@@ -266,12 +266,11 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut egui_textures: ResMut<EguiUserTextures>,
-    mut gizmos: ResMut<GizmoConfigStore>,
 ) {
     gizmo_configs.config_mut::<PathGizmos>().0.line.width = 5.0;
     // The panels get their own camera on top, so the 3D camera can be confined to the free area.
     egui_settings.auto_create_primary_context = false;
-    let (plan, _) = gizmos.config_mut::<PlanLine>();
+    let (plan, _) = gizmo_configs.config_mut::<PlanLine>();
     (plan.line.width, plan.depth_bias) = (5.0, PLAN_BEHIND);
     commands.insert_resource(Shapes {
         cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),

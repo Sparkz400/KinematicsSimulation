@@ -743,3 +743,5 @@ param-start = Start position (retracted or extended)
 param-rated_cushion_energy_j = Rated cushioning energy [J]
 param-load_factor_limit = Load factor limit
 param-compressor_energy_kwh_m3 = Compressor energy per m³ of air [kWh/m³]
+param-friction_breakaway_n = Breakaway friction [N]
+param-presliding_stiffness_n_m = Stiffness of the friction before sliding [N/m]

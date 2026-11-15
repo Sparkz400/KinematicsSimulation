@@ -633,7 +633,15 @@ fn an_effect_switch_reaches_the_config_and_stays() {
     assert_eq!(switch.toggled, Some(on));
     let at = switch.rect.center();
     d.click_at(Vec2::new(at.x, at.y));
-    d.frames(60);
+    // Until the session has taken the switch, not for a fixed count of frames: on a busy machine 60 frames went by
+    // before it had (15 November 2026).
+    for _ in 0..300 {
+        d.frames(10);
+        if d.state().model.config.bool(&path).unwrap() != on {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     assert_eq!(d.state().model.config.bool(&path).unwrap(), !on, "{:?}", d.messages());
     assert_eq!(d.in_region(SETUP, Role::CheckBox).remove(0).toggled, Some(!on));
 }

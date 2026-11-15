@@ -743,3 +743,5 @@ param-start = Startstellung (eingefahren oder ausgefahren)
 param-rated_cushion_energy_j = Zulässige Dämpfungsenergie [J]
 param-load_factor_limit = Grenze des Lastverhältnisses
 param-compressor_energy_kwh_m3 = Kompressorenergie je m³ Luft [kWh/m³]
+param-friction_breakaway_n = Losbrechreibung [N]
+param-presliding_stiffness_n_m = Steifigkeit der Reibung vor dem Gleiten [N/m]
