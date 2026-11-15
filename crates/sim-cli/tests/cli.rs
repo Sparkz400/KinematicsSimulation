@@ -818,11 +818,9 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         // the SCARA and the arm then the links' values the trace tells apart.
         let (count, checked) = if per_axis {
             (sim.machine.axes().len(), ["moved_mass_kg", "coulomb_friction_n"])
-        } else if !sim_components::identify::turns_both_ways(&measured) {
-            // A cycle of short moves: the four-arm delta's lifts last some 60 ms, less than the fit's 80 ms window, and
-            // its motor 2 turns forward for 189 of the 810 rows a direction needs (14 November), so the fit is skipped.
-            (0, ["coulomb_friction_nm"; 2])
         } else {
+            // Every machine's cycle fits: the four-arm delta's 60 ms lifts too, since the fit smooths over its lowest
+            // mode's period (23 ms) instead of 40 ms (`identify::smoothing_span`).
             (sim.machine.motors().len(), ["coulomb_friction_nm"; 2])
         };
         assert_eq!(fit.iter().filter(|r| !r[0].starts_with("link_")).count(), 4 * count, "{}: {fit:?}", entry.id);

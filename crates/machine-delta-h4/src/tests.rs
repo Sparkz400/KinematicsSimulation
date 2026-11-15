@@ -369,3 +369,39 @@ fn a_changed_ratio_keeps_the_tool_on_its_spring_and_the_gears_twisted() {
         close(s[8 + k] - before[k], 0.01, 1e-6, "twist at the motor, before");
     }
 }
+
+/// The fit's window (`identify::smoothing_span`) on traces of 6 s at 1 ms whose four motors turn at +-1 rad/s in runs
+/// of L rows, the arms standing at the start pose. A row counts for a direction where the 2 h - 1 rows about it keep
+/// its sign: L - 2h + 2 rows in each whole run; the loop over rows h + 1 to 6000 - h - 1 loses 2 of the first run and 1
+/// of the last; a direction needs 10 (2h + 1). L = 100: 30 runs each way, 30 (102 - 2h) - 2 >= 20 h + 10 holds up to
+/// h = 38 (778 of 770; 39: 718 of 790), so 38 ms, where the default 40 ms leaves 30 * 22 - 2 = 658 of 810. L = 40: 75
+/// runs, 75 (42 - 2h) - 2 >= 20 h + 10 up to h = 18, shorter than one period of the machine's lowest mode allows
+/// (below 54 Hz: over 18.5 rows), so the trace keeps 40 ms and is not fitted.
+#[test]
+fn the_fit_window_is_the_longest_its_lifts_allow_down_to_its_lowest_mode() {
+    use sim_components::identify::{SMOOTHING_S, smoothing_span, turns_both_ways};
+    use sim_components::trace::{MotorTrace, Trace};
+    let d = h4(&[]);
+    let pose = [0.1525, 0.0, -0.85, 0.0];
+    let mut motors = [0.0; 4];
+    d.inverse(&pose, &mut motors);
+    let lowest = d.modes(&pose)[0].hz;
+    assert!(lowest < 54.0, "{lowest} Hz");
+    let trace = |run: usize| Trace {
+        time: (0..=6000).map(|i| i as f64 * 1e-3).collect(),
+        motors: motors
+            .iter()
+            .map(|&angle| {
+                let speed: Vec<f64> =
+                    (0..=6000).map(|i| if (i / run).is_multiple_of(2) { 1.0 } else { -1.0 }).collect();
+                MotorTrace { setpoint: vec![angle; 6001], angle: vec![angle; 6001], speed, torque: vec![0.0; 6001] }
+            })
+            .collect(),
+    };
+    let long = trace(100);
+    close(smoothing_span(&d, &long), 0.038, 1e-9, "100 ms runs");
+    assert!(turns_both_ways(&d, &long));
+    let short = trace(40);
+    close(smoothing_span(&d, &short), SMOOTHING_S, 1e-12, "40 ms runs");
+    assert!(!turns_both_ways(&d, &short));
+}

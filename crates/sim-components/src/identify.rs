@@ -145,7 +145,7 @@ pub fn fit_rigid(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Ve
         return Err(TraceError { key: "error-trace-not-linear", detail: String::new() });
     }
     let simulated = replay(entry, cfg, trace)?;
-    let (h, per) = smoothing(&trace.time);
+    let (h, per) = smoothing(&trace.time, smoothing_span(machine.as_ref(), trace));
     let steps = match (regressor(machine.as_mut(), trace, h), regressor(machine.as_mut(), &simulated, h)) {
         (Some(measured), Some(config)) => payload_steps(&measured, &config, &trace.time, h, per),
         _ => Vec::new(),
@@ -332,18 +332,51 @@ type Sample = (usize, Vec<f64>, f64);
 /// The span over which the regressor's rows are smoothed, s: a triangle of this half-width (`smoothing`). A gear's ringing
 /// above 1 / 0.04 s = 25 Hz is all but gone from it (the triangle's response is sinc², below 0.05 beyond its first zero),
 /// the slow swings of an exciting trajectory pass (0.995 at 1 Hz), and as the torque and every column are smoothed alike
-/// the fit holds whatever passes.
-// shortcut: one span for every machine, set by the six-axis arm's gears (their ringing at some 30 Hz); take it from
-// `Machine::modes` once every machine reports its lowest mode (the chain machines report none).
+/// the fit holds whatever passes. Set by the six-axis arm's gears (their ringing at some 30 Hz); shorter only where a
+/// trace leaves too few rows at it (`smoothing_span`).
 pub const SMOOTHING_S: f64 = 0.04;
 
-/// The triangle's half-width `h` in rows of a trace's step (the median), and how many rows of a series smoothed by it
-/// count as one measurement: (Σ w)² / Σ w² for the weights w = h − |j|, |j| < h (h⁴ / (h² + 2 Σ (h − j)²), about 1.5 h;
-/// for a moving average of 2w + 1 rows the same formula gives 2w + 1).
-fn smoothing(time: &[f64]) -> (usize, f64) {
+/// The span a machine's trace is smoothed over, s: `SMOOTHING_S` where every motor turns each way long enough at it
+/// (`turns_both_ways`); else the longest span at which they do, in whole rows of the trace's step, but not shorter than
+/// one period of the machine's lowest mode (`Machine::modes`, at the forward kinematics of the motor angles at ten rows
+/// spread over the trace), where the triangle's first zero takes its ringing out. `SMOOTHING_S` where none does or the
+/// machine reports no mode above 25 Hz: the trace is then not fitted. The four-arm delta's lifts last some 60 ms and its
+/// arms 2 and 4 reverse in each traverse: at 40 ms its motor 2 kept its sign forward for 198 of the 810 rows a direction
+/// needs; its lowest mode, 44 Hz without the payload, allows down to 23 ms.
+pub fn smoothing_span(machine: &dyn Machine, trace: &Trace) -> f64 {
+    let (n, rows, longest) = (machine.axes().len(), trace.time.len(), smoothing(&trace.time, SMOOTHING_S).0);
+    if turns_both_ways_within(trace, longest) {
+        return SMOOTHING_S;
+    }
+    let lowest = (0..10)
+        .map(|k| k * rows.saturating_sub(1) / 9)
+        .filter(|&r| r < rows)
+        .filter_map(|r| {
+            let angles: Vec<f64> = trace.motors.iter().map(|m| m.angle[r]).collect();
+            let mut pose = vec![0.0; n];
+            machine.forward(&angles, &mut pose);
+            machine.modes(&pose).first().map(|m| m.hz).filter(|hz| hz.is_finite() && *hz > 0.0)
+        })
+        .fold(f64::INFINITY, f64::min);
+    if !lowest.is_finite() {
+        return SMOOTHING_S;
+    }
+    let (shortest, step) = (smoothing(&trace.time, 1.0 / lowest).0, median_step(&trace.time).unwrap_or(1.0));
+    (shortest..longest).rev().find(|&h| turns_both_ways_within(trace, h)).map_or(SMOOTHING_S, |h| h as f64 * step)
+}
+
+/// A trace's step, the median of its rows' spacing; `None` for fewer than two rows.
+fn median_step(time: &[f64]) -> Option<f64> {
     let mut steps: Vec<f64> = time.windows(2).map(|p| p[1] - p[0]).collect();
     steps.sort_by(f64::total_cmp);
-    let h = steps.get(steps.len() / 2).map_or(1, |step| ((SMOOTHING_S / step).round() as usize).max(1));
+    steps.get(steps.len() / 2).copied()
+}
+
+/// The triangle's half-width `h` in rows of a trace's step (the median) for a span in s, and how many rows of a series
+/// smoothed by it count as one measurement: (Σ w)² / Σ w² for the weights w = h − |j|, |j| < h (h⁴ / (h² + 2 Σ (h −
+/// j)²), about 1.5 h; for a moving average of 2w + 1 rows the same formula gives 2w + 1).
+fn smoothing(time: &[f64], span: f64) -> (usize, f64) {
+    let h = median_step(time).map_or(1, |step| ((span / step).round() as usize).max(1));
     let squares = (h * h) as f64 + 2.0 * (1..h).map(|j| ((h - j) * (h - j)) as f64).sum::<f64>();
     (h, (h * h) as f64 * (h * h) as f64 / squares)
 }
@@ -364,10 +397,16 @@ fn steady(speed: &[f64], top: f64, h: usize, i: usize) -> Option<f64> {
     (v.abs() > 0.05 * top && speed[i + 1 - h..i + h].iter().all(|s| s.signum() == v.signum())).then_some(v)
 }
 
-/// Whether `fit_joints` can fit the trace: every motor turns each way for at least ten windows' worth of rows that it
-/// takes (`steady`), else its Coulomb friction cannot be told from a constant torque.
-pub fn turns_both_ways(trace: &Trace) -> bool {
-    let (h, rows) = (smoothing(&trace.time).0, trace.time.len());
+/// Whether `fit_joints` can fit the machine's trace: every motor turns each way for at least ten windows' worth of rows
+/// that it takes (`steady`, over the machine's `smoothing_span`), else its Coulomb friction cannot be told from a
+/// constant torque.
+pub fn turns_both_ways(machine: &dyn Machine, trace: &Trace) -> bool {
+    turns_both_ways_within(trace, smoothing(&trace.time, smoothing_span(machine, trace)).0)
+}
+
+/// `turns_both_ways` with the triangle's half-width `h` in rows.
+fn turns_both_ways_within(trace: &Trace, h: usize) -> bool {
+    let rows = trace.time.len();
     trace.motors.iter().all(|m| {
         let (mut ways, top) = ([0usize; 2], top_speed(&m.speed));
         for v in (h + 1..rows.saturating_sub(h + 1)).filter_map(|i| steady(&m.speed, top, h, i)) {
@@ -400,7 +439,7 @@ pub fn turns_both_ways(trace: &Trace) -> bool {
 fn regressor(machine: &mut dyn Machine, trace: &Trace, h: usize) -> Option<Vec<Sample>> {
     let (rows, n, links) = (trace.time.len(), trace.motors.len(), machine.links().len());
     let p = 1 + 4 * n + 4 * links;
-    if rows < 2 * h + 5 || !turns_both_ways(trace) {
+    if rows < 2 * h + 5 || !turns_both_ways_within(trace, h) {
         return None;
     }
     let t = &trace.time;
@@ -750,7 +789,7 @@ pub fn fit_joints(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<O
     let mut machine = (entry.build)(&crate::catalog::resolve(entry, cfg)?)?;
     let ids: Vec<String> = machine.motors().iter().map(|m| m.id.to_string()).collect();
     let links = machine.links();
-    let (h, per) = smoothing(&trace.time);
+    let (h, per) = smoothing(&trace.time, smoothing_span(machine.as_ref(), trace));
     let (Some(measured), Some(config)) =
         (regressor(machine.as_mut(), trace, h), regressor(machine.as_mut(), &simulated, h))
     else {
