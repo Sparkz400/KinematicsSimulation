@@ -28,6 +28,8 @@ fn mechanism_only(mut cfg: Config) -> Config {
         "effects.payload_swing = false",
         "effects.link_bending = false",
         "effects.base_compliance = false",
+        // MuJoCo has no friction in the gears' mesh.
+        "effects.gearbox_mesh_friction = false",
         "kinematics.tool_space = false",
     ] {
         cfg.set_text(line).unwrap();

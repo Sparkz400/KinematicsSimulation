@@ -59,6 +59,7 @@ effect-motor_friction = Motor- und Lagerreibung
 effect-gearbox_backlash = Getriebespiel
 effect-gearbox_efficiency = Getriebewirkungsgrad
 effect-gearbox_drag = Getriebe-Leerlaufdrehmoment
+effect-gearbox_mesh_friction = Reibung im Zahneingriff des Getriebes
 effect-motor_stiction = Losbrechmoment des Motors (Stribeck)
 effect-slide_presliding = Vorgleiten der Führungen (Haften im Stillstand, Dahl)
 effect-gearbox_lost_motion = Getriebe-Lose und Hysterese

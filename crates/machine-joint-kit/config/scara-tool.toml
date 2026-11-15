@@ -50,6 +50,10 @@ joint_friction = true
 motor_friction = true
 gearbox_backlash = true
 gearbox_efficiency = true
+# The efficiency's loss as a friction in the gearbox's mesh: in proportion to the torque it passes, against the
+# motion at any speed, and sticking at rest inside its band (a gear holding a load stands for anything between the
+# torque that lowers it and the one that lifts it). Off: the loss fades in below 0.5 W, a gear at rest has none.
+gearbox_mesh_friction = true
 # The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
 # gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
 # pickers D2 and D3, whose sizing was redone with them.

@@ -907,7 +907,22 @@ pub struct Gearbox {
     pub knees: [f64; 2],
     /// [K2, K3], N m/rad.
     pub upper: [f64; 2],
+    /// With effects.gearbox_mesh_friction: the stiffness of the mesh friction's bristle against the housing (presliding),
+    /// N m/rad at the output, `MESH_STIFFNESS` times K1; 0 with the effect off (`mesh_friction`).
+    pub mesh_stiffness: f64,
+    /// The output angle at which the mesh friction's bristle is relaxed, where the last step ended (`commit`); NaN before
+    /// the first step (no friction yet).
+    pub mesh_anchor: f64,
 }
+
+/// The mesh friction's bristle stiffness over K1: K1 itself, as the hysteresis's Dahl stiffness. Presliding then takes mu
+/// of the gear's twist under the same torque (20 % at an efficiency of 0.8), and the friction a reversal of 2 mu of an
+/// amplitude to turn round, which lowers the damping of a small ring below the friction law's (see the tests). Stiffer
+/// bristles stick a light output (a belt axis's pulley) to the housing at a frequency the base step does not resolve: at
+/// 10 K1 two belt axes' energy budgets missed 1.4 and 2.0 % of a pass, at 3 K1 0.6 and 1.0 %, at K1 0.018 and 0.16 %
+/// (machines whose gears carry heavy outputs 0.000 % at any of them).
+/// shortcut: K1; a config key once a gear's presliding is measured.
+pub const MESH_STIFFNESS: f64 = 1.0;
 
 #[derive(Debug, Clone, Copy)]
 pub struct GearTorque {
@@ -949,6 +964,15 @@ impl Gearbox {
             anchor: [f64::NAN, 0.0],
             knees: if cfg.bool("effects.gearbox_stiffness_curve")? { knees } else { [f64::INFINITY; 2] },
             upper,
+            // A config without the switch (one written before 15 November 2026) has the faded efficiency.
+            mesh_stiffness: if cfg.get("effects.gearbox_mesh_friction").is_ok()
+                && cfg.bool("effects.gearbox_mesh_friction")?
+            {
+                MESH_STIFFNESS * stiffness
+            } else {
+                0.0
+            },
+            mesh_anchor: f64::NAN,
         })
     }
 
@@ -1000,6 +1024,23 @@ impl Gearbox {
         (t, e1 + 0.5 * (t1 + t2) * (x2 - x1) + 0.5 * (t2 + t) * (x - x2))
     }
 
+    /// The spring's stiffness dT/de at a twist `e` >= 0 beyond the dead zone (`spring`'s slope).
+    fn spring_slope(&self, e: f64) -> f64 {
+        let (k1, b) = (self.stiffness, self.band);
+        if e < b {
+            return k1 * e / b;
+        }
+        let (x, [t1, t2], [k2, k3]) = (e - 0.5 * b, self.knees, self.upper);
+        let x1 = t1 / k1;
+        if x <= x1 {
+            k1
+        } else if x <= x1 + (t2 - t1) / k2 {
+            k2
+        } else {
+            k3
+        }
+    }
+
     /// The twist beyond the dead zone that the spring needs for `torque` >= 0: the inverse of `spring`.
     pub fn spring_twist(&self, torque: f64) -> f64 {
         let (k1, b) = (self.stiffness, self.band);
@@ -1046,20 +1087,37 @@ impl Gearbox {
         (z, self.dahl_stiffness * (1.0 - s * z / th))
     }
 
-    /// The hysteresis anchors of `gears`, two numbers each: what `commit` carries between steps (`Machine::memory`).
+    /// The hysteresis anchors of `gears`, two numbers each, and the mesh friction's where it has one: what `commit`
+    /// carries between steps (`Machine::memory`).
     pub fn anchors<'a>(gears: impl IntoIterator<Item = &'a Gearbox>) -> Vec<f64> {
-        gears.into_iter().flat_map(|g| g.anchor).collect()
+        gears
+            .into_iter()
+            .flat_map(|g| g.anchor.into_iter().chain((g.mesh_stiffness > 0.0).then_some(g.mesh_anchor)))
+            .collect()
     }
 
     /// Sets back what `anchors` gave (`Machine::set_memory`).
     pub fn set_anchors<'a>(gears: impl IntoIterator<Item = &'a mut Gearbox>, memory: &[f64]) {
-        for (g, a) in gears.into_iter().zip(memory.as_chunks::<2>().0) {
-            g.anchor = *a;
+        let mut memory = memory.iter().copied();
+        for g in gears {
+            if let (Some(x), Some(z)) = (memory.next(), memory.next()) {
+                g.anchor = [x, z];
+            }
+            if g.mesh_stiffness > 0.0
+                && let Some(a) = memory.next()
+            {
+                g.mesh_anchor = a;
+            }
         }
     }
 
     /// Ends a step: the hysteresis's state moves on to the twist the step ended at (`Machine::after_step`).
     pub fn commit(&mut self, rotor_angle: f64, out_angle: f64) {
+        // The mesh friction first, with the hysteresis's torque from its anchor as the step had it.
+        if self.mesh_stiffness > 0.0 {
+            let f = self.mesh_friction(self.held_torque(rotor_angle, out_angle, 0.0).0, out_angle);
+            self.mesh_anchor = out_angle - f / self.mesh_stiffness;
+        }
         if self.hysteresis == 0.0 {
             return;
         }
@@ -1075,14 +1133,44 @@ impl Gearbox {
             return GearTorque { output: 0.0, rotor: 0.0 };
         }
         let rate = rotor_speed / self.ratio - out_speed;
-        let torque = self.spring(e).0.copysign(twist)
-            + self.damping * rate
-            + self.hysteresis_torque(Self::contact(twist, e), rate).0;
+        let held = self.spring(e).0.copysign(twist) + self.hysteresis_torque(Self::contact(twist, e), rate).0;
+        let torque = held + self.damping * rate;
         // Tooth flanks can push but not pull: while they separate fast, the damping must not reverse the torque.
         if self.has_play() && torque * twist < 0.0 {
             return GearTorque { output: 0.0, rotor: 0.0 };
         }
+        // Before the first step's commit (and in a machine that does not commit its gears) the faded efficiency.
+        if self.mesh_stiffness > 0.0 && !self.mesh_anchor.is_nan() {
+            return GearTorque { output: torque - self.mesh_friction(held, out_angle), rotor: torque / self.ratio };
+        }
         GearTorque { output: torque * self.loss_factor(torque, out_speed), rotor: torque / self.ratio }
+    }
+
+    /// With effects.gearbox_mesh_friction: the friction in the mesh at the output, against the housing, when the gear
+    /// passes `held` (its spring's and hysteresis's torque) at the output angle `out_angle`. It opposes the output's
+    /// motion, bounded by mu |held| with mu = 1 - eta (eta the teeth's efficiency), so that driving the output gets
+    /// eta held and driven back it takes (1 + mu) held: the back-driving efficiency is 1 / (1 + mu) = 1 / (2 - eta). At
+    /// rest it sticks: an elastic-plastic bristle of `mesh_stiffness` from the anchor where the last step left it, the
+    /// friction sigma (out - anchor) up to the bound. 0 before the first step's commit (the gear then has the faded
+    /// efficiency) and with the effect off.
+    pub fn mesh_friction(&self, held: f64, out_angle: f64) -> f64 {
+        if self.mesh_stiffness == 0.0 || self.mesh_anchor.is_nan() {
+            return 0.0;
+        }
+        let bound = (1.0 - self.efficiency) * held.abs();
+        (self.mesh_stiffness * (out_angle - self.mesh_anchor)).clamp(-bound, bound)
+    }
+
+    /// The torque the spring and hysteresis pass at the rotor and output angles, the damping left out (the friction's
+    /// bound is on it), and its rate at the twist's `rate`.
+    fn held_torque(&self, rotor_angle: f64, out_angle: f64, rate: f64) -> (f64, f64) {
+        let (twist, e) = self.beyond(rotor_angle, out_angle);
+        if e == 0.0 && (self.has_play() || self.hysteresis == 0.0) {
+            return (0.0, 0.0);
+        }
+        let (z, z_slope) = self.hysteresis_torque(Self::contact(twist, e), rate);
+        let slope = if e > 0.0 { self.spring_slope(e) } else { 0.0 };
+        (self.spring(e).0.copysign(twist) + z, (slope + z_slope) * rate)
     }
 
     /// The twist beyond the backlash that transmits `output_torque` at rest, with its sign: the spring's alone.
@@ -1103,7 +1191,13 @@ impl Gearbox {
     pub fn energy(&self, rotor_angle: f64, out_angle: f64) -> f64 {
         let (twist, e) = self.beyond(rotor_angle, out_angle);
         let z = self.hysteresis_torque(Self::contact(twist, e), 0.0).0;
-        self.spring(e).1 + if z == 0.0 { 0.0 } else { z * z / (2.0 * self.dahl_stiffness) }
+        let mesh = if self.mesh_stiffness > 0.0 {
+            let f = self.mesh_friction(self.held_torque(rotor_angle, out_angle, 0.0).0, out_angle);
+            f * f / (2.0 * self.mesh_stiffness)
+        } else {
+            0.0
+        };
+        self.spring(e).1 + if z == 0.0 { 0.0 } else { z * z / (2.0 * self.dahl_stiffness) } + mesh
     }
 
     /// Power the gearbox takes, W: what the rotor puts in less what the output gives the pulley and what spring and
@@ -1116,9 +1210,29 @@ impl Gearbox {
         }
         let (z, slope) = self.hysteresis_torque(Self::contact(twist, e), rotor_speed / self.ratio - out_speed);
         let stored = if z == 0.0 { 0.0 } else { z * slope / self.dahl_stiffness };
+        // The bristle's store F^2 / (2 sigma) changes at F dF/dt / sigma: sticking dF/dt = sigma w, sliding the bound's.
+        let mesh = if self.mesh_stiffness > 0.0 && !self.mesh_anchor.is_nan() {
+            let rate = rotor_speed / self.ratio - out_speed;
+            let (held, held_rate) = self.held_torque(rotor_angle, out_angle, rate);
+            let f = self.mesh_friction(held, out_angle);
+            let bound = (1.0 - self.efficiency) * held.abs();
+            // At its bound (where each step's commit leaves it while sliding, to rounding) it slides on if sticking would
+            // take it beyond the bound's own rate, and sticks if it would take it back inside.
+            let (sticking, along) =
+                (self.mesh_stiffness * out_speed, (1.0 - self.efficiency) * held.signum() * held_rate);
+            let f_rate = if f.abs() >= bound * (1.0 - 1e-9) && f.signum() * sticking > along {
+                f.signum() * along
+            } else {
+                sticking
+            };
+            f * f_rate / self.mesh_stiffness
+        } else {
+            0.0
+        };
         t.rotor * rotor_speed
             - t.output * out_speed
             - (self.spring(e).0.copysign(twist) + stored) * (rotor_speed / self.ratio - out_speed)
+            - mesh
     }
 }
 
@@ -1423,6 +1537,8 @@ preload_n = 200.0
             anchor: [f64::NAN, 0.0],
             knees: [f64::INFINITY; 2],
             upper: [1e4; 2],
+            mesh_stiffness: 0.0,
+            mesh_anchor: f64::NAN,
         }
     }
 
@@ -1814,5 +1930,148 @@ preload_n = 200.0
         assert!((driving.output - 2.0 * 0.9).abs() < 1e-9, "{}", driving.output);
         assert!((driven.output - 2.0 / 0.9).abs() < 1e-9, "{}", driven.output);
         assert!((g.torque(twist, 0.0, 0.0, 0.0).output - 2.0).abs() < 1e-12);
+    }
+
+    /// A gear of ratio 10, K1 1e4 N m/rad, teeth of efficiency 0.8 (mu = 0.2), with its mesh friction; its bristle 100 K1
+    /// (1e6 N m/rad), stiff enough that the friction law shows alone (the shipped K1:
+    /// `the_shipped_bristle_rings_down_by_its_hand_calculated_ratio`).
+    fn meshing() -> Gearbox {
+        Gearbox { ratio: 10.0, half_backlash: 0.0, efficiency: 0.8, mesh_stiffness: 1e6, mesh_anchor: 0.0, ..gearbox() }
+    }
+
+    /// Passing 100 N m (a twist of 0.01 rad at the output), sliding forward the output gets (1 - 0.2) 100 = 80 N m and the
+    /// rotor puts in 100 / 10 = 10 N m at 10 times the speed: 80 / 100 = 0.8. Driven back the output takes (1 + 0.2) 100 =
+    /// 120 N m for the rotor's 10 N m: 100 / 120 = 0.833333 = 1 / (2 - 0.8), where the faded efficiency had 0.8 either
+    /// way. Sticking, the friction is the bristle's 1e6 N m/rad times how far the output is from its anchor: 5 N m at
+    /// 5e-6 rad, within the bound of 20 N m.
+    #[test]
+    fn the_mesh_friction_passes_the_teeth_efficiency_each_way() {
+        let g = meshing();
+        let rotor = |out: f64| 10.0 * (out + 0.01);
+        let driving = g.torque(rotor(1.0), 0.0, 1.0, 0.0);
+        assert!((driving.output - 80.0).abs() < 1e-9 && (driving.rotor - 10.0).abs() < 1e-12, "{driving:?}");
+        let driven = g.torque(rotor(-1.0), 0.0, -1.0, 0.0);
+        assert!((driven.output - 120.0).abs() < 1e-9, "{driven:?}");
+        assert!((driven.rotor * 10.0 / driven.output - 1.0 / 1.2).abs() < 1e-12);
+        let stuck = g.torque(rotor(5e-6), 0.0, 5e-6, 0.0);
+        assert!((stuck.output - 95.0).abs() < 1e-9, "{stuck:?}");
+        // Off, as before: the faded efficiency.
+        let faded = Gearbox { mesh_stiffness: 0.0, ..g.clone() };
+        assert!((faded.torque(rotor(1.0), 0.0, 1.0, 1.0).output - 100.0 * faded.loss_factor(100.0, 1.0)).abs() < 1e-9);
+    }
+
+    /// With the no-load running torque (`GearDrag`) at the input: a catalogue efficiency of 0.9 at 50 N m out with
+    /// T0 = 0.1 N m at the reference speed leaves the teeth 1 / (1 / 0.9 - 10 0.1 / 50) = 0.916497. At that point, driving
+    /// at the reference speed: T1 = 50 / (10 0.916497) + 0.1 = 5.555556 N m, 50 / (10 T1) = 0.9; at a tenth of the torque
+    /// T1 = 5 / 9.16497 + 0.1 = 0.645556 N m, 5 / 6.45556 = 0.774527: the efficiency falls at part load.
+    #[test]
+    fn mesh_friction_and_drag_give_the_catalogue_efficiency_and_less_at_part_load() {
+        let drag = GearDrag { torque: 0.1, speed: 300.0 };
+        let tooth = drag.tooth_efficiency(0.9, 10.0, 50.0);
+        assert!((tooth - 0.916497).abs() < 1e-6, "{tooth}");
+        let g = Gearbox { efficiency: tooth, ..meshing() };
+        for (out, want) in [(50.0, 0.9), (5.0, 0.774527)] {
+            // The twist that passes out / tooth, the output sliding forward at 30 rad/s (the input at 300).
+            let held = out / tooth;
+            let t = g.torque(10.0 * (1.0 + held / 1e4), 300.0, 1.0, 30.0);
+            let input = t.rotor + drag.torque(300.0, 1.0);
+            let efficiency = t.output * 30.0 / (input * 300.0);
+            assert!((t.output - out).abs() < 1e-9 && (efficiency - want).abs() < 1e-6, "{efficiency} at {out} N m");
+        }
+    }
+
+    /// The output (1 kg m^2) on the gear, its rotor set by `rotor(t)`, against a constant load torque `load` (a weight
+    /// that the gear holds up), from at rest at `start`: RK4 at 1e-5 s with the anchor committed after each step. The
+    /// output angle and speed at each step, and the energy the gear's loss power took.
+    fn run_output(
+        g: &mut Gearbox,
+        rotor: impl Fn(f64) -> f64,
+        load: f64,
+        start: f64,
+        seconds: f64,
+    ) -> (Vec<(f64, f64, f64)>, f64) {
+        let (dt, mut state, mut lost) = (1e-5, [start, 0.0], 0.0);
+        let mut trace = Vec::new();
+        let steps = (seconds / dt).round() as usize;
+        let rotor_speed = |t: f64| (rotor(t + 1e-7) - rotor(t - 1e-7)) / 2e-7;
+        for k in 0..steps {
+            let t = k as f64 * dt;
+            let f = |s: [f64; 2], t: f64| [s[1], g.torque(rotor(t), rotor_speed(t), s[0], s[1]).output - load];
+            let k1 = f(state, t);
+            let k2 = f([state[0] + 0.5 * dt * k1[0], state[1] + 0.5 * dt * k1[1]], t + 0.5 * dt);
+            let k3 = f([state[0] + 0.5 * dt * k2[0], state[1] + 0.5 * dt * k2[1]], t + 0.5 * dt);
+            let k4 = f([state[0] + dt * k3[0], state[1] + dt * k3[1]], t + dt);
+            let power = |s: [f64; 2], t: f64| g.loss_power(rotor(t), rotor_speed(t), s[0], s[1]);
+            let p0 = power(state, t);
+            state = [
+                state[0] + dt / 6.0 * (k1[0] + 2.0 * k2[0] + 2.0 * k3[0] + k4[0]),
+                state[1] + dt / 6.0 * (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1]),
+            ];
+            lost += 0.5 * dt * (p0 + power(state, t + dt));
+            g.commit(rotor(t + dt), state[0]);
+            trace.push((t + dt, state[0], state[1]));
+        }
+        (trace, lost)
+    }
+
+    /// A weight of 100 N m held by the gear (a twist of 0.01 rad, anchored there). The motor winds the gear on slowly
+    /// (1 N m of spring torque per second at a blocked output): the output stands, but for the bristle's give of at most
+    /// 25 / 1e6 = 2.5e-5 rad, until the gear passes 100 / 0.8 = 125 N m, the torque that lifts the weight; then it lifts.
+    /// Wound back the other way it stands until 100 / 1.2 = 83.33 N m and then lowers: it holds anything in between.
+    #[test]
+    fn a_held_gear_stands_inside_its_friction_band_and_breaks_away_at_its_ends() {
+        for (direction, edge) in [(1.0, 125.0), (-1.0, 100.0 / 1.2)] {
+            let mut g = Gearbox { damping: 20.0, ..meshing() };
+            // At rest the twist 0.01 rad holds the weight with no friction.
+            let rotor = move |t: f64| 10.0 * (0.01 + direction * t / 1e4);
+            let (trace, _) = run_output(&mut g, rotor, 100.0, 0.0, 50.0);
+            let away = trace.iter().find(|(_, angle, _)| angle.abs() > 3e-5).expect("it never broke away");
+            // The spring's torque then, at the output standing within the bristle's give: 1e4 (rotor / 10 - angle).
+            let held = 1e4 * (rotor(away.0) / 10.0 - away.1);
+            assert!((held - edge).abs() < 3.0, "direction {direction}: broke away at {held} N m, by hand {edge}");
+            let before = trace.iter().take_while(|(t, ..)| 1e4 * (rotor(*t) / 10.0) < edge - 3.0);
+            assert!(before.clone().all(|(_, angle, _)| angle.abs() <= 2.5e-5 + 1e-9));
+        }
+    }
+
+    /// Around zero load, the motor held: the output (1 kg m^2 on 1e4 N m/rad, 15.9 Hz) let go 0.01 rad off. The friction
+    /// mu 1e4 |x| against the motion takes, from one turning point A1 to the next A2, mu 1e4 (A1^2 + A2^2) / 2 of the
+    /// spring's 1e4 (A1^2 - A2^2) / 2: A2 / A1 = sqrt((1 - mu) / (1 + mu)), a cycle (1 - mu) / (1 + mu) = 0.666667, a
+    /// damping of ln(1.5) / (2 pi) = 0.0645 (the faded efficiency gives the same ring some 1 %). The bristle's give at
+    /// each reversal, 2 mu / 100 of the amplitude, leaves a little less: within 5 %. And the loss power integrates to the
+    /// energy the ring lost (spring, bristle and output) within 1 %: the power jumps where the friction sticks or slides
+    /// on inside a step, which the trapezoid takes at the step's ends, by up to F w dt = 9 W 1e-5 s each time, four times
+    /// a cycle (seen: 0.4 %).
+    #[test]
+    fn a_ring_around_zero_load_decays_by_the_hand_calculated_damping() {
+        let mut g = meshing();
+        g.mesh_anchor = f64::NAN;
+        let (trace, lost) = run_output(&mut g, |_| 0.0, 0.0, 0.01, 0.4);
+        let peaks: Vec<f64> =
+            trace.windows(3).filter(|w| w[1].1 > w[0].1 && w[1].1 >= w[2].1 && w[1].1 > 0.0).map(|w| w[1].1).collect();
+        let ratio = peaks[1] / peaks[0];
+        assert!((ratio / (0.8 / 1.2) - 1.0).abs() < 0.05, "a cycle {ratio}, by hand 0.666667, peaks {peaks:?}");
+        let &(_, angle, speed) = trace.last().unwrap();
+        let energy = |angle: f64, speed: f64| g.energy(0.0, angle) + 0.5 * speed * speed;
+        let gone = energy(0.01, 0.0) - energy(angle, speed);
+        assert!((lost - gone).abs() < 1e-2 * gone, "lost {lost} J, gone {gone} J");
+    }
+
+    /// The same ring with the shipped bristle, sigma = K1 (`MESH_STIFFNESS`). At a turning point A the friction stands at
+    /// its bound mu K A, its anchor at A - mu K A / sigma = A (1 - mu). Turning back the output sticks on the spring and the
+    /// bristle (2 K) until the friction reaches the other bound, K (x - A (1 - mu)) = -mu K x at x1 = A (1 - mu) / (1 + mu),
+    /// with v1^2 = K (1 + mu^2) (A^2 - x1^2) (1 kg m^2); then it slides, on K (1 - mu) down to x = 0 and on K (1 + mu)
+    /// beyond, to the next turning point A2: A2^2 / A^2 = ((1 + mu^2)(1 - r^2) + (1 - mu) r^2) / (1 + mu), r = 2 / 3, = 7 / 9
+    /// per half cycle. A cycle keeps 7 / 9 = 0.777778 of its amplitude, a damping of ln(9 / 7) / (2 pi) = 0.0400 against the
+    /// friction law's 0.0645: the bristle's give at each reversal.
+    #[test]
+    fn the_shipped_bristle_rings_down_by_its_hand_calculated_ratio() {
+        let mut g = Gearbox { mesh_stiffness: MESH_STIFFNESS * 1e4, mesh_anchor: f64::NAN, ..meshing() };
+        let (trace, _) = run_output(&mut g, |_| 0.0, 0.0, 0.01, 0.4);
+        let peaks: Vec<f64> =
+            trace.windows(3).filter(|w| w[1].1 > w[0].1 && w[1].1 >= w[2].1 && w[1].1 > 0.0).map(|w| w[1].1).collect();
+        for w in peaks.windows(2).take(4) {
+            assert!((w[1] / w[0] - 7.0 / 9.0).abs() < 1e-4, "a cycle {}, by hand 0.777778 ({peaks:?})", w[1] / w[0]);
+        }
     }
 }
