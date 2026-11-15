@@ -1085,6 +1085,13 @@ fn the_app_optimises_the_cycle_and_applies_the_settings(entry: &'static MachineE
     // a faster move uses up (the screw's 46 of 50 um: 2.9 % shorter by acceleration and jerk alone).
     let settling = judged.iter().find(|v| v.check == "settling").unwrap();
     let shorter = if settling.value > 0.9 * settling.limit { 0.98 } else { 0.95 };
+    // And no more than a motor's heating allows: it goes as the torque squared, the torque that accelerates as 1 / T^2,
+    // so a cycle T shorter by the factor f heats by 1 / f^4 (the torque against gravity does not grow, which leaves a
+    // little more). The four-arm delta's motor 1, whose arm lies along the traverse, is at 90.2 % of its thermal limit
+    // as configured: 0.902^(1/4) = 0.9745, 2.6 % shorter (the optimiser finds 0.720 to 0.698 s, 99.6 %; 1.1 times the
+    // axes' limits 139.6 %). Every other machine is below 0.95^4 = 81.5 % (the flying saw's 40 % the most, 15 Nov).
+    let heated = judged.iter().filter(|v| v.check == "motor-thermal").map(|v| v.value / v.limit).fold(0.0, f64::max);
+    let shorter = f64::max(shorter, heated.powf(0.25));
     wait_for_analysis(&mut model);
     let table = model.optimised_table().unwrap();
     let found = model.optimised.clone().unwrap();
