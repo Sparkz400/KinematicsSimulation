@@ -62,9 +62,10 @@ fn configs(entry: &MachineEntry) -> Vec<(String, Config)> {
     // integration (0.05 N m s/rad of damping or a quarter of the gain holds it; the default config has 1 N m s/rad).
     // The standard suite checks those configs' energy without the controller. The same for the hexapod's: with its
     // gearboxes' damping at zero the elastic legs' mode runs away under the velocity loops (utilisation 31.6 and 2.8e11
-    // on 14 November 2026, 0.076 on the default config with its damping).
+    // on 14 November 2026, 0.076 on the default config with its damping). The tripod's legs alike: utilisation 1.1e11 to
+    // 2.0e11 undamped, 0.053 with 0.05 N m s/rad at each coupling (15 November 2026; the default config has 0.3).
     out.retain(|(name, _)| {
-        !(["scara", "hexapod"].contains(&entry.id) && (name == "loss-free 2" || name == "loss-free 3"))
+        !(["scara", "hexapod", "tripod"].contains(&entry.id) && (name == "loss-free 2" || name == "loss-free 3"))
     });
     if entry.id == machine_t_gantry::ENTRY.id {
         out.push(("EXCT-30".into(), sim_components::load_config(entry, machine_t_gantry::EXCT_30_CONFIG).unwrap()));
