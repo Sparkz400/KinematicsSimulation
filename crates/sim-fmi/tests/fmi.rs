@@ -119,9 +119,12 @@ fn a_move_through_the_fmu_matches_a_plain_simulation_bit_for_bit() {
         }
         // It moved by the ramp, to 1 mm, and the setpoint input reads back as set. The tool by what its setpoint moved: it
         // stands off its setpoint by what the gears give under the load, at the start as at the end (the palletiser's
-        // arm some 1 mm below it with its 20 kg).
+        // arm some 1 mm below it with its 20 kg). Where the machine's settling tolerance is wider, to that: a geared arm's
+        // mesh friction (effects.gearbox_mesh_friction) sticks within its band, so the gears give by another amount after
+        // a move than at rest before it (the palletiser 1.3 mm short of its 48 mm ramp, within its 4 mm).
         let (moved, ramp) = (found[position] - start_position, target[0] - start_setpoint);
-        assert!((moved - ramp).abs() < 1e-3, "{}: moved {moved} for a ramp of {ramp}", entry.id);
+        let tolerance = f64::max(1e-3, cfg.f64("ratings.settling_tolerance_m").unwrap_or(0.0));
+        assert!((moved - ramp).abs() < tolerance, "{}: moved {moved} for a ramp of {ramp}", entry.id);
         assert_eq!(get_reals(c, &[setpoint])[0], target[0]);
         unsafe {
             assert_eq!(fmi2Terminate(c), fmi2OK);

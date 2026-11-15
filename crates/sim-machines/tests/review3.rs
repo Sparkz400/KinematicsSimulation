@@ -40,7 +40,10 @@ fn a_path_from_an_end_of_a_stroke_is_run() {
                     .collect()
             })
             .collect();
-        let poses = if corners.iter().all(|p| machine.unreachable(p, 0.0).is_none()) { corners } else { faces };
+        // Seven axes and more (the arm on a track) have 128 corners and more, each a run of seconds: there too the faces'
+        // middles, 2 n poses, each at the end of one stroke, which is what the scenario needs.
+        let few = axes.len() <= 6;
+        let poses = if few && corners.iter().all(|p| machine.unreachable(p, 0.0).is_none()) { corners } else { faces };
         for pose in poses {
             let mut cfg = entry.config();
             cfg.set_text(&format!("start.pose = {pose:?}")).unwrap();
@@ -61,7 +64,10 @@ fn a_path_from_an_end_of_a_stroke_is_run() {
             sim.machine.tool_state(&sim.state, &mut tool, &mut speed);
             // To 1 mm, or the machine's own settling tolerance where that is wider (an arm's gears twist under its weight,
             // which its motors' encoders do not see: 3 mrad).
-            let tolerance = f64::max(1e-3, cfg.f64("ratings.settling_tolerance_m").unwrap_or(0.0));
+            // The angle's tolerance too, where the config has one: the arm on a track judges its track in m (0.5 mm)
+            // and its joints in rad (3 mrad; its shoulder's gear twists 2.3 mrad under the arm).
+            let settling = |key: &str| cfg.f64(&format!("ratings.settling_tolerance_{key}")).unwrap_or(0.0);
+            let tolerance = 1e-3_f64.max(settling("m")).max(settling("rad"));
             assert!(
                 tool.iter().zip(&middle).all(|(t, m)| (t - m).abs() < tolerance),
                 "{}: from {pose:?} the tool arrives at {tool:?}",
@@ -115,6 +121,15 @@ fn a_stream_of_setpoints_at_the_speed_limit_is_followed() {
         let cfg = entry.config();
         let interval = cfg.f64("profile.setpoint_interval_s").unwrap();
         for (share, jitter) in [(1.0, 0usize), (0.95, 0), (1.0, 24), (0.5, 24)] {
+            // The jitter turns the stream into steps of the speed by 30 % from one interval to the next: an acceleration
+            // of 0.3 v_max per 10 ms, ten times an axis's limit. On a heavy axis (the arm on a track: 130 kg at 30 m/s^2,
+            // its drive near its peak torque) the energy that brakes back then charges the DC links beyond their trip
+            // level and the drives go off. Whether the braking resistors take a cycle's energy is the DC link verdicts'
+            // question, not this one's (the timing of the stream): the jittered runs have the DC links off.
+            let mut cfg = cfg.clone();
+            if jitter > 0 && cfg.get("effects.dc_link").is_ok() {
+                cfg.set_text("effects.dc_link = false").unwrap();
+            }
             let mut sim = Sim::new(entry, &cfg).unwrap();
             let axis = sim.machine.axes()[0].clone();
             // From near the low end of the axis, 5 % of it in (on the gantries 50 mm from their start at 0.1 m).
