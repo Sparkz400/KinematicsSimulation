@@ -790,25 +790,38 @@ impl Mechanism for Arm {
         let all = q.len();
         let detached_swing = self.swing.is_some() && !(self.attached && self.payload.mass > 0.0);
         let moving = if detached_swing { &self.chain } else { &self.moving };
-        let (qm, qdm) = (self.moving_joints(q), self.moving_joints(qd));
+        // Uncoupled and without a swing the moving chain's joints are the mechanism's own.
+        let joints;
+        let (qm, qdm) = if self.coupling.is_none() && all == self.chain.len() {
+            (q, qd)
+        } else {
+            joints = (self.moving_joints(q), self.moving_joints(qd));
+            (&joints.0[..], &joints.1[..])
+        };
         let l = moving.len();
         let (mut ml, mut hl) = (vec![0.0; l * l], vec![0.0; l]);
         moving.dynamics(&qm[..l], &qdm[..l], self.g, self.extra(), &mut ml, &mut hl);
         let n = self.ratios.len();
         // T: the moving chain's joints per mechanism joint (l x all).
-        let t = |r: usize, c: usize| -> f64 {
-            match (&self.coupling, r < self.chain.len(), c < n) {
-                (Some(rows), true, true) => rows[r][c],
-                (None, true, true) => (r == c) as u8 as f64,
-                (_, false, false) => (r - self.chain.len() == c - n) as u8 as f64,
-                _ => 0.0,
-            }
-        };
+        let tm: Vec<f64> = (0..l * all)
+            .map(|rc| {
+                let (r, c) = (rc / all, rc % all);
+                match (&self.coupling, r < self.chain.len(), c < n) {
+                    (Some(rows), true, true) => rows[r][c],
+                    (None, true, true) => (r == c) as u8 as f64,
+                    (_, false, false) => (r - self.chain.len() == c - n) as u8 as f64,
+                    _ => 0.0,
+                }
+            })
+            .collect();
+        let t = |r: usize, c: usize| tm[r * all + c];
+        // M_urdf T, once for every row of the result (l x all).
+        let ml_t: Vec<f64> =
+            (0..l * all).map(|rj| (0..l).map(|c| ml[rj / all * l + c] * t(c, rj % all)).sum()).collect();
         for i in 0..all {
             bias[i] = (0..l).map(|r| t(r, i) * hl[r]).sum();
             for j in 0..all {
-                mass[i * all + j] =
-                    (0..l).map(|r| t(r, i) * (0..l).map(|c| ml[r * l + c] * t(c, j)).sum::<f64>()).sum();
+                mass[i * all + j] = (0..l).map(|r| t(r, i) * ml_t[r * all + j]).sum();
             }
         }
         if detached_swing {

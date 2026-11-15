@@ -45,7 +45,7 @@
 //! feedforward ask the same pretension of the cables. `forward` finds the pose by Gauss-Newton on the cable lengths
 //! (rigid), or where the platform hangs at rest on cables of the motors' free lengths (elastic).
 
-use sim_components::chain::solve;
+use sim_components::chain::{solve, solve_in_place};
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::{HardStop, ShaftFriction, ThermalFeedback};
 use sim_components::rigid::{M3, V3, about, add, cross, dot, matmul, mul};
@@ -364,6 +364,8 @@ struct Cable {
     exit: V3,
     axis: V3,
     ref_x: V3,
+    /// axis x ref_x, the pulley's third direction.
+    ref_y: V3,
     /// On the platform, in its frame.
     anchor: V3,
 }
@@ -379,17 +381,21 @@ pub struct Span {
     pub b: V3,
 }
 
-/// The pulley's geometry for an anchor at `p` (world).
-fn span(c: &Cable, r: f64, p: V3) -> Option<(f64, f64, V3, V3)> {
+/// The pulley's plane for an anchor at `p` (world): its direction e_u, the anchor in it (P_u, P_w), and its distance m
+/// from the pulley's centre; `None` where the cable cannot be drawn (the anchor at its pulley).
+fn pulley_plane(c: &Cable, r: f64, p: V3) -> Option<(V3, f64, f64, f64)> {
     let d = sub(p, c.exit);
-    let ey = cross(c.axis, c.ref_x);
+    let ey = c.ref_y;
     let gamma = dot(d, ey).atan2(dot(d, c.ref_x));
     let eu = add(scale(c.ref_x, gamma.cos()), scale(ey, gamma.sin()));
     let (pu, pw) = (dot(d, eu), dot(d, c.axis));
     let m = (pu - r).hypot(pw);
-    if !(m > r * (1.0 + 1e-9)) || !(m > 1e-9) {
-        return None;
-    }
+    (m > r * (1.0 + 1e-9) && m > 1e-9).then_some((eu, pu, pw, m))
+}
+
+/// The pulley's geometry for an anchor at `p` (world).
+fn span(c: &Cable, r: f64, p: V3) -> Option<(f64, f64, V3, V3)> {
+    let (eu, pu, pw, m) = pulley_plane(c, r, p)?;
     let straight = (m * m - r * r).sqrt();
     let theta = pw.atan2(pu - r) - (r / m).acos();
     let beta = (theta - PI).rem_euclid(TAU);
@@ -472,7 +478,8 @@ impl CableRobot {
             if !(norm(flat) > 1e-9) || !axis.iter().all(|v| v.is_finite()) {
                 return Err(ConfigError::Invalid("frame.winch_directions".into()));
             }
-            cables.push(Cable { exit: exits[k], axis, ref_x: scale(flat, 1.0 / norm(flat)), anchor: anchors[k] });
+            let ref_x = scale(flat, 1.0 / norm(flat));
+            cables.push(Cable { exit: exits[k], axis, ref_x, ref_y: cross(axis, ref_x), anchor: anchors[k] });
         }
         let t_min = cfg.non_negative("cable.min_tension_n")?;
         let t_max = cfg.positive("cable.breaking_load_n")? / cfg.positive("cable.safety_factor")?;
@@ -641,14 +648,19 @@ impl CableRobot {
     /// The cables at a pose; `None` where one cannot be drawn (the anchor at its pulley).
     pub fn spans(&self, pose: &[f64]) -> Option<Vec<Span>> {
         let (p, r) = self.place(pose);
-        self.cables
-            .iter()
-            .map(|c| {
-                let b = mul(&r, c.anchor);
-                let (length, straight, u, exit) = span(c, self.pulley, add(p, b))?;
-                Some(Span { length, straight, u, exit, b })
-            })
-            .collect()
+        self.spans_at(p, &r)
+    }
+
+    /// `spans` with the pose placed (`place`).
+    fn spans_at(&self, p: V3, r: &M3) -> Option<Vec<Span>> {
+        // Of its length at once: collecting the options grew it twice.
+        let mut out = Vec::with_capacity(self.m());
+        for c in &self.cables {
+            let b = mul(r, c.anchor);
+            let (length, straight, u, exit) = span(c, self.pulley, add(p, b))?;
+            out.push(Span { length, straight, u, exit, b });
+        }
+        Some(out)
     }
 
     /// The structure matrix A (n x m, row by row): column k is cable k's wrench per newton, (u, b x u) in the degrees
@@ -668,8 +680,12 @@ impl CableRobot {
 
     /// The platform's mass matrix over its twist, in the degrees of freedom (n x n).
     fn platform_mass(&self, pose: &[f64]) -> Vec<f64> {
-        let (_, r) = self.place(pose);
-        let iw = matmul(&matmul(&r, &self.inertia), &transpose(&r));
+        self.platform_mass_at(&self.place(pose).1)
+    }
+
+    /// `platform_mass` at the pose's rotation `r`.
+    fn platform_mass_at(&self, r: &M3) -> Vec<f64> {
+        let iw = matmul(&matmul(r, &self.inertia), &transpose(r));
         let n = self.n();
         let mut out = vec![0.0; n * n];
         for (i, di) in self.dofs.iter().enumerate() {
@@ -686,9 +702,13 @@ impl CableRobot {
 
     /// What the cables have to give the platform besides its acceleration: c + g = (0, 0, m g, w x I_w w).
     fn platform_bias(&self, pose: &[f64], xi: &[f64]) -> Vec<f64> {
-        let (_, r) = self.place(pose);
+        self.platform_bias_at(&self.place(pose).1, xi)
+    }
+
+    /// `platform_bias` at the pose's rotation `r`.
+    fn platform_bias_at(&self, r: &M3, xi: &[f64]) -> Vec<f64> {
         let (_, w) = self.full(xi);
-        let iw = matmul(&matmul(&r, &self.inertia), &transpose(&r));
+        let iw = matmul(&matmul(r, &self.inertia), &transpose(r));
         let gyro = cross(w, mul(&iw, w));
         let full = [0.0, 0.0, self.moving() * self.g, gyro[0], gyro[1], gyro[2]];
         self.dofs.iter().map(|d| full[*d]).collect()
@@ -754,24 +774,29 @@ impl CableRobot {
     fn pose_of_lengths(&self, lengths: &[f64], start: &[f64]) -> Option<Vec<f64>> {
         let (n, m) = (self.n(), self.m());
         // A A^T and A r at a pose: Gauss-Newton solves (A A^T) step = A r, Newton H step = A r with H = -d(A r)/d xi.
-        let at = |pose: &[f64]| -> Option<(Vec<f64>, Vec<f64>)> {
+        // A A^T only where asked for: the Newton steps' differences need A r alone.
+        let at = |pose: &[f64], gauss: bool| -> Option<(Vec<f64>, Vec<f64>)> {
             let spans = self.spans(pose)?;
             let a = self.structure(&spans);
-            let aat = (0..n * n).map(|rc| (0..m).map(|k| a[rc / n * m + k] * a[rc % n * m + k]).sum()).collect();
+            let aat = if gauss {
+                (0..n * n).map(|rc| (0..m).map(|k| a[rc / n * m + k] * a[rc % n * m + k]).sum()).collect()
+            } else {
+                Vec::new()
+            };
             let rhs = (0..n).map(|r| (0..m).map(|k| a[r * m + k] * (spans[k].length - lengths[k])).sum()).collect();
             Some((aat, rhs))
         };
         let (mut pose, mut last, mut slow) = (start.to_vec(), f64::INFINITY, false);
         for _ in 0..100 {
-            let (aat, rhs) = at(&pose)?;
+            let (aat, rhs) = at(&pose, true)?;
             let newton = || -> Option<Vec<f64>> {
                 let mut h = vec![0.0; n * n];
                 for c in 0..n {
                     let mut e = vec![0.0; n];
                     e[c] = 1e-7;
-                    let up = at(&self.moved(&pose, &e))?.1;
+                    let up = at(&self.moved(&pose, &e), false)?.1;
                     e[c] = -1e-7;
-                    let down = at(&self.moved(&pose, &e))?.1;
+                    let down = at(&self.moved(&pose, &e), false)?.1;
                     (0..n).for_each(|r| h[r * n + c] = -(up[r] - down[r]) / 2e-7);
                 }
                 let sym: Vec<f64> = (0..n * n).map(|rc| 0.5 * (h[rc] + h[rc % n * n + rc / n])).collect();
@@ -855,8 +880,12 @@ impl CableRobot {
 
     /// L' = G xi = -A^T xi.
     fn length_rates(&self, spans: &[Span], xi: &[f64]) -> Vec<f64> {
+        self.length_rates_with(&self.structure(spans), xi)
+    }
+
+    /// `length_rates` with the structure matrix `a` known.
+    fn length_rates_with(&self, a: &[f64], xi: &[f64]) -> Vec<f64> {
         let (n, m) = (self.n(), self.m());
-        let a = self.structure(spans);
         (0..m).map(|k| -(0..n).map(|r| a[r * m + k] * xi[r]).sum::<f64>()).collect()
     }
 
@@ -1236,16 +1265,18 @@ impl Machine for CableRobot {
         }
         let at_rest = vec![0.0; m];
         let residual = |pose: &[f64]| -> Option<Vec<f64>> {
-            let spans = self.spans(pose)?;
+            let (p, rot) = self.place(pose);
+            let spans = self.spans_at(p, &rot)?;
             let t = self.tensions(&spans, &at_rest, &free, &at_rest).platform;
-            let (a, w) = (self.structure(&spans), self.platform_bias(pose, &vec![0.0; n]));
+            let (a, w) = (self.structure(&spans), self.platform_bias_at(&rot, &at_rest[..n]));
             Some((0..n).map(|r| (0..m).map(|k| a[r * m + k] * t[k]).sum::<f64>() - w[r]).collect())
         };
         // The potential the equilibrium is the least of: the platform's weight and the taut cables' springs.
         let energy = |pose: &[f64]| -> Option<f64> {
-            let spans = self.spans(pose)?;
+            let (p, rot) = self.place(pose);
+            let spans = self.spans_at(p, &rot)?;
             let springs = spans.iter().zip(&free).map(|(s, l)| self.ea * (s.length - l).max(0.0).powi(2) / (2.0 * l));
-            Some(springs.sum::<f64>() + self.moving() * self.g * self.place(pose).0[2])
+            Some(springs.sum::<f64>() + self.moving() * self.g * p[2])
         };
         let size = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
         for _ in 0..50 {
@@ -1362,19 +1393,24 @@ impl Machine for CableRobot {
             }
             return;
         }
-        let Some(spans) = self.spans(pose) else {
+        // The pose placed and the structure matrix once, for the spans, the rates and the platform.
+        let (p, rot) = self.place(pose);
+        let Some(spans) = self.spans_at(p, &rot) else {
             out.fill(f64::NAN);
             return;
         };
-        let (free, free_rates, rotor, speed) = self.winch_state(s, &spans);
+        let state = |k: usize| &s[2 * n + k * m..2 * n + (k + 1) * m];
+        let (free, free_rates, rotor, speed) = (state(0), state(1), state(2), state(3));
         let brakes = self.brakes(s);
-        let rates = self.length_rates(&spans, xi);
-        let t = self.tensions(&spans, &rates, &free, &free_rates);
         let a = self.structure(&spans);
-        let bias = self.platform_bias(pose, xi);
-        let rhs: Vec<f64> =
+        let rates = self.length_rates_with(&a, xi);
+        let t = self.tensions(&spans, &rates, free, free_rates);
+        let bias = self.platform_bias_at(&rot, xi);
+        let mut acc: Vec<f64> =
             (0..n).map(|r| (0..m).map(|k| a[r * m + k] * t.platform[k]).sum::<f64>() - bias[r]).collect();
-        let acc = solve(&self.platform_mass(pose), &rhs).unwrap_or_else(|| vec![f64::NAN; n]);
+        if !solve_in_place(&mut self.platform_mass_at(&rot), &mut acc) {
+            acc.fill(f64::NAN);
+        }
         out[n..2 * n].copy_from_slice(&acc);
         for k in 0..m {
             let j = &self.winches[k];
@@ -1411,8 +1447,20 @@ impl Machine for CableRobot {
     }
 
     fn motor_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
-        let m = self.m();
+        let (n, m) = (self.n(), self.m());
         let (pose, _) = self.platform(s);
+        if self.elastic {
+            // The rotors are states of their own: the spans only tell whether the pose can be drawn.
+            let (p, r) = self.place(pose);
+            if self.cables.iter().all(|c| pulley_plane(c, self.pulley, add(p, mul(&r, c.anchor))).is_some()) {
+                pos[..m].copy_from_slice(&s[2 * n + 2 * m..2 * n + 3 * m]);
+                vel[..m].copy_from_slice(&s[2 * n + 3 * m..2 * n + 4 * m]);
+            } else {
+                pos[..m].fill(f64::NAN);
+                vel[..m].fill(f64::NAN);
+            }
+            return;
+        }
         let Some(spans) = self.spans(pose) else {
             pos[..m].fill(f64::NAN);
             vel[..m].fill(f64::NAN);

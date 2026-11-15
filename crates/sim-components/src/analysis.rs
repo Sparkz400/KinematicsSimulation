@@ -2116,6 +2116,23 @@ fn judge_each(
     on_all_cores(count, |run| make(run).and_then(|cfg| judged(entry, &cfg)))
 }
 
+/// The most threads `on_all_cores` starts; 0: one per processor.
+static MAX_THREADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Limits the threads the analyses run their cycles on to `count` (0: one per processor, as by default). The results
+/// do not depend on it, only the time they take.
+pub fn set_max_threads(count: usize) {
+    MAX_THREADS.store(count, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How many threads `on_all_cores` starts at most: one per processor, or `set_max_threads`.
+fn threads() -> usize {
+    match MAX_THREADS.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => std::thread::available_parallelism().map_or(1, |n| n.get()),
+        count => count,
+    }
+}
+
 /// `work(0..count)` on all processors, in the order of the index: for runs that do not depend on each other.
 pub(crate) fn on_all_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T> {
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -2129,7 +2146,7 @@ pub(crate) fn on_all_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sy
             done.push((run, work(run)));
         }
     };
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(count.max(1));
+    let threads = threads().min(count.max(1));
     // One processor, or none known (WebAssembly, which cannot start threads): on this thread.
     let mut runs: Vec<_> = if threads <= 1 {
         worker()
@@ -3082,28 +3099,36 @@ pub fn optimise_cycle_with(
     let runs = std::cell::Cell::new(0usize);
     // Every setting run that passed every verdict, for the front.
     let passed = std::cell::RefCell::new(Vec::<FrontPoint>::new());
-    // The cycle of a setting and the checks it fails, if it runs.
-    let judged = |setting: &Setting| -> Option<(CycleLoad, Vec<&'static str>)> {
-        runs.set(runs.get() + 1);
+    // The cycle of a setting, the checks it fails, and its point of the front where it fails none; if it runs. Touches
+    // nothing shared, so that settings can run side by side.
+    let evaluate = |setting: &Setting| -> Option<(CycleLoad, Vec<&'static str>, Option<FrontPoint>)> {
         let changed = build(setting).ok()?;
         let mut sim = Sim::new(entry, &changed).ok()?;
         let load = analyse_cycle_with(&mut sim, false).ok()?;
         let failed: Vec<&'static str> =
             verdicts(&changed, &load).ok()?.iter().filter(|v| !v.ok).map(|v| v.check).collect();
-        if failed.is_empty() {
+        let point = failed.is_empty().then(|| {
             let utilisation = load.motors.iter().fold(0.0, |a: f64, m| a.max(m.utilisation));
             let (factors, blending, shaping) = (setting.factors, setting.blending, setting.shaping);
-            passed.borrow_mut().push(FrontPoint {
+            FrontPoint {
                 duration: load.duration,
                 energy: supply_energy(&changed, &load),
                 utilisation,
                 factors,
                 blending,
                 shaping,
-            });
-        }
+            }
+        });
+        Some((load, failed, point))
+    };
+    // A setting's run counted, and its point put on the front.
+    let count = |result: Option<(CycleLoad, Vec<&'static str>, Option<FrontPoint>)>| {
+        runs.set(runs.get() + 1);
+        let (load, failed, point) = result?;
+        passed.borrow_mut().extend(point);
         Some((load, failed))
     };
+    let judged = |setting: &Setting| -> Option<(CycleLoad, Vec<&'static str>)> { count(evaluate(setting)) };
     let start = Setting {
         factors: [1.0; 3],
         blending: cfg.bool("effects.corner_blending")?,
@@ -3261,19 +3286,25 @@ pub fn optimise_cycle_with(
                 })
             })
         });
-        'candidates: for candidate in candidates {
-            // A candidate that only leaves the tool swinging gets its tries with the shaper right after it.
+        // A candidate's tries, at most `budget`, up to the first that is faster than `best` by more than 0.1 ms: its
+        // own run, and where that only leaves the tool swinging its tries with the shaper right after it. They depend on
+        // the candidate's own runs alone, so the candidates' tries can run side by side.
+        let tries_of = |candidate: Setting, best: f64, budget: usize| {
+            let mut done = Vec::new();
             let mut tries = std::collections::VecDeque::from([candidate]);
             let mut raised = 0;
             while let Some(setting) = tries.pop_front() {
-                if runs.get() >= max_runs {
-                    break 'candidates;
+                if done.len() >= budget {
+                    break;
                 }
-                let Some((load, failed)) = judged(&setting) else { continue };
-                if failed.is_empty() && load.duration < best_load.duration - 1e-4 {
-                    accepted.push((setting.clone(), load.clone()));
-                    (best, best_load, improved) = (setting, load, true);
-                    break 'candidates;
+                let result = evaluate(&setting);
+                let Some((load, failed, _)) = &result else {
+                    done.push((setting, result));
+                    continue;
+                };
+                if failed.is_empty() && load.duration < best - 1e-4 {
+                    done.push((setting, result));
+                    break;
                 }
                 if !failed.is_empty() && failed.iter().all(|check| *check == "settling" || *check == "settling-angle") {
                     if !setting.shaping {
@@ -3289,12 +3320,37 @@ pub fn optimise_cycle_with(
                 // millimetre (0.05 mm on the gantry). A setting that fails on that alone, by less than a millimetre, is
                 // run again (twice at most) with those lifts higher by what the run lacked and 1 um.
                 let lack = load.clearance.map_or(f64::INFINITY, |run| clearance - run + 1e-6);
-                if failed == ["collision"] && raised < 2 && lack < 1e-3 {
+                if *failed == ["collision"] && raised < 2 && lack < 1e-3 {
                     let higher = raised_by(&setting, lack);
                     if higher != setting {
                         raised += 1;
                         tries.push_back(higher);
                     }
+                }
+                done.push((setting, result));
+            }
+            done
+        };
+        // The candidates are taken in order, the first faster one accepted: a batch at a time, their tries then counted
+        // in order as if they had run one after the other, those after the accepted one (or beyond `max_runs`)
+        // dropped. The first candidate runs alone (it is often taken, and runs beside it would only slow it down), then
+        // the batch doubles while candidates fail, up to one per processor. The result is the same with any batch.
+        let (mut from, mut batch) = (0, 1);
+        'candidates: while from < candidates.len() {
+            let chunk = &candidates[from..(from + batch).min(candidates.len())];
+            (from, batch) = (from + chunk.len(), (2 * batch).min(threads().max(1)));
+            let budget = max_runs.saturating_sub(runs.get());
+            let best_duration = best_load.duration;
+            let tried = on_all_cores(chunk.len(), |i| tries_of(chunk[i].clone(), best_duration, budget));
+            for (setting, result) in tried.into_iter().flatten() {
+                if runs.get() >= max_runs {
+                    break 'candidates;
+                }
+                let Some((load, failed)) = count(result) else { continue };
+                if failed.is_empty() && load.duration < best_load.duration - 1e-4 {
+                    accepted.push((setting.clone(), load.clone()));
+                    (best, best_load, improved) = (setting, load, true);
+                    break 'candidates;
                 }
             }
         }
@@ -3429,11 +3485,15 @@ pub fn optimise_cycle_with(
     }
     let mut front = Vec::new();
     if options.pareto {
-        for f in [0.8, 0.6, 0.4] {
-            let [v, a, j] = best.factors;
-            for factors in [[v, a * f, j * f], [v * f, a * f, j * f]] {
-                judged(&Setting { factors, ..best.clone() });
-            }
+        let [v, a, j] = best.factors;
+        let slower: Vec<Setting> = [0.8, 0.6, 0.4]
+            .into_iter()
+            .flat_map(|f| [[v, a * f, j * f], [v * f, a * f, j * f]])
+            .map(|factors| Setting { factors, ..best.clone() })
+            .collect();
+        // Side by side, counted in their order.
+        for result in on_all_cores(slower.len(), |i| evaluate(&slower[i])) {
+            count(result);
         }
         front = non_dominated(&passed.borrow());
     }

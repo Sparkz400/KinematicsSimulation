@@ -197,16 +197,9 @@ fn solve4(m: &M4, b: V4) -> Option<V4> {
     x.iter().all(|v| v.is_finite()).then_some(x)
 }
 
-/// The inverse of a 4 x 4 matrix, column by column; `None` where it is singular.
+/// The inverse of a 4 x 4 matrix, column by column as `solve4` finds each, eliminated once; `None` where it is singular.
 fn inverse4(m: &M4) -> Option<M4> {
-    let mut out = [[0.0; 4]; 4];
-    for c in 0..4 {
-        let col = solve4(m, std::array::from_fn(|r| if r == c { 1.0 } else { 0.0 }))?;
-        for r in 0..4 {
-            out[r][c] = col[r];
-        }
-    }
-    Some(out)
+    sim_components::chain::Lu::new(m)?.inverse()
 }
 
 /// A point mass m into `load`: its Jacobian jm (3 x 4), its acceleration am at no acceleration of the arms, its weight
@@ -729,16 +722,21 @@ impl H4 {
         if self.amplifier.is_none() {
             return (0.0, 0.0);
         }
-        let (t, w) = self.arms(s);
-        let (x, j) = self.pose(t);
+        self.twist_at(s, &self.pose(self.arms(s).0))
+    }
+
+    /// `twist` with the pose of the arms' angles (`pose`) known.
+    fn twist_at(&self, s: &[f64], (x, j): &(V4, M4)) -> (f64, f64) {
+        let (_, w) = self.arms(s);
         let at = self.turn_at();
         (self.kappa * x[3] - s[at], self.kappa * dot4(j[3], w) - s[at + 1])
     }
 
-    /// The amplifier's torque on the tool; zero without effects.amplifier_compliance.
-    fn amplifier_torque(&self, s: &[f64]) -> f64 {
+    /// The amplifier's torque on the tool, the pose of the arms' angles (`pose`) known; zero without
+    /// effects.amplifier_compliance.
+    fn amplifier_torque_at(&self, s: &[f64], pose: &(V4, M4)) -> f64 {
         self.amplifier.map_or(0.0, |a| {
-            let (twist, rate) = self.twist(s);
+            let (twist, rate) = self.twist_at(s, pose);
             a.torque(twist, rate)
         })
     }
@@ -831,9 +829,15 @@ impl H4 {
         if self.amplifier.is_none() {
             return self.rigid_load(t, w);
         }
-        let (x, j) = self.pose(t);
+        self.joint_load_at(s, &self.pose(t))
+    }
+
+    /// `joint_load` with effects.amplifier_compliance, the pose of the arms' angles (`pose`) known.
+    fn joint_load_at(&self, s: &[f64], pose: &(V4, M4)) -> Load {
+        let (t, w) = self.arms(s);
+        let (x, j) = *pose;
         let mut load = self.load_with(t, x, j, w, self.carried(), 0.0);
-        let torque = self.amplifier_torque(s);
+        let torque = self.amplifier_torque_at(s, pose);
         for r in 0..4 {
             load.1[r] += self.kappa * j[3][r] * torque;
         }
@@ -1265,10 +1269,12 @@ impl Machine for H4 {
     }
 
     fn derivatives(&self, s: &[f64], torque: &[f64], out: &mut [f64]) {
-        if self.amplifier.is_some() {
+        // The pose of the arms' angles, worked out once for the amplifier and the load (forward kinematics by Newton).
+        let pose = self.amplifier.is_some().then(|| self.pose(self.arms(s).0));
+        if let Some(pose) = &pose {
             let at = self.turn_at();
             out[at] = s[at + 1];
-            out[at + 1] = self.amplifier_torque(s) / self.tool_inertia();
+            out[at + 1] = self.amplifier_torque_at(s, pose) / self.tool_inertia();
         }
         if !self.elastic {
             let (acc, ..) = self.rigid_solve(s, torque);
@@ -1282,7 +1288,10 @@ impl Machine for H4 {
             return;
         }
         let (t, w) = self.arms(s);
-        let (mass, velocity, gravity) = self.joint_load(s);
+        let (mass, velocity, gravity) = match &pose {
+            Some(pose) => self.joint_load_at(s, pose),
+            None => self.joint_load(s),
+        };
         let mut rhs = [0.0; 4];
         for k in 0..4 {
             let joint = &self.joints[k];

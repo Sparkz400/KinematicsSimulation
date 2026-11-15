@@ -127,7 +127,8 @@ stays visible however long the window. The same plotter draws the operating poin
 ## Differences from the native build
 
 WebAssembly starts no threads. The analyses that share the processors natively (error bands, sampled runs, the
-catalogue search, the stability margins, the comparison of an effect on and off) run one after another there; the code
+catalogue search, the stability margins, the comparison of an effect on and off, the optimiser's candidates) run one
+after another there; the code
 falls back to one thread whenever `std::thread::available_parallelism` says one or knows none. The page offers the
 sizing check, the sweep and the fit, each one run or a set of short runs. Machine files are TOML; a JSON machine file
 is read by `sim-cli` and the app but not yet by the page. The fit takes a trace in the simulator's own columns, not a
