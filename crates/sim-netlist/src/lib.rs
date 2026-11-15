@@ -24,6 +24,11 @@ use toml::{Table, Value};
 
 /// `MachineEntry::build` of every machine file: the netlist is in the config itself.
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
+    let machine = build_without_cylinders(cfg)?;
+    sim_components::pneumatic::attach(cfg, &netlist::cylinders(cfg)?, machine)
+}
+
+fn build_without_cylinders(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let net = Netlist::parse(cfg)?;
     if let Some(scissor) = &net.scissor {
         return sim_components::base::mount(cfg, Box::new(scissor::ScissorMachine::from_node(cfg, &net, scissor)?));
@@ -183,6 +188,19 @@ fn schema(cfg: &Config, net: &Netlist, known: &[Config]) -> Config {
             ("sync_gain_1_s".to_string(), Value::Float(0.0)),
         ]);
         merge(&mut all, &Table::from_iter([("gantry".to_string(), Value::Table(sync))]));
+    }
+    // A pneumatic cylinder's table at its `values` path, and the effect switches only cylinders have.
+    for node in netlist::cylinders(cfg).unwrap_or_default() {
+        let table: Table = sim_components::pneumatic::TABLE.parse().unwrap_or_default();
+        let nested = node
+            .values
+            .rsplit('.')
+            .fold(Value::Table(table), |inner, part| Value::Table(Table::from_iter([(part.to_string(), inner)])));
+        let effects = sim_components::pneumatic::EFFECTS.map(|e| (e.to_string(), Value::Boolean(true)));
+        if let Value::Table(nested) = nested {
+            merge(&mut all, &nested);
+        }
+        merge(&mut all, &Table::from_iter([("effects".to_string(), Value::Table(Table::from_iter(effects)))]));
     }
     if let Ok(machine) = cfg.get("machine") {
         all.insert("machine".into(), machine.clone());

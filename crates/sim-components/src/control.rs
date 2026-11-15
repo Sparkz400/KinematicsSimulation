@@ -53,6 +53,12 @@ struct Segment {
     corner: Option<f64>,
     /// The motion law of its move: `profile.shape`, or the segment's own `shape`.
     law: MotionLaw,
+    /// `valves`: the commands it gives valves (`Machine::valves`, by index) once it has arrived, as the gripper acts.
+    #[serde(default)]
+    valves: Vec<(usize, f64)>,
+    /// `wait`: the end-position sensors ([valve, 0 retracted or 1 extended]) its dwell waits for before it counts.
+    #[serde(default)]
+    wait: Vec<(usize, usize)>,
 }
 
 /// One mode an input shaper cancels: its impulses (`shaper::impulses`, times in half damped periods), half its damped
@@ -165,6 +171,10 @@ pub struct Controller {
     stopping: bool,
     enabled: bool,
     pub payload_attached: bool,
+    /// The command of each valve of `Machine::valves` (+1 extend, -1 retract, 0 centre), set by the cycle's segments;
+    /// the simulation hands them to the machine every step.
+    #[serde(default)]
+    pub valves: Vec<f64>,
     pub drives: Vec<Drive>,
     /// Tool-side setpoints and following error.
     pub set_pos: Vec<f64>,
@@ -329,6 +339,7 @@ impl Controller {
             stopping: false,
             enabled: true,
             payload_attached: true,
+            valves: machine.valves().into_iter().map(|(_, command)| command).collect(),
             drives: Vec::new(),
             set_pos: vec![0.0; axes],
             set_vel: vec![0.0; axes],
@@ -581,7 +592,34 @@ impl Controller {
                     .and_then(Shape::from_name)
                     .ok_or_else(|| ConfigError::Invalid(format!("cycle.segment[{i}].shape")))?,
             };
+            // Valves by the id `Machine::valves` gives them: `valves = { z = "extend" }`, `wait = ["z.extended"]`.
+            let ids: Vec<String> = machine.valves().into_iter().map(|(id, _)| id).collect();
+            let valve = |id: &str| ids.iter().position(|v| v == id);
+            let mut valves = Vec::new();
+            if let Some(table) = segment.get("valves") {
+                let bad = || ConfigError::Invalid(format!("cycle.segment[{i}].valves"));
+                for (id, command) in table.as_table().ok_or_else(bad)? {
+                    let command = match command.as_str() {
+                        Some("extend") => 1.0,
+                        Some("retract") => -1.0,
+                        Some("centre") => 0.0,
+                        _ => return Err(bad()),
+                    };
+                    valves.push((valve(id).ok_or_else(bad)?, command));
+                }
+            }
+            let mut wait = Vec::new();
+            if let Some(list) = segment.get("wait") {
+                let bad = || ConfigError::Invalid(format!("cycle.segment[{i}].wait"));
+                for sensor in list.as_array().ok_or_else(bad)? {
+                    let (id, end) = sensor.as_str().and_then(|s| s.rsplit_once('.')).ok_or_else(bad)?;
+                    let end = ["retracted", "extended"].iter().position(|e| *e == end).ok_or_else(bad)?;
+                    wait.push((valve(id).ok_or_else(bad)?, end));
+                }
+            }
             segments.push(Segment {
+                valves,
+                wait,
                 target,
                 dwell_ticks: (segment
                     .get("dwell_s")
@@ -681,6 +719,11 @@ impl Controller {
             (*speed, *ramp) = (new.speed, new.ramp_s);
         }
         self.cam = machine.cam();
+        // The valves keep their commands; a machine with other valves starts them as it says.
+        let valves = machine.valves();
+        if valves.len() != self.valves.len() {
+            self.valves = valves.into_iter().map(|(_, command)| command).collect();
+        }
         self.gantry_sync = sync;
         (self.n_velocity, self.n_position, self.n_profile) = (n_velocity, n_position, n_profile);
         (self.profile_cycle, self.setpoint_ticks, self.params, self.segments) =
@@ -1384,7 +1427,7 @@ impl Controller {
                     match self.cycle {
                         Some(i) => {
                             self.payload_attached = self.segments[i].payload;
-                            Motion::Dwell { until_tick: tick + self.segments[i].dwell_ticks }
+                            self.arrived(i, tick)
                         }
                         None => Motion::Idle,
                     }
@@ -1457,7 +1500,14 @@ impl Controller {
                     (self.cycle, self.stopping) = (None, false);
                 }
             }
-            Motion::Dwell { until_tick } => {
+            Motion::Dwell { mut until_tick } => {
+                // Waiting for end-position sensors (`arrived`): the dwell counts from when they all report.
+                if until_tick == u64::MAX
+                    && let Some(i) = self.cycle
+                    && self.segments[i].wait.iter().all(|&(valve, end)| machine.end_sensors(valve)[end])
+                {
+                    until_tick = tick + self.segments[i].dwell_ticks;
+                }
                 if tick >= until_tick {
                     self.next_cycle_segment(machine);
                 } else {
@@ -1480,7 +1530,7 @@ impl Controller {
                         let lag = if waits { self.shaper_span(machine, &self.set_pos).ceil() } else { 0.0 };
                         self.motion = if t >= points[last].0 + lag * dt {
                             self.payload_attached = self.segments[i].payload;
-                            Motion::Dwell { until_tick: tick + self.segments[i].dwell_ticks }
+                            self.arrived(i, tick)
                         } else {
                             Motion::Trajectory { points, speeds, start_tick }
                         };
@@ -1749,6 +1799,18 @@ impl Controller {
         self.cycle = Some(next_index);
         self.passes += (next_index == 0) as u64;
         Some(next)
+    }
+
+    /// Cycle segment `i` has arrived at tick `tick`: its valve commands go out, and its dwell starts, or waits for its
+    /// end-position sensors first (a dwell until `u64::MAX`, see `Motion::Dwell`).
+    fn arrived(&mut self, i: usize, tick: u64) -> Motion {
+        for &(valve, command) in &self.segments[i].valves {
+            if let Some(v) = self.valves.get_mut(valve) {
+                *v = command;
+            }
+        }
+        let until_tick = if self.segments[i].wait.is_empty() { tick + self.segments[i].dwell_ticks } else { u64::MAX };
+        Motion::Dwell { until_tick }
     }
 
     fn next_cycle_segment(&mut self, machine: &dyn Machine) {

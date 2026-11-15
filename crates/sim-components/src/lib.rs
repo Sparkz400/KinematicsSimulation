@@ -27,6 +27,7 @@ pub mod joint;
 pub mod mech;
 pub mod motor_fit;
 pub mod path;
+pub mod pneumatic;
 pub mod profile;
 pub mod program;
 pub mod report;

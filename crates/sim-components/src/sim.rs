@@ -573,6 +573,9 @@ impl Sim {
         }
         self.machine.set_dwelling(self.control.dwell_progress().is_some());
         self.machine.set_brake_engaged(!self.control.enabled());
+        for (k, &command) in self.control.valves.iter().enumerate() {
+            self.machine.set_valve(k, command);
+        }
         // The temperatures the last step ended with; fed back here and not after the parts warm, so that the losses
         // the parts warmed with are those the machine reports after the step.
         self.feed_temperatures_back();

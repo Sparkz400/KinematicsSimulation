@@ -627,7 +627,44 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             POS,
         ],
     ),
+    (
+        "cylinder",
+        "A double-acting pneumatic cylinder at the tool, moved by its directional valve and not by a drive (sim_components::pneumatic; checks cushion-energy, load-factor). It is no tool axis: the cycle commands its valve (a segment's valves = { <id> = \"extend\" }) and waits for its end-position sensors (wait = [\"<id>.extended\"]). Its signals are cylinder.<id>.*; its weight belongs in the body of the axis that carries it.",
+        &[
+            ID,
+            field("key", Kind::Key, false, "Translation key of its name; default cylinder."),
+            field(
+                "values",
+                Kind::Table,
+                true,
+                "The table of its values (bore, stroke, valve, throttles, cushions, seals; see docs/config-reference.md).",
+            ),
+            POS,
+        ],
+    ),
 ];
+
+/// The `[[machine.cylinder]]` nodes of a file (`Netlist::parse` has checked their fields), for `pneumatic::attach`.
+pub fn cylinders(cfg: &Config) -> Result<Vec<sim_components::pneumatic::CylinderNode>> {
+    let Ok(Value::Array(nodes)) = cfg.get("machine.cylinder") else { return Ok(Vec::new()) };
+    nodes
+        .iter()
+        .map(|node| {
+            let field = |name: &str| node.get(name).and_then(Value::as_str);
+            let id = field("id").ok_or_else(|| ConfigError::Missing("machine.cylinder.id".into()))?;
+            let values =
+                field("values").ok_or_else(|| ConfigError::Missing(format!("machine.cylinder[{id}].values")))?;
+            if !cfg.get(values).is_ok_and(Value::is_table) {
+                return Err(ConfigError::Missing(format!("machine.cylinder[{id}].values = \"{values}\"")));
+            }
+            Ok(sim_components::pneumatic::CylinderNode {
+                id: id.into(),
+                key: field("key").unwrap_or("cylinder").into(),
+                values: values.into(),
+            })
+        })
+        .collect()
+}
 
 pub struct AxisNode {
     pub id: String,

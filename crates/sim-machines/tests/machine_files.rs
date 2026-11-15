@@ -450,7 +450,11 @@ fn every_machine_file_passes_the_standard_suite() {
     fn lossless() -> Vec<Config> {
         LOSSLESS.lock().unwrap().clone()
     }
-    for name in ["single-axis.toml", "t-gantry.toml", "h-bot.toml", "corexy.toml", "xyz-portal.toml"] {
+    // The pneumatic axis's cylinder rests in its end stop through the suite (it has no motor; the suite's pulse is on the
+    // servo X): its own energy and step checks are in tests/pneumatic.rs and sim_components::pneumatic.
+    for name in
+        ["single-axis.toml", "t-gantry.toml", "h-bot.toml", "corexy.toml", "xyz-portal.toml", "pneumatic-axis.toml"]
+    {
         let shipped = file(name);
         let mut configs = Vec::new();
         for elastic in [true, false] {
