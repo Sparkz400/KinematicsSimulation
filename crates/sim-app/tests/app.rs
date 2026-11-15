@@ -20,7 +20,7 @@ fn payload_key(cfg: &Config) -> &'static str {
 
 /// How long a test waits for the app's work: the waits end when the work is done (an analysis has answered, the live
 /// machine has run so far), and this bound only stops one that never ends. A loaded 4-core CI runner took over 20 minutes
-/// for an optimiser and over 30 s for half a second of the live hexapod (14 November 2026), and failed the deadlines of
+/// for an optimiser and over 30 s for half a second of the slowest machine's live run (14 November 2026), and failed the deadlines of
 /// then; nextest stops a test that hangs before this bound (`.config/nextest.toml`).
 const PATIENCE: Duration = Duration::from_secs(3600);
 
@@ -1137,7 +1137,9 @@ fn the_app_optimises_the_cycle_and_applies_the_settings(entry: &'static MachineE
         assert_eq!(&model.config.get(path).unwrap().to_string(), value, "{path}");
     }
     let applied = cycle_time(entry, &model.config);
-    assert!((applied - after).abs() < 2e-3, "{}: {applied} s applied, {after} s found", entry.id);
+    // Within one profile cycle of 2 ms, that cycle included: the cycle time is counted in whole profile cycles, and a
+    // last bit in the arm's first inverse solution can move the end by one (3.896 s against 3.894 s on 15 November 2026).
+    assert!((applied - after).abs() < 2e-3 + 1e-9, "{}: {applied} s applied, {after} s found", entry.id);
     // The running simulation took the config: no refusal comes back.
     std::thread::sleep(Duration::from_millis(100));
     model.poll();
