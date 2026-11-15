@@ -276,6 +276,17 @@ fn setpoint_steps(entry: &MachineEntry, change: Option<&str>) -> (f64, f64, Sim)
     (step, demand, sim)
 }
 
+/// The lowest efficiency of a config's gears (`[gearbox]` and each motor's `[gearbox.<k>]`) where their mesh friction is
+/// on, 1 where it is off.
+fn sticking_mesh_efficiency(cfg: &Config) -> f64 {
+    if !cfg.bool("effects.gearbox_mesh_friction").unwrap_or(false) {
+        return 1.0;
+    }
+    let Some(gears) = cfg.get("gearbox").ok().and_then(|g| g.as_table()) else { return 1.0 };
+    let own = gears.values().filter_map(|g| g.get("efficiency"));
+    gears.get("efficiency").into_iter().chain(own).filter_map(|e| e.as_float()).fold(1.0, f64::min)
+}
+
 /// Switching input shaping off, or changing the shaper's frequency, at speed: the setpoint used to jump
 /// (16 mm, and a torque demand of 14.85 N m against 0.60 N m). The change now waits until the plan stands
 /// still, so the largest setpoint step stays the one of the undisturbed move: speed times profile cycle,
@@ -301,8 +312,14 @@ fn a_shaper_changed_at_speed_does_not_make_the_setpoint_jump() {
                 "{}: {change} makes the setpoint step by {changed_step} m, undisturbed {step} m",
                 entry.id
             );
+            // Without the shaper's tail a joint may arrive with the rest of its error while its gear's mesh sticks
+            // (effects.gearbox_mesh_friction): the velocity loop then holds the load with a torque anywhere in the
+            // stuck mesh's band, up to 1 / eta of the load's (`Gearbox::mesh_friction`), eta the lowest efficiency of
+            // the machine's gears. The six-axis arm's shoulder: 1.0047 against 0.8608 N m, 1.167 of it, with mesh
+            // friction on; 1.05 with it off. The jump this test was written for asked 25 times the undisturbed torque.
+            let band = 1.0 / sticking_mesh_efficiency(&entry.config());
             assert!(
-                changed_demand <= 1.05 * demand,
+                changed_demand <= 1.05 * band * demand,
                 "{}: {change} asks for {changed_demand} N m, undisturbed {demand} N m",
                 entry.id
             );
