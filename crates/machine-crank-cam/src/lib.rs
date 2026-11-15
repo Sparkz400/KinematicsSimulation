@@ -6,6 +6,9 @@
 //! - `flying-saw`: a saw on a carriage that runs with the material while it cuts and returns (`saw`).
 //! - `disc-cam`: a cam disc turned by the servo lifting a roller follower on a slide against its spring (`disc`): the
 //!   mechanical cam, its lift law, contact force and pressure angle.
+//! - `toggle-press`: a crank pushing the knee of two links in line between the frame and the ram, a knuckle-joint press:
+//!   the force amplification towards the links' dead centre, the frame's stretch, the force capacity over the stroke
+//!   (`toggle`).
 //!
 //! With `cam.run = false` (as shipped) the cycle is the config's `[[cycle.segment]]`, as on every machine: the crank
 //! swings through its working stroke and back as a servo press in pendulum mode does, the knife indexes, the saw's
@@ -19,6 +22,7 @@ mod crank;
 mod disc;
 mod knife;
 mod saw;
+mod toggle;
 
 use sim_components::chain::{JOINT_KEYS, JointMachine, JointSpec, MOTOR_IDS, MOTOR_KEYS, Mechanism};
 use sim_components::joint::RotaryJoint;
@@ -29,6 +33,7 @@ pub use crank::SliderCrank;
 pub use disc::DiscCam;
 pub use knife::RotaryKnife;
 pub use saw::FlyingSaw;
+pub use toggle::TogglePress;
 
 const I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("de", include_str!("../i18n/de.ftl"))];
 
@@ -53,6 +58,7 @@ entry!(SLIDER_CRANK, "slider-crank", "slider-crank.toml", crank::build);
 entry!(ROTARY_KNIFE, "rotary-knife", "rotary-knife.toml", knife::build);
 entry!(FLYING_SAW, "flying-saw", "flying-saw.toml", saw::build);
 entry!(DISC_CAM, "disc-cam", "disc-cam.toml", disc::build);
+entry!(TOGGLE_PRESS, "toggle-press", "toggle-press.toml", toggle::build);
 
 const G: f64 = 9.80665;
 
@@ -209,3 +215,5 @@ fn forwards(v: f64, smoothing: f64) -> f64 {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod toggle_tests;

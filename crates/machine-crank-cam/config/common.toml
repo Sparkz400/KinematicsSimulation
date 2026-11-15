@@ -40,6 +40,9 @@ brake_delay = false
 # The process: the press force on the slider over its stroke, the cut on the knife or the saw (tables in each machine's
 # file). On in the shipped configs.
 process_force = true
+# The press frame stretches under the press force, a spring in series with the work (frame.stretch_stiffness_n_m): read
+# by the toggle press alone, which has the key.
+frame_stretch = true
 velocity_feedforward = true
 torque_feedforward = true
 # The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),

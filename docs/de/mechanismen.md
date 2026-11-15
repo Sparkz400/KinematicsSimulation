@@ -313,6 +313,7 @@ gemeinsamen Prüfungen sind dieselben wie oben.
 | `rotary-knife` | Querschneider: Messerwalze mit 100 mm Radius, ein Messer, schneidet eine Bahn mit 1 m/s in Formate von 0,5 m | Planetengetriebe 10 | Walzenwinkel (rad), 0 mit einem Messer am Schnitt | |
 | `flying-saw` | Wagen 40 kg mit Säge 25 kg, Material mit 1 m/s, in Längen von 1,5 m in einem Fenster von 0,2 m geschnitten | Schrägverzahntes Ritzel auf Zahnstange hinter Planetengetriebe 5 | x (m) | `rack-feed-force` |
 | `disc-cam` | Kurvenscheibe: Grundkreis 60 mm, ein Rollenstößel von 2 kg (und ein Werkzeug von 1 kg), gegen seine Rückholfeder um 30 mm gehoben, 60 Umdrehungen je Minute | Planetengetriebe 10 | Scheibenwinkel (rad) | `disc-contact-force`, `disc-pressure-angle` |
+| `toggle-press` | Kniehebelpresse: Hebel von 150 mm in Linie zwischen Kopfstück und Stößel, eine Kurbel von 50 mm drückt das Knie über ein Pleuel von 250 mm, Stößel 20 kg und Werkzeug 8 kg, Hub 57,7 mm, Nennkraft 20 kN, Presskraft bis 12 kN | Planetengetriebe 10 | Kurbelwinkel (rad), 0 im Totpunkt der Hebel | `press-capacity`, `upper-link-force`, `lower-link-force`, `rod-force`, `frame-deflection` |
 
 **Schubkurbel.** Der Abstand des Schiebers vom Kurbelmittelpunkt ist x(θ) = r cos θ + √(l² − r² sin² θ), seine
 Übersetzung x'(θ) = −r sin θ − r² sin θ cos θ / w mit w = √(l² − r² sin² θ), und x''(θ) = −r cos θ − r² cos 2θ / w −
@@ -360,6 +361,40 @@ Stößel ab, was das Signal zeigt und das Modell nicht trennt (eine so knapp aus
 Scheibe liegt auf der ersten Hälfte des Hubs, wo s'' > 0 ist und Feder und Gewicht die Scheibe dort halten, wo sie gegen
 sie gehalten wird; hinter der Mitte des Hubs drehen sie sie weg.
 
+**Kniehebelpresse.** Zwei Hebel in Linie zwischen dem Drehpunkt O im Kopfstück und dem Stößel, der obere a, der untere
+b, ihr Gelenk das Knie; eine Kurbel vom Radius r drückt das Knie über ein Pleuel der Länge c zur Seite. Eine Kurbel und
+kein Kugelgewindetrieb: der kurbelgetriebene Kniehebel ist die klassische Form und behält den drehenden Antrieb und die
+Kurvenscheibe der Kiste; der spindelgetriebene Kniehebel (das Knie an der Mutter) ist nicht gebaut. Mit dem oberen Hebel
+um φ aus der Senkrechten steht der Stößel x = a cos φ + √(b² − a² sin² φ) unter O (die Formel der Schubkurbel, der obere
+Hebel ihre Kurbel), x = a + b, wo die Hebel gestreckt stehen (φ = 0, der Totpunkt). Das Gelenk ist der Kurbelwinkel q von
+diesem Totpunkt; der Mittelpunkt der Kurbel liegt so, dass das Pleuel dort waagerecht liegt, die Kurbel um
+`crank.angle_at_dead_centre_deg` zu ihm (90: quer, die Übersetzung fällt linear in den Totpunkt; gegen 180 in Linie,
+eine lange flache Rast). Das Knie schließt das Viergelenk O–Knie–Kurbelzapfen–Kurbelmitte: φ aus den zwei Kreisen in
+geschlossener Form, φ' = D·P_q / D·K_φ und φ'' = −(E·E + D·(K_φφ φ'² − P_qq)) / D·K_φ aus der festen Länge des Pleuels
+(D = K − P, E = K_φ φ' − P_q), also x' = x_φ φ' und x'' = x_φφ φ'² + x_φ φ''. Die Übersetzung x' (m/rad) ist im
+Totpunkt null: ein Kurbelmoment τ hält am Stößel die Kraft τ / x', die in den Totpunkt hinein ohne Grenze wächst. Die
+Umkehrung von der Stößelhöhe hat zwei Äste, vor und nach dem Totpunkt (`TogglePress::crank_angle`); die Anschläge
+(`joint.max_angle_deg`) sagen, ob die Kurbel durch ihn hindurch darf. Die Massen: Kurbel und Pleuelende am Zapfen, der
+obere Hebel ein gleichförmiger Stab (m a² / 3 um O), das Knie mit dem anderen Pleuelende und einem Anteil des unteren
+Hebels, der Stößel mit Werkzeug und dem Rest: J(q) = J_Kurbel + m_Zapfen r² + (m_oben / 3 + m_Knie) a² φ'² + m_x x'²,
+mit seinem Geschwindigkeitsterm und dem Moment der Gewichte. Die Prozesskraft (`[process]`, über der Höhe des Stößels
+über dem unteren Totpunkt) drückt den Stößel hoch, solange er abwärts fährt oder steht, so dass sie durch eine Rast im
+Totpunkt hält, und klingt über `process.smoothing_m_s` ab, wenn er steigt. Das Gestell federt unter ihr auf
+(`effects.frame_stretch`, `frame.stretch_stiffness_n_m` = k), eine Feder in Reihe: der Stößel bleibt F / k vor dem Punkt
+stehen, an den ihn die Hebel stellen, und die Kraft ist die Wurzel von F = Tabelle(d + F / k), Abschnitt für Abschnitt
+der Tabelle gelöst. Signale: die Höhe des Stößels über dem unteren Totpunkt (mit der Auffederung), seine Geschwindigkeit
+und Beschleunigung, die Übersetzung x', die Presskraft, das Kraftvermögen in der Stellung und sein Anteil, die
+Auffederung des Gestells, die Kräfte der beiden Hebel (Zweigelenkstäbe, ihre Bolzen tragen dasselbe) und des Pleuels,
+und J(q). Prüfungen: `press-capacity`, die Presskraft in jeder Stellung innerhalb von
+min(`ratings.rated_press_force_n`, τ_max / |x'|), τ_max das Spitzenmoment des Antriebs über Übersetzung und
+Wirkungsgrad des Getriebes (höchstens `gearbox_max_torque_nm`): die Nennkraft nur über die letzten Millimeter, mit dem
+Abstand vom Totpunkt fallend, so dass eine Umformkraft früh im Hub sie verfehlt (und `motor-peak` des Motors);
+`upper-link-force` und `lower-link-force` gegen `ratings.link_max_force_n`, `rod-force` gegen `rod_max_force_n`,
+`frame-deflection` gegen `frame_max_deflection_m`. Der mitgelieferte Zyklus fährt vom oberen Totpunkt des Stößels (die
+Kurbel in Linie mit dem Pleuel, wo sie das Gewicht des Stößels ohne Moment hält) in einer Bewegung in den Totpunkt,
+wobei die Übersetzung den Stößel über die letzten Millimeter verlangsamt, rastet dort unter 11,5 kN, während der Motor fast nichts gibt, und fährt zurück;
+`config/toggle-press-cam.toml` tut dasselbe mit einer Kurvenscheibe bei 30 Hüben je Minute.
+
 **Elektronische Kurvenscheibe.** `sim_components::cam` hält eine Kurvenscheibe als Folgewert über einem Leitwert,
 periodisch, der Folgewert steigt je Leitwertperiode um seinen Vorschub (Kurbel oder Messer eine Umdrehung, die Säge 0).
 Segmente nehmen die Bewegungsgesetze der VDI 2143: `linear` (Synchronlauf), `dwell` (Rast), `3-4-5` und `4-5-6-7` (Polynome
@@ -383,7 +418,8 @@ Umdrehung je Hub wie eine mechanische Presse mit Schwungrad) oder mit der Servop
 
 Die mitgelieferten Konfigurationen lassen `cam.run = false`: der Zyklus schwenkt die Kurbel vom oberen Totpunkt in den
 unteren und zurück (Servopresse im Pendelhub), taktet das Messer um eine halbe Umdrehung hin und zurück und fährt den
-Sägewagen über seinen Hub und dreht die Kurvenscheibe eine halbe Umdrehung hin und zurück. Neben jeder liegt
+Sägewagen über seinen Hub, dreht die Kurvenscheibe eine halbe Umdrehung hin und zurück und fährt den Stößel der
+Kniehebelpresse vom oberen Totpunkt in den unteren und zurück. Neben jeder liegt
 `config/<id>-cam.toml`, dieselbe Konfiguration mit `cam.run = true`, die jedes Urteil besteht (die Grenzen der
 Kurvenscheibe darunter); oder die Kurvenscheiben laufen mit `--set cam.run=true` (App: der Schalter der Gruppe
 Elektronische Kurvenscheibe):
@@ -613,7 +649,18 @@ Bahngeschwindigkeit unter der laufenden Kurvenscheibe des Messers fährt den Lei
 Mitte der Rampe, 0,8 m/s nach 0,5 s, 0,45 m auf dem Weg, ohne Sprung der Geschwindigkeit. Die Kurvenscheibe bei 60°
 (Mitte eines 3-4-5-Hubs von 30 mm über 120°, r_b 60 mm, r_r 15 mm, e 10 mm): s0 = 0,0743303 m, s' = 0,0268574 m/rad,
 tan φ = 0,188709, φ = 10,687°; bei 2π rad/s drücken Feder und Gewicht mit 159,420 N, die Kontaktkraft ist 162,234 N, die
-Führungslast 30,084 N und das Moment an der Scheibe 4,28161 N m.
+Führungslast 30,084 N und das Moment an der Scheibe 4,28161 N m. Die Kniehebelpresse (Hebel 150 mm, Kurbel 50 mm um 120°
+zum im Totpunkt waagerechten Pleuel, Pleuel 250 mm), gegen einen Kreisschnitt für das Knie und zentrale Differenzen: bei
+−90° der Kurbel steht der Stößel 35,655 mm über dem unteren Totpunkt mit x' = 0,0364766 m/rad, bei −20° 1,792 mm und
+0,0108256, bei −2° 0,0156 mm und 0,00090095, im Totpunkt x' = 0, φ' = −0,2886751, x'' = −0,025 m/rad²; 1 mm darüber
+steht die Kurbel auf dem einen Ast bei −0,2646374 rad, auf dem anderen ebenso weit dahinter; 10 N m des Motors (100 N m
+an der Kurbel) halten bei −90° 2741,5 N und bei −5° 42530 N; 10 kN brauchen 1 mm vor dem Totpunkt 79,387 N m an der
+Kurbel, 0,1 mm davor 23,487 N m; das Gestell (5e7 N/m) federt unter den 20 kN Nennkraft 0,4 mm auf, aus den 12 kN der
+Tabelle werden 11538,46 N bei 0,2308 mm Auffederung; J = 0,01859375 kg m² im Totpunkt und 0,05605024 fern davon; das
+Kraftvermögen bei −90° ist 145,5 / 0,0364766 = 3988,85 N; ein Umformhub aus der Ruhe in die Ruhe nimmt im verlustfreien
+Lauf 20,615 J vom Motor (19,284 J ins Teil, 1,331 J ins Gestell); in der Rast gibt der Motor weniger als ein Zehntel der
+9,44 N m, die dieselbe Kraft 1 mm vor dem Totpunkt bräuchte; eine um 20 mm nach oben gelegte Umformkraft verfehlt
+`press-capacity` und `motor-peak`.
 
 Maschinentests (`machine-hexapod`, `machine-cable-robot`): Alle drei bestehen die Standardprüfungen, und ihre
 Standardzyklen bestehen alle Prüfungen. Hexapod: Jedes Bein ist in der Grundstellung (0, 0, 0,48 m) 0,5471158 m lang,
@@ -656,8 +703,9 @@ abgelehnt. Die Datei besteht die Standard-Testreihe mit dem Zylinder in Ruhe.
   dem Geschwindigkeits- und Rampenmodell des Bands); eine neue Leitgeschwindigkeit beginnt ihre Rampe bei der
   Geschwindigkeit des Leitwerts ohne seine Beschleunigung (ein Sprung der Beschleunigung, wo sie während einer Rampe
   kommt); das Gelenk von Kurbel, Messer und Kurvenscheibe hat keine Anschläge, solange die Kurvenscheibe es weiterdreht;
-  der Stößel der Kurvenscheibe ist ein geradegeführter (kein Schwinghebel) und hebt nie von der Scheibe ab; die Presskraft wirkt
-  nur beim Ausfahren (keine Rückfederung), die Schnittkraft von Messer und Säge nur vorwärts.
+  der Stößel der Kurvenscheibe ist ein geradegeführter (kein Schwinghebel) und hebt nie von der Scheibe ab; die Presskraft der
+  Schubkurbel wirkt nur beim Ausfahren (keine Rückfederung), die der Kniehebelpresse auch im Stillstand und klingt ab,
+  wenn der Stößel steigt (die Auffederung des Gestells ist eine masselose Feder, die Hebel sind starr), die Schnittkraft von Messer und Säge nur vorwärts.
 - Der Linear-Delta (`delta-linear`, drei Riemenachsen an Säulen, die sich neigen können,
   `geometry.column_incline_deg`) ist eine Parallelkinematik und keine dieser Maschinen; siehe die
   [Modellreferenz](../model-reference.md#linear-delta).

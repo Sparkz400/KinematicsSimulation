@@ -38,6 +38,7 @@ Test files, abbreviated in the tables:
 - [Hand calculations: linear delta](#hand-calculations-linear-delta)
 
 - [Hand calculations: four-axis delta picker D4](#hand-calculations-four-axis-delta-picker-d4)
+- [Hand calculations: toggle press](#hand-calculations-toggle-press)
 - [Vendor formulas and vendor documents](#vendor-formulas-and-vendor-documents)
 - [Self-consistency](#self-consistency)
 - [What is not validated](#what-is-not-validated)
@@ -575,6 +576,28 @@ pulse the servo X, and the cylinder rests in its end stop, so they check that it
 (the equilibrium is the stop's deflection under the net pressure force). For the cylinder itself energy conservation
 does not apply (it is fed by the supply): the closed-cylinder check and the enthalpy balance above take its place, and
 the stroke-time convergence that of the travel.
+
+## Hand calculations: toggle press
+
+The knuckle-joint press `toggle-press` of `machine-crank-cam` (tests in its `src/toggle_tests.rs`): links a = b =
+0.15 m, crank r = 0.05 m at 120° from the rod at the dead centre, rod c = 0.25 m, the crank's centre at (0.275,
+−0.1933013) m from the top pivot. The independent numbers come from a circle intersection for the knee, the ram by
+Pythagoras and central differences for the rates, not from the closed-form chain of `toggle.rs`.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Ram and ratio at three crank angles and the dead centre | −90°: knee (0.0709256, −0.1321724), φ = 0.4925083, x = 0.2643449 m (35.655 mm above the bottom dead centre), x' = 0.0364766 m/rad; −20°: x = 0.2982085 m, x' = 0.0108256; −2°: x = 0.2999844 m, x' = 0.00090095; 0°: x = a + b, x' = 0, φ' = D·P_q / D·K_φ = −r sin(t0) / a = −0.2886751 (D = (−c, 0)), x'' = −(a + a²/b) φ'² = −0.025 m/rad²; every rate the difference of its position, through the dead centre too | 1e-7 | `the_toggle_kinematics_match_the_hand_worked_linkage` |
+| The inverse's two branches | 1 mm above the bottom dead centre cos φ = x / 2a = 0.9966667, φ = ±0.0816724: the crank at −0.2646374 rad before, as far past after; 0.1 mm: −0.0871754 rad; the round trip over the stroke; beyond the links' reach none | 1e-7, 1e-8 | `the_inverse_has_a_branch_on_each_side_of_the_dead_centre` |
+| The force amplification | 10 N m of the motor through 10, loss-free: 100 N m at the crank hold 100 / x' = 2741.48 N at −90° and 42530.15 N at −5°, 15.5 times as much | 1e-3 N m | `the_toggle_amplifies_the_crank_torque_towards_the_dead_centre` |
+| Holding torque of 10 kN | F x' at the crank: 79.3873 N m 1 mm before the dead centre (8.18 N m at the motor), 23.4866 N m 0.1 mm before it, 0 at it | 1e-3 N m | `the_holding_torque_falls_towards_the_dead_centre` |
+| The frame's stretch (5e7 N/m) | 20000 / 5e7 = 0.4 mm under the rated force, the `frame-deflection` limit; at the dead centre the table's 12000 N − 2e6 N/m · F / k: F = 12000 / 1.04 = 11538.46 N, the ram 0.230769 mm short of the links' bottom (signals `ram.height`, `frame.deflection`); rigid 12000 N at the bottom | 1e-3 N, 1e-9 m | `the_frame_stretches_under_the_press_force_and_the_ram_stops_short` |
+| Reflected inertia | J = J_crank + m_pin r² + (m_up/3 + m_knee) a² φ'² + m_x x'²: 0.01 + 0.003125 + 2.9166667 · 0.0225 / 12 = 0.01859375 kg m² at the dead centre, 0.05605024 at −90°; the speed term dJ/dq q'² / 2 and gravity's dV/dq by differences | 1e-9, 1e-7 | `the_reflected_inertia_far_from_and_at_the_dead_centre_match_the_hand_calculation` |
+| Force capacity and link forces | 15 N m · 10 · 0.97 = 145.5 N m at the crank: 3988.85 N at −90°, the rated 20 kN at −5°, the capacity's use 1 at its limit; at the dead centre both links carry F, the rod nothing; at −20° the rod's torque about the crank's centre is −F x' = −108.256 N m (virtual work) | 1e-3, 1e-6 | `the_force_capacity_and_the_link_forces_match_the_hand_calculation` |
+| A forming force early in the stroke | The 12 kN table 20 mm up asks about 380 N m of the crank's 145.5: `press-capacity` and `motor-peak` fail | – | `a_forming_force_early_in_the_stroke_overloads_the_drive` |
+| The dwell at the dead centre | The press force 11538 N held while the motor gives under a tenth of the 9.44 N m it would take 1 mm before the dead centre | 5 N; 10 % | `the_toggle_holds_the_press_force_at_the_dead_centre_with_little_motor_torque` |
+| Energy of a forming stroke | Into the part 22 J (the table's area) less 12000 u − 1e6 u² over the last u = 0.2308 mm, 19.284 J; into the frame F² / 2k = 1.331 J; 20.615 J; the motor's Σ τ Δφ from rest 5.5 mm above to rest at the dead centre, rigid and loss-free | 1 % | `a_forming_stroke_takes_the_hand_worked_energy_from_the_motor` |
+| Friction feedforward from the model | (1 N m + 0.2 · 2 rad/s) / (10 · 0.97) + 0.05 + 2e-4 · 20 = 0.1983299 N m | 1e-6 | `the_steady_friction_is_the_hand_calculated_one` |
+| Standard suite, verdicts | The suite (with gravity: the middle of the crank's range lies where the ram's weight pulls towards the dead centre, stable); the shipped cycle and `toggle-press-cam.toml` pass every verdict | suite's | `toggle_press_passes_the_standard_suite`, `every_default_cycle_and_every_cam_passes_its_verdicts` |
 
 ## Friction feedforward in the shipped configs
 

@@ -959,6 +959,17 @@ CSV aus Leit- und Folgewert (und Steigungen) in `cam.table_file`. In der App zei
 Stößels, die Pleuelkraft und die Trägheit an der Kurbel über dem Hub; der Schleppfehler ist der des Folgewerts gegen die
 Kurvenscheibe.
 
+Die Kniehebelpresse (`toggle-press`) ist die Kniehebelform: ihre Kurbel drückt das Knie zweier Hebel in Linie, und nahe
+ihrem Totpunkt hält ein kleines Kurbelmoment eine große Stößelkraft. `sim-cli verdicts toggle-press` beurteilt neben
+den Prüfungen des Motors die Presskraft gegen das Kraftvermögen in jeder Stellung (`press-capacity`: die Nennkraft von
+20 kN, oder weniger, wo das Kurbelmoment über die Übersetzung dx/dq weniger gibt: 3989 N auf halbem Hub), die Kräfte der
+Hebel und des Pleuels und die Auffederung des Gestells (`frame-deflection`, 0,23 mm unter den 11,5 kN des
+mitgelieferten Teils gegen 0,4 mm). Die Umformkraft im Hub nach oben gelegt
+(`--set 'process.distance_m=[0.02, 0.021, 0.022, 0.023]'`), und `press-capacity` und `motor-peak` verfehlen: fern vom
+Totpunkt gibt der Mechanismus wenig Kraft. Im Oszilloskop bleibt der Stößel 0,23 mm über dem unteren Totpunkt stehen
+(`ram.height`, die Auffederung des Gestells, `effects.frame_stretch`), und in der Rast im Totpunkt bleibt die Presskraft,
+während das Moment des Motors fast auf nichts fällt.
+
 ## Einen Hexapod oder einen Seilroboter auslegen
 
 Zwei Parallelkinematiken mit allgemein gehaltenen Maßen und Siemens-Motoren 1FK2105-4AF an S210-Antrieben (jeder andere

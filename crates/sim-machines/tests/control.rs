@@ -280,7 +280,7 @@ fn a_move_arrives_and_comes_to_rest() {
 
 /// The machines that work on a process (a press, a cross cutter, a flying saw, a disc cam's stroke) and carry their load
 /// through the whole cycle: their cycles keep the payload, and no gripper acts.
-const NO_GRIPPER: &[&str] = &["slider-crank", "rotary-knife", "flying-saw", "disc-cam"];
+const NO_GRIPPER: &[&str] = &["slider-crank", "rotary-knife", "flying-saw", "disc-cam", "toggle-press"];
 
 #[test]
 fn the_cycle_visits_every_segment_and_switches_the_payload() {
@@ -703,6 +703,11 @@ const UNREAD: &[(&str, &str)] = &[
     ("delta-h4", "effects.arm_tube_inertia"),
     // The crank-cam crate's common switch: the disc cam works on no process.
     ("disc-cam", "effects.process_force"),
+    // The crank-cam crate's common switch: only the toggle press has a press frame to stretch.
+    ("slider-crank", "effects.frame_stretch"),
+    ("rotary-knife", "effects.frame_stretch"),
+    ("flying-saw", "effects.frame_stretch"),
+    ("disc-cam", "effects.frame_stretch"),
     // Read by machine files' gantries only, as its config says.
     ("t-gantry", "effects.gantry_yaw"),
 ];

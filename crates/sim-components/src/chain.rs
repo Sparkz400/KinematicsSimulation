@@ -395,8 +395,11 @@ impl<M: Mechanism> JointMachine<M> {
                 continue;
             }
             let (_, gravity) = self.load(&q, &vec![0.0; n]);
+            // A process force that holds at rest (a press's force through a dwell) twists the gearbox too; the
+            // mechanisms whose process acts only in motion put none here.
+            let process = self.process(&q, &vec![0.0; n]);
             let twisted: Vec<f64> =
-                (0..n).map(|k| q[k] + self.joints[k].drive.gearbox.static_twist(gravity[k])).collect();
+                (0..n).map(|k| q[k] + self.joints[k].drive.gearbox.static_twist(gravity[k] - process[k])).collect();
             self.mechanism.forward(&q, &mut tool);
             self.mechanism.forward(&twisted, &mut sagged);
             most = most.max(tool.iter().zip(&sagged).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max));

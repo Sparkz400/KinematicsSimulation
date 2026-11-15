@@ -119,6 +119,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `gantry_yaw` | T E | off | Read by machine files only: the bridge of a `machine.gantry` node yaws, one more coordinate held by its drives, belts and joints' spring (values in `[gantry]`, see [machine files](machine-files.md#a-gantry-that-yaws-and-tools-on-rotary-axes)); signals `gantry.<id>.yaw`, `.sync_error`, `.moment`, check `gantry-sync`. On in `machines/dual-gantry.toml`, off in the H-bot, CoreXY and rack gantry files, so that earlier results stay as they were; the crates have no such bridge |
 | `cable_chain` | T E S | off | A cable chain whose moving mass grows with x, plus drag. On an inclined single axis the moving run is lifted too |
 | `process_force` | T E S | off | A force on the tool (single axis: the carriage) while the cycle dwells |
+| `frame_stretch` | the crank and cam machines (read by the toggle press) | on | The press frame stretches under the press force, a spring in series with the part (`frame.stretch_stiffness_n_m`): the ram stops short of the links' bottom by F / k, signal `frame.deflection`, check `frame-deflection` |
 | `hard_stops` | T E S | on | Spring-damper stops beyond both ends of each stroke |
 | `holding_brake` | T E S | on | Motor holding brakes that act while the drives are disabled, in the elastic and in the rigid model |
 | `brake_delay` | T E S | off | The holding brakes engage `brake.engage_delay_s` after they are asked to hold (the torque off, or the end of a category 1 stop) and release `brake.release_delay_s` after they are asked to let go; a hanging axis sags while its brake engages. Off: at once, as before. Optional in a config file (off) |
@@ -1021,10 +1022,11 @@ Beside each machine's config in `crates/machine-crank-cam/config/` lies `<id>-ca
 and the machine's file) with `cam.run = true` and nothing else changed (a test keeps it so): a whole config that runs
 the cam as its cycle, `sim-cli verdicts <id> --config crates/machine-crank-cam/config/<id>-cam.toml`.
 
-What the four machines of `machine-crank-cam` read beside `[motor]`, `[gearbox]`, `[drive]`, `[ratings]` and the rest (the
+What the five machines of `machine-crank-cam` read beside `[motor]`, `[gearbox]`, `[drive]`, `[ratings]` and the rest (the
 crank and the knife a `[joint]` as the rotary table's, the saw a `[slide]` and `[rack]` as the rack axis's). Formulas in
 [mechanisms](mechanisms.md#crank-and-cam-mechanisms-machine-crank-cam). `effects.process_force` switches the press force and the
-cuts (on in all three).
+cuts (on in all three); `effects.frame_stretch` (in the crate's `common.toml`, read by the toggle press alone, on) the
+press frame's stretch under the press force.
 
 | Key | Unit | Meaning | Mark |
 | --- | --- | --- | --- |
@@ -1061,6 +1063,15 @@ cuts (on in all three).
 | `follower.roller_radius_m`, `follower.offset_m` (disc cam) | m | The roller's radius, and the follower's axis off the disc's centre (lowers the pressure angle on the rise where positive) | [estimate] |
 | `follower.spring_n_m`, `follower.spring_preload_n` (disc cam) | N/m, N | The return spring that holds the roller on the disc, and its force at the base circle | [estimate], [bounds] |
 | `ratings.disc_max_contact_force_n`, `ratings.disc_max_pressure_angle_deg` (disc cam) | N, ° | The verdicts `disc-contact-force` (the roller's load) and `disc-pressure-angle` (30° for a translating follower) | [estimate] |
+| `toggle.upper_link_m`, `toggle.lower_link_m` (toggle press) | m | The links between the top pivot and the knee, and the knee and the ram (lower ≥ upper) | [estimate] |
+| `toggle.upper_link_mass_kg`, `toggle.lower_link_mass_kg`, `toggle.lower_link_knee_share` (toggle press) | kg, kg, – | The links' masses (the upper a uniform bar about its pivot) and the share of the lower one at the knee; the rest moves with the ram | [estimate], masses [bounds] |
+| `crank.angle_at_dead_centre_deg` (toggle press) | ° | The crank's angle from the rod where the links stand stretched, the rod level there (0 to 180, 0 excluded): 90 across the rod, towards 180 in line with it | [estimate] |
+| `rod.mass_kg`, `rod.crank_end_share` (toggle press) | kg, – | As the slider-crank's; the rest moves with the knee | [estimate], [bounds] |
+| `ram.mass_kg` (toggle press) | kg | The ram on its gibs, the die apart (`mass.payload_kg`) | [estimate], [bounds] |
+| `frame.stretch_stiffness_n_m` (toggle press) | N/m | With `effects.frame_stretch`: the frame between the top pivot and the bed under the press force, a spring in series with the part | [estimate], [bounds] |
+| `process.distance_m`, `process.force_n`, `process.smoothing_m_s` (toggle press) | m, N, m/s | The press force over the ram's height above the bottom dead centre; it acts while the ram moves down or stands and fades out over the smoothing speed as it rises | [estimate], choice |
+| `ratings.rated_press_force_n` (toggle press) | N | The press's rated force, what frame and links are built for: the verdict `press-capacity` holds the press force within min(it, the crank's torque over x') | [estimate] |
+| `ratings.link_max_force_n`, `ratings.rod_max_force_n`, `ratings.frame_max_deflection_m` (toggle press) | N, N, m | The verdicts `upper-link-force` and `lower-link-force` (links and pins), `rod-force`, `frame-deflection` | [estimate] |
 
 All four have `[axis.crank]`, `[axis.knife]`, `[axis.x]` or `[axis.disc]` with `max_velocity_*`, `max_acceleration_*` and
 `max_jerk_*` as every machine; with `cam.run` the cam's peaks at the master's speed are checked against them when the
