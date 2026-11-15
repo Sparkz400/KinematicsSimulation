@@ -1016,7 +1016,7 @@ fn a_run_can_stop_the_machine_and_stop_finds_the_worst_moment() {
     };
     let entry = sim_machines::find("single-axis").unwrap();
     let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
-    let (torque, x) = (sim.signal_index("motor.x.torque").unwrap(), sim.signal_index("axis.x.position").unwrap());
+    let (torque, x) = (sim.signal_index("motor.m.torque").unwrap(), sim.signal_index("axis.x.position").unwrap());
     let off = rows(&["--stop-at", "0.3", "--stop-category", "0"]);
     assert!(off[301..].iter().all(|row| row[torque] == 0.0));
     let held = rows(&["--stop-at", "0.3", "--stop-category", "2"]);
