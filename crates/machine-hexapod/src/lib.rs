@@ -28,7 +28,9 @@
 //! shortcut: the payload is a point mass at the platform centre (no inertia of its own); give it an inertia where a
 //! large workpiece turns with the platform.
 
-use sim_components::chain::{JOINT_KEYS, JointMachine, JointSpec, MOTOR_IDS, MOTOR_KEYS, Mechanism, solve};
+use sim_components::chain::{
+    JOINT_KEYS, JointMachine, JointSpec, MOTOR_IDS, MOTOR_KEYS, Mechanism, condition_number, invert as inverse, solve,
+};
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::{HardStop, ShaftFriction, ThermalFeedback};
 use sim_components::rigid::{M3, V3, about, add, cross, dot, matmul, mul};
@@ -128,61 +130,6 @@ pub fn log(r: &M3) -> V3 {
     let n = norm(col);
     let sign = if dot(col, vee) < 0.0 { -1.0 } else { 1.0 };
     col.map(|v| sign * v / n * angle)
-}
-
-/// The eigenvalues of the symmetric n x n matrix `a` (row by row), by Jacobi rotations.
-pub fn eigenvalues(mut a: Vec<f64>, n: usize) -> Vec<f64> {
-    for _ in 0..100 {
-        let off: f64 = (0..n * n).filter(|k| k / n != k % n).map(|k| a[k].powi(2)).sum();
-        let diag: f64 = (0..n).map(|k| a[k * n + k].powi(2)).sum();
-        if !(off > 1e-30 * diag) {
-            break;
-        }
-        for p in 0..n {
-            for q in p + 1..n {
-                if a[p * n + q] == 0.0 {
-                    continue;
-                }
-                let theta = 0.5 * (a[q * n + q] - a[p * n + p]) / a[p * n + q];
-                let t = if theta == 0.0 { 1.0 } else { theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt()) };
-                let (c, s) = (1.0 / (t * t + 1.0).sqrt(), t / (t * t + 1.0).sqrt());
-                for k in 0..n {
-                    let (akp, akq) = (a[k * n + p], a[k * n + q]);
-                    a[k * n + p] = c * akp - s * akq;
-                    a[k * n + q] = s * akp + c * akq;
-                }
-                for k in 0..n {
-                    let (apk, aqk) = (a[p * n + k], a[q * n + k]);
-                    a[p * n + k] = c * apk - s * aqk;
-                    a[q * n + k] = s * apk + c * aqk;
-                }
-            }
-        }
-    }
-    (0..n).map(|k| a[k * n + k]).collect()
-}
-
-/// The 2-norm condition number of a rows x cols matrix (row by row): sqrt of the largest over the smallest eigenvalue
-/// of J^T J; infinite where it is singular.
-pub fn condition_number(j: &[f64], rows: usize, cols: usize) -> f64 {
-    let jtj: Vec<f64> =
-        (0..cols * cols).map(|rc| (0..rows).map(|k| j[k * cols + rc / cols] * j[k * cols + rc % cols]).sum()).collect();
-    let eig = eigenvalues(jtj, cols);
-    let (most, least) = (eig.iter().copied().fold(0.0, f64::max), eig.iter().copied().fold(f64::INFINITY, f64::min));
-    if !(least > 1e-24 * most) { f64::INFINITY } else { (most / least).sqrt() }
-}
-
-/// The inverse of an n x n matrix (row by row), column by column; `None` where it is singular.
-fn inverse(m: &[f64], n: usize) -> Option<Vec<f64>> {
-    let mut inv = vec![0.0; n * n];
-    for c in 0..n {
-        let e: Vec<f64> = (0..n).map(|r| if r == c { 1.0 } else { 0.0 }).collect();
-        let x = solve(m, &e)?;
-        for r in 0..n {
-            inv[r * n + c] = x[r];
-        }
-    }
-    Some(inv)
 }
 
 /// The legs at a platform pose: unit vectors u_i from base to platform joint, lengths L_i, and the platform joints'

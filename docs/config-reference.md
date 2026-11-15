@@ -16,6 +16,7 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 
 | L | [`crates/machine-delta-linear/default.toml`](../crates/machine-delta-linear/default.toml) | Linear delta, sized like the Festo EXPT-95 with Siemens 1FK2205-2AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#linear-delta) |
 | H | [`crates/machine-hexapod/default.toml`](../crates/machine-hexapod/default.toml) | Hexapod on six electric cylinders, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#hexapod) |
+| TR | [`crates/machine-tripod/default.toml`](../crates/machine-tripod/default.toml) | Tripod (3-RPS tilting table) on three electric cylinders, generic proportions with Siemens 1FK2104-4AF and Hiwin 20-10K3-FDC screws. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#tripod) |
 | CP, CS | [`crates/machine-cable-robot/config/`](../crates/machine-cable-robot/config/) | Planar (4 cables) and spatial (8 cables) cable robots, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Their keys are in [their own section](#cable-robots) |
 
 | ST, IL | [`machines/stepper-axis.toml`](../machines/stepper-axis.toml), [`machines/induction-lift.toml`](../machines/induction-lift.toml) | Machine files with a stepper motor (a NEMA 23 stepper on a small belt axis) and an induction motor (a 1.5 kW four-pole motor on a frequency converter, gearbox 10, vertical belt lift). [estimate] values. Their own keys are in [motor kinds](#motor-kinds) |
@@ -1102,6 +1103,37 @@ legs' friction bounded):
 | `workspace.tool_min`, `tool_max` | m, rad | The tool's box, the axes' ranges | −0.06, −0.06, 0.44, −0.08, −0.08, −0.12 to 0.06, 0.06, 0.54, 0.08, 0.08, 0.12 |
 | `workspace.max_joint_angle_deg` | ° | Steepest leg against the base's or the platform's normal; beyond: `error-hexapod-joint-angle` | 40 |
 | `workspace.max_condition_number` | – | Of the Jacobian, turns weighed by the platform radius; beyond: `error-hexapod-singularity` | 20 |
+
+## Tripod
+
+The tripod's config ([`machine-tripod/default.toml`](../crates/machine-tripod/default.toml)) has the hexapod's tables
+with the same meanings, one motor, coupling, screw and drive per leg, all alike: the screw a Hiwin 20-10K3-FDC
+(catalogue: diameters, lead, load ratings, nut stiffness, d n; `length_m` 0.35 and the rest estimates), the motor a
+1FK2104-4AF on an S210 6SL3210-5HE10-4UF0 (catalogue; its resistance an estimate, its inductance from the catalogue's
+short-circuit braking table, the current loop at 0.25 ms), the coupling 6000 N m/rad (estimate). The tool pose,
+`start.pose` and the targets are z (m), rx, ry (rad: R = Rx(rx) Ry(ry) Rz(g), the turn g dependent); `[axis.z]` takes
+`max_velocity_m_s`, `max_acceleration_m_s2`, `max_jerk_m_s3` (0.1, 2, 50, estimates), `[axis.rx]`, `[axis.ry]` the same in
+rad (0.5, 5, 200, estimates); `profile.vertical_axis` "z". Its own keys and those that differ from the hexapod's (all
+estimates; the masses, the legs' friction and force bounded):
+
+| Key | Unit | Meaning | Value |
+| --- | --- | --- | --- |
+| `tripod.base_radius_m` | m | Circle of the base joints (revolute about its tangent), at 0, 120, 240° | 0.3 |
+| `tripod.platform_radius_m` | m | Circle of the platform joints (spherical), at the same angles; also the length the condition number weighs tilts by | 0.2 |
+| `leg.closed_length_m`, `stroke_m` | m | A leg retracted, joint to joint; its stroke (the joint's range, its stops) | 0.45, 0.2 |
+| `leg.friction_coulomb_n`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | N, N s/m, m/s | The rod's guide and seal (`effects.joint_friction`), plus the nut's preload drag | 15, 40, 0.002 |
+| `leg.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | Buffers at the stroke's ends (`effects.hard_stops`) | 2e6, 2000 |
+| `leg.mass_kg`, `platform_share` | kg, – | A leg: body, motor, rod and nut; the share that moves with the platform joint | 3, 0.3 |
+| `leg.max_force_n` | N | The feed force the cylinder allows; judged by `tripod-leg-force` | 1500 |
+| `mass.platform_kg`, `platform_inertia_kgm2` | kg, kg m² | The platform; its inertia about its centre, x, y, z (the legs' shares are added) | 20; 0.35, 0.35, 0.65 |
+| `mass.payload_kg` | kg | Payload (`effects.payload`) | 40 |
+| `mass.payload_offset_m` | m | Its centre in the platform frame, from the platform centre | 0.05, 0, 0.1 |
+| `mass.payload_inertia_kgm2` | kg m² | Its inertia about its centre, x, y, z (platform frame) | 0.6, 0.6, 0.6 |
+| `workspace.tool_min`, `tool_max` | m, rad | The tool's box (z, rx, ry), the axes' ranges; the forward kinematics starts at its centre (tilts within ±1 rad) | 0.5, −0.2, −0.2 to 0.58, 0.2, 0.2 |
+| `workspace.max_revolute_angle_deg` | ° | A leg's swing at its base joint from the base's normal; beyond: `error-tripod-revolute-angle`, judged by `tripod-revolute-angle` | 30 |
+| `workspace.max_cone_angle_deg` | ° | A leg against the platform's normal at its spherical joint; beyond: `error-tripod-cone-angle`, judged by `tripod-cone-angle` | 35 |
+| `workspace.max_condition_number` | – | Of the Jacobian, tilts weighed by the platform radius; beyond: `error-tripod-singularity` | 5 |
+| `ratings.parasitic_tolerance_m` | m | The pose's error against the pure tilt (`platform.pose_error`) the cycle may reach; judged by `tripod-parasitic`, left out: not judged | 0.005 |
 
 ## Cable robots
 

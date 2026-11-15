@@ -1,5 +1,5 @@
 # Linear delta: three vertical toothed-belt axes on the columns of a frame, each carriage with a parallelogram of rods
-# down to a plate that stays level (as the Festo EXPT tripod and the Kossel printers). Sized like the Festo EXPT-95:
+# down to a plate that stays level (as the Festo EXPT and the Kossel printers). Sized like the Festo EXPT-95:
 # working range 950 mm across and 100 mm high, EGC-80 toothed-belt axes, servo motors on the axes without gearbox,
 # 1 kg rated load at its highest dynamics.
 # Every value says where it comes from:
@@ -156,7 +156,7 @@ plate_radius_m = 0.07
 rod_m = 1.1
 # Distance between the two rods of a pair, for the 3D view only.
 rod_spacing_m = 0.08
-# The columns' lean from the vertical, degrees: positive with their tops towards the machine's axis (a tripod whose
+# The columns' lean from the vertical, degrees: positive with their tops towards the machine's axis (a pyramid whose
 # columns meet above it), negative away from it; below 60 either way. The carriage's place (carriage_top_m, stroke_m) is
 # then its travel along the column, its joint stands at that times the cosine, and column_radius_m is measured at
 # z = 0. Upright, 0, as the shipped machine: Festo gives no angle for the EXPT.

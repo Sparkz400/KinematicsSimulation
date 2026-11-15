@@ -207,6 +207,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "machine-tripod"
+version = "1.0.0"
+dependencies = [
+ "sim-components",
+ "sim-core",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -327,6 +335,7 @@ dependencies = [
  "machine-parallel-scara",
  "machine-single-axis",
  "machine-t-gantry",
+ "machine-tripod",
  "serde_json",
  "sim-components",
  "sim-core",

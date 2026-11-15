@@ -1,5 +1,5 @@
 //! Linear delta: three toothed-belt axes on the columns of a frame at 120 degrees, each carriage carrying a
-//! parallelogram of two rods down to a plate that stays level (Festo EXPT tripod, the Kossel printers). The columns
+//! parallelogram of two rods down to a plate that stays level (Festo EXPT, the Kossel printers). The columns
 //! stand upright or lean by an angle alpha (`geometry.column_incline_deg`, positive with their tops towards the
 //! machine's axis). The tool is the plate's centre, x, y, z.
 //!

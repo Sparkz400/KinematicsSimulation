@@ -38,6 +38,7 @@ Test files, abbreviated in the tables:
 - [Hand calculations: linear delta](#hand-calculations-linear-delta)
 
 - [Hand calculations: four-axis delta picker D4](#hand-calculations-four-axis-delta-picker-d4)
+- [Hand calculations: tripod](#hand-calculations-tripod)
 - [Vendor formulas and vendor documents](#vendor-formulas-and-vendor-documents)
 - [Self-consistency](#self-consistency)
 - [What is not validated](#what-is-not-validated)
@@ -533,6 +534,27 @@ The SCARA and the six-axis arm with `kinematics.tool_space` on ([mechanisms](mec
 | Two-way bending, energy at an instant | The six-axis arm under gravity, loss-free, no motor torque, all three directions, links bent by 1 mm (1 mrad) and moving, joints turning: dE/dt along the state's own rates by central differences is zero (1e-5 W left; without G 0.22 W, without ½ Ṁ_d ḋ 0.012 W), rigid and elastic | 1e-4 W | `two_way_bending_trades_energy_without_loss_at_every_instant` |
 | Two-way bending, energy over a run | The standard suite's energy conservation (0.1 % of the pulse's energy over 10 s): the tube hanging under gravity with all three directions, elastic and rigid; the six-axis arm's loss-free elastic config with the payload, gravity off, its links bending in their joints' planes | 0.1 % | `two_way_bending_keeps_the_energy_of_a_hanging_link`, `two_way_bending_keeps_the_six_axis_arms_energy` |
 | Two-way bending at rest and with losses | The shipped six-axis arm, all three directions: the standard suite's static hold (1e-7 m for 1 s, the gears holding the bent links' weight shift) and loss budget (the links' damping as `power.link_bending`) | suite's | `two_way_bending_holds_still_and_balances_the_losses` |
+
+## Hand calculations: tripod
+
+The 3-RPS tilting table ([mechanisms](mechanisms.md#tripod)), its default config: rb 0.3 m, rp 0.2 m, legs 0.45 m
+retracted, 62.7 kg moving (20 kg platform, 3 x 0.9 kg of legs, 40 kg payload at (0.05, 0, 0.1) m). All in
+`machine-tripod`.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| The standard suite | As every machine; its loss-free configs without gravity, as the hexapod's | – | `the_tripod_passes_the_standard_suite` |
+| Leg lengths | Level at z = 0.54: √(0.54² + 0.1²) = 0.5491812 m, 0.0991812 m out; tilted 0.15 rad about x (p_x = rp (1 − cos 0.15) / 2 = 0.0011229 m): 0.5489779, 0.5750463, 0.5241851 m | 1e-7 m | `the_legs_have_the_hand_calculated_lengths` |
+| The parasitic motion at (0.15, 0.1) rad | Closed form g = −0.0075203 rad, p_x = 0.00061207 m, p_y = −0.00149654 m; second order rp (rx² − ry²)/4, −rp rx ry / 2, −rx ry / 2; each platform joint in its leg's plane; the normal the pure tilt's; tilted about x alone the pose error is p_x | 1e-8 m, 1e-7 rad (second order 2e-5 m, 1e-4 rad) | `the_parasitic_motion_is_the_hand_calculated_one` |
+| Forward of inverse | 9³ poses over the working range; legs no pose fits (one 1 m out) refused | 1e-12 | `the_forward_kinematics_undoes_the_inverse_over_the_working_range` |
+| Convergence of the forward kinematics | The chord step's contraction over the box grown by r = 0.04 m (weighed): at most 0.595 on 17³ points, changing by under 0.07 between neighbours, so below 0.7 | < 0.7 | `the_chord_iteration_contracts_over_the_grown_working_range` |
+| The Jacobian, level | Rows u_z (1, rp sin t_i, −rp cos t_i), u_z = 0.9832820: (0.983282, 0, −0.196656), (0.983282, ±0.170309, 0.098328); condition number √2 (u_z² diag(3, 3/2, 3/2)); below 1.7 at the box's corners | 1e-6; 1e-9 | `the_jacobian_at_the_level_pose_is_the_geometrys` |
+| Holding a centred load, level | m g / (3 u_z) = 62.7 · 9.80665 / (3 · 0.983282) = 208.4437 N per leg; 0.331749 N m per motor (f lead / 2π) | 1e-3 N, 1e-5 N m | `the_legs_hold_a_centred_load_with_the_hand_calculated_forces` |
+| Holding the offset load, level | Moment balance: centre of mass 0.031898 m out, V_i = m g (1/3 + 2 c cos t_i / (3 rp)), f_i = V_i / u_z: 274.9330 N (leg 1), 175.1991 N (legs 2, 3) | 1e-3 N | `the_legs_hold_an_offset_load_with_the_hand_calculated_forces` |
+| A leg's force rising at 2 m/s² | m (g + a) / (3 u_z) = 250.9544 N with q'' = u_z a, from M_q q'' + h | 1e-3 N | `a_leg_pushes_the_hand_calculated_force_for_an_acceleration_along_z` |
+| Momentum on a compliant base, rising at 0.1 m/s | m v = (0, 0, 6.27) N s, s × v = (0, −0.2, 0) N m s from the payload's offset, first moment (2.0, 0, 37.858) kg m | 1e-5 | `the_platform_has_the_hand_calculated_momentum` |
+| The new verdicts at their limits | Level: `tripod-leg-force` the offset load's forces against 1500 N, `tripod-leg-stroke` −0.0008188 m against 0.1 m, `tripod-revolute-angle` −10.4915° and `tripod-cone-angle` 10.4915° against 30° and 35°, `tripod-parasitic` 0 against 5 mm; the base joints limited to 10.4° refuse the level pose, 10.5° take it; the cone at 10.4° refuses it; no tolerance, no parasitic check | 1e-7 (forces 1e-3 N) | `the_new_verdicts_have_the_hand_calculated_values_and_limits` |
+| The default cycle | Every verdict passes: legs to 376 N, swing 12.0°, cone 21.6°, pose error 2.87 of 5 mm, settling 2.8 µm of 50 µm | – | `the_default_cycle_passes_its_verdicts` |
 
 ## Hand calculations: picking from a conveyor
 
