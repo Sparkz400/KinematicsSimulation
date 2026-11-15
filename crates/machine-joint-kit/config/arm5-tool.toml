@@ -157,6 +157,8 @@ torque_reserve = 0.8
 # Read but not used: no belt.
 tension_reserve = 0.8
 tension_margin_n = 0.0
+# The share of every limit the time-optimal plan may use, on top of the reserves above (1: all; 0.9 plans at 90 %).
+time_optimal_margin = 1.0
 path_tolerance_m = 0.0
 min_clearance_m = 0.0
 

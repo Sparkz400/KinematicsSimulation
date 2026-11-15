@@ -660,6 +660,8 @@ tension_reserve = 0.5
 # rigid model leaves out whatever the room: the guides' friction, which the loss-free rigid model does not carry:
 # the x guide's 15 N coulomb plus 20 N s/m at the axis' 0.8 m/s.
 tension_margin_n = 31.0
+# The share of every limit the time-optimal plan may use, on top of the reserves above (1: all; 0.9 plans at 90 %).
+time_optimal_margin = 1.0
 # For a path of lines and arcs: how far the planned path may leave them, so that transition curves
 # (clothoids) can take it from a line into an arc at speed. 0: the path as given, and a crawl into every arc.
 path_tolerance_m = 0.0

@@ -614,7 +614,36 @@ impl Controller {
                     .map_or([0.0; 5], |f| [f.coulomb, f.viscous, f.smoothing, f.drag.torque, f.drag.speed]))
             })
             .collect::<Result<Vec<_>>>()?;
-        let plan_limits = path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide, friction };
+        // 1 where a config (an older machine file) leaves it out.
+        let margin = if cfg.get("profile.time_optimal_margin").is_ok() {
+            cfg.positive("profile.time_optimal_margin")?
+        } else {
+            1.0
+        };
+        if margin > 1.0 {
+            return Err(ConfigError::Invalid("profile.time_optimal_margin".into()));
+        }
+        // Each motor's drive current, gearbox input speed and braking power as the verdicts judge them
+        // (`path::PlanLimits::ratings`); a line-up's one Braking Module shared out evenly over its motors.
+        let line_up = cfg.get("drive.braking_module").is_ok() && cfg.bool("drive.braking_module")?;
+        let ratings = machine
+            .motors()
+            .iter()
+            .map(|m| -> Result<[f64; 3]> {
+                let own = crate::catalog::motor_config(cfg, m.id)?;
+                let rating = |key: &str| own.f64(&format!("ratings.{key}")).unwrap_or(f64::INFINITY);
+                let dc_link = own.get("ratings.dc_link_capacitance_uf").is_ok();
+                let braking = if dc_link { rating("braking_resistor_peak_w") } else { f64::INFINITY };
+                let share = if line_up { machine.motors().len() as f64 } else { 1.0 };
+                Ok([
+                    rating("drive_max_current_a"),
+                    rating("gearbox_max_input_speed_rpm") * std::f64::consts::PI / 30.0,
+                    braking / share,
+                ])
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let plan_limits =
+            path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide, friction, ratings, margin };
         // A path through via points has to be one the planner times, from where the segment before ends; timed as fast as
         // the motors allow, so has the straight way of every other segment.
         for (i, segment) in segments.iter().enumerate() {

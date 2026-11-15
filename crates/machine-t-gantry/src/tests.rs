@@ -868,7 +868,8 @@ line,0.6,0.05",
         (sim, points, most)
     };
     let (mut sim, points, most) = plan(&[]);
-    assert!(most[1] > 0.999 && most[2] > 0.999, "speed and jerk used to {most:?}");
+    // The speed to the 0.99 of the motors' maximum the plan keeps (`path::SPEED_KEPT`).
+    assert!(most[1] > 0.989 && most[2] > 0.999, "speed and jerk used to {most:?}");
     let (duration, within_axis_limits) = (points[points.len() - 1].0, sim.plan_path(&pieces, false).unwrap());
     let slow = within_axis_limits[within_axis_limits.len() - 1].0;
     assert!(duration < 0.8 * slow, "{duration} s as fast as the motors allow, {slow} s within the axis limits");
@@ -883,7 +884,11 @@ line,0.6,0.05",
         "effects.gearbox_efficiency = false",
     ])
     .2;
-    assert!(most.iter().all(|m| *m > 0.999), "a small motor: torque, speed and jerk used to {most:?}");
+    // The speed to the 0.99 of the motors' maximum the plan keeps (`path::SPEED_KEPT`).
+    assert!(
+        most[0] > 0.999 && most[1] > 0.989 && most[2] > 0.999,
+        "a small motor: torque, speed and jerk used to {most:?}"
+    );
 
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
     for m in &load.motors {
@@ -1063,7 +1068,8 @@ fn belt_bound(x: f64) -> f64 {
 /// Limits that change within a piece: a line along X from (0.1, 0.35) to (0.9, 0.35) at 300 m/s^3, the belt rated
 /// 400 N. The belt allows 42.26 N / (11 kg * 2.5 / 4.2) = 6.455 m/s^2 at both ends and up to 7.7 m/s^2 in the middle
 /// (`belt_bound`). The plan with one limit per piece took 6.455 m/s^2 all along: distance / v + v / a + a / j =
-/// 0.8 / 1.2559 + 1.2559 / 6.455 + 6.455 / 300 = 0.8531 s (v the rated speed; it planned that). The plan point by
+/// 0.8 / 1.2559 + 1.2559 / 6.455 + 6.455 / 300 = 0.8531 s (v the rated speed; it planned that; since 15 November the
+/// rated speed less 1 %, 1.2433 m/s, 0.8576 s, and the point-by-point plan is quicker by less than the 1 ms it is read to). The plan point by
 /// point accelerates as the bound rises along its ramp, 6.455 m/s^2 at x = 0.1 to 6.73 m/s^2 at x = 0.23 where the ramp
 /// ends: the ramp takes the integral of dv / a(x), with x = 0.1 + v^2 / (2 * 6.6), 1.2559 * 2.5 / 16.137 - 1.2559^3 /
 /// (6 * 6.6) / 16.137 = 0.1915 s instead of 0.1946 s, but covers less of the line at the top speed, so the line takes
@@ -1087,16 +1093,15 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
     let sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
     let points = sim.plan_path(&sim_components::path::parse("line,0.9,0.35").unwrap(), true).unwrap();
     let duration = points[points.len() - 1].0;
-    let by_hand = 0.8 / 1.2559 + 1.2559 / belt_bound(0.9) + belt_bound(0.9) / 300.0;
+    // The top speed: the rated 1.2559 m/s less the 1 % the plan keeps back of a speed rating (15 November).
+    let v = 0.99 * 1.2559;
+    let by_hand = 0.8 / v + v / belt_bound(0.9) + belt_bound(0.9) / 300.0;
     assert!(
-        (belt_bound(0.9) - 6.455).abs() < 1e-3 && (by_hand - 0.8531).abs() < 1e-4,
+        (belt_bound(0.9) - 6.455).abs() < 1e-3 && (by_hand - 0.8576).abs() < 1e-4,
         "{} m/s^2, {by_hand} s",
         belt_bound(0.9)
     );
-    assert!(
-        duration < by_hand - 1e-3 && duration > by_hand - 2.5e-3,
-        "{duration} s, with one limit per piece {by_hand} s"
-    );
+    assert!(duration < by_hand && duration > by_hand - 2.5e-3, "{duration} s, with one limit per piece {by_hand} s");
     let (c, mut of_bound, mut hardest, mut most_change) = (1e-3, 0f64, 0f64, 0f64);
     for w in points.windows(3) {
         let acc = [(w[2].1[0] - 2.0 * w[1].1[0] + w[0].1[0]) / (c * c), 0.0];
@@ -1124,7 +1129,9 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
     let fine = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
     let points = fine.plan_path(&sim_components::path::parse("line,0.9,0.35").unwrap(), true).unwrap();
     let duration = points[points.len() - 1].0;
-    assert!(duration < 0.851693 && duration > 0.8515, "{duration} s, on 13 November 0.85175 s");
+    // Before 15 November (top speed 1.2559 m/s) 0.851565 s against the 0.851693 s of 13 November; since then 0.8561 s
+    // at 1.2434 m/s, quicker than one limit per piece.
+    assert!(duration < by_hand - 1e-3 && duration > by_hand - 2.5e-3, "{duration} s, one limit per piece {by_hand} s");
 }
 
 /// The guides' load rating limits the time-optimal plan (`Machine::rigid_guide_loads`): along X at z = 0.35 m the Z axis

@@ -794,6 +794,40 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         self.mechanism.rigid_guide_loads(pos, acc, out);
     }
 
+    /// The friction in each joint (`RotaryJoint::friction`, its Coulomb level and viscous part, at the joint) as torque
+    /// at its motor while the tool moves along `dir`: through the ratio and what a screw or rack passes on
+    /// (`extra_efficiency`), the joint's speed per speed along the path from the kinematics.
+    fn rigid_friction(&self, pos: &[f64], dir: &[f64], out: &mut Vec<[f64; 2]>) {
+        let (_, qd, _) = self.joint_motion(pos, dir, &vec![0.0; pos.len()]);
+        for (joint, rate) in self.joints.iter().zip(qd) {
+            let (f, lever) = (&joint.drive.friction, 1.0 / (joint.drive.ratio() * joint.drive.extra_efficiency));
+            let sign = if rate == 0.0 { 0.0 } else { rate.signum() };
+            out.push([f.coulomb * sign * lever, f.viscous * rate * lever]);
+        }
+    }
+
+    /// The mechanism's signals (`Mechanism::signals`) and each joint's force (`joint.<id>.force`) at the joints' motion,
+    /// with the force M q'' + h that the rigid model passes to each joint (the process force left out, as the
+    /// feedforward leaves it out), read for each check of `rating_checks`; NaN for a life or a signal not among them.
+    fn rigid_checks(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut Vec<f64>) {
+        let n = self.n();
+        let (q, qd, qdd) = self.joint_motion(pos, vel, acc);
+        let (mass, bias) = self.load(&q, &qd);
+        let force: Vec<f64> = (0..n).map(|k| (0..n).map(|c| mass[k * n + c] * qdd[c]).sum::<f64>() + bias[k]).collect();
+        let mut values = Vec::new();
+        self.mechanism.signals(&q, &qd, &qdd, &force, &mut values);
+        let infos = self.mechanism.signal_infos();
+        for check in self.mechanism.rating_checks() {
+            let joint = (0..n).find(|&k| check.signal == format!("joint.{}.force", self.joints[k].id));
+            let value = match (check.life, joint) {
+                (true, _) => f64::NAN,
+                (false, Some(k)) => force[k],
+                (false, None) => infos.iter().position(|s| s.id == check.signal).map_or(f64::NAN, |i| values[i]),
+            };
+            out.push(value);
+        }
+    }
+
     /// The joints' motion (`joint_motion`), then `rigid_motor_torque` with the velocity terms: the Coriolis and
     /// centripetal torques of M(q) changing with the pose, in joint space too.
     fn feedforward_torque_moving(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut [f64]) {

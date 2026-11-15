@@ -520,6 +520,8 @@ torque_reserve = 0.8
 # and what is taken off them first (the guide's 15 N plus 20 N s/m at 3 m/s), as on the one-axis machine.
 tension_reserve = 0.5
 tension_margin_n = 75.0
+# The share of every limit the time-optimal plan may use, on top of the reserves above (1: all; 0.9 plans at 90 %).
+time_optimal_margin = 1.0
 # Not used on three axes (see docs/user-guide.md): paths run as given.
 path_tolerance_m = 0.0
 # How far a planned path may leave a corner between two lines to round it instead of stopping there (as a CNC's

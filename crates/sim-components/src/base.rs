@@ -298,6 +298,12 @@ impl Machine for Based {
     fn rigid_guide_loads(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_guide_loads(tool_pos, tool_acc, out)
     }
+    fn rigid_friction(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
+        self.inner.rigid_friction(tool_pos, tool_dir, out)
+    }
+    fn rigid_checks(&self, tool_pos: &[f64], tool_vel: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
+        self.inner.rigid_checks(tool_pos, tool_vel, tool_acc, out)
+    }
     /// The machine's, plus the base's kinetic and elastic energy (its potential energy in gravity left out: the
     /// machine's own energy is not conserved with it anyway, see the module's shortcut).
     fn energy(&self, state: &[f64]) -> f64 {
