@@ -1028,6 +1028,11 @@ impl Controller {
         self.reacting.is_some()
     }
 
+    /// Whether a category 2 stop (`StopCategory::Two`) is braking the plan.
+    pub fn halting(&self) -> bool {
+        matches!(self.motion, Motion::Halting { .. })
+    }
+
     /// Each drive's fault reaction (effects.drive_monitoring).
     pub fn fault_reaction(&self, k: usize) -> fault::Reaction {
         self.fault_settings[k].reaction

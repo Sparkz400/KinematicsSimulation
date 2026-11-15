@@ -549,6 +549,35 @@ then chopper, rectifier and trip as above, once, with one resistor of `braking_r
 
 A drive starts at rest already delivering the torque that holds the load, so a hanging axis does not sag: the velocity integrator, the torque filter and delay hold that torque, the current loop's integrator, output and delay the voltage R(ϑ) · i that holds its current, with the winding's resistance at its start temperature (before 14 November 2026 the cold one: a winding started or enabled warm began with a step of (R(ϑ) − R) i). The holding torque is the machine's equilibrium at the pose the motor encoders read (the forward transformation of the motor angles), not at the pose the machine stands at; where the gearbox's twist or a belt's stretch separates the two, it is the torque of a pose some micrometres away (on the single axis with its backlash 8.7 µm: 5.3e-4 N m against 0.8e-4 N m of cogging and tooth meshing, gone within a few milliseconds). At the start the DC link is at the bus voltage: the ½ L i² of the holding current is taken from it only at an Enable (below). Disabled drives give zero torque, current and voltage; their windings cool (with `effects.winding_heating`) and their DC links discharge (with `effects.dc_link`). The current in a winding when the pulses stop freewheels through the inverter's diodes into the DC link within microseconds, so in the first disabled step its energy ½ L i² is fed back (the drive's power for that step is −½ L i² / dt; without the DC link simulated it goes back to the supply). Enable restarts the loops holding where the motors stand; a winding keeps the temperature it has and a DC link the charge it has, less the ½ L i² of the current that holds the load (below the bus level the rectifier makes that up at the next step). A drive that tripped and is enabled again while its link is still above the trip level trips again unless the chopper brings it below within the step. Test: `disable_and_enable_conserve_the_electrical_energy` (windings plus capacitors across Disable and Enable, to 1e-9 relative).
 
+## Stops
+
+`Command::Halt(category)` stops the machine as a servo drive does, by the stop categories of IEC 60204-1 (`sim-cli run --stop-at SECONDS --stop-category N`, `sim-cli stop`, the FMU's `command.stop_category`, `ks.Sim.stop`, the OPC UA node `command.stop_category`). A move, path or cycle under way is dropped in each.
+
+- **Category 0** (SINAMICS STO / OFF2): the torque off at once, as `Command::Disable`. The motors coast against what holds them (friction, gravity, the process) until the holding brakes engage.
+- **Category 1** (OFF3, then off; as SS1): every drive's speed setpoint ramps down from the speed it measures on its OFF3 ramp, ω_rated / `drive.off3_ramp_s` (the same ramp as the fault reaction `"off3"`, whatever `drive.fault_reaction` is), the velocity and current loops following it with their torque and current limits, the DC link and the braking chopper as in any move (the position loop open). Once every ramp is at zero and every motor below `drive.pulse_off_speed_rad_s`, the brakes are asked to hold with the torque still on; after `brake.engage_delay_s` the torque goes off. If `drive.ss1_time_s` runs out first, the torque goes off then, the brakes asked to hold at the same moment, as SS1's timer does.
+- **Category 2**: the controller brakes the plan, the drives stay on. From where the plan stands at its speed v, every axis decelerates evenly to rest in T = max_i |v_i| / a_max,i (the axis limits `axis.*.max_acceleration_*`), so the tool keeps the direction it moved in and stops |v| T / 2 further on; then it holds there with torque on. A stop that would end outside the axes' range ends in T halved until it is inside (at most 8 times). The deceleration steps in and out (no jerk limit).
+
+```text
+category 1: s = v² / (2 a) + lag      t = v / a + lag      a = ω_rated / off3_ramp_s · (load per motor angle)
+category 2: s = v T / 2               T = max_i |v_i| / a_max,i
+category 0: s = v t_d − F t_d² / (2 m) + m v₁² / (2 (F + F_b))      v₁ = v − F t_d / m
+```
+
+with F what holds the axis (friction), F_b the brake's torque at the carriage and t_d the brake's engagement delay. The velocity loop follows a ramp somewhat behind, so the peak deceleration over 1 ms overshoots the ramp's at its start (6.0 against 5 m/s² on the single axis below); in category 2 the position loop follows the plan's steps in deceleration the same way (13.3 against 10 m/s²).
+
+**Brake delays** (`effects.brake_delay`, off by default): the brakes engage `brake.engage_delay_s` after they are asked to hold (the drives off, or the end of a category 1 stop) and release `brake.release_delay_s` after they are asked to let go (the drives on again), to the nearest base step; the brake model of [Holding brakes](#holding-brakes) is unchanged. Meanwhile a disabled hanging axis falls: g_eff t_d² / 2, g_eff the weight less what friction holds over the moved mass; a drive enabled again holds against the brake until it lets go. Off, or with both delays 0, the brakes follow the drives within the step as before.
+
+The stop's state (the SS1 timer, the brakes' timer) is the controller's and goes with its snapshot. Tests on the rigid, loss-free single axis (`ideal_rigid`: 6.125 kg reflected, 4 kg carriage), each seen to fail with its part taken out:
+
+| Test | By hand | Simulated |
+| --- | --- | --- |
+| `the_stops_travel_the_hand_calculated_distance_in_the_hand_calculated_time` | category 1 at 1 m/s, ramp 0.2512 s from 314 rad/s = 5 m/s²: 0.1 m in 0.2 s; category 2 at 10 m/s²: 0.05 m in 0.1 s | within 3 %; the tool's last 1 mm/s in category 2 within 20 % of the time (the position loop's lag) |
+| `a_category_0_stop_coasts_the_hand_calculated_distance_with_the_brake_delay` | 10 N friction, 50 N brake, 0.03 s delay: 0.075435 m; no delay 0.051042 m | within 1 % |
+| `a_hanging_axis_sags_by_hand_while_its_brake_engages` | upright, 39.227 N weight less 10 N friction on 6.125 kg: 2.1473 mm in 0.03 s (480 steps) | within 2 % |
+| `a_category_1_stop_brings_the_hand_calculated_energy_to_the_dc_link` | 3.0625 J less 0.0593 J copper loss: 470 µF to 191.95 V; 4.7 µF: the resistor 2.9412 J | within 0.3 V and 2 % |
+
+**Stopping distance** (`sim-cli stop MACHINE [--category N] [--points N]`, `stop::study`): the cycle (or the `[path]`, or `--path FILE`) runs once; the moments where each tool axis is fastest, where the machine's kinetic plus potential energy (`Machine::energy`) is largest, and N moments evenly over the pass (20 by default) are kept as snapshots of a second, identical run, and from each the stop is run until every axis stays below a hundredth of its speed limit for 0.1 s (at most 3 s; a carriage ringing on its belt and brake after the torque is off is not travelling any more). Per stop: how far the tool got from where it was at the trigger, over the axes in metres (over all axes on a machine without one), and how far each axis got, the farthest (not the path, so that ringing does not add up), the stopping time, the peak deceleration over 1 ms, whether an axis went beyond its range by more than `Machine::setpoint_slack` (a hard stop), the DC link's peak voltage and the braking resistors' energy, and whether a drive tripped (it then coasts, as a disabled drive). The worst is the stop with the longest tool distance; `stopping-distance` judges it against `ratings.max_stopping_distance_m` where the config has it, and `stop-dc-link` (with `effects.dc_link`) the stops' highest DC link voltage against the trip level, failed when a stop tripped a drive.
+
 ## T-gantry
 
 Source: [`machine-t-gantry/src/lib.rs`](../crates/machine-t-gantry/src/lib.rs).
@@ -726,7 +755,7 @@ ds/dt   = ω − (s − clamp(s, −s_max, +s_max)) / T_slip        s_max = 1 mr
 τ_brake = clamp( (τ_max / s_max) · s + c · ds/dt, −τ_max, +τ_max )
 ```
 
-Held, the shaft sits on a spring that reaches the brake torque at 1 mrad, with the damping c critical for the rotor on that stiffness. The torque never exceeds the brake torque: beyond it the brake slips, and what s is deflected beyond 1 mrad is forgotten within 50 µs. A brake that engages at speed therefore decelerates the rotor with brake torque over inertia until it stands, at any speed. (The brake was a LuGre contact before; its bristle damping gave many times the brake torque when it engaged at speed, and above 178 rad/s its state was too stiff for the integration step.) A released brake forgets its deflection within 1 ms. Brakes exist in the elastic and in the rigid model, and on both motors (there is no separate "brake on Z"; holding Z takes both).
+Held, the shaft sits on a spring that reaches the brake torque at 1 mrad, with the damping c critical for the rotor on that stiffness. The torque never exceeds the brake torque: beyond it the brake slips, and what s is deflected beyond 1 mrad is forgotten within 50 µs. A brake that engages at speed therefore decelerates the rotor with brake torque over inertia until it stands, at any speed. (The brake was a LuGre contact before; its bristle damping gave many times the brake torque when it engaged at speed, and above 178 rad/s its state was too stiff for the integration step.) A released brake forgets its deflection within 1 ms. With `effects.brake_delay` a brake engages and releases its delay after it is asked to (see [Stops](#stops)). Brakes exist in the elastic and in the rigid model, and on both motors (there is no separate "brake on Z"; holding Z takes both).
 
 ### Rigid reference model
 
@@ -1712,7 +1741,7 @@ Not marked as shortcuts in the code, but worth knowing. Most are stated in the s
 | Gearbox | Constant efficiency, constant stiffness, hard dead zone |
 | Frame | One mode, in X only |
 | Z axis | Rigid body leaning on a compliant guide, in X only |
-| Stop | No fast stop ramp, no emergency stop |
-| Brakes | A spring up to the brake torque, then slipping with it; no wear, no engagement delay. In the rigid model the spring holds the whole machine with the damping meant for the rotor |
+| Stop | Categories 0, 1 and 2 ([Stops](#stops)); category 2 brakes along the direction of motion, not along a curved path, and without a jerk limit; the OFF3 ramp is a time from the rated speed; no safe torque monitoring beyond the SS1 timer |
+| Brakes | A spring up to the brake torque, then slipping with it; no wear. Engagement and release delays one for all brakes of a machine (`effects.brake_delay`); during the release delay the drive holds against the brake (a drive's brake control would wait for it). In the rigid model the spring holds the whole machine with the damping meant for the rotor |
 | Cycle | The payload switches as a step on arrival; no gripper time, no swinging payload |
 | Feedforward | Rigid model with inertia and gravity. No friction feedforward, so some following error stays while moving |

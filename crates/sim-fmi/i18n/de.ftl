@@ -38,3 +38,5 @@ fmi-drive-mode = Betriebsart des Antriebs: "position" folgt dem Plan der Steueru
 fmi-torque = Momentensollwert in Momentenregelung, am Motor
 fmi-velocity = Drehzahlsollwert in Drehzahlregelung, am Motor
 fmi-error-drive-mode = Keine solche Betriebsart (position, velocity, torque): { $arg }
+fmi-stop-category = Stoppkategorie: wie command.enable auf false die Antriebe anhält, "0" sofort momentfrei, "1" an der Schnellhalterampe, dann aus, "2" die Bahn abbremsen und mit Moment halten
+fmi-error-stop-category = Unbekannte Stoppkategorie (0, 1 oder 2): { $arg }

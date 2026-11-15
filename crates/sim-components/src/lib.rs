@@ -34,6 +34,7 @@ pub mod rigid;
 pub mod search;
 pub mod shaper;
 pub mod sim;
+pub mod stop;
 pub mod trace;
 pub mod transmission;
 

@@ -136,9 +136,19 @@ fn main() {
 
 fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let known: &[&str] = match args.positional(0) {
-        Some("run") => {
-            &["--move", "--cycle", "--trajectory", "--path", "--time-optimal", "--time", "--disable-at", "--every"]
-        }
+        Some("run") => &[
+            "--move",
+            "--cycle",
+            "--trajectory",
+            "--path",
+            "--time-optimal",
+            "--time",
+            "--disable-at",
+            "--stop-at",
+            "--stop-category",
+            "--every",
+        ],
+        Some("stop") => &["--category", "--points", "--path", "--time-optimal"],
         Some("analyze") => &["--trajectory", "--path", "--time-optimal", "--points", "--breakdown", "--budget"],
         Some("sweep") => &["--from", "--to", "--count", "--amplitude"],
         Some("optimise") => &["--runs", "--nominal", "--pareto", "--worst", "--path", "--time-optimal"],
@@ -217,6 +227,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("compare") => compare(args),
         Some("fmu") => fmu(args),
         Some("report") => report(args, tr),
+        Some("stop") => stop(args, tr),
         _ => Err(Failure("cli-usage", String::new())),
     }
 }
@@ -1627,7 +1638,8 @@ fn modes(args: &Args) -> Result<(), Failure> {
 }
 
 /// `run <machine>`: simulate a move or the cycle and write every signal as CSV. `--disable-at SECONDS`
-/// switches the drives off at that time, to show the axes held by the brakes, coasting or falling. Where the config has
+/// switches the drives off at that time, to show the axes held by the brakes, coasting or falling; `--stop-at SECONDS`
+/// stops them in the category of `--stop-category` (`Command::Halt`). Where the config has
 /// obstacles, the error stream says what the motion keeps from them as planned before the run, and the least clearance
 /// and first contact of the run after it.
 fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
@@ -1635,6 +1647,8 @@ fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let seconds = args.number("--time")?.unwrap_or(2.0);
     let every = args.number("--every")?.unwrap_or(16.0).max(1.0) as u64;
     let disable_at = args.number("--disable-at")?.map(|seconds| (seconds / sim.dt).round() as u64);
+    let stop_at = args.number("--stop-at")?.map(|seconds| (seconds / sim.dt).round() as u64);
+    let category = stop_category(args, "--stop-category")?;
     let mut out = output(args, "--out")?;
     let header: Vec<String> = sim.signal_infos().iter().map(|s| format!("{}[{}]", s.id, s.unit)).collect();
     writeln!(out, "{}", header.join(",")).map_err(io)?;
@@ -1650,9 +1664,83 @@ fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
         if Some(step) == disable_at {
             sim.command(Command::Disable).map_err(|e| Failure(e.key, String::new()))?;
         }
+        if Some(step) == stop_at {
+            sim.command(Command::Halt(category)).map_err(|e| Failure(e.key, String::new()))?;
+        }
         sim.step();
     }
     tell_run(tr, &sim);
+    out.flush().map_err(io)
+}
+
+/// The stop category of `option` (0, 1 or 2; 0 without it).
+fn stop_category(args: &Args, option: &str) -> Result<sim_components::StopCategory, Failure> {
+    let Some(text) = args.option(option) else { return Ok(sim_components::StopCategory::Zero) };
+    text.parse()
+        .ok()
+        .and_then(sim_components::StopCategory::from_number)
+        .ok_or_else(|| Failure("cli-error-bad-argument", format!("{option} {text}")))
+}
+
+/// `stop <machine> [--category N] [--points N]`: the stopping distance (`sim_components::stop::study`): the cycle, or the
+/// path of `--path FILE`, run once and stopped in category N (0 without it) at the moments each axis is fastest, the
+/// energy is largest, and at N moments evenly over the pass (20 without `--points`). One CSV line per stop, then the
+/// worst again; its moment and the verdicts on it to the error stream.
+fn stop(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    use sim_components::stop::{Moment, Stop};
+    let (entry, cfg) = machine_and_config(args)?;
+    let cfg = path_instead(args, entry, cfg)?;
+    let category = stop_category(args, "--category")?;
+    let points = match args.number("--points")? {
+        Some(n) if n.fract() != 0.0 || !(0.0..=10_000.0).contains(&n) => {
+            return Err(Failure("cli-error-bad-argument", format!("--points {n}")));
+        }
+        Some(n) => n as usize,
+        None => 20,
+    };
+    let study = sim_components::stop::study(entry, &cfg, category, points)?;
+    let axes = (entry.build)(&cfg)?.axes().to_vec();
+    let mut out = output(args, "--out")?;
+    let distances: Vec<String> = axes.iter().map(|a| format!("{}_distance[{}]", a.id, a.unit)).collect();
+    writeln!(
+        out,
+        "moment,trigger[s],tool_distance[m],stop_time[s],peak_deceleration[m/s2],hard_stop,peak_dc_link[V],\
+         braking_resistor_energy[J],tripped,{}",
+        distances.join(",")
+    )
+    .map_err(io)?;
+    let row = |s: &Stop, moment: String| {
+        let axes: Vec<String> = s.axis_distance.iter().map(|d| format!("{d:.6}")).collect();
+        format!(
+            "{moment},{:.4},{:.6},{:.4},{:.3},{},{:.2},{:.4},{},{}",
+            s.at,
+            s.tool_distance,
+            s.time,
+            s.peak_deceleration,
+            s.hard_stop,
+            s.peak_dc_voltage,
+            s.resistor_energy,
+            s.tripped,
+            axes.join(",")
+        )
+    };
+    let moment = |m: Moment| match m {
+        Moment::Grid => "grid".to_string(),
+        Moment::Fastest(k) => format!("fastest_{}", axes[k].id),
+        Moment::Energy => "energy".to_string(),
+    };
+    for s in &study.stops {
+        writeln!(out, "{}", row(s, moment(s.moment))).map_err(io)?;
+    }
+    if let Some(worst) = study.stops.get(study.worst) {
+        writeln!(out, "{}", row(worst, "worst".into())).map_err(io)?;
+        eprintln!("{}", tr.tr_arg("cli-stop-worst", &format!("{:.4} s ({})", worst.at, moment(worst.moment))));
+    }
+    for v in &study.verdicts {
+        let result = if v.ok { "ok" } else { "FAIL" };
+        let detail = format!("{}: {} / {} {result}", v.check, significant(v.value), significant(v.limit));
+        eprintln!("{}", tr.tr_arg("cli-stop-verdict", &detail));
+    }
     out.flush().map_err(io)
 }
 

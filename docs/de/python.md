@@ -106,6 +106,8 @@ out["motor.a.angle"], out["motor.a.speed"], out["motor.a.current"]   # jedes Sig
 sim.signals(), sim.time, sim.dt, sim.modes   # ["torque"], ...
 sim.analyze()                          # die Spalten von ks.analyze über den Lauf seit dem Start oder reset()
 sim.verdicts()                         # die Urteile über diesen Lauf: check, motor, value, limit, ok
+sim.stop(1)                            # ein Stopp der Kategorie 1 (0: Moment aus, 2: bremsen und halten); step() führt ihn aus
+sim.enable()                           # die Antriebe wieder ein
 sim.reset()
 ```
 
