@@ -1,0 +1,23 @@
+# The documentation as a browsable, searchable site: mdBook (a pinned release binary, see .github/workflows/pages.yml).
+#   mdbook build docs        -> target/book, served under /docs/ beside the sizing page
+[book]
+title = "Kinematics Simulation"
+authors = ["Nico Schuermann"]
+language = "en"
+src = "."
+
+[build]
+build-dir = "../target/book"
+create-missing = false
+
+# Links to files outside docs/ (configs, sources, catalogue) point to GitHub instead.
+[preprocessor.repo-links]
+command = "python3 ../tools/mdbook_repo_links.py"
+
+[output.html]
+git-repository-url = "https://github.com/Sparkz400/KinematicsSimulation"
+edit-url-template = "https://github.com/Sparkz400/KinematicsSimulation/edit/main/docs/{path}"
+site-url = "/KinematicsSimulation/docs/"
+
+[output.html.search]
+enable = true

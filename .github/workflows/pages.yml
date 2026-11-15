@@ -1,6 +1,7 @@
 name: Pages
 
 # The sizing page (crates/sim-wasm/web) on GitHub Pages: https://sparkz400.github.io/KinematicsSimulation/
+# and the documentation (docs/, mdBook) beside it: https://sparkz400.github.io/KinematicsSimulation/docs/
 on:
   push:
     branches: [main]
@@ -35,6 +36,24 @@ jobs:
           mkdir -p site
           cp crates/sim-wasm/web/index.html site/
           cp target/wasm32-unknown-unknown/wasm/sim_wasm.wasm site/
+      # mdBook and lychee as pinned release binaries, checked against their SHA-256 (no Rust dependency for the site).
+      - name: Install mdBook and lychee
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          cd "$RUNNER_TEMP"
+          curl -sSfLo mdbook.tar.gz https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz
+          curl -sSfLo lychee.tar.gz https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-gnu.tar.gz
+          echo "3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7  mdbook.tar.gz" | sha256sum -c
+          echo "1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a  lychee.tar.gz" | sha256sum -c
+          tar -xzf mdbook.tar.gz -C bin
+          tar -xzf lychee.tar.gz -C bin --strip-components=1 lychee-x86_64-unknown-linux-gnu/lychee
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # The docs under /docs/; a broken link or anchor between pages fails the build (web links are not fetched).
+      - name: Build and check the docs
+        run: |
+          mdbook build docs
+          lychee --offline --include-fragments --no-progress --exclude-path '404\.html$' target/book
+          cp -r target/book site/docs
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: site
