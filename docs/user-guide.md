@@ -978,11 +978,11 @@ and brings it back level.
 
 ```text
 $ sim-cli verdicts hexapod-rotary
-settling,,0.0005041,0.001000,ok
+settling,,0.0004184,0.001000,ok
 singularity,,3.589,15.00,ok
-gearbox-peak,3,182.8,278.0,ok
-crank-dead-centre,1,0.4452,1.222,ok
-rod-buckling,4,953.4,3530,ok
+gearbox-peak,3,144.6,278.0,ok
+crank-dead-centre,1,0.4372,1.222,ok
+rod-buckling,4,767.1,3530,ok
 platform-ball-joint,1,0.5734,0.6981,ok
 ...
 ```
@@ -995,10 +995,10 @@ angles. A target is refused where a rod cannot reach, a crank comes nearer its d
 `workspace.min_dead_centre_margin_deg`, a ball joint would leave its angle, two rods would come nearer than
 `workspace.min_rod_clearance_m`, or near a singularity. `crank.branch` picks the cranks' configuration (`"out"` or
 `"in"`) once for all legs.
-On its cycle the motors use at most 46 % of their torque curve, the gearboxes see at most 183 of their 278 N m, the
-cranks keep at least 64.5° from their dead centres, the rods carry at most 953 N against the 3530 N their buckling allows,
-and the platform settles within 0.50 mm: the gearboxes' twist under the seat's weight, which the motors' encoders do not
-see, is most of it (0.15 mm with rigid gearboxes). The velocity loops' gain is 0.10 N m s/rad (47.1° and 11.1 dB at the
+On its cycle the motors use at most 37 % of their torque curve, the gearboxes see at most 145 of their 278 N m, the
+cranks keep at least 65° from their dead centres, the rods carry at most 767 N against the 3530 N their buckling allows,
+and the platform settles within 0.42 mm: much of it the gearboxes' twist and backlash under the seat's weight, which the
+motors' encoders do not see. The velocity loops' gain is 0.10 N m s/rad (47.1° and 11.1 dB at the
 level pose, 38.7° and 9.6 dB with the friction off; 0.12 left 34.2° there).
 
 `cable-planar` hangs a carriage of 3 kg (up to 2 kg on it) in a vertical plane from 4 cables, `cable-spatial` a platform

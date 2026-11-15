@@ -422,7 +422,7 @@ torque_band = 0.0
 # [estimate] a motion base's accuracy at rest, 1 mm and 2 mrad (its cues are judged in mm and degrees). It counts the
 # gearboxes' twist and backlash under the seat's weight, which the motor encoders do not see: sideways the platform moves
 # some 0.46 m per radian of crank, so the twist under 41 N m (0.39 mrad) alone puts it 0.18 mm off. The cycle settles at
-# 0.49 mm and 0.18 mrad (0.15 mm with rigid gearboxes).
+# 0.42 mm and 0.19 mrad.
 settling_tolerance_m = 0.001
 settling_tolerance_rad = 0.002
 # [catalogue] SP100-04-50 (catalog/siemens/gearbox_sp.csv): 347 N m rated, 278 N m maximum (the geared motor's).

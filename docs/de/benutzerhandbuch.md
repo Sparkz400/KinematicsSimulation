@@ -994,11 +994,11 @@ rollt, giert und nickt sie, jeweils aus der Lage davor, und bringt sie waagrecht
 
 ```text
 $ sim-cli verdicts hexapod-rotary
-settling,,0.0005041,0.001000,ok
+settling,,0.0004184,0.001000,ok
 singularity,,3.589,15.00,ok
-gearbox-peak,3,182.8,278.0,ok
-crank-dead-centre,1,0.4452,1.222,ok
-rod-buckling,4,953.4,3530,ok
+gearbox-peak,3,144.6,278.0,ok
+crank-dead-centre,1,0.4372,1.222,ok
+rod-buckling,4,767.1,3530,ok
 platform-ball-joint,1,0.5734,0.6981,ok
 ...
 ```
@@ -1011,10 +1011,10 @@ Kugelgelenke. Ein Ziel wird abgelehnt, wo eine Stange nicht hinreicht, eine Kurb
 `workspace.min_dead_centre_margin_deg`, ein Kugelgelenk seinen Winkel verließe, zwei Stangen sich näher kämen als
 `workspace.min_rod_clearance_m` oder nahe einer Singularität. `crank.branch` wählt die Lage der Kurbeln (`"out"` oder
 `"in"`) einmal für alle Beine.
-Im Zyklus nutzen die Motoren höchstens 46 % ihrer Momentenkennlinie, die Getriebe sehen höchstens 183 ihrer 278 N m,
-die Kurbeln bleiben mindestens 64,5° von ihren Totpunkten, die Stangen tragen höchstens 953 N gegen die 3530 N, die ihr
-Knicken erlaubt, und die Plattform beruhigt sich auf 0,50 mm: der Großteil ist die Verdrehung der Getriebe unter dem
-Gewicht des Sitzes, die die Geber der Motoren nicht sehen (0,15 mm mit starren Getrieben). Die Drehzahlregler haben
+Im Zyklus nutzen die Motoren höchstens 37 % ihrer Momentenkennlinie, die Getriebe sehen höchstens 145 ihrer 278 N m,
+die Kurbeln bleiben mindestens 65° von ihren Totpunkten, die Stangen tragen höchstens 767 N gegen die 3530 N, die ihr
+Knicken erlaubt, und die Plattform beruhigt sich auf 0,42 mm: vieles davon ist die Verdrehung und das Spiel der Getriebe
+unter dem Gewicht des Sitzes, die die Geber der Motoren nicht sehen. Die Drehzahlregler haben
 0,10 N m s/rad (47,1° und 11,1 dB in der waagrechten Lage, 38,7° und 9,6 dB ohne Reibung; 0,12 ließ dort 34,2°).
 
 `cable-planar` hängt einen Schlitten von 3 kg (bis zu 2 kg darauf) in einer senkrechten Ebene an 4 Seile,
