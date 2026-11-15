@@ -128,51 +128,103 @@ fn a_cable_the_exact_solve_takes_out_of_the_band_goes_to_its_bound() {
 
 /// Motor angles that no pose fits, as a run with a following error has them: the spatial robot's motors 0.163 s and
 /// 1.703 s into its cycle on a weak drive (sim-app's `demanding` config, 14 November 2026), 2.5 rad behind on cable 1
-/// and 1.9 rad on cable 7, 12.7 and 9.6 mm of cable at 200 rad/m. Gauss-Newton on the lengths slowed to a ratio of
-/// 0.72 and then 0.97 a step there and ran out of steps, and the following error was shown as NaN. Now the pose that
-/// fits them best: the cables' misfit grows when the pose moves 1 um or 1 urad either way along any of its six axes.
+/// and 1.9 rad on cable 7, 12.7 and 9.6 mm of cable at 200 rad/m. The forward kinematics fitted the lengths by
+/// Gauss-Newton, which slowed to a ratio of 0.72 and then 0.97 a step there and ran out of steps: the following error
+/// was shown as NaN. Elastic, the platform hangs where its weight and the cables' tensions EA (L - l) / l balance,
+/// A t = w (to 1e-6 N and N m, every cable pulling or slack); rigid, it is where the lengths fit best: their misfit
+/// grows when the pose moves 1 um or 1 urad either way along any of its six axes.
 #[test]
-fn motor_angles_no_pose_fits_give_the_pose_that_fits_them_best() {
-    let robot = CableRobot::new(&SPATIAL.config()).unwrap();
-    for motors in [
-        [
-            218.1766718244078,
-            236.09204543034912,
-            246.82031457745563,
-            228.18806261401326,
-            230.0101951015795,
-            248.74408977052855,
-            257.55184642979265,
-            241.0469591701435,
-        ],
-        [
-            217.81652339558013,
-            236.09872513770574,
-            247.05701949764565,
-            228.0179794981002,
-            229.8651170709315,
-            249.02085196246475,
-            257.9467071660587,
-            241.16067748027044,
-        ],
-    ] {
-        let mut pose = vec![0.0; 6];
-        robot.forward(&motors, &mut pose);
-        let free: Vec<f64> = (0..8).map(|k| motors[k] / robot.winches[k].ratio()).collect();
-        let misfit = |pose: &[f64]| -> f64 {
-            robot.rest_lengths(pose).unwrap().iter().zip(&free).map(|(l, f)| (l - f).powi(2)).sum::<f64>().sqrt()
-        };
-        assert!(pose.iter().all(|v| v.is_finite()), "{pose:?}");
-        let best = misfit(&pose);
-        for axis in 0..6 {
-            for by in [-1e-6, 1e-6] {
-                let mut step = vec![0.0; 6];
-                step[axis] = by;
-                let moved = misfit(&robot.moved(&pose, &step));
-                assert!(moved > best, "{pose:?} fits by {best} m, moved by {by} along {axis} {moved} m");
+fn motor_angles_no_pose_fits_give_the_pose_the_platform_takes() {
+    for elastic in [true, false] {
+        let mut cfg = SPATIAL.config();
+        cfg.set_text(&format!("effects.cable_stretch = {elastic}")).unwrap();
+        let robot = CableRobot::new(&cfg).unwrap();
+        for motors in [
+            [
+                218.1766718244078,
+                236.09204543034912,
+                246.82031457745563,
+                228.18806261401326,
+                230.0101951015795,
+                248.74408977052855,
+                257.55184642979265,
+                241.0469591701435,
+            ],
+            [
+                217.81652339558013,
+                236.09872513770574,
+                247.05701949764565,
+                228.0179794981002,
+                229.8651170709315,
+                249.02085196246475,
+                257.9467071660587,
+                241.16067748027044,
+            ],
+        ] {
+            let mut pose = vec![0.0; 6];
+            robot.forward(&motors, &mut pose);
+            assert!(pose.iter().all(|v| v.is_finite()), "elastic {elastic}: {pose:?}");
+            let free: Vec<f64> = (0..8).map(|k| motors[k] / robot.winches[k].ratio()).collect();
+            if elastic {
+                let spans = robot.spans(&pose).unwrap();
+                let t: Vec<f64> =
+                    spans.iter().zip(&free).map(|(s, l)| (robot.ea * (s.length - l) / l).max(0.0)).collect();
+                let (a, w) = (robot.structure(&spans), robot.platform_bias(&pose, &[0.0; 6]));
+                for r in 0..6 {
+                    let off = (0..8).map(|k| a[r * 8 + k] * t[k]).sum::<f64>() - w[r];
+                    assert!(off.abs() < 1e-6, "{pose:?}: {off} N or N m left on axis {r}, tensions {t:?}");
+                }
+                continue;
+            }
+            let misfit = |pose: &[f64]| -> f64 {
+                robot.rest_lengths(pose).unwrap().iter().zip(&free).map(|(l, f)| (l - f).powi(2)).sum::<f64>().sqrt()
+            };
+            let best = misfit(&pose);
+            for axis in 0..6 {
+                for by in [-1e-6, 1e-6] {
+                    let mut step = vec![0.0; 6];
+                    step[axis] = by;
+                    let moved = misfit(&robot.moved(&pose, &step));
+                    assert!(moved > best, "{pose:?} fits by {best} m, moved by {by} along {axis} {moved} m");
+                }
             }
         }
     }
+}
+
+/// The motors' angles of a pose ask the cables for the distribution's tensions, so the platform hangs there on them:
+/// at (0.3, -0.2, 1.3) m turned (0.05, -0.03, 0.08) the closed form t_ref + A^+ (w - A t_ref) asked -8.7 N of cable 5,
+/// a slack cable, and the platform hung 1.5 mrad off. The free lengths of `inverse` stretch each cable to a tension
+/// EA (L - l) / l within the band (20 N to 1000 N) that holds the platform's weight, A t = w (to 1e-6 N and N m).
+/// And the machine set up at rest at the end of x turned 0.05 rad about z has its setpoint (where the motors' angles
+/// put the tool) within its setpoint slack of the pose: 0.42 mrad off about z, the gearboxes' twist, within 0.50 mrad;
+/// it had been 0.49 mrad against the default 0.1.
+#[test]
+fn the_platform_hangs_where_the_motors_put_it() {
+    let robot = CableRobot::new(&SPATIAL.config()).unwrap();
+    let pose = [0.3, -0.2, 1.3, 0.05, -0.03, 0.08];
+    let mut motors = vec![0.0; 8];
+    robot.inverse(&pose, &mut motors);
+    let spans = robot.spans(&pose).unwrap();
+    let t: Vec<f64> = (0..8)
+        .map(|k| {
+            let l = motors[k] / robot.winches[k].ratio();
+            robot.ea * (spans[k].length - l) / l
+        })
+        .collect();
+    assert!(t.iter().all(|v| (20.0 - 1e-6..=1000.0).contains(v)), "{t:?}");
+    let (a, w) = (robot.structure(&spans), robot.platform_bias(&pose, &[0.0; 6]));
+    for r in 0..6 {
+        let off = (0..8).map(|k| a[r * 8 + k] * t[k]).sum::<f64>() - w[r];
+        assert!(off.abs() < 1e-6, "{off} N or N m left on axis {r}, tensions {t:?}");
+    }
+    let end = [0.4, 0.0, 1.1, 0.0, 0.0, 0.05];
+    let mut cfg = SPATIAL.config();
+    cfg.set_text(&format!("start.pose = {end:?}")).unwrap();
+    let sim = sim_components::Sim::new(&SPATIAL, &cfg).unwrap();
+    let slack = sim.machine.setpoint_slack();
+    let off: Vec<f64> = sim.control.planned_pos().iter().zip(&end).map(|(p, e)| p - e).collect();
+    assert!(slack < 1e-3 && off.iter().all(|d| d.abs() < slack) && off[5].abs() > 1e-4, "{off:?} against {slack}");
 }
 
 /// The spatial robot's inverse and Gauss-Newton forward kinematics undo each other at three poses.
