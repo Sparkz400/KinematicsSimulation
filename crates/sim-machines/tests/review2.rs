@@ -53,6 +53,15 @@ fn tool(sim: &Sim) -> Vec<f64> {
     pos
 }
 
+/// The tool's pose where its motors put it, the gears taken as rigid: the forward kinematics of the motor angles.
+fn motors_pose(sim: &Sim) -> Vec<f64> {
+    let (n, m) = (sim.machine.axes().len(), sim.machine.motors().len());
+    let (mut angle, mut speed, mut pose) = (vec![0.0; m], vec![0.0; m], vec![0.0; n]);
+    sim.machine.motor_state(&sim.state, &mut angle, &mut speed);
+    sim.machine.forward(&angle, &mut pose);
+    pose
+}
+
 fn tensions(sim: &Sim) -> Vec<f64> {
     let row = sample(sim);
     sim.signal_infos()
@@ -353,13 +362,18 @@ fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
                 let mut changed = cfg.clone();
                 changed.set_text(&format!("{path} = {:?}", 1.01 * cfg.f64(path).unwrap())).unwrap();
                 sims[1].reconfigure(entry, &changed).unwrap();
-                let (mut tension_off, mut tool_off) = (0f64, 0f64);
+                let axes = sims[0].machine.axes().to_vec();
+                let (mut tension_off, mut tool_off, mut twist) = (0f64, vec![0f64; axes.len()], vec![0f64; axes.len()]);
                 for _ in 0..(0.5 / sims[0].dt) as usize {
                     sims.iter_mut().for_each(Sim::step);
                     let off =
                         |a: Vec<f64>, b: Vec<f64>| a.iter().zip(&b).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
                     tension_off = tension_off.max(off(tensions(&sims[0]), tensions(&sims[1])));
-                    tool_off = tool_off.max(off(tool(&sims[0]), tool(&sims[1])));
+                    let (a, b, at_motors) = (tool(&sims[0]), tool(&sims[1]), motors_pose(&sims[0]));
+                    for k in 0..axes.len() {
+                        tool_off[k] = tool_off[k].max((a[k] - b[k]).abs());
+                        twist[k] = twist[k].max((a[k] - at_motors[k]).abs());
+                    }
                 }
                 let what = format!(
                     "{}: {path} changed by 1 % {}",
@@ -370,10 +384,27 @@ fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
                 // 0.1 mm, or a tenth of what the machine's gears sag at rest where that is more (the delta's backlash
                 // takes up anew after the change: 0.13 mm with 9 arcmin); on a turning axis 1e-4 of its range in rad
                 // (the table: 0.68 mrad, 0.27 mm at its edge).
-                let axis = &sims[0].machine.axes()[0];
+                let axis = &axes[0];
                 let turning = if axis.unit == "rad" { 1e-4 * (axis.max - axis.min) } else { 0.0 };
                 let limit = (0.1 * sims[0].machine.setpoint_slack()).max(1e-4).max(turning);
-                assert!(tool_off < limit, "{what}: tool off by {tool_off}, limit {limit}");
+                // A tool's turn that the gears' twist under the move's torques moves more than they sag at rest (the
+                // four-arm delta's: some 6.6 rad of turn per rad of arm, 24.6 mrad on this move of x alone, 5.3 with
+                // rigid gears) rings after the move with the position loop, at kv / 2 pi (8 Hz). The changed ratio
+                // changes the loop's gain at the arm by 2 %, the ringing's frequency by 1 %: over the 0.5 s its phase
+                // drifts by 0.01 kv 0.5 s (0.25 rad at kv = 50 / s), and the two runs part by up to that times the
+                // twist's swing (seen: 2.3 mrad of the delta's 24.6). The twist: how far the tool is from the pose of
+                // its motors (`motors_pose`) in the run left alone.
+                let drift = 0.01 * cfg.f64("drive.kv_1_s").unwrap() * 0.5;
+                for (k, a) in axes.iter().enumerate() {
+                    let limit = if a.unit == "rad" { limit.max(drift * twist[k]) } else { limit };
+                    assert!(
+                        tool_off[k] < limit,
+                        "{what}: axis {} off by {}, limit {limit} (twist {})",
+                        a.id,
+                        tool_off[k],
+                        twist[k]
+                    );
+                }
                 // The motors stand where the new kinematics put them for this pose.
                 let (mut wanted, mut speed) =
                     (vec![0.0; sims[1].machine.motors().len()], vec![0.0; sims[1].machine.motors().len()]);
