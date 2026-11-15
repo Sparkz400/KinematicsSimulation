@@ -1495,7 +1495,7 @@ Limits for this task:
 $ sim-cli run single-axis --cycle --time 2.5 --set effects.payload=false --set mass.carriage_kg=5.5 --out measured.csv
 $ sim-cli replay single-axis --trace measured.csv --set effects.payload=false --out overlay.csv
 motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad
-m,2.262654e-2,6.523016e-2,6.230175e-4,4.241306e-3
+m,2.262540e-2,6.523099e-2,6.307172e-4,4.241181e-3
 ```
 
 The replay starts from the trace's own state, whatever the config's start pose: at rest at a pose before the first row, it runs up to the first row's position setpoint at the first row's measured speed (a smooth run-up of 0.25 s or more, within a quarter of each axis's acceleration limit), so a trace cut out of a longer motion replays without the jolt of a start from rest; behind the last row the motion carries on, it is not forced to rest. The pose the run-up starts at has to be within the axes' ranges. Where the source records its setpoint in the same cycle as the position it is compared with (the simulator's trace holds the setpoint the drive worked with up to the row, the one of the cycle before), give the setpoint `time_offset_s` = one position cycle in the mapping, so that the following errors compare.
@@ -1511,11 +1511,11 @@ time,motor.m.torque_measured,motor.m.torque_simulated,motor.m.speed_measured,mot
 ```text
 $ sim-cli fit single-axis --trace measured.csv --set effects.payload=false
 quantity,of,config,fitted,standard_error
-moved_mass_kg,x,6.550994e0,8.068848e0,1.597e-2
-viscous_friction_n_s_m,x,2.681117e1,2.621257e1,2.163e-1
-coulomb_friction_n,x,2.132537e1,2.196308e1,1.928e-1
-constant_force_n,x,-6.347860e-4,1.573428e-3,6.211e-2
-presliding_stiffness_n_m,x,6.949501e5,7.307120e5,2.571e5
+moved_mass_kg,x,6.551009e0,8.068848e0,1.597e-2
+viscous_friction_n_s_m,x,2.681126e1,2.621257e1,2.163e-1
+coulomb_friction_n,x,2.132519e1,2.196308e1,1.928e-1
+constant_force_n,x,-7.687695e-4,1.573428e-3,6.211e-2
+presliding_stiffness_n_m,x,6.949591e5,7.307120e5,2.571e5
 Moved mass, axis x: +1.518 kg ± 0.016. Add this to the masses that move with the axis. The trace cannot tell load mass from rotor and pulley inertia.
 Viscous friction, axis x: × 0.978 ± 0.008. Scale the viscous friction of the axis's guide and of the motor shafts by this factor; the trace cannot tell the two apart.
 Coulomb friction, axis x: × 1.030 ± 0.009. Scale the Coulomb friction and stiction of the axis's guide and of the motor shafts by this factor; the trace cannot tell the two apart.

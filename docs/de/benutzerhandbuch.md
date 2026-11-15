@@ -1517,7 +1517,7 @@ Grenzen bei dieser Aufgabe:
 $ sim-cli run single-axis --cycle --time 2.5 --set effects.payload=false --set mass.carriage_kg=5.5 --out measured.csv
 $ sim-cli replay single-axis --trace measured.csv --set effects.payload=false --out overlay.csv
 motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad
-m,2.262654e-2,6.523016e-2,6.230175e-4,4.241306e-3
+m,2.262540e-2,6.523099e-2,6.307172e-4,4.241181e-3
 ```
 
 Das Nachfahren beginnt im Zustand der Aufzeichnung, gleich, welche Startpose die Konfiguration nennt: in Ruhe an einer Pose vor der ersten Zeile fährt es auf deren Lagesollwert mit deren gemessener Geschwindigkeit hoch (glatt, 0,25 s oder länger, mit höchstens einem Viertel der Beschleunigungsgrenze jeder Achse), so dass eine Aufzeichnung, die aus einer längeren Bewegung geschnitten ist, ohne den Ruck eines Starts aus der Ruhe nachgefahren wird; hinter der letzten Zeile läuft die Bewegung weiter, sie wird nicht in die Ruhe gezwungen. Die Pose, an der das Hochfahren beginnt, muss in den Bereichen der Achsen liegen. Wo die Quelle ihren Sollwert im selben Takt aufzeichnet wie die Lage, mit der er verglichen wird (die Aufzeichnung des Simulators hält den Sollwert, mit dem der Antrieb bis zur Zeile gearbeitet hat, den des Takts davor), bekommt der Sollwert in der Zuordnung `time_offset_s` = ein Lagereglertakt, damit die Schleppfehler vergleichbar werden.
@@ -1533,11 +1533,11 @@ time,motor.m.torque_measured,motor.m.torque_simulated,motor.m.speed_measured,mot
 ```text
 $ sim-cli fit single-axis --trace measured.csv --set effects.payload=false
 quantity,of,config,fitted,standard_error
-moved_mass_kg,x,6.550994e0,8.068848e0,1.597e-2
-viscous_friction_n_s_m,x,2.681117e1,2.621257e1,2.163e-1
-coulomb_friction_n,x,2.132537e1,2.196308e1,1.928e-1
-constant_force_n,x,-6.347860e-4,1.573428e-3,6.211e-2
-presliding_stiffness_n_m,x,6.949501e5,7.307120e5,2.571e5
+moved_mass_kg,x,6.551009e0,8.068848e0,1.597e-2
+viscous_friction_n_s_m,x,2.681126e1,2.621257e1,2.163e-1
+coulomb_friction_n,x,2.132519e1,2.196308e1,1.928e-1
+constant_force_n,x,-7.687695e-4,1.573428e-3,6.211e-2
+presliding_stiffness_n_m,x,6.949591e5,7.307120e5,2.571e5
 Bewegte Masse, Achse x: +1.518 kg ± 0.016. Um diesen Betrag sind die mit der Achse bewegten Massen zu ändern. Lastmasse und die Trägheit von Rotor und Scheibe kann die Aufzeichnung nicht trennen.
 Viskose Reibung, Achse x: × 0.978 ± 0.008. Die viskose Reibung der Führung der Achse und der Motorwellen ist mit diesem Faktor zu multiplizieren; trennen kann die Aufzeichnung beide nicht.
 Coulomb-Reibung, Achse x: × 1.030 ± 0.009. Coulomb- und Haftreibung der Führung der Achse und der Motorwellen sind mit diesem Faktor zu multiplizieren; trennen kann die Aufzeichnung beide nicht.
