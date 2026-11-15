@@ -186,8 +186,9 @@ and the factor is the one whose motor torques, less their mean over ±10 ms, mat
 loops, filters and friction damp the ringing in the replay as they do on the machine, so a cycle or a few
 ordinary moves at the machine's limits do; the masses have to be right first. What rings the belt is the jerk
 at the ramps and, at speed, the motor's ripple and cogging sweeping through the mode. The fit is refused
-(`fit-move-not-excited`) where the factor's standard error is above a tenth of it, or the best factor lies at an
-end of 0.25 to 4: on the single axis a move of 2 mm at 1 m/s³ and 0.2 m/s² is refused, two moves of 0.8 m at the
+(`fit-move-not-excited`) where the factor's standard error is above a tenth of it, the best factor lies at an
+end of 0.25 to 4, or the trace's ringing power is below 1.25 times what the fitted replay leaves of it (the
+replay explains an RMS of less than half its residual: the move rings at its noise level): on the single axis a move of 2 mm at 1 m/s³ and 0.2 m/s² is refused, two moves of 0.8 m at the
 config's limits give 0.708 ± 0.015 for a belt of 0.7. A sweep stays the better measurement where the drive
 offers it.
 

@@ -715,7 +715,7 @@ fn sweep(
 
 /// A shorter cycle that still passes every verdict, as `sim-cli optimise` finds it (`runs` cycles at most; judged in
 /// the error bands of `[bounds]` unless `nominal`, at their worst corner with `worst`): "cycle_s" and
-/// "dwell_error_peak_m" as (before, after), "runs", "changes" (columns "setting", "before", "after": the config values
+/// "dwell_error_peak_m" and "dwell_angle_error_peak_rad" as (before, after), "runs", "changes" (columns "setting", "before", "after": the config values
 /// to change, and per changed lift its height and via points), "robust" (what the bands cost, or None) and with
 /// `pareto=True` "pareto", the settings no other beats in cycle time, energy and peak utilisation at once. With `path`
 /// (and `path_file`, `time_optimal`, see `path_instead`) the path's time is shortened in place of the cycle's.
@@ -742,6 +742,10 @@ fn optimise(
     let out = PyDict::new(py);
     out.set_item("cycle_s", (found.before.duration, found.after.duration))?;
     out.set_item("dwell_error_peak_m", (found.before.dwell_error_peak, found.after.dwell_error_peak))?;
+    out.set_item(
+        "dwell_angle_error_peak_rad",
+        (found.before.dwell_angle_error_peak, found.after.dwell_angle_error_peak),
+    )?;
     out.set_item("runs", found.runs)?;
     // The new cycle itself is TOML; its lifts say what changed in it, as the command line writes them.
     let mut rows: Vec<(String, String, String)> =

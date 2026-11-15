@@ -22,6 +22,33 @@ fn on_every_machine(check: impl Fn(&'static sim_core::MachineEntry) + Sync) {
     });
 }
 
+/// One test per machine of `MACHINES`, `$name::machine_00` and on by its place in the list (machine names stay in their
+/// crates; each failure names the machine's id): `cargo nextest` spreads them over the cores, where a loop over the
+/// machines in one test ran past 20 minutes on a CI runner. `every_machine_has_its_test` keeps the list complete.
+macro_rules! per_machine {
+    ($name:ident, $check:ident) => {
+        mod $name {
+            per_machine!(@at $check, machine_00 0, machine_01 1, machine_02 2, machine_03 3, machine_04 4, machine_05 5,
+                machine_06 6, machine_07 7, machine_08 8, machine_09 9, machine_10 10, machine_11 11, machine_12 12,
+                machine_13 13, machine_14 14, machine_15 15, machine_16 16, machine_17 17, machine_18 18, machine_19 19,
+                machine_20 20, machine_21 21);
+        }
+    };
+    (@at $check:ident, $($test:ident $index:literal),*) => {
+        $(#[test]
+        fn $test() {
+            super::$check(super::MACHINES[$index]);
+        })*
+    };
+}
+
+const PER_MACHINE_TESTS: usize = 22;
+
+#[test]
+fn every_machine_has_its_test() {
+    assert_eq!(MACHINES.len(), PER_MACHINE_TESTS, "add or take out a `machine_NN` line in `per_machine!`");
+}
+
 /// The config's payload value: `mass.payload_kg` where the machine has a [mass] table, else the arms' payload, the
 /// rotary table's payload inertia or the payload of a platform hung on cables (the slides have one; the arms, the table
 /// and the platforms have none).
@@ -270,9 +297,10 @@ fn a_bad_axis_index_is_refused() {
     }
 }
 
-#[test]
-fn step_bode_and_tuning_write_csv_for_every_machine() {
-    for entry in MACHINES {
+per_machine!(step_bode_and_tuning_write_csv_for_every_machine, step_bode_and_tuning);
+
+fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
+    {
         let axes = sim_components::Sim::new(entry, &entry.config()).unwrap().machine.axes().len();
         let table = |args: &[&str]| {
             let out = cli(args);
@@ -341,10 +369,22 @@ fn step_bode_and_tuning_write_csv_for_every_machine() {
     // An unstable loop says so: every machine with a velocity gain of 0.3 N m s/rad (7.5 to 12 times the shipped one).
     // (12 times the shipped one where 0.3 would be less than 7.5 times it: the delta's 0.25 and the screw's, rack's, arms' and table's;
     // at 10 times the screw's loop is still stable, by 6 degrees.)
-    for entry in MACHINES {
-        let shipped = entry.config().f64("drive.velocity_kp_nm_s_rad").unwrap();
-        let gain = if 7.5 * shipped <= 0.3 { 0.3 } else { 12.0 * shipped };
-        let out = cli(&["margins", entry.id, "--set", &format!("drive.velocity_kp_nm_s_rad={gain}")]);
+    // Each motor's own drive too (`[drive.<id>]`, the arms' smaller joints): the shared gain alone left them stable. A
+    // gain of 0.04 takes 12 times too: at 0.3, 7.5 times it, the SCARA's joint 3 is stable with 42 degrees.
+    {
+        let cfg = entry.config();
+        let sets: Vec<String> = cfg
+            .leaves()
+            .iter()
+            .filter(|(p, _)| p.starts_with("drive.") && p.ends_with("velocity_kp_nm_s_rad"))
+            .map(|(p, _)| {
+                let shipped = cfg.f64(p).unwrap();
+                format!("{p}={}", if 7.5 * shipped < 0.3 { 0.3 } else { 12.0 * shipped })
+            })
+            .collect();
+        let out =
+            cli(&[&["margins", entry.id][..], &sets.iter().flat_map(|s| ["--set", s.as_str()]).collect::<Vec<_>>()]
+                .concat());
         let unstable = text(&out.stdout);
         assert!(
             out.status.success()
@@ -462,11 +502,12 @@ fn a_path_file_is_planned_run_and_analysed_for_every_machine() {
     });
 }
 
+per_machine!(sensitivity_writes_one_ranked_row_per_parameter, sensitivity);
+
 /// The sensitivity run varies the parameters of the named config tables for every machine and prints
 /// one row of relative changes per parameter, strongest first.
-#[test]
-fn sensitivity_writes_one_ranked_row_per_parameter() {
-    for entry in MACHINES {
+fn sensitivity(entry: &'static sim_core::MachineEntry) {
+    {
         // The table that holds the payload: [mass], the rotary table's [table] or a platform's [platform]. An arm's
         // [arm] has one number beside its lists and its URDF (the palletiser's two more of its payload's swing, an effect
         // that is off), and the crank and cam machines' [mass] the payload alone: there the joints' [joint] comes along.
@@ -511,7 +552,7 @@ fn sensitivity_writes_one_ranked_row_per_parameter() {
         );
         // With bounds, they are the bounds: 10 N to 20 N for the Coulomb friction of both belt machines' guides.
         if cfg.get("friction_x").is_err() {
-            continue;
+            return;
         }
         let run = cli(&[&["sensitivity", entry.id, "--group", "friction_x", "--delta", "0.1"][..], &cold].concat());
         let out = text(&run.stdout);
@@ -1059,7 +1100,10 @@ fn the_belt_stiffness_is_fitted_to_a_moves_trace_on_the_command_line() {
             .to_string()
     };
     let (moved, gentle) = (file("move"), file("gentle"));
-    // A belt of 0.7 times the config's, out to 0.9 m at the config's limits; and 2 mm at 1 m/s³ and 0.2 m/s².
+    // A belt of 0.7 times the config's, out to 0.9 m at the config's limits; and 2 mm at 1 m/s³ and 0.2 m/s², with the
+    // sensors' noise: it rings at that noise (2.02 mN m RMS, of which the replay leaves 1.98: a power ratio of 1.04
+    // against `MOVE_RINGING_RATIO` 1.25). Without noise its 0.41 mN m ring above the 0.09 the replay leaves, and the
+    // refusal hung on the curvature of the sum of squares alone, which CI's Linux runner found (left Some(0)).
     let slow = ["--set", "axis.x.max_jerk_m_s3=1", "--set", "axis.x.max_acceleration_m_s2=0.2"];
     assert!(
         cli(&[
@@ -1089,7 +1133,9 @@ fn the_belt_stiffness_is_fitted_to_a_moves_trace_on_the_command_line() {
                 "--out",
                 &gentle,
                 "--set",
-                "belt.stiffness_ea_n=3.5e5"
+                "belt.stiffness_ea_n=3.5e5",
+                "--set",
+                "effects.sensor_noise=true"
             ][..],
             &slow[..]
         ]
@@ -1337,9 +1383,12 @@ fn analyze_writes_the_torque_breakdown_and_the_energy_budget() {
         let mut cfg = entry.config();
         cfg.set_text("effects.regenerative_supply = true").unwrap();
         let load = analyse_cycle(&mut sim_components::Sim::new(entry, &cfg).unwrap()).unwrap();
-        for (line, m) in text(&out.stdout).lines().skip(1).zip(&load.motors) {
+        // By name: the column was taken by its place, 27, which four columns of angle errors moved to 31.
+        let stdout = text(&out.stdout);
+        let column = stdout.lines().next().unwrap().split(',').position(|c| c == "mains_energy_j").unwrap();
+        for (line, m) in stdout.lines().skip(1).zip(&load.motors) {
             assert!(
-                m.mains_energy > 0.0 && line.split(',').nth(27) == Some(format!("{:.3}", m.mains_energy).as_str()),
+                m.mains_energy > 0.0 && line.split(',').nth(column) == Some(format!("{:.3}", m.mains_energy).as_str()),
                 "{}: {line}",
                 entry.id
             );
@@ -1357,11 +1406,12 @@ fn analyze_writes_the_torque_breakdown_and_the_energy_budget() {
     });
 }
 
+per_machine!(compare_writes_the_cycle_with_an_effect_on_and_off, compare);
+
 /// `compare` writes the cycle with an effect on and off side by side, and the differences as `Comparison` has them.
-#[test]
-fn compare_writes_the_cycle_with_an_effect_on_and_off() {
+fn compare(entry: &'static sim_core::MachineEntry) {
     use sim_components::analysis::compare_effect;
-    for entry in MACHINES {
+    {
         let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
         let (traces, differences) =
             (dir.join(format!("{}-compare.csv", entry.id)), dir.join(format!("{}-differences.csv", entry.id)));

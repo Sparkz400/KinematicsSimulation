@@ -248,7 +248,10 @@ def test_optimise_matches_the_cli():
     before, after = result["cycle_s"]
     assert (round(before, 4), round(after, 4)) == (float(rows["cycle_s"]["before"]), float(rows["cycle_s"]["after"]))
     assert after <= before and result["robust"] is None
-    assert [s for s in result["changes"]["setting"]] == [s for s in rows if s not in ("cycle_s", "dwell_error_peak_m")]
+    for key in ("dwell_error_peak_m", "dwell_angle_error_peak_rad"):
+        assert [float(f"{v:.3e}") for v in result[key]] == [float(rows[key][c]) for c in ("before", "after")], key
+    shown = ("cycle_s", "dwell_error_peak_m", "dwell_angle_error_peak_rad")
+    assert [s for s in result["changes"]["setting"]] == [s for s in rows if s not in shown]
 
 
 @pytest.fixture(scope="module")
