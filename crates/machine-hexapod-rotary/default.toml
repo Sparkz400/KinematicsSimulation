@@ -321,9 +321,11 @@ magnet_temperature_coefficient_1_k = -0.0012
 # [catalogue] the stall current: static torque over torque constant.
 stall_current_a = 2.1
 
-# [estimate] A motion base's moves: 0.3 m/s and 4 m/s2 (0.4 g) along, 0.6 rad/s and 5 rad/s2 about each axis; the jerk
-# reaches them in 0.1 s, as long as the platform's lowest mode on the gearboxes takes to swing (some 10 Hz with the seat's
-# centre of mass 0.3 m up): at 80 m/s3 a surge rang 10 % about its speed 50 ms into its cruise.
+# [estimate] A motion base's moves: 0.3 m/s and 4 m/s2 (0.4 g) along, 0.6 rad/s and 5 rad/s2 about each axis. The jerk
+# reaches 4 m/s2 in 0.1 s, as long as the platform's lowest mode on the gearboxes takes to swing (some 10 Hz with the
+# seat's centre of mass 0.3 m up): at 80 m/s3 a surge rang 10 % about its speed 50 ms into its cruise. About the axes
+# 100 rad/s3 (5 rad/s2 in 0.05 s; 30 m/s3 at the platform joints): at 50 the turns were jerk-bound, and a time-optimal
+# plan could be no quicker than one within the axis limits.
 [axis.x]
 max_velocity_m_s = 0.3
 max_acceleration_m_s2 = 4.0
@@ -342,17 +344,17 @@ max_jerk_m_s3 = 40.0
 [axis.rx]
 max_velocity_rad_s = 0.6
 max_acceleration_rad_s2 = 5.0
-max_jerk_rad_s3 = 50.0
+max_jerk_rad_s3 = 100.0
 
 [axis.ry]
 max_velocity_rad_s = 0.6
 max_acceleration_rad_s2 = 5.0
-max_jerk_rad_s3 = 50.0
+max_jerk_rad_s3 = 100.0
 
 [axis.rz]
 max_velocity_rad_s = 0.6
 max_acceleration_rad_s2 = 5.0
-max_jerk_rad_s3 = 50.0
+max_jerk_rad_s3 = 100.0
 
 # One drive per motor, all with the same settings. Cycle times must be whole multiples of sim.dt_s.
 [drive]
