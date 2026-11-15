@@ -13,6 +13,7 @@
 # set effects.belt_tooth_jump = false
 # set effects.belt_tooth_stiffness = false
 # set effects.belt_wrap = false
+# set effects.brake_delay = false
 # set effects.braking_resistor_heating = false
 # set effects.cable_chain = false
 # set effects.corner_blending = false
