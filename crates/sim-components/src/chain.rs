@@ -1361,7 +1361,9 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     fn set_memory(&mut self, memory: &[f64]) {
         let (own, rest) = memory.split_at(self.mechanism.memory().len().min(memory.len()));
         self.mechanism.set_memory(own);
-        let (gears, frictions) = rest.split_at((2 * self.joints.len()).min(rest.len()));
+        // Two numbers per gear, three with its mesh friction's anchor (`Gearbox::anchors`).
+        let geared = crate::mech::Gearbox::anchors(self.joints.iter().map(|j| &j.drive.gearbox)).len();
+        let (gears, frictions) = rest.split_at(geared.min(rest.len()));
         crate::mech::Gearbox::set_anchors(self.joints.iter_mut().map(|j| &mut j.drive.gearbox), gears);
         let sliding = self.joints.iter_mut().filter(|j| j.drive.friction.presliding > 0.0);
         for (joint, anchor) in sliding.zip(frictions.as_chunks::<2>().0) {

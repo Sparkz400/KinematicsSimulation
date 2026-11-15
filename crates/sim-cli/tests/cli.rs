@@ -342,11 +342,15 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         // step at its 1.17 m (0.856 mrad of output a millimetre). Then the efficiency, faded in below 0.5 W, acts as a
         // damper of T^2 ln(1 / 0.8) / 0.5 W = 7e4 N m s/rad on that spring: the tool creeps (0.42 mm at 0.2 s) after
         // motors that arrived within 0.15 s, which the motor encoders do not see. There the loops' band is the one
-        // without the gear's losses (12.6 Hz), and an axis without a band is one the gear holds back.
+        // without the gear's losses (12.6 Hz), and an axis without a band is one the gear holds back. With the gears' mesh
+        // friction (effects.gearbox_mesh_friction) an arm's joint that holds a weight rises but then sticks within the
+        // stuck mesh's band, (1 - eta) of the torque it holds, short of the step, and never settles to it: the six-axis
+        // arm's joints 2 and 3 (3.97 and 6.02 Hz with the mesh friction off; 8.07 and 7.20 Hz without the gear's losses,
+        // which take the mesh's band with them).
         let lossless = std::cell::OnceCell::new();
         for (i, row) in tuning.lines().enumerate().skip(1) {
             let cells: Vec<&str> = row.split(',').collect();
-            let held = cells[4].is_empty() && cells[1] == "NaN";
+            let held = cells[4].is_empty();
             let without =
                 || lossless.get_or_init(|| table(&["tuning", entry.id, "--set", "effects.gearbox_efficiency=false"]));
             let band: f64 =
@@ -444,7 +448,13 @@ fn a_path_file_is_planned_run_and_analysed_for_every_machine() {
         };
         let (path, out) = (file("path.csv"), file("path-run.csv"));
         std::fs::write(&path, format!("# two lines\nline,{}\nline,{}\n", point(0.5), point(0.75))).unwrap();
-        let run = cli(&["run", entry.id, "--path", &path, "--time", "3", "--out", &out]);
+        // 3 s, or as long as the path takes and half a second where that is longer (the arm on a track's 2.5 m).
+        let at =
+            |share: f64| -> Vec<f64> { sim.machine.axes().iter().map(|a| a.min + share * (a.max - a.min)).collect() };
+        let pieces = [sim_components::path::Piece::Line(at(0.5)), sim_components::path::Piece::Line(at(0.75))];
+        let planned = sim.plan_path(&pieces, false).unwrap().last().unwrap().0;
+        let time = format!("{}", f64::max(3.0, planned + 0.5));
+        let run = cli(&["run", entry.id, "--path", &path, "--time", &time, "--out", &out]);
         assert!(run.status.success(), "{}", text(&run.stderr));
         let csv = std::fs::read_to_string(&out).unwrap();
         let last: Vec<f64> = csv.lines().last().unwrap().split(',').map(|v| v.parse().unwrap()).collect();
@@ -951,8 +961,18 @@ fn parts_are_named_on_the_command_line() {
             assert!(out.status.success(), "{}", text(&out.stderr));
             let table = text(&out.stdout);
             // The torque at the gearbox output over the use of the motor's curve: another motor or ratio changes it.
+            // Of the first motor the named parts reach: one with parts of its own (`[parts.<id>]`, the arm on a
+            // track's motor 1) keeps them.
+            let first = {
+                let cfg = entry.config();
+                let ids: Vec<&str> = (entry.build)(&cfg).unwrap().motors().iter().map(|m| m.id).collect();
+                let own = ids.iter().position(|id| cfg.get(&format!("parts.{id}")).is_err());
+                ids[own.unwrap_or(0)]
+            };
             let value = |check: &str| {
-                table.lines().find(|l| l.starts_with(check)).unwrap().split(',').nth(2).unwrap().parse::<f64>().unwrap()
+                let row = table.lines().find(|l| l.starts_with(&format!("{check},{first},")));
+                let row = row.or_else(|| table.lines().find(|l| l.starts_with(check))).unwrap();
+                row.split(',').nth(2).unwrap().parse::<f64>().unwrap()
             };
             if geared { value("gearbox-peak") / value("motor-peak") } else { value("motor-peak") }
         };
