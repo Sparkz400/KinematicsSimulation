@@ -327,8 +327,11 @@ impl Geo {
                 // 0.4 of those axes' jerk.
                 let (a, b) = ([from[3], from[4], from[5]], [to[3], to[4], to[5]]);
                 let size = |v: [f64; 3]| crate::rigid::dot(v, v).sqrt();
-                let one_axis = size(crate::rigid::cross(a, b)) <= 1e-12 * size(a) * size(b)
-                    && crate::rigid::dot(a, b) >= 0.0
+                // To the rounding of the turns' sizes: a turn that ends a piece is the next one's start only to it (a
+                // level pose as 1e-17 rad about some axis), and the next turn bent by it.
+                let scale = (size(a) + size(b)).powi(2);
+                let one_axis = size(crate::rigid::cross(a, b)) <= 1e-12 * scale
+                    && crate::rigid::dot(a, b) >= -1e-12 * scale
                     && size(a).max(size(b)) < std::f64::consts::PI;
                 if one_axis {
                     return [from.iter().zip(&dir).map(|(p, d)| p + d * s).collect(), dir.clone(), vec![0.0; 6]];
@@ -4268,7 +4271,8 @@ line,0.3,0.13",
     fn a_turn_about_one_axis_does_not_bend_its_rotation_vector() {
         let to = [0.04, 0.04, 0.43, 0.075, 0.075, 0.1];
         let length = to.iter().map(|v| v * v).sum::<f64>().sqrt();
-        for from in [vec![0.0; 6], vec![0.0, 0.0, 0.0, 0.03, 0.03, 0.04]] {
+        // From no turn, from a level pose to the rounding (as a previous piece ends at it), and from along the axis.
+        for from in [vec![0.0; 6], vec![0.0, 0.0, 0.0, 1e-17, -2e-17, 0.0], vec![0.0, 0.0, 0.0, 0.03, 0.03, 0.04]] {
             let piece = Geo::Slerp { from: from.clone(), to: to.to_vec(), length };
             for s in [0.0, 0.3 * length, length] {
                 let [pose, d1, d2] = piece.at(s);
