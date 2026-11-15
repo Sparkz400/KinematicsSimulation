@@ -84,6 +84,38 @@ The palletiser's parallelogram is the config's `arm.joint_coupling` (the URDF's 
 
 What it does not cover: the motors' rotors, the gearboxes' inertia, efficiency and elasticity, friction, the drives, the payload (and its swing), bending links and the compliant base; the parallelogram's bars as bodies of their own (they are in the links they move with, in the URDF as in the reference); the tool-space kinematics (`tool::Pose`, `tool::Scara`) beyond the flange's pose.
 
+**Delta picker D3** ([`crates/machine-delta-d3/reference/`](../crates/machine-delta-d3/reference), tests in [`tests/reference.rs`](../crates/machine-delta-d3/tests/reference.rs)). The rigid, loss-free model of the [model reference](model-reference.md#delta-picker-d3), written again from the document (not from the Rust source) by another route: the arm angles and the platform's position are the coordinates, every body's energy is written out, SymPy differentiates the Lagrangian, and the legs' constraints enter with Lagrange multipliers; the crate instead eliminates the platform through its Jacobian. The inverse kinematics is a root search on each leg's constraint, the forward kinematics a Newton iteration. The rods' spin is worked out from the frame of the pair's plane (n′ · (e × n)), not from the document's closed form.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Motor torques of the rigid model (`feedforward_torque_moving`) at 60 random states in the working range (seed 2026; speeds and accelerations up to the axes' 3 m/s and 50 m/s²), forearms lumped and as rods | The Lagrangian with multipliers ([`lagrange_reference.py`](../crates/machine-delta-d3/reference/lagrange_reference.py), [`inverse_dynamics.csv`](../crates/machine-delta-d3/reference/inverse_dynamics.csv)) | 1e-8 of the state's largest torque | `delta_inverse_dynamics_matches_the_lagrangian`, delta reference |
+| x, y, z of the platform over an open-loop move of 0.5 s from (0.05, 0.02, −0.92) m: the reference's holding torques, plus its push for (5, 3, −4) m/s² as a sin² pulse of 0.15 s and back at 0.25 s (travel 79, 48, 72 mm); forearms as rods (shipped), RK4 at the simulator's step | The same Lagrangian integrated by SciPy's DOP853 (rtol 1e-10), driven by the same torques ([`open_loop_move.csv`](../crates/machine-delta-d3/reference/open_loop_move.csv), [`open_loop_torques.csv`](../crates/machine-delta-d3/reference/open_loop_torques.csv)) | 0.2 % of the travel per axis, every ms | `open_loop_move_matches_scipy`, delta reference |
+
+Both fail when one value of the config changes by 1 % (tried on 14 November 2026 with `mass.forearm_pair_kg` 0.5 → 0.505 kg and `geometry.upper_arm_m` 0.4 → 0.404 m: the torques differ at the first state; the move's z first leaves the allowed 0.14 mm at 148 ms and at 60 ms). The open-loop move is driven by the reference's torques, not the crate's feedforward, so that a model wrong by a factor cannot push itself just as far. The document and the code agreed: no difference was found.
+
+Effects: the Rust tests run the crate's `lossless_config` with `effects.joint_elasticity = false`, i.e. off are the gearboxes' and the arms' elasticity (`joint_elasticity`, `link_elasticity`, `arm_tube_inertia`), every loss (`joint_friction`, `motor_friction`, `gearbox_drag`, `gearbox_lost_motion`, `gearbox_efficiency`, `torque_ripple`, `holding_brake`) and the base (`base_compliance`). Gravity and the payload are on, `forearm_inertia` both ways. The hard stops are on but every state stays inside the stop angles (the script asserts it); drive and controller take no part in given torques. The script asserts the switches it names are still in the config.
+
+**What the mass split costs** ([`multibody_reference.py`](../crates/machine-delta-d3/reference/multibody_reference.py), MuJoCo 4.0.1; printed, not a test). A full multibody model: each upper arm a body on a hinge, the elbow block on it, each of the six forearms a rigid tube of half the pair's mass with its true inertia (m L²/12 + I_axial/2 across, `forearm_rod_spin_inertia_kgm2` along) on a ball joint at its elbow, the platform with the payload a free body, the rotors as armature. Its motor torques come from MuJoCo's inverse dynamics of the open tree mapped onto the arms by virtual work. Over the 638 states (every ms) of the Adept cycle 25/305/25 mm of the default config, the S-curve at 3 m/s, 50 m/s², 2500 m/s³ without the dwells:
+
+| Model | Largest motor-torque difference from the multibody model |
+| --- | --- |
+| The same pipeline with the lumped masses, against the Lagrangian (a check of the pipeline) | 5.0e-6 N m |
+| Forearms lumped, s = 2/3 at the elbow (Codourey/Olsson, `effects.forearm_inertia = false`) | **0.160 N m**, 2.5 % of the cycle's peak 6.44 N m; RMS motor 1 3.290 against 3.217 N m (+2.3 %), motors 2 and 3 1.933 against 1.900 N m (+1.7 %) |
+| Forearms as rods (`effects.forearm_inertia = true`, shipped) | 5.5e-5 N m (the tubes' own cross-section, which the slender rods leave out) |
+
+The payload does not change the difference (it sits at the platform in every model).
+
+**Planar delta D2 and linear delta**: their inverse dynamics by the same route (`reference/lagrange_reference.py` in [machine-delta-d2](../crates/machine-delta-d2/reference) and [machine-delta-linear](../crates/machine-delta-linear/reference), tests in each crate's `tests/reference.rs`), lumped forearms and rods as their models have them.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| D2: motor torques of the rigid model at 60 random states in the working range (seed 2026, up to the axes' limits) | The Lagrangian in the arm angles and the plate's (x, z) with multipliers | 1e-8 of the state's largest torque | `d2_inverse_dynamics_matches_the_lagrangian`, D2 reference |
+| Linear delta: motor torques of the rigid model (`effects.belt_stretch = false`) at 30 random states with the columns upright and 30 leaning 10° inwards, with the pulley, the belt's mass on it and the rotor | The Lagrangian in the carriages' travels and the plate's position with multipliers | 1e-8 of the state's largest torque | `linear_delta_inverse_dynamics_matches_the_lagrangian`, linear delta reference |
+
+Each fails with a mass or a length changed by 1 % (14 November 2026: `mass.forearm_pair_kg`, `geometry.forearm_m` on the D2; `mass.rod_pair_kg`, `geometry.rod_m` on the linear delta). Effects as on the D3 (each crate's `lossless_config`, rigid; on the linear delta also no guide friction). Not covered: their open-loop motion, the elastic models, the belts and guides of the linear delta beyond the belt's mass on the pulley.
+
+What the D3 references do not cover: the elastic model (gearboxes, bending arms), friction and every other loss, the drives and the controller, the planner (the multibody script writes the cycle's S-curve itself), the hard stops. Both references take the model's assumptions about the real machine (the parallelogram's rods turning with the pair's plane, rigid rods and ball joints, the estimated masses), so like the T-gantry's they catch coding and integration errors and, here, a wrong equation for the model as documented, not a wrong model of a real delta.
+
 ## Hand calculations: mechanics
 
 | What is compared | Against | Tolerance | Test |
