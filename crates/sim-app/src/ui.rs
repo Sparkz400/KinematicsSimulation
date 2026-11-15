@@ -493,7 +493,8 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
                 actions.push(Action::RunAnalysis(Analysis::Cycle));
                 actions.push(Action::Panels(PanelState { tools: ToolTab::Cycle, ..panels }));
             }
-            ui.label(RichText::new(tr("ui-verdicts-none")).color(dim()));
+            // Cut to the bar with the whole of it on hover: in German at 1280 pixels it ran out of the window.
+            ui.add(Label::new(RichText::new(tr("ui-verdicts-none")).color(dim())).truncate());
             return;
         }
         let failed = checks.iter().filter(|c| !c.2).count();
@@ -559,7 +560,7 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
 pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewInfo, actions: &mut Vec<Action>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
     Frame::new().fill(floating()).corner_radius(4).inner_margin(Margin::same(8)).show(ui, |ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (key, yaw, pitch) in [
                 ("ui-view-front", 0.0, 0.0),
                 ("ui-view-side", 90.0, 0.0),
@@ -579,7 +580,7 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
                 actions.push(Action::Record(!view.recording));
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let mut shown = overlays;
             ui.checkbox(&mut shown.xray, tr("ui-view-xray")).on_hover_text(tr("ui-view-xray-hint"));
             ui.checkbox(&mut shown.forces, tr("ui-view-forces")).on_hover_text(tr("ui-view-forces-hint"));
@@ -589,7 +590,7 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
                 actions.push(Action::Overlays(shown));
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let mut shown = overlays;
             let mode = ui.add_enabled(view.has_mode, Checkbox::new(&mut shown.mode, tr("ui-view-mode")));
             mode.on_hover_text(tr("ui-view-mode-hint")).on_disabled_hover_text(tr("ui-view-mode-none"));
@@ -602,6 +603,10 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
                 actions.push(Action::Compare(on, effect.to_string()));
             }
             let name = |path: &str| tr(&format!("effect-{}", path.strip_prefix("effects.").unwrap_or(path)));
+            // A wrapped row does not wrap a combo box (it is a row of its own inside): it goes on the next row here.
+            if ui.available_size_before_wrap().x < 160.0 {
+                ui.end_row();
+            }
             ComboBox::from_id_salt("view-compare").selected_text(name(effect)).width(150.0).show_ui(ui, |ui| {
                 for (path, key, _) in model.effects() {
                     if ui.selectable_label(path == effect, tr(&key)).clicked() && path != effect {
@@ -610,7 +615,7 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
                 }
             });
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let mut shown = overlays;
             ui.label(tr("ui-view-trail"));
             for (color, key) in [
@@ -632,7 +637,7 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
                 if overlays.trail == TrailColor::Speed { (1.0, tr("unit-m-per-s")) } else { (1e3, tr("unit-mm")) };
             let (low, high) = trail_scale(overlays, (low, high));
             scale_bar(ui, &format!("{:.3} {unit}", low * factor), &format!("{:.3} {unit}", high * factor), trail_color);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let mut shown = overlays;
                 let mut fixed = shown.scale.is_some();
                 if ui
@@ -892,7 +897,10 @@ fn verdict_cells(ui: &mut Ui, model: &Model, v: &Verdict) {
 
 /// "Motor A  1250 1/min"
 pub fn label_text(model: &Model, label: &sim_core::Label) -> String {
-    format!("{}  {:.*} {}", model.tr.tr(label.owner_key), label.decimals, label.value, model.tr.tr(label.unit_key))
+    // Rounded first and `+ 0.0`, so that a motor at rest reads 0 rpm and not -0.
+    let scale = 10f64.powi(label.decimals as i32);
+    let value = (label.value * scale).round() / scale + 0.0;
+    format!("{}  {:.*} {}", model.tr.tr(label.owner_key), label.decimals, value, model.tr.tr(label.unit_key))
 }
 
 /// The part clicked in the 3D view, in the `scene` it is drawn from: its name, the live values written next to it,
@@ -964,7 +972,8 @@ pub fn timeline(
     let tr = |key: &str| model.tr.tr(key).to_string();
     Frame::new().fill(floating()).corner_radius(4).inner_margin(Margin::symmetric(8, 5)).show(ui, |ui| {
         ui.set_width(width);
-        ui.horizontal(|ui| {
+        // Wrapped: in a narrow view the time and the speed buttons go to a second row rather than out of the view.
+        ui.horizontal_wrapped(|ui| {
             let live = timeline.time.is_none();
             if ui.selectable_label(live, tr("ui-timeline-live")).on_hover_text(tr("ui-timeline-live-hint")).clicked()
                 && !live
@@ -982,7 +991,16 @@ pub fn timeline(
                 actions.push(Action::Step(true));
             }
             let mut time = timeline.time.unwrap_or(span.1);
-            ui.spacing_mut().slider_width = (ui.available_width() - 250.0).max(60.0);
+            // The slider takes what the time and the speed buttons after it leave: a fixed 250 pixels for them let the
+            // last button stick out of the view once the time had two digits.
+            let shown = |time: f64| format!("{time:.3} {}  {:+.3} {}", "s", time - span.1, "s");
+            let font = egui::TextStyle::Body.resolve(ui.style());
+            let width = |text: String| ui.painter().layout_no_wrap(text, font.clone(), chalk()).size().x;
+            let (gap, padding) = (ui.spacing().item_spacing.x, 2.0 * ui.spacing().button_padding.x);
+            let after = gap
+                + width(shown(time))
+                + [0.1, 0.25, 1.0].map(|s| gap + padding + width(format!("{s}×"))).iter().sum::<f32>();
+            ui.spacing_mut().slider_width = (ui.available_width() - after - 2.0).max(60.0);
             let slider = ui.add(Slider::new(&mut time, span.0..=span.1).show_value(false));
             if slider.changed() {
                 actions.push(Action::Timeline(Timeline { time: Some(time), playing: false, ..timeline }));
@@ -998,11 +1016,7 @@ pub fn timeline(
                     .on_hover_text(model.tr.tr_arg("ui-timeline-contact-hint", &format!("{contact:.3}")));
             }
             // The time shown, and how far back from the newest scene: the scopes' right edge.
-            ui.label(RichText::new(format!("{time:.3} {}  {:+.3} {}", "s", time - span.1, "s")).color(if live {
-                chalk()
-            } else {
-                ACTUAL
-            }));
+            ui.label(RichText::new(shown(time)).color(if live { chalk() } else { ACTUAL }));
             for speed in [0.1, 0.25, 1.0] {
                 if ui
                     .selectable_label(timeline.speed == speed, format!("{speed}×"))

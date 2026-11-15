@@ -3,6 +3,8 @@
 
 mod ui;
 mod views;
+#[cfg(test)]
+mod window_tests;
 
 use bevy::anti_alias::smaa::Smaa;
 use bevy::asset::RenderAssetUsages;
@@ -10,7 +12,7 @@ use bevy::asset::io::file::FileAssetReader;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{CameraOutputMode, Hdr, RenderTarget, Viewport};
 use bevy::gltf::GltfAssetLabel;
-use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::pbr::ScreenSpaceAmbientOcclusion;
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings};
@@ -175,8 +177,15 @@ fn main() {
     }
     let window =
         Window { title: model.tr.tr("ui-window-title").into(), resolution: (1600u32, 900u32).into(), ..default() };
-    App::new()
-        .insert_resource(ClearColor(Color::srgb_u8(29, 32, 37)))
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }));
+    add_app(&mut app, model);
+    app.run();
+}
+
+/// The app's state, panels and systems, on top of Bevy's plugins (`main`'s, or the window tests' without a screen).
+fn add_app(app: &mut App, model: Model) {
+    app.insert_resource(ClearColor(Color::srgb_u8(29, 32, 37)))
         .insert_resource(State {
             model,
             orbit: Orbit { yaw: 0.35, pitch: 0.2, distance: 2.5, target: Vec3::ZERO },
@@ -205,7 +214,6 @@ fn main() {
             encodings: Vec::new(),
             notes: Default::default(),
         })
-        .add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }))
         .add_plugins(EguiPlugin::default())
         .add_systems(Startup, setup)
         .add_systems(
@@ -225,8 +233,7 @@ fn main() {
         )
         // After the window is closed and the exit asked for, in the same frame: the runner exits right after it.
         .add_systems(Last, finish_videos.after(bevy::window::ExitSystems))
-        .add_systems(EguiPrimaryContextPass, panels)
-        .run();
+        .add_systems(EguiPrimaryContextPass, panels);
 }
 
 fn setup(
@@ -1006,8 +1013,9 @@ fn occurrence(seen: &mut std::collections::HashMap<&'static str, usize>, id: &'s
     (id, *count - 1)
 }
 
-/// Orbit with the left mouse button, zoom with the wheel, while the pointer is over the 3D view. A click there
-/// without dragging picks the part under the pointer, or on empty space lets go of the one picked.
+/// Orbit with the left mouse button, pan with the right or middle one, zoom with the wheel, while the pointer is over
+/// the 3D view. A click there without dragging picks the part under the pointer, or on empty space lets go of the one
+/// picked. A resize keeps the machine in view.
 #[allow(clippy::too_many_arguments)]
 fn orbit_camera(
     mut state: ResMut<State>,
@@ -1022,6 +1030,8 @@ fn orbit_camera(
     cad: Query<(), With<CadPart>>,
     ghosts: Query<(), Or<(With<GhostPart>, With<ObstacleFace>)>>,
     mut pressed_at: Local<Option<Vec2>>,
+    mut panning: Local<bool>,
+    mut last_aspect: Local<f32>,
 ) {
     let (mut camera, lens, seen_from) = camera.into_inner();
     let [left, top, right, bottom] = state.view_rect;
@@ -1069,21 +1079,47 @@ fn orbit_camera(
     }
     let state = &mut *state;
     let orbit = &mut state.orbit;
-    if over_view {
-        if buttons.pressed(MouseButton::Left) {
-            orbit.yaw -= motion.delta.x * 0.005;
-            orbit.pitch = (orbit.pitch + motion.delta.y * 0.005).clamp(-1.55, 1.55);
-        }
-        orbit.distance = (orbit.distance * (1.0 - scroll.delta.y * 0.1)).clamp(0.2, 20.0);
+    // A drag turns or pans only where it started over the view: one from a panel or a control passing over the view
+    // turned the camera.
+    if buttons.any_just_pressed([MouseButton::Right, MouseButton::Middle]) {
+        *panning = over_view;
+    }
+    if !buttons.any_pressed([MouseButton::Right, MouseButton::Middle]) {
+        *panning = false;
+    }
+    if buttons.pressed(MouseButton::Left) && pressed_at.is_some() {
+        orbit.yaw -= motion.delta.x * 0.005;
+        orbit.pitch = (orbit.pitch + motion.delta.y * 0.005).clamp(-1.55, 1.55);
     }
     let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, -orbit.pitch, 0.0);
-    if state.fit
-        && let Some((low, high)) = state.bounds
+    // Panned so that the point under the pointer at the target's depth stays under it: the 45 degree field of view
+    // spans the view's height.
+    if *panning && bottom > top {
+        let per_pixel = 2.0 * orbit.distance * std::f32::consts::FRAC_PI_8.tan() / (bottom - top);
+        orbit.target += rotation * Vec3::new(-motion.delta.x, motion.delta.y, 0.0) * per_pixel;
+    }
+    if over_view {
+        // A notch of the wheel a tenth nearer; a touchpad's pixels (which come by the hundred) 50 to a notch.
+        let notches = match scroll.unit {
+            MouseScrollUnit::Line => scroll.delta.y,
+            MouseScrollUnit::Pixel => scroll.delta.y / 50.0,
+        };
+        orbit.distance = (orbit.distance * 0.9f32.powf(notches)).clamp(0.2, 20.0);
+    }
+    let aspect = (right - left) / (bottom - top);
+    if let Some((low, high)) = state.bounds
         && right > left
         && bottom > top
     {
-        orbit.distance = fit_distance(low, high, orbit.target, rotation, (right - left) / (bottom - top));
-        state.fit = false;
+        let fit = fit_distance(low, high, orbit.target, rotation, aspect);
+        if state.fit {
+            orbit.distance = fit;
+            state.fit = false;
+        } else if *last_aspect != aspect {
+            // The window or a panel was resized: back as far as the machine needs, never nearer than it was.
+            orbit.distance = orbit.distance.max(fit);
+        }
+        *last_aspect = aspect;
     }
     camera.translation = orbit.target + rotation * Vec3::new(0.0, 0.0, orbit.distance);
     camera.rotation = rotation;
@@ -1182,7 +1218,9 @@ fn panels(
                     compare: (state.ghost.is_some(), &state.compare_effect),
                     recording: state.recording.is_some(),
                 };
-                ui::view_controls(ui, &state.model, state.overlays, view, &mut actions)
+                // Within the view: in German in a narrow window its rows ran over the tools panel; now they wrap.
+                let room = egui::vec2((right.left() - left.right() - 36.0).max(100.0), ui.available_height());
+                ui.allocate_ui(room, |ui| ui::view_controls(ui, &state.model, state.overlays, view, &mut actions))
             })
             .response
             .rect
