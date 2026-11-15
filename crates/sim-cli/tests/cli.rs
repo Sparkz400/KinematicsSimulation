@@ -331,9 +331,23 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         // the band is not Kv's alone (the six-axis arm's j2 has 3.97 Hz, its j1 17 Hz with 27 % overshoot, at velocity
         // loops of some 80 Hz). There half the lower bound is asked.
         let lowest = if entry.config().get("arm.urdf_file").is_ok() { 2.0 } else { 4.0 };
-        for row in tuning.lines().skip(1) {
+        // An axis that holds a weight through a lossy gearbox stops short of a small step at the tool, whatever its loops:
+        // the palletiser's z holds 3.04 N m on motor 3, 486 N m at the gear (ratio 160); to lift it the gear must pass
+        // 486 / 0.8 = 608 N m, and the motor first winds it by (608 - 486) / 2e5 N m/rad = 0.61 mrad, 0.71 mm of the 1 mm
+        // step at its 1.17 m (0.856 mrad of output a millimetre). Then the efficiency, faded in below 0.5 W, acts as a
+        // damper of T^2 ln(1 / 0.8) / 0.5 W = 7e4 N m s/rad on that spring: the tool creeps (0.42 mm at 0.2 s) after
+        // motors that arrived within 0.15 s, which the motor encoders do not see. There the loops' band is the one
+        // without the gear's losses (12.6 Hz), and an axis without a band is one the gear holds back.
+        let lossless = std::cell::OnceCell::new();
+        for (i, row) in tuning.lines().enumerate().skip(1) {
             let cells: Vec<&str> = row.split(',').collect();
-            let band: f64 = cells[4].parse().unwrap();
+            let held = cells[4].is_empty() && cells[1] == "NaN";
+            let without =
+                || lossless.get_or_init(|| table(&["tuning", entry.id, "--set", "effects.gearbox_efficiency=false"]));
+            let band: f64 =
+                (if held { without().lines().nth(i).unwrap().split(',').nth(4).unwrap() } else { cells[4] })
+                    .parse()
+                    .unwrap();
             // Kv = 50 1/s puts the position loop's bandwidth near 8 Hz.
             assert!(band > lowest && band < 20.0, "{}: {row}", entry.id);
         }
