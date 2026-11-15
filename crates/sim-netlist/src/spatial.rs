@@ -1393,6 +1393,24 @@ impl Machine for Delta {
         }
     }
 
+    /// The rigid model at a steady speed, θ̇ = J⁻¹ ṗ: per arm the joint's friction f(θ̇) and the platform drag's
+    /// −Jᵀ F through the gearbox as `rigid_solve` takes them, (f − drag) / (i loss), plus the motor shaft's friction (with
+    /// the gearbox's drag) at i θ̇. The gearbox's loss factor is the one of what it passes at rest, the weight's −Q_g
+    /// with the friction, as in `rigid_solve`; the weight itself is the rigid feedforward's. The brake is released and
+    /// the stops are not touched in a move.
+    fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
+        let t = self.legs.inverse([pos[0], pos[1], pos[2]]).unwrap_or([f64::NAN; 3]);
+        let (_, j) = self.pose(t);
+        let w = inverse(&j).map_or([f64::NAN; 3], |inv| mul(&inv, [vel[0], vel[1], vel[2]]));
+        let (drag, gravity) = (self.drag_torque(t, w), self.load(t, [0.0; 3]).2);
+        for k in 0..3 {
+            let joint = &self.joints[k];
+            let at_arm = joint.friction.torque(w[k]) - drag[k];
+            let loss = joint.gearbox.loss_factor(at_arm - gravity[k], w[k]);
+            out[k] = joint.shaft.torque(joint.ratio() * w[k]) + at_arm / (joint.ratio() * loss);
+        }
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }

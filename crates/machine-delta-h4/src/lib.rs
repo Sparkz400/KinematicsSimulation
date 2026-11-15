@@ -1319,6 +1319,25 @@ impl Machine for H4 {
         }
     }
 
+    /// The rigid model at a steady speed, theta' = J^-1 (p', c' / kappa): per arm the joint's friction f(theta')
+    /// through the gearbox as `rigid_solve` takes it, f / (i loss), plus the motor shaft's friction (with the gearbox's
+    /// drag) at i theta'. The loss factor is the one of what the gearbox passes at rest, f - Q_g, as in `rigid_solve`;
+    /// the weight itself is the rigid feedforward's. The amplifier's damping does not work at a steady speed; the brake
+    /// is released and the stops are not touched in a move.
+    fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
+        let x = self.coordinates(pos);
+        let t = self.legs.inverse(x).unwrap_or([f64::NAN; 4]);
+        let j = self.legs.jacobian(t, x).unwrap_or([[f64::NAN; 4]; 4]);
+        let w = solve4(&j, self.coordinates(vel)).unwrap_or([f64::NAN; 4]);
+        let gravity = self.load_with(t, x, j, [0.0; 4], self.carried(), self.tool_inertia()).2;
+        for k in 0..4 {
+            let joint = &self.joints[k];
+            let at_arm = joint.friction.torque(w[k]);
+            let loss = joint.gearbox.loss_factor(at_arm - gravity[k], w[k]);
+            out[k] = joint.shaft.torque(joint.ratio() * w[k]) + at_arm / (joint.ratio() * loss);
+        }
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }

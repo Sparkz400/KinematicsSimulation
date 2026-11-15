@@ -1116,6 +1116,26 @@ impl Machine for TGantry {
         out[1] = k * (fx - fz);
     }
 
+    /// The rigid model at a steady speed: the guides at their steady level (loads at rest), the idlers and the cable
+    /// chain give F_x and F_z against the motion; motor a's belt force carries (F_x + F_z) / 2 and b's (F_x - F_z) / 2,
+    /// each through its gearbox, r / (i loss), plus the motor shaft's friction (with the gearbox's drag) at its speed.
+    /// The loss factor is the one of what the gearbox passes, the Z axis's weight ±m_z g / 2 with the friction, as in
+    /// `rigid_solve`; the weight itself is the rigid feedforward's.
+    fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
+        let (r, ratio, (vx, vz)) = (self.r, self.gearbox.ratio, (vel[0], vel[1]));
+        let (scale_x, scale_z) = self.load_scales(pos[1], 0.0);
+        let (idler_x, idler_z) = self.idler_friction(vx, vz);
+        let fx = self.friction_x.steady(vx, scale_x).iter().sum::<f64>() + idler_x + self.chain_drag(vx);
+        let fz = self.friction_z.steady(vz, scale_z).iter().sum::<f64>() + idler_z;
+        let lift = self.m_z() * self.g / 2.0;
+        let mut speed = [0.0; 2];
+        self.inverse(vel, &mut speed);
+        for (k, (force, weight)) in [((fx + fz) / 2.0, lift), ((fx - fz) / 2.0, -lift)].into_iter().enumerate() {
+            let loss = self.gears[k].loss_factor((force + weight) * r, speed[k] / ratio);
+            out[k] = self.shaft[k].torque(speed[k]) + r / (ratio * loss) * force;
+        }
+    }
+
     /// F_x = T3 - T1 on the carriage and F_z = 2 T2 - T1 - T3 on the Z axis carry the moved masses (without the pulleys
     /// and rotors of `feedforward_torque`), and the belt keeps its length: sum (T_i - P) L_i = 0 over the geometric
     /// section lengths L_i (the elastic law T = EA (L - l) / l to first order in T / EA). With d_i = T_i - P:

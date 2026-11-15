@@ -790,6 +790,23 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         self.rigid_motor_torque(&motor(&q), &motor(&qd), &motor(&qdd), out);
     }
 
+    /// The rigid model at q'' = 0: per joint, at its speed q' (`joint_motion`), the motor shaft's friction (with the
+    /// gearbox's drag) at i q' and the joint's own friction (guides, bearings, a screw nut's preload) through the gearbox
+    /// as `rigid_solve` takes it: f(q') / (i loss), the loss factor that of what the gearbox passes at rest, f plus the
+    /// weight it holds (driven back where the weight pulls the joint along). The brake is released and the stops are
+    /// not touched in a move.
+    fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
+        let (_, qd, _) = self.joint_motion(pos, vel, &vec![0.0; pos.len()]);
+        let mut hold = vec![0.0; out.len()];
+        self.feedforward_torque(pos, &vec![0.0; pos.len()], &mut hold);
+        for (k, joint) in self.joints.iter().enumerate() {
+            let (j, v) = (&joint.drive, qd[k]);
+            let friction = j.friction.torque(v);
+            let loss = j.gearbox.loss_factor(friction + j.ratio() * hold[k], v);
+            out[k] = j.shaft.torque(j.ratio() * v) + friction / (j.ratio() * loss);
+        }
+    }
+
     fn rigid_guide_loads(&self, pos: &[f64], acc: &[f64], out: &mut Vec<[f64; 2]>) {
         self.mechanism.rigid_guide_loads(pos, acc, out);
     }

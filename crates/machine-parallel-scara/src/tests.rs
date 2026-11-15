@@ -249,3 +249,42 @@ fn the_default_cycle_passes_its_verdicts() {
     assert!(failed.is_empty(), "{failed:?}");
     assert!(verdicts.iter().any(|v| v.check == "screw-speed"));
 }
+
+/// Friction feedforward from the machine's own model, by hand, on the tool turn (motor 4) in its cruise at 30 rad/s
+/// (the turn 0 -> 6 rad, the plate at rest). The quill's friction 0.02 tanh(30 / 0.01) + 1e-4 x 30 = 0.023 N m passes
+/// the gearbox 8, whose teeth (its 97 % at 259 N m with the drag 0.93 N m at the input taken out) pass 1 / (1 / 0.97 -
+/// 8 x 0.93 / 259) = 0.997803, at part load 0.997803^tanh(0.023 x 30 / 0.5) = 0.997803^0.880951 = 0.998064:
+/// 0.023 / (8 x 0.998064) = 0.002881 N m. The motor at 240 rad/s: its seals 0.05 (the breakaway's Stribeck part
+/// exp(-(240 / 2)^2) is nothing) + 2e-4 x 240 = 0.098 N m, and the gearbox's drag 0.93 (240 / 314.159)^(2/3) = 0.777184
+/// N m. So 0.878065 N m. With it the velocity loop's integrator carries nothing in the cruise (under 1 % of it; 0.04 %
+/// seen); without it, it carries the whole friction.
+#[test]
+fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing() {
+    let cruise = |model: bool| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text("effects.friction_feedforward = true").unwrap();
+        let source = if model { "machine" } else { "characteristic" };
+        cfg.set_text(&format!("drive.friction_feedforward_model = \"{source}\"")).unwrap();
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim.command(sim_components::Command::MoveTo(vec![0.1525, -0.5, 0.075, 6.0])).unwrap();
+        let (mut ff, mut integrator, mut n) = (0.0, 0.0, 0);
+        sim.run(0.3, |s| {
+            if s.control.set_acc[3] == 0.0 && (s.control.set_vel[3] - 30.0).abs() < 1e-12 {
+                (ff, integrator, n) =
+                    (s.control.drives[3].friction_ff, integrator + s.control.drives[3].controller_torque, n + 1);
+            }
+        });
+        assert!(n > 1000, "{n} samples in the cruise");
+        (ff, integrator / n as f64)
+    };
+    let quill: f64 = 0.02 + 1e-4 * 30.0;
+    let tooth: f64 = 1.0 / (1.0 / 0.97 - 8.0 * 0.93 / 259.0);
+    let loss = tooth.powf((quill * 30.0 / 0.5).tanh());
+    let expected = 0.05 + 2e-4 * 240.0 + 0.93 * (240.0f64 / 314.159265).powf(2.0 / 3.0) + quill / (8.0 * loss);
+    assert!((expected - 0.878065).abs() < 1e-6, "by hand {expected}");
+    let (ff, integrator) = cruise(true);
+    assert!((ff - expected).abs() < 1e-5 * expected, "feedforward {ff} N m, by hand {expected}");
+    assert!(integrator.abs() < 0.01 * expected, "the integrator carries {integrator} N m");
+    let (ff, integrator) = cruise(false);
+    assert!(ff == 0.0 && (integrator - expected).abs() < 0.02 * expected, "without: {integrator} N m");
+}
