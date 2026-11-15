@@ -13,6 +13,7 @@ Die Referenzdokumente, auf die dieses Handbuch verweist, gibt es nur auf Englisc
 - [Einen Delta-Picker auslegen](#einen-delta-picker-auslegen)
 - [Einen Linear-Delta auslegen](#einen-linear-delta-auslegen)
 - [Einen Hexapod oder einen Seilroboter auslegen](#einen-hexapod-oder-einen-seilroboter-auslegen)
+- [Einen Wickler auslegen](#einen-wickler-auslegen)
 - [Eine Bahn fahren und den Bahnfehler ablesen](#eine-bahn-fahren-und-den-bahnfehler-ablesen)
 - [Programme: G-Code und Roboterprogramme](#programme-g-code-und-roboterprogramme)
 - [Prüfurteile, Suche und Optimierung auf einer Bahn](#prüfurteile-suche-und-optimierung-auf-einer-bahn)
@@ -1096,6 +1097,46 @@ er braucht (`sim.substeps`).
 Festo druckt für kein VUVG-Ventil C und b; die des ausgelieferten Ventils sind aus seinem Normalnenndurchfluss
 geschätzt. Der Zylinder wirkt nicht auf die Achse zurück, die ihn trägt (seine Masse gehört in die des Schlittens), und
 ein Proportionalventil gibt es noch nicht.
+
+## Einen Wickler auslegen
+
+`winder` ist eine Bahnanlage: ein Abwickler, ein Tänzer, ein Aufwickler, beide Wickel zentral angetrieben (Einzelheiten
+in [Mechanismen](mechanismen.md#auf--und-abwickler-mit-tänzer-machine-winder)). Seine Achse ist die Bahnposition in
+Metern Bahn; der ausgelieferte Lauf sind 3 m am Anfang des Wickels, bis 2 m/s und zurück auf null, und wieder zurück.
+Ein Lauf nimmt Meter eines Wickels von 1286 m, während sich die Last der Motoren mit dem Wickel ändert: die Drehzahl ist
+am Kern am höchsten, das Moment beim vollen Wickel, die Trägheit wächst mit r⁴. Darum beurteilt der Wickler neben den
+Prüfungen der Motoren beide Enden des Wickels:
+
+```text
+$ sim-cli verdicts winder
+check,motor,value,limit,result
+...
+web-tension,,102.6,250.0,ok
+web-slack,,0.3106,1.000,ok
+dancer-travel,,0.000007132,0.04000,ok
+inertia-ratio,unwind,10.40,15.00,ok
+torque-at-full-roll,unwind,4.093,18.00,ok
+torque-at-core,unwind,1.207,18.00,ok
+speed-at-core,unwind,311.1,508.8,ok
+tension-torque-at-full-roll,unwind,2.204,5.400,ok
+...
+```
+
+`web-tension` und `web-slack` sind der höchste Bahnzug gegen das, was die Bahn tragen darf, und der niedrigste gegen
+ihren Mindestzug (der Mindestzug über dem niedrigsten: über 1 schlägt fehl); `dancer-travel` der größte Weg des Tänzers
+gegen seinen Platz. Je Motor: das Trägheitsverhältnis beim vollen Wickel (die Trägheit des Wickels am Motor über Läufer
+und Getriebe), das Motormoment beim vollen Wickel und am Kern für die Bahngeschwindigkeit, Beschleunigung und den
+Bahnzug jedes Augenblicks des Zyklus, die Motordrehzahl am Kern und das Moment des Bahnzugs beim vollen Wickel gegen das
+Bemessungsmoment. Zuerst das Trägheitsverhältnis lesen: hier entscheidet es, nicht das Moment, über den Motor (ein
+kleinerer 1FK2 hat das Moment, und beim vollen Wickel das 22-fache seiner Trägheit).
+
+Was man ändert: `web.tension_n` und `web.taper` (der Zug am Kern und wie er zum großen Wickel hin fällt),
+`axis.web.max_velocity_m_s` und `max_acceleration_m_s2` (die Bahn), `roll.core_radius_m` und `full_radius_m`, die
+`thickness_m`, `width_m` und `density_kg_m3` der Bahn, `gearbox.ratio` (Drehzahl am Kern gegen Moment und Trägheit beim
+vollen Wickel) und `roll.run_from_m`, um den Zyklus an anderer Stelle des Wickels zu fahren. Ein Not-Halt:
+`sim-cli stop winder --category 2` bremst die Bahn entlang ihres Wegs und hält ihren Zug; ein Halt der Kategorie 1 bremst
+jeden Motor an seiner eigenen Rampe, was die Wickel dort auseinanderlaufen lässt, wo ihre Radien verschieden sind, und
+die Bahn überlastet.
 
 ## Eine Bahn fahren und den Bahnfehler ablesen
 

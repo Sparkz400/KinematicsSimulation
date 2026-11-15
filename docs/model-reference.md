@@ -1192,8 +1192,9 @@ lengths do not change with the rolls' radii (the web leaves each roll over a fix
 mass in the spans is left out.
 
 **Dancer.** The roller turns with the web, J_d ω_d' = R (T2 − T1) − drag; the slide carries it, m y'' = F_cyl − k_air y + m g
-− T1 − T2 − friction + stops. The cylinder's force is set to hold the tension setpoint, F_cyl = 2 T_set − m g, the dancer's
-weight (and a weight on it, `mass.payload_kg`) taken off, with the taper T_set = T0 (1 − k (1 − r_c / r_rewind))
+− T1 − T2 − friction + stops, m the slide and roller (`mass.dancer_kg`) and a weight a cycle segment's `payload` hangs on
+it (`mass.payload_kg`). The cylinder's force is set to hold the tension setpoint, F_cyl = 2 T_set − m g, the dancer's
+weight (with the weight on it) taken off, with the taper T_set = T0 (1 − k (1 − r_c / r_rewind))
 (`effects.tension_taper`). Its potential is −(F_cyl + m g) y + ½ k_air y²; while the taper changes F_cyl the loss row
 `power.cylinder` = dF_cyl/dt · y books the energy that puts in.
 
@@ -1245,7 +1246,13 @@ the roller turning on the spans, R² (EA / L1 + EA / L2) on J_d.
 brakes each motor on its own OFF3 ramp, the same angular deceleration: the surfaces slow in proportion to their radii, so
 where the radii differ the rolls part and the web is overloaded or goes slack (tests
 `an_emergency_stop_along_the_line_keeps_the_web_within_its_limits`,
-`a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ`).
+`a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ`). Once the drives are off, the holding brakes
+keep the rolls and with them the tension.
+
+**Drives.** The shipped config has the two Motor Modules of an S120 line-up with a Braking Module (`drive.braking_module`),
+each with its own 110 µF of DC link; with `effects.shared_dc_link` (off as shipped, as on every machine) the two share
+one link and what the unwind brakes, the rewind takes. On S210 converters of 66 µF the unwind's DC link tripped on
+overvoltage under a stream of setpoints at the speed limit, its roll's inertia braked in steps.
 
 ## Compliant base
 

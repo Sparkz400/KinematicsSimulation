@@ -590,12 +590,15 @@ taper 0.3.
 | Conservation of web length over a 3 m run | paid out / (1 + ε_0) = taken up (trapezoid of the rewind's flow) + Δ(M1 + M2) | 1e-7 m | `the_web_that_leaves_the_unwind_arrives_at_the_rewind_or_stays_in_the_spans` |
 | Round trip and static hold at a radius | at L = 0, a quarter and the capacity: still for 1 s under the holding torques | 1e-7 m (line), 1e-9 m (dancer) | `the_winder_holds_at_rest_at_both_ends_of_the_roll` |
 | The draw and the dancer's loop: roll wound at 100 N, web at 80 N, 2 m/s | without the loop y' = v (ε − ε_0) / (2 (1 + ε_0)) = −0.24969 mm/s; with it the trim settles at 0.49938 mm/s and the dancer stands | 1 % | `the_dancer_loop_takes_out_the_draw_of_a_roll_wound_at_another_tension` |
-| The own verdicts on the shipped cycle | inertia ratio 10.4026; speed at the core 7 · 2 / 0.045 = 311.11 rad/s; tension's torque at the full roll (100 + 1.25) 0.15 / 7 = 2.1696, (79 + 1.25) 0.15 / 7 = 1.7196 N m; each fails with its rating just below | 1e-4, 0.05 rad/s, 0.01 N m | `the_own_verdicts_judge_the_cycle_and_fail_at_their_limits` |
-| Emergency stops from 2 m/s | category 2 at both ends and in the middle, category 1 in the middle: web between 30 and 250 N, dancer within 40 mm, standing after 1.0 and 2.0 s; category 1 near the ends: the line stands after 2 / (8.976 rad/s² r_small) (4.87 and 4.66 s) with the web above 250 N; category 0: slack | 0.05 s, 0.1 s | `an_emergency_stop_along_the_line_keeps_the_web_within_its_limits`, `a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ` |
+| The own verdicts on the shipped cycle (4 m/s²) | inertia ratio 10.4026; speed at the core 7 · 2 / 0.045 = 311.11 rad/s; tension's torque at the full roll with the roller's J_d a / 2R² = 2.5 N: (100 + 2.5) 0.15 / 7 = 2.1964, (79 + 2.5) 0.15 / 7 = 1.7464 N m; each fails with its rating just below | 1e-4, 0.05 rad/s, 0.01 N m | `the_own_verdicts_judge_the_cycle_and_fail_at_their_limits` |
+| Emergency stops from 2 m/s | category 2 at both ends and in the middle, category 1 in the middle: web between 30 and 250 N, dancer within 40 mm, standing after 0.5 s (4 m/s²) and 2.0 s (the OFF3 ramp, 0.99 m/s²); category 1 near the ends: the surfaces part at 1.346 − 0.404 m/s², the dancer meets its stop after sqrt(2 · 0.05 / 0.471) = 0.46 s, the web above 250 N; category 0: slack | 0.05 s | `an_emergency_stop_along_the_line_keeps_the_web_within_its_limits`, `a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ` |
 
 The standard suite runs on its four loss-free configs (rigid and elastic, with and without the dancer's weight; the
-taper off, as it feeds energy in through the cylinder): its energy holds with the web's transport, since the unwind was
-wound at the tension the web runs at and the strain it carries in equals the strain it carries out.
+taper off, as it feeds energy in through the cylinder) in the middle of the roll: there the radii are equal, the
+tension the suite's constant holding torques keep stays at the tension the unwind was wound at, and the strain the web
+carries in equals the strain it carries out. At the roll's start the radii part as the rolls turn, the tension drifts
+off the wound tension, and the elastic runs lose 0.36 % of the pulse's energy over the 10 s, exactly what
+`power.web_transport` books (the loss budget of the default config, at the roll's start, closes with it).
 
 Of the standard suite, round trip, static hold, determinism, energy conservation, the loss budget and step convergence
 run on `machines/pneumatic-axis.toml` as on every machine file (`every_machine_file_passes_the_standard_suite`); they

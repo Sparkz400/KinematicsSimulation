@@ -74,3 +74,4 @@ check-torque-at-full-roll = Motormoment beim vollen Wickel, Spitze, gegen das Sp
 check-torque-at-core = Motormoment am Kern, Spitze, gegen das Spitzenmoment [N m]
 check-speed-at-core = Motordrehzahl am Kern, höchste, gegen die höchste des Motors [rad/s]
 check-tension-torque-at-full-roll = Moment des Bahnzugs beim vollen Wickel gegen das Bemessungsmoment [N m]
+group-drive-unwind = Antrieb des Abwicklers

@@ -12,6 +12,7 @@ Deutsche Fassung: [Benutzerhandbuch](de/benutzerhandbuch.md).
 - [Size a delta picker](#size-a-delta-picker)
 - [Size a linear delta](#size-a-linear-delta)
 - [Size a hexapod or a cable robot](#size-a-hexapod-or-a-cable-robot)
+- [Size a winder](#size-a-winder)
 - [Run a path and read path error](#run-a-path-and-read-path-error)
 - [Programs: G-code and robot programs](#programs-g-code-and-robot-programs)
 - [Verdicts, search and optimise on a path](#verdicts-search-and-optimise-on-a-path)
@@ -1071,6 +1072,43 @@ speed the same way (0.05 l/(s bar): 0.072 m/s). A cylinder whose dead volume is 
 
 Festo prints C and b for no VUVG valve; the shipped valve's are estimated from its nominal flow. The cylinder does not
 act back on the axis carrying it (its mass belongs in the carriage's), and there is no proportional valve yet.
+
+## Size a winder
+
+`winder` is a web line: an unwind roll, a dancer, a rewind roll, both rolls centre-driven (details in
+[mechanisms](mechanisms.md#winder-and-unwinder-with-a-dancer-machine-winder)). Its axis is the line position in metres of
+web; the shipped run is 3 m at the roll's start, up to 2 m/s and down again, and back. A run takes metres of a roll of
+1286 m, while the motors' load changes with the roll: the speed is highest at the core, the torque at the full roll, the
+inertia grows with r⁴. So beside the motors' own checks the winder judges both ends of the roll:
+
+```text
+$ sim-cli verdicts winder
+check,motor,value,limit,result
+...
+web-tension,,102.6,250.0,ok
+web-slack,,0.3106,1.000,ok
+dancer-travel,,0.000007132,0.04000,ok
+inertia-ratio,unwind,10.40,15.00,ok
+torque-at-full-roll,unwind,4.093,18.00,ok
+torque-at-core,unwind,1.207,18.00,ok
+speed-at-core,unwind,311.1,508.8,ok
+tension-torque-at-full-roll,unwind,2.204,5.400,ok
+...
+```
+
+`web-tension` and `web-slack` are the web's highest tension against what it may carry and its lowest against its
+minimum (the minimum over the lowest: above 1 fails); `dancer-travel` the dancer's largest travel against its room.
+Per motor: the inertia ratio at the full roll (the roll's inertia at the motor over rotor and gearbox), the motor torque at
+the full roll and at the core for the line speed, acceleration and tension of each moment of the cycle, the motor speed
+at the core, and the tension's torque at the full roll against the rated torque. Read the inertia ratio first: here it,
+not the torque, decides the motor (a smaller 1FK2 has the torque, and 22 times its inertia at the full roll).
+
+What to change: `web.tension_n` and `web.taper` (the tension at the core and how it falls towards a large roll),
+`axis.web.max_velocity_m_s` and `max_acceleration_m_s2` (the line), `roll.core_radius_m` and `full_radius_m`, the web's
+`thickness_m`, `width_m`, `density_kg_m3`, `gearbox.ratio` (speed at the core against torque and inertia at the full
+roll), and `roll.run_from_m` to run the cycle elsewhere on the roll. An emergency stop: `sim-cli stop winder --category 2`
+brakes the line along its path and keeps the web's tension; a category 1 stop brakes each motor on its own ramp, which
+parts the rolls where their radii differ and overloads the web.
 
 ## Run a path and read path error
 

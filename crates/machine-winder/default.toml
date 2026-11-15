@@ -85,8 +85,10 @@ thermal_warm_start = true
 torque_saturation = true
 drive_delay = true
 dc_link = true
-# The two Motor Modules share one DC link (an S120 line-up): what the unwind brakes, the rewind takes.
-shared_dc_link = true
+# The two Motor Modules share one DC link, as an S120 line-up is wired: what the unwind brakes, the rewind takes. Off
+# here, as on every machine: each drive has a link of ratings.dc_link_capacitance_uf of its own, and the braking
+# resistor takes what either brakes.
+shared_dc_link = false
 regenerative_supply = false
 fieldbus_delay = false
 fieldbus_jitter = false
@@ -245,8 +247,10 @@ position_cycle_s = 1.0e-3
 current_delay_cycles = 1
 velocity_delay_cycles = 1
 kv_1_s = 50.0
-# [estimate] for the inertia at the motor in the middle of the roll (3.6e-3 kg m^2, 350 rad/s); it is a tenth of that
-# on the core and three times it on the full roll, so the loop is slower there.
+# [estimate] for the rewind on its core at the stretch shipped (1.1e-3 kg m^2 at the motor, 170 Hz); the unwind's, on its
+# full roll with ten times the inertia, is its own ([drive.unwind]). A roll's inertia at the motor changes 45-fold from
+# core to full: run elsewhere on the roll, the gains are set for the radii there (as the drive's speed controller is
+# adapted to the roll's inertia, which the drive model does not do by itself).
 velocity_kp_nm_s_rad = 1.2
 velocity_tn_s = 0.03
 velocity_feedforward_factor = 1.0
@@ -298,6 +302,10 @@ standstill_time_s = 1.0
 standstill_window_rad = 0.1
 torque_band = 0.0
 
+# The unwind's drive, its full roll at the stretch shipped (1.0e-2 kg m^2 at the motor). [estimate]
+[drive.unwind]
+velocity_kp_nm_s_rad = 3.0
+
 [ratings]
 # [estimate] what the film may carry: a tenth of its yield (100 MPa over 2e-5 m^2), and the least tension that keeps it
 # flat and tracking.
@@ -314,10 +322,10 @@ settling_tolerance_m = 0.001
 gearbox_rated_torque_nm = 60.0
 gearbox_max_torque_nm = 100.0
 gearbox_max_input_speed_rpm = 6000.0
-# [catalogue] The S120 line-up's DC link (catalog/siemens): a Smart Line Module 6SL3130-6AE15-0AB1 (220 uF), two Motor
-# Modules 6SL3120-1TE15-0AD0 (110 uF each) and the Braking Module 6SL3100-1AE31-0AB1 (110 uF), which switches in at
-# 770 V.
-dc_link_capacitance_uf = 550.0
+# [catalogue] Each Motor Module's DC link capacitance, 6SL3120-1TE15-0AD0 (catalog/siemens); the line-up's whole link with
+# the Smart Line Module 6SL3130-6AE15-0AB1 (220 uF) and the Braking Module 6SL3100-1AE31-0AB1 (110 uF, switching in at
+# 770 V) holds 550 uF.
+dc_link_capacitance_uf = 110.0
 braking_threshold_v = 770.0
 # [catalogue] the Braking Module's resistor 6SN1113-1AA00-0DA0 (catalog/siemens/braking_s120.csv)
 braking_resistor_continuous_w = 300.0

@@ -1187,6 +1187,11 @@ dancer (`true`) or takes it off. Model in [model-reference.md](model-reference.m
 | `ratings.dancer_max_travel_m` | m | The verdict `dancer-travel` | 0.04 |
 | `ratings.max_inertia_ratio` | – | The verdict `inertia-ratio`: the full roll's inertia at the motor over rotor and gearbox input | 15 |
 
+The two speed loops have their own gains: `drive.velocity_kp_nm_s_rad` (1.2) for the rewind on its core at the shipped
+stretch, `[drive.unwind]` `velocity_kp_nm_s_rad` (3.0) for the unwind on its full roll, ten times the inertia at the
+motor. A roll's inertia at the motor changes 45-fold from core to full; a run elsewhere on the roll needs its gains set
+for the radii there (near the roll's end the two swap), as the drive model does not adapt them to the roll's inertia.
+
 The verdicts `torque-at-full-roll` and `torque-at-core` judge against `drive.peak_torque_nm`, `speed-at-core` against
 `drive.max_speed_rad_s` and `tension-torque-at-full-roll` against `drive.rated_torque_nm`; a rating left out is not
 judged. With `effects.part_heating` both gearboxes warm (`thermal.gearbox_*`); with `effects.thermal_feedback` their

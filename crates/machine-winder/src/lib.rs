@@ -45,9 +45,15 @@
 //! electronic gearing (the inverse kinematics: the angles of the line position at the radii computed from the wound
 //! length, so the speed setpoint is i v / r), with the tension's torque and the roll's inertia fed forward
 //! (T r / i and J(r) w' / i plus the rotor's, `feedforward_torque_moving`). The dancer's position loop (`dancer.position
-//! _loop`), a PI as a winder's technology controller runs it, trims the unwind: its speed trim, integrated, shifts the
-//! unwind's position setpoint (`inverse`), so the unwind runs speed-controlled on the line speed over its radius plus
-//! the trim, and its position loop holds the integral of that.
+//! _loop`), a PI as a winder's technology controller runs it, trims the unwind: its speed trim, integrated, is web the
+//! unwind pays out beyond the line position, which `inverse` adds to the unwind's wound length, so the unwind runs on
+//! the line speed over its radius plus the trim, its radius following the web it gave, and its position loop holds the
+//! integral of that. Of a state the line position is the mean of the two rolls' (`tool_state`), the unwind's less the
+//! trim: in the rigid model the web's travel at the dancer roller.
+//!
+//! Gearboxes: rigid, with their efficiency (effects.gearbox_efficiency), no-load drag (effects.gearbox_drag) and, with
+//! effects.thermal_feedback, both at their temperature; each motor has a holding brake (effects.holding_brake) that keeps
+//! the roll, and with it the tension, while the drives are off.
 
 use sim_components::mech::{GearDrag, Gearbox, HoldingBrake, ThermalFeedback};
 use sim_core::{
@@ -305,6 +311,9 @@ impl Winder {
         let stroke = cfg.positive("dancer.stroke_m")?;
         let (kp, tn) = (cfg.non_negative("dancer.trim_kp_1_s")?, cfg.positive("dancer.trim_tn_s")?);
         let thermal = ThermalFeedback::from_config(cfg)?;
+        // What a catalogue gearbox writes beside its ratio: checked, not used (the gearboxes are rigid here).
+        cfg.positive("gearbox.stiffness_nm_rad")?;
+        cfg.non_negative("gearbox.backlash_rad")?;
         // The stretch of the roll the axis runs over: from where on the roll, how long.
         let (from, run) = (cfg.non_negative("roll.run_from_m")?, cfg.positive("roll.run_m")?);
         if from + run > roll.capacity() {
@@ -715,11 +724,21 @@ impl Winder {
         out
     }
 
-    /// The dancer at its travel `y`, as `scene` draws it: its roller, its slide and its cylinder below.
+    /// The dancer at its travel `y`, as `scene` draws it: its roller, its slide, the weight on it while it carries one, and
+    /// its cylinder below.
     fn dancer_parts(&self, y: f64) -> Vec<Part> {
         let (width, rd) = (self.width, self.roller_radius);
         let depth = 0.5 * (self.spans[0] + self.spans[1]) + y;
-        vec![
+        let mut parts = Vec::with_capacity(4);
+        if self.attached && self.payload > 0.0 {
+            parts.push(Part::new(
+                "payload",
+                Shape::Box { size: [0.08, 0.05, 0.05] },
+                [0.0, 0.5 * width + 0.04, -depth + 0.09],
+                [0.2, 0.7, 0.3],
+            ));
+        }
+        parts.extend([
             Part::new(
                 "dancer-roller",
                 Shape::Cylinder { radius: rd, length: width + 0.02 },
@@ -738,7 +757,8 @@ impl Winder {
                 [0.0, 0.5 * width + 0.04, -depth - 0.06],
                 [0.3, 0.45, 0.7],
             ),
-        ]
+        ]);
+        parts
     }
 
     /// The signal list of `effect_signals`.
@@ -931,10 +951,11 @@ impl Machine for Winder {
         self.energy_parts(&self.eval(s, &[0.0, 0.0])).iter().sum()
     }
 
-    /// What moves and can hit an obstacle: the dancer's slide, as `scene` draws it (the rolls turn in place).
+    /// What moves and can hit an obstacle: the dancer's slide and the weight on it, as `scene` draws them (the rolls turn
+    /// in place).
     fn collision_bodies(&self, s: &[f64]) -> Vec<sim_core::Aabb> {
         let y = self.eval(s, &[0.0, 0.0]).y;
-        sim_core::scene::scene_boxes(&self.dancer_parts(y), &["dancer-slide"])
+        sim_core::scene::scene_boxes(&self.dancer_parts(y), &["dancer-slide", "payload"])
     }
 
     fn set_payload_attached(&mut self, attached: bool) {

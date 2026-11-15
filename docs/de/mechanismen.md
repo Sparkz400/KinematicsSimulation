@@ -568,9 +568,10 @@ und deren Last sich im Lauf ändert: `winder` führt eine Bahn (Kunststofffolie,
 eine Tänzerwalze zu einem Aufwickler, mit einer Bahngeschwindigkeit und unter einem Bahnzug. Die ausgelieferte
 Konfiguration: eine PET-Folie von 50 µm, 400 mm breit, mit bis zu 2 m/s (in einer halben Sekunde auf Geschwindigkeit,
 4 m/s²) und 100 N, auf 3-Zoll-Kernen (r_c 45 mm), die bis 300 mm wachsen (r_f 150 mm; 1286 m Folie, 36 kg), jeder Wickel
-an einem 1FK2206-2AF mit Haltebremse hinter einem Planetengetriebe mit Übersetzung 7 und einem S210; der Tänzer eine Walze
+an einem 1FK2206-2AF mit Haltebremse hinter einem Planetengetriebe mit Übersetzung 7, an einem S120-Motor-Module von
+5 A mit einem Braking Module für beide; der Tänzer eine Walze
 von 80 mm auf einer senkrechten Führung, 4 kg und ein Gewicht von 2 kg, von einem Pneumatikzylinder nach unten gedrückt,
-±50 mm Weg. Die Bahnposition läuft über die ersten 20 m des Wickels (`roll.run_from_m`, `run_m`), wo der Abwickler voll
+±50 mm Weg. Die Bahnposition läuft über die ersten 6 m des Wickels (`roll.run_from_m`, `run_m`), wo der Abwickler voll
 ist und der Aufwickler auf seinem Kern; der Zyklus fährt 3 m vor und zurück. Das Modell steht in der
 [Modellreferenz](../model-reference.md#winder-with-dancer).
 
@@ -602,6 +603,11 @@ Ende verzögern die beiden Oberflächen im Verhältnis ihrer Radien (1,35 gegen 
 der Tänzer läuft nach 0,46 s in seinen Anschlag und die Bahn wird über 1200 N gedehnt. Kategorie 0 lässt die
 Haltebremsen die Wickel binnen etwa 50 ms greifen, und die Bahn hängt durch. Am Wickler hält nur ein Halt entlang der
 Bahn die Bahn; nach einem Halt der Kategorie 1 halten die Haltebremsen den Zug, den der Tänzer hält.
+
+**Drehzahlregler.** Der Aufwickler auf seinem Kern hat ein Zehntel der Trägheit des vollen Abwicklers am Motor, darum
+hat jeder seine eigene Verstärkung (1,2 und 3,0 N m s/rad, Tn 30 ms): `sim-cli margins winder` gibt 73,6° und 20,5 dB am
+Abwickler, 58,8° und 9,56 dB am Aufwickler (52,0° und 9,19 dB ohne Reibung), über die Grenzen mindestens 54,9° und
+8,91 dB (`--bands`).
 
 ```text
 sim-cli verdicts winder
@@ -743,7 +749,9 @@ Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels
   die Reibung der Wellendichtungen folgt der Temperatur der Getriebe nicht (ihr Wirkungsgrad und ihr Leerlaufmoment
   schon); der ausgelieferte Zyklus fährt 3 m der 1286 m des Wickels an seinem Anfang, das andere Ende des Wickels wird über
   die eigenen Prüfurteile beurteilt, nicht gefahren; Überschleifen hat auf der einen, umkehrenden Achse nichts zu
-  überschleifen.
+  überschleifen; der Antrieb passt seinen Drehzahlregler nicht an die Trägheit des Wickels an (45-fach vom Kern bis
+  voll), darum sind die ausgelieferten Verstärkungen die des ausgelieferten Abschnitts (`[drive.unwind]` eine eigene),
+  und ein Lauf nahe dem Ende des Wickels braucht sie vertauscht.
 - Seilroboter: Masse und Durchhang der Seile fehlen; der kraftfähige Arbeitsraum ist der statische (die Beschleunigungen
   des Zyklus beurteilen die Seilkraftprüfungen, die Planung weicht ihnen nicht aus); nahe am Rand des Arbeitsraums rechnet
   der Dehnungsausgleich der Motoren mit den Kräften der geschlossenen Form, wo die Verteilung ein Seil an einer Grenze

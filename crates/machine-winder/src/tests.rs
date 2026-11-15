@@ -332,6 +332,11 @@ fn stop_from_full_speed(start: f64, category: StopCategory) -> (f64, f64, f64, f
     let mut cfg = config(&[]);
     on_the_roll(&mut cfg, if start > 1000.0 { start - 15.0 } else { (start - 5.0).max(0.0) });
     cfg.set_text(&format!("start.pose = [{start:?}]")).unwrap();
+    if start > 1000.0 {
+        // Near the roll's end the unwind is on its core and the rewind full: their speed loops' gains swap.
+        cfg.set_text("drive.velocity_kp_nm_s_rad = 3.0").unwrap();
+        cfg.set_text("drive.unwind.velocity_kp_nm_s_rad = 1.2").unwrap();
+    }
     let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
     sim.command(Command::MoveTo(vec![start + if start > 1000.0 { -10.0 } else { 10.0 }])).unwrap();
     sim.run(1.5, |_| {});

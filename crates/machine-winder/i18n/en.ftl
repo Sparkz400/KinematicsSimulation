@@ -74,3 +74,4 @@ check-torque-at-full-roll = Motor torque at the full roll, peak, against the pea
 check-torque-at-core = Motor torque at the core, peak, against the peak torque [N m]
 check-speed-at-core = Motor speed at the core, highest, against the motor's highest [rad/s]
 check-tension-torque-at-full-roll = Tension's torque at the full roll against the rated torque [N m]
+group-drive-unwind = Drive of the unwind

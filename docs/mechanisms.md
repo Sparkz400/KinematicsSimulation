@@ -535,9 +535,10 @@ The classic servo sizing problem of converting machines, and the one machine who
 load changes over the run: `winder` runs a web (film, paper, foil) from an unwind roll over a dancer roller to a rewind
 roll, at a line speed, under a tension. The shipped config: a PET film of 50 µm, 400 mm wide, at up to 2 m/s (up to speed
 in half a second, 4 m/s²) and 100 N, on 3-inch cores (r_c 45 mm) growing to 300 mm (r_f 150 mm; 1286 m of film, 36 kg),
-each roll on a 1FK2206-2AF with a holding brake behind a planetary gearbox of ratio 7 and an S210; the dancer a roller of
+each roll on a 1FK2206-2AF with a holding brake behind a planetary gearbox of ratio 7, on an S120 Motor Module of 5 A
+with a Braking Module for both; the dancer a roller of
 80 mm on a vertical slide, 4 kg plus a 2 kg weight, pushed down by a pneumatic cylinder, ±50 mm of travel. The line
-position runs over the roll's first 20 m (`roll.run_from_m`, `run_m`), where the unwind is full and the rewind on its
+position runs over the roll's first 6 m (`roll.run_from_m`, `run_m`), where the unwind is full and the rewind on its
 core; the cycle runs 3 m forward and back. Model in the [model reference](model-reference.md#winder-with-dancer).
 
 | Id | Mechanism | Transmission | Tool pose | Own checks |
@@ -566,6 +567,10 @@ the ratio of their radii (1.35 against 0.40 m/s² on the full roll and the core)
 0.46 s and the web is stretched beyond 1200 N. Category 0 lets the holding brakes take the rolls within some 50 ms and the
 web goes slack. On a winder only a stop along the line keeps the web; after a category 1 stop the holding brakes keep
 the tension the dancer holds.
+
+**Speed loops.** The rewind on its core has a tenth of the full unwind's inertia at the motor, so each has its own gain
+(1.2 and 3.0 N m s/rad, Tn 30 ms): `sim-cli margins winder` gives 73.6° and 20.5 dB on the unwind, 58.8° and 9.56 dB on
+the rewind (52.0° and 9.19 dB without friction), at least 54.9° and 8.91 dB across the bounds (`--bands`).
 
 ```text
 sim-cli verdicts winder
@@ -687,7 +692,9 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
   telescoping) are left out; the roll's radius is computed from its wound length (a measured diameter or the speed ratio,
   `rewind.radius_from_speeds`, is a signal only); the shaft seals' friction does not follow the gearboxes' temperature
   (their efficiency and drag do); the shipped cycle runs 3 m of the roll's 1286 m at its start, and the other end of the
-  roll is judged through the own verdicts, not run; corner blending has nothing to blend on its one reversing axis.
+  roll is judged through the own verdicts, not run; corner blending has nothing to blend on its one reversing axis; the
+  drive does not adapt its speed controller to the roll's inertia (45-fold from core to full), so the shipped gains are
+  those of the stretch shipped (`[drive.unwind]` its own) and a run near the roll's end needs them swapped.
 - Cable robots: the cables' mass and sag are left out; the wrench-feasible workspace is the static one (the cycle's
   accelerations are judged by the tension verdicts, not planned around); near the workspace's edge the motors'
   stretch compensation counts on the closed form's tensions where the distribution holds a cable at a bound.
