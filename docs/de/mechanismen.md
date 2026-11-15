@@ -17,6 +17,7 @@ Konfigurationsschlüssel sind englische Bezeichner und in beiden Sprachen gleich
 - [Rundtisch: Wellgetriebe und Schneckengetriebe](#rundtisch-wellgetriebe-und-schneckengetriebe)
 - [Roboter aus URDF-Dateien](#roboter-aus-urdf-dateien)
 - [Parallelkinematiken: Hexapod und Seilroboter](#parallelkinematiken-hexapod-und-seilroboter)
+- [Pneumatikzylinder neben Servoachsen](#pneumatikzylinder-neben-servoachsen-machinecylinder)
 - [Was von Hand nachgerechnet ist](#was-von-hand-nachgerechnet-ist)
 - [Grenzen](#grenzen)
 
@@ -527,6 +528,32 @@ auf wie mit 0,03 s, und die Fehler beim Verweilen fallen auf 0,13 mrad (Kurbel),
 0,23 mrad (Scheibe), mit mindestens 35,8° und 8 dB Reserve in jedem Lauf über die Grenzen (`sim-cli margins <id>
 --bands`); die Toleranzen des Einschwingens sind 0,3 mrad, 0,3 mrad, 0,25 mm und 0,5 mrad.
 
+## Pneumatikzylinder neben Servoachsen (`[[machine.cylinder]]`)
+
+Die meisten Bestückautomaten haben neben ihren Servoachsen einen pneumatischen Antrieb: einen Z-Hub, einen
+Greiferschlitten, einen Stopper. Eine Maschinendatei fügt ihn mit einem Knoten `[[machine.cylinder]]` hinzu, dessen
+Tabelle `values` Zylinder, Ventil, Schlauch, Drosseln und Dämpfung enthält (`sim_components::pneumatic`, Schlüssel in
+[config-reference.md](../config-reference.md), Modell in [model-reference.md](../model-reference.md)). Er ist keine
+Werkzeugachse: kein Antrieb bewegt ihn, und die Steuerung plant für ihn nichts. Der Zyklus schaltet sein Ventil, sobald
+ein Segment angekommen ist (`valves = { z = "extend" }`), und wartet auf seine Endlagensensoren
+(`wait = ["z.extended"]`), bevor die Verweilzeit zählt und das nächste Segment beginnt.
+
+`machines/pneumatic-axis.toml`: die riemengetriebene Servo-X von `single-axis.toml` trägt einen Festo
+DSBC-32-100-PPVA-N3 (32 mm Kolben, 12 mm Stange, 100 mm Hub, PPV-Dämpfung 17 mm, 0,4 J), der nach unten ausfährt, an
+einem 5/2-Ventil mit Abluftdrosseln; 0,5 kg bewegt, 0,5 kg gegriffen. Der Zyklus: X zum Aufnehmen, Z ab, warten,
+greifen, Z auf, warten, X zum Ablegen, Z ab, loslassen, Z auf. Mit den ausgelieferten Einstellungen fährt Z in 0,55 s
+aus und in 0,65 s ein (Ventil 7 ms, die Stangenseite entlüftet aus dem Versorgungsdruck, gedrosselt 0,216 m/s, am Ende
+die Dämpfungsschraube), tritt mit 0,22 bis 0,24 m/s und 0,012 bis 0,029 J gegen die zulässigen 0,4 J in die Dämpfung ein
+(`cushion-energy`), trifft mit 0,06 bis 0,07 m/s auf den Puffer, ohne aus dem Sensorbereich zurückzuprallen, und hat
+ein Lastverhältnis von 0,024 (`load-factor`, 1 kg Gewicht gegen 415 N beim Einfahren). Ein Doppelhub verbraucht 1,10
+Normliter, 474 J am Kompressor (0,12 kWh/m³); von Hand beim Versorgungsdruck und der Wandtemperatur 1,15 l, 4 % weniger,
+weil die Verweilzeiten zu kurz sind, als dass die heiße Luft abkühlt.
+
+Was der Zylinder für die Auslegung liefert: Hubzeiten hin und zurück, den Geschwindigkeitsverlauf, Geschwindigkeit und
+Bewegungsenergie beim Eintritt in die Dämpfung gegen ihren Nennwert, die Geschwindigkeit am Endanschlag, Rückprall und
+Einschwingen, das Lastverhältnis, die Luft je Doppelhub und ihre Energie am Kompressor, die Druck- und
+Temperaturverläufe beider Kammern.
+
 ## Was von Hand nachgerechnet ist
 
 Komponententests (`sim-components`): kritische Drehzahl, Knicklast, Trägheit, Steifigkeit, Reibmoment der Vorspannung,
@@ -593,6 +620,15 @@ mehr; 5 cm unter den oberen Rollen wird die Lage abgelehnt; ein Seil, das die ge
 wird an der Grenze gehalten und die anderen tragen den Rest (je 8,485 N von Hand); vorwärts der inversen gibt die Lagen
 des räumlichen auf 1e-10 zurück.
 
+Tests des Pneumatikzylinders (`sim-components` pneumatic.rs, `sim-machines/tests/pneumatic.rs`): p A bei 6 bar auf
+beiden Seiten (482,5 und 414,7 N, Festo druckt 483 und 415); der gesperrte Durchfluss C p ρ0 nach ISO 6358 und das
+elliptische Gesetz; die Geschwindigkeit mit Abluftdrossel C ρ0 R T0 / A2 (0,1443 m/s auf 1 %, die des ausgelieferten Z
+0,2156 m/s auf 3 %); die Eigenfrequenz auf den Luftfedern adiabat (29,64 Hz) und isotherm (25,05 Hz); die Luft eines
+Doppelhubs (1,1119 Normliter); die geschlossene Füllzeit, solange der Durchfluss gesperrt ist (2,555 ms); die Energie
+eines geschlossenen Zylinders und die Enthalpiebilanz eines offenen; die Hubzeit auf 1 % beim halben Schritt; die
+Prüfurteile `cushion-energy` und `load-factor` im ausgelieferten Zyklus; ein für den Schritt zu steifer Zylinder wird
+abgelehnt. Die Datei besteht die Standard-Testreihe mit dem Zylinder in Ruhe.
+
 ## Grenzen
 
 - Ein Glied biegt sich in einer Eigenform in der Ebene, in der sein Gelenk es dreht; aus dieser Ebene heraus und in
@@ -603,6 +639,10 @@ des räumlichen auf 1e-10 zurück.
   Gelenk), da der Antrieb ein `[motor]` und ein `[drive]` je Maschine liest; keine Getriebelebensdauer für Roboter mit
   verschiedenen Übersetzungen der Gelenke.
 - Die Steifigkeit einer Spindel wird für den ganzen Hub an der weichsten Stellung der Mutter genommen.
+- Ein Pneumatikzylinder ist keine Werkzeugachse und wirkt nicht auf die Achse zurück, die ihn trägt; sein Ventil
+  schaltet auf und zu (kein Proportionalventil, kein servopneumatischer Lageregelkreis); ein Schlauch ist ein
+  Durchflusselement, dessen Volumen in die Totvolumen geht; Festo druckt für die VUVG-Ventile kein C und b nach ISO 6358,
+  daher sind die des ausgelieferten Ventils Schätzungen.
 - Ein vom Abtrieb zurückgetriebenes Schneckengetriebe verliert wie jedes Getriebe (1 / Wirkungsgrad) und hemmt nie selbst.
 - Keine Unwucht am Rundtisch, keine Lebensdauerformel der Zahnstange (keine veröffentlicht), keine Prüfung des
   Kreuzrollenlagers.

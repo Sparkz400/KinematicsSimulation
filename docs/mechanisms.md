@@ -15,6 +15,7 @@ The German version of this document is [de/mechanismen.md](de/mechanismen.md).
 - [Rotary table: strain wave and worm gear](#rotary-table-strain-wave-and-worm-gear)
 - [Arms from URDF files](#arms-from-urdf-files)
 - [Parallel kinematics: hexapod and cable robots](#parallel-kinematics-hexapod-and-cable-robots)
+- [Pneumatic cylinder beside servo axes](#pneumatic-cylinder-beside-servo-axes-machinecylinder)
 - [What is checked by hand](#what-is-checked-by-hand)
 - [Limits](#limits)
 
@@ -488,6 +489,29 @@ to 0.13 mrad (crank), 0.16 mrad (knife), 0.14 mm (saw) and 0.23 mrad (disc), wit
 every run across the bounds (`sim-cli margins <id> --bands`); the settling tolerances are 0.3 mrad, 0.3 mrad, 0.25 mm and
 0.5 mrad.
 
+## Pneumatic cylinder beside servo axes (`[[machine.cylinder]]`)
+
+Most pick-and-place machines carry a pneumatic actuator beside their servo axes: a Z stroke, a gripper slide, a
+stopper. A machine file adds one with a `[[machine.cylinder]]` node whose `values` table holds the cylinder, its valve,
+tube, throttles and cushions (`sim_components::pneumatic`, keys in [config-reference.md](config-reference.md), model
+in [model-reference.md](model-reference.md)). It is no tool axis: no drive moves it and the controller plans nothing
+for it. The cycle commands its valve once a segment has arrived (`valves = { z = "extend" }`) and waits for its
+end-position sensors (`wait = ["z.extended"]`) before the dwell counts and the next segment starts.
+
+`machines/pneumatic-axis.toml`: the belt-driven servo X of `single-axis.toml` carrying a Festo DSBC-32-100-PPVA-N3
+(32 mm bore, 12 mm rod, 100 mm stroke, PPV cushions 17 mm, 0.4 J) hanging downwards on a 5/2 valve with meter-out
+throttles; 0.5 kg moved, 0.5 kg picked. The cycle: X to the pick, Z down, wait, grip, Z up, wait, X to the place, Z
+down, release, Z up. With the shipped settings Z extends in 0.55 s and retracts in 0.65 s (valve 7 ms, the rod side
+exhausting from supply, 0.216 m/s throttled, the cushion's bleed at the end), enters the cushion at 0.22 to 0.24 m/s
+with 0.012 to 0.029 J against the 0.4 J rated (`cushion-energy`), stops at 0.06 to 0.07 m/s on the bumper without
+bouncing out of the sensor band, and has a load factor of 0.024 (`load-factor`, the 1 kg weight against 415 N
+retracting). A double stroke draws 1.10 normal litres, 474 J at the compressor (0.12 kWh/m³); by hand at the supply
+pressure and the wall's temperature 1.15 l, the 4 % less because the dwells are too short for the hot air to cool.
+
+What the cylinder gives for sizing: stroke times out and back, the speed profile, the speed and kinetic energy
+entering the cushion against its rating, the speed at the end stop, bounce and settling, the load factor, the air per
+double stroke and its energy at the compressor, the pressure and temperature traces of both chambers.
+
 ## What is checked by hand
 
 Component tests (`sim-components`): the screw's critical speed, buckling load, inertia, stiffness, preload drag, life
@@ -546,12 +570,23 @@ weight. Cable robots: at the planar centre each cable is 1.283539 m long (arc an
 takes below its band is held at the bound and the others carry the rest (8.485 N each by hand); the spatial robot's
 forward of inverse returns its poses within 1e-10.
 
+Pneumatic cylinder tests (`sim-components` pneumatic.rs, `sim-machines/tests/pneumatic.rs`): p A at 6 bar on both
+sides (482.5 and 414.7 N, Festo's 483 and 415); the ISO 6358 choked flow C p ρ0 and the elliptic law; the meter-out
+throttled speed C ρ0 R T0 / A2 (0.1443 m/s within 1 %, the shipped Z's 0.2156 m/s within 3 %); the air springs' natural
+frequency adiabatic (29.64 Hz) and isothermal (25.05 Hz); the air of a double stroke (1.1119 normal litres); the
+closed-form filling time while choked (2.555 ms); energy kept in a closed cylinder and the enthalpy balance of an open
+one; the stroke time within 1 % at half the step; the checks `cushion-energy` and `load-factor` on the shipped cycle;
+a cylinder too stiff for the step refused. The file passes the standard suite with the cylinder at rest.
+
 ## Limits
 
 - The arms are sized in joint space: no Cartesian paths and no inverse kinematics of the tool.
 - Every joint of an arm has the same motor, drive and gearbox (only the ratio differs per joint), as the drive reads
   one `[motor]` and `[drive]` per machine; no gearbox life for arms whose joints have different ratios.
 - A screw's stiffness is taken at its softest nut position for the whole stroke.
+- A pneumatic cylinder is no tool axis and does not act back on the axis that carries it; its valve switches on/off
+  (no proportional valve, no servo-pneumatic position loop); a tube is a flow element whose volume goes into the dead
+  volumes; Festo prints no ISO 6358 C and b for the VUVG valves, so the shipped valve's are estimates.
 - A link bends in one mode in the plane its joint turns it in; out of that plane and in torsion it is rigid, and the
   bending and the base do not act back on the joints (one-way).
 - A worm gear driven back from the load loses as any gearbox does (1 / efficiency) and never locks itself.

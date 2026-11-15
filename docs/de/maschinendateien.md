@@ -314,6 +314,20 @@ fehlen. Ein Effekt, der Knoten braucht, die die Datei nicht hat (`frame_complian
 `belt_span_vibration` ohne `span`, `tool_flex` ohne `lean`), lehnt die Datei mit `machine.<Liste>` ab; `belt_wrap` ohne
 die Lagen, aus denen er gerechnet wird, wird mit dem abgelehnt, was fehlt.
 
+Eine Datei kann auch Pneumatikzylinder haben, die weder Achsen noch Motoren sind:
+
+| Liste | Feld | | Bedeutung |
+| ----- | ---- | - | --------- |
+| `cylinder` | `values` | Pflicht | die Tabelle seiner Werte: Kolben, Stange, Hub, Massen, Totvolumen, Versorgung, Ventil, Schlauch, Drosseln, Dämpfung, Dichtungen, Sensoren und Nennwerte ([config-reference.md](../config-reference.md#a-machine-files-pneumatic-cylinders)); Signale `cylinder.<id>.*`, Prüfurteile `cushion-energy` und `load-factor` |
+| | `key` | | Übersetzungsschlüssel seines Namens; Vorgabe `cylinder` |
+
+Ein Zylinder sitzt am Werkzeug (sein Gewicht gehört in den Körper der Achse, die ihn trägt), und der Zyklus schaltet
+sein Ventil: ein `[[cycle.segment]]` mit `valves = { <id> = "extend" }` (oder `"retract"`, `"centre"`) schaltet es, sobald
+das Segment angekommen ist, und `wait = ["<id>.extended"]` hält die Verweilzeit des Segments an, bis der Endlagensensor
+meldet. Er geht neben jedem Mechanismus einer Datei. `machines/pneumatic-axis.toml` ist eine Servo-X mit einem
+pneumatischen Z; das Modell steht unter „Pneumatic cylinder“ in [model-reference.md](../model-reference.md), das
+Beispiel in [mechanismen.md](mechanismen.md).
+
 ## Motoren, die sich unterscheiden
 
 `[motor]`, `[gearbox]`, `[drive]`, `[ratings]` und `[parts]` gelten für jeden Motor. Eine Tabelle

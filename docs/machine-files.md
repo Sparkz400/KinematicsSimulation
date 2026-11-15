@@ -308,6 +308,19 @@ An effect that needs nodes the file has not (`frame_compliance` without a `frame
 `span`, `tool_flex` without a `lean`) refuses the file with `machine.<list>`; `belt_wrap` without the places it is worked
 out from is refused with what is missing.
 
+A file may also have pneumatic cylinders, which are neither axes nor motors:
+
+| list | field | | meaning |
+| ---- | ----- | - | ------- |
+| `cylinder` | `values` | required | the table of its values: bore, rod, stroke, masses, dead volumes, supply, valve, tube, throttles, cushions, seals, sensors and ratings ([config-reference.md](config-reference.md#a-machine-files-pneumatic-cylinders)); signals `cylinder.<id>.*`, checks `cushion-energy` and `load-factor` |
+| | `key` | | translation key of its name; default `cylinder` |
+
+A cylinder sits at the tool (its weight belongs in the body of the axis that carries it), and the cycle commands its
+valve: a `[[cycle.segment]]` with `valves = { <id> = "extend" }` (or `"retract"`, `"centre"`) switches it once the
+segment has arrived, and `wait = ["<id>.extended"]` holds the segment's dwell until the end-position sensor reports.
+It works beside any mechanism of a file. `machines/pneumatic-axis.toml` is a servo X with a pneumatic Z; the model is
+"Pneumatic cylinder" in [model-reference.md](model-reference.md), the example in [mechanisms.md](mechanisms.md).
+
 ## Motors that differ
 
 `[motor]`, `[gearbox]`, `[drive]`, `[ratings]` and `[parts]` hold for every motor. A table `[<table>.<motor id>]` gives

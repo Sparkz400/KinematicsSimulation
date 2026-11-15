@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:open-drive-catalogue:schema:1:pneumatic_cylinder",
+  "$comment": "Schema 1 of the catalogue. Every value in SI units, given in each number's \"unit\"; an empty CSV field is a value the source does not give.",
+  "title": "pneumatic_cylinder",
+  "description": "A double-acting pneumatic cylinder: one series, piston diameter and end-position cushioning.",
+  "type": "object",
+  "required": [
+    "series",
+    "size"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "part_number": {
+      "type": "string",
+      "description": "The maker's part number, where a row is one part; empty for a series configured by stroke."
+    },
+    "series": {
+      "type": "string"
+    },
+    "size": {
+      "type": "string",
+      "description": "The size as the maker names it (the piston diameter in mm)."
+    },
+    "cushioning": {
+      "type": "string",
+      "description": "The end-position cushioning as the maker names it (PPV: pneumatic, adjustable at both ends)."
+    },
+    "piston_diameter_m": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "unit": "m"
+    },
+    "rod_diameter_m": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "unit": "m"
+    },
+    "cushion_length_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m"
+    },
+    "max_impact_energy_j": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "J",
+      "description": "The kinetic energy of the moved mass the end positions take, as printed."
+    },
+    "force_gauge_pressure_pa": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "unit": "Pa",
+      "description": "The gauge pressure the theoretical forces are printed at."
+    },
+    "theoretical_force_extend_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N"
+    },
+    "theoretical_force_retract_n": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "N"
+    },
+    "moving_mass_at_zero_stroke_kg": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg"
+    },
+    "moving_mass_per_stroke_kg_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "kg/m"
+    },
+    "stroke_min_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m"
+    },
+    "stroke_max_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m"
+    },
+    "source": {
+      "type": "string"
+    }
+  }
+}

@@ -513,7 +513,7 @@ const SENSITIVITY_KEYS: [&str; 6] = [
 ];
 const OPTIMISED_KEYS: [&str; 3] = ["ui-analysis-setting", "ui-analysis-before", "ui-analysis-after"];
 /// Every check a cycle can be judged by (`verdicts`); each has a label "check-<name>".
-const CHECKS: [&str; 49] = [
+const CHECKS: [&str; 51] = [
     "motor-peak",
     "motor-thermal",
     "motor-s1",
@@ -563,6 +563,8 @@ const CHECKS: [&str; 49] = [
     "thermal-warm-start",
     "pick-tracking",
     "parts-missed",
+    "cushion-energy",
+    "load-factor",
 ];
 /// The parts of a motor's torque in the effect view, in the order of `TORQUE_PARTS`, and the torque itself.
 const BREAKDOWN_KEYS: [&str; 5] = [

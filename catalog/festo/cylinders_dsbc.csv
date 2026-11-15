@@ -1,0 +1,8 @@
+series,size,cushioning,piston_diameter_m,rod_diameter_m,cushion_length_m,max_impact_energy_j,force_gauge_pressure_pa,theoretical_force_extend_n,theoretical_force_retract_n,moving_mass_at_zero_stroke_kg,moving_mass_per_stroke_kg_m,stroke_min_m,stroke_max_m
+DSBC,32,PPV,0.032,0.012,0.017,0.4,600000,483,415,0.110,0.9,0.001,2.8
+DSBC,40,PPV,0.04,0.016,0.019,0.7,600000,754,633,0.205,1.6,0.001,2.8
+DSBC,50,PPV,0.05,0.02,0.022,1.0,600000,1178,990,0.365,2.5,0.001,2.8
+DSBC,63,PPV,0.063,0.02,0.022,1.3,600000,1870,1682,0.430,2.5,0.001,2.8
+DSBC,80,PPV,0.08,0.025,0.031,1.8,600000,3016,2721,0.810,3.9,0.001,2.8
+DSBC,100,PPV,0.1,0.025,0.031,2.5,600000,4712,4418,1.000,3.9,0.001,2.8
+DSBC,125,PPV,0.125,0.032,0.045,3.3,600000,7363,6881,2.245,6.3,0.001,2.8
