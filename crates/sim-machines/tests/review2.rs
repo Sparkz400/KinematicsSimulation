@@ -394,9 +394,11 @@ fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
                 // drifts by 0.01 kv 0.5 s (0.25 rad at kv = 50 / s), and the two runs part by up to that times the
                 // twist's swing (seen: 2.3 mrad of the delta's 24.6). The twist: how far the tool is from the pose of
                 // its motors (`motors_pose`) in the run left alone.
+                // So does a place the gears' twist moves: the palletiser's z, 4.83 mm of twist swing on this move of x
+                // (its arms at full reach), 0.62 mm apart (0.4 mm was the limit in m, 14 Nov).
                 let drift = 0.01 * cfg.f64("drive.kv_1_s").unwrap() * 0.5;
                 for (k, a) in axes.iter().enumerate() {
-                    let limit = if a.unit == "rad" { limit.max(drift * twist[k]) } else { limit };
+                    let limit = limit.max(drift * twist[k]);
                     assert!(
                         tool_off[k] < limit,
                         "{what}: axis {} off by {}, limit {limit} (twist {})",
@@ -405,14 +407,17 @@ fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
                         twist[k]
                     );
                 }
-                // The motors stand where the new kinematics put them for this pose.
-                let (mut wanted, mut speed) =
-                    (vec![0.0; sims[1].machine.motors().len()], vec![0.0; sims[1].machine.motors().len()]);
-                sims[1].machine.inverse(&tool(&sims[1]), &mut wanted);
+                // The motors stand where the new kinematics put them for this pose at rest, the gears twisted under the
+                // load they hold (`equilibrium`): `inverse` leaves the twist out, which the palletiser's motor 3 sees as
+                // 486 N m / 2e5 N m/rad x 160 = 0.39 rad (1.5 % of its 25.56 rad), the six-axis arm's joint 2 as 0.3 rad.
+                let motors = sims[1].machine.motors().len();
+                let (mut rest, mut torque, mut wanted, mut speed) =
+                    (Vec::new(), vec![0.0; motors], vec![0.0; motors], vec![0.0; motors]);
+                sims[1].machine.equilibrium(&tool(&sims[1]), &mut rest, &mut torque);
+                sims[1].machine.motor_state(&rest, &mut wanted, &mut speed);
                 let mut angle = wanted.clone();
                 sims[1].machine.motor_state(&sims[1].state, &mut angle, &mut speed);
-                // To 0.05 rad, or 1 %: an arm's gears twist under its weight (2.6 mrad at joint 2), which its motors see
-                // times the ratio (0.3 rad behind 120).
+                // To 0.05 rad, or 1 %: what the position loop leaves at rest beside the twist.
                 assert!(
                     wanted.iter().zip(&angle).all(|(w, a)| (w - a).abs() < f64::max(0.05, 0.01 * w.abs())),
                     "{what}: motors at {angle:?}, the pose asks for {wanted:?}"
