@@ -104,6 +104,8 @@ out["motor.a.angle"], out["motor.a.speed"], out["motor.a.current"]   # every sig
 sim.signals(), sim.time, sim.dt, sim.modes   # ["torque"], ...
 sim.analyze()                          # the columns of ks.analyze over the run since the start or reset()
 sim.verdicts()                         # the verdicts on that run: check, motor, value, limit, ok
+sim.stop(1)                            # a category 1 stop (0: torque off, 2: brake and hold); step() runs it
+sim.enable()                           # the drives on again
 sim.reset()
 ```
 

@@ -13,6 +13,7 @@
 //! | `command.cycle`                               | Boolean | write  | true starts the cycle, false stops it     |
 //! | `command.disable`                             | Boolean | write  | true switches the drives off (brakes on)  |
 //! | `command.enable`                              | Boolean | write  | true switches the drives on again         |
+//! | `command.stop_category`                       | Int32   | write  | 0, 1 or 2 stops the machine in that stop category (`Command::Halt`) |
 //! | `command.path`                                | String  | write  | a path, in the text of a path file        |
 //! | `command.path_time_optimal`                   | Boolean | write  | plan the path as fast as the motors allow |
 //! | `command.run_path`                            | Boolean | write  | true plans `command.path` and runs it     |
@@ -122,6 +123,7 @@ enum Input {
     Cycle(bool),
     Disable,
     Enable,
+    Halt(sim_components::StopCategory),
     Path(String),
     PathTimeOptimal(bool),
     RunPath,
@@ -612,6 +614,7 @@ pub async fn serve_secured(
             ("command.cycle", "opcua-cycle", DataTypeId::Boolean, Variant::from(false), true),
             ("command.disable", "opcua-disable", DataTypeId::Boolean, Variant::from(false), true),
             ("command.enable", "opcua-enable", DataTypeId::Boolean, Variant::from(false), true),
+            ("command.stop_category", "opcua-stop-category", DataTypeId::Int32, Variant::from(-1i32), true),
             ("command.path", "opcua-path", DataTypeId::String, Variant::from(""), true),
             ("command.path_time_optimal", "opcua-path-time-optimal", DataTypeId::Boolean, Variant::from(false), true),
             ("command.run_path", "opcua-run-path", DataTypeId::Boolean, Variant::from(false), true),
@@ -654,6 +657,15 @@ pub async fn serve_secured(
     on_write("command.cycle".into(), |v, _| Some(Input::Cycle(flag(v)?)), 0, inputs.clone());
     on_write("command.disable".into(), |v, _| flag(v)?.then_some(Input::Disable), 0, inputs.clone());
     on_write("command.enable".into(), |v, _| flag(v)?.then_some(Input::Enable), 0, inputs.clone());
+    on_write(
+        "command.stop_category".into(),
+        |v, _| {
+            let n = number(v).filter(|n| n.fract() == 0.0 && (0.0..=2.0).contains(n))?;
+            sim_components::StopCategory::from_number(n as u8).map(Input::Halt)
+        },
+        0,
+        inputs.clone(),
+    );
     on_write("command.path".into(), |v, _| Some(Input::Path(text(v)?)), 0, inputs.clone());
     on_write("command.path_time_optimal".into(), |v, _| Some(Input::PathTimeOptimal(flag(v)?)), 0, inputs.clone());
     on_write("command.run_path".into(), |v, _| flag(v)?.then_some(Input::RunPath), 0, inputs.clone());
@@ -815,6 +827,7 @@ async fn simulate(mut s: SimLoop) {
                 Input::Cycle(on) => commands.push(Some(if on { Command::StartCycle } else { Command::Stop })),
                 Input::Disable => commands.push(Some(Command::Disable)),
                 Input::Enable => commands.push(Some(Command::Enable)),
+                Input::Halt(category) => commands.push(Some(Command::Halt(category))),
                 Input::Path(text) => path = text,
                 Input::PathTimeOptimal(on) => time_optimal = on,
                 Input::RunPath => commands.push(None),

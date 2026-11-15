@@ -245,6 +245,20 @@ Thermal model of gearboxes and guides (`effects.part_heating`), in views:
 
 The winding's own model (settles at the rated rise at the rated current, 51.3 K after one time constant from cold, 19.34 K at half the current) is `the_winding_warms_to_the_rated_rise_at_the_rated_current`, drive.
 
+### Stops and brake delays
+
+On the rigid, loss-free single axis (`ideal_rigid`: 6.125 kg reflected, 4 kg carriage, r = 0.02 m, i = 5), stopped from 1 m/s (machine-single-axis). Each was seen to fail with its piece taken out: the OFF3 ramp (braking at the torque limit instead), category 2's braking plan, the brake delay.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Category 1 on an OFF3 ramp of 0.2512 s from 314 rad/s (5 m/s² at the carriage) | v² / (2 a) = 0.1 m, v / a = 0.2 s; peak deceleration over 1 ms above 5 m/s² (the speed loop overshoots the ramp's start: 6.0) | 3 %; peak below 6.5 | `the_stops_travel_the_hand_calculated_distance_in_the_hand_calculated_time` |
+| Category 2 at the axis' 10 m/s² | 0.05 m; the plan in 0.1 s, the tool below 1 mm/s within 0.12 s (the position loop's lag) | 3 %; 20 % on the time; peak below 15 | same |
+| Category 0, 10 N guide friction (Coulomb = stiction), 0.2 N m brake (50 N), 0.03 s engagement delay | v t − F t² / (2 m) + m v₁² / (2 (F + F_b)) = 0.075435 m; without the delay 0.051042 m | 1 % | `a_category_0_stop_coasts_the_hand_calculated_distance_with_the_brake_delay` |
+| A hanging axis (upright) taken off in category 0, 0.03 s engagement delay, 10 N friction | (39.227 − 10) N / 6.125 kg · 0.03² / 2 = 2.1473 mm before the brake holds, after 480 steps; none without the delay | 2 % | `a_hanging_axis_sags_by_hand_while_its_brake_engages` |
+| The DC link in a category 1 stop | 3.0625 J less 0.0593 J copper loss: 470 µF from 155.13 to 191.95 V; with 4.7 µF the resistor takes 2.9412 J | 0.3 V; 2 % | `a_category_1_stop_brings_the_hand_calculated_energy_to_the_dc_link` |
+
+The stop analysis (`sim-cli stop`, `stop::study`) reports a worst stop with finite figures on every registered machine in categories 0, 1 and 2 (`the_stop_study_reports_the_worst_stop_on_every_machine`, sim-machines, category 1; the command line `a_run_can_stop_the_machine_and_stop_finds_the_worst_moment`). Nothing compares its distances with a real machine's stop: no measured stopping distance is in the repository.
+
 ## Hand calculations: control, profiles and paths
 
 | What is compared | Against | Tolerance | Test |

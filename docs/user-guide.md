@@ -1136,6 +1136,32 @@ Run: stopping distance per axis from the trip (the machine stood at) 0.0070 (0.4
 - The app draws the obstacles as translucent boxes with their edges, red while touched, the clearance to the nearest as a red line with its value in mm, and the first contact as a red mark on the timeline. When the drives trip, Messages says at once which motor tripped when, on which monitor, and how each drive stops, while the 3D view and the scopes show the axes ramping down or coasting; once the machine stands, how far each axis went from the trip.
 - The clearance is between the boxes of the tool, carriage, Z axis, platform and payload as the 3D view draws them (not their CAD shapes) and the capsules of the slanted parts: the delta's forearm rods and upper arms and the D4's telescope, each the points within half its drawn width of its drawn segment, exact however it slants.
 
+## How far does it travel after an emergency stop?
+
+Stop the cycle (or a path, `--path FILE`) at many moments and see how far the machine goes before it stands:
+
+```text
+$ sim-cli stop t-gantry --category 1 --points 3
+moment,trigger[s],tool_distance[m],stop_time[s],peak_deceleration[m/s2],hard_stop,peak_dc_link[V],braking_resistor_energy[J],tripped,x_distance[m],z_distance[m]
+grid,0.0000,0.000001,0.0000,0.218,false,155.14,0.0000,false,0.000000,0.000001
+grid,2.0263,0.025537,0.5630,37.150,false,183.27,0.0000,false,0.025536,0.000101
+energy,2.0800,0.026097,0.5636,34.219,false,187.04,0.0000,false,0.026097,0.000111
+grid,4.0527,0.000261,0.0173,17.919,false,224.04,0.0000,false,0.000029,0.000261
+fastest_z,4.3240,0.006484,0.0488,17.285,false,177.13,0.0000,false,0.000041,0.006484
+fastest_x,5.0760,0.026016,0.5921,41.406,false,178.96,0.0000,false,0.026016,0.000056
+worst,2.0800,0.026097,0.5636,34.219,false,187.04,0.0000,false,0.026097,0.000111
+Worst stop: triggered at 2.0800 s (energy)
+Stop verdict: stop-dc-link: 224.0 / 257.6 ok
+```
+
+- The stop categories are those of IEC 60204-1 as a servo drive makes them (`--category`, 0 without it): **0** takes the torque off at once (STO, as `--disable-at`): the axes coast until the holding brakes hold. **1** brakes every drive on its quick-stop ramp (`drive.off3_ramp_s`, the time from the rated speed), with its torque and current limits and the DC link and braking chopper acting as in any move; once all stand the brakes engage and the torque goes off, or when `drive.ss1_time_s` (0.5 s) runs out first. **2** brakes the planned motion at the axes' acceleration limits along the direction it moves and holds there with the torque on.
+- The moments: where each axis is fastest (`fastest_x`), where the kinetic plus potential energy is largest (`energy`), and `--points` moments evenly over the pass (`grid`, 20 by default). The last row repeats the worst, the stop that took the tool farthest.
+- Per stop: how far the tool got from where it was at the trigger (the farthest, over the axes in metres) and each axis, the time until every axis is below a hundredth of its speed limit, the peak deceleration over 1 ms, whether an axis went into its hard stop, the DC link's peak voltage, the energy the braking resistor took, and whether a drive tripped on overvoltage (it then coasts, as in category 0).
+- `stopping-distance` judges the worst against `ratings.max_stopping_distance_m`, which you add to `[ratings]` in a config file (`--config`); `stop-dc-link` (with `effects.dc_link`) fails when a stop trips a drive.
+- A hanging axis falls while its brake engages: switch on `effects.brake_delay` (off by default) and the brakes take `brake.engage_delay_s` (0.03 s, an estimate) to hold and `brake.release_delay_s` (0.06 s) to let go. On the T-gantry in category 0 (`sim-cli stop t-gantry --points 3 --set effects.brake_delay=true`) the worst stop then takes the tool 30.7 mm instead of 9.3 mm, and stopped where Z is fastest it goes 8.7 mm instead of 1.4 mm.
+- One stop at a time: `sim-cli run t-gantry --cycle --stop-at 5.076 --stop-category 1` writes every signal around it. From Python `ks.Sim(config).stop(1)` stops a stepped simulation, `enable()` switches it on again; the FMU's input `command.stop_category` says how `command.enable` turning false stops the drives; over OPC UA writing 0, 1 or 2 to `command.stop_category` stops the machine.
+- What it does not know: category 2 brakes along the direction of motion, not along a curved path; no jerk limit in a stop; the brakes have one delay for all; nothing has been compared with a measured stop yet (see [validation](validation.md#stops-and-brake-delays)).
+
 ## Programs: G-code and robot programs
 
 `--path FILE` (and the app's path field) reads a program as well as a path file, by the file's extension. Its moves become the lines and arcs of a path, timed by the same planners.

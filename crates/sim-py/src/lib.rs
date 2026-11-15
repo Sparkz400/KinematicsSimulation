@@ -1608,6 +1608,20 @@ impl PySim {
         self.signal_dict(py)
     }
 
+    /// Stops the machine in stop category 0, 1 or 2 (`sim_components::StopCategory`): 0 takes the torque off at
+    /// once, 1 brakes every drive on its quick-stop ramp and then takes it off, 2 brakes the plan and holds with the
+    /// torque on. The stop runs in the `step`s that follow; `enable` switches the drives on again.
+    fn stop(&mut self, category: u8) -> PyResult<()> {
+        let category = sim_components::StopCategory::from_number(category)
+            .ok_or_else(|| PyValueError::new_err(format!("category {category}: 0, 1 or 2")))?;
+        self.sim.command(Command::Halt(category)).map_err(|e| self.refused(e.key))
+    }
+
+    /// Switches the drives on again after a stop, holding where the motors stand.
+    fn enable(&mut self) -> PyResult<()> {
+        self.sim.command(Command::Enable).map_err(|e| self.refused(e.key))
+    }
+
     /// Every signal now, as `{signal id: float}`.
     fn signals<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         self.signal_dict(py)

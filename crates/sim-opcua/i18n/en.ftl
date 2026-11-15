@@ -10,6 +10,7 @@ opcua-error-argument = Cannot read this argument: { $arg }
 opcua-error-start = The OPC UA server could not start: { $arg }
 opcua-listening = OPC UA server listening at { $arg }
 opcua-disable = Disable the drives
+opcua-stop-category = Stop category: writing 0, 1 or 2 stops the machine (0 torque off, 1 quick-stop ramp then off, 2 brake and hold)
 opcua-enable = Enable the drives
 opcua-path = Path, as in a path file
 opcua-path-time-optimal = Plan the path as fast as the motors allow

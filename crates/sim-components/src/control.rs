@@ -30,6 +30,37 @@ pub enum Command {
     Disable,
     /// Switch the drives on again, holding where the motors stand.
     Enable,
+    /// A stop as a servo drive makes it, by its stop category (`StopCategory`); a move or cycle under way is dropped.
+    /// (`Stop` above ends the cycle after its segment.)
+    Halt(StopCategory),
+}
+
+/// The stop categories of IEC 60204-1 as servo drives make them (SINAMICS: STO / OFF2, OFF3, and a stop that holds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StopCategory {
+    /// 0: the torque off at once, as `Command::Disable`; the holding brakes engage after `brake.engage_delay_s`.
+    Zero,
+    /// 1: every drive brakes on its OFF3 ramp (`drive.off3_ramp_s`) within its torque and current limits; once all stand,
+    /// the brakes engage with the torque on, and after their engagement delay the torque goes off. When
+    /// `drive.ss1_time_s` runs out first, the torque goes off then (as SS1's timer).
+    One,
+    /// 2: the plan brakes along the direction it moves at the axes' acceleration limits and holds there, torque on.
+    Two,
+}
+
+impl StopCategory {
+    /// 0, 1 or 2.
+    pub fn from_number(n: u8) -> Option<Self> {
+        [Self::Zero, Self::One, Self::Two].get(n as usize).copied()
+    }
+}
+
+/// A category 1 stop under way (`StopCategory::One`): the time left on the SS1 timer, s, and how long all drives have
+/// stood with their brakes engaging, s (`None` while one still moves).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Halt {
+    left: f64,
+    closing: Option<f64>,
 }
 
 /// A command the controller refuses; `key` is a translation key.
@@ -128,6 +159,14 @@ enum Motion {
     Trajectory {
         points: Vec<(f64, Vec<f64>)>,
         speeds: Vec<Vec<f64>>,
+        start_tick: u64,
+    },
+    /// A category 2 stop (`StopCategory::Two`): from `from` at the speeds `vel`, every axis decelerating evenly to rest in
+    /// `time` seconds, so that the tool keeps the direction it moved in.
+    Halting {
+        from: Vec<f64>,
+        vel: Vec<f64>,
+        time: f64,
         start_tick: u64,
     },
 }
@@ -239,6 +278,20 @@ pub struct Controller {
     /// A dual-drive gantry's synchronisation (`gantry.sync`, `Machine::gantry_motors`); `None` for the plain scheme,
     /// in which each drive follows its own setpoint.
     gantry_sync: Option<GantrySync>,
+    /// effects.brake_delay: the holding brakes' engagement and release delays, s (`brake.engage_delay_s`,
+    /// `release_delay_s`); both 0 with the effect off. Whether the brakes are engaged now, and how long they have been
+    /// asked to change (`step_brake`).
+    #[serde(default)]
+    brake_delays: [f64; 2],
+    #[serde(default)]
+    brake_on: bool,
+    #[serde(default)]
+    brake_timer: f64,
+    /// The SS1 timer of a category 1 stop, s (`drive.ss1_time_s`; infinite without the key), and such a stop under way.
+    #[serde(default)]
+    ss1_time: f64,
+    #[serde(default)]
+    halt: Option<Halt>,
 }
 
 /// How the two drives of a dual-drive gantry are kept in step, beyond each following the common setpoint.
@@ -365,6 +418,11 @@ impl Controller {
             reacting: None,
             fault: None,
             gantry_sync: None,
+            brake_delays: [0.0; 2],
+            brake_on: false,
+            brake_timer: 0.0,
+            ss1_time: f64::INFINITY,
+            halt: None,
         };
         c.apply_config(cfg, machine)?;
         // Nothing moves yet: the shaper is in use from the first cycle on.
@@ -465,6 +523,14 @@ impl Controller {
             .collect::<Result<Vec<_>>>()?;
         // A config written before 14 November 2026 has no drive monitoring.
         let monitoring = cfg.get("effects.drive_monitoring").is_ok() && cfg.bool("effects.drive_monitoring")?;
+        // A config written before 15 November 2026 has neither brake delays nor an SS1 timer.
+        let brake_delays = if cfg.get("effects.brake_delay").is_ok() && cfg.bool("effects.brake_delay")? {
+            [cfg.non_negative("brake.engage_delay_s")?, cfg.non_negative("brake.release_delay_s")?]
+        } else {
+            [0.0; 2]
+        };
+        let ss1_time =
+            if cfg.get("drive.ss1_time_s").is_ok() { cfg.positive("drive.ss1_time_s")? } else { f64::INFINITY };
         let inertias = if motor_params.iter().any(|p| p.precontrol.constant_inertia) {
             rigid_inertias(machine, &cfg.f64s("start.pose")?)
         } else {
@@ -693,6 +759,7 @@ impl Controller {
             (profile_cycle, setpoint_ticks, params, segments);
         self.motor_params = motor_params;
         (self.fault_settings, self.monitoring) = (fault_settings, monitoring);
+        (self.brake_delays, self.ss1_time) = (brake_delays, ss1_time);
         self.watch.resize(self.motor_params.len(), Watch::default());
         (self.inertias, self.load_encoder) = (inertias, load_encoder);
         self.blend_time = blend_time;
@@ -739,7 +806,8 @@ impl Controller {
             Motion::Dwell { until_tick } => scale(until_tick),
             Motion::Following { start_tick, .. }
             | Motion::Trajectory { start_tick, .. }
-            | Motion::Cam { start_tick, .. } => scale(start_tick),
+            | Motion::Cam { start_tick, .. }
+            | Motion::Halting { start_tick, .. } => scale(start_tick),
         }
         if let Some(newest) = self.history.len().checked_sub(1) {
             let old = std::mem::take(&mut self.history);
@@ -758,24 +826,59 @@ impl Controller {
     }
 
     pub fn command(&mut self, command: Command, machine: &dyn Machine) -> std::result::Result<(), CommandError> {
-        if !self.enabled && !matches!(command, Command::Enable | Command::Disable) {
+        let off = matches!(command, Command::Enable | Command::Disable | Command::Halt(StopCategory::Zero));
+        if !self.enabled && !off {
             return Err(CommandError { key: "error-disabled" });
         }
-        if self.reacting.is_some() && !matches!(command, Command::Enable | Command::Disable) {
+        if self.reacting.is_some() && !off {
             return Err(CommandError { key: "error-fault" });
         }
         // A plan would act on the drives in position mode only, and be dropped when the others come back to it.
-        let planning = !matches!(command, Command::Enable | Command::Disable | Command::Stop);
+        let planning = !off && !matches!(command, Command::Stop | Command::Halt(_));
         if planning && self.drives.iter().any(|d| d.mode() != DriveMode::Position) {
             return Err(CommandError { key: "error-outside-mode" });
         }
         match command {
-            Command::Disable => self.disable(),
+            Command::Disable | Command::Halt(StopCategory::Zero) => self.disable(),
+            Command::Halt(StopCategory::One) => {
+                (self.motion, self.cycle, self.stopping) = (Motion::Idle, None, false);
+                let ramps = self.drives.iter_mut().map(|d| {
+                    d.pulses_off = false;
+                    Some(d.measured_speed())
+                });
+                self.reacting = Some(ramps.collect());
+                self.halt = Some(Halt { left: self.ss1_time, closing: None });
+            }
+            Command::Halt(StopCategory::Two) => {
+                (self.cycle, self.stopping) = (None, false);
+                let axes = machine.axes();
+                // The axis that needs longest to stop at its limit sets the time; the others decelerate in proportion.
+                let mut time = self.raw_vel.iter().zip(axes).map(|(v, a)| v.abs() / a.max_acc).fold(0.0, f64::max);
+                // A stop that would end beyond the range (a plan decelerating at its limit into an end) ends shorter.
+                for _ in 0..8 {
+                    let end: Vec<f64> =
+                        self.raw_pos.iter().zip(&self.raw_vel).map(|(x, v)| x + 0.5 * v * time).collect();
+                    if in_range(machine, &end) {
+                        break;
+                    }
+                    time *= 0.5;
+                }
+                self.motion = if time > 0.0 {
+                    Motion::Halting {
+                        from: self.raw_pos.clone(),
+                        vel: self.raw_vel.clone(),
+                        time,
+                        start_tick: u64::MAX,
+                    }
+                } else {
+                    Motion::Idle
+                };
+            }
             Command::Enable => {
                 // Enabling acknowledges a trip; drives still stopping are taken off and on again, holding where
                 // they stand.
                 if !self.enabled || self.reacting.is_some() {
-                    (self.enabled, self.reacting, self.fault) = (true, None, None);
+                    (self.enabled, self.reacting, self.fault, self.halt) = (true, None, None, None);
                     self.hold_here(machine, None);
                 }
             }
@@ -897,12 +1000,43 @@ impl Controller {
     /// Drives off: a move or cycle under way is dropped.
     fn disable(&mut self) {
         (self.motion, self.cycle, self.stopping, self.enabled) = (Motion::Idle, None, false, false);
-        self.reacting = None;
+        (self.reacting, self.halt) = (None, None);
+    }
+
+    /// Whether the holding brakes are asked to hold: with the drives off, and at the end of a category 1 stop once all
+    /// drives stand (`StopCategory::One`).
+    fn brake_wanted(&self) -> bool {
+        !self.enabled || self.halt.is_some_and(|h| h.closing.is_some())
+    }
+
+    /// One base step of `dt` of the holding brakes' command: they engage `brake.engage_delay_s` after they are asked to
+    /// hold and release `release_delay_s` after they are asked to let go (effects.brake_delay; at once without it).
+    pub fn step_brake(&mut self, dt: f64) {
+        let wanted = self.brake_wanted();
+        if wanted == self.brake_on {
+            self.brake_timer = 0.0;
+            return;
+        }
+        self.brake_timer += dt;
+        // To the nearest step: the summed steps come a rounding short of a delay of whole steps.
+        if self.brake_timer >= self.brake_delays[usize::from(!wanted)] - 0.5 * dt {
+            (self.brake_on, self.brake_timer) = (wanted, 0.0);
+        }
+    }
+
+    /// Whether the holding brakes hold (`step_brake`).
+    pub fn brake_engaged(&self) -> bool {
+        self.brake_on
     }
 
     /// Whether the drives are stopping after a trip (`react`).
     pub fn reacting(&self) -> bool {
         self.reacting.is_some()
+    }
+
+    /// Whether a category 2 stop (`StopCategory::Two`) is braking the plan.
+    pub fn halting(&self) -> bool {
+        matches!(self.motion, Motion::Halting { .. })
     }
 
     /// Each drive's fault reaction (effects.drive_monitoring).
@@ -937,11 +1071,37 @@ impl Controller {
         let Some(mut ramps) = self.reacting.take() else { return };
         let dt = self.profile_cycle / self.n_profile as f64;
         let velocity_due = step.is_multiple_of(self.n_velocity);
+        // A category 1 stop: every drive on its OFF3 ramp, its pulses off only together, once all stand and their brakes
+        // have had their engagement delay, or when the SS1 timer runs out.
+        if let Some(halt) = &mut self.halt {
+            halt.left -= dt;
+            let standing = self
+                .drives
+                .iter()
+                .zip(&ramps)
+                .zip(&self.fault_settings)
+                .all(|((d, r), s)| r.is_none_or(|v| v == 0.0) && d.measured_speed().abs() < s.pulse_off_speed);
+            if standing {
+                halt.closing = Some(halt.closing.unwrap_or(0.0) + dt);
+            }
+            let done = halt.closing.is_some_and(|t| t >= self.brake_delays[0] - 0.5 * dt);
+            if halt.left <= 0.0 || done {
+                ramps.iter_mut().for_each(|r| *r = None);
+                self.drives.iter_mut().for_each(|d| d.pulses_off = true);
+            }
+        }
         for (k, drive) in self.drives.iter_mut().enumerate() {
             let p = &self.motor_params[k];
             if let Some(speed) = ramps[k] {
-                let ramped = fault::ramp(speed, self.fault_settings[k].deceleration().unwrap_or(f64::INFINITY), dt);
-                if ramped == 0.0 && drive.measured_speed().abs() < self.fault_settings[k].pulse_off_speed {
+                let deceleration = match self.halt {
+                    Some(_) => self.fault_settings[k].off3_deceleration,
+                    None => self.fault_settings[k].deceleration().unwrap_or(f64::INFINITY),
+                };
+                let ramped = fault::ramp(speed, deceleration, dt);
+                if self.halt.is_none()
+                    && ramped == 0.0
+                    && drive.measured_speed().abs() < self.fault_settings[k].pulse_off_speed
+                {
                     (ramps[k], drive.pulses_off) = (None, true);
                 } else {
                     (ramps[k], drive.fault_speed) = (Some(ramped), Some(ramped));
@@ -1114,6 +1274,7 @@ impl Controller {
                     | Motion::Trajectory { .. }
                     | Motion::Conveyor
                     | Motion::Cam { .. }
+                    | Motion::Halting { .. }
             )
     }
 
@@ -1518,6 +1679,19 @@ impl Controller {
                 self.set_acc.fill(0.0);
                 if done < 1.0 {
                     self.motion = Motion::Following { from, to, start_tick };
+                }
+            }
+            Motion::Halting { from, vel, time, start_tick } => {
+                // From the cycle the stop came in, as a setpoint from outside is (`Following`).
+                let start_tick = if start_tick == u64::MAX { tick - 1 } else { start_tick };
+                let t = ((tick - start_tick) as f64 * dt).min(time);
+                for i in 0..from.len() {
+                    self.set_pos[i] = from[i] + vel[i] * (t - 0.5 * t * t / time);
+                    self.set_vel[i] = vel[i] * (1.0 - t / time);
+                    self.set_acc[i] = if t < time { -vel[i] / time } else { 0.0 };
+                }
+                if t < time {
+                    self.motion = Motion::Halting { from, vel, time, start_tick };
                 }
             }
         }
