@@ -160,11 +160,15 @@ fn mean_and_error(x: &[f64]) -> (f64, f64) {
 /// - `presliding_stiffness_n_m`: at each reversal of the averaged speed, the travel from the turning point (the row of
 ///   least speed) at which the friction, the force less inertia and constant, has turned from one sliding level through
 ///   zero; in Dahl's law (`ShaftFriction::presliding_force`) z = g (1 − 2 exp(−σ x / g)) passes zero at x = g ln 2 / σ, so
-///   σ = Coulomb ln 2 / x. The median over the reversals, its error 1.25 their spread over the root of their count
-///   (none for one), as `motor_fit` does for its LuGre bristles. A reversal whose friction does not pass zero within
-///   0.5 s or that crosses in its first row (faster than the trace resolves) is left out.
+///   σ = Coulomb ln 2 / x. The median over the reversals, its error 1.25 their spread over the root of their count,
+///   as `motor_fit` does for its LuGre bristles; only with two reversals or more and an error below the value. A
+///   reversal whose friction does not pass zero within 0.5 s or that crosses in its first row (faster than the trace
+///   resolves) is left out. On a machine whose friction has no presliding state it reads, as a Dahl σ, how far the
+///   axis travels while its friction turns: the smoothing of its Coulomb step over speed, LuGre bristles, the drive
+///   train's give and the loops' lag together. Compared with the replay's by the same estimate, not a value to set.
 ///
-/// Each mean's standard error from `mean_and_error`.
+/// Each mean's standard error from `mean_and_error`. A row is reported only where the trace tells it (`None` else):
+/// the CLI, Python and the app list the three after an axis's rigid values where they are there.
 pub fn friction_details(
     time: &[f64],
     force: &[f64],
@@ -236,16 +240,16 @@ pub fn friction_details(
         }
         stiffness.sort_by(f64::total_cmp);
         let n = stiffness.len();
-        (n > 0).then(|| {
-            let median = stiffness[n / 2];
-            let spread = if n > 1 {
-                (stiffness.iter().map(|s| (s - median).powi(2)).sum::<f64>() / (n - 1) as f64).sqrt() * 1.25
-                    / (n as f64).sqrt()
-            } else {
-                f64::NAN
-            };
-            (median, spread)
-        })
+        // Reported where the trace tells it: two reversals at least, for an error, and that error below the value.
+        (n > 1)
+            .then(|| {
+                let median = stiffness[n / 2];
+                let spread = (stiffness.iter().map(|s| (s - median).powi(2)).sum::<f64>() / (n - 1) as f64).sqrt()
+                    * 1.25
+                    / (n as f64).sqrt();
+                (median, spread)
+            })
+            .filter(|(median, spread)| spread < median)
     };
     [held, breakaway, presliding]
 }
@@ -491,13 +495,21 @@ type Sample = (usize, Vec<f64>, f64);
 /// trace leaves too few rows at it (`smoothing_span`).
 pub const SMOOTHING_S: f64 = 0.04;
 
+/// The shortest span (`smoothing_span`) on a machine without modes: the rigid fit's own window of 11 rows at 1 ms
+/// (`WINDOW`), which averages the noise but has no ringing to take out.
+pub const RIGID_SPAN_S: f64 = 0.011;
+
 /// The span a machine's trace is smoothed over, s: `SMOOTHING_S` where every motor turns each way long enough at it
 /// (`turns_both_ways`); else the longest span at which they do, in whole rows of the trace's step, but not shorter than
 /// one period of the machine's lowest mode (`Machine::modes`, at the forward kinematics of the motor angles at ten rows
-/// spread over the trace), where the triangle's first zero takes its ringing out. `SMOOTHING_S` where none does or the
-/// machine reports no mode above 25 Hz: the trace is then not fitted. The four-arm delta's lifts last some 60 ms and its
+/// spread over the trace), where the triangle's first zero takes its ringing out. `SMOOTHING_S` where none does (or
+/// where the lowest mode is below 25 Hz): the trace is then not fitted. The four-arm delta's lifts last some 60 ms and its
 /// arms 2 and 4 reverse in each traverse: at 40 ms its motor 2 kept its sign forward for 198 of the 810 rows a direction
 /// needs; its lowest mode, 44 Hz without the payload, allows down to 23 ms.
+///
+/// A machine that reports no mode at all may go down to `RIGID_SPAN_S`: the planar delta D2's cycle with friction
+/// feedforward from its model (15 November 2026) keeps motor 1 turning backwards for 808 of the 810 rows 40 ms needs,
+/// and its fit was skipped.
 pub fn smoothing_span(machine: &dyn Machine, trace: &Trace) -> f64 {
     let (n, rows, longest) = (machine.axes().len(), trace.time.len(), smoothing(&trace.time, SMOOTHING_S).0);
     if turns_both_ways_within(trace, longest) {
@@ -513,10 +525,9 @@ pub fn smoothing_span(machine: &dyn Machine, trace: &Trace) -> f64 {
             machine.modes(&pose).first().map(|m| m.hz).filter(|hz| hz.is_finite() && *hz > 0.0)
         })
         .fold(f64::INFINITY, f64::min);
-    if !lowest.is_finite() {
-        return SMOOTHING_S;
-    }
-    let (shortest, step) = (smoothing(&trace.time, 1.0 / lowest).0, median_step(&trace.time).unwrap_or(1.0));
+    // A machine that reports no mode (the planar delta, rigid) has no ringing to smooth away: down to `RIGID_SPAN_S`.
+    let shortest_span = if lowest.is_finite() { 1.0 / lowest } else { RIGID_SPAN_S };
+    let (shortest, step) = (smoothing(&trace.time, shortest_span).0, median_step(&trace.time).unwrap_or(1.0));
     (shortest..longest).rev().find(|&h| turns_both_ways_within(trace, h)).map_or(SMOOTHING_S, |h| h as f64 * step)
 }
 
@@ -1266,9 +1277,10 @@ mod tests {
     /// of 0.04 m), against the same estimates worked out by hand from the CSV (numpy, rows as stated):
     /// - held: the S-profile's rows 5000 to 6219; its top speed there 33.58 rad/s, at rest (the 11-row mean within 1 %)
     ///   from 5.214 s to the end; its torque after the first 0.1 s of that, 901 rows, averages -1.44440 N m.
-    /// - presliding: the sine's rows 2300 to 2800 with mass 0.0199 kg m², Coulomb 2.0 N m, no constant: the reversal at
-    ///   2.503 s (turning row 203), the friction through zero 1.0797e-3 rad on (between rows 233 and 234), so
-    ///   sigma = 2.0 ln 2 / 1.0797e-3 = 1284.0 N m/rad (3.17e7 N/m at the table).
+    /// - presliding: the sine's rows 2300 to 7800 with mass 0.0199 kg m², Coulomb 2.0 N m, no constant: the reversals at
+    ///   2.503 s and 7.504 s, the friction through zero 1.0797e-3 and 1.0625e-3 rad on, so sigma = 2.0 ln 2 / x = 1284.0
+    ///   and 1304.7 N m/rad (3.2e7 N/m at the table); the median of two the upper, 1304.7, its error
+    ///   1.25 * 20.7 / sqrt 2 = 18.3. One reversal alone (rows 2300 to 2800) gives no row: no error.
     /// - breakaway: the sine's rows 1000 to 19000, the same values: 262 rows between 1 % and 5 % of the top speed
     ///   (9.962 rad/s) slowing down average 1.63760 N m, below the Coulomb level: the linear drive's force at the ends of
     ///   the sine (-75 N at 350 mm, +67 N at 150 mm; docs/validation.md) is not in the torque's model.
@@ -1289,9 +1301,11 @@ mod tests {
         let (value, error) = held.unwrap();
         // Its standard error, 0.037 N m, is mostly the integrator unwinding slowly (-1.70 to -1.53 N m) against the friction.
         assert!((value + 1.44440).abs() < 1e-4 && error > 0.0 && error < 0.05, "{value} {error}");
-        let [_, _, presliding] = rows_of("sine-a100-v100.csv", 2299..2799, [0.0199, 0.0, 2.0, 0.0]);
+        let [_, _, presliding] = rows_of("sine-a100-v100.csv", 2299..7799, [0.0199, 0.0, 2.0, 0.0]);
         let (value, error) = presliding.unwrap();
-        assert!((value - 1284.0).abs() < 1.3 && error.is_nan(), "{value} {error}");
+        assert!((value - 1304.7).abs() < 1.5 && (error - 18.3).abs() < 1.0, "{value} {error}");
+        let [_, _, one] = rows_of("sine-a100-v100.csv", 2299..2799, [0.0199, 0.0, 2.0, 0.0]);
+        assert_eq!(one, None);
         let [_, breakaway, _] = rows_of("sine-a100-v100.csv", 999..18999, [0.0199, 0.0, 2.0, 0.0]);
         let (value, error) = breakaway.unwrap();
         // The import resamples onto its own grid (from + i step), a little off the file's times: 1e-3 here, 1.3 above.

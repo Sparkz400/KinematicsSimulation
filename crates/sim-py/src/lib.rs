@@ -938,6 +938,10 @@ fn fit(
                         for (q, name) in names.iter().enumerate() {
                             rows.push(name, axis.id, [fit.config[q], fit.fitted[q], fit.error[q]]);
                         }
+                        // The friction beyond its sliding level, where the trace tells it, as the command line.
+                        for d in &fit.details {
+                            rows.push(d.quantity, axis.id, [d.config, d.fitted, d.error]);
+                        }
                         advice
                             .extend(fit.advice(axis.id).iter().map(|(key, detail)| tr.tr_arg(key, detail).to_string()));
                     }

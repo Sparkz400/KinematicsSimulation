@@ -837,7 +837,19 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
             // mode's period (23 ms) instead of 40 ms (`identify::smoothing_span`).
             (sim.machine.motors().len(), ["coulomb_friction_nm"; 2])
         };
-        assert_eq!(fit.iter().filter(|r| !r[0].starts_with("link_")).count(), 4 * count, "{}: {fit:?}", entry.id);
+        // After an axis's four values, the friction beyond its sliding level where the trace tells it
+        // (`identify::friction_details`): each at most once per axis, with a finite value and error, the presliding
+        // stiffness only with an error below its value. None in the motors' coordinates.
+        let details = sim_components::identify::FRICTION_DETAILS;
+        let detail_rows: Vec<&Vec<String>> = fit.iter().filter(|r| details.contains(&r[0].as_str())).collect();
+        for row in &detail_rows {
+            let [fitted, error] = [3, 4].map(|c| row[c].parse::<f64>().unwrap());
+            assert!(per_axis && fitted.is_finite() && error.is_finite(), "{}: {row:?}", entry.id);
+            assert!(row[0] != "presliding_stiffness_n_m" || error < fitted.abs(), "{}: {row:?}", entry.id);
+            assert_eq!(detail_rows.iter().filter(|r| r[0] == row[0] && r[1] == row[1]).count(), 1, "{}", entry.id);
+        }
+        let core = fit.iter().filter(|r| !r[0].starts_with("link_") && !details.contains(&r[0].as_str())).count();
+        assert_eq!(core, 4 * count, "{}: {fit:?}", entry.id);
         for row in fit.iter().filter(|r| checked.contains(&r[0].as_str())) {
             let [config, fitted, error] = [2, 3, 4].map(|c| row[c].parse::<f64>().unwrap());
             // Or within a fifth of its standard error: the D4 picker's cycle knows motor 1's Coulomb friction to ± 21 %

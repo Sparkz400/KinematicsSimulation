@@ -323,6 +323,9 @@ fn joint_label(quantity: &str) -> String {
 }
 /// The four values of `AxisFit`, in its order.
 const FIT_QUANTITIES: [&str; 4] = ["ui-trace-mass", "ui-trace-viscous", "ui-trace-coulomb", "ui-trace-constant"];
+/// The labels of `identify::FRICTION_DETAILS`: `ui-trace-` and the quantity with dashes.
+const FIT_DETAIL_KEYS: [&str; 3] =
+    ["ui-trace-held-force-n", "ui-trace-breakaway-force-n", "ui-trace-presliding-stiffness-n-m"];
 /// The table of what the trace says per motor by itself.
 const IDENTIFY_KEYS: [&str; 5] =
     ["ui-analysis-motor", "ui-trace-quantity", "ui-identify-value", "ui-trace-error", "ui-identify-interval"];
@@ -2354,6 +2357,15 @@ impl Model {
                     short(fit.error[q]),
                 ]);
             }
+            // The friction beyond its sliding level, where the trace tells it (`identify::friction_details`).
+            for d in &fit.details {
+                fitted.push(vec![
+                    format!("{} · {}", tr(axis.key), tr(&format!("ui-trace-{}", d.quantity.replace('_', "-")))),
+                    short(d.config),
+                    short(d.fitted),
+                    short(d.error),
+                ]);
+            }
         }
         // In the motors' coordinates: the payload's factor (or its step), then per motor, then per link by its name.
         for v in fit.joints.iter().flatten().flat_map(|j| &j.values) {
@@ -3224,6 +3236,7 @@ impl Model {
             &TRACE_KEYS,
             &FIT_KEYS,
             &FIT_QUANTITIES,
+            &FIT_DETAIL_KEYS,
             &IDENTIFY_KEYS,
             &NOTES,
             &SWEEP_KEYS,
