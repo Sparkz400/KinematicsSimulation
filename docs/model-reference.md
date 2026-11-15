@@ -1398,7 +1398,9 @@ brakes each motor on its own OFF3 ramp, the same angular deceleration: the surfa
 where the radii differ the rolls part and the web is overloaded or goes slack (tests
 `an_emergency_stop_along_the_line_keeps_the_web_within_its_limits`,
 `a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ`). Once the drives are off, the holding brakes
-keep the rolls and with them the tension.
+keep the rolls and with them the tension; meanwhile the trim takes up what the unwind paid out more than the rewind took
+(the dancer's travel), so that enabled again each motor holds where it stands and the dancer's loop brings the dancer
+back.
 
 **Drives.** The shipped config has the two Motor Modules of an S120 line-up with a Braking Module (`drive.braking_module`),
 each with its own 110 µF of DC link; with `effects.shared_dc_link` (off as shipped, as on every machine) the two share

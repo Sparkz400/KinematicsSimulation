@@ -968,9 +968,17 @@ impl Machine for Winder {
     /// The dancer's position loop, every base step while the drives are on: the trim v = -(Kp e + integral), e the
     /// dancer's travel from the middle (down: too much web between the rolls, so the unwind slows), held to the most it
     /// may trim, the integrator Kp / Tn e (held while the trim is at its limit); the unwind's setpoint moves on by
-    /// i v / r_u.
+    /// i v / r_u. While the drives are off the trim tracks what the rolls stand at: the web the unwind paid out more than
+    /// the rewind took up (the dancer's travel, two spans of it), so that enabled again both motors' setpoints are where
+    /// they stand. Before 15 November 2026 a re-enable after a coast set both rolls to the mean of the two, yanked them
+    /// by the dancer's travel and tripped a weak DC link again.
     fn after_step(&mut self, s: &mut [f64], dt: f64) {
-        if !self.position_loop || self.drives_off {
+        if self.drives_off {
+            (self.trim_speed, self.trim_integral) = (0.0, 0.0);
+            self.trim_length = self.paid_out(s[0]) - self.wound_up(s[1]);
+            return;
+        }
+        if !self.position_loop {
             self.trim_speed = 0.0;
             return;
         }
