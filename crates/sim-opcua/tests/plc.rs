@@ -667,8 +667,30 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         let planned = sim.plan_path(&pieces, false).unwrap();
         let analysed =
             sim_components::analysis::analyse_trajectory(&mut Sim::new(entry, &cfg).unwrap(), planned.clone()).unwrap();
-        // The place (axes in m) and the turn (axes in rad) each by itself, as the analysis gives them since 14 November.
-        let path_error = [analysed.path_error_peak, analysed.path_angle_error_peak];
+        // Like with like: the PLC's machine runs cold, so the analysis too (with effects.thermal_warm_start it puts the
+        // windings and gears at their settled warmth: the palletiser's turn 2.192 mrad off the path warm, 2.263 cold, as
+        // polled). And the PLC's path starts anywhere inside the profile cycle, the analysis's at its start: the largest
+        // over eight starts across one cycle (the palletiser's turn 2.26255 to 2.26276 mrad), which also sample the run
+        // every eighth of the analysis's millisecond. Between two such samples a peak of an error that rings at f can
+        // rise by (pi f dt)^2 / 2 of it, 1.1e-6 at its 5.3 Hz over 2 base steps (seen: 4e-7 above, polled every step);
+        // 1e-5 of it is allowed.
+        let mut cold = cfg.clone();
+        if cold.get("effects.thermal_warm_start").is_ok() {
+            cold.set_text("effects.thermal_warm_start = false").unwrap();
+        }
+        let cycle = cold.f64("profile.cycle_s").unwrap();
+        let mut path_error = [0f64; 2];
+        for phase in 0..8 {
+            let mut fresh = Sim::new(entry, &cold).unwrap();
+            for _ in 0..(phase as f64 * cycle / 8.0 / fresh.dt).round() as usize {
+                fresh.step();
+            }
+            let cold = sim_components::analysis::analyse_trajectory(&mut fresh, planned.clone()).unwrap();
+            // The place (axes in m) and the turn (axes in rad) each by itself, as the analysis gives them since 14 November.
+            for (worst, now) in path_error.iter_mut().zip([cold.path_error_peak, cold.path_angle_error_peak]) {
+                *worst = worst.max(now * (1.0 + 1e-5));
+            }
+        }
         let groups =
             [false, true].map(|turn| (0..axes.len()).filter(|&i| (axes[i].unit == "rad") == turn).collect::<Vec<_>>());
         let slow = run_path(&plc, &text, false, &position).await;
