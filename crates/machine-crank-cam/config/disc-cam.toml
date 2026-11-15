@@ -5,6 +5,9 @@
 #   [catalogue]  read from a maker's document (Siemens D 32).
 #   [estimate]   ours: a packaging machine's cam and follower as the makers' catalogues size them.
 
+# effects.notch_filter (see config/common.toml): the velocity loop's notch at drive.notch_frequency_hz. Off.
+notch_filter = false
+
 [sim]
 dt_s = 62.5e-6
 substeps = 4

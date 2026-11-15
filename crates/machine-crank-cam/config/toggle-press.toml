@@ -8,6 +8,9 @@
 #   [estimate]   ours: a small servo toggle press for joining and coining as the press makers' catalogues size them,
 #                not one maker's article.
 
+# effects.notch_filter (see config/common.toml): the velocity loop's notch at drive.notch_frequency_hz. Off.
+notch_filter = false
+
 [sim]
 dt_s = 62.5e-6
 substeps = 4

@@ -19,119 +19,6 @@ axis = ""
 # "AS22DQC", "AM22DQC", for a 1FT2 also the 26-bit "AS26DQC", "AM26DQC").
 motor_brake = false
 motor_encoder = ""
-[effects]
-gravity = true
-payload = true
-# Gearbox, coupling, screw or rack twist and stretch under load: motor and load are two bodies per joint. Off, the
-# machine is the rigid reference model, in which the motor turns with the joint times the ratio.
-joint_elasticity = true
-# Friction in the joint: bearings, guides, the screw nut's preload.
-joint_friction = true
-motor_friction = true
-gearbox_backlash = true
-gearbox_efficiency = true
-torque_ripple = true
-hard_stops = true
-holding_brake = true
-# The holding brakes engage brake.engage_delay_s after they are asked to hold (the torque off) and release
-# brake.release_delay_s after they are asked to let go; a hanging axis sags while its brake engages. Off by default, so
-# that earlier results stay as they were.
-brake_delay = false
-# The process: the press force on the slider over its stroke, the cut on the knife or the saw (tables in each machine's
-# file). On in the shipped configs.
-process_force = true
-# The press frame stretches under the press force, a spring in series with the work (frame.stretch_stiffness_n_m): read
-# by the toggle press alone, which has the key.
-frame_stretch = true
-velocity_feedforward = true
-torque_feedforward = true
-# The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
-# as its speed feedforward runs on: a SINAMICS drive's fine interpolation, which a position loop at the speed loop's
-# cycle (DSC) needs once the profile cycle is longer than the position cycle. Changes nothing while they are equal.
-fine_interpolation = true
-# Friction feedforward from the characteristic drive.friction_feedforward_* (S120 p3820-p3839). On: the flying saw's
-# characteristic is its carriage's friction; the others have none recorded (0 N m), so it changes nothing there.
-friction_feedforward = true
-# The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
-# the motor encoder, which stays for the speed loop.
-load_encoder = false
-encoder_resolution = true
-velocity_filter = true
-torque_filter = true
-notch_filter = false
-torque_limit = true
-# The drive gives no more than its maximum output current, ratings.drive_max_current_a: the torque setpoint is held to
-# the torque of that current where it is below the motor's limit. Without the rating nothing is held.
-drive_current_limit = true
-# Off here (14 November 2026): the drive's overload over time by its thermal image (ratings.drive_base_load_current_a,
-# drive_overload_time_constant_s, drive_max_current_time_s) and the motor's three thermal nodes
-# (motor.winding_resistance_share, winding_time_constant_s). On: field weakening of the d-q motor model
-# (motor.pole_pairs, d_inductance_h).
-field_weakening = true
-drive_overload = false
-motor_thermal_nodes = false
-corner_blending = false
-input_shaping = false
-back_emf = true
-voltage_limit = true
-winding_heating = true
-part_heating = false
-thermal_feedback = false
-# The cycle analysis measures its pass with the windings (winding_heating) and, with thermal_feedback, the parts at the
-# rises they settle at on the cycle, iterated from cold to a fixed point, not from cold. Nothing to do where nothing
-# warms back on the run.
-thermal_warm_start = true
-torque_saturation = true
-drive_delay = true
-dc_link = true
-shared_dc_link = false
-regenerative_supply = false
-fieldbus_delay = false
-fieldbus_jitter = false
-sensor_noise = false
-shaper_follows_pose = false
-# Obstacles are rigid: touching one stops the machine and takes the drives off. Without obstacles it changes nothing.
-crash = false
-
-# With effects.part_heating: each gearbox (with the screw or rack behind it) warms with its loss. [estimate] as for the
-# delta picker's planetary gearboxes.
-# The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
-# moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
-base_compliance = false
-# With base_compliance, two-way: the machine feels its base's sway (its motors see it and hold against it) and
-# the base's energy is in the budget. Off: one-way, the base sways under the machine.
-base_reaction = false
-braking_resistor_heating = true
-# The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
-# gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
-# pickers D2 and D3, whose sizing was redone with them.
-gearbox_drag = false
-# The gearbox's flanks take the load over a band beyond the backlash, with a hysteresis (gearbox.lost_motion_band_rad,
-# hysteresis_rad).
-gearbox_lost_motion = false
-# A strain wave gear's three-segment stiffness, K1 to T1, K2 to T2, K3 beyond (gearbox.stiffness_*). Off in the shipped
-# configs.
-gearbox_stiffness_curve = false
-# Motor electrical and thermal model (14 November 2026). On here: field weakening above (the d-q voltage limit), the
-# stator's iron loss heating the motor (motor.stall_current_a) and the braking resistor's temperature
-# (ratings.braking_resistor_time_constant_s, braking_resistor_rated_rise_k; with dc_link only). Off: the magnets' flux
-# over temperature (motor.magnet_temperature_coefficient_1_k).
-iron_loss = true
-# The URDF arms' links bend, each in its first Euler-Bernoulli mode in the plane its joint turns it in ([link_bending]):
-# the tool rings with them. Not on the slides and the table, which have no links. Off in the shipped configs: the
-# sections are [estimate]s.
-link_bending = false
-# The links' bending acts back on the joints (with link_bending): joints, gearboxes and links one coupled system, the
-# bending's energy in the machine's. Off in the shipped configs.
-link_bending_reaction = false
-magnet_temperature = false
-# The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
-# (motor.friction_breakaway_nm, friction_stribeck_rad_s).
-motor_stiction = false
-# The drives watch their following error, their standstill and their torque limit ([drive] fault_reaction and the
-# keys after it); one that trips stops all, each by its fault reaction. Off by default, so that earlier results
-# stay as they were.
-drive_monitoring = false
 [thermal]
 gearbox_resistance_k_w = 1.5
 gearbox_time_constant_s = 1200.0
@@ -213,3 +100,118 @@ stiffness_z_n_m = 0.0
 tilt_stiffness_x_nm_rad = 0.0
 tilt_stiffness_y_nm_rad = 0.0
 tilt_stiffness_z_nm_rad = 7.1e5
+
+[effects]
+gravity = true
+payload = true
+# Gearbox, coupling, screw or rack twist and stretch under load: motor and load are two bodies per joint. Off, the
+# machine is the rigid reference model, in which the motor turns with the joint times the ratio.
+joint_elasticity = true
+# Friction in the joint: bearings, guides, the screw nut's preload.
+joint_friction = true
+motor_friction = true
+gearbox_backlash = true
+gearbox_efficiency = true
+torque_ripple = true
+hard_stops = true
+holding_brake = true
+# The holding brakes engage brake.engage_delay_s after they are asked to hold (the torque off) and release
+# brake.release_delay_s after they are asked to let go; a hanging axis sags while its brake engages. Off by default, so
+# that earlier results stay as they were.
+brake_delay = false
+# The process: the press force on the slider over its stroke, the cut on the knife or the saw (tables in each machine's
+# file). On in the shipped configs.
+process_force = true
+# The press frame stretches under the press force, a spring in series with the work (frame.stretch_stiffness_n_m): read
+# by the toggle press alone, which has the key.
+frame_stretch = true
+velocity_feedforward = true
+torque_feedforward = true
+# The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
+# as its speed feedforward runs on: a SINAMICS drive's fine interpolation, which a position loop at the speed loop's
+# cycle (DSC) needs once the profile cycle is longer than the position cycle. Changes nothing while they are equal.
+fine_interpolation = true
+# Friction feedforward from the characteristic drive.friction_feedforward_* (S120 p3820-p3839). On: the flying saw's
+# characteristic is its carriage's friction; the others have none recorded (0 N m), so it changes nothing there.
+friction_feedforward = true
+# The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
+# the motor encoder, which stays for the speed loop.
+load_encoder = false
+encoder_resolution = true
+velocity_filter = true
+torque_filter = true
+torque_limit = true
+# The drive gives no more than its maximum output current, ratings.drive_max_current_a: the torque setpoint is held to
+# the torque of that current where it is below the motor's limit. Without the rating nothing is held.
+drive_current_limit = true
+# Off here (14 November 2026): the drive's overload over time by its thermal image (ratings.drive_base_load_current_a,
+# drive_overload_time_constant_s, drive_max_current_time_s) and the motor's three thermal nodes
+# (motor.winding_resistance_share, winding_time_constant_s). On: field weakening of the d-q motor model
+# (motor.pole_pairs, d_inductance_h).
+field_weakening = true
+drive_overload = false
+motor_thermal_nodes = false
+corner_blending = false
+input_shaping = false
+back_emf = true
+voltage_limit = true
+winding_heating = true
+part_heating = false
+thermal_feedback = false
+# The cycle analysis measures its pass with the windings (winding_heating) and, with thermal_feedback, the parts at the
+# rises they settle at on the cycle, iterated from cold to a fixed point, not from cold. Nothing to do where nothing
+# warms back on the run.
+thermal_warm_start = true
+torque_saturation = true
+drive_delay = true
+dc_link = true
+shared_dc_link = false
+regenerative_supply = false
+fieldbus_delay = false
+fieldbus_jitter = false
+sensor_noise = false
+shaper_follows_pose = false
+# Obstacles are rigid: touching one stops the machine and takes the drives off. Without obstacles it changes nothing.
+crash = false
+
+# With effects.part_heating: each gearbox (with the screw or rack behind it) warms with its loss. [estimate] as for the
+# delta picker's planetary gearboxes.
+# The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
+# moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
+base_compliance = false
+# With base_compliance, two-way: the machine feels its base's sway (its motors see it and hold against it) and
+# the base's energy is in the budget. Off: one-way, the base sways under the machine.
+base_reaction = false
+braking_resistor_heating = true
+# The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
+# gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
+# pickers D2 and D3, whose sizing was redone with them.
+gearbox_drag = false
+# The gearbox's flanks take the load over a band beyond the backlash, with a hysteresis (gearbox.lost_motion_band_rad,
+# hysteresis_rad).
+gearbox_lost_motion = false
+# A strain wave gear's three-segment stiffness, K1 to T1, K2 to T2, K3 beyond (gearbox.stiffness_*). Off in the shipped
+# configs.
+gearbox_stiffness_curve = false
+# Motor electrical and thermal model (14 November 2026). On here: field weakening above (the d-q voltage limit), the
+# stator's iron loss heating the motor (motor.stall_current_a) and the braking resistor's temperature
+# (ratings.braking_resistor_time_constant_s, braking_resistor_rated_rise_k; with dc_link only). Off: the magnets' flux
+# over temperature (motor.magnet_temperature_coefficient_1_k).
+iron_loss = true
+# The URDF arms' links bend, each in its first Euler-Bernoulli mode in the plane its joint turns it in ([link_bending]):
+# the tool rings with them. Not on the slides and the table, which have no links. Off in the shipped configs: the
+# sections are [estimate]s.
+link_bending = false
+# The links' bending acts back on the joints (with link_bending): joints, gearboxes and links one coupled system, the
+# bending's energy in the machine's. Off in the shipped configs.
+link_bending_reaction = false
+magnet_temperature = false
+# The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
+# (motor.friction_breakaway_nm, friction_stribeck_rad_s).
+motor_stiction = false
+# The drives watch their following error, their standstill and their torque limit ([drive] fault_reaction and the
+# keys after it); one that trips stops all, each by its fault reaction. Off by default, so that earlier results
+# stay as they were.
+drive_monitoring = false
+# The velocity loop's notch filter (drive.notch_frequency_hz, notch_bandwidth_hz) is each machine's own: its switch
+# is the first key of the machine's file, which follows this table and so belongs to it.
