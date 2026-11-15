@@ -51,6 +51,10 @@ gearbox_drag = false
 # The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
 # (motor.friction_breakaway_nm, friction_stribeck_rad_s).
 motor_stiction = false
+# A slide's guides hold a load at rest within their breakaway force without creeping and turn over a presliding travel
+# at a reversal: a presliding friction state (slide.presliding_stiffness_n_m, friction_breakaway_n, friction_stribeck_m_s)
+# in place of the smoothed Coulomb step. Read by the slides only (screw, rack, linear motor, the SCARA's screw).
+slide_presliding = false
 # The gearbox's flanks take the load over a band beyond the backlash, with a hysteresis (gearbox.lost_motion_band_rad,
 # hysteresis_rad).
 gearbox_lost_motion = false
@@ -290,6 +294,12 @@ incline_deg = 90.0
 friction_coulomb_n = 10.0
 friction_viscous_n_s_m = 20.0
 friction_smoothing_m_s = 0.002
+# With effects.slide_presliding [estimate]: the guides' breakaway force, 1.5 times their Coulomb level (as the motor
+# shafts'), the speed over which it falls to that level, and the presliding stiffness: Dahl's sigma, the guides
+# turning over within a few micrometres of travel at a reversal.
+friction_breakaway_n = 15.0
+friction_stribeck_m_s = 0.001
+presliding_stiffness_n_m = 1.0e7
 stop_stiffness_n_m = 2.0e6
 stop_damping_n_s_m = 2000.0
 
@@ -638,6 +648,9 @@ ratings.drive_max_current_time_s = [0.1, 1.0]
 joint.friction_coulomb_nm = [0.25, 1.0]
 joint.friction_viscous_nm_s_rad = [0.1, 0.4]
 slide.friction_coulomb_n = [5.0, 20.0]
+slide.friction_breakaway_n = [10.0, 20.0]
+slide.friction_stribeck_m_s = [0.0002, 0.005]
+slide.presliding_stiffness_n_m = [2.0e6, 5.0e7]
 gearbox.efficiency = [0.65, 0.85]
 gearbox.stiffness_nm_rad = [30000.0, 50000.0]
 gearbox.damping_nm_s_rad = [0.5, 2.0]

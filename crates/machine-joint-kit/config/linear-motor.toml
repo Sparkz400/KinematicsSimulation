@@ -21,6 +21,12 @@ incline_deg = 0.0
 friction_coulomb_n = 20.0
 friction_viscous_n_s_m = 30.0
 friction_smoothing_m_s = 0.002
+# With effects.slide_presliding [estimate]: the guides' breakaway force, 1.5 times their Coulomb level (as the motor
+# shafts'), the speed over which it falls to that level, and the presliding stiffness: Dahl's sigma, the guides
+# turning over within a few micrometres of travel at a reversal.
+friction_breakaway_n = 30.0
+friction_stribeck_m_s = 0.001
+presliding_stiffness_n_m = 1.0e7
 # [estimate] a rubber buffer at each end.
 stop_stiffness_n_m = 2.0e6
 stop_damping_n_s_m = 2000.0
@@ -270,6 +276,9 @@ ratings.drive_overload_time_constant_s = [2.0, 60.0]
 ratings.drive_max_current_time_s = [0.1, 1.0]
 mass.carriage_kg = [4.0, 6.0]
 slide.friction_coulomb_n = [10.0, 40.0]
+slide.friction_breakaway_n = [20.0, 40.0]
+slide.friction_stribeck_m_s = [0.0002, 0.005]
+slide.presliding_stiffness_n_m = [2.0e6, 5.0e7]
 slide.friction_viscous_n_s_m = [15.0, 60.0]
 linear_motor.attraction_force_n = [2000.0, 3000.0]
 linear_motor.guide_friction_coefficient = [0.003, 0.01]

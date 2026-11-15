@@ -696,6 +696,11 @@ pub struct ShaftFriction {
     pub oil: f64,
     /// The exponent of the seals' levels on `oil` (0 without effects.thermal_feedback).
     pub seal_exponent: f64,
+    /// With a stiffness above 0 (a slide's effects.slide_presliding), the level is a presliding state of its own in
+    /// place of the tanh: Dahl's law, the force over the travel since the last step's end (`presliding_force`). 0: none.
+    pub presliding: f64,
+    /// Where the last step ended, travel and friction force (`commit`); NaN before the first: then no force.
+    pub anchor: [f64; 2],
 }
 
 impl ShaftFriction {
@@ -709,6 +714,8 @@ impl ShaftFriction {
         drag: GearDrag::NONE,
         oil: 1.0,
         seal_exponent: 0.0,
+        presliding: 0.0,
+        anchor: [f64::NAN, 0.0],
     };
 
     pub fn from_config(cfg: &Config) -> Result<Self> {
@@ -727,6 +734,7 @@ impl ShaftFriction {
             // With the feedback, at ambient; the machine follows the gearbox's temperature (`set_oil`).
             oil: feedback.as_ref().map_or(1.0, |t| t.viscosity_factor(0.0)),
             seal_exponent: feedback.map_or(0.0, |t| t.seal_exponent),
+            ..Self::NONE
         })
     }
 
@@ -752,6 +760,37 @@ impl ShaftFriction {
     /// The power the gearbox's drag (effects.gearbox_drag) takes at a rotor speed, W: the gearbox's loss, not the motor's.
     pub fn drag_power(&self, speed: f64) -> f64 {
         self.drag.torque(speed, self.oil) * speed
+    }
+
+    /// With `presliding`: the friction force at travel `x` and speed `speed`, Dahl's law solved from the anchor
+    /// [x0, z0] along a travel that ran one way, z = s g - (s g - z0) exp(-sigma |x - x0| / g), g the level at the speed
+    /// (`level`: Coulomb, or stiction falling to it along the Stribeck curve), s the sign of x - x0 (of the speed at the
+    /// anchor itself). It holds any force within ±g at rest without creeping (the travel, not the time, moves it), turns
+    /// over a presliding travel of about g / sigma at a reversal, and slides at ±g. 0 before the first step and
+    /// without a level.
+    pub fn presliding_force(&self, x: f64, speed: f64) -> f64 {
+        let ([x0, z0], g) = (self.anchor, self.level(speed));
+        if x0.is_nan() || g <= 0.0 {
+            return 0.0;
+        }
+        let s = if x > x0 || (x == x0 && speed >= 0.0) { 1.0 } else { -1.0 };
+        s * g - (s * g - z0) * (-self.presliding * (x - x0).abs() / g).exp()
+    }
+
+    /// The torque (force) opposing a positive speed at travel `x`: `torque`, with `presliding` the Dahl force in place of
+    /// the smoothed level.
+    pub fn torque_at(&self, x: f64, speed: f64) -> f64 {
+        if self.presliding == 0.0 {
+            return self.torque(speed);
+        }
+        self.presliding_force(x, speed) + self.viscous * speed + self.drag.torque(speed, self.oil)
+    }
+
+    /// Ends a step: with `presliding`, the anchor moves to where the step ended (`Machine::after_step`).
+    pub fn commit(&mut self, x: f64, speed: f64) {
+        if self.presliding > 0.0 {
+            self.anchor = [x, self.presliding_force(x, speed)];
+        }
     }
 }
 
@@ -1603,6 +1642,38 @@ preload_n = 200.0
         for (stiction, breakaway, expected) in [(true, 0.075, 0.075), (true, 0.03, 0.05), (false, 0.075, 0.05)] {
             assert!((level(stiction, breakaway) - expected).abs() < 1e-15, "{stiction} {breakaway}");
         }
+    }
+
+    /// The presliding state, by hand: Coulomb 100 N, breakaway 150 N, Stribeck speed 1 mm/s, sigma 1e6 N/m, viscous
+    /// 10 N s/m. From the anchor [0, 0] at rest the level is 150 N; 1.5e-4 m on (sigma x / g = 1) the force is
+    /// 150 (1 - exp(-1)) = 94.8181 N, and it stays there at rest however long (it moves with the travel, not the time).
+    /// Turned back by 1.5e-4 m at rest: -150 + (150 + 94.8181) exp(-1) = -59.9364 N. Sliding at 1 mm/s far from the
+    /// anchor: the level 100 + 50 exp(-1) = 118.394 N, plus 10 * 0.001 viscous. Without a presliding stiffness the
+    /// smoothed step as before, to the bit.
+    #[test]
+    fn a_presliding_friction_holds_at_rest_and_turns_over_its_travel() {
+        let mut f = ShaftFriction {
+            coulomb: 100.0,
+            viscous: 10.0,
+            stiction: 150.0,
+            stribeck: 1e-3,
+            smoothing: 1e-3,
+            presliding: 1e6,
+            ..ShaftFriction::NONE
+        };
+        assert_eq!(f.presliding_force(1e-4, 0.0), 0.0);
+        f.commit(0.0, 0.0);
+        assert_eq!(f.anchor, [0.0, 0.0]);
+        assert!((f.presliding_force(1.5e-4, 0.0) - 94.8181).abs() < 1e-4);
+        f.commit(1.5e-4, 0.0);
+        for _ in 0..1000 {
+            f.commit(1.5e-4, 0.0);
+        }
+        assert!((f.torque_at(1.5e-4, 0.0) - 94.8181).abs() < 1e-4, "{}", f.torque_at(1.5e-4, 0.0));
+        assert!((f.presliding_force(0.0, 0.0) + 59.9364).abs() < 1e-4);
+        assert!((f.torque_at(0.1, 1e-3) - 118.3940 - 0.01).abs() < 1e-3, "{}", f.torque_at(0.1, 1e-3));
+        let smoothed = ShaftFriction { presliding: 0.0, ..f.clone() };
+        assert_eq!(smoothed.torque_at(1.5e-4, 0.3).to_bits(), smoothed.torque(0.3).to_bits());
     }
 
     /// Harmonic Drive's size 32 strain wave gear, ratio 80 and up (Table 43): K1 6.7e4 N m/rad to T1 29 N m, K2 1.1e5 to

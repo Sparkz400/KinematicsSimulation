@@ -89,7 +89,9 @@ fn fit_through_a_mapping_gives_what_the_simulators_own_columns_give() {
         table(&text(&out.stdout), 3)
     };
     let (own, mapped) = (fit(&[]), fit(&["--map", map.to_str().unwrap()]));
-    assert_eq!(own.len(), 4);
+    // The four rigid values, then the friction beyond its sliding level that the run shows (it ends at rest: the held
+    // force).
+    assert_eq!((own.len(), mapped.len()), (5, 5));
     for (a, b) in own.iter().zip(&mapped) {
         assert!((a.1 - b.1).abs() <= 1e-6 * a.1.abs().max(1e-3), "{a:?} {b:?}");
     }

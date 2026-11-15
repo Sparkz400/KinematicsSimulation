@@ -5,7 +5,7 @@
 [dataset]
 id = "isw-ball-screw-axis"
 title = "Ball screw axis with a 400 kg table, S-profile, sine and constant speed (ISW Stuttgart, measured)"
-description = "A SIEMENS 1FT7085 motor on a SINAMICS S120 turns a 40 mm ball screw that moves a 400 kg table over 0.72 m, speed and position loops on a dSPACE board. Motor position and speed (as table travel), motor torque from the inverter and the position setpoint, every fourth sample of the 4 kHz recording. Measured by ISW, University of Stuttgart (Hinze, Zeh), CC BY 4.0, doi:10.18419/darus-3003."
+description = "A SIEMENS 1FT7085 motor on a SINAMICS S120 turns a 40 mm ball screw that moves a 400 kg table over 0.72 m, speed and position loops on a dSPACE board. Motor position and speed (as table travel), motor torque from the inverter, the position setpoint, the linear drive's compensation force and the nut's measured force, every fourth sample of the 4 kHz recording; and three frequency responses from velocity sweeps. Measured by ISW, University of Stuttgart (Hinze, Zeh et al.), CC BY 4.0, doi:10.18419/darus-3003 and doi:10.18419/darus-3252."
 license = "CC-BY-4.0"
 contributor = "ISW, University of Stuttgart (data published on DaRUS, doi:10.18419/darus-3003)"
 recorded = "2022-08"
@@ -49,3 +49,28 @@ map = "map.toml"
 test = "friction-map"
 sample_time_s = 1e-3
 notes = "Source file const_v_100.mat: 0 to 700 mm and back at 0.1 m/s, one point of the source's Stribeck map. Recorded 2022-06."
+
+# From C. Hinze et al., "Replication Data for: Robust mu parameterization with low tuning complexity of cascaded control
+# for feed drives", DaRUS 2023, https://doi.org/10.18419/darus-3252, CC BY 4.0 (the same files are in darus-3003):
+# velocity sweeps of the same bench, speed loop closed, position loop open, 8 mm/s with 1 mm/s swept up to 375 Hz.
+# The frequency response from motor torque to motor speed, computed by the tool (README.md).
+[[recording]]
+file = "velocity-sweep-s0.csv"
+test = "frequency-response"
+# The source's 4 kHz, from which the response is computed.
+sample_time_s = 2.5e-4
+notes = "Source file Identification/VelocitySweeps/vel_sweep_s_0_dir_pos.mat (DaRUS-3252, CC BY 4.0): the table near 0 mm moving up. Torque to speed, Welch over 8192 samples at 4 kHz, five frequencies averaged, 15 to 250 Hz."
+
+[[recording]]
+file = "velocity-sweep-s350.csv"
+test = "frequency-response"
+# The source's 4 kHz, from which the response is computed.
+sample_time_s = 2.5e-4
+notes = "Source file Identification/VelocitySweeps/vel_sweep_s_350_dir_pos.mat (DaRUS-3252, CC BY 4.0): the table near 350 mm moving up."
+
+[[recording]]
+file = "velocity-sweep-s700.csv"
+test = "frequency-response"
+# The source's 4 kHz, from which the response is computed.
+sample_time_s = 2.5e-4
+notes = "Source file Identification/VelocitySweeps/vel_sweep_s_700_dir_neg.mat (DaRUS-3252, CC BY 4.0): the table near 700 mm moving down."

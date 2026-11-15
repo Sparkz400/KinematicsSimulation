@@ -145,6 +145,8 @@ What it does not cover: field weakening, iron loss, the drive's overload, the mo
 | Acceleration under constant torque, rigid model | Force over effective mass | 1e-9 | `constant_torque_gives_force_over_effective_mass`, axis and gantry |
 | Holding torque of an inclined axis | m g sin · r / i | exact rigid; 0.1 % elastic | `inclined_axis_needs_holding_torque`, axis |
 | Holding torques on Z | ± m_z g r / (2i) | exact rigid; 0.1 % elastic | `static_hold_on_z_needs_opposite_torques`, gantry |
+| A slide's presliding friction (`effects.slide_presliding`): Dahl's force from its anchor, held at rest, turned back, the Stribeck level; off, the smoothed step to the bit | g (1 − e^−1) = 94.8181 N; −59.9364 N; 118.394 N | 1e-4 N | `a_presliding_friction_holds_at_rest_and_turns_over_its_travel`, mech |
+| The screw axis inclined by 5°, drive off: held by its presliding friction, crept with the smoothed step | −g / σ ln(1 − F / g) = 2.40 µm taken up, < 1 µm in the second half second (Dahl ratchets 10 µm more while the screw rings); 0.002 · atanh(21.37 / 89.47) = 0.487 mm/s | 1 µm; 0.03 mm | `a_presliding_slide_holds_its_load_without_creeping`, joint kit |
 | Belt tension from stretch; damping on the stretch rate | EA · strain; c · rate | 1e-6 N; 1e-9 N | `belt_tension_is_ea_strain_and_pretension_at_rest`, `belt_damping_acts_on_the_stretch_rate`, mech |
 | Belt forces | The gradient of the belt's energy | 1e-3 N | `belt_forces_are_the_gradient_of_its_energy`, mech |
 | Belt sections at rest and in a static hold (belt view) | Without gravity every section at the pretension 300 N, section 1 stretched by L · P / (EA + P) (0.4497 mm on 0.75 m, gantry; 0.1499 mm on 0.25 m, axis). Held: single axis at 30°, T₂ − T₁ = 6 kg · g · sin 30° = 29.42 N; T-gantry, 2 T₂ − T₁ − T₃ = 7 kg · g = 68.65 N and T₁ = T₃. The 3D view's strips carry (T − P) / P of exactly these tensions | 1e-6 N; 1e-12 m; exact | `belt_sections_have_the_pretension_at_rest_and_carry_the_weight_in_a_static_hold`, views |
@@ -564,83 +566,166 @@ These compare the simulator with itself. They prove repeatability and plumbing, 
 
 ## Against measured data
 
-One public measurement, not made by this project: the ball screw test bench of ISW, University of Stuttgart (C. Hinze,
-L. Zeh, DaRUS 2022, [doi:10.18419/darus-3003](https://doi.org/10.18419/darus-3003), CC BY 4.0), converted into
-[datasets/isw-ball-screw-axis](../datasets/isw-ball-screw-axis/). A 1FT7085 motor on a SINAMICS S120 turns a 40 mm ball
-screw that moves a 400 kg table; speed and position loops on a dSPACE board. Three recordings at 1 ms: an S-profile
-(10 to 700 mm and back, 0.3 m/s, 1 m/s²), a sine (±100 mm at 0.1 Hz) and a run at 0.1 m/s out and back. The machine is
-the `screw-axis` of the joint kit with the dataset's `machine.toml`: table, stroke, screw diameter and length, motor and
-position gain from the source, the motor's data from Siemens D 21.4, the rest estimates; the lead (40 mm) is read from
-the screw's article number, the source does not state it.
+One public test bench, not built or measured by this project: the ball screw axis of ISW, University of Stuttgart, in
+three datasets on DaRUS, all CC BY 4.0 (licence checked on each dataset's page): C. Hinze, L. Zeh 2022,
+[doi:10.18419/darus-3003](https://doi.org/10.18419/darus-3003) (the three recordings below), C. Hinze et al. 2023,
+[doi:10.18419/darus-3252](https://doi.org/10.18419/darus-3252) (velocity sweeps, the speed loop's gains), and
+[doi:10.18419/darus-2563](https://doi.org/10.18419/darus-2563) (the linear direct drive's force compensation; read, not
+brought in: its constant-speed runs carry nothing the three recordings and their nut force do not, its README explains
+the drive's force column). Converted into [datasets/isw-ball-screw-axis](../datasets/isw-ball-screw-axis/). A 1FT7085
+motor on a SINAMICS S120 turns a 40 mm ball screw that moves a 400 kg table; speed and position loops on a dSPACE board.
+The machine is the `screw-axis` of the joint kit with the dataset's `machine.toml`.
 
-**Compared**: the measured motor torque (`M_KGT_act`, the S120's torque from its current) with the simulated one when the
-trace's position setpoints are replayed (`sim-cli replay`), before and after applying what `sim-cli fit` on the
-S-profile advises (literally: table −91.7 kg, guide and motor viscous friction × 1.432, Coulomb × 0.879, the constant
-+15.4 N as an incline of 0.29°). Differences as a share of the recording's peak measured torque:
+**The recordings and their roles.** The S-profile (10 to 700 mm and back, 0.3 m/s, 1 m/s², 6.2 s) is the one everything
+is fitted on. The sine (±100 mm at 0.1 Hz, 21 s) and the run at 0.1 m/s out and back (15 s, recorded two months
+earlier) are checks: nothing was set from them. The velocity sweeps (darus-3252, at 0, 350 and 700 mm) check the screw's
+stiffness and the lead, and are compared, not fitted.
 
-| Recording | Peak torque | RMS, config as written | RMS, after the fit | Peak difference, as written | after the fit |
-| --- | --- | --- | --- | --- | --- |
-| S-profile (fitted on) | 8.07 N m | 0.857 N m, 10.6 % | 0.820 N m, 10.2 % | 7.39 N m, 92 % | 5.78 N m, 72 % |
-| Sine, 0.1 to 19.9 s | 3.52 N m | 0.502 N m, 14.3 % | 0.494 N m, 14.0 % | 1.88 N m, 53 % | 1.95 N m, 56 % |
-| Constant speed 0.1 m/s | 14.63 N m | 0.746 N m, 5.1 % | 0.713 N m, 4.9 % | 6.17 N m, 42 % | 6.32 N m, 43 % |
+**Compared**: the measured motor torque (`M_KGT_act`) with the simulated one when the trace's position setpoints are
+replayed (`sim-cli replay`), as written for 1.0.0 and now. Differences as a share of the recording's peak measured
+torque; "as written" is the 1.0.0 table (the config before any fit, the replay from rest at the configured pose), "now"
+is `machine.toml` as committed:
 
-The fit hardly moves the RMS: what is left is not in the rigid values. A rigid model fitted to the S-profile alone
-(`identify`, no simulator) leaves 0.233 N m RMS (2.9 %), the floor for any choice of mass and friction. The rest:
+| Recording | Role | Peak torque | RMS, 1.0.0 | RMS, now | Peak difference, 1.0.0 | now |
+| --- | --- | --- | --- | --- | --- | --- |
+| S-profile | fit | 8.07 N m | 0.857 N m, 10.6 % | 0.430 N m, 5.3 % | 7.39 N m, 92 % | 2.27 N m, 28 % |
+| Sine, 0.1 to 19.9 s | check | 3.52 N m | 0.502 N m, 14.3 % | 0.470 N m, 13.3 % | 1.88 N m, 53 % | 1.23 N m, 35 % |
+| Sine, whole file | check | 34.16 N m | 1.62 N m, 4.7 % | 0.786 N m, 2.3 % | 95 N m, 278 % | 30.0 N m, 88 % |
+| Constant speed 0.1 m/s | check | 14.63 N m | 0.746 N m, 5.1 % | 0.895 N m, 6.1 % | 6.17 N m, 42 % | 3.59 N m, 25 % |
 
-- At standstill (16 % of the S-profile's rows, after its last move) the bench holds about −1.5 N m, friction holding the
-  speed loop's integral torque; the simulation, its Coulomb friction smoothed through zero and without stiction, holds
-  0. That is 1.5 N m RMS on those rows.
-- The peak differences sit where the motion changes abruptly: at the start of braking (2.31 s) the simulated torque
-  swings ±4.5 N m for 5 ms where the measured one bends smoothly; at the sine's reversals (7.5 s, 17.5 s) the measured
-  torque jumps with the friction's sign, the simulated one follows the smoothed Coulomb curve. The simulated speed
-  loop's gains are estimates (the bench's loop ran on dSPACE, in units the source does not give).
-- Over the whole sine file the peak difference is 95 N m (278 %): its setpoint jumps to 0.063 m/s at the first row and
-  back to rest at the last; the bench jolts with 34 N m, the replay, which starts and ends at rest, with ±90 N m for
-  5 ms. Hence the table's 0.1 to 19.9 s; over the whole file the RMS is 1.62 N m (4.7 % of 34.2 N m).
+On the S-profile, step by step (RMS, peak): the setpoint on the simulator's clock (below) 0.842 N m, 7.23 N m; the
+torque feedforward off 0.711, 3.85; the speed loop's gains 0.686, 2.75; the guides' presliding friction 0.425, 2.24; the
+fitted friction and constant force 0.430, 2.27. Replaying from the trace's own state changes nothing here (the
+S-profile starts at rest) and the whole sine's jolt from 95 to 30 N m.
 
-**Found by the fit** (S-profile, the config's value → fitted ± standard error): moved mass at the table 583.6 → 491.9 ±
-3.4 kg (at the motor 0.0199 kg m²), viscous friction 544 → 779 ± 23 N s/m, Coulomb friction 366 → 322 ± 6 N, constant
-force 0 → +15.4 ± 1.6 N. Against the source: it gives the table's 400 kg and no friction. Table and the catalogue's
-rotor (20.7 kg cm²) make 451 kg; the 41 kg left (1.7e-3 kg m² at the motor) is what a steel screw 1.8 m long has at its
-root diameter (1.8e-3; at the full 40 mm 3.6e-3). With a lead of 25 mm the same torques fit a heavier rotor side, so
-this confirms the masses only together with the assumed lead.
+**Following error**, now on the source's clock: S-profile measured 0.0411 rad RMS, simulated 0.0399, their difference
+0.0022 rad (5 % of the measured); sine (0.1 to 19.9 s) 0.0078 against 0.0070, difference 0.0018 rad (23 %); constant
+speed 0.0165 against 0.0153, difference 0.0039 rad (24 %). With the bench's position gain (35 1/s) and speed feedforward,
+and the speed loop's gains read off the S-profile (below), not the dSPACE board's own law.
 
-The other recordings do not agree with it to within their standard errors, and say why: the constant-speed run gives
-529 ± 3 kg (only its ramps carry mass) and 426 ± 1 N of friction at 0.1 m/s (the S-profile's values give 322 + 78 =
-400 N there); the sine 575 ± 8 kg, all of it from the jolt at its start (its own acceleration is 0.04 m/s²). The
-constant force is the same on both runs out and back (+15.4 and +13.9 N); the source does not say what it is (an
-incline of 0.3°, or the linear motor's magnet pull left over by its compensation). Applied as advised and fitted again,
-the mass and the constant force land on the measured ones (487 kg, 17.2 N); Coulomb friction does not (337 against
-322 N), because the advice scales the guide's and the motor's friction (147 of the config's 366 N) and the rest is the
-nut's preload drag (THK's formula, 0.0887 · 2000 N · 0.04 m / 2π = 1.13 N m, 177 N at the table; `screw.preload_n` an
-estimate) and the screw's efficiency, which the advice does not name.
+**What was changed in machine.toml, and why** (each change marked in the file):
 
-**What was changed to get there, and what was not tuned.** Before any comparison the replay of the sine stopped after
-2 ms: `machine.toml` still had the 66 µF S210 DC link of the screw axis it was made from, and the jolt tripped it. It
-now names the S120 Motor Module that D 21.4 pairs with the motor (1230 µF) and a regenerative supply, both estimates.
-Nothing else was adjusted to the measurements; friction values and loop gains are the estimates written before the
-first replay, and the fit's advice was applied once, as printed.
+- `effects.torque_feedforward` off. The recordings' torque command holds no term of the acceleration setpoint: regressed
+  on the speed error, its integral and the acceleration setpoint, the S-profile gives −0.9 N m per m/s² where a torque
+  feedforward would give +3.1. Off, the S-profile's peak difference falls from 92 % to 48 %: the bench's speed loop lags
+  at the start of each ramp and overshoots, the simulated one did not.
+- The speed loop's gains: 3.9 N m s/rad and Tn 14.45 ms for the estimates 6.0 and 10 ms. The recordings name them "Gain"
+  166 and 69.2 without units; the S-profile's torque command regressed on the speed error and its integral, with Ki / Kp
+  = 69.2 1/s, gives Kp = 616 N m per m/s at the table, 3.9 at the motor (3.3 to 4.0 with Ki / Kp free). darus-3252,
+  recorded a year later, gives Kp = 175, Ki = 11 and a closed speed loop of 215 rad/s at a damping of 0.44, which on the
+  fitted 0.0199 kg m² is Kp = 2 · 0.44 · 215 · 0.0199 = 3.77 N m s/rad: the same within the regression's spread.
+- `effects.slide_presliding` on (new, shared physics behind its own switch, off in every shipped config): the guides'
+  and nut's friction as a Dahl state ([model reference](model-reference.md#slide-presliding-friction)), σ = 2e7 N/m, an
+  estimate. Without it the replay holds nothing at rest; on the S-profile 16 % of the rows are rest, and the bench holds
+  −1.44 N m there. With it the replay holds −0.99 N m.
+- Friction from `sim-cli fit` on the S-profile: guides' Coulomb 100 → 87.6 N and viscous 500 → 723 N s/m, the motor
+  shaft's 0.3 → 0.263 N m and 1e-3 → 1.446e-3 N m s/rad, and the nut's preload 2000 → 1752 N (its drag scaled with the
+  rest: the trace cannot tell the guides from the nut, both act as a sign of the speed). The constant force of +15.4 N
+  as an incline of 0.225° (`slide.incline_deg`).
+- The mapping (`map.toml`): the setpoint 1 ms later (`time_offset_s`), see below.
 
-**Found in the tools** by this data: on the constant-speed run the speed is its sign times 0.1 m/s, so viscous and
-Coulomb friction cannot be told apart (inflation 223, above the 100 the fit allows elsewhere), and the fit advised
-scaling the viscous friction by −8.6. It now leaves viscous friction out there and reports both as one Coulomb value
-(`at_one_speed_each_way_viscous_friction_is_left_in_the_coulomb_value`, sim-components). `check-dataset .` run inside
-a dataset's folder refused every dataset (`the_checker_takes_the_name_of_the_folder_it_runs_in`, cli). The inertia
-`identify` reads off the S-profile lies between the bounds the source's masses give by hand
-(`the_measured_ball_screw_has_the_inertia_its_masses_give`, cli). Column names, units (m and m/s through the lead), the
-sampling and the time stamps (1 ms, jitter below 1 ns) imported as they were.
+Fitted again on the S-profile, the config lands on the measurement within its standard errors but for the mass and the
+held force: viscous 792 against 779 ± 23 N s/m, Coulomb 325 against 322 ± 6 N, constant 16.8 against 15.4 ± 1.6 N;
+moved mass 584 against 492 ± 3 kg, held force −155 against −242 ± 6 N.
+
+**Not changed, and why.** The moved mass: the fit says 92 kg less than the config's 584 kg. The table's 400 kg is the
+source's, and the sweeps put the load side at 0.0173 to 0.0214 kg m² (427 to 528 kg at the table), so the table is not
+lighter; the excess is on the screw's side. Two parts of the model make it: `BallScrew::inertia` takes the shaft at its
+nominal diameter (0.00355 kg m², 88 kg at the table; at its root 0.00179, 44 kg), and the gearbox efficiency (0.9 for
+the screw) acts on the inertial force too (444 kg for 400). Both are model code: the gearbox's loss model is left to a
+later piece of work, and a carriage of 307.5 kg, which makes the torques fit (S-profile RMS 4.6 % instead of 5.3 %), would
+contradict the sweeps. The screw's stiffness: see the sweeps. The lead: see the sweeps.
+
+**The friction the data can tell** (`fit`, the rows after the rigid values; `friction_details`, tested on excerpts of
+these files against the same estimate worked out by hand, `held_force_breakaway_and_presliding_of_the_measured_ball_screw`
+in sim-components):
+
+| Value | S-profile (fit) | Sine (check) | Constant speed (check) | Replay of the config now (S-profile, sine, constant) |
+| --- | --- | --- | --- | --- |
+| Coulomb, guides, nut and motor together, at the table | 322 ± 6 N | 315 ± 4 N | 426 ± 1 N (with the viscous share at 0.1 m/s) | 325, 310, 395 N |
+| Viscous | 779 ± 23 N s/m | 1222 ± 96 N s/m | (one speed: in the Coulomb value) | 792, 876 |
+| Held at rest after the last move | −242 ± 6 N | +230 ± 7 N | +354 ± 1 N | −155, +209, −178 N |
+| Breakaway (1 to 5 % of top speed, slowing) | (too few rows) | 255 ± 1 N | (too few rows) | (−), 291 |
+| Presliding stiffness σ, from the turn at reversals | 7.0e6 N/m (one reversal at 1 m/s², crossed in 2 ms) | 3.1e7 ± 0.6e7 N/m (four) | 1.9e7 N/m (one) | 2.2e7, 2.0e7, 2.4e7 |
+
+- **Guides against nut.** The motor torque cannot tell them apart. The source's nut force sensors (`F_nut_sum`, now a
+  column of the CSV) can: regressed on the S-profile, the torque is 0.00829 N m per N of nut force plus 1.48 N m of
+  Coulomb friction that does not pass the nut's sensors (the nut's preload drag, the screw's bearings, the motor), and
+  the nut force carries 59 N of Coulomb friction from the table (the guides): 1.48 and 0.49 N m of the 1.99 N m that
+  `identify` finds, 74 and 26 %. The config as fitted has 1.36 and 0.62 N m (69 and 31 %). The sensors are not
+  referenced (the source says so): the nut force's acceleration term is 264 kg where the table has 400, and scaled by
+  400 / 264 the guides' share is 89 N, 0.63 N m.
+- **Stiction above Coulomb: none the data show.** On the sine, with the linear drive's force (below) and the inertia
+  taken off by hand, the friction while slowing is 1.97 to 2.25 N m between 0.5 and 8 mm/s and 2.02 to 2.50 N m from
+  8 to 65 mm/s; the breakaway row's 255 N is the drive's force at the sine's ends (−75 N at 350 mm, +67 N at 150 mm,
+  both against the motion there), which the fit does not know. The S-profile has too few slow rows. So
+  `slide.friction_breakaway_n` is the Coulomb level, and its Stribeck speed plays no part.
+- **The turn at a reversal.** At the sine's four reversals the friction (inertia and the drive's force off by hand)
+  turns from +2.0 to −1.5 N m over 80 ms and 125 µm, through zero after 13.5 to 15.6 µm: σ = 315 N ln 2 / x = 1.4e7 to
+  1.6e7 N/m. The fit's 3.1e7 does not take the drive's force off (it pushes against the motion at both ends of the sine and
+  moves the crossing to 7 µm); the config's 2e7 lies between, and its replay gives 2.0e7 by the same estimate. Dahl's law
+  with 1.5e7 would be within 1 % of the far level after 125 µm; the measured friction is at 68 %: it approaches the
+  level more slowly, a second, longer scale that one σ does not have.
+- **The held force.** It is the friction holding what the speed loop's integrator had when the axis stopped, so its sign
+  depends on the last deceleration: the S-profile and the constant-speed run both stop moving backwards and hold −242 and
+  +354 N. The model holds the right sign and two thirds on the S-profile, the right sign on the sine, the wrong one on
+  the constant-speed run (−178 N): its last stop is a ramp at 0.1 m/s whose loop dynamics the stand-in loops do not
+  reproduce. On that recording the rest rows (6 %) leave 3.29 N m RMS, the moving rows 0.347 N m (2.4 %); without the
+  presliding state it held nothing, and its whole RMS was 0.66 N m (4.5 %): that check is worse with the new friction.
+
+**The setpoint's clock.** The source records the setpoint its loop compares with the position of the same cycle; a
+simulated trace holds in each row the setpoint the drive worked with up to that row, the one of the cycle before. The
+mapping's existing `time_offset_s` on the setpoint (1 ms here) puts the source on the simulator's clock: the following
+errors then compare (above), where the simulated one was the speed times one cycle (0.047 rad at 0.3 m/s) against the
+bench's 0.001.
+
+**The velocity sweeps** (darus-3252, `velocity-sweep-s0.csv`, `-s350`, `-s700`; the frequency response from motor torque
+to motor speed, computed by `tools/darus_ball_screw_to_csv.py --sweep`). `sim-cli identify --sweep` fits the two-mass
+model: at 0, 350 and 700 mm a stiffness at the motor of 3240 ± 420, 2590 ± 300, 2830 ± 370 N m/rad, the first mode
+(resonance) at 134 ± 13, 123 ± 10, 126 ± 12 Hz, the dip (antiresonance) at 63, 62, 58 Hz. The model (`sim-cli modes`):
+137 Hz, its stiffness at the motor 3210 N m/rad (coupling 50000 N m/rad in series with the screw, nut and bearings,
+8.5e7 N/m at the softest nut position), its dip 70 Hz; `fit --sweep` puts the config's dip against the measured one at a
+stiffness factor of 0.80, 0.76, 0.66 if the table's mass is right. So the model's screw is as stiff as the bench near the
+motor and up to a third too stiff at the far end (one stiffness for the whole stroke, `BallScrew::converter`); not
+changed, as the closed speed loop under the sweep and the load side's mass (the sweeps' own 427 to 528 kg) each move
+the dip as much. **The lead**: the sweeps' ratio of load side to motor side, 3.0 to 3.7, is what a lead of 40 mm gives
+(table 0.0162 kg m² over a rotor side of 0.0039 to 0.0060: 2.7 to 4.2); a lead of 25 mm would give 1.0 to 1.6. This
+checks the lead read from the article number without the torque fit.
+
+**What still does not match.**
+
+- The sine: half of its remaining difference is the linear direct drive's force. Its setpoint (`F_des_LDD`, −113 to
+  +123 N, now a column of the CSV) shows in the nut force one for one (regression coefficient 1.00) and in the motor torque
+  at 0.0078 N m per N; added to the simulated torque by hand, the sine's RMS falls from 0.470 to 0.233 N m (6.6 %). The
+  simulator has no input for a force on the table from outside, so the replay leaves it out. (On the S-profile the same
+  column's coefficient is 0.0007 N m per N, 0.10 in the nut force: the drive's compensation there did what it should.)
+- The whole sine's start and end: its setpoint starts at 63 mm/s from rest and stops from it at 20 s; the bench jolts
+  with 34 N m, the replay with up to 46 N m.
+- The moved mass (above), and the S-profile's peak difference of 2.27 N m at the start of the return (2.62 s), where
+  the bench's speed loop overshoots more than the stand-in.
+- The torque per force at the table is 0.0078 to 0.0083 N m per N in both nut and drive regressions, 1.23 to 1.30 times
+  the lead's 0.04 / 2π = 0.00637: an efficiency of 0.77 to 0.81, or a torque reading, sensor or lead off by that factor.
+  The config's 0.9 is the makers' figure.
+- The held force on the constant-speed run, and the second length scale of the turn at a reversal (above).
+
+**Found in the tools** by this data: the replay forced a start from rest; it now runs up to the trace's own first
+position and speed (`a_replay_starts_from_the_traces_own_speed`, cli: the sine from 3 s on, measured within ±3.42 N m,
+jolted the replay with 86 N m before). From 1.0.0: on the constant-speed run the speed is its sign times 0.1 m/s, so
+viscous and Coulomb friction cannot be told apart, and the fit reports both as one Coulomb value
+(`at_one_speed_each_way_viscous_friction_is_left_in_the_coulomb_value`); `check-dataset .` inside a dataset's folder
+(`the_checker_takes_the_name_of_the_folder_it_runs_in`); the inertia `identify` reads off the S-profile lies between the
+bounds the source's masses give by hand (`the_measured_ball_screw_has_the_inertia_its_masses_give`).
 
 **What this does not show.**
 
 - One machine, a horizontal ball screw axis. Nothing about belts, gearboxes, deltas, arms or gravity loads.
-- Not the drive model: the bench's speed and position loops ran on a dSPACE board, not in the S120, so the simulated
-  S120 loops are stand-ins with estimated gains. The following error is not compared: the simulated one at constant
-  speed is the speed times one position cycle (0.047 rad at 0.3 m/s); the source records setpoint and position in the
-  same cycle (about 0.001 rad apart).
+- Not the drive model: the bench's speed and position loops ran on a dSPACE board, not in the S120; the simulated S120
+  loops have the bench's position gain and speed gains read off its signals, not its control law.
 - Not the current loop, the DC link, the motor's heating, the noise, or the screw's ratings and life.
-- The lead and the moved masses only together (above); friction only at the speeds of these recordings, not its
-  Stribeck shape and not at standstill.
-- A fit on one recording checked on two others, but all three from one bench, in June and August 2022.
+- Friction at the speeds of these recordings (0.5 mm/s to 0.3 m/s), its turn at slow reversals, and what it holds at rest
+  after a stop; not its dwell time, nor at the speeds of darus-3003's other constant-speed runs (1 to 750 mm/s, not
+  brought in).
+- A fit on one recording checked on two others and three sweeps, all from one bench, in 2022 and 2023.
 
 ## What is not validated
 
@@ -648,10 +733,10 @@ sampling and the time stamps (1 ms, jitter below 1 ns) imported as they were.
 
 **Against a real machine: one public measurement.**
 
-- One set of measured drive traces has been compared with the simulation: a ball screw axis of ISW Stuttgart ([above](#against-measured-data)). The "Real traces" check of the project plan (stage D4) on the project's own axes does not exist.
+- One measured machine has been compared with the simulation: a ball screw axis of ISW Stuttgart, three recordings and three velocity sweeps ([above](#against-measured-data)). The "Real traces" check of the project plan (stage D4) on the project's own axes does not exist.
 - The test runs on a real axis (stage D2) have not been made.
-- Trace import, replay and fit have seen one real recording, converted to CSV by a script; a drive's own export (Startdrive, TwinCAT, CODESYS) with its column names, units and sampling is still untested.
-- The following error in particular is harder to match than torque, because drive vendors do not document their internal filters.
+- Trace import, replay and fit have seen one real machine's recordings, converted to CSV by a script; a drive's own export (Startdrive, TwinCAT, CODESYS) with its column names, units and sampling is still untested.
+- The following error is compared on that one bench only, whose loops ran on a dSPACE board; drive vendors do not document their internal filters.
 
 **Parameters.** These are estimates in every config, and nothing checks them:
 

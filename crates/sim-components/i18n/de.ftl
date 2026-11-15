@@ -60,6 +60,7 @@ effect-gearbox_backlash = Getriebespiel
 effect-gearbox_efficiency = Getriebewirkungsgrad
 effect-gearbox_drag = Getriebe-Leerlaufdrehmoment
 effect-motor_stiction = Losbrechmoment des Motors (Stribeck)
+effect-slide_presliding = Vorgleiten der Führungen (Haften im Stillstand, Dahl)
 effect-gearbox_lost_motion = Getriebe-Lose und Hysterese
 effect-gearbox_stiffness_curve = Steifigkeitskennlinie des Wellgetriebes
 effect-torque_ripple = Drehmomentwelligkeit und Rastmoment

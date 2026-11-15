@@ -513,7 +513,7 @@ impl<M: Mechanism> JointMachine<M> {
     /// The torque breakdown, loss powers, energies and friction signals of the effect views.
     fn view_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         let n = self.n();
-        let (_, qd) = self.arms(s);
+        let (q, qd) = self.arms(s);
         let (_, rotor_speed) = self.rotors(s);
         let brakes = self.brakes(s);
         let (qa, qda) = self.all_joints(s);
@@ -530,7 +530,7 @@ impl<M: Mechanism> JointMachine<M> {
             let parts = [
                 (moving + bias[k] - gravity[k] + j.reflected_inertia() * acc[k]) / i,
                 gravity[k] / i,
-                j.shaft.torque(rotor_speed[k]) + held + losses.gear_at_rotor[k] + j.friction.torque(qd[k]) / i,
+                j.shaft.torque(rotor_speed[k]) + held + losses.gear_at_rotor[k] + j.friction.torque_at(q[k], qd[k]) / i,
             ];
             out.extend(parts);
             out.push(torque[k] - parts.iter().sum::<f64>());
@@ -856,7 +856,8 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
 
     /// The gearboxes, in the order of `thermal_parts`.
-    /// The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
+    /// The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`), and so do the joints'
+    /// presliding friction states (`ShaftFriction::commit`).
     fn after_step(&mut self, s: &mut [f64], _dt: f64) {
         let n = self.n();
         if self.elastic {
@@ -864,16 +865,28 @@ impl<M: Mechanism> Machine for JointMachine<M> {
                 self.joints[k].drive.gearbox.commit(s[2 * n + k], s[k]);
             }
         }
+        // The joints' positions and speeds lead the state in both models (`arms`).
+        for k in 0..n {
+            self.joints[k].drive.friction.commit(s[k], s[n + k]);
+        }
     }
-    /// The mechanism's, then the gearboxes' hysteresis anchors.
+    /// The mechanism's, then the gearboxes' hysteresis anchors, then those of the joints whose friction has a presliding
+    /// state.
     fn memory(&self) -> Vec<f64> {
         let gears = crate::mech::Gearbox::anchors(self.joints.iter().map(|j| &j.drive.gearbox));
-        [self.mechanism.memory(), gears].concat()
+        let frictions =
+            self.joints.iter().filter(|j| j.drive.friction.presliding > 0.0).flat_map(|j| j.drive.friction.anchor);
+        [self.mechanism.memory(), gears, frictions.collect()].concat()
     }
     fn set_memory(&mut self, memory: &[f64]) {
-        let (own, gears) = memory.split_at(self.mechanism.memory().len().min(memory.len()));
+        let (own, rest) = memory.split_at(self.mechanism.memory().len().min(memory.len()));
         self.mechanism.set_memory(own);
-        crate::mech::Gearbox::set_anchors(self.joints.iter_mut().map(|j| &mut j.drive.gearbox), gears)
+        let (gears, frictions) = rest.split_at((2 * self.joints.len()).min(rest.len()));
+        crate::mech::Gearbox::set_anchors(self.joints.iter_mut().map(|j| &mut j.drive.gearbox), gears);
+        let sliding = self.joints.iter_mut().filter(|j| j.drive.friction.presliding > 0.0);
+        for (joint, anchor) in sliding.zip(frictions.as_chunks::<2>().0) {
+            joint.drive.friction.anchor = *anchor;
+        }
     }
 
     fn set_part_temperatures(&mut self, rises: &[f64]) {

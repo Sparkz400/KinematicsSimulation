@@ -62,13 +62,29 @@ impl RotaryJoint {
     /// at 0 and the stroke), `friction_coulomb_n`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` (the guides,
     /// effects.joint_friction), `stop_stiffness_n_m`, `stop_damping_n_s_m` (effects.hard_stops). Motor and gearbox as for
     /// `from_config`; a transmission (`transmission::Converter`) turns the gearbox into one in N and m.
+    ///
+    /// With effects.slide_presliding (a config without the switch has it off) the guides' friction is a presliding
+    /// state (`ShaftFriction::presliding_force`) of stiffness `presliding_stiffness_n_m`, its level the breakaway force
+    /// `friction_breakaway_n` at rest falling to the Coulomb level over `friction_stribeck_m_s`.
     pub fn linear_from_config(cfg: &Config) -> Result<Self, ConfigError> {
         let on = cfg.bool("effects.joint_friction")?;
+        let presliding = on && cfg.get("effects.slide_presliding").is_ok() && cfg.bool("effects.slide_presliding")?;
+        let coulomb = if on { cfg.non_negative("slide.friction_coulomb_n")? } else { 0.0 };
         let friction = ShaftFriction {
-            coulomb: if on { cfg.non_negative("slide.friction_coulomb_n")? } else { 0.0 },
+            coulomb,
             viscous: if on { cfg.non_negative("slide.friction_viscous_n_s_m")? } else { 0.0 },
             smoothing: cfg.positive("slide.friction_smoothing_m_s")?,
             ..ShaftFriction::NONE
+        };
+        let friction = if presliding {
+            ShaftFriction {
+                stiction: cfg.non_negative("slide.friction_breakaway_n")?.max(coulomb),
+                stribeck: cfg.positive("slide.friction_stribeck_m_s")?,
+                presliding: cfg.positive("slide.presliding_stiffness_n_m")?,
+                ..friction
+            }
+        } else {
+            friction
         };
         let stops =
             Self::stops(cfg, cfg.positive("slide.stop_stiffness_n_m")?, cfg.non_negative("slide.stop_damping_n_s_m")?)?;
@@ -120,7 +136,7 @@ impl RotaryJoint {
     /// stops (positive turns the angle up).
     pub fn output_torque(&self, angle: f64, speed: f64) -> f64 {
         let (min, max) = self.range;
-        self.stops.force(angle - min, speed, max - min) - self.friction.torque(speed)
+        self.stops.force(angle - min, speed, max - min) - self.friction.torque_at(angle, speed)
     }
 
     /// Elastic model: the gearbox torques between rotor and arm, the rotor's acceleration under the motor's torque
@@ -162,7 +178,7 @@ impl RotaryJoint {
         let held = self.brake.torque(engaged, rotor_speed, brake).0;
         let drag = self.shaft.drag_power(rotor_speed);
         [
-            self.friction.torque(speed) * speed,
+            self.friction.torque_at(angle, speed) * speed,
             self.stops.loss_power(angle - min, speed, max - min),
             (self.shaft.torque(rotor_speed) + held) * rotor_speed - drag,
             drag,
