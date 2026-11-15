@@ -1004,7 +1004,7 @@ Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels
   [Modellreferenz](../model-reference.md#linear-delta).
 
 - Hexapod: Das Drehen der Beine um ihre Basisgelenke und die Trägheit der Nutzlast fehlen; eine Steifigkeit je Bein
-  (an der weichsten Stellung der Mutter); noch keine Eigenfrequenzen (`resonance_hz`).
+  (an der weichsten Stellung der Mutter). Seine Eigenfrequenzen werden bei gehaltenen Motoren angegeben wie die der Roboter (`sim-cli modes hexapod`).
 - Tripod: Das Schwenken der Beine um ihre Basisgelenke fehlt wie am Hexapod; keine Reibung und kein Spiel in Dreh- und
   Kugelgelenken; eine Steifigkeit je Bein (an der weichsten Stellung der Mutter); die Konvergenz der Vorwärtskinematik
   ist für den ausgelieferten Quader gezeigt (eine Konfiguration mit anderer Geometrie oder anderem Quader sollte die

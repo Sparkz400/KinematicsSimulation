@@ -1296,12 +1296,12 @@ Ein Spline kann über seine Stützpunkte hinausschwingen: Zwischen ihnen baucht 
 
 ```text
 $ sim-cli analyze t-gantry --path corner.path
-Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.050 K
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.046 K
 motor,cycle_s,peak_torque_nm,...,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,...
-a,2.128000,0.557940,...,1.821e-4,7.442e-5,1.821e-4,0.000e0,...
+a,2.128000,0.552014,...,1.268e-4,4.329e-5,1.746e-4,0.000e0,...
 
 $ sim-cli analyze t-gantry --path corner.path --time-optimal
-a,1.695000,0.646623,...,2.435e-4,9.641e-5,2.435e-4,0.000e0,...
+a,1.658000,0.719198,...,1.702e-4,5.027e-5,2.482e-4,0.000e0,...
 ```
 
 Bei einer Bahn ist `cycle_s` die geplante Dauer plus 0,3 s Ruhe am Ende, damit das Einschwingen des Werkzeugs mitzählt.
@@ -1318,7 +1318,7 @@ Zwei Planer legen den Zeitverlauf der Bahn fest:
 | Wo ein Spline auf eine Gerade oder einen Kreisbogen trifft | Die Krümmung springt; er bremst ab wie von einer Geraden in einen Kreisbogen. Mit `profile.path_tolerance_m` wird das Ende des Splines auf die Krümmung seines Nachbarn ausgeglichen, und der Übergang wird zügig durchfahren (unten) | Ebenso |
 | Modell für die Planung | Keines, nur die Achsgrenzwerte | Das Starrkörpermodell: keine Reibung, keine Riemendehnung |
 
-Der zeitoptimale Plan hält an jeder geplanten Pose jeden Motor innerhalb der Momentenreserve und der Bemessungsdrehzahl und jede Achse innerhalb ihres Ruckgrenzwerts. Beim voreingestellten Ruckgrenzwert von 100 m/s³ entscheidet fast überall der Ruck: Das Beispiel erreicht die Bemessungsdrehzahl auf seiner ersten Geraden und nutzt 0,16 des erlaubten Drehmoments. Ein höherer Ruckgrenzwert macht es schneller (0,79 s plus Ruhe bei 2000 m/s³, wo die Zuggrenze des Riemens begrenzt).
+Der zeitoptimale Plan hält an jeder geplanten Pose jeden Motor innerhalb der Momentenreserve und der Bemessungsdrehzahl und jede Achse innerhalb ihres Ruckgrenzwerts. Beim voreingestellten Ruckgrenzwert von 100 m/s³ entscheidet fast überall der Ruck: Das Beispiel erreicht die Bemessungsdrehzahl auf seiner ersten Geraden und nutzt 0,16 des erlaubten Drehmoments. Ein höherer Ruckgrenzwert macht es schneller (0,68 s plus Ruhe bei 2000 m/s³).
 
 So lesen Sie das Ergebnis:
 
@@ -1332,9 +1332,9 @@ So lesen Sie das Ergebnis:
 ```text
 $ sim-cli analyze t-gantry --path corner.path --set profile.path_tolerance_m=0.0001 --lang de
 Die geplante Bahn liegt bis zu 0.1000 mm neben den vorgegebenen Geraden und Kreisbögen (Übergangsbögen und Kreisbögen, die neben ihrem angegebenen Ende enden).
-Thermischer Start: warm, bei den Übertemperaturen, auf die der Zyklus einschwingt; größte Änderung einer Übertemperatur im gemessenen Durchlauf 0.056 K
+Thermischer Start: warm, bei den Übertemperaturen, auf die der Zyklus einschwingt; größte Änderung einer Übertemperatur im gemessenen Durchlauf 0.051 K
 motor,cycle_s,peak_torque_nm,...,path_error_peak_m,...
-a,1.890000,0.558121,...,1.466e-4,...
+a,1.890000,0.552021,...,7.897e-5,...
 ```
 
 1,89 s statt 2,13 s, und jede Achse bleibt innerhalb ihrer Grenzwerte für Geschwindigkeit, Beschleunigung und Ruck. Die Regeln:
@@ -1360,15 +1360,15 @@ line,0.55,0.05
 
 ```text
 $ sim-cli analyze t-gantry --path curve.path
-Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.038 K
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.036 K
 motor,cycle_s,peak_torque_nm,...,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,...
-a,2.101000,0.558226,...,1.866e-4,7.199e-5,1.866e-4,0.000e0,...
+a,2.101000,0.551950,...,1.318e-4,4.403e-5,1.780e-4,0.000e0,...
 
 $ sim-cli analyze t-gantry --path curve.path --time-optimal
-a,1.650000,0.593255,...,2.615e-4,1.031e-4,2.615e-4,0.000e0,...
+a,1.640000,0.588146,...,1.821e-4,6.383e-5,1.821e-4,0.000e0,...
 ```
 
-2,101 s innerhalb der Achsgrenzwerte und 1,650 s so schnell, wie die Motoren es erlauben, beide mit 0,3 s Ruhe. Die Kurve verlässt die erste Gerade waagerecht und kommt auf der letzten senkrecht nach unten an. Dabei hat sie die Krümmung, die ihre Stützpunkte verlangen, und bremst an beiden Übergängen ab wie in einen Kreisbogen. Mit `--set profile.path_tolerance_m=0.0001` werden die Enden des Splines ausgeglichen: Nahe jedem Übergang wird der Spline so gebogen, dass seine Krümmung dort die der Geraden ist (0), über eine Länge l = sqrt(Abweichung / (0,01728 dk)) für einen Krümmungssprung dk, höchstens den halben Abschnitt und nur so lang, wie die Geschwindigkeit es braucht. Die Stützpunkte bleiben, wo sie sind; der Spline weicht um höchstens die zulässige Abweichung ab. Hier: 1,985 s innerhalb der Achsgrenzwerte und 1,528 s so schnell, wie die Motoren es erlauben. Der ausgeglichene Teil ändert seine Krümmung etwa neunmal so schnell wie eine Klothoide gleicher Länge und wird deshalb langsamer durchfahren als ein Übergangsbogen zwischen Gerade und Kreisbogen (siehe die [Modellreferenz](../model-reference.md#transition-curves-profilepath_tolerance_m)).
+2,101 s innerhalb der Achsgrenzwerte und 1,640 s so schnell, wie die Motoren es erlauben, beide mit 0,3 s Ruhe. Die Kurve verlässt die erste Gerade waagerecht und kommt auf der letzten senkrecht nach unten an. Dabei hat sie die Krümmung, die ihre Stützpunkte verlangen, und bremst an beiden Übergängen ab wie in einen Kreisbogen. Mit `--set profile.path_tolerance_m=0.0001` werden die Enden des Splines ausgeglichen: Nahe jedem Übergang wird der Spline so gebogen, dass seine Krümmung dort die der Geraden ist (0), über eine Länge l = sqrt(Abweichung / (0,01728 dk)) für einen Krümmungssprung dk, höchstens den halben Abschnitt und nur so lang, wie die Geschwindigkeit es braucht. Die Stützpunkte bleiben, wo sie sind; der Spline weicht um höchstens die zulässige Abweichung ab. Hier: 1,985 s innerhalb der Achsgrenzwerte und 1,521 s so schnell, wie die Motoren es erlauben. Der ausgeglichene Teil ändert seine Krümmung etwa neunmal so schnell wie eine Klothoide gleicher Länge und wird deshalb langsamer durchfahren als ein Übergangsbogen zwischen Gerade und Kreisbogen (siehe die [Modellreferenz](../model-reference.md#transition-curves-profilepath_tolerance_m)).
 
 Andere Wege, eine Bahn vorzugeben:
 
@@ -1379,7 +1379,7 @@ Grenzen bei dieser Aufgabe:
 
 - Ohne zulässige Abweichung ist eine verrundete Ecke mit dem Standardplaner langsam: 0,07 m/s in einen Kreisbogen mit 0,1 m Radius bei 100 m/s³.
 - Splines: Ohne zulässige Abweichung springt die Krümmung, wo einer an eine Gerade oder einen Kreisbogen anschließt; die Bahn durchfährt diesen Übergang deshalb langsam, wie von einer Geraden in einen Kreisbogen. Mit einer zulässigen Abweichung wird der ausgeglichene Übergang zügig durchfahren, aber langsamer, als eine Klothoide bei gleicher Abweichung erlaubte. Ein Abschnitt hat einen Grenzwert, nach seiner engsten Stelle; ein Abschnitt mit einer engen Biegung ist also auf ganzer Länge langsam.
-- Übergangsbögen zwischen Geraden und Kreisbögen: keiner, wo zwei Kreisbögen in verschiedenen Ebenen in ihrer Richtung aufeinandertreffen (drei Achsen); dort fährt die Bahn langsam. Ein Stück, das zu kurz für seine Übergangsbögen ist, halbiert die Übergangsbögen der ganzen Bahn, nicht nur seine eigenen. Ihre Länge folgt den Geschwindigkeiten, die der Plan erlaubt: den Achsgrenzwerten oder bei `--time-optimal` den Motoren (das Beispiel braucht mit 0,1 mm zulässiger Abweichung 1,397 s, ohne 1,695 s).
+- Übergangsbögen zwischen Geraden und Kreisbögen: keiner, wo zwei Kreisbögen in verschiedenen Ebenen in ihrer Richtung aufeinandertreffen (drei Achsen); dort fährt die Bahn langsam. Ein Stück, das zu kurz für seine Übergangsbögen ist, halbiert die Übergangsbögen der ganzen Bahn, nicht nur seine eigenen. Ihre Länge folgt den Geschwindigkeiten, die der Plan erlaubt: den Achsgrenzwerten oder bei `--time-optimal` den Motoren (das Beispiel braucht mit 0,1 mm zulässiger Abweichung 1,370 s, ohne 1,658 s).
 - Der zeitoptimale Plan kennt die Zuggrenzen des Riemens (`ratings.belt_max_tension_n`, `belt_min_tension_n`): Er zieht von beiden `profile.tension_margin_n` ab (31 N am voreingestellten T-Portal, die Führungsreibung, die der Riemen zieht) und hält die Zugkraft jedes Abschnitts im starren Modell innerhalb von `profile.tension_reserve` (0,5) des verbleibenden Spielraums, weil die Riemenschwingung noch einmal so viel aufschlagen kann wie die Zugänderung des starren Modells (siehe die [Modellreferenz](../model-reference.md#as-fast-as-the-motors-allow---time-optimal)). Er hält außerdem jede andere Grenze ein, deren Urteil von der Bewegung an einer Stelle der Bahn abhängt: den Maximalstrom des Antriebs (`ratings.drive_max_current_a`, mit `effects.drive_current_limit` oder ohne, wie "drive-peak-current" ihn in beiden Fällen beurteilt), `profile.torque_reserve` der Momentgrenzen von Getriebe und Riemenscheibe am Abtrieb (`ratings.gearbox_max_torque_nm`, `pulley_max_torque_nm`, wo die Maschine das Abtriebsmoment des Getriebes meldet), die höchste Eintriebsdrehzahl des Getriebes (`ratings.gearbox_max_input_speed_rpm`), die Tragzahl der Führungen (`ratings.guide_max_load_n`), die Spitzenleistung des Bremswiderstands (`ratings.braking_resistor_peak_w`: ein Bremsen, das mehr zurückspeisen würde, steht nicht zur Verfügung) und die eigenen Teile der Maschine: Drehzahl, d n und Axialkraft einer Spindel, Vorschubkraft einer Zahnstange. Von Drehzahlgrenzen hält er 1 % für das Nachlaufen der Regelkreise zurück. Er kennt die Verluste des Getriebes (`gearbox.efficiency` mit `effects.gearbox_efficiency`: der Motor bringt sie zusätzlich auf), die Reibung von Motoren, Führungen und Gelenken und hält von der Tragzahl der Führungen `profile.torque_reserve` ein, wie von den Momenten der Motoren. `profile.time_optimal_margin` (1 in den mitgelieferten Konfigurationen) plant mit diesem Anteil jeder Grenze: 0,9 für 90 %. Was über den ganzen Zyklus beurteilt wird, kennt der Plan nicht: die Erwärmung der Wicklung ("motor-thermal", "motor-s1"), den Effektivstrom des Antriebs, die Lebensdauern und die mittlere Leistung des Bremswiderstands. Ein zeitoptimaler Zyklus besteht im Lauf also die eigenen Prüfungen des Plans an jeder mitgelieferten Maschine (ein Test je Maschine, `crates/sim-machines/tests/time_optimal.rs`), kann aber einen Motor überhitzen: die der Linearmotorachse, der fliegenden Säge, des parallelen SCARA und des Vierarm-Deltas tun es. Lassen Sie `analyze` oder `verdicts` darüber laufen. Am mitgelieferten Delta begrenzt das M2max der Getriebe: Eine Gerade quer durch seinen Bereich dauert 0,434 s, 0,411 s, bevor der Plan es kannte.
 - Der zeitoptimale Plan liest die Grenzen der Motoren Punkt für Punkt (alle 2 mm) und folgt innerhalb eines Bahnstücks der höchsten Geschwindigkeit, die sie erlauben, auf und ab, ist aber nicht nachweislich der schnellste mögliche: Die Läufe von beiden Enden eines Bahnstücks treffen sich auf einer kurzen Konstantfahrt oder auf der Geschwindigkeitskurve, je nachdem, was schneller ist, und auf einer Kurve bekommen die Rampen 0,4 des Ruckgrenzwerts (siehe die [Modellreferenz](../model-reference.md#as-fast-as-the-motors-allow---time-optimal)). Die Auslegung dauert einige Millisekunden (2 bis 21 ms an den mitgelieferten Maschinen). Im vollständigen Modell überschreiten die Motoren die Bemessungsdrehzahl um das, was die Regelkreise hinzufügen (0,1 % im Beispiel).
 - Eine Maschine, die am Ende eines Hubs steht, hat ihren Sollwert einige hundertstel Millimeter dahinter: Der Sollwert liegt dort, wo die Motoren stehen, unter Riemendehnung und Getriebeverdrehung. Eine Bahn von dort beginnt so weit außerhalb des Verfahrbereichs und wird gefahren. Nur nahe ihrem Anfang darf eine Bahn den Bereich verlassen: Eine Pose, die innerhalb des Spielraums der Maschine vom Anfang liegt (0,1 mm bei den Portalen, 2,3 mm beim Delta), darf so weit außerhalb liegen; jede andere Pose muss im Bereich liegen (auf einer Achse, deren Anfang jenseits eines Endes liegt, nicht weiter jenseits als der Anfang; Rundung um 1e-9 m ausgenommen). Andere Posen werden abgelehnt (`Die Bahn verlässt den Verfahrbereich. ...` bei einer Bahn aus Stücken, `Die zeitlich vorgegebene Bahn braucht mindestens zwei Punkte im Verfahrbereich, mit steigenden Zeiten ab 0.` bei Posen mit Zeiten).

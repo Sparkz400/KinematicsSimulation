@@ -62,6 +62,17 @@ No dates. What to verify before the release is in [TODO.md](TODO.md).
 - Gripper: the payload's mass switches as a step; no gripper dynamics or compliance; the vacuum cup's hold is judged
   with its axis vertical.
 - The palletiser ships without input shaping, although its turret rings at about 5.3 Hz after a long move.
+- Winder: the drive does not adapt its speed controller to the roll's inertia (45-fold from core to full), so the
+  shipped gains fit the stretch the cycle runs, 3 m at the roll's start; the other end of the roll is judged through
+  the machine's own verdicts, not run. A category 1 stop (each drive on its own OFF3 ramp) overloads the web near
+  either end of the roll, where the radii differ; only a category 2 stop keeps the web within its limits at every
+  radius. Both rolls have the same core, full radius, motor and gearbox; the web's mass in the spans and the roll's own
+  compliance are left out.
+- Six-axis platform on cranks (`hexapod-rotary`): the time-optimal plan refuses a pure yaw from the level pose as
+  singular, while roll and pitch plan (its shipped cycle yaws from the roll; the planner is unchanged). It ships with a
+  settling tolerance of 1 mm. The rods' spin and the ball joints' friction are left out; one crank branch for all legs.
+- The rotary knife was retuned for its margins across the bounds with friction off at a cost in following error (its
+  cycle 8.86 -> 12.1 mrad); the flying saw and the toggle press were retuned for the same margins.
 - The toggle press is crank-driven only; the screw-driven toggle (the knee on a nut) is not built.
 - The measured ball screw's remaining differences (above): the screw shaft's inertia and the gearbox loss on the
   inertial force are model code left to a later piece of work.
@@ -75,6 +86,9 @@ No dates. What to verify before the release is in [TODO.md](TODO.md).
   beside other mechanisms in one file.
 
 ## Front ends
+
+- Labels such as `joint-1` are defined by several machine crates (`Joint 1`, `Leg 1`, `Crank 1`); a machine that defines
+  none of its own shows the wording of the last registered machine that does (the selected machine's own wording wins).
 
 - App: its layout at 1280 x 720 (the view's controls cover much of the machine, some tools tabs widen the tools panel
   by up to 160 pixels); the file dialogs, dragging a panel's edge and a plot's right-click menu are not tested; only

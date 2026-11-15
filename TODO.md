@@ -1,18 +1,16 @@
 # Before and right after the 1.0.0 release
 
 What is not built is in [ROADMAP.md](ROADMAP.md). This file lists only what is left to check or finish around the
-release (state of 15 November 2026, main at 27544b4).
+release (state of 15 November 2026, main at e7c41e5).
 
 ## Before the tag
 
 - Full run on the final main: `cargo nextest run --workspace --cargo-profile quick --exclude sim-py --profile full`, the
-  long sweeps and the doctests (see CONTRIBUTING.md), clippy, fmt, pytest. The last full run (15 November, at 54a2fca)
-  had 1533 of 1538 tests passing, before the third wave; then `python tools/slow_tests.py` to refresh the slow list.
+  long sweeps and the doctests (see CONTRIBUTING.md), clippy, fmt, pytest. The last full run recorded (15 November,
+  slow list rewritten at 3ed1647) had 1878 tests on 27 machines, before `hexapod-rotary` was merged; then
+  `python tools/slow_tests.py` to refresh the slow list.
 - Fill the two placeholders: the release date in CHANGELOG.md (`RELEASE-DATE`) and the test count and date of that run
   in docs/validation.md (`TEST-COUNT`).
-- The path example of the user guide (both languages) still prints the figures of before 15 November (`analyze
-  t-gantry --path corner.path`: 0.557940 N m and 1.821e-4 m where the program now gives 0.552014 and 1.268e-4; the
-  time-optimal 1.695 s is now 1.658 s); README.md has the current ones.
 - Update the GitHub repository's description and topics to the machines it has now.
 
 ## Right after the push and the tag
