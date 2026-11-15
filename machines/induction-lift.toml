@@ -393,6 +393,9 @@ torque_feedforward_model = "rigid"
 # at 2.5 rad/s (0.01 m/s), 0.192 N m at 250 rad/s (1 m/s); in between within 1 % of the curve (125 rad/s: 0.137).
 friction_feedforward_speed_rad_s = [2.5, 250.0]
 friction_feedforward_torque_nm = [0.084, 0.192]
+# With effects.friction_feedforward: "characteristic" adds the characteristic above; "machine" adds in its place the
+# friction of the machine's own model at the planned speed (guides, motor shaft, gearbox drag, joints).
+friction_feedforward_model = "characteristic"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
