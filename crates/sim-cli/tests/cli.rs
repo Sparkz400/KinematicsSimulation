@@ -1009,26 +1009,27 @@ fn a_run_can_disable_the_drives_on_the_way() {
 /// the worst again, the worst having the longest tool distance, and says the verdicts on it.
 #[test]
 fn a_run_can_stop_the_machine_and_stop_finds_the_worst_moment() {
+    // The list's second machine: one motor `m` on one axis `x`.
+    let entry = MACHINES[1];
     let rows = |args: &[&str]| -> Vec<Vec<f64>> {
-        let out = cli(&[&["run", "single-axis", "--cycle", "--time", "1.0"], args].concat());
+        let out = cli(&[&["run", entry.id, "--cycle", "--time", "1.0"], args].concat());
         assert!(out.status.success(), "{}", text(&out.stderr));
         text(&out.stdout).lines().skip(1).map(|l| l.split(',').map(|v| v.parse().unwrap()).collect()).collect()
     };
-    let entry = sim_machines::find("single-axis").unwrap();
     let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
     let (torque, x) = (sim.signal_index("motor.m.torque").unwrap(), sim.signal_index("axis.x.position").unwrap());
     let off = rows(&["--stop-at", "0.3", "--stop-category", "0"]);
     assert!(off[301..].iter().all(|row| row[torque] == 0.0));
     let held = rows(&["--stop-at", "0.3", "--stop-category", "2"]);
     assert!(held[320][torque] != 0.0 && (held[1000][x] - held[600][x]).abs() < 1e-5, "{:?}", held[1000]);
-    let refused = cli(&["run", "single-axis", "--cycle", "--stop-at", "0.3", "--stop-category", "3"]);
+    let refused = cli(&["run", entry.id, "--cycle", "--stop-at", "0.3", "--stop-category", "3"]);
     assert!(!refused.status.success() && text(&refused.stderr).contains("--stop-category 3"));
 
     // A rating no default config has: added in a config file.
     let file = std::env::temp_dir().join(format!("sim-cli-stop-{}.toml", std::process::id()));
     let rated = entry.default_config.replacen("[ratings]\n", "[ratings]\nmax_stopping_distance_m = 0.01\n", 1);
     std::fs::write(&file, rated).unwrap();
-    let out = cli(&["stop", "single-axis", "--category", "1", "--points", "4", "--config", file.to_str().unwrap()]);
+    let out = cli(&["stop", entry.id, "--category", "1", "--points", "4", "--config", file.to_str().unwrap()]);
     std::fs::remove_file(&file).unwrap();
     assert!(out.status.success(), "{}", text(&out.stderr));
     let lines: Vec<Vec<String>> =
