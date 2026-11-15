@@ -528,6 +528,34 @@ The SCARA and the six-axis arm with `kinematics.tool_space` on ([mechanisms](mec
 | RMS torque of a belt pick at 0.3 m/s against a stationary pick, single axis with inertia alone | sqrt of the ratio of ∫a² dt of the bang-bang moves with the reduced acceleration plus 1.2 v² / T per blend: 0.8876 (measured 0.8877) | 0.02 | `a_belt_pick_changes_the_rms_torque_by_the_hand_estimated_share`, conveyor |
 | Belt, slats and parts in the scene; an obstacle at the place | 1 band, 10 slats, part 0 at 0.15 m at 0.5 s; `collision` fails | 1e-9 m | `the_scene_draws_the_belt_its_slats_and_its_parts`, `an_obstacle_at_the_place_fails_the_collision_check`, conveyor |
 
+## Hand calculations: pneumatic cylinder
+
+The cylinder of `sim_components::pneumatic` (unit tests there, a DSBC-32-like cylinder: A1 = 8.0425e-4 m², A2 =
+6.9115e-4 m², 0.5 kg, 6 bar gauge) and the pneumatic Z of `machines/pneumatic-axis.toml` (tests in
+`sim-machines/tests/pneumatic.rs`).
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Theoretical force at 6 bar, extending and retracting | p_g A1 = 482.55 N, p_g A2 = 414.69 N (Festo prints 483 and 415 N; the catalogue check holds every DSBC size to p A) | 1e-5 | `the_theoretical_force_is_p_a_on_both_sides` |
+| Choked and subsonic mass flow through C = 1 l/(s bar), b = 0.3; two elements in series | C p ρ0 = 8.3107e-3 kg/s from 7.013 bar; ψ(0.65) = 0.86603; C_s = 2^(−1/3) C, b_s = 1 − C_s²/C² (1.4) | 1e-5 | `the_flow_through_a_conductance_is_choked_below_b_and_elliptic_above` |
+| Steady speed of a meter-out throttled cylinder, C = 0.1 l/(s bar), 50 N load | v = C ρ0 R T0 / A2 = 0.14428 m/s, whatever p2 while choked (p2 = 7.27 bar) | 1 % | `a_meter_out_throttled_cylinder_runs_at_the_choked_flow_s_speed` |
+| The same in the machine file: Z extending downwards with its seals and the payload | C_s = 0.14943 l/(s bar) (throttle, valve, tube in series): 0.2156 m/s | 3 % | `the_servo_x_and_the_pneumatic_z_run_their_cycle` |
+| Natural frequency on the two air springs at mid-stroke, closed centre | sqrt(n (p1 A1²/V1 + p2 A2²/V2) / m) / 2π: adiabatic (n = 1.4) 29.64 Hz, isothermal limit (500 W/K, n = 1) 25.05 Hz | 2 % | `the_air_springs_ring_at_the_hand_frequency_adiabatic_and_isothermal` |
+| Air for a double stroke, long dwells | Σ (p_s (V0 + A s) − p_atm V0) / (R T) = 1.31757e-3 kg, 1.1119 normal litres (ANR) | 0.5 % | `a_double_stroke_draws_the_hand_air_consumption` |
+| Filling a closed 49 cm³ chamber, adiabatic, while choked | t = (b p_s − p_atm) V / (κ R T ṁ) = 2.555 ms (C 0.9615 l/(s bar), b 0.2142) | 0.5 % | `filling_a_closed_volume_takes_the_closed_form_time_while_choked` |
+| Energy of a closed cylinder (both chambers shut, adiabatic, no friction, stops undamped), vertical, 1 s | U1 + U2 + kinetic + gravity + the atmosphere's work on the rod + the stops' springs: constant | 1e-9 of U | `a_closed_cylinder_keeps_its_energy` |
+| Balance of the open cylinder over an extend and a retract stroke with seals, cushions and heat transfer | Δ(energy) = enthalpy from the supply − to the exhaust + heat from the wall − seal and damper work, each integrated as a state | 1e-6 of the enthalpy drawn | `the_enthalpy_flows_balance_the_energy_of_an_open_cylinder` |
+| Step convergence: stroke time at the sub-step 15.6 µs and half of it; the machine file's stroke times at 4 and 8 sub-steps | the same | 1 % | `the_stroke_time_converges_with_the_step`, `halving_the_step_leaves_the_stroke_time` |
+| Checks of the shipped cycle | Impact energy ½ · 1.0 kg · 0.2156² = 0.023 J (within 30 %: the piston still swings about its steady speed) against 0.4 J; load factor 9.807 N / 414.7 N = 0.0236 against 0.7; a rating of 0.01 J fails | as said | `the_cylinder_s_checks_are_judged` |
+| A cylinder too stiff for the step | refused with `error-cylinder-unstable` (1e-9 m³ dead volume) | – | `a_cylinder_too_stiff_for_the_step_is_refused`, `..._in_a_file` |
+
+Of the standard suite, round trip, static hold, determinism, energy conservation, the loss budget and step convergence
+run on `machines/pneumatic-axis.toml` as on every machine file (`every_machine_file_passes_the_standard_suite`); they
+pulse the servo X, and the cylinder rests in its end stop, so they check that it does rest there exactly
+(the equilibrium is the stop's deflection under the net pressure force). For the cylinder itself energy conservation
+does not apply (it is fed by the supply): the closed-cylinder check and the enthalpy balance above take its place, and
+the stroke-time convergence that of the travel.
+
 ## Vendor formulas and vendor documents
 
 | What is compared | Against | Tolerance | Test |

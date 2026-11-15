@@ -273,6 +273,18 @@ pub trait Machine: Send {
     fn set_dwelling(&mut self, _dwelling: bool) {}
     /// Told every step whether the drives are disabled, for machines with holding brakes.
     fn set_brake_engaged(&mut self, _engaged: bool) {}
+    /// Actuators that a valve moves and no drive (pneumatic cylinders): each one's id and the valve command it starts
+    /// with (+1 extend, -1 retract, 0 the closed centre of a 5/3 valve), for a cycle segment's `valves` and `wait`. None
+    /// by default.
+    fn valves(&self) -> Vec<(String, f64)> {
+        Vec::new()
+    }
+    /// Told every step the command of valve `valve` (of `valves`); the valve switches after its own delay.
+    fn set_valve(&mut self, _valve: usize, _command: f64) {}
+    /// Valve `valve`'s end-position sensors, [retracted, extended], each after its delay.
+    fn end_sensors(&self, _valve: usize) -> [bool; 2] {
+        [false; 2]
+    }
     /// Called after every base step, for what happens at once and not by integration (a belt tooth that jumps):
     /// the machine may change `state` and must report what that took out of its energy among its loss powers
     /// over this step of `dt` seconds, so that the energy budget closes.

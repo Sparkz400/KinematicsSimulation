@@ -1,0 +1,36 @@
+schema_version = 1
+class = "pneumatic_cylinder"
+key = ["series", "size", "cushioning"]
+default_source = "dsbc_2026"
+notes = '''
+Festo standards-based cylinders DSBC to ISO 15552, double-acting, with adjustable pneumatic end-position cushioning
+at both ends (PPV, order code PPVA-N3): one row per piston diameter. Source: Festo catalogue "Standards-based
+cylinders DSBC, to ISO 15552", edition 2026/09. Typed in from the catalogue's text; the layout is ours.
+piston_diameter_m: the size. rod_diameter_m: dimension "MM" of the dimension table of the variant DSBC-...-KE (p. 21);
+  the main dimension table (pp. 19, 20) could not be read as text. The same rod for every variant of a size is an
+  assumption of this table, which the forces confirm: the retracting forces below are 6 bar times the piston's area
+  less the rod's to within the printed rounding for every size.
+cushion_length_m: "Cushioning length" PPV [mm] (p. 9).
+max_impact_energy_j: "Max. impact energy in the end positions" [J], row "DSBC-..." of the table "Forces [N] and impact
+  energy [J]" (p. 13). The catalogue does not say which cushioning (P, PPV, PPS) the row is for and prints no PPV
+  graph; the rows -L/-U/-T1/-T3/-T4 (half) and -KE are other variants and not here. With the trunnion mounting kit
+  DAMT the maximum is 0.1 J (footnote 1, Ø32). The same page gives v = sqrt(2 E / (m1 + m2)).
+theoretical_force_extend_n, theoretical_force_retract_n: "Theoretical force at 6 bar, advancing / retracting" [N]
+  (p. 13); force_gauge_pressure_pa is those 6 bar.
+moving_mass_at_zero_stroke_kg, moving_mass_per_stroke_kg_m: "Moving mass" of the basic DSBC at 0 mm stroke and
+  "additional moving mass per 10 mm stroke", printed in g (p. 11); per 10 mm converted to per metre.
+stroke_min_m, stroke_max_m: "Stroke" of the basic DSBC, 1 ... 2800 mm (p. 9); standard strokes in the ordering
+  tables pp. 28 to 30.
+Not in the table: the operating pressure (p. 10 prints 0.6 ... 12, 0.4 ... 12 and 0.2 ... 10 bar in grouped columns
+  whose sizes the text does not show), the self-adjusting cushioning PPS, air consumption (not printed), dimensions.
+No misprints found.
+'''
+
+[[sources]]
+id = "dsbc_2026"
+document = "Festo, catalogue \"Standards-based cylinders DSBC, to ISO 15552\", English"
+date = "2026-09"
+locator = "pages 9 (stroke, cushioning length), 11 (moving mass), 13 (forces and impact energy), 21 (rod diameter MM of DSBC-...-KE)"
+method = "manual: typed in from the PDF's text"
+url = "https://ftp.festo.com/Public/PNEUMATIC/SOFTWARE_SERVICE/Documentation/2026/EN/DSBC_EN.PDF"
+retrieved = "2026-11-15"

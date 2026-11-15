@@ -1053,6 +1053,47 @@ sind das Typenschild (`rated_voltage_v`, `rated_frequency_hz`, `drive.rated_spee
 das Ersatzschaltbild (`resistance_ohm`, `rotor_resistance_ohm`, `magnetizing_inductance_h`, die beiden Streuungen);
 manche Hersteller veröffentlichen es für eine Baureihe, sonst muss es geschätzt werden (die Dateien sagen, welche Werte,
 und begrenzen sie).
+
+## Eine pneumatische Achse neben einer Servoachse auslegen
+
+Bestückautomaten heben oft mit einem Pneumatikzylinder, während Servoachsen verfahren. Eine Maschinendatei fügt ihn mit
+einem Knoten `[[machine.cylinder]]` und einer Tabelle seiner Werte hinzu (Kolben, Stange, Hub, bewegte Masse,
+Totvolumen, Versorgungsdruck, C und b nach ISO 6358 von Ventil und Schlauch, die Abluftdrosseln, die Dämpfung, die
+Dichtungen; Schlüssel in [config-reference.md](../config-reference.md#a-machine-files-pneumatic-cylinders)). Der Zyklus
+schaltet sein Ventil und wartet auf seine Endlagensensoren:
+
+```toml
+[[cycle.segment]]
+target = [0.1]          # X zum Aufnehmen
+dwell_s = 0.05          # gezählt, sobald der Sensor meldet
+payload = false
+valves = { z = "extend" }
+wait = ["z.extended"]
+```
+
+`machines/pneumatic-axis.toml` ist eine Servo-X mit einem Festo DSBC-32-100 als Z, der vom Schlitten nach unten hängt:
+
+```text
+$ sim-cli verdicts --machine-file machines/pneumatic-axis.toml
+$ sim-cli run --machine-file machines/pneumatic-axis.toml --cycle --time 5 --out z.csv
+```
+
+Die Prüfurteile bewerten den Zylinder neben dem Motor: `cushion-energy` (die Bewegungsenergie beim Eintritt in die
+Dämpfung, hier 0,012 bis 0,029 J, gegen die zulässigen 0,4 J des Zylinders) und `load-factor` (wogegen er arbeitet,
+geteilt durch seine theoretische Kraft beim Versorgungsdruck, 0,024 gegen die übliche Grenze 0,7). Die Signale
+`cylinder.z.*` enthalten Stellung und Geschwindigkeit des Kolbens, Drücke und Temperaturen beider Kammern, den
+Ventilschieber und die Endlagensensoren, die letzten Hubzeiten (0,55 s aus, 0,65 s ein), die Geschwindigkeit beim
+Eintritt in die Dämpfung und am Anschlag, Rückprall und Einschwingen, die Luft je Doppelhub (1,10 Normliter) und ihre
+Energie am Kompressor (474 J bei 0,12 kWh/m³). Die Ausfahrgeschwindigkeit stellt die Abluftdrossel der Stangenseite
+ein: gesperrt läuft der Kolben mit C p0 / A2 (hier 0,216 m/s), wie groß die Last auch ist. In der Dämpfung stellt die
+Dämpfungsschraube die Geschwindigkeit ebenso ein (0,05 l/(s bar): 0,072 m/s). Ein Zylinder, dessen Totvolumen für den
+Schritt zu klein ist, wird mit `error-cylinder-unstable` abgelehnt; die Meldung nennt die Rate und den Teilschritt, den
+er braucht (`sim.substeps`).
+
+Festo druckt für kein VUVG-Ventil C und b; die des ausgelieferten Ventils sind aus seinem Normalnenndurchfluss
+geschätzt. Der Zylinder wirkt nicht auf die Achse zurück, die ihn trägt (seine Masse gehört in die des Schlittens), und
+ein Proportionalventil gibt es noch nicht.
+
 ## Eine Bahn fahren und den Bahnfehler ablesen
 
 Eine Bahndatei hat ein Stück je Zeile. Die Bahn beginnt dort, wo die Maschine steht (`start.pose`).

@@ -8,7 +8,7 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {"const": 1},
-    "class": {"enum": ["servo_motor", "drive", "braking_resistor", "gearbox", "belt", "belt_axis", "ball_screw", "linear_guide", "linear_motor"]},
+    "class": {"enum": ["servo_motor", "drive", "braking_resistor", "gearbox", "belt", "belt_axis", "ball_screw", "linear_guide", "linear_motor", "pneumatic_cylinder"]},
     "table": {"type": "string", "description": "A table of the class other than its parts themselves: a name in the class schema's $defs."},
     "key": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "The columns that together name a row; no two rows may have the same."},
     "default_source": {"type": "string", "description": "The source of every value that names no other."},

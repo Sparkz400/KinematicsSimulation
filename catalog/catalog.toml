@@ -16,6 +16,7 @@ tables = [
     "festo/belt_axes_egc.csv",
     "festo/belt_axes_elga.csv",
     "festo/belt_axis_torque_formula.csv",
+    "festo/cylinders_dsbc.csv",
     "gates/belt_tooth_load.csv",
     "gates/belts.csv",
     "harmonicdrive/gearbox_csf.csv",

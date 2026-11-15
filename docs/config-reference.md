@@ -161,6 +161,8 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `sensor_noise` | T E S | off | Gaussian noise on the measured position and current, repeatable from a seed |
 | `crash` | T E S D | off | The obstacles of `obstacles` push back on a part that goes into them, with their contact stiffness and damping, with the drives on or off: the axes in contact are blocked, the others go on until the drives' monitoring (`drive_monitoring`) trips them (see the [model reference](model-reference.md#obstacles-and-crash)). Contacts are found and reported whether it is on or not; off, the machine moves through the obstacle. Changes nothing without obstacles. Off by default, so that earlier results stay as they were |
 | `drive_monitoring` | T E S D | off | Each drive watches its following error, its following error at standstill, whether it is held at its torque limit at low speed, and optionally its torque against the model's (the `[drive]` keys from `fault_reaction` on); the first that trips stops all drives, each by its fault reaction. Changes nothing until a drive trips, which no shipped cycle does. Optional in a config file (off: a config written before 14 November 2026). Off by default, so that earlier results stay as they were |
+| `cylinder_friction` | files with cylinders | on | The pneumatic cylinders' seal friction, a Stribeck curve rising with the chambers' pressure (`friction_*` of the cylinder's table, see "A machine file's pneumatic cylinders") |
+| `cylinder_cushion` | files with cylinders | on | The cylinders' end-position cushions: within `cushion_length_m` of an end the chamber exhausts through the bleed screw alone. Off, the piston runs into its elastic end stops at the throttled speed |
 
 **Motion planning**
 
@@ -424,6 +426,46 @@ catalogue lists for the article ([catalogue] where one is named, placeholders in
 stiffness, preload and the load ratings of an unnamed size are [estimate] and have `[bounds]` entries, as
 `screw_z.efficiency = [0.85, 0.95]` and `rack_x.stiffness_n_m = [6.0e7, 1.5e8]`. A rotary node's axis takes its limits
 in rad (`[axis.<id>]` below).
+
+## A machine file's pneumatic cylinders
+
+Each `[[machine.cylinder]]` node names the table of its values by `values` (`[cylinder_z]` in
+`machines/pneumatic-axis.toml`); every key is required, and a file with cylinders has the effect switches
+`effects.cylinder_friction` (the seals' friction) and `effects.cylinder_cushion` (the end-position cushions). The model
+is "Pneumatic cylinder" in [model-reference.md](model-reference.md). Shipped values: a Festo DSBC-32-100 PPV
+([catalogue] from `catalog/festo/cylinders_dsbc.csv`), a VUVG-L10 valve whose C and b Festo does not print ([estimate]
+from its nominal flow), the rest [estimate] with `[bounds]`.
+
+| Key | Unit | Meaning | pneumatic-axis |
+| --- | --- | --- | --- |
+| `piston_diameter_m`, `rod_diameter_m` | m | Bore and rod; A1 = π D²/4, A2 = A1 − π d²/4 | 0.032, 0.012 |
+| `stroke_m` | m | Stroke, 0 retracted | 0.1 |
+| `moved_mass_kg` | kg | Piston, rod and what is fixed to the rod | 0.5 |
+| `payload_kg` | kg | On the rod while the gripper holds it (effects.payload) | 0.5 |
+| `incline_deg` | deg | Extending direction above the horizontal; −90 extends downwards | −90 |
+| `dead_volume_cap_m3`, `dead_volume_rod_m3` | m³ | Each chamber's volume at its own end of the stroke, the tube to the valve included | 8e-6, 8e-6 |
+| `supply_pressure_bar` | bar | Supply, gauge | 6 |
+| `ambient_pressure_pa`, `ambient_temperature_k` | Pa, K | The atmosphere; the supply and the walls are at this temperature | 101325, 293.15 |
+| `heat_transfer_w_k` | W/K | α A between each chamber's air and its wall; 0 adiabatic, large isothermal | 0.3 |
+| `valve` | – | `"5/2"` or `"5/3"` (closed centre) | "5/2" |
+| `valve_c_dm3_s_bar`, `valve_b` | l/(s bar), – | The valve's ISO 6358 sonic conductance and critical pressure ratio (b below 0.95) | 0.87, 0.3 |
+| `valve_switch_time_s` | s | From a command to the spool's switch | 0.007 |
+| `tube_c_dm3_s_bar`, `tube_b` | l/(s bar), – | The tube and fittings between valve and cylinder | 1.0, 0.4 |
+| `throttle_extend_c_dm3_s_bar`, `throttle_retract_c_dm3_s_bar`, `throttle_b` | l/(s bar), – | Meter-out flow controls: the rod side's (sets the extend speed) and the cap side's (retract) | 0.15, 0.2, 0.3 |
+| `cushion_length_m` | m | Length of the end-position cushion at each end; at most half the stroke | 0.017 |
+| `cushion_bleed_c_dm3_s_bar`, `cushion_bleed_b` | l/(s bar), – | The cushion's bleed screw | 0.05, 0.3 |
+| `stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | The elastic end stops behind the cushions | 1e6, 500 |
+| `friction_coulomb_n`, `friction_coulomb_n_bar` | N, N/bar | The seals' sliding friction and its rise with the chambers' mean gauge pressure | 10, 2 |
+| `friction_stiction_ratio`, `friction_stribeck_m_s`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | –, m/s, N s/m, m/s | Breakaway over sliding (at least 1), the Stribeck speed, viscous friction, the smoothing through zero speed | 1.5, 0.01, 20, 0.002 |
+| `load_force_n` | N | A process force on the rod against extending | 0 |
+| `sensor_band_m`, `sensor_delay_s` | m, s | The end sensors switch this near the end, after this delay | 0.002, 0.005 |
+| `start` | – | `"retracted"` or `"extended"`: where it rests at the start, its valve driving it there | "retracted" |
+| `rated_cushion_energy_j` | J | The cylinder's maximum impact energy (check `cushion-energy`) | 0.4 |
+| `load_factor_limit` | – | Check `load-factor` | 0.7 |
+| `compressor_energy_kwh_m3` | kWh/m³ | The compressor's electrical energy per m³ of air (ANR) | 0.12 |
+
+`sim.dt_s / sim.substeps` must be small enough for the cylinder's stiffest rate (`error-cylinder-unstable` says which
+and how small): a dead volume below about 1 cm³ with these flows, or very stiff stops, ask for more sub-steps.
 
 ## `[hard_stop]`
 
@@ -1110,6 +1152,8 @@ The cycle is a list of segments, run in order and repeated. All three configs ha
 | `via` | m | Optional, in no shipped file. Via points, each one position per axis inside the strokes: the segment then runs a path planned within the axis limits (`path::plan`, with the transition curves of `profile.path_tolerance_m` and the rounded corners of `profile.corner_tolerance_m`; with `profile.cycle_timing = "time_optimal"` as fast as the motors allow) instead of the straight move: a line to the first via point, a smooth curve (spline) through the others, and a line from the last to `target`. With via points straight above pick and place and one between, a lift, traverse and lower without a stop; the optimiser writes such segments. One via point is two lines with a stop between. The path is planned from the segment before's target when the config is read, and refused (`cycle.segment[i].via`) where it cannot be planned or leaves the strokes. A segment with via points does not blend (`corner_blending`) with the one before. The first segment of a run starts from the start pose; were its path refused from there, it runs the straight move |
 
 | `corners_m` | m | Optional, in no shipped file; with `via`. The via points are then joined by lines (to the first, between them and from the last to `target`), and their corners rounded within this tolerance in place of `profile.corner_tolerance_m`: the optimiser writes it for a lift whose two corners it rounds (via points the two corners at the lift's height, the tolerance 3/16 of the height above the lowest the clearance allows, so that the curves start there). At least 0 |
+| `valves` | – | Optional; a machine with pneumatic cylinders (`machines/pneumatic-axis.toml`). Commands to cylinders' valves by the cylinder's id, given once the segment has arrived, as the gripper acts: `{ z = "extend" }`, `"retract"` or `"centre"` (the closed centre of a 5/3 valve; a 5/2 valve stays where it is). The valve switches after its own delay. An unknown id or command is refused (`cycle.segment[i].valves`) |
+| `wait` | – | Optional, with cylinders. End-position sensors the segment's dwell waits for, `["z.extended"]` or `"z.retracted"`: the dwell counts from when all of them report (each after its sensor delay), so the next segment, an X move say, starts only with the cylinder there. A sensor that never reports holds the cycle there |
 
 T and E: lower, dwell (grip), lift, traverse, lower, dwell (release), lift, traverse back; six segments. S: a shuttle between x = 0.9 and x = 0.1 with a dwell of 0.1 s at each end; two segments.
 

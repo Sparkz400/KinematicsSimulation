@@ -450,6 +450,8 @@ fn every_machine_file_passes_the_standard_suite() {
     fn lossless() -> Vec<Config> {
         LOSSLESS.lock().unwrap().clone()
     }
+    // The pneumatic axis's cylinder rests in its end stop through the suite (it has no motor; the suite's pulse is on the
+    // servo X): its own energy and step checks are in tests/pneumatic.rs and sim_components::pneumatic.
     let files = [
         "single-axis.toml",
         "t-gantry.toml",
@@ -458,6 +460,7 @@ fn every_machine_file_passes_the_standard_suite() {
         "xyz-portal.toml",
         "stepper-axis.toml",
         "induction-lift.toml",
+        "pneumatic-axis.toml",
     ];
     for name in files {
         let shipped = file(name);

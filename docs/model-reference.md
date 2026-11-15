@@ -1792,12 +1792,92 @@ Force and speed are averaged over 11 rows; the acceleration is the slope of the 
 
 **Stage 2, resonance.** In a sweep of motor torque to motor speed, the load resonating on the belt shows as a dip. Gain times frequency is level for a pure inertia; the dip's flanks are where that has twice the power of the lowest point. Frequency = geometric mean of the two flanks; damping ratio = (high − low) / (2 · frequency); frequency error = half the spacing of the sweep's points there. With the masses right, (measured / config frequency)² is the factor the stiffness is off by.
 
+## Pneumatic cylinder
+
+Source: [`pneumatic.rs`](../crates/sim-components/src/pneumatic.rs). A machine file attaches one with a
+`[[machine.cylinder]]` node ([machine-files.md](machine-files.md)); the cylinder is no tool axis and has no drive: the
+cycle commands its valve and waits for its end-position sensors (`[[cycle.segment]]` `valves` and `wait`, see
+[config-reference.md](config-reference.md)). Its states follow the machine's: piston position x (0 retracted, s
+extended) and speed v, and per chamber the air's mass m and internal energy U, then running totals for the balances.
+
+**Chambers.** Cap side 1 (area A1 = π D²/4), rod side 2 (A2 = A1 − π d²/4), each a control volume of an ideal gas
+(R = 287.058 J/(kg K), κ = 1.4, c_p = κ R/(κ − 1)):
+
+```text
+V1 = V01 + A1 x,  V2 = V02 + A2 (s − x),  p = (κ − 1) U / V,  T = p V / (m R)
+dm/dt = ṁ,   dU/dt = c_p T_in ṁ + α A (T_wall − T) − p dV/dt
+```
+
+T_in is the port's temperature for air flowing in, the chamber's for air flowing out. **Thermal assumption:**
+adiabatic with heat transfer to the wall, `heat_transfer_w_k` = α A per chamber. 0 is the adiabatic limit (a closed
+chamber's air spring has the exponent κ); a heat transfer quick against the process (α A ≫ m c_v / t) is the
+isothermal limit (exponent 1). Both limits are tested on the natural frequency. The wall and the supply are at
+`ambient_temperature_k`.
+
+**Flow elements (ISO 6358).** Every flow path is a sonic conductance C (m³/(s Pa), ANR; the config gives l/(s bar))
+and a critical pressure ratio b:
+
+```text
+ṁ = C p_up ρ0 sqrt(T0 / T_up) ψ(r),  r = p_down / p_up,  ρ0 = 1.185 kg/m³, T0 = 293.15 K (ANR, ISO 8778)
+ψ = 1 for r ≤ b (choked),  ψ = sqrt(1 − ((r − b) / (1 − b))²) above
+```
+
+The last 0.5 % of r before 1 is a straight line through zero (the root's slope is infinite there, which no fixed step
+integrates; a shortcut, see below). Elements in series combine to C = (Σ C_i⁻³)^(−1/3) and 1 − b = C² Σ (1 − b_i)/C_i²:
+the cube rule for the choked flow, and b so that at small pressure drops (where the elliptic law is Δp ∝ ṁ² (1 − b)/C²)
+the drops add up.
+
+**Valve and paths.** A 5/2 valve (or 5/3 with a closed centre) switches `valve_switch_time_s` after its command
+changes; extending, chamber 1 is on the supply (`supply_pressure_bar` gauge plus ambient) and chamber 2 on the exhaust
+(ambient), retracting the other way. Air into a chamber passes valve and tube (the throttles' and cushions' check
+valves open); air out of it passes valve, tube and its meter-out throttle (`throttle_extend_*` on the rod side's port,
+`throttle_retract_*` on the cap side's). Within `cushion_length_m` of its end (effects.cylinder_cushion), the cushion
+spear closes the main bore and the chamber exhausts through valve, tube and the cushion bleed alone, blended in over the
+first millimetre.
+
+**Piston.**
+
+```text
+(m + payload) dv/dt = p1 A1 − p2 A2 − p_atm (A1 − A2) − F_load − (m + payload) g sin(incline) − F_seal + F_stop
+F_seal = (F_c + k_p p̄_g) (1 + (r_s − 1) exp(−(v/v_s)²)) tanh(v / v_ε) + b v      (effects.cylinder_friction)
+```
+
+p̄_g is the chambers' mean gauge pressure (`friction_coulomb_n_bar` per bar), r_s the breakaway ratio, v_s the Stribeck
+speed, v_ε the smoothing; a Stribeck curve rather than the LuGre bristles of the guides, whose bristle stiffness would
+add a stiff state for no gain at a cylinder's speeds. F_stop is `mech::HardStop` with the cylinder's own
+`stop_stiffness_n_m` and `stop_damping_n_s_m` (the elastic bumpers), always on. The payload rides on the rod while the
+gripper holds it (effects.payload).
+
+**What it reports** (`cylinder.<id>.*`): position, speed, both pressures (absolute) and temperatures, the spool, the two
+end sensors (on once the piston has been within `sensor_band_m` of the end for `sensor_delay_s`), the supply's flow and
+the air drawn in normal litres (ANR), the air of the last double stroke (between two switches to extend), the
+compressor's energy for it (`compressor_energy_kwh_m3`), the last stroke times out and back (from the spool switching
+to within the sensor band), the speed and kinetic energy entering the cushion (at the end stop without a cushion), the
+speed at the end stop, the bounce back from it and the settling time (until the piston last left the sensor band), and
+the load factor. Checks: `cushion-energy` (the highest kinetic energy entering the cushion against
+`rated_cushion_energy_j`) and `load-factor` (the force the cylinder works against, load and weight, over p_g A1
+extending or p_g A2 retracting, the worse, against `load_factor_limit`, 0.7 by the usual rule).
+
+**Energy.** The cylinder is an open system: `Machine::energy` and the energy view leave it out. Its own balance: the
+change of U1 + U2 + ½ m v² + (m g sin + F_load + p_atm (A1 − A2)) x + the stops' springs equals the enthalpy from the
+supply less that to the exhaust, plus the heat from the wall, less the seals' and the stops' dampers' work, each
+integrated as a state.
+
+**Step.** The model is stiff where a chamber is small: the flow law's straight end, the air spring of the dead volume,
+the stops, the seal's smoothing and the heat transfer each give a rate; a cylinder whose largest rate times the
+integrator's sub-step (`sim.dt_s / sim.substeps`) exceeds 2 is refused with `error-cylinder-unstable`, naming the rate
+and the largest sub-step that would do (RK4 is stable to 2.8). Not modelled: a proportional valve with a position loop
+(servo-pneumatics), the valve's spool travel (it switches at once after its delay), tube dynamics (a tube is a flow
+element; its volume belongs in the dead volumes), the cylinder's reaction on the axis that carries it.
+
 ## Known shortcuts
 
 Places where the code carries a `shortcut:` comment.
 
 | Where | Shortcut | When to upgrade |
 | --- | --- | --- |
+| [`sim-components/src/pneumatic.rs`](../crates/sim-components/src/pneumatic.rs), `psi` | The ISO 6358 flow law's last 0.5 % of pressure ratio before 1 is a straight line, not the root | ISO 6358-3's laminar region, if a test against measured data needs the last 0.5 % of a pressure |
+| [`sim-components/src/pneumatic.rs`](../crates/sim-components/src/pneumatic.rs), module | A cylinder rides on the machine without acting back on it; its weight belongs in the carrying body's mass | A cylinder not at right angles to the axes that carry it |
 | [`machine-t-gantry/src/lib.rs`](../crates/machine-t-gantry/src/lib.rs), `elastic_derivatives` (line 381) | Idler and cable-chain inertia ride on the carriage's speed over ground, not on its speed along the beam. The two differ by the frame's own motion, which is a thousand times smaller | If the frame moves by more than a small fraction of the carriage's travel |
 | [`sim-components/src/control.rs`](../crates/sim-components/src/control.rs), `Controller::rescale_ticks` (line 302) | When `profile.cycle_s` changes, setpoints on the fieldbus keep their count of cycles, so the fieldbus delay changes with the cycle at once instead of after the queue has run through | Resample the queue, if that step ever matters |
 | [`sim-components/src/control.rs`](../crates/sim-components/src/control.rs), `Controller::shape` (line 707) | While the shaper's period changes (`shaper_follows_pose`), the speed and acceleration setpoints are the delayed plan's, not the exact rates of the shaped position. Off by the rate of the delay, a few percent in a Z move; they are feedforward only | Shape the position alone and difference it, if that matters |

@@ -1031,6 +1031,44 @@ V/f has no position. The motor's data are the name plate (`rated_voltage_v`, `ra
 `drive.rated_speed_rad_s` for the rated slip) and the equivalent circuit (`resistance_ohm`, `rotor_resistance_ohm`,
 `magnetizing_inductance_h`, the two leakages); makers publish the circuit for some series, else it has to be estimated
 (the files say which and bound them).
+
+## Size a pneumatic axis beside a servo axis
+
+Pick-and-place machines often lift with a pneumatic cylinder while servo axes travel. A machine file adds one with a
+`[[machine.cylinder]]` node and a table of its values (bore, rod, stroke, moved mass, dead volumes, supply pressure,
+the valve's and tube's ISO 6358 C and b, the meter-out throttles, the cushions, the seals; keys in
+[config-reference.md](config-reference.md#a-machine-files-pneumatic-cylinders)). The cycle commands it by its valve and
+waits for its end-position sensors:
+
+```toml
+[[cycle.segment]]
+target = [0.1]          # X to the pick
+dwell_s = 0.05          # counted once the sensor reports
+payload = false
+valves = { z = "extend" }
+wait = ["z.extended"]
+```
+
+`machines/pneumatic-axis.toml` is a servo X with a Festo DSBC-32-100 Z hanging down from its carriage:
+
+```text
+$ sim-cli verdicts --machine-file machines/pneumatic-axis.toml
+$ sim-cli run --machine-file machines/pneumatic-axis.toml --cycle --time 5 --out z.csv
+```
+
+The verdicts judge the cylinder beside the motor: `cushion-energy` (the kinetic energy entering the cushion, 0.012 to
+0.029 J here, against the cylinder's rated 0.4 J) and `load-factor` (what it works against over its theoretical force
+at supply pressure, 0.024 against the usual 0.7). The traces `cylinder.z.*` have the piston's position and speed, both
+chambers' pressures and temperatures, the spool and the end sensors, the last stroke times (0.55 s out, 0.65 s back),
+the speed entering the cushion and at the stop, bounce and settling, the air per double stroke (1.10 normal litres)
+and its energy at the compressor (474 J at 0.12 kWh/m³). The extend speed is set by the rod side's meter-out throttle:
+choked, the piston runs at C p0 / A2 (0.216 m/s here), whatever the load. Within the cushion the bleed screw sets the
+speed the same way (0.05 l/(s bar): 0.072 m/s). A cylinder whose dead volume is too small for the step is refused with
+`error-cylinder-unstable`, which names the rate and the sub-step it needs (`sim.substeps`).
+
+Festo prints C and b for no VUVG valve; the shipped valve's are estimated from its nominal flow. The cylinder does not
+act back on the axis carrying it (its mass belongs in the carriage's), and there is no proportional valve yet.
+
 ## Run a path and read path error
 
 A path file has one piece per line. The path starts where the machine stands (`start.pose`).

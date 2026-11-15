@@ -160,6 +160,42 @@
           },
           "type": "array"
         },
+        "cylinder": {
+          "description": "A double-acting pneumatic cylinder at the tool, moved by its directional valve and not by a drive (sim_components::pneumatic; checks cushion-energy, load-factor). It is no tool axis: the cycle commands its valve (a segment's valves = { <id> = \"extend\" }) and waits for its end-position sensors (wait = [\"<id>.extended\"]). Its signals are cylinder.<id>.*; its weight belongs in the body of the axis that carries it.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "Stable id of the node; signals and other nodes refer to it.",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "key": {
+                "description": "Translation key of its name; default cylinder.",
+                "type": "string"
+              },
+              "pos": {
+                "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "values": {
+                "description": "The table of its values (bore, stroke, valve, throttles, cushions, seals; see docs/config-reference.md).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "values"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "frame": {
           "description": "The machine frame swaying along a horizontal axis on its own spring (effects.frame_compliance, elastic model only). At most one.",
           "items": {
