@@ -32,6 +32,7 @@ Konfigurationsschlüssel sind englische Bezeichner und in beiden Sprachen gleich
 | `urdf-arm` | Sechsachsroboter, `urdf/six-axis.urdf` | Wellgetriebe i = 120 und 80 | sechs Gelenkwinkel (rad), oder x, y, z, rx, ry, rz im Werkzeugraum | `strain-wave-life` je Gelenk |
 | `scara` | SCARA-Roboter, `urdf/scara.urdf` | Wellgetriebe; die Pinole auf einem Kugelgewindetrieb | Gelenke (rad, m, rad), oder x, y, z, c im Werkzeugraum | `strain-wave-life`, die Prüfungen der Spindel an Gelenk 3 |
 | `palletiser` | Vierachs-Palettierer, `urdf/palletiser.urdf`, ein Parallelogramm hält den Flansch waagerecht | Getriebe i = 160, das Wellgetriebe des Flanschs 50 | x, y, z, rz (ausgeliefert im Werkzeugraum), oder die vier Motorgelenke | `strain-wave-life` je Gelenk |
+| `arm-on-track` | der Sechsachsroboter auf einem Schlitten von 80 kg auf einer Bodenschiene von 4 m, `urdf/arm-on-track.urdf` | die Schiene: ein Ritzel auf einer Zahnstange hinter einem Planetengetriebe i = 10; der Arm wie `urdf-arm` | die Schiene (m) und die sechs Gelenke (rad), oder im Werkzeugraum die Schiene neben x, y, z, rx, ry, rz | `rack-feed-force`, `gearbox-radial-load` an der Schiene; `guide-load`, `guide-life` ihrer Führungswagen; `strain-wave-life` je Armgelenk |
 | `parallel-scara` | Fünfgelenk mit Parallelogramm-Unterarmen in der waagerechten Ebene (eigenes Crate, keine Gelenkmaschine); Z-Hub und Werkzeugdrehung an der Platte | Planetengetriebe i = 20 an den Armen; der Z-Hub über einen Kugelgewindetrieb 16 x 20 hinter einer Kupplung; die Drehung über ein Planetengetriebe i = 8 | x, y (m), z (m), c (rad) | `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life` am Z-Hub |
 
 Jede bekommt außerdem die Prüfungen, die jede Maschine bekommt: Spitzen- und Effektivmoment des Motors (`motor-peak`,
@@ -150,13 +151,17 @@ Schwerpunkt `arm.payload_inertia_kgm2` (xx, yy, zz, xy, xz, yz im Spitzenrahmen)
 Körper eingerechnet (`Inertial::merged`).
 
 Konfiguration `[arm]`: `urdf_file` ist ein Pfad oder `builtin:six-axis`, `builtin:scara`, `builtin:five-axis`,
-`builtin:seven-axis` oder `builtin:palletiser` für die Beispiele in `crates/machine-joint-kit/urdf/`. `gear_ratios` hat
+`builtin:seven-axis`, `builtin:palletiser` oder `builtin:arm-on-track` für die Beispiele in `crates/machine-joint-kit/urdf/`. `gear_ratios` hat
 einen Eintrag je Motor; die Grenzen jedes Motorgelenks stehen in `[axis.j1]`, `[axis.j2]`, ... (`max_velocity_rad_s`,
 für ein Schiebegelenk `max_velocity_m_s`, und so weiter). Die Grenzen der URDF sind die Anschläge der Gelenke; ein
 Gelenk vom Typ continuous nimmt `min_angle_deg` und `max_angle_deg` aus `[joint]`. Ein Schiebegelenk läuft auf der
 `[screw]`, mit seinem Motor gekuppelt (seine Übersetzung muss 1 sein; Steifigkeit und Dämpfung des `[gearbox]` stehen
 für die Kupplung, sein Wirkungsgrad und seine Trägheit zählen nicht), mit der Reibung aus `[slide]` (die Pinole des
-SCARA). Eine fehlende Grenze der URDF ist 0; ein leerer Bereich wird abgelehnt. Mit einer Tabelle `[strain_wave]` bekommt
+SCARA); wo die Konfiguration eine `[rack]` hat, läuft es stattdessen auf einem Ritzel auf dieser Zahnstange hinter seinem
+eigenen Getriebe (Übersetzung aus `gear_ratios`, beliebig), wie die Zahnstangenachse, mit `rack-feed-force` und der
+Radialkraft des Ritzels auf die Getriebewelle (`rack.<k>.radial_load`, die Zahnkraft mal sqrt(1 + (tan 20° / cos
+beta)^2), gegen `ratings.shaft_max_radial_load_n`: `gearbox-radial-load`, wie bei den Zahnstangen der Maschinendateien).
+Eine fehlende Grenze der URDF ist 0; ein leerer Bereich wird abgelehnt. Mit einer Tabelle `[strain_wave]` bekommt
 das Getriebe jedes Drehgelenks die Lebensdauerprüfung.
 
 Jedes Gelenk hat seinen eigenen Motor, Antrieb und sein eigenes Getriebe, wo die Konfiguration es sagt: `[motor.<k>]`,
@@ -206,6 +211,41 @@ Last fest am Flansch. Der Karton des Palettierers pendelt mit 2,2 Hz (sqrt(k / (
 20 kg, 0,2 m).
 shortcut: Ohne Last tragen die Pendelgelenke eine eigene Einheitsträgheit, getrennt vom Arm.
 
+### Ein Roboter auf einer Schiene
+
+`arm-on-track` (`urdf/arm-on-track.urdf`, `config/arm-on-track.toml`) ist der Sechsachsroboter des Beispiels auf einem
+Schlitten, der 4 m entlang x auf zwei Schienen fährt: ein Schiebegelenk zuerst, dann die sechs des Arms. Der Schlitten
+(80 kg: Platte, Sockel, Führungswagen, Motor, Getriebe und Ritzel der Schiene) ist ein Körper der Kette wie jedes Glied,
+die Schiene also ein Gelenk mehr im Newton-Euler-Modell, und die Kopplung zwischen Schiene und Arm steckt in den
+Gleichungen der Kette: Der schwenkende Arm schiebt an der Schiene (Gelenk 2 mit 3 rad/s² bei quer zur Schiene
+ausgestrecktem Arm verlangt von der Schiene -3 · Σ m y = -43,5 N, Σ m y = 14,505 kg m von Arm und Last), und die
+Beschleunigung der Schiene erreicht jedes Gelenk des Arms (bei 2 m/s² hält Gelenk 2 -2 · 14,505 = -29,0 N m). Der Motor
+der Schiene ist der 1FK2105-4AF des Katalogs an einem S210, hinter einem Siemens NRB080 mit i = 10 (Katalogwerte, ohne
+sein Spiel für ein vorgespanntes Ritzel) und dem Ritzel der Zahnstangenachse mit 200 mm je Umdrehung; 130,5 kg fahren
+darauf mit bis zu 1 m/s und 3 m/s².
+
+`[track]` setzt den Schlitten auf vier Führungswagen, `block_spacing_m` (0,4 m) längs der Schienen auseinander und
+`rail_spacing_m` (0,5 m) quer. Ihre Last kommt aus der Reaktion der Kette an ihrem ersten Gelenk: was die Basis an die
+Kette gibt, F = dP/dt + Σ m g z und M_O = dH_O/dt + Σ c × m g z (die Änderungen von Impuls P und Drehimpuls H der Kette
+um den Ursprung der Basis als zentrale Differenzen), in das System des Schlittens zwischen den Wagen gebracht. Sein
+Schub längs der Schienen ist der der Zahnstange; den Rest teilen die Wagen als starre Lager, jeder F_z / 4 ± M_x / (2 w)
+∓ M_y / (2 l) auf seiner Schiene und F_y / 4 ± M_z / (2 l) quer dazu, seine Last die Summe beider Beträge (die
+äquivalente Last des Katalogs). Das Signal `axis.j1.guide_load` ist die Last des höchstbelasteten Wagens mal vier, damit
+die Führungsurteile, die eine Last gleich auf einen Satz von vier verteilen und den Satz als einen bewerten
+(`parts.axis = "<wagen>x4"`), diesen Wagen beurteilen: `guide-load` gegen `ratings.guide_max_load_n`, `guide-life` aus
+`ratings.guide_dynamic_load_rating_n` und der Geschwindigkeit der Schiene. Die Momente entscheiden die Größe: Auf dem
+Standardzyklus trägt der höchstbelastete Wagen in der Spitze 895 N gegen die 320 N, die ein Viertel des Gewichts gibt.
+Ausgeliefert: vier HIWIN HGH20CA (Katalog), 3580 N gegen 73360 N, eine Lebensdauer von 1,4 Millionen Stunden.
+
+Redundanz: sieben Gelenke für eine Werkzeuglage aus sechs. Im Werkzeugraum (`config/arm-on-track-tool.toml`) ist die
+Stellung der Schiene eine eigene Achse, `"j1"` vor denen der Lage in `kinematics.tool_axes`: sieben Achsen, die Schiene
+vorgegeben und die sechs Gelenke des Arms mit gedämpften kleinsten Quadraten für die Lage des Flanschs gelöst, bei der
+Schiene, wo sie steht. Eine Gerade einer Bahn bewegt Schiene und Flansch zusammen, jedes gerade; hält der Flansch,
+während die Schiene fährt, greift der Arm zurück. Der Standardzyklus in Gelenken greift bei 0,5 m links des Arms und legt
+bei 3,5 m rechts ab, der Arm schwenkt herum und greift aus, während die Schiene fährt; der Zyklus im Werkzeugraum greift
+und legt mit Geraden des Flanschs ab, die Schiene trägt ihn 3 m, während der Flansch von 0,9 m vor und 0,6 m links des
+Arms zu 0,7 m vor und 0,3 m rechts geht, 150 mm hoch und um 0,5 rad gedreht.
+
 ### Werkzeugraum
 
 Mit `kinematics.tool_space = true` sind die Achsen der Maschine die Lage des Flanschs, und jeder Planer, der Zyklus, die
@@ -231,7 +271,9 @@ Speicher.
   sin beta, L1 + L2 cos beta). Die Konditionszahl ist die von d(x, y)/d(q1, q2): unendlich beim gestreckten und beim
   gefalteten Arm (25 bei 11 Grad Ellbogen, die Grenze des Beispiels).
 - Jede andere Kette von 4 bis 7 Gelenken: Die Achsen sind die von x, y, z (m) und rx, ry, rz (rad), die
-  `kinematics.tool_axes` nennt, so viele wie Motoren oder einer weniger (ein redundanter Arm). Die Orientierung ist der
+  `kinematics.tool_axes` nennt, so viele wie Motoren oder einer weniger (ein redundanter Arm); `"j1"` davor macht die
+  Stellung des ersten Gelenks zu einer Achse (die einer Schiene: siehe
+  [Ein Roboter auf einer Schiene](#ein-roboter-auf-einer-schiene)). Die Orientierung ist der
   Drehvektor (Achse mal Winkel, im Basissystem) der Drehung gegen die Orientierung des Flanschs bei Gelenken null: Eine
   URDF, deren Flansch bei null nach unten zeigt, steht dort bei 0, nicht eine halbe Drehung gegen das Basissystem. Eine
   Lage bis auf 0,01 rad an einer halben Drehung dagegen wird abgelehnt (`error-arm-orientation-half-turn`): Dort springt
@@ -590,7 +632,12 @@ Grundstellung ohne Anteil im Nullraum der Jacobi-Matrix; ein bei null nach unten
 Drehung; der Flansch des Palettierers bleibt über die Bereiche seiner Gelenke waagerecht, und sein pendelnder Karton hat
 m g l (1 - cos 0,1) + k 0,1^2 / 2 = 0,79597 J um 0,1 rad gedreht und (m l^2 + I) / 2 = 0,775 J bei 1 rad/s, und hält
 verlustfrei die Energie; jedes Gelenk der Arme hat seinen eigenen Katalogmotor; ein zeitoptimaler Plan eines Kriechens
-wird jenseits von zehn Millionen Punkten abgelehnt.
+wird jenseits von zehn Millionen Punkten abgelehnt. Der Roboter auf seiner Schiene: Die Schiene schiebt mit -3 · 14,505 =
+-43,515 N, während Gelenk 2 den ausgestreckten Arm mit 3 rad/s² schwenkt, Gelenk 2 hält -2 · 14,505 = -29,01 N m, während
+die Schiene mit 2 m/s² beschleunigt, und die Schiene schiebt 130,5 · 2 = 261 N; die Führungswagen tragen 4 (1279,768 / 4 +
+142,2455 / 1) = 1848,75 N in Ruhe bei quer ausgestrecktem Arm und 2656,85 N beim Beschleunigen, die Welle des Ritzels
+261 · 1,071978 N; die Führungsurteile kippen an ihren Grenzen; im Werkzeugraum steht die Schiene auf 1e-12 m, wo die Lage
+es sagt, und Vorwärts der Inversen gibt die Lage auf 1e-9 entlang der ganzen Schiene zurück.
 Eine 1,6 m lange Spindel fällt bei `screw-speed` durch, und eine geforderte Lebensdauer über der der Spindel bei
 `screw-life`. Mit Verlusten: Getriebemoment und Vorschubkraft der Zahnstange sind die Kraft an der Last durch 0,97, die
 Lebensdauer der Spindel schrumpft bei 99 % Zuverlässigkeit um a1, und die Temperaturrückführung behält den Wirkungsgrad
@@ -645,6 +692,10 @@ abgelehnt. Die Datei besteht die Standard-Testreihe mit dem Zylinder in Ruhe.
   Gelenk), da der Antrieb ein `[motor]` und ein `[drive]` je Maschine liest; keine Getriebelebensdauer für Roboter mit
   verschiedenen Übersetzungen der Gelenke.
 - Die Steifigkeit einer Spindel wird für den ganzen Hub an der weichsten Stellung der Mutter genommen.
+- Der Roboter auf seiner Schiene: Der Schub der Zahnstange wird durch den Ursprung des Schlittens genommen (kein eigenes
+  Moment auf die Wagen), die Kreiselmomente der Motorläufer des Arms fehlen in der Führungslast, und die Wagen sind
+  starre Lager (keine Steifigkeit der Führung: der Schlitten kippt nicht auf ihnen); die Führungslast wird dem
+  zeitoptimalen Plan nicht mitgeteilt (`rigid_guide_loads`), der nur die Grenzen der Motoren und Getriebe einhält.
 - Ein Pneumatikzylinder ist keine Werkzeugachse und wirkt nicht auf die Achse zurück, die ihn trägt; sein Ventil
   schaltet auf und zu (kein Proportionalventil, kein servopneumatischer Lageregelkreis); ein Schlauch ist ein
   Durchflusselement, dessen Volumen in die Totvolumen geht; Festo druckt für die VUVG-Ventile kein C und b nach ISO 6358,

@@ -30,6 +30,10 @@ fn scara_passes_the_standard_suite() {
 fn palletiser_passes_the_standard_suite() {
     sim_core::testkit::run_standard_suite(&PALLETISER);
 }
+#[test]
+fn arm_on_track_passes_the_standard_suite() {
+    sim_core::testkit::run_standard_suite(&ARM_ON_TRACK);
+}
 
 /// Runs a machine's default cycle and judges it.
 fn judged(entry: &MachineEntry, cfg: &Config) -> (CycleLoad, Vec<Verdict>) {
@@ -42,7 +46,7 @@ fn judged(entry: &MachineEntry, cfg: &Config) -> (CycleLoad, Vec<Verdict>) {
 /// Each machine's default config passes every verdict of its own cycle: the defaults are a sized example.
 #[test]
 fn every_default_cycle_passes_its_verdicts() {
-    for entry in [&SCREW, &RACK, &LINEAR_MOTOR, &ROTARY_TABLE, &URDF_ARM, &SCARA, &PALLETISER] {
+    for entry in [&SCREW, &RACK, &LINEAR_MOTOR, &ROTARY_TABLE, &URDF_ARM, &SCARA, &PALLETISER, &ARM_ON_TRACK] {
         let (load, verdicts) = judged(entry, &entry.config());
         assert!(!load.tripped, "{}", entry.id);
         for v in verdicts {
@@ -443,12 +447,14 @@ const L2: f64 = 0.275;
 
 #[test]
 fn the_tool_configs_are_the_defaults_but_for_tool_space_start_cycle_and_settling() {
-    for (entry, text) in [(&SCARA, SCARA_TOOL_CONFIG), (&URDF_ARM, ARM_TOOL_CONFIG)] {
+    for (entry, text) in
+        [(&SCARA, SCARA_TOOL_CONFIG), (&URDF_ARM, ARM_TOOL_CONFIG), (&ARM_ON_TRACK, ARM_ON_TRACK_TOOL_CONFIG)]
+    {
         let (default, mut tool) = (entry.config(), tool_config(entry, text));
         assert!(tool.bool("kinematics.tool_space").unwrap());
         tool.set_text("kinematics.tool_space = false").unwrap();
-        // The settling tolerance in rad is the joints' in joint space, the orientation's in tool space.
-        for key in ["start.pose", "cycle", "ratings.settling_tolerance_rad"] {
+        // The settling tolerances are the joints' in joint space, the flange's place and orientation in tool space.
+        for key in ["start.pose", "cycle", "ratings.settling_tolerance_rad", "ratings.settling_tolerance_m"] {
             tool.set(key, default.get(key).unwrap().clone()).unwrap();
         }
         assert_eq!(tool.to_text().unwrap(), default.to_text().unwrap(), "{}", entry.id);
@@ -643,7 +649,9 @@ fn the_time_optimal_plan_keeps_the_scara_motors_within_their_rated_speed_along_a
 /// under the payload).
 #[test]
 fn the_tool_space_cycles_pass_their_verdicts() {
-    for (entry, text) in [(&SCARA, SCARA_TOOL_CONFIG), (&URDF_ARM, ARM_TOOL_CONFIG)] {
+    for (entry, text) in
+        [(&SCARA, SCARA_TOOL_CONFIG), (&URDF_ARM, ARM_TOOL_CONFIG), (&ARM_ON_TRACK, ARM_ON_TRACK_TOOL_CONFIG)]
+    {
         let cfg = tool_config(entry, text);
         let (load, verdicts) = judged(entry, &cfg);
         assert!(!load.tripped, "{}", entry.id);
@@ -1328,4 +1336,140 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
     assert!(integrator.abs() < 0.01 * expected, "the integrator carries {integrator} N m");
     let (ff, integrator) = cruise(false);
     assert!(ff == 0.0 && (integrator - expected).abs() < 0.02 * expected, "without: {integrator} N m");
+}
+
+// ---------------------------------------------------------------------------------------------
+// The arm on its track (`arm-on-track`): the track a joint of the chain, its rack, its guide blocks.
+
+/// The track's ratio, motor radians per metre: the gearbox's 10 over the pinion's pitch radius, 2 mm 30 teeth /
+/// (2 cos 19.5283 deg) = 31.831 mm (200 mm a turn).
+fn track_ratio() -> f64 {
+    10.0 / (0.002 * 30.0 / (2.0 * 19.5283f64.to_radians().cos()))
+}
+
+/// From urdf/arm-on-track.urdf with the arm turned to stretch along +y (joint 2 at pi/2, the others at 0): the moving
+/// masses' distances from the track's line, y, the arm's x of urdf/six-axis.urdf at zero: link2 12 kg at 0.15 m, link3
+/// 7 kg at 0.23, link4 4 kg at 0.60, link5 2 kg at 0.83, link6 1.5 kg at 0.89 and the 6 kg payload 0.05 m beyond the
+/// flange at 0.95; link1 and the carriage on the line. Sum m y = 1.8 + 1.61 + 2.4 + 1.66 + 1.335 + 5.7 = 14.505 kg m.
+const SUM_MY: f64 = 14.505;
+/// Their heights above the carriage's frame (the guide blocks' plane): the carriage 80 kg at 0.1, link1 18 kg at 0.70,
+/// link2 at 1.15, link3 at 1.53, links 4 to 6 and the payload (13.5 kg) at 1.57: sum m z = 8 + 12.6 + 13.8 + 10.71 +
+/// 21.195 = 66.305 kg m. All of it 80 + 18 + 12 + 7 + 4 + 2 + 1.5 + 6 = 130.5 kg.
+const SUM_MZ: f64 = 66.305;
+const TRACK_MASS: f64 = 130.5;
+
+fn sideways() -> [f64; 7] {
+    [1.0, std::f64::consts::FRAC_PI_2, 0.0, 0.0, 0.0, 0.0, 0.0]
+}
+
+/// The coupling, by hand, from the rigid model's torques at rest (no speed terms):
+/// - joint 2 (the arm's base) turns at 3 rad/s^2 with the arm stretched across the track: each mass moves along the
+///   track by -3 y (alpha z x y = -alpha y x), so the track's joint must push -3 * 14.505 = -43.515 N (motor 1: that over
+///   the ratio); nothing pushes along the track with joint 2 still;
+/// - the track accelerates at 2 m/s^2 under the same arm: joint 2 holds the masses beyond it against turning, the
+///   moment of m a x about the vertical, -2 * 14.505 = -29.01 N m (motor 2: over its 120), and the track pushes all
+///   130.5 kg by 261 N.
+#[test]
+fn the_track_and_the_arm_act_on_each_other_as_by_hand() {
+    let m = (ARM_ON_TRACK.build)(&rigid(&ARM_ON_TRACK)).unwrap();
+    let mut torque = [0.0; 7];
+    let mut acc = [0.0; 7];
+    acc[1] = 3.0;
+    m.feedforward_torque(&sideways(), &acc, &mut torque);
+    near(torque[0] * track_ratio(), -3.0 * SUM_MY, 1e-6, "track force while joint 2 swings");
+    acc = [0.0; 7];
+    m.feedforward_torque(&sideways(), &acc, &mut torque);
+    assert!(torque[0].abs() < 1e-9, "the arm at rest pushes on the track by {}", torque[0] * track_ratio());
+    acc[0] = 2.0;
+    m.feedforward_torque(&sideways(), &acc, &mut torque);
+    // Motor 1 turns too: its rotor, gearbox and pinion (1.7 + 0.359 + 1 / 100 kg cm^2) at 2 * track_ratio() rad/s^2.
+    let rotor = (1.7e-4 + 3.59e-5 + 1.0e-4 / 100.0) * 2.0 * track_ratio();
+    near((torque[0] - rotor) * track_ratio(), TRACK_MASS * 2.0, 1e-6, "track force");
+    near(torque[1] * 120.0, -2.0 * SUM_MY, 1e-6, "joint 2 while the track accelerates");
+}
+
+fn track_signal(m: &dyn Machine, pose: &[f64], acc: &[f64], id: &str) -> f64 {
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; pose.len()]);
+    m.equilibrium(pose, &mut state, &mut torque);
+    m.feedforward_torque(pose, acc, &mut torque);
+    let mut values = Vec::new();
+    m.signals(&state, &torque, &mut values);
+    values[m.signal_infos().iter().position(|s| s.id == id).unwrap_or_else(|| panic!("no {id}"))]
+}
+
+/// The guide blocks by hand, four of them 0.4 m apart along the rails and 0.5 m across, the arm stretched across the
+/// track with its payload. At rest they carry the weight, 130.5 * 9.80665 = 1279.768 N, a quarter each, and its moment
+/// about the track's line, M_x = 9.80665 * 14.505 = 142.2455 N m, as +-M_x / (2 * 0.5) on the two rails: the most
+/// loaded block 319.942 + 142.2455 = 462.188 N, reported times four, 1848.75 N. The track accelerating at 2 m/s^2 adds
+/// the inertia's moments about the carriage: pitch M_y = 2 * 66.305 = 132.61 N m on the blocks front and back, +-M_y /
+/// (2 * 0.4), and yaw M_z = -2 * 14.505 = -29.01 N m across the rails, +-M_z / (2 * 0.4); the push along the rails is
+/// the rack's: 462.188 + 165.7625 + 36.2625 = 664.213 N, times four 2656.85 N. The rack's teeth then carry the 261 N,
+/// and the pinion loads the gearbox's shaft with 261 sqrt(1 + (tan 20 deg / cos 19.5283 deg)^2) = 261 * 1.071978 =
+/// 279.786 N.
+#[test]
+fn the_guide_blocks_carry_the_weight_and_the_tilting_moments_by_hand() {
+    let m = (ARM_ON_TRACK.build)(&rigid(&ARM_ON_TRACK)).unwrap();
+    let g = 9.80665;
+    let block = |extra: f64| 4.0 * (TRACK_MASS * g / 4.0 + g * SUM_MY / (2.0 * 0.5) + extra);
+    let at_rest = track_signal(m.as_ref(), &sideways(), &[0.0; 7], "axis.j1.guide_load");
+    assert!((block(0.0) - 1848.75).abs() < 0.01);
+    near(at_rest, block(0.0), 1e-7, "guide load at rest");
+    let mut acc = [0.0; 7];
+    acc[0] = 2.0;
+    let pushed = track_signal(m.as_ref(), &sideways(), &acc, "axis.j1.guide_load");
+    let by_hand = block(2.0 * SUM_MZ / (2.0 * 0.4) + 2.0 * SUM_MY / (2.0 * 0.4));
+    assert!((by_hand - 2656.85).abs() < 0.01);
+    near(pushed, by_hand, 1e-6, "guide load accelerating");
+    let teeth = track_signal(m.as_ref(), &sideways(), &acc, "rack.1.feed_force");
+    near(teeth, TRACK_MASS * 2.0, 1e-6, "feed force");
+    let radial = track_signal(m.as_ref(), &sideways(), &acc, "rack.1.radial_load");
+    let apart = 20f64.to_radians().tan() / 19.5283f64.to_radians().cos();
+    assert!(((1.0 + apart * apart).sqrt() - 1.071978).abs() < 1e-6);
+    near(radial, teeth * 1.071978, 1e-6, "radial load");
+}
+
+/// The guide verdicts judge that load: a set rated just below the cycle's highest guide load fails "guide-load", just
+/// above passes; and a rated life just above what the blocks give fails "guide-life".
+#[test]
+fn the_guide_verdicts_judge_the_track_at_their_limits() {
+    let cfg = ARM_ON_TRACK.config();
+    let (load, verdicts) = judged(&ARM_ON_TRACK, &cfg);
+    let peak = load.guide_load.unwrap().0;
+    assert!(peak > 1800.0, "{peak} N: at least the weight and the moment of the stretched arm");
+    let life = value(&verdicts, "guide-life");
+    for (key, limit, check, fails) in [
+        ("ratings.guide_max_load_n", 0.999 * peak, "guide-load", true),
+        ("ratings.guide_max_load_n", 1.001 * peak, "guide-load", false),
+        ("ratings.required_life_h", 1.001 * life, "guide-life", true),
+    ] {
+        // The same pass, judged against the changed rating.
+        let mut cfg = cfg.clone();
+        cfg.set_text(&format!("{key} = {limit}")).unwrap();
+        let v = sim_components::analysis::verdicts(&cfg, &load).unwrap();
+        assert_eq!(v.iter().find(|v| v.check == check).unwrap().ok, !fails, "{check} at {limit}");
+    }
+}
+
+/// In tool space the track is a given axis beside the flange's pose: the inverse puts the track exactly where the tool
+/// pose says and solves the arm's six joints for the pose from there, and forward of it returns the pose within 1e-9,
+/// at poses along the whole track; the flange held while only the track moves needs the arm to move back by as much.
+#[test]
+fn the_track_is_a_given_axis_beside_the_tool_pose() {
+    let m = (ARM_ON_TRACK.build)(&tool_config(&ARM_ON_TRACK, ARM_ON_TRACK_TOOL_CONFIG)).unwrap();
+    let down = std::f64::consts::FRAC_PI_2;
+    let (mut q, mut back) = ([0.0; 7], [0.0; 7]);
+    for track in [0.3, 1.5, 2.8, 3.7] {
+        let pose = [track, track + 0.9, 0.3, 0.8, 0.1, down, -0.2];
+        assert_eq!(m.unreachable(&pose, 0.0), None, "{pose:?}");
+        m.inverse(&pose, &mut q);
+        assert!((q[0] / track_ratio() - track).abs() < 1e-12, "track at {} for {track}", q[0] / track_ratio());
+        m.forward(&q, &mut back);
+        assert!(pose.iter().zip(&back).all(|(a, b)| (a - b).abs() < 1e-9), "{pose:?} came back as {back:?}");
+    }
+    // The same flange from the track 0.2 m further on: the arm's base joint turns to reach back.
+    let (mut here, mut there) = ([0.0; 7], [0.0; 7]);
+    m.inverse(&[1.5, 2.4, 0.3, 0.8, 0.0, down, 0.0], &mut here);
+    m.inverse(&[1.7, 2.4, 0.3, 0.8, 0.0, down, 0.0], &mut there);
+    assert!((there[0] - here[0] - 0.2 * track_ratio()).abs() < 1e-9 && (there[1] - here[1]).abs() > 1.0);
+    sim_core::testkit::static_hold(m.as_ref());
 }

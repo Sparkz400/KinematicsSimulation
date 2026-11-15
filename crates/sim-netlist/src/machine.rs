@@ -179,21 +179,8 @@ struct Direct {
     /// `ratings.required_life_h` of its motor, where set.
     required_life: Option<f64>,
     /// `ratings.shaft_max_radial_load_n` of its motor, where set: what a rack's pinion may load the gearbox's output
-    /// shaft with sideways (`pinion_radial_load`).
+    /// shaft with sideways (`RackPinion::radial_load`).
     radial_limit: Option<f64>,
-}
-
-/// The standard pressure angle of a rack and pinion's teeth (DIN 867), in the normal section.
-/// shortcut: every rack is taken at 20 degrees; give `[rack]` a pressure angle if a file uses another.
-const RACK_PRESSURE_ANGLE_DEG: f64 = 20.0;
-
-/// The radial load the pinion puts on the gearbox's output shaft for the force `tooth_force` on its teeth: the tooth
-/// force itself, tangential to the pinion and so across the shaft, and the force that pushes pinion and rack apart,
-/// F tan(alpha_n) / cos(beta), at right angles to it: |F| sqrt(1 + (tan(alpha_n) / cos(beta))^2). The axial force of a
-/// helical pinion, F tan(beta), and the tilt it puts on the shaft are left out.
-fn pinion_radial_load(rack: &RackPinion, tooth_force: f64) -> f64 {
-    let apart = RACK_PRESSURE_ANGLE_DEG.to_radians().tan() / rack.helix_angle.cos();
-    tooth_force.abs() * (1.0 + apart * apart).sqrt()
 }
 
 enum DirectKind {
@@ -3116,7 +3103,7 @@ impl Machine for ConfigMachine {
                 DirectKind::Screw(screw) => screw.signals(speed, force, out),
                 DirectKind::Rack(rack) => {
                     let teeth = RackPinion::feed_force(force, speed, self.extra_efficiency[kk]);
-                    out.extend([teeth, pinion_radial_load(rack, teeth)]);
+                    out.extend([teeth, rack.radial_load(teeth)]);
                 }
                 DirectKind::Rotary(Some(gear)) => out.push(gear.signal(force, speed * self.ratio[kk])),
                 _ => {}

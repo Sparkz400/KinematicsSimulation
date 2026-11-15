@@ -1147,6 +1147,25 @@ The links' modes (the upper arm's bend at 88 Hz) lie well above the gears' modes
 
 The joints' units are their own (`JointSpec::unit`), no longer the axes': a joint's position signal, its force's unit and whether it has a gearbox output torque follow the joint. The time-optimal planner reads the motors' limits through `feedforward_torque_moving`, so along a line of the tool it slows where a motor reaches its rated speed (on the SCARA's example line, joint 1 near the middle, 307.5 of 314.2 rad/s). Before timing a path as fast as the motors allow, `Controller::plan_path` checks the path as planned within the axis limits: a pose on it the machine cannot go to (a singularity, where the motors would have to turn infinitely fast) is refused with `error-path-range` at once, where the time-optimal timing would slow to a standstill there.
 
+## Arm on a track
+
+Source: [`machine-joint-kit/src/arm.rs`](../crates/machine-joint-kit/src/arm.rs) (`Arm::guide_load`, the rack in `build`), the tool axis in [`tool.rs`](../crates/machine-joint-kit/src/tool.rs); the machine `arm-on-track`, [`urdf/arm-on-track.urdf`](../crates/machine-joint-kit/urdf/arm-on-track.urdf), [`config/arm-on-track.toml`](../crates/machine-joint-kit/config/arm-on-track.toml). The six-axis arm on a carriage whose prismatic joint along x comes first in the URDF chain: the track is a joint of the Newton-Euler model like the arm's, so M(q) couples them both ways (the arm's swing in the track's force, the track's acceleration in every arm joint's torque) with nothing added. The track's joint runs on a pinion and rack behind its gearbox (`[rack]`, the rack axis's `transmission::RackPinion` as a converter), its tooth force `rack.1.feed_force` and the pinion's radial load on the gearbox shaft `rack.1.radial_load` = |F| √(1 + (tan 20° / cos β)²) (`RackPinion::radial_load`, as the machine files' racks).
+
+**Guide blocks** (`[track]`: `block_spacing_m` l, `rail_spacing_m` w; four blocks at (±l/2, ±w/2) of the first joint's frame, its origin between them):
+
+```text
+F   = dP/dt + Σ_k m_k g ẑ                    the base's force on the chain (P its momentum; payload with the last body)
+M_O = dH_O/dt + Σ_k c_k × m_k g ẑ            its moment about the base's origin (H_O the angular momentum about it)
+M   = M_O − o × F,   (F, M) into the carriage's frame (o, R its origin and rotation)
+R_i = F_z/4 + s_y M_x/(2w) − s_x M_y/(2l)     on the rail, block at (s_x l/2, s_y w/2)
+T_i = F_y/4 + s_x M_z/(2l)                    across it
+P_i = |R_i| + |T_i|,   axis.j1.guide_load = 4 max_i P_i
+```
+
+dP/dt and dH/dt by central differences over ±1 µs along q̇ and q̈ (as the link bending's loads); F_x is the rack's. Four times the most loaded block, because the guide verdicts share a load equally among a set of `catalog::GUIDE_CARRIAGES` = 4 and rate the set (`guide-load` against `ratings.guide_max_load_n`, `guide-life` (C/P)³ 50 km over the track's mean speed). Shortcuts: the rack's force through o, the arm's rotors' gyroscopic moments left out, the blocks rigid and statically shared; `rigid_guide_loads` is not given, so the time-optimal plan does not keep the guide rating.
+
+**Tool space with the track** (`kinematics.tool_axes = ["j1", "x", …, "rz"]`, `tool::FIRST_JOINT`): the first joint's position is a tool axis of its own ahead of the pose's, its row of the Jacobian (1, 0, …, 0) unweighted, so seven axes for seven joints: not redundant, the track given and the arm solved by the damped least squares above with it where it is. A line moves the track and the flange straight together.
+
 ## Compliant base
 
 Source: [`sim-components/src/base.rs`](../crates/sim-components/src/base.rs). With `effects.base_compliance` every machine and machine file stands on a base that gives way: a rigid body on springs in up to six directions, translation along x, y, z and a small tilt about x, y, z through `base.pivot_m`, in the frame of the tool pose (x, y, z of the tool; the slides' x along their axis). Each direction with a stiffness above 0 is a state d and its rate after the machine's own:
@@ -1548,7 +1567,7 @@ Notes:
 
   One bearing per pulley shaft takes all of the radial load (a config can fold a pair into one C, as the EXCT-30's does); no axial load. The bearing lives are multiplied by the life factor a1 of ISO 281 for `ratings.bearing_reliability_percent` R: a1 = 0.95 · (ln(100 / R) / ln(100 / 90))^(2/3) + 0.05, the Weibull form behind the standard's table (1 at 90 %, 0.64 at 95 %, 0.25 at 99 %); R from 90 to 99.95 %, others refused by `verdicts`. The guide life is not, its makers use factors of their own. a_ISO is on the pulley shaft bearing only: Siemens' figures for the planet bearings (20000 h) and the motor bearings (25000 h) are for their own lubrication already. The motors' own bearings have no figure in any shipped config: the belt does not pull on a motor shaft there (a gearbox, or Festo's drive head with a coupling, is between). The gearing's figure appears on the delta's first arm only (about 11600 h: its NRB080 runs up to 134 N m against 120 N m rated); the belt machines' cycles stay below M2N.
 - The belt's teeth (`belt_tooth_utilisation`): no belt maker publishes a life in hours or load cycles, or a Wöhler curve, for polyurethane steel-cord belts (Megadyne's MEGALINEAR handbook, Gates' polyurethane belt catalogue and BRECO's data sheets were read; Optibelt's could not be reached). They size by the tooth load and the cord tension with a service factor, so this is a rating, not a life: per motor the highest over the cycle of τ_out / r · c_s / (F_spec(n) · b / 10 · min(z_m, 12)), with r = `geometry.pulley_radius_m`, c_s = `ratings.belt_service_factor`, F_spec the allowed specific tooth load at the pulley's speed n (`ratings.belt_tooth_load_n_cm` over `belt_tooth_load_rpm`, interpolated, held beyond the ends; each speed band taken at its upper speed), b = `ratings.belt_width_mm`, z_m = `ratings.belt_teeth_in_mesh`. Megadyne's method (handbook 02.2026, page 9). The cords are judged by `belt-tension`.
-- The guide life is the catalogue formula and nothing more: no load factors for shock, temperature or hardness, no moments on single blocks, the mean taken over time and not over distance, and a guide load that is itself an estimate from the rigid model. It is not validated.
+- The guide life is the catalogue formula and nothing more: no load factors for shock, temperature or hardness, no moments on single blocks (but on the [arm on a track](#arm-on-a-track), which reports its most loaded block), the mean taken over time and not over distance, and a guide load that is itself an estimate from the rigid model. It is not validated.
 
 ## Verdicts
 

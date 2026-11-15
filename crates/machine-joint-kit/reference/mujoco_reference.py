@@ -30,8 +30,16 @@ G = 9.80665  # the crate's (lib.rs)
 STATES = 60
 SEED = 20261114
 
-# URDF file and the config with its arm.joint_coupling ("" for one motor per joint).
-ARMS = [("six-axis", ""), ("scara", ""), ("five-axis", ""), ("seven-axis", ""), ("palletiser", "palletiser.toml")]
+# URDF file and the config with its arm.joint_coupling ("" for one motor per joint). New files go at the end: the
+# random states are drawn in this order from one generator, so that the files before keep theirs.
+ARMS = [
+    ("six-axis", ""),
+    ("scara", ""),
+    ("five-axis", ""),
+    ("seven-axis", ""),
+    ("palletiser", "palletiser.toml"),
+    ("arm-on-track", ""),
+]
 
 # Keep the fixed flange frame as a body of its own (MuJoCo fuses fixed links by default), every inertia as written.
 COMPILER = '<mujoco><compiler fusestatic="false" discardvisual="true" balanceinertia="false"/></mujoco>'

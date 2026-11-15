@@ -6,7 +6,7 @@
 //! M q'' + h alone, through the motors' ratios and the palletiser's `arm.joint_coupling`), and the flange from the
 //! URDF's chain (`rigid::Chain::tip`). Payload, swing, bending links and base compliance off: none is in the reference.
 
-use machine_joint_kit::{ARM5_TOOL_CONFIG, ARM7_TOOL_CONFIG, PALLETISER, SCARA, URDF_ARM};
+use machine_joint_kit::{ARM_ON_TRACK, ARM5_TOOL_CONFIG, ARM7_TOOL_CONFIG, PALLETISER, SCARA, URDF_ARM};
 use sim_components::load_config;
 use sim_components::rigid::Chain;
 use sim_core::{Config, Machine};
@@ -97,6 +97,7 @@ fn machine_entry(name: &str) -> &'static sim_core::MachineEntry {
     match name {
         "scara" => &SCARA,
         "palletiser" => &PALLETISER,
+        "arm-on-track" => &ARM_ON_TRACK,
         _ => &URDF_ARM,
     }
 }
@@ -138,6 +139,18 @@ fn seven_axis_arm_matches_mujoco() {
         mechanism_only(load_config(&URDF_ARM, ARM7_TOOL_CONFIG).unwrap()),
         include_str!("../urdf/seven-axis.urdf"),
         include_str!("../reference/seven-axis.csv"),
+    );
+}
+
+/// The track's prismatic joint in one chain with the arm: its force carries the arm's reaction along the rails, and its
+/// acceleration reaches every joint of the arm. Through the rack's ratio (motor radians per metre).
+#[test]
+fn arm_on_track_matches_mujoco() {
+    compare(
+        "arm-on-track",
+        mechanism_only(ARM_ON_TRACK.config()),
+        include_str!("../urdf/arm-on-track.urdf"),
+        include_str!("../reference/arm-on-track.csv"),
     );
 }
 

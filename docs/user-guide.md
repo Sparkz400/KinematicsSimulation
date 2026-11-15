@@ -919,6 +919,26 @@ sim-cli verdicts urdf-arm --config crates/machine-joint-kit/config/arm-tool.toml
 
 Both pass every check. The SCARA picks 100 mm down, carries the part 500 mm across at x = 0.4 m turning it by 1.5 rad, and back: 2.542 s, motor 1 at 5 % of its peak and 288 of its 314 rad/s (the arm swings fastest where the line passes nearest the base), settling 0.04 mm. The arm does the same with its flange pointing down all along (ry = π/2): 3.774 s, motor 2 at 23 % of its peak, settling 4.0 mm of the 5 the config allows: under the 6 kg payload the gears twist and the flange rests 4 mm below where the encoders put it (0.2 mm in the rigid model, `--set effects.joint_elasticity=false`). A path in tool space is written `line,x,y,z,c` (or six numbers on the arm); `--time-optimal` times it as fast as the motors allow through the inverse kinematics: the SCARA's line across takes 1.542 s instead of 1.750 s, motor 1 at 307.5 of its 314.2 rad/s. A target the arm cannot reach is refused with the reason (`The arm cannot reach the target.`), as is one too near a singularity (the SCARA's stretched arm: `workspace.max_condition_number`, 25), and a path through one. The SCARA's elbow is `kinematics.elbow` ("right" or "left"); the arm keeps the branch of `kinematics.home_joints` (shoulder, elbow and wrist as there).
 
+### Six-axis arm on a linear track
+
+`arm-on-track` is the six-axis arm on an 80 kg carriage that runs 4 m on a floor track, driven through a rack and pinion
+by a 1FK2105-4AF behind a planetary gearbox of ratio 10: a seventh axis, the first, in metres. Track and arm are one
+chain, so the arm's swing pushes on the track and the track's acceleration loads every joint of the arm; the carriage's
+four guide blocks carry the arm's weight and its tilting moments, and `guide-load` and `guide-life` judge the most loaded
+block ([mechanisms](mechanisms.md#an-arm-on-a-track)).
+
+```bash
+sim-cli verdicts arm-on-track
+sim-cli verdicts arm-on-track --config crates/machine-joint-kit/config/arm-on-track-tool.toml
+```
+
+The default cycle picks at 0.5 m on the arm's left and places at 3.5 m on its right, the arm swinging round while the
+track travels, and back empty: 7.27 s, every check passes; the track's motor at 15 % of its peak torque and its rated
+3000 r/min, the rack's teeth at 583 of their 2400 N, the most loaded guide block at 895 N (3580 N for the set of four,
+against 320 N a block from the weight alone). In tool space the axes are the track's position beside the flange's
+x, y, z, rx, ry, rz (`kinematics.tool_axes = ["j1", "x", ...]`): seven axes for seven joints, the track given and the arm
+solved for the pose, so a line moves the track and the flange straight together.
+
 ## Size a press, a rotary knife or a flying saw
 
 `machine-crank-cam` has the crank and cam cases of a servo sizing tool ([mechanisms](mechanisms.md#crank-and-cam-mechanisms-machine-crank-cam)).

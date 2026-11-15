@@ -8,6 +8,8 @@
 //! - `urdf-arm`: a serial six-axis arm whose bodies come from a URDF file (`arm`).
 //! - `scara`: a SCARA arm from a URDF file, its vertical joint on a ball screw (`arm`).
 //! - `palletiser`: a four-axis palletiser from a URDF file, a parallelogram keeping its flange level (`arm`).
+//! - `arm-on-track`: the six-axis arm on a carriage that runs on a floor track, a seventh joint driven by a rack and
+//!   pinion, its guide blocks loaded by the arm's reaction (`arm`).
 //!
 //! Each has its own default config in `config/`: `config/common.toml` with what all share, then the machine's file.
 
@@ -47,6 +49,7 @@ entry!(ROTARY_TABLE, "rotary-table", "table.toml", table::build);
 entry!(URDF_ARM, "urdf-arm", "arm.toml", arm::build);
 entry!(SCARA, "scara", "scara.toml", arm::build);
 entry!(PALLETISER, "palletiser", "palletiser.toml", arm::build);
+entry!(ARM_ON_TRACK, "arm-on-track", "arm-on-track.toml", arm::build);
 
 /// The full configs of the SCARA and the six-axis arm in tool space (`kinematics.tool_space = true`), with a cycle of
 /// straight lines of the tool: for `--config`.
@@ -56,6 +59,8 @@ pub const ARM_TOOL_CONFIG: &str = include_str!("../config/arm-tool.toml");
 /// `urdf/seven-axis.urdf`), for `--config` with the `urdf-arm` machine.
 pub const ARM5_TOOL_CONFIG: &str = include_str!("../config/arm5-tool.toml");
 pub const ARM7_TOOL_CONFIG: &str = include_str!("../config/arm7-tool.toml");
+/// The six-axis arm on its track in tool space: the track's position beside the flange's pose.
+pub const ARM_ON_TRACK_TOOL_CONFIG: &str = include_str!("../config/arm-on-track-tool.toml");
 
 const G: f64 = 9.80665;
 
@@ -112,7 +117,7 @@ fn suite_configs(entry: &MachineEntry) -> Vec<Config> {
             cfg.set_text(&format!("effects.payload = {payload}")).unwrap();
             cfg.set_text(&format!("effects.part_heating = {}", elastic && payload)).unwrap();
             cfg.set_text(&format!("effects.thermal_feedback = {}", elastic && payload)).unwrap();
-            if entry.id == "urdf-arm" || entry.id == "palletiser" {
+            if ["urdf-arm", "palletiser", "arm-on-track"].contains(&entry.id) {
                 cfg.set_text("effects.gravity = false").unwrap();
             }
             cfg
