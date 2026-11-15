@@ -510,8 +510,9 @@ positiv hebt die Spitze). Jede Kurbel ist ein Gelenk von `chain::JointMachine` m
 - Vorwärtskinematik nach Newton über die Bewegung der Plattform, wie beim Hexapod.
 - Jacobi-Matrix: A ξ = diag(u_i · t_i) θ', die Zeilen von A (u_i, b_i × u_i), u_i die Richtung der Stange und t_i die
   Tangente der Kurbelspitze; u_i · t_i ist der Hebelarm des Motors. Die Konditionszahl der inversen Jacobi-Matrix
-  (Drehungen mit dem Plattformradius gewichtet) zeigen die Arbeitsraumkarte und das Signal `kinematics.condition`; im
-  Totpunkt ist sie unendlich.
+  (Drehungen mit dem Plattformradius gewichtet) zeigen die Arbeitsraumkarte und das Signal `kinematics.condition`; sie wächst
+  ohne Grenze, wenn sich eine Kurbel ihrem Totpunkt nähert (alle sechs zugleich dort skalieren ihre Zeilen gleich und
+  lassen sie unverändert: diese Lage lehnt der Abstand vom Totpunkt selbst ab).
 - Abgelehnt: eine Stange, die nicht hinreicht (`error-target-out-of-range`), eine Kurbel näher an ihrem Totpunkt (die
   Stange in der Ebene von Kurbel und Achse, der Hebelarm null) als `workspace.min_dead_centre_margin_deg`
   (`error-rss-dead-centre`), ein Kugelgelenk über `workspace.crank_joint_max_angle_deg` (die Stange aus der Kurbelebene)

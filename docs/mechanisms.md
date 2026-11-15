@@ -483,7 +483,8 @@ pickers. See the [model reference](model-reference.md#hexapod-with-rotary-actuat
 - Forward kinematics by Newton's method on the platform's twist from the centre of the tool's box, as on the hexapod.
 - Jacobian: A ξ = diag(u_i · t_i) θ', A's rows (u_i, b_i × u_i), u_i the rod's direction and t_i the crank tip's
   tangent; u_i · t_i is the motor's torque arm. The condition number of the inverse Jacobian (turns weighed by the
-  platform radius) is the workspace map's and the signal `kinematics.condition`; it is infinite at a dead centre.
+  platform radius) is the workspace map's and the signal `kinematics.condition`; it grows without bound as one crank nears its dead centre (all six there at once
+  scale its rows alike and leave it as it is: the dead centre's own margin refuses that pose).
 - Refused: a rod that cannot reach (`error-target-out-of-range`), a crank nearer its dead centre (the rod in the plane
   of the crank and its axis, the torque arm zero) than `workspace.min_dead_centre_margin_deg` (`error-rss-dead-centre`),
   a ball joint beyond `workspace.crank_joint_max_angle_deg` (the rod out of the crank's plane) or

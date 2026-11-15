@@ -337,7 +337,8 @@ impl Geometry {
     }
 
     /// The condition number of the inverse Jacobian with the turns weighed by the platform radius (the platform
-    /// joints' speed for w); infinite out of reach and at a dead centre.
+    /// joints' speed for w); infinite out of reach and where one crank is at its dead centre (all six at once scale the
+    /// rows alike, which the dead centre's margin in `unreachable` catches).
     pub fn condition(&self, tool: &[f64]) -> f64 {
         let Some(legs) = self.legs(tool) else { return f64::INFINITY };
         let mut j = Self::inverse_jacobian(&legs);
