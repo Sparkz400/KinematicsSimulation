@@ -880,7 +880,7 @@ in sim-components):
 | Viscous | 779 ± 23 N s/m | 1222 ± 96 N s/m | (one speed: in the Coulomb value) | 792, 876 |
 | Held at rest after the last move | −242 ± 6 N | +230 ± 7 N | +354 ± 1 N | −155, +209, −178 N |
 | Breakaway (1 to 5 % of top speed, slowing) | (too few rows) | 255 ± 1 N | (too few rows) | (−), 291 |
-| Presliding stiffness σ, from the turn at reversals | 7.0e6 N/m (one reversal at 1 m/s², crossed in 2 ms) | 3.1e7 ± 0.6e7 N/m (four) | 1.9e7 N/m (one) | 2.2e7, 2.0e7, 2.4e7 |
+| Presliding stiffness σ, from the turn at reversals | (one reversal at 1 m/s², crossed in 2 ms: no row; 7.0e6 N/m from it alone) | 3.1e7 ± 0.6e7 N/m (four) | (one reversal: no row; 1.9e7 N/m from it alone) | (−), 2.0e7, (−) |
 
 - **Guides against nut.** The motor torque cannot tell them apart. The source's nut force sensors (`F_nut_sum`, now a
   column of the CSV) can: regressed on the S-profile, the torque is 0.00829 N m per N of nut force plus 1.48 N m of

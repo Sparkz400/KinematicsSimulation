@@ -2091,7 +2091,26 @@ fn a_trace_is_replayed_and_fitted_in_the_app(entry: &'static MachineEntry) {
         .iter()
         .map(|q| model.tr.tr(&format!("ui-trace-{}", q.replace('_', "-"))).to_string())
         .collect();
-    let own_rows = fitted.iter().skip(1).filter(|r| !link_labels.iter().any(|l| r[0].ends_with(l.as_str()))).count();
+    // After an axis's four values the friction beyond its sliding level where the trace tells it, as on the command
+    // line: each at most once per axis, a number and its error.
+    let detail_labels: Vec<String> = sim_components::identify::FRICTION_DETAILS
+        .iter()
+        .map(|q| model.tr.tr(&format!("ui-trace-{}", q.replace('_', "-"))).to_string())
+        .collect();
+    let is_detail = |r: &Vec<String>| detail_labels.iter().any(|l| r[0].ends_with(l.as_str()));
+    for detail in fitted.iter().skip(1).filter(|r| is_detail(r)) {
+        assert!(
+            per_axis && number(&detail[2]).is_finite() && number(&detail[3]).is_finite(),
+            "{}: {detail:?}",
+            entry.id
+        );
+        assert_eq!(fitted.iter().filter(|r| r[0] == detail[0]).count(), 1, "{}: {detail:?}", entry.id);
+    }
+    let own_rows = fitted
+        .iter()
+        .skip(1)
+        .filter(|r| !link_labels.iter().any(|l| r[0].ends_with(l.as_str())) && !is_detail(r))
+        .count();
     assert_eq!(own_rows, 4 * owners.len(), "{}: {fitted:?}", entry.id);
     for owner in &owners {
         for quantity in quantities {

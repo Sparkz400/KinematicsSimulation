@@ -165,7 +165,10 @@ pub const RUN_UP_S: f64 = 0.25;
 /// recording cut out of a longer motion replays without the jolt of a start from rest. The run-up is a smootherstep of
 /// the speed (rest to that speed, zero acceleration at both ends, `RUN_UP_S` or more, so that its acceleration stays
 /// within a quarter of each axis's limit), the way covered half the speed times its time; the pose it starts at has to
-/// be within the axes' ranges. A trace that starts at rest runs up by holding still.
+/// be within the axes' ranges; the run-up starts where the machine's setpoint stands at rest there (its motors, a sag
+/// away from the tool) and takes that difference up on the way. A trace that starts at rest where the config's own
+/// machine stands at rest (a trace written by a run of the config) is replayed from that state with no run-up, the
+/// first row the machine at rest, as before the run-up existed: it replays onto itself to rounding.
 ///
 /// The setpoints become tool poses (the machine's forward transformation) and run as `Command::Trajectory`,
 /// so the simulator's own controller makes the speed and torque feedforward from them, as it does for any
@@ -196,26 +199,43 @@ pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace
     let ahead = pose_of(&trace.motors.iter().map(|m| m.setpoint[0] + 1e-3 * m.speed[0]).collect::<Vec<f64>>());
     let speed: Vec<f64> = ahead.iter().zip(&start).map(|(a, s)| (a - s) / 1e-3).collect();
     let step = trace.time[1] - trace.time[0];
+    // A trace that starts at rest where the config's own machine stands at rest (its drives' setpoints those of the
+    // first row: a trace written by a run of this config) is replayed from that very state, with no run-up: so it
+    // replays onto itself to rounding, where the gear mesh sticks at rest too (the arm, the spatial cable robot).
+    let at_rest = trace.motors.iter().all(|m| m.speed[0].abs() <= 1e-9);
+    let own = Sim::new(entry, &cfg)?;
+    let same_start =
+        own.control.drives.iter().zip(&first).all(|(d, s)| (d.pos_set - s).abs() <= 1e-9 * s.abs().max(1.0));
     // Peak acceleration of the smootherstep: 15/8 of speed over time.
     let long =
         machine.axes().iter().zip(&speed).map(|(a, v)| 1.875 * v.abs() / (0.25 * a.max_acc)).fold(RUN_UP_S, f64::max);
-    let run_up = (long / step).ceil() as usize + 1;
-    let span = (run_up - 1) as f64 * step;
+    let run_up = if at_rest && same_start { 0 } else { (long / step).ceil() as usize + 1 };
+    let span = run_up.saturating_sub(1) as f64 * step;
     let from: Vec<f64> = start.iter().zip(&speed).map(|(p, v)| p - 0.5 * v * span).collect();
-    cfg.set("start.pose", toml::Value::Array(from.iter().map(|p| toml::Value::Float(*p)).collect()))?;
-    let mut sim = Sim::new(entry, &cfg)?;
+    let mut sim = if run_up == 0 {
+        own
+    } else {
+        cfg.set("start.pose", toml::Value::Array(from.iter().map(|p| toml::Value::Float(*p)).collect()))?;
+        Sim::new(entry, &cfg)?
+    };
+    // The setpoint of a machine at rest is where its motors stand, some hundredths of a millimetre from the tool where
+    // gravity twists its gears or stretches its belts or cables (`Controller::command`): the run-up starts there and
+    // takes the difference up along a smoothstep, so the setpoint does not step.
+    let rest = sim.control.planned_pos().to_vec();
     // Smootherstep of the speed, integrated: s(u) = 2.5 u^4 - 3 u^5 + u^6, 1/2 at u = 1.
     let mut points: Vec<(f64, Vec<f64>)> = (0..run_up)
         .map(|k| {
             let u = k as f64 / (run_up - 1) as f64;
             let way = span * (2.5 * u.powi(4) - 3.0 * u.powi(5) + u.powi(6));
-            (k as f64 * step, from.iter().zip(&speed).map(|(p, v)| p + v * way).collect())
+            let blend = 1.0 - u * u * u * (10.0 - 15.0 * u + 6.0 * u * u);
+            (k as f64 * step, (0..from.len()).map(|i| from[i] + speed[i] * way + (rest[i] - from[i]) * blend).collect())
         })
         .collect();
     // A row holds the setpoint the drive worked with up to the row's time (a run writes a row before it
     // computes the step at that time). So each row is commanded one row earlier: the first row, the start, ends the
-    // run-up, and row i follows at the run-up's end plus the time from row 1 to row i + 1.
-    let offset = span + step;
+    // run-up, and row i follows at the run-up's end plus the time from row 1 to row i + 1. Without a run-up, row 1 is
+    // commanded at once and row 0 is the machine at rest.
+    let offset = if run_up == 0 { 0.0 } else { span + step };
     points.extend((1..rows).map(|i| {
         let setpoint: Vec<f64> = trace.motors.iter().map(|m| m.setpoint[i]).collect();
         (offset + trace.time[i] - trace.time[1], pose_of(&setpoint))
