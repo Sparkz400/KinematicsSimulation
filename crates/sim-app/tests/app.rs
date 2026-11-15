@@ -47,7 +47,8 @@ macro_rules! per_machine {
     machine_22 22,
     machine_23 23,
     machine_24 24,
-    machine_25 25);
+    machine_25 25,
+    machine_26 26);
     };
     ($check:ident: $($test:ident $place:literal),*) => {
         mod $check {
@@ -64,7 +65,7 @@ macro_rules! per_machine {
 /// Every registered machine has its tests from `per_machine!`.
 #[test]
 fn every_machine_has_its_tests() {
-    assert_eq!(MACHINES.len(), 26, "give per_machine! a test for each machine");
+    assert_eq!(MACHINES.len(), 27, "give per_machine! a test for each machine");
 }
 
 /// Polls until the simulation thread has delivered samples and a scene.
@@ -3321,9 +3322,9 @@ fn the_thermal_belt_and_comparison_views_show_the_simulation(entry: &'static Mac
             );
         }
     }
-    // The friction the machine has: of its guides, of its arms' joints, or of the winches of a platform in cables
-    // (since 13 November 2026).
-    let effect = ["guide_friction", "joint_friction", "winch_friction"]
+    // The friction the machine has: of its guides, of its arms' joints, of the winches of a platform in cables (since 13
+    // November 2026), or of the dancer a web runs over.
+    let effect = ["guide_friction", "joint_friction", "winch_friction", "dancer_friction"]
         .into_iter()
         .find(|e| model.config.get(&format!("effects.{e}")).is_ok())
         .unwrap();

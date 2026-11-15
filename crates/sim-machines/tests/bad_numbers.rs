@@ -258,6 +258,7 @@ default_config! {
     default_wafer_handler: "wafer-handler";
     default_toggle_press: "toggle-press";
     default_arm_on_track: "arm-on-track";
+    default_winder: "winder";
 }
 
 shipped_config! {

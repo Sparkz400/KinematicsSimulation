@@ -19,6 +19,7 @@ Konfigurationsschlüssel sind englische Bezeichner und in beiden Sprachen gleich
 - [R-Theta-Z-Arm mit Bändern (wafer-handler)](#r-theta-z-arm-mit-bändern-wafer-handler)
 - [Parallelkinematiken: Hexapod und Seilroboter](#parallelkinematiken-hexapod-und-seilroboter)
 - [Pneumatikzylinder neben Servoachsen](#pneumatikzylinder-neben-servoachsen-machinecylinder)
+- [Auf- und Abwickler mit Tänzer](#auf--und-abwickler-mit-tänzer-machine-winder)
 - [Was von Hand nachgerechnet ist](#was-von-hand-nachgerechnet-ist)
 - [Grenzen](#grenzen)
 
@@ -726,6 +727,61 @@ Bewegungsenergie beim Eintritt in die Dämpfung gegen ihren Nennwert, die Geschw
 Einschwingen, das Lastverhältnis, die Luft je Doppelhub und ihre Energie am Kompressor, die Druck- und
 Temperaturverläufe beider Kammern.
 
+## Auf- und Abwickler mit Tänzer (`machine-winder`)
+
+Die klassische Auslegungsaufgabe der Verarbeitungsmaschinen, und die einzige Maschine, deren Motoren ein Material koppelt
+und deren Last sich im Lauf ändert: `winder` führt eine Bahn (Kunststofffolie, Papier, Metallfolie) von einem Abwickler über
+eine Tänzerwalze zu einem Aufwickler, mit einer Bahngeschwindigkeit und unter einem Bahnzug. Die ausgelieferte
+Konfiguration: eine PET-Folie von 50 µm, 400 mm breit, mit bis zu 2 m/s (in einer halben Sekunde auf Geschwindigkeit,
+4 m/s²) und 100 N, auf 3-Zoll-Kernen (r_c 45 mm), die bis 300 mm wachsen (r_f 150 mm; 1286 m Folie, 36 kg), jeder Wickel
+an einem 1FK2206-2AF mit Haltebremse hinter einem Planetengetriebe mit Übersetzung 7, an einem S120-Motor-Module von
+5 A mit einem Braking Module für beide; der Tänzer eine Walze
+von 80 mm auf einer senkrechten Führung, 4 kg und ein Gewicht von 2 kg, von einem Pneumatikzylinder nach unten gedrückt,
+±50 mm Weg. Die Bahnposition läuft über die ersten 6 m des Wickels (`roll.run_from_m`, `run_m`), wo der Abwickler voll
+ist und der Aufwickler auf seinem Kern; der Zyklus fährt 3 m vor und zurück. Das Modell steht in der
+[Modellreferenz](../model-reference.md#winder-with-dancer).
+
+| Kennung | Mechanismus | Übertragung | Werkzeuglage | Eigene Prüfungen |
+| --- | --- | --- | --- | --- |
+| `winder` | Abwickler, zwei Bahnabschnitte von 1 m über eine Tänzerwalze, Aufwickler | Planetengetriebe mit Übersetzung 7 je Wickel | Bahnposition (m), die aufgewickelte Bahn | `web-tension`, `web-slack`, `dancer-travel`; je Motor `inertia-ratio`, `torque-at-full-roll`, `torque-at-core`, `speed-at-core`, `tension-torque-at-full-roll` |
+
+**Was sich im Lauf ändert.** Der Radius eines Wickels wächst je Umdrehung um die Dicke der Bahn, r² = r_c² + h s / π; die
+Motordrehzahl für eine Bahngeschwindigkeit v ist i v / r, am höchsten am Kern (311 rad/s bei 2 m/s), das Moment für
+einen Bahnzug T r / i, am höchsten beim vollen Wickel (2,14 N m bei 100 N), und die Trägheit, die er sieht, wächst mit
+r⁴: über den Wickel vom 0,23- bis zum 10,4-fachen der von Läufer und Getriebe. Eine Auslegung muss beide Enden halten;
+ein Zyklus fährt Meter eines Wickels von 1286 m, darum tragen die eigenen Prüfurteile Bahngeschwindigkeit, Beschleunigung
+und Bahnzug des Zyklus an den vollen Wickel und an den Kern (Modellreferenz, „Own verdicts“). Mit dem ausgelieferten
+Motor entscheidet das Trägheitsverhältnis (10,4 von erlaubten 15) über den Motor, nicht sein Moment: ein 1FK2205-2AF
+(3,15 kg cm²) hätte das Moment, aber beim vollen Wickel das 22-fache seiner Trägheit.
+
+**Die Bahn** dehnt sich in zwei Abschnitten von EA / L (je 80 kN/m), trägt ihre Dehnung von Abschnitt zu Abschnitt und
+hängt unter null Zug durch. Der Tänzer schwingt auf ihnen mit 26,1 Hz, seine Walze mit 56,9 Hz. Die Wickel folgen der
+Bahnposition als elektronisches Getriebe beim Radius ihrer gewickelten Länge, mit dem Moment des Bahnzugs und der
+Trägheit des Wickels vorgesteuert; der Lageregler des Tänzers korrigiert die Drehzahl des Abwicklers: ein mit 100 N
+gewickelter und mit 80 N gefahrener Wickel ließe den Tänzer bei 2 m/s um 0,25 mm/s wandern (der Verzug), was der Regler
+ausgleicht. Der Bahnzug-Sollwert fällt über den Radius des Aufwicklers, von 100 N am Kern auf 79 N beim vollen Wickel,
+über die Kraft des Zylinders.
+
+**Halt.** Ein Halt der Kategorie 2 (`sim-cli stop winder --category 2`, die Bahn entlang ihres Wegs mit den 4 m/s² der
+Achse gebremst) hält die Bahn bei jedem Radius zwischen 30 und 250 N. Ein Halt der Kategorie 1 bremst jeden Motor an
+seiner eigenen AUS3-Rampe: in der Mitte des Wickels, wo die Radien gleich sind, behält die Bahn ihren Zug; nahe einem
+Ende verzögern die beiden Oberflächen im Verhältnis ihrer Radien (1,35 gegen 0,40 m/s² am vollen Wickel und am Kern),
+der Tänzer läuft nach 0,46 s in seinen Anschlag und die Bahn wird über 1200 N gedehnt. Kategorie 0 lässt die
+Haltebremsen die Wickel binnen etwa 50 ms greifen, und die Bahn hängt durch. Am Wickler hält nur ein Halt entlang der
+Bahn die Bahn; nach einem Halt der Kategorie 1 halten die Haltebremsen den Zug, den der Tänzer hält.
+
+**Drehzahlregler.** Der Aufwickler auf seinem Kern hat ein Zehntel der Trägheit des vollen Abwicklers am Motor, darum
+hat jeder seine eigene Verstärkung (1,2 und 3,0 N m s/rad, Tn 30 ms): `sim-cli margins winder` gibt 73,6° und 20,5 dB am
+Abwickler, 58,8° und 9,56 dB am Aufwickler (52,0° und 9,19 dB ohne Reibung), über die Grenzen mindestens 54,9° und
+8,91 dB (`--bands`).
+
+```text
+sim-cli verdicts winder
+sim-cli run winder --cycle --time 10 --stop-at 7.5 --stop-category 2 --out winder.csv
+sim-cli stop winder --category 2
+sim-cli verdicts winder --set web.tension_n=150 --set axis.web.max_velocity_m_s=3.0
+```
+
 ## Was von Hand nachgerechnet ist
 
 Komponententests (`sim-components`): kritische Drehzahl, Knicklast, Trägheit, Steifigkeit, Reibmoment der Vorspannung,
@@ -843,6 +899,27 @@ eines geschlossenen Zylinders und die Enthalpiebilanz eines offenen; die Hubzeit
 Prüfurteile `cushion-energy` und `load-factor` im ausgelieferten Zyklus; ein für den Schritt zu steifer Zylinder wird
 abgelehnt. Die Datei besteht die Standard-Testreihe mit dem Zylinder in Ruhe.
 
+Tests des Wicklers (`machine-winder`): die Standard-Testreihe (starr und elastisch, mit und ohne das Gewicht auf dem
+Tänzer) und das Halten in Ruhe an beiden Enden des Wickels und bei einem Viertel. Nach 640 m hat der Aufwickler
+110,503 mm Radius, der Abwickler 110,969 mm (8231,352 und 4904,800 rad gedreht); der Wickel fasst 1286,482 m. Die
+Trägheit des Wickels bei 110,503 mm ist 0,1366427 kg m², voll 0,4485586 kg m², das Trägheitsverhältnis 10,4026 beim
+vollen Wickel und 0,2319 am Kern. Das Moment des Bahnzugs durch die Übersetzung: −2,142857 und 0,642857 N m am Anfang des
+Wickels, −0,507857 und 1,692857 N m an seinem Ende (die 79 N der Kennlinie). Das Moment, um die Bahn bei 640 m um 2 m/s²
+zu beschleunigen: 1,7824107 N m am Aufwickler in Ruhe, 1,7818049 N m bei 2 m/s, −0,8150135 und −0,8144080 N m am
+Abwickler, mit den 2,5 N der Tänzerwalze zwischen den Abschnitten; im starren Modell beschleunigen diese Momente die Bahn
+mit genau 2 m/s² bei ruhendem Tänzer. Die verlustfreien Läufe der Testreihe laufen in der Mitte des Wickels, wo die Radien
+gleich sind; am Anfang des Wickels wandert der Zug, den ihre festen Haltemomente halten, mit den auseinanderlaufenden
+Radien vom Wickelzug weg, und die Dehnung, die die Bahn hinein- und hinausträgt (`power.web_transport`), ist das, um was
+sich die Energie ändert. Der stationäre Zug eines Abschnitts bei 1 gegen 1,0005 m/s: EA (v2 / v1 − 1) =
+40,000 N (die Abschnittsgleichung in erster Ordnung 39,980 N). Der Tänzer bei 120 N Last und auf 100 N gehaltenen Wickeln
+steht 39,9948 mm tief (die Radien der Wickel 2,88 µm kleiner, nachdem sie die Bahn abgegeben haben). Der Tänzer schwingt
+auf der Bahn mit 26,071 Hz, seine Walze mit 56,941 Hz. Was den Abwickler verlässt, kommt am Aufwickler an oder bleibt in
+den Abschnitten, auf 1e-7 m über 3 m Lauf. Ohne den Tänzerregler wandert der Tänzer bei einem mit 100 N gewickelten und
+mit 80 N gefahrenen Wickel um −0,24969 mm/s bei 2 m/s, mit ihm stellt sich die Korrektur auf 0,49938 mm/s ein. Die eigenen
+Prüfurteile: das Trägheitsverhältnis 10,4026, die Drehzahl am Kern 311,11 rad/s, jedes schlägt fehl, wenn sein Grenzwert
+knapp unter seinem Wert liegt. Ein Halt der Kategorie 2 und, in der Mitte des Wickels, einer der Kategorie 1 halten die
+Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels überlastet sie.
+
 ## Grenzen
 
 - Ein Glied biegt sich in einer Eigenform in der Ebene, in der sein Gelenk es dreht; aus dieser Ebene heraus und in
@@ -882,6 +959,17 @@ abgelehnt. Die Datei besteht die Standard-Testreihe mit dem Zylinder in Ruhe.
   Kugelgelenken; eine Steifigkeit je Bein (an der weichsten Stellung der Mutter); die Konvergenz der Vorwärtskinematik
   ist für den ausgelieferten Quader gezeigt (eine Konfiguration mit anderer Geometrie oder anderem Quader sollte die
   Prüfung jenes Tests wiederholen).
+
+- Wickler: beide Wickel haben denselben Kern, vollen Radius, Motor und dasselbe Getriebe; die Masse der Bahn in den
+  Abschnitten, die Änderung der Abschnittslängen mit den Radien der Wickel, die Querkontraktion der Bahn und die
+  Nachgiebigkeit des Wickels selbst (gleitende Lagen, Teleskopieren) fehlen; der Radius wird aus der gewickelten Länge
+  berechnet (ein gemessener Durchmesser oder das Drehzahlverhältnis, `rewind.radius_from_speeds`, ist nur ein Signal);
+  die Reibung der Wellendichtungen folgt der Temperatur der Getriebe nicht (ihr Wirkungsgrad und ihr Leerlaufmoment
+  schon); der ausgelieferte Zyklus fährt 3 m der 1286 m des Wickels an seinem Anfang, das andere Ende des Wickels wird über
+  die eigenen Prüfurteile beurteilt, nicht gefahren; Überschleifen hat auf der einen, umkehrenden Achse nichts zu
+  überschleifen; der Antrieb passt seinen Drehzahlregler nicht an die Trägheit des Wickels an (45-fach vom Kern bis
+  voll), darum sind die ausgelieferten Verstärkungen die des ausgelieferten Abschnitts (`[drive.unwind]` eine eigene),
+  und ein Lauf nahe dem Ende des Wickels braucht sie vertauscht.
 - Seilroboter: Masse und Durchhang der Seile fehlen; der kraftfähige Arbeitsraum ist der statische (die Beschleunigungen
   des Zyklus beurteilen die Seilkraftprüfungen, die Planung weicht ihnen nicht aus); nahe am Rand des Arbeitsraums rechnet
   der Dehnungsausgleich der Motoren mit den Kräften der geschlossenen Form, wo die Verteilung ein Seil an einer Grenze

@@ -201,7 +201,7 @@ pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace
     let step = trace.time[1] - trace.time[0];
     // A trace that starts at rest where the config's own machine stands at rest (its drives' setpoints those of the
     // first row: a trace written by a run of this config) is replayed from that very state, with no run-up: so it
-    // replays onto itself to rounding, where the gear mesh sticks at rest too (the arm, the spatial cable robot).
+    // replays onto itself to rounding, where the gear mesh sticks at rest too (an arm, a machine on cables).
     let at_rest = trace.motors.iter().all(|m| m.speed[0].abs() <= 1e-9);
     let own = Sim::new(entry, &cfg)?;
     let same_start =

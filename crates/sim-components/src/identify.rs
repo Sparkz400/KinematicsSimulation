@@ -507,7 +507,7 @@ pub const RIGID_SPAN_S: f64 = 0.011;
 /// arms 2 and 4 reverse in each traverse: at 40 ms its motor 2 kept its sign forward for 198 of the 810 rows a direction
 /// needs; its lowest mode, 44 Hz without the payload, allows down to 23 ms.
 ///
-/// A machine that reports no mode at all may go down to `RIGID_SPAN_S`: the planar delta D2's cycle with friction
+/// A machine that reports no mode at all may go down to `RIGID_SPAN_S`: the cycle of a planar two-arm picker with friction
 /// feedforward from its model (15 November 2026) keeps motor 1 turning backwards for 808 of the 810 rows 40 ms needs,
 /// and its fit was skipped.
 pub fn smoothing_span(machine: &dyn Machine, trace: &Trace) -> f64 {
