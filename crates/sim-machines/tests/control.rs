@@ -517,13 +517,23 @@ fn every_effect_switch_changes_the_traces() {
         let traces = |cfg: &Config| {
             let mut sim = Sim::new(entry, cfg).unwrap();
             sim.command(Command::StartCycle).unwrap();
+            // 4 s, and where the cycle has not passed its via point's corner by then (the end of its last segment: a
+            // track's long travels), on until it has.
+            let via = cfg.array("cycle.segment").map_or(0, |s| s.len().saturating_sub(1));
             let (mut all, mut sample) = (Vec::new(), Vec::new());
-            sim.run(4.0, |s| {
+            let (reached, passed) = (std::cell::Cell::new(false), std::cell::Cell::new(false));
+            let mut record = |s: &Sim| {
+                reached.set(reached.get() || s.control.cycle_segment() == Some(via));
+                passed.set(passed.get() || reached.get() && s.control.cycle_segment() == Some(0));
                 if s.step % 16 == 0 {
                     s.sample(&mut sample);
                     all.extend(sample.iter().map(|v| v.to_bits()));
                 }
-            });
+            };
+            sim.run(4.0, &mut record);
+            while !passed.get() && sim.control.cycle_segment().is_some() && sim.time() < 30.0 {
+                sim.run(0.1, &mut record);
+            }
             all
         };
         let reference = traces(&base);
