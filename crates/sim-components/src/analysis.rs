@@ -222,6 +222,10 @@ pub struct CycleLoad {
     pub warm_start: Option<WarmStart>,
     /// With `[conveyor]`: what the measured pass, one pick, did on the belt.
     pub conveyor: Option<ConveyorLoad>,
+    /// While the gripper held the payload (and was not closing or opening): the tool's acceleration upwards (along z)
+    /// and sideways (|a_x, a_y|), m/s^2, once per millisecond from its speed a millisecond apart, for the verdict
+    /// "gripper-hold" (`gripper::demand`). Empty on a machine without tool axes x, y or z in m.
+    pub held_accelerations: Vec<[f64; 2]>,
 }
 
 /// With an electronic cam (`Machine::cam`): per slave axis what its cam asks at the master's steady speed against the
@@ -495,6 +499,11 @@ pub struct Tally {
     /// With `[conveyor]`: the most the tool was from the gripped part along the belt, and the parts missed before.
     pick_tracking: f64,
     missed_before: u64,
+    /// The tool axes x, y, z in m (by index; `None` where the machine lacks one), the tool's speed along them at the
+    /// last sample, and `CycleLoad::held_accelerations`.
+    cartesian: [Option<usize>; 3],
+    last_speed: Option<[f64; 3]>,
+    held: Vec<[f64; 2]>,
 }
 
 /// Distance from `p` to the piece of line between `a` and `b`, in the axes `axes` alone.
@@ -665,6 +674,9 @@ impl Tally {
             }),
             pick_tracking: 0.0,
             missed_before: sim.control.conveyor().map_or(0, |(c, _)| c.missed),
+            cartesian: ["x", "y", "z"].map(|id| sim.machine.axes().iter().position(|a| a.id == id && a.unit == "m")),
+            last_speed: None,
+            held: Vec::new(),
         }
     }
 
@@ -736,6 +748,15 @@ impl Tally {
             sim.machine.tool_state(&sim.state, &mut tool, &mut rate);
             for (axis, sum) in self.guide_axes.iter().zip(&mut self.guide_speeds) {
                 *sum += axis.map_or(0.0, |a| rate[a].abs());
+            }
+            if self.cartesian.iter().any(Option::is_some) {
+                let speed = self.cartesian.map(|i| i.map_or(0.0, |i| rate[i]));
+                let held = sim.control.payload_attached && !sim.control.gripper_acting();
+                if let (true, Some(last)) = (held, self.last_speed) {
+                    let a: [f64; 3] = std::array::from_fn(|k| (speed[k] - last[k]) / (self.every as f64 * sim.dt));
+                    self.held.push([a[2], a[0].hypot(a[1])]);
+                }
+                self.last_speed = Some(speed);
             }
             for (k, (signal, (cubed, weight))) in self.pulley_radial.iter().zip(&mut self.radial_sums).enumerate() {
                 if let Some(i) = *signal {
@@ -1017,6 +1038,7 @@ impl Tally {
                         .max(0.0),
                 }
             }),
+            held_accelerations: self.held,
         }
     }
 
@@ -1257,11 +1279,26 @@ pub struct Verdict {
 }
 
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
-/// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, and the motor kinds' own keys
-/// (`drive::Motor`: a stepper's and an induction motor's).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 40] = [
+/// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
+/// own keys (`drive::Motor`: a stepper's and an induction motor's).
+pub const RATINGS_BEYOND_DEFAULT: [&str; 54] = [
     // What `stop::study` judges the worst stop against.
     "ratings.max_stopping_distance_m",
+    // The gripper's time and hold (`gripper::Gripper`), and the hold's safety factor.
+    "effects.gripper_time",
+    "gripper",
+    "gripper.kind",
+    "gripper.close_s",
+    "gripper.open_s",
+    "gripper.cup_volume_m3",
+    "gripper.generator_flow_m3_s",
+    "gripper.vacuum_pa",
+    "gripper.holding_pressure_pa",
+    "gripper.vent_flow_m3_s",
+    "gripper.release_pressure_pa",
+    "gripper.cup_area_m2",
+    "gripper.friction_coefficient",
+    "ratings.gripper_safety_factor",
     // A path in place of the cycle (`sim::with_path`).
     "path",
     "path.file",
@@ -1544,6 +1581,19 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     // The turn's (an arm's orientation, a turning tool or table), on its own: no metres and radians added.
     if let Some(limit) = rating("settling_tolerance_rad") {
         out.push(at_most("settling-angle", None, load.dwell_angle_error_peak, limit));
+    }
+    // A vacuum gripper (effects.gripper_time): the most the held part asked of the cup against its hold over the
+    // safety factor (`gripper`).
+    if let (Some(crate::gripper::Gripper { hold: Some((hold, mu)), .. }), Some(factor)) =
+        (crate::gripper::Gripper::from_config(cfg)?, rating("gripper_safety_factor"))
+    {
+        let (mass, g) = (crate::gripper::payload_mass(cfg)?, crate::gripper::gravity(cfg)?);
+        let asked = load
+            .held_accelerations
+            .iter()
+            .map(|&[up, side]| crate::gripper::demand(mass, [side, 0.0, up], g, mu))
+            .fold(0.0, f64::max);
+        out.push(at_most("gripper-hold", None, asked, hold / factor));
     }
     if let Some((slackest, tightest)) = load.belt_tension {
         if let Some(limit) = rating("belt_max_tension_n") {
@@ -4160,6 +4210,7 @@ mod tests {
             braking_power_peak: 0.0,
             warm_start: None,
             conveyor: None,
+            held_accelerations: Vec::new(),
         };
         close(guide_life_km(&cfg, &load).unwrap(), 6250.0, "guide km");
         close(guide_life_h(&cfg, &load).unwrap(), 6944.444, "guide h");

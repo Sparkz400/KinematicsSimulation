@@ -332,3 +332,45 @@ fn the_flying_saw_s_friction_characteristic_is_its_friction_at_the_motor() {
     assert_eq!([get("motor.friction_coulomb_nm"), get("motor.friction_viscous_nm_s_rad")], [0.05, 2.0e-4]);
     assert_eq!(get("axis.x.max_velocity_m_s"), 1.2);
 }
+
+/// Friction feedforward from the machine's own model, by hand, as the characteristic above
+/// (`the_flying_saw_s_friction_characteristic_is_its_friction_at_the_motor`, 1.440936 N m to its rounding): at 1.2 m/s
+/// the guides slide at 80 N + 100 N s/m x 1.2 m/s = 200 N (tanh(1.2 / 0.002) = 1), through r / (i eta) = 0.0318310 /
+/// (5 x 0.9409): 1.353218 N m (the gearbox's power 240 W far beyond its fade, so eta whole); the shaft at 5 x 1.2 /
+/// 0.0318310 = 188.4956 rad/s: 0.05 tanh(377) + 2e-4 x 188.4956 = 0.0876991 N m. So 1.440917 N m, and backwards its
+/// negative. In the cruise at 1.2 m/s of the move 0.1 -> 0.7 m (the cut off, so that only friction is left) the drive
+/// gets it, and the velocity loop's integrator carries nothing (under 2 % of it); without it, it carries the whole
+/// friction.
+#[test]
+fn the_flying_saw_s_machine_friction_feedforward_is_its_characteristic_and_the_integrator_carries_nothing() {
+    let expected = 1.440917;
+    let saw = (FLYING_SAW.build)(&FLYING_SAW.config()).unwrap();
+    let mut out = [0.0];
+    for v in [1.2, -1.2] {
+        saw.steady_friction(&[0.4], &[v], &mut out);
+        assert!((out[0] - expected * v.signum()).abs() < 1e-5, "at {v} m/s: {} N m, by hand {expected}", out[0]);
+    }
+    let cruise = |model: bool| {
+        let mut cfg = FLYING_SAW.config();
+        cfg.set_text("effects.process_force = false").unwrap();
+        cfg.set_text("drive.friction_feedforward_torque_nm = [0.0, 0.0]").unwrap();
+        let source = if model { "machine" } else { "characteristic" };
+        cfg.set_text(&format!("drive.friction_feedforward_model = \"{source}\"")).unwrap();
+        let mut sim = Sim::new(&FLYING_SAW, &cfg).unwrap();
+        sim.command(Command::MoveTo(vec![0.7])).unwrap();
+        let (mut ff, mut integrator, mut n) = (0.0, 0.0, 0);
+        sim.run(0.6, |s| {
+            if s.time() > 0.3 && s.control.set_acc[0] == 0.0 && (s.control.set_vel[0] - 1.2).abs() < 1e-12 {
+                (ff, integrator, n) =
+                    (s.control.drives[0].friction_ff, integrator + s.control.drives[0].controller_torque, n + 1);
+            }
+        });
+        assert!(n > 1000, "{n} samples in the cruise");
+        (ff, integrator / n as f64)
+    };
+    let (ff, integrator) = cruise(true);
+    assert!((ff - expected).abs() < 1e-4 * expected, "feedforward {ff} N m, by hand {expected}");
+    assert!(integrator.abs() < 0.02 * expected, "the integrator carries {integrator} N m");
+    let (ff, integrator) = cruise(false);
+    assert!(ff == 0.0 && (integrator - expected).abs() < 0.02 * expected, "without: {integrator} N m");
+}

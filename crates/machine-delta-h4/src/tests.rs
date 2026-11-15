@@ -428,3 +428,48 @@ fn on_a_coupled_base_the_four_arm_delta_keeps_its_energy_and_budget() {
     sim_core::testkit::energy_conservation(on((ENTRY.suite_configs)()[0].clone(), 0.0).as_ref());
     sim_core::testkit::loss_budget(on(ENTRY.config(), 0.02).as_ref());
 }
+
+/// Friction feedforward from the machine's own model (`steady_friction`), by hand, with the tool on the axis at
+/// z = -0.95 m, unturned, going down at 0.5 m/s: the slide stands (h = 0), so each of the four legs is the D3's
+/// (e = 0.25 - 0.07 = 0.18, L_a = 0.5, L_b = 1.1): 2 e L_a cos t + 2 z L_a sin t + e^2 + z^2 + L_a^2 - L_b^2 = 0, elbow
+/// out t = 0.161292 rad, t' = -(2 L_a sin t + 2 z) z' / (2 z L_a cos t - 2 e L_a sin t) = 0.899777 rad/s. The joint:
+/// 0.4 tanh(t' / 0.01) + 0.06 t' = 0.453987 N m. The rotor at 20 t' = 17.99554 rad/s: 0.06 (the breakaway's Stribeck
+/// part exp(-81) nothing) + 2.5e-4 x 17.996 = 0.004499, and the gearbox's drag 0.93 (17.996 / 314.159)^(2/3) =
+/// 0.138195: 0.202694 N m. The teeth lose nothing (the drag takes the catalogue's whole loss), so 0.202694 + 0.453987 /
+/// 20 = 0.225393 N m per arm. In a vertical cruise of the shipped (elastic) machine at 0.5 m/s the velocity loops'
+/// integrators then carry almost nothing; without the feedforward they carry the friction.
+#[test]
+fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing() {
+    let m = (ENTRY.build)(&ENTRY.config()).unwrap();
+    let mut out = [0.0; 4];
+    m.steady_friction(&[0.0, 0.0, -0.95, 0.0], &[0.0, 0.0, -0.5, 0.0], &mut out);
+    for f in out {
+        assert!((f - 0.225393).abs() < 1e-5, "{out:?}");
+    }
+    let cruise = |model: bool| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text("effects.friction_feedforward = true").unwrap();
+        let source = if model { "machine" } else { "characteristic" };
+        cfg.set_text(&format!("drive.friction_feedforward_model = \"{source}\"")).unwrap();
+        cfg.set_text("start.pose = [0.0, 0.0, -0.8, 0.0]").unwrap();
+        cfg.set_text("axis.z.max_velocity_m_s = 0.5").unwrap();
+        let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
+        let at = sim.control.set_pos.clone();
+        sim.command(sim_components::Command::MoveTo(vec![at[0], at[1], -1.1, at[3]])).unwrap();
+        let (mut ff, mut integrator, mut n) = (0.0, 0.0, 0);
+        sim.run(0.6, |s| {
+            if s.time() > 0.15 && s.control.set_acc[2] == 0.0 && (s.control.set_vel[2] + 0.5).abs() < 1e-12 {
+                n += 1;
+                for k in 0..4 {
+                    ff += s.control.drives[k].friction_ff;
+                    integrator += s.control.drives[k].controller_torque;
+                }
+            }
+        });
+        assert!(n > 1000, "{n} samples in the cruise");
+        (ff / (4 * n) as f64, integrator / (4 * n) as f64)
+    };
+    let ((ff, with), (_, without)) = (cruise(true), cruise(false));
+    assert!(with.abs() < 0.03 * ff, "the integrators carry {with} N m of {ff}");
+    assert!((without - with - ff).abs() < 0.03 * ff, "without: {without} N m, with {with}, of {ff}");
+}

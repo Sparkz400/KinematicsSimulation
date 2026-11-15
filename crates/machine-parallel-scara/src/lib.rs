@@ -1085,6 +1085,21 @@ impl Machine for ParallelScara {
         }
     }
 
+    /// The rigid model at theta'' = 0: each arm at theta' = J^-1 p', the stroke and the turn at their own speeds; per
+    /// joint the motor shaft's friction (with the gearbox's drag) at i q' and the joint's own friction (bearings, the
+    /// Z guides and the nut's preload) through the gearbox as `rigid_solve` and `Extra::solve` take it: f(q') / (i loss).
+    fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
+        let t = self.legs.inverse([pos[0], pos[1]]).unwrap_or([f64::NAN; 2]);
+        let (_, j) = self.pose(t);
+        let w = inverse(&j).map_or([f64::NAN; 2], |inv| mul(&inv, [vel[0], vel[1]]));
+        let joints =
+            self.joints.iter().zip(w).chain(self.extras.iter().map(|x| &x.joint).zip(vel[2..].iter().copied()));
+        for (k, (joint, v)) in joints.enumerate() {
+            let (i, friction) = (joint.ratio(), joint.friction.torque(v));
+            out[k] = joint.shaft.torque(i * v) + friction / (i * joint.gearbox.loss_factor(friction, v));
+        }
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }

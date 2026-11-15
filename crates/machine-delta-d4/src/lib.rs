@@ -567,6 +567,15 @@ impl Machine for Delta4 {
         out[3] = self.tool_inertia() * acc[3] / i + self.tool.rotor_inertia * i * acc[3];
     }
 
+    /// The arms' (the D3's, the telescope's sliding included), and the turn's: the tool bearing's friction f(c') through
+    /// the gearbox, f / (i loss), plus the tool motor shaft's at i c'.
+    fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
+        self.arms.steady_friction(&pos[..3], &vel[..3], &mut out[..3]);
+        let (j, w) = (&self.tool, vel[3]);
+        let bearing = j.friction.torque(w);
+        out[3] = j.shaft.torque(j.ratio() * w) + bearing / (j.ratio() * j.gearbox.loss_factor(bearing, w));
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.arms.energy(&s[..self.n3]) + self.tool_energy(s).iter().sum::<f64>()
     }

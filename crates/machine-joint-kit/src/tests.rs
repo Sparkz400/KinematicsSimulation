@@ -1257,3 +1257,40 @@ fn a_machine_built_at_rest_stays_there() {
         assert!(most < limit, "resolution {resolution}: moved {most} m, limit {limit} m");
     }
 }
+
+/// Friction feedforward from the machine's own model, by hand, on the screw axis in its cruise at 0.8 m/s (the move
+/// 0.1 -> 0.7 m). The guides slide at 30 N plus the nut's preload, 0.05 / sqrt(tan b) Fpr l / 2 pi with tan b =
+/// 0.02 / (pi 0.025) = 0.254648: 0.099083 x 600 x 0.02 / 2 pi = 0.189235 N m at the screw, times 2 pi / 0.02 = 314.159:
+/// 59.4499 N; plus 40 N s/m x 0.8 m/s: 121.4499 N (tanh(0.8 / 0.002) = 1). Through the screw's ratio 314.159 rad/m and
+/// its efficiency 0.9 (the coupling's 1): 121.4499 / (314.159 x 0.9) = 0.429541 N m. The motor shaft at 251.327 rad/s:
+/// 0.05 tanh(502.65) + 2e-4 x 251.327 = 0.100265 N m. So 0.529807 N m. With it the velocity loop's integrator carries
+/// nothing in the cruise (under 1 % of it); without it, it carries the whole friction.
+#[test]
+fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing() {
+    let cruise = |model: bool| {
+        let mut cfg = SCREW.config();
+        cfg.set_text("effects.friction_feedforward = true").unwrap();
+        let source = if model { "machine" } else { "characteristic" };
+        cfg.set_text(&format!("drive.friction_feedforward_model = \"{source}\"")).unwrap();
+        let mut sim = Sim::new(&SCREW, &cfg).unwrap();
+        sim.command(Command::MoveTo(vec![0.7])).unwrap();
+        let (mut ff, mut integrator, mut n) = (0.0, 0.0, 0);
+        sim.run(0.8, |s| {
+            if s.time() > 0.4 && s.control.set_acc[0] == 0.0 && (s.control.set_vel[0] - 0.8).abs() < 1e-12 {
+                (ff, integrator, n) =
+                    (s.control.drives[0].friction_ff, integrator + s.control.drives[0].controller_torque, n + 1);
+            }
+        });
+        assert!(n > 1000, "{n} samples in the cruise");
+        (ff, integrator / n as f64)
+    };
+    let preload = 0.05 / (0.02 / (std::f64::consts::PI * 0.025)).sqrt() * 600.0 * 0.02 / std::f64::consts::TAU;
+    let ratio = std::f64::consts::TAU / 0.02;
+    let expected = 0.05 + 2e-4 * 0.8 * ratio + (30.0 + preload * ratio + 40.0 * 0.8) / (ratio * 0.9);
+    assert!((expected - 0.529807).abs() < 1e-6, "by hand {expected}");
+    let (ff, integrator) = cruise(true);
+    assert!((ff - expected).abs() < 1e-4 * expected, "feedforward {ff} N m, by hand {expected}");
+    assert!(integrator.abs() < 0.01 * expected, "the integrator carries {integrator} N m");
+    let (ff, integrator) = cruise(false);
+    assert!(ff == 0.0 && (integrator - expected).abs() < 0.02 * expected, "without: {integrator} N m");
+}

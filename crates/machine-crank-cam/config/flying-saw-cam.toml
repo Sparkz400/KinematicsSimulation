@@ -334,6 +334,9 @@ torque_feedforward_model = "rigid"
 # `the_flying_saw_s_friction_characteristic_is_its_friction_at_the_motor` has the hand calculation.
 friction_feedforward_speed_rad_s = [0.314, 188.5]
 friction_feedforward_torque_nm = [0.591, 1.441]
+# With effects.friction_feedforward: "characteristic" adds the characteristic above; "machine" adds in its place the
+# friction of the machine's own model at the planned speed (guides, motor shaft, gearbox drag, joints).
+friction_feedforward_model = "characteristic"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0

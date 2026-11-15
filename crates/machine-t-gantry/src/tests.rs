@@ -383,9 +383,12 @@ fn leaning_resonance(z: f64) -> f64 {
 /// `edit` sets it up.
 fn swing_after_a_traverse(z: f64, edit: &[String]) -> f64 {
     let mut cfg = ENTRY.config();
-    // A sharp profile, so that the plain move does start the swing.
+    // A sharp profile, so that the plain move does start the swing. Without the friction feedforward, as these hand
+    // calculations were made: with it the shaped moves leave about twice the swing (17 um at z = 0.15 m), the
+    // guides' friction no longer taking the carriage's last motion off before the plan stops.
     for e in [
         "effects.frame_compliance = false".to_string(),
+        "effects.friction_feedforward = false".to_string(),
         format!("start.pose = [0.1, {z:?}]"),
         "axis.x.max_jerk_m_s3 = 2000.0".to_string(),
     ]
@@ -1996,4 +1999,58 @@ fn a_coupled_base_along_x_moves_as_the_frame_mode() {
     let off = frame.iter().zip(&base).map(|(a, b)| (a[0] - b[0]).abs().max((a[1] - b[1]).abs())).fold(0.0, f64::max);
     println!("sway peak {peak:.4e} m, the base off it by {off:.3e} m");
     assert!(peak > 1e-5 && off < 1e-9 * peak, "sway peak {peak} m, the base off it by {off} m");
+}
+
+/// Friction feedforward from the machine's own model (`steady_friction`), by hand, in an X traverse at 0.8 m/s with the
+/// Z axis at 0.35 m. The X guide carries m_x g = 11 kg x 9.80665 = 107.873 N against its rated 9 kg: load scale
+/// (200 + 107.873) / (200 + 88.260) = 1.068040; it slides at 15 N x 1.068040 + 20 N s/m x 0.8 m/s = 32.0206 N (the
+/// Stribeck part exp(-(0.8 / 0.01)^2) is nothing), the Z guide stands. Each belt force carries half, 16.0103 N, through
+/// r / i = 0.02 / 5; motor a lifts the Z axis (m_z g / 2 = 34.32 N with it) and drives its gearbox (/ 0.95), motor b
+/// holds it back and is driven back (x 0.95). The shafts at 0.8 / 0.02 x 5 = 200 rad/s: 0.02 tanh(400) + 1e-4 x 200 =
+/// 0.04 N m. So a: 0.04 + 16.0103 x 0.02 / (5 x 0.95) = 0.107412 N m, b: 0.04 + 16.0103 x 0.02 x 0.95 / 5 = 0.100839
+/// N m. In the cruise the feedforward takes exactly that off the velocity loop's integrator (to 2 %, shipped elastic
+/// machine and rigid one). In the rigid one what stays is the gearboxes' loss on the weight, which the rigid torque
+/// feedforward leaves out by design: a 34.32 x 0.004 (1 / 0.95 - 1) = 0.007226 N m, b 34.32 x 0.004 x 0.05 = 0.006865
+/// N m, and a little more X guide friction from the tilt the guide loads take from the torques' acceleration (under
+/// 3 % of the friction).
+#[test]
+fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing() {
+    let cruise = |model: bool, elastic: bool| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text("effects.friction_feedforward = true").unwrap();
+        cfg.set_text(&format!("effects.belt_stretch = {elastic}")).unwrap();
+        let source = if model { "machine" } else { "characteristic" };
+        cfg.set_text(&format!("drive.friction_feedforward_model = \"{source}\"")).unwrap();
+        let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
+        // At the height the setpoint stands at: it starts 46 um above the start pose, and a move to 0.35 would slide the
+        // Z guide at 4e-5 m/s, which the steady model takes at its full breakaway level.
+        let z = sim.control.set_pos[1];
+        sim.command(sim_components::Command::MoveTo(vec![0.95, z])).unwrap();
+        let (mut ff, mut integrator, mut n) = ([0.0; 2], [0.0; 2], 0);
+        sim.run(1.2, |s| {
+            if s.time() > 0.5 && s.control.set_acc[0] == 0.0 && (s.control.set_vel[0] - 0.8).abs() < 1e-12 {
+                assert!(s.control.set_vel[1] == 0.0, "the Z axis moves at {} m/s", s.control.set_vel[1]);
+                n += 1;
+                for k in 0..2 {
+                    ff[k] = s.control.drives[k].friction_ff;
+                    integrator[k] += s.control.drives[k].controller_torque;
+                }
+            }
+        });
+        assert!(n > 1000, "{n} samples in the cruise");
+        (ff, integrator.map(|i| i / n as f64))
+    };
+    let expected = [0.04 + 16.0103 * 0.02 / (5.0 * 0.95), 0.04 + 16.0103 * 0.02 * 0.95 / 5.0];
+    let weight = [34.3233 * 0.004 * (1.0 / 0.95 - 1.0), 34.3233 * 0.004 * 0.05];
+    for elastic in [true, false] {
+        let ((ff, with), (_, without)) = (cruise(true, elastic), cruise(false, elastic));
+        for k in 0..2 {
+            let e = expected[k];
+            assert!((ff[k] - e).abs() < 1e-4 * e, "motor {k}: feedforward {ff:?}, by hand {expected:?}");
+            assert!((without[k] - with[k] - e).abs() < 0.02 * e, "motor {k}: with {with:?}, without {without:?}");
+            if !elastic {
+                assert!((0.0..0.03 * e).contains(&(with[k] - weight[k])), "motor {k}: the integrator carries {with:?}");
+            }
+        }
+    }
 }

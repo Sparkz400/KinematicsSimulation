@@ -167,6 +167,12 @@ What it does not cover: field weakening, iron loss, the drive's overload, the mo
 | Friction factor with guide load | (preload + load) / (preload + nominal) | 1e-12 | `friction_grows_with_payload_when_load_dependent`, axis; `guide_friction_grows_with_acceleration_and_overhang`, gantry |
 | Lost motion on reversal | The configured backlash, 8.7e-4 rad | 1 % | `lost_motion_on_reversal_equals_the_backlash`, axis |
 | Gearbox: dead zone, flanks that never pull, efficiency both ways | τη driving, τ/η driven | 1e-9 N m | `gearbox_transmits_nothing_inside_the_backlash`, `gearbox_flanks_in_contact_never_pull`, `gearbox_efficiency_loses_torque_in_the_direction_of_power_flow`, mech |
+| Friction feedforward from the machine's model (`drive.friction_feedforward_model = "machine"`), single axis in its cruise at 1 m/s | Guide 15 N · 1.082012 (load scale with the 2 kg payload) + 20 N s/m · 1 m/s through 0.02 m / (5 · 0.95), shaft 0.02 + 1e-4 · 250: 0.197548 N m; the velocity integrator's mean carries under 1 % of it (without the feedforward, all of it) | 1e-4 relative; 1 %; 2 % | `the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing`, axis |
+| The same on every other machine crate | Screw axis 0.529807 N m at 0.8 m/s; parallel SCARA tool turn 0.878065 N m at 30 rad/s; flying saw 1.440917 N m at 1.2 m/s (its shipped characteristic 1.440936); T-gantry 0.107412 / 0.100839 N m at 0.8 m/s in X; linear delta −0.267866 N m; D3 0.233030, D2 0.223461, H4 0.225393 N m going down at 0.5 m/s; D4 arms 0.114165, tool 0.025778 N m; hexapod 0.254378 N m rising at 0.1 m/s; planar cable robot −0.0960803 / 0.0946509 N m hauling in and paying out; in the cruises the integrators carry under 1 to 3 % of it | 1e-4 relative (hand values), 1e-5 N m (hexapod), 1e-6 N m (cable); 1 to 3 % | `the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing` in each crate; `the_flying_saw_s_machine_friction_feedforward_is_its_characteristic_and_the_integrator_carries_nothing`; `the_steady_friction_of_a_rising_platform_is_the_hand_calculated_one`; `the_planar_winches_steady_friction_at_the_centre_is_the_hand_calculated_one`, `the_planar_machine_friction_feedforward_takes_the_friction_off_the_integrators` |
+| Gripper times | Vacuum: V/Q ln(p_v / (p_v − p_hold)) = 0.12 ln 4 = 0.166355 s to grip, V/Q_vent ln(p_v / p_release) = 0.03 ln 8 = 0.062383 s to let go, hold A p_hold = 42.4116 N; jaws as configured | 1e-12 s | `the_vacuum_gripper_takes_the_hand_calculated_times_and_holds_area_times_pressure`, gripper |
+| Vacuum cup's hold against a part accelerated sideways | Slips beyond a = μ (A Δp − m g) / m = 5.69958 m/s² (2 kg, μ 0.5): there the part asks exactly A Δp | 1e-9 N | `the_part_asks_the_hold_exactly_at_the_hand_calculated_slip_acceleration`, gripper |
+| Gripper time on the single axis's shuttle cycle | Jaws opening in 0.25 s and closing in 0.3 s against dwells of 0.1 s: the cycle 0.35 s longer, the payload let go 0.25 s after arrival; jaws of 0.05 s and the switch off change nothing | 1e-9 s; 1.5 ms; exact | `the_gripper_time_lengthens_the_dwells_and_moves_the_payload_switch_by_hand`, axis |
+| `gripper-hold` on the rigid single axis at 10 m/s² | m g + m a / μ = 59.6133 N (seen 61.86 N: the servo's overshoot); passes a 70 N cup, fails a 55 N one; the optimiser stops where a 63 N cup still holds, short of where it goes with the hold not judged | 5 % | `the_gripper_hold_judges_the_held_part_against_the_cup_and_the_optimiser_keeps_to_it`, axis |
 | Leaning Z axis at two heights: restoring acceleration and tool-tip offset | Two masses on k = 1 / (1/k_lat + h²/k_tilt) | 1e-6 relative; 1e-12 m | `leaning_z_axis_matches_the_two_mass_hand_calculation`, gantry |
 | Resonance the machine reports at two heights | 24.6 Hz and 35.6 Hz by hand | 0.05 Hz | `a_shaper_that_follows_the_height_leaves_about_a_tenth_at_both_heights`, gantry |
 | Both modes at two heights, with their damping | Roots of the two-mass equation: 24.6303 and 104.1875 Hz at z = 0.05 m, 35.6220 and 109.5573 Hz at 0.15 m; damping ratios of their shapes 0.029751, 0.055161, 0.017328, 0.053512 | 1e-3 Hz; 1e-5 | `both_modes_are_the_roots_of_the_two_mass_hand_calculation`, gantry |
@@ -561,6 +567,47 @@ pulse the servo X, and the cylinder rests in its end stop, so they check that it
 (the equilibrium is the stop's deflection under the net pressure force). For the cylinder itself energy conservation
 does not apply (it is fed by the supply): the closed-cylinder check and the enthalpy balance above take its place, and
 the stroke-time convergence that of the travel.
+
+## Friction feedforward in the shipped configs
+
+`sim-cli analyze` of every shipped config with `effects.friction_feedforward = false` and with it on and `drive.friction_feedforward_model = "machine"` (15 November 2026): the following error while moving (`tracking_error_peak`, the tool's distance from the setpoint; `_angle_` for the axes in rad) and the settling at pick and place (`dwell_error_peak`, the second half of the dwells). Place in um, turn in mrad; "–" where the machine has none (no dwell in a conveyor or cam cycle). **On** marks where it is switched on as shipped. The velocity loop's margins do not change with a feedforward (`sim-cli margins` gives the same figures with it on and off), so every config keeps the margins it was tuned to: `sim-cli margins MACHINE --bands` of every config switched on gives at least 35.8° and 8.0 dB (rotary knife; the T-gantry 48.9° and 8.63 dB, the D4 40.4° and 8.92 dB).
+
+| Config | Following off → on | Settling off → on | On |
+| --- | --- | --- | --- |
+| T-gantry | 194.9 → 178.2 | 47.4 → 42.9 | yes |
+| T-gantry conveyor | 671.1 → 659.2 | – | yes |
+| T-gantry EXCT-30 | 535.9 → 512.0 | 39.5 → 34.8 | yes |
+| Single axis | 201.1 → 126.3 (characteristic 118.5) | 20.8 → 42.5 (characteristic 38.8) | no |
+| D3 | 1461 → 1131 | 305.2 → 179.3 | yes |
+| D3 conveyor | 1428 → 1194 | – | yes |
+| D2 | 1062 → 1047 | 369.4 → 210.2 | yes |
+| D2 conveyor | 1120 → 1080 | – | yes |
+| D4 | 3656 → 3491; 5.833 → 5.373 mrad | 388.0 → 320.0; 0.192 → 0.187 mrad | yes |
+| D4 conveyor | 3156 → 3064; 3.321 → 2.860 mrad | – | yes |
+| H4 | 2485 → 2313; 24.48 → 26.51 mrad | 435.9 → 365.9; 3.655 → 3.052 mrad | no (turn follows worse) |
+| Linear delta | 609.3 → 312.2 | 74.2 → 112.7 | no |
+| Linear delta conveyor | 666.5 → 350.8 | – | yes |
+| Parallel SCARA | 1021 → 1040; 1.366 → 0.481 mrad | 303.0 → 163.9; 0.117 → 0.022 mrad | no (place follows worse) |
+| Screw axis | 82.3 → 30.8 | 46.2 → 6.9 | yes |
+| Rack axis | 117.5 → 49.4 | 62.9 → 8.1 | yes |
+| Linear motor axis | 43.5 → 39.7 | 24.5 → 6.6 | yes |
+| Rotary table | 2.621 → 2.541 mrad | 0.0364 → 0.0264 mrad | yes |
+| Six-axis arm (joints) | 4.164 → 4.150 mrad | 2.069 → 2.008 mrad | no (gain under 3 %; its tool-space configs follow worse) |
+| Arm, 5- and 7-axis arm in tool space | 5759 → 5734, 6467 → 6432, 5758 → 5732; 7.667 → 7.697, 8.827 → 8.850, 7.692 → 7.722 mrad | 2362 → 2348, 2368 → 2353, 2365 → 2351; 3.185 → 3.252, 3.150 → 3.183, 3.178 → 3.234 mrad | no |
+| SCARA | 156.6 → 20.5; 1.788 → 1.713 mrad | 73.6 → 9.8; 0.279 → 0.082 mrad | yes |
+| SCARA in tool space | 592.7 → 543.6; 1.508 → 1.369 mrad | 91.6 → 28.3; 0.0199 → 0.0011 mrad | yes |
+| Palletiser | 5906 → 5890; 2.770 → 2.720 mrad | 2537 → 2533; 0.0130 → 0.0153 mrad | no |
+| Slider crank (and cam) | 4.444 → 4.467 mrad (2.265 → 2.269) | 0.134 → 0.047 mrad | no |
+| Rotary knife | 9.059 → 8.855 mrad | 0.155 → 0.042 mrad | yes |
+| Rotary knife cam | 4.715 → 4.718 mrad | – | yes (as the rotary knife: the cam configs are the shipped one running its cam) |
+| Flying saw (and cam) | 457.6 → 455.4 (519.0 → 418.7) | 192.6 → 22.4 | characteristic, as before: 455.1 and 23.1 (418.5) |
+| Disc cam | 0.319 → 0.232 mrad | 0.228 → 0.024 mrad | yes |
+| Disc cam cam | 0.158 → 0.158 mrad | – | yes |
+| Hexapod | 27.2 → 10.9; 0.081 → 0.026 mrad | 15.7 → 1.5; 0.034 → 0.004 mrad | yes |
+| Planar cable robot | 707.0 → 666.7 | 153.5 → 137.9 | yes |
+| Spatial cable robot | 355.2 → 283.1; 2.161 → 1.594 mrad | 105.1 → 67.0; 0.836 → 0.624 mrad | yes |
+
+Where it settles worse (the single axis, the linear delta: belt axes whose guides have a LuGre contact), the cause is not worked out; the single axis does the same with its shipped characteristic, so it is not the machine model's value. The guides' feedforward fades in over their Stribeck speed (`Lugre::feedforward`), so that a stop puts no torque step on the axis (the plain steady value changed the figures above by under 10 %). The arm's joints, the slider crank and the palletiser change by under 3 %.
 
 ## Vendor formulas and vendor documents
 

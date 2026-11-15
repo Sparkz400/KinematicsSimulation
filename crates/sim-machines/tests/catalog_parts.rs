@@ -310,6 +310,7 @@ fn an_s120_line_up_is_judged_against_its_one_braking_module() {
         braking_power_peak: 120e3,
         warm_start: None,
         conveyor: None,
+        held_accelerations: Vec::new(),
     };
     let braking = |cfg: &Config| -> Vec<(&'static str, Option<usize>, f64, f64, bool)> {
         verdicts(cfg, &load)
@@ -500,6 +501,7 @@ fn the_s1_check_judges_the_rms_torque_at_the_mean_speed_by_hand() {
             braking_power_peak: 0.0,
             warm_start: None,
             conveyor: None,
+            held_accelerations: Vec::new(),
         };
         let all = verdicts(&cfg, &load).unwrap();
         let find = |check: &str| all.iter().find(|v| v.check == check && v.motor == Some(0)).unwrap().clone();

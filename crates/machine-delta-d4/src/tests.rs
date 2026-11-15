@@ -374,3 +374,51 @@ fn an_arms_own_motor_table_is_refused() {
     }
     assert!(Delta4::new(&ENTRY.config()).is_ok());
 }
+
+/// Friction feedforward from the machine's own model (`steady_friction`), by hand, with the platform on the axis at
+/// z = -0.85 m going down at 0.5 m/s and the tool turning at 5 rad/s. Each arm turns at t' = 1.128251 rad/s (the D3's
+/// geometry, see its test of the same name): the joint 0.3 tanh(t' / 0.01) + 0.05 t' = 0.356413 N m. The telescope
+/// lengthens at 0.5 m/s and slides at 5 tanh(100) + 2 x 0.5 = 6 N, upward on the platform; each arm moves the platform
+/// by dz/dt_k = z' / (3 t') = -0.147721 m/rad (the three alike), so it feels 6 x -0.147721 = -0.886328 N m against its
+/// turn: 1.242740 N m through the gearbox. The arms hold the platform's weight, so their gearboxes are driven back:
+/// x 0.96 / 20, 0.059652 N m, plus the shaft at 20 t' = 22.565 rad/s, 0.05 tanh(45) + 2e-4 x 22.565 = 0.054513 N m:
+/// 0.114165 N m. The tool: the bearing 0.02 tanh(500) + 1e-4 x 5 = 0.0205 N m through ratio 8 at the efficiency
+/// 0.97^tanh(0.0205 x 5 / 0.5 W) = 0.993861 (the fade over 0.5 W), 0.002578 N m, plus the shaft at 40 rad/s,
+/// 0.02 tanh(80) + 8e-5 x 40 = 0.0232 N m: 0.025778 N m. In a vertical cruise of the shipped delta at 0.5 m/s the
+/// feedforward takes its own size off the arms' integrators (which keep the gearboxes' loss on the weight, by design).
+#[test]
+fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing() {
+    let m = (ENTRY.build)(&ENTRY.config()).unwrap();
+    let mut out = [0.0; 4];
+    m.steady_friction(&[0.0, 0.0, -0.85, 0.0], &[0.0, 0.0, -0.5, 5.0], &mut out);
+    let expected = [0.114165, 0.114165, 0.114165, 0.025778];
+    for k in 0..4 {
+        assert!((out[k] - expected[k]).abs() < 1e-5, "{out:?}, by hand {expected:?}");
+    }
+    let cruise = |model: bool| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text("effects.friction_feedforward = true").unwrap();
+        let source = if model { "machine" } else { "characteristic" };
+        cfg.set_text(&format!("drive.friction_feedforward_model = \"{source}\"")).unwrap();
+        cfg.set_text("start.pose = [0.0, 0.0, -0.7, 0.0]").unwrap();
+        cfg.set_text("axis.z.max_velocity_m_s = 0.5").unwrap();
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        let at = sim.control.set_pos.clone();
+        sim.command(Command::MoveTo(vec![at[0], at[1], -1.0, at[3]])).unwrap();
+        let (mut ff, mut integrator, mut n) = (0.0, 0.0, 0);
+        sim.run(0.6, |s| {
+            if s.time() > 0.15 && s.control.set_acc[2] == 0.0 && (s.control.set_vel[2] + 0.5).abs() < 1e-12 {
+                n += 1;
+                for k in 0..3 {
+                    ff += s.control.drives[k].friction_ff;
+                    integrator += s.control.drives[k].controller_torque;
+                }
+            }
+        });
+        assert!(n > 1000, "{n} samples in the cruise");
+        (ff / (3 * n) as f64, integrator / (3 * n) as f64)
+    };
+    let ((ff, with), (_, without)) = (cruise(true), cruise(false));
+    assert!(ff > 0.1, "feedforward {ff} N m");
+    assert!((without - with - ff).abs() < 0.03 * ff, "without: {without} N m, with {with}, of {ff}");
+}
