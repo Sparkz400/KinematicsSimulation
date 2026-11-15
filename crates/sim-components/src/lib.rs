@@ -23,6 +23,7 @@ pub mod drive;
 pub mod fault;
 pub mod identify;
 pub mod import;
+pub mod induction;
 pub mod joint;
 pub mod mech;
 pub mod motor_fit;
@@ -34,6 +35,7 @@ pub mod rigid;
 pub mod search;
 pub mod shaper;
 pub mod sim;
+pub mod stepper;
 pub mod trace;
 pub mod transmission;
 

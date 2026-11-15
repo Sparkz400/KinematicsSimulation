@@ -185,6 +185,7 @@ error-setpoint-too-far = The setpoint is further away than the axis may travel i
 error-disabled = The drives are disabled.
 error-fault = The drives have tripped and are stopping; enable them to acknowledge.
 error-outside-mode = A drive is in velocity or torque mode; put it back in position mode first.
+error-open-loop = A stepper's step generator and a V/f converter run open loop and take no torque setpoint.
 monitor-following-error = following error beyond its window
 monitor-standstill = following error at standstill beyond its window
 monitor-blocked = motor blocked at its torque limit
@@ -243,6 +244,7 @@ param-drive_max_current_a = Drive maximum output current [A]
 param-drive_base_load_current_a = Drive base load output current [A]
 param-drive_overload_time_constant_s = Time constant of the drive's thermal image [s]
 param-drive_max_current_time_s = Time the drive gives its maximum current from the rated load [s]
+check-stepper-synchronism = Stepper load angle, peak, against the pull-out angle (beyond it the rotor falls out of step) [rad]
 check-drive-overload = Drive thermal image, peak, against its trip level (1 = rated current held)
 check-drive-current = Motor current, RMS, against the drive rated current [A]
 check-drive-peak-current = Motor current, peak, against the drive maximum current [A]

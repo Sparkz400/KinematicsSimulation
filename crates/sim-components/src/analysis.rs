@@ -32,6 +32,12 @@ pub struct MotorLoad {
     pub peak_current: f64,
     /// Temperature rise the winding settles at when the cycle repeats for long.
     pub winding_rise: f64,
+    /// RMS of the current that heats the winding (Drive::thermal_current): the phase current's, an induction motor's
+    /// with its rotor's copper loss.
+    pub thermal_current: f64,
+    /// A stepper's highest |load angle| over the pass, electrical rad (drive::Phases::load_angle): beyond pi / 2 it
+    /// is past its pull-out angle, beyond pi it has lost steps. None for the other motors.
+    pub load_angle: Option<f64>,
     /// With effects.iron_loss: the stator's mean iron loss over the pass, W (`DriveParams::iron_loss_at`); 0 without.
     pub iron_loss: f64,
     /// With effects.motor_thermal_nodes: the rise the stator and housing settle at, K, the winding's times the housing's
@@ -847,6 +853,12 @@ impl Tally {
             // The RMS phase current: with field weakening the d current flows too.
             let (current, power) = (sim.control.drives[k].phase_current(), sim.control.drives[k].power);
             load.rms_current += current * current;
+            let heating = sim.control.drives[k].thermal_current(sim.control.drive_params_of(k));
+            load.thermal_current += heating * heating;
+            if let crate::drive::Motor::Stepper(_) = sim.control.drive_params_of(k).motor {
+                let angle = sim.control.drives[k].phases.load_angle.abs();
+                load.load_angle = Some(load.load_angle.unwrap_or(0.0).max(angle));
+            }
             load.peak_current = load.peak_current.max(current.abs());
             // Each motor's own drive and motor (`[drive.<id>]`, `[motor.<id>]`, `[parts.<id>]`).
             let own = sim.control.drive_params_of(k);
@@ -906,6 +918,7 @@ impl Tally {
         for (k, load) in self.loads.iter_mut().enumerate() {
             load.rms_torque = (load.rms_torque / steps).sqrt();
             load.rms_current = (load.rms_current / steps).sqrt();
+            load.thermal_current = (load.thermal_current / steps).sqrt();
             load.iron_loss /= steps;
             load.cubic_mean_torque =
                 if self.cubic[k].1 > 0.0 { (self.cubic[k].0 / self.cubic[k].1).cbrt() } else { 0.0 };
@@ -922,7 +935,7 @@ impl Tally {
                 self.pulley_radial[k].map(|_| if weight > 0.0 { (cubed / weight).cbrt() } else { 0.0 });
             load.radial_load_peak = self.pulley_radial[k].map(|_| self.radial_peaks[k]);
             let p = sim.control.drive_params_of(k);
-            load.winding_rise = p.settled_rise(load.rms_current, load.iron_loss);
+            load.winding_rise = p.settled_rise(load.thermal_current, load.iron_loss);
             // The housing carries all of the loss through its share of the resistance: the winding's rise less what the
             // winding's own share adds to it of the copper loss, which is the winding's rise less the iron's part.
             if let (true, Some(n)) = (p.heating, &p.thermal_nodes) {
@@ -1074,11 +1087,7 @@ impl Tally {
 fn stored_electrically(sim: &Sim) -> (f64, f64) {
     let p = sim.control.drive_params();
     let drives = &sim.control.drives;
-    let windings = drives
-        .iter()
-        .enumerate()
-        .map(|(k, d)| 0.5 * sim.control.drive_params_of(k).inductance * d.current * d.current)
-        .sum();
+    let windings = drives.iter().enumerate().map(|(k, d)| d.magnetic_energy(sim.control.drive_params_of(k))).sum();
     // A link of its own has its drive's capacitance (a drive named per motor brings its own); a shared one each drive's
     // share of the shared `[drive]`'s, as `drive::shared_dc_link` steps it.
     let capacitance =
@@ -1247,9 +1256,10 @@ pub struct Verdict {
     pub ok: bool,
 }
 
-/// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, and
-/// the `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt.
-pub const RATINGS_BEYOND_DEFAULT: [&str; 24] = [
+/// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
+/// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, and the motor kinds' own keys
+/// (`drive::Motor`: a stepper's and an induction motor's).
+pub const RATINGS_BEYOND_DEFAULT: [&str; 39] = [
     // A path in place of the cycle (`sim::with_path`).
     "path",
     "path.file",
@@ -1275,6 +1285,21 @@ pub const RATINGS_BEYOND_DEFAULT: [&str; 24] = [
     "conveyor.place_direction",
     "conveyor.place_speed_m_s",
     "conveyor.tracking_tolerance_m",
+    "motor.kind",
+    "motor.rotor_teeth",
+    "motor.detent_torque_nm",
+    "effects.detent_torque",
+    "drive.microsteps",
+    "drive.stepper_current_a",
+    "motor.rotor_resistance_ohm",
+    "motor.magnetizing_inductance_h",
+    "motor.stator_leakage_inductance_h",
+    "motor.rotor_leakage_inductance_h",
+    "motor.rated_voltage_v",
+    "motor.rated_frequency_hz",
+    "drive.induction_control",
+    "drive.vf_boost_v",
+    "drive.vf_slip_compensation",
 ];
 
 fn at_most(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -> Verdict {
@@ -1376,8 +1401,14 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
         // Peak torque against the torque-speed curve, and the settled winding temperature against the rated rise.
         out.push(at_most("motor-peak", Some(k), m.utilisation, 1.0));
         out.push(at_most("motor-thermal", Some(k), m.winding_rise, rated_rise));
-        // Siemens' S1 check: the RMS torque at the mean speed against the S1 curve (`s1_torque`).
-        if let Some(limit) = s1_torque(cfg, m.mean_speed)? {
+        // A stepper's load angle against its pull-out angle, pi / 2 electrical: beyond it the rotor falls out of step.
+        if let Some(angle) = m.load_angle {
+            out.push(at_most("stepper-synchronism", Some(k), angle, std::f64::consts::FRAC_PI_2));
+        }
+        // Siemens' S1 check: the RMS torque at the mean speed against the S1 curve (`s1_torque`), for a servo motor; a
+        // stepper's and an induction motor's heat is judged by "motor-thermal" alone.
+        let servo = cfg.get("motor.kind").ok().and_then(|v| v.as_str()).is_none_or(|kind| kind == "servo");
+        if let (true, Some(limit)) = (servo, s1_torque(cfg, m.mean_speed)?) {
             out.push(at_most("motor-s1", Some(k), m.rms_torque, limit));
         }
         // The peak speed against the motor's maximum speed, where the config gives it (a catalogue motor does).

@@ -2,7 +2,7 @@
 //! per motor. It works on any machine through the machine interface.
 
 use crate::conveyor::{Conveyor, Pass};
-use crate::drive::{Drive, DriveMode, DriveParams, quantise, shared_dc_link};
+use crate::drive::{Drive, DriveMode, DriveParams, WINDING_STATES, quantise, shared_dc_link};
 use crate::fault::{self, Fault, Monitor, Watch};
 use crate::path::{self, Piece};
 use crate::profile::{MotionLaw, Move, Shape};
@@ -863,6 +863,10 @@ impl Controller {
         if self.reacting.is_some() {
             return Err(CommandError { key: "error-fault" });
         }
+        // A stepper's step generator and a V/f converter take no torque setpoint.
+        if matches!(mode, DriveMode::Torque(_)) && self.motor_params[k].motor.open_loop() {
+            return Err(CommandError { key: "error-open-loop" });
+        }
         let was = self.drives[k].mode();
         if mode != DriveMode::Position && was == DriveMode::Position && self.busy() {
             return Err(CommandError { key: "error-busy" });
@@ -1317,11 +1321,14 @@ impl Controller {
     }
 
     /// The base step done (see `update`): per drive the current at its end and the electrical energy, copper loss and
-    /// work on the shaft over it, four numbers per drive in their order. Then the shared DC link, and the trip.
-    pub fn winding_stepped(&mut self, windings: &[f64]) {
-        for (k, (drive, w)) in self.drives.iter_mut().zip(windings.as_chunks::<4>().0).enumerate() {
+    /// work on the shaft over it, `WINDING_STATES` numbers per drive in their order, and the rotors' angles and speeds at
+    /// its end. Then the shared DC link, and the trip.
+    pub fn winding_stepped(&mut self, windings: &[f64], angle: &[f64], speed: &[f64]) {
+        for (k, (drive, w)) in self.drives.iter_mut().zip(windings.as_chunks::<WINDING_STATES>().0).enumerate() {
             // A drive whose pulses are off after a trip has had its disabled step (`react`).
             if !drive.pulses_off {
+                (drive.phases.x, drive.phases.angle, drive.phases.speed) =
+                    ([w[0], w[4], w[5], w[6]], angle[k], speed[k]);
                 drive.winding_stepped(&self.motor_params[k], w[0], [w[1], w[2], w[3]]);
             }
         }
