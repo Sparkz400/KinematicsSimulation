@@ -3293,9 +3293,9 @@ fn the_thermal_belt_and_comparison_views_show_the_simulation(entry: &'static Mac
             );
         }
     }
-    // The friction the machine has: of its guides, of its arms' joints, or of the winches of a platform in cables
-    // (since 13 November 2026).
-    let effect = ["guide_friction", "joint_friction", "winch_friction"]
+    // The friction the machine has: of its guides, of its arms' joints, of the winches of a platform in cables (since 13
+    // November 2026), or of the dancer a web runs over.
+    let effect = ["guide_friction", "joint_friction", "winch_friction", "dancer_friction"]
         .into_iter()
         .find(|e| model.config.get(&format!("effects.{e}")).is_ok())
         .unwrap();

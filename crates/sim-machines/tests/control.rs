@@ -6,9 +6,9 @@ use sim_core::{Config, MachineEntry};
 use sim_machines::MACHINES;
 
 /// The switch between a machine's elastic model and its rigid reference model: belt stretch on a belt machine, the
-/// gearboxes' elasticity on one of arms.
+/// gearboxes' elasticity on one of arms, the web's stretch on a machine that winds a web.
 fn model_switch(cfg: &Config) -> &'static str {
-    ["effects.belt_stretch", "effects.joint_elasticity", "effects.cable_stretch"]
+    ["effects.belt_stretch", "effects.joint_elasticity", "effects.cable_stretch", "effects.web_stretch"]
         .into_iter()
         .find(|key| cfg.bool(key).is_ok())
         .expect("a machine with an elastic and a rigid model")
@@ -1146,11 +1146,16 @@ fn loops_keep_their_margins(names: &[&str], across: bool) {
         // `step_bode_and_tuning_write_csv_for_every_machine` (its `margins`): not again here, but across the bounds.
         let frictions: &[bool] = if across || name.as_str() != entry.id { &[true, false] } else { &[false] };
         frictions.iter().map(move |&friction| {
-            // Motor friction, and the guides', the joints' or the winches' (whichever the machine has).
-            let other = ["effects.guide_friction", "effects.joint_friction", "effects.winch_friction"]
-                .into_iter()
-                .find(|key| cfg.bool(key).is_ok())
-                .unwrap();
+            // Motor friction, and the guides', the joints', the winches' or the dancer's (whichever the machine has).
+            let other = [
+                "effects.guide_friction",
+                "effects.joint_friction",
+                "effects.winch_friction",
+                "effects.dancer_friction",
+            ]
+            .into_iter()
+            .find(|key| cfg.bool(key).is_ok())
+            .unwrap();
             let cfg =
                 config_of(cfg, &[&format!("effects.motor_friction = {friction}"), &format!("{other} = {friction}")]);
             // With friction off, the friction values act on nothing: their runs gave the margins of the config as it is

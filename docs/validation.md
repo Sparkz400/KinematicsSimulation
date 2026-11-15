@@ -23,6 +23,7 @@ Test files, abbreviated in the tables:
 | joint | [`crates/sim-components/src/joint.rs`](../crates/sim-components/src/joint.rs) |
 | suite, control, catalog, review2, review3, sweep, effects, views, electrical, belt_and_heat | [`crates/sim-machines/tests/`](../crates/sim-machines/tests) `suite.rs`, `control.rs`, `catalog.rs`, `catalog_1fk2.rs`, `catalog_bahr.rs`, `catalog_parts.rs`, `catalog_golden.rs`, `catalog_dir.rs`, `review2.rs`, `review3.rs`, `sweep.rs`, `effects.rs`, `views.rs`, `electrical.rs`, `belt_and_heat.rs` |
 | cli | [`crates/sim-cli/tests/cli.rs`](../crates/sim-cli/tests/cli.rs) |
+| winder | [`crates/machine-winder/src/tests.rs`](../crates/machine-winder/src/tests.rs) |
 | plc | [`crates/sim-opcua/tests/plc.rs`](../crates/sim-opcua/tests/plc.rs) |
 | fmi | [`crates/sim-fmi/tests/fmi.rs`](../crates/sim-fmi/tests/fmi.rs), and `crates/sim-fmi/src/lib.rs` |
 
@@ -38,6 +39,7 @@ Test files, abbreviated in the tables:
 - [Hand calculations: linear delta](#hand-calculations-linear-delta)
 
 - [Hand calculations: four-axis delta picker D4](#hand-calculations-four-axis-delta-picker-d4)
+- [Hand calculations: winder with dancer](#hand-calculations-winder-with-dancer)
 - [Vendor formulas and vendor documents](#vendor-formulas-and-vendor-documents)
 - [Self-consistency](#self-consistency)
 - [What is not validated](#what-is-not-validated)
@@ -568,6 +570,32 @@ The cylinder of `sim_components::pneumatic` (unit tests there, a DSBC-32-like cy
 | Step convergence: stroke time at the sub-step 15.6 µs and half of it; the machine file's stroke times at 4 and 8 sub-steps | the same | 1 % | `the_stroke_time_converges_with_the_step`, `halving_the_step_leaves_the_stroke_time` |
 | Checks of the shipped cycle | Impact energy ½ · 1.0 kg · 0.2156² = 0.023 J (within 30 %: the piston still swings about its steady speed) against 0.4 J; load factor 9.807 N / 414.7 N = 0.0236 against 0.7; a rating of 0.01 J fails | as said | `the_cylinder_s_checks_are_judged` |
 | A cylinder too stiff for the step | refused with `error-cylinder-unstable` (1e-9 m³ dead volume) | – | `a_cylinder_too_stiff_for_the_step_is_refused`, `..._in_a_file` |
+
+## Hand calculations: winder with dancer
+
+The winder of `machine-winder` (tests in its `src/tests.rs`): PET film 50 µm × 0.4 m, 1390 kg/m³, EA = 80 kN; rolls
+from r_c = 45 mm to r_f = 150 mm, core and shaft 0.01 kg m²; gearbox i = 7, rotor and gearbox input 8.8e-4 kg m²; spans
+of 1 m; dancer 4 kg plus 2 kg, roller R = 40 mm, J_d = 2e-3 kg m², air spring 1000 N/m; tension 100 N at the core,
+taper 0.3.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Radius after a wound length of 640 m; the angles; the roll's capacity | r² = r_c² + h L / π: rewind 0.1105030 m, unwind 0.1109688 m; φ = 2 L / (r_0 + r): 8231.352 and 4904.800 rad; π (r_f² − r_c²) / h = 1286.482 m; forward of inverse, the dancer's trim in the unwind's wound length | 1e-7 m, 1e-3 rad, 1e-9 m | `the_radius_after_a_wound_length_matches_the_hand_calculation` |
+| Roll inertia at a radius; inertia ratio | ½ ρ w π (r⁴ − r_c⁴) + J_core: 0.1366427 kg m² at 110.503 mm, 0.4485586 full; ratio over i² J_m: 10.4026 full, 0.2319 on the core | 1e-7, 1e-4 | `the_roll_inertia_at_a_radius_matches_the_hand_calculation` |
+| Steady torque for a tension through the ratio, holding and feedforward | T r / i: −2.142857 and 0.642857 N m at the roll's start (100 N), −0.507857 and 1.692857 N m at its end (taper 79 N) | 1e-6 N m | `the_steady_torque_for_a_tension_through_the_ratio_matches_the_hand_calculation` |
+| Torque to speed the line up by 2 m/s² at 640 m, with the tension | ((J + i² J_m) (a ∓ h ω² / 2π) / r ± T r) / i, T = 82.21686 ∓ 1.25 N (the roller's J_d a / 2R²): rewind 1.7824107 N m at rest, 1.7818049 at 2 m/s; unwind −0.8150135, −0.8144080; the rigid model under them accelerates the line at 2 m/s² with the dancer at rest | 1e-6 N m, 1e-9 m/s² | `the_torque_to_accelerate_the_line_matches_the_hand_calculation` |
+| A span's steady tension for a speed difference, 1 against 1.0005 m/s, unwind wound slack | EA (v2 / v1 − 1) = 40.000 N in both spans (the first-order span equation gives 39.980 N) | 1e-6 N | `a_span_settles_at_the_tension_of_its_speed_difference` |
+| The dancer's static position for a tension and a load: cylinder set for 120 N, rolls held at 100 N | (2 · 120 − 2 T) / k_air with T = 100 r0 / (r0 − 2.88 µm) = 100.0026 N: 39.9948 mm | 2e-7 m | `the_dancer_settles_where_the_web_carries_its_load` |
+| Natural frequencies and damping on the web's stiffness | sqrt((2 EA / L + k_air) / m) / 2π = 26.0710 Hz, ζ = 0.026454; the roller sqrt(R² 2 EA / L / J_d) / 2π = 56.9410 Hz | 1e-4 Hz | `the_dancer_frequency_on_the_web_stiffness_matches_the_hand_calculation` |
+| Conservation of web length over a 3 m run | paid out / (1 + ε_0) = taken up (trapezoid of the rewind's flow) + Δ(M1 + M2) | 1e-7 m | `the_web_that_leaves_the_unwind_arrives_at_the_rewind_or_stays_in_the_spans` |
+| Round trip and static hold at a radius | at L = 0, a quarter and the capacity: still for 1 s under the holding torques | 1e-7 m (line), 1e-9 m (dancer) | `the_winder_holds_at_rest_at_both_ends_of_the_roll` |
+| The draw and the dancer's loop: roll wound at 100 N, web at 80 N, 2 m/s | without the loop y' = v (ε − ε_0) / (2 (1 + ε_0)) = −0.24969 mm/s; with it the trim settles at 0.49938 mm/s and the dancer stands | 1 % | `the_dancer_loop_takes_out_the_draw_of_a_roll_wound_at_another_tension` |
+| The own verdicts on the shipped cycle | inertia ratio 10.4026; speed at the core 7 · 2 / 0.045 = 311.11 rad/s; tension's torque at the full roll (100 + 1.25) 0.15 / 7 = 2.1696, (79 + 1.25) 0.15 / 7 = 1.7196 N m; each fails with its rating just below | 1e-4, 0.05 rad/s, 0.01 N m | `the_own_verdicts_judge_the_cycle_and_fail_at_their_limits` |
+| Emergency stops from 2 m/s | category 2 at both ends and in the middle, category 1 in the middle: web between 30 and 250 N, dancer within 40 mm, standing after 1.0 and 2.0 s; category 1 near the ends: the line stands after 2 / (8.976 rad/s² r_small) (4.87 and 4.66 s) with the web above 250 N; category 0: slack | 0.05 s, 0.1 s | `an_emergency_stop_along_the_line_keeps_the_web_within_its_limits`, `a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ` |
+
+The standard suite runs on its four loss-free configs (rigid and elastic, with and without the dancer's weight; the
+taper off, as it feeds energy in through the cylinder): its energy holds with the web's transport, since the unwind was
+wound at the tension the web runs at and the strain it carries in equals the strain it carries out.
 
 Of the standard suite, round trip, static hold, determinism, energy conservation, the loss budget and step convergence
 run on `machines/pneumatic-axis.toml` as on every machine file (`every_machine_file_passes_the_standard_suite`); they

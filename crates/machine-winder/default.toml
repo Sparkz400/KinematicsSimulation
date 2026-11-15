@@ -1,0 +1,456 @@
+# Winder and unwinder with a dancer: a PET film of 50 um, 400 mm wide, runs from an unwind roll down over a dancer
+# roller and up to a rewind roll, at up to 2 m/s (120 m/min) under 100 N. Both rolls on 3-inch cores (90 mm outside)
+# grow to 300 mm; each is turned by a 1FK2206-2AF servo motor through a planetary gearbox of ratio 7. The dancer is a
+# roller on a vertical slide, pushed down by a pneumatic cylinder whose force is the tension setpoint; its position
+# trims the unwind (`dancer.position_loop`). The shipped cycle runs the line at the roll's start 3 m forward, up to
+# line speed and down again, and back.
+#   [catalogue]  read from a maker's document (Siemens D 32, the motor; catalog/siemens).
+#   [estimate]   ours: a narrow-web film converter's mechanics as converting machine makers size them, not one maker's.
+format_version = 1
+# Obstacles the machine must not touch, as for every machine (see docs/config-reference.md). None by default.
+obstacles = []
+
+# Parts by name from the catalogue in catalog/, as for every machine (see docs/config-reference.md). "" names none:
+# the numbers in this file are used as written.
+[parts]
+motor = ""
+motor_supply = "s120"
+gearbox = ""
+drive = ""
+belt = ""
+axis = ""
+
+# Motor options: the holding brake (its inertia and weight) and the encoder ("" keeps drive.encoder_counts_per_rev).
+motor_brake = false
+motor_encoder = ""
+
+# One switch per effect.
+[effects]
+# The dancer's weight (taken off by its cylinder's force setpoint).
+gravity = true
+# A weight on the dancer (mass.payload_kg), taken off as its own.
+payload = true
+# The web stretches: two spans of EA / L with the transport of strain, slack below zero tension. Off, the web does not
+# stretch: the rigid reference model, in which the dancer takes up what the rolls' surfaces differ by.
+web_stretch = true
+# The web's material damping in the spans (web.damping_time_s).
+web_damping = true
+# The dancer's slide (Coulomb and viscous) and its roller's bearings.
+dancer_friction = true
+motor_friction = true
+# The gearboxes lose gearbox.efficiency of what they pass, either way.
+gearbox_efficiency = true
+# The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
+# gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here, as on the crank and
+# cam machines.
+gearbox_drag = false
+# The dancer's end stops at +-dancer.stroke_m.
+hard_stops = true
+# Each motor's holding brake (motor.brake_torque_nm), engaged while the drives are off: it keeps the rolls, and with
+# them the web's tension, after a stop that takes the torque off.
+holding_brake = true
+# The holding brakes engage brake.engage_delay_s after they are asked to hold and release brake.release_delay_s after
+# they are asked to let go. Off by default.
+brake_delay = false
+# The tension setpoint falls over the rewind's radius (web.taper): T0 (1 - k (1 - r_core / r)).
+tension_taper = true
+velocity_feedforward = true
+torque_feedforward = true
+# The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
+# as its speed feedforward runs on: a SINAMICS drive's fine interpolation. Changes nothing while the cycles are equal.
+fine_interpolation = true
+# Friction feedforward from the characteristic drive.friction_feedforward_* (S120 p3820-p3839): none recorded (0 N m).
+friction_feedforward = true
+# The position loop closes on a load-side scale (drive.load_encoder_step) instead of the motor encoder.
+load_encoder = false
+encoder_resolution = true
+velocity_filter = true
+torque_filter = true
+notch_filter = false
+torque_limit = true
+# The drive gives no more than its maximum output current, ratings.drive_max_current_a.
+drive_current_limit = true
+field_weakening = true
+drive_overload = false
+motor_thermal_nodes = false
+corner_blending = false
+input_shaping = false
+back_emf = true
+voltage_limit = true
+winding_heating = true
+part_heating = false
+thermal_feedback = false
+# The cycle analysis measures its pass with the windings at the rises they settle at on the cycle.
+thermal_warm_start = true
+torque_saturation = true
+drive_delay = true
+dc_link = true
+# The two Motor Modules share one DC link (an S120 line-up): what the unwind brakes, the rewind takes.
+shared_dc_link = true
+regenerative_supply = false
+fieldbus_delay = false
+fieldbus_jitter = false
+sensor_noise = false
+shaper_follows_pose = false
+# Obstacles are rigid: touching one stops the machine and takes the drives off. Without obstacles it changes nothing.
+crash = false
+# The frame under the machine gives way on springs ([base]). Off: the stiffnesses are [estimate]s.
+base_compliance = false
+base_reaction = false
+braking_resistor_heating = true
+iron_loss = true
+magnet_temperature = false
+# The drives watch their following error, their standstill and their torque limit; off by default.
+drive_monitoring = false
+
+[sim]
+dt_s = 62.5e-6
+substeps = 4
+
+# [estimate] a biaxially oriented PET film: 4 GPa, 1390 kg/m^3. tension_n is the setpoint at the rewind's core (2.5
+# N/cm), taper the share it falls by towards a large roll (T0 (1 - k (1 - r_core / r))); damping_time_s the film's
+# material damping, EA times it per unit of strain rate.
+[web]
+thickness_m = 50.0e-6
+width_m = 0.4
+density_kg_m3 = 1390.0
+modulus_pa = 4.0e9
+damping_time_s = 2.0e-4
+tension_n = 100.0
+taper = 0.3
+
+# [estimate] Both rolls on a 3-inch core of 90 mm outside diameter, full at 300 mm; core, shaft and chuck about the
+# roll's axis. The unwind roll was wound at wound_tension_n: its web comes off at that strain.
+[roll]
+core_radius_m = 0.045
+full_radius_m = 0.15
+core_inertia_kgm2 = 0.01
+wound_tension_n = 100.0
+# The stretch of the roll the line position runs over: from run_from_m of web on the rewind (0: the rewind on its core,
+# the unwind full), run_m long. The shipped one is the roll's first 6 m, where the unwind's torque and the rewind's speed
+# are highest.
+run_from_m = 0.0
+run_m = 6.0
+
+# [estimate] The two spans' length from the rolls (their idlers) to the dancer's roller at the middle of its travel.
+[span]
+unwind_m = 1.0
+rewind_m = 1.0
+
+# [estimate] The dancer's roller (an aluminium tube of 80 mm), its pneumatic cylinder's air spring, its travel from the
+# middle to the end stops, its friction, and the position loop that trims the unwind's speed (PI: trim = -(Kp y + Kp /
+# Tn integral of y), at most trim_max_m_s).
+[dancer]
+roller_radius_m = 0.04
+roller_inertia_kgm2 = 2.0e-3
+air_spring_n_m = 1000.0
+stroke_m = 0.05
+friction_coulomb_n = 3.0
+friction_viscous_n_s_m = 20.0
+friction_smoothing_m_s = 0.005
+roller_friction_coulomb_nm = 0.02
+roller_friction_viscous_nm_s_rad = 1.0e-4
+roller_friction_smoothing_rad_s = 0.5
+stop_stiffness_n_m = 1.0e6
+stop_damping_n_s_m = 2000.0
+position_loop = true
+trim_kp_1_s = 5.0
+trim_tn_s = 1.0
+trim_max_m_s = 0.2
+
+# [estimate] What moves with the dancer: its slide and roller; and a weight the cycle hangs on it and takes off again
+# (effects.payload, `payload` of a cycle segment), its weight taken off by the cylinder's force setpoint as the
+# dancer's own.
+[mass]
+dancer_kg = 4.0
+payload_kg = 2.0
+
+# [estimate] a planetary gearbox of ratio 7: 2 m/s at the core is 311 rad/s of the motor; its inertia at the input and
+# its efficiency (one stage).
+[gearbox]
+ratio = 7.0
+inertia_at_input_kgm2 = 1.0e-4
+efficiency = 0.97
+# The torque at which `efficiency` holds with effects.gearbox_drag: [estimate] the gearbox's rated torque.
+efficiency_torque_nm = 60.0
+# With effects.gearbox_drag: the no-load running torque at the input at no_load_speed_rpm and 20 degC. [catalogue]
+# Neugart PLE080, one stage: 0.20 to 0.35 N m, the middle.
+no_load_torque_nm = 0.275
+no_load_speed_rpm = 3000.0
+# What a gearbox named in [parts] (the catalogue) writes beside its ratio, efficiency and inertia: its torsional
+# stiffness and backlash. Read but not used: the winder's gearboxes are rigid (the web's spans are far softer).
+stiffness_nm_rad = 35752.6
+backlash_rad = 0.0
+
+# With effects.part_heating each gearbox warms with its loss. [estimate] as for the other machines' planetary
+# gearboxes.
+[thermal]
+gearbox_resistance_k_w = 1.5
+gearbox_time_constant_s = 1200.0
+gearbox_max_rise_k = 50.0
+
+# With effects.thermal_feedback (see mech::ThermalFeedback): the gearboxes' efficiency and drag follow their lubricant's
+# temperature. [estimate] as for the other machines; the belt's coefficient is read but not used, as this machine has
+# no belt; the seals' exponent likewise (its shaft friction does not follow the lubricant).
+[thermal_feedback]
+ambient_c = 20.0
+reference_c = 20.0
+viscosity_slope_k = 4000.0
+gearbox_viscous_loss_share = 0.5
+belt_stiffness_coefficient_1_k = 3.0e-4
+seal_viscosity_exponent = 0.33
+
+[motor]
+# [catalogue] 1FK2206-2AF, D 32: rotor 7.8 kg cm2
+rotor_inertia_kgm2 = 7.8e-4
+# [estimate]
+friction_coulomb_nm = 0.08
+friction_viscous_nm_s_rad = 3.0e-4
+friction_smoothing_rad_s = 0.5
+# [catalogue] static torque 6.5 N m over stall current 5.0 A
+torque_constant_nm_a = 1.3
+# [estimate] Siemens publishes neither for the 1FK2.
+resistance_ohm = 1.6
+inductance_h = 0.012
+# With effects.field_weakening [estimate]: pole pairs and the d-axis inductance (surface magnets: that of the q axis).
+pole_pairs = 4.0
+d_inductance_h = 0.012
+# With effects.motor_thermal_nodes [estimate]: the winding's share of the thermal resistance and its time constant.
+winding_resistance_share = 0.3
+winding_time_constant_s = 60.0
+# [catalogue] rated current 4.35 A at 400 V; thermal time constant 21 min; 18 N m at the maximum current of 17.8 A.
+rated_current_a = 4.35
+thermal_time_constant_s = 1260.0
+rated_temperature_rise_k = 100.0
+start_temperature_rise_k = 0.0
+# [catalogue] the stall current: with effects.iron_loss the copper loss at it brings the winding to its rated rise.
+stall_current_a = 5.0
+# With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
+magnet_temperature_coefficient_1_k = -0.0012
+max_current_a = 17.8
+torque_constant_at_max_current_nm_a = 1.0112
+# [estimate] the holding brake: more than the tension's torque at the full roll (250 N * 0.15 m / 7 = 5.4 N m).
+brake_torque_nm = 10.0
+
+# [estimate] the line: 2 m/s, up and down in half a second (4 m/s^2), as a narrow-web converter that indexes.
+[axis.web]
+max_velocity_m_s = 2.0
+max_acceleration_m_s2 = 4.0
+max_jerk_m_s3 = 40.0
+
+[drive]
+current_cycle_s = 62.5e-6
+velocity_cycle_s = 125.0e-6
+position_cycle_s = 1.0e-3
+current_delay_cycles = 1
+velocity_delay_cycles = 1
+kv_1_s = 50.0
+# [estimate] for the inertia at the motor in the middle of the roll (3.6e-3 kg m^2, 350 rad/s); it is a tenth of that
+# on the core and three times it on the full roll, so the loop is slower there.
+velocity_kp_nm_s_rad = 1.2
+velocity_tn_s = 0.03
+velocity_feedforward_factor = 1.0
+torque_feedforward_factor = 1.0
+# Torque feedforward: "rigid", the rigid model's inverse dynamics (the tension's torque and the roll's inertia at its
+# radius), or "inertia", one moment of inertia per motor (the rigid model's at the start pose).
+torque_feedforward_model = "rigid"
+# With effects.friction_feedforward: none recorded.
+friction_feedforward_speed_rad_s = [10.0]
+friction_feedforward_torque_nm = [0.0]
+friction_feedforward_model = "characteristic"
+precontrol_balance_s = 0.0
+# With effects.load_encoder: the step of the load-side scale, m of web.
+load_encoder_step = 1.0e-6
+current_kp_v_a = 48.0
+current_tn_s = 5.0e-3
+# [catalogue] a 400 V line: 540 V DC link
+bus_voltage_v = 540.0
+# [catalogue] 1FK2206-2AF at 400 V: 18 N m maximum, 5.4 N m rated at 3000 r/min
+peak_torque_nm = 18.0
+rated_torque_nm = 5.4
+rated_speed_rad_s = 314.159
+# sqrt(3/2) * 540 V / 1.3 N m/A
+no_load_speed_rad_s = 508.75
+# [estimate] a 22-bit encoder
+encoder_counts_per_rev = 4194304.0
+velocity_filter_s = 0.1e-3
+torque_filter_s = 0.1e-3
+notch_frequency_hz = 60.0
+notch_bandwidth_hz = 20.0
+encoder_noise_counts = 4.0
+current_noise_a = 0.01
+noise_seed = 1
+# On: one S120 Braking Module for the line-up (off: each axis brakes into a resistor of its own, an S210).
+braking_module = true
+blocked_speed_rad_s = 12.57
+blocked_time_s = 3.0
+fault_reaction = "off3"
+following_error_window_rad = 1.0
+# The highest speed the motor may turn at: its no-load speed, where the torque-speed curve ends.
+max_speed_rad_s = 508.75
+off1_ramp_s = 10.0
+# [estimate] A winder's quick stop: from the rated speed in 5 s, 63 rad/s^2 of the motor, 1 m/s^2 of web in the middle
+# of the roll; faster brakes the rolls apart on rolls of different radii (docs/mechanisms.md).
+off3_ramp_s = 5.0
+ss1_time_s = 10.0
+pulse_off_speed_rad_s = 2.09
+standstill_time_s = 1.0
+standstill_window_rad = 0.1
+torque_band = 0.0
+
+[ratings]
+# [estimate] what the film may carry: a tenth of its yield (100 MPa over 2e-5 m^2), and the least tension that keeps it
+# flat and tracking.
+web_max_tension_n = 250.0
+web_min_tension_n = 30.0
+# [estimate] the dancer's travel short of its end stops at 50 mm.
+dancer_max_travel_m = 0.04
+# [estimate] the largest load inertia over the rotor's a winder's drive is tuned for.
+max_inertia_ratio = 15.0
+# The axis in m: line position off target while dwelling.
+settling_tolerance_m = 0.001
+# [estimate] a planetary gearbox of this size: its limit for the average torque, its repeated peak torque and its input
+# speed.
+gearbox_rated_torque_nm = 60.0
+gearbox_max_torque_nm = 100.0
+gearbox_max_input_speed_rpm = 6000.0
+# [catalogue] The S120 line-up's DC link (catalog/siemens): a Smart Line Module 6SL3130-6AE15-0AB1 (220 uF), two Motor
+# Modules 6SL3120-1TE15-0AD0 (110 uF each) and the Braking Module 6SL3100-1AE31-0AB1 (110 uF), which switches in at
+# 770 V.
+dc_link_capacitance_uf = 550.0
+braking_threshold_v = 770.0
+# [catalogue] the Braking Module's resistor 6SN1113-1AA00-0DA0 (catalog/siemens/braking_s120.csv)
+braking_resistor_continuous_w = 300.0
+braking_resistor_peak_w = 25000.0
+# With effects.braking_resistor_heating [estimate]: the braking resistor's time constant and its rise at its continuous
+# power.
+braking_resistor_time_constant_s = 60.0
+braking_resistor_rated_rise_k = 200.0
+dc_link_overvoltage_v = 820.0
+dc_link_discharge_time_constant_s = 130.0
+# [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
+line_module_rated_power_w = 16000.0
+line_module_max_power_w = 35000.0
+line_module_efficiency = 0.98
+required_life_h = 20000.0
+bearing_reliability_percent = 90.0
+# [catalogue] Motor Module 6SL3120-1TE15-0AD0: 5 A rated, 15 A maximum
+drive_rated_current_a = 5.0
+drive_max_current_a = 15.0
+# With effects.drive_overload [estimate]: as for the other machines.
+drive_base_load_current_a = 4.25
+drive_chip_share = 0.3
+drive_chip_time_constant_s = 1.0
+drive_overload_time_constant_s = 10.0
+drive_max_current_time_s = 0.25
+
+[profile]
+cycle_s = 1.0e-3
+fieldbus_delay_cycles = 1
+fieldbus_jitter_cycles = 1
+setpoint_interval_s = 10.0e-3
+blend_time_s = 0.05
+shaper_frequency_hz = 25.0
+shaper_damping = 0.03
+shaper2_frequency_hz = 0.0
+shaper2_damping = 0.03
+torque_reserve = 0.8
+# Read but not used: no belt.
+tension_reserve = 0.8
+tension_margin_n = 0.0
+time_optimal_margin = 1.0
+path_tolerance_m = 0.0
+min_clearance_m = 0.0
+corner_tolerance_m = 0.0
+cycle_timing = "axis_limits"
+deceleration_ratio = 1.0
+shape = "s-curve"
+shaper_axes = []
+shaper_ei_tolerance = 0.05
+shaper_modes = []
+shaper_type = "zvd"
+trajectory_spline = "c2"
+up_acceleration_ratio = 1.0
+vertical_axis = ""
+
+[base]
+damping_ratio_rx = 0.02
+damping_ratio_ry = 0.02
+damping_ratio_rz = 0.02
+damping_ratio_x = 0.02
+damping_ratio_y = 0.02
+damping_ratio_z = 0.02
+inertia_x_kgm2 = 50.0
+inertia_y_kgm2 = 50.0
+inertia_z_kgm2 = 50.0
+# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi.
+mass_kg = 400.0
+# Where it tilts about, in the tool pose's frame (x, y, z), m.
+pivot_m = [0.0, 0.0, -1.5]
+# 0: rigid in that direction (no state). [estimate] the stand sways along z under the dancer.
+stiffness_x_n_m = 0.0
+stiffness_y_n_m = 0.0
+stiffness_z_n_m = 2.0e7
+tilt_stiffness_x_nm_rad = 0.0
+tilt_stiffness_y_nm_rad = 0.0
+tilt_stiffness_z_nm_rad = 0.0
+
+# At the roll's start (the unwind full, the rewind on its core), 3 m forward, the weight taken off the dancer, and back
+# with it hung on again.
+[start]
+pose = [2.0]
+
+[[cycle.segment]]
+target = [5.0]
+dwell_s = 0.3
+payload = false
+
+[[cycle.segment]]
+target = [2.0]
+dwell_s = 0.3
+payload = true
+
+# effects.brake_delay: how long the holding brakes take to engage once asked to hold, and to release once asked to let
+# go. [estimate] a servo motor's spring-applied brake closes in some 10 to 60 ms and opens in some 30 to 150 ms.
+[brake]
+engage_delay_s = 0.03
+release_delay_s = 0.06
+
+# Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
+[bounds]
+web.modulus_pa = [3.5e9, 5.0e9]
+web.damping_time_s = [1.0e-4, 5.0e-4]
+roll.core_inertia_kgm2 = [0.006, 0.015]
+mass.dancer_kg = [3.0, 6.0]
+dancer.roller_inertia_kgm2 = [1.5e-3, 3.0e-3]
+dancer.air_spring_n_m = [500.0, 3000.0]
+dancer.friction_coulomb_n = [1.0, 6.0]
+dancer.friction_viscous_n_s_m = [5.0, 50.0]
+gearbox.inertia_at_input_kgm2 = [0.5e-4, 2.0e-4]
+gearbox.efficiency = [0.95, 0.98]
+gearbox.no_load_torque_nm = [0.20, 0.35]
+thermal_feedback.ambient_c = [10.0, 40.0]
+thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
+thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
+thermal.gearbox_resistance_k_w = [0.8, 3.0]
+thermal.gearbox_time_constant_s = [600.0, 2400.0]
+brake.engage_delay_s = [0.01, 0.06]
+brake.release_delay_s = [0.03, 0.15]
+motor.friction_coulomb_nm = [0.04, 0.16]
+motor.friction_viscous_nm_s_rad = [1.5e-4, 6.0e-4]
+motor.resistance_ohm = [1.2, 2.4]
+motor.inductance_h = [0.009, 0.015]
+motor.pole_pairs = [3.0, 5.0]
+motor.d_inductance_h = [0.009, 0.015]
+motor.winding_resistance_share = [0.2, 0.5]
+motor.winding_time_constant_s = [20.0, 120.0]
+ratings.drive_base_load_current_a = [4.0, 4.5]
+ratings.drive_overload_time_constant_s = [2.0, 60.0]
+ratings.drive_max_current_time_s = [0.1, 1.0]
+ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
+ratings.line_module_efficiency = [0.95, 0.99]
+motor.magnet_temperature_coefficient_1_k = [-0.0013, -0.0009]
+ratings.drive_chip_share = [0.0, 0.5]
+ratings.drive_chip_time_constant_s = [0.1, 5.0]
+ratings.braking_resistor_time_constant_s = [20.0, 300.0]
+ratings.braking_resistor_rated_rise_k = [100.0, 300.0]

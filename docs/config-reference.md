@@ -1145,6 +1145,55 @@ estimates, values planar / spatial; bounded where they are a part's property):
 | `winch.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | The stops (`effects.hard_stops`) | 1e6, 1000 |
 | `workspace.tool_min`, `tool_max` | m, rad | The tool's box, the axes' ranges; poses in it outside the wrench-feasible workspace are refused (`error-cable-wrench-infeasible`) | −0.6, 0.3 to 0.6, 1.3 / −0.4, −0.3, 0.8, −0.05 (each turn) to 0.4, 0.3, 1.4, 0.05 |
 
+## Winder with dancer (`machine-winder`)
+
+The winder's config ([`machine-winder/default.toml`](../crates/machine-winder/default.toml)) has the common tables
+(`[parts]`, `[effects]`, `[thermal]`, `[thermal_feedback]`, `[profile]`, `[sim]`, `[base]`, `[brake]`, `[motor]`,
+`[drive]`, `[ratings]`, `[bounds]`, `[start]`, `[[cycle.segment]]`) with the same meanings; both rolls have the same
+motor, gearbox (`gearbox.ratio`, `inertia_at_input_kgm2`, `efficiency`, `efficiency_torque_nm`, `no_load_torque_nm`,
+`no_load_speed_rpm`) and drive. Its one axis is the line position, `[axis.web]` (`max_velocity_m_s` the line speed,
+`max_acceleration_m_s2`, `max_jerk_m_s3`), over the stretch of the roll `roll.run_from_m` to `run_from_m + run_m` (0 has
+the unwind full, the roll's capacity π (r_f² − r_c²) / h the rewind). A cycle segment's `payload` hangs the weight on the
+dancer (`true`) or takes it off. Model in [model-reference.md](model-reference.md#winder-with-dancer). Its own keys:
+
+| Key | Unit | Meaning | Shipped |
+| --- | --- | --- | --- |
+| `effects.web_stretch` | true/false | The web's spans stretch, carry their strain and go slack (off: the rigid model, an inextensible web) | true |
+| `effects.web_damping` | true/false | The web's material damping, `web.damping_time_s` | true |
+| `effects.dancer_friction` | true/false | The dancer slide's and its roller's friction | true |
+| `effects.tension_taper` | true/false | The tension setpoint falls over the rewind's radius by `web.taper` | true |
+| `effects.gearbox_efficiency`, `gearbox_drag`, `motor_friction`, `hard_stops` (the dancer's end stops), `holding_brake`, `brake_delay`, `gravity`, `payload` | true/false | As on every machine; with `thermal_feedback` the gearboxes' efficiency and drag follow their temperature | true; `gearbox_drag`, `brake_delay` false |
+| `web.thickness_m`, `width_m`, `density_kg_m3` | m, m, kg/m³ | The web: each turn adds the thickness to a roll's radius | 50e-6, 0.4, 1390 (PET), estimate |
+| `web.modulus_pa` | Pa | Young's modulus: EA = E h w | 4e9, estimate, bounds 3.5e9 to 5e9 |
+| `web.damping_time_s` | s | The material damping, EA times it per unit of strain rate | 2e-4, estimate, bounds 1e-4 to 5e-4 |
+| `web.tension_n` | N | The tension setpoint at the rewind's core, T0 | 100 |
+| `web.taper` | – | k of the taper T0 (1 − k (1 − r_c / r)), 0 to below 1 | 0.3 |
+| `roll.core_radius_m`, `full_radius_m` | m | Both rolls' core (outside) and full radius | 0.045, 0.15 |
+| `roll.core_inertia_kgm2` | kg m² | Core, shaft and chuck about the roll's axis | 0.01, estimate, bounds 0.006 to 0.015 |
+| `roll.wound_tension_n` | N | The tension the unwind roll was wound at: its web comes off at that strain | 100 |
+| `roll.run_from_m`, `roll.run_m` | m | The stretch of the roll the line position runs over: from this much web on the rewind, this long; within the capacity | 0, 6 |
+| `span.unwind_m`, `span.rewind_m` | m | The spans' length from each roll to the dancer roller with the dancer in the middle | 1.0, 1.0 |
+| `mass.dancer_kg` | kg | Slide and roller, moving with the dancer | 4, estimate, bounds 3 to 6 |
+| `mass.payload_kg` | kg | A weight the cycle hangs on the dancer (`effects.payload`), taken off by the cylinder's force setpoint | 2 |
+| `dancer.roller_radius_m`, `roller_inertia_kgm2` | m, kg m² | The dancer roller | 0.04, 2e-3 (bounds 1.5e-3 to 3e-3) |
+| `dancer.air_spring_n_m` | N/m | The cylinder's air spring: its force falls by k y as the dancer goes down | 1000, estimate, bounds 500 to 3000 |
+| `dancer.stroke_m` | m | The dancer's travel from the middle to its end stops | 0.05 |
+| `dancer.friction_coulomb_n`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | N, N s/m, m/s | The slide's friction (`effects.dancer_friction`) | 3, 20, 0.005 |
+| `dancer.roller_friction_coulomb_nm`, `roller_friction_viscous_nm_s_rad`, `roller_friction_smoothing_rad_s` | N m, N m s/rad, rad/s | The roller's bearings | 0.02, 1e-4, 0.5 |
+| `dancer.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | The end stops (`effects.hard_stops`) | 1e6, 2000 |
+| `dancer.position_loop` | true/false | The dancer's position loop trims the unwind's speed | true |
+| `dancer.trim_kp_1_s`, `trim_tn_s`, `trim_max_m_s` | 1/s, s, m/s | Its PI: trim = −(Kp y + Kp / Tn ∫ y dt), held to ± the most | 5, 1, 0.2 |
+| `ratings.web_max_tension_n`, `web_min_tension_n` | N | The verdicts `web-tension` (the highest span tension) and `web-slack` (the lowest, as the minimum over it) | 250, 30 |
+| `ratings.dancer_max_travel_m` | m | The verdict `dancer-travel` | 0.04 |
+| `ratings.max_inertia_ratio` | – | The verdict `inertia-ratio`: the full roll's inertia at the motor over rotor and gearbox input | 15 |
+
+The verdicts `torque-at-full-roll` and `torque-at-core` judge against `drive.peak_torque_nm`, `speed-at-core` against
+`drive.max_speed_rad_s` and `tension-torque-at-full-roll` against `drive.rated_torque_nm`; a rating left out is not
+judged. With `effects.part_heating` both gearboxes warm (`thermal.gearbox_*`); with `effects.thermal_feedback` their
+efficiency and drag follow it (`[thermal_feedback]`; the seals' exponent and the belt's coefficient are read and not
+used). The torque at each gearbox's output (`gearbox.<motor>.output_torque`) is judged against
+`ratings.gearbox_max_torque_nm` and `gearbox_rated_torque_nm` as on every geared machine.
+
 ## `[[cycle.segment]]`
 
 The cycle is a list of segments, run in order and repeated. All three configs have one. It cannot be edited in the parameter panel; `--set "cycle.segment = [{...}, ...]"` replaces it whole (TOML inline tables), and so does "Apply" of the app's optimiser where it changed the cycle's lifts.

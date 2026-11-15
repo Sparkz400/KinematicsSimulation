@@ -4605,6 +4605,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "machine-winder"
+version = "1.0.0"
+dependencies = [
+ "sim-components",
+ "sim-core",
+]
+
+[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6378,6 +6386,7 @@ dependencies = [
  "machine-parallel-scara",
  "machine-single-axis",
  "machine-t-gantry",
+ "machine-winder",
  "proptest",
  "serde_json",
  "sim-components",

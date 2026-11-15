@@ -16,6 +16,7 @@ The German version of this document is [de/mechanismen.md](de/mechanismen.md).
 - [Arms from URDF files](#arms-from-urdf-files)
 - [Parallel kinematics: hexapod and cable robots](#parallel-kinematics-hexapod-and-cable-robots)
 - [Pneumatic cylinder beside servo axes](#pneumatic-cylinder-beside-servo-axes-machinecylinder)
+- [Winder and unwinder with a dancer](#winder-and-unwinder-with-a-dancer-machine-winder)
 - [What is checked by hand](#what-is-checked-by-hand)
 - [Limits](#limits)
 
@@ -528,6 +529,51 @@ What the cylinder gives for sizing: stroke times out and back, the speed profile
 entering the cushion against its rating, the speed at the end stop, bounce and settling, the load factor, the air per
 double stroke and its energy at the compressor, the pressure and temperature traces of both chambers.
 
+## Winder and unwinder with a dancer (`machine-winder`)
+
+The classic servo sizing problem of converting machines, and the one machine whose motors a material couples and whose
+load changes over the run: `winder` runs a web (film, paper, foil) from an unwind roll over a dancer roller to a rewind
+roll, at a line speed, under a tension. The shipped config: a PET film of 50 µm, 400 mm wide, at up to 2 m/s (up to speed
+in half a second, 4 m/s²) and 100 N, on 3-inch cores (r_c 45 mm) growing to 300 mm (r_f 150 mm; 1286 m of film, 36 kg),
+each roll on a 1FK2206-2AF with a holding brake behind a planetary gearbox of ratio 7 and an S210; the dancer a roller of
+80 mm on a vertical slide, 4 kg plus a 2 kg weight, pushed down by a pneumatic cylinder, ±50 mm of travel. The line
+position runs over the roll's first 20 m (`roll.run_from_m`, `run_m`), where the unwind is full and the rewind on its
+core; the cycle runs 3 m forward and back. Model in the [model reference](model-reference.md#winder-with-dancer).
+
+| Id | Mechanism | Transmission | Tool pose | Own checks |
+| --- | --- | --- | --- | --- |
+| `winder` | unwind roll, two web spans of 1 m over a dancer roller, rewind roll | planetary gearbox of ratio 7 per roll | line position (m), the web wound up | `web-tension`, `web-slack`, `dancer-travel`; per motor `inertia-ratio`, `torque-at-full-roll`, `torque-at-core`, `speed-at-core`, `tension-torque-at-full-roll` |
+
+**What changes over a run.** A roll's radius grows by the web's thickness per turn, r² = r_c² + h s / π; the motor's speed
+for a line speed v is i v / r, highest at the core (311 rad/s at 2 m/s), the torque for a tension T r / i, highest at the
+full roll (2.14 N m at 100 N), and the inertia it sees grows with r⁴: from 0.23 to 10.4 times the rotor's and gearbox's
+over the roll. A sizing has to hold both ends; a cycle runs metres of a roll of 1286 m, so the own verdicts carry the
+cycle's line speed, acceleration and tension to the full roll and to the core (model reference, "Own verdicts"). With the
+shipped motor the inertia ratio (10.4 of 15 allowed) decides the motor, not its torque: a 1FK2205-2AF (3.15 kg cm²) has
+the torque but 22 times its inertia at the full roll.
+
+**The web** stretches in two spans of EA / L (80 kN/m each), carries its strain from span to span, and goes slack below
+zero tension. The dancer on them rings at 26.1 Hz, its roller at 56.9 Hz. The rolls follow the line position by
+electronic gearing at the radius of their wound length, with the tension's torque and the roll's inertia fed forward;
+the dancer's position loop trims the unwind's speed: a roll wound at 100 N run at 80 N would drift the dancer by 0.25 mm/s
+at 2 m/s (the draw), which the loop takes out. The tension setpoint tapers over the rewind's radius, 100 N at the core to
+79 N at the full roll, through the cylinder's force.
+
+**Stops.** A category 2 stop (`sim-cli stop winder --category 2`, the line braked along its path at the axis's 4 m/s²)
+keeps the web between 30 and 250 N at every radius. A category 1 stop brakes each motor on its own OFF3 ramp: in
+the middle of the roll, where the radii are equal, the web keeps its tension; near either end the two surfaces slow in
+the ratio of their radii (1.35 against 0.40 m/s² on the full roll and the core), the dancer runs into its stop after
+0.46 s and the web is stretched beyond 1200 N. Category 0 lets the holding brakes take the rolls within some 50 ms and the
+web goes slack. On a winder only a stop along the line keeps the web; after a category 1 stop the holding brakes keep
+the tension the dancer holds.
+
+```text
+sim-cli verdicts winder
+sim-cli run winder --cycle --time 10 --stop-at 7.5 --stop-category 2 --out winder.csv
+sim-cli stop winder --category 2
+sim-cli verdicts winder --set web.tension_n=150 --set axis.web.max_velocity_m_s=3.0
+```
+
 ## What is checked by hand
 
 Component tests (`sim-components`): the screw's critical speed, buckling load, inertia, stiffness, preload drag, life
@@ -594,6 +640,24 @@ closed-form filling time while choked (2.555 ms); energy kept in a closed cylind
 one; the stroke time within 1 % at half the step; the checks `cushion-energy` and `load-factor` on the shipped cycle;
 a cylinder too stiff for the step refused. The file passes the standard suite with the cylinder at rest.
 
+Winder tests (`machine-winder`): the standard suite (rigid and elastic, with and without the dancer's weight), and holding
+at rest at both ends of the roll and a quarter of it. After 640 m the rewind's radius is 110.503 mm and the unwind's
+110.969 mm (8231.352 and 4904.800 rad turned); the roll holds 1286.482 m. The roll's inertia at 110.503 mm is 0.1366427
+kg m², full 0.4485586 kg m², the inertia ratio 10.4026 at the full roll and 0.2319 on the core. The tension's torque through
+the ratio, −2.142857 and 0.642857 N m at the roll's start, −0.507857 and 1.692857 N m at its end (the taper's 79 N). The
+torque to speed the line up by 2 m/s² at 640 m: 1.7824107 N m on the rewind at rest, 1.7818049 N m at 2 m/s, −0.8150135 and
+−0.8144080 N m on the unwind, the roller's 2.5 N between the spans included; in the rigid model these torques move the line
+at exactly 2 m/s² with the dancer at rest. The suite's loss-free runs are made in the middle of the roll, where the radii
+are equal; at the roll's start the tension its constant holding torques keep drifts off the wound tension as the radii
+part, and the strain the web carries in and out (`power.web_transport`) is what the energy changes by. A span's steady tension for 1 against 1.0005 m/s: EA (v2 / v1 − 1) = 40.000 N
+(the span equation to first order 39.980 N). The dancer at a load of 120 N with the rolls held at 100 N stands 39.9948 mm
+down (the rolls' radii 2.88 µm smaller after giving the web). The dancer rings on the web at 26.071 Hz, its roller at
+56.941 Hz. What leaves the unwind arrives at the rewind or stays in the spans within 1e-7 m over a 3 m run. Without the
+dancer's loop a roll wound at 100 N run at 80 N drifts the dancer by −0.24969 mm/s at 2 m/s, with it the trim settles at
+0.49938 mm/s. The own verdicts: the inertia ratio 10.4026, the speed at the core 311.11 rad/s, each failing with its rating
+just below its value. A category 2 stop and, in the middle of the roll, a category 1 stop keep the web between 30 and
+250 N; a category 1 stop near either end of the roll overloads it.
+
 ## Limits
 
 - The arms are sized in joint space: no Cartesian paths and no inverse kinematics of the tool.
@@ -618,6 +682,12 @@ a cylinder too stiff for the step refused. The file passes the standard suite wi
 - Not built yet: mechanical cams, electronic cams and flying saw profiles.
 - Hexapod: the legs' own turning about their base joints and the payload's inertia are left out; one stiffness per leg
   (the screw's softest nut position); no modes reported (`resonance_hz`) for it yet.
+- Winder: both rolls have the same core, full radius, motor and gearbox; the web's mass in the spans, the change of the
+  spans' length with the rolls' radii, the web's Poisson thinning and the roll's own compliance (its layers sliding,
+  telescoping) are left out; the roll's radius is computed from its wound length (a measured diameter or the speed ratio,
+  `rewind.radius_from_speeds`, is a signal only); the shaft seals' friction does not follow the gearboxes' temperature
+  (their efficiency and drag do); the shipped cycle runs 3 m of the roll's 1286 m at its start, and the other end of the
+  roll is judged through the own verdicts, not run; corner blending has nothing to blend on its one reversing axis.
 - Cable robots: the cables' mass and sag are left out; the wrench-feasible workspace is the static one (the cycle's
   accelerations are judged by the tension verdicts, not planned around); near the workspace's edge the motors'
   stretch compensation counts on the closed form's tensions where the distribution holds a cable at a bound.

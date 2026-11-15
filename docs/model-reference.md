@@ -1147,6 +1147,106 @@ The links' modes (the upper arm's bend at 88 Hz) lie well above the gears' modes
 
 The joints' units are their own (`JointSpec::unit`), no longer the axes': a joint's position signal, its force's unit and whether it has a gearbox output torque follow the joint. The time-optimal planner reads the motors' limits through `feedforward_torque_moving`, so along a line of the tool it slows where a motor reaches its rated speed (on the SCARA's example line, joint 1 near the middle, 307.5 of 314.2 rad/s). Before timing a path as fast as the motors allow, `Controller::plan_path` checks the path as planned within the axis limits: a pose on it the machine cannot go to (a singularity, where the motors would have to turn infinitely fast) is refused with `error-path-range` at once, where the time-optimal timing would slow to a standstill there.
 
+## Winder with dancer
+
+Source: [`machine-winder/src/lib.rs`](../crates/machine-winder/src/lib.rs). A web runs from an unwind roll down over a
+dancer roller and up to a rewind roll; both rolls are centre-driven by a servo motor through a gearbox of ratio i; the
+dancer is a roller on a vertical slide pushed down by a pneumatic cylinder. The tool axis is the line position L (m), the
+web wound onto the rewind since it was empty, which is the web the unwind has paid out since it was full when the dancer
+stands in the middle: 0 has the unwind full and the rewind on its core, the roll's capacity π (r_f² − r_c²) / h the other
+way round. The axis runs over a stretch of the roll (`roll.run_from_m`, `run_m`; shipped its first 6 m). Of a state the
+line position is the mean of the two rolls', ½ (s_u − trim + s_r) (the dancer's trim below); in the rigid model the web's
+travel at the dancer roller.
+
+**Rolls.** A roll of web of thickness h gains h per turn, an Archimedean spiral: r = r_c + h φ / 2π (rewind, wound from the
+core), r = r_f − h φ / 2π (unwind, paid out from full), and r² = r_c² + h s / π with s the web on it, s(φ) = φ (r_0 + r) / 2.
+Its inertia is the web's as a thick-walled cylinder plus core and shaft, J(r) = ½ ρ w π (r⁴ − r_c⁴) + J_core; the motor's
+rotor and gearbox input add i² J_m. A roll that gains or loses web where the web moves with its surface gets no torque from
+the mass flow, so
+
+```text
+unwind   (J_u + λ_u i² J_m) ω_u' = λ_u i (τ_u − τ_f) + T1 r_u        (ω_u in the paying-out sense)
+rewind   (J_r + λ_r i² J_m) ω_r' = λ_r i (τ_r − τ_f) − T2 r_r
+```
+
+not d(J ω)/dt: the kinetic energy ½ λ v³ per second the web carries from roll to roll (λ = ρ w h) is booked with the
+web's transport below. λ_k is the gearbox's factor, η^tanh(P / 0.5 W) on the power P it passes (`effects.gearbox_efficiency`,
+as every machine's gearbox; with `effects.thermal_feedback` η and the drag at the gearbox's temperature), τ_f the shaft's
+friction, the gearbox's no-load drag (`effects.gearbox_drag`, booked as the gearbox's loss) and, while the drives are
+off, the holding brake (`mech::HoldingBrake`, a deflection state per motor). The torque each gearbox passes on,
+λ i τ_in, is the signal `gearbox.<motor>.output_torque`.
+
+**Web** (`effects.web_stretch`). Two spans, unwind to dancer and dancer to rewind, each vertical, of length L_k0 + y (y the
+dancer's travel down from the middle), each holding M_k of web unstretched; T = EA (L / M − 1) + EA τ_d ε̇ while L > M, 0
+while slack (`web.slack_time` counts the seconds). The web carries its strain: what crosses a boundary crosses it at the
+strain of the side it comes from,
+
+```text
+dM1/dt = v_u / (1 + ε_0) − v_d / (1 + ε_1),     dM2/dt = v_d / (1 + ε_1) − v_r / (1 + ε_2)
+```
+
+ε_0 = `roll.wound_tension_n` / EA the strain the unwind roll was wound at, v_d the roller's surface speed; backwards the
+upstream side is the other one (the rewind giving off web at the tension setpoint's strain). To first order this is the
+span equation L dT2/dt = EA (v2 − v1) + v1 T1 − v2 T2 (+ EA dL/dt); the form in M keeps the web's length exactly. The span
+lengths do not change with the rolls' radii (the web leaves each roll over a fixed idler, not modelled), and the web's own
+mass in the spans is left out.
+
+**Dancer.** The roller turns with the web, J_d ω_d' = R (T2 − T1) − drag; the slide carries it, m y'' = F_cyl − k_air y + m g
+− T1 − T2 − friction + stops. The cylinder's force is set to hold the tension setpoint, F_cyl = 2 T_set − m g, the dancer's
+weight (and a weight on it, `mass.payload_kg`) taken off, with the taper T_set = T0 (1 − k (1 − r_c / r_rewind))
+(`effects.tension_taper`). Its potential is −(F_cyl + m g) y + ½ k_air y²; while the taper changes F_cyl the loss row
+`power.cylinder` = dF_cyl/dt · y books the energy that puts in.
+
+**Rigid model** (`effects.web_stretch` off): the web does not stretch, the dancer stands at y = (s_u − s_r) / 2 and the
+roller turns at (v_u + v_r) / 2R. With a_k = b_k ± k_k T_k the surfaces' accelerations (b from the drive, k = r² / J), y'' =
+(a_u − a_r) / 2 and R ω_d' = (a_u + a_r) / 2 into the dancer's and the roller's balance give two linear equations in T1 and
+T2, solved loss-free and again with the gearboxes' factors.
+
+**Energy.** `energy.*`: the rolls with their rotors, the dancer and its roller; the dancer's weight and the cylinder; the
+spans' EA (L − M)² / 2M and the stops. The loss rows: each shaft, each gearbox, the dancer (slide and roller), the web's
+damping, the stops, `power.web_transport` (the balance of what the tensions do on the bodies, what the spans store and
+what their damping takes, plus the kinetic energy the web carries from roll to roll: ½ λ (v_u³ − v_r³) and the strain
+energy the web brings into and out of the spans, T v (ε_in − ε) to first order) and `power.cylinder`.
+
+**Control.** Both motors follow the line position by electronic gearing: `inverse` gives each roll's angle at the radius
+of its wound length (2 s / (r_0 + r)), so the speed setpoint is i v / r and the position loop holds the roll on the line.
+The torque feedforward (`feedforward_torque_moving`) is the tension's torque and the inertia compensation at that radius,
+
+```text
+τ = (J(r) ω' ∓ T r) / i,   ω' = (a ± h ω² / 2π) / r      (unwind −T r and +; rewind +T r and −)
+T1, T2 = T_set ∓ J_d a / (2 R²)                            (the roller's inertia between the spans)
+```
+
+The dancer's position loop (`dancer.position_loop`), a PI as a winder's technology controller runs it, trims the
+unwind: trim = −(Kp y + Kp / Tn ∫ y dt), within ± `trim_max_m_s`, every base step while the drives are on (`after_step`).
+The trim's integral, the web it has had the unwind pay out beyond the line, goes into the unwind's wound length in
+`inverse`: the unwind runs on the line speed over its radius plus the trim, and its radius follows the web it gave.
+Without the loop a roll wound at another tension than the web runs at drifts the dancer at v (ε − ε_0) / 2 (the draw).
+
+**Signals.** The spans' tensions `web.span.<k>.tension`, the highest `web.tension_peak`, `web.slack_ratio` (the minimum
+tension over the lower span's), `web.tension_setpoint`, `web.slack_time`; `dancer.position`, `speed`, `load_force`,
+`trim_speed`; `rewind.radius_from_speeds` (r_u ω_u / ω_r, as a drive works the radius out); per roll its radius, inertia
+ratio now and at the full roll, and the figures of the sizing at both ends of the roll.
+
+**Own verdicts.** `web-tension` (highest span tension, `ratings.web_max_tension_n`), `web-slack` (the minimum over the
+lowest, at most 1), `dancer-travel` (`ratings.dancer_max_travel_m`), and per motor: `inertia-ratio` (the full roll's
+J / (i² J_m), `ratings.max_inertia_ratio`), `torque-at-full-roll` and `torque-at-core` (the torque of the formula above at
+the full roll and at the core, at the line's speed and acceleration of the moment and the tension the span would have
+there: the setpoint at that end of the roll plus what the span is off its setpoint now; against `drive.peak_torque_nm`),
+`speed-at-core` (i v / r_c, `drive.max_speed_rad_s`) and `tension-torque-at-full-roll` (T r_f / i, `drive.rated_torque_nm`).
+A run takes metres of a roll of hundreds; these carry the cycle's line speed, acceleration and tension to both ends, where
+the speed is highest at the core and the torque at the full roll. `rigid_checks` gives them for the time-optimal plan
+(the dancer's travel: none in the rigid model).
+
+**Modes.** The dancer on the spans with the rolls held, k = EA / L1 + EA / L2 + k_air on the dancer and what it carries;
+the roller turning on the spans, R² (EA / L1 + EA / L2) on J_d.
+
+**Stops.** A category 2 stop brakes the line along its path and keeps the web's tension at every radius. A category 1 stop
+brakes each motor on its own OFF3 ramp, the same angular deceleration: the surfaces slow in proportion to their radii, so
+where the radii differ the rolls part and the web is overloaded or goes slack (tests
+`an_emergency_stop_along_the_line_keeps_the_web_within_its_limits`,
+`a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ`).
+
 ## Compliant base
 
 Source: [`sim-components/src/base.rs`](../crates/sim-components/src/base.rs). With `effects.base_compliance` every machine and machine file stands on a base that gives way: a rigid body on springs in up to six directions, translation along x, y, z and a small tilt about x, y, z through `base.pivot_m`, in the frame of the tool pose (x, y, z of the tool; the slides' x along their axis). Each direction with a stiffness above 0 is a state d and its rate after the machine's own:

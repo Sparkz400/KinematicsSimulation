@@ -1471,8 +1471,9 @@ fn compare(entry: &'static sim_core::MachineEntry) {
         // The first axis's position: not every machine has an axis x (the rotary table's c, the arms' j1), nor metres.
         let position = format!("axis.{}.position", sim.machine.axes()[0].id);
         let unit = sim.signal_infos().iter().find(|s| s.id == position).unwrap().unit.clone();
-        // The friction the machine has: of its guides, of its arms' joints, or of the winches that pull a platform.
-        let effect = ["guide_friction", "joint_friction", "winch_friction"]
+        // The friction the machine has: of its guides, of its arms' joints, of the winches that pull a platform, or of the
+        // dancer a web runs over.
+        let effect = ["guide_friction", "joint_friction", "winch_friction", "dancer_friction"]
             .into_iter()
             .find(|e| entry.config().bool(&format!("effects.{e}")).is_ok())
             .unwrap();
