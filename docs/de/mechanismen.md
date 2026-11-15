@@ -16,6 +16,7 @@ Konfigurationsschlüssel sind englische Bezeichner und in beiden Sprachen gleich
 - [Linearmotor](#linearmotor)
 - [Rundtisch: Wellgetriebe und Schneckengetriebe](#rundtisch-wellgetriebe-und-schneckengetriebe)
 - [Roboter aus URDF-Dateien](#roboter-aus-urdf-dateien)
+- [R-Theta-Z-Arm mit Bändern (wafer-handler)](#r-theta-z-arm-mit-bändern-wafer-handler)
 - [Parallelkinematiken: Hexapod und Seilroboter](#parallelkinematiken-hexapod-und-seilroboter)
 - [Pneumatikzylinder neben Servoachsen](#pneumatikzylinder-neben-servoachsen-machinecylinder)
 - [Was von Hand nachgerechnet ist](#was-von-hand-nachgerechnet-ist)
@@ -33,6 +34,7 @@ Konfigurationsschlüssel sind englische Bezeichner und in beiden Sprachen gleich
 | `scara` | SCARA-Roboter, `urdf/scara.urdf` | Wellgetriebe; die Pinole auf einem Kugelgewindetrieb | Gelenke (rad, m, rad), oder x, y, z, c im Werkzeugraum | `strain-wave-life`, die Prüfungen der Spindel an Gelenk 3 |
 | `palletiser` | Vierachs-Palettierer, `urdf/palletiser.urdf`, ein Parallelogramm hält den Flansch waagerecht | Getriebe i = 160, das Wellgetriebe des Flanschs 50 | x, y, z, rz (ausgeliefert im Werkzeugraum), oder die vier Motorgelenke | `strain-wave-life` je Gelenk |
 | `parallel-scara` | Fünfgelenk mit Parallelogramm-Unterarmen in der waagerechten Ebene (eigenes Crate, keine Gelenkmaschine); Z-Hub und Werkzeugdrehung an der Platte | Planetengetriebe i = 20 an den Armen; der Z-Hub über einen Kugelgewindetrieb 16 x 20 hinter einer Kupplung; die Drehung über ein Planetengetriebe i = 8 | x, y (m), z (m), c (rad) | `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life` am Z-Hub |
+| `wafer-handler` | R-Theta-Z-Arm aus zwei gleich langen Gliedern in der waagerechten Ebene, Unterarm und Effektor über Bänder 2:1 und 1:2 an die Schulter gekoppelt (eigenes Crate, keine Gelenkmaschine); eine Säule, die sich dreht und hebt | Wellgetriebe i = 50 an Säule und Oberarm; der Hub über einen Kugelgewindetrieb 16 x 10 hinter einer Kupplung | r (m), theta (rad), z (m) | `wafer-slip`, `effector-direction`, `elbow-band-slack`, `wrist-band-slack`; die Prüfungen der Spindel am Hub |
 
 Jede bekommt außerdem die Prüfungen, die jede Maschine bekommt: Spitzen- und Effektivmoment des Motors (`motor-peak`,
 `motor-thermal`), Antriebsströme, Spitzen- und kubisch gemitteltes Moment, Antriebsdrehzahl und Lebensdauer des
@@ -440,6 +442,40 @@ ein eigener Körper an der Feder der Übersetzung (mit `effects.amplifier_backla
 Werkzeug des D4 an seiner Welle. Siehe die Konfigurationsreferenz (docs/config-reference.md, Abschnitt „Quattro-type
 delta H4“).
 
+## R-Theta-Z-Arm mit Bändern (wafer-handler)
+
+Der Wafer-Handler `wafer-handler` (eigenes Crate, keine Gelenkmaschine) ist der R-θ-Z-Arm der Halbleiter- und
+Flachbildschirmfertigung. Eine Säule hebt (z, Motor 3, Kugelgewindetrieb 16 x 10 hinter einer Kupplung) und dreht
+(θ, Motor 1) einen Arm aus zwei Gliedern derselben Länge L = 0,32 m. Motor 2 fährt auf der Säule mit und dreht den
+Oberarm um φ, seinen Winkel zur radialen Linie. Im Oberarm läuft ein Stahlband von einer Scheibe, die fest an der Säule
+sitzt, zu einer Scheibe des halben Radius am Unterarm: Der Unterarm dreht sich gegen den Oberarm um −2 φ. Im Unterarm
+dreht ein Band von einer Scheibe am Oberarm zu einer doppelt so großen am Effektor diesen gegen den Unterarm um φ. So
+bleibt das Handgelenk auf der radialen Linie, 2 L cos φ von der Säulenachse, und der Effektor zeigt weiter entlang
+dieser Linie: Ein Motor fährt den Wafer gerade hinein und heraus (r = 2 L cos φ + e, e = 0,18 m vom Handgelenk zur
+Wafermitte). Die Werkzeuglage ist (r, θ, z).
+
+dr/dφ = −2 L sin φ ist am größten, wenn das Handgelenk über der Säule steht (φ = 90°), und verschwindet bei voller
+Streckung (φ = 0), der singulären Lage: Über `workspace.max_condition_number` (5: φ über 11,5°, r bis 0,807 m) wird die
+Konditionszahl 1 / sin φ abgelehnt, die Anschläge des Oberarms liegen bei 10° und 110°. Das Trägheitsmoment am R-Motor
+ändert sich stark mit der Reichweite: Die 0,55 kg m² der Glieder eingefahren sind 1,35 kg entlang r, ihre 0,19 kg m² an
+den Stationen 2,22 kg (und gegen die volle Streckung ohne Grenze); der θ-Motor spürt den ganzen Arm, eingefahren
+0,15 kg m², an den Stationen 0,60 kg m², mit r² wachsend. Die beiden Motoren sind über die Bewegung des Arms gekoppelt:
+Das Drehen zieht den Arm nach außen (Motor 2 hält ihn, der Wafer wird mit r θ̇² zur Achse beschleunigt), das Ausfahren
+während einer Drehung bremst Motor 1 (die Coriolis-Beschleunigung des Wafers 2 ṙ θ̇).
+
+Der Wafer liegt auf den Reibpads des Effektors (oder auf Vakuumpads, oder ein Kantengreifer hält ihn, `wafer.hold`).
+Seine Beschleunigung in der Ebene über den Zyklus ist das Prüfurteil `wafer-slip`, gegen μ g (μ (g + A p / m) auf
+Vakuumpads, die Beschleunigung des Greifers an der Kante) über einen Sicherheitsfaktor: Das begrenzt die Taktzeit eines
+Handlers. Der ausgelieferte Zyklus (unter den Wafer an Station A ausfahren, ihn 10 mm anheben, auf r = 0,05 m einfahren,
+um 180° drehen, an Station B ausfahren und einschwingen, absetzen, einfahren, zurückdrehen) ist darauf ausgelegt:
+0,3 g über 1,2 erlauben 2,45 m/s², die Reichweite ist auf 1,5 m/s² begrenzt, die Drehung auf 4 rad/s und 36 rad/s²
+(0,8 m/s² nach außen und 1,8 m/s² entlang bei r = 0,05 m, der Wafer nahe an die Säulenachse zurückgezogen). Die Bänder sind Federn mit Vorspannung (jedes Trum
+k = 9,4e5 N/m, 150 N): Ihre Dehnung lässt Unterarm und Effektor hinter Säule und Oberarm zurückbleiben, der Wafer bleibt
+in r zurück, und der Effektor dreht sich aus seiner radialen Linie (`effector.direction_error`; beim Verweilen an einer
+Station geprüft, `effector-direction`); ein Trum, das seine ganze Vorspannung verliert, wird schlaff (`elbow-band-slack`,
+`wrist-band-slack` prüfen den Ausschlag gegen die Hälfte davon). Siehe die
+[Modellreferenz](../model-reference.md#wafer-handler) und die
+[Konfigurationsreferenz](../config-reference.md#wafer-handler).
 ## Parallelkinematiken: Hexapod und Seilroboter
 
 Zwei Parallelkinematiken haben eigene Crates, `machine-hexapod` und `machine-cable-robot`, und werden wie jede andere
@@ -626,6 +662,19 @@ mehr; 5 cm unter den oberen Rollen wird die Lage abgelehnt; ein Seil, das die ge
 wird an der Grenze gehalten und die anderen tragen den Rest (je 8,485 N von Hand); vorwärts der inversen gibt die Lagen
 des räumlichen auf 1e-10 zurück.
 
+Maschinentests (`machine-wafer-handler`): die Standard-Testreihe mit jeder Mischung aus starren und elastischen Getrieben
+und Bändern; bei φ = 60°, θ = 30° liegt das Handgelenk bei (0,277128, 0,16) auf der radialen Linie und die Wafermitte bei
+(0,433013, 0,25), dr/dφ = −0,554256 m/rad; das Trägheitsmoment am R-Motor von Hand M_φφ = m₁ c₁² + I₁ + m₂ (L² + c₂² −
+2 L c₂ cos 2φ) + I₂ + (m₃ + m_w) 4 L² sin² φ, eingefahren 0,5499656 kg m² (2,485862e-4 kg m² am Motor), an den Stationen
+0,1876677 (1,036671e-4); am θ-Motor 0,153033 und 0,604751 kg m²; dreht der Arm an den Stationen mit sqrt(μ g / r) =
+1,980571 rad/s, beschleunigt der Wafer mit μ g = 2,941995 m/s², dem 1,2-Fachen der Grenze, und Motor 2 hält den Arm mit
+0,0162955 N m; fährt er bei r = 0,5 m mit 0,5 m/s aus, während er sich mit 1 rad/s dreht, beschleunigt der Wafer mit
+(−0,5, 1,0) m/s²; ein Moment von 1 N m am Effektor dehnt die Bänder um β = 2,955083e-4 und γ = 5,819704e-4 rad
+(K₁ = 1692, K₂ = 2303 N m/rad) und dreht ihn um 3,300103e-4 rad aus seiner radialen Linie; die starren Bänder tragen
+dT₁ = −4,271710 N und dT₂ = 4,379926 N bei θ̈ = 10 rad/s² mit dem Handgelenk über der Säule; der Z-Motor hält 11,2276 kg
+mit 0,1752378 N m; die Eigenformen gegen die von numpy (18,20 bis 186,45 Hz); der Halt auf Pads, Vakuum und Kante; ein
+Trum wird über seine Vorspannung hinaus schlaff; der Standardzyklus besteht alle Prüfungen, und eine Drehung, die mit
+60 rad/s² anläuft, lässt den Wafer rutschen.
 Tests des Pneumatikzylinders (`sim-components` pneumatic.rs, `sim-machines/tests/pneumatic.rs`): p A bei 6 bar auf
 beiden Seiten (482,5 und 414,7 N, Festo druckt 483 und 415); der gesperrte Durchfluss C p ρ0 nach ISO 6358 und das
 elliptische Gesetz; die Geschwindigkeit mit Abluftdrossel C ρ0 R T0 / A2 (0,1443 m/s auf 1 %, die des ausgelieferten Z

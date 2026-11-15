@@ -14,6 +14,7 @@ The German version of this document is [de/mechanismen.md](de/mechanismen.md).
 - [Linear motor](#linear-motor)
 - [Rotary table: strain wave and worm gear](#rotary-table-strain-wave-and-worm-gear)
 - [Arms from URDF files](#arms-from-urdf-files)
+- [Banded R-theta-Z arm (wafer-handler)](#banded-r-theta-z-arm-wafer-handler)
 - [Parallel kinematics: hexapod and cable robots](#parallel-kinematics-hexapod-and-cable-robots)
 - [Pneumatic cylinder beside servo axes](#pneumatic-cylinder-beside-servo-axes-machinecylinder)
 - [What is checked by hand](#what-is-checked-by-hand)
@@ -31,6 +32,7 @@ The German version of this document is [de/mechanismen.md](de/mechanismen.md).
 | `scara` | SCARA arm, `urdf/scara.urdf` | strain wave gears; the quill on a ball screw | joints (rad, m, rad), or x, y, z, c in tool space | `strain-wave-life`, the screw's checks on joint 3 |
 | `palletiser` | four-axis palletiser, `urdf/palletiser.urdf`, a parallelogram keeping the flange level | gears of ratio 160, the flange's strain wave gear 50 | x, y, z, rz (shipped in tool space), or the four motors' joints | `strain-wave-life` per joint |
 | `parallel-scara` | five-bar with parallelogram forearms in the horizontal plane (its own crate, not a joint machine); a Z stroke and a tool turn at the plate | planetary gearboxes of ratio 20 on the arms; the Z stroke on a ball screw 16 x 20 behind a coupling; the turn behind a planetary gearbox of ratio 8 | x, y (m), z (m), c (rad) | `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life` on the Z stroke |
+| `wafer-handler` | R-theta-Z arm of two equal links in the horizontal plane, its forearm and effector coupled to the shoulder by bands at 2:1 and 1:2 (its own crate, not a joint machine); a column that turns and lifts | strain wave gears of ratio 50 on the column and the upper arm; the lift on a ball screw 16 x 10 behind a coupling | r (m), theta (rad), z (m) | `wafer-slip`, `effector-direction`, `elbow-band-slack`, `wrist-band-slack`; the screw's checks on the lift |
 
 Every one of them also gets the checks every machine gets: motor peak and RMS torque (`motor-peak`, `motor-thermal`),
 drive currents, gearbox peak, cubic-mean torque, input speed and life where `[ratings]` gives them, DC link and braking
@@ -416,6 +418,37 @@ machine's character: the tool's inertia counts in the slide times kappa squared 
 `effects.amplifier_backlash` a dead band in it), as the D4's tool on its shaft. See the
 [config reference](config-reference.md#quattro-type-delta-h4).
 
+## Banded R-theta-Z arm (wafer-handler)
+
+The wafer handler `wafer-handler` (its own crate, not a joint machine) is the R-θ-Z arm of semiconductor and flat-panel
+handling. A column lifts (z, motor 3, a ball screw 16 x 10 behind a coupling) and turns (θ, motor 1) an arm of two links
+of the same length L = 0.32 m. Motor 2 rides on the column and turns the upper arm by φ, its angle from the radial line.
+Inside the upper arm a steel band runs from a pulley fixed to the column to a pulley on the forearm of half its radius:
+the forearm turns against the upper arm by −2 φ. Inside the forearm a band from a pulley fixed to the upper arm to one on
+the effector of twice its radius turns the effector against the forearm by φ. So the wrist stays on the radial line at
+2 L cos φ from the column's axis, and the effector keeps pointing along it: one motor moves the wafer straight in and out
+(r = 2 L cos φ + e, e = 0.18 m from the wrist to the wafer centre). The tool pose is (r, θ, z).
+
+dr/dφ = −2 L sin φ is largest with the wrist over the column (φ = 90°) and vanishes at full extension (φ = 0), the
+singular pose: the condition number 1 / sin φ is refused above `workspace.max_condition_number` (5: φ above 11.5°, r up
+to 0.807 m), and the upper arm's stops are at 10° and 110°. The R motor's inertia changes strongly with the reach: the
+links' 0.55 kg m² retracted is 1.35 kg along r, their 0.19 kg m² at the stations 2.22 kg (and without bound towards the
+full extension), while the θ motor feels the whole arm, 0.15 kg m² retracted and 0.60 kg m² at the stations, growing with
+r². The two motors are coupled through the arm's motion: turning pulls the arm outwards (motor 2 holds it, the wafer is
+accelerated towards the axis at r θ̇²), extending during a turn drags on motor 1 (the wafer's Coriolis acceleration
+2 ṙ θ̇).
+
+The wafer lies on the effector's friction pads (or vacuum pads, or an edge grip, `wafer.hold`). Its in-plane
+acceleration over the cycle is the verdict `wafer-slip`, against μ g (μ (g + A p / m) on vacuum pads, the grip's
+acceleration at the edge) over a safety factor: what limits a handler's cycle time. The shipped cycle (extend under the
+wafer at station A, lift it 10 mm, retract to r = 0.05 m, turn 180°, extend to station B and settle, lower it, retract,
+turn back) is sized for it: 0.3 g over 1.2 allows 2.45 m/s², the reach's limit is 1.5 m/s² and the turn's 4 rad/s and
+36 rad/s² (0.8 m/s² outwards and 1.8 m/s² along at r = 0.05 m, the wafer drawn back near the column's axis). The bands are springs with pretension (each span
+k = 9.4e5 N/m, 150 N): their stretch lets the forearm and the effector lag behind the column and the upper arm, the
+wafer lags in r and the effector turns out of its radial line (`effector.direction_error`; judged while it dwells at a
+station, `effector-direction`); a span that loses all its pretension runs slack (`elbow-band-slack`, `wrist-band-slack`
+judge the swing against half of it). See the [model reference](model-reference.md#wafer-handler) and the
+[config reference](config-reference.md#wafer-handler).
 ## Parallel kinematics: hexapod and cable robots
 
 Two parallel kinematics have crates of their own, `machine-hexapod` and `machine-cable-robot`, run and sized like every
@@ -586,6 +619,18 @@ weight. Cable robots: at the planar centre each cable is 1.283539 m long (arc an
 takes below its band is held at the bound and the others carry the rest (8.485 N each by hand); the spatial robot's
 forward of inverse returns its poses within 1e-10.
 
+Machine tests (`machine-wafer-handler`): the standard suite with every combination of rigid and elastic gearboxes and
+bands; at φ = 60°, θ = 30° the wrist at (0.277128, 0.16) on the radial line and the wafer centre at (0.433013, 0.25),
+dr/dφ = −0.554256 m/rad; the R motor's inertia by hand M_φφ = m₁ c₁² + I₁ + m₂ (L² + c₂² − 2 L c₂ cos 2φ) + I₂ + (m₃ + m_w)
+4 L² sin² φ, 0.5499656 kg m² retracted (2.485862e-4 kg m² at the motor) and 0.1876677 at the stations (1.036671e-4); the
+θ motor's 0.153033 and 0.604751 kg m²; turning at the stations at sqrt(μ g / r) = 1.980571 rad/s the wafer accelerates at
+μ g = 2.941995 m/s², 1.2 times the limit, and motor 2 holds the arm with 0.0162955 N m; extending at 0.5 m/s during a
+turn at 1 rad/s at r = 0.5 m the wafer's acceleration is (−0.5, 1.0) m/s²; a torque of 1 N m on the effector stretches
+the bands by β = 2.955083e-4 and γ = 5.819704e-4 rad (K₁ = 1692, K₂ = 2303 N m/rad) and turns it out of its radial line by
+3.300103e-4 rad; the rigid bands carry dT₁ = −4.271710 N and dT₂ = 4.379926 N at θ̈ = 10 rad/s² with the wrist over the
+column; the Z motor holds 11.2276 kg with 0.1752378 N m; the modes against numpy's (18.20 to 186.45 Hz); the hold on
+pads, vacuum and edge; a span runs slack beyond its pretension; the default cycle passes all verdicts and a turn
+speeding up at 60 rad/s² slips the wafer.
 Pneumatic cylinder tests (`sim-components` pneumatic.rs, `sim-machines/tests/pneumatic.rs`): p A at 6 bar on both
 sides (482.5 and 414.7 N, Festo's 483 and 415); the ISO 6358 choked flow C p ρ0 and the elliptic law; the meter-out
 throttled speed C ρ0 R T0 / A2 (0.1443 m/s within 1 %, the shipped Z's 0.2156 m/s within 3 %); the air springs' natural

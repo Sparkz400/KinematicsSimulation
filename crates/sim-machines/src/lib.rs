@@ -29,6 +29,7 @@ pub static MACHINES: &[&MachineEntry] = &[
     &machine_cable_robot::PLANAR,
     &machine_cable_robot::SPATIAL,
     &machine_crank_cam::DISC_CAM,
+    &machine_wafer_handler::ENTRY,
 ];
 
 pub const LANGUAGES: &[&str] = &["en", "de"];
