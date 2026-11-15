@@ -118,6 +118,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `process_force` | T E S | off | A force on the tool (single axis: the carriage) while the cycle dwells |
 | `hard_stops` | T E S | on | Spring-damper stops beyond both ends of each stroke |
 | `holding_brake` | T E S | on | Motor holding brakes that act while the drives are disabled, in the elastic and in the rigid model |
+| `brake_delay` | T E S | off | The holding brakes engage `brake.engage_delay_s` after they are asked to hold (the torque off, or the end of a category 1 stop) and release `brake.release_delay_s` after they are asked to let go; a hanging axis sags while its brake engages. Off: at once, as before. Optional in a config file (off) |
 | `temperature` | T E S | off | Scale factors on friction and belt stiffness, set by hand in `[temperature]`; not used while `thermal_feedback` is on |
 
 **Drive and control**
@@ -251,6 +252,15 @@ Festo gives the friction of the EXCT only as a graph of torque over speed, so al
 | `max_current_a` | T E S | A | Maximum current. Where saturation is referred to, and with saturation on the limit of the current setpoint | datasheet | `torque_saturation` |
 | `torque_constant_at_max_current_nm_a` | T E S | N m/A | Torque constant at the maximum current. Must not exceed `torque_constant_nm_a`. E: 18 N m at 15.1 A | datasheet | `torque_saturation` |
 | `brake_torque_nm` | T E S | N m | Torque each motor's holding brake holds while the drives are disabled; it slips beyond. The most the brake ever gives, also when it engages at speed | datasheet (estimate in E) | `holding_brake` |
+
+## `[brake]`
+
+The holding brakes' timing, one for all brakes of a machine. In every shipped config and machine file that has a holding brake; optional in a config file (0).
+
+| Key | In | Unit | Meaning | Source | Effect switch |
+| --- | --- | --- | --- | --- | --- |
+| `engage_delay_s` | T E S | s | From the moment the brakes are asked to hold until they hold (a spring-applied brake's closing time). 0.03 in all files, bounds 0.01 to 0.06 | estimate: the Siemens motor data in `catalog/` gives no brake times | `brake_delay` |
+| `release_delay_s` | T E S | s | From the moment the drives come on until the brakes let go (opening time); meanwhile the drive holds against the brake. 0.06 in all files, bounds 0.03 to 0.15 | estimate, as above | `brake_delay` |
 
 ## `[gearbox]`
 
@@ -512,7 +522,8 @@ One drive per motor, all with the same settings.
 | `noise_seed` | T E S | – | Seed of the noise and of the fieldbus jitter. A whole number, not negative. Each motor has a stream of its own, and the jitter one more | choice | `sensor_noise`, `fieldbus_jitter` |
 | `fault_reaction` | T E S D | – | With `effects.drive_monitoring`: how the drive stops when the drives trip. `"off1"` ramps the speed setpoint down on `off1_ramp_s` (S120 OFF1, p1121), `"off3"` on `off3_ramp_s` (OFF3, p1135), `"sto"` takes the torque off at once (the motor coasts), `"current_limit"` brakes at the torque limit (OFF3 with no ramp). Per motor as `[drive.<id>]`. `"off3"` in all files | choice | `drive_monitoring` |
 | `off1_ramp_s` | T E S D | s | OFF1 ramp: the time from the rated speed to standstill; 0 brakes at the torque limit. 1.0 in all files | estimate | `drive_monitoring` |
-| `off3_ramp_s` | T E S D | s | OFF3 ramp, the same. 0.1 in all files, a fast stop as commissioned | estimate | `drive_monitoring` |
+| `off3_ramp_s` | T E S D | s | OFF3 ramp, the same. 0.1 in all files, a fast stop as commissioned. Also the ramp of a category 1 stop (`sim-cli run --stop-category 1`, `sim-cli stop`), whatever `fault_reaction` is | estimate | `drive_monitoring`, stops |
+| `ss1_time_s` | T E S D | s | A category 1 stop takes the torque off after this long at the latest, also when a motor still turns, as SS1's timer (p9652). 0.5 in all files. Optional in a config file (no limit). A setting: no `[bounds]` | estimate | stops |
 | `pulse_off_speed_rad_s` | T E S D | rad/s | Once its ramp is down, the drive takes its pulses off below this speed (p1226). 2.09 (20 r/min); 0.02 m/s on a linear motor | estimate | `drive_monitoring` |
 | `following_error_window_rad` | T E S D | rad | The drive trips when its following error (at the motor) is beyond this (p2546). 1.0; 0.005 m on a linear motor. A setting, not a physical value: no `[bounds]` | estimate | `drive_monitoring` |
 | `standstill_window_rad` | T E S D | rad | Once the setpoint has stood still `standstill_time_s`, the drive trips when its following error is beyond this (p2542). 0.1; 0.0005 m on a linear motor | estimate | `drive_monitoring` |
@@ -531,6 +542,7 @@ What the parts allow. `sim-cli verdicts` judges a cycle against these. **A ratin
 | `belt_max_tension_n` | T E S | N | Allowable belt tension. E: 2140 N. Festo publishes no allowable belt tension for the EXCT. It states the 5 mm pitch, the steel cords, the 30 mm width and the stretch of the belt: 0.045 % at 300 N, which is 667 kN per unit strain. Megadyne's Megalinear handbook lists for 5 mm pitch steel-cord polyurethane belts, at 4 mm/m stretch: T5 840 N at 25 mm and 1060 N at 32 mm (about 250 kN per unit strain at 30 mm), AT5 1805 N at 25 mm and 2275 N at 32 mm (about 535 kN). Festo's belt is somewhat stiffer than AT5 with standard steel cords and far stiffer than T5, so the limit is the AT5 figure between the two widths: 2140 N at 30 mm. The figures were read from the handbook itself (average values for open-ended belts, a quarter of the breaking strength); that Festo's belt has cords of that class is concluded from the stretch, not stated by Festo. The teeth give way before the cords do: that is judged by `pulley_max_torque_nm`. | `belt-tension` | placeholder (T S), estimate (E) |
 | `belt_min_tension_n` | T E S | N | Lowest tension allowed. Below it the teeth can jump | `belt-slack` | choice (0) |
 | `settling_tolerance_m` | T E S | m | How far the tool's place (its axes in m) may be from its target in the second half of a dwell | `settling` | choice |
+| `max_stopping_distance_m` | none | m | How far the tool may travel after a stop at the worst moment of the cycle or path (`sim-cli stop`: the farthest it gets from where it was at the trigger, over the axes in m). Any config may add it | `stopping-distance` (in `sim-cli stop`, not in `verdicts`) | – |
 | `settling_tolerance_rad` | arms, table, D4 | rad | How far the tool's turn (its axes in rad: an arm's joints or orientation, the SCARA's and the D4's c, the table) may be from its target then, apart from the place: metres and radians are not added. Any config may add it | `settling-angle` | arm 3 mrad in joints, 5 mrad in tool space; SCARA 1 mrad (2 in tool space); table 0.2 mrad; palletiser and D4 5 mrad; estimates |
 | `pulley_max_torque_nm` | E | N m | Allowable torque at the pulley. Also caps the peak torque of a motor by name, and the time-optimal plan keeps `profile.torque_reserve` of it at the gearbox output | `pulley-torque` | datasheet (Festo: 12.5 N m) |
 | `gearbox_rated_torque_nm` | T S | N m | Gearbox rated (continuous) torque at the output. A gearbox by name sets it | `gearbox-continuous` | datasheet (as Siemens NRB060, ratio 5) |
@@ -624,6 +636,8 @@ Low and high bound of the values that are estimates. The table mirrors the confi
 | D4 | 50 | As D, with the arms' backlash, and the estimates of `[gearbox.4]` (backlash, damping), `[motor.4]` (winding, friction), `[ratings.4]`, `[tool]` and `[shaft]` | As D; the shaft's slide smoothing speed |
 | H4 | 43 | As D, with the arms' backlash (an estimate here), and the estimates of `[plate]` (pinion radius, gear ratio, the amplifier's stiffness, damping and backlash) and `[tool]` | As D; the upper arms have no bending (no `[upper_arm]`) |
 | E | 75 | Every `[estimate]` of the file, including geometry estimates, belt mass, all friction values, winding resistance and inductance, brake torque, pulley inertia, frame mass, idler, cable chain, process force, hard stops, sensor noise, the estimated ratings (the discharge time constant and the line module's efficiency among them), the thermal resistances and time constants, the tooth jump factor and the four estimates of `[thermal_feedback]` | The ripple and cogging orders and the loop gains; all `[catalogue]` values; the rated rises of `[thermal]`; the span resonance band (a limit) |
+
+Since 15 November 2026 every config with a holding brake also bounds `brake.engage_delay_s` and `brake.release_delay_s`, two more than the counts above. No cycle uses them (the brakes act only while the drives stop or start), so `verdicts --bands` runs nothing for them; `sim-cli stop` with the bounds set by hand shows what they do.
 
 Keys with bounds in one config only:
 
@@ -939,7 +953,10 @@ have theirs).
 `effects.link_bending` (in all joint kit configs, acting on the arms only; off as shipped) and `[link_bending]` (in the
 arms' configs): each link from its joint to the next joint (the flange after the last) bends as a cantilever in its
 first Euler-Bernoulli mode, in the plane its joint turns it in; its own URDF mass spread along it, everything beyond at
-its tip. Signals `link.<n>.bend` (m, its tip's deflection). Estimates: cast aluminium.
+its tip. Signals `link.<n>.bend` (m, its tip's deflection), `link.<n>.bend_across` (m) and `link.<n>.twist` (rad)
+for the other directions. Estimates: cast aluminium. `effects.link_bending_reaction` (in the same configs, off as shipped;
+acts only with `effects.link_bending`): the bending acts back on the joints, joints, gearboxes and links one coupled
+system, the bending's energy and its damping (`power.link_bending`) in the machine's; off, the bending is one-way.
 
 | Key | Unit | Meaning | Value, source |
 | --- | --- | --- | --- |
@@ -947,6 +964,8 @@ its tip. Signals `link.<n>.bend` (m, its tip's deflection). Estimates: cast alum
 | `wall_m` | m | Per joint, the tube's wall | arm 0, 0.008, 0.008, 0.006, 0.005, 0; SCARA 0.008, 0.006, 0, 0; estimates |
 | `youngs_modulus_pa` | Pa | E of all links: cast aluminium 7e10; bounds 6.5e10 to 7.2e10 | 7.0e10, estimate |
 | `damping_ratio` | – | Of every link's mode; bounds 0.01 to 0.05 | 0.02, estimate |
+| `directions` | – | The directions each link deflects in, each its first mode: `in_plane` (bending in the plane its joint turns it in), `out_of_plane` (bending across that plane), `torsion` (twisted about its length) | `["in_plane"]` |
+| `shear_modulus_pa` | Pa | G of all links, read with `torsion`: cast aluminium 2.6e10; bounds 2.4e10 to 2.7e10 | 2.6e10, estimate |
 
 ## Slider-crank, rotary knife, flying saw, disc cam (`machine-crank-cam`)
 

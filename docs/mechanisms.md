@@ -262,7 +262,12 @@ Euler-Bernoulli mode, in the plane its joint turns it in: modal mass a quarter o
 it, stiffness 1.875104^4 / 4 E I / L^3, driven by what the bodies beyond need from its tip (their m (a - g), its moment
 through the tip's slope) and its own weight and inertia spread along it. The tool rings with it in tool space; the
 joints do not feel it (one-way). A 60 x 4 mm steel tube of 0.8 m and 4.5 kg alone rings at the Euler-Bernoulli 88.96 Hz
-and sags under its weight by 49.2 um, 1.3 % above the exact q L^4 / (8 E I).
+and sags under its weight by 49.2 um, 1.3 % above the exact q L^4 / (8 E I). `link_bending.directions` adds the bend
+across that plane (`out_of_plane`) and the twist about the link's length (`torsion`, shear modulus
+`link_bending.shear_modulus_pa`), a first mode each, with the bodies beyond as a tip mass and a tip inertia. With
+`effects.link_bending_reaction` the bending acts back: joints, gearboxes and links are one coupled system, the motors
+feel the links ring and excite them through their loops, the bending's energy and damping are in the machine's, and
+`modes` gives the coupled modes with the motors held (a link on a gearbox rings as the two springs in series).
 
 With `effects.base_compliance` (every machine and machine file, off as shipped) the machine stands on a base of up to
 six spring-mass directions (`[base]`): it takes the rate of change of the momentum of everything that moves on it,

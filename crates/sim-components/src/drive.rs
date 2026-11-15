@@ -1066,8 +1066,8 @@ impl Drive {
 
     /// The current loop holding its current at rest: the voltage R i, with the winding's resistance at its temperature,
     /// in its integrator, its output and its delay. Before 14 November 2026 the cold resistance, so a winding started
-    /// or enabled warm began with a voltage step of (R(rise) - R) i (found by the closed-loop reference of the single
-    /// axis, `crates/machine-single-axis/reference`).
+    /// or enabled warm began with a voltage step of (R(rise) - R) i (found by the closed-loop reference written in
+    /// Python for one belt axis, see docs/validation.md).
     pub fn hold_current(&mut self, p: &DriveParams) {
         let voltage = self.winding_resistance(p) * self.current;
         (self.voltage, self.current_integral) = (voltage, voltage);

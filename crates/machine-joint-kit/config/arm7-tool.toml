@@ -43,6 +43,10 @@ gearbox_efficiency = true
 torque_ripple = true
 hard_stops = true
 holding_brake = true
+# The holding brakes engage brake.engage_delay_s after they are asked to hold (the torque off) and release
+# brake.release_delay_s after they are asked to let go; a hanging axis sags while its brake engages. Off by default, so
+# that earlier results stay as they were.
+brake_delay = false
 velocity_feedforward = true
 torque_feedforward = true
 encoder_resolution = true
@@ -115,6 +119,9 @@ iron_loss = true
 # the tool rings with them. Not on the slides and the table, which have no links. Off in the shipped configs: the
 # sections are [estimate]s.
 link_bending = false
+# The links' bending acts back on the joints (with link_bending): joints, gearboxes and links one coupled system, the
+# bending's energy in the machine's. Off in the shipped configs.
+link_bending_reaction = false
 # The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
 # the motor encoder, which stays for the speed loop.
 load_encoder = false
@@ -469,6 +476,9 @@ fault_reaction = "off3"
 following_error_window_rad = 1.0
 off1_ramp_s = 1.0
 off3_ramp_s = 0.1
+# A category 1 stop (sim-cli run --stop-category 1, sim-cli stop) takes the torque off after this time at the latest,
+# as SS1's timer (p9652) does. [estimate] as commissioned: five times the OFF3 ramp.
+ss1_time_s = 0.5
 pulse_off_speed_rad_s = 2.09
 standstill_time_s = 1.0
 standstill_window_rad = 0.1
@@ -616,8 +626,17 @@ target = [0.9, -0.3, 0.7, 0.0, 1.5707963267948966, 0.0]
 dwell_s = 0.0
 payload = false
 
+# effects.brake_delay: how long the holding brakes take to engage once asked to hold, and to release once asked to let
+# go. [estimate] the Siemens motor data in catalog/ gives no brake times; a servo motor's spring-applied brake closes in
+# some 10 to 60 ms and opens in some 30 to 150 ms.
+[brake]
+engage_delay_s = 0.03
+release_delay_s = 0.06
+
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+brake.engage_delay_s = [0.01, 0.06]
+brake.release_delay_s = [0.03, 0.15]
 motor.pole_pairs = [3.0, 5.0]
 motor.d_inductance_h = [0.008, 0.012]
 motor.winding_resistance_share = [0.2, 0.5]
@@ -661,6 +680,7 @@ base.tilt_stiffness_z_nm_rad = [2.52e5, 1.575e6]
 gearbox.no_load_torque_nm = [0.4, 0.6]
 link_bending.damping_ratio = [0.01, 0.05]
 link_bending.youngs_modulus_pa = [6.5e10, 7.2e10]
+link_bending.shear_modulus_pa = [2.4e10, 2.7e10]
 motor.friction_breakaway_nm = [0.05, 0.1]
 motor.friction_stribeck_rad_s = [0.5, 10.0]
 motor.magnet_temperature_coefficient_1_k = [-0.0013, -0.0009]
@@ -697,3 +717,7 @@ damping_ratio = 0.02
 outer_diameter_m = [0.0, 0.14, 0.12, 0.1, 0.08, 0.06, 0.0]  # [estimate] one per joint of this URDF
 wall_m = [0.0, 0.008, 0.008, 0.006, 0.005, 0.004, 0.0]  # [estimate]
 youngs_modulus_pa = 7.0e10
+# [estimate] The directions each link deflects in: "in_plane" (the plane its joint turns it in), "out_of_plane"
+# (across it), "torsion" (twisted about its length, by shear_modulus_pa, cast aluminium).
+directions = ["in_plane"]
+shear_modulus_pa = 2.6e10

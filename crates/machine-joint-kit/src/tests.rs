@@ -650,6 +650,241 @@ fn a_level_link_sags_under_its_weight_as_a_cantilever_does() {
     assert!((bend / 48.506e-6 - 1.0).abs() < 0.015);
 }
 
+/// A steel tube 60 x 4 mm, 0.8 m long along x, on joint 1 about y (its URDF mass and inertia `tube`: kg, then ixx, iyy,
+/// izz about its centre in the middle), and at its end a body on joint 2 about x, the tube's own axis, with its centre
+/// on that axis (`tip`, likewise): the load beyond the tube as a tip mass and a tip inertia. Joint 1 between `lower`
+/// and `upper`. Bending with E = 2.1e11 Pa and G = 8.1e10 Pa, undamped, plus `edits`.
+fn tube_with_tip(
+    name: &str,
+    tube: (f64, [f64; 3]),
+    tip: (f64, [f64; 3]),
+    lower: f64,
+    edits: &[&str],
+) -> Box<dyn Machine> {
+    let inertial = |(mass, [xx, yy, zz]): (f64, [f64; 3]), at: f64| {
+        format!(
+            r#"<inertial><origin xyz="{at} 0 0"/><mass value="{mass}"/><inertia ixx="{xx}" ixy="0" ixz="0" iyy="{yy}" iyz="0" izz="{zz}"/></inertial>"#
+        )
+    };
+    let path = std::env::temp_dir().join(format!("joint-kit-test-{name}.urdf"));
+    std::fs::write(
+        &path,
+        format!(
+            r#"<?xml version="1.0"?>
+<robot name="{name}">
+  <link name="base_link"/>
+  <link name="tube">{}</link>
+  <joint name="joint1" type="revolute"><parent link="base_link"/><child link="tube"/><axis xyz="0 1 0"/><limit lower="{lower}" upper="{}"/></joint>
+  <link name="tip">{}</link>
+  <joint name="joint2" type="revolute"><parent link="tube"/><child link="tip"/><origin xyz="0.8 0 0"/><axis xyz="1 0 0"/><limit lower="-3" upper="3"/></joint>
+</robot>"#,
+            inertial(tube, 0.4),
+            lower + 1.14,
+            inertial(tip, 0.0)
+        ),
+    )
+    .unwrap();
+    let mut cfg = lossless_config(&URDF_ARM);
+    for edit in [
+        format!("arm.urdf_file = {:?}", path.to_str().unwrap()),
+        "arm.gear_ratios = [120.0, 120.0]".into(),
+        "effects.payload = false".into(),
+        "effects.link_bending = true".into(),
+        "link_bending.outer_diameter_m = [0.06, 0.0]".into(),
+        "link_bending.wall_m = [0.004, 0.0]".into(),
+        "link_bending.youngs_modulus_pa = 2.1e11".into(),
+        "link_bending.shear_modulus_pa = 8.1e10".into(),
+        "link_bending.damping_ratio = 0.0".into(),
+    ]
+    .into_iter()
+    .chain(edits.iter().map(|e| e.to_string()))
+    {
+        cfg.set_text(&edit).unwrap();
+    }
+    (URDF_ARM.build)(&cfg).unwrap()
+}
+
+const ALL_DIRECTIONS: &str = r#"link_bending.directions = ["in_plane", "out_of_plane", "torsion"]"#;
+
+/// The tube twists as a shaft with a tip inertia J = 0.5 kg m^2: k = G I_p / L = 8.1e10 x 2 x 2.772644e-7 / 0.8 =
+/// 56146.0 N m/rad, I_p = pi / 32 (0.06^4 - 0.052^4); the tube's own share J_own / 3, J_own = m (D^2 + d^2) / 8 =
+/// 4.5 x (0.0036 + 0.002704) / 8 = 3.546e-3 kg m^2 (its URDF ixx), 1.182e-3: f = sqrt(56146.0 / 0.501182) / 2 pi =
+/// 53.2699 Hz, sqrt(G I_p / (L J)) / 2 pi = 53.3328 Hz without the tube's share (the exact root of beta tan beta =
+/// J_own / J gives 53.26988 Hz). It bends in both planes alike, a round tube with 10 kg at its tip: k = 1.875104^4 / 4 x
+/// E I / L^3 = 351467 N/m, m / 4 + M = 11.125 kg, 28.2887 Hz.
+#[test]
+fn a_tube_twists_at_the_frequency_of_its_tip_inertia_and_bends_alike_in_both_planes() {
+    let m = tube_with_tip(
+        "twist",
+        (4.5, [3.546e-3, 0.24, 0.24]),
+        (10.0, [0.5, 0.0, 0.0]),
+        -0.57,
+        &["effects.joint_elasticity = false", ALL_DIRECTIONS],
+    );
+    let modes = m.modes(&[0.0, 0.0]);
+    assert_eq!(modes.len(), 3, "{modes:?}");
+    near(modes[0].hz, 28.2887, 1e-5, "bend in the joint's plane");
+    near(modes[1].hz, 28.2887, 1e-5, "bend across it");
+    near(modes[2].hz, 53.2699, 1e-5, "twist");
+    near(modes[2].hz, 53.26988, 1e-5, "twist, exact");
+    let ids: Vec<String> = m.signal_infos().into_iter().map(|s| s.id).filter(|id| id.starts_with("link.")).collect();
+    assert_eq!(ids, ["link.1.bend", "link.1.bend_across", "link.1.twist"]);
+}
+
+/// Two-way (effects.link_bending_reaction): the tube, here 0.45 kg (iyy 0.024 kg m^2 about its centre), carries 20 kg
+/// at its tip (0.001 kg m^2 about each axis) and hangs level on joint 1's gearbox, k_g = 2e5 N m/rad, its motor held
+/// (a rotor of 1e4 kg m^2). Joint and tube are two springs in series for the tip: L^2 / k_g = 3.2e-6 m/N and
+/// 1 / k_b = 1 / 351467 N/m, together k_s = 165420 N/m.
+///
+/// The mode: in q (joint 1) and d (the tube's tip) the masses are M_qq = 0.024 + 0.45 x 0.4^2 + 20 x 0.8^2 + 0.001 =
+/// 12.897 kg m^2, B = 0.391496 x 0.45 x 0.4 + 20 x 0.8 + 1.37651 / 0.8 x 0.001 = 16.07219 kg m, M_d = 0.45 / 4 + 20 +
+/// (1.37651 / 0.8)^2 x 0.001 = 20.11546 kg; det(diag(k_g, k_b) - w^2 M) = 0 gives 14.43363 Hz, the series spring on the
+/// modal mass sqrt(k_s / M_d) / 2 pi = 14.43276 Hz (and 440.88 Hz). One-way the joint would ring alone at
+/// sqrt(k_g / M_qq) / 2 pi = 19.82 Hz and the tube clamped at 21.04 Hz.
+///
+/// Statically the tip sinks by L tau / k_g + Q_g / k_b, tau = g (20 x 0.8 + 0.45 x 0.4) = 158.6716 N m, Q_g =
+/// g (20 + 0.391496 x 0.45) = 197.8609 N: 0.6346864 + 0.5629561 = 1.197642 mm, within 1 % of the series springs under
+/// the tip mass alone, M g / k_s = 1.185666 mm (the tube's own weight is the rest). Let go from straight (gear untwisted,
+/// tube unbent) it rings about that at the mode's frequency.
+#[test]
+fn a_bending_link_on_an_elastic_joint_rings_as_the_two_springs_in_series() {
+    let m = tube_with_tip(
+        "series",
+        (0.45, [4.0e-4, 0.024, 0.024]),
+        (20.0, [0.001, 0.001, 0.001]),
+        -0.57,
+        &[
+            "effects.joint_elasticity = true",
+            "effects.link_bending_reaction = true",
+            "effects.gearbox_stiffness_curve = false",
+            "effects.gearbox_backlash = false",
+            "gearbox.stiffness_nm_rad = 2.0e5",
+            "motor.rotor_inertia_kgm2 = 1.0e4",
+        ],
+    );
+    // The lowest mode the machine reports (the input shaper's) is the coupled one.
+    let modes = m.modes(&[0.0, 0.0]);
+    near(modes[0].hz, 14.43363, 1e-5, "coupled mode");
+    near(modes[0].hz, 14.43276, 1e-4, "series spring on the modal mass");
+    near(modes[1].hz, 440.88, 1e-4, "second mode");
+    let (mut state, mut hold) = (Vec::new(), vec![0.0; 2]);
+    m.equilibrium(&[0.0, 0.0], &mut state, &mut hold);
+    let at = state.len() - 2;
+    let tip = |s: &[f64]| 0.8 * s[0] + s[at];
+    let rest = tip(&state);
+    // Straight: joint 1 where its rotor is (state: joints, their speeds, then the rotors), the tube unbent.
+    state[0] = state[4] / 120.0;
+    state[at] = 0.0;
+    near(rest - tip(&state), 1.197642e-3, 1e-4, "static deflection");
+    near(rest - tip(&state), 1.185666e-3, 0.011, "series springs under the tip mass");
+    let (dt, mut rk) = (sim_core::testkit::DT, sim_core::Rk4::new(state.len()));
+    let (mut low, mut high, mut ups, mut was) = (f64::INFINITY, f64::NEG_INFINITY, Vec::new(), tip(&state) - rest);
+    for step in 1..=(1.0 / dt) as usize {
+        sim_core::advance(m.as_ref(), &mut rk, &mut state, &hold, dt, sim_core::testkit::SUBSTEPS);
+        let now = tip(&state) - rest;
+        (low, high) = (low.min(now), high.max(now));
+        if was < 0.0 && now >= 0.0 {
+            ups.push((step as f64 - now / (now - was)) * dt);
+        }
+        was = now;
+    }
+    let hz = (ups.len() - 1) as f64 / (ups[ups.len() - 1] - ups[0]);
+    near(hz, 14.43363, 2e-3, "ringing");
+    near(0.5 * (high - low), 1.197642e-3, 0.01, "amplitude");
+    assert!((0.5 * (high + low)).abs() < 0.01 * 1.197642e-3, "it rings about {} m from rest", 0.5 * (high + low));
+}
+
+/// With the links two-way and no losses the energy stays within the suite's 0.1 % of what its pulse puts in: the tube
+/// with its tip hanging under gravity (where the bent links shift the weights), bending and twisting, on its elastic
+/// and on rigid joints.
+#[test]
+fn two_way_bending_keeps_the_energy_of_a_hanging_link() {
+    std::thread::scope(|scope| {
+        for elastic in [true, false] {
+            scope.spawn(move || {
+                let elasticity = format!("effects.joint_elasticity = {elastic}");
+                let hanging = tube_with_tip(
+                    &format!("hanging-{elastic}"),
+                    (4.5, [3.546e-3, 0.24, 0.24]),
+                    (10.0, [0.05, 0.02, 0.02]),
+                    1.0,
+                    &[&elasticity, "effects.link_bending_reaction = true", ALL_DIRECTIONS],
+                );
+                sim_core::testkit::energy_conservation(hanging.as_ref());
+            });
+        }
+    });
+}
+
+/// Two-way, at every instant: on the six-axis arm under gravity, loss-free and with no motor torque, its links bent by
+/// 1 mm (1 mrad twisted) and moving, the joints turning, the machine's energy changes along its own rates by nothing:
+/// dE/dt by central differences over +-1e-7 s of the state's rates, within 1e-4 W (1e-5 W is left, rounding). Without
+/// G (the bent links' weight shift at the joints) it is off by 0.22 W, without 1/2 M_d' d' by 0.012 W (both tried).
+#[test]
+fn two_way_bending_trades_energy_without_loss_at_every_instant() {
+    for elastic in [false, true] {
+        let mut cfg = lossless_config(&URDF_ARM);
+        for edit in [
+            format!("effects.joint_elasticity = {elastic}"),
+            "effects.link_bending = true".into(),
+            "effects.link_bending_reaction = true".into(),
+            ALL_DIRECTIONS.into(),
+            "link_bending.damping_ratio = 0.0".into(),
+        ] {
+            cfg.set_text(&edit).unwrap();
+        }
+        let m = (URDF_ARM.build)(&cfg).unwrap();
+        let n = 6;
+        let (mut state, mut hold) = (Vec::new(), vec![0.0; n]);
+        m.equilibrium(&sim_core::testkit::mid_pose(m.as_ref()), &mut state, &mut hold);
+        let speeds = [0.5, -0.4, 0.3, 0.6, -0.5, 0.4];
+        state[n..2 * n].copy_from_slice(&speeds);
+        if elastic {
+            let ratios = cfg.f64s("arm.gear_ratios").unwrap();
+            (0..n).for_each(|k| state[3 * n + k] = ratios[k] * speeds[k]);
+        }
+        let modes = m.signal_infos().iter().filter(|s| s.id.starts_with("link.")).count();
+        let at = state.len() - 2 * modes;
+        for i in 0..modes {
+            (state[at + i], state[at + modes + i]) = (1e-3 * (1.0 - 0.3 * i as f64 / modes as f64), 0.05);
+        }
+        let mut rates = vec![0.0; state.len()];
+        m.derivatives(&state, &[0.0; 6], &mut rates);
+        let h = 1e-7;
+        let along = |s: f64| -> Vec<f64> { state.iter().zip(&rates).map(|(x, r)| x + s * r).collect() };
+        let change = (m.energy(&along(h)) - m.energy(&along(-h))) / (2.0 * h);
+        assert!(change.abs() < 1e-4, "elastic {elastic}: the energy changes by {change} W");
+    }
+}
+
+/// The same on the six-axis arm, the suite's loss-free elastic config with the payload (without gravity, as the suite
+/// runs it), its links bending two-way in their joints' planes.
+#[test]
+fn two_way_bending_keeps_the_six_axis_arms_energy() {
+    let mut cfg = suite_configs(&URDF_ARM).remove(2);
+    assert!(cfg.bool("effects.joint_elasticity").unwrap() && cfg.bool("effects.payload").unwrap());
+    for edit in
+        ["effects.link_bending = true", "effects.link_bending_reaction = true", "link_bending.damping_ratio = 0.0"]
+    {
+        cfg.set_text(edit).unwrap();
+    }
+    sim_core::testkit::energy_conservation((URDF_ARM.build)(&cfg).unwrap().as_ref());
+}
+
+/// The shipped six-axis arm with its links two-way in all three directions holds still under its weight at rest (the
+/// bent links' weight shift held by the gears) and accounts for the links' damping among its losses.
+#[test]
+fn two_way_bending_holds_still_and_balances_the_losses() {
+    let mut cfg = URDF_ARM.config();
+    for edit in ["effects.link_bending = true", "effects.link_bending_reaction = true", ALL_DIRECTIONS] {
+        cfg.set_text(edit).unwrap();
+    }
+    let m = (URDF_ARM.build)(&cfg).unwrap();
+    assert!(m.signal_infos().iter().any(|s| s.id == "power.link_bending"));
+    sim_core::testkit::static_hold(m.as_ref());
+    sim_core::testkit::loss_budget(m.as_ref());
+}
+
 // ---------------------------------------------------------------------------------------------
 // The arms' dynamics, tool space and palletiser (14 November).
 
@@ -947,5 +1182,35 @@ fn the_swinging_payload_conserves_energy() {
         }
         let m = (PALLETISER.build)(&cfg).unwrap();
         sim_core::testkit::energy_conservation(m.as_ref());
+    }
+}
+
+/// A machine built at rest stays there: its drives start with the torque that holds the load where the tool stands,
+/// with the cogging, 0.02 N m sin(24 rotor angle), at the angle the rotor stands at. The palletiser's motors start at
+/// angles where it is up to 0.02 N m (asserted below: at least 5 mN m on one). The hold used to be worked out at the
+/// setpoint, where the motors' angles put the tool without its gears' twist (motor 3 0.39 rad further on, the tool
+/// 4 mm off), with that pose's gravity and cogging: the machine moved 1.2 um in its first 0.2 s while its drives
+/// settled. Without the encoder's counts it stays within 1e-9 m over 0.2 s (seen: 1.2e-13 m); with its 22 bits the
+/// position loop corrects to the nearest count, 2 pi / 2^22 = 1.5e-6 rad at a motor, 9.4e-9 rad at a 160:1 joint, at
+/// most 1.7 m from the turret: within half of 16 nm (seen: 3.2 nm).
+#[test]
+fn a_machine_built_at_rest_stays_there() {
+    for (resolution, limit) in [(false, 1e-9), (true, 0.5 * 1.7 * std::f64::consts::TAU / 4194304.0 / 160.0)] {
+        let mut cfg = PALLETISER.config();
+        cfg.set_text(&format!("effects.encoder_resolution = {resolution}")).unwrap();
+        let mut sim = sim_components::Sim::new(&PALLETISER, &cfg).unwrap();
+        let n = sim.machine.axes().len();
+        let pose = |s: &sim_components::Sim| {
+            let (mut p, mut v) = (vec![0.0; n], vec![0.0; n]);
+            s.machine.tool_state(&s.state, &mut p, &mut v);
+            p
+        };
+        let (mut angle, mut speed) = (vec![0.0; 4], vec![0.0; 4]);
+        sim.machine.motor_state(&sim.state, &mut angle, &mut speed);
+        assert!(angle.iter().any(|a| (0.02 * (24.0 * a).sin()).abs() > 5e-3), "no cogging at {angle:?}");
+        let start = pose(&sim);
+        let mut most = 0f64;
+        sim.run(0.2, |s| most = pose(s).iter().zip(&start).map(|(a, b)| (a - b).abs()).fold(most, f64::max));
+        assert!(most < limit, "resolution {resolution}: moved {most} m, limit {limit} m");
     }
 }

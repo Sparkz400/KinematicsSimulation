@@ -14,8 +14,8 @@ pip install kinematics-sim
 import kinematics_sim as ks
 import pandas as pd
 
-ks.machines()                                   # [{"id": "t-gantry", "name": "T-gantry"}, ...]
-cfg = ks.Config("t-gantry")                     # a machine's default config
+first = ks.machines()[0]["id"]                  # machines() lists every machine: [{"id": ..., "name": ...}, ...]
+cfg = ks.Config(first)                          # a machine's default config
 cfg["mass.payload_kg"] = 3.5                    # a value at a dotted path, as sim-cli --set
 pd.DataFrame(ks.analyze(cfg))                   # the load per motor over one cycle
 pd.DataFrame(ks.verdicts(cfg, bands=True))      # every check, with its band over the uncertain values

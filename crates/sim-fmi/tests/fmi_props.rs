@@ -24,11 +24,11 @@ struct Unpacked {
     path: CString,
 }
 
-/// The single axis's FMU for FMI 2 and 3, unpacked once: its resources as a URI (FMI 2) and as a path (FMI 3).
+/// The FMU of the list's second machine (the lightest to step) for FMI 2 and 3, unpacked once: its resources as a URI (FMI 2) and as a path (FMI 3).
 fn unpacked(fmi: u8) -> &'static Unpacked {
     static CELLS: [OnceLock<Unpacked>; 2] = [OnceLock::new(), OnceLock::new()];
     CELLS[(fmi - 2) as usize].get_or_init(|| {
-        let entry: &'static MachineEntry = sim_machines::find("single-axis").unwrap();
+        let entry: &'static MachineEntry = sim_machines::MACHINES[1];
         let model = Model::with_fmi(entry, &entry.config().to_text().unwrap(), "en", fmi).unwrap();
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("fmi{fmi}-props"));
         for (path, bytes) in model.files() {

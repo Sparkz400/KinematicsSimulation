@@ -265,6 +265,9 @@ noise_seed = 1
 fault_reaction = "off3"
 off1_ramp_s = 1.0
 off3_ramp_s = 0.1
+# A category 1 stop (sim-cli run --stop-category 1, sim-cli stop) takes the torque off after this time at the latest,
+# as SS1's timer (p9652) does. [estimate] as commissioned: five times the OFF3 ramp.
+ss1_time_s = 0.5
 pulse_off_speed_rad_s = 2.09
 # What trips it, at the motor (rad): the following error beyond its window (p2546); at standstill, after
 # standstill_time_s of a resting setpoint, beyond the standstill window (p2542, p2543); held at the torque limit below
@@ -375,6 +378,10 @@ payload = true
 outer_diameter_m = [0.12, 0.1, 0.0, 0.0]
 wall_m = [0.008, 0.006, 0.0, 0.0]
 youngs_modulus_pa = 7.0e10
+# [estimate] The directions each link deflects in: "in_plane" (the plane its joint turns it in), "out_of_plane"
+# (across it), "torsion" (twisted about its length, by shear_modulus_pa, cast aluminium).
+directions = ["in_plane"]
+shear_modulus_pa = 2.6e10
 damping_ratio = 0.02
 
 # With effects.base_compliance [estimate]: the SCARA's column and its table tilt about x and y at 30 Hz (30 kg m^2
@@ -402,9 +409,19 @@ damping_ratio_rx = 0.02
 damping_ratio_ry = 0.02
 damping_ratio_rz = 0.02
 
+# effects.brake_delay: how long the holding brakes take to engage once asked to hold, and to release once asked to let
+# go. [estimate] the Siemens motor data in catalog/ gives no brake times; a servo motor's spring-applied brake closes in
+# some 10 to 60 ms and opens in some 30 to 150 ms.
+[brake]
+engage_delay_s = 0.03
+release_delay_s = 0.06
+
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+brake.engage_delay_s = [0.01, 0.06]
+brake.release_delay_s = [0.03, 0.15]
 link_bending.youngs_modulus_pa = [6.5e10, 7.2e10]
+link_bending.shear_modulus_pa = [2.4e10, 2.7e10]
 link_bending.damping_ratio = [0.01, 0.05]
 base.mass_kg = [72.0, 192.0]
 base.tilt_stiffness_x_nm_rad = [4.4e5, 2.75e6]

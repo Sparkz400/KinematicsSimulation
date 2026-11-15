@@ -2226,3 +2226,162 @@ mod outside_control {
         sim.command(Command::MoveTo(vec![0.5])).unwrap();
     }
 }
+
+/// The stops of `Command::Halt` on the rigid, loss-free axis of `ideal_rigid` (6.125 kg reflected: 4 kg carriage and
+/// the rotor's and gearbox's 2.125 kg), cruising at 1 m/s from 0.1 to 0.9 m and stopped at 0.4 s, with `edit` on top:
+/// (speed and pose when stopped, pose 1.5 s later, time from the stop until the speed is below 1 mm/s for good, peak
+/// deceleration over 1 ms, the simulation).
+fn stopped(category: sim_components::StopCategory, edit: &[&str]) -> (f64, f64, f64, f64, f64, Sim) {
+    use sim_components::Command;
+    let mut cfg = ideal_rigid();
+    for e in edit {
+        cfg.set_text(e).unwrap();
+    }
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    sim.command(Command::MoveTo(vec![0.9])).unwrap();
+    sim.run(0.4, |_| {});
+    let (mut x, mut v) = ([0.0], [0.0]);
+    sim.machine.tool_state(&sim.state, &mut x, &mut v);
+    let (x0, v0) = (x[0], v[0]);
+    sim.command(Command::Halt(category)).unwrap();
+    let (mut moving, mut peak, mut last) = (0.0, 0.0f64, v0);
+    let every = (1e-3 / sim.dt).round() as u64;
+    for step in 1..=(1.5 / sim.dt).round() as u64 {
+        sim.step();
+        sim.machine.tool_state(&sim.state, &mut x, &mut v);
+        if v[0].abs() >= 1e-3 {
+            moving = step as f64 * sim.dt;
+        }
+        if step % every == 0 {
+            peak = peak.max((last - v[0]).abs() / (every as f64 * sim.dt));
+            last = v[0];
+        }
+    }
+    (v0, x0, x[0], moving, peak, sim)
+}
+
+/// Category 1 by hand: the OFF3 ramp of 0.2512 s from the rated 314 rad/s is 1250 rad/s^2 at the motor, 5 m/s^2 at the
+/// carriage (0.02 m / 5); from v = 1 m/s it stops in v^2 / (2 a) = 0.1 m and v / a = 0.2 s, the drive with its torque
+/// on until the motor stands, then off. The velocity loop follows the ramp a little behind, which the 3 % allow for.
+/// Category 2: the plan brakes at the axis' 10 m/s^2 in 0.05 m and 0.1 s, and the drive holds there with torque on.
+#[test]
+fn the_stops_travel_the_hand_calculated_distance_in_the_hand_calculated_time() {
+    use sim_components::StopCategory;
+    let (v, x0, x1, time, peak, sim) = stopped(StopCategory::One, &["drive.off3_ramp_s = 0.2512"]);
+    let (by_hand, t_hand) = (v * v / (2.0 * 5.0), v / 5.0);
+    assert!((v - 1.0).abs() < 1e-3, "cruising at {v} m/s");
+    assert!((x1 - x0 - by_hand).abs() < 0.03 * by_hand, "category 1: {} m, by hand {by_hand} m", x1 - x0);
+    assert!((time - t_hand).abs() < 0.03 * t_hand, "category 1: {time} s, by hand {t_hand} s");
+    // The speed loop takes the ramp from the position loop with a step in its slope, and overshoots it at first.
+    assert!(peak > 0.97 * 5.0 && peak < 1.3 * 5.0, "category 1: {peak} m/s^2");
+    assert!(!sim.control.enabled() && sim.control.brake_engaged() && sim.torque[0] == 0.0);
+
+    let (v, x0, x1, time, peak, sim) = stopped(StopCategory::Two, &[]);
+    let (by_hand, t_hand) = (v * v / (2.0 * 10.0), v / 10.0);
+    assert!((x1 - x0 - by_hand).abs() < 0.03 * by_hand, "category 2: {} m, by hand {by_hand} m", x1 - x0);
+    // The plan stops in 0.1 s; the tool follows it behind by the position loop, whose last 1 mm/s take some 15 ms more.
+    assert!(time > t_hand && time < 1.2 * t_hand, "category 2: {time} s, by hand {t_hand} s");
+    // The plan's deceleration steps from 0 to 10 m/s^2 and back (no jerk limit in a stop); the loops overshoot the steps.
+    assert!(peak > 0.97 * 10.0 && peak < 1.5 * 10.0, "category 2: {peak} m/s^2");
+    assert!(sim.control.enabled() && !sim.control.brake_engaged() && !sim.control.busy());
+}
+
+/// Category 0 by hand: the torque goes off at once and the carriage coasts against the guide's 10 N (Coulomb and
+/// stiction alike, no viscous part) until the brake engages 0.03 s later, then against the guide and the brake's
+/// 0.2 N m * 5 / 0.02 m = 50 N. From v = 1 m/s on 6.125 kg: during the delay it slows to v1 = v - F t / m = 0.95102 m/s
+/// over v t - F t^2 / (2 m) = 0.029265 m, then stops in m v1^2 / (2 (F + F_b)) = 0.046170 m: 0.075435 m in all. Without
+/// the delay (effects.brake_delay off) m v^2 / (2 (F + F_b)) = 0.051042 m.
+#[test]
+fn a_category_0_stop_coasts_the_hand_calculated_distance_with_the_brake_delay() {
+    use sim_components::StopCategory;
+    let friction = [
+        "effects.guide_friction = true",
+        "friction_x.coulomb_n = 10.0",
+        "friction_x.stiction_n = 10.0",
+        "friction_x.viscous_n_s_m = 0.0",
+        "effects.holding_brake = true",
+        "motor.brake_torque_nm = 0.2",
+        "brake.engage_delay_s = 0.03",
+    ];
+    let (m, f, f_b, t) = (6.125, 10.0, 50.0, 0.03);
+    for delayed in [true, false] {
+        let mut edit = friction.to_vec();
+        let switch = format!("effects.brake_delay = {delayed}");
+        edit.push(&switch);
+        let (v, x0, x1, _, _, sim) = stopped(StopCategory::Zero, &edit);
+        let v1 = if delayed { v - f * t / m } else { v };
+        let by_hand = if delayed { v * t - f * t * t / (2.0 * m) } else { 0.0 } + m * v1 * v1 / (2.0 * (f + f_b));
+        assert!((x1 - x0 - by_hand).abs() < 0.01 * by_hand, "delay {delayed}: {} m, by hand {by_hand} m", x1 - x0);
+        assert!(!sim.control.enabled() && sim.control.brake_engaged());
+    }
+}
+
+/// A hanging axis during the brake's engagement delay, by hand: the axis upright, held at rest at 0.5 m, its torque
+/// taken off (category 0). Its 4 kg weigh 39.227 N, of which the guide holds 10 N; the rest accelerates the 6.125 kg
+/// at 4.7717 m/s^2, so in the 0.03 s before the brake engages it falls 4.7717 * 0.03^2 / 2 = 2.1473 mm. The brake's
+/// 1 N m (250 N at the carriage) then stops it. Without the delay it does not fall before the brake holds.
+#[test]
+fn a_hanging_axis_sags_by_hand_while_its_brake_engages() {
+    use sim_components::{Command, StopCategory};
+    for delayed in [true, false] {
+        let mut cfg = ideal_rigid();
+        for e in [
+            "effects.guide_friction = true",
+            "friction_x.coulomb_n = 10.0",
+            "friction_x.stiction_n = 10.0",
+            "friction_x.viscous_n_s_m = 0.0",
+            "effects.holding_brake = true",
+            "motor.brake_torque_nm = 1.0",
+            "geometry.incline_deg = 90.0",
+            "start.pose = [0.5]",
+            "brake.engage_delay_s = 0.03",
+            &format!("effects.brake_delay = {delayed}"),
+        ] {
+            cfg.set_text(e).unwrap();
+        }
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim.run(0.2, |_| {});
+        let start = sim.state[0];
+        sim.command(Command::Halt(StopCategory::Zero)).unwrap();
+        let mut steps = 0;
+        while !sim.control.brake_engaged() {
+            sim.step();
+            steps += 1;
+        }
+        let fell = start - sim.state[0];
+        let by_hand = if delayed { 0.5 * (4.0 * G - 10.0) / 6.125 * 0.03 * 0.03 } else { 0.0 };
+        assert_eq!(steps, if delayed { 480 } else { 1 }, "engaged after {steps} steps");
+        assert!((fell - by_hand).abs() < 0.02 * by_hand + 1e-6, "delay {delayed}: fell {fell} m, by hand {by_hand} m");
+        sim.run(0.3, |_| {});
+        assert!(start - sim.state[0] < 1.5 * by_hand + 1e-4, "held at {} m", sim.state[0]);
+    }
+}
+
+/// The DC link in a category 1 stop, by hand: the kinetic energy 6.125 kg * (1 m/s)^2 / 2 = 3.0625 J comes back less
+/// the copper loss: 30.625 N at the carriage is 0.1225 N m at the motor, 0.27222 A through k_t 0.45 N m/A, 4 Ohm *
+/// 0.27222^2 * 0.2 s = 0.0593 J. The 470 uF take the 3.0032 J from 155.13 V to sqrt(155.13^2 + 2 * 3.0032 / 470e-6) =
+/// 191.95 V, below the chopper's 224.65 V. With 4.7 uF they have room for 4.7e-6 (224.65^2 - 155.13^2) / 2 = 0.0620 J,
+/// and the resistor burns the other 2.9412 J.
+#[test]
+fn a_category_1_stop_brings_the_hand_calculated_energy_to_the_dc_link() {
+    use sim_components::StopCategory;
+    for (capacitance, voltage, burned) in [(470.0, 191.95, 0.0), (4.7, 224.65, 2.9412)] {
+        let uf = format!("ratings.dc_link_capacitance_uf = {capacitance:?}");
+        let edit = ["drive.off3_ramp_s = 0.2512", "effects.dc_link = true", uf.as_str()];
+        let mut cfg = ideal_rigid();
+        for e in edit {
+            cfg.set_text(e).unwrap();
+        }
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim.command(sim_components::Command::MoveTo(vec![0.9])).unwrap();
+        sim.run(0.4, |_| {});
+        sim.command(sim_components::Command::Halt(StopCategory::One)).unwrap();
+        let (mut peak, mut resistor) = (0.0f64, 0.0);
+        sim.run(0.4, |s| {
+            peak = peak.max(s.control.drives[0].dc_voltage);
+            resistor += s.control.drives[0].resistor_power * s.dt;
+        });
+        assert!((peak - voltage).abs() < 0.3, "{capacitance} uF: {peak} V, by hand {voltage} V");
+        assert!((resistor - burned).abs() < 0.02 * burned + 1e-9, "{capacitance} uF: {resistor} J, by hand {burned} J");
+    }
+}

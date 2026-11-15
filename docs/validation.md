@@ -267,6 +267,20 @@ Thermal model of gearboxes and guides (`effects.part_heating`), in views:
 
 The winding's own model (settles at the rated rise at the rated current, 51.3 K after one time constant from cold, 19.34 K at half the current) is `the_winding_warms_to_the_rated_rise_at_the_rated_current`, drive.
 
+### Stops and brake delays
+
+On the rigid, loss-free single axis (`ideal_rigid`: 6.125 kg reflected, 4 kg carriage, r = 0.02 m, i = 5), stopped from 1 m/s (machine-single-axis). Each was seen to fail with its piece taken out: the OFF3 ramp (braking at the torque limit instead), category 2's braking plan, the brake delay.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Category 1 on an OFF3 ramp of 0.2512 s from 314 rad/s (5 m/s² at the carriage) | v² / (2 a) = 0.1 m, v / a = 0.2 s; peak deceleration over 1 ms above 5 m/s² (the speed loop overshoots the ramp's start: 6.0) | 3 %; peak below 6.5 | `the_stops_travel_the_hand_calculated_distance_in_the_hand_calculated_time` |
+| Category 2 at the axis' 10 m/s² | 0.05 m; the plan in 0.1 s, the tool below 1 mm/s within 0.12 s (the position loop's lag) | 3 %; 20 % on the time; peak below 15 | same |
+| Category 0, 10 N guide friction (Coulomb = stiction), 0.2 N m brake (50 N), 0.03 s engagement delay | v t − F t² / (2 m) + m v₁² / (2 (F + F_b)) = 0.075435 m; without the delay 0.051042 m | 1 % | `a_category_0_stop_coasts_the_hand_calculated_distance_with_the_brake_delay` |
+| A hanging axis (upright) taken off in category 0, 0.03 s engagement delay, 10 N friction | (39.227 − 10) N / 6.125 kg · 0.03² / 2 = 2.1473 mm before the brake holds, after 480 steps; none without the delay | 2 % | `a_hanging_axis_sags_by_hand_while_its_brake_engages` |
+| The DC link in a category 1 stop | 3.0625 J less 0.0593 J copper loss: 470 µF from 155.13 to 191.95 V; with 4.7 µF the resistor takes 2.9412 J | 0.3 V; 2 % | `a_category_1_stop_brings_the_hand_calculated_energy_to_the_dc_link` |
+
+The stop analysis (`sim-cli stop`, `stop::study`) reports a worst stop with finite figures on every registered machine in categories 0, 1 and 2 (`the_stop_study_reports_the_worst_stop_on_every_machine`, sim-machines, category 1; the command line `a_run_can_stop_the_machine_and_stop_finds_the_worst_moment`). Nothing compares its distances with a real machine's stop: no measured stopping distance is in the repository.
+
 ## Hand calculations: control, profiles and paths
 
 | What is compared | Against | Tolerance | Test |
@@ -494,6 +508,11 @@ The SCARA and the six-axis arm with `kinematics.tool_space` on ([mechanisms](mec
 | The stretched SCARA arm | At x = 0.598 the elbow acos((0.598² − L1² − L2²) / (2 L1 L2)) = 0.1639 rad, condition above 25: the move refused with `error-arm-singularity`; at 0.59 (0.3669 rad) it goes; at 0.61 `error-arm-out-of-reach`; a line ending at 0.6 refused with `error-path-range`, within the axis limits and time-optimal | – | `a_tool_path_into_the_stretched_scara_arm_is_refused_with_its_reason` |
 | The time-optimal plan of a line of the tool | No motor faster than its rated 314.159 rad/s (from differences of the planned poses' joints); the fastest above 0.9 of it and faster than within the axis limits, the plan shorter | 0.1 % | `the_time_optimal_plan_keeps_the_scara_motors_within_their_rated_speed_along_a_tool_line` |
 | The tool-space configs | The defaults but for `kinematics.tool_space`, `start.pose`, the cycle and the arm's settling tolerance; both cycles of straight lines pass every verdict (SCARA 2.542 s, settling 0.04 mm; arm 3.774 s, settling 4.0 of 5 mm) | – | `the_tool_configs_are_the_defaults_but_for_tool_space_start_cycle_and_settling`, `the_tool_space_cycles_pass_their_verdicts` |
+| A link that twists and bends (`link_bending.directions` all three): a 60 × 4 mm steel tube, 0.8 m, 4.5 kg, with 10 kg and 0.5 kg m² about its axis at its tip | Twist sqrt(G I_p / (L (J + J_own / 3))) / 2π = sqrt(56146.0 / 0.501182) / 2π = 53.2699 Hz (the tube's share J_own / 3 = 1.182e-3 kg m²; the exact root of β tan β = J_own / J 53.26988 Hz); both bends sqrt(3.0906 E I / L³ / (m / 4 + M)) / 2π = 28.2887 Hz | 1e-5 | `a_tube_twists_at_the_frequency_of_its_tip_inertia_and_bends_alike_in_both_planes` |
+| Two-way bending (`effects.link_bending_reaction`): the tube of 0.45 kg with 20 kg at its tip on a gearbox of 2e5 N m/rad, the motor held | The two-coordinate mode det(diag(k_g, k_b) − ω² M) = 0, M_qq = 12.897 kg m², B = 16.07219 kg m, M_d = 20.11546 kg: 14.43363 Hz, the lowest in `modes` (the series spring on the modal mass 14.43276 Hz); static sag L τ / k_g + Q_g / k_b = 1.197642 mm (M g / k_s = 1.185666 mm with the tip mass alone); let go from straight it rings about the sag with that amplitude at that frequency | 1e-5 (modes), 1e-4 (sag), 0.2 % (ringing), 1 % (amplitude, middle) | `a_bending_link_on_an_elastic_joint_rings_as_the_two_springs_in_series` |
+| Two-way bending, energy at an instant | The six-axis arm under gravity, loss-free, no motor torque, all three directions, links bent by 1 mm (1 mrad) and moving, joints turning: dE/dt along the state's own rates by central differences is zero (1e-5 W left; without G 0.22 W, without ½ Ṁ_d ḋ 0.012 W), rigid and elastic | 1e-4 W | `two_way_bending_trades_energy_without_loss_at_every_instant` |
+| Two-way bending, energy over a run | The standard suite's energy conservation (0.1 % of the pulse's energy over 10 s): the tube hanging under gravity with all three directions, elastic and rigid; the six-axis arm's loss-free elastic config with the payload, gravity off, its links bending in their joints' planes | 0.1 % | `two_way_bending_keeps_the_energy_of_a_hanging_link`, `two_way_bending_keeps_the_six_axis_arms_energy` |
+| Two-way bending at rest and with losses | The shipped six-axis arm, all three directions: the standard suite's static hold (1e-7 m for 1 s, the gears holding the bent links' weight shift) and loss budget (the links' damping as `power.link_bending`) | suite's | `two_way_bending_holds_still_and_balances_the_losses` |
 
 ## Hand calculations: picking from a conveyor
 

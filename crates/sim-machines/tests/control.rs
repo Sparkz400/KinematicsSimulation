@@ -217,13 +217,21 @@ fn a_move_arrives_and_comes_to_rest() {
             sim.step();
         }
         sim.run(0.3, |_| {});
-        let position = sim.signal_index(&format!("axis.{}.position", sim.machine.axes()[0].id)).unwrap();
-        let (mut low, mut high, mut sample) = (f64::INFINITY, f64::NEG_INFINITY, Vec::new());
-        sim.run(0.2, |s| {
-            s.sample(&mut sample);
-            low = low.min(sample[position]);
-            high = high.max(sample[position]);
-        });
+        let axis = sim.machine.axes()[0].clone();
+        let position = sim.signal_index(&format!("axis.{}.position", axis.id)).unwrap();
+        // The axis's position over `seconds`, one sample a base step.
+        let record = |sim: &mut Sim, seconds: f64| {
+            let (mut trace, mut sample) = (Vec::new(), Vec::new());
+            sim.run(seconds, |s| {
+                s.sample(&mut sample);
+                trace.push(sample[position]);
+            });
+            trace
+        };
+        let span =
+            |trace: &[f64]| trace.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), v| (l.min(*v), h.max(*v)));
+        let window = record(&mut sim, 0.2);
+        let (low, high) = span(&window);
         // The drive controls the motor; belt stretch, gear twist, backlash and friction leave a standstill error, up to
         // the machine's setpoint slack (the delta's 9 arcmin: 0.21 mm here).
         assert!(
@@ -232,7 +240,41 @@ fn a_move_arrives_and_comes_to_rest() {
             entry.id,
             target[0]
         );
-        assert!(high - low < 2e-5, "{}: still moving by {} m at rest", entry.id, high - low);
+        // Coming to rest: under 20 um of motion in the window. What this is to catch is a machine that does not come to
+        // rest: hunting in backlash or friction, a limit cycle, a loop on the edge (the parallel SCARA's 21.7 um). A
+        // lightly damped structural mode that rings down after a long move is real for a machine of a long reach (the
+        // palletiser's turret against its gear at 1.79 m: 5.3 Hz, 94 um of x in the window), and is told apart by two
+        // things: it stays inside the machine's own settling tolerance (the one its `settling` verdict judges with), and
+        // it decays. A mode of frequency f and damping zeta loses exp(-2 pi f zeta dt) of its amplitude in dt; the later
+        // window, dt = 1 s on, must have lost more than a mode of 0.5 % damping at the machine's reported frequency
+        // (`resonance_hz`) or, where it reports none, the one measured from the motion's zero crossings over both
+        // windows. And it rings: at least two periods (four crossings of its mean) over the 1.2 s; a creep through a
+        // gear's play crosses once (the parallel SCARA's at a friction smoothing of 0.01 rad/s: 21.7 um in the window,
+        // gone 1 s later, one crossing). The palletiser: 94.5 um, 28.1 um 1 s later (x 0.30), 12 crossings, 5.0 Hz
+        // from them (5.3 Hz from 2 s of its ring-down), exp(-2 pi 5 0.005 1) = 0.855, within its 4 mm. A machine that
+        // hunts keeps its amplitude and fails.
+        let moved = high - low;
+        if moved >= 2e-5 {
+            let key =
+                if axis.unit == "rad" { "ratings.settling_tolerance_rad" } else { "ratings.settling_tolerance_m" };
+            let tolerance = entry.config().f64(key).unwrap_or(0.0);
+            let gap = record(&mut sim, 0.8);
+            let later = record(&mut sim, 0.2);
+            let (later_low, later_high) = span(&later);
+            let all: Vec<f64> = window.iter().chain(&gap).chain(&later).copied().collect();
+            let mean = all.iter().sum::<f64>() / all.len() as f64;
+            let crossings = all.windows(2).filter(|w| (w[0] - mean) * (w[1] - mean) < 0.0).count();
+            let measured = crossings as f64 / (2.0 * all.len() as f64 * sim.dt);
+            let frequency = sim.machine.resonance_hz(&target).unwrap_or(measured);
+            let factor = (-std::f64::consts::TAU * frequency * 0.005 * 1.0).exp();
+            assert!(
+                moved < tolerance && crossings >= 4 && later_high - later_low < factor * moved,
+                "{}: still moving by {moved} m at rest (settling tolerance {tolerance}), {crossings} crossings of its mean in 1.2 s, {} m 1 s later (a mode of {frequency} Hz and 0.5 % damping: below {} m)",
+                entry.id,
+                later_high - later_low,
+                factor * moved
+            );
+        }
     }
 }
 
@@ -507,8 +549,8 @@ fn every_effect_switch_changes_the_traces() {
         };
         let effects: Vec<String> =
             base.leaves().into_iter().map(|(p, _)| p).filter(|p| p.starts_with("effects.")).collect();
-        // Hard stops act only beyond the stroke and holding brakes only while the drives are disabled. A cycle
-        // meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
+        // Hard stops act only beyond the stroke and holding brakes (and their delays) only while the drives are disabled.
+        // A cycle meets neither. The shaper follows the pose only where input shaping is on, which it is not here.
         // A crash needs an obstacle, and the configs have none; drive monitoring acts only on a trip, which a cycle never
         // has. The thermal warm start acts on the cycle analysis, not on a run. A swinging payload is the arms' alone (the
         // joint kit's other machines read the switch but have no payload to hang, the SCARA's sits at its flange with no
@@ -516,6 +558,7 @@ fn every_effect_switch_changes_the_traces() {
         let skipped = [
             "effects.hard_stops",
             "effects.holding_brake",
+            "effects.brake_delay",
             "effects.shaper_follows_pose",
             "effects.crash",
             "effects.drive_monitoring",
@@ -566,7 +609,7 @@ fn every_effect_switch_changes_the_traces() {
             "effects.gravity" => unloaded,
             "effects.part_heating" | "effects.thermal_feedback" => cold,
             // The links' bending on a machine without links (the joint kit's slides and table).
-            "effects.link_bending" => base.get("link_bending").is_err(),
+            "effects.link_bending" | "effects.link_bending_reaction" => base.get("link_bending").is_err(),
             // The braking resistor's temperature where there is no DC link and so no resistor.
             "effects.braking_resistor_heating" => !base.bool("effects.dc_link").unwrap(),
             // A machine that cannot tell the momentum of what moves on its base cannot stand on a compliant one
@@ -609,7 +652,7 @@ fn every_effect_switch_changes_the_traces() {
         // The braking resistor warms only where it burns, so its chopper switches in just above the (low) bus. Fine
         // interpolation acts between profile cycles, which here are as long as the position loop's (1 ms), so it is
         // flipped at a profile cycle of 2 ms. The arm tube's inertia goes into the bending of the arms (with
-        // effects.link_elasticity). The iron loss is what the stall current's copper loss has more than the rated
+        // effects.link_elasticity), the links' bending acts back only where they bend. The iron loss is what the stall current's copper loss has more than the rated
         // current's (the shipped motors have the two equal, so none), so the stall current is a fifth above the rated
         // one. The shipped friction feedforward has no torque in its characteristic (it is off), so it gets 0.05 N m.
         let resistor =
@@ -619,7 +662,7 @@ fn every_effect_switch_changes_the_traces() {
             "drive.friction_feedforward_torque_nm = {:?}",
             vec![0.05; base.f64s("drive.friction_feedforward_speed_rad_s").map_or(0, |v| v.len())]
         )];
-        let through: [(&str, &[String]); 8] = [
+        let through: [(&str, &[String]); 9] = [
             ("effects.belt_wrap", &["effects.belt_tooth_jump = true".into()]),
             ("effects.drive_current_limit", &limit),
             ("effects.drive_overload", &overload),
@@ -628,6 +671,7 @@ fn every_effect_switch_changes_the_traces() {
             ("effects.arm_tube_inertia", &["effects.link_elasticity = true".into()]),
             ("effects.iron_loss", &stall),
             ("effects.friction_feedforward", &characteristic),
+            ("effects.link_bending_reaction", &["effects.link_bending = true".into()]),
         ];
         for effect in effects {
             let (from, own);

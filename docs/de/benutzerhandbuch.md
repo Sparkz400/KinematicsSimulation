@@ -1196,6 +1196,32 @@ Lauf: Anhalteweg je Achse ab der Abschaltung (die Maschine stand um) 0.0070 (0.4
 - Die App zeichnet die Hindernisse als durchscheinende Quader mit ihren Kanten, rot solange berührt, den Abstand zum nächsten als rote Linie mit seinem Wert in mm und die erste Berührung als rote Marke auf der Zeitleiste. Schalten die Antriebe ab, sagen die Meldungen sofort, welcher Motor wann über welche Überwachung abgeschaltet hat und wie jeder Antrieb anhält, während 3D-Ansicht und Scopes die Achsen die Rampe herunterfahren oder austrudeln zeigen; steht die Maschine, wie weit jede Achse ab der Abschaltung fuhr.
 - Der Abstand gilt zwischen den Quadern von Werkzeug, Schlitten, Z-Achse, Plattform und Nutzlast, wie die 3D-Ansicht sie zeichnet (nicht ihren CAD-Formen), und den Kapseln der schrägen Teile: Unterarmstäbe und Oberarme des Delta-Pickers und das Teleskop des D4, jedes die Punkte innerhalb der halben gezeichneten Breite um seine gezeichnete Strecke, genau, wie schräg es auch steht.
 
+## Wie weit fährt sie nach einem Not-Halt?
+
+Den Zyklus (oder eine Bahn, `--path DATEI`) an vielen Zeitpunkten anhalten und sehen, wie weit die Maschine noch fährt, bis sie steht:
+
+```text
+$ sim-cli stop t-gantry --category 1 --points 3
+moment,trigger[s],tool_distance[m],stop_time[s],peak_deceleration[m/s2],hard_stop,peak_dc_link[V],braking_resistor_energy[J],tripped,x_distance[m],z_distance[m]
+grid,0.0000,0.000001,0.0000,0.218,false,155.14,0.0000,false,0.000000,0.000001
+grid,2.0263,0.025537,0.5630,37.150,false,183.27,0.0000,false,0.025536,0.000101
+energy,2.0800,0.026097,0.5636,34.219,false,187.04,0.0000,false,0.026097,0.000111
+grid,4.0527,0.000261,0.0173,17.919,false,224.04,0.0000,false,0.000029,0.000261
+fastest_z,4.3240,0.006484,0.0488,17.285,false,177.13,0.0000,false,0.000041,0.006484
+fastest_x,5.0760,0.026016,0.5921,41.406,false,178.96,0.0000,false,0.026016,0.000056
+worst,2.0800,0.026097,0.5636,34.219,false,187.04,0.0000,false,0.026097,0.000111
+Ungünstigster Stopp: ausgelöst bei 2.0800 s (energy)
+Bewertung des Stopps: stop-dc-link: 224.0 / 257.6 ok
+```
+
+- Die Stoppkategorien sind die der IEC 60204-1, wie ein Servoantrieb sie ausführt (`--category`, ohne Angabe 0): **0** nimmt das Moment sofort weg (STO, wie `--disable-at`): die Achsen trudeln aus, bis die Haltebremsen halten. **1** bremst jeden Antrieb an seiner Schnellhalterampe (`drive.off3_ramp_s`, die Zeit ab Nenndrehzahl) mit seinen Moment- und Stromgrenzen, Zwischenkreis und Bremschopper wirken wie bei jeder Fahrt; stehen alle, fallen die Bremsen ein und das Moment geht weg, oder wenn `drive.ss1_time_s` (0,5 s) vorher abläuft. **2** bremst die geplante Bewegung mit den Beschleunigungsgrenzen der Achsen in ihrer Fahrtrichtung ab und hält dort mit Moment.
+- Die Zeitpunkte: wo jede Achse am schnellsten ist (`fastest_x`), wo die kinetische plus potentielle Energie am größten ist (`energy`), und `--points` Zeitpunkte gleichmäßig über den Durchlauf (`grid`, ohne Angabe 20). Die letzte Zeile wiederholt den ungünstigsten, den Stopp, nach dem das Werkzeug am weitesten kam.
+- Je Stopp: wie weit das Werkzeug von dort kam, wo es beim Auslösen war (das Weiteste, über die Achsen in Metern), und jede Achse, die Zeit, bis jede Achse unter einem Hundertstel ihrer Höchstgeschwindigkeit bleibt, die größte Verzögerung über 1 ms, ob eine Achse in ihren Endanschlag fuhr, die höchste Zwischenkreisspannung, die Energie im Bremswiderstand und ob ein Antrieb auf Überspannung abschaltete (er trudelt dann aus wie in Kategorie 0).
+- `stopping-distance` beurteilt den ungünstigsten gegen `ratings.max_stopping_distance_m`, das man in einer Konfigurationsdatei unter `[ratings]` ergänzt (`--config`); `stop-dc-link` (mit `effects.dc_link`) fällt durch, wenn ein Stopp einen Antrieb abschaltet.
+- Eine hängende Achse fällt, solange ihre Bremse einfällt: mit `effects.brake_delay` (voreingestellt aus) brauchen die Bremsen `brake.engage_delay_s` (0,03 s, geschätzt) zum Halten und `brake.release_delay_s` (0,06 s) zum Lüften. Am T-Portal in Kategorie 0 (`sim-cli stop t-gantry --points 3 --set effects.brake_delay=true`) kommt das Werkzeug beim ungünstigsten Stopp dann 30,7 mm statt 9,3 mm weit, angehalten dort, wo Z am schnellsten ist, 8,7 mm statt 1,4 mm.
+- Ein einzelner Stopp: `sim-cli run t-gantry --cycle --stop-at 5.076 --stop-category 1` schreibt alle Signale um ihn herum. Aus Python hält `ks.Sim(config).stop(1)` eine schrittweise Simulation an, `enable()` schaltet sie wieder ein; der FMU-Eingang `command.stop_category` sagt, wie `command.enable` auf false die Antriebe anhält; über OPC UA hält 0, 1 oder 2 in `command.stop_category` die Maschine an.
+- Was es nicht kennt: Kategorie 2 bremst in Fahrtrichtung, nicht entlang einer gekrümmten Bahn; keine Ruckbegrenzung im Stopp; eine Verzögerung für alle Bremsen; noch nichts ist mit einem gemessenen Stopp verglichen (siehe [Validierung](../validation.md#stops-and-brake-delays)).
+
 ## Programme: G-Code und Roboterprogramme
 
 `--path DATEI` (und das Bahnfeld der App) liest außer einer Bahndatei auch ein Programm, nach der Endung der Datei. Seine Bewegungen werden zu den Geraden und Kreisbögen einer Bahn, deren Zeitverlauf dieselben Planer festlegen.

@@ -26,7 +26,7 @@
 
 use crate::api3::fmi3LogMessageCallback;
 use crate::{Kind, LOG_CATEGORIES, Model, texts};
-use sim_components::{Command, DriveMode, Sim, Snapshot, load_config};
+use sim_components::{Command, DriveMode, Sim, Snapshot, StopCategory, load_config};
 use sim_core::Translations;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -94,6 +94,8 @@ pub(crate) enum Logger {
 struct Applied {
     steps: u32,
     enable: bool,
+    /// How `enable` false stops the drives.
+    category: StopCategory,
     /// The commands the triggers gave at its start: `StartCycle`, `Stop`, `MoveTo`, and `Trajectory` with the path as
     /// it was planned then.
     commands: Vec<Command>,
@@ -228,8 +230,17 @@ fn sample_of(sim: &Sim, start_time: f64) -> Vec<f64> {
 /// controller refused.
 fn apply(sim: &mut Sim, applied: &Applied) -> Vec<&'static str> {
     let mut refused = Vec::new();
+    // Category 1 runs down with the drives on and ends with them off; category 2 holds with them on. Each is given
+    // once: not again while its stop runs, nor to a machine that stands.
+    let stop = match applied.category {
+        StopCategory::Zero => true,
+        StopCategory::One => !sim.control.reacting(),
+        StopCategory::Two => sim.control.busy() && !sim.control.halting(),
+    };
+    let command = if applied.enable { Command::Enable } else { Command::Halt(applied.category) };
     if applied.enable != sim.control.enabled()
-        && let Err(e) = sim.command(if applied.enable { Command::Enable } else { Command::Disable })
+        && (applied.enable || stop)
+        && let Err(e) = sim.command(command)
     {
         refused.push(e.key);
     }
@@ -515,11 +526,17 @@ impl Instance {
         let mut applied = Applied {
             steps: steps as u32,
             enable: !matches!(self.set[self.find(&Kind::Enable)], Some(Value::Bool(false))),
+            category: StopCategory::Zero,
             commands: Vec::new(),
             setpoints: vec![None; sim.machine.axes().len()],
             modes: Vec::new(),
         };
         let mut warnings = Vec::new();
+        let category = self.text_value(self.find(&Kind::StopCategory));
+        match category.parse().ok().and_then(StopCategory::from_number) {
+            Some(c) => applied.category = c,
+            None => warnings.push(self.tr.tr_arg("fmi-error-stop-category", &category)),
+        }
         for k in 0..sim.machine.motors().len() {
             let mode = self.text_value(self.find(&Kind::DriveMode(k)));
             applied.modes.push(match mode.as_str() {

@@ -80,6 +80,10 @@ temperature = false
 # Stops at both ends of each carriage's stroke ([hard_stop]).
 hard_stops = true
 holding_brake = true
+# The holding brakes engage brake.engage_delay_s after they are asked to hold (the torque off) and release
+# brake.release_delay_s after they are asked to let go; a hanging axis sags while its brake engages. Off by default, so
+# that earlier results stay as they were.
+brake_delay = false
 velocity_feedforward = true
 torque_feedforward = true
 # The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
@@ -406,6 +410,9 @@ noise_seed = 1
 fault_reaction = "off3"
 off1_ramp_s = 1.0
 off3_ramp_s = 0.1
+# A category 1 stop (sim-cli run --stop-category 1, sim-cli stop) takes the torque off after this time at the latest,
+# as SS1's timer (p9652) does. [estimate] as commissioned: five times the OFF3 ramp.
+ss1_time_s = 0.5
 pulse_off_speed_rad_s = 2.09
 # What trips it, at the motor (rad): the following error beyond its window (p2546); at standstill, after
 # standstill_time_s of a resting setpoint, beyond the standstill window (p2542, p2543); held at the torque limit below
@@ -560,8 +567,17 @@ damping_ratio_rx = 0.02
 damping_ratio_ry = 0.02
 damping_ratio_rz = 0.02
 
+# effects.brake_delay: how long the holding brakes take to engage once asked to hold, and to release once asked to let
+# go. [estimate] the Siemens motor data in catalog/ gives no brake times; a servo motor's spring-applied brake closes in
+# some 10 to 60 ms and opens in some 30 to 150 ms.
+[brake]
+engage_delay_s = 0.03
+release_delay_s = 0.06
+
 # Low and high bound of the values that are estimates (see the other machines' configs).
 [bounds]
+brake.engage_delay_s = [0.01, 0.06]
+brake.release_delay_s = [0.03, 0.15]
 base.mass_kg = [180.0, 480.0]
 base.stiffness_x_n_m = [1.08e6, 6.75e6]
 base.damping_ratio_x = [0.01, 0.05]
