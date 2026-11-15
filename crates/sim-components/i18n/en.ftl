@@ -586,6 +586,7 @@ quantity-braking-resistor-temperature = Braking resistor temperature rise
 check-motor-s1 = RMS torque at the mean speed against the S1 curve [N m]
 
 effect-base_compliance = Machine base gives way: the frame or stand under the machine on springs, in up to six directions (off: rigid on the floor)
+effect-base_reaction = The machine feels its base's sway: the motors see it and hold against it, its energy in the budget (off: the base sways under the machine one-way)
 base = Machine base
 quantity-base-x = Shift along X
 quantity-base-y = Shift along Y

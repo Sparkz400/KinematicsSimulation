@@ -578,6 +578,8 @@ fn every_effect_switch_changes_the_traces() {
                     m.frame_momentum(&state).is_none()
                 })
                 .unwrap(),
+            // Two-way only on a compliant base.
+            "effects.base_reaction" => !base.bool("effects.base_compliance").unwrap(),
             _ => false,
         } || UNREAD.contains(&(entry.id, e))
             || CANNOT_ACT.contains(&(entry.id, e));

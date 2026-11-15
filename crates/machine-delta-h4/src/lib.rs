@@ -77,7 +77,7 @@ pub const LOSSY_EFFECTS: [&str; 7] = [
 ];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
-    Ok(Box::new(H4::new(cfg)?))
+    sim_components::base::mount(cfg, Box::new(H4::new(cfg)?))
 }
 
 /// The start pose and the cycle's targets moved by `dz` in z, the tool's turn kept.
@@ -1174,6 +1174,48 @@ impl H4 {
 const ARMS: [&str; 4] = ["arm-1", "arm-2", "arm-3", "arm-4"];
 
 impl Machine for H4 {
+    /// In the tool's frame (z up): the plate's two parts at p -+ h d, the carriage with the payload at p, the rods'
+    /// middles (effects.forearm_inertia) between elbow and plate as the dynamics has them; the arms turning about their
+    /// joints at the base radius and their rotors about the elbows' axes; the tool's turn about z (its own angle with
+    /// effects.amplifier_compliance).
+    // shortcut: the rods' spin about their own axes (effects.forearm_inertia) is left out, as on the D3; add it if a
+    // base's tilt under the H4 has to be exact.
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        use sim_components::base::{add_point, add_spin, add_turning};
+        let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        let (t, w) = self.arms(s);
+        let (x, j) = self.pose(t);
+        let (xv, d) = (mul4(&j, w), self.legs.slide);
+        // A point at p + side h d, and its speed.
+        let point = |side: f64| -> (V3, V3) {
+            (std::array::from_fn(|k| x[k] + side * d[k] * x[3]), std::array::from_fn(|k| xv[k] + side * d[k] * xv[3]))
+        };
+        for side in [-1.0, 1.0] {
+            let (r, v) = point(side);
+            add_point(&mut f, self.m_part, r, v);
+        }
+        let (r, v) = point(0.0);
+        add_point(&mut f, self.carried(), r, v);
+        let rotor_speed = self.rotors(s).1;
+        for i in 0..4 {
+            let (sin, cos) = t[i].sin_cos();
+            let (dir, ddir) = (self.legs.to_base(i, [cos, 0.0, -sin]), self.legs.to_base(i, [-sin, 0.0, -cos]));
+            let joint = self.legs.to_base(i, [self.base_radius, 0.0, 0.0]);
+            add_turning(&mut f, joint, dir, ddir, w[i], self.arm_inertia, self.arm_moment);
+            add_spin(&mut f, self.legs.tangent(i), self.joints[i].rotor_inertia, rotor_speed[i]);
+            if self.m_rod_middle > 0.0 {
+                let ([elbow, d1, _], (end, end_v)) = (self.legs.elbow(i, t[i]), point(SIDE[i]));
+                let middle = std::array::from_fn(|k| 0.5 * (elbow[k] + end[k]));
+                add_point(&mut f, self.m_rod_middle, middle, std::array::from_fn(|k| 0.5 * (d1[k] * w[i] + end_v[k])));
+            }
+        }
+        let turn = match self.amplifier {
+            Some(_) => s[self.turn_at() + 1],
+            None => self.kappa * xv[3],
+        };
+        add_spin(&mut f, [0.0, 0.0, 1.0], self.tool_inertia(), turn);
+        Some(f)
+    }
     fn axes(&self) -> &[AxisInfo] {
         &self.axes
     }

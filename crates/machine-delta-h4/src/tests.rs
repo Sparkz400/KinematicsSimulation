@@ -405,3 +405,26 @@ fn the_fit_window_is_the_longest_its_lifts_allow_down_to_its_lowest_mode() {
     close(smoothing_span(&d, &short), SMOOTHING_S, 1e-12, "40 ms runs");
     assert!(!turns_both_ways(&d, &short));
 }
+
+/// On a compliant base with effects.base_reaction (x, y 2.7e6 N/m and z 1.9e7 N/m as shipped, 300 kg; tilts about x
+/// and y of 5e5 N m/rad added, 100 kg m^2), the base undamped and the losses off (the standard suite's rigid config): the
+/// arms, the plate and the base keep their energy as the suite's check has it, the base's sway with the machine's
+/// momentum and the weight's work on its tilt included. With the shipped damping ratio (0.02) and losses the loss budget
+/// closes with the base's damping loss in it.
+#[test]
+fn on_a_coupled_base_the_four_arm_delta_keeps_its_energy_and_budget() {
+    let on = |mut cfg: Config, zeta: f64| {
+        for e in ["effects.base_compliance = true", "effects.base_reaction = true"] {
+            cfg.set_text(e).unwrap();
+        }
+        for axis in ["x", "y"] {
+            cfg.set_text(&format!("base.tilt_stiffness_{axis}_nm_rad = 5.0e5")).unwrap();
+        }
+        for id in sim_components::base::DOFS {
+            cfg.set_text(&format!("base.damping_ratio_{id} = {zeta:?}")).unwrap();
+        }
+        build(&cfg).unwrap()
+    };
+    sim_core::testkit::energy_conservation(on((ENTRY.suite_configs)()[0].clone(), 0.0).as_ref());
+    sim_core::testkit::loss_budget(on(ENTRY.config(), 0.02).as_ref());
+}

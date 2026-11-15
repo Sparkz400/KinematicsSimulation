@@ -69,7 +69,7 @@ pub const LOSSY_EFFECTS: [&str; 7] = [
 ];
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
-    Ok(Box::new(ParallelScara::new(cfg)?))
+    sim_components::base::mount(cfg, Box::new(ParallelScara::new(cfg)?))
 }
 
 /// The default config with every loss switched off.
@@ -329,6 +329,9 @@ pub struct ParallelScara {
     required_life: Option<f64>,
     /// I_b without the rotor, plate mass without and with payload (forearm share and what it carries included).
     arm_inertia: f64,
+    /// The arm's first moment about its joint, elbow share included (for `frame_momentum`), and gravity.
+    arm_moment: f64,
+    g: f64,
     m_platform: f64,
     m_payload: f64,
     payload_attached: bool,
@@ -540,6 +543,10 @@ impl ParallelScara {
             extras,
             required_life: cfg.f64("ratings.required_life_h").ok(),
             arm_inertia: i_arm + la * la * elbow,
+            // shortcut: the arm's tube as a uniform rod (its weight is out of the plane, so the config gives its inertia
+            // and no mass): m L / 2 = 3 I / (2 L); give its mass and centre if a base's tilt under it has to be exact.
+            arm_moment: 1.5 * i_arm / la + la * elbow,
+            g,
             m_platform: cfg.positive("mass.platform_kg")? + 2.0 * (1.0 - share) * m_fb + carried,
             m_payload,
             payload_attached: true,
@@ -855,6 +862,39 @@ impl ParallelScara {
 }
 
 impl Machine for ParallelScara {
+    /// In the tool's frame (x, y in the plane, z up): the plate with all it carries at the tool's (x, y), of it the Z
+    /// stroke's carriage and payload moving up at the tool's z; the arms turning about their joints at +-base radius,
+    /// about -+z, their rotors with them; the stroke's rotor, the tool's turn and its rotor about z.
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        use sim_components::base::{add_point, add_spin, add_turning};
+        let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        let (t, w) = self.arms(s);
+        let (p, j) = self.pose(t);
+        let pv = mul(&j, w);
+        let mut plate = self.m_nt();
+        let rotor_speed = self.rotors(s).1;
+        for (e, x) in self.extras.iter().enumerate() {
+            let [q, v, _] = self.extra_state(s, e)[..] else { unreachable!() };
+            let (i, rotor) = (x.ratio(), x.joint.rotor_inertia);
+            if x.screw.is_some() {
+                let moved = x.mass(self.payload_attached);
+                plate -= moved;
+                add_point(&mut f, moved, [p[0], p[1], q], [pv[0], pv[1], v]);
+            } else {
+                add_spin(&mut f, [0.0, 0.0, 1.0], x.mass(self.payload_attached), v);
+            }
+            add_spin(&mut f, [0.0, 0.0, 1.0], rotor, i * v);
+        }
+        add_point(&mut f, plate, [p[0], p[1], 0.0], [pv[0], pv[1], 0.0]);
+        for k in 0..2 {
+            let (side, (sin, cos)) = (SIDE[k], t[k].sin_cos());
+            let (dir, ddir) = ([side * cos, -sin, 0.0], [-side * sin, -cos, 0.0]);
+            let joint = [side * self.base_radius, 0.0, 0.0];
+            add_turning(&mut f, joint, dir, ddir, w[k], self.arm_inertia, self.arm_moment);
+            add_spin(&mut f, [0.0, 0.0, -side], self.joints[k].rotor_inertia, rotor_speed[k]);
+        }
+        Some(f)
+    }
     fn axes(&self) -> &[AxisInfo] {
         &self.axes
     }

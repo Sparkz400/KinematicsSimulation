@@ -14,7 +14,7 @@
 //! The cut (effects.process_force) pushes on the carriage along the material with a table over the way into the window
 //! (`cut.position_m`, `cut.force_n`, positive along the material) while the carriage moves forwards.
 
-use crate::{Table, axis, forwards, machine, master, payload};
+use crate::{Table, axis, forwards, gravity, machine, master, payload};
 use sim_components::cam::{Cam, Law, Segment};
 use sim_components::chain::Mechanism;
 use sim_components::joint::RotaryJoint;
@@ -36,7 +36,12 @@ pub struct FlyingSaw {
     pub master: Option<CamMaster>,
     rack: RackPinion,
     efficiency: f64,
+    /// Gravity, for the carriage's weight on a compliant base (`frame_momentum`).
+    g: f64,
 }
+
+/// The carriage's height in the scene (`scene`), m.
+const CARRIAGE_Z: f64 = 0.35;
 
 /// The flying saw's cam (the module's): material at `speed`, mean synchronising acceleration `acc`, cut window `window`,
 /// cut length `length`, `law` for the return. `None` where the cut length leaves no room for the return.
@@ -92,6 +97,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         cam,
         rack,
         efficiency: joint.extra_efficiency,
+        g: gravity(cfg)?,
     };
     let x = axis(cfg, "x", "axis-x", "m", joint.range)?;
     machine(cfg, saw, (joint, Some(lever), "m"), x, false)
@@ -109,6 +115,20 @@ impl FlyingSaw {
 }
 
 impl Mechanism for FlyingSaw {
+    /// In the scene's frame: the carriage with the saw (and the blade, the payload) along x at its height, the pinion's
+    /// rotor about y; the cut pushing the carriage along the material.
+    fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
+        let at = [q[0], 0.0, CARRIAGE_Z];
+        let mut f = sim_core::FrameMomentum {
+            gravity: [0.0, 0.0, -self.g],
+            external: [self.cut_force(q[0], qd[0]), 0.0, 0.0],
+            external_at: at,
+            ..Default::default()
+        };
+        sim_components::base::add_point(&mut f, self.moving(), at, [qd[0], 0.0, 0.0]);
+        f.angular[1] += rotor_spin[0];
+        Some(f)
+    }
     fn dynamics(&self, _q: &[f64], _qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         mass[0] = self.moving();
         bias[0] = 0.0;

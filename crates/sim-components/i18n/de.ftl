@@ -586,6 +586,7 @@ quantity-braking-resistor-temperature = Übertemperatur des Bremswiderstands
 check-motor-s1 = Effektivmoment bei mittlerer Drehzahl gegen die S1-Kennlinie [N m]
 
 effect-base_compliance = Maschinenbett gibt nach: Gestell oder Ständer unter der Maschine auf Federn, in bis zu sechs Richtungen (aus: starr auf dem Boden)
+effect-base_reaction = Die Maschine spürt das Schwingen ihres Betts: die Motoren sehen es und halten dagegen, seine Energie in der Bilanz (aus: das Bett schwingt nur unter der Maschine)
 base = Maschinenbett
 quantity-base-x = Verschiebung in X
 quantity-base-y = Verschiebung in Y
