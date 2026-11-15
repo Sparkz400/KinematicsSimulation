@@ -16,6 +16,7 @@ transmission = "toothed belt AT5, 25 mm, pulley 22 teeth, no gearbox"
 mounting = "horizontal"              # horizontal, vertical, inclined 30 deg, ...
 travel_per_motor_rev_m = 0.110       # optional: for a linear axis
 payload_kg = 0.0                     # optional
+# config = "machine.toml"            # optional: the machine as a config of a simulator machine, a file in the folder
 
 [drive]
 vendor = "Siemens"                   # Siemens, Beckhoff, CODESYS-based (name the drive), ...

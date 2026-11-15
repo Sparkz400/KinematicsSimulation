@@ -1,0 +1,51 @@
+# Measured on the ball screw test bench of ISW, University of Stuttgart, and published by them on DaRUS under CC BY 4.0:
+# C. Hinze, L. Zeh, "Identification data for plant and friction identification", DaRUS, V1, 2022,
+# https://doi.org/10.18419/darus-3003. Three of its recordings, converted to CSV (README.md says how).
+
+[dataset]
+id = "isw-ball-screw-axis"
+title = "Ball screw axis with a 400 kg table, S-profile, sine and constant speed (ISW Stuttgart, measured)"
+description = "A SIEMENS 1FT7085 motor on a SINAMICS S120 turns a 40 mm ball screw that moves a 400 kg table over 0.72 m, speed and position loops on a dSPACE board. Motor position and speed (as table travel), motor torque from the inverter and the position setpoint, every fourth sample of the 4 kHz recording. Measured by ISW, University of Stuttgart (Hinze, Zeh), CC BY 4.0, doi:10.18419/darus-3003."
+license = "CC-BY-4.0"
+contributor = "ISW, University of Stuttgart (data published on DaRUS, doi:10.18419/darus-3003)"
+recorded = "2022-08"
+synthetic = false
+
+[machine]
+kind = "single ball screw axis, linear direct drive below the table (idle in these recordings)"
+transmission = "ball screw Steinmeyer 3526/40.40.6,3E, 40 mm, lead 40 mm (estimate: not stated by the source), spindle 1800 mm, motor coupled directly"
+mounting = "horizontal (estimate: not stated by the source)"
+travel_per_motor_rev_m = 0.04
+payload_kg = 0.0
+config = "machine.toml"
+
+[drive]
+vendor = "Siemens, loops on dSPACE"
+family = "SINAMICS S120, speed and position loops on a dSPACE DS1006 at 4 kHz and 1 kHz"
+position_cycle_s = 1e-3
+
+[motor]
+family = "1FT7 High Dynamic, water cooled"
+rated_torque_nm = 38.0
+rotor_inertia_kg_m2 = 2.07e-3
+
+[[recording]]
+file = "s-profile-v300.csv"
+map = "map.toml"
+test = "cycle"
+sample_time_s = 1e-3
+notes = "Source file Validation/SProfile/SPP_v300_xS10_xE700_a1000.mat: 10 mm to 700 mm and back, 0.3 m/s, 1 m/s2, 100 m/s3. Recorded 2022-08."
+
+[[recording]]
+file = "sine-a100-v100.csv"
+map = "map.toml"
+test = "friction-map"
+sample_time_s = 1e-3
+notes = "Source file Validation/SineTrajectory/Sine_xS250_t20_A100_v100_f0-1.mat: a sine of 100 mm about 250 mm at 0.1 Hz (0.063 m/s peak), 21 s. Starts in motion: the first 10 ms jerk the axis (34 N m). Recorded 2022-08."
+
+[[recording]]
+file = "constant-speed-v100.csv"
+map = "map.toml"
+test = "friction-map"
+sample_time_s = 1e-3
+notes = "Source file const_v_100.mat: 0 to 700 mm and back at 0.1 m/s, one point of the source's Stribeck map. Recorded 2022-06."

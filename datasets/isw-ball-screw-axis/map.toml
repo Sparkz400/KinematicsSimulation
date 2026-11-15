@@ -1,0 +1,11 @@
+# Signals of the CSV files at the motor shaft. The source gives the motor's angle and speed already as table travel
+# (m, m/s, through the lead it used); per_rev = 0.04 m is the lead of machine.toml, an [estimate] (README.md).
+format = "csv"
+time = "time"
+
+[[motor]]
+id = "x"
+setpoint = { signal = "position setpoint", per_rev = 0.04 }
+angle = { signal = "position actual", per_rev = 0.04 }
+speed = { signal = "speed actual", per_rev = 0.04 }
+torque = "torque actual"
