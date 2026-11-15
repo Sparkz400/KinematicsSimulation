@@ -40,7 +40,10 @@ fn a_path_from_an_end_of_a_stroke_is_run() {
                     .collect()
             })
             .collect();
-        let poses = if corners.iter().all(|p| machine.unreachable(p, 0.0).is_none()) { corners } else { faces };
+        // Seven axes and more (the arm on a track) have 128 corners and more, each a run of seconds: there too the faces'
+        // middles, 2 n poses, each at the end of one stroke, which is what the scenario needs.
+        let few = axes.len() <= 6;
+        let poses = if few && corners.iter().all(|p| machine.unreachable(p, 0.0).is_none()) { corners } else { faces };
         for pose in poses {
             let mut cfg = entry.config();
             cfg.set_text(&format!("start.pose = {pose:?}")).unwrap();
