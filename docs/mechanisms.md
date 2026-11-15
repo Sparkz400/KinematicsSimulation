@@ -944,7 +944,7 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
   parallel machine, not one of these; see the [model reference](model-reference.md#linear-delta).
 
 - Hexapod: the legs' own turning about their base joints and the payload's inertia are left out; one stiffness per leg
-  (the screw's softest nut position); no modes reported (`resonance_hz`) for it yet.
+  (the screw's softest nut position). Its modes are reported with the motors held, as the arms' (`sim-cli modes hexapod`).
 - Tripod: the legs' swing about their base joints is left out, as on the hexapod; no friction or play in the revolute
   and spherical joints; one stiffness per leg (the screw's softest nut position); the forward kinematics' convergence is
   shown for the shipped box (a config with another geometry or box should run that test's check again).

@@ -31,6 +31,18 @@ after them are the release as cut.
   joint of the Newton-Euler chain; the carriage's four guide blocks loaded by the arm's reaction (`[track]`,
   `guide-load`, `guide-life`), a prismatic joint on a `[rack]`; tool space with the track as an axis of its own
   (`config/arm-on-track-tool.toml`).
+- Machine `winder` (crate `machine-winder`): a PET web from an unwind roll over a dancer roller to a rewind roll, both
+  centre-driven by a 1FK2206-2AF through a planetary gearbox on an S120 line-up; roll radius and inertia follow the wound
+  length, two elastic web spans that go slack below zero tension, a dancer on a pneumatic cylinder, electronic gearing
+  at the rolls' radii with tension and inertia feedforward, a taper over the rewind's radius and the dancer's position
+  loop trimming the unwind. Checks `web-tension`, `web-slack`, `dancer-travel`, and per motor `inertia-ratio`,
+  `torque-at-full-roll`, `torque-at-core`, `speed-at-core`, `tension-torque-at-full-roll`, which carry the cycle to
+  both ends of the roll.
+- Machine `hexapod-rotary` (crate `machine-hexapod-rotary`): a six-axis platform on six cranks (6-RSS), each turned by
+  a 1FT2104-5AF through an SP100 gearbox, rods with ball joints at both ends; closed-form inverse and Newton forward
+  kinematics, dynamics by virtual work; checks `crank-dead-centre`, `rod-buckling`, `crank-ball-joint`,
+  `platform-ball-joint` per leg. `chain::inverse`, `chain::eigenvalues` and `chain::condition_number` are shared with
+  the hexapod.
 - Motor kinds (`motor.kind`): `"stepper"`, a two-phase hybrid stepper behind an open-loop step and direction drive
   (microsteps, detent torque with `effects.detent_torque`, lost steps kept; check `stepper-synchronism`, `motor-peak`
   against the pull-out curve), and `"induction"`, a d-q induction motor on a frequency converter with V/f or
@@ -102,10 +114,15 @@ after them are the release as cut.
 - A machine built at rest is held where its tool stands, not where its motors' angles put it (`Controller::new`).
 - Joint machines work out their setpoint slack when first asked (the seven-axis arm builds in 56 ms instead of 1.8 s);
   faster steps of the hexapod, the cable robots, the four-arm delta and the rigid chain, results bit for bit as before.
-- The flying saw: friction feedforward from its carriage's friction and velocity loop Tn 0.03 s; it comes to rest
-  within 14 µm instead of creeping 58 µm.
+- The flying saw: friction feedforward from its carriage's friction; with the retuning below it comes to rest moving
+  11.8 µm in 0.2 s after a long move instead of creeping 58 µm.
 - Cable robots: the elastic forward kinematics is the platform's static equilibrium on the cables; the inverse asks the
   tension distribution's tensions.
+- Crank and cam machines retuned so that their velocity loops keep 35 degrees and 6 dB across their bounds with friction
+  off too: the rotary knife's Kp 0.25 -> 0.18 (its cycle's following error 8.86 -> 12.1 mrad), the toggle press's Kp
+  0.3 -> 0.25 with kv 140; the flying saw gets a notch filter at 400 Hz (`effects.notch_filter` is now each crank-cam
+  machine's own switch) and Kp 0.25, Tn 0.04 s, kv 57 1/s (at least 40.5 degrees and 11.98 dB; following error
+  455 -> 366 µm).
 - `kinematics_sim.optimise()` returns `dwell_angle_error_peak_rad` (before, after), as `sim-cli optimise` prints it.
 - The app's delta and 3D-view pictures in docs/images are taken anew.
 
@@ -130,7 +147,8 @@ after them are the release as cut.
   delta's tool turn after a ratio change and over OPC UA (its config keeps the tool on its spring), the CLI's energy
   budget read by column name; the cross-machine tests now judge turning axes in rad, allow the gears' twist under load
   (the palletiser in the model switch, tuning and ratio-change tests) and tell a ring-down from hunting; the app's tests
-  wait for the app, not for a count of frames or the wall clock.
+  wait for the app, not for a count of frames or the wall clock. The shaper test allows the torque a stuck gear mesh
+  holds; the effect-switch test runs long cycles until their via point's corner has passed.
 
 ### Added
 

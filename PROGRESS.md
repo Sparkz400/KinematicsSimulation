@@ -4341,7 +4341,7 @@ Left open:
 
 ## After the release cut: three waves of work (15 November)
 
-Merged on main between the cut (19c2ad1, 14 November) and 27544b4; the entries are in the 1.0.0 section of
+Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries are in the 1.0.0 section of
 [CHANGELOG.md](CHANGELOG.md), what stays open in [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md).
 
 - Wave 1, fixes and checks: the tests failing at the cut fixed (parallel SCARA, four-arm delta, crank-cam, cross-machine
@@ -4353,7 +4353,8 @@ Merged on main between the cut (19c2ad1, 14 November) and 27544b4; the entries a
   stepper and induction motors, the pneumatic cylinder, gripper time, friction feedforward from the machine's model,
   gearbox mesh friction, the time-optimal plan inside every pointwise limit, the measured ball screw fitted, four
   app views and the window tested by synthetic input, faster steps.
-- Wave 3, machines: tripod, wafer handler, toggle press, arm on a track (26 registered machines); the arms' modes with
+- Wave 3, machines: tripod, wafer handler, toggle press, arm on a track, then the winder and the six-axis platform on
+  cranks (28 registered machines); the crank and cam machines retuned to their margins, the flying saw with a notch; the arms' modes with
   the motors held; machine files that follow their crates' friction feedforward.
 - Last full run in this period: 1533 of 1538 tests passed at 54a2fca, before wave 3; the final count is a placeholder
   in docs/validation.md.
