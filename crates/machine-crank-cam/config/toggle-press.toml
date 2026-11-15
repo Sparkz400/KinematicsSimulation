@@ -156,9 +156,11 @@ current_delay_cycles = 1
 velocity_delay_cycles = 1
 # [estimate] Stiff loops: near the dead centre the press force pushes the knee out of line (-F x'' at the crank,
 # +288 N m/rad at 11.5 kN), which the position loop has to hold; with kv 50 and kp 0.15 the crank rang at 4 Hz for a
-# second under the force. `sim-cli margins toggle-press --bands`: at least 41.5 degrees and 7.08 dB.
-kv_1_s = 100.0
-velocity_kp_nm_s_rad = 0.3
+# second under the force. Kp 0.25 (0.3 left 33.5 degrees with friction off at the softest gearbox damping of the bounds)
+# and kv 140: a long move into the forming zone comes to rest moving 9.8 urad in 0.2 s (kv 100: 31 urad).
+# `sim-cli margins toggle-press --bands`: at least 37.7 degrees and 8.32 dB with friction off, 48 and 8.73 with it.
+kv_1_s = 140.0
+velocity_kp_nm_s_rad = 0.25
 # [estimate]
 velocity_tn_s = 0.01
 velocity_feedforward_factor = 1.0

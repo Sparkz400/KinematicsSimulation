@@ -327,8 +327,12 @@ kv_1_s = 50.0
 # [estimate] scaled from the delta picker's 0.25 by the inertia at the motor (roll and bars over 100, rotor), then
 # lowered from 0.3 with Tn from 0.03 s to 0.01 s (14 November): the integrator takes up the friction at the end of a move
 # three times as fast and the dwell error falls from 0.34 to 0.16 mrad, and `sim-cli margins rotary-knife --bands`
-# finds at least 35.8 degrees and 8.0 dB (31.6 degrees with 0.3 and 0.03 s).
-velocity_kp_nm_s_rad = 0.25
+# finds at least 35.8 degrees and 8.0 dB (31.6 degrees with 0.3 and 0.03 s). Then 0.18 (15 November): with friction off
+# the softest gearbox damping of the bounds (2 N m s/rad) left 29.7 degrees at 0.25 (26.4 at 0.3, 0.03 s: it never passed
+# the sweep); at 0.18 at least 37.8 degrees and 9.9 dB, 45.7 and 11.0 with friction. The cycle's following error grows
+# from 8.86 to 12.1 mrad (the cut, outside the feedforward), the cam's from 4.72 to 5.70 mrad, settling 0.042 to
+# 0.072 mrad of 0.3.
+velocity_kp_nm_s_rad = 0.18
 velocity_tn_s = 0.01
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
