@@ -1125,8 +1125,8 @@ impl Machine for TGantry {
         let (r, ratio, (vx, vz)) = (self.r, self.gearbox.ratio, (vel[0], vel[1]));
         let (scale_x, scale_z) = self.load_scales(pos[1], 0.0);
         let (idler_x, idler_z) = self.idler_friction(vx, vz);
-        let fx = self.friction_x.steady(vx, scale_x).iter().sum::<f64>() + idler_x + self.chain_drag(vx);
-        let fz = self.friction_z.steady(vz, scale_z).iter().sum::<f64>() + idler_z;
+        let fx = self.friction_x.feedforward(vx, scale_x) + idler_x + self.chain_drag(vx);
+        let fz = self.friction_z.feedforward(vz, scale_z) + idler_z;
         let lift = self.m_z() * self.g / 2.0;
         let mut speed = [0.0; 2];
         self.inverse(vel, &mut speed);

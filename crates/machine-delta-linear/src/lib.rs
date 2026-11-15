@@ -1072,7 +1072,7 @@ impl Machine for LinearDelta {
         let v = inverse(&j).map_or([f64::NAN; 3], |inv| mul(&inv, [vel[0], vel[1], vel[2]]));
         let (r, ratio, scales, gravity) = (self.r, self.gearbox.ratio, self.load_scales(h), self.load(h, [0.0; 3]).2);
         for k in 0..3 {
-            let force = self.friction[k].steady(v[k], scales[k]).iter().sum::<f64>();
+            let force = self.friction[k].feedforward(v[k], scales[k]);
             let loss = self.gears[k].loss_factor((force - gravity[k]) * r, v[k] / r);
             out[k] = self.shaft.torque(ratio * v[k] / r) + r / (ratio * loss) * force;
         }

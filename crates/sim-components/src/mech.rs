@@ -587,6 +587,18 @@ impl Lugre {
         [coulomb * sign, self.viscous * v, (self.level(v, load_scale) - coulomb) * sign]
     }
 
+    /// The steady sliding force for a feedforward at a planned speed v (`Machine::steady_friction`): `steady`'s sum, its
+    /// level g(v) faded in by tanh(v / v_s) over the Stribeck speed, g(v) tanh(v / v_s) + b v. Above a few v_s it is
+    /// `steady` (1 m/s on a 10 mm/s Stribeck speed: to 1e-86); towards rest it falls to 0 smoothly instead of stepping
+    /// from the breakaway level, so that a move's last micrometres and its stop put no torque step on the axis, as the
+    /// bristles that stick there take the force over without one.
+    pub fn feedforward(&self, v: f64, load_scale: f64) -> f64 {
+        if !self.on {
+            return 0.0;
+        }
+        self.level(v, load_scale) * (v / self.stribeck_v).tanh() + self.viscous * v
+    }
+
     /// The force of `eval` split into [Coulomb, viscous, stiction]: b v, and the bristle force (all the rest) shared
     /// in the proportion of the Coulomb level to what the Stribeck curve adds to it at this speed. In steady
     /// sliding these are the parts of `steady`; at rest the bristles hold with the shares of the stiction level.
@@ -1190,6 +1202,17 @@ mod tests {
             assert!(s_dot.abs() < 1e-12);
             assert!((force - v.signum() * (15.0 + 20.0 * 0.5)).abs() < 1e-9, "{force}");
         }
+    }
+
+    /// The feedforward's force by hand: at 0.5 m/s the steady 15 + 20 x 0.5 = 25 N (tanh(50) is 1 to 1e-43); at the
+    /// Stribeck speed 0.01 m/s, g = 15 + 5 / e = 16.8394 N times tanh(1) = 0.761594, plus 0.2 N: 13.0248 N; at rest 0.
+    #[test]
+    fn the_friction_feedforward_fades_the_level_in_over_the_stribeck_speed() {
+        let f = lugre();
+        assert!((f.feedforward(-0.5, 1.0) + 25.0).abs() < 1e-12);
+        let by_hand = (15.0 + 5.0 * (-1f64).exp()) * 1f64.tanh() + 0.2;
+        assert!((f.feedforward(0.01, 1.0) - by_hand).abs() < 1e-12 && (by_hand - 13.0248).abs() < 1e-4);
+        assert_eq!(f.feedforward(0.0, 1.0), 0.0);
     }
 
     /// Stiff bristles on a light contact at speed. By hand: 1e6 N/m, a level of 12 N and 2.5 m/s make the

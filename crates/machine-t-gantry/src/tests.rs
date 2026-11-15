@@ -383,9 +383,12 @@ fn leaning_resonance(z: f64) -> f64 {
 /// `edit` sets it up.
 fn swing_after_a_traverse(z: f64, edit: &[String]) -> f64 {
     let mut cfg = ENTRY.config();
-    // A sharp profile, so that the plain move does start the swing.
+    // A sharp profile, so that the plain move does start the swing. Without the friction feedforward, as these hand
+    // calculations were made: with it the shaped moves leave about twice the swing (17 um at z = 0.15 m), the
+    // guides' friction no longer taking the carriage's last motion off before the plan stops.
     for e in [
         "effects.frame_compliance = false".to_string(),
+        "effects.friction_feedforward = false".to_string(),
         format!("start.pose = [0.1, {z:?}]"),
         "axis.x.max_jerk_m_s3 = 2000.0".to_string(),
     ]

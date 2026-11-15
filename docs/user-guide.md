@@ -165,6 +165,7 @@ thermal-warm-start,,0.00001281,0.1000,ok
 | `dc-link-overvoltage` | highest DC link voltage (only with `effects.dc_link`) | `ratings.dc_link_overvoltage_v` | V |
 | `settling` | `dwell_error_peak_m` | `ratings.settling_tolerance_m` | m |
 | `settling-angle` | `dwell_angle_error_peak_rad` | `ratings.settling_tolerance_rad` | rad |
+| `gripper-hold` | the most the held part asks of a vacuum cup, m (a_z + g) + m |a_xy| / μ (with `effects.gripper_time`) | its hold A p_hold over `ratings.gripper_safety_factor` | N |
 | `belt-tension` | highest belt tension | `ratings.belt_max_tension_n` | N |
 | `belt-slack` | lowest belt tension | `ratings.belt_min_tension_n` | N |
 | `gearbox-radial-load` | `radial_load_peak_n` | `ratings.shaft_max_radial_load_n` | N |
@@ -194,6 +195,8 @@ Limits for this task:
 - With input shaping, a dwell and the gripper wait until the shaped setpoint has arrived, one period of the shaper after the plan. `settling` is then judged from that moment.
 - Gearbox and pulley torques are the torque at the gearbox output, the signal `gearbox.<motor id>.output_torque`. In the elastic model that is what the gear's spring passes on to the pulley, with the efficiency applied; in the rigid model it is the value the solver works out. The torque that accelerates the rotor itself does not count against the gearbox, and a load that drives the gearbox back (braking, lowering) counts with what it puts on the output. `cubic_mean_torque_nm` of `analyze` is still the motor's.
 - The motor, friction and drive values of the default configs are placeholders. See the README on what the absolute numbers rest on.
+
+**The gripper's time, and whether a vacuum cup holds.** By default the gripper grips and lets go at once on arrival. With `effects.gripper_time` and a `[gripper]` table (see the [config reference](config-reference.md#gripper)) jaws take `close_s` and `open_s`, and a vacuum cup the time its generator needs to evacuate it to the switch level and its vent to let go (a first-order build-up from cup volume and flow). The dwell at pick and place lasts at least that long and the payload comes or goes when the gripper is done, so a short dwell makes the cycle longer: on the single axis jaws of 0.3 s and 0.25 s against dwells of 0.1 s add 0.35 s. With a vacuum gripper and `ratings.gripper_safety_factor` the verdict `gripper-hold` judges the most the held part asks of the cup, m (a_z + g) + m |a_xy| / μ from the tool's acceleration, against the cup's hold A p_hold over the factor: on the rigid single axis (10 m/s², 2 kg, μ 0.5) 61.86 N, which a 70 N cup holds and a 55 N one does not. A faster cycle raises it, and `optimise` stops where the cup still holds. None of the shipped configs has the gripper's time on.
 
 **One DC link for all drives.** `effects.shared_dc_link` (off by default, needs `effects.dc_link`) gives the drives of a machine one DC link, as with one Line Module on a SINAMICS S120. What a braking motor feeds back, a motoring one draws; only the net power charges the capacitors. The link has the capacitance of all drives together (each brings `ratings.dc_link_capacitance_uf`), one chopper with one braking resistor of the `[ratings]` powers, and one trip. Every motor then shows the same DC link voltage and resistor power, and the braking checks appear once per motor with the same shared values. On a machine with one drive the switch changes nothing.
 
@@ -1216,6 +1219,8 @@ Trajectories (`--trajectory`, planned paths, a segment's via points) run a cubic
 ## Tune gains and use input shaping
 
 The gains are in `[drive]`: `kv_1_s` (position), `velocity_kp_nm_s_rad` and `velocity_tn_s` (velocity), `current_kp_v_a` and `current_tn_s` (current). The three commands below put a test signal on the position setpoint only, without feedforward, so they show the feedback loops.
+
+**Friction feedforward.** `effects.friction_feedforward` adds friction to the torque feedforward, so that the velocity loop's integrator need not build it up while the axis moves. `drive.friction_feedforward_model` says which: `"characteristic"`, the points `drive.friction_feedforward_*` a drive records at constant speeds, or `"machine"`, the friction of the machine's own model at the planned speed (guides, motor shaft, gearbox drag, joints, idlers, cable chain), which every machine tells. It is on with `"machine"` in the shipped configs where it cuts the following error while moving and the settling at the pick (the T-gantry's 194.9 um to 178.2 um and 47.4 um to 42.9 um; the screw axis 82.3 to 30.8 um and 46.2 to 6.9 um); the [validation](validation.md#friction-feedforward-in-the-shipped-configs) has the table for every config and why the single axis and the linear delta keep it off. A feedforward does not change the loop's margins. Try it on any config with `--set effects.friction_feedforward=true --set 'drive.friction_feedforward_model="machine"'`.
 
 **One line per axis:**
 
