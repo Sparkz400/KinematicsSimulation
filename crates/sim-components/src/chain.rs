@@ -86,8 +86,8 @@ pub trait Mechanism: Send {
     fn memory(&self) -> Vec<f64> {
         Vec::new()
     }
-    /// Sets back what `memory` gave.
-    fn set_memory(&mut self, _memory: &[f64]) {}
+    /// Sets back what `memory` gave (empty: none, as before the first `inverse`), as `inverse` keeps it: behind a lock.
+    fn set_memory(&self, _memory: &[f64]) {}
     fn unreachable(&self, _tool: &[f64], _slack: f64) -> Option<&'static str> {
         None
     }
@@ -191,8 +191,10 @@ pub struct JointMachine<M: Mechanism> {
     pub axes: Vec<AxisInfo>,
     pub motors: Vec<MotorInfo>,
     brake_engaged: bool,
-    /// `Machine::setpoint_slack`, worked out once (`rest_sag`).
-    rest_slack: f64,
+    /// `Machine::setpoint_slack`, worked out when first asked for (`rest_sag`, 1.4 s on the seven-joint arm).
+    rest_slack: std::sync::OnceLock<f64>,
+    /// Whether the payload is attached, as `set_payload_attached` last had it (attached as built).
+    payload_attached: bool,
     /// `Mechanism::passive_joints`: their angles and speeds follow the joint machine's own states.
     passive: Vec<(f64, f64)>,
     /// How many bending modes the mechanism has (`Mechanism::flex_modes`); their deflections and rates end the state,
@@ -220,7 +222,7 @@ impl<M: Mechanism> JointMachine<M> {
     ) -> Self {
         assert!(axes.len() <= joints.len() && joints.len() == motors.len());
         let (passive, flex) = (mechanism.passive_joints(), mechanism.flex_modes().len());
-        let mut machine = Self {
+        Self {
             mechanism,
             joints,
             elastic,
@@ -228,12 +230,23 @@ impl<M: Mechanism> JointMachine<M> {
             axes,
             motors,
             brake_engaged: false,
-            rest_slack: 0.0,
+            rest_slack: std::sync::OnceLock::new(),
+            payload_attached: true,
             passive,
             flex,
-        };
-        machine.rest_slack = machine.rest_sag();
-        machine
+        }
+    }
+
+    /// `rest_sag` as it is at the build: worked out on first use, before anything it reads changes (the payload, a
+    /// link's mass), from the mechanism's inverse as built (no last solution), whose own memory it leaves as it was.
+    fn rest_slack(&self) -> f64 {
+        *self.rest_slack.get_or_init(|| {
+            let kept = self.mechanism.memory();
+            self.mechanism.set_memory(&[]);
+            let slack = self.rest_sag();
+            self.mechanism.set_memory(&kept);
+            slack
+        })
     }
 
     /// How far the motors' pose can be from the tool's at rest, as the delta works it out: each gearbox twisted by the
@@ -825,12 +838,17 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
 
     fn set_payload_attached(&mut self, attached: bool) {
+        if attached != self.payload_attached {
+            self.rest_slack();
+        }
+        self.payload_attached = attached;
         self.mechanism.set_payload_attached(attached);
     }
     fn links(&self) -> Vec<String> {
         self.mechanism.links()
     }
     fn set_link_change(&mut self, link: usize, factor: f64, moment: [f64; 3]) {
+        self.rest_slack();
         self.mechanism.set_link_change(link, factor, moment);
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
@@ -885,7 +903,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
 
     fn setpoint_slack(&self) -> f64 {
-        self.rest_slack
+        self.rest_slack()
     }
 
     fn condition(&self, tool: &[f64]) -> Option<f64> {

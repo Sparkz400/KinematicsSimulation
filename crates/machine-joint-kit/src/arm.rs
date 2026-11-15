@@ -653,7 +653,7 @@ impl Mechanism for Arm {
     fn memory(&self) -> Vec<f64> {
         if let Tool::Pose(p) = &self.tool { p.memory() } else { Vec::new() }
     }
-    fn set_memory(&mut self, memory: &[f64]) {
+    fn set_memory(&self, memory: &[f64]) {
         if let Tool::Pose(p) = &self.tool {
             p.set_memory(memory)
         }
