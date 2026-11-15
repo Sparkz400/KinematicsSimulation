@@ -746,3 +746,23 @@ param-load_factor_limit = Load factor limit
 param-compressor_energy_kwh_m3 = Compressor energy per m³ of air [kWh/m³]
 param-friction_breakaway_n = Breakaway friction [N]
 param-presliding_stiffness_n_m = Stiffness of the friction before sliding [N/m]
+# Labels every machine may show and none needs in its own words (added 15 November 2026, when machines stopped borrowing
+# another machine's labels).
+axis-x = X
+axis-y = Y
+axis-z = Z
+group-axis-x = X axis
+group-axis-y = Y axis
+group-axis-z = Z axis
+unit-deg = °
+effect-hard_stops = End stops of the joints' ranges
+effect-link_bending = Links bend in their first mode
+effect-link_bending_reaction = The links' bending acts back on the joints (two-way)
+param-mass_kg = Mass [kg]
+param-incline_deg = Incline [°]
+param-radius_m = Radius [m]
+param-stroke_m = Stroke [m]
+param-span_min_m = Shortest free belt span [m]
+param-max_velocity_rad_s = Highest speed [rad/s]
+param-max_acceleration_rad_s2 = Highest acceleration [rad/s²]
+param-max_jerk_rad_s3 = Highest jerk [rad/s³]

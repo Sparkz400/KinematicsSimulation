@@ -746,3 +746,23 @@ param-load_factor_limit = Grenze des Lastverhältnisses
 param-compressor_energy_kwh_m3 = Kompressorenergie je m³ Luft [kWh/m³]
 param-friction_breakaway_n = Losbrechreibung [N]
 param-presliding_stiffness_n_m = Steifigkeit der Reibung vor dem Gleiten [N/m]
+# Bezeichnungen, die jede Maschine zeigen kann und keine in eigenen Worten braucht (15. November 2026, seit Maschinen
+# keine Bezeichnungen einer anderen Maschine mehr leihen).
+axis-x = X
+axis-y = Y
+axis-z = Z
+group-axis-x = X-Achse
+group-axis-y = Y-Achse
+group-axis-z = Z-Achse
+unit-deg = °
+effect-hard_stops = Endanschläge der Gelenkbereiche
+effect-link_bending = Glieder biegen sich in ihrer ersten Eigenform
+effect-link_bending_reaction = Die Biegung der Glieder wirkt auf die Gelenke zurück (zweiseitig)
+param-mass_kg = Masse [kg]
+param-incline_deg = Neigung [°]
+param-radius_m = Radius [m]
+param-stroke_m = Hub [m]
+param-span_min_m = Kürzester freier Riemenabschnitt [m]
+param-max_velocity_rad_s = Größte Geschwindigkeit [rad/s]
+param-max_acceleration_rad_s2 = Größte Beschleunigung [rad/s²]
+param-max_jerk_rad_s3 = Größter Ruck [rad/s³]

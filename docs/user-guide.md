@@ -1038,7 +1038,7 @@ s/rad: with 0.1 the legs' friction held the platform 0.17 mm off at the dwells.
 `hexapod-rotary` is the other build of a hexapod, a motion base on six cranks (6-RSS): six 1FT2104-5AF with planetary
 gearboxes SP100 50:1 on the base, each turning a crank of 200 mm, each crank joined to the platform by a rod of 550 mm
 with a ball joint at both ends; a platform of 35 kg carrying a seat with its occupant, 80 kg, 300 mm above the platform
-joints. Its cycle heaves the platform up, then surges, sways, rolls, yaws and pitches it, each from the pose before,
+joints. Its cycle heaves the platform up, then surges, sways, rolls, pitches and yaws it, each from the pose before,
 and brings it back level.
 
 ```text
