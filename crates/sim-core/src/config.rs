@@ -121,6 +121,11 @@ impl Config {
 
     /// Overwrites an existing value. New keys and type changes are rejected, so a typo cannot pass silently.
     pub fn set(&mut self, path: &str, value: Value) -> Result<()> {
+        // A version `parse` would refuse is refused here too: a config set to it could be written but not read again
+        // (found by the property test of `set_text`, 15 November 2026).
+        if path == "format_version" && value.as_integer() != Some(FORMAT_VERSION) {
+            return Err(ConfigError::Version(format!("{:?}", value.as_integer())));
+        }
         let old = self.get(path)?;
         let value = match (old, value) {
             (Value::Float(_), Value::Integer(i)) => Value::Float(i as f64),
@@ -215,6 +220,9 @@ mod tests {
     fn rejects_wrong_format_version() {
         assert!(matches!(Config::parse("format_version = 2"), Err(ConfigError::Version(_))));
         assert!(matches!(Config::parse("x = 1"), Err(ConfigError::Version(_))));
+        let mut cfg = Config::parse("format_version = 1").unwrap();
+        assert!(matches!(cfg.set_text("format_version = 2"), Err(ConfigError::Version(_))));
+        assert!(cfg.set_text("format_version = 1").is_ok() && Config::parse(&cfg.to_text().unwrap()).is_ok());
     }
 
     #[test]
