@@ -547,6 +547,7 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
         braking_power_peak: 0.0,
         warm_start: None,
         conveyor: None,
+        held_accelerations: Vec::new(),
     };
     let candidate = |verdicts: Vec<Verdict>| Candidate {
         article: "",
@@ -668,6 +669,7 @@ fn the_tightest_check_of_a_one_motor_search_is_that_motors() {
         braking_power_peak: 0.0,
         warm_start: None,
         conveyor: None,
+        held_accelerations: Vec::new(),
     };
     let verdicts = vec![
         Verdict { check: "motor-peak", motor: Some(0), value: 0.9, limit: 1.0, ok: true },

@@ -44,6 +44,9 @@ struct Segment {
     dwell_ticks: u64,
     /// Whether the payload is attached once this segment has arrived.
     payload: bool,
+    /// With effects.gripper_time: how long the gripper takes to come to `payload` (`Gripper`), ticks; 0 without.
+    #[serde(default)]
+    grip_ticks: u64,
     /// With `via`: the path to the target, planned where the segment starts (see `via_pieces`): by `path::plan`, or
     /// with `profile.cycle_timing = "time_optimal"` by `path::plan_time_optimal`.
     path: Option<Vec<Piece>>,
@@ -165,6 +168,12 @@ pub struct Controller {
     stopping: bool,
     enabled: bool,
     pub payload_attached: bool,
+    /// effects.gripper_time: the tick at which the gripper under way is done, and whether it then holds the payload.
+    #[serde(default)]
+    gripping: Option<(u64, bool)>,
+    /// The ticks of the dwell under way (`dwell_progress`): its segment's `dwell_s`, or the gripper's time if longer.
+    #[serde(default)]
+    dwell_ticks: u64,
     pub drives: Vec<Drive>,
     /// Tool-side setpoints and following error.
     pub set_pos: Vec<f64>,
@@ -329,6 +338,8 @@ impl Controller {
             stopping: false,
             enabled: true,
             payload_attached: true,
+            gripping: None,
+            dwell_ticks: 0,
             drives: Vec::new(),
             set_pos: vec![0.0; axes],
             set_vel: vec![0.0; axes],
@@ -541,6 +552,7 @@ impl Controller {
         let guides = reported.iter().any(|s| s.id.ends_with(".guide_load"));
         let guide = if guides { cfg.f64("ratings.guide_max_load_n").unwrap_or(f64::INFINITY) } else { f64::INFINITY };
         let mut segments = Vec::new();
+        let gripper = crate::gripper::Gripper::from_config(cfg)?;
         for (i, segment) in cfg.array("cycle.segment")?.iter().enumerate() {
             let bad = || ConfigError::Invalid(format!("cycle.segment[{i}]"));
             let number = |v: &toml::Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
@@ -581,8 +593,14 @@ impl Controller {
                     .and_then(Shape::from_name)
                     .ok_or_else(|| ConfigError::Invalid(format!("cycle.segment[{i}].shape")))?,
             };
+            let payload = segment.get("payload").and_then(|p| p.as_bool()).ok_or_else(bad)?;
+            // Whole profile cycles, at least the gripper's time.
+            let grip_ticks = gripper
+                .map_or(0.0, |g| ((if payload { g.close_s } else { g.open_s }) / profile_cycle - 1e-9).ceil())
+                as u64;
             segments.push(Segment {
                 target,
+                grip_ticks,
                 dwell_ticks: (segment
                     .get("dwell_s")
                     .and_then(number)
@@ -590,7 +608,7 @@ impl Controller {
                     .ok_or_else(bad)?
                     / profile_cycle)
                     .round() as u64,
-                payload: segment.get("payload").and_then(|p| p.as_bool()).ok_or_else(bad)?,
+                payload,
                 path: via,
                 corner,
                 law: MotionLaw { shape, ..law.clone() },
@@ -735,6 +753,10 @@ impl Controller {
             | Motion::Trajectory { start_tick, .. }
             | Motion::Cam { start_tick, .. } => scale(start_tick),
         }
+        if let Some((at, _)) = &mut self.gripping {
+            scale(at);
+        }
+        self.dwell_ticks = (self.dwell_ticks as f64 * ratio).round() as u64;
         if let Some(newest) = self.history.len().checked_sub(1) {
             let old = std::mem::take(&mut self.history);
             // From the oldest stored moment to now, in steps of the new cycle; between two stored cycles, in proportion.
@@ -1148,9 +1170,29 @@ impl Controller {
 
     /// How far a dwell of the cycle has run, from 0 to 1; `None` outside a dwell.
     pub fn dwell_progress(&self) -> Option<f64> {
-        let (Motion::Dwell { until_tick }, Some(i)) = (&self.motion, self.cycle) else { return None };
-        let total = self.segments[i].dwell_ticks;
+        let (Motion::Dwell { until_tick }, Some(_)) = (&self.motion, self.cycle) else { return None };
+        let total = self.dwell_ticks;
         (total > 0).then(|| 1.0 - until_tick.saturating_sub(self.tick) as f64 / total as f64)
+    }
+
+    /// Segment `i` has arrived at `tick`: the dwell starts. Where the gripper changes its state, with
+    /// effects.gripper_time it closes or opens for its time (`Segment::grip_ticks`), the dwell lasts at least that long
+    /// and the payload comes or goes when the gripper is done; without, at once.
+    fn arrive(&mut self, i: usize, tick: u64) -> Motion {
+        let s = &self.segments[i];
+        let grip = if s.payload != self.payload_attached { s.grip_ticks } else { 0 };
+        if grip == 0 {
+            self.payload_attached = s.payload;
+        } else {
+            self.gripping = Some((tick + grip, s.payload));
+        }
+        self.dwell_ticks = s.dwell_ticks.max(grip);
+        Motion::Dwell { until_tick: tick + self.dwell_ticks }
+    }
+
+    /// Whether the gripper is closing or opening (effects.gripper_time).
+    pub fn gripper_acting(&self) -> bool {
+        self.gripping.is_some()
     }
 
     /// The setpoint as planned, before input shaping: during a dwell, the target.
@@ -1344,6 +1386,12 @@ impl Controller {
         self.set_pos.clone_from(&self.raw_pos);
         self.set_vel.clone_from(&self.raw_vel);
         self.set_acc.clone_from(&self.raw_acc);
+        // effects.gripper_time: the grip is made or lost once the gripper has had its time (`arrive`).
+        if let Some((at, holds)) = self.gripping
+            && tick >= at
+        {
+            (self.payload_attached, self.gripping) = (holds, None);
+        }
         if matches!(self.motion, Motion::Idle) {
             self.next_cycle_segment(machine);
         }
@@ -1382,10 +1430,7 @@ impl Controller {
                 let arrival = mv.duration() + lag * dt;
                 self.motion = if t >= arrival && tail.is_none() {
                     match self.cycle {
-                        Some(i) => {
-                            self.payload_attached = self.segments[i].payload;
-                            Motion::Dwell { until_tick: tick + self.segments[i].dwell_ticks }
-                        }
+                        Some(i) => self.arrive(i, tick),
                         None => Motion::Idle,
                     }
                 } else {
@@ -1479,8 +1524,7 @@ impl Controller {
                             self.segments[i].dwell_ticks > 0 || self.segments[i].payload != self.payload_attached;
                         let lag = if waits { self.shaper_span(machine, &self.set_pos).ceil() } else { 0.0 };
                         self.motion = if t >= points[last].0 + lag * dt {
-                            self.payload_attached = self.segments[i].payload;
-                            Motion::Dwell { until_tick: tick + self.segments[i].dwell_ticks }
+                            self.arrive(i, tick)
                         } else {
                             Motion::Trajectory { points, speeds, start_tick }
                         };

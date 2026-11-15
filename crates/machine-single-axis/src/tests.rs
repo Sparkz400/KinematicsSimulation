@@ -2134,6 +2134,96 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
     assert!(ff == 0.0 && (integrator - expected).abs() < 0.02 * expected, "without: {integrator} N m");
 }
 
+/// The default config with effects.gripper_time and a `[gripper]` table of `gripper` (TOML lines), and `edits`.
+fn with_gripper(gripper: &str, edits: &[&str]) -> Config {
+    let text =
+        ENTRY.default_config.replace("[effects]\n", "[effects]\ngripper_time = true\n") + "\n[gripper]\n" + gripper;
+    let mut cfg = Config::parse(&text).unwrap();
+    for e in edits {
+        cfg.set_text(e).unwrap();
+    }
+    cfg
+}
+
+const JAWS: &str = "kind = \"mechanical\"\nclose_s = 0.3\nopen_s = 0.25\n";
+
+/// Gripper time by hand on the shuttle cycle: it lets go at 0.9 m (dwell 0.1 s) and grips at 0.1 m (dwell 0.1 s). Jaws
+/// that open in 0.25 s and close in 0.3 s make those dwells 0.25 and 0.3 s, so the cycle takes 0.15 + 0.2 = 0.35 s
+/// longer; jaws faster than the dwells (0.05 s) change nothing. The payload goes 0.25 s after the arrival at 0.9 m,
+/// where without gripper time it goes on arrival. The switch off keeps the cycle bit for bit.
+#[test]
+fn the_gripper_time_lengthens_the_dwells_and_moves_the_payload_switch_by_hand() {
+    use sim_components::analysis::analyse_cycle;
+    let duration = |cfg: &Config| analyse_cycle(&mut Sim::new(&ENTRY, cfg).unwrap()).unwrap().duration;
+    let plain = duration(&ENTRY.config());
+    let slow = duration(&with_gripper(JAWS, &[]));
+    assert!((slow - plain - 0.35).abs() < 1e-9, "{plain} s, with the gripper {slow} s");
+    let quick = duration(&with_gripper("kind = \"mechanical\"\nclose_s = 0.05\nopen_s = 0.05\n", &[]));
+    assert_eq!(quick, plain);
+    assert_eq!(duration(&with_gripper(JAWS, &["effects.gripper_time = false"])), plain);
+    // When the payload goes, from the start of the cycle.
+    let released = |cfg: &Config| {
+        let mut sim = Sim::new(&ENTRY, cfg).unwrap();
+        sim.command(sim_components::Command::StartCycle).unwrap();
+        let mut at = None;
+        sim.run(3.0, |s| {
+            if at.is_none() && !s.control.payload_attached {
+                at = Some(s.time());
+            }
+        });
+        at.unwrap()
+    };
+    let (on_arrival, gripped) = (released(&ENTRY.config()), released(&with_gripper(JAWS, &[])));
+    assert!((gripped - on_arrival - 0.25).abs() < 1.5e-3, "on arrival {on_arrival} s, with the gripper {gripped} s");
+}
+
+/// A vacuum cup on the carriage, the 2 kg payload under it, pushed along x by the carriage's acceleration: it asks
+/// m g + m a / mu of the cup (`gripper::demand`). The rigid axis accelerates at 10 m/s^2 (the jerk-limited ramp
+/// reaches it), so 2 x 9.80665 + 2 x 10 / 0.5 = 59.6133 N, which the verdict sees within 5 % (61.86 N: the carriage follows the planned ramp with an overshoot of the servo, 10.56 m/s^2 at its peak). A cup holding 70 N passes,
+/// one holding 55 N fails. The optimiser counts the verdict as any other: with a cup of 63 N, which the cycle as
+/// configured passes, it stops where the cup still holds, a longer cycle than it finds with the hold not judged.
+#[test]
+fn the_gripper_hold_judges_the_held_part_against_the_cup_and_the_optimiser_keeps_to_it() {
+    use sim_components::analysis::{analyse_cycle, optimise_cycle, verdicts};
+    // 0.12 s to grip, a 70 N hold: A = 70 N / 60 kPa.
+    let cup = |area: f64| {
+        format!(
+            "kind = \"vacuum\"\ncup_volume_m3 = 2.0e-5\ngenerator_flow_m3_s = 1.6666666666666666e-4\nvacuum_pa = 80000.0\n\
+             holding_pressure_pa = 60000.0\nvent_flow_m3_s = 6.666666666666667e-4\nrelease_pressure_pa = 10000.0\n\
+             cup_area_m2 = {area:e}\nfriction_coefficient = 0.5\n"
+        )
+    };
+    let judged = |area: f64| {
+        let mut cfg = with_gripper(&cup(area), &["effects.belt_stretch = false"]);
+        cfg = Config::parse(&cfg.to_text().unwrap().replace("[ratings]\n", "[ratings]\ngripper_safety_factor = 1.0\n"))
+            .unwrap();
+        let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
+        let v = verdicts(&cfg, &load).unwrap().into_iter().find(|v| v.check == "gripper-hold").unwrap();
+        (cfg, v)
+    };
+    let (_, holds) = judged(70.0 / 60000.0);
+    let by_hand = 2.0 * 9.80665 + 2.0 * 10.0 / 0.5;
+    assert!(
+        (holds.value - by_hand).abs() < 0.05 * by_hand && (holds.limit - 70.0).abs() < 1e-9 && holds.ok,
+        "{holds:?}"
+    );
+    let (_, drops) = judged(55.0 / 60000.0);
+    assert!(!drops.ok, "{drops:?}");
+    let (cfg, tight) = judged(63.0 / 60000.0);
+    assert!(tight.ok, "{tight:?}");
+    let found = optimise_cycle(&ENTRY, &cfg, 14).unwrap();
+    let mut faster = cfg.clone();
+    for (path, _, after) in &found.changes {
+        faster.set_text(&format!("{path} = {after}")).unwrap();
+    }
+    let load = analyse_cycle(&mut Sim::new(&ENTRY, &faster).unwrap()).unwrap();
+    assert!(verdicts(&faster, &load).unwrap().iter().all(|v| v.ok), "{:?}", found.changes);
+    // The same gripper and its time, the hold not judged (no safety factor).
+    let free = with_gripper(&cup(63.0 / 60000.0), &["effects.belt_stretch = false"]);
+    let unbound = optimise_cycle(&ENTRY, &free, 14).unwrap();
+    assert!(found.after.duration > unbound.after.duration + 1e-3, "{:?} against {:?}", found.changes, unbound.changes);
+}
+
 /// Drive modes from outside (`DriveMode`): torque and speed setpoints of an outside controller on the rigid axis.
 mod outside_control {
     use super::*;
