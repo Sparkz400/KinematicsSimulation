@@ -1405,6 +1405,55 @@ each with its own 110 µF of DC link; with `effects.shared_dc_link` (off as ship
 one link and what the unwind brakes, the rewind takes. On S210 converters of 66 µF the unwind's DC link tripped on
 overvoltage under a stream of setpoints at the speed limit, its roll's inertia braked in steps.
 
+## Hexapod with rotary actuators (6-RSS)
+
+`machine-hexapod-rotary` (id `hexapod-rotary`): six cranks on the base, each turned by its motor through a gearbox
+(`joint::RotaryJoint` in `chain::JointMachine`, as the arms), each crank's tip joined to the platform by a rod with a
+ball joint at both ends. The joints are the crank angles θ_i; the tool pose is the platform centre p and its rotation
+vector.
+
+### Kinematics
+
+Crank i turns about the horizontal axis k_i = d_i × z through B_i, d_i its zero direction (horizontal, in its plane):
+
+```text
+tip      C_i = B_i + r (cos θ d_i + sin θ z),  t_i = dC/dθ,  t2_i = d²C/dθ²
+rod      |P_i − C_i| = L,  P_i = p + b_i,  b_i = R a_i,  u_i = (P_i − C_i) / L
+inverse  e = P_i − B_i:  a cos θ + b sin θ = c,  a = e · d_i,  b = e_z,  c = (|e|² + r² − L²) / 2r
+         θ = atan2(b, a) ∓ acos(c / √(a² + b²))   ("out" −, "in" +; refused where |c| > √(a² + b²))
+rates    A ξ = diag(m) θ',  A row i = (u_i, b_i × u_i),  m_i = u_i · t_i  (the torque arm),  ξ = K θ',  K = A⁻¹ diag(m)
+         A ξ' = diag(m) θ'' + s,  s_i = u_i · t2_i θ_i'² − |v + w × b_i − t_i θ_i'|² / L − u_i · (w × (w × b_i))
+forward  Newton on the twist from the centre of the tool's box: ξ = A⁻¹ (L − |P_i − C_i|), p += v, R = exp(w) R
+```
+
+The torque arm is m_i = e · t_i / L = r √(a² + b²) sin δ / L, δ the closed form's acos: zero at the dead centres δ = 0
+and π, where the rod lies in the plane of the crank and its axis. `condition` is the condition number of diag(m)⁻¹ A
+with the turns' columns over the platform radius.
+
+### Dynamics
+
+By virtual work in θ (M θ'' + h = τ at the cranks):
+
+- the platform with the payload, one rigid body: mass m, first moment S = R s and inertia I = R I_p R^T about p, s and
+  I_p from both bodies' centres of mass (`mass.platform_cg_m`, `payload_cg_m`) and inertias; M_ξ = [m 1, −[S]×; [S]×,
+  I], c = (w × (w × S), w × I w), G = (m g, S × g): M += K^T M_ξ K, h += K^T (M_ξ A⁻¹ s + c − G);
+- each rod a uniform slender rod as three points, m/6 at C_i and at P_i and 2m/3 at the middle (exact in mass, centre
+  and the inertia across; the spin about its own axis, free between two ball joints, is left out), each with its
+  Jacobian P in θ and its acceleration a0 at θ'' = 0: M += m P^T P, h += m P^T (a0 − g);
+- each crank its inertia about its axis and its weight at `crank.cg_m`: h_i += m_c g r_cg cos θ_i.
+
+The rods' forces (signal `rod.<i>.force`, compression positive): A^T f = W, W the body's required wrench plus each rod's
+upper sixth and half its middle at P_i; the test `the_virtual_work_agrees_with_the_forces_along_the_rods` checks that
+each crank's torque from M and h equals its own Newton-Euler balance with f_i m_i (to 1e-9).
+
+### Signals and verdicts
+
+Per leg `crank.<i>.dead_centre_angle` (acos(|m_i| / r), 90° at the dead centre), `rod.<i>.force`, `rod.<i>.compression`
+(its positive part), `crank.<i>.ball_joint_angle` (asin |u_i · k_i|) and `platform.<i>.ball_joint_angle` (acos(u_i ·
+R z)); `kinematics.condition`. The verdicts `crank-dead-centre`, `rod-buckling` (π² E I / L² of the tube over
+`ratings.rod_buckling_safety_factor`), `crank-ball-joint` and `platform-ball-joint` judge their peaks; the gearboxes'
+output torque (`gearbox.<i>.output_torque`) is judged by the common gearbox verdicts.
+
 ## Compliant base
 
 Source: [`sim-components/src/base.rs`](../crates/sim-components/src/base.rs). With `effects.base_compliance` every machine and machine file stands on a base that gives way: a rigid body on springs in up to six directions, translation along x, y, z and a small tilt about x, y, z through `base.pivot_m`, in the frame of the tool pose (x, y, z of the tool; the slides' x along their axis). Each direction with a stiffness above 0 is a state d and its rate after the machine's own:

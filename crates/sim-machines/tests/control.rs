@@ -1267,6 +1267,7 @@ mod across_the_bounds {
         toggle_press: "toggle-press",
         arm_on_track: "arm-on-track",
         winder: "winder",
+        hexapod_rotary: "hexapod-rotary",
         exct_30: "EXCT-30",
     );
 }

@@ -24,6 +24,8 @@ machine-tripod = { path = "../machine-tripod" }
 machine-wafer-handler = { path = "../machine-wafer-handler" }
 
 machine-winder = { path = "../machine-winder" }
+
+machine-hexapod-rotary = { path = "../machine-hexapod-rotary" }
 sim-netlist = { path = "../sim-netlist" }
 toml.workspace = true
 serde_json.workspace = true

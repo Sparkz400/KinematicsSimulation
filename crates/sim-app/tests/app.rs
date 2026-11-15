@@ -48,7 +48,8 @@ macro_rules! per_machine {
     machine_23 23,
     machine_24 24,
     machine_25 25,
-    machine_26 26);
+    machine_26 26,
+    machine_27 27);
     };
     ($check:ident: $($test:ident $place:literal),*) => {
         mod $check {
@@ -65,7 +66,7 @@ macro_rules! per_machine {
 /// Every registered machine has its tests from `per_machine!`.
 #[test]
 fn every_machine_has_its_tests() {
-    assert_eq!(MACHINES.len(), 27, "give per_machine! a test for each machine");
+    assert_eq!(MACHINES.len(), 28, "give per_machine! a test for each machine");
 }
 
 /// Polls until the simulation thread has delivered samples and a scene.

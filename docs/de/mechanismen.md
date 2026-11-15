@@ -564,6 +564,7 @@ wie jede andere Maschine gerechnet und ausgelegt (`sim-cli analyze hexapod`, `si
 | Id | Mechanik | Antriebe | Werkzeuglage | Eigene Prüfungen |
 | --- | --- | --- | --- | --- |
 | `hexapod` | Stewart-Gough-Plattform, 25 kg und bis zu 30 kg darauf, auf sechs elektrischen Zylindern (450 mm eingefahren, 200 mm Hub) | je Bein ein Kugelgewindetrieb 25 x 10 hinter einer Kupplung an einem 1FK2105-4AF | x, y, z (m), rx, ry, rz (rad, ein Drehvektor) | `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life` der Spindel je Bein, unter der Kraft des Beins |
+| `hexapod-rotary` | Stewart-Plattform auf sechs Kurbeln (6-RSS), 35 kg und ein Sitz von 80 kg, Kurbeln 200 mm, Stangen 550 mm | je Kurbel ein Planetengetriebe SP100 50:1 an einem 1FT2104-5AF | x, y, z (m), rx, ry, rz (rad, ein Drehvektor) | `crank-dead-centre`, `rod-buckling`, `crank-ball-joint`, `platform-ball-joint` je Bein, das Getriebemoment |
 | `cable-planar` | ein Schlitten von 3 kg und bis zu 2 kg, ein Punkt in einer senkrechten Ebene, an 4 Seilen aus einem Gestell 2 m x 1,6 m | je Seil eine Winde: Trommel 25 mm hinter einem Planetengetriebe 5:1 | x, z (m) | `cable-max-tension`, `cable-min-tension` je Seil |
 | `cable-spatial` | eine Plattform von 4 kg und bis zu 4 kg, sechs Freiheitsgrade, an 8 Seilen aus den Ecken eines Gestells 2 x 1,6 x 1,8 m | wie der ebene, Trommel 30 mm | x, y, z (m), rx, ry, rz (rad) | wie der ebene |
 | `tripod` | 3-RPS-Schwenktisch, 20 kg und 40 kg außermittig darauf, auf drei elektrischen Zylindern (450 mm eingefahren, 200 mm Hub), ein Drehgelenk an der Basis, ein Kugelgelenk an der Plattform | je Bein ein Kugelgewindetrieb 20 x 10 (Hiwin 20-10K3-FDC) hinter einer Kupplung an einem 1FK2104-4AF | z (m), rx, ry (rad, Neigungen um x und y) | die der Spindel je Bein; `tripod-leg-force`, `tripod-leg-stroke`, `tripod-revolute-angle`, `tripod-cone-angle` je Bein; `tripod-parasitic` |
@@ -652,6 +653,56 @@ gibt:
 - Prüfungen: die der Spindeln wie am Hexapod; `tripod-leg-force` (`joint.<i>.force` gegen `leg.max_force_n`),
   `tripod-leg-stroke` (`from_middle` gegen den halben Hub), `tripod-revolute-angle`, `tripod-cone-angle` (gegen die
   Grenzen der Gelenke) und `tripod-parasitic` (`platform.pose_error` gegen `ratings.parasitic_tolerance_m`, wo gegeben).
+
+### Hexapod mit Drehantrieben (6-RSS)
+
+`hexapod-rotary` (Crate `machine-hexapod-rotary`) ist die Bauart von Bewegungssimulatoren und schnellen
+Sechsachs-Positionierern: sechs Servomotoren mit Planetengetrieben auf der Basis, jeder dreht eine Kurbel von 200 mm,
+die Spitze jeder Kurbel ist über eine Stange von 550 mm mit einem Kugelgelenk an beiden Enden mit der Plattform
+verbunden. Die Standardkonfiguration ist eine kleine Bewegungsplattform: 35 kg Plattform mit einem Sitz samt Insasse,
+80 kg (Schwerpunkt 300 mm über den Plattformgelenken, mit eigener Trägheit), auf sechs 1FT2104-5AF mit Getrieben
+SP100-04-50 an S210-Umrichtern 6SL3210-5HE10-8UF0 (Katalog). Werkzeuglage und Achsen wie beim Hexapod; die Gelenke sind die Kurbelwinkel (rad, 0 waagrecht,
+positiv hebt die Spitze). Jede Kurbel ist ein Gelenk von `chain::JointMachine` mit einem `joint::RotaryJoint`
+(Getriebesteifigkeit, Spiel, Wirkungsgrad, Reibung des Kurbellagers, Anschläge) wie bei den Delta-Pickern. Siehe die
+[Modellreferenz](../model-reference.md#hexapod-with-rotary-actuators-6-rss) und die
+[Konfigurationsreferenz](../config-reference.md#hexapod-with-rotary-actuators).
+
+- Geometrie: die Mitten der Kurbelachsen paarweise bei 120 k ± `platform.base_half_angle_deg` auf
+  `platform.base_radius_m`, die Plattformgelenke paarweise bei 120 k ± (60 − `platform_half_angle_deg`) auf
+  `platform_radius_m`; jede Kurbelachse waagrecht, der Basisradius um ± `crank.axis_turn_deg` gedreht (im Paar
+  gespiegelt), damit die Stange wenig aus der Kurbelebene kippt.
+- Inverse Kinematik je Bein geschlossen: mit e = P_i − B_i ist a cos θ + b sin θ = c, a = e · d_i, b = e_z,
+  c = (|e|² + r² − L²) / 2r; θ = atan2(b, a) ∓ acos(c / √(a² + b²)), der Zweig einmal durch `crank.branch` festgelegt
+  ("out": die Spitze vom Partner des Paars weg; "in" der andere); keine Lösung, wo |c| > √(a² + b²).
+- Vorwärtskinematik nach Newton über die Bewegung der Plattform, wie beim Hexapod.
+- Jacobi-Matrix: A ξ = diag(u_i · t_i) θ', die Zeilen von A (u_i, b_i × u_i), u_i die Richtung der Stange und t_i die
+  Tangente der Kurbelspitze; u_i · t_i ist der Hebelarm des Motors. Die Konditionszahl der inversen Jacobi-Matrix
+  (Drehungen mit dem Plattformradius gewichtet) zeigen die Arbeitsraumkarte und das Signal `kinematics.condition`; sie wächst
+  ohne Grenze, wenn sich eine Kurbel ihrem Totpunkt nähert (alle sechs zugleich dort skalieren ihre Zeilen gleich und
+  lassen sie unverändert: diese Lage lehnt der Abstand vom Totpunkt selbst ab).
+- Abgelehnt: eine Stange, die nicht hinreicht (`error-target-out-of-range`), eine Kurbel näher an ihrem Totpunkt (die
+  Stange in der Ebene von Kurbel und Achse, der Hebelarm null) als `workspace.min_dead_centre_margin_deg`
+  (`error-rss-dead-centre`), ein Kugelgelenk über `workspace.crank_joint_max_angle_deg` (die Stange aus der Kurbelebene)
+  oder `platform_joint_max_angle_deg` (gegen die Normale der Plattform; `error-rss-ball-joint`), zwei Stangen näher als
+  `workspace.min_rod_clearance_m` Achse zu Achse (`error-rss-rods-cross`), eine Konditionszahl über
+  `workspace.max_condition_number` (`error-rss-singularity`), eine Kurbel über ihre Anschläge hinaus.
+- Dynamik über virtuelle Arbeit in den Kurbelwinkeln: Plattform und Nutzlast als ein starrer Körper mit Schwerpunkt
+  außerhalb der Plattformmitte, jede Stange als schlanker Stab (ein Sechstel ihrer Masse an jedem Ende und zwei Drittel
+  in der Mitte: genau für Masse, Schwerpunkt und Querträgheit eines gleichförmigen Stabs, was die Aufteilung der
+  Delta-Crates nicht ist), jede Kurbel mit Trägheit und Gewicht, die Rotoren über die Übersetzung; Schwerkraft; Energie
+  und Impuls für die Standardprüfungen und die nachgiebige Basis.
+- Prüfungen außer denen der Motoren: die Getriebemomente (`gearbox-peak`, `gearbox-continuous`, `gearbox-input-speed`
+  gegen die Nennwerte des SP100), je Bein `crank-dead-centre` (Winkel der Stange zur Tangente der Kurbel gegen 90°
+  weniger `ratings.crank_dead_centre_margin_deg`, 20°), `rod-buckling` (Druckkraft der Stange gegen ihre Euler-Last
+  π² E I / L² des Rohrs aus `[rod]`, durch `ratings.rod_buckling_safety_factor`), `crank-ball-joint` und
+  `platform-ball-joint` (die Winkel der Gelenke gegen ihre Grenzen) und `singularity`.
+- Der Standardzyklus: Hub 50 mm auf, dann Längs- und Querbewegung 60 mm, Rollen
+  0,12 rad, Gieren 0,15 rad und Nicken 0,12 rad, jeweils aus der Lage davor (die eine geht zurück, während die nächste einsetzt),
+  und zurück in die waagrechte Lage, wo der Sitz ab- und wieder aufgesetzt wird (das Umschalten der Nutzlast).
+
+Wie beim Hexapod läuft die von festen Kurbelmomenten gehaltene Plattform unter ihrem Gewicht aus ihrer Lage, daher
+laufen die verlustfreien Konfigurationen der Standardprüfungen ohne Schwerkraft (und ohne Getriebespiel, das ohne Last
+an keiner Flanke anliegt); die Schwerkraft prüfen die von Hand gerechneten Haltemomente und die Standardkonfiguration.
 
 ### Seilroboter
 

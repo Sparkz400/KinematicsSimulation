@@ -17,6 +17,8 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | L | [`crates/machine-delta-linear/default.toml`](../crates/machine-delta-linear/default.toml) | Linear delta, sized like the Festo EXPT-95 with Siemens 1FK2205-2AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#linear-delta) |
 | H | [`crates/machine-hexapod/default.toml`](../crates/machine-hexapod/default.toml) | Hexapod on six electric cylinders, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#hexapod) |
 | TR | [`crates/machine-tripod/default.toml`](../crates/machine-tripod/default.toml) | Tripod (3-RPS tilting table) on three electric cylinders, generic proportions with Siemens 1FK2104-4AF and Hiwin 20-10K3-FDC screws. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#tripod) |
+
+| HR | [`crates/machine-hexapod-rotary/default.toml`](../crates/machine-hexapod-rotary/default.toml) | Hexapod on six cranks (6-RSS), a small motion base with Siemens 1FT2104-5AF and SP100-04-50. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#hexapod-with-rotary-actuators) |
 | CP, CS | [`crates/machine-cable-robot/config/`](../crates/machine-cable-robot/config/) | Planar (4 cables) and spatial (8 cables) cable robots, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Their keys are in [their own section](#cable-robots) |
 | W | [`crates/machine-wafer-handler/default.toml`](../crates/machine-wafer-handler/default.toml) | Wafer handler: an R-theta-Z arm of two equal links in the horizontal plane, its forearm and effector coupled to the shoulder by bands at 2:1 and 1:2, on a column that turns and lifts; sized as an atmospheric handler for 300 mm wafers with Siemens 1FK2103-2AH. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#wafer-handler) |
 
@@ -1154,6 +1156,43 @@ estimates; the masses, the legs' friction and force bounded):
 | `workspace.max_cone_angle_deg` | ° | A leg against the platform's normal at its spherical joint; beyond: `error-tripod-cone-angle`, judged by `tripod-cone-angle` | 35 |
 | `workspace.max_condition_number` | – | Of the Jacobian, tilts weighed by the platform radius; beyond: `error-tripod-singularity` | 5 |
 | `ratings.parasitic_tolerance_m` | m | The pose's error against the pure tilt (`platform.pose_error`) the cycle may reach; judged by `tripod-parasitic`, left out: not judged | 0.005 |
+
+## Hexapod with rotary actuators
+
+The config of `hexapod-rotary` ([`machine-hexapod-rotary/default.toml`](../crates/machine-hexapod-rotary/default.toml))
+has the tables of the delta picker D3 for its drives (`[parts]`, `[effects]`, `[thermal]`, `[thermal_feedback]`,
+`[profile]`, `[sim]`, `[joint]` for each crank's bearing and stops, `[gearbox]`, `[motor]`, `[drive]`, `[ratings]`,
+`[bounds]`, `[base]`, `[brake]`) with the same meanings; one motor, gearbox and drive per crank, all alike: the
+1FT2104-5AF on an S210 6SL3210-5HE10-8UF0 and the SP100-04-50 (ratio 50, 106570 N m/rad, 0.54 kg cm² at the input,
+catalogue; backlash 2.25 arcmin, estimate). `drive.velocity_kp_nm_s_rad` 0.10 (tuned with `sim-cli margins hexapod-rotary --bands`: 47.1° and 11.1 dB at the start pose, 38.7° and 9.6 dB with the friction off); `profile.vertical_axis` "z". The tool pose, `start.pose` and the
+targets are x, y, z (m), rx, ry, rz (rad, a rotation vector), as on the hexapod; `[axis.x]` to `[axis.z]` 0.3 m/s,
+4 m/s², 40 m/s³, `[axis.rx]` to `[axis.rz]` 0.6 rad/s, 5 rad/s², 50 rad/s³ (estimates; the jerk reaches the acceleration in
+0.1 s, a swing of the platform's lowest mode on the gearboxes, some 10 Hz). `joint.min_angle_deg`,
+`max_angle_deg` are the cranks' stops (−100, 50; the working range needs −92 to 38). `gearbox_drag` and `gearbox_lost_motion` are off (no catalogue figure for
+this ratio). Its own keys (all estimates; the masses bounded):
+
+| Key | Unit | Meaning | Value |
+| --- | --- | --- | --- |
+| `platform.base_radius_m` | m | Circle of the crank axes' centres | 0.5 |
+| `platform.base_half_angle_deg` | ° | A base pair's crank axes sit at 120 k ± this | 5 |
+| `platform.platform_radius_m` | m | Circle of the platform joints (also the length the condition number weighs turns by) | 0.3 |
+| `platform.platform_half_angle_deg` | ° | A platform pair's joints sit at 120 k ± (60 − this) | 5 |
+| `crank.length_m` | m | Crank, axis to the ball joint's centre | 0.2 |
+| `crank.axis_turn_deg` | ° | Each crank axis (horizontal) is the base radius turned by ± this, mirrored in a pair | 30 |
+| `crank.branch` | – | `"out"`: the closed form's minus root, the tip away from the pair's partner; `"in"`: the plus root | "out" |
+| `crank.mass_kg`, `cg_m`, `inertia_kgm2` | kg, m, kg m² | The crank's mass, its centre of mass from the axis, its inertia about the axis | 2, 0.08, 0.02 |
+| `rod.length_m` | m | Rod, ball joint to ball joint | 0.55 |
+| `rod.mass_kg` | kg | A rod with its ball joints, taken as a uniform rod (a sixth at each end, two thirds at its middle) | 0.4 |
+| `rod.outer_diameter_m`, `wall_m`, `youngs_modulus_pa` | m, m, Pa | The rod's tube, for its Euler load π² E I / L² | 0.02, 0.002, 7e10 |
+| `mass.platform_kg`, `platform_cg_m`, `platform_inertia_kgm2` | kg, m, kg m² | The platform, its centre of mass (platform frame, from the joints' centre) and its inertia about it, x, y, z | 35, (0, 0, 0.05), (1.5, 1.5, 2.8) |
+| `mass.payload_kg`, `payload_cg_m`, `payload_inertia_kgm2` | kg, m, kg m² | The payload (`effects.payload`), as the platform | 80, (0, 0, 0.3), (5, 5, 2) |
+| `workspace.tool_min`, `tool_max` | m, rad | The tool's box, the axes' ranges | −0.08, −0.08, 0.34, −0.15, −0.15, −0.2 to 0.08, 0.08, 0.46, 0.15, 0.15, 0.2 |
+| `workspace.min_dead_centre_margin_deg` | ° | Least angle of a crank from its dead centre; nearer: `error-rss-dead-centre` | 10 |
+| `workspace.crank_joint_max_angle_deg`, `platform_joint_max_angle_deg` | ° | The ball joints' limits: the rod out of the crank's plane, against the platform's normal; beyond: `error-rss-ball-joint`; also the verdicts' limits | 35, 40 |
+| `workspace.min_rod_clearance_m` | m | Least distance between two rods' axes; nearer: `error-rss-rods-cross` | 0.03 |
+| `workspace.max_condition_number` | – | Of the inverse Jacobian, turns weighed by the platform radius; beyond: `error-rss-singularity` | 30 |
+| `ratings.crank_dead_centre_margin_deg` | ° | Verdict `crank-dead-centre`: the rod's angle from the crank's tangent at most 90° less this | 20 |
+| `ratings.rod_buckling_safety_factor` | – | Verdict `rod-buckling`: the rod's compression at most its Euler load over this | 3 |
 
 ## Cable robots
 

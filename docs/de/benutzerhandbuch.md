@@ -1056,6 +1056,37 @@ nahe einer Singularität (`workspace.max_condition_number`; die Arbeitsraumkarte
 Drehzahlregler hat 0,4 N m s/rad: mit 0,1 hielt die Reibung der Beine die Plattform in den Verweilzeiten 0,17 mm
 daneben.
 
+`hexapod-rotary` ist die andere Bauart eines Hexapods, eine Bewegungsplattform auf sechs Kurbeln (6-RSS): sechs
+1FT2104-5AF mit Planetengetrieben SP100 50:1 auf der Basis, jeder dreht eine Kurbel von 200 mm, jede Kurbel über eine
+Stange von 550 mm mit einem Kugelgelenk an beiden Enden mit der Plattform verbunden; eine Plattform von 35 kg mit einem
+Sitz samt Insasse, 80 kg, 300 mm über den Plattformgelenken. Ihr Zyklus hebt die Plattform, verschiebt sie dann längs und quer,
+rollt, giert und nickt sie, jeweils aus der Lage davor, und bringt sie waagrecht zurück.
+
+```text
+$ sim-cli verdicts hexapod-rotary
+settling,,0.0004184,0.001000,ok
+singularity,,3.589,15.00,ok
+gearbox-peak,3,144.6,278.0,ok
+crank-dead-centre,1,0.4372,1.222,ok
+rod-buckling,4,767.1,3530,ok
+platform-ball-joint,1,0.5734,0.6981,ok
+...
+```
+
+Alle Prüfungen bestehen. Außer denen der Motoren und Getriebe wird jedes Bein geprüft auf den Abstand seiner Kurbel vom
+Totpunkt (`crank-dead-centre`: der Winkel der Stange zur Tangente der Kurbel gegen 90° weniger
+`ratings.crank_dead_centre_margin_deg`, denn der Hebelarm des Motors fällt mit seinem Kosinus), das Knicken seiner Stange
+(`rod-buckling`: die Druckkraft gegen die Euler-Last des Rohrs aus `[rod]` durch ihre Sicherheit) und die Winkel beider
+Kugelgelenke. Ein Ziel wird abgelehnt, wo eine Stange nicht hinreicht, eine Kurbel ihrem Totpunkt näher käme als
+`workspace.min_dead_centre_margin_deg`, ein Kugelgelenk seinen Winkel verließe, zwei Stangen sich näher kämen als
+`workspace.min_rod_clearance_m` oder nahe einer Singularität. `crank.branch` wählt die Lage der Kurbeln (`"out"` oder
+`"in"`) einmal für alle Beine.
+Im Zyklus nutzen die Motoren höchstens 37 % ihrer Momentenkennlinie, die Getriebe sehen höchstens 145 ihrer 278 N m,
+die Kurbeln bleiben mindestens 65° von ihren Totpunkten, die Stangen tragen höchstens 767 N gegen die 3530 N, die ihr
+Knicken erlaubt, und die Plattform beruhigt sich auf 0,42 mm: vieles davon ist die Verdrehung und das Spiel der Getriebe
+unter dem Gewicht des Sitzes, die die Geber der Motoren nicht sehen. Die Drehzahlregler haben
+0,10 N m s/rad (47,1° und 11,1 dB in der waagrechten Lage, 38,7° und 9,6 dB ohne Reibung; 0,12 ließ dort 34,2°).
+
 `cable-planar` hängt einen Schlitten von 3 kg (bis zu 2 kg darauf) in einer senkrechten Ebene an 4 Seile,
 `cable-spatial` eine Plattform von 4 kg (bis zu 4 kg) mit sechs Freiheitsgraden an 8; jedes Seil läuft über eine
 schwenkbare Umlenkrolle auf eine Winde hinter einem Planetengetriebe 5:1. Die Seilkräfte gibt ein kleines QP, die

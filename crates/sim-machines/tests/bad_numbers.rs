@@ -259,6 +259,7 @@ default_config! {
     default_toggle_press: "toggle-press";
     default_arm_on_track: "arm-on-track";
     default_winder: "winder";
+    default_hexapod_rotary: "hexapod-rotary";
 }
 
 shipped_config! {

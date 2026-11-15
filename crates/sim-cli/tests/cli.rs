@@ -36,7 +36,8 @@ macro_rules! per_machine {
     machine_23 23,
     machine_24 24,
     machine_25 25,
-    machine_26 26);
+    machine_26 26,
+    machine_27 27);
         }
     };
     (@at $check:ident, $($test:ident $index:literal),*) => {
@@ -47,7 +48,7 @@ macro_rules! per_machine {
     };
 }
 
-const PER_MACHINE_TESTS: usize = 27;
+const PER_MACHINE_TESTS: usize = 28;
 
 #[test]
 fn every_machine_has_its_test() {
