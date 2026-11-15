@@ -35,6 +35,11 @@ toml_edit = "=0.25.19"
 async-opcua = "=0.19.0"
 async-trait = "=0.1.92"
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+# Test-only: property tests of the readers of untrusted input (configs, machine files, traces, programs, URDF, cam
+# tables, the FMI C API); without fork and timeout, which re-run a test in a child process.
+proptest = { version = "=1.12.0", default-features = false, features = ["std", "bit-set"] }
+# Bench-only: crates/sim-machines/benches (integrator step, default cycle, cycle analysis); not run in CI.
+criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
 
 # The physics tests integrate millions of steps; unoptimised they take minutes.
 [profile.dev]

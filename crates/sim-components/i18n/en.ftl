@@ -225,6 +225,7 @@ param-min_clearance_m = Least clearance: to every obstacle, and for the optimise
 error-path = The path cannot be laid out: every point needs one position per axis, an arc needs two or more axes (its centre two positions, or three on three axes or more) and has to end on the circle through its start (on three axes or more not a half or full turn), and a spline needs two to six axes and via points it can pass without turning back on the spot.
 error-path-singular = The path passes a pose where the motors would have to turn without bound for the tool to move (a singularity), or it would take longer than 1000 s at the speed the motors allow.
 error-path-first-arc = The path starts with an arc that ends less than 1 mm from where the machine stands. There a full turn cannot be told from a short arc. State the start first with a `line` to it; the arc is then judged against that point.
+error-path-long = The path would take more than ten million poses, one per profile cycle (2.8 hours at 1 ms): a feed this slow is a mistake in the program, or the path is too long for one plan.
 error-path-range = The path leaves the travel range. An arc or a spline can do so even with all its given points inside: a spline swings past its via points.
 error-path-torque = The motors or their gearboxes cannot hold or move the load somewhere on the path within the torque reserve.
 error-path-guide = A guide carries more than its load rating (ratings.guide_max_load_n) somewhere on the path while it only holds the load there.
