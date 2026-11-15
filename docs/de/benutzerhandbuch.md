@@ -1758,6 +1758,7 @@ Ohne weitere Angabe nimmt `fmu` die neben `sim-cli` gebaute Binärdatei (`target
 | `command.cycle` | Boolean | input | Wechsel auf `true` startet den konfigurierten Zyklus, Wechsel auf `false` hält ihn am Ende seines Segments an |
 | `command.target.<Achs-ID>`, `command.move` | Real, Boolean | input | `command.move` fährt beim Wechsel auf `true` zu den Zielen (Startwert: die Startpose) |
 | `command.path`, `command.path_file`, `command.run_path` | String, String, Boolean | input | `command.run_path` plant beim Wechsel auf `true` die Bahn (Text einer Bahndatei oder die genannte Datei) ab der Stelle, an der die Maschine steht, und fährt sie |
+| `command.mode.<Motor-ID>`, `command.torque.<Motor-ID>`, `command.velocity.<Motor-ID>` | String, Real, Real | input | Die Betriebsart des Antriebs, "position" (Startwert), "velocity" oder "torque", und sein Drehzahl- oder Momentensollwert vom eigenen Regler ([unten](#eigenen-regler-prüfen)) |
 | `machine` | String | parameter | Die Maschinenkennung |
 | `config_file` | String | parameter | Eine Konfigurationsdatei statt der in der FMU; leer (der Startwert) für die in der FMU |
 | `effects.<Name>` | Boolean | parameter | Jeder Effektschalter, Startwert wie in der Konfiguration; ein hier gesetzter Wert gilt vor dem der Konfigurationsdatei |
@@ -1777,9 +1778,27 @@ Grenzen bei dieser Aufgabe:
 
 - Geprüft mit fmpy und OMSimulator (Prüfung gegen das FMI-Schema, Simulation verglichen mit `sim-cli run`; die Befehle stehen in [FMI-Export](fmi.md#prüfung)). In OpenModelica 1.27.1 mit OMSimulator gerechnet (FMI 2.0; sein Modelica-Import nimmt nur Model Exchange); der Import in Simulink oder Dymola ist ungeprüft.
 - Nur Co-Simulation, kein Model Exchange ([warum](fmi.md#warum-es-kein-model-exchange-gibt)). Ein FMU-Zustand hält eine Momentaufnahme der Simulation und ist sofort gesetzt; ein serialisierter wiederholt jeden Schritt seit der Initialisierung, sein Setzen dauert also so lange, wie bis zu ihm zu simulieren ([FMU-Zustand](fmi.md#fmu-zustand)). Die Richtungsableitungen sind null, weil kein Ausgang direkt von einem Eingang abhängt. Keine asynchronen Schritte.
-- Eingänge sind Lagesollwerte und die Auslöser für Zyklus, Fahrt und Bahn ([FMI-Export](fmi.md#zyklus-fahrten-und-bahnen)); ein einmal gesetzter Sollwerteingang übernimmt die Achsen von Zyklus, Fahrt oder Bahn. Kein Momenteingang: Die Regelkreise bleiben in der FMU.
+- Eingänge sind Lagesollwerte und die Auslöser für Zyklus, Fahrt und Bahn ([FMI-Export](fmi.md#zyklus-fahrten-und-bahnen)); ein einmal gesetzter Sollwerteingang übernimmt die Achsen von Zyklus, Fahrt oder Bahn. Moment- und Drehzahlsollwerte je Motor gehen über Momenten- und Drehzahlregelung hinein ([Eigenen Regler prüfen](#eigenen-regler-prüfen)); der Stromregler bleibt in der FMU.
 - Meldungen und Beschreibungen in einer Sprache, der von `--lang` beim Schreiben der FMU.
 - Eine 64-Bit-Binärdatei für Windows, solange keine für Linux wie oben hinzukommt; keine 32-Bit-Binärdateien.
+
+## Eigenen Regler prüfen
+
+Der eingebaute Antrieb schließt Lage-, Drehzahl- und Stromregelkreis selbst. Um ein eigenes Regelgesetz an der
+simulierten Mechanik zu prüfen, einen Antrieb in Momentenregelung (das eigene Moment ersetzt den Ausgang seines
+Drehzahlreglers) oder Drehzahlregelung (die eigene Drehzahl ersetzt den Ausgang seines Lagereglers) setzen, wie ein
+echter Servoantrieb sie bietet; Momentengrenze, Stromregler, Wicklung und Zwischenkreis bleiben drin, Strom-, Spannungs-
+und thermische Grenzen sind also wahr.
+
+- In Python: `sim = ks.Sim(cfg)`, dann je Takt des eigenen Reglers `out = sim.step(torque=[...], time=0.001)` mit den
+  Signalen am Ende des Schritts in `out`; `sim.analyze()` und `sim.verdicts()` beurteilen den Lauf wie den des
+  eingebauten Antriebs ([Python-Modul](python.md#eigenen-regler-prüfen); das Beispiel
+  `crates/sim-py/examples/own_controller.py` rechnet einen PD gegen die eingebaute Kaskade).
+- In Simulink oder Modelica: die Eingänge `command.mode.<Motor-ID>` ("torque" oder "velocity") und
+  `command.torque.<Motor-ID>` / `command.velocity.<Motor-ID>` der FMU ([FMI-Export](fmi.md#eigener-regler-momenten--und-drehzahlregelung)).
+
+Ein Wechsel der Betriebsart lässt das Moment nicht springen, wo die Regler des Antriebs übernehmen; solange ein Antrieb
+nicht in Lageregelung ist, werden Zyklus, Fahrten, Bahnen und Sollwerte abgelehnt.
 
 ## Die App bedienen
 

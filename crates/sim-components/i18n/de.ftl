@@ -184,6 +184,7 @@ quantity-slack-time = Zeit ohne Riemenkraft (Zähne können überspringen)
 error-setpoint-too-far = Der Sollwert liegt weiter entfernt, als die Achse in einem Sollwertintervall fahren darf.
 error-disabled = Die Antriebe sind gesperrt.
 error-fault = Die Antriebe haben abgeschaltet und halten an; Freigeben quittiert die Störung.
+error-outside-mode = Ein Antrieb ist in Drehzahl- oder Momentenregelung; zuerst wieder auf Lageregelung schalten.
 monitor-following-error = Schleppfehler außerhalb seines Fensters
 monitor-standstill = Schleppfehler im Stillstand außerhalb seines Fensters
 monitor-blocked = Motor an der Momentengrenze blockiert

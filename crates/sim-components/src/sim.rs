@@ -490,6 +490,11 @@ impl Sim {
         self.control.command(command, self.machine.as_ref())
     }
 
+    /// Puts motor `k`'s drive in `mode`: torque or speed setpoints from an outside controller (`Controller::set_drive_mode`).
+    pub fn set_drive_mode(&mut self, k: usize, mode: crate::DriveMode) -> Result<(), CommandError> {
+        self.control.set_drive_mode(k, mode, self.machine.as_ref(), &self.state)
+    }
+
     /// The config's `[path]` (`with_path`) planned from where the machine stands, as `sim-cli run --path` plans a file:
     /// one run at the axes' limits as a path, a program with feeds run by run (`plan_program`). `None` without one.
     pub fn plan_configured_path(&self) -> Option<Result<Vec<(f64, Vec<f64>)>, CommandError>> {

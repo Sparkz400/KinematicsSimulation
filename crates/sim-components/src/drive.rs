@@ -775,6 +775,20 @@ fn notch_coefficients(frequency: f64, bandwidth: f64, cycle: f64) -> [f64; 5] {
     [1.0 / a0, -2.0 * w0.cos() / a0, 1.0 / a0, -2.0 * w0.cos() / a0, (1.0 - alpha) / a0]
 }
 
+/// How a drive takes its command, as a servo drive's operating modes. `Position`: the controller's plan through the
+/// position and velocity loops (the default). `Velocity`: a speed setpoint from outside, rad/s at the motor, for the
+/// velocity loop; the position loop is bypassed. `Torque`: a torque setpoint from outside, N m at the motor, in place of
+/// the velocity loop's output; both loops are bypassed. Either way the setpoint still passes the torque filter, notch,
+/// torque limit and delay, the current loop, the winding and the DC link. Outside position mode the position setpoint
+/// tracks the measured position (no following error), as a drive's tracking mode does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum DriveMode {
+    #[default]
+    Position,
+    Velocity(f64),
+    Torque(f64),
+}
+
 /// The loops and filters of one drive.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Drive {
@@ -865,6 +879,10 @@ pub struct Drive {
     /// Values computed but not yet acting, oldest first.
     voltage_queue: VecDeque<f64>,
     torque_queue: VecDeque<f64>,
+    mode: DriveMode,
+    /// Set when the mode changes between position, velocity and torque: the next velocity loop that runs its PI sets
+    /// the integrator so that its output is the torque last asked for (bumpless transfer, `set_mode`).
+    retune: bool,
 }
 
 /// `value` goes into the queue; what was computed `cycles` ago comes out.
@@ -925,6 +943,26 @@ impl Drive {
         self.encoder
     }
 
+    pub fn mode(&self) -> DriveMode {
+        self.mode
+    }
+
+    /// Switches the operating mode. A change between position, velocity and torque mode does not make the torque jump
+    /// where the drive's own loops take over: the next velocity loop sets the PI integrator so that it asks for the
+    /// torque it asked for last (`retune`). Into torque mode the outside setpoint acts at once, and the integrator is
+    /// held meanwhile; a jump there is the outside controller's.
+    pub fn set_mode(&mut self, mode: DriveMode) {
+        if std::mem::discriminant(&mode) != std::mem::discriminant(&self.mode) {
+            self.retune = true;
+        }
+        self.mode = mode;
+    }
+
+    /// The next velocity loop starts its PI from the torque last asked for (see `set_mode`).
+    pub fn retune(&mut self) {
+        self.retune = true;
+    }
+
     /// The RMS phase current: of the q current `current` and the d current together.
     pub fn phase_current(&self) -> f64 {
         self.current.hypot(self.d_current)
@@ -975,6 +1013,11 @@ impl Drive {
     /// Position loop, every `cycle`: following error times Kv against the position setpoint (`position_setpoint`),
     /// with the measured position `measured`: the motor encoder's (`encoder`) or a load-side one's.
     pub fn position_loop(&mut self, p: &DriveParams, measured: f64, cycle: f64) {
+        if self.mode != DriveMode::Position {
+            // Tracking: the setpoint follows the actual position, so the loop asks for nothing.
+            (self.position_setpoint, self.following_error, self.position_part) = (measured, 0.0, 0.0);
+            return;
+        }
         let (c, t) = (&p.precontrol, self.since_setpoint);
         let target = if c.fine_interpolation {
             self.pos_set + (self.vel_set + 0.5 * self.acc_set * t) * t
@@ -1004,14 +1047,28 @@ impl Drive {
         // Velocity feedforward, interpolated between profile cycles. Holding it for a whole profile
         // cycle would make the speed command a staircase and the torque a sawtooth.
         let speed_set = self.vel_set + self.acc_set * self.since_setpoint;
-        self.speed_command = self.fault_speed.unwrap_or(self.position_part + p.velocity_ff * speed_set);
+        // A fault's stop ramp wins over every mode.
+        let mode = if self.fault_speed.is_some() { DriveMode::Velocity(0.0) } else { self.mode };
+        self.speed_command = match (self.fault_speed, mode) {
+            (Some(speed), _) | (None, DriveMode::Velocity(speed)) => speed,
+            _ => self.position_part + p.velocity_ff * speed_set,
+        };
 
         let error = self.speed_command - self.speed;
-        self.controller_torque = p.kp * error + self.integral;
-        self.feedforward_torque = match self.fault_speed {
-            Some(_) => 0.0,
-            None => p.torque_ff * self.torque_ff + p.precontrol.friction_at(speed_set),
+        let outside_torque = match mode {
+            DriveMode::Torque(torque) => Some(torque),
+            _ => None,
         };
+        let feedforward = match mode {
+            DriveMode::Position => p.torque_ff * self.torque_ff + p.precontrol.friction_at(speed_set),
+            _ => 0.0,
+        };
+        if self.retune && outside_torque.is_none() {
+            self.integral = self.controller_torque + self.feedforward_torque - feedforward - p.kp * error;
+            self.retune = false;
+        }
+        self.controller_torque = outside_torque.unwrap_or(p.kp * error + self.integral);
+        self.feedforward_torque = feedforward;
         let wanted = self.controller_torque + self.feedforward_torque;
         self.filtered += p.torque_filter * (wanted - self.filtered);
         let mut out = self.filtered;
@@ -1031,8 +1088,8 @@ impl Drive {
         self.at_limit = out + self.torque_injection > high || out + self.torque_injection < low;
         self.torque_command =
             delayed(&mut self.torque_queue, (out + self.torque_injection).clamp(low, high), p.velocity_delay);
-        // Anti-windup: the integrator stops while it would push further into the limit.
-        if (out <= high || error < 0.0) && (out >= low || error > 0.0) {
+        // Anti-windup: the integrator stops while it would push further into the limit; in torque mode it is held.
+        if outside_torque.is_none() && (out <= high || error < 0.0) && (out >= low || error > 0.0) {
             self.integral += p.ki * error * p.velocity_cycle;
         }
     }

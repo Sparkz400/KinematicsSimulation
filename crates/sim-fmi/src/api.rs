@@ -26,7 +26,7 @@
 
 use crate::api3::fmi3LogMessageCallback;
 use crate::{Kind, LOG_CATEGORIES, Model, texts};
-use sim_components::{Command, Sim, Snapshot, load_config};
+use sim_components::{Command, DriveMode, Sim, Snapshot, load_config};
 use sim_core::Translations;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -99,6 +99,8 @@ struct Applied {
     commands: Vec<Command>,
     /// Per axis, the setpoint input if the importer has set it.
     setpoints: Vec<Option<f64>>,
+    /// Per motor, the mode its inputs ask for (`command.mode`, `command.torque`, `command.velocity`).
+    modes: Vec<DriveMode>,
 }
 
 /// The places in `Instance::logging` (and in `LOG_CATEGORIES`).
@@ -230,6 +232,15 @@ fn apply(sim: &mut Sim, applied: &Applied) -> Vec<&'static str> {
         && let Err(e) = sim.command(if applied.enable { Command::Enable } else { Command::Disable })
     {
         refused.push(e.key);
+    }
+    // The modes first: a plan command is refused while a drive is out of position mode.
+    for (k, mode) in applied.modes.iter().enumerate() {
+        if sim.control.enabled()
+            && *mode != sim.control.drives[k].mode()
+            && let Err(e) = sim.set_drive_mode(k, *mode)
+        {
+            refused.push(e.key);
+        }
     }
     for command in &applied.commands {
         if let Err(e) = sim.command(command.clone()) {
@@ -408,8 +419,8 @@ impl Instance {
                 (_, Some(sim)) => sim.control.external_setpoint()[i],
                 _ => self.start(index).parse().unwrap_or(f64::NAN),
             }),
-            Kind::Target(_) => Ok(self.real_value(index)),
-            _ => unreachable!("only signals, setpoints and targets are Real"),
+            Kind::Target(_) | Kind::Torque(_) | Kind::Velocity(_) => Ok(self.real_value(index)),
+            _ => unreachable!("only signals, setpoints, targets, torques and speeds are Real"),
         }
     }
 
@@ -506,7 +517,21 @@ impl Instance {
             enable: !matches!(self.set[self.find(&Kind::Enable)], Some(Value::Bool(false))),
             commands: Vec::new(),
             setpoints: vec![None; sim.machine.axes().len()],
+            modes: Vec::new(),
         };
+        let mut warnings = Vec::new();
+        for k in 0..sim.machine.motors().len() {
+            let mode = self.text_value(self.find(&Kind::DriveMode(k)));
+            applied.modes.push(match mode.as_str() {
+                "velocity" => DriveMode::Velocity(self.real_value(self.find(&Kind::Velocity(k)))),
+                "torque" => DriveMode::Torque(self.real_value(self.find(&Kind::Torque(k)))),
+                "position" => DriveMode::Position,
+                _ => {
+                    warnings.push(self.tr.tr_arg("fmi-error-drive-mode", &mode));
+                    sim.control.drives[k].mode()
+                }
+            });
+        }
         for (index, v) in self.model.variables.iter().enumerate() {
             if let (Kind::Setpoint(i), Some(Value::Real(value))) = (&v.kind, &self.set[index]) {
                 applied.setpoints[*i] = Some(*value);
@@ -514,7 +539,6 @@ impl Instance {
         }
         // The triggers that changed since the last communication point.
         let on = [Kind::Cycle, Kind::Move, Kind::RunPath].map(|kind| self.bool_value(self.find(&kind)));
-        let mut warnings = Vec::new();
         if on[0] != self.latched[0] {
             applied.commands.push(if on[0] { Command::StartCycle } else { Command::Stop });
         }

@@ -713,3 +713,59 @@ fn a_time_optimal_path_and_a_trajectory_file_run_as_with_the_cli() {
         unsafe { fmi2FreeInstance(c) };
     }
 }
+
+/// An outside controller through the FMU: the first motor in torque mode with a torque that varies from step to step,
+/// then in velocity mode, then back in position mode, gives bit for bit the signals of a plain `Sim` whose drive is put
+/// in the same modes with the same setpoints (`Sim::set_drive_mode`); the other motors hold in position mode.
+#[test]
+fn torque_and_velocity_modes_through_the_fmu_match_a_plain_simulation_bit_for_bit() {
+    use sim_components::DriveMode;
+    for entry in MACHINES.iter().copied() {
+        let (model, resources) = unpack(entry, "modes");
+        let cfg = load_config(entry, &model.config_text).unwrap();
+        let mut sim = Sim::new(entry, &cfg).unwrap();
+        let signals = signal_refs(&model);
+        let c = instantiate(&model.guid, &resources, fmi2CoSimulation);
+        start(c);
+        let (mode, torque, velocity) =
+            (vr(&model, &Kind::DriveMode(0)), vr(&model, &Kind::Torque(0)), vr(&model, &Kind::Velocity(0)));
+        let interval = cfg.positive("profile.setpoint_interval_s").unwrap();
+        let steps = (interval / sim.dt).round() as u64;
+        // Around the torque that holds the start pose, by a tenth of the rated torque.
+        let (hold, swing) = (sim.control.drives[0].torque, 0.1 * sim.control.rated_torque());
+        let mut expected = Vec::new();
+        for k in 0..30 {
+            let wanted = match k {
+                0..10 => DriveMode::Torque(hold + swing * (0.7 * k as f64).sin()),
+                10..20 => DriveMode::Velocity(0.5 * (k - 10) as f64),
+                _ => DriveMode::Position,
+            };
+            match wanted {
+                DriveMode::Torque(t) => {
+                    set_text(c, mode, "torque");
+                    unsafe { assert_eq!(fmi2SetReal(c, &torque, 1, &t), fmi2OK) };
+                }
+                DriveMode::Velocity(v) => {
+                    set_text(c, mode, "velocity");
+                    unsafe { assert_eq!(fmi2SetReal(c, &velocity, 1, &v), fmi2OK) };
+                }
+                DriveMode::Position => set_text(c, mode, "position"),
+            }
+            let time = k as f64 * interval;
+            assert_eq!(unsafe { fmi2DoStep(c, time, interval, 1) }, fmi2OK, "{} at {time}", entry.id);
+            if wanted != sim.control.drives[0].mode() {
+                sim.set_drive_mode(0, wanted).unwrap();
+            }
+            for _ in 0..steps {
+                sim.step();
+            }
+            sim.sample(&mut expected);
+            assert_eq!(get_reals(c, &signals), expected, "{} at {time}", entry.id);
+            assert_eq!(sim.control.drives[0].mode(), wanted, "{}", entry.id);
+        }
+        unsafe {
+            assert_eq!(fmi2Terminate(c), fmi2OK);
+            fmi2FreeInstance(c);
+        }
+    }
+}

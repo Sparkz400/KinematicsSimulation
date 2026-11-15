@@ -379,8 +379,11 @@ pub fn repeating_peak(
     samples.iter().chain([(t_end, end)].iter()).map(|&(t, x)| at(t, x)).fold(x0[0] + x0[1], f64::max)
 }
 
-/// What a run adds up step by step, for a cycle or a trajectory.
-struct Tally {
+/// What a run adds up step by step, for a cycle or a trajectory, or for any run stepped from outside (a controller of
+/// the user's own, `kinematics_sim.Sim`): `step` after each `Sim::step`, then `finish` gives the load the verdicts judge.
+/// The path, tracking and dwell errors are measured against the controller's plan.
+#[derive(Clone)]
+pub struct Tally {
     loads: Vec<MotorLoad>,
     pos: Vec<f64>,
     speed: Vec<f64>,
@@ -500,7 +503,7 @@ fn distance_to_piece(p: &[f64], a: &[f64], b: &[f64], axes: &[usize]) -> f64 {
 }
 
 impl Tally {
-    fn new(sim: &Sim, views: bool) -> Self {
+    pub fn new(sim: &Sim, views: bool) -> Self {
         let motors = sim.machine.motors().len();
         let infos = sim.signal_infos();
         let named = |start: &str, end: &str| -> Vec<usize> {
@@ -664,7 +667,7 @@ impl Tally {
     }
 
     /// Adds the step the simulation has just made.
-    fn step(&mut self, sim: &Sim) {
+    pub fn step(&mut self, sim: &Sim) {
         sim.machine.motor_state(&sim.state, &mut self.pos, &mut self.speed);
         if let Some((conveyor, Some(pass))) = sim.control.conveyor()
             && let Some(part) = conveyor.gripping(pass, sim.time())
@@ -898,7 +901,7 @@ impl Tally {
         self.steps += 1;
     }
 
-    fn finish(mut self, sim: &Sim, duration: f64) -> CycleLoad {
+    pub fn finish(mut self, sim: &Sim, duration: f64) -> CycleLoad {
         let steps = self.steps.max(1) as f64;
         for (k, load) in self.loads.iter_mut().enumerate() {
             load.rms_torque = (load.rms_torque / steps).sqrt();

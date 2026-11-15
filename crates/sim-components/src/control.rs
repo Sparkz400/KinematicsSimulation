@@ -2,7 +2,7 @@
 //! per motor. It works on any machine through the machine interface.
 
 use crate::conveyor::{Conveyor, Pass};
-use crate::drive::{Drive, DriveParams, quantise, shared_dc_link};
+use crate::drive::{Drive, DriveMode, DriveParams, quantise, shared_dc_link};
 use crate::fault::{self, Fault, Monitor, Watch};
 use crate::path::{self, Piece};
 use crate::profile::{MotionLaw, Move, Shape};
@@ -758,6 +758,11 @@ impl Controller {
         if self.reacting.is_some() && !matches!(command, Command::Enable | Command::Disable) {
             return Err(CommandError { key: "error-fault" });
         }
+        // A plan would act on the drives in position mode only, and be dropped when the others come back to it.
+        let planning = !matches!(command, Command::Enable | Command::Disable | Command::Stop);
+        if planning && self.drives.iter().any(|d| d.mode() != DriveMode::Position) {
+            return Err(CommandError { key: "error-outside-mode" });
+        }
         match command {
             Command::Disable => self.disable(),
             Command::Enable => {
@@ -834,6 +839,50 @@ impl Controller {
                     return Err(CommandError { key: "error-trajectory-start" });
                 }
                 self.motion = trajectory(points, self.spline_c2);
+            }
+        }
+        Ok(())
+    }
+
+    /// Puts motor `k`'s drive in `mode` (`DriveMode`), `state` the machine's. Refused while the drives are off or
+    /// stopping after a trip, and out of position mode while a move, cycle or path runs; while a drive is out of position
+    /// mode, the plan commands are refused. A drive coming back to position mode takes the plan with it: the plan stands
+    /// where the motors stand, at rest, and every drive starts its PI from the torque it asked for last
+    /// (`Drive::set_mode`), so the torque does not jump; at speed, the position loop then brings the motors back to
+    /// where they were at the switch. Enabling the drives puts them all in position mode.
+    pub fn set_drive_mode(
+        &mut self,
+        k: usize,
+        mode: DriveMode,
+        machine: &dyn Machine,
+        state: &[f64],
+    ) -> std::result::Result<(), CommandError> {
+        if !self.enabled {
+            return Err(CommandError { key: "error-disabled" });
+        }
+        if self.reacting.is_some() {
+            return Err(CommandError { key: "error-fault" });
+        }
+        let was = self.drives[k].mode();
+        if mode != DriveMode::Position && was == DriveMode::Position && self.busy() {
+            return Err(CommandError { key: "error-busy" });
+        }
+        self.drives[k].set_mode(mode);
+        if mode == DriveMode::Position && was != DriveMode::Position {
+            machine.motor_state(state, &mut self.motor_pos, &mut self.motor_vel);
+            machine.forward(&self.motor_pos, &mut self.set_pos);
+            self.raw_pos.clone_from(&self.set_pos);
+            for rate in [&mut self.set_vel, &mut self.set_acc, &mut self.raw_vel, &mut self.raw_acc] {
+                rate.fill(0.0);
+            }
+            (self.motion, self.cycle, self.stopping) = (Motion::Idle, None, false);
+            self.history.clear();
+            self.fieldbus.clear();
+            for (drive, pos) in self.drives.iter_mut().zip(&self.motor_pos) {
+                if drive.mode() == DriveMode::Position {
+                    (drive.pos_set, drive.position_setpoint, drive.vel_set, drive.acc_set) = (*pos, *pos, 0.0, 0.0);
+                }
+                drive.retune();
             }
         }
         Ok(())

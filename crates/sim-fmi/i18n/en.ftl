@@ -34,3 +34,7 @@ fmi-error-path = The path cannot be run: { $arg }
 fmi-trajectory-file = Trajectory file (poses at times, as sim-cli run --trajectory reads it) run by command.run_path instead of a path (empty: the path)
 fmi-time-optimal = Paths timed as fast as the motors allow (sim-cli --time-optimal) instead of within the axis limits
 fmi-error-fmu-state-version = This FMU state was saved by another version of the FMU; a state is set by the version that saved it: { $arg }
+fmi-drive-mode = Drive mode: "position" follows the controller's plan, "velocity" takes command.velocity, "torque" takes command.torque
+fmi-torque = Torque setpoint in torque mode, at the motor
+fmi-velocity = Speed setpoint in velocity mode, at the motor
+fmi-error-drive-mode = No such drive mode (position, velocity, torque): { $arg }

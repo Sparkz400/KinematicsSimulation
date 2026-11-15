@@ -34,3 +34,7 @@ fmi-error-path = Die Bahn kann nicht gefahren werden: { $arg }
 fmi-trajectory-file = Trajektoriendatei (Posen zu Zeiten, wie sim-cli run --trajectory sie liest), die command.run_path statt einer Bahn fährt (leer: die Bahn)
 fmi-time-optimal = Bahnen so schnell, wie die Motoren erlauben (sim-cli --time-optimal), statt innerhalb der Achsgrenzen
 fmi-error-fmu-state-version = Dieser FMU-Zustand wurde von einer anderen Version der FMU gespeichert; ein Zustand lässt sich nur von der Version setzen, die ihn gespeichert hat: { $arg }
+fmi-drive-mode = Betriebsart des Antriebs: "position" folgt dem Plan der Steuerung, "velocity" nimmt command.velocity, "torque" nimmt command.torque
+fmi-torque = Momentensollwert in Momentenregelung, am Motor
+fmi-velocity = Drehzahlsollwert in Drehzahlregelung, am Motor
+fmi-error-drive-mode = Keine solche Betriebsart (position, velocity, torque): { $arg }
