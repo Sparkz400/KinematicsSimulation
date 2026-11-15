@@ -161,7 +161,9 @@ advice names each value's share (`fit-combined`: the change shown is its own cha
 folded one's). For a link's mass, swing the joints it hangs on over much of their range, against gravity. On the
 six-axis arm with its gears elastic (as shipped) the load is put where the gears' twist holds it: each motor's angle
 less the twist its torque holds through the gear's stiffness (a two-mass model per joint), the rotor at its own
-acceleration. The torque and every column of the fit are smoothed alike over ±40 ms, which takes the gears' ringing out.
+acceleration. The torque and every column of the fit are smoothed alike over ±40 ms, which takes the gears' ringing out;
+over less where a trace's moves are too short for that (the four-arm delta's 60 ms lifts: ±30 ms), but never less than
+one period of the machine's lowest mode.
 With link 2 1.2 and link 3 1.3 times heavier, link 2's value came out + 0.558 ± 0.025 for 0.565 (before 14 November
 −9.4: the rigid model at the motors' angles took the twist for the links' motion). Swing well below the gears'
 resonance (on the arm joint 2 rings at some 9 Hz).

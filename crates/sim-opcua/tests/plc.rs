@@ -153,8 +153,15 @@ async fn every_signal_of_every_machine_is_a_variable() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_plc_commanded_move_runs_and_reports_position_and_following_error() {
     for entry in MACHINES.iter().copied() {
-        let plc = connect(entry, &format!("move-{}", entry.id)).await;
-        let sim = Sim::new(entry, &entry.config()).unwrap();
+        // The process machines' cut and press forces are loads their loops take, outside the feedforward, as in the
+        // cycle test of sim-machines: the rotary knife's move starts with the blade in the cut (7.76 mrad of following
+        // error with the cut force, 0.31 without).
+        let mut cfg = entry.config();
+        if cfg.bool("effects.process_force").is_ok() {
+            cfg.set_text("effects.process_force = false").unwrap();
+        }
+        let plc = connect_with(entry, &cfg, &format!("move-{}", entry.id)).await;
+        let sim = Sim::new(entry, &cfg).unwrap();
         let axes = sim.machine.axes();
         let start = sim.control.set_pos.clone();
         // Every axis moves 0.2 of its range towards the middle.
@@ -163,6 +170,7 @@ async fn a_plc_commanded_move_runs_and_reports_position_and_following_error() {
             .zip(&start)
             .map(|(a, s)| s + 0.2 * (a.max - a.min) * (0.5 * (a.min + a.max) - s).signum())
             .collect();
+        let twist = twist_in_move(entry, &cfg, &target);
         let position: Vec<String> = axes.iter().map(|a| format!("signal.axis.{}.position", a.id)).collect();
         let error: Vec<String> = axes.iter().map(|a| format!("signal.axis.{}.following_error", a.id)).collect();
 
@@ -209,12 +217,18 @@ async fn a_plc_commanded_move_runs_and_reports_position_and_following_error() {
                 reached[i],
                 target[i]
             );
-            // Below 1 mm, and on a fast machine 0.04 mm per m/s2 of its fastest axis (the delta's diagonal move at 50 m/s2
-            // per axis: up to 1.4 mm, 2 mm allowed).
-            let fastest = axes.iter().map(|a| a.max_acc).fold(0.0, f64::max);
+            // Below 1 mm, and on a fast machine 0.04 mm per m/s2 of its fastest linear axis (the delta's diagonal move
+            // at 50 m/s2 per axis: up to 1.4 mm, 2 mm allowed). A turning axis in rad, as the same limit 100 mm from its
+            // axis, as in the cycle test of sim-machines; plus the twist of the gears beyond its motors, which no drive's
+            // loop sees: the four-arm delta's tool turn moves some 6.6 rad per rad of arm angle, so the gears' twist
+            // under the move's torques shows on it as 14 to 25 mrad (the run on rigid gears: 5 mrad), elsewhere a few
+            // urad. The twist: how far the tool was from its motors' pose in the same move run here (`twist_in_move`).
+            let fastest = axes.iter().filter(|a| a.unit == "m").map(|a| a.max_acc).fold(0.0, f64::max);
+            let limit = f64::max(1e-3, 4e-5 * fastest);
+            let (limit, unit) = if axes[i].unit == "rad" { (limit / 0.1 + twist[i], "rad") } else { (limit, "m") };
             assert!(
-                peak_error[i] > 1e-7 && peak_error[i] < f64::max(1e-3, 4e-5 * fastest),
-                "{}: axis {i} reported a following error of {} m",
+                peak_error[i] > 1e-7 && peak_error[i] < limit,
+                "{}: axis {i} reported a following error of {} {unit}, limit {limit} {unit}",
                 entry.id,
                 peak_error[i]
             );
@@ -295,11 +309,23 @@ async fn the_plc_disables_and_enables_the_drives() {
             .zip(&sim.control.set_pos)
             .map(|(a, p)| (format!("command.target.{}", a.id), Variant::Double(*p)))
             .collect();
+        // The move ran: the setpoints, which stood where the axes stood, arrive at the targets. Not whether it is still
+        // busy two ticks of the server on (0.2 s): the four-arm delta's move back is 4 mm and over by then, as the D3's.
+        let setpoints: Vec<String> =
+            sim.machine.axes().iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect();
+        let targets: Vec<f64> = sim.control.set_pos.clone();
+        let there = |at: &[f64]| at.iter().zip(&targets).all(|(a, t)| (a - t).abs() < 1e-6);
+        assert!(!there(&plc.numbers(&setpoints).await), "{}: already at the start pose, no move to see", entry.id);
         back.extend(set("command.move"));
         plc.write(back).await;
         plc.carried_out(0.0).await;
         assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
-        assert!(plc.busy().await, "{}: no move after enabling", entry.id);
+        let mut polls = 0;
+        while !there(&plc.numbers(&setpoints).await) {
+            polls += 1;
+            assert!(polls < 500, "{}: no move after enabling", entry.id);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         assert!(
             !plc.write(vec![("command.disable".into(), Variant::Double(1.0))]).await[0].is_good(),
             "a number is not a switch"
@@ -877,6 +903,32 @@ fn at_rest_within(entry: &'static MachineEntry, pose: &[f64]) -> f64 {
         .sum::<f64>()
         .sqrt();
     (1.2 * sag).max(2e-4)
+}
+
+/// Per axis, how far the tool gets from its motors' pose (the forward kinematics of the motor angles, the gears taken
+/// as rigid) in a move from the start pose to `target` and 0.3 s on, run without the server: the twist of the gears and
+/// belts beyond the motors, which the drives' loops do not see.
+fn twist_in_move(entry: &'static MachineEntry, cfg: &sim_core::Config, target: &[f64]) -> Vec<f64> {
+    let mut sim = Sim::new(entry, cfg).unwrap();
+    let (n, m) = (sim.machine.axes().len(), sim.machine.motors().len());
+    let mut twist = vec![0f64; n];
+    sim.command(sim_components::Command::MoveTo(target.to_vec())).unwrap();
+    let (mut pos, mut vel, mut angle, mut speed, mut at_motors) =
+        (vec![0.0; n], vec![0.0; n], vec![0.0; m], vec![0.0; m], vec![0.0; n]);
+    let mut rest = 0;
+    while rest < (0.3 / sim.dt) as usize {
+        sim.step();
+        if !sim.control.busy() {
+            rest += 1;
+        }
+        sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
+        sim.machine.motor_state(&sim.state, &mut angle, &mut speed);
+        sim.machine.forward(&angle, &mut at_motors);
+        for k in 0..n {
+            twist[k] = twist[k].max((pos[k] - at_motors[k]).abs());
+        }
+    }
+    twist
 }
 
 /// 0.2 of the axis range from `from` towards the middle.
