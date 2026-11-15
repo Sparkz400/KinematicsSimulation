@@ -177,6 +177,41 @@ fn the_rack_axis_reaches_the_hand_calculated_force_torque_and_speed() {
     near(value(&v, "gearbox-input-speed"), 2850.0, 0.03, "motor speed");
 }
 
+/// The top speed and the hardest acceleration of a time-optimal line, by differences over its 1 ms poses.
+fn time_optimal_line(entry: &MachineEntry, cfg: &Config, to: f64) -> (f64, f64) {
+    let sim = Sim::new(entry, cfg).unwrap();
+    let points = sim.plan_path(&sim_components::path::parse(&format!("line,{to}")).unwrap(), true).unwrap();
+    let x = |k: usize| points[k].1[0];
+    let top = (1..points.len()).map(|k| ((x(k) - x(k - 1)) / 1e-3).abs()).fold(0.0, f64::max);
+    let acc = (1..points.len() - 1).map(|k| ((x(k + 1) - 2.0 * x(k) + x(k - 1)) / 1e-6).abs()).fold(0.0, f64::max);
+    (top, acc)
+}
+
+/// The time-optimal plan keeps the screw's speed rating (`Machine::rigid_checks`, "screw-speed"): the 1.6 m screw of
+/// the test above whirls at 1250 r/min, which on the 20 mm lead is 0.41667 m/s, less the 1 % the plan keeps back of a
+/// speed rating, 0.41250 m/s; the motor alone would run the carriage at far more.
+#[test]
+fn the_time_optimal_plan_keeps_the_screws_speed_rating() {
+    let mut cfg = rigid(&SCREW);
+    let (free, _) = time_optimal_line(&SCREW, &cfg, 0.7);
+    cfg.set_text("screw.length_m = 1.6").unwrap();
+    let (top, _) = time_optimal_line(&SCREW, &cfg, 0.7);
+    let by_hand: f64 = 0.99 * 1250.0 / 60.0 * 0.02;
+    assert!((by_hand - 0.41250).abs() < 1e-5 && free > 1.5 * by_hand, "{free} m/s without the long screw");
+    assert!((top - by_hand).abs() < 1e-3 * by_hand, "{top} m/s, by hand {by_hand} m/s");
+}
+
+/// The time-optimal plan keeps the rack's feed force ("rack-feed-force", the rated 500 N over the service factor 1.25:
+/// 400 N) with the torque reserve 0.8: the rigid, loss-free horizontal axis pushes its 60 kg carriage and 20 kg payload
+/// at no more than 0.8 * 400 / 80 = 4 m/s^2; the motor's 0.8 * 15 N m * 10 / 31.831 mm would push it at 47 m/s^2.
+#[test]
+fn the_time_optimal_plan_keeps_the_racks_feed_force() {
+    let mut cfg = rigid(&RACK);
+    cfg.set_text("rack.rated_feed_force_n = 500.0").unwrap();
+    let (_, acc) = time_optimal_line(&RACK, &cfg, 1.5);
+    assert!((acc - 4.0).abs() < 2e-3 * 4.0, "{acc} m/s^2, by hand 4 m/s^2");
+}
+
 /// By hand: the guides carry the attraction and the weight of carriage, forcer and payload, 2500 + (5 + 3 + 5) * 9.80665 =
 /// 2627.49 N, at any speed; the motor pushes the carriage, its payload and the forcer's own 3 kg (the rotor's inertia)
 /// by m a, 13 kg in all.

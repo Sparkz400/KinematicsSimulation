@@ -1268,13 +1268,17 @@ fn the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measur
     assert!(fitted.damping > 0.03 && fitted.damping < 0.3, "damping {}", fitted.damping);
 }
 
+/// The top speed of the time-optimal plan on the single axis whose motor may turn at 314 rad/s: 314 * 0.02 m / 5 =
+/// 1.256 m/s less the 1 % the plan keeps back for the loops' following (`path::SPEED_KEPT`), 1.2434 m/s.
+const TOP: f64 = 0.99 * 314.0 * 0.02 / 5.0;
+
 /// Time-optimal timing against a hand calculation: on a straight line the motor gives its share of the peak
-/// torque (0.8 of 0.5 N m) until it turns at its rated speed, and the same to brake. The acceleration a comes
-/// and goes at the jerk limit j, which adds a / j: distance / v + v / a + a / j. With a jerk limit of
-/// 1e5 m/s^3 that is 0.714 s, 0.16 ms more than without one. With the config's 100 m/s^3 a ramp to
-/// v = 1.256 m/s is over before the acceleration reaches the 16.3 m/s^2 the torque allows (that takes a
+/// torque (0.8 of 0.5 N m) until it turns at its rated speed (less 1 %, `TOP`), and the same to brake. The acceleration
+/// a comes and goes at the jerk limit j, which adds a / j: distance / v + v / a + a / j. With a jerk limit of
+/// 1e5 m/s^3 that is 0.72 s, 0.16 ms more than without one. With the config's 100 m/s^3 a ramp to
+/// v = 1.243 m/s is over before the acceleration reaches the 16.3 m/s^2 the torque allows (that takes a
 /// change of speed of a^2 / j = 2.67 m/s): each ramp takes 2 sqrt(v / j) and reaches sqrt(v j) = 11.2 m/s^2,
-/// so the line takes distance / v + 2 sqrt(v / j) = 0.861 s.
+/// so the line takes distance / v + 2 sqrt(v / j) = 0.866 s.
 #[test]
 fn a_time_optimal_line_takes_the_hand_calculated_time() {
     let mut cfg = ideal_rigid();
@@ -1284,7 +1288,7 @@ fn a_time_optimal_line_takes_the_hand_calculated_time() {
     cfg.set_text("axis.x.max_jerk_m_s3 = 1.0e5").unwrap();
     // Carriage plus pulley and rotor inertia, through radius and gear ratio (as in the reference cycle).
     let m_total = 4.0 + (1.0e-4 + 25.0 * 0.3e-4) / (0.02 * 0.02);
-    let (a, v, dist) = (0.8 * 0.5 * 5.0 / 0.02 / m_total, 314.0 * 0.02 / 5.0, 0.8);
+    let (a, v, dist) = (0.8 * 0.5 * 5.0 / 0.02 / m_total, TOP, 0.8);
     let by_hand = dist / v + v / a + a / 1e5;
     let line = [sim_components::path::Piece::Line(vec![0.9])];
     let duration = |cfg: &Config| {
@@ -1323,7 +1327,8 @@ fn a_time_optimal_line_takes_the_hand_calculated_time() {
 
 /// The rigid single axis at 1e5 m/s^3 with the belt's ratings out of the way (at a hundred m/s^2 the carriage's pull
 /// would take the slack side's room), and the motor's maximum speed at its rated 314 rad/s, so that the plan cruises
-/// there (above it, it would follow the torque-speed curve; limits.rs tests that).
+/// there (above it, it would follow the torque-speed curve; limits.rs tests that); the braking resistor's rating out of
+/// the way too (braking at a hundred m/s^2 from 1.24 m/s feeds back some 700 W, beyond its 500 W).
 fn ideal_rigid_quick() -> Config {
     let mut cfg = ideal_rigid();
     for e in [
@@ -1331,6 +1336,7 @@ fn ideal_rigid_quick() -> Config {
         "ratings.belt_min_tension_n = -1.0e6",
         "ratings.belt_max_tension_n = 1.0e6",
         "drive.max_speed_rad_s = 314.0",
+        "ratings.braking_resistor_peak_w = 1.0e6",
     ] {
         cfg.set_text(e).unwrap();
     }
@@ -1353,28 +1359,32 @@ fn time_optimal_line(cfg: &Config) -> (f64, f64, f64, f64) {
 /// incline the carriage's weight along the axis, F = 4 kg * 9.80665 * 0.5 = 19.613 N, takes from the torque on the way
 /// up and gives on the way down: a = (0.8 * 0.9 N m * 5 / 0.02 m -+ F) / 6.125 kg = (180 -+ 19.613) / 6.125 = 26.186 and
 /// 32.590 m/s^2 (6.125 kg: the carriage, the pulley and the rotor through radius and ratio). The duration is the cruise
-/// at the rated speed 1.256 m/s plus half of each ramp: 0.8 / v + (v / a1 + a1 / j) / 2 + (v / a2 + a2 / j) / 2 =
-/// 0.68049 s. Without the effect the motor's torque limits it again.
+/// at the rated speed (`TOP`, 1.2434 m/s) plus half of each ramp: 0.8 / v + (v / a1 + a1 / j) / 2 + (v / a2 + a2 / j) /
+/// 2 = 0.68649 s. Without the effect the drive does not hold its current, but "drive-peak-current" still judges the
+/// rating: the plan keeps it all the same (since 15 November; before, the motor's torque limited it then). With the
+/// rating left out, the motor's own 0.8 * 3.8 N m gives far more.
 #[test]
 fn the_drive_current_limits_the_time_optimal_acceleration_to_the_hand_calculated_one() {
     let mut cfg = ideal_rigid_quick();
     for e in ["effects.torque_saturation = false", "geometry.incline_deg = 30.0", "ratings.drive_max_current_a = 2.0"] {
         cfg.set_text(e).unwrap();
     }
-    let (m_total, v, j, weight) =
-        (4.0 + (1.0e-4 + 25.0 * 0.3e-4) / (0.02 * 0.02), 314.0 * 0.02 / 5.0, 1e5, 4.0 * G * 0.5);
+    let (m_total, v, j, weight) = (4.0 + (1.0e-4 + 25.0 * 0.3e-4) / (0.02 * 0.02), TOP, 1e5, 4.0 * G * 0.5);
     let (up, down) =
         ((0.8 * 0.45 * 2.0 * 5.0 / 0.02 - weight) / m_total, (0.8 * 0.45 * 2.0 * 5.0 / 0.02 + weight) / m_total);
     let by_hand = 0.8 / v + 0.5 * (v / up + up / j) + 0.5 * (v / down + down / j);
-    assert!((up - 26.186).abs() < 1e-3 && (down - 32.590).abs() < 1e-3 && (by_hand - 0.68049).abs() < 1e-5);
-    let (time, top, rising, falling) = time_optimal_line(&cfg);
-    assert!((time - by_hand).abs() < 1.5e-3, "{time} s, by hand {by_hand} s");
-    assert!(
-        (top - v).abs() < 1e-3 * v && (rising - up).abs() < 1e-3 * up && (falling - down).abs() < 1e-3 * down,
-        "{top} m/s, {rising} and {falling} m/s^2, by hand {v} m/s, {up} and {down} m/s^2"
-    );
-    // The motor's own 0.8 * 3.8 N m gives far more without the drive's limit.
-    cfg.set_text("effects.drive_current_limit = false").unwrap();
+    assert!((up - 26.186).abs() < 1e-3 && (down - 32.590).abs() < 1e-3 && (by_hand - 0.68649).abs() < 1e-5);
+    for limited in [true, false] {
+        cfg.set_text(&format!("effects.drive_current_limit = {limited}")).unwrap();
+        let (time, top, rising, falling) = time_optimal_line(&cfg);
+        assert!((time - by_hand).abs() < 1.5e-3, "{limited}: {time} s, by hand {by_hand} s");
+        assert!(
+            (top - v).abs() < 1e-3 * v && (rising - up).abs() < 1e-3 * up && (falling - down).abs() < 1e-3 * down,
+            "{limited}: {top} m/s, {rising} and {falling} m/s^2, by hand {v} m/s, {up} and {down} m/s^2"
+        );
+    }
+    // The motor's own 0.8 * 3.8 N m gives far more without the drive's rating.
+    cfg.set_text("ratings.drive_max_current_a = 1.0e6").unwrap();
     let (_, _, rising, _) = time_optimal_line(&cfg);
     let motor = (0.8 * 3.8 * 5.0 / 0.02 - weight) / m_total;
     assert!((rising - motor).abs() < 1e-3 * motor, "{rising} m/s^2, by hand {motor} m/s^2");
@@ -1388,7 +1398,7 @@ fn the_drive_current_limits_the_time_optimal_acceleration_to_the_hand_calculated
 #[test]
 fn a_gearbox_or_pulley_rating_that_binds_limits_the_time_optimal_acceleration() {
     let mut cfg = ideal_rigid_quick();
-    let (v, j) = (314.0 * 0.02 / 5.0, 1e5);
+    let (v, j) = (TOP, 1e5);
     let per_acc: f64 = 5.0 * (6.125 * 0.02 / 5.0 - 0.3e-4 * 5.0 / 0.02);
     assert!((per_acc - 0.085).abs() < 1e-12);
     for (rating, rated) in [("gearbox_max_torque_nm", 10.0), ("pulley_max_torque_nm", 8.0)] {
@@ -1421,17 +1431,17 @@ fn a_gearbox_or_pulley_rating_that_binds_limits_the_time_optimal_acceleration() 
 /// 0.0075 N m per m/s^2, plus what the gearbox passes on, (0.0245 - 0.0075) / eta per m/s^2 (the output's load through
 /// the ratio, driving it). With eta = 0.9 that is 0.0075 + 0.017 / 0.9 = 0.026389 N m per m/s^2, and the 0.8 * 0.5 N m
 /// the motor may give accelerate the carriage at 15.158 m/s^2 (16.327 without the loss). The line 0.1 -> 0.9 m then takes
-/// 0.8 / v + v / a + a / j = 0.71996 s at the rated speed v = 1.256 m/s and j = 1e5 m/s^3.
+/// 0.8 / v + v / a + a / j = 0.72556 s at the rated speed less 1 % v = 1.2434 m/s (`TOP`) and j = 1e5 m/s^3.
 #[test]
 fn a_lossy_gearbox_lowers_the_time_optimal_acceleration_by_its_loss() {
     let mut cfg = ideal_rigid_quick();
     for e in ["drive.peak_torque_nm = 0.5", "effects.gearbox_efficiency = true", "gearbox.efficiency = 0.9"] {
         cfg.set_text(e).unwrap();
     }
-    let (v, j, per_acc): (f64, f64, f64) = (314.0 * 0.02 / 5.0, 1e5, 0.0075 + (0.0245 - 0.0075) / 0.9);
+    let (v, j, per_acc): (f64, f64, f64) = (TOP, 1e5, 0.0075 + (0.0245 - 0.0075) / 0.9);
     let a = 0.8 * 0.5 / per_acc;
     let by_hand = 0.8 / v + v / a + a / j;
-    assert!((per_acc - 0.026389).abs() < 1e-6 && (a - 15.158).abs() < 1e-3 && (by_hand - 0.71996).abs() < 1e-5);
+    assert!((per_acc - 0.026389).abs() < 1e-6 && (a - 15.158).abs() < 1e-3 && (by_hand - 0.72556).abs() < 1e-5);
     let (time, _, rising, falling) = time_optimal_line(&cfg);
     assert!((time - by_hand).abs() < 1.5e-3, "{time} s, by hand {by_hand} s");
     assert!(
@@ -1440,18 +1450,143 @@ fn a_lossy_gearbox_lowers_the_time_optimal_acceleration_by_its_loss() {
     );
 }
 
+/// The time-optimal plan of `pieces` on the single axis: its poses at 1 ms and its duration.
+fn planned(cfg: &Config, pieces: &str) -> (Vec<(f64, Vec<f64>)>, f64) {
+    let points = Sim::new(&ENTRY, cfg).unwrap().plan_path(&sim_components::path::parse(pieces).unwrap(), true).unwrap();
+    let duration = points[points.len() - 1].0;
+    (points, duration)
+}
+
+/// Where a plan up the axis first reaches the place `at` (m), and its speed there by differences over the two cycles
+/// around it.
+fn speed_at(points: &[(f64, Vec<f64>)], at: f64) -> (f64, f64) {
+    let k = points.iter().position(|(_, p)| p[0] >= at).unwrap();
+    (points[k].1[0], (points[k + 1].1[0] - points[k - 1].1[0]) / 2e-3)
+}
+
+/// A line too short to reach the top speed, rest to rest: the motor accelerates at a = 0.8 * 0.5 N m * 5 / 0.02 m / 6.125
+/// kg = 16.327 m/s^2 and brakes at the same, ramped at the jerk j = 1e5 m/s^3. A move of distance s that ramps up to a,
+/// holds it for t1 and ramps down, then brakes alike, covers s = a (tau + t1) (2 tau + t1) with tau = a / j, so it takes
+/// T = 2 (2 tau + t1) = tau + sqrt(tau^2 + 4 s / a); without the jerk limit (tau = 0) the bang-bang time 2 sqrt(s / a) =
+/// 2 sqrt(s m r / (T_motor i)). For s = 0.05 m: 0.11084 s (the bang-bang 0.11068 s), peaking at a (tau + t1) = 0.902 m/s,
+/// below the top speed.
+#[test]
+fn a_short_time_optimal_line_takes_the_hand_calculated_bang_bang_time() {
+    let mut cfg = ideal_rigid_quick();
+    cfg.set_text("drive.peak_torque_nm = 0.5").unwrap();
+    let (a, s, j): (f64, f64, f64) = (0.8 * 0.5 * 5.0 / 0.02 / 6.125, 0.05, 1e5);
+    let tau = a / j;
+    let by_hand = tau + (tau * tau + 4.0 * s / a).sqrt();
+    let peak = a * (tau + 0.5 * (-3.0 * tau + (tau * tau + 4.0 * s / a).sqrt()));
+    assert!((by_hand - 0.11084).abs() < 1e-5 && (2.0 * (s / a).sqrt() - 0.11068).abs() < 1e-5 && peak < TOP);
+    let (points, time) = planned(&cfg, "line,0.15");
+    assert!((time - by_hand).abs() < 1.5e-3, "{time} s, by hand {by_hand} s");
+    let top = points.windows(2).map(|w| (w[1].1[0] - w[0].1[0]) / 1e-3).fold(0.0, f64::max);
+    assert!((top - peak).abs() < 1e-2 * peak, "{top} m/s, by hand {peak} m/s");
+}
+
+/// A hanging axis (the single axis turned upright, 90 degrees): gravity takes the carriage's weight, 4 kg * 9.80665 =
+/// 39.227 N, from the motor's 0.8 * 0.5 N m * 5 / 0.02 m = 100 N on the way up and gives it on the way down, so up the
+/// line 0.1 -> 0.9 m the plan speeds up at (100 - 39.227) / 6.125 = 9.922 m/s^2 and brakes at (100 + 39.227) / 6.125 =
+/// 22.731 m/s^2. Its speed follows sqrt(2 a d) from the start and from the end (d the distance from them), the jerk's
+/// ramps of a few 0.1 ms aside, and the top `TOP` between: at 0.05 m from the start 0.9961 m/s, in the middle 1.2434 m/s,
+/// at 0.02 m before the end 0.9535 m/s. The other way, down, the two accelerations swap.
+#[test]
+fn on_a_hanging_axis_the_time_optimal_speed_follows_the_hand_calculated_limit_curve() {
+    let mut cfg = ideal_rigid_quick();
+    cfg.set_text("drive.peak_torque_nm = 0.5").unwrap();
+    cfg.set_text("geometry.incline_deg = 90.0").unwrap();
+    let (up, down) = ((100.0 - 4.0 * G) / 6.125, (100.0 + 4.0 * G) / 6.125);
+    assert!((up - 9.922).abs() < 1e-3 && (down - 22.731).abs() < 1e-3);
+    let curve = |a: f64, d: f64| (2.0 * a * d).sqrt().min(TOP);
+    let (points, _) = planned(&cfg, "line,0.9");
+    // The curve where the plan passes each place (its pose a cycle on lies up to 1.2 mm beyond the place).
+    let by_hand = |x: f64| curve(up, x - 0.1).min(curve(down, 0.9 - x));
+    for at in [0.15, 0.5, 0.88] {
+        let (x, v) = speed_at(&points, at);
+        assert!((v - by_hand(x)).abs() < 5e-3 * by_hand(x), "up, at {x} m: {v} m/s, by hand {} m/s", by_hand(x));
+    }
+    assert!((curve(up, 0.05) - 0.9961).abs() < 1e-4 && (curve(down, 0.02) - 0.9535).abs() < 1e-4);
+    // Down from 0.9 m: braking at the bottom takes the weight on top of the inertia.
+    cfg.set_text("start.pose = [0.9]").unwrap();
+    let (points, _) = planned(&cfg, "line,0.1");
+    let by_hand = |x: f64| curve(down, 0.9 - x).min(curve(up, x - 0.1));
+    for at in [0.88, 0.5, 0.12] {
+        let k = points.iter().position(|(_, p)| p[0] <= at).unwrap();
+        let (x, v) = (points[k].1[0], (points[k - 1].1[0] - points[k + 1].1[0]) / 2e-3);
+        assert!((v - by_hand(x)).abs() < 5e-3 * by_hand(x), "down, at {x} m: {v} m/s, by hand {} m/s", by_hand(x));
+    }
+}
+
+/// The braking resistor's peak power, 50 W here, bounds how hard the plan may brake: the power the carriage feeds back
+/// at the speed v is m a v (the loss-free rigid model, the losses would only take some of it), so it brakes at no more
+/// than P / (m v) = 50 / (6.125 v): 6.565 m/s^2 from the top speed 1.2434 m/s, 8.163 at 1 m/s, 10.204 at 0.8 m/s, below
+/// the 16.327 m/s^2 the motor's torque allows, which binds again below 0.5 m/s. Speeding up is not bounded by it. The plan
+/// takes the ceilings of each speed band of 1/32 of the top speed at the band's top, so it brakes up to 4 % softer.
+#[test]
+fn the_braking_resistor_bounds_the_time_optimal_deceleration() {
+    let mut cfg = ideal_rigid_quick();
+    cfg.set_text("drive.peak_torque_nm = 0.5").unwrap();
+    cfg.set_text("ratings.braking_resistor_peak_w = 50.0").unwrap();
+    let (points, _) = planned(&cfg, "line,0.9");
+    let state = |k: usize| {
+        let x = |i: usize| points[i].1[0];
+        ((x(k + 1) - x(k - 1)) / 2e-3, (x(k + 1) - 2.0 * x(k) + x(k - 1)) / 1e-6)
+    };
+    let braking: Vec<(f64, f64)> = (1..points.len() - 1).map(state).filter(|(_, a)| *a < 0.0).collect();
+    for v in [1.2, 1.0, 0.8] {
+        let (_, a) = braking.iter().copied().min_by(|p, q| (p.0 - v).abs().total_cmp(&(q.0 - v).abs())).unwrap();
+        let by_hand = 50.0 / (6.125 * v);
+        assert!(-a <= by_hand * 1.01 && -a > by_hand * 0.95, "at {v} m/s: braking at {} m/s^2, by hand {by_hand}", -a);
+    }
+    let rising = (1..points.len() - 1).map(|k| state(k).1).fold(0.0, f64::max);
+    assert!((rising - 16.327).abs() < 1e-3 * 16.327, "{rising} m/s^2");
+}
+
+/// The gearbox's maximum input speed caps the plan's top speed below the motor's: 2000 r/min is 209.44 rad/s, 0.83776 m/s
+/// through ratio 5 and 20 mm, less the 1 % kept back, 0.82938 m/s.
+#[test]
+fn the_gearbox_input_speed_caps_the_time_optimal_top_speed() {
+    let mut cfg = ideal_rigid_quick();
+    cfg.set_text("ratings.gearbox_max_input_speed_rpm = 2000.0").unwrap();
+    let by_hand = 0.99 * 2000.0 * std::f64::consts::PI / 30.0 * 0.02 / 5.0;
+    assert!((by_hand - 0.82938).abs() < 1e-5);
+    let (_, top, _, _) = time_optimal_line(&cfg);
+    assert!((top - by_hand).abs() < 1e-3 * by_hand, "{top} m/s, by hand {by_hand} m/s");
+}
+
+/// `profile.time_optimal_margin` takes its share of every limit: at 0.9 the top speed is 0.9 of `TOP` and the
+/// acceleration 0.9 of the 16.327 m/s^2 (the reserve's 0.8 of the torque becomes 0.72), so the line takes
+/// 0.8 / v + v / a + a / j with both 0.9 times as large.
+#[test]
+fn the_time_optimal_margin_plans_at_its_share_of_the_limits() {
+    let mut cfg = ideal_rigid_quick();
+    cfg.set_text("drive.peak_torque_nm = 0.5").unwrap();
+    cfg.set_text("profile.time_optimal_margin = 0.9").unwrap();
+    let (a, v, j) = (0.9 * 16.327, 0.9 * TOP, 1e5);
+    let by_hand = 0.8 / v + v / a + a / j;
+    let (time, top, rising, falling) = time_optimal_line(&cfg);
+    assert!((time - by_hand).abs() < 1.5e-3, "{time} s, by hand {by_hand} s");
+    assert!(
+        (top - v).abs() < 1e-3 * v && (rising - a).abs() < 1e-3 * a && (falling - a).abs() < 1e-3 * a,
+        "{top} m/s, {rising} and {falling} m/s^2, by hand {v} m/s, {a} m/s^2"
+    );
+    cfg.set_text("profile.time_optimal_margin = 1.5").unwrap();
+    assert!(Sim::new(&ENTRY, &cfg).is_err());
+}
+
 /// `profile.cycle_timing = "time_optimal"` times each cycle segment as fast as the motor allows, rest to rest: the
-/// first segment, 0.1 -> 0.9 m, as the time-optimal line above, 0.8 / v + v / a + a / j = 0.71404 s with the motor's
-/// 0.8 x 0.5 N m (a = 16.327 m/s^2, v = 1.256 m/s, j = 1e5 m/s^3), where the S-curve within the axis limits (1 m/s,
+/// first segment, 0.1 -> 0.9 m, as the time-optimal line above, 0.8 / v + v / a + a / j = 0.71970 s with the motor's
+/// 0.8 x 0.5 N m (a = 16.327 m/s^2, v = 1.2434 m/s, j = 1e5 m/s^3), where the S-curve within the axis limits (1 m/s,
 /// 10 m/s^2) takes longer. Measured on the planned setpoint, from its first cycle off the start to its arrival.
 #[test]
 fn a_time_optimal_cycle_segment_takes_the_hand_calculated_time() {
     let mut cfg = ideal_rigid_quick();
     cfg.set_text("drive.peak_torque_nm = 0.5").unwrap();
     let m_total = 4.0 + (1.0e-4 + 25.0 * 0.3e-4) / (0.02 * 0.02);
-    let (a, v, j): (f64, f64, f64) = (0.8 * 0.5 * 5.0 / 0.02 / m_total, 314.0 * 0.02 / 5.0, 1e5);
+    let (a, v, j): (f64, f64, f64) = (0.8 * 0.5 * 5.0 / 0.02 / m_total, TOP, 1e5);
     let by_hand = 0.8 / v + v / a + a / j;
-    assert!((a - 16.327).abs() < 1e-3 && (by_hand - 0.71404).abs() < 1e-5, "{a} m/s^2, {by_hand} s");
+    assert!((a - 16.327).abs() < 1e-3 && (by_hand - 0.71970).abs() < 1e-5, "{a} m/s^2, {by_hand} s");
     let segment = |cfg: &Config| {
         let mut sim = Sim::new(&ENTRY, cfg).unwrap();
         sim.command(sim_components::Command::StartCycle).unwrap();

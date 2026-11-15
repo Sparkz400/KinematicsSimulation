@@ -265,6 +265,12 @@ pub trait Machine: Send {
     fn steady_friction(&self, _tool_pos: &[f64], _tool_vel: &[f64], out: &mut [f64]) {
         out.fill(0.0);
     }
+
+    /// What limits the time-optimal plan among the machine's own parts: per check of `rating_checks` (in its order) the
+    /// value of its signal in the loss-free rigid model at a tool pose, speed and acceleration (a screw's speed, its
+    /// force, a rack's feed force), or NaN where the rigid model does not give it (a life, a sync error). The plan keeps
+    /// each value within its check's limit. Appends nothing where the machine does not tell (no row is planned).
+    fn rigid_checks(&self, _tool_pos: &[f64], _tool_vel: &[f64], _tool_acc: &[f64], _out: &mut Vec<f64>) {}
     /// Kinetic plus potential energy, for the conservation check.
     fn energy(&self, state: &[f64]) -> f64;
     fn set_payload_attached(&mut self, attached: bool);

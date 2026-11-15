@@ -33,7 +33,7 @@ fn plan_across(sim: &Sim, axis: usize) -> Vec<(f64, Vec<f64>)> {
 
 /// The single axis turns its motor 250 rad per metre (gearbox 5 over a 20 mm pulley radius). With its maximum speed at
 /// 200 rad/s, below the rated 314 rad/s where the curve is full, a move across the 1 m stroke cruises at 200 / 250 =
-/// 0.8 m/s. Before, the plan capped every motor at its rated speed and read no maximum: it cruised at 314 / 250 =
+/// 0.8 m/s, less the 1 % the plan keeps back of a speed rating: 0.792 m/s. Before, the plan capped every motor at its rated speed and read no maximum: it cruised at 314 / 250 =
 /// 1.256 m/s.
 #[test]
 fn the_time_optimal_plan_keeps_a_motor_within_its_maximum_speed() {
@@ -42,7 +42,7 @@ fn the_time_optimal_plan_keeps_a_motor_within_its_maximum_speed() {
     cfg.set_text("drive.max_speed_rad_s = 200.0").unwrap();
     let sim = Sim::new(entry, &cfg).unwrap();
     let peak = peak_speed(&plan_across(&sim, 0), 0);
-    assert!(peak <= 0.8 * (1.0 + 1e-6) && peak > 0.8 * (1.0 - 1e-3), "{peak} m/s");
+    assert!(peak <= 0.792 * (1.0 + 1e-6) && peak > 0.792 * (1.0 - 1e-3), "{peak} m/s");
 }
 
 /// Above its rated speed a motor gives less than its full torque, and the plan may use it there: the single axis's curve
@@ -62,7 +62,7 @@ fn the_time_optimal_plan_turns_a_motor_above_its_rated_speed_along_its_curve() {
 }
 
 /// The XYZ portal's Z motor has its own drive table: given a maximum speed of 100 rad/s there, a Z move cruises at
-/// 100 rad/s through r / i = 2 mm (0.2 m/s), while X and Y keep the shared drive. Before, the plan read the shared
+/// 100 rad/s through r / i = 2 mm (0.2 m/s, less the 1 % kept back: 0.198 m/s), while X and Y keep the shared drive. Before, the plan read the shared
 /// `[drive]` for every motor and cruised Z at the rated 314 rad/s, 0.628 m/s.
 #[test]
 fn the_time_optimal_plan_holds_each_motor_to_its_own_drive() {
@@ -77,7 +77,7 @@ fn the_time_optimal_plan_holds_each_motor_to_its_own_drive() {
     assert_eq!((sim.control.drive_params_of(2).max_speed, sim.control.drive_params_of(0).max_speed), (100.0, 420.0));
     let z = sim.machine.axes().iter().position(|a| a.id == "z").unwrap();
     let peak = peak_speed(&plan_across(&sim, z), z);
-    assert!(peak <= 0.2 * (1.0 + 1e-6) && peak > 0.2 * (1.0 - 1e-3), "{peak} m/s");
+    assert!(peak <= 0.198 * (1.0 + 1e-6) && peak > 0.198 * (1.0 - 1e-3), "{peak} m/s");
     // X keeps the shared maximum: faster than the Z motor's 100 rad/s, 0.2 m/s through its 2 mm, would allow.
     let x = sim.machine.axes().iter().position(|a| a.id == "x").unwrap();
     assert!(peak_speed(&plan_across(&sim, x), x) > 0.5);

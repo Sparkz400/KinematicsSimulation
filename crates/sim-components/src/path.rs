@@ -1587,6 +1587,11 @@ fn highest_fitting(mut low: f64, mut high: f64, ok: impl Fn(f64) -> bool) -> f64
     }
     while high - low > 1e-9 * high {
         let mid = 0.5 * (low + high);
+        // From a low of 0 where nothing above fits, high halves down to the smallest number and the middle rounds to
+        // low: before 15 November that looped for ever (a delta's line planned time-optimal hung the cycle).
+        if mid <= low || mid >= high {
+            break;
+        }
         if ok(mid) { low = mid } else { high = mid }
     }
     low
@@ -1821,12 +1826,63 @@ pub struct PlanLimits {
     /// (`mech::ShaftFriction`, `mech::GearDrag`), all 0 with effects.motor_friction and gearbox_drag off. No entry: none.
     #[serde(default)]
     pub friction: Vec<[f64; 5]>,
+    /// Per motor (in the order of `Machine::motors`) the drive's and the gearbox's ratings that bound the plan beside the
+    /// motor: [the drive's maximum current `ratings.drive_max_current_a` (A, whether or not effects.drive_current_limit
+    /// holds the drive to it), the gearbox's maximum input speed `ratings.gearbox_max_input_speed_rpm` (rad/s), the
+    /// most power the braking resistor takes `ratings.braking_resistor_peak_w` (W, shared out evenly over the motors of
+    /// a line-up that brakes through one module)], each infinite without. No entry: none.
+    #[serde(default)]
+    pub ratings: Vec<[f64; 3]>,
+    /// `profile.time_optimal_margin`: the share of every limit the plan may use, on top of the reserves (1: all).
+    #[serde(default = "one")]
+    pub margin: f64,
+}
+
+fn one() -> f64 {
+    1.0
 }
 
 impl PlanLimits {
     /// The torque share and the belt only, with no gearbox or guide rating and no friction.
     pub fn new(reserve: f64, tension: [f64; 3]) -> Self {
-        Self { reserve, tension, gearbox: Vec::new(), guide: f64::INFINITY, friction: Vec::new() }
+        Self {
+            reserve,
+            tension,
+            gearbox: Vec::new(),
+            guide: f64::INFINITY,
+            friction: Vec::new(),
+            ratings: Vec::new(),
+            margin: 1.0,
+        }
+    }
+
+    /// These limits with the margin taken into the reserves: the torque share and the share of the belt's room.
+    fn with_margin(&self) -> Self {
+        let mut out = self.clone();
+        out.reserve *= self.margin;
+        out.tension[2] *= self.margin;
+        out
+    }
+
+    /// Each motor's drive as the plan holds it: its maximum current no more than the drive's rating, and its maximum
+    /// speed no more than the gearbox's input speed rating, times the margin, less `SPEED_KEPT`.
+    fn rated(&self, drives: &[&DriveParams]) -> Vec<DriveParams> {
+        drives
+            .iter()
+            .enumerate()
+            .map(|(m, drive)| {
+                let [current, speed, _] = self.ratings.get(m).copied().unwrap_or([f64::INFINITY; 3]);
+                let mut drive = (*drive).clone();
+                drive.drive_max_current = drive.drive_max_current.min(current);
+                drive.max_speed = drive.max_speed.min(speed) * self.margin * (1.0 - SPEED_KEPT);
+                drive
+            })
+            .collect()
+    }
+
+    /// The most power motor `m`'s braking may feed back (W), times the margin; infinite without a rating.
+    fn braking(&self, m: usize) -> f64 {
+        self.ratings.get(m).map_or(f64::INFINITY, |r| r[2] * self.margin)
     }
 
     /// The steady friction on motor `m`'s shaft at the speed `speed` (rad/s, at least 0): c tanh(w / smoothing) + b w +
@@ -1864,10 +1920,13 @@ struct MotorCurve {
     step: f64,
     motoring: Vec<f64>,
     braking: Vec<f64>,
+    /// The most power its braking may feed back to the DC link (`PlanLimits::braking`): as it brakes at the speed w its
+    /// torque is held to power / |w| as well, the mechanical power, which the electrical exceeds by the losses.
+    power: f64,
 }
 
 impl MotorCurve {
-    fn new(drive: &DriveParams, reserve: f64, friction: impl Fn(f64) -> f64) -> Self {
+    fn new(drive: &DriveParams, reserve: f64, power: f64, friction: impl Fn(f64) -> f64) -> Self {
         let step = drive.max_speed / CURVE_SAMPLES as f64;
         let most =
             if drive.drive_max_current.is_finite() { drive.torque_of(drive.drive_max_current) } else { f64::INFINITY };
@@ -1887,7 +1946,7 @@ impl MotorCurve {
             motoring.push(drives);
             braking.push(brakes);
         }
-        Self { step, motoring, braking }
+        Self { step, motoring, braking, power: (1.0 - KEPT_BACK) * power }
     }
 
     /// The highest speed the motor may turn at.
@@ -1904,7 +1963,9 @@ impl MotorCurve {
         let (Some(drives), Some(brakes)) = (self.motoring.get(i), self.braking.get(i)) else {
             return (f64::INFINITY, f64::NEG_INFINITY);
         };
-        if speed >= 0.0 { (-brakes, *drives) } else { (-drives, *brakes) }
+        // The braking power's bound is the tightest at the speed itself, among the speeds of its sign up to it.
+        let brakes = brakes.min(self.power / speed.abs());
+        if speed >= 0.0 { (-brakes, *drives) } else { (-drives, brakes) }
     }
 }
 
@@ -1952,11 +2013,13 @@ pub fn plan_time_optimal(
     tolerance: impl Into<Tolerance>,
     slack: f64,
 ) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
-    let ((geo, _), _) = time_optimal_geometry(machine, drives, limits, start, pieces, tolerance, slack)?;
+    let (rated, limits) = (limits.rated(drives), &limits.with_margin());
+    let drives: Vec<&DriveParams> = rated.iter().collect();
+    let ((geo, _), _) = time_optimal_geometry(machine, &drives, limits, start, pieces, tolerance, slack)?;
     let curves: Arc<[MotorCurve]> = drives
         .iter()
         .enumerate()
-        .map(|(m, drive)| MotorCurve::new(drive, limits.reserve, |w| limits.shaft_friction(m, w)))
+        .map(|(m, drive)| MotorCurve::new(drive, limits.reserve, limits.braking(m), |w| limits.shaft_friction(m, w)))
         .collect();
     let places =
         geo.iter().map(|piece| piece_limits(machine, &curves, limits, piece)).collect::<Result<Vec<_>, _>>()?;
@@ -2003,7 +2066,9 @@ pub fn deviation_time_optimal(
     tolerance: impl Into<Tolerance>,
     slack: f64,
 ) -> Result<f64, CommandError> {
-    Ok(time_optimal_geometry(machine, drives, limits, start, pieces, tolerance, slack)?.0.1)
+    let (rated, limits) = (limits.rated(drives), &limits.with_margin());
+    let drives: Vec<&DriveParams> = rated.iter().collect();
+    Ok(time_optimal_geometry(machine, &drives, limits, start, pieces, tolerance, slack)?.0.1)
 }
 
 /// The speed, acceleration and jerk limits along a piece that `plan_time_optimal` uses: speed and acceleration
@@ -2099,6 +2164,7 @@ fn piece_knots(
 ) -> Result<Vec<[f64; 4]>, CommandError> {
     let (hold, step) = (2.0 * cycle, cycle / STEPS_PER_CYCLE);
     let timing = |top: f64, slack: f64| piece_timing(limits, length, [v0, v1, top], hold, step, slack);
+
     // The top speed: the highest that fits, up to the curve's highest. The runs are the same whatever the top until
     // they brake for it, so the higher top is the quicker; it fits while the runs reach it before they meet.
     // shortcut: halving takes the tops that fit as one range from `low`; where the speed curve has two humps with a
@@ -2195,6 +2261,11 @@ const PLACES_MOST: usize = 1000;
 /// The share of each torque and tension limit that the time-optimal plan keeps back, for what falls between its
 /// places and the rounding of its steps.
 const KEPT_BACK: f64 = 2e-4;
+/// The share of each speed rating (a motor's maximum speed, a gearbox's input speed, a screw's speed) that the
+/// time-optimal plan keeps back for the following of the loops: a plan at the motors' 420 rad/s ran them up to 420.66
+/// rad/s (0.16 % over) on a belt gantry's cycle.
+/// shortcut: one fixed share; take it from the velocity loop's overshoot if a machine follows less closely.
+const SPEED_KEPT: f64 = 0.01;
 /// Steps of the time-optimal plan's ramps per profile cycle.
 const STEPS_PER_CYCLE: f64 = 4.0;
 /// The step of the central differences by which the plan reads the motors' speed per speed along the path (m).
@@ -2245,6 +2316,9 @@ struct Place {
     /// Per motor the friction of the guides it drives (`Machine::rigid_friction`), as [c, b] for the torque c + b v it
     /// gives against them at the speed v along the path; empty where the machine tells none.
     guide: Vec<[f64; 2]>,
+    /// Per row (after the motors' rows; none where empty) a part b v of its value that grows with the speed v along the
+    /// path alone (a screw's speed): its value is then c a + b v + d v^2 + e (`Machine::rigid_checks`).
+    speed: Vec<f64>,
     /// Per axis, 3 |p''| v |a| + |p'''| v^3 <= room as [3 |p''|, |p'''|, room]: the part of the axis jerk that speed and
     /// acceleration take on a curve. The rest of the jerk limit is for the ramps.
     bends: Vec<[f64; 3]>,
@@ -2264,7 +2338,11 @@ impl Place {
                 let (least, most) = (c.min(c + b * v).min(0.0), c.max(c + b * v).max(0.0));
                 (low - least, high - most)
             }
-            None => (self.rows[i][3], self.rows[i][4]),
+            None => {
+                // The part b v takes its room off its side, at its most over the speeds up to v, as the friction above.
+                let b = self.speed.get(i).copied().unwrap_or(0.0) * v;
+                (self.rows[i][3] - b.min(0.0), self.rows[i][4] - b.max(0.0))
+            }
         }
     }
 
@@ -2457,6 +2535,7 @@ fn piece_limits(
     // What each motor gives at a standstill, either way: the bounds of its row, and what holds the tool.
     let torque: Vec<f64> = curves.iter().map(|c| c.motoring[0].min(c.braking[0])).collect();
     let zero = vec![0.0; axes.len()];
+    let checks = machine.rating_checks();
     let mut places = Vec::new();
     for [pose, d1, d2, d3] in &derivatives {
         let torques = |vel: &[f64], acc: &[f64]| {
@@ -2552,6 +2631,36 @@ fn piece_limits(
                 rows.push([per_acc[k][1] - still[k][1], per_speed[k][1] - still[k][1], 0.0, -room, room]);
             }
         }
+        // The machine's own parts (`Machine::rigid_checks`), each within its check's limit: a value read at rest, at the
+        // acceleration 1 and at the speeds 1 and 2 along the path gives c a + b v + d v^2 + e. One that grows with the
+        // acceleration keeps `reserve` of its limit, as the torques do; a speed alone, the margin's share less
+        // `SPEED_KEPT`.
+        let mut speed = vec![0.0; rows.len()];
+        if !checks.is_empty() {
+            let values = |vel: &[f64], acc: &[f64]| {
+                let mut out = Vec::new();
+                machine.rigid_checks(pose, vel, acc, &mut out);
+                out
+            };
+            let (twice, four): (Vec<f64>, Vec<f64>) =
+                (d1.iter().map(|x| 2.0 * x).collect(), d2.iter().map(|x| 4.0 * x).collect());
+            let (still, per_acc, once, fast) =
+                (values(&zero, &zero), values(&zero, d1), values(d1, d2), values(&twice, &four));
+            for (k, check) in checks.iter().enumerate().take(still.len()) {
+                let e = still[k];
+                if !e.is_finite() {
+                    continue;
+                }
+                let (c, d) = (per_acc[k] - e, 0.5 * (fast[k] - 2.0 * once[k] + e));
+                let share = if c != 0.0 { reserve } else { limits.margin * (1.0 - SPEED_KEPT) };
+                let room = (1.0 - KEPT_BACK) * share * check.limit;
+                if !(e.abs() < room) {
+                    return Err(CommandError { key: "error-path-rating" });
+                }
+                rows.push([c, d, e, -room, room]);
+                speed.push(once[k] - e - d);
+            }
+        }
         let bends: Vec<[f64; 3]> = axes
             .iter()
             .enumerate()
@@ -2576,7 +2685,7 @@ fn piece_limits(
                 *g = g.map(|t| t / efficiency);
             }
         }
-        let mut place = Place { rows, turn, curves: curves.clone(), guide, bends, top: x.sqrt() };
+        let mut place = Place { rows, turn, curves: curves.clone(), guide, speed, bends, top: x.sqrt() };
         // A motor that turns here and has to hold the tool against more than its curve less its friction leaves no room.
         if (0..motors).any(|m| {
             let (low, high) = place.bounds(m, 0.0);
@@ -2584,9 +2693,10 @@ fn piece_limits(
         }) {
             return Err(CommandError { key: "error-path-torque" });
         }
+        // The motors' rows and the rows with a part that grows with the speed (whose top the formula above overestimates).
         let holds = |place: &Place, v: f64| {
-            (0..motors).all(|m| {
-                let ([_, d, e, ..], (low, high)) = (place.rows[m], place.bounds(m, v));
+            (0..place.rows.len()).filter(|&i| i < motors || place.speed[i] != 0.0).all(|i| {
+                let ([_, d, e, ..], (low, high)) = (place.rows[i], place.bounds(i, v));
                 (low..=high).contains(&(d * v * v + e))
             })
         };
@@ -4079,6 +4189,16 @@ line,0.3,0.13",
         assert_blend_runs_within(&axes, &start, &pieces, tolerance, &[0.4, 0.25], "three quarters");
     }
 
+    /// The halving for a piece's top speed ends where nothing above a low of 0 fits: before 15 November it halved the
+    /// high down to the smallest number, whose middle with 0 rounds to 0, and looped for ever (a line of the four-arm
+    /// delta hung its time-optimal cycle). It ends with the low; and finds a top that fits as before.
+    #[test]
+    fn the_search_for_a_top_speed_ends_where_nothing_above_zero_fits() {
+        assert_eq!(highest_fitting(0.0, 1.0, |top| top == 0.0), 0.0);
+        let found = highest_fitting(0.0, 1.0, |top| top <= 0.3);
+        assert!((found - 0.3).abs() < 1e-9, "{found}");
+    }
+
     /// Places with the same acceleration bound A = 10 m/s^2 both ways at any speed and a top of 1 m/s, except one of
     /// 0.5 m/s in the middle, 10 mm apart.
     fn dip(jerk: f64) -> (Vec<Place>, Vec<f64>) {
@@ -4088,6 +4208,7 @@ line,0.3,0.13",
                 turn: Vec::new(),
                 curves: Arc::from([]),
                 guide: Vec::new(),
+                speed: Vec::new(),
                 bends: Vec::new(),
                 top: if k == 20 { 0.5 } else { 1.0 },
             })
@@ -4202,6 +4323,7 @@ line,0.3,0.13",
                 turn: Vec::new(),
                 curves: Arc::from([]),
                 guide: Vec::new(),
+                speed: Vec::new(),
                 bends: Vec::new(),
                 top: top(k as f64 / count as f64),
             })

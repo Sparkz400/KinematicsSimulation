@@ -492,6 +492,12 @@ impl Machine for Based {
     fn steady_friction(&self, tool_pos: &[f64], tool_vel: &[f64], out: &mut [f64]) {
         self.inner.steady_friction(tool_pos, tool_vel, out)
     }
+    fn rigid_friction(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
+        self.inner.rigid_friction(tool_pos, tool_dir, out)
+    }
+    fn rigid_checks(&self, tool_pos: &[f64], tool_vel: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
+        self.inner.rigid_checks(tool_pos, tool_vel, tool_acc, out)
+    }
     /// The machine's, plus the base's kinetic and elastic energy (its potential energy in gravity left out: one-way the
     /// machine's own energy is not conserved with it anyway). With effects.base_reaction the base's share as the module
     /// has it, which the two together conserve.
