@@ -380,6 +380,8 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
             "effects.gravity" => unloaded,
             "effects.part_heating" | "effects.thermal_feedback" => cold,
             "effects.link_bending" | "effects.link_bending_reaction" => base.get("link_bending").is_err(),
+            // A press frame's stretch where the config gives no frame to stretch (a shared common file's switch).
+            "effects.frame_stretch" => base.get("frame.stretch_stiffness_n_m").is_err(),
             "effects.braking_resistor_heating" => !base.bool("effects.dc_link").unwrap(),
             "effects.base_compliance" => {
                 let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
