@@ -1870,3 +1870,49 @@ fn search_takes_the_configs_own_supply() {
     assert!(table.lines().nth(1).unwrap().starts_with(",1FK7040-2AK7,,6SL3120-1TE13-0AD0,"), "{table}");
     assert!(text(&out.stderr).contains("0 / 1"), "{}", text(&out.stderr));
 }
+
+/// `modes --shapes` writes the app's mode list (`shapes::mode_views` at the start pose), and `workspace` its workspace
+/// map (`shapes::workspace_slice` at the middle of the third axis's range, with each motor's peak torque), on the first
+/// machine that has each; a machine whose motors move its tool as its axes has no map.
+#[test]
+fn the_mode_shapes_and_the_workspace_map_are_written_as_csv() {
+    use sim_components::shapes::{mode_views, workspace_slice};
+    let built = |e: &sim_core::MachineEntry| sim_components::Sim::new(e, &e.config()).unwrap();
+    let start = |e: &sim_core::MachineEntry| e.config().f64s("start.pose").unwrap();
+    let entry = MACHINES.iter().copied().find(|e| !built(e).machine.modes(&start(e)).is_empty()).unwrap();
+    let out = cli(&["modes", entry.id, "--shapes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let views = mode_views(entry, &entry.config(), &start(entry)).unwrap();
+    let lines: Vec<String> = text(&out.stdout).lines().map(String::from).collect();
+    assert!(
+        lines[0].starts_with("mode,hz,damping,linear_hz,linear_damping,shape,stiffness,s0_re,s0_im"),
+        "{}",
+        lines[0]
+    );
+    assert_eq!(lines.len(), 1 + views.len());
+    let first: Vec<&str> = lines[1].split(',').collect();
+    assert_eq!(first[1], format!("{:.4}", views[0].hz));
+    assert_eq!(first.len(), 7 + 2 * views[0].shape.re.len());
+
+    let middle = |sim: &sim_components::Sim| {
+        let axes = sim.machine.axes();
+        (axes.len() >= 3).then(|| (axes[2].min + axes[2].max) / 2.0)
+    };
+    let (entry, sim) = MACHINES
+        .iter()
+        .copied()
+        .map(|e| (e, built(e)))
+        .find(|(_, sim)| middle(sim).is_some_and(|z| sim.machine.condition(&[0.0, 0.0, z]).is_some()))
+        .unwrap();
+    let out = cli(&["workspace", entry.id, "--points", "5"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let peak: Vec<f64> = (0..sim.machine.motors().len()).map(|k| sim.control.drive_params_of(k).peak_torque).collect();
+    let slice = workspace_slice(sim.machine.as_ref(), middle(&sim).unwrap(), 5, &peak).unwrap();
+    let lines: Vec<String> = text(&out.stdout).lines().map(String::from).collect();
+    assert_eq!((lines[0].as_str(), lines.len()), ("x,y,condition,goes,acceleration_m_s2", 26));
+    let centre: Vec<&str> = lines[1 + 12].split(',').collect();
+    assert_eq!(centre[2], format!("{:.6}", slice.condition[12]));
+    assert_eq!(centre[4], format!("{:.4}", slice.acceleration[12]));
+    let flat = MACHINES.iter().copied().find(|e| built(e).machine.condition(&start(e)).is_none()).unwrap();
+    assert_eq!(cli(&["workspace", flat.id]).status.code(), Some(2));
+}

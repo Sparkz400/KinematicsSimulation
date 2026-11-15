@@ -4143,3 +4143,273 @@ fn the_torque_and_error_views_hold_the_motor_model_and_add_up(entry: &'static Ma
     assert_eq!(run.off_path[0][0], 0.0);
 }
 per_machine!(the_torque_and_error_views_hold_the_motor_model_and_add_up);
+
+/// The first registered machine with one axis, one motor and a belt: the single belt axis, without naming it.
+fn belt_axis() -> &'static MachineEntry {
+    MACHINES
+        .iter()
+        .copied()
+        .find(|e| {
+            let machine = (e.build)(&e.config()).unwrap();
+            machine.axes().len() == 1 && machine.motors().len() == 1 && !machine.belt_sections().is_empty()
+        })
+        .unwrap()
+}
+
+/// The mode list of the single belt axis, with the effects that are not smooth at rest switched off (guide friction,
+/// backlash, the gearbox's efficiency, which passes the spring's torque on to the rotor less than it takes back, ripple,
+/// tooth meshing, the brake) and the belt's mass and damping too, so that its elastic model at rest
+/// is a chain of three masses on two springs, motors free: the carriage and payload m1 = 4 + 2 = 6 kg on the belt's
+/// two sections, k1 = EA / L1 + EA / L2; the pulley J_p / r_m^2; the rotor J_r i^2 / r_m^2 behind the gearbox's
+/// k2 = k_g / r_m^2 (r_m = r / (1 + P / EA), the belt fed per radian). k1 is the one `modes` reports its frequency with
+/// (carriage on the belt, pulley held): k1 = m1 (2 pi f)^2. The chain's two modes are the roots of
+/// w^4 - w^2 [k1 (1/m1 + 1/m2) + k2 (1/m2 + 1/m3)] + k1 k2 (m1 + m2 + m3) / (m1 m2 m3) = 0; the lower one, the two-mass
+/// mode of carriage against pulley and rotor, has the shape x1 = 1, x2 = 1 - m1 w^2 / k1, x3 = k2 x2 / (k2 - m3 w^2),
+/// so the motor turns by i x3 / r_m per metre of carriage, against it. The list reports the frequency `modes` reports,
+/// and its shape is the linearised model's; the belt holds most of its strain energy.
+#[test]
+fn the_belt_axis_two_mass_mode_has_the_hand_calculated_shape() {
+    let entry = belt_axis();
+    let mut model = Model::new(entry, "en");
+    for effect in [
+        "guide_friction",
+        "motor_friction",
+        "gearbox_backlash",
+        "gearbox_efficiency",
+        "torque_ripple",
+        "tooth_meshing",
+        "holding_brake",
+        "belt_damping",
+        "belt_mass",
+    ] {
+        model.set_param(&format!("effects.{effect}"), toml::Value::Boolean(false));
+    }
+    model.find_modes();
+    let cfg = sim_components::catalog::resolve(entry, &model.config).unwrap();
+    let pose = cfg.f64s("start.pose").unwrap();
+    let reported = (entry.build)(&cfg).unwrap().modes(&pose);
+    let (_, modes) = model.insight.modes.clone().expect("a mode list");
+    assert_eq!(modes.len(), reported.len());
+    let mode = &modes[0];
+    assert!(mode.hz == reported[0].hz && !mode.from_machine, "{} against {:?}", mode.hz, reported[0]);
+    let get = |key: &str| cfg.f64(key).unwrap();
+    let (ea, pretension, r, ratio) =
+        (get("belt.stiffness_ea_n"), get("belt.pretension_n"), get("geometry.pulley_radius_m"), get("gearbox.ratio"));
+    let r_m = r / (1.0 + pretension / ea);
+    let m1 = get("mass.carriage_kg") + get("mass.payload_kg");
+    let m2 = get("pulley.inertia_kgm2") / (r_m * r_m);
+    let m3 = (get("motor.rotor_inertia_kgm2") + get("gearbox.inertia_at_input_kgm2")) * ratio * ratio / (r_m * r_m);
+    let k1 = m1 * (std::f64::consts::TAU * reported[0].hz).powi(2);
+    let k2 = get("gearbox.stiffness_nm_rad") / (r_m * r_m);
+    let b = k1 * (1.0 / m1 + 1.0 / m2) + k2 * (1.0 / m2 + 1.0 / m3);
+    let c = k1 * k2 * (m1 + m2 + m3) / (m1 * m2 * m3);
+    let w2 = (b - (b * b - 4.0 * c).sqrt()) / 2.0;
+    let x2 = 1.0 - m1 * w2 / k1;
+    let motor_per_metre = ratio * k2 * x2 / (k2 - m3 * w2) / r_m;
+    let linear = mode.linear.expect("a linearised mode");
+    let hand_hz = w2.sqrt() / std::f64::consts::TAU;
+    assert!((linear.hz / hand_hz - 1.0).abs() < 2e-3, "{} Hz against {hand_hz} Hz by hand", linear.hz);
+    // The elastic state starts [x, pulley angle, motor angle]: the motor's amplitude over the carriage's.
+    let (re, im) = (&mode.shape.re, &mode.shape.im);
+    let ratio_shown = (re[2] * re[0] + im[2] * im[0]) / (re[0] * re[0] + im[0] * im[0]);
+    assert!(
+        motor_per_metre < 0.0 && (ratio_shown / motor_per_metre - 1.0).abs() < 5e-3,
+        "{ratio_shown} rad per m against {motor_per_metre} by hand; pulley {} against {}; {} Hz, {hand_hz} by hand; pose {:?}",
+        (re[1] * re[0] + im[1] * im[0]) / (re[0] * re[0] + im[0] * im[0]),
+        x2 / r_m,
+        linear.hz,
+        mode.shape.pose
+    );
+    // The carriage moves by 1 m per unit of the shape (it moves the tool most).
+    assert!((re[0].hypot(im[0]) - 1.0).abs() < 1e-4, "{} {}", re[0], im[0]);
+    assert_eq!(mode.stiffness.first().map(|s| s.0), Some("belt"), "{:?}", mode.stiffness);
+    let shares: f64 = mode.stiffness.iter().map(|s| s.1).sum();
+    assert!((shares - 1.0).abs() < 0.05, "{:?}", mode.stiffness);
+    // The table, and the mode picked for the 3D view, which then swings in it.
+    let table = model.modes_table().unwrap();
+    assert_eq!(
+        table[0],
+        ["Mode", "Frequency [Hz]", "Damping [%]", "Linearised [Hz · %]", "Shape", "Stiffness it lives in"]
+    );
+    assert!(table[1][4] == "linearised" && table[1][5].starts_with("belt "), "{table:?}");
+    model.pick_mode(Some(0));
+    assert_eq!(model.insight.picked, Some(0));
+    let mut sim = sim_components::Sim::new(entry, &model.config).unwrap();
+    sim.step();
+    let at = |t: f64| sim_app::session::mode_scene(&sim, 10.0, t, Some(&mode.shape)).unwrap().tool.unwrap()[0];
+    // A quarter of a swing on, the carriage stands out by the amplitude, 10 times 4 mm.
+    let out = at(0.25) - at(0.0);
+    assert!((out.abs() - 0.04).abs() < 2e-3, "{out}");
+    model.set_language("de");
+    assert_eq!(model.modes_table().unwrap()[1][4], "linearisiert");
+}
+
+/// The path that was run, coloured: the values along it are the analysis's (the distance to the path every millisecond,
+/// `CycleLoad::path_error_series`, at the sample's time; the utilisation the torque-speed chart gives for each sample's
+/// speed and torque), each at the tool's place in the scene, and the point marked is the highest. Read out there, the
+/// table has every quantity.
+#[test]
+fn the_path_is_coloured_by_the_analysis_values_and_its_worst_point_is_their_maximum() {
+    use sim_app::insight::PathQuantity;
+    let entry = belt_axis();
+    let mut model = Model::new(entry, "en");
+    wait_for_data(&mut model);
+    let axis = model.session.axes[0].clone();
+    let file = temp_file(entry, "coloured.path");
+    let at = |share: f64| axis.min + share * (axis.max - axis.min);
+    std::fs::write(&file, format!("line,{:?}\nline,{:?}\n", at(0.5), at(0.8))).unwrap();
+    model.inputs.path_file = file;
+    model.run_analysis(Analysis::Path);
+    wait_for_analysis(&mut model);
+    let quantities = model.path_quantities();
+    for q in [PathQuantity::PathError, PathQuantity::TrackingError, PathQuantity::Speed, PathQuantity::BeltTension] {
+        assert!(quantities.contains(&q), "{q:?} in {quantities:?}");
+    }
+    assert!(quantities.contains(&PathQuantity::Utilisation(0)));
+    let run = model.path_run.as_ref().unwrap().run.clone();
+    let load = model.path_run.as_ref().unwrap().load.clone();
+    let machine = (entry.build)(&model.config).unwrap();
+
+    model.inputs.path_colour = Some(PathQuantity::PathError);
+    let colours = model.path_colours().unwrap();
+    assert_eq!(colours.values.len(), run.time().len());
+    let position = run.column(&format!("axis.{}.position", axis.id)).unwrap();
+    for (i, &t) in run.time().iter().enumerate() {
+        let nearest =
+            load.path_error_series.iter().min_by(|a, b| (a[0] - t).abs().total_cmp(&(b[0] - t).abs())).unwrap();
+        assert_eq!(colours.values[i], nearest[1], "sample {i} at {t} s");
+        assert_eq!(Some(colours.points[i]), machine.scene_point(&[position[i]]));
+    }
+    let top = colours.values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    assert!(colours.values[colours.worst] == top && top == load.path_error_peak && top > 0.0, "{top}");
+
+    model.inputs.path_colour = Some(PathQuantity::Utilisation(0));
+    let colours = model.path_colours().unwrap();
+    let (speed, torque) = (run.column("motor.m.speed"), run.column("motor.m.torque"));
+    let (speed, torque) = match (speed, torque) {
+        (Some(s), Some(t)) => (s, t),
+        _ => {
+            let id = &run.motors[0];
+            (run.column(&format!("motor.{id}.speed")).unwrap(), run.column(&format!("motor.{id}.torque")).unwrap())
+        }
+    };
+    for i in 0..colours.values.len() {
+        let hand = sim_components::charts::torque_utilisation(&run.drives[0], speed[i], torque[i]);
+        assert_eq!(colours.values[i], hand);
+    }
+    let top = colours.values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    assert!(colours.values[colours.worst] == top && top > 0.1 && top < 1.5, "{top}");
+    // Read out at the worst point: the time and every quantity, the utilisation in %.
+    let table = model.path_values_at(colours.worst);
+    assert_eq!(table.len(), 1 + quantities.len());
+    let used = table.iter().find(|row| row[0].starts_with("Utilisation")).unwrap();
+    assert!(shows(&used[1], 100.0 * top) && used[2] == "%", "{used:?}");
+}
+
+/// The workspace map of the linear delta at the centre of its slice, by hand. Upright columns at radius e = column less
+/// plate radius and rods of L, the plate at x = y = 0: each rod rises s = sqrt(L^2 - e^2), and the inverse Jacobian
+/// (carriage travel per plate motion) has the rows [(e / s) u_k, 1], u_k the column's direction outwards. Its J^T J is
+/// diag(1.5 (e/s)^2, 1.5 (e/s)^2, 3): the condition number is sqrt(3) / (sqrt(1.5) e / s) = sqrt(2) s / e. The motor
+/// torque for a plate acceleration a is (r / i) [M (e/s) u_k . a + M a_z + m_p ((2/3)(s/e) u_k . a + a_z / 3)] plus
+/// the weight (r / i)(m_c + m_p / 3) g, with M = m_c + (J_pulley + J_rotor i^2) / r^2 the carriage with its share of
+/// the rods, pulley and rotor, m_p the plate with its share of the rods and the payload. Its worst direction is along
+/// its row, so the largest acceleration in every direction is (T_peak - weight torque) / |row|.
+#[test]
+fn the_workspace_map_has_the_hand_calculated_condition_and_acceleration_at_the_linear_deltas_centre() {
+    let entry = MACHINES.iter().copied().find(|e| e.config().get("geometry.column_incline_deg").is_ok()).unwrap();
+    let mut model = Model::new(entry, "en");
+    // The belt's mass, which the machine lumps on its pulleys by the belt's length, is left out of the hand calculation.
+    model.set_param("effects.belt_mass", toml::Value::Boolean(false));
+    let slice = model.workspace_slice(41).unwrap();
+    let centre = 20 * 41 + 20;
+    let cfg = sim_components::catalog::resolve(entry, &model.config).unwrap();
+    let get = |key: &str| cfg.f64(key).unwrap();
+    assert_eq!(get("geometry.column_incline_deg"), 0.0);
+    let (e, l) = (get("geometry.column_radius_m") - get("geometry.plate_radius_m"), get("geometry.rod_m"));
+    let s = (l * l - e * e).sqrt();
+    let hand_condition = (2f64.sqrt() * s / e).max(e / (2f64.sqrt() * s));
+    assert!(
+        (slice.nodes[centre].0 / hand_condition - 1.0).abs() < 1e-6,
+        "{:?} against {hand_condition}",
+        slice.nodes[centre]
+    );
+    let (r, ratio, share, rods) = (
+        get("geometry.pulley_radius_m"),
+        get("gearbox.ratio"),
+        get("mass.rod_carriage_share"),
+        get("mass.rod_pair_kg"),
+    );
+    let m_c = get("mass.carriage_kg") + share * rods;
+    let m_p = get("mass.plate_kg") + 3.0 * (1.0 - share) * rods + get("mass.payload_kg");
+    let rotor = get("motor.rotor_inertia_kgm2") + get("gearbox.inertia_at_input_kgm2");
+    let big_m = m_c + (get("pulley.inertia_kgm2") + rotor * ratio * ratio) / (r * r);
+    let across = big_m * e / s + 2.0 / 3.0 * m_p * s / e;
+    let row = r / ratio * across.hypot(big_m + m_p / 3.0);
+    let weight = r / ratio * (m_c + m_p / 3.0) * 9.80665;
+    let hand_acceleration = (get("drive.peak_torque_nm") - weight) / row;
+    let shown = slice.acceleration[centre];
+    assert!((shown / hand_acceleration - 1.0).abs() < 1e-6, "{shown} m/s2 against {hand_acceleration} by hand");
+    // Out of reach there is no acceleration; the map's colour choice is the model's input.
+    assert!(slice.acceleration.iter().zip(&slice.nodes).all(|(a, (c, _))| a.is_finite() == c.is_finite()));
+    model.inputs.workspace_by = sim_app::insight::WorkspaceColour::Acceleration;
+    assert!(model.workspace_slice(41).is_some());
+}
+
+/// The bands over the cycle's traces on the machine with the fewest bounds, all but one of its bounds closed to the
+/// config's own value, so that two runs are left (the kept bound at its low and at its high value): at each millisecond
+/// the band is the lower and the higher of the two runs' traces, recorded here by hand as the analysis records a cycle,
+/// and the nominal trace is the config's own cycle.
+#[test]
+fn the_band_over_a_trace_is_the_lowest_and_highest_of_the_bounds_runs() {
+    use sim_components::analysis::{bounds, record_cycle, set_bounded};
+    let entry = fewest_bounds();
+    let mut model = Model::new(entry, "en");
+    model.set_paused(true);
+    model.set_param("effects.thermal_warm_start", toml::Value::Boolean(false));
+    let all = bounds(&model.config).unwrap();
+    let key = payload_key(&model.config);
+    let kept = all.iter().find(|(path, ..)| path == key).unwrap_or(&all[0]).clone();
+    for (path, ..) in all.iter().filter(|(path, ..)| *path != kept.0) {
+        let value = model.config.f64(path).unwrap();
+        model.set_param(&format!("bounds.{path}"), toml::Value::Array(vec![value.into(), value.into()]));
+    }
+    model.trace_bands();
+    assert!(model.bands_tracing());
+    wait_for_analysis(&mut model);
+    let (config, runs) = model.insight.band_runs.clone().unwrap();
+    assert!(config == model.config && runs.runs == 2, "{} runs", runs.runs);
+    let resolved = sim_components::catalog::resolve(entry, &model.config).unwrap();
+    let at = |value: f64| {
+        let mut cfg = resolved.clone();
+        set_bounded(&mut cfg, &kept.0, value).unwrap();
+        record_cycle(entry, &cfg).unwrap()
+    };
+    let (low_run, high_run, nominal) = (at(kept.1), at(kept.2), record_cycle(entry, &model.config).unwrap());
+    let signals = sim_components::Sim::new(entry, &model.config).unwrap().signal_infos();
+    let torque = runs.traces.iter().find(|t| t.signal.id.ends_with(".torque")).unwrap();
+    let i = signals.iter().position(|s| s.id == torque.signal.id).unwrap();
+    let n = low_run.len().max(high_run.len());
+    assert_eq!((torque.low.len(), torque.high.len()), (n, n));
+    for k in 0..n {
+        let values: Vec<f64> = [&low_run, &high_run].iter().filter_map(|run| run.get(k).map(|row| row[i])).collect();
+        let (low, high) = (
+            values.iter().copied().fold(f64::INFINITY, f64::min),
+            values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        );
+        assert!(
+            torque.low[k] == low && torque.high[k] == high,
+            "at {k}: {} {} against {low} {high}",
+            torque.low[k],
+            torque.high[k]
+        );
+    }
+    assert!(torque.nominal == nominal.iter().map(|row| row[i]).collect::<Vec<_>>());
+    // The payload's bound moves the torque: the band has a width.
+    assert!((0..n).any(|k| torque.high[k] > torque.low[k] + 0.01), "{}", kept.0);
+    // The plots in at most `BAND_BUCKETS` stretches, each holding what its samples span; the cloud of operating points.
+    let plots = model.band_plots();
+    assert_eq!(plots.len(), runs.traces.len());
+    let (_, _, stretches) = plots.iter().find(|(title, ..)| title.contains("Torque")).unwrap();
+    assert!(stretches.len() <= sim_app::model::BAND_BUCKETS && stretches.iter().all(|s| s[2] <= s[3]));
+    assert!(model.band_points()[0].len() > 100);
+}

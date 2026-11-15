@@ -21,6 +21,9 @@ pub enum Request {
     Exaggeration(f64),
     /// The 3D view shows the machine swinging in its mode (`mode_scene`) in place of the live state, which waits.
     Mode(bool),
+    /// The mode `mode_scene` shows: one picked from the mode list (`insight::mode_views`), or `None` for the one the
+    /// machine gives (`Machine::mode_shape`).
+    ModeShape(Option<crate::insight::ShownMode>),
     Quit,
 }
 
@@ -100,16 +103,28 @@ pub const MODE_TRAVEL_MOST: f64 = 0.1;
 /// `seconds` after it started, with the mode's true frequency as a label by the tool. `exaggeration` scales the
 /// whole shape through its amplitude, and the scene draws it at true scale (`Scene::exaggeration` 1): the scene
 /// draws the carriage's part of the shape at true scale and only the lean larger, which would distort the shape.
-/// `None` where the machine tells no mode.
-pub fn mode_scene(sim: &Sim, exaggeration: f64, seconds: f64) -> Option<Scene> {
+/// `None` where the machine tells no mode. With `picked` (a mode of the mode list) that mode at its own pose, its
+/// shape complex: the state swings as rest + a (re sin + im cos), every part with its own phase.
+pub fn mode_scene(
+    sim: &Sim,
+    exaggeration: f64,
+    seconds: f64,
+    picked: Option<&crate::insight::ShownMode>,
+) -> Option<Scene> {
     let machine = &sim.machine;
-    let pose = sim.control.planned_pos();
-    let (hz, shape) = machine.mode_shape(pose)?;
+    let (pose, hz, re, im) = match picked.filter(|p| p.re.len() == machine.state_len()) {
+        Some(p) => (p.pose.as_slice(), p.hz, p.re.clone(), p.im.clone()),
+        None => {
+            let (hz, shape) = machine.mode_shape(sim.control.planned_pos())?;
+            let n = shape.len();
+            (sim.control.planned_pos(), hz, shape, vec![0.0; n])
+        }
+    };
     let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
     machine.equilibrium(pose, &mut state, &mut torque);
-    let amplitude =
-        (MODE_TRAVEL * exaggeration).min(MODE_TRAVEL_MOST) * (std::f64::consts::TAU * MODE_SHOWN_HZ * seconds).sin();
-    state.iter_mut().zip(&shape).for_each(|(s, d)| *s += amplitude * d);
+    let (sin, cos) = (std::f64::consts::TAU * MODE_SHOWN_HZ * seconds).sin_cos();
+    let amplitude = (MODE_TRAVEL * exaggeration).min(MODE_TRAVEL_MOST);
+    state.iter_mut().zip(re.iter().zip(&im)).for_each(|(s, (r, i))| *s += amplitude * (r * sin + i * cos));
     let mut scene = Scene { exaggeration: 1.0, ..Scene::default() };
     machine.scene(&state, &mut scene);
     let (mut pos, mut vel) = (vec![0.0; pose.len()], vec![0.0; pose.len()]);
@@ -237,7 +252,12 @@ impl Runner {
                     Err(e) => Err((e.key(), e.detail().into())),
                 }));
             }
-            Request::Pause(_) | Request::Speed(_) | Request::Exaggeration(_) | Request::Mode(_) | Request::Quit => {}
+            Request::Pause(_)
+            | Request::Speed(_)
+            | Request::Exaggeration(_)
+            | Request::Mode(_)
+            | Request::ModeShape(_)
+            | Request::Quit => {}
         }
     }
 
@@ -384,6 +404,7 @@ impl Session {
             let (mut paused, mut speed, mut owed, mut exaggeration) = (false, 1.0, 0.0, 1.0);
             // When the mode started showing; meanwhile the simulation waits.
             let mut mode: Option<Instant> = None;
+            let mut picked: Option<crate::insight::ShownMode> = None;
             let (mut last, mut last_scene) = (Instant::now(), Instant::now() - Duration::from_secs(1));
             let mut batch = Vec::new();
             loop {
@@ -395,6 +416,7 @@ impl Session {
                         Ok(Request::Speed(factor)) => speed = factor.clamp(0.0, 100.0),
                         Ok(Request::Exaggeration(factor)) => exaggeration = factor.clamp(1.0, 1.0e4),
                         Ok(Request::Mode(on)) => mode = if on { mode.or(Some(Instant::now())) } else { None },
+                        Ok(Request::ModeShape(shape)) => picked = shape,
                         Ok(other) => runner.handle(other, &mut batch),
                         Err(TryRecvError::Empty) => break,
                     }
@@ -411,8 +433,9 @@ impl Session {
                 runner.advance(whole, &mut batch);
                 owed -= whole;
                 if now - last_scene > Duration::from_millis(8) {
-                    let swinging =
-                        mode.and_then(|since| mode_scene(&runner.sim, exaggeration, since.elapsed().as_secs_f64()));
+                    let swinging = mode.and_then(|since| {
+                        mode_scene(&runner.sim, exaggeration, since.elapsed().as_secs_f64(), picked.as_ref())
+                    });
                     let scene = swinging.unwrap_or_else(|| {
                         let mut scene = Scene { exaggeration, ..Scene::default() };
                         runner.sim.scene(&mut scene);
@@ -422,7 +445,8 @@ impl Session {
                     batch.push(Event::Scene(scene));
                     last_scene = now;
                     if let Ok(mut news) = news.lock() {
-                        news.has_mode = runner.sim.machine.mode_shape(runner.sim.control.planned_pos()).is_some();
+                        news.has_mode = picked.is_some()
+                            || runner.sim.machine.mode_shape(runner.sim.control.planned_pos()).is_some();
                     }
                 }
                 if let Ok(mut news) = news.lock() {

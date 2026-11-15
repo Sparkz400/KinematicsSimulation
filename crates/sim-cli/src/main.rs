@@ -58,7 +58,8 @@ const COMMON: [&str; 12] = [
     "--lang",
 ];
 /// Options without a value.
-const FLAGS: [&str; 7] = ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal", "--stiffness"];
+const FLAGS: [&str; 8] =
+    ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal", "--stiffness", "--shapes"];
 /// The ways to say what the machine should do: one at most.
 const MOTIONS: [&str; 4] = ["--cycle", "--move", "--trajectory", "--path"];
 
@@ -173,7 +174,8 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("bode") => &["--axis-index", "--from", "--to", "--count", "--amplitude"],
         Some("tuning") => &["--size", "--amplitude"],
         Some("margins") => &["--bands"],
-        Some("modes") => &["--axis-index", "--points"],
+        Some("modes") => &["--axis-index", "--points", "--shapes"],
+        Some("workspace") => &["--z", "--points"],
         Some("replay") => &["--trace", "--map"],
         Some("fit") => {
             &["--trace", "--map", "--sweep", "--sweep-motor", "--amplitude", "--stiffness", "--stiffness-key"]
@@ -220,6 +222,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("tuning") => tuning(args),
         Some("margins") => margins(args),
         Some("modes") => modes(args),
+        Some("workspace") => workspace(args),
         Some("replay") => replay(args, tr),
         Some("fit") => fit(args, tr),
         Some("identify") => identify(args, tr),
@@ -1615,6 +1618,9 @@ fn margins(args: &Args) -> Result<(), Failure> {
 /// each mode, lowest first; a mode a place does not have is left empty.
 fn modes(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
+    if args.flag("--shapes") {
+        return mode_shapes(args, entry, &cfg);
+    }
     let (axis, points) = (axis_index(args, entry, &cfg)?, number(args, "--points", 21.0)?);
     if points < 2.0 || points.fract() != 0.0 {
         return Err(Failure("cli-error-bad-argument", format!("--points {points}")));
@@ -1633,6 +1639,56 @@ fn modes(args: &Args) -> Result<(), Failure> {
             .map(|i| modes.get(i).map_or(",,".into(), |m| format!(",{:.4},{:.5}", m.hz, m.damping)))
             .collect();
         writeln!(out, "{position:.6}{cells}").map_err(io)?;
+    }
+    out.flush().map_err(io)
+}
+
+/// `modes <machine> --shapes`: the modes at the start pose as the app's mode list has them (`shapes::mode_views`): per
+/// mode its frequency and damping as the machine reports them, those of the linearised model's mode its shape is of,
+/// where the shape comes from (`machine` or `linearised`), the share of its strain energy per kind of stiffness, and
+/// the shape itself, per entry of the state its real and imaginary part.
+fn mode_shapes(args: &Args, entry: &'static MachineEntry, cfg: &Config) -> Result<(), Failure> {
+    let views = sim_components::shapes::mode_views(entry, cfg, &cfg.f64s("start.pose")?)?;
+    let n = views.first().map_or(0, |v| v.shape.re.len());
+    let mut out = output(args, "--out")?;
+    let states: String = (0..n).map(|i| format!(",s{i}_re,s{i}_im")).collect();
+    writeln!(out, "mode,hz,damping,linear_hz,linear_damping,shape,stiffness{states}").map_err(io)?;
+    for (i, v) in views.iter().enumerate() {
+        let linear = v.linear.map_or(",".into(), |l| format!("{:.4},{:.5}", l.hz, l.damping));
+        let stiffness: Vec<String> = v.stiffness.iter().map(|(kind, share)| format!("{kind}={share:.4}")).collect();
+        let shape: String = v.shape.re.iter().zip(&v.shape.im).map(|(re, im)| format!(",{re:.6e},{im:.6e}")).collect();
+        let source = if v.from_machine { "machine" } else { "linearised" };
+        writeln!(out, "{},{:.4},{:.5},{linear},{source},{}{shape}", i + 1, v.hz, v.damping, stiffness.join(";"))
+            .map_err(io)?;
+    }
+    out.flush().map_err(io)
+}
+
+/// `workspace <machine>`: the app's workspace map as CSV (`shapes::workspace_slice`): a horizontal slice at `--z` (the
+/// middle of the third axis's range by default) with `--points` nodes a side (61): per node x, y, the condition number
+/// (inf out of reach), whether the machine goes there (1) and the largest tool acceleration in the worst direction in
+/// m/s^2, with each motor's peak torque.
+fn workspace(args: &Args) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let points = number(args, "--points", 61.0)?;
+    if points < 2.0 || points.fract() != 0.0 {
+        return Err(Failure("cli-error-bad-argument", format!("--points {points}")));
+    }
+    let sim = Sim::new(entry, &cfg)?;
+    let axes = sim.machine.axes();
+    let none = || Failure("cli-error-no-workspace", entry.id.to_string());
+    let third = axes.get(2).ok_or_else(none)?;
+    let z = number(args, "--z", (third.min + third.max) / 2.0)?.clamp(third.min, third.max);
+    let peak: Vec<f64> = (0..sim.machine.motors().len()).map(|k| sim.control.drive_params_of(k).peak_torque).collect();
+    let slice =
+        sim_components::shapes::workspace_slice(sim.machine.as_ref(), z, points as usize, &peak).ok_or_else(none)?;
+    let mut out = output(args, "--out")?;
+    writeln!(out, "x,y,condition,goes,acceleration_m_s2").map_err(io)?;
+    let at = |(low, high): (f64, f64), i: usize| low + (high - low) * i as f64 / (slice.n - 1) as f64;
+    for k in 0..slice.n * slice.n {
+        let (x, y) = (at(slice.x, k % slice.n), at(slice.y, k / slice.n));
+        let (condition, acceleration) = (slice.condition[k], slice.acceleration[k]);
+        writeln!(out, "{x:.6},{y:.6},{condition:.6},{},{acceleration:.4}", u8::from(slice.goes[k])).map_err(io)?;
     }
     out.flush().map_err(io)
 }
