@@ -20,6 +20,8 @@ machine-crank-cam = { path = "../machine-crank-cam" }
 machine-hexapod = { path = "../machine-hexapod" }
 machine-cable-robot = { path = "../machine-cable-robot" }
 machine-tripod = { path = "../machine-tripod" }
+
+machine-wafer-handler = { path = "../machine-wafer-handler" }
 sim-netlist = { path = "../sim-netlist" }
 toml.workspace = true
 serde_json.workspace = true

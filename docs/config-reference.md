@@ -18,6 +18,7 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | H | [`crates/machine-hexapod/default.toml`](../crates/machine-hexapod/default.toml) | Hexapod on six electric cylinders, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#hexapod) |
 | TR | [`crates/machine-tripod/default.toml`](../crates/machine-tripod/default.toml) | Tripod (3-RPS tilting table) on three electric cylinders, generic proportions with Siemens 1FK2104-4AF and Hiwin 20-10K3-FDC screws. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#tripod) |
 | CP, CS | [`crates/machine-cable-robot/config/`](../crates/machine-cable-robot/config/) | Planar (4 cables) and spatial (8 cables) cable robots, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Their keys are in [their own section](#cable-robots) |
+| W | [`crates/machine-wafer-handler/default.toml`](../crates/machine-wafer-handler/default.toml) | Wafer handler: an R-theta-Z arm of two equal links in the horizontal plane, its forearm and effector coupled to the shoulder by bands at 2:1 and 1:2, on a column that turns and lifts; sized as an atmospheric handler for 300 mm wafers with Siemens 1FK2103-2AH. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#wafer-handler) |
 
 | ST, IL | [`machines/stepper-axis.toml`](../machines/stepper-axis.toml), [`machines/induction-lift.toml`](../machines/induction-lift.toml) | Machine files with a stepper motor (a NEMA 23 stepper on a small belt axis) and an induction motor (a 1.5 kW four-pole motor on a frequency converter, gearbox 10, vertical belt lift). [estimate] values. Their own keys are in [motor kinds](#motor-kinds) |
 
@@ -1180,6 +1181,49 @@ estimates, values planar / spatial; bounded where they are a part's property):
 | `winch.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | The stops (`effects.hard_stops`) | 1e6, 1000 |
 | `workspace.tool_min`, `tool_max` | m, rad | The tool's box, the axes' ranges; poses in it outside the wrench-feasible workspace are refused (`error-cable-wrench-infeasible`) | −0.6, 0.3 to 0.6, 1.3 / −0.4, −0.3, 0.8, −0.05 (each turn) to 0.4, 0.3, 1.4, 0.05 |
 
+## Wafer handler
+
+The wafer handler's config ([`machine-wafer-handler/default.toml`](../crates/machine-wafer-handler/default.toml)) has the
+tables every machine has (`[sim]`, `[parts]`, `[motor]`, `[gearbox]`, `[thermal]`, `[thermal_feedback]`, `[drive]`,
+`[ratings]`, `[profile]`, `[brake]`, `[base]`, `[bounds]`, `[start]`, `[[cycle.segment]]`) and the effects of the drives
+and the controller. Motors 1 (the column's turn) and 2 (the upper arm) share `[motor]`, `[gearbox]` and `[drive]`; motor
+3 (the lift) has its coupling in `[gearbox.3]` and its velocity loop in `[drive.3]`. The tool pose, `start.pose` and the
+cycle's targets are (r, theta, z): the wafer centre's distance from the column's axis (m), the effector's direction (rad),
+the lift (m). Its own keys:
+
+| Key | Unit | Meaning | Value, source |
+| --- | --- | --- | --- |
+| `effects.joint_elasticity` | | The gearboxes of motors 1 and 2 twist (two bodies per joint); off, the rigid model | true |
+| `effects.band_elasticity` | | The bands in the links stretch: the forearm and the effector on the bands' springs; off, rigid bands | true |
+| `geometry.link_m` | m | Both links' length, shoulder to elbow and elbow to wrist (equal, or the bands would not keep the wrist on the radial line) | 0.32, estimate |
+| `geometry.effector_m` | m | The effector's length from the wrist to the wafer centre | 0.18, estimate |
+| `workspace.min_reach_m`, `max_reach_m` | m | The r axis's range; both must lie within the upper arm's stops and the condition number | 0.04, 0.78, estimates |
+| `workspace.max_condition_number` | | Targets where 1 / sin(phi) passes this are refused (near the full extension) | 5, estimate |
+| `mass.column_inertia_kgm2` | kg m² | What turns with the column: its head, motor 2 and its gearbox, the shoulder pulley | 0.05, estimate |
+| `mass.upper_arm_kg`, `_inertia_kgm2`, `_centre_m` | kg, kg m², m | The upper arm's mass, inertia about its own centre and the centre's distance from the shoulder | 1.5, 0.0128, 0.16, estimates |
+| `mass.forearm_kg`, `_inertia_kgm2`, `_centre_m` | kg, kg m², m | The forearm's, from the elbow | 1.2, 0.01024, 0.16, estimates |
+| `mass.effector_kg`, `_inertia_kgm2`, `_centre_m` | kg, kg m², m | The effector's (fork, pads, wrist pulley), from the wrist | 0.4, 0.004, 0.12, estimates |
+| `mass.payload_kg`, `payload_inertia_kgm2` | kg, kg m² | The wafer, its centre at `geometry.effector_m`, and its inertia about its axis | 0.1276, 1.4355e-3: 300 mm, 775 µm of silicon, catalogue (SEMI M1) |
+| `elbow_band.pulley_radius_m` | m | The band in the upper arm: the elbow pulley's radius (the shoulder pulley's is twice it) | 0.03, estimate |
+| `wrist_band.pulley_radius_m` | m | The band in the forearm: the wrist pulley's radius (the elbow pulley's is half of it) | 0.035, estimate |
+| `elbow_band.`, `wrist_band.span_stiffness_n_m` | N/m | A span's stiffness, E A over its length | 9.4e5 (0.15 × 10 mm spring steel over 0.32 m), estimate |
+| `elbow_band.`, `wrist_band.span_damping_n_s_m` | N s/m | A span's damping, while it holds tension | 750 (about 5 % of critical on the forearm's mode), estimate |
+| `elbow_band.`, `wrist_band.pretension_n` | N | Each span's tension at rest; a span goes slack once k s passes it | 150, estimate |
+| `wafer.hold` | | `"pads"` (friction, the wafer's weight), `"vacuum"` (vacuum pads) or `"edge"` (an edge grip), for `wafer-slip` | `"pads"` |
+| `wafer.friction_coefficient` | | The pads' friction on the wafer | 0.3, estimate |
+| `wafer.vacuum_area_m2`, `vacuum_pa` | m², Pa | With `"vacuum"`: the pads' area and vacuum, A p pressing the wafer on | 3e-4, 6e4, estimates |
+| `wafer.edge_grip_acceleration_m_s2` | m/s² | With `"edge"`: the in-plane acceleration the grip holds | 9.81, estimate |
+| `joint.*` | | The column's joint: friction, stops at ±200° | estimates |
+| `[joint.2]` | | The upper arm's stops over `[joint]`: `min_angle_deg`, `max_angle_deg` from the radial line; between 0 and 180 degrees | 10, 110, estimates |
+| `z_axis.carriage_kg` | kg | What the screw lifts besides the links, the effector and the wafer (the column, motors 1 and 2) | 8, estimate |
+| `slide.*`, `screw.*` | | The lift's guides (0.3 m stroke) and ball screw (16 x 10), as for the screw axis | estimates |
+| `axis.r.*`, `axis.theta.*`, `axis.z.*` | | The axes' limits; `axis.theta.min_angle_deg`, `max_angle_deg` the turn's range | 0.8 m/s, 1.5 m/s², 15 m/s³; ±190°, 4 rad/s, 36 rad/s², 360 rad/s³ (the turn at r = 0.05 m); 0.1 m/s, 1 m/s², 20 m/s³; sized against `wafer-slip` |
+| `ratings.wafer_slip_safety_factor` | | The hold at rest over this is the limit of `wafer-slip` | 1.2, estimate |
+| `ratings.direction_tolerance_rad` | rad | `effector-direction`: how far the effector may turn out of its radial line while it dwells | 5e-4, estimate |
+| `ratings.band_max_pretension_share` | | `elbow-band-slack`, `wrist-band-slack`: the most a span may lose or gain of its pretension | 0.5, estimate |
+| `ratings.settling_tolerance_m`, `settling_tolerance_rad` | m, rad | The hand-off: the wafer centre's r and z, and theta | 1.5e-4, 2e-4, estimates |
+
+Without `effects.gravity` the pads hold nothing (`wafer-slip`'s limit 0) and the Z motor holds nothing either.
 ## `[[cycle.segment]]`
 
 The cycle is a list of segments, run in order and repeated. All three configs have one. It cannot be edited in the parameter panel; `--set "cycle.segment = [{...}, ...]"` replaces it whole (TOML inline tables), and so does "Apply" of the app's optimiser where it changed the cycle's lifts.

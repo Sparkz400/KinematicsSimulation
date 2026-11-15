@@ -255,6 +255,7 @@ default_config! {
     default_spatial_cable_robot: "cable-spatial";
     default_disc_cam: "disc-cam";
     default_tripod: "tripod";
+    default_wafer_handler: "wafer-handler";
 }
 
 shipped_config! {

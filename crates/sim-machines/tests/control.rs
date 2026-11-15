@@ -1241,6 +1241,7 @@ mod across_the_bounds {
         cable_spatial: "cable-spatial",
         disc_cam: "disc-cam",
         tripod: "tripod",
+        wafer_handler: "wafer-handler",
         exct_30: "EXCT-30",
     );
 }
