@@ -595,14 +595,18 @@ impl Mechanism for Arm {
         moving.dynamics(&qm[..l], &qdm[..l], self.g, self.extra(), &mut ml, &mut hl);
         let n = self.ratios.len();
         // T: the moving chain's joints per mechanism joint (l x all).
-        let t = |r: usize, c: usize| -> f64 {
-            match (&self.coupling, r < self.chain.len(), c < n) {
-                (Some(rows), true, true) => rows[r][c],
-                (None, true, true) => (r == c) as u8 as f64,
-                (_, false, false) => (r - self.chain.len() == c - n) as u8 as f64,
-                _ => 0.0,
-            }
-        };
+        let tm: Vec<f64> = (0..l * all)
+            .map(|rc| {
+                let (r, c) = (rc / all, rc % all);
+                match (&self.coupling, r < self.chain.len(), c < n) {
+                    (Some(rows), true, true) => rows[r][c],
+                    (None, true, true) => (r == c) as u8 as f64,
+                    (_, false, false) => (r - self.chain.len() == c - n) as u8 as f64,
+                    _ => 0.0,
+                }
+            })
+            .collect();
+        let t = |r: usize, c: usize| tm[r * all + c];
         // M_urdf T, once for every row of the result (l x all).
         let ml_t: Vec<f64> =
             (0..l * all).map(|rj| (0..l).map(|c| ml[rj / all * l + c] * t(c, rj % all)).sum()).collect();

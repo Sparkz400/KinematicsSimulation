@@ -114,6 +114,9 @@ impl<const N: usize> Lu<N> {
     }
 }
 
+/// Joints (driven and passive) whose load the elastic model's derivatives keep on the stack; more take the heap.
+const ON_STACK: usize = 9;
+
 /// What a mechanism tells the joint machine.
 pub trait Mechanism: Send {
     /// The load's mass matrix M (n x n, row by row, without the rotors) and h with M q'' + h = the torques (forces) at
@@ -524,10 +527,15 @@ impl<M: Mechanism> JointMachine<M> {
     }
 
     fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
+        let (q, _) = self.all_joints(s);
+        self.energy_parts_with(s, &self.load_all(&q, &vec![0.0; q.len()]).0)
+    }
+
+    /// `energy_parts` with the load's mass matrix at rest (all joints, `load_all` at no speed) known.
+    fn energy_parts_with(&self, s: &[f64], mass: &[f64]) -> [f64; 3] {
         let n = self.n();
         let (q, qd) = self.all_joints(s);
         let all = q.len();
-        let (mass, _) = self.load_all(&q, &vec![0.0; all]);
         let mut kinetic =
             0.5 * (0..all).map(|i| (0..all).map(|j| qd[i] * mass[i * all + j] * qd[j]).sum::<f64>()).sum::<f64>();
         let potential = self.mechanism.potential(&q);
@@ -591,7 +599,7 @@ impl<M: Mechanism> JointMachine<M> {
         let (qa, qda) = self.all_joints(s);
         let all = qa.len();
         let (mass, bias) = self.load_all(&qa, &qda);
-        let (_, gravity) = self.load_all(&qa, &vec![0.0; all]);
+        let (at_rest, gravity) = self.load_all(&qa, &vec![0.0; all]);
         let (acc, _) = self.motion(s, torque);
         let losses = self.losses(s, torque);
         for k in 0..n {
@@ -608,7 +616,7 @@ impl<M: Mechanism> JointMachine<M> {
             out.push(torque[k] - parts.iter().sum::<f64>());
         }
         out.extend(&losses.powers);
-        out.extend(self.energy_parts(s));
+        out.extend(self.energy_parts_with(s, &at_rest));
         for k in 0..n {
             let f = &self.joints[k].drive.friction;
             out.extend([qd[k], f.coulomb * (qd[k] / f.smoothing).tanh(), f.viscous * qd[k], 0.0, 1.0]);
@@ -808,10 +816,20 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             joints = self.all_joints(s);
             (&joints.0[..], &joints.1[..])
         };
-        let (mut mass, bias) = self.load_all(qa, qda);
+        // The load, the process and the accelerations on the stack for up to `ON_STACK` joints: this runs four times a
+        // sub-step, and the heap's allocations were a tenth of a six-joint arm's step.
+        let all = n + p;
+        let (mut stack, mut heap) =
+            (([0.0; ON_STACK * ON_STACK], [0.0; ON_STACK], [0.0; ON_STACK], [0.0; ON_STACK]), None);
+        let (mass, bias, process, rhs): (&mut [f64], &mut [f64], &mut [f64], &mut [f64]) = if all <= ON_STACK {
+            (&mut stack.0[..all * all], &mut stack.1[..all], &mut stack.2[..n], &mut stack.3[..all])
+        } else {
+            let (m, b, pr, r) = heap.insert((vec![0.0; all * all], vec![0.0; all], vec![0.0; n], vec![0.0; all]));
+            (m, b, pr, r)
+        };
+        self.mechanism.dynamics(qa, qda, mass, bias);
         let springs = self.passive_torque(&qa[n..], &qda[n..]);
-        let process = self.process(q, qd);
-        let mut rhs = vec![0.0; n + p];
+        self.mechanism.process_torque(q, qd, process);
         for i in 0..p {
             rhs[n + i] = springs[i] - bias[n + i];
         }
@@ -824,13 +842,13 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             out[3 * n + k] = rotor_acc;
             out[4 * n + k] = brake_rate;
         }
-        if !solve_in_place(&mut mass, &mut rhs) {
+        if !solve_in_place(mass, rhs) {
             rhs.fill(f64::NAN);
         }
         let acc = rhs;
         out[n..2 * n].copy_from_slice(&acc[..n]);
         out[at + p..at + 2 * p].copy_from_slice(&acc[n..]);
-        self.flex_rates(s, &acc, out);
+        self.flex_rates(s, acc, out);
     }
 
     fn tool_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
