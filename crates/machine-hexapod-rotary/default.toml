@@ -466,7 +466,7 @@ braking_resistor_rated_rise_k = 200.0
 [start]
 pose = [0.0, 0.0, 0.40, 0.0, 0.0, 0.0]
 
-# A motion base's test cycle: heave up and down, then surge, sway, roll, pitch and yaw, each from the pose before (so
+# A motion base's test cycle: heave up and down, then surge, sway, roll, yaw and pitch, each from the pose before (so
 # that one turns back while the next sets in, as a motion cue does), and back to the level pose, with the seat and its
 # occupant on (payload) all the way.
 [[cycle.segment]]
@@ -495,12 +495,12 @@ dwell_s = 0.1
 payload = true
 
 [[cycle.segment]]
-target = [0.0, 0.0, 0.40, 0.0, 0.12, 0.0]
+target = [0.0, 0.0, 0.40, 0.0, 0.0, 0.15]
 dwell_s = 0.1
 payload = true
 
 [[cycle.segment]]
-target = [0.0, 0.0, 0.40, 0.0, 0.0, 0.15]
+target = [0.0, 0.0, 0.40, 0.0, 0.12, 0.0]
 dwell_s = 0.1
 payload = true
 

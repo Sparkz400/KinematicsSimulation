@@ -990,7 +990,7 @@ daneben.
 1FT2104-5AF mit Planetengetrieben SP100 50:1 auf der Basis, jeder dreht eine Kurbel von 200 mm, jede Kurbel über eine
 Stange von 550 mm mit einem Kugelgelenk an beiden Enden mit der Plattform verbunden; eine Plattform von 35 kg mit einem
 Sitz samt Insasse, 80 kg, 300 mm über den Plattformgelenken. Ihr Zyklus hebt und senkt die Plattform, verschiebt sie dann längs und quer,
-rollt, nickt und giert sie, jeweils aus der Lage davor, und bringt sie waagrecht zurück.
+rollt, giert und nickt sie, jeweils aus der Lage davor, und bringt sie waagrecht zurück.
 
 ```text
 $ sim-cli verdicts hexapod-rotary

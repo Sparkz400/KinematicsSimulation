@@ -24,7 +24,7 @@
 //!          A xi' = diag(m) theta'' + s,  s_i = u_i . t2_i theta_i'^2 - |v_i - t_i theta_i'|^2 / L - u_i . (w x (w x b_i)),
 //!          v_i = v + w x b_i
 //! forward  Newton on the twist: xi = A^-1 (L - |P_i - C_i|), p += v, R = exp(w) R, from the home pose, until the rods'
-//!          lengths are within 1e-13 m; refused (NaN) where it does not converge within 40 steps
+//!          lengths are within 1e-12 m, and one step more; refused (NaN) where it does not converge within 40 steps
 //! ```
 //!
 //! The dead centre: the rod in the plane of the crank and its axis, u_i . t_i = 0, where the motor's torque arm m_i
@@ -317,13 +317,16 @@ impl Geometry {
             if !worst.is_finite() {
                 break;
             }
-            if worst < 1e-13 {
-                converged = true;
-                break;
-            }
             let Some(step) = solve(&Self::constraint(&legs), &miss) else { break };
             p = add(p, [step[0], step[1], step[2]]);
             r = matmul(&exp([step[3], step[4], step[5]]), &r);
+            // Within 1e-12 m one more step: Newton's square takes the rest to the rounding (stopping at 1e-13 left some
+            // poses unconverged by their rounding, stopping at 1e-12 left 1e-13 of noise in the pose, which the
+            // controller's differences of the forward kinematics amplify).
+            if worst < 1e-12 {
+                converged = true;
+                break;
+            }
         }
         if !converged {
             tool.iter_mut().for_each(|v| *v = f64::NAN);
