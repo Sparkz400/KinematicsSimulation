@@ -262,7 +262,7 @@ fn the_setpoint_slack_covers_the_sag_at_rest() {
 /// 14.154 N. The guide at the centre carries the rods' horizontal pull at rest: lambda e with lambda = m_nt g / (3
 /// sqrt(L^2 - e^2)), sqrt(1.21 - 0.2025) = 1.003743, so 2.325 * 9.80665 * 0.45 / (3 * 1.003743) = 3.40732 N.
 #[test]
-fn the_inclined_tripod_at_0_degrees_is_the_vertical_linear_delta() {
+fn the_inclined_columns_at_0_degrees_are_the_vertical_linear_delta() {
     let d = delta(&["effects.torque_ripple = false", "effects.belt_stretch = false"]);
     assert!(d.legs.dir.iter().all(|v| v[0] == 0.0 && v[1] == 0.0 && v[2] == 1.0), "{:?}", d.legs.dir);
     let e = 0.45;

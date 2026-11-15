@@ -418,14 +418,16 @@ machine's character: the tool's inertia counts in the slide times kappa squared 
 
 ## Parallel kinematics: hexapod and cable robots
 
-Two parallel kinematics have crates of their own, `machine-hexapod` and `machine-cable-robot`, run and sized like every
-other machine (`sim-cli analyze hexapod`, `sim-cli verdicts cable-planar`, the app's 3D view, `search`):
+Three parallel kinematics have crates of their own, `machine-hexapod`, `machine-tripod` and `machine-cable-robot`, run
+and sized like every other machine (`sim-cli analyze hexapod`, `sim-cli verdicts cable-planar`, the app's 3D view,
+`search`):
 
 | Id | Mechanism | Drives | Tool pose | Own checks |
 | --- | --- | --- | --- | --- |
 | `hexapod` | Stewart-Gough platform, 25 kg plus up to 30 kg, on six electric cylinders (450 mm retracted, 200 mm stroke) | per leg a ball screw 25 x 10 behind a coupling on a 1FK2105-4AF | x, y, z (m), rx, ry, rz (rad, a rotation vector) | the screw's `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life` per leg, under the leg's force |
 | `cable-planar` | a carriage of 3 kg plus up to 2 kg, a point in a vertical plane, on 4 cables from a frame 2 m x 1.6 m | per cable a winch: 25 mm drum behind a planetary gearbox 5:1 | x, z (m) | `cable-max-tension`, `cable-min-tension` per cable |
 | `cable-spatial` | a platform of 4 kg plus up to 4 kg, six degrees of freedom, on 8 cables from the corners of a frame 2 x 1.6 x 1.8 m | as the planar one, 30 mm drum | x, y, z (m), rx, ry, rz (rad) | as the planar one |
+| `tripod` | 3-RPS tilting table, 20 kg plus 40 kg off its centre, on three electric cylinders (450 mm retracted, 200 mm stroke), a revolute joint at the base and a spherical one at the platform | per leg a ball screw 20 x 10 (Hiwin 20-10K3-FDC) behind a coupling on a 1FK2104-4AF | z (m), rx, ry (rad, tilts about x and y) | the screw's checks per leg; `tripod-leg-force`, `tripod-leg-stroke`, `tripod-revolute-angle`, `tripod-cone-angle` per leg; `tripod-parasitic` |
 
 Their proportions are generic, every value an `[estimate]` but the motor's and drive's (catalogue, as above). Each
 default cycle passes all its verdicts; the cable robots' settling tolerances are requirements of their size (0.3 mm
@@ -459,6 +461,52 @@ and the motor are those of the ball screw axis above. The mechanism gives the pl
 Under its weight the platform held by constant leg forces is unstable (d²/dz² of m g z − Σ f_i L_i < 0), a real
 property that the position loops hold; the standard suite's loss-free configs therefore run without gravity, as the
 six-axis arm's do, and gravity is checked by the hand-calculated leg forces and the default config.
+
+### Tripod
+
+A platform on three legs of variable length: z and two tilts, as tilting tables, tool heads and motion bases use them.
+The form is 3-RPS: each leg an electric cylinder as on the hexapod (motor in line, ball screw, coupling), on a trunnion
+at the base (a revolute joint about the tangent of the base's circle, so the leg swings in the vertical plane through
+the base's centre) and on a ball joint at the platform. The other common form, 3-PRS (vertical slides carrying struts of
+fixed length, as in the Sprint Z3 head), has the same constraints and the same dependent motion; legs of variable length
+are the hexapod's electric cylinders, parts the simulator has. Each leg is a joint of `chain::JointMachine` as on the
+hexapod; the mechanism gives:
+
+- The pose: z, the platform centre's height, and the tilts rx, ry, with R = Rx(rx) Ry(ry) Rz(g): the pure tilt R0 =
+  Rx(rx) Ry(ry), then a turn g about the platform's normal. The three constraints (each platform joint stays in its
+  leg's plane, e_i · (p + R a_i) = 0 with the joints at 0, 120 and 240 degrees) give the three dependent coordinates in
+  closed form: tan g = −sin rx sin ry / (cos rx + cos ry), p_x = rp (cos ry cos g + sin rx sin ry sin g − cos rx cos g) /
+  2, p_y = rp cos ry sin g; to second order p_x ≈ rp (rx² − ry²) / 4, p_y ≈ −rp rx ry / 2, g ≈ −rx ry / 2. The platform's
+  normal is exactly the pure tilt's: the turn is about it alone.
+- Inverse kinematics in closed form (the legs' lengths |p + R a_i − B_i|). The twist (v, w) of the platform solves G xi =
+  (q', 0), G's rows (u_i, b_i × u_i) for the legs and (e_i, b_i × e_i) for the constraints; the tool's rates are S xi
+  (z' = v_z and the tilts' rates from w), so the Jacobian is K = (S A)^-1, A the first three columns of G^-1.
+- Forward kinematics by chord iterations x += K(home)^-1 (q − q(x)) from the centre of the tool's box; after the first,
+  steps with K at that first iterate (far faster near the solution: 5 to 6 evaluations of the legs over the box) as
+  long as each halves the legs' miss, else the chord again for good; until the legs miss by less than 1e-13 m, NaN
+  (refused) after 100 steps. Why it converges over the working range: weighing the error as (dz, rp drx, rp dry) in the max norm, every pose of the box
+  lies within r = 0.04 m of its centre, and a chord step shrinks the error by at least kappa = max ||W (1 − K0^-1 K(x))
+  W^-1|| over the box grown by r (z 0.46 to 0.62 m, tilts ±0.4 rad), which holds every segment the iterations run along.
+  On a grid of 17³ points there kappa is at most 0.595 and changes by less than 0.07 between neighbours, so kappa < 0.7:
+  the iterations converge from the centre to every pose of the box (test
+  `the_chord_iteration_contracts_over_the_grown_working_range`); the faster steps cannot stop that, as each must halve
+  the miss or hand back to the chord.
+- Dynamics by the twist with the constraint forces projected out: G xi' = (q'' − a0, −c0) gives xi' = A q'' + beta; the
+  platform M_xi xi' + c + g = J^T f + C^T lambda, M_xi with the first moment s = R s_b of a payload off centre; A^T takes
+  lambda out (C A = 0) and A^T J^T = 1, so M_q = A^T M_xi A, h = A^T (M_xi beta + c + g). The payload is a body of its own
+  (`mass.payload_kg`, `payload_offset_m`, `payload_inertia_kgm2`); each leg's mass split as on the hexapod.
+- Signals: per leg `leg.<i>.from_middle` (its extension from the middle of the stroke), `leg.<i>.swing` (its angle in its
+  plane from the base's normal, at the revolute joint), `leg.<i>.cone` (its angle against the platform's normal, the
+  spherical joint's cone); the platform's `platform.condition`, the parasitic `platform.x`, `platform.y`, `platform.turn`
+  and `platform.pose_error`, the farthest any point of the joint circle lies from where the pure tilt about (0, 0, z)
+  puts it, sqrt(|d|² + c² + 2 c |(R0^T d)_xy|) with d = (p_x, p_y, 0) and c = 2 rp |sin(g/2)|.
+- Refused: a leg beyond its stroke (`error-joint-beyond-stop`), a swing beyond `workspace.max_revolute_angle_deg`
+  (`error-tripod-revolute-angle`), a cone angle beyond `workspace.max_cone_angle_deg` (`error-tripod-cone-angle`), a
+  condition number of K (tilts weighed by rp) above `workspace.max_condition_number` (`error-tripod-singularity`). Level
+  the condition number is √2; over the shipped box at most 1.62.
+- Verdicts: the screws' as on the hexapod; `tripod-leg-force` (`joint.<i>.force` against `leg.max_force_n`),
+  `tripod-leg-stroke` (`from_middle` against half the stroke), `tripod-revolute-angle`, `tripod-cone-angle` (against the
+  joints' limits), and `tripod-parasitic` (`platform.pose_error` against `ratings.parasitic_tolerance_m`, where given).
 
 ### Cable robots
 
@@ -586,6 +634,16 @@ weight. Cable robots: at the planar centre each cable is 1.283539 m long (arc an
 takes below its band is held at the bound and the others carry the rest (8.485 N each by hand); the spatial robot's
 forward of inverse returns its poses within 1e-10.
 
+Machine tests (`machine-tripod`): the standard suite and the default cycle with all verdicts. Level at z = 0.54 m every
+leg is 0.5491812 m long; tilted 0.15 rad about x the centre shifts by rp (1 − cos 0.15) / 2 = 1.1229 mm and the legs are
+0.5489779, 0.5750463 and 0.5241851 m; at (0.15, 0.1) rad the closed form's turn and shift (−7.5203 mrad, 0.61207 and
+−1.49654 mm) match their second order and keep each platform joint in its leg's plane; forward of inverse to 1e-12 on 9³
+poses; the chord step contracts by under 0.7 over the grown box; level the Jacobian's rows are u_z (1, rp sin t_i, −rp
+cos t_i) and its condition number √2; the legs hold the centred 62.7 kg with m g / (3 u_z) = 208.4437 N (0.331749 N m
+at the motors), the offset load by moment balance with 274.9330 and 175.1991 N, and push 250.9544 N each rising at 2
+m/s²; the platform's momentum on a compliant base carries the payload's offset; each new verdict's value and limit by
+hand, and the joints' limits refuse the level pose 0.1° below its 10.49°.
+
 Pneumatic cylinder tests (`sim-components` pneumatic.rs, `sim-machines/tests/pneumatic.rs`): p A at 6 bar on both
 sides (482.5 and 414.7 N, Festo's 483 and 415); the ISO 6358 choked flow C p ρ0 and the elliptic law; the meter-out
 throttled speed C ρ0 R T0 / A2 (0.1443 m/s within 1 %, the shipped Z's 0.2156 m/s within 3 %); the air springs' natural
@@ -618,6 +676,9 @@ a cylinder too stiff for the step refused. The file passes the standard suite wi
 - Not built yet: mechanical cams, electronic cams and flying saw profiles.
 - Hexapod: the legs' own turning about their base joints and the payload's inertia are left out; one stiffness per leg
   (the screw's softest nut position); no modes reported (`resonance_hz`) for it yet.
+- Tripod: the legs' swing about their base joints is left out, as on the hexapod; no friction or play in the revolute
+  and spherical joints; one stiffness per leg (the screw's softest nut position); the forward kinematics' convergence is
+  shown for the shipped box (a config with another geometry or box should run that test's check again).
 - Cable robots: the cables' mass and sag are left out; the wrench-feasible workspace is the static one (the cycle's
   accelerations are judged by the tension verdicts, not planned around); near the workspace's edge the motors'
   stretch compensation counts on the closed form's tensions where the distribution holds a cable at a bound.

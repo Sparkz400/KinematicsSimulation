@@ -442,15 +442,16 @@ delta H4“).
 
 ## Parallelkinematiken: Hexapod und Seilroboter
 
-Zwei Parallelkinematiken haben eigene Crates, `machine-hexapod` und `machine-cable-robot`, und werden wie jede andere
-Maschine gerechnet und ausgelegt (`sim-cli analyze hexapod`, `sim-cli verdicts cable-planar`, die 3D-Ansicht der App,
-`search`):
+Drei Parallelkinematiken haben eigene Crates, `machine-hexapod`, `machine-tripod` und `machine-cable-robot`, und werden
+wie jede andere Maschine gerechnet und ausgelegt (`sim-cli analyze hexapod`, `sim-cli verdicts cable-planar`, die
+3D-Ansicht der App, `search`):
 
 | Id | Mechanik | Antriebe | Werkzeuglage | Eigene Prüfungen |
 | --- | --- | --- | --- | --- |
 | `hexapod` | Stewart-Gough-Plattform, 25 kg und bis zu 30 kg darauf, auf sechs elektrischen Zylindern (450 mm eingefahren, 200 mm Hub) | je Bein ein Kugelgewindetrieb 25 x 10 hinter einer Kupplung an einem 1FK2105-4AF | x, y, z (m), rx, ry, rz (rad, ein Drehvektor) | `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life` der Spindel je Bein, unter der Kraft des Beins |
 | `cable-planar` | ein Schlitten von 3 kg und bis zu 2 kg, ein Punkt in einer senkrechten Ebene, an 4 Seilen aus einem Gestell 2 m x 1,6 m | je Seil eine Winde: Trommel 25 mm hinter einem Planetengetriebe 5:1 | x, z (m) | `cable-max-tension`, `cable-min-tension` je Seil |
 | `cable-spatial` | eine Plattform von 4 kg und bis zu 4 kg, sechs Freiheitsgrade, an 8 Seilen aus den Ecken eines Gestells 2 x 1,6 x 1,8 m | wie der ebene, Trommel 30 mm | x, y, z (m), rx, ry, rz (rad) | wie der ebene |
+| `tripod` | 3-RPS-Schwenktisch, 20 kg und 40 kg außermittig darauf, auf drei elektrischen Zylindern (450 mm eingefahren, 200 mm Hub), ein Drehgelenk an der Basis, ein Kugelgelenk an der Plattform | je Bein ein Kugelgewindetrieb 20 x 10 (Hiwin 20-10K3-FDC) hinter einer Kupplung an einem 1FK2104-4AF | z (m), rx, ry (rad, Neigungen um x und y) | die der Spindel je Bein; `tripod-leg-force`, `tripod-leg-stroke`, `tripod-revolute-angle`, `tripod-cone-angle` je Bein; `tripod-parasitic` |
 
 Ihre Maße sind allgemein gehalten, jeder Wert ein `[estimate]` bis auf die von Motor und Antrieb (Katalog, wie oben).
 Jeder Standardzyklus besteht alle seine Prüfungen; die Beruhigungstoleranzen der Seilroboter sind Anforderungen ihrer
@@ -485,6 +486,57 @@ Unter ihrem Gewicht ist die Plattform, von festen Beinkräften gehalten, instabi
 eine echte Eigenschaft, die die Lageregler halten; die verlustfreien Konfigurationen der Standardprüfungen laufen daher
 ohne Schwerkraft wie die des Sechsachsers, und die Schwerkraft prüfen die von Hand gerechneten Beinkräfte und die
 Standardkonfiguration.
+
+### Tripod
+
+Eine Plattform auf drei Beinen veränderlicher Länge: z und zwei Neigungen, wie sie Schwenktische, Werkzeugköpfe und
+Bewegungsplattformen nutzen. Die Bauform ist 3-RPS: jedes Bein ein elektrischer Zylinder wie am Hexapod (Motor in
+Linie, Kugelgewindetrieb, Kupplung), an der Basis in einem Drehzapfen (Drehgelenk um die Tangente des Basiskreises, so
+schwenkt das Bein in der senkrechten Ebene durch die Mitte der Basis) und an der Plattform in einem Kugelgelenk. Die
+andere übliche Bauform, 3-PRS (senkrechte Schlitten mit Streben fester Länge, wie im Sprint-Z3-Kopf), hat dieselben
+Zwangsbedingungen und dieselbe abhängige Bewegung; Beine veränderlicher Länge sind die elektrischen Zylinder des
+Hexapods, Teile, die der Simulator hat. Jedes Bein ist ein Gelenk von `chain::JointMachine` wie am Hexapod; die Mechanik
+gibt:
+
+- Die Lage: z, die Höhe der Plattformmitte, und die Neigungen rx, ry, mit R = Rx(rx) Ry(ry) Rz(g): die reine Neigung
+  R0 = Rx(rx) Ry(ry), dann eine Drehung g um die Normale der Plattform. Die drei Zwangsbedingungen (jedes
+  Plattformgelenk bleibt in der Ebene seines Beins, e_i · (p + R a_i) = 0 mit den Gelenken bei 0, 120 und 240 Grad)
+  geben die drei abhängigen Koordinaten geschlossen: tan g = −sin rx sin ry / (cos rx + cos ry), p_x = rp (cos ry cos g
+  + sin rx sin ry sin g − cos rx cos g) / 2, p_y = rp cos ry sin g; in zweiter Ordnung p_x ≈ rp (rx² − ry²) / 4, p_y ≈
+  −rp rx ry / 2, g ≈ −rx ry / 2. Die Normale der Plattform ist genau die der reinen Neigung: die Drehung geht nur um sie.
+- Inverse Kinematik geschlossen (die Beinlängen |p + R a_i − B_i|). Die Bewegung (v, w) der Plattform löst G xi = (q',
+  0), die Zeilen von G (u_i, b_i × u_i) für die Beine und (e_i, b_i × e_i) für die Zwangsbedingungen; die Raten des
+  Werkzeugs sind S xi (z' = v_z und die Neigungsraten aus w), die Jacobi-Matrix also K = (S A)^-1, A die ersten drei
+  Spalten von G^-1.
+- Vorwärtskinematik mit Sehnenschritten x += K(home)^-1 (q − q(x)) von der Mitte des Werkzeugquaders aus; nach dem
+  ersten Schritte mit K an diesem ersten Punkt (nahe der Lösung weit schneller: 5 bis 6 Auswertungen der Beine über den
+  Quader), solange jeder den Fehler der Beine halbiert, sonst endgültig wieder Sehnenschritte; bis die Beine um weniger
+  als 1e-13 m verfehlen, NaN (abgelehnt) nach 100 Schritten. Warum das im Arbeitsraum konvergiert: mit dem Fehler
+  gewichtet als (dz, rp drx, rp dry) in der Maximumnorm liegt jede Lage des Quaders höchstens r = 0,04 m von seiner Mitte,
+  und ein Sehnenschritt verkleinert den Fehler mindestens um kappa = max ||W (1 − K0^-1 K(x)) W^-1|| über den um r
+  vergrößerten Quader (z 0,46 bis 0,62 m, Neigungen ±0,4 rad), der jede Strecke enthält, entlang der die Schritte laufen.
+  Auf einem Gitter von 17³ Punkten dort ist kappa höchstens 0,595 und ändert sich zwischen Nachbarn um weniger als
+  0,07, also kappa < 0,7: die Schritte konvergieren von der Mitte zu jeder Lage des Quaders (Test
+  `the_chord_iteration_contracts_over_the_grown_working_range`); die schnelleren Schritte können das nicht verhindern,
+  denn jeder muss den Fehler halbieren oder an die Sehne zurückgeben.
+- Dynamik über die Bewegung der Plattform, die Zwangskräfte herausprojiziert: G xi' = (q'' − a0, −c0) gibt xi' = A q''
+  + beta; die Plattform M_xi xi' + c + g = J^T f + C^T lambda, M_xi mit dem ersten Moment s = R s_b einer außermittigen
+  Nutzlast; A^T nimmt lambda heraus (C A = 0) und A^T J^T = 1, also M_q = A^T M_xi A, h = A^T (M_xi beta + c + g). Die
+  Nutzlast ist ein Körper für sich (`mass.payload_kg`, `payload_offset_m`, `payload_inertia_kgm2`); die Masse jedes
+  Beins wird aufgeteilt wie am Hexapod.
+- Signale: je Bein `leg.<i>.from_middle` (sein Auszug von der Hubmitte), `leg.<i>.swing` (sein Winkel in seiner Ebene
+  gegen die Normale der Basis, am Drehgelenk), `leg.<i>.cone` (sein Winkel gegen die Normale der Plattform, der Kegel
+  des Kugelgelenks); die der Plattform `platform.condition`, die parasitären `platform.x`, `platform.y`, `platform.turn`
+  und `platform.pose_error`, der größte Abstand eines Punkts des Gelenkkreises von dort, wohin ihn die reine Neigung um
+  (0, 0, z) brächte, sqrt(|d|² + c² + 2 c |(R0^T d)_xy|) mit d = (p_x, p_y, 0) und c = 2 rp |sin(g/2)|.
+- Abgelehnt: ein Bein über seinen Hub hinaus (`error-joint-beyond-stop`), ein Schwenkwinkel über
+  `workspace.max_revolute_angle_deg` (`error-tripod-revolute-angle`), ein Kegelwinkel über `workspace.max_cone_angle_deg`
+  (`error-tripod-cone-angle`), eine Konditionszahl von K (Neigungen mit rp gewichtet) über
+  `workspace.max_condition_number` (`error-tripod-singularity`). Waagrecht ist die Konditionszahl √2, im ausgelieferten
+  Quader höchstens 1,62.
+- Prüfungen: die der Spindeln wie am Hexapod; `tripod-leg-force` (`joint.<i>.force` gegen `leg.max_force_n`),
+  `tripod-leg-stroke` (`from_middle` gegen den halben Hub), `tripod-revolute-angle`, `tripod-cone-angle` (gegen die
+  Grenzen der Gelenke) und `tripod-parasitic` (`platform.pose_error` gegen `ratings.parasitic_tolerance_m`, wo gegeben).
 
 ### Seilroboter
 
@@ -626,6 +678,18 @@ mehr; 5 cm unter den oberen Rollen wird die Lage abgelehnt; ein Seil, das die ge
 wird an der Grenze gehalten und die anderen tragen den Rest (je 8,485 N von Hand); vorwärts der inversen gibt die Lagen
 des räumlichen auf 1e-10 zurück.
 
+Maschinentests (`machine-tripod`): die Standardprüfungen und der Standardzyklus mit allen Prüfungen. Waagrecht bei z =
+0,54 m ist jedes Bein 0,5491812 m lang; um 0,15 rad um x geneigt verschiebt sich die Mitte um rp (1 − cos 0,15) / 2 =
+1,1229 mm und die Beine sind 0,5489779, 0,5750463 und 0,5241851 m lang; bei (0,15, 0,1) rad stimmen Drehung und
+Verschiebung der geschlossenen Form (−7,5203 mrad, 0,61207 und −1,49654 mm) mit ihrer zweiten Ordnung überein und halten
+jedes Plattformgelenk in der Ebene seines Beins; vorwärts der inversen auf 1e-12 an 9³ Lagen; der Sehnenschritt zieht
+über den vergrößerten Quader um weniger als 0,7 zusammen; waagrecht sind die Zeilen der Jacobi-Matrix u_z (1, rp sin
+t_i, −rp cos t_i) und ihre Konditionszahl √2; die Beine halten die mittigen 62,7 kg mit m g / (3 u_z) = 208,4437 N
+(0,331749 N m an den Motoren), die außermittige Last nach dem Momentengleichgewicht mit 274,9330 und 175,1991 N, und
+drücken beim Heben mit 2 m/s² je 250,9544 N; der Impuls der Plattform auf einer nachgiebigen Basis trägt den Versatz der
+Nutzlast; Wert und Grenze jeder neuen Prüfung von Hand, und die Grenzen der Gelenke lehnen die waagrechte Lage 0,1°
+unter ihren 10,49° ab.
+
 Tests des Pneumatikzylinders (`sim-components` pneumatic.rs, `sim-machines/tests/pneumatic.rs`): p A bei 6 bar auf
 beiden Seiten (482,5 und 414,7 N, Festo druckt 483 und 415); der gesperrte Durchfluss C p ρ0 nach ISO 6358 und das
 elliptische Gesetz; die Geschwindigkeit mit Abluftdrossel C ρ0 R T0 / A2 (0,1443 m/s auf 1 %, die des ausgelieferten Z
@@ -665,6 +729,10 @@ abgelehnt. Die Datei besteht die Standard-Testreihe mit dem Zylinder in Ruhe.
 - Noch nicht gebaut: mechanische Kurvenscheiben, elektronische Kurvenscheiben und Profile für die fliegende Säge.
 - Hexapod: Das Drehen der Beine um ihre Basisgelenke und die Trägheit der Nutzlast fehlen; eine Steifigkeit je Bein
   (an der weichsten Stellung der Mutter); noch keine Eigenfrequenzen (`resonance_hz`).
+- Tripod: Das Schwenken der Beine um ihre Basisgelenke fehlt wie am Hexapod; keine Reibung und kein Spiel in Dreh- und
+  Kugelgelenken; eine Steifigkeit je Bein (an der weichsten Stellung der Mutter); die Konvergenz der Vorwärtskinematik
+  ist für den ausgelieferten Quader gezeigt (eine Konfiguration mit anderer Geometrie oder anderem Quader sollte die
+  Prüfung jenes Tests wiederholen).
 - Seilroboter: Masse und Durchhang der Seile fehlen; der kraftfähige Arbeitsraum ist der statische (die Beschleunigungen
   des Zyklus beurteilen die Seilkraftprüfungen, die Planung weicht ihnen nicht aus); nahe am Rand des Arbeitsraums rechnet
   der Dehnungsausgleich der Motoren mit den Kräften der geschlossenen Form, wo die Verteilung ein Seil an einer Grenze

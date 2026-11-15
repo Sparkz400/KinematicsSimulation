@@ -1161,6 +1161,52 @@ The links' modes (the upper arm's bend at 88 Hz) lie well above the gears' modes
 
 The joints' units are their own (`JointSpec::unit`), no longer the axes': a joint's position signal, its force's unit and whether it has a gearbox output torque follow the joint. The time-optimal planner reads the motors' limits through `feedforward_torque_moving`, so along a line of the tool it slows where a motor reaches its rated speed (on the SCARA's example line, joint 1 near the middle, 307.5 of 314.2 rad/s). Before timing a path as fast as the motors allow, `Controller::plan_path` checks the path as planned within the axis limits: a pose on it the machine cannot go to (a singularity, where the motors would have to turn infinitely fast) is refused with `error-path-range` at once, where the time-optimal timing would slow to a standstill there.
 
+## Tripod
+
+Source: [`machine-tripod/src/lib.rs`](../crates/machine-tripod/src/lib.rs). A 3-RPS platform: three electric cylinders,
+each a revolute joint at the base (about the tangent of the base's circle, radius rb), a ball screw leg of length
+L_i = L_closed + q_i, and a spherical joint at the platform (radius rp), the joints at t_i = 0, 120, 240 degrees. Each
+leg is a joint of `chain::JointMachine` (screw, coupling, friction, stops, motor; rigid and elastic as there). The tool
+pose is x = (z, rx, ry); the platform's place follows in closed form:
+
+```text
+pose        R = Rx(rx) Ry(ry) Rz(g),  p = (p_x, p_y, z)
+constraints e_i . (p + R a_i) = 0   (e_i = (−sin t_i, cos t_i, 0), each platform joint in its leg's plane)
+            ⇔ R12 = R21,  p_x = rp (R11 − R22) / 2,  p_y = −rp R21
+closed form tan g = −sin rx sin ry / (cos rx + cos ry),  p_x = rp (cos ry cos g + sin rx sin ry sin g − cos rx cos g) / 2,
+            p_y = rp cos ry sin g      (second order: p_x ≈ rp (rx² − ry²)/4,  p_y ≈ −rp rx ry / 2,  g ≈ −rx ry / 2)
+inverse     d_i = p + R a_i − B_i,  L_i = |d_i|,  u_i = d_i / L_i,  b_i = R a_i
+twist       G xi = (q', 0),  G = [u_i, b_i × u_i ; e_i, b_i × e_i],  A = G⁻¹[:, 0..3],  xi = A q'
+rates       z' = v_z,  rx' = w_x + tan ry (sin rx w_y − cos rx w_z),  ry' = cos rx w_y + sin rx w_z;  K⁻¹ = S A
+forward     chord x += K(home)⁻¹ (q − q(x)), then K(x1)⁻¹ while each step halves the miss; to 1e-13 m
+accelerat.  G xi' = (q'' − a0, −c0),  a0_i = (|w_i|² − (u_i · w_i)²) / L_i + u_i · (w × (w × b_i)),  w_i = v + w × b_i,
+            c0_i = e_i · (w × (w × b_i));  xi' = A q'' + β,  β = G⁻¹ (−a0, −c0)
+platform    M_xi = [[m 1, −[s]×], [[s]×, I_p]],  s = R s_b,  I_p = R I_b Rᵀ   (about the platform centre)
+            c = (w × (w × s), w × I_p w),  g = (0, 0, m g, g s_y, −g s_x, 0)
+joints      M_q = Aᵀ M_xi A,  h = Aᵀ (M_xi β + c + g),  M_q q'' + h = f      (Aᵀ Cᵀ = 0, Aᵀ Jᵀ = 1)
+potential   V = g (m p_z + s_z)
+momentum    L = m v + w × s,  H_O = s × v + I_p w + p × L,  first moment m p + s
+```
+
+m, s_b and I_b (platform frame, about the centre) sum the platform (`mass.platform_kg`, `platform_inertia_kgm2`), the
+legs' platform shares (`leg.platform_share` of `leg.mass_kg` at each platform joint) and, attached, the payload
+(`mass.payload_kg` at `payload_offset_m` with its own `payload_inertia_kgm2`, by the parallel axis theorem). The
+constraint forces at the base joints (along e_i) do no work along the platform's admissible motions, so projecting the
+Newton-Euler equations with Aᵀ removes them; at rest f = Aᵀ g. Level with the load centred each leg carries m g / (3
+u_z); off centre by c the vertical shares are m g (1/3 + 2 c · â_i / (3 rp)).
+
+**Signals**: the screws' per leg; `leg.<i>.from_middle` (q_i − stroke/2), `leg.<i>.swing` (atan2(u_i · r̂_i, u_iz), the
+revolute joint's angle from the base's normal), `leg.<i>.cone` (acos(u_i · R e_z)); `platform.condition` (of diag(1,
+rp, rp) K⁻¹, which K shares), `platform.x`, `platform.y`, `platform.turn` (p_x, p_y, g) and `platform.pose_error`, the
+largest distance of a point of the joint circle from the pure tilt's place, sqrt(|d|² + c² + 2 c |(R0ᵀ d)_xy|), d = (p_x,
+p_y, 0), c = 2 rp |sin(g/2)|. **Verdicts**: `tripod-leg-force`, `tripod-leg-stroke`, `tripod-revolute-angle`,
+`tripod-cone-angle` per leg and `tripod-parasitic` (with `ratings.parasitic_tolerance_m`). **Refusals**:
+`error-tripod-revolute-angle`, `error-tripod-cone-angle`, `error-tripod-singularity`, and the joint machine's
+`error-joint-beyond-stop`. **Base**: `frame_momentum` as above with the rotors' spin along u_i, for `base::mount`.
+
+Not modelled: the legs' swing inertia about their base joints, friction and play in the revolute and spherical joints,
+the joints' and the platform's elasticity (the legs' screws are the only springs).
+
 ## Compliant base
 
 Source: [`sim-components/src/base.rs`](../crates/sim-components/src/base.rs). With `effects.base_compliance` every machine and machine file stands on a base that gives way: a rigid body on springs in up to six directions, translation along x, y, z and a small tilt about x, y, z through `base.pivot_m`, in the frame of the tool pose (x, y, z of the tool; the slides' x along their axis). Each direction with a stiffness above 0 is a state d and its rate after the machine's own:

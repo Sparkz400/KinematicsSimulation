@@ -254,6 +254,7 @@ default_config! {
     default_planar_cable_robot: "cable-planar";
     default_spatial_cable_robot: "cable-spatial";
     default_disc_cam: "disc-cam";
+    default_tripod: "tripod";
 }
 
 shipped_config! {

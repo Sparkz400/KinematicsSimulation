@@ -12,6 +12,7 @@ Deutsche Fassung: [Benutzerhandbuch](de/benutzerhandbuch.md).
 - [Size a delta picker](#size-a-delta-picker)
 - [Size a linear delta](#size-a-linear-delta)
 - [Size a hexapod or a cable robot](#size-a-hexapod-or-a-cable-robot)
+- [Size a tripod](#size-a-tripod)
 - [Run a path and read path error](#run-a-path-and-read-path-error)
 - [Programs: G-code and robot programs](#programs-g-code-and-robot-programs)
 - [Verdicts, search and optimise on a path](#verdicts-search-and-optimise-on-a-path)
@@ -994,6 +995,34 @@ its payload is refused as outside the wrench-feasible workspace. The cables stre
 the modes change over the workspace (`sim-cli modes`): 24.6 Hz at the planar robot's centre. The spatial robot's cables
 run from corner to corner and hold little moment: turns of 0.05 rad already take some near the band's top, and its
 platform rings at up to 0.85 mrad in the dwells (settling 0.84 mm against the 1 mm the config asks).
+
+## Size a tripod
+
+`tripod` is a 3-RPS tilting table: a platform of 20 kg carrying 40 kg off its centre (0.05 m out, 0.1 m up) on three
+electric cylinders, each a Hiwin 20-10K3-FDC ball screw on a Siemens 1FK2104-4AF with an S210, a trunnion at the base
+and a ball joint at the platform (see [mechanisms](mechanisms.md#tripod) and the [config
+reference](config-reference.md#tripod)). The tool pose is z (m) and the tilts rx, ry (rad); the platform's shift in x,
+y and its turn about its normal follow from the legs and are reported (`platform.x`, `platform.y`, `platform.turn`,
+`platform.pose_error`). Its cycle tilts about x, about y raised and both lowered with the part on the table, and goes back level without it:
+
+```text
+$ sim-cli verdicts tripod
+motor-peak,1,0.1955,1.000,ok
+...
+tripod-leg-force,1,376.3,1500,ok
+tripod-leg-stroke,2,0.05161,0.1000,ok
+tripod-revolute-angle,2,0.2100,0.5236,ok
+tripod-cone-angle,2,0.3762,0.6109,ok
+tripod-parasitic,,0.002872,0.005000,ok
+```
+
+Every check passes; the motors are used to a fifth of their peak and run 8 K warm, sized for a heavier load or faster
+tilts. Beyond the screws' checks each leg's force is judged against the cylinder's 1500 N, its extension against its
+stroke, its swing at the trunnion and its cone at the ball joint against 30° and 35°; `tripod-parasitic` judges the
+largest distance of a point of the joint circle from where a pure tilt would put it, 2.9 mm against the 5 mm of
+`ratings.parasitic_tolerance_m` (leave the key out to judge none). A target is refused where a leg would leave its
+stroke or a joint its range, or near a singularity (`workspace.max_condition_number`; level the condition number is
+√2). The velocity loops (`sim-cli margins tripod`) keep at least 128.9° and 11.35 dB, and 110.1° and 9.35 dB across the bounds (`--bands`).
 
 ## Size a stepper or an induction motor
 

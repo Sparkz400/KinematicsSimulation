@@ -1240,6 +1240,7 @@ mod across_the_bounds {
         cable_planar: "cable-planar",
         cable_spatial: "cable-spatial",
         disc_cam: "disc-cam",
+        tripod: "tripod",
         exct_30: "EXCT-30",
     );
 }

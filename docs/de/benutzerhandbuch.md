@@ -13,6 +13,7 @@ Die Referenzdokumente, auf die dieses Handbuch verweist, gibt es nur auf Englisc
 - [Einen Delta-Picker auslegen](#einen-delta-picker-auslegen)
 - [Einen Linear-Delta auslegen](#einen-linear-delta-auslegen)
 - [Einen Hexapod oder einen Seilroboter auslegen](#einen-hexapod-oder-einen-seilroboter-auslegen)
+- [Einen Tripod auslegen](#einen-tripod-auslegen)
 - [Eine Bahn fahren und den Bahnfehler ablesen](#eine-bahn-fahren-und-den-bahnfehler-ablesen)
 - [Programme: G-Code und Roboterprogramme](#programme-g-code-und-roboterprogramme)
 - [Prüfurteile, Suche und Optimierung auf einer Bahn](#prüfurteile-suche-und-optimierung-auf-einer-bahn)
@@ -1012,6 +1013,36 @@ Seile dehnen sich mit EA / l, daher ändern sich Steifigkeit und Eigenfrequenzen
 24,6 Hz in der Mitte des ebenen Roboters. Die Seile des räumlichen laufen von Ecke zu Ecke und halten wenig Moment:
 schon Drehungen von 0,05 rad bringen einige nahe an die Obergrenze des Bands, und seine Plattform schwingt in den
 Verweilzeiten mit bis zu 0,85 mrad (Beruhigung 0,84 mm gegen die 1 mm, die die Konfiguration verlangt).
+
+## Einen Tripod auslegen
+
+`tripod` ist ein 3-RPS-Schwenktisch: eine Plattform von 20 kg mit 40 kg außermittig darauf (0,05 m seitlich, 0,1 m
+hoch) auf drei elektrischen Zylindern, jeder ein Kugelgewindetrieb Hiwin 20-10K3-FDC an einem Siemens 1FK2104-4AF mit
+S210, ein Drehzapfen an der Basis und ein Kugelgelenk an der Plattform (siehe [Mechanismen](mechanismen.md#tripod) und
+die [Konfigurationsreferenz](../config-reference.md#tripod)). Die Werkzeuglage ist z (m) mit den Neigungen rx, ry (rad);
+Verschiebung der Plattform in x, y und ihre Drehung um die Normale folgen aus den Beinen und werden ausgegeben
+(`platform.x`, `platform.y`, `platform.turn`, `platform.pose_error`). Der Zyklus neigt mit dem Teil auf dem Tisch um x, um y
+angehoben und um beide abgesenkt und fährt ohne es zurück waagrecht:
+
+```text
+$ sim-cli verdicts tripod
+motor-peak,1,0.1955,1.000,ok
+...
+tripod-leg-force,1,376.3,1500,ok
+tripod-leg-stroke,2,0.05161,0.1000,ok
+tripod-revolute-angle,2,0.2100,0.5236,ok
+tripod-cone-angle,2,0.3762,0.6109,ok
+tripod-parasitic,,0.002872,0.005000,ok
+```
+
+Alle Prüfungen bestehen; die Motoren sind zu einem Fünftel ihres Spitzenmoments genutzt und werden 8 K warm, ausgelegt
+für schwerere Last oder schnellere Neigungen. Neben den Prüfungen der Spindeln wird die Kraft jedes Beins gegen die
+1500 N des Zylinders geprüft, sein Auszug gegen seinen Hub, sein Schwenkwinkel am Zapfen und sein Kegelwinkel am
+Kugelgelenk gegen 30° und 35°; `tripod-parasitic` prüft den größten Abstand eines Punkts des Gelenkkreises von dort,
+wohin ihn eine reine Neigung brächte, 2,9 mm gegen die 5 mm von `ratings.parasitic_tolerance_m` (ohne den Schlüssel
+wird nichts geprüft). Ein Ziel wird abgelehnt, wo ein Bein seinen Hub oder ein Gelenk seinen Bereich verließe, oder
+nahe einer Singularität (`workspace.max_condition_number`; waagrecht ist die Konditionszahl √2). Die Drehzahlregler
+(`sim-cli margins tripod`) halten mindestens 128,9° und 11,35 dB, über die Grenzen (`--bands`) 110,1° und 9,35 dB.
 
 ## Einen Schrittmotor oder einen Asynchronmotor auslegen
 
