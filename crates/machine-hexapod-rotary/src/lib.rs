@@ -498,6 +498,10 @@ pub struct RotaryPlatform {
     platform: Body,
     payload: Body,
     attached: bool,
+    /// The rods' shares the dynamics counts with the platform: a third of each rod's mass at its platform joint for the
+    /// inertia (the m/3 H^T H of its upper end and middle), a half for the weight (m/6 and m/3).
+    rods_inertia: Body,
+    rods_weight: Body,
     pub crank_mass: f64,
     pub crank_cg: f64,
     pub crank_inertia: f64,
@@ -588,15 +592,21 @@ impl RotaryPlatform {
         }
         let second_moment = PI / 64.0 * (d_out.powi(4) - (d_out - 2.0 * wall).powi(4));
         let euler = PI * PI * cfg.positive("rod.youngs_modulus_pa")? * second_moment / (rod * rod);
+        let rod_mass = cfg.non_negative("rod.mass_kg")?;
+        let at_joints =
+            |m: f64| geo.anchors.iter().fold(body(0.0, [0.0; 3], [0.0; 3]), |sum, a| sum.plus(&body(m, *a, [0.0; 3])));
+        let (rods_inertia, rods_weight) = (at_joints(rod_mass / 3.0), at_joints(rod_mass / 2.0));
         let mech = RotaryPlatform {
             geo,
             platform,
             payload,
             attached: true,
+            rods_inertia,
+            rods_weight,
             crank_mass: cfg.non_negative("crank.mass_kg")?,
             crank_cg: cfg.non_negative("crank.cg_m")?,
             crank_inertia: cfg.positive("crank.inertia_kgm2")?,
-            rod_mass: cfg.non_negative("rod.mass_kg")?,
+            rod_mass,
             g: if cfg.bool("effects.gravity")? { G } else { 0.0 },
             dead_centre_limit: FRAC_PI_2 - cfg.non_negative("ratings.crank_dead_centre_margin_deg")?.to_radians(),
             buckling_limit: euler / cfg.positive("ratings.rod_buckling_safety_factor")?,
@@ -687,11 +697,11 @@ impl RotaryPlatform {
     }
 
     /// The body's mass matrix over the twist (6 x 6), its speed terms c and its weight G, in the base frame.
-    fn twist_terms(&self, m: &Motion) -> (Vec<f64>, [f64; 6], [f64; 6]) {
-        let body = self.body();
+    /// `body` moves, `weight` weighs (the same but where the rods' shares differ).
+    fn twist_terms(&self, m: &Motion, body: &Body, weight: &Body) -> ([f64; 36], [f64; 6], [f64; 6]) {
         let s = mul(&m.r, body.moment);
         let inertia = matmul(&matmul(&m.r, &body.inertia), &transpose(&m.r));
-        let mut mx = vec![0.0; 36];
+        let mut mx = [0.0; 36];
         for i in 0..3 {
             mx[i * 6 + i] = body.mass;
             for j in 0..3 {
@@ -708,26 +718,8 @@ impl RotaryPlatform {
         }
         let w = [m.xi[3], m.xi[4], m.xi[5]];
         let (f, t) = (cross(w, cross(w, s)), cross(w, mul(&inertia, w)));
-        let gravity = [0.0, 0.0, -self.g];
-        let gw = cross(s, gravity);
-        (mx, [f[0], f[1], f[2], t[0], t[1], t[2]], [0.0, 0.0, -body.mass * self.g, gw[0], gw[1], gw[2]])
-    }
-
-    /// Each rod's three points: (mass, Jacobian in theta, acceleration at theta'' = 0), its lower end, upper end and
-    /// middle.
-    fn rod_points(&self, m: &Motion, qd: &[f64], i: usize) -> [(f64, [[f64; 6]; 3], V3); 3] {
-        let leg = &m.legs[i];
-        let mut low = [[0.0; 6]; 3];
-        (0..3).for_each(|r| low[r][i] = leg.t[r]);
-        let a_low = scale(leg.t2, qd[i] * qd[i]);
-        let high = Self::joint_jacobian(m, leg.b);
-        let w = [m.xi[3], m.xi[4], m.xi[5]];
-        let a_high = add(add([m.xi0[0], m.xi0[1], m.xi0[2]], cross([m.xi0[3], m.xi0[4], m.xi0[5]], leg.b)), {
-            cross(w, cross(w, leg.b))
-        });
-        let mid: [[f64; 6]; 3] = std::array::from_fn(|r| std::array::from_fn(|c| 0.5 * (low[r][c] + high[r][c])));
-        let rod = self.rod_mass;
-        [(rod / 6.0, low, a_low), (rod / 6.0, high, a_high), (2.0 * rod / 3.0, mid, scale(add(a_low, a_high), 0.5))]
+        let gw = cross(mul(&m.r, weight.moment), [0.0, 0.0, -self.g]);
+        (mx, [f[0], f[1], f[2], t[0], t[1], t[2]], [0.0, 0.0, -weight.mass * self.g, gw[0], gw[1], gw[2]])
     }
 
     /// The force along each rod (compression positive, N) at crank angles, rates and accelerations: A^T f = W, the
@@ -735,7 +727,8 @@ impl RotaryPlatform {
     pub fn rod_forces(&self, q: &[f64], qd: &[f64], qdd: &[f64]) -> Option<[f64; 6]> {
         let m = self.motion(q, qd)?;
         let xi_acc: [f64; 6] = std::array::from_fn(|r| m.xi0[r] + (0..6).map(|c| m.k[r * 6 + c] * qdd[c]).sum::<f64>());
-        let (mx, c, g) = self.twist_terms(&m);
+        let body = self.body();
+        let (mx, c, g) = self.twist_terms(&m, &body, &body);
         let mut wrench: [f64; 6] =
             std::array::from_fn(|r| (0..6).map(|k| mx[r * 6 + k] * xi_acc[k]).sum::<f64>() + c[r] - g[r]);
         let (v_acc, w_acc, w) =
@@ -766,27 +759,39 @@ impl Mechanism for RotaryPlatform {
             bias.fill(f64::NAN);
             return;
         };
-        let (mx, c, g) = self.twist_terms(&m);
-        let need: Vec<f64> =
-            (0..6).map(|r| (0..6).map(|k| mx[r * 6 + k] * m.xi0[k]).sum::<f64>() + c[r] - g[r]).collect();
+        // Each rod's three points (m/6 at its tip C with Jacobian L, m/6 at its joint P with H, 2m/3 at its middle with
+        // (L + H) / 2) give m/3 (L^T L + H^T H) + m/6 (L^T H + H^T L): the H^T H part a point of m/3 on the platform, the
+        // L^T L part m/3 r^2 on the crank (L only in crank i's column, t_i). Their accelerations at theta'' = 0 likewise:
+        // m/3 (L^T a_C + H^T a_P) + m/6 (L^T a_P + H^T a_C), t . a_C = t . t2 theta'^2 = 0. Their weight m/2 (L_z + H_z).
+        let (inertial, weighing) = (self.body().plus(&self.rods_inertia), self.body().plus(&self.rods_weight));
+        let (mx, c, g) = self.twist_terms(&m, &inertial, &weighing);
+        let need: [f64; 6] =
+            std::array::from_fn(|r| (0..6).map(|k| mx[r * 6 + k] * m.xi0[k]).sum::<f64>() + c[r] - g[r]);
+        // M_xi K, then K^T of it.
+        let mk: [f64; 36] = std::array::from_fn(|rc| (0..6).map(|k| mx[rc / 6 * 6 + k] * m.k[k * 6 + rc % 6]).sum());
         for i in 0..6 {
             bias[i] = (0..6).map(|r| m.k[r * 6 + i] * need[r]).sum();
             for j in 0..6 {
-                mass[i * 6 + j] =
-                    (0..6).map(|r| m.k[r * 6 + i] * (0..6).map(|k| mx[r * 6 + k] * m.k[k * 6 + j]).sum::<f64>()).sum();
+                mass[i * 6 + j] = (0..6).map(|r| m.k[r * 6 + i] * mk[r * 6 + j]).sum();
             }
         }
-        for i in 0..6 {
-            for (pm, jac, a0) in self.rod_points(&m, qd, i) {
-                for r in 0..6 {
-                    for c in 0..6 {
-                        mass[r * 6 + c] += pm * (0..3).map(|k| jac[k][r] * jac[k][c]).sum::<f64>();
-                    }
-                    bias[r] += pm * ((0..3).map(|k| jac[k][r] * a0[k]).sum::<f64>() + self.g * jac[2][r]);
-                }
+        let (rod, w) = (self.rod_mass, [m.xi[3], m.xi[4], m.xi[5]]);
+        for (i, leg) in m.legs.iter().enumerate() {
+            let high = Self::joint_jacobian(&m, leg.b);
+            let a_high = add(add([m.xi0[0], m.xi0[1], m.xi0[2]], cross([m.xi0[3], m.xi0[4], m.xi0[5]], leg.b)), {
+                cross(w, cross(w, leg.b))
+            });
+            let a_low = scale(leg.t2, qd[i] * qd[i]);
+            for c in 0..6 {
+                let col = [high[0][c], high[1][c], high[2][c]];
+                let cross_term = rod / 6.0 * dot(leg.t, col);
+                mass[i * 6 + c] += cross_term;
+                mass[c * 6 + i] += cross_term;
+                bias[c] += rod / 6.0 * dot(col, a_low);
             }
-            mass[i * 6 + i] += self.crank_inertia;
-            bias[i] += self.crank_mass * self.g * self.crank_cg * q[i].cos();
+            mass[i * 6 + i] += self.crank_inertia + rod / 3.0 * dot(leg.t, leg.t);
+            bias[i] += rod / 6.0 * dot(leg.t, a_high)
+                + self.g * (self.crank_mass * self.crank_cg + 0.5 * rod * self.geo.crank) * q[i].cos();
         }
     }
 
