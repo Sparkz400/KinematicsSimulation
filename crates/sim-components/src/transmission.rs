@@ -273,6 +273,10 @@ impl BallScrew {
     }
 }
 
+/// The standard pressure angle of a rack and pinion's teeth (DIN 867), in the normal section.
+/// shortcut: every rack is taken at 20 degrees; give `[rack]` a pressure angle if a file uses another.
+const RACK_PRESSURE_ANGLE_DEG: f64 = 20.0;
+
 /// A pinion on a rack. Config `[rack]`: `module_m`, `teeth`, `helix_angle_deg`, `efficiency`, `stiffness_n_m` (mesh and
 /// rack mounting), `backlash_m`, `pinion_inertia_kgm2`, `rated_feed_force_n` (the maker's permissible feed force of the
 /// pair), `service_factor` (K_A).
@@ -479,6 +483,15 @@ impl RackPinion {
     /// the load drives it back.
     pub fn feed_force(force: f64, speed: f64, efficiency: f64) -> f64 {
         if force * speed >= 0.0 { force / efficiency } else { force * efficiency }
+    }
+
+    /// The radial load the pinion puts on the gearbox's output shaft for the force `tooth_force` on its teeth: the tooth
+    /// force itself, tangential to the pinion and so across the shaft, and the force that pushes pinion and rack apart,
+    /// F tan(alpha_n) / cos(beta), at right angles to it: |F| sqrt(1 + (tan(alpha_n) / cos(beta))^2). The axial force of
+    /// a helical pinion, F tan(beta), and the tilt it puts on the shaft are left out.
+    pub fn radial_load(&self, tooth_force: f64) -> f64 {
+        let apart = RACK_PRESSURE_ANGLE_DEG.to_radians().tan() / self.helix_angle.cos();
+        tooth_force.abs() * (1.0 + apart * apart).sqrt()
     }
 
     /// "rack-feed-force": the force on the teeth of joint `id` (signal `rack.<id>.feed_force`) against `allowed_force`.

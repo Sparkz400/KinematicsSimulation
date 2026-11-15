@@ -7,7 +7,7 @@
 //! and `tool_max`; poses near a singularity (`workspace.max_condition_number`) are refused.
 //!
 //! Config `[arm]`: `urdf_file` (a path, or "builtin:six-axis" / "builtin:scara" / "builtin:five-axis" /
-//! "builtin:seven-axis" / "builtin:palletiser" for the files in `urdf/`), `gear_ratios` (one per motor, before any
+//! "builtin:seven-axis" / "builtin:palletiser" / "builtin:arm-on-track" for the files in `urdf/`), `gear_ratios` (one per motor, before any
 //! screw), `payload_kg`, `payload_offset_m` (its centre from the URDF's tip frame) and `payload_inertia_kgm2` (about its
 //! centre in the tip frame: xx, yy, zz, xy, xz, yz), `joint_coupling` (the URDF's joints as sums of the motors' joints,
 //! one row per URDF joint: a parallelogram that keeps a palletiser's flange level; `[]` for one motor per joint).
@@ -16,7 +16,11 @@
 //! the shared tables, `[strain_wave.<k>]` and `[joint.<k>]` too (`catalog::motor_config`, k = 1, 2, ...); its ratio
 //! is `arm.gear_ratios`'. A revolute joint has the `[joint]` friction and stops (its stops from the URDF's limits where
 //! it gives them). A prismatic joint is a `[screw]` coupled to its motor (ratio 1; the `[gearbox]`'s stiffness and
-//! damping stand for the coupling, its efficiency and inertia do not count) with the `[slide]` friction and stops. With
+//! damping stand for the coupling, its efficiency and inertia do not count) with the `[slide]` friction and stops; where
+//! the config has a `[rack]`, a pinion on a rack behind the joint's own gearbox instead (ratio `arm.gear_ratios`'), its
+//! feed force and the pinion's radial load on the gearbox shaft (`ratings.shaft_max_radial_load_n` of its motor) judged.
+//! With `[track]` the first joint is a carriage on four guide blocks (`track.block_spacing_m` along, `rail_spacing_m`
+//! across), their load from the chain's reaction at that joint (`Arm::guide_load`, judged by the guide verdicts). With
 //! a `[strain_wave]` table, each revolute joint's gear is judged by its life.
 //!
 //! With `effects.payload_swing` the payload hangs from the flange on a pivot about two axes across the line to its
@@ -24,23 +28,24 @@
 //! `arm.payload_swing_damping_nm_s_rad`: two joints no motor drives (`chain::Mechanism::passive_joints`), a sack or a
 //! carton stack in a soft gripper that swings after each move.
 
-use crate::tool::{POSE_AXES, Pose, Scara, Tool, turn_length};
+use crate::tool::{FIRST_JOINT, POSE_AXES, Pose, Scara, Tool, turn_length};
 use crate::{axis, gravity, machine, payload, required_life};
 use sim_components::beam::{CANTILEVER_PARTICIPATION, CANTILEVER_TIP_SLOPE, cantilever_mode, tube_second_moment};
-use sim_components::catalog::motor_config;
+use sim_components::catalog::{GUIDE_CARRIAGES, motor_config};
 use sim_components::chain::{FlexCoupling, FlexKind, FlexMode, JOINT_KEYS, MOTOR_IDS, MOTOR_KEYS, Mechanism};
 use sim_components::joint::RotaryJoint;
 use sim_components::rigid::{Body, BodyState, Chain, Inertial, M3, V3, add, cross, dot, exp, matmul, mul, transpose};
-use sim_components::transmission::{BallScrew, StrainWave};
+use sim_components::transmission::{BallScrew, RackPinion, StrainWave};
 use sim_core::{Config, ConfigError, Label, Machine, Part, RatingCheck, Scene, Shape, SignalInfo};
 use std::f64::consts::TAU;
 
-const BUILTIN: [(&str, &str); 5] = [
+const BUILTIN: [(&str, &str); 6] = [
     ("builtin:six-axis", include_str!("../urdf/six-axis.urdf")),
     ("builtin:scara", include_str!("../urdf/scara.urdf")),
     ("builtin:five-axis", include_str!("../urdf/five-axis.urdf")),
     ("builtin:seven-axis", include_str!("../urdf/seven-axis.urdf")),
     ("builtin:palletiser", include_str!("../urdf/palletiser.urdf")),
+    ("builtin:arm-on-track", include_str!("../urdf/arm-on-track.urdf")),
 ];
 
 const AXIS_IDS: [&str; 7] = ["j1", "j2", "j3", "j4", "j5", "j6", "j7"];
@@ -67,6 +72,12 @@ pub struct Arm {
     /// Per motor joint: whether it is a prismatic one.
     prismatic: Vec<bool>,
     screw: Option<BallScrew>,
+    /// Per motor joint, its rack and pinion where it is a prismatic one and the config has a `[rack]`: the rack, the
+    /// efficiency in effect on its teeth, and its motor's `ratings.shaft_max_radial_load_n`.
+    racks: Vec<Option<(RackPinion, f64, Option<f64>)>>,
+    /// `[track]`: the first joint is a carriage on four guide blocks, `block_spacing_m` apart along its travel and
+    /// `rail_spacing_m` across it (`guide_load`).
+    track: Option<(f64, f64)>,
     /// Per motor joint, its strain wave gear where the config has one.
     strain_waves: Vec<Option<StrainWave>>,
     required_life: Option<f64>,
@@ -343,7 +354,19 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     {
         return Err(ConfigError::Invalid("ratings.gearbox_reference_speed_rpm".into()));
     }
-    let screw = if prismatic.iter().any(|p| *p) { Some(BallScrew::from_config(cfg)?) } else { None };
+    let rack = if cfg.get("rack").is_ok() { Some(RackPinion::from_config(cfg)?) } else { None };
+    let screw = if rack.is_none() && prismatic.iter().any(|p| *p) { Some(BallScrew::from_config(cfg)?) } else { None };
+    let mut racks = vec![None; n];
+    let track = if cfg.get("track").is_ok() {
+        // The guide loads take the first joint's frame as the carriage's: x along the rails, its origin between the
+        // four blocks.
+        if !prismatic[0] || coupling.is_some() || chain.bodies[0].axis != [1.0, 0.0, 0.0] {
+            return Err(ConfigError::Invalid("track (the first joint slides along its frame's x)".into()));
+        }
+        Some((cfg.positive("track.block_spacing_m")?, cfg.positive("track.rail_spacing_m")?))
+    } else {
+        None
+    };
     let strain_waves = (0..n)
         .map(|k| {
             if !prismatic[k] && owns[k].get("strain_wave").is_ok() {
@@ -356,8 +379,18 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let (mut joints, mut axes) = (Vec::new(), Vec::new());
     for k in 0..n {
         let own = &owns[k];
-        let (mut joint, lever) = match (&screw, prismatic[k]) {
-            (Some(screw), true) => {
+        let (mut joint, lever) = match (&screw, &rack, prismatic[k]) {
+            (_, Some(rack), true) => {
+                // The pinion on the gearbox's output, as on the rack axis (`slide`), the ratio arm.gear_ratios'.
+                let mut joint = RotaryJoint::linear_from_config(own)?;
+                joint.gearbox.ratio = ratios[k];
+                joint.coupled = ratios[k] == 1.0;
+                rack.converter().apply(own, &mut joint)?;
+                racks[k] =
+                    Some((rack.clone(), joint.extra_efficiency, own.f64("ratings.shaft_max_radial_load_n").ok()));
+                (joint, Some(rack.radius()))
+            }
+            (Some(screw), _, true) => {
                 // The screw sits on the motor's shaft through a coupling: no gear, no gear losses or inertia.
                 if ratios[k] != 1.0 {
                     return Err(ConfigError::Invalid("arm.gear_ratios".into()));
@@ -438,6 +471,8 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         ratios: joints.iter().map(|(j, ..)| j.ratio()).collect(),
         prismatic,
         screw,
+        racks,
+        track,
         strain_waves,
         required_life: required_life(cfg),
         built: Vec::new(),
@@ -453,7 +488,10 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         let names = cfg.get("kinematics.tool_axes")?.as_array().ok_or_else(refuse)?.clone();
         let picked: Vec<usize> = names
             .iter()
-            .map(|v| v.as_str().and_then(|s| POSE_AXES.iter().position(|(id, ..)| *id == s)))
+            .map(|v| match v.as_str() {
+                Some("j1") => Some(FIRST_JOINT),
+                s => s.and_then(|s| POSE_AXES.iter().position(|(id, ..)| *id == s)),
+            })
             .collect::<Option<_>>()
             .ok_or_else(|| ConfigError::Invalid("kinematics.tool_axes".into()))?;
         let scara = (picked == [0, 1, 2, 5] && arm.coupling.is_none())
@@ -486,7 +524,8 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
                 let length = turn_length(arm.chain.tip(&full).1, arm.chain.frames(&full)[1.min(u - 1)].1);
                 let pose = Pose::new(&fk, home, picked.clone(), length, max_condition).ok_or_else(refuse)?;
                 arm.tool = Tool::Pose(pose);
-                picked.iter().map(|&a| POSE_AXES[a]).collect()
+                let first = (AXIS_IDS[0], JOINT_KEYS[0], if arm.prismatic[0] { "m" } else { "rad" });
+                picked.iter().map(|&a| if a == FIRST_JOINT { first } else { POSE_AXES[a] }).collect()
             }
         };
         let m = ids.len();
@@ -603,6 +642,48 @@ impl Arm {
         }
     }
 
+    /// `[track]`: the load of the carriage's guides from the chain's reaction at its first joint, for the guide verdicts.
+    /// What the base passes to the chain (carriage and all it carries, the payload with it) is the rate of the chain's
+    /// momentum less gravity's pull: F = dP/dt + sum m g z, M_O = dH_O/dt + sum c x m g z about the base's origin (P and
+    /// H by central differences of +-1 us along q' and q'', as `flex_loads`), taken to the carriage's origin between the
+    /// blocks, M = M_O - o x F, and into its frame. Its x along the rails is the drive's; the rest the four blocks at
+    /// (+-l/2, +-w/2) share as rigid supports: each carries F_z / 4 + M_x / (2 w) s_y - M_y / (2 l) s_x on its rail and
+    /// F_y / 4 + M_z / (2 l) s_x across it (s the block's signs), its load the sum of both magnitudes (the catalogue's
+    /// equivalent load with equal ratings both ways). Reported as the most loaded block's times the four blocks, so that
+    /// the guide verdicts, which share the load equally among the set (`GUIDE_CARRIAGES`) and rate the set as one
+    /// (`catalog` `parts.axis`), judge that block.
+    /// shortcut: the rack's push taken through the carriage's origin (no moment of its own), the arm's motor rotors'
+    /// gyroscopic moments left out, and the load always on the four blocks of the first joint.
+    fn guide_load(&self, q: &[f64], qd: &[f64], qdd: &[f64]) -> f64 {
+        let Some((along, across)) = self.track else { return 0.0 };
+        let h = 1e-6;
+        let momentum = |s: f64| {
+            let q: Vec<f64> = q.iter().zip(qd).map(|(q, v)| q + s * v).collect();
+            let qd: Vec<f64> = qd.iter().zip(qdd).map(|(v, a)| v + s * a).collect();
+            let ((chain, q), (_, qd)) = (self.loaded(&q), self.loaded(&qd));
+            chain.momentum(&q, &qd, self.extra())
+        };
+        let ((p0, h0), (p1, h1)) = (momentum(-h), momentum(h));
+        let rate = |a: V3, b: V3| -> V3 { std::array::from_fn(|i| (b[i] - a[i]) / (2.0 * h)) };
+        let (mut force, mut moment) = (rate(p0, p1), rate(h0, h1));
+        let states = self.states(q, qd);
+        for b in &states {
+            let lift = [0.0, 0.0, b.inertial.mass * self.g];
+            force = add(force, lift);
+            moment = add(moment, cross(b.com, lift));
+        }
+        let carriage = &states[0];
+        let back = transpose(&carriage.rot);
+        let (f, m) = (mul(&back, force), mul(&back, sub(moment, cross(carriage.origin, force))));
+        let block = |sx: f64, sy: f64| {
+            (f[2] / 4.0 + sy * m[0] / (2.0 * across) - sx * m[1] / (2.0 * along)).abs()
+                + (f[1] / 4.0 + sx * m[2] / (2.0 * along)).abs()
+        };
+        let most =
+            [block(1.0, 1.0), block(1.0, -1.0), block(-1.0, 1.0), block(-1.0, -1.0)].into_iter().fold(0.0, f64::max);
+        GUIDE_CARRIAGES * most
+    }
+
     /// The joints at a tool pose and their Jacobian's condition number there (`tool::Scara::condition`,
     /// `tool::Pose::condition`); `None` out of reach.
     fn solved(&self, tool: &[f64]) -> Option<(Vec<f64>, f64)> {
@@ -629,7 +710,11 @@ impl Mechanism for Arm {
             first_moment = add(first_moment, b.com.map(|c| c * b.inertial.mass));
         }
         for (k, spin) in rotor_spin.iter().enumerate() {
-            angular = add(angular, bodies[self.motor_body(k)].axis.map(|a| a * spin));
+            let body = &bodies[self.motor_body(k)];
+            // A rack's motor stands upright on the carriage, its pinion turning about the vertical against the rack on
+            // the side of the rails.
+            let axis = if self.racks[k].is_some() { mul(&body.rot, [0.0, 0.0, 1.0]) } else { body.axis };
+            angular = add(angular, axis.map(|a| a * spin));
         }
         Some(sim_core::FrameMomentum {
             linear,
@@ -903,29 +988,58 @@ impl Mechanism for Arm {
         matches!(self.tool, Tool::Joints)
     }
 
+    /// A rack's force on its teeth and the pinion's radial load on the gearbox shaft (`RackPinion::radial_load`), and a
+    /// track's guide load (`guide_load`, as `axis.j1.guide_load`: the guide verdicts take the speed of the axis it names).
     fn signal_infos(&self) -> Vec<SignalInfo> {
         let mut out = Vec::new();
         for k in 0..self.ratios.len() {
-            match (self.prismatic[k], &self.screw, &self.strain_waves[k]) {
-                (true, Some(s), _) => out.extend(s.signal_infos(MOTOR_IDS[k], JOINT_KEYS[k])),
-                (false, _, Some(g)) => out.push(g.signal_info(MOTOR_IDS[k], JOINT_KEYS[k])),
+            let (id, key) = (MOTOR_IDS[k], JOINT_KEYS[k]);
+            match (self.prismatic[k], &self.screw, &self.strain_waves[k], &self.racks[k]) {
+                (_, _, _, Some((r, ..))) => out.extend([
+                    r.signal_info(id, key),
+                    SignalInfo::new(format!("rack.{id}.radial_load"), key, "quantity-radial-load", "N"),
+                ]),
+                (true, Some(s), ..) => out.extend(s.signal_infos(id, key)),
+                (false, _, Some(g), _) => out.push(g.signal_info(id, key)),
                 _ => {}
             }
         }
+        if self.track.is_some() {
+            out.push(SignalInfo::new("axis.j1.guide_load", JOINT_KEYS[0], "quantity-guide-load", "N"));
+        }
         out
     }
-    fn signals(&self, _q: &[f64], qd: &[f64], _qdd: &[f64], force: &[f64], out: &mut Vec<f64>) {
+    fn signals(&self, q: &[f64], qd: &[f64], qdd: &[f64], force: &[f64], out: &mut Vec<f64>) {
         for k in 0..self.ratios.len() {
-            match (self.prismatic[k], &self.screw, &self.strain_waves[k]) {
-                (true, Some(s), _) => s.signals(qd[k], force[k], out),
-                (false, _, Some(g)) => out.push(g.signal(force[k], qd[k] * self.ratios[k])),
+            match (self.prismatic[k], &self.screw, &self.strain_waves[k], &self.racks[k]) {
+                (_, _, _, Some((r, efficiency, _))) => {
+                    let teeth = RackPinion::feed_force(force[k], qd[k], *efficiency);
+                    out.extend([teeth, r.radial_load(teeth)]);
+                }
+                (true, Some(s), ..) => s.signals(qd[k], force[k], out),
+                (false, _, Some(g), _) => out.push(g.signal(force[k], qd[k] * self.ratios[k])),
                 _ => {}
             }
+        }
+        if self.track.is_some() {
+            out.push(self.guide_load(q, qd, qdd));
         }
     }
     fn rating_checks(&self) -> Vec<RatingCheck> {
         let mut out = Vec::new();
         for k in 0..self.ratios.len() {
+            if let Some((r, _, radial)) = &self.racks[k] {
+                let id = MOTOR_IDS[k];
+                out.extend(r.rating_checks(id, k));
+                out.extend(radial.map(|limit| RatingCheck {
+                    check: "gearbox-radial-load",
+                    signal: format!("rack.{id}.radial_load"),
+                    motor: Some(k),
+                    limit,
+                    life: false,
+                }));
+                continue;
+            }
             match (self.prismatic[k], &self.screw, &self.strain_waves[k], self.required_life) {
                 (true, Some(s), ..) => out.extend(s.rating_checks(MOTOR_IDS[k], k, self.required_life)),
                 (false, _, Some(g), Some(life)) => out.push(g.rating_check(MOTOR_IDS[k], k, life)),
@@ -953,6 +1067,16 @@ impl Mechanism for Arm {
             [0.0, 0.0, -0.025],
             [0.62, 0.64, 0.68],
         ));
+        if let (Some(_), Some((low, high))) = (self.track, self.chain.bodies[0].limits) {
+            // The rails from one end of the travel to the other, under the carriage's origin.
+            let end = |x: f64| add(self.chain.bodies[0].origin_pos, [x, 0.0, 0.0]);
+            out.parts.push(Part::new(
+                "rail",
+                Shape::Segment { to: end(high), width: 0.08 },
+                end(low),
+                [0.62, 0.64, 0.68],
+            ));
+        }
         let mut from = [0.0; 3];
         for (_, at) in &frames {
             out.parts.push(Part::new("link", Shape::Segment { to: *at, width: 0.05 }, from, [0.2, 0.22, 0.26]));
@@ -1014,8 +1138,10 @@ impl Mechanism for Arm {
         });
     }
     fn scene_point(&self, tool: &[f64]) -> Option<[f64; 3]> {
-        match self.tool {
+        match &self.tool {
             Tool::Joints => Some(self.tip(tool).1),
+            // After the first joint's own axis where it leads.
+            Tool::Pose(p) if p.axes.first() == Some(&FIRST_JOINT) => Some([tool[1], tool[2], tool[3]]),
             _ => Some([tool[0], tool[1], tool[2]]),
         }
     }

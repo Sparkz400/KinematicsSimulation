@@ -1248,6 +1248,7 @@ mod across_the_bounds {
         tripod: "tripod",
         wafer_handler: "wafer-handler",
         toggle_press: "toggle-press",
+        arm_on_track: "arm-on-track",
         exct_30: "EXCT-30",
     );
 }

@@ -5,7 +5,8 @@
 //! - SCARA (four joints: two arms about vertical axes, a vertical quill, a turning flange): x, y, z (m) of the flange
 //!   and c (rad), its turn about the vertical, in closed form with the elbow as `kinematics.elbow` says.
 //! - Any other chain of 4 to 7 joints (`Pose`): those of x, y, z (m) and rx, ry, rz (rad) that `kinematics.tool_axes`
-//!   names, as many as joints or one fewer for a redundant arm. The orientation is the rotation vector (axis times
+//!   names, as many as joints or one fewer for a redundant arm; "j1" ahead of them makes the first joint's position (a
+//!   track under the arm) a tool axis of its own, given beside the pose, so that seven joints take seven axes. The orientation is the rotation vector (axis times
 //!   angle, base frame) of the turn from the flange's orientation at zero joints, so that a flange pointing down at zero
 //!   is at 0 there, not at half a turn. Numerically by damped least squares on the URDF chain, with the redundant
 //!   joint's freedom spent on staying near `kinematics.home_joints` (the null space of the Jacobian). The solution is
@@ -36,6 +37,16 @@ pub const POSE_AXES: [(&str, &str, &str); 6] = [
     ("ry", "axis-ry", "rad"),
     ("rz", "axis-rz", "rad"),
 ];
+
+/// "j1" in `kinematics.tool_axes`, ahead of the pose's axes: the first joint's own position (a track the arm rides on)
+/// as a tool axis. A chain with a joint more than pose axes is then not redundant: the first joint is given, the others
+/// are solved for the pose with it where it is.
+pub const FIRST_JOINT: usize = 6;
+
+/// Whether tool axis `a` is a turn (rx, ry, rz), weighted by the turn length in the solver.
+fn is_turn(a: usize) -> bool {
+    (3..6).contains(&a)
+}
 
 /// The flange's orientation and position at the joints `q`.
 pub type Forward<'a> = &'a dyn Fn(&[f64]) -> (M3, V3);
@@ -189,14 +200,15 @@ pub struct Pose {
 }
 
 impl Pose {
-    /// `None` where the home is not one position per joint, the axes are not a rising selection of the six, or there are
-    /// more axes than joints or more than one joint to spare.
+    /// `None` where the home is not one position per joint, the axes are not a rising selection of the six (after
+    /// `FIRST_JOINT`, where it leads), or there are more axes than joints or more than one joint to spare.
     pub fn new(fk: Forward, home: Vec<f64>, axes: Vec<usize>, length: f64, max_condition: f64) -> Option<Self> {
         let n = home.len();
+        let pose = &axes[usize::from(axes.first() == Some(&FIRST_JOINT))..];
         let fits = (4..=7).contains(&n)
             && (n == axes.len() || n == axes.len() + 1)
-            && axes.windows(2).all(|w| w[0] < w[1])
-            && axes.iter().all(|a| *a < 6);
+            && pose.windows(2).all(|w| w[0] < w[1])
+            && pose.iter().all(|a| *a < 6);
         fits.then(|| Self { axes, zero_rot: fk(&vec![0.0; n]).0, home, length, max_condition, last: Mutex::new(None) })
     }
 
@@ -208,7 +220,14 @@ impl Pose {
     fn coordinates(&self, fk: Forward, q: &[f64], scale: f64) -> Vec<f64> {
         let (rot, pos) = fk(q);
         let turn = log(&matmul(&rot, &transpose(&self.zero_rot)));
-        self.axes.iter().map(|&a| if a < 3 { pos[a] } else { scale * turn[a - 3] }).collect()
+        self.axes
+            .iter()
+            .map(|&a| match a {
+                FIRST_JOINT => q[0],
+                _ if is_turn(a) => scale * turn[a - 3],
+                _ => pos[a],
+            })
+            .collect()
     }
 
     pub fn forward(&self, fk: Forward, q: &[f64], tool: &mut [f64]) {
@@ -306,7 +325,7 @@ impl Pose {
             .axes
             .iter()
             .zip(tool.iter().zip(&start))
-            .map(|(&a, (t, s))| (t - s).abs() / if a < 3 { 0.02 } else { 0.05 })
+            .map(|(&a, (t, s))| (t - s).abs() / if is_turn(a) { 0.05 } else { 0.02 })
             .fold(1.0, f64::max)
             .ceil() as usize;
         q.copy_from_slice(from);
@@ -316,7 +335,7 @@ impl Pose {
                 .axes
                 .iter()
                 .enumerate()
-                .map(|(i, &a)| (start[i] + s * (tool[i] - start[i])) * if a < 3 { 1.0 } else { self.length })
+                .map(|(i, &a)| (start[i] + s * (tool[i] - start[i])) * if is_turn(a) { self.length } else { 1.0 })
                 .collect();
             let (tol, iterations) = if k == steps { (1e-13, 200) } else { (1e-6, 30) };
             // shortcut: a walk of one step (at most 20 mm and 0.05 rad, as along a cycle) is not checked for passing a
@@ -377,7 +396,7 @@ impl Pose {
     /// Whether the orientation of a tool pose is near half a turn from the flange's at zero joints, where the rotation
     /// vector jumps.
     pub fn near_half_turn(&self, tool: &[f64]) -> bool {
-        let angle2: f64 = self.axes.iter().zip(tool).filter(|(a, _)| **a >= 3).map(|(_, v)| v * v).sum();
+        let angle2: f64 = self.axes.iter().zip(tool).filter(|(a, _)| is_turn(**a)).map(|(_, v)| v * v).sum();
         angle2.sqrt() > PI - 0.01
     }
 }

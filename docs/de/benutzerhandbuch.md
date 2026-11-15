@@ -967,6 +967,28 @@ sim-cli verdicts urdf-arm --config crates/machine-joint-kit/config/arm-tool.toml
 
 Beide bestehen jede Prüfung. Der SCARA greift 100 mm tiefer, trägt das Teil 500 mm quer bei x = 0,4 m und dreht es dabei um 1,5 rad, und zurück: 2,542 s, Motor 1 bei 5 % seiner Spitze und 288 seiner 314 rad/s (der Arm schwenkt am schnellsten, wo die Gerade der Basis am nächsten kommt), Einschwingen 0,04 mm. Der Arm tut dasselbe mit durchweg nach unten zeigendem Flansch (ry = π/2): 3,774 s, Motor 2 bei 23 % seiner Spitze, Einschwingen 4,0 mm der 5, die die Konfiguration erlaubt: Unter den 6 kg Nutzlast verdrehen sich die Getriebe, und der Flansch ruht 4 mm unter der Lage, die die Geber angeben (0,2 mm im starren Modell, `--set effects.joint_elasticity=false`). Eine Bahn im Werkzeugraum schreibt man `line,x,y,z,c` (oder sechs Zahlen beim Arm); `--time-optimal` plant sie so schnell, wie die Motoren es über die Rückwärtskinematik erlauben: Die Gerade des SCARA quer dauert 1,542 s statt 1,750 s, Motor 1 bei 307,5 seiner 314,2 rad/s. Ein Ziel, das der Arm nicht erreicht, wird mit dem Grund abgelehnt (`Der Arm reicht nicht bis zum Ziel.`), ebenso eines zu nahe an einer Singularität (der gestreckte Arm des SCARA: `workspace.max_condition_number`, 25) und eine Bahn hindurch. Den Ellbogen des SCARA wählt `kinematics.elbow` ("right" oder "left"); der Arm hält den Zweig von `kinematics.home_joints` (Schulter, Ellbogen und Handgelenk wie dort).
 
+### Sechsachsroboter auf einer Linearschiene
+
+`arm-on-track` ist der Sechsachsroboter auf einem Schlitten von 80 kg, der 4 m auf einer Bodenschiene fährt, angetrieben
+über Zahnstange und Ritzel von einem 1FK2105-4AF hinter einem Planetengetriebe i = 10: eine siebte Achse, die erste, in
+Metern. Schiene und Arm sind eine Kette, der schwenkende Arm schiebt also an der Schiene, und die Beschleunigung der
+Schiene belastet jedes Gelenk des Arms; die vier Führungswagen des Schlittens tragen das Gewicht des Arms und seine
+Kippmomente, und `guide-load` und `guide-life` beurteilen den höchstbelasteten Wagen
+([Mechanismen](mechanismen.md#ein-roboter-auf-einer-schiene)).
+
+```bash
+sim-cli verdicts arm-on-track
+sim-cli verdicts arm-on-track --config crates/machine-joint-kit/config/arm-on-track-tool.toml
+```
+
+Der Standardzyklus greift bei 0,5 m links des Arms und legt bei 3,5 m rechts ab, der Arm schwenkt herum, während die
+Schiene fährt, und leer zurück: 7,27 s, jede Prüfung besteht; der Motor der Schiene bei 15 % seines Spitzenmoments und
+seinen Nenn-3000 1/min, die Zähne der Zahnstange bei 583 ihrer 2400 N, der höchstbelastete Führungswagen bei 895 N
+(3580 N für den Satz von vier, gegen 320 N je Wagen aus dem Gewicht allein). Im Werkzeugraum sind die Achsen die
+Stellung der Schiene neben x, y, z, rx, ry, rz des Flanschs (`kinematics.tool_axes = ["j1", "x", ...]`): sieben Achsen
+für sieben Gelenke, die Schiene vorgegeben und der Arm für die Lage gelöst, eine Gerade bewegt also Schiene und Flansch
+zusammen gerade.
+
 ## Eine Presse, ein Rotationsmesser oder eine fliegende Säge auslegen
 
 `machine-crank-cam` enthält die Kurbel- und Kurvenscheibenfälle eines Servo-Auslegungswerkzeugs

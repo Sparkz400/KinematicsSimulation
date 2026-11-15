@@ -31,6 +31,7 @@ The German version of this document is [de/mechanismen.md](de/mechanismen.md).
 | `urdf-arm` | six-axis arm, `urdf/six-axis.urdf` | strain wave gears of ratio 120 and 80 | six joint angles (rad), or x, y, z, rx, ry, rz in tool space | `strain-wave-life` per joint |
 | `scara` | SCARA arm, `urdf/scara.urdf` | strain wave gears; the quill on a ball screw | joints (rad, m, rad), or x, y, z, c in tool space | `strain-wave-life`, the screw's checks on joint 3 |
 | `palletiser` | four-axis palletiser, `urdf/palletiser.urdf`, a parallelogram keeping the flange level | gears of ratio 160, the flange's strain wave gear 50 | x, y, z, rz (shipped in tool space), or the four motors' joints | `strain-wave-life` per joint |
+| `arm-on-track` | the six-axis arm on an 80 kg carriage on a 4 m floor track, `urdf/arm-on-track.urdf` | the track: a pinion on a rack behind a planetary gearbox of ratio 10; the arm as `urdf-arm` | the track (m) and the six joints (rad), or the track beside x, y, z, rx, ry, rz in tool space | `rack-feed-force`, `gearbox-radial-load` on the track; `guide-load`, `guide-life` of its guide blocks; `strain-wave-life` per arm joint |
 | `parallel-scara` | five-bar with parallelogram forearms in the horizontal plane (its own crate, not a joint machine); a Z stroke and a tool turn at the plate | planetary gearboxes of ratio 20 on the arms; the Z stroke on a ball screw 16 x 20 behind a coupling; the turn behind a planetary gearbox of ratio 8 | x, y (m), z (m), c (rad) | `screw-speed`, `screw-dn`, `screw-buckling`, `screw-static`, `screw-life` on the Z stroke |
 | `wafer-handler` | R-theta-Z arm of two equal links in the horizontal plane, its forearm and effector coupled to the shoulder by bands at 2:1 and 1:2 (its own crate, not a joint machine); a column that turns and lifts | strain wave gears of ratio 50 on the column and the upper arm; the lift on a ball screw 16 x 10 behind a coupling | r (m), theta (rad), z (m) | `wafer-slip`, `effector-direction`, `elbow-band-slack`, `wrist-band-slack`; the screw's checks on the lift |
 
@@ -155,13 +156,17 @@ and velocity terms. The payload is a rigid body on the last link: its mass `arm.
 xy, xz, yz in the tip frame), merged into the last body by the parallel axis theorem (`Inertial::merged`).
 
 Config `[arm]`: `urdf_file` is a path, or `builtin:six-axis`, `builtin:scara`, `builtin:five-axis`,
-`builtin:seven-axis` or `builtin:palletiser` for the examples in `crates/machine-joint-kit/urdf/`. `gear_ratios` has one
+`builtin:seven-axis`, `builtin:palletiser` or `builtin:arm-on-track` for the examples in `crates/machine-joint-kit/urdf/`. `gear_ratios` has one
 entry per motor; each motor joint's limits are in `[axis.j1]`, `[axis.j2]`, ... (`max_velocity_rad_s`, or
 `max_velocity_m_s` for a prismatic joint, and so on). The URDF's limits are the joints' stops; a continuous joint takes
 `[joint]` `min_angle_deg` and `max_angle_deg`. A prismatic joint slides on the `[screw]`, coupled to its motor (its
 ratio must be 1; the `[gearbox]`'s stiffness and damping stand for the coupling, its efficiency and inertia do not
-count), with the `[slide]` friction (the SCARA's quill). A URDF limit left out is 0; an empty range is refused. With a
-`[strain_wave]` table each revolute joint's gear gets the life check.
+count), with the `[slide]` friction (the SCARA's quill); where the config has a `[rack]`, it runs on a pinion on that rack
+behind its own gearbox instead (ratio `gear_ratios`', any), as the rack axis does, with `rack-feed-force` and the
+pinion's radial load on the gearbox shaft (`rack.<k>.radial_load`, the tooth force times sqrt(1 + (tan 20° / cos
+beta)^2), against `ratings.shaft_max_radial_load_n`: `gearbox-radial-load`, as on the machine files' racks). A URDF
+limit left out is 0; an empty range is refused. With a `[strain_wave]` table each revolute joint's gear gets the life
+check.
 
 Each joint has its own motor, drive and gear where the config says so: `[motor.<k>]`, `[drive.<k>]`, `[gearbox.<k>]`,
 `[strain_wave.<k>]`, `[joint.<k>]`, `[ratings.<k>]` and `[parts.<k>]` over the shared tables, k = 1, 2, ... (`catalog::motor_config`,
@@ -206,6 +211,39 @@ feedforward and the poses at rest see the payload fixed to the flange. The palle
 (sqrt(k / (m l^2) + g / l) / 2 pi with 120 N m/rad, 20 kg, 0.2 m).
 shortcut: without the payload the swing's joints carry a unit inertia of their own, apart from the arm.
 
+### An arm on a track
+
+`arm-on-track` (`urdf/arm-on-track.urdf`, `config/arm-on-track.toml`) is the six-axis example arm on a carriage that
+runs 4 m along x on two rails: a prismatic first joint, then the arm's six. The carriage (80 kg: plate, riser, guide
+blocks, the track's motor, gearbox and pinion) is a body of the chain like any link, so the track is one more joint of
+the Newton-Euler model and the coupling between track and arm is in the chain's equations: the arm's swing pushes on
+the track (joint 2 turning at 3 rad/s² with the arm stretched across the track asks -3 · Σ m y = -43.5 N of the track,
+Σ m y = 14.505 kg m of the arm and payload), and the track's acceleration reaches every joint of the arm (at 2 m/s²
+joint 2 holds -2 · 14.505 = -29.0 N m). The track's motor is the catalogue's 1FK2105-4AF on an S210, behind a Siemens
+NRB080 of ratio 10 (catalogue values, its backlash left out for a preloaded pinion) and the rack axis's pinion of 200 mm a
+turn; 130.5 kg move on it at up to 1 m/s and 3 m/s².
+
+`[track]` puts the carriage on four guide blocks, `block_spacing_m` (0.4 m) apart along the rails and `rail_spacing_m`
+(0.5 m) across them. Their load comes from the chain's reaction at its first joint: what the base passes to the chain,
+F = dP/dt + Σ m g z and M_O = dH_O/dt + Σ c × m g z (the rates of the chain's momentum P and its angular momentum H
+about the base's origin by central differences), taken to the carriage's frame between the blocks. Its push along the
+rails is the rack's; the rest the blocks share as rigid supports, each F_z / 4 ± M_x / (2 w) ∓ M_y / (2 l) on its rail and
+F_y / 4 ± M_z / (2 l) across it, its load the sum of both magnitudes (the catalogue's equivalent load). The signal
+`axis.j1.guide_load` is the most loaded block's load times four, so that the guide verdicts, which share a load equally
+among a set of four and rate the set as one (`parts.axis = "<block>x4"`), judge that block: `guide-load` against
+`ratings.guide_max_load_n`, `guide-life` from `ratings.guide_dynamic_load_rating_n` and the track's speed. The moments
+decide the size: on the default cycle the most loaded block carries 895 N at its peak against the 320 N a quarter of
+the weight gives. Shipped: four HIWIN HGH20CA (catalogue), 3580 N against 73360 N, a life of 1.4 million hours.
+
+Redundancy: seven joints for a tool pose of six. In tool space (`config/arm-on-track-tool.toml`) the track's position
+is an axis of its own, `"j1"` ahead of the pose's in `kinematics.tool_axes`: seven axes, the track given and the arm's
+six joints solved by damped least squares for the flange's pose with the track where it is. A line of a path moves the
+track and the flange together, each straight; the flange held while the track moves makes the arm reach back. The
+default cycle in joints picks at 0.5 m on the arm's left and places at 3.5 m on its right, the arm swinging round and
+reaching out while the track travels; the tool-space cycle picks and places with straight lines of the flange, the
+track carrying it 3 m while the flange moves from 0.9 m ahead and 0.6 m left of the arm to 0.7 m ahead and 0.3 m right,
+150 mm up and turned by 0.5 rad.
+
 ### Tool space
 
 With `kinematics.tool_space = true` the machine's axes are the flange's pose, and every planner, the cycle, the CLI
@@ -228,7 +266,8 @@ points (`error-path-torque`): where the motors allow only a crawl it would fill 
   above) or "left"; joint 1 = atan2(y, x) - atan2(L2 sin beta, L1 + L2 cos beta). The condition number is that of
   d(x, y)/d(q1, q2): infinite at the stretched and the folded arm (25 at 11 degrees of elbow, the example's limit).
 - Any other chain of 4 to 7 joints: the axes are those of x, y, z (m) and rx, ry, rz (rad) that `kinematics.tool_axes`
-  names, as many as the motors or one fewer (a redundant arm). The orientation is the rotation vector (axis times angle,
+  names, as many as the motors or one fewer (a redundant arm); `"j1"` ahead of them makes the first joint's own position
+  an axis (a track's: see [An arm on a track](#an-arm-on-a-track)). The orientation is the rotation vector (axis times angle,
   base frame) of the turn from the flange's orientation at zero joints: a URDF whose flange points down at zero is at
   0 there, not half a turn from the base frame. A pose within 0.01 rad of half a turn from that is refused
   (`error-arm-orientation-half-turn`): there the rotation vector jumps. The joints by damped least squares on the
@@ -669,7 +708,12 @@ joints a walk from the home gives (1e-9 rad); the seven-joint arm reaches a pose
 the home free of the Jacobian's null space; a flange pointing down at zero is at no turn; the palletiser's flange stays
 level over its joints' ranges and its swinging carton has m g l (1 - cos 0.1) + k 0.1^2 / 2 = 0.79597 J turned by 0.1
 rad and (m l^2 + I) / 2 = 0.775 J swinging at 1 rad/s, and keeps the energy loss-free; each arm joint has its own
-catalogue motor; a time-optimal plan of a crawl is refused beyond ten million points. A screw 1.6 m long fails `screw-speed`, and a life asked for beyond the
+catalogue motor; a time-optimal plan of a crawl is refused beyond ten million points. The arm on its track: the track
+pushes -3 · 14.505 = -43.515 N while joint 2 swings the stretched arm at 3 rad/s², joint 2 holds -2 · 14.505 =
+-29.01 N m while the track accelerates at 2 m/s² and the track pushes 130.5 · 2 = 261 N; the guide blocks carry
+4 (1279.768 / 4 + 142.2455 / 1) = 1848.75 N at rest with the arm stretched across and 2656.85 N accelerating, the
+pinion's shaft 261 · 1.071978 N; the guide verdicts flip at their limits; in tool space the track is where the pose
+says to 1e-12 m and forward of inverse returns the pose to 1e-9 along the whole track. A screw 1.6 m long fails `screw-speed`, and a life asked for beyond the
 screw's fails `screw-life`. With losses: the rack's gearbox torque and feed force are the load's force over 0.97, the
 screw's life shrinks by a1 at 99 % reliability, and the temperature feedback keeps the efficiency of screw, rack and
 worm.
@@ -749,6 +793,10 @@ a cylinder too stiff for the step refused. The file passes the standard suite wi
 - Every joint of an arm has the same motor, drive and gearbox (only the ratio differs per joint), as the drive reads
   one `[motor]` and `[drive]` per machine; no gearbox life for arms whose joints have different ratios.
 - A screw's stiffness is taken at its softest nut position for the whole stroke.
+- The arm on its track: the rack's push is taken through the carriage's origin (no moment of its own on the blocks),
+  the arm's motor rotors' gyroscopic moments are left out of the guide load, and the blocks are rigid supports (no
+  guide stiffness: the carriage does not tilt on them); the guide load is not told to the time-optimal plan
+  (`rigid_guide_loads`), which keeps the motors' and gears' limits only.
 - A pneumatic cylinder is no tool axis and does not act back on the axis that carries it; its valve switches on/off
   (no proportional valve, no servo-pneumatic position loop); a tube is a flow element whose volume goes into the dead
   volumes; Festo prints no ISO 6358 C and b for the VUVG valves, so the shipped valve's are estimates.

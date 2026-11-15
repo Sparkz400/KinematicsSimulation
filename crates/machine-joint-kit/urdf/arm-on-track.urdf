@@ -1,0 +1,114 @@
+<?xml version="1.0"?>
+<!-- The six-axis example arm (six-axis.urdf, its links and joints as there) on a carriage that runs on a floor track:
+     a prismatic first joint along x, 4 m of travel, driven by a rack and pinion. The carriage's joint frame is the
+     middle of its four guide blocks, on the rails' top face; the arm's base joint stands 0.55 m above it (a riser of
+     0.2 m under the arm's own 0.35 m). The carriage's 80 kg (plate, riser, guide blocks, the track's motor, gearbox
+     and pinion) as a box of 0.6 x 0.6 x 0.25 m, its centre 0.1 m up: m (b^2 + c^2) / 12 = 80 (0.36 + 0.0625) / 12 =
+     2.8167, and 80 (0.36 + 0.36) / 12 = 4.8 about z. All values are estimates of this project, not any maker's. z up. -->
+<robot name="arm-on-track-example">
+  <link name="base_link"/>
+  <link name="carriage">
+    <inertial>
+      <origin xyz="0 0 0.1" rpy="0 0 0"/>
+      <mass value="80.0"/>
+      <inertia ixx="2.8167" ixy="0" ixz="0" iyy="2.8167" iyz="0" izz="4.8"/>
+    </inertial>
+  </link>
+  <joint name="track" type="prismatic">
+    <parent link="base_link"/>
+    <child link="carriage"/>
+    <origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="0.0" upper="4.0" effort="0" velocity="0"/>
+  </joint>
+  <link name="link1">
+    <inertial>
+      <origin xyz="0 0 0.15" rpy="0 0 0"/>
+      <mass value="18.0"/>
+      <inertia ixx="0.35" ixy="0" ixz="0" iyy="0.35" iyz="0" izz="0.25"/>
+    </inertial>
+  </link>
+  <joint name="joint1" type="revolute">
+    <parent link="carriage"/>
+    <child link="link1"/>
+    <origin xyz="0 0 0.55" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.967" upper="2.967" effort="0" velocity="0"/>
+  </joint>
+  <link name="link2">
+    <inertial>
+      <origin xyz="0 0 0.3" rpy="0 0 0"/>
+      <mass value="12.0"/>
+      <inertia ixx="0.4" ixy="0" ixz="0" iyy="0.4" iyz="0" izz="0.05"/>
+    </inertial>
+  </link>
+  <joint name="joint2" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin xyz="0.15 0 0.3" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.571" upper="2.356" effort="0" velocity="0"/>
+  </joint>
+  <link name="link3">
+    <inertial>
+      <origin xyz="0.08 0 0.08" rpy="0 0 0"/>
+      <mass value="7.0"/>
+      <inertia ixx="0.05" ixy="0" ixz="0" iyy="0.06" iyz="0" izz="0.05"/>
+    </inertial>
+  </link>
+  <joint name="joint3" type="revolute">
+    <parent link="link2"/>
+    <child link="link3"/>
+    <origin xyz="0 0 0.6" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.6" upper="1.2" effort="0" velocity="0"/>
+  </joint>
+  <link name="link4">
+    <inertial>
+      <origin xyz="0.2 0 0" rpy="0 0 0"/>
+      <mass value="4.0"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.06" iyz="0" izz="0.06"/>
+    </inertial>
+  </link>
+  <joint name="joint4" type="revolute">
+    <parent link="link3"/>
+    <child link="link4"/>
+    <origin xyz="0.25 0 0.12" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-3.3" upper="3.3" effort="0" velocity="0"/>
+  </joint>
+  <link name="link5">
+    <inertial>
+      <origin xyz="0.03 0 0" rpy="0 0 0"/>
+      <mass value="2.0"/>
+      <inertia ixx="0.004" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.004"/>
+    </inertial>
+  </link>
+  <joint name="joint5" type="revolute">
+    <parent link="link4"/>
+    <child link="link5"/>
+    <origin xyz="0.4 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-2.1" upper="2.1" effort="0" velocity="0"/>
+  </joint>
+  <link name="link6">
+    <inertial>
+      <origin xyz="0.01 0 0" rpy="0 0 0"/>
+      <mass value="1.5"/>
+      <inertia ixx="0.006" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.004"/>
+    </inertial>
+  </link>
+  <joint name="joint6" type="revolute">
+    <parent link="link5"/>
+    <child link="link6"/>
+    <origin xyz="0.08 0 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-6.28" upper="6.28" effort="0" velocity="0"/>
+  </joint>
+  <link name="tool0"/>
+  <joint name="flange" type="fixed">
+    <parent link="link6"/>
+    <child link="tool0"/>
+    <origin xyz="0.02 0 0" rpy="0 0 0"/>
+  </joint>
+</robot>

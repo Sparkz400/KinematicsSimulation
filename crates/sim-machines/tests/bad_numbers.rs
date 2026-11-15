@@ -257,6 +257,7 @@ default_config! {
     default_tripod: "tripod";
     default_wafer_handler: "wafer-handler";
     default_toggle_press: "toggle-press";
+    default_arm_on_track: "arm-on-track";
 }
 
 shipped_config! {
@@ -275,6 +276,7 @@ shipped_config! {
     config_arm7_tool: "urdf-arm", "crates/machine-joint-kit/config/arm7-tool.toml";
     config_scara_tool: "scara", "crates/machine-joint-kit/config/scara-tool.toml";
     config_toggle_press_cam: "toggle-press", "crates/machine-crank-cam/config/toggle-press-cam.toml";
+    config_arm_on_track_tool: "arm-on-track", "crates/machine-joint-kit/config/arm-on-track-tool.toml";
 }
 
 machine_file! {

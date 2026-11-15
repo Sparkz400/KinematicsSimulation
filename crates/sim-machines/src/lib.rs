@@ -32,6 +32,7 @@ pub static MACHINES: &[&MachineEntry] = &[
     &machine_tripod::ENTRY,
     &machine_wafer_handler::ENTRY,
     &machine_crank_cam::TOGGLE_PRESS,
+    &machine_joint_kit::ARM_ON_TRACK,
 ];
 
 pub const LANGUAGES: &[&str] = &["en", "de"];
