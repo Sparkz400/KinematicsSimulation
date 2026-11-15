@@ -1189,6 +1189,15 @@ impl Machine for LinearDelta {
         }
     }
 
+    /// The condition number of the legs' Jacobian at the plate position, for the workspace map; infinite out of the
+    /// rods' reach or at a direct singularity.
+    fn condition(&self, tool: &[f64]) -> Option<f64> {
+        let p = [tool[0], tool[1], tool[2]];
+        Some(
+            self.legs.inverse(p).and_then(|h| self.legs.jacobian(h, p)).map_or(f64::INFINITY, |j| condition_number(&j)),
+        )
+    }
+
     fn signal_infos(&self) -> Vec<SignalInfo> {
         let mut out = Vec::new();
         for (k, motor) in self.motors.iter().enumerate() {

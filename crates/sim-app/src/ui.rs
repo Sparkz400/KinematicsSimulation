@@ -327,6 +327,12 @@ pub enum Action {
     CloseAnalysis,
     Clear(Analysis),
     ClearMessages,
+    /// The mode list is found at the pose the machine stands at (`Model::find_modes`), and one of its modes shown
+    /// swinging in the 3D view, or the machine's own again.
+    FindModes,
+    PickMode(Option<usize>),
+    /// The cycle is run with each bounded value at its bounds, for the bands over its traces (`Model::trace_bands`).
+    TraceBands,
 }
 
 /// How much of its limit a check uses (`analysis::utilisation`): 1 is at the limit, above 1 over it. `None` where
@@ -1063,7 +1069,10 @@ pub fn tools(
             ToolTab::Path => path(ui, model, &mut inputs, actions),
             ToolTab::Trace => trace(ui, model, &mut inputs, actions),
             ToolTab::Sweep => sweep(ui, model, &mut inputs, actions),
-            ToolTab::Tuning => tuning(ui, model, actions),
+            ToolTab::Tuning => {
+                crate::views::mode_list(ui, model, actions);
+                tuning(ui, model, actions)
+            }
             ToolTab::Runs => runs(ui, model, &mut inputs, ghost, actions),
             ToolTab::Views => crate::views::views(ui, model, tolerance, actions),
         }
@@ -1492,6 +1501,9 @@ fn analysis(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<A
     if let Some(rows) = model.worst_table() {
         heading(ui, model, "ui-analysis-worst-corners", Analysis::Cycle);
         table(ui, "ui-analysis-worst-corners", &rows, None);
+    }
+    if model.bands.is_some() || model.insight.band_runs.is_some() || model.bands_tracing() {
+        crate::views::band_plots(ui, model, actions);
     }
     points(ui, model, actions);
     if let Some(rows) = &ranking {
@@ -2004,6 +2016,7 @@ fn path(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Actio
         heading(ui, model, key, Analysis::Path);
         table(ui, &format!("path-{key}"), rows, None);
     }
+    crate::views::path_colouring(ui, model, inputs);
     torque_speed(ui, model, Analysis::Path, actions);
     workspace(ui, model, inputs);
     search_views::move_maps(ui, model, inputs, actions);
@@ -2034,13 +2047,28 @@ fn workspace(ui: &mut Ui, model: &Model, inputs: &mut Inputs) {
     {
         inputs.workspace_z = Some(z);
     }
+    // By the condition number, or by the largest acceleration in the worst direction: dark where the machine does
+    // best, light where it does worst, the same way round for both.
+    use sim_app::insight::WorkspaceColour;
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut inputs.workspace_by, WorkspaceColour::Condition, tr("quantity-condition-number"));
+        ui.radio_value(&mut inputs.workspace_by, WorkspaceColour::Acceleration, tr("ui-workspace-acceleration"))
+            .on_hover_text(tr("ui-workspace-acceleration-hint"));
+    });
+    let by_acceleration = inputs.workspace_by == WorkspaceColour::Acceleration;
+    let gone = |k: &usize| slice.nodes[*k].1;
+    let top = (0..slice.nodes.len()).filter(gone).map(|k| slice.acceleration[k]).fold(0.0, f64::max);
     let side = ui.available_width().min(360.0);
     let map = search_views::GridMap::draw(ui, side, (slice.x, slice.y), slice.n, |k| {
         let (condition, goes) = slice.nodes[k];
         if !condition.is_finite() {
             return None;
         }
-        let color = if condition > slice.limit {
+        let color = if by_acceleration {
+            let [r, g, b] = trail_color((1.0 - slice.acceleration[k] / top.max(1e-12)) as f32)
+                .map(|c| (c.clamp(0.0, 1.0) * 255.0) as u8);
+            Color32::from_rgb(r, g, b)
+        } else if condition > slice.limit {
             LIMIT
         } else {
             let [r, g, b] = trail_color((condition.ln() / slice.limit.ln()) as f32).map(|c| (c * 255.0) as u8);
@@ -2055,8 +2083,14 @@ fn workspace(ui: &mut Ui, model: &Model, inputs: &mut Inputs) {
     if let Some((i, j)) = map.hovered() {
         let condition = slice.nodes[j * slice.n + i].0;
         let shown = if condition.is_finite() { short(condition) } else { tr("ui-workspace-out-of-reach") };
+        let acceleration = slice.acceleration[j * slice.n + i];
+        let reached = if acceleration.is_finite() {
+            format!(", {} {} {}", tr("ui-workspace-acceleration"), short(acceleration), tr("unit-m-per-s2"))
+        } else {
+            String::new()
+        };
         map.response.clone().on_hover_text(format!(
-            "{} {}, {} {}: {} {shown}",
+            "{} {}, {} {}: {} {shown}{reached}",
             tr(axes[0].key),
             short(map.at(slice.x, i)),
             tr(axes[1].key),
@@ -2065,8 +2099,13 @@ fn workspace(ui: &mut Ui, model: &Model, inputs: &mut Inputs) {
         ));
     }
     ui.horizontal(|ui| {
-        scale_bar(ui, "1", &short(slice.limit), trail_color);
-        ui.colored_label(LIMIT, format!("■ {}", tr("ui-workspace-above")));
+        if by_acceleration {
+            let unit = tr("unit-m-per-s2");
+            scale_bar(ui, &format!("{} {unit}", short(top)), &format!("0 {unit}"), trail_color);
+        } else {
+            scale_bar(ui, "1", &short(slice.limit), trail_color);
+            ui.colored_label(LIMIT, format!("■ {}", tr("ui-workspace-above")));
+        }
     });
     ui.weak(tr("ui-workspace-faint"));
 }

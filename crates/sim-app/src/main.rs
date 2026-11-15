@@ -548,6 +548,19 @@ fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
     if let Some(run) = &state.model.path_run {
         gizmos.linestrip(run.scene_line.iter().map(|p| to_bevy(*p)), palette(ui::PLAN));
     }
+    // The path that was run, coloured by what happened on it (`Model::path_colours`) on the scale the path tab shows,
+    // with its worst point red and the point read out there cyan.
+    if let Some(colours) = state.model.path_colours() {
+        let (low, high) = (colours.values.iter().copied().fold(f64::INFINITY, f64::min), colours.values[colours.worst]);
+        gizmos.linestrip_gradient(colours.points.iter().zip(&colours.values).map(|(p, v)| {
+            let [r, g, b] = ui::trail_color(((v - low) / (high - low).max(1e-12)) as f32);
+            (to_bevy(*p), Color::srgb(r, g, b))
+        }));
+        gizmos.sphere(Isometry3d::from_translation(to_bevy(colours.points[colours.worst])), 0.015, palette(ui::LIMIT));
+        if let Some(at) = state.model.inputs.path_probe.and_then(|i| colours.points.get(i)) {
+            gizmos.sphere(Isometry3d::from_translation(to_bevy(*at)), 0.012, palette(ui::ACTUAL));
+        }
+    }
     // The travelled path up to the time the timeline shows: scrubbed back, the tool had not been further yet. The
     // points with their times are the window's (`trail_points`); the plain path has none, so scrubbed it is drawn
     // from those.
@@ -1045,6 +1058,16 @@ fn orbit_camera(
         && let (Some(from), Some(at)) = (pressed_at.take(), window.cursor_position())
         && from.distance(at) < 4.0
     {
+        // On the coloured path (within 8 pixels of one of its points): that point is read out, nothing is picked.
+        let on_path = state.model.path_colours().and_then(|colours| {
+            let seen = |p: &[f64; 3]| lens.world_to_viewport(seen_from, to_bevy(*p)).ok().map(|s| s.distance(at));
+            let nearest = colours.points.iter().enumerate().filter_map(|(i, p)| Some((i, seen(p)?)));
+            nearest.min_by(|a, b| a.1.total_cmp(&b.1)).filter(|(_, d)| *d < 8.0).map(|(i, _)| i)
+        });
+        if let Some(i) = on_path {
+            state.model.inputs.path_probe = Some(i);
+            return;
+        }
         // In x-ray the CAD parts are see-through: a click goes through them to the belt and pulleys they hide.
         let xray = state.overlays.xray;
         // The compared run's ghost is never picked, nor an obstacle's faces: they are not the machine's parts.
@@ -1434,6 +1457,13 @@ fn panels(
             Action::CloseAnalysis => model.clear_analysis(),
             Action::Clear(kind) => model.clear(kind),
             Action::ClearMessages => model.messages.clear(),
+            Action::FindModes => model.find_modes(),
+            Action::PickMode(i) => {
+                model.pick_mode(i);
+                // A mode picked is shown at once; letting go of it shows the machine's own, as the switch says.
+                state.overlays.mode |= i.is_some();
+            }
+            Action::TraceBands => model.trace_bands(),
         }
     }
     Ok(())
@@ -1678,6 +1708,30 @@ fn developer_hooks(
             state.themed = false;
             if let Some(height) = asked("SIM_APP_WORKSPACE_Z").and_then(|z| z.parse().ok()) {
                 state.model.inputs.workspace_z = Some(height);
+            }
+            // The workspace map by acceleration; the path coloured by a quantity (path-error, tracking-error, speed,
+            // utilisation-<motor's place> or belt-tension) and read out at a sample; the mode list found and its mode
+            // shown (its place, from 0); the bands over the cycle's traces run.
+            if asked("SIM_APP_WORKSPACE_BY").is_some_and(|by| by == "acceleration") {
+                state.model.inputs.workspace_by = sim_app::insight::WorkspaceColour::Acceleration;
+            }
+            use sim_app::insight::PathQuantity;
+            state.model.inputs.path_colour = asked("SIM_APP_PATH_COLOUR").and_then(|word| match word.as_str() {
+                "path-error" => Some(PathQuantity::PathError),
+                "tracking-error" => Some(PathQuantity::TrackingError),
+                "speed" => Some(PathQuantity::Speed),
+                "belt-tension" => Some(PathQuantity::BeltTension),
+                other => other.strip_prefix("utilisation-")?.parse().ok().map(PathQuantity::Utilisation),
+            });
+            state.model.inputs.path_probe = asked("SIM_APP_PATH_PROBE").and_then(|i| i.parse().ok());
+            if let Some(mode) = asked("SIM_APP_MODE").and_then(|i| i.parse::<usize>().ok()) {
+                state.model.find_modes();
+                state.model.pick_mode(Some(mode));
+                state.overlays.mode = true;
+            }
+            if asked("SIM_APP_BANDS").is_some() {
+                state.model.inputs.bands = true;
+                state.model.trace_bands();
             }
             if let Some(part) = asked("SIM_APP_PART") {
                 let (id, nth) =

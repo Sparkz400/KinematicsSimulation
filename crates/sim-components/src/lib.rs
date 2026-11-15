@@ -33,6 +33,7 @@ pub mod report;
 pub mod rigid;
 pub mod search;
 pub mod shaper;
+pub mod shapes;
 pub mod sim;
 pub mod trace;
 pub mod transmission;
