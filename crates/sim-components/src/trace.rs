@@ -155,36 +155,71 @@ impl Trace {
     }
 }
 
+/// The shortest run-up of a replay (`replay`), s: long enough for the loops' integrators and the friction to settle
+/// at the trace's first speed before its first row.
+pub const RUN_UP_S: f64 = 0.25;
+
 /// Plays the position setpoints of a trace through the simulator and returns what the simulated drives
-/// did at the times of the trace's rows. The config's start pose has to be where the trace starts.
+/// did at the times of the trace's rows. The replay starts from the trace's own state, whatever the config's start pose:
+/// at rest at a pose before it, it runs up to the first row's position setpoint at the first row's measured speed, so a
+/// recording cut out of a longer motion replays without the jolt of a start from rest. The run-up is a smootherstep of
+/// the speed (rest to that speed, zero acceleration at both ends, `RUN_UP_S` or more, so that its acceleration stays
+/// within a quarter of each axis's limit), the way covered half the speed times its time; the pose it starts at has to
+/// be within the axes' ranges. A trace that starts at rest runs up by holding still.
 ///
 /// The setpoints become tool poses (the machine's forward transformation) and run as `Command::Trajectory`,
 /// so the simulator's own controller makes the speed and torque feedforward from them, as it does for any
 /// path. With a row per profile cycle the position setpoints are reproduced exactly; the speed and
-/// acceleration setpoints are slopes between rows.
+/// acceleration setpoints are slopes between rows. Behind the last row the motion carries on (below): the trace's end
+/// is not forced to rest.
 pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace, TraceError> {
     // The rows are a stream, interpolated between neighbours as a drive does (the Hermite cubic, whatever the config's
     // `profile.trajectory_spline`): the C2 spline, clamped at rest at the end of the run-out below, rang back over
     // the rows before it, the last ones off by 4 N m of torque on a belt axis and 800 N m on a linear motor.
     let mut cfg = cfg.clone();
     cfg.set_text("profile.trajectory_spline = \"hermite\"")?;
-    let mut sim = Sim::new(entry, &cfg)?;
     let rows = trace.time.len();
     // The first row is the start, and carrying on behind the last one (below) takes three more.
     if rows < 4 {
         return Err(TraceError { key: "error-trace-short", detail: String::new() });
     }
-    // A row holds the setpoint the drive worked with up to the row's time (a run writes a row before it
-    // computes the step at that time). So each row is commanded one row earlier, and the first row, the
-    // start, is left out.
-    let mut points: Vec<(f64, Vec<f64>)> = (1..rows)
-        .map(|i| {
-            let setpoint: Vec<f64> = trace.motors.iter().map(|m| m.setpoint[i]).collect();
-            let mut pose = vec![0.0; sim.machine.axes().len()];
-            sim.machine.forward(&setpoint, &mut pose);
-            (trace.time[i] - trace.time[1], pose)
+    let machine = (entry.build)(&crate::catalog::resolve(entry, &cfg)?)?;
+    let pose_of = |angles: &[f64]| {
+        let mut pose = vec![0.0; machine.axes().len()];
+        machine.forward(angles, &mut pose);
+        pose
+    };
+    // The trace's state at its first row: the position setpoint's pose, and the measured speed in tool units (the pose
+    // 1 ms ahead at that speed).
+    let first: Vec<f64> = trace.motors.iter().map(|m| m.setpoint[0]).collect();
+    let start = pose_of(&first);
+    let ahead = pose_of(&trace.motors.iter().map(|m| m.setpoint[0] + 1e-3 * m.speed[0]).collect::<Vec<f64>>());
+    let speed: Vec<f64> = ahead.iter().zip(&start).map(|(a, s)| (a - s) / 1e-3).collect();
+    let step = trace.time[1] - trace.time[0];
+    // Peak acceleration of the smootherstep: 15/8 of speed over time.
+    let long =
+        machine.axes().iter().zip(&speed).map(|(a, v)| 1.875 * v.abs() / (0.25 * a.max_acc)).fold(RUN_UP_S, f64::max);
+    let run_up = (long / step).ceil() as usize + 1;
+    let span = (run_up - 1) as f64 * step;
+    let from: Vec<f64> = start.iter().zip(&speed).map(|(p, v)| p - 0.5 * v * span).collect();
+    cfg.set("start.pose", toml::Value::Array(from.iter().map(|p| toml::Value::Float(*p)).collect()))?;
+    let mut sim = Sim::new(entry, &cfg)?;
+    // Smootherstep of the speed, integrated: s(u) = 2.5 u^4 - 3 u^5 + u^6, 1/2 at u = 1.
+    let mut points: Vec<(f64, Vec<f64>)> = (0..run_up)
+        .map(|k| {
+            let u = k as f64 / (run_up - 1) as f64;
+            let way = span * (2.5 * u.powi(4) - 3.0 * u.powi(5) + u.powi(6));
+            (k as f64 * step, from.iter().zip(&speed).map(|(p, v)| p + v * way).collect())
         })
         .collect();
+    // A row holds the setpoint the drive worked with up to the row's time (a run writes a row before it
+    // computes the step at that time). So each row is commanded one row earlier: the first row, the start, ends the
+    // run-up, and row i follows at the run-up's end plus the time from row 1 to row i + 1.
+    let offset = span + step;
+    points.extend((1..rows).map(|i| {
+        let setpoint: Vec<f64> = trace.motors.iter().map(|m| m.setpoint[i]).collect();
+        (offset + trace.time[i] - trace.time[1], pose_of(&setpoint))
+    }));
     // A trajectory ends at rest, a trace may end in motion. Two more points, carrying on with the last
     // rows' speed and acceleration, put the stop and the piece of curve that bends towards it behind
     // the last row.
@@ -195,7 +230,7 @@ pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace
     sim.command(Command::Trajectory(points)).map_err(|e| TraceError { key: e.key, detail: String::new() })?;
     let mut out = Trace::default();
     for time in &trace.time {
-        while sim.step < ((time - trace.time[0]) / sim.dt).round() as u64 {
+        while sim.step < ((time - trace.time[0] + offset) / sim.dt).round() as u64 {
             sim.step();
         }
         out.record(&sim);
