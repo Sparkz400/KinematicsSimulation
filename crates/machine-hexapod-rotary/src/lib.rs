@@ -49,7 +49,7 @@
 //! friction; parts that cross are checked only for the rods among each other.
 
 use sim_components::chain::{
-    JOINT_KEYS, JointMachine, JointSpec, MOTOR_IDS, MOTOR_KEYS, Mechanism, condition_number, inverse, solve,
+    JOINT_KEYS, JointMachine, JointSpec, MOTOR_IDS, MOTOR_KEYS, Mechanism, condition_number, solve,
 };
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::ThermalFeedback;
@@ -131,6 +131,58 @@ fn norm(a: V3) -> f64 {
     dot(a, a).sqrt()
 }
 
+/// A 6 x 6 matrix factored by Gaussian elimination with partial pivoting (P A = L U), to solve with it more than once.
+struct Lu {
+    a: [f64; 36],
+    pivot: [usize; 6],
+}
+
+impl Lu {
+    /// The factors of `m` (row by row); `None` where it is singular.
+    fn of(m: &[f64]) -> Option<Lu> {
+        let mut a: [f64; 36] = std::array::from_fn(|k| m[k]);
+        let mut pivot = [0; 6];
+        for c in 0..6 {
+            let p = (c..6).max_by(|&i, &j| a[i * 6 + c].abs().total_cmp(&a[j * 6 + c].abs()))?;
+            if !(a[p * 6 + c].abs() > 1e-300) {
+                return None;
+            }
+            pivot[c] = p;
+            if p != c {
+                for k in 0..6 {
+                    a.swap(p * 6 + k, c * 6 + k);
+                }
+            }
+            for r in c + 1..6 {
+                let f = a[r * 6 + c] / a[c * 6 + c];
+                a[r * 6 + c] = f;
+                for k in c + 1..6 {
+                    a[r * 6 + k] -= f * a[c * 6 + k];
+                }
+            }
+        }
+        Some(Lu { a, pivot })
+    }
+
+    /// x with A x = b.
+    fn solve(&self, mut b: [f64; 6]) -> [f64; 6] {
+        // The rows' interchanges first, in their order: the multipliers moved with every later interchange.
+        for c in 0..6 {
+            b.swap(c, self.pivot[c]);
+        }
+        for c in 0..6 {
+            for r in c + 1..6 {
+                b[r] -= self.a[r * 6 + c] * b[c];
+            }
+        }
+        for c in (0..6).rev() {
+            let s: f64 = (c + 1..6).map(|k| self.a[c * 6 + k] * b[k]).sum();
+            b[c] = (b[c] - s) / self.a[c * 6 + c];
+        }
+        b
+    }
+}
+
 /// The least distance between the segments p0-p1 and q0-q1.
 pub fn segment_distance(p0: V3, p1: V3, q0: V3, q1: V3) -> f64 {
     let (d1, d2, r) = (sub(p1, p0), sub(q1, q0), sub(p0, q0));
@@ -186,6 +238,10 @@ pub struct Geometry {
     pub max_condition: f64,
     /// The pose Newton's forward kinematics starts from: the centre of the tool's box.
     pub home: [f64; 6],
+    /// The cranks' angles at `home` and the twist per crank angle there (K, 6 x 6): Newton starts from home moved by
+    /// K (q - q_home), a guess that depends on q alone (`set_home`); it saves about two of its steps.
+    home_q: [f64; 6],
+    home_k: [f64; 36],
 }
 
 impl Geometry {
@@ -227,7 +283,26 @@ impl Geometry {
             min_clearance: 0.0,
             max_condition: f64::INFINITY,
             home: [0.0; 6],
+            home_q: [0.0; 6],
+            home_k: [0.0; 36],
         }
+    }
+
+    /// Sets the pose the forward kinematics starts from, and its first-order guess there (none where home is out of
+    /// reach or singular).
+    pub fn set_home(&mut self, home: [f64; 6]) {
+        (self.home, self.home_q, self.home_k) = (home, [0.0; 6], [0.0; 36]);
+        let mut q = [0.0; 6];
+        if !self.inverse(&home, &mut q) {
+            return;
+        }
+        let legs = self.legs_at(&q, [home[0], home[1], home[2]], &Self::rotation(&home));
+        let Some(lu) = Lu::of(&Self::constraint(&legs)) else { return };
+        for c in 0..6 {
+            let col = lu.solve(std::array::from_fn(|i| if i == c { legs[c].arm } else { 0.0 }));
+            (0..6).for_each(|r| self.home_k[r * 6 + c] = col[r]);
+        }
+        self.home_q = q;
     }
 
     pub fn rotation(tool: &[f64]) -> M3 {
@@ -306,34 +381,45 @@ impl Geometry {
         j
     }
 
-    /// The tool pose for crank angles, by Newton's method from `home`; NaN where it does not converge.
-    pub fn forward(&self, q: &[f64], tool: &mut [f64]) {
-        let (mut p, mut r) = ([self.home[0], self.home[1], self.home[2]], Self::rotation(&self.home));
-        let mut converged = false;
+    /// The platform's centre and rotation for crank angles, by Newton's method from `home`; `None` where it does not
+    /// converge.
+    pub fn pose(&self, q: &[f64]) -> Option<(V3, M3)> {
+        let dq: [f64; 6] = std::array::from_fn(|c| q[c] - self.home_q[c]);
+        let guess: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| self.home_k[r * 6 + c] * dq[c]).sum());
+        // Far from home (or out of reach of the guess) Newton starts from home itself.
+        let ok = guess.iter().all(|v| v.is_finite() && v.abs() < 0.5);
+        let guess = if ok { guess } else { [0.0; 6] };
+        let mut p = add([self.home[0], self.home[1], self.home[2]], [guess[0], guess[1], guess[2]]);
+        let mut r = matmul(&exp([guess[3], guess[4], guess[5]]), &Self::rotation(&self.home));
         for _ in 0..40 {
             let legs = self.legs_at(q, p, &r);
-            let miss: Vec<f64> = legs.iter().map(|l| self.rod - norm(sub(l.joint, l.tip))).collect();
+            let miss: [f64; 6] = std::array::from_fn(|i| self.rod - norm(sub(legs[i].joint, legs[i].tip)));
             let worst = miss.iter().fold(0.0f64, |m, v| m.max(v.abs()));
             if !worst.is_finite() {
-                break;
+                return None;
             }
-            let Some(step) = solve(&Self::constraint(&legs), &miss) else { break };
+            let step = Lu::of(&Self::constraint(&legs))?.solve(miss);
             p = add(p, [step[0], step[1], step[2]]);
             r = matmul(&exp([step[3], step[4], step[5]]), &r);
             // Within 1e-12 m one more step: Newton's square takes the rest to the rounding (stopping at 1e-13 left some
             // poses unconverged by their rounding, stopping at 1e-12 left 1e-13 of noise in the pose, which the
             // controller's differences of the forward kinematics amplify).
             if worst < 1e-12 {
-                converged = true;
-                break;
+                return Some((p, r));
             }
         }
-        if !converged {
-            tool.iter_mut().for_each(|v| *v = f64::NAN);
-            return;
+        None
+    }
+
+    /// The tool pose for crank angles (`pose`); NaN where it does not converge.
+    pub fn forward(&self, q: &[f64], tool: &mut [f64]) {
+        match self.pose(q) {
+            Some((p, r)) => {
+                let rv = log(&r);
+                tool[..6].copy_from_slice(&[p[0], p[1], p[2], rv[0], rv[1], rv[2]]);
+            }
+            None => tool.iter_mut().for_each(|v| *v = f64::NAN),
         }
-        let rv = log(&r);
-        tool[..6].copy_from_slice(&[p[0], p[1], p[2], rv[0], rv[1], rv[2]]);
     }
 
     /// The condition number of the inverse Jacobian with the turns weighed by the platform radius (the platform
@@ -478,7 +564,7 @@ impl RotaryPlatform {
         if (0..6).any(|k| !(min[k] < max[k])) {
             return Err(ConfigError::Invalid("workspace.tool_max".into()));
         }
-        geo.home = std::array::from_fn(|k| 0.5 * (min[k] + max[k]));
+        geo.set_home(std::array::from_fn(|k| 0.5 * (min[k] + max[k])));
         let body =
             |mass: f64, cg: V3, diag: V3| Body { mass, moment: scale(cg, mass), inertia: shifted(diag, mass, cg) };
         let platform = body(
@@ -567,27 +653,24 @@ impl RotaryPlatform {
     /// The platform's motion at crank angles q and rates qd; `None` where the forward kinematics fails or A is
     /// singular.
     fn motion(&self, q: &[f64], qd: &[f64]) -> Option<Motion> {
-        let mut tool = [0.0; 6];
-        self.geo.forward(q, &mut tool);
-        if !tool.iter().all(|v| v.is_finite()) {
-            return None;
+        let (p, r) = self.geo.pose(q)?;
+        let rv = log(&r);
+        let tool = [p[0], p[1], p[2], rv[0], rv[1], rv[2]];
+        let legs = self.geo.legs_at(q, p, &r);
+        let lu = Lu::of(&Geometry::constraint(&legs))?;
+        let mut k = vec![0.0; 36];
+        for c in 0..6 {
+            let col = lu.solve(std::array::from_fn(|i| if i == c { legs[c].arm } else { 0.0 }));
+            (0..6).for_each(|r| k[r * 6 + c] = col[r]);
         }
-        let r = Geometry::rotation(&tool);
-        let legs = self.geo.legs_at(q, [tool[0], tool[1], tool[2]], &r);
-        let ainv = inverse(&Geometry::constraint(&legs), 6)?;
-        let k: Vec<f64> = (0..36).map(|rc| ainv[rc] * legs[rc % 6].arm).collect();
-        let xi: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| k[r * 6 + c] * qd[c]).sum());
+        let xi = lu.solve(std::array::from_fn(|i| legs[i].arm * qd[i]));
         let (v, w) = ([xi[0], xi[1], xi[2]], [xi[3], xi[4], xi[5]]);
-        let s: Vec<f64> = (0..6)
-            .map(|i| {
-                let leg = &legs[i];
-                let slip = sub(add(v, cross(w, leg.b)), scale(leg.t, qd[i]));
-                dot(leg.u, leg.t2) * qd[i] * qd[i]
-                    - dot(slip, slip) / self.geo.rod
-                    - dot(leg.u, cross(w, cross(w, leg.b)))
-            })
-            .collect();
-        let xi0: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| ainv[r * 6 + c] * s[c]).sum());
+        let s: [f64; 6] = std::array::from_fn(|i| {
+            let leg = &legs[i];
+            let slip = sub(add(v, cross(w, leg.b)), scale(leg.t, qd[i]));
+            dot(leg.u, leg.t2) * qd[i] * qd[i] - dot(slip, slip) / self.geo.rod - dot(leg.u, cross(w, cross(w, leg.b)))
+        });
+        let xi0 = lu.solve(s);
         Some(Motion { tool, r, legs, k, xi, xi0 })
     }
 

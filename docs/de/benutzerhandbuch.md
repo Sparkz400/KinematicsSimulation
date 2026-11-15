@@ -989,7 +989,7 @@ daneben.
 `hexapod-rotary` ist die andere Bauart eines Hexapods, eine Bewegungsplattform auf sechs Kurbeln (6-RSS): sechs
 1FT2104-5AF mit Planetengetrieben SP100 50:1 auf der Basis, jeder dreht eine Kurbel von 200 mm, jede Kurbel über eine
 Stange von 550 mm mit einem Kugelgelenk an beiden Enden mit der Plattform verbunden; eine Plattform von 35 kg mit einem
-Sitz samt Insasse, 80 kg, 300 mm über den Plattformgelenken. Ihr Zyklus hebt und senkt die Plattform, verschiebt sie dann längs und quer,
+Sitz samt Insasse, 80 kg, 300 mm über den Plattformgelenken. Ihr Zyklus hebt die Plattform, verschiebt sie dann längs und quer,
 rollt, giert und nickt sie, jeweils aus der Lage davor, und bringt sie waagrecht zurück.
 
 ```text
@@ -1015,7 +1015,7 @@ Im Zyklus nutzen die Motoren höchstens 46 % ihrer Momentenkennlinie, die Getrie
 die Kurbeln bleiben mindestens 64,5° von ihren Totpunkten, die Stangen tragen höchstens 953 N gegen die 3530 N, die ihr
 Knicken erlaubt, und die Plattform beruhigt sich auf 0,50 mm: der Großteil ist die Verdrehung der Getriebe unter dem
 Gewicht des Sitzes, die die Geber der Motoren nicht sehen (0,15 mm mit starren Getrieben). Die Drehzahlregler haben
-0,12 N m s/rad (41,8° und 9,5 dB in der waagrechten Lage).
+0,10 N m s/rad (47,1° und 11,1 dB in der waagrechten Lage, 38,7° und 9,6 dB ohne Reibung; 0,12 ließ dort 34,2°).
 
 `cable-planar` hängt einen Schlitten von 3 kg (bis zu 2 kg darauf) in einer senkrechten Ebene an 4 Seile,
 `cable-spatial` eine Plattform von 4 kg (bis zu 4 kg) mit sechs Freiheitsgraden an 8; jedes Seil läuft über eine

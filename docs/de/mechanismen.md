@@ -529,9 +529,9 @@ positiv hebt die Spitze). Jede Kurbel ist ein Gelenk von `chain::JointMachine` m
   weniger `ratings.crank_dead_centre_margin_deg`, 20°), `rod-buckling` (Druckkraft der Stange gegen ihre Euler-Last
   π² E I / L² des Rohrs aus `[rod]`, durch `ratings.rod_buckling_safety_factor`), `crank-ball-joint` und
   `platform-ball-joint` (die Winkel der Gelenke gegen ihre Grenzen) und `singularity`.
-- Der Standardzyklus: Hub 50 mm auf und bis 50 mm unter die waagrechte Lage, dann Längs- und Querbewegung 60 mm, Rollen
+- Der Standardzyklus: Hub 50 mm auf, dann Längs- und Querbewegung 60 mm, Rollen
   0,12 rad, Gieren 0,15 rad und Nicken 0,12 rad, jeweils aus der Lage davor (die eine geht zurück, während die nächste einsetzt),
-  und zurück in die waagrechte Lage, mit Sitz durchgehend.
+  und zurück in die waagrechte Lage, wo der Sitz ab- und wieder aufgesetzt wird (das Umschalten der Nutzlast).
 
 Wie beim Hexapod läuft die von festen Kurbelmomenten gehaltene Plattform unter ihrem Gewicht aus ihrer Lage, daher
 laufen die verlustfreien Konfigurationen der Standardprüfungen ohne Schwerkraft (und ohne Getriebespiel, das ohne Last

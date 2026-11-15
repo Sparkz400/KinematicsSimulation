@@ -973,7 +973,7 @@ s/rad: with 0.1 the legs' friction held the platform 0.17 mm off at the dwells.
 `hexapod-rotary` is the other build of a hexapod, a motion base on six cranks (6-RSS): six 1FT2104-5AF with planetary
 gearboxes SP100 50:1 on the base, each turning a crank of 200 mm, each crank joined to the platform by a rod of 550 mm
 with a ball joint at both ends; a platform of 35 kg carrying a seat with its occupant, 80 kg, 300 mm above the platform
-joints. Its cycle heaves the platform up and down, then surges, sways, rolls, yaws and pitches it, each from the pose before,
+joints. Its cycle heaves the platform up, then surges, sways, rolls, yaws and pitches it, each from the pose before,
 and brings it back level.
 
 ```text
@@ -998,8 +998,8 @@ angles. A target is refused where a rod cannot reach, a crank comes nearer its d
 On its cycle the motors use at most 46 % of their torque curve, the gearboxes see at most 183 of their 278 N m, the
 cranks keep at least 64.5° from their dead centres, the rods carry at most 953 N against the 3530 N their buckling allows,
 and the platform settles within 0.50 mm: the gearboxes' twist under the seat's weight, which the motors' encoders do not
-see, is most of it (0.15 mm with rigid gearboxes). The velocity loops' gain is 0.12 N m s/rad (41.8° and 9.5 dB at the
-level pose).
+see, is most of it (0.15 mm with rigid gearboxes). The velocity loops' gain is 0.10 N m s/rad (47.1° and 11.1 dB at the
+level pose, 38.7° and 9.6 dB with the friction off; 0.12 left 34.2° there).
 
 `cable-planar` hangs a carriage of 3 kg (up to 2 kg on it) in a vertical plane from 4 cables, `cable-spatial` a platform
 of 4 kg (up to 4 kg) with six degrees of freedom from 8; each cable runs over a swivelling pulley onto a winch behind a

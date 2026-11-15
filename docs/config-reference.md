@@ -1111,9 +1111,10 @@ has the tables of the delta picker D3 for its drives (`[parts]`, `[effects]`, `[
 `[profile]`, `[sim]`, `[joint]` for each crank's bearing and stops, `[gearbox]`, `[motor]`, `[drive]`, `[ratings]`,
 `[bounds]`, `[base]`, `[brake]`) with the same meanings; one motor, gearbox and drive per crank, all alike: the
 1FT2104-5AF on an S210 6SL3210-5HE10-8UF0 and the SP100-04-50 (ratio 50, 106570 N m/rad, 0.54 kg cm² at the input,
-catalogue; backlash 2.25 arcmin, estimate). `drive.velocity_kp_nm_s_rad` 0.12 (tuned with `sim-cli margins hexapod-rotary --bands`); `profile.vertical_axis` "z". The tool pose, `start.pose` and the
+catalogue; backlash 2.25 arcmin, estimate). `drive.velocity_kp_nm_s_rad` 0.10 (tuned with `sim-cli margins hexapod-rotary --bands`: 47.1° and 11.1 dB at the start pose, 38.7° and 9.6 dB with the friction off); `profile.vertical_axis` "z". The tool pose, `start.pose` and the
 targets are x, y, z (m), rx, ry, rz (rad, a rotation vector), as on the hexapod; `[axis.x]` to `[axis.z]` 0.3 m/s,
-4 m/s², 80 m/s³, `[axis.rx]` to `[axis.rz]` 0.6 rad/s, 5 rad/s², 100 rad/s³ (estimates). `joint.min_angle_deg`,
+4 m/s², 40 m/s³, `[axis.rx]` to `[axis.rz]` 0.6 rad/s, 5 rad/s², 50 rad/s³ (estimates; the jerk reaches the acceleration in
+0.1 s, a swing of the platform's lowest mode on the gearboxes, some 10 Hz). `joint.min_angle_deg`,
 `max_angle_deg` are the cranks' stops (−100, 50; the working range needs −92 to 38). `gearbox_drag` and `gearbox_lost_motion` are off (no catalogue figure for
 this ratio). Its own keys (all estimates; the masses bounded):
 

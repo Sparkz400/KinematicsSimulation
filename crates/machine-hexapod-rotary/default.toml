@@ -321,36 +321,38 @@ magnet_temperature_coefficient_1_k = -0.0012
 # [catalogue] the stall current: static torque over torque constant.
 stall_current_a = 2.1
 
-# [estimate] A motion base's moves: 0.3 m/s and 4 m/s2 (0.4 g) along, 0.6 rad/s and 5 rad/s2 about each axis.
+# [estimate] A motion base's moves: 0.3 m/s and 4 m/s2 (0.4 g) along, 0.6 rad/s and 5 rad/s2 about each axis; the jerk
+# reaches them in 0.1 s, as long as the platform's lowest mode on the gearboxes takes to swing (some 10 Hz with the seat's
+# centre of mass 0.3 m up): at 80 m/s3 a surge rang 10 % about its speed 50 ms into its cruise.
 [axis.x]
 max_velocity_m_s = 0.3
 max_acceleration_m_s2 = 4.0
-max_jerk_m_s3 = 80.0
+max_jerk_m_s3 = 40.0
 
 [axis.y]
 max_velocity_m_s = 0.3
 max_acceleration_m_s2 = 4.0
-max_jerk_m_s3 = 80.0
+max_jerk_m_s3 = 40.0
 
 [axis.z]
 max_velocity_m_s = 0.3
 max_acceleration_m_s2 = 4.0
-max_jerk_m_s3 = 80.0
+max_jerk_m_s3 = 40.0
 
 [axis.rx]
 max_velocity_rad_s = 0.6
 max_acceleration_rad_s2 = 5.0
-max_jerk_rad_s3 = 100.0
+max_jerk_rad_s3 = 50.0
 
 [axis.ry]
 max_velocity_rad_s = 0.6
 max_acceleration_rad_s2 = 5.0
-max_jerk_rad_s3 = 100.0
+max_jerk_rad_s3 = 50.0
 
 [axis.rz]
 max_velocity_rad_s = 0.6
 max_acceleration_rad_s2 = 5.0
-max_jerk_rad_s3 = 100.0
+max_jerk_rad_s3 = 50.0
 
 # One drive per motor, all with the same settings. Cycle times must be whole multiples of sim.dt_s.
 [drive]
@@ -360,8 +362,9 @@ position_cycle_s = 1.0e-3
 current_delay_cycles = 1
 velocity_delay_cycles = 1
 kv_1_s = 50.0
-# [estimate] tuned with `sim-cli margins hexapod-rotary --bands`.
-velocity_kp_nm_s_rad = 0.12
+# [estimate] tuned with `sim-cli margins hexapod-rotary --bands`: at the start pose 176 Hz, 47.1 degrees and 11.1 dB, with
+# the motors' and cranks' friction off 38.7 degrees and 9.6 dB (0.12 left 34.2 degrees there).
+velocity_kp_nm_s_rad = 0.10
 velocity_tn_s = 0.03
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
@@ -466,16 +469,12 @@ braking_resistor_rated_rise_k = 200.0
 [start]
 pose = [0.0, 0.0, 0.40, 0.0, 0.0, 0.0]
 
-# A motion base's test cycle: heave up and down, then surge, sway, roll, yaw and pitch, each from the pose before (so
+# A motion base's test cycle: heave up, then surge, sway, roll, yaw and pitch, each from the pose before (so
 # that one turns back while the next sets in, as a motion cue does), and back to the level pose, with the seat and its
-# occupant on (payload) all the way.
+# occupant on (payload); at the level pose the seat is taken off (payload false) and put on again, as a motion base
+# changes its occupant between runs.
 [[cycle.segment]]
 target = [0.0, 0.0, 0.45, 0.0, 0.0, 0.0]
-dwell_s = 0.1
-payload = true
-
-[[cycle.segment]]
-target = [0.0, 0.0, 0.35, 0.0, 0.0, 0.0]
 dwell_s = 0.1
 payload = true
 
@@ -503,6 +502,11 @@ payload = true
 target = [0.0, 0.0, 0.40, 0.0, 0.12, 0.0]
 dwell_s = 0.1
 payload = true
+
+[[cycle.segment]]
+target = [0.0, 0.0, 0.40, 0.0, 0.0, 0.0]
+dwell_s = 0.1
+payload = false
 
 [[cycle.segment]]
 target = [0.0, 0.0, 0.40, 0.0, 0.0, 0.0]
@@ -572,6 +576,8 @@ motor.friction_breakaway_nm = [0.03, 0.06]
 motor.friction_stribeck_rad_s = [0.5, 10.0]
 ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
 ratings.line_module_efficiency = [0.95, 0.99]
+thermal.gearbox_resistance_k_w = [0.8, 3.0]
+thermal.gearbox_time_constant_s = [600.0, 2400.0]
 thermal_feedback.ambient_c = [10.0, 40.0]
 thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
 thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
