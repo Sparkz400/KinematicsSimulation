@@ -2064,9 +2064,9 @@ fn a_trace_is_replayed_and_fitted_in_the_app(entry: &'static MachineEntry) {
     let [replayed, fitted, _identified] = &tables[..] else { panic!("{} tables", tables.len()) };
     // Per motor the difference between trace and replay: within 0.5 % (RMS) and 5 % (peak) of the largest torque.
     assert_eq!((replayed.len(), replayed[0][0].as_str(), replayed[0].len()), (5, "Figure", 1 + measured.motors.len()));
-    // The wafer handler's arm moves a wafer held by friction ("wafer-slip"): its reach motor, a 1FK2103 of 1.95 N m, peaks
-    // at 0.071 N m on this trace, which still lies far above the replay's error.
-    let floor = if entry.id == "wafer-handler" { 0.05 } else { 0.1 };
+    // Every motor works on the trace: at least 0.05 N m. An arm that carries a part held by friction alone asks its
+    // reach motor for little (0.071 N m of a 1.95 N m motor, 15 November 2026), still far above the replay's error.
+    let floor = 0.05;
     for (k, motor) in measured.motors.iter().enumerate() {
         let largest = motor.torque.iter().fold(0.0, |a: f64, b| a.max(b.abs()));
         let (rms, peak) =
