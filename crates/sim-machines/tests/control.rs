@@ -967,11 +967,37 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
             let quiet = sim.control.drives.iter().map(|d| d.torque_command.abs()).fold(0.0, f64::max);
             let mut other = cfg.clone();
             other.set_text(&format!("{switch} = {}", !elastic)).unwrap();
+            let motors = |s: &Sim| {
+                let n = s.machine.motors().len();
+                let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+                s.machine.motor_state(&s.state, &mut pos, &mut vel);
+                pos
+            };
+            let rotors = motors(&sim);
             sim.reconfigure(entry, &other).unwrap();
+            // The motors of the elastic model stand ahead of the rigid one's by their gears' twist under the load (the
+            // palletiser's lift: 2.5 N m x 160 x 0.8 / 2e5 N m/rad = 1.6 mrad at the arm, 0.26 rad at the motor), and the
+            // profile's next setpoint, the same for both models, puts that step into the following error. The drive's
+            // answer is the velocity loop's gain times Kv times the step, here 0.35 x 50 x 0.26 = 4.5 N m on the 2.5 it
+            // held: a kick of the model change, not of the motion carried over.
+            let kick: Vec<f64> = motors(&sim)
+                .iter()
+                .zip(&rotors)
+                .zip(sim.machine.motors())
+                .map(|((after, before), m)| {
+                    let own = sim_components::catalog::motor_config(&other, m.id).unwrap();
+                    let gain = own.f64("drive.velocity_kp_nm_s_rad").unwrap() * own.f64("drive.kv_1_s").unwrap();
+                    gain * (after - before).abs()
+                })
+                .collect();
             let after = tool(&sim);
+            // To the last digits: the hexapod's forward kinematics is a Newton iteration to 1e-13 m of leg length, and its
+            // speeds pass through J^-1 at the new state, up to 1.7e-11 m/s (or rad/s) apart at 0.2 m/s.
+            let fastest = before.1.iter().fold(0f64, |m, v| m.max(v.abs()));
             for i in 0..axes.len() {
                 assert!(
-                    (after.0[i] - before.0[i]).abs() < 1e-12 && (after.1[i] - before.1[i]).abs() < 1e-12,
+                    (after.0[i] - before.0[i]).abs() < 1e-12
+                        && (after.1[i] - before.1[i]).abs() < 1e-12 + 1e-9 * fastest,
                     "{}: {before:?} to {after:?}",
                     entry.id
                 );
@@ -979,7 +1005,8 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
             assert!(before.1[0] > 0.95 * axes[0].max_vel);
             let (mut torque, mut off) = (0f64, 0f64);
             sim.run(0.2, |s| {
-                torque = s.control.drives.iter().map(|d| d.torque_command.abs()).fold(torque, f64::max);
+                let over = s.control.drives.iter().zip(&kick).map(|(d, kick)| d.torque_command.abs() - kick);
+                torque = over.fold(torque, f64::max);
                 off = off.max((tool(s).0[0] - s.control.set_pos[0]).abs());
             });
             // The lag the new model has of its own, where it grows in those 200 ms: the slider-crank's elastic crank,
@@ -991,7 +1018,7 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
             }
             assert!(
                 torque < 0.5 * peak && off < behind + 2e-4,
-                "{}, from elastic {elastic}: {torque} N m (before {quiet} N m, limit {peak} N m), {off} m off the setpoint (before {behind} m)",
+                "{}, from elastic {elastic}: {torque} N m beyond the kick {kick:?} N m (before {quiet} N m, limit {peak} N m), {off} m off the setpoint (before {behind} m)",
                 entry.id
             );
         }

@@ -339,7 +339,7 @@ pub struct Hexapod {
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let (machine, _) = Hexapod::from_config(cfg)?;
-    Ok(machine)
+    sim_components::base::mount(cfg, machine)
 }
 
 impl Hexapod {
@@ -531,6 +531,23 @@ impl Mechanism for Hexapod {
                     .sum();
             }
         }
+    }
+    /// The platform (its joints' share of the legs and the payload with it) at its centre p with its twist (v, w):
+    /// m v, p x m v + R I R^T w; the platform joints lie symmetric about p, so their first moment is m p. Each leg's
+    /// rotor spins along the leg's u_i. The legs' shares at the base joints do not move.
+    fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
+        let (tool, legs, r) = self.pose(q)?;
+        let jinv = inverse(&Geometry::jacobian(&legs), 6)?;
+        let xi: Vec<f64> = (0..6).map(|r| (0..6).map(|c| jinv[r * 6 + c] * qd[c]).sum()).collect();
+        let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        sim_components::base::add_point(&mut f, self.moving(), [tool[0], tool[1], tool[2]], [xi[0], xi[1], xi[2]]);
+        let iw = matmul(&matmul(&r, &self.inertia), &transpose(&r));
+        let turning = mul(&iw, [xi[3], xi[4], xi[5]]);
+        (0..3).for_each(|k| f.angular[k] += turning[k]);
+        for (u, spin) in legs.u.iter().zip(rotor_spin) {
+            sim_components::base::add_spin(&mut f, *u, 1.0, *spin);
+        }
+        Some(f)
     }
     fn potential(&self, q: &[f64]) -> f64 {
         self.pose(q).map_or(f64::NAN, |(tool, ..)| self.moving() * self.g * tool[2])

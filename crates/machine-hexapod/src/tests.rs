@@ -94,3 +94,23 @@ fn the_default_cycle_passes_its_verdicts() {
         assert!(v.ok, "{} of motor {:?} is {} against {}", v.check, v.motor, v.value, v.limit);
     }
 }
+
+/// What the platform puts on a compliant base at home (0, 0, 0.48 m), moving at v = (0.1, 0, 0.1) m/s and turning at
+/// w = (0, 0, 0.2) rad/s, the rotors at rest: m = 62.2 kg (as above), so m v = (6.22, 0, 6.22) N s; about the origin
+/// p x m v = (0, 0.48 x 6.22, 0) = (0, 2.9856, 0) N m s and I_zz w with I_zz = 0.7 + 6 x 1.2 kg x 0.2^2 m^2 = 0.988
+/// kg m^2 (the platform and its joints' share of the legs; the payload is a point at the centre): 0.1976 N m s.
+#[test]
+fn the_platform_has_the_hand_calculated_momentum() {
+    let mech = mechanism(&ENTRY.config());
+    let home = [0.0, 0.0, 0.48, 0.0, 0.0, 0.0];
+    let mut q = [0.0; 6];
+    assert!(mech.geo.inverse(&home, &mut q));
+    let j = Geometry::jacobian(&mech.geo.legs(&home));
+    let xi = [0.1, 0.0, 0.1, 0.0, 0.0, 0.2];
+    let qd: Vec<f64> = (0..6).map(|r| (0..6).map(|c| j[r * 6 + c] * xi[c]).sum()).collect();
+    let f = sim_components::chain::Mechanism::frame_momentum(&mech, &q, &qd, &[0.0; 6]).unwrap();
+    for (got, want) in f.linear.iter().chain(&f.angular).zip([6.22, 0.0, 6.22, 0.0, 2.9856, 0.1976]) {
+        assert!((got - want).abs() < 1e-9, "{f:?}");
+    }
+    assert!((f.mass - 62.2).abs() < 1e-12 && (f.first_moment[2] - 62.2 * 0.48).abs() < 1e-9 && f.gravity[2] < 0.0);
+}

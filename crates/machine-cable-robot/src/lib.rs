@@ -42,7 +42,8 @@
 //!
 //! The motor angles of a pose (`inverse`) are those of the free lengths that hold the platform at rest there with the
 //! tensions of the distribution, l = L / (1 + t / EA) (rigid: l = L), so that position setpoints and the torque
-//! feedforward ask the same pretension of the cables. `forward` finds the pose by Gauss-Newton on the cable lengths.
+//! feedforward ask the same pretension of the cables. `forward` finds the pose by Gauss-Newton on the cable lengths
+//! (rigid), or where the platform hangs at rest on cables of the motors' free lengths (elastic).
 
 use sim_components::chain::solve;
 use sim_components::joint::RotaryJoint;
@@ -115,7 +116,7 @@ fn suite_configs(entry: &MachineEntry) -> Vec<Config> {
 }
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
-    Ok(Box::new(CableRobot::new(cfg)?))
+    sim_components::base::mount(cfg, Box::new(CableRobot::new(cfg)?))
 }
 
 const MOTOR_IDS: [&str; 8] = ["1", "2", "3", "4", "5", "6", "7", "8"];
@@ -324,9 +325,12 @@ pub fn distribute(a: &[f64], w: &[f64], t_min: f64, t_max: f64, t_ref: f64) -> O
     let n = w.len();
     let m = a.len() / n;
     let mut t = penalised(a, w, t_min, t_max, t_ref)?;
-    let free: Vec<usize> = (0..m).filter(|k| t[*k] > t_min && t[*k] < t_max).collect();
-    let f = free.len();
-    if f >= n {
+    let band = 1e-9 * t_max.abs().clamp(1.0, 1e12);
+    let mut free: Vec<usize> = (0..m).filter(|k| t[*k] > t_min && t[*k] < t_max).collect();
+    // A cable the penalised problem leaves just inside the band (20.04 N against 20 N) can land just outside it in the
+    // exact solve (19.97 N): it goes to its bound and the others are solved again, until none crosses.
+    while free.len() >= n {
+        let f = free.len();
         let rest: Vec<f64> = (0..n)
             .map(|r| w[r] - (0..m).filter(|k| !free.contains(k)).map(|k| a[r * m + k] * t[k]).sum::<f64>())
             .collect();
@@ -337,8 +341,15 @@ pub fn distribute(a: &[f64], w: &[f64], t_min: f64, t_max: f64, t_ref: f64) -> O
         for k in 0..f {
             t[free[k]] = t_ref + (0..n).map(|r| af(r, k) * y[r]).sum::<f64>();
         }
+        let crossed = |v: f64| v < t_min - band || v > t_max + band;
+        if !free.iter().any(|k| crossed(t[*k])) {
+            break;
+        }
+        free.retain(|k| !crossed(t[*k]));
+        for v in &mut t {
+            *v = v.clamp(t_min, t_max);
+        }
     }
-    let band = 1e-9 * t_max.abs().clamp(1.0, 1e12);
     let off = (0..n).map(|r| ((0..m).map(|k| a[r * m + k] * t[k]).sum::<f64>() - w[r]).abs()).fold(0.0, f64::max);
     let scale = w.iter().fold(t_max.abs().clamp(1.0, 1e12), |s, v| s.max(v.abs()));
     let inside = t.iter().all(|v| *v >= t_min - band && *v <= t_max + band);
@@ -386,6 +397,7 @@ fn span(c: &Cable, r: f64, p: V3) -> Option<(f64, f64, V3, V3)> {
     Some((r * beta + straight, straight, scale(sub(exit, p), 1.0 / straight), exit))
 }
 
+#[derive(Clone)]
 pub struct CableRobot {
     spatial: bool,
     /// The platform's degrees of freedom among (x, y, z, wx, wy, wz).
@@ -415,6 +427,8 @@ pub struct CableRobot {
     /// The pose Gauss-Newton starts from: the centre of the tool's box.
     home: Vec<f64>,
     frame: Vec<V3>,
+    /// `rest_sag`, once asked for.
+    rest_slack: std::sync::OnceLock<f64>,
 }
 
 /// Per cable of one moment: tension on the platform, on the drum, and the damper's share of it.
@@ -544,6 +558,7 @@ impl CableRobot {
             motors: (0..m).map(|k| MotorInfo { id: MOTOR_IDS[k], key: MOTOR_KEYS[k] }).collect(),
             home: (0..n).map(|k| 0.5 * (min[k] + max[k])).collect(),
             frame: exits,
+            rest_slack: std::sync::OnceLock::new(),
         };
         let mut torque = vec![0.0; m];
         robot.equilibrium(&robot.home, &mut Vec::new(), &mut torque);
@@ -551,6 +566,39 @@ impl CableRobot {
             return Err(ConfigError::Invalid("workspace.tool_min".into()));
         }
         Ok(robot)
+    }
+
+    /// How far the tool can be from where the motors' angles put it at rest anywhere in the tool's box, payload on or
+    /// off: the gearboxes twisted (with half their backlash) under the cables' tensions, as `equilibrium` sets them up,
+    /// through the forward kinematics; over the box's corners, edges, faces and centre (each axis at its two ends and
+    /// its middle). The cables hold the platform's turns weakly near the box's edges, and the twist of a few um of
+    /// cable turns it there by up to 0.42 mrad (at the end of x, turned 0.05 rad about z; 0.46 mrad on a grid of five
+    /// a side). Plus a tenth for what the grid steps over; at least the default 0.1 mm.
+    fn rest_sag(&mut self) -> f64 {
+        let (n, m) = (self.n(), self.m());
+        let mut most = 0f64;
+        for attached in [true, false] {
+            self.attached = attached;
+            for k in 0..3usize.pow(n as u32) {
+                let pose: Vec<f64> = (0..n)
+                    .map(|i| {
+                        let a = &self.axes[i];
+                        a.min + (a.max - a.min) * ((k / 3usize.pow(i as u32)) % 3) as f64 / 2.0
+                    })
+                    .collect();
+                if self.unreachable(&pose, 0.0).is_some() {
+                    continue;
+                }
+                let (mut state, mut torque) = (Vec::new(), vec![0.0; m]);
+                let (mut motors, mut speed, mut tool) = (vec![0.0; m], vec![0.0; m], vec![0.0; n]);
+                self.equilibrium(&pose, &mut state, &mut torque);
+                self.motor_state(&state, &mut motors, &mut speed);
+                self.forward(&motors, &mut tool);
+                most = (0..n).map(|i| (tool[i] - pose[i]).abs()).fold(most, f64::max);
+            }
+        }
+        self.attached = true;
+        (1.1 * most).max(1e-4)
     }
 
     fn n(&self) -> usize {
@@ -660,16 +708,18 @@ impl CableRobot {
         distribute(&self.structure(&spans), &w, self.t_min, self.t_max, self.t_ref)
     }
 
-    /// The tensions the motors' angles count on at rest at a pose: the closed form t_ref + A^+ (w - A t_ref) without
-    /// the band, smooth wherever the cables can be drawn, so that `forward` finds the pose again; the distribution's
-    /// own wherever no cable sits at a bound of its band.
-    /// shortcut: where the distribution holds a cable at a bound (near the workspace's edge), the setpoints count on
-    /// the closed form's tensions and the feedforward on the distribution's, and each cable's stretch differs by
-    /// (t_qp - t) L / EA; the position loops make up for it. Compensate with the distribution itself once `forward` can
-    /// follow its kinks.
+    /// The tensions the motors' angles count on at rest at a pose: the distribution's (`static_tensions`), which the
+    /// feedforward and `equilibrium` ask too, so that the platform hangs at the pose on cables stretched by them
+    /// (`forward`); the closed form t_ref + A^+ (w - A t_ref) without the band beyond the wrench-feasible workspace.
+    /// The closed form alone, smoother in the pose, asked -8.7 N of cable 5 at (0.3, -0.2, 1.3) m turned (0.05, -0.03,
+    /// 0.08): a slack cable, and the platform 1.5 mrad off. Where a cable reaches a bound the distribution has a kink
+    /// in the pose, and the cables' speed setpoints one of L / EA times the jump in the tension's slope.
     fn rest_tensions(&self, spans: &[Span], pose: &[f64]) -> Option<Vec<f64>> {
         let w = self.platform_bias(pose, &vec![0.0; self.n()]);
         let a = self.structure(spans);
+        if let Some(t) = distribute(&a, &w, self.t_min, self.t_max, self.t_ref) {
+            return Some(t);
+        }
         let (n, m) = (self.n(), self.m());
         let aat: Vec<f64> = (0..n * n).map(|rc| (0..m).map(|k| a[rc / n * m + k] * a[rc % n * m + k]).sum()).collect();
         let miss: Vec<f64> = (0..n).map(|r| w[r] - (0..m).map(|k| a[r * m + k] * self.t_ref).sum::<f64>()).collect();
@@ -695,28 +745,54 @@ impl CableRobot {
     }
 
     /// The pose whose cables are `lengths` long (pulley to anchor): Gauss-Newton through G = -A^T from `start`, no step
-    /// longer than 50 mm or 50 mrad, until a step is below 1e-14; `None` where it does not settle within 100 steps.
-    /// Lengths that no pose fits exactly give the pose that fits them best.
+    /// longer than 50 mm or 50 mrad, until a step is below 1e-14, or the steps still to come add up to less than 1e-14;
+    /// `None` where it does not settle within 100 steps. Lengths that no pose fits exactly give the pose that fits them
+    /// best: there the misfit r = L - l leaves a residual, and Gauss-Newton, which leaves out the misfit's curvature
+    /// sum r_k d2L_k, slows down (by 0.97 a step at 12 mm off, the motors of a weak drive's run 2.5 rad behind); once a
+    /// step shrinks by less than half, Newton steps on the misfit's gradient -A r take over, its Hessian by central
+    /// differences of the gradient (0.1 um, 0.1 urad), as long as they go downhill.
     fn pose_of_lengths(&self, lengths: &[f64], start: &[f64]) -> Option<Vec<f64>> {
         let (n, m) = (self.n(), self.m());
-        let mut pose = start.to_vec();
-        for _ in 0..100 {
-            let spans = self.spans(&pose)?;
+        // A A^T and A r at a pose: Gauss-Newton solves (A A^T) step = A r, Newton H step = A r with H = -d(A r)/d xi.
+        let at = |pose: &[f64]| -> Option<(Vec<f64>, Vec<f64>)> {
+            let spans = self.spans(pose)?;
             let a = self.structure(&spans);
-            // G^T G step = G^T miss with G = -A^T: (A A^T) step = -A miss.
-            let aat: Vec<f64> =
-                (0..n * n).map(|rc| (0..m).map(|k| a[rc / n * m + k] * a[rc % n * m + k]).sum()).collect();
-            let rhs: Vec<f64> =
-                (0..n).map(|r| -(0..m).map(|k| a[r * m + k] * (lengths[k] - spans[k].length)).sum::<f64>()).collect();
-            let mut step = solve(&aat, &rhs)?;
+            let aat = (0..n * n).map(|rc| (0..m).map(|k| a[rc / n * m + k] * a[rc % n * m + k]).sum()).collect();
+            let rhs = (0..n).map(|r| (0..m).map(|k| a[r * m + k] * (spans[k].length - lengths[k])).sum()).collect();
+            Some((aat, rhs))
+        };
+        let (mut pose, mut last, mut slow) = (start.to_vec(), f64::INFINITY, false);
+        for _ in 0..100 {
+            let (aat, rhs) = at(&pose)?;
+            let newton = || -> Option<Vec<f64>> {
+                let mut h = vec![0.0; n * n];
+                for c in 0..n {
+                    let mut e = vec![0.0; n];
+                    e[c] = 1e-7;
+                    let up = at(&self.moved(&pose, &e))?.1;
+                    e[c] = -1e-7;
+                    let down = at(&self.moved(&pose, &e))?.1;
+                    (0..n).for_each(|r| h[r * n + c] = -(up[r] - down[r]) / 2e-7);
+                }
+                let sym: Vec<f64> = (0..n * n).map(|rc| 0.5 * (h[rc] + h[rc % n * n + rc / n])).collect();
+                solve(&sym, &rhs).filter(|step| (0..n).map(|r| step[r] * rhs[r]).sum::<f64>() > 0.0)
+            };
+            let mut step = match slow.then(newton).flatten() {
+                Some(step) => step,
+                None => solve(&aat, &rhs)?,
+            };
             let longest = step.iter().fold(0.0f64, |s, v| s.max(v.abs()));
             if longest > 0.05 {
                 step.iter_mut().for_each(|v| *v *= 0.05 / longest);
             }
             pose = self.moved(&pose, &step);
-            if longest < 1e-14 {
+            // At a ratio r the steps still to come add up to longest r / (1 - r).
+            let r = longest / last;
+            if longest < 1e-14 || last.is_finite() && r < 0.95 && longest * r / (1.0 - r) < 1e-14 {
                 return Some(pose);
             }
+            slow |= last.is_finite() && r > 0.5;
+            last = longest;
         }
         None
     }
@@ -1081,6 +1157,20 @@ impl CableRobot {
 }
 
 impl Machine for CableRobot {
+    /// The platform (payload at its centre p) at its twist (v, w): m v, p x m v + R I R^T w.
+    // shortcut: the winches' drums and rotors spin on the frame about axes the config does not give (square to
+    // `frame.winch_directions`), so their spin is left out of the frame's load; add their axes where a winch's spin
+    // (J w, a few 0.01 N m s) matters against the platform's.
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        let (pose, xi) = self.platform(s);
+        let (p, r) = self.place(pose);
+        let (v, w) = self.full(xi);
+        let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        sim_components::base::add_point(&mut f, self.moving(), p, v);
+        let turning = mul(&matmul(&matmul(&r, &self.inertia), &transpose(&r)), w);
+        (0..3).for_each(|k| f.angular[k] += turning[k]);
+        Some(f)
+    }
     fn axes(&self) -> &[AxisInfo] {
         &self.axes
     }
@@ -1121,14 +1211,16 @@ impl Machine for CableRobot {
         }
     }
 
-    /// The motors' cable to the pose. Rigid: the pose of those lengths (`pose_of_lengths`). Elastic: Gauss-Newton on the
-    /// free lengths at rest (`rest_lengths`) from the pose of the lengths stretched at the reference tension; first
-    /// with the steps through G = -A^T / (1 + t_ref / EA), cheap, as long as they shrink by a third each; then, where
-    /// the lengths still miss (near the edge, where the tensions change fast with the pose), with the Jacobian by
-    /// central differences (0.1 um, 0.1 urad), each step halved until the lengths miss by less. No step longer than
-    /// 50 mm or 50 mrad. Settled at a step below 1e-11 m (rad) with the lengths missing by under 1e-10 m, or where no
-    /// step helps any more: lengths no pose fits exactly (the motors of a run with a following error) give the pose
-    /// that fits them best. NaN where it does not settle within 100 steps.
+    /// The motors' cable to the pose. Rigid: the pose of those lengths (`pose_of_lengths`). Elastic: where the platform
+    /// hangs at rest on cables of those free lengths l, its static equilibrium A t = w with t = EA (L - l) / l on each
+    /// taut cable (none on a slack one): eight cables fix six degrees of freedom and their pretension, so any free
+    /// lengths have one pose, whatever tensions they were set up for (the closed form's of `inverse`, the
+    /// distribution's of `equilibrium`, or neither, as the motors of a run with a following error stand). Newton on
+    /// the residual A t - w from the pose of the lengths stretched at the reference tension, its Jacobian by central
+    /// differences (0.1 um, 0.1 urad), each step halved until it lowers the potential (weight and cable springs) whose
+    /// least the equilibrium is; where Newton's step is not downhill (every cable slack), one along the residual. No
+    /// step longer than 50 mm or 50 mrad. Settled at a step below 1e-12 m (rad), or where no step helps any more (at
+    /// the rounding floor). NaN where it does not settle within 50 steps.
     fn forward(&self, motors: &[f64], tool: &mut [f64]) {
         let (n, m) = (self.n(), self.m());
         let free: Vec<f64> = (0..m).map(|k| motors[k] / self.winches[k].ratio()).collect();
@@ -1142,60 +1234,59 @@ impl Machine for CableRobot {
             tool[..n].copy_from_slice(&pose);
             return;
         }
-        let miss_at = |pose: &[f64]| -> Option<Vec<f64>> {
-            Some(self.rest_lengths(pose)?.iter().zip(&free).map(|(l, f)| f - l).collect())
+        let at_rest = vec![0.0; m];
+        let residual = |pose: &[f64]| -> Option<Vec<f64>> {
+            let spans = self.spans(pose)?;
+            let t = self.tensions(&spans, &at_rest, &free, &at_rest).platform;
+            let (a, w) = (self.structure(&spans), self.platform_bias(pose, &vec![0.0; n]));
+            Some((0..n).map(|r| (0..m).map(|k| a[r * m + k] * t[k]).sum::<f64>() - w[r]).collect())
+        };
+        // The potential the equilibrium is the least of: the platform's weight and the taut cables' springs.
+        let energy = |pose: &[f64]| -> Option<f64> {
+            let spans = self.spans(pose)?;
+            let springs = spans.iter().zip(&free).map(|(s, l)| self.ea * (s.length - l).max(0.0).powi(2) / (2.0 * l));
+            Some(springs.sum::<f64>() + self.moving() * self.g * self.place(pose).0[2])
         };
         let size = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
-        let mut exact = false;
-        let mut last = f64::INFINITY;
-        for _ in 0..100 {
-            let Some(miss) = miss_at(&pose) else { break };
-            let Some(spans) = self.spans(&pose) else { break };
-            // g (m x n, row by row): d free length / d twist.
-            let mut g = vec![0.0; m * n];
-            if exact {
-                for c in 0..n {
-                    let mut step = vec![0.0; n];
-                    step[c] = 1e-7;
-                    let up = self.rest_lengths(&self.moved(&pose, &step));
-                    step[c] = -1e-7;
-                    let down = self.rest_lengths(&self.moved(&pose, &step));
-                    let (Some(up), Some(down)) = (up, down) else {
-                        tool[..n].fill(f64::NAN);
-                        return;
-                    };
-                    (0..m).for_each(|k| g[k * n + c] = (up[k] - down[k]) / 2e-7);
-                }
-            } else {
-                let a = self.structure(&spans);
-                (0..m * n).for_each(|kc| g[kc] = -a[kc % n * m + kc / n] / stretch);
+        for _ in 0..50 {
+            let Some(miss) = residual(&pose) else { break };
+            let mut jacobian = vec![0.0; n * n];
+            for c in 0..n {
+                let mut step = vec![0.0; n];
+                step[c] = 1e-7;
+                let up = residual(&self.moved(&pose, &step));
+                step[c] = -1e-7;
+                let down = residual(&self.moved(&pose, &step));
+                let (Some(up), Some(down)) = (up, down) else { break };
+                (0..n).for_each(|r| jacobian[r * n + c] = (up[r] - down[r]) / 2e-7);
             }
-            let gtg: Vec<f64> =
-                (0..n * n).map(|rc| (0..m).map(|k| g[k * n + rc / n] * g[k * n + rc % n]).sum()).collect();
-            let rhs: Vec<f64> = (0..n).map(|r| (0..m).map(|k| g[k * n + r] * miss[k]).sum::<f64>()).collect();
-            let Some(mut step) = solve(&gtg, &rhs) else { break };
+            // The residual is the potential's slope taken back, so a step downhill has a positive product with it. Where
+            // Newton's is not (every cable slack, the Jacobian zero), the longest step along the residual, halved below.
+            let downhill = |step: &Vec<f64>| (0..n).map(|r| step[r] * miss[r]).sum::<f64>() > 0.0;
+            let newton = solve(&jacobian, &miss.iter().map(|v| -v).collect::<Vec<_>>()).filter(downhill);
+            let mut step = newton.unwrap_or_else(|| {
+                let most = miss.iter().fold(0.0f64, |s, v| s.max(v.abs()));
+                miss.iter().map(|v| v * 0.05 / most).collect()
+            });
             let longest = step.iter().fold(0.0f64, |s, v| s.max(v.abs()));
             if longest > 0.05 {
                 step.iter_mut().for_each(|v| *v *= 0.05 / longest);
             }
-            // The lengths come from solves to some 1e-14 m: below that a step is noise.
-            if longest < 1e-11 && size(&miss) < 1e-10 {
-                tool[..n].copy_from_slice(&pose);
+            if longest < 1e-12 {
+                tool[..n].copy_from_slice(&self.moved(&pose, &step));
                 return;
             }
-            if !exact {
-                if longest < 1e-11 || longest > 0.67 * last {
-                    exact = true;
-                    continue;
-                }
-                last = longest;
-                pose = self.moved(&pose, &step);
-                continue;
-            }
+            // A step is taken where it lowers the potential, or, near the equilibrium where the potential changes by
+            // less than its rounding, where it shrinks the residual and does not raise the potential beyond that.
+            let Some(here) = energy(&pose) else { break };
             let mut next = None;
             for _ in 0..30 {
                 let trial = self.moved(&pose, &step);
-                if miss_at(&trial).is_some_and(|m| size(&m) < size(&miss)) {
+                let (lower, smaller) = (
+                    energy(&trial).map(|e| (e < here, e <= here + 1e-12 * (1.0 + here.abs()))),
+                    residual(&trial).is_some_and(|r| size(&r) < size(&miss)),
+                );
+                if lower.is_some_and(|(lower, level)| lower || level && smaller) {
                     next = Some(trial);
                     break;
                 }
@@ -1203,7 +1294,7 @@ impl Machine for CableRobot {
             }
             match next {
                 Some(next) => pose = next,
-                // Settled, or the best fit of lengths no pose fits: no step helps any more.
+                // The residual at its rounding floor: no step helps any more.
                 None => {
                     tool[..n].copy_from_slice(&pose);
                     return;
@@ -1404,6 +1495,12 @@ impl Machine for CableRobot {
     }
 
     /// The structure matrix's condition number, the turns weighed by the platform's size.
+    /// What the gearboxes twist at rest anywhere in the tool's box (`rest_sag`).
+    fn setpoint_slack(&self) -> f64 {
+        // On a copy: `rest_sag` switches the payload, and nothing else it reads changes after `new`.
+        *self.rest_slack.get_or_init(|| self.clone().rest_sag())
+    }
+
     fn condition(&self, tool: &[f64]) -> Option<f64> {
         let Some(spans) = self.spans(tool) else { return Some(f64::INFINITY) };
         let (n, m) = (self.n(), self.m());
