@@ -426,6 +426,8 @@ release_delay_s = 0.06
 
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+# The wound roll's density: the film's, less the air entrained between its layers (up to a tenth).
+web.density_kg_m3 = [1250.0, 1400.0]
 web.modulus_pa = [3.5e9, 5.0e9]
 web.damping_time_s = [1.0e-4, 5.0e-4]
 roll.core_inertia_kgm2 = [0.006, 0.015]

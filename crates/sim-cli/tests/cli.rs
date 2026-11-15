@@ -633,8 +633,10 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         let settling =
             rows.iter().find(|r| r[0] == check).unwrap_or_else(|| panic!("{}: no {check} in {out}", entry.id));
         let (value, limit) = (settling[2].parse::<f64>().unwrap(), settling[3].parse::<f64>().unwrap());
+        // Off its target at all: a web line's rolls, geared to the line position on 22-bit encoders, dwell within
+        // 0.3 um of web (2.765e-7 m), below the micrometre this asked before 15 November 2026.
         assert!(
-            value > 1e-6
+            value > 1e-8
                 && (value < limit) == (settling[4] == "ok")
                 && limit == entry.config().f64(key).unwrap()
                 && settling[2].trim_start_matches("0.0").len() >= 4,

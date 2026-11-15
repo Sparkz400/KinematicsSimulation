@@ -1298,7 +1298,7 @@ dancer (`true`) or takes it off. Model in [model-reference.md](model-reference.m
 | `effects.dancer_friction` | true/false | The dancer slide's and its roller's friction | true |
 | `effects.tension_taper` | true/false | The tension setpoint falls over the rewind's radius by `web.taper` | true |
 | `effects.gearbox_efficiency`, `gearbox_drag`, `motor_friction`, `hard_stops` (the dancer's end stops), `holding_brake`, `brake_delay`, `gravity`, `payload` | true/false | As on every machine; with `thermal_feedback` the gearboxes' efficiency and drag follow their temperature | true; `gearbox_drag`, `brake_delay` false |
-| `web.thickness_m`, `width_m`, `density_kg_m3` | m, m, kg/m³ | The web: each turn adds the thickness to a roll's radius | 50e-6, 0.4, 1390 (PET), estimate |
+| `web.thickness_m`, `width_m`, `density_kg_m3` | m, m, kg/m³ | The web: each turn adds the thickness to a roll's radius | 50e-6, 0.4, 1390 (PET), estimate; the density as wound bounds 1250 to 1400 (air between the layers) |
 | `web.modulus_pa` | Pa | Young's modulus: EA = E h w | 4e9, estimate, bounds 3.5e9 to 5e9 |
 | `web.damping_time_s` | s | The material damping, EA times it per unit of strain rate | 2e-4, estimate, bounds 1e-4 to 5e-4 |
 | `web.tension_n` | N | The tension setpoint at the rewind's core, T0 | 100 |

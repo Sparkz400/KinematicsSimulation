@@ -1694,7 +1694,9 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
         ("Turn behind the setpoint, peak [mrad]", load.tracking_angle_error_peak)
     };
     let behind = number(&row(summary, label)[0]);
-    assert!(peak > 1e-5 && (behind / (peak * 1e3) - 1.0).abs() < 0.05, "{}: {peak} m or rad in {summary:?}", entry.id);
+    // Behind at all (a web line's rolls, geared to the line position with their tension and inertia fed forward, run
+    // 9.8 um behind on this path, below the 10 um this asked before 15 November 2026), and shown as it is.
+    assert!(peak > 1e-6 && (behind / (peak * 1e3) - 1.0).abs() < 0.05, "{}: {peak} m or rad in {summary:?}", entry.id);
     assert_eq!(row(summary, "Planned path off the given one, at most [mm]")[0], "0.000");
     // A path has no cycle time and no dwell.
     assert!(summary.iter().all(|row| row[0] != "Cycle time [s]" && !row[0].starts_with("Off target")));
