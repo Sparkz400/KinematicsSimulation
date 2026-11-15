@@ -43,16 +43,26 @@ pub fn find(id: &str) -> Option<&'static MachineEntry> {
     MACHINES.iter().copied().find(|m| m.id == id)
 }
 
-/// Everything core, components and machines name, in one language. Front ends add their own labels.
-/// `machine` selects whose axis and parameter names apply; machines may reuse keys such as `axis-x`.
+/// Everything core, components and `machine` name, in one language, and every registered machine's own name (for lists
+/// of machines). Front ends add their own labels. A registered machine's labels come from its own crate first, then from
+/// the shared components, never from another machine's (where several machine crates had the same key, the last
+/// registered one's wording won on every machine without its own). A machine file has no labels of its own: its tables
+/// are the registered machines', so it borrows theirs, beneath the shared ones.
 pub fn translations(lang: &str, machine: &MachineEntry) -> Translations {
     let mut out = Translations::default();
-    let sources = [sim_core::i18n::I18N, sim_components::I18N].into_iter();
-    // The selected machine comes last, so its own wording wins where keys repeat.
-    let machines = MACHINES.iter().filter(|m| m.id != machine.id).chain([&machine]).map(|m| m.i18n);
-    for (_, text) in sources.chain(machines).flatten().filter(|(l, _)| *l == lang) {
-        out.add(text);
+    let texts = |sources: &'static [(&'static str, &'static str)]| {
+        sources.iter().filter(move |(l, _)| *l == lang).map(|(_, text)| *text)
+    };
+    if !MACHINES.iter().any(|m| m.id == machine.id && std::ptr::eq(m.i18n, machine.i18n)) {
+        MACHINES.iter().flat_map(|m| texts(m.i18n)).for_each(|t| out.add(t));
     }
+    texts(sim_core::i18n::I18N).chain(texts(sim_components::I18N)).for_each(|t| out.add(t));
+    for m in MACHINES {
+        let name =
+            texts(m.i18n).flat_map(str::lines).find(|l| l.split_once('=').is_some_and(|(k, _)| k.trim() == m.key));
+        name.into_iter().for_each(|line| out.add(line));
+    }
+    texts(machine.i18n).for_each(|t| out.add(t));
     out
 }
 

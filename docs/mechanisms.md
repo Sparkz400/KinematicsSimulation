@@ -658,8 +658,8 @@ pickers. See the [model reference](model-reference.md#hexapod-with-rotary-actuat
   `ratings.crank_dead_centre_margin_deg`, 20°), `rod-buckling` (the rod's compression against its Euler load π² E I /
   L² of the tube in `[rod]`, over `ratings.rod_buckling_safety_factor`), `crank-ball-joint` and
   `platform-ball-joint` (the joints' angles against their limits), and `singularity`.
-- The default cycle: heave up 50 mm, then surge and sway 60 mm, roll 0.12 rad,
-  yaw 0.15 rad and pitch 0.12 rad, each from the pose before (one turns back while the next sets in), and back to the level pose,
+- The default cycle: heave up 50 mm, then surge and sway 60 mm, roll and pitch
+  0.12 rad, yaw 0.15 rad, each from the pose before (one turns back while the next sets in), and back to the level pose,
   where the seat is taken off and put on again (the payload's switch).
 
 As on the hexapod, the platform held by constant crank torques runs away from its pose under its weight, so the standard

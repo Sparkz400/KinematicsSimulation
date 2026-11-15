@@ -50,7 +50,13 @@ pub static ENTRY: MachineEntry = MachineEntry {
     id: "delta-d4",
     key: "machine-delta-d4",
     default_config: include_str!("../default.toml"),
-    i18n: &[("en", include_str!("../i18n/en.ftl")), ("de", include_str!("../i18n/de.ftl"))],
+    // The arms are the D3's, and so are their labels; the D4's own come after them and win where both have a key.
+    i18n: &[
+        ("en", include_str!("../../machine-delta-d3/i18n/en.ftl")),
+        ("de", include_str!("../../machine-delta-d3/i18n/de.ftl")),
+        ("en", include_str!("../i18n/en.ftl")),
+        ("de", include_str!("../i18n/de.ftl")),
+    ],
     build,
     suite_configs,
 };

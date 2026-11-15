@@ -2825,8 +2825,12 @@ fn follow(
         let room = (jerk - end_own.abs()).max((1.0 - CURVE_JERK) * jerk);
         // (To the rounding of a run that ends on the curve's speed.)
         let reach = reach * (1.0 - 1e-9);
+        // Below the lowest of the curve all the rest of the way, the run never has to follow its slowing down: a curve
+        // that falls faster than the jerk can follow but stays above the run (a turn about z alone, whose motors' speed
+        // limit falls by a fifth over the turn) held the run at rest and refused the piece as a crawl.
+        let below_rest = reach * reach <= limits.lowest_between(backward, ahead, (curve.len() - 1) as f64 * spacing);
         let clear = reach * reach <= limits.lowest_between(backward, ahead, there)
-            && end_acc.min(0.0).powi(2) <= 2.0 * room * (end_speed - reach).max(0.0);
+            && (below_rest || end_acc.min(0.0).powi(2) <= 2.0 * room * (end_speed - reach).max(0.0));
         let du = if clear { du } else { du.min(y + acc - a).max(floor) };
         let next = [t + step, s + v * step + (a / 2.0 + du / 6.0) * step * step, v + (a + du / 2.0) * step, a + du];
         if top.is_infinite() {
@@ -4215,6 +4219,33 @@ line,0.3,0.13",
             .collect();
         let x = smoothed(&places, 0.01, jerk, 1.0);
         (places, x)
+    }
+
+    /// A piece whose speed curve falls faster than the jerk could follow, but stays far above what the piece reaches:
+    /// tops from 4 to 2 m/s over 0.4 m (the curve slows at (16 - 4) / (2 * 0.4) = 15 m/s^2, which 20 m/s^3 cannot
+    /// follow from rest), accelerations within 50 m/s^2. Rest to rest the jerk alone bounds it: four phases of
+    /// T = (d / (2 j))^(1/3) = (0.4 / 40)^(1/3) = 0.215443 s, 4.31 m/s^2 and 0.928 m/s at most, 0.861774 s in all. Before
+    /// 15 November the run counted on the curve's slowing at its speed and stayed at rest: the piece was refused as a
+    /// crawl (a turn about z alone on the six-axis platform on cranks, whose motors' speed limit falls over the turn).
+    #[test]
+    fn a_piece_under_a_steeply_falling_speed_curve_takes_the_hand_calculated_time() {
+        let places: Vec<Place> = (0..41)
+            .map(|k| Place {
+                rows: vec![[1.0, 0.0, 0.0, -50.0, 50.0]],
+                turn: Vec::new(),
+                curves: Arc::from([]),
+                guide: Vec::new(),
+                speed: Vec::new(),
+                bends: Vec::new(),
+                top: 4.0 - 2.0 * k as f64 / 40.0,
+            })
+            .collect();
+        let limits = piece_limits_of(places, 0.01, 20.0).unwrap();
+        let knots = piece_knots(&limits, 0.4, [0.0, 0.0], 1e-3, true).unwrap();
+        let [t, s, v, _] = knots[knots.len() - 1];
+        assert!((t - 0.861774).abs() < 2e-3 && s == 0.4 && v.abs() < 1e-9, "{t} s, {s} m, {v} m/s");
+        let fastest = knots.iter().map(|k| k[2]).fold(0.0, f64::max);
+        assert!((fastest - 0.928318).abs() < 5e-3, "{fastest} m/s");
     }
 
     /// The speed curve a piece follows around a slow place. With a jerk too high to matter, the squared speed may change

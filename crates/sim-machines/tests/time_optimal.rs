@@ -1,8 +1,9 @@
 //! A time-optimal plan passes the verdicts it keeps within (15 November 2026): every machine with paths, its cycle timed
 //! as fast as the motors allow (`profile.cycle_timing = "time_optimal"`), simulated with the config as shipped.
 
-use sim_components::Sim;
 use sim_components::analysis::{analyse_cycle_with, verdicts};
+use sim_components::path::Piece;
+use sim_components::{Sim, load_config};
 use sim_core::{Config, MachineEntry};
 use sim_machines::MACHINES;
 
@@ -84,4 +85,39 @@ per_machine!(machine_00 0, machine_01 1, machine_02 2, machine_03 3, machine_04 
 #[test]
 fn every_machine_has_its_test() {
     assert_eq!(MACHINES.len(), PER_MACHINE_TESTS, "add or take out a `machine_NN` in `per_machine!`");
+}
+
+/// A turn about one rotary tool axis alone, a tenth of its range from the start pose, is timed as fast as the motors
+/// allow on every machine that has one (the platforms' rx, ry, rz, the tripod's tilts, the four-axis delta's turn, the
+/// arms' joints, and the arms in tool space): until 15 November a turn about z alone of the six-axis platform on cranks
+/// was refused as a crawl (`error-path-singular`), because the speed curve fell faster than the jerk could follow.
+#[test]
+fn a_turn_about_one_rotary_axis_alone_is_timed_on_every_machine() {
+    let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    let mut configs: Vec<(&MachineEntry, Config)> = MACHINES.iter().map(|e| (*e, e.config())).collect();
+    for (id, file) in [("urdf-arm", "arm-tool.toml"), ("scara", "scara-tool.toml")] {
+        let entry = sim_machines::find(id).unwrap();
+        let text = std::fs::read_to_string(root.join("crates/machine-joint-kit/config").join(file)).unwrap();
+        configs.push((entry, load_config(entry, &text).unwrap()));
+    }
+    let mut failed = Vec::new();
+    for (entry, cfg) in &configs {
+        let sim = Sim::new(entry, cfg).unwrap();
+        if sim.machine.cam().is_some() {
+            continue;
+        }
+        let start = sim.control.planned_pos().to_vec();
+        for (i, axis) in sim.machine.axes().iter().enumerate().filter(|(_, a)| a.unit == "rad") {
+            let mut target = start.clone();
+            let turn = 0.1 * (axis.max - axis.min);
+            target[i] = if start[i] + turn <= axis.max { start[i] + turn } else { start[i] - turn };
+            if sim.machine.unreachable(&target, 0.0).is_some() {
+                continue;
+            }
+            if let Err(e) = sim.plan_path(&[Piece::Line(target)], true) {
+                failed.push(format!("{} {}: {}", entry.id, axis.id, e.key));
+            }
+        }
+    }
+    assert!(failed.is_empty(), "{failed:?}");
 }
