@@ -68,6 +68,8 @@ In `machines/` liegen vierzehn Dateien:
 | `machines/planar-delta.toml` | der ebene Delta aus `crates/machine-delta-d2` als Koppelgetriebe mit zwei Armen ([unten](#koppelgetriebe-der-ebene-und-der-räumliche-delta)) |
 | `machines/delta-d3.toml` | der räumliche Delta aus `crates/machine-delta-d3` als Koppelgetriebe mit drei Armen |
 | `machines/scissor-lift.toml` | ein zweistufiger Scherenhubtisch an einem Kugelgewindetrieb ([unten](#ein-scherenhubtisch)) |
+| `machines/stepper-axis.toml` | die Netzliste der Einzelachse mit einem Schrittmotor an einem Antrieb ohne Rückführung (`motor.kind = "stepper"`, [Benutzerhandbuch](benutzerhandbuch.md#einen-schrittmotor-oder-einen-asynchronmotor-auslegen)) |
+| `machines/induction-lift.toml` | die Netzliste der Einzelachse als senkrechtes Hubwerk mit Asynchronmotor, feldorientiert (`motor.kind = "induction"`) |
 | `machines/dual-gantry.toml` | ein Portal mit zwei Antrieben: eine gierende Brücke auf zwei Zahnstangen, ihre Antriebe einfach, als Master/Slave oder kreuzgekoppelt im Gleichlauf |
 | `machines/portal-c.toml` | das Spindelportal mit einer C-Achse, die einen Greifer dreht, dessen Spitze der Werkzeugmittelpunkt ist |
 | `machines/five-axis.toml` | das Spindelportal mit einem Gabelkopf (C und A), die Werkzeugspitze der Werkzeugmittelpunkt |

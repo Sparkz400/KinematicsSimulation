@@ -185,6 +185,7 @@ error-setpoint-too-far = Der Sollwert liegt weiter entfernt, als die Achse in ei
 error-disabled = Die Antriebe sind gesperrt.
 error-fault = Die Antriebe haben abgeschaltet und halten an; Freigeben quittiert die Störung.
 error-outside-mode = Ein Antrieb ist in Drehzahl- oder Momentenregelung; zuerst wieder auf Lageregelung schalten.
+error-open-loop = Der Schrittgenerator eines Schrittmotors und ein U/f-Umrichter laufen ohne Rückführung und nehmen keinen Momentensollwert.
 monitor-following-error = Schleppfehler außerhalb seines Fensters
 monitor-standstill = Schleppfehler im Stillstand außerhalb seines Fensters
 monitor-blocked = Motor an der Momentengrenze blockiert
@@ -243,6 +244,7 @@ param-drive_max_current_a = Maximaler Ausgangsstrom des Antriebs [A]
 param-drive_base_load_current_a = Grundlast-Ausgangsstrom des Antriebs [A]
 param-drive_overload_time_constant_s = Zeitkonstante des thermischen Abbilds des Antriebs [s]
 param-drive_max_current_time_s = Dauer des Maximalstroms des Antriebs aus der Bemessungslast [s]
+check-stepper-synchronism = Lastwinkel des Schrittmotors, Spitze, gegen den Kippwinkel (darüber fällt der Läufer außer Tritt) [rad]
 check-drive-overload = Thermisches Abbild des Antriebs, Spitze, gegen seine Auslöseschwelle (1 = Bemessungsstrom dauernd)
 check-drive-current = Motorstrom, Effektivwert, gegen den Bemessungsstrom des Antriebs [A]
 check-drive-peak-current = Motorstrom, Spitze, gegen den Maximalstrom des Antriebs [A]

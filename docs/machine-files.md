@@ -67,6 +67,8 @@ Fourteen files ship in `machines/`:
 | `machines/planar-delta.toml` | the planar delta of `crates/machine-delta-d2` as a linkage of two arms ([below](#linkages-the-planar-and-the-spatial-delta)) |
 | `machines/delta-d3.toml` | the spatial delta of `crates/machine-delta-d3` as a linkage of three arms |
 | `machines/scissor-lift.toml` | a two-stage scissor lift table on a ball screw ([below](#a-scissor-lift)) |
+| `machines/stepper-axis.toml` | the single axis's netlist with a stepper motor on an open-loop drive (`motor.kind = "stepper"`, [user guide](user-guide.md#size-a-stepper-or-an-induction-motor)) |
+| `machines/induction-lift.toml` | the single axis's netlist as a vertical lift with an induction motor, field-oriented (`motor.kind = "induction"`) |
 | `machines/dual-gantry.toml` | a dual-drive gantry: a yawing bridge on two racks, its drives in plain, master/slave or cross-coupled synchronisation ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)) |
 | `machines/portal-c.toml` | the screw portal with a C axis turning a gripper, its tip the tool centre point |
 | `machines/five-axis.toml` | the screw portal with a fork head (C and A), its tool's tip the tool centre point |

@@ -91,9 +91,9 @@ fn push_torques(pushes: &[Push], from: &[f64], angle: &[f64], speed: &[f64], out
     total
 }
 
-/// Per drive in the integrated state: winding current, and since the start of the step the electrical energy, the
-/// copper loss and the work on the shaft.
-const WINDING_STATES: usize = 4;
+// Per drive in the integrated state: winding current, and since the start of the step the electrical energy, the
+// copper loss and the work on the shaft; then a stepper's or an induction motor's further states.
+use crate::drive::WINDING_STATES;
 
 pub struct Sim {
     pub machine: Box<dyn Machine>,
@@ -769,8 +769,8 @@ impl Sim {
         let (n, drives) = (state.len(), &control.drives);
         joint.clear();
         joint.extend_from_slice(state);
-        for d in drives {
-            joint.extend([d.current, 0.0, 0.0, 0.0]);
+        for (k, d) in drives.iter().enumerate() {
+            joint.extend(d.winding_states(control.drive_params_of(k)));
         }
         // The work the obstacles' pushes take out of the machine over the step (`pushed`).
         joint.push(0.0);
@@ -787,16 +787,14 @@ impl Sim {
                             dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].fill(0.0);
                             continue;
                         }
-                        let (i, p) = (windings[WINDING_STATES * k], control.drive_params_of(k));
-                        stage_torque[k] = p.torque_with(i, d.d_current, d.flux(p));
-                        dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].copy_from_slice(&p.winding_rates(
-                            d.voltage,
-                            d.winding_resistance(p),
-                            i,
+                        let range = WINDING_STATES * k..WINDING_STATES * (k + 1);
+                        stage_torque[k] = control.drive_params_of(k).motor_rates(
+                            d,
+                            &windings[range.clone()],
+                            angle[k],
                             speed[k],
-                            d.d_current,
-                            d.flux(p),
-                        ));
+                            &mut dwindings[range],
+                        );
                     }
                     push.fill(0.0);
                     push_torques(pushes, push_from, angle, speed, push);
@@ -812,7 +810,9 @@ impl Sim {
             );
         }
         state.copy_from_slice(&joint[..n]);
-        control.winding_stepped(&joint[n..]);
+        // The rotors where the step leaves them, for a stepper's torque at its end.
+        machine.motor_state(state, angle, speed);
+        control.winding_stepped(&joint[n..], angle, speed);
         for (torque, d) in torque.iter_mut().zip(&control.drives) {
             *torque = d.torque;
         }
