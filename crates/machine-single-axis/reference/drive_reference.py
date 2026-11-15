@@ -17,10 +17,10 @@ Stages, each a set of effects switched on (every other effect off), with some va
 
 Writes stage<N>.csv next to this file; the Rust test tests/reference.rs runs the simulator with the `# set` lines of
 the file's header and compares. Run from the repository root, with the pinned packages of
-crates/machine-t-gantry/reference/requirements.txt in a venv:
+crates/machine-single-axis/reference/requirements.txt in a venv:
 
     python -m venv .venv
-    .venv/Scripts/python -m pip install -r crates/machine-t-gantry/reference/requirements.txt
+    .venv/Scripts/python -m pip install -r crates/machine-single-axis/reference/requirements.txt
     .venv/Scripts/python crates/machine-single-axis/reference/drive_reference.py 1 2 3 4
 
 A stage with effects taken out, for finding where a difference comes from: drive_reference.py 3-gearbox_backlash

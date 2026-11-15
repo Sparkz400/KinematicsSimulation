@@ -1324,7 +1324,7 @@ impl Machine for H4 {
     }
 
     /// As `Machine::adopt_state`, the same pose and speed with the gears as at rest there; but from a model to one with
-    /// the same states (`Sim::reconfigure` keeps the entry), as the parallel SCARA's, each gearbox keeps the twist it
+    /// the same states (`Sim::reconfigure` keeps the entry), as on the other machines with gears on their arms, each gearbox keeps the twist it
     /// had at its motor, and with effects.amplifier_compliance the tool keeps its angle and speed on the amplifier's
     /// spring, the slide where the arms had it. Rebuilt at rest, the slide was put under the tool and the spring
     /// unloaded, and the gears put back in the middle of their play: after a 1 % change of the ratio during a move the

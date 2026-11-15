@@ -1,4 +1,4 @@
-//! Property tests of the URDF reader (`Chain::from_urdf`) that machine-joint-kit builds its arms with: whatever the text,
+//! Property tests of the URDF reader (`Chain::from_urdf`) that this crate builds its arms with: whatever the text,
 //! a chain or a `ConfigError`, never a panic or a hang; a chain read holds finite numbers and unit joint axes. Seeds:
 //! crates/machine-joint-kit/urdf.
 
