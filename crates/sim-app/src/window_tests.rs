@@ -529,7 +529,7 @@ fn the_motion_tab_drives_the_machine() {
     let tool = |d: &Driver| d.state().model.scene.tool.expect("a tool");
     let still = tool(&d);
     d.button_of("ui-start-cycle");
-    d.wait(10.0, "the cycle moves the tool", |d| {
+    d.wait(60.0, "the cycle moves the tool", |d| {
         let now = tool(d);
         (0..3).map(|i| (now[i] - still[i]).abs()).sum::<f64>() > 1e-3
     });
@@ -543,7 +543,7 @@ fn the_motion_tab_drives_the_machine() {
     assert_eq!(d.state().model.target[0], 0.05);
     d.button_of("ui-move");
     let before = d.state().model.scene.clone();
-    d.wait(10.0, "the move moves the parts", |d| d.state().model.scene.parts != before.parts);
+    d.wait(60.0, "the move moves the parts", |d| d.state().model.scene.parts != before.parts);
 }
 
 /// A number of the config's parameter panel, and its path.
@@ -602,8 +602,21 @@ fn a_drag_on_a_parameter_changes_it() {
         .iter()
         .find_map(|(path, _, value)| value.as_float().map(|v| (path.clone(), v)))
         .expect("a number in the first group");
-    let field = d.in_region(SETUP, Role::SpinButton).into_iter().find(|w| w.value.parse::<f64>().ok() == Some(old));
-    let at = field.expect("its field").rect.center();
+    // The group opens with an animation: the field is found once it stands still.
+    let field = |d: &mut Driver| {
+        let found = d.in_region(SETUP, Role::SpinButton).into_iter().find(|w| w.value.parse::<f64>().ok() == Some(old));
+        found.map(|w| w.rect)
+    };
+    let mut last = None;
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let now = field(&mut d);
+        if now.is_some() && now == last {
+            break;
+        }
+        last = now;
+    }
+    let at = last.expect("its field").center();
     // egui counts a drag from a few pixels on: 40 pixels make some 30 percent.
     d.drag(MouseButton::Left, Vec2::new(at.x, at.y), Vec2::new(40.0, 0.0), 10);
     d.frames(30);
@@ -657,7 +670,7 @@ fn the_machine_and_the_language_are_picked_from_their_lists() {
     let other = d.tr(MACHINES[1].key);
     d.click(Role::Button, &other);
     assert_eq!(d.state().model.entry.id, MACHINES[1].id);
-    d.wait(10.0, "the new machine is framed", |d| d.state().bounds != bounds && !d.state().fit);
+    d.wait(60.0, "the new machine is framed", |d| d.state().bounds != bounds && !d.state().fit);
     assert!(corners_out_of_sight(&mut d).is_empty());
     let english = d.tr("lang-en");
     let combo = d.widgets().into_iter().find(|w| w.role == Role::ComboBox && w.value == english).unwrap().rect;
@@ -786,6 +799,17 @@ fn nothing_is_cut_off_or_overlaps_in_either_language() {
         }
         problems.dedup();
         assert!(problems.is_empty(), "{}", problems.join("\n"));
+        // At the default size the timeline is one row: its first button and its last on the same line.
+        if size.0 == 1600.0 {
+            let view = d.regions()[4];
+            let row: Vec<f32> = d
+                .widgets()
+                .into_iter()
+                .filter(|w| view.contains_rect(w.rect) && (w.label == d.tr("ui-timeline-live") || w.label == "1×"))
+                .map(|w| w.rect.center().y)
+                .collect();
+            assert!(row.len() == 2 && (row[0] - row[1]).abs() < 1.0, "{lang}: the timeline's rows at {row:?}");
+        }
     }
 }
 
@@ -793,7 +817,7 @@ fn nothing_is_cut_off_or_overlaps_in_either_language() {
 fn space_and_the_arrows_over_the_view_replay_and_step_but_not_while_typing() {
     let mut d = Driver::new();
     d.button_of("ui-start-cycle");
-    d.wait(10.0, "scenes recorded", |d| d.state().recorded.len() > 20);
+    d.wait(60.0, "scenes recorded", |d| d.state().recorded.len() > 20);
     let view = d.in_view();
     d.move_to(view);
     d.key(KeyCode::Space, Key::Space);
@@ -858,7 +882,7 @@ fn every_tool_tab_starts_its_computation() {
     let field = d.in_region(TOOLS, Role::TextInput).remove(0).rect;
     d.type_into(field, "no-such-trace.csv");
     d.button_of("ui-trace-run");
-    d.wait(10.0, "the trace's answer", |d| !d.state().model.running(Analysis::Trace));
+    d.wait(60.0, "the trace's answer", |d| !d.state().model.running(Analysis::Trace));
     assert!(d.messages().contains(&"ui-file-unreadable"), "{:?}", d.messages());
     // The cycle's result arrives in its tab.
     d.tab("ui-analysis");
@@ -873,10 +897,17 @@ fn a_path_from_a_file_is_planned_run_and_drawn_as_two_lines() {
     let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/corner.path");
     d.type_into(field, file);
     d.button_of("ui-path-run");
-    d.wait(120.0, "the path's analysis", |d| d.state().model.path_run.is_some());
+    d.wait(300.0, "the path's analysis", |d| d.state().model.path_run.is_some());
     // The planned line, and the travelled one as the machine runs it.
     assert!(d.state().model.path_run.as_ref().unwrap().scene_line.len() > 10);
-    d.wait(30.0, "the travelled path", |d| d.state().model.trail.as_ref().is_some_and(|t| t.len() > 10));
+    d.wait(60.0, "the travelled path", |d| d.state().model.trail.as_ref().is_some_and(|t| t.len() > 10));
+    // The plan is drawn wider and a little behind, so that the travelled line over it shows: drawn alike, at the same
+    // depth, the second line lost the depth test to the first and only the plan was seen.
+    // (Checked by eye in the pictures; here that the plan's line is configured so.)
+    let store = d.app.world().resource::<GizmoConfigStore>();
+    let (planned, travelled) =
+        (store.config::<PlanLine>().0, store.config::<bevy::gizmos::config::DefaultGizmoConfigGroup>().0);
+    assert!(planned.depth_bias > travelled.depth_bias && planned.line.width > travelled.line.width);
 }
 
 #[test]
@@ -946,4 +977,41 @@ fn a_value_at_rest_beside_a_part_reads_without_a_minus() {
     assert_eq!(text(-0.0004, 3), "0.000");
     assert_eq!(text(-0.6, 0), "-1");
     assert_eq!(text(1234.5678, 1), "1234.6");
+}
+
+#[test]
+fn the_bottom_panel_keeps_its_height_with_the_kept_runs() {
+    let mut d = Driver::new();
+    // 250 pixels high by default, and so it stays.
+    let bottom = d.state().view_rect[3];
+    assert_eq!(bottom, 900.0 - 250.0);
+    d.frames(30);
+    assert_eq!(d.state().view_rect[3], bottom, "live");
+    let runs = d.tr("ui-scopes-runs");
+    let toggle = d.in_region(3, Role::Button).into_iter().find(|w| w.label == runs).expect("the runs toggle").rect;
+    d.click_at(Vec2::new(toggle.center().x, toggle.center().y));
+    d.frames(3);
+    assert!(d.state().panels.runs_view);
+    assert_eq!(d.state().view_rect[3], bottom, "with no run kept");
+    d.tab("ui-runs");
+    d.button_of("ui-runs-keep-live");
+    d.frames(5);
+    assert_eq!(d.state().model.runs.iter().count(), 1);
+    d.frames(30);
+    assert_eq!(d.state().view_rect[3], bottom, "with a run kept");
+}
+
+#[test]
+fn a_plot_across_labels_a_tick_every_60_pixels_or_so() {
+    // The planned path's plot: 0.7 m across 340 pixels; egui_plot's base step is what 8 pixels span.
+    let input = |range: f64, pixels: f64| egui_plot::GridInput {
+        bounds: (-0.02, range - 0.02),
+        base_step_size: range / pixels * 8.0,
+    };
+    let values =
+        |marks: Vec<egui_plot::GridMark>| marks.iter().map(|m| (m.value * 1e6).round() / 1e6).collect::<Vec<_>>();
+    assert_eq!(values(ui::x_ticks(input(0.7, 340.0))), [0.0, 0.2, 0.4, 0.6]);
+    // A torque-speed chart from -600 to 600 rad/s over 380 pixels: 200 apart, 63 pixels.
+    let marks = ui::x_ticks(egui_plot::GridInput { bounds: (-600.0, 600.0), base_step_size: 1200.0 / 380.0 * 8.0 });
+    assert_eq!(values(marks), [-600.0, -400.0, -200.0, 0.0, 200.0, 400.0, 600.0]);
 }

@@ -103,7 +103,9 @@ pub(super) fn search(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &
     let tr = |key: &str| model.tr.tr(key).to_string();
     let found = model.search_table();
     ui.horizontal_wrapped(|ui| {
-        ComboBox::from_label(tr("ui-search-supply")).selected_text(&inputs.supply).width(60.0).show_ui(ui, |ui| {
+        // Each list after its name, as the fields: a name after its list read as the name of the field after it.
+        ui.label(tr("ui-search-supply"));
+        ComboBox::from_id_salt("search-supply").selected_text(&inputs.supply).width(60.0).show_ui(ui, |ui| {
             for &supply in SUPPLIES {
                 ui.selectable_value(&mut inputs.supply, supply.to_string(), supply);
             }
@@ -118,7 +120,8 @@ pub(super) fn search(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &
             }
         };
         let s = &mut inputs.search;
-        ComboBox::from_label(tr("ui-search-vendor")).selected_text(vendor(&s.vendor)).width(90.0).show_ui(ui, |ui| {
+        ui.label(tr("ui-search-vendor"));
+        ComboBox::from_id_salt("search-vendor").selected_text(vendor(&s.vendor)).width(90.0).show_ui(ui, |ui| {
             for v in ["", "all"].into_iter().chain(vendors()) {
                 ui.selectable_value(&mut s.vendor, v.to_string(), vendor(v));
             }
@@ -137,7 +140,8 @@ pub(super) fn search(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &
             (Drives::All, "ui-search-drives-all"),
         ];
         let named = drives.iter().find(|d| d.0 == s.drives).map_or(String::new(), |d| tr(d.1));
-        ComboBox::from_label(tr("ui-search-drives")).selected_text(named).width(110.0).show_ui(ui, |ui| {
+        ui.label(tr("ui-search-drives"));
+        ComboBox::from_id_salt("search-drives").selected_text(named).width(110.0).show_ui(ui, |ui| {
             for (drives, key) in drives {
                 ui.selectable_value(&mut s.drives, drives, tr(key));
             }
@@ -145,7 +149,8 @@ pub(super) fn search(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &
         ui.label(tr("ui-search-rank-by")).on_hover_text(tr("ui-search-rank-by-hint"));
         ui.add(TextEdit::singleline(&mut s.rank_by).desired_width(110.0));
         let motor = if s.motor.is_empty() { tr("ui-search-motor-all") } else { s.motor.clone() };
-        ComboBox::from_label(tr("ui-search-motor-id")).selected_text(motor).width(80.0).show_ui(ui, |ui| {
+        ui.label(tr("ui-search-motor-id"));
+        ComboBox::from_id_salt("search-motor").selected_text(motor).width(80.0).show_ui(ui, |ui| {
             ui.selectable_value(&mut s.motor, String::new(), tr("ui-search-motor-all"));
             for m in &model.session.motors {
                 ui.selectable_value(&mut s.motor, m.id.to_string(), format!("{} ({})", tr(m.key), m.id));
@@ -467,19 +472,18 @@ pub(super) fn move_maps(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions
         let planes: Vec<[usize; 2]> =
             [[0, 1], [0, 2], [1, 2]].into_iter().filter(|p| p[1] < axes.len().min(3)).collect();
         let plane_name = |p: [usize; 2]| format!("{} – {}", tr(axes[p[0]].key), tr(axes[p[1]].key));
-        ComboBox::from_label(tr("ui-map-plane")).selected_text(plane_name(m.plane)).show_ui(ui, |ui| {
+        ui.label(tr("ui-map-plane"));
+        ComboBox::from_id_salt("map-plane").selected_text(plane_name(m.plane)).show_ui(ui, |ui| {
             for p in planes {
                 ui.selectable_value(&mut m.plane, p, plane_name(p));
             }
         });
-        ComboBox::from_label(tr("ui-map-axis")).selected_text(tr(axes[m.axis.min(axes.len() - 1)].key)).show_ui(
-            ui,
-            |ui| {
-                for (i, a) in axes.iter().enumerate() {
-                    ui.selectable_value(&mut m.axis, i, tr(a.key));
-                }
-            },
-        );
+        ui.label(tr("ui-map-axis"));
+        ComboBox::from_id_salt("map-axis").selected_text(tr(axes[m.axis.min(axes.len() - 1)].key)).show_ui(ui, |ui| {
+            for (i, a) in axes.iter().enumerate() {
+                ui.selectable_value(&mut m.axis, i, tr(a.key));
+            }
+        });
         ui.label(format!("{} [{}]", tr("ui-map-distance"), axes[m.axis.min(axes.len() - 1)].unit))
             .on_hover_text(tr("ui-map-distance-hint"));
         ui.add(DragValue::new(&mut m.distance).speed(0.001).range(0.0..=10.0));

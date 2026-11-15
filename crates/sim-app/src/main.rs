@@ -117,6 +117,15 @@ struct Ghost {
 /// The ghost's colour: a light neutral grey, see-through, none of the palette's meaning colours.
 const GHOST: Color = Color::srgba(0.86, 0.88, 0.92, 0.25);
 
+/// The planned path's line (`draw_paths`): wider than the travelled one and a little behind it, so that both show
+/// where the tool follows the plan. Drawn as the other lines, at the same depth the travelled line lost the depth
+/// test to the plan's drawn before it and was never seen.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct PlanLine;
+
+/// How far behind the plan's line is drawn: its depth times 1 less this, a hair, so that it hides nothing else.
+const PLAN_BEHIND: f32 = 1e-3;
+
 /// The gap between the tool and the plan, as the plan overlay and the deviation tube draw it.
 const GAP: Color = Color::srgb(0.9, 0.3, 0.9);
 
@@ -175,8 +184,16 @@ fn main() {
         eprintln!("{}", model.tr.tr_arg(key, &detail));
         std::process::exit(2);
     }
-    let window =
-        Window { title: model.tr.tr("ui-window-title").into(), resolution: (1600u32, 900u32).into(), ..default() };
+    // SIM_APP_SIZE ("1280x720"): another window size, for the screenshot hook (`developer_hooks`).
+    let size = std::env::var("SIM_APP_SIZE").ok().and_then(|s| {
+        let (w, h) = s.split_once('x')?;
+        Some((w.parse().ok()?, h.parse().ok()?))
+    });
+    let window = Window {
+        title: model.tr.tr("ui-window-title").into(),
+        resolution: size.unwrap_or((1600u32, 900u32)).into(),
+        ..default()
+    };
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(window), ..default() }));
     add_app(&mut app, model);
@@ -215,6 +232,7 @@ fn add_app(app: &mut App, model: Model) {
             notes: Default::default(),
         })
         .add_plugins(EguiPlugin::default())
+        .init_gizmo_group::<PlanLine>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -242,9 +260,12 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut egui_textures: ResMut<EguiUserTextures>,
+    mut gizmos: ResMut<GizmoConfigStore>,
 ) {
     // The panels get their own camera on top, so the 3D camera can be confined to the free area.
     egui_settings.auto_create_primary_context = false;
+    let (plan, _) = gizmos.config_mut::<PlanLine>();
+    (plan.line.width, plan.depth_bias) = (5.0, PLAN_BEHIND);
     commands.insert_resource(Shapes {
         cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         cylinder: meshes.add(Cylinder::new(0.5, 1.0)),
@@ -508,7 +529,7 @@ fn arrow_length(force: f32) -> f32 {
 /// The planned path as a line in the 3D view, and over it the path the tool has really travelled since; a grid on
 /// the floor; where they are switched on, the force arrows and where the plan has the tool; a box around the part
 /// picked by a click; and the obstacles of the config with the clearance to the nearest.
-fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
+fn draw_paths(state: Res<State>, mut gizmos: Gizmos, mut plan: Gizmos<PlanLine>) {
     if let Some((_, middle, width)) = state.floor {
         let flat = Isometry3d::new(middle, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
         gizmos.grid(flat, UVec2::splat((width / 0.1) as u32), Vec2::splat(0.1), Color::srgba(1.0, 1.0, 1.0, 0.05));
@@ -553,7 +574,7 @@ fn draw_paths(state: Res<State>, mut gizmos: Gizmos) {
         gizmos.line(to_bevy(from), to_bevy(to), palette(ui::LIMIT));
     }
     if let Some(run) = &state.model.path_run {
-        gizmos.linestrip(run.scene_line.iter().map(|p| to_bevy(*p)), palette(ui::PLAN));
+        plan.linestrip(run.scene_line.iter().map(|p| to_bevy(*p)), palette(ui::PLAN));
     }
     // The travelled path up to the time the timeline shows: scrubbed back, the tool had not been further yet. The
     // points with their times are the window's (`trail_points`); the plain path has none, so scrubbed it is drawn
@@ -1158,7 +1179,16 @@ fn panels(
         .resizable(true)
         .default_size(250.0)
         .frame(edge)
-        .show(&mut root, |ui| ui::scopes(ui, &state.model, state.timeline, state.panels, &mut actions))
+        .show(&mut root, |ui| {
+            ui::scopes(ui, &state.model, state.timeline, state.panels, &mut actions);
+            // The panel keeps its height whatever it holds: with the kept runs (none yet, or plots that shrink to
+            // fit) it shrank to some 60 pixels and stayed so. Only where room is left: the scopes fill it, and an
+            // allocation past the end grew the panel by a gap each frame.
+            let room = ui.available_size();
+            if room.y > 1.0 {
+                ui.allocate_space(room);
+            }
+        })
         .response
         .rect;
     let side = egui::Frame::new().fill(ui::graphite()).inner_margin(egui::Margin::same(10));
@@ -1628,6 +1658,8 @@ fn config_path(model: &Model, dialog: bool, save: bool) -> Option<String> {
 /// the deflections larger, and SIM_APP_VIEW ("yaw,pitch" in degrees) turns the camera and frames the machine.
 /// SIM_APP_CHECK (a check's name, e.g. "motor-peak") opens that check in the tools panel; SIM_APP_TAB (cycle, effects,
 /// search, path, trace, sweep, tuning, runs (with the runs in the bottom panel) or views) opens that tab of it,
+/// SIM_APP_SETUP (motion, effects, parameters or config) that of the setup panel, SIM_APP_SIZE ("1280x720") sizes the
+/// window,
 /// SIM_APP_THEME=light shows the light theme, and SIM_APP_WORKSPACE_Z (in the third axis's unit) sets
 /// the height of the workspace map in the path tab. SIM_APP_PART (a part's id,
 /// e.g. "motor", or "motor,1" for the second of them) picks that part as a click would. SIM_APP_SCRUB (seconds)
@@ -1711,6 +1743,17 @@ fn developer_hooks(
             {
                 // The runs tab with the runs in the bottom panel.
                 (state.panels.tools, state.panels.runs_view) = (tab, tab == ui::ToolTab::Runs);
+            }
+            let setups = [
+                ("motion", ui::SetupTab::Motion),
+                ("effects", ui::SetupTab::Effects),
+                ("parameters", ui::SetupTab::Parameters),
+                ("config", ui::SetupTab::Config),
+            ];
+            if let Some((_, tab)) =
+                asked("SIM_APP_SETUP").and_then(|name| setups.into_iter().find(|(word, _)| *word == name))
+            {
+                state.panels.setup = tab;
             }
             state.panels.light = asked("SIM_APP_THEME").is_some_and(|theme| theme == "light");
             state.themed = false;

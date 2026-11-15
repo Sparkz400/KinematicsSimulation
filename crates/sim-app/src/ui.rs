@@ -1000,7 +1000,8 @@ pub fn timeline(
             let after = gap
                 + width(shown(time))
                 + [0.1, 0.25, 1.0].map(|s| gap + padding + width(format!("{s}×"))).iter().sum::<f32>();
-            ui.spacing_mut().slider_width = (ui.available_width() - after - 2.0).max(60.0);
+            // What is left of this row (a wrapped row's `available_width` is that of a whole row).
+            ui.spacing_mut().slider_width = (ui.available_size_before_wrap().x - after - 2.0).max(60.0);
             let slider = ui.add(Slider::new(&mut time, span.0..=span.1).show_value(false));
             if slider.changed() {
                 actions.push(Action::Timeline(Timeline { time: Some(time), playing: false, ..timeline }));
@@ -1016,7 +1017,8 @@ pub fn timeline(
                     .on_hover_text(model.tr.tr_arg("ui-timeline-contact-hint", &format!("{contact:.3}")));
             }
             // The time shown, and how far back from the newest scene: the scopes' right edge.
-            ui.label(RichText::new(shown(time)).color(if live { chalk() } else { ACTUAL }));
+            let text = RichText::new(shown(time)).color(if live { chalk() } else { ACTUAL });
+            ui.add(Label::new(text).wrap_mode(TextWrapMode::Extend));
             for speed in [0.1, 0.25, 1.0] {
                 if ui
                     .selectable_label(timeline.speed == speed, format!("{speed}×"))
@@ -1107,9 +1109,22 @@ const TICK_PIXELS: f32 = 20.0;
 /// apart, between two and five on a scope: egui_plot's own steps of powers of ten, labelled only from 20 pixels
 /// apart, left a plot 150 pixels high (some 100 of them for the values) often with 0 alone.
 fn ticks(input: GridInput) -> Vec<GridMark> {
+    ticks_apart(input, TICK_PIXELS)
+}
+
+/// Labelled ticks on the time or speed axis, as `ticks` with room for a number across: egui_plot's own steps of powers of
+/// ten, labelled only from 60 pixels apart, left a planned path 0.7 m across 340 pixels with 0 alone.
+pub fn x_ticks(input: GridInput) -> Vec<GridMark> {
+    ticks_apart(input, X_TICK_PIXELS)
+}
+
+/// The fewest pixels between two labelled ticks across: a number and a gap.
+const X_TICK_PIXELS: f32 = 60.0;
+
+fn ticks_apart(input: GridInput, pixels: f32) -> Vec<GridMark> {
     let (low, high) = input.bounds;
     // At most some twenty: a plot not laid out yet has no size to go by.
-    let raw = (TICK_PIXELS as f64 / GRID_PIXELS as f64 * input.base_step_size).max((high - low) / 20.0);
+    let raw = (pixels as f64 / GRID_PIXELS as f64 * input.base_step_size).max((high - low) / 20.0);
     if !(raw.is_finite() && raw > 0.0) {
         return Vec::new();
     }
@@ -1130,7 +1145,13 @@ fn tick_label(mark: GridMark, _: &std::ops::RangeInclusive<f64>) -> String {
 pub fn plot<'a>(id: impl std::hash::Hash + std::fmt::Debug) -> Plot<'a> {
     // Labels at full strength from `TICK_PIXELS` apart; egui_plot fades them in from 20 to 30.
     let axis = AxisHints::new_y().label_spacing(TICK_PIXELS - 4.0..=TICK_PIXELS).formatter(tick_label);
-    Plot::new(id).grid_spacing(GRID_PIXELS..=300.0).y_grid_spacer(ticks).custom_y_axes(vec![axis])
+    let across = AxisHints::new_x().label_spacing(X_TICK_PIXELS - 20.0..=X_TICK_PIXELS - 10.0).formatter(tick_label);
+    Plot::new(id)
+        .grid_spacing(GRID_PIXELS..=300.0)
+        .y_grid_spacer(ticks)
+        .custom_y_axes(vec![axis])
+        .x_grid_spacer(x_ticks)
+        .custom_x_axes(vec![across])
 }
 
 /// A right click on a plot offers to save it: as SVG, drawn as the sizing report draws its plots, or as PNG, a picture
@@ -1968,24 +1989,23 @@ fn config(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Act
             actions.push(Action::ExportReport);
         }
     });
-    ui.horizontal_wrapped(|ui| {
-        let [motor, supply, gearbox, drive, belt, axis] = &mut inputs.parts;
-        ui.label(tr("ui-parts-motor"));
-        ui.add(TextEdit::singleline(motor).desired_width(110.0));
-        ui.label(tr("ui-search-supply"));
-        ui.add(TextEdit::singleline(supply).desired_width(40.0));
-        ui.label(tr("ui-search-gearbox"));
-        ui.add(TextEdit::singleline(gearbox).desired_width(100.0));
-        ui.label(tr("ui-parts-drive"));
-        ui.add(TextEdit::singleline(drive).desired_width(130.0));
-        ui.label(tr("ui-parts-belt"));
-        ui.add(TextEdit::singleline(belt).desired_width(70.0));
-        ui.label(tr("ui-search-axis"));
-        ui.add(TextEdit::singleline(axis).desired_width(80.0));
-        if ui.button(tr("ui-parts-apply")).clicked() {
-            actions.push(Action::ApplyParts);
-        }
-    });
+    // Each name over its field: flowed in a row, a label wrapped to the end of the line before its field and read as
+    // the name of the field before it.
+    let [motor, supply, gearbox, drive, belt, axis] = &mut inputs.parts;
+    for (key, field) in [
+        ("ui-parts-motor", motor),
+        ("ui-search-supply", supply),
+        ("ui-search-gearbox", gearbox),
+        ("ui-parts-drive", drive),
+        ("ui-parts-belt", belt),
+        ("ui-search-axis", axis),
+    ] {
+        ui.label(tr(key));
+        ui.add(TextEdit::singleline(field).desired_width(f32::INFINITY));
+    }
+    if ui.button(tr("ui-parts-apply")).clicked() {
+        actions.push(Action::ApplyParts);
+    }
 }
 
 /// A path from a file: planned, run by the machine and analysed, with the planned path drawn.
