@@ -1022,7 +1022,42 @@ m_mod d̈ + c ḋ + k_mod d = −across · F_beyond − 0.3915 across · m (a_c 
 F_beyond = Σ_beyond m_k (a_k − g),   M_beyond = Σ_beyond (c_k − tip) × m_k (a_k − g),   turn = along × across
 ```
 
-so a link alone rings at the Euler-Bernoulli frequency 1.875104² / 2π · sqrt(E I / (m L³)) (a 60 × 4 mm steel tube of 0.8 m and 4.5 kg: 88.96 Hz), and a tip load F bends it F L³ / (3.09 E I), the static cantilever's within 3 %. The bodies' accelerations come from the joints' (central differences over ±1 µs along q̇ and q̈ of `Chain::body_states`). One-way, as the [compliant base](#compliant-base): the joints do not feel the links' bending. In tool space the flange moves with each link's tip and turns with its slope, d · across + 1.3765 d / L · turn × (flange − tip), its turn added to the rotation vector through exp and log; in joint space the tool pose is the joints, which the bending does not move (its signals `link.<n>.bend` show it). Default six-axis arm: the upper arm, 0.6 m, 12 kg with 20.5 kg beyond it, as a 140 × 8 mm aluminium tube rings at 88.5 Hz. A link along its joint's axis (the base column) has no mode in that plane; out of the plane and in torsion the links are rigid (shortcut in `arm.rs`).
+so a link alone rings at the Euler-Bernoulli frequency 1.875104² / 2π · sqrt(E I / (m L³)) (a 60 × 4 mm steel tube of 0.8 m and 4.5 kg: 88.96 Hz), and a tip load F bends it F L³ / (3.09 E I), the static cantilever's within 3 %. The bodies' accelerations come from the joints' (central differences over ±1 µs along q̇ and q̈ of `Chain::body_states`). One-way, as the [compliant base](#compliant-base): the joints do not feel the links' bending (two-way with `effects.link_bending_reaction`, below). In tool space the flange moves with each link's tip and turns with its slope, d · across + 1.3765 d / L · turn × (flange − tip), its turn added to the rotation vector through exp and log; in joint space the tool pose is the joints, which the bending does not move (its signals `link.<n>.bend` show it). Default six-axis arm: the upper arm, 0.6 m, 12 kg with 20.5 kg beyond it, as a 140 × 8 mm aluminium tube rings at 88.5 Hz. A link along its joint's axis (the base column) has no bend (shortcut in `arm.rs`).
+
+**Directions** (`link_bending.directions`, shipped `["in_plane"]`, the model above). `out_of_plane` adds the bend across that plane (across' = along × across, turning about along × across' = −across), `torsion` the twist about the link's length: one more first mode each per link, states after the others in the order of the list. The twist is a shaft from the joint, its tip turning by d (rad) about the link's line, stiffness k = G I_p / L, I_p = 2 I = π (D⁴ − d⁴) / 32 (`link_bending.shear_modulus_pa`), its shape growing evenly along the link. Signals `link.<n>.bend_across` (m) and `link.<n>.twist` (rad).
+
+With any direction beyond `in_plane`, or with the reaction (below), every mode takes the bodies beyond its link whole: each rides on the tip, its centre moving by t_k = u + r × (c_k − tip) and turning by r per unit of d (a bend: u = across, r = 1.3765 / L · turn; a twist: u = 0, r = along), its turning inertia counted. The link's own body takes its share: a bend 0.3915 u (its turning left out), a twist half of r and of r × (c − origin). Per mode
+
+```text
+p_i   = Σ_k m_k t_ik · v_k + r_ik · I_k ω_k            the mode's momentum (B q̇: B's column j is p at unit speed of joint j)
+Q_g,i = Σ_k m_k t_ik · g                               its load by gravity
+M_d   = Σ_k m_k t_i · t_j + r_i · I_k r_j  + own       own: a bend m (1/4 − 0.3915²), a twist J_line / 12 (J_line about the link's line)
+```
+
+so that the own body's modal mass is the mode shape's (m / 4, J_line / 3) and M_d stays positive definite with the joints'. One-way the load is Q_g − ṗ (ṗ by central differences along q̇ and q̈) and the modal mass M_d's diagonal at zero joints. A tube with a tip inertia J twists at sqrt(G I_p / (L (J + J_own / 3))) / 2π: 60 × 4 mm steel (G 8.1e10 Pa), 0.8 m, J = 0.5 kg m², J_own = 3.546e-3 kg m²: 53.2699 Hz, 53.3328 Hz without the tube's share, the exact root of β tan β = J_own / J 53.26988 Hz; a round tube bends alike in both planes.
+
+**Two-way** (`effects.link_bending_reaction`; off as shipped, then all of the above is unchanged to the bit). The modes are coordinates of their own beside the joints, one mass matrix for both (`chain::FlexCoupling`, `Mechanism::flex_coupling`):
+
+```text
+T = ½ q̇ᵀ M q̇ + ḋᵀ B q̇ + ½ ḋᵀ M_d ḋ,   V = V(q) − dᵀ Q_g(q) + ½ dᵀ K d
+M q̈ + Bᵀ d̈ = τ − h + G                 G_j = ∂(dᵀ Q_g) / ∂q_j = Σ_i d_i Σ_k m_k g · ∂t_ik/∂q_j   (the bent links' weight shift)
+B q̈ + M_d d̈ = Q_g − Ḃ q̇ − ½ Ṁ_d ḋ − K d − C ḋ
+```
+
+solved together (in the rigid model with the rotors' reflected inertia, in the elastic one behind the gearboxes' springs). Ḃ q̇ and Ṁ_d by central differences over ±1 µs along q̇; ∂t/∂q_j from the bodies' speeds at unit speed of joint j. With those terms T + V changes by the joints' work less the links' damping C ḋ² alone, which the machine reports as `power.link_bending`; T, V and ½ dᵀ K d are in `energy.*`. (Lagrange's terms of second order in the small d, ḋ — the centrifugal stiffening and the gyroscopic terms in ḋ q̇ — are left out; dropping the ½ Ṁ_d ḋ and G as well would leave a drift.) At rest the gears hold the weight less G. The joints feel the bending: the bending link's spring force reaches the joint through B, the motors see it in their following error and excite it through the loop.
+
+`modes` lists, two-way, the modes of joints and links together with the motors held: K x = ω² M x over the joints (on their gearboxes' stiffness where elastic; held where rigid; passive joints held) and the modes, M of the load (`chain::generalized_modes`: Cholesky, Jacobi rotations), each with its damping ratio xᵀ C x / 2ω (C the gearboxes' and the links' dampers). A tube of 0.45 kg with 20 kg at its tip on a gearbox of k_g = 2e5 N m/rad, its motor held: joint and link are two springs in series for the tip, L² / k_g + 1 / k_b, k_s = 165420 N/m; the coupled mode 14.43363 Hz, the series spring on the modal mass sqrt(k_s / M_d) / 2π 14.43276 Hz (one-way the joint rings alone at 19.82 Hz and the tube clamped at 21.04 Hz); let go from straight the tip rings about its static sag L τ / k_g + Q_g / k_b = 1.1976 mm at that frequency.
+
+The six-axis arm's cycle in tool space (`arm-tool.toml`, the shipped `[link_bending]` estimates, `sim-cli analyze`), m and rad:
+
+| Bending | Path error peak | Path error RMS | Tracking peak | Dwell peak (settling) | Dwell angle peak |
+| --- | --- | --- | --- | --- | --- |
+| off (shipped) | 3.998e-3 | 1.715e-3 | 5.759e-3 | 2.362e-3 | 3.185e-3 |
+| one-way, in_plane | 4.101e-3 | 1.775e-3 | 5.905e-3 | 2.448e-3 | 3.306e-3 |
+| two-way, in_plane | 4.084e-3 | 1.776e-3 | 5.894e-3 | 2.460e-3 | 3.321e-3 |
+| two-way, all three directions | 4.092e-3 | 1.779e-3 | 5.894e-3 | 2.460e-3 | 3.321e-3 |
+
+The links' modes (the upper arm's bend at 88 Hz) lie well above the gears' modes and the position loops, so the reaction changes the tool's errors by under 1 % and the other directions by less again: the shipped default stays as it was (bending off, one-way when switched on); two-way is for links soft enough to come near the gears' or the loops' frequencies, and where the bending's energy or its load on the motors matters.
 
 The joints' units are their own (`JointSpec::unit`), no longer the axes': a joint's position signal, its force's unit and whether it has a gearbox output torque follow the joint. The time-optimal planner reads the motors' limits through `feedforward_torque_moving`, so along a line of the tool it slows where a motor reaches its rated speed (on the SCARA's example line, joint 1 near the middle, 307.5 of 314.2 rad/s). Before timing a path as fast as the motors allow, `Controller::plan_path` checks the path as planned within the axis limits: a pose on it the machine cannot go to (a singularity, where the motors would have to turn infinitely fast) is refused with `error-path-range` at once, where the time-optimal timing would slow to a standstill there.
 

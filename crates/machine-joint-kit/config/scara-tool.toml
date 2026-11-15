@@ -31,6 +31,9 @@ base_compliance = false
 # the tool rings with them. Not on the slides and the table, which have no links. Off in the shipped configs: the
 # sections are [estimate]s.
 link_bending = false
+# The links' bending acts back on the joints (with link_bending): joints, gearboxes and links one coupled system, the
+# bending's energy in the machine's. Off in the shipped configs.
+link_bending_reaction = false
 gravity = true
 payload = true
 # The arms' payload swings on a pivot at the flange (arm.payload_swing_*): two joints no motor drives. Off here; read
@@ -582,6 +585,10 @@ payload = false
 outer_diameter_m = [0.12, 0.1, 0.0, 0.0]
 wall_m = [0.008, 0.006, 0.0, 0.0]
 youngs_modulus_pa = 7.0e10
+# [estimate] The directions each link deflects in: "in_plane" (the plane its joint turns it in), "out_of_plane"
+# (across it), "torsion" (twisted about its length, by shear_modulus_pa, cast aluminium).
+directions = ["in_plane"]
+shear_modulus_pa = 2.6e10
 damping_ratio = 0.02
 
 # With effects.base_compliance [estimate]: the SCARA's column and its table tilt about x and y at 30 Hz (30 kg m^2
@@ -612,6 +619,7 @@ damping_ratio_rz = 0.02
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
 link_bending.youngs_modulus_pa = [6.5e10, 7.2e10]
+link_bending.shear_modulus_pa = [2.4e10, 2.7e10]
 link_bending.damping_ratio = [0.01, 0.05]
 base.mass_kg = [72.0, 192.0]
 base.tilt_stiffness_x_nm_rad = [4.4e5, 2.75e6]

@@ -111,6 +111,9 @@ iron_loss = true
 # the tool rings with them. Not on the slides and the table, which have no links. Off in the shipped configs: the
 # sections are [estimate]s.
 link_bending = false
+# The links' bending acts back on the joints (with link_bending): joints, gearboxes and links one coupled system, the
+# bending's energy in the machine's. Off in the shipped configs.
+link_bending_reaction = false
 magnet_temperature = false
 # The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
 # (motor.friction_breakaway_nm, friction_stribeck_rad_s).

@@ -445,6 +445,7 @@ base.tilt_stiffness_z_nm_rad = [2.52e5, 1.575e6]
 gearbox.no_load_torque_nm = [0.4, 0.6]
 link_bending.damping_ratio = [0.01, 0.05]
 link_bending.youngs_modulus_pa = [6.5e10, 7.2e10]
+link_bending.shear_modulus_pa = [2.4e10, 2.7e10]
 motor.friction_breakaway_nm = [0.05, 0.1]
 motor.friction_stribeck_rad_s = [0.5, 10.0]
 motor.magnet_temperature_coefficient_1_k = [-0.0013, -0.0009]
@@ -480,3 +481,7 @@ damping_ratio = 0.02
 outer_diameter_m = [0.0, 0.14, 0.12, 0.0, 0.0]  # [estimate] one per joint of this URDF
 wall_m = [0.0, 0.008, 0.008, 0.0, 0.0]  # [estimate]
 youngs_modulus_pa = 7.0e10
+# [estimate] The directions each link deflects in: "in_plane" (the plane its joint turns it in), "out_of_plane"
+# (across it), "torsion" (twisted about its length, by shear_modulus_pa, cast aluminium).
+directions = ["in_plane"]
+shear_modulus_pa = 2.6e10
