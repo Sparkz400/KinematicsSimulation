@@ -2056,10 +2056,9 @@ fn a_trace_is_replayed_and_fitted_in_the_app(entry: &'static MachineEntry) {
             ("Moved mass, axis ", "Bewegte Masse, Achse "),
         )
     } else {
-        // As on the command line (`a_trace_from_run_replays_onto_itself_and_fits_its_own_config`): a cycle of moves too
-        // short to turn every motor both ways for the fit's window gets no fit (the four-arm delta, 14 November 2026).
-        let fitted_motors =
-            if sim_components::identify::turns_both_ways(&measured) { &model.session.motors[..] } else { &[] };
+        // As on the command line (`a_trace_from_run_replays_onto_itself_and_fits_its_own_config`): every machine's
+        // cycle gets a fit, a cycle of short moves with a shorter window (15 November 2026).
+        let fitted_motors = &model.session.motors[..];
         (
             fitted_motors.iter().map(|m| m.key).collect(),
             ["Coulomb friction [N m]"; 2],
