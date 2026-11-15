@@ -200,6 +200,7 @@ effect-load_encoder = Lastseitiger Geber (direktes Messsystem)
 param-torque_feedforward_model = Modell der Momentenvorsteuerung (rigid / inertia)
 param-friction_feedforward_speed_rad_s = Drehzahlen der Reibkennlinie [rad/s]
 param-friction_feedforward_torque_nm = Momente der Reibkennlinie [N m]
+param-friction_feedforward_model = Reibungsvorsteuerung aus (characteristic oder machine)
 param-precontrol_balance_s = Zeitkonstante der Vorsteuersymmetrierung [s]
 param-load_encoder_step = Auflösung des lastseitigen Gebers [m oder rad]
 quantity-torque-feedforward = Vorsteuermoment

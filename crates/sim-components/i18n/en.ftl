@@ -200,6 +200,7 @@ effect-load_encoder = Load-side encoder (direct measuring system)
 param-torque_feedforward_model = Torque feedforward model (rigid / inertia)
 param-friction_feedforward_speed_rad_s = Friction feedforward speeds [rad/s]
 param-friction_feedforward_torque_nm = Friction feedforward torques [N m]
+param-friction_feedforward_model = Friction feedforward from (characteristic or machine)
 param-precontrol_balance_s = Precontrol balancing time constant [s]
 param-load_encoder_step = Load-side encoder step [m or rad]
 quantity-torque-feedforward = Feedforward torque
