@@ -992,6 +992,45 @@ the modes change over the workspace (`sim-cli modes`): 24.6 Hz at the planar rob
 run from corner to corner and hold little moment: turns of 0.05 rad already take some near the band's top, and its
 platform rings at up to 0.85 mrad in the dwells (settling 0.84 mm against the 1 mm the config asks).
 
+## Size a stepper or an induction motor
+
+`motor.kind` puts another motor behind the drive (see [model reference](model-reference.md#stepper-motor) and
+[config reference](config-reference.md#motor-kinds)); without it every machine keeps its servo motor. Two machine files
+show them, both with [estimate] values:
+
+```text
+$ sim-cli verdicts --machine-file machines/stepper-axis.toml
+$ sim-cli verdicts --machine-file machines/induction-lift.toml
+$ sim-cli verdicts --machine-file machines/induction-lift.toml --set geometry.incline_deg=0 --set 'drive.induction_control="vf"'
+```
+
+**A stepper belt axis.** A NEMA 23 stepper (1.26 N m holding torque at 2.8 A per phase, 0.9 Ω, 2.5 mH, 50 rotor teeth)
+straight on a 16 mm pulley, 48 V, 16 microsteps, the drive set to 3.5 A (`drive.stepper_current_a`, 88 % of the rating:
+holding torque 1.11 N m). The drive runs open loop: it counts the setpoint in microsteps and puts the current vector there,
+and the rotor follows on the "magnetic spring" of the holding torque. Three checks size it:
+
+- `stepper-synchronism`: the highest load angle over the cycle against the pull-out angle, 90° electrical. The shipped
+  cycle reaches 0.42 rad (24°). A rotor that falls out of step has lost position for good (the drive does not know): the
+  value then is above π. With `--set mass.payload_kg=25` the 5 m/s² alone ask for 2.08 N m of the 1.11 N m, and it fails.
+- `motor-peak`: the torque against the pull-out curve, the holding torque up to the corner speed, here 85 rad/s
+  ((R I + k_E ω)² + (N ω L I)² = U²), falling above: 44 % on the shipped cycle. The torque-speed chart shows the curve.
+- `motor-thermal`: a stepper carries its current at standstill too; the winding settles at 59 K of its 80 K. At the full
+  3.96 A it would sit at its rated rise.
+
+Siemens' S1 check (`motor-s1`) is a servo motor's and is not made. In the scope the motor speed shows the rotor ringing
+on its spring after each move (about 60 Hz here, sqrt(N T_hold / J) / 2π with the load's inertia), and the following
+error the load angle at the motor: the true position against the counted one.
+
+**An induction motor lift.** A four-pole 1.5 kW, 400 V, 50 Hz motor (1440 rpm, 10 N m) through a gearbox 10 onto a
+vertical belt lift with 50 kg, field-oriented (`drive.induction_control = "foc"`) under the drive's speed and position
+loops. Its torque-speed curve is the breakdown curve of its equivalent circuit (27.1 N m at the rated voltage) and the
+converter's current limit; the copper loss of stator and rotor heats it. It passes every check: 24 % of the curve,
+17.5 K, 0.2 mm off its target in the dwells against the 0.5 mm allowed. Laid flat and run on V/f (the third command) the
+converter follows the plan's speed open loop with the slip compensated, and the carriage stops about 9 mm off its targets:
+V/f has no position. The motor's data are the name plate (`rated_voltage_v`, `rated_frequency_hz`,
+`drive.rated_speed_rad_s` for the rated slip) and the equivalent circuit (`resistance_ohm`, `rotor_resistance_ohm`,
+`magnetizing_inductance_h`, the two leakages); makers publish the circuit for some series, else it has to be estimated
+(the files say which and bound them).
 ## Run a path and read path error
 
 A path file has one piece per line. The path starts where the machine stands (`start.pose`).

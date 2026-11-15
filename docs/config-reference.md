@@ -18,6 +18,8 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | H | [`crates/machine-hexapod/default.toml`](../crates/machine-hexapod/default.toml) | Hexapod on six electric cylinders, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#hexapod) |
 | CP, CS | [`crates/machine-cable-robot/config/`](../crates/machine-cable-robot/config/) | Planar (4 cables) and spatial (8 cables) cable robots, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Their keys are in [their own section](#cable-robots) |
 
+| ST, IL | [`machines/stepper-axis.toml`](../machines/stepper-axis.toml), [`machines/induction-lift.toml`](../machines/induction-lift.toml) | Machine files with a stepper motor (a NEMA 23 stepper on a small belt axis) and an induction motor (a 1.5 kW four-pole motor on a frequency converter, gearbox 10, vertical belt lift). [estimate] values. Their own keys are in [motor kinds](#motor-kinds) |
+
 The **In** column says which configs have the key. "T E" means the key exists on the T-gantry only; "S" on the single axis only; "E" in the EXCT-30 config only. A key marked for one machine is not read by the other.
 
 The **Source** column says where a value of this kind normally comes from:
@@ -374,6 +376,24 @@ With `effects.process_force`: a force on the tool tip (single axis: on the carri
 | `force_x_n` | T E S | N | Force on the tool in X. May be negative | choice |
 | `force_z_n` | T E | N | Force on the tool in Z (positive is upwards) | choice |
 | `force_<axis>_n` | machine files | N | Force on the tool along each axis of a machine file (`force_y_n` on the H-bot, the CoreXY and the portal). Read only with the effect on | choice |
+
+## Motor kinds
+
+`motor.kind` chooses the motor each drive turns (see [model reference](model-reference.md#stepper-motor)). Without it, or with `"servo"`, the permanent-magnet servo motor of the rest of this page, bit for bit as before. The keys below are read only for their kind, and any config may have them (`analysis::RATINGS_BEYOND_DEFAULT`). The servo's keys stay required for every kind (the stepper and the induction motor read `resistance_ohm`, `inductance_h`, `torque_constant_nm_a`, `rated_current_a`, `max_current_a`, the thermal and the drive's keys as said below; the rest is read and not used).
+
+| Key | In | Unit | Meaning | Source |
+| --- | --- | --- | --- | --- |
+| `motor.kind` | ST IL | – | `"servo"` (default), `"stepper"` or `"induction"` | choice |
+| `motor.rotor_teeth` | ST | – | Stepper: rotor teeth N, 50 for a 1.8° motor (4 N full steps a turn) | datasheet |
+| `motor.detent_torque_nm` | ST | N m | Stepper, with `effects.detent_torque`: the detent torque's amplitude, 4 N periods a turn | estimate (a few % of the holding torque), bounds |
+| `effects.detent_torque` | ST | – | Stepper: the detent torque on (`false` or absent: off) | choice |
+| `drive.microsteps` | ST | – | Stepper: microsteps per full step, a whole number up to 4096 | choice |
+| `drive.stepper_current_a` | ST | A | Stepper: the current vector's amplitude the drive sets, sqrt 2 times a phase's current in a full step. The holding torque is `torque_constant_nm_a` times it; `rated_current_a` (the same kind of amplitude) is where the winding settles at its rated rise. For a stepper `resistance_ohm`, `inductance_h` and `torque_constant_nm_a` are a phase's, the supply is `drive.bus_voltage_v` | datasheet's A/phase, choice |
+| `motor.rated_voltage_v`, `motor.rated_frequency_hz` | IL | V, Hz | Induction: the name plate's line-to-line voltage and frequency. Its rated speed is `drive.rated_speed_rad_s` (rated slip against the synchronous speed), its rated torque `drive.rated_torque_nm`, its pole pairs `motor.pole_pairs` | datasheet |
+| `motor.rotor_resistance_ohm`, `magnetizing_inductance_h`, `stator_leakage_inductance_h`, `rotor_leakage_inductance_h` | IL | Ω, H | Induction: the equivalent circuit per phase (star); the stator resistance is `resistance_ohm` | datasheet where the maker gives it, else estimate, bounds |
+| `drive.induction_control` | IL | – | Induction: `"foc"` (field-oriented, under the speed and position loops; `current_kp_v_a` = sigma L_s / T, `current_tn_s` = sigma L_s / R_sigma) or `"vf"` (open loop) | choice |
+| `drive.vf_boost_v` | IL | V | Induction, V/f: the line-to-line voltage at 0 Hz | choice |
+| `drive.vf_slip_compensation` | IL | – | Induction, V/f: raise the frequency by the rated slip times the estimated torque over the rated torque | choice |
 
 ## A motor's own tables
 

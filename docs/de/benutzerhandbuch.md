@@ -1010,6 +1010,49 @@ Seile dehnen sich mit EA / l, daher ändern sich Steifigkeit und Eigenfrequenzen
 schon Drehungen von 0,05 rad bringen einige nahe an die Obergrenze des Bands, und seine Plattform schwingt in den
 Verweilzeiten mit bis zu 0,85 mrad (Beruhigung 0,84 mm gegen die 1 mm, die die Konfiguration verlangt).
 
+## Einen Schrittmotor oder einen Asynchronmotor auslegen
+
+`motor.kind` setzt einen anderen Motor hinter den Antrieb (siehe [Modellreferenz](../model-reference.md#stepper-motor) und
+[Konfigurationsreferenz](../config-reference.md#motor-kinds)); ohne den Schlüssel behält jede Maschine ihren Servomotor.
+Zwei Maschinendateien zeigen sie, beide mit [estimate]-Werten:
+
+```text
+$ sim-cli verdicts --machine-file machines/stepper-axis.toml
+$ sim-cli verdicts --machine-file machines/induction-lift.toml
+$ sim-cli verdicts --machine-file machines/induction-lift.toml --set geometry.incline_deg=0 --set 'drive.induction_control="vf"'
+```
+
+**Eine Riemenachse mit Schrittmotor.** Ein NEMA-23-Schrittmotor (1,26 N m Haltemoment bei 2,8 A je Phase, 0,9 Ω, 2,5 mH,
+50 Rotorzähne) direkt auf einer Riemenscheibe von 16 mm, 48 V, 16 Mikroschritte, der Antrieb auf 3,5 A eingestellt
+(`drive.stepper_current_a`, 88 % des Nennstroms: Haltemoment 1,11 N m). Der Antrieb arbeitet ohne Rückführung: Er zählt den
+Sollwert in Mikroschritten und stellt den Stromzeiger dorthin, und der Läufer folgt an der „magnetischen Feder“ des
+Haltemoments. Drei Prüfungen legen ihn aus:
+
+- `stepper-synchronism`: der größte Lastwinkel im Zyklus gegen den Kippwinkel, 90° elektrisch. Der mitgelieferte Zyklus
+  erreicht 0,42 rad (24°). Ein Läufer, der außer Tritt fällt, hat seine Lage endgültig verloren (der Antrieb weiß es nicht):
+  Der Wert liegt dann über π. Mit `--set mass.payload_kg=25` verlangen die 5 m/s² allein 2,08 N m von den 1,11 N m, und
+  die Prüfung schlägt fehl.
+- `motor-peak`: das Moment gegen die Kippmomentkennlinie, das Haltemoment bis zur Eckdrehzahl, hier 85 rad/s
+  ((R I + k_E ω)² + (N ω L I)² = U²), darüber fallend: 44 % im mitgelieferten Zyklus. Das Drehmoment-Drehzahl-Diagramm
+  zeigt die Kennlinie.
+- `motor-thermal`: Ein Schrittmotor führt seinen Strom auch im Stillstand; die Wicklung erreicht 59 K von ihren 80 K. Mit
+  den vollen 3,96 A läge sie bei ihrer Bemessungserwärmung.
+
+Die S1-Prüfung von Siemens (`motor-s1`) gilt für Servomotoren und entfällt. Im Oszilloskop zeigt die Motordrehzahl das
+Nachschwingen des Läufers an seiner Feder nach jeder Bewegung (hier etwa 60 Hz, sqrt(N T_halt / J) / 2π mit der
+Trägheit der Last) und der Schleppfehler den Lastwinkel am Motor: die wahre Lage gegen die gezählte.
+
+**Ein Hubwerk mit Asynchronmotor.** Ein vierpoliger Motor mit 1,5 kW, 400 V, 50 Hz (1440 min⁻¹, 10 N m) über ein Getriebe
+10 an einem senkrechten Riemenhubwerk mit 50 kg, feldorientiert (`drive.induction_control = "foc"`) unter dem Drehzahl-
+und Lageregler des Antriebs. Seine Drehmoment-Drehzahl-Kennlinie ist die Kippmomentkennlinie seines Ersatzschaltbilds
+(27,1 N m bei Bemessungsspannung) und die Stromgrenze des Umrichters; die Kupferverluste von Ständer und Läufer erwärmen
+ihn. Er besteht jede Prüfung: 24 % der Kennlinie, 17,5 K, 0,2 mm neben dem Ziel in den Verweilzeiten gegen erlaubte
+0,5 mm. Flach gelegt und mit U/f betrieben (dritter Befehl) folgt der Umrichter der Plandrehzahl ohne Rückführung, mit
+Schlupfkompensation, und der Schlitten hält etwa 9 mm neben seinen Zielen: U/f kennt keine Lage. Die Daten des Motors
+sind das Typenschild (`rated_voltage_v`, `rated_frequency_hz`, `drive.rated_speed_rad_s` für den Bemessungsschlupf) und
+das Ersatzschaltbild (`resistance_ohm`, `rotor_resistance_ohm`, `magnetizing_inductance_h`, die beiden Streuungen);
+manche Hersteller veröffentlichen es für eine Baureihe, sonst muss es geschätzt werden (die Dateien sagen, welche Werte,
+und begrenzen sie).
 ## Eine Bahn fahren und den Bahnfehler ablesen
 
 Eine Bahndatei hat ein Stück je Zeile. Die Bahn beginnt dort, wo die Maschine steht (`start.pose`).
