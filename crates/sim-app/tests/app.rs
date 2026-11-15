@@ -1129,7 +1129,8 @@ fn the_app_optimises_the_cycle_and_applies_the_settings(entry: &'static MachineE
     for (path, _, value) in &found.changes {
         assert_eq!(&model.config.get(path).unwrap().to_string(), value, "{path}");
     }
-    assert!((cycle_time(entry, &model.config) - after).abs() < 2e-3, "{}", entry.id);
+    let applied = cycle_time(entry, &model.config);
+    assert!((applied - after).abs() < 2e-3, "{}: {applied} s applied, {after} s found", entry.id);
     // The running simulation took the config: no refusal comes back.
     std::thread::sleep(Duration::from_millis(100));
     model.poll();
