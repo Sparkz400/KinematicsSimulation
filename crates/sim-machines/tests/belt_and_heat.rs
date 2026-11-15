@@ -124,10 +124,18 @@ fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
             // stays. The loss is T w (1 - eta) with the torque into the gearbox set, T w (1 - eta) / eta with the torque
             // out of it set, eta = g e; the ratio warm to cold lies between the two (by hand 0.6409 and 0.6338 for a
             // gearbox of 97 %, 0.6409 and 0.5724 for a strain wave gear's 75 %).
-            let g = cfg.f64("gearbox.efficiency").unwrap();
+            // The gearbox's own efficiency, `[gearbox.<motor>]` over `[gearbox]` where its motor has its own (an arm on a
+            // track: its track's planetary gearbox of 96 % beside the arm's strain wave gears of 75 %).
+            let motor = id.trim_start_matches("power.gearbox_");
+            let own = sim_components::catalog::motor_config(&cfg, motor).unwrap();
+            let g = own.f64("gearbox.efficiency").unwrap();
+            // A joint that slides (its force in N) runs on the rack or screw behind its gearbox, an arm's track too.
+            let slides = sim.signal_infos().iter().any(|s| s.id == format!("joint.{motor}.force") && s.unit == "N");
             // An arm's heated gearboxes are those of its turning joints, with nothing behind them, as the parallel
             // SCARA's first (its screw is the quill's) and the wafer handler's arm (its screw is the lift's).
-            let e = if cfg.get("arm.gear_ratios").is_ok() || ["parallel-scara", "wafer-handler"].contains(&entry.id) {
+            let e = if !slides
+                && (cfg.get("arm.gear_ratios").is_ok() || ["parallel-scara", "wafer-handler"].contains(&entry.id))
+            {
                 1.0
             } else {
                 ["rack.efficiency", "screw.efficiency"].iter().find_map(|k| cfg.f64(k).ok()).unwrap_or(1.0)

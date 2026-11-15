@@ -18,9 +18,10 @@ mod slide;
 mod table;
 mod tool;
 
+use sim_components::catalog::motor_config;
 use sim_components::chain::{JOINT_KEYS, JointMachine, JointSpec, MOTOR_IDS, MOTOR_KEYS, Mechanism};
 use sim_components::joint::RotaryJoint;
-use sim_components::mech::ThermalFeedback;
+use sim_components::mech::{Gearbox, ThermalFeedback};
 use sim_core::{AxisInfo, Config, ConfigError, Machine, MachineEntry, MotorInfo};
 
 const I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("de", include_str!("../i18n/de.ftl"))];
@@ -174,14 +175,20 @@ fn machine<M: Mechanism + 'static>(
         })
         .collect::<Vec<_>>();
     let motors = (0..specs.len()).map(|k| MotorInfo { id: MOTOR_IDS[k], key: MOTOR_KEYS[k] }).collect();
-    Ok(Box::new(JointMachine::new(
+    // Each joint's gearbox warms from its own efficiency (`[gearbox.<k>]` over `[gearbox]`).
+    let gear_efficiencies = (0..specs.len())
+        .map(|k| Gearbox::configured_efficiency(&motor_config(cfg, MOTOR_IDS[k])?))
+        .collect::<Result<_, _>>()?;
+    let mut machine = JointMachine::new(
         mechanism,
         specs,
         cfg.bool("effects.joint_elasticity")?,
         ThermalFeedback::from_config(cfg)?,
         axes,
         motors,
-    )))
+    );
+    machine.gear_efficiencies = gear_efficiencies;
+    Ok(Box::new(machine))
 }
 
 /// `ratings.required_life_h`, where it is set.

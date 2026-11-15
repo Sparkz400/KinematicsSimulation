@@ -428,6 +428,10 @@ pub struct JointMachine<M: Mechanism> {
     pub joints: Vec<JointSpec>,
     pub elastic: bool,
     pub thermal: Option<ThermalFeedback>,
+    /// Per joint, the efficiency its own gearbox has at the reference temperature, which `thermal`'s law warms from:
+    /// empty where every joint has the shared `[gearbox]`'s (`ThermalFeedback::efficiency`). A machine whose joints have
+    /// gearboxes of their own (`[gearbox.<k>]`) sets it.
+    pub gear_efficiencies: Vec<f64>,
     pub axes: Vec<AxisInfo>,
     pub motors: Vec<MotorInfo>,
     brake_engaged: bool,
@@ -471,6 +475,7 @@ impl<M: Mechanism> JointMachine<M> {
             joints,
             elastic,
             thermal,
+            gear_efficiencies: Vec::new(),
             axes,
             motors,
             brake_engaged: false,
@@ -1373,9 +1378,15 @@ impl<M: Mechanism> Machine for JointMachine<M> {
 
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         let Some(law) = &self.thermal else { return };
-        let geared = self.joints.iter_mut().filter(|j| !j.drive.coupled);
-        for (joint, rise) in geared.zip(rises) {
-            joint.drive.gearbox.efficiency = law.gearbox_efficiency(*rise) * joint.drive.extra_efficiency;
+        let geared = self.joints.iter_mut().enumerate().filter(|(_, j)| !j.drive.coupled);
+        for ((k, joint), rise) in geared.zip(rises) {
+            // From the joint's own gearbox's efficiency where it has one (a track's planetary gearbox beside an arm's
+            // strain wave gears), else the shared one's.
+            let warmed = match self.gear_efficiencies.get(k) {
+                Some(&efficiency) => ThermalFeedback { efficiency, ..law.clone() }.gearbox_efficiency(*rise),
+                None => law.gearbox_efficiency(*rise),
+            };
+            joint.drive.gearbox.efficiency = warmed * joint.drive.extra_efficiency;
             joint.drive.shaft.set_oil(law.viscosity_factor(*rise));
         }
     }
