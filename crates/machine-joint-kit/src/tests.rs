@@ -949,3 +949,33 @@ fn the_swinging_payload_conserves_energy() {
         sim_core::testkit::energy_conservation(m.as_ref());
     }
 }
+
+/// A machine built at rest stays there: its drives start with the torque that holds the load where the tool stands,
+/// with the cogging, 0.02 N m sin(24 rotor angle), at the angle the rotor stands at. The palletiser's motors start at
+/// angles where it is up to 0.02 N m (asserted below: at least 5 mN m on one). The hold used to be worked out at the
+/// setpoint, where the motors' angles put the tool without its gears' twist (motor 3 0.39 rad further on, the tool
+/// 4 mm off), with that pose's gravity and cogging: the machine moved 1.2 um in its first 0.2 s while its drives
+/// settled. Without the encoder's counts it stays within 1e-9 m over 0.2 s (seen: 1.2e-13 m); with its 22 bits the
+/// position loop corrects to the nearest count, 2 pi / 2^22 = 1.5e-6 rad at a motor, 9.4e-9 rad at a 160:1 joint, at
+/// most 1.7 m from the turret: within half of 16 nm (seen: 3.2 nm).
+#[test]
+fn a_machine_built_at_rest_stays_there() {
+    for (resolution, limit) in [(false, 1e-9), (true, 0.5 * 1.7 * std::f64::consts::TAU / 4194304.0 / 160.0)] {
+        let mut cfg = PALLETISER.config();
+        cfg.set_text(&format!("effects.encoder_resolution = {resolution}")).unwrap();
+        let mut sim = sim_components::Sim::new(&PALLETISER, &cfg).unwrap();
+        let n = sim.machine.axes().len();
+        let pose = |s: &sim_components::Sim| {
+            let (mut p, mut v) = (vec![0.0; n], vec![0.0; n]);
+            s.machine.tool_state(&s.state, &mut p, &mut v);
+            p
+        };
+        let (mut angle, mut speed) = (vec![0.0; 4], vec![0.0; 4]);
+        sim.machine.motor_state(&sim.state, &mut angle, &mut speed);
+        assert!(angle.iter().any(|a| (0.02 * (24.0 * a).sin()).abs() > 5e-3), "no cogging at {angle:?}");
+        let start = pose(&sim);
+        let mut most = 0f64;
+        sim.run(0.2, |s| most = pose(s).iter().zip(&start).map(|(a, b)| (a - b).abs()).fold(most, f64::max));
+        assert!(most < limit, "resolution {resolution}: moved {most} m, limit {limit} m");
+    }
+}
