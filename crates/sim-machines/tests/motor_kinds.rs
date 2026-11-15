@@ -2,7 +2,7 @@
 //! each runs its cycle and is judged with the verdicts that apply to it.
 
 use sim_components::Sim;
-use sim_components::analysis::{Verdict, analyse_cycle, verdicts};
+use sim_components::analysis::{BUDGET_TOLERANCE, ELECTRICAL_TOLERANCE, Verdict, analyse_cycle, verdicts};
 use sim_core::{Config, MachineEntry};
 use sim_machines::load_file;
 use std::path::Path;
@@ -12,8 +12,12 @@ fn file(name: &str) -> &'static MachineEntry {
         .unwrap_or_else(|e| panic!("{e}"))
 }
 
+/// The cycle's verdicts; and its energy budget closes, the electrical side (windings, DC link) as for the servo.
 fn judged(entry: &'static MachineEntry, cfg: &Config) -> Vec<Verdict> {
     let load = analyse_cycle(&mut Sim::new(entry, cfg).unwrap()).unwrap();
+    let budget = load.budget.as_ref().unwrap();
+    assert!(budget.electrical_unaccounted().abs() < ELECTRICAL_TOLERANCE * budget.supply, "{budget:?}");
+    assert!(budget.unaccounted().abs() < BUDGET_TOLERANCE * budget.supply, "{budget:?}");
     verdicts(cfg, &load).unwrap()
 }
 
@@ -55,4 +59,24 @@ fn the_induction_lift_runs_its_cycle_field_oriented() {
     let failed: Vec<_> = v.iter().filter(|v| !v.ok).collect();
     assert!(failed.is_empty(), "{failed:?}");
     assert!(v.iter().all(|v| v.check != "motor-s1" && v.check != "stepper-synchronism"));
+}
+
+/// The same lift laid flat as a conveyor and run open loop on V/f (drive.induction_control = "vf"): the cycle runs, the
+/// converter following the plan's speed with the slip compensated, and nothing holds the position, so the carriage
+/// stops off its targets by what the slip and the speed ramps leave. (Its warm start, "thermal-warm-start", settles 0.4 K
+/// from where the pass started: the settled rise assumes a current that stays as the winding warms, and on V/f the
+/// voltage is set, not the current.)
+#[test]
+fn the_induction_axis_runs_its_cycle_on_v_f() {
+    let entry = file("induction-lift.toml");
+    let mut cfg = entry.config();
+    cfg.set_text("geometry.incline_deg = 0.0").unwrap();
+    cfg.set_text("drive.induction_control = \"vf\"").unwrap();
+    let v = judged(entry, &cfg);
+    for ok in ["motor-peak", "motor-thermal", "drive-current", "drive-peak-current"] {
+        assert!(check(&v, ok).ok, "{:?}", check(&v, ok));
+    }
+    // 9.4 mm off its target in the dwells, against 0.2 mm field-oriented: open loop.
+    let settling = check(&v, "settling");
+    assert!(settling.value > 2e-3 && settling.value < 0.02, "{settling:?}");
 }
