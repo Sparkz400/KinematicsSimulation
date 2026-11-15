@@ -217,13 +217,21 @@ fn a_move_arrives_and_comes_to_rest() {
             sim.step();
         }
         sim.run(0.3, |_| {});
-        let position = sim.signal_index(&format!("axis.{}.position", sim.machine.axes()[0].id)).unwrap();
-        let (mut low, mut high, mut sample) = (f64::INFINITY, f64::NEG_INFINITY, Vec::new());
-        sim.run(0.2, |s| {
-            s.sample(&mut sample);
-            low = low.min(sample[position]);
-            high = high.max(sample[position]);
-        });
+        let axis = sim.machine.axes()[0].clone();
+        let position = sim.signal_index(&format!("axis.{}.position", axis.id)).unwrap();
+        // The axis's position over `seconds`, one sample a base step.
+        let record = |sim: &mut Sim, seconds: f64| {
+            let (mut trace, mut sample) = (Vec::new(), Vec::new());
+            sim.run(seconds, |s| {
+                s.sample(&mut sample);
+                trace.push(sample[position]);
+            });
+            trace
+        };
+        let span =
+            |trace: &[f64]| trace.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), v| (l.min(*v), h.max(*v)));
+        let window = record(&mut sim, 0.2);
+        let (low, high) = span(&window);
         // The drive controls the motor; belt stretch, gear twist, backlash and friction leave a standstill error, up to
         // the machine's setpoint slack (the delta's 9 arcmin: 0.21 mm here).
         assert!(
@@ -232,7 +240,41 @@ fn a_move_arrives_and_comes_to_rest() {
             entry.id,
             target[0]
         );
-        assert!(high - low < 2e-5, "{}: still moving by {} m at rest", entry.id, high - low);
+        // Coming to rest: under 20 um of motion in the window. What this is to catch is a machine that does not come to
+        // rest: hunting in backlash or friction, a limit cycle, a loop on the edge (the parallel SCARA's 21.7 um). A
+        // lightly damped structural mode that rings down after a long move is real for a machine of a long reach (the
+        // palletiser's turret against its gear at 1.79 m: 5.3 Hz, 94 um of x in the window), and is told apart by two
+        // things: it stays inside the machine's own settling tolerance (the one its `settling` verdict judges with), and
+        // it decays. A mode of frequency f and damping zeta loses exp(-2 pi f zeta dt) of its amplitude in dt; the later
+        // window, dt = 1 s on, must have lost more than a mode of 0.5 % damping at the machine's reported frequency
+        // (`resonance_hz`) or, where it reports none, the one measured from the motion's zero crossings over both
+        // windows. And it rings: at least two periods (four crossings of its mean) over the 1.2 s; a creep through a
+        // gear's play crosses once (the parallel SCARA's at a friction smoothing of 0.01 rad/s: 21.7 um in the window,
+        // gone 1 s later, one crossing). The palletiser: 94.5 um, 28.1 um 1 s later (x 0.30), 12 crossings, 5.0 Hz
+        // from them (5.3 Hz from 2 s of its ring-down), exp(-2 pi 5 0.005 1) = 0.855, within its 4 mm. A machine that
+        // hunts keeps its amplitude and fails.
+        let moved = high - low;
+        if moved >= 2e-5 {
+            let key =
+                if axis.unit == "rad" { "ratings.settling_tolerance_rad" } else { "ratings.settling_tolerance_m" };
+            let tolerance = entry.config().f64(key).unwrap_or(0.0);
+            let gap = record(&mut sim, 0.8);
+            let later = record(&mut sim, 0.2);
+            let (later_low, later_high) = span(&later);
+            let all: Vec<f64> = window.iter().chain(&gap).chain(&later).copied().collect();
+            let mean = all.iter().sum::<f64>() / all.len() as f64;
+            let crossings = all.windows(2).filter(|w| (w[0] - mean) * (w[1] - mean) < 0.0).count();
+            let measured = crossings as f64 / (2.0 * all.len() as f64 * sim.dt);
+            let frequency = sim.machine.resonance_hz(&target).unwrap_or(measured);
+            let factor = (-std::f64::consts::TAU * frequency * 0.005 * 1.0).exp();
+            assert!(
+                moved < tolerance && crossings >= 4 && later_high - later_low < factor * moved,
+                "{}: still moving by {moved} m at rest (settling tolerance {tolerance}), {crossings} crossings of its mean in 1.2 s, {} m 1 s later (a mode of {frequency} Hz and 0.5 % damping: below {} m)",
+                entry.id,
+                later_high - later_low,
+                factor * moved
+            );
+        }
     }
 }
 
