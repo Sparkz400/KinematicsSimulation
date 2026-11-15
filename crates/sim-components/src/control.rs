@@ -370,12 +370,15 @@ impl Controller {
         // Nothing moves yet: the shaper is in use from the first cycle on.
         c.shaper = c.pending_shaper.take().flatten();
         machine.motor_state(state, &mut c.motor_pos, &mut c.motor_vel);
-        c.hold_here(machine);
+        let (mut tool, mut speed) = (vec![0.0; axes], vec![0.0; axes]);
+        machine.tool_state(state, &mut tool, &mut speed);
+        c.hold_here(machine, Some(&tool));
         Ok(c)
     }
 
-    /// Setpoints and drives at rest where the motors stand.
-    fn hold_here(&mut self, machine: &dyn Machine) {
+    /// Setpoints and drives at rest where the motors stand; holding the load at the tool pose `at` where it is known
+    /// (the start), else at the setpoint (`Command::Enable`).
+    fn hold_here(&mut self, machine: &dyn Machine, at: Option<&[f64]>) {
         let motors = self.motor_pos.len();
         // The setpoint starts where the motors are. With a stretched belt and a loaded gearbox that
         // is a few micrometres from the tool pose, and starting there avoids a jolt at the first step.
@@ -387,9 +390,12 @@ impl Controller {
         self.history.clear();
         self.fieldbus.clear();
         self.watch = vec![Watch::default(); motors];
-        // Start holding the load: the torque that keeps the pose, and the feedforward's share of it.
+        // Start holding the load: the torque that keeps the pose, and the feedforward's share of it. At the tool's pose,
+        // not the setpoint's: the setpoint is where the motors' angles put the tool without the gears' twist (4 mm from
+        // it on the palletiser), and the hold there had its gravity, and its ripple and cogging at the rotor angle, of
+        // another pose; a machine built at rest moved 1.2 um in its first 0.2 s while its drives settled.
         let (mut hold, mut ff) = (vec![0.0; motors], vec![0.0; motors]);
-        machine.equilibrium(&self.set_pos, &mut Vec::new(), &mut hold);
+        machine.equilibrium(at.unwrap_or(&self.set_pos), &mut Vec::new(), &mut hold);
         self.torque_feedforward(machine, &self.set_pos, &self.set_vel, &self.set_acc, &vec![0.0; motors], &mut ff);
         // A winding that was warm stays warm, and a DC link keeps its charge. The current that holds the load comes
         // out of that charge (L i^2 / 2); below the bus level the rectifier makes it up at the next step. Without the DC
@@ -770,7 +776,7 @@ impl Controller {
                 // they stand.
                 if !self.enabled || self.reacting.is_some() {
                     (self.enabled, self.reacting, self.fault) = (true, None, None);
-                    self.hold_here(machine);
+                    self.hold_here(machine, None);
                 }
             }
             Command::MoveTo(target) => {
