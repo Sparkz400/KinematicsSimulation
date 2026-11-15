@@ -110,6 +110,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `tooth_meshing` | T E S | on | A small periodic force at the tooth-pass frequency |
 | `frame_compliance` | T E | on | One spring-mass mode of the frame in X: the portal's posts swaying under its beam, coupled to the belt both ways |
 | `base_compliance` | every machine and machine file | off | The base the whole machine stands on gives way ([`[base]`](#base)): up to six spring-mass directions under the motors' reactions and the moving masses, the tool moving with it. In series with `frame_compliance` |
+| `base_reaction` | every machine and machine file | off | With `base_compliance`: two-way. The machine feels the base's acceleration (its motors see the sway and hold against it), base and machine solved together; the base's energy is in `energy.*` and its damping in `power.*` (`power.base`). Off: one-way, the base sways under the machine |
 | `z_axis_bending` | T E | off | The Z axis bends as a cantilever from the carriage (`tool_flex.z_axis_bending_stiffness_nm2`), in series with its guide's give; with `tool_flex` off it only bends. Elastic model |
 | `beam_sag` | T E | off | The X beam sags under the carriage and the Z axis as a simple span ([`[beam]`](#beam)), quasi-static, lowering the tool. Elastic model |
 | `tool_flex` | T E | on | The Z axis leans against the carriage; the reported X position is the tool tip. In a machine file the body its `machine.lean` node names leans (elastic model), off in `machines/t-gantry.toml` as compared with its crate |
@@ -324,7 +325,7 @@ T-gantry. With `effects.beam_sag`: the X beam as a simple span between the posts
 
 ## `[base]`
 
-Every machine and machine file. With `effects.base_compliance` the frame or stand under the whole machine is a rigid body on springs: each direction with a stiffness above 0 is a state of its own (`sim_components::base`, model reference "Compliant base"). Directions in the frame of the tool pose's x, y, z (the slides' x along their axis); a tilt turns about `pivot_m`. Off in every shipped config: the values are typical, not measured. Signals `base.<x|y|z|rx|ry|rz>` (m, rad).
+Every machine and machine file. With `effects.base_compliance` the frame or stand under the whole machine is a rigid body on springs: each direction with a stiffness above 0 is a state of its own (`sim_components::base`, model reference "Compliant base"). Directions in the frame of the tool pose's x, y, z (the slides' x along their axis); a tilt turns about `pivot_m`. Off in every shipped config: the values are typical, not measured. Signals `base.<x|y|z|rx|ry|rz>` (m, rad). With `effects.base_reaction` the coupling is two-way (model reference "Compliant base"), with the signal `power.base` (W), and `mass_kg` (`inertia_*_kgm2`) has to be more than what the machine moves on the base along that direction.
 
 | Key | Unit | Meaning |
 | --- | --- | --- |
@@ -339,10 +340,10 @@ The shipped values, all estimates with `[bounds]` (stiffness ÷ 2.5 to × 2.5, m
 
 | Machines | Base | Values |
 | --- | --- | --- |
-| D2, D3 (and its conveyor config), D4, linear delta, `planar-delta.toml` | A welded steel picker frame with the robot, 300 kg | x, y 2.7e6 N/m (15 Hz), z 1.9e7 N/m (40 Hz); tilts rigid |
-| T-gantry, EXCT-30, the gantry machine files | The stand under the gantry with it, 150 kg | x, y 2.4e6 N/m (20 Hz), z 1.5e7 N/m (50 Hz); tilts rigid |
+| D2, D3 (and its conveyor config), D4, H4, linear delta, parallel SCARA, `planar-delta.toml` | A welded steel picker frame with the robot, 300 kg | x, y 2.7e6 N/m (15 Hz), z 1.9e7 N/m (40 Hz); tilts rigid |
+| T-gantry, EXCT-30, the gantry machine files, hexapod | The stand under the gantry with it, 150 kg | x, y 2.4e6 N/m (20 Hz), z 1.5e7 N/m (50 Hz); tilts rigid |
 | Single axis, screw, rack and linear motor axes, `single-axis.toml` | The machine bed, 100 kg | along the axis 2.5e6 N/m (25 Hz); the rest rigid |
-| Rotary table | The table's stand, 20 kg m² about z | twist 7.1e5 N m/rad (30 Hz) |
+| Rotary table; the cable robots and the crank and cam machines (the same values) | The table's stand, 20 kg m² about z | twist 7.1e5 N m/rad (30 Hz) |
 | Six-axis arm | The pedestal, 60 kg m² about the floor in tilt, 10 about z | tilts 1.5e6 N m/rad (25 Hz), twist 6.3e5 N m/rad (40 Hz) |
 | SCARA | The column and its table, 30 kg m² in tilt, 5 about z | tilts 1.1e6 N m/rad (30 Hz), twist 3.2e5 N m/rad (40 Hz) |
 

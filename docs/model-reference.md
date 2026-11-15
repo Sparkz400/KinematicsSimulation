@@ -1161,21 +1161,47 @@ p and L are the momentum and the angular momentum of everything that moves on th
 
 The tool rides on the base and the workpiece stands on the floor: the tool pose is the machine's plus the base's move at the tool, u + θ × (r − P) for the axes x, y, z and θ for the turns (rx, ry, rz, c about z; `Machine::base_shift`); the motors' angles are measured on the base and do not see it. At rest the machine stands off by the base's deflection under its load so that the tool is at its pose. The scene moves as a whole by the base's move at the tool, exaggerated. Signals `base.<x|y|z|rx|ry|rz>`.
 
-Checks: a force held at rest moves the base and the tool by F / k (single axis, 50 N on 2.5e6 N/m: 20 µm); after a move an undamped base rings at sqrt(k / M) / 2π (100 kg on 2.5e6 N/m: 25.165 Hz, half period 19.869 ms, in the tool's position); every machine's momentum is the rate of its first moment (`testkit::frame_momentum_moves_its_first_moment`).
+Checks: a force held at rest moves the base and the tool by F / k (single axis, 50 N on 2.5e6 N/m: 20 µm); after a move an undamped base rings at sqrt(k / M) / 2π (100 kg on 2.5e6 N/m: 25.165 Hz, half period 19.869 ms, in the tool's position); every machine's momentum is the rate of its first moment (`testkit::frame_momentum_moves_its_first_moment`). Two-way: a slider (4 kg) on a spring (2e5 N/m) to a base of 200 kg on 8e5 N/m swings in the two-mass system's closed-form modes, 10.057 Hz and 35.981 Hz, each in its shape (to 1e-6 of the amplitude; one-way the base rings at 10.066 Hz whatever the slider does); a free base and an arm swung on it keep their momentum (to 1e-9); the arm in gravity on a base along x, z and in tilt keeps its energy (`testkit::energy_conservation`; without the tilt's turn of gravity it drifts by 0.32 %) and closes the loss budget, and so does the H4 (one-way it drifts by 4.5 %); on the T-gantry a two-way base along X of the frame's mass plus what rides on it (30 + 11 kg), its stiffness and damping, gives the frame mode's motion (`effects.frame_compliance`) to 6e-15 m against a sway of 0.154 mm (one-way 0.123 mm off).
 
-Assumptions (shortcut in `base.rs`): one-way. The machine's own dynamics do not feel the base's acceleration: the motors neither see the sway in their following error nor hold against it. That is exact where the base is much heavier than what moves on it or the servo holds the axes stiffly to it; the frame of the T-gantry and the machine files (`frame_compliance`) is the coupled one along one axis. The base's energy is not in the energy budget. The rotors' spin is left out where the machine does not know their axes (machine files' belt drives), the table's worm motor is taken about z, the T-gantry's idlers and the D3's forearm spin are left out.
+**Two-way** (`effects.base_reaction`, with `base_compliance`; off in every shipped config). Without it the coupling is one-way: the machine's own dynamics do not feel the base's acceleration, the motors neither see the sway in their following error nor hold against it, and the base's energy is not in the budget; exact where the base is much heavier than what moves on it or the servo holds the axes stiffly to it. With it the base's acceleration acts on everything that moves on it as an inertial force, derived from the same momentum, not written per machine. The machine's momentum is linear in its speeds v (the states its momentum moves with and whose change moves more than speeds: a frame mode or a tool flex switched off, held at zero, is none; found at the start pose), P = A(q) v, linear and angular about the pivot; A turns the base's acceleration a into the generalised forces −Aᵀ a on the speeds, as it turns gravity into A_linᵀ g. The machine's mass matrix over its speeds is the Hessian of its kinetic energy, M = ∂²E/∂v², from `Machine::energy` at unit speeds (by polarisation: exact, E being quadratic in v). Base and machine are solved together at every evaluation of the derivatives, no lag:
 
-The cycles with the shipped estimates (`[base]` of each config; base on against off): tracking error peak and dwell error peak (what the settling verdict judges), m.
+```text
+(M_B − A M⁻¹ Aᵀ) a = L − k d − c d' − A M⁻¹ Aᵀ w        (over the compliant directions; L as above, with the machine's own rates)
+v'' = v₀'' + M⁻¹ Aᵀ (w − a)                            (v₀'': the machine's own accelerations)
+w = (g × θ, 0)                                          (the base's tilt θ turns gravity in the machine's frame)
+E_B = ½ M_B d'² + d' · P + ½ k d² − θ · (c × g − c₀ × g)
+```
 
-| Machine | Base | Tracking peak off → on | Dwell peak off → on |
+E_B, the base's energy (its sway, its sway with the machine's momentum, its springs, the weight's work on its tilt), is in `Machine::energy` and in the signals `energy.kinetic`, `energy.elastic` and `energy.potential`; its damping c d'² is the signal `power.base`, so the loss budget closes with the base on. M_B − A M⁻¹ Aᵀ has to be positive: a base lighter than what the machine moves on it is refused (`base.mass_kg`, `base.inertia_*_kgm2`). The cost: each evaluation takes the machine's energy at 1 + n + n(n − 1)/2 speed settings and its momentum at n + 3 (n speeds: 4 on the rigid H4, 9 elastic with its amplifier).
+
+Assumptions (shortcut in `base.rs`): the gyroscopic and centrifugal terms of the base's tilt rates on the machine (second order in the small tilt; they do no work, so the energy stays conserved) and the change of the base's inertia with the machine's pose are left out; the process force's work on the moving base is not in the budget. The frame of the T-gantry and the machine files (`frame_compliance`) is the two-way base along one axis, in series with this one. The rotors' spin is left out where the machine does not know their axes (machine files' belt drives), the table's worm motor is taken about z, the T-gantry's idlers and the D3's and H4's forearm spin are left out; the parallel SCARA's arm is taken as a uniform rod for its first moment (its config gives its inertia, its weight being out of the plane), the crank-cam machines' rotors turn about −y with their crank, roll or disc (the saw's pinion about y), and the knife's cut acts at the cut point.
+
+The cycles of the default configs with the shipped estimates (`[base]` of each config): base off → on one-way → on two-way (`base_reaction`), tracking error peak and dwell error peak (what the settling verdict judges), m (rad where the tool is a turn or the joints). Measured on 15 November 2026; the two-way runs took 3 to 10 times as long as the one-way ones (the H4 161 s against 17 s, the SCARA 301 s against 34 s).
+
+| Machine | Base | Tracking peak off → one-way → two-way | Dwell peak off → one-way → two-way |
 | --- | --- | --- | --- |
-| D2 | 300 kg, 15/15/40 Hz | 2.200e-3 → 2.410e-3 | 3.475e-4 → 3.400e-4 |
-| D3 | 300 kg, 15/15/40 Hz | 4.017e-3 → 4.180e-3 | 6.760e-4 → 6.674e-4 |
-| D4 | 300 kg, 15/15/40 Hz | 5.517e-3 → 5.552e-3 | 4.035e-4 → 3.841e-4 |
-| Linear delta | 300 kg, 15/15/40 Hz | 5.514e-4 → 5.568e-4 | 7.375e-5 → 9.009e-5 |
-| T-gantry | 150 kg, 20/20/50 Hz | 1.706e-4 → 2.408e-4 | 4.734e-5 → 4.921e-5 |
+| D2 | 300 kg, 15/15/40 Hz | 1.062e-3 → 1.275e-3 → 1.283e-3 | 3.694e-4 → 3.682e-4 → 3.541e-4 |
+| D3 | 300 kg, 15/15/40 Hz | 1.461e-3 → 1.601e-3 → 1.626e-3 | 3.052e-4 → 3.177e-4 → 3.002e-4 |
+| D4 | 300 kg, 15/15/40 Hz | 3.656e-3 → 3.808e-3 → 3.845e-3 | 3.880e-4 → 3.463e-4 → 3.707e-4 |
+| H4 | 300 kg, 15/15/40 Hz | 2.485e-3 → 2.758e-3 → 2.778e-3 | 4.359e-4 → 4.254e-4 → 4.308e-4 |
+| H4, its turn c (rad) | | 2.448e-2 → 2.448e-2 → 2.402e-2 | 3.655e-3 → 3.655e-3 → 4.212e-3 |
+| Linear delta | 300 kg, 15/15/40 Hz | 6.093e-4 → 6.179e-4 → 5.886e-4 | 7.418e-5 → 9.054e-5 → 6.663e-5 |
+| Parallel SCARA | 300 kg, 15/15/40 Hz | 1.021e-3 → 1.231e-3 → 1.358e-3 | 3.030e-4 → 5.850e-4 → 3.127e-4 |
+| T-gantry | 150 kg, 20/20/50 Hz | 1.949e-4 → 2.677e-4 → 2.298e-4 | 4.735e-5 → 4.923e-5 → 5.416e-5 |
+| Single axis | 100 kg, 25 Hz along x | 2.011e-4 → 2.115e-4 → 2.078e-4 | 2.076e-5 → 2.534e-5 → 2.542e-5 |
+| Screw axis | 100 kg, 25 Hz along x | 8.234e-5 → 1.798e-4 → 1.853e-4 | 4.616e-5 → 1.187e-4 → 1.044e-4 |
+| Rack axis | 100 kg, 25 Hz along x | 1.175e-4 → 4.004e-4 → 3.645e-4 | 6.285e-5 → 1.643e-4 → 9.285e-5 |
+| Linear motor axis | 100 kg, 25 Hz along x | 4.351e-5 → 2.469e-4 → 2.656e-4 | 2.453e-5 → 1.260e-4 → 1.362e-4 |
+| Rotary table (rad) | 20 kg m², 30 Hz twist | 2.621e-3 → 2.790e-3 → 2.825e-3 | 3.637e-5 → 4.187e-5 → 4.476e-5 |
+| SCARA (rad, joints) | 30 kg m² tilts, 5 twist | 1.788e-3 → 1.788e-3 → 1.837e-3 | 2.785e-4 → 2.785e-4 → 2.793e-4 |
+| Six-axis arm (rad, joints) | 60 kg m² tilts, 10 twist | 4.164e-3 → 4.164e-3 → refused | 2.069e-3 → 2.069e-3 → refused |
+| Palletiser (m) | as the six-axis arm | 5.906e-3 → 6.968e-3 → refused | 2.537e-3 → 3.040e-3 → refused |
+| Slider-crank, rotary knife, flying saw, disc cam | 20 kg m², 30 Hz twist about z | unchanged (4.444e-3 rad, 9.059e-3 rad, 4.551e-4 m, 3.189e-4 rad) | unchanged |
+| Hexapod | 150 kg, 20/20/50 Hz | 2.722e-5 → 1.480e-4 → not measured | 1.566e-5 → 4.127e-5 → not measured |
+| Planar cable robot | 20 kg m², 30 Hz twist about z | 7.070e-4, unchanged | 1.535e-4, unchanged |
+| Spatial cable robot, its turn (rad) | as the planar | 2.161e-3 → 2.167e-3 → 2.165e-3 (place 3.552e-4 m unchanged) | 8.357e-4 → 8.351e-4 → 8.296e-4 |
 
-The deltas' dwell error is their own settling, which the base's 0.1 mm sway shifts in phase (a little less at the D2, D3 and D4's dwells, more at the linear delta's); the T-gantry's tracking error grows by 41 %, its traverse pushing the stand along x.
+The deltas' dwell error is their own settling, which the base's 0.1 mm sway shifts in phase; the T-gantry's tracking error grows by 37 % one-way, its traverse pushing the stand along x, and by 18 % two-way, where the drives hold the carriage against the stand's sway, but its dwell error is 10 % higher. The axes on their bed (25 Hz) feel it most: one-way the bed's sway is all in the tool's error, two-way the rack axis's dwell error is 43 % lower, as its drive holds the carriage still over the moving bed. Where the tool is the joints (SCARA, six-axis arm) the one-way base moves nothing (`base_shift`) and only the two-way base shows, in the motors. Two-way refused the six-axis arm and the palletiser: their pedestal's 60 kg m² about x is less than what the arm moves on it there (64.6 kg m²; the palletiser 110 and 185 kg m² about x and y), so `base.inertia_*_kgm2` of those configs has to be raised before they can stand on a two-way base. The crank and cam machines' base turns about z only, and their motion is in the x-z plane: it does not move. The hexapod's two-way cycle (elastic legs) was stopped after 20 minutes on a machine shared with ten other runs.
 
 ## Motion controller
 

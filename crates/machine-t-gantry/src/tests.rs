@@ -1951,3 +1951,49 @@ fn the_z_axis_bends_as_a_cantilever_from_the_carriage() {
     let numeric = (both.flex_at(0.1 + h).0 - both.flex_at(0.1 - h).0) / (2.0 * h);
     assert!((dk - numeric).abs() < 1e-6 * numeric.abs(), "{dk} against {numeric}");
 }
+
+/// effects.frame_compliance is a two-way base along X: the beam (frame.mass_kg, 30 kg) on its spring (7.4e5 N/m,
+/// 190 N s/m) with the carriage and the Z axis riding on it. The frame mode off and a coupled base along X instead
+/// (effects.base_reaction), of everything that sways along X, M = 30 + 4 + 5 + 2 = 41 kg (beam, carriage, Z axis,
+/// payload), with the frame's stiffness and damping ratio 190 / (2 sqrt(7.4e5 x 41)) = 0.01725, are the same equations:
+/// the base's momentum balance is the beam's, its acceleration on carriage and Z axis the beam's. A move from the start
+/// (0.1, 0.35) to (0.9, 0.05) under the controller gives the same tool position and sway over 1.5 s: measured 6.3e-15 m
+/// apart against the sway's 0.154 mm (the order of the floating-point sums), asked within 1e-9 of it. One-way the base
+/// is 0.123 mm off the frame's sway.
+#[test]
+fn a_coupled_base_along_x_moves_as_the_frame_mode() {
+    let cfg = ENTRY.config();
+    let (k, c) = (cfg.f64("frame.stiffness_n_m").unwrap(), cfg.f64("frame.damping_n_s_m").unwrap());
+    let parts = ["frame.mass_kg", "mass.carriage_kg", "mass.z_axis_kg", "mass.payload_kg"];
+    let mass: f64 = parts.iter().map(|key| cfg.f64(key).unwrap()).sum();
+    assert_eq!(mass, 41.0);
+    let mut based = cfg.clone();
+    for e in [
+        "effects.frame_compliance = false".to_string(),
+        "effects.base_compliance = true".into(),
+        "effects.base_reaction = true".into(),
+        format!("base.mass_kg = {mass:?}"),
+        format!("base.stiffness_x_n_m = {k:?}"),
+        "base.stiffness_y_n_m = 0.0".into(),
+        "base.stiffness_z_n_m = 0.0".into(),
+        format!("base.damping_ratio_x = {:?}", c / (2.0 * (k * mass).sqrt())),
+    ] {
+        based.set_text(&e).unwrap();
+    }
+    let run = |cfg: &Config, sway: &str| {
+        let mut sim = sim_components::Sim::new(&ENTRY, cfg).unwrap();
+        let (x, sway) = (sim.signal_index("axis.x.position").unwrap(), sim.signal_index(sway).unwrap());
+        sim.command(sim_components::Command::MoveTo(vec![0.9, 0.05])).unwrap();
+        let (mut sample, mut out) = (Vec::new(), Vec::new());
+        sim.run(1.5, |s| {
+            s.sample(&mut sample);
+            out.push([sample[x], sample[sway]]);
+        });
+        out
+    };
+    let (frame, base) = (run(&cfg, "frame.deflection"), run(&based, "base.x"));
+    let peak = frame.iter().map(|s| s[1].abs()).fold(0.0, f64::max);
+    let off = frame.iter().zip(&base).map(|(a, b)| (a[0] - b[0]).abs().max((a[1] - b[1]).abs())).fold(0.0, f64::max);
+    println!("sway peak {peak:.4e} m, the base off it by {off:.3e} m");
+    assert!(peak > 1e-5 && off < 1e-9 * peak, "sway peak {peak} m, the base off it by {off} m");
+}

@@ -165,6 +165,27 @@ impl SliderCrank {
 }
 
 impl Mechanism for SliderCrank {
+    /// In the scene's frame (x, z in the crank's plane, z up): the crank turning about -y, the rod's crank end at the
+    /// pin, the slider with the rod's other end and the die on the guide, the rotor about the crank's axis; the process
+    /// force pushing the slider back along the guide.
+    fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
+        use sim_components::base::{add_point, add_spin};
+        let (sb, cb) = self.beta.sin_cos();
+        let at = |a: f64, b: f64| [a * cb - b * sb, 0.0, a * sb + b * cb];
+        let ((s, c), [x, x1, _], w) = (q[0].sin_cos(), self.slider(q[0]), qd[0]);
+        let process = self.process_force(q[0], w);
+        let mut f = sim_core::FrameMomentum {
+            gravity: [0.0, 0.0, -self.g],
+            external: at(-process, 0.0),
+            external_at: at(x, 0.0),
+            ..Default::default()
+        };
+        add_point(&mut f, self.m_pin, at(self.r * c, self.r * s), at(-self.r * s * w, self.r * c * w));
+        add_point(&mut f, self.m_x(), at(x, 0.0), at(x1 * w, 0.0));
+        add_spin(&mut f, [0.0, -1.0, 0.0], self.j_crank, w);
+        f.angular[1] -= rotor_spin[0];
+        Some(f)
+    }
     fn dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         let [_, x1, x2] = self.slider(q[0]);
         mass[0] = self.inertia(q[0]);

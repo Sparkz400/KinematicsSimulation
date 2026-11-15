@@ -376,6 +376,7 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
                 machine.equilibrium(&base.f64s("start.pose").unwrap(), &mut state, &mut torque);
                 machine.frame_momentum(&state).is_none()
             }
+            "effects.base_reaction" => !base.bool("effects.base_compliance").unwrap(),
             _ => false,
         } || UNREAD.contains(&(place, e))
             || CANNOT_ACT.contains(&(place, e));
