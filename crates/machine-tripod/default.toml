@@ -311,9 +311,9 @@ magnet_temperature_coefficient_1_k = -0.0012
 # the winding to its rated rise, and the iron loss at the rated speed is the rest of that loss at the rated current.
 stall_current_a = 1.19
 
-# [estimate] The platform's speeds: 0.1 m/s and 0.5 rad/s take a leg to at most some 0.2 m/s, 1200 r/min of its screw.
+# [estimate] The platform's speeds: 0.2 m/s and 0.5 rad/s take a leg to at most some 0.3 m/s, 1800 r/min of its screw.
 [axis.z]
-max_velocity_m_s = 0.1
+max_velocity_m_s = 0.2
 max_acceleration_m_s2 = 2.0
 max_jerk_m_s3 = 50.0
 
@@ -335,7 +335,8 @@ position_cycle_s = 1.0e-3
 current_delay_cycles = 1
 velocity_delay_cycles = 1
 kv_1_s = 50.0
-# [estimate] tuned with `sim-cli margins tripod`.
+# [estimate] tuned with `sim-cli margins tripod`: at least 128.9 degrees of phase and 11.35 dB of gain margin, and
+# across the bounds (--bands) at least 110.1 degrees and 9.35 dB.
 velocity_kp_nm_s_rad = 0.15
 velocity_tn_s = 0.03
 velocity_feedforward_factor = 1.0
@@ -440,7 +441,8 @@ braking_resistor_rated_rise_k = 200.0
 [start]
 pose = [0.54, 0.0, 0.0]
 
-# A tilting table's cycle with its payload: a tilt about x, a tilt about y raised, both tilts lowered, back level.
+# A tilting table's cycle: with the part on it a tilt about x, a tilt about y raised, both tilts lowered; back level
+# without it (the part taken off and the next put on there).
 [[cycle.segment]]
 target = [0.54, 0.15, 0.0]
 dwell_s = 0.2
@@ -459,7 +461,7 @@ payload = true
 [[cycle.segment]]
 target = [0.54, 0.0, 0.0]
 dwell_s = 0.2
-payload = true
+payload = false
 
 # effects.brake_delay: how long the holding brakes take to engage once asked to hold, and to release once asked to let
 # go. [estimate] a servo motor's spring-applied brake closes in some 10 to 60 ms and opens in some 30 to 150 ms.

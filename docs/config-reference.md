@@ -1110,9 +1110,11 @@ The tripod's config ([`machine-tripod/default.toml`](../crates/machine-tripod/de
 with the same meanings, one motor, coupling, screw and drive per leg, all alike: the screw a Hiwin 20-10K3-FDC
 (catalogue: diameters, lead, load ratings, nut stiffness, d n; `length_m` 0.35 and the rest estimates), the motor a
 1FK2104-4AF on an S210 6SL3210-5HE10-4UF0 (catalogue; its resistance an estimate, its inductance from the catalogue's
-short-circuit braking table, the current loop at 0.25 ms), the coupling 6000 N m/rad (estimate). The tool pose,
+short-circuit braking table, the current loop at 0.25 ms), the coupling 6000 N m/rad (estimate);
+`drive.velocity_kp_nm_s_rad` 0.15 (`sim-cli margins tripod`: at least 128.9° and 11.35 dB, across the bounds 110.1° and
+9.35 dB). The cycle carries the part through its three tilts and puts it off at the level pose. The tool pose,
 `start.pose` and the targets are z (m), rx, ry (rad: R = Rx(rx) Ry(ry) Rz(g), the turn g dependent); `[axis.z]` takes
-`max_velocity_m_s`, `max_acceleration_m_s2`, `max_jerk_m_s3` (0.1, 2, 50, estimates), `[axis.rx]`, `[axis.ry]` the same in
+`max_velocity_m_s`, `max_acceleration_m_s2`, `max_jerk_m_s3` (0.2, 2, 50, estimates), `[axis.rx]`, `[axis.ry]` the same in
 rad (0.5, 5, 200, estimates); `profile.vertical_axis` "z". Its own keys and those that differ from the hexapod's (all
 estimates; the masses, the legs' friction and force bounded):
 
