@@ -107,6 +107,13 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   heating from the movers' coil currents, the gap between movers. Two cam cycles: indexing through stations
   (`default.toml`) and a flying process synchronous with a conveyor (`flying.toml`). Checks `mover-guide-load`,
   `curve-holding`, `station-settling`, `mover-gap`, `segment-current`, `segment-temperature`.
+- Machine `overhead-crane` (crate `machine-overhead-crane`): a single-girder overhead crane of 250 kg, bridge, trolley
+  and hoist on Siemens 1FK2 and S210, the load a spherical pendulum on an elastic rope that goes slack
+  (`effects.rope_stretch`, off the rigid rope; `rope_damping`, `guide_friction`); its sway acts back on both travel
+  drives. Checks `rope-max-tension`, `rope-min-tension`, `residual-sway`, `hoist-brake`. The input shaper follows the
+  sway's period of the rope's length (`resonance_hz`, `effects.shaper_follows_pose`); the default cycle (travel while
+  lowering, back, pick, hoist) passes with it and leaves the load swinging without. Hand calculations (pendulum period, static
+  stretch, the energy of a lift) and a SciPy reference of a trapezoidal trolley move.
 
 ## [1.0.0] - 2026-11-16
 

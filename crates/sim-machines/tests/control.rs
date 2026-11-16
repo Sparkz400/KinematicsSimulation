@@ -8,10 +8,16 @@ use sim_machines::MACHINES;
 /// The switch between a machine's elastic model and its rigid reference model: belt stretch on a belt machine, the
 /// gearboxes' elasticity on one of arms, the web's stretch on a machine that winds a web.
 fn model_switch(cfg: &Config) -> &'static str {
-    ["effects.belt_stretch", "effects.joint_elasticity", "effects.cable_stretch", "effects.web_stretch"]
-        .into_iter()
-        .find(|key| cfg.bool(key).is_ok())
-        .expect("a machine with an elastic and a rigid model")
+    [
+        "effects.belt_stretch",
+        "effects.joint_elasticity",
+        "effects.cable_stretch",
+        "effects.web_stretch",
+        "effects.rope_stretch",
+    ]
+    .into_iter()
+    .find(|key| cfg.bool(key).is_ok())
+    .expect("a machine with an elastic and a rigid model")
 }
 
 /// `check` on every machine, each on a thread of its own named after the machine (a failure says "thread 'scara'
@@ -1283,6 +1289,7 @@ mod across_the_bounds {
         geneva_drive: "geneva-drive",
         cam_indexer: "cam-indexer",
         mover_track: "mover-track",
+        overhead_crane: "overhead-crane",
         exct_30: "EXCT-30",
     );
 }

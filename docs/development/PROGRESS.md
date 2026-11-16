@@ -4571,3 +4571,24 @@ twice a position cycle for the following error (16 Gauss-Newton steps from the c
   coils' warmth colours them as every machine's motors.
 - Seen in the app (screenshot hook, `SIM_APP_MACHINE=mover-track`): the loop, six movers with payloads and speeds, 21 of
   21 checks passing. Not looked at in German or at 1280 × 720.
+
+## Overhead crane (16 November, after the release)
+
+New crate `machine-overhead-crane`, machine `overhead-crane` (29 registered machines): bridge (x), trolley (y) and hoist
+on rigid servo drives with gearboxes (1FK2104-6AF, 1FK2105-6AF, S210), the load a spherical pendulum on an elastic
+single-fall rope (EA / l, slack below zero, its damper; the rigid rope as the reference model, its tension the
+constraint force in closed form). The rope pulls back on the trolley and the bridge and, through its potential, on the
+drum; the wheels roll against their load. The motors count on the empty hook's stretch, so the drum stands still at pick
+and set-down, which are quasi-static (`after_step` sets the rope to the new weight, its energy booked in
+`power.other`). Verdicts `rope-max-tension`, `rope-min-tension`, `residual-sway` (the sway's amplitude at every dwell),
+`hoist-brake`. The input shaper follows sqrt(g / L) where the plan stands: on the empty hook's hoist-while-travelling move
+it leaves 0.012 m of sway against 0.047 and 0.041 m of a ZVD fixed at the end's or the start's length and 0.43 m
+unshaped. Shaping is off in the shipped config (a setpoint from outside has to arrive as sent, a test of every machine);
+with it on the default cycle passes every verdict, without it `residual-sway` fails (0.65 m). The tool pose is the hook as the drives place it (the bridge's x,
+the trolley's y, the load's z): the sway is not in it, so a setpoint from outside (FMU) arrives as sent. Tests in
+`src/tests.rs`: the standard suite (elastic and rigid, with and without the payload), static stretch and holding torque,
+the pendulum's period braked and free (two masses), a loss-free lift's work (5201.683 J), the rigid rope as the stiff
+rope's limit, the SciPy reference of a trapezoidal trolley move, shaping, the default cycle with and without the shaper.
+Registered in `sim-machines` (and in the shared tests' lists: the model switch, the bounds sweep, the time-optimal test,
+which runs it at `profile.time_optimal_margin` 0.7: planned at the motors' full speed the swing ran the bridge past its
+no-load speed).

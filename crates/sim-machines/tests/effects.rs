@@ -46,10 +46,16 @@ fn configs(entry: &MachineEntry) -> Vec<(String, Config)> {
             "rigid".into(),
             edited(&[&format!(
                 "{} = false",
-                ["effects.belt_stretch", "effects.joint_elasticity", "effects.cable_stretch", "effects.web_stretch"]
-                    .into_iter()
-                    .find(|key| entry.config().bool(key).is_ok())
-                    .unwrap()
+                [
+                    "effects.belt_stretch",
+                    "effects.joint_elasticity",
+                    "effects.cable_stretch",
+                    "effects.web_stretch",
+                    "effects.rope_stretch"
+                ]
+                .into_iter()
+                .find(|key| entry.config().bool(key).is_ok())
+                .unwrap()
             )]),
         ),
         ("no DC link".into(), edited(&["effects.dc_link = false"])),

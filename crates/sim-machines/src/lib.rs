@@ -38,6 +38,7 @@ pub static MACHINES: &[&MachineEntry] = &[
     &machine_crank_cam::GENEVA_DRIVE,
     &machine_crank_cam::CAM_INDEXER,
     &machine_mover_track::ENTRY,
+    &machine_overhead_crane::ENTRY,
 ];
 
 pub const LANGUAGES: &[&str] = &["en", "de"];

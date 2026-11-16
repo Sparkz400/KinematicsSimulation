@@ -20,6 +20,7 @@ Test files, abbreviated in the tables:
 | delta4 | [`crates/machine-delta-d4/src/tests.rs`](../crates/machine-delta-d4/src/tests.rs) |
 | H4, parallel SCARA, hexapod, tripod, cable robot, wafer handler | `src/tests.rs` of [`machine-delta-h4`](../crates/machine-delta-h4/src/tests.rs), [`machine-parallel-scara`](../crates/machine-parallel-scara/src/tests.rs), [`machine-hexapod`](../crates/machine-hexapod/src/tests.rs), [`machine-tripod`](../crates/machine-tripod/src/tests.rs), [`machine-cable-robot`](../crates/machine-cable-robot/src/tests.rs), [`machine-wafer-handler`](../crates/machine-wafer-handler/src/tests.rs) |
 | joint kit | [`crates/machine-joint-kit/src/tests.rs`](../crates/machine-joint-kit/src/tests.rs) |
+| overhead crane | [`crates/machine-overhead-crane/src/tests.rs`](../crates/machine-overhead-crane/src/tests.rs) |
 | crank, toggle | [`crates/machine-crank-cam/src/tests.rs`](../crates/machine-crank-cam/src/tests.rs), [`toggle_tests.rs`](../crates/machine-crank-cam/src/toggle_tests.rs) |
 | indexing table | [`crates/machine-crank-cam/src/indexer_tests.rs`](../crates/machine-crank-cam/src/indexer_tests.rs) |
 | winder | [`crates/machine-winder/src/tests.rs`](../crates/machine-winder/src/tests.rs) |
@@ -50,6 +51,7 @@ Test files, abbreviated in the tables:
 - [Hand calculations: pneumatic cylinder](#hand-calculations-pneumatic-cylinder)
 - [Hand calculations: toggle press](#hand-calculations-toggle-press)
 - [Hand calculations: winder with dancer](#hand-calculations-winder-with-dancer)
+- [Hand calculations: overhead crane](#hand-calculations-overhead-crane)
 - [Friction feedforward in the shipped configs](#friction-feedforward-in-the-shipped-configs)
 - [Vendor formulas and vendor documents](#vendor-formulas-and-vendor-documents)
 - [Self-consistency](#self-consistency)
@@ -85,6 +87,21 @@ What it does not cover:
 - Everything added later and off by default: tooth stiffness, material damping, idlers, cable chain, process force. The hard stops and brakes are in the Rust run but never act in this move.
 - The script [`scipy_reference.py`](../crates/machine-t-gantry/reference/scipy_reference.py) runs against the current default config again. It asserts that the fourteen effects it models are on and that the six effects of the machine it does not model are off (tooth stiffness, material damping, idlers, cable chain, process force, temperature); the leaning Z axis is switched off on the Rust side (the gearboxes' mesh friction is off in its config); the switches of drive and controller, the hard stops and the brakes take no part in a move driven by given torques. Run on 11 November 2026 with the pinned packages, it reproduced the committed trace exactly (all 601 samples to the last printed digit).
 - It is the same person's reading of the same equations, written twice. It catches integration and coding errors, not a wrong equation.
+
+### The overhead crane's sway against SciPy
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| The load's y and its sway (its offset from under the sheave) over a trapezoidal trolley move driven open loop by torque steps (speed up 1.5 s, cruise 2 s, brake 1.5 s, let go; 10 s on a 3 m rope with the 265 kg load), default config but ripple, 201 samples | The same equations written again in Python ([`scipy_reference.py`](../crates/machine-overhead-crane/reference/scipy_reference.py)) and integrated with SciPy's LSODA (rtol 1e-11) instead of fixed-step RK4: the elastic rope with its damping and slack, the spherical pendulum, the three rigid drives with their gearboxes' loss factor and the motors' friction, the wheels' load-dependent rolling. Trace committed as [`scipy_trace.csv`](../crates/machine-overhead-crane/reference/scipy_trace.csv) (largest sway 0.313 m, 1.05 m of travel) | 1e-4 of the travel for y, 1e-3 of the largest sway | `a_trapezoidal_trolley_move_sways_as_scipy_says`, overhead crane |
+
+The script asserts that the six effects it models are on (gravity, payload, rope damping, rolling resistance, motor
+friction, gearbox efficiency) and four it does not are off (gearbox drag, motor stiction, thermal feedback, base
+compliance); the Rust side switches the torque ripple off. Run on 16 November 2026 with the pinned packages
+(numpy 2.5.4, scipy 1.18.1). As the T-gantry's, it is the same person's reading of the same equations written twice: it
+catches integration and coding errors, not a wrong equation. The rigid rope (`effects.rope_stretch` off) is checked
+against the elastic one instead: at the same pose a rope a hundred times stiffer sways within 4.5e-5 of the rigid
+one's largest sway, the shipped rope 4.75e-3 off (its stretch hangs the load 5.1 mm lower)
+(`a_stiff_rope_converges_to_the_rigid_reference`).
 
 ### The arms against MuJoCo
 
@@ -748,6 +765,22 @@ weighted sum is below the home solution's, and the machine built with the key so
 (`the_seven_joint_arm_can_spend_its_spare_joint_on_staying_off_its_stops`). Its dynamics are the seven-axis URDF's,
 compared with MuJoCo above (`seven_axis_arm_matches_mujoco`); the option changes only which joints solve a pose.
 
+## Hand calculations: overhead crane
+
+The crane of `machine-overhead-crane` (tests in its `src/tests.rs`): sheave at H = 5 m, hook 15 kg and payload 250 kg
+(m g = 2598.762 N), rope EA = 1.44e6 N; the trolley 120 kg, its motor and gearbox input 1.34e-4 kg m² at 500 rad/m; the
+hoist 40:1 on an 80 mm drum (500 rad/m).
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| The rope at rest on 4 m: tension, free length, stretch, elastic energy, the drum's pull and the hoist's holding torque; the brake's check | t = m g = 2598.762 N; the drum at the pose's free length l = 4 / (1 + 15 g / EA) = 3.999591 m, the load on it L = l (1 + m g / EA) = 4.006809 m, e = 7.2180 mm; t e / 2 = 9.3790 J; t (1 + e / (2 l)) = 2601.107 N, / 500 = 5.20221 N m; 12 N m / 1.6 = 7.5 N m | 1e-3 N, 1e-6 m, 1e-4 J, 1e-5 N m | `the_static_stretch_tension_and_holding_torque_are_the_hand_calculated_ones` |
+| The payload's own stretch below the motors' pose (they count on the empty hook's), the tool pose, the setpoint slack | 4 m (s / s_h − 1) = 6.8095 mm on 4 m; `forward` and `tool_state` give the pose; 4.5 m × 250 g / EA + 0.1 mm = 7.762 mm | 1e-7 m, 1e-12 m, 1e-6 m | same test |
+| The sway's period, small amplitude, the pose 3 m below the sheave (L = 3.005107 m with the payload's stretch) | Trolley braked: 2π √(L / g) = 3.47816 s; trolley free: two masses, 3.47816 / √(1 + 265 / 153.5) = 2.10647 s (153.5 kg the trolley with its rotor at the rail) | 2e-4 relative | `the_sway_period_is_the_hand_calculated_pendulum_s` |
+| The energy budget of a loss-free lift, 265 kg from the pose z = 1 to 3 m | m g h with h = 2.00340474 m (the load hangs 6.8095 mm below the pose on 4 m, 3.4047 mm on 2 m) = 5206.373 J, less the rope's t e / 2 at 4 m and 2 m (9.3790 − 4.6895 J): 5201.683 J; the motors' work ∫ T ω dt equals the machine's energy gained | 1e-4, 1e-3 | `a_loss_free_lift_takes_the_hand_calculated_work` |
+| Signals at rest, the pose 2 m below the sheave | `rope.tension` 2598.76 N, `rope.length` 2.0034047 m, `hoist.brake_load` and the hoist's gravity torque 5.2 N m, `energy.elastic` 4.6895 J | 0.5 N, 1e-6 m, 0.01 | `the_signals_at_rest_are_the_hand_calculated_ones` |
+| Input shaping against the sway | A travel on 2 m of rope: the ZVD leaves under a tenth of the unshaped sway (0.072 m unshaped, 3e-5 m shaped). Hoisting from 4 to 2 m while travelling 7 m: following the rope's length 0.012 m, under a third of a ZVD set for either end's length (0.047, 0.041 m), under a tenth of unshaped (0.43 m) | as stated | `the_shaper_cancels_the_sway_and_following_the_rope_length_beats_a_fixed_period` |
+| The default cycle | Shaped, every verdict passes, the rope within 7 % of the load's weight and never slack; unshaped, `residual-sway` fails | as stated | `the_default_cycle_passes_with_the_shaper_and_leaves_the_load_swinging_without` |
+
 ## Friction feedforward in the shipped configs
 
 `sim-cli analyze` of every shipped config with `effects.friction_feedforward = false` and with it on and `drive.friction_feedforward_model = "machine"` (15 November 2026): the following error while moving (`tracking_error_peak`, the tool's distance from the setpoint; `_angle_` for the axes in rad) and the settling at pick and place (`dwell_error_peak`, the second half of the dwells). Place in um, turn in mrad; "–" where the machine has none (no dwell in a conveyor or cam cycle). **On** marks where it is switched on as shipped. The velocity loop's margins do not change with a feedforward (`sim-cli margins` gives the same figures with it on and off), so every config keeps the margins it was tuned to: `sim-cli margins MACHINE --bands` of every config switched on gives at least 35.8° and 8.0 dB (rotary knife; the T-gantry 48.9° and 8.63 dB, the D4 40.4° and 8.92 dB).
@@ -1099,6 +1132,13 @@ checked on functions whose indices are known in closed form; on the machines onl
 ## What is not validated
 
 - **The delta picker D3's geometry, masses and stiffnesses.** Autonox keeps them behind a registration; the arm lengths are scaled from Williams' estimate of an ABB IRB 360, the masses estimated. Its cycle time is compared with ABB's and Omron's printed figures, not asserted (they round the corners and run faster). Its forearms are rigid rods (their spin about their own axis with an estimated inertia), its upper arms' bending stiffnesses (in and out of their planes) estimates for a carbon tube; neither is compared with a measured delta.
+- **The overhead crane against a real crane.** No crane has been measured: its masses, the rope's EA and damping, the
+  rolling coefficient, the brake's torque and the drives' tuning are estimates, the rope one point mass on a massless
+  rope (no rope mass, no bending at the sheave, no double pendulum of hook and load, no twist), the bridge one drive
+  (no skew), the drives rigid. Pick and set-down are idealised as quasi-static (the load's contact with the floor is not
+  modelled), so a snatch lift or a slack rope at set-down is not checked. The residual sway is the amplitude of a free
+  pendulum at the dwell, not what a sway sensor of a real crane reads; the input shaper is checked against the model's
+  own pendulum only. The SciPy reference checks the integration, not the equations.
 
 **Against a real machine: one public measurement.**
 
