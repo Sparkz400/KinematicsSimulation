@@ -18,7 +18,7 @@ continuous_force_n / continuous_current_a: Fc / Ic, S1 near standstill. peak_for
 max_speed_m_s: vmax, "Maximum velocity of the linear motor"; the document does not say at which force.
   max_speed_at_peak_force_m_s: not printed, empty. AL8043-0G prints "7.0", kept.
 line_voltage_v: 400, from the type key ("t: Series, 0 = 400 V AC", section 3.1.2); the tables give no voltage.
-force_constant_n_a: Kf. back_emf_constant_v_s_m: "Counter EMF ph-ph [V/m/s]", phase to phase as printed (RMS by
+force_constant_n_a: Kf. back_emf_constant_v_s_m: "Counter EMF ph-ph [V/m/s]", phase to phase as printed, the convention of the column in every table (RMS by
   section 4.1's convention; Kf is about sqrt(3) times it).
 phase_resistance_20c_ohm / phase_inductance_h: "Winding resistance ph-ph" / "Winding inductance ph-ph" (mH) halved,
   the printed terminal-to-terminal values / 2 for the per-phase column. The document does not say the resistance

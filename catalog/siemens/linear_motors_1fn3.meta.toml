@@ -19,8 +19,9 @@ General conditions of every data sheet: DC link voltage UDC 600 V (converter out
 continuous_force_n: rated force FN (S1). continuous_current_a: rated current IN. peak_force_n / peak_current_a:
   FMAX / IMAX. max_speed_m_s: vMAX,FN, the highest speed with rated force; max_speed_at_peak_force_m_s: vMAX,FMAX;
   both printed in m/min, divided by 60.
-force_constant_n_a: kF,20 (at 20 degC). back_emf_constant_v_s_m: kE, phase to neutral point (chapter 7.1.1:
-  "mutually induced voltage between the phase and the neutral point").
+force_constant_n_a: kF,20 (at 20 degC). back_emf_constant_v_s_m: kE, printed phase to neutral point (chapter 7.1.1:
+  "mutually induced voltage between the phase and the neutral point"; kF = 3 kE); stored phase to phase, RMS, as sqrt(3)
+  times the printed value (4 significant figures), so that the column means the same in every linear motor table.
 motor_constant_n_sqrt_w: kM,20, at 20 degC (printed "N/W0.5", in four data sheets "N/(W)0.5").
 phase_resistance_20c_ohm: RSTR,20, the resistance of one phase (Strang) at 20 degC, as printed (the manual
   translates it "line resistance", but its PV = 3 RSTR I^2 makes it the per-phase value). phase_inductance_h: LSTR
