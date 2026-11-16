@@ -882,14 +882,17 @@ is `machine.toml` as committed:
 
 | Recording | Role | Peak torque | RMS, 1.0.0 | RMS, now | Peak difference, 1.0.0 | now |
 | --- | --- | --- | --- | --- | --- | --- |
-| S-profile | fit | 8.07 N m | 0.857 N m, 10.6 % | 0.430 N m, 5.3 % | 7.39 N m, 92 % | 2.27 N m, 28 % |
-| Sine, 0.1 to 19.9 s | check | 3.52 N m | 0.502 N m, 14.3 % | 0.470 N m, 13.3 % | 1.88 N m, 53 % | 1.23 N m, 35 % |
-| Sine, whole file | check | 34.16 N m | 1.62 N m, 4.7 % | 0.786 N m, 2.3 % | 95 N m, 278 % | 30.0 N m, 88 % |
-| Constant speed 0.1 m/s | check | 14.63 N m | 0.746 N m, 5.1 % | 0.895 N m, 6.1 % | 6.17 N m, 42 % | 3.59 N m, 25 % |
+| S-profile | fit | 8.07 N m | 0.857 N m, 10.6 % | 0.370 N m, 4.6 % | 7.39 N m, 92 % | 2.19 N m, 27 % |
+| Sine, 0.1 to 19.9 s | check | 3.52 N m | 0.502 N m, 14.3 % | 0.462 N m, 13.1 % | 1.88 N m, 53 % | 1.20 N m, 34 % |
+| Sine, whole file | check | 34.16 N m | 1.62 N m, 4.7 % | 0.789 N m, 2.3 % | 95 N m, 278 % | 30.0 N m, 88 % |
+| Constant speed 0.1 m/s | check | 14.63 N m | 0.746 N m, 5.1 % | 0.896 N m, 6.1 % | 6.17 N m, 42 % | 3.65 N m, 25 % |
 
 On the S-profile, step by step (RMS, peak): the setpoint on the simulator's clock (below) 0.842 N m, 7.23 N m; the
 torque feedforward off 0.711, 3.85; the speed loop's gains 0.686, 2.75; the guides' presliding friction 0.425, 2.24; the
-fitted friction and constant force 0.430, 2.27. Replaying from the trace's own state changes nothing here (the
+fitted friction and constant force 0.430, 2.27; the screw's efficiency from its lead angle
+(`effects.screw_lead_efficiency`, 0.990 in place of 0.9) 0.441, 2.26; its Coulomb friction fitted again 0.370, 2.19.
+Before the last two steps (16 November 2026) the table's "now" read 0.430 N m, 5.3 % and 2.27 N m, 28 % on the S-profile;
+0.470, 13.3 % and 1.23, 35 % on the sine; 0.895, 6.1 % and 3.59, 25 % at constant speed. Replaying from the trace's own state changes nothing here (the
 S-profile starts at rest) and the whole sine's jolt from 95 to 30 N m.
 
 **Following error**, now on the source's clock: S-profile measured 0.0411 rad RMS, simulated 0.0399, their difference
@@ -917,18 +920,35 @@ and the speed loop's gains read off the S-profile (below), not the dSPACE board'
   rest: the trace cannot tell the guides from the nut, both act as a sign of the speed). The constant force of +15.4 N
   as an incline of 0.225° (`slide.incline_deg`).
 - The mapping (`map.toml`): the setpoint 1 ms later (`time_offset_s`), see below.
+- `effects.screw_lead_efficiency` on (16 November 2026; new, behind its own switch, off in every other shipped config):
+  the screw's efficiency from its lead angle, THK's (1 − μ tan β) / (1 + μ / tan β) with μ = 0.003 (an estimate, THK's
+  general value): 0.990 at β = 17.7° (`the_screw_efficiency_follows_the_lead_angle_with_its_switch`, sim-components:
+  0.976607 and 0.989717 by hand, and off the switch keeps `screw.efficiency` to the bit). `screw.efficiency` 0.9 is a catalogue's figure that holds the nut's preload drag,
+  and the preload drags apart in the model (`screw.preload_n`, fitted): the 0.9 counted it twice, and on the inertial
+  force too. Then the S-profile's fit asked for Coulomb × 1.115 ± 0.022 (the 0.9 had lifted every friction force by 1 /
+  0.9): guides 87.6 → 97.7 N (breakaway with them), nut preload 1752 → 1953 N, motor shaft 0.263 → 0.293 N m.
 
 Fitted again on the S-profile, the config lands on the measurement within its standard errors but for the mass and the
 held force: viscous 792 against 779 ± 23 N s/m, Coulomb 325 against 322 ± 6 N, constant 16.8 against 15.4 ± 1.6 N;
-moved mass 584 against 492 ± 3 kg, held force −155 against −242 ± 6 N.
+moved mass 549 against 492 ± 3 kg, held force −162 against −242 ± 6 N (before the screw's efficiency: viscous 792,
+Coulomb 325, moved mass 584 kg). The checks: moved mass 562 against 578 ± 8 kg on the sine, 557 against 529 ± 3 kg at
+constant speed (555 and 572 before).
 
-**Not changed, and why.** The moved mass: the fit says 92 kg less than the config's 584 kg. The table's 400 kg is the
-source's, and the sweeps put the load side at 0.0173 to 0.0214 kg m² (427 to 528 kg at the table), so the table is not
-lighter; the excess is on the screw's side. Two parts of the model make it: `BallScrew::inertia` takes the shaft at its
-nominal diameter (0.00355 kg m², 88 kg at the table; at its root 0.00179, 44 kg), and the gearbox efficiency (0.9 for
-the screw) acts on the inertial force too (444 kg for 400). Both are model code: the gearbox's loss model is left to a
-later piece of work, and a carriage of 307.5 kg, which makes the torques fit (S-profile RMS 4.6 % instead of 5.3 %), would
-contradict the sweeps. The screw's stiffness: see the sweeps. The lead: see the sweeps.
+**Not changed, and why.** The moved mass: the fit says 57 kg less than the config's 549 kg (92 kg less than 584 before
+the screw's efficiency). The table's 400 kg is the source's, and the sweeps put the load side at 0.0173 to 0.0214 kg m²
+(427 to 528 kg at the table), so the table is not lighter; the excess is on the screw's side. Both parts of the model
+that the 1.0 work named were already in it: `BallScrew::inertia` takes the shaft as a solid steel cylinder at its
+nominal diameter over its whole length, ρ π d⁴ L / 32 = 0.00355 kg m² (88 kg at the table; at its root 0.00179, 44 kg),
+and the efficiency acts on the whole force the screw passes, inertial force included, η driving and 1 / η driven back
+(`Gearbox::loss_factor`). Neither is missing; both make the model heavier, not lighter. The efficiency was the wrong
+figure (above). The shaft: the remaining 57 kg is two thirds of the shaft's 88 kg, which fits a threaded part lighter
+than a solid shaft at the nominal diameter and journals thinner than it, but the source gives neither, and the three
+recordings disagree by more (moved mass 492, 578 and 529 kg). A carriage of 342 kg would make the torques fit and
+would contradict the sweeps. The first mode stays at 137.02 Hz (`sim-cli modes`): the efficiency does not enter it.
+Against it, the torque per force at the table (below) reads as an efficiency of 0.77 to 0.81; at that efficiency the
+table alone would be 494 to 519 kg at the motor, more than the fit's 492 kg for everything, so the inertia does not
+support it.
+The screw's stiffness: see the sweeps. The lead: see the sweeps.
 
 **The friction the data can tell** (`fit`, the rows after the rigid values; `friction_details`, tested on excerpts of
 these files against the same estimate worked out by hand, `held_force_breakaway_and_presliding_of_the_measured_ball_screw`
@@ -936,11 +956,11 @@ in sim-components):
 
 | Value | S-profile (fit) | Sine (check) | Constant speed (check) | Replay of the config now (S-profile, sine, constant) |
 | --- | --- | --- | --- | --- |
-| Coulomb, guides, nut and motor together, at the table | 322 ± 6 N | 315 ± 4 N | 426 ± 1 N (with the viscous share at 0.1 m/s) | 325, 310, 395 N |
-| Viscous | 779 ± 23 N s/m | 1222 ± 96 N s/m | (one speed: in the Coulomb value) | 792, 876 |
-| Held at rest after the last move | −242 ± 6 N | +230 ± 7 N | +354 ± 1 N | −155, +209, −178 N |
-| Breakaway (1 to 5 % of top speed, slowing) | (too few rows) | 255 ± 1 N | (too few rows) | (−), 291 |
-| Presliding stiffness σ, from the turn at reversals | (one reversal at 1 m/s², crossed in 2 ms: no row; 7.0e6 N/m from it alone) | 3.1e7 ± 0.6e7 N/m (four) | (one reversal: no row; 1.9e7 N/m from it alone) | (−), 2.0e7, (−) |
+| Coulomb, guides, nut and motor together, at the table | 322 ± 6 N | 315 ± 4 N | 426 ± 1 N (with the viscous share at 0.1 m/s) | 321, 318, 396 N |
+| Viscous | 779 ± 23 N s/m | 1222 ± 96 N s/m | (one speed: in the Coulomb value) | 762, 801 |
+| Held at rest after the last move | −242 ± 6 N | +230 ± 7 N | +354 ± 1 N | −162, +227, −184 N |
+| Breakaway (1 to 5 % of top speed, slowing) | (too few rows) | 255 ± 1 N | (too few rows) | (−), 305 |
+| Presliding stiffness σ, from the turn at reversals | (one reversal at 1 m/s², crossed in 2 ms: no row; 7.0e6 N/m from it alone) | 3.1e7 ± 0.6e7 N/m (four) | (one reversal: no row; 1.9e7 N/m from it alone) | (−), 1.8e7, (−) |
 
 - **Guides against nut.** The motor torque cannot tell them apart. The source's nut force sensors (`F_nut_sum`, now a
   column of the CSV) can: regressed on the S-profile, the torque is 0.00829 N m per N of nut force plus 1.48 N m of
@@ -957,13 +977,14 @@ in sim-components):
 - **The turn at a reversal.** At the sine's four reversals the friction (inertia and the drive's force off by hand)
   turns from +2.0 to −1.5 N m over 80 ms and 125 µm, through zero after 13.5 to 15.6 µm: σ = 315 N ln 2 / x = 1.4e7 to
   1.6e7 N/m. The fit's 3.1e7 does not take the drive's force off (it pushes against the motion at both ends of the sine and
-  moves the crossing to 7 µm); the config's 2e7 lies between, and its replay gives 2.0e7 by the same estimate. Dahl's law
+  moves the crossing to 7 µm); the config's 2e7 lies between, and its replay gives 1.8e7 by the same estimate (2.0e7 before the screw's lead
+  efficiency). Dahl's law
   with 1.5e7 would be within 1 % of the far level after 125 µm; the measured friction is at 68 %: it approaches the
   level more slowly, a second, longer scale that one σ does not have.
 - **The held force.** It is the friction holding what the speed loop's integrator had when the axis stopped, so its sign
   depends on the last deceleration: the S-profile and the constant-speed run both stop moving backwards and hold −242 and
   +354 N. The model holds the right sign and two thirds on the S-profile, the right sign on the sine, the wrong one on
-  the constant-speed run (−178 N): its last stop is a ramp at 0.1 m/s whose loop dynamics the stand-in loops do not
+  the constant-speed run (−184 N): its last stop is a ramp at 0.1 m/s whose loop dynamics the stand-in loops do not
   reproduce. On that recording the rest rows (6 %) leave 3.29 N m RMS, the moving rows 0.347 N m (2.4 %); without the
   presliding state it held nothing, and its whole RMS was 0.66 N m (4.5 %): that check is worse with the new friction.
 
@@ -995,11 +1016,11 @@ checks the lead read from the article number without the torque fit.
   column's coefficient is 0.0007 N m per N, 0.10 in the nut force: the drive's compensation there did what it should.)
 - The whole sine's start and end: its setpoint starts at 63 mm/s from rest and stops from it at 20 s; the bench jolts
   with 34 N m, the replay with up to 46 N m.
-- The moved mass (above), and the S-profile's peak difference of 2.27 N m at the start of the return (2.62 s), where
+- The moved mass (above), and the S-profile's peak difference of 2.19 N m at the start of the return (2.62 s), where
   the bench's speed loop overshoots more than the stand-in.
 - The torque per force at the table is 0.0078 to 0.0083 N m per N in both nut and drive regressions, 1.23 to 1.30 times
   the lead's 0.04 / 2π = 0.00637: an efficiency of 0.77 to 0.81, or a torque reading, sensor or lead off by that factor.
-  The config's 0.9 is the makers' figure.
+  The config's 0.9 is the makers' figure; with `effects.screw_lead_efficiency` the config uses 0.990 (above).
 - The held force on the constant-speed run, and the second length scale of the turn at a reversal (above).
 
 **Found in the tools** by this data: the replay forced a start from rest; it now runs up to the trace's own first
@@ -1044,6 +1065,7 @@ bounds the source's masses give by hand (`the_measured_ball_screw_has_the_inerti
 - The test runs on a real axis (stage D2) have not been made.
 - Trace import, replay and fit have seen one real machine's recordings, converted to CSV by a script; a drive's own export (Startdrive, TwinCAT, CODESYS) with its column names, units and sampling is still untested.
 - The following error is compared on that one bench only, whose loops ran on a dSPACE board; drive vendors do not document their internal filters.
+- The screw's efficiency from its lead angle (`effects.screw_lead_efficiency`): μ = 0.003 is THK's general value, not measured on any screw; the bench's fit prefers it to 0.9 through the moved mass and friction, which does not measure the efficiency by itself. Driven back the screw loses by the driving factor (a shortcut, 1e-4 off THK's back-drive formula at the bench's lead). The screw shaft's inertia is a solid cylinder at the nominal diameter over `screw.length_m`, journals and threads not told apart; the bench's fit leaves 57 kg of it unexplained.
 
 **Parameters.** These are estimates in every config, and nothing checks them:
 

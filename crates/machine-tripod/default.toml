@@ -38,6 +38,10 @@ joint_friction = true
 motor_friction = true
 gearbox_backlash = true
 gearbox_efficiency = true
+# The ball screw's efficiency from its lead angle and its balls' friction (screw.friction_coefficient, THK's
+# formula) in place of screw.efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart.
+# Off in the shipped configs: their sizing was done with screw.efficiency.
+screw_lead_efficiency = false
 # The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
 # gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: a coupling has none.
 gearbox_drag = false
@@ -232,6 +236,9 @@ root_diameter_m = 0.017324
 length_m = 0.35
 mounting = "fixed-supported"
 efficiency = 0.9
+# With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
+# ball screws, not this screw's.
+friction_coefficient = 0.003
 nut_stiffness_n_m = 4.118793e8
 bearing_stiffness_n_m = 5.0e8
 preload_n = 400.0
@@ -471,6 +478,7 @@ release_delay_s = 0.06
 
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+screw.friction_coefficient = [0.002, 0.01]
 brake.engage_delay_s = [0.01, 0.06]
 brake.release_delay_s = [0.03, 0.15]
 motor.pole_pairs = [3.0, 5.0]

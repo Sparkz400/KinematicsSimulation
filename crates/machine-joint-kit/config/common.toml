@@ -46,6 +46,10 @@ joint_friction = true
 motor_friction = true
 gearbox_backlash = true
 gearbox_efficiency = true
+# The ball screw's efficiency from its lead angle and its balls' friction (screw.friction_coefficient, THK's
+# formula) in place of screw.efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart.
+# Off in the shipped configs: their sizing was done with screw.efficiency.
+screw_lead_efficiency = false
 # The efficiency's loss as a friction in the gearbox's mesh: in proportion to the torque it passes, against the
 # motion at any speed, and sticking at rest inside its band (a gear holding a load stands for anything between the
 # torque that lowers it and the one that lifts it). Off: the loss fades in below 0.5 W, a gear at rest has none.

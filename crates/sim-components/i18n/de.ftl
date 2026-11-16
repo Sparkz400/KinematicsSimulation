@@ -62,6 +62,7 @@ effect-gearbox_drag = Getriebe-Leerlaufdrehmoment
 effect-gearbox_mesh_friction = Reibung im Zahneingriff des Getriebes
 effect-motor_stiction = Losbrechmoment des Motors (Stribeck)
 effect-slide_presliding = Vorgleiten der Führungen (Haften im Stillstand, Dahl)
+effect-screw_lead_efficiency = Wirkungsgrad der Spindel aus ihrem Steigungswinkel (THK)
 effect-gearbox_lost_motion = Getriebe-Lose und Hysterese
 effect-gearbox_stiffness_curve = Steifigkeitskennlinie des Wellgetriebes
 effect-torque_ripple = Drehmomentwelligkeit und Rastmoment

@@ -62,6 +62,7 @@ effect-gearbox_drag = Gearbox no-load torque
 effect-gearbox_mesh_friction = Gearbox mesh friction
 effect-motor_stiction = Motor breakaway (Stribeck)
 effect-slide_presliding = Slide presliding friction (holds at rest, Dahl)
+effect-screw_lead_efficiency = Screw efficiency from its lead angle (THK)
 effect-gearbox_lost_motion = Gearbox lost motion and hysteresis
 effect-gearbox_stiffness_curve = Strain wave gear stiffness curve
 effect-torque_ripple = Torque ripple and cogging

@@ -123,6 +123,9 @@ root_diameter_m = 0.0135
 length_m = 0.3
 mounting = "fixed-free"
 efficiency = 0.9
+# With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
+# ball screws, not this screw's.
+friction_coefficient = 0.003
 nut_stiffness_n_m = 2.0e8
 bearing_stiffness_n_m = 4.0e8
 preload_n = 200.0
@@ -427,6 +430,7 @@ release_delay_s = 0.06
 
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+screw.friction_coefficient = [0.002, 0.01]
 brake.engage_delay_s = [0.01, 0.06]
 brake.release_delay_s = [0.03, 0.15]
 link_bending.youngs_modulus_pa = [6.5e10, 7.2e10]

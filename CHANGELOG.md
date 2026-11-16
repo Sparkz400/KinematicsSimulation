@@ -32,6 +32,18 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
 - Dataset keys `machine.simulator` (the machine the recordings are replayed on) and `machine.set` (values on top of the
   config); a step-by-step contribution guide in docs/measurement-procedure.md (what to record, sample rates, layout,
   licence, metadata), a fuller `datasets/template`, and the GitHub issue form "Offer a measured dataset".
+- `effects.screw_lead_efficiency` and `screw.friction_coefficient` (0.003, THK's general value): a ball screw's
+  efficiency from its lead angle, (1 − μ tan β) / (1 + μ / tan β), in place of the catalogue's `screw.efficiency` that
+  also holds the nut's preload drag, which the model drags apart. Off in every shipped config but the measured ISW
+  bench's `machine.toml`; off keeps the old results to the bit.
+
+### Changed
+
+- The ISW ball screw bench (`datasets/isw-ball-screw-axis/machine.toml`): the screw's efficiency from its lead (0.990
+  for 0.9) and the Coulomb friction fitted again on the S-profile (× 1.115: guides 97.7 N, nut preload 1953 N, motor
+  shaft 0.293 N m). S-profile replay 5.3 → 4.6 % RMS, checks 13.3 → 13.1 % and 6.1 %; fitted moved mass 57 kg below
+  the config's 549 kg (92 below 584 before); first mode unchanged at 137 Hz. The screw shaft's inertia and the
+  efficiency on the inertial force, named as missing in 1.0.0's notes, were already modelled: docs/validation.md.
 
 ## [1.0.0] - 2026-11-16
 

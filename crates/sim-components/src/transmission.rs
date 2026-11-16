@@ -109,7 +109,8 @@ impl Converter {
 /// A ball screw: shaft, nut and the bearings that hold the shaft. The nut moves the load by `lead` per turn.
 ///
 /// Config `[screw]`: `lead_m`, `nominal_diameter_m`, `root_diameter_m`, `length_m` (between the bearings, or from the
-/// fixed bearing to the free end), `mounting` (as `Mounting::parse`), `efficiency`, `nut_stiffness_n_m`,
+/// fixed bearing to the free end), `mounting` (as `Mounting::parse`), `efficiency`, `friction_coefficient` (with
+/// effects.screw_lead_efficiency, `lead_efficiency`), `nut_stiffness_n_m`,
 /// `bearing_stiffness_n_m`, `preload_n`, `dynamic_load_rating_n` (Ca), `static_load_rating_n` (C0a), `load_factor`
 /// (fw), `static_safety_factor`, `critical_speed_factor`, `buckling_safety_factor`, `max_dn` (d n with d in mm and n in
 /// r/min; 0 for none).
@@ -149,8 +150,16 @@ impl BallScrew {
         if efficiency > 1.0 {
             return Err(ConfigError::Invalid("screw.efficiency".into()));
         }
+        let lead = p("lead_m")?;
+        // A config without the switch (one written before 16 November 2026) has it off.
+        let efficiency =
+            if cfg.get("effects.screw_lead_efficiency").is_ok() && cfg.bool("effects.screw_lead_efficiency")? {
+                Self::lead_efficiency(lead, nominal, cfg.positive("screw.friction_coefficient")?)
+            } else {
+                efficiency
+            };
         Ok(Self {
-            lead: p("lead_m")?,
+            lead,
             nominal_diameter: nominal,
             root_diameter: root,
             length: p("length_m")?,
@@ -167,6 +176,19 @@ impl BallScrew {
             buckling_safety: p("buckling_safety_factor")?,
             max_dn: cfg.non_negative("screw.max_dn")?,
         })
+    }
+
+    /// The rolling efficiency of a ball screw driving its nut, from its lead angle beta = atan(lead / (pi d)) and the
+    /// balls' friction coefficient mu (THK's formula): (1 - mu tan beta) / (1 + mu / tan beta), tan beta / tan(beta + rho)
+    /// with mu = tan rho. effects.screw_lead_efficiency puts it in place of `screw.efficiency`, which is a catalogue's
+    /// lumped figure that holds the nut's preload drag too; the preload drags apart (`preload_torque`).
+    ///
+    /// shortcut: driven back the screw loses by the same factor (`Gearbox::loss_factor`), where THK gives
+    /// (1 - mu / tan beta) / (1 + mu tan beta); the two differ by 1e-4 at the ISW bench's lead angle (17.7 degrees) and
+    /// by 6e-4 at 7 degrees. A gearbox with its own back-drive efficiency would be needed for a self-locking screw.
+    pub fn lead_efficiency(lead: f64, nominal_diameter: f64, mu: f64) -> f64 {
+        let tan_beta = lead / (PI * nominal_diameter);
+        (1.0 - mu * tan_beta) / (1.0 + mu / tan_beta)
     }
 
     /// Screw radians per metre of travel: 2 pi / lead.
@@ -576,6 +598,28 @@ mod tests {
         close(s.stiffness(0.5), 9.9923e7, "stiffness");
         close(s.preload_torque(), 0.11151, "preload drag");
         close(s.dn(2000.0), 50000.0, "dn");
+    }
+
+    /// THK's rolling efficiency at mu = 0.003. The test screw: tan beta = 0.01 / (pi 0.025) = 0.127324,
+    /// (1 - 0.003 0.127324) / (1 + 0.003 / 0.127324) = 0.999618 / 1.023562 = 0.976607. The ISW bench's 40 x 40:
+    /// tan beta = 0.318310, 0.999045 / 1.009425 = 0.989717. From a config: the switch off keeps screw.efficiency to the
+    /// bit, on takes the lead's.
+    #[test]
+    fn the_screw_efficiency_follows_the_lead_angle_with_its_switch() {
+        close(BallScrew::lead_efficiency(0.01, 0.025, 0.003), 0.976607, "test screw");
+        close(BallScrew::lead_efficiency(0.04, 0.04, 0.003), 0.989717, "ISW screw");
+        let text = |on: bool| {
+            format!(
+                "format_version = 1\n[effects]\nscrew_lead_efficiency = {on}\n[screw]\nlead_m = 0.04\nnominal_diameter_m = 0.04\n\
+                 root_diameter_m = 0.0337\nlength_m = 1.8\nmounting = \"fixed-supported\"\nefficiency = 0.9\n\
+                 friction_coefficient = 0.003\nnut_stiffness_n_m = 5e8\nbearing_stiffness_n_m = 1e9\npreload_n = 500.0\n\
+                 dynamic_load_rating_n = 15000.0\nstatic_load_rating_n = 30000.0\nload_factor = 1.2\n\
+                 static_safety_factor = 2.0\ncritical_speed_factor = 0.8\nbuckling_safety_factor = 2.0\nmax_dn = 0.0\n"
+            )
+        };
+        let screw = |on| BallScrew::from_config(&Config::parse(&text(on)).unwrap()).unwrap();
+        assert_eq!(screw(false).efficiency, 0.9);
+        close(screw(true).efficiency, 0.989717, "from the config");
     }
 
     /// Preload 500 N lifts off at 1415 N. At 1000 N: 500 (1 + 1000 / 1415)^1.5 = 500 1.70671^1.5 = 1114.8 N; beyond, the

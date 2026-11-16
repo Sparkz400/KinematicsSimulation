@@ -78,7 +78,7 @@ Next: the [overview and five-minute tour](docs/overview.md), the [user guide](do
 
 ## How accurate is it?
 
-Every component and analysis figure is tested against a hand calculation. The arms' dynamics match MuJoCo to 1e-14, the deltas' match independent Lagrangian derivations, and the drive loop matches an independent Python implementation. One real machine, a ball screw bench of ISW Stuttgart, has been replayed: the simulated motor torque is within 5 to 13 % RMS of the measured one.
+Every component and analysis figure is tested against a hand calculation. The arms' dynamics match MuJoCo to 1e-14, the deltas' match independent Lagrangian derivations, and the drive loop matches an independent Python implementation. One real machine, a ball screw bench of ISW Stuttgart, has been replayed: the simulated motor torque is within 4.6 to 13 % RMS of the measured one.
 
 The equations are checked; the parameters of a given machine (friction, damping, stiffness) are often estimates, and the configs mark which. Comparisons and trends are reliable; absolute numbers are as good as those values. Every check with its outcome and values: the [validation dashboard](https://sparkz400.github.io/KinematicsSimulation/validation/). Details and open points: [validation](docs/validation.md). Results per measured machine: [datasets/RESULTS.md](datasets/RESULTS.md). Measured data from your machine is the most valuable contribution: see [contributing a measured machine](docs/measurement-procedure.md#contributing-a-measured-machine-step-by-step).
 

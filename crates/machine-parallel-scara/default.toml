@@ -53,6 +53,10 @@ joint_friction = true
 motor_friction = true
 gearbox_backlash = true
 gearbox_efficiency = true
+# The ball screw's efficiency from its lead angle and its balls' friction (screw.friction_coefficient, THK's
+# formula) in place of screw.efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart.
+# Off in the shipped configs: their sizing was done with screw.efficiency.
+screw_lead_efficiency = false
 torque_ripple = true
 # Stops at both ends of each arm's angle range ([joint]).
 hard_stops = true
@@ -433,6 +437,9 @@ root_diameter_m = 0.0135
 length_m = 0.3
 mounting = "fixed-free"
 efficiency = 0.9
+# With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
+# ball screws, not this screw's.
+friction_coefficient = 0.003
 nut_stiffness_n_m = 2.0e8
 bearing_stiffness_n_m = 4.0e8
 preload_n = 200.0
@@ -678,6 +685,7 @@ engage_delay_s = 0.03
 release_delay_s = 0.06
 
 [bounds]
+screw.friction_coefficient = [0.002, 0.01]
 brake.engage_delay_s = [0.01, 0.06]
 brake.release_delay_s = [0.03, 0.15]
 motor.pole_pairs = [3.0, 5.0]
