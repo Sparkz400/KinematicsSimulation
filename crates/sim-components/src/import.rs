@@ -257,11 +257,12 @@ fn read_twincat(text: &str) -> Result<Vec<Channel>, TraceError> {
             }
         }
     }
+    // Full timestamps are FILETIME (100 ns since 1601), counted from the earliest first stamp of all channels so that
+    // channels starting at different times keep their offset; otherwise ms from the start of the export.
+    let origin = channels.iter().filter_map(|c| c.time.first().copied()).filter(|&t| t > 1e15).fold(f64::INFINITY, f64::min);
     for channel in &mut channels {
-        // Full timestamps are FILETIME (100 ns since 1601); otherwise ms from the start of the export.
         let full = channel.time.first().is_some_and(|&t| t > 1e15);
-        let first = channel.time.first().copied().unwrap_or(0.0);
-        channel.time.iter_mut().for_each(|t| *t = if full { (*t - first) * 1e-7 } else { *t * 1e-3 });
+        channel.time.iter_mut().for_each(|t| *t = if full { (*t - origin) * 1e-7 } else { *t * 1e-3 });
     }
     Ok(channels)
 }
@@ -786,6 +787,15 @@ mod tests {
         let (_, v) = s.convert(&[channel], Quantity::Angle).unwrap();
         let counts: Vec<f64> = v.iter().map(|v| (v / TAU).round()).collect();
         assert_eq!(counts, vec![4294967000.0, 4294967200.0, 4294967400.0, 4294967696.0]);
+    }
+
+    #[test]
+    fn twincat_channels_keep_their_start_offset() {
+        // Channel b starts 5e7 FILETIME ticks (100 ns) = 5 s after channel a: it starts at 5 s, not at 0.
+        let text = "Name;export\nName;a;Name;b\n\n130000000000000000;1;130000000050000000;2\n130000000010000000;1;130000000060000000;2\n";
+        let channels = read_twincat(text).unwrap();
+        assert_eq!(channels[0].time, vec![0.0, 1.0]);
+        assert_eq!(channels[1].time, vec![5.0, 6.0]);
     }
 
     #[test]
