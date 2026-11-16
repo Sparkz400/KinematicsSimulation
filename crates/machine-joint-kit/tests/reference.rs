@@ -91,6 +91,16 @@ fn compare(name: &str, cfg: Config, urdf: &str, csv: &str) {
             *w = w.max(e);
         }
     }
+    for (what, w) in
+        ["torque", "gravity torque", "mass matrix", "flange position", "flange rotation"].iter().zip(worst_seen)
+    {
+        sim_core::testkit::record_check(
+            &format!("{name}: {what}, largest difference over the largest value"),
+            0.0,
+            w,
+            TOLERANCE,
+        );
+    }
     println!("{name}: worst relative error of torque, gravity, mass matrix, flange position, rotation: {worst_seen:?}");
     assert!(worst_seen.iter().all(|e| *e < TOLERANCE), "{name} disagrees with MuJoCo: {worst_seen:?}");
 }

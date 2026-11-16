@@ -300,3 +300,53 @@ pub fn determinism(m: &dyn Machine) {
     };
     assert!(trace() == trace(), "two identical runs differ");
 }
+
+/// Appends one check against an outside number as a JSON line to the file `KS_VALIDATION_OUT` names, for the
+/// validation dashboard (tools/validation_dashboard.py); nothing when the variable is unset. It asserts nothing: the
+/// test's own assert stays the judge. `allowed` is the largest difference the test accepts, in the reference's unit
+/// (a relative tolerance times |reference|, or the absolute one). The test is the running thread's name, as libtest
+/// and nextest name it, and the source line is the caller's.
+#[track_caller]
+pub fn record_check(what: &str, reference: f64, simulated: f64, allowed: f64) {
+    let Some(path) = std::env::var_os("KS_VALIDATION_OUT") else { return };
+    let at = std::panic::Location::caller();
+    let thread = std::thread::current();
+    let number = |v: f64| if v.is_finite() { format!("{v:e}") } else { "null".into() };
+    let line = format!(
+        "{{\"test\":{},\"file\":{},\"line\":{},\"what\":{},\"reference\":{},\"simulated\":{},\"allowed\":{}}}\n",
+        json_string(thread.name().unwrap_or("")),
+        json_string(&at.file().replace('\\', "/")),
+        at.line(),
+        json_string(what),
+        number(reference),
+        number(simulated),
+        number(allowed),
+    );
+    // One write per line in append mode: the tests of a run write to the same file at once.
+    use std::io::Write;
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(&path);
+    if let Err(e) = file.and_then(|mut f| f.write_all(line.as_bytes())) {
+        panic!("KS_VALIDATION_OUT={}: {e}", path.to_string_lossy());
+    }
+}
+
+fn json_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out + "\""
+}
+
+#[cfg(test)]
+mod record_tests {
+    #[test]
+    fn a_string_is_escaped_as_json() {
+        assert_eq!(super::json_string("a\"b\\c\nd ü"), r#""a\"b\\c\u000ad ü""#);
+    }
+}

@@ -38,7 +38,7 @@ It can tell you, for a machine described in a config file:
 
 The motors are permanent-magnet servo motors, two-phase hybrid steppers on an open-loop drive, or induction motors on a frequency converter (V/f or field-oriented); a machine file can put pneumatic cylinders with their valves beside the servo axes.
 
-What stands behind the numbers ([docs/validation.md](docs/validation.md)):
+What stands behind the numbers ([docs/validation.md](docs/validation.md); every check with its outcome and values on the [validation dashboard](https://sparkz400.github.io/KinematicsSimulation/validation/), the crates' [API docs](https://sparkz400.github.io/KinematicsSimulation/api/)):
 
 | Checked against | What | Where |
 | --- | --- | --- |
@@ -319,6 +319,7 @@ The curve leaves the first line in its direction and ends in the direction of th
 | [docs/catalogue.md](docs/catalogue.md) | What is in `catalog/`, where it came from, misprints found, what is missing |
 | [docs/validation.md](docs/validation.md) | Every check against something independent, the measured ball screw, and what is not validated |
 | [docs/measurement-procedure.md](docs/measurement-procedure.md) | How to record traces on a real machine for the fit |
+| [docs/dashboard.md](docs/dashboard.md) | The validation dashboard (every check with its outcome and values) and the API docs on the project site, and how the dashboard is made |
 | [docs/python.md](docs/python.md) | The Python module `kinematics_sim`: configs, runs, analysis, verdicts, bands and sizing as NumPy arrays and pandas-ready tables; a simulation stepped by your own controller; a parameter-sweep notebook |
 | [docs/web.md](docs/web.md) | The simulator in the browser: built for WebAssembly, a static page with a 3D view and the sizing check |
 | [docs/fmi.md](docs/fmi.md) | FMU export (FMI 2.0 and 3.0): variables, torque and velocity mode, FMU state, directional derivatives, validation, import into Simulink, OpenModelica and Dymola |

@@ -55,6 +55,9 @@ fn worst(reference: &str) -> Vec<(String, f64)> {
 
 fn agrees(reference: &str, tolerance: f64) {
     let worst = worst(reference);
+    for (column, d) in &worst {
+        sim_core::testkit::record_check(&format!("{column}: largest difference over its peak"), 0.0, *d, tolerance);
+    }
     let failed: Vec<_> = worst.iter().filter(|(_, d)| !(*d <= tolerance)).collect();
     assert!(failed.is_empty(), "beyond {tolerance:e} of the peak: {failed:?}");
 }

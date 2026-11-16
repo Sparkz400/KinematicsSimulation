@@ -12,7 +12,9 @@ fn scara(edits: &[&str]) -> ParallelScara {
     ParallelScara::new(&cfg).unwrap()
 }
 
+#[track_caller]
 fn close(a: f64, b: f64, tolerance: f64, what: &str) {
+    sim_core::testkit::record_check(what, b, a, tolerance * b.abs().max(1e-12));
     assert!((a - b).abs() <= tolerance * b.abs().max(1e-12), "{what}: {a} against {b} by hand");
 }
 

@@ -7,6 +7,15 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Added
+
+- Validation dashboard on the project site (`/validation/`): every check of `docs/validation.md` with the outcome of
+  its tests in that run, a link to each test's source line and, where the test records them, the reference, the
+  simulated value, the difference allowed and the margin left. Made by `tools/validation_dashboard.py` (standard
+  library only) from the tables, nextest's JUnit file and the values the tests write with
+  `sim_core::testkit::record_check` to the file `KS_VALIDATION_OUT` names (nothing without it). The rustdoc of the
+  workspace is published under `/api/`. See `docs/dashboard.md`.
+
 ## [1.0.0] - 2026-11-16
 
 The release was cut on 14 November 2026 at 19c2ad1 and tagged on 16 November 2026; the three

@@ -12,6 +12,7 @@
 - [Catalogue](catalogue.md)
 - [Validation](validation.md)
   - [Measuring a drive train](measurement-procedure.md)
+  - [Validation dashboard and API docs](dashboard.md)
 - [Python module](python.md)
 - [The simulator in the browser](web.md)
 - [FMI export](fmi.md)
