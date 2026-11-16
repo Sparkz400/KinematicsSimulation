@@ -7,8 +7,71 @@ described in [datasets/README.md](../datasets/README.md).
 
 Everything here was tested on synthetic traces (the simulator's, and a motor model with LuGre friction,
 encoder quantisation, noise and a current-loop lag) and on files built after the vendors' documented or
-observed export layouts. No trace of a real drive has been read yet. Treat the first real machine as a
-test of this procedure, and report what did not fit.
+observed export layouts. One real machine has been read, the ISW ball screw bench
+([datasets/isw-ball-screw-axis](../datasets/isw-ball-screw-axis/)), converted to CSV from its dSPACE recordings;
+no vendor export of a real drive yet. Treat your machine as a test of this procedure, and report what did not fit.
+
+## Contributing a measured machine, step by step
+
+Measured data is the only way to show that the simulator matches a real machine, and every dataset that comes in
+adds a row to [datasets/RESULTS.md](../datasets/RESULTS.md). What a dataset needs, in order:
+
+1. **Pick the machine.** One the simulator has (`sim-cli list`): a belt or screw axis, a gantry, a delta, a SCARA, an
+   arm. The axis has to be able to move freely over part of its travel with the safety functions on (section 1).
+2. **Record at least two recordings of the machine's real work**, without changing anything between them:
+   - a **cycle** (section 4, `cycle`): the move the machine makes in production, 5 to 30 s, out and back. The first
+     trace recording of the dataset is the one the free values (mass, friction, a constant force) are fitted on;
+   - one or more **checks**: other moves of the same machine (a different speed, a sine, a `friction-map` with
+     constant speeds both ways). Nothing is set from them, so they show whether the fit holds beyond its own data;
+   - if the drive offers it, a **frequency response** (motor torque to motor speed) at one or more positions: it
+     checks the first mode.
+3. **Record these signals per motor** (section 2): position setpoint, position actual, speed actual, torque actual;
+   the torque setpoint if the drive gives it. **Sample time**: 1 ms (the position cycle) for the cycle, the checks
+   and the friction map; the current-loop cycle (62.5 to 250 µs) for a torque step or a noise excitation
+   (section 3). Keep the drive's loop gains and filters as in production, and write them down.
+4. **Export** each recording as the drive's tool exports it (section 5: Startdrive CSV, TwinCAT Scope CSV, CODESYS
+   trace, or any CSV with a header) and do not edit the numbers. A frequency response goes in a CSV with the columns
+   `frequency_hz`, `gain_rad_s_per_nm` (and optionally `phase_deg`).
+5. **Lay out the folder** `datasets/<id>/` by copying [datasets/template/](../datasets/template/):
+
+   | File | What |
+   | --- | --- |
+   | `dataset.toml` | the metadata (below) |
+   | `README.md` | the machine, the drive settings, per file its test move, and anything odd |
+   | `<recording>.csv` (or `.txt`, `.trace`) | one file per recording, as exported |
+   | `map.toml` | one mapping per export format: which column is which signal, in which unit |
+   | `machine.toml` (optional, recommended) | the machine as a config of the simulator's machine, every value you changed marked `[source]`, `[catalogue]` or `[estimate]` |
+
+6. **Fill in `dataset.toml`**: `[dataset]` id (the folder's name), title, description, **licence**, contributor (an
+   organisation or `anonymous`), recorded (year and month only), `synthetic = false`; `[machine]` kind,
+   transmission, mounting, travel per motor revolution, payload, `simulator` (the simulator's machine id, e.g.
+   `"screw-axis"`), `config` (`"machine.toml"`) and `set` (single values on top of the config, as `--set` takes
+   them, e.g. `["effects.payload = false"]`); `[drive]` vendor, family and cycles; `[motor]` family, rated torque,
+   rotor inertia, encoder counts; one `[[recording]]` per file with `file`, `map`, `test` and `sample_time_s`.
+   [datasets/README.md](../datasets/README.md) lists every key.
+7. **Licence.** We suggest **CC BY 4.0** (`CC-BY-4.0`): anyone may use the data, naming you. CC0-1.0, CC-BY-SA-4.0,
+   ODbL-1.0 and PDDL-1.0 are accepted too. Only offer data you may publish: measured on your own machine, or
+   published by its owner under one of these licences (then name the source and its DOI in the README).
+8. **Anonymise** (the list in [datasets/README.md](../datasets/README.md#anonymisation)): no names, e-mail
+   addresses, IP addresses or Net IDs, paths, serial numbers, customers or sites; the date to the month.
+9. **Check and report:**
+
+   ```text
+   sim-cli check-dataset datasets/<id>
+   sim-cli fit --dataset datasets/<id> --report report/
+   ```
+
+   The first must print no problem. The second replays every trace recording on the machine and config the
+   dataset names, fits the free values on the first, and writes `report/report.md` with the torque difference
+   (RMS and worst sample, in N m and as a share of the peak) on the fit recording and on each check, the fitted
+   values against the config's with their standard errors, the config's `[bounds]`, the first mode against each
+   measured frequency response, the torque plots as SVG, and the numbers as CSV. A bad fit is not a reason to hold
+   the data back: it is what the simulator has to learn from.
+10. **Offer it**: open an issue with the form "Offer a measured dataset" (it asks for all of the above), or a pull
+    request with the folder. Then `UPDATE_RESULTS=1 cargo test --release -p sim-cli --test results` adds its row to
+    [datasets/RESULTS.md](../datasets/RESULTS.md).
+
+Sections 1 to 7 below say how to record each test move and how to read what `identify` and `fit` give.
 
 ## 1. Safety first
 

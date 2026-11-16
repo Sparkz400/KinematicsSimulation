@@ -12,6 +12,8 @@ recorded = "2022-08"
 synthetic = false
 
 [machine]
+# The simulator's machine the recordings are replayed on (`sim-cli fit --dataset`).
+simulator = "screw-axis"
 kind = "single ball screw axis, linear direct drive below the table (idle in these recordings)"
 transmission = "ball screw Steinmeyer 3526/40.40.6,3E, 40 mm, lead 40 mm (estimate: not stated by the source), spindle 1800 mm, motor coupled directly"
 mounting = "horizontal (estimate: not stated by the source)"

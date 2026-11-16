@@ -16,6 +16,8 @@ use sim_core::{Config, ConfigError, MachineEntry, Translations};
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
 use std::io::Write;
 
+mod report;
+
 static I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("de", include_str!("../i18n/de.ftl"))];
 
 /// A failure as a translation key and its argument.
@@ -177,9 +179,17 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("modes") => &["--axis-index", "--points", "--shapes"],
         Some("workspace") => &["--z", "--points"],
         Some("replay") => &["--trace", "--map"],
-        Some("fit") => {
-            &["--trace", "--map", "--sweep", "--sweep-motor", "--amplitude", "--stiffness", "--stiffness-key"]
-        }
+        Some("fit") => &[
+            "--trace",
+            "--map",
+            "--sweep",
+            "--sweep-motor",
+            "--amplitude",
+            "--stiffness",
+            "--stiffness-key",
+            "--dataset",
+            "--report",
+        ],
         Some("identify") => &[
             "--trace",
             "--map",
@@ -452,13 +462,29 @@ fn replay(args: &Args, tr: &Translations) -> Result<(), Failure> {
 /// with `--stiffness` also the factor on the stiffness at `--stiffness-key` (the belts' by default) from the trace's
 /// own moves; with `--sweep FILE` (a frequency response as `sweep` writes it, taken on motor `--sweep-motor` with
 /// `--amplitude`) the load's resonance on the belt.
+/// With `--dataset DIR --report OUT` the whole report of a dataset folder instead (`report::run`).
 fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    if args.option("--dataset").is_some() || args.option("--report").is_some() {
+        return report::run(args, tr);
+    }
+    let mut out = output(args, "--out")?;
+    let (advice, result) = fit_rows(args, tr, &mut *out)?;
+    out.flush().map_err(io)?;
+    advice.iter().for_each(|line| eprintln!("{line}"));
+    result
+}
+
+/// The table of `fit` written to `out`, and what to change in the config, with the failure that came after the table.
+fn fit_rows(
+    args: &Args,
+    tr: &Translations,
+    out: &mut dyn Write,
+) -> Result<(Vec<String>, Result<(), Failure>), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let machine = (entry.build)(&cfg)?;
     if args.option("--trace").is_none() && args.option("--sweep").is_none() {
         return Err(Failure("cli-usage", String::new()));
     }
-    let mut out = output(args, "--out")?;
     let (mut advice, mut result) = (Vec::new(), Ok(()));
     writeln!(out, "quantity,of,config,fitted,standard_error").map_err(io)?;
     if args.option("--trace").is_some() && !sim_components::trace::per_axis_fit(machine.as_ref()) {
@@ -546,9 +572,7 @@ fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
             None => result = Err(Failure("fit-no-resonance", String::new())),
         }
     }
-    out.flush().map_err(io)?;
-    advice.iter().for_each(|line| eprintln!("{line}"));
-    result
+    Ok((advice, result))
 }
 
 /// The trace named by `--trace`: through the mapping file `--map` (a vendor export; see

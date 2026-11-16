@@ -19,7 +19,7 @@ pub const TESTS: [&str; 7] = [
     "cycle",
 ];
 
-/// (table, key, required, kind): `s` text, `n` number, `b` true/false.
+/// (table, key, required, kind): `s` text, `n` number, `b` true/false, `a` a list of texts.
 const SCHEMA: &[(&str, &str, bool, char)] = &[
     ("dataset", "id", true, 's'),
     ("dataset", "title", true, 's'),
@@ -34,6 +34,8 @@ const SCHEMA: &[(&str, &str, bool, char)] = &[
     ("machine", "travel_per_motor_rev_m", false, 'n'),
     ("machine", "payload_kg", false, 'n'),
     ("machine", "config", false, 's'),
+    ("machine", "simulator", false, 's'),
+    ("machine", "set", false, 'a'),
     ("drive", "vendor", true, 's'),
     ("drive", "family", true, 's'),
     ("drive", "current_cycle_s", false, 'n'),
@@ -54,6 +56,7 @@ fn kind_ok(value: &Value, kind: char) -> bool {
     match kind {
         's' => value.is_str(),
         'b' => value.is_bool(),
+        'a' => value.as_array().is_some_and(|a| a.iter().all(Value::is_str)),
         _ => value.as_float().or(value.as_integer().map(|i| i as f64)).is_some_and(|v| v.is_finite() && v >= 0.0),
     }
 }
@@ -123,6 +126,56 @@ pub fn personal_data(file: &str, text: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// One `[[recording]]`: its file, its mapping ("" for a frequency response) and its test move.
+pub struct Recording {
+    pub file: String,
+    pub map: String,
+    pub test: String,
+}
+
+/// What `sim-cli fit --dataset` reads of a folder: the metadata it reports and the recordings in their order.
+pub struct Contents {
+    pub id: String,
+    pub title: String,
+    pub license: String,
+    pub synthetic: bool,
+    /// `machine.simulator`, the simulator's machine the dataset is replayed on; "" if not named.
+    pub simulator: String,
+    /// `machine.config`, a file in the folder; "" for the machine's default config.
+    pub config: String,
+    /// `machine.set`, values set on top of the config as `--set` does (`"effects.payload = false"`).
+    pub set: Vec<String>,
+    pub recordings: Vec<Recording>,
+}
+
+/// The folder's `dataset.toml` as `Contents`; its problems are `check`'s business, here only what cannot be read.
+pub fn contents(dir: &Path) -> Result<Contents, String> {
+    let text = std::fs::read(dir.join("dataset.toml")).map_err(|e| format!("dataset.toml: {e}"))?;
+    let table: Table = decode(&text).parse().map_err(|e| format!("dataset.toml: {e}"))?;
+    let get = |t: &Table, k: &str| t.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let empty = Table::new();
+    let part = |name: &str| table.get(name).and_then(Value::as_table).unwrap_or(&empty);
+    let (dataset, machine) = (part("dataset"), part("machine"));
+    let recordings = table.get("recording").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+    Ok(Contents {
+        id: get(dataset, "id"),
+        title: get(dataset, "title"),
+        license: get(dataset, "license"),
+        synthetic: dataset.get("synthetic").and_then(Value::as_bool).unwrap_or(false),
+        simulator: get(machine, "simulator"),
+        config: get(machine, "config"),
+        set: machine
+            .get("set")
+            .and_then(Value::as_array)
+            .map_or(Vec::new(), |a| a.iter().filter_map(Value::as_str).map(String::from).collect()),
+        recordings: recordings
+            .iter()
+            .filter_map(Value::as_table)
+            .map(|r| Recording { file: get(r, "file"), map: get(r, "map"), test: get(r, "test") })
+            .collect(),
+    })
 }
 
 /// Everything that keeps the folder `dir` from being published; empty when it is fine.

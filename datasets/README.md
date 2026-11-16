@@ -22,8 +22,10 @@ Every key is described in [template/dataset.toml](template/dataset.toml). In sho
 - `[dataset]`: `id` (the folder's name), `title`, `description`, `license` (CC0-1.0, CC-BY-4.0,
   CC-BY-SA-4.0, ODbL-1.0 or PDDL-1.0), `contributor` (an organisation or `anonymous`), `recorded` (year and
   month, `YYYY-MM`), `synthetic` (true only for data a simulator made).
-- `[machine]`: `kind`, `transmission`, `mounting`; optional `travel_per_motor_rev_m`, `payload_kg`, `config` (a TOML
-  file in the folder: the machine as a config of one of the simulator's machines; its README names which).
+- `[machine]`: `kind`, `transmission`, `mounting`; optional `travel_per_motor_rev_m`, `payload_kg`, `simulator` (the
+  simulator's machine the recordings are replayed on, an id of `sim-cli list`), `config` (a TOML file in the folder:
+  the machine as a config of that machine) and `set` (a list of single values on top of the config, as `--set` takes
+  them: `["effects.payload = false"]`).
 - `[drive]`: `vendor`, `family`; optional `current_cycle_s`, `speed_cycle_s`, `position_cycle_s`.
 - `[motor]`: `family`, `rated_torque_nm`; optional `rotor_inertia_kg_m2`, `encoder_counts_per_rev`.
 - `[[recording]]`, one per file: `file`, `map` (not for a frequency response), `test` (one of the test
@@ -61,6 +63,19 @@ wrong kind, an `id` that is not the folder's name, a license not on the list, a 
 that is missing or not named by a recording, a mapping that does not load, a trace that does not import
 through its mapping or has fewer than 100 rows, a `sample_time_s` that is not the trace's own (1 %), and
 whatever the anonymisation check finds. The tests run it on every folder here except `template/`.
+
+## The report
+
+```text
+sim-cli fit --dataset datasets/<id> --report report/
+```
+
+replays every trace recording on `machine.simulator` with `machine.config` and `machine.set` (a machine or
+`--config` on the command line wins), fits the free values on the first trace recording (the others are checks) and
+writes `report/report.md`: the torque difference, RMS and worst sample, on each recording; the fitted values against
+the config's; the config's `[bounds]`; each frequency response's resonance against the model's first mode; the torque
+plots as SVG and every number as CSV. [RESULTS.md](RESULTS.md) has one row per dataset, made from these reports by a
+test.
 
 ## Datasets
 
