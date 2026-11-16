@@ -631,7 +631,10 @@ fn axis_speed(axes: &[AxisInfo]) -> impl Fn(&Geo) -> f64 {
 
 /// How far the path that is planned for these pieces is from the pieces as given, at most: the deviation
 /// the transition curves make, plus how far an arc ends off its stated end (`given`). Zero with a tolerance of
-/// zero and arcs that end on their circles. For the plan within the axis limits.
+/// zero and arcs that end on their circles. For the plan within the axis limits. A program's run with a feed per piece
+/// (`plan_feeds`) is shaped per stretch of one feed, with no curve across a change of feed and shorter curves at a lower
+/// feed: this reads it as without the feeds, so it may read higher than that run's own path, never lower, and never
+/// more than the larger of the two tolerances plus how far an arc ends off its stated end.
 pub fn deviation(
     axes: &[AxisInfo],
     start: &[f64],
@@ -2479,9 +2482,9 @@ struct Place {
     /// squared: the centripetal and Coriolis part, e the torque that holds the tool), per belt section its change of
     /// tension (e = 0).
     rows: Vec<[f64; 5]>,
-    /// Per motor (the first rows; empty or short where a motor's row is the same on both sides): the row [c, d, e] that holds
-    /// against the low bound, where a lossy gearbox gives the motor eta of the load's torque (it brakes) instead of the
-    /// 1 / eta that `rows` has against the high bound.
+    /// Per motor behind a lossy gearbox (the first rows; empty where no motor has one): the row [c, d, e] with eta of the
+    /// load's torque (the load drives the motor) beside the 1 / eta of `rows` (the motor drives the load); `Place::against`
+    /// says which holds against which bound.
     low: Vec<[f64; 3]>,
     /// Per motor (the first rows), how fast it turns per speed along the path (rad/m, signed): its row's low and high
     /// are then those of its curve (`curves`) at that speed, not the row's own (which are those at a standstill).
@@ -2520,33 +2523,45 @@ impl Place {
         }
     }
 
-    /// Row `i` against the low bound: `low`'s where the row has one (a motor behind a lossy gearbox), else its own.
-    fn low_row(&self, i: usize) -> [f64; 3] {
-        self.low.get(i).copied().unwrap_or_else(|| {
-            let [c, d, e, ..] = self.rows[i];
-            [c, d, e]
-        })
+    /// Row `i`'s forms [c, d, e], each with whether it holds against the high and the low bound. Behind a lossy gearbox the
+    /// motor gives I alpha + (T - I alpha) / eta where the load's torque T - I alpha turns the way the motor turns (it
+    /// drives the load), I alpha + eta (T - I alpha) where against it (the load drives the motor): for a motor that turns
+    /// forwards along the path that is the larger of the two forms, for one that turns backwards the smaller. So the eta
+    /// form holds against both bounds, and the 1 / eta form against the high bound where the motor turns forwards, the low
+    /// where backwards (both where it stands), whichever sign the load's torque has, the rotor's I alpha too.
+    fn against(&self, i: usize) -> [([f64; 3], bool, bool); 2] {
+        let [c, d, e, ..] = self.rows[i];
+        match self.low.get(i) {
+            Some(&eta) => {
+                let turn = self.turn.get(i).copied().unwrap_or(0.0);
+                [([c, d, e], turn >= 0.0, turn <= 0.0), (eta, true, true)]
+            }
+            None => [([c, d, e], true, true), ([c, d, e], false, false)],
+        }
     }
 
-    /// Whether row `i` holds at the speed `v` along the path without acceleration: against the high bound by its row, the
-    /// low bound by its low row.
+    /// Whether row `i` holds at the speed `v` along the path without acceleration, each of its forms against its bounds.
     fn holds(&self, i: usize, v: f64) -> bool {
-        let ((low, high), [_, d, e, ..], [_, d_low, e_low]) = (self.bounds(i, v), self.rows[i], self.low_row(i));
-        d * v * v + e <= high && d_low * v * v + e_low >= low
+        let (low, high) = self.bounds(i, v);
+        self.against(i).iter().all(|([_, d, e], vs_high, vs_low)| {
+            (!vs_high || d * v * v + e <= high) && (!vs_low || d * v * v + e >= low)
+        })
     }
 
     /// The most acceleration (`sign` 1) or deceleration (-1) along the path that holds every row and bend here at
     /// every speed from zero to `top`. Rows are linear in v^2, so the two ends of that range are the worst, against
     /// bounds that do not widen with the speed (a motor's curve), so those at `top`; the bends get tighter with the
-    /// speed, so `top` is. A row that grows with the acceleration meets its high bound, one that falls its low bound
-    /// (by its low row).
+    /// speed, so `top` is. A row's form that grows with the acceleration meets its high bound, one that falls its low
+    /// bound (`against`).
     fn most(&self, top: f64, sign: f64) -> f64 {
         let x = top * top;
         let rows = (0..self.rows.len()).flat_map(|i| {
-            let ([c, d, e, ..], [c_low, d_low, e_low], (low, high)) = (self.rows[i], self.low_row(i), self.bounds(i, top));
-            let up = (c * sign > 0.0).then(|| (high - e).min(high - (d * x + e)) / c.abs());
-            let down = (c_low * sign < 0.0).then(|| ((e_low - low).min(d_low * x + e_low - low)) / c_low.abs());
-            [up, down]
+            let (low, high) = self.bounds(i, top);
+            self.against(i).into_iter().flat_map(move |([c, d, e], vs_high, vs_low)| {
+                let up = (vs_high && c * sign > 0.0).then(|| (high - e).min(high - (d * x + e)) / c.abs());
+                let down = (vs_low && c * sign < 0.0).then(|| (e - low).min(d * x + e - low) / c.abs());
+                [up, down]
+            })
         });
         let rows = rows.flatten();
         let bends = self
@@ -2810,16 +2825,15 @@ fn piece_limits(
                 speed.push(once[k] - still[k] - d);
             }
         }
-        // Per motor the row against the low bound: the same as its row, but behind a lossy gearbox (below).
+        // Per motor its row with eta of the load's torque (`Place::low`): the same as its row but behind a lossy gearbox.
         let mut low: Vec<[f64; 3]> = rows[..motors].iter().map(|[c, d, e, ..]| [*c, *d, *e]).collect();
         if (0..motors).any(|m| gearbox(m).is_some()) {
             // The output torque ratio (T - I alpha), alpha = theta' a + theta'' v^2 the input's angular acceleration: the
             // torque the load takes, whatever the gearbox loses. What it loses the motor gives on top: the rigid model's
             // motor torque is I alpha + (T - I alpha), and with the efficiency eta the motor gives I alpha + (T - I alpha)
-            // / eta while it drives the load, I alpha + (T - I alpha) eta while the load drives it. The motor's row
-            // holds the first against the high bound (the larger of the two where the load takes torque) and its low row
-            // the second against the low bound (the smaller where the load gives torque back): a motor that brakes the
-            // load gives eta of what the load's deceleration asks, not 1 / eta of it.
+            // / eta while it drives the load, I alpha + (T - I alpha) eta while the load drives it (`Place::against` says
+            // which form holds against which bound): a motor that brakes the load gives eta of what the load's
+            // deceleration asks, not 1 / eta of it.
             let (far, here, back) = (angles(BEND_STEP), angles(0.0), angles(-BEND_STEP));
             for m in (0..motors).filter_map(|m| Some((m, gearbox(m)?))).collect::<Vec<_>>() {
                 let (m, [ratio, inertia, rated, efficiency]) = m;
@@ -2830,7 +2844,8 @@ fn piece_limits(
                 (rows[m][0], rows[m][1], rows[m][2]) =
                     (inertia * turn + c_load / efficiency, inertia * bend + d_load / efficiency, e / efficiency);
                 low[m] = [inertia * turn + c_load * efficiency, inertia * bend + d_load * efficiency, e * efficiency];
-                if (if e > 0.0 { e / efficiency } else { -e * efficiency }) >= torque[m] {
+                // Holding while it starts to turn: the load's torque drives the motor where it turns the other way.
+                if (if e * turn >= 0.0 { e / efficiency } else { e * efficiency }).abs() >= torque[m] {
                     return Err(CommandError { key: "error-path-torque" });
                 }
                 if rated.is_finite() {
@@ -2915,10 +2930,7 @@ fn piece_limits(
         }
         let mut place = Place { rows, low, turn, curves: curves.clone(), guide, speed, bends, top: x.sqrt() };
         // A motor that turns here and has to hold the tool against more than its curve less its friction leaves no room.
-        if (0..motors).any(|m| {
-            let (low, high) = place.bounds(m, 0.0);
-            place.turn[m] != 0.0 && !(place.rows[m][2] <= high && place.low_row(m)[2] >= low)
-        }) {
+        if (0..motors).any(|m| place.turn[m] != 0.0 && !place.holds(m, 0.0)) {
             return Err(CommandError { key: "error-path-torque" });
         }
         // The motors' rows and the rows with a part that grows with the speed (whose top the formula above overestimates).
@@ -3340,17 +3352,34 @@ arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw",
     }
 
     /// The deviation of a curve from the corner it replaces is read between the samples too: a line from (0.9, 0) to
-    /// (1.0, 0.2) beside the corner (0.9, 0), (1, 0), (1, 0.1) is as far from it as the nearer leg: 0.2 u from the first and
-    /// 0.1 (1 - u) from the second, equal at u = 1/3, where the peak is 1/15 = 0.066667 (the samples at 21 / 64 and 22 / 64
-    /// give 0.065625).
+    /// (1.0, 0.2) beside the corner (0.9, 0), (1, 0), (1, 0.2) (the last 0.1 of the first piece, the first 0.2 of the
+    /// second) is as far from it as the nearer leg: 0.2 u from the first and 0.1 (1 - u) from the second, equal at u = 1/3,
+    /// where the peak is 1/15 = 0.066667 (the samples at 21 / 64 and 22 / 64 give 0.065625).
     #[test]
     fn the_deviation_of_a_corner_curve_is_found_between_the_samples() {
         let line = |from: [f64; 2], dir: [f64; 2], length: f64| Geo::Line { dir: dir.to_vec(), from: from.to_vec(), length };
         let (a, b) = (line([0.0, 0.0], [1.0, 0.0], 1.0), line([1.0, 0.0], [0.0, 1.0], 1.0));
         let size = 0.05_f64.sqrt();
         let curve = line([0.9, 0.0], [0.1 / size, 0.2 / size], size);
-        let off = off_corner(&curve, &a, 0.1, &b, 0.1);
+        let off = off_corner(&curve, &a, 0.1, &b, 0.2);
         assert!((off - 1.0 / 15.0).abs() < 1e-6, "{off}");
+    }
+
+    /// `deviation` reads a run with a feed per piece as without the feeds: a line into an arc (tangent), a line out of it
+    /// (tangent) and a right-angled corner, at 10, 20, 20 and 10 mm/s, with 1 mm for the transition curves and the corner.
+    /// Without the feeds the line-arc junction gets a curve, with them (a change of feed there) it does not, and the
+    /// curves at the lower feed are shorter: the feeds' path deviates less, the reading is never below it, and never
+    /// above the tolerance.
+    #[test]
+    fn the_deviation_without_the_feeds_bounds_that_of_a_run_with_them() {
+        let axes = axes();
+        let pieces = parse("line,0.1,0.0\narc,0.2,0.1,0.1,0.1,ccw\nline,0.2,0.2\nline,0.3,0.2").unwrap();
+        let tolerance = Tolerance { path: 1e-3, corner: 1e-3 };
+        let fed = geometry_fed(&axes, &[0.0; 2], &pieces, &[0.01, 0.02, 0.02, 0.01], tolerance, &axis_speed(&axes), 0.0)
+            .unwrap()
+            .1;
+        let read = deviation(&axes, &[0.0; 2], &pieces, tolerance, 0.0).unwrap();
+        assert!(fed <= read && read <= 1e-3 * (1.0 + 1e-9) && read > 0.0, "with the feeds {fed} m, read {read} m");
     }
 
     /// The ramps of a piece of radius 100 m keep nearly all of the jerk: at the start (tangent along x) with the limits
@@ -4782,20 +4811,28 @@ line,0.3,0.13",
     /// A motor behind a gearbox of efficiency 0.9 (the single axis: its rotor 0.0075 N m per m/s^2, the load's 0.017 N m per
     /// m/s^2) with 0.4 N m to give either way: accelerating the load it gives 0.0075 + 0.017 / 0.9 = 0.026389 N m per
     /// m/s^2, so 0.4 / 0.026389 = 15.158 m/s^2; braking it the load drives the motor and it gives 0.0075 + 0.017 * 0.9 =
-    /// 0.0228 N m per m/s^2 (negative), so 0.4 / 0.0228 = 17.544 m/s^2 (15.158 when braking took 1 / eta as well).
+    /// 0.0228 N m per m/s^2 (negative), so 0.4 / 0.0228 = 17.544 m/s^2 (15.158 when braking took 1 / eta as well). The
+    /// same with the motor turning backwards along the path (its row negative). Where the rotor's inertia outweighs the
+    /// load (rotor 0.03 N m per m/s^2, the load pushing on with 0.4 N m): accelerating, the load's torque 0.017 a - 0.4 is
+    /// below zero up to 23.5 m/s^2, so the load drives the motor and it gives 0.03 a + 0.9 (0.017 a - 0.4) = 0.0453 a - 0.36
+    /// <= 0.4: 16.777 m/s^2. The 1 / eta form alone allowed 17.27 m/s^2, where the motor gives 0.4227 N m.
     #[test]
     fn a_motor_that_brakes_through_a_lossy_gearbox_gives_eta_and_not_one_over_eta_of_the_loads_torque() {
-        let place = Place {
-            rows: vec![[0.0075 + 0.017 / 0.9, 0.0, 0.0, -0.4, 0.4]],
-            low: vec![[0.0075 + 0.017 * 0.9, 0.0, 0.0]],
-            turn: Vec::new(),
-            curves: Arc::from([]),
+        let place = |sign: f64, rotor: f64, push: f64| Place {
+            rows: vec![[sign * (rotor + 0.017 / 0.9), 0.0, -sign * push / 0.9, -0.4, 0.4]],
+            low: vec![[sign * (rotor + 0.017 * 0.9), 0.0, -sign * push * 0.9]],
+            turn: vec![sign],
+            curves: Arc::from([MotorCurve { step: 1.0, motoring: vec![0.4; 2], braking: vec![0.4; 2], power: 1e9 }]),
             guide: Vec::new(),
             speed: Vec::new(),
             bends: Vec::new(),
             top: 1.0,
         };
-        let (up, down) = (place.most(1.0, 1.0), place.most(1.0, -1.0));
-        assert!((up - 15.158).abs() < 1e-3 && (down - 17.544).abs() < 1e-3, "{up} and {down} m/s^2");
+        for sign in [1.0, -1.0] {
+            let (up, down) = (place(sign, 0.0075, 0.0).most(1.0, 1.0), place(sign, 0.0075, 0.0).most(1.0, -1.0));
+            assert!((up - 15.158).abs() < 1e-3 && (down - 17.544).abs() < 1e-3, "{sign}: {up} and {down} m/s^2");
+        }
+        let up = place(1.0, 0.03, 0.4).most(1.0, 1.0);
+        assert!((up - 0.76 / 0.0453).abs() < 1e-9, "{up} m/s^2");
     }
 }

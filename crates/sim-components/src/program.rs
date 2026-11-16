@@ -25,8 +25,8 @@
 //! units (m, rad), as a path file has them; at the axes' limits.
 //!
 //! KRL (`.src`): `PTP {X 100, Y 0, Z 500}`, `LIN {...}`, `CIRC {aux}, {end}` with mm and degrees, components left out
-//! kept from the point before (for a CIRC too, the auxiliary point's are not used; this follows that rule and was not
-//! checked against a KUKA manual); A, B, C, S, T, E1... move axes of those names where the machine has them and are left out
+//! kept from the point before (for a CIRC too, the auxiliary point's are not used: KUKA System Software 8.3, section
+//! 11.5.3); A, B, C, S, T, E1... move axes of those names where the machine has them and are left out
 //! otherwise. Where the machine's axes are x, y, z and a rotation vector rx, ry, rz (an arm in tool space), A, B, C are
 //! the orientation (R = Rz(A) Ry(B) Rx(C), KUKA's) and set rx, ry, rz. `$VEL.CP = v` (m/s) is the speed along the path
 //! of the LIN and CIRC moves after it; a PTP runs at the axes' limits.
@@ -711,6 +711,18 @@ mod tests {
         assert!((feed("G1 X10 F600") - 0.01).abs() < 1e-15);
         assert!((feed("G1 C90 F3600") - PI / 3.0).abs() < 1e-12);
         assert!((feed("G1 X10 C90 F600") - (0.01f64.powi(2) + (PI / 2.0).powi(2)).sqrt()).abs() < 1e-12);
+        // Planned (axes quick enough that the ramps take a few ms: v / a + a / j at most 1.05 + 1 ms), the three take 1,
+        // 1.5 and 1 s.
+        let quick = axes.map(|a| AxisInfo { max_vel: 10.0, max_acc: 1e3, max_jerk: 1e6, ..a });
+        for (text, time) in [("G1 X10 F600", 1.0), ("G1 C90 F3600", 1.5), ("G1 X10 C90 F600", 1.0)] {
+            let runs = gcode(text, &quick, &[0.0, 0.0]).unwrap();
+            let caps = runs[0].caps().unwrap();
+            let points =
+                crate::path::plan_feeds(&quick, &[0.0, 0.0], &runs[0].pieces, &caps, 1e-3, 0.0, crate::path::ARC_SLACK)
+                    .unwrap();
+            let planned = points[points.len() - 1].0;
+            assert!(planned >= time && planned <= time + 4e-3, "{text}: {planned} s");
+        }
     }
 
     /// A feed that changes between blocks is a cap per piece inside one run, with no stop between: `F600 G1 X10 / F1200 G1
@@ -736,7 +748,8 @@ G1 X30", &axes, &[0.0; 2]).unwrap();
         assert!((time - 2.5).abs() < 0.03 && (speed - 0.01).abs() < 1e-4, "{time} s, {speed} m/s at 10 mm");
     }
 
-    /// `F600 / G1 X1 / G2 I10` is 1 mm, then a full circle of radius 10 mm: 0.001 + 2 pi 0.01 m on the planned path.
+    /// `F600 / G1 X1 / G2 I10` is 1 mm, then a full circle of radius 10 mm: 0.001 + 2 pi 0.01 m on the planned path, which
+    /// closes where the circle starts, (1, 0) mm, and reaches x = 21 mm and y = 10 and -10 mm on the way.
     #[test]
     fn a_full_circle_is_planned() {
         let axes = [axis("x"), axis("y")];
@@ -747,6 +760,28 @@ G2 I10", &axes, &[0.0; 2]).unwrap();
         assert_eq!(pieces.len(), 4);
         let l = length(&axes, &[0.0; 2], pieces);
         assert!((l - (0.001 + 2.0 * PI * 0.01)).abs() < 1e-5, "{l}");
+        let points = crate::path::plan(&axes, &[0.0; 2], pieces, 1e-3, 0.0, crate::path::ARC_SLACK).unwrap();
+        let end = &points[points.len() - 1].1;
+        assert!((end[0] - 0.001).abs() < 1e-12 && end[1].abs() < 1e-12, "ends at {end:?}");
+        // The poses (some 1 mm apart) reach the circle's far side and both of its extremes in y.
+        let most = |f: &dyn Fn(&[f64]) -> f64| points.iter().map(|(_, p)| f(p)).fold(f64::NEG_INFINITY, f64::max);
+        let (x, up, down) = (most(&|p| p[0]), most(&|p| p[1]), most(&|p| -p[1]));
+        assert!([x - 0.021, up - 0.01, down - 0.01].iter().all(|d| d.abs() < 2e-4), "{x} {up} {down}");
+    }
+
+    /// A KRL CIRC whose end leaves out a component keeps it from the point before, not from the auxiliary point: from
+    /// (0, 0, 100) mm through {X 100, Y 100, Z 200} to {X 200, Y 0} ends at z = 100 mm, on the circle through the three
+    /// points, and the planned path ends there.
+    #[test]
+    fn a_krl_circ_keeps_a_component_left_out_of_its_end_from_the_point_before() {
+        let axes = [axis("x"), axis("y"), axis("z")];
+        let runs = krl("LIN {X 0, Y 0, Z 100}\nCIRC {X 100, Y 100, Z 200}, {X 200, Y 0}", &axes, &[0.0; 3]).unwrap();
+        let pieces: Vec<Piece> = runs.iter().flat_map(|r| r.pieces.clone()).collect();
+        let Piece::Arc { to, .. } = &pieces[1] else { panic!("{pieces:?}") };
+        assert!(to.iter().zip([0.2, 0.0, 0.1]).all(|(a, b)| (a - b).abs() < 1e-12), "{to:?}");
+        let points = crate::path::plan(&axes, &[0.0; 3], &pieces, 1e-3, 0.0, crate::path::ARC_SLACK).unwrap();
+        let end = &points[points.len() - 1].1;
+        assert!(end.iter().zip([0.2, 0.0, 0.1]).all(|(a, b)| (a - b).abs() < 1e-9), "{end:?}");
     }
 
     /// The other planes and units: G18 on a gantry of x and z: G2 is clockwise seen from +y, so counterclockwise seen

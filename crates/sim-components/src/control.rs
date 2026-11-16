@@ -1472,6 +1472,11 @@ impl Controller {
         &self.params
     }
 
+    /// The limits the time-optimal plan keeps beside the motors' (`path::PlanLimits`), as the config gives them.
+    pub fn plan_limits(&self) -> &path::PlanLimits {
+        &self.plan_limits
+    }
+
     /// Motor and drive data of motor `k`: `drive_params` with that motor's own values (`catalog::motor_config`).
     pub fn drive_params_of(&self, k: usize) -> &DriveParams {
         self.motor_params.get(k).unwrap_or(&self.params)
