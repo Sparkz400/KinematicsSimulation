@@ -29,7 +29,7 @@ Auslegungstabellen rechnen eine Maschine als starre Massen mit festen Wirkungsgr
 | Delta- und Parallelroboter | Delta mit 3 Armen, Delta mit 4 Achsen, Quattro-Art, planarer Delta, Linear-Delta, Parallel-SCARA, Hexapod (Zylinder und Kurbeln), Tripod |
 | Roboter | Sechsachsroboter aus URDF (auch auf Linearschiene), SCARA, Palettierer, Wafer-Handler mit R-Theta-Z-Arm |
 | Kurbel und Kurve | Servopresse, Kniehebelpresse, Rotationsmesser, fliegende Säge, Kurvenscheibe, Rundschalttisch (Malteserkreuz, Kurvenschrittgetriebe) |
-| Weitere | Ebener und räumlicher Seilroboter, Auf- und Abwickler mit Tänzer, Scherenhubtisch |
+| Weitere | Ebener und räumlicher Seilroboter, Auf- und Abwickler mit Tänzer, Mover-Strecke mit Linearmotoren (unabhängige Mover auf geschlossener Bahn), Scherenhubtisch |
 
 Antriebe: permanenterregte Servomotoren, Schrittmotoren, Asynchronmotoren (U/f oder feldorientiert) und Pneumatikzylinder. Neue Maschinen lassen sich ohne Programmieren in einer [Maschinendatei](maschinendateien.md) beschreiben.
 

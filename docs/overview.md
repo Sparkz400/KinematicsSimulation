@@ -91,6 +91,7 @@ winder	Winder and unwinder with dancer
 hexapod-rotary	Six-axis platform on cranks (6-RSS, rotary actuators)
 geneva-drive	Indexing table with Geneva drive
 cam-indexer	Indexing table with cam index drive
+mover-track	Mover track (independent movers on a closed loop)
 ```
 
 A machine file is run like a registered machine: `sim-cli verdicts --machine-file machines/h-bot.toml`, or `sim-app --machine-file machines/h-bot.toml`.

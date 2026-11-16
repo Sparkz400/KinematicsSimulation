@@ -34,7 +34,7 @@ Sizing spreadsheets treat a machine as rigid masses and constant efficiencies. T
 | Delta and parallel robots | 3-arm delta, 4-axis delta, Quattro-type, planar delta, linear delta, parallel SCARA, hexapod (cylinders and cranks), tripod |
 | Arms | Six-axis arm from URDF (also on a linear track), SCARA, palletiser, R-theta-Z wafer handler |
 | Crank and cam | Servo press, toggle press, rotary knife, flying saw, disc cam, indexing table (Geneva drive, cam index drive) |
-| Other | Planar and spatial cable robots, winder with dancer, scissor lift |
+| Other | Planar and spatial cable robots, winder with dancer, linear-motor mover track (independent movers on a closed loop), scissor lift |
 
 Drives: permanent-magnet servo motors, steppers, induction motors (V/f or field-oriented) and pneumatic cylinders. New machines can be described in a [machine file](docs/machine-files.md) without writing code.
 
