@@ -705,7 +705,7 @@ pub fn import(text: &str, mapping: &Mapping) -> Result<Imported, TraceError> {
     let count = count as usize;
     let grid: Vec<f64> = (0..count).map(|i| from + i as f64 * step).collect();
     let on_grid = |s: &Option<(Vec<f64>, Vec<f64>)>| s.as_ref().map(|(t, v)| resample(t, v, &grid));
-    let mut trace = Trace { time: grid.iter().map(|t| t - from).collect(), motors: Vec::new() };
+    let mut trace = Trace { time: grid.iter().map(|t| t - from).collect(), ..Trace::default() };
     let mut torque_setpoints = Vec::new();
     for k in 0..mapping.motors.len() {
         let angle = on_grid(&signals[5 * k + 1]).expect("angle");

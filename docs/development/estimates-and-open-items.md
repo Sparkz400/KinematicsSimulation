@@ -24,6 +24,7 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 
 | What | Where | Why it is only a choice | Closing it |
 | --- | --- | --- | --- |
+| `PER_AXIS_SPREAD` = 5 % chooses between the fit per axis and the fit in the motors' coordinates (T-gantry 3.9/4.5 %, disc cam 4.1/6.2 % with/without payload) | `trace.rs` | A threshold; since 17 November it only chooses the fit: the per-axis mass error holds how far the config's inertia strays from one mass over the trace's poses and axis couplings (`AxisFit::mass_spread`, advice `fit-mass-spread` where it is the larger part). Disc cam without payload, disc 0.002 kg m² heavier: +0.002024 ± 0.000249 kg m² (spread 2.49e-4; 8 errors off without it); with payload (motor fit) +2.022e-5 ± 3.9e-8 kg m² at the motor against 2.0e-5 through ratio 10 (the gearbox's 0.97 efficiency not separated); T-gantry spread 1.2e-4 / 0.9e-4 kg on x / z for the shipped cycle (its axes move one at a time) | The spread is the config's model, not measured: check on a measured machine whose inertia varies |
 
 ## 3. Behaviour assumed without the manual
 
@@ -44,11 +45,6 @@ result is in, treat **every number below as unverified**.
 
 | What the model leaves out | Where | Size of the error | Why it was left | Closing it |
 | --- | --- | --- | --- | --- |
-| The flange's spin on a path of an arm with seven tool axes (arm on track): its lines are not slerps, so `path::plan_within` bounds only the rotation vector's rates there | `path.rs` (`shape`, `plan_within`) | as before the fix: up to 1.27 times the limit at the home | Only six-axis tool poses turn by slerp | Slerp the orientation whatever axes stand beside it |
-| The ram's acceleration of the toggle press leaves out the stretch's share that follows the crank's jerk, where the press force fades as the ram rises (in the press zone going down it is the derivative of `ram.speed`) | `toggle.rs` (`signals`) | only in the fade-out band of `process.smoothing_m_s` | The signals get no jerk | Pass the jerk, or difference the speed signal over time |
-| The torque-band monitor expects the friction at the planned speed (characteristic or `steady_friction`), none at rest: a breakaway or stiction at a standstill is not expected | `control.rs` (`setpoints`), `fault.rs` | up to the breakaway torque at a reversal or a start | `steady_friction` is a sliding level | Expect the breakaway band at zero speed, or widen the band there |
-| The DC link's running account keeps every stretch until the link first empties or fills; a link that does neither over a long run (net zero power at rest, no braking reaching its room) still keeps them all. The room is the run's config's; a verdict with another room falls back to `regeneration_events`, which a run leaves empty | `analysis.rs` (`LinkAccount`, `Tally`) | none in the shipped runs (the T-gantry's and the single axis's figures unchanged) | Exact for every room needs the whole list | Merge stretches below a share of the room once that has no merge |
-| The H4's small-amplitude modes take Dahl's σ as K1 (√2 above `modes`), as the D3's do | `machine-delta-h4/src/lib.rs` (`modes_at`), `mech.rs` | unknown; no maker publishes the loop's shape | Ships with hysteresis 0, so nothing changes today | A measured hysteresis loop, then σ as a config key |
 | Pre-existing estimates the audit did not judge: tooth-jump factor, brake deflection and slip times, the efficiency fade constant 0.5 W, placeholder drive currents in shipped configs | `mech.rs`, shipped `default.toml` files | unknown | Outside the audit's reach without measurements | Measure, or mark each in its config comment |
 | The belt's mass run by run is in the T-gantry and in every machine file whose belt runs move over ground (H-bot, CoreXY, XYZ and C portal, dual and rack gantry); the dual gantry's runs do not move with the bridge's yaw | `machines/dual-gantry.toml` | the yaw's inertia of the 0.11 kg belt at its lever, under 0.1 % | A span's speed over ground is constant per axis speed; the yaw's lever depends on the pose | Let a span's speed depend on the pose |
 | The guide load's acceleration (`commanded_acc`) leaves the belt's runs out, as it leaves chains and idlers | `sim-netlist/src/machine.rs` | the H-bot's X: 0.32 kg on 11 kg, 3 % of the tilt | The crates take it the same way; the true acceleration would make friction depend on itself | Add `runs_mass` in file and crates together |
@@ -62,6 +58,14 @@ result is in, treat **every number below as unverified**.
   match the program (before this batch already), and the batch changes more numbers. They are
   regenerated after the suite is green.
 - `docs/validation.md`: rows 212 and 214 still quote the old T-gantry mode numbers.
+- `docs/validation.md` and `docs/model-reference.md`: run figures re-run on 17 November 2026 (ball screw checks, friction
+  feedforward table and margins, EXCT-30 margins, compliant base, arm bending, corners, spline, optimiser, budget, part
+  heating). Not reproduced: the ball screw's sine cut to 0.1 to 19.9 s (the CLI cuts no trace) and the step-by-step
+  history of its table; the D3's 41.5 → 27.2 Hz at the pick (pose not given); the rounded-lift search (300 runs);
+  "0.67 N m now" in the inertia breakdown (its setup not given; `analyze t-gantry` peaks at 0.559 N m); the margins of
+  the switched-on configs other than knife, T-gantry and D4. `docs/config-reference.md` (corner figures 1.306 / 0.978 /
+  0.920 s, now 1.262 s and 0.869 / 0.888 s) and `docs/user-guide.md` (delta line 0.434 s, now 0.412 s with the SP+ 100's
+  278 N m; optimiser 3.44 s, now 2.344 s) still have the old ones.
 - `docs/de/*`: not checked for the statements changed in the English docs (modes, belt mass, ramp share).
 - `docs/fmi.md`: the validation logs are from 14 November 2026.
 

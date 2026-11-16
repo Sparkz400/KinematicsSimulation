@@ -419,6 +419,7 @@ fn the_fit_window_is_the_longest_its_lifts_allow_down_to_its_lowest_mode() {
                 MotorTrace { setpoint: vec![angle; 6001], angle: vec![angle; 6001], speed, torque: vec![0.0; 6001] }
             })
             .collect(),
+        ..Trace::default()
     };
     let long = trace(100);
     close(smoothing_span(&d, &long), 0.038, 1e-9, "100 ms runs");

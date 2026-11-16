@@ -67,8 +67,10 @@ pub fn per_axis_fit(machine: &dyn sim_core::Machine) -> bool {
 }
 
 /// How far the torques per unit of an axis's acceleration may differ across the range for the fit per axis
-/// (`per_axis_fit`), of the largest: the fitted mass is then their mean over the trace, and what differs from it is in
-/// the trace's and the replay's residual alike. The T-gantry's belt (its runs on the vertical posts and its share in the
+/// (`per_axis_fit`), of the largest: the fitted mass is then their mean over the trace, and how far the inertia strays
+/// from it over the trace's poses is in the mass's error (`AxisFit::mass_spread`), so this only chooses which of the two
+/// fits answers, and both answer honestly on either side of it (the disc cam per axis without its payload and in its
+/// motor's coordinates with it, `a_mass_that_varies_over_the_poses_carries_its_spread_in_its_error`). The T-gantry's belt (its runs on the vertical posts and its share in the
 /// Z axis's moves) changes its torques by up to 3.9 % over the range (4.5 % without the payload); the other machines
 /// fitted per axis by 0; the disc cam by 6.2 % (4.1 % without the payload, so its config without one is fitted per
 /// axis); the slider-crank, the SCARA, the indexers' cams and the arm by 40 % and more.
@@ -93,6 +95,10 @@ impl MotorTrace {
 pub struct Trace {
     pub time: Vec<f64>,
     pub motors: Vec<MotorTrace>,
+    /// Per axis the tool's speed and acceleration setpoints row by row, where the trace carries them (a file written by
+    /// a run: `axis.<id>.velocity_setpoint`, `.acceleration_setpoint`); empty for a drive's trace. `replay` then runs
+    /// the setpoints the run had, not the slopes between the rows.
+    pub tool_rates: Vec<[Vec<f64>; 2]>,
 }
 
 /// The named columns of a CSV table with a header line. A unit in brackets after a column's name is
@@ -148,7 +154,25 @@ impl Trace {
             .iter()
             .map(|_| MotorTrace { setpoint: next(), angle: next(), speed: next(), torque: next() })
             .collect();
-        Ok(Self { time, motors })
+        // The axes' speed and acceleration setpoints, where every axis named in the header has both.
+        let header: Vec<&str> = text
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .split(',')
+            .map(|h| h.split('[').next().unwrap_or("").trim())
+            .collect();
+        let axes: Vec<&str> =
+            header.iter().filter_map(|h| h.strip_prefix("axis.")?.strip_suffix(".position")).collect();
+        let names: Vec<String> = axes
+            .iter()
+            .flat_map(|a| ["velocity_setpoint", "acceleration_setpoint"].map(|n| format!("axis.{a}.{n}")))
+            .collect();
+        let tool_rates = match columns(text, &names) {
+            Ok(found) if !axes.is_empty() => found.chunks(2).map(|c| [c[0].clone(), c[1].clone()]).collect(),
+            _ => Vec::new(),
+        };
+        Ok(Self { time, motors, tool_rates })
     }
 
     /// Adds the present state of a simulation as one row, with the values a run writes to CSV.
@@ -186,8 +210,11 @@ pub const RUN_UP_S: f64 = 0.25;
 /// The setpoints become tool poses (the machine's forward transformation) and run as `Command::Trajectory`,
 /// so the simulator's own controller makes the speed and torque feedforward from them, as it does for any
 /// path. With a row per profile cycle the position setpoints are reproduced exactly; the speed and
-/// acceleration setpoints are slopes between rows. Behind the last row the motion carries on (below): the trace's end
-/// is not forced to rest.
+/// acceleration setpoints are slopes between rows. Where the trace carries the tool's speed and acceleration setpoints
+/// (`Trace::tool_rates`, a file written by a run), they run with the poses as `Command::RatedTrajectory`, and the replay
+/// has the run's own setpoints at every row: the slopes were off by up to jerk x row, which moved what the fit finds on
+/// a run's own trace by up to 0.63 % (11 of its standard errors on the hexapod). Behind the last row the motion carries
+/// on (below): the trace's end is not forced to rest.
 pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace, TraceError> {
     // The rows are a stream, interpolated between neighbours as a drive does (the Hermite cubic, whatever the config's
     // `profile.trajectory_spline`): the C2 spline, clamped at rest at the end of the run-out below, rang back over
@@ -235,15 +262,27 @@ pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace
     // gravity twists its gears or stretches its belts or cables (`Controller::command`): the run-up starts there and
     // takes the difference up along a smoothstep, so the setpoint does not step.
     let rest = sim.control.planned_pos().to_vec();
-    // Smootherstep of the speed, integrated: s(u) = 2.5 u^4 - 3 u^5 + u^6, 1/2 at u = 1.
-    let mut points: Vec<(f64, Vec<f64>)> = (0..run_up)
+    // Smootherstep of the speed, integrated: s(u) = 2.5 u^4 - 3 u^5 + u^6, 1/2 at u = 1; with its speed and acceleration
+    // (`rates`, for a trace that carries its own).
+    let (mut points, mut rates): (Vec<(f64, Vec<f64>)>, Vec<[Vec<f64>; 2]>) = (0..run_up)
         .map(|k| {
             let u = k as f64 / (run_up - 1) as f64;
-            let way = span * (2.5 * u.powi(4) - 3.0 * u.powi(5) + u.powi(6));
-            let blend = 1.0 - u * u * u * (10.0 - 15.0 * u + 6.0 * u * u);
-            (k as f64 * step, (0..from.len()).map(|i| from[i] + speed[i] * way + (rest[i] - from[i]) * blend).collect())
+            let way = [
+                span * (2.5 * u.powi(4) - 3.0 * u.powi(5) + u.powi(6)),
+                10.0 * u.powi(3) - 15.0 * u.powi(4) + 6.0 * u.powi(5),
+                (30.0 * u * u - 60.0 * u.powi(3) + 30.0 * u.powi(4)) / span,
+            ];
+            let blend = [
+                1.0 - u * u * u * (10.0 - 15.0 * u + 6.0 * u * u),
+                -(30.0 * u * u - 60.0 * u.powi(3) + 30.0 * u.powi(4)) / span,
+                -(60.0 * u - 180.0 * u * u + 120.0 * u.powi(3)) / (span * span),
+            ];
+            let at = |d: usize| (0..from.len()).map(|i| speed[i] * way[d] + (rest[i] - from[i]) * blend[d]).collect();
+            let pose: Vec<f64> =
+                (0..from.len()).map(|i| from[i] + speed[i] * way[0] + (rest[i] - from[i]) * blend[0]).collect();
+            ((k as f64 * step, pose), [at(1), at(2)])
         })
-        .collect();
+        .unzip();
     // A row holds the setpoint the drive worked with up to the row's time (a run writes a row before it
     // computes the step at that time). So each row is commanded one row earlier: the first row, the start, ends the
     // run-up, and row i follows at the run-up's end plus the time from row 1 to row i + 1. Without a run-up, row 1 is
@@ -253,14 +292,26 @@ pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace
         let setpoint: Vec<f64> = trace.motors.iter().map(|m| m.setpoint[i]).collect();
         (offset + trace.time[i] - trace.time[1], pose_of(&setpoint))
     }));
+    let rated = trace.tool_rates.len() == from.len() && trace.tool_rates.iter().all(|r| r[0].len() == rows);
+    let rate = |d: usize, i: usize| trace.tool_rates.iter().map(|r| r[d][i]).collect::<Vec<f64>>();
+    rates.extend((1..rows).map(|i| if rated { [rate(0, i), rate(1, i)] } else { Default::default() }));
     // A trajectory ends at rest, a trace may end in motion. Two more points, carrying on with the last
     // rows' speed and acceleration, put the stop and the piece of curve that bends towards it behind
     // the last row.
     for _ in 0..2 {
         let [a, b, c] = [1, 2, 3].map(|back| &points[points.len() - back]);
-        points.push((2.0 * a.0 - b.0, (0..a.1.len()).map(|i| 3.0 * a.1[i] - 3.0 * b.1[i] + c.1[i]).collect()));
+        let (time, gap) = (2.0 * a.0 - b.0, a.0 - b.0);
+        points.push((time, (0..a.1.len()).map(|i| 3.0 * a.1[i] - 3.0 * b.1[i] + c.1[i]).collect()));
+        let [v, acc] = rates[rates.len() - 1].clone();
+        rates.push([v.iter().zip(&acc).map(|(v, a)| v + a * gap).collect(), acc]);
     }
-    sim.command(Command::Trajectory(points)).map_err(|e| TraceError { key: e.key, detail: String::new() })?;
+    let command = if rated {
+        let (speeds, accelerations) = rates.into_iter().map(|[v, a]| (v, a)).unzip();
+        Command::RatedTrajectory(points, speeds, accelerations)
+    } else {
+        Command::Trajectory(points)
+    };
+    sim.command(command).map_err(|e| TraceError { key: e.key, detail: String::new() })?;
     let mut out = Trace::default();
     for time in &trace.time {
         while sim.step < ((time - trace.time[0] + offset) / sim.dt).round() as u64 {
