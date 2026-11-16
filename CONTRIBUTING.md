@@ -74,7 +74,7 @@ red one hides none of the others; Windows and Linux each:
   keeps its `junit.xml` as an artifact `junit-<os>-<k>`; `python tools/slow_tests.py junit-*/junit.xml` writes the slow
   list from them as from a local full run (CI's runners have 4 cores, so the times are longer than on 16 threads).
 - `plc`: the OPC UA tests that run against the wall clock, one at a time.
-- `sweeps` (main only): the long sweeps in four groups, the last taking every sweep the others do not name.
+- `sweeps` (main only): the long sweeps in eleven groups (the slowest machines each alone), the last taking every sweep the others do not name.
 - `doctests`, `fmu` (the FMU check with fmpy), `python` (wheel, clippy of sim-py, pytest with one worker per core,
   CAD mass tests), `deny`, `wasm`.
 

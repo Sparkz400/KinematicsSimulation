@@ -176,8 +176,11 @@ jobs:
 
   # On a push to main: what every profile leaves out, the long sweeps of the velocity loops' margins across the bounds
   # and the EXCT-30's worst corner. Each spreads its runs over every core, so one at a time on a runner, and the
-  # longest apart: 27 minutes for the D4 alone on 4 cores (14 November 2026), 89 minutes for all of them. The last
-  # group takes every sweep the others do not name, so that a new one is run, not left out.
+  # longest apart: 27 minutes for the D4 alone on 4 cores (14 November 2026), where it takes 7.4 minutes on the 16
+  # threads of the machine all of them were timed on (16 November 2026: the rotary hexapod 12.1 minutes, the platform
+  # on cables in space 12.5, the hexapod and the four-arm delta 10.2, the arm on its track 8.9; so some 45 minutes
+  # each on a runner, estimated, not measured). The last group takes every sweep the others do not name, so that a
+  # new one is run, not left out.
   sweeps:
     needs: build
     if: ${{ !cancelled() && github.event_name == 'push' }}
@@ -192,16 +195,27 @@ jobs:
             filter: test(=across_the_bounds::urdf_arm) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
           - name: delta-d3-and-scara
             filter: test(=across_the_bounds::delta_d3) | test(=across_the_bounds::scara)
+          - name: hexapod-rotary
+            filter: test(=across_the_bounds::hexapod_rotary)
+          - name: cable-spatial
+            filter: test(=across_the_bounds::cable_spatial)
+          - name: hexapod
+            filter: test(=across_the_bounds::hexapod)
+          - name: delta-h4
+            filter: test(=across_the_bounds::delta_h4)
+          - name: arm-on-track-and-tripod
+            filter: test(=across_the_bounds::arm_on_track) | test(=across_the_bounds::tripod)
+          - name: palletiser-and-parallel-scara
+            filter: test(=across_the_bounds::palletiser) | test(=across_the_bounds::parallel_scara)
+          - name: wafer-handler-and-cable-planar
+            filter: test(=across_the_bounds::wafer_handler) | test(=across_the_bounds::cable_planar)
           - name: the-rest
             filter: >-
-              ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/))
-              | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))
-              & not (test(=across_the_bounds::delta_d4) | test(=across_the_bounds::urdf_arm)
-              | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
-              | test(=across_the_bounds::delta_d3) | test(=across_the_bounds::scara))
+              (package(sim-machines) & binary(control) & test(/^across_the_bounds::/))
+              & not test(/^across_the_bounds::(delta_d4|urdf_arm|delta_d3|scara|hexapod_rotary|cable_spatial|hexapod|delta_h4|arm_on_track|tripod|cable_planar|palletiser|parallel_scara|wafer_handler)$/)
     name: sweeps (${{ matrix.os }}, ${{ matrix.group.name }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Linux system libraries
@@ -219,7 +233,7 @@ jobs:
         shell: bash
         run: >-
           cargo nextest run --archive-file tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite
-          --profile ci --ignore-default-filter -E "${{ matrix.group.filter }}" --test-threads 1
+          --profile ci-sweeps --ignore-default-filter -E "${{ matrix.group.filter }}" --test-threads 1
 
   # nextest does not run doctests. They build the workspace's libraries apart from the job "build", in parallel to it.
   doctests:

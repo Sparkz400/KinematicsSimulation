@@ -7,9 +7,7 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
-## [1.0.0] - RELEASE-DATE
-
-<!-- RELEASE-DATE: placeholder, the coordinator writes the date of the v1.0.0 tag here (YYYY-MM-DD). -->
+## [1.0.0] - 2026-11-16
 
 **Release date to be filled in.** The release was cut on 14 November 2026 at 19c2ad1 but not tagged; the three
 blocks below (Added, Changed, Fixed) are the work merged on 15 November 2026 after the cut, in three waves: failing

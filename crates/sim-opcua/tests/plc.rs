@@ -490,7 +490,15 @@ async fn enable_path_and_run_in_one_write_run_the_path() {
         assert!(written.iter().all(|s| s.is_good()));
         plc.carried_out(0.0).await;
         assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
-        assert!(plc.busy().await, "{}: the path does not run", entry.id);
+        // Busy, or there already: where the simulator's ticks take 0.1 s of simulated time each (the platform on cables
+        // in space), a short way to the middle was run within the two ticks `carried_out` waits (seen on 16 November
+        // 2026 on a quiet host, after the test had passed the run before).
+        let busy = plc.busy().await;
+        let setpoints = plc
+            .numbers(&axes.iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect::<Vec<_>>())
+            .await;
+        let there = axes.iter().zip(&setpoints).all(|(a, s)| (s - 0.5 * (a.min + a.max)).abs() < 1e-6);
+        assert!(busy || there, "{}: the path does not run, setpoints {setpoints:?}", entry.id);
     }
 }
 
