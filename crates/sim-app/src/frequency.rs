@@ -207,13 +207,14 @@ mod tests {
         assert!((m.gain_margin_db - 1.984).abs() < 0.01, "{m:?}");
     }
 
-    /// The measurement on the single axis: a response per motor, refined beyond the 60 points of
-    /// `loop_frequencies`, the margins `sim-cli margins` prints (61.2 degrees, 11.56 dB). With friction on, the plant at
+    /// The measurement on the first registered machine with one motor (a belt axis): a response per motor, refined
+    /// beyond the 60 points of `loop_frequencies`, the margins `sim-cli margins` prints for it (61.2 degrees, 11.56 dB). With friction on, the plant at
     /// 10 Hz leads (+47 degrees): at a tenth of the rated torque the LuGre bristles hold the axis like a spring. Without
     /// friction it is the inertia far below the belt's resonance: speed lags torque by 90 degrees (within 5).
     #[test]
-    fn the_single_axis_is_measured_with_its_margins_and_an_inertia_for_a_plant() {
-        let entry = sim_machines::find("single-axis").unwrap();
+    fn a_one_motor_belt_axis_is_measured_with_its_margins_and_an_inertia_for_a_plant() {
+        let motors = |e: &MachineEntry| (e.build)(&e.config()).unwrap().motors().len();
+        let entry = sim_machines::MACHINES.iter().copied().find(|e| motors(e) == 1).unwrap();
         let progress = Progress::default();
         let response = measure(entry, &entry.config(), &progress).unwrap();
         assert_eq!(response.curves.len(), 1);
