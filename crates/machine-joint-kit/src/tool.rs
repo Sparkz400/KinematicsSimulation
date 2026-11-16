@@ -188,6 +188,11 @@ pub struct Pose {
     /// Which of x, y, z, rx, ry, rz the tool's axes are, in that order.
     pub axes: Vec<usize>,
     home: Vec<f64>,
+    /// Where a redundant arm's null space moves the joints, and the weight of each joint's distance from there: the home
+    /// with 1 each (`kinematics.redundancy = "home"`), or the middle of each joint's range with (the narrowest range /
+    /// its range)^2 (`"joint_limits"`, `away_from_limits`).
+    goal: Vec<f64>,
+    weight: Vec<f64>,
     /// The flange's orientation at zero joints, which the tool's orientation is the turn from.
     zero_rot: M3,
     /// The length that weighs turns against travels (m per rad): the flange's distance from joint 2 at the home pose.
@@ -209,7 +214,28 @@ impl Pose {
             && (n == axes.len() || n == axes.len() + 1)
             && pose.windows(2).all(|w| w[0] < w[1])
             && pose.iter().all(|a| *a < 6);
-        fits.then(|| Self { axes, zero_rot: fk(&vec![0.0; n]).0, home, length, max_condition, last: Mutex::new(None) })
+        fits.then(|| Self {
+            axes,
+            zero_rot: fk(&vec![0.0; n]).0,
+            goal: home.clone(),
+            weight: vec![1.0; n],
+            home,
+            length,
+            max_condition,
+            last: Mutex::new(None),
+        })
+    }
+
+    /// A redundant arm's spare joint kept away from the joints' stops (`kinematics.redundancy = "joint_limits"`): the
+    /// null space moves the joints towards the middles m of their `ranges` (lower, upper), each weighed by w = (s_min /
+    /// s)^2, s its range: the solution is the pose's nearest to the middles in sum w (q - m)^2, the joints' offsets
+    /// from their middles as shares of their ranges (Liegeois 1977, the gradient of that sum projected into the null
+    /// space). The weights are at most 1, so a step is no larger than the home's.
+    pub fn away_from_limits(mut self, ranges: &[(f64, f64)]) -> Self {
+        let narrowest = ranges.iter().map(|(a, b)| b - a).fold(f64::INFINITY, f64::min);
+        self.goal = ranges.iter().map(|(a, b)| 0.5 * (a + b)).collect();
+        self.weight = ranges.iter().map(|(a, b)| (narrowest / (b - a)).powi(2)).collect();
+        self
     }
 
     fn redundant(&self) -> bool {
@@ -266,9 +292,10 @@ impl Pose {
 
     /// Damped least squares from `q` towards the weighted coordinates `target` until what is left is below `tol` (m),
     /// at most `steps` iterations: dq = J^T (J J^T + lambda^2 I)^-1 e, lambda 1 mm. A redundant arm also moves within
-    /// the null space of J towards the home, dq += (I - J^T (J J^T)^-1 J) (home - q), until that move is below 1e-11
-    /// rad: there the joints are the nearest to the home of all nearby that reach the pose (the null space part of
-    /// home - q is zero). `false` where it does not get there.
+    /// the null space of J towards the goal (the home, or the middles of the joints' ranges: `away_from_limits`),
+    /// dq += (I - J^T (J J^T)^-1 J) W (goal - q), until that move is below 1e-11 rad: there the joints are the nearest
+    /// to the goal (in the weights W) of all nearby that reach the pose (the null space part of W (goal - q) is zero).
+    /// `false` where it does not get there.
     fn settle(&self, fk: Forward, q: &mut [f64], target: &[f64], tol: f64, steps: usize) -> bool {
         let (m, n) = (self.axes.len(), q.len());
         // The Jacobian is kept while the error falls to a tenth each iteration (a step of a few micrometres changes it
@@ -296,7 +323,7 @@ impl Pose {
             };
             let mut drift = 0.0;
             if self.redundant() {
-                let z: Vec<f64> = (0..n).map(|k| self.home[k] - q[k]).collect();
+                let z: Vec<f64> = (0..n).map(|k| self.weight[k] * (self.goal[k] - q[k])).collect();
                 let jz: Vec<f64> = (0..m).map(|r| (0..n).map(|k| j[r * n + k] * z[k]).sum()).collect();
                 let Some(back) = Self::through(&j, m, n, &jz, 0.0) else { return false };
                 for k in 0..n {

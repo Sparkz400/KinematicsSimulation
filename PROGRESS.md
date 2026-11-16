@@ -4358,3 +4358,22 @@ Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries a
   the motors held; machine files that follow their crates' friction feedforward.
 - Last full run in this period: 1533 of 1538 tests passed at 54a2fca, before wave 3; the final count is a placeholder
   in docs/validation.md.
+
+## Indexing table and the redundant arm's joint limits (16 November 2026)
+
+- **Indexing table** (`machine-crank-cam` `indexer.rs`, machines `geneva-drive` and `cam-indexer`): a table of six
+  stations stepped by a Geneva wheel of six slots (pin on a 60 mm crank, centre distance 120 mm) or by a cam index drive
+  (modified sine over 120 degrees), both behind a planetary gearbox of 20; the wheel's exact angle, speed and
+  acceleration, the acceleration step tan(pi / n) theta'^2 at the pin's entry and exit (the crank does not feel it, the
+  wheel and the pin do), the pin's force across the slot, the index accuracy from the locking disc's play, and the
+  table's settling after each index from its twist mode (exact oscillator steps through the index). Tests in
+  `src/indexer_tests.rs`: the dwell share (n + 2) / (2n) (the task's (n - 2) / (2n) is the motion's share), peak speed
+  and acceleration ratios for n = 4, 6, 8, the modified sine's 5.528 and 1.760, the entry step's torque and force by hand,
+  the ring after an index (Geneva 6.27e-5 rad and 12.5 ms against the cam's 8.96e-6 rad), both standard suites, every
+  verdict of the shipped and the cam-running configs. Shipped verdicts: servo cycle contact force 1103 of 1500 N, settling
+  66 ms of 100 ms on the Geneva; the cam indexer settles within the tolerance.
+- **Redundant arm** (`machine-joint-kit` `tool.rs`): the seven-axis URDF arm already solved its spare joint by damped
+  least squares with null-space motion towards its home, and its dynamics are compared with MuJoCo; new is
+  `kinematics.redundancy = "joint_limits"`, the null space towards the joints' range middles weighed by (s_min / s)^2,
+  in every config that has `home_joints` (shipped as "home"). Test:
+  `the_seven_joint_arm_can_spend_its_spare_joint_on_staying_off_its_stops`.

@@ -250,6 +250,10 @@ tool_space = true
 home_joints = [2.0, 0.0, 0.4, 0.2, 0.0, 0.97, 0.0]
 # The tool's axes in tool space: "j1", the track, then x, y, z, rx, ry, rz.
 tool_axes = ["j1", "x", "y", "z", "rx", "ry", "rz"]
+# What a redundant arm (a joint more than tool axes) spends its spare joint on, in tool space: "home" keeps the
+# joints nearest home_joints, "joint_limits" nearest the middles of their ranges (each offset as a share of its
+# range), off their stops.
+redundancy = "home"
 
 # In tool space: the range of the track (m), of x, y, z (m) and rx, ry, rz (rad, the turn from the flange's orientation
 # at zero joints, the base frame's), the flange pointing down (ry = pi/2) by up to 0.6 rad each way, ahead of the arm

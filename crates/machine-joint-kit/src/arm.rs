@@ -522,7 +522,14 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
                 let fk = |q: &[f64]| arm.tip(q);
                 let full = arm.full(&home);
                 let length = turn_length(arm.chain.tip(&full).1, arm.chain.frames(&full)[1.min(u - 1)].1);
-                let pose = Pose::new(&fk, home, picked.clone(), length, max_condition).ok_or_else(refuse)?;
+                let mut pose = Pose::new(&fk, home, picked.clone(), length, max_condition).ok_or_else(refuse)?;
+                match cfg.get("kinematics.redundancy")?.as_str() {
+                    Some("home") => {}
+                    Some("joint_limits") => {
+                        pose = pose.away_from_limits(&joints.iter().map(|j| j.0.range).collect::<Vec<_>>());
+                    }
+                    _ => return Err(ConfigError::Invalid("kinematics.redundancy".into())),
+                }
                 arm.tool = Tool::Pose(pose);
                 let first = (AXIS_IDS[0], JOINT_KEYS[0], if arm.prismatic[0] { "m" } else { "rad" });
                 picked.iter().map(|&a| if a == FIRST_JOINT { first } else { POSE_AXES[a] }).collect()

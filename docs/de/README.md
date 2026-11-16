@@ -105,6 +105,8 @@ toggle-press	Kniehebelpresse
 arm-on-track	Sechsachsroboter auf Linearschiene (URDF, Zahnstange)
 winder	Auf- und Abwickler mit Tänzer
 hexapod-rotary	Sechsachsige Plattform auf Kurbeln (6-RSS, Drehantriebe)
+geneva-drive	Rundschalttisch mit Malteserkreuzgetriebe
+cam-indexer	Rundschalttisch mit Kurvenschrittgetriebe
 ```
 
 Alle Befehle schreiben CSV auf die Standardausgabe oder mit `--out FILE` in eine Datei. Meldungen und Fehler gehen auf die Fehlerausgabe. Die Spaltennamen der CSV-Ausgabe sind englische Bezeichner und werden nicht übersetzt. Beispiele zu jeder Aufgabe, jedes getestet: [examples/README.md](../../examples/README.md) (englisch).

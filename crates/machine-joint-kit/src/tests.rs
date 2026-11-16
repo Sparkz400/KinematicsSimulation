@@ -1136,8 +1136,18 @@ fn the_seven_joint_arm_reaches_a_pose_nearest_its_home_posture() {
     let mut back = [0.0; 6];
     pose.forward(&fk, &q, &mut back);
     assert!(back.iter().zip(&target).all(|(a, b)| (a - b).abs() < 1e-9), "{back:?} against {target:?}");
-    // The null space: J (6 x 7, of the tool's axes, by central differences), n = (I - J^T (J J^T)^-1 J) e for the e of
-    // the joint the null space is largest along.
+    let n = null_direction(&pose, &fk, &q);
+    let size = n.iter().map(|v| v * v).sum::<f64>().sqrt();
+    assert!(size > 0.1, "a null space of {size}");
+    let along: f64 = (0..7).map(|k| n[k] / size * (q[k] - home[k])).sum();
+    let off: f64 = (0..7).map(|k| (q[k] - home[k]).powi(2)).sum::<f64>().sqrt();
+    assert!(off > 0.05 && along.abs() < 1e-6 * off.max(1.0), "{along} rad of {off} along the null space");
+}
+
+/// The direction of the seven-joint arm's null space at joints `q`: J (6 x 7, of the tool's axes, by central
+/// differences), n = (I - J^T (J J^T)^-1 J) e for the e of the joint the null space is largest along.
+fn null_direction(pose: &tool::Pose, fk: tool::Forward, q: &[f64; 7]) -> Vec<f64> {
+    let q = *q;
     let jac: Vec<f64> = {
         let mut j = vec![0.0; 42];
         for c in 0..7 {
@@ -1159,15 +1169,56 @@ fn the_seven_joint_arm_reaches_a_pose_nearest_its_home_posture() {
         let y = sim_components::chain::solve(&jjt, &je).unwrap();
         (0..7).map(|k| if k == e { 1.0 } else { 0.0 } - (0..6).map(|r| jac[r * 7 + k] * y[r]).sum::<f64>()).collect()
     };
-    let n = (0..7)
+    (0..7)
         .map(null)
         .max_by(|a, b| a.iter().map(|v| v * v).sum::<f64>().total_cmp(&b.iter().map(|v| v * v).sum()))
-        .unwrap();
+        .unwrap()
+}
+/// `kinematics.redundancy = "joint_limits"` on the seven-joint URDF: the pose of
+/// `the_seven_joint_arm_reaches_a_pose_nearest_its_home_posture` is reached to 1e-9 as well, and the spare joint now
+/// keeps the joints nearest the middles m of their ranges s, weighed (s_min / s)^2 (s_min = 3.8 rad of joint 4): the
+/// weighted offset W (q - m) has no part along the null space, and its sum sum w (q - m)^2 is below the home solution's.
+/// The machine built with the key solves the same joints (its motors over the gear ratios).
+#[test]
+// The URDF's limits as written, 6.28 among them.
+#[allow(clippy::approx_constant)]
+fn the_seven_joint_arm_can_spend_its_spare_joint_on_staying_off_its_stops() {
+    let mut cfg = tool_config(&URDF_ARM, ARM7_TOOL_CONFIG);
+    let chain = arm::chain(&cfg).unwrap();
+    let home = cfg.f64s("kinematics.home_joints").unwrap();
+    let fk = |q: &[f64]| chain.tip(q);
+    // urdf/seven-axis.urdf's limits.
+    let ranges = [(-2.967, 2.967), (-1.571, 2.356), (-2.9, 2.9), (-2.6, 1.2), (-3.3, 3.3), (-2.1, 2.1), (-6.28, 6.28)];
+    let by_home = tool::Pose::new(&fk, home.clone(), vec![0, 1, 2, 3, 4, 5], 0.86, 30.0).unwrap();
+    let off_stops =
+        tool::Pose::new(&fk, home.clone(), vec![0, 1, 2, 3, 4, 5], 0.86, 30.0).unwrap().away_from_limits(&ranges);
+    let mut at_home = [0.0; 6];
+    by_home.forward(&fk, &home, &mut at_home);
+    let target =
+        [at_home[0] - 0.1, at_home[1] + 0.15, at_home[2] - 0.08, at_home[3] + 0.3, at_home[4], at_home[5] - 0.1];
+    let (mut a, mut b) = ([0.0; 7], [0.0; 7]);
+    assert!(by_home.inverse(&fk, &target, &mut a));
+    assert!(off_stops.inverse(&fk, &target, &mut b));
+    let mut back = [0.0; 6];
+    off_stops.forward(&fk, &b, &mut back);
+    assert!(back.iter().zip(&target).all(|(x, y)| (x - y).abs() < 1e-9), "{back:?} against {target:?}");
+    let w: Vec<f64> = ranges.iter().map(|(l, h)| (3.8 / (h - l)).powi(2)).collect();
+    let mid: Vec<f64> = ranges.iter().map(|(l, h)| 0.5 * (l + h)).collect();
+    let cost = |q: &[f64; 7]| (0..7).map(|k| w[k] * (q[k] - mid[k]).powi(2)).sum::<f64>();
+    assert!(cost(&b) < cost(&a) - 1e-3, "{} against the home solution's {}", cost(&b), cost(&a));
+    let n = null_direction(&off_stops, &fk, &b);
     let size = n.iter().map(|v| v * v).sum::<f64>().sqrt();
-    assert!(size > 0.1, "a null space of {size}");
-    let along: f64 = (0..7).map(|k| n[k] / size * (q[k] - home[k])).sum();
-    let off: f64 = (0..7).map(|k| (q[k] - home[k]).powi(2)).sum::<f64>().sqrt();
-    assert!(off > 0.05 && along.abs() < 1e-6 * off.max(1.0), "{along} rad of {off} along the null space");
+    let along: f64 = (0..7).map(|k| n[k] / size * w[k] * (b[k] - mid[k])).sum();
+    assert!(along.abs() < 1e-6, "{along} along the null space");
+    // The machine reads the key and solves the same.
+    cfg.set_text("kinematics.redundancy = \"joint_limits\"").unwrap();
+    let m = (URDF_ARM.build)(&cfg).unwrap();
+    let ratios = cfg.f64s("arm.gear_ratios").unwrap();
+    let mut motors = [0.0; 7];
+    m.inverse(&target, &mut motors);
+    assert!((0..7).all(|k| (motors[k] / ratios[k] - b[k]).abs() < 1e-9), "{motors:?} against {b:?}");
+    cfg.set_text("kinematics.redundancy = \"nearest\"").unwrap();
+    assert!((URDF_ARM.build)(&cfg).is_err());
 }
 
 /// A URDF whose flange points down at zero joints (the five-axis example) works around pointing down: the orientation

@@ -7,6 +7,16 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Added
+
+- Machines `geneva-drive` and `cam-indexer` (crate `machine-crank-cam`): a rotary indexing table of six stations
+  stepped by a Geneva wheel (exact wheel angle, speed and acceleration, the acceleration step at the pin's entry and
+  exit) or by a cam index drive with the modified sine; checks `indexer-contact-force`, `index-accuracy` (the lock's play
+  in the dwell) and `index-settling` (the table's ring after each index).
+- `kinematics.redundancy` for the URDF arms in tool space: `"joint_limits"` spends a redundant arm's spare joint on
+  keeping the joints off their stops (the null space towards the middles of their ranges), `"home"` (as before) on
+  staying near `kinematics.home_joints`.
+
 ## [1.0.0] - 2026-11-16
 
 The release was cut on 14 November 2026 at 19c2ad1 and tagged on 16 November 2026; the three

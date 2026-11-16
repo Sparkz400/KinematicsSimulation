@@ -119,3 +119,4 @@ machine-arm-on-track = Sechsachsroboter auf Linearschiene (URDF, Zahnstange)
 group-track = Schiene: die Führungswagen des Schlittens
 param-block_spacing_m = Abstand der Führungswagen längs der Schienen [m]
 param-rail_spacing_m = Abstand der Schienen [m]
+param-redundancy = Freier Gelenkfreiheitsgrad eines redundanten Arms: „home“ oder „joint_limits“

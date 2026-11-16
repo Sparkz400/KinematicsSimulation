@@ -281,7 +281,11 @@ points (`error-path-torque`): where the motors allow only a crawl it would fill 
   74 us. A redundant arm (seven joints, six axes) spends its spare joint on staying nearest its home posture: each
   iteration also moves within the null space of J, by (I - J^T (J J^T)^-1 J)(home - q), until that move is below 1e-11
   rad; its joint speeds and accelerations are those of the inverse itself, by central differences along the tool's speed
-  and acceleration. The condition number is that of the weighted Jacobian (of its transpose on a redundant arm).
+  and acceleration. With `kinematics.redundancy = "joint_limits"` (`"home"` as shipped) the spare joint keeps the
+  joints off their stops instead: the null space moves them by (I - J^T (J J^T)^-1 J) W (m - q) towards the middles m of
+  their ranges s, W = (s_min / s)², so the arm settles where sum W (q - m)² is least among the poses near it that reach
+  the target (Liégeois 1977), each offset counted as a share of its joint's range. The condition number is that of the
+  weighted Jacobian (of its transpose on a redundant arm).
 
 A line of a path in x, y, z, rx, ry, rz moves the place straight and turns the orientation by slerp (`path`, the
 quaternions' spherical interpolation, Shoemake 1985): about one fixed axis at a steady rate, also between rotation
@@ -342,6 +346,8 @@ into a stroke, and two axes that work on a moving web or bar through an electron
 | `flying-saw` | carriage 40 kg with a saw of 25 kg, material at 1 m/s cut into 1.5 m lengths in a window of 0.2 m | helical pinion on a rack behind a planetary gearbox of ratio 5 | x (m) | `rack-feed-force` |
 | `disc-cam` | disc cam: base circle 60 mm, a roller follower of 2 kg (and a 1 kg tool) lifted 30 mm against its return spring, 60 turns a minute | planetary gearbox of ratio 10 | disc angle (rad) | `disc-contact-force`, `disc-pressure-angle` |
 | `toggle-press` | knuckle-joint press: links of 150 mm in line between crown and ram, a crank of 50 mm pushing the knee through a rod of 250 mm, ram 20 kg and die 8 kg, stroke 57.7 mm, rated 20 kN, press force up to 12 kN | planetary gearbox of ratio 10 | crank angle (rad), 0 at the links' dead centre | `press-capacity`, `upper-link-force`, `lower-link-force`, `rod-force`, `frame-deflection` |
+| `geneva-drive` | rotary indexing table of 6 stations by a Geneva wheel of 6 slots, crank 60 mm, centre distance 120 mm; table 0.4 kg m² with six parts of 0.5 kg at 200 mm; an index a second | planetary gearbox of ratio 20 | crank angle (rad), 0 halfway through an index | `indexer-contact-force`, `index-accuracy`, `index-settling` |
+| `cam-indexer` | the same table stepped by a cam index drive (roller-gear cam, modified sine over 120° of the cam's turn, rollers at 80 mm) | planetary gearbox of ratio 20 | cam angle (rad), 0 halfway through an index | `indexer-contact-force`, `index-accuracy`, `index-settling` |
 
 **Slider-crank.** The slider's distance from the crank's centre is x(θ) = r cos θ + √(l² − r² sin² θ), its speed ratio
 x'(θ) = −r sin θ − r² sin θ cos θ / w with w = √(l² − r² sin² θ), and x''(θ) = −r cos θ − r² cos 2θ / w −
@@ -453,6 +459,53 @@ sim-cli verdicts flying-saw --set cam.run=true --set material.speed_m_s=1.2
 
 The torque and following error come out of the drive model as on every machine; the cams' and the mechanisms' formulas are
 checked by hand in `cam.rs` and `machine-crank-cam`'s tests (below).
+
+### Indexing table: Geneva drive and cam index drive (`geneva-drive`, `cam-indexer`)
+
+A rotary indexing table steps on by one of its n stations per turn of its driver and stands still between (the dwell)
+while the stations work. The joint is the driver's angle theta, 0 halfway through an index; the table's angle phi(theta)
+follows it over |theta - 2 pi k| < h and stands outside, a station on per turn (`src/indexer.rs`).
+
+- **Geneva wheel** (`geneva-drive`): n radial slots, the pin on a crank of radius a entering a slot radially at the centre
+  distance C = a / sin(pi / n). With lambda = sin(pi / n) and x the crank's angle from the line of centres:
+  tan(phi) = lambda sin x / (1 - lambda cos x), phi' = lambda (cos x - lambda) / (1 - 2 lambda cos x + lambda²),
+  phi'' = -lambda (1 - lambda²) sin x / (1 - 2 lambda cos x + lambda²)². The pin is in a slot over 2h = pi - 2 pi / n of
+  the turn: the table moves over (n - 2) / (2n) of it and dwells over (n + 2) / (2n) (n = 6: a third and two thirds; the
+  "(n - 2) / (2n)" sometimes quoted as the dwell is the motion's share). Peak speed ratio lambda / (1 - lambda) (2.414,
+  1, 0.620 for n = 4, 6, 8), peak acceleration ratio 5.41, 1.35, 0.700. The wheel starts and stops at rest but with
+  phi'' = ±tan(pi / n): its acceleration jumps, the jerk is infinite, and the torque on the wheel and the pin's force on
+  the slot step by J tan(pi / n) theta'² (12.5 N m and 121 N on the shipped table at 60 turns a minute). The crank does
+  not feel the step (its torque is J phi' phi'' theta'², phi' = 0 there); the table does. The pin's force is the wheel's
+  torque over its distance from the wheel's centre, C sqrt(1 - 2 lambda cos x + lambda²), across the radial slot. The
+  locking disc holds the wheel during the dwell.
+- **Cam index drive** (`cam-indexer`), the modern alternative: a roller-gear (globoid) cam moves the turret by the
+  modified sine (VDI 2143: a quarter sine of acceleration over the first and last eighth, a half sine of a third the
+  frequency between; peak acceleration 4 pi² / (4 + pi) = 5.528, peak speed 1.760) over `indexer.index_angle_deg` of its
+  turn, and holds it on its dwell ridge over the rest. No step in acceleration at either end: its jerk is finite. The
+  rollers on the turret's pitch radius take the turret's torque over that radius (the cam's pressure angle left out).
+
+The wheel, the table and its parts (`mass.payload_kg` at `table.station_radius_m`) give J(theta) = J_driver + J_t phi'²
+and the speed term J_t phi' phi'' theta'²; the table is horizontal, so gravity does nothing (as process force and frame
+stretch, a switch these machines do not read). **Index accuracy** in the dwell is the lock's: half
+`indexer.locking_play_rad` at the station radius (`index-accuracy` against `ratings.index_max_error_m`), whatever the
+motor's following error, as the locking disc or the dwell ridge holds the table, not the servo. **Settling**: the table
+twists on its shaft against the held wheel (`table.stiffness_nm_rad`, `table.damping_ratio`); through the index its twist
+follows x'' + 2 zeta w_n x' + w_n² x = -phi'' theta'², and the ring left at the index's end dies as exp(-zeta w_n t). The
+signal `table.settling_time` is the time the table rings beyond `ratings.index_settling_tolerance_m` (at the station
+radius) after an index run at the driver's present speed, solved over 2000 steps by the oscillator's exact solution for a
+held force; `index-settling` judges it against `ratings.index_max_settling_s`. On the shipped table (w_n = 603 rad/s,
+zeta 0.03) the Geneva's step leaves 63 µrad, 12.5 µm, settling to 10 µm in 12.5 ms at 60 indexes a minute and 66 ms on
+the servo cycle that runs the index at up to 10 rad/s; the cam indexer's modified sine leaves 9 µrad (its jerk over
+w_n³) and is settled when the index ends. The ring is worked out beside the dynamics, not in them: the drive does not see
+it.
+
+The shipped cycle turns the driver one turn (one index) from the middle of a dwell and back; `config/geneva-drive-cam.toml`
+and `config/cam-indexer-cam.toml` turn it on at 60 turns a minute:
+
+```text
+sim-cli verdicts geneva-drive --config crates/machine-crank-cam/config/geneva-drive-cam.toml
+sim-cli verdicts cam-indexer --set cam.run=true --set indexer.turns_per_min=90
+```
 
 ## Five-bar in the horizontal plane (parallel-scara)
 

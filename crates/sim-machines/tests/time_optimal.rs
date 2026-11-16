@@ -80,7 +80,9 @@ per_machine!(machine_00 0, machine_01 1, machine_02 2, machine_03 3, machine_04 
     machine_24 24,
     machine_25 25,
     machine_26 26,
-    machine_27 27);
+    machine_27 27,
+    machine_28 28,
+    machine_29 29);
 
 #[test]
 fn every_machine_has_its_test() {
