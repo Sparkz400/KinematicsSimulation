@@ -388,7 +388,8 @@ fn run(
 
 /// The load per motor over one pass of the cycle, or over a path or trajectory, as `sim-cli analyze` gives it: a dict
 /// of columns, one row per motor. `points=True` adds "points", per motor an (n, 2) array of speed (rad/s) and torque
-/// (N m) at its operating points.
+/// (N m) at its operating points. The column names are fixed: on a linear motor "*_torque_nm" holds a force in N and
+/// "peak_speed_rad_s" a speed in m/s.
 #[pyfunction]
 #[pyo3(signature = (config, *, path=None, trajectory=None, time_optimal=false, points=false))]
 fn analyze(
@@ -702,7 +703,8 @@ fn sizing(
 
 /// The mechanical frequency response from motor `motor`'s torque to its speed, as `sim-cli sweep` gives it: columns
 /// "frequency_hz", "gain_rad_s_per_nm", "phase_deg" at `count` frequencies spaced logarithmically from `from_hz` to
-/// `to_hz`, with a torque amplitude of `amplitude` N m (the default as the command line's).
+/// `to_hz`, with a torque amplitude of `amplitude` N m (the default as the command line's). On a linear motor the
+/// amplitude is a force in N and "gain_rad_s_per_nm" is in (m/s)/N.
 #[pyfunction]
 #[pyo3(signature = (config, *, motor=0, from_hz=5.0, to_hz=500.0, count=SWEEP_POINTS, amplitude=None))]
 fn sweep(
@@ -1492,7 +1494,8 @@ fn sensitivity(py: Python<'_>, config: &PyConfig, delta: f64, groups: Option<Vec
 
 /// The position setpoints of a drive trace run through the simulator, as `sim-cli replay` runs them: per motor how far
 /// simulated torque and following error are from the measured ones (columns "motor", "torque_rms_nm",
-/// "torque_peak_nm", "following_error_rms_rad", "following_error_peak_rad"), and "overlay": measured and simulated
+/// "torque_peak_nm", "following_error_rms_rad", "following_error_peak_rad"; N and m on a linear motor), and
+/// "overlay": measured and simulated
 /// torque, speed and following error side by side ({"time": ..., "motor.<id>.<quantity>_measured": ..., ...}).
 /// `map_file` maps a vendor export, as for `fit`.
 #[pyfunction]
@@ -1689,9 +1692,9 @@ impl PySim {
     }
 
     /// Runs one controller cycle, or `time` seconds (whole base steps), and returns every signal at its end as
-    /// `{signal id: float}`. At most one of: `torque` (N m per motor: torque mode), `velocity` (rad/s per motor:
-    /// velocity mode), `setpoint` (per tool axis: position mode, interpolated over `profile.setpoint_interval_s` as
-    /// from a PLC). With none, the drives keep their modes and setpoints.
+    /// `{signal id: float}`. At most one of: `torque` (N m per motor, N on a linear motor: torque mode), `velocity`
+    /// (rad/s per motor, m/s on a linear motor: velocity mode), `setpoint` (per tool axis: position mode,
+    /// interpolated over `profile.setpoint_interval_s` as from a PLC). With none, the drives keep their modes and setpoints.
     #[pyo3(signature = (*, torque=None, velocity=None, setpoint=None, time=None))]
     fn step<'py>(
         &mut self,

@@ -128,6 +128,11 @@ impl Args {
 
 fn main() {
     let args = Args(std::env::args().skip(1).collect());
+    if args.flag("--help") || args.flag("-h") {
+        let tr = texts(args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en"), MACHINES[0]);
+        println!("{}", tr.tr("cli-usage"));
+        return;
+    }
     let lang = args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en");
     let entry = machine(&args).unwrap_or(MACHINES[0]);
     let tr = texts(lang, entry);
@@ -214,8 +219,12 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
     match args.positional(0) {
         Some("list") => {
             let lang = args.option("--lang").unwrap_or("en");
+            let mut out = std::io::stdout().lock();
             for entry in MACHINES {
-                println!("{}\t{}", entry.id, translations(lang, entry).tr(entry.key));
+                // A closed pipe (`list | head`) ends the listing quietly.
+                if writeln!(out, "{}\t{}", entry.id, translations(lang, entry).tr(entry.key)).is_err() {
+                    break;
+                }
             }
             Ok(())
         }
@@ -1876,9 +1885,11 @@ fn stop(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let axes = (entry.build)(&cfg)?.axes().to_vec();
     let mut out = output(args, "--out")?;
     let distances: Vec<String> = axes.iter().map(|a| format!("{}_distance[{}]", a.id, a.unit)).collect();
+    // As `stop::study` measures: over the axes in m, or over all of them where none is (then rad).
+    let unit = if axes.iter().any(|a| a.unit == "m") { "m" } else { "rad" };
     writeln!(
         out,
-        "moment,trigger[s],tool_distance[m],stop_time[s],peak_deceleration[m/s2],hard_stop,peak_dc_link[V],\
+        "moment,trigger[s],tool_distance[{unit}],stop_time[s],peak_deceleration[{unit}/s2],hard_stop,peak_dc_link[V],\
          braking_resistor_energy[J],tripped,{}",
         distances.join(",")
     )
