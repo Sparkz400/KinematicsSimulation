@@ -18,6 +18,7 @@ The German version of this document is [de/mechanismen.md](de/mechanismen.md).
 - [Parallel kinematics: hexapod and cable robots](#parallel-kinematics-hexapod-and-cable-robots)
 - [Pneumatic cylinder beside servo axes](#pneumatic-cylinder-beside-servo-axes-machinecylinder)
 - [Winder and unwinder with a dancer](#winder-and-unwinder-with-a-dancer-machine-winder)
+- [Overhead crane](#overhead-crane-machine-overhead-crane)
 - [What is checked by hand](#what-is-checked-by-hand)
 - [Limits](#limits)
 
@@ -791,6 +792,77 @@ sim-cli run winder --cycle --time 10 --stop-at 7.5 --stop-category 2 --out winde
 sim-cli stop winder --category 2
 sim-cli verdicts winder --set web.tension_n=150 --set axis.web.max_velocity_m_s=3.0
 ```
+
+## Overhead crane (`machine-overhead-crane`)
+
+`overhead-crane` is a single-girder overhead crane of 250 kg safe working load: a bridge travelling 10 m on its runway
+(x), a trolley travelling 5 m along the girder (y), and a hoist on the trolley whose drum winds a single fall of 6 mm
+steel wire rope down to the hook. The tool is the hook as the drives place it: the bridge's x, the trolley's y and the load's height z over the floor
+(m); the load's sway is not in it (a crane is positioned by its bridge and trolley) but has signals and a verdict of its own. Each drive
+is a servo motor behind a planetary gearbox (Siemens 1FK2104-6AF on the bridge and the trolley, 1FK2105-6AF on the
+hoist, S210 drives), its wheel or drum the lever: 30:1 on 80 mm wheels, 25:1 on 50 mm wheels, 40:1 on an 80 mm drum.
+
+- **The rope.** It leaves the trolley's sheave at T = (x, y, H), H = 5 m, and runs straight to the load's point P (hook
+  and load one point mass). Its length L = |P − T| over its free length l (paid out by the drum) is a stretch e = L − l;
+  while taut it pulls with t = EA e / l + c / l (L' − l') (`rope.ea_n`, `rope.specific_damping_n_s` with
+  `effects.rope_damping`), its potential EA e² / (2 l), and it cannot push: below zero it is slack. It pulls the load
+  with −t u (u the unit vector from the sheave to the load), the trolley with t u (x on the bridge's drive, y on the
+  trolley's, z into the rails) and the drum, through the potential's slope over l, with t (1 + e / (2 l)): the load's
+  sway acts back on both travel drives, and its swing stretches the rope on the hoist.
+- **The load** is a spherical pendulum on that rope, P'' = −t u / m − g e_z. Its small swing has the period
+  2π √(L / g): 2.84 s on a 2 m rope, 4.01 s on 4 m (`sim-cli modes overhead-crane` reports the frequency over z).
+  With the trolley free to roll it is a two-mass pendulum, ω² = g / L (1 + m / M), M the trolley with its rotor at the
+  rail. Rigid (`effects.rope_stretch` off) the rope keeps its free length: its tension is the constraint force that
+  keeps L'' = l'', solved in closed form each step; that model's rope also pushes (it is the reference for a taut rope).
+- **The drives** are rigid (`joint::RotaryJoint` with a `transmission::Converter`; the gearboxes' backlash and twist are
+  read and not used, the crane's give is its rope's), the gearbox's efficiency on the power it passes, the motors' own
+  friction, ripple and holding brake as on every machine. The wheels roll against `crane.rolling_coefficient` (0.006)
+  times their load, the bridge's and trolley's weight and the rope's pull down (`effects.guide_friction`). Buffers
+  at the rails' ends and stops at an empty and a full drum (`effects.hard_stops`).
+- **The motors' angles of a pose** are the empty hook's: l = (H − z) / (1 + m_hook g / EA). The payload hangs lower than
+  the pose by its own stretch (6.8 mm on 4 m), and the drum stands still when the hook takes the load or lets it go, as
+  a hoist's does (`setpoint_slack` 7.8 mm). Pick and set-down are quasi-static: the payload goes on (off) with the rope
+  at once at the stretch of the new weight, as a load standing on the floor that the hoist takes up slowly; without that
+  the rope would snatch the load from rest at twice its weight and fling the empty hook up off a slack rope.
+- **Input shaping against the sway.** The machine reports the sway's frequency √(g / L) / 2π at a pose
+  (`Machine::resonance_hz`), and with `effects.shaper_follows_pose` (on in the shipped config) the input shaper's
+  period follows the rope's length where the plan stands, so a move that hoists while it travels is shaped for the
+  length as it changes; `profile.shaper_axes = ["x", "y"]` leaves the hoist unshaped. `effects.input_shaping` itself is
+  off in the shipped config (as on every machine, so that a setpoint from outside arrives as sent); switch it on with
+  `--set effects.input_shaping=true` (`machine_overhead_crane::shaped_config()`). Measured on the empty hook's way back,
+  which hoists from 4 m to 2 m of rope while it travels 7 m: unshaped 0.43 m of sway left, the following ZVD 0.012 m, a
+  ZVD set for the length at the move's end 0.047 m, one set for its start 0.041 m. A move without a dwell starts when the
+  plan arrives, the shaper's tail still under way, so a segment that lowers right after a travel has the sway's period
+  change under that tail: the default cycle travels and lowers in one move instead.
+- **The time-optimal plan** (`profile.cycle_timing = "time_optimal"`) knows the load as carried along with the trolley,
+  not swinging: the config keeps 30 % of every limit for the swing (`profile.time_optimal_margin` 0.7; planned at the
+  motors' full speed, the swing ran the bridge's motor past its no-load speed). It is no sway-aware plan.
+- **The default cycle** (travel and lower, back, pick, hoist): from the travel height (z = 3 m, a 2 m rope) over the pick
+  place the load travels 7 m and 3 m to the place while it is lowered to 1 m, and is let go; the empty hook goes up and
+  back in one move, down to the next load, a second to sling it, and hoists it. Every move but the pick's lowering and
+  hoisting travels and changes the rope's length at once, so every drive moves from the start. Shaped, every verdict
+  passes (residual sway 19.5 mm, the rope 2731 N at most and never below its least tension, the hoist brake loaded to
+  5.5 of 7.5 N m); unshaped, the load is left swinging by 0.65 m and `residual-sway` fails, and so does the hoist's
+  `braking-resistor-continuous` (107 W of 100 W: the unshaped cycle is the shorter, it lowers more often per hour).
+- **Verdicts of its own:** `rope-max-tension` (the highest tension against `rope.breaking_load_n` / `safety_factor`,
+  4444 N), `rope-min-tension` (any fall below `rope.min_tension_n`, 50 N, fails: no slack rope), `residual-sway` (the
+  load's sway amplitude √(d² + (d' / ω)²) at every dwell, d its horizontal offset from under the sheave, against
+  `crane.residual_sway_max_m`, 50 mm), `hoist-brake` (the rope's torque at the hoist's motor, t (1 + e / (2 l)) r / i,
+  against `motor.hoist.brake_torque_nm` / `hoist.brake_safety_factor`, 12 / 1.6 = 7.5 N m). Signals `rope.tension`,
+  `rope.shortfall`, `rope.length`, `load.sway_angle`, `load.sway`, `load.residual_sway`, `hoist.brake_load`.
+- **3D view:** the runway's rails on their columns, the girder, the trolley with its drum, each drive's motor and
+  gearbox, the rope coloured by its tension against the load's weight, the hook and the load; labels with the motors'
+  speeds, the rope's tension and the sway in mm.
+
+```text
+sim-cli verdicts overhead-crane --set effects.input_shaping=true
+sim-cli verdicts overhead-crane
+sim-cli modes overhead-crane --axis-index 2
+```
+
+Left out (shortcuts in the code): the rope's own mass (0.14 kg/m against 265 kg) and its bending at the sheave, a hook
+block and a load that swing on their own (a double pendulum) or twist, a bridge on two drives that can skew, and the
+load standing on the floor during pick and set-down.
 
 ## What is checked by hand
 

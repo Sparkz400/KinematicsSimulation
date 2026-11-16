@@ -1,0 +1,609 @@
+# Overhead crane (machine-overhead-crane): every value says where it comes from, see the head of the machine's part
+# below [profile].
+format_version = 1
+# Obstacles the machine must not touch, as for every machine (see docs/config-reference.md): a list of
+# { name, centre_m, size_m } boxes, or [[obstacles]] tables. None by default.
+obstacles = []
+
+# Parts by name from the catalogue in catalog/, as for every machine (see docs/config-reference.md). "" names none:
+# the numbers in this file are used as written.
+[parts]
+motor = ""
+motor_supply = "400v"
+gearbox = ""
+drive = ""
+belt = ""
+axis = ""
+
+# One switch per effect.
+# Motor options: the holding brake (its inertia and weight) and the encoder ("" keeps drive.encoder_counts_per_rev;
+# "AS22DQC", "AM22DQC", for a 1FT2 also the 26-bit "AS26DQC", "AM26DQC").
+motor_brake = false
+motor_encoder = ""
+[effects]
+gravity = true
+payload = true
+# The travels' guides: steel wheels on steel rails, the bridge and the trolley rolling against crane.rolling_coefficient
+# times the load on their wheels (their own weight and the rope's pull down), against the motion.
+guide_friction = true
+# The rope stretches (EA / l, so its stiffness changes with its length) and goes slack below zero tension. Off, the
+# machine is the rigid reference model: the rope keeps its free length and pulls (or pushes) whatever the load needs.
+rope_stretch = true
+# With rope_stretch: the rope's material damping along its length (rope.specific_damping_n_s).
+rope_damping = true
+motor_friction = true
+gearbox_backlash = true
+gearbox_efficiency = true
+# No gearbox_mesh_friction: the drives are rigid, their gearboxes' efficiency fades in below 0.5 W.
+# The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
+# gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
+# pickers D2 and D3, whose sizing was redone with them.
+gearbox_drag = false
+# The motor shaft's seals and bearings break away above their sliding level along a Stribeck curve
+# (motor.friction_breakaway_nm, friction_stribeck_rad_s).
+motor_stiction = false
+# The gearbox's flanks take the load over a band beyond the backlash, with a hysteresis (gearbox.lost_motion_band_rad,
+# hysteresis_rad).
+gearbox_lost_motion = false
+# A strain wave gear's three-segment stiffness, K1 to T1, K2 to T2, K3 beyond (gearbox.stiffness_*). Off in the shipped
+# configs.
+gearbox_stiffness_curve = false
+torque_ripple = true
+hard_stops = true
+holding_brake = true
+# The holding brakes engage brake.engage_delay_s after they are asked to hold (the torque off) and release
+# brake.release_delay_s after they are asked to let go; a hanging axis sags while its brake engages. Off by default, so
+# that earlier results stay as they were.
+brake_delay = false
+velocity_feedforward = true
+torque_feedforward = true
+# The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
+# as its speed feedforward runs on: a SINAMICS drive's fine interpolation, which a position loop at the speed loop's
+# cycle (DSC) needs once the profile cycle is longer than the position cycle. Changes nothing while they are equal.
+fine_interpolation = true
+# Friction feedforward (S120 p3820-p3839): with drive.friction_feedforward_model = "machine" the friction of the
+# machine's own model at the planned speed, else the characteristic drive.friction_feedforward_* (0 N m where none
+# is recorded). On: each machine's file says which; "machine" where it cuts the following error and the settling.
+friction_feedforward = true
+# The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
+# the motor encoder, which stays for the speed loop.
+load_encoder = false
+encoder_resolution = true
+velocity_filter = true
+torque_filter = true
+notch_filter = false
+torque_limit = true
+# The drive gives no more than its maximum output current, ratings.drive_max_current_a: the torque setpoint is held to
+# the torque of that current where it is below the motor's limit. Without the rating nothing is held.
+drive_current_limit = true
+# Off here (14 November 2026): field weakening of the d-q motor model (motor.pole_pairs, d_inductance_h), the drive's
+# overload over time by its thermal image (ratings.drive_base_load_current_a, drive_overload_time_constant_s,
+# drive_max_current_time_s) and the motor's three thermal nodes (motor.winding_resistance_share, winding_time_constant_s).
+field_weakening = false
+drive_overload = false
+motor_thermal_nodes = false
+corner_blending = false
+# The travel moves shaped against the load's sway (see [profile]): off here, as on every machine, so that a setpoint
+# from outside arrives as sent; on (`--set effects.input_shaping=true`) the default cycle leaves the load still at its
+# dwells, off it leaves it swinging there by half a metre and fails the verdict residual-sway.
+input_shaping = false
+back_emf = true
+voltage_limit = true
+winding_heating = true
+part_heating = false
+thermal_feedback = false
+# The cycle analysis measures its pass with the windings (winding_heating) and, with thermal_feedback, the parts at the
+# rises they settle at on the cycle, iterated from cold to a fixed point, not from cold. Nothing to do where nothing
+# warms back on the run.
+thermal_warm_start = true
+torque_saturation = true
+drive_delay = true
+dc_link = true
+shared_dc_link = false
+regenerative_supply = false
+fieldbus_delay = false
+fieldbus_jitter = false
+sensor_noise = false
+# The shaper's period follows the sway period 2 pi sqrt(L / g) of the rope length L where the plan stands, so a move
+# that hoists or lowers while it travels is shaped for the length as it changes (Machine::resonance_hz).
+shaper_follows_pose = true
+# Obstacles are rigid: touching one stops the machine and takes the drives off. Without obstacles it changes nothing.
+crash = false
+
+# With effects.part_heating: each drive's gearbox warms with its loss. [estimate] as for planetary gearboxes of this size
+# gearboxes.
+# The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
+# moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
+base_compliance = false
+# With base_compliance, two-way: the machine feels its base's sway (its motors see it and hold against it) and
+# the base's energy is in the budget. Off: one-way, the base sways under the machine.
+base_reaction = false
+braking_resistor_heating = true
+# The drives watch their following error, their standstill and their torque limit ([drive] fault_reaction and the
+# keys after it); one that trips stops all, each by its fault reaction. Off by default, so that earlier results
+# stay as they were.
+drive_monitoring = false
+# Motor electrical and thermal model (14 November 2026). On here: field weakening above (the d-q voltage limit), the
+# stator's iron loss heating the motor (motor.stall_current_a) and the braking resistor's temperature
+# (ratings.braking_resistor_time_constant_s, braking_resistor_rated_rise_k; with dc_link only). Off: the magnets' flux
+# over temperature (motor.magnet_temperature_coefficient_1_k).
+iron_loss = true
+magnet_temperature = false
+[thermal]
+gearbox_resistance_k_w = 1.5
+gearbox_time_constant_s = 1200.0
+gearbox_max_rise_k = 50.0
+
+# With effects.thermal_feedback (see mech::ThermalFeedback). [estimate] as for the other machines; the belt's
+# coefficient is read but not used, as these machines have no belt.
+[thermal_feedback]
+ambient_c = 20.0
+reference_c = 20.0
+viscosity_slope_k = 4000.0
+gearbox_viscous_loss_share = 0.5
+# With effects.thermal_feedback [estimate]: the motor shaft's seal friction (motor.friction_coulomb_nm and
+# friction_breakaway_nm) follows the gearbox's lubricant, (nu / nu_ref) to this power: a lip seal on its oil film.
+seal_viscosity_exponent = 0.33
+belt_stiffness_coefficient_1_k = 3.0e-4
+
+[profile]
+cycle_s = 1.0e-3
+fieldbus_delay_cycles = 1
+fieldbus_jitter_cycles = 1
+setpoint_interval_s = 10.0e-3
+blend_time_s = 0.05
+# The sway of a 2 m rope (the travel height of the default cycle): sqrt(9.80665 / 2) / (2 pi) = 0.35242 Hz. With
+# effects.shaper_follows_pose only its being above zero counts: the period is the machine's at the plan's pose.
+shaper_frequency_hz = 0.35242
+# The pendulum's own damping: none (the air's is far below 1 %).
+shaper_damping = 0.0
+shaper2_frequency_hz = 0.0
+shaper2_damping = 0.03
+# The shape of moves (see docs/config-reference.md): "s-curve" (seven segments), "sin2" (Bestehorn), "poly345" or
+# "poly4567" (VDI 2143); a [[cycle.segment]] may name its own with shape = "...". Braking within deceleration_ratio of
+# the acceleration limits (1: as fast as speeding up). vertical_axis: the axis that lifts against gravity ("z", "-z"
+# where up is its minus direction, "" for none), which has up_acceleration_ratio of its acceleration limit upwards.
+shape = "s-curve"
+deceleration_ratio = 1.0
+vertical_axis = "z"
+up_acceleration_ratio = 1.0
+# The curve a trajectory runs through its poses: "c2" (a cubic spline, the acceleration continuous) or "hermite" (the
+# slopes of the neighbours, as before 14 November 2026).
+trajectory_spline = "c2"
+# With effects.input_shaping: the shaper ("zv", "zvd", "zvdd", "ei", "ei2" the two-hump EI), the vibration the EI
+# shapers allow, the axes the first and the second shaper act on ([] for all), and further modes, each convolved:
+# { frequency_hz = 40.0, damping = 0.02, type = "ei", axes = ["z"] } (type and axes may be left out).
+shaper_type = "zvd"
+shaper_ei_tolerance = 0.05
+# The sway is horizontal: the hoist is not shaped.
+shaper_axes = ["x", "y"]
+shaper_modes = []
+torque_reserve = 0.8
+# Read but not used: no belt (the rope's checks come from [rope]).
+tension_reserve = 0.8
+tension_margin_n = 0.0
+# The share of every limit the time-optimal plan may use, on top of the reserves above (1: all; 0.9 plans at 90 %).
+# [estimate] 0.7 here: the plan knows the load as carried along, not swinging, and the swing pulls the travel drives
+# off their plan by up to the load's weight times the sway angle; planned at the motors' full speed, the bridge's had no
+# torque left to hold against it and ran past its no-load speed. The plan is no sway-aware one (see mechanisms.md).
+time_optimal_margin = 0.7
+path_tolerance_m = 0.0
+min_clearance_m = 0.0
+# How far a planned path may leave a corner between two lines to round it instead of stopping there (as a CNC's
+# G642 or a robot's zone): the corner curve starts and ends 16/3 of it from a right-angled corner. 0: stop.
+corner_tolerance_m = 0.0
+# How the cycle's segments are timed: "axis_limits" (the S-curves within the axis limits above) or "time_optimal"
+# (each segment as fast as the motors, the gearbox and belt ratings and the jerk limits allow, rest to rest).
+cycle_timing = "axis_limits"
+
+[base]
+damping_ratio_rx = 0.02
+damping_ratio_ry = 0.02
+damping_ratio_rz = 0.02
+damping_ratio_x = 0.02
+damping_ratio_y = 0.02
+damping_ratio_z = 0.02
+inertia_x_kgm2 = 10.0
+inertia_y_kgm2 = 10.0
+inertia_z_kgm2 = 20.0
+# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi.
+mass_kg = 100.0
+# Where it tilts about, in the tool pose's frame (x, y, z), m.
+pivot_m = [0.0, 0.0, 0.0]
+# 0: rigid in that direction (no state).
+stiffness_x_n_m = 0.0
+stiffness_y_n_m = 0.0
+stiffness_z_n_m = 0.0
+tilt_stiffness_x_nm_rad = 0.0
+tilt_stiffness_y_nm_rad = 0.0
+tilt_stiffness_z_nm_rad = 7.1e5
+
+# The machine: a single-girder overhead crane of 250 kg safe working load, its bridge (x) travelling 10 m on a runway,
+# its trolley (y) 5 m along the girder, its hoist drum winding a single fall of steel wire rope down to the hook (z, the
+# load's height over the floor). Each drive a servo motor behind a planetary gearbox on Siemens S210. Generic
+# proportions of a light workshop crane; every value says where it comes from:
+#   [catalogue]  read from a maker's document (catalog/siemens/*.csv, Siemens D 32).
+#   [estimate]   ours: parts of this size as the makers' catalogues list them, not one maker's article. Each has a
+#                [bounds] entry at the end, but for those of the drives' tuning and the cycle.
+#   [hand]       worked out from the values above it, the working shown.
+
+[sim]
+dt_s = 62.5e-6
+# The stiffest mode is the empty hook on the shortest rope, sqrt(1.44e6 / 15) / (2 pi) = 49 Hz, 0.02 rad of a step of
+# 62.5 us; four sub-steps as on every machine, for the holding brakes' slip (mech::HoldingBrake).
+substeps = 4
+
+[crane]
+# [estimate] Where the rope leaves the trolley's sheave, over the floor (m).
+rope_exit_height_m = 5.0
+# [estimate] The girder with its end carriages and the bridge drive; the trolley with the hoist on it (drum, gearbox,
+# motor); the hook block. The payload hangs from the hook with effects.payload and a segment's payload.
+bridge_mass_kg = 600.0
+trolley_mass_kg = 120.0
+hook_mass_kg = 15.0
+payload_kg = 250.0
+# [estimate] Travel between the runway's buffers and between the girder's buffers (m), from 0.
+bridge_stroke_m = 10.0
+trolley_stroke_m = 5.0
+# [estimate] Radius of the driven wheels.
+bridge_wheel_radius_m = 0.08
+trolley_wheel_radius_m = 0.05
+# [estimate] With effects.guide_friction: the travel resistance of steel wheels on rails with rolling bearings, as a
+# share of the load on the wheels (5 to 7 N per kN are usual), and the speed over which it builds up from rest.
+rolling_coefficient = 0.006
+rolling_smoothing_m_s = 0.005
+# [estimate] The runway's and the girder's buffers (effects.hard_stops): rubber buffers of this size.
+stop_stiffness_n_m = 1.0e6
+stop_damping_n_s_m = 2000.0
+# [estimate] The load's sway left at a dwell (pick and place) that the cycle is judged against, as its amplitude
+# sqrt(d^2 + (v / w)^2), w = sqrt(g / L): what placing a load by hand on a mark still takes.
+residual_sway_max_m = 0.05
+
+[hoist]
+# [estimate] The drum (its radius to the rope's centre), its inertia, and how much rope it holds.
+drum_radius_m = 0.08
+drum_inertia_kgm2 = 0.05
+capacity_m = 6.0
+# [estimate] Stops at an empty and a full drum (effects.hard_stops).
+stop_stiffness_n_m = 1.0e6
+stop_damping_n_s_m = 2000.0
+# [estimate] The hoist's holding brake has to hold this many times the torque the rope puts on the motor (1.6 is the
+# usual demand on a hoist brake). The verdict hoist-brake judges the highest rope torque of the cycle at the motor
+# against motor.hoist.brake_torque_nm over it.
+brake_safety_factor = 1.6
+
+# [estimate] A single fall of 6 mm steel wire rope (6x19, 1770 N/mm2): its stiffness EA (some 14 mm2 of metal at the
+# 100 GPa of a stranded rope), its material damping (N s/m times its free length, so c / l: 3 % of the critical
+# damping of the 265 kg on 2 m of it), its minimum breaking load and the coefficient of utilisation of a light hoist
+# (breaking load / safety factor = 4444 N); the least tension that keeps it taut.
+[rope]
+ea_n = 1.44e6
+specific_damping_n_s = 1660.0
+breaking_load_n = 20000.0
+safety_factor = 4.5
+min_tension_n = 50.0
+
+# The box the load may be in (x, y, z in m; z the load's height). The rope is 1 m long at the top, 4.5 m at the bottom.
+[workspace]
+tool_min = [0.5, 0.5, 0.5]
+tool_max = [9.5, 4.5, 4.0]
+
+# [estimate] A crane's travel: some 0.4 m/s2, gently jerked. The limits are the load's.
+[axis.x]
+max_velocity_m_s = 0.8
+max_acceleration_m_s2 = 0.4
+max_jerk_m_s3 = 2.0
+
+[axis.y]
+max_velocity_m_s = 0.6
+max_acceleration_m_s2 = 0.4
+max_jerk_m_s3 = 2.0
+
+# 15 m/min of hoisting.
+[axis.z]
+max_velocity_m_s = 0.25
+max_acceleration_m_s2 = 0.4
+max_jerk_m_s3 = 2.0
+
+# [estimate] The bridge's and the trolley's planetary gearbox (the shared table; the hoist's is [gearbox.hoist]): 30:1
+# on the bridge's 80 mm wheels is 375 rad/m, so 0.8 m/s turns the motor at 300 rad/s, below its 314 rad/s rated speed.
+# Its values at the output, as on every machine. The drives are rigid here (the crane's give is the rope's): stiffness
+# and damping are read and not used, and backlash, lost motion and the stiffness's curve are set to none.
+[gearbox]
+ratio = 30.0
+efficiency = 0.94
+backlash_rad = 0.0
+stiffness_nm_rad = 2.0e4
+damping_nm_s_rad = 1.0
+inertia_at_input_kgm2 = 5.0e-5
+efficiency_torque_nm = 40.0
+no_load_torque_nm = 0.1
+no_load_speed_rpm = 3000.0
+lost_motion_band_rad = 0.0
+hysteresis_rad = 0.0
+stiffness_t1_nm = 10.0
+stiffness_t2_nm = 30.0
+stiffness_k2_nm_rad = 2.0e4
+stiffness_k3_nm_rad = 2.0e4
+
+# [estimate] The trolley's: 25:1 on its 50 mm wheels, 500 rad/m, 300 rad/s at 0.6 m/s.
+[gearbox.trolley]
+ratio = 25.0
+
+# [estimate] The hoist's two-stage planetary gearbox: 40:1 on the 80 mm drum, 500 rad/m, 125 rad/s at 0.25 m/s; the
+# rope's 2600 N on the drum ask 2600 x 0.08 / 40 = 5.2 N m of the motor.
+[gearbox.hoist]
+ratio = 40.0
+efficiency = 0.92
+efficiency_torque_nm = 300.0
+inertia_at_input_kgm2 = 1.0e-4
+
+# The bridge's and the trolley's motor (the shared table; the hoist's is [motor.hoist]).
+[motor]
+# [catalogue] 1FK2104-6AF with holding brake, D 32: rotor 0.84 kg cm2
+rotor_inertia_kgm2 = 8.4e-5
+# [estimate]
+friction_coulomb_nm = 0.03
+friction_viscous_nm_s_rad = 1.0e-4
+friction_smoothing_rad_s = 0.5
+# With effects.motor_stiction [estimate]: 1.5 times the Coulomb level, falling to it over the Stribeck speed.
+friction_breakaway_nm = 0.045
+friction_stribeck_rad_s = 2.0
+ripple_fraction = 0.02
+ripple_order = 24.0
+cogging_nm = 0.015
+cogging_order = 24.0
+# [catalogue] static torque 3.2 N m over stall current 3.0 A
+torque_constant_nm_a = 1.06667
+# [estimate] Siemens publishes neither for the 1FK2.
+resistance_ohm = 3.0
+inductance_h = 0.012
+# With effects.field_weakening [estimate]: pole pairs and the d-axis inductance (surface magnets: that of the q axis).
+pole_pairs = 4.0
+d_inductance_h = 0.012
+# With effects.motor_thermal_nodes [estimate]: the winding's share of the thermal resistance and its time constant.
+winding_resistance_share = 0.3
+winding_time_constant_s = 60.0
+# [catalogue] rated current 3.0 A at 400 V; thermal time constant 38 min; 10 N m at the maximum current of 10.9 A.
+rated_current_a = 3.0
+thermal_time_constant_s = 2280.0
+rated_temperature_rise_k = 100.0
+start_temperature_rise_k = 0.0
+max_current_a = 10.9
+torque_constant_at_max_current_nm_a = 0.91743
+# [estimate] the holding brake of a 1FK2 of shaft height 40
+brake_torque_nm = 4.0
+# With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
+magnet_temperature_coefficient_1_k = -0.0012
+# The rated current: the motor is not named in [parts].
+stall_current_a = 3.0
+
+# The hoist's motor.
+[motor.hoist]
+# [catalogue] 1FK2105-6AF with holding brake, D 32: rotor 3.5 kg cm2
+rotor_inertia_kgm2 = 3.5e-4
+# [estimate]
+friction_coulomb_nm = 0.06
+friction_viscous_nm_s_rad = 2.0e-4
+friction_breakaway_nm = 0.09
+cogging_nm = 0.03
+# [catalogue] static torque 8 N m over stall current 6.7 A
+torque_constant_nm_a = 1.19403
+# [estimate]
+resistance_ohm = 1.5
+inductance_h = 0.008
+d_inductance_h = 0.008
+# [catalogue] rated current 5.6 A at 400 V; thermal time constant 40 min; 24 N m at the maximum current of 24 A.
+rated_current_a = 5.6
+thermal_time_constant_s = 2400.0
+max_current_a = 24.0
+torque_constant_at_max_current_nm_a = 1.0
+# [estimate] the holding brake of a 1FK2 of shaft height 52
+brake_torque_nm = 12.0
+stall_current_a = 5.6
+
+# One drive per motor: the shared table for the bridge and the trolley, [drive.hoist] for the hoist. Cycle times must be
+# whole multiples of sim.dt_s.
+[drive]
+current_cycle_s = 62.5e-6
+velocity_cycle_s = 125.0e-6
+position_cycle_s = 1.0e-3
+current_delay_cycles = 1
+velocity_delay_cycles = 1
+kv_1_s = 30.0
+# [estimate] for the inertia at the bridge's motor: rotor and gearbox input 1.3e-4 kg m2 plus girder and trolley,
+# 720 kg / 375^2 = 5.1e-3 kg m2 (the load swings on its rope, below the loop's band), some 100 rad/s of band.
+velocity_kp_nm_s_rad = 0.5
+velocity_tn_s = 0.03
+velocity_feedforward_factor = 1.0
+torque_feedforward_factor = 1.0
+# Torque feedforward: "rigid", the rigid model's inverse dynamics (the load carried along with the trolley), or
+# "inertia", one moment of inertia per motor times its acceleration setpoint (S120 p1498).
+torque_feedforward_model = "rigid"
+# With effects.friction_feedforward: the characteristic (none recorded) or the machine's own model.
+friction_feedforward_speed_rad_s = [10.0]
+friction_feedforward_torque_nm = [0.0]
+friction_feedforward_model = "machine"
+precontrol_balance_s = 0.0
+load_encoder_step = 1.0e-6
+current_kp_v_a = 30.0
+current_tn_s = 5.0e-3
+# [catalogue] a 400 V line: 540 V DC link
+bus_voltage_v = 540.0
+# [catalogue] 1FK2104-6AF at 400 V: 10 N m maximum, 3.2 N m rated at 3000 r/min
+peak_torque_nm = 10.0
+rated_torque_nm = 3.2
+rated_speed_rad_s = 314.159
+# [hand] sqrt(3/2) * 540 V / 1.06667 N m/A
+no_load_speed_rad_s = 620.0
+# [estimate] the no-load speed, where the torque-speed curve ends
+max_speed_rad_s = 620.0
+# [estimate] a 22-bit encoder
+encoder_counts_per_rev = 4194304.0
+velocity_filter_s = 0.1e-3
+torque_filter_s = 0.1e-3
+notch_frequency_hz = 60.0
+notch_bandwidth_hz = 20.0
+encoder_noise_counts = 4.0
+current_noise_a = 0.01
+noise_seed = 1
+braking_module = false
+blocked_speed_rad_s = 12.57
+blocked_time_s = 3.0
+# effects.drive_monitoring (see docs/config-reference.md). [estimate] as commissioned.
+fault_reaction = "off3"
+following_error_window_rad = 2.0
+off1_ramp_s = 1.0
+off3_ramp_s = 0.2
+ss1_time_s = 1.0
+pulse_off_speed_rad_s = 2.09
+standstill_time_s = 1.0
+standstill_window_rad = 0.2
+torque_band = 0.0
+
+[drive.trolley]
+# [estimate] rotor and gearbox input 1.3e-4 kg m2 plus the trolley's 120 kg / 500^2 = 4.8e-4 kg m2.
+velocity_kp_nm_s_rad = 0.06
+
+[drive.hoist]
+# [estimate] rotor and gearbox input 4.5e-4 kg m2, the drum's 0.05 / 40^2 = 3e-5 kg m2 and the 265 kg on the rope
+# 265 / 500^2 = 1.06e-3 kg m2: 1.5e-3 kg m2, a band of some 100 rad/s.
+velocity_kp_nm_s_rad = 0.15
+current_kp_v_a = 20.0
+# [catalogue] 1FK2105-6AF at 400 V: 24 N m maximum, 6.6 N m rated at 3000 r/min
+peak_torque_nm = 24.0
+rated_torque_nm = 6.6
+rated_speed_rad_s = 314.159
+# [hand] sqrt(3/2) * 540 V / 1.19403 N m/A
+no_load_speed_rad_s = 553.9
+max_speed_rad_s = 553.9
+
+[ratings]
+# [estimate] the drives have put the hook (bridge, trolley, the load's height) within 50 mm; the load's sway has its
+# own verdict (crane.residual_sway_max_m).
+settling_tolerance_m = 0.05
+# The DC link of the S210 converter. [estimate] as for the other S210 machines.
+dc_link_capacitance_uf = 66.0
+braking_threshold_v = 770.0
+# [catalogue] The hoist's S210 6SL3210-5HE12-0UF0 (catalog/siemens/braking_s210.csv): internal braking resistor and
+# trip level. The shared table is the hoist's drive; [ratings.bridge] and [ratings.trolley] give theirs.
+braking_resistor_continuous_w = 100.0
+braking_resistor_peak_w = 6000.0
+dc_link_overvoltage_v = 820.0
+dc_link_discharge_time_constant_s = 130.0
+# [catalogue] S120 Active Line Module 6SL3130-7TE21-6AA4, for effects.regenerative_supply; its efficiency [estimate].
+line_module_rated_power_w = 16000.0
+line_module_max_power_w = 35000.0
+line_module_efficiency = 0.98
+required_life_h = 20000.0
+bearing_reliability_percent = 90.0
+# [catalogue] S210 converter 6SL3210-5HE12-0UF0: 7 A rated, 24 A maximum
+drive_rated_current_a = 7.0
+drive_max_current_a = 24.0
+# With effects.drive_overload [estimate]: 0.85 of the rated current, as the S120 Motor Modules up to 30 A have it.
+drive_base_load_current_a = 5.95
+drive_chip_share = 0.3
+drive_chip_time_constant_s = 1.0
+drive_overload_time_constant_s = 10.0
+drive_max_current_time_s = 0.25
+# With effects.braking_resistor_heating [estimate].
+braking_resistor_time_constant_s = 60.0
+braking_resistor_rated_rise_k = 200.0
+
+# [catalogue] The bridge's and the trolley's S210 6SL3210-5HE11-0UF0: 3 A rated, 10.9 A maximum; its braking resistor
+# 50 W, 3000 W peak. Base load current [estimate] 0.85 of the rated.
+[ratings.bridge]
+drive_rated_current_a = 3.0
+drive_max_current_a = 10.9
+drive_base_load_current_a = 2.55
+braking_resistor_continuous_w = 50.0
+braking_resistor_peak_w = 3000.0
+
+[ratings.trolley]
+drive_rated_current_a = 3.0
+drive_max_current_a = 10.9
+drive_base_load_current_a = 2.55
+braking_resistor_continuous_w = 50.0
+braking_resistor_peak_w = 3000.0
+
+# The hook holds the load at the travel height (a 2 m rope) over the pick place. A segment's payload is whether the
+# hook holds the load once it has arrived. Every move but the pick's lowering travels and hoists or lowers at once:
+# the shaper follows the rope's length as it changes (effects.shaper_follows_pose).
+[start]
+pose = [1.0, 1.0, 3.0]
+
+# Travel to the place, the bridge 7 m and the trolley 3 m, lowering the load to 1 m (a 4 m rope) on the way; the hook
+# lets go on arrival. The residual sway is judged at every dwell.
+[[cycle.segment]]
+target = [8.0, 4.0, 1.0]
+dwell_s = 1.0
+payload = false
+
+# The empty hook up and back over the pick place in one move.
+[[cycle.segment]]
+target = [1.0, 1.0, 3.0]
+dwell_s = 1.0
+payload = false
+
+# Pick: down to the load, a second to sling it.
+[[cycle.segment]]
+target = [1.0, 1.0, 1.0]
+dwell_s = 1.0
+payload = true
+
+# Hoist it to the travel height.
+[[cycle.segment]]
+target = [1.0, 1.0, 3.0]
+dwell_s = 0.5
+payload = true
+
+# effects.brake_delay [estimate]: a servo motor's spring-applied brake closes in some 10 to 60 ms, opens in 30 to 150 ms.
+[brake]
+engage_delay_s = 0.03
+release_delay_s = 0.06
+
+# Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
+[bounds]
+brake.engage_delay_s = [0.01, 0.06]
+brake.release_delay_s = [0.03, 0.15]
+thermal.gearbox_resistance_k_w = [0.8, 3.0]
+thermal.gearbox_time_constant_s = [600.0, 2400.0]
+crane.rope_exit_height_m = [4.8, 5.2]
+crane.bridge_mass_kg = [450.0, 800.0]
+crane.trolley_mass_kg = [90.0, 160.0]
+crane.hook_mass_kg = [10.0, 25.0]
+crane.rolling_coefficient = [0.004, 0.01]
+crane.rolling_smoothing_m_s = [0.002, 0.01]
+crane.stop_stiffness_n_m = [5.0e5, 2.0e6]
+crane.stop_damping_n_s_m = [1000.0, 4000.0]
+hoist.drum_inertia_kgm2 = [0.03, 0.08]
+hoist.stop_stiffness_n_m = [5.0e5, 2.0e6]
+hoist.stop_damping_n_s_m = [1000.0, 4000.0]
+hoist.brake_safety_factor = [1.5, 2.0]
+rope.ea_n = [1.0e6, 2.0e6]
+rope.specific_damping_n_s = [500.0, 5000.0]
+rope.breaking_load_n = [18000.0, 23000.0]
+rope.min_tension_n = [20.0, 100.0]
+gearbox.efficiency = [0.92, 0.96]
+gearbox.no_load_torque_nm = [0.05, 0.2]
+gearbox.inertia_at_input_kgm2 = [3.0e-5, 8.0e-5]
+motor.friction_coulomb_nm = [0.015, 0.06]
+motor.friction_viscous_nm_s_rad = [0.5e-4, 2.0e-4]
+motor.ripple_fraction = [0.01, 0.04]
+motor.cogging_nm = [0.008, 0.03]
+motor.resistance_ohm = [2.0, 4.0]
+motor.brake_torque_nm = [3.2, 5.0]
+motor.pole_pairs = [3.0, 5.0]
+motor.d_inductance_h = [0.009, 0.015]
+motor.winding_resistance_share = [0.2, 0.5]
+motor.winding_time_constant_s = [20.0, 120.0]
+motor.friction_breakaway_nm = [0.03, 0.09]
+motor.friction_stribeck_rad_s = [0.5, 10.0]
+ratings.drive_base_load_current_a = [5.6, 6.3]
+ratings.drive_overload_time_constant_s = [2.0, 60.0]
+ratings.drive_max_current_time_s = [0.1, 1.0]
+ratings.dc_link_discharge_time_constant_s = [30.0, 300.0]
+ratings.line_module_efficiency = [0.95, 0.99]
+thermal_feedback.ambient_c = [10.0, 40.0]
+thermal_feedback.viscosity_slope_k = [3470.0, 4730.0]
+thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]

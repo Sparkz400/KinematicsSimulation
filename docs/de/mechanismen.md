@@ -20,6 +20,7 @@ Konfigurationsschlüssel sind englische Bezeichner und in beiden Sprachen gleich
 - [Parallelkinematiken: Hexapod und Seilroboter](#parallelkinematiken-hexapod-und-seilroboter)
 - [Pneumatikzylinder neben Servoachsen](#pneumatikzylinder-neben-servoachsen-machinecylinder)
 - [Auf- und Abwickler mit Tänzer](#auf--und-abwickler-mit-tänzer-machine-winder)
+- [Brückenkran](#brückenkran-machine-overhead-crane)
 - [Was von Hand nachgerechnet ist](#was-von-hand-nachgerechnet-ist)
 - [Grenzen](#grenzen)
 
@@ -838,6 +839,45 @@ sim-cli verdicts winder
 sim-cli run winder --cycle --time 10 --stop-at 7.5 --stop-category 2 --out winder.csv
 sim-cli stop winder --category 2
 sim-cli verdicts winder --set web.tension_n=150 --set axis.web.max_velocity_m_s=3.0
+```
+
+## Brückenkran (`machine-overhead-crane`)
+
+`overhead-crane` ist ein Einträger-Brückenkran mit 250 kg Tragfähigkeit: die Brücke fährt 10 m auf ihrer Kranbahn (x),
+die Katze 5 m am Träger (y), das Hubwerk auf der Katze wickelt ein einsträngiges Drahtseil von 6 mm auf seine Trommel. Die
+Werkzeuglage ist der Haken, wie die Antriebe ihn stellen: x der Brücke, y der Katze und die Höhe z der Last über dem
+Boden (m); das Pendeln der Last hat eigene Signale und eine eigene Prüfung. Jeder Antrieb ist ein Servomotor hinter
+einem Planetengetriebe (Siemens 1FK2104-6AF an Brücke und Katze, 1FK2105-6AF am Hubwerk, S210), Rad oder Trommel der
+Hebel: 30:1 auf Rädern von 80 mm, 25:1 auf 50 mm, 40:1 auf einer Trommel von 80 mm.
+
+- **Das Seil** läuft gerade von der Seilrolle der Katze in 5 m Höhe zum Lastpunkt (Haken und Last ein Massenpunkt). Gespannt
+  zieht es mit t = EA e / l + c / l (L' − l'), e = L − l die Dehnung über die freie Länge, drücken kann es nicht: unter null
+  wird es schlaff. Es zieht die Last zur Katze, die Katze (x an der Brücke, y an der Katze) und über die Ableitung seiner
+  Federenergie die Trommel mit t (1 + e / (2 l)): das Pendeln der Last wirkt auf beide Fahrantriebe zurück.
+- **Die Last** ist ein Kugelpendel an diesem Seil; ihre Schwingdauer bei kleinem Ausschlag 2π √(L / g) (2,84 s an 2 m
+  Seil, 4,01 s an 4 m). Starr (`effects.rope_stretch` aus) behält das Seil seine Länge, seine Kraft ist die
+  Zwangskraft (das Bezugsmodell für ein gespanntes Seil; es kann auch drücken).
+- **Die Antriebe** sind starr, mit Getriebewirkungsgrad, Motorreibung und Haltebremse wie an jeder Maschine; die Räder
+  rollen gegen `crane.rolling_coefficient` mal ihre Last (`effects.guide_friction`).
+- **Die Motorwinkel einer Lage** sind die des leeren Hakens; die Last hängt um ihre eigene Dehnung tiefer (6,8 mm an
+  4 m), und die Trommel steht still, wenn der Haken die Last nimmt oder abgibt. Aufnehmen und Absetzen sind quasistatisch.
+- **Eingangsformer gegen das Pendeln.** Die Maschine meldet die Pendelfrequenz √(g / L) / 2π einer Lage; mit
+  `effects.shaper_follows_pose` (in der Konfiguration an) folgt die Periode des Formers der Seillänge, wo der Plan steht,
+  sodass eine Fahrt, die dabei hebt, für die sich ändernde Länge geformt wird. `effects.input_shaping` selbst ist in der
+  ausgelieferten Konfiguration aus, wie an jeder Maschine; eingeschaltet mit `--set effects.input_shaping=true`. Gemessen
+  auf dem Rückweg des leeren Hakens, der beim Fahren von 4 m auf 2 m Seil hebt: ungeformt 0,43 m Restpendeln, mitgeführter
+  ZVD 0,012 m, ein ZVD für die Länge am Ende der Fahrt 0,047 m, einer für die am Anfang 0,041 m.
+- **Der Zyklus** (fahren und absenken, zurück, aufnehmen, heben) besteht geformt alle Prüfungen (Restpendeln 19,5 mm,
+  Seilkraft höchstens 2731 N und nie schlaff, Hubwerksbremse 5,5 von 7,5 N m belastet); ungeformt pendelt die Last
+  0,65 m, und `residual-sway` fällt durch, ebenso `braking-resistor-continuous` des Hubwerks (der ungeformte Zyklus ist
+  kürzer).
+- **Eigene Prüfungen:** `rope-max-tension`, `rope-min-tension` (kein Schlaffseil), `residual-sway` (Amplitude des
+  Pendelns bei jedem Verweilen gegen `crane.residual_sway_max_m`), `hoist-brake` (Seilmoment am Hubmotor gegen das
+  Bremsmoment durch `hoist.brake_safety_factor`).
+
+```text
+sim-cli verdicts overhead-crane --set effects.input_shaping=true
+sim-cli verdicts overhead-crane
 ```
 
 ## Was von Hand nachgerechnet ist

@@ -21,6 +21,7 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | HR | [`crates/machine-hexapod-rotary/default.toml`](../crates/machine-hexapod-rotary/default.toml) | Hexapod on six cranks (6-RSS), a small motion base with Siemens 1FT2104-5AF and SP100-04-50. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#hexapod-with-rotary-actuators) |
 | CP, CS | [`crates/machine-cable-robot/config/`](../crates/machine-cable-robot/config/) | Planar (4 cables) and spatial (8 cables) cable robots, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Their keys are in [their own section](#cable-robots) |
 | W | [`crates/machine-wafer-handler/default.toml`](../crates/machine-wafer-handler/default.toml) | Wafer handler: an R-theta-Z arm of two equal links in the horizontal plane, its forearm and effector coupled to the shoulder by bands at 2:1 and 1:2, on a column that turns and lifts; sized as an atmospheric handler for 300 mm wafers with Siemens 1FK2103-2AH. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#wafer-handler) |
+| OC | [`crates/machine-overhead-crane/config/crane.toml`](../crates/machine-overhead-crane/config/crane.toml) | Overhead crane of 250 kg: bridge, trolley and hoist on Siemens 1FK2104-6AF and 1FK2105-6AF with S210, the load swinging on an elastic rope. Each value marked `[catalogue]`, `[estimate]` or `[hand]` in the file. Its keys are in [their own section](#overhead-crane) |
 
 | ST, IL | [`machines/stepper-axis.toml`](../machines/stepper-axis.toml), [`machines/induction-lift.toml`](../machines/induction-lift.toml) | Machine files with a stepper motor (a NEMA 23 stepper on a small belt axis) and an induction motor (a 1.5 kW four-pole motor on a frequency converter, gearbox 10, vertical belt lift). [estimate] values. Their own keys are in [motor kinds](#motor-kinds) |
 
@@ -1333,6 +1334,44 @@ judged. With `effects.part_heating` both gearboxes warm (`thermal.gearbox_*`); w
 efficiency and drag follow it (`[thermal_feedback]`; the seals' exponent and the belt's coefficient are read and not
 used). The torque at each gearbox's output (`gearbox.<motor>.output_torque`) is judged against
 `ratings.gearbox_max_torque_nm` and `gearbox_rated_torque_nm` as on every geared machine.
+
+## Overhead crane
+
+The config of `overhead-crane` ([`machine-overhead-crane/config/crane.toml`](../crates/machine-overhead-crane/config/crane.toml))
+has the common tables (`[parts]`, `[effects]`, `[thermal]`, `[thermal_feedback]`, `[profile]`, `[base]`, `[sim]`,
+`[motor]`, `[gearbox]`, `[drive]`, `[ratings]`, `[brake]`, `[bounds]`, `[start]`, `[[cycle.segment]]`) with the same
+meanings. Its three motors have the ids `bridge`, `trolley` and `hoist`: the shared `[motor]`, `[gearbox]`, `[drive]` and
+`[ratings]` are the bridge's, and `[gearbox.trolley]`, `[drive.trolley]`, `[motor.hoist]`, `[gearbox.hoist]`,
+`[drive.hoist]`, `[ratings.hoist]` give the others their own values over them (`catalog::motor_config`). The tool pose is
+the hook as the drives place it (the bridge's x, the trolley's y, the load's height z; m), `[axis.x]`, `[axis.y]`,
+`[axis.z]` their limits (0.8, 0.6, 0.25 m/s; 0.4 m/s²;
+2 m/s³; estimates); `[workspace]` `tool_min`, `tool_max` the box it may be in. `profile.vertical_axis` is "z",
+`profile.shaper_axes` ["x", "y"], `effects.shaper_follows_pose` on (the shaper follows the sway's period of the rope's
+length; `effects.input_shaping` itself off, on with `--set effects.input_shaping=true`). A segment's `payload` is whether
+the hook holds the load once the segment has arrived. Model in [mechanisms.md](mechanisms.md#overhead-crane-machine-overhead-crane).
+Its own keys (estimates, each with a `[bounds]` entry where it is a part's property):
+
+| Key | Unit | Meaning | Shipped |
+| --- | --- | --- | --- |
+| `effects.rope_stretch` | true/false | The rope stretches (EA / l) and goes slack. **Off selects the rigid reference model**: the rope keeps its free length, its tension the constraint force (it may push) | true |
+| `effects.rope_damping` | true/false | With `rope_stretch`: the rope's material damping, `rope.specific_damping_n_s` / l | true |
+| `effects.guide_friction` | true/false | The bridge's and the trolley's wheels roll against `crane.rolling_coefficient` times their load | true |
+| `crane.rope_exit_height_m` | m | Where the rope leaves the trolley's sheave, over the floor | 5.0 |
+| `crane.bridge_mass_kg`, `trolley_mass_kg`, `hook_mass_kg` | kg | Girder with end carriages and its drive; trolley with the hoist; hook block | 600, 120, 15 |
+| `crane.payload_kg` | kg | The load on the hook, with `effects.payload` and a segment's `payload` | 250 |
+| `crane.bridge_stroke_m`, `trolley_stroke_m` | m | Travel between the buffers, from 0 | 10, 5 |
+| `crane.bridge_wheel_radius_m`, `trolley_wheel_radius_m` | m | The driven wheels: the lever behind each gearbox | 0.08, 0.05 |
+| `crane.rolling_coefficient` | – | Travel resistance as a share of the wheel load (5 to 7 N/kN with rolling bearings) | 0.006 |
+| `crane.rolling_smoothing_m_s` | m/s | The speed over which the rolling resistance builds up from rest (tanh) | 0.005 |
+| `crane.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | The rails' buffers (`effects.hard_stops`) | 1e6, 2000 |
+| `crane.residual_sway_max_m` | m | Verdict `residual-sway`: the load's sway amplitude at a dwell at most this | 0.05 |
+| `hoist.drum_radius_m`, `drum_inertia_kgm2`, `capacity_m` | m, kg m², m | The drum: the lever behind the hoist's gearbox, its inertia, the rope it holds | 0.08, 0.05, 6 |
+| `hoist.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | Stops at an empty and a full drum | 1e6, 2000 |
+| `hoist.brake_safety_factor` | – | Verdict `hoist-brake`: the rope's torque at the hoist's motor at most `motor.hoist.brake_torque_nm` over this | 1.6 |
+| `rope.ea_n` | N | The rope's stiffness EA (a 6 mm 6x19 steel wire rope) | 1.44e6 |
+| `rope.specific_damping_n_s` | N s | Its damping times its free length, so c / l | 1660 |
+| `rope.breaking_load_n`, `safety_factor` | N, – | Verdict `rope-max-tension`: the tension at most their quotient | 20000, 4.5 |
+| `rope.min_tension_n` | N | Verdict `rope-min-tension`: the tension never below this (no slack rope) | 50 |
 
 ## `[[cycle.segment]]`
 

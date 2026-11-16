@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 /// a platform hung in cables or the rotary table's payload inertia (the slides have one; the arms, the platforms in
 /// cables and the table have none).
 fn payload_key(cfg: &Config) -> &'static str {
-    ["mass.payload_kg", "arm.payload_kg", "platform.payload_kg", "table.payload_inertia_kgm2"]
+    ["mass.payload_kg", "arm.payload_kg", "platform.payload_kg", "table.payload_inertia_kgm2", "crane.payload_kg"]
         .into_iter()
         .find(|k| cfg.get(k).is_ok())
         .unwrap()
@@ -49,7 +49,8 @@ macro_rules! per_machine {
     machine_24 24,
     machine_25 25,
     machine_26 26,
-    machine_27 27);
+    machine_27 27,
+    machine_28 28);
     };
     ($check:ident: $($test:ident $place:literal),*) => {
         mod $check {
@@ -66,7 +67,7 @@ macro_rules! per_machine {
 /// Every registered machine has its tests from `per_machine!`.
 #[test]
 fn every_machine_has_its_tests() {
-    assert_eq!(MACHINES.len(), 28, "give per_machine! a test for each machine");
+    assert_eq!(MACHINES.len(), 29, "give per_machine! a test for each machine");
 }
 
 /// Polls until the simulation thread has delivered samples and a scene.

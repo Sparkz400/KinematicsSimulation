@@ -37,7 +37,8 @@ macro_rules! per_machine {
     machine_24 24,
     machine_25 25,
     machine_26 26,
-    machine_27 27);
+    machine_27 27,
+    machine_28 28);
         }
     };
     (@at $check:ident, $($test:ident $index:literal),*) => {
@@ -48,7 +49,7 @@ macro_rules! per_machine {
     };
 }
 
-const PER_MACHINE_TESTS: usize = 28;
+const PER_MACHINE_TESTS: usize = 29;
 
 #[test]
 fn every_machine_has_its_test() {
@@ -59,7 +60,7 @@ fn every_machine_has_its_test() {
 /// rotary table's payload inertia or the payload of a platform hung on cables (the slides have one; the arms, the table
 /// and the platforms have none).
 fn payload_key(cfg: &sim_core::Config) -> &'static str {
-    ["mass.payload_kg", "arm.payload_kg", "table.payload_inertia_kgm2", "platform.payload_kg"]
+    ["mass.payload_kg", "arm.payload_kg", "table.payload_inertia_kgm2", "platform.payload_kg", "crane.payload_kg"]
         .into_iter()
         .find(|k| cfg.get(k).is_ok())
         .unwrap()
