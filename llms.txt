@@ -1,0 +1,41 @@
+# Kinematics Simulation
+
+> A physics simulator of motion machines (belt gantries, delta and parallel pickers, arms, parallel kinematics on
+> cylinders and cables, cranes, presses, web handling) with a servo drive model: cycle loads per motor, sizing verdicts
+> with error bands, catalogue motor search, loop margins, positioning accuracy, path error, FMU export. Rust; front
+> ends: command line `sim-cli`, Python module `kinematics-sim` (PyPI), an MCP server, a desktop app, a browser page,
+> FMI, OPC UA. Only one machine (a ball screw bench) has been measured: most parameters of the shipped configs are
+> estimates with [bounds]; read "What it can and cannot tell you" before stating results as facts.
+
+Docs site: https://sparkz400.github.io/KinematicsSimulation/docs/ (the same pages as docs/*.md in the repository,
+https://github.com/Sparkz400/KinematicsSimulation).
+
+## For LLMs and coding agents
+
+- [MCP server](https://sparkz400.github.io/KinematicsSimulation/docs/mcp.html): `uvx --from "kinematics-sim[mcp]" kinematics-sim-mcp`, its tools, client config snippets
+- [Using sim-cli from a coding agent](https://sparkz400.github.io/KinematicsSimulation/docs/mcp.html#using-sim-cli-from-a-coding-agent): the commands that answer the common questions, their CSV output and exit codes
+
+## Start here
+
+- [What it can and cannot tell you](https://sparkz400.github.io/KinematicsSimulation/docs/overview.html#what-it-can-and-cannot-tell-you): scope, validation, limits
+- [Overview and tour](https://sparkz400.github.io/KinematicsSimulation/docs/overview.html): a five-minute tour of the command line with real output
+- [Installing a release](https://sparkz400.github.io/KinematicsSimulation/docs/install.html)
+- [User guide](https://sparkz400.github.io/KinematicsSimulation/docs/user-guide.html): every command, option and output column
+- [Python module](https://sparkz400.github.io/KinematicsSimulation/docs/python.html): `kinematics_sim`, every function
+
+## Reference
+
+- [Config reference](https://sparkz400.github.io/KinematicsSimulation/docs/config-reference.html): every config key, with units in the key names
+- [Machine files](https://sparkz400.github.io/KinematicsSimulation/docs/machine-files.html): a new machine from components, without Rust
+- [Model reference](https://sparkz400.github.io/KinematicsSimulation/docs/model-reference.html): the equations
+- [Mechanisms and transmissions](https://sparkz400.github.io/KinematicsSimulation/docs/mechanisms.html)
+- [Catalogue](https://sparkz400.github.io/KinematicsSimulation/docs/catalogue.html): motors, drives, gearboxes, axes and where their data comes from
+- [Validation](https://sparkz400.github.io/KinematicsSimulation/docs/validation.html): what each figure was checked against
+
+## Optional
+
+- [FMI export](https://sparkz400.github.io/KinematicsSimulation/docs/fmi.html)
+- [PLC virtual commissioning (OPC UA)](https://sparkz400.github.io/KinematicsSimulation/docs/plc.html)
+- [The simulator in the browser](https://sparkz400.github.io/KinematicsSimulation/docs/web.html)
+- [Measuring a drive train](https://sparkz400.github.io/KinematicsSimulation/docs/measurement-procedure.html)
+- [Changelog](https://github.com/Sparkz400/KinematicsSimulation/blob/main/CHANGELOG.md)

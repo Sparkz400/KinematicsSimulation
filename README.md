@@ -87,7 +87,8 @@ The equations are checked; the parameters of a given machine (friction, damping,
 | Front end | For |
 | --- | --- |
 | Desktop app | 3D view, scopes, cycle analysis, search and tuning |
-| `sim-cli` | Scripting and CI; CSV output |
+| `sim-cli` | Scripting and CI; CSV output; [from a coding agent](docs/mcp.md#using-sim-cli-from-a-coding-agent) |
+| [MCP server](docs/mcp.md) | LLM clients (Claude, Cursor, any MCP client): sizing, search, margins in conversation |
 | [Python](docs/python.md) | NumPy/pandas results, parameter sweeps, your own controller |
 | [FMI 2.0 / 3.0](docs/fmi.md) | Co-simulation in Simulink, OpenModelica, Dymola |
 | [OPC UA](docs/plc.md) | Virtual commissioning with a PLC (PLCopen-style axes) |

@@ -9,7 +9,8 @@ heißt `machines`; was die Funktionen auslassen, steht am Ende), und sie liefern
 kommen als NumPy-Arrays und als Dicts gleich langer Spalten; `pandas.DataFrame(ergebnis)` nimmt jede Tabelle so, wie sie ist.
 
 Quelle: `crates/sim-py` (PyO3 0.30.1, gebaut mit maturin 1.16.0). Das Wheel ist abi3: ein Wheel je Plattform dient jedem
-CPython ab 3.10. Die Typ-Stubs (`kinematics_sim.pyi`) und die Markierung `py.typed` liegen im Wheel.
+CPython ab 3.10. Die Typ-Stubs und die Markierung `py.typed` liegen im Wheel. Das Extra `kinematics-sim[mcp]` bringt
+einen MCP-Server für LLM-Clients ([MCP-Server](../mcp.md), englisch).
 
 ## Installieren
 
@@ -52,6 +53,7 @@ pd.DataFrame(ks.sizing(cfg, series="1FK2"))             # jeder Katalogmotor auf
 | `Config(machine_file=DATEI, text=None, path=None)` | dasselbe für eine Maschine aus einer Maschinendatei ([Maschinendateien](maschinendateien.md)); ein Fehler in der Datei nennt Datei und Zeile | `--machine-file DATEI` |
 | `cfg[pfad] = wert`, `cfg.set("pfad = wert")` | ein Wert obendrauf. Ein unter `[parts]` genanntes Teil (`cfg["parts.motor"] = "1FK2104-5AK"`) wirkt wie `--motor` und die anderen Teil-Optionen: alle genannten Teile kommen zusammen aus dem Katalog, und jeder andere gesetzte Wert bleibt über ihren, gleich in welcher Reihenfolge beide gesetzt wurden | `--set`, `--motor` und die anderen Teil-Optionen |
 | `signals(cfg)` | `{"id": [...], "unit": [...]}`, die Signale in der Reihenfolge von `run` | der Kopf von `sim-cli run` |
+| `label(cfg, key, lang="en")` | der Text eines Meldungsschlüssels für die Maschine, z. B. `"check-motor-thermal"` (was ein Urteil prüft, mit Einheit); ein Schlüssel ohne Text kommt unverändert zurück | die Texte von `sim-app` und dem Bericht |
 | `run(cfg, cycle=, move_to=, path=, trajectory=, time_optimal=, time=2.0, every=16, disable_at=)` | `{Signal-ID: Array}` über `time` Sekunden, alle `every` Grundschritte abgetastet | `sim-cli run` |
 | `analyze(cfg, path=, trajectory=, time_optimal=, points=False)` | die Last je Motor über einen Durchlauf des Zyklus oder über eine Bahn; `points=True` fügt je Motor die Arbeitspunkte als (n, 2)-Array aus Drehzahl (rad/s) und Moment (N m) hinzu | `sim-cli analyze` |
 | `verdicts(cfg, bands=False, samples=None, seed=1, worst=False, path=None, path_file=None, time_optimal=False)` | die Prüfungen; mit `bands` ihr kleinster und größter Wert über die `[bounds]` und ob der ungünstigste Fall besteht; mit `samples` N Läufe zwischen den Grenzen und der Anteil, der bestand; mit `bands=True, worst=True` die ungünstigste Ecke je Prüfung: `worst`, `limit`, `worst_ok`, `at_high_bound` und `at_low_bound` (Listen von Parametern) und `runs`; mit `path` (der Text einer Bahndatei oder Roboter-CSV, oder mit `path_file` ein Programm nach der Endung dieses Namens) wird statt des Zyklus der Lauf der Bahn beurteilt | `sim-cli verdicts [--bands] [--samples N --seed S] [--worst] [--path DATEI [--time-optimal]]` |

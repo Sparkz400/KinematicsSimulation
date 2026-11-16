@@ -9,3 +9,7 @@ recordings/
 /crates/sim-wasm/web/*.wasm
 /.venv-py
 /bench-baseline
+# The native module maturin develop puts into the mixed Python package
+/crates/sim-py/python/kinematics_sim/*.pyd
+/crates/sim-py/python/kinematics_sim/*.so
+/crates/sim-py/python/kinematics_sim/*.pdb

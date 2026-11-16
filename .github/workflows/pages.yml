@@ -38,6 +38,7 @@ jobs:
           mkdir -p site
           cp crates/sim-wasm/web/index.html site/
           cp target/wasm32-unknown-unknown/wasm/sim_wasm.wasm site/
+          cp llms.txt site/
       # mdBook and lychee as pinned release binaries, checked against their SHA-256 (no Rust dependency for the site).
       - name: Install mdBook and lychee
         run: |
