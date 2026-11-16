@@ -1997,7 +1997,7 @@ pub fn bounds(cfg: &Config) -> Result<Vec<(String, f64, f64)>, ConfigError> {
 /// `bounds` as the config resolved from `cfg` has them, where they are `cfg`'s own `[bounds]`: a part by name has
 /// re-centred those of the values it set (see `bounds`). A bound given otherwise (the caller's own range), or one the
 /// resolved config has none for, is kept.
-fn followed(cfg: &Config, resolved: &Config, bounds: &[(String, f64, f64)]) -> Vec<(String, f64, f64)> {
+pub(crate) fn followed(cfg: &Config, resolved: &Config, bounds: &[(String, f64, f64)]) -> Vec<(String, f64, f64)> {
     let own = |c: &Config, path: &str| match c.f64s(&format!("bounds.{path}")).as_deref() {
         Ok([low, high]) => Some((*low, *high)),
         _ => None,

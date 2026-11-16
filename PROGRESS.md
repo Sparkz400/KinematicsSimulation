@@ -4358,3 +4358,18 @@ Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries a
   the motors held; machine files that follow their crates' friction feedforward.
 - Last full run in this period: 1533 of 1538 tests passed at 54a2fca, before wave 3; the final count is a placeholder
   in docs/validation.md.
+
+## Global sensitivity: Morris and Sobol' (16 November)
+
+- `sim_components::sensitivity`: Morris trajectories on a four-level grid (step 2/3 of the range), μ*, μ, σ; Saltelli
+  points (A, B, AB_i) with Jansen's first-order and total estimators and 200 bootstrap resamples for 95 % intervals.
+  Results per run: every verdict's margin (room to its limit in its unit; not the utilisation, which is 0 for
+  `belt-slack` whatever the tension), per motor peak and RMS torque and winding rise, path error peak and RMS, dwell
+  error. Front ends: `sim-cli sensitivity --method morris|sobol` (the one-at-a-time mode unchanged without `--method`),
+  `ks.global_sensitivity`.
+- Tests: Ishigami S and S_T to 0.03, the linear model's a_i² Var_i / Σ, Morris' exact μ* = |a_i| range with σ = 0, the
+  Morris grid, determinism and thread independence, a value that cannot act (μ* = 0, S_T = 0) on the single axis, Python
+  against the CLI.
+- Morris, 10 trajectories: T-gantry 320 cycles in about 2 min (friction leads heat and RMS torque, belt and frame
+  stiffness lead settling and path error, the belt's slack follows the pretension 1:1); D3 370 cycles in about 30 s
+  (platform and forearm masses lead the torques, gearbox backlash and lost motion the accuracy). See the user guide.

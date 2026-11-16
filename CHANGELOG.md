@@ -7,6 +7,15 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Added
+
+- Global sensitivity over a config's `[bounds]`: `sim-cli sensitivity <machine> --method morris|sobol [--samples N]
+  [--seed S] [--result NAME] [--group TABLE]`, Python `ks.global_sensitivity` (module `sim_components::sensitivity`).
+  Morris' elementary effects (μ*, μ, σ) as a cheap screening, Sobol' first-order and total indices (Saltelli sampling,
+  Jansen estimators) with bootstrap 95 % intervals; per result (the verdicts' margins, peak and RMS torque, winding rise,
+  path and dwell error) a ranked CSV and "measure these first" on the error stream; runs on all cores, deterministic for
+  a seed. Checked on the Ishigami function and a linear model with known indices.
+
 ## [1.0.0] - 2026-11-16
 
 The release was cut on 14 November 2026 at 19c2ad1 and tagged on 16 November 2026; the three
