@@ -534,12 +534,18 @@ fn texts<'a>(lang: &str, keys: impl Iterator<Item = &'a str>) -> String {
 
 /// The cycle of the config, one pass measured by `analyse_cycle`, or the path of the request run through by
 /// `analyse_trajectory`, and judged as `sim-cli verdicts` judges it; per motor every column of `sim-cli analyze`, with
-/// the operating points and the torque-speed curve.
+/// the operating points and the torque-speed curve. The column names are fixed: a motor's `torque_unit` and
+/// `speed_unit` say what its `*_torque_nm` and `peak_speed_rad_s` hold (N m and rad/s, on a linear motor N and m/s).
 fn size(r: &Request) -> Result<String, String> {
     let (entry, tr, cfg) = configured(r)?;
     let refused = |e: sim_core::ConfigError| tr.tr_arg(e.key(), e.detail());
     let mut sim = Sim::new(entry, &cfg).map_err(refused)?;
     let motors = sim.machine.motors().to_vec();
+    let infos = sim.signal_infos();
+    let unit_of = |motor: &str, signal: &str, rotary: &str| {
+        let id = format!("motor.{motor}.{signal}");
+        infos.iter().find(|s| s.id == id).map_or(rotary, |s| s.unit.as_str()).to_string()
+    };
     let mut warnings: Vec<String> = sim
         .limit_violations
         .iter()
@@ -615,10 +621,12 @@ fn size(r: &Request) -> Result<String, String> {
         ];
         let _ = write!(
             json,
-            "{}{{\"id\":{},\"name\":{}",
+            "{}{{\"id\":{},\"name\":{},\"torque_unit\":{},\"speed_unit\":{}",
             if k == 0 { "" } else { "," },
             quote(motor.id),
-            quote(tr.tr(motor.key))
+            quote(tr.tr(motor.key)),
+            quote(&unit_of(motor.id, "torque", "N m")),
+            quote(&unit_of(motor.id, "speed", "rad/s"))
         );
         for (key, value) in columns {
             let _ = write!(json, ",{}:{}", quote(key), or_null(value));
@@ -674,7 +682,8 @@ pub fn torque_speed_curve(drive: &sim_components::drive::DriveParams) -> (Vec<(f
     (curve, vec![(-rated, t), (rated, t), (rated, -t), (-rated, -t), (-rated, t)])
 }
 
-/// The frequency response from one motor's torque to its speed (kind 5), as `sim-cli sweep` gives it.
+/// The frequency response from one motor's torque to its speed (kind 5), as `sim-cli sweep` gives it. On a linear
+/// motor `amplitude_nm` is a force in N and the gain is in (m/s)/N.
 fn sweep(r: &Request) -> Result<String, String> {
     let (entry, tr, cfg) = configured(r)?;
     let refused = |e: sim_core::ConfigError| tr.tr_arg(e.key(), e.detail());
@@ -870,10 +879,21 @@ fn scopes(r: &Request) -> Result<String, String> {
         let values: Vec<String> = rows.iter().map(|row| c.map_or("null".into(), |c| short(row[c]))).collect();
         format!("[{}]", values.join(","))
     };
+    // The label is the first motor's; each unit is listed per motor (a rotary and a linear motor may share a machine).
     let head = SCOPE_SIGNALS.map(|name| {
         let info = motors.first().and_then(|m| column(format!("motor.{}.{name}", m.id))).map(|c| &signals[c]);
         let (key, unit) = info.map_or((name.to_string(), ""), |s| (s.quantity_key.clone(), s.unit.as_str()));
-        format!("{{\"id\":{},\"label\":{},\"unit\":{}}}", quote(name), quote(tr.tr(&key)), quote(unit))
+        let units: Vec<String> = motors
+            .iter()
+            .map(|m| quote(column(format!("motor.{}.{name}", m.id)).map_or("", |c| signals[c].unit.as_str())))
+            .collect();
+        format!(
+            "{{\"id\":{},\"label\":{},\"unit\":{},\"units\":[{}]}}",
+            quote(name),
+            quote(tr.tr(&key)),
+            quote(unit),
+            units.join(",")
+        )
     });
     let mut json = format!(
         "{{\"step_s\":{},\"time\":{},\"signals\":[{}],\"motors\":[",

@@ -1987,3 +1987,13 @@ fn the_mode_shapes_and_the_workspace_map_are_written_as_csv() {
     let flat = MACHINES.iter().copied().find(|e| built(e).machine.condition(&start(e)).is_none()).unwrap();
     assert_eq!(cli(&["workspace", flat.id]).status.code(), Some(2));
 }
+
+/// `--help` and `-h` print the usage on the output stream and succeed; they were refused as unknown options.
+#[test]
+fn help_prints_the_usage() {
+    for flag in ["--help", "-h"] {
+        let out = cli(&[flag]);
+        assert!(out.status.success(), "{flag}");
+        assert!(text(&out.stdout).starts_with("Usage: sim-cli list"), "{flag}");
+    }
+}

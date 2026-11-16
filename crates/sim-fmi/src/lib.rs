@@ -28,8 +28,8 @@
 //! | `command.trajectory_file`   | String  | input       | poses at times, run instead of a path where not empty |
 //! | `command.run_path`          | Boolean | input       | turning true plans the path from here and runs it     |
 //! | `command.mode.<motor>`      | String  | input       | the drive's mode: "position", "velocity" or "torque"  |
-//! | `command.torque.<motor>`    | Real    | input       | torque setpoint in torque mode, N m at the motor      |
-//! | `command.velocity.<motor>`  | Real    | input       | speed setpoint in velocity mode, rad/s at the motor   |
+//! | `command.torque.<motor>`    | Real    | input       | torque setpoint in torque mode, N m (N if linear)    |
+//! | `command.velocity.<motor>`  | Real    | input       | speed setpoint in velocity mode, rad/s (m/s if linear)|
 //! | `time_optimal`              | Boolean | parameter   | paths timed as fast as the motors allow               |
 //! | `machine`                   | String  | parameter   | the machine of the registry                           |
 //! | `config_file`               | String  | parameter   | a config file to use instead of the one in the FMU    |
@@ -223,9 +223,10 @@ pub fn machine_of(resources: &std::path::Path, id: &str) -> Result<&'static Mach
 }
 
 fn variables(machine: &str, sim: &Sim, cfg: &Config, tr: &Translations) -> Vec<Variable> {
-    let mut out: Vec<Variable> = sim
-        .signal_infos()
-        .into_iter()
+    let infos = sim.signal_infos();
+    let mut out: Vec<Variable> = infos
+        .iter()
+        .cloned()
         .enumerate()
         .map(|(i, s)| Variable {
             description: format!("{} · {}", tr.tr(&s.owner_key), tr.tr(&s.quantity_key)),
@@ -281,14 +282,20 @@ fn variables(machine: &str, sim: &Sim, cfg: &Config, tr: &Translations) -> Vec<V
         let mut mode = text(&format!("command.mode.{}", motor.id), Kind::DriveMode(k), "fmi-drive-mode", "position");
         mode.description = format!("{owner} · {}", mode.description);
         out.push(mode);
-        for (name, kind, key, unit) in
-            [("torque", Kind::Torque(k), "fmi-torque", "N m"), ("velocity", Kind::Velocity(k), "fmi-velocity", "rad/s")]
-        {
+        // The unit of the motor's own signal: N and m/s on a linear motor, N m and rad/s on a rotary one.
+        let unit_of = |signal: &str, fallback: &str| {
+            let id = format!("motor.{}.{signal}", motor.id);
+            infos.iter().find(|s| s.id == id).map_or(fallback.to_string(), |s| s.unit.clone())
+        };
+        for (name, kind, key, unit) in [
+            ("torque", Kind::Torque(k), "fmi-torque", unit_of("torque", "N m")),
+            ("velocity", Kind::Velocity(k), "fmi-velocity", unit_of("speed", "rad/s")),
+        ] {
             out.push(Variable {
                 name: format!("command.{name}.{}", motor.id),
                 kind,
                 description: format!("{owner} · {}", tr.tr(key)),
-                unit: unit.into(),
+                unit,
                 start: Some("0.0".into()),
             });
         }
