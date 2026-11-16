@@ -36,10 +36,9 @@ pub fn torque_speed(drive: &DriveParams, dc_voltage: f64) -> TorqueSpeed {
         let pairs: Vec<_> = speeds.iter().map(|&w| (w, f(w))).collect();
         [pairs.iter().map(|&(w, (_, high))| [w, high]).collect(), pairs.iter().map(|&(w, (low, _))| [w, low]).collect()]
     };
-    // The verdict's line (`analysis::s1_torque`): k_t I_0 at standstill to the rated torque at the rated speed, on beyond it.
-    let still = drive.kt * drive.stall_current;
+    // The verdict's line, from the same source (`DriveParams::s1_torque`, `analysis::s1_torque`).
     let s1 = |sign: f64| {
-        let at = |w: f64| sign * (still + (drive.rated_torque - still) * w.abs() / drive.rated_speed).max(0.0);
+        let at = |w: f64| sign * drive.s1_torque(w);
         vec![[-top, at(top)], [0.0, at(0.0)], [top, at(top)]]
     };
     TorqueSpeed {
@@ -474,12 +473,33 @@ mod tests {
     /// 1.8 - 0.6 * 1.5 = 0.9 N m (the verdict's `s1_torque`), standstill 1.8, both directions.
     #[test]
     fn the_s1_line_runs_from_the_static_torque_to_the_rated_one_and_on() {
-        let p = DriveParams { kt: 0.45, stall_current: 4.0, rated_torque: 1.2, rated_speed: 100.0, ..drive() };
+        let p = DriveParams { kt: 0.45, static_torque: 1.8, rated_torque: 1.2, rated_speed: 100.0, ..drive() };
         let c = torque_speed(&p, 300.0);
         let top = c.s1[0][2][0];
         assert!((c.s1[0][1][1] - 1.8).abs() < 1e-12 && (c.s1[1][1][1] + 1.8).abs() < 1e-12);
         let at_150 = c.s1[0][2][1] - (c.s1[0][2][1] - 1.8) * (top - 150.0) / top;
         assert!((at_150 - 0.9).abs() < 1e-9, "{at_150}");
+    }
+
+    /// With effects.iron_loss off the drive's stall current is the rated one (2 A, `stall_current`), but the config's
+    /// `motor.stall_current_a` (4 A) still sets the verdict's static torque 0.45 * 4 = 1.8 N m: the chart draws that, 1.8 N m
+    /// at standstill and 1.2 N m at the rated speed, not a flat 1.2 N m. Without a stall current it is flat at the rated
+    /// torque.
+    #[test]
+    fn the_s1_line_takes_the_static_torque_from_the_stall_current_key_without_iron_loss() {
+        let p = DriveParams {
+            kt: 0.45,
+            stall_current: 2.0,
+            static_torque: 1.8,
+            rated_torque: 1.2,
+            rated_speed: 100.0,
+            ..drive()
+        };
+        assert!((p.s1_torque(0.0) - 1.8).abs() < 1e-12 && (p.s1_torque(-100.0) - 1.2).abs() < 1e-12);
+        let c = torque_speed(&p, 300.0);
+        assert!((c.s1[0][1][1] - 1.8).abs() < 1e-12);
+        let flat = DriveParams { static_torque: 0.0, ..p };
+        assert!((flat.s1_torque(0.0) - 1.2).abs() < 1e-12 && (flat.s1_torque(150.0) - 1.2).abs() < 1e-12);
     }
 
     /// 300 samples (not a power of two) of a sine of 0.3 on a bin of the padded 512: the whole run is used, so the

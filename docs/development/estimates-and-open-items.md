@@ -30,10 +30,8 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 | What | Where | Why it is only a choice | Closing it |
 | --- | --- | --- | --- |
 | A printed voltage constant more than 20 % off the torque constant is thrown away as a misprint | `catalog.rs` (`motor_data`, `emf_constant`) | The threshold is arbitrary. The audit found genuine Beckhoff AM8000 rows at 1.30 and Rexroth at 1.18; the rule may drop real data | Replace by the two named misprints (AKM64Q at 240 V, 1FT7044-1AF7) |
-| The induction motor's flux is held so the no-load voltage uses 0.9 of the supply | `induction.rs` (`flux_setpoint`) | 0.9 is a round number, not the torque-optimal flux (near 1/√2 of the voltage for the stator's share) | Derive the flux that gives the most torque inside the voltage and current limits at each speed |
 | The mesh-friction bristle behind a screw, rack or drum is capped at a quarter of the integrator's rate bound | `transmission.rs` (`Converter::apply`) | A numerical cap, softer than the physical bristle; chosen so RK4 stays stable, never tuned by a run | Run cable robot and screw axis, check the energy budget, then either keep the cap with its measured error or integrate the bristle implicitly |
 | The error band of "fitted minus config" is scaled by the ratio of residual norms | `identify.rs` (`unshared`) | The implementer's own estimate of the difference's error; not derived, not checked for coverage | Monte Carlo on a machine with known truth: (fitted − config)/error must have a standard deviation near 1 |
-| V/f breakdown torque by a 96-point scan over slip | `induction.rs` (`vf_extreme`) | Resolution chosen by eye | Compare with the closed-form Thevenin breakdown at fixed frequency |
 | A half-turn arc is laid in the first coordinate plane that contains its start radius, x-y first | `path.rs` (`arc3`) | A convention: a G18 or G19 semicircle whose start radius lies in two coordinate planes lands in the wrong plane | Carry the plane on the arc piece, set by G17/G18/G19 in `program.rs` |
 | The pinion's separating force always loads the worst guide block | `machine-joint-kit/src/arm.rs` (`guide_load`) | The config does not say on which side the rack sits, so the sign is taken as worst case | Add the rack side to the config |
 | The retuned speed-loop gain grows with the square root of the inertia change | `catalog.rs` (`retuned`) | A stated compromise. With the now-correct inertia the catalogue axis ELZ-125 gets gain 0.0573 and oscillated in the audit | Bound the retuned gain by the machine's first resonance, or retune for a crossover frequency |
@@ -47,7 +45,6 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 | KRL `CIRC`: components left out of the end point come from the previous position | `program.rs` | The module's own doc sentence and RAPID's MoveC; no KUKA manual was read | Read the KUKA System Software manual's CIRC section |
 | G-code: a rotary-only block reads F in degrees per minute, a mixed block takes its time from the linear axes | `program.rs` (`path_feed`) | Common control behaviour (Siemens); Fanuc counts degrees as mm | State the dialect, or make it a setting |
 | A late fieldbus frame makes a drive with fine interpolation carry on extrapolating the old frame | `control.rs` (`profile_tick`) | Reasoning; no drive manual was read | Read one drive's behaviour on a missed setpoint (SINAMICS DSC, CiA 402 interpolated position) |
-| Stepper drive current ratings are the phase-peak amplitude | `docs/config-reference.md` | The model's own convention; datasheets often print RMS | Check per catalogue vendor and convert where they print RMS |
 
 ## 4. Derived but never run (as of this writing nothing in the batch has been executed)
 
@@ -65,6 +62,15 @@ result is in, treat **every number below as unverified**.
   planned; the original case (−19.1 N m at 42.5 A near 400 rad/s with saturation off) was never
   reproduced before or after.
 - **Induction torque curve and delivered torque agree** (`induction.rs`): by construction, not by run.
+- **Induction flux of the most torque** (`induction.rs`, `flux_setpoint`): 27.29 N m at 0.774 Wb and 115 rad/s
+  (540 V link) come from an independent scan in Python, not from the Rust; the shipped `induction-lift` cycle
+  now runs with a weaker flux from about 100 rad/s on, and nobody has seen it run. Cost per base step in the
+  weakened range (a golden section of about 1700 voltage evaluations) unmeasured.
+- **Back-EMF constant apart from the torque constant** (`drive.rs`, `emf_loss`, budget row `emf.<motor>`): the
+  row is the winding's step energies less copper, shaft and stored energy, derived by hand; nothing has run
+  with a printed voltage constant, and the sign in braking (the row is negative) is a model limit, not physics.
+- **Torque band with the inertia feedforward** (`control.rs`, `holding_torque`): the rigid model's torque at rest
+  at the planned pose stands in for the held load; friction and the integrator's rest are not in it.
 - **The time-optimal planner still keeps every limit** with the ramp share following curvature
   (`path.rs`, `ramp_share`): argued, not run.
 - **Mesh friction with the bristle in joint units**: the cable robots blew up numerically and the screw
@@ -81,7 +87,6 @@ result is in, treat **every number below as unverified**.
 
 | What the model leaves out | Where | Size of the error | Why it was left | Closing it |
 | --- | --- | --- | --- | --- |
-| Simulated back-EMF uses the torque constant, not the printed voltage constant (only the reported no-load speed uses the printed one) | `drive.rs` | 10 to 15 % on the voltage limit for Beckhoff, Kollmorgen, SEW, Rexroth; about 5 % of that is real magnet temperature | The drive model has one constant; the implementer's group did not own `drive.rs` | Give the drive a separate back-EMF constant |
 | Plan's belt tensions on the linear delta drop the speed term | `machine-delta-linear/src/lib.rs` (`rigid_tensions`) | 12 to 20 N per carriage at 3 m/s (3 to 4 % of pretension) | The shared trait method has no speed argument; the implementer could not change sim-core | Add the speed to the trait (or a v² row as the guide rows have) |
 | Mover track segment current uses the linear force constant | `machine-mover-track/src/lib.rs` (`segment_load`) | up to 5 % low at peak force | The saturated current needs the drive's cycle time, which the crate does not hold | Pass the drive parameters in |
 | Stroke limit of Rexroth CKR and Bahr axes is the module length | `catalog.rs` | stroke overstated by carriage plus adapter, about 80 to 170 mm | The tables have no carriage or adapter length | Extract those two lengths from the vendor PDFs |
@@ -94,9 +99,7 @@ result is in, treat **every number below as unverified**.
 | Guide life comes from one guide | `analysis.rs` (`Tally::finish`) | can differ from the true minimum when guides run at very different speeds | The result structure carries one pair | Carry a pair per guide |
 | "motor-speed" label says rad/s on linear motors | `sim-components/i18n/*.ftl`, `sim-app/src/model.rs` | label only | The text has the unit baked in and three groups owned the three files | Build the label from the motor's kind |
 | CLI, Python and browser column names say kg, N, N m, rad/s when the axis is rotary or the motor linear | `sim-cli`, `sim-py`, `sim-wasm` | names only; usage text and docstrings now say so | Names are an interface | Add a unit column |
-| Torque-band monitor trips on a held load with the "inertia" feed-forward | `fault.rs` | 11 % of peak torque on the lift | Adding the integrator would blind the monitor | Compare against feed-forward plus gravity |
 | A full circle given with R is refused; consecutive mixed linear/rotary G-code blocks stop between each other | `program.rs` | behaviour, not a wrong number | An R circle is ambiguous; mixed blocks get different caps | Blend mixed blocks |
-| With iron loss off, the drawn S1 line may be flat while the verdict reads the stall current | `charts.rs` / `analysis.rs` | chart only | Needs one field from `drive.rs` | Use the same source in both |
 | Tool position error falls back to the motor-side following error when a run has no setpoint signal | `sim-app/src/runs.rs` | 2.4 to 15 times too small when it falls back | Old recordings lack the signal | Check every machine emits `axis.<id>.position_setpoint` |
 | Pre-existing estimates the audit did not judge: tooth-jump factor, brake deflection and slip times, the efficiency fade constant 0.5 W, placeholder drive currents in shipped configs | `mech.rs`, shipped `default.toml` files | unknown | Outside the audit's reach without measurements | Measure, or mark each in its config comment |
 

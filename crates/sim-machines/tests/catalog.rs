@@ -811,3 +811,22 @@ fn the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds() {
         );
     }
 }
+
+/// `drive.back_emf_constant_v_s_rad` sets the servo winding's back-EMF per speed apart from the torque constant
+/// (0.45 N m/A in the single axis): 0.5 V s/rad where the key is given, the torque constant without it or with 0, and 0
+/// with effects.back_emf off.
+#[test]
+fn the_back_emf_constant_key_sets_the_servo_winding_apart_from_the_torque_constant() {
+    use sim_components::drive::DriveParams;
+    let ke = |edit: &[&str]| {
+        let mut cfg = machine_single_axis::ENTRY.config();
+        for e in edit {
+            cfg.set_text(e).unwrap();
+        }
+        DriveParams::from_config(&cfg, 62.5e-6, 125e-6).unwrap().ke
+    };
+    assert_eq!(ke(&[]), 0.45);
+    assert_eq!(ke(&["drive.back_emf_constant_v_s_rad = 0.5"]), 0.5);
+    assert_eq!(ke(&["drive.back_emf_constant_v_s_rad = 0.0"]), 0.45);
+    assert_eq!(ke(&["drive.back_emf_constant_v_s_rad = 0.5", "effects.back_emf = false"]), 0.0);
+}

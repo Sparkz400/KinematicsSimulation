@@ -359,6 +359,7 @@ quantity-friction-stiction = Haftreibung (Stribeck-Anteil)
 quantity-friction-load-scale = Reibungsfaktor aus der Führungslast
 budget-supply = Aus der Einspeisung bezogen
 budget-copper = Kupferverlust
+budget-emf = Magnet- und Eisenverlust aus der EMK-Konstante (kE - kt) i w
 budget-resistor = Bremswiderstand
 budget-capacitors = Gespeichert in den Zwischenkreiskondensatoren
 budget-windings = Gespeichert in der Wicklungsinduktivität
