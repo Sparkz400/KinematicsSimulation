@@ -121,6 +121,11 @@
       "minimum": 0,
       "unit": "m"
     },
+    "non_stroke_length_m": {
+      "type": "number",
+      "minimum": 0,
+      "unit": "m"
+    },
     "max_length_x_m": {
       "type": "number",
       "minimum": 0,

@@ -26,7 +26,7 @@ HEADER = ["series", "size", "kind", "belt", "belt_pitch_m", "belt_width_m", "pul
           "feed_per_rev_m", "pulley_teeth", "no_load_torque_nm", "max_pulley_torque_nm", "feed_force_peak_n",
           "max_speed_m_s", "max_acceleration_m_s2", "fy_dynamic_n", "fz_dynamic_n", "mx_dynamic_nm", "my_dynamic_nm",
           "mz_dynamic_nm", "mass_at_zero_stroke_kg", "mass_per_stroke_kg_m", "moved_mass_x_kg", "stroke_x_min_m",
-          "max_length_one_piece_m"]
+          "max_length_one_piece_m", "non_stroke_length_m"]
 # "5, 500" (Lmax of the 280) has a blank after the thousands comma.
 TOKEN = re.compile(r"AT\d+|\d{1,3}(?:,\s?\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
 
@@ -79,10 +79,13 @@ def extract(lines):
     for s, group in general.items():
         t = expect(tokens(group), 9 if s == "280" else 16, f"general technical data {s}")
         carriage[s] = (t[0], t[1], t[2])
-        rows[s].update(stroke_x_min_m=to_si(t[4], "milli"), max_length_one_piece_m=to_si(t[5], "milli"))
+        # Lca + Lad is the part of the module length L that is not stroke (L = smax + Lca + Lad).
+        rows[s].update(stroke_x_min_m=to_si(t[4], "milli"), max_length_one_piece_m=to_si(t[5], "milli"),
+                       non_stroke_length_m=to_si(str(Decimal(t[0]) + Decimal(t[2])), "milli"))
         if s != "280":
             carriage[s + "L"] = (t[9], t[10], t[11])
-            rows[s + "L"].update(stroke_x_min_m=to_si(t[4], "milli"), max_length_one_piece_m=to_si(t[5], "milli"))
+            rows[s + "L"].update(stroke_x_min_m=to_si(t[4], "milli"), max_length_one_piece_m=to_si(t[5], "milli"),
+                                 non_stroke_length_m=to_si(str(Decimal(t[9]) + Decimal(t[11])), "milli"))
 
     # Drive data: the row with gear ratio 1 (no gear unit), and the moved mass mca per carriage. Misprint kept: the
     # drive data give the 110's carriage with connection plate as 60 mm long, the general data as 110 mm.

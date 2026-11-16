@@ -337,14 +337,17 @@ struct MotorData {
     /// A linear motor's magnetic attraction (N) and pole pitch (m).
     linear: Option<(f64, f64)>,
     /// The back-EMF constant in the model's one-winding convention (sqrt(3) times the printed line-to-line RMS voltage
-    /// constant, V s/rad), where the table has it and it fits the torque constant; `None` for kt.
+    /// constant, V s/rad), where the table has it and it is not a documented misprint; `None` for kt.
     emf_constant: Option<f64>,
 }
 
-/// The one-winding back-EMF constant from a printed line-to-line RMS voltage constant. A value more than 20 % off the
-/// torque constant is a documented misprint (AKM64Q at 240 V, 1FT7044-1AF7; `VENDOR_MISPRINTS` in the checks): not used.
-fn emf_constant(printed: Option<f64>, kt: f64) -> Option<f64> {
-    printed.map(|ke| 3f64.sqrt() * ke).filter(|ke| (ke / kt - 1.0).abs() <= 0.2)
+/// The one-winding back-EMF constant from a printed line-to-line RMS voltage constant. The two documented misprints
+/// (AKM64Q at 240 V, 1FT7044-1AF7; `VENDOR_MISPRINTS` in the checks) are not used; any other printed value is, however far
+/// from the torque constant (Beckhoff AM8000 up to 1.30 times it, Rexroth MS2N 1.18). `line` is the line voltage, 0 for
+/// Siemens.
+fn emf_constant(printed: Option<f64>, article: &str, line: f64) -> Option<f64> {
+    let misprint = (article == "AKM64Q" && line == 240.0) || article == "1FT7044-1AF7";
+    printed.filter(|_| !misprint).map(|ke| 3f64.sqrt() * ke)
 }
 
 fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
@@ -411,7 +414,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
             mass: get("mass_kg")?,
             force_constant: None,
             linear: None,
-            emf_constant: emf_constant(number(&m, "voltage_constant_v_s_rad"), static_torque / stall_current),
+            emf_constant: emf_constant(number(&m, "voltage_constant_v_s_rad"), article, line),
         });
     }
     if supply == "s120" {
@@ -440,10 +443,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
                 mass: get(&m, "mass_kg")?,
                 force_constant: None,
                 linear: None,
-                emf_constant: emf_constant(
-                    number(&sheet, "voltage_constant_v_s_rad"),
-                    get(&m, "static_torque_nm")? / get(&m, "stall_current_a")?,
-                ),
+                emf_constant: emf_constant(number(&sheet, "voltage_constant_v_s_rad"), article, 0.0),
             });
         }
         let m = motor_manuals()
@@ -639,11 +639,7 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
         set_if_present(cfg, "linear_motor.attraction_force_n", attraction)?;
         set_if_present(cfg, "linear_motor.pole_pitch_m", pitch)?;
     }
-    let ratio = cfg.f64("gearbox.ratio").unwrap_or(1.0);
-    // Braking, the pulley's torque is the motor's times ratio over efficiency: the tighter of the two directions caps it.
-    let efficiency = cfg.f64("gearbox.efficiency").unwrap_or(1.0).clamp(f64::MIN_POSITIVE, 1.0);
-    let allowed = cfg.f64("ratings.pulley_max_torque_nm").map_or(f64::INFINITY, |at_pulley| at_pulley * efficiency / ratio);
-    set(cfg, "drive.peak_torque_nm", m.max_torque.min(allowed))?;
+    cap_peak_torque(cfg, m.max_torque)?;
     set(cfg, "drive.rated_torque_nm", m.rated_torque)?;
     set(cfg, "drive.rated_speed_rad_s", rated_speed)?;
     set(cfg, "drive.max_speed_rad_s", m.max_speed)?;
@@ -661,10 +657,21 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     }
     set(cfg, "drive.bus_voltage_v", bus)?;
     // Full torque up to the rated speed; it is gone where the back-EMF uses up what the DC link gives the winding.
-    // The drive model has one constant (back-EMF = kt); a printed voltage constant sets the no-load speed alone.
-    // shortcut: the back-EMF in the time simulation stays kt, which is within 20 % of the printed one by construction.
+    // A printed voltage constant is the model's back-EMF constant (`drive.back_emf_constant_v_s_rad`, 0 for kt) and sets
+    // the no-load speed with it.
     let ke = m.emf_constant.unwrap_or(kt);
+    set_if_present(cfg, "drive.back_emf_constant_v_s_rad", m.emf_constant.unwrap_or(0.0))?;
     set(cfg, "drive.no_load_speed_rad_s", (crate::drive::WINDING_PER_DC_LINK * bus / ke).max(1.1 * rated_speed))
+}
+
+/// The motor's peak torque `uncapped` held within the pulley's rating. Braking, the pulley's torque is the motor's times
+/// ratio over efficiency: the tighter of the two directions caps it. `apply_gearbox` calls it too, so the result does not
+/// depend on which of the two came first.
+fn cap_peak_torque(cfg: &mut Config, uncapped: f64) -> Result<(), ConfigError> {
+    let ratio = cfg.f64("gearbox.ratio").unwrap_or(1.0);
+    let efficiency = cfg.f64("gearbox.efficiency").unwrap_or(1.0).clamp(f64::MIN_POSITIVE, 1.0);
+    let allowed = cfg.f64("ratings.pulley_max_torque_nm").map_or(f64::INFINITY, |at_pulley| at_pulley * efficiency / ratio);
+    set(cfg, "drive.peak_torque_nm", uncapped.min(allowed))
 }
 
 /// The drive the catalogue pairs with a motor at a supply: for the S210 the converter the D 32 lists beside the
@@ -1049,11 +1056,17 @@ pub fn gearbox_mass(name: &str) -> Option<f64> {
     row.and_then(|r| number(&r, "mass_kg")).or_else(|| mechanics::own_mass(base))
 }
 
-/// Efficiency of a Harmonic Drive strain wave gear [estimate]: the maker prints it as charts only (rated torque, 2000 r/min
-/// input, grease), which could not be read here; 0.70 is below what such charts show for the CSF/CSG/SHG ratios (about 0.65
-/// at ratio 30 to 0.85 at 160, from memory, not verified) so a motor sized with it errs on the safe side.
-/// shortcut: one value for every size and ratio, replace by the charts' values when they are read.
+/// Efficiency of a Harmonic Drive strain wave gear row without an `efficiency` value [estimate]: the maker prints it as
+/// charts only (rated torque, 2000 r/min input, grease); a row whose table has the value read from them uses that, 0.70
+/// stands for the rest. It is below what such charts show for the CSF/CSG/SHG ratios (about 0.65 at ratio 30 to 0.85 at
+/// 160, from memory, not verified) so a motor sized with it errs on the safe side.
 const STRAIN_WAVE_EFFICIENCY: f64 = 0.70;
+
+/// The efficiency a gearbox row prints: at full load (`efficiency_full_load`), or a strain wave gear's read from the
+/// maker's charts (`efficiency`).
+fn printed_efficiency(row: &Row) -> Option<f64> {
+    number(row, "efficiency_full_load").or_else(|| number(row, "efficiency"))
+}
 
 fn strain_wave(row: &Row) -> bool {
     matches!(row["series"], "CSF" | "CSG" | "SHG")
@@ -1064,7 +1077,7 @@ fn strain_wave(row: &Row) -> bool {
 pub fn estimated_gearbox_data(name: &str) -> Vec<&'static str> {
     let mut out = Vec::new();
     if let Some((g, _)) = mechanics::find_gearbox(name) {
-        if number(&g.row, "efficiency_full_load").is_none() && strain_wave(&g.row) {
+        if printed_efficiency(&g.row).is_none() && strain_wave(&g.row) {
             out.push("gearbox-efficiency");
         }
     }
@@ -1089,7 +1102,7 @@ pub fn apply_gearbox(cfg: &mut Config, name: &str) -> Result<(), ConfigError> {
     let curve = get("stiffness_k1_nm_rad").zip(get("stiffness_k2_nm_rad")).zip(get("stiffness_k3_nm_rad"));
     let curve = curve.zip(get("stiffness_t1_nm")).zip(get("stiffness_t2_nm"));
     set(cfg, "gearbox.ratio", need("ratio")?)?;
-    if let Some(efficiency) = get("efficiency_full_load") {
+    if let Some(efficiency) = printed_efficiency(&gearbox.row) {
         set(cfg, "gearbox.efficiency", efficiency)?;
     } else if strain_wave(&gearbox.row) {
         set(cfg, "gearbox.efficiency", STRAIN_WAVE_EFFICIENCY)?;
@@ -1133,6 +1146,17 @@ pub fn apply_gearbox(cfg: &mut Config, name: &str) -> Result<(), ConfigError> {
     }
     if let Some(hysteresis) = get("hysteresis_rad") {
         set_if_present(cfg, "gearbox.hysteresis_rad", hysteresis)?;
+    }
+    // The motor's own peak is what its max current gives at the torque constant at max current (`apply_motor` sets both);
+    // a config whose peak is higher keeps that.
+    if cfg.f64("ratings.pulley_max_torque_nm").is_ok()
+        && let (Ok(peak), Ok(current), Ok(constant)) = (
+            cfg.f64("drive.peak_torque_nm"),
+            cfg.f64("motor.max_current_a"),
+            cfg.f64("motor.torque_constant_at_max_current_nm_a"),
+        )
+    {
+        cap_peak_torque(cfg, peak.max(current * constant))?;
     }
     Ok(())
 }
@@ -1295,6 +1319,18 @@ fn festo_sizes() -> Vec<String> {
     out
 }
 
+/// Whether a belt axis's stroke limit is its printed module length for want of the length that is not stroke
+/// (`non_stroke_length_m`: Bahr's other series than the ELZ): the stroke is then overstated by the carriage; `estimated_data`'s
+/// column names it "axis-stroke".
+fn axis_stroke_is_module_length(name: &str) -> bool {
+    belt_axis_rows().iter().any(|(_, r)| {
+        format!("{}-{}", r["series"], r["size"]) == name
+            && r["kind"] == "axis"
+            && number(r, "max_length_one_piece_m").is_some()
+            && number(r, "non_stroke_length_m").is_none()
+    })
+}
+
 fn axis_data(name: &str) -> Option<AxisData> {
     let festo = rows(table("festo/belt_axes.csv"));
     if let Some(f) = festo.iter().find(|r| format!("{}-{}", r["series"], r["size"]) == name) {
@@ -1341,9 +1377,16 @@ fn axis_data(name: &str) -> Option<AxisData> {
     let m = |column: &str| number(r, column);
     let (stroke_x, strokes_z) = match kind {
         Kind::XzGantry => (m("max_length_x_m")?, vec![m("max_length_z_m")?]),
-        // shortcut: Rexroth's Lmax is the module length L = s_max + carriage + adapter, not the stroke; the tables carry no
-        // carriage or adapter length (80 to 170 mm and more), so the stroke is overstated by that much; upgrade with them.
-        Kind::Single => (m("max_length_one_piece_m").or(m("stroke_x_max_m")).unwrap_or(f64::INFINITY), Vec::new()),
+        // The module length (Rexroth's Lmax, Bahr's "aus einem Stück") is stroke plus the length that is not stroke
+        // (`non_stroke_length_m`: Rexroth carriage and adapter, Bahr's basic length); a row without it keeps the module
+        // length and `estimated_axis_data` flags it.
+        Kind::Single => (
+            m("max_length_one_piece_m")
+                .map(|length| length - m("non_stroke_length_m").unwrap_or(0.0))
+                .or(m("stroke_x_max_m"))
+                .unwrap_or(f64::INFINITY),
+            Vec::new(),
+        ),
     };
     let moved = match kind {
         Kind::XzGantry => Some((number(r, "moved_mass_x_kg")?, number(r, "moved_mass_z_kg")?)),
@@ -1822,6 +1865,12 @@ pub fn inertia_ratios(entry: &MachineEntry, cfg: &Config) -> Result<Vec<f64>, Co
 
 /// The velocity gain of `before` scaled for the parts of `after` as `with_parts` says: by the square root of the ratio
 /// of the inertia the motors turn (`inertia_seen`) times that of the rotor's (with the gearbox's).
+///
+/// A gain that grows with a larger inertia is bounded so that the loop's crossover, about Kp over the inertia J the
+/// motor turns (rotor, gearbox and load, `inertia_turned`; the smallest of the motors, as one gain serves them all),
+/// stays below a third of the machine's first resonance at the middle of the travel (`Machine::resonance_hz`): a third
+/// is the usual separation between a speed loop and a mechanical resonance. Where the machine reports none, or the
+/// gain does not grow, the scaled gain stands, and a config whose own gain is above the bound keeps it.
 fn retuned(entry: &MachineEntry, before: &Config, after: &mut Config) -> Result<(), ConfigError> {
     let rotor = |cfg: &Config| {
         Ok::<f64, ConfigError>(
@@ -1829,8 +1878,22 @@ fn retuned(entry: &MachineEntry, before: &Config, after: &mut Config) -> Result<
         )
     };
     let ratio = inertia_seen(entry, after)? / inertia_seen(entry, before)? * rotor(after)? / rotor(before)?;
-    let gain = before.positive("drive.velocity_kp_nm_s_rad")? * ratio.sqrt();
-    set(after, "drive.velocity_kp_nm_s_rad", gain)
+    let old = before.positive("drive.velocity_kp_nm_s_rad")?;
+    let machine = (entry.build)(after)?;
+    let resonance = machine.resonance_hz(&sim_core::testkit::mid_pose(machine.as_ref()));
+    let inertia = inertia_turned(entry, after)?.into_iter().filter(|j| *j > 0.0).fold(f64::INFINITY, f64::min);
+    set(after, "drive.velocity_kp_nm_s_rad", bounded_gain(old * ratio.sqrt(), old, resonance, inertia))
+}
+
+/// `retuned`'s gain `scaled` held to a third of the resonance's angular frequency times the inertia `inertia` (crossover
+/// Kp/J), where it grew over the `old` one and a resonance in Hz is known; never below `old`.
+fn bounded_gain(scaled: f64, old: f64, resonance_hz: Option<f64>, inertia: f64) -> f64 {
+    match resonance_hz {
+        Some(hz) if hz > 0.0 && inertia.is_finite() && scaled > old => {
+            scaled.min(old.max(2.0 * PI * hz / 3.0 * inertia))
+        }
+        _ => scaled,
+    }
 }
 
 /// The config with a candidate's parts in it and the velocity loop retuned for them. Without this a
@@ -2149,6 +2212,9 @@ fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply:
     if !gearbox.is_empty() {
         estimated.extend(estimated_gearbox_data(gearbox));
     }
+    if !job.axis.is_empty() && axis_stroke_is_module_length(&job.axis) {
+        estimated.push("axis-stroke");
+    }
     candidate.figures = Some(crate::search::figures(entry, &with_parts, &job.motor, &runs, estimated));
     if runs.len() == 1 {
         let (_, load, v) = runs.pop()?;
@@ -2385,9 +2451,12 @@ mod tests {
 
     #[test]
     fn the_voltage_constant_is_sqrt3_times_the_printed_one_unless_it_is_a_misprint() {
-        // 0.5 V s/rad line to line: sqrt(3) * 0.5 = 0.866 for kt 0.9; for kt 2 it is 57 % off, a misprint.
-        assert!((emf_constant(Some(0.5), 0.9).unwrap() - 0.866_025_4).abs() < 1e-6);
-        assert_eq!(emf_constant(Some(0.5), 2.0), None);
+        // 0.5 V s/rad line to line: sqrt(3) * 0.5 = 0.866, however far that is from kt (a genuine row may be 1.3 times it).
+        assert!((emf_constant(Some(0.5), "AM8051-0J", 400.0).unwrap() - 0.866_025_4).abs() < 1e-6);
+        // The two documented misprints are left out, the AKM64Q only at 240 V.
+        assert_eq!(emf_constant(Some(0.0611), "AKM64Q", 240.0), None);
+        assert!(emf_constant(Some(0.0611), "AKM64Q", 400.0).is_some());
+        assert_eq!(emf_constant(Some(0.468), "1FT7044-1AF7", 0.0), None);
     }
 
     #[test]
@@ -2409,8 +2478,106 @@ mod tests {
         let name = |series: &str| {
             mechanics::all_gearboxes().into_iter().find(|g| g.row["series"] == series).map(|g| mechanics::gearbox_name(&g.row))
         };
-        // The Apex PE II prints no mass; a Harmonic Drive CSF prints no efficiency.
+        // The Apex PE II prints no mass; a Harmonic Drive CSF is an estimate unless its row has an `efficiency`.
         assert_eq!(estimated_gearbox_data(&name("PEII").unwrap()), ["gearbox-mass"]);
-        assert!(estimated_gearbox_data(&name("CSF").unwrap()).contains(&"gearbox-efficiency"));
+        let csf = mechanics::all_gearboxes().into_iter().find(|g| g.row["series"] == "CSF").unwrap();
+        let flagged = estimated_gearbox_data(&mechanics::gearbox_name(&csf.row)).contains(&"gearbox-efficiency");
+        assert_eq!(flagged, printed_efficiency(&csf.row).is_none());
+    }
+
+    #[test]
+    fn a_strain_wave_gears_efficiency_column_is_used_and_the_estimate_stays_for_rows_without() {
+        // `efficiency` (read from the maker's charts) counts as printed; a row with neither column has the 0.70 estimate.
+        let with: Row = Box::leak(Box::new(HashMap::from([("series", "CSF"), ("efficiency", "0.83")])));
+        let without: Row = Box::leak(Box::new(HashMap::from([("series", "CSF")])));
+        assert_eq!(printed_efficiency(&with), Some(0.83));
+        assert!(printed_efficiency(&without).is_none() && strain_wave(&without));
+    }
+
+    /// A config with what `apply_motor` and `apply_gearbox` read and a pulley rating, and the first Kollmorgen motor with
+    /// a voltage constant and the first gearbox with an efficiency and a stiffness.
+    fn pulley_config(pulley_max: f64) -> Config {
+        Config::parse(&format!(
+            "[motor]\nrotor_inertia_kgm2 = 1e-4\ntorque_constant_nm_a = 0.5\nmax_current_a = 10.0\nrated_current_a = 5.0\n\
+             torque_constant_at_max_current_nm_a = 0.5\ninductance_h = 1e-3\nresistance_ohm = 1.0\n\
+             [drive]\ncurrent_kp_v_a = 5.0\ncurrent_tn_s = 1e-3\npeak_torque_nm = 1.0\nrated_torque_nm = 1.0\n\
+             rated_speed_rad_s = 100.0\nmax_speed_rad_s = 200.0\nbus_voltage_v = 540.0\nno_load_speed_rad_s = 300.0\n\
+             back_emf_constant_v_s_rad = 0.0\n[gearbox]\nratio = 1.0\nefficiency = 1.0\n\
+             [ratings]\npulley_max_torque_nm = {pulley_max}\n"
+        ))
+        .unwrap()
+    }
+
+    fn kollmorgen_motor() -> &'static str {
+        vendor_rows("motors_", "kollmorgen", 400.0)
+            .into_iter()
+            .find(|r| number(r, "voltage_constant_v_s_rad").is_some() && r["part_number"] != "AKM64Q")
+            .map(|r| r["part_number"])
+            .expect("a motor with a voltage constant")
+    }
+
+    #[test]
+    fn the_peak_torque_cap_does_not_depend_on_the_order_of_motor_and_gearbox() {
+        let gearbox = mechanics::all_gearboxes()
+            .into_iter()
+            .find(|g| {
+                number(&g.row, "efficiency_full_load").is_some()
+                    && number(&g.row, "torsional_stiffness_nm_rad").is_some()
+                    && number(&g.row, "rated_output_torque_nm").is_some()
+                    && number(&g.row, "ratio").is_some_and(|r| r > 2.0)
+            })
+            .map(|g| mechanics::gearbox_name(&g.row))
+            .unwrap();
+        let g = mechanics::find_gearbox(&gearbox).unwrap().0;
+        let (ratio, efficiency) = (number(&g.row, "ratio").unwrap(), number(&g.row, "efficiency_full_load").unwrap());
+        let motor = kollmorgen_motor();
+        let data = motor_data(motor, "kollmorgen-400v").unwrap();
+        // The pulley takes half the motor's peak at the pulley: allowed = pulley * eta / i = 0.5 * peak, either order.
+        let mut gearbox_first = pulley_config(0.5 * data.max_torque * ratio / efficiency);
+        let mut motor_first = gearbox_first.clone();
+        apply_gearbox(&mut gearbox_first, &gearbox).unwrap();
+        apply_motor(&mut gearbox_first, motor, "kollmorgen-400v").unwrap();
+        apply_motor(&mut motor_first, motor, "kollmorgen-400v").unwrap();
+        apply_gearbox(&mut motor_first, &gearbox).unwrap();
+        for cfg in [&gearbox_first, &motor_first] {
+            assert!((cfg.f64("drive.peak_torque_nm").unwrap() - 0.5 * data.max_torque).abs() < 1e-9 * data.max_torque);
+        }
+    }
+
+    #[test]
+    fn a_printed_voltage_constant_becomes_the_models_back_emf_constant() {
+        // The motor's printed line-to-line RMS constant times sqrt(3); 0 (= kt) for a motor without one.
+        let motor = kollmorgen_motor();
+        let printed = vendor_rows("motors_", "kollmorgen", 400.0)
+            .into_iter()
+            .find(|r| r["part_number"] == motor)
+            .and_then(|r| number(&r, "voltage_constant_v_s_rad"))
+            .unwrap();
+        let mut cfg = pulley_config(1e9);
+        apply_motor(&mut cfg, motor, "kollmorgen-400v").unwrap();
+        assert!((cfg.f64("drive.back_emf_constant_v_s_rad").unwrap() - 3f64.sqrt() * printed).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_belt_axis_stroke_is_the_module_length_less_the_length_that_is_not_stroke() {
+        // Rexroth CKR-110: L = 5.5 m = s_max + Lca 170 mm + Lad 25 mm, so s_max = 5.305 m.
+        assert!((axis_data("CKR-110").unwrap().stroke_x.1 - 5.305).abs() < 1e-9);
+        // Bahr ELZ-60: basic length 290 mm + travel = 6 m total, travel 5.71 m.
+        assert!((axis_data("ELZ-60").unwrap().stroke_x.1 - 5.71).abs() < 1e-9);
+        // An ELSZ has no basic length read directly: the module length stays and the row is flagged.
+        assert!((axis_data("ELSZ-60").unwrap().stroke_x.1 - 6.0).abs() < 1e-9);
+        assert!(axis_stroke_is_module_length("ELSZ-60") && !axis_stroke_is_module_length("ELZ-60"));
+        assert!(!axis_stroke_is_module_length("CKR-110"));
+    }
+
+    #[test]
+    fn a_retuned_gain_keeps_the_crossover_below_a_third_of_the_resonance() {
+        // Resonance 10 Hz, J = 1e-3 kg m2: Kp <= 2 pi 10 / 3 * 1e-3 = 0.020944 N m s/rad (crossover 20.9 rad/s).
+        let bound = 2.0 * PI * 10.0 / 3.0 * 1e-3;
+        assert!((bounded_gain(0.0573, 0.01, Some(10.0), 1e-3) - bound).abs() < 1e-12);
+        // A config whose own gain is above the bound keeps it; no resonance, or a gain that shrinks, is not bounded.
+        assert_eq!(bounded_gain(0.0573, 0.0368, Some(10.0), 1e-3), 0.0368);
+        assert_eq!(bounded_gain(0.0573, 0.01, None, 1e-3), 0.0573);
+        assert_eq!(bounded_gain(0.005, 0.01, Some(10.0), 1e-3), 0.005);
     }
 }
