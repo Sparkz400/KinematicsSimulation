@@ -723,6 +723,15 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
     });
 }
 
+/// A wrapped row goes on to the next line before a list `width` wide and its name, where the line has no room for both:
+/// a wrapped row does not wrap a list (a combo box), which ran past the panel's edge (the motor search's lists, at any
+/// window size, since the panels no longer widen to what they hold). 120 pixels for the name and the list's arrow.
+fn room_for_list(ui: &mut Ui, width: f32) {
+    if ui.available_size_before_wrap().x < width + 120.0 {
+        ui.end_row();
+    }
+}
+
 /// A row of tabs: the one shown filled, the others plain.
 fn tabs<T: Copy + PartialEq>(ui: &mut Ui, model: &Model, shown: T, all: &[(T, &str)]) -> Option<T> {
     let mut picked = None;
@@ -1928,6 +1937,7 @@ fn compare(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
     });
     ui.horizontal_wrapped(|ui| {
         let effect_label = |name: &str| tr(&format!("effect-{name}"));
+        room_for_list(ui, 180.0);
         ui.label(tr("ui-effects-effect"));
         ComboBox::from_id_salt("compare-effect")
             .selected_text(effect_label(&inputs.compare_effect))
@@ -1937,6 +1947,7 @@ fn compare(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
                     ui.selectable_value(&mut inputs.compare_effect, path["effects.".len()..].to_string(), tr(&key));
                 }
             });
+        room_for_list(ui, 140.0);
         ui.label(tr("ui-effects-quantity"));
         ComboBox::from_id_salt("compare-quantity").selected_text(tr(&inputs.compare_quantity)).width(140.0).show_ui(
             ui,
