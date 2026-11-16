@@ -187,6 +187,11 @@ pub trait Machine: Send {
 
     fn axes(&self) -> &[AxisInfo];
     fn motors(&self) -> &[MotorInfo];
+    /// Whether motor `motor` is a linear motor: its angle, speed and torque signals are then m, m/s and N, and the
+    /// "motor-speed" verdict's value is m/s. False by default, a rotary motor.
+    fn motor_linear(&self, _motor: usize) -> bool {
+        false
+    }
     /// Tool pose to motor shaft angles, and back. Both are pure kinematics.
     fn inverse(&self, tool: &[f64], motors: &mut [f64]);
     fn forward(&self, motors: &[f64], tool: &mut [f64]);

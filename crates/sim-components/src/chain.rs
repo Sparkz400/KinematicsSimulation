@@ -252,6 +252,10 @@ pub trait Mechanism: Send {
         Vec::new()
     }
     fn set_payload_attached(&mut self, attached: bool);
+    /// Whether the motors are linear motors (their signals in m, m/s, N): `Machine::motor_linear`. False by default.
+    fn linear_motor(&self) -> bool {
+        false
+    }
     /// As `Machine::links` and `Machine::set_link_change`: the bodies whose inertial parameters a trace can be fitted for.
     fn links(&self) -> Vec<String> {
         Vec::new()
@@ -924,13 +928,14 @@ impl<M: Mechanism> JointMachine<M> {
     }
 
     fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
-        for motor in &self.motors {
+        for (k, motor) in self.motors.iter().enumerate() {
+            let unit = if self.motor_linear(k) { "N" } else { "N m" };
             out.extend(TORQUE_PARTS.map(|part| {
                 SignalInfo::new(
                     format!("motor.{}.torque_{part}", motor.id),
                     motor.key,
                     &format!("quantity-torque-{part}"),
-                    "N m",
+                    unit,
                 )
             }));
         }
@@ -1029,6 +1034,9 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
     fn motors(&self) -> &[MotorInfo] {
         &self.motors
+    }
+    fn motor_linear(&self, _motor: usize) -> bool {
+        self.mechanism.linear_motor()
     }
 
     fn rating_checks(&self) -> Vec<RatingCheck> {

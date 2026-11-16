@@ -479,6 +479,9 @@ impl Movers {
 }
 
 impl Mechanism for Movers {
+    fn linear_motor(&self) -> bool {
+        true
+    }
     /// The mass centre runs at v (1 + e k(s)) with the centre line's speed v: T = m (1 + e k)^2 v^2 / 2, so the mass is
     /// m (1 + e k)^2 and the bias (the energy kept, the clothoid's tangential force) m (1 + e k) e k' v^2. The plate's
     /// inertia stays on the centre line (shortcut: the plate is 0.2 kg of 1.25, e = 0 ships, when e matters).
@@ -825,6 +828,9 @@ impl Machine for MoverTrack {
     }
     fn motors(&self) -> &[MotorInfo] {
         self.inner.motors()
+    }
+    fn motor_linear(&self, motor: usize) -> bool {
+        self.inner.motor_linear(motor)
     }
     fn inverse(&self, tool: &[f64], motors: &mut [f64]) {
         self.inner.inverse(tool, motors)
