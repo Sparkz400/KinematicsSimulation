@@ -91,10 +91,10 @@ fn a_clothoid_takes_the_lateral_jerk_down_by_the_hand_calculation() {
 
 /// The force at a current: k_t = 10 N/A, so 30 N is 3 A and R I^2 = 1 * 9 = 9 W. A mover in the middle of the first
 /// module (0.125 m, its 0.06 m plate wholly on it) puts both on segment 1; one at the module's end (0.25 m) half on
-/// each: 1.5 A and 4.5 W. Two movers on one module at 30 N each: 6 A, 18 W.
+/// each: 1.5 A and 4.5 W. Two movers on one module at 30 N each: 6 A, 18 W. (Saturation off: the force constant is linear.)
 #[test]
 fn the_segment_current_and_loss_match_the_hand_calculation() {
-    let m = track(&[]);
+    let m = track(&["effects.torque_saturation = false"]);
     let (current, loss) = m.segment_load(&[0.125, 1.0, 1.5, 2.0, 2.2, 2.6], &[30.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
     assert!((current[0] - 3.0).abs() < 1e-12 && (loss[0] - 9.0).abs() < 1e-12, "{current:?} {loss:?}");
     assert!(current[1..].iter().all(|c| *c == 0.0));
@@ -107,12 +107,24 @@ fn the_segment_current_and_loss_match_the_hand_calculation() {
     assert!((current[0] - 6.0).abs() < 1e-12, "{current:?}");
 }
 
+/// The drive saturates: k_t = 10 N/A falls to 9.5 N/A at the maximum current 11 A, so the force at 11 A is
+/// 10 * 11 * (1 - 0.05) = 104.5 N (F = k_t I (1 - 0.05 (I / 11)^2), the whole 0.05 lost at the
+/// maximum). A mover holding 104.5 N wholly on the first module needs 11 A, not the linear 10.45 A, and loses
+/// R I^2 = 1 * 121 = 121 W.
+#[test]
+fn the_segment_current_is_that_of_the_saturated_drive() {
+    let m = track(&[]);
+    let (current, loss) = m.segment_load(&[0.125, 1.0, 1.5, 2.0, 2.2, 2.6], &[104.5, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    assert!((current[0] - 11.0).abs() < 1e-9 && (loss[0] - 121.0).abs() < 1e-7, "{current:?} {loss:?}");
+}
+
 /// Two movers standing on the first module, each holding 30 N (3 A, 9 W): 18 W into 2 K/W settles at 36 K. Over one
 /// time constant (600 s, held loss) it rises to 36 (1 - 1/e) = 22.757 K; the settled rise, over its window of 1 s (no
 /// cam running), is at 36 K. The other segments stay cold.
 #[test]
 fn a_segment_with_two_movers_stopping_on_it_heats_by_the_hand_calculation() {
-    let mut m = track(&["start.pose = [0.06, 0.18, 1.131233, 1.634349, 2.137465, 2.640582]"]);
+    let sat = "effects.torque_saturation = false";
+    let mut m = track(&[sat, "start.pose = [0.06, 0.18, 1.131233, 1.634349, 2.137465, 2.640582]"]);
     let start = m.movers().start.clone();
     let (mut state, mut torque) = (Vec::new(), vec![0.0; 6]);
     m.equilibrium(&start, &mut state, &mut torque);
@@ -124,7 +136,7 @@ fn a_segment_with_two_movers_stopping_on_it_heats_by_the_hand_calculation() {
     assert!(m.rises[1..].iter().all(|r| *r == 0.0));
     // And it comes back with a snapshot.
     let memory = m.memory();
-    let mut other = track(&["start.pose = [0.06, 0.18, 1.131233, 1.634349, 2.137465, 2.640582]"]);
+    let mut other = track(&[sat, "start.pose = [0.06, 0.18, 1.131233, 1.634349, 2.137465, 2.640582]"]);
     other.set_memory(&memory);
     assert_eq!(other.rises, m.rises);
 }
@@ -133,7 +145,7 @@ fn a_segment_with_two_movers_stopping_on_it_heats_by_the_hand_calculation() {
 /// nothing for the next half second average to 9 W, 18 K at 2 K/W (a low-pass of one pass would read about 22 K).
 #[test]
 fn the_settled_rise_is_the_loss_averaged_over_one_pass() {
-    let mut m = track(&["start.pose = [0.06, 0.18, 1.131233, 1.634349, 2.137465, 2.640582]"]);
+    let mut m = track(&["effects.torque_saturation = false", "start.pose = [0.06, 0.18, 1.131233, 1.634349, 2.137465, 2.640582]"]);
     let start = m.movers().start.clone();
     let (mut state, mut torque) = (Vec::new(), vec![0.0; 6]);
     m.equilibrium(&start, &mut state, &mut torque);
