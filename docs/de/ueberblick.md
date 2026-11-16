@@ -39,6 +39,6 @@ Weitere Grenzen, die zählen:
 - Die Zahlen im Browser stimmen mit denen der Befehlszeile auf vier bis fünf signifikante Stellen überein, nicht Bit für Bit ([Auslegung im Browser](web.md)).
 - Das Fenster der App wird mit künstlichen Maus-, Tastatur- und Größenereignissen getestet, und seine Bilder wurden gelesen; die Dateidialoge sind nicht getestet, wie die Bewegung über die Zeit aussieht, hat niemand angesehen, und bei 1280 x 720 verdecken die Bedienelemente der Ansicht einen großen Teil der Maschine ([validation.md](../validation.md#what-is-not-validated)).
 - Das Einlesen von Antriebsaufzeichnungen und die Parameteranpassung wurden an Aufzeichnungen geprüft, die der Simulator selbst erzeugt hat, und an denen des einen Prüfstands, mit einem Skript in CSV umgewandelt; der eigene Export eines Antriebs (Startdrive, TwinCAT, CODESYS) wurde noch nicht gelesen.
-- Hexapod und räumlicher Seilroboter rechnen langsamer als Echtzeit.
+- Die Hexapods und der räumliche Seilroboter rechnen auf einem Kern nur 1,35- bis 2-mal schneller als Echtzeit (Prozessorzeit); auf einem langsamen oder ausgelasteten Rechner können sie zurückfallen.
 
 Was noch nicht gebaut ist: [ROADMAP.md](../../ROADMAP.md) (englisch).

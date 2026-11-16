@@ -49,7 +49,7 @@ Other limits that matter:
 - The browser's numbers agree with the command line's to four or five significant digits, not bit for bit ([docs/web.md](web.md)).
 - The app's window is tested by synthetic mouse, keyboard and resize input and its pictures were read; its file dialogs were not tested, how the motion looks over time was not watched, and at 1280 x 720 the view's controls cover much of the machine ([validation](validation.md#what-is-not-validated)).
 - Trace import and the fit were tested on traces the simulator made and on the one bench's recordings, converted to CSV by a script; no drive's own export (Startdrive, TwinCAT, CODESYS) has been read.
-- The hexapod and the spatial cable robot simulate slower than real time.
+- The hexapods and the spatial cable robot run only 1.35 to 2 times faster than real time on one core (processor time); on a slow or busy computer they can fall behind.
 
 What is not built yet: [ROADMAP.md](../ROADMAP.md).
 
