@@ -853,6 +853,52 @@ sim-cli stop winder --category 2
 sim-cli verdicts winder --set web.tension_n=150 --set axis.web.max_velocity_m_s=3.0
 ```
 
+## Movers on a closed track (`machine-mover-track`)
+
+A linear transport system as Beckhoff XTS or B&R ACOPOStrak: motor segments of linear-motor coils in a closed loop, and
+on them independent movers, each a mass on rollers carrying a magnet plate, each driven by the coils under it with a
+position loop of its own. The shipped config: six movers of 651 g (AT9014) with 600 g each, on a loop of two 1 m
+straights of four 250 mm modules (AT2000) and two 180° curves 267 mm across, a 100 mm clothoid at each end of an arc of
+130.3 mm (the split is an estimate; Beckhoff publishes the width and that it is a clothoid); 3.019 m round. A mover gives
+100 N peak and 30 N continuous, 4 m/s, 10 g unloaded (the 5-pin magnet plate on 48 V; with the payload the axes are
+limited to 60 m/s²); force constant, coil resistance, the
+attraction (300 N) and the pole pitch are estimates.
+
+| Id | Mechanism | Transmission | Tool pose | Own checks |
+| --- | --- | --- | --- | --- |
+| `mover-track` | 1 to 7 movers on a closed loop of straights and curves (6 shipped) | linear motor per mover: the coils under it | each mover's distance along the loop (m), unwrapped | per mover `mover-guide-load`, `curve-holding`, `station-settling` (index cycle); `mover-gap`; per segment `segment-current`, `segment-temperature` |
+
+**Two cycles, both electronic cams.** A closed track only goes forward, so the cycle is a cam (`[cam]`): `track.cycle =
+"index"` (shipped) moves every mover one station pitch (the loop over the movers, 0.503 m) by a 4-5-6-7 law in 0.4 s and
+stands it at its station for the rest of the period, 1.5 times a second (2.75 m/s, 23.6 m/s² peak); `flying.toml` runs
+`"flying"`: each mover in turn rides with a conveyor at 1.0 m/s over 0.3 m of the first straight, synchronous with it,
+then back round the loop and into the process again (6 products of 0.3 m per loop: the movers close up to a product
+pitch over the process and run back at up to 2.78 m/s). With `cam.run = false` the movers jog 0.2 m forward and back by
+the `[[cycle.segment]]`.
+
+**Curves.** A mover's rollers span its wheelbase w, so the curvature its body follows is the curvature's mean over it:
+the lateral acceleration v² k rises over the wheelbase where a constant-radius curve begins and over the clothoid where
+there is one; its rate, the lateral jerk 2 v a k + v³ dk/ds, is what the clothoid takes down (at 2 m/s 1228 m/s³ into a
+circle, 614 m/s³ into the clothoid). The movers run outside the loop with the plate facing the coils, so the centrifugal
+force m v² k pulls a mover off the coils against the attraction: the rollers carry sqrt((F_a − m v² k)² + (m g)²)
+(`mover-guide-load`), and the share m v² k / F_a (`curve-holding`) must stay below 1, where the mover lifts off.
+
+**Coils and segments.** A mover's current is its force over the force constant; it flows in the coils under its magnet
+plate, shared among the segments by the plate's length on each. A segment's current is the sum of its movers' shares
+(`segment-current`, against the module's 48 A peak), its copper loss R I² of each; it warms through one thermal
+resistance and time constant (`segment.<j>.temperature_rise`), and `segment-temperature` judges the rise its loss settles
+at averaged over a pass: movers stopping on one segment heat it. The gap between neighbours along the centre line, less
+a body's length, against the 2 mm least distance (`mover-gap`); a standing mover's error at its station against the
+±10 µm repeatability (`station-settling`).
+
+Model and limits in the crate's documentation (`crates/machine-mover-track/src/lib.rs`).
+
+```text
+sim-cli verdicts mover-track
+sim-cli verdicts mover-track --config crates/machine-mover-track/flying.toml
+sim-cli verdicts mover-track --set track.index_rate_hz=2.5 --set track.clothoid_m=0.0
+```
+
 ## What is checked by hand
 
 Component tests (`sim-components`): the screw's critical speed, buckling load, inertia, stiffness, preload drag, life

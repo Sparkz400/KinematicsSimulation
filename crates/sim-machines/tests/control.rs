@@ -1282,6 +1282,7 @@ mod across_the_bounds {
         hexapod_rotary: "hexapod-rotary",
         geneva_drive: "geneva-drive",
         cam_indexer: "cam-indexer",
+        mover_track: "mover-track",
         exct_30: "EXCT-30",
     );
 }

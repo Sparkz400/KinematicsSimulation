@@ -1202,3 +1202,15 @@ optimum it settles at, not for how far from its stops a whole cycle keeps the ar
 floating controls leave free, by the accessibility tree without a screen; it does not check what the machine's parts
 fill of the view, nor other window sizes than 1280 x 720 and the default 1600 x 900. The 3D view of each machine was
 looked at in screenshots at 1280 x 720 at its start pose, not in motion.
+
+**Mover track (`mover-track`).** Checked by hand calculations and the standard suite only; no XTS or ACOPOStrak has been
+measured. Not published, so estimated: the force constant, coil resistance and inductance, the magnets' attraction, the
+pole pitch and cogging, the rollers' resistance and spread, how the 267 mm curve splits into arc and clothoid, the
+segments' thermal resistance and time constant. Not modelled: the rollers' resistance changing with the curve's load
+(it is the straight's level throughout), the mover's yaw and its rollers' own compliance in a curve, the coils'
+commutation across a segment joint (a mover's force is the same wherever its plate lies), the movers' coupling through a
+shared supply beyond the DC link, the gap in a curve measured across the chord (it is measured along the centre line),
+the tilt of a mover on a vertical track (the track lies level). The segment's settled rise is the loss of about the last
+pass times its thermal resistance, not a thermal network of coils, frame and air. The station error reads the cam's
+master as the controller last set it (once a profile cycle); a stop and restart part-way through an index leaves the
+setpoints off a station, which the check then counts.

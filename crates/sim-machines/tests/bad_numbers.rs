@@ -262,6 +262,7 @@ default_config! {
     default_hexapod_rotary: "hexapod-rotary";
     default_geneva_drive: "geneva-drive";
     default_cam_indexer: "cam-indexer";
+    default_mover_track: "mover-track";
 }
 
 shipped_config! {
@@ -283,6 +284,7 @@ shipped_config! {
     config_arm_on_track_tool: "arm-on-track", "crates/machine-joint-kit/config/arm-on-track-tool.toml";
     config_geneva_drive_cam: "geneva-drive", "crates/machine-crank-cam/config/geneva-drive-cam.toml";
     config_cam_indexer_cam: "cam-indexer", "crates/machine-crank-cam/config/cam-indexer-cam.toml";
+    config_mover_track_flying: "mover-track", "crates/machine-mover-track/flying.toml";
 }
 
 machine_file! {

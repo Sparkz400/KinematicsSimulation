@@ -100,6 +100,13 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
 - The camera frames the machine clear of the folded controls and the timeline (56 pixels at the top and bottom): the
   six-axis arm's top was under the controls and its base under the timeline.
 - Window test `at_1280_by_720_the_panels_keep_their_widths_and_the_view_stays_free`.
+- Machine `mover-track` (crate `machine-mover-track`): independent movers on a closed track of linear-motor segments, as
+  Beckhoff XTS or B&R ACOPOStrak (six movers on two straights of 250 mm modules and two 180° clothoid curves, XTS data
+  where published). Each mover a linear-motor joint with its own drive; lateral acceleration and jerk over the rollers'
+  wheelbase (clothoid or constant radius), roller load and lift-off against the magnets' attraction, segment currents and
+  heating from the movers' coil currents, the gap between movers. Two cam cycles: indexing through stations
+  (`default.toml`) and a flying process synchronous with a conveyor (`flying.toml`). Checks `mover-guide-load`,
+  `curve-holding`, `station-settling`, `mover-gap`, `segment-current`, `segment-temperature`.
 
 ## [1.0.0] - 2026-11-16
 
