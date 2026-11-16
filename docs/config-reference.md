@@ -181,7 +181,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | --- | --- | --- | --- |
 | `corner_blending` | T S off, E on | | The next cycle segment starts while the current one is still braking |
 | `input_shaping` | T S off, E on | | Input shaper (`profile.shaper_type`, `zvd` by default; `zv`, `zvdd`, `ei`, `ei2`) on the setpoints of the axes in `profile.shaper_axes` (all where empty) |
-| `shaper_follows_pose` | T E S | off | With `input_shaping`: the shaper takes its frequency from the resonance the machine reports for the planned pose, and a second shaper (`profile.shaper2_frequency_hz` above 0) that of the machine's second mode there (`sim-cli modes`); one the machine does not report stays as configured. The T-gantry reports two modes, the single axis one |
+| `shaper_follows_pose` | T E S | off | With `input_shaping`: the shaper takes its frequency from the resonance the machine reports for the planned pose, and a second shaper (`profile.shaper2_frequency_hz` above 0) that of the machine's second mode there (`sim-cli modes`); one the machine does not report stays as configured. The T-gantry reports up to four modes (carriage, Z axis, frame, lean), the single axis one |
 
 ## `[geometry]`
 

@@ -2668,3 +2668,19 @@ fn a_category_1_stop_brings_the_hand_calculated_energy_to_the_dc_link() {
         assert!((resistor - burned).abs() < 0.02 * burned + 1e-9, "{capacitance} uF: {resistor} J, by hand {burned} J");
     }
 }
+
+/// The gearbox's loss on the weight is in the friction feedforward (`steady_friction`). 30 degree incline, 6 kg: the
+/// weight along the guide W = 6 x 9.80665 x sin 30 = 29.41995 N, no guide friction, eta = 0.95, r / i = 0.02 / 5 = 0.004 m.
+/// Moving up the motor drives the gearbox: weight torque r W / (i eta) = 0.123873 N m, of which the rigid feedforward
+/// carries r W / i = 0.117680; moving down it is driven back: 0.004 x 29.41995 x 0.95 = 0.111799 N m (the feedforward
+/// gave 0.117680 both ways).
+#[test]
+fn the_steady_friction_has_the_gearbox_loss_on_the_weight() {
+    let m = rigid(&["geometry.incline_deg = 30.0", "effects.gearbox_efficiency = true", "gearbox.efficiency = 0.95"]);
+    for (speed, by_hand) in [(0.5, 0.123873), (-0.5, 0.111799)] {
+        let (mut weight, mut friction) = ([0.0], [0.0]);
+        m.feedforward_torque(&[0.5], &[0.0], &mut weight);
+        m.steady_friction(&[0.5], &[speed], &mut friction);
+        assert!((weight[0] + friction[0] - by_hand).abs() < 1e-5, "{speed} m/s: {} N m", weight[0] + friction[0]);
+    }
+}

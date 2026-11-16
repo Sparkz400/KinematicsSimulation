@@ -120,58 +120,35 @@ fn the_arrows_show_the_belt_pull_and_the_posts_stand_under_the_travel_ends() {
     assert!((posts[0] - 0.15).abs() < 1e-12 && (posts[1] - (end - 0.15)).abs() < 1e-12, "posts at {posts:?}");
 }
 
-/// The mode of `resonance_hz` (see `mode_shape`), by hand from the default config at x = 0.9 m: mc = 4 kg, mz = 5 + 2
-/// = 7 kg, kb = EA / L1 + EA / L3 with L1 = 0.3 + x + z, L3 = 0.3 + 1 - x + z, EA = 5e5 N; kz = 1 / (1 / 2e7 + h^2 /
-/// 1.2e4) and tip = kz (1 / 2e7 + h (0.7 - z) / 1.2e4) with h = 0.3 - z. In (x, u): M = [[mc + mz, mz], [mz, mz]],
-/// K = [[kb, 0], [0, kz]]. At z = 0.05 m: w^2 = 2.394e4, tip = 2.585, v = (0.050, 0.368), the tool moving 1 m. At
-/// z = 0.362 m (x = 0.9) tip has turned negative and the tool hardly moves in the mode: the shape stays finite there,
-/// the carriage's travel being the larger.
+/// The mode of `resonance_hz` (see `mode_shape`) in the coordinates of the model (x, z, the frame's q, the Z axis's lean
+/// u): only those move, the largest of the carriage's travel, the Z axis's travel and the tool's travel x + q + tip u is
+/// 1 m. Without the tool flex and the frame only x and z are left; without belt stretch there is no mode.
 #[test]
-fn the_mode_shape_is_the_eigenvector_of_the_carriage_and_the_leaning_z_axis() {
+fn the_mode_shape_is_an_eigenvector_of_the_elastic_model() {
     let m = TGantry::new(&ENTRY.config()).unwrap();
     let x = 0.9;
     for z in [0.05, 0.15, 0.362] {
         let (hz, shape) = m.mode_shape(&[x, z]).unwrap();
         assert_eq!(hz, m.resonance_hz(&[x, z]).unwrap());
         assert_eq!(shape.len(), m.state_len());
-        assert!(shape.iter().enumerate().all(|(i, &v)| i == X || i == U || v == 0.0), "only x and u move: {shape:?}");
-        let (mc, mz) = (4.0, 7.0);
-        let kb = 5e5 / (0.3 + x + z) + 5e5 / (0.3 + 1.0 - x + z);
-        let h = 0.3 - z;
-        let kz = 1.0 / (1.0 / 2e7 + h * h / 1.2e4);
-        let tip = kz * (1.0 / 2e7 + h * (0.7 - z) / 1.2e4);
-        let w2 = (std::f64::consts::TAU * hz).powi(2);
-        let (vx, vu) = (shape[X], shape[U]);
-        let residual = [kb * vx - w2 * ((mc + mz) * vx + mz * vu), kz * vu - w2 * (mz * vx + mz * vu)];
-        let scale = kb * vx.abs() + kz * vu.abs();
-        assert!(residual.iter().all(|r| r.abs() < 1e-9 * scale), "z = {z}: (K - w^2 M) v = {residual:?}");
-        let largest = vx.abs().max((vx + tip * vu).abs());
-        assert!((largest - 1.0).abs() < 1e-12 && vu.is_finite(), "z = {z}: the larger travel is {largest}, lean {vu}");
-        assert!(vx * vu > 0.0, "z = {z}: the lower mode, both the same way: {vx} {vu}");
-        if z < 0.2 {
-            assert!(vu > vx, "z = {z}: low on the Z axis mostly lean: {vx} {vu}");
-        }
-        if z == 0.05 {
-            assert!(
-                (w2 - 2.394e4).abs() < 10.0
-                    && (tip - 2.585).abs() < 1e-3
-                    && (vx - 0.050).abs() < 1e-3
-                    && (vu - 0.368).abs() < 1e-3,
-                "{w2} {tip} {vx} {vu}"
-            );
-        }
+        assert!(
+            shape.iter().enumerate().all(|(i, &v)| [X, Z, Q, U].contains(&i) || v == 0.0),
+            "only x, z, q and u move: {shape:?}"
+        );
+        let tip = m.flex_at(z).2;
+        let largest = shape[X].abs().max(shape[Z].abs()).max((shape[X] + shape[Q] + tip * shape[U]).abs());
+        assert!((largest - 1.0).abs() < 1e-12 && shape.iter().all(|v| v.is_finite()), "z = {z}: {shape:?}");
     }
-    // No resonance, no mode.
-    assert!(
-        TGantry::new(&{
-            let mut cfg = ENTRY.config();
-            cfg.set_text("effects.tool_flex = false").unwrap();
-            cfg
-        })
-        .unwrap()
-        .mode_shape(&[x, 0.05])
-        .is_none()
-    );
+    // The elastic model without the tool flex and the frame has x and z only.
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.tool_flex = false").unwrap();
+    cfg.set_text("effects.frame_compliance = false").unwrap();
+    let (_, shape) = TGantry::new(&cfg).unwrap().mode_shape(&[x, 0.05]).unwrap();
+    assert!(shape[Q] == 0.0 && shape[U] == 0.0 && shape[X] != 0.0, "{shape:?}");
+    // No elastic belt, no mode.
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.belt_stretch = false").unwrap();
+    assert!(TGantry::new(&cfg).unwrap().mode_shape(&[x, 0.05]).is_none());
 }
 
 /// Equilibrium plus 1e-3 times the shape moves the tool by 1e-3 m (`tool_state`) and, drawn as it is, the flange

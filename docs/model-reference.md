@@ -686,7 +686,7 @@ F_z = 2 T₂ − T₁ − T₃                   belt force on the Z axis
 τ_B = r_mat · (M₂ − M₃)                belt torque on pulley B
 ```
 
-Belt mass: half of the belt is lumped on each motor pulley, J_pulley += ½ · ρ · L_total · r².
+Belt mass: half of the free belt is lumped on each motor pulley, J_pulley += ½ · ρ · L_total · r², which is exact for the runs that move at pulley speed. The vertical runs move over ground at other speeds (section 1 and 3 with the clamp, (v_x, v_z); section 2 at (v_x, 2v_x + v_z) and (v_x, −(2v_x − v_z))), so the belt's kinetic energy has one more term, T = ½ m_xx v_x² + m_xz v_x v_z with m_xx = 8ρ (s + s_z − z) and m_xz = 2ρ (2x − s_x) (s the free span at each end, s_x, s_z the strokes); the equations of motion and the energy have it in both models. The rigid feedforward has the mass terms but not the speed terms.
 
 ### States of the elastic model
 
@@ -768,15 +768,17 @@ z_tool = z − sag(x),   ż_tool = ż − sag'(x) ẋ
 
 At rest the Z axis stands sag(x) higher on its belt so that the tool is at its pose. With the default values: 107.87 N, L = 1.3 m, E I = 8.4e4 N m²: 58.8 µm in the middle, 9.8 µm at the ends of the stroke. Quasi-static: the beam's vertical mode with the carriage on it (about 100 Hz) lies above the Z axis's mode on its belt, and the Z axis's acceleration does not add to the load (shortcut, `Beam`).
 
-The modes the machine reports (`modes`; the lower one is `resonance_hz`, the input shaper's) are those of two masses in a row: the carriage on the belt's X stiffness k_b = EA/L₁ + EA/L₃ (pulleys taken as held), and the Z axis on k(z):
+The modes the machine reports (`modes`; the lowest is `resonance_hz`, the input shaper's) are the generalised eigenvalues K v = ω² M v over the elastic coordinates the model has at that pose (pulleys taken as held): the carriage x on the frame, the Z axis's z on its belt, with `effects.frame_compliance` the frame's sway q, with the leaning Z axis its lean u:
 
 ```text
-ω⁴ − ( k_b/m_c + k/m_c + k/m_z ) · ω² + k_b · k / (m_c · m_z) = 0
-v = (k − ω² m_z, ω² m_z)                                    shape in (x, u)
-ζ = (c_b v_x² + c_z v_u²) / (2 ω (m_c v_x² + m_z (v_x + v_u)²))
+T = ½ m_c w² + ½ m_z (w + u')² + ½ (m_z + m_idlers) z'² + ½ m_f q'²,  w = x' + q'
+K = Σ k_i g_i g_iᵀ + k_f e_q e_qᵀ + k_u e_u e_uᵀ,  k_i = EA / L_i
+g₁ = (1, 1), g₂ = (0, −2), g₃ = (−1, 1)          in (x, z): the sections' lengths change with x + z, −2z, −x + z
+K_xx = k₁ + k₃,  K_xz = k₁ − k₃,  K_zz = k₁ + 4k₂ + k₃
+ζ = vᵀ C v / (2 ω vᵀ M v)
 ```
 
-Both roots: in the lower mode carriage and Z axis swing together (24.6 Hz at x = 0.9 m, z = 0.05 m), in the upper one against each other (104.2 Hz). c_b is the damping of the two sections (2 · `belt.damping_n_s_m`, or with material damping `belt.damping_time_s` · k_b), c_z `tool_flex.damping_n_s_m`; the cross terms of a damping that is not proportional are left out. The frame mode and the stiffness of the control loops are not in it.
+With the default frame and the leaning Z axis that is four modes: carriage and frame swinging, the carriage on the belt, the Z axis on its belt, the Z axis's lean. By hand without the lean at x = 0.5 m, z = 0.25 m: M = diag(11, 30) kg, K = [[k_b, −k_b], [−k_b, k_b + 7.4·10⁵]] with k_b = 2 · 5·10⁵ / 1.05 N/m, 20.72 Hz and 56.51 Hz (the Z axis's mode on the belt above them); with the lean 20.64 Hz, and 18.81 Hz at x = 0.9 m, z = 0.05 m. C holds the two sections' damping on the same g_i (`belt.damping_n_s_m` each, or with material damping `belt.damping_time_s` · k_i more), `frame.damping_n_s_m` on q and `tool_flex.damping_n_s_m` on u; the cross terms of a damping that is not proportional are left out. The belt's own mass and the stiffness of the control loops are not in it.
 
 The single axis reports one mode, its carriage on the belt with the pulley held: f = sqrt(k / m) / (2π), k = EA/L₁ + EA/L₂, m the carriage with payload and cable chain, ζ = c / (2 m ω) (65.8 Hz at x = 0.5 m). None in the rigid model.
 
