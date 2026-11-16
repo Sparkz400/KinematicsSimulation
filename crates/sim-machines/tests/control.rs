@@ -280,7 +280,8 @@ fn a_move_arrives_and_comes_to_rest() {
 
 /// The machines that work on a process (a press, a cross cutter, a flying saw, a disc cam's stroke) and carry their load
 /// through the whole cycle: their cycles keep the payload, and no gripper acts.
-const NO_GRIPPER: &[&str] = &["slider-crank", "rotary-knife", "flying-saw", "disc-cam", "toggle-press"];
+const NO_GRIPPER: &[&str] =
+    &["slider-crank", "rotary-knife", "flying-saw", "disc-cam", "toggle-press", "geneva-drive", "cam-indexer"];
 
 #[test]
 fn the_cycle_visits_every_segment_and_switches_the_payload() {
@@ -727,6 +728,13 @@ const UNREAD: &[(&str, &str)] = &[
     ("rotary-knife", "effects.frame_stretch"),
     ("flying-saw", "effects.frame_stretch"),
     ("disc-cam", "effects.frame_stretch"),
+    // The indexing tables: a horizontal table, no process, no press frame.
+    ("geneva-drive", "effects.gravity"),
+    ("geneva-drive", "effects.process_force"),
+    ("geneva-drive", "effects.frame_stretch"),
+    ("cam-indexer", "effects.gravity"),
+    ("cam-indexer", "effects.process_force"),
+    ("cam-indexer", "effects.frame_stretch"),
     // Read by machine files' gantries only, as its config says.
     ("t-gantry", "effects.gantry_yaw"),
 ];
@@ -1272,6 +1280,8 @@ mod across_the_bounds {
         arm_on_track: "arm-on-track",
         winder: "winder",
         hexapod_rotary: "hexapod-rotary",
+        geneva_drive: "geneva-drive",
+        cam_indexer: "cam-indexer",
         exct_30: "EXCT-30",
     );
 }

@@ -119,3 +119,4 @@ machine-arm-on-track = Six-axis arm on a linear track (URDF, rack and pinion)
 group-track = Track: the carriage's guide blocks
 param-block_spacing_m = Guide blocks' spacing along the rails [m]
 param-rail_spacing_m = Rails' spacing [m]
+param-redundancy = Spare joint of a redundant arm: "home" or "joint_limits"

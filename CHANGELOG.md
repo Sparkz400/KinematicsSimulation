@@ -66,6 +66,13 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   cheapest motor, how fast a path can go, an E-stop, the energy, input shaping, a fit from a drive trace, an own
   controller in Python or through the FMU), each with its command, its output and what to read from it; the new
   `examples/fmu_controller.py` drives the FMU in torque mode with fmpy.
+- Machines `geneva-drive` and `cam-indexer` (crate `machine-crank-cam`): a rotary indexing table of six stations
+  stepped by a Geneva wheel (exact wheel angle, speed and acceleration, the acceleration step at the pin's entry and
+  exit) or by a cam index drive with the modified sine; checks `indexer-contact-force`, `index-accuracy` (the lock's play
+  in the dwell) and `index-settling` (the table's ring after each index).
+- `kinematics.redundancy` for the URDF arms in tool space: `"joint_limits"` spends a redundant arm's spare joint on
+  keeping the joints off their stops (the null space towards the middles of their ranges), `"home"` (as before) on
+  staying near `kinematics.home_joints`.
 
 ## [1.0.0] - 2026-11-16
 

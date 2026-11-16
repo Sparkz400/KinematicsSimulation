@@ -9,6 +9,9 @@
 //! - `toggle-press`: a crank pushing the knee of two links in line between the frame and the ram, a knuckle-joint press:
 //!   the force amplification towards the links' dead centre, the frame's stretch, the force capacity over the stroke
 //!   (`toggle`).
+//! - `geneva-drive` and `cam-indexer`: a rotary indexing table stepped on a station per turn of its driver, by a Geneva
+//!   wheel (its infinite jerk at the pin's entry) or by a cam index drive with the modified sine (`indexer`): the
+//!   contact force, the index accuracy in the dwell and the table's settling after each index.
 //!
 //! With `cam.run = false` (as shipped) the cycle is the config's `[[cycle.segment]]`, as on every machine: the crank
 //! swings through its working stroke and back as a servo press in pendulum mode does, the knife indexes, the saw's
@@ -20,6 +23,7 @@
 
 mod crank;
 mod disc;
+mod indexer;
 mod knife;
 mod saw;
 mod toggle;
@@ -31,6 +35,7 @@ use sim_core::{AxisInfo, Config, ConfigError, Machine, MachineEntry, MotorInfo};
 
 pub use crank::SliderCrank;
 pub use disc::DiscCam;
+pub use indexer::{Drive, Indexer, modified_sine};
 pub use knife::RotaryKnife;
 pub use saw::FlyingSaw;
 pub use toggle::TogglePress;
@@ -59,6 +64,8 @@ entry!(ROTARY_KNIFE, "rotary-knife", "rotary-knife.toml", knife::build);
 entry!(FLYING_SAW, "flying-saw", "flying-saw.toml", saw::build);
 entry!(DISC_CAM, "disc-cam", "disc-cam.toml", disc::build);
 entry!(TOGGLE_PRESS, "toggle-press", "toggle-press.toml", toggle::build);
+entry!(GENEVA_DRIVE, "geneva-drive", "geneva-drive.toml", indexer::build_geneva);
+entry!(CAM_INDEXER, "cam-indexer", "cam-indexer.toml", indexer::build_cam);
 
 const G: f64 = 9.80665;
 
@@ -213,6 +220,8 @@ fn forwards(v: f64, smoothing: f64) -> f64 {
     (v / smoothing - 1.0).clamp(0.0, 1.0)
 }
 
+#[cfg(test)]
+mod indexer_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

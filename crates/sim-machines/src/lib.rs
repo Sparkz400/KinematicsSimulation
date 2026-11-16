@@ -35,6 +35,8 @@ pub static MACHINES: &[&MachineEntry] = &[
     &machine_joint_kit::ARM_ON_TRACK,
     &machine_winder::ENTRY,
     &machine_hexapod_rotary::ENTRY,
+    &machine_crank_cam::GENEVA_DRIVE,
+    &machine_crank_cam::CAM_INDEXER,
 ];
 
 pub const LANGUAGES: &[&str] = &["en", "de"];

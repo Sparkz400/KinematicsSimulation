@@ -21,6 +21,7 @@ Test files, abbreviated in the tables:
 | H4, parallel SCARA, hexapod, tripod, cable robot, wafer handler | `src/tests.rs` of [`machine-delta-h4`](../crates/machine-delta-h4/src/tests.rs), [`machine-parallel-scara`](../crates/machine-parallel-scara/src/tests.rs), [`machine-hexapod`](../crates/machine-hexapod/src/tests.rs), [`machine-tripod`](../crates/machine-tripod/src/tests.rs), [`machine-cable-robot`](../crates/machine-cable-robot/src/tests.rs), [`machine-wafer-handler`](../crates/machine-wafer-handler/src/tests.rs) |
 | joint kit | [`crates/machine-joint-kit/src/tests.rs`](../crates/machine-joint-kit/src/tests.rs) |
 | crank, toggle | [`crates/machine-crank-cam/src/tests.rs`](../crates/machine-crank-cam/src/tests.rs), [`toggle_tests.rs`](../crates/machine-crank-cam/src/toggle_tests.rs) |
+| indexing table | [`crates/machine-crank-cam/src/indexer_tests.rs`](../crates/machine-crank-cam/src/indexer_tests.rs) |
 | winder | [`crates/machine-winder/src/tests.rs`](../crates/machine-winder/src/tests.rs) |
 | reference (per crate) | `tests/reference.rs` of [`machine-single-axis`](../crates/machine-single-axis/tests/reference.rs), [`machine-delta-d3`](../crates/machine-delta-d3/tests/reference.rs), [`machine-delta-d2`](../crates/machine-delta-d2/tests/reference.rs), [`machine-delta-linear`](../crates/machine-delta-linear/tests/reference.rs), [`machine-joint-kit`](../crates/machine-joint-kit/tests/reference.rs) |
 | sim-netlist | [`crates/sim-netlist/src/`](../crates/sim-netlist/src) |
@@ -724,6 +725,29 @@ Pythagoras and central differences for the rates, not from the closed-form chain
 | Friction feedforward from the model | (1 N m + 0.2 · 2 rad/s) / (10 · 0.97) + 0.05 + 2e-4 · 20 = 0.1983299 N m | 1e-6 | `the_steady_friction_is_the_hand_calculated_one` |
 | Standard suite, verdicts | The suite (with gravity: the middle of the crank's range lies where the ram's weight pulls towards the dead centre, stable); the shipped cycle and `toggle-press-cam.toml` pass every verdict | suite's | `toggle_press_passes_the_standard_suite`, `every_default_cycle_and_every_cam_passes_its_verdicts` |
 
+## Hand calculations: indexing table
+
+The rotary indexing tables `geneva-drive` and `cam-indexer` of `machine-crank-cam` (tests in its
+`src/indexer_tests.rs`). The Geneva's numbers come from the textbook closed forms (the peak acceleration where
+cos x = sqrt(k² + 2) - k, k = (1 + lambda²) / (4 lambda)), the code's from a grid of 200001 points over the index.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Geneva's motion share and dwell share, n = 4, 6, 8 | (n - 2) / (2n) = 1/4, 1/3, 3/8 and (n + 2) / (2n) = 3/4, 2/3, 5/8 | 1e-12 | `the_geneva_s_dwell_share_and_peak_speed_and_acceleration_ratios_match_the_textbook` |
+| Geneva's peak speed ratio | lambda / (1 - lambda) = 2.41421356, 1, 0.61991440 | 1e-8 | same |
+| Geneva's peak acceleration ratio | 5.406981, 1.349637, 0.699757 (at 11.46°, 22.90°, 31.64°; the textbooks' 5.41, 1.35, 0.700) | 1e-5 | same |
+| The step at the pin's entry | phi'' from 0 to tan(pi / 6) = 0.57735; on the shipped table at 60 turns a minute the wheel's torque 0.55 · 0.57735 · 39.4784 = 12.536 N m, the pin's force over C cos(pi / 6) = 0.103923 m 120.63 N, the crank's torque 0 | 1e-3 N m, 1e-2 N | `the_geneva_s_acceleration_jumps_at_the_pin_s_entry_and_the_torque_on_the_wheel_with_it` |
+| Modified sine | peak acceleration 4 pi² / (4 + pi) = 5.527957, peak speed 4 pi / (4 + pi) = 1.759603, s, s', s'' continuous at 1/8 and 7/8 | 1e-6 | `the_modified_sine_s_peak_acceleration_is_5_53_and_its_peak_speed_1_76` |
+| Cam indexer's peaks over 120° | 1.047198 · 5.527957 / 2.094395² = 1.319707, 1.047198 · 1.759603 / 2.094395 = 0.879802 | 1e-5 | `the_cam_indexer_s_peaks_are_the_modified_sine_s_over_its_index_angle` |
+| The table's ring after an index (w_n = 603.02 rad/s, zeta 0.03) | Geneva: the exit step 22.794 rad/s² over w_n² = 6.268e-5 rad, settled to 5e-5 rad in ln(6.268 / 5) / 18.09 = 12.5 ms, 89 ms at twice the speed; cam: its jerk 1964.1 rad/s³ over w_n³ = 8.96e-6 rad | 3 %, 2 ms, 3 ms; 5 % | `the_geneva_leaves_the_table_ringing_by_its_acceleration_step_and_the_cam_indexer_does_not` |
+| Energy, step convergence, determinism | the standard suite | as for every machine | `geneva_drive_passes_the_standard_suite`, `cam_indexer_passes_the_standard_suite` |
+
+The redundant arm's `kinematics.redundancy = "joint_limits"` (`machine-joint-kit`): on the seven-axis URDF the pose is
+reached to 1e-9, the weighted offset from the ranges' middles has no part along the null space (below 1e-6), its
+weighted sum is below the home solution's, and the machine built with the key solves the same joints
+(`the_seven_joint_arm_can_spend_its_spare_joint_on_staying_off_its_stops`). Its dynamics are the seven-axis URDF's,
+compared with MuJoCo above (`seven_axis_arm_matches_mujoco`); the option changes only which joints solve a pose.
+
 ## Friction feedforward in the shipped configs
 
 `sim-cli analyze` of every shipped config with `effects.friction_feedforward = false` and with it on and `drive.friction_feedforward_model = "machine"` (15 November 2026): the following error while moving (`tracking_error_peak`, the tool's distance from the setpoint; `_angle_` for the axes in rad) and the settling at pick and place (`dwell_error_peak`, the second half of the dwells). Place in um, turn in mrad; "–" where the machine has none (no dwell in a conveyor or cam cycle). **On** marks where it is switched on as shipped. The velocity loop's margins do not change with a feedforward (`sim-cli margins` gives the same figures with it on and off), so every config keeps the margins it was tuned to: `sim-cli margins MACHINE --bands` of every config switched on gives at least 35.8° and 8.0 dB (rotary knife; the T-gantry 48.9° and 8.63 dB, the D4 40.4° and 8.92 dB).
@@ -1160,3 +1184,12 @@ runner and was never run on a Mac; its FMU binary is not run by `check_fmu.py`, 
 and `SHA256SUMS` were not produced by a real release before 1.0.0 was tagged. The benchmark check
 (`.github/workflows/bench.yml`) compares each run on main with the one before, on shared runners that differ by 10 to
 20 % between runs: it warns only, and a slowdown spread over several pushes of under 15 % each is never warned about.
+
+**Indexing tables** (`geneva-drive`, `cam-indexer`). The Geneva and modified-sine kinematics are checked against the
+textbook formulas, not against a measured indexer; every mass, inertia, stiffness, play and rating is an estimate. The
+pin and the rollers carry the wheel's torque without friction, the cam's pressure angle left out of the roller's force.
+The locking disc holds the wheel rigidly: its play gives the index accuracy, but the wheel does not rattle in it, and the
+lock's own load is not judged. The table's twist on its shaft is worked out beside the dynamics for an index run at the
+driver's speed of the moment (exact under `cam.run`, an estimate on a servo cycle that speeds up through the index), and
+does not act back on the drive. The seven-axis arm's joint-limit option is checked for the pose it reaches and the
+optimum it settles at, not for how far from its stops a whole cycle keeps the arm.
