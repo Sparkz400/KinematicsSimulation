@@ -2442,8 +2442,8 @@ impl ConfigMachine {
 
 impl Machine for ConfigMachine {
     /// Each body moving with its axes (an axis with the id x, y or z along that direction), over ground with the frame's
-    /// sway and the lean; the frame's own mass in its sway; a rotary axis's inertia turning about z; the process force on
-    /// the tool. What does not move is left out (see `FrameMomentum`).
+    /// sway and the lean; the frame's own mass in its sway; a rotary axis's inertia turning about its own axis; the process
+    /// force on the tool. What does not move is left out (see `FrameMomentum`).
     // shortcut: the pulleys', idlers' and rotors' spin is left out (their axes are not in the netlist), and a linear
     // axis whose id is not x, y or z moves nothing; add them once the netlist places them.
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
@@ -2467,11 +2467,12 @@ impl Machine for ConfigMachine {
             }
         }
         for (b, body) in self.bodies.iter().enumerate() {
-            let (mut r, mut w) = ([0.0; 3], [0.0; 3]);
-            for i in (0..n).filter(|&i| body.axes[i]) {
-                if let Some(k) = along[i] {
-                    (r[k], w[k]) = (place[i], ground[i]);
-                }
+            // Where the body is (straight axes, its offset turned by the rotaries it rides on) and how fast, by the
+            // Jacobian of that place: a rotary's lever arm and omega x r come with it.
+            let mut r = self.body_point(body, &place);
+            let mut w = [0.0; 3];
+            for (i, column) in self.body_jacobian(body, &place).iter().enumerate() {
+                (0..3).for_each(|k| w[k] += column[k] * ground[i]);
             }
             // A body that does not move along the frame's axis rides on the frame.
             if let Some(k) = self.frame.as_ref().filter(|fr| !body.axes[fr.axis]).and_then(|fr| along[fr.axis]) {
@@ -2484,9 +2485,14 @@ impl Machine for ConfigMachine {
             }
             sim_components::base::add_point(&mut f, self.body_mass(body), r, w);
         }
+        // Each rotary's own spin, about its axis as the rotaries outside it have turned it.
         for i in (0..n).filter(|&i| self.axes[i].unit == "rad") {
             let turned = self.turned[i].0 + if self.payload_attached { self.turned[i].1 } else { 0.0 };
-            f.angular[2] += turned * v[i];
+            let outer = self.bodies.iter().find_map(|b| {
+                b.rotaries.iter().position(|&r| r == i).map(|at| &b.rotaries[..at])
+            });
+            let axis = self.turned_by(outer.unwrap_or(&[]), q, self.turn[i]);
+            (0..3).for_each(|k| f.angular[k] += turned * v[i] * axis[k]);
         }
         for (i, force) in self.process_force().iter().enumerate().take(n) {
             if let Some(k) = along[i] {
@@ -2725,7 +2731,7 @@ impl Machine for ConfigMachine {
 
     /// `rigid_solve` at a steady speed: the guides (`Lugre::feedforward`, at their load at rest), idlers and cable chains
     /// as forces on the axes, taken to the motors as the rigid forces are (`to_motors`), over each gearbox's loss factor
-    /// for what it passes at rest (that friction less the weight), plus each shaft's friction at its rotor's speed.
+    /// for what it passes at rest (that friction less the weight; the loss on the weight counts as friction), plus each shaft's friction at its rotor's speed.
     fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
         let (q, v, _) = self.joint_motion(pos, vel, &vec![0.0; pos.len()]);
         let n = self.n();
@@ -2736,11 +2742,13 @@ impl Machine for ConfigMachine {
         let ((idlers, _), drag, gravity) = (self.idler_friction(&v), self.chain_drag(&v), self.gravity(&q));
         let friction: Vec<f64> = (0..n).map(|i| force[i] - idlers[i] + drag[i]).collect();
         let held: Vec<f64> = (0..n).map(|i| friction[i] - gravity[i]).collect();
-        let (at_motors, passed) = (self.to_motors(&friction), self.to_motors(&held));
+        let (weight, passed) = (self.to_motors(&gravity), self.to_motors(&held));
         for (kk, out) in out.iter_mut().enumerate() {
             let pulley = self.pulley_angle(kk, &v);
             let (output, rotor) = self.rigid_factors(kk, self.ratio[kk] * passed[kk], pulley);
-            *out = self.shafts[kk].torque(self.ratio[kk] * pulley) + at_motors[kk] * rotor / output;
+            // The loss factor acts on everything the gearbox passes, the weight included; the weight's own lossless torque
+            // (-weight) is not friction, so it comes off again.
+            *out = self.shafts[kk].torque(self.ratio[kk] * pulley) + passed[kk] * rotor / output + weight[kk];
         }
     }
 

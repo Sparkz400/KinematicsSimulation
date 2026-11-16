@@ -203,9 +203,9 @@ fn the_telescopes_friction_is_the_hand_calculated() {
     assert!(d4(&["effects.telescope_friction = false"]).drag.is_none());
 }
 
-/// The tool's torsion with the motor held: the gearbox's 8594.4 N m/rad in series with the shaft's 500 N m/rad,
-/// 1 / (1/8594.4 + 1/500) = 472.51 N m/rad, against J_c = 7.08e-3 kg m^2: sqrt(472.51 / 7.08e-3) / 2 pi = 41.12 Hz,
-/// without the payload (2.08e-3) 75.86 Hz; damping 0.075 / (2 sqrt(472.51 * 7.08e-3)) = 2.05 % of critical. It is among
+/// The tool's torsion with the motor held: the gearbox's 8250.592 N m/rad in series with the shaft's 500 N m/rad,
+/// 1 / (1/8250.592 + 1/500) = 471.43 N m/rad, against J_c = 7.08e-3 kg m^2: sqrt(471.43 / 7.08e-3) / 2 pi = 41.0688 Hz,
+/// without the payload (2.08e-3) 75.77 Hz; damping 0.075 / (2 sqrt(471.43 * 7.08e-3)) = 2.05 % of critical. It is among
 /// the modes, the arms' first; the rigid model has none of it.
 #[test]
 fn the_tools_torsional_mode_is_the_hand_calculated() {

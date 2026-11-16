@@ -501,6 +501,10 @@ pub struct LinkageMachine {
     arm_inertia: f64,
     arm_moment: f64,
     m_platform: f64,
+    /// The same two for the weight: the potential energy of a rod is its mass at its middle, so the forearms' weight splits
+    /// half to the elbow and half to the plate whatever share their inertia is split by.
+    weight_moment: f64,
+    weight_platform: f64,
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
@@ -605,6 +609,8 @@ impl LinkageMachine {
             arm_inertia: i_arm + la * la * elbow,
             arm_moment: m_arm * cg + la * elbow,
             m_platform: n.positive("mass.platform_kg")? + 2.0 * (1.0 - share) * m_fb,
+            weight_moment: m_arm * cg + la * (m_elbow + 0.5 * m_fb),
+            weight_platform: n.positive("mass.platform_kg")? + m_fb,
             m_payload: if cfg.bool("effects.payload")? { n.non_negative("mass.payload_kg")? } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
@@ -643,9 +649,9 @@ impl LinkageMachine {
                 }
                 let Some(t) = self.legs.inverse(p) else { continue };
                 let Some(j) = self.legs.jacobian(t, p) else { continue };
-                for m in [self.m_platform, self.m_platform + self.m_payload] {
+                for m in [self.weight_platform, self.weight_platform + self.m_payload] {
                     let twist: V2 = std::array::from_fn(|k| {
-                        let held = -(self.g * self.arm_moment * t[k].cos() - m * self.g * j[1][k])
+                        let held = -(self.g * self.weight_moment * t[k].cos() - m * self.g * j[1][k])
                             - self.joints[k].output_torque(t[k], 0.0);
                         self.joints[k].gearbox.spring_twist_signed(held)
                     });
@@ -721,7 +727,8 @@ impl LinkageMachine {
         });
         let pv = mul(&j, w);
         let velocity = self.legs.velocity_term(t, p, w, pv).map_or([f64::NAN; 2], |a| mul(&jt, a.map(|v| m * v)));
-        let gravity: V2 = std::array::from_fn(|k| self.g * self.arm_moment * t[k].cos() - m * self.g * j[1][k]);
+        let mw = self.weight_platform + if self.payload_attached { self.m_payload } else { 0.0 };
+        let gravity: V2 = std::array::from_fn(|k| self.g * self.weight_moment * t[k].cos() - mw * self.g * j[1][k]);
         (mass, velocity, gravity)
     }
 
@@ -779,7 +786,8 @@ impl LinkageMachine {
         let (mass, ..) = self.load(t, w);
         let mut kinetic = 0.5 * dot(w, mul(&mass, w));
         let (p, _) = self.pose(t);
-        let potential = self.g * (self.m_nt() * p[1] - self.arm_moment * (t[0].sin() + t[1].sin()));
+        let mw = self.weight_platform + if self.payload_attached { self.m_payload } else { 0.0 };
+        let potential = self.g * (mw * p[1] - self.weight_moment * (t[0].sin() + t[1].sin()));
         let mut elastic: f64 = (0..2).map(|k| self.joints[k].stop_energy(t[k])).sum();
         if self.elastic {
             for k in 0..2 {
@@ -1061,8 +1069,9 @@ impl Machine for LinkageMachine {
 
     /// The rigid model at a steady speed, theta' = J^-1 p': per arm the joint's friction f(theta') through the gearbox
     /// as `rigid_solve` takes it, f / (i loss), plus the motor shaft's friction (with the gearbox's drag) at i theta'.
-    /// The loss factor is the one of what the gearbox passes at rest, f - Q_g, as in `rigid_solve`; the weight itself is
-    /// the rigid feedforward's. The brake is released and the stops are not touched in a move.
+    /// The loss factor is the one of what the gearbox passes at rest, f - Q_g, as in `rigid_solve`; the weight's lossless torque
+    /// is the rigid feedforward's, so the loss on the weight is part of what this returns. The brake is released and the
+    /// stops are not touched in a move.
     fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
         let t = self.legs.inverse([pos[0], pos[1]]).unwrap_or([f64::NAN; 2]);
         let (_, j) = self.pose(t);
@@ -1072,7 +1081,9 @@ impl Machine for LinkageMachine {
             let joint = &self.joints[k];
             let at_arm = joint.friction.torque(w[k]);
             let loss = joint.gearbox.loss_factor(at_arm - gravity[k], w[k]);
-            out[k] = joint.shaft.torque(joint.ratio() * w[k]) + at_arm / (joint.ratio() * loss);
+            // The loss acts on the weight too: what it adds over the lossless weight torque (-gravity / i) is friction.
+            out[k] = joint.shaft.torque(joint.ratio() * w[k])
+                + ((at_arm - gravity[k]) / loss + gravity[k]) / joint.ratio();
         }
     }
 

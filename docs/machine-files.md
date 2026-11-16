@@ -285,7 +285,7 @@ the file. The order of the motors in the file is the order of the motor signals 
 | | `strain_wave` | | the table of its strain wave gear's life values, laid out as `[strain_wave]` |
 | `worm` | `gearbox` | required | that gearbox is a worm stage ([below](#worm-gears)); one worm per gearbox |
 | | `ratio` | required | its ratio, in place of the gearbox's |
-| | `efficiency`, `back_efficiency` | required | driven by the worm (above 0, at most 1) and back by the wheel (at most 1; 0 or less locks itself) |
+| | `efficiency`, `back_efficiency` | required | driven by the worm (above 0, at most 1) and back by the wheel (at most 1; 0 or less locks itself, which needs a driven efficiency below 0.5) |
 | `lean` | `body`, `axis` | required | a body leaning on its carriage along a horizontal axis it moves with (`effects.tool_flex`, elastic model); at most one ([below](#the-belts-wrap-and-a-leaning-axis)) |
 | | `com_drop_m`, `tool_drop_m` | required | its centre of mass and the tool tip below the guide with `lever_axis` at 0, m |
 | | `lever_axis` | | an axis whose travel raises both towards the guide |
@@ -552,7 +552,7 @@ id = "worm_c"
 gearbox = "gear_c"         # the gearbox in front of a rotary table, say
 ratio = 40.0
 efficiency = 0.76          # driven by the worm: tan(gamma) / tan(gamma + rho')
-back_efficiency = 0.5      # driven back by the wheel: tan(gamma - rho') / tan(gamma); 0 or less locks itself
+back_efficiency = 0.69     # driven back by the wheel: tan(gamma - rho') / tan(gamma); 0 or less locks itself (then eta < 0.5)
 ```
 
 While the motor drives it passes its spring's torque t on as t eta to the output and t / i to the rotor, as a gearbox
@@ -860,7 +860,7 @@ machine; nothing about them is particular to machine files.
   do not follow the yaw.
 - A body on rotary axes is a point mass at its centre of mass: its own inertia about that is in the rotary's
   `inertia_kgm2`. A tool centre point needs three straight axes square to each other (the 3D view's x, y, z) and the
-  rotaries on the tool's side (a head): a rotary table carrying the workpiece is not one yet. The analysis's settling
+  rotaries on the tool's side (a head), or a rotary table carrying the workpiece (`tcp.table`). The analysis's settling
   and path errors add a rotary axis's error in rad to the straight axes' in m.
 - `effects.belt_tooth_jump` together with a screw, rack, linear motor or rotary: its states are laid out per motor, and
   a motor without a pulley has none; the file is refused.

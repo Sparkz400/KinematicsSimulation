@@ -47,11 +47,12 @@ rate = lambda e: e.jacobian(q) * qd
 legs = [(sp.Matrix([s * (R + La * sp.cos(th[i])), -La * sp.sin(th[i])]), sp.Matrix([x + s * r, z])) for i, s in enumerate(SIDE)]
 
 T = (mass["platform_kg"] + mass["payload_kg"] + 2 * (1 - share) * m_fb) * (xd**2 + zd**2) / 2
-V = (mass["platform_kg"] + mass["payload_kg"] + 2 * (1 - share) * m_fb) * G * z
+# The weight, unlike the inertia, splits a forearm half to the elbow and half to the plate (a rod's mass is at its middle).
+V = (mass["platform_kg"] + mass["payload_kg"] + m_fb) * G * z
 for i, (elbow, _) in enumerate(legs):
     ve = rate(elbow)
     T += (mass["upper_arm_inertia_kgm2"] + j_rotor * ratio**2) * thd[i] ** 2 / 2 + (mass["elbow_kg"] + share * m_fb) * ve.dot(ve) / 2
-    V += -G * mass["upper_arm_kg"] * mass["upper_arm_cg_m"] * sp.sin(th[i]) + (mass["elbow_kg"] + share * m_fb) * G * elbow[1]
+    V += -G * mass["upper_arm_kg"] * mass["upper_arm_cg_m"] * sp.sin(th[i]) + (mass["elbow_kg"] + 0.5 * m_fb) * G * elbow[1]
 
 T = sp.Matrix([T])
 t_qd = T.jacobian(qd).T

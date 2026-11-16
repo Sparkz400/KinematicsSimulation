@@ -1498,7 +1498,7 @@ impl Netlist {
 }
 
 /// The worm stage on the gearbox `gearbox` (`machine.worm`), where one names it: its ratio above 0, its efficiency
-/// above 0 and at most 1, its back efficiency at most 1 (0 or less locks itself).
+/// above 0 and at most 1 (below 0.5 where it locks itself), its back efficiency at most 1 (0 or less locks itself).
 fn worm_node(cfg: &Config, worms: &[Node], gearbox: &str, refs: &mut Vec<String>) -> Result<Option<WormNode>> {
     let mine: Vec<&Node> =
         worms.iter().filter(|w| w.table.get("gearbox").and_then(Value::as_str) == Some(gearbox)).collect();
@@ -1523,6 +1523,11 @@ fn worm_node(cfg: &Config, worms: &[Node], gearbox: &str, refs: &mut Vec<String>
     }
     if worm.back_efficiency > 1.0 {
         return Err(ConfigError::Invalid(format!("{} (at most 1)", node.at("back_efficiency"))));
+    }
+    // A worm locks itself where gamma < rho', and there eta = tan(gamma) / tan(gamma + rho') < 1/2.
+    if worm.back_efficiency <= 0.0 && worm.efficiency >= 0.5 {
+        let why = "a self-locking worm has an efficiency below 0.5";
+        return Err(ConfigError::Invalid(format!("{} ({why})", node.at("efficiency"))));
     }
     Ok(Some(worm))
 }

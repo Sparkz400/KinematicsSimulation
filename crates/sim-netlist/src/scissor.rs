@@ -17,7 +17,7 @@
 //! Q_g = -g m_g h'. m counts the platform, the payload and the arms' vertical motion, arms (4 n^2 - 1) / (12 n^2) (the
 //! centres of stage k's arms at (k - 1/2) h / n); m_g the platform, the payload and half the arms.
 //! shortcut: the arms' turning and the sideways motion of their centres and of the sliding feet are left out of the
-//! kinetic energy (a few per cent of the arms' share at mid height); add them to M if light platforms on heavy arms
+//! kinetic energy (about 16 % of the arms' share, 0.7 % of the total at mid height); add them to M if light platforms on heavy arms
 //! matter.
 //!
 //! The joint is a `RotaryJoint` on the motor's own config (motor, gearbox, brake), without joint friction or stops: the
@@ -542,10 +542,14 @@ impl Machine for ScissorMachine {
         out
     }
 
-    /// The gearbox's output torque, and the force on the sliding foot, the screw's torque over its lever c.
+    /// The gearbox's output torque, and the force on the sliding foot, the screw's torque over its lever c. The joint's
+    /// gearbox carries the screw's loss too, so `gear` is the torque after the screw: the gearbox's own shaft carries
+    /// more of it while it drives (gear / eta_s) and less while the load drives it back (gear eta_s), as the registered
+    /// screw axes report.
     fn base_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         let gear = self.gear(s, torque[0]);
-        out.extend([gear, gear / self.geometry.lever]);
+        let shaft = shaft_torque(gear, s[1], self.screw_efficiency);
+        out.extend([shaft, gear / self.geometry.lever]);
     }
     fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         let (theta, w) = (s[0], s[1]);
@@ -669,6 +673,11 @@ impl Machine for ScissorMachine {
     }
 }
 
+/// The gearbox's own output torque from the torque after the screw: more while it drives, less while driven back.
+fn shaft_torque(after_screw: f64, speed: f64, screw_efficiency: f64) -> f64 {
+    after_screw * if after_screw * speed >= 0.0 { 1.0 / screw_efficiency } else { screw_efficiency }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,5 +706,13 @@ mod tests {
         let step = 1e-3;
         let numeric = (lift.height(theta + step)[1] - lift.height(theta - step)[1]) / (2.0 * step);
         assert!((lift.height(theta)[2] - numeric).abs() < 1e-9 * numeric.abs().max(1e-9), "{numeric}");
+    }
+    /// Screw 0.9, gearbox 0.96, ratio 20, the weight needing F c = 27.780 N m after both (motor 1.60763 N m lifting:
+    /// 1.60763 * 20 * 0.96 * 0.9). Lifting the gearbox's own shaft carries 27.780 / 0.9 = 30.867 N m; lowering
+    /// (same holding torque, speed reversed) 27.780 * 0.9 = 25.002 N m.
+    #[test]
+    fn the_gearbox_shaft_carries_the_screws_loss() {
+        assert!((shaft_torque(27.780, 0.05, 0.9) - 30.867).abs() < 1e-3);
+        assert!((shaft_torque(27.780, -0.05, 0.9) - 25.002).abs() < 1e-3);
     }
 }
