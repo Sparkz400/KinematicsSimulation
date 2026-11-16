@@ -47,6 +47,14 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo fmt --all --check
 
+      # No crate goes to crates.io (CONTRIBUTING.md, "Not on crates.io"): every one has publish = false.
+      - name: No crate publishable
+        if: runner.os == 'Linux'
+        run: >-
+          cargo metadata --no-deps --format-version 1 | python3 -c "import json, sys;
+          p = [x['name'] for x in json.load(sys.stdin)['packages'] if x['publish'] != []];
+          sys.exit(f'publish = false missing in: {p}' if p else 0)"
+
       # Bevy (window, input, audio) and the native file dialog need these on Linux.
       - name: Linux system libraries
         if: runner.os == 'Linux'
@@ -359,7 +367,7 @@ jobs:
         run: |
           pip install maturin==1.16.0
           (cd crates/sim-py && maturin build --release --locked --out ../../target/wheels)
-          pip install target/wheels/*.whl "pytest==9.2.0" "pytest-xdist==3.8.0" pandas matplotlib nbformat nbclient ipykernel
+          pip install target/wheels/*.whl "pytest==9.2.0" "pytest-xdist==3.8.0" pandas matplotlib nbformat nbclient ipykernel "fmpy==0.3.32"
       # One worker per core (-n auto); --durations lists the slowest, to see which test made the job slow.
       - name: Tests
         shell: bash

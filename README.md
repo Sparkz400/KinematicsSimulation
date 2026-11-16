@@ -10,7 +10,7 @@ A physics simulator of motion machines in which torque, speed and following erro
 It has twenty-eight machines: a two-motor T-gantry (X and Z on one belt) and a single belt axis; five delta pickers (the three-arm D3 sized like an Autonox RL3-1200-3kg, a four-axis D4 that also turns the tool, a four-arm delta of the Quattro type whose two-part plate turns the tool, a planar two-arm D2 sized like a Codian D2-800 and a linear delta on three belt columns sized like a Festo EXPT-95) and a parallel SCARA; from a kit of joints a ball screw axis, a rack and pinion axis, a linear motor axis, a rotary table, a six-axis arm read from a URDF file (also on a linear track), a SCARA and a palletiser; crank and cam machines (a servo press, a toggle press, a rotary knife, a flying saw, a disc cam); parallel kinematics (a hexapod on electric cylinders, a six-axis platform on cranks, a tripod, a planar and a spatial cable robot); an R-theta-Z wafer handler; and a winder and unwinder with a dancer ([mechanisms](docs/mechanisms.md)). More machines are described in [machine files](docs/machine-files.md) without Rust code: an H-bot, a CoreXY table, an XYZ portal, a portal with a ball-screw Z, rack-and-pinion and dual-drive gantries, a portal with a C axis, two five-axis machines, a scissor lift, a stepper belt axis, an induction motor lift and a servo axis with a pneumatic Z cylinder (`machines/*.toml`).
 They run behind six front ends: a desktop app with a 3D view and scopes, a command-line tool that writes CSV, an OPC UA server with PLCopen-style axes for a PLC, an FMI 2.0 and 3.0 Co-Simulation export for Simulink, OpenModelica, Dymola and other tools, a Python module, and a browser page with a 3D view of the machine and a sizing check.
 It is written in Rust; vendor data for motors, gearboxes, drives, belt axes, screws, guides and pneumatic cylinders is in [`catalog/`](catalog/).
-**Quick start:** watch a machine run in 3D and try the sizing check in your browser at **https://sparkz400.github.io/KinematicsSimulation/** (nothing to install; the documents are under [/docs/](https://sparkz400.github.io/KinematicsSimulation/docs/)), download the Windows or Linux build from [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases), or build it yourself with `cargo run --release -p sim-app` (see [Build and run](#build-and-run)).
+**Quick start:** watch a machine run in 3D and try the sizing check in your browser at **https://sparkz400.github.io/KinematicsSimulation/** (nothing to install; the documents are under [/docs/](https://sparkz400.github.io/KinematicsSimulation/docs/)), download the Windows, Linux or macOS build from [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases), or build it yourself with `cargo run --release -p sim-app` (see [Build and run](#build-and-run)).
 Deutsche Fassung: [docs/de/README.md](docs/de/README.md) und [Benutzerhandbuch](docs/de/benutzerhandbuch.md).
 
 ![The delta picker in the app: motion panel, 3D view, cycle analysis and scopes](docs/images/delta-d3-app.png)
@@ -67,6 +67,20 @@ Other limits that matter:
 - The hexapod and the spatial cable robot simulate slower than real time.
 
 What is not built yet: [ROADMAP.md](ROADMAP.md).
+
+## Downloads
+
+Each [release](https://github.com/Sparkz400/KinematicsSimulation/releases) has a Windows zip and MSI, a Linux tarball and .deb, a macOS tarball (one universal build for Apple silicon and Intel), FMUs and `SHA256SUMS`. Check a download with `sha256sum -c SHA256SUMS --ignore-missing`, and that GitHub's release workflow built it with `gh attestation verify FILE --repo Sparkz400/KinematicsSimulation`.
+
+Nothing is code-signed. Windows SmartScreen may warn ("More info", "Run anyway"). On macOS the build is neither signed nor notarised, so Gatekeeper refuses to open it when it came through a browser; after unpacking, take the quarantine flag off the folder and start the programs from a terminal:
+
+```sh
+tar -xzf kinematics-simulation-<version>-macos-universal.tar.gz
+xattr -dr com.apple.quarantine kinematics-simulation-<version>-macos-universal
+kinematics-simulation-<version>-macos-universal/bin/sim-app
+```
+
+(Or, after the first refusal, System Settings → Privacy & Security → "Open Anyway" for that program.) The macOS build is made on GitHub's macOS runner and has not been run on a Mac by the authors.
 
 ## Build and run
 

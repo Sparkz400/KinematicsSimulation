@@ -7,6 +7,22 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Release polish (session 12)
+
+- Releases: `SHA256SUMS` over every file of the release, a GitHub build provenance attestation for each of them
+  (zip, MSI, tarballs, .deb, FMUs) and for the Python wheels and sdist (`gh attestation verify FILE --repo ...`); a
+  macOS build (one universal tarball, arm64 and x86_64, unsigned; the README says how to open it) and the darwin64
+  binary in the FMUs, both left out with a warning when the macOS build fails.
+- `.github/workflows/bench.yml`: the Criterion step and cycle benches of every machine on each push to main and by hand, compared
+  with the last run on main by `tools/bench_compare.py`; a median over 15 % slower with the 95 % intervals apart gives
+  a warning, never a failure.
+- Every crate has `publish = false` (CI's `lint` checks it): the product ships as binaries, wheels and FMUs, not on
+  crates.io (CONTRIBUTING.md).
+- `examples/README.md` opens with a gallery of eight recipes, one per question users ask (will this motor do it, the
+  cheapest motor, how fast a path can go, an E-stop, the energy, input shaping, a fit from a drive trace, an own
+  controller in Python or through the FMU), each with its command, its output and what to read from it; the new
+  `examples/fmu_controller.py` drives the FMU in torque mode with fmpy.
+
 ## [1.0.0] - 2026-11-16
 
 The release was cut on 14 November 2026 at 19c2ad1 and tagged on 16 November 2026; the three

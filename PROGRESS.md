@@ -4358,3 +4358,30 @@ Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries a
   the motors held; machine files that follow their crates' friction feedforward.
 - Last full run in this period: 1533 of 1538 tests passed at 54a2fca, before wave 3; the final count is a placeholder
   in docs/validation.md.
+
+## Release polish: checksums, attestations, macOS, benches, examples (16 November)
+
+- `release.yml`: the package job gained `macos-latest` (optional, `continue-on-error`): `tools/package.sh` on Darwin
+  builds `aarch64-apple-darwin` and `x86_64-apple-darwin` and joins every binary with `lipo` into
+  `kinematics-simulation-<version>-macos-universal.tar.gz`; the .deb only on Linux now. The FMU job adds
+  `libsim_fmi.dylib` (FMI 2.0 `darwin64`, the universal file serves both architectures) when the macOS build exists.
+  All release files go to `release/` with `SHA256SUMS`, which `actions/attest-build-provenance` v4.2.2 (pinned by
+  commit) attests file by file (`subject-checksums`); `publish-python.yml` attests the wheels and the sdist. Checked:
+  `actionlint` 1.7.12 with shellcheck and pyflakes on all four touched workflows, `shellcheck tools/package.sh`, and
+  both branches of `package.sh` run in WSL against stub `cargo`, `uname` and `lipo` (the right files in each tarball,
+  no .deb from Darwin). Not run: a real macOS build, the attestation, a release.
+- `bench.yml` runs the groups `step` and `cycle` (here 3.5 and some 8 minutes); `analysis` is left out, its iterations
+  take up to 37 s (cable-spatial), minutes a machine at 10 samples. With `tools/bench_compare.py` (`--self-test`: 20 % slower with the intervals apart warns; overlapping,
+  10 % slower and faster do not). The step group on this machine, busy with other builds, had 95 % intervals of the
+  median up to ±50 % (tripod 51 to 145 µs), which is why the size of a change alone is not enough. The hexapod's and
+  the spatial cable robot's one-step benches already existed (the bench loops over every registered machine:
+  `step/hexapod`, `step/cable-spatial`, 70 and 116 µs mean here).
+- `publish = false` in all 26 crates (the fuzz crate had it); `cargo publish -p sim-core --dry-run` refuses, and the
+  `lint` job's check names a crate without it (tried with sim-core set back to true).
+- `examples/README.md`: eight recipes; every `sim-cli` line runs in `crates/sim-cli/tests/examples.rs` (28 s for all),
+  the two Python ones in `crates/sim-py/tests/test_examples.py` (the FMU one asserts the inertia 1.344e-4 kg m² worked
+  out by hand in docs/python.md, and a following error under 0.2 rad); CI's python job installs fmpy for it.
+- Seen, not mine: `crates/sim-py/examples/own_controller.py` now prints 0.168 N m RMS for the PD and 0.0175 rad short,
+  where docs/python.md still says 0.172 N m and 0.05 rad. `sim-cli verdicts t-gantry --config exct-30.toml --motor
+  1FK2104-5AK --bands --worst` reports a motor-peak "worst" of 4.87e9 (FAIL) at a corner of the bands while the nominal
+  run uses 0.29: a run that diverges at that corner, read as a number.

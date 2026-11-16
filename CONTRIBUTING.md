@@ -80,6 +80,21 @@ red one hides none of the others; Windows and Linux each:
 
 The jobs that run the archive wait for `build`, but run even when the other platform's build failed.
 
+`.github/workflows/bench.yml` runs the Criterion benchmarks of `crates/sim-machines/benches` (one step and one pass of
+the default cycle, per machine; not the analysis, minutes a machine) on every push to main and by hand, some 20 minutes.
+It compares each median with the last run on main (`tools/bench_compare.py`, the baseline kept in the Actions cache) and
+warns, in the job summary, about every bench more than 15 % slower whose 95 % interval lies wholly above the baseline's.
+It never fails: shared runners differ by 10 to 20 % between runs. Since each run on main becomes the next baseline, a
+slowdown in steps of under 15 % passes unwarned; compare against an older commit by hand on a quiet machine (`cargo
+bench -p sim-machines --bench simulate -- --save-baseline before`, then `-- --baseline before` after the change).
+
+### Not on crates.io
+
+The product ships as binaries, an MSI, a .deb, a macOS tarball, FMUs and Python wheels (`release.yml`,
+`publish-python.yml`), not as Rust libraries: their interfaces change with every phase and are not kept stable for
+outside users. So every crate has `publish = false` in its `Cargo.toml`, and `cargo publish` refuses. A new crate needs
+the same line; the job `lint` fails on a crate without it.
+
 ## Licence
 
 By contributing you agree that your contribution is licensed under MIT OR Apache-2.0, as the rest of the project,

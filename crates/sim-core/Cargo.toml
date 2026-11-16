@@ -3,6 +3,8 @@ name = "sim-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Shipped as binaries, wheels and FMUs, not on crates.io (CONTRIBUTING.md).
+publish = false
 
 [dependencies]
 toml.workspace = true
