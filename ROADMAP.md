@@ -8,11 +8,12 @@ No dates. What to verify before the release is in [TODO.md](TODO.md).
 ## Needs a real machine or data
 
 - Measured machines. One exists: the ball screw bench of ISW, University of Stuttgart
-  (`datasets/isw-ball-screw-axis`, CC BY 4.0). After the fit on its S-profile the replayed motor torque is 5.3 % of
-  the peak off in RMS (28 % at the worst sample); on the two recordings kept as checks 13.3 % and 6.1 % (35 % and
-  25 %). The fitted moved mass is 92 kg below the config's (the screw shaft's inertia at its nominal diameter, and
-  the gearbox efficiency acting on the inertial force); the held force at rest has the wrong sign on the
-  constant-speed run; the model's first mode is 137 Hz against 123 to 134 Hz measured
+  (`datasets/isw-ball-screw-axis`, CC BY 4.0). After the fit on its S-profile, with the screw's efficiency from its
+  lead angle, the replayed motor torque is 4.6 % of the peak off in RMS (27 % at the worst sample); on the two
+  recordings kept as checks 13.1 % and 6.1 % (34 % and 25 %). The fitted moved mass is 57 kg below the config's 549 kg
+  (92 kg before the efficiency): what is left is the screw shaft's inertia, a solid cylinder at its nominal diameter
+  over 1.8 m in the model, whose threaded part and journals the source does not give; the held force at rest has the
+  wrong sign on the constant-speed run; the model's first mode is 137 Hz against 123 to 134 Hz measured
   ([validation](docs/validation.md#against-measured-data)). No other machine has been measured, and the project's own
   test runs on a real axis (stages D2, D4 of the plan) have not been made.
 - A drive's own trace export. The importers for SINAMICS, TwinCAT and CODESYS traces are tested on files built after

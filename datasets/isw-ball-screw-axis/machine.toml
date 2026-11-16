@@ -57,6 +57,11 @@ joint_friction = true
 motor_friction = true
 gearbox_backlash = true
 gearbox_efficiency = true
+# The ball screw's efficiency from its lead angle and its balls' friction (screw.friction_coefficient, THK's
+# formula) in place of screw.efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart.
+# On here: the preload drag is fitted (screw.preload_n), so screw.efficiency 0.9 counted it twice, on the inertial
+# force too (docs/validation.md, "Against measured data").
+screw_lead_efficiency = true
 # The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
 # gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
 # pickers D2 and D3, whose sizing was redone with them.
@@ -227,14 +232,15 @@ stroke_m = 0.72
 # of asin(15.4 / (400 9.80665)): the source does not say what it is (an incline, or the linear motor's magnets).
 incline_deg = 0.225
 # [estimate] guides and seals of a 400 kg table: 100 N and 500 N s/m before any fit, scaled as `sim-cli fit` on the
-# S-profile advises (Coulomb x 0.876, viscous x 1.446; with the nut's preload and the motor's, below). The nut's force
+# S-profile advises (Coulomb x 0.876, viscous x 1.446; with the nut's preload and the motor's, below), and Coulomb again
+# x 1.115 once effects.screw_lead_efficiency took the screw's 0.9 off the friction (16 November 2026). The nut's force
 # sensors in the source put 59 to 89 N of Coulomb friction at the table (docs/validation.md).
-friction_coulomb_n = 87.6
+friction_coulomb_n = 97.7
 friction_viscous_n_s_m = 723.0
 friction_smoothing_m_s = 0.002
 # With effects.slide_presliding. [estimate] no breakaway above the sliding level: the S-profile does not tell it, and
 # on the sine, with the linear drive's force taken off by hand, the friction at 0.5 to 8 mm/s is that at 8 to 60 mm/s.
-friction_breakaway_n = 87.6
+friction_breakaway_n = 97.7
 friction_stribeck_m_s = 0.001
 # [estimate] sigma: a turn-over of the guides' and nut's 263 N within some 10 um. The S-profile's one reversal (at
 # 1 m/s2, crossed in 2 ms) gives 7e6 N/m, the sine's four 3.1e7 +- 0.6e7 (a check recording, not applied).
@@ -256,10 +262,13 @@ root_diameter_m = 0.0337
 length_m = 1.8
 mounting = "fixed-supported"
 efficiency = 0.9
+# With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
+# ball screws, not this screw's.
+friction_coefficient = 0.003
 nut_stiffness_n_m = 1.0e9
 bearing_stiffness_n_m = 1.0e9
-# [estimate] 2000 N before any fit, times the fit's 0.876 (above).
-preload_n = 1752.0
+# [estimate] 2000 N before any fit, times the fit's 0.876 and 1.115 (above).
+preload_n = 1953.0
 dynamic_load_rating_n = 40000.0
 static_load_rating_n = 80000.0
 # fw: smooth running without shocks, 1.0 to 1.2 in the makers' tables.
@@ -294,7 +303,7 @@ stiffness_k3_nm_rad = 50000.0
 # [catalogue] 1FT7085-7WF7, D 21.4: rotor 20.7 kg cm2 without brake (the source does not say whether it has one)
 rotor_inertia_kgm2 = 2.07e-3
 # [estimate] 0.3 N m and 1e-3 N m s/rad before any fit, times the fit's factors (above).
-friction_coulomb_nm = 0.263
+friction_coulomb_nm = 0.293
 friction_viscous_nm_s_rad = 1.446e-3
 friction_smoothing_rad_s = 0.5
 # With effects.motor_stiction [estimate]: the shaft's breakaway torque, 1.5 times its Coulomb level (lip seals and
@@ -502,6 +511,7 @@ release_delay_s = 0.06
 
 # Low and high bound of the values that are estimates (see docs/config-reference.md): error bands, sensitivity.
 [bounds]
+screw.friction_coefficient = [0.002, 0.01]
 brake.engage_delay_s = [0.01, 0.06]
 brake.release_delay_s = [0.03, 0.15]
 base.mass_kg = [60.0, 160.0]
@@ -521,7 +531,7 @@ ratings.drive_overload_time_constant_s = [2.0, 60.0]
 ratings.drive_max_current_time_s = [0.1, 1.0]
 mass.carriage_kg = [380.0, 420.0]
 slide.friction_coulomb_n = [20.0, 500.0]
-slide.friction_breakaway_n = [87.6, 175.0]
+slide.friction_breakaway_n = [97.7, 175.0]
 slide.friction_stribeck_m_s = [0.0002, 0.005]
 slide.presliding_stiffness_n_m = [7.0e6, 4.0e7]
 slide.friction_viscous_n_s_m = [100.0, 5000.0]

@@ -620,6 +620,10 @@ fn every_effect_switch_changes_the_traces() {
             "effects.gearbox_lost_motion" => zero(&["gearbox.lost_motion_band_rad", "gearbox.hysteresis_rad"]),
             // The joint kit's common switch, read by its slides: the table and the arms have no slide.
             "effects.slide_presliding" => zero(&["slide.presliding_stiffness_n_m"]),
+            // A machine without a screw, or whose efficiencies are off.
+            "effects.screw_lead_efficiency" => {
+                base.get("screw.friction_coefficient").is_err() || !base.bool("effects.gearbox_efficiency").unwrap()
+            }
             "effects.gearbox_stiffness_curve" => ["gearbox.stiffness_k2_nm_rad", "gearbox.stiffness_k3_nm_rad"]
                 .iter()
                 .all(|k| base.f64(k).unwrap() == base.f64("gearbox.stiffness_nm_rad").unwrap()),

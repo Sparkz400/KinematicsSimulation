@@ -4358,3 +4358,16 @@ Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries a
   the motors held; machine files that follow their crates' friction feedforward.
 - Last full run in this period: 1533 of 1538 tests passed at 54a2fca, before wave 3; the final count is a placeholder
   in docs/validation.md.
+
+## Screw efficiency from its lead angle; the ISW bench fitted again (16 November)
+
+The 1.0.0 notes said the ISW bench's fitted moved mass (92 kg below the config) came from the screw shaft's inertia and
+the gearbox efficiency on the inertial force. Both were already in the model (`BallScrew::inertia` through
+`Converter::apply`; `Gearbox::loss_factor` on the whole transmitted torque, η driving, 1 / η driven back) and both make
+it heavier. What was wrong is the screw's efficiency 0.9, a catalogue figure that holds the nut's preload drag, which
+the model also drags apart. New: `effects.screw_lead_efficiency` with `screw.friction_coefficient` (THK's lead-angle
+formula; 0.990 on the bench), wired through `BallScrew::from_config` into every machine with a screw, off in every
+shipped config but the bench's. On the bench, with the Coulomb friction fitted again: S-profile 4.6 % RMS (5.3), checks
+13.1 % and 6.1 %, fitted mass 57 kg below 549 kg, first mode 137 Hz unchanged. Test:
+`the_screw_efficiency_follows_the_lead_angle_with_its_switch` (sim-components). Missing: the screw shaft's real
+geometry (threads, journals), which the remaining 57 kg points at; a separate back-drive efficiency.
