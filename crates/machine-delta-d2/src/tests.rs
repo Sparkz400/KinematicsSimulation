@@ -273,9 +273,10 @@ fn the_condition_number_is_the_ratio_of_the_singular_values() {
 
 /// Held by constant torques (the holding torques of the pose), the stiffness of the potential gravity less torque
 /// times angle, by second differences, in the symmetric mode (both arms together, the plate up and down) a + b and the
-/// sideways mode a - b of [[a, b], [b, a]]. At the middle of the default range, 638.5 mm down: a + b = -3.49 N m/rad,
-/// unstable; at 788.5 mm, the standard suite's middle, +7.52; a - b = 13.47 and 18.86, stable (by hand with the
-/// script of the hand calculation: the same potential, V = m_nt g z - g m_LG (sin t_1 + sin t_2)).
+/// sideways mode a - b of [[a, b], [b, a]]. At the middle of the default range, 638.5 mm down: a + b = -3.778 N m/rad,
+/// unstable; at 788.5 mm, the standard suite's middle, +7.428; a - b = 13.714 and 19.125, stable (by hand with a
+/// script of the same potential, V = m_nt g z - g m_LG (sin t_1 + sin t_2), the forearms' weight a half at each end:
+/// m_nt = 1 + 5 + 0.6 = 6.6 kg, m_LG = 1.2 * 0.2 + 0.4 (0.4 + 0.3) = 0.52 kg m; the plate from the two circles).
 #[test]
 fn the_vertical_mode_under_constant_torques_is_unstable_high_up() {
     let mut cfg = lossless_config();
@@ -304,8 +305,8 @@ fn the_vertical_mode_under_constant_torques_is_unstable_high_up() {
     };
     let ((up, side_up), (down, side_down)) = (stiffness(-0.6385), stiffness(-0.7885));
     println!("638.5 mm: {up:.3}, {side_up:.3}; 788.5 mm: {down:.3}, {side_down:.3} N m/rad");
-    assert!((up + 3.49).abs() < 0.05 && (down - 7.52).abs() < 0.05, "{up} {down}");
-    assert!((side_up - 13.47).abs() < 0.05 && (side_down - 18.86).abs() < 0.05, "{side_up} {side_down}");
+    assert!((up + 3.778).abs() < 0.005 && (down - 7.428).abs() < 0.005, "{up} {down}");
+    assert!((side_up - 13.714).abs() < 0.005 && (side_down - 19.125).abs() < 0.005, "{side_up} {side_down}");
 }
 
 /// The feedforward with the speed is the rigid, loss-free model's torque: given it at a pose where the plate moves at

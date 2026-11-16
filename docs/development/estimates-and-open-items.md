@@ -36,9 +36,6 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 Every fix was compile-checked only. The whole suite is being run once after the merge; until its
 result is in, treat **every number below as unverified**.
 
-- **All hand numbers in the new regression tests** (guide loads 11.414 N and 2.762 N, momentum
-- **The 2-axis delta's reference file** `crates/machine-delta-d2/reference/inverse_dynamics.csv` is
-  stale: its generator was changed but could not be run (no sympy).
 - **The video tool** `crates/sim-app/tools/frames_to_mp4.py` (holds frames for dropped numbers).
 - **`catalog/tools/extract_rexroth_ckr.py`** (writes `non_stroke_length_m`): changed, not run, its source PDF
   is not in the repository. (`catalog.py validate` and the tools' unit tests pass.)

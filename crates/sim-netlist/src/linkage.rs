@@ -389,6 +389,13 @@ pub fn inverse(m: &M2) -> Option<M2> {
     Some([[m[1][1] / det, -m[0][1] / det], [-m[1][0] / det, m[0][0] / det]])
 }
 
+/// The gearbox's loss factor at a steady speed `w` where it passes `output` to the arm: `rigid_solve` takes it of the
+/// torque that goes in, output / loss, so it is found by fixed point (the efficiency's fade over the power makes the
+/// two differ by 1e-3 of the torque at 0.01 m/s on the linkage).
+pub fn steady_loss(gearbox: &sim_components::mech::Gearbox, output: f64, w: f64) -> f64 {
+    (0..4).fold(1.0, |loss, _| gearbox.loss_factor(output / loss, w))
+}
+
 /// The 2-norm condition number of a 2 x 2 matrix: the square root of the larger over the smaller eigenvalue of
 /// J^T J, m +- sqrt(((a - c) / 2)^2 + b^2) with m = (a + c) / 2 for J^T J = [[a, b], [b, c]].
 pub fn condition_number(j: &M2) -> f64 {
@@ -1080,7 +1087,7 @@ impl Machine for LinkageMachine {
         for k in 0..2 {
             let joint = &self.joints[k];
             let at_arm = joint.friction.torque(w[k]);
-            let loss = joint.gearbox.loss_factor(at_arm - gravity[k], w[k]);
+            let loss = steady_loss(&joint.gearbox, at_arm - gravity[k], w[k]);
             // The loss acts on the weight too: what it adds over the lossless weight torque (-gravity / i) is friction.
             out[k] = joint.shaft.torque(joint.ratio() * w[k])
                 + ((at_arm - gravity[k]) / loss + gravity[k]) / joint.ratio();

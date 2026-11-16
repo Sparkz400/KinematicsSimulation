@@ -226,23 +226,24 @@ fn a_worm_gear_in_a_file_drives_as_the_joint_kits_table() {
 ///   the loss, the table's own acceleration a from J a = P + o with the rotor's R a = eta_back o:
 ///   a = P / (J + R / eta_back) = -10 / (4.5 + 0.992) = -1.820830 rad/s2. At rest it starts as a gear of 1 would:
 ///   -10 / (4.5 + 0.496) = -2.001601 rad/s2.
-/// - A self-locking one (eta_back = -0.2, forward 0.8) holds the 10 N m at rest with no motor torque. Lowering at
-///   -10 rad/s with no motor torque it brakes itself: the worm drags by (1 - eta_back) 10 = 12 N m, so the table slows
-///   at (12 - 10) / 4.996 = 0.400320 rad/s2, the gear passing 12 - 0.496 * 0.400320 = 11.801441 N m. The motor has to
-///   push to lower it: -eta_back 10 / 40 = 0.05 N m against the motion holds the speed; 0.1 N m speeds it up at
-///   (12 - 10 - 4) / 4.996 = -0.400320 rad/s2.
-/// - From rest it sticks while the worm can take what the motor and load ask of it, from -(1 / 0.8 - 1) 10 = -2.5 N m
-///   (lifting: the motor needs 10 / (0.8 * 40) = 0.3125 N m) to 12 N m (lowering: 0.05 N m): -0.04 N m (11.6) and
-///   +0.3 N m (-2) hold it; -0.06 N m breaks it loose downwards at (12 - 10 - 2.4) / 4.996 = -0.080064 rad/s2, +0.35 N m
-///   upwards at (14 - 10 - 2.5) / 4.996 = 0.300240 rad/s2.
+/// - A self-locking one: lead angle 4 deg, friction angle 6 deg, so forward tan 4 / tan 10 = 0.397 and back
+///   tan(-2) / tan 4 = -0.499, written rounded as 0.4 and -0.5. It holds the 10 N m at rest with no motor torque.
+///   Lowering at -10 rad/s with no motor torque it brakes itself: the worm drags by (1 - eta_back) 10 = 15 N m, so the
+///   table slows at (15 - 10) / 4.996 = 1.000801 rad/s2, the gear passing 10 + 4.5 * 1.000801 = 14.503603 N m. The motor
+///   has to push to lower it: -eta_back 10 / 40 = 0.125 N m against the motion holds the speed; 0.25 N m speeds it up at
+///   (15 - 10 - 10) / 4.996 = -1.000801 rad/s2, the gear passing 10 - 4.5 * 1.000801 = 5.496397 N m.
+/// - From rest it sticks while the worm can take what the motor and load ask of it, from -(1 / 0.4 - 1) 10 = -15 N m
+///   (lifting: the motor needs 10 / (0.4 * 40) = 0.625 N m) to 15 N m (lowering: 0.125 N m): -0.1 N m (14) and
+///   +0.6 N m (-14) hold it; -0.15 N m breaks it loose downwards at (15 - 10 - 6) / 4.996 = -0.200160 rad/s2, +0.7 N m
+///   upwards at (28 - 10 - 15) / 4.996 = 0.600480 rad/s2.
 ///
 /// Elastic (backlash off), at rest with the gear twisted by 10 N m / 67000 N m/rad so that it holds the load: the table
 /// stands for both; the rotor of the worm that turns back takes 10 / 40 N m and turns back at 0.25 / 3.1e-4 =
 /// 806.4516 rad/s2, the self-locking one's stands.
 #[test]
 fn a_self_locking_worm_holds_its_load_and_one_that_turns_back_loses_by_its_back_efficiency() {
-    let machine = |back: f64, elastic: bool| {
-        let cfg = kit_as_file("rotary-table", &worm_table("40", 0.8, back));
+    let machine = |eta: f64, back: f64, elastic: bool| {
+        let cfg = kit_as_file("rotary-table", &worm_table("40", eta, back));
         let cfg = with(
             &cfg,
             &[
@@ -265,28 +266,28 @@ fn a_self_locking_worm_holds_its_load_and_one_that_turns_back_loses_by_its_back_
         (out[1], signal(m, &state, &[torque], "gearbox.1.output_torque"))
     };
     let acc = |m: &dyn Machine, speed: f64| torque_acc(m, speed, 0.0);
-    let turning = machine(0.5, false);
+    let turning = machine(0.8, 0.5, false);
     assert!(close(acc(turning.as_ref(), -10.0).0, -10.0 / (4.5 + 0.496 / 0.5), 1e-12));
     assert!(close(acc(turning.as_ref(), -10.0).0, -1.820_830, 1e-6));
     assert!(close(acc(turning.as_ref(), 0.0).0, -2.001_601, 1e-6));
-    let locking = machine(-0.2, false);
+    let locking = machine(0.4, -0.5, false);
     let near = |(a, o): (f64, f64), (by_hand_a, by_hand_o): (f64, f64), what: &str| {
         assert!((a - by_hand_a).abs() < 1e-6 && (o - by_hand_o).abs() < 1e-6, "{what}: {a} rad/s2, {o} N m");
     };
     near(acc(locking.as_ref(), 0.0), (0.0, 10.0), "held at rest");
-    near(acc(locking.as_ref(), -10.0), (0.400_320, 11.801_441), "lowering, no torque");
-    near(torque_acc(locking.as_ref(), -10.0, -0.05), (0.0, 10.0), "lowering, pushed");
-    near(torque_acc(locking.as_ref(), -10.0, -0.1), (-0.400_320, 8.198_559), "lowering, pushed harder");
-    for torque in [-0.04, 0.3] {
+    near(acc(locking.as_ref(), -10.0), (1.000_801, 14.503_603), "lowering, no torque");
+    near(torque_acc(locking.as_ref(), -10.0, -0.125), (0.0, 10.0), "lowering, pushed");
+    near(torque_acc(locking.as_ref(), -10.0, -0.25), (-1.000_801, 5.496_397), "lowering, pushed harder");
+    for torque in [-0.1, 0.6] {
         assert!(torque_acc(locking.as_ref(), 0.0, torque).0.abs() < 1e-12, "stuck at {torque} N m");
     }
-    assert!((torque_acc(locking.as_ref(), 0.0, -0.06).0 + 0.080_064).abs() < 1e-6);
-    assert!((torque_acc(locking.as_ref(), 0.0, 0.35).0 - 0.300_240).abs() < 1e-6);
+    assert!((torque_acc(locking.as_ref(), 0.0, -0.15).0 + 0.200_160).abs() < 1e-6);
+    assert!((torque_acc(locking.as_ref(), 0.0, 0.7).0 - 0.600_480).abs() < 1e-6);
     // Elastic: [table, its gear output, rotor], their rates, the friction state, slack time, brake.
     let rotor = 40.0 * (1.0 + 10.0 / 67000.0);
     let state = [1.0, 1.0, rotor, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    for (back, rotor_acc) in [(0.5, -806.451_612_9), (-0.2, 0.0)] {
-        let m = machine(back, true);
+    for (eta, back, rotor_acc) in [(0.8, 0.5, -806.451_612_9), (0.4, -0.5, 0.0)] {
+        let m = machine(eta, back, true);
         let mut out = [0.0; 9];
         m.derivatives(&state, &[0.0], &mut out);
         assert!(out[3].abs() < 1e-9, "back {back}: table {}", out[3]);
@@ -305,6 +306,11 @@ fn a_self_locking_worm_holds_its_load_and_one_that_turns_back_loses_by_its_back_
     assert_eq!(
         refused(worm_table("40", 1.2, 0.5)),
         Some(ConfigError::Invalid("machine.worm[worm].efficiency (above 0, at most 1)".into()))
+    );
+    // Forward 0.8 with a back efficiency below 0 is no worm: one that locks has a lead angle below its friction angle.
+    assert_eq!(
+        refused(worm_table("40", 0.8, -0.2)),
+        Some(ConfigError::Invalid("machine.worm[worm].efficiency (a self-locking worm has an efficiency below 0.5)".into()))
     );
 }
 
