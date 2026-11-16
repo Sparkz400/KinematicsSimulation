@@ -44,28 +44,6 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 Every fix was compile-checked only. The whole suite is being run once after the merge; until its
 result is in, treat **every number below as unverified**.
 
-- **T-gantry belt mass, run by run** (`machine-t-gantry/src/lib.rs`: `belt_mass`, `belt_sway`,
-  `elastic_mass`): run and settled. Derived from the belt path run by run (in the code comment): the
-  cross term in the kinetic energy is 2·μ·(2x − sx)·vx·vz (the audit's 4·μ is that of 2T/μ), the X
-  coefficient μ·(L_tot + 8(s + sz − z)); with the frame the whole belt sways with it. The lossless model
-  keeps its energy to at most 8.8e-9 of the motors' power (rigid; with idlers and chain; elastic; elastic
-  with idlers, chain, tooth stiffness, Z bending, beam sag); the machine file sums the same from its
-  spans' speeds (`machine.span` velocity_x/_z, general for any routing); base and frame agree to 5e-15 m;
-  the SciPy reference has the terms and was regenerated.
-- **T-gantry modes with the frame** (`modal`): run and settled. They equal the eigenvalues of the
-  linearised derivatives with the pulleys held (K v = ω² M v to 1e-6), now with the belt's runs in M:
-  18.74 / 30.67 / 76.04 / 116.30 Hz at (0.9, 0.05) and 20.53 / 53.22 / 83.05 / 200.98 Hz at (0.5, 0.25);
-  with the belt's mass at 0 they are the audit's 18.81 / 30.77 / 78.51 / 119.46 and
-  20.64 / 53.91 / 83.05 / 206.52 Hz. Only modes that move the tool are reported; the input shaper takes
-  the lowest, the second shaper the next.
-- **Field-weakening braking runaway** (`drive.rs`, `current_control`): fixed by a different route than
-  planned; the original case (−19.1 N m at 42.5 A near 400 rad/s with saturation off) was never
-  reproduced before or after.
-- **Induction torque curve and delivered torque agree** (`induction.rs`): by construction, not by run.
-- **Induction flux of the most torque** (`induction.rs`, `flux_setpoint`): 27.29 N m at 0.774 Wb and 115 rad/s
-  (540 V link) come from an independent scan in Python, not from the Rust; the shipped `induction-lift` cycle
-  now runs with a weaker flux from about 100 rad/s on, and nobody has seen it run. Cost per base step in the
-  weakened range (a golden section of about 1700 voltage evaluations) unmeasured.
 - **Back-EMF constant apart from the torque constant** (`drive.rs`, `emf_loss`, budget row `emf.<motor>`): the
   row is the winding's step energies less copper, shaft and stored energy, derived by hand; nothing has run
   with a printed voltage constant, and the sign in braking (the row is negative) is a model limit, not physics.
