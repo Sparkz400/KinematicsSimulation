@@ -22,8 +22,9 @@
 //! plane through where it starts, its end and its centre, and `cw`/`ccw` is seen from the side of that plane its
 //! normal points to when the normal is taken upwards (+z); for a vertical plane, towards the viewer (-y), as the
 //! scene looks at the machine; for the y-z plane, from +x. So an arc in the x-z plane is seen as on a two-axis
-//! machine with x and z. What three axes do not have: a full turn or a half turn (start, end and centre on one line
-//! leave the plane open, and such an arc is refused). Transition curves on three axes are laid in the plane of the arc
+//! machine with x and z. What three axes do not have: a full turn (start and end the same). A half turn (start, centre
+//! and end on one line) leaves the plane open and is laid in the first of the x-y, x-z and y-z planes that holds the
+//! line; one that no such plane holds is refused. Transition curves on three axes are laid in the plane of the arc
 //! they meet (`blend3`); where two arcs in different planes meet, the path passes as given.
 //!
 //! Where the axes are x, y, z and an orientation as a rotation vector rx, ry, rz (an arm in tool space), a line moves
@@ -643,7 +644,7 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece], slack: f64) -> Result<(Vec<Geo>
                         wide(&[-turn * (end[1] - centre[1]) / radius, turn * (end[0] - centre[0]) / radius])
                     }
                     Some(Piece::Arc { to, centre, clockwise })
-                        if end.len() >= 3 && to.len() == end.len() && centre.len() == 3 =>
+                        if end.len() >= 3 && to.len() == end.len() && (centre.len() == 3 || centre.len() == end.len()) =>
                     {
                         arc_on(end, to, centre, *clockwise).and_then(|g| wide(&g.at(0.0)[1]))
                     }
@@ -694,7 +695,11 @@ fn given<'a>(start: &[f64], pieces: &'a [Piece], slack: f64) -> Result<(Vec<Geo>
                     length: sweep * radius,
                 }
             }
-            Piece::Arc { to, centre, clockwise } if here.len() >= 3 && to.len() == here.len() && centre.len() == 3 => {
+            // The centre may carry the machine's other axes too (a program's), of which the arc takes the first three.
+            Piece::Arc { to, centre, clockwise }
+                if here.len() >= 3 && to.len() == here.len() && (centre.len() == 3 || centre.len() == here.len()) =>
+            {
+                let centre = &centre[..3];
                 // Its end is told from the end stated before it, as on two axes. An arc in space is never a full turn,
                 // so a first arc needs no distance from where the machine stands. On more than three axes the arc is
                 // on the first three, and the others go along with it (`arc_on`).
@@ -731,9 +736,27 @@ fn arc3(from: &[f64], to: &[f64], centre: &[f64], clockwise: bool) -> Option<Geo
     let (a, b) = (at(from), at(to));
     let radius = norm3(a);
     let mut normal = cross3(a, b);
-    let size = norm3(normal);
-    if radius < 1e-6 || size < 1e-9 * radius * norm3(b) {
+    let mut size = norm3(normal);
+    if radius < 1e-6 {
         return None;
+    }
+    if size < 1e-9 * radius * norm3(b) {
+        // A half turn (end opposite the start) leaves the plane open: the first of the x-y, x-z and y-z planes that holds
+        // the start's radius, as G17 before G18 before G19 would. A full turn has no end to tell it from.
+        if dot3(a, b) >= 0.0 {
+            return None;
+        }
+        let flat = |i: usize| a[i].abs() < 1e-9 * radius;
+        normal = if flat(2) {
+            [0.0, 0.0, 1.0]
+        } else if flat(1) {
+            [0.0, 1.0, 0.0]
+        } else if flat(0) {
+            [1.0, 0.0, 0.0]
+        } else {
+            return None;
+        };
+        size = 1.0;
     }
     normal = normal.map(|x| x / size);
     let view = if normal[2].abs() > 1e-9 {
@@ -907,12 +930,24 @@ fn off_corner(curve: &Geo, a: &Geo, back: f64, b: &Geo, ahead: f64) -> f64 {
         .map(|k| a.at(la - back + back * k as f64 / 64.0)[0].clone())
         .chain((1..=64).map(|k| b.at(ahead * k as f64 / 64.0)[0].clone()))
         .collect();
-    (0..=64)
-        .map(|k| {
-            let p = &curve.at(curve.length() * k as f64 / 64.0)[0];
-            line.windows(2).map(|w| to_segment(p, &w[0], &w[1])).fold(f64::INFINITY, f64::min)
-        })
-        .fold(0.0, f64::max)
+    let off = |u: f64| {
+        let p = &curve.at(curve.length() * u)[0];
+        line.windows(2).map(|w| to_segment(p, &w[0], &w[1])).fold(f64::INFINITY, f64::min)
+    };
+    let (best, _) = (0..=64)
+        .map(|k| (k, off(k as f64 / 64.0)))
+        .fold((0, 0.0), |m, c| if c.1 > m.1 { c } else { m });
+    // The peak can lie between samples (the cusp next to an arc): golden-section it between the neighbours of the best.
+    let (mut lo, mut hi) = ((best as f64 - 1.0).max(0.0) / 64.0, (best as f64 + 1.0).min(64.0) / 64.0);
+    let phi = 0.5 * (5f64.sqrt() - 1.0);
+    let mut peak = off(best as f64 / 64.0);
+    for _ in 0..30 {
+        let (x1, x2) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
+        let (f1, f2) = (off(x1), off(x2));
+        peak = peak.max(f1).max(f2);
+        if f1 < f2 { lo = x1 } else { hi = x2 }
+    }
+    peak
 }
 
 /// The curve that rounds the corner between `a` and `b`, either of them an arc or a spline (`hermite_curve`), from `d`
@@ -1643,21 +1678,32 @@ fn limits(geo: &Geo, bounds: &[Bounds; 3]) -> [f64; 3] {
         Geo::Slerp { from, to, length } => tightest(&|row| {
             row.iter().zip(from.iter().zip(to)).map(|(w, (f, t))| w * (t - f) / length).sum::<f64>().abs()
         }),
-        Geo::Arc { radius, .. } | Geo::Arc3 { radius, .. } => curved(*radius, 0.0, any()),
+        Geo::Arc { radius, .. } | Geo::Arc3 { radius, .. } => curved(*radius, *radius * *radius, 0.0, any()),
         // A transition curve counts as an arc of its tightest radius.
-        Geo::Clothoid { k0, k1, length, .. } => curved(1.0 / k0.abs().max(k1.abs()), (k1 - k0).abs() / length, any()),
+        Geo::Clothoid { k0, k1, length, .. } => {
+            let r = 1.0 / k0.abs().max(k1.abs());
+            curved(r, r * r, (k1 - k0).abs() / length, any())
+        },
         // So does a spline span, with the fastest its curvature changes anywhere on it.
-        Geo::Spline { tightest, rate, .. } => curved(1.0 / tightest, *rate, any()),
-        // An arc with other axes carried along is a helix: its curvature is the arc's times the share of the distance
-        // that is on the arc, squared.
+        // shortcut: a span on three axes also has the jerk v^3 kappa tau along the binormal (tau the torsion), left out; it
+        // stayed within 0.71 of the limit in the tests; add it as a `Geo::Spline` field and a share of `curved`'s jerk
+        // if a path of tight, strongly twisting splines passes a jerk limit.
+        Geo::Spline { tightest, rate, .. } => {
+            let r = 1.0 / tightest;
+            curved(r, r * r, *rate, any())
+        },
+        // An arc with other axes carried along is a helix: with the share of the distance that is on the arc, its
+        // curvature is the arc's times share^2 and its |p'''| is share^3 / R^2 (the jerk's radius squared R^2 / share^3).
         Geo::Carried { arc, length, .. } => {
             let Geo::Arc3 { radius, length: on_arc, .. } = **arc else { unreachable!("a carried piece is an arc") };
-            curved(radius / (on_arc / length).powi(2), 0.0, any())
+            let share = on_arc / length;
+            curved(radius / share.powi(2), radius * radius / share.powi(3), 0.0, any())
         }
     }
 }
 
-/// `limits` on a curve of radius `r` whose curvature changes by `dk` per distance (0 on an arc), from the
+/// `limits` on a curve of radius `r` whose curvature changes by `dk` per distance (0 on an arc) and whose jerk term
+/// v^3 |p'''| is v^3 / sqrt(`r_jerk2`) (r^2 unless other axes are carried along), from the
 /// speed, acceleration and jerk the tool may have in any direction.
 ///
 /// Along the path (t) and towards the centre (n), at the speed v:
@@ -1670,8 +1716,8 @@ fn limits(geo: &Geo, bounds: &[Bounds; 3]) -> [f64; 3] {
 /// The limits are shared out 3 : 4 : 5. Acceleration: 0.6 along, 0.8 towards the centre. Jerk: 0.4 for the
 /// ramps and 0.4 for v^3 / r^2, together 0.8 along, and 0.6 towards the centre: all of it for 3 v dv/dt / r
 /// on an arc, and on a transition curve 0.4 for v^3 dk and 0.2 for 3 v dv/dt / r.
-fn curved(r: f64, dk: f64, [v, a, j]: [f64; 3]) -> [f64; 3] {
-    let v = v.min((0.8 * a * r).sqrt()).min((0.4 * j * r * r).cbrt());
+fn curved(r: f64, r_jerk2: f64, dk: f64, [v, a, j]: [f64; 3]) -> [f64; 3] {
+    let v = v.min((0.8 * a * r).sqrt()).min((0.4 * j * r_jerk2).cbrt());
     let (v, share) = if dk > 0.0 { (v.min((0.4 * j / dk).cbrt()), 0.2 / 3.0) } else { (v, 0.2) };
     [v, (0.6 * a).min(share * j * r / v), 0.4 * j]
 }
@@ -1936,7 +1982,7 @@ struct MotorCurve {
     motoring: Vec<f64>,
     braking: Vec<f64>,
     /// The most power its braking may feed back to the DC link (`PlanLimits::braking`): as it brakes at the speed w its
-    /// torque is held to power / |w| as well, the mechanical power, which the electrical exceeds by the losses.
+    /// torque is held to power / |w| as well, the mechanical power, which while braking exceeds the electrical by the losses, so the bound is on the safe side.
     power: f64,
 }
 
@@ -2498,6 +2544,26 @@ fn ceiling(places: &[Place], curve: &[f64], spacing: f64, jerk: f64, sign: f64, 
     most
 }
 
+/// The share of its axes' jerk a curved piece's ramps may use: what the bends 3 |p''| v a + |p'''| v^3 leave of an axis's
+/// limit at the piece's own ceilings of speed and acceleration (the axes' limits along the path), at least 0.4 (as `curved`
+/// shares it out), so a slight curve keeps nearly all of it. `derivatives`: the pose and its three derivatives per place.
+fn ramp_share(axes: &[AxisInfo], derivatives: &[[Vec<f64>; 4]]) -> f64 {
+    let ceiling = |most: fn(&AxisInfo) -> f64| {
+        derivatives
+            .iter()
+            .flat_map(|[_, d1, ..]| axes.iter().zip(d1).map(move |(a, d)| most(a) / d.abs()))
+            .fold(f64::INFINITY, f64::min)
+    };
+    let (v, a) = (ceiling(|a| a.max_vel), ceiling(|a| a.max_acc));
+    let used = derivatives
+        .iter()
+        .flat_map(|[_, _, d2, d3]| {
+            axes.iter().enumerate().map(move |(i, ax)| (3.0 * d2[i].abs() * v * a + d3[i].abs() * v.powi(3)) / ax.max_jerk)
+        })
+        .fold(0.0, f64::max);
+    if used.is_finite() { (1.0 - used).clamp(0.4, 1.0) } else { 0.4 }
+}
+
 /// The places of a piece and what bounds the time-optimal plan at each (see `plan_time_optimal`). Refused where the
 /// torque that holds the tool (at a motor or a gearbox), the belt's holding tension or a guide's load at rest leaves no
 /// room, or where the piece turns no motor.
@@ -2535,7 +2601,7 @@ fn piece_limits(
             [pose, d1, d2, d3]
         })
         .collect();
-    // The ramps' jerk along the path: on a line all of the axes' jerk limits; on a curve 0.4 of it, as `curved` shares
+    // The ramps' jerk along the path: on a line all of the axes' jerk limits; on a curve what its bends leave, 0.4 at least, as `curved` shares
     // it out, and the bends get the rest. A turning slerp bends its rotation vector a little (and its differences
     // add rounding): an axis of it that bends keeps 0.6 of its jerk limit for that, or the bend would stop the piece.
     let slerp = matches!(geo, Geo::Slerp { .. });
@@ -2546,7 +2612,10 @@ fn piece_limits(
             axes.iter().zip(d1).enumerate().map(|(i, (a, d))| if bends(i) { 0.4 } else { 1.0 } * a.max_jerk / d.abs())
         })
         .fold(f64::INFINITY, f64::min);
-    let jerk = if matches!(geo, Geo::Line { .. } | Geo::Slerp { .. }) { 1.0 } else { 0.4 } * along;
+    // A curve's ramps get what its bends leave (`ramp_share`); the bends' rows below take the rest of each axis's limit
+    // whatever the share, so the limits hold with any share.
+    let ramps = if matches!(geo, Geo::Line { .. } | Geo::Slerp { .. }) { 1.0 } else { ramp_share(axes, &derivatives) };
+    let jerk = ramps * along;
     // What each motor gives at a standstill, either way: the bounds of its row, and what holds the tool.
     let torque: Vec<f64> = curves.iter().map(|c| c.motoring[0].min(c.braking[0])).collect();
     let zero = vec![0.0; axes.len()];
@@ -3056,7 +3125,8 @@ mod tests {
     /// viewer (-y, x to the right and z up, as on a two-axis machine with x and z): 0.1 pi / 2 long, through
     /// (0.1 cos 45, 0, 0.1 sin 45) about the centre halfway; clockwise it goes the other way round, three quarters.
     /// In the x-y plane, seen from +z, from +x to +y is counter-clockwise too. An arc whose start, end and centre lie on
-    /// one line (a half or a full turn) leaves its plane open and is refused.
+    /// one line (a half turn) leaves its plane open and is laid in the x-y, else x-z, else y-z plane; where none holds
+    /// it, it is refused. A centre with the machine's other axes too (a program's, four axes) works as one with three.
     #[test]
     fn arcs_on_three_axes_lie_in_the_plane_of_their_points() {
         let pieces = parse(
@@ -3085,16 +3155,74 @@ arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw",
         assert!((cw[0].length() - 3.0 * quarter).abs() < 1e-12 && cw[0].at(cw[0].length() / 3.0)[0][2] < -0.8);
         let flat = given(&[0.1, 0.0, -0.8], &parse("arc,0.0,0.1,-0.8,0.0,0.0,-0.8,ccw").unwrap(), ARC_SLACK).unwrap().0;
         assert!((flat[0].length() - quarter).abs() < 1e-12 && flat[0].at(0.5 * quarter)[0][1] > 0.0);
-        assert_eq!(
-            given(&[0.1, 0.0, -0.8], &parse("arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap(), ARC_SLACK)
-                .err()
-                .unwrap()
-                .key,
-            "error-path"
-        );
+        // A half turn is laid in the x-y plane (the first plane that holds the start's radius): ccw from +x passes +y;
+        // one whose radius lies in no coordinate plane stays refused.
+        let half = given(&[0.1, 0.0, -0.8], &parse("arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap(), ARC_SLACK).unwrap().0;
+        assert!((half[0].length() - 2.0 * quarter).abs() < 1e-12 && distance(&half[0].at(quarter)[0], &[0.0, 0.1, -0.8]) < 1e-12);
+        let tilted = parse("arc,-0.1,-0.1,-0.9,0.0,0.0,-0.8,ccw").unwrap();
+        assert_eq!(given(&[0.1, 0.1, -0.7], &tilted, ARC_SLACK).err().unwrap().key, "error-path");
         // Planned within the axis limits, the path ends where it was told.
         let points = plan(&axes3(), &[0.1, 0.0, -0.9], &pieces, 1e-3, 0.0, ARC_SLACK).unwrap();
         assert!(distance(&points[points.len() - 1].1, &[-0.1, 0.0, -0.8]) < 1e-9);
+    }
+
+    /// A program's arc on four axes has its centre with four positions too (the other axis at its start value): a quarter
+    /// of 0.1 m radius is 0.1 pi / 2 long, and a half turn there is laid in the x-y plane, 0.1 pi long.
+    #[test]
+    fn arcs_on_four_axes_take_a_centre_with_four_positions() {
+        let arc = |to: [f64; 4]| Piece::Arc { to: to.to_vec(), centre: vec![0.0, 0.0, -0.8, 0.0], clockwise: false };
+        let start = [0.1, 0.0, -0.8, 0.0];
+        let quarter = given(&start, &[arc([0.0, 0.1, -0.8, 0.0])], ARC_SLACK).unwrap().0;
+        assert!((quarter[0].length() - 0.1 * std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        let half = given(&start, &[arc([-0.1, 0.0, -0.8, 0.0])], ARC_SLACK).unwrap().0;
+        assert!((half[0].length() - 0.1 * std::f64::consts::PI).abs() < 1e-12);
+    }
+
+    /// A helix: an arc of radius R = 10 mm with a fourth axis carried along, the arc a share s = 0.45 of the distance. The
+    /// acceleration is v^2 s^2 / R and the jerk v^3 s^3 / R^2 (not s^4), so with the limits 5 / 100 / 100 the jerk bound is
+    /// v <= cbrt(0.4 * 100 * R^2 / s^3) = cbrt(0.04 * 1e-4 / 0.091125) = 0.35272 m/s, the acceleration's
+    /// sqrt(0.8 * 100 * R / s^2) = 1.987 m/s.
+    #[test]
+    fn a_helix_keeps_its_jerk_with_the_carried_axes() {
+        let (r, share) = (0.01_f64, 0.45_f64);
+        let on_arc = std::f64::consts::TAU / 3.0 * r;
+        let arc = Geo::Arc3 { centre: [0.0; 3], u: [1.0, 0.0, 0.0], w: [0.0, 1.0, 0.0], radius: r, length: on_arc };
+        let helix = Geo::Carried { arc: Box::new(arc), from: vec![0.0], by: vec![0.1], length: on_arc / share };
+        let bounds: [Bounds; 3] = [
+            vec![(vec![1.0, 0.0, 0.0, 0.0], 5.0)],
+            vec![(vec![1.0, 0.0, 0.0, 0.0], 100.0)],
+            vec![(vec![1.0, 0.0, 0.0, 0.0], 100.0)],
+        ];
+        let [v, ..] = limits(&helix, &bounds);
+        assert!((v - (0.4_f64 * 100.0 * r * r / share.powi(3)).cbrt()).abs() < 1e-9 && (v - 0.35272).abs() < 1e-4, "{v}");
+        assert!(v.powi(3) * share.powi(3) / (r * r) <= 0.4 * 100.0 * (1.0 + 1e-9));
+    }
+
+    /// The deviation of a curve from the corner it replaces is read between the samples too: a line from (0.9, 0) to
+    /// (1.0, 0.2) beside the corner (0.9, 0), (1, 0), (1, 0.1) is as far from it as the nearer leg: 0.2 u from the first and
+    /// 0.1 (1 - u) from the second, equal at u = 1/3, where the peak is 1/15 = 0.066667 (the samples at 21 / 64 and 22 / 64
+    /// give 0.065625).
+    #[test]
+    fn the_deviation_of_a_corner_curve_is_found_between_the_samples() {
+        let line = |from: [f64; 2], dir: [f64; 2], length: f64| Geo::Line { dir: dir.to_vec(), from: from.to_vec(), length };
+        let (a, b) = (line([0.0, 0.0], [1.0, 0.0], 1.0), line([1.0, 0.0], [0.0, 1.0], 1.0));
+        let size = 0.05_f64.sqrt();
+        let curve = line([0.9, 0.0], [0.1 / size, 0.2 / size], size);
+        let off = off_corner(&curve, &a, 0.1, &b, 0.1);
+        assert!((off - 1.0 / 15.0).abs() < 1e-6, "{off}");
+    }
+
+    /// The ramps of a piece of radius 100 m keep nearly all of the jerk: at the start (tangent along x) with the limits
+    /// 0.8 m/s, 8 m/s^2 and 100 m/s^3 on x, p'' = 0.01 and p''' = -1e-4 along the axes, the bends use (3 * 0.01 * 0.8 * 8 +
+    /// 1e-4 * 0.8^3) / 100 = 1.9205e-3 of x's jerk, the ramps 0.998; at a radius of 10 mm the bends use more than all and
+    /// the ramps keep the 0.4 floor.
+    #[test]
+    fn a_slight_curve_gives_its_ramps_nearly_all_the_jerk() {
+        let axes = axes();
+        let at = |r: f64| [[vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0 / r], vec![-1.0 / (r * r), 0.0]]];
+        let share = ramp_share(&axes, &at(100.0));
+        assert!((share - (1.0 - 1.9205e-3)).abs() < 1e-6, "{share}");
+        assert_eq!(ramp_share(&axes, &at(0.01)), 0.4);
     }
 
     /// A spline on three axes passes through its via points, leaves the line before it in that line's direction, and its
