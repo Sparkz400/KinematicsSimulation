@@ -58,12 +58,15 @@ jobs:
 
       # --target: the cargo-fuzz binary install-action fetches is built for musl, and cargo-fuzz defaults to the triple
       # it was built for; musl links libc statically, which the address sanitizer refuses (and has no std installed).
-      # -detect_leaks=0: sim_machines::load_text/load_file leak each loaded entry by design (&'static MachineEntry).
+      # detect_leaks=0: sim_machines::load_text/load_file leak each loaded entry by design (&'static MachineEntry); in
+      # ASAN_OPTIONS, since libFuzzer's -detect_leaks=0 leaves the sanitizer's own check at exit on.
       - name: Fuzz
         working-directory: fuzz
+        env:
+          ASAN_OPTIONS: detect_leaks=0
         run: >
           cargo +nightly-2026-11-01 fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} --
-          -max_total_time=${{ github.event.inputs.seconds || '240' }} -timeout=20 -rss_limit_mb=4096 -max_len=65536 -detect_leaks=0
+          -max_total_time=${{ github.event.inputs.seconds || '240' }} -timeout=20 -rss_limit_mb=4096 -max_len=65536
 
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
