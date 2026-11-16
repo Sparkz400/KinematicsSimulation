@@ -9,7 +9,8 @@ the sizing report, the dataset check and the FMU export. Every command of `sim-c
 `pandas.DataFrame(result)` takes every table as it is.
 
 Source: `crates/sim-py` (PyO3 0.30.1, built with maturin 1.16.0). The wheel is abi3: one wheel per platform serves
-every CPython from 3.10 on. Type stubs (`kinematics_sim.pyi`) and the `py.typed` marker are in the wheel.
+every CPython from 3.10 on. Type stubs and the `py.typed` marker are in the wheel. The extra `kinematics-sim[mcp]` adds
+an MCP server for LLM clients: [MCP server and coding agents](mcp.md).
 
 ## Install
 
@@ -53,6 +54,7 @@ pd.DataFrame(ks.sizing(cfg, series="1FK2"))             # every catalogue motor 
 | `Config(machine_file=FILE, text=None, path=None)` | the same for a machine from a machine file ([machine files](machine-files.md)); an error in the file names the file and line | `--machine-file FILE` |
 | `cfg[path] = value`, `cfg.set("path = value")` | a value set on top. A part named under `[parts]` (`cfg["parts.motor"] = "1FK2104-5AK"`) acts as `--motor` and the other part options: all named parts come in from the catalogue together, and every other value set stays on top of theirs, in whatever order the two were set | `--set`, `--motor` and the other part options |
 | `signals(cfg)` | `{"id": [...], "unit": [...]}`, the signals in the order `run` gives them | the header of `sim-cli run` |
+| `label(cfg, key, lang="en")` | the text of a message key for the machine, e.g. `"check-motor-thermal"` (what a verdict judges, with its unit); a key with no text comes back as it is | the texts of `sim-app` and the report |
 | `run(cfg, cycle=, move_to=, path=, trajectory=, time_optimal=, time=2.0, every=16, disable_at=)` | `{signal id: array}` over `time` seconds, sampled every `every` base steps | `sim-cli run` |
 | `analyze(cfg, path=, trajectory=, time_optimal=, points=False)` | the load per motor over one pass of the cycle, or over a path; `points=True` adds the operating points per motor as an (n, 2) array of speed (rad/s) and torque (N m) | `sim-cli analyze` |
 | `verdicts(cfg, bands=False, samples=None, seed=1, worst=False, path=None, path_file=None, time_optimal=False)` | the checks; with `bands` their lowest and highest value over the `[bounds]` and whether the worst case passes; with `samples` N runs drawn between the bounds and the share that passed; with `bands=True, worst=True` the worst corner per check: `worst`, `limit`, `worst_ok`, `at_high_bound` and `at_low_bound` (lists of parameters), and `runs`; with `path` (the text of a path file or robot CSV, or with `path_file` a program by that name's extension) the path's run is judged in place of the cycle | `sim-cli verdicts [--bands] [--samples N --seed S] [--worst] [--path FILE [--time-optimal]]` |

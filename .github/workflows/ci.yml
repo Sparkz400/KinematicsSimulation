@@ -367,7 +367,7 @@ jobs:
         run: |
           pip install maturin==1.16.0
           (cd crates/sim-py && maturin build --release --locked --out ../../target/wheels)
-          pip install target/wheels/*.whl "pytest==9.2.0" "pytest-xdist==3.8.0" pandas matplotlib nbformat nbclient ipykernel "fmpy==0.3.32"
+          pip install target/wheels/*.whl "pytest==9.2.0" "pytest-xdist==3.8.0" pandas matplotlib nbformat nbclient ipykernel "fmpy==0.3.32" "mcp==2.3.0"
       # One worker per core (-n auto); --durations lists the slowest, to see which test made the job slow.
       - name: Tests
         shell: bash

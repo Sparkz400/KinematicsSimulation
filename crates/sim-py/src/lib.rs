@@ -1,7 +1,7 @@
 //! The Python module `kinematics_sim`: the simulator's machines, configs, runs, analyses, verdicts with their bands
 //! and the catalogue sizing, as `sim-cli` has them, for notebooks and scripts. Results come as NumPy arrays and as
 //! dicts of equal-length columns, which `pandas.DataFrame(result)` takes as they are. The type stubs are in
-//! `kinematics_sim.pyi`; `docs/python.md` has the guide.
+//! `python/kinematics_sim/kinematics_sim.pyi`; `docs/python.md` has the guide.
 //!
 //! Every long call releases the GIL, so Python threads can run several at once.
 
@@ -253,6 +253,17 @@ fn machines(py: Python<'_>, lang: &str) -> PyResult<Py<PyList>> {
         rows.append(row)?;
     }
     Ok(rows.unbind())
+}
+
+/// The text of a message key for the config's machine in `lang`, e.g. a verdict's label "check-<check>"; a key with no
+/// text comes back as itself.
+#[pyfunction]
+#[pyo3(signature = (config, key, lang="en"))]
+fn label(config: &PyConfig, key: &str, lang: &str) -> PyResult<String> {
+    if !LANGUAGES.contains(&lang) {
+        return Err(PyValueError::new_err(format!("unknown language: {lang}")));
+    }
+    Ok(translations(lang, config.entry).tr(key).to_string())
 }
 
 /// Every signal of a run of this config, in the order `run` gives them: `{"id": [...], "unit": [...]}`.
@@ -1811,6 +1822,7 @@ fn kinematics_sim(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySim>()?;
     m.add_function(wrap_pyfunction!(machines, m)?)?;
     m.add_function(wrap_pyfunction!(signals, m)?)?;
+    m.add_function(wrap_pyfunction!(label, m)?)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;
     m.add_function(wrap_pyfunction!(analyze, m)?)?;
     m.add_function(wrap_pyfunction!(verdicts, m)?)?;

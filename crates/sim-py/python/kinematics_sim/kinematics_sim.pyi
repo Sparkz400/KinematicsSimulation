@@ -1,4 +1,4 @@
-"""Type stubs of the native module kinematics_sim (crates/sim-py/src/lib.rs)."""
+"""Type stubs of the native module kinematics_sim.kinematics_sim (crates/sim-py/src/lib.rs), re-exported by the package."""
 
 from os import PathLike
 from typing import Any, Literal, Sequence, TypedDict, final
@@ -8,9 +8,9 @@ import numpy.typing as npt
 
 __version__: str
 __all__ = [
-    "Config", "Sim", "machines", "signals", "run", "analyze", "verdicts", "sizing", "sweep", "optimise", "fit", "identify",
+    "Config", "Sim", "machines", "signals", "label", "run", "analyze", "verdicts", "sizing", "sweep", "optimise", "fit", "identify",
     "step", "bode", "tuning", "margins", "modes", "sensitivity", "global_sensitivity", "replay", "compare", "report", "check_dataset", "fmu",
-    "__version__",
+    "accuracy", "__version__",
 ]
 
 FloatArray = npt.NDArray[np.float64]
@@ -85,6 +85,8 @@ class Sim:
 def machines(lang: Literal["en", "de"] = "en") -> list[MachineRow]: ...
 def signals(config: Config) -> dict[str, list[str]]:
     """{"id": [...], "unit": [...]} in the order `run` gives the signals."""
+def label(config: Config, key: str, lang: Literal["en", "de"] = "en") -> str:
+    """The text of a message key for the config's machine, e.g. "check-motor-thermal"; a key with none comes back as is."""
 
 def run(
     config: Config,

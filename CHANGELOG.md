@@ -9,6 +9,16 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
 
 ### Added
 
+- MCP server for LLM clients (`kinematics_sim.mcp`, the extra `kinematics-sim[mcp]` with `mcp>=2.3,<3`, the console
+  script `kinematics-sim-mcp`; `uvx --from "kinematics-sim[mcp]" kinematics-sim-mcp`): 17 tools (machines, configs as
+  named sessions with dotted-path get and set and a diff, sizing verdicts with margins, meanings and bands, cycle
+  analysis, inline paths, catalogue search, optimiser, loop margins, accuracy, sensitivity, report and FMU), compact
+  JSON with capped tables and a `notes` field with the limits, a timeout (`KINEMATICS_SIM_MCP_TIMEOUT_S`, 900 s) and
+  progress; a resource with the model's limits and a prompt "size a motor". `docs/mcp.md` has the client
+  configuration for Claude Desktop, Claude Code and Cursor, a worked example, and a section on using `sim-cli` from a
+  coding agent with real outputs. `llms.txt` at the repository root and on the project site indexes the docs for
+  LLMs. Python `ks.label(cfg, key)` gives a message key's text (a verdict's meaning). The Python package is now a mixed
+  one (`crates/sim-py/python/kinematics_sim`, the native module inside it); `import kinematics_sim` is unchanged.
 - Validation dashboard on the project site (`/validation/`): every check of `docs/validation.md` with the outcome of
   its tests in that run, a link to each test's source line and, where the test records them, the reference, the
   simulated value, the difference allowed and the margin left. Made by `tools/validation_dashboard.py` (standard

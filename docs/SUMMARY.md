@@ -16,6 +16,7 @@
   - [Measuring a drive train](measurement-procedure.md)
   - [Validation dashboard and API docs](dashboard.md)
 - [Python module](python.md)
+  - [MCP server and coding agents](mcp.md)
 - [The simulator in the browser](web.md)
 - [FMI export](fmi.md)
 - [PLC virtual commissioning](plc.md)

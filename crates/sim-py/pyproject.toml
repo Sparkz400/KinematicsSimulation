@@ -38,9 +38,18 @@ Issues = "https://github.com/Sparkz400/KinematicsSimulation/issues"
 Changelog = "https://github.com/Sparkz400/KinematicsSimulation/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-test = ["pytest==9.2.0", "pandas>=2.0", "matplotlib>=3.7", "nbformat>=5.9", "nbclient>=0.10", "ipykernel>=6.29"]
+test = ["pytest==9.2.0", "pandas>=2.0", "matplotlib>=3.7", "nbformat>=5.9", "nbclient>=0.10", "ipykernel>=6.29", "mcp==2.3.0"]
 notebook = ["pandas>=2.0", "matplotlib>=3.7", "jupyter"]
+# The MCP server for LLM clients (docs/mcp.md): uvx --from "kinematics-sim[mcp]" kinematics-sim-mcp
+mcp = ["mcp>=2.3,<3"]
+
+[project.scripts]
+kinematics-sim-mcp = "kinematics_sim.mcp:main"
 
 [tool.maturin]
-# The stubs kinematics_sim.pyi beside this file go into the wheel with a py.typed marker.
+# A mixed package: python/kinematics_sim (the MCP server, the stubs kinematics_sim.pyi and py.typed) with the native
+# module inside it as kinematics_sim.kinematics_sim, re-exported by __init__.py.
+python-source = "python"
 module-name = "kinematics_sim"
+# What a local run leaves there (maturin develop's native module is replaced by the build's own).
+exclude = ["python/kinematics_sim/__pycache__/*", "python/kinematics_sim/*.pdb"]
