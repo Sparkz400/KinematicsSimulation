@@ -29,6 +29,11 @@ jobs:
             optional: true
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.optional || false }}
+    # The build provenance attestation of the wheel (`gh attestation verify WHEEL --repo OWNER/REPO`).
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
@@ -47,6 +52,9 @@ jobs:
         run: |
           pip install crates/sim-py/dist/*.whl
           python -c "import kinematics_sim as ks; print(ks.analyze(ks.Config('single-axis')))"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: crates/sim-py/dist/*.whl
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: wheel-${{ matrix.os }}
@@ -54,6 +62,10 @@ jobs:
 
   sdist:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # The package version is the workspace's: a tag that names another version is a mistake, not a release.
@@ -83,6 +95,9 @@ jobs:
           python-version: "3.12"
       - name: The sdist builds
         run: pip wheel --no-deps -w sdist-check crates/sim-py/dist/*.tar.gz
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: crates/sim-py/dist/*.tar.gz
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: sdist

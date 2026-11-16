@@ -3,6 +3,8 @@ name = "sim-fmi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Shipped as binaries, wheels and FMUs, not on crates.io (CONTRIBUTING.md).
+publish = false
 
 # The cdylib is the binary inside the FMU; the rlib serves the CLI (which writes the FMU) and the tests.
 [lib]

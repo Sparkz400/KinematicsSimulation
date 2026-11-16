@@ -1154,3 +1154,9 @@ wide; no rule says how many rows are enough. Morris' μ* is in the result's unit
 say which share of the variance a value explains. A result missing from a run (a check only some values bring up) or not
 finite in one (a life where nothing wore) is left out. Integer values (pole pairs) are rounded, so their steps are not
 the grid's.
+
+**Release packaging and benchmarks.** The macOS build (universal tarball, darwin64 in the FMUs) is made on GitHub's
+runner and was never run on a Mac; its FMU binary is not run by `check_fmu.py`, which runs on Linux. The attestations
+and `SHA256SUMS` were not produced by a real release before 1.0.0 was tagged. The benchmark check
+(`.github/workflows/bench.yml`) compares each run on main with the one before, on shared runners that differ by 10 to
+20 % between runs: it warns only, and a slowdown spread over several pushes of under 15 % each is never warned about.

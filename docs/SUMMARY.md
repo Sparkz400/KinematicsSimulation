@@ -5,6 +5,7 @@
 # English
 
 - [Overview and tour](overview.md)
+- [Installing a release](install.md)
 - [User guide](user-guide.md)
 - [Machine files](machine-files.md)
 - [Config reference](config-reference.md)

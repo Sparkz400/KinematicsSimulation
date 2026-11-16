@@ -8,3 +8,4 @@ __pycache__/
 recordings/
 /crates/sim-wasm/web/*.wasm
 /.venv-py
+/bench-baseline

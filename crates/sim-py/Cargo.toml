@@ -3,6 +3,8 @@ name = "sim-py"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Shipped as binaries, wheels and FMUs, not on crates.io (CONTRIBUTING.md).
+publish = false
 
 # The Python module `kinematics_sim`, built with maturin (see pyproject.toml). One abi3 wheel per platform serves
 # every CPython from 3.10 on.

@@ -1,8 +1,9 @@
 //! Benchmarks per registered machine with its default config: one integrator step (`Sim::step`, the control and the
 //! drives with it) while the cycle runs, one whole pass of the default cycle from a fresh simulation, and the cycle
-//! analysis with its verdicts (`analyse_cycle`, `verdicts`). Not run in CI: `cargo bench -p sim-machines`, or one
-//! machine: `cargo bench -p sim-machines -- t-gantry`. Before the benchmarks it prints each machine's base step and
-//! the simulated length of one pass, for the ratio to real time.
+//! analysis with its verdicts (`analyse_cycle`, `verdicts`). The steps and cycles run on main in
+//! .github/workflows/bench.yml, which warns when a median gets over 15 % slower (tools/bench_compare.py).
+//! `cargo bench -p sim-machines`, or one machine: `cargo bench -p sim-machines -- t-gantry`. Before the benchmarks it
+//! prints each machine's base step and the simulated length of one pass, for the ratio to real time.
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use sim_components::analysis::{analyse_cycle, verdicts};

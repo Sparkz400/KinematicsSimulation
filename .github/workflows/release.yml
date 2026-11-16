@@ -1,8 +1,10 @@
 name: Release
 
-# On a version tag (v1.0.0, v1.0.0-rc.2): the Windows zip and MSI, the Linux tarball and .deb, and FMUs of the three
-# example configs with win64 and linux64 binaries, each checked with fmpy, attached to a draft GitHub release.
-# Nothing is signed.
+# On a version tag (v1.0.0, v1.0.0-rc.2): the Windows zip and MSI, the Linux tarball and .deb, the macOS tarball
+# (universal: arm64 and x86_64), and FMUs of the three example configs with win64, linux64 and darwin64 binaries, each
+# checked with fmpy on Linux, attached to a draft GitHub release with SHA256SUMS over every file of it. Every file of
+# the release gets a GitHub build provenance attestation (`gh attestation verify FILE --repo OWNER/REPO`). Nothing is
+# code-signed or notarised: the README says how to open the macOS app.
 on:
   push:
     tags: ["v*"]
@@ -24,13 +26,21 @@ jobs:
             fmi: sim_fmi.dll
           - os: ubuntu-latest
             fmi: libsim_fmi.so
+          # Built nowhere else (CI has no macOS runner): a failure here leaves macOS out of the release instead of
+          # holding it up, and the FMUs go without darwin64.
+          - os: macos-latest
+            fmi: libsim_fmi.dylib
+            targets: aarch64-apple-darwin, x86_64-apple-darwin
+            optional: true
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional || false }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # Third-party actions pinned to a commit: their output ends up in the release.
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master as of 2026-11-13
         with:
           toolchain: "1.98.1"
+          targets: ${{ matrix.targets || '' }}
 
       - name: Linux system libraries
         if: runner.os == 'Linux'
@@ -47,8 +57,9 @@ jobs:
           dotnet tool install --global wix --version 5.0.2
           pwsh tools/package.ps1
 
-      - name: Package (Linux, with .deb)
-        if: runner.os == 'Linux'
+      # On macOS the same script builds both architectures and joins them with lipo.
+      - name: Package (Linux with .deb, macOS)
+        if: runner.os != 'Windows'
         run: sh tools/package.sh
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -64,6 +75,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # The attestations: an OIDC token for the Sigstore certificate, and the right to store them.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
@@ -80,6 +94,9 @@ jobs:
           cli=artifacts/package-Linux/target/release/sim-cli
           chmod +x $cli
           both="--binary artifacts/package-Windows/target/release/sim_fmi.dll --binary artifacts/package-Linux/target/release/libsim_fmi.so"
+          # The universal dylib serves both Mac architectures from darwin64 (FMI 2.0); it is not run here.
+          mac=artifacts/package-macOS/target/release/libsim_fmi.dylib
+          if [ -f $mac ]; then both="$both --binary $mac"; else echo "::warning::no macOS build: FMUs without darwin64"; fi
           mkdir -p fmu
           $cli fmu t-gantry $both --out fmu/t-gantry-$version.fmu
           $cli fmu single-axis $both --out fmu/single-axis-$version.fmu
@@ -93,13 +110,22 @@ jobs:
           name: fmu
           path: fmu/*
 
+      # Every file of the release in one folder, with its checksums (`sha256sum -c SHA256SUMS` checks a download).
+      - name: SHA256SUMS
+        run: |
+          mkdir release
+          cp artifacts/package-*/dist/* fmu/* release/
+          (cd release && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+
+      # One provenance attestation per file named in SHA256SUMS: the zip, MSI, tarballs, .deb and FMUs.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: release/SHA256SUMS
+
       - name: Draft release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: |
-            artifacts/package-Windows/dist/*
-            artifacts/package-Linux/dist/*
-            fmu/*
+          files: release/*

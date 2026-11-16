@@ -40,7 +40,7 @@ Drives: permanent-magnet servo motors, steppers, induction motors (V/f or field-
 
 ## Getting started
 
-**Desktop app and command line:** download the Windows installer or the Linux package from [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases).
+**Desktop app and command line:** download the build for Windows, Linux or macOS from [Releases](https://github.com/Sparkz400/KinematicsSimulation/releases). The builds are not code-signed; [installing a release](docs/install.md) shows how to verify a download and open it on macOS.
 
 **Python:**
 
