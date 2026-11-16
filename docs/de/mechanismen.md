@@ -789,8 +789,10 @@ DSBC-32-100-PPVA-N3 (32 mm Kolben, 12 mm Stange, 100 mm Hub, PPV-Dämpfung 17 mm
 einem 5/2-Ventil mit Abluftdrosseln; 0,5 kg bewegt, 0,5 kg gegriffen. Der Zyklus: X zum Aufnehmen, Z ab, warten,
 greifen, Z auf, warten, X zum Ablegen, Z ab, loslassen, Z auf. Mit den ausgelieferten Einstellungen fährt Z in 0,55 s
 aus und in 0,65 s ein (Ventil 7 ms, die Stangenseite entlüftet aus dem Versorgungsdruck, gedrosselt 0,216 m/s, am Ende
-die Dämpfungsschraube), tritt mit 0,22 bis 0,24 m/s und 0,012 bis 0,029 J gegen die zulässigen 0,4 J in die Dämpfung ein
-(`cushion-energy`), trifft mit 0,06 bis 0,07 m/s auf den Puffer, ohne aus dem Sensorbereich zurückzuprallen, und hat
+die Dämpfungsschraube), tritt mit 0,22 bis 0,24 m/s und der Bewegungsenergie von 0,012 bis 0,029 J plus der Arbeit des Gewichts über die 17 mm Dämpfung,
+m g L (0,5 kg: 0,083 J, mit Karton 1 kg: 0,167 J; der Zylinder hängt, die Schwerkraft schiebt beim Ausfahren in die Dämpfung
+hinein und wird weggelassen, wo sie der Bewegung entgegenwirkt), also etwa 0,10 bis 0,20 J gegen die zulässigen 0,4 J in die
+Dämpfung ein (`cushion-energy`; Handschätzung, die protokollierten Werte folgen mit der nächsten Neuberechnung), trifft mit 0,06 bis 0,07 m/s auf den Puffer, ohne aus dem Sensorbereich zurückzuprallen, und hat
 ein Lastverhältnis von 0,024 (`load-factor`, 1 kg Gewicht gegen 415 N beim Einfahren). Ein Doppelhub verbraucht 1,10
 Normliter, 474 J am Kompressor (0,12 kWh/m³); von Hand beim Versorgungsdruck und der Wandtemperatur 1,15 l, 4 % weniger,
 weil die Verweilzeiten zu kurz sind, als dass die heiße Luft abkühlt.

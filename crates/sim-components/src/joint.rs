@@ -243,6 +243,28 @@ mod tests {
         assert!(close(j.gearbox.half_backlash, 1e-4));
     }
 
+    /// The mesh friction's bristle behind a converter is in N/m: a pinion of 50 mm (1e7 N/m) behind the 1e4 N m/rad
+    /// gearbox gives the series 2.857143e6 N/m, MESH_STIFFNESS times it. A stiff gearbox (1e12 N m/rad) behind a rigid
+    /// 50 mm lever would give 1e12 / 0.05^2 = 4e14 N/m; the cap is the rotor (2e-4 kg m^2) at 20 / 0.05 = 400 rad/m,
+    /// 2e-4 * 400^2 = 32 kg, times (BRISTLE_RATE_MAX / 4)^2 = (2.5e4)^2: 32 * 6.25e8 = 2e10 N/m.
+    #[test]
+    fn a_converters_mesh_bristle_is_in_newtons_per_metre_and_capped() {
+        use crate::transmission::Converter;
+        let text = joint_text().replace("gearbox_lost_motion = false", "gearbox_lost_motion = false\ngearbox_mesh_friction = true");
+        let mut cfg = Config::parse(&text).unwrap();
+        let mut j = RotaryJoint::from_config(&cfg).unwrap();
+        Converter { lever: 0.05, stiffness: 1e7, backlash: 0.0, efficiency: 0.95, inertia: 0.04 }
+            .apply(&cfg, &mut j)
+            .unwrap();
+        assert!((j.gearbox.mesh_stiffness / 2.857142857e6 - 1.0).abs() < 1e-9);
+        cfg.set_text("gearbox.stiffness_nm_rad = 1e12").unwrap();
+        let mut j = RotaryJoint::from_config(&cfg).unwrap();
+        Converter { lever: 0.05, stiffness: f64::INFINITY, backlash: 0.0, efficiency: 1.0, inertia: 0.0 }
+            .apply(&cfg, &mut j)
+            .unwrap();
+        assert!((j.gearbox.mesh_stiffness / 2e10 - 1.0).abs() < 1e-9);
+    }
+
     /// The slide's own table: its stroke, its guides' friction in N, its stops in N/m.
     #[test]
     fn a_linear_joint_reads_its_slide() {

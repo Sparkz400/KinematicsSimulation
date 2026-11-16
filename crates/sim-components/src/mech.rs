@@ -621,7 +621,7 @@ impl Lugre {
 /// sigma0 |v| / level, which a stiff bristle on a light contact at speed takes beyond what the integrator can
 /// follow (1e6 N/m, 12 N and 2.5 m/s: 2.1e5 1/s, against a limit of 2.8 over the 15.6 us step = 1.8e5 1/s for
 /// RK4): the friction force then grew without bound. No config shipped reaches the cap with its own values.
-const BRISTLE_RATE_MAX: f64 = 1.0e5;
+pub const BRISTLE_RATE_MAX: f64 = 1.0e5;
 
 // ---------------------------------------------------------------------------------------------
 // Motor shaft
