@@ -9,6 +9,12 @@ use sim_core::{Config, ConfigError, MachineEntry, Translations};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+/// The label key of a verdict: "check-<check>", and for "motor-speed" on a linear motor (m/s, not rad/s) the key with
+/// "-linear" appended.
+pub fn check_key(check: &str, linear: bool) -> String {
+    if linear && check == "motor-speed" { "check-motor-speed-linear".into() } else { format!("check-{check}") }
+}
+
 /// One part of the report, in reading order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
@@ -281,7 +287,10 @@ pub fn make(
         .map(t)
         .to_vec();
     let result = |ok: bool| t(if ok { "report-ok" } else { "report-not-ok" });
-    let check = |b: &Band| tr.tr(&format!("check-{}", b.verdict.check)).to_string();
+    let check = |b: &Band| {
+        let linear = b.verdict.motor.is_some_and(|k| sim.machine.motor_linear(k));
+        tr.tr(&check_key(b.verdict.check, linear)).to_string()
+    };
     let verdict_rows = judged.iter().map(|b| {
         let v = &b.verdict;
         (

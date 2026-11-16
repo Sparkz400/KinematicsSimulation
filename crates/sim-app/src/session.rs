@@ -384,6 +384,8 @@ pub struct Session {
     pub signals: Vec<SignalInfo>,
     pub axes: Vec<AxisInfo>,
     pub motors: Vec<MotorInfo>,
+    /// Per motor: linear (m, m/s, N), `Machine::motor_linear`.
+    pub motor_linear: Vec<bool>,
 }
 
 impl Session {
@@ -391,6 +393,7 @@ impl Session {
         let mut runner = Runner::new(entry, cfg)?;
         let signals = runner.sim.signal_infos();
         let (axes, motors) = (runner.sim.machine.axes().to_vec(), runner.sim.machine.motors().to_vec());
+        let motor_linear = (0..motors.len()).map(|k| runner.sim.machine.motor_linear(k)).collect();
         let (requests, inbox) = channel();
         let events = Arc::new(Mutex::new(Outbox::default()));
         let outbox = events.clone();
@@ -463,7 +466,7 @@ impl Session {
                 std::thread::sleep(Duration::from_millis(1));
             }
         });
-        Ok(Self { requests, events, thread, news: window_news, signals, axes, motors })
+        Ok(Self { requests, events, thread, news: window_news, signals, axes, motors, motor_linear })
     }
 
     /// The travelled path's points with their speed and plan since the last call, whether the path started anew

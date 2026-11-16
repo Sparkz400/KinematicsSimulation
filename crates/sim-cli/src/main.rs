@@ -497,20 +497,21 @@ fn fit_rows(
         return Err(Failure("cli-usage", String::new()));
     }
     let (mut advice, mut result) = (Vec::new(), Ok(()));
-    writeln!(out, "quantity,of,config,fitted,standard_error").map_err(io)?;
+    // "units" is the last column: the unit of the row's numbers, empty where there is none to name.
+    writeln!(out, "quantity,of,config,fitted,standard_error,units").map_err(io)?;
     if args.option("--trace").is_some() && !sim_components::trace::per_axis_fit(machine.as_ref()) {
         let measured = load_trace(args, machine.motors(), tr)?.trace;
         match fit_joints(entry, &cfg, &measured)? {
             Some(fit) => {
                 for v in &fit.values {
-                    writeln!(out, "{},{},{:.6e},{:.6e},{:.3e}", v.quantity, v.of, v.config, v.fitted, v.error)
+                    writeln!(out, "{},{},{:.6e},{:.6e},{:.3e},", v.quantity, v.of, v.config, v.fitted, v.error)
                         .map_err(io)?;
                 }
                 // One step's row is of `payload`, several are numbered as their factors after them are.
                 for (j, (time, error)) in fit.payload_steps.iter().enumerate() {
                     let of =
                         if fit.payload_steps.len() == 1 { "payload".to_string() } else { format!("payload {}", j + 1) };
-                    writeln!(out, "payload_step_s,{of},,{time:.6e},{error:.3e}").map_err(io)?;
+                    writeln!(out, "payload_step_s,{of},,{time:.6e},{error:.3e},s").map_err(io)?;
                 }
                 advice.extend(fit.advice().iter().map(|(key, detail)| tr.tr_arg(key, detail)));
             }
@@ -526,18 +527,22 @@ fn fit_rows(
             for (q, name) in
                 ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"].iter().enumerate()
             {
-                writeln!(out, "{name},{},{:.6e},{:.6e},{:.3e}", axis.id, fit.config[q], fit.fitted[q], fit.error[q])
-                    .map_err(io)?;
+                writeln!(
+                    out,
+                    "{name},{},{:.6e},{:.6e},{:.3e},{}",
+                    axis.id, fit.config[q], fit.fitted[q], fit.error[q], fit.units[q]
+                )
+                .map_err(io)?;
             }
             // The friction beyond its sliding level, where the trace shows it (`identify::friction_details`).
             for d in &fit.details {
-                writeln!(out, "{},{},{:.6e},{:.6e},{:.3e}", d.quantity, axis.id, d.config, d.fitted, d.error)
+                writeln!(out, "{},{},{:.6e},{:.6e},{:.3e},", d.quantity, axis.id, d.config, d.fitted, d.error)
                     .map_err(io)?;
             }
             // A payload picked or dropped: its time, then the change of the payload's factor there.
             for (time, time_error, change, error) in &fit.payload_steps {
-                writeln!(out, "payload_step_s,{},,{time:.6e},{time_error:.3e}", axis.id).map_err(io)?;
-                writeln!(out, "payload_factor_change,{},0,{change:.6e},{error:.3e}", axis.id).map_err(io)?;
+                writeln!(out, "payload_step_s,{},,{time:.6e},{time_error:.3e},s", axis.id).map_err(io)?;
+                writeln!(out, "payload_factor_change,{},0,{change:.6e},{error:.3e},", axis.id).map_err(io)?;
             }
             advice.extend(fit.advice(axis.id).iter().map(|(key, detail)| tr.tr_arg(key, detail)));
         }
@@ -547,9 +552,9 @@ fn fit_rows(
         let key = args.option("--stiffness-key").unwrap_or(BELT_STIFFNESS_KEY);
         match fit_move_stiffness(entry, &cfg, &measured, key) {
             Ok(fit) => {
-                writeln!(out, "stiffness_factor,{key},{:.6e},{:.6e},{:.3e}", 1.0, fit.factor, fit.error).map_err(io)?;
-                writeln!(out, "ringing_rms_nm,{key},,{:.6e},", fit.ringing).map_err(io)?;
-                writeln!(out, "ringing_left_rms_nm,{key},,{:.6e},", fit.residual).map_err(io)?;
+                writeln!(out, "stiffness_factor,{key},{:.6e},{:.6e},{:.3e},", 1.0, fit.factor, fit.error).map_err(io)?;
+                writeln!(out, "ringing_rms_nm,{key},,{:.6e},,", fit.ringing).map_err(io)?;
+                writeln!(out, "ringing_left_rms_nm,{key},,{:.6e},,", fit.residual).map_err(io)?;
                 let (key, detail) = fit.advice();
                 advice.push(tr.tr_arg(key, &detail));
             }
@@ -571,11 +576,11 @@ fn fit_rows(
                 let (id, (config, fitted)) = (machine.motors()[motor].id, (fit.config, fit.fitted));
                 writeln!(
                     out,
-                    "resonance_hz,{id},{:.6e},{:.6e},{:.3e}",
+                    "resonance_hz,{id},{:.6e},{:.6e},{:.3e},Hz",
                     config.frequency, fitted.frequency, fitted.frequency_error
                 )
                 .map_err(io)?;
-                writeln!(out, "resonance_damping,{id},{:.6e},{:.6e},", config.damping, fitted.damping).map_err(io)?;
+                writeln!(out, "resonance_damping,{id},{:.6e},{:.6e},,", config.damping, fitted.damping).map_err(io)?;
                 let (key, detail) = fit.advice();
                 advice.push(tr.tr_arg(key, &detail));
             }
@@ -1022,7 +1027,9 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let columns: String = checks.iter().map(|c| format!(",u_{c}")).collect();
     let robust_columns =
         if robust.is_some() { ",robust_rank,robust_result,robust_check,robust_utilisation" } else { "" };
-    writeln!(out, "axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,following_error_m,settling_error_m,inertia_ratio,failing,estimated{robust_columns}{columns}").map_err(io)?;
+    writeln!(out, "axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,following_error_m,settling_error_m,inertia_ratio,failing,estimated{robust_columns}{columns},torque_unit").map_err(io)?;
+    // The unit of peak_torque_nm: N on a machine of linear motors (the first motor's kind), else N m.
+    let torque_unit = if (entry.build)(&cfg).is_ok_and(|m| m.motor_linear(0)) { "N" } else { "N m" };
     for (rank, c) in found.iter().enumerate() {
         let (check, utilisation) = c.tightest().unwrap_or((c.refused, f64::NAN));
         // Of the searched motor alone with --motor-id (the others are the config's, alike for every candidate).
@@ -1096,7 +1103,7 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
                 None => write!(out, ",").map_err(io)?,
             }
         }
-        writeln!(out).map_err(io)?;
+        writeln!(out, ",{torque_unit}").map_err(io)?;
     }
     out.flush().map_err(io)
 }
@@ -1517,7 +1524,9 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
         eprintln!("{}", tr.tr_arg("cli-conveyor", &detail));
     }
     let mut out = output(args, "--out")?;
-    writeln!(out, "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload").map_err(io)?;
+    writeln!(out, "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload,torque_unit,speed_unit").map_err(io)?;
+    // The units of the motor's torque and speed columns (also of the points and the breakdown): N m and rad/s, N and m/s on a linear motor.
+    let units = |k: usize| if sim.machine.motor_linear(k) { ("N", "m/s") } else { ("N m", "rad/s") };
     // Empty where the machine does not report the signal or the config has no load rating for the guide.
     let or_empty = |value: Option<f64>| value.map_or(String::new(), |v| format!("{v:.4e}"));
     let machine_wide = format!(
@@ -1527,7 +1536,7 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
         or_empty(load.guide_load.map(|g| g.0)),
         or_empty(sim_components::analysis::guide_life_km(&cfg, &load))
     );
-    for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+    for (k, (motor, m)) in sim.machine.motors().iter().zip(&load.motors).enumerate() {
         let belt = load.belt_tension.map_or(String::from(","), |(low, high)| format!("{low:.2},{high:.2}"));
         let electrical = format!(
             "{:.4},{:.2},{:.3},{:.3},{:.2},{:.3}",
@@ -1572,30 +1581,39 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
         let electrical = format!("{electrical},{:.2},{:.4}", m.housing_rise, m.drive_overload);
         writeln!(
             out,
-            "{},{:.6},{:.6},{:.6},{:.4},{:.4},{:.4},{belt},{electrical}",
-            motor.id, load.duration, m.peak_torque, m.rms_torque, m.peak_speed, m.utilisation, m.thermal_utilisation
+            "{},{:.6},{:.6},{:.6},{:.4},{:.4},{:.4},{belt},{electrical},{},{}",
+            motor.id,
+            load.duration,
+            m.peak_torque,
+            m.rms_torque,
+            m.peak_speed,
+            m.utilisation,
+            m.thermal_utilisation,
+            units(k).0,
+            units(k).1
         )
         .map_err(io)?;
     }
     out.flush().map_err(io)?;
     if args.option("--points").is_some() {
         let mut out = output(args, "--points")?;
-        writeln!(out, "motor,speed_rad_s,torque_nm").map_err(io)?;
-        for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+        writeln!(out, "motor,speed_rad_s,torque_nm,speed_unit,torque_unit").map_err(io)?;
+        for (k, (motor, m)) in sim.machine.motors().iter().zip(&load.motors).enumerate() {
             for (speed, torque) in &m.points {
-                writeln!(out, "{},{speed:.6e},{torque:.6e}", motor.id).map_err(io)?;
+                writeln!(out, "{},{speed:.6e},{torque:.6e},{},{}", motor.id, units(k).1, units(k).0).map_err(io)?;
             }
         }
         out.flush().map_err(io)?;
     }
     if args.option("--breakdown").is_some() {
         let mut out = output(args, "--breakdown")?;
-        writeln!(out, "motor,part,peak_torque_nm,rms_torque_nm").map_err(io)?;
-        for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+        writeln!(out, "motor,part,peak_torque_nm,rms_torque_nm,torque_unit").map_err(io)?;
+        for (k, (motor, m)) in sim.machine.motors().iter().zip(&load.motors).enumerate() {
             for (part, (peak, rms)) in sim_core::TORQUE_PARTS.iter().zip(m.torque_parts.iter().flatten()) {
-                writeln!(out, "{},{part},{peak:.6e},{rms:.6e}", motor.id).map_err(io)?;
+                writeln!(out, "{},{part},{peak:.6e},{rms:.6e},{}", motor.id, units(k).0).map_err(io)?;
             }
-            writeln!(out, "{},torque,{:.6e},{:.6e}", motor.id, m.peak_torque, m.rms_torque).map_err(io)?;
+            writeln!(out, "{},torque,{:.6e},{:.6e},{}", motor.id, m.peak_torque, m.rms_torque, units(k).0)
+                .map_err(io)?;
         }
         out.flush().map_err(io)?;
     }
