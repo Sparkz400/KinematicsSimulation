@@ -435,6 +435,43 @@ pub struct CableRobot {
     frame: Vec<V3>,
     /// `rest_sag`, once asked for.
     rest_slack: std::sync::OnceLock<f64>,
+    /// Where the elastic `forward` found the platform last, for which motor angles, and its Jacobian there: its next
+    /// Newton starts there.
+    last_forward: LastForward,
+}
+
+/// How far a cable's free length may have changed since the last elastic `forward` for its Newton to start from that
+/// pose, m: the controller asks for the setpoint's and the actual pose every position cycle, micrometres apart; a jump
+/// further starts from the pose of the lengths, as before.
+const WARM_REACH: f64 = 1e-3;
+
+/// The last elastic `forward`: its motor angles, the pose it found, and the Jacobian of its residual it took the last
+/// step with (n x n); behind a lock (`Machine` is `Send`, `forward` takes `&self`).
+#[derive(Debug, Clone)]
+struct Forwarded {
+    motors: Vec<f64>,
+    pose: Vec<f64>,
+    jacobian: Vec<f64>,
+}
+
+#[derive(Debug, Default)]
+struct LastForward(std::sync::Mutex<Option<Forwarded>>);
+
+impl LastForward {
+    fn get(&self) -> Option<Forwarded> {
+        self.0.lock().ok().and_then(|f| f.clone())
+    }
+    fn set(&self, last: Option<Forwarded>) {
+        if let Ok(mut f) = self.0.lock() {
+            *f = last;
+        }
+    }
+}
+
+impl Clone for LastForward {
+    fn clone(&self) -> Self {
+        Self(std::sync::Mutex::new(self.get()))
+    }
 }
 
 /// Per cable of one moment: tension on the platform, on the drum, and the damper's share of it.
@@ -566,6 +603,7 @@ impl CableRobot {
             home: (0..n).map(|k| 0.5 * (min[k] + max[k])).collect(),
             frame: exits,
             rest_slack: std::sync::OnceLock::new(),
+            last_forward: LastForward::default(),
         };
         let mut torque = vec![0.0; m];
         robot.equilibrium(&robot.home, &mut Vec::new(), &mut torque);
@@ -1249,13 +1287,25 @@ impl Machine for CableRobot {
     /// differences (0.1 um, 0.1 urad), each step halved until it lowers the potential (weight and cable springs) whose
     /// least the equilibrium is; where Newton's step is not downhill (every cable slack), one along the residual. No
     /// step longer than 50 mm or 50 mrad. Settled at a step below 1e-12 m (rad), or where no step helps any more (at
-    /// the rounding floor). NaN where it does not settle within 50 steps.
+    /// the rounding floor). NaN where it does not settle within 50 steps. Where no cable's free length changed by
+    /// `WARM_REACH` or more since the last call, Newton starts from the pose that call found instead, with the
+    /// Jacobian it took its last step with, as long as that one's steps go downhill (a chord method: the Jacobian of a
+    /// pose micrometres away; recomputed at the pose where a step fails). That saves the pose of the lengths, which took
+    /// about 16 Gauss-Newton steps from the box's centre, and the 2 n residuals of each Jacobian; the pose then differs
+    /// by Newton's tolerance, not more. The controller asks for it every position cycle, for the tool's following error.
     fn forward(&self, motors: &[f64], tool: &mut [f64]) {
         let (n, m) = (self.n(), self.m());
         let free: Vec<f64> = (0..m).map(|k| motors[k] / self.winches[k].ratio()).collect();
+        let near =
+            |last: &Forwarded| (0..m).all(|k| (free[k] - last.motors[k] / self.winches[k].ratio()).abs() < WARM_REACH);
+        let warm = self.elastic.then(|| self.last_forward.get()).flatten().filter(near);
         let stretch = if self.elastic { 1.0 + self.t_ref / self.ea } else { 1.0 };
         let stretched: Vec<f64> = free.iter().map(|l| l * stretch).collect();
-        let Some(mut pose) = self.pose_of_lengths(&stretched, &self.home) else {
+        let (start, mut chord) = match warm {
+            Some(last) => (Some(last.pose), Some(last.jacobian)),
+            None => (self.pose_of_lengths(&stretched, &self.home), None),
+        };
+        let Some(mut pose) = start else {
             tool[..n].fill(f64::NAN);
             return;
         };
@@ -1263,6 +1313,9 @@ impl Machine for CableRobot {
             tool[..n].copy_from_slice(&pose);
             return;
         }
+        let found = |pose: &[f64], jacobian: Vec<f64>| {
+            self.last_forward.set(Some(Forwarded { motors: motors[..m].to_vec(), pose: pose.to_vec(), jacobian }))
+        };
         let at_rest = vec![0.0; m];
         let residual = |pose: &[f64]| -> Option<Vec<f64>> {
             let (p, rot) = self.place(pose);
@@ -1281,20 +1334,30 @@ impl Machine for CableRobot {
         let size = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
         for _ in 0..50 {
             let Some(miss) = residual(&pose) else { break };
-            let mut jacobian = vec![0.0; n * n];
-            for c in 0..n {
-                let mut step = vec![0.0; n];
-                step[c] = 1e-7;
-                let up = residual(&self.moved(&pose, &step));
-                step[c] = -1e-7;
-                let down = residual(&self.moved(&pose, &step));
-                let (Some(up), Some(down)) = (up, down) else { break };
-                (0..n).for_each(|r| jacobian[r * n + c] = (up[r] - down[r]) / 2e-7);
-            }
+            let (jacobian, cached) = match chord.take() {
+                Some(jacobian) => (jacobian, true),
+                None => {
+                    let mut jacobian = vec![0.0; n * n];
+                    for c in 0..n {
+                        let mut step = vec![0.0; n];
+                        step[c] = 1e-7;
+                        let up = residual(&self.moved(&pose, &step));
+                        step[c] = -1e-7;
+                        let down = residual(&self.moved(&pose, &step));
+                        let (Some(up), Some(down)) = (up, down) else { break };
+                        (0..n).for_each(|r| jacobian[r * n + c] = (up[r] - down[r]) / 2e-7);
+                    }
+                    (jacobian, false)
+                }
+            };
             // The residual is the potential's slope taken back, so a step downhill has a positive product with it. Where
             // Newton's is not (every cable slack, the Jacobian zero), the longest step along the residual, halved below.
             let downhill = |step: &Vec<f64>| (0..n).map(|r| step[r] * miss[r]).sum::<f64>() > 0.0;
             let newton = solve(&jacobian, &miss.iter().map(|v| -v).collect::<Vec<_>>()).filter(downhill);
+            // The last call's Jacobian whose step is not downhill: this pose's own, in the next round.
+            if cached && newton.is_none() {
+                continue;
+            }
             let mut step = newton.unwrap_or_else(|| {
                 let most = miss.iter().fold(0.0f64, |s, v| s.max(v.abs()));
                 miss.iter().map(|v| v * 0.05 / most).collect()
@@ -1305,7 +1368,7 @@ impl Machine for CableRobot {
             }
             if longest < 1e-12 {
                 tool[..n].copy_from_slice(&self.moved(&pose, &step));
-                return;
+                return found(&tool[..n], jacobian);
             }
             // A step is taken where it lowers the potential, or, near the equilibrium where the potential changes by
             // less than its rounding, where it shrinks the residual and does not raise the potential beyond that.
@@ -1324,11 +1387,16 @@ impl Machine for CableRobot {
                 step.iter_mut().for_each(|v| *v *= 0.5);
             }
             match next {
-                Some(next) => pose = next,
+                Some(next) => {
+                    pose = next;
+                    chord = cached.then_some(jacobian);
+                }
+                // The last call's Jacobian whose step helps nothing: this pose's own, in the next round.
+                None if cached => {}
                 // The residual at its rounding floor: no step helps any more.
                 None => {
                     tool[..n].copy_from_slice(&pose);
-                    return;
+                    return found(&pose, jacobian);
                 }
             }
         }
@@ -1339,7 +1407,10 @@ impl Machine for CableRobot {
         2 * self.n() + self.m() * if self.elastic { 5 } else { 1 }
     }
 
+    /// Also forgets the last elastic `forward`: a run starts here, so that what ran on this machine before does not
+    /// change it by Newton's rounding.
     fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]) {
+        self.last_forward.set(None);
         let (n, m) = (self.n(), self.m());
         state.clear();
         state.extend_from_slice(&tool[..n]);
@@ -1532,11 +1603,24 @@ impl Machine for CableRobot {
             }
         }
     }
+    /// The gearboxes' anchors, then the motor angles, pose and Jacobian of the last elastic `forward` (NaN before the
+    /// first), which the next one starts from: a restored simulation starts it where the one it was taken from did.
     fn memory(&self) -> Vec<f64> {
-        sim_components::mech::Gearbox::anchors(self.winches.iter().map(|j| &j.gearbox))
+        let (m, n) = (self.m(), self.n());
+        let last =
+            self.last_forward.get().map_or(vec![f64::NAN; m + n + n * n], |f| [f.motors, f.pose, f.jacobian].concat());
+        [sim_components::mech::Gearbox::anchors(self.winches.iter().map(|j| &j.gearbox)), last].concat()
     }
     fn set_memory(&mut self, memory: &[f64]) {
-        sim_components::mech::Gearbox::set_anchors(self.winches.iter_mut().map(|j| &mut j.gearbox), memory)
+        let (m, n) = (self.m(), self.n());
+        let (anchors, last) = memory.split_at(memory.len().saturating_sub(m + n + n * n));
+        sim_components::mech::Gearbox::set_anchors(self.winches.iter_mut().map(|j| &mut j.gearbox), anchors);
+        let known = last.len() == m + n + n * n && last.iter().all(|v| v.is_finite());
+        self.last_forward.set(known.then(|| Forwarded {
+            motors: last[..m].to_vec(),
+            pose: last[m..m + n].to_vec(),
+            jacobian: last[m + n..].to_vec(),
+        }));
     }
 
     fn set_brake_engaged(&mut self, engaged: bool) {

@@ -554,7 +554,11 @@ and the motor are those of the ball screw axis above. The mechanism gives the pl
   pairs at 120 k ± (60 − `platform_half_angle_deg`), each leg to the neighbouring pair.
 - Forward kinematics by Newton's method on the platform's twist, from the centre of the tool's box: xi = J^-1 (q −
   q(x)), p += v, R = exp(w) R, until the legs miss by less than 1e-13 m; legs that no pose fits (no convergence within 40
-  steps) give NaN, which every caller refuses.
+  steps) give NaN, which every caller refuses. The dynamics, four times an integration step, starts Newton from the pose
+  its last call found moved by J^-1 (q − q_last) instead, where no leg moved 10 mm or more since: two steps instead of
+  about five. That pose differs from the one from the box's centre by Newton's tolerance; the default cycle's figures
+  move by up to 1.1e-4 with it, as much as a change at the rounding of the pose moves them anyway. The machine's
+  `inverse` (a run's start, each position cycle's setpoint) forgets that pose, and a snapshot keeps it.
 - J's rows are (u_i, b_i × u_i), u_i the leg's direction and b_i = R a_i. Dynamics by the platform's twist: M_xi xi' +
   c + g = J^T f, so in leg space M_q = J^-T M_xi J^-1 and h = J^-T (c + g − M_xi J^-1 a0), a0 the legs' length
   acceleration at the twist (checked against the Lagrange equations of M_q by differences: equal to 1e-9). Each leg's
@@ -637,7 +641,8 @@ pickers. See the [model reference](model-reference.md#hexapod-with-rotary-actuat
 - Inverse kinematics per leg in closed form: with e = P_i − B_i, a cos θ + b sin θ = c, a = e · d_i, b = e_z,
   c = (|e|² + r² − L²) / 2r; θ = atan2(b, a) ∓ acos(c / √(a² + b²)), the branch fixed once by `crank.branch` ("out":
   the tip away from the pair's partner; "in" the other); no solution where |c| > √(a² + b²).
-- Forward kinematics by Newton's method on the platform's twist from the centre of the tool's box, as on the hexapod.
+- Forward kinematics by Newton's method on the platform's twist from the centre of the tool's box, as on the hexapod;
+  the dynamics too starts from its last call's pose, moved by K (q − q_last), where no crank turned 0.01 rad or more.
 - Jacobian: A ξ = diag(u_i · t_i) θ', A's rows (u_i, b_i × u_i), u_i the rod's direction and t_i the crank tip's
   tangent; u_i · t_i is the motor's torque arm. The condition number of the inverse Jacobian (turns weighed by the
   platform radius) is the workspace map's and the signal `kinematics.condition`; it grows without bound as one crank nears its dead centre (all six there at once
@@ -698,7 +703,10 @@ arc r beta plus the tangent l_f = sqrt(m² − r²), and dL/dP = −u, u the uni
   torque feedforward (the distribution's tensions for the platform's wrench, plus the winches' inertia) ask the same
   pretension of the cables. The forward kinematics is Gauss-Newton on these lengths; the controller uses it twice a
   position cycle (the following error in tool space), so it takes cheap steps first and the numerical Jacobian only near
-  the workspace's edge.
+  the workspace's edge. With stretching cables it then finds the platform's rest on them by Newton; where no cable's
+  free length changed by 1 mm or more since the last call, that Newton starts from the last call's pose with its
+  Jacobian (a chord method, the Jacobian recomputed where a step fails), which saves the Gauss-Newton and most residuals.
+  The pose differs by Newton's tolerance (1e-12 m); it feeds the following error the controller shows, not the motion.
 - Signals per cable: `cable.<k>.tension`, `cable.<k>.shortfall` (how far it is below the least tension), `cable.<k>.length`;
   `platform.condition`, the structure matrix's condition number. Verdicts: `cable-max-tension` (highest tension against
   the rating) and `cable-min-tension` (any shortfall fails), the motors and drives as on every machine.

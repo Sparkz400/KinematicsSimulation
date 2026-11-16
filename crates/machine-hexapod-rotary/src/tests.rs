@@ -239,3 +239,73 @@ fn the_default_cycle_passes_its_verdicts() {
         assert!(v.ok, "{} of motor {:?} is {} against {}", v.check, v.motor, v.value, v.limit);
     }
 }
+
+/// The default cycle's figures as they were before the speed work of 16 November 2026, recorded then on Windows, when
+/// the dynamics' forward kinematics started Newton from home moved by K (q - q_home) at every call. Now it starts from
+/// the last call's pose (`warm_motion`) and stops within the same tolerance, a change at the rounding of the pose,
+/// which the closed loop amplifies as on the hexapod (whose figures a rounding-level change of Newton's start moved
+/// by up to 7e-5): the warm start moved these by up to 3.9e-5 (motor 6's peak torque). Another platform's maths
+/// library moves them the same way. Hence 1e-3.
+#[test]
+fn the_default_cycle_keeps_its_figures() {
+    const BEFORE: [f64; 30] = [
+        2.498610348977951,
+        1.0394098022723743,
+        35.09639863990918,
+        20.04434080957894,
+        2.793429899724822,
+        0.9675981156413708,
+        40.727337819540416,
+        26.044144925299992,
+        2.7458258912214935,
+        0.992427834912653,
+        37.48768235761933,
+        17.712846050271413,
+        2.6361610353058,
+        0.9541349388656739,
+        33.33844720762749,
+        17.104951914533657,
+        2.131160903736745,
+        0.9239455727725213,
+        34.66958495406301,
+        19.312820969759663,
+        1.9829167819894136,
+        0.856060336399854,
+        30.93949682870313,
+        15.484992628109385,
+        0.0011215905058419321,
+        0.0002651256412623923,
+        0.0011215905058419321,
+        0.0005011392417459714,
+        0.00012334937662172933,
+        0.0005011392417459714,
+    ];
+    assert_figures("hexapod-rotary", &cycle_figures(&ENTRY), &BEFORE, 1e-3);
+}
+
+/// The default cycle's key figures: per motor its peak and RMS torque and the energy it drew and fed back, then the
+/// tool's path error (peak, RMS), tracking error, and the same of its turn.
+fn cycle_figures(entry: &MachineEntry) -> Vec<f64> {
+    let cfg = entry.config();
+    let mut sim = sim_components::Sim::new(entry, &cfg).unwrap();
+    let load = analyse_cycle(&mut sim).unwrap();
+    let mut out: Vec<f64> =
+        load.motors.iter().flat_map(|m| [m.peak_torque, m.rms_torque, m.energy_in, m.energy_regenerated]).collect();
+    out.extend([
+        load.path_error_peak,
+        load.path_error_rms,
+        load.tracking_error_peak,
+        load.path_angle_error_peak,
+        load.path_angle_error_rms,
+        load.tracking_angle_error_peak,
+    ]);
+    out
+}
+
+/// Every figure within `tol` of the recorded one, relative (absolute below 1e-12).
+fn assert_figures(id: &str, got: &[f64], want: &[f64], tol: f64) {
+    assert_eq!(got.len(), want.len(), "{id}: {got:?}");
+    for (k, (g, w)) in got.iter().zip(want).enumerate() {
+        assert!((g - w).abs() <= tol * w.abs().max(1e-12), "{id}: figure {k} is {g:e}, was {w:e}; all: {got:?}");
+    }
+}

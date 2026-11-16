@@ -4358,3 +4358,25 @@ Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries a
   the motors held; machine files that follow their crates' friction feedforward.
 - Last full run in this period: 1533 of 1538 tests passed at 54a2fca, before wave 3; the final count is a placeholder
   in docs/validation.md.
+
+## Speed of the hexapods and the spatial cable robot (16 November)
+
+Profiled with rdtsc counters in a scratch build (samply's Windows symbols did not resolve): the hexapod's dynamics,
+four calls a sub-step, spent half the step in Newton's forward kinematics from the box's centre (about five steps) and
+J^-1; the platform on cranks the same; the spatial cable robot 39 % in its elastic `forward`, which the controller calls
+twice a position cycle for the following error (16 Gauss-Newton steps from the centre, then Newton with a Jacobian of
+12 residuals a step), and most of the rest in its derivatives' eight spans and eight drives.
+
+- Hexapod and platform on cranks: the dynamics start Newton from the last call's pose moved by J^-1 (K) (q - q_last),
+  within 10 mm of leg (0.01 rad of crank), from the old start otherwise; `inverse` forgets the pose (a run's start and
+  every setpoint), `memory` carries it (54 numbers). The platform's A is an array instead of a vector.
+- Spatial cable robot: the elastic `forward` starts from its last pose with its Jacobian (a chord method, recomputed
+  where a step fails), within 1 mm of free length; `equilibrium` forgets it, `memory` carries it.
+- Processor time for 2 s of `sim-cli run <machine> --cycle`, least of seven runs interleaved with the old build on a
+  busy 16-thread Ryzen 7 9800X3D: hexapod 1.33 -> 0.94 s, platform on cranks 1.84 -> 1.39 s, spatial cable robot
+  2.39 -> 1.48 s. The wall clock on that busy host was two to five times the processor time, before and after.
+- New tests `the_default_cycle_keeps_its_figures` (hexapod, platform on cranks; 1e-3, with the rounding study in their
+  comments) and `the_default_cycles_keep_their_figures` (cable robots; 1e-9 on Windows, 1e-3 elsewhere). Every test of
+  the three crates passes, the standard suites included (determinism needed `inverse` / `equilibrium` to forget).
+- Not done: a faster J^-1 (now a sixth of the hexapod's step), allocation-free cable derivatives, the drive models'
+  share (a third of each step). Not checked on Linux.

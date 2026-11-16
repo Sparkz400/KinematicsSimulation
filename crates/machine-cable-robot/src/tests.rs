@@ -344,3 +344,106 @@ fn the_planar_machine_friction_feedforward_takes_the_friction_off_the_integrator
         assert!((ff[k] - friction).abs() < 0.03 * friction.abs(), "winch {k}: feedforward {} N m of {friction}", ff[k]);
     }
 }
+
+/// Both default cycles' figures as they were before the speed work of 16 November 2026, recorded then on Windows. The
+/// warm-started elastic `forward` feeds only the tool's following error (the signal), not the motion, so on the
+/// platform they were recorded on they are the same to 1e-9. Another platform's maths library rounds sine and arc
+/// tangent differently in the last bit, which the closed loop amplifies to some 1e-4 (as on the hexapods): 1e-3 there.
+#[test]
+fn the_default_cycles_keep_their_figures() {
+    const PLANAR_BEFORE: [f64; 22] = [
+        1.0389606581361805,
+        0.6479861361877007,
+        55.15605952445517,
+        37.66381165862248,
+        1.6484450662868255,
+        0.7751408942240309,
+        216.53514897364323,
+        119.22439518511554,
+        0.9741805671230831,
+        0.5074452311248481,
+        44.49918884238062,
+        28.429049654761798,
+        1.1529379398008017,
+        0.636068238322625,
+        193.46466438048614,
+        98.69438046364186,
+        0.0006009987347714806,
+        0.00014488979459075676,
+        0.0006471198258464821,
+        0.0,
+        0.0,
+        0.0,
+    ];
+    const SPATIAL_BEFORE: [f64; 38] = [
+        2.4412936559147154,
+        1.5461626889253295,
+        170.00768422234148,
+        114.70237297650282,
+        2.0888749855699738,
+        1.6332665649124543,
+        27.146001260943798,
+        15.930176850698514,
+        1.6766752878582951,
+        1.2416166492776037,
+        47.139055592409754,
+        40.61165201783822,
+        2.0727370567209973,
+        1.6599916758200133,
+        88.41374837354466,
+        66.15660061604721,
+        1.7845207139881991,
+        1.1656503598153982,
+        50.93796101943463,
+        32.05191462719961,
+        1.9409129125355142,
+        1.4520758435848597,
+        83.60517595710246,
+        56.1473698625616,
+        2.2976306546130973,
+        1.4069747101344625,
+        148.96721978856755,
+        106.63558187173287,
+        1.7055648786260489,
+        1.3957958869653693,
+        25.3525102592258,
+        15.065209084660706,
+        0.00022184312648876797,
+        6.842195194345995e-5,
+        0.00026880527283743965,
+        0.0015966339615177524,
+        0.0004910623584291974,
+        0.0015966339615177524,
+    ];
+    let (planar, spatial) = (cycle_figures(&PLANAR), cycle_figures(&SPATIAL));
+    let tol = if cfg!(windows) { 1e-9 } else { 1e-3 };
+    assert_figures("cable-planar", &planar, &PLANAR_BEFORE, tol);
+    assert_figures("cable-spatial", &spatial, &SPATIAL_BEFORE, tol);
+}
+
+/// The default cycle's key figures: per motor its peak and RMS torque and the energy it drew and fed back, then the
+/// tool's path error (peak, RMS), tracking error, and the same of its turn.
+fn cycle_figures(entry: &MachineEntry) -> Vec<f64> {
+    let cfg = entry.config();
+    let mut sim = sim_components::Sim::new(entry, &cfg).unwrap();
+    let load = analyse_cycle(&mut sim).unwrap();
+    let mut out: Vec<f64> =
+        load.motors.iter().flat_map(|m| [m.peak_torque, m.rms_torque, m.energy_in, m.energy_regenerated]).collect();
+    out.extend([
+        load.path_error_peak,
+        load.path_error_rms,
+        load.tracking_error_peak,
+        load.path_angle_error_peak,
+        load.path_angle_error_rms,
+        load.tracking_angle_error_peak,
+    ]);
+    out
+}
+
+/// Every figure within `tol` of the recorded one, relative (absolute below 1e-12).
+fn assert_figures(id: &str, got: &[f64], want: &[f64], tol: f64) {
+    assert_eq!(got.len(), want.len(), "{id}: {got:?}");
+    for (k, (g, w)) in got.iter().zip(want).enumerate() {
+        assert!((g - w).abs() <= tol * w.abs().max(1e-12), "{id}: figure {k} is {g:e}, was {w:e}; all: {got:?}");
+    }
+}
