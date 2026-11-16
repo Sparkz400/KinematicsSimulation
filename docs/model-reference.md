@@ -690,7 +690,7 @@ F_z = 2 T₂ − T₁ − T₃                   belt force on the Z axis
 τ_B = r_mat · (M₂ − M₃)                belt torque on pulley B
 ```
 
-Belt mass: half of the free belt is lumped on each motor pulley, J_pulley += ½ · ρ · L_total · r², which is exact for the runs that move at pulley speed. The vertical runs move over ground at other speeds (section 1 and 3 with the clamp, (v_x, v_z); section 2 at (v_x, 2v_x + v_z) and (v_x, −(2v_x − v_z))), so the belt's kinetic energy has one more term, T = ½ m_xx v_x² + m_xz v_x v_z with m_xx = 8ρ (s + s_z − z) and m_xz = 2ρ (2x − s_x) (s the free span at each end, s_x, s_z the strokes); the equations of motion and the energy have it in both models. The rigid feedforward has the mass terms but not the speed terms.
+Belt mass: half of the free belt is lumped on each motor pulley, J_pulley += ½ · ρ · L_total · r², which is exact for the runs that move at pulley speed. Summed run by run along the belt path (`belt_mass`), the runs at the clamp move with it, (v_x, v_z), the upper runs at the pulleys' surface speeds v_x ± v_z and the lower ones back at −(v_x ± v_z), and the runs down the Z axis, which pass the lower carriage idlers at 2v_x ± v_z, at (v_x, 2v_x + v_z) and (v_x, −(2v_x − v_z)): 2T / ρ = L_total (v_x² + v_z²) + 8 (s + s_z − z) v_x² + 4 (2x − s_x) v_x v_z (s the free span at each end, s_x, s_z the strokes). Beyond the lumps that is T = ½ m_xx v_x² + m_xz v_x v_z with m_xx = 8ρ (s + s_z − z) and m_xz = 2ρ (2x − s_x): the X coefficient ρ (L_total + 8 (s + s_z − z)) in all and the cross term 2ρ (2x − s_x) v_x v_z. Lagrange's equations give the speed terms 8ρ v_x v_z on X and −8ρ v_x² on Z. Where the frame sways at q' the whole belt sways with it, which adds ρ (4s + 2s_z) q' v_x (the vertical runs; the horizontal ones cancel) and ½ ρ L_total q'². Both models, the energy, the modes, the frame's momentum (for a [base](#compliant-base)) and the feedforward at speed (`feedforward_torque_moving`) have all of it; the machine file sums it the same way from its spans' speeds over ground ([machine files](machine-files.md)).
 
 ### States of the elastic model
 
@@ -701,25 +701,21 @@ Belt mass: half of the free belt is lumped on each motor pulley, J_pulley += ½ 
 
 ### Equations of motion
 
-Masses: m_z = Z axis + payload (if attached); m_c = carriage + idler mass on X + moving chain mass.
+Masses: m_z = Z axis + payload (if attached); m_c = carriage + idler mass on X + moving chain mass m(x).
 
-Carriage, frame and leaning Z axis:
-
-```text
-f_x   = F_x − F_f,x − F_idler,x − F_chain drag + F_stop,x
-a_q   = ( −k_f · q − c_f · dq/dt − f_x − ½ · m′ · w² ) / m_f              frame; w = dx/dt + dq/dt
-spring = k(z) · u + c_u · du/dt
-d²x/dt² = ( f_x + chain_x + (1 − tip) · F_p,x + spring ) / m_c − a_q
-d²u/dt² = ( tip · F_p,x − spring ) / m_z − ( d²x/dt² + a_q )
-```
-
-Without `effects.tool_flex`: d²x/dt² = (f_x + chain_x + F_p,x) / (m_c + m_z) − a_q, and u stays 0. Without `effects.frame_compliance`: q stays 0 and a_q = 0.
-
-Z axis:
+Carriage, Z axis, frame and leaning Z axis, Lagrange's equations solved together over (x, z, q, u):
 
 ```text
-d²z/dt² = ( F_z − F_f,z + f_z,flex − F_idler,z + F_p,z + F_stop,z ) / (m_z + m_idler,z)  −  g · m_z / (m_z + m_idler,z)
+T = ½ m_c w² + ½ m_z (w + u')² + ½ (m_z + m_idler,z) z'² + ½ m_f q'²                 w = x' + q'
+  + ½ m_xx x'² + m_xz x' z' + ρ (4s + 2s_z) q' x' + ½ ρ L_total q'²                 the belt's runs (above)
+M · (x'', z'', q'', u'') = (F_x, F_z, F_q, F_u)                                       M the mass matrix of T
+F_x = T₃ − T₁ − F_f,x − F_idler,x − F_chain drag + F_stop,x + F_p,x + m′ w (½ w − x') + 8ρ x' z'
+F_z = 2T₂ − T₁ − T₃ − F_f,z + f_z,flex − F_idler,z + F_p,z + F_stop,z − m_z g − 8ρ x'²
+F_q = −k_f q − c_f q' + F_p,x − m′ x' w
+F_u = tip · F_p,x − k(z) u − c_u u'
 ```
+
+The process force acts at the tool tip, at x + q + tip · u, so on each of them; the lean's spring acts between carriage and Z axis, on u alone. Without `effects.tool_flex` m_z rides on w and u stays 0; without `effects.frame_compliance` q stays 0.
 
 Pulleys and motor shafts, for k = A, B:
 
@@ -775,14 +771,14 @@ At rest the Z axis stands sag(x) higher on its belt so that the tool is at its p
 The modes the machine reports (`modes`; the lowest is `resonance_hz`, the input shaper's) are the generalised eigenvalues K v = ω² M v over the elastic coordinates the model has at that pose (pulleys taken as held): the carriage x on the frame, the Z axis's z on its belt, with `effects.frame_compliance` the frame's sway q, with the leaning Z axis its lean u:
 
 ```text
-T = ½ m_c w² + ½ m_z (w + u')² + ½ (m_z + m_idlers) z'² + ½ m_f q'²,  w = x' + q'
-K = Σ k_i g_i g_iᵀ + k_f e_q e_qᵀ + k_u e_u e_uᵀ,  k_i = EA / L_i
+T as in the equations of motion, belt's runs and all; the pulleys and the belt lumped on them stand
+K = Σ k_i g_i g_iᵀ + k_f e_q e_qᵀ + k_u e_u e_uᵀ,  k_i = EA / l_i (l_i the section's unstretched belt at rest)
 g₁ = (1, 1), g₂ = (0, −2), g₃ = (−1, 1)          in (x, z): the sections' lengths change with x + z, −2z, −x + z
 K_xx = k₁ + k₃,  K_xz = k₁ − k₃,  K_zz = k₁ + 4k₂ + k₃
 ζ = vᵀ C v / (2 ω vᵀ M v)
 ```
 
-With the default frame and the leaning Z axis that is four modes: carriage and frame swinging, the carriage on the belt, the Z axis on its belt, the Z axis's lean. By hand without the lean at x = 0.5 m, z = 0.25 m: M = diag(11, 30) kg, K = [[k_b, −k_b], [−k_b, k_b + 7.4·10⁵]] with k_b = 2 · 5·10⁵ / 1.05 N/m, 20.72 Hz and 56.51 Hz (the Z axis's mode on the belt above them); with the lean 20.64 Hz, and 18.81 Hz at x = 0.9 m, z = 0.05 m. C holds the two sections' damping on the same g_i (`belt.damping_n_s_m` each, or with material damping `belt.damping_time_s` · k_i more), `frame.damping_n_s_m` on q and `tool_flex.damping_n_s_m` on u; the cross terms of a damping that is not proportional are left out. The belt's own mass and the stiffness of the control loops are not in it.
+Only modes that move the tool (along X by x + q + tip · u, or along Z) are reported, so that the input shaper aims at the lowest that does and the second shaper at the next one. With the default frame and the leaning Z axis that is four modes: the frame swaying with the carriage on it, the carriage swaying against the frame with the Z axis leaning, the Z axis on its belt, the Z axis's lean against the carriage. By hand without the lean at x = 0.5 m, z = 0.25 m, in (x, q): M = [[11.32, 11.16], [11.16, 41.42]] kg (11 kg, the belt's runs 0.32 kg on x, the whole belt's 0.42 kg swaying, its 1.6 m of vertical runs coupling), K = diag(k_b, 7.4·10⁵) with k_b = 2 · 5·10⁵ / l, l = 1.05 / (1 + 282.84 / 5·10⁵) m: 20.60 Hz and 55.64 Hz (the Z axis's mode on the belt above them). Against the model's own linearised equations at rest (`the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held`), loss-free with the backlash off: 18.74 / 30.67 / 76.04 / 116.30 Hz at x = 0.9 m, z = 0.05 m and 20.53 / 53.22 / 83.05 / 200.98 Hz at (0.5, 0.25); without the belt's mass 18.81 / 30.77 / 78.51 / 119.46 and 20.64 / 53.91 / 83.05 / 206.52 Hz. C holds the two sections' damping on the same g_i (`belt.damping_n_s_m` each, or with material damping `belt.damping_time_s` · k_i more), `frame.damping_n_s_m` on q and `tool_flex.damping_n_s_m` on u; the cross terms of a damping that is not proportional are left out. The stiffness of the control loops is not in it: under the servo the swing is a little faster (about 36 Hz where 34.58 Hz is reported, frame off, x = 0.9 m, z = 0.15 m).
 
 The single axis reports one mode, its carriage on the belt with the pulley held: f = sqrt(k / m) / (2π), k = EA/L₁ + EA/L₂, m the carriage with payload and cable chain, ζ = c / (2 m ω) (65.8 Hz at x = 0.5 m). None in the rigid model.
 
@@ -1481,7 +1477,7 @@ p and L are the momentum and the angular momentum of everything that moves on th
 
 The tool rides on the base and the workpiece stands on the floor: the tool pose is the machine's plus the base's move at the tool, u + θ × (r − P) for the axes x, y, z and θ for the turns (rx, ry, rz, c about z; `Machine::base_shift`); the motors' angles are measured on the base and do not see it. At rest the machine stands off by the base's deflection under its load so that the tool is at its pose. The scene moves as a whole by the base's move at the tool, exaggerated. Signals `base.<x|y|z|rx|ry|rz>`.
 
-Checks: a force held at rest moves the base and the tool by F / k (single axis, 50 N on 2.5e6 N/m: 20 µm); after a move an undamped base rings at sqrt(k / M) / 2π (100 kg on 2.5e6 N/m: 25.165 Hz, half period 19.869 ms, in the tool's position); every machine's momentum is the rate of its first moment (`testkit::frame_momentum_moves_its_first_moment`). Two-way: a slider (4 kg) on a spring (2e5 N/m) to a base of 200 kg on 8e5 N/m swings in the two-mass system's closed-form modes, 10.057 Hz and 35.981 Hz, each in its shape (to 1e-6 of the amplitude; one-way the base rings at 10.066 Hz whatever the slider does); a free base and an arm swung on it keep their momentum (to 1e-9); the arm in gravity on a base along x, z and in tilt keeps its energy (`testkit::energy_conservation`; without the tilt's turn of gravity it drifts by 0.32 %) and closes the loss budget, and so does the H4 (one-way it drifts by 4.5 %); on the T-gantry a two-way base along X of the frame's mass plus what rides on it (30 + 11 kg), its stiffness and damping, gives the frame mode's motion (`effects.frame_compliance`) to 6e-15 m against a sway of 0.154 mm (one-way 0.123 mm off).
+Checks: a force held at rest moves the base and the tool by F / k (single axis, 50 N on 2.5e6 N/m: 20 µm); after a move an undamped base rings at sqrt(k / M) / 2π (100 kg on 2.5e6 N/m: 25.165 Hz, half period 19.869 ms, in the tool's position); every machine's momentum is the rate of its first moment (`testkit::frame_momentum_moves_its_first_moment`). Two-way: a slider (4 kg) on a spring (2e5 N/m) to a base of 200 kg on 8e5 N/m swings in the two-mass system's closed-form modes, 10.057 Hz and 35.981 Hz, each in its shape (to 1e-6 of the amplitude; one-way the base rings at 10.066 Hz whatever the slider does); a free base and an arm swung on it keep their momentum (to 1e-9); the arm in gravity on a base along x, z and in tilt keeps its energy (`testkit::energy_conservation`; without the tilt's turn of gravity it drifts by 0.32 %) and closes the loss budget, and so does the H4 (one-way it drifts by 4.5 %); on the T-gantry a two-way base along X of the frame's mass plus what rides on it (30 + 11 kg and the belt's 0.42 kg), its stiffness and damping, gives the frame mode's motion (`effects.frame_compliance`) to 5e-15 m against a sway of 0.149 mm.
 
 **Two-way** (`effects.base_reaction`, with `base_compliance`; off in every shipped config). Without it the coupling is one-way: the machine's own dynamics do not feel the base's acceleration, the motors neither see the sway in their following error nor hold against it, and the base's energy is not in the budget; exact where the base is much heavier than what moves on it or the servo holds the axes stiffly to it. With it the base's acceleration acts on everything that moves on it as an inertial force, derived from the same momentum, not written per machine. The machine's momentum is linear in its speeds v (the states its momentum moves with and whose change moves more than speeds: a frame mode or a tool flex switched off, held at zero, is none; found at the start pose), P = A(q) v, linear and angular about the pivot; A turns the base's acceleration a into the generalised forces −Aᵀ a on the speeds, as it turns gravity into A_linᵀ g. The machine's mass matrix over its speeds is the Hessian of its kinetic energy, M = ∂²E/∂v², from `Machine::energy` at unit speeds (by polarisation: exact, E being quadratic in v). Base and machine are solved together at every evaluation of the derivatives, no lag:
 

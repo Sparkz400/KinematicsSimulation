@@ -1716,7 +1716,7 @@
           "type": "array"
         },
         "span": {
-          "description": "A free belt span between two points that hold it (pulley, idler, clamp), for its sideways mode (effects.belt_span_vibration).",
+          "description": "A free belt span between two points that hold it (pulley, idler, clamp), for its sideways mode (effects.belt_span_vibration), and with its speed over ground for the belt's mass run by run.",
           "items": {
             "additionalProperties": false,
             "properties": {
@@ -1766,6 +1766,54 @@
               "section": {
                 "description": "The section it is part of: its tension. Id of a machine.section node.",
                 "type": "string"
+              },
+              "velocity_x": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "Its belt's speed over ground along x of the 3D view per unit speed of each axis. Given on every span (with velocity_y and velocity_z, 0 where left out), the spans together the whole belt, the belt's kinetic energy is summed run by run (effects.belt_mass) beyond the half of it on each pulley. Keys: ids of machine.axis nodes.",
+                "type": "object"
+              },
+              "velocity_y": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "As velocity_x, along y. Keys: ids of machine.axis nodes.",
+                "type": "object"
+              },
+              "velocity_z": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "As velocity_x, along z. Keys: ids of machine.axis nodes.",
+                "type": "object"
               }
             },
             "required": [

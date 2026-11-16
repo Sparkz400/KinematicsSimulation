@@ -60,6 +60,15 @@ rest0 = lengths(0, 0) / (1 + T0 / EA)
 r_mat = r / (1 + T0 / EA)
 j_pulley = cfg["pulley"]["inertia_kgm2"] + 0.5 * belt["mass_kg_m"] * lengths(0, 0).sum() * r * r
 m_motors = 2 * (j_pulley + ratio**2 * j_rotor) / r**2
+mu, L = belt["mass_kg_m"], lengths(0, 0).sum()
+
+
+def belt_mass(x, z):
+    """The belt's runs beyond the half lumped on each pulley (see `belt_mass` in ../src/lib.rs): run by run over ground,
+    the clamp's vertical runs at (vx, vz), the horizontal ones at +-(vx + vz) and +-(vx - vz), section 2's down the
+    Z axis at (vx, 2 vx + vz) and (vx, vz - 2 vx). T = 1/2 xx vx^2 + xz vx vz, and with the frame swaying at vq
+    the whole belt sways: + mu (4 span + 2 sz) vq vx + 1/2 mu L vq^2."""
+    return 8 * mu * (span + sz - z), 2 * mu * (2 * x - sx)
 
 
 def material(a, b):
@@ -121,10 +130,20 @@ def rhs(t, y, torque_at):
     rest_rate = (r_mat * va, r_mat * (vb - va), -r_mat * vb)
     tension, feed = zip(*(section(length[i], rest[i], length_rate[i], rest_rate[i]) for i in range(3)))
     ffx, dsx, ffz, dsz = guide_friction(z, vx, vz, s_x, s_z, torque)
-    fx = tension[2] - tension[0] - ffx
-    aq = (-frame["stiffness_n_m"] * q - frame["damping_n_s_m"] * vq - fx) / frame["mass_kg"]
-    ax = fx / m_x - aq
-    az = (2 * tension[1] - tension[0] - tension[2] - ffz) / m_z - G
+    # Lagrange's equations over (x on the frame, z, frame sway q): M (ax, az, aq) = F.
+    xx, xz = belt_mass(x, z)
+    cross = mu * (4 * span + 2 * sz)
+    mass_matrix = np.array([
+        [m_x + xx, xz, m_x + cross],
+        [xz, m_z, 0.0],
+        [m_x + cross, 0.0, frame["mass_kg"] + m_x + mu * L],
+    ])
+    forces = np.array([
+        tension[2] - tension[0] - ffx + 8 * mu * vx * vz,
+        2 * tension[1] - tension[0] - tension[2] - ffz - m_z * G - 8 * mu * vx * vx,
+        -frame["stiffness_n_m"] * q - frame["damping_n_s_m"] * vq,
+    ])
+    ax, az, aq = np.linalg.solve(mass_matrix, forces)
     belt_torque = (r_mat * (feed[0] - feed[1]), r_mat * (feed[1] - feed[2]))
     acc = []
     for k, (theta, w_theta, phi, w_phi) in enumerate(((a, va, pa, wa), (b, vb, pb, wb))):
@@ -162,8 +181,10 @@ def main():
     pose = (0.5, 0.25)
     y0, hold = equilibrium(*pose)
     # The push asks for each axis's acceleration limit, through the rigid model.
-    fx = (m_x + m_motors) * cfg["axis"]["x"]["max_acceleration_m_s2"]
-    fz = (m_z + m_motors) * cfg["axis"]["z"]["max_acceleration_m_s2"]
+    xx, xz = belt_mass(*pose)
+    acc = (cfg["axis"]["x"]["max_acceleration_m_s2"], cfg["axis"]["z"]["max_acceleration_m_s2"])
+    fx = (m_x + m_motors + xx) * acc[0] + xz * acc[1]
+    fz = (m_z + m_motors) * acc[1] + xz * acc[0]
     delta = r / (2 * ratio) * np.array([fx + fz, fx - fz])
     torque_at = lambda t: hold + delta * pulse(t)
     assert max(abs(v) for v in rhs(0.0, y0, torque_at)) < 1e-6, "the start state is not at rest"

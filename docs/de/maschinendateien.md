@@ -854,6 +854,13 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
   nimmt (`mech::ToothJump`); eine Scheibe mit einem Abschnitt nur auf einer Seite (eine Trommel) lehnt den Effekt ab.
 - Trumschwingung (`machine.span`): die erste Querschwingung jedes Trums bei der Spannung seines Abschnitts, gegen das,
   was die Antriebe anregen (`mech::span_frequency`).
+- Die Riemenmasse Trum für Trum: wo jedes Trum die Geschwindigkeit seines Riemens über Grund je Achsgeschwindigkeit
+  angibt (`velocity_x`, `velocity_y`, `velocity_z`, entlang der Achsen der 3D-Ansicht) und die Trume zusammen der ganze
+  Riemen sind (sonst abgelehnt), bewegt sich jedes Trum, L_s = L0_s + c_s · q lang, mit V_s v über Grund, mit dem
+  Schwingen des Rahmens e du obendrauf: die kinetische Energie des Riemens ½ mu Σ_s L_s |V_s v + e du|² ersetzt die
+  Hälfte auf jeder Scheibe in der Massenmatrix der Achsen (und des Rahmens), mit den Geschwindigkeitstermen nach
+  Lagrange, und sein Impuls und erstes Moment gehen in den Impuls des Rahmens ein. Die Datei des T-Portals gibt ihre
+  Trume so an; ihr Crate leitet dasselbe aus dem Riemenweg ab (`belt_mass`).
 - Die Eigenform des Riemens (elastisches Modell): die Achsen, und der Rahmen, wo er schwingt, auf der Steifigkeit des
   Riemens bei festgehaltenen Scheiben, K = Σ_s EA / L_s c_s c_s^T, gegen ihre Massenmatrix; die niedrigste ist
   `resonance_hz` in einer Lage, also stellt `effects.shaper_follows_pose` den Shaper darauf, und die App zeigt ihre
