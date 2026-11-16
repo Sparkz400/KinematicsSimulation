@@ -119,6 +119,12 @@ struct Ghost {
 /// The ghost's colour: a light neutral grey, see-through, none of the palette's meaning colours.
 const GHOST: Color = Color::srgba(0.86, 0.88, 0.92, 0.25);
 
+/// The view's height in logical pixels the camera leaves free of the machine at the top and at the bottom when it
+/// frames it (`fit_distance`): the folded controls' row on top and the timeline below are each some 36 pixels tall and
+/// 10 from the edge. Framed in the whole height, a tall machine (the six-axis arm) had its top under the controls and
+/// its base under the timeline.
+const OVERLAY_ROOM: f32 = 56.0;
+
 /// The planned path's line (`draw_paths`): wider than the travelled one and a little behind it, so that both show
 /// where the tool follows the plan. Drawn as the other lines, at the same depth the travelled line lost the depth
 /// test to the plan's drawn before it and was never seen.
@@ -1038,11 +1044,11 @@ fn fill_obstacles(
 }
 
 /// How far back the camera must stand, looking along `rotation` at `target`, for the box from `low` to `high`
-/// to fill the view with a little room: each corner within the vertical field of view of 45 degrees and the
-/// horizontal one the view's `aspect` gives.
-fn fit_distance(low: Vec3, high: Vec3, target: Vec3, rotation: Quat, aspect: f32) -> f32 {
-    let tan_v = std::f32::consts::FRAC_PI_8.tan();
-    let tan_h = tan_v * aspect;
+/// to fill the view with a little room: each corner within the share `free` of the vertical field of view of 45
+/// degrees (`OVERLAY_ROOM`) and within the horizontal one the view's `aspect` gives.
+fn fit_distance(low: Vec3, high: Vec3, target: Vec3, rotation: Quat, aspect: f32, free: f32) -> f32 {
+    let tan_h = std::f32::consts::FRAC_PI_8.tan() * aspect;
+    let tan_v = std::f32::consts::FRAC_PI_8.tan() * free;
     let into_camera = rotation.inverse();
     let corners =
         (0..8).map(|i| Vec3::new([low.x, high.x][i & 1], [low.y, high.y][(i >> 1) & 1], [low.z, high.z][i >> 2]));
@@ -1166,7 +1172,8 @@ fn orbit_camera(
         && right > left
         && bottom > top
     {
-        let fit = fit_distance(low, high, orbit.target, rotation, aspect);
+        let free = ((bottom - top - 2.0 * OVERLAY_ROOM) / (bottom - top)).max(0.5);
+        let fit = fit_distance(low, high, orbit.target, rotation, aspect, free);
         if state.fit {
             orbit.distance = fit;
             state.fit = false;

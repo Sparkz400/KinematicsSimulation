@@ -16,6 +16,9 @@ item are in [PROGRESS.md](PROGRESS.md).
   at 1280 x 720 the opened controls covered half of the 418-pixel view. "More…" / "Less" opens and folds them.
 - The runs tab's key figures have a column per kept run less the reference ("Δ" and its label; for the checks, the
   failed ones less the reference's).
+- Lists in wrapped rows (motor search, move map, effect comparison) go to the next line where they do not fit.
+- The camera frames the machine clear of the folded controls and the timeline (56 pixels at the top and bottom): the
+  six-axis arm's top was under the controls and its base under the timeline.
 - Window test `at_1280_by_720_the_panels_keep_their_widths_and_the_view_stays_free`.
 
 ## [1.0.0] - 2026-11-16

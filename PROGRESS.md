@@ -4372,6 +4372,12 @@ Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries a
   friction).
 - Window test: `at_1280_by_720_the_panels_keep_their_widths_and_the_view_stays_free` (both languages, every tab of
   both panels, with and without the cycle's result).
+- The camera frames the machine within the view less 56 pixels at the top and the bottom (`OVERLAY_ROOM`), which
+  `the_view_presets_put_the_camera_where_they_say_with_the_machine_in_view` now checks. Every one of the 28 machines'
+  3D views was looked at in a screenshot at 1280 x 720 (`SIM_APP_SIZE`, `SIM_APP_MACHINE`, `SIM_APP_MAP` for the start
+  pose without analyses); the six-axis arm's framing was the one fault found and fixed.
+- Lists (combo boxes) in wrapped rows go to the next line where they do not fit (`room_for_list`): with the panels no
+  longer widening, the motor search's and the move map's lists were cut off at the edge.
 - Already in place before this wave, so not rebuilt: the mode list's mode swinging in the 3D view at 1 Hz with the
   exaggeration slider and its true frequency by the tool (`session::mode_scene`); the energy flow diagram, whose columns
   add up to the budget (`Model::budget_flows`, test in tests/app.rs); kept runs overlaid and differenced in the runs

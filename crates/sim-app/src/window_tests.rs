@@ -437,9 +437,15 @@ fn camera(d: &mut Driver) -> Transform {
 /// The corners of the machine's box that the camera does not see: outside Bevy's default field of view (45 degrees
 /// up and down, the view's width across) or behind it. Worked out here from the camera's transform alone.
 fn corners_out_of_sight(d: &mut Driver) -> Vec<Vec3> {
+    corners_beyond(d, 0.0)
+}
+
+/// `corners_out_of_sight` with `room` logical pixels at the top and the bottom of the view counted as out of sight.
+fn corners_beyond(d: &mut Driver, room: f32) -> Vec<Vec3> {
     let (low, high) = d.state().bounds.expect("the machine's box");
     let [left, top, right, bottom] = d.state().view_rect;
     let aspect = (right - left) / (bottom - top);
+    let free = (bottom - top - 2.0 * room) / (bottom - top);
     let camera = camera(d);
     let tan = (std::f32::consts::FRAC_PI_4 / 2.0).tan();
     (0..8)
@@ -447,7 +453,7 @@ fn corners_out_of_sight(d: &mut Driver) -> Vec<Vec3> {
         .filter(|corner| {
             let p = camera.rotation.inverse() * (*corner - camera.translation);
             let depth = -p.z;
-            !(depth > 0.0 && (p.x / depth).abs() <= tan * aspect + 1e-4 && (p.y / depth).abs() <= tan + 1e-4)
+            !(depth > 0.0 && (p.x / depth).abs() <= tan * aspect + 1e-4 && (p.y / depth).abs() <= tan * free + 1e-4)
         })
         .collect()
 }
@@ -600,11 +606,12 @@ fn the_view_presets_put_the_camera_where_they_say_with_the_machine_in_view() {
         let camera = camera(&mut d);
         let seen_from = (camera.translation - d.state().orbit.target).normalize();
         assert!(seen_from.distance(expected) < 1e-4, "{key}: from {seen_from}, expected {expected}");
-        assert_eq!(corners_out_of_sight(&mut d), Vec::<Vec3>::new(), "{key}");
-        // Framed: zoomed in a little, a corner leaves the view.
+        // Clear of the folded controls on top and the timeline below (`OVERLAY_ROOM`).
+        assert_eq!(corners_beyond(&mut d, OVERLAY_ROOM), Vec::<Vec3>::new(), "{key}");
+        // Framed: zoomed in a little, a corner goes under them.
         d.state_mut().orbit.distance *= 0.8;
         d.camera_still();
-        assert!(!corners_out_of_sight(&mut d).is_empty(), "{key}: not framed but far off");
+        assert!(!corners_beyond(&mut d, OVERLAY_ROOM).is_empty(), "{key}: not framed but far off");
     }
 }
 

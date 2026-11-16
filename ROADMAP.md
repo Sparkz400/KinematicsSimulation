@@ -90,9 +90,8 @@ No dates. What to verify before the release is in [TODO.md](TODO.md).
 - Labels such as `joint-1` are defined by several machine crates (`Joint 1`, `Leg 1`, `Crank 1`); a machine that defines
   none of its own shows the wording of the last registered machine that does (the selected machine's own wording wins).
 
-- App: its layout at 1280 x 720 (the view's controls cover much of the machine, some tools tabs widen the tools panel
-  by up to 160 pixels); the file dialogs, dragging a panel's edge and a plot's right-click menu are not tested; only
-  the T-gantry's 3D view was looked at, and how the motion looks over time was seen in single pictures, not watched.
+- App: the file dialogs, dragging a panel's edge and a plot's right-click menu are not tested; the machines' 3D views
+  were looked at in single pictures at their start pose, how the motion looks over time not watched.
 - FMI: asynchronous steps, a darwin64 binary in the shipped FMUs; import tested in Simulink or Dymola (checked with fmpy
   in CI, run in OpenModelica 1.27.1 through OMSimulator); the Modelica Association's `fmusim` and the FMU Compliance
   Checker. A Model Exchange FMU, which Modelica tools import as a block, is not written (docs/fmi.md says why).
