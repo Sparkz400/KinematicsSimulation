@@ -18,8 +18,8 @@ Sources (same as the repo's meta files):
   - CSF-20-80, 1000 rpm, 20 C, grease: R = 78 % at rated torque; at load torque 19.6 Nm (ratio 0.58) Ke = 0.93, so 73 %. (CSG-CSF doc, printed p.46, Table 046-1 worked example.)
   - SHF-20-80, 1000 rpm, 20 C, grease: R = 82 %, Ke = 0.93, so 76 %. (SHG-SHF doc, printed p.90.)
   - Those are the only printed numbers I could extract. They are NOT at 2000 rpm / 25 C.
-- I could not read values off the curves (the graphs are vector art, no data table; no image renderer was available in this environment). A per-ratio table at 2000 rpm, 25/40 C therefore has no primary numeric source from me. Options: digitise Graphs 047-1..8 / 090-2..091-5 from the PDF, or ask Harmonic Drive. Confidence that the manuals contain no table: high.
-- The repo's flat 0.70 stays unsourced; the two printed anchors (78 % and 82 % at ratio 80, size 20, 1000 rpm, 20 C) suggest 0.70 is low for rated-load ratio 80 but that is not a per-ratio value.
+- The graphs are vector art with no data table. They are now digitised from the PDF paths by `catalog/tools/extract_harmonicdrive_efficiency.py` (readings in `catalog/tools/harmonicdrive_efficiency_readings.csv`, method in the `efficiency_full_load` note of `catalog/harmonicdrive/gearbox_*.meta.toml`): 2000 rpm, 25 C, rated torque, grease, about 0.70 to 0.80.
+- The two printed anchors (78 % and 82 % at ratio 80, size 20, 1000 rpm, 20 C) came out at 79.1 % and 81.6 % from the digitised graphs.
 
 ### No-load running torque
 CSG/CSF (printed p.44-45): Table 044-5 conditions (ratio 100, grease, "measured after 2 hours at 2000 rpm input"). Absolute values for ratio 100 are graphs only (Graphs 045-1 to 045-4 by input speed 500/1000/2000/3500 rpm, log scale vs size). Numeric part is Table 044-6, "Component Set No Load Torque Compensation", Ncm, to ADD to the ratio-100 graph value:

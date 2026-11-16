@@ -28,11 +28,20 @@ Left out: backlash_rad. The document prints a "Backlash" table per size and rati
   of the wave generator's Oldham coupling referred to the output (the
   document's definition of terms: the gear itself has none; what is measured comes from the Oldham coupling's clearance); not a gear backlash, so
   not put into backlash_rad (task instruction). lost_motion_rad: no table for component sets. no_load_torque: only
-  graphs (ratio 100, plus a compensation table per ratio); efficiency: only graphs; both left out of the table (`apply_gearbox` puts in an ESTIMATE of 0.70 for every size and ratio, not read from the graphs, flagged `gearbox-efficiency` in a search). Starting torque,
+  graphs (ratio 100, plus a compensation table per ratio), left out of the table. Starting torque,
   backdriving torque, ratcheting and buckling torque, positional accuracy: tables, no schema column.
 The SHG is the hollow-shaft version of the CSG; its rating table is the CSG's except where kept as
   printed: SHG32 limit for average input speed with grease 3000 r/min (CSG32: 3500), SHG65 moment of inertia
   46.5 x10^-4 kg m2 (CSG65: 46.8). SHG17 ratio 120 has a lower momentary peak torque (112 N m) than ratio 100 (143 N m).
+efficiency_full_load: efficiency at the rated torque, 2000 r/min input speed, 25 degC ambient, grease lubrication, read off the
+  vendor's "Efficiency at rated torque" graphs (Graphs 090-2 to 091-5 (printed pages 90 and 91)); fractions (0.74 = 74 %). Method: the graphs
+  are vector art; tools/extract_harmonicdrive_efficiency.py reads the PDF's paths, takes the axes from the frame and grid lines
+  (checked against the printed tick labels), chains the path pieces into the four curves (500, 1000, 2000, 3500 r/min; they
+  do not cross and the legend order agrees) and reads the 2000 r/min curve at 25 degC; every reading is in
+  tools/harmonicdrive_efficiency_readings.csv. Graph per row: size 14: 090-2 (ratio 30), 090-3 (50 and 80), 090-4 (100); sizes 17 to 65: 091-1 (30), 091-2 (50), 091-3 (80 and 100), 091-4 (120), 091-5 (160); every size of a group shares its graph, as the
+  vendor draws it; a row whose size group has no graph for its ratio stays empty. Check against the printed example (SHF-20-80 82 % printed, 81.6 % read (0.4 points));
+  estimated reading error 1 point (the larger anchor residual, rounded). Not in the model: the efficiency compensation
+  coefficient Ke for a load below the rated torque (Graph 046-1 / 090-1), other speeds and temperatures, oil lubrication.
 Source: Harmonic Drive LLC, Component Sets SHG/SHF, Engineering Data (TI-26121 REV 1, 08/2026), rating table 082-1.
   Extracted by catalog/tools/extract_harmonicdrive.py; the numbers are Harmonic Drive's, the layout is ours. SHG sizes
   14 to 65, all ratios printed (44 rows).
@@ -46,3 +55,17 @@ locator = "pages 82 to 87: rating table 082-1 (SHG), dimensions 085-1, hysteresi
 method = "script:tools/extract_harmonicdrive.py"
 url = "https://www.harmonicdrive.net/_hd/content/documents1/SHG-SHF_Component.pdf"
 retrieved = "2026-11-14"
+
+[[sources]]
+id = "shg-shf-efficiency-graphs"
+document = "Harmonic Drive LLC, Reducer Catalog, Component Sets SHG/SHF, Engineering Data, TI-26121 REV 1"
+date = "2026-08"
+locator = "Graphs 090-2 to 091-5 (printed pages 90 and 91): efficiency at rated torque against ambient temperature, one curve per input speed"
+method = "script:tools/extract_harmonicdrive_efficiency.py"
+url = "https://www.harmonicdrive.net/_hd/content/documents1/SHG-SHF_Component.pdf"
+retrieved = "2026-11-16"
+
+[[provenance]]
+rows = ["*"]
+fields = ["efficiency_full_load"]
+source = "shg-shf-efficiency-graphs"
