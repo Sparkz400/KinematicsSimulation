@@ -3,7 +3,7 @@
 # the place. Everything else, and where each value comes from, is as in default.toml.
 #
 # T-gantry default configuration. Placeholder values for a mid-size catalogue-style machine;
-# see PROGRESS.md for the assumptions. Units are in the field names.
+# see docs/development/PROGRESS.md for the assumptions. Units are in the field names.
 # Masses, inertias, backlash and belt stiffness are datasheet-type values. Friction and damping
 # values are estimates and the first candidates for a sensitivity sweep.
 format_version = 1

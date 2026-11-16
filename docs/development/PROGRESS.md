@@ -1,6 +1,6 @@
 # Progress
 
-Status per phase of "T-Gantry Physics Simulator Project Plan.md". A phase is done when its "Done when"
+Status per phase of the [project plan](project-plan.md). A phase is done when its "Done when"
 criterion and its Validation-table checks exist as automated tests and `cargo test --workspace` passes.
 
 | Phase | Status | Tests that prove it |
@@ -212,7 +212,7 @@ Not done then: the gearbox torque as a signal (item l). Done since: see "Seven g
 A second independent review confirmed twelve defects by experiment and raised five suspicions; all five
 were real. All are fixed, each with a test of the review's scenario that was seen to fail with the fix
 taken out. `cargo test --workspace`: 211 tests. The tests are in
-[`review2.rs`](crates/sim-machines/tests/review2.rs) unless another file is named.
+[`review2.rs`](../../crates/sim-machines/tests/review2.rs) unless another file is named.
 
 | Fix | What changed | Test |
 | --- | --- | --- |
@@ -250,7 +250,7 @@ catches up with a move; a config value is only as checked as its key (a rating i
 ## The app does what the command line does, and arcs entered at speed (12 November 2026)
 
 `cargo test --workspace`: 220 tests (211 before). New tests are in
-[`app.rs`](crates/sim-app/tests/app.rs) unless another file is named.
+[`app.rs`](../../crates/sim-app/tests/app.rs) unless another file is named.
 
 | Addition | What it is | Test |
 | --- | --- | --- |
@@ -262,7 +262,7 @@ catches up with a move; a config value is only as checked as its key (a rating i
 | A trip is said | The simulation thread reports a drive that trips, once per trip (`ui-drive-tripped`); an analysed cycle or path that trips adds `ui-analysis-tripped` | `a_drive_that_trips_is_reported` (4.7 uF and a 5 W resistor on both machines) |
 | Results and the config | Every result remembers the config it was computed for (`Model::outdated`); the window marks it once the config has changed, and "Apply", "Use" and the run of a planned path refuse with `ui-analysis-stale`. A search is not outdated by the part names it sets itself | in each of the tests above |
 | Right panel | Scrolls as a whole; Scopes, Analysis, Motor search, Path, Trace and Tuning fold away and open when their result arrives; long names wrap, numbers have four digits, the default width is 720 px; the 3D camera is fitted once the panels are laid out. The screenshot hook runs the cycle analysis with error bands, the ranking, the optimiser and the tuning; with `SIM_APP_SEARCH=<start of the article numbers>`, `SIM_APP_PATH=<file>` or `SIM_APP_TRACE=<file>` it runs that part instead, so that it is in the picture | screenshots (see "Blocked or not verifiable here") |
-| Arcs entered at speed | `profile.path_tolerance_m` (0 in all three configs: the path as given). Above 0 the path gets transition curves (clothoids) where a line and an arc or two arcs meet in the same direction, in `geometry` of [`path.rs`](crates/sim-components/src/path.rs), which both planners time. An arc of radius r keeps its centre and moves in by e = L² / (24 r) for curves of length L; one L for the whole path, L = min(v³ dk / (0.4 j) of the fastest junction, sqrt(24 · tolerance · r_min)); each curve is then fitted exactly. `path::deviation`, `Sim::path_deviation`, a line on the CLI's error stream and a row in the app's path table report the largest e | `transition_curves_let_the_path_enter_an_arc_at_speed` in `path.rs`: line, arc of 0.1 m, line with 0.1 mm: 1.590 s against 1.828 s, into the arc at 0.3955 m/s (0.3957 by hand) against 0.0707 m/s, curves 15.49 mm, every pose within 0.1000 mm of the given path, axis rates within 0.1 % of their limits; with 1 mm: curves 15.99 mm (16 by hand), off by 0.10667 mm (0.1067 by hand), 1.589 s. `transition_curves_join_two_arcs`: an S of two arcs 1.539 s against 1.847 s, two arcs turning the same way 1.481 s against 1.824 s, no step in position, direction or curvature. `both_planners_time_the_path_with_its_transition_curves` in `machine-t-gantry/src/tests.rs`; `a_path_tolerance_shortens_a_rounded_path_and_the_deviation_is_reported` in `sim-cli/tests/cli.rs` |
+| Arcs entered at speed | `profile.path_tolerance_m` (0 in all three configs: the path as given). Above 0 the path gets transition curves (clothoids) where a line and an arc or two arcs meet in the same direction, in `geometry` of [`path.rs`](../../crates/sim-components/src/path.rs), which both planners time. An arc of radius r keeps its centre and moves in by e = L² / (24 r) for curves of length L; one L for the whole path, L = min(v³ dk / (0.4 j) of the fastest junction, sqrt(24 · tolerance · r_min)); each curve is then fitted exactly. `path::deviation`, `Sim::path_deviation`, a line on the CLI's error stream and a row in the app's path table report the largest e | `transition_curves_let_the_path_enter_an_arc_at_speed` in `path.rs`: line, arc of 0.1 m, line with 0.1 mm: 1.590 s against 1.828 s, into the arc at 0.3955 m/s (0.3957 by hand) against 0.0707 m/s, curves 15.49 mm, every pose within 0.1000 mm of the given path, axis rates within 0.1 % of their limits; with 1 mm: curves 15.99 mm (16 by hand), off by 0.10667 mm (0.1067 by hand), 1.589 s. `transition_curves_join_two_arcs`: an S of two arcs 1.539 s against 1.847 s, two arcs turning the same way 1.481 s against 1.824 s, no step in position, direction or curvature. `both_planners_time_the_path_with_its_transition_curves` in `machine-t-gantry/src/tests.rs`; `a_path_tolerance_shortens_a_rounded_path_and_the_deviation_is_reported` in `sim-cli/tests/cli.rs` |
 
 Changed for users: `sim-cli search`-style tables in the app show the tightest check only; the app's numbers
 have four digits (1912, not 1912.141); the right panel is 720 px wide by default; `cli-fit-*` translation
@@ -277,7 +277,7 @@ pose, so its figures differ from the command line's in the last digits.
 A third independent review went through the newest code: the transition curves, the app's analysis panel and
 the second fix round. Five defects were confirmed by experiment and are fixed, each with a test of the
 review's scenario that was seen to fail with the fix taken out. `cargo test --workspace`: 224 tests (220
-before). The tests are in [`review3.rs`](crates/sim-machines/tests/review3.rs) unless another file is named.
+before). The tests are in [`review3.rs`](../../crates/sim-machines/tests/review3.rs) unless another file is named.
 
 | Fix | What changed | Test |
 | --- | --- | --- |
@@ -324,7 +324,7 @@ The defect the third review left open. The time-optimal plan had no jerk limit a
 mean of the distance along the path over 40 ms, which carried the speed of the lines through any arc shorter
 than that: utilisation 10.5 on a quarter turn of 5 mm radius. `cargo test --workspace`: 226 tests (224 before).
 
-What changed, in [`path.rs`](crates/sim-components/src/path.rs): `plan_time_optimal` no longer has a
+What changed, in [`path.rs`](../../crates/sim-components/src/path.rs): `plan_time_optimal` no longer has a
 planner of its own. It works out a speed and an acceleration limit per piece from the motors (rated speed;
 `profile.torque_reserve` times the torque-speed curve less the holding torque; both from the rigid model at
 nine poses of the piece) and hands them to the timing of the plan within the axis limits (`timed`), with the
@@ -983,7 +983,7 @@ Also seen in the traces, not put into any config (the conveyor is none of the re
 
 The first of the further kinematics: a three-arm rotary delta (Clavel), sized like the Autonox DELTA RL3-1200-3kg with
 the Siemens 1FK2105-4AF Autonox recommends. Equations and parameter sources: the research note of 13 November and the
-[model reference](docs/model-reference.md#delta-picker-d3); config keys in the [config reference](docs/config-reference.md#delta-picker-d3).
+[model reference](../../docs/model-reference.md#delta-picker-d3); config keys in the [config reference](../../docs/config-reference.md#delta-picker-d3).
 
 | Item | What was built | Tests (hand-calculated numbers) |
 | --- | --- | --- |
@@ -4342,7 +4342,7 @@ Left open:
 ## After the release cut: three waves of work (15 November)
 
 Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries are in the 1.0.0 section of
-[CHANGELOG.md](CHANGELOG.md), what stays open in [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md).
+[CHANGELOG.md](../../CHANGELOG.md), what stays open in [ROADMAP.md](../../ROADMAP.md) and [TODO.md](TODO.md).
 
 - Wave 1, fixes and checks: the tests failing at the cut fixed (parallel SCARA, four-arm delta, crank-cam, cross-machine
   and app tests); independent references for the arms (MuJoCo), the D3, D2 and linear delta (Lagrangians, a MuJoCo

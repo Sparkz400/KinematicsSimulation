@@ -25,7 +25,7 @@ below are about evidence first and code second.
    LGPL, AGPL or an unknown licence.
 7. **Each effect has its own switch** (`effects.<name>`), so its contribution can be seen alone.
 8. **Docs move with the numbers.** When a shipped figure changes, update the user guide (both languages), the
-   config or model reference, `docs/validation.md` and `PROGRESS.md` in the same change.
+   config or model reference, `docs/validation.md` and `docs/development/PROGRESS.md` in the same change.
 
 ## Before a pull request
 

@@ -1,9 +1,10 @@
 # Summary
 
-<!-- The table of contents of the docs site (mdBook, docs/book.toml), in the order of "Where to go next" in README.md. -->
+<!-- The table of contents of the docs site (mdBook, docs/book.toml), in the order of the Documentation line in README.md. -->
 
 # English
 
+- [Overview and tour](overview.md)
 - [User guide](user-guide.md)
 - [Machine files](machine-files.md)
 - [Config reference](config-reference.md)

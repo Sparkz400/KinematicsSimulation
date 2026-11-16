@@ -1,6 +1,6 @@
 # Before and right after the 1.0.0 release
 
-What is not built is in [ROADMAP.md](ROADMAP.md). This file lists only what is left to check or finish around the
+What is not built is in [ROADMAP.md](../../ROADMAP.md). This file lists only what is left to check or finish around the
 release (state of 16 November 2026).
 
 ## Before the tag

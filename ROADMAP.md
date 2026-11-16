@@ -1,9 +1,9 @@
 # Roadmap
 
-What is not built yet, or built and left open, collected from the "Left open" lists of [PROGRESS.md](PROGRESS.md), the
+What is not built yet, or built and left open, collected from the "Left open" lists of [PROGRESS.md](docs/development/PROGRESS.md), the
 commit messages since the 1.0.0 cut, and the "not covered", "shortcut" and "assumptions" passages of the
 [model reference](docs/model-reference.md), [mechanisms](docs/mechanisms.md) and [validation](docs/validation.md).
-No dates. What to verify before the release is in [TODO.md](TODO.md).
+No dates. What to verify before the release is in [TODO.md](docs/development/TODO.md).
 
 ## Needs a real machine or data
 

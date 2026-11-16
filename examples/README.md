@@ -12,7 +12,7 @@ shipped one.
 
 ## A path on two axes
 
-[`corner.path`](corner.path): line, arc, line on the T-gantry, the first path printed in the README.
+[`corner.path`](corner.path): line, arc, line on the T-gantry, the first path printed in the [overview](../docs/overview.md).
 
 ```bash
 sim-cli analyze t-gantry --path examples/corner.path
