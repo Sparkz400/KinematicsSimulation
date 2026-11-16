@@ -127,7 +127,7 @@ def rows_of(sheets, part2):
         rows.append({
             "part_number": part, "series": "1FN3 peak load" if peak else "1FN3 continuous load",
             "peak_force_n": s["fmax"], "continuous_force_n": s["fn"], "force_constant_n_a": s["kf"],
-            "back_emf_constant_v_s_m": s["ke"], "continuous_current_a": s["in"], "peak_current_a": s["imax"],
+            "back_emf_constant_v_s_m": f"{float(s['ke']) * 3 ** 0.5:.4g}",  # printed phase to neutral; the column is phase to phase "continuous_current_a": s["in"], "peak_current_a": s["imax"],
             "phase_resistance_20c_ohm": s["r"], "phase_inductance_h": to_si(s["l"], "milli"),
             # tau_M is north centre to south centre; the schema's pole pitch is north to north
             "pole_pitch_m": to_si(str(2 * float(s["tau"])).removesuffix(".0"), "milli"),

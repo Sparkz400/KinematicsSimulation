@@ -33,6 +33,8 @@ tools/tests/                 tests of the tools
 
 Part classes, one schema file each: `servo_motor`, `drive`, `braking_resistor`, `gearbox`, `belt`, `belt_axis`, `ball_screw`, `linear_guide`, `linear_motor`, `pneumatic_cylinder`. A class can have further tables for data that is not one row per part, in the schema's `$defs`: `servo_motor/dynamic_braking`, `drive/braking`, `drive/dc_link_measurement`, `drive/line_module`, `servo_motor/shaft`, `gearbox/mass`, `ball_screw/mounting`, `belt/tooth_load`, `belt_axis/torque_formula`. A table's metadata names its `class` and, for these, its `table`.
 
+Voltage constants are line to line (phase to phase), RMS, in every motor table: `voltage_constant_v_s_rad` of the rotary motors and `back_emf_constant_v_s_m` of the linear ones (force constant over it is about sqrt(3) for a sine-wave motor). A maker that prints phase to neutral is converted when read (the 1FN3: times sqrt(3)).
+
 The rules every table keeps:
 
 - **SI units, named in the column**: `_m`, `_kg`, `_s`, `_a`, `_v`, `_w`, `_j`, `_f`, `_h`, `_ohm`, `_hz`, `_rad`, `_rad_s`, `_nm` (newton metre), `_n`, `_kgm2`, `_kg_m` (per metre), `_nm_rad`, `_v_s_rad`. No unit suffix: a ratio or a count. Each number's unit is also in the schema as `"unit"`. Speeds are in rad/s, so 3000 r/min is `314.1592653589793`.

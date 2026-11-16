@@ -473,7 +473,7 @@ def siemens_1fn3_linear_motors_are_plausible(tables):
     if not have(tables, SIEMENS_1FN3):
         return []
     # kE phase to neutral: kF = 3 kE; kM,20 = kF / sqrt(3 RSTR,20); PV,N = 3 R(120 degC) IN^2, R(120) = 1.39 R20
-    return _linear_motor_rows_are_plausible(tables[SIEMENS_1FN3], SIEMENS_1FN3, 3.0, 0.03, True, (1.3, 1.5))
+    return _linear_motor_rows_are_plausible(tables[SIEMENS_1FN3], SIEMENS_1FN3, math.sqrt(3), 0.03, True, (1.3, 1.5))
 
 
 def beckhoff_al8000_linear_motors_are_plausible(tables):

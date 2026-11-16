@@ -6,7 +6,7 @@
 
 use crate::analysis::{CycleLoad, Verdict, analyse_cycle_with, verdicts};
 use crate::sim::Sim;
-use sim_core::{Config, ConfigError, MachineEntry};
+use sim_core::{Config, ConfigError, Machine, MachineEntry};
 use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -336,6 +336,15 @@ struct MotorData {
     force_constant: Option<f64>,
     /// A linear motor's magnetic attraction (N) and pole pitch (m).
     linear: Option<(f64, f64)>,
+    /// The back-EMF constant in the model's one-winding convention (sqrt(3) times the printed line-to-line RMS voltage
+    /// constant, V s/rad), where the table has it and it fits the torque constant; `None` for kt.
+    emf_constant: Option<f64>,
+}
+
+/// The one-winding back-EMF constant from a printed line-to-line RMS voltage constant. A value more than 20 % off the
+/// torque constant is a documented misprint (AKM64Q at 240 V, 1FT7044-1AF7; `VENDOR_MISPRINTS` in the checks): not used.
+fn emf_constant(printed: Option<f64>, kt: f64) -> Option<f64> {
+    printed.map(|ke| 3f64.sqrt() * ke).filter(|ke| (ke / kt - 1.0).abs() <= 0.2)
 }
 
 fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
@@ -362,6 +371,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
             mass: get("coil_mass_kg")?,
             force_constant: number(&m, "force_constant_n_a"),
             linear: number(&m, "attraction_force_n").zip(number(&m, "pole_pitch_m")),
+            emf_constant: None,
         });
     }
     if let Some((vendor, line)) = vendor_supply(supply) {
@@ -371,17 +381,24 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
             .ok_or_else(|| unknown("motor", article))?;
         let get = |column: &str| number(&m, column).ok_or_else(missing);
         // shortcut: a maker that prints no standstill values (Yaskawa, Mitsubishi) has its rated ones stand for them,
-        // one that prints no rated torque or current (SEW CMP; Kollmorgen and Beckhoff at 480 V no rated current) its
-        // standstill ones, which overstate what the motor carries at speed by a few per cent; upgrade with rated data.
+        // and one that prints no rated torque (SEW CMP) its standstill one, which overstates what the motor carries at
+        // speed by a few per cent; upgrade with rated data. A missing rated current (Kollmorgen, Beckhoff at 480 V)
+        // is the rated torque over the torque constant.
         let either = |first: &str, second: &str| number(&m, first).map_or_else(|| get(second), Ok);
+        let (static_torque, stall_current) = (either("static_torque_nm", "rated_torque_nm")?, either("stall_current_a", "rated_current_a")?);
+        let rated_current = match (number(&m, "rated_current_a"), number(&m, "rated_torque_nm")) {
+            (Some(current), _) => current,
+            (None, Some(torque)) => torque * stall_current / static_torque,
+            (None, None) => stall_current,
+        };
         return Ok(MotorData {
             rotor_kgm2: get("rotor_inertia_kgm2")?,
             brake: number(&m, "rotor_inertia_with_brake_kgm2").zip(number(&m, "mass_with_brake_kg")),
-            static_torque: either("static_torque_nm", "rated_torque_nm")?,
-            stall_current: either("stall_current_a", "rated_current_a")?,
+            static_torque,
+            stall_current,
             max_torque: get("max_torque_nm")?,
             max_current: get("max_current_a")?,
-            rated_current: either("rated_current_a", "stall_current_a")?,
+            rated_current,
             rated_torque: either("rated_torque_nm", "static_torque_nm")?,
             rated_speed: get("rated_speed_rad_s")?,
             max_speed: get("max_speed_rad_s")?,
@@ -394,6 +411,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
             mass: get("mass_kg")?,
             force_constant: None,
             linear: None,
+            emf_constant: emf_constant(number(&m, "voltage_constant_v_s_rad"), static_torque / stall_current),
         });
     }
     if supply == "s120" {
@@ -413,7 +431,8 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
                 max_current: get(&sheet, "max_current_a")?,
                 rated_current: get(&m, "rated_current_a")?,
                 rated_torque: get(&m, "rated_torque_nm")?,
-                rated_speed: get(&m, "rated_speed_rad_s")?,
+                // Rated torque and current hold at `rated_values_at_speed_rad_s` where the table fills it (9 rows).
+                rated_speed: number(&m, "rated_values_at_speed_rad_s").map_or_else(|| get(&m, "rated_speed_rad_s"), Ok)?,
                 max_speed: get(&sheet, "max_speed_mechanical_rad_s")?.min(get(&sheet, "max_speed_inverter_rad_s")?),
                 thermal_seconds: number(&sheet, "thermal_time_constant_s"),
                 winding: number(&sheet, "phase_resistance_20c_ohm").zip(number(&sheet, "phase_inductance_h")),
@@ -421,6 +440,10 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
                 mass: get(&m, "mass_kg")?,
                 force_constant: None,
                 linear: None,
+                emf_constant: emf_constant(
+                    number(&sheet, "voltage_constant_v_s_rad"),
+                    get(&m, "static_torque_nm")? / get(&m, "stall_current_a")?,
+                ),
             });
         }
         let m = motor_manuals()
@@ -438,7 +461,13 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
             max_current: get("max_current_a")?,
             rated_current: get("rated_current_a")?,
             rated_torque: get("rated_torque_nm")?,
-            rated_speed: get("rated_speed_rad_s")?,
+            // Three rows print a rated speed that does not fit their rated torque and power (`docs/catalogue.md`): power
+            // over torque gives 4500 and 3000 r/min, as the S210 catalogue has it. The data keep the printed value.
+            rated_speed: if ["1FT2105-4AH", "1FT2206-4AH", "1FT2208-4AF"].contains(&article) {
+                get("rated_power_w")? / get("rated_torque_nm")?
+            } else {
+                get("rated_speed_rad_s")?
+            },
             max_speed: get("max_speed_inverter_rad_s")?,
             thermal_seconds: number(&m, "thermal_time_constant_s"),
             winding: None,
@@ -446,6 +475,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
             mass: get("mass_kg")?,
             force_constant: None,
             linear: None,
+            emf_constant: None,
         });
     }
     let motor = rows(table("siemens/motors_s210.csv"))
@@ -479,6 +509,7 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
         mass: get("mass_kg")?,
         force_constant: None,
         linear: None,
+        emf_constant: None,
     })
 }
 
@@ -609,7 +640,9 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
         set_if_present(cfg, "linear_motor.pole_pitch_m", pitch)?;
     }
     let ratio = cfg.f64("gearbox.ratio").unwrap_or(1.0);
-    let allowed = cfg.f64("ratings.pulley_max_torque_nm").map_or(f64::INFINITY, |at_pulley| at_pulley / ratio);
+    // Braking, the pulley's torque is the motor's times ratio over efficiency: the tighter of the two directions caps it.
+    let efficiency = cfg.f64("gearbox.efficiency").unwrap_or(1.0).clamp(f64::MIN_POSITIVE, 1.0);
+    let allowed = cfg.f64("ratings.pulley_max_torque_nm").map_or(f64::INFINITY, |at_pulley| at_pulley * efficiency / ratio);
     set(cfg, "drive.peak_torque_nm", m.max_torque.min(allowed))?;
     set(cfg, "drive.rated_torque_nm", m.rated_torque)?;
     set(cfg, "drive.rated_speed_rad_s", rated_speed)?;
@@ -628,7 +661,10 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     }
     set(cfg, "drive.bus_voltage_v", bus)?;
     // Full torque up to the rated speed; it is gone where the back-EMF uses up what the DC link gives the winding.
-    set(cfg, "drive.no_load_speed_rad_s", (crate::drive::WINDING_PER_DC_LINK * bus / kt).max(1.1 * rated_speed))
+    // The drive model has one constant (back-EMF = kt); a printed voltage constant sets the no-load speed alone.
+    // shortcut: the back-EMF in the time simulation stays kt, which is within 20 % of the printed one by construction.
+    let ke = m.emf_constant.unwrap_or(kt);
+    set(cfg, "drive.no_load_speed_rad_s", (crate::drive::WINDING_PER_DC_LINK * bus / ke).max(1.1 * rated_speed))
 }
 
 /// The drive the catalogue pairs with a motor at a supply: for the S210 the converter the D 32 lists beside the
@@ -1013,6 +1049,31 @@ pub fn gearbox_mass(name: &str) -> Option<f64> {
     row.and_then(|r| number(&r, "mass_kg")).or_else(|| mechanics::own_mass(base))
 }
 
+/// Efficiency of a Harmonic Drive strain wave gear [estimate]: the maker prints it as charts only (rated torque, 2000 r/min
+/// input, grease), which could not be read here; 0.70 is below what such charts show for the CSF/CSG/SHG ratios (about 0.65
+/// at ratio 30 to 0.85 at 160, from memory, not verified) so a motor sized with it errs on the safe side.
+/// shortcut: one value for every size and ratio, replace by the charts' values when they are read.
+const STRAIN_WAVE_EFFICIENCY: f64 = 0.70;
+
+fn strain_wave(row: &Row) -> bool {
+    matches!(row["series"], "CSF" | "CSG" | "SHG")
+}
+
+/// What a gearbox of the catalogue leaves to estimates, by name (see `estimated_data`): "gearbox-efficiency" (a strain wave
+/// gear: `STRAIN_WAVE_EFFICIENCY`) and "gearbox-mass" (no mass printed; the search ranks by the motor's alone).
+pub fn estimated_gearbox_data(name: &str) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if let Some((g, _)) = mechanics::find_gearbox(name) {
+        if number(&g.row, "efficiency_full_load").is_none() && strain_wave(&g.row) {
+            out.push("gearbox-efficiency");
+        }
+    }
+    if gearbox_mass(name).is_none() {
+        out.push("gearbox-mass");
+    }
+    out
+}
+
 /// Puts a gearbox of the catalogue into a config. The name is size, motor frame (for the gearboxes fitted through an
 /// adapter plate the clamping hub's bore in mm) and ratio, e.g. "NRK070-04-5" or "SP+100MF-19-20", with "-r" after it
 /// for the maker's reduced backlash ("SP100-05-20-r"). Sets ratio, efficiency, torsional stiffness, backlash and the
@@ -1028,9 +1089,10 @@ pub fn apply_gearbox(cfg: &mut Config, name: &str) -> Result<(), ConfigError> {
     let curve = get("stiffness_k1_nm_rad").zip(get("stiffness_k2_nm_rad")).zip(get("stiffness_k3_nm_rad"));
     let curve = curve.zip(get("stiffness_t1_nm")).zip(get("stiffness_t2_nm"));
     set(cfg, "gearbox.ratio", need("ratio")?)?;
-    // Harmonic Drive prints the efficiency as charts only: the config's stays then.
     if let Some(efficiency) = get("efficiency_full_load") {
         set(cfg, "gearbox.efficiency", efficiency)?;
+    } else if strain_wave(&gearbox.row) {
+        set(cfg, "gearbox.efficiency", STRAIN_WAVE_EFFICIENCY)?;
     }
     let stiffness = match curve {
         Some(((((k1, _), _), _), _)) => k1,
@@ -1279,6 +1341,8 @@ fn axis_data(name: &str) -> Option<AxisData> {
     let m = |column: &str| number(r, column);
     let (stroke_x, strokes_z) = match kind {
         Kind::XzGantry => (m("max_length_x_m")?, vec![m("max_length_z_m")?]),
+        // shortcut: Rexroth's Lmax is the module length L = s_max + carriage + adapter, not the stroke; the tables carry no
+        // carriage or adapter length (80 to 170 mm and more), so the stroke is overstated by that much; upgrade with them.
         Kind::Single => (m("max_length_one_piece_m").or(m("stroke_x_max_m")).unwrap_or(f64::INFINITY), Vec::new()),
     };
     let moved = match kind {
@@ -1675,8 +1739,40 @@ impl Candidate {
 /// needs per unit of acceleration at the middle of its travel, summed over axes and motors, over the gear
 /// ratio (a motor behind a higher ratio turns faster for the same axis acceleration).
 fn inertia_seen(entry: &MachineEntry, cfg: &Config) -> Result<f64, ConfigError> {
-    let per_axis = torque_per_acceleration(entry, cfg)?;
-    Ok(per_axis.iter().flatten().map(|t| t.abs()).sum::<f64>() / cfg.f64("gearbox.ratio").unwrap_or(1.0))
+    Ok(inertia_turned(entry, cfg)?.iter().sum())
+}
+
+/// The motor's angle per unit of each axis's travel at the middle of the travel, `[axis][motor]`, from `Machine::inverse`:
+/// a central difference of a step small against the travel, exact for a linear map, 1e-8 off for the rest.
+fn motor_rates(machine: &dyn Machine, pose: &[f64]) -> Vec<Vec<f64>> {
+    let angles = |pose: &[f64]| {
+        let mut out = vec![0.0; machine.motors().len()];
+        machine.inverse(pose, &mut out);
+        out
+    };
+    (0..machine.axes().len())
+        .map(|axis| {
+            let step = 1e-6 * (machine.axes()[axis].max - machine.axes()[axis].min).abs().max(1e-3);
+            let (mut ahead, mut behind) = (pose.to_vec(), pose.to_vec());
+            ahead[axis] += step;
+            behind[axis] -= step;
+            angles(&ahead).iter().zip(angles(&behind)).map(|(a, b)| (a - b) / (2.0 * step)).collect()
+        })
+        .collect()
+}
+
+/// Per motor, the inertia it turns (rotor, gearbox and load, summed over the axes that move it): the torque the rigid
+/// machine needs per unit of an axis's acceleration over the motor's angle per unit of that axis's travel
+/// (`motor_rates`), so a pulley radius, a screw lead or a rack's pinion count as well as the gear ratio.
+fn inertia_turned(entry: &MachineEntry, cfg: &Config) -> Result<Vec<f64>, ConfigError> {
+    let torques = torque_per_acceleration(entry, cfg)?;
+    let machine = (entry.build)(cfg)?;
+    let rates = motor_rates(machine.as_ref(), &sim_core::testkit::mid_pose(machine.as_ref()));
+    Ok((0..machine.motors().len())
+        .map(|k| {
+            torques.iter().zip(&rates).filter(|(_, r)| r[k].abs() > 1e-9).map(|(t, r)| (t[k] / r[k]).abs()).sum()
+        })
+        .collect())
 }
 
 /// The torque each motor of the rigid machine needs per unit of each axis's acceleration at the middle of its travel,
@@ -1706,24 +1802,14 @@ pub(crate) fn torque_per_acceleration(entry: &MachineEntry, cfg: &Config) -> Res
 pub fn inertia_ratios(entry: &MachineEntry, cfg: &Config) -> Result<Vec<f64>, ConfigError> {
     let torques = torque_per_acceleration(entry, cfg)?;
     let machine = (entry.build)(cfg)?;
-    let pose = sim_core::testkit::mid_pose(machine.as_ref());
+    let rates = motor_rates(machine.as_ref(), &sim_core::testkit::mid_pose(machine.as_ref()));
     let motors = machine.motors().to_vec();
-    let angles = |pose: &[f64]| {
-        let mut out = vec![0.0; motors.len()];
-        machine.inverse(pose, &mut out);
-        out
-    };
     let mut out = Vec::new();
     for (k, motor) in motors.iter().enumerate() {
         let rotor = motor_config(cfg, motor.id)?.positive("motor.rotor_inertia_kgm2")?;
         let mut ratio = f64::NAN;
-        for (axis, torque) in torques.iter().enumerate() {
-            // A central difference of a step small against the travel: exact for a linear map, 1e-8 off for the rest.
-            let step = 1e-6 * (machine.axes()[axis].max - machine.axes()[axis].min).abs().max(1e-3);
-            let (mut ahead, mut behind) = (pose.clone(), pose.clone());
-            ahead[axis] += step;
-            behind[axis] -= step;
-            let rate = (angles(&ahead)[k] - angles(&behind)[k]) / (2.0 * step);
+        for (torque, rate) in torques.iter().zip(&rates) {
+            let rate = rate[k];
             if rate.abs() > 1e-9 {
                 let load = torque[k] / rate - rotor;
                 ratio = if ratio.is_nan() { load / rotor } else { ratio.max(load / rotor) };
@@ -2032,7 +2118,8 @@ fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply:
     let own = if job.motor.is_empty() { Ok(cfg.clone()) } else { motor_config(cfg, &job.motor) };
     let own_gearbox = own.ok().and_then(|own| Some(Parts::of(&own).ok()?.gearbox.to_string())).unwrap_or_default();
     let gearbox = if job.gearbox.is_empty() { own_gearbox.as_str() } else { job.gearbox.as_str() };
-    let gearbox_mass = if gearbox.is_empty() { 0.0 } else { gearbox_mass(gearbox).unwrap_or(f64::NAN) };
+    // An unknown mass counts 0 (not NaN, which sorted the row last); `estimated` says so ("gearbox-mass").
+    let gearbox_mass = if gearbox.is_empty() { 0.0 } else { gearbox_mass(gearbox).unwrap_or(0.0) };
     let mass = motor_mass_for(cfg, job.article, supply).unwrap_or(f64::INFINITY) + gearbox_mass;
     let mut candidate = Candidate {
         article: job.article,
@@ -2058,7 +2145,10 @@ fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply:
             }
         }
     }
-    let estimated = estimated_data(job.article, supply, job.drive);
+    let mut estimated = estimated_data(job.article, supply, job.drive);
+    if !gearbox.is_empty() {
+        estimated.extend(estimated_gearbox_data(gearbox));
+    }
     candidate.figures = Some(crate::search::figures(entry, &with_parts, &job.motor, &runs, estimated));
     if runs.len() == 1 {
         let (_, load, v) = runs.pop()?;
@@ -2270,11 +2360,57 @@ pub fn with_motor_part(
             mine.f64("gearbox.ratio").unwrap_or(1.0),
         ))
     };
-    // The torque motor `index` needs per unit of each axis's acceleration at the middle of the travel, over its ratio.
-    let seen = |cfg: &Config| -> Result<f64, ConfigError> {
-        Ok(torque_per_acceleration(entry, cfg)?.iter().map(|t| t[index].abs()).sum::<f64>() / rotor(cfg)?.1)
-    };
+    // The inertia motor `index` turns at the middle of the travel (`inertia_turned`).
+    let seen = |cfg: &Config| -> Result<f64, ConfigError> { Ok(inertia_turned(entry, cfg)?[index]) };
     let ratio = seen(&out)? / seen(cfg)? * rotor(&out)?.0 / rotor(cfg)?.0;
     let gain = motor_config(cfg, motor)?.positive("drive.velocity_kp_nm_s_rad")? * ratio.sqrt();
     own(&out, "drive", &[("velocity_kp_nm_s_rad", toml::Value::Float(gain))])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_rated_current_is_the_rated_torque_over_the_torque_constant() {
+        // Kollmorgen prints no rated current at 400 V: In = M_N * I0 / M0, below I0 for a motor whose rated torque is below M0.
+        let row = vendor_rows("motors_", "kollmorgen", 400.0)
+            .into_iter()
+            .find(|r| number(r, "rated_current_a").is_none() && number(r, "rated_torque_nm").is_some())
+            .expect("a row without rated current");
+        let m = motor_data(row["part_number"], "kollmorgen-400v").unwrap();
+        assert!((m.rated_current - m.rated_torque * m.stall_current / m.static_torque).abs() < 1e-12);
+        assert!(m.rated_current < m.stall_current);
+    }
+
+    #[test]
+    fn the_voltage_constant_is_sqrt3_times_the_printed_one_unless_it_is_a_misprint() {
+        // 0.5 V s/rad line to line: sqrt(3) * 0.5 = 0.866 for kt 0.9; for kt 2 it is 57 % off, a misprint.
+        assert!((emf_constant(Some(0.5), 0.9).unwrap() - 0.866_025_4).abs() < 1e-6);
+        assert_eq!(emf_constant(Some(0.5), 2.0), None);
+    }
+
+    #[test]
+    fn rated_values_are_paired_with_the_speed_they_hold_at() {
+        // 1FT7044-5AK7: 3.0 N m at 471.24 rad/s (4500 r/min); the table's rated speed of 628 rad/s is another point.
+        let m = motor_data("1FT7044-5AK7", "s120").unwrap();
+        assert!((m.rated_speed - 4500.0 * PI / 30.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_misprinted_rated_speed_is_rated_power_over_rated_torque() {
+        // 1FT2105-4AH: 1740 W / 3.7 N m = 470.3 rad/s (4491 r/min), not the printed 3000 r/min.
+        let m = motor_data("1FT2105-4AH", "s120").unwrap();
+        assert!((m.rated_speed - 1740.0 / 3.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_gearbox_without_mass_or_efficiency_is_named_as_estimated_not_ranked_by_nan() {
+        let name = |series: &str| {
+            mechanics::all_gearboxes().into_iter().find(|g| g.row["series"] == series).map(|g| mechanics::gearbox_name(&g.row))
+        };
+        // The Apex PE II prints no mass; a Harmonic Drive CSF prints no efficiency.
+        assert_eq!(estimated_gearbox_data(&name("PEII").unwrap()), ["gearbox-mass"]);
+        assert!(estimated_gearbox_data(&name("CSF").unwrap()).contains(&"gearbox-efficiency"));
+    }
 }

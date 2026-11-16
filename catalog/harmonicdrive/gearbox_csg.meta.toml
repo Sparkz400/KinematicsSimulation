@@ -28,7 +28,7 @@ Left out: backlash_rad. The document prints a "Backlash" table per size and rati
   of the wave generator's Oldham coupling referred to the output (the
   document's definition of terms: the gear itself has none; what is measured comes from the Oldham coupling's clearance); not a gear backlash, so
   not put into backlash_rad (task instruction). lost_motion_rad: no table for component sets. no_load_torque: only
-  graphs (ratio 100, plus a compensation table per ratio); efficiency: only graphs; both left out. Starting torque,
+  graphs (ratio 100, plus a compensation table per ratio); efficiency: only graphs; both left out of the table (`apply_gearbox` puts in an ESTIMATE of 0.70 for every size and ratio, not read from the graphs, flagged `gearbox-efficiency` in a search). Starting torque,
   backdriving torque, ratcheting and buckling torque, positional accuracy: tables, no schema column.
 Kept as printed: CSG17 ratio 120 has a lower momentary peak torque (112 N m) than ratio 100 (143 N m).
 Source: Harmonic Drive LLC, Component Sets CSG/CSF, Engineering Data (TI-26108 REV 1, 08/2026), rating table 038-1.

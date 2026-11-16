@@ -10,7 +10,7 @@ The same motors on SINAMICS S210 are in motors_s210.csv; the manual of 02/2022 c
 Currents are RMS. max_speed_inverter: what the converter allows. thermal_time_constant: of the winding.
 An empty field: the manual does not state the value.
 Kept as printed although they are misprints: rated_speed_rpm of the 1FT2105-4AH and 1FT2206-4AH (3000) and of
-  the 1FT2208-4AF (2000); the manual's own rated torque and power, and the S210 catalogue, give 4500 and 3000.
+  the 1FT2208-4AF (2000); the manual's own rated torque and power, and the S210 catalogue, give 4500 and 3000. `catalog::apply_motor` takes rated power over rated torque for these three.
 '''
 
 [[sources]]
