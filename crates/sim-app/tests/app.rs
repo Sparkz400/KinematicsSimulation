@@ -292,7 +292,16 @@ fn demanding(entry: &MachineEntry) -> Config {
     // 100 V would hold the motor far below it all the time (the screw's 251 rad/s need 220 V), so that no switch shows.
     let top = load.motors.iter().map(|m| m.peak_speed).fold(0.0, f64::max);
     let emf = cfg.f64("motor.torque_constant_nm_a").unwrap() * top / 1.5f64.sqrt();
-    cfg.set_text(&format!("drive.bus_voltage_v = {:?}", 81.65f64.max(0.75 * emf))).unwrap();
+    let (old, bus) = (cfg.f64("drive.bus_voltage_v").unwrap(), 81.65f64.max(0.75 * emf));
+    cfg.set_text(&format!("drive.bus_voltage_v = {bus:?}")).unwrap();
+    // A DC link rated for a lower bus (a 48 V track's) keeps its chopper and its trip above the raised one, at their ratios.
+    if bus > old {
+        for key in ["ratings.braking_threshold_v", "ratings.dc_link_overvoltage_v"] {
+            if let Ok(v) = cfg.f64(key) {
+                cfg.set_text(&format!("{key} = {:?}", v * bus / old)).unwrap();
+            }
+        }
+    }
     cfg
 }
 
@@ -3274,7 +3283,8 @@ fn the_thermal_belt_and_comparison_views_show_the_simulation(entry: &'static Mac
         let cells = row(&view.table, &format!("{} · Winding temperature rise", model.tr.tr(motor.key)));
         assert!(
             shows(&cells[0], latest(&model, &id))
-                && cells[2] == "100.0"
+                // The config's rating: 100 K on the catalogue motors, 60 K on a track's coils.
+                && shows(&cells[2], model.config.f64("motor.rated_temperature_rise_k").unwrap())
                 && view.lines[k].1.last().unwrap()[1] == latest(&model, &id),
             "{cells:?}"
         );

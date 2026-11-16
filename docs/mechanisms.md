@@ -861,8 +861,8 @@ on them independent movers, each a mass on rollers carrying a magnet plate, each
 position loop of its own. The shipped config: six movers of 651 g (AT9014) with 600 g each, on a loop of two 1 m
 straights of four 250 mm modules (AT2000) and two 180° curves 267 mm across, a 100 mm clothoid at each end of an arc of
 130.3 mm (the split is an estimate; Beckhoff publishes the width and that it is a clothoid); 3.019 m round. A mover gives
-100 N peak and 30 N continuous, 4 m/s, 10 g unloaded (the 5-pin magnet plate on 48 V; with the payload the axes are
-limited to 60 m/s²); force constant, coil resistance, the
+100 N peak and 30 N continuous, 4 m/s, 10 g unloaded (the 5-pin magnet plate on 48 V; with the payload the plate moves
+1.65 kg at 60 m/s², the axes are limited to half that, 30 m/s²); force constant, coil resistance, the
 attraction (300 N) and the pole pitch are estimates.
 
 | Id | Mechanism | Transmission | Tool pose | Own checks |
@@ -870,12 +870,14 @@ attraction (300 N) and the pole pitch are estimates.
 | `mover-track` | 1 to 7 movers on a closed loop of straights and curves (6 shipped) | linear motor per mover: the coils under it | each mover's distance along the loop (m), unwrapped | per mover `mover-guide-load`, `curve-holding`, `station-settling` (index cycle); `mover-gap`; per segment `segment-current`, `segment-temperature` |
 
 **Two cycles, both electronic cams.** A closed track only goes forward, so the cycle is a cam (`[cam]`): `track.cycle =
-"index"` (shipped) moves every mover one station pitch (the loop over the movers, 0.503 m) by a 4-5-6-7 law in 0.4 s and
+"index"` moves every mover one station pitch (the loop over the movers, 0.503 m) by a 4-5-6-7 law in 0.4 s and
 stands it at its station for the rest of the period, 1.5 times a second (2.75 m/s, 23.6 m/s² peak); `flying.toml` runs
 `"flying"`: each mover in turn rides with a conveyor at 1.0 m/s over 0.3 m of the first straight, synchronous with it,
 then back round the loop and into the process again (6 products of 0.3 m per loop: the movers close up to a product
-pitch over the process and run back at up to 2.78 m/s). With `cam.run = false` the movers jog 0.2 m forward and back by
-the `[[cycle.segment]]`.
+pitch over the process and run back at up to 2.78 m/s). `default.toml` ships `cam.run = false`, as the crank and cam
+machines do: there the movers jog 0.25 to 0.3 m forward to take a product and back with it through a point they pass
+without stopping, to hand it over at the start, by the `[[cycle.segment]]`, the cycle the generic tests and tools run;
+`--set cam.run=true` runs the index cycle.
 
 **Curves.** A mover's rollers span its wheelbase w, so the curvature its body follows is the curvature's mean over it:
 the lateral acceleration v² k rises over the wheelbase where a constant-radius curve begins and over the clothoid where
@@ -895,9 +897,9 @@ a body's length, against the 2 mm least distance (`mover-gap`); a standing mover
 Model and limits in the crate's documentation (`crates/machine-mover-track/src/lib.rs`).
 
 ```text
-sim-cli verdicts mover-track
+sim-cli verdicts mover-track --set cam.run=true
 sim-cli verdicts mover-track --config crates/machine-mover-track/flying.toml
-sim-cli verdicts mover-track --set track.index_rate_hz=2.5 --set track.clothoid_m=0.0
+sim-cli verdicts mover-track --set cam.run=true --set track.index_rate_hz=2.5 --set track.clothoid_m=0.0
 ```
 
 ## Overhead crane (`machine-overhead-crane`)

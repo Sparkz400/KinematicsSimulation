@@ -216,6 +216,16 @@ fn the_energy_budget_closes_with_the_mesh_friction_on_every_gearbox() {
 fn the_regenerative_supply_feeds_back_what_the_motors_regenerate() {
     // From cold: the line module's share is judged here, nothing thermal; the budget of a warm start closes in
     // `the_energy_budget_closes_on_every_machine_and_config`, and the warm start would run each cycle once more.
+    // A link is shared where its config shares it: in "shared DC link", and in every config of a machine that ships one.
+    let shared: Vec<String> = MACHINES
+        .iter()
+        .flat_map(|e| {
+            configs(e)
+                .into_iter()
+                .filter(|(_, c)| c.bool("effects.shared_dc_link").unwrap_or(false))
+                .map(move |(n, _)| format!("{} {n}", e.id))
+        })
+        .collect();
     for (name, load) in analysed(&["effects.regenerative_supply = true", "effects.thermal_warm_start = false"])
         .into_iter()
         .filter(|(name, _)| !name.contains("no DC link"))
@@ -225,7 +235,7 @@ fn the_regenerative_supply_feeds_back_what_the_motors_regenerate() {
         let (mains, line, resistor) = (row("mains"), row("line_module"), row("resistor"));
         let efficiency = 0.98;
         let regenerated: f64 = load.motors.iter().map(|m| m.energy_regenerated).sum();
-        if name.contains("shared") {
+        if shared.contains(&name) {
             assert!(
                 mains <= efficiency * regenerated + 1e-9 && mains > 0.0,
                 "{name}: {mains} J fed back of {regenerated} J"
