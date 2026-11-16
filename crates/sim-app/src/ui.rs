@@ -243,6 +243,8 @@ pub enum ToolTab {
     Runs,
     /// Torque and error views of the reference run (`views`).
     Views,
+    /// Bode and Nyquist plots of each motor's velocity loop (`loop_view`).
+    Loop,
 }
 
 /// What the window keeps for the panels between frames.
@@ -309,6 +311,7 @@ pub enum Action {
     TuningAxis(usize),
     RunTuning,
     CloseTuning,
+    Loop(crate::loop_view::LoopAction),
     /// What the search, path and trace fields hold after an edit.
     Inputs(Inputs),
     RunAnalysis(Analysis),
@@ -1061,6 +1064,7 @@ pub fn tools(
         (ToolTab::Tuning, "ui-tuning"),
         (ToolTab::Runs, "ui-runs"),
         (ToolTab::Views, "ui-views"),
+        (ToolTab::Loop, "ui-loop-tab"),
     ];
     if let Some(tab) = tabs(ui, model, panels.tools, &all) {
         actions.push(Action::Panels(PanelState { tools: tab, ..panels }));
@@ -1091,6 +1095,7 @@ pub fn tools(
             }
             ToolTab::Runs => runs(ui, model, &mut inputs, ghost, actions),
             ToolTab::Views => crate::views::views(ui, model, tolerance, actions),
+            ToolTab::Loop => crate::loop_view::loop_response(ui, model, actions),
         }
         if inputs != model.inputs {
             actions.push(Action::Inputs(inputs));
@@ -2253,7 +2258,7 @@ fn points(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
 }
 
 /// Frequency on a logarithmic axis: the plot runs over log10(f) and the ticks show f.
-fn hertz(mark: GridMark, _: &std::ops::RangeInclusive<f64>) -> String {
+pub fn hertz(mark: GridMark, _: &std::ops::RangeInclusive<f64>) -> String {
     format!("{:.3}", 10f64.powf(mark.value)).trim_end_matches('0').trim_end_matches('.').to_string()
 }
 

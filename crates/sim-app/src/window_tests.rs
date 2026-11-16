@@ -813,7 +813,16 @@ fn the_machine_and_the_language_are_picked_from_their_lists() {
 fn every_label(d: &mut Driver) -> std::collections::BTreeSet<String> {
     let mut labels = std::collections::BTreeSet::new();
     let setup = ["ui-motion", "ui-effects", "ui-parameters", "ui-config"];
-    let tools = ["ui-analysis", "ui-effect-views", "ui-search", "ui-path", "ui-trace", "ui-sweep-tab", "ui-tuning"];
+    let tools = [
+        "ui-analysis",
+        "ui-effect-views",
+        "ui-search",
+        "ui-path",
+        "ui-trace",
+        "ui-sweep-tab",
+        "ui-tuning",
+        "ui-loop-tab",
+    ];
     for key in setup.iter().chain(&tools) {
         d.tab(key);
         for w in d.widgets() {
@@ -917,7 +926,16 @@ fn nothing_is_cut_off_or_overlaps_in_either_language() {
         let lang = format!("{lang} {size:?}");
         let mut problems = Vec::new();
         let setup = ["ui-motion", "ui-effects", "ui-parameters", "ui-config"];
-        let tools = ["ui-analysis", "ui-effect-views", "ui-search", "ui-path", "ui-trace", "ui-sweep-tab", "ui-tuning"];
+        let tools = [
+            "ui-analysis",
+            "ui-effect-views",
+            "ui-search",
+            "ui-path",
+            "ui-trace",
+            "ui-sweep-tab",
+            "ui-tuning",
+            "ui-loop-tab",
+        ];
         for (s, t) in setup.iter().cycle().zip(&tools) {
             d.tab(s);
             d.tab(t);
@@ -1156,4 +1174,53 @@ fn a_plot_across_labels_a_tick_every_60_pixels_or_so() {
     // A torque-speed chart from -600 to 600 rad/s over 380 pixels: 200 apart, 63 pixels.
     let marks = ui::x_ticks(egui_plot::GridInput { bounds: (-600.0, 600.0), base_step_size: 1200.0 / 380.0 * 8.0 });
     assert_eq!(values(marks), [-600.0, -400.0, -200.0, 0.0, 200.0, 400.0, 600.0]);
+}
+
+/// The loop-response tab on the single axis, the T-gantry and the D3: its button measures every motor's velocity loop
+/// in the background, the result arrives with the margins `sim-cli margins` prints (all stable), the plots' labels show,
+/// and a click on another motor shows that one.
+#[test]
+fn the_loop_tab_measures_every_motor_of_three_machines() {
+    for id in ["single-axis", "t-gantry", "delta-d3"] {
+        let mut d = Driver::of(sim_machines::find(id).unwrap(), "en");
+        d.tab("ui-loop-tab");
+        d.button_of("ui-loop-run");
+        d.wait(id, |d| d.state().model.loop_response.running());
+        d.wait_result(id, |d| d.state().model.loop_response.result.is_some());
+        let motors = d.state().model.session.motors.len();
+        let response = d.state().model.loop_response.result.as_ref().unwrap().1.clone();
+        assert_eq!(response.curves.len(), motors, "{id}");
+        assert!(response.margins.iter().all(|m| m.stable()), "{id}: {:?}", response.margins);
+        assert!(response.curves.iter().all(|c| c.len() >= 60), "{id}");
+        for key in ["ui-loop-phase-margin", "ui-loop-gain-margin", "ui-loop-open", "ui-loop-critical"] {
+            let label = d.tr(key);
+            d.find_where(key, |w| w.label.contains(&label) || w.value.contains(&label));
+        }
+        if motors > 1 {
+            let other = d.tr(d.state().model.session.motors[1].key);
+            let tools = d.regions()[TOOLS];
+            let tab = d.find_where(&other, |w| w.label == other && w.toggled.is_some() && tools.contains_rect(w.rect));
+            d.click_at(Vec2::new(tab.rect.center().x, tab.rect.center().y));
+            d.wait("the second motor", |d| d.state().model.loop_response.motor == 1);
+        }
+    }
+}
+
+/// While the loop is measured a progress bar and a cancel button stand where the run button was; cancelled, the run
+/// button is back and nothing of that measurement arrives.
+#[test]
+fn the_loop_measurement_shows_progress_and_is_cancelled() {
+    let mut d = Driver::new();
+    d.tab("ui-loop-tab");
+    d.button_of("ui-loop-run");
+    d.wait("some points measured", |d| d.state().model.loop_response.progress().is_some_and(|(done, _)| done > 0));
+    let run = d.tr("ui-loop-run");
+    assert!(!d.has(Role::Button, &run));
+    let said = d.messages().len();
+    d.button_of("ui-loop-cancel");
+    d.wait("cancelled", |d| !d.state().model.loop_response.running());
+    d.wait("the run button back", |d| d.state().model.loop_response.progress().is_none());
+    assert!(d.has(Role::Button, &run));
+    d.frames(60);
+    assert!(d.state().model.loop_response.result.is_none() && d.messages().len() == said, "{:?}", d.messages());
 }

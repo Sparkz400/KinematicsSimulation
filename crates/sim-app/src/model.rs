@@ -822,6 +822,8 @@ pub struct Model {
     pub comparison: Option<(String, Comparison)>,
     /// The search's views, the ratio sweep, the kinematics comparison and the path tab's move maps (`search_views`).
     pub views: crate::search_views::Views,
+    /// The loop-response tab's measurement and its result (`frequency`).
+    pub loop_response: crate::frequency::LoopResponse,
     /// Per kind of analysis (`Analysis as usize`) the config its result was computed for. A result says
     /// nothing about another config: it is marked (`outdated`), and nothing of it is applied to one.
     computed_for: [Option<Config>; 9],
@@ -1022,6 +1024,7 @@ impl Model {
             computed_for: Default::default(),
             analysis_jobs: Vec::new(),
             views: Default::default(),
+            loop_response: Default::default(),
             insight: Default::default(),
         };
         model.target = model.config.f64s("start.pose").unwrap_or_default();
@@ -1324,6 +1327,9 @@ impl Model {
             }
         }
         for message in self.views.poll() {
+            self.say(message);
+        }
+        if let Some(message) = self.loop_response.poll() {
             self.say(message);
         }
         if let Some(result) = self.insight.band_job.as_ref().and_then(answer) {

@@ -81,6 +81,11 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   the forward kinematics from the last call's pose (`Mechanism::memory` carries it for snapshots); the cable robot's
   elastic `forward` from its last pose and Jacobian. The cable robots' cycle figures are unchanged to 1e-9; the
   hexapods' move by up to 1.1e-4, as rounding-level changes of the pose move them anyway (docs/validation.md).
+- App: a "Loop response" tab: per motor the Bode plot of the velocity loop (open loop, closed loop, and the plant from
+  motor torque to speed) with the margins, the machine's resonances and the shaper's and notch filter's frequencies
+  marked, and the Nyquist plot around -1; measured in the background with progress and cancel.
+- `sim-cli margins` (and Python `margins`) measure at the machine's resonances too and refine the sweep where the loop
+  or the plant changes fast (`analysis::refinement`), so a sharp resonance between two of the 60 points is not missed.
 
 ## [1.0.0] - 2026-11-16
 
