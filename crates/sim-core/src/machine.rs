@@ -339,6 +339,13 @@ pub trait Machine: Send {
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
         self.resonance_hz(tool_pose).map(|hz| Mode { hz, damping: 0.0 }).into_iter().collect()
     }
+    /// The same modes as `modes` for small vibrations: where a joint's gearbox has hysteresis (`gearbox_lost_motion`),
+    /// the stiffness it shows at a reversal is K1 + sigma, not the large-amplitude K1 `modes` uses. A shaper for the
+    /// move's own swing takes `modes` (the twists of the move are far above the hysteresis loop); one for the residual
+    /// ringing below about 1e-4 rad at the joint takes these. By default the same as `modes`.
+    fn modes_small_amplitude(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        self.modes(tool_pose)
+    }
     /// With effects.belt_wrap: the angle (rad) by which the belt wraps each driven pulley at a tool pose, from the places
     /// of the pulleys and idlers, in the order of `motors`; NaN for a motor that drives no belt. Empty where the machine
     /// gives no belt geometry or the effect is off: then `ratings.belt_teeth_in_mesh` stands for the teeth in mesh.

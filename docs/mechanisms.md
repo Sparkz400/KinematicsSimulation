@@ -231,7 +231,7 @@ turn; 130.5 kg move on it at up to 1 m/s and 3 m/s².
 F = dP/dt + Σ m g z and M_O = dH_O/dt + Σ c × m g z (the rates of the chain's momentum P and its angular momentum H
 about the base's origin by central differences), taken to the carriage's frame between the blocks. Its push along the
 rails is the rack's; the rest the blocks share as rigid supports, each F_z / 4 ± M_x / (2 w) ∓ M_y / (2 l) on its rail and
-F_y / 4 ± M_z / (2 l) across it, its load the sum of both magnitudes (the catalogue's equivalent load). The signal
+F_y / 4 ± M_z / (2 l) across it, its load the sum of both magnitudes (the catalogue's equivalent load). The rack's side (`track.rack_side`, ±1 along the carriage's y) decides on which side the helical pinion's separating force adds to F_y, and its lever (`track.rack_lever_m`) turns the drive's push into a yaw moment on the blocks, M_z + side · lever · F_x; the defaults, +1 and 0, are the loads as they were counted. The signal
 `axis.j1.guide_load` is the most loaded block's load times four, so that the guide verdicts, which share a load equally
 among a set of four and rate the set as one (`parts.axis = "<block>x4"`), judge that block: `guide-load` against
 `ratings.guide_max_load_n`, `guide-life` from `ratings.guide_dynamic_load_rating_n` and the track's speed. The moments

@@ -76,8 +76,9 @@ pub struct Arm {
     /// efficiency in effect on its teeth, and its motor's `ratings.shaft_max_radial_load_n`.
     racks: Vec<Option<(RackPinion, f64, Option<f64>)>>,
     /// `[track]`: the first joint is a carriage on four guide blocks, `block_spacing_m` apart along its travel and
-    /// `rail_spacing_m` across it (`guide_load`).
-    track: Option<(f64, f64)>,
+    /// `rail_spacing_m` across it, and the rack's side (+1 or -1 along the carriage's y) and its lever (the rack's line's
+    /// distance from the carriage's centre line, m): `rack_side`, `rack_lever_m` (`guide_load`).
+    track: Option<(f64, f64, f64, f64)>,
     /// Per motor joint, its strain wave gear where the config has one.
     strain_waves: Vec<Option<StrainWave>>,
     required_life: Option<f64>,
@@ -91,6 +92,9 @@ pub struct Arm {
     /// Whether the modes take the bodies beyond their link as rigid bodies on its tip (`field`): with the reaction or a
     /// direction other than the plane its joint turns it in. Else the one-way bend in that plane as it was (`flex_loads`).
     whole: bool,
+    /// With rx, ry or rz among the tool axes: the smallest of their velocity and of their acceleration limits, which the
+    /// flange's angular speed and acceleration are held to (`tool.angular_speed`, `tool.angular_acceleration`).
+    angular_limits: Option<[f64; 2]>,
 }
 
 /// A link's mode (effects.link_bending), its first as a cantilever from its joint: from the joint's origin to the next
@@ -363,7 +367,14 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         if !prismatic[0] || coupling.is_some() || chain.bodies[0].axis != [1.0, 0.0, 0.0] {
             return Err(ConfigError::Invalid("track (the first joint slides along its frame's x)".into()));
         }
-        Some((cfg.positive("track.block_spacing_m")?, cfg.positive("track.rail_spacing_m")?))
+        // A config from before the rack's side (16 November 2026) has it on +y with its line through the centre.
+        let side = if cfg.get("track.rack_side").is_ok() { cfg.f64("track.rack_side")? } else { 1.0 };
+        if side.abs() != 1.0 {
+            return Err(ConfigError::Invalid("track.rack_side".into()));
+        }
+        let lever =
+            if cfg.get("track.rack_lever_m").is_ok() { cfg.non_negative("track.rack_lever_m")? } else { 0.0 };
+        Some((cfg.positive("track.block_spacing_m")?, cfg.positive("track.rail_spacing_m")?, side, lever))
     } else {
         None
     };
@@ -481,6 +492,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         bending,
         reaction,
         whole,
+        angular_limits: None,
     };
     arm.built = arm.chain.bodies.iter().map(|b| b.inertial).collect();
     if cfg.bool("kinematics.tool_space")? {
@@ -531,6 +543,16 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
                     _ => return Err(ConfigError::Invalid("kinematics.redundancy".into())),
                 }
                 arm.tool = Tool::Pose(pose);
+                // The per-axis limits bound the rotation vector's rates; the spin they allow is bounded by these.
+                let least = |key: &str| -> Result<Option<f64>, ConfigError> {
+                    let turns = picked.iter().filter(|a| (3..6).contains(*a));
+                    turns.map(|&a| cfg.f64(&format!("axis.{}.{key}", POSE_AXES[a].0))).try_fold(None, |m: Option<f64>, v| {
+                        v.map(|v| Some(m.map_or(v, |m| m.min(v))))
+                    })
+                };
+                if let (Some(v), Some(a)) = (least("max_velocity_rad_s")?, least("max_acceleration_rad_s2")?) {
+                    arm.angular_limits = Some([v, a]);
+                }
                 let first = (AXIS_IDS[0], JOINT_KEYS[0], if arm.prismatic[0] { "m" } else { "rad" });
                 picked.iter().map(|&a| if a == FIRST_JOINT { first } else { POSE_AXES[a] }).collect()
             }
@@ -659,12 +681,15 @@ impl Arm {
     /// equivalent load with equal ratings both ways). Reported as the most loaded block's times the four blocks, so that
     /// the guide verdicts, which share the load equally among the set (`GUIDE_CARRIAGES`) and rate the set as one
     /// (`catalog` `parts.axis`), judge that block.
-    /// The helical pinion's separating force F tan(alpha) / cos(beta) is added to F_y, on the side that loads the worst
-    /// block more (the rack's side is not in the config).
-    /// shortcut: the rack's push and separating force taken through the carriage's origin (no moment of their own), the
-    /// arm's motor rotors' gyroscopic moments left out, and the load always on the four blocks of the first joint.
+    /// The rack on the side s (`track.rack_side`, +1 or -1 along the carriage's y) at the lever l (`track.rack_lever_m`)
+    /// takes part of what the base passes: the base's force F_y is the blocks' plus the rack's, and the rack's is the
+    /// helical pinion's separating force F tan(alpha) / cos(beta) pushing the carriage off the rack, -s of it, so the
+    /// blocks' F_y is the chain's plus s of it; the rack's push F_x, at y = s l, turns the carriage by -s l F_x about z,
+    /// which the blocks carry as M_z + s l F_x (F_x the chain's reaction along the rails, the drive's).
+    /// shortcut: the arm's motor rotors' gyroscopic moments left out, and the load always on the four blocks of the
+    /// first joint.
     fn guide_load(&self, q: &[f64], qd: &[f64], qdd: &[f64]) -> f64 {
-        let Some((along, across)) = self.track else { return 0.0 };
+        let Some((along, across, side, lever)) = self.track else { return 0.0 };
         let h = 1e-6;
         let momentum = |s: f64| {
             let q: Vec<f64> = q.iter().zip(qd).map(|(q, v)| q + s * v).collect();
@@ -683,11 +708,12 @@ impl Arm {
         }
         let carriage = &states[0];
         let back = transpose(&carriage.rot);
-        let (mut f, m) = (mul(&back, force), mul(&back, sub(moment, cross(carriage.origin, force))));
+        let (mut f, mut m) = (mul(&back, force), mul(&back, sub(moment, cross(carriage.origin, force))));
+        m[2] += side * lever * f[0];
         // The helical pinion also pushes the carriage off the rack, across the rails (as `rack.<id>.radial_load` counts it).
         if let Some((r, efficiency, _)) = &self.racks[0] {
             let teeth = RackPinion::feed_force(f[0], qd[0], *efficiency);
-            f[1] += (r.radial_load(teeth).powi(2) - teeth * teeth).max(0.0).sqrt();
+            f[1] += side * (r.radial_load(teeth).powi(2) - teeth * teeth).max(0.0).sqrt();
         }
         let block = |sx: f64, sy: f64| {
             (f[2] / 4.0 + sy * m[0] / (2.0 * across) - sx * m[1] / (2.0 * along)).abs()
@@ -1021,6 +1047,12 @@ impl Mechanism for Arm {
         if self.track.is_some() {
             out.push(SignalInfo::new("axis.j1.guide_load", JOINT_KEYS[0], "quantity-guide-load", "N"));
         }
+        if self.angular_limits.is_some() {
+            out.extend([
+                SignalInfo::new("tool.angular_speed", "tool-orientation", "quantity-angular-speed", "rad/s"),
+                SignalInfo::new("tool.angular_acceleration", "tool-orientation", "quantity-angular-acceleration", "rad/s^2"),
+            ]);
+        }
         out
     }
     fn signals(&self, q: &[f64], qd: &[f64], qdd: &[f64], force: &[f64], out: &mut Vec<f64>) {
@@ -1037,6 +1069,10 @@ impl Mechanism for Arm {
         }
         if self.track.is_some() {
             out.push(self.guide_load(q, qd, qdd));
+        }
+        if let (Some(_), Tool::Pose(p)) = (self.angular_limits, &self.tool) {
+            let (w, a) = p.angular_motion(&|q: &[f64]| self.tip(q), q, qd, qdd);
+            out.extend([w, a]);
         }
     }
     fn rating_checks(&self) -> Vec<RatingCheck> {
@@ -1059,6 +1095,13 @@ impl Mechanism for Arm {
                 (false, _, Some(g), Some(life)) => out.push(g.rating_check(MOTOR_IDS[k], k, life)),
                 _ => {}
             }
+        }
+        if let Some([speed, acceleration]) = self.angular_limits {
+            let check = |check, signal: &str, limit| RatingCheck { check, signal: signal.into(), motor: None, limit, life: false };
+            out.extend([
+                check("tool-angular-speed", "tool.angular_speed", speed),
+                check("tool-angular-acceleration", "tool.angular_acceleration", acceleration),
+            ]);
         }
         out
     }

@@ -235,7 +235,7 @@ Kette gibt, F = dP/dt + Σ m g z und M_O = dH_O/dt + Σ c × m g z (die Änderun
 um den Ursprung der Basis als zentrale Differenzen), in das System des Schlittens zwischen den Wagen gebracht. Sein
 Schub längs der Schienen ist der der Zahnstange; den Rest teilen die Wagen als starre Lager, jeder F_z / 4 ± M_x / (2 w)
 ∓ M_y / (2 l) auf seiner Schiene und F_y / 4 ± M_z / (2 l) quer dazu, seine Last die Summe beider Beträge (die
-äquivalente Last des Katalogs). Das Signal `axis.j1.guide_load` ist die Last des höchstbelasteten Wagens mal vier, damit
+äquivalente Last des Katalogs). Die Seite der Zahnstange (`track.rack_side`, ±1 längs der y-Achse des Schlittens) bestimmt, auf welcher Seite die Abstoßkraft des Schrägritzels zu F_y kommt, ihr Hebelarm (`track.rack_lever_m`) macht aus dem Schub des Antriebs ein Giermoment auf die Wagen, M_z + Seite · Hebel · F_x; die Vorgaben +1 und 0 sind die Lasten, wie sie bisher gezählt wurden. Das Signal `axis.j1.guide_load` ist die Last des höchstbelasteten Wagens mal vier, damit
 die Führungsurteile, die eine Last gleich auf einen Satz von vier verteilen und den Satz als einen bewerten
 (`parts.axis = "<wagen>x4"`), diesen Wagen beurteilen: `guide-load` gegen `ratings.guide_max_load_n`, `guide-life` aus
 `ratings.guide_dynamic_load_rating_n` und der Geschwindigkeit der Schiene. Die Momente entscheiden die Größe: Auf dem

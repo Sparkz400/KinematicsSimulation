@@ -118,5 +118,13 @@ group-joint-7 = Joint 7: bearings and stops
 machine-arm-on-track = Six-axis arm on a linear track (URDF, rack and pinion)
 group-track = Track: the carriage's guide blocks
 param-block_spacing_m = Guide blocks' spacing along the rails [m]
+param-rack_side = Side of the rack on the carriage: +1 or -1 along the carriage's y
+param-rack_lever_m = Distance of the rack's line from the carriage's centre line [m]
 param-rail_spacing_m = Rails' spacing [m]
 param-redundancy = Spare joint of a redundant arm: "home" or "joint_limits"
+
+tool-orientation = Tool orientation
+quantity-angular-speed = Angular speed of the flange
+quantity-angular-acceleration = Angular acceleration of the flange
+check-tool-angular-speed = Flange angular speed, highest, against the smallest of the Rx, Ry and Rz velocity limits [rad/s]
+check-tool-angular-acceleration = Flange angular acceleration, highest, against the smallest of the Rx, Ry and Rz acceleration limits [rad/s²]
