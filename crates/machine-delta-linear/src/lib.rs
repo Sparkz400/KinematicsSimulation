@@ -897,8 +897,8 @@ impl LinearDelta {
 }
 
 impl Machine for LinearDelta {
-    /// The plate (with the payload and the rods' share) at the tool, the carriages (with theirs) on their columns at
-    /// the column radius, and each column's pulley and rotor at its top spinning about the horizontal across the column,
+    /// The plate (with the payload and the rods' share) at the tool, the carriages (with theirs) on their columns, moving
+    /// along them, and each column's pulley and rotor at its top spinning about the horizontal across the column,
     /// positive as the carriage rises. What does not move is left out (see `FrameMomentum`).
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         use sim_components::base::{add_point, add_spin};
@@ -909,7 +909,7 @@ impl Machine for LinearDelta {
         let rotor_speed = self.rotors(s).1;
         for i in 0..3 {
             let (c, sin) = self.legs.azimuth[i];
-            add_point(&mut f, self.m_c, [self.column_radius * c, self.column_radius * sin, h[i]], [0.0, 0.0, v[i]]);
+            add_point(&mut f, self.m_c, self.legs.joint(i, h[i]), self.legs.dir[i].map(|x| x * v[i]));
             let pulley = if self.elastic { s[12 + i] } else { v[i] / self.r };
             let across = [-sin, c, 0.0];
             add_spin(&mut f, across, self.j_pulley, pulley);
@@ -1078,6 +1078,8 @@ impl Machine for LinearDelta {
         }
     }
 
+    // shortcut: h'' = J^-1 p'' without the speed term J_x^-1 w (the trait gives no speed), so m_c h'' is off by 12 to 20 N
+    // per carriage at 3 m/s; upgrade when `rigid_tensions` gets the tool speed.
     /// Per column, F = m_c h'' + m_nt (J^T p'')_k - Q_g,k on the carriage (without pulley and rotor), T1 - T2 = F, and the
     /// belt keeps its length: (T1 - P) L1 + (T2 - P) L2 = 0. So T1 = P + F L2 / (L1 + L2), T2 = P - F L1 / (L1 + L2).
     fn rigid_tensions(&self, pos: &[f64], acc: &[f64], out: &mut Vec<f64>) {
@@ -1096,8 +1098,8 @@ impl Machine for LinearDelta {
         }
     }
 
-    /// Each carriage guide's load across its rail (`guide_loads`) at a tool pose and acceleration: the rods' pull times
-    /// the reach, at rest under the plate's weight and moving with what accelerating the plate (and payload) takes on
+    /// Each carriage guide's load across its rail (`guide_loads`) at a tool pose and acceleration: the rods' pull and the
+    /// carriage's weight at right angles to the column, at rest under the plate's weight and moving with what accelerating the plate (and payload) takes on
     /// top, m a, through the same rods; the size of the sum is at most the rest's plus the moving part's.
     fn rigid_guide_loads(&self, pos: &[f64], acc: &[f64], out: &mut Vec<[f64; 2]>) {
         let p = [pos[0], pos[1], pos[2]];
@@ -1109,8 +1111,16 @@ impl Machine for LinearDelta {
         };
         let (rest, moving) = (pull([0.0; 3]), pull([acc[0], acc[1], acc[2]]));
         for k in 0..3 {
-            let reach = self.legs.reach(k, p);
-            out.push([(rest[k] * reach).abs(), (moving[k] - rest[k]) * reach]);
+            // As `guide_loads`: the part of the rod pull and the carriage's weight at right angles to the column.
+            let (u, d) = (sub(p, self.legs.joint(k, h[k])), self.legs.dir[k]);
+            let across = |f: V3| {
+                let along = dot(f, d);
+                std::array::from_fn::<f64, 3, _>(|i| f[i] - along * d[i])
+            };
+            let at_rest = across([rest[k] * u[0], rest[k] * u[1], rest[k] * u[2] - self.m_c * self.g]);
+            let extra = across(u.map(|x| (moving[k] - rest[k]) * x));
+            let size = norm(extra);
+            out.push([norm(at_rest), if dot(extra, at_rest) < 0.0 { -size } else { size }]);
         }
     }
 

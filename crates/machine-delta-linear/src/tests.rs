@@ -511,3 +511,39 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
         assert!((without[k] - expected).abs() < 0.02 * expected.abs(), "motor {k}: without {without:?}");
     }
 }
+
+/// On an inclined column the carriage's weight m_c g sin(alpha) also loads the rail: the plan's guide load at rest is
+/// that of `guide_loads`, the part of (lambda u - m_c g e_z) at right angles to the column, not |lambda| times the reach.
+/// At (0, 0, -1.17) with the default masses that is 11.414 N at +20 degrees and 2.762 N at -15 (the reach alone: 6.467
+/// and 0.982 N).
+#[test]
+fn the_plans_guide_load_at_rest_holds_the_carriages_weight_on_an_inclined_column() {
+    for (deg, expected) in [(20.0, 11.414), (-15.0, 2.762)] {
+        let m = delta(&["effects.belt_stretch = false", &format!("geometry.column_incline_deg = {deg}")]);
+        let pose = [0.0, 0.0, -1.17];
+        let h = m.legs.inverse(pose).unwrap();
+        let (rest, mut loads) = (m.guide_loads(h, [0.0; 3]), Vec::new());
+        m.rigid_guide_loads(&pose, &[0.0; 3], &mut loads);
+        for k in 0..3 {
+            close(loads[k][0], rest[k], 1e-9, "load at rest as guide_loads");
+            close(loads[k][0], expected, 1e-3, "load at rest by hand");
+            close(loads[k][1], 0.0, 1e-9, "no moving part at rest");
+        }
+    }
+}
+
+/// The carriages move along their (inclined) columns: with p = (0.1, -0.05, -1.17), p' = (1, 0.5, 0.8) and 20 degrees
+/// the linear momentum is m_nt p' + m_c sum h'_i d_i = (1.875, 0.856, 5.693) N s (the carriages at the column radius
+/// moving straight up gave (2.325, 1.163, 5.939)).
+#[test]
+fn the_carriages_carry_momentum_along_their_columns() {
+    let m = delta(&["effects.belt_stretch = false", "geometry.column_incline_deg = 20.0"]);
+    let (p, v) = ([0.1, -0.05, -1.17], [1.0, 0.5, 0.8]);
+    let (mut state, mut hold) = (Vec::new(), [0.0; 3]);
+    m.equilibrium(&p, &mut state, &mut hold);
+    m.set_tool_velocity(&mut state, &v);
+    let f = m.frame_momentum(&state).unwrap();
+    for (k, by_hand) in [1.875, 0.856, 5.693].into_iter().enumerate() {
+        close(f.linear[k], by_hand, 1e-3, "linear momentum");
+    }
+}

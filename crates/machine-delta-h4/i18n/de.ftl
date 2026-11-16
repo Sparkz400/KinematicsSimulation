@@ -61,5 +61,3 @@ error-delta-outside-envelope = Das Ziel liegt außerhalb des Arbeitsraums.
 error-delta-out-of-reach = Die Arme reichen nicht bis zum Ziel.
 error-delta-joint-stop = Ein Arm müsste für das Ziel über seinen Anschlag hinaus.
 error-delta-singularity = Das Ziel liegt zu nahe an einer Singularität der Kinematik.
-effect-arm_tube_inertia = Anteil des Armrohrs an den Biegeformen und Verdrehung des Ellbogenblocks (an diesem Delta nicht gebaut: der Schalter wirkt nicht)
-param-elbow_twist_inertia_kgm2 = Drehträgheit des Ellbogenblocks [kg m²]
