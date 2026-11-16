@@ -268,6 +268,21 @@ fn the_default_cycles_pass_their_verdicts() {
     }
 }
 
+/// The scene's cable labels are the tensions of the signals (those of the platform's wrench, 139.808 N on the top cable
+/// at the centre by hand, above), not the rigid model's at zero motor torque.
+#[test]
+fn the_scene_labels_the_tensions_the_signals_show() {
+    let robot = planar();
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; 4]);
+    robot.equilibrium(&CENTRE, &mut state, &mut torque);
+    let mut signals = Vec::new();
+    robot.base_signals(&state, &torque, &mut signals);
+    let mut scene = Scene::default();
+    robot.scene(&state, &mut scene);
+    let label = scene.labels.iter().find(|l| l.owner_key == CABLE_KEYS[0]).unwrap();
+    assert!((label.value - signals[0]).abs() < 1e-9 && label.value > 100.0, "{} {}", label.value, signals[0]);
+}
+
 /// What the planar carriage puts on a compliant base at the centre (x 0, z 0.8 m), moving at (0.5, -0.2) m/s: m = 3 + 2
 /// kg, so m v = (2.5, 0, -1.0) N s, and about the origin p x m v = (0, 0.8 x 2.5, 0) = (0, 2.0, 0) N m s; the first
 /// moment m p = (0, 0, 4.0) kg m.

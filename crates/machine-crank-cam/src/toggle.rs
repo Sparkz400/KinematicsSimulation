@@ -420,8 +420,9 @@ impl Mechanism for TogglePress {
         let [upper, lower, rod] = self.link_forces(q[0], qd[0], qdd[0]);
         out.extend([
             self.a + self.b - p.x[0] + stretch,
-            p.x[1] * qd[0],
-            p.x[2] * qd[0] * qd[0] + p.x[1] * qdd[0],
+            // The height is a + b - x, so its derivatives carry the minus sign of x (x is positive down).
+            -p.x[1] * qd[0],
+            -(p.x[2] * qd[0] * qd[0] + p.x[1] * qdd[0]),
             p.x[1],
             force,
             capacity,

@@ -20,6 +20,7 @@ param-run = Run the cam as the cycle
 param-ramp_s = Master's run-up and run-down [s]
 param-mover_kg = Mover body without its magnet plate [kg]
 param-payload_kg = Payload per mover [kg]
+param-centre_offset_m = Mass centre outside the centre line [m]
 param-length_m = Mover length along the track [m]
 param-wheelbase_m = Rollers' spread along the track [m]
 param-magnet_length_m = Magnet plate length [m]
