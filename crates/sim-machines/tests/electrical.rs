@@ -128,8 +128,26 @@ fn a_disabled_drives_dc_link_discharges_by_the_rc_exponential() {
             Sim::new(entry, &with(&entry.config(), &["effects.regenerative_supply = true"])).unwrap();
         regenerative.command(Command::Disable).unwrap();
         let bus = entry.config().f64("drive.bus_voltage_v").unwrap();
-        regenerative.control.drives.iter_mut().for_each(|d| d.dc_voltage = 160.0 * bus / 155.13);
-        regenerative.step();
+        let start = 160.0 * bus / 155.13;
+        regenerative.control.drives.iter_mut().for_each(|d| d.dc_voltage = start);
+        // At once, or as fast as the line module's highest power takes the charge above the bus: a 48 V track's 2.3 kW
+        // take its six movers' shared 6 x 4.7 mF from 49.5 V in 15 steps (2.06 J), the 540 V machines' 35 kW theirs in
+        // one. A shared link has one line module for the capacitors of all its drives.
+        let cfg = entry.config();
+        let rating = |key: &str| cfg.f64(&format!("ratings.{key}"));
+        let links =
+            if cfg.bool("effects.shared_dc_link").unwrap_or(false) { regenerative.control.drives.len() } else { 1 };
+        let charge =
+            links as f64 * 0.5 * rating("dc_link_capacitance_uf").unwrap_or(0.0) * 1e-6 * (start * start - bus * bus);
+        let most = (charge / (0.98 * rating("line_module_max_power_w").unwrap_or(f64::INFINITY) * regenerative.dt))
+            .ceil()
+            .max(1.0) as usize;
+        for _ in 0..most {
+            regenerative.step();
+            if regenerative.control.drives.iter().all(|d| d.dc_voltage <= bus) {
+                break;
+            }
+        }
         assert!(
             regenerative
                 .control
@@ -208,8 +226,8 @@ fn disable_and_enable_conserve_the_electrical_energy() {
 }
 
 /// The two line module checks, only with the regenerative supply: the mean power through the line module either way
-/// (drawn and fed back) over the cycle against its rated power, the highest against its maximum power. A line module
-/// rated at 1 W fails the first.
+/// (drawn and fed back) over the cycle against its rated power, the highest against its maximum power (the config's: 16 kW
+/// and 35 kW for a 540 V machine, a 48 V track's own module less). A line module rated at 1 W fails the first.
 #[test]
 fn the_line_module_is_judged_against_its_ratings() {
     for entry in MACHINES {
@@ -222,19 +240,20 @@ fn the_line_module_is_judged_against_its_ratings() {
         assert!(!off.iter().any(|v| v.check.starts_with("line-module")), "{}", entry.id);
         let cfg = with(&entry.config(), &["effects.regenerative_supply = true"]);
         let (load, all) = judged(&cfg);
+        let rating = |key: &str| cfg.f64(&format!("ratings.line_module_{key}_power_w")).unwrap();
         for (k, m) in load.motors.iter().enumerate() {
             let find = |check: &str| all.iter().find(|v| v.check == check && v.motor == Some(k)).unwrap();
             let (continuous, peak) = (find("line-module-continuous"), find("line-module-peak"));
             assert!(
                 continuous.value == m.line_module_energy / load.duration
-                    && continuous.limit == 16000.0
+                    && continuous.limit == rating("rated")
                     && continuous.ok,
                 "{}: {continuous:?}",
                 entry.id
             );
             assert!(
                 peak.value == m.peak_line_module_power
-                    && peak.limit == 35000.0
+                    && peak.limit == rating("max")
                     && peak.ok
                     && peak.value > continuous.value,
                 "{}: {peak:?}",

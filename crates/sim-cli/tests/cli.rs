@@ -993,8 +993,15 @@ fn parts_are_named_on_the_command_line() {
             };
             if geared { value("gearbox-peak") / value("motor-peak") } else { value("motor-peak") }
         };
-        let parts: &[&str] =
-            if geared { &["--motor", "1FK2104-5AK", "--gearbox", "NRK070-04-7"] } else { &["--motor", "1FK2104-5AK"] };
+        // A linear motor machine (`[linear_motor]`, a track's movers) takes a linear motor, here Beckhoff's at its supply.
+        let linear = sim_components::catalog::is_linear_motor(&entry.config());
+        let parts: &[&str] = if linear {
+            &["--motor", "AL8021-0E", "--supply", "beckhoff-400v"]
+        } else if geared {
+            &["--motor", "1FK2104-5AK", "--gearbox", "NRK070-04-7"]
+        } else {
+            &["--motor", "1FK2104-5AK"]
+        };
         let (own, named) = (ratio(&[]), ratio(parts));
         assert!(named > 0.0 && (named / own - 1.0).abs() > 0.1, "{}: {own} and {named}", entry.id);
         let (en, de) = (
@@ -1041,7 +1048,8 @@ fn a_run_can_disable_the_drives_on_the_way() {
             entry.id
         );
 
-        if entry.config().bool("effects.holding_brake").is_ok() {
+        // Where the brakes are on: a machine without any (a track's movers, holding_brake off) coasts as it is free.
+        if entry.config().bool("effects.holding_brake").unwrap_or(false) {
             // How far the axes are after a second from where another run (or this one at its start) has them.
             let apart = |a: &[f64], b: &[f64]| positions.iter().map(|&i| (a[i] - b[i]).abs()).fold(0.0, f64::max);
             let (at_rest, free) = (

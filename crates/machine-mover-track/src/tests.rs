@@ -15,10 +15,10 @@ fn track(edits: &[&str]) -> MoverTrack {
     MoverTrack::new(&config(edits)).unwrap()
 }
 
-/// The shipped cycle judged; `edits` on top of the config, the warm start off (the windings from cold).
+/// The cam cycle judged (cam.run on); `edits` on top of the config, the warm start off (the windings from cold).
 fn judged(base: &str, edits: &[&str]) -> Vec<sim_components::analysis::Verdict> {
     let mut cfg = Config::parse(base).unwrap();
-    for edit in [&["effects.thermal_warm_start = false"], edits].concat() {
+    for edit in [&["effects.thermal_warm_start = false", "cam.run = true"], edits].concat() {
         cfg.set_text(edit).unwrap();
     }
     let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
@@ -108,8 +108,8 @@ fn the_segment_current_and_loss_match_the_hand_calculation() {
 }
 
 /// Two movers standing on the first module, each holding 30 N (3 A, 9 W): 18 W into 2 K/W settles at 36 K. Over one
-/// time constant (600 s, held loss) it rises to 36 (1 - 1/e) = 22.757 K; the settled rise, over a pass of 0.667 s, is at
-/// 36 K. The other segments stay cold.
+/// time constant (600 s, held loss) it rises to 36 (1 - 1/e) = 22.757 K; the settled rise, over its window of 1 s (no
+/// cam running), is at 36 K. The other segments stay cold.
 #[test]
 fn a_segment_with_two_movers_stopping_on_it_heats_by_the_hand_calculation() {
     let mut m = track(&["start.pose = [0.06, 0.18, 1.131233, 1.634349, 2.137465, 2.640582]"]);
@@ -134,7 +134,7 @@ fn a_segment_with_two_movers_stopping_on_it_heats_by_the_hand_calculation() {
 /// in six product pitches.
 #[test]
 fn the_cams_index_and_fly_as_configured() {
-    let m = track(&[]);
+    let m = track(&["cam.run = true"]);
     let mv = m.movers();
     let p = mv.track.length / 6.0;
     let mut out = vec![[0.0; 4]; 6];
@@ -150,13 +150,14 @@ fn the_cams_index_and_fly_as_configured() {
     assert!((out[0][0] - f.start[0] - f.track.length).abs() < 1e-9);
 }
 
-/// flying.toml is the shipped config with the flying cycle and its start poses: each mover a product pitch of the cam
+/// flying.toml is the shipped config with the flying cycle, its cam on and its start poses: each mover a product pitch of the cam
 /// behind the next, mover 1 at the start of the process (0.3 m), so that each enters the process as the cam has it.
 #[test]
 fn the_flying_config_is_the_default_with_its_cycle_and_matching_start_poses() {
     let (default, flying) = (ENTRY.config(), Config::parse(FLYING_CONFIG).unwrap());
     let mut changed = default.clone();
     changed.set_text("track.cycle = \"flying\"").unwrap();
+    changed.set_text("cam.run = true").unwrap();
     changed.set_text(&format!("start.pose = {:?}", flying.f64s("start.pose").unwrap())).unwrap();
     assert_eq!(changed, flying, "flying.toml differs from default.toml beyond its cycle and start");
     let fly = MoverTrack::new(&flying).unwrap();
@@ -168,7 +169,7 @@ fn the_flying_config_is_the_default_with_its_cycle_and_matching_start_poses() {
     }
 }
 
-/// Every verdict of the shipped index cycle and of the flying one passes: per mover its force and speed (the motor
+/// Every verdict of the index cycle (the shipped config with its cam on) and of the flying one passes: per mover its force and speed (the motor
 /// checks), the segments' current and warmth, the rollers' load and the lift-off in the curves, the least gap, the
 /// movers' error at their stations; the own checks are there.
 #[test]

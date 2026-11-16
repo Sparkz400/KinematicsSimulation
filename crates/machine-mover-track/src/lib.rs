@@ -32,7 +32,8 @@
 //! (`track.index_law`) and stands it at its station for the rest of the period, at `track.index_rate_hz`; "flying" runs
 //! each mover once round the loop per n products of a conveyor (the master, m), synchronous with it over
 //! `track.process_length_m` and back to the start of the process along the rest of the loop, the movers a product apart.
-//! With `cam.run = false` the config's `[[cycle.segment]]` move the movers instead, as on every machine.
+//! With `cam.run = false` (default.toml, as the crank and cam machines ship) the config's `[[cycle.segment]]` move the
+//! movers instead, as on every machine; `flying.toml` runs its cam, and `--set cam.run=true` the index cam.
 
 use sim_components::cam::{Cam, Law, Segment};
 use sim_components::chain::{JointMachine, JointSpec, MOTOR_IDS, Mechanism};
@@ -67,6 +68,12 @@ const CURVE_POINTS: usize = 2000;
 const CURVE_STRIPS: usize = 12;
 
 pub const MAX_MOVERS: usize = 7;
+/// How far a mover's axis range reaches behind and ahead of its cycle's targets, m: as far as one mover alone at an end
+/// of its range keeps from its neighbours at their starts (the shipped 0.503 m pitch less a body and, ahead, the 0.3 m of
+/// jog: 0.433 m and 0.133 m), a little less. The 0.8 m range gives one mover alone a stroke of some 0.25 s at its top
+/// speed; at the middles of the box's faces the shipped movers keep 0.103 m.
+const BEHIND: f64 = 0.37;
+const AHEAD: f64 = 0.13;
 const AXIS_IDS: [&str; MAX_MOVERS] = ["s1", "s2", "s3", "s4", "s5", "s6", "s7"];
 const AXIS_KEYS: [&str; MAX_MOVERS] =
     ["axis-mover-1", "axis-mover-2", "axis-mover-3", "axis-mover-4", "axis-mover-5", "axis-mover-6", "axis-mover-7"];
@@ -525,6 +532,13 @@ impl Mechanism for Movers {
         self.all_checks().into_iter().filter(|c| c.limit.is_finite()).collect()
     }
 
+    /// A pose that puts a mover on the one ahead of it (closer than a body's length along the loop) cannot be stood in.
+    fn unreachable(&self, tool: &[f64], _slack: f64) -> Option<&'static str> {
+        let n = self.n().min(tool.len());
+        let behind = (0..n).any(|k| self.gap(tool, k) < 0.0);
+        behind.then_some("error-target-out-of-range")
+    }
+
     fn collision_parts(&self) -> &'static [&'static str] {
         &[sim_core::scene::MOTOR_PART, "payload"]
     }
@@ -646,8 +660,29 @@ impl MoverTrack {
             },
             track,
         };
-        // Each mover's axis its own limits, `axis.s<k>.max_*`, as every machine's axes have theirs. Its range is two
-        // loops, so that the last mover and its moves past the loop's start stay in it (a cam runs on beyond it anyway).
+        // Each mover's axis its own limits, `axis.s<k>.max_*`, as every machine's axes have theirs. Its range spans its
+        // cycle's targets, BEHIND m behind and AHEAD m ahead of them (a cam runs on beyond it anyway): each mover's range
+        // its own stretch of the loop, so that the middles of the ranges keep the movers in order and apart, and the
+        // middles of the box's faces too (the shipped movers 0.103 m apart there); two poses in it are never a whole loop
+        // apart, the same place on the track. Poses that put movers on each other are `unreachable`. The start pose
+        // widens a range only as far as it lies outside it (a cam's start, a cycle cut short), without the reach: a start
+        // pose on a range's end moves no range, as on every machine.
+        let mut stretch: Vec<Vec<f64>> = cfg
+            .array("cycle.segment")
+            .map(|segments| {
+                let targets = segments.iter().filter_map(|s| s.get("target")?.as_array());
+                targets
+                    .map(|t| t.iter().filter_map(|v| v.as_float()).collect())
+                    .filter(|t: &Vec<f64>| t.len() == n)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if stretch.is_empty() {
+            stretch.push(movers.start.clone());
+        }
+        let reach = |k: usize, pick: fn(f64, f64) -> f64, by: f64| {
+            pick(stretch.iter().map(|t| t[k]).reduce(pick).unwrap_or(0.0) + by, movers.start[k])
+        };
         let get = |k: usize, what: &str, rate: &str| cfg.positive(&format!("axis.{}.max_{what}_m_{rate}", AXIS_IDS[k]));
         let axes = (0..n)
             .map(|k| -> Result<AxisInfo, ConfigError> {
@@ -655,8 +690,8 @@ impl MoverTrack {
                     id: AXIS_IDS[k],
                     key: AXIS_KEYS[k],
                     unit: "m",
-                    min: 0.0,
-                    max: 2.0 * movers.track.length,
+                    min: reach(k, f64::min, -BEHIND),
+                    max: reach(k, f64::max, AHEAD),
                     max_vel: get(k, "velocity", "s")?,
                     max_acc: get(k, "acceleration", "s2")?,
                     max_jerk: get(k, "jerk", "s3")?,
@@ -733,15 +768,18 @@ impl MoverTrack {
         pos
     }
 
+    /// The segments judged by the highest of them (`track.max_segment_current`, `track.max_settled_rise`): one verdict
+    /// each, as a check without a motor is one row of the verdicts.
     fn own_checks(&self) -> Vec<RatingCheck> {
-        let mut out = Vec::new();
-        for j in 0..self.rises.len() {
-            let id = j + 1;
-            let check = |check, signal: String, limit| RatingCheck { check, signal, motor: None, limit, life: false };
-            out.push(check("segment-current", format!("segment.{id}.current"), self.current_limit));
-            out.push(check("segment-temperature", format!("segment.{id}.settled_rise"), self.rise_limit));
-        }
-        out.into_iter().filter(|c| c.limit.is_finite()).collect()
+        let check =
+            |check, signal: &str, limit| RatingCheck { check, signal: signal.into(), motor: None, limit, life: false };
+        [
+            check("segment-current", "track.max_segment_current", self.current_limit),
+            check("segment-temperature", "track.max_settled_rise", self.rise_limit),
+        ]
+        .into_iter()
+        .filter(|c| c.limit.is_finite())
+        .collect()
     }
 }
 
@@ -919,7 +957,7 @@ impl Machine for MoverTrack {
         self.inner.gantry_motors()
     }
     /// The inner machine's base signals, then per segment its current, copper loss, temperature rise and settled rise,
-    /// then the inner machine's effect signals.
+    /// the highest current and settled rise of them, then the inner machine's effect signals.
     fn signal_infos(&self) -> Vec<SignalInfo> {
         let mut infos = self.inner.signal_infos();
         let own = (1..=self.rises.len()).flat_map(|id| {
@@ -933,7 +971,11 @@ impl Machine for MoverTrack {
                 SignalInfo::new(format!("segment.{id}.{what}"), &format!("segment-{id}"), quantity, unit)
             })
         });
-        infos.splice(self.inner_base..self.inner_base, own);
+        let highest = [
+            SignalInfo::new("track.max_segment_current", "group-track", "quantity-segment-current", "A"),
+            SignalInfo::new("track.max_settled_rise", "group-track", "quantity-segment-settled-rise", "K"),
+        ];
+        infos.splice(self.inner_base..self.inner_base, own.chain(highest));
         infos
     }
     fn base_signals(&self, state: &[f64], torque: &[f64], out: &mut Vec<f64>) {
@@ -942,6 +984,8 @@ impl Machine for MoverTrack {
         for j in 0..self.rises.len() {
             out.extend([current[j], loss[j], self.rises[j], self.settled[j]]);
         }
+        out.push(current.iter().fold(0.0, |a: f64, b| a.max(*b)));
+        out.push(self.settled.iter().fold(0.0, |a: f64, b| a.max(*b)));
     }
     fn effect_signals(&self, state: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         self.inner.effect_signals(state, torque, out)

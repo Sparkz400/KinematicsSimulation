@@ -1,7 +1,8 @@
 # Linear transport system with independent movers on a closed track, as Beckhoff XTS or B&R ACOPOStrak: six movers on a
 # loop of two 1 m straights of 250 mm motor modules and two 180 degree clothoid curves, each mover driven by the coils
-# under it with a position loop of its own. This is flying.toml: default.toml with track.cycle = "flying" and its start
-# poses, nothing else changed (a test keeps it so): each mover in turn runs with a conveyor over 0.3 m of a straight.
+# under it with a position loop of its own. This is flying.toml: default.toml with track.cycle = "flying", cam.run = true
+# and its start poses, nothing else changed (a test keeps it so): each mover in turn runs with a conveyor over 0.3 m of a
+# straight.
 #   [catalogue]  read from a maker's page (Beckhoff XTS AT2000 motor module, AT9014 mover, AT9001 magnet plate).
 #   [estimate]   ours, where the makers publish nothing (force constant, resistance, attraction, rollers).
 format_version = 1
@@ -236,7 +237,8 @@ process_length_m = 0.3
 return_law = "4-5-6-7"
 
 # The electronic cam (sim_components::cam): the controller runs it as the cycle instead of [[cycle.segment]] where run is
-# on; the master comes up to speed in ramp_s.
+# on; the master comes up to speed in ramp_s. Off in default.toml, as on the crank and cam machines, so that the generic
+# tests and tools run its [[cycle.segment]]; on in flying.toml, and --set cam.run=true runs the index cycle.
 [cam]
 run = true
 ramp_s = 0.5
@@ -339,38 +341,40 @@ brake_torque_nm = 0.0
 thermal_resistance_k_w = 2.0
 thermal_time_constant_s = 600.0
 
-# [catalogue] 4 m/s (AT20xx system), the motors' highest; [estimate] the axes 5 % below it. Beckhoff gives 10 g, for a
-# mover without load: with the 0.6 kg payload the 100 N peak moves 1.451 kg at 69 m/s^2, so [estimate] 60 m/s^2 leaves
-# the loops their reserve; the jerk [estimate]. One table per mover (s1 to s6), as every machine's axes.
+# [catalogue] 4 m/s (AT20xx system), the motors' highest; [estimate] the axes at 3 m/s. Beckhoff gives 10 g, for a
+# mover without load: with the 0.6 kg payload the 100 N peak moves 1.651 kg (the 0.2 kg plate with it) at 60.6 m/s^2
+# (at 60 the jog asked 109 N). [estimate] The axes at half that, 30 m/s^2 and 2000 m/s^3 as the linear motor axis's, leave
+# the loops and the optimiser their reserve; the cams (23.6 m/s^2 at most) are not held to them. One table per mover (s1
+# to s6), as every machine's axes.
 [axis.s1]
-max_velocity_m_s = 3.8
-max_acceleration_m_s2 = 60.0
-max_jerk_m_s3 = 20000.0
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 30.0
+max_jerk_m_s3 = 2000.0
 
 [axis.s2]
-max_velocity_m_s = 3.8
-max_acceleration_m_s2 = 60.0
-max_jerk_m_s3 = 20000.0
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 30.0
+max_jerk_m_s3 = 2000.0
 
 [axis.s3]
-max_velocity_m_s = 3.8
-max_acceleration_m_s2 = 60.0
-max_jerk_m_s3 = 20000.0
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 30.0
+max_jerk_m_s3 = 2000.0
 
 [axis.s4]
-max_velocity_m_s = 3.8
-max_acceleration_m_s2 = 60.0
-max_jerk_m_s3 = 20000.0
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 30.0
+max_jerk_m_s3 = 2000.0
 
 [axis.s5]
-max_velocity_m_s = 3.8
-max_acceleration_m_s2 = 60.0
-max_jerk_m_s3 = 20000.0
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 30.0
+max_jerk_m_s3 = 2000.0
 
 [axis.s6]
-max_velocity_m_s = 3.8
-max_acceleration_m_s2 = 60.0
-max_jerk_m_s3 = 20000.0
+max_velocity_m_s = 3.0
+max_acceleration_m_s2 = 30.0
+max_jerk_m_s3 = 2000.0
 
 # One drive per mover: the power stages of the coils under it. [estimate] tuned as the linear motor axis, scaled to the
 # mover's mass; the 48 V supply [catalogue].
@@ -380,7 +384,9 @@ velocity_cycle_s = 125.0e-6
 position_cycle_s = 1.0e-3
 current_delay_cycles = 1
 velocity_delay_cycles = 1
-kv_1_s = 100.0
+# Below the linear motor axis's 100: at 100 the light mover's position loop reached 20.2 Hz with its feedforward, above
+# the 20 Hz the position loops of the machines are held to.
+kv_1_s = 80.0
 velocity_kp_nm_s_rad = 800.0
 velocity_tn_s = 0.02
 velocity_feedforward_factor = 1.0
@@ -408,7 +414,9 @@ velocity_filter_s = 0.1e-3
 torque_filter_s = 0.1e-3
 notch_frequency_hz = 60.0
 notch_bandwidth_hz = 20.0
-encoder_noise_counts = 4.0
+# [estimate] A count of noise on the 1 um scale: at 4 the stiff loop of the light mover took the jog from 0.45 to 0.86 of
+# its peak force with effects.sensor_noise.
+encoder_noise_counts = 1.0
 current_noise_a = 0.01
 noise_seed = 1
 fault_reaction = "off3"
@@ -437,14 +445,15 @@ segment_max_rise_k = 40.0
 # [estimate] what a mover's rollers may carry, and the share of the attraction the centrifugal force may take in a curve.
 mover_guide_max_load_n = 500.0
 mover_max_liftoff_ratio = 0.7
-# [estimate] the movers' 48 V supply as one DC link they share (effects.shared_dc_link).
+# [estimate] the movers' 48 V supply as one DC link they share (effects.shared_dc_link); its chopper and its trip at the
+# single axis's ratios to its bus (224.65 V and 257.6 V on 155.13 V): 70 V and 80 V.
 dc_link_capacitance_uf = 4700.0
-braking_threshold_v = 56.0
+braking_threshold_v = 70.0
 braking_resistor_continuous_w = 100.0
 braking_resistor_peak_w = 1000.0
 braking_resistor_time_constant_s = 60.0
 braking_resistor_rated_rise_k = 200.0
-dc_link_overvoltage_v = 60.0
+dc_link_overvoltage_v = 80.0
 dc_link_discharge_time_constant_s = 130.0
 # [catalogue] AT2000: 768 W rated per module.
 line_module_rated_power_w = 768.0
@@ -465,16 +474,23 @@ drive_max_current_time_s = 0.25
 [start]
 pose = [0.3, 0.6, 0.940636, 1.553169, 2.36553, 2.978063]
 
-# With cam.run = false: every mover 0.2 m on and back (each axis spans two loops).
+# With cam.run = false: every mover on to take its product (0.3 m the odd ones, 0.25 m the even), and back with it
+# through a point it passes without stopping (0.1 m and 0.2 m from the start), so that the jog has a corner to blend, to
+# hand it over at the start.
 [[cycle.segment]]
-target = [0.325, 0.828116, 1.331233, 1.834349, 2.337465, 2.840582]
-dwell_s = 0.2
+target = [0.425, 0.878116, 1.431233, 1.884349, 2.437465, 2.890582]
+dwell_s = 0.4
+payload = true
+
+[[cycle.segment]]
+target = [0.225, 0.828116, 1.231233, 1.834349, 2.237465, 2.840582]
+dwell_s = 0.0
 payload = true
 
 [[cycle.segment]]
 target = [0.125, 0.628116, 1.131233, 1.634349, 2.137465, 2.640582]
 dwell_s = 0.2
-payload = true
+payload = false
 
 [base]
 pivot_m = [0.0, 0.0, 0.0]

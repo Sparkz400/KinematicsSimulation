@@ -521,11 +521,13 @@ fn every_effect_switch_changes_the_traces() {
             f64::max(0.3, 1.5 * hold).max(0.3 / 3.8 * base.f64("drive.peak_torque_nm").unwrap())
         );
         // The low bus at 81.65 V for a rotary motor; a linear motor's force constant (N/A) is tens of times a rotary
-        // motor's torque constant, and its bus is lowered with it (65 N/A: 37.7 V, 0.71 m/s at no load).
-        let bus = format!(
-            "drive.bus_voltage_v = {:?}",
-            81.65 * f64::min(1.0, 30.0 / base.f64("motor.torque_constant_nm_a").unwrap())
-        );
+        // motor's torque constant, and its bus is lowered with it (65 N/A: 37.7 V, 0.71 m/s at no load). A linear motor
+        // of a smaller force constant keeps that no-load speed, 0.58 V per N/A (a track's 10 N/A movers: 5.8 V), and the
+        // bus is never raised above the machine's own.
+        let kt = base.f64("motor.torque_constant_nm_a").unwrap();
+        let low = 81.65 * f64::min(1.0, 30.0 / kt);
+        let low = if sim_components::catalog::is_linear_motor(&base) { low.min(0.58 * kt) } else { low };
+        let bus = format!("drive.bus_voltage_v = {:?}", low.min(base.f64("drive.bus_voltage_v").unwrap()));
         for e in ["belt.pretension_n = 20.0", peak.as_str(), bus.as_str()] {
             if base.get(e.split(' ').next().unwrap()).is_ok() {
                 base.set_text(e).unwrap();

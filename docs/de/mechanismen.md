@@ -863,8 +863,8 @@ Spulen unter ihm mit eigenem Lageregler angetrieben. Die ausgelieferte Konfigura
 je 600 g, auf einer Schleife aus zwei Geraden von 1 m aus je vier Modulen von 250 mm (AT2000) und zwei 180°-Kurven von
 267 mm Breite, an jedem Ende eines Bogens von 130,3 mm eine Klothoide von 100 mm (die Aufteilung ist geschätzt; Beckhoff
 veröffentlicht die Breite und dass es eine Klothoide ist); 3,019 m Umfang. Ein Mover gibt 100 N Spitze und 30 N
-Dauerkraft, 4 m/s, 10 g ohne Last (die 5-polige Magnetplatte an 48 V; mit der Nutzlast sind die Achsen auf 60 m/s²
-begrenzt); Kraftkonstante, Spulenwiderstand, Anzugskraft (300 N) und
+Dauerkraft, 4 m/s, 10 g ohne Last (die 5-polige Magnetplatte an 48 V; mit der Nutzlast bewegt die Platte
+1,65 kg mit 60 m/s², die Achsen sind auf die Hälfte, 30 m/s², begrenzt); Kraftkonstante, Spulenwiderstand, Anzugskraft (300 N) und
 Polteilung sind geschätzt.
 
 | Id | Mechanismus | Übertragung | Werkzeugpose | Eigene Prüfungen |
@@ -872,13 +872,15 @@ Polteilung sind geschätzt.
 | `mover-track` | 1 bis 7 Mover auf einer geschlossenen Schleife aus Geraden und Kurven (6 ausgeliefert) | Linearmotor je Mover: die Spulen unter ihm | Weg jedes Movers entlang der Schleife (m), nicht umgebrochen | je Mover `mover-guide-load`, `curve-holding`, `station-settling` (Taktzyklus); `mover-gap`; je Segment `segment-current`, `segment-temperature` |
 
 **Zwei Zyklen, beide elektronische Kurvenscheiben.** Eine geschlossene Strecke fährt nur vorwärts, daher ist der Zyklus
-eine Kurvenscheibe (`[cam]`): `track.cycle = "index"` (ausgeliefert) fährt jeden Mover um eine Stationsteilung (die
+eine Kurvenscheibe (`[cam]`): `track.cycle = "index"` fährt jeden Mover um eine Stationsteilung (die
 Schleife durch die Zahl der Mover, 0,503 m) mit einem 4-5-6-7-Gesetz in 0,4 s weiter und lässt ihn den Rest der Periode
 an seiner Station stehen, 1,5-mal je Sekunde (2,75 m/s, 23,6 m/s² Spitze); `flying.toml` fährt `"flying"`: jeder Mover
 fährt der Reihe nach über 0,3 m der ersten Geraden synchron mit einem Förderband von 1,0 m/s, dann um die Schleife zurück
 und wieder in den Prozess (6 Produkte zu 0,3 m je Umlauf: die Mover rücken über dem Prozess auf eine Produktteilung
-zusammen und fahren mit bis zu 2,78 m/s zurück). Mit `cam.run = false` fahren die Mover nach den `[[cycle.segment]]`
-0,2 m vor und zurück.
+zusammen und fahren mit bis zu 2,78 m/s zurück). `default.toml` liefert `cam.run = false` aus, wie die Kurbel- und
+Kurvenmaschinen: dort fahren die Mover nach den `[[cycle.segment]]` 0,25 bis 0,3 m vor, nehmen ein Produkt
+und bringen es durch einen Punkt, an dem sie nicht anhalten, zum Start zurück, den
+Zyklus, den die allgemeinen Tests und Werkzeuge fahren; `--set cam.run=true` fährt den Taktzyklus.
 
 **Kurven.** Die Rollen eines Movers spannen seinen Radstand w, daher folgt sein Körper dem Mittel der Krümmung darüber:
 die Querbeschleunigung v² k steigt über den Radstand an, wo eine Kurve mit festem Radius beginnt, und über die
@@ -900,9 +902,9 @@ gegen die Wiederholgenauigkeit von ±10 µm (`station-settling`).
 Modell und Grenzen in der Dokumentation des Crates (`crates/machine-mover-track/src/lib.rs`).
 
 ```text
-sim-cli verdicts mover-track
+sim-cli verdicts mover-track --set cam.run=true
 sim-cli verdicts mover-track --config crates/machine-mover-track/flying.toml
-sim-cli verdicts mover-track --set track.index_rate_hz=2.5 --set track.clothoid_m=0.0
+sim-cli verdicts mover-track --set cam.run=true --set track.index_rate_hz=2.5 --set track.clothoid_m=0.0
 
 ## Brückenkran (`machine-overhead-crane`)
 
