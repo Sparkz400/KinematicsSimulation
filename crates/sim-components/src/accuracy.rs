@@ -359,7 +359,8 @@ pub fn study(entry: &MachineEntry, cfg: &Config, settings: Settings) -> Result<S
             judged.iter().map(|r| r.repeatability).fold(0.0, f64::max),
         ),
     ] {
-        if cfg.get(key).is_ok() {
+        // 0 or absent: not judged.
+        if cfg.get(key).is_ok() && cfg.f64(key)? > 0.0 {
             let limit = cfg.f64(key)?;
             verdicts.push(Verdict { check, motor: None, value, limit, ok: value <= limit });
         }

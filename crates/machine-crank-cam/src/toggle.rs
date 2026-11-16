@@ -418,10 +418,15 @@ impl Mechanism for TogglePress {
         let (force, stretch) = self.press_force(q[0], qd[0]);
         let capacity = self.capacity(q[0]);
         let [upper, lower, rod] = self.link_forces(q[0], qd[0], qdd[0]);
+        // The frame's stretch changes with the angle and (where the force fades as the ram rises) with the speed.
+        let (h, at) = (1e-7, |q: f64, w: f64| self.press_force(q, w).1);
+        let stretch_rate = (at(q[0] + h, qd[0]) - at(q[0] - h, qd[0])) / (2.0 * h) * qd[0]
+            + (at(q[0], qd[0] + h) - at(q[0], qd[0] - h)) / (2.0 * h) * qdd[0];
         out.extend([
             self.a + self.b - p.x[0] + stretch,
-            // The height is a + b - x, so its derivatives carry the minus sign of x (x is positive down).
-            -p.x[1] * qd[0],
+            // The height is a + b - x + stretch, so its derivatives carry the minus sign of x (x is positive down).
+            // shortcut: the acceleration leaves out the stretch's second derivative (a tenth of a millimetre at most).
+            -p.x[1] * qd[0] + stretch_rate,
             -(p.x[2] * qd[0] * qd[0] + p.x[1] * qdd[0]),
             p.x[1],
             force,

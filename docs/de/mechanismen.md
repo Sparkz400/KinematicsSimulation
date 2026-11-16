@@ -788,14 +788,14 @@ ein Segment angekommen ist (`valves = { z = "extend" }`), und wartet auf seine E
 `machines/pneumatic-axis.toml`: die riemengetriebene Servo-X von `single-axis.toml` trägt einen Festo
 DSBC-32-100-PPVA-N3 (32 mm Kolben, 12 mm Stange, 100 mm Hub, PPV-Dämpfung 17 mm, 0,4 J), der nach unten ausfährt, an
 einem 5/2-Ventil mit Abluftdrosseln; 0,5 kg bewegt, 0,5 kg gegriffen. Der Zyklus: X zum Aufnehmen, Z ab, warten,
-greifen, Z auf, warten, X zum Ablegen, Z ab, loslassen, Z auf. Mit den ausgelieferten Einstellungen fährt Z in 0,55 s
+greifen, Z auf, warten, X zum Ablegen, Z ab, loslassen, Z auf. Mit den ausgelieferten Einstellungen fährt Z in 0,55 bis 0,56 s
 aus und in 0,65 s ein (Ventil 7 ms, die Stangenseite entlüftet aus dem Versorgungsdruck, gedrosselt 0,216 m/s, am Ende
 die Dämpfungsschraube), tritt mit 0,22 bis 0,24 m/s und einer Bewegungsenergie von 0,012 bis 0,029 J gegen die zulässigen 0,4 J in die
 Dämpfung ein (`cushion-energy`). Die Prüfung ist die Regel des Herstellers für die eigene Dämpfung des Zylinders: die
 Bewegungsenergie beim Eintritt in die Dämpfung gegen die höchste Aufprallenergie der Tabelle (Festo-Datenblatt DSBC,
 „Kräfte und Aufprallenergie“, v = sqrt(2 E / (m1 + m2)), S. 13); die Arbeit des Gewichts über die Dämpfungslänge, m g L,
 gehört zu Festos Regel für externe Stoßdämpfer und wird nicht addiert (1 kg hängend über die 17 mm: 0,167 J mehr, die
-diese Prüfung nicht zählt). Er trifft mit 0,06 bis 0,07 m/s auf den Puffer, ohne aus dem Sensorbereich zurückzuprallen, und hat
+diese Prüfung nicht zählt). Er trifft mit 0,06 bis 0,09 m/s auf den Puffer, ohne aus dem Sensorbereich zurückzuprallen, und hat
 ein Lastverhältnis von 0,024 (`load-factor`, 1 kg Gewicht gegen 415 N beim Einfahren). Ein Doppelhub verbraucht 1,10
 Normliter, 474 J am Kompressor (0,12 kWh/m³); von Hand beim Versorgungsdruck und der Wandtemperatur 1,15 l, 4 % weniger,
 weil die Verweilzeiten zu kurz sind, als dass die heiße Luft abkühlt.
@@ -893,7 +893,11 @@ Klothoide, wo es eine gibt; ihre Änderung, der Querruck 2 v a k + v³ dk/ds, is
 1228 m/s³ in einen Kreis, 614 m/s³ in die Klothoide). Die Mover laufen außen an der Schleife, die Magnetplatte den
 Spulen zugewandt, daher zieht die Fliehkraft m v² k einen Mover gegen die Anzugskraft von den Spulen weg: die Rollen
 tragen sqrt((F_a − m v² k)² + (m g)²) (`mover-guide-load`), und der Anteil m v² k / F_a (`curve-holding`) muss unter 1
-bleiben, wo der Mover abhebt.
+bleiben, wo der Mover abhebt. `mass.centre_offset_m` = e legt den Massenschwerpunkt der Mover außerhalb der Mittellinie
+(beim gezeichneten Mover 35 mm; ausgeliefert 0): in einer Kurve läuft er auf R + e mit v (1 + e k), seine
+Querbeschleunigung ist v² k (1 + e k) (38,9 m/s² mitten im Bogen bei 2 m/s und e = 35 mm, 30,7 bei e = 0), seine
+kinetische Energie ½ m v² (1 + e k)²; die Tangentialkraft der sich über die Klothoide ändernden Masse ist in der Dynamik
+(die Energie bleibt erhalten). Der Versatz gilt für Moverkörper und Nutzlast, nicht für die Magnetplatte.
 
 **Spulen und Segmente.** Der Strom eines Movers ist seine Kraft durch die Kraftkonstante; er fließt in den Spulen unter
 seiner Magnetplatte, auf die Segmente nach der Länge der Platte auf jedem verteilt. Der Strom eines Segments ist die
@@ -946,10 +950,12 @@ Hebel: 30:1 auf Rädern von 80 mm, 25:1 auf 50 mm, 40:1 auf einer Trommel von 80
   0,32 m, und `residual-sway` fällt durch, ebenso `thermal-warm-start` (das Pendeln eines Durchgangs ändert den
   nächsten). Ein echter Werkstattkranzyklus über die Kranbahn dauert eine Minute: ein Ziel von [8.0, 4.0, 1.0].
 - **Die Drehzahlregler** sind so steif eingestellt wie an den anderen Maschinen (Brücke und Katze etwa 60 Hz). Der des
-  Hubwerks hat, in Ruhe unter den 265 kg gemessen (`sim-cli margins`), keine Durchtrittsfrequenz (NaN): Der Wirkungsgrad
-  seines Getriebes (92 %), unter 0,5 W eingeblendet, wirkt als Dämpfer von 1,1e6 N s/m am Seil, 4,5 N m s/rad am Motor,
-  von dem das Testmoment nicht losbricht; das Getriebe hält den Regelkreis in Ruhe fest. Ohne die Getriebeverluste liegt
-  sie bei 48 Hz.
+  Hubwerks wird in Ruhe unter den 265 kg (`sim-cli margins`) mit ausgeschaltetem Wirkungsgradeffekt gemessen: Der
+  Wirkungsgrad seines Getriebes (92 %), unter 0,5 W eingeblendet, wirkt sonst als Dämpfer von 1,1e6 N s/m am Seil,
+  4,5 N m s/rad am Motor, von dem das Testmoment nicht losbricht, und der Kreis zeigt keine Durchtrittsfrequenz. Ohne die
+  Getriebeverluste, mit einem Zehntel des eigenen Nennmoments des Hubmotors (0,66 N m) als Testmoment, liegt sie bei
+  50,4 Hz mit 73,7° und 21,0 dB (bei 0,32 N m, einem Zehntel des gemeinsamen Antriebswerts: 48,5 Hz, 83,1°, 21,3 dB; die
+  Reibung des Motors dämpft das kleinere Signal stärker).
 - **Eigene Prüfungen:** `rope-max-tension`, `rope-min-tension` (kein Schlaffseil), `residual-sway` (Amplitude des
   Pendelns bei jedem Verweilen gegen `crane.residual_sway_max_m`), `hoist-brake` (Seilmoment am Hubmotor gegen das
   Bremsmoment durch `hoist.brake_safety_factor`).

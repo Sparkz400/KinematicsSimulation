@@ -2512,6 +2512,9 @@ impl Machine for ConfigMachine {
     fn motors(&self) -> &[MotorInfo] {
         &self.motors
     }
+    fn motor_linear(&self, motor: usize) -> bool {
+        matches!(self.direct.get(motor), Some(Some(Direct { kind: DirectKind::Linear { .. }, .. })))
+    }
 
     fn inverse(&self, tool: &[f64], motors: &mut [f64]) {
         self.motor_angles(&self.joints(tool), motors);

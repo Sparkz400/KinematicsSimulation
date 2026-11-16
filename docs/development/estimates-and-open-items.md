@@ -18,8 +18,7 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 | What | Where | Status | What is true instead | Closing it |
 | --- | --- | --- | --- | --- |
 | "Strain-wave gears run at 70 to 85 %" | the audit's finding K5 | **from memory** of the auditor | same as above | same as above |
-| Cushion energy "about 0.10 to 0.20 J" on the hanging pneumatic axis | `docs/mechanisms.md`, `docs/de/mechanismen.md` | **made up**: a hand estimate written before any run | Whatever the shipped cycle gives with the weight's work included | Run the shipped pneumatic axis hanging and write the measured figure |
-| Mover's mass centre sits on the track centre line (`mass.centre_offset_m = 0.0`) | `crates/machine-mover-track/default.toml`, `flying.toml` | **made up** default: the mover is drawn 35 mm outside the centre line, the real mass offset is not known | With 35 mm the lateral acceleration at 2 m/s is 38.9 m/s², not 30.7 | Take the centre-of-mass offset from the vendor's mover data (or CAD) and set it |
+| Mover's mass centre sits on the track centre line (`mass.centre_offset_m = 0.0`) | `crates/machine-mover-track/default.toml`, `flying.toml` | **made up** default: the mover is drawn 35 mm outside the centre line, the real mass offset is not known | With 35 mm the lateral acceleration at 2 m/s is 38.94 m/s², not 30.70 (run, `a_mass_centre_outside_the_centre_line_runs_the_longer_way_round`; energy kept with it, `a_mass_centre_outside_the_centre_line_keeps_the_energy`) | Take the centre-of-mass offset from the vendor's mover data (or CAD) and set it |
 | FMU output counts 114 / 60 / 108 | `docs/fmi.md` | **assumed**: copied from the audit, the FMUs were not regenerated | Whatever the current export gives | Export the three FMUs and count |
 | Catalogue rows equal the vendors' datasheets | `catalog/**` | **assumed**: the audit checked internal consistency and a few values from memory, never the PDFs | Unknown per row | Spot-check rows per vendor against the source PDFs the extract scripts read |
 
@@ -29,7 +28,7 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 | --- | --- | --- | --- |
 | The mesh-friction bristle behind a screw, rack or drum is capped at a quarter of the integrator's rate bound | `transmission.rs` (`Converter::apply`) | A numerical cap, softer than the physical bristle; chosen so RK4 stays stable, never tuned by a run | Run cable robot and screw axis, check the energy budget, then either keep the cap with its measured error or integrate the bristle implicitly |
 | The error band of "fitted minus config" is scaled by the ratio of residual norms | `identify.rs` (`unshared`) | The implementer's own estimate of the difference's error; not derived, not checked for coverage | Monte Carlo on a machine with known truth: (fitted − config)/error must have a standard deviation near 1 |
-| Tolerances of new tests (settled rise 0.5 K, seven-joint inverse 1e-4) | `machine-mover-track`, `machine-joint-kit` tests | Picked before any run | Set from the first run |
+| Tolerance of a new test (seven-joint inverse 1e-4) | `machine-joint-kit` tests | Picked before any run | Set from the first run |
 
 ## 3. Behaviour assumed without the manual
 
@@ -62,15 +61,25 @@ result is in, treat **every number below as unverified**.
 - **Back-EMF constant apart from the torque constant** (`drive.rs`, `emf_loss`, budget row `emf.<motor>`): the
   row is the winding's step energies less copper, shaft and stored energy, derived by hand; nothing has run
   with a printed voltage constant, and the sign in braking (the row is negative) is a model limit, not physics.
-- **Torque band with the inertia feedforward** (`control.rs`, `holding_torque`): the rigid model's torque at rest
-  at the planned pose stands in for the held load; friction and the integrator's rest are not in it.
+- **Torque band with the inertia feedforward** (`control.rs`, `holding_torque`): run on the single axis standing up
+  (`the_torque_band_expects_the_held_weight_and_trips_on_a_lasting_extra_load`: no trip at rest, moving or dwelling
+  with a band of half the weight's torque; a process force of twice the weight trips it in the dwell). Still a model
+  limit: the rigid model's torque at rest stands in for the held load, so friction and the integrator's rest are not
+  in it (the test runs loss-free).
 - **The time-optimal planner still keeps every limit** with the ramp share following curvature
   (`path.rs`, `ramp_share`): argued, not run.
 - **Mesh friction with the bristle in joint units**: the cable robots blew up numerically and the screw
   axis lost 1.6 % of its energy budget in a trial at full stiffness; behaviour with the cap is unknown.
 - **All hand numbers in the new regression tests** (guide loads 11.414 N and 2.762 N, momentum
-  (1.875, 0.856, 5.693) N s, reactance limits 3.474 / 2.709 / 1.956 N m, steady friction totals,
-  the full circle's length, and so on).
+  (1.875, 0.856, 5.693) N s, reactance limits 3.474 / 2.709 / 1.956 N m, the T-gantry's steady friction totals,
+  the full circle's length, and so on). Run and passing on 2026-11-16 in the sizing analysis and the machines named
+  there: the single axis's steady friction totals (30° incline, up 0.123873, down 0.111799 N m), the guide life over
+  distance and over every guide, the braking resistor's estimate (T-gantry motor b 0.961 W, the simulated link's
+  figure), the crane hoist's loop margins without the efficiency fade, the base wrapper's forwarding, the mover
+  track's settled rise (within 0.05 % of R_th times the mean loss over a pass), the winder's taper power, the toggle
+  press's ram speed (the frame's stretch under the press force included), the pneumatic axis's documented figures
+  (0.012 to 0.029 J kinetic at the cushion, 1.10 l and 474 J per double stroke). The cushion row that stood in
+  section 1 is closed: the check is the kinetic energy only again, and the docs give the run's figures.
 - **The 2-axis delta's reference file** `crates/machine-delta-d2/reference/inverse_dynamics.csv` is
   stale: its generator was changed but could not be run (no sympy).
 - **The video tool** `crates/sim-app/tools/frames_to_mp4.py` (holds frames for dropped numbers).

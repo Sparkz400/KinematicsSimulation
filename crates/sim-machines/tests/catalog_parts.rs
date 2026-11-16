@@ -279,6 +279,8 @@ fn an_s120_line_up_is_judged_against_its_one_braking_module() {
         energy_regenerated: 900.0,
         peak_regenerated_power: 60e3,
         largest_regeneration: 900.0,
+        // The cycle's one braking, nothing drawn: the link enters it full and all 900 J go to the resistor.
+        regeneration_events: vec![900.0],
         ..Default::default()
     };
     let load = CycleLoad {

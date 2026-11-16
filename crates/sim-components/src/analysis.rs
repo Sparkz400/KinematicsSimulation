@@ -53,8 +53,9 @@ pub struct MotorLoad {
     /// braking resistor have to take.
     pub peak_regenerated_power: f64,
     pub largest_regeneration: f64,
-    /// The energy of each braking event (one run of negative power) fed back, J: what the resistor takes above the
-    /// DC link's room, event by event, where the link is not simulated.
+    /// The cycle's electrical energy in stretches of one sign, J, in their order: positive for a braking event (one run of
+    /// negative power) fed back, negative for the energy drawn between two, which empties the DC link's capacitors first.
+    /// What the resistor takes above the link's room (`resistor_excess`), where the link is not simulated.
     pub regeneration_events: Vec<f64>,
     /// With the DC link simulated: the energy the braking resistor burned (over the cycle's duration its
     /// mean power), the most power it took and the highest DC link voltage. For a drive that tripped on
@@ -505,7 +506,7 @@ pub struct Tally {
     /// Whether the effect views (torque breakdown, energy budget) are added up: they need the machine's
     /// `effect_signals` every step.
     views: bool,
-    /// Energy fed back since each motor last drew power.
+    /// Energy fed back (positive) since each motor last drew power, or drawn (negative) since it last fed back.
     braking: Vec<f64>,
     /// `CycleLoad::braking_power_peak`.
     braking_peak: f64,
@@ -914,16 +915,18 @@ impl Tally {
             if own.drive_max_current.is_finite() {
                 load.peak_current = load.peak_current.max(own.current_for(sim.control.drives[k].torque_demand).abs());
             }
+            // The running stretch: energy fed back (positive) or drawn (negative), pushed as one event when the sign turns.
+            let fed = -power * sim.dt;
+            if self.braking[k] * fed < 0.0 {
+                load.regeneration_events.push(self.braking[k]);
+                self.braking[k] = 0.0;
+            }
+            self.braking[k] += fed;
             if power >= 0.0 {
                 load.energy_in += power * sim.dt;
-                if self.braking[k] > 0.0 {
-                    load.regeneration_events.push(self.braking[k]);
-                }
-                self.braking[k] = 0.0;
             } else {
                 load.energy_regenerated -= power * sim.dt;
                 load.peak_regenerated_power = load.peak_regenerated_power.max(-power);
-                self.braking[k] -= power * sim.dt;
                 load.largest_regeneration = load.largest_regeneration.max(self.braking[k]);
             }
             load.rms_torque += torque * torque;
@@ -970,7 +973,7 @@ impl Tally {
         for (k, load) in self.loads.iter_mut().enumerate() {
             load.rms_torque = (load.rms_torque / steps).sqrt();
             load.rms_current = (load.rms_current / steps).sqrt();
-            if self.braking[k] > 0.0 {
+            if self.braking[k] != 0.0 {
                 load.regeneration_events.push(self.braking[k]);
             }
             load.thermal_current = (load.thermal_current / steps).sqrt();
@@ -1107,9 +1110,14 @@ impl Tally {
             .map(|(m, copper)| row(&format!("copper.{}", m.id), m.key, "budget-copper", *copper))
             .collect();
         // The magnets' and iron's share of a back-EMF constant that is not the torque constant: only where there is one.
-        rows.extend(sim.machine.motors().iter().zip(&self.emf).filter(|(_, emf)| **emf != 0.0).map(|(m, emf)| {
-            row(&format!("emf.{}", m.id), m.key, "budget-emf", *emf)
-        }));
+        rows.extend(
+            sim.machine
+                .motors()
+                .iter()
+                .zip(&self.emf)
+                .filter(|(_, emf)| **emf != 0.0)
+                .map(|(m, emf)| row(&format!("emf.{}", m.id), m.key, "budget-emf", *emf)),
+        );
         let p = sim.control.drive_params();
         if p.dc_link {
             rows.push(row("resistor", "group-drive", "budget-resistor", self.resistor));
@@ -1579,10 +1587,10 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
                 let stored = 0.5 * capacitance * 1e-6 * (m.peak_dc_link_voltage.powi(2) - bus * bus);
                 (stored, m.resistor_energy > 0.0, m.resistor_energy / load.duration, m.peak_resistor_power)
             } else {
-                // The capacitors take each braking up to their room; only what is above it goes to the resistor.
-                let excess = resistor_excess(&m.regeneration_events, room);
+                // The capacitors take the braking up to their room; only what is above it goes to the resistor.
+                let (excess, fill) = resistor_excess(&m.regeneration_events, room);
                 regenerated_excess += excess;
-                (m.largest_regeneration, m.largest_regeneration > room, excess / load.duration, m.peak_regenerated_power)
+                (fill, fill > room, excess / load.duration, m.peak_regenerated_power)
             };
             // With a resistor to fall back on, a full DC link is no failure in itself.
             out.push(Verdict {
@@ -1743,10 +1751,23 @@ fn equivalent_load(cubed_sum: f64, weight_sum: f64) -> f64 {
     if weight_sum > 0.0 { (cubed_sum / weight_sum).cbrt() } else { 0.0 }
 }
 
-/// The energy a braking resistor takes from braking events of `events` J when the DC link's capacitors take `room` J of
-/// each: what is above it, summed.
-fn resistor_excess(events: &[f64], room: f64) -> f64 {
-    events.iter().map(|e| (e - room).max(0.0)).sum()
+/// The energy a braking resistor takes per cycle, J, and the most the DC link's capacitors would have to hold, J, from the
+/// cycle's stretches `events` (`MotorLoad::regeneration_events`: fed back positive, drawn negative) when the capacitors
+/// hold `room` J above the bus: the link fills with what is fed back, spills what is above its room into the resistor and
+/// empties by what is drawn (to the bus, no lower; its own losses left out, so the estimate errs high). Braking events
+/// with too little drawn between them add up. The cycle repeats: the link enters it as the cycle before left it, so the
+/// figures are those of a second pass.
+fn resistor_excess(events: &[f64], room: f64) -> (f64, f64) {
+    let (mut fill, mut excess, mut most) = (0.0f64, 0.0, 0.0f64);
+    for (i, &e) in events.iter().chain(events).enumerate() {
+        fill = (fill + e).max(0.0);
+        if i >= events.len() {
+            most = most.max(fill);
+            excess += (fill - room).max(0.0);
+        }
+        fill = fill.min(room);
+    }
+    (excess, most)
 }
 
 /// Nominal life of the guide that has the least, in km, where the machine reports guide loads and the config has
@@ -1781,7 +1802,10 @@ fn guides_of(load: &CycleLoad) -> Vec<GuideLoad> {
     if !load.guides.is_empty() {
         return load.guides.clone();
     }
-    load.guide_load.map(|(peak, equivalent)| GuideLoad { peak, equivalent, speed: load.guide_speed }).into_iter().collect()
+    load.guide_load
+        .map(|(peak, equivalent)| GuideLoad { peak, equivalent, speed: load.guide_speed })
+        .into_iter()
+        .collect()
 }
 
 /// The width of the speed bands of `MotorLoad::gearbox_torque_by_speed`, rad/s of the motor.
@@ -4203,7 +4227,8 @@ pub fn velocity_loop_responses(
     let first = &crate::catalog::resolve(entry, configs.first().ok_or_else(|| ConfigError::Invalid("config".into()))?)?;
     let mut frequencies = loop_frequencies(first)?;
     let machine = (entry.build)(first)?;
-    let amplitudes = machine.motors().iter().map(|m| loop_amplitude(entry, first, &m.id)).collect::<Result<Vec<_>, _>>()?;
+    let amplitudes =
+        machine.motors().iter().map(|m| loop_amplitude(entry, first, &m.id)).collect::<Result<Vec<_>, _>>()?;
     let range = frequencies[0]..=frequencies[frequencies.len() - 1];
     frequencies.extend(machine.modes(&first.f64s("start.pose")?).iter().map(|m| m.hz).filter(|f| range.contains(f)));
     let motors = machine.motors().len();
@@ -4702,12 +4727,37 @@ mod tests {
 
     /// A guide at 100 N for 1 s at 1 m/s and at 200 N for 1 s at 3 m/s: the speed-weighted cubic mean is
     /// cbrt((100^3 * 1 + 200^3 * 3) / (1 + 3)) = cbrt(6.25e6) = 184.20 N (time-weighted: 165.1 N). A braking resistor, with the
-    /// capacitors taking 2 J of each event, takes (5 - 2) + 0 + (3 - 2) = 4 J of 5, 1.5 and 3 J.
+    /// capacitors holding 2 J: of 5, 1.5 and 3 J fed back with 10 J drawn between each it takes (5 - 2) + 0 + (3 - 2) = 4 J.
+    /// With 1 J drawn between, the link enters the 1.5 J and the 3 J 1 J full: the resistor takes 3 + 0.5 + 2 = 5.5 J and
+    /// the link would have to hold 5 J. A cycle that ends on 1 J fed back and begins on 1.5 J
+    /// enters its first braking 1 J full: 0.5 J spills (the link would hold 2.5 J).
     #[test]
     fn a_guide_load_is_weighted_with_distance_and_the_resistor_takes_what_the_link_cannot() {
         assert!((equivalent_load(100f64.powi(3) + 200f64.powi(3) * 3.0, 4.0) - 184.2).abs() < 0.01);
         assert_eq!(equivalent_load(0.0, 0.0), 0.0);
-        assert!((resistor_excess(&[5.0, 1.5, 3.0], 2.0) - 4.0).abs() < 1e-12);
+        let close = |(a, b): (f64, f64), (c, d): (f64, f64)| assert!((a - c).abs() < 1e-12 && (b - d).abs() < 1e-12);
+        close(resistor_excess(&[5.0, -10.0, 1.5, -10.0, 3.0, -10.0], 2.0), (4.0, 5.0));
+        close(resistor_excess(&[5.0, -1.0, 1.5, -1.0, 3.0, -10.0], 2.0), (5.5, 5.0));
+        close(resistor_excess(&[1.5, -3.0, 1.0], 2.0), (0.5, 2.5));
+        assert_eq!(resistor_excess(&[], 2.0), (0.0, 0.0));
+    }
+
+    /// Without a gain crossover in the band the phase margin is NaN (not measurable) and `stable` judges the gain margin
+    /// alone; a valid measurement with a negative margin, or one not valid, is not stable.
+    #[test]
+    fn a_loop_without_a_gain_crossover_is_judged_on_its_gain_margin() {
+        let m = |phase: f64, gain: f64, valid: bool| LoopMargins {
+            crossover_hz: f64::NAN,
+            phase_margin_deg: phase,
+            gain_margin_db: gain,
+            valid,
+            peak_sensitivity: 1.0,
+            peak_frequency_hz: 10.0,
+        };
+        assert!(m(f64::NAN, 20.0, true).stable());
+        assert!(!m(f64::NAN, -1.0, true).stable());
+        assert!(!m(f64::NAN, f64::NAN, true).stable());
+        assert!(!m(-5.0, 20.0, true).stable() && m(40.0, 6.0, true).stable() && !m(40.0, 6.0, false).stable());
     }
 
     /// L(jw) = (wc / jw) e^(-jw tau), an integrator with a dead time, by hand: |L| = 1 at wc, where the phase is

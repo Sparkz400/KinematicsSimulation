@@ -79,6 +79,49 @@ fn the_cylinder_s_checks_are_judged() {
     assert!(!verdicts(&tight, &load).unwrap().iter().find(|v| v.check == "cushion-energy").unwrap().ok);
 }
 
+/// The shipped cycle's figures as docs/mechanisms.md gives them (with the port throttle in series with the cushion's
+/// bleed): stroke times, the speed and kinetic energy entering the cushion, the speed at the end stop, the air per
+/// double stroke and its energy at the compressor (0.12 kWh/m3: 432 J per normal litre).
+#[test]
+fn the_shipped_cylinder_gives_its_documented_figures() {
+    let ids = [
+        "cylinder.z.stroke_time_extend",
+        "cylinder.z.stroke_time_retract",
+        "cylinder.z.impact_speed",
+        "cylinder.z.impact_energy",
+        "cylinder.z.end_speed",
+        "cylinder.z.air_cycle",
+        "cylinder.z.compressor_energy",
+    ];
+    let rows = run(&entry().config(), 7.0, &ids);
+    // Each signal holds its figure of the last stroke: the values it took over the run.
+    let taken = |i: usize| {
+        let mut v: Vec<f64> = rows.iter().map(|r| r[i]).filter(|x| *x > 0.0).collect();
+        v.dedup();
+        v
+    };
+    let range = |i: usize| taken(i).iter().fold((f64::MAX, f64::MIN), |(a, b), x| (a.min(*x), b.max(*x)));
+    for (i, id) in ids.iter().enumerate() {
+        println!("{id}: {:?}", taken(i));
+    }
+    let within = |i: usize, low: f64, high: f64| {
+        let (a, b) = range(i);
+        assert!(a >= low && b <= high, "{}: {a} to {b}, documented {low} to {high}", ids[i]);
+    };
+    // Run on 16 November 2026: extending 0.5506 to 0.5555 s, retracting 0.6523 to 0.6546 s, entering the cushion at 0.218
+    // to 0.241 m/s with 0.0119 to 0.0289 J, at the end stop 0.058 to 0.088 m/s, 1.097 l per double stroke (474 J).
+    within(0, 0.545, 0.565);
+    within(1, 0.645, 0.655);
+    within(2, 0.215, 0.245);
+    within(3, 0.0115, 0.0295);
+    within(4, 0.055, 0.095);
+    // The air per double stroke once the first has ended (before it, the signal counts the stroke under way).
+    let air = range(5).1;
+    assert!((air - 1.10).abs() < 0.005, "{air} l");
+    let energy = rows.last().unwrap()[6];
+    assert!(energy > 0.0 && (air * 0.12 * 3.6e6 / 1e3 - 474.0).abs() < 1.0, "{air} l, {energy} J");
+}
+
 /// Halving the integration step (four sub-steps to eight) changes the cylinder's stroke times by less than 1 %.
 #[test]
 fn halving_the_step_leaves_the_stroke_time() {

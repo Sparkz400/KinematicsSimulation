@@ -569,17 +569,36 @@ fn verdicts_match_the_hand_calculation_and_fail_where_a_part_is_too_small() {
         Verdict { check: "motor-thermal", motor: Some(0), value: m.winding_rise, limit: 100.0, ok: true }
     );
     // The DC link: 470 uF between 155.13 V and 224.65 V hold C (U2^2 - U1^2) / 2 = 6.2 J, more than one braking gives back.
+    // The acceleration between two brakings draws more than a braking gave back, so the link starts each braking empty
+    // and holds the one braking (2.9833 J) and what the controller's settling feeds back after it with too little drawn
+    // between (0.5 mJ: 2.9838 J).
     let link = find(&all, "dc-link-energy").unwrap();
-    assert!((link.limit - 6.204).abs() < 1e-3 && link.value == m.largest_regeneration && link.value < link.limit);
+    assert!(
+        (link.limit - 6.204).abs() < 1e-3
+            && link.value >= m.largest_regeneration
+            && link.value - m.largest_regeneration < 1e-3
+            && link.value < link.limit
+            && m.energy_regenerated > 0.0,
+        "{link:?}, largest braking {} J",
+        m.largest_regeneration
+    );
     assert!(find(&all, "braking-resistor-continuous").is_none());
 
-    // A tenth of the capacitance cannot hold a braking: the resistor has to, and is judged on mean and peak power.
+    // A tenth of the capacitance cannot hold a braking: the resistor has to, and is judged on mean and peak power. By hand
+    // (see the DC link test below): the cycle's two brakings feed back 3.0625 J - 0.079 J of copper loss = 2.983 J each,
+    // the link holds 47 uF (224.65^2 - 155.13^2) V^2 / 2 = 0.620 J of each and empties into the next acceleration, so the
+    // resistor takes 2 (2.983 - 0.620) J = 4.725 J over the cycle's 2.202 s: 2.146 W (all of it fed back would be 2.71 W).
     let (load, all) = judged(&["ratings.dc_link_capacitance_uf = 47.0"]);
     let m = &load.motors[0];
     assert!(find(&all, "dc-link-energy").unwrap().value > 0.62 && all.iter().all(|v| v.ok), "{all:?}");
+    let room = 0.5 * 47e-6 * (224.65f64.powi(2) - 155.13f64.powi(2));
+    let mean = find(&all, "braking-resistor-continuous").unwrap().value;
     assert!(
-        (find(&all, "braking-resistor-continuous").unwrap().value - m.energy_regenerated / load.duration).abs() < 1e-12
+        (mean - (m.energy_regenerated - 2.0 * room) / load.duration).abs() < 1e-3 * mean
+            && (mean - 2.0 * (2.983 - 0.620) / 2.202).abs() < 0.01 * mean,
+        "resistor {mean} W"
     );
+    println!("resistor {mean} W over the cycle's {} s", load.duration);
     assert_eq!(find(&all, "braking-resistor-peak").unwrap().value, m.peak_regenerated_power);
     // A resistor that is too small for the mean power fails; so does a gearbox below the peak torque.
     let (_, all) = judged(&[
@@ -753,6 +772,46 @@ fn a_late_frame_is_extrapolated_not_restarted() {
         last = (d.pos_set, d.since_setpoint);
     });
     assert!(held > 0 && bad == 0, "{bad} restarts of a held setpoint in {held} steps");
+}
+
+/// The torque-band monitor on the axis standing up, with the constant-inertia feedforward (no weight in it): it expects
+/// the weight besides the feedforward (`torque_hold`), so holding at rest, moving and dwelling trip nothing although the
+/// band, 0.9 of the weight's torque 4 kg * g * 0.02 m / 5 = 0.1569 N m, is below it. A process force of twice the
+/// weight pushing on the carriage while it dwells, which no model expects, is a lasting extra load: it trips there.
+#[test]
+fn the_torque_band_expects_the_held_weight_and_trips_on_a_lasting_extra_load() {
+    let run = |process: bool| {
+        let mut cfg = ideal_rigid();
+        let band = 0.9 * 4.0 * G * 0.02 / 5.0 / cfg.f64("drive.peak_torque_nm").unwrap();
+        for e in [
+            "geometry.incline_deg = 90.0".to_string(),
+            "drive.torque_feedforward_model = \"inertia\"".into(),
+            "effects.drive_monitoring = true".into(),
+            format!("drive.torque_band = {band:?}"),
+            format!("effects.process_force = {process}"),
+            format!("process.force_x_n = {:?}", 2.0 * 4.0 * G),
+        ] {
+            cfg.set_text(&e).unwrap();
+        }
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim.run(0.5, |_| {});
+        assert!(sim.control.fault.is_none(), "at rest: {:?}", sim.control.fault);
+        sim.command(sim_components::Command::StartCycle).unwrap();
+        // Whether the cycle dwelt going into the step that tripped (the trip drops the cycle).
+        let mut dwelling = false;
+        while sim.time() < 4.0 && sim.control.fault.is_none() {
+            dwelling = sim.control.dwell_progress().is_some();
+            sim.step();
+        }
+        (sim.control.fault.clone(), dwelling)
+    };
+    let (fault, _) = run(false);
+    assert!(fault.is_none(), "{fault:?}");
+    let (fault, dwelling) = run(true);
+    assert!(
+        fault.as_ref().is_some_and(|f| f.monitor == sim_components::fault::Monitor::TorqueBand) && dwelling,
+        "{fault:?}, dwelling {dwelling}"
+    );
 }
 
 /// Fieldbus jitter against a hand calculation. Each frame takes the delay of 1 cycle plus j more, j drawn evenly from
