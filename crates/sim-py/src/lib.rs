@@ -20,7 +20,7 @@ use sim_components::motor_fit::{
 };
 use sim_components::trace::{Trace, TraceError, per_axis_fit};
 use sim_components::{Command, DriveMode, Sim, load_config};
-use sim_core::{ConfigError, MachineEntry, MotorInfo, Translations};
+use sim_core::{Config, ConfigError, MachineEntry, MotorInfo, Translations};
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
 use std::path::{Path, PathBuf};
 
@@ -1365,6 +1365,75 @@ fn modes(py: Python<'_>, config: &PyConfig, axis_index: usize, points: usize) ->
     Ok(out.unbind())
 }
 
+/// The global sensitivity of the cycle's results to the values of `[bounds]`, all moving at once, as `sim-cli sensitivity
+/// --method` gives it (`sim_components::sensitivity`): columns "result", "rank", "parameter", and for "morris" "mu_star",
+/// "mu", "sigma", for "sobol" "first", "first_low", "first_high", "total", "total_low", "total_high". `samples`: Morris
+/// trajectories (10 by default) or Sobol base rows (64). `groups` limits the bounds to those config tables, `results` the
+/// rows to those results.
+#[pyfunction]
+#[pyo3(signature = (config, *, method="morris", samples=None, seed=1, groups=None, results=None))]
+fn global_sensitivity(
+    py: Python<'_>,
+    config: &PyConfig,
+    method: &str,
+    samples: Option<usize>,
+    seed: u64,
+    groups: Option<Vec<String>>,
+    results: Option<Vec<String>>,
+) -> PyResult<Py<PyDict>> {
+    use sim_components::sensitivity::{morris, sobol};
+    let (entry, cfg) = (config.entry, config.cfg.clone());
+    let (groups, wanted) = (groups.unwrap_or_default(), results.unwrap_or_default());
+    let bounded = |cfg: &Config| -> Result<Vec<(String, f64, f64)>, ConfigError> {
+        let mut b = bounds(cfg)?;
+        b.retain(|(path, ..)| groups.is_empty() || groups.iter().any(|g| path.split('.').next() == Some(g.as_str())));
+        Ok(b)
+    };
+    // Per result its rows: parameter and the method's figures in the order of `names`.
+    let (names, rankings): (&[&str], Vec<(String, Vec<(String, Vec<f64>)>)>) = match method {
+        "morris" => {
+            let r = py
+                .detach(|| morris(entry, &cfg, &bounded(&cfg)?, samples.unwrap_or(10), seed))
+                .map_err(|e| config_error(entry, e))?;
+            let rows = r.into_iter().map(|k| {
+                (k.result, k.rows.into_iter().map(|w| (w.parameter, vec![w.mu_star, w.mu, w.sigma])).collect())
+            });
+            (&["mu_star", "mu", "sigma"], rows.collect())
+        }
+        "sobol" => {
+            let r = py
+                .detach(|| sobol(entry, &cfg, &bounded(&cfg)?, samples.unwrap_or(64), seed))
+                .map_err(|e| config_error(entry, e))?;
+            let rows = r.into_iter().map(|k| {
+                let figures = |w: &sim_components::sensitivity::SobolRow| {
+                    vec![w.first, w.first_ci.0, w.first_ci.1, w.total, w.total_ci.0, w.total_ci.1]
+                };
+                (k.result, k.rows.iter().map(|w| (w.parameter.clone(), figures(w))).collect())
+            });
+            (&["first", "first_low", "first_high", "total", "total_low", "total_high"], rows.collect())
+        }
+        _ => return Err(PyValueError::new_err(format!("method must be \"morris\" or \"sobol\", not {method:?}"))),
+    };
+    if let Some(missing) = wanted.iter().find(|w| !rankings.iter().any(|(result, _)| result == *w)) {
+        return Err(PyValueError::new_err(format!("no result {missing:?}")));
+    }
+    let rows: Vec<(&str, usize, &str, &[f64])> = rankings
+        .iter()
+        .filter(|(result, _)| wanted.is_empty() || wanted.contains(result))
+        .flat_map(|(result, rows)| {
+            rows.iter().enumerate().map(move |(k, (p, f))| (result.as_str(), k + 1, p.as_str(), f.as_slice()))
+        })
+        .collect();
+    let out = PyDict::new(py);
+    out.set_item("result", rows.iter().map(|r| r.0).collect::<Vec<_>>())?;
+    out.set_item("rank", rows.iter().map(|r| r.1).collect::<Vec<_>>())?;
+    out.set_item("parameter", rows.iter().map(|r| r.2).collect::<Vec<_>>())?;
+    for (k, name) in names.iter().enumerate() {
+        out.set_item(*name, column(py, rows.iter().map(|r| r.3[k])))?;
+    }
+    Ok(out.unbind())
+}
+
 /// The cycle with each parameter at its low and at its high bound of the config, or `delta` lower and higher where it
 /// has none, one at a time, strongest first, as `sim-cli sensitivity` gives it: columns "parameter", "value", "low",
 /// "high", the relative changes "peak_torque_low", "peak_torque_high", "rms_torque_low", "rms_torque_high",
@@ -1756,6 +1825,7 @@ fn kinematics_sim(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(margins, m)?)?;
     m.add_function(wrap_pyfunction!(modes, m)?)?;
     m.add_function(wrap_pyfunction!(sensitivity, m)?)?;
+    m.add_function(wrap_pyfunction!(global_sensitivity, m)?)?;
     m.add_function(wrap_pyfunction!(replay, m)?)?;
     m.add_function(wrap_pyfunction!(compare, m)?)?;
     m.add_function(wrap_pyfunction!(report, m)?)?;

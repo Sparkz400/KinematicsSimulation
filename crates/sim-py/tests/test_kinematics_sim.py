@@ -400,6 +400,17 @@ def test_sensitivity_matches_the_cli():
         np.testing.assert_allclose(result[column], floats(rows, column), atol=0.0051, err_msg=column)
 
 
+
+def test_global_sensitivity_matches_the_cli():
+    cfg = ks.Config(FIRST)
+    result = ks.global_sensitivity(cfg, method="morris", samples=2, groups=["friction_x"], results=["rms-torque:a"])
+    args = ("--method", "morris", "--samples", "2", "--group", "friction_x", "--result", "rms-torque:a")
+    rows = cli("sensitivity", FIRST, *args)
+    assert result["parameter"] == [r["parameter"] for r in rows] and len(rows) == 3
+    np.testing.assert_allclose(result["mu_star"], floats(rows, "mu_star"), rtol=1e-3)
+    with pytest.raises(ValueError):
+        ks.global_sensitivity(cfg, method="fast")
+
 def test_replay_matches_the_cli(trace, tmp_path):
     result = ks.replay(configured(), trace_file=trace)
     overlay = tmp_path / "overlay.csv"

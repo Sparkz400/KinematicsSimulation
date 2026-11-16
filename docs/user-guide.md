@@ -629,6 +629,69 @@ On the EXCT-30 it found what neither band mode found: with the 25 Hz shaper alon
 
 `--worst` without `--bands`, or with `--samples` or `--seed`, is refused (exit code 2). The app has it as "worst corner" beside the error bands.
 
+**Global sensitivity: which bounded values to measure first.** The sensitivity above moves one value at a time; `--method` moves all values of `[bounds]` at once and ranks them per result, so a value that matters only together with another one shows too.
+
+```text
+$ sim-cli sensitivity t-gantry --method morris --samples 10
+Cycles simulated for the global sensitivity: 320
+Measure these first: motor-peak:a: gearbox.efficiency, friction_x.coulomb_n, motor.friction_coulomb_nm
+...
+result,rank,parameter,mu_star,mu,sigma
+motor-thermal:a,1,motor.friction_coulomb_nm,0.2510,-0.2510,0.04316
+motor-thermal:a,2,friction_x.viscous_n_s_m,0.2241,-0.2241,0.02817
+motor-thermal:a,3,motor.friction_viscous_nm_s_rad,0.1659,-0.1659,0.02200
+...
+```
+
+`--method morris` is Morris' elementary-effects screening: from a random start on a grid of four levels per value (0, 1/3, 2/3 and 1 of its range) each value is stepped once by 2/3 of its range, in a random order; `--samples` such trajectories (10 by default) cost `samples` × (k + 1) cycles for k bounded values. `--method sobol` gives Sobol' indices (Saltelli's sampling, Jansen's estimators) for the variance of a result: `--samples` N base rows (64 by default), N × (k + 2) cycles. Both use all processor cores and `--seed S` (default 1): the same call gives the same table.
+
+| Column | Meaning |
+| --- | --- |
+| `result` | What is ranked: a verdict's margin, `check` or `check:motor` (its room to the limit in the check's unit, as `verdicts` shows value and limit: limit − value, or value − limit for the checks that must stay above their limit; negative where it fails), or a figure of the cycle: `peak-torque:motor`, `rms-torque:motor` (N m), `winding-rise:motor` (K), `path-error-peak`, `path-error-rms`, `dwell-error-peak` (m; the dwell error is the settling) |
+| `rank` | 1 is the value to measure first for this result |
+| `mu_star` (Morris) | Mean of the absolute effects: how much the result changes when the value goes over its whole range, in the result's unit. The ranking figure |
+| `mu` (Morris) | Mean of the effects with their sign. Near 0 with a large `mu_star`: the effect changes sign over the range |
+| `sigma` (Morris) | Spread of the effects: large against `mu_star` where the effect depends on the other values (interaction) or is curved |
+| `first`, `first_low`, `first_high` (Sobol) | Share of the result's variance the value explains alone, with its bootstrap 95 % interval (200 resamples of the rows) |
+| `total`, `total_low`, `total_high` (Sobol) | Share with all its interactions; the ranking figure. A value with total 0 does not matter, whatever the others do |
+
+| Option | Effect |
+| --- | --- |
+| `--method morris\|sobol` | Global instead of one at a time. Refused together with `--delta` |
+| `--samples N` | Morris trajectories (10) or Sobol' base rows (64) |
+| `--seed S` | Another set of random numbers (1) |
+| `--result NAME` | Only the rows of this result. Repeatable; an unknown name is refused (after the runs, which name the results) |
+| `--group TABLE` | Only the bounds of this config table. Repeatable |
+
+On the default T-gantry (31 bounded values that act on the cycle, 320 cycles, about 2 minutes on the machine this guide was written on) the ranking is what the physics says:
+
+| Result | 1st | 2nd | 3rd |
+| --- | --- | --- | --- |
+| `motor-thermal:a` (K of room) | `motor.friction_coulomb_nm` 0.25 | `friction_x.viscous_n_s_m` 0.22 | `motor.friction_viscous_nm_s_rad` 0.17 |
+| `motor-peak:a` | `gearbox.efficiency` | `friction_x.coulomb_n` | `motor.friction_coulomb_nm` |
+| `settling` (m of room) | `belt.stiffness_ea_n` 1.2e-5 | `frame.stiffness_n_m` 4.2e-6 | `friction_z.stiction_n` 4.1e-6 |
+| `path-error-peak` (m) | `frame.stiffness_n_m` 7.3e-5 | `tool_flex.tilt_stiffness_nm_rad` 6.9e-5 | `belt.stiffness_ea_n` 2.4e-5 |
+| `belt-slack` (N of tension) | `belt.pretension_n` 200 | `friction_x.coulomb_n` 8.4 | `friction_x.viscous_n_s_m` 7.0 |
+| `pulley-bearing-life:a` (h) | `ratings.bearing_lubricant_viscosity_mm2_s` | `belt.pretension_n` | `ratings.bearing_contamination_factor` |
+
+The masses of the T-gantry have no bounds, so friction leads the heat: what is unknown about the drive train is its friction, and that is what to measure first (a constant-speed run per axis, see "Replay a drive trace and fit parameters"). The belt's slackest section moves one to one with the pretension (μ* 200 N for a range of 200 N, σ 0.002 N): a value that acts alone and in a straight line has σ near 0. The frame's stiffness has σ (8.6e-6 m) twice its μ* on settling: where the tool settles depends on it together with the shaper and the belt.
+
+On the D3 (36 values, 370 cycles, about 30 s) the masses lead every torque and heat result (`mass.platform_kg`, `mass.forearm_pair_kg`, `mass.elbow_kg`, then `geometry.upper_arm_m`; μ* of `rms-torque:1` 0.38, 0.24, 0.13 N m), and the gearbox's play leads the tool's accuracy (`gearbox.backlash_rad`, `gearbox.lost_motion_band_rad`, `gearbox.stiffness_nm_rad` for `path-error-peak` and `settling`). So: weigh the platform and the forearms, and measure the gearboxes' lost motion.
+
+Sobol' on the D3's masses alone, for its first motor's RMS torque:
+
+```text
+$ sim-cli sensitivity delta-d3 --method sobol --samples 32 --group mass --result rms-torque:1
+Cycles simulated for the global sensitivity: 288
+Measure these first: rms-torque:1: mass.platform_kg, mass.forearm_pair_kg, mass.elbow_kg
+result,rank,parameter,first,first_low,first_high,total,total_low,total_high
+rms-torque:1,1,mass.platform_kg,0.806,0.670,0.905,0.880,0.617,1.178
+rms-torque:1,2,mass.forearm_pair_kg,-0.040,-0.388,0.311,0.123,0.082,0.184
+...
+```
+
+32 rows are few: the first-order indices of the smaller values scatter around 0 (even below it, which the estimator allows) and their intervals are wide. Screen with Morris first, then run Sobol' with `--group` on the few values that lead, and raise `--samples` until the intervals are narrow enough to decide. Python: `ks.global_sensitivity(cfg, method="morris", samples=10, groups=None, results=None)` returns the same columns.
+
 Limits for this task:
 
 - **Plain `--bands` is one at a time.** Two values that are both off can take a result beyond its band. `--samples` shows that.

@@ -44,6 +44,12 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   shaft 0.293 N m). S-profile replay 5.3 → 4.6 % RMS, checks 13.3 → 13.1 % and 6.1 %; fitted moved mass 57 kg below
   the config's 549 kg (92 below 584 before); first mode unchanged at 137 Hz. The screw shaft's inertia and the
   efficiency on the inertial force, named as missing in 1.0.0's notes, were already modelled: docs/validation.md.
+- Global sensitivity over a config's `[bounds]`: `sim-cli sensitivity <machine> --method morris|sobol [--samples N]
+  [--seed S] [--result NAME] [--group TABLE]`, Python `ks.global_sensitivity` (module `sim_components::sensitivity`).
+  Morris' elementary effects (μ*, μ, σ) as a cheap screening, Sobol' first-order and total indices (Saltelli sampling,
+  Jansen estimators) with bootstrap 95 % intervals; per result (the verdicts' margins, peak and RMS torque, winding rise,
+  path and dwell error) a ranked CSV and "measure these first" on the error stream; runs on all cores, deterministic for
+  a seed. Checked on the Ishigami function and a linear model with known indices.
 
 ## [1.0.0] - 2026-11-16
 

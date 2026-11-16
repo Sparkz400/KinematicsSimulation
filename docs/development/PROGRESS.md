@@ -4417,3 +4417,18 @@ shipped config but the bench's. On the bench, with the Coulomb friction fitted a
 13.1 % and 6.1 %, fitted mass 57 kg below 549 kg, first mode 137 Hz unchanged. Test:
 `the_screw_efficiency_follows_the_lead_angle_with_its_switch` (sim-components). Missing: the screw shaft's real
 geometry (threads, journals), which the remaining 57 kg points at; a separate back-drive efficiency.
+
+## Global sensitivity: Morris and Sobol' (16 November)
+
+- `sim_components::sensitivity`: Morris trajectories on a four-level grid (step 2/3 of the range), μ*, μ, σ; Saltelli
+  points (A, B, AB_i) with Jansen's first-order and total estimators and 200 bootstrap resamples for 95 % intervals.
+  Results per run: every verdict's margin (room to its limit in its unit; not the utilisation, which is 0 for
+  `belt-slack` whatever the tension), per motor peak and RMS torque and winding rise, path error peak and RMS, dwell
+  error. Front ends: `sim-cli sensitivity --method morris|sobol` (the one-at-a-time mode unchanged without `--method`),
+  `ks.global_sensitivity`.
+- Tests: Ishigami S and S_T to 0.03, the linear model's a_i² Var_i / Σ, Morris' exact μ* = |a_i| range with σ = 0, the
+  Morris grid, determinism and thread independence, a value that cannot act (μ* = 0, S_T = 0) on the single axis, Python
+  against the CLI.
+- Morris, 10 trajectories: T-gantry 320 cycles in about 2 min (friction leads heat and RMS torque, belt and frame
+  stiffness lead settling and path error, the belt's slack follows the pretension 1:1); D3 370 cycles in about 30 s
+  (platform and forearm masses lead the torques, gearbox backlash and lost motion the accuracy). See the user guide.

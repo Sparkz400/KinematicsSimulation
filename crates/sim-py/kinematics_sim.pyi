@@ -9,7 +9,7 @@ import numpy.typing as npt
 __version__: str
 __all__ = [
     "Config", "Sim", "machines", "signals", "run", "analyze", "verdicts", "sizing", "sweep", "optimise", "fit", "identify",
-    "step", "bode", "tuning", "margins", "modes", "sensitivity", "replay", "compare", "report", "check_dataset", "fmu",
+    "step", "bode", "tuning", "margins", "modes", "sensitivity", "global_sensitivity", "replay", "compare", "report", "check_dataset", "fmu",
     "__version__",
 ]
 
@@ -228,6 +228,18 @@ def modes(config: Config, *, axis_index: int = 0, points: int = 21) -> dict[str,
 
 def sensitivity(config: Config, *, delta: float = 0.2, groups: Sequence[str] | None = None) -> dict[str, Any]:
     """Each parameter at its low and high value, strongest first: parameter, value, low, high, relative changes."""
+
+def global_sensitivity(
+    config: Config,
+    *,
+    method: Literal["morris", "sobol"] = "morris",
+    samples: int | None = None,
+    seed: int = 1,
+    groups: Sequence[str] | None = None,
+    results: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """All values of [bounds] moving at once, ranked per result: result, rank, parameter, and mu_star, mu, sigma
+    (morris) or first, first_low, first_high, total, total_low, total_high (sobol)."""
 
 def replay(
     config: Config, *, trace_file: str | PathLike[str], map_file: str | PathLike[str] | None = None

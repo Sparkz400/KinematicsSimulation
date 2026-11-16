@@ -1055,6 +1055,23 @@ bounds the source's masses give by hand (`the_measured_ball_screw_has_the_inerti
 | Thermal growth and lead error in a run, screw axis | 10 K: each target reads 11.5e-6 · 10 · x further out; with the table (0, 0)–(0.8 m, 16 µm) 20 µm/m more; nothing with `effects.load_encoder` | 1e-9 m | `a_warm_screw_and_its_lead_error_move_the_real_position`, sim-machines accuracy |
 | The test on the single axis, screw axis, T-gantry and D3 | Finite figures within a millimetre; a rating gives a verdict | — | `the_test_runs_on_the_axes_the_gantry_and_the_delta`, sim-machines accuracy |
 
+## Hand calculations: global sensitivity
+
+`sim-cli sensitivity --method morris|sobol`, `ks.global_sensitivity` (`sim_components::sensitivity`). The estimators are
+checked on functions whose indices are known in closed form; on the machines only what can be said exactly.
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| Sobol' first-order and total indices of the Ishigami function (a = 7, b = 0.1), 16384 rows | V1 = ½ (1 + b π⁴ / 5)² = 4.3459, V2 = a² / 8 = 6.125, V13 = b² π⁸ (1/18 − 1/50) = 3.3737, V = 13.8446: S = 0.3139, 0.4424, 0; S_T = 0.5576, 0.4424, 0.2437 | 0.03 absolute; bootstrap interval narrower than 0.06 and around the estimate | `sobol_finds_the_ishigami_indices`, sensitivity |
+| Sobol' indices of a linear model Y = Σ a_i X_i, a = (1, −2, 0.5, 0), ranges 1, 1, 4, 3 | S_i = S_Ti = a_i² Var_i / Σ with Var_i = range² / 12: 1/9, 4/9, 4/9, 0; the value without effect exactly 0 | 0.03 (first), 0.02 (total); exact | `sobol_finds_the_shares_of_a_linear_model`, sensitivity |
+| Morris on the same linear model, 10 trajectories | Every elementary effect is a_i × range: μ* = 1, 2, 2, 0, μ with the sign, σ = 0 | 1e-9 | `morris_on_a_linear_model_gives_the_slope_times_the_range_with_no_spread`, sensitivity |
+| Morris on the Ishigami function, 200 trajectories | On the grid (−π, −π/3, π/3, π) every step of x2 changes 7 sin² x2 by 7 · 3/4: μ*2 = 5.25 / (2/3) = 7.875; x3 acts only with sin x1 ≠ 0 (half the steps): μ*3 ≈ ½ · 0.1 · (π⁴ − π⁴/81) · 0.866 / (2/3) = 6.25 and σ3 > 1, though S3 = 0 | μ*3 > 1, σ3 > 1, μ*2 > μ*3 | `morris_sees_the_interaction_of_the_ishigami_function`, sensitivity |
+| Morris points | Every point on the four-level grid, every step moves one value by 2/3 of its range, every value once per trajectory | 1e-12 | `every_morris_point_lies_on_the_grid_and_every_step_moves_one_parameter_by_the_step`, sensitivity |
+| Determinism | The same seed gives the same points and indices, another seed other points; on the single axis the same rankings on one thread and on five, to the bit | exact | `the_same_seed_gives_the_same_points_and_another_seed_others`, sensitivity; `the_same_seed_gives_the_same_ranking_on_one_thread_as_on_many`, global_sensitivity |
+| Single axis: slide friction against the lubricant's viscosity (which only the bearings' life reads) | RMS torque: both frictions μ* > 0 with μ = μ* (more friction, more torque in every step); the lubricant μ* = σ = 0 and Sobol' S_T = 0 with interval (0, 0) | exact | `friction_moves_the_rms_torque_and_the_lubricant_does_not`, global_sensitivity |
+| T-gantry, Morris 10 trajectories: the slackest belt section's margin against the pretension (200 to 400 N) | The section's tension rises one to one with the pretension: μ* = 200 N, σ ≈ 0 (found 200.0 N, σ 0.002 N) | as found, shown in the user guide | run by hand, not a test |
+| Python against the command line | The same rows and μ* | 1e-3 relative | `test_global_sensitivity_matches_the_cli`, sim-py |
+
 ## What is not validated
 
 - **The delta picker D3's geometry, masses and stiffnesses.** Autonox keeps them behind a registration; the arm lengths are scaled from Williams' estimate of an ABB IRB 360, the masses estimated. Its cycle time is compared with ABB's and Omron's printed figures, not asserted (they round the corners and run faster). Its forearms are rigid rods (their spin about their own axis with an estimated inertia), its upper arms' bending stiffnesses (in and out of their planes) estimates for a carbon tube; neither is compared with a measured delta.
@@ -1127,3 +1144,13 @@ project yet. The report's texts are in English only.
 **The validation dashboard.** It shows the outcome of each test this page names and, for the tests that call `record_check`, their values; it checks nothing these tests do not. Most rows carry no recorded values, the Python tests are not run for it, and a row whose tests did not run shows as "not run", not as passed ([dashboard](dashboard.md)).
 
 **Positioning accuracy** (`sim-cli accuracy`). The ISO figures are computed as the standards define them and checked by hand; what the simulated axes give is not compared with a laser measurement of any machine. Thermal growth and the lead error are a map applied to the tool pose at rest, not part of the dynamics; the belt's expansion coefficient is an estimate (no belt datasheet gives one); the frame's growth, a gradient along the screw and the screw's own heating from its nut are not modelled; the screw's stiffness is the one at its softest place over the whole stroke (the model's shortcut), so a sag that grows along the screw does not show. The D3's systematic deviation of up to 0.57 mm along y comes from its estimated stiffnesses and is not checked against a real delta. The machine tests run one or two approaches per target and direction, not ISO 230-2's five.
+
+**Global sensitivity** (`sensitivity --method morris|sobol`). The estimators are checked on analytic functions, not on
+a machine whose true indices are known: on the machines the tests check only determinism, a value that cannot act and
+one that must. The ranking is only as good as the `[bounds]` it starts from, which are mostly estimates, and it ranks
+only bounded values (the shipped T-gantry bounds no mass). Sobol' uses plain Monte Carlo rows, not a quasi-random
+sequence; with a few dozen rows its first-order indices scatter around 0 (below 0 too) and the bootstrap intervals are
+wide; no rule says how many rows are enough. Morris' μ* is in the result's unit per whole range of the value and does not
+say which share of the variance a value explains. A result missing from a run (a check only some values bring up) or not
+finite in one (a life where nothing wore) is left out. Integer values (pole pairs) are rounded, so their steps are not
+the grid's.

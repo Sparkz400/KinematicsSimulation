@@ -36,6 +36,7 @@ pub mod program;
 pub mod report;
 pub mod rigid;
 pub mod search;
+pub mod sensitivity;
 pub mod shaper;
 pub mod shapes;
 pub mod sim;

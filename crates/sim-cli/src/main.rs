@@ -172,7 +172,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("transmission") => &["--key", "--from", "--to", "--count", "--gearboxes"],
         Some("compare-kinematics") => &["--machines", "--vendor", "--series", "--gearboxes", "--drives", "--rank-by"],
         Some("verdicts") => &["--bands", "--samples", "--seed", "--worst", "--path", "--time-optimal"],
-        Some("sensitivity") => &["--delta", "--group"],
+        Some("sensitivity") => &["--delta", "--group", "--method", "--samples", "--seed", "--result"],
         Some("step") => &["--axis-index", "--size", "--time"],
         Some("bode") => &["--axis-index", "--from", "--to", "--count", "--amplitude"],
         Some("tuning") => &["--size", "--amplitude"],
@@ -222,7 +222,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("run") => run(args, tr),
         Some("analyze") => analyze(args, tr),
         Some("sweep") => sweep(args),
-        Some("sensitivity") => sensitivity(args),
+        Some("sensitivity") => sensitivity(args, tr),
         Some("verdicts") => verdicts(args, tr),
         Some("search") => search(args, tr),
         Some("transmission") => transmission(args, tr),
@@ -1351,10 +1351,21 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
 /// or 20 % (or `--delta`) lower and higher where the config gives it no bounds, one at a
 /// time, as relative changes of the results, strongest first. `--group NAME` (repeatable) limits it to
 /// config tables; without it every table of machine and motor data is varied.
-fn sensitivity(args: &Args) -> Result<(), Failure> {
+///
+/// `--method morris|sobol` moves all values of `[bounds]` at once instead (`global_sensitivity`).
+fn sensitivity(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
-    let delta = args.number("--delta")?.unwrap_or(0.2);
     let groups = args.options("--group");
+    if let Some(method) = args.option("--method") {
+        if args.option("--delta").is_some() {
+            return Err(Failure("cli-error-conflict", "--delta --method".into()));
+        }
+        return global_sensitivity(args, tr, entry, &cfg, method, &groups);
+    }
+    if let Some(name) = ["--samples", "--seed", "--result"].into_iter().find(|name| args.option(name).is_some()) {
+        return Err(Failure("cli-error-missing-value", format!("--method ({name})")));
+    }
+    let delta = args.number("--delta")?.unwrap_or(0.2);
     // Timing, switches, limits, gains and the cycle itself are choices, not uncertain machine data.
     let fixed = ["sim", "effects", "drive", "profile", "start", "axis", "temperature", "path"];
     let paths: Vec<String> = cfg
@@ -1392,6 +1403,82 @@ fn sensitivity(args: &Args) -> Result<(), Failure> {
             slack(&row.high)
         )
         .map_err(io)?;
+    }
+    out.flush().map_err(io)
+}
+
+/// `sensitivity <machine> --method morris|sobol`: the global sensitivity of the cycle's results to the values of
+/// `[bounds]` (only those of the tables `--group` names, where it is given), all moving at once
+/// (`sim_components::sensitivity`). Morris: `--samples` trajectories (10 by default), (k + 1) cycles each; one row per
+/// result and parameter with mu*, mu and sigma. Sobol: `--samples` base rows (64 by default), (k + 2) cycles each; S_i
+/// and S_Ti with their bootstrap 95 % intervals. Rows ranked per result, strongest first; `--result NAME` (repeatable)
+/// keeps only those results. `--seed S` (1 by default) picks other samples. The error stream says how many cycles ran
+/// and, per result, the three parameters to measure first.
+fn global_sensitivity(
+    args: &Args,
+    tr: &Translations,
+    entry: &'static MachineEntry,
+    cfg: &Config,
+    method: &str,
+    groups: &[&str],
+) -> Result<(), Failure> {
+    use sim_components::sensitivity::{morris, sobol};
+    let whole = |name: &str, default: f64, least: f64| -> Result<usize, Failure> {
+        let v = args.number(name)?.unwrap_or(default);
+        if v.fract() != 0.0 || v < least || v > 1e9 {
+            return Err(Failure("cli-error-bad-argument", format!("{name} {v}")));
+        }
+        Ok(v as usize)
+    };
+    let mut bounded = sim_components::analysis::bounds(cfg)?;
+    if !groups.is_empty() {
+        bounded.retain(|(path, ..)| groups.contains(&path.split('.').next().unwrap_or("")));
+    }
+    let (k, seed, wanted) = (bounded.len(), whole("--seed", 1.0, 0.0)? as u64, args.options("--result"));
+    // Per result its rows as CSV fields after the rank, and the parameters in their order.
+    let (header, runs, rankings): (&str, usize, Vec<(String, Vec<(String, String)>)>) = match method {
+        "morris" => {
+            let r = whole("--samples", 10.0, 1.0)?;
+            let rankings = morris(entry, cfg, &bounded, r, seed)?;
+            let rows = rankings.into_iter().map(|ranking| {
+                let rows = ranking.rows.into_iter().map(|row| {
+                    let fields =
+                        format!("{},{},{}", significant(row.mu_star), significant(row.mu), significant(row.sigma));
+                    (row.parameter, fields)
+                });
+                (ranking.result, rows.collect())
+            });
+            ("result,rank,parameter,mu_star,mu,sigma", r * (k + 1), rows.collect())
+        }
+        "sobol" => {
+            let n = whole("--samples", 64.0, 2.0)?;
+            let rankings = sobol(entry, cfg, &bounded, n, seed)?;
+            let rows = rankings.into_iter().map(|ranking| {
+                let rows = ranking.rows.into_iter().map(|row| {
+                    let fields = format!(
+                        "{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+                        row.first, row.first_ci.0, row.first_ci.1, row.total, row.total_ci.0, row.total_ci.1
+                    );
+                    (row.parameter, fields)
+                });
+                (ranking.result, rows.collect())
+            });
+            ("result,rank,parameter,first,first_low,first_high,total,total_low,total_high", n * (k + 2), rows.collect())
+        }
+        _ => return Err(Failure("cli-error-bad-argument", format!("--method {method}"))),
+    };
+    if let Some(missing) = wanted.iter().find(|w| !rankings.iter().any(|(result, _)| result == *w)) {
+        return Err(Failure("cli-error-bad-argument", format!("--result {missing}")));
+    }
+    eprintln!("{}", tr.tr_arg("cli-sensitivity-runs", &runs.to_string()));
+    let mut out = output(args, "--out")?;
+    writeln!(out, "{header}").map_err(io)?;
+    for (result, rows) in rankings.iter().filter(|(result, _)| wanted.is_empty() || wanted.contains(&result.as_str())) {
+        let first: Vec<&str> = rows.iter().take(3).map(|(parameter, _)| parameter.as_str()).collect();
+        eprintln!("{}", tr.tr_arg("cli-measure-first", &format!("{result}: {}", first.join(", "))));
+        for (rank, (parameter, fields)) in rows.iter().enumerate() {
+            writeln!(out, "{result},{},{parameter},{fields}", rank + 1).map_err(io)?;
+        }
     }
     out.flush().map_err(io)
 }
