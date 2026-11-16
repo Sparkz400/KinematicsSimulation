@@ -129,6 +129,41 @@ fn a_segment_with_two_movers_stopping_on_it_heats_by_the_hand_calculation() {
     assert_eq!(other.rises, m.rises);
 }
 
+/// The settled rise is R_th times the loss averaged over the last pass (window 1 s here): 18 W for half a second and
+/// nothing for the next half second average to 9 W, 18 K at 2 K/W (a low-pass of one pass would read about 22 K).
+#[test]
+fn the_settled_rise_is_the_loss_averaged_over_one_pass() {
+    let mut m = track(&["start.pose = [0.06, 0.18, 1.131233, 1.634349, 2.137465, 2.640582]"]);
+    let start = m.movers().start.clone();
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; 6]);
+    m.equilibrium(&start, &mut state, &mut torque);
+    let mut rate = vec![0.0; state.len()];
+    for held in [30.0, 0.0] {
+        m.derivatives(&state, &[held, held, 0.0, 0.0, 0.0, 0.0], &mut rate);
+        for _ in 0..5 {
+            m.after_step(&mut state, 0.1);
+        }
+    }
+    // The ring drops 1/64 of the window at its far end: 0.4921 of 36 K.
+    assert!((m.settled[0] - 18.0).abs() < 0.5, "{:?}", m.settled);
+}
+
+/// A mass centre 35 mm outside a constant-radius curve (R = 0.1303 m, no clothoid) runs on R + e at v (1 + e / R): the
+/// mass m (1 + e / R)^2 and the lateral acceleration v^2 (1 / R) (1 + e / R); e = 0 leaves both at the centre line's.
+#[test]
+fn a_mass_centre_outside_the_centre_line_runs_the_longer_way_round() {
+    let (r, e): (f64, f64) = (0.1303, 0.035);
+    let m = track(&["track.clothoid_m = 0.0", "mass.centre_offset_m = 0.035"]);
+    let mv = m.movers();
+    let mid = mv.track.straight + 0.5 * mv.track.curve;
+    let (mut mass, mut bias) = (vec![0.0; 36], vec![0.0; 6]);
+    mv.dynamics(&[mid; 6], &[1.0; 6], &mut mass, &mut bias);
+    assert!((mass[0] - mv.moving() * (1.0 + e / r).powi(2)).abs() < 1e-9, "{}", mass[0]);
+    assert!(bias[0].abs() < 1e-9, "no change of curvature mid-arc: {}", bias[0]);
+    let lateral = mv.curve_loads(mid, 1.0, 0.0)[0];
+    assert!((lateral - (1.0 / r) * (1.0 + e / r)).abs() < 1e-9, "{lateral}");
+}
+
 /// The index cam moves every mover one station pitch (the loop over six, 0.503116 m) per period and stands it still for
 /// the first 0.4 of it; the flying cam runs a mover at the conveyor's speed (slope 1) over the process and goes once round
 /// in six product pitches.

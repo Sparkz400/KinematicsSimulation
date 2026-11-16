@@ -754,7 +754,8 @@ arc r beta plus the tangent l_f = sqrt(m² − r²), and dL/dP = −u, u the uni
   and rotor are bodies of their own behind the gearbox's spring; rigid, the cables keep their length and the winches'
   inertia joins the platform's.
 - The motors' angles of a pose are those of the free lengths that hold the platform there at rest, l = L / (1 + t /
-  EA), t the closed form's tensions (the distribution's wherever no cable sits at a bound), so position setpoints and the
+  EA), t the tension distribution's wherever one exists (the closed form's only beyond the wrench-feasible workspace),
+  so position setpoints and the
   torque feedforward (the distribution's tensions for the platform's wrench, plus the winches' inertia) ask the same
   pretension of the cables. The forward kinematics is Gauss-Newton on these lengths; the controller uses it twice a
   position cycle (the following error in tool space), so it takes cheap steps first and the numerical Jacobian only near
@@ -864,7 +865,7 @@ position loop of its own. The shipped config: six movers of 651 g (AT9014) with 
 straights of four 250 mm modules (AT2000) and two 180° curves 267 mm across, a 100 mm clothoid at each end of an arc of
 130.3 mm (the split is an estimate; Beckhoff publishes the width and that it is a clothoid); 3.019 m round. A mover gives
 100 N peak and 30 N continuous, 4 m/s, 10 g unloaded (the 5-pin magnet plate on 48 V; with the payload the plate moves
-1.65 kg at 60 m/s², the axes are limited to half that, 30 m/s²); force constant, coil resistance, the
+1.25 kg at 79.9 m/s², the axes are limited to 30 m/s²); force constant, coil resistance, the
 attraction (300 N) and the pole pitch are estimates.
 
 | Id | Mechanism | Transmission | Tool pose | Own checks |

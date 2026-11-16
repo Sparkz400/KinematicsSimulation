@@ -641,7 +641,7 @@ impl Winder {
         }
         let r = e.r[1].max(self.roll.core);
         let slope = -2.0 * self.tension * self.taper * self.roll.core / (r * r);
-        let cylinder = if e.r[1] > self.roll.core { slope * growth[1] * r * e.y } else { 0.0 };
+        let cylinder = if e.r[1] > self.roll.core { slope * growth[1] * e.y } else { 0.0 };
         [
             shaft[0],
             shaft[1],

@@ -438,6 +438,8 @@ pub struct CableRobot {
     /// The elastic `forward` at the last grid point of free lengths (`ANCHOR_STEP`) and its Jacobian there: Newton
     /// starts there.
     last_forward: LastForward,
+    /// The motor torques of the last `base_signals`, for the scene's tension labels (`scene` has no torque argument).
+    last_torque: LastTorque,
 }
 
 /// The grid of free lengths the elastic `forward`'s Newton starts from, m: from the nearest point, so the pose is a
@@ -472,6 +474,16 @@ impl LastForward {
 impl Clone for LastForward {
     fn clone(&self) -> Self {
         Self(std::sync::Mutex::new(self.get()))
+    }
+}
+
+/// The torques the signals were last computed with, behind a lock like `LastForward`.
+#[derive(Debug, Default)]
+struct LastTorque(std::sync::Mutex<Vec<f64>>);
+
+impl Clone for LastTorque {
+    fn clone(&self) -> Self {
+        Self(std::sync::Mutex::new(self.0.lock().map(|t| t.clone()).unwrap_or_default()))
     }
 }
 
@@ -605,6 +617,7 @@ impl CableRobot {
             frame: exits,
             rest_slack: std::sync::OnceLock::new(),
             last_forward: LastForward::default(),
+            last_torque: LastTorque::default(),
         };
         let mut torque = vec![0.0; m];
         robot.equilibrium(&robot.home, &mut Vec::new(), &mut torque);
@@ -1772,6 +1785,9 @@ impl Machine for CableRobot {
 
     fn base_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         let (pose, _) = self.platform(s);
+        if let Ok(mut last) = self.last_torque.0.lock() {
+            *last = torque.to_vec();
+        }
         let tension = self.state_tensions(s, torque);
         let lengths: Vec<f64> =
             self.spans(pose).map_or(vec![f64::NAN; self.m()], |sp| sp.iter().map(|s| s.length).collect());
@@ -1861,7 +1877,10 @@ impl Machine for CableRobot {
         let (pose, _) = self.platform(s);
         let Some(spans) = self.spans(pose) else { return };
         let (p, _) = self.place(pose);
-        let tension = self.state_tensions(s, &vec![0.0; self.m()]);
+        // The torques of the last signals (zero before any): the rigid model's tensions depend on them.
+        let mut torque = self.last_torque.0.lock().map(|t| t.clone()).unwrap_or_default();
+        torque.resize(self.m(), 0.0);
+        let tension = self.state_tensions(s, &torque);
         let (_, _, rotor, speed) = self.winch_state(s, &spans);
         let grey = [0.55, 0.57, 0.6];
         let floor = self.frame.iter().map(|e| e[2]).fold(f64::INFINITY, f64::min) - 0.1;

@@ -164,6 +164,18 @@ fn the_frame_stretches_under_the_press_force_and_the_ram_stops_short() {
     assert_eq!((check.signal.as_str(), check.limit), ("frame.deflection", 0.0004));
 }
 
+/// The ram's speed signal is the derivative of the height signal (positive up): the height is a + b - x with
+/// x' = 0.0364766 m/rad at q = -90 degrees (above), so at q' = 2 rad/s the height changes at -x' q' = -0.0729532 m/s.
+#[test]
+fn the_ram_speed_is_the_derivative_of_the_height() {
+    let p = press(&["effects.gravity = false"]);
+    let mut out = Vec::new();
+    p.signals(&[-PI / 2.0], &[2.0], &[0.0], &[0.0], &mut out);
+    let ids: Vec<String> = p.signal_infos().into_iter().map(|s| s.id.to_string()).collect();
+    let speed = out[ids.iter().position(|s| s == "ram.speed").unwrap()];
+    assert!((speed + 0.0729532).abs() < 1e-6, "{speed}");
+}
+
 /// J(q) = J_crank + m_pin r^2 + (m_up / 3 + m_knee) a^2 phi'^2 + m_x x'^2: m_pin = 1.25 kg (half the rod), m_up = 2 kg,
 /// m_knee = 1.25 + 1 kg (the rod's and the lower link's halves), m_x = 20 + 1 + 8 = 29 kg (ram, half the link, die).
 /// At the dead centre (phi' = -0.2886751, x' = 0): 0.01 + 0.003125 + 2.9166667 * 0.0225 / 12 = 0.01859375 kg m^2;

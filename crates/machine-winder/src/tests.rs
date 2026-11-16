@@ -118,6 +118,23 @@ fn the_torque_to_accelerate_the_line_matches_the_hand_calculation() {
     assert!((e.t[0] - 80.96686).abs() < 1e-5 && (e.t[1] - 83.46686).abs() < 1e-5, "{:?}", e.t);
 }
 
+/// The cylinder's loss power is dF/dt y (docs/model-reference.md): the setpoint F = T0 (1 - taper (1 - core / r)) falls
+/// with r as dF/dr = -T0 taper core / r^2 ... times 2 in the model's tension law, and r grows at h w / 2 pi, so
+/// P = (-2 T0 taper core / r^2) (h w / 2 pi) y, with no further factor of r.
+#[test]
+fn the_cylinders_taper_power_is_the_setpoint_rate_times_the_dancers_position() {
+    let w = winder(&[]);
+    let (mut state, mut hold) = (Vec::new(), [0.0; 2]);
+    w.equilibrium(&[640.0], &mut state, &mut hold);
+    let mut e = w.eval(&state, &hold);
+    e.r[1] = 0.1;
+    e.w[1] = 10.0;
+    e.y = 0.01;
+    let slope = -2.0 * w.tension * w.taper * w.roll.core / (e.r[1] * e.r[1]);
+    let want = slope * (w.roll.thickness * e.w[1] / TAU) * e.y;
+    assert!(e.r[1] > w.roll.core && (w.losses(&e)[8] - want).abs() < 1e-12 * want.abs().max(1.0), "{want}");
+}
+
 /// A span's steady tension for a speed difference: the unwind gives off unstretched web (wound at no tension) at
 /// v1 = 1 m/s, roller and rewind take it at v2 = 1.0005 m/s. Steady, what enters a span leaves it: v1 / (1 + 0) =
 /// v2 / (1 + eps), eps = v2 / v1 - 1 = 5e-4, T = EA eps = 80 kN * 5e-4 = 40.000 N in both spans (the second takes it at

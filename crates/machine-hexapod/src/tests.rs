@@ -133,8 +133,8 @@ fn the_steady_friction_of_a_rising_platform_is_the_hand_calculated_one() {
 }
 
 /// The default cycle's figures as they were before the speed work of 16 November 2026, recorded then on Windows, when
-/// the dynamics' forward kinematics started Newton from home at every call. Now it starts from the last call's pose
-/// (`warm_pose`) and stops within the same 1e-13 m, a change at the rounding of the pose; the closed loop amplifies
+/// the dynamics' forward kinematics started Newton from home at every call. Now it starts from the nearest point of a
+/// grid of leg lengths (`warm_pose`), so the pose depends on the legs alone and not on the last call, and stops within the same 1e-13 m, a change at the rounding of the pose; the closed loop amplifies
 /// such changes: moving only Newton's start from home by 1e-9 to 1e-7 m in the old code moved these figures by up to
 /// 7e-5 (the energy motor 2 fed back), the peak torques by up to 3e-6, the path errors by up to 7e-5. The warm start
 /// moved them by up to 1.1e-4 (motor 1's peak torque), the rest by up to 2.4e-5. Another platform's maths library,
