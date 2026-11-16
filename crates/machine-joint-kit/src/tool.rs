@@ -285,6 +285,42 @@ impl Pose {
         j
     }
 
+    /// The flange's angular speed |w| (rad/s) and angular acceleration |dw/dt| (rad/s^2) at joints q moving at qd and qdd:
+    /// w = J_w(q) qd from the spin between the flange's orientations a microradian either side of each joint (the
+    /// geometric Jacobian's turn rows, without the weighting length), and dw/dt = J_w qdd + (d J_w / dt) qd, the second
+    /// term by a central difference of J_w along qd. What the tool axes' limits on rx, ry and rz have to bound: those
+    /// act on the rotation vector's rates, not on this.
+    pub fn angular_motion(&self, fk: Forward, q: &[f64], qd: &[f64], qdd: &[f64]) -> (f64, f64) {
+        let spin = |at: &[f64], v: &[f64]| -> V3 {
+            let (mut w, mut p) = ([0.0; 3], at.to_vec());
+            for c in (0..v.len()).filter(|&c| v[c] != 0.0) {
+                p[c] = at[c] + 1e-6;
+                let ra = fk(&p).0;
+                p[c] = at[c] - 1e-6;
+                let rel = log(&matmul(&ra, &transpose(&fk(&p).0)));
+                p[c] = at[c];
+                for k in 0..3 {
+                    w[k] += rel[k] / 2e-6 * v[c];
+                }
+            }
+            w
+        };
+        let w = spin(q, qd);
+        let mut a = spin(q, qdd);
+        let speed = qd.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if speed > 0.0 {
+            let step = |sign: f64| -> V3 {
+                let at: Vec<f64> = q.iter().zip(qd).map(|(q, v)| q + sign * 1e-3 * v / speed).collect();
+                spin(&at, qd)
+            };
+            let (plus, minus) = (step(1.0), step(-1.0));
+            for k in 0..3 {
+                a[k] += speed * (plus[k] - minus[k]) / 2e-3;
+            }
+        }
+        (dot(w, w).sqrt(), dot(a, a).sqrt())
+    }
+
     /// J^T (J J^T + damping I)^-1 rhs, J of m rows and n columns.
     fn through(j: &[f64], m: usize, n: usize, rhs: &[f64], damping: f64) -> Option<Vec<f64>> {
         let jjt: Vec<f64> = (0..m * m)

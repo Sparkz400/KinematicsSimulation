@@ -76,15 +76,18 @@ fn centre_by_hand(d: &Delta, z: f64) -> (f64, f64) {
 
 /// Static hold at the centre, 100 mm below the top, the forearms lumped (effects.forearm_inertia off): the platform's
 /// weight shares out evenly. By hand (default config): t = 0.0577 degrees, dz/dt per arm = -0.13343 m/rad,
-/// m_nt = 1.2 + 3 + 3 (1/3) 0.5 = 4.7 kg, m_LG = 0.9 * 0.2 + 0.4 (0.3 + 2/3 0.5) = 0.4333 kg m. Each gearbox holds -(g m_LG cos t) + m_nt g dz/dt
-/// = -4.249 - 6.150 = -10.40 N m (negative: the arm is held up), the motor that over 20: -0.520 N m.
+/// m_nt = 1.2 + 3 + 3 (1/3) 0.5 = 4.7 kg in the inertia; the weight of the forearms is half at the elbow, half at the plate
+/// whatever the share: m_nt,g = 4.2 + 3 (1/2) 0.5 = 4.95 kg, m_LG,g = 0.9 * 0.2 + 0.4 (0.3 + 0.5 0.5) = 0.40 kg m. Each
+/// gearbox holds -(g m_LG,g cos t) + m_nt,g g dz/dt = -3.923 - 6.477 = -10.40 N m (negative: the arm is held up), the
+/// motor that over 20: -0.520 N m.
 #[test]
 fn the_holding_torque_at_the_centre_is_the_platforms_weight_shared_out_and_the_arms_own() {
     let d = delta(&["effects.torque_ripple = false", "effects.forearm_inertia = false"]);
     let z = -0.775;
     let (t, dz) = centre_by_hand(&d, z);
-    let (m_nt, m_lg) = (1.2 + 3.0 + 0.5 / 3.0 * 3.0, 0.9 * 0.2 + 0.4 * (0.3 + 0.6667 * 0.5));
-    close(m_nt, d.m_nt(), 1e-3, "m_nt");
+    let (m_nt, m_lg) = (1.2 + 3.0 + 0.5 / 3.0 * 3.0, 0.9 * 0.2 + 0.4 * (0.3 + 0.5 * 0.5));
+    close(1.2 + 3.0 + 0.5 / 3.0 * 3.0, d.m_nt(), 1e-3, "m_nt");
+    let m_nt = m_nt + 0.25;
     let by_hand = -G * m_lg * t.cos() + m_nt * G * dz;
     println!(
         "centre: t = {:.4} deg, dz/dt per arm {dz:.5} m/rad, holding {by_hand:.4} N m at each gearbox",
@@ -99,6 +102,45 @@ fn the_holding_torque_at_the_centre_is_the_platforms_weight_shared_out_and_the_a
     assert!((by_hand + 10.40).abs() < 0.01, "{by_hand} N m");
 }
 
+/// The lumped forearms weigh half at the elbow and half at the plate whatever share the inertia is split by: the holding
+/// torque at a pose off the centre with the share 2/3 equals the one with the share 1/2 (where inertia and weight split
+/// alike), as the weight is the same 0.5 kg pair.
+#[test]
+fn the_lumped_forearm_weight_does_not_depend_on_the_inertia_share() {
+    let hold = |share: &str| {
+        let d = delta(&["effects.torque_ripple = false", "effects.forearm_inertia = false", share]);
+        let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
+        d.equilibrium(&[0.3, 0.1, -0.775], &mut state, &mut torque);
+        torque
+    };
+    let (a, b) = (hold("mass.forearm_elbow_share = 0.6667"), hold("mass.forearm_elbow_share = 0.5"));
+    for k in 0..3 {
+        close(a[k], b[k], 1e-9, "motor torque");
+    }
+}
+
+/// With hysteresis a small vibration sees K1 + sigma = 2 K1 (sigma is K1): on the gearboxes' springs alone every
+/// frequency is sqrt(2) times the large-amplitude one (docs/model-reference.md: 49.08 Hz becomes 69.41 Hz); without
+/// `gearbox_lost_motion` the two lists are the same.
+#[test]
+fn the_small_amplitude_modes_stand_sqrt_two_above_the_large_ones_with_hysteresis() {
+    let pose = [0.0, 0.0, -0.775];
+    let with = |lost: bool| {
+        let lost = format!("effects.gearbox_lost_motion = {lost}");
+        delta(&["effects.link_elasticity = false", &lost, "gearbox.hysteresis_rad = 0.0003"])
+    };
+    let d = with(true);
+    let (large, small) = (d.modes(&pose), d.modes_small_amplitude(&pose));
+    assert!(!large.is_empty() && large.len() == small.len());
+    for (l, s) in large.iter().zip(&small) {
+        close(s.hz, l.hz * 2f64.sqrt(), 1e-9, "small-amplitude mode");
+    }
+    let d = with(false);
+    for (l, s) in d.modes(&pose).iter().zip(&d.modes_small_amplitude(&pose)) {
+        close(s.hz, l.hz, 1e-12, "mode without hysteresis");
+    }
+}
+
 /// Static hold at the edge, x = 0.6 m: by the Jacobian's transpose with the Jacobian from central differences of the
 /// forward kinematics (not the machine's own), tau_k = -g m_LG cos t_k + m_nt g dz/dt_k, at each gearbox. The arm
 /// pointing at the edge carries most: -22.2 N m against -1.35 N m on the other two (by hand with the script of the
@@ -108,7 +150,8 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
     let d = delta(&["effects.torque_ripple = false", "effects.forearm_inertia = false"]);
     let p = [0.6, 0.0, -0.775];
     let t = d.legs().inverse(p).unwrap();
-    let m_lg = 0.9 * 0.2 + 0.4 * (0.3 + 0.6667 * 0.5);
+    // The weight's split: half the forearms at the elbow, half at the plate (m_nt of the inertia plus 3 (1/2 - 1/3) 0.5).
+    let m_lg = 0.9 * 0.2 + 0.4 * (0.3 + 0.5 * 0.5);
     let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
     d.equilibrium(&p, &mut state, &mut torque);
     let mut by_hand = [0.0; 3];
@@ -117,7 +160,7 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
         up[k] += 1e-6;
         down[k] -= 1e-6;
         let dz = (d.legs().forward(up).unwrap()[2] - d.legs().forward(down).unwrap()[2]) / 2e-6;
-        by_hand[k] = -G * m_lg * t[k].cos() + d.m_nt() * G * dz;
+        by_hand[k] = -G * m_lg * t[k].cos() + (d.m_nt() + 0.25) * G * dz;
         close(torque[k] * 20.0, by_hand[k], 1e-6, "gearbox torque");
     }
     println!("edge: {by_hand:?} N m");

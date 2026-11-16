@@ -118,5 +118,13 @@ group-joint-7 = Gelenk 7: Lager und Anschläge
 machine-arm-on-track = Sechsachsroboter auf Linearschiene (URDF, Zahnstange)
 group-track = Schiene: die Führungswagen des Schlittens
 param-block_spacing_m = Abstand der Führungswagen längs der Schienen [m]
+param-rack_side = Seite der Zahnstange am Schlitten: +1 oder -1 längs der y-Achse des Schlittens
+param-rack_lever_m = Abstand der Zahnstangenlinie von der Mittellinie des Schlittens [m]
 param-rail_spacing_m = Abstand der Schienen [m]
 param-redundancy = Freier Gelenkfreiheitsgrad eines redundanten Arms: „home“ oder „joint_limits“
+
+tool-orientation = Werkzeugorientierung
+quantity-angular-speed = Winkelgeschwindigkeit des Flanschs
+quantity-angular-acceleration = Winkelbeschleunigung des Flanschs
+check-tool-angular-speed = Winkelgeschwindigkeit des Flanschs, höchste, gegen die kleinste der Rx-, Ry- und Rz-Geschwindigkeitsgrenzen [rad/s]
+check-tool-angular-acceleration = Winkelbeschleunigung des Flanschs, höchste, gegen die kleinste der Rx-, Ry- und Rz-Beschleunigungsgrenzen [rad/s²]

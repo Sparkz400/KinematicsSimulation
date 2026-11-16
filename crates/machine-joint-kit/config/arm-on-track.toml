@@ -161,6 +161,11 @@ service_factor = 1.25
 [track]
 block_spacing_m = 0.4
 rail_spacing_m = 0.5
+# Which side of the carriage's centre line the rack is on (+1 or -1 along its y; the separating force of the helical
+# pinion pushes the carriage off it) and how far its line is from the centre line, which turns the drive's push into a
+# yaw moment on the blocks. [estimate] +1 as the loads were counted before the key, on the centre line.
+rack_side = 1
+rack_lever_m = 0.0
 
 [joint]
 friction_coulomb_nm = 1.0

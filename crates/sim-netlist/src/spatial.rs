@@ -436,6 +436,9 @@ pub struct Delta {
     tip_inertia: f64,
     tip_moment: f64,
     m_rod_middle: f64,
+    /// Per leg, the forearm weight that the lumped inertia split puts at the elbow beyond the half a rod's weight has
+    /// there ((share - 1/2) m_fb; 0 with the rods): the weight takes it from the elbow to the platform (`load_n`).
+    weight_shift: f64,
     /// The mass at each elbow (elbow block and the forearms' share), which moves with an arm's bend out of its plane.
     /// What moves with an arm's bend out of its plane, at the elbow: the elbow block and the forearms' share, with
     /// effects.arm_tube_inertia the tube's own share and the elbow block's twist too.
@@ -591,6 +594,7 @@ impl Delta {
             tip_inertia,
             tip_moment,
             m_rod_middle: middle * m_fb,
+            weight_shift: if rods { 0.0 } else { (share - 0.5) * m_fb },
             m_lateral,
             rod_spin: if rods { 2.0 * spin } else { 0.0 },
             bending: cfg.bool("effects.link_elasticity")?.then_some(bending),
@@ -814,6 +818,10 @@ impl Delta {
         let a0 = self.legs.velocity_term_moved(t, y, p, w, yv, pv).unwrap_or([f64::NAN; 3]);
         let mut load = ([[0.0; N]; N], [0.0; N], [0.0; N]);
         add_point(&mut load, m, &jp, a0, self.g);
+        // The weight of the lumped forearms is half at the elbow, half at the platform whatever share the inertia has.
+        for r in 0..N {
+            load.2[r] -= 3.0 * self.weight_shift * self.g * jp[2][r];
+        }
         let (inertia, moment) =
             if root { (self.arm_inertia(), self.arm_moment()) } else { (self.tip_inertia, self.tip_moment) };
         if let Some(drag) = &self.drag {
@@ -825,7 +833,7 @@ impl Delta {
         let elbows = self.legs.elbows_moved(t, y);
         for i in 0..3 {
             load.0[i][i] += inertia;
-            load.2[i] += self.g * moment * t[i].cos();
+            load.2[i] += self.g * (moment - self.legs.la * self.weight_shift) * t[i].cos();
             // The elbow's Jacobian: dc/dtheta on its angle, its axis on its move; c'' = d2 w^2 at no acceleration.
             let ([_, d1, d2], axis) = (self.legs.elbow(i, t[i]), self.legs.tangent(i));
             let je: [[f64; N]; 3] = std::array::from_fn(|r| {
@@ -962,12 +970,15 @@ impl Delta {
     /// shape (the joints' turns, the elbows' turns, with bending arms the elbows' moves). The damping of a shape v is
     /// v'Cv / (2 w v'Mv) with C the gearboxes', the bending's and the lateral dampers (the cross terms of a damping that
     /// is not proportional left out). None with rigid gearboxes and rigid arms, or out of reach.
-    fn modes_at(&self, tool: &[f64]) -> Vec<(f64, f64, Vec<f64>)> {
+    fn modes_at(&self, tool: &[f64], small: bool) -> Vec<(f64, f64, Vec<f64>)> {
         // shortcut: the modes take the first arm's gearbox for all three; give `arm_modes` one per arm once a file
         // drives the arms through different gearboxes.
-        // K1, the stiffness of the moves that excite the mode; with hysteresis a small vibration sees K1 + sigma = 2 K1 (about
-        // 41 % higher, docs/model-reference.md, Resonance).
-        let k_gear = self.elastic.then(|| self.joints[0].gearbox.stiffness);
+        // K1, the stiffness of the moves that excite the mode; with hysteresis a small vibration (`small`) sees K1 + sigma
+        // (2 K1 as shipped, about 41 % higher, docs/model-reference.md, Resonance).
+        let k_gear = self.elastic.then(|| {
+            let g = &self.joints[0].gearbox;
+            g.stiffness + if small && g.hysteresis > 0.0 { g.dahl_stiffness } else { 0.0 }
+        });
         let elbows = if tool.len() == 3 { self.legs.inverse([tool[0], tool[1], tool[2]]) } else { None };
         let (Some(elbows), true) = (elbows, k_gear.is_some() || self.bending.is_some()) else { return Vec::new() };
         let distal: Vec<Vec<f64>> = match self.bending {
@@ -1064,9 +1075,9 @@ impl Delta {
         let middles: f64 = (0..3).map(|i| 0.5 * (self.legs.elbow(i, elbows[i])[0][2] + p[2])).sum();
         let sines = |a: V3| a[0].sin() + a[1].sin() + a[2].sin();
         let potential = self.g
-            * (self.m_nt() * p[2] + self.m_rod_middle * middles
+            * ((self.m_nt() + 3.0 * self.weight_shift) * p[2] + self.m_rod_middle * middles
                 - self.root_moment * sines(t)
-                - self.tip_moment * sines(elbows));
+                - (self.tip_moment - self.legs.la * self.weight_shift) * sines(elbows));
         let mut elastic: f64 = (0..3).map(|k| self.joints[k].stop_energy(t[k])).sum();
         if let Some(b) = self.bending {
             let (bend, _) = self.bend(s);
@@ -1635,14 +1646,14 @@ impl Machine for Delta {
     /// their planes (effects.link_elasticity), in series where both are on. At the centre the lowest is sideways
     /// (twice).
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
-        self.modes_at(tool_pose).first().map(|mode| mode.0)
+        self.modes_at(tool_pose, false).first().map(|mode| mode.0)
     }
 
     /// The mode of `resonance_hz`: the joints' turns in the arm angles, the bend (elbow less joint) in the bend states,
     /// the elbows' moves out of the arms' planes in theirs, rotors still; scaled so that the platform's largest travel
     /// along an axis is 1 m.
     fn mode_shape(&self, tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
-        let (hz, _, v) = self.modes_at(tool_pose).into_iter().next()?;
+        let (hz, _, v) = self.modes_at(tool_pose, false).into_iter().next()?;
         let p = [tool_pose[0], tool_pose[1], tool_pose[2]];
         let (j, jy) = self.legs.jacobians(self.legs.inverse(p)?, [0.0; 3], p)?;
         let (root, tip) = ([v[0], v[1], v[2]], [v[3], v[4], v[5]]);
@@ -1664,7 +1675,12 @@ impl Machine for Delta {
     /// Every mode of `modes_at` with its damping ratio: 3 with the gearboxes' springs alone (one per arm), 6 with the
     /// arms' bending alone (in and out of their planes), 9 with both.
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
-        self.modes_at(tool_pose).into_iter().map(|(hz, damping, _)| Mode { hz, damping }).collect()
+        self.modes_at(tool_pose, false).into_iter().map(|(hz, damping, _)| Mode { hz, damping }).collect()
+    }
+
+    /// `modes` with the gearboxes' hysteresis stiffness added (K1 + sigma): the frequencies of a small ringing.
+    fn modes_small_amplitude(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        self.modes_at(tool_pose, true).into_iter().map(|(hz, damping, _)| Mode { hz, damping }).collect()
     }
 }
 

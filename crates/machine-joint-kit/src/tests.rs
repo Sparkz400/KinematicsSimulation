@@ -1552,6 +1552,49 @@ fn the_guide_blocks_carry_the_weight_and_the_tilting_moments_by_hand() {
     near(radial, teeth * 1.071978, 1e-6, "radial load");
 }
 
+/// The rack's side and lever (`track.rack_side`, `track.rack_lever_m`) at the track's 2 m/s^2 above, F_x = 261 N, the
+/// separating force F_sep = 261 * 0.386 = 100.8 N: the blocks' F_y is the chain's plus side * F_sep, and the yaw moment
+/// M_z = -2 * 14.505 + side * lever * 261 N m. The yaw term of the most loaded block, which the pitch moment keeps at
+/// s_x = -1, is |F_y / 4 - M_z / (2 * 0.4)|: 25.2 + 36.2625 = 61.4625 N at side +1 and no lever (as shipped), 25.2 + 3.6375
+/// at lever 0.1 m (M_z = -2.91 N m), |-25.2 + 36.2625| = 11.0625 N at side -1, 25.2 + 68.8875 at side -1 and lever 0.1 m.
+#[test]
+fn the_racks_side_and_lever_move_the_guide_blocks_load_as_by_hand() {
+    let g = 9.80665;
+    let push = TRACK_MASS * 2.0;
+    let apart = push * (1.071978f64.powi(2) - 1.0).sqrt();
+    let by_hand = |side: f64, lever: f64| {
+        let yaw = -2.0 * SUM_MY + side * lever * push;
+        4.0 * (TRACK_MASS * g / 4.0 + g * SUM_MY + 2.0 * SUM_MZ / 0.8 + (side * apart / 4.0 - yaw / 0.8).abs())
+    };
+    let mut acc = [0.0; 7];
+    acc[0] = 2.0;
+    for (side, lever) in [(1.0, 0.0), (1.0, 0.1), (-1.0, 0.0), (-1.0, 0.1)] {
+        let mut cfg = rigid(&ARM_ON_TRACK);
+        cfg.set_text(&format!("track.rack_side = {side}")).unwrap();
+        cfg.set_text(&format!("track.rack_lever_m = {lever}")).unwrap();
+        let m = (ARM_ON_TRACK.build)(&cfg).unwrap();
+        let load = track_signal(m.as_ref(), &sideways(), &acc, "axis.j1.guide_load");
+        near(load, by_hand(side, lever), 1e-6, &format!("guide load, side {side}, lever {lever}"));
+    }
+}
+
+/// The flange's angular speed and acceleration, not the rotation vector's rates. The six-axis arm with joint 1 about z
+/// and joints 2 and 3 about y (all frames unrotated), at q1 = 0: w = q1' z + s y with s = q2' + q3', and dw/dt =
+/// q1'' z + s' y + s q1' (z x y) = (-s q1', s', q1''). With q' = (0.5, 0.3, 0.4) and q'' = (2, 1, 2): s = 0.7, s' = 3,
+/// w = (0, 0.7, 0.5), |w| = 0.86023, dw/dt = (-0.35, 3, 2), |dw/dt| = 3.62244.
+#[test]
+fn the_flanges_angular_speed_and_acceleration_follow_from_the_joint_axes() {
+    let cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    let chain = arm::chain(&cfg).unwrap();
+    let fk = |q: &[f64]| chain.tip(q);
+    let home = cfg.f64s("kinematics.home_joints").unwrap();
+    let pose = tool::Pose::new(&fk, home, vec![0, 1, 2, 3, 4, 5], 0.86, 30.0).unwrap();
+    let q = [0.0, 0.2, -0.3, 0.0, 0.0, 0.0];
+    let (w, a) = pose.angular_motion(&fk, &q, &[0.5, 0.3, 0.4, 0.0, 0.0, 0.0], &[2.0, 1.0, 2.0, 0.0, 0.0, 0.0]);
+    near(w, 0.74f64.sqrt(), 1e-6, "angular speed");
+    near(a, 13.1225f64.sqrt(), 1e-4, "angular acceleration");
+}
+
 /// The guide verdicts judge that load: a set rated just below the cycle's highest guide load fails "guide-load", just
 /// above passes; and a rated life just above what the blocks give fails "guide-life".
 #[test]
