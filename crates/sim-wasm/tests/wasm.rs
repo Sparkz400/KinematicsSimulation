@@ -57,7 +57,7 @@ fn the_c_functions_hand_back_json() {
     let answer = unsafe { std::slice::from_raw_parts(sim_wasm::out_ptr(), sim_wasm::out_len()) };
     assert!(std::str::from_utf8(answer).unwrap().starts_with("[{\"id\":"));
     let ptr = sim_wasm::alloc(0);
-    assert_eq!(unsafe { sim_wasm::call(9, ptr, 0) }, 1);
+    assert_eq!(unsafe { sim_wasm::call(99, ptr, 0) }, 1);
 }
 
 /// The 3D view's frame for every machine, read as the page reads it, against the machine's own scene from a native
@@ -381,4 +381,174 @@ fn page_texts_in_both_languages() {
         lines.filter_map(|l| l.split_once(" = ").map(|(k, _)| k.to_string())).collect()
     };
     assert_eq!(keys(include_str!("../i18n/en.ftl")), keys(include_str!("../i18n/de.ftl")));
+}
+
+fn json(text: &str) -> serde_json::Value {
+    serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}: {text}"))
+}
+
+/// Every verdict has its margin as the sizing report has it: what is left of the limit. By hand for a check that must
+/// stay below its limit: value 3 of limit 4 leaves 1 - 3 / 4 = +25 %; here from the run's own value and limit, and a
+/// check passes exactly where its margin is not below 0.
+#[test]
+fn verdicts_have_their_margins() {
+    let answer = json(&handle(2, "t-gantry\nen\n").unwrap());
+    let verdicts = answer["verdicts"].as_array().unwrap();
+    let peak = verdicts.iter().find(|v| v["check"] == "motor-peak").expect("t-gantry judges motor-peak");
+    let (value, limit) = (peak["value"].as_f64().unwrap(), peak["limit"].as_f64().unwrap());
+    assert!((peak["margin"].as_f64().unwrap() - (1.0 - value / limit)).abs() < 1e-12, "{peak}");
+    for v in verdicts {
+        let Some(margin) = v["margin"].as_f64() else { continue };
+        assert_eq!(v["ok"].as_bool().unwrap(), margin >= 0.0, "{v}");
+    }
+}
+
+/// The scopes are the rows `sim-cli compare` records of the cycle's second pass, one a millisecond, to 6 significant
+/// digits: per motor angle, speed, torque, current, following error and winding temperature rise.
+#[test]
+fn scopes_are_the_recorded_pass() {
+    let entry = sim_machines::find("t-gantry").unwrap();
+    let cfg = entry.config();
+    let rows = sim_components::analysis::record_cycle(entry, &cfg).unwrap();
+    let signals = sim_components::Sim::new(entry, &cfg).unwrap().signal_infos();
+    let answer = json(&handle(10, "t-gantry\nen\n").unwrap());
+    let time = answer["time"].as_array().unwrap();
+    assert_eq!(time.len(), rows.len());
+    assert_eq!(answer["step_s"].as_f64(), Some(1e-3));
+    let names: Vec<&str> = answer["signals"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert_eq!(names, sim_wasm::SCOPE_SIGNALS);
+    assert_eq!(answer["signals"][2]["unit"], "N m");
+    for motor in answer["motors"].as_array().unwrap() {
+        for (i, name) in sim_wasm::SCOPE_SIGNALS.iter().enumerate() {
+            let id = format!("motor.{}.{name}", motor["id"].as_str().unwrap());
+            let c = signals.iter().position(|s| s.id == id).unwrap();
+            for r in [0, rows.len() / 3, rows.len() - 1] {
+                let got = motor["data"][i][r].as_f64().unwrap();
+                assert!((got - rows[r][c]).abs() <= 5e-6 * rows[r][c].abs(), "{id} row {r}: {got}");
+            }
+        }
+    }
+    assert!(handle(10, "no-such-machine\nen\n").is_err());
+}
+
+/// The form offers every number of the config with its label, and the catalogue's names for the parts: the motors of
+/// the config's supply, and the gearboxes of a named motor only.
+#[test]
+fn the_form_offers_the_values_and_the_catalogue() {
+    let form = json(&handle(8, "t-gantry\nde\n").unwrap());
+    let params = form["params"].as_array().unwrap();
+    let payload = params.iter().find(|p| p["path"] == "mass.payload_kg").unwrap();
+    assert_eq!(payload["value"], "2.0");
+    assert_eq!(payload["label"], "Nutzlast [kg]", "{payload}");
+    assert!(params.iter().all(|p| !p["path"].as_str().unwrap().starts_with("effects.")));
+    let part = |form: &serde_json::Value, key: &str| {
+        form["parts"].as_array().unwrap().iter().find(|p| p["key"] == key).unwrap()["options"].as_array().unwrap().len()
+    };
+    assert!(part(&form, "motor") > 10 && part(&form, "drive") > 3 && part(&form, "motor_supply") > 10, "{form}");
+    assert_eq!(part(&form, "gearbox"), 0);
+    let entry = sim_machines::find("t-gantry").unwrap();
+    let motor = entry.default_config.replacen("motor = \"\"", "motor = \"1FK2205-4AF\"", 1);
+    assert!(part(&json(&handle(8, &format!("t-gantry\nen\n{motor}")).unwrap()), "gearbox") > 0);
+}
+
+/// A change from the form is written over the value's own text, comments kept; the answer lists what differs from the
+/// default, and those lines alone give the config back unless an array changed.
+#[test]
+fn changes_keep_the_comments_and_make_the_share_link() {
+    let entry = sim_machines::find("t-gantry").unwrap();
+    let answer = json(&handle(9, "t-gantry\nen\n\n---\nmass.payload_kg = 3.5\ndrive.kv_1_s = 40").unwrap());
+    let text = answer["config"].as_str().unwrap();
+    assert!(text.contains("payload_kg = 3.5\n") && text.contains("kv_1_s = 40.0\n"), "{text}");
+    for line in entry.default_config.lines().filter(|l| l.starts_with('#')) {
+        assert!(text.contains(line), "{line}");
+    }
+    assert_eq!(answer["changed"], serde_json::json!(["drive.kv_1_s = 40.0", "mass.payload_kg = 3.5"]));
+    assert_eq!(answer["compact"], true);
+    // The link's lines on the default config give the same text.
+    let from_link = json(&handle(9, "t-gantry\nen\n\n---\ndrive.kv_1_s = 40.0\nmass.payload_kg = 3.5").unwrap());
+    assert_eq!(from_link["config"], answer["config"]);
+    // An unknown key and a value of another type are refused by name.
+    assert!(handle(9, "t-gantry\nen\n\n---\nmass.no_such_kg = 1").unwrap_err().contains("no_such_kg"));
+    assert!(handle(9, "t-gantry\nen\n\n---\nmass.payload_kg = \"heavy\"").unwrap_err().contains("payload_kg"));
+    // A changed array (a cycle segment) is no `path = value` line: the link carries the whole text.
+    // The first `dwell_s = 0.1` is the first segment's dwell.
+    let moved = entry.default_config.replacen("dwell_s = 0.1\n", "dwell_s = 0.123\n", 1);
+    assert_ne!(moved, entry.default_config);
+    let answer = json(&handle(9, &format!("t-gantry\nen\n{moved}\n---\n")).unwrap());
+    assert_eq!(answer["compact"], false, "{answer}");
+}
+
+/// The module built for the browser against the native numbers (WebAssembly's libm against the platform's maths
+/// library, amplified by the simulation): the cycle time and what sums over the pass (the scopes' RMS) to 4 significant
+/// digits, 1e-4; a peak, the highest of one base step, to 3, 1e-3 (measured 16 November 2026: up to 5.2e-4, the
+/// T-gantry's motor-peak of motor b, 0.12161 against 0.12154); a value near 0 to 1e-3 of its limit (the warm start's
+/// change, 1e-5 K against a limit of 0.1 K); a margin to 1e-3. Runs the built `sim_wasm.wasm` in Node; without either (no wasm build, no Node) it says so and
+/// passes. CI's job `wasm` builds the module before the tests, so it runs there.
+#[test]
+fn the_wasm_build_agrees_with_the_native_numbers() {
+    let target =
+        std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| format!("{}/../../target", env!("CARGO_MANIFEST_DIR")));
+    let module = format!("{target}/wasm32-unknown-unknown/wasm/sim_wasm.wasm");
+    if !std::path::Path::new(&module).exists() {
+        eprintln!("skipped: no {module} (cargo build -p sim-wasm --profile wasm --target wasm32-unknown-unknown)");
+        return;
+    }
+    let script = [
+        "const [file, kind, text] = process.argv.slice(1);",
+        "WebAssembly.instantiate(require('fs').readFileSync(file), {}).then(({ instance: { exports: w } }) => {",
+        "const bytes = new TextEncoder().encode(text), ptr = w.alloc(bytes.length);",
+        "new Uint8Array(w.memory.buffer, ptr, bytes.length).set(bytes);",
+        "const code = w.call(+kind, ptr, bytes.length);",
+        "process.stdout.write(new TextDecoder().decode(new Uint8Array(w.memory.buffer, w.out_ptr(), w.out_len())));",
+        "process.exitCode = code; });",
+    ]
+    .join("\n");
+    let in_wasm = |kind: u32, request: &str| -> Option<serde_json::Value> {
+        let run =
+            std::process::Command::new("node").args(["-e", &script, &module, &kind.to_string(), request]).output();
+        match run {
+            Ok(out) if out.status.success() => Some(json(&String::from_utf8_lossy(&out.stdout))),
+            Ok(out) => panic!("node: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)),
+            Err(e) => {
+                eprintln!("skipped: no node ({e})");
+                None
+            }
+        }
+    };
+    let close = |a: f64, b: f64, scale: f64, digits: i32, what: &str| {
+        let tolerance = 10f64.powi(-digits) * a.abs().max(b.abs()).max(scale) + 1e-12;
+        assert!((a - b).abs() <= tolerance, "{what}: wasm {a}, native {b}");
+    };
+    for id in ["t-gantry", "file:corexy.toml"] {
+        let request = format!("{id}\nen\n");
+        let Some(wasm) = in_wasm(2, &request) else { return };
+        let native = json(&handle(2, &request).unwrap());
+        close(wasm["cycle_s"].as_f64().unwrap(), native["cycle_s"].as_f64().unwrap(), 0.0, 4, "cycle_s");
+        let (wv, nv) = (wasm["verdicts"].as_array().unwrap(), native["verdicts"].as_array().unwrap());
+        assert_eq!(wv.len(), nv.len());
+        for (w, n) in wv.iter().zip(nv) {
+            assert_eq!(w["check"], n["check"]);
+            let what = format!("{id} {} {}", w["check"], w["motor"]);
+            let limit = n["limit"].as_f64().unwrap_or(0.0).abs();
+            for key in ["value", "limit"] {
+                let (a, b) = (w[key].as_f64().unwrap_or(0.0), n[key].as_f64().unwrap_or(0.0));
+                close(a, b, limit, 3, &format!("{what} {key}"));
+            }
+            let (wm, nm) = (w["margin"].as_f64().unwrap_or(0.0), n["margin"].as_f64().unwrap_or(0.0));
+            assert!((wm - nm).abs() <= 1e-3, "{what} margin: wasm {wm}, native {nm}");
+        }
+        let (wasm, native) = (in_wasm(10, &request).unwrap(), json(&handle(10, &request).unwrap()));
+        for (wm, nm) in wasm["motors"].as_array().unwrap().iter().zip(native["motors"].as_array().unwrap()) {
+            for (i, name) in sim_wasm::SCOPE_SIGNALS.iter().enumerate() {
+                let stats = |v: &serde_json::Value| {
+                    let xs: Vec<f64> = v.as_array().unwrap().iter().filter_map(serde_json::Value::as_f64).collect();
+                    let peak = xs.iter().fold(0f64, |m, x| m.max(x.abs()));
+                    (peak, (xs.iter().map(|x| x * x).sum::<f64>() / xs.len().max(1) as f64).sqrt())
+                };
+                let ((wp, wr), (np, nr)) = (stats(&wm["data"][i]), stats(&nm["data"][i]));
+                close(wp, np, 0.0, 3, &format!("{id} {} {name} peak", nm["id"]));
+                close(wr, nr, 0.0, 4, &format!("{id} {} {name} rms", nm["id"]));
+            }
+        }
+    }
 }
