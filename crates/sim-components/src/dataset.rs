@@ -150,7 +150,8 @@ pub struct Contents {
     pub recordings: Vec<Recording>,
 }
 
-/// The folder's `dataset.toml` as `Contents`; its problems are `check`'s business, here only what cannot be read.
+/// The folder's `dataset.toml` as `Contents`; its problems are `check`'s business, here only what cannot be read and a
+/// file, map or config that is not a plain name in the folder.
 pub fn contents(dir: &Path) -> Result<Contents, String> {
     let text = std::fs::read(dir.join("dataset.toml")).map_err(|e| format!("dataset.toml: {e}"))?;
     let table: Table = decode(&text).parse().map_err(|e| format!("dataset.toml: {e}"))?;
@@ -159,6 +160,13 @@ pub fn contents(dir: &Path) -> Result<Contents, String> {
     let part = |name: &str| table.get(name).and_then(Value::as_table).unwrap_or(&empty);
     let (dataset, machine) = (part("dataset"), part("machine"));
     let recordings = table.get("recording").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+    // Only plain names of files in the folder: the report reads them and names its own files after them.
+    let names = recordings.iter().filter_map(Value::as_table).flat_map(|r| [get(r, "file"), get(r, "map")]);
+    if let Some(bad) =
+        names.chain([get(machine, "config")]).find(|f| f.contains(['/', '\\', ':']) || f.starts_with('.'))
+    {
+        return Err(format!("{bad}: has to be the plain name of a file in the folder"));
+    }
     Ok(Contents {
         id: get(dataset, "id"),
         title: get(dataset, "title"),
@@ -340,5 +348,25 @@ mod tests {
         assert_eq!(found("15:56:24.376 12:30:00 https://example.org/data"), 0);
         assert_eq!(found("0.001,1.25,3.5,4.75\n1.2.3"), 0);
         assert_eq!(found("time [s],speed [1/min]"), 0);
+    }
+
+    #[test]
+    fn contents_refuses_a_file_outside_the_folder() {
+        let dir = std::env::temp_dir().join("dataset-contents-escape");
+        std::fs::create_dir_all(&dir).unwrap();
+        let toml = |file: &str| {
+            format!(
+                "[machine]
+config = \"machine.toml\"
+[[recording]]
+file = \"{file}\"
+map = \"map.toml\"
+"
+            )
+        };
+        std::fs::write(dir.join("dataset.toml"), toml("../../escape.csv")).unwrap();
+        assert!(contents(&dir).is_err_and(|e| e.contains("escape.csv")));
+        std::fs::write(dir.join("dataset.toml"), toml("cycle.csv")).unwrap();
+        assert_eq!(contents(&dir).unwrap().recordings[0].file, "cycle.csv");
     }
 }
