@@ -365,8 +365,9 @@ pub fn kinematics_table(tr: &Translations, rows: &[KinematicsRow]) -> Table {
             (None, None) => column.push(tr.tr("ui-search-refused").into()),
             (None, Some(c)) => {
                 let f = c.figures.clone().unwrap_or_default();
-                let (check, u) =
-                    c.tightest().map_or((String::new(), f64::NAN), |(k, u)| (tr.tr(&sim_components::report::check_key(k, linear)).into(), u));
+                let (check, u) = c.tightest().map_or((String::new(), f64::NAN), |(k, u)| {
+                    (tr.tr(&sim_components::report::check_key(k, linear)).into(), u)
+                });
                 column.extend([
                     tr.tr(if row.meets() { "ui-analysis-ok" } else { "ui-analysis-fail" }).to_string(),
                     c.article.to_string(),

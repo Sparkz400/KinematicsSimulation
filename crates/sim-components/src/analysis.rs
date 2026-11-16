@@ -3657,7 +3657,7 @@ impl Sensitivity {
 /// The cycle with the config as it is, and with each of `paths` at a low and at a high value, one at a
 /// time: the bounds the config gives the parameter (see `bounds`), or the value scaled by 1 - delta and
 /// by 1 + delta where it gives none. Shows which of the uncertain parameters the results depend on, and
-/// so which are worth measuring. A parameter that is not a number, whose changed value the machine
+/// so which are worth measuring. A parameter of value 0 without bounds (nothing to scale), one that is not a number, whose changed value the machine
 /// refuses, or that only an effect that is off uses (see `bounds`), is left out, and so are the analysis' own choices
 /// in `NOT_MACHINE_DATA`.
 pub fn sensitivity(
@@ -3675,14 +3675,12 @@ pub fn sensitivity(
         .filter(|path| !effect_off(cfg, path) && !NOT_MACHINE_DATA.contains(&path.as_str()))
         .filter_map(|path| {
             let value = cfg.f64(path).ok()?;
-            Some((
-                path,
-                value,
-                configured
-                    .iter()
-                    .find(|b| b.0 == *path)
-                    .map_or((value * (1.0 - delta), value * (1.0 + delta)), |b| (b.1, b.2)),
-            ))
+            let bound = configured.iter().find(|b| b.0 == *path).map(|b| (b.1, b.2));
+            // A value of 0 scaled by 1 -+ delta stays 0: without a range of its own it is not varied (left out).
+            if bound.is_none() && value == 0.0 {
+                return None;
+            }
+            Some((path, value, bound.unwrap_or((value * (1.0 - delta), value * (1.0 + delta)))))
         })
         .collect();
     // Run 0 is the config as it is, then each parameter at its low and at its high value.
@@ -3808,6 +3806,26 @@ pub fn modes_along(machine: &dyn Machine, pose: &[f64], axis: usize, points: usi
             (at[axis], machine.modes(&at))
         })
         .collect()
+}
+
+/// The small-amplitude modes (`Machine::modes_small_amplitude`) at the places of `modes_along`'s `rows`, or `None` where
+/// they are the large-amplitude ones everywhere (no gearbox hysteresis): the front ends' second column.
+pub fn small_amplitude_along(
+    machine: &dyn Machine,
+    pose: &[f64],
+    axis: usize,
+    rows: &[(f64, Vec<Mode>)],
+) -> Option<Vec<Vec<Mode>>> {
+    let small: Vec<Vec<Mode>> = rows
+        .iter()
+        .map(|(position, _)| {
+            let mut at = pose.to_vec();
+            at[axis] = *position;
+            machine.modes_small_amplitude(&at)
+        })
+        .collect();
+    let same = |a: &[Mode], b: &[Mode]| a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.hz == b.hz);
+    (!rows.iter().zip(&small).all(|((_, large), small)| same(large, small))).then_some(small)
 }
 
 /// Frequencies spaced evenly on a logarithmic axis, both ends included.

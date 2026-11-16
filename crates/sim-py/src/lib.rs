@@ -1301,7 +1301,8 @@ fn tuning(py: Python<'_>, config: &PyConfig, size: f64, amplitude: f64) -> PyRes
 /// Per motor the stability margins of its velocity loop, as `sim-cli margins` gives them: columns "run" ("nominal",
 /// and with `bands=True` each value of `[bounds]` at its low and its high bound), "motor", "crossover_hz",
 /// "phase_margin_deg", "gain_margin_db", "peak_sensitivity", "peak_frequency_hz" and "ok" (false: the loop is unstable
-/// or its measurement not valid).
+/// or its measurement not valid). Crossover and phase margin are NaN where the loop has no gain crossover in the band
+/// (not measurable; "ok" is then the gain margin's alone), the CLI's empty cell.
 #[pyfunction]
 #[pyo3(signature = (config, *, bands=false))]
 fn margins(py: Python<'_>, config: &PyConfig, bands: bool) -> PyResult<Py<PyDict>> {
@@ -1377,7 +1378,8 @@ fn accuracy(py: Python<'_>, config: &PyConfig, points: usize, repeats: usize, dw
 
 /// The modes the machine reports over the stroke of axis `axis_index` at `points` places, the other axes at the start
 /// pose, as `sim-cli modes` gives them: "position", then per mode, lowest first, "mode<i>_hz" and "mode<i>_damping"
-/// (NaN where a place does not have it).
+/// (NaN where a place does not have it), and where the small-amplitude modes differ (a gearbox's hysteresis) also
+/// "mode<i>_small_hz".
 #[pyfunction]
 #[pyo3(signature = (config, *, axis_index=0, points=21))]
 fn modes(py: Python<'_>, config: &PyConfig, axis_index: usize, points: usize) -> PyResult<Py<PyDict>> {
@@ -1387,10 +1389,13 @@ fn modes(py: Python<'_>, config: &PyConfig, axis_index: usize, points: usize) ->
     let (entry, cfg, i) = (config.entry, config.cfg.clone(), axis(config, axis_index)?);
     let rows = py
         .detach(|| -> Result<_, ConfigError> {
-            let sim = Sim::new(entry, &cfg)?;
-            Ok(sim_components::analysis::modes_along(sim.machine.as_ref(), &cfg.f64s("start.pose")?, i, points))
+            let (sim, pose) = (Sim::new(entry, &cfg)?, cfg.f64s("start.pose")?);
+            let rows = sim_components::analysis::modes_along(sim.machine.as_ref(), &pose, i, points);
+            let small = sim_components::analysis::small_amplitude_along(sim.machine.as_ref(), &pose, i, &rows);
+            Ok((rows, small))
         })
         .map_err(|e| config_error(entry, e))?;
+    let (rows, small) = rows;
     let count = rows.iter().map(|(_, modes)| modes.len()).max().unwrap_or(0);
     let out = PyDict::new(py);
     out.set_item("position", column(py, rows.iter().map(|r| r.0)))?;
@@ -1398,6 +1403,10 @@ fn modes(py: Python<'_>, config: &PyConfig, axis_index: usize, points: usize) ->
         let at = |f: fn(&sim_core::Mode) -> f64| column(py, rows.iter().map(move |r| r.1.get(k).map_or(f64::NAN, f)));
         out.set_item(format!("mode{}_hz", k + 1), at(|m| m.hz))?;
         out.set_item(format!("mode{}_damping", k + 1), at(|m| m.damping))?;
+        if let Some(small) = &small {
+            let hz = column(py, small.iter().map(|s| s.get(k).map_or(f64::NAN, |m| m.hz)));
+            out.set_item(format!("mode{}_small_hz", k + 1), hz)?;
+        }
     }
     Ok(out.unbind())
 }

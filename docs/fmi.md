@@ -44,6 +44,8 @@ The variables are the same in both versions; only the type names differ. The val
 
 An FMU of a machine file (`sim-cli fmu --machine-file FILE`) carries the file as `resources/machine.toml` and builds its machine from it when it is instantiated, in both versions; its `machine` parameter is the file's machine id.
 
+Every Real / Float64 variable declares its unit, and the model description lists them as unit definitions. An output carries its signal's unit; `command.setpoint.<axis id>` and `command.target.<axis id>` the axis's (m or rad); `command.torque.<motor id>` and `command.velocity.<motor id>` those of the motor's own `motor.<id>.torque` and `motor.<id>.speed` signals: N m and rad/s on a rotary motor, N and m/s on a linear motor (the linear-motor axis, the mover track), where the motor's torque and speed signals are in N and m/s as well.
+
 The outputs are every signal of the simulation (`Sim::signal_infos`), generated, never listed per machine: a signal the simulator gains (the drives' overload image or a motor's housing temperature, once they are signals) is an output of every FMU exported after that, with no change here.
 
 ### Cycle, moves and paths
@@ -188,7 +190,7 @@ move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEve
 machines/h-bot.toml  (FMI 3.0): 0 validator problems, 90 outputs, 101 rows, worst 4.9e-10 (motor.b.torque_rest): ok
 ```
 
-Later on 14 November 2026 it gained a fifth part (the logs below are from that date; the FMUs of 16 November 2026 have 114 outputs for t-gantry, 60 for single-axis and 108 for h-bot, as signals were added since): the same target as a path file through `command.path_file` and `command.run_path` with the parameter `time_optimal`, against `sim-cli run --path FILE --time-optimal`; and the serialized state now carries the snapshot (format 3). Same setup:
+Later on 14 November 2026 it gained a fifth part (the logs below are from that date; the FMUs exported with `sim-cli fmu` on 16 November 2026 have 114 outputs and 18 inputs for t-gantry, 60 and 13 for single-axis and 108 and 18 for h-bot (FMI 3.0), as signals were added since): the same target as a path file through `command.path_file` and `command.run_path` with the parameter `time_optimal`, against `sim-cli run --path FILE --time-optimal`; and the serialized state now carries the snapshot (format 3). Same setup:
 
 ```
 FMU state: restored bit for bit, serialized 3840 bytes and restored bit for bit; directional derivative and finite difference zero

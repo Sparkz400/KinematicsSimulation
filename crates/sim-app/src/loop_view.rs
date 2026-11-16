@@ -77,7 +77,12 @@ pub fn loop_response(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
         ];
         for (key, value, unit) in values {
             ui.weak(tr(key));
-            ui.label(RichText::new(format!("{value:.1} {unit}")).monospace().color(colour));
+            if value.is_nan() && m.valid {
+                // No gain crossover in the band: nothing to measure, the verdict is the gain margin's alone.
+                ui.label(RichText::new("–").monospace().color(colour)).on_hover_text(tr("ui-loop-no-crossover"));
+            } else {
+                ui.label(RichText::new(format!("{value:.1} {unit}")).monospace().color(colour));
+            }
         }
         ui.weak(format!("{} {}", points.len(), tr("ui-loop-points")));
     });

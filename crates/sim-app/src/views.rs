@@ -104,7 +104,7 @@ pub fn torque_speed_grid(
                 let drawn = plot((id, k))
                     .height(200.0)
                     .x_axis_label(model.speed_label())
-                    .y_axis_label(tr("ui-points-torque"))
+                    .y_axis_label(model.torque_label())
                     .show(ui, |plot| {
                         for line in &chart.peak {
                             plot.line(
@@ -277,7 +277,7 @@ pub fn views(ui: &mut Ui, model: &Model, tolerance: Option<f64>, actions: &mut V
             ui.label(RichText::new(tr("ui-views-no-drives")).color(dim()));
             return;
         }
-        let rpm = model.units.scale(sim_app::runs::Quantity::Speed.unit()).0;
+        let rpm = model.speed_scale();
         let curves: Vec<TorqueSpeed> = run.torque_speed().iter().map(|c| scaled_speeds(c, rpm)).collect();
         // Every shown run's points over the reference run's charts, motor by motor by their place.
         let mut operating: Vec<Vec<Operating>> = vec![Vec::new(); curves.len()];

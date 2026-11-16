@@ -313,7 +313,10 @@ impl Run {
 
     /// Whether the tool's error of this run is only the drives' following error (no setpoint signals to compare).
     pub fn tool_error_is_motor_side(&self) -> bool {
-        let real = self.signals.iter().any(|s| s.id.starts_with("axis.") && s.id.ends_with(".position_setpoint") && s.unit == "m");
+        let real = self
+            .signals
+            .iter()
+            .any(|s| s.id.starts_with("axis.") && s.id.ends_with(".position_setpoint") && s.unit == "m");
         !real && !self.tool_errors().is_empty()
     }
 

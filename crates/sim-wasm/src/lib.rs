@@ -646,20 +646,24 @@ fn size(r: &Request) -> Result<String, String> {
     }
     json.push_str("],\"verdicts\":[");
     for (i, v) in judged.iter().enumerate() {
-        let _ = write!(
-            json,
-            "{}{{\"check\":{},\"label\":{},\"motor\":{},\"value\":{},\"limit\":{},\"margin\":{},\"ok\":{}}}",
-            if i == 0 { "" } else { "," },
-            quote(v.check),
-            quote(tr.tr(&sim_components::report::check_key(v.check, v.motor.is_some_and(|k| sim.machine.motor_linear(k))))),
-            v.motor.map_or("null".into(), |k| quote(motors[k].id)),
-            number(v.value),
-            number(v.limit),
-            // As the sizing report has it: the share of the limit left, 1 - value / limit (limit / value for a check
-            // that must stay above its limit); null where there is none (0 of an at-least check).
-            number(1.0 - sim_components::analysis::utilisation(v)),
-            v.ok
-        );
+        let _ =
+            write!(
+                json,
+                "{}{{\"check\":{},\"label\":{},\"motor\":{},\"value\":{},\"limit\":{},\"margin\":{},\"ok\":{}}}",
+                if i == 0 { "" } else { "," },
+                quote(v.check),
+                quote(tr.tr(&sim_components::report::check_key(
+                    v.check,
+                    v.motor.is_some_and(|k| sim.machine.motor_linear(k))
+                ))),
+                v.motor.map_or("null".into(), |k| quote(motors[k].id)),
+                number(v.value),
+                number(v.limit),
+                // As the sizing report has it: the share of the limit left, 1 - value / limit (limit / value for a check
+                // that must stay above its limit); null where there is none (0 of an at-least check).
+                number(1.0 - sim_components::analysis::utilisation(v)),
+                v.ok
+            );
     }
     json.push_str("]}");
     Ok(json)
@@ -667,10 +671,9 @@ fn size(r: &Request) -> Result<String, String> {
 
 /// The torque-speed curve of a motor's drive (`DriveParams::torque_curve`) as an outline of (speed rad/s, torque N m):
 /// the highest torque from the no-load speed backwards to the no-load speed forwards, then the lowest torque back,
-/// at the curve's corners and 40 speeds between (a field-weakened curve bends). And the continuous (S1) rating as
-/// a box: the rated torque both ways up to the rated speed both ways.
-// shortcut: the S1 box ends at the rated speed, where the motor data says nothing more (as the app's curves do);
-// upgrade when the catalogue gives the S1 curve above it.
+/// at the curve's corners and 40 speeds between (a field-weakened curve bends). And the continuous (S1) rating as the
+/// app and the motor-s1 verdict have it (`charts::torque_speed`): its line for positive torque, then the one for
+/// negative torque back, closed.
 pub fn torque_speed_curve(drive: &sim_components::drive::DriveParams) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
     let (top, rated) = (drive.no_load_speed, drive.rated_speed);
     let mut speeds: Vec<f64> = (0..=40).map(|i| top * (i as f64 / 20.0 - 1.0)).chain([-rated, 0.0, rated]).collect();
@@ -678,8 +681,9 @@ pub fn torque_speed_curve(drive: &sim_components::drive::DriveParams) -> (Vec<(f
     speeds.dedup();
     let high = speeds.iter().map(|&s| (s, drive.torque_curve(s).1));
     let curve = high.chain(speeds.iter().rev().map(|&s| (s, drive.torque_curve(s).0))).collect();
-    let t = drive.rated_torque;
-    (curve, vec![(-rated, t), (rated, t), (rated, -t), (-rated, -t), (-rated, t)])
+    let [high, low] = sim_components::charts::torque_speed(drive, drive.bus_voltage).s1;
+    let s1: Vec<(f64, f64)> = high.iter().chain(low.iter().rev()).chain(high.first()).map(|p| (p[0], p[1])).collect();
+    (curve, s1)
 }
 
 /// The frequency response from one motor's torque to its speed (kind 5), as `sim-cli sweep` gives it. On a linear

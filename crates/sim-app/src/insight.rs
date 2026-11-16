@@ -221,6 +221,8 @@ pub fn band_runs(entry: &MachineEntry, config: &Config) -> Result<BandRuns, Conf
 #[derive(Default)]
 pub struct Insight {
     pub modes: Option<(Config, Vec<ModeView>)>,
+    /// The small-amplitude frequencies of those modes (`Machine::modes_small_amplitude`), where they differ.
+    pub small_modes: Option<Vec<f64>>,
     pub picked: Option<usize>,
     pub band_runs: Option<(Config, BandRuns)>,
     #[allow(clippy::type_complexity)] // the model's `Job` of what `band_runs` answers, with its config
@@ -229,13 +231,14 @@ pub struct Insight {
 }
 
 /// The labels these views take from the model.
-pub const KEYS: [&str; 22] = [
+pub const KEYS: [&str; 23] = [
     "ui-colour-utilisation",
     "ui-modes",
     "ui-modes-hint",
     "ui-modes-find",
     "ui-modes-mode",
     "ui-modes-hz",
+    "ui-modes-small-hz",
     "ui-modes-damping",
     "ui-modes-linear",
     "ui-modes-shape",

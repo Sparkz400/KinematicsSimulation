@@ -374,9 +374,12 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
             "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result"
         );
         let rows: Vec<Vec<&str>> = margins.lines().skip(1).map(|l| l.split(',').collect()).collect();
+        // A loop without a gain crossover in the band (below) has no phase margin to measure: crossover and phase
+        // margin empty, judged on the gain margin alone.
         for row in &rows {
-            let (phase, gain): (f64, f64) = (row[3].parse().unwrap(), row[4].parse().unwrap());
-            assert!(phase > 35.0 && gain > 6.0 && row[7] == "ok", "{}: {row:?}", entry.id);
+            let gain: f64 = row[4].parse().unwrap();
+            let phase_ok = if row[2].is_empty() { row[3].is_empty() } else { row[3].parse::<f64>().unwrap() > 35.0 };
+            assert!(phase_ok && gain > 6.0 && row[7] == "ok", "{}: {row:?}", entry.id);
         }
         assert_eq!(rows.len(), (entry.build)(&entry.config()).unwrap().motors().len());
         // They are the figures of `velocity_loop_margins`, which the command line prints alike for every machine: checked on
@@ -398,7 +401,7 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         // above: a crane's hoist, its 92 % gearbox under the 265 kg, whose efficiency faded in below 0.5 W
         // is a damper of 2601^2 ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope, 4.5 N m s/rad at the motor, which the
         // test torque (0.32 N m) does not break away from: |L| some 0.045, the loop not seen.
-        rows.iter().map(|row| row[2] == "NaN").collect::<Vec<bool>>()
+        rows.iter().map(|row| row[2].is_empty()).collect::<Vec<bool>>()
     };
     // An unstable loop says so: every machine with a velocity gain of 0.3 N m s/rad (7.5 to 12 times the shipped one).
     // (12 times the shipped one where 0.3 would be less than 7.5 times it: the delta's 0.25 and the screw's, rack's, arms' and table's;
@@ -1548,7 +1551,9 @@ fn compare(entry: &'static sim_core::MachineEntry) {
         let torque = format!("motor.{motor}.torque");
         // The first axis's position: not every machine has an axis x (the rotary table's c, the arms' j1), nor metres.
         let position = format!("axis.{}.position", sim.machine.axes()[0].id);
-        let unit = sim.signal_infos().iter().find(|s| s.id == position).unwrap().unit.clone();
+        let unit_of = |id: &str| sim.signal_infos().iter().find(|s| s.id == id).unwrap().unit.clone();
+        // N m on a rotary motor, N on a linear one (the linear-motor axis, the mover track).
+        let (unit, torque_unit) = (unit_of(&position), unit_of(&torque));
         // The friction the machine has: of its guides, of its arms' joints, of the winches that pull a platform, or of the
         // dancer a web runs over.
         let effect = ["guide_friction", "joint_friction", "winch_friction", "dancer_friction"]
@@ -1576,7 +1581,9 @@ fn compare(entry: &'static sim_core::MachineEntry) {
         let lines: Vec<&str> = written.lines().collect();
         assert_eq!(
             lines[0],
-            format!("time[s],{torque}.on[N m],{torque}.off[N m],{position}.on[{unit}],{position}.off[{unit}]")
+            format!(
+                "time[s],{torque}.on[{torque_unit}],{torque}.off[{torque_unit}],{position}.on[{unit}],{position}.off[{unit}]"
+            )
         );
         assert_eq!(lines.len(), 1 + found.on.len().min(found.off.len()));
         let (on, off) = (&found.on[100], &found.off[100]);
@@ -1584,7 +1591,7 @@ fn compare(entry: &'static sim_core::MachineEntry) {
         assert_eq!(lines[101], format!("{:.4},{:.9e},{:.9e},{:.9e},{:.9e}", on[0], on[t], off[t], on[p], off[p]));
         let (peak, rms) = found.difference(t);
         let written = std::fs::read_to_string(&differences).unwrap();
-        assert_eq!(written.lines().nth(1).unwrap(), format!("{torque},N m,{peak:.6e},{rms:.6e}"));
+        assert_eq!(written.lines().nth(1).unwrap(), format!("{torque},{torque_unit},{peak:.6e},{rms:.6e}"));
         // An effect the config does not have is refused by name.
         let out = cli(&["compare", entry.id, "--effect", "no_such_effect"]);
         assert!(!out.status.success() && text(&out.stderr).contains("effects.no_such_effect"), "{}", text(&out.stderr));

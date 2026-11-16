@@ -302,7 +302,14 @@ impl Runner {
         let (a, b, along) = nearest;
         let nearest: Vec<f64> = a.iter().zip(b).map(|(a, b)| a + along * (b - a)).collect();
         let planned = self.sim.machine.scene_point(&nearest).unwrap_or(at);
-        TrailPoint { at, planned, speed: crate::insight::linear_speed(self.sim.machine.axes().iter().zip(&vel).map(|(a, v)| (a.unit == "m", *v))), time: self.sim.time() }
+        TrailPoint {
+            at,
+            planned,
+            speed: crate::insight::linear_speed(
+                self.sim.machine.axes().iter().zip(&vel).map(|(a, v)| (a.unit == "m", *v)),
+            ),
+            time: self.sim.time(),
+        }
     }
 
     /// Runs whole base steps for `seconds` of simulated time and reports the samples.

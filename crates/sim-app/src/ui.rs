@@ -562,7 +562,11 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
                         });
                         ui.horizontal(|ui| {
                             gauge_bar(ui, 112.0, used, passes);
-                            ui.label(RichText::new(share_text(model, used, passes)).small().color(margin_color(used, passes)));
+                            ui.label(
+                                RichText::new(share_text(model, used, passes))
+                                    .small()
+                                    .color(margin_color(used, passes)),
+                            );
                         });
                     });
                 })

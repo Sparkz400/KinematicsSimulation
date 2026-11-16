@@ -465,7 +465,7 @@ motor,drive,cost_kg,result,tightest_check,tightest_utilisation,rank,front,cycle_
 ```text
 $ sim-cli transmission t-gantry --config crates/machine-t-gantry/exct-30.toml --motor 1FK2104-5AF --from 1 --to 20 --count 7 --gearboxes NRK
 Classic optimum (least torque per unit acceleration) and best value for the cycle of gearbox.ratio: 5.1707, 1.6475
-kind,value,gearbox,torque_per_acceleration,inertia_ratio,cycle_s,result,tightest_check,tightest_utilisation
+kind,value,gearbox,torque_per_acceleration,inertia_ratio,cycle_s,result,tightest_check,tightest_utilisation,torque_unit
 sweep,1.000000,,0.390498,34.8269,2.0480,ok,settling,0.5320
 sweep,1.647549,,0.251668,12.8303,2.0480,ok,gearbox-radial-load,0.5007
 sweep,2.714418,,0.176891,4.7267,2.0480,ok,motor-speed,0.6074

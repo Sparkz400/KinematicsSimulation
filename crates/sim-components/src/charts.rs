@@ -37,10 +37,16 @@ pub fn torque_speed(drive: &DriveParams, dc_voltage: f64) -> TorqueSpeed {
         [pairs.iter().map(|&(w, (_, high))| [w, high]).collect(), pairs.iter().map(|&(w, (low, _))| [w, low]).collect()]
     };
     // The verdict's line, from the same source (`DriveParams::s1_torque`, `analysis::s1_torque`).
-    let s1 = |sign: f64| {
-        let at = |w: f64| sign * drive.s1_torque(w);
-        vec![[-top, at(top)], [0.0, at(0.0)], [top, at(top)]]
-    };
+    // Straight but for its kink at standstill and, where it falls to nothing before `top` (a static torque well above the
+    // rated one), at that speed.
+    let (still, rated) = (drive.s1_torque(0.0), drive.s1_torque(drive.rated_speed));
+    let zero = drive.rated_speed * still / (still - rated);
+    let mut speeds = vec![0.0, top];
+    if still > rated && zero < top {
+        speeds.insert(1, zero);
+    }
+    let speeds: Vec<f64> = speeds.iter().rev().map(|w| -w).chain(speeds[1..].iter().copied()).collect();
+    let s1 = |sign: f64| speeds.iter().map(|&w| [w, sign * drive.s1_torque(w)]).collect::<Vec<_>>();
     TorqueSpeed {
         peak: line(&|w| drive.torque_curve(w)),
         s1: [s1(1.0), s1(-1.0)],
@@ -469,16 +475,26 @@ mod tests {
         assert!(e.angle.iter().all(|v| (v - 0.01).abs() < 1e-12), "{e:?}");
     }
 
+    /// The drawn line read at a speed, straight between its points.
+    fn drawn(line: &[[f64; 2]], speed: f64) -> f64 {
+        let i = line.windows(2).position(|w| w[0][0] <= speed && speed <= w[1][0]).unwrap();
+        let ([a, ta], [b, tb]) = (line[i], line[i + 1]);
+        ta + (tb - ta) * (speed - a) / (b - a)
+    }
+
     /// S1 from k_t I_0 = 0.45 * 4 = 1.8 N m at standstill to 1.2 N m at the rated 100 rad/s: at 150 rad/s the line has
-    /// 1.8 - 0.6 * 1.5 = 0.9 N m (the verdict's `s1_torque`), standstill 1.8, both directions.
+    /// 1.8 - 0.6 * 1.5 = 0.9 N m (the verdict's `s1_torque`), standstill 1.8, both directions; at 300 rad/s it reaches
+    /// nothing and stays there (a corner of the drawn line, not a line through it below 0).
     #[test]
     fn the_s1_line_runs_from_the_static_torque_to_the_rated_one_and_on() {
         let p = DriveParams { kt: 0.45, static_torque: 1.8, rated_torque: 1.2, rated_speed: 100.0, ..drive() };
         let c = torque_speed(&p, 300.0);
-        let top = c.s1[0][2][0];
-        assert!((c.s1[0][1][1] - 1.8).abs() < 1e-12 && (c.s1[1][1][1] + 1.8).abs() < 1e-12);
-        let at_150 = c.s1[0][2][1] - (c.s1[0][2][1] - 1.8) * (top - 150.0) / top;
-        assert!((at_150 - 0.9).abs() < 1e-9, "{at_150}");
+        let top = c.s1[0].last().unwrap()[0];
+        assert!((drawn(&c.s1[0], 0.0) - 1.8).abs() < 1e-12 && (drawn(&c.s1[1], 0.0) + 1.8).abs() < 1e-12);
+        assert!((drawn(&c.s1[0], 150.0) - 0.9).abs() < 1e-9 && (drawn(&c.s1[0], -150.0) - 0.9).abs() < 1e-9);
+        for w in [250.0, 300.0, 0.5 * (300.0 + top), top].into_iter().filter(|w| *w <= top) {
+            assert!((drawn(&c.s1[0], w) - p.s1_torque(w)).abs() < 1e-9, "{w}: {:?}", c.s1[0]);
+        }
     }
 
     /// With effects.iron_loss off the drive's stall current is the rated one (2 A, `stall_current`), but the config's
@@ -497,7 +513,7 @@ mod tests {
         };
         assert!((p.s1_torque(0.0) - 1.8).abs() < 1e-12 && (p.s1_torque(-100.0) - 1.2).abs() < 1e-12);
         let c = torque_speed(&p, 300.0);
-        assert!((c.s1[0][1][1] - 1.8).abs() < 1e-12);
+        assert!((drawn(&c.s1[0], 0.0) - 1.8).abs() < 1e-12);
         let flat = DriveParams { static_torque: 0.0, ..p };
         assert!((flat.s1_torque(0.0) - 1.2).abs() < 1e-12 && (flat.s1_torque(150.0) - 1.2).abs() < 1e-12);
     }

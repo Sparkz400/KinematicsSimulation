@@ -723,12 +723,16 @@ fn tuning_measures_the_axis_with_the_current_gains() {
             std::thread::sleep(Duration::from_millis(20));
         }
         let tuning = model.tuning.take().expect("the tuning job returned nothing");
-        // The modes over X at the start height (z = 0.35 m), as the machine reports them there: both at every place,
-        // the middle place at x = 0.5 m.
+        // The modes over X at the start height (z = 0.35 m), as the machine reports them there: at every place at least
+        // two (the frame's and the belts', up to four with the lean and Z), lowest first, the lowest between 15 and
+        // 25 Hz; the middle place at x = 0.5 m.
         let machine = (model.entry.build)(&model.config).unwrap();
         let (at, modes) = &tuning.modes[sim_app::model::MODE_POINTS / 2];
         assert!(
-            tuning.modes.len() == sim_app::model::MODE_POINTS && tuning.modes.iter().all(|(_, m)| m.len() == 2),
+            tuning.modes.len() == sim_app::model::MODE_POINTS
+                && tuning.modes.iter().all(|(_, m)| {
+                    m.len() >= 2 && m.windows(2).all(|w| w[0].hz <= w[1].hz) && m[0].hz > 15.0 && m[0].hz < 25.0
+                }),
             "{:?}",
             tuning.modes
         );
@@ -989,7 +993,7 @@ fn the_cycle_is_analysed_and_judged_in_the_app(entry: &'static MachineEntry) {
     assert_eq!(checks.len(), 1 + verdicts.len());
     assert_eq!(checks[0], ["Check", "Motor", "Value", "Limit", "Result"]);
     for (row, v) in checks[1..].iter().zip(&verdicts) {
-        assert_eq!(row[0], model.tr.tr(&format!("check-{}", v.check)));
+        assert_eq!(row[0], model.tr.tr(&model.check_key(v.check, v.motor)));
         assert!(model.tr.has(&format!("check-{}", v.check)), "no label for {}", v.check);
         assert_eq!(row[1].is_empty(), v.motor.is_none());
         // To the digits the tables give (an arm's wrist motor uses 0.011 of its curve, shown with three decimals).
@@ -1388,7 +1392,7 @@ fn the_app_searches_the_worst_corner_of_the_bounds() {
     assert_eq!(table[0], ["Check", "Motor", "Worst value", "Limit", "Result", "At the high bound", "At the low bound"]);
     assert_eq!(table.len(), 1 + worst.len());
     for (row, w) in table[1..].iter().zip(&worst) {
-        assert_eq!(row[0], model.tr.tr(&format!("check-{}", w.verdict.check)));
+        assert_eq!(row[0], model.tr.tr(&model.check_key(w.verdict.check, w.verdict.motor)));
         assert!(
             shows(&row[2], w.verdict.value)
                 && shows(&row[3], w.verdict.limit)
@@ -1465,7 +1469,7 @@ fn banded_in_the_app(entry: &'static MachineEntry, library: bool) {
     assert_eq!(banded[0], ["Check", "Motor", "Lowest", "Highest", "Worst case", "Runs passed [%]"]);
     assert_eq!(banded.len(), 1 + bands.len(), "{}", entry.id);
     for (row, band) in banded[1..].iter().zip(&bands) {
-        assert_eq!(row[0], model.tr.tr(&format!("check-{}", band.verdict.check)));
+        assert_eq!(row[0], model.tr.tr(&model.check_key(band.verdict.check, band.verdict.motor)));
         assert_eq!(
             (row[1].is_empty(), row[4].as_str()),
             (band.verdict.motor.is_none(), if band.ok { "ok" } else { "FAIL" })
@@ -1749,7 +1753,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     for (row, v) in checks[1..].iter().zip(&judged) {
         assert_eq!(
             (row[0].as_str(), row[4].as_str()),
-            (model.tr.tr(&format!("check-{}", v.check)), if v.ok { "ok" } else { "FAIL" })
+            (model.tr.tr(&model.check_key(v.check, v.motor)), if v.ok { "ok" } else { "FAIL" })
         );
     }
     // The operating points of the path, as its analysis has them, over the curves the cycle's plot has.
@@ -2740,8 +2744,8 @@ per_machine!(the_replayed_trace_is_overlaid_and_exported_in_the_app);
 /// The operating points in the app, as `sim-cli analyze --points` writes them (`MotorLoad::points`, which
 /// `cli.rs` checks against the command line's file), over the torque-speed curves. The peak curve by hand: the peak
 /// torque both ways up to the rated speed, falling straight to nothing at the no-load speed in the direction
-/// of motion, and the peak torque against the motion at every speed. The S1 curve: the rated torque both ways from
-/// the rated speed backwards to the rated speed forwards (on the gantry 1.27 N m up to 314 rad/s).
+/// of motion, and the peak torque against the motion at every speed. The S1 curve: the motor-s1 verdict's line, from the
+/// static torque at standstill to the rated torque at the rated speed and on, both ways.
 fn the_operating_points_are_shown_over_the_torque_speed_curve(entry: &'static MachineEntry) {
     // The machine in the app stands meanwhile (`the_app_optimises_the_cycle_and_applies_the_settings`).
     let mut model = Model::new(entry, "en");
@@ -2760,7 +2764,11 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve(entry: &'static Ma
     let (count, table) = model.points_table(0..all.len()).unwrap();
     // One per millisecond of the cycle (0.72 s on the delta).
     assert!(count == all.len() && count > 700 * load.motors.len(), "{}: {count} points", entry.id);
-    assert_eq!(table[0], ["Motor", "Motor speed [rad/s]", "Motor torque [N m]"]);
+    // A machine of linear motors (the linear-motor axis, the mover track) in m/s and N.
+    let linear = model.motors_linear();
+    let units =
+        if linear { ["Motor speed [m/s]", "Motor force [N]"] } else { ["Motor speed [rad/s]", "Motor torque [N m]"] };
+    assert_eq!(table[0], ["Motor", units[0], units[1]]);
     for (row, (k, (speed, torque))) in table[1..].iter().zip(&all) {
         assert!(
             row[0] == model.tr.tr(model.session.motors[*k].key) && shows(&row[1], *speed) && shows(&row[2], *torque),
@@ -2778,7 +2786,7 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve(entry: &'static Ma
     }
     // Per motor its own drive's curves, sampled densely: the peak curve is `torque_curve` at every sampled speed
     // (with the fade without field weakening: the peak torque at standstill, nothing at the no-load speed in the
-    // direction of motion), the S1 line the rated torque up to the rated speed both ways.
+    // direction of motion), the S1 line the verdict's.
     let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
     assert_eq!(curves.len(), load.motors.len());
     for (k, chart) in curves.iter().enumerate() {
@@ -2790,11 +2798,35 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve(entry: &'static Ma
         let middle = sim_components::charts::CURVE_POINTS / 2;
         // At standstill the peak torque; with field weakening (on by default since 13 November 2026) that of the d-q
         // model within the maximum current, a hair below it where the catalogue rounds (14.99994 of 15 N m).
+        // The d-q model's current circle is the smaller of motor's and drive's: where the drive gives less current than
+        // the motor takes at its peak torque (the winder's 15 A Motor Module against the 1FK7's 17.8 A for 18 N m),
+        // the curve stands at the drive's torque.
+        let peak = if drive.field_weakening.is_some() && drive.drive_max_current < drive.max_current {
+            drive.peak_torque.min(drive.torque_of(drive.drive_max_current))
+        } else {
+            drive.peak_torque
+        };
         let standstill = drive.torque_curve(0.0).1;
-        assert!(standstill <= drive.peak_torque && standstill > 0.999 * drive.peak_torque, "{}", entry.id);
+        assert!(standstill <= peak && standstill > 0.999 * peak, "{}: {standstill} against {peak}", entry.id);
         assert_eq!(chart.peak[0][middle], [0.0, standstill]);
-        let (w, t) = (drive.rated_speed, drive.rated_torque);
-        assert!(chart.s1 == [vec![[-w, t], [w, t]], vec![[-w, -t], [w, -t]]], "{}", entry.id);
+        // The S1 line, symmetric through standstill, is the motor-s1 verdict's (`analysis::s1_torque`, flat at the rated
+        // torque without a stall current) wherever it is read, up to the rated speed both ways.
+        let cfg = sim_components::catalog::motor_config(&entry.config(), &load.motors[k].id).unwrap();
+        // Symmetric through standstill, straight between its corners (standstill, and where it falls to nothing: the
+        // parallel SCARA's and the D4's small motors, whose config gives them the arms' stall current).
+        let line = &chart.s1[0];
+        let n = line.len();
+        assert!(n % 2 == 1 && line[n / 2][0] == 0.0, "{}: {line:?}", entry.id);
+        assert!(line.iter().zip(line.iter().rev()).all(|(a, b)| a[0] == -b[0] && a[1] == b[1]), "{}", entry.id);
+        assert!(chart.s1[1].iter().zip(line).all(|(low, high)| low == &[high[0], -high[1]]), "{}", entry.id);
+        let w = drive.rated_speed;
+        for speed in [0.0, 0.5 * w, w, -0.5 * w, -w] {
+            let i = line.windows(2).position(|p| p[0][0] <= speed && speed <= p[1][0]).unwrap();
+            let ([a, ta], [b, tb]) = (line[i], line[i + 1]);
+            let drawn = ta + (tb - ta) * (speed - a) / (b - a);
+            let s1 = sim_components::analysis::s1_torque(&cfg, speed).unwrap().unwrap_or(drive.rated_torque);
+            assert!((drawn - s1).abs() < 1e-9 * s1, "{}: motor {k} at {speed} rad/s: {drawn} against {s1}", entry.id);
+        }
         // The cycle runs inside the motor's curve.
         for (speed, torque) in &load.motors[k].points {
             assert!(
@@ -2810,7 +2842,8 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve(entry: &'static Ma
     // Nothing of a path before one was run.
     assert!(model.points_plot(Analysis::Path).is_none());
     model.set_language("de");
-    assert_eq!(model.points_table(0..1).unwrap().1[0][1], "Motordrehzahl [rad/s]");
+    let speed = if linear { "Motorgeschwindigkeit [m/s]" } else { "Motordrehzahl [rad/s]" };
+    assert_eq!(model.points_table(0..1).unwrap().1[0][1], speed);
     model.clear_analysis();
     assert!(model.points_plot(Analysis::Cycle).is_none());
 }
@@ -3032,7 +3065,9 @@ fn the_effect_views_show_torque_parts_energy_budget_and_friction(entry: &'static
     let lines = model.breakdown_lines();
     assert_eq!(lines.len(), model.session.motors.len());
     for ((title, parts), motor) in lines.iter().zip(&model.session.motors) {
-        assert_eq!(title, &format!("{} [N m]", model.tr.tr(motor.key)));
+        // N on a linear motor (the linear-motor axis, the mover track).
+        let unit = if model.motors_linear() { "N" } else { "N m" };
+        assert_eq!(title, &format!("{} [{unit}]", model.tr.tr(motor.key)));
         assert_eq!(
             parts.iter().map(|p| p.0.as_str()).collect::<Vec<_>>(),
             ["Torque to inertia", "Torque to gravity", "Torque to friction", "Torque to belt and the rest", "Torque"]
@@ -3408,19 +3443,24 @@ fn the_thermal_belt_and_comparison_views_show_the_simulation(entry: &'static Mac
 
     // The comparison: one line per motor for the torque, on and off, and the difference of each.
     let compare = model.compare_view().unwrap();
+    // N on a linear motor (the linear-motor axis, the mover track).
+    let torque_unit = if model.motors_linear() { "N" } else { "N m" };
     let (compared, label) = (effect, model.tr.tr(&format!("effect-{effect}")).to_string());
     let (effect, found) = model.comparison.as_ref().unwrap();
     assert!(
         effect == compared
             && compare.effect == label
             && (compared != "guide_friction" || label == "Guide friction")
-            && compare.title == "Torque [N m]",
+            && compare.title == format!("Torque [{torque_unit}]"),
         "{} {}",
         compare.effect,
         compare.title
     );
     assert_eq!(compare.lines.len(), model.session.motors.len());
-    assert_eq!(compare.table[0], ["Signal", "Peak of on − off [N m]", "RMS of on − off [N m]"]);
+    assert_eq!(
+        compare.table[0],
+        ["Signal".to_string(), format!("Peak of on − off [{torque_unit}]"), format!("RMS of on − off [{torque_unit}]")]
+    );
     for ((name, on, off), motor) in compare.lines.iter().zip(&model.session.motors) {
         let i = found.signals.iter().position(|s| s.id == format!("motor.{}.torque", motor.id)).unwrap();
         let (peak, rms) = found.difference(i);

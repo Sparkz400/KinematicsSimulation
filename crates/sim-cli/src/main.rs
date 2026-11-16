@@ -552,7 +552,8 @@ fn fit_rows(
         let key = args.option("--stiffness-key").unwrap_or(BELT_STIFFNESS_KEY);
         match fit_move_stiffness(entry, &cfg, &measured, key) {
             Ok(fit) => {
-                writeln!(out, "stiffness_factor,{key},{:.6e},{:.6e},{:.3e},", 1.0, fit.factor, fit.error).map_err(io)?;
+                writeln!(out, "stiffness_factor,{key},{:.6e},{:.6e},{:.3e},", 1.0, fit.factor, fit.error)
+                    .map_err(io)?;
                 writeln!(out, "ringing_rms_nm,{key},,{:.6e},,", fit.ringing).map_err(io)?;
                 writeln!(out, "ringing_left_rms_nm,{key},,{:.6e},,", fit.residual).map_err(io)?;
                 let (key, detail) = fit.advice();
@@ -1141,16 +1142,18 @@ fn transmission(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let mut out = output(args, "--out")?;
     writeln!(
         out,
-        "kind,value,gearbox,torque_per_acceleration,inertia_ratio,cycle_s,result,tightest_check,tightest_utilisation"
+        "kind,value,gearbox,torque_per_acceleration,inertia_ratio,cycle_s,result,tightest_check,tightest_utilisation,torque_unit"
     )
     .map_err(io)?;
+    // The unit of the torque in torque_per_acceleration, as `search` names it: N on a machine of linear motors.
+    let torque_unit = if (entry.build)(&cfg).is_ok_and(|m| m.motor_linear(0)) { "N" } else { "N m" };
     let rows = sweep.rows.iter().map(|r| (if r.value == sweep.classic { "classic" } else { "sweep" }, r));
     for (kind, r) in rows.chain(sweep.snapped.iter().map(|r| ("catalogue", r))) {
         let (check, u) = r.tightest.unwrap_or((r.refused, f64::NAN));
         let result = if r.passes { "ok" } else { "FAIL" };
         writeln!(
             out,
-            "{kind},{:.6},{},{:.6},{:.4},{:.4},{result},{check},{u:.4}",
+            "{kind},{:.6},{},{:.6},{:.4},{:.4},{result},{check},{u:.4},{torque_unit}",
             r.value, r.gearbox, r.torque_per_acceleration, r.inertia_ratio, r.cycle_s
         )
         .map_err(io)?;
@@ -1395,6 +1398,11 @@ fn sensitivity(args: &Args, tr: &Translations) -> Result<(), Failure> {
         })
         .collect();
     let (nominal, mut rows) = sim_components::analysis::sensitivity(entry, &cfg, &paths, delta)?;
+    // A value of 0 without a range in [bounds] has nothing to scale and is not ranked: named on the error stream.
+    let bounded = sim_components::analysis::bounds(&cfg)?;
+    for path in paths.iter().filter(|p| cfg.f64(p).ok() == Some(0.0) && !bounded.iter().any(|b| &b.0 == *p)) {
+        eprintln!("{}", tr.tr_arg("cli-sensitivity-zero", path));
+    }
     let slack = |load: &sim_components::analysis::CycleLoad| load.belt_tension.map_or(0.0, |t| t.0);
     rows.sort_by(|a, b| b.strength(&nominal).total_cmp(&a.strength(&nominal)));
     let mut out = output(args, "--out")?;
@@ -1747,10 +1755,18 @@ fn margins(args: &Args) -> Result<(), Failure> {
     for (run, margins) in &runs {
         for (motor, m) in motors.iter().zip(margins) {
             let result = if m.stable() { "ok" } else { "FAIL" };
+            // No gain crossover in the band (or no valid measurement): crossover and phase margin left empty, as a
+            // missing band in `tuning`; the result is then the gain margin's alone.
+            let cell = |x: f64| if x.is_nan() { String::new() } else { format!("{x:.1}") };
             writeln!(
                 out,
-                "{run},{},{:.1},{:.1},{:.2},{:.3},{:.1},{result}",
-                motor.id, m.crossover_hz, m.phase_margin_deg, m.gain_margin_db, m.peak_sensitivity, m.peak_frequency_hz
+                "{run},{},{},{},{:.2},{:.3},{:.1},{result}",
+                motor.id,
+                cell(m.crossover_hz),
+                cell(m.phase_margin_deg),
+                m.gain_margin_db,
+                m.peak_sensitivity,
+                m.peak_frequency_hz
             )
             .map_err(io)?;
         }
@@ -1760,7 +1776,9 @@ fn margins(args: &Args) -> Result<(), Failure> {
 
 /// `modes <machine>`: the modes the machine reports over the stroke of one axis (`--axis-index`, the first by default) at
 /// `--points` places (21 by default), the other axes at the start pose: position, then frequency and damping ratio of
-/// each mode, lowest first; a mode a place does not have is left empty.
+/// each mode, lowest first; a mode a place does not have is left empty. Where the machine's small-amplitude modes
+/// (`Machine::modes_small_amplitude`, a gearbox's hysteresis stiffness) differ, each mode has a third column with that
+/// frequency, `mode<i>_small_hz`.
 fn modes(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     if args.flag("--shapes") {
@@ -1773,15 +1791,23 @@ fn modes(args: &Args) -> Result<(), Failure> {
     let sim = Sim::new(entry, &cfg)?;
     // At the configured start pose, where the tool stands, not the plan at rest (the motors' pose by the rigid
     // kinematics, off it by the belt's stretch).
-    let rows =
-        sim_components::analysis::modes_along(sim.machine.as_ref(), &cfg.f64s("start.pose")?, axis, points as usize);
+    let pose = cfg.f64s("start.pose")?;
+    let rows = sim_components::analysis::modes_along(sim.machine.as_ref(), &pose, axis, points as usize);
+    let small = sim_components::analysis::small_amplitude_along(sim.machine.as_ref(), &pose, axis, &rows);
     let count = rows.iter().map(|(_, modes)| modes.len()).max().unwrap_or(0);
     let mut out = output(args, "--out")?;
-    let header: String = (1..=count).map(|i| format!(",mode{i}_hz,mode{i}_damping")).collect();
+    let extra = |i: usize| if small.is_some() { format!(",mode{i}_small_hz") } else { String::new() };
+    let header: String = (1..=count).map(|i| format!(",mode{i}_hz,mode{i}_damping{}", extra(i))).collect();
     writeln!(out, "position{header}").map_err(io)?;
-    for (position, modes) in rows {
+    for (k, (position, modes)) in rows.iter().enumerate() {
         let cells: String = (0..count)
-            .map(|i| modes.get(i).map_or(",,".into(), |m| format!(",{:.4},{:.5}", m.hz, m.damping)))
+            .map(|i| {
+                let large = modes.get(i).map_or(",,".into(), |m| format!(",{:.4},{:.5}", m.hz, m.damping));
+                let small = small
+                    .as_ref()
+                    .map_or(String::new(), |s| s[k].get(i).map_or(",".into(), |m| format!(",{:.4}", m.hz)));
+                large + &small
+            })
             .collect();
         writeln!(out, "{position:.6}{cells}").map_err(io)?;
     }
