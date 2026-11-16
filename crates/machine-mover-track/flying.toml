@@ -446,7 +446,7 @@ segment_max_rise_k = 40.0
 mover_guide_max_load_n = 500.0
 mover_max_liftoff_ratio = 0.7
 # [estimate] the movers' 48 V supply as one DC link they share (effects.shared_dc_link); its chopper and its trip at the
-# single axis's ratios to its bus (224.65 V and 257.6 V on 155.13 V): 70 V and 80 V.
+# ratios to its bus of the shipped S210 belt axes (224.65 V and 257.6 V on 155.13 V): 70 V and 80 V.
 dc_link_capacitance_uf = 4700.0
 braking_threshold_v = 70.0
 braking_resistor_continuous_w = 100.0

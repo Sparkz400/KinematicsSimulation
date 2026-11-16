@@ -383,6 +383,11 @@ fn page_texts_in_both_languages() {
     assert_eq!(keys(include_str!("../i18n/en.ftl")), keys(include_str!("../i18n/de.ftl")));
 }
 
+/// The first registered machine: the tests name no machine (the architecture test).
+fn first() -> &'static str {
+    sim_machines::MACHINES[0].id
+}
+
 fn json(text: &str) -> serde_json::Value {
     serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}: {text}"))
 }
@@ -392,9 +397,9 @@ fn json(text: &str) -> serde_json::Value {
 /// check passes exactly where its margin is not below 0.
 #[test]
 fn verdicts_have_their_margins() {
-    let answer = json(&handle(2, "t-gantry\nen\n").unwrap());
+    let answer = json(&handle(2, &format!("{}\nen\n", first())).unwrap());
     let verdicts = answer["verdicts"].as_array().unwrap();
-    let peak = verdicts.iter().find(|v| v["check"] == "motor-peak").expect("t-gantry judges motor-peak");
+    let peak = verdicts.iter().find(|v| v["check"] == "motor-peak").expect("the first machine judges motor-peak");
     let (value, limit) = (peak["value"].as_f64().unwrap(), peak["limit"].as_f64().unwrap());
     assert!((peak["margin"].as_f64().unwrap() - (1.0 - value / limit)).abs() < 1e-12, "{peak}");
     for v in verdicts {
@@ -407,11 +412,11 @@ fn verdicts_have_their_margins() {
 /// digits: per motor angle, speed, torque, current, following error and winding temperature rise.
 #[test]
 fn scopes_are_the_recorded_pass() {
-    let entry = sim_machines::find("t-gantry").unwrap();
+    let entry = sim_machines::MACHINES[0];
     let cfg = entry.config();
     let rows = sim_components::analysis::record_cycle(entry, &cfg).unwrap();
     let signals = sim_components::Sim::new(entry, &cfg).unwrap().signal_infos();
-    let answer = json(&handle(10, "t-gantry\nen\n").unwrap());
+    let answer = json(&handle(10, &format!("{}\nen\n", first())).unwrap());
     let time = answer["time"].as_array().unwrap();
     assert_eq!(time.len(), rows.len());
     assert_eq!(answer["step_s"].as_f64(), Some(1e-3));
@@ -435,7 +440,7 @@ fn scopes_are_the_recorded_pass() {
 /// the config's supply, and the gearboxes of a named motor only.
 #[test]
 fn the_form_offers_the_values_and_the_catalogue() {
-    let form = json(&handle(8, "t-gantry\nde\n").unwrap());
+    let form = json(&handle(8, &format!("{}\nde\n", first())).unwrap());
     let params = form["params"].as_array().unwrap();
     let payload = params.iter().find(|p| p["path"] == "mass.payload_kg").unwrap();
     assert_eq!(payload["value"], "2.0");
@@ -446,17 +451,18 @@ fn the_form_offers_the_values_and_the_catalogue() {
     };
     assert!(part(&form, "motor") > 10 && part(&form, "drive") > 3 && part(&form, "motor_supply") > 10, "{form}");
     assert_eq!(part(&form, "gearbox"), 0);
-    let entry = sim_machines::find("t-gantry").unwrap();
+    let entry = sim_machines::MACHINES[0];
     let motor = entry.default_config.replacen("motor = \"\"", "motor = \"1FK2205-4AF\"", 1);
-    assert!(part(&json(&handle(8, &format!("t-gantry\nen\n{motor}")).unwrap()), "gearbox") > 0);
+    assert!(part(&json(&handle(8, &format!("{}\nen\n{motor}", first())).unwrap()), "gearbox") > 0);
 }
 
 /// A change from the form is written over the value's own text, comments kept; the answer lists what differs from the
 /// default, and those lines alone give the config back unless an array changed.
 #[test]
 fn changes_keep_the_comments_and_make_the_share_link() {
-    let entry = sim_machines::find("t-gantry").unwrap();
-    let answer = json(&handle(9, "t-gantry\nen\n\n---\nmass.payload_kg = 3.5\ndrive.kv_1_s = 40").unwrap());
+    let entry = sim_machines::MACHINES[0];
+    let answer =
+        json(&handle(9, &format!("{}\nen\n\n---\nmass.payload_kg = 3.5\ndrive.kv_1_s = 40", first())).unwrap());
     let text = answer["config"].as_str().unwrap();
     assert!(text.contains("payload_kg = 3.5\n") && text.contains("kv_1_s = 40.0\n"), "{text}");
     for line in entry.default_config.lines().filter(|l| l.starts_with('#')) {
@@ -465,23 +471,26 @@ fn changes_keep_the_comments_and_make_the_share_link() {
     assert_eq!(answer["changed"], serde_json::json!(["drive.kv_1_s = 40.0", "mass.payload_kg = 3.5"]));
     assert_eq!(answer["compact"], true);
     // The link's lines on the default config give the same text.
-    let from_link = json(&handle(9, "t-gantry\nen\n\n---\ndrive.kv_1_s = 40.0\nmass.payload_kg = 3.5").unwrap());
+    let from_link =
+        json(&handle(9, &format!("{}\nen\n\n---\ndrive.kv_1_s = 40.0\nmass.payload_kg = 3.5", first())).unwrap());
     assert_eq!(from_link["config"], answer["config"]);
     // An unknown key and a value of another type are refused by name.
-    assert!(handle(9, "t-gantry\nen\n\n---\nmass.no_such_kg = 1").unwrap_err().contains("no_such_kg"));
-    assert!(handle(9, "t-gantry\nen\n\n---\nmass.payload_kg = \"heavy\"").unwrap_err().contains("payload_kg"));
+    assert!(handle(9, &format!("{}\nen\n\n---\nmass.no_such_kg = 1", first())).unwrap_err().contains("no_such_kg"));
+    assert!(
+        handle(9, &format!("{}\nen\n\n---\nmass.payload_kg = \"heavy\"", first())).unwrap_err().contains("payload_kg")
+    );
     // A changed array (a cycle segment) is no `path = value` line: the link carries the whole text.
     // The first `dwell_s = 0.1` is the first segment's dwell.
     let moved = entry.default_config.replacen("dwell_s = 0.1\n", "dwell_s = 0.123\n", 1);
     assert_ne!(moved, entry.default_config);
-    let answer = json(&handle(9, &format!("t-gantry\nen\n{moved}\n---\n")).unwrap());
+    let answer = json(&handle(9, &format!("{}\nen\n{moved}\n---\n", first())).unwrap());
     assert_eq!(answer["compact"], false, "{answer}");
 }
 
 /// The module built for the browser against the native numbers (WebAssembly's libm against the platform's maths
 /// library, amplified by the simulation): the cycle time and what sums over the pass (the scopes' RMS) to 4 significant
 /// digits, 1e-4; a peak, the highest of one base step, to 3, 1e-3 (measured 16 November 2026: up to 5.2e-4, the
-/// T-gantry's motor-peak of motor b, 0.12161 against 0.12154); a value near 0 to 1e-3 of its limit (the warm start's
+/// first machine's motor-peak of motor b, 0.12161 against 0.12154); a value near 0 to 1e-3 of its limit (the warm start's
 /// change, 1e-5 K against a limit of 0.1 K); a margin to 1e-3. Runs the built `sim_wasm.wasm` in Node; without either (no wasm build, no Node) it says so and
 /// passes. CI's job `wasm` builds the module before the tests, so it runs there.
 #[test]
@@ -519,7 +528,7 @@ fn the_wasm_build_agrees_with_the_native_numbers() {
         let tolerance = 10f64.powi(-digits) * a.abs().max(b.abs()).max(scale) + 1e-12;
         assert!((a - b).abs() <= tolerance, "{what}: wasm {a}, native {b}");
     };
-    for id in ["t-gantry", "file:corexy.toml"] {
+    for id in [first(), "file:corexy.toml"] {
         let request = format!("{id}\nen\n");
         let Some(wasm) = in_wasm(2, &request) else { return };
         let native = json(&handle(2, &request).unwrap());
