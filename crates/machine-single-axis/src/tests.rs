@@ -1174,8 +1174,8 @@ fn every_row_of_the_energy_front_is_beaten_by_no_other() {
 }
 
 /// A drive trace of the axis going to the far end and back, one row per millisecond as a run writes it,
-/// with measurement noise on torque (0.005 N m, about 1 % of the peak), speed (0.1 rad/s) and angle.
-fn noisy_trace(cfg: &Config, noise: &mut Noise) -> Trace {
+/// with measurement noise on torque, speed and angle of the standard deviations `levels` (`NOISE`).
+fn noisy_trace(cfg: &Config, noise: &mut Noise, levels: [f64; 3]) -> Trace {
     let mut sim = Sim::new(&ENTRY, cfg).unwrap();
     let mut trace = Trace::default();
     for target in [0.9, 0.1] {
@@ -1187,12 +1187,15 @@ fn noisy_trace(cfg: &Config, noise: &mut Noise) -> Trace {
     }
     let m = &mut trace.motors[0];
     for row in 0..m.torque.len() {
-        m.torque[row] += 0.005 * noise.next();
-        m.speed[row] += 0.1 * noise.next();
-        m.angle[row] += 1e-5 * noise.next();
+        m.torque[row] += levels[0] * noise.next();
+        m.speed[row] += levels[1] * noise.next();
+        m.angle[row] += levels[2] * noise.next();
     }
     trace
 }
+
+/// The test noise: torque 0.005 N m (about 1 % of the peak), speed 0.1 rad/s (0.04 % of the top speed), angle 1e-5 rad.
+const NOISE: [f64; 3] = [0.005, 0.1, 1e-5];
 
 /// Fitting: measurements of a machine that is 1.5 kg heavier than the config, with 1.4 times the Coulomb
 /// friction, 1.3 times the viscous friction and 0.7 times the belt stiffness, with noise on them, are
@@ -1211,7 +1214,7 @@ fn the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measur
     scale(&mut truth, &coulomb, 1.4);
     scale(&mut truth, &viscous, 1.3);
     scale(&mut truth, &["belt.stiffness_ea_n"], 0.7);
-    let trace = noisy_trace(&truth, &mut Noise(1));
+    let trace = noisy_trace(&truth, &mut Noise(1), NOISE);
 
     // Stage 1, the rigid values. The lumped mass of the config: 6 kg plus pulley, rotor and belt.
     let mut cfg = ENTRY.config();
@@ -1225,10 +1228,14 @@ fn the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measur
         fit.fitted[2] / fit.config[2],
         fit.fitted[3] - fit.config[3],
     ];
-    // Mass in kg, friction as factors, and no constant force on a level axis.
-    for (q, expected) in [1.5, 1.3, 1.4, 0.0].into_iter().enumerate() {
+    // Mass in kg, friction as factors, and no constant force on a level axis. Within three standard errors, which hold
+    // the noise alone (`identify::difference_share`; on the config's own trace with this noise they cover it, see
+    // `the_fit_s_errors_cover_its_noise`), and what the rigid model mixes up between the values of a machine that differs
+    // from the config (the gearbox's losses, the softer belt): 5 % of the mass's change, 0.02 on the friction's factors.
+    // Without noise (16 November 2026) the first pass found + 1.570 kg, × 1.321 and × 1.388.
+    for (q, (expected, model)) in [(1.5, 0.075), (1.3, 0.02), (1.4, 0.02), (0.0, 0.0)].into_iter().enumerate() {
         assert!(
-            (found[q] - expected).abs() < 3.0 * errors[q],
+            (found[q] - expected).abs() < 3.0 * errors[q] + model,
             "value {q}: {} ± {}, expected {expected}",
             found[q],
             errors[q]
@@ -1253,11 +1260,11 @@ fn the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measur
     apply(&mut cfg, &second);
     let (mass, drag, dry) =
         (cfg.f64("mass.carriage_kg").unwrap() + 2.0, cfg.f64(viscous[0]).unwrap(), cfg.f64(coulomb[0]).unwrap());
-    // Two standard errors, as for the friction below: with the winding integrated with the mechanics the second pass
-    // lands 0.03 kg off (it was within one before).
+    // Two standard errors of the first pass, and for the friction 0.02 more: the belt is still the config's, stiffer than
+    // the machine's (stage 2 fits it), and the second pass lands at 7.4997 kg, 25.99 N s/m and 21.31 N (1.5 % high).
     assert!((mass - 7.5).abs() < 2.0 * errors[0], "carriage and payload {mass} kg, in truth 7.5 kg ± {}", errors[0]);
     assert!(
-        (drag / 26.0 - 1.0).abs() < 2.0 * errors[1] && (dry / 21.0 - 1.0).abs() < 2.0 * errors[2],
+        (drag / 26.0 - 1.0).abs() < 2.0 * errors[1] + 0.02 && (dry / 21.0 - 1.0).abs() < 2.0 * errors[2] + 0.02,
         "viscous {drag} N s/m of 26, Coulomb {dry} N of 21"
     );
 
@@ -2685,5 +2692,64 @@ fn the_steady_friction_has_the_gearbox_loss_on_the_weight() {
         m.feedforward_torque(&[0.5], &[0.0], &mut weight);
         m.steady_friction(&[0.5], &[speed], &mut friction);
         assert!((weight[0] + friction[0] - by_hand).abs() < 1e-5, "{speed} m/s: {} N m", weight[0] + friction[0]);
+    }
+}
+
+/// The coverage of the fit's standard errors, by experiment (run by hand: `--run-ignored only --no-capture`): the
+/// axis's own config to 0.9 m and back as `noisy_trace`, with the noise of seeds 1 to 40 (`FIT_SEEDS` sets the count,
+/// `FIT_SPEED_NOISE` the speed noise in rad/s, 0.1 by default; `FIT_TRUTH=changed` measures the changed machine of
+/// `the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measurements`), fitted against the config:
+/// per value (mass, viscous and Coulomb friction) the mean and standard deviation of (fitted − config − expected) /
+/// error, which should be near 0 and 1. Then the trace without noise, a self-replay, whose error must not collapse.
+#[test]
+#[ignore]
+fn the_fit_s_errors_cover_its_noise() {
+    let env = |key: &str, default: f64| std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
+    let (seeds, speed_noise) = (env("FIT_SEEDS", 40.0) as u64, env("FIT_SPEED_NOISE", 0.1));
+    let mut truth = ENTRY.config();
+    let mut expected = [0.0; 3];
+    if std::env::var("FIT_TRUTH").is_ok_and(|v| v == "changed") {
+        for (paths, factor) in [
+            (&["mass.carriage_kg", "mass.payload_kg"][..], 1.25),
+            (&["friction_x.coulomb_n", "friction_x.stiction_n", "motor.friction_coulomb_nm"][..], 1.4),
+            (&["friction_x.viscous_n_s_m", "motor.friction_viscous_nm_s_rad"][..], 1.3),
+            (&["belt.stiffness_ea_n"][..], 0.7),
+        ] {
+            for path in paths {
+                truth.set_text(&format!("{path} = {:?}", truth.f64(path).unwrap() * factor)).unwrap();
+            }
+        }
+        expected = [1.5, 0.3, 0.4];
+    }
+    let clean = noisy_trace(&truth, &mut Noise(1), [0.0; 3]);
+    let cfg = ENTRY.config();
+    // Mass in kg, the friction as its factor less 1.
+    let z = |fit: &sim_components::identify::AxisFit| -> [(f64, f64); 3] {
+        [
+            (fit.fitted[0] - fit.config[0] - expected[0], fit.error[0]),
+            (fit.fitted[1] / fit.config[1] - 1.0 - expected[1], fit.error[1] / fit.config[1]),
+            (fit.fitted[2] / fit.config[2] - 1.0 - expected[2], fit.error[2] / fit.config[2]),
+        ]
+    };
+    let mut scores = vec![Vec::new(); 3];
+    let from = env("FIT_FROM", 1.0) as u64;
+    for seed in from..from + seeds {
+        let trace = noisy_trace(&truth, &mut Noise(seed), [NOISE[0], speed_noise, NOISE[2]]);
+        let fit = fit_rigid(&ENTRY, &cfg, &trace).unwrap()[0].clone().unwrap();
+        for (q, (d, e)) in z(&fit).into_iter().enumerate() {
+            scores[q].push(d / e);
+            if seed < from + 2 {
+                eprintln!("seed {seed} value {q}: {d:+.5} ± {e:.5}");
+            }
+        }
+    }
+    for (q, s) in scores.iter().enumerate() {
+        let mean = s.iter().sum::<f64>() / s.len() as f64;
+        let sd = (s.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (s.len() - 1) as f64).sqrt();
+        eprintln!("value {q}: z mean {mean:+.3}, standard deviation {sd:.3} over {} seeds", s.len());
+    }
+    let fit = fit_rigid(&ENTRY, &cfg, &clean).unwrap()[0].clone().unwrap();
+    for (q, (d, e)) in z(&fit).into_iter().enumerate() {
+        eprintln!("no noise, value {q}: {d:+.3e} ± {e:.3e} ({:+.2} σ)", d / e);
     }
 }

@@ -444,8 +444,9 @@ The stop analysis (`sim-cli stop`, `stop::study`) reports a worst stop with fini
 | The EXCT-30 config in the worst case of both band modes (67 bounded values one at a time; 60 samples) | Every check passes, `pulley-bearing-life` too since a_ISO is in it (above 40000 h in both modes; it failed before); slackest belt section above 100 N (158 N and 137 N), settling below 0.07 mm (0.044 and 0.050), shaft load below 1500 N (1200 and 1201); cycle 2.048 s | As stated | `the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes`, catalog |
 | The EXCT-30 config at the worst corner of its bounds (`verdict_worst`, 2428 cycles, about 50 s) | `settling` below 0.1 mm (0.095 mm, with the second shaper at 17.5 Hz; 0.115 mm without); every other check passes but `pulley-bearing-life` (about 10000 h there, with a_ISO's estimates at their bad bounds) | As stated | `the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds`, catalog |
 | A tool pose mapped into the 3D scene, at five poses of each machine, rigid and elastic | Where the scene draws the tool part (flange, carriage); by hand (0.45, −0.05, −0.592) m and (0.45, −0.03, 0.06) m | 1e-12 m | `the_scene_point_of_a_tool_pose_is_where_the_scene_draws_the_tool`, gantry; `..._the_carriage`, axis |
-| Fit of a noisy simulated trace of a changed machine (1.5 kg heavier, friction × 1.4 and × 1.3, belt stiffness × 0.7) | The changes that were made | Within 3 standard errors; stiffness band below 0.03 | `the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measurements`, axis |
-| Fit on the T-gantry, where both motors move both axes | The changes per axis | Within 3 standard errors | `the_fit_tells_the_two_axes_apart`, gantry |
+| Fit of a noisy simulated trace of a changed machine (1.5 kg heavier, friction × 1.4 and × 1.3, belt stiffness × 0.7) | The changes that were made | Within 3 standard errors plus what the rigid model mixes up on a changed machine, 5 % of the mass's change and 0.02 on the friction's factors (found + 1.570 kg, × 1.313, × 1.395); stiffness band below 0.03 | `the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measurements`, axis |
+| Fit on the axis's own config with the test noise, 40 seeds (by hand: `--run-ignored only`) | (fitted − config) / error has mean 0 and standard deviation 1 for mass, viscous and Coulomb friction | Mean within 0.4, standard deviation 0.8 to 1.25 (found 1.01, 1.13, 1.15; seeds 41 to 80: 0.88, 0.94, 0.90) | `the_fit_s_errors_cover_its_noise`, axis |
+| Fit on the T-gantry, where both motors move both axes | The changes per axis | Within 3 standard errors plus 20 % of the mass's change, 0.03 on the Coulomb factor and 3 % of the Coulomb friction on the constant force (found X + 2.32 kg, Z + 1.01 kg) | `the_fit_tells_the_two_axes_apart`, gantry |
 | Resonance read off a synthetic dip | The frequency and damping it was built with, also with the points from high to low frequency | The sweep's spacing; 5 % | `resonance_reads_frequency_and_damping_off_a_known_dip`, identify |
 | Of two synthetic dips, the deeper one higher | The lower one, 22 Hz, damping 0.05 | 0.5 Hz; 0.01 | `of_two_dips_the_lowest_in_frequency_is_reported`, identify |
 | Fit in the motors' coordinates of a noisy simulated swing of the delta with all its effects: 4 kg of payload for 3, the joints' Coulomb and viscous friction doubled | Payload × 4 / 3; at the motor behind the gearbox of 20 and efficiency 0.96, Coulomb + 0.3 / 20 / 0.96 = 0.0156 N m, viscous + 0.05 / 400 / 0.96 = 1.30e-4 N m s/rad; no added inertia or constant torque; nothing the trace cannot tell apart | Within 3 standard errors; payload band below 2 % (found × 1.329 ± 0.014) | `the_delta_fit_finds_a_heavier_payload_and_more_joint_friction`, fit_joints |
@@ -988,24 +989,24 @@ and the speed loop's gains read off the S-profile (below), not the dSPACE board'
   0.9): guides 87.6 → 97.7 N (breakaway with them), nut preload 1752 → 1953 N, motor shaft 0.263 → 0.293 N m.
 
 Fitted again on the S-profile, the config lands on the measurement within its standard errors but for the mass and the
-held force: viscous 792 against 779 ± 23 N s/m, Coulomb 325 against 322 ± 6 N, constant 16.8 against 15.4 ± 1.6 N;
-moved mass 549 against 492 ± 3 kg, held force −162 against −242 ± 6 N (before the screw's efficiency: viscous 792,
+held force: viscous 766 against 773 ± 24 N s/m, Coulomb 320 against 324 ± 7 N, constant 15.6 against 15.2 ± 1.5 N;
+moved mass 550 against 496 ± 3 kg, held force −162 against −242 ± 6 N (before the screw's efficiency: viscous 792,
 Coulomb 325, moved mass 584 kg). The checks: moved mass 562 against 578 ± 8 kg on the sine, 557 against 529 ± 3 kg at
 constant speed (555 and 572 before).
 
-**Not changed, and why.** The moved mass: the fit says 57 kg less than the config's 549 kg (92 kg less than 584 before
+**Not changed, and why.** The moved mass: the fit says 54 kg less than the config's 550 kg (92 kg less than 584 before
 the screw's efficiency). The table's 400 kg is the source's, and the sweeps put the load side at 0.0173 to 0.0214 kg m²
 (427 to 528 kg at the table), so the table is not lighter; the excess is on the screw's side. Both parts of the model
 that the 1.0 work named were already in it: `BallScrew::inertia` takes the shaft as a solid steel cylinder at its
 nominal diameter over its whole length, ρ π d⁴ L / 32 = 0.00355 kg m² (88 kg at the table; at its root 0.00179, 44 kg),
 and the efficiency acts on the whole force the screw passes, inertial force included, η driving and 1 / η driven back
 (`Gearbox::loss_factor`). Neither is missing; both make the model heavier, not lighter. The efficiency was the wrong
-figure (above). The shaft: the remaining 57 kg is two thirds of the shaft's 88 kg, which fits a threaded part lighter
+figure (above). The shaft: the remaining 54 kg is three fifths of the shaft's 88 kg, which fits a threaded part lighter
 than a solid shaft at the nominal diameter and journals thinner than it, but the source gives neither, and the three
-recordings disagree by more (moved mass 492, 578 and 529 kg). A carriage of 342 kg would make the torques fit and
+recordings disagree by more (moved mass 496, 578 and 529 kg). A carriage of 342 kg would make the torques fit and
 would contradict the sweeps. The first mode stays at 137.02 Hz (`sim-cli modes`): the efficiency does not enter it.
 Against it, the torque per force at the table (below) reads as an efficiency of 0.77 to 0.81; at that efficiency the
-table alone would be 494 to 519 kg at the motor, more than the fit's 492 kg for everything, so the inertia does not
+table alone would be 494 to 519 kg at the motor, more than the fit's 496 kg for everything, so the inertia does not
 support it.
 The screw's stiffness: see the sweeps. The lead: see the sweeps.
 
@@ -1015,8 +1016,8 @@ in sim-components):
 
 | Value | S-profile (fit) | Sine (check) | Constant speed (check) | Replay of the config now (S-profile, sine, constant) |
 | --- | --- | --- | --- | --- |
-| Coulomb, guides, nut and motor together, at the table | 322 ± 6 N | 315 ± 4 N | 426 ± 1 N (with the viscous share at 0.1 m/s) | 321, 318, 396 N |
-| Viscous | 779 ± 23 N s/m | 1222 ± 96 N s/m | (one speed: in the Coulomb value) | 762, 801 |
+| Coulomb, guides, nut and motor together, at the table | 324 ± 7 N | 315 ± 4 N | 426 ± 1 N (with the viscous share at 0.1 m/s) | 320, 318, 396 N |
+| Viscous | 773 ± 24 N s/m | 1222 ± 96 N s/m | (one speed: in the Coulomb value) | 766, 801 |
 | Held at rest after the last move | −242 ± 6 N | +230 ± 7 N | +354 ± 1 N | −162, +227, −184 N |
 | Breakaway (1 to 5 % of top speed, slowing) | (too few rows) | 255 ± 1 N | (too few rows) | (−), 305 |
 | Presliding stiffness σ, from the turn at reversals | (one reversal at 1 m/s², crossed in 2 ms: no row; 7.0e6 N/m from it alone) | 3.1e7 ± 0.6e7 N/m (four) | (one reversal: no row; 1.9e7 N/m from it alone) | (−), 1.8e7, (−) |

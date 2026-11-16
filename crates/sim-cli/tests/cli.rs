@@ -812,7 +812,11 @@ fn verdicts_search_the_worst_corner_of_the_bounds() {
 fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
     on_every_machine(|entry| {
         let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
-        let per_axis = sim_components::trace::per_axis_fit(sim.machine.as_ref());
+        // Of the config the trace is fitted with, without the payload: the disc cam's inertia varies by 6.2 % over its
+        // range with it, by 4.1 % without (`trace::PER_AXIS_SPREAD`).
+        let mut empty = entry.config();
+        empty.set_text("effects.payload = false").unwrap();
+        let per_axis = sim_components::trace::per_axis_fit((entry.build)(&empty).unwrap().as_ref());
         let file = |name: &str| {
             std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
                 .join(format!("{}-{name}.csv", entry.id))
@@ -893,10 +897,13 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         assert_eq!(core, 4 * count, "{}: {fit:?}", entry.id);
         for row in fit.iter().filter(|r| checked.contains(&r[0].as_str())) {
             let [config, fitted, error] = [2, 3, 4].map(|c| row[c].parse::<f64>().unwrap());
-            // Or within a fifth of its standard error: the D4 picker's cycle knows motor 1's Coulomb friction to ± 21 %
-            // and the tool motor's to ± 84 %, and run and replay differ by 2.4 % and 5.3 % of it (0.12 and 0.06 σ).
+            // Within three standard errors (which hold the noise and what else the trace has that the replay has not,
+            // `identify::difference_share`, and are never 0), or within 1 %: what a replay does not reproduce of a run
+            // (its setpoints interpolated between the rows) lies partly along the fit's columns, where no residual shows
+            // it. Measured (16 November 2026): within 2 standard errors on most machines, the worst the hexapod's motor
+            // 5 at 0.63 % (11 σ), the D3's motors 2 and 3 at 0.07 % (5.7 σ), the mover track's at 0.04 % (5.6 σ).
             assert!(
-                config > 0.0 && (fitted - config).abs() < (0.02 * config).max(0.2 * error),
+                config > 0.0 && error > 0.0 && (fitted - config).abs() < (0.01 * config).max(3.0 * error),
                 "{}: {row:?}",
                 entry.id
             );

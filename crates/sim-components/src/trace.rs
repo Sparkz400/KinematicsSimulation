@@ -41,8 +41,8 @@ pub fn linear_transformation(machine: &dyn sim_core::Machine) -> bool {
 
 /// Whether the fit per axis (`identify::fit_rigid`) applies: a linear transformation, and a rigid model whose torques
 /// per unit of each axis's acceleration are the same at 10 %, 20 % ... 90 % of every range (a SCARA's inertia, even in its
-/// elbow angle, agrees at poses symmetric about the middle; a cam's dwells hold two probes alike), to 1e-6 of the largest. A
-/// SCARA's tool pose is its joints, linear, but the inertia an arm turns changes with the pose.
+/// elbow angle, agrees at poses symmetric about the middle; a cam's dwells hold two probes alike), to `PER_AXIS_SPREAD` of
+/// the largest. A SCARA's tool pose is its joints, linear, but the inertia an arm turns changes with the pose.
 pub fn per_axis_fit(machine: &dyn sim_core::Machine) -> bool {
     let (axes, motors) = (machine.axes(), machine.motors().len());
     let at = |share: f64| axes.iter().map(|a| a.min + share * (a.max - a.min)).collect::<Vec<f64>>();
@@ -60,11 +60,19 @@ pub fn per_axis_fit(machine: &dyn sim_core::Machine) -> bool {
         let largest = low.iter().fold(0.0, |m: f64, v| m.max(v.abs()));
         (2..=9).all(|k| {
             let high = inertia(&at(k as f64 / 10.0), axis);
-            low.iter().zip(&high).all(|(a, b)| (a - b).abs() <= 1e-6 * largest)
+            low.iter().zip(&high).all(|(a, b)| (a - b).abs() <= PER_AXIS_SPREAD * largest)
         })
     };
     linear_transformation(machine) && (0..axes.len()).all(same)
 }
+
+/// How far the torques per unit of an axis's acceleration may differ across the range for the fit per axis
+/// (`per_axis_fit`), of the largest: the fitted mass is then their mean over the trace, and what differs from it is in
+/// the trace's and the replay's residual alike. The T-gantry's belt (its runs on the vertical posts and its share in the
+/// Z axis's moves) changes its torques by up to 3.9 % over the range (4.5 % without the payload); the other machines
+/// fitted per axis by 0; the disc cam by 6.2 % (4.1 % without the payload, so its config without one is fitted per
+/// axis); the slider-crank, the SCARA, the indexers' cams and the arm by 40 % and more.
+pub const PER_AXIS_SPREAD: f64 = 0.05;
 
 /// One motor's columns of a trace, all at the motor shaft: position setpoint, position, speed, torque.
 #[derive(Debug, Clone, Default, PartialEq)]

@@ -2066,13 +2066,15 @@ fn twist_in_scene(machine: &dyn sim_core::Machine, pose: &[f64]) -> f64 {
 /// that is no trace is refused with a message. Since 13 November also the delta, the SCARA and the arm, which are
 /// fitted in their motors' coordinates (`identify::fit_joints`).
 fn a_trace_is_replayed_and_fitted_in_the_app(entry: &'static MachineEntry) {
-    let per_axis = sim_components::trace::per_axis_fit((entry.build)(&entry.config()).unwrap().as_ref());
     // A trace as a run writes it: one pass of the cycle, a row per millisecond. The gripper stays
     // empty, because a trace does not say when a payload comes and goes.
     // And the encoders count without steps: their quantisation noise is not replayed sample by sample (the linear
     // motor's 1 um scale under its stiff velocity loop makes some 10 N of it).
     let mut cfg = entry.config();
     cfg.set_text("effects.payload = false").unwrap();
+    // Of the config fitted, without the payload, as the app asks it (the disc cam's inertia varies by 6.2 % with it, by
+    // 4.1 % without: `trace::PER_AXIS_SPREAD`).
+    let per_axis = sim_components::trace::per_axis_fit((entry.build)(&cfg).unwrap().as_ref());
     cfg.set_text("effects.encoder_resolution = false").unwrap();
     let mut sim = sim_components::Sim::new(entry, &cfg).unwrap();
     sim.command(Command::StartCycle).unwrap();
@@ -2165,10 +2167,11 @@ fn a_trace_is_replayed_and_fitted_in_the_app(entry: &'static MachineEntry) {
         for quantity in quantities {
             let cells = row(fitted, &format!("{} · {quantity}", model.tr.tr(owner)));
             let (config, fit, error) = (number(&cells[0]), number(&cells[1]), number(&cells[2]));
-            // Within 2 %, or within a fifth of its standard error, as on the command line: the D4 picker's cycle knows motor
-            // 1's Coulomb friction to ± 21 % (0.0249 N m fitted as 0.0236 ± 0.0209 N m: 5 % and 0.06 σ off).
+            // Within 1 % or three standard errors, as on the command line: the errors hold the noise alone, and what a
+            // replay does not reproduce of a run can lie along the fit's columns
+            // (`a_trace_from_run_replays_onto_itself_and_fits_its_own_config`).
             assert!(
-                config > 0.0 && (fit - config).abs() < (0.02 * config).max(0.2 * error) && error > 0.0,
+                config > 0.0 && (fit - config).abs() < (0.01 * config).max(3.0 * error) && error > 0.0,
                 "{}: {quantity} {cells:?}",
                 entry.id
             );
@@ -3004,10 +3007,11 @@ fn the_belt_stiffness_is_fitted_to_a_measured_response_in_the_app(entry: &'stati
         wait_for_jobs(model);
         model.messages.last().unwrap().0
     };
-    // The same response from 90 Hz on has no lower flank to its dip.
+    // The same response below its dip has no upper flank to it. (The points from 90 Hz on, taken here before, hold the
+    // T-gantry's second dip near 103 Hz, which the config's sweep, run beyond the file's range, shows with both flanks.)
     let other = temp_file(entry, "sweep-without-dip.csv");
-    std::fs::write(&other, sweep_csv(&measured.iter().copied().filter(|p| p.frequency > 90.0).collect::<Vec<_>>()))
-        .unwrap();
+    let below: Vec<_> = measured.iter().copied().filter(|p| p.frequency < fit.fitted.frequency).collect();
+    std::fs::write(&other, sweep_csv(&below)).unwrap();
     assert_eq!(refused(&mut model, other.clone()), "fit-no-resonance");
     assert_eq!(refused(&mut model, temp_file(entry, "no-such-sweep.csv")), "ui-file-unreadable");
     std::fs::write(&other, "line,0.5\n").unwrap();
