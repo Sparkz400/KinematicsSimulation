@@ -308,7 +308,7 @@ fn operating_points(ui: &mut Ui, model: &Model, candidates: &[sim_components::ca
     }
     heading(ui, model, "ui-search-curves", Analysis::Search);
     key_row(ui, &[(tr("ui-points-curve"), Color32::GRAY, true), (tr("ui-points-s1"), chalk(), true)]);
-    let rpm = model.units.scale(sim_app::runs::Quantity::Speed.unit()).0;
+    let rpm = model.speed_scale();
     let scaled = |line: &Vec<[f64; 2]>| line.iter().map(|[s, t]| [s * rpm, *t]).collect::<Vec<_>>();
     for (i, c, curves) in shown {
         ui.label(format!("{} {} · {} · {}", i + 1, c.article, c.drive, c.supply));
@@ -316,7 +316,7 @@ fn operating_points(ui: &mut Ui, model: &Model, candidates: &[sim_components::ca
         plot(("search-points", i))
             .height(140.0)
             .x_axis_label(model.speed_label())
-            .y_axis_label(tr("ui-points-torque"))
+            .y_axis_label(model.torque_label())
             .show(ui, |plot| {
                 let motors = load.motors.iter().filter(|m| c.motor.is_empty() || m.id == c.motor);
                 for (m, color) in motors.zip(PALETTE.iter().cycle()) {

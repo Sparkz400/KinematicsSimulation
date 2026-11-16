@@ -13,22 +13,28 @@ import sys
 import bpy
 
 
+def held(names):
+    """The frames in the order shown. The files are numbered by time (one per 1/30 s); a number the app dropped (full
+    queue) holds the frame before, so that the video keeps real time. Ordered by number, not by name (the app pads to
+    six digits, which a recording past 9 hours outgrows). Names that are not all numbers keep their sorted order."""
+    names = sorted(names)
+    stems = [os.path.splitext(f)[0] for f in names]
+    if not names or not all(s.isdigit() for s in stems):
+        return names
+    by_number = dict(zip(map(int, stems), names))
+    shown, out = None, []
+    for n in range(min(by_number), max(by_number) + 1):
+        shown = by_number.get(n, shown)
+        out.append(shown)
+    return out
+
+
 def main():
     # Absolute: Blender does not read relative paths from the working folder.
     frames_dir, out_path = (os.path.abspath(p) for p in sys.argv[sys.argv.index("--") + 1 :][:2])
-    frames = sorted(f for f in os.listdir(frames_dir) if f.lower().endswith(".png"))
+    frames = held(f for f in os.listdir(frames_dir) if f.lower().endswith(".png"))
     if not frames:
         raise SystemExit("no frames in " + frames_dir)
-    # The files are numbered by time (one per 1/30 s); a number the app dropped (full queue) holds the frame before,
-    # so that the video keeps real time. Names that are not numbers keep their order.
-    numbers = [int(os.path.splitext(f)[0]) if os.path.splitext(f)[0].isdigit() else None for f in frames]
-    if None not in numbers:
-        by_number = dict(zip(numbers, frames))
-        held, shown = [], frames[0]
-        for n in range(numbers[0], numbers[-1] + 1):
-            shown = by_number.get(n, shown)
-            held.append(shown)
-        frames = held
     first = bpy.data.images.load(os.path.join(frames_dir, frames[0]))
     width, height = first.size
     scene = bpy.context.scene

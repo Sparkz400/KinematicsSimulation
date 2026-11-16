@@ -938,7 +938,8 @@ fn scopes_for(signals: &[SignalInfo]) -> Vec<Scope> {
 pub fn display_scale(peak: f64, unit: &str) -> (f64, &'static str) {
     // Only plain SI units take a prefix: not %, 1/h, deg or rpm.
     const PREFIXED: [&str; 17] = [
-        "m", "s", "N", "W", "V", "A", "J", "Hz", "rad", "N m", "m/s", "m/s2", "m/s²", "rad/s", "rad/s2", "rad/s²", "N m/rad",
+        "m", "s", "N", "W", "V", "A", "J", "Hz", "rad", "N m", "m/s", "m/s2", "m/s²", "rad/s", "rad/s2", "rad/s²",
+        "N m/rad",
     ];
     match peak {
         _ if !PREFIXED.contains(&unit) || peak == 0.0 || !peak.is_finite() => (1.0, ""),
@@ -1724,12 +1725,16 @@ impl Model {
                     run.signals.iter().find(|s| s.id == id).map(|s| tr(&s.owner_key))
                 })
                 .unwrap_or_else(|| format!("{}", k + 1));
+            // A linear motor's numbers are in N, m/s and m.
+            let linear = self.session.motor_linear.get(k).copied().unwrap_or(false);
+            let (speed, speed_unit) = if linear { (1.0, "m/s".to_string()) } else { (speed, speed_unit.clone()) };
+            let length = if linear { "m" } else { "rad" };
             let rows: [(&str, String, fn(&crate::runs::MotorFigures) -> Option<f64>, f64); 8] = [
                 ("ui-analysis-peak-torque", "N m".into(), |m| Some(m.peak_torque), 1.0),
                 ("ui-analysis-rms-torque", "N m".into(), |m| Some(m.rms_torque), 1.0),
-                ("ui-run-peak-speed", speed_unit.clone(), |m| Some(m.peak_speed), speed),
-                ("ui-run-peak-error", "rad".into(), |m| Some(m.peak_error), 1.0),
-                ("ui-run-rms-error", "rad".into(), |m| Some(m.rms_error), 1.0),
+                ("ui-run-peak-speed", speed_unit, |m| Some(m.peak_speed), speed),
+                ("ui-run-peak-error", length.into(), |m| Some(m.peak_error), 1.0),
+                ("ui-run-rms-error", length.into(), |m| Some(m.rms_error), 1.0),
                 ("ui-run-thermal-use", "%".into(), |m| m.utilisation.map(|u| u.0), 100.0),
                 ("ui-run-peak-use", "%".into(), |m| m.utilisation.map(|u| u.1), 100.0),
                 ("ui-run-energy", "J".into(), |m| m.energy, 1.0),
@@ -1739,6 +1744,7 @@ impl Model {
                 // The unit, unless the label has it already (the torques' are the analysis tables').
                 let label = tr(key);
                 let label = if label.contains('[') { label } else { format!("{label} [{unit}]") };
+                let label = if linear { label.replace("[N m]", "[N]") } else { label };
                 row(&mut table, format!("{name} · {label}"), cells.collect());
             }
         }
@@ -1750,11 +1756,8 @@ impl Model {
             // A run without setpoint signals has only the drives' following error: its values get a row of their own.
             let side: Vec<bool> = self.runs.iter().map(Run::tool_error_is_motor_side).collect();
             for motor_side in [false, true] {
-                let values: Vec<Option<f64>> = value
-                    .iter()
-                    .zip(&side)
-                    .map(|(v, s)| v.filter(|_| *s == motor_side).map(|v| v * length))
-                    .collect();
+                let values: Vec<Option<f64>> =
+                    value.iter().zip(&side).map(|(v, s)| v.filter(|_| *s == motor_side).map(|v| v * length)).collect();
                 if values.iter().any(Option::is_some) || (!motor_side && !side.contains(&true)) {
                     let name = if motor_side { format!("{} · {}", tr(key), tr("ui-run-motor-side")) } else { tr(key) };
                     row(&mut table, format!("{name} [{length_unit}]"), values);
@@ -2283,12 +2286,10 @@ impl Model {
         let motor = |k: usize| tr(self.session.motors[k].key);
         let named = |v: &Verdict| vec![tr(&self.check_key(v.check, v.motor)), v.motor.map_or(String::new(), motor)];
         let mut checks = vec![self.header(&VERDICT_KEYS)];
-        checks.extend(
-            verdicts.iter().map(|v| {
-                let (value, limit) = short_pair(v.value, v.limit, v.ok);
-                [named(v), vec![value, limit, self.result(v.ok)]].concat()
-            }),
-        );
+        checks.extend(verdicts.iter().map(|v| {
+            let (value, limit) = short_pair(v.value, v.limit, v.ok);
+            [named(v), vec![value, limit, self.result(v.ok)]].concat()
+        }));
         let mut tables = vec![summary, motors, checks];
         if let Some(bands) = bands {
             let mut banded = vec![self.header(&BAND_KEYS)];
@@ -2522,7 +2523,7 @@ impl Model {
     /// how many there are, and the header with the rows in `rows`. `None` until a cycle was analysed.
     pub fn points_table(&self, rows: std::ops::Range<usize>) -> Option<(usize, Table)> {
         let (load, _, _) = self.cycle_report.as_ref()?;
-        let rpm = self.units.scale("rad/s").0;
+        let rpm = self.speed_scale();
         let all = self
             .session
             .motors
@@ -2533,15 +2534,34 @@ impl Model {
             vec![self.tr.tr(motor.key).to_string(), short(*speed * rpm), short(*torque)]
         });
         let mut header = self.header(&POINTS_KEYS);
-        if self.units.rpm {
-            header[1] = self.tr.tr("ui-points-speed-rpm").to_string();
-        }
+        (header[1], header[2]) = (self.speed_label(), self.torque_label());
         Some((all.count(), [vec![header], shown.collect()].concat()))
     }
 
-    /// The label of the motor speed's axis in the unit chosen.
+    /// The label of the motor speed's axis in the unit chosen; m/s where every motor is linear.
     pub fn speed_label(&self) -> String {
-        self.tr.tr(if self.units.rpm { "ui-points-speed-rpm" } else { "ui-points-speed" }).to_string()
+        let key = match () {
+            _ if self.motors_linear() => "ui-points-speed-linear",
+            _ if self.units.rpm => "ui-points-speed-rpm",
+            _ => "ui-points-speed",
+        };
+        self.tr.tr(key).to_string()
+    }
+
+    /// The label of the motor torque's axis: a force in N where every motor is linear.
+    pub fn torque_label(&self) -> String {
+        self.tr.tr(if self.motors_linear() { "ui-points-torque-linear" } else { "ui-points-torque" }).to_string()
+    }
+
+    /// Whether every motor of the machine is linear (`Machine::motor_linear`): speeds in m/s, forces in N.
+    // shortcut: a machine with rotary and linear motors gets the rotary labels on its one chart axis.
+    pub fn motors_linear(&self) -> bool {
+        !self.session.motor_linear.is_empty() && self.session.motor_linear.iter().all(|l| *l)
+    }
+
+    /// The factor of the motor speeds in the unit chosen: rpm applies to rotary motors only.
+    pub fn speed_scale(&self) -> f64 {
+        if self.motors_linear() { 1.0 } else { self.units.scale("rad/s").0 }
     }
 
     /// The operating points per motor as (speed, torque), and the torque-speed curves (`Curves`): of the analysed
@@ -2552,7 +2572,7 @@ impl Model {
             _ => self.cycle_report.as_ref().map(|(load, _, curves)| (load, curves))?,
         };
         // Speeds in the unit chosen (`units`).
-        let rpm = self.units.scale("rad/s").0;
+        let rpm = self.speed_scale();
         let points = load
             .motors
             .iter()
@@ -3081,7 +3101,14 @@ impl Model {
     pub fn find_modes(&mut self) {
         let pose = self.standing().or_else(|| self.config.f64s("start.pose").ok()).unwrap_or_default();
         match crate::insight::mode_views(self.entry, &self.config, &pose) {
-            Ok(views) => self.insight.modes = Some((self.config.clone(), views)),
+            Ok(views) => {
+                let small = crate::insight::build(self.entry, &self.config)
+                    .map(|m| m.modes_small_amplitude(&pose).iter().map(|m| m.hz).collect::<Vec<_>>())
+                    .ok();
+                let views_hz: Vec<f64> = views.iter().map(|v| v.hz).collect();
+                self.insight.small_modes = small.filter(|s| *s != views_hz);
+                self.insight.modes = Some((self.config.clone(), views));
+            }
             Err(e) => self.say((e.key(), e.detail().to_string())),
         }
         self.pick_mode(None);
@@ -3105,14 +3132,12 @@ impl Model {
     pub fn modes_table(&self) -> Option<Table> {
         let (_, modes) = self.insight.modes.as_ref()?;
         let tr = |key: &str| self.tr.tr(key).to_string();
-        let mut table = vec![self.header(&[
-            "ui-modes-mode",
-            "ui-modes-hz",
-            "ui-modes-damping",
-            "ui-modes-linear",
-            "ui-modes-shape",
-            "ui-modes-stiffness",
-        ])];
+        // The small-amplitude frequency (a gearbox's hysteresis stiffness) beside the reported one, where it differs.
+        let small = self.insight.small_modes.as_ref();
+        let mut keys = vec!["ui-modes-mode", "ui-modes-hz"];
+        keys.extend(small.map(|_| "ui-modes-small-hz"));
+        keys.extend(["ui-modes-damping", "ui-modes-linear", "ui-modes-shape", "ui-modes-stiffness"]);
+        let mut table = vec![self.header(&keys)];
         for (i, m) in modes.iter().enumerate() {
             let linear = m.linear.map_or(String::new(), |l| format!("{} · {}", short(l.hz), short(100.0 * l.damping)));
             let source = tr(if m.from_machine { "ui-modes-from-machine" } else { "ui-modes-from-linear" });
@@ -3122,14 +3147,10 @@ impl Model {
                 .filter(|(_, share)| *share >= 0.05)
                 .map(|(kind, share)| format!("{} {:.0} %", tr(&format!("ui-modes-stiffness-{kind}")), 100.0 * share))
                 .collect();
-            table.push(vec![
-                (i + 1).to_string(),
-                short(m.hz),
-                short(100.0 * m.damping),
-                linear,
-                source,
-                stiffness.join(", "),
-            ]);
+            let mut row = vec![(i + 1).to_string(), short(m.hz)];
+            row.extend(small.map(|s| s.get(i).map_or(String::new(), |hz| short(*hz))));
+            row.extend([short(100.0 * m.damping), linear, source, stiffness.join(", ")]);
+            table.push(row);
         }
         Some(table)
     }
@@ -3278,7 +3299,7 @@ impl Model {
     /// torque-speed view; empty before the bounds were run.
     pub fn band_points(&self) -> Vec<Vec<[f64; 2]>> {
         let Some((_, runs)) = &self.insight.band_runs else { return Vec::new() };
-        let rpm = self.units.scale("rad/s").0;
+        let rpm = self.speed_scale();
         runs.points.iter().map(|points| points.iter().map(|[w, t]| [w * rpm, *t]).collect()).collect()
     }
 

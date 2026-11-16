@@ -253,7 +253,9 @@ mod tests {
     }
 
     /// The measurement on the first registered machine with one motor (a belt axis): a response per motor, refined
-    /// beyond the 60 points of `loop_frequencies`, the margins `sim-cli margins` prints for it (61.2 degrees, 11.56 dB). With friction on, the plant at
+    /// beyond the 60 points of `loop_frequencies`, the margins `sim-cli margins` prints for it (59.92 degrees, 11.56 dB;
+    /// 61.2 degrees with the gearbox's efficiency in the loop, which `velocity_loop_response` leaves out since 16 November
+    /// 2026: its fade at standstill is a damper the small-signal loop does not have). With friction on, the plant at
     /// 10 Hz leads (+47 degrees): at a tenth of the rated torque the LuGre bristles hold the axis like a spring. Without
     /// friction it is the inertia far below the belt's resonance: speed lags torque by 90 degrees (within 5).
     #[test]
@@ -264,7 +266,7 @@ mod tests {
         let response = measure(entry, &entry.config(), &progress).unwrap();
         assert_eq!(response.curves.len(), 1);
         let m = response.margins[0];
-        assert!((m.phase_margin_deg - 61.2).abs() < 0.1 && (m.gain_margin_db - 11.56).abs() < 0.01, "{m:?}");
+        assert!((m.phase_margin_deg - 59.92).abs() < 0.1 && (m.gain_margin_db - 11.56).abs() < 0.01, "{m:?}");
         assert_eq!(progress.done.load(Relaxed), progress.total.load(Relaxed));
         assert!(response.curves[0][0].plant[0] > 0.0, "{:?}", response.curves[0][0]);
         let mut cfg = entry.config();

@@ -325,8 +325,8 @@ fn sizing_has_the_columns_of_analyze() {
 }
 
 /// By hand from the first machine's motor 0 drive: the curve starts and ends at the no-load speed backwards, passes 0 rad/s
-/// at the peak torque both ways, has the rated speed both ways as corners, and the S1 box has the rated torque at
-/// ± the rated speed.
+/// at the peak torque both ways, has the rated speed both ways as corners, and the S1 outline is the app's S1 line
+/// (`charts::torque_speed`), closed: the verdict's S1 torque at standstill and at the rated speed, both ways.
 #[test]
 fn torque_speed_curve_by_hand() {
     let entry = sim_machines::MACHINES[0];
@@ -340,8 +340,10 @@ fn torque_speed_curve_by_hand() {
     for s in [drive.rated_speed, -drive.rated_speed] {
         assert!(curve.iter().any(|p| p.0 == s), "{s}");
     }
-    let (r, t) = (drive.rated_speed, drive.rated_torque);
-    assert_eq!(s1, [(-r, t), (r, t), (r, -t), (-r, -t), (-r, t)]);
+    assert_eq!(s1.first(), s1.last());
+    let line = sim_components::charts::torque_speed(drive, drive.bus_voltage).s1;
+    assert_eq!(s1.len(), 2 * line[0].len() + 1);
+    assert!(s1.contains(&(0.0, drive.s1_torque(0.0))) && s1.contains(&(0.0, -drive.s1_torque(0.0))), "{s1:?}");
 }
 
 /// The page's sweep is `frequency_sweep` at the same frequencies: 3 from 10 Hz to 1000 Hz are 10, 100 and 1000 Hz.
@@ -434,6 +436,21 @@ fn scopes_are_the_recorded_pass() {
         }
     }
     assert!(handle(10, "no-such-machine\nen\n").is_err());
+}
+
+/// A linear motor's numbers are in N and m/s wherever the page reads them: the sizing's per-motor units, the motor-speed
+/// verdict's label, and the scopes' units.
+#[test]
+fn a_linear_motor_is_in_newtons_and_metres_per_second() {
+    let sizing = json(&handle(2, "linear-motor-axis\nen\n").unwrap());
+    let motor = &sizing["motors"][0];
+    assert!(motor["torque_unit"] == "N" && motor["speed_unit"] == "m/s", "{motor}");
+    let speed =
+        sizing["verdicts"].as_array().unwrap().iter().find(|v| v["check"] == "motor-speed").expect("motor-speed");
+    assert!(speed["label"].as_str().unwrap().contains("[m/s]"), "{speed}");
+    let scopes = json(&handle(10, "linear-motor-axis\nen\n").unwrap());
+    let units = |i: usize| scopes["signals"][i]["units"][0].as_str().unwrap().to_string();
+    assert_eq!((units(0), units(1), units(2)), ("m".into(), "m/s".into(), "N".into()));
 }
 
 /// The form offers every number of the config with its label, and the catalogue's names for the parts: the motors of
