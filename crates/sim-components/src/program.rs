@@ -5,7 +5,10 @@
 //! - G0 rapid, G1 line, G2 clockwise and G3 counterclockwise arc (seen from the plus side of the plane's normal),
 //!   centre by I, J, K (from the start, always incremental) or radius R (negative: the longer of the two arcs);
 //! - G17 (XY plane), G18 (ZX), G19 (YZ); G20 inch, G21 mm (the default); G90 absolute (the default), G91 incremental;
-//! - F the feed in units per minute, needed before the first G1, G2 or G3: the speed along the path. Each run of moves
+//! - F the feed per minute, needed before the first G1, G2 or G3: the speed along the path, in length units for a block
+//!   with a linear axis and in degrees for a block that moves only rotary axes (A, B, C); where both move, the linear
+//!   axes' distance at F sets the time and the rotary axes follow in it. G2 or G3 with I, J, K and no end is a full
+//!   circle. Each run of moves
 //!   at one feed is planned on its own, its speed along the path capped at the feed (`path::plan_at`), with a stop
 //!   between runs; G0 runs at the axes' limits;
 //! - X, Y, Z (and A, B, C in degrees) move the axes of the same name (ids x, y, z, a, b, c); the start is where the
@@ -20,7 +23,8 @@
 //! units (m, rad), as a path file has them; at the axes' limits.
 //!
 //! KRL (`.src`): `PTP {X 100, Y 0, Z 500}`, `LIN {...}`, `CIRC {aux}, {end}` with mm and degrees, components left out
-//! kept from the point before; A, B, C, S, T, E1... move axes of those names where the machine has them and are left out
+//! kept from the point before (for a CIRC too, the auxiliary point's are not used; this follows that rule and was not
+//! checked against a KUKA manual); A, B, C, S, T, E1... move axes of those names where the machine has them and are left out
 //! otherwise. Where the machine's axes are x, y, z and a rotation vector rx, ry, rz (an arm in tool space), A, B, C are
 //! the orientation (R = Rz(A) Ry(B) Rx(C), KUKA's) and set rx, ry, rz. `$VEL.CP = v` (m/s) is the speed along the path
 //! of the LIN and CIRC moves after it; a PTP runs at the axes' limits.
@@ -142,7 +146,7 @@ fn push(runs: &mut Vec<Run>, feed: Option<f64>, piece: Piece) {
 /// G-code (see the module).
 pub fn gcode(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
     let mut pos = start.to_vec();
-    let (mut absolute, mut inch, mut plane, mut motion, mut feed) = (true, false, 17, None::<u32>, None::<f64>);
+    let (mut absolute, mut inch, mut plane, mut motion, mut feed) = (true, false, 17, None::<u32>, None::<(f64, f64)>);
     let mut runs = Vec::new();
     for (n, raw) in text.lines().enumerate() {
         let line = n + 1;
@@ -197,7 +201,8 @@ pub fn gcode(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
             match letter {
                 'G' | 'N' | 'O' | 'S' | 'T' => {}
                 'M' => ends |= v == 2.0 || v == 30.0,
-                'F' if v > 0.0 => feed = Some(v * length / 60.0),
+                // The feed as per second: length units, and degrees as radians for a block that only turns rotary axes.
+                'F' if v > 0.0 => feed = Some((v * length / 60.0, v.to_radians() / 60.0)),
                 'X' | 'Y' | 'Z' | 'A' | 'B' | 'C' => {
                     let Some(i) = axis_of(axes, letter) else { return fail(line, "program-error-axis", word) };
                     let scale = if axes[i].unit == "rad" { std::f64::consts::PI / 180.0 } else { length };
@@ -209,19 +214,25 @@ pub fn gcode(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
                 _ => return fail(line, "program-error-word", word),
             }
         }
+        // A full circle (G2/G3 with I, J, K and no end) moves too.
+        moving |= matches!(motion, Some(2 | 3)) && centre_offset.iter().any(Option::is_some);
         if moving {
             let Some(kind) = motion else { return fail(line, "program-error-motion", clean) };
             let rate = if kind == 0 {
                 None
             } else {
-                Some(feed.ok_or_else(|| ProgramError { line, key: "program-error-feed", detail: clean.clone() })?)
+                let (linear, rotary) =
+                    feed.ok_or_else(|| ProgramError { line, key: "program-error-feed", detail: clean.clone() })?;
+                Some(path_feed(axes, &pos, &target, linear, rotary))
             };
-            let piece = if kind < 2 {
-                Piece::Line(target.clone())
+            let pieces = if kind < 2 {
+                vec![Piece::Line(target.clone())]
             } else {
                 arc_block(line, axes, &pos, &target, plane, kind == 2, centre_offset, radius)?
             };
-            push(&mut runs, rate, piece);
+            for piece in pieces {
+                push(&mut runs, rate, piece);
+            }
             pos = target;
         }
         if ends {
@@ -231,8 +242,27 @@ pub fn gcode(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
     Ok(runs)
 }
 
+/// The speed along the path (over all axes, as `path::plan_at` takes it) that moves `from` to `to` at the F of the
+/// block: `linear` m/s for the linear axes' distance, else `rotary` rad/s for the rotary axes' (a block that only
+/// turns), and where both move the linear axes set the time and the rotary ones follow in it.
+fn path_feed(axes: &[AxisInfo], from: &[f64], to: &[f64], linear: f64, rotary: f64) -> f64 {
+    let (mut lin, mut rot) = (0.0, 0.0);
+    for (i, a) in axes.iter().enumerate() {
+        let d = (to[i] - from[i]).powi(2);
+        if a.unit == "rad" { rot += d } else { lin += d }
+    }
+    if lin > 0.0 {
+        linear * (lin + rot).sqrt() / lin.sqrt()
+    } else if rot > 0.0 {
+        rotary
+    } else {
+        linear
+    }
+}
+
 /// The arc of a G2 (`clockwise`) or G3 block in `plane` from `from` to `to`, its centre from the offsets I, J, K or
-/// the radius R.
+/// the radius R; a full circle (`to` at `from`, centre by I, J, K) as three arcs of 120 degrees, as the planner takes
+/// no half turn on three axes.
 #[allow(clippy::too_many_arguments)]
 fn arc_block(
     line: usize,
@@ -243,7 +273,7 @@ fn arc_block(
     clockwise: bool,
     offset: [Option<f64>; 3],
     radius: Option<f64>,
-) -> Result<Piece> {
+) -> Result<Vec<Piece>> {
     // The plane's axes, the first to the right and the second up seen from the plus side of the normal, and their
     // offset letters.
     let (a, b) = match plane {
@@ -283,7 +313,22 @@ fn arc_block(
     }
     let mut centre = from.to_vec();
     (centre[ia], centre[ib]) = (ca, cb);
-    Ok(Piece::Arc { to: to.to_vec(), centre, clockwise: path_clockwise(ia, ib, if clockwise { -1.0 } else { 1.0 }) })
+    let turning = if clockwise { -1.0 } else { 1.0 };
+    let clockwise = path_clockwise(ia, ib, turning);
+    if (ea - sa).hypot(eb - sb) > 1e-12 * r0 {
+        return Ok(vec![Piece::Arc { to: to.to_vec(), centre, clockwise }]);
+    }
+    let start = (sb - cb).atan2(sa - ca);
+    Ok((1..=3)
+        .map(|k| {
+            let mut end = to.to_vec();
+            if k < 3 {
+                let angle = start + turning * k as f64 * 2.0 * std::f64::consts::PI / 3.0;
+                (end[ia], end[ib]) = (ca + r0 * angle.cos(), cb + r0 * angle.sin());
+            }
+            Piece::Arc { to: end, centre: centre.clone(), clockwise }
+        })
+        .collect())
 }
 
 /// Robot moves as CSV (see the module).
@@ -421,7 +466,7 @@ pub fn krl(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
             ("LIN", [end]) => (Piece::Line(oriented(&pos, end)), speed),
             ("CIRC", [aux, end]) => {
                 let via = robot_pose(axes, &pos, aux);
-                let to = oriented(&via, end);
+                let to = oriented(&pos, end);
                 (circle(line, &pos, &via, &to)?, speed)
             }
             _ => return fail(line, "program-error-named", code),
@@ -618,6 +663,34 @@ mod tests {
         }
         // F600 mm/min is 0.01 m/s.
         assert!((gcode("G1 X1 F600", &axes, &start).unwrap()[0].feed.unwrap() - 0.01).abs() < 1e-15);
+    }
+
+    /// F per minute is mm for linear axes and degrees for a block with rotary axes only. With x (m) and c (rad):
+    /// `G1 X10 F600` is 10 mm at 10 mm/s, 1 s: path speed 0.01. `G1 C90 F3600` is pi/2 rad at 3600 deg/min = pi/3
+    /// rad/s, 1.5 s. `G1 X10 C90 F600` takes 1 s for the 10 mm, so the path of length sqrt(0.01^2 + (pi/2)^2) runs at
+    /// that length per second.
+    #[test]
+    fn feed_is_per_minute_in_mm_or_degrees() {
+        let mut c = axis("c");
+        c.unit = "rad";
+        let axes = [axis("x"), c];
+        let feed = |text: &str| gcode(text, &axes, &[0.0, 0.0]).unwrap()[0].feed.unwrap();
+        assert!((feed("G1 X10 F600") - 0.01).abs() < 1e-15);
+        assert!((feed("G1 C90 F3600") - PI / 3.0).abs() < 1e-12);
+        assert!((feed("G1 X10 C90 F600") - (0.01f64.powi(2) + (PI / 2.0).powi(2)).sqrt()).abs() < 1e-12);
+    }
+
+    /// `F600 / G1 X1 / G2 I10` is 1 mm, then a full circle of radius 10 mm: 0.001 + 2 pi 0.01 m on the planned path.
+    #[test]
+    fn a_full_circle_is_planned() {
+        let axes = [axis("x"), axis("y")];
+        let runs = gcode("F600
+G1 X1
+G2 I10", &axes, &[0.0; 2]).unwrap();
+        let pieces = &runs[0].pieces;
+        assert_eq!(pieces.len(), 4);
+        let l = length(&axes, &[0.0; 2], pieces);
+        assert!((l - (0.001 + 2.0 * PI * 0.01)).abs() < 1e-5, "{l}");
     }
 
     /// The other planes and units: G18 on a gantry of x and z: G2 is clockwise seen from +y, so counterclockwise seen

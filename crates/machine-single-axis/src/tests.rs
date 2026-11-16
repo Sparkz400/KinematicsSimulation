@@ -732,6 +732,29 @@ fn a_fieldbus_delay_shifts_the_move_by_its_cycles() {
     assert!((plain[plain.len() - 1] - 0.9).abs() < 1e-6 && (late[late.len() - 1] - 0.9).abs() < 1e-6);
 }
 
+/// A late frame leaves the drive the frame before, and the time since its setpoint runs on (it extrapolates the old
+/// frame), so while the held setpoint is the same the time since it never falls back to 0: by hand, the same frame
+/// held for one more cycle is one more cycle old.
+#[test]
+fn a_late_frame_is_extrapolated_not_restarted() {
+    let mut cfg = ideal_rigid();
+    for e in ["effects.fieldbus_jitter = true", "profile.fieldbus_jitter_cycles = 2"] {
+        cfg.set_text(e).unwrap();
+    }
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    sim.command(sim_components::Command::MoveTo(vec![0.9])).unwrap();
+    let (mut last, mut held, mut bad) = ((f64::NAN, 0.0), 0, 0);
+    sim.run(1.0, |s| {
+        let d = &s.control.drives[0];
+        if d.vel_set > 100.0 && d.pos_set == last.0 && d.since_setpoint < last.1 {
+            bad += 1;
+        }
+        held += (d.vel_set > 100.0 && d.pos_set == last.0) as usize;
+        last = (d.pos_set, d.since_setpoint);
+    });
+    assert!(held > 0 && bad == 0, "{bad} restarts of a held setpoint in {held} steps");
+}
+
 /// Fieldbus jitter against a hand calculation. Each frame takes the delay of 1 cycle plus j more, j drawn evenly from
 /// 0 to N; the drive uses the newest frame that has arrived. So the frame it uses is older than the delay by more
 /// than i cycles only if each of the frames i + 1 cycles late or less has not arrived: P(more than i) =
