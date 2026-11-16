@@ -1673,8 +1673,13 @@ fn keep_ghost(state: &mut State) {
     let label = format!("{} · {switched}", model.tr.tr(RunKind::Ghost.key()));
     let (signals, motors) = (ghost.session.signals.clone(), &ghost.session.motors);
     let run = Run::from_rows(label, RunKind::Ghost, model.entry.id, signals, motors, rows.iter().skip(from));
-    let run = model.rated(run);
-    model.runs.add(run);
+    // The ghost's own config: its base with the effect switched.
+    let mut config = ghost.base.clone();
+    let rated = match config.set(&ghost.effect, toml::Value::Boolean(ghost.on)) {
+        Ok(()) => model.rated_with(run, &config),
+        Err(_) => model.rated(run),
+    };
+    model.runs.add(rated);
 }
 
 /// A file to save to, from the system's dialog, starting with `name`; `None` where it is cancelled. The dialog holds

@@ -275,13 +275,7 @@ impl Run {
         match channel.quantity.signal() {
             Some(name) => self.column(&format!("motor.{}.{name}", self.motors.get(channel.motor)?)).map(Cow::Borrowed),
             None => {
-                let errors: Vec<&[f64]> = self
-                    .signals
-                    .iter()
-                    .zip(&self.columns)
-                    .filter(|(s, _)| s.id.starts_with("axis.") && s.id.ends_with(".following_error") && s.unit == "m")
-                    .map(|(_, c)| c.as_slice())
-                    .collect();
+                let errors = self.tool_errors();
                 (!errors.is_empty()).then(|| {
                     Cow::Owned(
                         (0..self.time().len())
@@ -291,6 +285,36 @@ impl Run {
                 })
             }
         }
+    }
+
+    /// Per axis in metres the tool's position error, setpoint minus actual position; a run without setpoints gets the
+    /// drives' following errors instead (`tool_error_is_motor_side`).
+    fn tool_errors(&self) -> Vec<Cow<'_, [f64]>> {
+        let in_metres = |suffix: &str| -> Vec<(&str, &[f64])> {
+            let signals = self.signals.iter().zip(&self.columns);
+            signals
+                .filter(|(s, _)| s.id.starts_with("axis.") && s.id.ends_with(suffix) && s.unit == "m")
+                .map(|(s, c)| (s.id.as_str(), c.as_slice()))
+                .collect()
+        };
+        // The encoder-side following error misses belt stretch and compliance; setpoint minus position does not.
+        let real: Vec<Cow<[f64]>> = in_metres(".position")
+            .into_iter()
+            .filter_map(|(id, actual)| {
+                let set = self.column(&format!("{id}_setpoint"))?;
+                Some(Cow::Owned(set.iter().zip(actual).map(|(s, a)| s - a).collect()))
+            })
+            .collect();
+        if !real.is_empty() {
+            return real;
+        }
+        in_metres(".following_error").into_iter().map(|(_, c)| Cow::Borrowed(c)).collect()
+    }
+
+    /// Whether the tool's error of this run is only the drives' following error (no setpoint signals to compare).
+    pub fn tool_error_is_motor_side(&self) -> bool {
+        let real = self.signals.iter().any(|s| s.id.starts_with("axis.") && s.id.ends_with(".position_setpoint") && s.unit == "m");
+        !real && !self.tool_errors().is_empty()
     }
 
     /// The channels this run has, motor after motor in the order of `Quantity::ALL`, then the tool's error.
@@ -617,4 +641,28 @@ pub fn scaled_speeds(chart: &TorqueSpeed, factor: f64) -> TorqueSpeed {
     let scale =
         |lines: &[Vec<[f64; 2]>; 2]| lines.clone().map(|line| line.into_iter().map(|[w, t]| [w * factor, t]).collect());
     TorqueSpeed { peak: scale(&chart.peak), s1: scale(&chart.s1), voltage: scale(&chart.voltage), ..chart.clone() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A belt axis stands 0.9 mm behind its setpoint at the tool while its encoder-side following error is 0.1 mm:
+    /// the tool error is setpoint minus position, 1.0000 - 0.9991 = 0.9 mm, not the 0.1 mm; without setpoint signals
+    /// it is the following error, and says so.
+    #[test]
+    fn the_tool_error_is_setpoint_minus_position_not_the_motor_side_error() {
+        let run = |ids: &[&str], row: &[f64]| {
+            let signals = ids.iter().map(|id| SignalInfo::new(*id, "owner", "quantity", "m")).collect();
+            Run::from_rows("run".into(), RunKind::Live, "m", signals, &[], [row])
+        };
+        let tool = Channel { quantity: Quantity::ToolError, motor: 0 };
+        let full = run(
+            &["time", "axis.x.position", "axis.x.position_setpoint", "axis.x.following_error"],
+            &[0.0, 0.9991, 1.0, 0.0001],
+        );
+        assert!((full.channel(tool).unwrap()[0] - 0.0009).abs() < 1e-12 && !full.tool_error_is_motor_side());
+        let bare = run(&["time", "axis.x.following_error"], &[0.0, 0.0001]);
+        assert!((bare.channel(tool).unwrap()[0] - 0.0001).abs() < 1e-12 && bare.tool_error_is_motor_side());
+    }
 }

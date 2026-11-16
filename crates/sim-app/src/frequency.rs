@@ -131,6 +131,12 @@ pub fn closed_loop(p: &LoopPoint) -> [f64; 2] {
     [(p.re * dr + p.im * di) / d2, (p.im * dr - p.re * di) / d2]
 }
 
+/// The phase `raw` (degrees) turned by whole turns to lie within half a turn of the previous one, `last`: unwrapped in
+/// both directions.
+pub fn unwrap_near(raw: f64, last: f64) -> f64 {
+    raw + 360.0 * ((last - raw) / 360.0).round()
+}
+
 /// Phases in degrees of complex values in frequency order, unwrapped along the frequency axis and turned by whole
 /// turns so that the first lies in (-270, 90], as `loop_margins` takes the loop's phase. A value that is not a number
 /// gives NaN and the next one is unwrapped from the last that was.
@@ -142,7 +148,7 @@ pub fn phases(values: impl IntoIterator<Item = [f64; 2]>) -> Vec<f64> {
             out.push(f64::NAN);
             continue;
         }
-        let unwrapped = last.map_or(raw, |last| raw + 360.0 * ((last - raw) / 360.0).round());
+        let unwrapped = last.map_or(raw, |last| unwrap_near(raw, last));
         let shift = *shift.get_or_insert(-360.0 * ((unwrapped - 90.0) / 360.0).ceil());
         last = Some(unwrapped);
         out.push(unwrapped + shift);
@@ -150,28 +156,43 @@ pub fn phases(values: impl IntoIterator<Item = [f64; 2]>) -> Vec<f64> {
     out
 }
 
-/// Where the gain margin is read: the frequency at which the loop's phase (`phases`) crosses an odd multiple of -180
-/// degrees with the largest |L| there, interpolated as `loop_margins` does (on the logarithmic frequency axis, linearly
-/// in the phase); `None` without a crossing.
+/// Where the gain margin is read: the crossing `loop_margins` takes. The phase (`phases`) starts from 0 at the first
+/// point's gain; of its crossings of odd multiples of -180 degrees only falling ones count (interpolated on the
+/// logarithmic frequency axis, linearly in the phase), and a rising one at |L| > 1 cancels the latest falling one at
+/// |L| > 1 (Nyquist). Of those left the one with the largest |L|; `None` without one.
 pub fn phase_crossover(points: &[LoopPoint]) -> Option<f64> {
     let phase = phases(points.iter().map(|p| [p.re, p.im]));
     let gain = |p: &LoopPoint| p.re.hypot(p.im).ln();
-    let mut best: Option<(f64, f64)> = None;
-    for i in 1..points.len() {
-        let (pa, pb) = (phase[i - 1], phase[i]);
-        // The odd multiple of 180 degrees between the two, if any.
-        let level = 360.0 * ((pa.min(pb) + 180.0) / 360.0).ceil() - 180.0;
-        if !(level <= pa.max(pb) && pa != pb) {
-            continue;
+    let first = points.first()?;
+    let samples: Vec<(f64, f64, f64)> = std::iter::once((0.0, gain(first), first.frequency))
+        .chain(points.iter().zip(&phase).map(|(p, ph)| (*ph, gain(p), p.frequency)))
+        .collect();
+    let (mut open, mut worst): (Vec<(f64, f64)>, Option<(f64, f64)>) = (Vec::new(), None);
+    for w in samples.windows(2) {
+        let ((pa, ga, fa), (pb, gb, fb)) = (w[0], w[1]);
+        let at = |level: f64| {
+            let share = (pa - level) / (pa - pb);
+            (ga + (gb - ga) * share, fa * (fb / fa).powf(share))
+        };
+        let mut level = -180.0 + 360.0 * ((pa + 180.0) / 360.0).floor();
+        while pb < level && level <= pa {
+            let (g, f) = at(level);
+            if g > 0.0 {
+                open.push((g, f));
+            } else if worst.is_none_or(|(w, _)| g > w) {
+                worst = Some((g, f));
+            }
+            level -= 360.0;
         }
-        let share = (pa - level) / (pa - pb);
-        let g = gain(&points[i - 1]) + (gain(&points[i]) - gain(&points[i - 1])) * share;
-        if best.is_none_or(|(_, worst)| g > worst) {
-            let (fa, fb) = (points[i - 1].frequency, points[i].frequency);
-            best = Some((fa * (fb / fa).powf(share), g));
+        level += 360.0;
+        while pa < level && level <= pb {
+            if at(level).0 > 0.0 {
+                open.pop();
+            }
+            level += 360.0;
         }
     }
-    best.map(|(f, _)| f)
+    open.into_iter().chain(worst).max_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, f)| f)
 }
 
 #[cfg(test)]
@@ -205,6 +226,30 @@ mod tests {
         assert!((t[0] + 3.897).abs() < 1e-3 && t[1].abs() < 1e-9, "{t:?}");
         let m = loop_margins(&points);
         assert!((m.gain_margin_db - 1.984).abs() < 0.01, "{m:?}");
+    }
+
+    /// A phase that rises through a branch cut is carried up as it is carried down: 170 after -170 is -190, 3 turns
+    /// of lead give 1080 + 10 from 1075.
+    #[test]
+    fn phases_unwrap_in_both_directions() {
+        assert!((unwrap_near(170.0, -170.0) + 190.0).abs() < 1e-9);
+        assert!((unwrap_near(-170.0, 170.0) - 190.0).abs() < 1e-9);
+        assert!((unwrap_near(10.0, 1075.0) - 1090.0).abs() < 1e-9);
+    }
+
+    /// Phase -200 degrees at 10 Hz, rising to -120 at 50 Hz, then falling to -250 at 1 kHz (linear in the phase over
+    /// log f); gain 30 dB at 10 Hz, -30 dB/decade. The rising crossing of -180 (share 20/80 of 10..50 Hz: 14.95 Hz,
+    /// 25.7 dB) undoes the falling one before the first point; the falling one at share 60/130 of 50..1000 Hz is at
+    /// 50 * 20^0.4615 = 199.2 Hz (-9.1 dB), the one the margin is read at, not the 14.95 Hz of the largest |L|.
+    #[test]
+    fn phase_crossover_follows_loop_margins_rule() {
+        let at = |f: f64, deg: f64| {
+            let g = 10f64.powf((30.0 - 30.0 * (f / 10.0).log10()) / 20.0);
+            point(f, [g * deg.to_radians().cos(), g * deg.to_radians().sin()])
+        };
+        let points = [at(10.0, -200.0), at(50.0, -120.0), at(1000.0, -250.0)];
+        let crossing = phase_crossover(&points).unwrap();
+        assert!((crossing / 199.2 - 1.0).abs() < 2e-3, "{crossing}");
     }
 
     /// The measurement on the first registered machine with one motor (a belt axis): a response per motor, refined

@@ -488,6 +488,7 @@ ui-run-cycle = Zyklus
 ui-run-path = Bahn
 ui-run-trace = Aufzeichnung
 ui-run-tool-error = Lagefehler des Werkzeugs
+ui-run-motor-side = Nachlauffehler (Motorseite)
 ui-run-default = Standard
 ui-run-measured = gemessen
 ui-run-replayed = nachgerechnet
@@ -576,7 +577,7 @@ ui-loop-gain-margin = Amplitudenreserve
 ui-loop-peak = Maximale Empfindlichkeit
 ui-loop-unstable = Instabil, oder die Messung ist nicht gültig: die Momentengrenze wurde erreicht oder der Kreis schwang von selbst.
 ui-loop-open = Offener Kreis L
-ui-loop-closed = Geschlossener Kreis T
+ui-loop-closed = Komplementäre Empfindlichkeit T = L/(1+L) am Momenteneingang, Lageregelkreis geschlossen (nicht die Antwort auf die Drehzahlvorgabe)
 ui-loop-plant = Strecke, Motormoment zu Drehzahl (dB von 1 rad/s je N m)
 ui-loop-mode = Resonanz
 ui-loop-shaper = Eingangsformer

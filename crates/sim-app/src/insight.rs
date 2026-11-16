@@ -58,7 +58,7 @@ impl PathQuantity {
         use crate::runs::{Channel, Quantity};
         let time = run.time();
         let length = |columns: &[&[f64]]| -> Vec<f64> {
-            (0..time.len()).map(|i| columns.iter().map(|c| c[i] * c[i]).sum::<f64>().sqrt()).collect()
+            (0..time.len()).map(|i| linear_speed(columns.iter().map(|c| (true, c[i])))).collect()
         };
         match self {
             Self::PathError => {
@@ -97,6 +97,12 @@ impl PathQuantity {
             }
         }
     }
+}
+
+/// The length of a vector of speeds that counts only those marked linear (m/s): a turning axis's rad/s does not add to
+/// a tool speed (`PathQuantity::Speed`, `Runner::trail_point`).
+pub fn linear_speed(speeds: impl IntoIterator<Item = (bool, f64)>) -> f64 {
+    speeds.into_iter().filter(|(linear, _)| *linear).map(|(_, v)| v * v).sum::<f64>().sqrt()
 }
 
 /// The place in `series` (sorted by its first entry, the time) whose time is nearest `t`.
