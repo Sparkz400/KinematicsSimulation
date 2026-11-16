@@ -291,7 +291,7 @@ Motorsignale und von `--motor N`.
 | `pulley`, `idler` | `clockwise` | | mit `effects.belt_wrap`: der Riemen läuft im Uhrzeigersinn um sie, von vorn gesehen (x nach rechts, z nach oben) und den Routen in ihrer Reihenfolge nach; Vorgabe false; `at_m` ist dann ihre Lage in der Ebene des Riemens (x, z) |
 | `worm` | `gearbox` | Pflicht | dieses Getriebe ist eine Schneckenstufe ([unten](#schneckengetriebe)); eine Schnecke je Getriebe |
 | | `ratio` | Pflicht | ihre Übersetzung, anstelle der des Getriebes |
-| | `efficiency`, `back_efficiency` | Pflicht | angetrieben von der Schnecke (über 0, höchstens 1) und rückwärts vom Rad (höchstens 1; 0 oder weniger sperrt selbst) |
+| | `efficiency`, `back_efficiency` | Pflicht | angetrieben von der Schnecke (über 0, höchstens 1) und rückwärts vom Rad (höchstens 1; 0 oder weniger sperrt selbst, was ein angetriebenes eta unter 0,5 verlangt) |
 | `lean` | `body`, `axis` | Pflicht | ein Körper, der sich an seinem Wagen entlang einer waagrechten Achse neigt, mit der er fährt (`effects.tool_flex`, elastisches Modell); höchstens einer ([unten](#die-umschlingung-des-riemens-und-eine-sich-neigende-achse)) |
 | | `com_drop_m`, `tool_drop_m` | Pflicht | sein Schwerpunkt und die Werkzeugspitze unter der Führung bei `lever_axis` auf 0, m |
 | | `lever_axis` | | eine Achse, deren Weg beide zur Führung hebt |
@@ -576,7 +576,7 @@ id = "worm_c"
 gearbox = "gear_c"         # das Getriebe vor einem Rundtisch etwa
 ratio = 40.0
 efficiency = 0.76          # von der Schnecke angetrieben: tan(gamma) / tan(gamma + rho')
-back_efficiency = 0.5      # vom Rad zurück angetrieben: tan(gamma - rho') / tan(gamma); 0 oder weniger sperrt selbst
+back_efficiency = 0.69     # vom Rad zurück angetrieben: tan(gamma - rho') / tan(gamma); 0 oder weniger sperrt selbst (dann eta < 0,5)
 ```
 
 Solange der Motor treibt, gibt sie das Moment t ihrer Feder als t eta an den Abtrieb und t / i an den Läufer weiter, wie

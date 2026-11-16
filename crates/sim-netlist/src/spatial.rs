@@ -965,6 +965,8 @@ impl Delta {
     fn modes_at(&self, tool: &[f64]) -> Vec<(f64, f64, Vec<f64>)> {
         // shortcut: the modes take the first arm's gearbox for all three; give `arm_modes` one per arm once a file
         // drives the arms through different gearboxes.
+        // K1, the stiffness of the moves that excite the mode; with hysteresis a small vibration sees K1 + sigma = 2 K1 (about
+        // 41 % higher, docs/model-reference.md, Resonance).
         let k_gear = self.elastic.then(|| self.joints[0].gearbox.stiffness);
         let elbows = if tool.len() == 3 { self.legs.inverse([tool[0], tool[1], tool[2]]) } else { None };
         let (Some(elbows), true) = (elbows, k_gear.is_some() || self.bending.is_some()) else { return Vec::new() };
