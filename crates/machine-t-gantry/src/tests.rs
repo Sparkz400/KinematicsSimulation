@@ -958,17 +958,25 @@ fn plan_use(sim: &sim_components::Sim, cfg: &Config, points: &[(f64, Vec<f64>)])
     let (c, reserve, fastest) =
         (1e-3, cfg.f64("profile.torque_reserve").unwrap(), cfg.f64("drive.max_speed_rad_s").unwrap());
     let pose = |i: isize| &points[i.clamp(0, points.len() as isize - 1) as usize].1;
+    // The motor gives the load's torque (the rigid one less what turns rotor and gearbox input) over the gearbox's
+    // efficiency where it drives the load, times it where the load drives it (braking).
+    let eta = if cfg.bool("effects.gearbox_efficiency").unwrap() { cfg.f64("gearbox.efficiency").unwrap() } else { 1.0 };
+    let inertia = cfg.f64("motor.rotor_inertia_kgm2").unwrap() + cfg.f64("gearbox.inertia_at_input_kgm2").unwrap_or(0.0);
     let mut all = Vec::new();
     for i in 0..points.len() as isize {
         let mut used = [0f64; 3];
         let (a, p, b, b2) = (pose(i - 1), pose(i), pose(i + 1), pose(i + 2));
         let acc = [(b[0] - 2.0 * p[0] + a[0]) / (c * c), (b[1] - 2.0 * p[1] + a[1]) / (c * c)];
-        let (mut torque, mut ahead, mut here) = ([0.0; 2], [0.0; 2], [0.0; 2]);
+        let (mut torque, mut ahead, mut here, mut behind) = ([0.0; 2], [0.0; 2], [0.0; 2], [0.0; 2]);
         sim.machine.feedforward_torque(p, &acc, &mut torque);
         sim.machine.inverse(b, &mut ahead);
         sim.machine.inverse(p, &mut here);
+        sim.machine.inverse(a, &mut behind);
         for k in 0..2 {
             let speed = (ahead[k] - here[k]) / c;
+            let rotor = inertia * (ahead[k] - 2.0 * here[k] + behind[k]) / (c * c);
+            let load = torque[k] - rotor;
+            torque[k] = rotor + if load * speed >= 0.0 { load / eta } else { load * eta };
             let (low, high) = sim.control.torque_curve(speed);
             let jerk = (b2[k] - 3.0 * b[k] + 3.0 * p[k] - a[k]) / (c * c * c);
             used = [

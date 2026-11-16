@@ -30,13 +30,13 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 | The mesh-friction bristle behind a screw, rack or drum is capped at a quarter of the integrator's rate bound | `transmission.rs` (`Converter::apply`) | A numerical cap, softer than the physical bristle; chosen so RK4 stays stable, never tuned by a run | Run cable robot and screw axis, check the energy budget, then either keep the cap with its measured error or integrate the bristle implicitly |
 | The error band of "fitted minus config" is scaled by the ratio of residual norms | `identify.rs` (`unshared`) | The implementer's own estimate of the difference's error; not derived, not checked for coverage | Monte Carlo on a machine with known truth: (fitted − config)/error must have a standard deviation near 1 |
 | Tolerances of new tests (settled rise 0.5 K, seven-joint inverse 1e-4) | `machine-mover-track`, `machine-joint-kit` tests | Picked before any run | Set from the first run |
+| The binormal part v³κτ of a 3D spline's jerk may take at most 0.3 of an axis's jerk limit in the plan within the axis limits | `path.rs` (`BINORMAL_SHARE`, `curved`) | A choice: the other two parts then keep sqrt(1 − 0.3²) = 0.954 of theirs. Measured: on the 3D spline of `a_spline_on_three_axes_passes_through_its_points_within_the_limits` (0.697 s, axis jerk used to 1.0000) the time is the same at 0.15, 0.3 and 0.6: the cap does not bind there; in the time-optimal plan the share plays no part (its bend rows take the whole p''' by differences) | Keep; derive it only if a machine's 3D splines come out jerk-limited by it |
+| Friction is not counted as help while a motor brakes in the time-optimal plan | `path.rs` (`MotorCurve`, `Place::bounds`) | A choice: friction is nil at a standstill and the bounds hold at every speed up to v. Measured: the friction left unused where the braking torque binds is 0.0213 N m of 0.48 N m on the T-gantry with a 0.6 N m motor (4.4 %), 0.0237 of 0.4 N m on the single axis (5.9 %), 0.34 of 12 N m on the delta-d3 (2.8 %), so braking is planned that much below what the motor could do | Keep; count it above a speed where it is sure to be there if the few per cent matter |
 
 ## 3. Behaviour assumed without the manual
 
 | What | Where | Assumed from | Closing it |
 | --- | --- | --- | --- |
-| KRL `CIRC`: components left out of the end point come from the previous position | `program.rs` | The module's own doc sentence and RAPID's MoveC; no KUKA manual was read | Read the KUKA System Software manual's CIRC section |
-| G-code: a rotary-only block reads F in degrees per minute, a mixed block takes its time from the linear axes | `program.rs` (`path_feed`) | Common control behaviour (Siemens); Fanuc counts degrees as mm | State the dialect, or make it a setting |
 | A late fieldbus frame makes a drive with fine interpolation carry on extrapolating the old frame | `control.rs` (`profile_tick`) | Reasoning; no drive manual was read | Read one drive's behaviour on a missed setpoint (SINAMICS DSC, CiA 402 interpolated position) |
 
 ## 4. Derived but never run (as of this writing nothing in the batch has been executed)
@@ -64,13 +64,26 @@ result is in, treat **every number below as unverified**.
   with a printed voltage constant, and the sign in braking (the row is negative) is a model limit, not physics.
 - **Torque band with the inertia feedforward** (`control.rs`, `holding_torque`): the rigid model's torque at rest
   at the planned pose stands in for the held load; friction and the integrator's rest are not in it.
-- **The time-optimal planner still keeps every limit** with the ramp share following curvature
-  (`path.rs`, `ramp_share`): argued, not run.
+- **The time-optimal planner keeps every limit: verified by run on 16 November** (`crates/sim-machines/tests/planned_limits.rs`):
+  T-gantry, delta-d3, linear delta, SCARA in tool space and single axis, loss-free, shipped and shipped with twenty times
+  the jerk, on lines, arcs (radius 100 m, half turns), 3D splines, a helix, corners, and the single axis braking
+  through a gearbox of efficiency 0.9 with a heavy rotor and on ±30°: tool jerk, motor speed, motor torque by the
+  machine's own inverse dynamics through η the way the power flows, gearbox output, belt tension with the speed,
+  guide loads and own checks, all at most 1.0001 of their planned bounds. The run found the braking rows unsafe where
+  the rotor's inertia outweighs the load (fixed: `Place::against`). A nearly straight arc (100 m) now takes 0.620 s
+  against 0.619 s for its chord (0.684 s against 0.504 s before; the chord itself is slower now on the batch's
+  T-gantry).
+- **Found by that run, open:** the D3's inverse kinematics (`sim-netlist/src/spatial.rs`, `Legs::inverse_moved`,
+  `2 atan((−b − √d) / (c − a))`) gives motor 2 an angle of 0 at (−0.15, −0.0866, −0.9) exactly (c = a), so a
+  time-optimal line through that point crawls (23.6 s for 0.2 m; `a_path_in_a_tilted_plane_gets_its_transition_curves`
+  still passes). The palletiser's time-optimal cycle fails its `tool-angular-acceleration` check (13.5 against 10):
+  the check's value is a vector's length, which the plan's fit c a + b v + d v² + e cannot hold (as `wafer-slip`);
+  `rigid_checks` should give NaN for it or its components.
 - **Mesh friction with the bristle in joint units**: the cable robots blew up numerically and the screw
   axis lost 1.6 % of its energy budget in a trial at full stiffness; behaviour with the cap is unknown.
 - **All hand numbers in the new regression tests** (guide loads 11.414 N and 2.762 N, momentum
   (1.875, 0.856, 5.693) N s, reactance limits 3.474 / 2.709 / 1.956 N m, steady friction totals,
-  the full circle's length, and so on).
+  and so on; the full circle's length is now run).
 - **The 2-axis delta's reference file** `crates/machine-delta-d2/reference/inverse_dynamics.csv` is
   stale: its generator was changed but could not be run (no sympy).
 - **The video tool** `crates/sim-app/tools/frames_to_mp4.py` (holds frames for dropped numbers).
