@@ -1157,3 +1157,73 @@ fn a_plot_across_labels_a_tick_every_60_pixels_or_so() {
     let marks = ui::x_ticks(egui_plot::GridInput { bounds: (-600.0, 600.0), base_step_size: 1200.0 / 380.0 * 8.0 });
     assert_eq!(values(marks), [-600.0, -400.0, -200.0, 0.0, 200.0, 400.0, 600.0]);
 }
+
+/// How much of the 3D view the things floating on it (its controls, the timeline, the tool view) leave free, as a share
+/// of its area: what they cover, each counted alone, which counts any overlap twice and so errs on the covered side.
+fn view_free(d: &Driver) -> f32 {
+    let view = d.regions()[4];
+    let covered: f32 =
+        d.state().covered.iter().map(|r| r.intersect(view)).filter(|r| r.is_positive()).map(|r| r.area()).sum();
+    1.0 - covered / view.area()
+}
+
+/// At 1280 x 720, in either language, with no result and with the cycle's: every tab of either panel leaves the panels
+/// at their widths (setup 270, tools 430 pixels; a tools tab widened its panel by up to 160 pixels), and the view's
+/// controls start folded to one row, so that what floats on the view (controls and timeline) leaves at least 80 % of
+/// it free. Opened, they take more; folded again, as little as before.
+#[test]
+fn at_1280_by_720_the_panels_keep_their_widths_and_the_view_stays_free() {
+    for lang in ["en", "de"] {
+        let mut d = Driver::of(MACHINES[0], lang);
+        d.resize(1280.0, 720.0);
+        d.button_of("ui-start-cycle");
+        d.wait("the timeline on the view", |d| d.state().recorded.len() > 2 && d.state().covered.len() == 2);
+        let setup = ["ui-motion", "ui-effects", "ui-parameters", "ui-config"];
+        let tools = [
+            "ui-analysis",
+            "ui-effect-views",
+            "ui-search",
+            "ui-path",
+            "ui-trace",
+            "ui-sweep-tab",
+            "ui-tuning",
+            "ui-runs",
+            "ui-views",
+        ];
+        let mut problems = Vec::new();
+        for result in [false, true] {
+            if result {
+                d.tab("ui-analysis");
+                let label = d.tr("ui-analysis-run-cycle");
+                let tools = d.regions()[TOOLS];
+                let run = d.find_where("run the cycle", |w| {
+                    w.role == Role::Button && w.label == label && tools.contains_rect(w.rect)
+                });
+                d.click_at(Vec2::new(run.rect.center().x, run.rect.center().y));
+                d.wait_result("the cycle's result", |d| d.state().model.cycle_report.is_some());
+            }
+            for (s, t) in setup.iter().cycle().zip(&tools) {
+                d.tab(s);
+                d.tab(t);
+                let [_, left, right, _, _] = d.regions();
+                let free = view_free(&d);
+                if (left.width() - 270.0).abs() > 0.5 || (right.width() - 430.0).abs() > 0.5 || free < 0.8 {
+                    problems.push(format!(
+                        "{lang} {s} {t} result {result}: setup {} tools {} free {free:.2}",
+                        left.width(),
+                        right.width()
+                    ));
+                }
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+        let folded = view_free(&d);
+        d.button_of("ui-view-more");
+        d.find(Role::CheckBox, &d.tr("ui-view-xray"));
+        d.settle();
+        assert!(view_free(&d) < folded - 0.05, "{lang}: opened, {} free; folded, {folded}", view_free(&d));
+        d.button_of("ui-view-less");
+        d.settle();
+        assert!((view_free(&d) - folded).abs() < 1e-3, "{lang}: folded again, {} free", view_free(&d));
+    }
+}

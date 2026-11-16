@@ -4358,3 +4358,21 @@ Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries a
   the motors held; machine files that follow their crates' friction feedforward.
 - Last full run in this period: 1533 of 1538 tests passed at 54a2fca, before wave 3; the final count is a placeholder
   in docs/validation.md.
+
+## App: layout at 1280 x 720 and run differences (area 7, 16 November)
+
+- The side panels lay out their tabs in their own width (`in_width` in sim-app `main.rs`). Measured before at 1280 x 720
+  by the window test: the Search tab's motor list, a combo box at the end of a wrapped row, ended 0.3 pixels past the
+  edge and widened the tools panel from 430 to 524 pixels, which it kept on every other tab; the effect views widened it
+  by 22, the German parameters tab the setup panel by 8.
+- The view's controls start folded to one row where the view is under 500 pixels tall (`ui::CONTROLS_OPEN_FROM`): at
+  1280 x 720 the view is 580 x 418 pixels, the controls and timeline now leave 85 % of it free (the test asks 80 %).
+- The runs' key figures have a column per run less the reference, checked against the figures in
+  `two_runs_overlay_with_aligned_time_and_a_correct_difference` (peak torque of motor 1, with and without guide
+  friction).
+- Window test: `at_1280_by_720_the_panels_keep_their_widths_and_the_view_stays_free` (both languages, every tab of
+  both panels, with and without the cycle's result).
+- Already in place before this wave, so not rebuilt: the mode list's mode swinging in the 3D view at 1 Hz with the
+  exaggeration slider and its true frequency by the tool (`session::mode_scene`); the energy flow diagram, whose columns
+  add up to the budget (`Model::budget_flows`, test in tests/app.rs); kept runs overlaid and differenced in the runs
+  view of the bottom panel.

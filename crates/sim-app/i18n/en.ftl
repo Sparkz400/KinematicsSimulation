@@ -565,3 +565,6 @@ ui-bands-high = Highest
 ui-bands-cloud = Operating points of the bounds runs
 ui-workspace-acceleration = Acceleration in the worst direction
 ui-workspace-acceleration-hint = The largest acceleration the motors can give the tool there in the direction they do it worst, with their peak torque and the weight held: dark where it is high, light where it is low.
+ui-view-more = More…
+ui-view-less = Less
+ui-view-more-hint = Shows or hides the view's other controls: what is drawn besides the parts, the mode, the compared run, the path's colours and the exaggeration. In a small window they start hidden, so that the machine stays in sight.

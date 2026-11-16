@@ -152,7 +152,14 @@ pub struct Overlays {
     pub scale: Option<f64>,
     /// The error the path may have, in m: points further off the plan are drawn red, and the scale marks it.
     pub tolerance: Option<f64>,
+    /// The view's controls open (`true`) or folded to their first row; `None` until the user picks one: open where the
+    /// view is at least `CONTROLS_OPEN_FROM` tall, so that at 1280 x 720 they leave the machine in sight.
+    pub controls: Option<bool>,
 }
+
+/// The view's height in logical pixels from which its controls start open (`Overlays::controls`): opened, their rows
+/// take some 200 pixels, half of the view at 1280 x 720 (418 pixels tall) and a third at 1600 x 900 (598).
+pub const CONTROLS_OPEN_FROM: f32 = 500.0;
 
 /// What the travelled path is coloured by: cyan as everything travelled, or by a value along it (`trail_color`).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -188,6 +195,8 @@ pub struct ViewInfo<'a> {
     pub compare: (bool, &'a str),
     /// The view is being recorded (`sim_app::video`).
     pub recording: bool,
+    /// The controls show all their rows, not only the first (`Overlays::controls`).
+    pub open: bool,
 }
 
 /// The timeline under the 3D view: which of the recorded scenes the view draws, and whether they replay.
@@ -585,7 +594,15 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
             {
                 actions.push(Action::Record(!view.recording));
             }
+            let fold = if view.open { "ui-view-less" } else { "ui-view-more" };
+            if ui.add(egui::Button::new(tr(fold)).selected(view.open)).on_hover_text(tr("ui-view-more-hint")).clicked()
+            {
+                actions.push(Action::Overlays(Overlays { controls: Some(!view.open), ..overlays }));
+            }
         });
+        if !view.open {
+            return;
+        }
         ui.horizontal_wrapped(|ui| {
             let mut shown = overlays;
             ui.checkbox(&mut shown.xray, tr("ui-view-xray")).on_hover_text(tr("ui-view-xray-hint"));

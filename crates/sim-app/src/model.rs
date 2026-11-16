@@ -1642,8 +1642,9 @@ impl Model {
         }
     }
 
-    /// The key figures of the kept runs side by side (`runs::Figures`): one column per run, the reference first marked,
-    /// in the chosen units. `None` with no run kept.
+    /// The key figures of the kept runs side by side (`runs::Figures`): one column per run, the reference marked, then
+    /// one column per other run with its value less the reference's ("Δ label"; for the verdicts, the failed checks
+    /// less the reference's), in the chosen units. `None` with no run kept.
     pub fn runs_table(&self) -> Option<Table> {
         if self.runs.is_empty() {
             return None;
@@ -1656,17 +1657,27 @@ impl Model {
                 if i == self.runs.reference() { format!(" ({})", tr("ui-run-reference")) } else { String::new() };
             header.push(format!("{}{mark}", run.label));
         }
+        let reference = self.runs.reference();
+        let others: Vec<usize> = (0..self.runs.len()).filter(|i| *i != reference).collect();
+        header.extend(others.iter().map(|&i| format!("Δ {}", self.runs.get(i).map_or("", |r| r.label.as_str()))));
         let mut table = vec![header];
         let cell = |value: Option<f64>| value.map_or(String::new(), short);
-        let mut row = |label: String, cells: Vec<String>| table.push([vec![label], cells].concat());
-        row(tr("ui-analysis-duration"), figures.iter().map(|f| short(f.duration)).collect());
-        row(
-            tr("ui-run-verdicts"),
-            figures
-                .iter()
-                .map(|f| f.verdicts.map_or(String::new(), |(ok, failed)| format!("{ok} / {failed}")))
-                .collect(),
-        );
+        let signed = |d: f64| if d > 0.0 { format!("+{}", short(d)) } else { short(d) };
+        // A row of numbers: each run's value, then each other run's less the reference's.
+        let row = |table: &mut Table, label: String, values: Vec<Option<f64>>| {
+            let differences = others.iter().map(|&i| match (values[i], values[reference]) {
+                (Some(value), Some(of_reference)) => signed(value - of_reference),
+                _ => String::new(),
+            });
+            table.push([vec![label], values.iter().map(|v| cell(*v)).collect(), differences.collect()].concat());
+        };
+        row(&mut table, tr("ui-analysis-duration"), figures.iter().map(|f| Some(f.duration)).collect());
+        let failed = |i: usize| figures[i].verdicts.map(|(_, failed)| failed as f64);
+        let verdicts =
+            figures.iter().map(|f| f.verdicts.map_or(String::new(), |(ok, failed)| format!("{ok} / {failed}")));
+        let failed_more =
+            others.iter().map(|&i| failed(i).zip(failed(reference)).map_or(String::new(), |(a, b)| signed(a - b)));
+        table.push([vec![tr("ui-run-verdicts")], verdicts.collect(), failed_more.collect()].concat());
         let motors = figures.iter().map(|f| f.motors.len()).max().unwrap_or(0);
         let (speed, speed_unit) = self.units.scale("rad/s");
         for k in 0..motors {
@@ -1689,11 +1700,11 @@ impl Model {
                 ("ui-run-energy", "J".into(), |m| m.energy, 1.0),
             ];
             for (key, unit, value, factor) in rows {
-                let cells = figures.iter().map(|f| cell(f.motors.get(k).and_then(value).map(|v| v * factor)));
+                let cells = figures.iter().map(|f| f.motors.get(k).and_then(value).map(|v| v * factor));
                 // The unit, unless the label has it already (the torques' are the analysis tables').
                 let label = tr(key);
                 let label = if label.contains('[') { label } else { format!("{label} [{unit}]") };
-                row(format!("{name} · {label}"), cells.collect());
+                row(&mut table, format!("{name} · {label}"), cells.collect());
             }
         }
         let (length, length_unit) = self.units.scale("m");
@@ -1702,8 +1713,9 @@ impl Model {
             ("ui-run-tool-error-rms", figures.iter().map(|f| f.tool_error_rms).collect()),
         ] {
             row(
+                &mut table,
                 format!("{} [{length_unit}]", tr(key)),
-                value.into_iter().map(|v| cell(v.map(|v| v * length))).collect(),
+                value.into_iter().map(|v| v.map(|v| v * length)).collect(),
             );
         }
         Some(table)

@@ -565,3 +565,6 @@ ui-bands-high = Größter Wert
 ui-bands-cloud = Arbeitspunkte der Grenzläufe
 ui-workspace-acceleration = Beschleunigung in der ungünstigsten Richtung
 ui-workspace-acceleration-hint = Die größte Beschleunigung, die die Motoren dem Werkzeug dort in der Richtung geben können, in der sie es am schlechtesten tun, mit ihrem Spitzenmoment und gehaltenem Gewicht: dunkel, wo sie hoch ist, hell, wo sie niedrig ist.
+ui-view-more = Mehr…
+ui-view-less = Weniger
+ui-view-more-hint = Zeigt oder verbirgt die übrigen Bedienelemente der Ansicht: was außer den Teilen gezeichnet wird, die Eigenform, den Vergleichslauf, die Farben der Bahn und die Überhöhung. In einem kleinen Fenster sind sie zuerst verborgen, damit die Maschine sichtbar bleibt.

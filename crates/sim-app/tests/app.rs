@@ -3846,7 +3846,17 @@ fn two_runs_overlay_with_aligned_time_and_a_correct_difference() {
     wait_for_runs(&mut model);
     assert_eq!(model.runs.len(), 2, "{:?}", model.messages);
     let table = model.runs_table().unwrap();
-    assert_eq!(table[0].len(), 3);
+    // The figure, the two runs, and the second less the first (the reference), worked out here from the figures.
+    assert_eq!(table[0].len(), 4);
+    assert!(table[0][3].starts_with("Δ "), "{:?}", table[0]);
+    let (of_first, of_second) = (model.runs.get(0).unwrap().figures(), model.runs.get(1).unwrap().figures());
+    let by_hand = of_second.motors[0].peak_torque - of_first.motors[0].peak_torque;
+    let peak_torque = model.tr.tr("ui-analysis-peak-torque").to_string();
+    let row = table.iter().find(|r| r[0].contains(&peak_torque)).unwrap();
+    let signed =
+        if by_hand > 0.0 { format!("+{}", sim_app::model::short(by_hand)) } else { sim_app::model::short(by_hand) };
+    assert_eq!(row[3], signed, "{row:?}");
+    assert!(table.iter().all(|r| r.len() == 4), "{table:?}");
     let plots = model.run_plots();
     let torque = plots.iter().find(|p| p.quantity == Quantity::Torque).unwrap();
     assert_eq!((torque.lines.len(), torque.differences.len()), (4, 2));

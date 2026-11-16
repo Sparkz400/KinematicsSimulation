@@ -94,6 +94,8 @@ struct State {
     encodings: Vec<video::Encoding>,
     /// What the plot pictures saved say, from the screenshot's observer, for the messages.
     notes: std::sync::Arc<std::sync::Mutex<Vec<Message>>>,
+    /// What floats over the 3D view this frame: its controls, the timeline and the tool view.
+    covered: Vec<egui::Rect>,
 }
 
 /// A second run beside the machine's with one effect switched the other way, drawn as a see-through ghost.
@@ -234,6 +236,7 @@ fn add_app(app: &mut App, model: Model) {
             recording: None,
             encodings: Vec::new(),
             notes: Default::default(),
+            covered: Vec::new(),
         })
         .add_plugins(EguiPlugin::default())
         .init_gizmo_group::<PathGizmos>()
@@ -1177,6 +1180,18 @@ fn orbit_camera(
     camera.rotation = rotation;
 }
 
+/// A side panel's contents laid out in its width, never wider. A panel is as wide as what it holds: a row a little too
+/// wide in one tab (a list at the end of a wrapped row) widened the tools panel by up to 160 pixels, taken from the
+/// view, and it stayed so. Here the contents go into a child of the panel's width that takes no room of its own; what
+/// does not fit is cut off at the edge, which the window tests look for
+/// (`nothing_is_cut_off_or_overlaps_in_either_language`).
+fn in_width<R>(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let width = ui.available_width();
+    let mut inside = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()));
+    ui.allocate_space(egui::vec2(width, 0.0));
+    contents(&mut inside)
+}
+
 fn panels(
     mut contexts: EguiContexts,
     mut state: ResMut<State>,
@@ -1227,7 +1242,7 @@ fn panels(
         .resizable(true)
         .default_size(270.0)
         .frame(side)
-        .show(&mut root, |ui| ui::setup(ui, &state.model, state.panels, &mut actions))
+        .show(&mut root, |ui| in_width(ui, |ui| ui::setup(ui, &state.model, state.panels, &mut actions)))
         .response
         .rect;
     let scene = shown(&state.model, &state.recorded, state.timeline);
@@ -1236,17 +1251,19 @@ fn panels(
         .default_size(430.0)
         .frame(side)
         .show(&mut root, |ui| {
-            let ghost = state.ghost.is_some();
-            ui::tools(
-                ui,
-                &state.model,
-                scene,
-                state.panels,
-                &mut actions,
-                state.scroll,
-                ghost,
-                state.overlays.tolerance,
-            )
+            in_width(ui, |ui| {
+                let ghost = state.ghost.is_some();
+                ui::tools(
+                    ui,
+                    &state.model,
+                    scene,
+                    state.panels,
+                    &mut actions,
+                    state.scroll,
+                    ghost,
+                    state.overlays.tolerance,
+                )
+            })
         })
         .response
         .rect;
@@ -1278,6 +1295,7 @@ fn panels(
                     range: trail_range(&state.trail_points, state.overlays.trail),
                     compare: (state.ghost.is_some(), &state.compare_effect),
                     recording: state.recording.is_some(),
+                    open: state.overlays.controls.unwrap_or(view_bottom - view_top >= ui::CONTROLS_OPEN_FROM),
                 };
                 // Within the view: in German in a narrow window its rows ran over the tools panel; now they wrap.
                 let room = egui::vec2((right.left() - left.right() - 36.0).max(100.0), ui.available_height());
@@ -1365,8 +1383,8 @@ fn panels(
         .collect();
     // Top to bottom, each label where it is free of those placed before, of the view's controls and of the timeline.
     labels.sort_by(|a, b| a.0.y.total_cmp(&b.0.y));
-    let mut taken: Vec<egui::Rect> =
-        [controls, timeline, tool_picture].into_iter().flatten().map(|r| r.expand(4.0)).collect();
+    state.covered = [controls, timeline, tool_picture].into_iter().flatten().collect();
+    let mut taken: Vec<egui::Rect> = state.covered.iter().map(|r| r.expand(4.0)).collect();
     for (at, galley) in labels {
         let size = galley.size() + egui::vec2(10.0, 6.0);
         let room = view.shrink(4.0);
@@ -1753,6 +1771,7 @@ fn developer_hooks(
                 trail,
                 tube: has("tube"),
                 tool_view: has("toolview"),
+                controls: has("controls").then_some(true),
                 ..Default::default()
             };
             if let Some(effect) = words.iter().find_map(|w| w.strip_prefix("compare-")) {
