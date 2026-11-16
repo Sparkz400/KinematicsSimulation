@@ -878,8 +878,13 @@ impl Plc {
         let tolerance = entry.config().f64(key).unwrap_or(0.0);
         self.simulated(1.0).await;
         let later = self.axis_number(axis.id, "ActualPosition").await;
+        // With the gears' mesh friction a stuck gear holds the axis off until the speed loop's integral breaks it away:
+        // cable-spatial's rz 5.5e-4 rad past its target 0.3 s after Done (the gears hold the cables' pretension), back
+        // within 2e-4 rad 1 s later. Creeping back to within `rest` passes as a ring inside the tolerance does.
+        let creeps = entry.config().bool("effects.gearbox_mesh_friction").unwrap_or(false)
+            && (later - wanted).abs() < (at - wanted).abs();
         assert!(
-            (at - wanted).abs() < rest + tolerance && (later - wanted).abs() < rest,
+            ((at - wanted).abs() < rest + tolerance || creeps) && (later - wanted).abs() < rest,
             "{}.{}: at {at} {unit}, wanted {wanted} {unit}, within {rest} {unit} and a ring inside the settling tolerance of {tolerance} {unit}; at {later} {unit} 1 s later",
             entry.id,
             axis.id,

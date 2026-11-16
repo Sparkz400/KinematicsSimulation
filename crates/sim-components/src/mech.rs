@@ -908,7 +908,8 @@ pub struct Gearbox {
     /// [K2, K3], N m/rad.
     pub upper: [f64; 2],
     /// With effects.gearbox_mesh_friction: the stiffness of the mesh friction's bristle against the housing (presliding),
-    /// N m/rad at the output, `MESH_STIFFNESS` times K1; 0 with the effect off (`mesh_friction`).
+    /// N m/rad at the output (N/m behind a screw, rack or drum: `Converter::apply`), `MESH_STIFFNESS` times K1; 0 with
+    /// the effect off (`mesh_friction`).
     pub mesh_stiffness: f64,
     /// The output angle at which the mesh friction's bristle is relaxed, where the last step ended (`commit`); NaN before
     /// the first step (no friction yet).
@@ -1024,23 +1025,6 @@ impl Gearbox {
         (t, e1 + 0.5 * (t1 + t2) * (x2 - x1) + 0.5 * (t2 + t) * (x - x2))
     }
 
-    /// The spring's stiffness dT/de at a twist `e` >= 0 beyond the dead zone (`spring`'s slope).
-    fn spring_slope(&self, e: f64) -> f64 {
-        let (k1, b) = (self.stiffness, self.band);
-        if e < b {
-            return k1 * e / b;
-        }
-        let (x, [t1, t2], [k2, k3]) = (e - 0.5 * b, self.knees, self.upper);
-        let x1 = t1 / k1;
-        if x <= x1 {
-            k1
-        } else if x <= x1 + (t2 - t1) / k2 {
-            k2
-        } else {
-            k3
-        }
-    }
-
     /// The twist beyond the dead zone that the spring needs for `torque` >= 0: the inverse of `spring`.
     pub fn spring_twist(&self, torque: f64) -> f64 {
         let (k1, b) = (self.stiffness, self.band);
@@ -1115,7 +1099,7 @@ impl Gearbox {
     pub fn commit(&mut self, rotor_angle: f64, out_angle: f64) {
         // The mesh friction first, with the hysteresis's torque from its anchor as the step had it.
         if self.mesh_stiffness > 0.0 {
-            let f = self.mesh_friction(self.held_torque(rotor_angle, out_angle, 0.0).0, out_angle);
+            let f = self.mesh_friction(self.held_torque(rotor_angle, out_angle), out_angle);
             self.mesh_anchor = out_angle - f / self.mesh_stiffness;
         }
         if self.hysteresis == 0.0 {
@@ -1161,16 +1145,14 @@ impl Gearbox {
         (self.mesh_stiffness * (out_angle - self.mesh_anchor)).clamp(-bound, bound)
     }
 
-    /// The torque the spring and hysteresis pass at the rotor and output angles, the damping left out (the friction's
-    /// bound is on it), and its rate at the twist's `rate`.
-    fn held_torque(&self, rotor_angle: f64, out_angle: f64, rate: f64) -> (f64, f64) {
+    /// The torque the spring and hysteresis pass at the rotor and output angles at rest, the damping left out (the
+    /// friction's bound is on it).
+    fn held_torque(&self, rotor_angle: f64, out_angle: f64) -> f64 {
         let (twist, e) = self.beyond(rotor_angle, out_angle);
         if e == 0.0 && (self.has_play() || self.hysteresis == 0.0) {
-            return (0.0, 0.0);
+            return 0.0;
         }
-        let (z, z_slope) = self.hysteresis_torque(Self::contact(twist, e), rate);
-        let slope = if e > 0.0 { self.spring_slope(e) } else { 0.0 };
-        (self.spring(e).0.copysign(twist) + z, (slope + z_slope) * rate)
+        self.spring(e).0.copysign(twist) + self.hysteresis_torque(Self::contact(twist, e), 0.0).0
     }
 
     /// The twist beyond the backlash that transmits `output_torque` at rest, with its sign: the spring's alone.
@@ -1187,21 +1169,25 @@ impl Gearbox {
         }
     }
 
-    /// The energy in the spring and in the hysteresis's state, z^2 / (2 sigma).
+    /// The energy in the spring and in the hysteresis's state, z^2 / (2 sigma). Not the mesh friction's bristle: see
+    /// `loss_power`.
     pub fn energy(&self, rotor_angle: f64, out_angle: f64) -> f64 {
         let (twist, e) = self.beyond(rotor_angle, out_angle);
         let z = self.hysteresis_torque(Self::contact(twist, e), 0.0).0;
-        let mesh = if self.mesh_stiffness > 0.0 {
-            let f = self.mesh_friction(self.held_torque(rotor_angle, out_angle, 0.0).0, out_angle);
-            f * f / (2.0 * self.mesh_stiffness)
-        } else {
-            0.0
-        };
-        self.spring(e).1 + if z == 0.0 { 0.0 } else { z * z / (2.0 * self.dahl_stiffness) } + mesh
+        self.spring(e).1 + if z == 0.0 { 0.0 } else { z * z / (2.0 * self.dahl_stiffness) }
     }
 
     /// Power the gearbox takes, W: what the rotor puts in less what the output gives the pulley and what spring and
     /// hysteresis store. The efficiency loss, the damping and the hysteresis's friction, s x' z^2 / T_h.
+    ///
+    /// The mesh friction counts as F w, all of its power: its bristle's store F^2 / (2 sigma) is neither in `energy`
+    /// nor taken off here. Its rate, F dF/dt / sigma, depends on whether the bristle sticks or slides, which at a
+    /// step's end (where `commit` leaves it exactly at its bound) says nothing about the step itself: there the anchor
+    /// stands, the output runs many bristle lengths (0.1 m/s over 62.5 us is 6e-6 m against mu |held| / sigma = 1e-7 m on
+    /// the planar cable robot) and the friction slides at the bound throughout, also where the bound grew faster than
+    /// sigma w at the ends. Booked that way it missed 1.80 J of 38.17 J on the planar cable robot's cycle, at any step
+    /// (dt / 4 the same), and 10.8 J at 3 sigma. Left out, what is not booked is the store itself, at most
+    /// (mu |held|)^2 / (2 sigma) per gear: 4e-7 J on the planar cable robot.
     pub fn loss_power(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64) -> f64 {
         let t = self.torque(rotor_angle, rotor_speed, out_angle, out_speed);
         let (twist, e) = self.beyond(rotor_angle, out_angle);
@@ -1210,29 +1196,9 @@ impl Gearbox {
         }
         let (z, slope) = self.hysteresis_torque(Self::contact(twist, e), rotor_speed / self.ratio - out_speed);
         let stored = if z == 0.0 { 0.0 } else { z * slope / self.dahl_stiffness };
-        // The bristle's store F^2 / (2 sigma) changes at F dF/dt / sigma: sticking dF/dt = sigma w, sliding the bound's.
-        let mesh = if self.mesh_stiffness > 0.0 && !self.mesh_anchor.is_nan() {
-            let rate = rotor_speed / self.ratio - out_speed;
-            let (held, held_rate) = self.held_torque(rotor_angle, out_angle, rate);
-            let f = self.mesh_friction(held, out_angle);
-            let bound = (1.0 - self.efficiency) * held.abs();
-            // At its bound (where each step's commit leaves it while sliding, to rounding) it slides on if sticking would
-            // take it beyond the bound's own rate, and sticks if it would take it back inside.
-            let (sticking, along) =
-                (self.mesh_stiffness * out_speed, (1.0 - self.efficiency) * held.signum() * held_rate);
-            let f_rate = if f.abs() >= bound * (1.0 - 1e-9) && f.signum() * sticking > along {
-                f.signum() * along
-            } else {
-                sticking
-            };
-            f * f_rate / self.mesh_stiffness
-        } else {
-            0.0
-        };
         t.rotor * rotor_speed
             - t.output * out_speed
             - (self.spring(e).0.copysign(twist) + stored) * (rotor_speed / self.ratio - out_speed)
-            - mesh
     }
 }
 

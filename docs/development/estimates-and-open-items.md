@@ -31,7 +31,7 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 | --- | --- | --- | --- |
 | A printed voltage constant more than 20 % off the torque constant is thrown away as a misprint | `catalog.rs` (`motor_data`, `emf_constant`) | The threshold is arbitrary. The audit found genuine Beckhoff AM8000 rows at 1.30 and Rexroth at 1.18; the rule may drop real data | Replace by the two named misprints (AKM64Q at 240 V, 1FT7044-1AF7) |
 | The induction motor's flux is held so the no-load voltage uses 0.9 of the supply | `induction.rs` (`flux_setpoint`) | 0.9 is a round number, not the torque-optimal flux (near 1/√2 of the voltage for the stator's share) | Derive the flux that gives the most torque inside the voltage and current limits at each speed |
-| The mesh-friction bristle behind a screw, rack or drum is capped at a quarter of the integrator's rate bound | `transmission.rs` (`Converter::apply`) | A numerical cap, softer than the physical bristle; chosen so RK4 stays stable, never tuned by a run | Run cable robot and screw axis, check the energy budget, then either keep the cap with its measured error or integrate the bristle implicitly |
+| The mesh-friction bristle behind a screw, rack or drum is capped at a quarter of the integrator's rate bound | `transmission.rs` (`Converter::apply`) | A safety cap for gears far stiffer than any shipped; no shipped machine reaches it (rack, screw, both cable robots run the full 2.6e7 to 5.6e7 N/m). Measured: their gearbox loss per cycle is the same at 0.1x and 10x the bristle to 4e-4 J (rack 16.741 J, screw 16.762 J, cable-planar 38.167 J, cable-spatial 53.544 to 53.548 J; SCARA 16.407 J), budgets closed to 2e-5 J. The bristle's store, at most (mu tau)^2 / (2 sigma) per gear (4e-7 J), is booked as loss, not stored (`Gearbox::loss_power`) | Size the cap by the output's mass, not the rotor's, if a gear that stiff is ever configured |
 | The error band of "fitted minus config" is scaled by the ratio of residual norms | `identify.rs` (`unshared`) | The implementer's own estimate of the difference's error; not derived, not checked for coverage | Monte Carlo on a machine with known truth: (fitted − config)/error must have a standard deviation near 1 |
 | V/f breakdown torque by a 96-point scan over slip | `induction.rs` (`vf_extreme`) | Resolution chosen by eye | Compare with the closed-form Thevenin breakdown at fixed frequency |
 | A half-turn arc is laid in the first coordinate plane that contains its start radius, x-y first | `path.rs` (`arc3`) | A convention: a G18 or G19 semicircle whose start radius lies in two coordinate planes lands in the wrong plane | Carry the plane on the arc piece, set by G17/G18/G19 in `program.rs` |
@@ -67,8 +67,12 @@ result is in, treat **every number below as unverified**.
 - **Induction torque curve and delivered torque agree** (`induction.rs`): by construction, not by run.
 - **The time-optimal planner still keeps every limit** with the ramp share following curvature
   (`path.rs`, `ramp_share`): argued, not run.
-- **Mesh friction with the bristle in joint units**: the cable robots blew up numerically and the screw
-  axis lost 1.6 % of its energy budget in a trial at full stiffness; behaviour with the cap is unknown.
+- **Mesh friction with the bristle in joint units**: run (16 November 2026). Nothing blows up at the full stiffness;
+  the 1.80 J (0.39 %) the cable-planar budget missed was the bristle store's rate booked as sticking where the step
+  slid, now booked as F w (closed to 1e-5 J on every machine). Stuck meshes holding the cables' pretension slow
+  cable-spatial's small turn steps (rx 1.41 Hz, ry 1.25 Hz; 4.44 / 4.37 Hz with the effect off, the same at 0.1x and
+  10x the bristle) and leave rz 5.5e-4 rad past a PLCopen target until the speed loop's integral pulls it back
+  (1.96e-4 rad 1 s later): the friction model's, not a numerical, result; the CLI and PLC tests judge it so.
 - **All hand numbers in the new regression tests** (guide loads 11.414 N and 2.762 N, momentum
   (1.875, 0.856, 5.693) N s, reactance limits 3.474 / 2.709 / 1.956 N m, steady friction totals,
   the full circle's length, and so on).
