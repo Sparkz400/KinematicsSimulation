@@ -130,6 +130,12 @@ jobs:
           name: tests-${{ matrix.os }}
       # Unpacked into target/ of the checkout, where the binaries were built: the CLI's tests find sim-cli by the
       # path it had at build time (env!("CARGO_BIN_EXE_sim-cli")), the same on every runner of one platform.
+      # The tests' own folder for the files they write (CARGO_TARGET_TMPDIR, a path fixed at build time): cargo makes
+      # it when it builds the tests, and the archive does not carry it. Without it every test of sim-cli and sim-app
+      # that writes a file failed in all twelve partitions (16 November 2026).
+      - name: Folder for the tests' files
+        shell: bash
+        run: mkdir -p target/tmp
       - name: Test
         shell: bash
         run: >-
