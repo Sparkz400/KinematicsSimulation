@@ -962,10 +962,7 @@ hoist, S210 drives), its wheel or drum the lever: 30:1 on 80 mm wheels, 25:1 on 
   `thermal-warm-start` (the sway left from one pass changes the next, so the passes never repeat: a winding's rise
   1.1 K apart). A workshop crane's real cycle over the runway takes a minute: a segment's target of [8.0, 4.0, 1.0].
 - **The drives' velocity loops** are tuned as stiff as the other machines' (bridge and trolley some 60 Hz, 2.0 and 0.24
-  N m s/rad). The hoist's, measured at rest under the 265 kg (`sim-cli margins`), has no gain crossover (NaN): its 92 %
-  gearbox's efficiency, faded in below 0.5 W, is a damper of 2601² ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope,
-  4.5 N m s/rad at the motor, which the test torque does not break away from; the gear holds the loop at rest. Without
-  the gear's losses (`--set effects.gearbox_efficiency=false`) its crossover is 48 Hz.
+  N m s/rad). The hoist's is measured at rest under the 265 kg (`sim-cli margins`) with the gearbox's efficiency effect off: with it on, the 92 % gearbox's efficiency, faded in below 0.5 W, is a damper of 2601² ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope, 4.5 N m s/rad at the motor, which the test torque does not break away from, and the loop shows no gain crossover. Without the gear's losses its crossover is 48 Hz.
 - **Verdicts of its own:** `rope-max-tension` (the highest tension against `rope.breaking_load_n` / `safety_factor`,
   4444 N), `rope-min-tension` (any fall below `rope.min_tension_n`, 50 N, fails: no slack rope), `residual-sway` (the
   load's sway amplitude √(d² + (d' / ω)²) at every dwell, d its horizontal offset from under the sheave, against

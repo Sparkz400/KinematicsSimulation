@@ -53,6 +53,9 @@ pub struct MotorLoad {
     /// braking resistor have to take.
     pub peak_regenerated_power: f64,
     pub largest_regeneration: f64,
+    /// The energy of each braking event (one run of negative power) fed back, J: what the resistor takes above the
+    /// DC link's room, event by event, where the link is not simulated.
+    pub regeneration_events: Vec<f64>,
     /// With the DC link simulated: the energy the braking resistor burned (over the cycle's duration its
     /// mean power), the most power it took and the highest DC link voltage. For a drive that tripped on
     /// overvoltage, the voltage it tripped at.
@@ -425,8 +428,10 @@ pub struct Tally {
     base_only: bool,
     belt_tension: Option<(f64, f64)>,
     radial_peak: f64,
-    /// Per guide: highest load and the sum of the load cubed, one per sample.
+    /// Per guide: highest load and the sum of the load cubed times its axis's |speed| (rolling damage goes with distance;
+    /// time where the axis is unknown), one per sample; and the sum of that weight.
     guide_loads: Vec<(f64, f64)>,
+    guide_weights: Vec<f64>,
     /// Per guide the place of its axis among the machine's axes, and the sum of that axis's |speed|, one per sample.
     guide_axes: Vec<Option<usize>>,
     guide_speeds: Vec<f64>,
@@ -618,6 +623,7 @@ impl Tally {
             checks,
             radial_peak: 0.0,
             guide_loads: vec![(0.0, 0.0); guides.len()],
+            guide_weights: vec![0.0; guides.len()],
             guide_axes: guides
                 .iter()
                 .map(|&i| sim.machine.axes().iter().position(|a| infos[i].id == format!("axis.{}.guide_load", a.id)))
@@ -725,8 +731,10 @@ impl Tally {
             for (_, i, peak, sum) in &mut self.checks {
                 (*peak, *sum) = (peak.max(self.sample[*i].abs()), *sum + self.sample[*i]);
             }
-            for (&i, (peak, cubed)) in self.guides.iter().zip(&mut self.guide_loads) {
-                (*peak, *cubed) = (peak.max(self.sample[i]), *cubed + self.sample[i].powi(3));
+            for (k, (&i, (peak, cubed))) in self.guides.iter().zip(&mut self.guide_loads).enumerate() {
+                let weight = self.guide_axes[k].map_or(1.0, |a| rate[a].abs());
+                (*peak, *cubed) = (peak.max(self.sample[i]), *cubed + self.sample[i].powi(3) * weight);
+                self.guide_weights[k] += weight;
             }
             if let (0, Some(i)) = (self.steps, self.slack) {
                 self.slack_start = self.sample[i];
@@ -888,6 +896,9 @@ impl Tally {
             }
             if power >= 0.0 {
                 load.energy_in += power * sim.dt;
+                if self.braking[k] > 0.0 {
+                    load.regeneration_events.push(self.braking[k]);
+                }
                 self.braking[k] = 0.0;
             } else {
                 load.energy_regenerated -= power * sim.dt;
@@ -939,6 +950,9 @@ impl Tally {
         for (k, load) in self.loads.iter_mut().enumerate() {
             load.rms_torque = (load.rms_torque / steps).sqrt();
             load.rms_current = (load.rms_current / steps).sqrt();
+            if self.braking[k] > 0.0 {
+                load.regeneration_events.push(self.braking[k]);
+            }
             load.thermal_current = (load.thermal_current / steps).sqrt();
             load.iron_loss /= steps;
             load.cubic_mean_torque =
@@ -983,11 +997,16 @@ impl Tally {
             .map(|(h, heat)| (h.part.clone(), h.resistance * heat / duration))
             .collect();
         let samples = self.path_error[0].2.max(1) as f64;
-        // The guide that the life estimate is about: the one with the highest equivalent load.
-        let guide =
-            (0..self.guide_loads.len()).max_by(|&a, &b| self.guide_loads[a].1.total_cmp(&self.guide_loads[b].1));
-        let guide_load = guide.map(|g| (self.guide_loads[g].0, (self.guide_loads[g].1 / samples).cbrt()));
-        let guide_speed = guide.and_then(|g| self.guide_axes[g].map(|_| self.guide_speeds[g] / samples));
+        // Per guide: its equivalent load (cubic mean over distance) and mean speed. The life estimate is about the guide
+        // that wears out first: life in hours goes with 1/(P^3 v); the peak is the highest of all guides.
+        let equivalent = |g: usize| equivalent_load(self.guide_loads[g].1, self.guide_weights[g]);
+        let speed = |g: usize| self.guide_axes[g].map(|_| self.guide_speeds[g] / samples);
+        let wear = |g: usize| equivalent(g).powi(3) * speed(g).unwrap_or(1.0);
+        // shortcut: the km life (one equivalent load) is that of this guide, not always the lowest, when guides differ in speed; upgrade with per-guide fields in CycleLoad
+        let guide = (0..self.guide_loads.len()).max_by(|&a, &b| wear(a).total_cmp(&wear(b)));
+        let peak = self.guide_loads.iter().map(|g| g.0).reduce(f64::max);
+        let guide_load = guide.zip(peak).map(|(g, peak)| (peak, equivalent(g)));
+        let guide_speed = guide.and_then(speed);
         CycleLoad {
             duration,
             belt_tension: self.belt_tension,
@@ -1443,6 +1462,7 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     // is judged together, after the axes. An S210 has a resistor of its own and is judged per axis.
     let line_up = cfg.get("drive.braking_module").is_ok() && cfg.bool("drive.braking_module")?;
     let mut line_up_brakes = false;
+    let mut regenerated_excess = 0.0;
     let shared = cfg;
     for (k, m) in load.motors.iter().enumerate() {
         // Each motor against its own motor, drive and ratings.
@@ -1532,12 +1552,10 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
                 let stored = 0.5 * capacitance * 1e-6 * (m.peak_dc_link_voltage.powi(2) - bus * bus);
                 (stored, m.resistor_energy > 0.0, m.resistor_energy / load.duration, m.peak_resistor_power)
             } else {
-                (
-                    m.largest_regeneration,
-                    m.largest_regeneration > room,
-                    m.energy_regenerated / load.duration,
-                    m.peak_regenerated_power,
-                )
+                // The capacitors take each braking up to their room; only what is above it goes to the resistor.
+                let excess = resistor_excess(&m.regeneration_events, room);
+                regenerated_excess += excess;
+                (m.largest_regeneration, m.largest_regeneration > room, excess / load.duration, m.peak_regenerated_power)
             };
             // With a resistor to fall back on, a full DC link is no failure in itself.
             out.push(Verdict {
@@ -1578,7 +1596,7 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
         let energy: f64 = match (simulated, shared) {
             (true, true) => load.motors.first().map_or(0.0, |m| m.resistor_energy),
             (true, false) => load.motors.iter().map(|m| m.resistor_energy).sum(),
-            (false, _) => load.motors.iter().map(|m| m.energy_regenerated).sum(),
+            (false, _) => regenerated_excess,
         };
         if let Some(limit) = rating("braking_resistor_continuous_w") {
             out.push(at_most("braking-resistor-continuous", None, energy / load.duration, limit));
@@ -1692,12 +1710,25 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     Ok(out)
 }
 
+/// The equivalent load of a guide: the cubic mean cbrt(sum F^3 w / sum w) with the weight w (|speed|: over distance);
+/// 0 where nothing moved.
+fn equivalent_load(cubed_sum: f64, weight_sum: f64) -> f64 {
+    if weight_sum > 0.0 { (cubed_sum / weight_sum).cbrt() } else { 0.0 }
+}
+
+/// The energy a braking resistor takes from braking events of `events` J when the DC link's capacitors take `room` J of
+/// each: what is above it, summed.
+fn resistor_excess(events: &[f64], room: f64) -> f64 {
+    events.iter().map(|e| (e - room).max(0.0)).sum()
+}
+
 /// Nominal life of the most loaded guide in km, where the machine reports guide loads and the config has
 /// `ratings.guide_dynamic_load_rating_n`: L10 = (C / P)^3 * 50 km, the catalogue formula for ball guides,
-/// with the dynamic load rating C and for P the cubic mean of the guide load over the cycle's time.
+/// with the dynamic load rating C and for P the cubic mean of the guide load over the cycle's distance (weighted by
+/// the axis's |speed|, as the pulley's radial load is; over time where the guide's axis is unknown).
 ///
 /// This is the catalogue formula and nothing more, and it is not validated: no load factors for shock,
-/// temperature or hardness, no moments on single blocks, the mean taken over time and not over distance,
+/// temperature or hardness, no moments on single blocks,
 /// and a guide load that is itself an estimate from the rigid model.
 pub fn guide_life_km(cfg: &Config, load: &CycleLoad) -> Option<f64> {
     let rating = cfg.f64("ratings.guide_dynamic_load_rating_n").ok()?;
@@ -1705,9 +1736,9 @@ pub fn guide_life_km(cfg: &Config, load: &CycleLoad) -> Option<f64> {
 }
 
 /// `guide_life_km` in hours: the distance over the mean speed of the guide's axis over the cycle
-/// (`CycleLoad::guide_speed`).
+/// (`CycleLoad::guide_speed`), times the reliability factor a1 as every other life (`reliability_factor`).
 pub fn guide_life_h(cfg: &Config, load: &CycleLoad) -> Option<f64> {
-    Some(guide_life_km(cfg, load)? * 1e3 / (load.guide_speed? * 3600.0))
+    Some(guide_life_km(cfg, load)? * 1e3 / (load.guide_speed? * 3600.0) * reliability_factor(cfg)?)
 }
 
 /// The width of the speed bands of `MotorLoad::gearbox_torque_by_speed`, rad/s of the motor.
@@ -3866,6 +3897,10 @@ pub struct LoopPoint {
 /// L = -U / E and S = E / D at the frequency. Everything between the two is in L: velocity filter, PI, torque
 /// filter, delays, current loop, the elastic mechanics, and the position loop around it. Sampled at the velocity
 /// cycle, over whole periods: at least 0.1 s to settle and 0.1 s to measure.
+///
+/// Measured with `effects.gearbox_efficiency` off: at standstill the efficiency's fade with the transmitted power
+/// (`Gearbox::loss_factor`) would act as a large damper on the small-signal torque and hide the loop (a crane hoist read
+/// no gain crossover); the small-signal loop is that of the lossless gearbox.
 pub fn velocity_loop_response(
     entry: &MachineEntry,
     cfg: &Config,
@@ -3874,6 +3909,11 @@ pub fn velocity_loop_response(
     amplitude: f64,
 ) -> Result<Vec<LoopPoint>, ConfigError> {
     check_frequencies(frequencies)?;
+    let mut lossless = cfg.clone();
+    if lossless.get("effects.gearbox_efficiency").is_ok() {
+        lossless.set_text("effects.gearbox_efficiency = false")?;
+    }
+    let cfg = &lossless;
     let mut out = Vec::new();
     for &frequency in frequencies {
         let (mut sim, _) = settled(entry, cfg, 0)?;
@@ -3943,7 +3983,8 @@ pub struct LoopMargins {
     /// The gain crossover (|L| = 1) with the smallest phase margin; NaN without one.
     pub crossover_hz: f64,
     /// 180 degrees plus the phase of L at that crossover, the phase unwrapped along the frequency axis and taken
-    /// between -270 and 90 degrees at the first point; infinite without a crossover. Negative: the loop is unstable.
+    /// between -270 and 90 degrees at the first point; NaN without a crossover in the measured band (not measurable,
+    /// not infinite: nothing is known beyond the band). Negative: the loop is unstable.
     pub phase_margin_deg: f64,
     /// By how much the gain may rise before L reaches -1, in dB, at the worst crossing of the negative real axis
     /// where the phase falls through -180 degrees and that a later rising crossing beyond -1 does not undo;
@@ -3961,9 +4002,9 @@ pub struct LoopMargins {
 }
 
 impl LoopMargins {
-    /// A valid measurement, both margins positive: the loop is stable.
+    /// A valid measurement, both margins positive (a phase margin that is NaN has no crossover to judge): stable.
     pub fn stable(&self) -> bool {
-        self.valid && self.phase_margin_deg > 0.0 && self.gain_margin_db > 0.0
+        self.valid && !(self.phase_margin_deg <= 0.0) && self.gain_margin_db > 0.0
     }
 }
 
@@ -3974,7 +4015,7 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
     let measured = |p: &&LoopPoint| p.re.is_finite() && p.im.is_finite();
     let mut m = LoopMargins {
         crossover_hz: f64::NAN,
-        phase_margin_deg: f64::INFINITY,
+        phase_margin_deg: f64::NAN,
         gain_margin_db: f64::INFINITY,
         valid: points.iter().all(|p| measured(&p)),
         peak_sensitivity: 0.0,
@@ -4009,7 +4050,7 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
     phase.iter_mut().for_each(|p| *p += shift);
     for &(i, share) in &crossovers {
         let margin = 180.0 + phase[i - 1] + (phase[i] - phase[i - 1]) * share;
-        if margin < m.phase_margin_deg {
+        if !(margin >= m.phase_margin_deg) {
             (m.phase_margin_deg, m.crossover_hz) =
                 (margin, points[i - 1].frequency * (points[i].frequency / points[i - 1].frequency).powf(share));
         }
@@ -4058,9 +4099,11 @@ pub fn loop_frequencies(cfg: &Config) -> Result<Vec<f64>, ConfigError> {
     Ok(log_spaced(10.0, 0.25 / cfg.positive("drive.velocity_cycle_s")?, 60))
 }
 
-/// The amplitude of the test torque: a tenth of the motor's rated torque.
-pub fn loop_amplitude(entry: &MachineEntry, cfg: &Config) -> Result<f64, ConfigError> {
-    Ok(0.1 * crate::catalog::resolve(entry, cfg)?.positive("drive.rated_torque_nm")?)
+/// The amplitude of the test torque: a tenth of the rated torque of the motor `id` (its own `[drive.<id>]`, not the
+/// shared one).
+pub fn loop_amplitude(entry: &MachineEntry, cfg: &Config, id: &str) -> Result<f64, ConfigError> {
+    let own = crate::catalog::motor_config(&crate::catalog::resolve(entry, cfg)?, id)?;
+    Ok(0.1 * own.positive("drive.rated_torque_nm")?)
 }
 
 /// Where neighbouring points of a response differ by more than this turn (degrees) or this change of magnitude (dB),
@@ -4115,8 +4158,9 @@ pub fn velocity_loop_responses(
 ) -> Result<Vec<Vec<Vec<LoopPoint>>>, ConfigError> {
     use std::sync::atomic::Ordering::Relaxed;
     let first = &crate::catalog::resolve(entry, configs.first().ok_or_else(|| ConfigError::Invalid("config".into()))?)?;
-    let (mut frequencies, amplitude) = (loop_frequencies(first)?, loop_amplitude(entry, first)?);
+    let mut frequencies = loop_frequencies(first)?;
     let machine = (entry.build)(first)?;
+    let amplitudes = machine.motors().iter().map(|m| loop_amplitude(entry, first, &m.id)).collect::<Result<Vec<_>, _>>()?;
     let range = frequencies[0]..=frequencies[frequencies.len() - 1];
     frequencies.extend(machine.modes(&first.f64s("start.pose")?).iter().map(|m| m.hz).filter(|f| range.contains(f)));
     let motors = machine.motors().len();
@@ -4127,7 +4171,8 @@ pub fn velocity_loop_responses(
                 return Err(ConfigError::Invalid(CANCELLED.into()));
             }
             let (run, motor, frequency) = jobs[j];
-            let point = velocity_loop_response(entry, &configs[run], motor, &[frequency], amplitude).map(|p| p[0]);
+            let point =
+                velocity_loop_response(entry, &configs[run], motor, &[frequency], amplitudes[motor]).map(|p| p[0]);
             progress.done.fetch_add(1, Relaxed);
             point
         })
@@ -4459,6 +4504,7 @@ mod tests {
             close(reliability_factor(&reliable).unwrap(), a1, "a1");
             close(pulley_bearing_life_h(&reliable, &m).unwrap(), a1 * 468696.16, "pulley bearing with a1");
             close(gearbox_life_h(&reliable, &m).unwrap(), a1 * 352777.89, "gearbox with a1");
+            close(guide_life_h(&reliable, &load).unwrap(), a1 * 6944.444, "guide with a1");
         }
         assert_eq!(reliability_factor(&cfg), Some(1.0));
         assert_eq!(reliability_factor(&Config::parse("format_version = 1\n").unwrap()), Some(1.0));
@@ -4604,6 +4650,16 @@ mod tests {
         assert_eq!(motor_bearing_life_h(&cfg, &MotorLoad { radial_load_equivalent: None, ..m }), None);
     }
 
+    /// A guide at 100 N for 1 s at 1 m/s and at 200 N for 1 s at 3 m/s: the speed-weighted cubic mean is
+    /// cbrt((100^3 * 1 + 200^3 * 3) / (1 + 3)) = cbrt(6.25e6) = 184.20 N (time-weighted: 165.1 N). A braking resistor, with the
+    /// capacitors taking 2 J of each event, takes (5 - 2) + 0 + (3 - 2) = 4 J of 5, 1.5 and 3 J.
+    #[test]
+    fn a_guide_load_is_weighted_with_distance_and_the_resistor_takes_what_the_link_cannot() {
+        assert!((equivalent_load(100f64.powi(3) + 200f64.powi(3) * 3.0, 4.0) - 184.2).abs() < 0.01);
+        assert_eq!(equivalent_load(0.0, 0.0), 0.0);
+        assert!((resistor_excess(&[5.0, 1.5, 3.0], 2.0) - 4.0).abs() < 1e-12);
+    }
+
     /// L(jw) = (wc / jw) e^(-jw tau), an integrator with a dead time, by hand: |L| = 1 at wc, where the phase is
     /// -90 degrees - wc tau, so the phase margin is 90 - 360 fc tau degrees (100 Hz, 1 ms: 54); the phase reaches
     /// -180 degrees at w = pi / (2 tau) (250 Hz), where |L| = fc / 250 Hz, a gain margin of 20 log 2.5 = 7.959 dB.
@@ -4623,10 +4679,11 @@ mod tests {
         assert!((m.crossover_hz - fc).abs() < 0.1, "crossover {} Hz", m.crossover_hz);
         assert!((m.phase_margin_deg - 54.0).abs() < 0.1, "phase margin {}", m.phase_margin_deg);
         assert!((m.gain_margin_db - 20.0 * 2.5f64.log10()).abs() < 0.01, "gain margin {}", m.gain_margin_db);
-        // Without a crossover and without a crossing of the negative real axis, both margins are infinite.
+        // Without a crossover and without a crossing of the negative real axis, the gain margin is infinite and the
+        // phase margin is not measurable (NaN), though the loop counts as stable.
         let m =
             loop_margins(&points[..10].iter().map(|p| LoopPoint { re: 2.0 + p.re.abs(), ..*p }).collect::<Vec<_>>());
-        assert!(m.phase_margin_deg.is_infinite() && m.gain_margin_db.is_infinite() && m.crossover_hz.is_nan());
+        assert!(m.phase_margin_deg.is_nan() && m.gain_margin_db.is_infinite() && m.crossover_hz.is_nan() && m.stable());
     }
 
     /// The same loop, stable and unstable: phase margin 90 - 360 fc tau degrees, gain margin 20 log(1 / (4 fc tau)) dB,
