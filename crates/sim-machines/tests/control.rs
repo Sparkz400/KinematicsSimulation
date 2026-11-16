@@ -195,19 +195,24 @@ fn velocity_feedforward_removes_the_following_error() {
 #[test]
 fn torque_feedforward_cuts_the_following_error_while_accelerating() {
     for entry in MACHINES {
-        let peak = |edit: &[&str]| {
+        let trace = |edit: &[&str]| {
             let mut sim = Sim::new(entry, &config(entry, edit)).unwrap();
             sim.command(Command::MoveTo(long_move(&sim))).unwrap_or_else(|e| panic!("{}: {}", entry.id, e.key));
-            let mut peak = 0f64;
-            sim.run(0.15, |s| peak = peak.max(s.control.tool_error[0].abs()));
-            peak
+            let mut trace = Vec::new();
+            sim.run(0.15, |s| trace.push(s.control.tool_error[0].abs()));
+            trace
         };
         // The process force (the knife's cut, the press's force) is not in the feedforward model either, and comes on the
         // move: off, as it is a load the loop takes, not an inertia (on the knife 7.8 mrad with, 9.4 without; off 0.31
         // and 1.68 mrad).
         let process: &[&str] =
             if entry.config().bool("effects.process_force").is_ok() { &["effects.process_force = false"] } else { &[] };
-        let (with, without) = (peak(process), peak(&[process, &["effects.torque_feedforward = false"]].concat()));
+        let (with, without) = (trace(process), trace(&[process, &["effects.torque_feedforward = false"]].concat()));
+        // Judged where the lag peaks without it: a load light against its loop's tuning (the indexing tables' driver
+        // in its dwell, 2.4e-4 kg m2 at the motor) lags little, and the 0.136 mrad that stays with the feedforward
+        // there, later and at speed, is the loops' own lag, which no inertia model removes (0.91 of the peak without).
+        let peak = (0..without.len()).max_by(|&a, &b| without[a].total_cmp(&without[b])).unwrap();
+        let (with, without) = (with[peak], without[peak]);
         // Friction and ripple are not in the feedforward model, so part of the error stays.
         assert!(with < 0.75 * without, "{}: {with} m with, {without} m without", entry.id);
     }

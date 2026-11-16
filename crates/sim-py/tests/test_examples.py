@@ -3,6 +3,7 @@ crates/sim-cli/tests/examples.rs)."""
 
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -27,8 +28,11 @@ def test_the_fmu_controller_example_follows_its_move(tmp_path):
     cli = ROOT / "target" / "release" / ("sim-cli.exe" if os.name == "nt" else "sim-cli")
     if not cli.exists():
         pytest.skip("build sim-cli and sim-fmi first: cargo build -p sim-cli -p sim-fmi --release")
-    fmu = tmp_path / "single-axis.fmu"
-    subprocess.run([str(cli), "fmu", "single-axis", "--out", str(fmu)], cwd=ROOT, check=True)
+    # The machine the example's own docstring exports (no machine name outside its crate: the architecture test).
+    example = (ROOT / "examples" / "fmu_controller.py").read_text(encoding="utf-8")
+    machine = re.search(r"sim-cli fmu (\S+) --out", example).group(1)
+    fmu = tmp_path / f"{machine}.fmu"
+    subprocess.run([str(cli), "fmu", machine, "--out", str(fmu)], cwd=ROOT, check=True)
     out = subprocess.run([sys.executable, str(ROOT / "examples" / "fmu_controller.py"), str(fmu)], cwd=ROOT,
                          capture_output=True, text=True, check=True).stdout.splitlines()
     # The inertia at the motor as docs/python.md works it out by hand: 6 kg (0.02/5)^2 + 0.26 kg (0.02/5)^2

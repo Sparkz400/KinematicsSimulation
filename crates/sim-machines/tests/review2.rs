@@ -448,7 +448,8 @@ fn a_changed_ratio_or_pulley_radius_does_not_tear_the_machine() {
 // d. Fewer cycle segments during a running cycle
 
 /// A cycle that loses segments while it runs: the segment index used to point past the end (a panic), and
-/// a cycle left without segments divided by zero. The cycle goes on within the segments it has, or ends.
+/// a cycle left without segments divided by zero. The cycle goes on within the segments it has, or ends; started again
+/// without segments it is refused, but on a machine that runs its cam.
 #[test]
 fn a_running_cycle_survives_losing_segments() {
     for entry in MACHINES.iter().copied() {
@@ -485,7 +486,9 @@ fn a_running_cycle_survives_losing_segments() {
         sim.run(3.0, |_| {});
         // The move under way was finished, and nothing follows it.
         assert!(!sim.control.busy() && sample(&sim).iter().all(|v| v.is_finite()), "{}", entry.id);
-        assert_eq!(sim.command(Command::StartCycle).err().map(|e| e.key), Some("error-no-cycle"));
+        // A machine that runs its cam (the cam is its cycle) starts it with segments or without.
+        let refused = if sim.machine.cam().is_some() { None } else { Some("error-no-cycle") };
+        assert_eq!(sim.command(Command::StartCycle).err().map(|e| e.key), refused, "{}", entry.id);
     }
 }
 

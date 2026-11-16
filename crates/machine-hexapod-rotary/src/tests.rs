@@ -242,10 +242,9 @@ fn the_default_cycle_passes_its_verdicts() {
 
 /// The default cycle's figures as they were before the speed work of 16 November 2026, recorded then on Windows, when
 /// the dynamics' forward kinematics started Newton from home moved by K (q - q_home) at every call. Now it starts from
-/// the last call's pose (`warm_motion`) and stops within the same tolerance, a change at the rounding of the pose,
-/// which the closed loop amplifies as on the hexapod (whose figures a rounding-level change of Newton's start moved
-/// by up to 7e-5): the warm start moved these by up to 3.9e-5 (motor 6's peak torque). Another platform's maths
-/// library moves them the same way. Hence 1e-3.
+/// a grid point's pose (`warm_motion`) and stops within the same tolerance, a change at the rounding of the pose, which
+/// the closed loop amplifies, as on other parallel machines (where a rounding-level change of Newton's start moved the
+/// figures by up to 7e-5). Another platform's maths library moves them the same way. Hence 1e-3.
 #[test]
 fn the_default_cycle_keeps_its_figures() {
     const BEFORE: [f64; 30] = [

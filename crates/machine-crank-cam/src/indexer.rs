@@ -278,7 +278,7 @@ impl Mechanism for Indexer {
             ("table.angle", "group-table", "quantity-position", "rad"),
             ("table.speed", "group-table", "quantity-speed", "rad/s"),
             ("table.acceleration", "group-table", "quantity-acceleration", "rad/s²"),
-            ("table.torque", "group-table", "quantity-table-torque", "N m"),
+            ("table.drive_torque", "group-table", "quantity-table-torque", "N m"),
             ("indexer.contact_force", "group-indexer", "quantity-contact-force", "N"),
             ("table.index_error", "group-table", "quantity-index-error", "m"),
             ("table.settling_time", "group-table", "quantity-settling-time", "s"),
@@ -317,8 +317,14 @@ impl Mechanism for Indexer {
         .collect()
     }
 
-    /// Seen from the front: the table at the origin with a mark per station turning with it, the driver beside it with
-    /// its crank (or cam) mark; the motor behind the driver.
+    /// The stations' fixtures and the parts on them: what turns with the table and can hit an obstacle (the table
+    /// itself is a cylinder, which no collision box stands for).
+    fn collision_parts(&self) -> &'static [&'static str] {
+        &["station", "payload"]
+    }
+
+    /// Seen from the front: the table at the origin with a mark and a fixture (with its part) per station turning with
+    /// it, the driver beside it with its crank (or cam) mark; the gearbox and the motor behind the driver.
     fn scene(&self, q: &[f64], rotors: &[f64], rotor_speeds: &[f64], out: &mut Scene) {
         let r = self.station_radius;
         let phi = self.motion(q[0])[0];
@@ -329,6 +335,14 @@ impl Mechanism for Indexer {
                 Part::new("table-mark", Shape::Box { size: [r, 0.004, 0.02] }, [0.0, -0.017, 0.0], [0.1, 0.1, 0.1])
                     .turned(-phi + self.step() * i as f64),
             );
+            let a = -phi + self.step() * i as f64;
+            let at = |y: f64| [0.85 * r * a.cos(), y, 0.85 * r * a.sin()];
+            let fixture = Part::new("station", Shape::Box { size: [0.05, 0.01, 0.05] }, at(-0.02), [0.6, 0.62, 0.66]);
+            out.parts.push(fixture.turned(a));
+            if self.attached && self.payload > 0.0 {
+                let part = Part::new("payload", Shape::Box { size: [0.04, 0.03, 0.04] }, at(-0.04), [0.2, 0.7, 0.3]);
+                out.parts.push(part.turned(a));
+            }
         }
         out.parts.push(Part::new("driver", Shape::Cylinder { radius: 0.08, length: 0.03 }, driver, [0.3, 0.32, 0.36]));
         out.parts.push(
@@ -340,6 +354,13 @@ impl Mechanism for Indexer {
             Shape::Cylinder { radius: 0.05, length: 0.12 },
             motor,
             [0.9, 0.45, 0.1],
+        ));
+        // The gearbox between motor and driver: the part that warms (`JointMachine::thermal_parts`).
+        out.parts.push(Part::new(
+            "gearbox",
+            Shape::Box { size: [0.1, 0.06, 0.1] },
+            [driver[0], 0.06, 0.0],
+            [0.25, 0.25, 0.28],
         ));
         out.parts.push(
             Part::new("rotor-bar", Shape::Box { size: [0.07, 0.004, 0.012] }, [motor[0], 0.19, 0.0], [0.1, 0.1, 0.1])
