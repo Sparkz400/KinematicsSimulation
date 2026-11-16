@@ -267,12 +267,20 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
     ),
     (
         "span",
-        "A free belt span between two points that hold it (pulley, idler, clamp), for its sideways mode (effects.belt_span_vibration).",
+        "A free belt span between two points that hold it (pulley, idler, clamp), for its sideways mode (effects.belt_span_vibration), and with its speed over ground for the belt's mass run by run.",
         &[
             ID,
             field("section", Kind::Ref("section"), true, "The section it is part of: its tension."),
             field("length_m", Kind::Number, true, "Length with every axis at 0, m."),
             field("axes", Kind::Coefficients("axis"), false, "How much longer it gets per metre of each axis."),
+            field(
+                "velocity_x",
+                Kind::Coefficients("axis"),
+                false,
+                "Its belt's speed over ground along x of the 3D view per unit speed of each axis. Given on every span (with velocity_y and velocity_z, 0 where left out), the spans together the whole belt, the belt's kinetic energy is summed run by run (effects.belt_mass) beyond the half of it on each pulley.",
+            ),
+            field("velocity_y", Kind::Coefficients("axis"), false, "As velocity_x, along y."),
+            field("velocity_z", Kind::Coefficients("axis"), false, "As velocity_x, along z."),
             POS,
         ],
     ),
@@ -779,6 +787,8 @@ pub struct SpanNode {
     pub section: usize,
     pub length: f64,
     pub axes: Vec<f64>,
+    /// Its belt's speed over ground along x, y and z per unit speed of each axis, where the file gives it.
+    pub velocity: Option<[Vec<f64>; 3]>,
 }
 
 pub struct BodyNode {
@@ -1456,11 +1466,19 @@ impl Netlist {
             if length <= 0.0 {
                 return Err(ConfigError::Invalid(node.at("length_m")));
             }
+            let named = ["velocity_x", "velocity_y", "velocity_z"];
+            let velocity = if named.iter().any(|name| node.get(name).is_some()) {
+                let [x, y, z] = named.map(|name| coefficients(node, name, &mut refs));
+                Some([x?, y?, z?])
+            } else {
+                None
+            };
             span_nodes.push(SpanNode {
                 id: id_of(node),
                 section,
                 length,
                 axes: coefficients(node, "axes", &mut refs)?,
+                velocity,
             });
         }
         let lean = lean_node(cfg, &leans, &axes, &bodies, &axis_nodes, &body_nodes, &mut refs)?;

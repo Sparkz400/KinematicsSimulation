@@ -1011,51 +1011,67 @@ pos = [900, 550]
 # The free spans (effects.belt_span_vibration), from the left clamp: section 1 runs clamp to upper idler (span_min_m
 # + z) and idler to motor A (span_min_m + x); section 2 motor A to lower idler, down the Z axis and up again
 # (span_min_m + stroke_z_m - z each), lower idler to motor B (span_min_m + stroke_x_m - x); section 3 motor B to idler
-# and idler to clamp.
+# and idler to clamp. Each with its belt's speed over ground per speed of X and Z (along x and z of the 3D view), so
+# that the belt's mass is summed run by run (see `belt_mass` in crates/machine-t-gantry/src/lib.rs): the runs at the
+# clamp move with it, (vx, vz); the upper runs at pulley A's surface speed vx + vz and B's vx - vz, the lower ones
+# back at -(vx + vz) and -(vx - vz); down the Z axis the belt passes the lower carriage idlers at 2 vx + vz and
+# 2 vx - vz, so it moves at (vx, 2 vx + vz) and (vx, vz - 2 vx).
 [[machine.span]]
 id = "span_1"
 section = "1"
 length_m = "geometry.span_min_m"
 axes = { z = 1 }
+velocity_x = { x = 1 }
+velocity_z = { z = 1 }
 
 [[machine.span]]
 id = "span_2"
 section = "1"
 length_m = "geometry.span_min_m"
 axes = { x = 1 }
+velocity_x = { x = 1, z = 1 }
 
 [[machine.span]]
 id = "span_3"
 section = "2"
 length_m = "geometry.span_min_m"
 axes = { x = 1 }
+velocity_x = { x = -1, z = -1 }
 
 [[machine.span]]
 id = "span_4"
 section = "2"
 length_m = 0.65
 axes = { z = -1 }
+velocity_x = { x = 1 }
+velocity_z = { x = 2, z = 1 }
 
 [[machine.span]]
 id = "span_5"
 section = "2"
 length_m = 0.65
 axes = { z = -1 }
+velocity_x = { x = 1 }
+velocity_z = { x = -2, z = 1 }
 
 [[machine.span]]
 id = "span_6"
 section = "2"
 length_m = 1.15
 axes = { x = -1 }
+velocity_x = { x = -1, z = 1 }
 
 [[machine.span]]
 id = "span_7"
 section = "3"
 length_m = 1.15
 axes = { x = -1 }
+velocity_x = { x = 1, z = -1 }
 
 [[machine.span]]
 id = "span_8"
 section = "3"
 length_m = "geometry.span_min_m"
 axes = { z = 1 }
+velocity_x = { x = 1 }
+velocity_z = { z = 1 }

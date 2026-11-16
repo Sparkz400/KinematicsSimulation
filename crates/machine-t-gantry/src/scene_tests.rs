@@ -152,24 +152,27 @@ fn the_mode_shape_is_an_eigenvector_of_the_elastic_model() {
 }
 
 /// Equilibrium plus 1e-3 times the shape moves the tool by 1e-3 m (`tool_state`) and, drawn as it is, the flange
-/// too. Drawn k times larger, only the lean is: the carriage's x is where it is, so the flange moves by
-/// 1e-3 (vx + k tip vu), not 1e-3 k.
+/// too. Drawn k times larger, only the sway and the lean are: the carriage's x is where it is, so the flange moves by
+/// 1e-3 (vx + k (vq + tip vu)), not 1e-3 k. The mode at (0.9, 0.05) is the frame's with the carriage on it (all four of
+/// x, z, q, u move); its Z travel changes the lean's lever, so the tool moves by 1e-3 to second order in the amplitude
+/// (3e-5 of it) and the drawn lean has the lever of the moved height.
 #[test]
 fn the_mode_shape_drawn_moves_the_flange_by_its_amplitude() {
     let m = TGantry::new(&ENTRY.config()).unwrap();
     let pose = [0.9, 0.05];
     let (_, shape) = m.mode_shape(&pose).unwrap();
+    assert!(shape[Q] != 0.0 && shape[Z] != 0.0, "{shape:?}");
     let (mut rest, mut torque) = (Vec::new(), [0.0; 2]);
     m.equilibrium(&pose, &mut rest, &mut torque);
     let moved: Vec<f64> = rest.iter().zip(&shape).map(|(s, v)| s + 1e-3 * v).collect();
     let (mut before, mut after, mut speed) = ([0.0; 2], [0.0; 2], [0.0; 2]);
     m.tool_state(&rest, &mut before, &mut speed);
     m.tool_state(&moved, &mut after, &mut speed);
-    assert!((after[0] - before[0] - 1e-3).abs() < 1e-12, "the tool moves {}", after[0] - before[0]);
-    let tip = m.flex_at(pose[1]).2;
+    assert!((after[0] - before[0] - 1e-3).abs() < 1e-7, "the tool moves {}", after[0] - before[0]);
+    let tip = m.flex_at(moved[Z]).2;
     for k in [1.0, 100.0] {
         let shift = part(&drawn(&m, &moved, k), "flange", 0).pos[0] - part(&drawn(&m, &rest, k), "flange", 0).pos[0];
-        let by_hand = 1e-3 * (shape[X] + k * tip * shape[U]);
+        let by_hand = 1e-3 * (shape[X] + k * (shape[Q] + tip * shape[U]));
         assert!((shift - by_hand).abs() < 1e-12, "x{k}: flange moves {shift}, by hand {by_hand}");
     }
 }

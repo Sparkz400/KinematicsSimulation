@@ -808,6 +808,12 @@ derivations):
   (`mech::ToothJump`); a pulley with a section on one side only (a drum) refuses the effect.
 - Span vibration (`machine.span`): each span's first sideways mode at its section's tension, against what the drives
   excite (`mech::span_frequency`).
+- The belt's mass run by run: where every span gives its belt's speed over ground per axis speed (`velocity_x`,
+  `velocity_y`, `velocity_z`, along the 3D view's axes) and the spans together are the whole belt (refused otherwise),
+  each run, L_s = L0_s + c_s . q long, moves at V_s v over ground, and with the frame's sway e du on top: the belt's
+  kinetic energy ½ mu Σ_s L_s |V_s v + e du|² replaces the half of it on each pulley in the axes' (and the frame's)
+  mass matrix, with Lagrange's speed terms, and its momentum and first moment are in the frame's momentum. The
+  T-gantry's file gives its spans so; its crate derives the same from its belt path (`belt_mass`).
 - The belt's mode (elastic model): the axes, and the frame where it sways, on the belt's stiffness with the pulleys
   held, K = Σ_s EA / L_s c_s c_s^T, against their mass matrix; the lowest is `resonance_hz` at a pose, so
   `effects.shaper_follows_pose` sets the shaper to it, and the app shows its shape (scaled to 1 m of tool travel).

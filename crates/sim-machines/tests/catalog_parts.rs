@@ -55,13 +55,19 @@ fn an_axis_by_name_gives_the_numbers_of_the_hand_written_exct_30() {
         ("ratings.belt_teeth_in_mesh", 0.0),
         ("ratings.pulley_max_torque_nm", 0.0),
         ("drive.peak_torque_nm", 0.0),
-        // Fitted again from the same formula and machine: 7.136 kg. The file's 7.16 kg was fitted by hand, to the 2 %
-        // within which `exct_30_config_agrees_with_the_catalogue` holds the torque.
-        ("mass.carriage_kg", 5e-3),
     ] {
         let (got, want) = (resolved.f64(path).unwrap(), by_hand.f64(path).unwrap());
         assert!(close(got, want, tolerance), "{path}: {got} against {want} by hand");
     }
+    // The carriage, fitted again from the same formula and machine at the middle of the strokes (x = 0.5 m, z = 0.125 m):
+    // 6.900 kg, and the belt's runs that move with it beyond the pulleys' lumps (the T-gantry's `belt_mass`, its X-Z term
+    // nil at x = 0.5 m), 8 x 0.09786 kg/m x (0.177 + 0.25 - 0.125) m = 0.2364 kg, which Festo's constant holds too: 7.136
+    // kg. The file's 7.16 kg (no belt runs then) was fitted by hand, to the 2 % within which
+    // `exct_30_config_agrees_with_the_catalogue` holds the torque.
+    let runs = 8.0 * resolved.f64("belt.mass_kg_m").unwrap() * (0.177 + 0.25 - 0.125);
+    let carriage = resolved.f64("mass.carriage_kg").unwrap();
+    assert!((carriage - 6.900).abs() < 1e-3 && (runs - 0.2364).abs() < 1e-4, "{carriage} kg, runs {runs} kg");
+    assert!(close(carriage + runs, by_hand.f64("mass.carriage_kg").unwrap(), 5e-3), "{carriage} + {runs} kg");
     assert!(close(resolved.f64("belt.mass_kg_m").unwrap(), (80.0 + 25.0 * 5.0 / 7.0) * 1e-3, 1e-9));
     assert_eq!(
         resolved.f64s("ratings.belt_tooth_load_n_cm").unwrap(),

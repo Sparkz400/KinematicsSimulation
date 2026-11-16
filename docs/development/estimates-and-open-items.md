@@ -44,13 +44,20 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 Every fix was compile-checked only. The whole suite is being run once after the merge; until its
 result is in, treat **every number below as unverified**.
 
-- **T-gantry belt mass, run by run** (`machine-t-gantry/src/lib.rs`: `belt_mass`, `belt_speed_terms`).
-  The implementer's derivation gives a cross term 2·μ·(2x − sx)·vx·vz in the kinetic energy; the audit
-  stated 4·μ. One of the two is wrong. Energy conservation of the lossless model after this change has
-  not been shown.
-- **T-gantry modes with the frame** (`modal`): expected 18.81 / 30.77 / 78.51 / 119.46 Hz at
-  (0.9, 0.05) and 20.64 / 53.91 / 83.05 / 206.52 Hz at (0.5, 0.25) from the audit's linearisation; the
-  new code holds the pulleys and leaves the belt's own mass out of the mass matrix.
+- **T-gantry belt mass, run by run** (`machine-t-gantry/src/lib.rs`: `belt_mass`, `belt_sway`,
+  `elastic_mass`): run and settled. Derived from the belt path run by run (in the code comment): the
+  cross term in the kinetic energy is 2·μ·(2x − sx)·vx·vz (the audit's 4·μ is that of 2T/μ), the X
+  coefficient μ·(L_tot + 8(s + sz − z)); with the frame the whole belt sways with it. The lossless model
+  keeps its energy to at most 8.8e-9 of the motors' power (rigid; with idlers and chain; elastic; elastic
+  with idlers, chain, tooth stiffness, Z bending, beam sag); the machine file sums the same from its
+  spans' speeds (`machine.span` velocity_x/_z, general for any routing); base and frame agree to 5e-15 m;
+  the SciPy reference has the terms and was regenerated.
+- **T-gantry modes with the frame** (`modal`): run and settled. They equal the eigenvalues of the
+  linearised derivatives with the pulleys held (K v = ω² M v to 1e-6), now with the belt's runs in M:
+  18.74 / 30.67 / 76.04 / 116.30 Hz at (0.9, 0.05) and 20.53 / 53.22 / 83.05 / 200.98 Hz at (0.5, 0.25);
+  with the belt's mass at 0 they are the audit's 18.81 / 30.77 / 78.51 / 119.46 and
+  20.64 / 53.91 / 83.05 / 206.52 Hz. Only modes that move the tool are reported; the input shaper takes
+  the lowest, the second shaper the next.
 - **Field-weakening braking runaway** (`drive.rs`, `current_control`): fixed by a different route than
   planned; the original case (−19.1 N m at 42.5 A near 400 rad/s with saturation off) was never
   reproduced before or after.
@@ -80,7 +87,6 @@ result is in, treat **every number below as unverified**.
 
 | What the model leaves out | Where | Size of the error | Why it was left | Closing it |
 | --- | --- | --- | --- | --- |
-| Feed-forward of the T-gantry has the belt's mass terms but not its speed terms | `machine-t-gantry/src/lib.rs` (`feedforward_torque`) | small (belt mass 0.1 kg/m) | The method takes no velocity | Use the moving feed-forward where it exists |
 | Pre-existing estimates the audit did not judge: tooth-jump factor, brake deflection and slip times, the efficiency fade constant 0.5 W, placeholder drive currents in shipped configs | `mech.rs`, shipped `default.toml` files | unknown | Outside the audit's reach without measurements | Measure, or mark each in its config comment |
 
 ## 6. Documents that do not match the program
