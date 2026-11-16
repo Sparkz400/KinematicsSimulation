@@ -125,9 +125,15 @@ fn a_stream_of_setpoints_at_the_speed_limit_is_followed() {
             // of 0.3 v_max per 10 ms, ten times an axis's limit. On a heavy axis (the arm on a track: 130 kg at 30 m/s^2,
             // its drive near its peak torque) the energy that brakes back then charges the DC links beyond their trip
             // level and the drives go off. Whether the braking resistors take a cycle's energy is the DC link verdicts'
-            // question, not this one's (the timing of the stream): the jittered runs have the DC links off.
+            // question, not this one's (the timing of the stream): the jittered runs have the DC links off. So do the
+            // others where the axis takes longer than an interval to reach the stream's speed: the stream starts with a
+            // step of the speed, which the axis follows behind and then catches up, faster than the stream, and brakes
+            // back (a crane's bridge, 985 kg at 0.4 m/s2: from 1.26 m/s to 0.8 m/s in 0.1 s, 4.7 kW into its 3 kW
+            // braking resistor).
             let mut cfg = cfg.clone();
-            if jitter > 0 && cfg.get("effects.dc_link").is_ok() {
+            let axis = (entry.build)(&cfg).unwrap().axes()[0].clone();
+            let stepped = axis.max_vel / axis.max_acc > interval;
+            if (jitter > 0 || stepped) && cfg.get("effects.dc_link").is_ok() {
                 cfg.set_text("effects.dc_link = false").unwrap();
             }
             let mut sim = Sim::new(entry, &cfg).unwrap();

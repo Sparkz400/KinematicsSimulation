@@ -258,7 +258,12 @@ fn with_via_point(entry: &MachineEntry) -> Config {
     let at = |target: &[f64]| {
         middle.iter().zip(target).zip(machine.axes()).all(|((m, t), a)| (m - t).abs() < 1e-9 * (a.max - a.min))
     };
-    let between = machine.axes().len() > 1 || (middle[0] - last[0]) * (first[0] - middle[0]) > 0.0;
+    // On one axis, and on every axis where the cycle has no corner of its own (every segment dwells: a crane's short
+    // cycle in a corner of its runway), the middle has to lie between the last target and the first.
+    let own_corner = segments.iter().any(|s| s.get("dwell_s").and_then(|d| d.as_float()) == Some(0.0));
+    let turns = (0..middle.len()).any(|i| (middle[i] - last[i]) * (first[i] - middle[i]) < 0.0);
+    let between =
+        (machine.axes().len() > 1 || (middle[0] - last[0]) * (first[0] - middle[0]) > 0.0) && (own_corner || !turns);
     if (0..segments.len()).any(|k| at(&target(k))) || !between {
         middle = first.iter().zip(&last).map(|(f, l)| 0.5 * (f + l)).collect();
     }
@@ -516,8 +521,11 @@ const UNREAD: [(usize, &str); 3] =
 /// the flying saw never gets fast enough for the voltage limit; the disc cam's cycle stays within the weak drive's torque.
 /// And here, where the bus gives three quarters of the default cycle's top back EMF (`demanding`): the SCARA of parallel
 /// arms, whose weak drive moves it slower than its default cycle, never meets the voltage limit, so neither that switch
-/// nor field weakening changed anything within a cycle (14 November 2026).
-const CANNOT_ACT: [(usize, &str); 9] = [
+/// nor field weakening changed anything within a cycle (14 November 2026). A crane's (31) weak drive keeps 1.5
+/// times the hoist's holding torque, 7.8 N m, for its bridge and trolley too, which its short positioning cycle (0.2 m
+/// at 0.4 m/s2) asks some 0.6 N m of (16 November 2026).
+const CANNOT_ACT: [(usize, &str); 10] = [
+    (31, "effects.torque_limit"),
     (17, "effects.torque_limit"),
     (17, "effects.voltage_limit"),
     (17, "effects.field_weakening"),
@@ -1687,9 +1695,12 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     let [summary, motors, checks] = &tables[..] else { panic!("{} tables", tables.len()) };
     let slow = number(&row(summary, "Duration [s]")[0]);
     // The app plans from where its machine stands, a few micrometres from the config's start pose, so
-    // the plan can be a cycle longer and what depends on the first milliseconds differs in the last digits.
+    // the plan can be a cycle longer and what depends on the first milliseconds differs in the last digits. And the
+    // table rounds: to 10 ms from 10 s on (a crane's 14.236 s shows as 14.24).
+    let shown = &row(summary, "Duration [s]")[0];
+    let rounding = 0.5 * 10f64.powi(-(shown.split('.').nth(1).map_or(0, str::len) as i32));
     assert!(
-        (slow - load.duration).abs() < 2e-3 && load.duration > 0.5,
+        (slow - load.duration).abs() < 2e-3 + rounding && load.duration > 0.5,
         "{}: {} s in {summary:?}",
         entry.id,
         load.duration
@@ -1833,7 +1844,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     model.run_analysis(Analysis::Path);
     wait_for_analysis(&mut model);
     assert!(
-        (number(&row(&model.path_tables()[0], "Duration [s]")[0]) - load.duration).abs() < 2e-3,
+        (number(&row(&model.path_tables()[0], "Duration [s]")[0]) - load.duration).abs() < 2e-3 + rounding,
         "{}: {:?}",
         entry.id,
         model.path_tables()[0]
@@ -1928,7 +1939,10 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     model.messages.clear();
     model.set_speed(20.0);
     model.command(Command::MoveTo(ends.clone()));
-    simulate(&mut model, 4.0);
+    // 4 s, or where an axis takes longer over its whole stroke at its limits (a crane's bridge: 9 m at 0.8 m/s), that.
+    let stroke = axes.iter().map(|a| (a.max - a.min) / a.max_vel + a.max_vel / a.max_acc + a.max_acc / a.max_jerk);
+    let stroke = stroke.fold(4.0, f64::max);
+    simulate(&mut model, stroke);
     // To 1 mm, or the machine's settling tolerance where that is wider: the palletiser's arms at full reach stand
     // 1.8 mm off with the twist of their gears, which the encoders do not see (its tolerance is 4 mm for that).
     let near = entry.config().f64("ratings.settling_tolerance_m").map_or(1e-3, |t| t.max(1e-3));
@@ -1955,7 +1969,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
         (model.inputs.path_file, model.inputs.time_optimal) = (file, false);
         model.run_analysis(Analysis::Path);
         wait_for_analysis(&mut model);
-        simulate(&mut model, 4.0);
+        simulate(&mut model, stroke);
         assert!(
             (latest(&model, &position) - to[0]).abs() < near,
             "{}: {name}: the machine stands at {} ({:?})",

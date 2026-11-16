@@ -225,7 +225,7 @@ fn sway_after(from: [f64; 3], to: [f64; 3], edits: &[&str]) -> f64 {
     while sim.control.busy() {
         sim.step();
     }
-    // The longest shaper here, ZVD at a 4.5 m rope, spans one period, 4.3 s.
+    // The longest shaper here, ZV at a 4.5 m rope, spans half a period, 2.1 s; ZVD's whole one, 4.3 s.
     sim.run(4.5, |_| {});
     let (mut sample, mut largest) = (Vec::new(), 0f64);
     sim.run(4.0, |s| {
@@ -236,11 +236,12 @@ fn sway_after(from: [f64; 3], to: [f64; 3], edits: &[&str]) -> f64 {
 }
 
 /// The input shaper against the sway. A travel at the travel height (a 2 m rope, 0.35242 Hz): unshaped the load swings
-/// on after the trolley stops; shaped (ZVD) less than a tenth of that is left. Then the empty hook's way back, which
-/// hoists from a 4 m rope to a 2 m one while it travels: the sway period falls from 4.01 s to 2.84 s under the move.
-/// A shaper that follows the rope's length (effects.shaper_follows_pose, the shipped setting) leaves the least, under a
-/// tenth of the unshaped sway; one set for the length at either end of the move leaves three times as much or more
-/// (measured: unshaped 0.434 m, following 0.012 m, set for the end 0.047 m, for the start 0.041 m).
+/// on after the trolley stops; shaped (the shipped ZV) less than a tenth of that is left. Then the empty hook's way back,
+/// which hoists from a 4 m rope to a 2 m one while it travels: the sway period falls from 4.01 s to 2.84 s under the
+/// move. A shaper that follows the rope's length (effects.shaper_follows_pose, the shipped setting) leaves the least,
+/// under a tenth of the unshaped sway; one set for the length at either end of the move leaves three times as much or
+/// more (measured with ZV: unshaped 0.434 m, following 0.017 m, set for the end 0.124 m, for the start 0.105 m; with
+/// ZVD 0.012, 0.047 and 0.041 m).
 #[test]
 fn the_shaper_cancels_the_sway_and_following_the_rope_length_beats_a_fixed_period() {
     let travel =

@@ -256,9 +256,13 @@ fn setpoint_steps(entry: &MachineEntry, change: Option<&str>) -> (f64, f64, Sim)
         last = sim.control.set_pos[0];
         demand = sim.control.drives.iter().fold(demand, |d, drive| d.max(drive.torque_demand.abs()));
     };
-    // 0.4 s in, or as soon as the first axis cruises where a move is shorter (the delta's 3 m/s over a metre).
+    // 0.4 s in, or as soon as the first axis cruises where a move is shorter (the delta's 3 m/s over a metre); where the
+    // axis takes longer to reach half its speed limit (a crane's bridge, 0.8 m/s at 0.4 m/s2), until it has.
     let v_max = sim.machine.axes()[0].max_vel;
-    while sim.time() - begun < 0.4 && !(sim.time() - begun > 0.1 && sim.control.set_vel[0] >= v_max * (1.0 - 1e-9)) {
+    let slow = |sim: &Sim| sim.control.set_vel[0] <= 0.5 * v_max && sim.control.busy();
+    while (sim.time() - begun < 0.4 || slow(&sim))
+        && !(sim.time() - begun > 0.1 && sim.control.set_vel[0] >= v_max * (1.0 - 1e-9))
+    {
         sim.step();
         watch(&sim);
     }
@@ -269,6 +273,13 @@ fn setpoint_steps(entry: &MachineEntry, change: Option<&str>) -> (f64, f64, Sim)
         sim.reconfigure(entry, &changed).unwrap();
     }
     while sim.control.busy() {
+        sim.step();
+        watch(&sim);
+    }
+    // Until the shaper's tail has arrived (half a crane's sway period, 1.4 s), then 0.2 s on: a changed shaper is taken
+    // a few cycles after it, once its store holds nothing but where the plan stands.
+    let arrived = sim.time() + 10.0;
+    while sim.control.set_pos != sim.control.planned_pos() && sim.time() < arrived {
         sim.step();
         watch(&sim);
     }

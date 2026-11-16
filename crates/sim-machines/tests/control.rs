@@ -73,8 +73,13 @@ fn with_via_point(entry: &MachineEntry) -> Config {
     let at = |target: &[f64]| {
         middle.iter().zip(target).zip(machine.axes()).all(|((m, t), a)| (m - t).abs() < 1e-9 * (a.max - a.min))
     };
-    // On one axis the middle has to lie between the last target and the first, or the pass turns back there.
-    let between = machine.axes().len() > 1 || (middle[0] - last[0]) * (first[0] - middle[0]) > 0.0;
+    // On one axis the middle has to lie between the last target and the first, or the pass turns back there. So on
+    // every axis where the cycle has no corner of its own to round (every segment dwells), or blending would have
+    // none: a crane's short cycle in a corner of its runway, below the sheave, far from the middle of its workspace.
+    let own_corner = segments.iter().any(|s| s.get("dwell_s").and_then(|d| d.as_float()) == Some(0.0));
+    let turns = (0..middle.len()).any(|i| (middle[i] - last[i]) * (first[i] - middle[i]) < 0.0);
+    let between =
+        (machine.axes().len() > 1 || (middle[0] - last[0]) * (first[0] - middle[0]) > 0.0) && (own_corner || !turns);
     if (0..segments.len()).any(|k| at(&target(k))) || !between {
         middle = first.iter().zip(&last).map(|(f, l)| 0.5 * (f + l)).collect();
     }

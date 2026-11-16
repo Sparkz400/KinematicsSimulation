@@ -310,7 +310,7 @@ fn a_bad_axis_index_is_refused() {
 per_machine!(step_bode_and_tuning_write_csv_for_every_machine, step_bode_and_tuning);
 
 fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
-    {
+    let gear_held = {
         let axes = sim_components::Sim::new(entry, &entry.config()).unwrap().machine.axes().len();
         let table = |args: &[&str]| {
             let out = cli(args);
@@ -393,7 +393,12 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
                 );
             }
         }
-    }
+        // A loop without a gain crossover in the band is one its gear holds at rest, as the tuning's axis without a band
+        // above: a crane's hoist, its 92 % gearbox under the 265 kg, whose efficiency faded in below 0.5 W
+        // is a damper of 2601^2 ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope, 4.5 N m s/rad at the motor, which the
+        // test torque (0.32 N m) does not break away from: |L| some 0.045, the loop not seen.
+        rows.iter().any(|row| row[2] == "NaN")
+    };
     // An unstable loop says so: every machine with a velocity gain of 0.3 N m s/rad (7.5 to 12 times the shipped one).
     // (12 times the shipped one where 0.3 would be less than 7.5 times it: the delta's 0.25 and the screw's, rack's, arms' and table's;
     // at 10 times the screw's loop is still stable, by 6 degrees.)
@@ -410,6 +415,11 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
                 format!("{p}={}", if 7.5 * shipped < 0.3 { 0.3 } else { 12.0 * shipped })
             })
             .collect();
+        // Where a gear holds a loop at rest, its loops are judged without the gears' losses, as the tuning's band is.
+        let mut sets = sets;
+        if gear_held {
+            sets.push("effects.gearbox_efficiency=false".into());
+        }
         let out =
             cli(&[&["margins", entry.id][..], &sets.iter().flat_map(|s| ["--set", s.as_str()]).collect::<Vec<_>>()]
                 .concat());
