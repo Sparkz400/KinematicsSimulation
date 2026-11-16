@@ -152,7 +152,14 @@ pub struct Overlays {
     pub scale: Option<f64>,
     /// The error the path may have, in m: points further off the plan are drawn red, and the scale marks it.
     pub tolerance: Option<f64>,
+    /// The view's controls open (`true`) or folded to their first row; `None` until the user picks one: open where the
+    /// view is at least `CONTROLS_OPEN_FROM` tall, so that at 1280 x 720 they leave the machine in sight.
+    pub controls: Option<bool>,
 }
+
+/// The view's height in logical pixels from which its controls start open (`Overlays::controls`): opened, their rows
+/// take some 200 pixels, half of the view at 1280 x 720 (418 pixels tall) and a third at 1600 x 900 (598).
+pub const CONTROLS_OPEN_FROM: f32 = 500.0;
 
 /// What the travelled path is coloured by: cyan as everything travelled, or by a value along it (`trail_color`).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -188,6 +195,8 @@ pub struct ViewInfo<'a> {
     pub compare: (bool, &'a str),
     /// The view is being recorded (`sim_app::video`).
     pub recording: bool,
+    /// The controls show all their rows, not only the first (`Overlays::controls`).
+    pub open: bool,
 }
 
 /// The timeline under the 3D view: which of the recorded scenes the view draws, and whether they replay.
@@ -588,7 +597,15 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
             {
                 actions.push(Action::Record(!view.recording));
             }
+            let fold = if view.open { "ui-view-less" } else { "ui-view-more" };
+            if ui.add(egui::Button::new(tr(fold)).selected(view.open)).on_hover_text(tr("ui-view-more-hint")).clicked()
+            {
+                actions.push(Action::Overlays(Overlays { controls: Some(!view.open), ..overlays }));
+            }
         });
+        if !view.open {
+            return;
+        }
         ui.horizontal_wrapped(|ui| {
             let mut shown = overlays;
             ui.checkbox(&mut shown.xray, tr("ui-view-xray")).on_hover_text(tr("ui-view-xray-hint"));
@@ -707,6 +724,15 @@ pub fn view_controls(ui: &mut Ui, model: &Model, overlays: Overlays, view: ViewI
             actions.push(Action::Exaggeration(factor));
         }
     });
+}
+
+/// A wrapped row goes on to the next line before a list `width` wide and its name, where the line has no room for both:
+/// a wrapped row does not wrap a list (a combo box), which ran past the panel's edge (the motor search's lists, at any
+/// window size, since the panels no longer widen to what they hold). 120 pixels for the name and the list's arrow.
+fn room_for_list(ui: &mut Ui, width: f32) {
+    if ui.available_size_before_wrap().x < width + 120.0 {
+        ui.end_row();
+    }
 }
 
 /// A row of tabs: the one shown filled, the others plain.
@@ -1916,6 +1942,7 @@ fn compare(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
     });
     ui.horizontal_wrapped(|ui| {
         let effect_label = |name: &str| tr(&format!("effect-{name}"));
+        room_for_list(ui, 180.0);
         ui.label(tr("ui-effects-effect"));
         ComboBox::from_id_salt("compare-effect")
             .selected_text(effect_label(&inputs.compare_effect))
@@ -1925,6 +1952,7 @@ fn compare(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
                     ui.selectable_value(&mut inputs.compare_effect, path["effects.".len()..].to_string(), tr(&key));
                 }
             });
+        room_for_list(ui, 140.0);
         ui.label(tr("ui-effects-quantity"));
         ComboBox::from_id_salt("compare-quantity").selected_text(tr(&inputs.compare_quantity)).width(140.0).show_ui(
             ui,

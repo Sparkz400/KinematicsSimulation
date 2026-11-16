@@ -437,9 +437,15 @@ fn camera(d: &mut Driver) -> Transform {
 /// The corners of the machine's box that the camera does not see: outside Bevy's default field of view (45 degrees
 /// up and down, the view's width across) or behind it. Worked out here from the camera's transform alone.
 fn corners_out_of_sight(d: &mut Driver) -> Vec<Vec3> {
+    corners_beyond(d, 0.0)
+}
+
+/// `corners_out_of_sight` with `room` logical pixels at the top and the bottom of the view counted as out of sight.
+fn corners_beyond(d: &mut Driver, room: f32) -> Vec<Vec3> {
     let (low, high) = d.state().bounds.expect("the machine's box");
     let [left, top, right, bottom] = d.state().view_rect;
     let aspect = (right - left) / (bottom - top);
+    let free = (bottom - top - 2.0 * room) / (bottom - top);
     let camera = camera(d);
     let tan = (std::f32::consts::FRAC_PI_4 / 2.0).tan();
     (0..8)
@@ -447,7 +453,7 @@ fn corners_out_of_sight(d: &mut Driver) -> Vec<Vec3> {
         .filter(|corner| {
             let p = camera.rotation.inverse() * (*corner - camera.translation);
             let depth = -p.z;
-            !(depth > 0.0 && (p.x / depth).abs() <= tan * aspect + 1e-4 && (p.y / depth).abs() <= tan + 1e-4)
+            !(depth > 0.0 && (p.x / depth).abs() <= tan * aspect + 1e-4 && (p.y / depth).abs() <= tan * free + 1e-4)
         })
         .collect()
 }
@@ -600,11 +606,12 @@ fn the_view_presets_put_the_camera_where_they_say_with_the_machine_in_view() {
         let camera = camera(&mut d);
         let seen_from = (camera.translation - d.state().orbit.target).normalize();
         assert!(seen_from.distance(expected) < 1e-4, "{key}: from {seen_from}, expected {expected}");
-        assert_eq!(corners_out_of_sight(&mut d), Vec::<Vec3>::new(), "{key}");
-        // Framed: zoomed in a little, a corner leaves the view.
+        // Clear of the folded controls on top and the timeline below (`OVERLAY_ROOM`).
+        assert_eq!(corners_beyond(&mut d, OVERLAY_ROOM), Vec::<Vec3>::new(), "{key}");
+        // Framed: zoomed in a little, a corner goes under them.
         d.state_mut().orbit.distance *= 0.8;
         d.camera_still();
-        assert!(!corners_out_of_sight(&mut d).is_empty(), "{key}: not framed but far off");
+        assert!(!corners_beyond(&mut d, OVERLAY_ROOM).is_empty(), "{key}: not framed but far off");
     }
 }
 
@@ -1223,4 +1230,74 @@ fn the_loop_measurement_shows_progress_and_is_cancelled() {
     assert!(d.has(Role::Button, &run));
     d.frames(60);
     assert!(d.state().model.loop_response.result.is_none() && d.messages().len() == said, "{:?}", d.messages());
+}
+
+/// How much of the 3D view the things floating on it (its controls, the timeline, the tool view) leave free, as a share
+/// of its area: what they cover, each counted alone, which counts any overlap twice and so errs on the covered side.
+fn view_free(d: &Driver) -> f32 {
+    let view = d.regions()[4];
+    let covered: f32 =
+        d.state().covered.iter().map(|r| r.intersect(view)).filter(|r| r.is_positive()).map(|r| r.area()).sum();
+    1.0 - covered / view.area()
+}
+
+/// At 1280 x 720, in either language, with no result and with the cycle's: every tab of either panel leaves the panels
+/// at their widths (setup 270, tools 430 pixels; a tools tab widened its panel by up to 160 pixels), and the view's
+/// controls start folded to one row, so that what floats on the view (controls and timeline) leaves at least 80 % of
+/// it free. Opened, they take more; folded again, as little as before.
+#[test]
+fn at_1280_by_720_the_panels_keep_their_widths_and_the_view_stays_free() {
+    for lang in ["en", "de"] {
+        let mut d = Driver::of(MACHINES[0], lang);
+        d.resize(1280.0, 720.0);
+        d.button_of("ui-start-cycle");
+        d.wait("the timeline on the view", |d| d.state().recorded.len() > 2 && d.state().covered.len() == 2);
+        let setup = ["ui-motion", "ui-effects", "ui-parameters", "ui-config"];
+        let tools = [
+            "ui-analysis",
+            "ui-effect-views",
+            "ui-search",
+            "ui-path",
+            "ui-trace",
+            "ui-sweep-tab",
+            "ui-tuning",
+            "ui-runs",
+            "ui-views",
+        ];
+        let mut problems = Vec::new();
+        for result in [false, true] {
+            if result {
+                d.tab("ui-analysis");
+                let label = d.tr("ui-analysis-run-cycle");
+                let tools = d.regions()[TOOLS];
+                let run = d.find_where("run the cycle", |w| {
+                    w.role == Role::Button && w.label == label && tools.contains_rect(w.rect)
+                });
+                d.click_at(Vec2::new(run.rect.center().x, run.rect.center().y));
+                d.wait_result("the cycle's result", |d| d.state().model.cycle_report.is_some());
+            }
+            for (s, t) in setup.iter().cycle().zip(&tools) {
+                d.tab(s);
+                d.tab(t);
+                let [_, left, right, _, _] = d.regions();
+                let free = view_free(&d);
+                if (left.width() - 270.0).abs() > 0.5 || (right.width() - 430.0).abs() > 0.5 || free < 0.8 {
+                    problems.push(format!(
+                        "{lang} {s} {t} result {result}: setup {} tools {} free {free:.2}",
+                        left.width(),
+                        right.width()
+                    ));
+                }
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+        let folded = view_free(&d);
+        d.button_of("ui-view-more");
+        d.find(Role::CheckBox, &d.tr("ui-view-xray"));
+        d.settle();
+        assert!(view_free(&d) < folded - 0.05, "{lang}: opened, {} free; folded, {folded}", view_free(&d));
+        d.button_of("ui-view-less");
+        d.settle();
+        assert!((view_free(&d) - folded).abs() < 1e-3, "{lang}: folded again, {} free", view_free(&d));
+    }
 }

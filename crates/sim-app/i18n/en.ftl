@@ -586,3 +586,7 @@ ui-loop-phase = Phase response
 ui-loop-nyquist = Nyquist plot of the open loop, where |L| is at most 4
 ui-loop-critical = Critical point -1
 ui-loop-unit-circle = Unit circle
+
+ui-view-more = More…
+ui-view-less = Less
+ui-view-more-hint = Shows or hides the view's other controls: what is drawn besides the parts, the mode, the compared run, the path's colours and the exaggeration. In a small window they start hidden, so that the machine stays in sight.

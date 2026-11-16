@@ -586,3 +586,7 @@ ui-loop-phase = Phasengang
 ui-loop-nyquist = Ortskurve des offenen Kreises, wo |L| höchstens 4 ist
 ui-loop-critical = Kritischer Punkt -1
 ui-loop-unit-circle = Einheitskreis
+
+ui-view-more = Mehr…
+ui-view-less = Weniger
+ui-view-more-hint = Zeigt oder verbirgt die übrigen Bedienelemente der Ansicht: was außer den Teilen gezeichnet wird, die Eigenform, den Vergleichslauf, die Farben der Bahn und die Überhöhung. In einem kleinen Fenster sind sie zuerst verborgen, damit die Maschine sichtbar bleibt.

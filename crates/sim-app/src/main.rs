@@ -95,6 +95,8 @@ struct State {
     encodings: Vec<video::Encoding>,
     /// What the plot pictures saved say, from the screenshot's observer, for the messages.
     notes: std::sync::Arc<std::sync::Mutex<Vec<Message>>>,
+    /// What floats over the 3D view this frame: its controls, the timeline and the tool view.
+    covered: Vec<egui::Rect>,
 }
 
 /// A second run beside the machine's with one effect switched the other way, drawn as a see-through ghost.
@@ -117,6 +119,12 @@ struct Ghost {
 
 /// The ghost's colour: a light neutral grey, see-through, none of the palette's meaning colours.
 const GHOST: Color = Color::srgba(0.86, 0.88, 0.92, 0.25);
+
+/// The view's height in logical pixels the camera leaves free of the machine at the top and at the bottom when it
+/// frames it (`fit_distance`): the folded controls' row on top and the timeline below are each some 36 pixels tall and
+/// 10 from the edge. Framed in the whole height, a tall machine (the six-axis arm) had its top under the controls and
+/// its base under the timeline.
+const OVERLAY_ROOM: f32 = 56.0;
 
 /// The planned path's line (`draw_paths`): wider than the travelled one and a little behind it, so that both show
 /// where the tool follows the plan. Drawn as the other lines, at the same depth the travelled line lost the depth
@@ -235,6 +243,7 @@ fn add_app(app: &mut App, model: Model) {
             recording: None,
             encodings: Vec::new(),
             notes: Default::default(),
+            covered: Vec::new(),
         })
         .add_plugins(EguiPlugin::default())
         .init_gizmo_group::<PathGizmos>()
@@ -1036,11 +1045,11 @@ fn fill_obstacles(
 }
 
 /// How far back the camera must stand, looking along `rotation` at `target`, for the box from `low` to `high`
-/// to fill the view with a little room: each corner within the vertical field of view of 45 degrees and the
-/// horizontal one the view's `aspect` gives.
-fn fit_distance(low: Vec3, high: Vec3, target: Vec3, rotation: Quat, aspect: f32) -> f32 {
-    let tan_v = std::f32::consts::FRAC_PI_8.tan();
-    let tan_h = tan_v * aspect;
+/// to fill the view with a little room: each corner within the share `free` of the vertical field of view of 45
+/// degrees (`OVERLAY_ROOM`) and within the horizontal one the view's `aspect` gives.
+fn fit_distance(low: Vec3, high: Vec3, target: Vec3, rotation: Quat, aspect: f32, free: f32) -> f32 {
+    let tan_h = std::f32::consts::FRAC_PI_8.tan() * aspect;
+    let tan_v = std::f32::consts::FRAC_PI_8.tan() * free;
     let into_camera = rotation.inverse();
     let corners =
         (0..8).map(|i| Vec3::new([low.x, high.x][i & 1], [low.y, high.y][(i >> 1) & 1], [low.z, high.z][i >> 2]));
@@ -1164,7 +1173,8 @@ fn orbit_camera(
         && right > left
         && bottom > top
     {
-        let fit = fit_distance(low, high, orbit.target, rotation, aspect);
+        let free = ((bottom - top - 2.0 * OVERLAY_ROOM) / (bottom - top)).max(0.5);
+        let fit = fit_distance(low, high, orbit.target, rotation, aspect, free);
         if state.fit {
             orbit.distance = fit;
             state.fit = false;
@@ -1176,6 +1186,18 @@ fn orbit_camera(
     }
     camera.translation = orbit.target + rotation * Vec3::new(0.0, 0.0, orbit.distance);
     camera.rotation = rotation;
+}
+
+/// A side panel's contents laid out in its width, never wider. A panel is as wide as what it holds: a row a little too
+/// wide in one tab (a list at the end of a wrapped row) widened the tools panel by up to 160 pixels, taken from the
+/// view, and it stayed so. Here the contents go into a child of the panel's width that takes no room of its own; what
+/// does not fit is cut off at the edge, which the window tests look for
+/// (`nothing_is_cut_off_or_overlaps_in_either_language`).
+fn in_width<R>(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let width = ui.available_width();
+    let mut inside = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()));
+    ui.allocate_space(egui::vec2(width, 0.0));
+    contents(&mut inside)
 }
 
 fn panels(
@@ -1228,7 +1250,7 @@ fn panels(
         .resizable(true)
         .default_size(270.0)
         .frame(side)
-        .show(&mut root, |ui| ui::setup(ui, &state.model, state.panels, &mut actions))
+        .show(&mut root, |ui| in_width(ui, |ui| ui::setup(ui, &state.model, state.panels, &mut actions)))
         .response
         .rect;
     let scene = shown(&state.model, &state.recorded, state.timeline);
@@ -1237,17 +1259,19 @@ fn panels(
         .default_size(430.0)
         .frame(side)
         .show(&mut root, |ui| {
-            let ghost = state.ghost.is_some();
-            ui::tools(
-                ui,
-                &state.model,
-                scene,
-                state.panels,
-                &mut actions,
-                state.scroll,
-                ghost,
-                state.overlays.tolerance,
-            )
+            in_width(ui, |ui| {
+                let ghost = state.ghost.is_some();
+                ui::tools(
+                    ui,
+                    &state.model,
+                    scene,
+                    state.panels,
+                    &mut actions,
+                    state.scroll,
+                    ghost,
+                    state.overlays.tolerance,
+                )
+            })
         })
         .response
         .rect;
@@ -1279,6 +1303,7 @@ fn panels(
                     range: trail_range(&state.trail_points, state.overlays.trail),
                     compare: (state.ghost.is_some(), &state.compare_effect),
                     recording: state.recording.is_some(),
+                    open: state.overlays.controls.unwrap_or(view_bottom - view_top >= ui::CONTROLS_OPEN_FROM),
                 };
                 // Within the view: in German in a narrow window its rows ran over the tools panel; now they wrap.
                 let room = egui::vec2((right.left() - left.right() - 36.0).max(100.0), ui.available_height());
@@ -1366,8 +1391,8 @@ fn panels(
         .collect();
     // Top to bottom, each label where it is free of those placed before, of the view's controls and of the timeline.
     labels.sort_by(|a, b| a.0.y.total_cmp(&b.0.y));
-    let mut taken: Vec<egui::Rect> =
-        [controls, timeline, tool_picture].into_iter().flatten().map(|r| r.expand(4.0)).collect();
+    state.covered = [controls, timeline, tool_picture].into_iter().flatten().collect();
+    let mut taken: Vec<egui::Rect> = state.covered.iter().map(|r| r.expand(4.0)).collect();
     for (at, galley) in labels {
         let size = galley.size() + egui::vec2(10.0, 6.0);
         let room = view.shrink(4.0);
@@ -1755,6 +1780,7 @@ fn developer_hooks(
                 trail,
                 tube: has("tube"),
                 tool_view: has("toolview"),
+                controls: has("controls").then_some(true),
                 ..Default::default()
             };
             if let Some(effect) = words.iter().find_map(|w| w.strip_prefix("compare-")) {

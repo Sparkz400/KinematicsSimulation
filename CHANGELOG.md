@@ -87,6 +87,20 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
 - `sim-cli margins` (and Python `margins`) measure at the machine's resonances too and refine the sweep where the loop
   or the plant changes fast (`analysis::refinement`), so a sharp resonance between two of the 60 points is not missed.
 
+### App: layout at 1280 x 720, run differences
+
+- The side panels no longer widen with what a tab holds: a combo box at the end of a wrapped row in the Search tab
+  widened the tools panel from 430 to 524 pixels at 1280 x 720 (the effect views by 22, the German parameters the
+  setup panel by 8), taken from the 3D view, and it stayed so. Their contents are now laid out in the panel's width.
+- The 3D view's controls fold to their first row (presets, Record, "More…") where the view is under 500 pixels tall:
+  at 1280 x 720 the opened controls covered half of the 418-pixel view. "More…" / "Less" opens and folds them.
+- The runs tab's key figures have a column per kept run less the reference ("Δ" and its label; for the checks, the
+  failed ones less the reference's).
+- Lists in wrapped rows (motor search, move map, effect comparison) go to the next line where they do not fit.
+- The camera frames the machine clear of the folded controls and the timeline (56 pixels at the top and bottom): the
+  six-axis arm's top was under the controls and its base under the timeline.
+- Window test `at_1280_by_720_the_panels_keep_their_widths_and_the_view_stays_free`.
+
 ## [1.0.0] - 2026-11-16
 
 The release was cut on 14 November 2026 at 19c2ad1 and tagged on 16 November 2026; the three

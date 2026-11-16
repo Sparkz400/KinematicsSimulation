@@ -1197,3 +1197,8 @@ does not act back on the drive. The seven-axis arm's joint-limit option is check
 optimum it settles at, not for how far from its stops a whole cycle keeps the arm.
 
 **Loop response (velocity-loop Bode and Nyquist, refined sweep).** The refinement is tested against a two-mass system worked out by hand (`refinement_finds_a_sharp_resonance_the_coarse_sweep_misses`: resonance 318.31 Hz with 1 % damping, missed by a factor of four by the 60 points, found within 0.2 % and 3 % of its peak) and the margins, phase crossover and closed loop against a hand-calculated loop (`phase_crossover_and_closed_loop_of_a_hand_calculated_loop`). Not checked: a resonance whose peak and dip both fall between two neighbouring points of the 60 (and is not one the machine reports in `modes`) shows no fast change and is not refined; the plant is the air-gap torque to the motor's speed with both sampled once per simulation step, so its phase near the top of the range is uncertain by up to half a step (31 µs, 22° at 2 kHz) and is not checked there against a hand calculation; and the plots themselves are checked by the window tests for their labels and results, not by eye against a measured Bode plot of a real drive.
+
+**App layout (16 November).** The window test at 1280 x 720 checks the panels' widths and how much of the 3D view the
+floating controls leave free, by the accessibility tree without a screen; it does not check what the machine's parts
+fill of the view, nor other window sizes than 1280 x 720 and the default 1600 x 900. The 3D view of each machine was
+looked at in screenshots at 1280 x 720 at its start pose, not in motion.

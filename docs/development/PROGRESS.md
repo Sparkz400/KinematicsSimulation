@@ -4518,3 +4518,27 @@ twice a position cycle for the following error (16 Gauss-Newton steps from the c
   for progress and cancel; the tab is in the language and layout tests.
 - Found: with friction on, the plant at 10 Hz leads by +47° (single axis): at a tenth of the rated torque the LuGre
   bristles hold the axis like a spring; without friction it is the inertia's -90°.
+
+## App: layout at 1280 x 720 and run differences (area 7, 16 November)
+
+- The side panels lay out their tabs in their own width (`in_width` in sim-app `main.rs`). Measured before at 1280 x 720
+  by the window test: the Search tab's motor list, a combo box at the end of a wrapped row, ended 0.3 pixels past the
+  edge and widened the tools panel from 430 to 524 pixels, which it kept on every other tab; the effect views widened it
+  by 22, the German parameters tab the setup panel by 8.
+- The view's controls start folded to one row where the view is under 500 pixels tall (`ui::CONTROLS_OPEN_FROM`): at
+  1280 x 720 the view is 580 x 418 pixels, the controls and timeline now leave 85 % of it free (the test asks 80 %).
+- The runs' key figures have a column per run less the reference, checked against the figures in
+  `two_runs_overlay_with_aligned_time_and_a_correct_difference` (peak torque of motor 1, with and without guide
+  friction).
+- Window test: `at_1280_by_720_the_panels_keep_their_widths_and_the_view_stays_free` (both languages, every tab of
+  both panels, with and without the cycle's result).
+- The camera frames the machine within the view less 56 pixels at the top and the bottom (`OVERLAY_ROOM`), which
+  `the_view_presets_put_the_camera_where_they_say_with_the_machine_in_view` now checks. Every one of the 28 machines'
+  3D views was looked at in a screenshot at 1280 x 720 (`SIM_APP_SIZE`, `SIM_APP_MACHINE`, `SIM_APP_MAP` for the start
+  pose without analyses); the six-axis arm's framing was the one fault found and fixed.
+- Lists (combo boxes) in wrapped rows go to the next line where they do not fit (`room_for_list`): with the panels no
+  longer widening, the motor search's and the move map's lists were cut off at the edge.
+- Already in place before this wave, so not rebuilt: the mode list's mode swinging in the 3D view at 1 Hz with the
+  exaggeration slider and its true frequency by the tool (`session::mode_scene`); the energy flow diagram, whose columns
+  add up to the budget (`Model::budget_flows`, test in tests/app.rs); kept runs overlaid and differenced in the runs
+  view of the bottom panel.
