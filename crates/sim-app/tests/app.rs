@@ -507,9 +507,15 @@ per_machine!(switching_an_effect_changes_the_traces_within_one_cycle);
 
 /// Effect switches a machine's config has but the machine does not read, by the machine's place in `MACHINES` (no
 /// machine is named outside its crate), as sim-machines' control test lists them: the four-arm delta's arm tube
-/// inertia, the disc cam's process force and the first gantry's yaw (read by machine files' gantries only).
-const UNREAD: [(usize, &str); 3] =
-    [(7, "effects.arm_tube_inertia"), (21, "effects.process_force"), (0, "effects.gantry_yaw")];
+/// inertia, the disc cam's and the two indexing tables' process force and the first gantry's yaw (read by machine files'
+/// gantries only).
+const UNREAD: [(usize, &str); 5] = [
+    (7, "effects.arm_tube_inertia"),
+    (21, "effects.process_force"),
+    (28, "effects.process_force"),
+    (29, "effects.process_force"),
+    (0, "effects.gantry_yaw"),
+];
 
 /// Effect switches that cannot act in the test's weak-drive cycle on a machine, as sim-machines' control test lists them:
 /// the palletiser's motors and drives are named per motor, and the catalogue's replace the weak drive and the low bus;
