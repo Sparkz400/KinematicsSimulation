@@ -126,10 +126,6 @@ crash = false
 # between -45 and +83 degrees and the condition number of the Jacobian below 3.7 (checked over a grid of 27 x 27 x 9
 # poses at the turn's ends and its middle, by a script after the crate's equations; the highest, 3.68, near the rim
 # with the parts slid to an end).
-# With link_elasticity: the arm tube's own share of the bending modes (a quarter of its mass in each, as a
-# cantilever's first mode) and the elbow block's twist as an arm bends out of its plane. Off as shipped, with
-# link_elasticity.
-arm_tube_inertia = false
 # The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
 # moving masses and takes the tool with it. Off in the shipped configs: the stiffnesses are [estimate]s.
 base_compliance = false
@@ -213,9 +209,6 @@ payload_kg = 6.0
 # payload's 0.013 kg m^2 as 11.7 kg at 30 rad/m), and so do the arms' twist and backlash in the tool's turn. At 60 rad/m
 # (pinion 25 mm, stage 1.5) the slide weighed 47 kg, and the drives' loops, tuned for the rotors, let a turn of 1.5 rad
 # overshoot by 0.27 rad and ring at 6 Hz, growing.
-# With effects.arm_tube_inertia: the elbow block's inertia about the arm's normal through it, which turns as the arm
-# bends out of its plane. [estimate] an aluminium block of 0.3 kg and 0.1 m across: m w^2 / 12 = 2.5e-4 kg m^2.
-elbow_twist_inertia_kgm2 = 2.5e-4
 [plate]
 pinion_radius_m = 0.04
 gear_ratio = 1.2
@@ -635,7 +628,6 @@ base.stiffness_y_n_m = [1.08e6, 6.75e6]
 base.stiffness_z_n_m = [7.6e6, 4.75e7]
 gearbox.lost_motion_band_rad = [0.0, 2.909e-4]
 gearbox.no_load_torque_nm = [0.7, 1.2]
-mass.elbow_twist_inertia_kgm2 = [1.2e-4, 5.0e-4]
 # Above the place position of the cycle. (Further out, near the edge of the range, one arm carries little of the
 # platform's weight and its velocity loop measures badly in `sim-cli margins`.)
 motor.friction_breakaway_nm = [0.05, 0.1]

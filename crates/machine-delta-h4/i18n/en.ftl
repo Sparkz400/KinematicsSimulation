@@ -61,5 +61,3 @@ error-delta-outside-envelope = The target lies outside the working range.
 error-delta-out-of-reach = The arms cannot reach the target.
 error-delta-joint-stop = An arm would have to go beyond its stop for the target.
 error-delta-singularity = The target lies too near a singularity of the kinematics.
-effect-arm_tube_inertia = The arm tube's share of the bending modes and the elbow block's twist (not built on this delta: the switch does nothing)
-param-elbow_twist_inertia_kgm2 = Elbow block's twist inertia [kg m²]
