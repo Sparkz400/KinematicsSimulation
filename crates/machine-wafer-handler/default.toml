@@ -386,6 +386,8 @@ load_encoder_step = 1.0e-6
 current_kp_v_a = 180.0
 current_tn_s = 5.0e-3
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 1.95
 rated_torque_nm = 0.59
 rated_speed_rad_s = 471.239

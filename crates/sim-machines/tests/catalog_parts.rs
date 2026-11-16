@@ -267,18 +267,21 @@ fn a_drive_by_name_brings_its_published_dc_link_data() {
 }
 
 /// An S120 line-up brakes through one Braking Module (1.5 kW continuous, 100 kW peak) for all its axes, so their
-/// braking power is judged together. Two axes each feeding back 900 J in a 1 s cycle, both at 60 kW at the same
-/// moment, each more than its DC link takes: by hand 900 + 900 = 1800 W mean against 1500 W and 60 + 60 = 120 kW
-/// peak against 100 kW, both FAIL, where each axis alone (900 W, 60 kW) passed before. An S210 has a resistor of its
-/// own: the same load on the EXCT-30's 6SL3210-5HE11-5UF0 is judged per axis against 100 W and 5.7 kW. And a run:
+/// braking power is judged together. The resistor takes of each braking what the DC link has no room for: the S120
+/// Motor Module's 110 uF between 540 V and the 770 V threshold hold 0.5 * 110e-6 * (770^2 - 540^2) = 16.5715 J. Two
+/// axes each braking once with 916.5715 J in a 1 s cycle, both at 60 kW at the same moment: by hand 900 + 900 = 1800
+/// W mean against 1500 W and 60 + 60 = 120 kW peak against 100 kW, both FAIL, where each axis alone (900 W, 60 kW)
+/// passed before. An S210 has a resistor of its own: the same load on the EXCT-30's 6SL3210-5HE11-5UF0 (66 uF, room
+/// 9.9429 J) is judged per axis, 916.5715 - 9.9429 = 906.6286 W against 100 W and 60 kW against 5.7 kW. And a run:
 /// the peak of the summed signal lies between the highest axis' peak and the sum of the peaks.
 #[test]
 fn an_s120_line_up_is_judged_against_its_one_braking_module() {
     use sim_components::analysis::{CycleLoad, MotorLoad, verdicts};
     let axis = MotorLoad {
-        energy_regenerated: 900.0,
+        energy_regenerated: 916.5715,
         peak_regenerated_power: 60e3,
-        largest_regeneration: 900.0,
+        largest_regeneration: 916.5715,
+        regeneration_events: vec![916.5715],
         ..Default::default()
     };
     let load = CycleLoad {
@@ -318,7 +321,8 @@ fn an_s120_line_up_is_judged_against_its_one_braking_module() {
             .unwrap()
             .into_iter()
             .filter(|v| v.check.starts_with("braking-resistor"))
-            .map(|v| (v.check, v.motor, v.value, v.limit, v.ok))
+            // To the 0.1 mW of the hand values.
+            .map(|v| (v.check, v.motor, (v.value * 1e4).round() / 1e4, v.limit, v.ok))
             .collect()
     };
     let mut cfg = exct_30();
@@ -337,7 +341,7 @@ fn an_s120_line_up_is_judged_against_its_one_braking_module() {
     let per_axis: Vec<_> = (0..2)
         .flat_map(|k| {
             [
-                ("braking-resistor-continuous", Some(k), 900.0, 100.0, false),
+                ("braking-resistor-continuous", Some(k), 906.6286, 100.0, false),
                 ("braking-resistor-peak", Some(k), 60e3, 5700.0, false),
             ]
         })

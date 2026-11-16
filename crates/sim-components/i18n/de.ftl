@@ -97,6 +97,7 @@ param-peak_torque_nm = Spitzenmoment [N m]
 param-rated_torque_nm = Bemessungsmoment, dauernd [N m]
 param-rated_speed_rad_s = Bemessungsdrehzahl [rad/s]
 param-no_load_speed_rad_s = Leerlaufdrehzahl [rad/s]
+param-back_emf_constant_v_s_rad = Spannungskonstante, 0 für die Drehmomentkonstante [V s/rad]
 param-encoder_counts_per_rev = Geberstriche pro Umdrehung
 param-velocity_filter_s = Zeitkonstante Drehzahlfilter [s]
 param-torque_filter_s = Zeitkonstante Momentensollwertfilter [s]

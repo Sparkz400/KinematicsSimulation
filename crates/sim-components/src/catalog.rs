@@ -388,7 +388,8 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
         // speed by a few per cent; upgrade with rated data. A missing rated current (Kollmorgen, Beckhoff at 480 V)
         // is the rated torque over the torque constant.
         let either = |first: &str, second: &str| number(&m, first).map_or_else(|| get(second), Ok);
-        let (static_torque, stall_current) = (either("static_torque_nm", "rated_torque_nm")?, either("stall_current_a", "rated_current_a")?);
+        let (static_torque, stall_current) =
+            (either("static_torque_nm", "rated_torque_nm")?, either("stall_current_a", "rated_current_a")?);
         let rated_current = match (number(&m, "rated_current_a"), number(&m, "rated_torque_nm")) {
             (Some(current), _) => current,
             (None, Some(torque)) => torque * stall_current / static_torque,
@@ -435,7 +436,8 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
                 rated_current: get(&m, "rated_current_a")?,
                 rated_torque: get(&m, "rated_torque_nm")?,
                 // Rated torque and current hold at `rated_values_at_speed_rad_s` where the table fills it (9 rows).
-                rated_speed: number(&m, "rated_values_at_speed_rad_s").map_or_else(|| get(&m, "rated_speed_rad_s"), Ok)?,
+                rated_speed: number(&m, "rated_values_at_speed_rad_s")
+                    .map_or_else(|| get(&m, "rated_speed_rad_s"), Ok)?,
                 max_speed: get(&sheet, "max_speed_mechanical_rad_s")?.min(get(&sheet, "max_speed_inverter_rad_s")?),
                 thermal_seconds: number(&sheet, "thermal_time_constant_s"),
                 winding: number(&sheet, "phase_resistance_20c_ohm").zip(number(&sheet, "phase_inductance_h")),
@@ -668,10 +670,14 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
 /// ratio over efficiency: the tighter of the two directions caps it. `apply_gearbox` calls it too, so the result does not
 /// depend on which of the two came first.
 fn cap_peak_torque(cfg: &mut Config, uncapped: f64) -> Result<(), ConfigError> {
+    set(cfg, "drive.peak_torque_nm", uncapped.min(pulley_allowed(cfg)))
+}
+
+/// The highest motor torque the pulley's rating allows through the config's gearbox; infinite without a rating.
+fn pulley_allowed(cfg: &Config) -> f64 {
     let ratio = cfg.f64("gearbox.ratio").unwrap_or(1.0);
     let efficiency = cfg.f64("gearbox.efficiency").unwrap_or(1.0).clamp(f64::MIN_POSITIVE, 1.0);
-    let allowed = cfg.f64("ratings.pulley_max_torque_nm").map_or(f64::INFINITY, |at_pulley| at_pulley * efficiency / ratio);
-    set(cfg, "drive.peak_torque_nm", uncapped.min(allowed))
+    cfg.f64("ratings.pulley_max_torque_nm").map_or(f64::INFINITY, |at_pulley| at_pulley * efficiency / ratio)
 }
 
 /// The drive the catalogue pairs with a motor at a supply: for the S210 the converter the D 32 lists beside the
@@ -1097,6 +1103,8 @@ pub fn estimated_gearbox_data(name: &str) -> Vec<&'static str> {
 /// as `docs/config-reference.md` says for a planetary gearbox).
 pub fn apply_gearbox(cfg: &mut Config, name: &str) -> Result<(), ConfigError> {
     let (gearbox, reduced) = mechanics::find_gearbox(name).ok_or_else(|| unknown("gearbox", name))?;
+    // A peak the old gearbox's cap held may rise to the motor's own; one the config set lower stays its own.
+    let held_by_cap = cfg.f64("drive.peak_torque_nm").is_ok_and(|peak| peak >= pulley_allowed(cfg) * (1.0 - 1e-12));
     let get = |column: &str| number(&gearbox.row, column);
     let need = |column: &str| get(column).ok_or_else(|| unknown("gearbox", name));
     let curve = get("stiffness_k1_nm_rad").zip(get("stiffness_k2_nm_rad")).zip(get("stiffness_k3_nm_rad"));
@@ -1148,7 +1156,7 @@ pub fn apply_gearbox(cfg: &mut Config, name: &str) -> Result<(), ConfigError> {
         set_if_present(cfg, "gearbox.hysteresis_rad", hysteresis)?;
     }
     // The motor's own peak is what its max current gives at the torque constant at max current (`apply_motor` sets both);
-    // a config whose peak is higher keeps that.
+    // a peak the old cap held may rise to it; any other peak is the config's own and is only lowered, never raised.
     if cfg.f64("ratings.pulley_max_torque_nm").is_ok()
         && let (Ok(peak), Ok(current), Ok(constant)) = (
             cfg.f64("drive.peak_torque_nm"),
@@ -1156,7 +1164,7 @@ pub fn apply_gearbox(cfg: &mut Config, name: &str) -> Result<(), ConfigError> {
             cfg.f64("motor.torque_constant_at_max_current_nm_a"),
         )
     {
-        cap_peak_torque(cfg, peak.max(current * constant))?;
+        cap_peak_torque(cfg, if held_by_cap { peak.max(current * constant) } else { peak })?;
     }
     Ok(())
 }
@@ -1812,9 +1820,7 @@ fn inertia_turned(entry: &MachineEntry, cfg: &Config) -> Result<Vec<f64>, Config
     let machine = (entry.build)(cfg)?;
     let rates = motor_rates(machine.as_ref(), &sim_core::testkit::mid_pose(machine.as_ref()));
     Ok((0..machine.motors().len())
-        .map(|k| {
-            torques.iter().zip(&rates).filter(|(_, r)| r[k].abs() > 1e-9).map(|(t, r)| (t[k] / r[k]).abs()).sum()
-        })
+        .map(|k| torques.iter().zip(&rates).filter(|(_, r)| r[k].abs() > 1e-9).map(|(t, r)| (t[k] / r[k]).abs()).sum())
         .collect())
 }
 
@@ -1866,11 +1872,15 @@ pub fn inertia_ratios(entry: &MachineEntry, cfg: &Config) -> Result<Vec<f64>, Co
 /// The velocity gain of `before` scaled for the parts of `after` as `with_parts` says: by the square root of the ratio
 /// of the inertia the motors turn (`inertia_seen`) times that of the rotor's (with the gearbox's).
 ///
-/// A gain that grows with a larger inertia is bounded so that the loop's crossover, about Kp over the inertia J the
-/// motor turns (rotor, gearbox and load, `inertia_turned`; the smallest of the motors, as one gain serves them all),
-/// stays below a third of the machine's first resonance at the middle of the travel (`Machine::resonance_hz`): a third
-/// is the usual separation between a speed loop and a mechanical resonance. Where the machine reports none, or the
-/// gain does not grow, the scaled gain stands, and a config whose own gain is above the bound keeps it.
+/// A gain that grows with a larger inertia is bounded so that the loop's crossover stays below a third of the machine's
+/// first resonance at the middle of the travel (`Machine::resonance_hz`): a third is the usual separation between a
+/// speed loop and a mechanical resonance. The crossover is Kp over the rotor's inertia with the gearbox's: above the
+/// resonance the belt no longer carries the load along and the loop sees the rotor alone (as `with_parts` says), and
+/// there the loop rings. Kp over the whole inertia (rotor and load) bounds nothing where it matters: the Bahr ELZ-125
+/// on the single axis (resonance 160 Hz, 7.0e-4 kg m2 turned) allows 0.236 N m s/rad by it, and the scaled 0.0573 ran
+/// at 2.05 times the motor's peak; with the rotor's 3.0e-5 kg m2 it keeps the config's 0.025 and passes. Where the
+/// machine reports no resonance, or the gain does not grow, the scaled gain stands, and the config's own gain is kept
+/// where it is above the bound (the shipped configs are tuned by margins, not by this rule).
 fn retuned(entry: &MachineEntry, before: &Config, after: &mut Config) -> Result<(), ConfigError> {
     let rotor = |cfg: &Config| {
         Ok::<f64, ConfigError>(
@@ -1881,8 +1891,7 @@ fn retuned(entry: &MachineEntry, before: &Config, after: &mut Config) -> Result<
     let old = before.positive("drive.velocity_kp_nm_s_rad")?;
     let machine = (entry.build)(after)?;
     let resonance = machine.resonance_hz(&sim_core::testkit::mid_pose(machine.as_ref()));
-    let inertia = inertia_turned(entry, after)?.into_iter().filter(|j| *j > 0.0).fold(f64::INFINITY, f64::min);
-    set(after, "drive.velocity_kp_nm_s_rad", bounded_gain(old * ratio.sqrt(), old, resonance, inertia))
+    set(after, "drive.velocity_kp_nm_s_rad", bounded_gain(old * ratio.sqrt(), old, resonance, rotor(after)?))
 }
 
 /// `retuned`'s gain `scaled` held to a third of the resonance's angular frequency times the inertia `inertia` (crossover
@@ -2476,7 +2485,10 @@ mod tests {
     #[test]
     fn a_gearbox_without_mass_or_efficiency_is_named_as_estimated_not_ranked_by_nan() {
         let name = |series: &str| {
-            mechanics::all_gearboxes().into_iter().find(|g| g.row["series"] == series).map(|g| mechanics::gearbox_name(&g.row))
+            mechanics::all_gearboxes()
+                .into_iter()
+                .find(|g| g.row["series"] == series)
+                .map(|g| mechanics::gearbox_name(&g.row))
         };
         // The Apex PE II prints no mass; a Harmonic Drive CSF is an estimate unless its row has an `efficiency`.
         assert_eq!(estimated_gearbox_data(&name("PEII").unwrap()), ["gearbox-mass"]);
@@ -2498,11 +2510,13 @@ mod tests {
     /// a voltage constant and the first gearbox with an efficiency and a stiffness.
     fn pulley_config(pulley_max: f64) -> Config {
         Config::parse(&format!(
-            "[motor]\nrotor_inertia_kgm2 = 1e-4\ntorque_constant_nm_a = 0.5\nmax_current_a = 10.0\nrated_current_a = 5.0\n\
+            "format_version = 1\n[motor]\nrotor_inertia_kgm2 = 1e-4\ntorque_constant_nm_a = 0.5\nmax_current_a = 10.0\nrated_current_a = 5.0\n\
              torque_constant_at_max_current_nm_a = 0.5\ninductance_h = 1e-3\nresistance_ohm = 1.0\n\
+             thermal_time_constant_s = 600.0\n\
              [drive]\ncurrent_kp_v_a = 5.0\ncurrent_tn_s = 1e-3\npeak_torque_nm = 1.0\nrated_torque_nm = 1.0\n\
              rated_speed_rad_s = 100.0\nmax_speed_rad_s = 200.0\nbus_voltage_v = 540.0\nno_load_speed_rad_s = 300.0\n\
              back_emf_constant_v_s_rad = 0.0\n[gearbox]\nratio = 1.0\nefficiency = 1.0\n\
+             stiffness_nm_rad = 1e4\nbacklash_rad = 0.0\ninertia_at_input_kgm2 = 0.0\n\
              [ratings]\npulley_max_torque_nm = {pulley_max}\n"
         ))
         .unwrap()
@@ -2545,17 +2559,59 @@ mod tests {
     }
 
     #[test]
-    fn a_printed_voltage_constant_becomes_the_models_back_emf_constant() {
-        // The motor's printed line-to-line RMS constant times sqrt(3); 0 (= kt) for a motor without one.
-        let motor = kollmorgen_motor();
-        let printed = vendor_rows("motors_", "kollmorgen", 400.0)
+    fn a_config_peak_below_the_motors_is_not_raised_by_a_gearbox_applied_after_the_motor() {
+        let gearbox = mechanics::all_gearboxes()
             .into_iter()
-            .find(|r| r["part_number"] == motor)
-            .and_then(|r| number(&r, "voltage_constant_v_s_rad"))
+            .find(|g| {
+                number(&g.row, "ratio").is_some_and(|r| r > 2.0)
+                    && number(&g.row, "rated_output_torque_nm").is_some()
+                    && number(&g.row, "torsional_stiffness_nm_rad").is_some()
+            })
+            .map(|g| mechanics::gearbox_name(&g.row))
             .unwrap();
-        let mut cfg = pulley_config(1e9);
-        apply_motor(&mut cfg, motor, "kollmorgen-400v").unwrap();
-        assert!((cfg.f64("drive.back_emf_constant_v_s_rad").unwrap() - 3f64.sqrt() * printed).abs() < 1e-12);
+        let g = mechanics::find_gearbox(&gearbox).unwrap().0;
+        let (ratio, efficiency) = (number(&g.row, "ratio").unwrap(), printed_efficiency(&g.row).unwrap_or(1.0));
+        let motor = kollmorgen_motor();
+        let own = motor_data(motor, "kollmorgen-400v").unwrap().max_torque;
+        let lowered = |pulley: f64| {
+            let mut cfg = pulley_config(pulley);
+            apply_motor(&mut cfg, motor, "kollmorgen-400v").unwrap();
+            cfg.set_text(&format!("drive.peak_torque_nm = {:?}", 0.1 * own)).unwrap();
+            apply_gearbox(&mut cfg, &gearbox).unwrap();
+            cfg.f64("drive.peak_torque_nm").unwrap()
+        };
+        // A loose pulley: the config's peak, a tenth of the motor's, stays; a pulley that allows a twentieth through
+        // the gearbox lowers it to that: the lower of the config's value and the cap.
+        assert_eq!(lowered(1e9), 0.1 * own);
+        assert!((lowered(0.05 * own * ratio / efficiency) - 0.05 * own).abs() < 1e-9 * own);
+    }
+
+    #[test]
+    fn a_printed_voltage_constant_becomes_the_models_back_emf_constant() {
+        // The motor's printed line-to-line RMS constant times sqrt(3), and the no-load speed sqrt(3/2) bus over it, for a
+        // Kollmorgen AKM and a Beckhoff AM8000 (whose constant is up to 1.30 times its torque constant).
+        let beckhoff = vendor_rows("motors_", "beckhoff", 400.0)
+            .into_iter()
+            .find(|r| r["part_number"].starts_with("AM80") && number(r, "voltage_constant_v_s_rad").is_some())
+            .map(|r| r["part_number"])
+            .unwrap();
+        for (vendor, motor) in [("kollmorgen", kollmorgen_motor()), ("beckhoff", beckhoff)] {
+            let printed = vendor_rows("motors_", vendor, 400.0)
+                .into_iter()
+                .find(|r| r["part_number"] == motor)
+                .and_then(|r| number(&r, "voltage_constant_v_s_rad"))
+                .unwrap();
+            let mut cfg = pulley_config(1e9);
+            apply_motor(&mut cfg, motor, &format!("{vendor}-400v")).unwrap();
+            let ke = cfg.f64("drive.back_emf_constant_v_s_rad").unwrap();
+            assert!((ke - 3f64.sqrt() * printed).abs() < 1e-12, "{motor}: {ke} for {printed}");
+            let (bus, rated) = (cfg.f64("drive.bus_voltage_v").unwrap(), cfg.f64("drive.rated_speed_rad_s").unwrap());
+            let no_load = (crate::drive::WINDING_PER_DC_LINK * bus / ke).max(1.1 * rated);
+            assert_eq!(cfg.f64("drive.no_load_speed_rad_s").unwrap(), no_load, "{motor}");
+            eprintln!(
+                "{motor}: printed {printed} V s/rad, kE {ke}, bus {bus} V, no-load {no_load} rad/s, rated {rated}"
+            );
+        }
     }
 
     #[test]

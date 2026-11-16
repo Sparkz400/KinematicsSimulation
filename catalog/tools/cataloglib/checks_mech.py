@@ -296,6 +296,10 @@ def harmonicdrive_strain_wave_gears_are_plausible(tables):
                         errors.append(f"{where}: twist at T2 {twist:.2e} rad")
                     if not inside(need(r, "hysteresis_rad"), 2.9e-4, 8.7e-4):
                         errors.append(f"{where}: hysteresis_rad")
+                    # Read from the vendor's efficiency graphs at rated torque (0.699 to 0.800); a strain wave gear
+                    # outside 0.65 to 0.85 is a misread graph.
+                    if not inside(need(r, "efficiency_full_load"), 0.65, 0.85):
+                        errors.append(f"{where}: efficiency_full_load")
                 now = (need(g, "rated_output_torque_nm"), need(g, "mass_kg"), need(g, "inertia_at_input_kgm2"),
                        need(g, "stiffness_t2_nm"))
                 if last and not all(n > l for n, l in zip(now, last)):

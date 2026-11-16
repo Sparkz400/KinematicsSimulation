@@ -508,6 +508,8 @@ current_tn_s = 5.0e-3
 # model's one winding carries the RMS phase current, and its voltage times that current is the power of
 # all three phases.
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] the EXCT-30 allows 12.5 N m at the pulley; the motor could give 18 N m.
 peak_torque_nm = 12.5
 # [catalogue] rated torque of the 1FK2205-4AF at 400 V; the RMS torque of a cycle is judged against it.

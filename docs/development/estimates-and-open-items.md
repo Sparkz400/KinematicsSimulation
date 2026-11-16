@@ -17,7 +17,6 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 
 | What | Where | Status | What is true instead | Closing it |
 | --- | --- | --- | --- | --- |
-| "Strain-wave gears run at 70 to 85 %" | the audit's finding K5 | **from memory** of the auditor | same as above | same as above |
 | Cushion energy "about 0.10 to 0.20 J" on the hanging pneumatic axis | `docs/mechanisms.md`, `docs/de/mechanismen.md` | **made up**: a hand estimate written before any run | Whatever the shipped cycle gives with the weight's work included | Run the shipped pneumatic axis hanging and write the measured figure |
 | Mover's mass centre sits on the track centre line (`mass.centre_offset_m = 0.0`) | `crates/machine-mover-track/default.toml`, `flying.toml` | **made up** default: the mover is drawn 35 mm outside the centre line, the real mass offset is not known | With 35 mm the lateral acceleration at 2 m/s is 38.9 m/s², not 30.7 | Take the centre-of-mass offset from the vendor's mover data (or CAD) and set it |
 | FMU output counts 114 / 60 / 108 | `docs/fmi.md` | **assumed**: copied from the audit, the FMUs were not regenerated | Whatever the current export gives | Export the three FMUs and count |
@@ -29,6 +28,7 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 | --- | --- | --- | --- |
 | The mesh-friction bristle behind a screw, rack or drum is capped at a quarter of the integrator's rate bound | `transmission.rs` (`Converter::apply`) | A numerical cap, softer than the physical bristle; chosen so RK4 stays stable, never tuned by a run | Run cable robot and screw axis, check the energy budget, then either keep the cap with its measured error or integrate the bristle implicitly |
 | The error band of "fitted minus config" is scaled by the ratio of residual norms | `identify.rs` (`unshared`) | The implementer's own estimate of the difference's error; not derived, not checked for coverage | Monte Carlo on a machine with known truth: (fitted − config)/error must have a standard deviation near 1 |
+| A retuned velocity gain that grows is bounded by Kp / (rotor + gearbox inertia) <= 2 pi f_res / 3, never below the config's own | `catalog.rs` (`retuned`, `bounded_gain`) | The third is the usual separation of a speed loop from a resonance; the rotor-side inertia was chosen because the load-side one bounded nothing. Checked on one case only: the single axis with the Bahr ELZ-125 (0.0573 oscillated, 0.045 too, 0.0368 passed; the bound gives 0.025, which passes). In effect a gain grows with the load only on a machine that reports no resonance | Find the stable gain by run for a few axes on several machines and fit the rule to it |
 | Tolerances of new tests (settled rise 0.5 K, seven-joint inverse 1e-4) | `machine-mover-track`, `machine-joint-kit` tests | Picked before any run | Set from the first run |
 
 ## 3. Behaviour assumed without the manual
@@ -60,8 +60,11 @@ result is in, treat **every number below as unverified**.
   now runs with a weaker flux from about 100 rad/s on, and nobody has seen it run. Cost per base step in the
   weakened range (a golden section of about 1700 voltage evaluations) unmeasured.
 - **Back-EMF constant apart from the torque constant** (`drive.rs`, `emf_loss`, budget row `emf.<motor>`): the
-  row is the winding's step energies less copper, shaft and stored energy, derived by hand; nothing has run
-  with a printed voltage constant, and the sign in braking (the row is negative) is a model limit, not physics.
+  row is the winding's step energies less copper, shaft and stored energy, derived by hand. A catalogue motor's
+  printed constant now reaches the drive (every shipped config and machine file carries
+  `drive.back_emf_constant_v_s_rad = 0.0`, which `apply_motor` overwrites; checked for a Kollmorgen AKM and a
+  Beckhoff AM8000), but no cycle's energy budget has been run with it, and the sign in braking (the row is
+  negative) is a model limit, not physics.
 - **Torque band with the inertia feedforward** (`control.rs`, `holding_torque`): the rigid model's torque at rest
   at the planned pose stands in for the held load; friction and the integrator's rest are not in it.
 - **The time-optimal planner still keeps every limit** with the ramp share following curvature
@@ -74,7 +77,8 @@ result is in, treat **every number below as unverified**.
 - **The 2-axis delta's reference file** `crates/machine-delta-d2/reference/inverse_dynamics.csv` is
   stale: its generator was changed but could not be run (no sympy).
 - **The video tool** `crates/sim-app/tools/frames_to_mp4.py` (holds frames for dropped numbers).
-- **The Python catalogue checks** after the linear-motor back-EMF column was converted.
+- **`catalog/tools/extract_rexroth_ckr.py`** (writes `non_stroke_length_m`): changed, not run, its source PDF
+  is not in the repository. (`catalog.py validate` and the tools' unit tests pass.)
 
 ## 5. Model simplifications still in the code (not true to the real machine)
 
@@ -112,7 +116,10 @@ and link. What it changes in the tables above (rows stay until the code follows)
   axis in a mixed block is a synchronised axis and follows in the linear axes' time. Fanuc: no primary
   source found.
 - **Rexroth CKR and Bahr stroke** (section 5): sourced. Lca and Lad per CKR size and the basic length
-  per Bahr ELZ size are in the vendor-facts file; the stroke limit can now be module length minus those.
+  per Bahr ELZ size are in the vendor-facts file, and the code follows: the stroke limit is the module
+  length minus `non_stroke_length_m`. The other Bahr series keep the module length, flagged `axis-stroke`.
+- **Harmonic Drive efficiency**: read off the vendor's graphs (0.699 to 0.800, about 1 point reading error)
+  for every CSF / CSG / SHG row; the flat 0.70 estimate applies to no shipped row.
 - **Mover's mass centre** (section 1): not published by Beckhoff in anything readable; needs the
   vendor's load diagrams, CAD or a question to their support. Mass 651 g is sourced.
 - **Late fieldbus frame** (section 3): no primary text found; SINAMICS only documents the tolerated
