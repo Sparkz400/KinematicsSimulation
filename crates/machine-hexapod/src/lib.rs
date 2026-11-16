@@ -284,22 +284,22 @@ impl Geometry {
     }
 }
 
-/// The pose the dynamics found last: the leg extensions, the platform's centre and rotation, and J^-1 there.
+/// The pose at a point of the leg extensions' grid (`ANCHOR_STEP`) the dynamics' Newton starts from: the grid point's
+/// index, its leg extensions, the platform's centre and rotation, and J^-1 there.
 #[derive(Debug, Clone, Copy)]
 struct Found {
+    key: [i64; 6],
     q: [f64; 6],
     p: V3,
     r: M3,
     jinv: [[f64; 6]; 6],
 }
 
-/// How far a leg may have moved since `Found` for the dynamics to start Newton from there, m: an integration stage
-/// moves the legs by micrometres; a jump further (a new run, the planner's poses) starts from home, as `forward` does.
-const WARM_REACH: f64 = 0.01;
-/// Numbers in `Mechanism::memory`: `Found` flat.
-const FOUND_LEN: usize = 6 + 3 + 9 + 36;
+/// The grid of leg extensions the dynamics' Newton starts from, m: from the nearest point, so the pose is a function
+/// of the extensions alone, whatever was called before (a run, its replay and a perturbed run give the same numbers).
+const ANCHOR_STEP: f64 = 1e-3;
 
-/// The dynamics' last pose behind a lock (`Mechanism` is `Send`, and the integrator calls `dynamics` through `&self`).
+/// The last grid point's pose behind a lock (`Mechanism` is `Send`, and the integrator calls `dynamics` through `&self`).
 #[derive(Debug, Default)]
 struct LastFound(std::sync::Mutex<Option<Found>>);
 
@@ -331,7 +331,7 @@ pub struct Hexapod {
     inertia: M3,
     g: f64,
     required_life: Option<f64>,
-    /// Where the dynamics' Newton starts from next (`warm_pose`).
+    /// The grid point's pose the dynamics' Newton starts from (`warm_pose`).
     last: LastFound,
 }
 
@@ -468,26 +468,32 @@ impl Hexapod {
     }
 
     /// The legs, the platform's rotation and J^-1 for leg extensions, for the dynamics, which runs four times a
-    /// sub-step: Newton starts from the pose of the last call moved by J^-1 (q - q_last), which takes it two steps
-    /// instead of about five from home (`forward`), where no leg moved `WARM_REACH` or more since; from home otherwise,
-    /// or where that does not converge. The pose differs from `forward`'s by Newton's tolerance (1e-13 m on the legs).
-    /// `None` where the forward kinematics fails or J is singular.
+    /// sub-step: Newton starts from the pose at the nearest point of the `ANCHOR_STEP` grid moved by J^-1 (q - q_grid),
+    /// which takes it two steps instead of about five from home (`forward`); from home where that does not converge.
+    /// The grid point's pose (from home) is kept until the legs leave its cell. The pose differs from `forward`'s by
+    /// Newton's tolerance (1e-13 m on the legs). `None` where the forward kinematics fails or J is singular.
     fn warm_pose(&self, q: &[f64]) -> Option<(Legs, M3, [[f64; 6]; 6])> {
-        let near = self.last.get().filter(|f| (0..6).all(|i| (q[i] - f.q[i]).abs() < WARM_REACH));
-        let warm = near.and_then(|f| {
+        let key: [i64; 6] = std::array::from_fn(|i| (q[i] / ANCHOR_STEP).round() as i64);
+        let anchor = self.last.get().filter(|f| f.key == key).or_else(|| {
+            let g: [f64; 6] = std::array::from_fn(|i| key[i] as f64 * ANCHOR_STEP);
+            let (tool, legs, r) = self.pose(&g)?;
+            let jinv = inverse(&Geometry::jacobian_rows(&legs))?;
+            let found = Found { key, q: g, p: [tool[0], tool[1], tool[2]], r, jinv };
+            self.last.set(Some(found));
+            Some(found)
+        });
+        let warm = anchor.and_then(|f| {
             let xi: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| f.jinv[r][c] * (q[c] - f.q[c])).sum());
             self.geo.solve_from(q, add(f.p, [xi[0], xi[1], xi[2]]), matmul(&exp([xi[3], xi[4], xi[5]]), &f.r))
         });
-        let (p, r, legs) = match warm {
-            Some(found) => found,
+        let (r, legs) = match warm {
+            Some((_, r, legs)) => (r, legs),
             None => {
-                let (tool, legs, r) = self.pose(q)?;
-                ([tool[0], tool[1], tool[2]], r, legs)
+                let (_, legs, r) = self.pose(q)?;
+                (r, legs)
             }
         };
-        let jinv = inverse(&Geometry::jacobian_rows(&legs));
-        self.last.set(jinv.map(|jinv| Found { q: std::array::from_fn(|i| q[i]), p, r, jinv }));
-        Some((legs, r, jinv?))
+        Some((legs, r, inverse(&Geometry::jacobian_rows(&legs))?))
     }
 
     /// The platform's mass matrix over its twist (6 x 6).
@@ -569,30 +575,11 @@ impl Mechanism for Hexapod {
     fn set_payload_attached(&mut self, attached: bool) {
         self.attached = attached;
     }
-    /// The dynamics' last pose (`warm_pose`), which its next Newton starts from: a restored simulation starts it where
-    /// the one it was taken from did. NaN before the first.
-    fn memory(&self) -> Vec<f64> {
-        self.last
-            .get()
-            .map_or(vec![f64::NAN; FOUND_LEN], |f| [&f.q[..], &f.p, f.r.as_flattened(), f.jinv.as_flattened()].concat())
-    }
-    fn set_memory(&self, memory: &[f64]) {
-        let found = (memory.len() == FOUND_LEN && memory.iter().all(|v| v.is_finite())).then(|| Found {
-            q: std::array::from_fn(|i| memory[i]),
-            p: std::array::from_fn(|i| memory[6 + i]),
-            r: std::array::from_fn(|i| std::array::from_fn(|j| memory[9 + 3 * i + j])),
-            jinv: std::array::from_fn(|i| std::array::from_fn(|j| memory[18 + 6 * i + j])),
-        });
-        self.last.set(found);
-    }
 
     fn forward(&self, q: &[f64], tool: &mut [f64]) {
         self.geo.forward(q, tool);
     }
-    /// Also forgets the dynamics' last pose (`warm_pose`): a run starts here (`equilibrium`), as does each position
-    /// cycle's setpoint, so that what ran on this machine before does not change a run by Newton's rounding.
     fn inverse(&self, tool: &[f64], q: &mut [f64]) -> bool {
-        self.last.set(None);
         self.geo.inverse(tool, q)
     }
     fn unreachable(&self, tool: &[f64], _slack: f64) -> Option<&'static str> {

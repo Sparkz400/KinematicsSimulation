@@ -516,7 +516,7 @@ pub struct RotaryPlatform {
     /// (N); the ball joints' from the working range.
     dead_centre_limit: f64,
     buckling_limit: f64,
-    /// Where the dynamics' Newton starts from next (`warm_motion`).
+    /// The grid point's pose the dynamics' Newton starts from (`warm_motion`).
     last: LastFound,
 }
 
@@ -531,22 +531,22 @@ struct Motion {
     xi0: [f64; 6],
 }
 
-/// The pose the dynamics found last: the crank angles, the platform's centre and rotation, and K there.
+/// The pose at a point of the crank angles' grid (`ANCHOR_STEP`) the dynamics' Newton starts from: the grid point's
+/// index, its crank angles, the platform's centre and rotation, and K there.
 #[derive(Debug, Clone, Copy)]
 struct Found {
+    key: [i64; 6],
     q: [f64; 6],
     p: V3,
     r: M3,
     k: [f64; 36],
 }
 
-/// How far a crank may have turned since `Found` for the dynamics to start Newton from there, rad: an integration stage
-/// turns the cranks by microradians; a jump further (a new run, the planner's poses) starts as `forward` does.
-const WARM_REACH: f64 = 0.01;
-/// Numbers in `Mechanism::memory`: `Found` flat.
-const FOUND_LEN: usize = 6 + 3 + 9 + 36;
+/// The grid of crank angles the dynamics' Newton starts from, rad: from the nearest point, so the pose is a function of
+/// the angles alone, whatever was called before (a run, its replay and a perturbed run give the same numbers).
+const ANCHOR_STEP: f64 = 1e-3;
 
-/// The dynamics' last pose behind a lock (`Mechanism` is `Send`, and the integrator calls `dynamics` through `&self`).
+/// The last grid point's pose behind a lock (`Mechanism` is `Send`, and the integrator calls `dynamics` through `&self`).
 #[derive(Debug, Default)]
 struct LastFound(std::sync::Mutex<Option<Found>>);
 
@@ -710,13 +710,20 @@ impl RotaryPlatform {
         self.motion_at(q, qd, self.geo.pose(q)?)
     }
 
-    /// `motion` for the dynamics, which runs four times a sub-step: Newton starts from the pose of the last call moved
-    /// by K (q - q_last), which takes it two steps instead of about four from `forward`'s guess, where no crank turned
-    /// `WARM_REACH` or more since; as `motion` otherwise, or where that does not converge. The pose differs from
-    /// `forward`'s by Newton's tolerance (1e-12 m on the rods, and one step more).
+    /// `motion` for the dynamics, which runs four times a sub-step: Newton starts from the pose at the nearest point of
+    /// the `ANCHOR_STEP` grid moved by K (q - q_grid), which takes it two steps instead of about four from `forward`'s
+    /// guess; as `motion` where that does not converge. The grid point's pose (by `motion`) is kept until the cranks
+    /// leave its cell. The pose differs from `forward`'s by Newton's tolerance (1e-12 m on the rods, and one step more).
     fn warm_motion(&self, q: &[f64], qd: &[f64]) -> Option<Motion> {
-        let near = self.last.get().filter(|f| (0..6).all(|i| (q[i] - f.q[i]).abs() < WARM_REACH));
-        let warm = near.and_then(|f| {
+        let key: [i64; 6] = std::array::from_fn(|i| (q[i] / ANCHOR_STEP).round() as i64);
+        let anchor = self.last.get().filter(|f| f.key == key).or_else(|| {
+            let g: [f64; 6] = std::array::from_fn(|i| key[i] as f64 * ANCHOR_STEP);
+            let (p, r) = self.geo.pose(&g)?;
+            let found = Found { key, q: g, p, r, k: self.motion_at(&g, &[0.0; 6], (p, r))?.k };
+            self.last.set(Some(found));
+            Some(found)
+        });
+        let warm = anchor.and_then(|f| {
             let xi: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| f.k[r * 6 + c] * (q[c] - f.q[c])).sum());
             self.geo.pose_from(q, add(f.p, [xi[0], xi[1], xi[2]]), matmul(&exp([xi[3], xi[4], xi[5]]), &f.r))
         });
@@ -724,9 +731,7 @@ impl RotaryPlatform {
             Some(pose) => pose,
             None => self.geo.pose(q)?,
         };
-        let m = self.motion_at(q, qd, pose);
-        self.last.set(m.as_ref().map(|m| Found { q: std::array::from_fn(|i| q[i]), p: pose.0, r: pose.1, k: m.k }));
-        m
+        self.motion_at(q, qd, pose)
     }
 
     /// `motion` with the platform's centre and rotation known.
@@ -921,28 +926,11 @@ impl Mechanism for RotaryPlatform {
     fn set_payload_attached(&mut self, attached: bool) {
         self.attached = attached;
     }
-    /// The dynamics' last pose (`warm_motion`), which its next Newton starts from: a restored simulation starts it where
-    /// the one it was taken from did. NaN before the first.
-    fn memory(&self) -> Vec<f64> {
-        self.last.get().map_or(vec![f64::NAN; FOUND_LEN], |f| [&f.q[..], &f.p, f.r.as_flattened(), &f.k].concat())
-    }
-    fn set_memory(&self, memory: &[f64]) {
-        let found = (memory.len() == FOUND_LEN && memory.iter().all(|v| v.is_finite())).then(|| Found {
-            q: std::array::from_fn(|i| memory[i]),
-            p: std::array::from_fn(|i| memory[6 + i]),
-            r: std::array::from_fn(|i| std::array::from_fn(|j| memory[9 + 3 * i + j])),
-            k: std::array::from_fn(|i| memory[18 + i]),
-        });
-        self.last.set(found);
-    }
 
     fn forward(&self, q: &[f64], tool: &mut [f64]) {
         self.geo.forward(q, tool);
     }
-    /// Also forgets the dynamics' last pose (`warm_motion`): a run starts here (`equilibrium`), as does each position
-    /// cycle's setpoint, so that what ran on this machine before does not change a run by Newton's rounding.
     fn inverse(&self, tool: &[f64], q: &mut [f64]) -> bool {
-        self.last.set(None);
         self.geo.inverse(tool, q)
     }
     /// Out of reach is told by the joint machine (`inverse`); here a crank too near its dead centre, a ball joint

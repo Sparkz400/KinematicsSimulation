@@ -346,9 +346,11 @@ fn the_planar_machine_friction_feedforward_takes_the_friction_off_the_integrator
 }
 
 /// Both default cycles' figures as they were before the speed work of 16 November 2026, recorded then on Windows. The
-/// warm-started elastic `forward` feeds only the tool's following error (the signal), not the motion, so on the
-/// platform they were recorded on they are the same to 1e-9. Another platform's maths library rounds sine and arc
-/// tangent differently in the last bit, which the closed loop amplifies to some 1e-4 (as on the hexapods): 1e-3 there.
+/// elastic `forward` now starts Newton from a grid point's pose (`ANCHOR_STEP`) and stops within the same tolerance, a
+/// change at the rounding of the pose, which the closed loop amplifies, as on other parallel machines with a
+/// warm-started pose: it moved these by up to 1.5e-5 (the planar machine's fourth motor's peak torque). Another
+/// platform's maths library rounds sine and arc tangent differently in the last bit, which moves them the same way.
+/// Hence 1e-3.
 #[test]
 fn the_default_cycles_keep_their_figures() {
     const PLANAR_BEFORE: [f64; 22] = [
@@ -416,7 +418,7 @@ fn the_default_cycles_keep_their_figures() {
         0.0015966339615177524,
     ];
     let (planar, spatial) = (cycle_figures(&PLANAR), cycle_figures(&SPATIAL));
-    let tol = if cfg!(windows) { 1e-9 } else { 1e-3 };
+    let tol = 1e-3;
     assert_figures("cable-planar", &planar, &PLANAR_BEFORE, tol);
     assert_figures("cable-spatial", &spatial, &SPATIAL_BEFORE, tol);
 }
