@@ -9,7 +9,7 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [1.0.0] - 2026-11-16
 
-**Release date to be filled in.** The release was cut on 14 November 2026 at 19c2ad1 but not tagged; the three
+The release was cut on 14 November 2026 at 19c2ad1 and tagged on 16 November 2026; the three
 blocks below (Added, Changed, Fixed) are the work merged on 15 November 2026 after the cut, in three waves: failing
 tests fixed and independent cross-checks, then new models, actuators and app views, then new machines. The sections
 after them are the release as cut.
