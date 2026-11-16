@@ -17,7 +17,10 @@
 //!
 //! Field-oriented (`"foc"`): the drive models the rotor flux, dpsi/dt = (R_r / L_r) (L_m i_sd - psi), and turns its
 //! frame with it, w_k = w_r + R_r L_m i_sq / (L_r psi) (indirect: slip from the model). The flux setpoint is the rated
-//! one up to the rated frequency and falls with 1 / speed above (field weakening); torque = 3/2 p (L_m / L_r) psi i_sq.
+//! one up to the rated frequency and falls with 1 / speed above (field weakening), and lower where the converter's
+//! voltage U_dc / sqrt 3 gives out earlier (`flux_setpoint`); the q current is held within what that leaves of the
+//! voltage circle (`voltage_iq`), so that `torque_curve` is the torque the control delivers;
+//! torque = 3/2 p (L_m / L_r) psi i_sq.
 //! PI current controllers on i_sd and i_sq with the decoupling the model gives: sigma L_s di/dt = u - R_sigma i + ...,
 //! sigma = 1 - L_m^2 / (L_s L_r), R_sigma = R_s + (L_m / L_r)^2 R_r; tuned with Kp = sigma L_s / T and
 //! Tn = sigma L_s / R_sigma the current follows its setpoint with T. The speed and position loops above are the servo's.
@@ -51,6 +54,9 @@ pub struct Induction {
 
 /// Phase amplitude per line-to-line RMS voltage: sqrt 2 / sqrt 3.
 const PHASE_PER_LINE: f64 = 0.816_496_580_927_726;
+
+/// The share of the converter's voltage the flux setpoint may take on the d axis (`Induction::flux_setpoint`).
+const FLUX_VOLTAGE: f64 = 0.9;
 
 impl Induction {
     pub fn from_config(cfg: &Config) -> Result<Self> {
@@ -116,9 +122,43 @@ impl Induction {
         d.max_voltage(p) / crate::drive::WINDING_PER_DC_LINK / 3f64.sqrt()
     }
 
-    /// The flux setpoint at a shaft speed: rated up to the rated frequency, then falling with 1 / speed.
-    fn flux_setpoint(&self, speed: f64) -> f64 {
-        self.rated_flux * (self.rated_frequency / (self.pole_pairs * speed.abs())).min(1.0)
+    /// The flux setpoint at a shaft speed, for the stator resistance `rs` and the phase amplitude `supply` the converter
+    /// has: rated up to the rated frequency, then falling with 1 / speed (field weakening by frequency); and where the
+    /// voltage runs out earlier (a DC link below the name plate's) weakened so that the d current alone takes
+    /// `FLUX_VOLTAGE` of it at the stator frequency, |R_s + j w L_s| psi / L_m, and the q axis keeps the rest for torque.
+    /// shortcut: not the flux of the most torque (about 1 / sqrt 2 of the voltage on the d axis in the deep range), which
+    /// would also weaken where the rated flux still gives all the torque a cycle asks; upgrade for a maximum-torque search.
+    fn flux_setpoint(&self, speed: f64, supply: f64, rs: f64) -> f64 {
+        let w_e = self.pole_pairs * speed.abs();
+        let by_voltage = self.magnetizing * FLUX_VOLTAGE * supply / rs.hypot(w_e * self.stator);
+        (self.rated_flux * (self.rated_frequency / w_e).min(1.0)).min(by_voltage)
+    }
+
+    /// The largest |i_q| up to `most` that the voltage circle `supply` leaves at the flux `flux` set (i_d = psi / L_m) in
+    /// the steady state at the rotor's electrical speed `w_r` >= 0, motoring (i_q with the speed) or generating. From the
+    /// model's steady voltage, with the frame at w_k = w_r + R_r (L_m / L_r) i_q / psi: u_d = R_s i_d - w_k sigma L_s i_q,
+    /// u_q = R_s i_q + w_k L_s i_d (psi_sd = L_s i_d). Bisection: |u| rises with |i_q| here.
+    fn voltage_iq(&self, rs: f64, supply: f64, flux: f64, w_r: f64, motoring: bool, most: f64) -> f64 {
+        let (id, k) = (flux / self.magnetizing, self.magnetizing / self.rotor);
+        let u2 = |m: f64| {
+            let iq = if motoring { m } else { -m };
+            let w_k = w_r + self.rotor_resistance * k * iq / flux;
+            let (ud, uq) = (rs * id - w_k * self.sigma_ls() * iq, rs * iq + w_k * self.stator * id);
+            ud * ud + uq * uq
+        };
+        let limit = supply * supply;
+        if u2(most) <= limit {
+            return most;
+        }
+        if u2(0.0) > limit {
+            return 0.0;
+        }
+        let (mut lo, mut hi) = (0.0, most);
+        for _ in 0..40 {
+            let mid = 0.5 * (lo + hi);
+            if u2(mid) <= limit { lo = mid } else { hi = mid }
+        }
+        lo
     }
 
     /// The fluxes of a steady state in a frame turning at `w_k` with the rotor at the electrical speed `w_r`, under the
@@ -160,23 +200,72 @@ impl Induction {
         self.boost + (self.rated_voltage - self.boost) * (w_k.abs() / self.rated_frequency).min(1.0)
     }
 
+    /// The torque of the equivalent circuit's steady state (`steady`) under V/f at the stator frequency `w_s` with the rotor
+    /// at `w_r` (both electrical, signed), the converter's voltage `supply` at most.
+    fn vf_torque(&self, rs: f64, supply: f64, w_s: f64, w_r: f64) -> f64 {
+        let u = self.vf_voltage(w_s).min(supply);
+        self.torque(&self.steady(rs, [0.0, u], w_s, w_r))
+    }
+
     /// (lowest, highest) torque at a speed with the DC link `dc_voltage`, as `DriveParams::torque_curve`: the breakdown
-    /// curve. Field-oriented also the current limit at the flux setpoint, 3/2 p (L_m / L_r) psi sqrt(I^2 - (psi / L_m)^2)
-    /// for the amplitude I of the smaller of the motor's and the drive's maximum current; and the peak torque.
+    /// curve. V/f: the most the stator frequency can make of it, motoring (above the rotor's electrical speed) and
+    /// generating (below it) apart, each the maximum over the slip of the circuit's torque at the voltage V/f gives at
+    /// that frequency (`vf_extreme`): the breakdown torque at a fixed frequency is the one at the speed that frequency
+    /// belongs to only. Field-oriented the current limit at the flux the control sets (`flux_setpoint`), 3/2 p (L_m / L_r)
+    /// psi sqrt(I^2 - (psi / L_m)^2) for the amplitude I of the smaller of the motor's and the drive's maximum current,
+    /// within what the voltage circle leaves at that flux (`voltage_iq`), and the breakdown; and the peak torque.
     pub fn torque_curve(&self, p: &DriveParams, speed: f64, dc_voltage: f64) -> (f64, f64) {
         let w_e = (self.pole_pairs * speed.abs()).max(0.02 * self.rated_frequency);
         let supply = dc_voltage / 3f64.sqrt();
-        let mut most = if self.field_oriented {
-            let flux = self.flux_setpoint(speed);
+        let (motoring, generating) = if self.field_oriented {
+            let flux = self.flux_setpoint(speed, supply, p.resistance);
             let amplitude = SQRT_2 * p.max_current.min(p.drive_max_current);
             let iq = (amplitude * amplitude - (flux / self.magnetizing).powi(2)).max(0.0).sqrt();
-            let by_current = 1.5 * self.pole_pairs * self.magnetizing / self.rotor * flux * iq;
-            by_current.min(self.breakdown(p.resistance, supply, w_e))
+            let w_r = self.pole_pairs * speed.abs();
+            let breakdown = self.breakdown(p.resistance, supply, w_e);
+            let torque = |motoring| {
+                let iq = self.voltage_iq(p.resistance, supply, flux, w_r, motoring, iq);
+                (1.5 * self.pole_pairs * self.magnetizing / self.rotor * flux * iq).min(breakdown)
+            };
+            (torque(true), torque(false))
         } else {
-            self.breakdown(p.resistance, self.vf_voltage(w_e).min(supply), w_e)
+            let w_r = self.pole_pairs * speed.abs();
+            (self.vf_extreme(p.resistance, supply, w_r, true), self.vf_extreme(p.resistance, supply, w_r, false))
         };
-        most = most.min(p.peak_torque);
-        (-most, most)
+        let (motoring, generating) = (motoring.min(p.peak_torque), generating.min(p.peak_torque));
+        if speed >= 0.0 { (-generating, motoring) } else { (-motoring, generating) }
+    }
+
+    /// V/f: the largest torque magnitude, motoring or generating, at the rotor's electrical speed `w_r` >= 0: the maximum
+    /// over the slip s = w_s - w_r (> 0 motoring, < 0 generating, the stator frequency down to and through 0 for
+    /// generating) of `vf_torque`. A scan over the slip, dense near 0, refined by golden section around its best.
+    fn vf_extreme(&self, rs: f64, supply: f64, w_r: f64, motoring: bool) -> f64 {
+        const N: usize = 96;
+        let span = 2.0 * (w_r + self.rated_frequency);
+        let sign = if motoring { 1.0 } else { -1.0 };
+        let at = |x: f64| {
+            // x in (0, 1]: the slip's magnitude span x^2; never exactly a stator frequency of 0.
+            let w_s = w_r + sign * span * x * x;
+            (sign * self.vf_torque(rs, supply, if w_s == 0.0 { 1e-6 } else { w_s }, w_r)).max(0.0)
+        };
+        let values: Vec<f64> = (1..=N).map(|n| at(n as f64 / N as f64)).collect();
+        let best = (0..N).max_by(|&a, &b| values[a].total_cmp(&values[b])).unwrap_or(0);
+        let (mut lo, mut hi) = ((best as f64) / N as f64, ((best + 2).min(N)) as f64 / N as f64);
+        let g = 0.5 * (5f64.sqrt() - 1.0);
+        let (mut x1, mut x2) = (hi - g * (hi - lo), lo + g * (hi - lo));
+        let (mut f1, mut f2) = (at(x1), at(x2));
+        for _ in 0..30 {
+            if f1 < f2 {
+                (lo, x1, f1) = (x1, x2, f2);
+                x2 = lo + g * (hi - lo);
+                f2 = at(x2);
+            } else {
+                (hi, x2, f2) = (x2, x1, f1);
+                x1 = hi - g * (hi - lo);
+                f1 = at(x1);
+            }
+        }
+        values[best].max(f1).max(f2)
     }
 
     /// The drive enabled: field-oriented, magnetized at the rated flux and giving `torque`, in the steady state at rest;
@@ -230,6 +319,8 @@ impl Induction {
     pub(crate) fn control(&self, d: &mut Drive, p: &DriveParams, speed: f64) {
         let dt = p.current_cycle;
         let supply = Self::supply(d, p);
+        let rs = d.winding_resistance(p);
+        let imax = p.overload.as_ref().filter(|_| d.overloaded).map_or(f64::INFINITY, |o| o.base_current);
         let (is, _) = self.currents(&d.phases.x);
         d.iron_loss = 0.0;
         if !self.field_oriented {
@@ -255,11 +346,17 @@ impl Induction {
         let flux = ph.estimate.max(1e-3 * self.rated_flux);
         let w_r = self.pole_pairs * speed;
         ph.frame_speed = w_r + self.rotor_resistance * k * is[1] / flux;
-        // Setpoints: the flux's d current, the torque's q current, within the current limit.
-        let amplitude = SQRT_2 * p.max_current.min(p.drive_max_current);
-        let id_set = (self.flux_setpoint(speed) / self.magnetizing).min(amplitude);
+        // Setpoints: the flux's d current (weakened where the voltage runs out), the torque's q current, within the current
+        // limit (the drive's base load current while it is overloaded) and the voltage circle at that flux, the same
+        // `torque_curve` has, motoring and generating apart.
+        let amplitude = SQRT_2 * p.max_current.min(p.drive_max_current).min(imax);
+        let flux_set = self.flux_setpoint(speed, supply, rs);
+        let id_set = (flux_set / self.magnetizing).min(amplitude);
         let iq_most = (amplitude * amplitude - id_set * id_set).max(0.0).sqrt();
-        let iq_set = (d.torque_command / (1.5 * self.pole_pairs * k * flux)).clamp(-iq_most, iq_most);
+        let by_voltage = |motoring| self.voltage_iq(rs, supply, flux_set, w_r.abs(), motoring, iq_most);
+        let (with_speed, against_speed) = (by_voltage(true), by_voltage(false));
+        let (iq_high, iq_low) = if w_r >= 0.0 { (with_speed, against_speed) } else { (against_speed, with_speed) };
+        let iq_set = (d.torque_command / (1.5 * self.pole_pairs * k * flux)).clamp(-iq_low, iq_high);
         let ff = self.feedforward(ph.frame_speed, w_r, is, flux);
         let error = [id_set - is[0], iq_set - is[1]];
         let wanted = [0, 1].map(|n| p.current_kp * error[n] + ph.integral[n] + ff[n]);
@@ -487,6 +584,48 @@ mod tests {
         assert!((plain / 2.947 - 1.0).abs() < 0.06, "{plain} rad/s");
         let compensated = drop(true);
         assert!(compensated.abs() < 0.4, "{compensated} rad/s");
+    }
+
+    /// The field-oriented curve on a 540 V link (phase amplitude 540 / sqrt 3 = 311.77 V, the 400 V plate needs 326.6 V)
+    /// is the torque the voltage leaves at the flux the control sets. At 115 rad/s (w = 230 rad/s) the rated flux
+    /// 0.99488 Wb (i_d = 2.2108 A) needs no weakening (|R_s + j w L_s| i_d = 249 V). Torque 23.05 N m is i_q =
+    /// 23.05 / (3 * 0.957447 * 0.99488) = 8.066 A, slip 3.5 * 0.957447 * 8.066 / 0.99488 = 27.17 rad/s, w_k = 257.17:
+    /// u_d = 4.5 * 2.2108 - 257.17 * 0.039149 * 8.066 = -71.26 V, u_q = 4.5 * 8.066 + 257.17 * 0.47 * 2.2108 = 303.5 V,
+    /// |u| = 311.8 V: the circle, where the rated-flux curve said the current limit's 25 N m. At 140 rad/s the rated flux
+    /// would leave 7.2 N m; the setpoint falls to the d current that takes 0.9 of the voltage (0.9589 Wb) and gives more.
+    #[test]
+    fn the_field_oriented_curve_follows_the_voltage_the_link_leaves() {
+        let p = params(true, 4.5);
+        let m = motor(&p);
+        let high = m.torque_curve(&p, 115.0, 540.0).1;
+        assert!((high - 23.05).abs() < 0.3, "{high} N m");
+        assert!(m.torque_curve(&p, 140.0, 540.0).1 > 7.5);
+        assert!(m.flux_setpoint(140.0, 540.0 / 3f64.sqrt(), 4.5) < m.rated_flux);
+        assert_eq!(m.flux_setpoint(115.0, 540.0 / 3f64.sqrt(), 4.5), m.rated_flux);
+    }
+
+    /// The drive's current limit is the converter's, not a servo's torque constant: a 6 A drive (RMS, amplitude 8.485 A)
+    /// at 50 rad/s holds i_d = 0.99488 / 0.45 = 2.2108 A and i_q = sqrt(72 - 4.888) = 8.192 A, 3 * 0.957447 * 0.99488 *
+    /// 8.192 = 23.41 N m, where the servo constant (3.0 N m/A here) clamped at 18.0 N m.
+    #[test]
+    fn the_drive_current_limit_of_an_induction_motor_is_its_own_currents_torque() {
+        let p = DriveParams { drive_max_current: 6.0, kt: 3.0, ..params(true, 4.5) };
+        let high = p.torque_range_at(50.0, p.max_voltage).1;
+        assert!((high - 23.41).abs() < 0.1, "{high} N m");
+    }
+
+    /// V/f at low speed: the stator frequency runs ahead of the rotor, not at it. At 10 rad/s (w = 20 rad/s) the most the
+    /// circuit makes of the V/f voltage over the slip is 18.88 N m (the old curve, the breakdown at the frequency of
+    /// the rotor, 7.79 N m): at a stator frequency of 20 rad/s the voltage is 326.6 * 20 / 314.16 = 20.8 V, little for
+    /// the 4.5 Ohm stator, and more slip means more voltage with it. The scan finds the circuit's own maximum.
+    #[test]
+    fn the_v_f_curve_is_the_maximum_over_the_slip() {
+        let p = params(false, 4.5);
+        let (low, high) = motor(&p).torque_curve(&p, 10.0, 540.0);
+        assert!((high - 18.88).abs() < 0.3, "{high} N m");
+        assert!(low < 0.0);
+        let (_, high) = motor(&p).torque_curve(&p, 25.0, 540.0);
+        assert!((high - 20.53).abs() < 0.3, "{high} N m");
     }
 
     /// Field-oriented from no flux: the d current steps to psi* / L_m within the current loop's 0.5 ms, and the rotor flux
