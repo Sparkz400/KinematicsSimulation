@@ -2059,7 +2059,7 @@ impl MotorCurve {
 /// The belt is a limit of the plan too: `tension` is the lowest and the highest tension a belt section may have
 /// (`ratings.belt_min_tension_n` and `belt_max_tension_n`, each less `profile.tension_margin_n`; -inf and inf where the
 /// config has none) and the share of the room to them the plan may use (`profile.tension_reserve`). The rigid model gives
-/// each section's tension at each place as c + g . acceleration (`Machine::rigid_tensions`), linear in the acceleration,
+/// each section's tension at each place as c + g . acceleration (`Machine::rigid_tensions_moving`: c a + b v + d v^2 along the path, as the checks' fit),
 /// so each section and place is one more bound: |g . acceleration| <= share * min(highest - c, c - lowest), the same
 /// room both ways. The rest of the room is for what the rigid model leaves out: the margin for the guide friction the
 /// belt pulls, the share (0.5 in the shipped configs) for the belt's vibration, which after a quick ramp of acceleration
@@ -2652,21 +2652,31 @@ fn piece_limits(
         let mut rows: Vec<[f64; 5]> = (0..motors)
             .map(|m| [per_acc[m] - hold[m], per_speed[m] - hold[m], hold[m], -torque[m], torque[m]])
             .collect();
+        // The speeds 1 and 2 along the path: the tool at v p' and p'' v^2 (and the same twice over, four times the second).
+        let (twice, four): (Vec<f64>, Vec<f64>) =
+            (d1.iter().map(|x| 2.0 * x).collect(), d2.iter().map(|x| 4.0 * x).collect());
+        // Per row after the motors' rows, the part b v of its value that grows with the speed alone (see `Place::speed`).
+        let mut speed = vec![0.0; motors];
         if lowest.is_finite() || highest.is_finite() {
-            let tensions = |acc: &[f64]| {
+            // The tension at the speed too (a delta's carriages accelerate with the speed): c a + b v + d v^2 as the
+            // checks below, read at rest, at the acceleration 1 and at the speeds 1 and 2 along the path.
+            let tensions = |vel: &[f64], acc: &[f64]| {
                 let mut out = Vec::new();
-                machine.rigid_tensions(pose, acc, &mut out);
+                machine.rigid_tensions_moving(pose, vel, acc, &mut out);
                 out
             };
-            let (still, per_acc, per_speed) = (tensions(&zero), tensions(d1), tensions(d2));
+            let (still, per_acc, once, fast) =
+                (tensions(&zero, &zero), tensions(&zero, d1), tensions(d1, d2), tensions(&twice, &four));
             for k in 0..still.len() {
                 let room = (1.0 - KEPT_BACK) * share * (highest - still[k]).min(still[k] - lowest);
                 if !(room > 0.0) {
                     return Err(CommandError { key: "error-path-tension" });
                 }
+                let d = 0.5 * (fast[k] - 2.0 * once[k] + still[k]);
                 // The same room on both sides: the belt's vibration after a change of tension swings as far the
                 // other way (see `plan_time_optimal`).
-                rows.push([per_acc[k] - still[k], per_speed[k] - still[k], 0.0, -room, room]);
+                rows.push([per_acc[k] - still[k], d, 0.0, -room, room]);
+                speed.push(once[k] - still[k] - d);
             }
         }
         if (0..motors).any(|m| gearbox(m).is_some()) {
@@ -2719,15 +2729,13 @@ fn piece_limits(
         // acceleration 1 and at the speeds 1 and 2 along the path gives c a + b v + d v^2 + e. One that grows with the
         // acceleration keeps `reserve` of its limit, as the torques do; a speed alone, the margin's share less
         // `SPEED_KEPT`.
-        let mut speed = vec![0.0; rows.len()];
+        speed.resize(rows.len(), 0.0);
         if !checks.is_empty() {
             let values = |vel: &[f64], acc: &[f64]| {
                 let mut out = Vec::new();
                 machine.rigid_checks(pose, vel, acc, &mut out);
                 out
             };
-            let (twice, four): (Vec<f64>, Vec<f64>) =
-                (d1.iter().map(|x| 2.0 * x).collect(), d2.iter().map(|x| 4.0 * x).collect());
             let (still, per_acc, once, fast) =
                 (values(&zero, &zero), values(&zero, d1), values(d1, d2), values(&twice, &four));
             for (k, check) in checks.iter().enumerate().take(still.len()) {

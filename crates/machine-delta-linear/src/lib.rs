@@ -1078,17 +1078,22 @@ impl Machine for LinearDelta {
         }
     }
 
-    // shortcut: h'' = J^-1 p'' without the speed term J_x^-1 w (the trait gives no speed), so m_c h'' is off by 12 to 20 N
-    // per carriage at 3 m/s; upgrade when `rigid_tensions` gets the tool speed.
     /// Per column, F = m_c h'' + m_nt (J^T p'')_k - Q_g,k on the carriage (without pulley and rotor), T1 - T2 = F, and the
     /// belt keeps its length: (T1 - P) L1 + (T2 - P) L2 = 0. So T1 = P + F L2 / (L1 + L2), T2 = P - F L1 / (L1 + L2).
     fn rigid_tensions(&self, pos: &[f64], acc: &[f64], out: &mut Vec<f64>) {
+        self.rigid_tensions_moving(pos, &[0.0; 3], acc, out);
+    }
+
+    /// With the speed: the carriage's acceleration is h'' = J^-1 (p'' - J_x^-1 w), as in `feedforward_torque_moving`.
+    fn rigid_tensions_moving(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut Vec<f64>) {
         let p = [pos[0], pos[1], pos[2]];
         let h = self.legs.inverse(p).unwrap_or([f64::NAN; 3]);
         let (_, _, gravity) = self.load(h, [0.0; 3]);
         let (_, j) = self.pose(h);
-        let pa = [acc[0], acc[1], acc[2]];
-        let carriage_acc = inverse(&j).map_or([f64::NAN; 3], |inv| mul(&inv, pa));
+        let inv = inverse(&j).unwrap_or([[f64::NAN; 3]; 3]);
+        let (pv, pa) = ([vel[0], vel[1], vel[2]], [acc[0], acc[1], acc[2]]);
+        let bend = self.legs.velocity_term(h, p, mul(&inv, pv), pv).unwrap_or([f64::NAN; 3]);
+        let carriage_acc = mul(&inv, std::array::from_fn(|i| pa[i] - bend[i]));
         let force = transpose(&j).map(|column| self.m_nt() * dot(column, pa));
         let pre = self.belt.pretension;
         for k in 0..3 {

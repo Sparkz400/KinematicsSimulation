@@ -218,6 +218,22 @@ fn the_feedforward_gives_the_asked_acceleration() {
     assert!((inertia * r - 0.63355).abs() < 1e-5, "{}", inertia * r);
 }
 
+/// At 3 m/s along y and no tool acceleration the carriages still accelerate (h'' = -J^-1 J_x^-1 w): the carriage part of
+/// T1 - T2 = m_c h'' + m_nt J^T p'' - Q_g changes against rest by m_c h'' = (-12.2, -17.9, -17.9) N at (0.3, 0, -1.17)
+/// (the audit's hand calculation); `rigid_tensions` without the speed misses it.
+#[test]
+fn the_rigid_tensions_have_the_speed_term_of_the_carriage_acceleration() {
+    let d = delta(&[]);
+    let (p, v) = ([0.3, 0.0, -1.17], [0.0, 3.0, 0.0]);
+    let (mut moving, mut rest) = (Vec::new(), Vec::new());
+    d.rigid_tensions_moving(&p, &v, &[0.0; 3], &mut moving);
+    d.rigid_tensions(&p, &[0.0; 3], &mut rest);
+    for (k, want) in [-12.2, -17.9, -17.9].into_iter().enumerate() {
+        let diff = (moving[2 * k] - moving[2 * k + 1]) - (rest[2 * k] - rest[2 * k + 1]);
+        close(diff, want, 1e-2, "m_c h'' in T1 - T2");
+    }
+}
+
 /// The default cycle passes every verdict, and takes the D3's hand-calculated 720 profile cycles: the same Adept cycle
 /// 25/305/25 mm at the same 3 m/s, 50 m/s^2 and 2500 m/s^3 (see the D3's test).
 #[test]

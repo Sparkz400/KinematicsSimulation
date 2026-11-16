@@ -23,7 +23,8 @@
 //! The mass centre sits `mass.centre_offset_m` = e outside the centre line (0 ships, the drawn mover is 35 mm out):
 //! it runs on R + e at v (1 + e k), the lateral acceleration is v^2 k (1 + e k) and the mass m (1 + e k)^2.
 //!
-//! The coils (`MoverTrack`): a mover's current is its force over the force constant, I = F / k_t, and it flows in the
+//! The coils (`MoverTrack`): a mover's current is that of its force, I = F / k_t less what saturation takes towards the
+//! maximum current (`DriveParams::current_for`), and it flows in the
 //! coils under its magnet plate, shared among the segments by the plate's length on each. A segment's current is the sum
 //! of |I| of the movers on it in those shares; its copper loss R I^2 per mover in those shares (R the coil set under one
 //! mover, `motor.resistance_ohm`). Each segment warms with its loss through one thermal resistance and time constant
@@ -38,6 +39,7 @@
 //! movers instead, as on every machine; `flying.toml` runs its cam, and `--set cam.run=true` the index cam.
 
 use sim_components::cam::{Cam, Law, Segment};
+use sim_components::drive::DriveParams;
 use sim_components::chain::{JointMachine, JointSpec, MOTOR_IDS, Mechanism};
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::ThermalFeedback;
@@ -484,7 +486,8 @@ impl Mechanism for Movers {
     }
     /// The mass centre runs at v (1 + e k(s)) with the centre line's speed v: T = m (1 + e k)^2 v^2 / 2, so the mass is
     /// m (1 + e k)^2 and the bias (the energy kept, the clothoid's tangential force) m (1 + e k) e k' v^2. The plate's
-    /// inertia stays on the centre line (shortcut: the plate is 0.2 kg of 1.25, e = 0 ships, when e matters).
+    /// inertia stays on the centre line: the plate faces the coils, which lie on it (the drawn mover sits outside it, its
+    /// body and payload with it), so only they move out with e.
     fn dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         let n = self.n();
         mass.fill(0.0);
@@ -610,7 +613,9 @@ pub struct MoverTrack {
     pub inner: JointMachine<Movers>,
     inner_base: usize,
     inner_memory: usize,
-    kt: f64,
+    /// The drive as the controller reads it: `current_for` gives the current of a force with the torque constant
+    /// falling towards the maximum current (`effects.torque_saturation`).
+    drive: DriveParams,
     resistance: f64,
     thermal_resistance: f64,
     time_constant: f64,
@@ -745,7 +750,8 @@ impl MoverTrack {
             inner_base: 0,
             inner_memory: inner.memory().len(),
             inner,
-            kt: cfg.positive("motor.torque_constant_nm_a")?,
+            // The base step and velocity cycle only set the filters, which `current_for` does not use.
+            drive: DriveParams::from_config(cfg, 1.0, 1.0)?,
             resistance: cfg.non_negative("motor.resistance_ohm")?,
             thermal_resistance: cfg.positive("segment.thermal_resistance_k_w")?,
             time_constant: cfg.positive("segment.thermal_time_constant_s")?,
@@ -771,15 +777,13 @@ impl MoverTrack {
         &self.inner.mechanism
     }
 
-    /// Per segment its current (A, the movers' |F| / k_t in their plates' shares on it) and its copper loss (W), at the
+    /// Per segment its current (A, the movers' currents for their forces, `DriveParams::current_for`, in their plates' shares on it) and its copper loss (W), at the
     /// movers' positions `q` and motor forces `force`.
     pub fn segment_load(&self, q: &[f64], force: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let t = &self.movers().track;
         let (mut current, mut loss) = (vec![0.0; t.segments.len()], vec![0.0; t.segments.len()]);
         for (k, f) in force.iter().enumerate() {
-            // shortcut: the linear k_t, while the drive saturates (9.5 N/A at 11 A: up to 5 % more current at peak force),
-            // `DriveParams::current_for` needs the control's cycle time; upgrade by building it for the loss.
-            let i = f / self.kt;
+            let i = self.drive.current_for(*f);
             for j in 0..t.segments.len() {
                 let share = t.share(q[k], self.movers().plate, j);
                 current[j] += share * i.abs();
@@ -876,6 +880,9 @@ impl Machine for MoverTrack {
     }
     fn rigid_tensions(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
         self.inner.rigid_tensions(tool_pos, tool_acc, out)
+    }
+    fn rigid_tensions_moving(&self, tool_pos: &[f64], tool_vel: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
+        self.inner.rigid_tensions_moving(tool_pos, tool_vel, tool_acc, out)
     }
     fn rigid_guide_loads(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_guide_loads(tool_pos, tool_acc, out)
