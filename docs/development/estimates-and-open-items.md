@@ -116,3 +116,30 @@ one measured data set in the repository is the external ISW set under `datasets/
 compared with that set, a "matches" in `docs/validation.md` compares the program with a hand
 calculation or with itself, not with hardware. (Not re-read line by line for this file: check
 `docs/validation.md` before quoting this.)
+
+## 8. Vendor facts looked up on 2026-11-16
+
+`docs/development/vendor-facts.md` holds what the vendors' own documents say, with document, page
+and link. What it changes in the tables above (rows stay until the code follows):
+
+- **KRL CIRC** (section 3): sourced. KUKA System Software 8.3, section 11.5.3: missing end-point
+  components take the previous position's values. The code now does this.
+- **Festo cushioning** (section 1): the vendor's rule for the cylinder's own cushioning is kinetic
+  energy only, v = sqrt(2E/(m1 + m2)); the weight term belongs to Festo's rule for external shock
+  absorbers. The weight term added to `pneumatic.rs` in this batch is therefore NOT the vendor's check
+  and is to be taken out again (keep it, if at all, as a separate signal).
+- **G-code feed** (section 3): sourced for Siemens SINUMERIK (Fundamentals manual, section 8.1): a
+  rotary-only block reads F in degrees per minute; with the default FGROUP (geometry axes) a rotary
+  axis in a mixed block is a synchronised axis and follows in the linear axes' time. Fanuc: no primary
+  source found.
+- **Rexroth CKR and Bahr stroke** (section 5): sourced. Lca and Lad per CKR size and the basic length
+  per Bahr ELZ size are in the vendor-facts file; the stroke limit can now be module length minus those.
+- **Harmonic Drive efficiency** (section 1): the vendor prints graphs only, no table. Two printed
+  anchors: CSF-20-80 at 1000 r/min, 20 °C, grease: 78 % at rated torque; SHF-20-80: 82 %. The flat
+  0.70 stays unsourced until the graphs are digitised.
+- **Mover's mass centre** (section 1): not published by Beckhoff in anything readable; needs the
+  vendor's load diagrams, CAD or a question to their support. Mass 651 g is sourced.
+- **Late fieldbus frame** (section 3): no primary text found; SINAMICS only documents the tolerated
+  number of missed sign-of-life counts (p0925, fault F01912), not what the setpoint does meanwhile.
+- **Stepper current convention** (section 3): the catalogue has no stepper vendor, so there is nothing
+  to check it against.
