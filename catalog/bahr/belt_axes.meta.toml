@@ -22,6 +22,12 @@ moved_mass: the "bewegte Masse" the gantry sheets give per axis.
 max_length_one_piece: longer axes are joined from pieces. max_length_x/y/z: of the gantries; the XY gantry
   prints one number for "length and width". Empty where the sheet does not state it in one of these forms
   (ELSD: "max. Länge 2.000 mm"; DLZPVI: one length per size).
+non_stroke_length: the "Grundlänge" (basic length, dimension L of the standard carriage) of the ordering key
+  "Grundlänge + Verstellweg = Gesamtlänge", page 2 of the sheet; the stroke limit is max_length_one_piece minus it.
+  Filled for the ELZ only (sheet 21.1.100, 11/25, read directly: 30: 158, 40: 225, 60: 290, 60S: 315, 80: 375, 80S: 395,
+  100: 530, 125: 625 mm). The other series' sheets carry the same rule but their values were read from a text layer with
+  merged columns (docs/development/vendor-facts.md section 2): left empty until checked, and the search flags such a
+  row "axis-stroke" (its stroke is the module length).
 sheet and edition: from the footer of the first page, "21.30.100 ... 11/25".
 As printed, and not smoothed over:
   The continuous feed force is the static Fx, except ELZ, ELZ-W, ELSD, ELSZ, ELZD-W, ELZU 60 and 60S and

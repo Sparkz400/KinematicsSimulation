@@ -33,6 +33,9 @@ mass_at_zero_stroke_kg: not printed as a number; from the catalogue's weight cal
 mass_per_stroke_kg_m: kg var [kg/mm]. moved_mass_x_kg: "Moved mass of system" mca [kg], without connection plate.
 stroke_x_min_m: smin [mm], "minimum required travel range to ensure a reliable lubrication distribution".
 max_length_one_piece_m: Lmax [mm], the maximum module length L (not the stroke).
+non_stroke_length_m: Lca + Lad [mm], the carriage and the additional length of the version without connection plate
+  (page 64, "General technical data"); L = smax + Lca + Lad (page 176, stroke reserve 0), so the stroke limit is
+  max_length_one_piece_m minus this. Lca + Lad is the same with and without connection plate in every row.
 Printed as is and kept: the Lmax of the 280 is printed "5, 500" (read as 5500); the drive data print the 280's
   gearing column as German "ohne" (= "–", no gear); the drive data give the 110's carriage with connection plate as
   60 mm long, the general data as 110 mm (only the "without" carriage, 170 mm, is used here).
