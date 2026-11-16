@@ -193,6 +193,29 @@ fn the_ram_speed_is_the_derivative_of_the_height() {
     assert!((signal(-0.8, 2.0, "ram.speed") + 0.051332).abs() < 1e-6);
 }
 
+/// The ram's acceleration is the derivative of its speed, the frame's stretch under the press force included: along a
+/// crank motion of constant acceleration (no jerk) through the press zone, down and (where the force fades) up, the
+/// central difference of `ram.speed` over 1 us gives `ram.acceleration`.
+#[test]
+fn the_ram_acceleration_is_the_derivative_of_the_speed_in_the_press_zone() {
+    let p = press(&["effects.gravity = false"]);
+    let ids: Vec<String> = p.signal_infos().into_iter().map(|s| s.id.to_string()).collect();
+    let signal = |q: f64, qd: f64, qdd: f64, id: &str| {
+        let mut out = Vec::new();
+        p.signals(&[q], &[qd], &[qdd], &[0.0], &mut out);
+        out[ids.iter().position(|s| s == id).unwrap()]
+    };
+    let mut pressed = false;
+    for (q, qd, qdd) in [(0.3, 2.0, 30.0), (0.3, 2.0, -30.0), (-0.05, 1.0, 5.0), (0.05, -0.5, 8.0), (0.2, -3.0, 0.0)] {
+        pressed |= p.press_force(q, qd).1 > 1e-5;
+        let at = |t: f64| signal(q + qd * t + qdd * t * t / 2.0, qd + qdd * t, qdd, "ram.speed");
+        let dt = 1e-6;
+        let (rate, acc) = ((at(dt) - at(-dt)) / (2.0 * dt), signal(q, qd, qdd, "ram.acceleration"));
+        assert!((acc - rate).abs() < 1e-4 * (1.0 + rate.abs()), "{q} {qd} {qdd}: {acc} against {rate}");
+    }
+    assert!(pressed, "no point stretched the frame");
+}
+
 /// J(q) = J_crank + m_pin r^2 + (m_up / 3 + m_knee) a^2 phi'^2 + m_x x'^2: m_pin = 1.25 kg (half the rod), m_up = 2 kg,
 /// m_knee = 1.25 + 1 kg (the rod's and the lower link's halves), m_x = 20 + 1 + 8 = 29 kg (ram, half the link, die).
 /// At the dead centre (phi' = -0.2886751, x' = 0): 0.01 + 0.003125 + 2.9166667 * 0.0225 / 12 = 0.01859375 kg m^2;

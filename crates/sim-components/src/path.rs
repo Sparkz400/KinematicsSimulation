@@ -1882,6 +1882,25 @@ pub fn plan_feeds(
     tolerance: impl Into<Tolerance>,
     slack: f64,
 ) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
+    plan_within(axes, None, start, pieces, feeds, cycle, tolerance, slack)
+}
+
+/// `plan_feeds` with the flange's angular speed and acceleration limits `spin` (rad/s, rad/s^2; `MotionLaw::spin`, an
+/// arm in tool space) kept on the pieces that turn by slerp: about one axis, so the flange turns at the angle between
+/// their orientations over their length times the speed along the path, and accelerates as much times the path's
+/// acceleration (no other part, the axis fixed). The axes' limits bound the rotation vector's rates only, which spin
+/// the flange faster away from no turn.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_within(
+    axes: &[AxisInfo],
+    spin: Option<[f64; 2]>,
+    start: &[f64],
+    pieces: &[Piece],
+    feeds: &[f64],
+    cycle: f64,
+    tolerance: impl Into<Tolerance>,
+    slack: f64,
+) -> Result<Vec<(f64, Vec<f64>)>, CommandError> {
     let (speed, bounds) = (axis_speed(axes), axis_bounds(axes));
     let (geo, _, caps) = geometry_fed(axes, start, pieces, feeds, tolerance, &speed, slack)?;
     let limits: Vec<[f64; 3]> = geo
@@ -1889,7 +1908,20 @@ pub fn plan_feeds(
         .zip(&caps)
         .map(|(g, cap)| {
             let [v, a, j] = limits(g, &bounds);
-            [v.min(*cap), a, j]
+            let per_length = match (spin, g) {
+                (Some(_), Geo::Slerp { from, to, length }) => {
+                    use crate::rigid::{exp, log, matmul, transpose};
+                    let turn = log(&matmul(&exp([to[3], to[4], to[5]]), &transpose(&exp([from[3], from[4], from[5]]))));
+                    norm(&turn) / length
+                }
+                _ => 0.0,
+            };
+            let [most_w, most_a] = spin.unwrap_or([f64::INFINITY; 2]);
+            if per_length > 0.0 {
+                [v.min(*cap).min(most_w / per_length), a.min(most_a / per_length), j]
+            } else {
+                [v.min(*cap), a, j]
+            }
         })
         .collect();
     timed(axes, &geo, &limits, cycle)

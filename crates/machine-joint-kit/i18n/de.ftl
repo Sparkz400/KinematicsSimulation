@@ -126,5 +126,5 @@ param-redundancy = Freier Gelenkfreiheitsgrad eines redundanten Arms: „home“
 tool-orientation = Werkzeugorientierung
 quantity-angular-speed = Winkelgeschwindigkeit des Flanschs
 quantity-angular-acceleration = Winkelbeschleunigung des Flanschs
-check-tool-angular-speed = Winkelgeschwindigkeit des Flanschs, höchste, gegen die kleinste der Rx-, Ry- und Rz-Geschwindigkeitsgrenzen [rad/s]
-check-tool-angular-acceleration = Winkelbeschleunigung des Flanschs, höchste, gegen die kleinste der Rx-, Ry- und Rz-Beschleunigungsgrenzen [rad/s²]
+check-tool-angular-speed = Winkelgeschwindigkeit des Flanschs im Plan (starres Modell), höchste, gegen die kleinste der Rx-, Ry- und Rz-Geschwindigkeitsgrenzen [rad/s]
+check-tool-angular-acceleration = Winkelbeschleunigung des Flanschs im Plan (starres Modell), höchste, gegen die kleinste der Rx-, Ry- und Rz-Beschleunigungsgrenzen [rad/s²]

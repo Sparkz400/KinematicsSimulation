@@ -272,7 +272,7 @@ fn the_line_module_is_judged_against_its_ratings() {
 /// The braking resistor's mean power estimated without the simulated DC link (each braking fills the link's capacitors,
 /// what is above their room goes to the resistor, what the motor draws between empties them) stays on the safe side of
 /// the simulated link's: on the T-gantry's motor b the audit's run gave 0.90 W simulated, where the old estimate (all
-/// that is fed back) said 2.56 W. Now (16 November 2026) both give 0.9611 W, to 1e-13: the simulated link keeps the same
+/// that is fed back) said 2.56 W. Now (16 November 2026) both give 0.9577 W, to 1e-13: the simulated link keeps the same
 /// energy account (it has no losses of its own), so the estimate is that link's figure; all of it fed back is 2.61 W.
 #[test]
 fn the_estimated_braking_resistor_power_is_not_below_the_simulated_one() {

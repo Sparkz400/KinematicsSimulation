@@ -271,18 +271,46 @@ impl Profile {
 
 /// How the moves of a machine are shaped: the shape, the braking limit as a share of the acceleration limit
 /// (`profile.deceleration_ratio`), and an axis that lifts against gravity (`profile.vertical_axis`): its index, the
-/// sign of up along it, and the share of its acceleration limit it has upwards (`profile.up_acceleration_ratio`).
+/// sign of up along it, and the share of its acceleration limit it has upwards (`profile.up_acceleration_ratio`). And
+/// where the tool's orientation is a rotation vector rx, ry, rz whose flange has limits of its own (an arm in tool
+/// space, the checks "tool-angular-speed" and "tool-angular-acceleration"): the flange's angular speed (rad/s) and
+/// acceleration (rad/s^2), which the move keeps beside the axes' limits on the rotation vector (`spin_rates`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MotionLaw {
     pub shape: Shape,
     pub deceleration_ratio: f64,
     pub vertical: Option<(usize, f64, f64)>,
+    #[serde(default)]
+    pub spin: Option<[f64; 2]>,
 }
 
 impl Default for MotionLaw {
     fn default() -> Self {
-        Self { shape: Shape::SCurve, deceleration_ratio: 1.0, vertical: None }
+        Self { shape: Shape::SCurve, deceleration_ratio: 1.0, vertical: None, spin: None }
     }
+}
+
+/// Of a move whose rotation vector runs straight from `from` by `delta` (rad, over its share s from 0 to 1): the most
+/// |w| per unit of ds/dt and the most |dw/ds| per unit of (ds/dt)^2 anywhere on it, w the flange's angular velocity
+/// (w = J(r) r', J the rotation vector's Jacobian, which is not 1 away from no turn: at r = (0, pi/2, 0) a rate of 1
+/// rad/s on rz alone spins it at 1.27 rad/s). So |w| <= g1 ds/dt and |dw/dt| <= g1 |d2s/dt2| + g2 (ds/dt)^2. From
+/// the turn between orientations 1e-6 apart, at 65 places along the move (the largest between them a rounding above).
+pub fn spin_rates(from: [f64; 3], delta: [f64; 3]) -> [f64; 2] {
+    use crate::rigid::{exp, log, matmul, transpose};
+    let at = |s: f64| -> [f64; 3] { std::array::from_fn(|i| from[i] + s * delta[i]) };
+    let spin = |s: f64| -> [f64; 3] {
+        let h = 1e-6;
+        log(&matmul(&exp(at(s + h)), &transpose(&exp(at(s - h))))).map(|v| v / (2.0 * h))
+    };
+    let size = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let (mut g1, mut g2) = (0.0f64, 0.0f64);
+    for i in 0..=64 {
+        let (s, k) = (i as f64 / 64.0, 1e-4);
+        let (ahead, behind) = (spin(s + k), spin(s - k));
+        g1 = g1.max(size(spin(s)));
+        g2 = g2.max(size(std::array::from_fn(|i| (ahead[i] - behind[i]) / (2.0 * k))));
+    }
+    [g1, g2]
 }
 
 /// Seven-segment S-curve over a distance, from rest to rest:
@@ -392,12 +420,23 @@ impl Move {
         };
         let moving = delta.iter().any(|d| *d != 0.0);
         let curve = if moving {
-            let limits = Limits {
+            let mut limits = Limits {
                 vel: tightest(&|_, a, _| a.max_vel),
                 acc: tightest(&|i, a, sign| acc(i, a, sign)),
                 dec: tightest(&|i, a, sign| acc(i, a, -sign) * law.deceleration_ratio),
                 jerk: tightest(&|_, a, _| a.max_jerk),
             };
+            // The flange's spin: |w| <= g1 v, and |dw/dt| <= g1 |a| + g2 v^2 with half of its limit at most for the second.
+            let turn = ["rx", "ry", "rz"].map(|id| axes.iter().position(|a| a.id == id));
+            if let (Some([most_w, most_a]), [Some(x), Some(y), Some(z)]) = (law.spin, turn) {
+                let [g1, g2] = spin_rates([start[x], start[y], start[z]], [delta[x], delta[y], delta[z]]);
+                if g1 > 0.0 {
+                    let by_curve = if g2 > 0.0 { (0.5 * most_a / g2).sqrt() } else { f64::INFINITY };
+                    limits.vel = limits.vel.min(most_w / g1).min(by_curve);
+                    let room = (most_a - g2 * limits.vel * limits.vel) / g1;
+                    (limits.acc, limits.dec) = (limits.acc.min(room), limits.dec.min(room));
+                }
+            }
             Profile::new(1.0, law.shape, limits)
         } else {
             Profile::default()

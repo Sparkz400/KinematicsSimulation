@@ -1028,8 +1028,9 @@ impl H4 {
     /// the load's mass matrix M, the rotors still, so w^2 = k / mu over M's eigenvalues mu, the shape M's eigenvector
     /// v; the damping ratio c / (2 w mu) with the gearboxes' damping c. The tool counts with the slide unless it is on
     /// the amplifier's spring (`amplifier_mode`). Gravity's stiffness and the stops are left out. Frequency in Hz,
-    /// damping ratio and shape in the arm angles, lowest first; none in the rigid model or out of reach.
-    fn modes_at(&self, tool: &[f64]) -> Vec<(f64, f64, V4)> {
+    /// damping ratio and shape in the arm angles, lowest first; none in the rigid model or out of reach. K1 for the moves
+    /// that excite the modes; with hysteresis a small vibration (`small`) sees K1 + sigma, as the 3-axis delta's.
+    fn modes_at(&self, tool: &[f64], small: bool) -> Vec<(f64, f64, V4)> {
         if !self.elastic || tool.len() != 4 {
             return Vec::new();
         }
@@ -1037,7 +1038,8 @@ impl H4 {
         let spin = if self.amplifier.is_some() { 0.0 } else { self.tool_inertia() };
         let (mass, ..) = self.load_at(t, [0.0; 4], self.carried(), spin);
         let (mu, v) = symmetric_eigen(mass.iter().map(|row| row.to_vec()).collect());
-        let (k, c) = (self.joints[0].gearbox.stiffness, self.joints[0].gearbox.damping);
+        let g = &self.joints[0].gearbox;
+        let (k, c) = (g.stiffness + if small && g.hysteresis > 0.0 { g.dahl_stiffness } else { 0.0 }, g.damping);
         let mut out: Vec<(f64, f64, V4)> = (0..4)
             .filter(|&i| mu[i] > 0.0)
             .map(|i| {
@@ -1046,6 +1048,15 @@ impl H4 {
             })
             .collect();
         out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out
+    }
+
+    /// The arms' four modes (`modes_at`, `small` amplitude or not) and the amplifier's, lowest first.
+    fn modes_with(&self, tool_pose: &[f64], small: bool) -> Vec<Mode> {
+        let mut out: Vec<Mode> =
+            self.modes_at(tool_pose, small).into_iter().map(|(hz, damping, _)| Mode { hz, damping }).collect();
+        out.extend(self.amplifier_mode());
+        out.sort_by(|a, b| a.hz.total_cmp(&b.hz));
         out
     }
 
@@ -1670,13 +1681,13 @@ impl Machine for H4 {
     /// The lowest of the arms' modes (`modes_at`), with the gearboxes' springs (effects.joint_elasticity): what an input
     /// shaper on the path is for. The tool's turn on the amplifier is in `modes`.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
-        self.modes_at(tool_pose).first().map(|mode| mode.0)
+        self.modes_at(tool_pose, false).first().map(|mode| mode.0)
     }
 
     /// The mode of `resonance_hz`: the joints' turns in the arm angles, rotors and tool still; scaled so that the tool
     /// point's largest travel along an axis is 1 m.
     fn mode_shape(&self, tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
-        let (hz, _, v) = self.modes_at(tool_pose).into_iter().next()?;
+        let (hz, _, v) = self.modes_at(tool_pose, false).into_iter().next()?;
         let x = self.coordinates(tool_pose);
         let j = self.legs.jacobian(self.legs.inverse(x)?, x)?;
         let moved = mul4(&j, v);
@@ -1691,11 +1702,13 @@ impl Machine for H4 {
     /// The arms' four modes (with effects.joint_elasticity) and the tool's turn on the amplifier (with
     /// effects.amplifier_compliance), lowest first.
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
-        let mut out: Vec<Mode> =
-            self.modes_at(tool_pose).into_iter().map(|(hz, damping, _)| Mode { hz, damping }).collect();
-        out.extend(self.amplifier_mode());
-        out.sort_by(|a, b| a.hz.total_cmp(&b.hz));
-        out
+        self.modes_with(tool_pose, false)
+    }
+
+    /// `modes` with the gearboxes' hysteresis stiffness added (K1 + sigma): the frequencies of a small ringing. The
+    /// amplifier's spring has no hysteresis: its mode stays.
+    fn modes_small_amplitude(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        self.modes_with(tool_pose, true)
     }
 }
 

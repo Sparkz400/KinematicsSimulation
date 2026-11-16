@@ -87,7 +87,9 @@ pub struct Settings {
     pub blocked_time: f64,
     /// The band around the expected torque, as a share of the peak torque; 0: that monitor is off. The expected torque is
     /// the feedforward (`Drive::torque_ff`) and, with `drive.torque_feedforward_model = "inertia"` (no gravity in it), the
-    /// torque that holds the planned pose (`Drive::torque_hold`): a held load is expected, a lasting extra load is not.
+    /// torque that holds the planned pose, and the friction at the planned speed (the characteristic of the friction
+    /// feedforward where the drive has one, else the machine's own model, `Machine::steady_friction`), both in
+    /// `Drive::torque_hold`: a held load and the friction are expected, a lasting extra load is not.
     pub torque_band: f64,
 }
 

@@ -315,6 +315,26 @@ fn the_amplifier_mode_is_the_hand_calculated_one() {
     assert!(h4(&["effects.amplifier_compliance = false"]).amplifier_mode().is_none());
 }
 
+/// With hysteresis in the gearboxes (`gearbox_lost_motion`, hysteresis_rad > 0) a small vibration sees K1 + sigma, and
+/// sigma is K1: the arms' modes stand sqrt 2 above the large-amplitude ones (the gears are their only spring here, the
+/// amplifier off). The amplifier's mode has no hysteresis and stays. Without hysteresis (as shipped) both lists agree.
+#[test]
+fn the_small_amplitude_modes_stand_sqrt_two_above_the_large_ones_with_hysteresis() {
+    let pose = [0.0, 0.0, -0.9, 0.0];
+    let d = h4(&["effects.amplifier_compliance = false", "gearbox.hysteresis_rad = 0.0003"]);
+    let (large, small) = (d.modes(&pose), d.modes_small_amplitude(&pose));
+    assert!(large.len() == 4 && small.len() == 4, "{large:?} {small:?}");
+    for (l, s) in large.iter().zip(&small) {
+        close(s.hz, l.hz * 2f64.sqrt(), 1e-9, "small-amplitude mode");
+        close(s.damping, l.damping / 2f64.sqrt(), 1e-9, "its damping ratio, c / (2 w mu)");
+    }
+    let amplified = h4(&["gearbox.hysteresis_rad = 0.0003"]);
+    let mode = amplified.amplifier_mode().unwrap();
+    assert!(amplified.modes_small_amplitude(&pose).iter().any(|m| m.hz == mode.hz));
+    let shipped = h4(&[]);
+    assert_eq!(shipped.modes(&pose), shipped.modes_small_amplitude(&pose));
+}
+
 /// Targets are refused with their reason: beyond the cylinder, with too few numbers; the centre and the cycle's
 /// corners at either end of the turn are not.
 #[test]

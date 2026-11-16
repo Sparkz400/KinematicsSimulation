@@ -1661,6 +1661,85 @@ fn a_reorienting_time_optimal_line_keeps_the_flanges_angular_limits() {
     assert!(fastest <= 2.5 * 1.001 && hardest <= 10.0 * 1.001, "{fastest} rad/s, {hardest} rad/s^2");
 }
 
+/// A pure reorientation timed by the axis limits (`cycle_timing = "axis_limits"`): at the six-axis arm's home, flange
+/// down (r = (0, pi/2, 0)), 0.5 rad more on rz. The rotation vector's rates alone kept to 1.5 rad/s let the flange spin
+/// at 1.91 rad/s there; the move keeps the flange's own limits too (`MotionLaw::spin`), so its spin from the setpoint,
+/// |log(exp(r + h r') exp(r - h r')^T)| / 2h, stays within 1.5 rad/s and its rate within 8 rad/s^2. A move of the place
+/// alone takes as long as before.
+#[test]
+fn a_reorientation_timed_by_the_axis_limits_keeps_the_flanges_angular_limits() {
+    use sim_components::rigid::{exp, log, matmul, transpose};
+    let cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    let spin = |r: [f64; 3], rate: [f64; 3]| -> [f64; 3] {
+        let h = 1e-6;
+        let at = |s: f64| exp(std::array::from_fn(|i| r[i] + s * rate[i]));
+        log(&matmul(&at(h), &transpose(&at(-h)))).map(|w| w / (2.0 * h))
+    };
+    let size = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let run = |target: Vec<f64>| {
+        let mut sim = Sim::new(&URDF_ARM, &cfg).unwrap();
+        sim.command(sim_components::Command::MoveTo(target)).unwrap();
+        // The setpoint at each profile cycle (it holds between them): time and the flange's angular velocity.
+        let mut samples: Vec<(f64, [f64; 3])> = Vec::new();
+        let (mut last, mut end) = (Vec::new(), 0.0);
+        sim.run(2.0, |s| {
+            let c = &s.control;
+            if c.set_pos != last {
+                let w = spin([c.set_pos[3], c.set_pos[4], c.set_pos[5]], [c.set_vel[3], c.set_vel[4], c.set_vel[5]]);
+                samples.push((s.time(), w));
+                (last, end) = (c.set_pos.clone(), s.time());
+            }
+        });
+        let fastest = samples.iter().map(|(_, w)| size(*w)).fold(0.0, f64::max);
+        let hardest = samples
+            .windows(3)
+            .map(|p| size(std::array::from_fn(|i| (p[2].1[i] - p[0].1[i]) / (p[2].0 - p[0].0))))
+            .fold(0.0, f64::max);
+        (fastest, hardest, end)
+    };
+    let start = cfg.f64s("start.pose").unwrap();
+    let mut turned = start.clone();
+    turned[5] += 0.5;
+    let (fastest, hardest, _) = run(turned);
+    println!("pure reorientation: |w| {fastest:.4} of 1.5 rad/s, |dw/dt| {hardest:.4} of 8 rad/s^2");
+    assert!(fastest <= 1.5 * (1.0 + 1e-3) && fastest > 1.2, "{fastest} rad/s");
+    assert!(hardest <= 8.0 * 1.01, "{hardest} rad/s^2");
+    // The place alone: the same timing with and without the flange's limits (no turn, nothing to keep).
+    let mut moved = start.clone();
+    moved[1] += 0.2;
+    let axes = (URDF_ARM.build)(&cfg).unwrap().axes().to_vec();
+    let law = |spin| sim_components::profile::MotionLaw { spin, ..Default::default() };
+    let duration = |spin| sim_components::profile::Move::with_law(&start, &moved, &axes, &law(spin)).duration();
+    assert_eq!(duration(Some([1.5, 8.0])), duration(None));
+}
+
+/// The verdicts "tool-angular-speed" and "tool-angular-acceleration" judge the flange's spin on the setpoint's rigid
+/// motion (`Machine::rigid_checks` along the plan, once per millisecond), not on the simulated flange, whose gears ring
+/// beyond any plan. The palletiser's shipped cycle turns the flange a quarter turn about the vertical within its rz
+/// limits (2.5 rad/s, 10 rad/s^2), and passes; on the six-axis arm a trajectory that turns it 0.5 rad about the
+/// vertical in 0.25 s (2 rad/s on average) is planned faster than its 1.5 rad/s, and fails.
+#[test]
+fn the_flanges_angular_limits_are_judged_on_the_planned_motion() {
+    use sim_components::analysis::{analyse_cycle_with, analyse_trajectory, verdicts};
+    let angular = |cfg: &Config, load| -> Vec<sim_components::analysis::Verdict> {
+        verdicts(cfg, load).unwrap().into_iter().filter(|v| v.check.starts_with("tool-angular")).collect()
+    };
+    let cfg = PALLETISER.config();
+    let load = analyse_cycle_with(&mut Sim::new(&PALLETISER, &cfg).unwrap(), false).unwrap();
+    let judged = angular(&cfg, &load);
+    println!("palletiser: {judged:?}");
+    assert!(judged.len() == 2 && judged.iter().all(|v| v.ok && v.value > 0.5 * v.limit), "{judged:?}");
+    let cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    let start = cfg.f64s("start.pose").unwrap();
+    let mut turned = start.clone();
+    turned[5] += 0.5;
+    let load = analyse_trajectory(&mut Sim::new(&URDF_ARM, &cfg).unwrap(), vec![(0.0, start), (0.25, turned)]).unwrap();
+    let judged = angular(&cfg, &load);
+    println!("six-axis arm, too fast: {judged:?}");
+    let speed = judged.iter().find(|v| v.check == "tool-angular-speed").unwrap();
+    assert!(!speed.ok && speed.value > 2.0 && speed.limit == 1.5, "{speed:?}");
+}
+
 /// The seven-joint arm resolves its spare joint by a walk from the last solution, settled to 1e-13, so the feedforward
 /// at a pose (its joint rates by differences of the inverse over 1e-3 of the tool's units) is the same whatever the
 /// inverse solved before: with `kinematics.redundancy = "joint_limits"` the motors' torques after four different

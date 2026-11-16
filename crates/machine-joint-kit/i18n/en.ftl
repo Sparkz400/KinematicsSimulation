@@ -126,5 +126,5 @@ param-redundancy = Spare joint of a redundant arm: "home" or "joint_limits"
 tool-orientation = Tool orientation
 quantity-angular-speed = Angular speed of the flange
 quantity-angular-acceleration = Angular acceleration of the flange
-check-tool-angular-speed = Flange angular speed, highest, against the smallest of the Rx, Ry and Rz velocity limits [rad/s]
-check-tool-angular-acceleration = Flange angular acceleration, highest, against the smallest of the Rx, Ry and Rz acceleration limits [rad/s²]
+check-tool-angular-speed = Flange angular speed of the plan (rigid model), highest, against the smallest of the Rx, Ry and Rz velocity limits [rad/s]
+check-tool-angular-acceleration = Flange angular acceleration of the plan (rigid model), highest, against the smallest of the Rx, Ry and Rz acceleration limits [rad/s²]

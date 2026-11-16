@@ -198,6 +198,9 @@ pub struct Controller {
     /// `profile.tension_margin_n` on both; unbounded where the config has none) and the share of the room to them
     /// (`profile.tension_reserve`), each gearbox's output torque rating and the guides' load rating (`path::PlanLimits`).
     plan_limits: path::PlanLimits,
+    /// Each motor's DC link room above the bus, J (`dc_link_room`).
+    #[serde(default)]
+    dc_link_rooms: Vec<Option<f64>>,
     /// How far a planned path may leave its lines and arcs for transition curves (`path`) and to round a corner between
     /// two lines (`corner`).
     path_tolerance: path::Tolerance,
@@ -396,6 +399,7 @@ impl Controller {
             setpoint_ticks: 1,
             blend_time: 0.0,
             plan_limits: path::PlanLimits::new(1.0, [f64::NEG_INFINITY, f64::INFINITY, 1.0]),
+            dc_link_rooms: Vec::new(),
             path_tolerance: path::Tolerance::default(),
             cycle_time_optimal: false,
             segments: Vec::new(),
@@ -778,6 +782,20 @@ impl Controller {
                 ])
             })
             .collect::<Result<Vec<_>>>()?;
+        // Each motor's DC link room above the bus, J, as the verdicts take it ("dc-link-energy"), for the tally's running
+        // account (`analysis::LinkAccount`); None without the capacitance or the threshold.
+        let dc_link_rooms = machine
+            .motors()
+            .iter()
+            .map(|m| -> Result<Option<f64>> {
+                let own = crate::catalog::motor_config(cfg, m.id)?;
+                let rating = |key: &str| own.f64(&format!("ratings.{key}")).ok();
+                let bus = own.f64("drive.bus_voltage_v")?;
+                Ok(rating("dc_link_capacitance_uf")
+                    .zip(rating("braking_threshold_v"))
+                    .map(|(capacitance, threshold)| 0.5 * capacitance * 1e-6 * (threshold * threshold - bus * bus)))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let plan_limits =
             path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide, friction, ratings, margin };
         // A path through via points has to be one the planner times, from where the segment before ends; timed as fast as
@@ -863,6 +881,7 @@ impl Controller {
         self.blend_time = blend_time;
         (self.path_tolerance, self.cycle_time_optimal, self.plan_limits) =
             (path_tolerance, cycle_time_optimal, plan_limits);
+        self.dc_link_rooms = dc_link_rooms;
         (self.law, self.spline_c2) = (law, spline_c2);
         (self.pending_shaper, self.fieldbus_delay, self.fieldbus_jitter) =
             (Some(shaper), fieldbus_delay, fieldbus_jitter);
@@ -1305,7 +1324,8 @@ impl Controller {
         };
         let within_axis_limits = || {
             let (cycle, slack) = (self.profile_cycle, machine.setpoint_slack());
-            path::plan_feeds(machine.axes(), start, pieces, feeds.unwrap_or(&[]), cycle, self.path_tolerance, slack)
+            let (feeds, spin) = (feeds.unwrap_or(&[]), self.law.spin);
+            path::plan_within(machine.axes(), spin, start, pieces, feeds, cycle, self.path_tolerance, slack)
         };
         if time_optimal {
             // A pose on the way that the machine cannot go to (an arm's singularity, where the motors would have to
@@ -1475,6 +1495,11 @@ impl Controller {
     /// The limits the time-optimal plan keeps beside the motors' (`path::PlanLimits`), as the config gives them.
     pub fn plan_limits(&self) -> &path::PlanLimits {
         &self.plan_limits
+    }
+
+    /// Motor k's DC link room above the bus, J: 1/2 C (U_threshold^2 - U_bus^2) of its own ratings; None without them.
+    pub fn dc_link_room(&self, k: usize) -> Option<f64> {
+        self.dc_link_rooms.get(k).copied().flatten()
     }
 
     /// Motor and drive data of motor `k`: `drive_params` with that motor's own values (`catalog::motor_config`).
@@ -1874,15 +1899,26 @@ impl Controller {
         let motor_acc: Vec<f64> = (0..motors).map(|k| (ahead[k] - 2.0 * here[k] + behind[k]) / (h * h)).collect();
         self.torque_feedforward(machine, &self.set_pos, &self.set_vel, &self.set_acc, &motor_acc, &mut ff);
         let hold = self.holding_torque(machine, &self.set_pos);
-        for (drive, hold) in self.drives.iter_mut().zip(hold) {
-            drive.torque_hold = hold;
-        }
-        // The friction of the machine's own model at the planned speed, for the drives that take it.
+        // The friction of the machine's own model at the planned speed, for the drives that take it and for the
+        // torque-band monitor, which expects it in the torque as it expects the held load.
         let mut friction = vec![0.0; motors];
-        if self.motor_params.iter().any(|p| p.precontrol.machine_friction) {
+        let banded: Vec<bool> = (0..motors)
+            .map(|k| self.monitoring && self.fault_settings.get(k).is_some_and(|s| s.torque_band > 0.0))
+            .collect();
+        if self.motor_params.iter().any(|p| p.precontrol.machine_friction) || banded.contains(&true) {
             machine.steady_friction(&self.set_pos, &self.set_vel, &mut friction);
-            for (f, p) in friction.iter_mut().zip(&self.motor_params) {
-                *f = if p.precontrol.machine_friction { *f } else { 0.0 };
+        }
+        for k in 0..motors {
+            let p = &self.motor_params[k];
+            // The friction the config's feedforward model gives (its characteristic where it has one), else the machine's.
+            let expected = if p.precontrol.friction.is_empty() {
+                friction[k]
+            } else {
+                p.precontrol.friction_at((ahead[k] - behind[k]) / (2.0 * h))
+            };
+            self.drives[k].torque_hold = hold[k] + if banded[k] { expected } else { 0.0 };
+            if !p.precontrol.machine_friction {
+                friction[k] = 0.0;
             }
         }
         let setpoints = (0..motors)
@@ -2191,7 +2227,8 @@ impl Controller {
         let planned = time_optimal.or_else(|| {
             self.segments[next].path.as_ref().and_then(|pieces| {
                 let (cycle, slack) = (self.profile_cycle, machine.setpoint_slack());
-                path::plan(machine.axes(), &self.set_pos, pieces, cycle, tolerance, slack).ok()
+                let spin = self.segments[next].law.spin;
+                path::plan_within(machine.axes(), spin, &self.set_pos, pieces, &[], cycle, tolerance, slack).ok()
             })
         });
         self.motion = match planned {
@@ -2396,7 +2433,11 @@ fn motion_law(cfg: &Config, machine: &dyn Machine) -> Result<MotionLaw> {
             Some((axis.ok_or_else(|| ConfigError::Invalid("profile.vertical_axis".into()))?, up, up_ratio))
         }
     };
-    Ok(MotionLaw { shape, deceleration_ratio, vertical })
+    // The flange's own limits, where the machine has them as limits of the plan (an arm in tool space).
+    let checks = machine.rating_checks();
+    let limit = |name: &str| checks.iter().find(|c| c.check == name && c.signal.starts_with("plan.")).map(|c| c.limit);
+    let spin = limit("tool-angular-speed").zip(limit("tool-angular-acceleration")).map(|(w, a)| [w, a]);
+    Ok(MotionLaw { shape, deceleration_ratio, vertical, spin })
 }
 
 /// A segment that starts on its target (within 1 nm on every axis) has no way to time: it is a move of no length.
