@@ -10,6 +10,10 @@ recorded = "2026-11"
 synthetic = true
 
 [machine]
+# The simulator's machine the recordings are replayed on (`sim-cli fit --dataset`).
+simulator = "single-axis"
+# What the recording was made with beyond the default config (its notes below).
+set = ["effects.payload = false"]
 kind = "single belt axis"
 transmission = "toothed belt, pulley radius 0.02 m, planetary gearbox"
 mounting = "horizontal"

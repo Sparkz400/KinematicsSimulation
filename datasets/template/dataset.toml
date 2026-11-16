@@ -1,11 +1,12 @@
-# Copy this folder to datasets/<id>/, fill in every field, and run `sim-cli check-dataset datasets/<id>`.
-# Required unless marked optional. Numbers in SI units. See datasets/README.md.
+# Copy this folder to datasets/<id>/, fill in every field, and run `sim-cli check-dataset datasets/<id>`, then
+# `sim-cli fit --dataset datasets/<id> --report report/`. Required unless marked optional. Numbers in SI units.
+# The step-by-step guide: docs/measurement-procedure.md; every key: datasets/README.md.
 
 [dataset]
 id = "template"                      # the folder's name: lower case, digits and dashes
 title = "Belt axis, friction map and step"
 description = "What was measured, on what, and anything a reader needs to know (a worn belt, a cold machine)."
-license = "CC-BY-4.0"                # CC0-1.0, CC-BY-4.0, CC-BY-SA-4.0, ODbL-1.0 or PDDL-1.0
+license = "CC-BY-4.0"                # suggested; also CC0-1.0, CC-BY-SA-4.0, ODbL-1.0 or PDDL-1.0
 contributor = "anonymous"            # an organisation, or "anonymous"; no person's name, no e-mail
 recorded = "2026-11"                 # year and month only
 synthetic = false                    # true only for data a simulator made
@@ -16,7 +17,9 @@ transmission = "toothed belt AT5, 25 mm, pulley 22 teeth, no gearbox"
 mounting = "horizontal"              # horizontal, vertical, inclined 30 deg, ...
 travel_per_motor_rev_m = 0.110       # optional: for a linear axis
 payload_kg = 0.0                     # optional
-# config = "machine.toml"            # optional: the machine as a config of a simulator machine, a file in the folder
+# simulator = "single-axis"          # optional: the simulator's machine (sim-cli list) the recordings are replayed on
+# config = "machine.toml"            # optional: the machine as a config of that machine, a file in the folder
+# set = ["effects.payload = false"]  # optional: single values on top of the config, as --set takes them
 
 [drive]
 vendor = "Siemens"                   # Siemens, Beckhoff, CODESYS-based (name the drive), ...
@@ -33,6 +36,7 @@ encoder_counts_per_rev = 1048576     # optional
 
 # One per file. test: inertia-sines, friction-map, slow-reversal, torque-step, noise-excitation,
 # frequency-response (a file with frequency_hz and gain_rad_s_per_nm, no map) or cycle.
+# The first recording with a map is the one `fit --dataset` fits on (best: the machine's cycle); the others are checks.
 [[recording]]
 file = "friction-map.csv"
 map = "map.toml"

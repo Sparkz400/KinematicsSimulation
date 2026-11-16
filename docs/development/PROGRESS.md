@@ -4387,3 +4387,20 @@ Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries a
   `sim-machines/tests/accuracy.rs` (backlash 18.4 against 17.4 µm, a vertical screw's sag 4.587 against 4.589 µm,
   growth and table in a run, a belt with a heated part, the four machines with verdicts). The Python test
   `test_accuracy_matches_the_cli` is written but was not run here (no built module).
+
+## Measured datasets: contribution and reports (wave 4, area 2)
+
+- `sim-cli fit --dataset DIR --report OUT` (crates/sim-cli/src/report.rs): reads `dataset.toml`
+  (`dataset::contents`), replays each trace recording on `machine.simulator` with `machine.config` and `machine.set`,
+  fits on the first (`fit_rows`, the table of `fit`, split out of it), compares each frequency response's two-mass
+  resonance with the model's first mode at the start pose. Writes report.md, summary.csv, fit.csv, bounds.csv,
+  modes.csv, per recording an overlay CSV and per motor a torque SVG (`report::Plot::svg`).
+- ISW ball screw, as docs/validation.md states for machine.toml as committed: S-profile 0.430 N m RMS (5.3 %), 2.27 N m
+  worst (28 %); whole sine 0.786 (2.3 %), 30.0 (88 %); constant speed 0.895 (6.1 %), 3.60 (25 %; the document's 3.59 is
+  3.599 cut off); fit viscous 779 ± 23 N s/m, Coulomb 322 ± 6 N, moved mass 492 ± 3 kg against 584; sweeps 134, 123,
+  126 Hz against the model's 137 Hz. Test `the_ball_screw_report_gives_the_documented_figures` (sim-cli
+  tests/results.rs), each within one unit of the document's last digit.
+- `datasets/RESULTS.md` from the reports, test `the_results_table_is_what_the_reports_give`; the synthetic belt axis
+  now says it was recorded with `effects.payload = false` (`machine.set`), and its replay is off by 0.8 % RMS.
+- docs/measurement-procedure.md "Contributing a measured machine, step by step"; datasets/template README and
+  dataset.toml; .github/ISSUE_TEMPLATE/dataset.yml.

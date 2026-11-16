@@ -1,0 +1,83 @@
+name: Offer a measured dataset
+description: Drive traces of a real machine, to check the simulator against (docs/measurement-procedure.md)
+title: "Dataset: "
+labels: [dataset]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you: measured data is the only way to show that the simulator matches a real machine. The step-by-step
+        guide is [docs/measurement-procedure.md](https://github.com/Sparkz400/KinematicsSimulation/blob/main/docs/measurement-procedure.md#contributing-a-measured-machine-step-by-step);
+        the folder layout and every key of `dataset.toml` are in
+        [datasets/README.md](https://github.com/Sparkz400/KinematicsSimulation/blob/main/datasets/README.md).
+        Attach the files as a ZIP below, or open a pull request with the folder `datasets/<id>/` and link it here.
+        Remove names, e-mail and IP addresses, paths and serial numbers first (the anonymisation list in datasets/README.md).
+  - type: input
+    id: machine
+    attributes:
+      label: Machine
+      description: What the motor drives, and which of the simulator's machines it is (`sim-cli list`), if any.
+      placeholder: "belt axis, 1.2 m stroke, 8 kg carriage; single-axis"
+    validations:
+      required: true
+  - type: input
+    id: drive
+    attributes:
+      label: Drive and motor
+      description: Vendor, drive family and motor family; the loop cycles if you know them.
+      placeholder: "SINAMICS S210, 1FK2 1.27 N m, position cycle 1 ms"
+    validations:
+      required: true
+  - type: checkboxes
+    id: recordings
+    attributes:
+      label: Recordings
+      description: Which test moves are in the dataset (docs/measurement-procedure.md, section 4). At least a cycle and one check.
+      options:
+        - label: cycle (the machine's real move; fitted on)
+        - label: a check recording of the same machine (another speed, a sine, a friction map)
+        - label: frequency response (motor torque to motor speed)
+        - label: inertia sines, slow reversal, torque step or noise excitation
+  - type: input
+    id: sampling
+    attributes:
+      label: Sample time and export format
+      description: Per recording if they differ.
+      placeholder: "1 ms, Startdrive trace CSV; sweep 125 us, exported as frequency_hz,gain_rad_s_per_nm"
+    validations:
+      required: true
+  - type: dropdown
+    id: license
+    attributes:
+      label: Licence
+      description: The licence the data is published under. CC BY 4.0 is suggested.
+      options:
+        - CC-BY-4.0
+        - CC0-1.0
+        - CC-BY-SA-4.0
+        - ODbL-1.0
+        - PDDL-1.0
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Source
+      description: Who measured it and when (year and month), or where it was published first (authors, title, DOI).
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Check and report
+      description: The output of `sim-cli check-dataset datasets/<id>` and the torque table of `sim-cli fit --dataset datasets/<id> --report report/` (report/report.md), if you ran them.
+      render: text
+  - type: checkboxes
+    id: rights
+    attributes:
+      label: Rights and anonymisation
+      options:
+        - label: I may publish this data under the licence above.
+          required: true
+        - label: The files hold no names, e-mail or IP addresses, Net IDs, paths, serial numbers, customers or sites, and dates only to the month.
+          required: true

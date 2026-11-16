@@ -22,6 +22,16 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   `ratings.max_repeatability_m`. Two optional effects for the axes of `[accuracy]`: `effects.thermal_growth` (screw
   11.5e-6 / K, belt 11.5e-6 / K [estimate], from a given rise and a heated part's) and `effects.lead_error` (a pitch
   error table); off where a config does not have them.
+- `sim-cli fit --dataset DIR --report OUT`: one report of a dataset folder. Every trace recording replayed on the
+  dataset's machine and config, the torque difference (RMS and worst sample, in N m and as a share of the peak) on the
+  fit recording and on the checks, the free values fitted on the first recording against the config's with their
+  standard errors, the config's `[bounds]`, each frequency response's resonance against the model's first mode; as
+  Markdown, CSV and SVG plots. On the ISW ball screw it gives the figures of docs/validation.md.
+- `datasets/RESULTS.md`, one row per dataset, generated from the reports by a test (`UPDATE_RESULTS=1` rewrites it),
+  linked from the README's validation table.
+- Dataset keys `machine.simulator` (the machine the recordings are replayed on) and `machine.set` (values on top of the
+  config); a step-by-step contribution guide in docs/measurement-procedure.md (what to record, sample rates, layout,
+  licence, metadata), a fuller `datasets/template`, and the GitHub issue form "Offer a measured dataset".
 
 ## [1.0.0] - 2026-11-16
 
