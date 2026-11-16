@@ -260,6 +260,7 @@ default_config! {
     default_arm_on_track: "arm-on-track";
     default_winder: "winder";
     default_hexapod_rotary: "hexapod-rotary";
+    default_mover_track: "mover-track";
 }
 
 shipped_config! {
@@ -279,6 +280,7 @@ shipped_config! {
     config_scara_tool: "scara", "crates/machine-joint-kit/config/scara-tool.toml";
     config_toggle_press_cam: "toggle-press", "crates/machine-crank-cam/config/toggle-press-cam.toml";
     config_arm_on_track_tool: "arm-on-track", "crates/machine-joint-kit/config/arm-on-track-tool.toml";
+    config_mover_track_flying: "mover-track", "crates/machine-mover-track/flying.toml";
 }
 
 machine_file! {

@@ -4358,3 +4358,32 @@ Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries a
   the motors held; machine files that follow their crates' friction feedforward.
 - Last full run in this period: 1533 of 1538 tests passed at 54a2fca, before wave 3; the final count is a placeholder
   in docs/validation.md.
+
+## Mover track (16 November, machine-mover-track)
+
+- New crate `machine-mover-track`, registered as `mover-track` (29 machines): a closed loop of straights and two 180°
+  curves (constant radius or a clothoid at each end), up to seven movers, each a `JointMachine` joint driven by a linear
+  motor (the coils under it), the cogging once per pole pitch; a wrapper (`MoverTrack`) adds the segments' currents and
+  warmth from the movers' forces. Values from Beckhoff's XTS pages (AT2000 module, AT9014 mover, AT9001 magnet plate, the
+  267 mm curve), the rest `[estimate]` with `[bounds]`.
+- Cycles as electronic cams, since a closed track only goes forward: `index` (every mover one station on at 1.5 Hz) and
+  `flying` (`flying.toml`, each mover synchronous with a 1 m/s conveyor over 0.3 m). One flying pass is every mover once
+  round, so that each drive's heat and the per-mover verdicts see the whole loop (one product per pass left the warm
+  start unsettled, 3.5 K).
+- Tests: the standard suite; by hand the track's length and its 267 mm width, the guide load in the arc at 2 m/s
+  (261.884 N), the lateral jerk into a circle and into a clothoid (1227.9 and 614.0 m/s³), current and copper loss at a
+  force (3 A, 9 W; half on each of two segments), a segment's heating with two movers stopped on it (22.757 K after one
+  time constant, 36 K settled); the cams; flying.toml kept equal to the default but for its cycle and start; both shipped
+  cycles pass every verdict, and the gap check fails where asked for more than the movers keep.
+- The station error first read one station pitch off after the warm start's second pass (the controller restarts the
+  cam from where the movers stand); it is now the distance to the nearest station.
+- Found by the cross tests and the bounds sweep (`across_the_bounds::mover_track`, now passing): Beckhoff's 10 g is for
+  an unloaded mover; with 0.6 kg the 100 N move 1.451 kg at 69 m/s², so the axes take 60 m/s² (98 broke the limit check
+  and saturated the feedforward test), and 3.8 m/s under the motors' 4 m/s. The current loop at 3.2 V/A was too slow at
+  4 mH (25° left); at 6 V/A the speed loop keeps at least 42° and 10 dB from 1.5 to 4 mH without friction, and 1 mH is
+  unstable at any useful gain on the 62.5 µs cycle, so the inductance's bounds start at 1.5 mH. The magnet plate's mount
+  rings at 1.5 kHz at 1.5e7 N/m (16 dB kept), unstable at 1e7: its bounds start at 1.5e7. The station error is NaN to the
+  time-optimal planner (it is no quantity of a planned pose), and the movers are drawn as the motor parts, so that their
+  coils' warmth colours them as every machine's motors.
+- Seen in the app (screenshot hook, `SIM_APP_MACHINE=mover-track`): the loop, six movers with payloads and speeds, 21 of
+  21 checks passing. Not looked at in German or at 1280 × 720.

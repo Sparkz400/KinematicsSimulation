@@ -1268,6 +1268,7 @@ mod across_the_bounds {
         arm_on_track: "arm-on-track",
         winder: "winder",
         hexapod_rotary: "hexapod-rotary",
+        mover_track: "mover-track",
         exct_30: "EXCT-30",
     );
 }

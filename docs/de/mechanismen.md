@@ -840,6 +840,56 @@ sim-cli stop winder --category 2
 sim-cli verdicts winder --set web.tension_n=150 --set axis.web.max_velocity_m_s=3.0
 ```
 
+## Mover auf geschlossener Strecke (`machine-mover-track`)
+
+Ein lineares Transportsystem wie Beckhoffs XTS oder B&Rs ACOPOStrak: Motorsegmente aus Linearmotorspulen in einer
+geschlossenen Schleife, und darauf unabhängige Mover, jeder eine Masse auf Rollen mit einer Magnetplatte, jeder von den
+Spulen unter ihm mit eigenem Lageregler angetrieben. Die ausgelieferte Konfiguration: sechs Mover von 651 g (AT9014) mit
+je 600 g, auf einer Schleife aus zwei Geraden von 1 m aus je vier Modulen von 250 mm (AT2000) und zwei 180°-Kurven von
+267 mm Breite, an jedem Ende eines Bogens von 130,3 mm eine Klothoide von 100 mm (die Aufteilung ist geschätzt; Beckhoff
+veröffentlicht die Breite und dass es eine Klothoide ist); 3,019 m Umfang. Ein Mover gibt 100 N Spitze und 30 N
+Dauerkraft, 4 m/s, 10 g ohne Last (die 5-polige Magnetplatte an 48 V; mit der Nutzlast sind die Achsen auf 60 m/s²
+begrenzt); Kraftkonstante, Spulenwiderstand, Anzugskraft (300 N) und
+Polteilung sind geschätzt.
+
+| Id | Mechanismus | Übertragung | Werkzeugpose | Eigene Prüfungen |
+| --- | --- | --- | --- | --- |
+| `mover-track` | 1 bis 7 Mover auf einer geschlossenen Schleife aus Geraden und Kurven (6 ausgeliefert) | Linearmotor je Mover: die Spulen unter ihm | Weg jedes Movers entlang der Schleife (m), nicht umgebrochen | je Mover `mover-guide-load`, `curve-holding`, `station-settling` (Taktzyklus); `mover-gap`; je Segment `segment-current`, `segment-temperature` |
+
+**Zwei Zyklen, beide elektronische Kurvenscheiben.** Eine geschlossene Strecke fährt nur vorwärts, daher ist der Zyklus
+eine Kurvenscheibe (`[cam]`): `track.cycle = "index"` (ausgeliefert) fährt jeden Mover um eine Stationsteilung (die
+Schleife durch die Zahl der Mover, 0,503 m) mit einem 4-5-6-7-Gesetz in 0,4 s weiter und lässt ihn den Rest der Periode
+an seiner Station stehen, 1,5-mal je Sekunde (2,75 m/s, 23,6 m/s² Spitze); `flying.toml` fährt `"flying"`: jeder Mover
+fährt der Reihe nach über 0,3 m der ersten Geraden synchron mit einem Förderband von 1,0 m/s, dann um die Schleife zurück
+und wieder in den Prozess (6 Produkte zu 0,3 m je Umlauf: die Mover rücken über dem Prozess auf eine Produktteilung
+zusammen und fahren mit bis zu 2,78 m/s zurück). Mit `cam.run = false` fahren die Mover nach den `[[cycle.segment]]`
+0,2 m vor und zurück.
+
+**Kurven.** Die Rollen eines Movers spannen seinen Radstand w, daher folgt sein Körper dem Mittel der Krümmung darüber:
+die Querbeschleunigung v² k steigt über den Radstand an, wo eine Kurve mit festem Radius beginnt, und über die
+Klothoide, wo es eine gibt; ihre Änderung, der Querruck 2 v a k + v³ dk/ds, ist, was die Klothoide senkt (bei 2 m/s
+1228 m/s³ in einen Kreis, 614 m/s³ in die Klothoide). Die Mover laufen außen an der Schleife, die Magnetplatte den
+Spulen zugewandt, daher zieht die Fliehkraft m v² k einen Mover gegen die Anzugskraft von den Spulen weg: die Rollen
+tragen sqrt((F_a − m v² k)² + (m g)²) (`mover-guide-load`), und der Anteil m v² k / F_a (`curve-holding`) muss unter 1
+bleiben, wo der Mover abhebt.
+
+**Spulen und Segmente.** Der Strom eines Movers ist seine Kraft durch die Kraftkonstante; er fließt in den Spulen unter
+seiner Magnetplatte, auf die Segmente nach der Länge der Platte auf jedem verteilt. Der Strom eines Segments ist die
+Summe der Anteile seiner Mover (`segment-current`, gegen die 48 A Spitze des Moduls), sein Kupferverlust R I² jedes
+Anteils; es erwärmt sich über einen Wärmewiderstand und eine Zeitkonstante (`segment.<j>.temperature_rise`), und
+`segment-temperature` beurteilt die Erwärmung, auf die sein über einen Durchlauf gemittelter Verlust einschwingt: Mover,
+die auf einem Segment halten, heizen es. Der Abstand zwischen Nachbarn entlang der Mittellinie, abzüglich einer
+Körperlänge, gegen den kleinsten Abstand von 2 mm (`mover-gap`); die Abweichung eines stehenden Movers an seiner Station
+gegen die Wiederholgenauigkeit von ±10 µm (`station-settling`).
+
+Modell und Grenzen in der Dokumentation des Crates (`crates/machine-mover-track/src/lib.rs`).
+
+```text
+sim-cli verdicts mover-track
+sim-cli verdicts mover-track --config crates/machine-mover-track/flying.toml
+sim-cli verdicts mover-track --set track.index_rate_hz=2.5 --set track.clothoid_m=0.0
+```
+
 ## Was von Hand nachgerechnet ist
 
 Komponententests (`sim-components`): kritische Drehzahl, Knicklast, Trägheit, Steifigkeit, Reibmoment der Vorspannung,
