@@ -1021,6 +1021,19 @@ bounds the source's masses give by hand (`the_measured_ball_screw_has_the_inerti
   brought in).
 - A fit on one recording checked on two others and three sweeps, all from one bench, in 2022 and 2023.
 
+## Hand calculations: positioning accuracy
+
+| What is compared | Against | Tolerance | Test |
+| --- | --- | --- | --- |
+| ISO 230-2 figures from given deviations | Two targets, two approaches each way, by hand: x̄↑ = 4 µm, x̄↓ = −4 µm, s = √2 µm; B 8 µm, R 4√2 + 8 µm, E 8 µm, M 0, A 8 + 4√2 µm | 1e-15 m | `iso_230_2_figures_match_a_hand_calculation`, accuracy |
+| ISO 9283 figures from given poses | Barycentre (2, 0) µm from (1, 0) and (3, 0): AP 2 µm, RP 1 µm; vAP √5 µm against (0, −1) | 1e-15 m | `iso_9283_figures_match_a_hand_calculation`, accuracy |
+| Thermal growth of a screw | 11.5e-6 / K · 5 K · 0.4 m = 23 µm from the fixed bearing; nothing at the bearing | 1e-12 m | `a_warm_screw_grows_from_its_fixed_end`, accuracy |
+| Lead error table | Halfway between (0.1 m, +4 µm) and (0.2 m, −2 µm): +1 µm; beyond the table the end row | 1e-15 m | `the_lead_error_is_interpolated_between_its_rows`, accuracy |
+| Backlash in the reversal error, single axis | 8.7e-4 rad at the gearbox output on a 20 mm pulley: 17.4 µm more reversal than without backlash (simulated 18.4 µm: the rest is the guide's friction held through the belt, which ends at another force with the gap) | 10 % | `the_reversal_error_takes_the_gearbox_backlash`, sim-machines accuracy |
+| Pure-stiffness deflection, screw axis standing up, no friction | 25 kg · 9.81 m/s² over screw (E A / 1 m = 7.272e7 N/m), nut 4e8, bearings 7.5e8 and the coupling 9000 N m/rad over (lead / 2π)²: 4.589 µm sag from either side (simulated 4.587 µm) | 1 % | `a_vertical_screw_sags_by_its_load_over_its_stiffness`, sim-machines accuracy |
+| Thermal growth and lead error in a run, screw axis | 10 K: each target reads 11.5e-6 · 10 · x further out; with the table (0, 0)–(0.8 m, 16 µm) 20 µm/m more; nothing with `effects.load_encoder` | 1e-9 m | `a_warm_screw_and_its_lead_error_move_the_real_position`, sim-machines accuracy |
+| The test on the single axis, screw axis, T-gantry and D3 | Finite figures within a millimetre; a rating gives a verdict | — | `the_test_runs_on_the_axes_the_gantry_and_the_delta`, sim-machines accuracy |
+
 ## What is not validated
 
 - **The delta picker D3's geometry, masses and stiffnesses.** Autonox keeps them behind a registration; the arm lengths are scaled from Williams' estimate of an ABB IRB 360, the masses estimated. Its cycle time is compared with ABB's and Omron's printed figures, not asserted (they round the corners and run faster). Its forearms are rigid rods (their spin about their own axis with an estimated inertia), its upper arms' bending stiffnesses (in and out of their planes) estimates for a carbon tube; neither is compared with a measured delta.
@@ -1081,3 +1094,5 @@ The default configs of both machines are placeholders throughout.
 **Catalogue data.** Cross-checks find values in the wrong row or column. They cannot find a number misread into another plausible number where nothing ties it to a second value. The misprints found are listed in the [catalogue](catalogue.md#misprints-and-inconsistencies-found-in-the-vendor-documents) document; there may be more.
 
 **The validation dashboard.** It shows the outcome of each test this page names and, for the tests that call `record_check`, their values; it checks nothing these tests do not. Most rows carry no recorded values, the Python tests are not run for it, and a row whose tests did not run shows as "not run", not as passed ([dashboard](dashboard.md)).
+
+**Positioning accuracy** (`sim-cli accuracy`). The ISO figures are computed as the standards define them and checked by hand; what the simulated axes give is not compared with a laser measurement of any machine. Thermal growth and the lead error are a map applied to the tool pose at rest, not part of the dynamics; the belt's expansion coefficient is an estimate (no belt datasheet gives one); the frame's growth, a gradient along the screw and the screw's own heating from its nut are not modelled; the screw's stiffness is the one at its softest place over the whole stroke (the model's shortcut), so a sag that grows along the screw does not show. The D3's systematic deviation of up to 0.57 mm along y comes from its estimated stiffnesses and is not checked against a real delta. The machine tests run one or two approaches per target and direction, not ISO 230-2's five.

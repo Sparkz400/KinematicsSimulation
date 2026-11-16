@@ -150,6 +150,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
             "--every",
         ],
         Some("stop") => &["--category", "--points", "--path", "--time-optimal"],
+        Some("accuracy") => &["--points", "--repeats", "--dwell"],
         Some("analyze") => &["--trajectory", "--path", "--time-optimal", "--points", "--breakdown", "--budget"],
         Some("sweep") => &["--from", "--to", "--count", "--amplitude"],
         Some("optimise") => &["--runs", "--nominal", "--pareto", "--worst", "--path", "--time-optimal"],
@@ -231,6 +232,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("fmu") => fmu(args),
         Some("report") => report(args, tr),
         Some("stop") => stop(args, tr),
+        Some("accuracy") => accuracy(args, tr),
         _ => Err(Failure("cli-usage", String::new())),
     }
 }
@@ -1801,6 +1803,69 @@ fn stop(args: &Args, tr: &Translations) -> Result<(), Failure> {
         let result = if v.ok { "ok" } else { "FAIL" };
         let detail = format!("{}: {} / {} {result}", v.check, significant(v.value), significant(v.limit));
         eprintln!("{}", tr.tr_arg("cli-stop-verdict", &detail));
+    }
+    out.flush().map_err(io)
+}
+
+/// `accuracy <machine> [--points N] [--repeats N] [--dwell SECONDS]`: the static positioning accuracy and repeatability
+/// (`sim_components::accuracy::study`), N targets per axis (5), each approached N times from each side (5), resting
+/// `--dwell` seconds at each (0.3). One CSV line per axis and target with the mean deviations and their standard
+/// deviations from below and above; per axis the ISO 230-2 figures, at the tool the ISO 9283 ones, and the verdicts to
+/// the error stream.
+fn accuracy(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let defaults = sim_components::accuracy::Settings::default();
+    let count = |option: &str, default: usize, least: f64| match args.number(option)? {
+        Some(n) if n.fract() != 0.0 || !(least..=1000.0).contains(&n) => {
+            Err(Failure("cli-error-bad-argument", format!("{option} {n}")))
+        }
+        Some(n) => Ok(n as usize),
+        None => Ok(default),
+    };
+    let dwell_s = match args.number("--dwell")? {
+        Some(d) if !(d > 0.0 && d <= 60.0) => return Err(Failure("cli-error-bad-argument", format!("--dwell {d}"))),
+        Some(d) => d,
+        None => defaults.dwell_s,
+    };
+    let settings = sim_components::accuracy::Settings {
+        points: count("--points", defaults.points, 2.0)?,
+        repeats: count("--repeats", defaults.repeats, 1.0)?,
+        dwell_s,
+    };
+    let study = sim_components::accuracy::study(entry, &cfg, settings)?;
+    let axes = (entry.build)(&cfg)?.axes().to_vec();
+    let mut out = output(args, "--out")?;
+    writeln!(out, "axis,unit,target,mean_up,mean_down,std_up,std_down,reversal").map_err(io)?;
+    for r in &study.axes {
+        let a = &axes[r.axis];
+        for j in 0..r.targets.len() {
+            writeln!(
+                out,
+                "{},{},{:.6},{:.4e},{:.4e},{:.4e},{:.4e},{:.4e}",
+                a.id,
+                a.unit,
+                r.targets[j],
+                r.mean_up[j],
+                r.mean_down[j],
+                r.std_up[j],
+                r.std_down[j],
+                r.mean_up[j] - r.mean_down[j]
+            )
+            .map_err(io)?;
+        }
+        let detail = format!(
+            "{} [{}]: B {:.3e}, R {:.3e}, E {:.3e}, M {:.3e}, A {:.3e}",
+            a.id, a.unit, r.reversal, r.repeatability, r.systematic, r.mean_range, r.accuracy
+        );
+        eprintln!("{}", tr.tr_arg("cli-accuracy-axis", &detail));
+    }
+    let t = &study.tool;
+    let detail = format!("AP {:.3e}, RP {:.3e}, vAP {:.3e}", t.accuracy, t.repeatability, t.direction_variation);
+    eprintln!("{}", tr.tr_arg("cli-accuracy-tool", &detail));
+    for v in &study.verdicts {
+        let result = if v.ok { "ok" } else { "FAIL" };
+        let detail = format!("{}: {} / {} {result}", v.check, significant(v.value), significant(v.limit));
+        eprintln!("{}", tr.tr_arg("cli-accuracy-verdict", &detail));
     }
     out.flush().map_err(io)
 }

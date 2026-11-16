@@ -1965,6 +1965,23 @@ Shortcuts: the acceleration step at the grip's ends during the belt's ramp; the 
 | Closed-loop response | A sine offset on the position setpoint, measured at the tool. Bandwidth: where the gain first falls below 1/√2, interpolated on the logarithmic frequency axis |
 | Motor search | See the [user guide](user-guide.md#find-the-lightest-motor). Velocity gain of a candidate = the config's gain × sqrt( ratio of inertia seen × ratio of rotor inertias ), rotor inertia with the gearbox's own, against the config's own numbers. The same rule applies wherever a part is named (`[parts]`, `--motor`, `--gearbox`). "Tightest check" leaves out `dc-link-overvoltage` and, with a braking resistor in use, `dc-link-energy` while they pass |
 
+## Positioning accuracy
+
+`accuracy::study` (`sim-cli accuracy`, `ks.accuracy`) runs each tool axis through ISO 230-2's linear cycle and judges the real tool pose at rest; see the [user guide](user-guide.md#how-accurate-and-repeatable-is-an-axis) for the procedure.
+
+| Quantity | Definition |
+| --- | --- |
+| Deviation x_ij | Real tool position less the target, averaged over the last tenth of the rest at target j, approach i |
+| x̄↑, x̄↓, s↑, s↓ | Mean and sample standard deviation (n − 1) of the approaches from below and from above |
+| B | max_j \|x̄↑ − x̄↓\| |
+| R | max_j max(2s↑ + 2s↓ + \|x̄↑ − x̄↓\|, 4s↑, 4s↓) |
+| E | max of all x̄↑, x̄↓ − min of them |
+| M | max_j (x̄↑ + x̄↓)/2 − min_j of the same |
+| A | max_j max(x̄↑ + 2s↑, x̄↓ + 2s↓) − min_j min(x̄↑ − 2s↑, x̄↓ − 2s↓) |
+| AP, RP, vAP (tool) | Over the axes in metres, per target and direction: the distance of the barycentre of the attained poses from the target; l̄ + 3 S_l, l the distances from the barycentre; the distance between the two directions' barycentres. Each the largest over targets and directions |
+
+**Thermal growth** (`effects.thermal_growth`) and **lead error** (`effects.lead_error`), both optional keys, off where a config does not have them, for the axes of `accuracy.axes`: the real position is x + α (ΔT_config + ΔT_part) (x − x_fixed) + e(x), x the position the controller holds, α `accuracy.screw_expansion_per_k` (11.5e-6 / K, hardened bearing steel) or `accuracy.belt_expansion_per_k` (11.5e-6 / K, [estimate]: the steel tension cords set the pitch; no belt datasheet found gives a coefficient; a glass-fibre cord would be about 5e-6, aramid about −2e-6), ΔT_part the rise of the named heated part (`Sim::heated`), e the lead error table linear between its rows and constant beyond them. The map is applied to the measured tool pose, not inside the machine's equations: a lead changed by 1e-4 changes the inertia the motor sees by 2e-4, far below what matters for a static test. With `effects.load_encoder` neither is applied.
+
 ## Effect views
 
 Sources: `losses` and `view_signals` (the machine's `loss_powers` and `effect_signals`) in each machine's `lib.rs`; `Lugre::steady`, `Lugre::split` and the `loss_power` functions in [`mech.rs`](../crates/sim-components/src/mech.rs); `EnergyBudget`, `Tally`, `Comparison` and `compare_effect` in [`analysis.rs`](../crates/sim-components/src/analysis.rs); `HeatedPart` and `Sim::scene` in [`sim.rs`](../crates/sim-components/src/sim.rs); the conventions `TORQUE_PARTS`, `LOSS_PREFIX`, `ENERGY_PARTS`, `FRICTION_SIGNALS`, `THERMAL_KINDS`, `TEMPERATURE_PREFIX` and the methods `friction_contacts`, `friction_curve`, `belt_sections` and `thermal_parts` in [`machine.rs`](../crates/sim-core/src/machine.rs).

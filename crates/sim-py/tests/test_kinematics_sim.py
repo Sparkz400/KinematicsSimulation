@@ -372,6 +372,19 @@ def test_modes_match_the_cli():
         ks.modes(ks.Config(FIRST), points=1)
 
 
+def test_accuracy_matches_the_cli():
+    result = ks.accuracy(ks.Config(FIRST), points=2, repeats=1)
+    rows = cli("accuracy", FIRST, "--points", "2", "--repeats", "1")
+    assert result["axis"] == [r["axis"] for r in rows]
+    # The CLI prints four decimals of the mantissa.
+    for column in ("target", "mean_up", "mean_down"):
+        np.testing.assert_allclose(result[column], floats(rows, column), rtol=1e-3, atol=1e-12, err_msg=column)
+    assert len(result["summary"]["axis"]) == len(set(result["axis"]))
+    assert result["tool_accuracy"] >= 0.0 and list(result["verdicts"]) == ["check", "value", "limit", "ok"]
+    with pytest.raises(ValueError):
+        ks.accuracy(ks.Config(FIRST), points=1)
+
+
 def test_sensitivity_matches_the_cli():
     cfg = ks.Config(FIRST)
     group = next(k for k in cfg.leaves() if k.endswith("payload_kg")).split(".")[0]

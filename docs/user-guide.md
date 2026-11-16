@@ -1406,6 +1406,55 @@ Stop verdict: stop-dc-link: 224.0 / 257.6 ok
 - One stop at a time: `sim-cli run t-gantry --cycle --stop-at 5.076 --stop-category 1` writes every signal around it. From Python `ks.Sim(config).stop(1)` stops a stepped simulation, `enable()` switches it on again; the FMU's input `command.stop_category` says how `command.enable` turning false stops the drives; over OPC UA writing 0, 1 or 2 to `command.stop_category` stops the machine.
 - What it does not know: category 2 brakes along the direction of motion, not along a curved path; no jerk limit in a stop; the brakes have one delay for all; nothing has been compared with a measured stop yet (see [validation](validation.md#stops-and-brake-delays)).
 
+## How accurate and repeatable is an axis?
+
+Run the machine to a line of targets along each axis, as a laser interferometer test does, and see where the tool really stands at each one:
+
+```text
+$ sim-cli accuracy t-gantry --points 3 --repeats 2
+axis,unit,target,mean_up,mean_down,std_up,std_down,reversal
+x,m,0.100000,1.4126e-5,2.6583e-5,1.5934e-7,3.8510e-10,-1.2457e-5
+x,m,0.500000,-1.4402e-5,1.4792e-5,1.5866e-9,6.2447e-10,-2.9194e-5
+x,m,0.900000,-2.6133e-5,-1.4487e-5,1.1457e-10,3.4781e-10,-1.1646e-5
+z,m,0.050000,-5.1121e-5,-3.8137e-5,1.1712e-7,1.1096e-9,-1.2984e-5
+z,m,0.250000,-5.2858e-5,-3.9237e-5,1.6836e-8,1.1464e-9,-1.3622e-5
+z,m,0.450000,-5.1449e-5,-3.8230e-5,5.9062e-9,1.4421e-9,-1.3220e-5
+Accuracy along ISO 230-2, axis x [m]: B 2.919e-5, R 2.920e-5, E 5.272e-5, M 4.066e-5, A 5.272e-5 (...)
+Accuracy along ISO 230-2, axis z [m]: B 1.362e-5, R 1.366e-5, E 1.472e-5, M 1.419e-6, A 1.476e-5 (...)
+Accuracy at the tool along ISO 9283, over the axes in metres: AP 5.544e-5, RP 2.172e-7, vAP 2.919e-5 (...)
+```
+
+- The test (`sim_components::accuracy::study`): per axis `--points` targets (5) evenly over the middle 80 % of its stroke, the other axes at the start pose; ISO 230-2's linear cycle run `--repeats` times (5): up through all targets, each approached from below, then down, each approached from above, with an overrun of 5 % of the stroke before the first target of each pass. At each target the machine rests `--dwell` seconds (0.3) and the tool's real pose is averaged over the last tenth of that. Targets the machine cannot reach (with their overruns) are left out; one simulation runs the whole test, so the parts warm as it goes.
+- Per target the mean deviation (real less target) and its standard deviation from below (`up`) and from above (`down`), and their difference, the reversal. Per axis ISO 230-2's figures: B the largest reversal error, R the bidirectional repeatability (the largest of 2s↑ + 2s↓ + |B_j|, 4s↑ and 4s↓), E the systematic deviation (range of all means), M the range of the mean bidirectional deviation, A the accuracy (max(x̄ + 2s) − min(x̄ − 2s)). At the tool, over the axes in metres, ISO 9283's: AP the largest distance of a target's barycentre (per direction) from the target, RP the largest l̄ + 3 S_l, vAP the largest distance between the two directions' barycentres.
+- What puts the tool off: everything the simulation has, as configured: backlash, gearbox twist and belt stretch under the load the axis holds at rest, guide and frame compliance, the encoder's step, sensor noise (`effects.sensor_noise`, off in the shipped configs, so the repeatability there is the reversal alone), friction where the axis settles. On the T-gantry the Z axis stands 51 µm low under its own weight on the belt; on the single axis the gearbox's 3 arcmin of backlash give 17 µm of the 29 to 52 µm reversal.
+- Two more effects, both off unless a config file switches them on in `[effects]`: **`thermal_growth`**, the screw or belt grown with its temperature, and **`lead_error`**, a lead (pitch) error table. They act on the axes listed in `[accuracy]`:
+
+  ```toml
+  [effects]
+  thermal_growth = true
+  lead_error = true
+
+  [accuracy]
+  # Steel 11.5e-6 / K by default; the belt's [estimate] is that of its steel cords, 11.5e-6 / K.
+  screw_expansion_per_k = 11.5e-6
+  belt_expansion_per_k = 11.5e-6
+  axes = [
+      # A screw fixed at x = 0, 4 K warm by itself plus the rise of the guide's heated part, with a pitch table
+      # (position, error) in the axis's unit, linear between rows.
+      { axis = "x", drive = "screw", fixed_end = 0.0, rise_k = 4.0, heated_part = "guide_x",
+        lead_error = [[0.0, 0.0], [0.4, 6.0e-6], [0.8, -2.0e-6]] },
+  ]
+
+  [ratings]
+  max_positioning_error_m = 50.0e-6
+  max_repeatability_m = 20.0e-6
+  ```
+
+  The real position is then the one the motor encoder holds plus expansion × (rise_k + the heated part's rise) × (x − fixed_end) plus the table's error at x. `heated_part` is one of the machine's heated parts (`effects.part_heating`; the gearbox and guide ids of the [thermal view](model-reference.md#thermal-model-and-view)); without part heating its rise stays 0. With `effects.load_encoder` neither effect applies: the scale reads the carriage itself.
+- The verdicts: `positioning-accuracy` judges the largest A of the axes in metres against `ratings.max_positioning_error_m`, `positioning-repeatability` their largest R against `ratings.max_repeatability_m`; without the rating, no verdict.
+- From Python: `ks.accuracy(config, points=5, repeats=5, dwell=0.3)`, the same columns, a `summary` per axis, the tool's figures and the verdicts.
+- What it does not know: the growth and the pitch error are a map from the encoder's position to the real one, applied to the tool pose at rest; the run's signals and dynamics do not carry them. The frame's own growth, a temperature gradient along the screw and the screw's own heating from its nut are not modelled (give them as `rise_k`). See [validation](validation.md#hand-calculations-positioning-accuracy).
+
 ## Programs: G-code and robot programs
 
 `--path FILE` (and the app's path field) reads a program as well as a path file, by the file's extension. Its moves become the lines and arcs of a path, timed by the same planners.

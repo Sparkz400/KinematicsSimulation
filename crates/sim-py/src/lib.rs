@@ -1292,6 +1292,52 @@ fn margins(py: Python<'_>, config: &PyConfig, bands: bool) -> PyResult<Py<PyDict
     Ok(out.unbind())
 }
 
+/// The static positioning accuracy and repeatability (`sim_components::accuracy::study`), as `sim-cli accuracy` gives
+/// it: `points` targets per axis, each approached `repeats` times from each side, resting `dwell` seconds. Per axis and
+/// target the columns "axis", "target", "mean_up", "mean_down", "std_up", "std_down"; per axis "summary", a dict of
+/// columns "axis", "reversal", "repeatability", "systematic", "mean_range", "accuracy" (ISO 230-2: B, R, E, M, A); at the
+/// tool "tool_accuracy", "tool_repeatability", "tool_direction_variation" (ISO 9283: AP, RP, vAP); and "verdicts", a
+/// dict of columns "check", "value", "limit", "ok" for the ratings the config has.
+#[pyfunction]
+#[pyo3(signature = (config, *, points=5, repeats=5, dwell=0.3))]
+fn accuracy(py: Python<'_>, config: &PyConfig, points: usize, repeats: usize, dwell: f64) -> PyResult<Py<PyDict>> {
+    if points < 2 || repeats < 1 || !(dwell > 0.0 && dwell.is_finite()) {
+        return Err(PyValueError::new_err("points must be at least 2, repeats at least 1 and dwell above 0"));
+    }
+    let (entry, cfg) = (config.entry, config.cfg.clone());
+    let axes: Vec<&'static str> = built(config)?.axes().iter().map(|a| a.id).collect();
+    let settings = sim_components::accuracy::Settings { points, repeats, dwell_s: dwell };
+    let study =
+        py.detach(|| sim_components::accuracy::study(entry, &cfg, settings)).map_err(|e| config_error(entry, e))?;
+    let rows: Vec<(usize, usize, &sim_components::accuracy::AxisResult)> =
+        study.axes.iter().flat_map(|r| (0..r.targets.len()).map(move |j| (r.axis, j, r))).collect();
+    let out = PyDict::new(py);
+    out.set_item("axis", rows.iter().map(|r| axes[r.0]).collect::<Vec<_>>())?;
+    out.set_item("target", column(py, rows.iter().map(|r| r.2.targets[r.1])))?;
+    out.set_item("mean_up", column(py, rows.iter().map(|r| r.2.mean_up[r.1])))?;
+    out.set_item("mean_down", column(py, rows.iter().map(|r| r.2.mean_down[r.1])))?;
+    out.set_item("std_up", column(py, rows.iter().map(|r| r.2.std_up[r.1])))?;
+    out.set_item("std_down", column(py, rows.iter().map(|r| r.2.std_down[r.1])))?;
+    let summary = PyDict::new(py);
+    summary.set_item("axis", study.axes.iter().map(|r| axes[r.axis]).collect::<Vec<_>>())?;
+    summary.set_item("reversal", column(py, study.axes.iter().map(|r| r.reversal)))?;
+    summary.set_item("repeatability", column(py, study.axes.iter().map(|r| r.repeatability)))?;
+    summary.set_item("systematic", column(py, study.axes.iter().map(|r| r.systematic)))?;
+    summary.set_item("mean_range", column(py, study.axes.iter().map(|r| r.mean_range)))?;
+    summary.set_item("accuracy", column(py, study.axes.iter().map(|r| r.accuracy)))?;
+    out.set_item("summary", summary)?;
+    out.set_item("tool_accuracy", study.tool.accuracy)?;
+    out.set_item("tool_repeatability", study.tool.repeatability)?;
+    out.set_item("tool_direction_variation", study.tool.direction_variation)?;
+    let verdicts = PyDict::new(py);
+    verdicts.set_item("check", study.verdicts.iter().map(|v| v.check).collect::<Vec<_>>())?;
+    verdicts.set_item("value", column(py, study.verdicts.iter().map(|v| v.value)))?;
+    verdicts.set_item("limit", column(py, study.verdicts.iter().map(|v| v.limit)))?;
+    verdicts.set_item("ok", PyArray1::from_vec(py, study.verdicts.iter().map(|v| v.ok).collect()))?;
+    out.set_item("verdicts", verdicts)?;
+    Ok(out.unbind())
+}
+
 /// The modes the machine reports over the stroke of axis `axis_index` at `points` places, the other axes at the start
 /// pose, as `sim-cli modes` gives them: "position", then per mode, lowest first, "mode<i>_hz" and "mode<i>_damping"
 /// (NaN where a place does not have it).
@@ -1715,6 +1761,7 @@ fn kinematics_sim(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(report, m)?)?;
     m.add_function(wrap_pyfunction!(check_dataset, m)?)?;
     m.add_function(wrap_pyfunction!(fmu, m)?)?;
+    m.add_function(wrap_pyfunction!(accuracy, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

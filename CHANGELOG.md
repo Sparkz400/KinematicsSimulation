@@ -15,6 +15,13 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   library only) from the tables, nextest's JUnit file and the values the tests write with
   `sim_core::testkit::record_check` to the file `KS_VALIDATION_OUT` names (nothing without it). The rustdoc of the
   workspace is published under `/api/`. See `docs/dashboard.md`.
+- Positioning accuracy and repeatability (`sim-cli accuracy`, Python `ks.accuracy`, `sim_components::accuracy`): each
+  tool axis run through ISO 230-2's linear cycle (targets approached from below and above, `--points`, `--repeats`,
+  `--dwell`), reported per target and per axis (B, R, E, M, A) and at the tool along ISO 9283 (AP, RP, vAP); verdicts
+  `positioning-accuracy` and `positioning-repeatability` against the optional `ratings.max_positioning_error_m` and
+  `ratings.max_repeatability_m`. Two optional effects for the axes of `[accuracy]`: `effects.thermal_growth` (screw
+  11.5e-6 / K, belt 11.5e-6 / K [estimate], from a given rise and a heated part's) and `effects.lead_error` (a pitch
+  error table); off where a config does not have them.
 
 ## [1.0.0] - 2026-11-16
 
