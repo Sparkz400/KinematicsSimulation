@@ -101,10 +101,13 @@ impl Converter {
             joint.extra_efficiency *= self.efficiency;
         }
         joint.rotor_inertia += self.inertia / (i * i);
-        // The mesh friction's bristle is MESH_STIFFNESS times the converted series stiffness (N/m now, not N m/rad), capped
-        // where it with the rotor's inertia seen at the load stays inside RK4's bound at the base step.
-        // shortcut: the load's own inertia is left out (only makes the cap conservative); omega <= a quarter of
-        // BRISTLE_RATE_MAX (omega h = 0.39 against 2.8), a measured presliding stiffness once a gear's is known.
+        // The mesh friction's bristle is MESH_STIFFNESS times the converted series stiffness (N/m now, not N m/rad). No
+        // shipped machine reaches the cap below: rack, screw and both cable robots run the full 2.6e7 to 5.6e7 N/m, and
+        // their gearbox loss per cycle is the same at a tenth and at ten times it to 4e-4 J (rack 16.741 J, screw
+        // 16.762 J, cable-planar 38.167 J, cable-spatial 53.544 to 53.548 J), with their energy budgets closed to 2e-5 J.
+        // shortcut: a gear far stiffer than any shipped (1e12 N m/rad behind a rigid lever) is capped where the bristle
+        // with the rotor's inertia seen at the load stays at a quarter of BRISTLE_RATE_MAX (omega h = 0.39 against RK4's
+        // 2.8); the output's own mass is not known here, so a lighter output than the rotor sees it stiffer.
         if g.mesh_stiffness > 0.0 {
             let reflected = joint.rotor_inertia * g.ratio * g.ratio;
             let omega = BRISTLE_RATE_MAX / 4.0;
