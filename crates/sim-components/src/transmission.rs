@@ -7,7 +7,7 @@
 //! Units: lengths in m, forces in N, torques in N m, speeds of rotation in r/min where a catalogue gives them so.
 
 use crate::joint::RotaryJoint;
-use crate::mech::HoldingBrake;
+use crate::mech::{HoldingBrake, BRISTLE_RATE_MAX, MESH_STIFFNESS};
 use sim_core::{Config, ConfigError, RatingCheck, SignalInfo};
 use std::f64::consts::PI;
 
@@ -101,6 +101,15 @@ impl Converter {
             joint.extra_efficiency *= self.efficiency;
         }
         joint.rotor_inertia += self.inertia / (i * i);
+        // The mesh friction's bristle is MESH_STIFFNESS times the converted series stiffness (N/m now, not N m/rad), capped
+        // where it with the rotor's inertia seen at the load stays inside RK4's bound at the base step.
+        // shortcut: the load's own inertia is left out (only makes the cap conservative); omega <= a quarter of
+        // BRISTLE_RATE_MAX (omega h = 0.39 against 2.8), a measured presliding stiffness once a gear's is known.
+        if g.mesh_stiffness > 0.0 {
+            let reflected = joint.rotor_inertia * g.ratio * g.ratio;
+            let omega = BRISTLE_RATE_MAX / 4.0;
+            g.mesh_stiffness = (MESH_STIFFNESS * g.stiffness).min(reflected * omega * omega);
+        }
         joint.brake = HoldingBrake::from_config(cfg, joint.rotor_inertia)?;
         Ok(())
     }

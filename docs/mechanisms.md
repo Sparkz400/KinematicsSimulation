@@ -797,7 +797,10 @@ end-position sensors (`wait = ["z.extended"]`) before the dwell counts and the n
 throttles; 0.5 kg moved, 0.5 kg picked. The cycle: X to the pick, Z down, wait, grip, Z up, wait, X to the place, Z
 down, release, Z up. With the shipped settings Z extends in 0.55 s and retracts in 0.65 s (valve 7 ms, the rod side
 exhausting from supply, 0.216 m/s throttled, the cushion's bleed at the end), enters the cushion at 0.22 to 0.24 m/s
-with 0.012 to 0.029 J against the 0.4 J rated (`cushion-energy`), stops at 0.06 to 0.07 m/s on the bumper without
+with the kinetic 0.012 to 0.029 J plus the weight's work over the 17 mm cushion, m g L (0.5 kg: 0.083 J, with the carton 1 kg:
+0.167 J; the cylinder hangs, so gravity pushes into the cushion when extending, and the term is left out where it opposes
+the motion), about 0.10 to 0.20 J against the 0.4 J rated (`cushion-energy`; hand estimate, the logged figures follow
+with the next regeneration), stops at 0.06 to 0.07 m/s on the bumper without
 bouncing out of the sensor band, and has a load factor of 0.024 (`load-factor`, the 1 kg weight against 415 N
 retracting). A double stroke draws 1.10 normal litres, 474 J at the compressor (0.12 kWh/m³); by hand at the supply
 pressure and the wall's temperature 1.15 l, the 4 % less because the dwells are too short for the hot air to cool.

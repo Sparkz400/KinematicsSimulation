@@ -18,7 +18,7 @@
 //!   small drops, where the elliptic law is dp ~ mdot^2 (1 - b) / C^2 (`Flow::series`).
 //! - A 5/2 valve (or a 5/3 with a closed centre) that switches `valve_switch_time_s` after its command; inflow through
 //!   valve and tube (the throttles' and the cushions' check valves open), outflow also through the meter-out throttle
-//!   of that chamber, or within the cushion length of its end through the cushion's bleed screw alone.
+//!   of that chamber, or within the cushion length of its end through the cushion's bleed screw behind that throttle.
 //! - The piston: (m + payload) dv/dt = p1 A1 - p2 A2 - p_atm (A1 - A2) - F_load - m g sin(incline) - F_seal + F_stop,
 //!   the seal's friction a Stribeck curve whose Coulomb level rises with the chambers' mean gauge pressure, the end
 //!   stops `mech::HardStop` (elastic bumpers).
@@ -412,7 +412,8 @@ impl Cylinder {
             switch_time: nonneg("valve_switch_time_s")?,
             inflow: Flow::series(&[valve, tube]),
             outflow: throttles.map(|t| Flow::series(&[valve, tube, t])),
-            bleed: [Flow::series(&[valve, tube, bleed]); 2],
+            // The cushion's bleed screw sits behind the port's meter-out throttle, so that is in series too.
+            bleed: throttles.map(|t| Flow::series(&[valve, tube, bleed, t])),
             cushion,
             stops: HardStop { stiffness: pos("stop_stiffness_n_m")?, damping: nonneg("stop_damping_n_s_m")? },
             seal,
@@ -648,7 +649,9 @@ impl Cylinder {
         let moved = self.mass + if self.payload_on { self.payload } else { 0.0 };
         if t.cushioned == 0.0 && self.cushion > 0.0 && to_end <= self.cushion {
             t.cushioned = 1.0;
-            (t.impact_speed, t.impact_energy) = (v.abs(), 0.5 * moved * v * v);
+            // Plus the weight's work over the cushion's length where it pushes into the cushion (not where it opposes).
+            let weight = moved * self.gravity * self.cushion * if extending { -1.0 } else { 1.0 };
+            (t.impact_speed, t.impact_energy) = (v.abs(), 0.5 * moved * v * v + weight.max(0.0));
         }
         if t.arrived == 0.0 && to_end <= self.sensor_band {
             t.arrived = 1.0;
@@ -1279,5 +1282,28 @@ mod tests {
         let error = Cylinder::from_config(&cfg, "z", "cylinder", "c", 62.5e-6 / 4.0).unwrap_err();
         assert_eq!(error.key(), "error-cylinder-unstable");
         assert!(error.detail().contains("flow"), "{}", error.detail());
+    }
+
+    /// The energy entering the cushion at 0.2 m/s into the 17 mm cushion with m = moved mass: kinetic m v^2 / 2 plus,
+    /// where the weight pushes the piston into the cushion, m g L (hanging 1 kg: 9.80665 * 0.017 = 0.1667 J, 0.02 J
+    /// kinetic); extending upwards the weight opposes and only the 0.5 m v^2 enters.
+    #[test]
+    fn the_cushion_takes_the_weights_work_over_its_length_where_gravity_pushes_in() {
+        let entering = |incline: &str, spool: f64, x: f64| {
+            let mut c = cylinder(&[incline], 1e-5);
+            c.cushion = 0.017;
+            c.track.spool = spool;
+            c.track.cushioned = 0.0;
+            let mut s = rest(&c, spool);
+            (s[X], s[V]) = (x, 0.2 * spool);
+            c.stepped(&s, 1e-5);
+            (c.track.impact_energy, c.mass + c.payload)
+        };
+        let (down, m) = entering("c.incline_deg = -90.0", 1.0, 0.1 - 0.0169);
+        near(down, 0.5 * m * 0.04 + m * G * 0.017, 1e-9, "extending down");
+        let (up, m) = entering("c.incline_deg = 90.0", 1.0, 0.1 - 0.0169);
+        near(up, 0.5 * m * 0.04, 1e-9, "extending up");
+        let (retract, m) = entering("c.incline_deg = 90.0", -1.0, 0.0169);
+        near(retract, 0.5 * m * 0.04 + m * G * 0.017, 1e-9, "retracting down");
     }
 }
