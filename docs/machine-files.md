@@ -813,9 +813,16 @@ derivations):
   each run, L_s = L0_s + c_s . q long, moves at V_s v over ground, and with the frame's sway e du on top: the belt's
   kinetic energy ½ mu Σ_s L_s |V_s v + e du|² replaces the half of it on each pulley in the axes' (and the frame's)
   mass matrix, with Lagrange's speed terms, and its momentum and first moment are in the frame's momentum. The
-  T-gantry's file gives its spans so; its crate derives the same from its belt path (`belt_mass`).
+  T-gantry's file gives its spans so; its crate derives the same from its belt path (`belt_mass`). So do the other
+  files whose belt runs move over ground, each with its table of runs in its comment: the H-bot (the T-gantry's path
+  with Y for Z: its belt weighs mu (L + 8 (0.65 - y)) on X, 0.86 kg at y = 0.1 m where the lumps had 0.42, and
+  2 mu (2x - 1) between X and Y), the CoreXY (each belt moves as a whole along X and along Y, as the lumps had it, and
+  adds mu (1.2 - 1.3) m = -0.01 kg between them), and the portals and gantries whose Y (and Z) belt rides on the axes
+  that carry it (on X 0.18 kg more on the XYZ portal, 0.105 kg on the C portal, 0.11 and 0.08 kg on the dual and rack
+  gantries). Checked by hand and for energy and feedforward
+  (`the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand`).
 - The belt's mode (elastic model): the axes, and the frame where it sways, on the belt's stiffness with the pulleys
-  held, K = Σ_s EA / L_s c_s c_s^T, against their mass matrix; the lowest is `resonance_hz` at a pose, so
+  held, K = Σ_s EA / l_s c_s c_s^T (l_s the section's unstretched belt at rest, as the crates take it), against their mass matrix; the lowest is `resonance_hz` at a pose, so
   `effects.shaper_follows_pose` sets the shaper to it, and the app shows its shape (scaled to 1 m of tool travel).
 - A screw, rack, linear motor or rotary (`machine.screw`, ...): its motor's gearbox becomes one in the axis's unit, of
   ratio i / lever (the joint kit's `RotaryJoint` with the `transmission::Converter` behind it), and its "pulley" is the

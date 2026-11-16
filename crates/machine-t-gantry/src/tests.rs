@@ -2127,6 +2127,8 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
 /// 7 kg). Z up at 0.5 m/s: motor a lifts (drives, / eta), motor b is driven forwards on its negative speed with a negative
 /// torque (also drives): ±0.004 x 34.3233 / 0.95 = ±0.144519 N m with the weight's own 0.137293 in the rigid
 /// feedforward (it gave ±0.137293). Down, the gearboxes are driven back: ±0.004 x 34.3233 x 0.95 = ±0.130428 N m.
+/// The model's own answer agrees: the torques under which the rigid model's `derivatives` give X and Z no acceleration
+/// at that speed (Newton, the Jacobian by differences) are the totals to 1e-9 N m.
 #[test]
 fn the_steady_friction_has_the_gearbox_loss_on_the_weight() {
     let m = rigid(&["effects.gearbox_efficiency = true", "gearbox.efficiency = 0.95"]);
@@ -2138,6 +2140,31 @@ fn the_steady_friction_has_the_gearbox_loss_on_the_weight() {
         assert!(
             (total[0] - by_hand).abs() < 1e-5 && (total[1] + by_hand).abs() < 1e-5,
             "{vz} m/s: {total:?}, by hand ±{by_hand}"
+        );
+        let acc = |t: [f64; 2]| {
+            let mut d = [0.0; N_RIGID];
+            m.derivatives(&[0.5, 0.25, 0.0, vz, 0.0, 0.0, 0.0, 0.0], &t, &mut d);
+            [d[2], d[3]]
+        };
+        let mut t = total;
+        for _ in 0..20 {
+            let a = acc(t);
+            let j: [[f64; 2]; 2] = std::array::from_fn(|c| {
+                let mut s = t;
+                s[c] += 1e-6;
+                let b = acc(s);
+                [(b[0] - a[0]) / 1e-6, (b[1] - a[1]) / 1e-6]
+            });
+            // a + J dt = 0, J[c] the column of motor c.
+            let det = j[0][0] * j[1][1] - j[1][0] * j[0][1];
+            t[0] -= (a[0] * j[1][1] - a[1] * j[1][0]) / det;
+            t[1] -= (j[0][0] * a[1] - j[0][1] * a[0]) / det;
+        }
+        let a = acc(t);
+        assert!(a[0].abs() < 1e-9 && a[1].abs() < 1e-9, "{vz} m/s: {a:?}");
+        assert!(
+            (t[0] - total[0]).abs() < 1e-9 && (t[1] - total[1]).abs() < 1e-9,
+            "{vz} m/s: Newton {t:?}, feedforward and steady friction {total:?}"
         );
     }
 }

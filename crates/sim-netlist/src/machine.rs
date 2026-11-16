@@ -1528,7 +1528,8 @@ impl ConfigMachine {
     /// The acceleration of each axis that the motor torques would give a loss-free rigid machine: what an overhang's
     /// tilt on a guide is worked out with. The true acceleration would make friction depend on itself, and its absolute
     /// value would turn every belt vibration into extra friction. Bodies, pulleys and rotors only, as the crates take it:
-    /// chains and idlers change it by a few per mille.
+    /// chains, idlers and the belt's runs beyond its lumps on the pulleys (`runs_mass`) change it by a few per mille to
+    /// a few per cent.
     fn commanded_acc(&self, q: &[f64], torque: &[f64]) -> Vec<f64> {
         let forces: Vec<f64> =
             (0..self.n()).map(|i| (0..self.m()).map(|kk| self.ratio[kk] * self.k[kk][i] * torque[kk]).sum()).collect();
@@ -2268,22 +2269,59 @@ impl ConfigMachine {
         out.push(frequencies.iter().map(|f| span_detuning(*f, &excitations)).fold(1.0, f64::min));
     }
 
+    /// The sections' tensions at rest at q and their unstretched belt, L_s / (1 + T_s / EA): the tensions hold every axis
+    /// against gravity, sum_s c_si T_s = gravity_i, and each closed belt keeps its material, sum over its sections of
+    /// L_s / (1 + T_s / EA) = what it had at q = 0. Newton from the pretension; the first equations are linear, the
+    /// others nearly so. The frame stands at 0: nothing pulls along its horizontal axis. An axis a screw, rack, linear
+    /// motor or rotary drives is held by that, not by the belt.
+    fn rest_tensions(&self, q: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let (n, geo, gravity) = (self.n(), self.geo(q), self.gravity(q));
+        let (ea, slack) = (self.belt.ea, self.belt.slack);
+        let taut = |t: f64| if slack { t.max(0.0) } else { t };
+        let mut tension = vec![self.belt.pretension; self.sections.len()];
+        let belt_held: Vec<usize> = (0..n).filter(|&i| !self.driven(i)).collect();
+        for _ in 0..50 {
+            let mut jac: Vec<Vec<f64>> =
+                belt_held.iter().map(|&i| self.sections.iter().map(|s| s.c[i]).collect()).collect();
+            let mut res: Vec<f64> =
+                belt_held.iter().zip(&jac).map(|(&i, row)| gravity[i] - dot(row, &tension)).collect();
+            for belt in &self.loops {
+                let mut row = vec![0.0; self.sections.len()];
+                let mut held = 0.0;
+                for &s in belt {
+                    let stretch = 1.0 + taut(tension[s]) / ea;
+                    held += geo[s] / stretch - self.sections[s].mat0;
+                    row[s] = if slack && tension[s] < 0.0 { 0.0 } else { -geo[s] / (ea * stretch * stretch) };
+                }
+                jac.push(row);
+                res.push(-held);
+            }
+            let step = lstsq(&jac, &res).unwrap_or_else(|| vec![0.0; self.sections.len()]);
+            tension.iter_mut().zip(&step).for_each(|(t, d)| *t += d);
+            if step.iter().all(|d| d.abs() < 1e-12 * (1.0 + self.belt.pretension)) {
+                break;
+            }
+        }
+        let mat = geo.iter().zip(&tension).map(|(g, t)| g / (1.0 + taut(*t) / ea)).collect();
+        (tension, mat)
+    }
+
     /// The lowest belt mode at a pose (elastic model): the axes (and the frame, where it sways, and the leaning body,
-    /// where it leans) on the belt's stiffness with the pulleys held, K = sum_s EA / L_s c_s c_s^T (plus the frame's and
+    /// where it leans) on the belt's stiffness with the pulleys held, K = sum_s EA / l_s c_s c_s^T (l_s the section's
+    /// unstretched belt at rest; plus the frame's and
     /// the lean's springs), against their mass matrix (see `energy_parts`): (w^2, the axes', frame's and lean's motion).
     fn belt_mode(&self, pose: &[f64]) -> Option<(f64, Vec<f64>)> {
         if !self.elastic {
             return None;
         }
-        // shortcut: EA / L of the geometric length, where `Belt::section` stiffens by EA / l of the unstretched belt, 1 +
-        // T / EA more (0.06 % at 300 N on 5e5 N, 0.03 % on the frequencies; the T-gantry crate takes l). Take l from
-        // `equilibrium` once the single axis's crate and its file's hand check do too.
-        let (n, geo) = (self.n(), self.geo(pose));
+        // dT/dL = EA / l of `Belt::section`, l the section's unstretched belt at rest at the pose (`rest_tensions`), as
+        // the crates take it.
+        let (n, rest) = (self.n(), self.rest_tensions(pose).1);
         let mass = self.elastic_mass(pose);
         let d = mass.len();
         let mut stiffness = vec![vec![0.0; d]; d];
         for i in 0..n {
-            for (sec, length) in self.sections.iter().zip(&geo) {
+            for (sec, length) in self.sections.iter().zip(&rest) {
                 for l in 0..n {
                     stiffness[i][l] += self.belt.ea / length * sec.c[i] * sec.c[l];
                 }
@@ -2653,38 +2691,9 @@ impl Machine for ConfigMachine {
             }
             return;
         }
-        // The tensions at rest: they hold every axis against gravity, sum_s c_si T_s = gravity_i, and each closed belt
-        // keeps its material, sum over its sections of L_s / (1 + T_s / EA) = what it had at q = 0. Newton from the
-        // pretension; the first equations are linear, the others nearly so. The frame stands at 0: nothing pulls along
-        // its horizontal axis. An axis a screw, rack, linear motor or rotary drives is held by that, not by the belt.
         let geo = self.geo(tool);
-        let (ea, slack) = (self.belt.ea, self.belt.slack);
-        let taut = |t: f64| if slack { t.max(0.0) } else { t };
-        let mut tension = vec![self.belt.pretension; self.sections.len()];
-        let belt_held: Vec<usize> = (0..n).filter(|&i| !self.driven(i)).collect();
-        for _ in 0..50 {
-            let mut jac: Vec<Vec<f64>> =
-                belt_held.iter().map(|&i| self.sections.iter().map(|s| s.c[i]).collect()).collect();
-            let mut res: Vec<f64> =
-                belt_held.iter().zip(&jac).map(|(&i, row)| gravity[i] - dot(row, &tension)).collect();
-            for belt in &self.loops {
-                let mut row = vec![0.0; self.sections.len()];
-                let mut held = 0.0;
-                for &s in belt {
-                    let stretch = 1.0 + taut(tension[s]) / ea;
-                    held += geo[s] / stretch - self.sections[s].mat0;
-                    row[s] = if slack && tension[s] < 0.0 { 0.0 } else { -geo[s] / (ea * stretch * stretch) };
-                }
-                jac.push(row);
-                res.push(-held);
-            }
-            let step = lstsq(&jac, &res).unwrap_or_else(|| vec![0.0; self.sections.len()]);
-            tension.iter_mut().zip(&step).for_each(|(t, d)| *t += d);
-            if step.iter().all(|d| d.abs() < 1e-12 * (1.0 + self.belt.pretension)) {
-                break;
-            }
-        }
-        let mat: Vec<f64> = geo.iter().zip(&tension).map(|(g, t)| g / (1.0 + taut(*t) / ea)).collect();
+        let taut = |t: f64| if self.belt.slack { t.max(0.0) } else { t };
+        let (tension, mat) = self.rest_tensions(tool);
         // The belt motors' pulley angles that feed that material (a motor without a pulley feeds none).
         let belted: Vec<usize> = (0..m).filter(|&kk| self.direct[kk].is_none()).collect();
         let fed: Vec<Vec<f64>> =

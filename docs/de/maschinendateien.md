@@ -860,9 +860,12 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
   Schwingen des Rahmens e du obendrauf: die kinetische Energie des Riemens ½ mu Σ_s L_s |V_s v + e du|² ersetzt die
   Hälfte auf jeder Scheibe in der Massenmatrix der Achsen (und des Rahmens), mit den Geschwindigkeitstermen nach
   Lagrange, und sein Impuls und erstes Moment gehen in den Impuls des Rahmens ein. Die Datei des T-Portals gibt ihre
-  Trume so an; ihr Crate leitet dasselbe aus dem Riemenweg ab (`belt_mass`).
+  Trume so an; ihr Crate leitet dasselbe aus dem Riemenweg ab (`belt_mass`). Ebenso die anderen Dateien, deren Trume sich
+  über Grund bewegen, jede mit der Tabelle ihrer Trume im Kommentar: der H-Bot (der Riemenweg des T-Portals mit Y statt
+  Z), der CoreXY (jeder Riemen bewegt sich entlang X und entlang Y als Ganzes, wie die Klumpen es hatten, und gibt
+  -0,01 kg zwischen X und Y) und die Portale, deren Y- (und Z-) Riemen auf den Achsen fährt, die ihn tragen.
 - Die Eigenform des Riemens (elastisches Modell): die Achsen, und der Rahmen, wo er schwingt, auf der Steifigkeit des
-  Riemens bei festgehaltenen Scheiben, K = Σ_s EA / L_s c_s c_s^T, gegen ihre Massenmatrix; die niedrigste ist
+  Riemens bei festgehaltenen Scheiben, K = Σ_s EA / l_s c_s c_s^T (l_s der ungedehnte Riemen des Abschnitts in Ruhe, wie in den Crates), gegen ihre Massenmatrix; die niedrigste ist
   `resonance_hz` in einer Lage, also stellt `effects.shaper_follows_pose` den Shaper darauf, und die App zeigt ihre
   Form (auf 1 m Werkzeugweg skaliert).
 - Spindel, Zahnstange, Linearmotor oder Rundtisch (`machine.screw`, ...): das Getriebe seines Motors wird eines in der

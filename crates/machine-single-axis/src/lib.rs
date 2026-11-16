@@ -239,6 +239,12 @@ impl SingleAxis {
         let (stroke, s, teeth) = (self.axes[0].max, self.span_min, self.belt.tooth_length);
         [s + x + teeth, 3.0 * s + 2.0 * stroke - x + teeth]
     }
+    /// Unstretched belt per section at rest at x: the carriage's balance T2 - T1 = its weight along the axis less what
+    /// pushes it at rest (the process force while dwelling); the belt total fixes the level.
+    fn rest_material(&self, x: f64) -> Vec<f64> {
+        let weight = (self.m() + self.chain.mass(x).0) * self.g_along - self.extra_force(x, 0.0);
+        self.belt.static_material(&self.geo(x), &[0.0, weight], self.mat0.iter().sum())
+    }
     /// Unstretched belt per section of the elastic state `s`: the pulley at angle s[1] has fed in r_mat a, and with
     /// effects.belt_tooth_jump the belt has slipped over it by u, which is r_mat / r u of material.
     fn mat(&self, s: &[f64]) -> [f64; 2] {
@@ -573,9 +579,7 @@ impl Machine for SingleAxis {
             torque[0] = self.ripple.invert(shaft, ratio * x / r);
             return;
         }
-        // Carriage balance: T2 - T1 = m g sin(incline). The belt total fixes the level.
-        let geo = self.geo(x);
-        let mat = self.belt.static_material(&geo, &[0.0, weight], self.mat0.iter().sum());
+        let (geo, mat) = (self.geo(x), self.rest_material(x));
         let a = (mat[0] - self.mat0[0]) / self.r_mat;
         let m: [f64; 2] = std::array::from_fn(|i| self.belt.section(geo[i], mat[i], 0.0, 0.0).material);
         let gear = -self.r_mat * (m[0] - m[1]) - r * self.mesh.force(r * a);
@@ -663,7 +667,8 @@ impl Machine for SingleAxis {
     }
 
     /// The carriage on the belt with the pulley held, as the gantry's `modes` takes it: the carriage, its payload and
-    /// the cable chain's share (m) on the two sections, k = EA / L1 + EA / L2, f = sqrt(k / m) / (2 pi). Its damping
+    /// the cable chain's share (m) on the two sections, k = EA / l1 + EA / l2 (dT/dL of `Belt::section`, l the
+    /// section's unstretched belt at rest there, `rest_material`), f = sqrt(k / m) / (2 pi). Its damping
     /// ratio c / (2 m w), c the two sections' damping (`belt.damping_n_s_m` each, or `belt.damping_time_s` k). The
     /// gearbox's twist and the motor's inertia behind it are left out: the drive's velocity loop holds the pulley far
     /// below this frequency, and stiffer than the belt above it. `None` in the rigid model.
@@ -674,8 +679,8 @@ impl Machine for SingleAxis {
         if !self.elastic {
             return Vec::new();
         }
-        let geo = self.geo(tool_pose[0]);
-        let (k, m) = (self.belt.ea / geo[0] + self.belt.ea / geo[1], self.m() + self.chain.mass(tool_pose[0]).0);
+        let mat = self.rest_material(tool_pose[0]);
+        let (k, m) = (self.belt.ea / mat[0] + self.belt.ea / mat[1], self.m() + self.chain.mass(tool_pose[0]).0);
         let (w, c) = ((k / m).sqrt(), 2.0 * self.belt.damping + self.belt.damping_time * k);
         vec![Mode { hz: w / std::f64::consts::TAU, damping: c / (2.0 * m * w) }]
     }

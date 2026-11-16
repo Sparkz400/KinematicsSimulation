@@ -2181,13 +2181,15 @@ fn the_friction_curve_is_the_formula() {
 }
 
 /// The carriage on the belt with the pulley held (`modes`): m = 4 + 2 kg, at x = 0.5 m the sections are 0.65 m and
-/// 1.95 m long, k = 5e5 / 0.65 + 5e5 / 1.95 = 1.025641e6 N/m, f = sqrt(k / m) / (2 pi) = 65.8025 Hz; at x = 0.1 m,
-/// 0.25 m and 2.35 m, k = 2.212766e6 N/m, 96.6523 Hz. Damping ratio 2 * 100 N s/m / (2 m w): 0.040311 and 0.027445.
+/// 1.95 m long. Each is as stiff as dT/dL = EA / l of `Belt::section`, l its unstretched belt: the axis lies flat, so
+/// both hold the 300 N pretension and l = L / (1 + 300 / 5e5). k = 5e5 * 1.0006 * (1 / 0.65 + 1 / 1.95) = 1.026256e6
+/// N/m, f = sqrt(k / m) / (2 pi) = 65.8222 Hz; at x = 0.1 m, 0.25 m and 2.35 m, k = 2.214094e6 N/m, 96.6813 Hz (EA / L
+/// of the stretched length gave 65.8025 and 96.6523 Hz). Damping ratio 2 * 100 N s/m / (2 m w): 0.040299 and 0.027436.
 /// The rigid model tells none.
 #[test]
 fn the_carriage_mode_is_the_hand_calculated_one_at_two_places() {
     let m = machine(ENTRY.config(), &[]);
-    for (x, hz, damping) in [(0.5, 65.8025, 0.040311), (0.1, 96.6523, 0.027445)] {
+    for (x, hz, damping) in [(0.5, 65.8222, 0.040299), (0.1, 96.6813, 0.027436)] {
         let modes = m.modes(&[x]);
         assert!(
             modes.len() == 1 && (modes[0].hz - hz).abs() < 1e-3 && (modes[0].damping - damping).abs() < 1e-5,

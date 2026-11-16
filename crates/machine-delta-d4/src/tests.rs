@@ -382,18 +382,21 @@ fn an_arms_own_motor_table_is_refused() {
 /// geometry, see its test of the same name): the joint 0.3 tanh(t' / 0.01) + 0.05 t' = 0.356413 N m. The telescope
 /// lengthens at 0.5 m/s and slides at 5 tanh(100) + 2 x 0.5 = 6 N, upward on the platform; each arm moves the platform
 /// by dz/dt_k = z' / (3 t') = -0.147721 m/rad (the three alike), so it feels 6 x -0.147721 = -0.886328 N m against its
-/// turn: 1.242740 N m through the gearbox. The arms hold the platform's weight, so their gearboxes are driven back:
-/// x 0.96 / 20, 0.059652 N m, plus the shaft at 20 t' = 22.565 rad/s, 0.05 tanh(45) + 2e-4 x 22.565 = 0.054513 N m:
-/// 0.114165 N m. The tool: the bearing 0.02 tanh(500) + 1e-4 x 5 = 0.0205 N m through ratio 8 at the efficiency
+/// turn: 1.242740 N m through the gearbox. Each arm holds G = 12.045 N m of weight (platform, payload, shaft and arms,
+/// pulling the arm down, the way it turns), so its gearbox passes 1.242740 - 12.045 N m, is driven back, and the loss
+/// is on all of it, as on the linkage (the weight's lossless G / 20 is the rigid feedforward's): ((1.242740 - 12.045)
+/// x 0.96 + 12.045) / 20 = 0.083742 N m (without the loss on the weight it was 1.242740 x 0.96 / 20 = 0.059652, and
+/// 0.114165 in all), plus the shaft at 20 t' = 22.565 rad/s, 0.05 tanh(45) + 2e-4 x 22.565 = 0.054513 N m: 0.138255
+/// N m. The tool: the bearing 0.02 tanh(500) + 1e-4 x 5 = 0.0205 N m through ratio 8 at the efficiency
 /// 0.97^tanh(0.0205 x 5 / 0.5 W) = 0.993861 (the fade over 0.5 W), 0.002578 N m, plus the shaft at 40 rad/s,
 /// 0.02 tanh(80) + 8e-5 x 40 = 0.0232 N m: 0.025778 N m. In a vertical cruise of the shipped delta at 0.5 m/s the
-/// feedforward takes its own size off the arms' integrators (which keep the gearboxes' loss on the weight, by design).
+/// feedforward takes its own size off the arms' integrators.
 #[test]
 fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing() {
     let m = (ENTRY.build)(&ENTRY.config()).unwrap();
     let mut out = [0.0; 4];
     m.steady_friction(&[0.0, 0.0, -0.85, 0.0], &[0.0, 0.0, -0.5, 5.0], &mut out);
-    let expected = [0.114165, 0.114165, 0.114165, 0.025778];
+    let expected = [0.138255, 0.138255, 0.138255, 0.025778];
     for k in 0..4 {
         assert!((out[k] - expected[k]).abs() < 1e-5, "{out:?}, by hand {expected:?}");
     }
@@ -423,6 +426,79 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
     let ((ff, with), (_, without)) = (cruise(true), cruise(false));
     assert!(ff > 0.1, "feedforward {ff} N m");
     assert!((without - with - ff).abs() < 0.03 * ff, "without: {without} N m, with {with}, of {ff}");
+}
+
+/// The friction feedforward (`steady_friction`) carries the arms' gearbox loss on the weight too, as the planar
+/// linkage's (the trait's rule: the load goes through the efficiencies where the motor drives): on the rigid D4 with
+/// its losses, at z = -0.85 m going down and up at 0.5 m/s with the tool turning, and sideways, the torques that leave
+/// platform and tool without acceleration (a Newton solve of the rigid model: the tool's acceleration from its velocity a
+/// microsecond along the model's rates, the Jacobian by differences) are the loss-free feedforward plus
+/// `steady_friction`, to 5e-4 of the torque (seen: 3.5e-4 vertically, 7e-5 sideways, 3e-6 on the tool; what is left
+/// is the loss on the velocity terms, which the feedforward leaves loss-free).
+#[test]
+fn the_friction_feedforward_takes_the_loss_on_the_weight() {
+    let machine = (ENTRY.build)(&{
+        let mut cfg = ENTRY.config();
+        for line in ["effects.joint_elasticity = false", "effects.torque_ripple = false"] {
+            cfg.set_text(line).unwrap();
+        }
+        cfg
+    })
+    .unwrap();
+    let pos = [0.0, 0.0, -0.85, 0.0];
+    for vel in [[0.0, 0.0, -0.5, 5.0], [0.0, 0.0, 0.5, -5.0], [0.2, -0.1, 0.0, 2.0]] {
+        let (mut state, mut held) = (Vec::new(), [0.0; 4]);
+        machine.equilibrium(&pos, &mut state, &mut held);
+        machine.set_tool_velocity(&mut state, &vel);
+        let acc = |t: [f64; 4]| -> [f64; 4] {
+            let mut rates = vec![0.0; machine.state_len()];
+            machine.derivatives(&state, &t, &mut rates);
+            let velocity = |h: f64| {
+                let s: Vec<f64> = state.iter().zip(&rates).map(|(s, r)| s + h * r).collect();
+                let (mut p, mut v) = ([0.0; 4], [0.0; 4]);
+                machine.tool_state(&s, &mut p, &mut v);
+                v
+            };
+            let (ahead, behind) = (velocity(1e-6), velocity(-1e-6));
+            std::array::from_fn(|i| (ahead[i] - behind[i]) / 2e-6)
+        };
+        let mut t = held;
+        for _ in 0..20 {
+            let a = acc(t);
+            // a + J dt = 0 by Gauss elimination, J[r][c] = d a_r / d t_c.
+            let mut j: [[f64; 5]; 4] = [[0.0; 5]; 4];
+            for c in 0..4 {
+                let mut s = t;
+                s[c] += 1e-6;
+                let b = acc(s);
+                (0..4).for_each(|r| j[r][c] = (b[r] - a[r]) / 1e-6);
+            }
+            (0..4).for_each(|r| j[r][4] = -a[r]);
+            for p in 0..4 {
+                let pivot = (p..4).max_by(|&x, &y| j[x][p].abs().total_cmp(&j[y][p].abs())).unwrap();
+                j.swap(p, pivot);
+                for r in p + 1..4 {
+                    let f = j[r][p] / j[p][p];
+                    (p..5).for_each(|c| j[r][c] -= f * j[p][c]);
+                }
+            }
+            let mut step = [0.0; 4];
+            for p in (0..4).rev() {
+                step[p] = (j[p][4] - (p + 1..4).map(|c| j[p][c] * step[c]).sum::<f64>()) / j[p][p];
+            }
+            (0..4).for_each(|r| t[r] += step[r]);
+        }
+        let a = acc(t);
+        assert!(a.iter().all(|a| a.abs() < 1e-7), "{vel:?}: {a:?}");
+        let (mut ff, mut friction) = ([0.0; 4], [0.0; 4]);
+        machine.feedforward_torque_moving(&pos, &vel, &[0.0; 4], &mut ff);
+        machine.steady_friction(&pos, &vel, &mut friction);
+        for k in 0..4 {
+            let off = t[k] - ff[k] - friction[k];
+            println!("{vel:?}: motor {k}: Newton {:.6} N m, feedforward {:.6} + friction {:.6}, off {off:.2e}", t[k], ff[k], friction[k]);
+            assert!(off.abs() < 5e-4 * t[k].abs(), "{vel:?}: motor {k}: {t:?} against {ff:?} + {friction:?}");
+        }
+    }
 }
 
 /// On a compliant base (`effects.base_compliance`) the machine keeps its collision capsules (11 of them, carried

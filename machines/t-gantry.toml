@@ -66,6 +66,10 @@ gearbox_lost_motion = false
 # A strain wave gear's three-segment stiffness, K1 to T1, K2 to T2, K3 beyond (gearbox.stiffness_*). Off in the shipped
 # configs.
 gearbox_stiffness_curve = false
+# The efficiency's loss as a friction in the gearbox's mesh: in proportion to the torque it passes, against the
+# motion at any speed, and sticking at rest inside its band. Off, as on the other belt machines (the loss fades in below
+# 0.5 W, a gear at rest has none); the energy budget closes with it on as without it.
+gearbox_mesh_friction = false
 torque_ripple = true
 tooth_meshing = true
 # The frame sways along X on its spring ([frame], machine.frame); elastic model only.

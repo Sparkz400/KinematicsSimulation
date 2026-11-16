@@ -78,7 +78,17 @@ impl Converter {
     ///
     /// With effects.thermal_feedback the gearbox's temperature changes the gearbox's share of the efficiency, not the
     /// converter's (`RotaryJoint::extra_efficiency`).
+    ///
+    /// The output's own inertia is not known here: the mesh friction's bristle is capped by the rotor's (`apply_to`).
     pub fn apply(&self, cfg: &Config, joint: &mut RotaryJoint) -> Result<()> {
+        self.apply_to(cfg, joint, f64::INFINITY)
+    }
+
+    /// `apply` for an output of the given inertia at the joint's travel (kg behind a screw, rack or drum): the mesh
+    /// friction's bristle, between the gear's output and the housing, is capped by the smaller of it and the rotor's
+    /// inertia seen at the load, so that a light output (a winch drum) does not stick to the housing at a frequency the
+    /// step cannot follow.
+    pub fn apply_to(&self, cfg: &Config, joint: &mut RotaryJoint, output: f64) -> Result<()> {
         let (g, l) = (&mut joint.gearbox, self.lever);
         let i = g.ratio;
         g.ratio = i / l;
@@ -105,13 +115,14 @@ impl Converter {
         // shipped machine reaches the cap below: rack, screw and both cable robots run the full 2.6e7 to 5.6e7 N/m, and
         // their gearbox loss per cycle is the same at a tenth and at ten times it to 4e-4 J (rack 16.741 J, screw
         // 16.762 J, cable-planar 38.167 J, cable-spatial 53.544 to 53.548 J), with their energy budgets closed to 2e-5 J.
-        // shortcut: a gear far stiffer than any shipped (1e12 N m/rad behind a rigid lever) is capped where the bristle
-        // with the rotor's inertia seen at the load stays at a quarter of BRISTLE_RATE_MAX (omega h = 0.39 against RK4's
-        // 2.8); the output's own mass is not known here, so a lighter output than the rotor sees it stiffer.
+        // A gear far stiffer than any shipped (1e12 N m/rad behind a rigid lever) is capped where the bristle on the
+        // lighter of the rotor's inertia seen at the load and the output's own stays at a quarter of BRISTLE_RATE_MAX
+        // (omega h = 0.39 at the 15.6 us step against RK4's 2.8). A winch drum of 0.32 kg at its radius puts the cap at
+        // 2e8 N/m, above what the cable robots' gears give.
         if g.mesh_stiffness > 0.0 {
-            let reflected = joint.rotor_inertia * g.ratio * g.ratio;
+            let lighter = (joint.rotor_inertia * g.ratio * g.ratio).min(output);
             let omega = BRISTLE_RATE_MAX / 4.0;
-            g.mesh_stiffness = (MESH_STIFFNESS * g.stiffness).min(reflected * omega * omega);
+            g.mesh_stiffness = (MESH_STIFFNESS * g.stiffness).min(lighter * omega * omega);
         }
         joint.brake = HoldingBrake::from_config(cfg, joint.rotor_inertia)?;
         Ok(())
@@ -565,6 +576,71 @@ impl StrainWave {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A winch: a gear of ratio 20 and 2e5 N m/rad (5 N m s/rad, efficiency 0.9, mesh friction on; rotor and input
+    /// 2e-4 kg m^2) behind a drum of 25 mm radius that weighs 0.32 kg at its radius. At the cable the gear is
+    /// 2e5 / 0.025^2 = 3.2e8 N/m and the rotor 2e-4 * 800^2 = 128 kg: capped by the rotor alone (`apply`) the bristle is
+    /// the full 3.2e8 N/m, by the drum (`apply_to`) 0.32 kg * (BRISTLE_RATE_MAX / 4)^2 = 2e8 N/m. Driven by a torque of
+    /// sin(2 pi 2 t) N m for a second at the base step's quarter (15.625 us, RK4), reversing four times, it stays
+    /// bounded, and its energy closes: the motor's work is the change of the rotor's, the drum's and the gear's energy and
+    /// the gear's loss (0.0636 J against 252 J that pass back and forth), to 1e-6 of the loss (seen: 4e-11 J).
+    #[test]
+    fn a_gear_at_the_bristle_cap_of_a_light_drum_stays_stable_and_closes_its_energy() {
+        let text = "format_version = 1\n[effects]\njoint_friction = false\nhard_stops = false\nmotor_friction = false\n\
+            torque_ripple = false\ngearbox_backlash = false\ngearbox_efficiency = true\ngearbox_drag = false\n\
+            motor_stiction = false\ngearbox_lost_motion = false\ngearbox_stiffness_curve = false\nthermal_feedback = false\n\
+            holding_brake = false\ngearbox_mesh_friction = true\n\
+            [motor]\nrotor_inertia_kgm2 = 1e-4\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\n\
+            friction_smoothing_rad_s = 1e-3\nfriction_breakaway_nm = 0.0\nfriction_stribeck_rad_s = 2.0\nripple_fraction = 0.0\n\
+            ripple_order = 6.0\ncogging_nm = 0.0\ncogging_order = 6.0\nbrake_torque_nm = 5.0\n\
+            [gearbox]\nratio = 20.0\nefficiency = 0.9\nbacklash_rad = 0.0\nstiffness_nm_rad = 2e5\ndamping_nm_s_rad = 5.0\n\
+            inertia_at_input_kgm2 = 1e-4\nefficiency_torque_nm = 100.0\nno_load_torque_nm = 0.0\nno_load_speed_rpm = 3000.0\n\
+            lost_motion_band_rad = 0.0\nhysteresis_rad = 0.0\nstiffness_t1_nm = 100.0\nstiffness_t2_nm = 100.0\n\
+            stiffness_k2_nm_rad = 2e5\nstiffness_k3_nm_rad = 2e5\n\
+            [joint]\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 1e-3\n\
+            min_angle_deg = -45.0\nmax_angle_deg = 90.0\nstop_stiffness_nm_rad = 1e5\nstop_damping_nm_s_rad = 0.0\n";
+        let cfg = Config::parse(text).unwrap();
+        let drum = Converter { lever: 0.025, stiffness: f64::INFINITY, backlash: 0.0, efficiency: 1.0, inertia: 0.0 };
+        let mass = 0.32;
+        let joint = |output: f64| {
+            let mut j = RotaryJoint::from_config(&cfg).unwrap();
+            drum.apply_to(&cfg, &mut j, output).unwrap();
+            j
+        };
+        assert!((joint(f64::INFINITY).gearbox.mesh_stiffness / 3.2e8 - 1.0).abs() < 1e-12);
+        let mut j = joint(mass);
+        let cap = mass * (BRISTLE_RATE_MAX / 4.0).powi(2);
+        assert!((j.gearbox.mesh_stiffness / cap - 1.0).abs() < 1e-12 && (cap / 2e8 - 1.0).abs() < 1e-12);
+        let command = |t: f64| (std::f64::consts::TAU * 2.0 * t).sin();
+        let rates = |j: &RotaryJoint, s: [f64; 4], t: f64| {
+            let (gear, acc, _) = j.rotor(command(t), s[0], s[1], s[2], s[3], 0.0, false);
+            [s[1], acc, s[3], (gear.output + j.output_torque(s[2], s[3])) / mass]
+        };
+        let energy = |j: &RotaryJoint, s: [f64; 4]| {
+            0.5 * j.rotor_inertia * s[1] * s[1] + 0.5 * mass * s[3] * s[3] + j.gearbox.energy(s[0], s[2])
+        };
+        let power = |j: &RotaryJoint, s: [f64; 4], t: f64| (command(t) * s[1], j.gearbox.loss_power(s[0], s[1], s[2], s[3]));
+        let (dt, mut s, mut t) = (15.625e-6, [0.0; 4], 0.0);
+        let (start, mut work, mut through, mut lost, mut peak) = (energy(&j, s), 0.0, 0.0, 0.0, 0.0f64);
+        for _ in 0..64000 {
+            let add = |s: [f64; 4], k: [f64; 4], h: f64| std::array::from_fn(|i| s[i] + h * k[i]);
+            let k1 = rates(&j, s, t);
+            let k2 = rates(&j, add(s, k1, 0.5 * dt), t + 0.5 * dt);
+            let k3 = rates(&j, add(s, k2, 0.5 * dt), t + 0.5 * dt);
+            let k4 = rates(&j, add(s, k3, dt), t + dt);
+            let (p0, l0) = power(&j, s, t);
+            s = std::array::from_fn(|i| s[i] + dt / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]));
+            t += dt;
+            let (p1, l1) = power(&j, s, t);
+            (work, through, lost) = (work + 0.5 * dt * (p0 + p1), through + 0.5 * dt * (p0.abs() + p1.abs()), lost + 0.5 * dt * (l0 + l1));
+            j.gearbox.commit(s[0], s[2]);
+            peak = peak.max(s[3].abs());
+        }
+        let off = work - (energy(&j, s) - start) - lost;
+        println!("peak speed {peak:.4} m/s, work {work:.6} J, lost {lost:.6} J, off {off:.3e} J of {through:.6} J through");
+        assert!(s.iter().all(|x| x.is_finite()) && peak > 0.1 && peak < 2.0, "{s:?}, peak {peak} m/s");
+        assert!(lost > 0.0 && off.abs() < 1e-6 * lost, "off by {off} J, lost {lost} J of {through} J through");
+    }
 
     fn screw() -> BallScrew {
         BallScrew {

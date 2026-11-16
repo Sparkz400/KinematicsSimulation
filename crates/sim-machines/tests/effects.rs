@@ -175,15 +175,13 @@ fn the_energy_budget_closes_on_every_machine_and_config() {
 /// With the gearboxes' mesh friction (effects.gearbox_mesh_friction) on every machine that has a gearbox, also where
 /// its shipped config leaves it off: the friction's work and its bristle's store go into the gearbox's loss row and the
 /// energy, and the budget of a pass closes as without it. (The standard suite cannot tell: it drives the machine without
-/// `after_step`, so the friction's anchor never commits and the gearbox keeps its faded efficiency there.) But the
-/// T-gantry, whose light pulleys, stuck to the housing by the friction, chatter between sticking and sliding faster than
-/// the base step resolves: 0.163 % of its pass unaccounted, beyond the 0.1 % (the effect is off in its config for that).
+/// `after_step`, so the friction's anchor never commits and the gearbox keeps its faded efficiency there.) The belt
+/// axes among them: since the friction is booked as its whole power the single axis leaves under 1e-6 of its pass
+/// unaccounted and the T-gantry 4e-6, as without the friction (it had missed 0.163 % under the earlier bookkeeping).
 #[test]
 fn the_energy_budget_closes_with_the_mesh_friction_on_every_gearbox() {
     std::thread::scope(|scope| {
-        for entry in
-            MACHINES.iter().copied().filter(|e| e.config().get("gearbox.efficiency").is_ok() && e.id != "t-gantry")
-        {
+        for entry in MACHINES.iter().copied().filter(|e| e.config().get("gearbox.efficiency").is_ok()) {
             std::thread::Builder::new()
                 .name(entry.id.into())
                 .spawn_scoped(scope, move || {

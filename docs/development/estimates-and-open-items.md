@@ -24,6 +24,8 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 
 | What | Where | Why it is only a choice | Closing it |
 | --- | --- | --- | --- |
+| The mesh friction's bristle is K1 (`MESH_STIFFNESS`) | `mech.rs` | Taken as the hysteresis's Dahl stiffness. The energy budget no longer chooses it: with the friction booked as its whole power the single axis and the T-gantry close their passes at K1, 3 K1 and 10 K1 alike (under 1e-6 and 4e-6 unaccounted; gearbox loss 3.04659 J and 8.70004 to 8.70029 J), so the T-gantry is back in `the_energy_budget_closes_with_the_mesh_friction_on_every_gearbox` and its config has the switch (off, as on the other belt machines) | Measure a gear's presliding |
+| The split of a machine file's section lengths into runs (`machine.span`) on the CoreXY and the portals | `machines/corexy.toml`, `xyz-portal.toml`, `portal-c.toml`, `dual-gantry.toml`, `rack-gantry.toml` | Their section lengths are placeholders shorter than the drawn loops, so the runs share them out (the table in each file); the CoreXY's -0.01 kg between X and Y comes from that split (equal belts would give 0). The portals' moved masses do not depend on it | Lengths from a real machine's drawing |
 
 ## 3. Behaviour assumed without the manual
 
@@ -45,6 +47,11 @@ result is in, treat **every number below as unverified**.
 | What the model leaves out | Where | Size of the error | Why it was left | Closing it |
 | --- | --- | --- | --- | --- |
 | Pre-existing estimates the audit did not judge: tooth-jump factor, brake deflection and slip times, the efficiency fade constant 0.5 W, placeholder drive currents in shipped configs | `mech.rs`, shipped `default.toml` files | unknown | Outside the audit's reach without measurements | Measure, or mark each in its config comment |
+| The belt's mass run by run is in the T-gantry and in every machine file whose belt runs move over ground (H-bot, CoreXY, XYZ and C portal, dual and rack gantry); the dual gantry's runs do not move with the bridge's yaw | `machines/dual-gantry.toml` | the yaw's inertia of the 0.11 kg belt at its lever, under 0.1 % | A span's speed over ground is constant per axis speed; the yaw's lever depends on the pose | Let a span's speed depend on the pose |
+| The guide load's acceleration (`commanded_acc`) leaves the belt's runs out, as it leaves chains and idlers | `sim-netlist/src/machine.rs` | the H-bot's X: 0.32 kg on 11 kg, 3 % of the tilt | The crates take it the same way; the true acceleration would make friction depend on itself | Add `runs_mass` in file and crates together |
+| The friction feedforward's velocity terms are loss-free (`feedforward_torque_moving`); `steady_friction` carries the loss on the weight and the friction (planar linkage, spatial D3/D4, T-gantry, single axis) | `linkage.rs`, `spatial.rs` | 3.5e-4 of the torque on the D4 at 0.5 m/s, 4e-5 on the linkage at 0.05 m/s (against a Newton solve of the rigid model) | Small at the speeds the deltas run | Put the loss factor on the velocity terms in the feedforward |
+| The mesh bristle's cap behind a screw, rack or drum knows the output's inertia only where the machine passes it (`Converter::apply_to`: the cable robots' drums); `apply` caps by the rotor's alone | `transmission.rs` | none on a shipped machine (no gear reaches either cap) | The screw, rack and crane builders do not pass their load's mass | Pass the carried mass in each builder |
+| Energy rate against the motors' power, loss-free, off by up to 9e-7 where the machine itself is (with the belt's mass at 0 too): the C portal (rigid 1.6e-7, elastic 7.5e-7; its rigid feedforward misses 4e-6 of the acceleration) and the dual gantry (elastic 9e-7; feedforward 5.5e-6) | `sim-netlist/src/machine.rs` (`body_jacobian` differences places over 1e-6; the yawing bridge) | below 1e-6 of the power | Found while checking the belt's runs, which add nothing to it (`the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand`) | Analytic body Jacobian and its rate; find the dual gantry's share |
 
 ## 6. Documents that do not match the program
 
