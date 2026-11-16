@@ -853,24 +853,26 @@ impl Sim {
                 ));
             }
         }
-        for motor in self.machine.motors() {
+        for (k, motor) in self.machine.motors().iter().enumerate() {
+            // A linear motor's angle is a position (m), its speed m/s, its torque a force (N).
+            let (pos, rate, load) = if self.machine.motor_linear(k) { ("m", "m/s", "N") } else { ("rad", "rad/s", "N m") };
             for (name, unit) in [
-                ("angle", "rad"),
-                ("speed", "rad/s"),
-                ("torque", "N m"),
-                ("torque-command", "N m"),
+                ("angle", pos),
+                ("speed", rate),
+                ("torque", load),
+                ("torque-command", load),
                 ("current", "A"),
                 ("voltage", "V"),
                 ("electrical-power", "W"),
                 ("winding-temperature", "K"),
                 ("dc-link-voltage", "V"),
                 ("braking-resistor-power", "W"),
-                ("speed-command", "rad/s"),
-                ("following-error", "rad"),
-                ("angle-setpoint", "rad"),
-                ("torque-feedforward", "N m"),
-                ("torque-feedback", "N m"),
-                ("speed-from-position", "rad/s"),
+                ("speed-command", rate),
+                ("following-error", pos),
+                ("angle-setpoint", pos),
+                ("torque-feedforward", load),
+                ("torque-feedback", load),
+                ("speed-from-position", rate),
                 // The electrical and thermal states, 0 where their effect is off.
                 ("d-current", "A"),
                 ("housing-temperature", "K"),

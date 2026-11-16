@@ -397,6 +397,9 @@ impl Machine for Based {
     fn motors(&self) -> &[MotorInfo] {
         self.inner.motors()
     }
+    fn motor_linear(&self, motor: usize) -> bool {
+        self.inner.motor_linear(motor)
+    }
     fn inverse(&self, tool: &[f64], motors: &mut [f64]) {
         self.inner.inverse(tool, motors)
     }
@@ -483,6 +486,12 @@ impl Machine for Based {
     fn rigid_motor_torque(&self, angle: &[f64], speed: &[f64], acc: &[f64], out: &mut [f64]) {
         self.inner.rigid_motor_torque(angle, speed, acc, out)
     }
+    fn twist(&self, torque: &[f64], acc: &[f64], out: &mut [f64]) {
+        self.inner.twist(torque, acc, out)
+    }
+    fn rigid_split_torque(&self, angle: &[f64], speed: &[f64], acc: &[f64], rotor_acc: &[f64], out: &mut [f64]) {
+        self.inner.rigid_split_torque(angle, speed, acc, rotor_acc, out)
+    }
     fn rigid_tensions(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
         self.inner.rigid_tensions(tool_pos, tool_acc, out)
     }
@@ -517,6 +526,15 @@ impl Machine for Based {
     fn set_payload_attached(&mut self, attached: bool) {
         self.inner.set_payload_attached(attached)
     }
+    fn valves(&self) -> Vec<(String, f64)> {
+        self.inner.valves()
+    }
+    fn set_valve(&mut self, valve: usize, command: f64) {
+        self.inner.set_valve(valve, command)
+    }
+    fn end_sensors(&self, valve: usize) -> [bool; 2] {
+        self.inner.end_sensors(valve)
+    }
     fn links(&self) -> Vec<String> {
         self.inner.links()
     }
@@ -544,7 +562,11 @@ impl Machine for Based {
     }
     /// The lower of the machine's resonance and the base's lowest mode that moves the tool along its first axis.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
-        self.mode_shape(tool_pose).map(|(hz, _)| hz).or_else(|| self.inner.resonance_hz(tool_pose))
+        let base = self.mode_shape(tool_pose).map(|(hz, _)| hz);
+        match (base, self.inner.resonance_hz(tool_pose)) {
+            (Some(b), Some(i)) => Some(b.min(i)),
+            (b, i) => b.or(i),
+        }
     }
     fn mode_shape(&self, tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
         let len = self.state_len();
@@ -587,6 +609,15 @@ impl Machine for Based {
     }
     fn setpoint_slack(&self) -> f64 {
         self.inner.setpoint_slack()
+    }
+    fn cam(&self) -> Option<sim_core::CamMaster> {
+        self.inner.cam()
+    }
+    fn cam_at(&self, master: f64, out: &mut [[f64; 4]]) {
+        self.inner.cam_at(master, out)
+    }
+    fn gantry_motors(&self) -> Option<[usize; 2]> {
+        self.inner.gantry_motors()
     }
     /// The machine's base signals, the base's deflections (`base.<dof>`, m or rad), then the machine's effect signals.
     fn signal_infos(&self) -> Vec<SignalInfo> {
@@ -644,6 +675,18 @@ impl Machine for Based {
         }
         bodies
     }
+    fn collision_capsules(&self, state: &[f64]) -> Vec<sim_core::Capsule> {
+        let mut capsules = self.inner.collision_capsules(&state[..self.n()]);
+        if let Some(d) = self.scene_shift(state, 1.0) {
+            for c in &mut capsules {
+                for k in 0..3 {
+                    c.from[k] += d[k];
+                    c.to[k] += d[k];
+                }
+            }
+        }
+        capsules
+    }
     fn friction_contacts(&self) -> Vec<FrictionContact> {
         self.inner.friction_contacts()
     }
@@ -672,6 +715,7 @@ mod tests {
         process: f64,
         spring: f64,
         dwelling: bool,
+        resonance: Option<f64>,
         axes: [AxisInfo; 1],
         motors: [MotorInfo; 1],
     }
@@ -682,6 +726,7 @@ mod tests {
             process: 50.0,
             spring: 0.0,
             dwelling: false,
+            resonance: None,
             axes: [AxisInfo {
                 id: "x",
                 key: "",
@@ -749,6 +794,12 @@ mod tests {
         fn set_payload_attached(&mut self, _: bool) {}
         fn set_dwelling(&mut self, dwelling: bool) {
             self.dwelling = dwelling;
+        }
+        fn resonance_hz(&self, _: &[f64]) -> Option<f64> {
+            self.resonance
+        }
+        fn motor_linear(&self, _: usize) -> bool {
+            true
         }
         fn signal_infos(&self) -> Vec<SignalInfo> {
             Vec::new()
@@ -881,6 +932,16 @@ mod tests {
         let modes = m.modes(&[0.5]);
         assert!((modes[0].hz - 63.245_553 / std::f64::consts::TAU).abs() < 1e-6, "{modes:?}");
         assert_eq!(m.resonance_hz(&[0.5]), Some(modes[0].hz));
+    }
+
+    #[test]
+    fn the_resonance_is_the_lower_of_the_machines_and_the_bases_and_the_motor_kind_is_forwarded() {
+        // The base mode is 10.07 Hz (see above); a machine resonance of 0.35 Hz without a mode shape is the lower.
+        let stiffness = [8.0e5, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let config = base_config(false, 0.5, stiffness, 0.0, [0.0; 3]);
+        let m = mount(&config, Box::new(Slider { resonance: Some(0.35), ..slider() })).unwrap();
+        assert_eq!(m.resonance_hz(&[0.5]), Some(0.35));
+        assert!(m.motor_linear(0));
     }
 
     #[test]

@@ -470,6 +470,9 @@ impl Movers {
 }
 
 impl Mechanism for Movers {
+    fn linear_motor(&self) -> bool {
+        true
+    }
     fn dynamics(&self, _q: &[f64], _qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         let n = self.n();
         mass.fill(0.0);
@@ -800,6 +803,9 @@ impl Machine for MoverTrack {
     }
     fn motors(&self) -> &[MotorInfo] {
         self.inner.motors()
+    }
+    fn motor_linear(&self, motor: usize) -> bool {
+        self.inner.motor_linear(motor)
     }
     fn inverse(&self, tool: &[f64], motors: &mut [f64]) {
         self.inner.inverse(tool, motors)

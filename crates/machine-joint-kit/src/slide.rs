@@ -110,6 +110,9 @@ impl Slide {
 }
 
 impl Mechanism for Slide {
+    fn linear_motor(&self) -> bool {
+        matches!(self.drive, Drive::Linear(..))
+    }
     /// Along the axis, x, with z across it: the carriage and payload, and the drive's rotor, a screw's about x, a
     /// pinion's about y; a linear motor's forcer moves with the carriage.
     fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
