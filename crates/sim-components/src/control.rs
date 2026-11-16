@@ -498,8 +498,10 @@ impl Controller {
             .collect();
         self.drives =
             (0..motors).map(|k| Drive::at_rest(&self.motor_params[k], self.motor_pos[k], hold[k], ff[k])).collect();
+        let held = self.holding_torque(machine, at.unwrap_or(&self.set_pos));
         for (k, (drive, (heat, resistor_rise, voltage))) in self.drives.iter_mut().zip(kept).enumerate() {
             let p = &self.motor_params[k];
+            drive.torque_hold = held[k];
             (drive.temperature_rise, drive.housing_rise, drive.overload_image, drive.overload_chip, drive.overloaded) =
                 heat;
             drive.resistor_rise = resistor_rise;
@@ -1866,6 +1868,10 @@ impl Controller {
         machine.inverse(&self.set_pos, &mut here);
         let motor_acc: Vec<f64> = (0..motors).map(|k| (ahead[k] - 2.0 * here[k] + behind[k]) / (h * h)).collect();
         self.torque_feedforward(machine, &self.set_pos, &self.set_vel, &self.set_acc, &motor_acc, &mut ff);
+        let hold = self.holding_torque(machine, &self.set_pos);
+        for (drive, hold) in self.drives.iter_mut().zip(hold) {
+            drive.torque_hold = hold;
+        }
         // The friction of the machine's own model at the planned speed, for the drives that take it.
         let mut friction = vec![0.0; motors];
         if self.motor_params.iter().any(|p| p.precontrol.machine_friction) {
@@ -1902,6 +1908,28 @@ impl Controller {
                 drive.since_setpoint = 0.0;
             }
         }
+    }
+
+    /// What the torque-band monitor expects besides the feedforward at `pose`: for a motor with the constant-inertia
+    /// feedforward (no gravity in it) the rigid model's torque at rest there, the weight; 0 for the others and without
+    /// the monitor.
+    fn holding_torque(&self, machine: &dyn Machine, pose: &[f64]) -> Vec<f64> {
+        let wanted = |k: usize| {
+            self.monitoring
+                && self.motor_params[k].precontrol.constant_inertia
+                && self.fault_settings.get(k).is_some_and(|s| s.torque_band > 0.0)
+        };
+        let mut out = vec![0.0; self.drives.len()];
+        if (0..out.len()).any(wanted) {
+            let still = vec![0.0; pose.len()];
+            machine.feedforward_torque_moving(pose, &still, &still, &mut out);
+            for (k, torque) in out.iter_mut().enumerate() {
+                if !wanted(k) {
+                    *torque = 0.0;
+                }
+            }
+        }
+        out
     }
 
     /// The torque feedforward per motor (before its weight): the rigid model's inverse dynamics, or, for a motor whose

@@ -594,7 +594,7 @@ const BREAKDOWN_KEYS: [&str; 5] = [
 const FRICTION_KEYS: [&str; 3] =
     ["quantity-friction-coulomb", "quantity-friction-viscous", "quantity-friction-stiction"];
 /// The labels of the effect view's tables and of the rows of an energy budget that the machine does not name.
-const EFFECT_KEYS: [&str; 21] = [
+const EFFECT_KEYS: [&str; 22] = [
     "ui-effects-part",
     "ui-effects-peak",
     "ui-effects-rms",
@@ -608,6 +608,7 @@ const EFFECT_KEYS: [&str; 21] = [
     "budget-supply",
     "budget-unaccounted",
     "budget-copper",
+    "budget-emf",
     "budget-resistor",
     "budget-windings",
     "budget-capacitors",
@@ -2629,6 +2630,7 @@ impl Model {
         let tr = |key: &str| self.tr.tr(key).to_string();
         let electrical = |id: &str| {
             id.starts_with("copper.")
+                || id.starts_with("emf.")
                 || matches!(id, "resistor" | "discharge" | "mains" | "line_module" | "windings" | "capacitors")
         };
         let unaccounted = |energy: f64| (tr("budget-unaccounted"), energy);

@@ -250,8 +250,8 @@ stall_current_a = 3.96
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
 # The amplitude of the current vector the drive sets, sqrt 2 times the 2.8 A per phase: both phases at their rated
-# current in a full step. With effects.winding_heating the winding settles at the rated rise at it [estimate]: 80 K
-# (class B), 20 minutes.
+# current in a full step; phase peak, a datasheet's RMS value must be multiplied by sqrt 2. With
+# effects.winding_heating the winding settles at the rated rise at it [estimate]: 80 K (class B), 20 minutes.
 rated_current_a = 3.96
 thermal_time_constant_s = 1200.0
 rated_temperature_rise_k = 80.0
@@ -360,8 +360,9 @@ max_jerk_m_s3 = 100.0
 [drive]
 # The stepper's drive counts the setpoint in microsteps of a full step (2 pi / 200 rad) each.
 microsteps = 16.0
-# The current vector's amplitude the drive sets [estimate]: 3.5 A, 88 % of the motor's rated 3.96 A, as stepper drives are
-# set below the rating to keep the motor cooler; holding torque 0.318 * 3.5 = 1.11 N m.
+# The current vector's amplitude the drive sets, phase peak (a datasheet RMS value must be multiplied by sqrt 2)
+# [estimate]: 3.5 A, 88 % of the motor's rated 3.96 A, as stepper drives are set below the rating to keep the motor
+# cooler; holding torque 0.318 * 3.5 = 1.11 N m.
 stepper_current_a = 3.5
 current_cycle_s = 62.5e-6
 velocity_cycle_s = 125.0e-6

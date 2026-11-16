@@ -30,7 +30,8 @@ pub struct DriveParams {
     /// Motor winding: torque per current and resistance (the inductance is below).
     pub kt: f64,
     pub resistance: f64,
-    /// Back-EMF per speed; 0 when switched off. In SI units it equals the torque constant.
+    /// Back-EMF per speed; 0 when switched off. The torque constant unless `drive.back_emf_constant_v_s_rad` gives
+    /// another (the maker's printed voltage constant, in the one winding's scale: sqrt(3) times the line-to-line one).
     pub ke: f64,
     /// Highest voltage at the winding, `WINDING_PER_DC_LINK` times the DC link voltage; infinite when the
     /// limit is switched off.
@@ -115,6 +116,9 @@ pub struct DriveParams {
     /// static data both hold for the rated rise. 0 and the rated current with the effect off.
     pub iron_loss_rated: f64,
     pub stall_current: f64,
+    /// The static torque k_t I_0 of the S1 curve, from `motor.stall_current_a` whether or not effects.iron_loss is on; 0
+    /// where the config has no stall current (`s1_torque`).
+    pub static_torque: f64,
     /// effects.magnet_temperature: the magnets' flux per kelvin, `motor.magnet_temperature_coefficient_1_k` (negative); the
     /// torque constant and back-EMF are the catalogue's at the rated rise and change with it (`Drive::flux`). 0 off.
     pub magnet_coefficient: f64,
@@ -388,6 +392,13 @@ impl DriveParams {
             None
         };
         let (kt, resistance) = (cfg.positive("motor.torque_constant_nm_a")?, cfg.positive("motor.resistance_ohm")?);
+        // The back-EMF per speed of a servo winding, where the maker prints a voltage constant apart from the torque
+        // constant; none, or 0, leaves it equal to kt. A stepper's winding keeps one constant for both (`stepper`).
+        let emf_constant = if cfg.get("drive.back_emf_constant_v_s_rad").is_ok() {
+            cfg.non_negative("drive.back_emf_constant_v_s_rad")?
+        } else {
+            0.0
+        };
         // The torque fades out between the two speeds; with the no-load speed at or below the rated one it
         // would have no slope to fade on.
         let (rated_speed, no_load_speed) =
@@ -520,6 +531,7 @@ impl DriveParams {
             None
         };
         let motor = Motor::from_config(cfg)?;
+        let servo = matches!(motor, Motor::Servo);
         Ok(Self {
             // Copper at the rated rise; a rated current above the stall current (a misprint, see catalog) gives no iron loss.
             iron_loss_rated: resistance
@@ -558,7 +570,16 @@ impl DriveParams {
             noise_seed: seed as u64,
             kt,
             resistance,
-            ke: if on("back_emf")? { kt } else { 0.0 },
+            ke: match on("back_emf")? {
+                false => 0.0,
+                true if servo && emf_constant > 0.0 => emf_constant,
+                true => kt,
+            },
+            static_torque: if cfg.get("motor.stall_current_a").is_ok() {
+                kt * cfg.positive("motor.stall_current_a")?
+            } else {
+                0.0
+            },
             max_voltage: if on("voltage_limit")? { WINDING_PER_DC_LINK * bus_voltage } else { f64::INFINITY },
             current_kp,
             current_ki: current_kp / cfg.positive("drive.current_tn_s")?,
@@ -834,6 +855,14 @@ impl DriveParams {
         self.resistance_at(self.rated_rise) * self.stall_current * self.stall_current
     }
 
+    /// The S1 torque at a speed, as the motor-s1 verdict has it (`analysis::s1_torque`) and the torque-speed chart draws it:
+    /// `s1_line` from the static torque k_t I_0 (`motor.stall_current_a`, read with effects.iron_loss off too); flat at the
+    /// rated torque where the config has no stall current.
+    pub fn s1_torque(&self, speed: f64) -> f64 {
+        let still = if self.static_torque > 0.0 { self.static_torque } else { self.rated_torque };
+        s1_line(still, self.rated_torque, self.rated_speed, speed)
+    }
+
     /// A loss in the rise it would settle at alone, K: rated rise per `rated_loss`.
     pub fn iron_heating(&self, loss: f64) -> f64 {
         self.rated_rise * loss / self.rated_loss()
@@ -930,6 +959,12 @@ impl DriveParams {
     }
 }
 
+/// The S1 line: from the static torque at standstill straight to the rated torque at the rated speed, and on along that
+/// line above it, never below 0.
+pub fn s1_line(static_torque: f64, rated_torque: f64, rated_speed: f64, speed: f64) -> f64 {
+    (static_torque + (rated_torque - static_torque) * speed.abs() / rated_speed).max(0.0)
+}
+
 /// Biquad notch (b0, b1, b2, a1, a2), normalised by a0.
 fn notch_coefficients(frequency: f64, bandwidth: f64, cycle: f64) -> [f64; 5] {
     let w0 = TAU * frequency * cycle;
@@ -1012,6 +1047,17 @@ pub struct Drive {
     pub overloaded: bool,
     /// With effects.iron_loss: the stator's iron loss over the last step, W, at the speed the step started with.
     pub iron_loss: f64,
+    /// With a back-EMF constant other than the torque constant (`DriveParams::ke`): the electrical power the winding takes
+    /// beyond the copper loss, the winding's stored energy and the shaft power over the last step, (kE - kt) i w, W. It
+    /// is booked as a loss of its own in the energy budget (the magnets' and iron's, which the maker's two constants
+    /// differ by); signed, as i w is. 0 for equal constants, a stepper and an induction motor.
+    #[serde(default)]
+    pub emf_loss: f64,
+    /// The torque the machine's rigid model needs to hold the planned pose, where the feedforward is the constant inertia
+    /// (`drive.torque_feedforward_model = "inertia"`: no gravity in `torque_ff`) and the torque-band monitor is on; 0
+    /// otherwise. What the monitor expects beside `torque_ff` (`fault::Watch::check`).
+    #[serde(default)]
+    pub torque_hold: f64,
     /// With effects.braking_resistor_heating: the braking resistor's temperature above its surroundings, K.
     pub resistor_rise: f64,
     /// The energy L i^2 / 2 a drive enabled without the DC link simulated put into its winding (`Control::hold_here`):
@@ -1397,6 +1443,14 @@ impl Drive {
         let dt = p.current_cycle;
         match &p.motor {
             Motor::Servo => {
+                // What the winding took and neither the copper, the shaft nor the inductance's energy accounts for:
+                // exact, as the integrator took all four through the step together.
+                self.emf_loss = if p.ke > 0.0 && p.ke != p.kt {
+                    let stored = 0.5 * p.inductance * (current * current - self.current * self.current);
+                    (electrical - copper - work - stored) / dt
+                } else {
+                    0.0
+                };
                 (self.current, self.torque) = (current, p.torque_with(current, self.d_current, self.flux(p)))
             }
             Motor::Stepper(s) => s.stepped(self, p),
@@ -1442,6 +1496,7 @@ impl Drive {
         // in if coasting with the drive off is ever sized thermally.
         (self.power, self.copper_loss, self.shaft_power, self.d_current, self.iron_loss) =
             (-freewheeling / p.current_cycle, 0.0, 0.0, 0.0, 0.0);
+        self.emf_loss = 0.0;
         self.warm(p);
         self.load_power_unit(p);
         if p.dc_link {
@@ -1627,6 +1682,7 @@ pub(crate) mod tests {
             motor: Motor::Servo,
             iron_loss_rated: 0.0,
             stall_current: 1.27 / 0.45,
+            static_torque: 0.0,
             magnet_coefficient: 0.0,
             resistor_heating: None,
         }
@@ -2732,5 +2788,36 @@ pub(crate) mod tests {
         assert!((d.resistor_rise - 72.15).abs() < 0.01, "{} K", d.resistor_rise);
         // Held at the continuous power it settles at the rated rise.
         assert!((r.rise_after(0.0, 1500.0, 1e6) - 200.0).abs() < 1e-9);
+    }
+
+    /// A back-EMF constant of 0.5 V s/rad beside the torque constant 0.45 N m/A (R = 4 Ohm, winding limit 190 V, no
+    /// reactance without pole pairs). The voltage left at 340 rad/s is 190 - 0.5 * 340 = 20 V, so i = 20 / 4 = 5 A and
+    /// 0.45 * 5 = 2.25 N m (with kE = kt: 190 - 153 = 37 V, 9.25 A, 4.1625 N m). Holding 2 A (0.9 N m) at 100 rad/s the
+    /// winding needs u = R i + kE w = 8 + 50 = 58 V and takes 116 W: copper 4 * 4 = 16 W, shaft 0.45 * 2 * 100 = 90 W, and
+    /// (kE - kt) i w = 0.05 * 2 * 100 = 10 W is the loss row's. With equal constants that row is exactly 0.
+    #[test]
+    fn a_back_emf_constant_apart_from_the_torque_constant_costs_voltage_and_books_the_difference() {
+        let p = DriveParams { ke: 0.5, ..params() };
+        let limited = p.voltage_limited_torque(340.0, 190.0 / WINDING_PER_DC_LINK);
+        assert!((limited.1 - 2.25).abs() < 1e-9, "{limited:?}");
+        let same = params().voltage_limited_torque(340.0, 190.0 / WINDING_PER_DC_LINK);
+        assert!((same.1 - 4.1625).abs() < 1e-9, "{same:?}");
+        let mut d = Drive::at_rest(&p, 0.0, 0.9, 0.0);
+        d.current_loop(&p, 100.0);
+        assert!((d.emf_loss - 10.0).abs() < 1e-6, "{} W", d.emf_loss);
+        assert!((d.power - 116.0).abs() < 1e-6 && (d.power - d.copper_loss - d.shaft_power - d.emf_loss).abs() < 1e-6);
+        let mut d = Drive::at_rest(&params(), 0.0, 0.9, 0.0);
+        d.current_loop(&params(), 100.0);
+        assert_eq!(d.emf_loss, 0.0);
+    }
+
+    /// The S1 line from the static torque (the stall current's, 1.8 N m here) to the rated torque at the rated speed:
+    /// at the rated speed 314 rad/s the rated 1.27 N m, halfway 1.535 N m, and flat at the rated torque without a static one.
+    #[test]
+    fn the_s1_torque_runs_from_the_static_torque_to_the_rated_one() {
+        let p = DriveParams { static_torque: 1.8, ..params() };
+        assert!((p.s1_torque(0.0) - 1.8).abs() < 1e-12 && (p.s1_torque(-314.0) - 1.27).abs() < 1e-12);
+        assert!((p.s1_torque(157.0) - 1.535).abs() < 1e-12);
+        assert_eq!(params().s1_torque(0.0), 1.27);
     }
 }

@@ -104,7 +104,7 @@ pub struct MotorLoad {
 /// One line of an energy budget.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BudgetRow {
-    /// `copper.<motor>`, `resistor`, `mains`, `line_module`, a machine's loss signal (`power.<place>`), `windings`,
+    /// `copper.<motor>`, `emf.<motor>` (only with a back-EMF constant other than the torque constant), `resistor`, `mains`, `line_module`, a machine's loss signal (`power.<place>`), `windings`,
     /// `capacitors`, a machine's energy signal (`energy.<part>`) or `payload`.
     pub id: String,
     /// The label, as two translation keys like a signal's.
@@ -140,6 +140,7 @@ impl EnergyBudget {
     pub fn electrical_unaccounted(&self) -> f64 {
         let electrical = |id: &str| {
             id.starts_with("copper.")
+                || id.starts_with("emf.")
                 || matches!(id, "resistor" | "discharge" | "mains" | "line_module" | "windings" | "capacitors")
         };
         self.supply - self.shaft_work - self.rows.iter().filter(|r| electrical(&r.id)).map(|r| r.energy).sum::<f64>()
@@ -473,6 +474,9 @@ pub struct Tally {
     crash: (f64, f64),
     supply: f64,
     copper: Vec<f64>,
+    /// What each servo winding took beyond copper, shaft and stored energy where its back-EMF constant is not its torque
+    /// constant (`Drive::emf_loss`).
+    emf: Vec<f64>,
     resistor: f64,
     /// What the DC links of drives switched off lost through their bleeders (`Drive::discharge_power`).
     discharge: f64,
@@ -602,6 +606,7 @@ impl Tally {
             energies,
             supply: 0.0,
             copper: vec![0.0; motors],
+            emf: vec![0.0; motors],
             resistor: 0.0,
             discharge: 0.0,
             drawn: 0.0,
@@ -832,8 +837,9 @@ impl Tally {
             let drives = &sim.control.drives;
             self.supply += drives.iter().map(|d| d.power).sum::<f64>() * sim.dt;
             self.work += drives.iter().map(|d| d.shaft_power).sum::<f64>() * sim.dt;
-            for (copper, d) in self.copper.iter_mut().zip(drives) {
+            for ((copper, emf), d) in self.copper.iter_mut().zip(&mut self.emf).zip(drives) {
                 *copper += d.copper_loss * sim.dt;
+                *emf += d.emf_loss * sim.dt;
             }
             // A shared DC link has one resistor, rectifier and line module, which every drive reports as its own.
             let shared = sim.control.drive_params().shared_dc_link;
@@ -1083,6 +1089,10 @@ impl Tally {
             .zip(&self.copper)
             .map(|(m, copper)| row(&format!("copper.{}", m.id), m.key, "budget-copper", *copper))
             .collect();
+        // The magnets' and iron's share of a back-EMF constant that is not the torque constant: only where there is one.
+        rows.extend(sim.machine.motors().iter().zip(&self.emf).filter(|(_, emf)| **emf != 0.0).map(|(m, emf)| {
+            row(&format!("emf.{}", m.id), m.key, "budget-emf", *emf)
+        }));
         let p = sim.control.drive_params();
         if p.dc_link {
             rows.push(row("resistor", "group-drive", "budget-resistor", self.resistor));
@@ -1282,7 +1292,7 @@ pub fn s1_torque(cfg: &Config, speed: f64) -> Result<Option<f64>, ConfigError> {
     }
     let still = cfg.positive("motor.torque_constant_nm_a")? * cfg.positive("motor.stall_current_a")?;
     let (rated, rated_speed) = (cfg.positive("drive.rated_torque_nm")?, cfg.positive("drive.rated_speed_rad_s")?);
-    Ok(Some((still + (rated - still) * speed.abs() / rated_speed).max(0.0)))
+    Ok(Some(crate::drive::s1_line(still, rated, rated_speed, speed)))
 }
 
 /// One judgement of a cycle: a value the cycle reached against what a part allows.
