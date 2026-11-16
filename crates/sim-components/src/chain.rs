@@ -1268,7 +1268,8 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     /// The mechanism's signals (`Mechanism::signals`) and each joint's force (`joint.<id>.force`) at the joints' motion,
     /// with the force M q'' + h that the rigid model passes to each joint (the process force left out, as the
     /// feedforward leaves it out), read for each check of `rating_checks`; NaN for a life or a signal not among them.
-    /// A check on `plan.<signal>` reads <signal>: a limit of the plan alone, which the verdicts (no such signal) leave out.
+    /// A check on `plan.<signal>` reads <signal>: a limit of the plan alone, which the verdicts judge on the setpoint's
+    /// rigid motion through this (`analysis::Tally`), not on the simulated signal.
     fn rigid_checks(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut Vec<f64>) {
         let n = self.n();
         let (q, qd, qdd) = self.joint_motion(pos, vel, acc);

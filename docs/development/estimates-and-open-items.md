@@ -24,6 +24,7 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 
 | What | Where | Why it is only a choice | Closing it |
 | --- | --- | --- | --- |
+| A move timed by the axis limits keeps the flange's spin with half its angular acceleration limit at most for the g₂ ṡ² part, g₁ and g₂ sampled at 65 places along the move | `profile.rs` (`spin_rates`, `Move::with_law`) | Any split keeps the limit; this one is conservative (the six-axis arm's pure 0.5 rad turn at the home spins at 1.35 of 1.5 rad/s) | Time the move along s against the exact bound, as the time-optimal planner does |
 
 ## 3. Behaviour assumed without the manual
 
@@ -44,6 +45,11 @@ result is in, treat **every number below as unverified**.
 
 | What the model leaves out | Where | Size of the error | Why it was left | Closing it |
 | --- | --- | --- | --- | --- |
+| The flange's spin on a path of an arm with seven tool axes (arm on track): its lines are not slerps, so `path::plan_within` bounds only the rotation vector's rates there | `path.rs` (`shape`, `plan_within`) | as before the fix: up to 1.27 times the limit at the home | Only six-axis tool poses turn by slerp | Slerp the orientation whatever axes stand beside it |
+| The ram's acceleration of the toggle press leaves out the stretch's share that follows the crank's jerk, where the press force fades as the ram rises (in the press zone going down it is the derivative of `ram.speed`) | `toggle.rs` (`signals`) | only in the fade-out band of `process.smoothing_m_s` | The signals get no jerk | Pass the jerk, or difference the speed signal over time |
+| The torque-band monitor expects the friction at the planned speed (characteristic or `steady_friction`), none at rest: a breakaway or stiction at a standstill is not expected | `control.rs` (`setpoints`), `fault.rs` | up to the breakaway torque at a reversal or a start | `steady_friction` is a sliding level | Expect the breakaway band at zero speed, or widen the band there |
+| The DC link's running account keeps every stretch until the link first empties or fills; a link that does neither over a long run (net zero power at rest, no braking reaching its room) still keeps them all. The room is the run's config's; a verdict with another room falls back to `regeneration_events`, which a run leaves empty | `analysis.rs` (`LinkAccount`, `Tally`) | none in the shipped runs (the T-gantry's and the single axis's figures unchanged) | Exact for every room needs the whole list | Merge stretches below a share of the room once that has no merge |
+| The H4's small-amplitude modes take Dahl's σ as K1 (√2 above `modes`), as the D3's do | `machine-delta-h4/src/lib.rs` (`modes_at`), `mech.rs` | unknown; no maker publishes the loop's shape | Ships with hysteresis 0, so nothing changes today | A measured hysteresis loop, then σ as a config key |
 | Pre-existing estimates the audit did not judge: tooth-jump factor, brake deflection and slip times, the efficiency fade constant 0.5 W, placeholder drive currents in shipped configs | `mech.rs`, shipped `default.toml` files | unknown | Outside the audit's reach without measurements | Measure, or mark each in its config comment |
 
 ## 6. Documents that do not match the program

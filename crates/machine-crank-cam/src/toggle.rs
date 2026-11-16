@@ -420,14 +420,21 @@ impl Mechanism for TogglePress {
         let [upper, lower, rod] = self.link_forces(q[0], qd[0], qdd[0]);
         // The frame's stretch changes with the angle and (where the force fades as the ram rises) with the speed.
         let (h, at) = (1e-7, |q: f64, w: f64| self.press_force(q, w).1);
-        let stretch_rate = (at(q[0] + h, qd[0]) - at(q[0] - h, qd[0])) / (2.0 * h) * qd[0]
-            + (at(q[0], qd[0] + h) - at(q[0], qd[0] - h)) / (2.0 * h) * qdd[0];
+        let (q, w, a) = (q[0], qd[0], qdd[0]);
+        let stretch_rate =
+            (at(q + h, w) - at(q - h, w)) / (2.0 * h) * w + (at(q, w + h) - at(q, w - h)) / (2.0 * h) * a;
+        // Its second derivative s_qq w^2 + 2 s_qw w a + s_ww a^2 + s_q a (a wider step: these divide by its square). Where
+        // the force fades as the ram rises it also follows the crank's jerk (s_w times it), which no signal knows.
+        let (k, s) = (1e-5, at(q, w));
+        let stretch_acc = (at(q + k, w) - 2.0 * s + at(q - k, w)) / (k * k) * w * w
+            + (at(q + k, w + k) - at(q + k, w - k) - at(q - k, w + k) + at(q - k, w - k)) / (2.0 * k * k) * w * a
+            + (at(q, w + k) - 2.0 * s + at(q, w - k)) / (k * k) * a * a
+            + (at(q + h, w) - at(q - h, w)) / (2.0 * h) * a;
         out.extend([
             self.a + self.b - p.x[0] + stretch,
             // The height is a + b - x + stretch, so its derivatives carry the minus sign of x (x is positive down).
-            // shortcut: the acceleration leaves out the stretch's second derivative (a tenth of a millimetre at most).
-            -p.x[1] * qd[0] + stretch_rate,
-            -(p.x[2] * qd[0] * qd[0] + p.x[1] * qdd[0]),
+            -p.x[1] * w + stretch_rate,
+            -(p.x[2] * w * w + p.x[1] * a) + stretch_acc,
             p.x[1],
             force,
             capacity,
@@ -436,7 +443,7 @@ impl Mechanism for TogglePress {
             upper,
             lower,
             rod,
-            self.inertia(q[0]),
+            self.inertia(q),
         ]);
     }
     fn rating_checks(&self) -> Vec<RatingCheck> {

@@ -55,8 +55,12 @@ pub struct MotorLoad {
     pub largest_regeneration: f64,
     /// The cycle's electrical energy in stretches of one sign, J, in their order: positive for a braking event (one run of
     /// negative power) fed back, negative for the energy drawn between two, which empties the DC link's capacitors first.
-    /// What the resistor takes above the link's room (`resistor_excess`), where the link is not simulated.
+    /// What the resistor takes above the link's room (`resistor_excess`), where the link is not simulated. For a load
+    /// built by hand: a run keeps its account online instead (`dc_link_account`) and leaves this empty.
     pub regeneration_events: Vec<f64>,
+    /// A run's running account of these stretches for the motor's DC link room (`LinkAccount`), where its config gives
+    /// the capacitance and the braking threshold; judged instead of `regeneration_events` where the room is the same.
+    pub dc_link_account: Option<LinkAccount>,
     /// With the DC link simulated: the energy the braking resistor burned (over the cycle's duration its
     /// mean power), the most power it took and the highest DC link voltage. For a drive that tripped on
     /// overvoltage, the voltage it tripped at.
@@ -439,6 +443,10 @@ pub struct Tally {
     /// The machine's rating checks, the places of their signals, and per check the highest |signal| and the sum of the
     /// signal, one per sample.
     checks: Vec<(RatingCheck, usize, f64, f64)>,
+    /// The checks on `plan.<signal>` (a limit the plan keeps: an arm's flange spin), their places among
+    /// `Machine::rating_checks` (and so in `Machine::rigid_checks`), and the highest |value| on the setpoint's rigid
+    /// motion, once per sample.
+    plan_checks: Vec<(RatingCheck, usize, f64)>,
     sample: Vec<f64>,
     /// Every signal looked at in `sample` is one of `Sim::sample_base`: the effect views need not be sampled.
     base_only: bool,
@@ -599,6 +607,14 @@ impl Tally {
             .map(|(i, c)| (c, i, 0.0, 0.0))
             .collect();
         let check_places: Vec<usize> = checks.iter().map(|c| c.1).collect();
+        let plan_checks = sim
+            .machine
+            .rating_checks()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, c)| c.signal.starts_with("plan.") && !c.life)
+            .map(|(i, c)| (c, i, 0.0))
+            .collect();
         let base_only = tensions
             .iter()
             .chain(&radial)
@@ -641,6 +657,7 @@ impl Tally {
             condition,
             condition_peak: 0.0,
             checks,
+            plan_checks,
             radial_peak: 0.0,
             guide_loads: vec![(0.0, 0.0); guides.len()],
             guide_weights: vec![0.0; guides.len()],
@@ -667,7 +684,12 @@ impl Tally {
                 .machine
                 .motors()
                 .iter()
-                .map(|m| MotorLoad { id: m.id.to_string(), ..MotorLoad::default() })
+                .enumerate()
+                .map(|(k, m)| MotorLoad {
+                    id: m.id.to_string(),
+                    dc_link_account: sim.control.dc_link_room(k).map(LinkAccount::new),
+                    ..MotorLoad::default()
+                })
                 .collect(),
             pos: {
                 let (mut pos, mut speed) = (vec![0.0; motors], vec![0.0; motors]);
@@ -750,6 +772,18 @@ impl Tally {
             }
             for (_, i, peak, sum) in &mut self.checks {
                 (*peak, *sum) = (peak.max(self.sample[*i].abs()), *sum + self.sample[*i]);
+            }
+            // A limit of the plan on the setpoint as the rigid model moves along it: the simulated machine's own
+            // signal counts what the plan cannot hold (the gears' ringing, the servo's steps).
+            if !self.plan_checks.is_empty() {
+                let mut rigid = Vec::new();
+                let c = &sim.control;
+                sim.machine.rigid_checks(&c.set_pos, &c.set_vel, &c.set_acc, &mut rigid);
+                for (_, i, peak) in &mut self.plan_checks {
+                    if let Some(v) = rigid.get(*i).filter(|v| v.is_finite()) {
+                        *peak = peak.max(v.abs());
+                    }
+                }
             }
             for (k, (&i, (peak, cubed))) in self.guides.iter().zip(&mut self.guide_loads).enumerate() {
                 let weight = self.guide_axes[k].map_or(1.0, |a| rate[a].abs());
@@ -918,7 +952,9 @@ impl Tally {
             // The running stretch: energy fed back (positive) or drawn (negative), pushed as one event when the sign turns.
             let fed = -power * sim.dt;
             if self.braking[k] * fed < 0.0 {
-                load.regeneration_events.push(self.braking[k]);
+                if let Some(account) = &mut load.dc_link_account {
+                    account.push(self.braking[k]);
+                }
                 self.braking[k] = 0.0;
             }
             self.braking[k] += fed;
@@ -973,8 +1009,8 @@ impl Tally {
         for (k, load) in self.loads.iter_mut().enumerate() {
             load.rms_torque = (load.rms_torque / steps).sqrt();
             load.rms_current = (load.rms_current / steps).sqrt();
-            if self.braking[k] != 0.0 {
-                load.regeneration_events.push(self.braking[k]);
+            if let (Some(account), true) = (&mut load.dc_link_account, self.braking[k] != 0.0) {
+                account.push(self.braking[k]);
             }
             load.thermal_current = (load.thermal_current / steps).sqrt();
             load.iron_loss /= steps;
@@ -1066,6 +1102,7 @@ impl Tally {
                     let value = if c.life { samples / sum } else { peak };
                     (c, value)
                 })
+                .chain(std::mem::take(&mut self.plan_checks).into_iter().map(|(c, _, peak)| (c, peak)))
                 .chain(cam_checks(sim.machine.as_ref()))
                 .collect(),
             clearance: (!sim.obstacles.is_empty()).then_some(sim.least_clearance),
@@ -1588,7 +1625,11 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
                 (stored, m.resistor_energy > 0.0, m.resistor_energy / load.duration, m.peak_resistor_power)
             } else {
                 // The capacitors take the braking up to their room; only what is above it goes to the resistor.
-                let (excess, fill) = resistor_excess(&m.regeneration_events, room);
+                // The run's own account where it kept one for this room, else the stretches of a load built by hand.
+                let (excess, fill) = match &m.dc_link_account {
+                    Some(account) if account.room == room => account.finish(),
+                    _ => resistor_excess(&m.regeneration_events, room),
+                };
                 regenerated_excess += excess;
                 (fill, fill > room, excess / load.duration, m.peak_regenerated_power)
             };
@@ -1758,16 +1799,67 @@ fn equivalent_load(cubed_sum: f64, weight_sum: f64) -> f64 {
 /// with too little drawn between them add up. The cycle repeats: the link enters it as the cycle before left it, so the
 /// figures are those of a second pass.
 fn resistor_excess(events: &[f64], room: f64) -> (f64, f64) {
-    let (mut fill, mut excess, mut most) = (0.0f64, 0.0, 0.0f64);
-    for (i, &e) in events.iter().chain(events).enumerate() {
-        fill = (fill + e).max(0.0);
-        if i >= events.len() {
-            most = most.max(fill);
-            excess += (fill - room).max(0.0);
-        }
-        fill = fill.min(room);
+    let mut account = LinkAccount::new(room);
+    events.iter().for_each(|&e| account.push(e));
+    account.finish()
+}
+
+/// The DC link's running account of `resistor_excess`, kept as the stretches come (`Tally`, where the motor's room is
+/// known at the run: `Controller::dc_link_room`). Only the stretches until the link's fill no longer depends on how full
+/// it entered the cycle are kept: until the pass entered empty and the one entered full meet, which they do the first
+/// time the link empties or fills whatever it held (a hanging axis at rest draws, so empties it at once). After that one
+/// fill stands for every entry, and what it spills and the most it holds are summed as they come. At most the stretches
+/// up to that point, so on a run at rest with noisy power the list stays at the few stretches before the link first
+/// emptied, where before it grew by one per sign change of the power (about 90 per cycle). Same figures as the two passes
+/// over the whole list, to rounding (the spills are summed in another order).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LinkAccount {
+    /// The room it was kept for, J.
+    pub room: f64,
+    /// The stretches before the passes entered empty and full met.
+    prefix: Vec<f64>,
+    /// The fill of the pass entered empty, and of the one entered full, J; one fill once they have met.
+    low: f64,
+    high: f64,
+    met: bool,
+    /// After they met: what the link spilled into the resistor, J, and the most it would have held.
+    spilled: f64,
+    most: f64,
+}
+
+impl LinkAccount {
+    pub fn new(room: f64) -> Self {
+        Self { room, high: room, ..Default::default() }
     }
-    (excess, most)
+
+    /// One stretch: fed back positive, drawn negative, J.
+    pub fn push(&mut self, e: f64) {
+        let room = self.room;
+        if self.met {
+            let fill = (self.low + e).max(0.0);
+            (self.spilled, self.most, self.low) =
+                (self.spilled + (fill - room).max(0.0), self.most.max(fill), fill.min(room));
+            return;
+        }
+        self.prefix.push(e);
+        let step = |fill: f64| (fill + e).max(0.0).min(room);
+        (self.low, self.high) = (step(self.low), step(self.high));
+        // Both at 0 or both at the room, exactly.
+        self.met = self.low == self.high;
+    }
+
+    /// What the resistor takes per cycle, J, and the most the link would have to hold, J (`resistor_excess`): the cycle
+    /// entered as it left, which is as the pass entered empty left it.
+    pub fn finish(&self) -> (f64, f64) {
+        let (mut fill, mut excess, mut most) = (self.low, self.spilled, self.most);
+        for &e in &self.prefix {
+            fill = (fill + e).max(0.0);
+            most = most.max(fill);
+            excess += (fill - self.room).max(0.0);
+            fill = fill.min(self.room);
+        }
+        (excess, most)
+    }
 }
 
 /// Nominal life of the guide that has the least, in km, where the machine reports guide loads and the config has
@@ -4740,6 +4832,37 @@ mod tests {
         close(resistor_excess(&[5.0, -1.0, 1.5, -1.0, 3.0, -10.0], 2.0), (5.5, 5.0));
         close(resistor_excess(&[1.5, -3.0, 1.0], 2.0), (0.5, 2.5));
         assert_eq!(resistor_excess(&[], 2.0), (0.0, 0.0));
+    }
+
+    /// The running account (`LinkAccount`) gives the two passes over the whole list, and keeps only the stretches until
+    /// the link first emptied or filled: here a braking, then 100000 sign changes of noise at rest that draw a little more
+    /// than they feed back (as a held axis does), then two more brakings. A 0.5 J and a 2 J link fill on the 2.5 J braking
+    /// (the third stretch), and keep those three.
+    #[test]
+    fn the_dc_link_account_matches_two_passes_over_the_list_and_stays_bounded() {
+        let two_passes = |events: &[f64], room: f64| {
+            let (mut fill, mut excess, mut most) = (0.0f64, 0.0, 0.0f64);
+            for (i, &e) in events.iter().chain(events).enumerate() {
+                fill = (fill + e).max(0.0);
+                if i >= events.len() {
+                    most = most.max(fill);
+                    excess += (fill - room).max(0.0);
+                }
+                fill = fill.min(room);
+            }
+            (excess, most)
+        };
+        let mut events = vec![0.3, -0.05, 2.5, -0.2];
+        events.extend((0..100_000).map(|i| if i % 2 == 0 { 1e-4 } else { -1.2e-4 }));
+        events.extend([1.7, -0.4, 3.1, -5.0]);
+        for room in [0.5, 2.0, 10.0] {
+            let mut account = LinkAccount::new(room);
+            events.iter().for_each(|&e| account.push(e));
+            let ((a, b), (c, d)) = (account.finish(), two_passes(&events, room));
+            assert!((a - c).abs() < 1e-9 && (b - d).abs() < 1e-12, "room {room}: {a} {b} against {c} {d}");
+            // A link of 10 J never fills nor empties here: it keeps them all, as the two passes did.
+            assert!(room > 2.0 || account.prefix.len() == 3, "room {room}: {} stretches kept", account.prefix.len());
+        }
     }
 
     /// Without a gain crossover in the band the phase margin is NaN (not measurable) and `stable` judges the gain margin

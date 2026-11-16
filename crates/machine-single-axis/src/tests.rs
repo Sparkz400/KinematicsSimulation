@@ -814,6 +814,52 @@ fn the_torque_band_expects_the_held_weight_and_trips_on_a_lasting_extra_load() {
     );
 }
 
+/// The same with the guide's and the motor's friction on (no friction feedforward): the monitor expects the friction at
+/// the planned speed (`Machine::steady_friction`) as it expects the weight, so a band of the friction's size at the
+/// cycle's top speed, below the friction itself, trips nothing over the cycle; the lasting extra load still trips.
+#[test]
+fn the_torque_band_expects_the_friction_at_the_planned_speed() {
+    let run = |process: bool| {
+        let mut cfg = ideal_rigid();
+        for e in ["effects.guide_friction = true", "effects.motor_friction = true", "geometry.incline_deg = 90.0"] {
+            cfg.set_text(e).unwrap();
+        }
+        // The friction at 1 m/s, the cycle's top speed, over what the model gives at rest, as the band.
+        let machine = (ENTRY.build)(&cfg).unwrap();
+        let mut friction = [0.0];
+        machine.steady_friction(&[0.5], &[1.0], &mut friction);
+        let mut still = [0.0];
+        machine.steady_friction(&[0.5], &[0.0], &mut still);
+        let band = (friction[0] - still[0]) / cfg.f64("drive.peak_torque_nm").unwrap();
+        assert!(band > 0.0, "{friction:?} {still:?}");
+        for e in [
+            "drive.torque_feedforward_model = \"inertia\"".to_string(),
+            "effects.drive_monitoring = true".into(),
+            format!("drive.torque_band = {band:?}"),
+            format!("effects.process_force = {process}"),
+            format!("process.force_x_n = {:?}", 2.0 * 4.0 * G),
+        ] {
+            cfg.set_text(&e).unwrap();
+        }
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim.run(0.5, |_| {});
+        sim.command(sim_components::Command::StartCycle).unwrap();
+        let mut dwelling = false;
+        while sim.time() < 4.0 && sim.control.fault.is_none() {
+            dwelling = sim.control.dwell_progress().is_some();
+            sim.step();
+        }
+        (sim.control.fault.clone(), dwelling, band)
+    };
+    let (fault, _, band) = run(false);
+    assert!(fault.is_none(), "band {band}: {fault:?}");
+    let (fault, dwelling, _) = run(true);
+    assert!(
+        fault.as_ref().is_some_and(|f| f.monitor == sim_components::fault::Monitor::TorqueBand) && dwelling,
+        "{fault:?}, dwelling {dwelling}"
+    );
+}
+
 /// Fieldbus jitter against a hand calculation. Each frame takes the delay of 1 cycle plus j more, j drawn evenly from
 /// 0 to N; the drive uses the newest frame that has arrived. So the frame it uses is older than the delay by more
 /// than i cycles only if each of the frames i + 1 cycles late or less has not arrived: P(more than i) =

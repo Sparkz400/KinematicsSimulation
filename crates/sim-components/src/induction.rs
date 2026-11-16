@@ -172,25 +172,49 @@ impl Induction {
     /// The flux the control sets for the torque `torque` at a shaft speed: as a field-oriented drive does, the rated one
     /// (`flux_cap` above the rated frequency) while the voltage and current circles leave room for that torque there, else
     /// the largest weaker flux that does (between the cap and the flux of the most torque, psi i_q falls with the flux,
-    /// so a bisection finds it). Beyond what any flux gives, the flux of the most torque, `flux_setpoint`: the curve's
-    /// flux, so that at the curve's torque the control and the curve meet.
+    /// so a bracketed secant finds it). Beyond what any flux gives, the flux of the most torque, `flux_setpoint`: the
+    /// curve's flux, so that at the curve's torque the control and the curve meet.
     fn control_flux(&self, torque: f64, speed: f64, supply: f64, rs: f64, amplitude: f64) -> f64 {
         let w_e = self.pole_pairs * speed.abs();
         let motoring = torque * speed >= 0.0;
         let need = torque.abs() / (1.5 * self.pole_pairs * self.magnetizing / self.rotor);
         let room = |flux: f64| self.torque_room(rs, supply, flux, w_e, motoring, amplitude);
         let cap = self.flux_cap(w_e);
-        if room(cap) >= need {
+        let at_cap = room(cap) - need;
+        if at_cap >= 0.0 {
             return cap;
         }
         let top = self.flux_setpoint(speed, supply, rs, amplitude);
-        if room(top) <= need {
+        let at_top = room(top) - need;
+        if at_top <= 0.0 {
             return top;
         }
-        let (mut lo, mut hi) = (top, cap);
-        for _ in 0..30 {
-            let mid = 0.5 * (lo + hi);
-            if room(mid) >= need { lo = mid } else { hi = mid }
+        // The root of room - need between them, kept bracketed: the secant through the bracket's ends, the end kept twice
+        // in a row halved (Illinois): a handful of steps where a bisection took 30.
+        let (mut lo, mut hi, mut f_lo, mut f_hi, mut kept) = (top, cap, at_top, at_cap, 0);
+        for _ in 0..60 {
+            let x = (lo * f_hi - hi * f_lo) / (f_hi - f_lo);
+            let f = room(x) - need;
+            if f >= 0.0 {
+                (lo, f_lo) = (x, f);
+                if kept == 1 {
+                    f_hi *= 0.5;
+                }
+                kept = 1;
+            } else {
+                (hi, f_hi) = (x, f);
+                if kept == -1 {
+                    f_lo *= 0.5;
+                }
+                kept = -1;
+            }
+            // To 1e-10: the room's own rounding (`voltage_iq` to 1e-13 of the current) stops a tighter one short.
+            if f.abs() <= 1e-10 * need {
+                return x;
+            }
+            if hi - lo <= 1e-10 * cap {
+                break;
+            }
         }
         lo
     }
