@@ -939,20 +939,28 @@ hoist, S210 drives), its wheel or drum the lever: 30:1 on 80 mm wheels, 25:1 on 
   length as it changes; `profile.shaper_axes = ["x", "y"]` leaves the hoist unshaped. `effects.input_shaping` itself is
   off in the shipped config (as on every machine, so that a setpoint from outside arrives as sent); switch it on with
   `--set effects.input_shaping=true` (`machine_overhead_crane::shaped_config()`). Measured on the empty hook's way back,
-  which hoists from 4 m to 2 m of rope while it travels 7 m: unshaped 0.43 m of sway left, the following ZVD 0.012 m, a
-  ZVD set for the length at the move's end 0.047 m, one set for its start 0.041 m. A move without a dwell starts when the
-  plan arrives, the shaper's tail still under way, so a segment that lowers right after a travel has the sway's period
-  change under that tail: the default cycle travels and lowers in one move instead.
+  which hoists from 4 m to 2 m of rope while it travels 7 m: unshaped 0.43 m of sway left, the following ZV (the shipped
+  `profile.shaper_type`, half a sway period behind the plan) 0.017 m, a ZV set for the length at the move's end 0.124 m,
+  one set for its start 0.105 m (ZVD, a whole period behind: 0.012, 0.047 and 0.041 m). A move without a dwell starts
+  when the plan arrives, the shaper's tail still under way, so a segment that lowers right after a travel has the sway's
+  period change under that tail: the default cycle travels and lowers in one move instead.
 - **The time-optimal plan** (`profile.cycle_timing = "time_optimal"`) knows the load as carried along with the trolley,
   not swinging: the config keeps 30 % of every limit for the swing (`profile.time_optimal_margin` 0.7; planned at the
   motors' full speed, the swing ran the bridge's motor past its no-load speed). It is no sway-aware plan.
-- **The default cycle** (travel and lower, back, pick, hoist): from the travel height (z = 3 m, a 2 m rope) over the pick
-  place the load travels 7 m and 3 m to the place while it is lowered to 1 m, and is let go; the empty hook goes up and
-  back in one move, down to the next load, a second to sling it, and hoists it. Every move but the pick's lowering and
-  hoisting travels and changes the rope's length at once, so every drive moves from the start. Shaped, every verdict
-  passes (residual sway 19.5 mm, the rope 2731 N at most and never below its least tension, the hoist brake loaded to
-  5.5 of 7.5 N m); unshaped, the load is left swinging by 0.65 m and `residual-sway` fails, and so does the hoist's
-  `braking-resistor-continuous` (107 W of 100 W: the unshaped cycle is the shorter, it lowers more often per hour).
+- **The default cycle** (travel and lower, back, pick, hoist): a short positioning cycle, 7.0 s a pass (12.8 s shaped),
+  so that every check of every machine's cycle sees it whole. From the travel height (z = 3 m, a 2 m rope) over the
+  pick place the load travels 0.2 m and 0.1 m to the place while it is lowered by 0.15 m, and is let go; the empty hook
+  goes up and back in one move, down to the next load, 0.3 s to sling it, and hoists it. Every move but the pick's
+  lowering and hoisting travels and changes the rope's length at once, so every drive moves from the start. Shaped,
+  every verdict passes (residual sway 4.3 mm, the rope 2727 N at most and never below its least tension, the hoist brake
+  loaded to 5.5 of 7.5 N m); unshaped, the load is left swinging by 0.32 m and `residual-sway` fails, and so does
+  `thermal-warm-start` (the sway left from one pass changes the next, so the passes never repeat: a winding's rise
+  1.1 K apart). A workshop crane's real cycle over the runway takes a minute: a segment's target of [8.0, 4.0, 1.0].
+- **The drives' velocity loops** are tuned as stiff as the other machines' (bridge and trolley some 60 Hz, 2.0 and 0.24
+  N m s/rad). The hoist's, measured at rest under the 265 kg (`sim-cli margins`), has no gain crossover (NaN): its 92 %
+  gearbox's efficiency, faded in below 0.5 W, is a damper of 2601² ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope,
+  4.5 N m s/rad at the motor, which the test torque does not break away from; the gear holds the loop at rest. Without
+  the gear's losses (`--set effects.gearbox_efficiency=false`) its crossover is 48 Hz.
 - **Verdicts of its own:** `rope-max-tension` (the highest tension against `rope.breaking_load_n` / `safety_factor`,
   4444 N), `rope-min-tension` (any fall below `rope.min_tension_n`, 50 N, fails: no slack rope), `residual-sway` (the
   load's sway amplitude √(d² + (d' / ω)²) at every dwell, d its horizontal offset from under the sheave, against

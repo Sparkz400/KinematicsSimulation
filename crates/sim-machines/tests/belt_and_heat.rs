@@ -35,7 +35,11 @@ fn viscosity(rise: f64) -> f64 {
 fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
     for entry in MACHINES.iter().copied() {
         let mut cfg = edited(entry, &["effects.part_heating = true", "effects.thermal_feedback = true"]);
-        for switch in ["effects.temperature = true", "effects.gearbox_drag = false"] {
+        // The motor shaft's seals follow the oil too (thermal_feedback.seal_viscosity_exponent, tested in mech.rs): with
+        // them the torque into the gearbox rises as it warms, which the ratio below leaves out. On a crane's bridge,
+        // whose wheels roll against 58 N, the seals took 0.06 of the 0.16 N m of the cruise, and the gear's loss rose to
+        // 0.67 of itself instead of 0.64. Off here.
+        for switch in ["effects.temperature = true", "effects.gearbox_drag = false", "effects.motor_friction = false"] {
             if cfg.bool(switch.split(' ').next().unwrap()).is_ok() {
                 cfg.set_text(switch).unwrap();
             }

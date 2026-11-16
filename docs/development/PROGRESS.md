@@ -4584,7 +4584,8 @@ and set-down, which are quasi-static (`after_step` sets the rope to the new weig
 `hoist-brake`. The input shaper follows sqrt(g / L) where the plan stands: on the empty hook's hoist-while-travelling move
 it leaves 0.012 m of sway against 0.047 and 0.041 m of a ZVD fixed at the end's or the start's length and 0.43 m
 unshaped. Shaping is off in the shipped config (a setpoint from outside has to arrive as sent, a test of every machine);
-with it on the default cycle passes every verdict, without it `residual-sway` fails (0.65 m). The tool pose is the hook as the drives place it (the bridge's x,
+with it on the default cycle passes every verdict, without it `residual-sway` fails (0.65 m; 0.32 m on the short cycle
+of 16 November that replaced it, so that the shared tests' windows see a whole pass, with a ZV shaper). The tool pose is the hook as the drives place it (the bridge's x,
 the trolley's y, the load's z): the sway is not in it, so a setpoint from outside (FMU) arrives as sent. Tests in
 `src/tests.rs`: the standard suite (elastic and rigid, with and without the payload), static stretch and holding torque,
 the pendulum's period braked and free (two masses), a loss-free lift's work (5201.683 J), the rigid rope as the stiff

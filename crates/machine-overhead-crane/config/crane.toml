@@ -85,7 +85,7 @@ motor_thermal_nodes = false
 corner_blending = false
 # The travel moves shaped against the load's sway (see [profile]): off here, as on every machine, so that a setpoint
 # from outside arrives as sent; on (`--set effects.input_shaping=true`) the default cycle leaves the load still at its
-# dwells, off it leaves it swinging there by half a metre and fails the verdict residual-sway.
+# dwells, off it leaves it swinging there by 0.32 m and fails the verdict residual-sway.
 input_shaping = false
 back_emf = true
 voltage_limit = true
@@ -173,7 +173,9 @@ trajectory_spline = "c2"
 # With effects.input_shaping: the shaper ("zv", "zvd", "zvdd", "ei", "ei2" the two-hump EI), the vibration the EI
 # shapers allow, the axes the first and the second shaper act on ([] for all), and further modes, each convolved:
 # { frequency_hz = 40.0, damping = 0.02, type = "ei", axes = ["z"] } (type and axes may be left out).
-shaper_type = "zvd"
+# ZV: half a sway period behind the plan (1.4 s on the 2 m rope); its period follows the rope's length, so ZVD's whole
+# period, robust against a period that is not known, is not needed.
+shaper_type = "zv"
 shaper_ei_tolerance = 0.05
 # The sway is horizontal: the hoist is not shaped.
 shaper_axes = ["x", "y"]
@@ -412,8 +414,10 @@ current_delay_cycles = 1
 velocity_delay_cycles = 1
 kv_1_s = 30.0
 # [estimate] for the inertia at the bridge's motor: rotor and gearbox input 1.3e-4 kg m2 plus girder and trolley,
-# 720 kg / 375^2 = 5.1e-3 kg m2 (the load swings on its rope, below the loop's band), some 100 rad/s of band.
-velocity_kp_nm_s_rad = 0.5
+# 720 kg / 375^2 = 5.1e-3 kg m2 (the load swings on its rope, below the loop's band): some 390 rad/s of band (measured
+# 59 Hz, 69 degrees and 18 dB of margin), as stiff as the other machines' loops are tuned, some 30 times below where it
+# goes unstable; 100 rad/s, a quarter of the gain, were 12 times below it still stable.
+velocity_kp_nm_s_rad = 2.0
 velocity_tn_s = 0.03
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
@@ -462,12 +466,16 @@ standstill_window_rad = 0.2
 torque_band = 0.0
 
 [drive.trolley]
-# [estimate] rotor and gearbox input 1.3e-4 kg m2 plus the trolley's 120 kg / 500^2 = 4.8e-4 kg m2.
-velocity_kp_nm_s_rad = 0.06
+# [estimate] rotor and gearbox input 1.3e-4 kg m2 plus the trolley's 120 kg / 500^2 = 4.8e-4 kg m2: some 390 rad/s of
+# band, as the bridge's.
+velocity_kp_nm_s_rad = 0.24
 
 [drive.hoist]
 # [estimate] rotor and gearbox input 4.5e-4 kg m2, the drum's 0.05 / 40^2 = 3e-5 kg m2 and the 265 kg on the rope
-# 265 / 500^2 = 1.06e-3 kg m2: 1.5e-3 kg m2, a band of some 100 rad/s.
+# 265 / 500^2 = 1.06e-3 kg m2: 1.5e-3 kg m2, a band of some 100 rad/s (48 Hz measured without the gear's losses, where
+# the rope lets the load go). With them `sim-cli margins` finds no crossover (NaN): at rest under the 265 kg the
+# gearbox's efficiency, faded in below 0.5 W, is a damper of 2601^2 ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope,
+# 4.5 N m s/rad at the motor, which the test torque does not break away from; the gear holds the loop at rest.
 velocity_kp_nm_s_rad = 0.15
 current_kp_v_a = 20.0
 # [catalogue] 1FK2105-6AF at 400 V: 24 N m maximum, 6.6 N m rated at 3000 r/min
@@ -527,34 +535,35 @@ braking_resistor_continuous_w = 50.0
 braking_resistor_peak_w = 3000.0
 
 # The hook holds the load at the travel height (a 2 m rope) over the pick place. A segment's payload is whether the
-# hook holds the load once it has arrived. Every move but the pick's lowering travels and hoists or lowers at once:
-# the shaper follows the rope's length as it changes (effects.shaper_follows_pose).
+# hook holds the load once it has arrived. Every move but the pick's lowering and hoisting travels and lowers or hoists
+# at once: the shaper follows the rope's length as it changes (effects.shaper_follows_pose). A short positioning cycle,
+# 7 s a pass (13 s shaped), so that every check of every machine's cycle sees it whole: a workshop crane's real cycle
+# over its 10 m runway takes a minute (try a target of [8.0, 4.0, 1.0]).
 [start]
 pose = [1.0, 1.0, 3.0]
 
-# Travel to the place, the bridge 7 m and the trolley 3 m, lowering the load to 1 m (a 4 m rope) on the way; the hook
-# lets go on arrival. The residual sway is judged at every dwell.
+# To the place, the bridge 0.2 m and the trolley 0.1 m, lowering the load by 0.15 m on the way; the hook lets go on
+# arrival. The residual sway is judged at every dwell.
 [[cycle.segment]]
-target = [8.0, 4.0, 1.0]
-dwell_s = 1.0
+target = [1.2, 1.1, 2.85]
+dwell_s = 0.2
 payload = false
 
 # The empty hook up and back over the pick place in one move.
 [[cycle.segment]]
 target = [1.0, 1.0, 3.0]
-dwell_s = 1.0
+dwell_s = 0.2
 payload = false
 
-# Pick: down to the load, a second to sling it.
+# Pick: down to the load, 0.3 s to sling it; then hoist it to the travel height.
 [[cycle.segment]]
-target = [1.0, 1.0, 1.0]
-dwell_s = 1.0
+target = [1.0, 1.0, 2.85]
+dwell_s = 0.3
 payload = true
 
-# Hoist it to the travel height.
 [[cycle.segment]]
 target = [1.0, 1.0, 3.0]
-dwell_s = 0.5
+dwell_s = 0.2
 payload = true
 
 # effects.brake_delay [estimate]: a servo motor's spring-applied brake closes in some 10 to 60 ms, opens in 30 to 150 ms.

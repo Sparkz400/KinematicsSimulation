@@ -929,11 +929,19 @@ Hebel: 30:1 auf Rädern von 80 mm, 25:1 auf 50 mm, 40:1 auf einer Trommel von 80
   sodass eine Fahrt, die dabei hebt, für die sich ändernde Länge geformt wird. `effects.input_shaping` selbst ist in der
   ausgelieferten Konfiguration aus, wie an jeder Maschine; eingeschaltet mit `--set effects.input_shaping=true`. Gemessen
   auf dem Rückweg des leeren Hakens, der beim Fahren von 4 m auf 2 m Seil hebt: ungeformt 0,43 m Restpendeln, mitgeführter
-  ZVD 0,012 m, ein ZVD für die Länge am Ende der Fahrt 0,047 m, einer für die am Anfang 0,041 m.
-- **Der Zyklus** (fahren und absenken, zurück, aufnehmen, heben) besteht geformt alle Prüfungen (Restpendeln 19,5 mm,
-  Seilkraft höchstens 2731 N und nie schlaff, Hubwerksbremse 5,5 von 7,5 N m belastet); ungeformt pendelt die Last
-  0,65 m, und `residual-sway` fällt durch, ebenso `braking-resistor-continuous` des Hubwerks (der ungeformte Zyklus ist
-  kürzer).
+  ZV (der ausgelieferte, eine halbe Pendelperiode hinter dem Plan) 0,017 m, ein ZV für die Länge am Ende der Fahrt
+  0,124 m, einer für die am Anfang 0,105 m (ZVD, eine ganze Periode dahinter: 0,012, 0,047 und 0,041 m).
+- **Der Zyklus** (fahren und absenken, zurück, aufnehmen, heben) ist ein kurzer Positionierzyklus, 7,0 s je Durchgang
+  (geformt 12,8 s), damit jede Prüfung über die Zyklen aller Maschinen ihn ganz sieht: aus der Fahrhöhe (z = 3 m, 2 m
+  Seil) 0,2 m und 0,1 m zur Ablage, dabei 0,15 m absenken. Geformt besteht er alle Prüfungen (Restpendeln 4,3 mm,
+  Seilkraft höchstens 2727 N und nie schlaff, Hubwerksbremse 5,5 von 7,5 N m belastet); ungeformt pendelt die Last
+  0,32 m, und `residual-sway` fällt durch, ebenso `thermal-warm-start` (das Pendeln eines Durchgangs ändert den
+  nächsten). Ein echter Werkstattkranzyklus über die Kranbahn dauert eine Minute: ein Ziel von [8.0, 4.0, 1.0].
+- **Die Drehzahlregler** sind so steif eingestellt wie an den anderen Maschinen (Brücke und Katze etwa 60 Hz). Der des
+  Hubwerks hat, in Ruhe unter den 265 kg gemessen (`sim-cli margins`), keine Durchtrittsfrequenz (NaN): Der Wirkungsgrad
+  seines Getriebes (92 %), unter 0,5 W eingeblendet, wirkt als Dämpfer von 1,1e6 N s/m am Seil, 4,5 N m s/rad am Motor,
+  von dem das Testmoment nicht losbricht; das Getriebe hält den Regelkreis in Ruhe fest. Ohne die Getriebeverluste liegt
+  sie bei 48 Hz.
 - **Eigene Prüfungen:** `rope-max-tension`, `rope-min-tension` (kein Schlaffseil), `residual-sway` (Amplitude des
   Pendelns bei jedem Verweilen gegen `crane.residual_sway_max_m`), `hoist-brake` (Seilmoment am Hubmotor gegen das
   Bremsmoment durch `hoist.brake_safety_factor`).
