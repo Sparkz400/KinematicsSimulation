@@ -352,15 +352,11 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         // friction (effects.gearbox_mesh_friction) an arm's joint that holds a weight rises but then sticks within the
         // stuck mesh's band, (1 - eta) of the torque it holds, short of the step, and never settles to it: the six-axis
         // arm's joints 2 and 3 (3.97 and 6.02 Hz with the mesh friction off; 8.07 and 7.20 Hz without the gear's losses,
-        // which take the mesh's band with them). The same holds a cable robot's platform turns, the gears holding the
-        // cables' pretension: the stuck meshes take a small step slowly, cable-spatial's rx and ry at 1.41 and 1.25 Hz (the
-        // same, 1.28 to 1.45 Hz, at a tenth and ten times the bristle's stiffness), 4.44 and 4.37 Hz with the mesh
-        // friction off. There too the band without the gear's losses.
-        let mesh = entry.config().bool("effects.gearbox_mesh_friction").unwrap_or(false);
+        // which take the mesh's band with them).
         let lossless = std::cell::OnceCell::new();
         for (i, row) in tuning.lines().enumerate().skip(1) {
             let cells: Vec<&str> = row.split(',').collect();
-            let held = cells[4].is_empty() || mesh && cells[4].parse::<f64>().unwrap() < lowest;
+            let held = cells[4].is_empty();
             let without =
                 || lossless.get_or_init(|| table(&["tuning", entry.id, "--set", "effects.gearbox_efficiency=false"]));
             let band: f64 =

@@ -307,12 +307,14 @@ fn the_planar_carriage_has_the_hand_calculated_momentum() {
 /// 0.0814198 N m; the drum's bearings 2 N + 1 N s/m x 0.785495 m/s = 2.785495 N at the cable. The cable's tension
 /// (100 N to 140 N) loads every gearbox the same way, against the drum: hauling in, the motor drives, f / (200 x 0.95)
 /// = 0.0146605 N m, so -(0.0814198 + 0.0146605) = -0.0960803 N m; paying out, the cable drives the gearbox back, which
-/// takes eta off the friction, f x 0.95 / 200 = 0.0132311 N m, so 0.0946509 N m.
+/// takes eta off the friction, f x 0.95 / 200 = 0.0132311 N m, so 0.0946509 N m. The gears' mesh friction
+/// (effects.gearbox_mesh_friction) adds (1 - 0.95) of the torque each gear holds, t / 200 at the rotor, along the motion:
+/// 0.0349519 N m on the top cables (139.807643 N), 0.0250481 N m on the bottom ones (100.192357 N).
 #[test]
 fn the_planar_winches_steady_friction_at_the_centre_is_the_hand_calculated_one() {
     let mut out = [0.0; 4];
     planar().steady_friction(&CENTRE, &[1.0, 0.0], &mut out);
-    for (got, want) in out.iter().zip([0.0946509, -0.0960803, -0.0960803, 0.0946509]) {
+    for (got, want) in out.iter().zip([0.1296028, -0.1310322, -0.1211284, 0.1196990]) {
         assert!((got - want).abs() < 1e-6, "{out:?}");
     }
 }
@@ -369,72 +371,77 @@ fn the_planar_machine_friction_feedforward_takes_the_friction_off_the_integrator
 /// (`Converter::apply`; it had K1's number in N m/rad, 1/r^2 = 1600 times too soft): the stiff bristle sticks the
 /// drums, which moves torques and energies by up to 2.4 % (cable-spatial's motor 2 peak torque 2.0888 to 2.1381 N m)
 /// and the path and tracking errors by up to 12 % (its tracking error 0.269 to 0.300 mm; the planar machine's
-/// tracking error 0.647 to 0.663 mm).
+/// tracking error 0.647 to 0.663 mm). Recorded again the same day for cable-spatial's speed loops at Tn 5 ms (was 30 ms;
+/// config/spatial.toml), which break the stuck meshes away sooner, and the machine friction feedforward with the
+/// meshes' friction on the cables' tension at rest (`steady_friction`): torques and energies move by up to 1.3 %
+/// (cable-spatial's motor 7 peak torque 2.2962 to 2.2755 N m; the planar machine's by up to 0.2 %), cable-spatial's
+/// tracking error falls from 0.300 to 0.204 mm, the turn's path error from 1.65 to 1.58 mrad, its tracking error stays
+/// 1.65 to 1.67 mrad.
 #[test]
 fn the_default_cycles_keep_their_figures() {
     const PLANAR_BEFORE: [f64; 22] = [
-        1.0386374463093453,
-        0.6507974949924891,
-        55.17149302341261,
-        37.6591911024887,
-        1.6484944393719496,
-        0.7732291038695974,
-        216.52073172096343,
-        119.19396004117289,
-        0.9721514461906247,
-        0.5073145476207607,
-        44.50748699819249,
-        28.4258606895948,
-        1.1517349643549721,
-        0.635402269582021,
-        193.4327425602417,
-        98.69399690110373,
-        0.0005974482785879023,
-        0.0001452187904668479,
-        0.000663303363257516,
+        1.036826713076201,
+        0.6506034358831292,
+        55.15011455129069,
+        37.612965343809435,
+        1.648867208200228,
+        0.7723243526252941,
+        216.56973956817774,
+        119.26997859678104,
+        0.9708317604524752,
+        0.5071410704603528,
+        44.4713704221371,
+        28.363814331421057,
+        1.1531638483217688,
+        0.6345945147869194,
+        193.45986088648885,
+        98.75500671155778,
+        0.0005991004289922591,
+        0.00014535642518889128,
+        0.0006496665622403318,
         0.0,
         0.0,
         0.0,
     ];
     const SPATIAL_BEFORE: [f64; 38] = [
-        2.441592543920541,
-        1.549700921232147,
-        170.0276694961773,
-        114.88592434191774,
-        2.138052185244413,
-        1.6360263619767634,
-        27.311288817184135,
-        15.96428181205036,
-        1.6763934079512282,
-        1.2403935128320889,
-        47.22191024742986,
-        40.6085835730467,
-        2.072282797718429,
-        1.660675349737453,
-        88.57835387240212,
-        66.16875011100717,
-        1.7832884363158858,
-        1.1648170624954535,
-        51.00115075265817,
-        32.02595506480891,
-        1.94808826776775,
-        1.4553036224097704,
-        83.82078946596883,
-        56.175784647717734,
-        2.2962242062795744,
-        1.4042072546046587,
-        148.80830376694084,
-        106.80255997553824,
-        1.7152213200466795,
-        1.4013775695020716,
-        25.52372325333138,
-        15.087904755715218,
-        0.0002364225607964681,
-        7.119753154657165e-5,
-        0.00030015863056452835,
-        0.0016507719698847308,
-        0.00048409328340431364,
-        0.0016507719698847308,
+        2.453346006451309,
+        1.5493634853811802,
+        169.56880536077756,
+        114.90327197231312,
+        2.111533926910222,
+        1.6346845593091068,
+        27.33045437093379,
+        15.911074823092452,
+        1.6862443905605913,
+        1.2395827208641264,
+        47.274243380068064,
+        40.542169236575575,
+        2.07284934900659,
+        1.6533564171843302,
+        88.46857979813996,
+        65.98478370766337,
+        1.796861950192463,
+        1.1643898256966565,
+        51.03714796288101,
+        31.99561929424842,
+        1.954304174909317,
+        1.4522562909267616,
+        83.75260172293633,
+        55.9582497025161,
+        2.275486315815277,
+        1.4018164583312052,
+        148.47531178878376,
+        106.78185173525571,
+        1.721829001508081,
+        1.4060255381830418,
+        25.583865368078587,
+        15.013153615669435,
+        0.00020441830576454638,
+        6.643029630954461e-05,
+        0.00020441830576454638,
+        0.0015756031262834297,
+        0.00046612599823322765,
+        0.001672195433086085,
     ];
     let (planar, spatial) = (cycle_figures(&PLANAR), cycle_figures(&SPATIAL));
     let tol = 1e-3;

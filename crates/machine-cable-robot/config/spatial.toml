@@ -196,7 +196,12 @@ kv_1_s = 50.0
 # [estimate] scaled from the delta picker's 0.25 by the inertia at the motor: rotor, gearbox input and drum
 # 2.2e-4 kg m^2 plus the platform's share on the cable through the ratio.
 velocity_kp_nm_s_rad = 0.1
-velocity_tn_s = 0.03
+# 5 ms (was 30 ms), as commissioning sets it by the symmetric optimum from the loop's crossover (80 Hz, 2.7 / crossover;
+# phase margin 60 degrees, 81 at 30 ms). The gears' mesh friction (effects.gearbox_mesh_friction) holds (1 - eta) of the
+# cables' pretension at each drum, 12 N of 250 N, and a platform turn moves each cable little (rz 14 mm/rad), so only the
+# integrator breaks the eight stuck meshes away in a small turn: at 30 ms rx, ry and rz had bands of 1.41, 1.25 Hz and
+# none (0.5 mrad), at 5 ms 5.6, 5.2 and 4.4 Hz (docs/mechanisms.md, cable robots).
+velocity_tn_s = 0.005
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
 # Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one
@@ -267,8 +272,10 @@ standstill_time_s = 1.0
 standstill_window_rad = 0.1
 torque_band = 0.0
 [ratings]
-# [estimate] What a cable robot of this size is asked to hold at a dwell; its turns ring at up to 0.85 mrad in the dwells (sim-cli analyze; the check takes rad as m).
+# [estimate] What a cable robot of this size is asked to hold at a dwell, the place and, on its own, the turn (2 mrad,
+# 0.28 mm at the anchors, as the SCARA's in tool space; the cycle's dwells reach 1.03 mrad, sim-cli verdicts).
 settling_tolerance_m = 0.001
+settling_tolerance_rad = 0.002
 # The DC link of the S210 converter. [estimate] as for the delta picker.
 dc_link_capacitance_uf = 66.0
 braking_threshold_v = 770.0

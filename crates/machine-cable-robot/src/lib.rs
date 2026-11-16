@@ -1584,6 +1584,8 @@ impl Machine for CableRobot {
     /// the gearbox's drag) at i L' and the drum's bearings f(L') through the gearbox as `rigid_solve` takes it,
     /// f / (i loss). The loss factor at the power of the whole load on the gearbox (the cable's steady tension of
     /// `torques_for` and f), as there: a cable paying out drives its gearbox back, which then takes eta off f, not on.
+    /// With effects.gearbox_mesh_friction also the mesh's friction on the tension at rest there, (1 - eta) of its torque
+    /// at the rotor, along the motion.
     fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
         let n = self.n();
         let xi = self.twist(pos, &vel[..n]);
@@ -1591,10 +1593,18 @@ impl Machine for CableRobot {
         let rates = self.length_rates(&spans, &xi);
         let mut held = vec![0.0; self.m()];
         self.torques_for(pos, &xi, &vec![0.0; n], &mut held);
+        // The tension at rest there, which the mesh friction is in proportion to (no speed terms).
+        let mut resting = vec![0.0; self.m()];
+        self.torques_for(pos, &vec![0.0; n], &vec![0.0; n], &mut resting);
         for (k, w) in self.winches.iter().enumerate() {
             let (i, v) = (w.ratio(), rates[k]);
             let friction = w.friction.torque(v);
             out[k] = w.shaft.torque(i * v) + friction / (i * w.gearbox.loss_factor(i * held[k] + friction, v));
+            // The mesh friction on the torque the gear holds, the cable's tension (`Gearbox::mesh_friction`), against the
+            // motion: (1 - eta) of it, which the integrator carried and took past the target when the motion stopped.
+            if w.gearbox.mesh_stiffness > 0.0 && v != 0.0 {
+                out[k] += (1.0 - w.gearbox.efficiency) * resting[k].abs() * v.signum();
+            }
         }
     }
 

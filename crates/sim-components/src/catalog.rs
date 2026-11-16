@@ -1870,39 +1870,54 @@ pub fn inertia_ratios(entry: &MachineEntry, cfg: &Config) -> Result<Vec<f64>, Co
 }
 
 /// The velocity gain of `before` scaled for the parts of `after` as `with_parts` says: by the square root of the ratio
-/// of the inertia the motors turn (`inertia_seen`) times that of the rotor's (with the gearbox's).
-///
-/// A gain that grows with a larger inertia is bounded so that the loop's crossover stays below a third of the machine's
-/// first resonance at the middle of the travel (`Machine::resonance_hz`): a third is the usual separation between a
-/// speed loop and a mechanical resonance. The crossover is Kp over the rotor's inertia with the gearbox's: above the
-/// resonance the belt no longer carries the load along and the loop sees the rotor alone (as `with_parts` says), and
-/// there the loop rings. Kp over the whole inertia (rotor and load) bounds nothing where it matters: the Bahr ELZ-125
-/// on the single axis (resonance 160 Hz, 7.0e-4 kg m2 turned) allows 0.236 N m s/rad by it, and the scaled 0.0573 ran
-/// at 2.05 times the motor's peak; with the rotor's 3.0e-5 kg m2 it keeps the config's 0.025 and passes. Where the
-/// machine reports no resonance, or the gain does not grow, the scaled gain stands, and the config's own gain is kept
-/// where it is above the bound (the shipped configs are tuned by margins, not by this rule).
+/// of the inertia the motors turn (`inertia_seen`) times that of the rotor's (with the gearbox's), and on an elastic
+/// machine bounded by `bounded_gain`.
 fn retuned(entry: &MachineEntry, before: &Config, after: &mut Config) -> Result<(), ConfigError> {
     let rotor = |cfg: &Config| {
         Ok::<f64, ConfigError>(
             cfg.positive("motor.rotor_inertia_kgm2")? + cfg.non_negative("gearbox.inertia_at_input_kgm2")?,
         )
     };
+    let rotor_ratio = rotor(after)? / rotor(before)?;
     let ratio = inertia_seen(entry, after)? / inertia_seen(entry, before)? * rotor(after)? / rotor(before)?;
     let old = before.positive("drive.velocity_kp_nm_s_rad")?;
     let machine = (entry.build)(after)?;
-    let resonance = machine.resonance_hz(&sim_core::testkit::mid_pose(machine.as_ref()));
-    set(after, "drive.velocity_kp_nm_s_rad", bounded_gain(old * ratio.sqrt(), old, resonance, rotor(after)?))
+    let elastic = machine.resonance_hz(&sim_core::testkit::mid_pose(machine.as_ref())).is_some();
+    set(after, "drive.velocity_kp_nm_s_rad", bounded_gain(old * ratio.sqrt(), old, rotor_ratio, elastic))
 }
 
-/// `retuned`'s gain `scaled` held to a third of the resonance's angular frequency times the inertia `inertia` (crossover
-/// Kp/J), where it grew over the `old` one and a resonance in Hz is known; never below `old`.
-fn bounded_gain(scaled: f64, old: f64, resonance_hz: Option<f64>, inertia: f64) -> f64 {
-    match resonance_hz {
-        Some(hz) if hz > 0.0 && inertia.is_finite() && scaled > old => {
-            scaled.min(old.max(2.0 * PI * hz / 3.0 * inertia))
-        }
-        _ => scaled,
-    }
+/// `retuned`'s gain `scaled` on a machine that reports a resonance (`elastic`): at most `old` times `rotor_ratio`, the
+/// change of the rotor's inertia with the gearbox's, so that the speed loop's crossover over that inertia, Kp / J_M,
+/// stays the config's own. On a rigid model the scaled gain stands (the loop sees the whole inertia at every frequency).
+///
+/// Above the drive train's resonance the belt or the arm no longer carries the load along and the loop sees the
+/// rotor-side inertia alone; in every case swept the crossover lies above the first anti-resonance and its limit is
+/// the drive's delays, not the mechanics. Swept on 16 November 2026 (sim-cli verdicts, margins, analyze with
+/// `--set drive.velocity_kp_nm_s_rad`): the largest gain that passes every verdict with a phase margin of 45 degrees
+/// (`velocity_loop_margins`) is Kp / J_M = 870 to 1550 rad/s in all of them, while the same gain is 1.0 to 12 times
+/// the first resonance (`Machine::resonance_hz`, 20.5 to 160 Hz): no fixed fraction of the resonance fits, a fixed
+/// crossover over the rotor-side inertia does (the shipped configs sit at 830 to 1330 rad/s).
+///
+/// ```text
+/// case (J_M, J_total kg m2; resonance Hz)          max at 45 deg  best tracking*  before   this rule
+/// single axis (3.0e-5, 1.34e-4; 65.8)              0.036          0.07            0.025    0.025
+///   pulley radius x0.5 / x2                        0.037 / 0.033  0.07 / 0.07     0.0166 / 0.025   same
+///   gear ratio x0.5 / x2                           0.040 / 0.037  0.09 / 0.07     0.025 / 0.0162   same
+///   Bahr ELZ-40 / ELZ-80 / ELZ-125 (r 16/31/48 mm) 0.037 / 0.026 / 0.03  0.07 / 0.055 / 0.037   0.0212 / 0.025 / 0.025   same
+///   1FK2103-4AH (1.4e-5, 1.18e-4)                  0.019          0.045           0.016    0.0117
+///   1FK2204-5AF (1.2e-4, 2.24e-4)                  0.127          0.2             0.025    0.0646
+/// T-gantry (3.0e-5, 1.28e-4; 20.5), its own 0.04   0.047          0.08            -        -
+///   1FK2204-5AF (1.2e-4, 2.18e-4)                  0.13           0.2             0.04     0.108
+/// delta D3 (2.4e-4, 3.9e-3; 43.0), its own 0.25    0.31           0.6             -        -
+/// * every verdict passes, any phase margin (the tracking error falls with the gain up to the edge of stability)
+/// ```
+///
+/// The bound replaces a third of the resonance times J_M, which held every grown gain at the config's own (the
+/// 1FK2204-5AF on the single axis at 0.025, crossover 21 Hz below the anti-resonance), and lowers a lighter rotor's gain
+/// where the geometric mean would raise its crossover (the 1FK2103-4AH from 0.016 to 0.0117, phase margin 71 degrees).
+/// The ELZ-125 scaled to 0.0573 ran at 2.05 times the motor's peak; bounded it keeps 0.025 and passes.
+fn bounded_gain(scaled: f64, old: f64, rotor_ratio: f64, elastic: bool) -> f64 {
+    if elastic { scaled.min(old * rotor_ratio) } else { scaled }
 }
 
 /// The config with a candidate's parts in it and the velocity loop retuned for them. Without this a
@@ -2627,13 +2642,14 @@ mod tests {
     }
 
     #[test]
-    fn a_retuned_gain_keeps_the_crossover_below_a_third_of_the_resonance() {
-        // Resonance 10 Hz, J = 1e-3 kg m2: Kp <= 2 pi 10 / 3 * 1e-3 = 0.020944 N m s/rad (crossover 20.9 rad/s).
-        let bound = 2.0 * PI * 10.0 / 3.0 * 1e-3;
-        assert!((bounded_gain(0.0573, 0.01, Some(10.0), 1e-3) - bound).abs() < 1e-12);
-        // A config whose own gain is above the bound keeps it; no resonance, or a gain that shrinks, is not bounded.
-        assert_eq!(bounded_gain(0.0573, 0.0368, Some(10.0), 1e-3), 0.0368);
-        assert_eq!(bounded_gain(0.0573, 0.01, None, 1e-3), 0.0573);
-        assert_eq!(bounded_gain(0.005, 0.01, Some(10.0), 1e-3), 0.005);
+    fn a_retuned_gain_keeps_the_crossover_over_the_rotor_side_inertia() {
+        // A heavier load on the same rotor keeps the config's gain; a rotor 4 times as heavy allows 4 times the gain,
+        // here more than the scaled one; a rotor half as heavy half the gain, here less than the scaled one.
+        assert_eq!(bounded_gain(0.0573, 0.025, 1.0, true), 0.025);
+        assert_eq!(bounded_gain(0.0646, 0.025, 4.0, true), 0.0646);
+        assert_eq!(bounded_gain(0.016, 0.025, 0.5, true), 0.0125);
+        // A gain that shrinks below the bound, and any gain of a rigid model, stands.
+        assert_eq!(bounded_gain(0.016, 0.025, 1.0, true), 0.016);
+        assert_eq!(bounded_gain(0.0573, 0.025, 1.0, false), 0.0573);
     }
 }

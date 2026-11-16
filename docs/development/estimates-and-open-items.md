@@ -24,7 +24,6 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 
 | What | Where | Why it is only a choice | Closing it |
 | --- | --- | --- | --- |
-| `PER_AXIS_SPREAD` = 5 % chooses between the fit per axis and the fit in the motors' coordinates (T-gantry 3.9/4.5 %, disc cam 4.1/6.2 % with/without payload) | `trace.rs` | A threshold; since 17 November it only chooses the fit: the per-axis mass error holds how far the config's inertia strays from one mass over the trace's poses and axis couplings (`AxisFit::mass_spread`, advice `fit-mass-spread` where it is the larger part). Disc cam without payload, disc 0.002 kg m² heavier: +0.002024 ± 0.000249 kg m² (spread 2.49e-4; 8 errors off without it); with payload (motor fit) +2.022e-5 ± 3.9e-8 kg m² at the motor against 2.0e-5 through ratio 10 (the gearbox's 0.97 efficiency not separated); T-gantry spread 1.2e-4 / 0.9e-4 kg on x / z for the shipped cycle (its axes move one at a time) | The spread is the config's model, not measured: check on a measured machine whose inertia varies |
 
 ## 3. Behaviour assumed without the manual
 
