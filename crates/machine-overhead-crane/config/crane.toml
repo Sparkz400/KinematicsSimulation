@@ -518,14 +518,18 @@ drive_max_current_time_s = 0.25
 braking_resistor_time_constant_s = 60.0
 braking_resistor_rated_rise_k = 200.0
 
-# [catalogue] The bridge's and the trolley's S210 6SL3210-5HE11-0UF0: 3 A rated, 10.9 A maximum; its braking resistor
-# 50 W, 3000 W peak. Base load current [estimate] 0.85 of the rated.
+# [catalogue] The bridge's S210 6SL3210-5HE12-0UF0, the hoist's size: 7 A rated, 24 A maximum; its braking resistor
+# 100 W, 6000 W peak. The next smaller one (5HE11-0UF0, 3000 W peak) trips when the 985 kg bridge brakes from a
+# setpoint stream at its speed limit (some 4.7 kW back). Base load current [estimate] 0.85 of the rated.
 [ratings.bridge]
-drive_rated_current_a = 3.0
-drive_max_current_a = 10.9
-drive_base_load_current_a = 2.55
-braking_resistor_continuous_w = 50.0
-braking_resistor_peak_w = 3000.0
+drive_rated_current_a = 7.0
+drive_max_current_a = 24.0
+drive_base_load_current_a = 5.95
+braking_resistor_continuous_w = 100.0
+braking_resistor_peak_w = 6000.0
+
+# [catalogue] The trolley's S210 6SL3210-5HE11-0UF0: 3 A rated, 10.9 A maximum; its braking resistor 50 W, 3000 W
+# peak. Base load current [estimate] 0.85 of the rated.
 
 [ratings.trolley]
 drive_rated_current_a = 3.0
