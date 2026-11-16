@@ -34,127 +34,130 @@ fn viscosity(rise: f64) -> f64 {
 #[test]
 fn with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature() {
     for entry in MACHINES.iter().copied() {
-        let mut cfg = edited(entry, &["effects.part_heating = true", "effects.thermal_feedback = true"]);
-        // The motor shaft's seals follow the oil too (thermal_feedback.seal_viscosity_exponent, tested in mech.rs): with
-        // them the torque into the gearbox rises as it warms, which the ratio below leaves out. On a crane's bridge,
-        // whose wheels roll against 58 N, the seals took 0.06 of the 0.16 N m of the cruise, and the gear's loss rose to
-        // 0.67 of itself instead of 0.64. Off here.
-        for switch in ["effects.temperature = true", "effects.gearbox_drag = false", "effects.motor_friction = false"] {
-            if cfg.bool(switch.split(' ').next().unwrap()).is_ok() {
-                cfg.set_text(switch).unwrap();
-            }
-        }
-        // A speed limit at which the move below cruises: its S-curve ramps take v^2 / a + v a / j, here at most 0.8 of
-        // the move (the knife roll's 6.8 rad do not hold its 20 rad/s: 17.2 rad/s).
-        let axis = (entry.build)(&cfg).unwrap().axes()[0].clone();
-        let (d, a, lead) = (
-            axis.max - 0.05 * axis.max - axis.min - 0.05 * (axis.max - axis.min),
-            axis.max_acc,
-            axis.max_acc / axis.max_jerk,
-        );
-        let v = 0.5 * a * ((lead * lead + 3.2 * d / a).sqrt() - lead);
-        if v < axis.max_vel {
-            cfg.set_text(&format!("axis.{}.max_velocity_{}_s = {v:?}", axis.id, axis.unit)).unwrap();
-        }
-        let mut sim = Sim::new(entry, &cfg).unwrap();
-        let guide = |id: &str| cfg.get(&format!("friction_{}", id.trim_start_matches("axis."))).is_ok();
-        let contacts: Vec<_> =
-            sim.machine.friction_contacts().into_iter().enumerate().filter(|(_, c)| guide(c.id)).collect();
-        for (i, contact) in contacts.iter().map(|(i, c)| (*i, c)) {
-            let table = format!("friction_{}", contact.id.trim_start_matches("axis."));
-            let [coulomb, viscous, _] = sim.machine.friction_curve(i, 0.5, 1.0);
-            assert_eq!(
-                (coulomb, viscous),
-                (
-                    cfg.f64(&format!("{table}.coulomb_n")).unwrap(),
-                    0.5 * cfg.f64(&format!("{table}.viscous_n_s_m")).unwrap()
-                ),
-                "{}",
-                entry.id
-            );
-        }
-        // Into a cruise, then the same state with every part 30 K warm. From near the low end of the range, as the long
-        // moves of control.rs: from the start pose the D2's 228 mm peaked at 2.91 m/s of its 3, and the loop waiting for
-        // the cruise stepped on for ever.
-        let axis = sim.machine.axes()[0].clone();
-        let mut low = sim.control.set_pos.clone();
-        low[0] = low[0].min(axis.min + 0.05 * (axis.max - axis.min));
-        sim.command(Command::MoveTo(low)).unwrap();
-        while sim.control.busy() {
-            sim.step();
-        }
-        let mut target: Vec<f64> = cfg.f64s("start.pose").unwrap();
-        target[0] = axis.max - 0.05 * axis.max;
-        sim.command(Command::MoveTo(target)).unwrap();
-        while sim.control.busy()
-            && (signal(&sim, &format!("axis.{}.velocity_setpoint", axis.id)) - axis.max_vel).abs() > 1e-9
-        {
-            sim.step();
-        }
-        assert!(
-            sim.control.busy(),
-            "{}: the move ended without a cruise at {} {}/s",
-            entry.id,
-            axis.max_vel,
-            axis.unit
-        );
-        sim.run(0.1, |_| {});
-        // The first gearbox that warms, which the move of axis 0 drives; the wafer handler's first is its column's,
-        // which stands while the arm reaches out along r (its axis 0): there the upper arm's, motor 2's.
-        let first = if entry.id == "wafer-handler" { "gearbox_2" } else { "" };
-        let gearbox = sim
-            .heated
-            .iter()
-            .position(|h| h.part.kind == "gearbox" && (first.is_empty() || h.part.id == first))
-            .map(|i| format!("power.{}", sim.heated[i].part.id));
-        let cold = gearbox.as_ref().map(|id| signal(&sim, id));
-        for part in &mut sim.heated {
-            part.rise = 30.0;
-        }
-        sim.feed_temperatures_back();
-        for (i, contact) in contacts.iter().map(|(i, c)| (*i, c)) {
-            let table = format!("friction_{}", contact.id.trim_start_matches("axis."));
-            let [coulomb, viscous, _] = sim.machine.friction_curve(i, 0.5, 1.0);
-            let by_hand = 0.5 * cfg.f64(&format!("{table}.viscous_n_s_m")).unwrap() * 0.281749;
-            assert!(
-                coulomb == cfg.f64(&format!("{table}.coulomb_n")).unwrap() && (viscous - by_hand).abs() < 1e-5,
-                "{}: {viscous} N against {by_hand} N",
-                entry.id
-            );
-        }
-        if let (Some(id), Some(cold)) = (gearbox, cold) {
-            let warm = signal(&sim, &id);
-            // The gearbox's own shortfall 1 - g falls to 0.64088 of itself; a screw's or rack's behind it (efficiency e)
-            // stays. The loss is T w (1 - eta) with the torque into the gearbox set, T w (1 - eta) / eta with the torque
-            // out of it set, eta = g e; the ratio warm to cold lies between the two (by hand 0.6409 and 0.6338 for a
-            // gearbox of 97 %, 0.6409 and 0.5724 for a strain wave gear's 75 %).
-            // The gearbox's own efficiency, `[gearbox.<motor>]` over `[gearbox]` where its motor has its own (an arm on a
-            // track: its track's planetary gearbox of 96 % beside the arm's strain wave gears of 75 %).
-            let motor = id.trim_start_matches("power.gearbox_");
-            let own = sim_components::catalog::motor_config(&cfg, motor).unwrap();
-            let g = own.f64("gearbox.efficiency").unwrap();
-            // A joint that slides (its force in N) runs on the rack or screw behind its gearbox, an arm's track too.
-            let slides = sim.signal_infos().iter().any(|s| s.id == format!("joint.{motor}.force") && s.unit == "N");
-            // An arm's heated gearboxes are those of its turning joints, with nothing behind them, as the parallel
-            // SCARA's first (its screw is the quill's) and the wafer handler's arm (its screw is the lift's).
-            let e = if !slides
-                && (cfg.get("arm.gear_ratios").is_ok() || ["parallel-scara", "wafer-handler"].contains(&entry.id))
-            {
-                1.0
-            } else {
-                ["rack.efficiency", "screw.efficiency"].iter().find_map(|k| cfg.f64(k).ok()).unwrap_or(1.0)
-            };
-            let warm_eta = (1.0 - 0.64088 * (1.0 - g)) * e;
-            let (input_set, output_set) =
-                ((1.0 - warm_eta) / (1.0 - g * e), (1.0 - warm_eta) / warm_eta / ((1.0 - g * e) / (g * e)));
-            let ratio = warm / cold;
-            assert!(
-                ratio > output_set.min(input_set) - 0.005 && ratio < output_set.max(input_set) + 0.005,
-                "{}: {warm} W against {cold} W, {ratio} not within {output_set} to {input_set}",
-                entry.id
-            );
+        if let Some((ratio, low, high)) = judge(entry, !SEALS_LOAD_THE_GEAR_AT_ONCE.contains(&entry.id)) {
+            assert!(ratio > low - 0.005 && ratio < high + 0.005, "{}: {ratio} not within {low} to {high}", entry.id);
         }
     }
+}
+
+/// Machines whose gear torque is solved from the torque balance at the rotor (a rigid gearbox): the motor shaft's seals
+/// follow the oil too (thermal_feedback.seal_viscosity_exponent, tested in mech.rs), and in the state warmed at once
+/// below their lower torque passes into the gearbox at once, which the ratio leaves out. The crane's bridge, whose
+/// wheels roll against 58 N: the seals took 0.06 of the 0.16 N m of the cruise, and the gear's loss rose to 0.672 of
+/// itself (bounds 0.627 to 0.641; 0.641 with the motor's friction off). Where the gear's torque is its twist's, the
+/// seals do not enter: every other machine keeps the bounds with the motor's friction on, and the 23 measured both
+/// ways have the same ratio on and off, to 1e-4 (16 November 2026). On these the motor's friction is off.
+const SEALS_LOAD_THE_GEAR_AT_ONCE: &[&str] = &["overhead-crane"];
+
+/// The run of `with_thermal_feedback_friction_and_gearbox_loss_follow_the_temperature` on one machine, the motor's
+/// friction (its seals) on or off: the warm gearbox's loss over the cold one's and the bounds it must lie in. `None`
+/// without a gearbox that warms.
+fn judge(entry: &'static MachineEntry, seals: bool) -> Option<(f64, f64, f64)> {
+    let mut cfg = edited(entry, &["effects.part_heating = true", "effects.thermal_feedback = true"]);
+    let friction = if seals { "effects.motor_friction = true" } else { "effects.motor_friction = false" };
+    for switch in ["effects.temperature = true", "effects.gearbox_drag = false", friction] {
+        if cfg.bool(switch.split(' ').next().unwrap()).is_ok() {
+            cfg.set_text(switch).unwrap();
+        }
+    }
+    // A speed limit at which the move below cruises: its S-curve ramps take v^2 / a + v a / j, here at most 0.8 of
+    // the move (the knife roll's 6.8 rad do not hold its 20 rad/s: 17.2 rad/s).
+    let axis = (entry.build)(&cfg).unwrap().axes()[0].clone();
+    let (d, a, lead) = (
+        axis.max - 0.05 * axis.max - axis.min - 0.05 * (axis.max - axis.min),
+        axis.max_acc,
+        axis.max_acc / axis.max_jerk,
+    );
+    let v = 0.5 * a * ((lead * lead + 3.2 * d / a).sqrt() - lead);
+    if v < axis.max_vel {
+        cfg.set_text(&format!("axis.{}.max_velocity_{}_s = {v:?}", axis.id, axis.unit)).unwrap();
+    }
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    let guide = |id: &str| cfg.get(&format!("friction_{}", id.trim_start_matches("axis."))).is_ok();
+    let contacts: Vec<_> =
+        sim.machine.friction_contacts().into_iter().enumerate().filter(|(_, c)| guide(c.id)).collect();
+    for (i, contact) in contacts.iter().map(|(i, c)| (*i, c)) {
+        let table = format!("friction_{}", contact.id.trim_start_matches("axis."));
+        let [coulomb, viscous, _] = sim.machine.friction_curve(i, 0.5, 1.0);
+        assert_eq!(
+            (coulomb, viscous),
+            (
+                cfg.f64(&format!("{table}.coulomb_n")).unwrap(),
+                0.5 * cfg.f64(&format!("{table}.viscous_n_s_m")).unwrap()
+            ),
+            "{}",
+            entry.id
+        );
+    }
+    // Into a cruise, then the same state with every part 30 K warm. From near the low end of the range, as the long
+    // moves of control.rs: from the start pose the D2's 228 mm peaked at 2.91 m/s of its 3, and the loop waiting for
+    // the cruise stepped on for ever.
+    let axis = sim.machine.axes()[0].clone();
+    let mut low = sim.control.set_pos.clone();
+    low[0] = low[0].min(axis.min + 0.05 * (axis.max - axis.min));
+    sim.command(Command::MoveTo(low)).unwrap();
+    while sim.control.busy() {
+        sim.step();
+    }
+    let mut target: Vec<f64> = cfg.f64s("start.pose").unwrap();
+    target[0] = axis.max - 0.05 * axis.max;
+    sim.command(Command::MoveTo(target)).unwrap();
+    while sim.control.busy()
+        && (signal(&sim, &format!("axis.{}.velocity_setpoint", axis.id)) - axis.max_vel).abs() > 1e-9
+    {
+        sim.step();
+    }
+    assert!(sim.control.busy(), "{}: the move ended without a cruise at {} {}/s", entry.id, axis.max_vel, axis.unit);
+    sim.run(0.1, |_| {});
+    // The first gearbox that warms, which the move of axis 0 drives; the wafer handler's first is its column's,
+    // which stands while the arm reaches out along r (its axis 0): there the upper arm's, motor 2's.
+    let first = if entry.id == "wafer-handler" { "gearbox_2" } else { "" };
+    let gearbox = sim
+        .heated
+        .iter()
+        .position(|h| h.part.kind == "gearbox" && (first.is_empty() || h.part.id == first))
+        .map(|i| format!("power.{}", sim.heated[i].part.id));
+    let cold = gearbox.as_ref().map(|id| signal(&sim, id));
+    for part in &mut sim.heated {
+        part.rise = 30.0;
+    }
+    sim.feed_temperatures_back();
+    for (i, contact) in contacts.iter().map(|(i, c)| (*i, c)) {
+        let table = format!("friction_{}", contact.id.trim_start_matches("axis."));
+        let [coulomb, viscous, _] = sim.machine.friction_curve(i, 0.5, 1.0);
+        let by_hand = 0.5 * cfg.f64(&format!("{table}.viscous_n_s_m")).unwrap() * 0.281749;
+        assert!(
+            coulomb == cfg.f64(&format!("{table}.coulomb_n")).unwrap() && (viscous - by_hand).abs() < 1e-5,
+            "{}: {viscous} N against {by_hand} N",
+            entry.id
+        );
+    }
+    let (id, cold) = (gearbox?, cold?);
+    let warm = signal(&sim, &id);
+    // The gearbox's own shortfall 1 - g falls to 0.64088 of itself; a screw's or rack's behind it (efficiency e)
+    // stays. The loss is T w (1 - eta) with the torque into the gearbox set, T w (1 - eta) / eta with the torque
+    // out of it set, eta = g e; the ratio warm to cold lies between the two (by hand 0.6409 and 0.6338 for a
+    // gearbox of 97 %, 0.6409 and 0.5724 for a strain wave gear's 75 %).
+    // The gearbox's own efficiency, `[gearbox.<motor>]` over `[gearbox]` where its motor has its own (an arm on a
+    // track: its track's planetary gearbox of 96 % beside the arm's strain wave gears of 75 %).
+    let motor = id.trim_start_matches("power.gearbox_");
+    let own = sim_components::catalog::motor_config(&cfg, motor).unwrap();
+    let g = own.f64("gearbox.efficiency").unwrap();
+    // A joint that slides (its force in N) runs on the rack or screw behind its gearbox, an arm's track too.
+    let slides = sim.signal_infos().iter().any(|s| s.id == format!("joint.{motor}.force") && s.unit == "N");
+    // An arm's heated gearboxes are those of its turning joints, with nothing behind them, as the parallel
+    // SCARA's first (its screw is the quill's) and the wafer handler's arm (its screw is the lift's).
+    let e =
+        if !slides && (cfg.get("arm.gear_ratios").is_ok() || ["parallel-scara", "wafer-handler"].contains(&entry.id)) {
+            1.0
+        } else {
+            ["rack.efficiency", "screw.efficiency"].iter().find_map(|k| cfg.f64(k).ok()).unwrap_or(1.0)
+        };
+    let warm_eta = (1.0 - 0.64088 * (1.0 - g)) * e;
+    let (input_set, output_set) =
+        ((1.0 - warm_eta) / (1.0 - g * e), (1.0 - warm_eta) / warm_eta / ((1.0 - g * e) / (g * e)));
+    let ratio = warm / cold;
+    Some((ratio, output_set.min(input_set), output_set.max(input_set)))
 }
 
 /// A guide at constant speed with the feedback on settles where its heat flow balances its loss, which now falls as
