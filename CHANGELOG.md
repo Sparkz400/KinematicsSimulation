@@ -7,6 +7,14 @@ item are in [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Added
+
+- App: a "Loop response" tab: per motor the Bode plot of the velocity loop (open loop, closed loop, and the plant from
+  motor torque to speed) with the margins, the machine's resonances and the shaper's and notch filter's frequencies
+  marked, and the Nyquist plot around -1; measured in the background with progress and cancel.
+- `sim-cli margins` (and Python `margins`) measure at the machine's resonances too and refine the sweep where the loop
+  or the plant changes fast (`analysis::refinement`), so a sharp resonance between two of the 60 points is not missed.
+
 ## [1.0.0] - 2026-11-16
 
 The release was cut on 14 November 2026 at 19c2ad1 and tagged on 16 November 2026; the three

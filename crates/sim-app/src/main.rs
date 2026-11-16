@@ -1,6 +1,7 @@
 //! The app window: a 3D view built from the machine's scene description, next to the panels.
 //! It knows no machine; it draws whatever parts the selected machine describes.
 
+mod loop_view;
 mod ui;
 mod views;
 #[cfg(test)]
@@ -1503,6 +1504,7 @@ fn panels(
             Action::TuningAxis(axis) => model.tuning_axis = axis,
             Action::RunTuning => model.run_tuning(model.tuning_axis),
             Action::CloseTuning => model.tuning = None,
+            Action::Loop(action) => loop_view::apply(model, action),
             Action::Inputs(inputs) => model.inputs = inputs,
             Action::RunAnalysis(kind) => model.run_analysis(kind),
             Action::ApplyOptimised => model.apply_optimised(),

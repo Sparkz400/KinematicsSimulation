@@ -4358,3 +4358,21 @@ Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries a
   the motors held; machine files that follow their crates' friction feedforward.
 - Last full run in this period: 1533 of 1538 tests passed at 54a2fca, before wave 3; the final count is a placeholder
   in docs/validation.md.
+
+## Loop response tab and refined loop sweep (16 November, area 6)
+
+- `analysis::velocity_loop_responses`: the one velocity-loop measurement of `sim-cli margins`, now also measuring the
+  plant (air-gap torque to motor speed, `LoopPoint::plant`) and refined: the machine's modes at the start pose are
+  added to the 60 points, and where L or the plant turns by more than 30° or changes by more than 3 dB between
+  neighbours their geometric middle is measured, up to 8 rounds, down to 0.1 % apart (`refinement`). With progress
+  and a cancel switch (`Progress`). `velocity_loop_margins` (CLI, Python) uses it; the default margins of the single
+  axis, the T-gantry and the D3 are unchanged to the digit printed except T-gantry motor b, 9.36 to 9.35 dB.
+- Test against a hand-calculated two-mass system (J1 1e-4, J2 3e-4 kg m², k 300 N m/rad, c 0.003 N m s/rad):
+  resonance 318.31 Hz, |P| 187.5 rad/s per N m; the 60 points see 44.7 at 331.9 Hz, the refined sweep finds it within
+  0.2 % and its peak within 3 %, and the anti-resonance at 159.155 Hz.
+- sim-app: a tool tab "Loop response" (`frequency.rs`, `loop_view.rs`): per motor the margins, Bode magnitude and phase
+  of L, T and the plant with the margins, the modes, shaper and notch frequencies marked, and the Nyquist plot around
+  -1; in the background with a progress bar and Cancel. Window tests on the single axis, the T-gantry and the D3, and
+  for progress and cancel; the tab is in the language and layout tests.
+- Found: with friction on, the plant at 10 Hz leads by +47° (single axis): at a tenth of the rated torque the LuGre
+  bristles hold the axis like a spring; without friction it is the inertia's -90°.

@@ -3842,6 +3842,9 @@ pub struct LoopPoint {
     pub re: f64,
     pub im: f64,
     pub sensitivity: f64,
+    /// The mechanics from the motor's air-gap torque to its speed in the same measurement, (real, imaginary part) in
+    /// rad/s per N m: the plant the loop works on, without the current loop, filters and delays. NaN where L is.
+    pub plant: [f64; 2],
 }
 
 /// The open-loop response of the velocity loop of one motor, measured on the closed loop as a drive's own
@@ -3869,6 +3872,7 @@ pub fn velocity_loop_response(
         let whole = |seconds: f64| ((seconds / period).ceil().max(5.0) * period / sim.dt).round() as u64;
         let (settle_steps, total) = (whole(0.1), whole(0.1) + whole(0.1));
         let (mut u_ab, mut e_ab, mut samples) = ([0.0; 2], [0.0; 2], 0.0);
+        let (mut torque_ab, mut speed_ab) = ([0.0; 2], [0.0; 2]);
         let (mut seen, mut limited, mut pos, mut speed) =
             (Vec::new(), false, vec![0.0; sim.control.drives.len()], vec![0.0; sim.control.drives.len()]);
         for step in 0..total {
@@ -3891,6 +3895,9 @@ pub fn velocity_loop_response(
                         (u_ab[0] + u * s, u_ab[1] + u * c, e_ab[0] + e * s, e_ab[1] + e * c);
                     samples += 1.0;
                     seen.push((s, c, e));
+                    let (t, v) = (drive.torque, speed[motor]);
+                    (torque_ab[0], torque_ab[1], speed_ab[0], speed_ab[1]) =
+                        (torque_ab[0] + t * s, torque_ab[1] + t * c, speed_ab[0] + v * s, speed_ab[1] + v * c);
                 }
             }
         }
@@ -3908,7 +3915,11 @@ pub fn velocity_loop_response(
         } else {
             (-(u[0] * e[0] + u[1] * e[1]) / e2, -(u[1] * e[0] - u[0] * e[1]) / e2)
         };
-        out.push(LoopPoint { frequency, re, im, sensitivity: e2.sqrt() / amplitude });
+        // Plant = speed / torque, phasors as (sine, cosine) parts; NaN with L.
+        let (t, v) = (torque_ab, speed_ab);
+        let t2 = (t[0] * t[0] + t[1] * t[1]) * if re.is_nan() { f64::NAN } else { 1.0 };
+        let plant = [(v[0] * t[0] + v[1] * t[1]) / t2, (v[1] * t[0] - v[0] * t[1]) / t2];
+        out.push(LoopPoint { frequency, re, im, sensitivity: e2.sqrt() / amplitude, plant });
     }
     Ok(out)
 }
@@ -4039,9 +4050,114 @@ pub fn loop_amplitude(entry: &MachineEntry, cfg: &Config) -> Result<f64, ConfigE
     Ok(0.1 * crate::catalog::resolve(entry, cfg)?.positive("drive.rated_torque_nm")?)
 }
 
+/// Where neighbouring points of a response differ by more than this turn (degrees) or this change of magnitude (dB),
+/// a sharp resonance may lie between them: `refinement` measures their middle too. A first-order lag turns by at
+/// most 5 degrees between two of the 60 points of `loop_frequencies` (9.4 % apart), the velocity loop's delays by
+/// about 17 degrees at 2 kHz; a resonance with 1 % damping turns by 180 degrees within 2 % of its frequency.
+pub const REFINE_TURN_DEG: f64 = 30.0;
+pub const REFINE_GAIN_DB: f64 = 3.0;
+/// Points closer than this ratio of frequencies are not split again (0.1 %, a twentieth of the half-power width of a
+/// mode with 1 % damping).
+pub const REFINE_CLOSEST: f64 = 1.001;
+/// At most this many rounds of splitting: 9.4 % halved eight times is 0.04 %.
+pub const REFINE_ROUNDS: usize = 8;
+
+/// The frequencies to measure next between neighbours of a response, `points` (frequency, complex value) in
+/// frequency order: the geometric middle of each two that differ by more than `REFINE_TURN_DEG` or `REFINE_GAIN_DB`
+/// and are further apart than `REFINE_CLOSEST`. Points with a value that is not a number are not split.
+pub fn refinement(points: &[(f64, [f64; 2])]) -> Vec<f64> {
+    points
+        .windows(2)
+        .filter_map(|w| {
+            let ((fa, a), (fb, b)) = (w[0], w[1]);
+            // The turn is the angle of b / a, the change of magnitude that of |b| / |a|.
+            let turn = (a[0] * b[1] - a[1] * b[0]).atan2(a[0] * b[0] + a[1] * b[1]).to_degrees().abs();
+            let change = 20.0 * (b[0].hypot(b[1]) / a[0].hypot(a[1])).log10().abs();
+            ((turn > REFINE_TURN_DEG || change > REFINE_GAIN_DB) && fb / fa > REFINE_CLOSEST).then(|| (fa * fb).sqrt())
+        })
+        .collect()
+}
+
+/// A long measurement's progress, read from another thread: measurements done, measurements planned so far (the
+/// refinement adds to them), and a switch that stops it (`velocity_loop_responses` then answers `cancelled`).
+#[derive(Debug, Default)]
+pub struct Progress {
+    pub done: std::sync::atomic::AtomicUsize,
+    pub total: std::sync::atomic::AtomicUsize,
+    pub cancel: std::sync::atomic::AtomicBool,
+}
+
+/// The key of the error a cancelled measurement answers with (`ConfigError::Invalid`).
+pub const CANCELLED: &str = "cancelled";
+
+/// Per config of `configs` (of the same machine) per motor the open-loop response of its velocity loop
+/// (`velocity_loop_response`), in frequency order: at `loop_frequencies` and the machine's resonances at the start pose
+/// (`Machine::modes`) of the first config, and where the loop gain or the plant changes fast between two points at
+/// their middle (`refinement`), in up to `REFINE_ROUNDS` rounds. Every point is measured on a simulation of its own:
+/// they share the processors. `progress` counts them and can stop the measurement.
+pub fn velocity_loop_responses(
+    entry: &MachineEntry,
+    configs: &[Config],
+    progress: &Progress,
+) -> Result<Vec<Vec<Vec<LoopPoint>>>, ConfigError> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let first = &crate::catalog::resolve(entry, configs.first().ok_or_else(|| ConfigError::Invalid("config".into()))?)?;
+    let (mut frequencies, amplitude) = (loop_frequencies(first)?, loop_amplitude(entry, first)?);
+    let machine = (entry.build)(first)?;
+    let range = frequencies[0]..=frequencies[frequencies.len() - 1];
+    frequencies.extend(machine.modes(&first.f64s("start.pose")?).iter().map(|m| m.hz).filter(|f| range.contains(f)));
+    let motors = machine.motors().len();
+    let measure = |jobs: &[(usize, usize, f64)]| -> Result<Vec<LoopPoint>, ConfigError> {
+        progress.total.fetch_add(jobs.len(), Relaxed);
+        on_all_cores(jobs.len(), |j| {
+            if progress.cancel.load(Relaxed) {
+                return Err(ConfigError::Invalid(CANCELLED.into()));
+            }
+            let (run, motor, frequency) = jobs[j];
+            let point = velocity_loop_response(entry, &configs[run], motor, &[frequency], amplitude).map(|p| p[0]);
+            progress.done.fetch_add(1, Relaxed);
+            point
+        })
+        .into_iter()
+        .collect()
+    };
+    let mut curves = vec![vec![Vec::<LoopPoint>::new(); motors]; configs.len()];
+    let mut jobs = Vec::new();
+    for run in 0..configs.len() {
+        for motor in 0..motors {
+            jobs.extend(frequencies.iter().map(|&f| (run, motor, f)));
+        }
+    }
+    for round in 0..=REFINE_ROUNDS {
+        for (&(run, motor, _), point) in jobs.iter().zip(measure(&jobs)?) {
+            curves[run][motor].push(point);
+        }
+        jobs.clear();
+        for (run, per_motor) in curves.iter_mut().enumerate() {
+            for (motor, curve) in per_motor.iter_mut().enumerate() {
+                curve.sort_by(|a, b| a.frequency.total_cmp(&b.frequency));
+                if round < REFINE_ROUNDS {
+                    let of = |value: fn(&LoopPoint) -> [f64; 2]| {
+                        refinement(&curve.iter().map(|p| (p.frequency, value(p))).collect::<Vec<_>>())
+                    };
+                    let mut more = of(|p| [p.re, p.im]);
+                    more.extend(of(|p| p.plant));
+                    more.sort_by(f64::total_cmp);
+                    more.dedup();
+                    jobs.extend(more.into_iter().map(|f| (run, motor, f)));
+                }
+            }
+        }
+        if jobs.is_empty() {
+            break;
+        }
+    }
+    Ok(curves)
+}
+
 /// The margins of every motor's velocity loop for the config as it is and with each value of `bounds` at its low
 /// and at its high bound, one at a time (as `verdict_bands`): per run its name ("" for the config as it is,
-/// "path=value" otherwise) and the margins per motor. The runs share the processors.
+/// "path=value" otherwise) and the margins per motor, from the refined responses of `velocity_loop_responses`.
 pub fn velocity_loop_margins(
     entry: &MachineEntry,
     cfg: &Config,
@@ -4049,8 +4165,6 @@ pub fn velocity_loop_margins(
 ) -> Result<Vec<(String, Vec<LoopMargins>)>, ConfigError> {
     let resolved = &crate::catalog::resolve(entry, cfg)?;
     let (bounds, cfg) = (&followed(cfg, resolved, bounds), resolved);
-    let (frequencies, amplitude, motors) =
-        (loop_frequencies(cfg)?, loop_amplitude(entry, cfg)?, (entry.build)(cfg)?.motors().len());
     let mut runs = vec![(String::new(), cfg.clone())];
     for (path, low, high) in bounds {
         for value in [low, high] {
@@ -4059,21 +4173,13 @@ pub fn velocity_loop_margins(
             runs.push((format!("{path}={value:?}"), changed));
         }
     }
-    // Every frequency of every motor of every run is measured on a simulation of its own: they share the processors.
-    let per_run = motors * frequencies.len();
-    let points = on_all_cores(runs.len() * per_run, |job| {
-        let (run, motor, point) = (job / per_run, job % per_run / frequencies.len(), job % frequencies.len());
-        velocity_loop_response(entry, &runs[run].1, motor, &frequencies[point..=point], amplitude).map(|p| p[0])
-    });
-    let mut points = points.into_iter();
-    let mut out = Vec::new();
-    for (name, _) in &runs {
-        let margins = (0..motors)
-            .map(|_| points.by_ref().take(frequencies.len()).collect::<Result<Vec<_>, _>>().map(|p| loop_margins(&p)))
-            .collect::<Result<Vec<_>, _>>()?;
-        out.push((name.clone(), margins));
-    }
-    Ok(out)
+    let configs: Vec<Config> = runs.iter().map(|(_, c)| c.clone()).collect();
+    let responses = velocity_loop_responses(entry, &configs, &Progress::default())?;
+    Ok(runs
+        .into_iter()
+        .zip(responses)
+        .map(|((name, _), motors)| (name, motors.iter().map(|points| loop_margins(points)).collect()))
+        .collect())
 }
 
 /// The same cycle run twice, once with an effect on and once with it off (`compare_effect`), for overlaying the two.
@@ -4165,6 +4271,54 @@ pub fn compare_effect(entry: &MachineEntry, cfg: &Config, effect: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The refinement finds a sharp resonance that the 60 points of the loop measurement miss. Two masses on a spring,
+    /// the motor's J1 = 1e-4 kg m², the load's J2 = 3e-4 kg m², k = 300 N m/rad, a damper c = 0.003 N m s/rad between
+    /// them. The motor's speed per torque: P(s) = (J2 s² + c s + k) / (s (J1 J2 s² + c (J1 + J2) s + k (J1 + J2))).
+    /// Anti-resonance sqrt(k / J2) = 1000 rad/s = 159.155 Hz; resonance sqrt(k (J1 + J2) / (J1 J2)) = sqrt(4e6) =
+    /// 2000 rad/s = 318.310 Hz, damping ratio c (J1 + J2) / (J1 J2) / (2 * 2000) = 40 / 4000 = 0.01. At s = j2000 the
+    /// numerator is -1200 + 300 + j6 = -900 + j6, the denominator j2000 (-0.12 + j0.0024 + 0.12) = -4.8: |P| = 900.02 /
+    /// 4.8 = 187.50 rad/s per N m, 150 times the rigid 1 / ((J1 + J2) 2000) = 1.25. The 60 points from 10 to 2000 Hz
+    /// lie 9.4 % apart, the nearest to the resonance at 303.5 and 331.9 Hz; the higher, the larger, has |P| = 44.7 by
+    /// the same formula, a quarter of the peak.
+    #[test]
+    fn refinement_finds_a_sharp_resonance_the_coarse_sweep_misses() {
+        let (j1, j2, k, c) = (1e-4, 3e-4, 300.0, 0.003);
+        let plant = |f: f64| {
+            let w = std::f64::consts::TAU * f;
+            let (nr, ni) = (k - j2 * w * w, c * w);
+            // j w (a + j b) = -w b + j w a
+            let (a, b) = (k * (j1 + j2) - j1 * j2 * w * w, c * (j1 + j2) * w);
+            let (dr, di) = (-w * b, w * a);
+            let d2 = dr * dr + di * di;
+            (f, [(nr * dr + ni * di) / d2, (ni * dr - nr * di) / d2])
+        };
+        let magnitude = |p: &(f64, [f64; 2])| p.1[0].hypot(p.1[1]);
+        let peak =
+            |points: &[(f64, [f64; 2])]| *points.iter().max_by(|a, b| magnitude(a).total_cmp(&magnitude(b))).unwrap();
+        let close = |value: f64, expected: f64, share: f64, what: &str| {
+            assert!((value / expected - 1.0).abs() < share, "{what}: {value} against {expected}")
+        };
+        close(magnitude(&plant(2000.0 / std::f64::consts::TAU)), 187.50, 1e-3, "|P| at the resonance");
+        let mut points: Vec<_> = log_spaced(10.0, 2000.0, 60).into_iter().map(plant).collect();
+        assert!(magnitude(&peak(&points)) < 0.25 * 187.5, "the coarse sweep sees the peak: {:?}", peak(&points));
+        for _ in 0..REFINE_ROUNDS {
+            let more = refinement(&points);
+            points.extend(more.into_iter().map(plant));
+            points.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+        let top = peak(&points);
+        close(top.0, 318.310, 2e-3, "resonance");
+        close(magnitude(&top), 187.50, 0.03, "peak");
+        let bottom = *points.iter().min_by(|a, b| magnitude(a).total_cmp(&magnitude(b))).unwrap();
+        close(bottom.0, 159.155, 2e-3, "anti-resonance");
+        // Only around the two: the rigid stretches (0.78 dB and no turn per step) are not split.
+        assert!(points.len() < 60 + 80, "{} points", points.len());
+        assert!(
+            points.iter().filter(|p| p.0 < 100.0 || p.0 > 700.0).count()
+                == log_spaced(10.0, 2000.0, 60).iter().filter(|f| **f < 100.0 || **f > 700.0).count()
+        );
+    }
 
     /// A lift whose corners are rounded keeps to `lowest` where the tolerance is 3 / 16 of its height above it: from
     /// pick and place at 0 up to 0.3 m and across 0.4 m, `lowest` 0.25 m, the corners rounded within 3 * 0.05 / 16 =
@@ -4449,7 +4603,7 @@ mod tests {
                 let w = std::f64::consts::TAU * f;
                 let (gain, phase) = (fc / f, -std::f64::consts::FRAC_PI_2 - w * tau);
                 let (re, im) = (gain * phase.cos(), gain * phase.sin());
-                LoopPoint { frequency: f, re, im, sensitivity: 1.0 / (1.0 + re).hypot(im) }
+                LoopPoint { frequency: f, re, im, sensitivity: 1.0 / (1.0 + re).hypot(im), plant: [0.0; 2] }
             })
             .collect();
         let m = loop_margins(&points);
@@ -4474,7 +4628,7 @@ mod tests {
                 .map(|f| {
                     let (gain, phase) = (fc / f, -std::f64::consts::FRAC_PI_2 - std::f64::consts::TAU * f * tau);
                     let (re, im) = (gain * phase.cos(), gain * phase.sin());
-                    LoopPoint { frequency: f, re, im, sensitivity: 1.0 / (1.0 + re).hypot(im) }
+                    LoopPoint { frequency: f, re, im, sensitivity: 1.0 / (1.0 + re).hypot(im), plant: [0.0; 2] }
                 })
                 .collect()
         };
@@ -4503,7 +4657,7 @@ mod tests {
             .map(|f| {
                 let (gain, phase) = l(std::f64::consts::TAU * f);
                 let (re, im) = (gain * phase.cos(), gain * phase.sin());
-                LoopPoint { frequency: f, re, im, sensitivity: 1.0 / (1.0 + re).hypot(im) }
+                LoopPoint { frequency: f, re, im, sensitivity: 1.0 / (1.0 + re).hypot(im), plant: [0.0; 2] }
             })
             .collect()
     }
