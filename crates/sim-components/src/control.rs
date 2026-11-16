@@ -260,6 +260,10 @@ pub struct Controller {
     /// acceleration, torque feedforward and friction feedforward from the machine's model (`Drive::friction_ff`).
     fieldbus_delay: usize,
     fieldbus: std::collections::VecDeque<(usize, Vec<[f64; 5]>)>,
+    /// Frames pushed so far, and the number of the one the drives hold: a late frame leaves them the old one, whose
+    /// setpoint the drive carries on from (`since_setpoint` runs on).
+    fieldbus_pushed: u64,
+    fieldbus_held: u64,
     /// Fieldbus jitter: a frame takes up to this many cycles more than the delay, drawn evenly from 0 to it per frame
     /// from its own pseudo-random stream; 0 with the jitter off.
     fieldbus_jitter: usize,
@@ -423,6 +427,8 @@ impl Controller {
             spline_c2: true,
             fieldbus_delay: 0,
             fieldbus: Default::default(),
+            fieldbus_pushed: 0,
+            fieldbus_held: u64::MAX,
             fieldbus_jitter: 0,
             jitter: Default::default(),
             tick: 0,
@@ -1879,15 +1885,21 @@ impl Controller {
             0
         };
         self.fieldbus.push_back((self.fieldbus_delay + late, setpoints));
+        self.fieldbus_pushed += 1;
         while self.fieldbus.len() > self.fieldbus_delay + self.fieldbus_jitter + 1 {
             self.fieldbus.pop_front();
         }
         let newest = self.fieldbus.len() - 1;
         let arrived = (0..=newest).find(|&age| self.fieldbus[newest - age].0 <= age).map_or(0, |age| newest - age);
+        let number = self.fieldbus_pushed - (self.fieldbus.len() - arrived) as u64;
+        let fresh = number != self.fieldbus_held;
+        self.fieldbus_held = number;
         for (drive, &[pos, vel, acc, ff, friction]) in self.drives.iter_mut().zip(&self.fieldbus[arrived].1) {
             (drive.pos_set, drive.vel_set, drive.acc_set, drive.torque_ff) = (pos, vel, acc, ff);
             drive.friction_ff = friction;
-            drive.since_setpoint = 0.0;
+            if fresh {
+                drive.since_setpoint = 0.0;
+            }
         }
     }
 
