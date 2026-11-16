@@ -49,17 +49,23 @@ jobs:
           case "${{ matrix.target }}" in
             config) cp machines/*.toml "$corpus"; for f in crates/*/*.toml; do [ "$(basename "$f")" = Cargo.toml ] || cp "$f" "$corpus/$(basename "$(dirname "$f")")-$(basename "$f")"; done ;;
             machine_file) cp machines/*.toml "$corpus" ;;
-            trace_import) cp crates/sim-components/tests/fixtures/* datasets/*/map.toml "$corpus"; head -n 200 datasets/example-synthetic-belt-axis/trace.csv > "$corpus/dataset.csv" ;;
+            trace_import) cp crates/sim-components/tests/fixtures/* "$corpus"; for f in datasets/*/map.toml; do cp "$f" "$corpus/$(basename "$(dirname "$f")")-map.toml"; done; head -n 200 datasets/example-synthetic-belt-axis/trace.csv > "$corpus/dataset.csv" ;;
             trace_run) cp fuzz/seeds/trace_run/* "$corpus" ;;
             program) cp fuzz/seeds/program/* "$corpus" ;;
             urdf) cp crates/machine-joint-kit/urdf/*.urdf "$corpus" ;;
             tables) cp fuzz/seeds/cam/* fuzz/seeds/trajectory/* "$corpus" ;;
           esac
 
+      # --target: the cargo-fuzz binary install-action fetches is built for musl, and cargo-fuzz defaults to the triple
+      # it was built for; musl links libc statically, which the address sanitizer refuses (and has no std installed).
+      # detect_leaks=0: sim_machines::load_text/load_file leak each loaded entry by design (&'static MachineEntry); in
+      # ASAN_OPTIONS, since libFuzzer's -detect_leaks=0 leaves the sanitizer's own check at exit on.
       - name: Fuzz
         working-directory: fuzz
+        env:
+          ASAN_OPTIONS: detect_leaks=0
         run: >
-          cargo +nightly-2026-11-01 fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} --
+          cargo +nightly-2026-11-01 fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} corpus/${{ matrix.target }} --
           -max_total_time=${{ github.event.inputs.seconds || '240' }} -timeout=20 -rss_limit_mb=4096 -max_len=65536
 
       - if: failure()
