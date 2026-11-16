@@ -61,7 +61,8 @@ fn per_duty(runs: &[(f64, CycleLoad, Vec<Verdict>)], k: usize, f: &dyn Fn(&Motor
 /// The verdicts of a duty mix, (weight, cycle, verdicts) per duty: per check and motor the worst duty's (failing before
 /// passing, then the highest utilisation), but the heat over the mix, as the duties take turns: "motor-thermal" the
 /// winding rise as the time-weighted mean of the duties' (the rise follows the copper loss, the mean square current),
-/// "drive-current" the time-weighted RMS of the duties' RMS currents (`mix_rms`).
+/// "drive-current" the time-weighted RMS of the duties' RMS currents (`mix_rms`), and "motor-s1" the RMS torque of the
+/// mix against the S1 limit at the mix's mean speed.
 // shortcut: the mix is taken to alternate faster than the winding's and the drive's thermal time constants, so that their
 // heat is that of the mean; a mix that runs one duty for an hour and then another needs the worst duty's instead.
 pub fn mix_verdicts(runs: &[(f64, CycleLoad, Vec<Verdict>)]) -> Vec<Verdict> {
@@ -83,6 +84,19 @@ pub fn mix_verdicts(runs: &[(f64, CycleLoad, Vec<Verdict>)]) -> Vec<Verdict> {
         o.value = match o.check {
             "motor-thermal" => mix_mean(&per_duty(runs, k, &|m| m.winding_rise)),
             "drive-current" => mix_rms(&per_duty(runs, k, &|m| m.rms_current)),
+            "motor-s1" => {
+                // The S1 limit is a line in the mean speed (`analysis::s1_torque`), so at the mix's mean speed it is the
+                // time-weighted mean of the duties' limits.
+                let limits: Vec<(f64, f64, f64)> = runs
+                    .iter()
+                    .filter_map(|(w, load, verdicts)| {
+                        let v = verdicts.iter().find(|v| v.check == "motor-s1" && v.motor == Some(k))?;
+                        Some((*w, v.limit, load.duration))
+                    })
+                    .collect();
+                o.limit = mix_mean(&limits);
+                mix_rms(&per_duty(runs, k, &|m| m.rms_torque))
+            }
             _ => continue,
         };
         o.ok = o.value <= o.limit;
@@ -700,6 +714,24 @@ mod tests {
         assert_eq!(get("motor-peak").value, 0.9);
         assert!((get("motor-thermal").value - 22.0).abs() < 1e-12 && get("motor-thermal").ok);
         assert!((get("drive-current").value - (44.0f64 / 5.0).sqrt()).abs() < 1e-12 && get("drive-current").ok);
+    }
+
+    /// The S1 check over a mix: duty A (weight 3, 1 s) 2 N m RMS against a limit of 4.5 N m at its mean speed, duty B
+    /// (weight 1, 2 s) 4 N m against 3.5 N m. B alone fails; the mix has sqrt(44 / 5) = 2.966 N m RMS against the limit at
+    /// the mix's mean speed, the time-weighted mean (3 * 4.5 * 1 + 1 * 3.5 * 2) / 5 = 4.1 N m, and passes.
+    #[test]
+    fn a_duty_mix_is_judged_on_s1_by_its_rms_torque_at_its_mean_speed() {
+        let load = |duration: f64, torque: f64| CycleLoad {
+            duration,
+            motors: vec![MotorLoad { rms_torque: torque, ..MotorLoad::default() }],
+            ..test_load()
+        };
+        let verdict = |value: f64, limit: f64| {
+            vec![Verdict { check: "motor-s1", motor: Some(0), value, limit, ok: value <= limit }]
+        };
+        let runs = vec![(3.0, load(1.0, 2.0), verdict(2.0, 4.5)), (1.0, load(2.0, 4.0), verdict(4.0, 3.5))];
+        let s1 = &mix_verdicts(&runs)[0];
+        assert!((s1.value - (44.0f64 / 5.0).sqrt()).abs() < 1e-12 && (s1.limit - 4.1).abs() < 1e-12 && s1.ok, "{s1:?}");
     }
 
     /// The classic optimum: J_L = 0.0025 kg m^2 at the output, J_m = 0.3e-4 kg m^2: sqrt(83.33) = 9.129.

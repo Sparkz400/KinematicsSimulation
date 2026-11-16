@@ -406,3 +406,13 @@ fn two_payload_steps_in_one_trace_are_found_with_when() {
     let steps: Vec<&str> = fit.advice().iter().filter(|(key, _)| *key == "fit-payload-step").map(|_| "step").collect();
     assert_eq!(steps.len(), 2);
 }
+
+/// The indexing machines' reflected inertia varies 5 to 7 times over the cam's turn, but 35 % and 60 % of the range both
+/// fell in a dwell, where it agrees: `per_axis_fit` probes nine poses (10 % to 90 %) and refuses them.
+#[test]
+fn a_cam_whose_inertia_varies_is_not_fitted_per_axis() {
+    for name in ["geneva-drive", "cam-indexer"] {
+        let entry = sim_machines::find(name).unwrap();
+        assert!(!per_axis_fit((entry.build)(&entry.config()).unwrap().as_ref()), "{name}");
+    }
+}

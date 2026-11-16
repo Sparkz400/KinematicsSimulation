@@ -40,8 +40,8 @@ pub fn linear_transformation(machine: &dyn sim_core::Machine) -> bool {
 }
 
 /// Whether the fit per axis (`identify::fit_rigid`) applies: a linear transformation, and a rigid model whose torques
-/// per unit of each axis's acceleration are the same at 35 % and at 60 % of every range (not symmetric about the middle,
-/// where a SCARA's inertia, even in its elbow angle, would agree), to 1e-6 of the largest. A
+/// per unit of each axis's acceleration are the same at 10 %, 20 % ... 90 % of every range (a SCARA's inertia, even in its
+/// elbow angle, agrees at poses symmetric about the middle; a cam's dwells hold two probes alike), to 1e-6 of the largest. A
 /// SCARA's tool pose is its joints, linear, but the inertia an arm turns changes with the pose.
 pub fn per_axis_fit(machine: &dyn sim_core::Machine) -> bool {
     let (axes, motors) = (machine.axes(), machine.motors().len());
@@ -53,10 +53,15 @@ pub fn per_axis_fit(machine: &dyn sim_core::Machine) -> bool {
         machine.feedforward_torque(pose, &acc, &mut b);
         b.iter().zip(&a).map(|(b, a)| b - a).collect::<Vec<f64>>()
     };
+    // Nine poses across the range, 10 % to 90 %: two of them can both fall in a dwell of a cam (the Geneva drive's and the
+    // indexer's reflected inertia varies 5 to 7 times, yet agreed at 35 % and 60 %).
     let same = |axis: usize| {
-        let (low, high) = (inertia(&at(0.35), axis), inertia(&at(0.6), axis));
+        let low = inertia(&at(0.1), axis);
         let largest = low.iter().fold(0.0, |m: f64, v| m.max(v.abs()));
-        low.iter().zip(&high).all(|(a, b)| (a - b).abs() <= 1e-6 * largest)
+        (2..=9).all(|k| {
+            let high = inertia(&at(k as f64 / 10.0), axis);
+            low.iter().zip(&high).all(|(a, b)| (a - b).abs() <= 1e-6 * largest)
+        })
     };
     linear_transformation(machine) && (0..axes.len()).all(same)
 }
