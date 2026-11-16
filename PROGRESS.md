@@ -4358,3 +4358,18 @@ Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries a
   the motors held; machine files that follow their crates' friction feedforward.
 - Last full run in this period: 1533 of 1538 tests passed at 54a2fca, before wave 3; the final count is a placeholder
   in docs/validation.md.
+
+## Positioning accuracy along ISO 230-2 and ISO 9283 (16 November)
+
+- `sim_components::accuracy::study`: one simulation from the start pose; per tool axis targets over the middle 80 % of
+  the stroke, ISO 230-2's linear cycle with a 5 % overrun, a rest at each target and the real tool pose averaged over
+  its last tenth. ISO 230-2 per axis, ISO 9283 at the tool. `sim-cli accuracy`, `ks.accuracy`.
+- `effects.thermal_growth` and `effects.lead_error` are optional keys (`RATINGS_BEYOND_DEFAULT`), applied as a map from
+  the encoder's position to the real one on the measured pose; no default config changed, so no machine's numbers move.
+- Default configs, 3 targets and 2 approaches: single axis B 52 µm (17.4 µm of it the gearbox backlash), screw axis B
+  2.1 µm, T-gantry x A 53 µm and z 51 µm low under its weight, D3 E up to 0.57 mm along y; repeatability there is the
+  reversal alone (sensor noise off).
+- Tests: four hand calculations in `accuracy` (ISO 230-2, ISO 9283, a screw's growth, a pitch table) and five in
+  `sim-machines/tests/accuracy.rs` (backlash 18.4 against 17.4 µm, a vertical screw's sag 4.587 against 4.589 µm,
+  growth and table in a run, a belt with a heated part, the four machines with verdicts). The Python test
+  `test_accuracy_matches_the_cli` is written but was not run here (no built module).

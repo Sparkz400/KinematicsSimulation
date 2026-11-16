@@ -1281,7 +1281,7 @@ pub struct Verdict {
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
 /// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
 /// own keys (`drive::Motor`: a stepper's and an induction motor's).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 54] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 62] = [
     // What `stop::study` judges the worst stop against.
     "ratings.max_stopping_distance_m",
     // The gripper's time and hold (`gripper::Gripper`), and the hold's safety factor.
@@ -1339,6 +1339,15 @@ pub const RATINGS_BEYOND_DEFAULT: [&str; 54] = [
     "drive.induction_control",
     "drive.vf_boost_v",
     "drive.vf_slip_compensation",
+    // The positioning accuracy test (`accuracy::study`): its two effects, the axes they act on, and its ratings.
+    "effects.thermal_growth",
+    "effects.lead_error",
+    "accuracy",
+    "accuracy.axes",
+    "accuracy.screw_expansion_per_k",
+    "accuracy.belt_expansion_per_k",
+    "ratings.max_positioning_error_m",
+    "ratings.max_repeatability_m",
 ];
 
 fn at_most(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -> Verdict {

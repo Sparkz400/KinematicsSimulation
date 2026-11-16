@@ -1440,6 +1440,21 @@ Bewertung des Stopps: stop-dc-link: 224.0 / 257.6 ok
 - Ein einzelner Stopp: `sim-cli run t-gantry --cycle --stop-at 5.076 --stop-category 1` schreibt alle Signale um ihn herum. Aus Python hält `ks.Sim(config).stop(1)` eine schrittweise Simulation an, `enable()` schaltet sie wieder ein; der FMU-Eingang `command.stop_category` sagt, wie `command.enable` auf false die Antriebe anhält; über OPC UA hält 0, 1 oder 2 in `command.stop_category` die Maschine an.
 - Was es nicht kennt: Kategorie 2 bremst in Fahrtrichtung, nicht entlang einer gekrümmten Bahn; keine Ruckbegrenzung im Stopp; eine Verzögerung für alle Bremsen; noch nichts ist mit einem gemessenen Stopp verglichen (siehe [Validierung](../validation.md#stops-and-brake-delays)).
 
+## Wie genau und wiederholbar ist eine Achse?
+
+Die Maschine fährt je Achse eine Reihe von Zielen an, wie bei einer Messung mit dem Laserinterferometer, und man sieht, wo das Werkzeug an jedem wirklich steht:
+
+```text
+$ sim-cli accuracy t-gantry --points 3 --repeats 2
+```
+
+- Der Ablauf (`sim_components::accuracy::study`): je Achse `--points` Ziele (5) gleichmäßig über die mittleren 80 % ihres Hubs, die anderen Achsen in der Startlage; der lineare Zyklus der ISO 230-2 `--repeats`-mal (5): aufwärts durch alle Ziele, jedes von unten angefahren, dann abwärts, jedes von oben, mit einem Überlauf von 5 % des Hubs vor dem ersten Ziel jedes Durchgangs. An jedem Ziel ruht die Maschine `--dwell` Sekunden (0,3); gemessen wird die wirkliche Lage des Werkzeugs, gemittelt über das letzte Zehntel davon. Nicht erreichbare Ziele fallen weg; der ganze Test läuft in einer Simulation, die Teile erwärmen sich also dabei.
+- Je Ziel die mittlere Abweichung (wirklich minus Ziel) und ihre Standardabweichung von unten (`up`) und von oben (`down`) und ihre Differenz, die Umkehrspanne. Je Achse die Kennwerte der ISO 230-2: B größte Umkehrspanne, R beidseitige Wiederholpräzision, E systematische Abweichung, M Spanne der mittleren beidseitigen Abweichung, A Positionsgenauigkeit. Am Werkzeug, über die Achsen in Metern, die der ISO 9283: AP Posegenauigkeit, RP Pose-Wiederholgenauigkeit, vAP Abstand der Schwerpunkte beider Anfahrrichtungen.
+- Was das Werkzeug versetzt: alles, was die Simulation hat: Spiel, Verdrehung des Getriebes und Dehnung des Riemens unter der Last in Ruhe, Nachgiebigkeit von Führung und Gestell, der Schritt des Gebers, Sensorrauschen (`effects.sensor_noise`, in den mitgelieferten Konfigurationen aus), die Reibung dort, wo die Achse zur Ruhe kommt.
+- Zwei weitere Effekte, beide aus, solange eine Konfigurationsdatei sie nicht unter `[effects]` einschaltet: **`thermal_growth`**, die Wärmedehnung von Spindel oder Riemen, und **`lead_error`**, eine Steigungsfehlertabelle. Sie wirken auf die Achsen, die `[accuracy]` nennt (`axes = [{ axis = "x", drive = "screw", fixed_end = 0.0, rise_k = 4.0, heated_part = "guide_x", lead_error = [[0.0, 0.0], [0.8, 16.0e-6]] }]`, die Ausdehnungskoeffizienten `screw_expansion_per_k` und `belt_expansion_per_k`, beide 11,5e-6 / K, der des Riemens eine Schätzung); ein Beispiel steht im englischen [Benutzerhandbuch](../user-guide.md#how-accurate-and-repeatable-is-an-axis). Mit `effects.load_encoder` wirkt keiner von beiden: der Maßstab misst den Schlitten selbst.
+- Die Bewertungen: `positioning-accuracy` vergleicht das größte A der Achsen in Metern mit `ratings.max_positioning_error_m`, `positioning-repeatability` ihr größtes R mit `ratings.max_repeatability_m`; ohne die Grenze keine Bewertung. Aus Python: `ks.accuracy(config, points=5, repeats=5, dwell=0.3)`.
+- Was sie nicht weiß: Dehnung und Steigungsfehler sind eine Abbildung von der Lage des Gebers auf die wirkliche, angewandt auf die Lage des Werkzeugs in Ruhe; Signale und Dynamik des Laufs tragen sie nicht. Die Dehnung des Gestells, ein Temperaturgefälle längs der Spindel und die Erwärmung der Spindel durch ihre Mutter sind nicht modelliert.
+
 ## Programme: G-Code und Roboterprogramme
 
 `--path DATEI` (und das Bahnfeld der App) liest außer einer Bahndatei auch ein Programm, nach der Endung der Datei. Seine Bewegungen werden zu den Geraden und Kreisbögen einer Bahn, deren Zeitverlauf dieselben Planer festlegen.

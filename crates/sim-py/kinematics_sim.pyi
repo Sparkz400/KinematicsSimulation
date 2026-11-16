@@ -218,6 +218,11 @@ def margins(config: Config, *, bands: bool = False) -> dict[str, Any]:
     """Per run and motor the velocity loop's margins: run, motor, crossover_hz, phase_margin_deg, gain_margin_db,
     peak_sensitivity, peak_frequency_hz, ok."""
 
+def accuracy(config: Config, *, points: int = 5, repeats: int = 5, dwell: float = 0.3) -> dict[str, Any]:
+    """Static positioning accuracy along ISO 230-2 and ISO 9283: per axis and target axis, target, mean_up, mean_down,
+    std_up, std_down; "summary" per axis (reversal, repeatability, systematic, mean_range, accuracy); tool_accuracy,
+    tool_repeatability, tool_direction_variation; "verdicts" (check, value, limit, ok)."""
+
 def modes(config: Config, *, axis_index: int = 0, points: int = 21) -> dict[str, FloatArray]:
     """The modes over one axis's stroke: position, mode<i>_hz, mode<i>_damping (NaN where a place lacks one)."""
 

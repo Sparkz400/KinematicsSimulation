@@ -8,6 +8,7 @@ pub static I18N: &[(&str, &str)] = &[
     ("de", include_str!("../i18n/import.de.ftl")),
 ];
 
+pub mod accuracy;
 pub mod analysis;
 pub mod base;
 pub mod beam;
