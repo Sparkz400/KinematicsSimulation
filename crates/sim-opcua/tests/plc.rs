@@ -1070,7 +1070,10 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
                 );
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
-            plc.until(id, "MoveAbsolute.Done", 5.0).await;
+            // 5 s, or what the move itself takes where that is longer: its distance at its speed, the ramps up and down,
+            // and 2 s for the input shaper's tail and settling (a crane's bridge: 1.7 m at 0.4 m/s, some 7 s).
+            let move_time = (target - home).abs() / speed + speed / axis.max_acc + 2.0;
+            plc.until(id, "MoveAbsolute.Done", move_time.max(5.0)).await;
             plc.simulated(0.3).await;
             let at = plc.axis_number(id, "ActualPosition").await;
             let set = plc.numbers(&setpoints).await;
