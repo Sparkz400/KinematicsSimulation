@@ -21,6 +21,22 @@ fn close(a: f64, b: f64, tolerance: f64, what: &str) {
     assert!((a - b).abs() <= tolerance * b.abs().max(1e-12), "{what}: {a} against {b} by hand");
 }
 
+/// At (-0.15, -0.0866, -0.9) arm 2's half-angle equation has c = a, where the root (-b - sqrt d) / (c - a) divided by
+/// zero and gave 0 rad (a time-optimal line through it crawled 23 s for 0.2 m): the inverse there round trips, and a
+/// hair either side the angles are within 1e-6 rad of it.
+#[test]
+fn the_inverse_is_continuous_where_the_half_angle_form_divided_by_zero() {
+    let d = delta(&[]);
+    let p = [-0.15, -0.0866, -0.9];
+    let t = d.legs().inverse(p).unwrap();
+    let back = d.legs().forward(t).unwrap();
+    assert!((0..3).all(|a| (back[a] - p[a]).abs() < 1e-12), "{t:?}: {back:?}");
+    for step in [[1e-9, 0.0, 0.0], [-1e-9, 0.0, 0.0], [0.0, 1e-9, 0.0], [0.0, -1e-9, 0.0], [0.0, 0.0, 1e-9], [0.0, 0.0, -1e-9]] {
+        let near = d.legs().inverse([p[0] + step[0], p[1] + step[1], p[2] + step[2]]).unwrap();
+        assert!((0..3).all(|k| (near[k] - t[k]).abs() < 1e-6), "{step:?}: {near:?} against {t:?}");
+    }
+}
+
 /// Forward of inverse is the pose to 1e-12 m over a grid of the working range, and the Jacobian is the derivative of
 /// the forward kinematics, by central differences of 1e-6 rad, to 1e-7 m/rad.
 #[test]
@@ -120,7 +136,7 @@ fn the_lumped_forearm_weight_does_not_depend_on_the_inertia_share() {
 }
 
 /// With hysteresis a small vibration sees K1 + sigma = 2 K1 (sigma is K1): on the gearboxes' springs alone every
-/// frequency is sqrt(2) times the large-amplitude one (docs/model-reference.md: 49.08 Hz becomes 69.41 Hz); without
+/// frequency is sqrt(2) times the large-amplitude one (docs/model-reference.md: 49.07 Hz becomes 69.39 Hz); without
 /// `gearbox_lost_motion` the two lists are the same.
 #[test]
 fn the_small_amplitude_modes_stand_sqrt_two_above_the_large_ones_with_hysteresis() {
@@ -139,19 +155,29 @@ fn the_small_amplitude_modes_stand_sqrt_two_above_the_large_ones_with_hysteresis
     for (l, s) in d.modes(&pose).iter().zip(&d.modes_small_amplitude(&pose)) {
         close(s.hz, l.hz, 1e-12, "mode without hysteresis");
     }
+    // As shipped (hysteresis 1.454e-4 rad, lost motion on), the gearboxes alone, at the start pose: the lists of
+    // docs/model-reference.md.
+    let d = delta(&["effects.link_elasticity = false"]);
+    let hz = |modes: Vec<sim_core::Mode>| modes.iter().map(|m| m.hz).collect::<Vec<_>>();
+    let start = [0.1525, 0.0, -0.75];
+    let (large, small) = (hz(d.modes(&start)), hz(d.modes_small_amplitude(&start)));
+    for (got, want) in large.iter().chain(&small).zip([49.065, 51.478, 84.021, 69.389, 72.801, 118.824]) {
+        assert!((got - want).abs() < 1e-3, "{large:?} Hz, small amplitude {small:?} Hz");
+    }
 }
 
 /// Static hold at the edge, x = 0.6 m: by the Jacobian's transpose with the Jacobian from central differences of the
 /// forward kinematics (not the machine's own), tau_k = -g m_LG cos t_k + m_nt g dz/dt_k, at each gearbox. The arm
-/// pointing at the edge carries most: -22.2 N m against -1.35 N m on the other two (by hand with the script of the
-/// research note).
+/// pointing at the edge carries most: -22.887 N m against -1.129 N m on the other two (the forearms' weight split a half
+/// to each end; the earlier -22.2 / -1.35 had it by the inertia share).
 #[test]
 fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose() {
     let d = delta(&["effects.torque_ripple = false", "effects.forearm_inertia = false"]);
     let p = [0.6, 0.0, -0.775];
     let t = d.legs().inverse(p).unwrap();
-    // The weight's split: half the forearms at the elbow, half at the plate (m_nt of the inertia plus 3 (1/2 - 1/3) 0.5).
-    let m_lg = 0.9 * 0.2 + 0.4 * (0.3 + 0.5 * 0.5);
+    // The weight's split: half the forearms at the elbow, half at the plate, whatever the inertia share (0.6667):
+    // m_nt = 1.2 + 3 + 3 (1/2) 0.5 = 4.95 kg, m_LG = 0.9 * 0.2 + 0.4 (0.3 + 0.5 * 0.5) = 0.4 kg m.
+    let (m_nt, m_lg) = (1.2 + 3.0 + 3.0 * 0.5 * 0.5, 0.9 * 0.2 + 0.4 * (0.3 + 0.5 * 0.5));
     let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
     d.equilibrium(&p, &mut state, &mut torque);
     let mut by_hand = [0.0; 3];
@@ -160,12 +186,12 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
         up[k] += 1e-6;
         down[k] -= 1e-6;
         let dz = (d.legs().forward(up).unwrap()[2] - d.legs().forward(down).unwrap()[2]) / 2e-6;
-        by_hand[k] = -G * m_lg * t[k].cos() + (d.m_nt() + 0.25) * G * dz;
+        by_hand[k] = -G * m_lg * t[k].cos() + m_nt * G * dz;
         close(torque[k] * 20.0, by_hand[k], 1e-6, "gearbox torque");
     }
     println!("edge: {by_hand:?} N m");
     assert!(
-        (by_hand[0] + 22.2).abs() < 0.1 && (by_hand[1] + 1.35).abs() < 0.05 && (by_hand[1] - by_hand[2]).abs() < 1e-6
+        (by_hand[0] + 22.887).abs() < 1e-3 && (by_hand[1] + 1.129).abs() < 1e-3 && (by_hand[1] - by_hand[2]).abs() < 1e-6
     );
     // The rigid model held there stays put; so does the elastic one (the standard suite checks the middle).
     for elastic in [false, true] {
@@ -1107,4 +1133,26 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
     let ((ff, with), (_, without)) = (cruise(true), cruise(false));
     assert!(with.abs() < 0.03 * ff, "the integrators carry {with} N m of {ff}");
     assert!((without - with - ff).abs() < 0.03 * ff, "without: {without} N m, with {with}, of {ff}");
+}
+
+/// On a compliant base (`effects.base_compliance`) the machine keeps its collision capsules (9 of them, carried
+/// along with the base) and its resonance is the lower of its own and the base's: the lowest of its modes.
+#[test]
+fn on_a_compliant_base_the_capsules_stay_and_the_resonance_is_the_lower() {
+    let pose = [0.1525, 0.0, -0.75];
+    let build = |on: bool| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text(&format!("effects.base_compliance = {on}")).unwrap();
+        (ENTRY.build)(&cfg).unwrap()
+    };
+    let (plain, based) = (build(false), build(true));
+    let capsules = |m: &dyn sim_core::Machine| {
+        let (mut state, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
+        m.equilibrium(&pose, &mut state, &mut torque);
+        m.collision_capsules(&state).len()
+    };
+    assert_eq!((capsules(plain.as_ref()), capsules(based.as_ref())), (9, 9));
+    let (own, on_base) = (plain.resonance_hz(&pose).unwrap(), based.resonance_hz(&pose).unwrap());
+    let lowest = based.modes(&pose)[0].hz;
+    assert!(on_base <= own && (on_base - lowest).abs() < 1e-9 * lowest, "{own} Hz alone, {on_base} on the base, lowest mode {lowest}");
 }

@@ -98,7 +98,9 @@ def lagrangian(rods):
     share = 1 / sp.Integer(6) if rods else mass["forearm_elbow_share"]
     plate_mass = m_plate + (0 if rods else 3 * (1 - share) * m_fb)
     T += plate_mass * pd.dot(pd) / 2
-    V += plate_mass * G * p[2]
+    # The weight, unlike the inertia, splits each forearm a half to the elbow and a half to the plate (a rod's mass is at
+    # its middle), whatever the inertia share.
+    V += (m_plate + (0 if rods else 3 * m_fb / 2)) * G * p[2]
     for i, (elbow, plate, axis) in enumerate(legs):
         # The upper arm about its joint (its centre of mass upper_arm_cg_m out), the rotor through the gearbox.
         T += (mass["upper_arm_inertia_kgm2"] + j_rotor * ratio**2) * thd[i] ** 2 / 2
@@ -123,7 +125,7 @@ def lagrangian(rods):
             # Codourey/Olsson: the elbow block and the share s of the pair at the elbow, the rest at the platform.
             m_e = mass["elbow_kg"] + share * m_fb
             T += m_e * ve.dot(ve) / 2
-            V += m_e * G * elbow[2]
+            V += (mass["elbow_kg"] + m_fb / 2) * G * elbow[2]
     return T, V
 
 

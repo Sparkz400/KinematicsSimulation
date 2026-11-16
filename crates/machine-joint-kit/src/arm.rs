@@ -93,7 +93,8 @@ pub struct Arm {
     /// direction other than the plane its joint turns it in. Else the one-way bend in that plane as it was (`flex_loads`).
     whole: bool,
     /// With rx, ry or rz among the tool axes: the smallest of their velocity and of their acceleration limits, which the
-    /// flange's angular speed and acceleration are held to (`tool.angular_speed`, `tool.angular_acceleration`).
+    /// planned flange's angular speed and acceleration are held to (`tool.angular_speed`, `tool.angular_acceleration`:
+    /// shown as measured, kept by the planner on the rigid model, see `rating_checks`).
     angular_limits: Option<[f64; 2]>,
 }
 
@@ -1096,11 +1097,15 @@ impl Mechanism for Arm {
                 _ => {}
             }
         }
+        // Limits of the plan, as the rx, ry and rz limits they stand for: the planner keeps them (`rigid_checks` reads
+        // `plan.<signal>` as the rigid model's <signal>), the verdicts find no `plan.` signal and leave them out. Judged
+        // on the simulated pass they would count the gears' ringing: 22 rad/s2 on the arm's tool cycle, whose plan
+        // holds the orientation (0 rad/s2), 6.4 with the joints rigid (the servo's steps).
         if let Some([speed, acceleration]) = self.angular_limits {
             let check = |check, signal: &str, limit| RatingCheck { check, signal: signal.into(), motor: None, limit, life: false };
             out.extend([
-                check("tool-angular-speed", "tool.angular_speed", speed),
-                check("tool-angular-acceleration", "tool.angular_acceleration", acceleration),
+                check("tool-angular-speed", "plan.tool.angular_speed", speed),
+                check("tool-angular-acceleration", "plan.tool.angular_acceleration", acceleration),
             ]);
         }
         out

@@ -29,7 +29,7 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 | --- | --- | --- | --- |
 | The mesh-friction bristle behind a screw, rack or drum is capped at a quarter of the integrator's rate bound | `transmission.rs` (`Converter::apply`) | A numerical cap, softer than the physical bristle; chosen so RK4 stays stable, never tuned by a run | Run cable robot and screw axis, check the energy budget, then either keep the cap with its measured error or integrate the bristle implicitly |
 | The error band of "fitted minus config" is scaled by the ratio of residual norms | `identify.rs` (`unshared`) | The implementer's own estimate of the difference's error; not derived, not checked for coverage | Monte Carlo on a machine with known truth: (fitted − config)/error must have a standard deviation near 1 |
-| Tolerances of new tests (settled rise 0.5 K, seven-joint inverse 1e-4) | `machine-mover-track`, `machine-joint-kit` tests | Picked before any run | Set from the first run |
+| Tolerance of a new test (settled rise 0.5 K) | `machine-mover-track` tests | Picked before any run | Set from the first run |
 
 ## 3. Behaviour assumed without the manual
 
@@ -68,11 +68,8 @@ result is in, treat **every number below as unverified**.
   (`path.rs`, `ramp_share`): argued, not run.
 - **Mesh friction with the bristle in joint units**: the cable robots blew up numerically and the screw
   axis lost 1.6 % of its energy budget in a trial at full stiffness; behaviour with the cap is unknown.
-- **All hand numbers in the new regression tests** (guide loads 11.414 N and 2.762 N, momentum
-  (1.875, 0.856, 5.693) N s, reactance limits 3.474 / 2.709 / 1.956 N m, steady friction totals,
+- **All hand numbers in the new regression tests** (reactance limits 3.474 / 2.709 / 1.956 N m, steady friction totals,
   the full circle's length, and so on).
-- **The 2-axis delta's reference file** `crates/machine-delta-d2/reference/inverse_dynamics.csv` is
-  stale: its generator was changed but could not be run (no sympy).
 - **The video tool** `crates/sim-app/tools/frames_to_mp4.py` (holds frames for dropped numbers).
 - **The Python catalogue checks** after the linear-motor back-EMF column was converted.
 
@@ -81,6 +78,8 @@ result is in, treat **every number below as unverified**.
 | What the model leaves out | Where | Size of the error | Why it was left | Closing it |
 | --- | --- | --- | --- | --- |
 | Feed-forward of the T-gantry has the belt's mass terms but not its speed terms | `machine-t-gantry/src/lib.rs` (`feedforward_torque`) | small (belt mass 0.1 kg/m) | The method takes no velocity | Use the moving feed-forward where it exists |
+| The flange's angular speed and acceleration limits (rx, ry, rz) bound the time-optimal plan only, not the simulated pass, and not a cycle timed by `axis_limits` | `machine-joint-kit/src/arm.rs` (`rating_checks`, `plan.` signals) | The plan keeps them (arm 0.990 / 0.800, palletiser 0.990 / 0.800 of the limits); measured, the gears' ringing alone reached 22 rad/s2 against 8 on a plan without turn | The simulated value counts the servo's and the gears' vibration, which a planning limit does not mean | Judge the check on the setpoint's rigid motion in the analysis (`analysis.rs`), or bound `axis_limits` moves by it too |
+| The spatial deltas' (D3, D4) friction feed-forward leaves the gearbox's loss on the weight to the integrators; the planar delta's carries it | `sim-netlist/src/spatial.rs` (`steady_friction`) | about 4 % of the weight torque at the arm in a vertical move | The D4's test states it as a design choice | Decide one rule for both and move the hand numbers (D4: 0.114165 -> 0.138255 N m) |
 | Pre-existing estimates the audit did not judge: tooth-jump factor, brake deflection and slip times, the efficiency fade constant 0.5 W, placeholder drive currents in shipped configs | `mech.rs`, shipped `default.toml` files | unknown | Outside the audit's reach without measurements | Measure, or mark each in its config comment |
 
 ## 6. Documents that do not match the program

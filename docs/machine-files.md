@@ -923,7 +923,7 @@ feedforwards, every signal, the parts' warmth, what the working range refuses); 
 every effect that is off by default switched on, gives the crate's signals at every 16th step of the first half second
 and the crate's motor loads and verdicts, to 1e-9 (the two sum in the same order, so they agree to the bit, encoder
 counts and all); the file passes the standard suite with the crate's loss-free configs; by hand, the arm angles at
-(0.1, -0.5) m (-asin 0.2 = -11.537 degrees and 16.474 degrees) and the holding torque at the centre (-18.358 N m at
+(0.1, -0.5) m (-asin 0.2 = -11.537 degrees and 16.474 degrees) and the holding torque at the centre (-18.368 N m at
 each gearbox); and a broken linkage is refused by key and line (a belt effect switched on and a spatial value on the
 planar linkage among them). `machines/delta-d3.toml` is the spatial delta's crate the same way, with each of its
 effects switched from its default, and its cycle gives the crate's signals and verdicts to 1e-9. The scissor lift's

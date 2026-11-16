@@ -219,8 +219,9 @@ fn the_feedforward_gives_the_asked_acceleration() {
 }
 
 /// At 3 m/s along y and no tool acceleration the carriages still accelerate (h'' = -J^-1 J_x^-1 w): the carriage part of
-/// T1 - T2 = m_c h'' + m_nt J^T p'' - Q_g changes against rest by m_c h'' = (-12.2, -17.9, -17.9) N at (0.3, 0, -1.17)
-/// (the audit's hand calculation); `rigid_tensions` without the speed misses it.
+/// T1 - T2 = m_c h'' + m_nt J^T p'' - Q_g changes against rest by m_c h'' = (-12.182, -17.920, -17.920) N at (0.3, 0,
+/// -1.17) (by hand: h'' a second difference over 0.1 ms of the heights h(p + v t) from the rods' constraint
+/// |p - c_i - h_i e_z| = L, times m_c = 1.475 kg); `rigid_tensions` without the speed misses it.
 #[test]
 fn the_rigid_tensions_have_the_speed_term_of_the_carriage_acceleration() {
     let d = delta(&[]);
@@ -228,9 +229,9 @@ fn the_rigid_tensions_have_the_speed_term_of_the_carriage_acceleration() {
     let (mut moving, mut rest) = (Vec::new(), Vec::new());
     d.rigid_tensions_moving(&p, &v, &[0.0; 3], &mut moving);
     d.rigid_tensions(&p, &[0.0; 3], &mut rest);
-    for (k, want) in [-12.2, -17.9, -17.9].into_iter().enumerate() {
+    for (k, want) in [-12.182, -17.920, -17.920].into_iter().enumerate() {
         let diff = (moving[2 * k] - moving[2 * k + 1]) - (rest[2 * k] - rest[2 * k + 1]);
-        close(diff, want, 1e-2, "m_c h'' in T1 - T2");
+        close(diff, want, 1e-4, "m_c h'' in T1 - T2");
     }
 }
 
@@ -531,10 +532,11 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
 /// On an inclined column the carriage's weight m_c g sin(alpha) also loads the rail: the plan's guide load at rest is
 /// that of `guide_loads`, the part of (lambda u - m_c g e_z) at right angles to the column, not |lambda| times the reach.
 /// At (0, 0, -1.17) with the default masses that is 11.414 N at +20 degrees and 2.762 N at -15 (the reach alone: 6.467
-/// and 0.982 N).
+/// and 0.982 N). By hand: lambda from the plate's balance sum(-lambda_i u_i) = m_nt g e_z, the rods u_i from the
+/// constraint along the inclined columns, then |f - (f . d_i) d_i| with f = lambda_i u_i - m_c g e_z: 11.41388, 2.76205 N.
 #[test]
 fn the_plans_guide_load_at_rest_holds_the_carriages_weight_on_an_inclined_column() {
-    for (deg, expected) in [(20.0, 11.414), (-15.0, 2.762)] {
+    for (deg, expected) in [(20.0, 11.41388), (-15.0, 2.76205)] {
         let m = delta(&["effects.belt_stretch = false", &format!("geometry.column_incline_deg = {deg}")]);
         let pose = [0.0, 0.0, -1.17];
         let h = m.legs.inverse(pose).unwrap();
@@ -542,7 +544,7 @@ fn the_plans_guide_load_at_rest_holds_the_carriages_weight_on_an_inclined_column
         m.rigid_guide_loads(&pose, &[0.0; 3], &mut loads);
         for k in 0..3 {
             close(loads[k][0], rest[k], 1e-9, "load at rest as guide_loads");
-            close(loads[k][0], expected, 1e-3, "load at rest by hand");
+            close(loads[k][0], expected, 1e-5, "load at rest by hand");
             close(loads[k][1], 0.0, 1e-9, "no moving part at rest");
         }
     }
@@ -550,7 +552,8 @@ fn the_plans_guide_load_at_rest_holds_the_carriages_weight_on_an_inclined_column
 
 /// The carriages move along their (inclined) columns: with p = (0.1, -0.05, -1.17), p' = (1, 0.5, 0.8) and 20 degrees
 /// the linear momentum is m_nt p' + m_c sum h'_i d_i = (1.875, 0.856, 5.693) N s (the carriages at the column radius
-/// moving straight up gave (2.325, 1.163, 5.939)).
+/// moving straight up gave (2.325, 1.163, 5.939)); by hand h' by central differences of the heights from the rods'
+/// constraint along the inclined columns: (1.87530, 0.85615, 5.69276).
 #[test]
 fn the_carriages_carry_momentum_along_their_columns() {
     let m = delta(&["effects.belt_stretch = false", "geometry.column_incline_deg = 20.0"]);
@@ -559,7 +562,7 @@ fn the_carriages_carry_momentum_along_their_columns() {
     m.equilibrium(&p, &mut state, &mut hold);
     m.set_tool_velocity(&mut state, &v);
     let f = m.frame_momentum(&state).unwrap();
-    for (k, by_hand) in [1.875, 0.856, 5.693].into_iter().enumerate() {
-        close(f.linear[k], by_hand, 1e-3, "linear momentum");
+    for (k, by_hand) in [1.87530, 0.85615, 5.69276].into_iter().enumerate() {
+        close(f.linear[k], by_hand, 1e-5, "linear momentum");
     }
 }

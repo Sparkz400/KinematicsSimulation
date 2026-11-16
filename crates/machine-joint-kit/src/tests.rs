@@ -1595,6 +1595,142 @@ fn the_flanges_angular_speed_and_acceleration_follow_from_the_joint_axes() {
     near(a, 13.1225f64.sqrt(), 1e-4, "angular acceleration");
 }
 
+/// A time-optimal line that turns the six-axis arm's flange 0.5 rad about the vertical and tilts it 0.2 rad (0.538 rad
+/// in all, the rotation vector staying in the tool range of +-0.6 rad) while it moves 0.05 m: along the plan, the flange's spin from its planned orientations, log(R(t + dt) R(t - dt)^T) / 2 dt, and
+/// its rate are what `Pose::angular_motion` gives from the joints (their rates differenced over the plan's 1 ms), and
+/// the plan keeps both within the smallest rx, ry, rz limits (1.5 rad/s, 8 rad/s^2), which bind: 1.4847 rad/s and
+/// 6.3987 rad/s^2 (the torque reserve's 0.8 of 8), the spin to 3e-7 rad/s, its rate to 0.01 rad/s^2.
+#[test]
+fn a_reorienting_time_optimal_line_keeps_the_flanges_angular_limits() {
+    use sim_components::rigid::{exp, log, matmul, transpose};
+    let mut cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    cfg.set_text("effects.joint_elasticity = false").unwrap();
+    let sim = Sim::new(&URDF_ARM, &cfg).unwrap();
+    let from = sim.control.planned_pos().to_vec();
+    let b = log(&matmul(&exp([0.0, 0.0, 0.5]), &matmul(&exp([0.2, 0.0, 0.0]), &exp([from[3], from[4], from[5]]))));
+    let text = format!("line, {}, {}, {}, {}, {}, {}", from[0], from[1] + 0.05, from[2], b[0], b[1], b[2]);
+    let points = sim.plan_path(&sim_components::path::parse(&text).unwrap(), true).unwrap();
+    let chain = arm::chain(&cfg).unwrap();
+    let fk = |q: &[f64]| chain.tip(q);
+    let pose = tool::Pose::new(&fk, cfg.f64s("kinematics.home_joints").unwrap(), vec![0, 1, 2, 3, 4, 5], 0.86, 30.0).unwrap();
+    let ratios = cfg.f64s("arm.gear_ratios").unwrap();
+    let joints: Vec<Vec<f64>> = points
+        .iter()
+        .map(|(_, p)| {
+            let mut m = vec![0.0; 6];
+            sim.machine.inverse(p, &mut m);
+            m.iter().zip(&ratios).map(|(m, r)| m / r).collect()
+        })
+        .collect();
+    let spin = |i: usize, j: usize| {
+        let (ri, rj) = (exp([points[i].1[3], points[i].1[4], points[i].1[5]]), exp([points[j].1[3], points[j].1[4], points[j].1[5]]));
+        log(&matmul(&rj, &transpose(&ri))).map(|w| w / (points[j].0 - points[i].0))
+    };
+    let (mut fastest, mut hardest, mut worst) = (0.0f64, 0.0f64, [0.0f64; 2]);
+    for k in 2..points.len() - 2 {
+        let dt = points[k + 1].0 - points[k].0;
+        let w = spin(k - 1, k + 1);
+        let (w_ahead, w_behind) = (spin(k, k + 2), spin(k - 2, k));
+        let dw: Vec<f64> = (0..3).map(|i| (w_ahead[i] - w_behind[i]) / (2.0 * dt)).collect();
+        let qd: Vec<f64> = (0..6).map(|c| (joints[k + 1][c] - joints[k - 1][c]) / (2.0 * dt)).collect();
+        let qdd: Vec<f64> = (0..6).map(|c| (joints[k + 1][c] - 2.0 * joints[k][c] + joints[k - 1][c]) / (dt * dt)).collect();
+        let (speed, acc) = pose.angular_motion(&fk, &joints[k], &qd, &qdd);
+        let (w_size, dw_size) = (w.iter().map(|v| v * v).sum::<f64>().sqrt(), dw.iter().map(|v| v * v).sum::<f64>().sqrt());
+        worst = [worst[0].max((speed - w_size).abs()), worst[1].max((acc - dw_size).abs())];
+        (fastest, hardest) = (fastest.max(w_size), hardest.max(dw_size));
+    }
+    println!("{} points: |w| {fastest:.4} of 1.5 rad/s, |dw/dt| {hardest:.4} of 8 rad/s^2, differences {worst:?}", points.len());
+    assert!(worst[0] < 1e-5 * fastest && worst[1] < 5e-3 * hardest, "{worst:?}");
+    assert!(fastest <= 1.5 * 1.001 && hardest <= 8.0 * 1.001, "{fastest} rad/s, {hardest} rad/s^2");
+    assert!(fastest > 0.9 * 1.5 || hardest > 0.9 * 8.0, "the limits bind: {fastest} rad/s, {hardest} rad/s^2");
+    // The palletiser's quarter turn across to the pallet (its cycle's third segment), time-optimal: its flange turns
+    // about the vertical alone, so the spin is rz' and its rate rz'', within 2.5 rad/s and 10 rad/s^2.
+    let mut cfg = PALLETISER.config();
+    cfg.set_text("effects.joint_elasticity = false").unwrap();
+    let sim = Sim::new(&PALLETISER, &cfg).unwrap();
+    let text = "line, 1.6, 0.5, 1.3, 1.5707963267948966";
+    let points = sim.plan_path(&sim_components::path::parse(text).unwrap(), true).unwrap();
+    let rate = |i: usize, j: usize| (points[j].1[3] - points[i].1[3]) / (points[j].0 - points[i].0);
+    let (mut fastest, mut hardest) = (0.0f64, 0.0f64);
+    for k in 2..points.len() - 2 {
+        let dt = 0.5 * (points[k + 1].0 - points[k - 1].0);
+        fastest = fastest.max(rate(k - 1, k + 1).abs());
+        hardest = hardest.max(((rate(k, k + 2) - rate(k - 2, k)) / (2.0 * dt)).abs());
+    }
+    println!("palletiser: |w| {fastest:.4} of 2.5 rad/s, |dw/dt| {hardest:.4} of 10 rad/s^2");
+    assert!(fastest <= 2.5 * 1.001 && hardest <= 10.0 * 1.001, "{fastest} rad/s, {hardest} rad/s^2");
+}
+
+/// The seven-joint arm resolves its spare joint by a walk from the last solution, settled to 1e-13, so the feedforward
+/// at a pose (its joint rates by differences of the inverse over 1e-3 of the tool's units) is the same whatever the
+/// inverse solved before: with `kinematics.redundancy = "joint_limits"` the motors' torques after four different
+/// earlier calls agree to 1e-3 (they spread by 3.7 % on motor 1 before the tight settle). The step's truncation: a
+/// quarter of it changes them by less than 1e-3 too. And the inverse converges (round trip to 1e-9) over a box of
+/// +-0.15 m and +-0.3 rad about the start.
+#[test]
+fn the_seven_joint_arms_second_difference_does_not_depend_on_the_call_before() {
+    let mut cfg = tool_config(&URDF_ARM, ARM7_TOOL_CONFIG);
+    cfg.set_text("kinematics.redundancy = \"joint_limits\"").unwrap();
+    let m = (URDF_ARM.build)(&cfg).unwrap();
+    let start = cfg.f64s("start.pose").unwrap();
+    let at = |d: [f64; 6]| -> Vec<f64> { start.iter().zip(d).map(|(s, d)| s + d).collect() };
+    let pose = at([0.05, 0.1, -0.08, 0.1, -0.2, 0.15]);
+    let (vel, acc) = ([0.4, -0.3, 0.2, 0.3, 0.2, -0.4], [3.0, 2.0, -2.5, 2.0, -1.5, 3.0]);
+    let ff = |m: &dyn Machine| {
+        let mut t = vec![0.0; 7];
+        m.feedforward_torque_moving(&pose, &vel, &acc, &mut t);
+        t
+    };
+    let mut torques = Vec::new();
+    for before in [start.clone(), at([0.15, -0.15, 0.1, -0.3, 0.3, 0.0]), at([-0.15, 0.15, -0.15, 0.3, 0.0, -0.3]), pose.clone()] {
+        let mut motors = [0.0; 7];
+        m.inverse(&before, &mut motors);
+        torques.push(ff(m.as_ref()));
+    }
+    let size = torques[0].iter().map(|t| t.abs()).fold(0.0, f64::max);
+    for t in &torques[1..] {
+        for k in 0..7 {
+            assert!((t[k] - torques[0][k]).abs() < 1e-3 * size, "motor {k}: {} against {} N m", t[k], torques[0][k]);
+        }
+    }
+    println!("motor 1 after four calls: {:?} N m", torques.iter().map(|t| t[0]).collect::<Vec<_>>());
+    // The reference with a quarter of the step: the motors' angles differenced by hand.
+    let ratios = cfg.f64s("arm.gear_ratios").unwrap();
+    let motors_at = |x: &[f64]| {
+        let mut q = vec![0.0; 7];
+        m.inverse(x, &mut q);
+        q
+    };
+    let along = |d: &[f64], s: f64| -> Vec<f64> { pose.iter().zip(d).map(|(p, d)| p + s * d).collect() };
+    let (hv, ha) = (0.25e-3 / vel.iter().map(|v| v * v).sum::<f64>().sqrt(), 0.25e-3 / acc.iter().map(|v| v * v).sum::<f64>().sqrt());
+    let (q, ahead, behind) = (motors_at(&pose), motors_at(&along(&vel, hv)), motors_at(&along(&vel, -hv)));
+    let (a_ahead, a_behind) = (motors_at(&along(&acc, ha)), motors_at(&along(&acc, -ha)));
+    let speed: Vec<f64> = (0..7).map(|k| (ahead[k] - behind[k]) / (2.0 * hv)).collect();
+    let accel: Vec<f64> = (0..7)
+        .map(|k| (ahead[k] - 2.0 * q[k] + behind[k]) / (hv * hv) + (a_ahead[k] - a_behind[k]) / (2.0 * ha))
+        .collect();
+    let mut fine = vec![0.0; 7];
+    m.rigid_motor_torque(&q, &speed, &accel, &mut fine);
+    let coarse = ff(m.as_ref());
+    for k in 0..7 {
+        assert!((coarse[k] - fine[k]).abs() < 1e-3 * size, "motor {k}: {} against {} N m with a quarter step", coarse[k], fine[k]);
+    }
+    println!("step 1e-3 against a quarter: {:?}", (0..7).map(|k| (coarse[k] - fine[k]) / size).collect::<Vec<_>>());
+    assert_eq!(ratios.len(), 7);
+    // Convergence over the box: every corner and the middles of its faces round trip.
+    for i in 0..6 {
+        for s in [-1.0, 1.0] {
+            let mut d = [0.0; 6];
+            d[i] = s * if i < 3 { 0.15 } else { 0.3 };
+            let x = at(d);
+            let (q, mut back) = (motors_at(&x), [0.0; 6]);
+            assert!(q.iter().all(|v| v.is_finite()), "{x:?} not solved");
+            m.forward(&q, &mut back);
+            assert!(back.iter().zip(&x).all(|(a, b)| (a - b).abs() < 1e-9), "{x:?} came back as {back:?}");
+        }
+    }
+}
+
 /// The guide verdicts judge that load: a set rated just below the cycle's highest guide load fails "guide-load", just
 /// above passes; and a rated life just above what the blocks give fails "guide-life".
 #[test]

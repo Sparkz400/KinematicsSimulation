@@ -198,7 +198,11 @@ impl Legs {
             if !(d >= 0.0) {
                 return None;
             }
-            *t = 2.0 * ((-b - d.sqrt()) / (c - a)).atan();
+            // a cos t + b sin t + c = 0 by the half angle u = tan(t / 2): (c - a) u^2 + 2 b u + (a + c) = 0, the root
+            // (-b - sqrt d) / (c - a) = (a + c) / (sqrt d - b). Below the base (b = 2 L_a z < 0) the second form stays
+            // finite where c = a, at which the first divided by zero (motor 2 at 0 rad at (-0.15, -0.0866, -0.9)).
+            let s = d.sqrt();
+            *t = if b <= 0.0 { 2.0 * (a + c).atan2(s - b) } else { 2.0 * ((-b - s) / (c - a)).atan() };
         }
         Some(out)
     }
@@ -1409,7 +1413,8 @@ impl Machine for Delta {
     /// The rigid model at a steady speed, θ̇ = J⁻¹ ṗ: per arm the joint's friction f(θ̇) and the platform drag's
     /// −Jᵀ F through the gearbox as `rigid_solve` takes them, (f − drag) / (i loss), plus the motor shaft's friction (with
     /// the gearbox's drag) at i θ̇. The gearbox's loss factor is the one of what it passes at rest, the weight's −Q_g
-    /// with the friction, as in `rigid_solve`; the weight itself is the rigid feedforward's. The brake is released and
+    /// with the friction, as in `rigid_solve` (of the torque going in: `linkage::steady_loss`); the weight itself is the
+    /// rigid feedforward's, and its loss is left to the integrators (unlike the linkage's). The brake is released and
     /// the stops are not touched in a move.
     fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
         let t = self.legs.inverse([pos[0], pos[1], pos[2]]).unwrap_or([f64::NAN; 3]);
@@ -1419,7 +1424,7 @@ impl Machine for Delta {
         for k in 0..3 {
             let joint = &self.joints[k];
             let at_arm = joint.friction.torque(w[k]) - drag[k];
-            let loss = joint.gearbox.loss_factor(at_arm - gravity[k], w[k]);
+            let loss = crate::linkage::steady_loss(&joint.gearbox, at_arm - gravity[k], w[k]);
             out[k] = joint.shaft.torque(joint.ratio() * w[k]) + at_arm / (joint.ratio() * loss);
         }
     }

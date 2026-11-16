@@ -1268,6 +1268,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     /// The mechanism's signals (`Mechanism::signals`) and each joint's force (`joint.<id>.force`) at the joints' motion,
     /// with the force M q'' + h that the rigid model passes to each joint (the process force left out, as the
     /// feedforward leaves it out), read for each check of `rating_checks`; NaN for a life or a signal not among them.
+    /// A check on `plan.<signal>` reads <signal>: a limit of the plan alone, which the verdicts (no such signal) leave out.
     fn rigid_checks(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut Vec<f64>) {
         let n = self.n();
         let (q, qd, qdd) = self.joint_motion(pos, vel, acc);
@@ -1277,11 +1278,12 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         self.mechanism.signals(&q, &qd, &qdd, &force, &mut values);
         let infos = self.mechanism.signal_infos();
         for check in self.mechanism.rating_checks() {
-            let joint = (0..n).find(|&k| check.signal == format!("joint.{}.force", self.joints[k].id));
+            let signal = check.signal.strip_prefix("plan.").unwrap_or(&check.signal);
+            let joint = (0..n).find(|&k| signal == format!("joint.{}.force", self.joints[k].id));
             let value = match (check.life, joint) {
                 (true, _) => f64::NAN,
                 (false, Some(k)) => force[k],
-                (false, None) => infos.iter().position(|s| s.id == check.signal).map_or(f64::NAN, |i| values[i]),
+                (false, None) => infos.iter().position(|s| s.id == signal).map_or(f64::NAN, |i| values[i]),
             };
             out.push(value);
         }

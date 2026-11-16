@@ -353,9 +353,10 @@ fn the_linkage_inverse_kinematics_at_a_pose_is_the_hand_calculation() {
 
 /// Static hold at the centre, 100 mm below the top, as the crate's test works it out: the arm angle from
 /// (e + L_a cos t)^2 + (z + L_a sin t)^2 = L_b^2 by halving, dz/dt per arm = (-L_a cos t + (e + L_a cos t) L_a sin t /
-/// (z + L_a sin t)) / 2; m_nt = 1.0 + 5 + 2 (1/3) 0.6 = 6.4 kg, m_LG = 1.2 * 0.2 + 0.4 (0.4 + 0.6667 * 0.6) =
-/// 0.560 kg m. Each gearbox holds -(g m_LG cos t) + m_nt g dz/dt = -5.490 - 12.868 = -18.358 N m at t = 1.4290 deg
-/// (negative: the arm is held up), the motor that over 20: -0.9179 N m.
+/// (z + L_a sin t)) / 2. The weight splits each forearm pair (0.6 kg) a half to the elbow and a half to the plate,
+/// whatever the inertia share (0.6667): m_nt = 1.0 + 5 + 2 (1/2) 0.6 = 6.6 kg, m_LG = 1.2 * 0.2 + 0.4 (0.4 + 0.5 * 0.6) =
+/// 0.520 kg m. Each gearbox holds -(g m_LG cos t) + m_nt g dz/dt = -5.098 - 13.270 = -18.368 N m at t = 1.4290 deg
+/// (negative: the arm is held up), the motor that over 20: -0.91840 N m.
 #[test]
 fn the_linkage_holds_the_plate_at_the_centre_with_the_hand_calculated_torque() {
     let mut cfg = file().config();
@@ -370,15 +371,86 @@ fn the_linkage_holds_the_plate_at_the_centre_with_the_hand_calculated_torque() {
     }
     let t = 0.5 * (lo + hi);
     let dz = (-la * t.cos() + (e + la * t.cos()) * la * t.sin() / (z + la * t.sin())) / 2.0;
-    let (m_nt, m_lg) = (1.0 + 5.0 + 2.0 * (1.0 - 0.6667) * 0.6, 1.2 * 0.2 + 0.4 * (0.4 + 0.6667 * 0.6));
+    let (m_nt, m_lg) = (1.0 + 5.0 + 2.0 * 0.5 * 0.6, 1.2 * 0.2 + 0.4 * (0.4 + 0.5 * 0.6));
     let by_hand = -G * m_lg * t.cos() + m_nt * G * dz;
-    assert!((t.to_degrees() - 1.4290).abs() < 1e-3 && (by_hand + 18.358).abs() < 0.002, "{by_hand} N m");
+    assert!((t.to_degrees() - 1.4290).abs() < 1e-3 && (by_hand + 18.368).abs() < 0.002, "{by_hand} N m");
     let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
     machine.equilibrium(&[0.0, z], &mut state, &mut torque);
     for k in 0..2 {
         assert!((state[k] - t).abs() < 1e-9, "arm angle {}", state[k]);
         assert!((torque[k] - by_hand / 20.0).abs() < 1e-6, "motor torque {} against {}", torque[k], by_hand / 20.0);
     }
+}
+
+/// The friction feedforward (`Machine::steady_friction`) carries the gearbox's loss on the weight too: on the rigid
+/// linkage with its losses, moving the plate at a steady 0.05 m/s up and down and sideways, the torques that leave the
+/// plate without acceleration (a Newton solve of the rigid model: the plate's acceleration from the tool's velocity a
+/// microsecond along the model's rates, the Jacobian by differences) are the loss-free feedforward plus
+/// `steady_friction`: as shipped (the gearbox's drag on, its efficiency at part load near 1) to 1e-12 N m, and with a
+/// plain efficiency of 0.94, where lifting takes more than lowering gives back (the loss on the weight), to 2e-4 of the
+/// torque: 4e-5 at 0.05 m/s (the loss on the velocity terms, which the feedforward leaves loss-free), 1.2e-4 at 0.01 m/s,
+/// where the efficiency fades over the power and the model takes the factor of the torque going in at the loss-free
+/// acceleration. `linkage::steady_loss` takes it of the torque going in (output / loss); of the output it missed by
+/// 1.2e-3 there.
+#[test]
+fn the_linkage_friction_feedforward_takes_the_loss_on_the_weight() {
+  for drag in [true, false] {
+    let mut cfg = file().config();
+    for line in ["effects.joint_elasticity = false", "effects.torque_ripple = false", &format!("effects.gearbox_drag = {drag}")] {
+        cfg.set_text(line).unwrap();
+    }
+    let machine = (file().build)(&cfg).unwrap();
+    let pos = [0.05, -0.55];
+    let mut vertical = Vec::new();
+    for vel in [[0.0, 0.05], [0.0, -0.05], [0.05, 0.0], [-0.05, 0.02], [0.0, 0.01], [0.0, -0.01], [-0.01, 0.004]] {
+        let (mut state, mut held) = (Vec::new(), [0.0; 2]);
+        machine.equilibrium(&pos, &mut state, &mut held);
+        machine.set_tool_velocity(&mut state, &vel);
+        let acc = |t: [f64; 2]| {
+            let mut rates = vec![0.0; machine.state_len()];
+            machine.derivatives(&state, &t, &mut rates);
+            let velocity = |h: f64| {
+                let s: Vec<f64> = state.iter().zip(&rates).map(|(s, r)| s + h * r).collect();
+                let (mut p, mut v) = ([0.0; 2], [0.0; 2]);
+                machine.tool_state(&s, &mut p, &mut v);
+                v
+            };
+            let (ahead, behind) = (velocity(1e-6), velocity(-1e-6));
+            [(ahead[0] - behind[0]) / 2e-6, (ahead[1] - behind[1]) / 2e-6]
+        };
+        let mut t = held;
+        for _ in 0..20 {
+            let a = acc(t);
+            let j: [[f64; 2]; 2] = std::array::from_fn(|c| {
+                let mut s = t;
+                s[c] += 1e-6;
+                let b = acc(s);
+                [(b[0] - a[0]) / 1e-6, (b[1] - a[1]) / 1e-6]
+            });
+            // a + J dt = 0, J[c] the column of motor c.
+            let det = j[0][0] * j[1][1] - j[1][0] * j[0][1];
+            t[0] -= (a[0] * j[1][1] - a[1] * j[1][0]) / det;
+            t[1] -= (j[0][0] * a[1] - j[0][1] * a[0]) / det;
+        }
+        let a = acc(t);
+        assert!(a[0].abs() < 1e-7 && a[1].abs() < 1e-7, "{a:?}");
+        let (mut ff, mut friction) = ([0.0; 2], [0.0; 2]);
+        machine.feedforward_torque_moving(&pos, &vel, &[0.0; 2], &mut ff);
+        machine.steady_friction(&pos, &vel, &mut friction);
+        for k in 0..2 {
+            assert!((t[k] - ff[k] - friction[k]).abs() < 2e-4 * t[k].abs(), "drag {drag}, {vel:?}: motor {k}: {t:?} against {ff:?} + {friction:?}");
+        }
+        if vel[0] == 0.0 {
+            vertical.push(friction[0]);
+        }
+    }
+    // Up and down: the loss on the weight is what the two frictions do not cancel.
+    let net = vertical[0] + vertical[1];
+    println!("drag {drag}: friction up {} and down {} N m", vertical[0], vertical[1]);
+    // Without the loss on the weight they would cancel: lifting -g (1 / eta - 1) more, lowering -g (1 - eta) less, net
+    // -g (1 / eta + eta - 2) = 1.037 * 0.00383 = 0.0040 N m (and the friction's own loss).
+    assert!(drag || net < -0.003, "{net}");
+  }
 }
 
 /// A broken linkage is refused with its key and line.
@@ -469,6 +541,30 @@ fn the_scissor_lift_holds_its_platform_with_the_hand_calculated_force_at_two_hei
         assert!((pos[0] - h).abs() < 1e-12, "{pos:?}");
     }
     assert!((3.179_797 / 1.020_204f64 - 3.116_825).abs() < 1e-5);
+}
+
+/// The gearbox's output torque on the scissor lift carries the screw's loss: rigid, at h = 0.6 m moving at +-0.05 m/s,
+/// the motor's 1.60763 N m lifting and 1.20009 N m lowering pass the gearbox (ratio 20, 0.96) and the screw (0.9) as
+/// 27.780 N m after both (1.60763 * 20 * 0.96 * 0.9 and 1.20009 * 20 / (0.96 * 0.9)); the gearbox's own shaft
+/// carries 27.780 / 0.9 = 30.867 N m lifting and 27.780 * 0.9 = 25.002 N m lowering.
+#[test]
+fn the_scissor_lifts_gearbox_carries_the_screws_loss_both_ways() {
+    let mut cfg = scissor_file().config();
+    for off in ["joint_elasticity", "torque_ripple", "motor_friction"] {
+        cfg.set_text(&format!("effects.{off} = false")).unwrap();
+    }
+    let machine = (scissor_file().build)(&cfg).unwrap();
+    let at = machine.signal_infos().iter().position(|s| s.id.starts_with("gearbox.") && s.id.ends_with(".output_torque"));
+    for (speed, motor, by_hand) in [(0.05, 1.60763, 30.867), (-0.05, 1.20009, 25.002)] {
+        let (mut state, mut held) = (Vec::new(), [0.0]);
+        machine.equilibrium(&[0.6], &mut state, &mut held);
+        machine.set_tool_velocity(&mut state, &[speed]);
+        let mut values = Vec::new();
+        machine.signals(&state, &[motor], &mut values);
+        let output = values[at.unwrap()];
+        println!("{speed} m/s, {motor} N m: output {output} N m, held {held:?}");
+        assert!((output - by_hand).abs() < 2e-3, "{speed} m/s: {output} N m against {by_hand}");
+    }
 }
 
 /// The scissor lift passes the standard suite (round trip, static hold, determinism, energy without losses, the loss

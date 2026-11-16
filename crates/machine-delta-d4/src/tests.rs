@@ -424,3 +424,25 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
     assert!(ff > 0.1, "feedforward {ff} N m");
     assert!((without - with - ff).abs() < 0.03 * ff, "without: {without} N m, with {with}, of {ff}");
 }
+
+/// On a compliant base (`effects.base_compliance`) the machine keeps its collision capsules (11 of them, carried
+/// along with the base) and its resonance is the lower of its own and the base's: the lowest of its modes.
+#[test]
+fn on_a_compliant_base_the_capsules_stay_and_the_resonance_is_the_lower() {
+    let pose = [0.1525, 0.0, -0.75, 0.0];
+    let build = |on: bool| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text(&format!("effects.base_compliance = {on}")).unwrap();
+        (ENTRY.build)(&cfg).unwrap()
+    };
+    let (plain, based) = (build(false), build(true));
+    let capsules = |m: &dyn sim_core::Machine| {
+        let (mut state, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
+        m.equilibrium(&pose, &mut state, &mut torque);
+        m.collision_capsules(&state).len()
+    };
+    assert_eq!((capsules(plain.as_ref()), capsules(based.as_ref())), (11, 11));
+    let (own, on_base) = (plain.resonance_hz(&pose).unwrap(), based.resonance_hz(&pose).unwrap());
+    let lowest = based.modes(&pose)[0].hz;
+    assert!(on_base <= own && (on_base - lowest).abs() < 1e-9 * lowest, "{own} Hz alone, {on_base} on the base, lowest mode {lowest}");
+}
