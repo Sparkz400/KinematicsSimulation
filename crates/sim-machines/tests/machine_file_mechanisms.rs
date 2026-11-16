@@ -334,6 +334,29 @@ fn a_linear_motor_axis_draws_the_hand_calculated_current_for_its_force() {
     machine.equilibrium(&[0.5], &mut state, &mut held);
     assert!(close(signal(machine.as_ref(), &state, &held, "axis.x.guide_load"), 2627.48645, 1e-9));
     assert!(machine.rating_checks().is_empty());
+    // Its motor is a linear one (`Machine::motor_linear`), so the simulation's motor signals read m, m/s and N
+    // (`Sim::signal_infos`, see `the_motor_signals_carry_the_motors_units`).
+    assert!(machine.motor_linear(0));
+}
+
+/// Every registered machine's motor signals are in its motors' units: m, m/s and N for the linear motors (the joint kit's
+/// linear motor axis, the mover track), rad, rad/s and N m for every other.
+#[test]
+fn the_motor_signals_carry_the_motors_units() {
+    for entry in MACHINES {
+        let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+        let linear = ["linear-motor-axis", "mover-track"].contains(&entry.id);
+        let infos = sim.signal_infos();
+        for (k, motor) in sim.machine.motors().iter().enumerate() {
+            assert_eq!(sim.machine.motor_linear(k), linear, "{} motor {}", entry.id, motor.id);
+            let unit = |name: &str| {
+                let id = format!("motor.{}.{name}", motor.id);
+                infos.iter().find(|s| s.id == id).unwrap_or_else(|| panic!("{}: {id}", entry.id)).unit.clone()
+            };
+            let expected = if linear { ["m", "m/s", "N"] } else { ["rad", "rad/s", "N m"] };
+            assert_eq!([unit("angle"), unit("speed"), unit("torque")], expected, "{} motor {}", entry.id, motor.id);
+        }
+    }
 }
 
 /// A rotary table as a netlist: the joint kit's table and strain wave gear, its axis in rad.
@@ -362,6 +385,7 @@ fn a_rotary_axis_turns_in_rad_with_its_strain_wave_gear() {
     let mut torque = [0.0];
     machine.feedforward_torque(&[1.0], &[10.0], &mut torque);
     assert!(close(torque[0], 0.76, 1e-12), "{torque:?}");
+    assert!(!machine.motor_linear(0));
     let checks = machine.rating_checks();
     assert!(
         checks.len() == 1

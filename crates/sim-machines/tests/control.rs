@@ -1264,6 +1264,43 @@ fn the_shipped_velocity_loops_keep_their_margins() {
     loops_keep_their_margins(&configs.iter().map(|(name, ..)| name.as_str()).collect::<Vec<_>>(), false);
 }
 
+/// Each motor's loop is measured with a tenth of its own rated torque (`loop_amplitude`): the palletiser's motor 1 (a
+/// 1FK2106-4AF, 8.6 N m) with 0.86 N m and the arm on a track's motor 5 (a 1FK2104-5AF, 2.4 N m) with 0.24 N m, not a
+/// tenth of the shared drive's 4.6 N m. And the crane's hoist is measured with the gearbox efficiency's fade taken out
+/// (at standstill it damped the small signal so that no gain crossover showed: "NaN, inf, 34.84 dB"). With the old
+/// amplitude, a tenth of the shared drive.rated_torque_nm 3.2 N m, it gives what the audit measured with the efficiency
+/// off: 48.5 Hz, 83.1 degrees, 21.31 dB (run: 48.504 Hz, 83.07 degrees, 21.305 dB). With its own, a tenth of the hoist's
+/// 6.6 N m, the larger test torque breaks the motor's friction more and so damps the loop less: 50.43 Hz, 73.73 degrees,
+/// 20.98 dB (run, 16 November 2026), what `velocity_loop_margins` reports.
+#[test]
+fn each_loop_is_measured_at_its_own_amplitude_and_the_hoist_without_the_efficiency_fade() {
+    use sim_components::analysis::{
+        loop_amplitude, loop_frequencies, loop_margins, velocity_loop_margins, velocity_loop_response,
+    };
+    for (id, motor, amplitude) in
+        [("palletiser", "1", 0.86), ("arm-on-track", "5", 0.24), ("overhead-crane", "hoist", 0.66)]
+    {
+        let entry = sim_machines::find(id).unwrap();
+        let found = loop_amplitude(entry, &entry.config(), motor).unwrap();
+        assert!((found - amplitude).abs() < 1e-9, "{id} motor {motor}: {found} N m");
+    }
+    let entry = sim_machines::find("overhead-crane").unwrap();
+    let cfg = entry.config();
+    let near = |m: &sim_components::analysis::LoopMargins, hz: f64, deg: f64, db: f64| {
+        assert!(
+            m.stable()
+                && (m.crossover_hz - hz).abs() < 0.05
+                && (m.phase_margin_deg - deg).abs() < 0.1
+                && (m.gain_margin_db - db).abs() < 0.02,
+            "{m:?}"
+        );
+    };
+    let old = loop_margins(&velocity_loop_response(entry, &cfg, 2, &loop_frequencies(&cfg).unwrap(), 0.32).unwrap());
+    near(&old, 48.50, 83.07, 21.305);
+    let margins = &velocity_loop_margins(entry, &cfg, &[]).unwrap()[0].1;
+    near(margins.last().unwrap(), 50.43, 73.73, 20.98);
+}
+
 /// The shipped velocity loops keep their margins across the bounds (`loops_keep_their_margins`), a test per config: in all
 /// 8600 s of processor time in a full run, 10 minutes alone on the 16 threads of the 8-core development machine. The
 /// default filter of `.config/nextest.toml` leaves them out; CI runs them one at a time after the other tests.

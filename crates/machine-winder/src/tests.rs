@@ -135,6 +135,38 @@ fn the_cylinders_taper_power_is_the_setpoint_rate_times_the_dancers_position() {
     assert!(e.r[1] > w.roll.core && (w.losses(&e)[8] - want).abs() < 1e-12 * want.abs().max(1.0), "{want}");
 }
 
+/// The power balance at an instant of the shipped move forward, with the taper on and off: the motors' power
+/// sum T w = dE/dt + the loss powers (`loss_powers`, the cylinder's row among them), dE/dt by a central difference
+/// along the derivatives. With the cylinder's row a factor r too small (the audit) the taper left 6.5e-3 W unbalanced at
+/// 3 m; the rest balances to about 1e-8 W.
+#[test]
+fn the_power_balances_with_the_taper() {
+    for taper in [true, false] {
+        let cfg = config(&[&format!("effects.tension_taper = {taper}")]);
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        let w = Winder::new(&cfg).unwrap();
+        sim.command(Command::MoveTo(vec![5.0])).unwrap();
+        for _ in 0..(2.0 / sim.dt) as usize {
+            sim.step();
+        }
+        let (s, torque) = (sim.state.clone(), sim.torque.clone());
+        let (mut pos, mut speed) = (vec![0.0; 2], vec![0.0; 2]);
+        w.motor_state(&s, &mut pos, &mut speed);
+        let power: f64 = torque.iter().zip(&speed).map(|(t, v)| t * v).sum();
+        let mut rate = vec![0.0; s.len()];
+        w.derivatives(&s, &torque, &mut rate);
+        let h = 1e-6;
+        let at = |sign: f64| w.energy(&s.iter().zip(&rate).map(|(x, r)| x + sign * h * r).collect::<Vec<_>>());
+        let stored = (at(1.0) - at(-1.0)) / (2.0 * h);
+        let mut losses = Vec::new();
+        w.loss_powers(&s, &torque, &mut losses);
+        let lost: f64 = losses.iter().sum();
+        let off = power - stored - lost;
+        println!("taper {taper}: motors {power} W, stored {stored} W, lost {lost} W, off {off:e} W");
+        assert!(power.abs() > 1.0 && off.abs() < 1e-5, "taper {taper}: off by {off} W of {power} W");
+    }
+}
+
 /// A span's steady tension for a speed difference: the unwind gives off unstretched web (wound at no tension) at
 /// v1 = 1 m/s, roller and rewind take it at v2 = 1.0005 m/s. Steady, what enters a span leaves it: v1 / (1 + 0) =
 /// v2 / (1 + eps), eps = v2 / v1 - 1 = 5e-4, T = EA eps = 80 kN * 5e-4 = 40.000 N in both spans (the second takes it at

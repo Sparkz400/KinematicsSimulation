@@ -797,13 +797,13 @@ end-position sensors (`wait = ["z.extended"]`) before the dwell counts and the n
 `machines/pneumatic-axis.toml`: the belt-driven servo X of `single-axis.toml` carrying a Festo DSBC-32-100-PPVA-N3
 (32 mm bore, 12 mm rod, 100 mm stroke, PPV cushions 17 mm, 0.4 J) hanging downwards on a 5/2 valve with meter-out
 throttles; 0.5 kg moved, 0.5 kg picked. The cycle: X to the pick, Z down, wait, grip, Z up, wait, X to the place, Z
-down, release, Z up. With the shipped settings Z extends in 0.55 s and retracts in 0.65 s (valve 7 ms, the rod side
+down, release, Z up. With the shipped settings Z extends in 0.55 to 0.56 s and retracts in 0.65 s (valve 7 ms, the rod side
 exhausting from supply, 0.216 m/s throttled, the cushion's bleed at the end), enters the cushion at 0.22 to 0.24 m/s
 with a kinetic energy of 0.012 to 0.029 J against the 0.4 J rated (`cushion-energy`). The check is the vendor's rule for
 the cylinder's own cushioning, the kinetic energy at the cushion's entry against the maximum impact energy of the
 table (Festo DSBC data sheet, "Forces and impact energy", v = sqrt(2 E / (m1 + m2)), p. 13); the weight's work over
 the cushion length, m g L, belongs to Festo's rule for external shock absorbers and is not added (hanging 1 kg over
-the 17 mm: 0.167 J more, which this check does not count). It stops at 0.06 to 0.07 m/s on the bumper without
+the 17 mm: 0.167 J more, which this check does not count). It stops at 0.06 to 0.09 m/s on the bumper without
 bouncing out of the sensor band, and has a load factor of 0.024 (`load-factor`, the 1 kg weight against 415 N
 retracting). A double stroke draws 1.10 normal litres, 474 J at the compressor (0.12 kWh/m³); by hand at the supply
 pressure and the wall's temperature 1.15 l, the 4 % less because the dwells are too short for the hot air to cool.
@@ -893,6 +893,10 @@ there is one; its rate, the lateral jerk 2 v a k + v³ dk/ds, is what the clotho
 circle, 614 m/s³ into the clothoid). The movers run outside the loop with the plate facing the coils, so the centrifugal
 force m v² k pulls a mover off the coils against the attraction: the rollers carry sqrt((F_a − m v² k)² + (m g)²)
 (`mover-guide-load`), and the share m v² k / F_a (`curve-holding`) must stay below 1, where the mover lifts off.
+`mass.centre_offset_m` = e puts the movers' mass centre outside the centre line (the drawn mover's is 35 mm out; 0
+ships): in a curve it runs on R + e at v (1 + e k), its lateral acceleration v² k (1 + e k) (38.9 m/s² mid-arc at 2 m/s
+with e = 35 mm, 30.7 at e = 0) and its kinetic energy ½ m v² (1 + e k)², with the tangential force of that mass changing
+over the clothoid in the dynamics (the energy is kept). The offset moves the mover body and payload, not the plate.
 
 **Coils and segments.** A mover's current is its force over the force constant; it flows in the coils under its magnet
 plate, shared among the segments by the plate's length on each. A segment's current is the sum of its movers' shares
@@ -965,7 +969,7 @@ hoist, S210 drives), its wheel or drum the lever: 30:1 on 80 mm wheels, 25:1 on 
   `thermal-warm-start` (the sway left from one pass changes the next, so the passes never repeat: a winding's rise
   1.1 K apart). A workshop crane's real cycle over the runway takes a minute: a segment's target of [8.0, 4.0, 1.0].
 - **The drives' velocity loops** are tuned as stiff as the other machines' (bridge and trolley some 60 Hz, 2.0 and 0.24
-  N m s/rad). The hoist's is measured at rest under the 265 kg (`sim-cli margins`) with the gearbox's efficiency effect off: with it on, the 92 % gearbox's efficiency, faded in below 0.5 W, is a damper of 2601² ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope, 4.5 N m s/rad at the motor, which the test torque does not break away from, and the loop shows no gain crossover. Without the gear's losses its crossover is 48 Hz.
+  N m s/rad). The hoist's is measured at rest under the 265 kg (`sim-cli margins`) with the gearbox's efficiency effect off: with it on, the 92 % gearbox's efficiency, faded in below 0.5 W, is a damper of 2601² ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope, 4.5 N m s/rad at the motor, which the test torque does not break away from, and the loop shows no gain crossover. Without the gear's losses, with a tenth of the hoist's own rated torque (0.66 N m) as the test torque, it crosses over at 50.4 Hz with 73.7° and 21.0 dB (at 0.32 N m, a tenth of the shared drive's rating: 48.5 Hz, 83.1°, 21.3 dB, where the motor's friction damps the smaller signal more).
 - **Verdicts of its own:** `rope-max-tension` (the highest tension against `rope.breaking_load_n` / `safety_factor`,
   4444 N), `rope-min-tension` (any fall below `rope.min_tension_n`, 50 N, fails: no slack rope), `residual-sway` (the
   load's sway amplitude √(d² + (d' / ω)²) at every dwell, d its horizontal offset from under the sheave, against

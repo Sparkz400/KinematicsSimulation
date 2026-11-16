@@ -130,6 +130,41 @@ fn the_test_runs_on_the_axes_the_gantry_and_the_delta() {
     });
 }
 
+/// A machine without an axis in m (the rotary table, in rad) is judged against the `_rad` ratings and never against a
+/// metre limit: its accuracy of some 5e-6 rad (4.58e-6 in the audit's run) passes 1e-4 rad, while metre limits of a
+/// nanometre, which the rad figures would fail, give no verdict.
+#[test]
+fn a_rotary_axis_is_judged_in_rad() {
+    let ratings = "
+[ratings]
+max_positioning_error_rad = 1.0e-4
+max_repeatability_rad = 1.0e-4
+                   max_positioning_error_m = 1.0e-9
+max_repeatability_m = 1.0e-9
+";
+    let entry = sim_machines::find("rotary-table").unwrap();
+    let cfg = load_config(
+        entry,
+        &entry.default_config.replacen(
+            "
+[ratings]",
+            ratings,
+            1,
+        ),
+    )
+    .unwrap();
+    let s = run("rotary-table", &cfg, 2, 1);
+    let accuracy = s.axes.iter().map(|a| a.accuracy).fold(0.0, f64::max);
+    println!("rotary table: accuracy {accuracy:e} rad, {:?}", s.verdicts);
+    assert!(accuracy > 0.0 && accuracy < 1e-4, "{accuracy} rad");
+    assert_eq!(s.verdicts.len(), 2, "{:?}", s.verdicts);
+    for v in &s.verdicts {
+        assert!(v.limit == 1e-4 && v.ok, "{v:?}");
+    }
+    let found = s.verdicts.iter().find(|v| v.check == "positioning-accuracy").unwrap();
+    assert_eq!(found.value, accuracy);
+}
+
 trait With {
     fn with(self, key: &str, on: bool) -> Self;
 }

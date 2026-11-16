@@ -174,6 +174,23 @@ fn the_ram_speed_is_the_derivative_of_the_height() {
     let ids: Vec<String> = p.signal_infos().into_iter().map(|s| s.id.to_string()).collect();
     let speed = out[ids.iter().position(|s| s == "ram.speed").unwrap()];
     assert!((speed + 0.0729532).abs() < 1e-6, "{speed}");
+    // At any angle, the frame's stretch under the press force (at 0.3 rad) included: the height's central difference
+    // times q' (at q = -0.8 rad, q' = 2 rad/s: -0.051332 m/s).
+    let signal = |q: f64, qd: f64, id: &str| {
+        let mut out = Vec::new();
+        p.signals(&[q], &[qd], &[0.0], &[0.0], &mut out);
+        out[ids.iter().position(|s| s == id).unwrap()]
+    };
+    for q in [-0.8, -PI / 2.0, 0.3] {
+        let h = 1e-6;
+        let rate = (signal(q + h, 2.0, "ram.height") - signal(q - h, 2.0, "ram.height")) / (2.0 * h) * 2.0;
+        assert!(
+            (signal(q, 2.0, "ram.speed") - rate).abs() < 1e-7,
+            "{q}: {} against {rate}",
+            signal(q, 2.0, "ram.speed")
+        );
+    }
+    assert!((signal(-0.8, 2.0, "ram.speed") + 0.051332).abs() < 1e-6);
 }
 
 /// J(q) = J_crank + m_pin r^2 + (m_up / 3 + m_knee) a^2 phi'^2 + m_x x'^2: m_pin = 1.25 kg (half the rod), m_up = 2 kg,

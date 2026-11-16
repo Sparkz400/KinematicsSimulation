@@ -145,7 +145,10 @@ fn a_segment_with_two_movers_stopping_on_it_heats_by_the_hand_calculation() {
 /// nothing for the next half second average to 9 W, 18 K at 2 K/W (a low-pass of one pass would read about 22 K).
 #[test]
 fn the_settled_rise_is_the_loss_averaged_over_one_pass() {
-    let mut m = track(&["effects.torque_saturation = false", "start.pose = [0.06, 0.18, 1.131233, 1.634349, 2.137465, 2.640582]"]);
+    let mut m = track(&[
+        "effects.torque_saturation = false",
+        "start.pose = [0.06, 0.18, 1.131233, 1.634349, 2.137465, 2.640582]",
+    ]);
     let start = m.movers().start.clone();
     let (mut state, mut torque) = (Vec::new(), vec![0.0; 6]);
     m.equilibrium(&start, &mut state, &mut torque);
@@ -156,8 +159,8 @@ fn the_settled_rise_is_the_loss_averaged_over_one_pass() {
             m.after_step(&mut state, 0.1);
         }
     }
-    // The ring drops 1/64 of the window at its far end: 0.4921 of 36 K.
-    assert!((m.settled[0] - 18.0).abs() < 0.5, "{:?}", m.settled);
+    // The ring holds the window whole (its oldest bin by what is left of it).
+    assert!((m.settled[0] - 18.0).abs() < 1e-6, "{:?}", m.settled);
 }
 
 /// A mass centre 35 mm outside a constant-radius curve (R = 0.1303 m, no clothoid) runs on R + e at v (1 + e / R): the
@@ -174,6 +177,52 @@ fn a_mass_centre_outside_the_centre_line_runs_the_longer_way_round() {
     assert!(bias[0].abs() < 1e-9, "no change of curvature mid-arc: {}", bias[0]);
     let lateral = mv.curve_loads(mid, 1.0, 0.0)[0];
     assert!((lateral - (1.0 / r) * (1.0 + e / r)).abs() < 1e-9, "{lateral}");
+    // With the shipped clothoid, mid-arc at 2 m/s: 4 / 0.1303 * (1 + 0.035 / 0.1303) = 38.94 m/s^2 (30.70 at e = 0).
+    let shipped = track(&["mass.centre_offset_m = 0.035"]);
+    let s = shipped.movers();
+    let lateral = s.curve_loads(s.track.straight + 0.5 * s.track.curve, 2.0, 0.0)[0];
+    assert!((lateral - 38.94).abs() < 0.01, "{lateral}");
+}
+
+/// The loss-free configs keep their energy with the mass centre 35 mm out: the clothoid's changing mass m (1 + e k)^2
+/// has its tangential force in the dynamics (`sim_core::testkit::energy_conservation`).
+#[test]
+fn a_mass_centre_outside_the_centre_line_keeps_the_energy() {
+    for mut cfg in suite_configs() {
+        cfg.set_text("mass.centre_offset_m = 0.035").unwrap();
+        sim_core::testkit::energy_conservation(&MoverTrack::new(&cfg).unwrap());
+    }
+}
+
+/// On the index cycle the settled rise of each segment is R_th times its copper loss averaged over the last pass, as the
+/// signals give it (the old low-pass of one pass read 23 to 26 % above it: segment 1 5.15 K where the mean gives 4.18 K).
+#[test]
+fn the_settled_rise_on_the_index_cycle_is_the_mean_loss_over_a_pass() {
+    let cfg = config(&["cam.run = true", "effects.thermal_warm_start = false"]);
+    let own = MoverTrack::new(&cfg).unwrap();
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    sim.command(sim_components::Command::StartCycle).unwrap();
+    let n = own.rises.len();
+    let index = |what: &str| -> Vec<usize> {
+        (1..=n).map(|j| sim.signal_index(&format!("segment.{j}.{what}")).unwrap()).collect()
+    };
+    let (loss, settled) = (index("copper_loss"), index("settled_rise"));
+    let pass = (own.window / sim.dt).round() as usize;
+    let (mut sum, mut values) = (vec![0.0; n], Vec::new());
+    for step in 0..3 * pass {
+        sim.step();
+        if step >= 2 * pass {
+            sim.sample(&mut values);
+            sum.iter_mut().zip(&loss).for_each(|(s, &i)| *s += values[i]);
+        }
+    }
+    let mean: Vec<f64> = sum.iter().map(|s| own.thermal_resistance * s / pass as f64).collect();
+    let rise: Vec<f64> = settled.iter().map(|&i| values[i]).collect();
+    println!("settled rise {rise:?} K, R_th times the mean loss {mean:?} K");
+    let top = mean.iter().fold(0.0f64, |a, b| a.max(*b));
+    for (a, b) in rise.iter().zip(&mean) {
+        assert!((a - b).abs() < 0.02 * top, "{rise:?} against {mean:?}");
+    }
 }
 
 /// The index cam moves every mover one station pitch (the loop over six, 0.503116 m) per period and stands it still for

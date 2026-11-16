@@ -17,8 +17,6 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 
 | What | Where | Status | What is true instead | Closing it |
 | --- | --- | --- | --- | --- |
-| Cushion energy "about 0.10 to 0.20 J" on the hanging pneumatic axis | `docs/mechanisms.md`, `docs/de/mechanismen.md` | **made up**: a hand estimate written before any run | Whatever the shipped cycle gives with the weight's work included | Run the shipped pneumatic axis hanging and write the measured figure |
-| Mover's mass centre sits on the track centre line (`mass.centre_offset_m = 0.0`) | `crates/machine-mover-track/default.toml`, `flying.toml` | **made up** default: the mover is drawn 35 mm outside the centre line, the real mass offset is not known | With 35 mm the lateral acceleration at 2 m/s is 38.9 m/s², not 30.7 | Take the centre-of-mass offset from the vendor's mover data (or CAD) and set it |
 | FMU output counts 114 / 60 / 108 | `docs/fmi.md` | **assumed**: copied from the audit, the FMUs were not regenerated | Whatever the current export gives | Export the three FMUs and count |
 | Catalogue rows equal the vendors' datasheets | `catalog/**` | **assumed**: the audit checked internal consistency and a few values from memory, never the PDFs | Unknown per row | Spot-check rows per vendor against the source PDFs the extract scripts read |
 
@@ -26,9 +24,6 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 
 | What | Where | Why it is only a choice | Closing it |
 | --- | --- | --- | --- |
-| Tolerances of new tests (settled rise 0.5 K, seven-joint inverse 1e-4) | `machine-mover-track`, `machine-joint-kit` tests | Picked before any run | Set from the first run |
-| The binormal part v³κτ of a 3D spline's jerk may take at most 0.3 of an axis's jerk limit in the plan within the axis limits | `path.rs` (`BINORMAL_SHARE`, `curved`) | A choice: the other two parts then keep sqrt(1 − 0.3²) = 0.954 of theirs. Measured: on the 3D spline of `a_spline_on_three_axes_passes_through_its_points_within_the_limits` (0.697 s, axis jerk used to 1.0000) the time is the same at 0.15, 0.3 and 0.6: the cap does not bind there; in the time-optimal plan the share plays no part (its bend rows take the whole p''' by differences) | Keep; derive it only if a machine's 3D splines come out jerk-limited by it |
-| Friction is not counted as help while a motor brakes in the time-optimal plan | `path.rs` (`MotorCurve`, `Place::bounds`) | A choice: friction is nil at a standstill and the bounds hold at every speed up to v. Measured: the friction left unused where the braking torque binds is 0.0213 N m of 0.48 N m on the T-gantry with a 0.6 N m motor (4.4 %), 0.0237 of 0.4 N m on the single axis (5.9 %), 0.34 of 12 N m on the delta-d3 (2.8 %), so braking is planned that much below what the motor could do | Keep; count it above a speed where it is sure to be there if the few per cent matter |
 
 ## 3. Behaviour assumed without the manual
 
@@ -42,8 +37,6 @@ Every fix was compile-checked only. The whole suite is being run once after the 
 result is in, treat **every number below as unverified**.
 
 - **All hand numbers in the new regression tests** (guide loads 11.414 N and 2.762 N, momentum
-  (1.875, 0.856, 5.693) N s, reactance limits 3.474 / 2.709 / 1.956 N m, steady friction totals,
-  and so on; the full circle's length is now run).
 - **The 2-axis delta's reference file** `crates/machine-delta-d2/reference/inverse_dynamics.csv` is
   stale: its generator was changed but could not be run (no sympy).
 - **The video tool** `crates/sim-app/tools/frames_to_mp4.py` (holds frames for dropped numbers).

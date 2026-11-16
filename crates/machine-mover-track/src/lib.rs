@@ -39,8 +39,8 @@
 //! movers instead, as on every machine; `flying.toml` runs its cam, and `--set cam.run=true` the index cam.
 
 use sim_components::cam::{Cam, Law, Segment};
-use sim_components::drive::DriveParams;
 use sim_components::chain::{JointMachine, JointSpec, MOTOR_IDS, Mechanism};
+use sim_components::drive::DriveParams;
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::ThermalFeedback;
 use sim_components::transmission::LinearMotor;
@@ -71,7 +71,7 @@ const CURVE_POINTS: usize = 2000;
 /// Strips a curve segment is drawn with.
 const CURVE_STRIPS: usize = 12;
 /// Bins of the moving average of the segment's loss over one pass.
-const BINS: usize = 64;
+const BINS: usize = 256;
 
 pub const MAX_MOVERS: usize = 7;
 /// How far a mover's axis range reaches behind and ahead of its cycle's targets, m: as far as one mover alone at an end
@@ -943,7 +943,8 @@ impl Machine for MoverTrack {
         }
         let (_, loss) = self.segment_load(&self.positions(state), &force);
         let slow = 1.0 - (-dt / self.time_constant).exp();
-        let bin = self.window / BINS as f64;
+        // BINS - 1 whole bins make the window; the newest is being filled, so the oldest counts by what is left of it.
+        let bin = self.window / (BINS - 1) as f64;
         for (j, p) in loss.iter().enumerate() {
             self.rises[j] += slow * (self.thermal_resistance * p - self.rises[j]);
             let ring = &mut self.energy[j * BINS..(j + 1) * BINS];
@@ -972,15 +973,22 @@ impl Machine for MoverTrack {
                 }
             }
         }
-        let span = bin * (BINS - 1) as f64 + self.fill;
+        let (oldest, gone) = ((self.cursor + 1) % BINS, self.fill / bin);
         for j in 0..self.rises.len() {
-            let sum: f64 = self.energy[j * BINS..(j + 1) * BINS].iter().sum();
-            self.settled[j] = self.thermal_resistance * sum / span;
+            let ring = &self.energy[j * BINS..(j + 1) * BINS];
+            let sum: f64 = ring.iter().sum::<f64>() - gone * ring[oldest];
+            self.settled[j] = self.thermal_resistance * sum / self.window;
         }
     }
     fn memory(&self) -> Vec<f64> {
-        [self.inner.memory(), self.rises.clone(), self.settled.clone(), self.energy.clone(), vec![self.cursor as f64, self.fill]]
-            .concat()
+        [
+            self.inner.memory(),
+            self.rises.clone(),
+            self.settled.clone(),
+            self.energy.clone(),
+            vec![self.cursor as f64, self.fill],
+        ]
+        .concat()
     }
     fn set_memory(&mut self, memory: &[f64]) {
         let (inner, own) = memory.split_at(self.inner_memory.min(memory.len()));
