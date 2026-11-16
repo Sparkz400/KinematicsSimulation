@@ -1453,8 +1453,10 @@ fn a_gearbox_or_pulley_rating_that_binds_limits_the_time_optimal_acceleration() 
 /// A lossy gearbox costs the time-optimal plan its loss: the motor gives what turns its rotor, 0.3e-4 kg m^2 * 250 rad/m =
 /// 0.0075 N m per m/s^2, plus what the gearbox passes on, (0.0245 - 0.0075) / eta per m/s^2 (the output's load through
 /// the ratio, driving it). With eta = 0.9 that is 0.0075 + 0.017 / 0.9 = 0.026389 N m per m/s^2, and the 0.8 * 0.5 N m
-/// the motor may give accelerate the carriage at 15.158 m/s^2 (16.327 without the loss). The line 0.1 -> 0.9 m then takes
-/// 0.8 / v + v / a + a / j = 0.72556 s at the rated speed less 1 % v = 1.2434 m/s (`TOP`) and j = 1e5 m/s^3.
+/// the motor may give accelerate the carriage at 15.158 m/s^2 (16.327 without the loss). Braking, the load drives the
+/// motor and the gearbox passes eta of its torque: 0.0075 + 0.017 * 0.9 = 0.0228 N m per m/s^2, 17.544 m/s^2. The line
+/// 0.1 -> 0.9 m then takes 0.8 / v + (v / a1 + a1 / j) / 2 + (v / a2 + a2 / j) / 2 = 0.72001 s at the rated speed less
+/// 1 % v = 1.2434 m/s (`TOP`) and j = 1e5 m/s^3 (0.72556 s when braking was planned at 15.158 too).
 #[test]
 fn a_lossy_gearbox_lowers_the_time_optimal_acceleration_by_its_loss() {
     let mut cfg = ideal_rigid_quick();
@@ -1462,14 +1464,15 @@ fn a_lossy_gearbox_lowers_the_time_optimal_acceleration_by_its_loss() {
         cfg.set_text(e).unwrap();
     }
     let (v, j, per_acc): (f64, f64, f64) = (TOP, 1e5, 0.0075 + (0.0245 - 0.0075) / 0.9);
-    let a = 0.8 * 0.5 / per_acc;
-    let by_hand = 0.8 / v + v / a + a / j;
-    assert!((per_acc - 0.026389).abs() < 1e-6 && (a - 15.158).abs() < 1e-3 && (by_hand - 0.72556).abs() < 1e-5);
+    let (a, brake) = (0.8 * 0.5 / per_acc, 0.8 * 0.5 / (0.0075 + (0.0245 - 0.0075) * 0.9));
+    let by_hand = 0.8 / v + 0.5 * (v / a + a / j) + 0.5 * (v / brake + brake / j);
+    assert!((per_acc - 0.026389).abs() < 1e-6 && (a - 15.158).abs() < 1e-3 && (brake - 17.544).abs() < 1e-3);
+    assert!((by_hand - 0.72001).abs() < 1e-5);
     let (time, _, rising, falling) = time_optimal_line(&cfg);
     assert!((time - by_hand).abs() < 1.5e-3, "{time} s, by hand {by_hand} s");
     assert!(
-        (rising - a).abs() < 1e-3 * a && (falling - a).abs() < 1e-3 * a,
-        "{rising} and {falling} m/s^2, by hand {a} m/s^2"
+        (rising - a).abs() < 1e-3 * a && (falling - brake).abs() < 1e-3 * brake,
+        "{rising} and {falling} m/s^2, by hand {a} and {brake} m/s^2"
     );
 }
 

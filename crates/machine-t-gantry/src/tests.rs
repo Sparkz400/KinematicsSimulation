@@ -1310,7 +1310,7 @@ fn time_optimal_plans_of_random_paths_stay_within_torque_speed_and_jerk() {
                 fits &= (1..16).all(|i| inside(&on(heading + turn * sweep * i as f64 / 16.0)));
                 heading += turn * sweep;
                 here = on(heading);
-                pieces.push(Piece::Arc { to: here.clone(), centre, clockwise: turn < 0.0 });
+                pieces.push(Piece::Arc { to: here.clone(), centre, clockwise: turn < 0.0, plane: None });
             }
             fits &= inside(&here);
         }

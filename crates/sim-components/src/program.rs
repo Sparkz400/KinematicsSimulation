@@ -7,10 +7,12 @@
 //! - G17 (XY plane), G18 (ZX), G19 (YZ); G20 inch, G21 mm (the default); G90 absolute (the default), G91 incremental;
 //! - F the feed per minute, needed before the first G1, G2 or G3: the speed along the path, in length units for a block
 //!   with a linear axis and in degrees for a block that moves only rotary axes (A, B, C); where both move, the linear
-//!   axes' distance at F sets the time and the rotary axes follow in it. G2 or G3 with I, J, K and no end is a full
-//!   circle. Each run of moves
-//!   at one feed is planned on its own, its speed along the path capped at the feed (`path::plan_at`), with a stop
-//!   between runs; G0 runs at the axes' limits;
+//!   axes' distance at F sets the time and the rotary axes follow in it. This is Siemens SINUMERIK's reading with its
+//!   default FGROUP (the geometry axes; a rotary axis in a mixed block is synchronised and has no F of its own;
+//!   Fanuc's, which counts degrees like mm in a mixed block, is not taken: no primary source). G2 or G3 with I, J, K and
+//!   no end is a full circle. F is modal and caps each piece at its own block's feed (`path::plan_feeds`, `Run::caps`):
+//!   the moves between two G0 are one run planned as one path, with no stop where the feed changes (a corner still
+//!   stops it, as it does without a feed); G0 runs at the axes' limits;
 //! - X, Y, Z (and A, B, C in degrees) move the axes of the same name (ids x, y, z, a, b, c); the start is where the
 //!   machine stands, an axis a block does not name stays;
 //! - taken and without effect: N, O, M, S, T words, G40, G49, G54, G80, G94; comments in ( ) and after ;; % lines;
@@ -43,12 +45,21 @@
 use crate::path::Piece;
 use sim_core::AxisInfo;
 
-/// Moves at one feed: the pieces, and the speed along the path they are capped at (axis units per second, over all
-/// axes, as `path::plan_at` takes it), `None` for the axes' limits.
+/// Moves planned as one path with no stop between them: the pieces, and the speed along the path each is capped at (axis
+/// units per second, over all axes, as `path::plan_feeds` takes it): `caps`, one per piece. `feed` is the highest of them,
+/// `None` where the run is at the axes' limits (and `caps` is empty).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Run {
     pub feed: Option<f64>,
+    pub caps: Vec<f64>,
     pub pieces: Vec<Piece>,
+}
+
+impl Run {
+    /// The cap of each piece, `None` where the run is at the axes' limits; a run built with a feed and no caps has it for all.
+    pub fn caps(&self) -> Option<Vec<f64>> {
+        self.feed.map(|f| if self.caps.len() == self.pieces.len() { self.caps.clone() } else { vec![f; self.pieces.len()] })
+    }
 }
 
 /// A line of a program that cannot be read: its number (from 1), a translation key and the word or detail.
@@ -74,7 +85,7 @@ pub fn read(file_name: &str, text: &str, axes: &[AxisInfo], start: &[f64]) -> Re
         "src" => krl(text, axes, start),
         "mod" | "prg" => rapid(text, axes, start),
         _ if text.lines().any(|l| l.trim().to_ascii_lowercase().starts_with("move")) => robot_csv(text, axes, start),
-        _ => crate::path::parse(text).map(|pieces| vec![Run { feed: None, pieces }]).map_err(|line| ProgramError {
+        _ => crate::path::parse(text).map(|pieces| vec![Run { feed: None, caps: Vec::new(), pieces }]).map_err(|line| ProgramError {
             line: 0,
             key: "program-error-word",
             detail: line,
@@ -137,9 +148,21 @@ fn arc_through(from: &[f64], via: &[f64], to: &[f64]) -> Option<(Vec<f64>, bool)
 
 /// Adds `piece` to the last run where that moves at `feed`, else to a new run.
 fn push(runs: &mut Vec<Run>, feed: Option<f64>, piece: Piece) {
+    push_by(runs, feed, piece, false);
+}
+
+/// `push`; with `joined` a piece with a feed also joins a run at another feed, keeping its own cap (G-code: the feed is
+/// modal and changes between blocks without a stop).
+fn push_by(runs: &mut Vec<Run>, feed: Option<f64>, piece: Piece, joined: bool) {
     match runs.last_mut() {
-        Some(run) if run.feed == feed => run.pieces.push(piece),
-        _ => runs.push(Run { feed, pieces: vec![piece] }),
+        Some(run) if run.feed == feed || (joined && run.feed.is_some() && feed.is_some()) => {
+            run.pieces.push(piece);
+            if let Some(f) = feed {
+                run.caps.push(f);
+                run.feed = run.feed.map(|g| g.max(f));
+            }
+        }
+        _ => runs.push(Run { feed, caps: feed.into_iter().collect(), pieces: vec![piece] }),
     }
 }
 
@@ -231,7 +254,7 @@ pub fn gcode(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
                 arc_block(line, axes, &pos, &target, plane, kind == 2, centre_offset, radius)?
             };
             for piece in pieces {
-                push(&mut runs, rate, piece);
+                push_by(&mut runs, rate, piece, true);
             }
             pos = target;
         }
@@ -261,8 +284,8 @@ fn path_feed(axes: &[AxisInfo], from: &[f64], to: &[f64], linear: f64, rotary: f
 }
 
 /// The arc of a G2 (`clockwise`) or G3 block in `plane` from `from` to `to`, its centre from the offsets I, J, K or
-/// the radius R; a full circle (`to` at `from`, centre by I, J, K) as three arcs of 120 degrees, as the planner takes
-/// no half turn on three axes.
+/// the radius R, in the plane G17, G18 or G19 states (`Piece::Arc::plane`); a full circle (`to` at `from`, centre by I,
+/// J, K) as three arcs of 120 degrees, which a full turn's end cannot tell from no turn at all.
 #[allow(clippy::too_many_arguments)]
 fn arc_block(
     line: usize,
@@ -315,8 +338,11 @@ fn arc_block(
     (centre[ia], centre[ib]) = (ca, cb);
     let turning = if clockwise { -1.0 } else { 1.0 };
     let clockwise = path_clockwise(ia, ib, turning);
+    // The plane's normal is the third of x, y, z by position: it is what a half turn, whose end lies opposite its start,
+    // has no other way to tell the planner (G18 and G19 half turns lie in the x-z and y-z planes).
+    let plane = (ia < 3 && ib < 3).then(|| std::array::from_fn(|k| if k == 3 - ia - ib { 1.0 } else { 0.0 }));
     if (ea - sa).hypot(eb - sb) > 1e-12 * r0 {
-        return Ok(vec![Piece::Arc { to: to.to_vec(), centre, clockwise }]);
+        return Ok(vec![Piece::Arc { to: to.to_vec(), centre, clockwise, plane }]);
     }
     let start = (sb - cb).atan2(sa - ca);
     Ok((1..=3)
@@ -326,7 +352,7 @@ fn arc_block(
                 let angle = start + turning * k as f64 * 2.0 * std::f64::consts::PI / 3.0;
                 (end[ia], end[ib]) = (ca + r0 * angle.cos(), cb + r0 * angle.sin());
             }
-            Piece::Arc { to: end, centre: centre.clone(), clockwise }
+            Piece::Arc { to: end, centre: centre.clone(), clockwise, plane }
         })
         .collect())
 }
@@ -363,7 +389,14 @@ pub fn robot_csv(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run
 fn circle(line: usize, from: &[f64], via: &[f64], to: &[f64]) -> Result<Piece> {
     let n = from.len().min(3);
     match arc_through(&from[..n], &via[..n], &to[..n]) {
-        Some((centre, clockwise)) => Ok(Piece::Arc { to: to.to_vec(), centre, clockwise }),
+        Some((centre, clockwise)) => {
+            // The plane of the three points: a half turn through them (end opposite start) is in no other plane.
+            let at = |p: &[f64]| [p[0], p[1], p.get(2).copied().unwrap_or(0.0)];
+            let (s, v, e) = (at(from), at(via), at(to));
+            let normal = cross([v[0] - s[0], v[1] - s[1], v[2] - s[2]], [e[0] - s[0], e[1] - s[1], e[2] - s[2]]);
+            let size = normal.iter().map(|x| x * x).sum::<f64>().sqrt();
+            Ok(Piece::Arc { to: to.to_vec(), centre, clockwise, plane: (n == 3).then(|| normal.map(|x| x / size)) })
+        }
         None => fail(line, "program-error-arc", format!("{via:?}")),
     }
 }
@@ -680,6 +713,29 @@ mod tests {
         assert!((feed("G1 X10 C90 F600") - (0.01f64.powi(2) + (PI / 2.0).powi(2)).sqrt()).abs() < 1e-12);
     }
 
+    /// A feed that changes between blocks is a cap per piece inside one run, with no stop between: `F600 G1 X10 / F1200 G1
+    /// X20 / F600 G1 X30` is 10 mm at 10 mm/s, 10 mm at 20 mm/s and 10 mm at 10 mm/s: 1 + 0.5 + 1 = 2.5 s (the ramps between
+    /// the speeds add a few ms: 0.01 m/s over a jerk of 1000 m/s^3 takes 2 sqrt(0.01 / 1000) = 6.3 ms), and the path
+    /// passes x = 10 mm at the lower feed, 10 mm/s, not at rest.
+    #[test]
+    fn a_feed_that_changes_between_blocks_is_a_cap_per_piece_in_one_run() {
+        let axes = [axis("x"), axis("y")];
+        let runs = gcode("F600
+G1 X10
+F1200
+G1 X20
+F600
+G1 X30", &axes, &[0.0; 2]).unwrap();
+        assert_eq!(runs.len(), 1);
+        let caps = runs[0].caps().unwrap();
+        assert!(caps.iter().zip([0.01, 0.02, 0.01]).all(|(a, b)| (a - b).abs() < 1e-15) && runs[0].feed == Some(0.02));
+        let points = crate::path::plan_feeds(&axes, &[0.0; 2], &runs[0].pieces, &caps, 1e-3, 0.0, crate::path::ARC_SLACK)
+            .unwrap();
+        let (time, k) = (points[points.len() - 1].0, points.iter().position(|(_, p)| p[0] >= 0.01).unwrap());
+        let speed = (points[k + 1].1[0] - points[k - 1].1[0]) / 2e-3;
+        assert!((time - 2.5).abs() < 0.03 && (speed - 0.01).abs() < 1e-4, "{time} s, {speed} m/s at 10 mm");
+    }
+
     /// `F600 / G1 X1 / G2 I10` is 1 mm, then a full circle of radius 10 mm: 0.001 + 2 pi 0.01 m on the planned path.
     #[test]
     fn a_full_circle_is_planned() {
@@ -699,7 +755,7 @@ G2 I10", &axes, &[0.0; 2]).unwrap();
     fn gcode_planes_units_and_increments() {
         let xz = [axis("x"), axis("z")];
         let runs = gcode("G18 G20 F10\nG2 X1 Z1 I1 K0", &xz, &[0.0, 0.0]).unwrap();
-        let Piece::Arc { to, centre, clockwise } = &runs[0].pieces[0] else { panic!() };
+        let Piece::Arc { to, centre, clockwise, .. } = &runs[0].pieces[0] else { panic!() };
         assert!(!clockwise && (to[0] - 0.0254).abs() < 1e-12 && (centre[0] - 0.0254).abs() < 1e-12 && centre[1] == 0.0);
         // Seen from -y, G2 from (0, 0) to (25.4, 25.4) mm around (25.4, 0) is the three-quarter way: 3/4 2 pi 25.4 mm.
         let l = length(&xz, &[0.0, 0.0], &runs[0].pieces);
@@ -708,6 +764,29 @@ G2 I10", &axes, &[0.0; 2]).unwrap();
         assert_eq!(runs[0].feed, None);
         let Piece::Line(end) = &runs[0].pieces[1] else { panic!() };
         assert!((end[0] - 0.12).abs() < 1e-15 && (end[1] - 0.095).abs() < 1e-15, "{end:?}");
+    }
+
+    /// Half turns on three axes lie in the plane the program states: G18 from (10, 0, 0) mm to (-10, 0, 0) around the origin
+    /// is in the x-z plane (y stays 0, z reaches the radius 10 mm), where the first plane holding the start's radius would
+    /// have been x-y. The three points of a MoveC (-0.5, 0, 0), (0, 0, 0.5), (0.5, 0, 0) say x-z too (their normal is
+    /// (1, 0, 1) x (2, 0, 0) = (0, 2, 0)), and the circle through them reaches z = 0.5.
+    #[test]
+    fn a_half_turn_on_three_axes_lies_in_the_plane_the_program_states() {
+        let axes = [axis("x"), axis("y"), axis("z")];
+        let reach = |start: &[f64], pieces: &[Piece]| {
+            let points = crate::path::plan(&axes, start, pieces, 1e-3, 0.0, crate::path::ARC_SLACK).unwrap();
+            points.iter().fold((0f64, 0f64), |(y, z), (_, p)| (y.max(p[1].abs()), z.max(p[2].abs())))
+        };
+        let start = [0.01, 0.0, 0.0];
+        let runs = gcode("G18 F600
+G2 X-10 Z0 I-10 K0", &axes, &start).unwrap();
+        assert!(matches!(&runs[0].pieces[0], Piece::Arc { plane: Some(n), .. } if *n == [0.0, 1.0, 0.0]));
+        let (y, z) = reach(&start, &runs[0].pieces);
+        assert!(y < 1e-12 && (z - 0.01).abs() < 1e-4, "y {y} m, z {z} m");
+        let runs = robot_csv("MoveL,-0.5,0,0
+MoveC,0,0,0.5,0.5,0,0", &axes, &[0.0; 3]).unwrap();
+        let (y, z) = reach(&[0.0; 3], &runs[0].pieces);
+        assert!(y < 1e-12 && (z - 0.5).abs() < 1e-3, "y {y} m, z {z} m");
     }
 
     /// What G-code the reader does not take is refused with its line.
@@ -722,7 +801,7 @@ G2 I10", &axes, &[0.0; 2]).unwrap();
         assert_eq!(gcode("G0 A1", &axes[..2], &[0.0; 2]).unwrap_err().key, "program-error-axis");
         // Comments, line numbers and switching functions pass; M30 ends the program.
         let runs = gcode("%\nN10 G0 X1 (to the side) ; rapid\nM3 S1000\nM30\nG0 X2", &axes, &[0.0; 3]).unwrap();
-        assert_eq!(runs, vec![Run { feed: None, pieces: vec![Piece::Line(vec![0.001, 0.0, 0.0])] }]);
+        assert_eq!(runs, vec![Run { feed: None, caps: vec![], pieces: vec![Piece::Line(vec![0.001, 0.0, 0.0])] }]);
     }
 
     /// Robot programs: MoveC through (0, 1) from (-1, 0) to (1, 0) is the upper half circle around (0, 0), clockwise as
@@ -730,11 +809,11 @@ G2 I10", &axes, &[0.0; 2]).unwrap();
     #[test]
     fn robot_programs_read_lines_and_circles() {
         let axes = [axis("x"), axis("y")];
-        let half = Piece::Arc { to: vec![1.0, 0.0], centre: vec![0.0, 0.0], clockwise: true };
+        let half = Piece::Arc { to: vec![1.0, 0.0], centre: vec![0.0, 0.0], clockwise: true, plane: None };
         let csv = robot_csv("MoveL,-1,0\nMoveC,0,1,1,0", &axes, &[0.0, 0.0]).unwrap();
         assert_eq!(csv[0].pieces, vec![Piece::Line(vec![-1.0, 0.0]), half.clone()]);
         let close = |a: &Piece, b: &Piece| match (a, b) {
-            (Piece::Arc { to, centre, clockwise }, Piece::Arc { to: t2, centre: c2, clockwise: w2 }) => {
+            (Piece::Arc { to, centre, clockwise, .. }, Piece::Arc { to: t2, centre: c2, clockwise: w2, .. }) => {
                 to.iter().chain(centre).zip(t2.iter().chain(c2)).all(|(x, y)| (x - y).abs() < 1e-12) && clockwise == w2
             }
             (Piece::Line(a), Piece::Line(b)) => a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-12),
