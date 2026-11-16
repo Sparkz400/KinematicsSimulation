@@ -131,3 +131,74 @@ fn the_steady_friction_of_a_rising_platform_is_the_hand_calculated_one() {
         assert!((torque - 0.254378).abs() < 1e-5, "motor {k}: {torque} N m");
     }
 }
+
+/// The default cycle's figures as they were before the speed work of 16 November 2026, recorded then on Windows, when
+/// the dynamics' forward kinematics started Newton from home at every call. Now it starts from the last call's pose
+/// (`warm_pose`) and stops within the same 1e-13 m, a change at the rounding of the pose; the closed loop amplifies
+/// such changes: moving only Newton's start from home by 1e-9 to 1e-7 m in the old code moved these figures by up to
+/// 7e-5 (the energy motor 2 fed back), the peak torques by up to 3e-6, the path errors by up to 7e-5. The warm start
+/// moved them by up to 1.1e-4 (motor 1's peak torque), the rest by up to 2.4e-5. Another platform's maths library,
+/// which rounds sine and arc tangent differently in the last bit, moves them the same way. Hence 1e-3.
+#[test]
+fn the_default_cycle_keeps_its_figures() {
+    const BEFORE: [f64; 30] = [
+        1.0238642766029902,
+        0.3016328207315903,
+        11.35598111604051,
+        1.0662918666753929,
+        0.6731209803523748,
+        0.24765878931921972,
+        3.8058188974856435,
+        0.2416618732122005,
+        1.1352891515872892,
+        0.4745838805724037,
+        27.77392744463231,
+        4.011644741573468,
+        0.9709239740636022,
+        0.43370016807471123,
+        26.930640143609157,
+        3.1217933010061722,
+        0.8828807335625467,
+        0.3444132288264889,
+        18.296168477123118,
+        0.6172951651861794,
+        1.112991902901006,
+        0.3579193222117818,
+        13.641048059371764,
+        0.9276152855116253,
+        7.487774917033477e-6,
+        1.8896379227442919e-6,
+        1.0878115342107962e-5,
+        1.2753265421857873e-5,
+        4.072568415897281e-6,
+        2.5526454517594324e-5,
+    ];
+    assert_figures("hexapod", &cycle_figures(&ENTRY), &BEFORE, 1e-3);
+}
+
+/// The default cycle's key figures: per motor its peak and RMS torque and the energy it drew and fed back, then the
+/// tool's path error (peak, RMS), tracking error, and the same of its turn.
+fn cycle_figures(entry: &MachineEntry) -> Vec<f64> {
+    let cfg = entry.config();
+    let mut sim = sim_components::Sim::new(entry, &cfg).unwrap();
+    let load = analyse_cycle(&mut sim).unwrap();
+    let mut out: Vec<f64> =
+        load.motors.iter().flat_map(|m| [m.peak_torque, m.rms_torque, m.energy_in, m.energy_regenerated]).collect();
+    out.extend([
+        load.path_error_peak,
+        load.path_error_rms,
+        load.tracking_error_peak,
+        load.path_angle_error_peak,
+        load.path_angle_error_rms,
+        load.tracking_angle_error_peak,
+    ]);
+    out
+}
+
+/// Every figure within `tol` of the recorded one, relative (absolute below 1e-12).
+fn assert_figures(id: &str, got: &[f64], want: &[f64], tol: f64) {
+    assert_eq!(got.len(), want.len(), "{id}: {got:?}");
+    for (k, (g, w)) in got.iter().zip(want).enumerate() {
+        assert!((g - w).abs() <= tol * w.abs().max(1e-12), "{id}: figure {k} is {g:e}, was {w:e}; all: {got:?}");
+    }
+}

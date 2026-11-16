@@ -363,8 +363,8 @@ impl Geometry {
     }
 
     /// A (6 x 6, row by row): row i (u_i, b_i x u_i), the rate of rod i's length over the platform's twist.
-    pub fn constraint(legs: &[Leg; 6]) -> Vec<f64> {
-        let mut a = vec![0.0; 36];
+    pub fn constraint(legs: &[Leg; 6]) -> [f64; 36] {
+        let mut a = [0.0; 36];
         for (i, leg) in legs.iter().enumerate() {
             let m = cross(leg.b, leg.u);
             a[i * 6..i * 6 + 6].copy_from_slice(&[leg.u[0], leg.u[1], leg.u[2], m[0], m[1], m[2]]);
@@ -378,7 +378,7 @@ impl Geometry {
         for (i, leg) in legs.iter().enumerate() {
             j[i * 6..i * 6 + 6].iter_mut().for_each(|v| *v /= leg.arm);
         }
-        j
+        j.to_vec()
     }
 
     /// The platform's centre and rotation for crank angles, by Newton's method from `home`; `None` where it does not
@@ -389,8 +389,13 @@ impl Geometry {
         // Far from home (or out of reach of the guess) Newton starts from home itself.
         let ok = guess.iter().all(|v| v.is_finite() && v.abs() < 0.5);
         let guess = if ok { guess } else { [0.0; 6] };
-        let mut p = add([self.home[0], self.home[1], self.home[2]], [guess[0], guess[1], guess[2]]);
-        let mut r = matmul(&exp([guess[3], guess[4], guess[5]]), &Self::rotation(&self.home));
+        let p = add([self.home[0], self.home[1], self.home[2]], [guess[0], guess[1], guess[2]]);
+        let r = matmul(&exp([guess[3], guess[4], guess[5]]), &Self::rotation(&self.home));
+        self.pose_from(q, p, r)
+    }
+
+    /// `pose`'s Newton from the platform at `p` turned by `r`.
+    fn pose_from(&self, q: &[f64], mut p: V3, mut r: M3) -> Option<(V3, M3)> {
         for _ in 0..40 {
             let legs = self.legs_at(q, p, &r);
             let miss: [f64; 6] = std::array::from_fn(|i| self.rod - norm(sub(legs[i].joint, legs[i].tip)));
@@ -511,6 +516,8 @@ pub struct RotaryPlatform {
     /// (N); the ball joints' from the working range.
     dead_centre_limit: f64,
     buckling_limit: f64,
+    /// Where the dynamics' Newton starts from next (`warm_motion`).
+    last: LastFound,
 }
 
 /// What the platform's motion is at crank angles and rates: the pose, the legs, A^-1, K = A^-1 diag(m), the twist and
@@ -519,9 +526,45 @@ struct Motion {
     tool: [f64; 6],
     r: M3,
     legs: [Leg; 6],
-    k: Vec<f64>,
+    k: [f64; 36],
     xi: [f64; 6],
     xi0: [f64; 6],
+}
+
+/// The pose the dynamics found last: the crank angles, the platform's centre and rotation, and K there.
+#[derive(Debug, Clone, Copy)]
+struct Found {
+    q: [f64; 6],
+    p: V3,
+    r: M3,
+    k: [f64; 36],
+}
+
+/// How far a crank may have turned since `Found` for the dynamics to start Newton from there, rad: an integration stage
+/// turns the cranks by microradians; a jump further (a new run, the planner's poses) starts as `forward` does.
+const WARM_REACH: f64 = 0.01;
+/// Numbers in `Mechanism::memory`: `Found` flat.
+const FOUND_LEN: usize = 6 + 3 + 9 + 36;
+
+/// The dynamics' last pose behind a lock (`Mechanism` is `Send`, and the integrator calls `dynamics` through `&self`).
+#[derive(Debug, Default)]
+struct LastFound(std::sync::Mutex<Option<Found>>);
+
+impl LastFound {
+    fn get(&self) -> Option<Found> {
+        self.0.lock().ok().and_then(|f| *f)
+    }
+    fn set(&self, found: Option<Found>) {
+        if let Ok(mut f) = self.0.lock() {
+            *f = found;
+        }
+    }
+}
+
+impl Clone for LastFound {
+    fn clone(&self) -> Self {
+        Self(std::sync::Mutex::new(self.get()))
+    }
 }
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
@@ -610,6 +653,7 @@ impl RotaryPlatform {
             g: if cfg.bool("effects.gravity")? { G } else { 0.0 },
             dead_centre_limit: FRAC_PI_2 - cfg.non_negative("ratings.crank_dead_centre_margin_deg")?.to_radians(),
             buckling_limit: euler / cfg.positive("ratings.rod_buckling_safety_factor")?,
+            last: LastFound::default(),
         };
         let joint = RotaryJoint::from_config(cfg)?;
         let axes = (0..6)
@@ -663,12 +707,35 @@ impl RotaryPlatform {
     /// The platform's motion at crank angles q and rates qd; `None` where the forward kinematics fails or A is
     /// singular.
     fn motion(&self, q: &[f64], qd: &[f64]) -> Option<Motion> {
-        let (p, r) = self.geo.pose(q)?;
+        self.motion_at(q, qd, self.geo.pose(q)?)
+    }
+
+    /// `motion` for the dynamics, which runs four times a sub-step: Newton starts from the pose of the last call moved
+    /// by K (q - q_last), which takes it two steps instead of about four from `forward`'s guess, where no crank turned
+    /// `WARM_REACH` or more since; as `motion` otherwise, or where that does not converge. The pose differs from
+    /// `forward`'s by Newton's tolerance (1e-12 m on the rods, and one step more).
+    fn warm_motion(&self, q: &[f64], qd: &[f64]) -> Option<Motion> {
+        let near = self.last.get().filter(|f| (0..6).all(|i| (q[i] - f.q[i]).abs() < WARM_REACH));
+        let warm = near.and_then(|f| {
+            let xi: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| f.k[r * 6 + c] * (q[c] - f.q[c])).sum());
+            self.geo.pose_from(q, add(f.p, [xi[0], xi[1], xi[2]]), matmul(&exp([xi[3], xi[4], xi[5]]), &f.r))
+        });
+        let pose = match warm {
+            Some(pose) => pose,
+            None => self.geo.pose(q)?,
+        };
+        let m = self.motion_at(q, qd, pose);
+        self.last.set(m.as_ref().map(|m| Found { q: std::array::from_fn(|i| q[i]), p: pose.0, r: pose.1, k: m.k }));
+        m
+    }
+
+    /// `motion` with the platform's centre and rotation known.
+    fn motion_at(&self, q: &[f64], qd: &[f64], (p, r): (V3, M3)) -> Option<Motion> {
         let rv = log(&r);
         let tool = [p[0], p[1], p[2], rv[0], rv[1], rv[2]];
         let legs = self.geo.legs_at(q, p, &r);
         let lu = Lu::of(&Geometry::constraint(&legs))?;
-        let mut k = vec![0.0; 36];
+        let mut k = [0.0; 36];
         for c in 0..6 {
             let col = lu.solve(std::array::from_fn(|i| if i == c { legs[c].arm } else { 0.0 }));
             (0..6).for_each(|r| k[r * 6 + c] = col[r]);
@@ -754,7 +821,7 @@ impl RotaryPlatform {
 
 impl Mechanism for RotaryPlatform {
     fn dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
-        let Some(m) = self.motion(q, qd) else {
+        let Some(m) = self.warm_motion(q, qd) else {
             mass.fill(f64::NAN);
             bias.fill(f64::NAN);
             return;
@@ -854,11 +921,28 @@ impl Mechanism for RotaryPlatform {
     fn set_payload_attached(&mut self, attached: bool) {
         self.attached = attached;
     }
+    /// The dynamics' last pose (`warm_motion`), which its next Newton starts from: a restored simulation starts it where
+    /// the one it was taken from did. NaN before the first.
+    fn memory(&self) -> Vec<f64> {
+        self.last.get().map_or(vec![f64::NAN; FOUND_LEN], |f| [&f.q[..], &f.p, f.r.as_flattened(), &f.k].concat())
+    }
+    fn set_memory(&self, memory: &[f64]) {
+        let found = (memory.len() == FOUND_LEN && memory.iter().all(|v| v.is_finite())).then(|| Found {
+            q: std::array::from_fn(|i| memory[i]),
+            p: std::array::from_fn(|i| memory[6 + i]),
+            r: std::array::from_fn(|i| std::array::from_fn(|j| memory[9 + 3 * i + j])),
+            k: std::array::from_fn(|i| memory[18 + i]),
+        });
+        self.last.set(found);
+    }
 
     fn forward(&self, q: &[f64], tool: &mut [f64]) {
         self.geo.forward(q, tool);
     }
+    /// Also forgets the dynamics' last pose (`warm_motion`): a run starts here (`equilibrium`), as does each position
+    /// cycle's setpoint, so that what ran on this machine before does not change a run by Newton's rounding.
     fn inverse(&self, tool: &[f64], q: &mut [f64]) -> bool {
+        self.last.set(None);
         self.geo.inverse(tool, q)
     }
     /// Out of reach is told by the joint machine (`inverse`); here a crank too near its dead centre, a ball joint

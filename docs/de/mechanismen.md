@@ -589,7 +589,12 @@ Hubenden und der Motor sind die der Kugelgewindeachse oben. Die Mechanik gibt Ki
   Plattformpaare bei 120 k ± (60 − `platform_half_angle_deg`), jedes Bein zum benachbarten Paar.
 - Vorwärtskinematik nach Newton über die Bewegung der Plattform, von der Mitte des Werkzeugquaders aus:
   xi = J^-1 (q − q(x)), p += v, R = exp(w) R, bis die Beine um weniger als 1e-13 m verfehlen; Beinlängen, die keine
-  Lage erfüllt (keine Konvergenz in 40 Schritten), geben NaN, was jeder Aufrufer ablehnt.
+  Lage erfüllt (keine Konvergenz in 40 Schritten), geben NaN, was jeder Aufrufer ablehnt. Die Dynamik, viermal je
+  Integrationsschritt, beginnt Newton stattdessen bei der Lage ihres letzten Aufrufs, verschoben um J^-1 (q − q_last),
+  wo sich kein Bein seither um 10 mm oder mehr bewegt hat: zwei Schritte statt etwa fünf. Diese Lage weicht von der aus
+  der Quadermitte um Newtons Toleranz ab; die Kennzahlen des Standardzyklus ändern sich damit um bis zu 1,1e-4, so viel,
+  wie eine Änderung in der Rundung der Lage sie ohnehin bewegt. `inverse` der Maschine (Start eines Laufs, Sollwert
+  jedes Lagereglertakts) vergisst diese Lage, ein Schnappschuss behält sie.
 - Die Zeilen von J sind (u_i, b_i × u_i), u_i die Richtung des Beins und b_i = R a_i. Dynamik über die Bewegung der
   Plattform: M_xi xi' + c + g = J^T f, also im Beinraum M_q = J^-T M_xi J^-1 und h = J^-T (c + g − M_xi J^-1 a0), a0
   die Längenbeschleunigung der Beine bei der Bewegung (gegen die Lagrange-Gleichungen von M_q mit Differenzen geprüft:
@@ -679,7 +684,8 @@ positiv hebt die Spitze). Jede Kurbel ist ein Gelenk von `chain::JointMachine` m
 - Inverse Kinematik je Bein geschlossen: mit e = P_i − B_i ist a cos θ + b sin θ = c, a = e · d_i, b = e_z,
   c = (|e|² + r² − L²) / 2r; θ = atan2(b, a) ∓ acos(c / √(a² + b²)), der Zweig einmal durch `crank.branch` festgelegt
   ("out": die Spitze vom Partner des Paars weg; "in" der andere); keine Lösung, wo |c| > √(a² + b²).
-- Vorwärtskinematik nach Newton über die Bewegung der Plattform, wie beim Hexapod.
+- Vorwärtskinematik nach Newton über die Bewegung der Plattform, wie beim Hexapod; auch die Dynamik beginnt bei der
+  Lage ihres letzten Aufrufs, verschoben um K (q − q_last), wo sich keine Kurbel um 0,01 rad oder mehr gedreht hat.
 - Jacobi-Matrix: A ξ = diag(u_i · t_i) θ', die Zeilen von A (u_i, b_i × u_i), u_i die Richtung der Stange und t_i die
   Tangente der Kurbelspitze; u_i · t_i ist der Hebelarm des Motors. Die Konditionszahl der inversen Jacobi-Matrix
   (Drehungen mit dem Plattformradius gewichtet) zeigen die Arbeitsraumkarte und das Signal `kinematics.condition`; sie wächst
@@ -743,7 +749,11 @@ u der Einheitsvektor vom Anlenkpunkt zum Ablaufpunkt.
   Momentenvorsteuerung (die Kräfte der Verteilung für die Dyname der Plattform, dazu die Trägheit der Winden) dieselbe
   Vorspannung von den Seilen verlangen. Die Vorwärtskinematik ist Gauß-Newton über diese Längen; die Regelung braucht
   sie zweimal je Lagereglertakt (der Schleppfehler im Werkzeugraum), daher macht sie zuerst billige Schritte und nimmt
-  die numerische Jacobi-Matrix nur nahe am Rand des Arbeitsraums.
+  die numerische Jacobi-Matrix nur nahe am Rand des Arbeitsraums. Mit dehnbaren Seilen sucht sie danach die Ruhelage
+  der Plattform auf ihnen nach Newton; wo sich keine freie Seillänge seit dem letzten Aufruf um 1 mm oder mehr geändert
+  hat, beginnt dieses Newton bei der Lage des letzten Aufrufs mit dessen Jacobi-Matrix (Sehnenverfahren, die Matrix neu
+  bestimmt, wo ein Schritt scheitert), was das Gauß-Newton und die meisten Residuen spart. Die Lage weicht um Newtons
+  Toleranz (1e-12 m) ab; sie geht in den angezeigten Schleppfehler ein, nicht in die Bewegung.
 - Signale je Seil: `cable.<k>.tension`, `cable.<k>.shortfall` (wie weit es unter der kleinsten Kraft liegt),
   `cable.<k>.length`; `platform.condition`, die Konditionszahl der Strukturmatrix. Prüfungen: `cable-max-tension`
   (höchste Seilkraft gegen die Nennkraft) und `cable-min-tension` (jedes Unterschreiten fällt durch), Motoren und

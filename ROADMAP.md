@@ -77,8 +77,13 @@ No dates. What to verify before the release is in [TODO.md](docs/development/TOD
 - The toggle press is crank-driven only; the screw-driven toggle (the knee on a nut) is not built.
 - The measured ball screw's remaining differences (above): the screw shaft's inertia and the gearbox loss on the
   inertial force are model code left to a later piece of work.
-- Speed: the hexapod and the spatial cable robot simulate slower than real time (about a quarter and a third of it on
-  a 16-thread desktop busy with other work, 15 November 2026).
+- Speed: the hexapod, the platform on cranks and the spatial cable robot run faster than real time on one core since
+  16 November 2026: processor time for the 2 s of `sim-cli run <machine> --cycle`, before and after, 1.33 -> 0.94 s,
+  1.84 -> 1.39 s and 2.39 -> 1.48 s (the least of seven runs on a 16-thread Ryzen 7 9800X3D busy with other builds; the
+  earlier "a quarter and a third of real time" was the wall clock on that busy host, which still runs two to five times
+  the processor time). The dynamics starts its forward kinematics from the last pose, the cable robot's elastic
+  `forward` from its last pose and Jacobian. The margin is thin: the drive models of six to eight motors at 62.5 us
+  take the rest, and a slower or busier host may not keep up.
 - Life estimates: no belt life (no maker publishes a method); the gearbox's gearing by Palmgren-Miner on Siemens'
   two torque figures, not Siemens' own damage method.
 - Linear delta: the guides' moments (Mx, My, Mz), and warming belts and pulleys.

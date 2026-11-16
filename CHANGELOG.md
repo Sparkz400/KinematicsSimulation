@@ -74,6 +74,14 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   keeping the joints off their stops (the null space towards the middles of their ranges), `"home"` (as before) on
   staying near `kinematics.home_joints`.
 
+### Changed
+
+- Speed: the hexapod, the platform on cranks and the spatial cable robot run faster than real time on one core (2 s of
+  their default cycles in 0.94, 1.39 and 1.48 s of processor time, from 1.33, 1.84 and 2.39 s). Their dynamics start
+  the forward kinematics from the last call's pose (`Mechanism::memory` carries it for snapshots); the cable robot's
+  elastic `forward` from its last pose and Jacobian. The cable robots' cycle figures are unchanged to 1e-9; the
+  hexapods' move by up to 1.1e-4, as rounding-level changes of the pose move them anyway (docs/validation.md).
+
 ## [1.0.0] - 2026-11-16
 
 The release was cut on 14 November 2026 at 19c2ad1 and tagged on 16 November 2026; the three
