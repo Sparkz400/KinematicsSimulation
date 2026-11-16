@@ -1259,7 +1259,7 @@ impl Controller {
 
     /// The timing for a program (`program::read`) from where the setpoint stands, as the poses `Command::Trajectory`
     /// runs: each run planned from where the one before ends, at rest between them. A run with a feed is planned within
-    /// the axis limits with its speed along the path capped at the feed (`path::plan_at`); one without as `plan_path`
+    /// the axis limits with the speed along the path of each piece capped at its own feed (`path::plan_feeds`); one without as `plan_path`
     /// plans it, as fast as the motors allow with `time_optimal`. A program without a move is refused (`error-path`).
     pub fn plan_program(
         &self,
@@ -1270,7 +1270,8 @@ impl Controller {
         let mut points = vec![(0.0, self.raw_pos.clone())];
         for run in runs.iter().filter(|run| !run.pieces.is_empty()) {
             let (t0, start) = points[points.len() - 1].clone();
-            let planned = self.plan_from(machine, &start, &run.pieces, time_optimal && run.feed.is_none(), run.feed)?;
+            let planned =
+                self.plan_from(machine, &start, &run.pieces, time_optimal && run.feed.is_none(), run.caps().as_deref())?;
             // Each plan starts at its start at 0 s, which the one before has as its end.
             points.extend(planned.into_iter().skip(1).map(|(t, pose)| (t0 + t, pose)));
         }
@@ -1280,17 +1281,17 @@ impl Controller {
         Ok(points)
     }
 
-    /// `plan_path` from `start`, with the speed along the path capped at `feed` where there is one (then within the axis
-    /// limits, also with `time_optimal`).
+    /// `plan_path` from `start`, with the speed along the path of piece i capped at `feeds[i]` where there are any (then
+    /// within the axis limits, also with `time_optimal`).
     fn plan_from(
         &self,
         machine: &dyn Machine,
         start: &[f64],
         pieces: &[Piece],
         time_optimal: bool,
-        feed: Option<f64>,
+        feeds: Option<&[f64]>,
     ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
-        let time_optimal = time_optimal && feed.is_none();
+        let time_optimal = time_optimal && feeds.is_none();
         // An arc or a spline can swing out of the range although every point given is inside. Said here,
         // because `Command::Trajectory` refuses such poses with a message about poses at times.
         let reachable = |points: &[(f64, Vec<f64>)]| {
@@ -1301,8 +1302,8 @@ impl Controller {
             }
         };
         let within_axis_limits = || {
-            let (cycle, slack, feed) = (self.profile_cycle, machine.setpoint_slack(), feed.unwrap_or(f64::INFINITY));
-            path::plan_at(machine.axes(), start, pieces, cycle, self.path_tolerance, slack, feed)
+            let (cycle, slack) = (self.profile_cycle, machine.setpoint_slack());
+            path::plan_feeds(machine.axes(), start, pieces, feeds.unwrap_or(&[]), cycle, self.path_tolerance, slack)
         };
         if time_optimal {
             // A pose on the way that the machine cannot go to (an arm's singularity, where the motors would have to
