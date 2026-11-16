@@ -637,12 +637,15 @@ impl Machine for SingleAxis {
 
     /// The rigid model at a = 0: shaft friction (with the gearbox's drag) at the rotor's speed i v / r, and the guide's
     /// steady sliding force and the cable chain's drag at v, through the pulley and the gearbox as `rigid_solve` takes
-    /// them: r / (i loss) (F_guide + F_chain).
-    fn steady_friction(&self, _pos: &[f64], vel: &[f64], out: &mut [f64]) {
+    /// them: r / (i loss) (F + W) - r W / i, F the guide and chain force and W the weight along the guide (the rigid
+    /// feedforward carries r W / i itself). The loss factor is the one of the whole torque the gearbox passes, as in
+    /// `rigid_solve`, so the weight's own loss is in it too.
+    fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
         let (r, ratio, v) = (self.r, self.gearbox.ratio, vel[0]);
         let force = self.friction.feedforward(v, self.load_scale()) + self.chain.drag(v, self.friction.stribeck_v);
-        let loss = self.gearbox.loss_factor(force * r, v / r);
-        out[0] = self.shaft.torque(ratio * v / r) + r / (ratio * loss) * force;
+        let weight = (self.m() + self.chain.mass(pos[0]).0) * self.g_along;
+        let loss = self.gearbox.loss_factor((force + weight) * r, v / r);
+        out[0] = self.shaft.torque(ratio * v / r) + r / ratio * ((force + weight) / loss - weight);
     }
 
     fn energy(&self, s: &[f64]) -> f64 {

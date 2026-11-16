@@ -218,6 +218,75 @@ const JUMP: usize = N_ELASTIC;
 const RIGID_BRAKE: usize = 6;
 const N_RIGID: usize = 8;
 
+/// The eigenpairs of K x = w2 M x for the symmetric n x n matrices `m` (positive definite) and `k`, row by row, lowest
+/// w2 first, each x scaled to x'Mx = 1: the eigenvalues of L^-1 K L^-T (M = L L') by Jacobi rotations, x = L^-T y. Empty
+/// where M is not positive definite.
+fn generalised_eigen(m: &[f64], k: &[f64], n: usize) -> Vec<(f64, Vec<f64>)> {
+    let mut l = vec![0.0; n * n];
+    for i in 0..n {
+        for j in 0..=i {
+            let sum = m[i * n + j] - (0..j).map(|p| l[i * n + p] * l[j * n + p]).sum::<f64>();
+            if i == j {
+                if !(sum > 0.0) {
+                    return Vec::new();
+                }
+                l[i * n + i] = sum.sqrt();
+            } else {
+                l[i * n + j] = sum / l[j * n + j];
+            }
+        }
+    }
+    // w = L^-1, by forward substitution column by column.
+    let mut w = vec![0.0; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            let sum = f64::from(u8::from(i == j)) - (0..i).map(|p| l[i * n + p] * w[p * n + j]).sum::<f64>();
+            w[i * n + j] = sum / l[i * n + i];
+        }
+    }
+    let mut a: Vec<f64> = (0..n * n)
+        .map(|rc| {
+            let (r, c) = (rc / n, rc % n);
+            (0..n).map(|p| (0..n).map(|q| w[r * n + p] * k[p * n + q] * w[c * n + q]).sum::<f64>()).sum()
+        })
+        .collect();
+    let mut v: Vec<f64> = (0..n * n).map(|rc| f64::from(u8::from(rc / n == rc % n))).collect();
+    for _ in 0..100 {
+        let off: f64 = (0..n * n).filter(|rc| rc / n != rc % n).map(|rc| a[rc] * a[rc]).sum();
+        let diag: f64 = (0..n).map(|i| a[i * n + i] * a[i * n + i]).sum();
+        if !(off > 1e-30 * diag) {
+            break;
+        }
+        for p in 0..n {
+            for q in p + 1..n {
+                if a[p * n + q] == 0.0 {
+                    continue;
+                }
+                let theta = (a[q * n + q] - a[p * n + p]) / (2.0 * a[p * n + q]);
+                let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+                let (cs, sn) = (1.0 / (t * t + 1.0).sqrt(), t / (t * t + 1.0).sqrt());
+                for r in 0..n {
+                    let (rp, rq) = (a[r * n + p], a[r * n + q]);
+                    (a[r * n + p], a[r * n + q]) = (cs * rp - sn * rq, sn * rp + cs * rq);
+                }
+                for r in 0..n {
+                    let (pr, qr) = (a[p * n + r], a[q * n + r]);
+                    (a[p * n + r], a[q * n + r]) = (cs * pr - sn * qr, sn * pr + cs * qr);
+                }
+                for r in 0..n {
+                    let (rp, rq) = (v[r * n + p], v[r * n + q]);
+                    (v[r * n + p], v[r * n + q]) = (cs * rp - sn * rq, sn * rp + cs * rq);
+                }
+            }
+        }
+    }
+    let mut pairs: Vec<(f64, Vec<f64>)> = (0..n)
+        .map(|i| (a[i * n + i], (0..n).map(|r| (0..n).map(|p| w[p * n + r] * v[p * n + i]).sum()).collect()))
+        .collect();
+    pairs.sort_by(|x, y| x.0.total_cmp(&y.0));
+    pairs
+}
+
 impl TGantry {
     pub fn new(cfg: &Config) -> Result<Self, ConfigError> {
         let axis = |id: &'static str, key: &'static str, stroke: f64| -> Result<AxisInfo, ConfigError> {
@@ -344,7 +413,8 @@ impl TGantry {
                 0.5 * m.belt.mass_per_m * (geo.iter().sum::<f64>() - 4.0 * m.belt.tooth_length),
             )?;
         }
-        // Belt mass: the belt runs at pulley surface speed, so half of it is lumped on each pulley.
+        // Belt mass: the belt's horizontal runs move at pulley surface speed, so half of the free belt is lumped on each
+        // pulley; what the vertical runs have more is `belt_mass`.
         m.j_pulley += 0.5 * m.belt.mass_per_m * (geo.iter().sum::<f64>() - 4.0 * m.belt.tooth_length) * r * r;
         Ok(m)
     }
@@ -367,6 +437,101 @@ impl TGantry {
     /// Both motors reflected onto one tool axis: 2 J / r^2.
     fn m_motors(&self) -> f64 {
         2.0 * self.j() / (self.r * self.r)
+    }
+
+    /// What the belt's kinetic energy has beyond the half of it lumped on each pulley, as a mass matrix on the carriage's
+    /// speed w along X and the Z axis's vz: (xx, xz) of T = 1/2 xx w^2 + xz w vz (zz stays at the lumps'). The two vertical
+    /// runs of section 1 and 3 move with the clamp, (w, vz); those of section 2 over ground at (w, 2 w + vz) and (w, -(2 w -
+    /// vz)) (the belt passes the carriage idlers there, see the module comment), 10 w^2 + 2 vz^2 per metre, the lumps
+    /// have counted 2 (w^2 + vz^2); so xx = 8 mu (s + sz - z), and the horizontal runs at (w + vz) over 2 (s + x) and (w -
+    /// vz) over 2 (s + sx - x) give xz = 2 mu (2 x - sx) against the lumps' 0.
+    fn belt_mass(&self, x: f64, z: f64) -> (f64, f64) {
+        let (mu, s) = (self.belt.mass_per_m, self.span_min);
+        (8.0 * mu * (s + self.axes[1].max - z), 2.0 * mu * (2.0 * x - self.axes[0].max))
+    }
+    /// The speed terms of `belt_mass`'s Lagrange equations at the carriage speed w along the beam (the frame's sway
+    /// included), its speed vx relative to the frame and vz: forces to put on the right side of the carriage's and the Z
+    /// axis's equations, and the beam's share (-dT/dx).
+    fn belt_speed_terms(&self, vx: f64, w: f64, vz: f64) -> (f64, f64, f64) {
+        let mu = self.belt.mass_per_m;
+        (mu * vz * (12.0 * w - 4.0 * vx), 4.0 * mu * w * (vx + w), 4.0 * mu * w * vz)
+    }
+
+    /// The small oscillations of the elastic model about the pose, lowest first, with each one's shape in the layout of
+    /// the state: the generalised eigenvalues K v = w^2 M v over the elastic coordinates the model has, x (the carriage
+    /// on the frame), z, with effects.frame_compliance the frame's sway q, with a flexible Z axis its lean u. The
+    /// pulleys are taken as held, so none of the belt's own or the pulleys' inertia is in M. In `elastic_derivatives`'
+    /// terms, with w = x' + q':
+    ///   T = 1/2 mc w^2 + 1/2 mz (w + u')^2 + 1/2 (mz + idlers) z'^2 + 1/2 mf q'^2 (u' and q' where present; without the
+    ///   lean the Z axis's mass mz rides on the carriage),
+    ///   V = 1/2 sum k_i (g_i . (x, z))^2 + 1/2 kf q^2 + 1/2 kz u^2, the belt's three sections, k_i = EA / L_i, with
+    ///   g_1 = (1, 1), g_2 = (0, -2), g_3 = (-1, 1) (the sections' lengths L_i change with x + z, -2 z, -x + z),
+    /// so K_xx = k_1 + k_3, K_xz = k_1 - k_3, K_zz = k_1 + 4 k_2 + k_3. Each one's damping ratio is that of its shape v
+    /// in the same coordinates, v'Cv / (2 w v'Mv), with C the belt's sections (`belt.damping_n_s_m` each, or with
+    /// effects.belt_material_damping `belt.damping_time_s` k_i more) on the same g_i, `frame.damping_n_s_m` on q and
+    /// `tool_flex.damping_n_s_m` on u; the cross terms of a damping that is not proportional are left out.
+    // shortcut: the pose's gravity and process loads and the tool flex's rise with z (dk/dz) do not enter K; they are
+    // second order in the small deflections. Add them if a mode under a large process force has to be right.
+    fn modal(&self, tool_pose: &[f64]) -> Vec<(Mode, Vec<f64>)> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let geo = self.geo(tool_pose[0], tool_pose[1]);
+        let mut at = vec![X, Z];
+        at.extend(self.frame.as_ref().map(|_| Q));
+        at.extend(self.flex.as_ref().map(|_| U));
+        let n = at.len();
+        let index = |coordinate: usize| at.iter().position(|&c| c == coordinate);
+        // v v' times `weight`, v given by the (coordinate, factor) of its non-zero entries.
+        let add = |matrix: &mut [f64], v: &[(usize, f64)], weight: f64| {
+            for &(i, a) in v {
+                for &(j, b) in v {
+                    matrix[i * n + j] += weight * a * b;
+                }
+            }
+        };
+        let (mut mass, mut stiffness, mut damping) = (vec![0.0; n * n], vec![0.0; n * n], vec![0.0; n * n]);
+        let mc = self.m_x() - self.m_z() + self.m_idlers[0] + self.chain.mass(tool_pose[0]).0;
+        let mut carriage = vec![(0, 1.0)];
+        carriage.extend(index(Q).map(|q| (q, 1.0)));
+        match index(U) {
+            Some(u) => {
+                add(&mut mass, &carriage, mc);
+                carriage.push((u, 1.0));
+                add(&mut mass, &carriage, self.m_z());
+            }
+            None => add(&mut mass, &carriage, mc + self.m_z()),
+        }
+        add(&mut mass, &[(1, 1.0)], self.m_z() + self.m_idlers[1]);
+        let sections = [[(0, 1.0), (1, 1.0)].as_slice(), &[(1, -2.0)], &[(0, -1.0), (1, 1.0)]];
+        for (g, length) in sections.into_iter().zip(geo) {
+            let k = self.belt.ea / length;
+            add(&mut stiffness, g, k);
+            add(&mut damping, g, self.belt.damping + self.belt.damping_time * k);
+        }
+        if let (Some(f), Some(q)) = (&self.frame, index(Q)) {
+            add(&mut mass, &[(q, 1.0)], f.mass);
+            add(&mut stiffness, &[(q, 1.0)], f.stiffness);
+            add(&mut damping, &[(q, 1.0)], f.damping);
+        }
+        if let (Some(f), Some(u)) = (&self.flex, index(U)) {
+            add(&mut stiffness, &[(u, 1.0)], self.flex_at(tool_pose[1]).0);
+            add(&mut damping, &[(u, 1.0)], f.damping);
+        }
+        generalised_eigen(&mass, &stiffness, n)
+            .into_iter()
+            .filter(|(w2, _)| *w2 > 0.0 && w2.is_finite())
+            .map(|(w2, v)| {
+                let quadratic = |m: &[f64]| (0..n * n).map(|rc| v[rc / n] * m[rc] * v[rc % n]).sum::<f64>();
+                let w = w2.sqrt();
+                let damping = quadratic(&damping) / (2.0 * w * quadratic(&mass));
+                let mut shape = vec![0.0; self.state_len()];
+                for (c, value) in at.iter().zip(v) {
+                    shape[*c] = value;
+                }
+                (Mode { hz: w / std::f64::consts::TAU, damping }, shape)
+            })
+            .collect()
     }
 
     /// The spring that holds the Z axis upright at height z: (stiffness k at the centre of mass, dk/dz,
@@ -555,37 +720,46 @@ impl TGantry {
         let w = vx + s[V + Q];
         let chain_x = chain_growth * w * (0.5 * w - vx);
         let m_carriage = self.m_x() - self.m_z() + self.m_idlers[0] + chain_mass;
+        let (belt_xx, belt_xz) = self.belt_mass(s[X], s[Z]);
+        let (belt_x, belt_z, belt_q) = self.belt_speed_terms(vx, w, s[V + Z]);
         let aq = match &self.frame {
-            Some(f) => (-f.stiffness * s[Q] - f.damping * s[V + Q] - fx - 0.5 * chain_growth * w * w) / f.mass,
+            Some(f) => {
+                (-f.stiffness * s[Q] - f.damping * s[V + Q] - fx - 0.5 * chain_growth * w * w - belt_q) / f.mass
+            }
             None => {
                 out[Q] = 0.0;
                 0.0
             }
         };
-        let mut fz_flex = 0.0;
-        match &self.flex {
-            Some(f) => {
-                let (k, dk_dz, tip) = self.flex_at(s[Z]);
-                let spring = k * s[U] + f.damping * s[V + U];
-                // The process force acts at the tool tip, which moves `tip` times as far as u: that share
-                // of it bends the Z axis, the rest pushes the carriage.
-                let ax = (fx + chain_x + (1.0 - tip) * process_x + spring) / m_carriage - aq;
-                out[V + X] = ax;
-                // The Z axis rides on the carriage and the frame: its own acceleration is ax + aq plus that of u.
-                out[V + U] = (tip * process_x - spring) / self.m_z() - (ax + aq);
-                // The spring gets stiffer as the Z axis rises, which pushes back on Z: -dV/dz of k u^2 / 2.
-                fz_flex = -0.5 * s[U] * s[U] * dk_dz;
-            }
-            None => {
-                out[V + X] = (fx + chain_x + process_x) / (m_carriage + self.m_z()) - aq;
-                out[U] = 0.0;
-                out[V + U] = 0.0;
-            }
-        }
+        let (k, dk_dz, tip) = self.flex_at(s[Z]);
+        let spring = self.flex.as_ref().map_or(0.0, |f| k * s[U] + f.damping * s[V + U]);
+        // The spring gets stiffer as the Z axis rises, which pushes back on Z: -dV/dz of k u^2 / 2.
+        let fz_flex = -0.5 * s[U] * s[U] * dk_dz;
+        // The carriage's equation: inertia (ax + aq) + belt_xz az = force, and the Z axis's, below.
+        let (inertia_x, force_x) = if self.flex.is_some() {
+            // The process force acts at the tool tip, which moves `tip` times as far as u: that share
+            // of it bends the Z axis, the rest pushes the carriage.
+            (m_carriage, fx + chain_x + (1.0 - tip) * process_x + spring)
+        } else {
+            out[U] = 0.0;
+            out[V + U] = 0.0;
+            (m_carriage + self.m_z(), fx + chain_x + process_x)
+        };
+        let (inertia_x, force_x) = (inertia_x + belt_xx, force_x + belt_x);
         // The idlers add inertia in Z but no weight.
         let m_z = self.m_z() + self.m_idlers[1];
-        out[V + Z] = (fz_belt - ffz + fz_flex - idler_z + process_z + self.stop_force(1, s[Z], vz)) / m_z
-            - self.g * (self.m_z() / m_z);
+        let force_z = fz_belt - ffz + fz_flex - idler_z + process_z + self.stop_force(1, s[Z], vz)
+            - self.g * self.m_z()
+            - belt_z;
+        // The two equations share the cross term of the belt's mass: solved together for the carriage's acceleration over
+        // ground and the Z axis's.
+        let a_carriage = (force_x - belt_xz * force_z / m_z) / (inertia_x - belt_xz * belt_xz / m_z);
+        out[V + Z] = (force_z - belt_xz * a_carriage) / m_z;
+        out[V + X] = a_carriage - aq;
+        if self.flex.is_some() {
+            // The Z axis rides on the carriage and the frame: its own acceleration is ax + aq plus that of u.
+            out[V + U] = (tip * process_x - spring) / self.m_z() - a_carriage;
+        }
         out[V + Q] = aq;
         let belt_torque =
             [self.r_mat * (sec[0].material - sec[1].material), self.r_mat * (sec[1].material - sec[2].material)];
@@ -638,7 +812,10 @@ impl TGantry {
         let rotor = ratio * ratio * self.j_rotor / (r * r);
         let pulleys = 2.0 * self.j_pulley / (r * r);
         let (chain_mass, chain_growth) = self.chain.mass(s[0]);
-        let (mx, mz) = (self.m_x() + pulleys + self.m_idlers[0] + chain_mass, self.m_z() + pulleys + self.m_idlers[1]);
+        let (belt_xx, belt_xz) = self.belt_mass(s[0], s[1]);
+        let (mx, mz) =
+            (self.m_x() + pulleys + self.m_idlers[0] + chain_mass + belt_xx, self.m_z() + pulleys + self.m_idlers[1]);
+        let (belt_x, belt_z, _) = self.belt_speed_terms(s[2], s[2], s[3]);
         let (ffx, ffz, dsx, dsz) = self.guide_friction(s[1], s[2], s[3], s[4], s[5], torque);
         // Idlers, chain, process and end stops; the growing chain takes m' vx^2 / 2 (see the elastic model).
         let (idler_x, idler_z) = self.idler_friction(s[2], s[3]);
@@ -650,10 +827,11 @@ impl TGantry {
         let extra_z = process_z + self.stop_force(1, s[1], s[3]) - idler_z;
         let (mut loss, mut out) = ([1.0; 2], [0.0; 10]);
         for _ in 0..3 {
-            let bx = loss[0] * drive[0] + loss[1] * drive[1] + mesh[0] + mesh[1] - ffx + extra_x;
-            let bz = loss[0] * drive[0] - loss[1] * drive[1] + mesh[0] - mesh[1] - ffz - self.m_z() * self.g + extra_z;
+            let bx = loss[0] * drive[0] + loss[1] * drive[1] + mesh[0] + mesh[1] - ffx + extra_x + belt_x;
+            let bz = loss[0] * drive[0] - loss[1] * drive[1] + mesh[0] - mesh[1] - ffz - self.m_z() * self.g + extra_z
+                - belt_z;
             // (mx + p) ax + q az = bx,  q ax + (mz + p) az = bz
-            let (p, q) = (rotor * (loss[0] + loss[1]), rotor * (loss[0] - loss[1]));
+            let (p, q) = (rotor * (loss[0] + loss[1]), rotor * (loss[0] - loss[1]) + belt_xz);
             let det = (mx + p) * (mz + p) - q * q;
             let (ax, az) = ((bx * (mz + p) - q * bz) / det, ((mx + p) * bz - q * bx) / det);
             let through_gear = [drive[0] - rotor * (ax + az), drive[1] - rotor * (ax - az)];
@@ -689,9 +867,11 @@ impl TGantry {
     fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
         let potential = self.m_z() * self.g * s[Z];
         if !self.elastic {
+            let (belt_xx, belt_xz) = self.belt_mass(s[0], s[1]);
             let kinetic =
-                0.5 * (self.m_x() + self.m_motors() + self.m_idlers[0] + self.chain.mass(s[0]).0) * s[2] * s[2]
-                    + 0.5 * (self.m_z() + self.m_motors() + self.m_idlers[1]) * s[3] * s[3];
+                0.5 * (self.m_x() + self.m_motors() + self.m_idlers[0] + self.chain.mass(s[0]).0 + belt_xx) * s[2] * s[2]
+                    + 0.5 * (self.m_z() + self.m_motors() + self.m_idlers[1]) * s[3] * s[3]
+                    + belt_xz * s[2] * s[3];
             return [kinetic, potential, self.stop_energy(s[0], s[1])];
         }
         let ([a, b], _) = self.fed_angles(s);
@@ -711,7 +891,10 @@ impl TGantry {
             .as_ref()
             .map_or([0.0; 2], |f| [0.5 * f.mass * s[V + Q].powi(2), 0.5 * f.stiffness * s[Q].powi(2)]);
         let v_carriage = s[V + X] + s[V + Q];
-        let kinetic = 0.5 * (self.m_x() - self.m_z() + self.m_idlers[0] + self.chain.mass(s[X]).0) * v_carriage.powi(2)
+        let (belt_xx, belt_xz) = self.belt_mass(s[X], s[Z]);
+        let kinetic = 0.5 * (self.m_x() - self.m_z() + self.m_idlers[0] + self.chain.mass(s[X]).0 + belt_xx)
+            * v_carriage.powi(2)
+            + belt_xz * v_carriage * s[V + Z]
             + 0.5 * self.m_z() * (v_carriage + s[V + U]).powi(2)
             + 0.5 * (self.m_z() + self.m_idlers[1]) * s[V + Z].powi(2)
             + turning
@@ -821,13 +1004,25 @@ impl TGantry {
             let (ax, az, aq, au) = (d[V + X], d[V + Z], d[V + Q], d[V + U]);
             let w = vx + s[V + Q];
             let m_carriage = self.m_x() - self.m_z() + idlers[0] + chain_mass;
-            let inertia_x =
-                m_carriage * (ax + aq) + self.m_z() * (ax + aq + au) + motors * ax + chain_growth * w * (vx - 0.5 * w);
-            [inertia_x, (self.m_z() + idlers[1] + motors) * az]
+            let (belt_xx, belt_xz) = self.belt_mass(s[X], z);
+            let (belt_x, belt_z, _) = self.belt_speed_terms(vx, w, vz);
+            let inertia_x = m_carriage * (ax + aq)
+                + self.m_z() * (ax + aq + au)
+                + motors * ax
+                + chain_growth * w * (vx - 0.5 * w)
+                + belt_xx * (ax + aq)
+                + belt_xz * az
+                - belt_x;
+            [inertia_x, (self.m_z() + idlers[1] + motors) * az + belt_xz * (ax + aq) + belt_z]
         } else {
             let solved = self.rigid_solve(s, torque);
-            let inertia_x = (self.m_x() + motors + idlers[0] + chain_mass) * solved[0] + 0.5 * chain_growth * vx * vx;
-            [inertia_x, (self.m_z() + motors + idlers[1]) * solved[1]]
+            let (belt_xx, belt_xz) = self.belt_mass(s[X], z);
+            let (belt_x, belt_z, _) = self.belt_speed_terms(vx, vx, vz);
+            let inertia_x = (self.m_x() + motors + idlers[0] + chain_mass + belt_xx) * solved[0]
+                + belt_xz * solved[1]
+                + 0.5 * chain_growth * vx * vx
+                - belt_x;
+            [inertia_x, (self.m_z() + motors + idlers[1]) * solved[1] + belt_xz * solved[0] + belt_z]
         };
         let friction = [ffx + idler_x + drag, ffz + idler_z];
         for k in 0..2 {
@@ -1045,13 +1240,13 @@ impl Machine for TGantry {
             return;
         }
         // X balance: T1 = T3. Z balance: 2 T2 - T1 - T3 = m_z g. The belt total fixes the level.
-        let geo = self.geo(x, z);
+        // The beam's sag lowers the tool under the Z axis's place on its belt: the belt holds the state's Z, not z.
+        let geo = self.geo(x, z + self.sag(x).0);
         let mat = self.belt.static_material(&geo, &[0.0, self.m_z() * self.g / 2.0, 0.0], self.mat0.iter().sum());
         let (a, b) = ((mat[0] - self.mat0[0]) / self.r_mat, (self.mat0[2] - mat[2]) / self.r_mat);
         let m: [f64; 3] = std::array::from_fn(|i| self.belt.section(geo[i], mat[i], 0.0, 0.0).material);
         *state = vec![0.0; self.state_len()];
         state[X] = x;
-        // The beam's sag lowers the tool under the Z axis's place on its belt.
         state[Z] = z + self.sag(x).0;
         for (k, (theta, belt_torque)) in
             [(a, self.r_mat * (m[0] - m[1])), (b, self.r_mat * (m[1] - m[2]))].into_iter().enumerate()
@@ -1109,8 +1304,12 @@ impl Machine for TGantry {
     }
 
     fn feedforward_torque(&self, pos: &[f64], acc: &[f64], out: &mut [f64]) {
-        let fx = (self.m_x() + self.m_motors() + self.m_idlers[0] + self.chain.mass(pos[0]).0) * acc[0];
-        let fz = (self.m_z() + self.m_motors() + self.m_idlers[1]) * acc[1] + self.m_z() * self.g;
+        // shortcut: the belt's speed terms (`belt_speed_terms`, second order in the speeds) are left to the
+        // loop, as the chain's growth is; add them if a feedforward without speed arguments ever gets one.
+        let (belt_xx, belt_xz) = self.belt_mass(pos[0], pos[1]);
+        let fx = (self.m_x() + self.m_motors() + self.m_idlers[0] + self.chain.mass(pos[0]).0 + belt_xx) * acc[0]
+            + belt_xz * acc[1];
+        let fz = (self.m_z() + self.m_motors() + self.m_idlers[1]) * acc[1] + belt_xz * acc[0] + self.m_z() * self.g;
         let k = self.r / (2.0 * self.gearbox.ratio);
         out[0] = k * (fx + fz);
         out[1] = k * (fx - fz);
@@ -1118,9 +1317,10 @@ impl Machine for TGantry {
 
     /// The rigid model at a steady speed: the guides at their steady level (loads at rest), the idlers and the cable
     /// chain give F_x and F_z against the motion; motor a's belt force carries (F_x + F_z) / 2 and b's (F_x - F_z) / 2,
-    /// each through its gearbox, r / (i loss), plus the motor shaft's friction (with the gearbox's drag) at its speed.
-    /// The loss factor is the one of what the gearbox passes, the Z axis's weight ±m_z g / 2 with the friction, as in
-    /// `rigid_solve`; the weight itself is the rigid feedforward's.
+    /// each through its gearbox, r / (i loss) (F + W) - r W / i with W = ±m_z g / 2 the Z axis's weight on that belt force,
+    /// plus the motor shaft's friction (with the gearbox's drag) at its speed. The loss factor is the one of what the
+    /// gearbox passes, the weight with the friction, as in `rigid_solve`; the weight itself is the rigid feedforward's,
+    /// its loss is here.
     fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
         let (r, ratio, (vx, vz)) = (self.r, self.gearbox.ratio, (vel[0], vel[1]));
         let (scale_x, scale_z) = self.load_scales(pos[1], 0.0);
@@ -1132,7 +1332,7 @@ impl Machine for TGantry {
         self.inverse(vel, &mut speed);
         for (k, (force, weight)) in [((fx + fz) / 2.0, lift), ((fx - fz) / 2.0, -lift)].into_iter().enumerate() {
             let loss = self.gears[k].loss_factor((force + weight) * r, speed[k] / ratio);
-            out[k] = self.shaft[k].torque(speed[k]) + r / (ratio * loss) * force;
+            out[k] = self.shaft[k].torque(speed[k]) + r / ratio * ((force + weight) / loss - weight);
         }
     }
 
@@ -1160,36 +1360,15 @@ impl Machine for TGantry {
         self.energy_parts(s).iter().sum()
     }
 
-    /// The lower of the two modes of `modes`.
+    /// The lowest of `modes`.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
         self.modes(tool_pose).first().map(|mode| mode.hz)
     }
 
-    /// The Z axis leaning on its guide while the belt holds the carriage: two masses in a row. The carriage
-    /// sits on the belt's stiffness in X (the two sections that end at the clamp, EA / L each, with the
-    /// pulleys taken as held), the Z axis with what it carries on the spring of its guide at this height.
-    /// Both modes, from w^4 - (kb / mc + kz / mc + kz / mz) w^2 + kb kz / (mc mz) = 0: in the lower one carriage and
-    /// Z axis swing together, in the upper one against each other. Each one's damping ratio is that of its shape v
-    /// (`mode_shape`) in (x, u), v'Cv / (2 w v'Mv) with C = [[cb, 0], [0, cz]]: cb the damping of the two sections
-    /// (`belt.damping_n_s_m` each, or with effects.belt_material_damping `belt.damping_time_s` EA / L), cz that of the
-    /// guide (`tool_flex.damping_n_s_m`); the cross terms of a damping that is not proportional are left out.
+    /// Every mode of `modal`, lowest first: with the default frame and the leaning Z axis four, the carriage and the frame
+    /// swaying against each other, the carriage on the belt, the Z axis on its belt and the Z axis's lean.
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
-        let Some(flex) = self.flex.as_ref().filter(|_| self.elastic) else { return Vec::new() };
-        let geo = self.geo(tool_pose[0], tool_pose[1]);
-        let (belt, lean) = (self.belt.ea / geo[0] + self.belt.ea / geo[2], self.flex_at(tool_pose[1]).0);
-        let belt_damping = 2.0 * self.belt.damping + self.belt.damping_time * belt;
-        let (mc, mz) = (self.m_x() - self.m_z() + self.m_idlers[0] + self.chain.mass(tool_pose[0]).0, self.m_z());
-        let (sum, product) = ((belt + lean) / mc + lean / mz, belt * lean / (mc * mz));
-        let root = (sum * sum - 4.0 * product).sqrt();
-        [sum - root, sum + root]
-            .map(|twice| {
-                let w2 = 0.5 * twice;
-                let (vx, vu) = (lean - w2 * mz, w2 * mz);
-                let (kinetic, damped) =
-                    (mc * vx * vx + mz * (vx + vu) * (vx + vu), belt_damping * vx * vx + flex.damping * vu * vu);
-                Mode { hz: w2.sqrt() / std::f64::consts::TAU, damping: damped / (2.0 * w2.sqrt() * kinetic) }
-            })
-            .to_vec()
+        self.modal(tool_pose).into_iter().map(|(mode, _)| mode).collect()
     }
 
     /// With effects.belt_wrap: the wrap at each motor pulley, from where `scene` puts the wheels next to it, the carriage
@@ -1206,30 +1385,18 @@ impl Machine for TGantry {
             .collect()
     }
 
-    /// The mode of `resonance_hz`. What moves: the carriage on the frame, x (with the pulleys held, all of it is
-    /// belt stretch), and the Z axis's centre of mass against the carriage, u. Nothing else: pulleys, motors and
-    /// frame stay. In (x, u), with the Z axis at x + u over ground:
-    ///   M = [[mc + mz, mz], [mz, mz]], K = [[kb, 0], [0, kz]],
-    /// kb, kz, mc, mz as in `modes`. The second row of (K - w^2 M) v = 0, -w^2 mz vx + (kz - w^2 mz) vu = 0,
-    /// gives v = (kz - w^2 mz, w^2 mz), scaled so that the larger of the carriage's travel x and the tool's travel
-    /// x + tip u (`tool_state`) is 1 m. Not to the tool's alone: high on the Z axis tip turns negative and the tool
-    /// stands still in the mode at one height, where that scale would be infinite. In the lower mode x and u have
-    /// the same sign. Low on the Z axis u is the larger: at x = 0.9 m, z = 0.05 m of the default config,
-    /// w^2 = 2.394e4, kz = 1.902e5 N/m, mz = 7 kg: v = (2.26e4, 1.676e5) before scaling, tip = 2.585, so
-    /// (0.050, 0.368), the tool moving 1 m: it swings mostly by the Z axis leaning.
+    /// The mode of `resonance_hz`: the lowest eigenvector of `modal` in the layout of the state (x, z, q and u move, as far
+    /// as the model has them), scaled so that the largest of the carriage's travel x, the Z axis's z and the tool's travel
+    /// x + q + tip u (`tool_state`) is 1 m, and signed so that the larger of the first and the last is positive. Not to
+    /// the tool's alone: high on the Z axis tip turns negative and the tool stands still in a mode at one height, where
+    /// that scale would be infinite.
     fn mode_shape(&self, tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
-        let hz = self.resonance_hz(tool_pose)?;
-        let (w2, kz, mz, tip) = (
-            (std::f64::consts::TAU * hz).powi(2),
-            self.flex_at(tool_pose[1]).0,
-            self.m_z(),
-            self.flex_at(tool_pose[1]).2,
-        );
-        let (vx, vu) = (kz - w2 * mz, w2 * mz);
-        let largest = vx.abs().max((vx + tip * vu).abs());
-        let mut shape = vec![0.0; self.state_len()];
-        (shape[X], shape[U]) = (vx / largest, vu / largest);
-        Some((hz, shape))
+        let (mode, mut shape) = self.modal(tool_pose).into_iter().next()?;
+        let tool = shape[X] + shape[Q] + self.flex_at(tool_pose[1]).2 * shape[U];
+        let largest = shape[X].abs().max(shape[Z].abs()).max(tool.abs());
+        let sign = if shape[X].abs() >= tool.abs() { shape[X].signum() } else { tool.signum() };
+        shape.iter_mut().for_each(|v| *v *= sign / largest);
+        Some((mode.hz, shape))
     }
 
     fn set_payload_attached(&mut self, attached: bool) {
