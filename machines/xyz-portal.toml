@@ -924,6 +924,93 @@ pulleys = { pulley_z = -1 }
 route = ["pulley_z", "z_slide"]
 pos = [450, 660]
 
+# The free spans, with the belt's speed over ground per axis speed along x, y and z of the 3D view, so that the belts'
+# mass is summed run by run. Each belt is a loop clamped to its carriage: the run from the clamp to the motor and the
+# one from the far idler back to the clamp move with the carriage, the run from the motor to the far idler against it,
+# and a belt on a moving axis moves with that axis too (the Y belt rides on the bridge, the Z belt on the Y carriage). The file's section lengths
+# shared out (the run from the motor to the far idler takes 0.1 m of the second section):
+#   belt  run                     length      speed over ground
+#   X     clamp to motor          0.1 + x     (vx, 0, 0)
+#         motor to far idler      0.1         (-vx, 0, 0)
+#         far idler to clamp      1.1 - x     (vx, 0, 0)
+#   Y     clamp to motor          0.1 + y     (vx, vy, 0)
+#         motor to far idler      0.1         (vx, -vy, 0)
+#         far idler to clamp      0.6 - y     (vx, vy, 0)
+#   Z     clamp to motor          0.1 + z     (vx, vy, vz)
+#         motor to far idler      0.1         (vx, vy, -vz)
+#         far idler to clamp      0.4 - z     (vx, vy, vz)
+# Every run moves at its axes' speeds squared, whatever the pose: 2T / mu = 2.7 vx^2 + 1.4 vy^2 + 0.6 vz^2, in place of
+# the lumps' third of the 2.7 m on each pulley (0.9 each): the belts add 0.18 kg on X, 0.05 kg on Y and -0.03 kg on Z,
+# and no speed terms.
+[[machine.span]]
+id = "x_1"
+section = "x1"
+length_m = 0.1
+axes = { x = 1 }
+velocity_x = { x = 1 }
+
+[[machine.span]]
+id = "x_2"
+section = "x2"
+length_m = 0.1
+velocity_x = { x = -1 }
+
+[[machine.span]]
+id = "x_3"
+section = "x2"
+length_m = 1.1
+axes = { x = -1 }
+velocity_x = { x = 1 }
+
+[[machine.span]]
+id = "y_1"
+section = "y1"
+length_m = 0.1
+axes = { y = 1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+
+[[machine.span]]
+id = "y_2"
+section = "y2"
+length_m = 0.1
+velocity_x = { x = 1 }
+velocity_y = { y = -1 }
+
+[[machine.span]]
+id = "y_3"
+section = "y2"
+length_m = 0.6
+axes = { y = -1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+
+[[machine.span]]
+id = "z_1"
+section = "z1"
+length_m = 0.1
+axes = { z = 1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+velocity_z = { z = 1 }
+
+[[machine.span]]
+id = "z_2"
+section = "z2"
+length_m = 0.1
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+velocity_z = { z = -1 }
+
+[[machine.span]]
+id = "z_3"
+section = "z2"
+length_m = 0.4
+axes = { z = -1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+velocity_z = { z = 1 }
+
 [[machine.body]]
 id = "bridge"
 mass_kg = "mass.carriage_kg"

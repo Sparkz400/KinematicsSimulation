@@ -557,6 +557,126 @@ fn the_corexy_moves_as_worked_out_by_hand() {
     assert_close("holding torque", &held, &[0.0, 0.0], 1e-12);
 }
 
+/// The belts' mass run by run (`machine.span` with velocity_x, _y, _z) in the files whose belt runs move over ground,
+/// each derived from its belt path in the file's comment. Per file, without losses: rigid and elastic, the motors' power
+/// is the rate of the energy along the machine's own derivatives to 1e-7 of it (Richardson's central difference over
+/// +-0.1 and 0.2 us, every state moved a little off rest); rigid, the feedforward at speed gives the commanded
+/// acceleration back; and the belts' kinetic energy is the sum over their runs by hand, 1/2 mu sum L_s |V_s v|^2: with
+/// the belt's mass per metre 0.1 kg/m more the energy grows by 0.05 times the sum below (2T / mu, at the pose and speed
+/// given). The H-bot's runs are the T-gantry's with Y for Z: L (vx^2 + vy^2) + 8 (0.65 - y) vx^2 + 4 (2x - 1) vx vy with
+/// L = 4.2 m, so at x = 0.3, y = 0.1 the belt weighs mu (4.2 + 8 * 0.55) = 0.86 kg on X where the lumps had 0.42,
+/// 0.42 kg on Y, and -0.08 kg between them. The CoreXY's belts move as a whole along X and along Y (0.39 kg, as the
+/// lumps had it) and add -0.01 kg between them (belt A's 1.2 m off the clamps against B's 1.3 m). The portals' belts
+/// ride on the axes that carry them: X carries every belt (2.7 m on the XYZ portal, 2.1 m on the C portal, the Y belt's
+/// 1.1 and 0.8 m on the dual and rack gantries), Y the belts on it.
+#[test]
+fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
+    type Sum = fn(&[f64], &[f64]) -> f64;
+    let cases: [(&str, &[f64], &[f64], Sum); 6] = [
+        ("h-bot.toml", &[0.3, 0.1], &[0.6, 0.2], |q, v| {
+            4.2 * (v[0] * v[0] + v[1] * v[1]) + 8.0 * (0.65 - q[1]) * v[0] * v[0] + 4.0 * (2.0 * q[0] - 1.0) * v[0] * v[1]
+        }),
+        ("corexy.toml", &[0.3, 0.1], &[0.6, 0.2], |_, v| 3.9 * (v[0] * v[0] + v[1] * v[1]) - 0.2 * v[0] * v[1]),
+        ("xyz-portal.toml", &[0.3, 0.2, 0.1], &[0.6, 0.4, 0.2], |_, v| {
+            2.7 * v[0] * v[0] + 1.4 * v[1] * v[1] + 0.6 * v[2] * v[2]
+        }),
+        ("portal-c.toml", &[0.3, 0.2, 0.1, 0.0], &[0.6, 0.4, 0.2, 0.0], |_, v| 2.1 * v[0] * v[0] + 0.8 * v[1] * v[1]),
+        ("dual-gantry.toml", &[1.0, 0.3], &[0.6, 0.4], |_, v| 1.1 * (v[0] * v[0] + v[1] * v[1])),
+        ("rack-gantry.toml", &[1.0, 0.2], &[0.6, 0.4], |_, v| 0.8 * (v[0] * v[0] + v[1] * v[1])),
+    ];
+    for (name, pose, vel, by_hand) in cases {
+        let entry = file(name);
+        let lossless = |edits: &[&str]| {
+            let mut cfg = entry.config();
+            for effect in [
+                "belt_damping",
+                "guide_friction",
+                "load_dependent_friction",
+                "motor_friction",
+                "gearbox_efficiency",
+                "gearbox_backlash",
+                "torque_ripple",
+                "tooth_meshing",
+                "holding_brake",
+            ] {
+                cfg.set_text(&format!("effects.{effect} = false")).unwrap();
+            }
+            for damping in ["gearbox.damping_nm_s_rad", "gantry.damping_nm_s_rad"] {
+                if cfg.get(damping).is_ok() {
+                    cfg.set_text(&format!("{damping} = 0.0")).unwrap();
+                }
+            }
+            for edit in edits {
+                cfg.set_text(edit).unwrap();
+            }
+            (entry.build)(&cfg).unwrap()
+        };
+        let moving = |m: &dyn Machine| {
+            let (mut s, mut hold) = (Vec::new(), vec![0.0; m.motors().len()]);
+            m.equilibrium(pose, &mut s, &mut hold);
+            m.set_tool_velocity(&mut s, vel);
+            (s, hold)
+        };
+        let off = |elastic: bool, mu: f64| {
+            let m = lossless(&[&format!("effects.belt_stretch = {elastic}"), &format!("belt.mass_kg_m = {mu}")]);
+            let (mut s, hold) = moving(m.as_ref());
+            for (i, x) in s.iter_mut().enumerate() {
+                *x += 1e-5 * (1.0 + (i % 5) as f64);
+            }
+            let torque: Vec<f64> = hold.iter().enumerate().map(|(k, h)| h + 0.7 - 0.4 * k as f64).collect();
+            let mut rate = vec![0.0; s.len()];
+            m.derivatives(&s, &torque, &mut rate);
+            let energy = |h: f64| m.energy(&s.iter().zip(&rate).map(|(x, r)| x + h * r).collect::<Vec<_>>());
+            let h = 1e-7;
+            let rate_of_energy = (8.0 * (energy(h) - energy(-h)) - (energy(2.0 * h) - energy(-2.0 * h))) / (12.0 * h);
+            let (mut angle, mut speed) = (vec![0.0; torque.len()], vec![0.0; torque.len()]);
+            m.motor_state(&s, &mut angle, &mut speed);
+            let power: f64 = torque.iter().zip(&speed).map(|(t, w)| t * w).sum();
+            (rate_of_energy - power) / power
+        };
+        for elastic in [false, true] {
+            // The C portal (both models) and the dual gantry (elastic) are off by up to 9e-7 with the belt's mass at 0
+            // too: the C portal's gripper on its rotary has speed forces from body places differenced over 1e-6
+            // (`body_jacobian`), the dual gantry's bridge yaws. There the belt's own share is what is checked.
+            let (with, without) = (off(elastic, 0.1), off(elastic, 0.0));
+            let belt = if without.abs() < 1e-7 { with } else { with - without };
+            println!("{name}, elastic {elastic}: off {with:.2e}, without the belt's mass {without:.2e}");
+            assert!(belt.abs() < 1e-7, "{name}, elastic {elastic}: off {with}, without the belt's mass {without}");        }
+        let acc: Vec<f64> = (0..pose.len()).map(|i| 3.0 - 2.0 * i as f64).collect();
+        let reached = |mu: f64| {
+            let rigid = lossless(&["effects.belt_stretch = false", &format!("belt.mass_kg_m = {mu}")]);
+            let mut torque = vec![0.0; rigid.motors().len()];
+            rigid.feedforward_torque_moving(pose, vel, &acc, &mut torque);
+            let (s, _) = moving(rigid.as_ref());
+            let mut rate = vec![0.0; s.len()];
+            rigid.derivatives(&s, &torque, &mut rate);
+            let tool_speed = |h: f64| {
+                let (mut p, mut v) = (vec![0.0; pose.len()], vec![0.0; pose.len()]);
+                rigid.tool_state(&s.iter().zip(&rate).map(|(x, r)| x + h * r).collect::<Vec<_>>(), &mut p, &mut v);
+                v
+            };
+            let (ahead, behind) = (tool_speed(1e-6), tool_speed(-1e-6));
+            ahead.iter().zip(&behind).map(|(a, b)| (a - b) / 2e-6).collect::<Vec<f64>>()
+        };
+        // The C portal and the dual gantry miss by up to 6e-6 with the belt's mass at 0 too (as above): there the
+        // belt's mass must change nothing.
+        let (with, without) = (reached(0.1), reached(0.0));
+        if without.iter().zip(&acc).all(|(a, b)| close(*a, *b, 1e-8)) {
+            assert_close(&format!("{name}: acceleration"), &with, &acc, 1e-8);
+        } else {
+            println!("{name}: acceleration {with:?}, without the belt's mass {without:?}");
+            assert_close(&format!("{name}: acceleration with and without the belt"), &with, &without, 1e-9);
+            assert_close(&format!("{name}: acceleration"), &with, &acc, 1e-5);
+        }
+        let kinetic = |mu: f64| {
+            let m = lossless(&["effects.belt_stretch = false", &format!("belt.mass_kg_m = {mu}")]);
+            m.energy(&moving(m.as_ref()).0)
+        };
+        let (belt, hand) = (kinetic(0.2) - kinetic(0.1), 0.5 * 0.1 * by_hand(pose, vel));
+        assert!(close(belt, hand, 1e-9), "{name}: the belt carries {belt} J more, by hand {hand} J");
+    }
+}
+
 /// The portal by hand. Each axis has a belt and a motor of its own, so the motor angle is i q / r: X and Y with the shared
 /// gearbox (i 5), Z with its own ([gearbox.mz], i 10): at q = 0.1 m 25, 25 and 50 rad, and at 0.2 m/s 50, 50 and 100
 /// rad/s. Its Z motor holds the slide (2.5 kg) and the payload (1 kg) against gravity: m g r / i = 3.5 * 9.80665 * 0.02
@@ -612,17 +732,20 @@ fn a_motors_own_tables_are_checked() {
 }
 
 /// The belt's lowest mode by hand, on the single axis at x = 0.5 m: the carriage (4 kg and the 2 kg payload) between
-/// the two sections, 0.15 + x = 0.65 m and 2.45 - x = 1.95 m long, with the pulley held: k = EA (1 / 0.65 + 1 / 1.95)
-/// = 5e5 * 2.0513 = 1.0256e6 N/m, f = sqrt(k / m) / (2 pi) = 65.80 Hz. The mode moves the tool by 1 m, the pulley not.
-/// The rigid model has no mode.
+/// the two sections, 0.15 + x = 0.65 m and 2.45 - x = 1.95 m long, with the pulley held. Each section's stiffness is
+/// dT/dL = EA / l with l its unstretched belt (`Belt::section`): the axis lies flat, so both hold the pretension and
+/// l = L / (1 + 300 / 5e5). k = EA (1 + 6e-4) (1 / 0.65 + 1 / 1.95) = 1.026257e6 N/m, f = sqrt(k / m) / (2 pi) =
+/// 65.8222 Hz, as the crate's (`modes`). The mode moves the tool by 1 m, the pulley not. The rigid model has no mode.
 #[test]
 fn a_machine_file_reports_its_belt_mode() {
     let entry = file("single-axis.toml");
     let machine = (entry.build)(&entry.config()).unwrap();
-    let k = 5e5 * (1.0 / 0.65 + 1.0 / 1.95);
+    let k = 5e5 * (1.0 + 300.0 / 5e5) * (1.0 / 0.65 + 1.0 / 1.95);
     let hand = (k / 6.0f64).sqrt() / std::f64::consts::TAU;
     let hz = machine.resonance_hz(&[0.5]).unwrap();
-    assert!(close(hz, hand, 1e-9) && (hz - 65.80).abs() < 0.01, "{hz} against {hand} by hand");
+    assert!(close(hz, hand, 1e-9) && (hz - 65.8222).abs() < 1e-4, "{hz} against {hand} by hand");
+    let krate = find("single-axis").unwrap();
+    assert!(close((krate.build)(&krate.config()).unwrap().resonance_hz(&[0.5]).unwrap(), hz, 1e-12));
     let (mode_hz, shape) = machine.mode_shape(&[0.5]).unwrap();
     assert_eq!((mode_hz, shape.len()), (hz, machine.state_len()));
     assert!(close(shape[0], 1.0, 1e-12) && shape[1..].iter().all(|s| *s == 0.0), "{shape:?}");
@@ -638,15 +761,13 @@ fn a_machine_file_reports_its_belt_mode() {
 }
 
 /// The 3D view draws the belt round its wheels: a strip per straight run from tangent to tangent, and 8 round each
-/// wheel inside a section's way and each motor pulley one section ends at and another starts from. The H-bot's
-/// sections have no route, so each runs between its pulleys and the head it is clamped to: sections 1 and 3 one run each
-/// (pulley A to the head, the head to pulley B), section 2 two runs and the arc round pulley A between them (head,
-/// pulley A, pulley B): 1 + 1 + 2 + 8 = 12; no pulley ends one way and starts another. The T-gantry's file routes them
-/// past its idlers: 2 + 4 + 2 runs, 8 round each of its 1 + 3 + 1 idlers inside the ways and each motor pulley, which
-/// one section ends at and the next starts from: 8 + 40 + 16 = 64 strips, and five idlers.
+/// wheel inside a section's way and each motor pulley one section ends at and another starts from. The T-gantry's file
+/// routes its sections past its idlers: 2 + 4 + 2 runs, 8 round each of its 1 + 3 + 1 idlers inside the ways and each
+/// motor pulley, which one section ends at and the next starts from: 8 + 40 + 16 = 64 strips, and five idlers. The
+/// H-bot's belt takes the T-gantry's path (its routes and idlers, for the belt's runs), so the same.
 #[test]
 fn the_3d_view_draws_the_belt_of_a_machine_file() {
-    for (name, strips, idlers) in [("h-bot.toml", 12, 0), ("t-gantry.toml", 64, 5)] {
+    for (name, strips, idlers) in [("h-bot.toml", 64, 5), ("t-gantry.toml", 64, 5)] {
         let entry = file(name);
         let sim = Sim::new(entry, &entry.config()).unwrap();
         let mut scene = sim_core::Scene::default();

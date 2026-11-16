@@ -94,15 +94,15 @@ fn a_screw_axis_takes_the_hand_calculated_torque_and_has_its_critical_speed() {
 
 /// The rack gantry's X by hand, rigid: the pinion (module 2, 30 teeth, 19.5283 degrees helix) has the pitch radius
 /// r = 0.002 * 30 / (2 cos 19.5283 deg) = 31.8310 mm, 200 mm per turn; behind ratio 10 the motor turns 10 x / r: at
-/// x = 1 m, 314.159 rad (five turns of the pinion, fifty of the motor). The bridge, Y carriage and payload,
-/// m = 12 + 4 + 1 = 17 kg, at a = 2 m/s2 take F = 34 N from the rack; the pinion's teeth then carry F / 0.97 =
-/// 35.0515 N while driving. The motor's torque for it, i / r = 314.159 rad/m, the gearbox 95 % and the rack 97 %, the
-/// rotor 3e-5 and the pinion 1e-4 / 10^2 kg m2 on the rotor side: T = 3.1e-5 * 2 * 314.159 + 34 / (314.159 * 0.95 *
-/// 0.97) = 0.0194778 + 0.1174449 = 0.1369228 N m.
+/// x = 1 m, 314.159 rad (five turns of the pinion, fifty of the motor). The bridge, Y carriage and payload and the Y
+/// belt that rides on the bridge (0.8 m at 0.1 kg/m, the file's spans), m = 12 + 4 + 1 + 0.08 = 17.08 kg, at a = 2 m/s2
+/// take F = 34.16 N from the rack; the pinion's teeth then carry F / 0.97 = 35.2165 N while driving. The motor's torque
+/// for it, i / r = 314.159 rad/m, the gearbox 95 % and the rack 97 %, the rotor 3e-5 and the pinion 1e-4 / 10^2 kg m2 on
+/// the rotor side: T = 3.1e-5 * 2 * 314.159 + 34.16 / (314.159 * 0.95 * 0.97) = 0.0194778 + 0.1179976 = 0.1374755 N m.
 ///
 /// The pinion loads the gearbox's output shaft sideways with the tooth force and the force that pushes pinion and
-/// rack apart, F tan 20 deg / cos 19.5283 deg = 0.3861849 F at right angles to it: 35.0515 sqrt(1 + 0.3861849^2) =
-/// 35.0515 * 1.0719789 = 37.5745 N, judged against the gearbox's shaft_max_radial_load_n, 1500 N.
+/// rack apart, F tan 20 deg / cos 19.5283 deg = 0.3861849 F at right angles to it: 35.2165 sqrt(1 + 0.3861849^2) =
+/// 35.2165 * 1.0719789 = 37.75134 N, judged against the gearbox's shaft_max_radial_load_n, 1500 N.
 #[test]
 fn a_rack_axis_turns_its_motor_by_x_over_r_and_feeds_its_force() {
     let machine = rigid("rack-gantry.toml");
@@ -112,9 +112,9 @@ fn a_rack_axis_turns_its_motor_by_x_over_r_and_feeds_its_force() {
     machine.inverse(&[1.0, 0.0], &mut motors);
     assert!(close(motors[0], 10.0 * 1.0 / r, 1e-12) && close(motors[0], 314.159, 1e-6), "{motors:?}");
 
-    let (ratio, mass, acc) = (10.0 / r, 17.0, 2.0);
+    let (ratio, mass, acc) = (10.0 / r, 17.08, 2.0);
     let torque = 3.1e-5 * acc * ratio + mass * acc / (ratio * 0.95 * 0.97);
-    assert!(close(torque, 0.1369228, 1e-6), "{torque}");
+    assert!(close(torque, 0.1374755, 1e-6), "{torque}");
     let (mut state, mut held) = (Vec::new(), [0.0; 2]);
     machine.equilibrium(&[1.0, 0.25], &mut state, &mut held);
     machine.set_tool_velocity(&mut state, &[0.3, 0.0]);
@@ -122,12 +122,12 @@ fn a_rack_axis_turns_its_motor_by_x_over_r_and_feeds_its_force() {
     let mut rates = vec![0.0; state.len()];
     machine.derivatives(&state, &torques, &mut rates);
     assert!(close(rates[2], acc, 1e-9), "X acceleration {} against {acc} by hand", rates[2]);
-    assert!(close(signal(machine.as_ref(), &state, &torques, "joint.mx.force"), 34.0, 1e-9));
-    assert!(close(signal(machine.as_ref(), &state, &torques, "rack.mx.feed_force"), 34.0 / 0.97, 1e-9));
+    assert!(close(signal(machine.as_ref(), &state, &torques, "joint.mx.force"), 34.16, 1e-9));
+    assert!(close(signal(machine.as_ref(), &state, &torques, "rack.mx.feed_force"), 34.16 / 0.97, 1e-9));
     let radial = signal(machine.as_ref(), &state, &torques, "rack.mx.radial_load");
     let apart = 20f64.to_radians().tan() / 19.5283f64.to_radians().cos();
     assert!(
-        close(radial, 34.0 / 0.97 * (1.0 + apart * apart).sqrt(), 1e-9) && close(radial, 37.5745, 1e-6),
+        close(radial, 34.16 / 0.97 * (1.0 + apart * apart).sqrt(), 1e-9) && close(radial, 37.751340, 1e-6),
         "{radial}"
     );
     let check = machine.rating_checks();

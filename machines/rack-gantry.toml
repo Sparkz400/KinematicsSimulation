@@ -839,6 +839,40 @@ pulleys = { pulley_y = -1 }
 route = ["pulley_y", "y_carriage"]
 pos = [450, 360]
 
+# The free spans, with the belt's speed over ground per axis speed along x, y and z of the 3D view, so that the belts'
+# mass is summed run by run. Each belt is a loop clamped to its carriage: the run from the clamp to the motor and the
+# one from the far idler back to the clamp move with the carriage, the run from the motor to the far idler against it,
+# and a belt on a moving axis moves with that axis too (the Y belt rides on the bridge). The file's section lengths
+# shared out (the run from the motor to the far idler takes 0.1 m of the second section):
+#   run                     length      speed over ground
+#   clamp to motor          0.1 + y     (vx, vy, 0)
+#   motor to far idler      0.1         (vx, -vy, 0)
+#   far idler to clamp      0.6 - y     (vx, vy, 0)
+# 2T / mu = 0.8 (vx^2 + vy^2) whatever the pose, where the lump on the pulley held 0.8 vy^2: the belt adds its 0.08 kg on
+# X, and no speed terms.
+[[machine.span]]
+id = "y_1"
+section = "y1"
+length_m = 0.1
+axes = { y = 1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+
+[[machine.span]]
+id = "y_2"
+section = "y2"
+length_m = 0.1
+velocity_x = { x = 1 }
+velocity_y = { y = -1 }
+
+[[machine.span]]
+id = "y_3"
+section = "y2"
+length_m = 0.6
+axes = { y = -1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+
 [[machine.body]]
 id = "bridge"
 mass_kg = "mass.carriage_kg"

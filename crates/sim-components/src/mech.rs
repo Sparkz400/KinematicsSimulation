@@ -918,10 +918,11 @@ pub struct Gearbox {
 
 /// The mesh friction's bristle stiffness over K1: K1 itself, as the hysteresis's Dahl stiffness. Presliding then takes mu
 /// of the gear's twist under the same torque (20 % at an efficiency of 0.8), and the friction a reversal of 2 mu of an
-/// amplitude to turn round, which lowers the damping of a small ring below the friction law's (see the tests). Stiffer
-/// bristles stick a light output (a belt axis's pulley) to the housing at a frequency the base step does not resolve: at
-/// 10 K1 two belt axes' energy budgets missed 1.4 and 2.0 % of a pass, at 3 K1 0.6 and 1.0 %, at K1 0.018 and 0.16 %
-/// (machines whose gears carry heavy outputs 0.000 % at any of them).
+/// amplitude to turn round, which lowers the damping of a small ring below the friction law's (see the tests). The
+/// energy budget does not choose it: with the friction booked as its whole power the belt axes, whose light pulleys
+/// stick to the housing first, close their passes at K1, 3 K1 and 10 K1 alike (single axis under 1e-6 unaccounted,
+/// gearbox loss 3.04659 J at all three; T-gantry 4e-6, 8.70004, 8.70027 and 8.70029 J; with the friction off 3.04944
+/// and 8.82445 J). (The 1.4 and 2.0 % they missed at 10 K1 were the earlier bookkeeping's, of the store's rate.)
 /// shortcut: K1; a config key once a gear's presliding is measured.
 pub const MESH_STIFFNESS: f64 = 1.0;
 

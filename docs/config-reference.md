@@ -99,7 +99,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `belt_stretch` | T E S | on | The elastic model: belt sections as springs, pulleys and motor shafts as separate states. **Off selects the rigid reference model**, in which belt damping, slack, tooth stiffness, backlash, gear stiffness, the frame mode, the leaning Z axis and the holding brakes have no effect |
 | `belt_damping` | T E S | on | Damping on the stretch rate of each belt section |
 | `belt_slack` | T E S | on | Belt tension cannot go below zero |
-| `belt_mass` | T E S | on | Belt mass, lumped on the pulleys |
+| `belt_mass` | T E S | on | Belt mass: lumped on the pulleys (exact where every run moves at pulley speed, the single axis), summed run by run on the T-gantry and in the machine files whose spans give their speeds over ground |
 | `belt_tooth_stiffness` | T E S | off | The teeth in mesh on a driven pulley give way, as a spring in series with each belt section |
 | `belt_material_damping` | T E S | off | Damping in proportion to a section's stiffness (`belt.damping_time_s`) instead of one constant. Needs `belt_damping` on |
 | `guide_friction` | T E S | on | LuGre friction in the linear guides; in a machine file also a screw nut's preload drag, a linear motor's attraction on its guide and a rotary's bearing friction (`friction_coulomb_nm`, `friction_viscous_nm_s_rad` of its node, see [machine files](machine-files.md#screws-racks-linear-motors-and-rotary-tables)) |
