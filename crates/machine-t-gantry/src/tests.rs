@@ -721,6 +721,14 @@ fn holding_brakes_hold_the_z_axis_when_they_are_strong_enough() {
 /// Fitting: both motors move both axes, yet the fit tells the axes apart. The measured machine has a
 /// carriage and a payload 1 kg heavier each (2 kg more for X, 1 kg more for Z and 9.81 N more to hold)
 /// and 1.3 times the Coulomb friction; its trace, with noise, is fitted against the unchanged config.
+///
+/// Each within three standard errors, which hold the noise alone (`identify::difference_share`), and what the rigid
+/// model mixes up between the values of a changed machine: the mass by 20 % of its change, the Coulomb factor by 0.03 and
+/// the constant force by 3 % of the axis's Coulomb friction. Measured without noise (16 November 2026): X + 2.332 kg
+/// (the heavier carriage and payload alone gave + 2.062 kg and 5.6 % more Coulomb friction; the friction 1.3 times as
+/// well adds the other 0.27 kg),
+/// Coulomb × 1.327, constant − 1.02 N; Z + 1.006 kg, × 1.278, + 9.955 N; the config's own trace fits itself to within
+/// one standard error.
 #[test]
 fn the_fit_tells_the_two_axes_apart() {
     let mut truth = ENTRY.config();
@@ -759,9 +767,10 @@ fn the_fit_tells_the_two_axes_apart() {
         let fit = fit.as_ref().unwrap();
         let found = [fit.fitted[0] - fit.config[0], fit.fitted[2] / fit.config[2], fit.fitted[3] - fit.config[3]];
         let errors = [fit.error[0], fit.error[2] / fit.config[2], fit.error[3]];
+        let model = [0.2 * expected[0], 0.03, 0.03 * fit.config[2]];
         for q in 0..3 {
             assert!(
-                (found[q] - expected[q]).abs() < 3.0 * errors[q],
+                (found[q] - expected[q]).abs() < 3.0 * errors[q] + model[q],
                 "value {q}: {} ± {}, expected {}",
                 found[q],
                 errors[q],

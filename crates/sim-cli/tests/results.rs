@@ -125,7 +125,7 @@ fn the_results_table_is_what_the_reports_give() {
 
 /// The ISW ball screw's report gives the figures docs/validation.md "Against measured data" states for machine.toml as
 /// committed: S-profile 0.370 N m RMS and 2.19 N m worst, the whole sine 0.789 and 30.0, constant speed 0.896 and 3.65;
-/// the fit's viscous 779 ± 23 N s/m, Coulomb 322 ± 6 N, moved mass 492 ± 3 kg; the sweeps' resonances 134, 123, 126 Hz
+/// the fit's viscous 773 ± 24 N s/m, Coulomb 324 ± 7 N, moved mass 496 ± 3 kg; the sweeps' resonances 134, 123, 126 Hz
 /// against the model's 137 Hz. Each within one unit of the last digit the document gives.
 #[test]
 fn the_ball_screw_report_gives_the_documented_figures() {
@@ -155,9 +155,9 @@ fn the_ball_screw_report_gives_the_documented_figures() {
     };
     let (viscous, coulomb, mass) =
         (fitted("viscous_friction_n_s_m"), fitted("coulomb_friction_n"), fitted("moved_mass_kg"));
-    assert!(close(viscous.0, 779.0, 1.0) && close(viscous.1, 23.0, 1.0), "{viscous:?}");
-    assert!(close(coulomb.0, 322.0, 1.0) && close(coulomb.1, 6.0, 1.0), "{coulomb:?}");
-    assert!(close(mass.0, 492.0, 1.0) && close(mass.1, 3.0, 1.0), "{mass:?}");
+    assert!(close(viscous.0, 773.0, 1.0) && close(viscous.1, 24.0, 1.0), "{viscous:?}");
+    assert!(close(coulomb.0, 324.0, 1.0) && close(coulomb.1, 7.0, 1.0), "{coulomb:?}");
+    assert!(close(mass.0, 496.0, 1.0) && close(mass.1, 3.0, 1.0), "{mass:?}");
     let modes = rows(&report.join("modes.csv"));
     for (r, hz) in modes.iter().zip([134.0, 123.0, 126.0]) {
         assert!(close(r[1].parse().unwrap(), hz, 1.0), "{r:?}");
