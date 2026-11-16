@@ -596,7 +596,7 @@ and sized like every other machine (`sim-cli analyze hexapod`, `sim-cli verdicts
 
 Their proportions are generic, every value an `[estimate]` but the motor's and drive's (catalogue, as above). Each
 default cycle passes all its verdicts; the cable robots' settling tolerances are requirements of their size (0.3 mm
-planar, 1 mm spatial), not the ball screw axis's 0.05 mm.
+planar, 1 mm and 2 mrad spatial), not the ball screw axis's 0.05 mm.
 
 ### Hexapod
 
@@ -754,6 +754,24 @@ arc r beta plus the tangent l_f = sqrt(m² − r²), and dL/dP = −u, u the uni
   inertia, friction of bearings and pulley (`effects.winch_friction`), stops at an empty and a full drum. Elastic, drum
   and rotor are bodies of their own behind the gearbox's spring; rigid, the cables keep their length and the winches'
   inertia joins the platform's.
+- The gears' mesh friction (`effects.gearbox_mesh_friction`) holds (1 - eta) of the torque each gear passes, and a
+  winch's gear always passes the cable's pretension: at cable-spatial's 250 N, 30 mm drum, ratio 5 and eta 0.95 a band
+  of +-12.5 N at the cable (+-0.075 N m at the motor) inside which the drum stands still. A turn of the platform moves
+  each cable by little (at the home pose 35, 28 and 14 mm per rad for rx, ry, rz), so the sum of the eight bands along
+  a turn, 3.5, 2.8 and 1.4 N m, against the position loop's proportional stiffness through the cables (830, 530 and
+  130 N m/rad) is a dead band of 4, 5 and 11 mrad without the integrator: by hand, a 0.5 mrad sine of rx at 1 Hz
+  asks the loop for 1.0 to 1.1 times the band's torque, rz for 0.4, so with the speed loop's Tn at 30 ms rx and ry
+  followed to 1.41 and 1.25 Hz and rz had no band (simulated alike; 4.44, 4.37 and 4.06 Hz with the friction off). The
+  friction is physical, so the tuning changed: Tn 5 ms, by the symmetric optimum from the speed loop's 80 Hz crossover
+  (phase margin 60 degrees), lets the integrator break the meshes away within the turn: 5.6, 5.2 and 4.4 Hz. A lower
+  pretension would narrow the band too, but below 200 N the cycle takes cable 7 under its 20 N. The machine friction
+  feedforward (`drive.friction_feedforward_model = "machine"`) now has the meshes' friction on the tension at rest,
+  (1 - eta) of each gear's held torque along the planned motion, so that the integrator no longer carries it through a
+  move and takes it past the target when the move stops; it acts on the planned speed and does not reach a step or a
+  sine on the setpoint. In the PLCopen test's 5 mrad move of rz the platform then stands 0.31 mrad past the target
+  0.3 s after Done and 0.17 mrad 1 s later (0.55 and 0.20 before), inside the 2 mrad turn tolerance the spatial config
+  now states (`ratings.settling_tolerance_rad`). The planar robot moves its cables by its translations alone and keeps
+  30 ms (9.3 and 9.8 Hz).
 - The motors' angles of a pose are those of the free lengths that hold the platform there at rest, l = L / (1 + t /
   EA), t the tension distribution's wherever one exists (the closed form's only beyond the wrench-feasible workspace),
   so position setpoints and the

@@ -173,8 +173,8 @@ fn parts_named_in_a_config_behave_like_their_numbers() {
         // Where the named gearbox has the config's ratio (5); another ratio changes the load the motor sees, and the
         // gain with it (a screw on a coupling: far less). The gain follows the rotor and gearbox inertia: a little
         // heavier than the gantry's and the single axis's own, more gain; far lighter than the 1.7e-4 kg m2 rotor of
-        // the flying saw and the cable robots, less. A gain that would grow is held at the config's own where the
-        // machine reports a resonance the loop must stay below (`retuned`: the t-gantry keeps its 0.04).
+        // the flying saw and the cable robots, less. Where the machine reports a resonance at most in proportion to
+        // the rotor's and gearbox's inertia (`retuned`).
         if entry.config().f64("gearbox.ratio").unwrap() == 5.0 {
             let turned = |c: &sim_core::Config| {
                 c.f64("motor.rotor_inertia_kgm2").unwrap() + c.f64("gearbox.inertia_at_input_kgm2").unwrap()
@@ -227,7 +227,8 @@ fn the_bounds_of_every_config_bracket_their_values() {
 }
 
 /// Retuning: the 1FK2204-6AF has a third of the rotor inertia of the EXCT-30 config's motor. With the gain scaled
-/// by the geometric mean of the ratio of the inertia the motors turn and the ratio of the rotor inertias it runs
+/// by the geometric mean of the ratio of the inertia the motors turn and the ratio of the rotor inertias, held to the
+/// config's crossover over the rotor's inertia (`retuned`: here the rotor's ratio, which is the smaller), it runs
 /// the cycle with about the torque of the config's own motor. The 1FK2104-5AF has a ninth of the rotor inertia:
 /// with the config's own gain (0.45 N m s/rad) its loop oscillates and the winding overheats, scaled with the
 /// inertia the motors turn alone (the rule before) it still oscillates, with the mean it runs calmly. (The config
@@ -261,7 +262,7 @@ fn the_search_retunes_the_velocity_loop_for_a_lighter_rotor() {
     let own_gain = cfg.f64("drive.velocity_kp_nm_s_rad").unwrap();
     let (gain, by_hand) = (
         retuned.f64("drive.velocity_kp_nm_s_rad").unwrap(),
-        own_gain * (seen(1.6e-4) / seen(5.1e-4) * 1.6 / 5.1).sqrt(),
+        own_gain * (seen(1.6e-4) / seen(5.1e-4) * 1.6 / 5.1).sqrt().min(1.6 / 5.1),
     );
     assert!(close(gain, by_hand, 0.02), "gain {gain}, by hand {by_hand}");
     let (oscillating, calm) = (cycle(&same_gain), cycle(&retuned));
@@ -851,9 +852,12 @@ fn the_back_emf_constant_key_sets_the_servo_winding_apart_from_the_torque_consta
 
 /// The retuned velocity gain on the single axis (gain 0.025, rotor and gearbox 3.0e-5 kg m2, first resonance 65.8 Hz).
 /// The inertia the motor turns comes from the machine: pulley radius x2 takes it from 1.3416e-4 to 4.3464e-4 kg m2,
-/// a scaled gain of sqrt(3.24) = 1.800 times the config's, which the bound holds at the config's (2 pi 65.8 / 3 times
-/// 3.0e-5 is 0.0041, below it). Gear ratio x2 shrinks it, unbounded: 0.6463. The Bahr ELZ-125 (pulley radius 48 mm,
-/// resonance 160 Hz) scaled to 0.0573 ran at 2.05 times the motor's peak; bounded it keeps 0.025 and passes.
+/// a scaled gain of sqrt(3.24) = 1.800 times the config's, which the bound holds at the config's: the rotor is the same,
+/// so is the crossover over it (`retuned`; 0.045 rings, phase margin 32 degrees). Gear ratio x2 shrinks it, unbounded:
+/// 0.6463. The Bahr ELZ-125 (pulley radius 48 mm, resonance 160 Hz) scaled to 0.0573 ran at 2.05 times the motor's
+/// peak; bounded it keeps 0.025 and passes. The 1FK2204-5AF (rotor 1.2e-4 kg m2, 4 times the config's) takes the scaled
+/// gain, below 4 times the config's; the 1FK2103-4AH (1.4e-5 kg m2) the config's times its rotor's ratio, 0.467, below
+/// the scaled one.
 #[test]
 fn the_retuned_gain_follows_the_inertia_the_machine_turns_and_stays_below_the_resonance() {
     use sim_components::catalog::{Parts, inertia_ratios, with_named, with_value};
@@ -877,4 +881,11 @@ fn the_retuned_gain_follows_the_inertia_the_machine_turns_and_stays_below_the_re
     let failed: Vec<_> = verdicts.iter().filter(|v| !v.ok).map(|v| (v.check, v.value, v.limit)).collect();
     assert!(failed.is_empty(), "{failed:?}");
     eprintln!("ELZ-125: tracking error {:e} m, settling {:e} m", load.tracking_error_peak, load.dwell_error_peak);
+    let motor = |article: &str| with_named(entry, &cfg, &Parts { motor: article, ..Parts::of(&cfg).unwrap() }).unwrap();
+    let rotor = |c: &sim_core::Config| c.f64("motor.rotor_inertia_kgm2").unwrap();
+    let heavy = motor("1FK2204-5AF");
+    let scaled = kp(&cfg) * (turned(&heavy) / turned(&cfg) * rotor(&heavy) / rotor(&cfg)).sqrt();
+    assert!(close(kp(&heavy), scaled, 1e-6) && scaled < 4.0 * kp(&cfg) && scaled > 2.0 * kp(&cfg), "{}", kp(&heavy));
+    let light = motor("1FK2103-4AH");
+    assert!(close(kp(&light), kp(&cfg) * rotor(&light) / rotor(&cfg), 1e-6), "{}", kp(&light));
 }
