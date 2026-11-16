@@ -1104,11 +1104,15 @@ Source: [`machine-joint-kit/src/tool.rs`](../crates/machine-joint-kit/src/tool.r
 ```text
 SCARA       x = x1 + L1 cos(q1 + φ1) + L2 cos(q1 + q2 + φ2),  y likewise with sin,  z = z0 + s q3,  c = c0 + q1 + q2 + q4
             cos β = (r² − L1² − L2²) / (2 L1 L2),  β = ±acos (elbow),  q1 = atan2(y, x) − atan2(L2 sin β, L1 + L2 cos β) − φ1,  q2 = β − φ2 + φ1
-six joints  (x, y, z) = p_tip(q),  (rx, ry, rz) = log R_tip(q);  Δq = Jᵀ (J Jᵀ + λ² I)⁻¹ e,  e = (p* − p, ℓ log(R* Rᵀ)),  λ = 1 mm,  ℓ = |p_tip − p_joint2| at the home
+six joints  (x, y, z) = p_tip(q),  r = (rx, ry, rz) = log(R_tip(q) R_0ᵀ);  Δq = Jᵀ (J Jᵀ + λ² I)⁻¹ e,  e = (p* − p, ℓ (r* − r)), J = ∂(p, ℓ r)/∂q,  λ = 1 mm,  ℓ = |p_tip − p_joint2| at the home
 speeds      q̇ = J⁻¹ v,  q̈ = J⁻¹ (a − J̇ q̇),  J̇ q̇ = [f(q + h q̇) − 2 f(q) + f(q − h q̇)] / h²,  h |q̇| = 1e-4,  J = ∂f/∂q by central differences
 feedforward τ = (M q̈ + h(q, q̇)) / i + J_rotor i q̈   per motor (in joint space the speed terms are left out, as before)
-condition   κ = √(λ_max / λ_min) of Jᵀ J (Jacobi rotations): SCARA of ∂(x, y)/∂(q1, q2), six joints of the geometric 6 × 6 with turn rows × ℓ
+condition   κ = √(λ_max / λ_min) of Jᵀ J (Jacobi rotations): SCARA of ∂(x, y)/∂(q1, q2), six joints of the geometric 6 × 6 (turn rows the angular velocity, × ℓ, not the rotation vector's rate)
 ```
+
+A redundant arm (fewer axes than joints) takes q̇ and q̈ from central differences of its inverse over 1e-3 of the tool's units, the null space settled by Newton steps to 1e-13 rad (to the rounding of J where that is not reached), so that the feed-forward does not depend on the call before.
+
+The limits of `rx`, `ry`, `rz` (`max_velocity_rad_s` and the rest) act on the rates of the rotation vector, not on the angular velocity: they differ by (θ/2) / sin(θ/2) about the vector's own axis and more across it, so at the home (θ = π/2) a limit of 1.5 rad/s on `rz` allows a spin of 1.91 rad/s.
 
 **Link bending** (`effects.link_bending`, the arms only; off as shipped). Each link with a section in `[link_bending]` bends as a cantilever from its joint to the next (the flange after the last) in its first Euler-Bernoulli mode, in the plane its joint turns it in (across = axis × along), one state d (its tip's deflection) and its rate per link, after the joint machine's states (`chain::Mechanism::flex_modes`, `beam::cantilever_mode`):
 

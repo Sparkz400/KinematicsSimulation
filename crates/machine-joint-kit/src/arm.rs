@@ -659,8 +659,10 @@ impl Arm {
     /// equivalent load with equal ratings both ways). Reported as the most loaded block's times the four blocks, so that
     /// the guide verdicts, which share the load equally among the set (`GUIDE_CARRIAGES`) and rate the set as one
     /// (`catalog` `parts.axis`), judge that block.
-    /// shortcut: the rack's push taken through the carriage's origin (no moment of its own), the arm's motor rotors'
-    /// gyroscopic moments left out, and the load always on the four blocks of the first joint.
+    /// The helical pinion's separating force F tan(alpha) / cos(beta) is added to F_y, on the side that loads the worst
+    /// block more (the rack's side is not in the config).
+    /// shortcut: the rack's push and separating force taken through the carriage's origin (no moment of their own), the
+    /// arm's motor rotors' gyroscopic moments left out, and the load always on the four blocks of the first joint.
     fn guide_load(&self, q: &[f64], qd: &[f64], qdd: &[f64]) -> f64 {
         let Some((along, across)) = self.track else { return 0.0 };
         let h = 1e-6;
@@ -681,7 +683,12 @@ impl Arm {
         }
         let carriage = &states[0];
         let back = transpose(&carriage.rot);
-        let (f, m) = (mul(&back, force), mul(&back, sub(moment, cross(carriage.origin, force))));
+        let (mut f, m) = (mul(&back, force), mul(&back, sub(moment, cross(carriage.origin, force))));
+        // The helical pinion also pushes the carriage off the rack, across the rails (as `rack.<id>.radial_load` counts it).
+        if let Some((r, efficiency, _)) = &self.racks[0] {
+            let teeth = RackPinion::feed_force(f[0], qd[0], *efficiency);
+            f[1] += (r.radial_load(teeth).powi(2) - teeth * teeth).max(0.0).sqrt();
+        }
         let block = |sx: f64, sy: f64| {
             (f[2] / 4.0 + sy * m[0] / (2.0 * across) - sx * m[1] / (2.0 * along)).abs()
                 + (f[1] / 4.0 + sx * m[2] / (2.0 * along)).abs()

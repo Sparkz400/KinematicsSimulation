@@ -283,6 +283,8 @@ max_velocity_m_s = 0.9
 max_acceleration_m_s2 = 4.0
 max_jerk_m_s3 = 80.0
 
+# The limits of rx, ry, rz act on the rates of the rotation vector, not on the angular velocity: at the home (theta = pi/2)
+# 1.5 rad/s on rz allows a spin of 1.91 rad/s about the vertical.
 [axis.rx]
 max_velocity_rad_s = 1.5
 max_acceleration_rad_s2 = 8.0

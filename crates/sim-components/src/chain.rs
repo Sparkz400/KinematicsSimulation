@@ -1585,7 +1585,8 @@ impl<M: Mechanism> JointMachine<M> {
     /// second difference of the forward kinematics along q'. With fewer (a redundant arm): by central differences of
     /// the mechanism's `inverse`, which resolves the redundancy, along v and along a, so that speeds and accelerations
     /// are those of the very joints it gives: q' = (q(x + h v) - q(x - h v)) / 2h, q'' = (q(x + h v) - 2 q(x) +
-    /// q(x - h v)) / h^2 + (q(x + k a) - q(x - k a)) / 2k, steps of 1e-4 of the tool's units.
+    /// q(x - h v)) / h^2 + (q(x + k a) - q(x - k a)) / 2k, steps of 1e-3 of the tool's units (the inverse's solution is good
+    /// to about 1e-11, which a second difference over 1e-4 would multiply by 1e8).
     pub fn joint_motion(&self, pos: &[f64], vel: &[f64], acc: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
         let (n, m) = (self.n(), self.axes.len());
         if self.mechanism.tool_is_joints() {
@@ -1603,7 +1604,7 @@ impl<M: Mechanism> JointMachine<M> {
             let along = |d: &[f64]| -> Option<(f64, Vec<f64>, Vec<f64>)> {
                 let size = d.iter().map(|v| v * v).sum::<f64>().sqrt();
                 (size > 0.0).then(|| {
-                    let h = 1e-4 / size;
+                    let h = 1e-3 / size;
                     let at = |s: f64| solved(&(0..m).map(|i| pos[i] + s * d[i]).collect::<Vec<_>>());
                     (h, at(h), at(-h))
                 })

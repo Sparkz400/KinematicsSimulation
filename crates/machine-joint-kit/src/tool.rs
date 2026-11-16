@@ -260,19 +260,26 @@ impl Pose {
         tool.copy_from_slice(&self.coordinates(fk, q, 1.0));
     }
 
-    /// d (weighted coordinates) / d q (axes x joints, row by row), by central differences of 1e-6 rad (m).
-    fn jacobian(&self, fk: Forward, q: &[f64]) -> Vec<f64> {
+    /// d (weighted coordinates) / d q (axes x joints, row by row), by central differences of 1e-6 rad (m). With
+    /// `geometric` the turn rows are the angular velocity (the turn log(R+ R-^T) between the two steps, times the
+    /// length) instead of the rotation vector's rate, which is off it by (theta / 2) / sin(theta / 2) and more.
+    fn jacobian(&self, fk: Forward, q: &[f64], geometric: bool) -> Vec<f64> {
         let (m, n) = (self.axes.len(), q.len());
         let mut j = vec![0.0; m * n];
         let mut p = q.to_vec();
         for c in 0..n {
             p[c] = q[c] + 1e-6;
             let a = self.coordinates(fk, &p, self.length);
+            let ra = fk(&p).0;
             p[c] = q[c] - 1e-6;
             let b = self.coordinates(fk, &p, self.length);
+            let spin = log(&matmul(&ra, &transpose(&fk(&p).0)));
             p[c] = q[c];
             for r in 0..m {
-                j[r * n + c] = (a[r] - b[r]) / 2e-6;
+                j[r * n + c] = match self.axes[r] {
+                    ax if geometric && is_turn(ax) => self.length * spin[ax - 3] / 2e-6,
+                    _ => (a[r] - b[r]) / 2e-6,
+                };
             }
         }
         j
@@ -293,14 +300,18 @@ impl Pose {
     /// Damped least squares from `q` towards the weighted coordinates `target` until what is left is below `tol` (m),
     /// at most `steps` iterations: dq = J^T (J J^T + lambda^2 I)^-1 e, lambda 1 mm. A redundant arm also moves within
     /// the null space of J towards the goal (the home, or the middles of the joints' ranges: `away_from_limits`),
-    /// dq += (I - J^T (J J^T)^-1 J) W (goal - q), until that move is below 1e-11 rad: there the joints are the nearest
-    /// to the goal (in the weights W) of all nearby that reach the pose (the null space part of W (goal - q) is zero).
-    /// `false` where it does not get there.
-    fn settle(&self, fk: Forward, q: &mut [f64], target: &[f64], tol: f64, steps: usize) -> bool {
+    /// dq += (I - W^-1 J^T (J W^-1 J^T)^-1 J) (goal - q), the Newton step of the weighted distance within the null space
+    /// (at most 0.05 rad), until that move is below `drift_tol` rad: there the joints are the nearest to the goal (in
+    /// the weights W) of all nearby that reach the pose (the null space part of W (goal - q) is zero). With `tight`
+    /// (the last step of a walk) to 1e-13, not 1e-11: the joint motion differences the solution over 1e-4 of the tool's
+    /// units (a second difference divides by 1e-8), so a drift left in it shows in the accelerations, and the solution
+    /// must not depend on where the walk started. `false` where it does not get there.
+    fn settle(&self, fk: Forward, q: &mut [f64], target: &[f64], tol: f64, steps: usize, tight: bool) -> bool {
+        let drift_tol = if tight { 1e-13 } else { 1e-11 };
         let (m, n) = (self.axes.len(), q.len());
         // The Jacobian is kept while the error falls to a tenth each iteration (a step of a few micrometres changes it
         // by a few millionths); a redundant arm's null space wants it where the joints are.
-        let (mut j, mut before) = (Vec::new(), f64::INFINITY);
+        let (mut j, mut before, mut free_before) = (Vec::new(), f64::INFINITY, f64::INFINITY);
         for _ in 0..steps {
             let now = self.coordinates(fk, q, self.length);
             let e: Vec<f64> = target.iter().zip(&now).map(|(t, c)| t - c).collect();
@@ -312,7 +323,7 @@ impl Pose {
                 return true;
             }
             if j.is_empty() || self.redundant() || size > 0.1 * before {
-                j = self.jacobian(fk, q);
+                j = self.jacobian(fk, q, false);
             }
             before = size;
             let mut dq = if size >= tol {
@@ -321,17 +332,21 @@ impl Pose {
             } else {
                 vec![0.0; n]
             };
-            let mut drift = 0.0;
             if self.redundant() {
-                let z: Vec<f64> = (0..n).map(|k| self.weight[k] * (self.goal[k] - q[k])).collect();
-                let jz: Vec<f64> = (0..m).map(|r| (0..n).map(|k| j[r * n + k] * z[k]).sum()).collect();
-                let Some(back) = Self::through(&j, m, n, &jz, 0.0) else { return false };
+                let a: Vec<f64> = (0..n).map(|k| self.goal[k] - q[k]).collect();
+                let ja: Vec<f64> = (0..m).map(|r| (0..n).map(|k| j[r * n + k] * a[k]).sum()).collect();
+                let jw: Vec<f64> = (0..m * n).map(|rc| j[rc] / self.weight[rc % n].sqrt()).collect();
+                let Some(back) = Self::through(&jw, m, n, &ja, 0.0) else { return false };
+                let free: Vec<f64> = (0..n).map(|k| a[k] - back[k] / self.weight[k].sqrt()).collect();
+                let norm = free.iter().map(|v| v * v).sum::<f64>().sqrt();
+                let cap = (0.05 / norm).min(1.0);
                 for k in 0..n {
-                    let free = z[k] - back[k];
-                    dq[k] += free;
-                    drift += free * free;
+                    dq[k] += cap * free[k];
                 }
-                if size < tol && drift.sqrt() < 1e-11 {
+                // Or no longer falling: the central differences' rounding (1e-10 in J) is all that is left of the step.
+                let stalled = tight && norm < 1e-9 && norm > 0.5 * free_before;
+                free_before = norm;
+                if size < tol && (norm < drift_tol || stalled) {
                     return true;
                 }
             }
@@ -367,7 +382,7 @@ impl Pose {
             let (tol, iterations) = if k == steps { (1e-13, 200) } else { (1e-6, 30) };
             // shortcut: a walk of one step (at most 20 mm and 0.05 rad, as along a cycle) is not checked for passing a
             // singularity; check it too where an arm's singular poses lie that close to its working poses.
-            if !self.settle(fk, q, &at, tol, iterations)
+            if !self.settle(fk, q, &at, tol, iterations, k == steps)
                 || guard && steps > 1 && !(self.condition(fk, q) <= self.max_condition)
             {
                 return false;
@@ -405,10 +420,10 @@ impl Pose {
     }
 
     pub fn condition(&self, fk: Forward, q: &[f64]) -> f64 {
-        self.condition_of(&self.jacobian(fk, q))
+        self.condition_of(&self.jacobian(fk, q, true))
     }
 
-    /// Of the weighted Jacobian; of its transpose where it has fewer rows than columns (a redundant arm), as J^T J is
+    /// Of the weighted geometric Jacobian (turn rows the angular velocity); of its transpose where it has fewer rows than columns (a redundant arm), as J^T J is
     /// singular then and J J^T tells.
     fn condition_of(&self, j: &[f64]) -> f64 {
         let (m, n) = (self.axes.len(), self.home.len());

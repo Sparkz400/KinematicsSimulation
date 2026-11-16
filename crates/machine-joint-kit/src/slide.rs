@@ -120,6 +120,7 @@ impl Mechanism for Slide {
             Drive::Screw(_) => f.angular[0] += rotor_spin[0],
             Drive::Rack(..) => f.angular[1] += rotor_spin[0],
             Drive::Linear(_, forcer) => {
+                f.mass += forcer;
                 f.linear[0] += rotor_spin[0];
                 f.first_moment[0] += forcer * q[0];
             }
