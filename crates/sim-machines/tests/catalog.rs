@@ -450,14 +450,29 @@ fn every_catalogue_motor_reaches_its_rated_point_inside_the_voltage_limit() {
                 m["part_number"],
                 p.max_voltage
             );
+            // Without field weakening (i_d = 0) the rated current meets the back-EMF, R i and the winding's reactance
+            // p w L i (L from Siemens' short-circuit braking table, `apply_motor`; the config's 10 mH where it has no row) and
+            // R i (the config's estimate of 4 Ohm) inside the circle. The 1FK2106-6AF at 230 V: 12.471 A for 13.8 N m with
+            // saturation, |(4 * 12.471 + 1.11888 * 157.08, 4 * 157.08 * 9.4841 mH * 12.471)| = 237.6 V of the 398.0 V; the
+            // tightest row, the 1FK2210-4AC at 400 V, 627.6 V of 661.4 V (0.949).
+            let plain = DriveParams { field_weakening: None, ..p.clone() };
+            let current = p.current_for(p.rated_torque);
+            assert!(
+                plain.voltage_limited_current(p.rated_speed, p.max_voltage, true) >= current,
+                "{} at {supply}: {current} A beyond the voltage circle at the rated speed",
+                m["part_number"]
+            );
             // The torque-speed curve agrees: at least the rated torque at the rated speed, and none where the voltage is
             // used up. (With the config's field weakening the d-q curve falls below the peak torque before the rated
-            // speed for most rows, the linear fade does not.)
+            // speed for most rows, the linear fade does not.) The motor's own curve: the single axis's 10.9 A drive
+            // (`ratings.drive_max_current_a`, effects.drive_current_limit) is not the motor's, and holds the 1FK2106-6AF
+            // to k_t 10.9 A (1 - s (10.9 / 49)^2) = 1.1189 * 10.9 * 0.99159 = 12.09 N m of its 13.8.
+            let own = DriveParams { drive_max_current: f64::INFINITY, ..p.clone() };
             assert!(
-                p.torque_curve(p.rated_speed).1 >= p.rated_torque && p.no_load_speed >= 1.1 * p.rated_speed,
+                own.torque_curve(p.rated_speed).1 >= p.rated_torque && p.no_load_speed >= 1.1 * p.rated_speed,
                 "{} at {supply}: {} N m at the rated speed",
                 m["part_number"],
-                p.torque_curve(p.rated_speed).1
+                own.torque_curve(p.rated_speed).1
             );
             rows += 1;
             beyond_the_dc_link += (back_emf > bus) as usize;

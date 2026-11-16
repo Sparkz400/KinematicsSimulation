@@ -1395,7 +1395,26 @@ impl Drive {
                 // The d current for this setpoint, with the winding warm as it is, for the larger of the setpoint and the
                 // q current there is (an overshoot needs its weakening too).
                 let limit = p.max_current.min(p.drive_max_current);
-                let q_ref = if self.current.abs() > setpoint.abs() { self.current } else { setpoint };
+                let mut q_ref = if self.current.abs() > setpoint.abs() { self.current } else { setpoint };
+                // A q current beyond what the two circles leave together (a setpoint above the curve) would take a d current
+                // that fills the current circle and leaves no q at all: the d current is the one of the most q that fits.
+                let fits = |q: f64| {
+                    let (d, w) =
+                        (p.d_current_for(q, speed, max_voltage, limit, resistance, flux), fw.pole_pairs * speed);
+                    let (u_q, u_d) = (
+                        resistance * q + flux * p.ke * speed + w * fw.d_inductance * d,
+                        resistance * d - w * p.inductance * q,
+                    );
+                    q * q + d * d <= limit * limit && u_q * u_q + u_d * u_d <= max_voltage * max_voltage * (1.0 + 1e-9)
+                };
+                if !fits(q_ref) {
+                    let (mut lo, mut hi) = (0.0, q_ref.abs());
+                    for _ in 0..40 {
+                        let mid = 0.5 * (lo + hi);
+                        if fits(mid.copysign(q_ref)) { lo = mid } else { hi = mid }
+                    }
+                    q_ref = lo.copysign(q_ref);
+                }
                 let wanted_d = p.d_current_for(q_ref, speed, max_voltage, limit, resistance, flux);
                 // The d axis follows it as the current loop does, with the voltage that takes i_d the lag's share this step
                 // on top of the steady one: held within the circle, i_d moves as far as that voltage takes it, and the q
@@ -2394,8 +2413,20 @@ pub(crate) mod tests {
         for _ in 0..4000 {
             d.current_loop(&p, 300.0);
         }
-        assert!((d.current - 7.7206).abs() < 0.05 && (d.voltage.hypot(d.d_voltage) - 190.0).abs() < 0.2, "{} A", d.current);
+        assert!(
+            (d.current - 7.7206).abs() < 0.05 && (d.voltage.hypot(d.d_voltage) - 190.0).abs() < 0.2,
+            "{} A",
+            d.current
+        );
         assert!((d.d_voltage + 92.65).abs() < 0.5 && (d.phase_voltage(&p) - 89.57).abs() < 0.1, "{} V", d.d_voltage);
+        // The time simulation at constant speed, asked for the peak torque, settles at the limit at each speed (0.25 s).
+        for (speed, torque) in [(300.0, 3.474), (330.0, 2.709), (360.0, 1.956)] {
+            let mut d = Drive { torque_command: 3.8, ..Drive::default() };
+            for _ in 0..4000 {
+                d.current_loop(&p, speed);
+            }
+            assert!((d.torque - torque).abs() < 0.01 * torque, "{speed} rad/s: {} N m", d.torque);
+        }
     }
 
     /// With field weakening the phase current, i_q and i_d together, stays within the drive's maximum current. The test
@@ -2414,16 +2445,43 @@ pub(crate) mod tests {
         assert!(d.phase_current() < 5.0 + 1e-3, "{} A", d.phase_current());
     }
 
-    /// Braking at the peak torque near the top speed does not run away: at 400 rad/s (back-EMF 180 V of the 190 V) the
-    /// q current stays within the motor's 9.5 A, and the phase current with the d current.
+    /// Braking or motoring at the peak torque near the top speed does not run away. The audit's case, the t-gantry's
+    /// motor (this test motor with field weakening, 190 V) with saturation off, a step to -3.8 N m held at 400 and
+    /// 420 rad/s, gave -19.1 N m at 42.5 A of phase current before the d axis was held within the voltage circle (commit
+    /// 1d098351). Now, stepped from rest to +-3.8 N m and to the curve's two torques (the velocity loop's clamp left out)
+    /// at 380 to 450 rad/s, saturation on and off, for 0.5 s: the torque stays within the peak 3.8 N m (the step overshoots
+    /// by 0.06 %), the phase current within the motor's 9.5 A and the voltage vector within the 190 V circle at every
+    /// step, and the torque settles at the command or, beyond the curve, at the curve (3.612, 3.470, 3.335, 3.145 N m
+    /// motoring without saturation: a command above the curve took a d current filling the current circle and fell to
+    /// nil before the d current was set for the most q current that fits).
     #[test]
     fn braking_at_the_voltage_limit_does_not_run_away() {
         let fw = FieldWeakening { pole_pairs: 4.0, d_inductance: 0.010 };
-        let p = DriveParams { pole_pairs: 4.0, field_weakening: Some(fw), ..params() };
-        let mut d = Drive { torque_command: p.torque_curve(400.0).0, ..Drive::default() };
-        for _ in 0..4000 {
-            d.current_loop(&p, 400.0);
-            assert!(d.phase_current() < 9.5 * 1.01, "{} A, {} A", d.current, d.d_current);
+        for saturation in [0.0, 1.0 - 0.40 / 0.45] {
+            let p = DriveParams { pole_pairs: 4.0, field_weakening: Some(fw), saturation, ..params() };
+            for speed in [380.0, 400.0, 420.0, 450.0] {
+                let (low, high) = p.torque_curve(speed);
+                for command in [-3.8, 3.8, low, high] {
+                    let mut d = Drive { torque_command: command, ..Drive::default() };
+                    let (mut torque, mut current, mut voltage) = (0.0f64, 0.0f64, 0.0f64);
+                    for _ in 0..8000 {
+                        d.current_loop(&p, speed);
+                        torque = torque.max(d.torque.abs());
+                        current = current.max(d.phase_current());
+                        voltage = voltage.max(d.voltage.hypot(d.d_voltage));
+                    }
+                    // It settles at the command, or at the curve where the command is beyond it.
+                    let settled = command.clamp(low, high);
+                    assert!(
+                        torque <= 3.8 * 1.001
+                            && current <= 9.5 + 1e-6
+                            && voltage <= 190.0 + 1e-9
+                            && (d.torque - settled).abs() < 1e-3 * settled.abs(),
+                        "{saturation} {speed} rad/s {command} N m: {torque} N m, {current} A, {voltage} V, {} N m",
+                        d.torque
+                    );
+                }
+            }
         }
     }
 
@@ -2654,16 +2712,21 @@ pub(crate) mod tests {
 
     /// The d axis follows its setpoint as the tuned current loop does: with Kp = 40 V/A and L_d = 10 mH the time constant
     /// is L_d / Kp = 0.25 ms, four current cycles of 62.5 us. At 500 rad/s the setpoint is -5.625 A (the field weakening
-    /// test); from 0 the d current is -5.625 (1 - exp(-1)) = -3.5557 A after four cycles, and -5.625 (1 - exp(-10)) after
-    /// forty. Before 14 November 2026 it was at -5.625 A in the first.
+    /// test); unbounded, from 0 the d current would be -5.625 (1 - exp(-1)) = -3.5557 A after four cycles, and -5.625
+    /// (1 - exp(-10)) after forty. Before 14 November 2026 it was at -5.625 A in the first. The d voltage is held within the
+    /// 190 V circle (the q current is 0 here, so the steady d voltage is R i_d, nil): the first cycle's share
+    /// e = 1 - exp(-1/4) = 0.22120 of 5.625 A asks for L_d e 5.625 / 62.5 us = 199.1 V, so it moves 190 V * 62.5 us / 10 mH
+    /// = 1.1875 A; then 0.22120 of what is left each cycle (157 V, 122 V, 96 V, within it): -2.1692, -2.9336, -3.5289 A.
     #[test]
     fn the_d_current_follows_its_setpoint_with_the_current_loop_time_constant() {
         let p = weakening();
         let mut d = Drive { torque_command: p.torque_curve(500.0).1, ..Drive::default() };
-        for _ in 0..4 {
+        d.current_control(&p, 500.0);
+        assert!((d.d_current + 1.1875).abs() < 1e-4 && (d.d_voltage + 190.0).abs() < 1e-9, "{} A", d.d_current);
+        for _ in 1..4 {
             d.current_control(&p, 500.0);
         }
-        assert!((d.d_current + 3.5557).abs() < 2e-3, "{} A", d.d_current);
+        assert!((d.d_current + 3.5289).abs() < 2e-4, "{} A", d.d_current);
         for _ in 4..40 {
             d.current_control(&p, 500.0);
         }

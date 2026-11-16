@@ -51,14 +51,32 @@ result is in, treat **every number below as unverified**.
 - **T-gantry modes with the frame** (`modal`): expected 18.81 / 30.77 / 78.51 / 119.46 Hz at
   (0.9, 0.05) and 20.64 / 53.91 / 83.05 / 206.52 Hz at (0.5, 0.25) from the audit's linearisation; the
   new code holds the pulleys and leaves the belt's own mass out of the mass matrix.
-- **Field-weakening braking runaway** (`drive.rs`, `current_control`): fixed by a different route than
-  planned; the original case (−19.1 N m at 42.5 A near 400 rad/s with saturation off) was never
-  reproduced before or after.
-- **Induction torque curve and delivered torque agree** (`induction.rs`): by construction, not by run.
-- **Induction flux of the most torque** (`induction.rs`, `flux_setpoint`): 27.29 N m at 0.774 Wb and 115 rad/s
-  (540 V link) come from an independent scan in Python, not from the Rust; the shipped `induction-lift` cycle
-  now runs with a weaker flux from about 100 rad/s on, and nobody has seen it run. Cost per base step in the
-  weakened range (a golden section of about 1700 voltage evaluations) unmeasured.
+- **Field-weakening braking runaway** (`drive.rs`, `current_control`): verified by run. The audit's case
+  reproduced on commit `1d098351` (test motor of the t-gantry, saturation off, step to −3.8 N m held at
+  400 rad/s: −19.11 N m at 42.47 A); now, stepped to ±3.8 N m and to the curve's torques at 380 to
+  450 rad/s, saturation on and off, the torque stays within 3.8 N m (0.06 % step overshoot), the phase
+  current within 9.5 A and the voltage vector within 190 V, and the torque settles at the curve
+  (`braking_at_the_voltage_limit_does_not_run_away`). A command above the curve used to take a d current
+  filling the current circle and give no torque; the d current is now the one of the most q current that
+  fits. The shipped t-gantry and delta-d3 cycles keep every verdict (motor peaks 0.5406 / 0.4545 N m
+  against 0.5400 / 0.4542 on `1d098351`, the change from the T-gantry belt mass; delta-d3 identical).
+- **Induction torque curve and delivered torque agree** (`induction.rs`): verified by run. The control
+  keeps the rated flux until the voltage binds at the torque commanded (`control_flux`, the largest flux
+  that leaves room for it); only the curve takes the flux of the most torque. Asked for the curve's torque
+  at 110 to 150 rad/s on the 540 V link the rotor-held simulation delivers it within 1 %
+  (`asked_for_the_curves_torque_the_field_oriented_control_delivers_it`).
+- **Induction flux of the most torque** (`induction.rs`, `flux_setpoint`): 27.29 N m at 0.774 Wb and
+  115 rad/s and 20.68 N m at 0.650 Wb and 140 rad/s are now asserted by the Rust tests. The shipped
+  `induction-lift` cycle is unchanged against `1d098351` (same verdicts, peak torque 5.79934 N m, RMS
+  2.48832 N m, tracking error peak 0.28457 mm, all to the printed digits). Cost: the voltage circle's
+  q current is solved by safeguarded Newton instead of a 40-step bisection (the curve at 120 rad/s took
+  52.7 µs per call, now 3.5 µs); the lift cycle's run time is within the noise of the old code (fastest of
+  six runs 5.90 s against 5.79 s).
+- **V/f curve over the slip** (`induction.rs`, `vf_extreme`): the scan is right. A sweep of 200 000
+  stator frequencies through an independently written per-phase circuit gives 17.949 N m at 10 rad/s and
+  19.552 at 25 (22.247 at 50, 26.365 at 100, 20.683 at 140; generating breakdown at rated V and f
+  −52.006 N m); the audit's 18.88 / 20.53 / 23.06 / 26.49 were not the circuit's maximum. The test now
+  asserts 17.949 and 19.552.
 - **Back-EMF constant apart from the torque constant** (`drive.rs`, `emf_loss`, budget row `emf.<motor>`): the
   row is the winding's step energies less copper, shaft and stored energy, derived by hand; nothing has run
   with a printed voltage constant, and the sign in braking (the row is negative) is a model limit, not physics.
