@@ -905,6 +905,7 @@ Modell und Grenzen in der Dokumentation des Crates (`crates/machine-mover-track/
 sim-cli verdicts mover-track --set cam.run=true
 sim-cli verdicts mover-track --config crates/machine-mover-track/flying.toml
 sim-cli verdicts mover-track --set cam.run=true --set track.index_rate_hz=2.5 --set track.clothoid_m=0.0
+```
 
 ## Brückenkran (`machine-overhead-crane`)
 

@@ -1,6 +1,6 @@
 # Überblick: was das Programm aussagen kann
 
-Was der Simulator liefert, was hinter den Zahlen steht und wo seine Grenzen liegen. Installation und Einstieg: [README](README.md); ein Rundgang mit echten Ausgaben steht im englischen [Overview](../overview.md).
+Was der Simulator liefert, was hinter den Zahlen steht und wo seine Grenzen liegen. Installation und Einstieg: die [deutsche Einstiegsseite](https://sparkz400.github.io/KinematicsSimulation/docs/de/); ein Rundgang mit echten Ausgaben steht im englischen [Overview](../overview.md).
 
 ## Was das Programm aussagen kann und was nicht
 
