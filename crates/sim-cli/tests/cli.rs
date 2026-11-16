@@ -397,7 +397,7 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         // above: a crane's hoist, its 92 % gearbox under the 265 kg, whose efficiency faded in below 0.5 W
         // is a damper of 2601^2 ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope, 4.5 N m s/rad at the motor, which the
         // test torque (0.32 N m) does not break away from: |L| some 0.045, the loop not seen.
-        rows.iter().any(|row| row[2] == "NaN")
+        rows.iter().map(|row| row[2] == "NaN").collect::<Vec<bool>>()
     };
     // An unstable loop says so: every machine with a velocity gain of 0.3 N m s/rad (7.5 to 12 times the shipped one).
     // (12 times the shipped one where 0.3 would be less than 7.5 times it: the delta's 0.25 and the screw's, rack's, arms' and table's;
@@ -415,22 +415,30 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
                 format!("{p}={}", if 7.5 * shipped < 0.3 { 0.3 } else { 12.0 * shipped })
             })
             .collect();
-        // Where a gear holds a loop at rest, its loops are judged without the gears' losses, as the tuning's band is.
-        let mut sets = sets;
-        if gear_held {
-            sets.push("effects.gearbox_efficiency=false".into());
+        let margins = |sets: &[String]| {
+            let out = cli(&[
+                &["margins", entry.id][..],
+                &sets.iter().flat_map(|s| ["--set", s.as_str()]).collect::<Vec<_>>(),
+            ]
+            .concat());
+            assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
+            let unstable = text(&out.stdout);
+            assert!(unstable.lines().count() > 1, "{}: {unstable}", entry.id);
+            unstable
+        };
+        let unstable = margins(&sets);
+        // A loop its gear holds at rest at the shipped gains (no crossover there) and that is still "ok" here is
+        // judged again without the gears' losses, as the tuning's band is; every other loop as configured.
+        let lossless = std::cell::OnceCell::new();
+        for (k, row) in unstable.lines().skip(1).enumerate() {
+            let row = if row.ends_with(",ok") && gear_held[k] {
+                let without = [sets.clone(), vec!["effects.gearbox_efficiency=false".into()]].concat();
+                lossless.get_or_init(|| margins(&without)).lines().nth(1 + k).unwrap().to_string()
+            } else {
+                row.to_string()
+            };
+            assert!(row.ends_with(",FAIL"), "{}: {row} of {unstable}", entry.id);
         }
-        let out =
-            cli(&[&["margins", entry.id][..], &sets.iter().flat_map(|s| ["--set", s.as_str()]).collect::<Vec<_>>()]
-                .concat());
-        let unstable = text(&out.stdout);
-        assert!(
-            out.status.success()
-                && unstable.lines().count() > 1
-                && unstable.lines().skip(1).all(|row| row.ends_with(",FAIL")),
-            "{}: {unstable}",
-            entry.id
-        );
     }
 }
 

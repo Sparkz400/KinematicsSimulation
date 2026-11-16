@@ -1713,7 +1713,8 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     // the plan can be a cycle longer and what depends on the first milliseconds differs in the last digits. And the
     // table rounds: to 10 ms from 10 s on (a crane's 14.236 s shows as 14.24).
     let shown = &row(summary, "Duration [s]")[0];
-    let rounding = 0.5 * 10f64.powi(-(shown.split('.').nth(1).map_or(0, str::len) as i32));
+    // Only a rounding coarser than the 3 decimals (0.5 ms) the 2 ms were set with adds to them.
+    let rounding = (0.5 * 10f64.powi(-(shown.split('.').nth(1).map_or(0, str::len) as i32)) - 5e-4).max(0.0);
     assert!(
         (slow - load.duration).abs() < 2e-3 + rounding && load.duration > 0.5,
         "{}: {} s in {summary:?}",

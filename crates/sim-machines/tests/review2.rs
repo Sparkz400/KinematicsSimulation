@@ -277,9 +277,19 @@ fn setpoint_steps(entry: &MachineEntry, change: Option<&str>) -> (f64, f64, Sim)
         watch(&sim);
     }
     // Until the shaper's tail has arrived (half a crane's sway period, 1.4 s), then 0.2 s on: a changed shaper is taken
-    // a few cycles after it, once its store holds nothing but where the plan stands.
+    // a few cycles after it, once its store holds nothing but where the plan stands. Arrived to rounding (1e-12 of each
+    // axis's range): the shaper's weighted sum need not give the plan to the last bit.
     let arrived = sim.time() + 10.0;
-    while sim.control.set_pos != sim.control.planned_pos() && sim.time() < arrived {
+    let apart = |sim: &Sim| {
+        let axes = sim.machine.axes();
+        sim.control
+            .set_pos
+            .iter()
+            .zip(sim.control.planned_pos())
+            .zip(axes.iter())
+            .any(|((s, p), a)| (s - p).abs() > 1e-12 * (a.max - a.min))
+    };
+    while apart(&sim) && sim.time() < arrived {
         sim.step();
         watch(&sim);
     }

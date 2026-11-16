@@ -213,15 +213,26 @@ fn torque_feedforward_cuts_the_following_error_while_accelerating() {
         let process: &[&str] =
             if entry.config().bool("effects.process_force").is_ok() { &["effects.process_force = false"] } else { &[] };
         let (with, without) = (trace(process), trace(&[process, &["effects.torque_feedforward = false"]].concat()));
-        // Judged where the lag peaks without it: a load light against its loop's tuning (the indexing tables' driver
-        // in its dwell, 2.4e-4 kg m2 at the motor) lags little, and the 0.136 mrad that stays with the feedforward
-        // there, later and at speed, is the loops' own lag, which no inertia model removes (0.91 of the peak without).
-        let peak = (0..without.len()).max_by(|&a, &b| without[a].total_cmp(&without[b])).unwrap();
-        let (with, without) = (with[peak], without[peak]);
         // Friction and ripple are not in the feedforward model, so part of the error stays.
-        assert!(with < 0.75 * without, "{}: {with} m with, {without} m without", entry.id);
+        let top = |trace: &[f64]| trace.iter().fold(0f64, |m, v| m.max(*v));
+        let (peak_with, peak_without) = (top(&with), top(&without));
+        if !LEAD_AT_CONSTANT_ACCELERATION.contains(&entry.id) {
+            assert!(peak_with < 0.75 * peak_without, "{}: {peak_with} m with, {peak_without} m without", entry.id);
+        }
+        // And where the lag peaks without it, on every machine.
+        let at = (0..without.len()).max_by(|&a, &b| without[a].total_cmp(&without[b])).unwrap();
+        assert!(with[at] < 0.75 * without[at], "{}: {} m with, {} m without", entry.id, with[at], without[at]);
     }
 }
+
+/// Machines whose peak following error in the test's 0.15 s is a lead the speed measurement gives at constant
+/// acceleration, the same with the torque feedforward and without (measured 16 November 2026). The indexing tables'
+/// driver accelerates at 60 rad/s2 through the whole window, in its dwell (2.4e-4 kg m2 at the motor, which the
+/// feedforward has right: the lag at 0.03 s falls from 0.135 to 0.055 mrad), and its speed, from the encoder's
+/// difference per velocity cycle through the 0.1 ms filter, lags the motor's: the loop runs the motor ahead until
+/// Kv times the error balances it, 0.135 mrad with and 0.133 mrad without by 0.15 s (gone with the filters and the
+/// encoder's quantisation off: under 0.011 mrad throughout). No torque feedforward removes that, so the peaks come out 0.91 and 0.88.
+const LEAD_AT_CONSTANT_ACCELERATION: &[&str] = &["geneva-drive", "cam-indexer"];
 
 #[test]
 fn a_move_arrives_and_comes_to_rest() {
