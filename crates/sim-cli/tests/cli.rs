@@ -211,7 +211,7 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
         let table = text(&out.stdout);
         assert_eq!(
             table.lines().next().unwrap(),
-            "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload"
+            "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload,torque_unit,speed_unit"
         );
         let rows: Vec<Vec<&str>> = table.lines().skip(1).map(|l| l.split(',').collect()).collect();
         assert_eq!(rows.len(), motors);
@@ -226,13 +226,14 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
         let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
         let load = sim_components::analysis::analyse_cycle(&mut sim).unwrap();
         let mut expected = String::from(
-            "motor,speed_rad_s,torque_nm
+            "motor,speed_rad_s,torque_nm,speed_unit,torque_unit
 ",
         );
-        for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+        for (k, (motor, m)) in sim.machine.motors().iter().zip(&load.motors).enumerate() {
+            let (speed_unit, torque_unit) = if sim.machine.motor_linear(k) { ("m/s", "N") } else { ("rad/s", "N m") };
             m.points.iter().for_each(|(speed, torque)| {
                 expected += &format!(
-                    "{},{speed:.6e},{torque:.6e}
+                    "{},{speed:.6e},{torque:.6e},{speed_unit},{torque_unit}
 ",
                     motor.id
                 )
@@ -956,12 +957,18 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
             [
                 format!("{:.6e}", shared.config.frequency),
                 format!("{:.6e}", shared.fitted.frequency),
-                format!("{:.3e}", shared.fitted.frequency_error)
+                format!("{:.3e}", shared.fitted.frequency_error),
+                "Hz".to_string()
             ]
         );
         assert_eq!(
             fit[1][2..],
-            [format!("{:.6e}", shared.config.damping), format!("{:.6e}", shared.fitted.damping), String::new()]
+            [
+                format!("{:.6e}", shared.config.damping),
+                format!("{:.6e}", shared.fitted.damping),
+                String::new(),
+                String::new()
+            ]
         );
         // The same file with its rows from high to low frequency gives the same fit. It gave a negative damping.
         let written = std::fs::read_to_string(&sweep).unwrap();
@@ -1202,7 +1209,7 @@ fn fit_without_a_resonance_dip_fails() {
         text(&en.stderr),
         text(&de.stderr)
     );
-    assert_eq!(text(&en.stdout).trim(), "quantity,of,config,fitted,standard_error");
+    assert_eq!(text(&en.stdout).trim(), "quantity,of,config,fitted,standard_error,units");
 }
 
 /// `fit --stiffness`: the belt's stiffness from a move's own trace, as `identify::fit_move_stiffness` gives it, a row with
@@ -1278,9 +1285,9 @@ fn the_belt_stiffness_is_fitted_to_a_moves_trace_on_the_command_line() {
     assert_eq!(
         rows,
         [
-            format!("stiffness_factor,belt.stiffness_ea_n,1.000000e0,{:.6e},{:.3e}", shared.factor, shared.error),
-            format!("ringing_rms_nm,belt.stiffness_ea_n,,{:.6e},", shared.ringing),
-            format!("ringing_left_rms_nm,belt.stiffness_ea_n,,{:.6e},", shared.residual),
+            format!("stiffness_factor,belt.stiffness_ea_n,1.000000e0,{:.6e},{:.3e},", shared.factor, shared.error),
+            format!("ringing_rms_nm,belt.stiffness_ea_n,,{:.6e},,", shared.ringing),
+            format!("ringing_left_rms_nm,belt.stiffness_ea_n,,{:.6e},,", shared.residual),
         ]
     );
     assert!(
@@ -1461,12 +1468,13 @@ fn analyze_writes_the_torque_breakdown_and_the_energy_budget() {
         assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
         let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
         let load = analyse_cycle(&mut sim).unwrap();
-        let mut expected = String::from("motor,part,peak_torque_nm,rms_torque_nm\n");
-        for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+        let mut expected = String::from("motor,part,peak_torque_nm,rms_torque_nm,torque_unit\n");
+        for (k, (motor, m)) in sim.machine.motors().iter().zip(&load.motors).enumerate() {
+            let unit = if sim.machine.motor_linear(k) { "N" } else { "N m" };
             for (part, (peak, rms)) in sim_core::TORQUE_PARTS.iter().zip(m.torque_parts.unwrap()) {
-                expected += &format!("{},{part},{peak:.6e},{rms:.6e}\n", motor.id);
+                expected += &format!("{},{part},{peak:.6e},{rms:.6e},{unit}\n", motor.id);
             }
-            expected += &format!("{},torque,{:.6e},{:.6e}\n", motor.id, m.peak_torque, m.rms_torque);
+            expected += &format!("{},torque,{:.6e},{:.6e},{unit}\n", motor.id, m.peak_torque, m.rms_torque);
         }
         assert_eq!(std::fs::read_to_string(&breakdown).unwrap(), expected, "{}", entry.id);
         let b = load.budget.unwrap();

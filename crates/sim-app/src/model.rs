@@ -1747,11 +1747,19 @@ impl Model {
             ("ui-run-tool-error-peak", figures.iter().map(|f| f.tool_error_peak).collect::<Vec<_>>()),
             ("ui-run-tool-error-rms", figures.iter().map(|f| f.tool_error_rms).collect()),
         ] {
-            row(
-                &mut table,
-                format!("{} [{length_unit}]", tr(key)),
-                value.into_iter().map(|v| v.map(|v| v * length)).collect(),
-            );
+            // A run without setpoint signals has only the drives' following error: its values get a row of their own.
+            let side: Vec<bool> = self.runs.iter().map(Run::tool_error_is_motor_side).collect();
+            for motor_side in [false, true] {
+                let values: Vec<Option<f64>> = value
+                    .iter()
+                    .zip(&side)
+                    .map(|(v, s)| v.filter(|_| *s == motor_side).map(|v| v * length))
+                    .collect();
+                if values.iter().any(Option::is_some) || (!motor_side && !side.contains(&true)) {
+                    let name = if motor_side { format!("{} · {}", tr(key), tr("ui-run-motor-side")) } else { tr(key) };
+                    row(&mut table, format!("{name} [{length_unit}]"), values);
+                }
+            }
         }
         Some(table)
     }
@@ -2273,7 +2281,7 @@ impl Model {
             }
         }
         let motor = |k: usize| tr(self.session.motors[k].key);
-        let named = |v: &Verdict| vec![tr(&format!("check-{}", v.check)), v.motor.map_or(String::new(), motor)];
+        let named = |v: &Verdict| vec![tr(&self.check_key(v.check, v.motor)), v.motor.map_or(String::new(), motor)];
         let mut checks = vec![self.header(&VERDICT_KEYS)];
         checks.extend(
             verdicts.iter().map(|v| {
@@ -2323,7 +2331,7 @@ impl Model {
             let motor = v.motor.map_or(String::new(), |k| tr(self.session.motors[k].key));
             let (value, limit) = short_pair(v.value, v.limit, v.ok);
             rows.push(vec![
-                tr(&format!("check-{}", v.check)),
+                tr(&self.check_key(v.check, v.motor)),
                 motor,
                 value,
                 limit,
@@ -2333,6 +2341,12 @@ impl Model {
             ]);
         }
         Some(rows)
+    }
+
+    /// The label key of a check (`report::check_key`): the motor's kind decides its unit; without a motor the first one's.
+    pub fn check_key(&self, check: &str, motor: Option<usize>) -> String {
+        let linear = self.session.motor_linear.get(motor.unwrap_or(0)).copied().unwrap_or(false);
+        sim_components::report::check_key(check, linear)
     }
 
     /// The motors of the search as ranked: passing ones first, cheapest first. Per motor its gearbox and axis (empty:
@@ -2347,7 +2361,7 @@ impl Model {
         for c in found {
             let reason = format!("ui-search-{}", c.refused);
             let (check, share) = match (c.tightest(), &c.result) {
-                (Some((check, share)), _) => (tr(&format!("check-{check}")), short(share)),
+                (Some((check, share)), _) => (tr(&self.check_key(check, None)), short(share)),
                 (None, Some(_)) => (String::new(), String::new()),
                 (None, None) => (tr(if self.tr.has(&reason) { &reason } else { "ui-search-refused" }), String::new()),
             };
@@ -2995,7 +3009,7 @@ impl Model {
         // cycle as configured fails there already (not judged).
         if let Some(robust) = &found.robust {
             let checks = |checks: &[&str]| {
-                checks.iter().map(|c| self.tr.tr(&format!("check-{c}")).to_string()).collect::<Vec<_>>().join(", ")
+                checks.iter().map(|c| self.tr.tr(&self.check_key(c, None)).to_string()).collect::<Vec<_>>().join(", ")
             };
             table.push(vec![
                 self.tr.tr("optimised-fastest").to_string(),

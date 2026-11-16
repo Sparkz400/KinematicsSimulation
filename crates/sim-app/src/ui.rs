@@ -543,7 +543,7 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
         for (check, used, passes) in
             checks.iter().filter_map(|&(check, used, passes)| Some((check, used?, passes))).take(room)
         {
-            let name = tr(&format!("check-{check}"));
+            let name = tr(&model.check_key(check, None));
             let picked = panels.check == Some(check);
             let frame = Frame::new()
                 .inner_margin(Margin::symmetric(6, 3))
@@ -883,7 +883,7 @@ fn picked_check(ui: &mut Ui, model: &Model, check: &'static str, panels: PanelSt
     Frame::new().fill(inset()).corner_radius(4).inner_margin(Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            ui.heading(tr(&format!("check-{check}")));
+            ui.heading(tr(&model.check_key(check, None)));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.small_button(tr("ui-close")).clicked() {
                     actions.push(Action::Panels(PanelState { check: None, ..panels }));
@@ -992,7 +992,7 @@ fn inspector(
             }
             ui.end_row();
             for v in mine {
-                ui.label(tr(&format!("check-{}", v.check)));
+                ui.label(tr(&model.check_key(v.check, v.motor)));
                 verdict_cells(ui, model, v);
             }
         });
@@ -2296,17 +2296,11 @@ pub fn hertz(mark: GridMark, _: &std::ops::RangeInclusive<f64>) -> String {
     format!("{:.3}", 10f64.powf(mark.value)).trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-/// A phase over log10(f), unwrapped in both directions, so that a lag beyond half a turn does not jump to the top of the plot.
+/// A phase over log10(f), unwrapped in both directions, so that a lag beyond half a turn does not jump to the top of the
+/// plot, and with the first value in (-270, 90] as the loop view has it (`frequency::phases`).
 fn phase_line(points: &[sim_components::analysis::SweepPoint]) -> Vec<[f64; 2]> {
-    let mut last = 0.0;
-    points
-        .iter()
-        .map(|p| {
-            let phase = sim_app::frequency::unwrap_near(p.phase_deg, last);
-            last = phase;
-            [p.frequency.log10(), phase]
-        })
-        .collect()
+    let unit = points.iter().map(|p| [p.phase_deg.to_radians().cos(), p.phase_deg.to_radians().sin()]);
+    points.iter().zip(sim_app::frequency::phases(unit)).map(|(p, phase)| [p.frequency.log10(), phase]).collect()
 }
 
 /// The open-loop frequency response of the mechanics per motor, its resonance, and the belt stiffness fitted
@@ -2475,4 +2469,22 @@ fn modes_plot(ui: &mut Ui, model: &Model, result: &sim_app::model::Tuning) {
             );
         }
     });
+}
+
+#[cfg(test)]
+mod phase_line_tests {
+    use super::phase_line;
+    use sim_components::analysis::SweepPoint;
+
+    /// A first phase of -200 degrees (reported as +160 by the wrapped angle) stays at -200, in (-270, 90]; the next
+    /// points follow it by the shortest step: 150 after 160 is -210, 170 after 150 is -190.
+    #[test]
+    fn the_first_phase_is_brought_into_minus_270_to_90() {
+        let at = |frequency: f64, phase_deg: f64| SweepPoint { frequency, gain: 1.0, phase_deg };
+        let line = phase_line(&[at(10.0, 160.0), at(20.0, 150.0), at(40.0, 170.0)]);
+        let phases: Vec<f64> = line.iter().map(|p| p[1]).collect();
+        for (got, want) in phases.iter().zip([-200.0, -210.0, -190.0]) {
+            assert!((got - want).abs() < 1e-6, "{phases:?}");
+        }
+    }
 }

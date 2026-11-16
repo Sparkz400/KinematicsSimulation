@@ -4503,3 +4503,26 @@ fn the_band_over_a_trace_is_the_lowest_and_highest_of_the_bounds_runs() {
     assert!(stretches.len() <= sim_app::model::BAND_BUCKETS && stretches.iter().all(|s| s[2] <= s[3]));
     assert!(model.band_points()[0].len() > 100);
 }
+
+/// A kept run without setpoint signals has only the drives' following error as its tool error: the comparison table
+/// puts its values on a row of their own, labelled "motor side", and leaves the run with setpoints on the plain row.
+/// Full run: setpoint 1.0000 m less position 0.9991 m = 0.9 mm; bare run: the encoder-side 0.1 mm.
+#[test]
+fn the_tool_error_of_a_run_without_setpoints_is_a_row_of_its_own() {
+    use sim_app::runs::{Run, RunKind};
+    use sim_core::SignalInfo;
+    let run = |label: &str, ids: &[&str], row: &[f64]| {
+        let signals = ids.iter().map(|id| SignalInfo::new(*id, "owner", "quantity", "m")).collect();
+        Run::from_rows(label.into(), RunKind::Live, MACHINES[0].id, signals, &[], [row])
+    };
+    let mut model = Model::new(MACHINES[0], "en");
+    model.runs.add(run("full", &["time", "axis.x.position", "axis.x.position_setpoint"], &[0.0, 0.9991, 1.0]));
+    model.runs.add(run("bare", &["time", "axis.x.following_error"], &[0.0, 0.0001]));
+    let table = model.runs_table().unwrap();
+    let peak = model.tr.tr("ui-run-tool-error-peak").to_string();
+    let side = format!("{peak} · {}", model.tr.tr("ui-run-motor-side"));
+    let plain = table.iter().find(|r| r[0].starts_with(&peak) && !r[0].starts_with(&side)).unwrap();
+    let motor_side = table.iter().find(|r| r[0].starts_with(&side)).unwrap();
+    assert!(!plain[1].is_empty() && plain[2].is_empty(), "{plain:?}");
+    assert!(motor_side[1].is_empty() && !motor_side[2].is_empty(), "{motor_side:?}");
+}

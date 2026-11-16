@@ -156,6 +156,17 @@ pub const BUDGET_TOLERANCE: f64 = 1e-3;
 /// of the supply: the error of the fourth-order integration of the winding's energy over a base step.
 pub const ELECTRICAL_TOLERANCE: f64 = 1e-6;
 
+/// One guide's load over the cycle (`CycleLoad::guides`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GuideLoad {
+    /// Its highest load, N.
+    pub peak: f64,
+    /// Its equivalent load: the cubic mean over the distance, N.
+    pub equivalent: f64,
+    /// The mean |speed| of its axis, m/s; `None` where the axis is not known.
+    pub speed: Option<f64>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CycleLoad {
     pub duration: f64,
@@ -180,6 +191,9 @@ pub struct CycleLoad {
     pub guide_load: Option<(f64, f64)>,
     /// The mean |speed| of the axis of that guide over the cycle, m/s: the distance it runs per hour.
     pub guide_speed: Option<f64>,
+    /// Every guide the machine reports, each with its own figures: `guide_life_km` and `guide_life_h` take the lowest
+    /// life over them. `guide_load` and `guide_speed` above are those of the one that wears out first.
+    pub guides: Vec<GuideLoad>,
     /// How far the tool was from the path its setpoint drew: the most and the RMS. And the most it was
     /// from where the setpoint was at the same moment, which also counts lagging behind along the path. Of the
     /// axes in m alone (its place); the axes in rad (its turn, an arm's orientation, a turning table) have their own
@@ -1008,11 +1022,13 @@ impl Tally {
         let equivalent = |g: usize| equivalent_load(self.guide_loads[g].1, self.guide_weights[g]);
         let speed = |g: usize| self.guide_axes[g].map(|_| self.guide_speeds[g] / samples);
         let wear = |g: usize| equivalent(g).powi(3) * speed(g).unwrap_or(1.0);
-        // shortcut: the km life (one equivalent load) is that of this guide, not always the lowest, when guides differ in speed; upgrade with per-guide fields in CycleLoad
         let guide = (0..self.guide_loads.len()).max_by(|&a, &b| wear(a).total_cmp(&wear(b)));
         let peak = self.guide_loads.iter().map(|g| g.0).reduce(f64::max);
         let guide_load = guide.zip(peak).map(|(g, peak)| (peak, equivalent(g)));
         let guide_speed = guide.and_then(speed);
+        let guides = (0..self.guide_loads.len())
+            .map(|g| GuideLoad { peak: self.guide_loads[g].0, equivalent: equivalent(g), speed: speed(g) })
+            .collect();
         CycleLoad {
             duration,
             belt_tension: self.belt_tension,
@@ -1024,6 +1040,7 @@ impl Tally {
             condition_peak: self.condition.map(|_| self.condition_peak),
             guide_load,
             guide_speed,
+            guides,
             path_error_peak: self.path_error[0].0,
             path_error_rms: (self.path_error[0].1 / self.path_error[0].2.max(1) as f64).sqrt(),
             tracking_error_peak: self.tracking_error[0],
@@ -1732,23 +1749,39 @@ fn resistor_excess(events: &[f64], room: f64) -> f64 {
     events.iter().map(|e| (e - room).max(0.0)).sum()
 }
 
-/// Nominal life of the most loaded guide in km, where the machine reports guide loads and the config has
+/// Nominal life of the guide that has the least, in km, where the machine reports guide loads and the config has
 /// `ratings.guide_dynamic_load_rating_n`: L10 = (C / P)^3 * 50 km, the catalogue formula for ball guides,
 /// with the dynamic load rating C and for P the cubic mean of the guide load over the cycle's distance (weighted by
-/// the axis's |speed|, as the pulley's radial load is; over time where the guide's axis is unknown).
+/// the axis's |speed|, as the pulley's radial load is; over time where the guide's axis is unknown). The lowest over
+/// all guides (`CycleLoad::guides`).
 ///
 /// This is the catalogue formula and nothing more, and it is not validated: no load factors for shock,
 /// temperature or hardness, no moments on single blocks,
 /// and a guide load that is itself an estimate from the rigid model.
 pub fn guide_life_km(cfg: &Config, load: &CycleLoad) -> Option<f64> {
     let rating = cfg.f64("ratings.guide_dynamic_load_rating_n").ok()?;
-    Some((rating / load.guide_load?.1).powi(3) * 50.0)
+    guides_of(load).iter().map(|g| (rating / g.equivalent).powi(3) * 50.0).reduce(f64::min)
 }
 
-/// `guide_life_km` in hours: the distance over the mean speed of the guide's axis over the cycle
-/// (`CycleLoad::guide_speed`), times the reliability factor a1 as every other life (`reliability_factor`).
+/// `guide_life_km` in hours: the distance over the mean speed of the guide's axis over the cycle (`GuideLoad::speed`),
+/// times the reliability factor a1 as every other life (`reliability_factor`); the lowest over the guides whose axis is
+/// known.
 pub fn guide_life_h(cfg: &Config, load: &CycleLoad) -> Option<f64> {
-    Some(guide_life_km(cfg, load)? * 1e3 / (load.guide_speed? * 3600.0) * reliability_factor(cfg)?)
+    let rating = cfg.f64("ratings.guide_dynamic_load_rating_n").ok()?;
+    let a1 = reliability_factor(cfg)?;
+    let hours = |g: &GuideLoad| -> Option<f64> {
+        Some((rating / g.equivalent).powi(3) * 50.0 * 1e3 / (g.speed? * 3600.0) * a1)
+    };
+    guides_of(load).iter().filter_map(hours).reduce(f64::min)
+}
+
+/// The guides of a load: `CycleLoad::guides`, or the one pair of `guide_load` and `guide_speed` where a load was built
+/// without them.
+fn guides_of(load: &CycleLoad) -> Vec<GuideLoad> {
+    if !load.guides.is_empty() {
+        return load.guides.clone();
+    }
+    load.guide_load.map(|(peak, equivalent)| GuideLoad { peak, equivalent, speed: load.guide_speed }).into_iter().collect()
 }
 
 /// The width of the speed bands of `MotorLoad::gearbox_torque_by_speed`, rad/s of the motor.
@@ -4473,6 +4506,7 @@ mod tests {
             condition_peak: None,
             guide_load: Some((1500.0, 1000.0)),
             guide_speed: Some(0.25),
+            guides: Vec::new(),
             path_error_peak: 0.0,
             path_error_rms: 0.0,
             tracking_error_peak: 0.0,
@@ -4496,6 +4530,12 @@ mod tests {
         };
         close(guide_life_km(&cfg, &load).unwrap(), 6250.0, "guide km");
         close(guide_life_h(&cfg, &load).unwrap(), 6944.444, "guide h");
+        // Two guides, C = 5000 N: 2000 N at 0.1 m/s lives (5000/2000)^3 * 50 = 781.25 km = 2170.14 h; 1000 N at 3 m/s
+        // lives 6250 km = 578.70 h. The km life is the first's, the hours the second's: each the lowest over the guides.
+        let guide = |equivalent: f64, speed: f64| GuideLoad { peak: equivalent, equivalent, speed: Some(speed) };
+        let two = CycleLoad { guides: vec![guide(2000.0, 0.1), guide(1000.0, 3.0)], ..load.clone() };
+        close(guide_life_km(&cfg, &two).unwrap(), 781.25, "lowest guide km");
+        close(guide_life_h(&cfg, &two).unwrap(), 578.704, "lowest guide h");
         // What a config or a machine lacks gives no figure: no output torque, no radial load, no rating.
         assert_eq!(belt_tooth_utilisation(&cfg, &MotorLoad { gearbox_torque: None, ..m.clone() }).unwrap(), None);
         assert_eq!(pulley_bearing_life_h(&cfg, &MotorLoad { radial_load_equivalent: None, ..m.clone() }), None);

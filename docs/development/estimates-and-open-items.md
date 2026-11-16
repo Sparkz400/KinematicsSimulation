@@ -19,7 +19,6 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 | --- | --- | --- | --- | --- |
 | "Strain-wave gears run at 70 to 85 %" | the audit's finding K5 | **from memory** of the auditor | same as above | same as above |
 | Cushion energy "about 0.10 to 0.20 J" on the hanging pneumatic axis | `docs/mechanisms.md`, `docs/de/mechanismen.md` | **made up**: a hand estimate written before any run | Whatever the shipped cycle gives with the weight's work included | Run the shipped pneumatic axis hanging and write the measured figure |
-| The cushion must absorb the weight's work over the cushion length | `crates/sim-components/src/pneumatic.rs` (`Cylinder::stepped`) | **assumed**: physically sound, but whether Festo's 0.4 J rating is meant to include it was never read in the catalogue | Unknown until the Festo DSNU/ADN sizing rule is read | Read the vendor's definition of the permissible impact energy |
 | Mover's mass centre sits on the track centre line (`mass.centre_offset_m = 0.0`) | `crates/machine-mover-track/default.toml`, `flying.toml` | **made up** default: the mover is drawn 35 mm outside the centre line, the real mass offset is not known | With 35 mm the lateral acceleration at 2 m/s is 38.9 m/s², not 30.7 | Take the centre-of-mass offset from the vendor's mover data (or CAD) and set it |
 | FMU output counts 114 / 60 / 108 | `docs/fmi.md` | **assumed**: copied from the audit, the FMUs were not regenerated | Whatever the current export gives | Export the three FMUs and count |
 | Catalogue rows equal the vendors' datasheets | `catalog/**` | **assumed**: the audit checked internal consistency and a few values from memory, never the PDFs | Unknown per row | Spot-check rows per vendor against the source PDFs the extract scripts read |
@@ -82,10 +81,6 @@ result is in, treat **every number below as unverified**.
 | What the model leaves out | Where | Size of the error | Why it was left | Closing it |
 | --- | --- | --- | --- | --- |
 | Feed-forward of the T-gantry has the belt's mass terms but not its speed terms | `machine-t-gantry/src/lib.rs` (`feedforward_torque`) | small (belt mass 0.1 kg/m) | The method takes no velocity | Use the moving feed-forward where it exists |
-| Guide life comes from one guide | `analysis.rs` (`Tally::finish`) | can differ from the true minimum when guides run at very different speeds | The result structure carries one pair | Carry a pair per guide |
-| "motor-speed" label says rad/s on linear motors | `sim-components/i18n/*.ftl`, `sim-app/src/model.rs` | label only | The text has the unit baked in and three groups owned the three files | Build the label from the motor's kind |
-| CLI, Python and browser column names say kg, N, N m, rad/s when the axis is rotary or the motor linear | `sim-cli`, `sim-py`, `sim-wasm` | names only; usage text and docstrings now say so | Names are an interface | Add a unit column |
-| Tool position error falls back to the motor-side following error when a run has no setpoint signal | `sim-app/src/runs.rs` | 2.4 to 15 times too small when it falls back | Old recordings lack the signal | Check every machine emits `axis.<id>.position_setpoint` |
 | Pre-existing estimates the audit did not judge: tooth-jump factor, brake deflection and slip times, the efficiency fade constant 0.5 W, placeholder drive currents in shipped configs | `mech.rs`, shipped `default.toml` files | unknown | Outside the audit's reach without measurements | Measure, or mark each in its config comment |
 
 ## 6. Documents that do not match the program
@@ -112,10 +107,6 @@ and link. What it changes in the tables above (rows stay until the code follows)
 
 - **KRL CIRC** (section 3): sourced. KUKA System Software 8.3, section 11.5.3: missing end-point
   components take the previous position's values. The code now does this.
-- **Festo cushioning** (section 1): the vendor's rule for the cylinder's own cushioning is kinetic
-  energy only, v = sqrt(2E/(m1 + m2)); the weight term belongs to Festo's rule for external shock
-  absorbers. The weight term added to `pneumatic.rs` in this batch is therefore NOT the vendor's check
-  and is to be taken out again (keep it, if at all, as a separate signal).
 - **G-code feed** (section 3): sourced for Siemens SINUMERIK (Fundamentals manual, section 8.1): a
   rotary-only block reads F in degrees per minute; with the default FGROUP (geometry axes) a rotary
   axis in a mixed block is a synchronised axis and follows in the linear axes' time. Fanuc: no primary

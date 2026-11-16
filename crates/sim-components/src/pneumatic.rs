@@ -649,9 +649,9 @@ impl Cylinder {
         let moved = self.mass + if self.payload_on { self.payload } else { 0.0 };
         if t.cushioned == 0.0 && self.cushion > 0.0 && to_end <= self.cushion {
             t.cushioned = 1.0;
-            // Plus the weight's work over the cushion's length where it pushes into the cushion (not where it opposes).
-            let weight = moved * self.gravity * self.cushion * if extending { -1.0 } else { 1.0 };
-            (t.impact_speed, t.impact_energy) = (v.abs(), 0.5 * moved * v * v + weight.max(0.0));
+            // The kinetic energy alone, the vendor's rule for the cylinder's own cushioning (Festo DSBC data sheet: v = sqrt(2 E /
+            // (m1 + m2))); the weight's work over the cushion length belongs to the rule for external shock absorbers.
+            (t.impact_speed, t.impact_energy) = (v.abs(), 0.5 * moved * v * v);
         }
         if t.arrived == 0.0 && to_end <= self.sensor_band {
             t.arrived = 1.0;
@@ -1287,11 +1287,11 @@ mod tests {
         assert!(error.detail().contains("flow"), "{}", error.detail());
     }
 
-    /// The energy entering the cushion at 0.2 m/s into the 17 mm cushion with m = moved mass: kinetic m v^2 / 2 plus,
-    /// where the weight pushes the piston into the cushion, m g L (hanging 1 kg: 9.80665 * 0.017 = 0.1667 J, 0.02 J
-    /// kinetic); extending upwards the weight opposes and only the 0.5 m v^2 enters.
+    /// The energy judged against the cushion's rating at 0.2 m/s into the 17 mm cushion with m = moved mass is the
+    /// kinetic m v^2 / 2 alone (the vendor's rule), whichever way the weight acts: hanging 1 kg gives 0.02 J (m g L =
+    /// 0.1667 J of weight work is not added), extending upwards and retracting down likewise.
     #[test]
-    fn the_cushion_takes_the_weights_work_over_its_length_where_gravity_pushes_in() {
+    fn the_cushion_energy_is_the_kinetic_energy_whichever_way_the_weight_acts() {
         let entering = |incline: &str, spool: f64, x: f64| {
             let mut c = cylinder(&[incline], 1e-5);
             c.cushion = 0.017;
@@ -1303,10 +1303,10 @@ mod tests {
             (c.track.impact_energy, c.mass + c.payload)
         };
         let (down, m) = entering("c.incline_deg = -90.0", 1.0, 0.1 - 0.0169);
-        near(down, 0.5 * m * 0.04 + m * G * 0.017, 1e-9, "extending down");
+        near(down, 0.5 * m * 0.04, 1e-9, "extending down");
         let (up, m) = entering("c.incline_deg = 90.0", 1.0, 0.1 - 0.0169);
         near(up, 0.5 * m * 0.04, 1e-9, "extending up");
         let (retract, m) = entering("c.incline_deg = 90.0", -1.0, 0.0169);
-        near(retract, 0.5 * m * 0.04 + m * G * 0.017, 1e-9, "retracting down");
+        near(retract, 0.5 * m * 0.04, 1e-9, "retracting down");
     }
 }

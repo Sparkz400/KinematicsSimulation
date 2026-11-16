@@ -651,7 +651,7 @@ fn size(r: &Request) -> Result<String, String> {
             "{}{{\"check\":{},\"label\":{},\"motor\":{},\"value\":{},\"limit\":{},\"margin\":{},\"ok\":{}}}",
             if i == 0 { "" } else { "," },
             quote(v.check),
-            quote(tr.tr(&format!("check-{}", v.check))),
+            quote(tr.tr(&sim_components::report::check_key(v.check, v.motor.is_some_and(|k| sim.machine.motor_linear(k))))),
             v.motor.map_or("null".into(), |k| quote(motors[k].id)),
             number(v.value),
             number(v.limit),
@@ -712,7 +712,7 @@ fn fit(r: &Request) -> Result<String, String> {
     let refused = |e: sim_components::trace::TraceError| tr.tr_arg(e.key, &e.detail);
     let machine = (entry.build)(&cfg).map_err(|e| tr.tr_arg(e.key(), e.detail()))?;
     let trace = sim_components::trace::Trace::parse(r.extra, machine.motors()).map_err(refused)?;
-    let (mut rows, mut advice) = (Vec::new(), Vec::new());
+    let (mut rows, mut advice, mut units) = (Vec::new(), Vec::new(), Vec::new());
     let row = |q: &str, of: &str, config: f64, fitted: f64, error: f64| {
         format!("[{},{},{},{},{}]", quote(q), quote(of), number(config), number(fitted), number(error))
     };
@@ -725,6 +725,7 @@ fn fit(r: &Request) -> Result<String, String> {
             let names = ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"];
             for (q, name) in names.iter().enumerate() {
                 rows.push(row(name, axis.id, fit.config[q], fit.fitted[q], fit.error[q]));
+                units.push(quote(fit.units[q]));
             }
             advice.extend(fit.advice(axis.id).iter().map(|(key, detail)| tr.tr_arg(key, detail)));
         }
@@ -732,13 +733,15 @@ fn fit(r: &Request) -> Result<String, String> {
         match fit_joints(entry, &cfg, &trace).map_err(refused)? {
             Some(fit) => {
                 rows.extend(fit.values.iter().map(|v| row(v.quantity, &v.of, v.config, v.fitted, v.error)));
+                units.extend(fit.values.iter().map(|_| quote("")));
                 advice.extend(fit.advice().iter().map(|(key, detail)| tr.tr_arg(key, detail)));
             }
             None => advice.push(tr.tr("fit-joints-skipped").to_string()),
         }
     }
     let advice: Vec<String> = advice.iter().map(|a| quote(a)).collect();
-    Ok(format!("{{\"rows\":[{}],\"advice\":[{}]}}", rows.join(","), advice.join(",")))
+    // `units`: the unit of each row's values, in the order of `rows` (empty for a joint value, which has none of its own).
+    Ok(format!("{{\"rows\":[{}],\"advice\":[{}],\"units\":[{}]}}", rows.join(","), advice.join(","), units.join(",")))
 }
 
 /// The values of the page's form (kind 8): every number of the config but the effect switches and the bounds, with

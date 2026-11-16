@@ -260,12 +260,12 @@ pub fn failures(c: &Candidate) -> Vec<&Verdict> {
 }
 
 /// A failing check as a line: the check, the motor it concerns, value, limit and utilisation.
-pub fn failure_line(tr: &Translations, v: &Verdict, motor_keys: &[&str]) -> String {
+pub fn failure_line(tr: &Translations, v: &Verdict, motor_keys: &[&str], linear: &[bool]) -> String {
     let motor = v.motor.and_then(|m| motor_keys.get(m)).map_or(String::new(), |key| format!(" ({})", tr.tr(key)));
     let (value, limit) = crate::model::short_pair(v.value, v.limit, v.ok);
     format!(
         "{}{motor}: {} / {} = {}",
-        tr.tr(&format!("check-{}", v.check)),
+        tr.tr(&sim_components::report::check_key(v.check, v.motor.is_some_and(|m| linear.get(m) == Some(&true)))),
         value,
         limit,
         short(utilisation(v))
@@ -353,6 +353,11 @@ pub fn kinematics_table(tr: &Translations, rows: &[KinematicsRow]) -> Table {
     for row in rows {
         let machine =
             MACHINES.iter().find(|m| m.id == row.machine).map_or(row.machine.clone(), |m| tr.tr(m.key).into());
+        // The unit of "motor-speed" is the machine's motor kind (the default config builds, the kind does not vary).
+        let linear = MACHINES
+            .iter()
+            .find(|m| m.id == row.machine)
+            .is_some_and(|m| (m.build)(&m.config()).is_ok_and(|b| b.motor_linear(0)));
         let target = row.target_s.map_or(String::new(), short);
         let mut column = vec![machine];
         match (&row.refused, &row.best) {
@@ -361,7 +366,7 @@ pub fn kinematics_table(tr: &Translations, rows: &[KinematicsRow]) -> Table {
             (None, Some(c)) => {
                 let f = c.figures.clone().unwrap_or_default();
                 let (check, u) =
-                    c.tightest().map_or((String::new(), f64::NAN), |(k, u)| (tr.tr(&format!("check-{k}")).into(), u));
+                    c.tightest().map_or((String::new(), f64::NAN), |(k, u)| (tr.tr(&sim_components::report::check_key(k, linear)).into(), u));
                 column.extend([
                     tr.tr(if row.meets() { "ui-analysis-ok" } else { "ui-analysis-fail" }).to_string(),
                     c.article.to_string(),
