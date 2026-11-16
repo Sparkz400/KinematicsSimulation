@@ -97,6 +97,7 @@ param-peak_torque_nm = Peak torque [N m]
 param-rated_torque_nm = Rated torque, continuous [N m]
 param-rated_speed_rad_s = Rated speed [rad/s]
 param-no_load_speed_rad_s = No-load speed [rad/s]
+param-back_emf_constant_v_s_rad = Back-EMF constant, 0 for the torque constant [V s/rad]
 param-encoder_counts_per_rev = Encoder counts per revolution
 param-velocity_filter_s = Velocity filter time constant [s]
 param-torque_filter_s = Torque setpoint filter time constant [s]

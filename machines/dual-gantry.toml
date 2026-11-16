@@ -443,6 +443,8 @@ current_tn_s = 2.5e-3
 # The DC link voltage. The winding gets sqrt(3/2) times it at most, here 190 V: the model's one winding
 # carries the RMS phase current, and its voltage times that current is the power of all three phases.
 bus_voltage_v = 155.13
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 3.8
 # What the motor can give continuously; the RMS torque of a cycle is judged against it.
 rated_torque_nm = 1.27

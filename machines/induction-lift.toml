@@ -409,6 +409,8 @@ current_tn_s = 5.0787e-3
 # carries the RMS phase current, and its voltage times that current is the power of all three phases.
 # The 400 V line rectified, 1.35 * 400 V.
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 25.0
 # What the motor can give continuously; the RMS torque of a cycle is judged against it.
 rated_torque_nm = 10.0

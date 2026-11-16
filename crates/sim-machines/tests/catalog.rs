@@ -173,13 +173,14 @@ fn parts_named_in_a_config_behave_like_their_numbers() {
         // Where the named gearbox has the config's ratio (5); another ratio changes the load the motor sees, and the
         // gain with it (a screw on a coupling: far less). The gain follows the rotor and gearbox inertia: a little
         // heavier than the gantry's and the single axis's own, more gain; far lighter than the 1.7e-4 kg m2 rotor of
-        // the flying saw and the cable robots, less.
+        // the flying saw and the cable robots, less. A gain that would grow is held at the config's own where the
+        // machine reports a resonance the loop must stay below (`retuned`: the t-gantry keeps its 0.04).
         if entry.config().f64("gearbox.ratio").unwrap() == 5.0 {
             let turned = |c: &sim_core::Config| {
                 c.f64("motor.rotor_inertia_kgm2").unwrap() + c.f64("gearbox.inertia_at_input_kgm2").unwrap()
             };
             let heavier = turned(&numbers) > turned(&entry.config());
-            assert!(if heavier { gain > own && gain < 2.0 * own } else { gain < own }, "{}: gain {gain}", entry.id);
+            assert!(if heavier { gain >= own && gain < 2.0 * own } else { gain < own }, "{}: gain {gain}", entry.id);
         }
         numbers.set_text(&format!("drive.velocity_kp_nm_s_rad = {gain:?}")).unwrap();
         assert_eq!(resolved, numbers, "{}", entry.id);
@@ -846,4 +847,34 @@ fn the_back_emf_constant_key_sets_the_servo_winding_apart_from_the_torque_consta
     assert_eq!(ke(&["drive.back_emf_constant_v_s_rad = 0.5"]), 0.5);
     assert_eq!(ke(&["drive.back_emf_constant_v_s_rad = 0.0"]), 0.45);
     assert_eq!(ke(&["drive.back_emf_constant_v_s_rad = 0.5", "effects.back_emf = false"]), 0.0);
+}
+
+/// The retuned velocity gain on the single axis (gain 0.025, rotor and gearbox 3.0e-5 kg m2, first resonance 65.8 Hz).
+/// The inertia the motor turns comes from the machine: pulley radius x2 takes it from 1.3416e-4 to 4.3464e-4 kg m2,
+/// a scaled gain of sqrt(3.24) = 1.800 times the config's, which the bound holds at the config's (2 pi 65.8 / 3 times
+/// 3.0e-5 is 0.0041, below it). Gear ratio x2 shrinks it, unbounded: 0.6463. The Bahr ELZ-125 (pulley radius 48 mm,
+/// resonance 160 Hz) scaled to 0.0573 ran at 2.05 times the motor's peak; bounded it keeps 0.025 and passes.
+#[test]
+fn the_retuned_gain_follows_the_inertia_the_machine_turns_and_stays_below_the_resonance() {
+    use sim_components::catalog::{Parts, inertia_ratios, with_named, with_value};
+    let entry = &machine_single_axis::ENTRY;
+    let cfg = entry.config();
+    let kp = |c: &sim_core::Config| c.f64("drive.velocity_kp_nm_s_rad").unwrap();
+    let turned = |c: &sim_core::Config| {
+        let rotor = c.f64("motor.rotor_inertia_kgm2").unwrap() + c.f64("gearbox.inertia_at_input_kgm2").unwrap();
+        rotor * (1.0 + inertia_ratios(entry, c).unwrap()[0])
+    };
+    let wide = with_value(entry, &cfg, "geometry.pulley_radius_m", 0.04).unwrap();
+    assert!(close(turned(&cfg), 1.3416e-4, 1e-4) && close(turned(&wide), 4.3464e-4, 1e-4), "{}", turned(&wide));
+    assert!(close((turned(&wide) / turned(&cfg)).sqrt(), 1.800, 1e-3));
+    assert_eq!(kp(&wide), kp(&cfg));
+    let geared = with_value(entry, &cfg, "gearbox.ratio", 10.0).unwrap();
+    assert!(close(kp(&geared) / kp(&cfg), 0.6463, 1e-4), "{}", kp(&geared) / kp(&cfg));
+    let elz = with_named(entry, &cfg, &Parts { axis: "ELZ-125", ..Parts::of(&cfg).unwrap() }).unwrap();
+    assert_eq!(kp(&elz), kp(&cfg));
+    let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &elz).unwrap()).unwrap();
+    let verdicts = sim_components::analysis::verdicts(&elz, &load).unwrap();
+    let failed: Vec<_> = verdicts.iter().filter(|v| !v.ok).map(|v| (v.check, v.value, v.limit)).collect();
+    assert!(failed.is_empty(), "{failed:?}");
+    eprintln!("ELZ-125: tracking error {:e} m, settling {:e} m", load.tracking_error_peak, load.dwell_error_peak);
 }

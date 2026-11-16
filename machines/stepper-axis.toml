@@ -407,6 +407,8 @@ current_tn_s = 2.5e-3
 # carries the RMS phase current, and its voltage times that current is the power of all three phases.
 # The stepper's supply. Its pull-out torque is the holding torque up to (R I + kE w)^2 + (50 w L I)^2 = 48^2, 85 rad/s.
 bus_voltage_v = 48.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 1.11
 rated_torque_nm = 1.11
 # A servo's torque-speed curve; the stepper's own is its pull-out curve from R, L, kE and the supply.
