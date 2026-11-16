@@ -1183,13 +1183,16 @@ fn a_plot_across_labels_a_tick_every_60_pixels_or_so() {
     assert_eq!(values(marks), [-600.0, -400.0, -200.0, 0.0, 200.0, 400.0, 600.0]);
 }
 
-/// The loop-response tab on the single axis, the T-gantry and the D3: its button measures every motor's velocity loop
-/// in the background, the result arrives with the margins `sim-cli margins` prints (all stable), the plots' labels show,
-/// and a click on another motor shows that one.
+/// The loop-response tab on the first machines with one, two and three motors: its button measures every motor's
+/// velocity loop in the background, the result arrives with the margins `sim-cli margins` prints (all stable), the
+/// plots' labels show, and a click on another motor shows that one.
 #[test]
 fn the_loop_tab_measures_every_motor_of_three_machines() {
-    for id in ["single-axis", "t-gantry", "delta-d3"] {
-        let mut d = Driver::of(sim_machines::find(id).unwrap(), "en");
+    let motors = |e: &sim_core::MachineEntry| (e.build)(&e.config()).unwrap().motors().len();
+    for n in 1..=3 {
+        let entry = MACHINES.iter().copied().find(|e| motors(e) == n).unwrap();
+        let id = entry.id;
+        let mut d = Driver::of(entry, "en");
         d.tab("ui-loop-tab");
         d.button_of("ui-loop-run");
         d.wait(id, |d| d.state().model.loop_response.running());
