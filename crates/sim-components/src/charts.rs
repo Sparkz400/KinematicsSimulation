@@ -15,7 +15,8 @@ pub const CURVE_POINTS: usize = 241;
 pub struct TorqueSpeed {
     /// What motor and drive give at most (`DriveParams::torque_curve`): the peak torque, faded or field-weakened.
     pub peak: [Vec<[f64; 2]>; 2],
-    /// The continuous (S1) rating, the rated torque up to the rated speed.
+    /// The continuous (S1) rating as the motor-s1 verdict has it (`analysis::s1_torque`): from k_t I_0 at standstill to the
+    /// rated torque at the rated speed, and on along that line.
     pub s1: [Vec<[f64; 2]>; 2],
     /// What the winding's voltage leaves at the DC link `dc_voltage` (`DriveParams::voltage_limited_torque`).
     pub voltage: [Vec<[f64; 2]>; 2],
@@ -35,8 +36,11 @@ pub fn torque_speed(drive: &DriveParams, dc_voltage: f64) -> TorqueSpeed {
         let pairs: Vec<_> = speeds.iter().map(|&w| (w, f(w))).collect();
         [pairs.iter().map(|&(w, (_, high))| [w, high]).collect(), pairs.iter().map(|&(w, (low, _))| [w, low]).collect()]
     };
+    // The verdict's line (`analysis::s1_torque`): k_t I_0 at standstill to the rated torque at the rated speed, on beyond it.
+    let still = drive.kt * drive.stall_current;
     let s1 = |sign: f64| {
-        vec![[-drive.rated_speed, sign * drive.rated_torque], [drive.rated_speed, sign * drive.rated_torque]]
+        let at = |w: f64| sign * (still + (drive.rated_torque - still) * w.abs() / drive.rated_speed).max(0.0);
+        vec![[-top, at(top)], [0.0, at(0.0)], [top, at(top)]]
     };
     TorqueSpeed {
         peak: line(&|w| drive.torque_curve(w)),
@@ -81,6 +85,8 @@ pub fn split(error: &[f64], direction: &[f64]) -> (f64, f64) {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ToolError {
     pub time: Vec<f64>,
+    /// Whether the machine has axes in m; without them `normal` and `tangential` are all zero.
+    pub place: bool,
     pub normal: Vec<f64>,
     pub tangential: Vec<f64>,
     /// Empty on a machine without axes in rad.
@@ -110,7 +116,7 @@ pub fn tool_error(signals: &[SignalInfo], columns: &[Vec<f64>]) -> Option<ToolEr
         return None;
     }
     let time = columns.first()?.clone();
-    let mut out = ToolError { time, ..ToolError::default() };
+    let mut out = ToolError { time, place: !place.is_empty(), ..ToolError::default() };
     for i in 0..out.time.len() {
         let error: Vec<f64> = place.iter().map(|(e, _)| e[i]).collect();
         let direction: Vec<f64> = place.iter().map(|(_, v)| v.map_or(0.0, |v| v[i])).collect();
@@ -224,6 +230,8 @@ pub fn utilisation(drive: &DriveParams, signals: &[SignalInfo], columns: &[Vec<f
     {
         out.push(("charts-overload-slow", image.iter().zip(chip).map(|(i, c)| (i - c) / o.trip).collect()));
         out.push(("charts-overload-chip", chip.iter().map(|c| c / o.trip).collect()));
+        // The trip is on their sum.
+        out.push(("charts-overload-total", image.iter().map(|i| i / o.trip).collect()));
     }
     if drive.heating {
         if let Some(rise) = get("winding_temperature") {
@@ -249,14 +257,14 @@ pub fn braking_share(drive: &DriveParams) -> Option<f64> {
 }
 
 /// The amplitude spectrum of samples `dt` apart: (frequency Hz, amplitude) from 0 to the Nyquist frequency. Of the
-/// newest power of two of them, mean removed, through a Hann window; a sine of amplitude A on a bin gives A there.
+/// samples, zero-padded to a power of two, mean removed, through a Hann window; a sine of amplitude A on a bin gives A there.
 /// Empty for fewer than 8 samples.
 pub fn spectrum(values: &[f64], dt: f64) -> Vec<[f64; 2]> {
     if values.len() < 8 {
         return Vec::new();
     }
-    let n = 1usize << values.len().ilog2();
-    let amplitudes = hann_amplitudes(&values[values.len() - n..]);
+    let n = values.len().next_power_of_two();
+    let amplitudes = hann_amplitudes(values, n);
     amplitudes.iter().enumerate().map(|(k, a)| [k as f64 / (n as f64 * dt), *a]).collect()
 }
 
@@ -277,22 +285,23 @@ pub fn spectrogram(values: &[f64], dt: f64, start: f64, frame: usize) -> Spectro
     let mut at = 0;
     while at + frame <= values.len() {
         out.times.push(start + (at + frame / 2) as f64 * dt);
-        out.frames.push(hann_amplitudes(&values[at..at + frame]));
+        out.frames.push(hann_amplitudes(&values[at..at + frame], frame));
         at += hop;
     }
     out
 }
 
-/// The amplitudes of bins 0 to n / 2 of n samples (a power of two), mean removed, Hann-windowed and scaled by 2 / the
-/// window's sum, so that a sine on a bin shows its amplitude.
-fn hann_amplitudes(values: &[f64]) -> Vec<f64> {
-    let n = values.len();
-    let mean = values.iter().sum::<f64>() / n as f64;
-    let window = |i: usize| 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n as f64).cos();
+/// The amplitudes of bins 0 to n / 2 of the samples zero-padded to `n` (a power of two), mean removed, Hann-windowed over
+/// the real samples and scaled by 2 / the window's sum, so that a sine on a bin shows its amplitude.
+fn hann_amplitudes(values: &[f64], n: usize) -> Vec<f64> {
+    let m = values.len();
+    let mean = values.iter().sum::<f64>() / m as f64;
+    let window = |i: usize| 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / m as f64).cos();
     let mut re: Vec<f64> = values.iter().enumerate().map(|(i, v)| (v - mean) * window(i)).collect();
+    re.resize(n, 0.0);
     let mut im = vec![0.0; n];
     fft(&mut re, &mut im);
-    let scale = 2.0 / (0..n).map(window).sum::<f64>();
+    let scale = 2.0 / (0..m).map(window).sum::<f64>();
     (0..=n / 2).map(|k| re[k].hypot(im[k]) * scale).collect()
 }
 
@@ -447,7 +456,42 @@ mod tests {
         ];
         let e = tool_error(&signals, &columns).unwrap();
         let near = |v: &[f64], x: f64| v.iter().all(|v| (v - x).abs() < 1e-15);
-        assert!(near(&e.normal, 2e-3) && near(&e.tangential, 1e-3) && e.angle.is_empty(), "{e:?}");
+        assert!(near(&e.normal, 2e-3) && near(&e.tangential, 1e-3) && e.angle.is_empty() && e.place, "{e:?}");
+    }
+
+    /// A machine with one axis in rad only: no place, the error is the angle 0.01 rad (setpoint 0.2 less actual 0.19).
+    #[test]
+    fn a_machine_without_an_axis_in_metres_has_its_error_in_the_angle() {
+        let signals = ["time", "axis.a.position", "axis.a.position_setpoint"]
+            .map(|id| SignalInfo::new(id, "k", "q", if id == "time" { "s" } else { "rad" }));
+        let columns = vec![vec![0.0, 1e-3], vec![0.19, 0.19], vec![0.2, 0.2]];
+        let e = tool_error(&signals, &columns).unwrap();
+        assert!(!e.place && e.normal.iter().all(|v| *v == 0.0), "{e:?}");
+        assert!(e.angle.iter().all(|v| (v - 0.01).abs() < 1e-12), "{e:?}");
+    }
+
+    /// S1 from k_t I_0 = 0.45 * 4 = 1.8 N m at standstill to 1.2 N m at the rated 100 rad/s: at 150 rad/s the line has
+    /// 1.8 - 0.6 * 1.5 = 0.9 N m (the verdict's `s1_torque`), standstill 1.8, both directions.
+    #[test]
+    fn the_s1_line_runs_from_the_static_torque_to_the_rated_one_and_on() {
+        let p = DriveParams { kt: 0.45, stall_current: 4.0, rated_torque: 1.2, rated_speed: 100.0, ..drive() };
+        let c = torque_speed(&p, 300.0);
+        let top = c.s1[0][2][0];
+        assert!((c.s1[0][1][1] - 1.8).abs() < 1e-12 && (c.s1[1][1][1] + 1.8).abs() < 1e-12);
+        let at_150 = c.s1[0][2][1] - (c.s1[0][2][1] - 1.8) * (top - 150.0) / top;
+        assert!((at_150 - 0.9).abs() < 1e-9, "{at_150}");
+    }
+
+    /// 300 samples (not a power of two) of a sine of 0.3 on a bin of the padded 512: the whole run is used, so the
+    /// spectrum has 257 bins and the amplitude near the bin is 0.3 within the leakage of the zero padding.
+    #[test]
+    fn the_spectrum_pads_to_the_next_power_of_two_and_keeps_the_amplitude() {
+        let (dt, hz) = (1e-3, 100.0);
+        let values: Vec<f64> = (0..300).map(|i| 0.3 * (std::f64::consts::TAU * hz * i as f64 * dt).sin()).collect();
+        let s = spectrum(&values, dt);
+        assert_eq!(s.len(), 257);
+        let top = s.iter().max_by(|a, b| a[1].total_cmp(&b[1])).unwrap();
+        assert!((top[0] - hz).abs() < 4.0 && (top[1] - 0.3).abs() < 0.03, "{top:?}");
     }
 
     /// A sine of 0.3 on bin 50 of 1024 samples 1 ms apart, 48.828 Hz, plus an offset: the spectrum's highest bin is

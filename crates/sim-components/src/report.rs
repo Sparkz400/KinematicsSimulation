@@ -118,7 +118,8 @@ pub fn make(
     } else {
         tr.tr_arg("report-fail", &format!("{failed} / {}", judged.len()))
     };
-    let duration = rows.last().map_or(0.0, |r| r[0]);
+    // The last row is stamped at the start of its sample: the cycle lasts one sample step longer.
+    let duration = rows.last().map_or(0.0, |r| r[0] + if rows.len() > 1 { r[0] - rows[rows.len() - 2][0] } else { 0.0 });
     let facts = [
         ("report-machine-name", tr.tr(entry.key).to_string()),
         ("report-config", source.to_string()),
@@ -211,25 +212,31 @@ pub fn make(
         }));
     }
     if let Some(error) = charts::tool_error(&signals, &columns).filter(|e| !e.normal.is_empty()) {
-        let micro = |v: &[f64]| v.iter().zip(&error.time).map(|(v, t)| [*t, v * 1e6]).collect::<Vec<_>>();
+        // Without an axis in m the error is the angle, in mrad; never a row of zeros in µm.
+        let (unit, scale, first, second) = if error.place {
+            ("µm", 1e6, error.normal.as_slice(), Some(error.tangential.as_slice()))
+        } else {
+            ("mrad", 1e3, error.angle.as_slice(), None)
+        };
+        let scaled = |v: &[f64]| v.iter().zip(&error.time).map(|(v, t)| [*t, v * scale]).collect::<Vec<_>>();
+        let name = t(if error.place { "charts-normal" } else { "charts-angle-error" });
+        let mut series = vec![(name.clone(), scaled(first), false)];
+        series.extend(second.map(|v| (t("charts-tangential"), scaled(v), false)));
         blocks.push(Block::Plot(Plot {
             title: t("charts-tool-error"),
             x_label: "t [s]".into(),
-            y_label: "e [µm]".into(),
-            series: vec![
-                (t("charts-normal"), micro(&error.normal), false),
-                (t("charts-tangential"), micro(&error.tangential), false),
-            ],
+            y_label: format!("e [{unit}]"),
+            series,
         }));
-        let steps = charts::histogram(&error.normal, 40)
+        let steps = charts::histogram(first, 40)
             .iter()
-            .flat_map(|(low, high, n)| [[low * 1e6, *n as f64], [high * 1e6, *n as f64]])
+            .flat_map(|(low, high, n)| [[low * scale, *n as f64], [high * scale, *n as f64]])
             .collect();
         blocks.push(Block::Plot(Plot {
             title: t("charts-histogram"),
-            x_label: format!("{} [µm]", t("charts-normal")),
+            x_label: format!("{name} [{unit}]"),
             y_label: "n".into(),
-            series: vec![(t("charts-normal"), steps, false)],
+            series: vec![(name, steps, false)],
         }));
     }
     for (k, m) in motors.iter().enumerate() {
