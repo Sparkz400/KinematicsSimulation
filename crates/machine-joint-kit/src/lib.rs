@@ -66,11 +66,12 @@ pub const ARM_ON_TRACK_TOOL_CONFIG: &str = include_str!("../config/arm-on-track-
 const G: f64 = 9.80665;
 
 /// Effects that take energy out or put it in; the standard suite runs with them off.
-pub const LOSSY_EFFECTS: [&str; 7] = [
+pub const LOSSY_EFFECTS: [&str; 8] = [
     "joint_friction",
     "motor_friction",
     "gearbox_drag",
     "gearbox_lost_motion",
+    "gearbox_mesh_friction",
     "gearbox_efficiency",
     "torque_ripple",
     "holding_brake",

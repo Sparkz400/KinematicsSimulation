@@ -211,8 +211,9 @@ weichen Vakuumgreifer oder ein Sack in einer Schlinge. Die beiden Pendelgelenke 
 (`chain::Mechanism::passive_joints`): Ihre Winkel und Geschwindigkeiten folgen den anderen Zuständen der Gelenkmaschine,
 ihre Dynamik ist die der Kette mit den Körpern des Pendels, die Leistung des Dämpfers der Verlust
 `power.payload_swing` und die Winkel die Signale `swing.1.angle`, `swing.2.angle`. Vorsteuerung und Ruhelagen sehen die
-Last fest am Flansch. Der Karton des Palettierers pendelt mit 2,2 Hz (sqrt(k / (m l^2) + g / l) / 2 pi mit 120 N m/rad,
-20 kg, 0,2 m).
+Last fest am Flansch. Der Karton des Palettierers pendelt mit 1,61 Hz
+um die Achse quer zu seiner 0,6-m-Seite und mit 1,82 Hz um die andere (sqrt((k + m g l) / (m l^2 + I)) / 2 pi mit 120 N m/rad,
+20 kg, 0,2 m und dem Eigenträgheitsmoment I = 0,75 und 0,4167 kg m^2 des Kartons: 159,2 / (0,8 + 0,75), 159,2 / (0,8 + 0,4167)).
 shortcut: Ohne Last tragen die Pendelgelenke eine eigene Einheitsträgheit, getrennt vom Arm.
 
 ### Ein Roboter auf einer Schiene

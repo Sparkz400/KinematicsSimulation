@@ -209,8 +209,9 @@ across the line from the flange to its centre (`arm.payload_offset_m`, the pendu
 vacuum gripper or a sack in a sling. The two swing joints are joints no motor drives (`chain::Mechanism::passive_joints`):
 their angles and speeds follow the joint machine's other states, their dynamics are the chain's with the swing's bodies,
 the damper's power is the loss `power.payload_swing` and the angles the signals `swing.1.angle`, `swing.2.angle`. The
-feedforward and the poses at rest see the payload fixed to the flange. The palletiser's carton swings at 2.2 Hz
-(sqrt(k / (m l^2) + g / l) / 2 pi with 120 N m/rad, 20 kg, 0.2 m).
+feedforward and the poses at rest see the payload fixed to the flange. The palletiser's carton swings at 1.61 Hz
+about the axis across its 0.6 m side and 1.82 Hz about the other (sqrt((k + m g l) / (m l^2 + I)) / 2 pi with 120 N m/rad,
+20 kg, 0.2 m and the carton's own inertia I = 0.75 and 0.4167 kg m^2: 159.2 / (0.8 + 0.75), 159.2 / (0.8 + 0.4167)).
 shortcut: without the payload the swing's joints carry a unit inertia of their own, apart from the arm.
 
 ### An arm on a track

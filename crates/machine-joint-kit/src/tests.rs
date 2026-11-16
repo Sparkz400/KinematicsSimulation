@@ -1523,7 +1523,7 @@ fn track_signal(m: &dyn Machine, pose: &[f64], acc: &[f64], id: &str) -> f64 {
 /// loaded block 319.942 + 142.2455 = 462.188 N, reported times four, 1848.75 N. The track accelerating at 2 m/s^2 adds
 /// the inertia's moments about the carriage: pitch M_y = 2 * 66.305 = 132.61 N m on the blocks front and back, +-M_y /
 /// (2 * 0.4), and yaw M_z = -2 * 14.505 = -29.01 N m across the rails, +-M_z / (2 * 0.4); the push along the rails is
-/// the rack's: 462.188 + 165.7625 + 36.2625 = 664.213 N, times four 2656.85 N. The rack's teeth then carry the 261 N,
+/// the rack's: 462.188 + 165.7625 + 36.2625 = 664.213 N, times four 2656.85 N, and the pinion's separating force on top (below). The rack's teeth then carry the 261 N,
 /// and the pinion loads the gearbox's shaft with 261 sqrt(1 + (tan 20 deg / cos 19.5283 deg)^2) = 261 * 1.071978 =
 /// 279.786 N.
 #[test]
@@ -1537,8 +1537,12 @@ fn the_guide_blocks_carry_the_weight_and_the_tilting_moments_by_hand() {
     let mut acc = [0.0; 7];
     acc[0] = 2.0;
     let pushed = track_signal(m.as_ref(), &sideways(), &acc, "axis.j1.guide_load");
-    let by_hand = block(2.0 * SUM_MZ / (2.0 * 0.4) + 2.0 * SUM_MY / (2.0 * 0.4));
-    assert!((by_hand - 2656.85).abs() < 0.01);
+    // The helical pinion's separating force across the rails, 261 N * tan 20 deg / cos 19.5283 deg = 261 * 0.386 = 100.8 N,
+    // on the four blocks: the total grows by it (F_y / 4 on each, all four on the loaded side).
+    let apart = TRACK_MASS * 2.0 * (1.071978f64.powi(2) - 1.0).sqrt();
+    assert!((apart - 100.8).abs() < 0.1, "{apart}");
+    let by_hand = block(2.0 * SUM_MZ / (2.0 * 0.4) + 2.0 * SUM_MY / (2.0 * 0.4) + apart / 4.0);
+    assert!((by_hand - 2757.65).abs() < 0.1, "{by_hand}");
     near(pushed, by_hand, 1e-6, "guide load accelerating");
     let teeth = track_signal(m.as_ref(), &sideways(), &acc, "rack.1.feed_force");
     near(teeth, TRACK_MASS * 2.0, 1e-6, "feed force");
@@ -1592,4 +1596,51 @@ fn the_track_is_a_given_axis_beside_the_tool_pose() {
     m.inverse(&[1.7, 2.4, 0.3, 0.8, 0.0, down, 0.0], &mut there);
     assert!((there[0] - here[0] - 0.2 * track_ratio()).abs() < 1e-9 && (there[1] - here[1]).abs() > 1.0);
     sim_core::testkit::static_hold(m.as_ref());
+}
+
+/// The linear motor axis's frame momentum counts the forcer in the moving mass as it does in the first moment: every
+/// moving part sits on the x axis at the carriage's travel x, so by hand at 0.2 m the first moment is 0.2 times the
+/// mass, whatever the payload's share, and the mass holds at least the carriage's 5 kg and the forcer's 3 kg.
+#[test]
+fn the_linear_motor_frame_momentum_has_the_forcers_mass() {
+    let m = (LINEAR_MOTOR.build)(&rigid(&LINEAR_MOTOR)).unwrap();
+    let (mut state, mut torque) = (Vec::new(), [0.0; 1]);
+    m.equilibrium(&[0.2], &mut state, &mut torque);
+    let f = m.frame_momentum(&state).unwrap();
+    assert!(f.mass >= 5.0 + 3.0, "{} kg is less than carriage and forcer", f.mass);
+    near(f.first_moment[0], f.mass * 0.2, 1e-9, "first moment");
+}
+
+/// The mesh friction takes energy out as the other gearbox losses do, so the lossless config has it off.
+#[test]
+fn the_lossless_config_lists_the_mesh_friction() {
+    assert!(LOSSY_EFFECTS.contains(&"gearbox_mesh_friction"));
+}
+
+/// The condition number is that of the geometric Jacobian, its turn rows the angular velocity (times the length 0.86 m):
+/// by hand from the flange's rotation at the joints one microradian either side, the angular velocity the vector of the
+/// antisymmetric part of R+ R-^T, whose vee is 2 sin(turn) w, the turn 2e-6 rad; the position rows as they are.
+#[test]
+fn the_condition_number_is_that_of_the_geometric_jacobian() {
+    let cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    let chain = arm::chain(&cfg).unwrap();
+    let fk = |q: &[f64]| chain.tip(q);
+    let home = cfg.f64s("kinematics.home_joints").unwrap();
+    let pose = tool::Pose::new(&fk, home.clone(), vec![0, 1, 2, 3, 4, 5], 0.86, 30.0).unwrap();
+    let mut jac = vec![0.0; 36];
+    let mut p = home.clone();
+    for c in 0..6 {
+        p[c] = home[c] + 1e-6;
+        let (ra, pa) = fk(&p);
+        p[c] = home[c] - 1e-6;
+        let (rb, pb) = fk(&p);
+        p[c] = home[c];
+        let rel = sim_components::rigid::matmul(&ra, &sim_components::rigid::transpose(&rb));
+        let w = [rel[2][1] - rel[1][2], rel[0][2] - rel[2][0], rel[1][0] - rel[0][1]];
+        for r in 0..3 {
+            jac[r * 6 + c] = (pa[r] - pb[r]) / 2e-6;
+            jac[(3 + r) * 6 + c] = 0.86 * w[r] / (2.0 * (2e-6f64).sin());
+        }
+    }
+    near(pose.condition(&fk, &home), tool::condition_number(&jac, 6, 6), 1e-3, "condition");
 }
