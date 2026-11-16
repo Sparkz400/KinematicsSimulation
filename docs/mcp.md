@@ -35,8 +35,10 @@ simulator cannot be stopped half-way, so its thread runs to its end in the backg
 **Claude Code:**
 
 ```bash
-claude mcp add kinematics-sim -- uvx --from "kinematics-sim[mcp]" kinematics-sim-mcp
+claude mcp add kinematics-sim -e KINEMATICS_SIM_MCP_OUT_DIR="$HOME/kinematics-sim" -- uvx --from "kinematics-sim[mcp]" kinematics-sim-mcp
 ```
+
+The variables are in [the output folder](#files-the-output-folder) below.
 
 **Claude Desktop** (`claude_desktop_config.json`; Settings, Developer, Edit Config) and **Cursor** (`.cursor/mcp.json`
 in a project, or `~/.cursor/mcp.json`) take the same entry:
@@ -47,7 +49,7 @@ in a project, or `~/.cursor/mcp.json`) take the same entry:
     "kinematics-sim": {
       "command": "uvx",
       "args": ["--from", "kinematics-sim[mcp]", "kinematics-sim-mcp"],
-      "env": { "KINEMATICS_SIM_MCP_TIMEOUT_S": "900" }
+      "env": { "KINEMATICS_SIM_MCP_OUT_DIR": "C:\\Users\\me\\Documents\\kinematics-sim" }
     }
   }
 }
@@ -75,11 +77,27 @@ environment) and no `args` does the same.
 | `loop_margins` | Per motor the velocity loop's crossover, phase and gain margin, peak sensitivity |
 | `positioning_accuracy` | ISO 230-2 per axis and ISO 9283 at the tool (simulated) |
 | `sensitivity` | Which uncertain values move the results most (one at a time, or Morris / Sobol' over all bounds): what to measure first |
-| `write_report` | The sizing report as HTML or PDF, to an absolute path the user gives |
-| `export_fmu` | An FMI 2.0 or 3.0 FMU to an absolute path, carrying the sim-fmi binaries named |
+| `write_report` | The sizing report as HTML or PDF, into the output folder under a file name ending in `.html` or `.pdf` |
+| `export_fmu` | An FMI 2.0 or 3.0 FMU, into the output folder under a file name ending in `.fmu`, carrying the sim-fmi library the operator set up |
 
-`session` takes a session's name or a machine id (its default config, not stored). Paths for files must be absolute:
-the server's working directory is wherever the client started it.
+`session` takes a session's name or a machine id (its default config, not stored).
+
+### Files: the output folder
+
+A tool is called by a model, and a model can be steered by what it reads (a web page, a file, a message: prompt
+injection). So the two tools that write files write only where the operator, who starts the server, says:
+
+| Variable | Effect |
+| --- | --- |
+| `KINEMATICS_SIM_MCP_OUT_DIR` | The output folder (created if missing). Default: `kinematics-sim-output` in the server's working directory, which is wherever the client starts it: set it |
+| `KINEMATICS_SIM_MCP_OVERWRITE` | `1` lets a tool replace an existing file; otherwise an existing name is refused |
+| `KINEMATICS_SIM_FMI_BINARIES` | The sim-fmi libraries an FMU carries (`sim_fmi.dll`, `libsim_fmi.so`, `libsim_fmi.dylib`), separated by `;` on Windows and `:` elsewhere. Without it, as `sim-cli fmu` does, this platform's library beside a `sim-cli` on `PATH` (a release ships them together; `cargo build -p sim-fmi --release` builds it) |
+| `KINEMATICS_SIM_MCP_TIMEOUT_S` | Seconds before a call is given up (default 900) |
+
+The model gives a file name, or a relative path inside the folder (`variants/gantry-3kg.html`). A name that leads out
+of the folder is refused: `..`, an absolute path, a drive (`C:x.html`), a network path, a link or junction inside the
+folder that points out of it. So is a name with another extension, and an existing file unless overwriting is allowed.
+The result gives the full path written, to show the user. The FMU's binaries never come from the call.
 
 The resource `kinematics-sim://limits` is a summary of [what it can and cannot tell you](overview.md#what-it-can-and-cannot-tell-you);
 the prompt `size_a_motor` (argument: a description of the machine) walks a model through describe, configure,
@@ -139,8 +157,9 @@ of the series pass, the lightest first, 1FK2203-2AK with the drive 6SL3210-5HE10
 over stdio as a client starts it (`python -m kinematics_sim.mcp`): on the first two machines of the registry (the
 T-gantry and the single axis) it checks the tools against the module's own results (verdicts, analysis, path error,
 search order, margins, accuracy), the sessions and the diff, the refusal of a misspelt key with the key meant, the
-all-or-nothing set, a path that leaves the travel range, the report and the FMU written where asked, the timeout, the
-resource and the prompt. 10 tests pass on Windows with CPython 3.14 and `mcp` 2.3.0 in about 3 minutes (16 November 2026).
+all-or-nothing set, a path that leaves the travel range, the report and the FMU written into the output folder (and
+`..`, an absolute path, another extension, an existing file and, where the system lets a test make one, a link out of
+the folder refused; the FMU's library only from the operator's variable), the timeout, the resource and the prompt. 10 tests pass on Windows with CPython 3.14 and `mcp` 2.3.0 in about 3 minutes (16 November 2026).
 
 Not tried: the server in Claude Desktop, Cursor or another client's own process (the tests use the SDK's client, as
 the clients do, but not the clients themselves); Linux and macOS; Python 3.10 to 3.13; the HTTP transports.

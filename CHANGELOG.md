@@ -14,7 +14,9 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   named sessions with dotted-path get and set and a diff, sizing verdicts with margins, meanings and bands, cycle
   analysis, inline paths, catalogue search, optimiser, loop margins, accuracy, sensitivity, report and FMU), compact
   JSON with capped tables and a `notes` field with the limits, a timeout (`KINEMATICS_SIM_MCP_TIMEOUT_S`, 900 s) and
-  progress; a resource with the model's limits and a prompt "size a motor". `docs/mcp.md` has the client
+  progress; a resource with the model's limits and a prompt "size a motor". The report and the FMU are written only
+  into an output folder the operator sets (`KINEMATICS_SIM_MCP_OUT_DIR`), never over a file unless
+  `KINEMATICS_SIM_MCP_OVERWRITE=1`, the FMU's sim-fmi library from `KINEMATICS_SIM_FMI_BINARIES` or beside `sim-cli`. `docs/mcp.md` has the client
   configuration for Claude Desktop, Claude Code and Cursor, a worked example, and a section on using `sim-cli` from a
   coding agent with real outputs. `llms.txt` at the repository root and on the project site indexes the docs for
   LLMs. Python `ks.label(cfg, key)` gives a message key's text (a verdict's meaning). The Python package is now a mixed

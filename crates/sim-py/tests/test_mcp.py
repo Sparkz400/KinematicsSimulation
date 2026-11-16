@@ -169,16 +169,54 @@ def test_sizing_search_optimiser_and_sensitivity_on_the_axis():
     assert error and "morris" in text
 
 
-def test_report_and_fmu_written_where_asked(tmp_path):
-    out = call("write_report", session=AXIS, path=str(tmp_path / "axis.html"))
-    assert out["every_check_passed"] in (True, False) and (tmp_path / "axis.html").stat().st_size > 1000
-    (error, text), = calls(("write_report", {"session": AXIS, "path": "relative.html"}))
-    assert error and "absolute path" in text
+def test_report_and_fmu_only_inside_the_output_folder(tmp_path, monkeypatch):
+    out_dir = tmp_path / "out"
+    monkeypatch.setenv("KINEMATICS_SIM_MCP_OUT_DIR", str(out_dir))
+    monkeypatch.delenv("KINEMATICS_SIM_MCP_OVERWRITE", raising=False)
+    out = call("write_report", session=AXIS, file_name="axis.html")
+    assert Path(out["written"]) == (out_dir / "axis.html").resolve() and Path(out["written"]).stat().st_size > 1000
+    assert call("write_report", session=AXIS, file_name="variants/axis.html")["written"].endswith("axis.html")
+    refused = calls(
+        ("write_report", {"session": AXIS, "file_name": "../escape.html"}),
+        ("write_report", {"session": AXIS, "file_name": "variants/../../escape.html"}),
+        ("write_report", {"session": AXIS, "file_name": str(tmp_path / "absolute.html")}),
+        ("write_report", {"session": AXIS, "file_name": "axis.exe"}),
+        ("write_report", {"session": AXIS, "file_name": "axis.html"}),
+        ("export_fmu", {"session": AXIS, "file_name": "axis.html"}),
+    )
+    assert all(error for error, _ in refused), refused
+    assert all("output folder" in t for _, t in refused[:3])
+    assert "must end in .html" in refused[3][1] and "exists" in refused[4][1] and "must end in .fmu" in refused[5][1]
+    assert not (tmp_path / "escape.html").exists() and not (tmp_path / "absolute.html").exists()
+    # The operator may allow overwriting.
+    monkeypatch.setenv("KINEMATICS_SIM_MCP_OVERWRITE", "1")
+    call("write_report", session=AXIS, file_name="axis.html")
+    # A link inside the folder that points out of it is refused (where this system lets a test make one).
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    try:
+        os.symlink(outside, out_dir / "link", target_is_directory=True)
+    except OSError:
+        pass
+    else:
+        (error, text), = calls(("write_report", {"session": AXIS, "file_name": "link/x.html"}))
+        assert error and "outside the output folder" in text and not list(outside.iterdir())
+    # Without the variable: kinematics-sim-output in the working directory.
+    monkeypatch.delenv("KINEMATICS_SIM_MCP_OUT_DIR")
+    monkeypatch.chdir(tmp_path)
+    assert Path(call("write_report", session=AXIS, file_name="d.html")["written"]).parent.name == "kinematics-sim-output"
+
+    # The FMU's binaries come from the operator, not from the call.
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.delenv("KINEMATICS_SIM_FMI_BINARIES", raising=False)
+    (error, text), = calls(("export_fmu", {"session": AXIS, "file_name": "axis.fmu"}))
+    assert error and "KINEMATICS_SIM_FMI_BINARIES" in text
     name = "sim_fmi.dll" if os.name == "nt" else "libsim_fmi.dylib" if sys.platform == "darwin" else "libsim_fmi.so"
     binary = ROOT / "target" / "release" / name
     if not binary.exists():
         pytest.skip("build the FMU binary first: cargo build -p sim-fmi --release")
-    out = call("export_fmu", session=AXIS, path=str(tmp_path / "axis.fmu"), binaries=[str(binary)])
+    monkeypatch.setenv("KINEMATICS_SIM_FMI_BINARIES", str(binary))
+    out = call("export_fmu", session=AXIS, file_name="axis.fmu")
     assert Path(out["written"]).stat().st_size > 1000
 
 

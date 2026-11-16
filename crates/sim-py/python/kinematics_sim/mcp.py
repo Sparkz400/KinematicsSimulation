@@ -14,6 +14,8 @@ import difflib
 import json
 import math
 import os
+import shutil
+import sys
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -167,13 +169,48 @@ async def _call(ctx: Context | None, what: str, fn: Any, *args: Any, **kwargs: A
     return result
 
 
-def _absolute(path: str) -> Path:
-    p = Path(path).expanduser()
-    if not p.is_absolute():
-        raise ToolError(f"give an absolute path (the server's working directory is {Path.cwd()}): {path}")
-    if not p.parent.is_dir():
-        raise ToolError(f"the folder does not exist: {p.parent}")
-    return p
+# Files are written only where the operator says, never where a (possibly prompt-injected) model asks.
+def _output_dir() -> Path:
+    out = Path(os.environ.get("KINEMATICS_SIM_MCP_OUT_DIR") or Path.cwd() / "kinematics-sim-output")
+    out.mkdir(parents=True, exist_ok=True)
+    return out.resolve()
+
+
+def _output_file(name: str, extensions: tuple[str, ...]) -> Path:
+    """`name` (a file name or a relative path) inside the output folder, refused if it leads outside it (.., an
+    absolute path or drive, a link or junction), has another extension, or exists (unless the operator allows)."""
+    out = _output_dir()
+    given = Path(name)
+    if not name or given.anchor or given.drive or ".." in given.parts:
+        raise ToolError(f"give a file name inside the output folder {out}, not a path out of it: {name!r}")
+    if given.suffix.lower() not in extensions:
+        raise ToolError(f"the file name must end in {' or '.join(extensions)}: {name!r}")
+    target = (out / given).resolve()  # follows links and junctions, so one pointing out of the folder is caught
+    if not target.is_relative_to(out) or target == out:
+        raise ToolError(f"{name!r} leads outside the output folder {out}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if (out / given).resolve() != target:  # a link that appeared meanwhile
+        raise ToolError(f"{name!r} leads outside the output folder {out}")
+    if target.exists() and os.environ.get("KINEMATICS_SIM_MCP_OVERWRITE") != "1":
+        raise ToolError(f"{target} exists; give another name (the operator can allow overwriting with "
+                        "KINEMATICS_SIM_MCP_OVERWRITE=1)")
+    return target
+
+
+def _fmi_binaries() -> list[str]:
+    """The sim-fmi libraries an FMU carries: those the operator names in KINEMATICS_SIM_FMI_BINARIES (separated by
+    the path separator), or else, as sim-cli does, this platform's library beside a sim-cli on PATH."""
+    named = [b for b in os.environ.get("KINEMATICS_SIM_FMI_BINARIES", "").split(os.pathsep) if b]
+    if named:
+        return named
+    lib = {"win32": "sim_fmi.dll", "darwin": "libsim_fmi.dylib"}.get(sys.platform, "libsim_fmi.so")
+    cli = shutil.which("sim-cli")
+    if cli and (Path(cli).with_name(lib)).is_file():
+        return [str(Path(cli).with_name(lib))]
+    raise ToolError(
+        f"no sim-fmi library found: the operator sets KINEMATICS_SIM_FMI_BINARIES to {lib} (a release ships it beside "
+        "sim-cli; `cargo build -p sim-fmi --release` builds it), or puts a sim-cli with it beside on PATH"
+    )
 
 
 # --- tools: machines and configs ------------------------------------------------------------------------------------
@@ -538,25 +575,23 @@ async def sensitivity(
 
 @mcp.tool()
 async def write_report(
-    session: str, path: str, bands: bool = False, lang: str = "en", ctx: Context | None = None
+    session: str, file_name: str, bands: bool = False, lang: str = "en", ctx: Context | None = None
 ) -> dict[str, Any]:
-    """Write the sizing report (PDF if the absolute `path` ends in .pdf, HTML otherwise) for the user to read."""
+    """Write the sizing report into the server's output folder: `file_name` ending in .html (or .pdf), e.g.
+    "gantry-3kg.html". The result gives the full path to show the user."""
     cfg = _config(session)
-    p = _absolute(path)
+    p = _output_file(file_name, (".html", ".htm", ".pdf"))
     passed = await _call(ctx, "report", ks.report, cfg, p, bands=bands, lang=lang)
     return {"written": str(p), "every_check_passed": passed, "notes": ESTIMATES}
 
 
 @mcp.tool()
-async def export_fmu(
-    session: str, path: str, binaries: list[str], fmi: int = 2, ctx: Context | None = None
-) -> dict[str, Any]:
-    """Export the session's machine as an FMI 2.0 or 3.0 Co-Simulation FMU at an absolute `path`. `binaries`: the
-    sim-fmi library files to carry (`cargo build -p sim-fmi --release` builds this platform's; release archives ship
-    them)."""
+async def export_fmu(session: str, file_name: str, fmi: int = 2, ctx: Context | None = None) -> dict[str, Any]:
+    """Export the session's machine as an FMI 2.0 or 3.0 Co-Simulation FMU into the server's output folder:
+    `file_name` ending in .fmu. The result gives the full path to show the user."""
     cfg = _config(session)
-    p = _absolute(path)
-    await _call(ctx, "fmu", ks.fmu, cfg, p, binaries=binaries, fmi=fmi)
+    p = _output_file(file_name, (".fmu",))
+    await _call(ctx, "fmu", ks.fmu, cfg, p, binaries=_fmi_binaries(), fmi=fmi)
     return {
         "written": str(p),
         "notes": "Checked with fmpy and OpenModelica/OMSimulator; not with Simulink or Dymola. " + ESTIMATES,
