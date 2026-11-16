@@ -927,7 +927,7 @@ impl Sim {
                 d.torque,
                 d.torque_command,
                 d.current,
-                d.voltage,
+                d.phase_voltage(c.drive_params_of(k)),
                 d.power,
                 d.temperature_rise,
                 d.dc_voltage,

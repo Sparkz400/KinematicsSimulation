@@ -85,7 +85,11 @@ pub struct Settings {
     pub standstill_time: f64,
     pub blocked_speed: f64,
     pub blocked_time: f64,
-    /// The band around the expected torque, as a share of the peak torque; 0: that monitor is off.
+    /// The band around the expected torque, as a share of the peak torque; 0: that monitor is off. The expected torque is
+    /// the feedforward (`Drive::torque_ff`): with `drive.torque_feedforward_model = "inertia"` it has no gravity and a held
+    /// load trips the band.
+    /// shortcut: the speed loop's integrator, which settles to that weight, is not added; it would blind the monitor to a
+    /// lasting load, upgrade if the combination is wanted.
     pub torque_band: f64,
 }
 
