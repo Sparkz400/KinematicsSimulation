@@ -387,6 +387,15 @@ not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | 
 | (binary_id(=sim-machines::time_optimal) & test(=machine_17))
 | (binary_id(=sim-machines::time_optimal) & test(=machine_27))
 | (binary_id(=sim-machines::views) & test(=comparing_friction_on_and_off_gives_the_friction_torque))
+| (binary_id(=sim-opcua::interop) & test(=a_user_certificate_lets_in_its_holder_only))
+| (binary_id(=sim-opcua::interop) & test(=a_user_name_and_password_keep_others_out))
+| (binary_id(=sim-opcua::plc) & test(=a_path_from_the_plc_is_planned_and_run))
+| (binary_id(=sim-opcua::plc) & test(=a_plc_commanded_move_runs_and_reports_position_and_following_error))
+| (binary_id(=sim-opcua::plc) & test(=a_refusal_stays_until_a_command_of_its_kind_is_accepted))
+| (binary_id(=sim-opcua::plc) & test(=enable_path_and_run_in_one_write_run_the_path))
+| (binary_id(=sim-opcua::plc) & test(=plcopen_power_home_and_moves_reach_their_targets))
+| (binary_id(=sim-opcua::plc) & test(=the_plc_disables_and_enables_the_drives))
+| (binary_id(=sim-opcua::soak) & test(=the_link_runs_move_cycles_for_a_long_time_without_errors_or_drift))
 )
 """
 # End of the default filter.

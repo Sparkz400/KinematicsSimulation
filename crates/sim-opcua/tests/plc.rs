@@ -866,6 +866,27 @@ impl Plc {
         self.numbers(&[format!("axis.{axis}.{name}")]).await[0]
     }
 
+    /// `at`, read 0.3 s after Done, is at `wanted` within `rest` (`at_rest_within`); or a mode still rings out, as in the
+    /// velocity check of the PLCopen test: then within the machine's settling tolerance more, and within `rest` 1 s
+    /// later. An arm on its track stood 5.8 mrad off 0.3 s after a move of 0.05 rad at full speed, with 4.2 mrad of
+    /// sag allowed, and 3.2 mrad off 1 s later (16 November 2026): a ring of 2.8 mrad, its tolerance 3 mrad.
+    async fn rests_at(&self, entry: &'static MachineEntry, axis: &sim_core::AxisInfo, at: f64, wanted: f64, rest: f64) {
+        if (at - wanted).abs() < rest {
+            return;
+        }
+        let key = if axis.unit == "rad" { "ratings.settling_tolerance_rad" } else { "ratings.settling_tolerance_m" };
+        let tolerance = entry.config().f64(key).unwrap_or(0.0);
+        self.simulated(1.0).await;
+        let later = self.axis_number(axis.id, "ActualPosition").await;
+        assert!(
+            (at - wanted).abs() < rest + tolerance && (later - wanted).abs() < rest,
+            "{}.{}: at {at} {unit}, wanted {wanted} {unit}, within {rest} {unit} and a ring inside the settling tolerance of {tolerance} {unit}; at {later} {unit} 1 s later",
+            entry.id,
+            axis.id,
+            unit = axis.unit
+        );
+    }
+
     async fn axis_write(&self, axis: &str, values: &[(&str, Variant)]) {
         let written = self
             .write(values.iter().map(|(name, value)| (format!("axis.{axis}.{name}"), value.clone())).collect())
@@ -1060,7 +1081,7 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
                 set[index(id)]
             );
             let rest = at_rest_within(entry, &set);
-            assert!((at - target).abs() < rest, "{}.{id}: at {at} m, target {target} m, within {rest} m", entry.id);
+            plc.rests_at(entry, axis, at, target, rest).await;
             // At rest: below 0.01 m/s or rad/s, or a mode that rings out, as in the move test of sim-machines: inside the
             // machine's settling tolerance at the frequency it reports (`resonance_hz`), so below 2 pi f times the
             // tolerance, and gone 1 s later. The arms' shoulder and elbow ring so after their move here: at 7 to 10 Hz
@@ -1098,11 +1119,7 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
                 set[index(id)]
             );
             let rest = at_rest_within(entry, &set);
-            assert!(
-                (moved - wanted).abs() < rest,
-                "{}.{id}: at {moved} m, wanted {wanted} m, within {rest} m",
-                entry.id
-            );
+            plc.rests_at(entry, axis, moved, wanted, rest).await;
             assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"), "{}.{id}", entry.id);
             assert_eq!(plc.read(&["status.refused".to_string()]).await[0], Variant::from(""), "{}.{id}", entry.id);
         }
