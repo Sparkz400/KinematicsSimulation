@@ -16,6 +16,13 @@ sim-core.workspace = true
 sim-components.workspace = true
 sim-machines.workspace = true
 sim-netlist.workspace = true
+# Writes a value the page changed over the config's own text, keeping its comments (as the app saves a config).
+toml_edit.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+# Reads the page's answers in the tests.
+serde_json.workspace = true
 
 [lints]
 workspace = true

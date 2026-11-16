@@ -14,6 +14,9 @@
 //! | 5    | machine id, language and options, a config (TOML)    | `{"motor", "points"}`: frequency response of one motor |
 //! | 6    | machine id, language, a config, `---`, a trace (CSV) | `{"rows", "advice"}`: masses and friction fitted to the trace |
 //! | 7    | language, then translation keys, one a line          | `{key: text}`: the page's texts and those keys    |
+//! | 8    | machine id, language, a config (TOML)                | `{"params", "parts"}`: the values the page's form edits |
+//! | 9    | machine id, language, a config, `---`, `path = value` lines | `{"config", "changed", "compact"}`: the values set in the config's own text |
+//! | 10   | machine id, language, a config (TOML)                | `{"step_s", "time", "signals", "motors"}`: the scopes of one pass of the cycle |
 //!
 //! An empty config is the machine's default one. Parts the config names (`[parts]`) come from the built-in catalogue,
 //! as in every front end. WebAssembly starts no threads, so analyses that share the processors natively run one after
@@ -136,6 +139,9 @@ pub fn handle(kind: u32, request: &str) -> Result<String, String> {
         5 => sweep(&r),
         6 => fit(&r),
         7 => Ok(texts(language(r.id), request.lines().skip(1))),
+        8 => form(&r),
+        9 => apply(&r),
+        10 => scopes(&r),
         _ => Err(format!("unknown request kind: {kind}")),
     }
 }
@@ -634,13 +640,16 @@ fn size(r: &Request) -> Result<String, String> {
     for (i, v) in judged.iter().enumerate() {
         let _ = write!(
             json,
-            "{}{{\"check\":{},\"label\":{},\"motor\":{},\"value\":{},\"limit\":{},\"ok\":{}}}",
+            "{}{{\"check\":{},\"label\":{},\"motor\":{},\"value\":{},\"limit\":{},\"margin\":{},\"ok\":{}}}",
             if i == 0 { "" } else { "," },
             quote(v.check),
             quote(tr.tr(&format!("check-{}", v.check))),
             v.motor.map_or("null".into(), |k| quote(motors[k].id)),
             number(v.value),
             number(v.limit),
+            // As the sizing report has it: the share of the limit left, 1 - value / limit (limit / value for a check
+            // that must stay above its limit); null where there is none (0 of an at-least check).
+            number(1.0 - sim_components::analysis::utilisation(v)),
             v.ok
         );
     }
@@ -721,6 +730,175 @@ fn fit(r: &Request) -> Result<String, String> {
     }
     let advice: Vec<String> = advice.iter().map(|a| quote(a)).collect();
     Ok(format!("{{\"rows\":[{}],\"advice\":[{}]}}", rows.join(","), advice.join(",")))
+}
+
+/// The values of the page's form (kind 8): every number of the config but the effect switches and the bounds, with
+/// its label (`param-<key>` and `group-<table>`, as the app's parameter panel), and the `[parts]` names with what the
+/// catalogue offers for each: the supplies, the motors of the config's supply, the gearboxes that fit its motor, the
+/// drives of its supply and the belt axes. Booleans, arrays and the other names are edited in the TOML.
+fn form(r: &Request) -> Result<String, String> {
+    use sim_components::catalog::{self, PART_KEYS, SUPPLIES};
+    let entry = machine(r.id, r.lang)?;
+    let tr = translations(r.lang, entry);
+    let refused = |e: sim_core::ConfigError| tr.tr_arg(e.key(), e.detail());
+    let cfg =
+        if r.config.trim().is_empty() { entry.config() } else { load_config(entry, r.config).map_err(refused)? };
+    let mut params = Vec::new();
+    for (path, value) in cfg.leaves() {
+        let Some((table, leaf)) = path.rsplit_once('.') else { continue };
+        let skipped = table == "effects" || table == "bounds" || table.starts_with("bounds.");
+        if skipped || !(value.is_float() || value.is_integer()) {
+            continue;
+        }
+        params.push(format!(
+            "{{\"path\":{},\"group\":{},\"label\":{},\"value\":{}}}",
+            quote(&path),
+            quote(tr.tr(&format!("group-{}", table.replace('.', "-")))),
+            quote(tr.tr(&format!("param-{leaf}"))),
+            quote(&value.to_string())
+        ));
+    }
+    let named = |key: &str| cfg.get(&format!("parts.{key}")).ok().and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let (supply, motor) = (named("motor_supply"), named("motor"));
+    let mut parts = Vec::new();
+    for key in PART_KEYS {
+        if cfg.get(&format!("parts.{key}")).is_err() {
+            continue;
+        }
+        let options: Vec<String> = match key {
+            "motor_supply" => SUPPLIES.iter().map(|s| s.to_string()).collect(),
+            "motor" => catalog::motor_articles_for(&supply).into_iter().map(String::from).collect(),
+            "gearbox" if !motor.is_empty() => catalog::gearboxes_for_motor(&motor, ""),
+            "drive" => catalog::drives_for(&supply).into_iter().map(|d| d.0.to_string()).collect(),
+            "axis" => catalog::axis_names(),
+            _ => Vec::new(),
+        };
+        let options: Vec<String> = options.iter().map(|o| quote(o)).collect();
+        parts.push(format!(
+            "{{\"key\":{},\"value\":{},\"options\":[{}]}}",
+            quote(key),
+            quote(&named(key)),
+            options.join(",")
+        ));
+    }
+    Ok(format!("{{\"params\":[{}],\"parts\":[{}]}}", params.join(","), parts.join(",")))
+}
+
+/// The page's changes set in its config (kind 9): each `path = value` line after `---` (TOML syntax; an unknown key or
+/// another type refused, as `Config::set_text` refuses them) written over the value's own text, so that the comments
+/// and the layout stay. Answers the text, every value that differs from the machine's default config as such a line
+/// (what a share link carries), and whether those lines on the default config give this config back (`compact`: a
+/// changed array, such as a cycle segment, is not among them, so the link then carries the whole text).
+fn apply(r: &Request) -> Result<String, String> {
+    let entry = machine(r.id, r.lang)?;
+    let tr = translations(r.lang, entry);
+    let refused = |e: sim_core::ConfigError| tr.tr_arg(e.key(), e.detail());
+    let text = if r.config.trim().is_empty() { entry.default_config } else { r.config };
+    let mut cfg = Config::parse(text).map_err(refused)?;
+    for line in r.extra.lines().filter(|l| !l.trim().is_empty()) {
+        cfg.set_text(line).map_err(refused)?;
+    }
+    let text = edited(text, &cfg).map_err(refused)?;
+    let default = entry.config();
+    let changed: Vec<String> = cfg
+        .leaves()
+        .into_iter()
+        .filter(|(path, value)| default.get(path).ok() != Some(value))
+        .map(|(path, value)| format!("{path} = {value}"))
+        .collect();
+    let mut rebuilt = default;
+    let compact = changed.iter().all(|line| rebuilt.set_text(line).is_ok()) && rebuilt == cfg;
+    let changed: Vec<String> = changed.iter().map(|c| quote(c)).collect();
+    Ok(format!("{{\"config\":{},\"changed\":[{}],\"compact\":{compact}}}", quote(&text), changed.join(",")))
+}
+
+/// `text` with every value that `cfg` has changed written in place, so that its comments and layout stay; where that
+/// does not give `cfg` back (an array was changed, a value is not where the text has it), `cfg` written plainly.
+/// The app saves a config over its file the same way (`sim-app` `saved_text`).
+fn edited(text: &str, cfg: &Config) -> Result<String, sim_core::ConfigError> {
+    use toml::Value;
+    let plain = cfg.to_text()?;
+    let (Ok(doc), Ok(old)) = (toml_edit::Document::parse(text), Config::parse(text)) else { return Ok(plain) };
+    let mut edits = Vec::new();
+    for (path, value) in cfg.leaves() {
+        if old.get(&path).ok() == Some(&value) {
+            continue;
+        }
+        let new = match value {
+            Value::Float(x) => toml_edit::Value::from(x),
+            Value::Integer(n) => toml_edit::Value::from(n),
+            Value::Boolean(on) => toml_edit::Value::from(on),
+            Value::String(name) => toml_edit::Value::from(name),
+            _ => return Ok(plain),
+        };
+        // The span is the value's own text: the comment behind it stays.
+        let span = path
+            .split('.')
+            .try_fold(doc.as_item(), |item, key| item.get(key))
+            .and_then(toml_edit::Item::as_value)
+            .and_then(toml_edit::Value::span);
+        let Some(span) = span else { return Ok(plain) };
+        edits.push((span, new.to_string()));
+    }
+    edits.sort_by_key(|(span, _)| std::cmp::Reverse(span.start));
+    let mut kept = text.to_string();
+    for (span, new) in edits {
+        kept.replace_range(span, new.trim());
+    }
+    Ok(if Config::parse(&kept).as_ref() == Ok(cfg) { kept } else { plain })
+}
+
+/// The signals of the scopes (kind 10), per motor, by the end of their id `motor.<id>.<signal>`.
+pub const SCOPE_SIGNALS: [&str; 6] = ["angle", "speed", "torque", "current", "following_error", "winding_temperature"];
+/// The most rows a scope answer has: one a millisecond up to a pass of 30 s.
+pub const SCOPE_ROWS: usize = 30_000;
+
+/// One pass of the configured cycle, once a millisecond, as `sim-cli compare` records it (`record_cycle`: the second
+/// pass, the time from its start): per motor its angle, speed, torque, current, following error and winding
+/// temperature rise. A longer pass keeps every n-th row, `SCOPE_ROWS` at most. Numbers to 6 significant digits.
+// shortcut: of the cycle only, not of a path (record_cycle runs the cycle); upgrade with a recorder of a path's run.
+fn scopes(r: &Request) -> Result<String, String> {
+    let (entry, tr, cfg) = configured(r)?;
+    let refused = |e: sim_core::ConfigError| tr.tr_arg(e.key(), e.detail());
+    let signals = Sim::new(entry, &cfg).map_err(refused)?.signal_infos();
+    let motors = (entry.build)(&cfg).map_err(refused)?.motors().to_vec();
+    let rows = sim_components::analysis::record_cycle(entry, &cfg).map_err(refused)?;
+    let every = rows.len().div_ceil(SCOPE_ROWS).max(1);
+    let rows: Vec<&Vec<f64>> = rows.iter().step_by(every).collect();
+    let column = |id: String| signals.iter().position(|s| s.id == id);
+    let series = |c: Option<usize>| -> String {
+        let values: Vec<String> = rows.iter().map(|row| c.map_or("null".into(), |c| short(row[c]))).collect();
+        format!("[{}]", values.join(","))
+    };
+    let head = SCOPE_SIGNALS.map(|name| {
+        let info = motors.first().and_then(|m| column(format!("motor.{}.{name}", m.id))).map(|c| &signals[c]);
+        let (key, unit) = info.map_or((name.to_string(), ""), |s| (s.quantity_key.clone(), s.unit.as_str()));
+        format!("{{\"id\":{},\"label\":{},\"unit\":{}}}", quote(name), quote(tr.tr(&key)), quote(unit))
+    });
+    let mut json = format!(
+        "{{\"step_s\":{},\"time\":{},\"signals\":[{}],\"motors\":[",
+        number(1e-3 * every as f64),
+        series(Some(0)),
+        head.join(",")
+    );
+    for (k, m) in motors.iter().enumerate() {
+        let data = SCOPE_SIGNALS.map(|name| series(column(format!("motor.{}.{name}", m.id))));
+        let _ = write!(
+            json,
+            "{}{{\"id\":{},\"name\":{},\"data\":[{}]}}",
+            if k == 0 { "" } else { "," },
+            quote(m.id),
+            quote(tr.tr(m.key)),
+            data.join(",")
+        );
+    }
+    json.push_str("]}");
+    Ok(json)
+}
+
+/// A number to 6 significant digits, `null` where it is not finite: the scopes' rows, a third the size of `number`'s.
+fn short(v: f64) -> String {
+    if v.is_finite() { format!("{v:.5e}") } else { "null".into() }
 }
 
 /// JSON has no NaN or infinity: those are `null`.

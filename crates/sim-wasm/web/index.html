@@ -35,6 +35,13 @@
   #scale { position: absolute; right: 8px; bottom: 8px; width: 160px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, rgb(38,77,191), rgb(242,204,26), rgb(242,26,13)); }
   .muted { color: var(--muted); }
   .keys span { display: inline-block; margin-right: 12px; }
+  .form { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 12px; margin: 6px 0 10px; }
+  .form label { display: flex; flex-direction: column; font-size: 13px; color: var(--muted); }
+  .form input { width: auto; color: var(--fg); }
+  .form input.changed { border-color: var(--accent); }
+  canvas.scope { height: 170px; touch-action: pan-y; cursor: crosshair; }
+  td.margin-low { color: var(--fail); }
+  @media (max-width: 600px) { main { padding: 12px; } th, td { padding: 3px 4px; } }
 </style>
 </head>
 <body>
@@ -46,6 +53,12 @@
     <label for="lang" data-t="web-language">Language</label> <select id="lang"><option value="en">English</option><option value="de">Deutsch</option></select>
     <label class="button"><span data-t="web-open-file">Open machine file…</span><input type="file" id="file" accept=".toml,text/plain"></label>
     <span id="status">Loading…</span>
+  </div>
+  <div class="row">
+    <label class="button"><span data-t="web-open-config">Open config…</span><input type="file" id="configfile" accept=".toml,text/plain"></label>
+    <button id="saveconfig" data-t="web-save-config">Save config</button>
+    <button id="share" data-t="web-share">Copy share link</button>
+    <span id="sharestatus" class="muted"></span>
   </div>
   <div class="row">
     <span data-t="web-motion">Motion</span>
@@ -74,6 +87,15 @@ line,0.5,-0.4</textarea>
   <canvas class="plot" id="plot-torque"></canvas>
   <canvas class="plot" id="plot-speed"></canvas>
   <canvas class="plot" id="plot-error"></canvas>
+  <h2 data-t="web-params">Parameters</h2>
+  <p class="muted" data-t="web-params-help"></p>
+  <div class="form" id="parts"></div>
+  <div class="form" id="mainparams"></div>
+  <details>
+    <summary data-t="web-all-values">All values</summary>
+    <input type="search" id="filter" data-tp="web-filter" placeholder="Filter" aria-label="Filter">
+    <div class="form" id="allparams"></div>
+  </details>
   <details>
     <summary data-t="web-config">Config (TOML)</summary>
     <textarea id="config" spellcheck="false" aria-label="Config"></textarea>
@@ -81,6 +103,14 @@ line,0.5,-0.4</textarea>
   </details>
   <div class="row"><button id="run" disabled data-t="web-run">Run sizing check</button> <span id="runstatus" class="muted"></span></div>
   <div id="error" role="alert"></div>
+  <div id="verdicts" class="scroll"></div>
+  <div id="scopes-box" hidden>
+    <h2 data-t="web-scopes">Scopes over one pass of the cycle</h2>
+    <div class="row"><span class="muted" data-t="web-scopes-help"></span> <button id="resetzoom" data-t="web-reset-zoom">Reset zoom</button></div>
+    <div class="keys" id="scopekeys"></div>
+    <div id="scopes"></div>
+  </div>
+  <p id="scopenote" class="muted"></p>
   <div id="result" class="scroll"></div>
   <h2 data-t="web-sweep">Frequency response</h2>
   <div class="row"><select id="sweepmotor"></select> <button id="sweep" disabled data-t="web-sweep-run">Run sweep</button> <span id="sweepstatus" class="muted"></span></div>
@@ -164,6 +194,7 @@ async function loadTexts() {
   document.documentElement.lang = lang();
   document.title = tr("web-title");
   for (const el of document.querySelectorAll("[data-t]")) el.textContent = tr(el.dataset.t);
+  for (const el of document.querySelectorAll("[data-tp]")) el.placeholder = tr(el.dataset.tp);
   $("play").textContent = tr(view.playing ? "web-pause" : "web-play");
 }
 
@@ -185,7 +216,8 @@ async function loadConfig() {
 // language draws again (the last sizing check stayed on screen under the next machine, 15 November 2026).
 function clearResults() {
   lastSizing = null;
-  $("result").innerHTML = $("fitresult").innerHTML = "";
+  scope.data = null; showScopes();
+  $("result").innerHTML = $("fitresult").innerHTML = $("verdicts").innerHTML = "";
   $("runstatus").textContent = "";
 }
 
@@ -197,6 +229,8 @@ async function useFile(name, text) {
     await loadMachines(loaded.id);
     $("config").value = loaded.config;
     clearResults();
+    await applyConfig([], true);
+    await renderForm();
     $("status").textContent = tr("web-file-read", loaded.name);
     startView();
   } catch (e) { $("error").textContent = e.message; }
@@ -245,12 +279,13 @@ function plot(canvas, opts) {
     g.strokeStyle = g.fillStyle = s.colour; g.lineWidth = 1.5 * dpr; g.setLineDash(s.dash ? [6 * dpr, 4 * dpr] : []);
     g.beginPath();
     if (s.cols) {
-      // One column a pixel: down to its lowest, up to its highest value; joined to the next.
+      // One column a device pixel: down to its lowest, up to its highest value; joined to the next one with data
+      // (zoomed in, samples are fewer than columns). The column's x was L + (i + 0.5) / dpr, squeezed on a phone.
       let on = false;
       for (let i = 0; i < s.cols[0].length; i++) {
         const lo = s.cols[0][i], hi = s.cols[1][i];
-        if (!Number.isFinite(lo)) { on = false; continue; }
-        const x = L + (i + 0.5) / dpr;
+        if (!Number.isFinite(lo)) continue;
+        const x = L + i + 0.5;
         if (on) g.lineTo(x, Y(lo)); else g.moveTo(x, Y(lo));
         g.lineTo(x, Y(hi)); on = true;
       }
@@ -262,6 +297,16 @@ function plot(canvas, opts) {
       s.pts.forEach(([x, y], i) => i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y)));
       g.stroke();
     }
+  }
+  g.setLineDash([]);
+  // The scopes: the span being dragged to zoom into, the hover's time and its values.
+  if (opts.select) { g.fillStyle = style.getPropertyValue("--accent"); g.globalAlpha = 0.15; g.fillRect(X(opts.select[0]), Tp, X(opts.select[1]) - X(opts.select[0]), ph); g.globalAlpha = 1; }
+  if (opts.cursor !== undefined) { g.strokeStyle = style.getPropertyValue("--fg"); g.lineWidth = dpr; g.beginPath(); g.moveTo(X(opts.cursor), Tp); g.lineTo(X(opts.cursor), Tp + ph); g.stroke(); }
+  if (opts.note) {
+    g.font = `${12 * dpr}px ui-monospace, monospace`; g.textAlign = "left"; g.textBaseline = "top";
+    const w = g.measureText(opts.note).width + 8 * dpr;
+    g.fillStyle = style.getPropertyValue("--bg"); g.globalAlpha = 0.85; g.fillRect(L + 2 * dpr, Tp + 2 * dpr, w, 18 * dpr); g.globalAlpha = 1;
+    g.fillStyle = style.getPropertyValue("--fg"); g.fillText(opts.note, L + 6 * dpr, Tp + 5 * dpr);
   }
   g.restore();
 }
@@ -568,6 +613,9 @@ async function run() {
   try {
     lastSizing = await analyst.call(2, body());
     showSizing();
+    scope.data = null; showScopes();
+    // The scopes record the cycle (lib.rs `scopes`); a path's run has none.
+    if (!pathMode()) { scope.data = await analyst.call(10, body()); scope.t0 = 0; scope.t1 = scope.data.time.at(-1) || 1; showScopes(); }
     $("runstatus").textContent = tr("web-done", ((performance.now() - started) / 1000).toFixed(1));
   } catch (e) {
     $("error").textContent = e.message;
@@ -581,9 +629,14 @@ function showSizing() {
   const failed = r.verdicts.filter((v) => !v.ok).length;
   let html = `<p><b class="${failed ? "fail" : "ok"}">${failed ? esc(tr("web-checks-fail", failed)) : esc(tr("web-all-pass"))}</b> · ${esc(tr("web-cycle"))} ${fmt(r.cycle_s)} s${r.tripped ? ` · <b class=fail>${esc(tr("web-tripped"))}</b>` : ""}</p>`;
   if (r.warnings.length) html += `<ul>${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>`;
-  html += `<table><thead><tr>${["web-check", "web-motor", "web-value", "web-limit", "web-result"].map((k) => `<th>${esc(tr(k))}</th>`).join("")}</tr></thead><tbody>`;
-  for (const v of r.verdicts) html += `<tr><td>${esc(v.label)}</td><td>${esc(v.motor ?? "")}</td><td class=n>${fmt(v.value)}</td><td class=n>${fmt(v.limit)}</td><td class="${v.ok ? "ok" : "fail"}">${esc(tr(v.ok ? "web-ok" : "web-fail"))}</td></tr>`;
-  html += `</tbody></table><h2>${esc(tr("web-load"))}</h2><table><thead><tr><th></th>${r.motors.map((m) => `<th>${esc(m.name)}</th>`).join("")}</tr></thead><tbody>`;
+  html += `<div class="row"><h2>${esc(tr("web-verdicts"))}</h2> <button id="verdictcsv">${esc(tr("web-verdicts-csv"))}</button></div>`;
+  html += `<table><thead><tr>${["web-check", "web-motor", "web-value", "web-limit", "web-margin", "web-result"].map((k) => `<th>${esc(tr(k))}</th>`).join("")}</tr></thead><tbody>`;
+  for (const v of r.verdicts) html += `<tr><td>${esc(v.label)}</td><td>${esc(v.motor ?? "")}</td><td class=n>${significant(v.value)}</td><td class=n>${significant(v.limit)}</td>` +
+    `<td class="n${v.margin !== null && v.margin < 0.1 ? " margin-low" : ""}">${margin(v.margin)}</td><td class="${v.ok ? "ok" : "fail"}">${esc(tr(v.ok ? "web-ok" : "web-fail"))}</td></tr>`;
+  $("verdicts").innerHTML = html + "</tbody></table>";
+  $("verdictcsv").addEventListener("click", () => save(`${r.machine}-verdicts.csv`, "check,motor,value,limit,result\n" +
+    r.verdicts.map((v) => `${v.check},${v.motor ?? ""},${significant(v.value)},${significant(v.limit)},${v.ok ? "ok" : "FAIL"}\n`).join("")));
+  html = `<h2>${esc(tr("web-load"))}</h2><table><thead><tr><th></th>${r.motors.map((m) => `<th>${esc(m.name)}</th>`).join("")}</tr></thead><tbody>`;
   for (const c of MOTOR_COLUMNS) html += `<tr><td>${esc(tr("web-col-" + c))}</td>${r.motors.map((m) => `<td class=n>${fmt(m[c])}</td>`).join("")}</tr>`;
   html += `</tbody></table><h2>${esc(tr("web-machine-wide"))}</h2><table><tbody>`;
   for (const c of MACHINE_COLUMNS) html += `<tr><td>${esc(tr("web-col-" + c))}</td><td class=n>${fmt(r[c])}</td></tr>`;
@@ -628,6 +681,168 @@ async function fitTrace(file) {
   } catch (e) { $("error").textContent = e.message; $("fitstatus").textContent = ""; }
 }
 
+// ---- Numbers as sim-cli verdicts prints them: four significant digits, no exponent (sim-cli `significant`); the
+// margin as the sizing report has it.
+function significant(v) {
+  if (v === null || v === undefined) return "–";
+  const decimals = v === 0 ? 0 : Math.max(0, 3 - Math.floor(Math.log10(Math.abs(v))));
+  return v.toFixed(Math.min(decimals, 100));
+}
+const margin = (m) => m === null || m === undefined ? "–" : `${m >= 0 ? "+" : ""}${(m * 100).toFixed(1)} %`;
+function save(name, text) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---- Scopes of one pass of the cycle (request 10): per signal one plot, every motor in its colour. Drag across one
+// to zoom into that span, wheel to zoom about the pointer, double-click or Reset for the whole pass; the hover's time
+// and values in the corner of every scope.
+const scope = { data: null, t0: 0, t1: 1, hover: undefined, drag: null, queued: false };
+const PLOT_LEFT = 58, PLOT_RIGHT = 8; // CSS pixels, as plot() lays out
+function scopeTime(canvas, clientX) {
+  const x = clientX - canvas.getBoundingClientRect().left, w = canvas.clientWidth - PLOT_LEFT - PLOT_RIGHT;
+  return scope.t0 + Math.min(1, Math.max(0, (x - PLOT_LEFT) / w)) * (scope.t1 - scope.t0);
+}
+function showScopes() {
+  const r = scope.data;
+  $("scopes-box").hidden = !r;
+  $("scopenote").textContent = !r && pathMode() && lastSizing ? tr("web-scopes-path") : "";
+  if (!r) { $("scopes").innerHTML = ""; return; }
+  if ($("scopes").childElementCount !== r.signals.length) {
+    $("scopes").innerHTML = r.signals.map((_, i) => `<canvas class="plot scope" id="scope-${i}"></canvas>`).join("");
+    for (const c of $("scopes").children) {
+      c.addEventListener("pointerdown", (e) => { if (e.pointerType === "mouse" || e.isPrimary) { c.setPointerCapture(e.pointerId); scope.drag = [scopeTime(c, e.clientX), scopeTime(c, e.clientX)]; } });
+      c.addEventListener("pointermove", (e) => { scope.hover = scopeTime(c, e.clientX); if (scope.drag) scope.drag[1] = scope.hover; drawScopes(); });
+      c.addEventListener("pointerup", () => {
+        const [a, b] = scope.drag ?? [0, 0];
+        if (Math.abs(b - a) > (scope.t1 - scope.t0) / 100) [scope.t0, scope.t1] = [Math.min(a, b), Math.max(a, b)];
+        scope.drag = null; drawScopes();
+      });
+      c.addEventListener("pointerleave", () => { if (!scope.drag) { scope.hover = undefined; drawScopes(); } });
+      c.addEventListener("dblclick", resetZoom);
+      c.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const t = scopeTime(c, e.clientX), f = Math.exp(e.deltaY * 0.002), end = scope.data.time.at(-1);
+        scope.t0 = Math.max(0, t - (t - scope.t0) * f); scope.t1 = Math.min(end, t + (scope.t1 - t) * f);
+        if (scope.t1 - scope.t0 < 0.005) scope.t1 = scope.t0 + 0.005;
+        drawScopes();
+      }, { passive: false });
+    }
+  }
+  $("scopekeys").innerHTML = r.motors.map((m, k) => `<span style="color:${COLOURS[k % COLOURS.length]}">■ ${esc(m.name)}</span>`).join("");
+  drawScopes();
+}
+function resetZoom() { if (scope.data) { scope.t0 = 0; scope.t1 = scope.data.time.at(-1) || 1; drawScopes(); } }
+// Per pixel column of the visible span the lowest and highest value of the rows it holds (rows one `step_s` apart).
+function scopeColumns(values, width) {
+  const { time, step_s } = scope.data, lo = new Float32Array(width).fill(NaN), hi = new Float32Array(width).fill(NaN);
+  const span = scope.t1 - scope.t0, first = Math.max(0, Math.floor(scope.t0 / step_s) - 1), last = Math.min(time.length - 1, Math.ceil(scope.t1 / step_s) + 1);
+  for (let i = first; i <= last; i++) {
+    const v = values[i], c = Math.floor((time[i] - scope.t0) / span * width);
+    if (v === null || c < 0 || c >= width) continue;
+    if (!(lo[c] <= v)) lo[c] = v;
+    if (!(hi[c] >= v)) hi[c] = v;
+  }
+  return [lo, hi];
+}
+function drawScopes() {
+  if (scope.queued) return;
+  scope.queued = true;
+  requestAnimationFrame(() => {
+    scope.queued = false;
+    const r = scope.data;
+    if (!r) return;
+    const at = scope.hover === undefined ? -1 : Math.min(r.time.length - 1, Math.max(0, Math.round(scope.hover / r.step_s)));
+    r.signals.forEach((s, i) => {
+      const canvas = $(`scope-${i}`), width = Math.max(1, Math.round((canvas.clientWidth - PLOT_LEFT - PLOT_RIGHT) * devicePixelRatio));
+      const series = r.motors.map((m, k) => ({ colour: COLOURS[k % COLOURS.length], cols: scopeColumns(m.data[i], width) }));
+      const note = at < 0 ? "" : `t ${r.time[at].toFixed(3)} s  ` + r.motors.map((m) => m.data[i][at] === null ? "–" : +m.data[i][at].toPrecision(5)).join("  ");
+      plot(canvas, { x: [scope.t0, scope.t1], xlabel: tr("web-time-axis"), ylabel: `${s.label} [${s.unit}]`, series,
+        cursor: at < 0 ? undefined : r.time[at], note, select: scope.drag });
+    });
+  });
+}
+
+// ---- The form (request 8) over the config: the parts of the catalogue, the main values (masses and payload, the
+// axes' profile limits, the velocity loop's gains), all numbers behind a filter. A change goes through request 9, which
+// writes it into the config's own text (comments kept) and answers the values changed from the default: the share
+// link carries those after the #, never in the query, so nothing reaches a server.
+const MAIN = /^(mass\.|axis\.|drive\.(kv_|velocity_kp|velocity_tn))/;
+let shared = { changed: [], compact: true };
+const field = (path, label, value, attr) =>
+  `<label title="${esc(path)}"><span>${esc(label)}</span><input ${attr} value="${esc(value)}" spellcheck="false"></label>`;
+async function renderForm() {
+  let f;
+  try { f = await analyst.call(8, `${$("machine").value}\n${lang()}\n${$("config").value}`); }
+  catch (e) { $("error").textContent = e.message; return; }
+  const changed = new Set(shared.changed.map((c) => c.split(" = ")[0]));
+  const cls = (path) => changed.has(path) ? ' class="changed"' : "";
+  $("parts").innerHTML = f.parts.map((p) => field(`parts.${p.key}`, tr(`web-part-${p.key}`), p.value,
+    `list="opts-${p.key}" data-part="${p.key}"${cls(`parts.${p.key}`)}`) +
+    `<datalist id="opts-${p.key}">${p.options.map((o) => `<option value="${esc(o)}">`).join("")}</datalist>`).join("");
+  const param = (p) => field(p.path, `${p.group} · ${p.label.startsWith("param-") ? p.path : p.label}`, p.value, `inputmode="decimal" data-path="${esc(p.path)}"${cls(p.path)}`);
+  $("mainparams").innerHTML = f.params.filter((p) => MAIN.test(p.path)).map(param).join("");
+  $("allparams").innerHTML = f.params.filter((p) => !MAIN.test(p.path)).map(param).join("");
+  filterParams();
+}
+function filterParams() {
+  const words = $("filter").value.toLowerCase().split(/\s+/).filter(Boolean);
+  for (const label of $("allparams").children) label.hidden = !words.every((w) => label.textContent.toLowerCase().includes(w) || label.title.includes(w));
+}
+// Sets `assignments` ("path = value", TOML) in the config text; with none, only reads what differs from the default.
+async function applyConfig(assignments, quiet) {
+  const r = await analyst.call(9, `${$("machine").value}\n${lang()}\n${$("config").value}\n---\n${assignments.join("\n")}`);
+  if (assignments.length) $("config").value = r.config;
+  shared = r;
+  $("sharestatus").textContent = r.changed.length ? tr("web-share-changed", r.changed.length) : "";
+  await updateHash();
+  if (!quiet) { clearResults(); startView(); }
+}
+async function formChanged(e) {
+  const input = e.target, path = input.dataset.path ?? `parts.${input.dataset.part}`;
+  const value = input.dataset.part ? JSON.stringify(input.value.trim()) : input.value.trim();
+  $("error").textContent = "";
+  try { await applyConfig([`${path} = ${value}`]); await renderForm(); }
+  catch (err) { $("error").textContent = `${path}: ${err.message}`; }
+}
+
+// The fragment: m=machine, set=path = value (repeated) where those give the config back, else toml=the config text,
+// deflated and base64url; path= and optimal=1 for a path.
+async function deflate(text, inflate) {
+  const stream = new Blob([inflate ? Uint8Array.from(atob(text.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0)) : text])
+    .stream().pipeThrough(inflate ? new DecompressionStream("deflate-raw") : new CompressionStream("deflate-raw"));
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  if (inflate) return new TextDecoder().decode(bytes);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+async function updateHash() {
+  const id = $("machine").value, p = new URLSearchParams();
+  if (id.startsWith("upload:")) { history.replaceState(null, "", location.pathname); return; }
+  p.set("m", id);
+  if (shared.compact) for (const c of shared.changed) p.append("set", c);
+  else p.set("toml", await deflate($("config").value));
+  if (pathMode()) { p.set("path", $("path").value); if ($("optimal").checked) p.set("optimal", "1"); }
+  history.replaceState(null, "", "#" + p.toString());
+}
+async function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1)), id = p.get("m");
+  if (!id || ![...$("machine").options].some((o) => o.value === id)) return false;
+  $("machine").value = id;
+  await loadConfig();
+  if (p.has("path")) {
+    document.querySelector("input[name=mode][value=path]").checked = true;
+    $("path").value = p.get("path"); $("optimal").checked = p.get("optimal") === "1";
+    $("path-box").hidden = $("optimal-box").hidden = false;
+  }
+  if (p.has("toml")) $("config").value = await deflate(p.get("toml"), true);
+  await applyConfig(p.getAll("set"), true);
+  return true;
+}
+
 // ---- Start: both workers load the module; the texts in the browser's language.
 (async () => {
   try {
@@ -636,17 +851,41 @@ async function fitTrace(file) {
     if (navigator.language?.startsWith("de")) $("lang").value = "de";
     await loadTexts();
     await loadMachines();
-    await loadConfig();
+    if (!(await readHash())) { await loadConfig(); await applyConfig([], true); }
+    await renderForm();
     $("run").disabled = false;
     $("status").textContent = "";
-    $("machine").addEventListener("change", async () => { await loadConfig(); startView(); });
-    $("lang").addEventListener("change", async () => { await loadTexts(); await loadMachines(); showKeys(); showSizing(); startView(); });
+    $("machine").addEventListener("change", async () => { await loadConfig(); await applyConfig([], true); await renderForm(); startView(); });
+    $("lang").addEventListener("change", async () => { await loadTexts(); await loadMachines(); await renderForm(); showKeys(); showSizing(); showScopes(); startView(); });
+    for (const id of ["parts", "mainparams", "allparams"]) $(id).addEventListener("change", formChanged);
+    $("filter").addEventListener("input", filterParams);
+    // A config typed into the editor: the link follows it; the form when the editor is left.
+    let typing;
+    $("config").addEventListener("input", () => { clearTimeout(typing); typing = setTimeout(() => applyConfig([], true).catch((e) => { $("sharestatus").textContent = e.message; }), 600); });
+    $("config").addEventListener("change", renderForm);
+    $("path").addEventListener("change", updateHash);
+    $("optimal").addEventListener("change", updateHash);
+    $("saveconfig").addEventListener("click", () => save(`${$("machine").value.replace(/^\w+:/, "").replace(/\.toml$/, "")}.toml`, $("config").value));
+    $("configfile").addEventListener("change", async (e) => {
+      const f = e.target.files[0]; e.target.value = "";
+      if (!f) return;
+      $("config").value = await f.text();
+      try { await applyConfig([]); await renderForm(); } catch (err) { $("error").textContent = `${f.name}: ${err.message}`; }
+    });
+    $("share").addEventListener("click", async () => {
+      if ($("machine").value.startsWith("upload:")) { $("sharestatus").textContent = tr("web-share-upload"); return; }
+      await updateHash();
+      try { await navigator.clipboard.writeText(location.href); $("sharestatus").textContent = tr("web-share-done"); }
+      catch { $("sharestatus").textContent = location.href; }
+    });
+    $("resetzoom").addEventListener("click", resetZoom);
+    addEventListener("resize", drawScopes);
     $("run").addEventListener("click", run);
     $("sweep").addEventListener("click", sweep);
     $("file").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await useFile(f.name, await f.text()); e.target.value = ""; });
     $("useeditor").addEventListener("click", () => useFile("pasted.toml", $("config").value));
     $("trace").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await fitTrace(f); e.target.value = ""; });
-    for (const radio of document.querySelectorAll("input[name=mode]")) radio.addEventListener("change", () => { $("path-box").hidden = $("optimal-box").hidden = !pathMode(); });
+    for (const radio of document.querySelectorAll("input[name=mode]")) radio.addEventListener("change", () => { $("path-box").hidden = $("optimal-box").hidden = !pathMode(); updateHash(); });
     $("trailscale").addEventListener("input", () => { trail.dirty = true; });
     $("cleartrail").addEventListener("click", () => { trail.points = []; trail.dirty = true; });
     setupView();

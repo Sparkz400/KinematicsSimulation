@@ -6478,10 +6478,13 @@ dependencies = [
 name = "sim-wasm"
 version = "1.0.0"
 dependencies = [
+ "serde_json",
  "sim-components",
  "sim-core",
  "sim-machines",
  "sim-netlist",
+ "toml",
+ "toml_edit",
 ]
 
 [[package]]

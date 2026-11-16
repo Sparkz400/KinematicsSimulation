@@ -9,6 +9,14 @@ every column of `sim-cli analyze` and the operating points over the motor's torq
 fit of masses and friction to a measured trace are there too. Nothing leaves the browser; there is no server beyond one
 that hands out two files. The page is in English and German (the switch at the top; the browser's language first).
 
+It is the workbench without an install: every machine of the registry and every machine file of `machines/` in the
+selector; a form over the config (the motor, supply, gearbox, drive, belt and axis from the catalogue, the masses and
+payload, the axes' profile limits, the velocity loop's gains, and every other number behind a filter), which writes a
+change into the config's own TOML with its comments kept; the config saved as and opened from a TOML file; the verdict
+table of `sim-cli verdicts` with each check's margin; scopes of position, speed, torque, current, following error and
+winding temperature rise per motor over one pass of the cycle, with zoom and the values under the pointer; and a share
+link that carries the changed values in the URL's fragment.
+
 **Live page:** https://sparkz400.github.io/KinematicsSimulation/, built from `main` by the workflow
 [`pages.yml`](../.github/workflows/pages.yml) on every push.
 
@@ -60,12 +68,15 @@ handed in (`upload:<file name>`).
 | --- | --- | --- |
 | 0 | language | every machine: `[{"id", "name", "file"}]`, the registered ones, then the machine files |
 | 1 | machine | `{"config"}`: the default config (of a machine file: the file) |
-| 2 | machine, language and options, config | the sizing check: `machine`, `cycle_s`, `tripped`, `warnings`, the machine-wide columns of `sim-cli analyze`, `motors` (every per-motor column of `sim-cli analyze` under its name, `points` the operating points, `curve` the peak torque-speed outline, `s1` the continuous rating), `verdicts` (check, label, motor, value, limit, ok) |
+| 2 | machine, language and options, config | the sizing check: `machine`, `cycle_s`, `tripped`, `warnings`, the machine-wide columns of `sim-cli analyze`, `motors` (every per-motor column of `sim-cli analyze` under its name, `points` the operating points, `curve` the peak torque-speed outline, `s1` the continuous rating), `verdicts` (check, label, motor, value, limit, margin, ok) |
 | 3 | machine, language and options, config | starts the 3D view: `{"dt_s", "centre", "radius", "motors", "sample"}` |
 | 4 | file name, language, machine file (TOML) | `{"id", "name", "config"}`: the file checked as `sim-cli --machine-file` checks it (an error names the file and the line) |
 | 5 | machine, language and options, config | `{"motor", "amplitude_nm", "points": [[frequency Hz, gain rad/s per N m, phase °]]}` as `sim-cli sweep` |
 | 6 | machine, language, config, `---`, trace (CSV) | `{"rows": [[quantity, of, config, fitted, standard error]], "advice"}` as `sim-cli fit --trace` without `--map` |
 | 7 | language, then translation keys, one a line | `{key: text}`: the page's texts (`crates/sim-wasm/i18n/*.ftl`) and those keys from the simulator's translations |
+| 8 | machine, language, config | the form: `params` (`path`, `group`, `label`, `value` as TOML text: every number but `[effects]` and `[bounds]`, labelled as the app's parameter panel) and `parts` (`key`, `value`, `options`: the supplies, the motors of the config's supply, the gearboxes that fit the named motor, the drives of the supply, the belt axes) |
+| 9 | machine, language, config, `---`, lines `path = value` | `{"config", "changed", "compact"}`: the values set over their own text in the config (comments and layout kept; an unknown key or another type refused, as `Config::set_text` refuses it), every value that differs from the machine's default as a line `path = value`, and whether those lines on the default give the config back |
+| 10 | machine, language, config | the scopes: `step_s`, `time`, `signals` (`id`, `label`, `unit`) and per motor `data`, one array per signal: `angle`, `speed`, `torque`, `current`, `following_error`, `winding_temperature` of one pass of the cycle as `record_cycle` (`sim-cli compare`) keeps it, once a millisecond, 6 significant digits |
 
 Options: `path` runs the path after `---` (format: `sim_components::path`, the file `sim-cli --path` reads) from the
 start pose instead of the cycle, timed within the axis limits or with `time-optimal` as fast as the motors allow
@@ -91,6 +102,33 @@ amplifies the differences in the last bit. One measured example: a peak torque o
 The operating points are those of the analysis (motor speed and torque, sampled once a millisecond), over the outline of
 `DriveParams::torque_curve` (peak torque of motor and drive both ways, at its corners and 40 speeds between, so a
 field-weakened curve bends) and the S1 box (rated torque up to the rated speed), as in the app.
+
+The verdict table prints value and limit as `sim-cli verdicts` does (four significant digits, no exponent) and
+"Save as CSV" writes its lines `check,motor,value,limit,result`. The margin is the sizing report's: what is left of the
+limit, 1 − value / limit, or 1 − limit / value for a check that must stay above its limit (`analysis::utilisation`);
+a check passes exactly where it is not below 0, and the page marks one below 10 % in red.
+
+## Scopes, the form and the share link
+
+"Run sizing check" runs the scopes after the verdicts: the config's cycle once more, recorded over its second pass as
+`sim-cli compare` records it, one row a millisecond (a pass of more than 30 s keeps every n-th row, 30,000 at most).
+One plot a signal, every motor in its colour. Drag across a scope to zoom into that span, the wheel zooms about the
+pointer, a double-click or "Reset zoom" shows the whole pass; the pointer's time and every motor's value at it stand in
+the corner of each scope. Each pixel column draws the lowest and highest value of its rows, as the time plots do.
+With a path instead of the cycle the scopes are not drawn: they record the cycle (`record_cycle`).
+
+The form is request 8 over the config in the editor. A field changed goes to request 9, which writes the value over its
+own text in the config (the app's way of saving a config over its file), and the 3D view restarts with it; the sizing
+check is run again by hand. A part's field takes any name and offers the catalogue's (a gearbox only for a named
+motor); empty keeps the config's own values. "Open config…" reads a TOML config into the editor, "Save config" writes
+the editor's text as `<machine>.toml`.
+
+The share link is the page's address with a fragment (after `#`, which browsers do not send to a server):
+`m=<machine>`, then `set=<path> = <value>` for every value that differs from the machine's default, or, where those
+lines do not give the config back (a changed array, such as a cycle segment), `toml=` the whole config deflated and in
+base64url; `path=` and `optimal=1` for a path. The page keeps its address up to date as the config changes, and
+"Copy share link" copies it; opening it sets machine, config and path. A machine file opened from disk has no link: its
+text is not in the module of the one who opens the link.
 
 ## The 3D view, plots and trail
 
@@ -149,7 +187,14 @@ an obstacle's record worked out by hand, an obstacle of the config in the frame,
 sizing check's, and the samples of 0.5 s (500 at 1 ms, with the highest torque and lowest following error of a native
 run step by step). The sizing check's analyze columns against the native analysis, the torque-speed curve's corners by
 hand, the sweep against `frequency_sweep`, a trace without the simulator's columns refused, and the page's texts in both
-languages with every English key in German.
+languages with every English key in German. The workbench: every verdict's margin (one by hand, and a check passing
+exactly where its margin is not below 0), the scopes against `record_cycle`'s rows, the form's values, labels and
+catalogue names, a change written with every comment of the default kept and refused for an unknown key or another
+type, the share link's lines giving the same config back and an array's change making it carry the whole text. And
+the built `sim_wasm.wasm` run in Node against the native numbers (`the_wasm_build_agrees_with_the_native_numbers`):
+verdicts' values, limits and margins, cycle time and the scopes' peak and RMS per signal of the T-gantry and the CoreXY
+file to 1e-4 relative; it passes with a note where the module is not built or Node is missing (CI's `wasm` job builds
+the module before its tests).
 
 The page itself was run in headless Chrome (puppeteer-core driving the installed Chrome, 14 November 2026): the
 T-gantry's cycle at real time with its plots, the sizing check passing every check with a cycle of 6.080 s; in German,
