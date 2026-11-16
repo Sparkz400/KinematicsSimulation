@@ -32,6 +32,15 @@ pub struct AxisFit {
     /// What the friction does beyond its sliding level (`friction_details`), those the trace shows; the config's NaN
     /// where its replay does not show it.
     pub details: Vec<FrictionDetail>,
+    /// The units of the four values (`fit_units`), for the axis's own unit: kg, N s/m, N, N on a linear axis.
+    pub units: [&'static str; 4],
+}
+
+/// The units of an axis's four rigid values (moved mass, viscous friction, Coulomb friction, constant force) by the
+/// axis's unit (`AxisInfo::unit`): those of a rotary axis ("rad") are kg m², N m s/rad, N m and N m, every other one's kg,
+/// N s/m, N and N.
+pub fn fit_units(axis_unit: &str) -> [&'static str; 4] {
+    if axis_unit == "rad" { ["kg m²", "N m s/rad", "N m", "N m"] } else { ["kg", "N s/m", "N", "N"] }
 }
 
 impl AxisFit {
@@ -39,18 +48,13 @@ impl AxisFit {
     /// `axis` with the change of mass and constant force, and the factors on the two kinds of friction; then each
     /// payload step.
     pub fn advice(&self, axis: &str) -> Vec<(&'static str, String)> {
-        let change = |q: usize, unit: &str| {
-            format!("{axis}: {:+.3} {unit} ± {:.3}", self.fitted[q] - self.config[q], self.error[q])
+        let change = |q: usize| {
+            format!("{axis}: {:+.3} {} ± {:.3}", self.fitted[q] - self.config[q], self.units[q], self.error[q])
         };
         let factor = |q: usize| {
             format!("{axis}: × {:.3} ± {:.3}", self.fitted[q] / self.config[q], (self.error[q] / self.config[q]).abs())
         };
-        [
-            ("fit-mass", change(0, "kg")),
-            ("fit-viscous", factor(1)),
-            ("fit-coulomb", factor(2)),
-            ("fit-constant", change(3, "N")),
-        ]
+        [("fit-mass", change(0)), ("fit-viscous", factor(1)), ("fit-coulomb", factor(2)), ("fit-constant", change(3))]
         .into_iter()
         // Viscous friction the trace does not tell from Coulomb friction (`rigid_values`) has no advice.
         .filter(|(key, _)| *key != "fit-viscous" || (self.fitted[1].is_finite() && self.config[1].is_finite()))
@@ -88,38 +92,81 @@ fn axis_view(machine: &dyn Machine, trace: &Trace) -> Vec<(Vec<f64>, Vec<f64>)> 
 
 /// Least squares of force = mass * acceleration + viscous * speed + coulomb * sign(speed) + constant + Σ the `extra`
 /// columns (one value per row each, by a value of their own) on the rows where the axis moves: values and standard
-/// errors, the four first. Force, speed and the extra columns are averaged over the window, the acceleration is the
-/// slope of the speed across it. Rows slower than 5 % of the top speed are left out, because there friction is neither
+/// errors, the four first. Rows slower than 5 % of the top speed are left out, because there friction is neither
 /// of the two terms. Viscous friction is NaN where the speeds used hardly vary (`inflation` above `WEAK`), its share then
 /// in the Coulomb value. `None` if the axis does not move both ways, since one direction alone cannot tell Coulomb friction
 /// from a constant force. The columns are scaled to unit length before the normal matrix is solved, as `solve` does:
 /// accelerations and ones differ by orders of magnitude.
-fn rigid_values(time: &[f64], force: &[f64], speed: &[f64], extra: &[Vec<f64>]) -> Option<(Vec<f64>, Vec<f64>)> {
-    let (w, rows, p) = (WINDOW, time.len(), 4 + extra.len());
-    let top = speed.iter().fold(0.0, |a: f64, b| a.max(b.abs()));
-    let mean = |x: &[f64], i: usize| x[i - w..=i + w].iter().sum::<f64>() / (2 * w + 1) as f64;
+///
+/// The acceleration is the second difference of the axis's `travel` (an encoder's position is far less noisy than the speed
+/// differentiated, and noise on a regressor biases its value towards zero: the mass came out 15 % low on a noisy trace),
+/// and the force and every column are smoothed alike by the triangle of half-width `h` (`smoothing`, `per` rows to a
+/// measurement), as `regressor` does for `fit_joints`. `basis` fixes the columns used (the trace's, for the config's
+/// replay). Also the trace's rows the fit used, in the order of the fit's residuals.
+fn rigid_values(
+    time: &[f64],
+    force: &[f64],
+    speed: &[f64],
+    travel: &[f64],
+    extra: &[Vec<f64>],
+    (h, per): (usize, f64),
+    basis: Option<&[usize]>,
+) -> Option<(Solved, Vec<usize>)> {
+    let (rows, p) = (time.len(), 4 + extra.len());
+    let top = top_speed(speed);
+    let smooth = |x: &[f64], i: usize| triangle(&|r| x[r], h, i);
+    let second = |a: usize| {
+        2.0 * ((travel[a + 1] - travel[a]) / (time[a + 1] - time[a]) - (travel[a] - travel[a - 1]) / (time[a] - time[a - 1]))
+            / (time[a + 1] - time[a - 1])
+    };
     let mut samples: Vec<Sample> = Vec::new();
-    for i in w..rows.saturating_sub(w) {
-        let v = mean(speed, i);
-        if v.abs() > 0.05 * top {
-            let mut x = vec![(speed[i + w] - speed[i - w]) / (time[i + w] - time[i - w]), v, v.signum(), 1.0];
-            x.extend(extra.iter().map(|column| mean(column, i)));
-            samples.push((i, x, mean(force, i)));
+    for i in h + 1..rows.saturating_sub(h + 1) {
+        if let Some(v) = steady(speed, top, h, i) {
+            let mut x = vec![triangle(&second, h, i), v, v.signum(), 1.0];
+            x.extend(extra.iter().map(|column| smooth(column, i)));
+            samples.push((i, x, smooth(force, i)));
         }
     }
     let one_way = |sign: f64| samples.iter().filter(|(_, x, _)| x[2] == sign).count();
-    if one_way(1.0).min(one_way(-1.0)) < 10 * (2 * w + 1) {
+    if one_way(1.0).min(one_way(-1.0)) < 10 * (2 * WINDOW + 1) {
         return None;
     }
-    // A column that is zero on every row used (the payload's force on an axis it does not load) has no value.
-    let mut basis: Vec<usize> = (0..p).filter(|&j| samples.iter().any(|(_, x, _)| x[j] != 0.0)).collect();
-    // At one speed each way (a constant-speed run, measured: inflation 223) the speed is its sign times a constant, and
-    // viscous against Coulomb friction is noise: viscous is left out (NaN) and the Coulomb value holds both.
-    if inflation(&samples, &basis, 1).is_none_or(|f| f > WEAK) {
-        basis.retain(|&j| j != 1);
+    let basis: Vec<usize> = match basis {
+        // The replay has no payload steps: the trace's columns of them are left out.
+        Some(b) => b.iter().copied().filter(|&j| j < p).collect(),
+        None => {
+            // A column that is zero on every row used (the payload's force on an axis it does not load) has no value.
+            let mut basis: Vec<usize> = (0..p).filter(|&j| samples.iter().any(|(_, x, _)| x[j] != 0.0)).collect();
+            // At one speed each way (a constant-speed run, measured: inflation 223) the speed is its sign times a constant,
+            // and viscous against Coulomb friction is noise: viscous is left out (NaN) and the Coulomb value holds both.
+            if inflation(&samples, &basis, 1).is_none_or(|f| f > WEAK) {
+                basis.retain(|&j| j != 1);
+            }
+            basis
+        }
+    };
+    let solved = solve(&samples, Some(&basis), per)?;
+    let used = samples.iter().map(|s| s.0).collect();
+    Some((solved, used))
+}
+
+/// The factor on the standard errors of fitted less config: the residual of (trace − replay) over the trace's, on the
+/// rows (keyed, ascending) both have. What the rigid model misses of the machine is in both residuals alike and cancels in
+/// the difference; the band of the trace's residual alone is 2.5 to 4 times too wide for it. At most 1.
+fn unshared(measured: &[((usize, usize), f64)], config: &[((usize, usize), f64)]) -> f64 {
+    let (mut a, mut b, mut difference, mut own) = (0, 0, 0.0, 0.0);
+    while a < measured.len() && b < config.len() {
+        match measured[a].0.cmp(&config[b].0) {
+            std::cmp::Ordering::Less => a += 1,
+            std::cmp::Ordering::Greater => b += 1,
+            std::cmp::Ordering::Equal => {
+                difference += (measured[a].1 - config[b].1).powi(2);
+                own += measured[a].1.powi(2);
+                (a, b) = (a + 1, b + 1);
+            }
+        }
     }
-    let solved = solve(&samples, Some(&basis), (2 * w + 1) as f64)?;
-    Some((solved.values, solved.errors))
+    if own > 0.0 { (difference / own).sqrt().min(1.0) } else { 1.0 }
 }
 
 /// What the friction of an axis does beyond the rigid values' sliding level (`friction_details`): its name as the CLI
@@ -333,9 +380,33 @@ pub fn fit_rigid(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Ve
                 .iter()
                 .map(|&(step, _)| (0..trace.time.len()).map(|i| if i >= step { force[i] } else { 0.0 }).collect())
                 .collect();
-            let (values, errors) = rigid_values(&trace.time, &measured.0, &measured.1, &columns)?;
+            let (fit, rows) = rigid_values(
+                &trace.time,
+                &measured.0,
+                &measured.1,
+                &measured_travel[axis],
+                &columns,
+                (h, per),
+                None,
+            )?;
+            // The replay's values on the trace's basis, so that the two differ by the config alone.
+            let (replay_fit, replay_rows) = rigid_values(
+                &trace.time,
+                &config.0,
+                &config.1,
+                &config_travel[axis],
+                &[],
+                (h, per),
+                Some(&fit.basis),
+            )?;
+            let keyed = |rows: Vec<usize>, residuals: &[f64]| -> Vec<((usize, usize), f64)> {
+                rows.into_iter().zip(residuals).map(|(row, r)| ((row, 0), *r)).collect()
+            };
+            let share = unshared(&keyed(rows, &fit.residuals), &keyed(replay_rows, &replay_fit.residuals));
+            let values = fit.values;
+            let errors: Vec<f64> = fit.errors.iter().map(|e| e * share).collect();
             let four = |v: &[f64]| -> [f64; 4] { std::array::from_fn(|q| v[q]) };
-            let own = four(&rigid_values(&trace.time, &config.0, &config.1, &[])?.0);
+            let own = four(&replay_fit.values);
             let fitted = friction_details(&trace.time, &measured.0, &measured.1, &measured_travel[axis], &values);
             let replayed = friction_details(&trace.time, &config.0, &config.1, &config_travel[axis], &own);
             let details = FRICTION_DETAILS
@@ -351,6 +422,7 @@ pub fn fit_rigid(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Ve
                 fitted: four(&values),
                 error: four(&errors),
                 details,
+                units: fit_units(machine.axes()[axis].unit),
                 payload_steps: steps
                     .iter()
                     .enumerate()
@@ -718,6 +790,8 @@ struct Solved {
     combines: Vec<Vec<(usize, f64)>>,
     covariance: Vec<Vec<f64>>,
     basis: Vec<usize>,
+    /// What the fit leaves over, per sample in the order given.
+    residuals: Vec<f64>,
 }
 
 /// Least squares on the base parameters: the columns, in their order, that the trace tells apart from those already
@@ -769,8 +843,9 @@ fn solve(samples: &[Sample], basis: Option<&[usize]>, per: f64) -> Option<Solved
             }
         }
     }
-    let residual: f64 =
-        samples.iter().map(|(_, x, y)| (y - basis.iter().map(|&j| values[j] * x[j]).sum::<f64>()).powi(2)).sum();
+    let residuals: Vec<f64> =
+        samples.iter().map(|(_, x, y)| y - basis.iter().map(|&j| values[j] * x[j]).sum::<f64>()).collect();
+    let residual: f64 = residuals.iter().map(|r| r * r).sum();
     // Neighbouring rows share most of their smoothing, so only every `per`th row counts as a measurement.
     let variance = residual / (samples.len() - m) as f64 * per;
     let mut covariance = vec![vec![f64::NAN; p]; p];
@@ -780,7 +855,7 @@ fn solve(samples: &[Sample], basis: Option<&[usize]>, per: f64) -> Option<Solved
         }
     }
     let errors = (0..p).map(|j| covariance[j][j].sqrt()).collect();
-    Some(Solved { values, errors, combines, covariance, basis })
+    Some(Solved { values, errors, combines, covariance, basis, residuals })
 }
 
 /// The inverse of the normal matrix `gram` on the columns `of`; `None` where it has none.
@@ -965,6 +1040,13 @@ pub fn fit_joints(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<O
     let at: Vec<usize> = steps.iter().map(|s| s.0).collect();
     let Some(fitted) = solve(&split(&measured, &at), None, per) else { return Ok(None) };
     let Some(replayed) = solve(&split(&config, &at), Some(&fitted.basis), per) else { return Ok(None) };
+    // The standard errors are those of fitted less config: the residual of (trace − replay) on the rows both have, not the
+    // trace's alone, which holds what the rigid model misses of the machine in both. A motor's rows by its constant column.
+    let owner = |x: &[f64]| (0..ids.len()).find(|&k| x[4 + 4 * k] > 0.5).unwrap_or(0);
+    let keyed = |s: &[Sample], r: &[f64]| -> Vec<((usize, usize), f64)> {
+        s.iter().zip(r).map(|((row, x, _), r)| ((*row, owner(x)), *r)).collect()
+    };
+    let share = unshared(&keyed(&measured, &fitted.residuals), &keyed(&config, &replayed.residuals));
     let payload: Vec<(&'static str, String)> = match steps.len() {
         0 => vec![("payload_factor", "payload".to_string())],
         1 => PAYLOAD_STEP_QUANTITIES.iter().map(|q| (*q, "payload".to_string())).collect(),
@@ -989,7 +1071,7 @@ pub fn fit_joints(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<O
             of: names[j].1.clone(),
             config: replayed.values[j] + shift(j),
             fitted: fitted.values[j] + shift(j),
-            error: fitted.errors[j],
+            error: fitted.errors[j] * share,
             combines: fitted.combines[j].iter().map(|&(i, c)| (label(i), c)).collect(),
         })
         .collect();
@@ -1328,8 +1410,17 @@ mod tests {
         let trace = crate::import::import(&read("constant-speed-v100.csv"), &mapping).unwrap().trace;
         let rows = 2000..12000;
         let motor = &trace.motors[0];
-        let (values, errors) =
-            rigid_values(&trace.time[rows.clone()], &motor.torque[rows.clone()], &motor.speed[rows], &[]).unwrap();
+        let (fit, _) = rigid_values(
+            &trace.time[rows.clone()],
+            &motor.torque[rows.clone()],
+            &motor.speed[rows.clone()],
+            &motor.angle[rows.clone()],
+            &[],
+            smoothing(&trace.time[rows], RIGID_SPAN_S),
+            None,
+        )
+        .unwrap();
+        let (values, errors) = (fit.values, fit.errors);
         assert!(values[1].is_nan() && errors[1].is_nan(), "{values:?}");
         assert!((values[2] - 2.7314).abs() < 0.03 * 2.7314, "{values:?} {errors:?}");
         assert!((values[3] - 0.0977).abs() < 0.02, "{values:?} {errors:?}");
@@ -1339,7 +1430,38 @@ mod tests {
             error: [0.0; 4],
             payload_steps: Vec::new(),
             details: Vec::new(),
+            units: fit_units("m"),
         };
         assert!(fit.advice("x").iter().all(|(key, _)| *key != "fit-viscous"));
+    }
+
+    /// A sine of 0.1 m at 1 Hz (4 s, 1 ms rows) on a 2 kg axis: F = 2 x'' + 0.5 x' + 1 sign(x') + 0.3 N from the exact
+    /// travel, while the speed column carries noise of ±0.05 m/s (10 % of the top speed 0.628 m/s). The acceleration comes
+    /// from the travel's second difference, so the mass is 2.0 whatever the speed column's noise (from the speed's slope
+    /// it came out some 15 % low on a measured sine). `unshared`: the same residual twice leaves nothing (factor 0), no
+    /// rows in common keep the whole band (factor 1).
+    #[test]
+    fn the_mass_comes_from_the_travel_and_not_from_a_noisy_speed() {
+        let rows = 4000;
+        let time: Vec<f64> = (0..rows).map(|i| i as f64 * 1e-3).collect();
+        let w = 2.0 * std::f64::consts::PI;
+        let travel: Vec<f64> = time.iter().map(|t| 0.1 * (w * t).sin()).collect();
+        let noise = |i: usize| 0.05 * (((i * 7919) % 13) as f64 - 6.0) / 6.0;
+        let speed: Vec<f64> = time.iter().enumerate().map(|(i, t)| 0.1 * w * (w * t).cos() + noise(i)).collect();
+        let force: Vec<f64> = time
+            .iter()
+            .map(|t| {
+                let v = 0.1 * w * (w * t).cos();
+                2.0 * -0.1 * w * w * (w * t).sin() + 0.5 * v + v.signum() + 0.3
+            })
+            .collect();
+        let (fit, used) =
+            rigid_values(&time, &force, &speed, &travel, &[], smoothing(&time, SMOOTHING_S), None).unwrap();
+        assert!((fit.values[0] - 2.0).abs() < 0.02, "{:?}", fit.values);
+        assert_eq!(used.len(), fit.residuals.len());
+        let keyed: Vec<((usize, usize), f64)> = used.iter().zip(&fit.residuals).map(|(r, e)| ((*r, 0), *e)).collect();
+        assert_eq!(unshared(&keyed, &keyed), 0.0);
+        assert_eq!(unshared(&keyed, &[]), 1.0);
+        assert_eq!(fit_units("rad")[0], "kg m²");
     }
 }
