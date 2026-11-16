@@ -17,7 +17,6 @@ Status words: **made up** (no source at all), **chosen** (a judgement, defensibl
 
 | What | Where | Status | What is true instead | Closing it |
 | --- | --- | --- | --- | --- |
-| Harmonic Drive strain-wave efficiency 0.70 for every CSF/CSG/SHG size and ratio | `crates/sim-components/src/catalog.rs` (`apply_gearbox`), flagged `gearbox-efficiency` in the search's `estimated` column | **made up**: typed from memory by the implementer, who could not open the vendor's charts | The vendor prints efficiency charts by ratio, speed, temperature and load; real values differ by ratio and are mostly above 0.70 at rated torque | Read the chart values from the Harmonic Drive catalogue into an efficiency column per series and ratio |
 | "Strain-wave gears run at 70 to 85 %" | the audit's finding K5 | **from memory** of the auditor | same as above | same as above |
 | Cushion energy "about 0.10 to 0.20 J" on the hanging pneumatic axis | `docs/mechanisms.md`, `docs/de/mechanismen.md` | **made up**: a hand estimate written before any run | Whatever the shipped cycle gives with the weight's work included | Run the shipped pneumatic axis hanging and write the measured figure |
 | The cushion must absorb the weight's work over the cushion length | `crates/sim-components/src/pneumatic.rs` (`Cylinder::stepped`) | **assumed**: physically sound, but whether Festo's 0.4 J rating is meant to include it was never read in the catalogue | Unknown until the Festo DSNU/ADN sizing rule is read | Read the vendor's definition of the permissible impact energy |
@@ -134,9 +133,6 @@ and link. What it changes in the tables above (rows stay until the code follows)
   source found.
 - **Rexroth CKR and Bahr stroke** (section 5): sourced. Lca and Lad per CKR size and the basic length
   per Bahr ELZ size are in the vendor-facts file; the stroke limit can now be module length minus those.
-- **Harmonic Drive efficiency** (section 1): the vendor prints graphs only, no table. Two printed
-  anchors: CSF-20-80 at 1000 r/min, 20 °C, grease: 78 % at rated torque; SHF-20-80: 82 %. The flat
-  0.70 stays unsourced until the graphs are digitised.
 - **Mover's mass centre** (section 1): not published by Beckhoff in anything readable; needs the
   vendor's load diagrams, CAD or a question to their support. Mass 651 g is sourced.
 - **Late fieldbus frame** (section 3): no primary text found; SINAMICS only documents the tolerated
