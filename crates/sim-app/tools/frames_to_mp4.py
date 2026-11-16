@@ -19,6 +19,16 @@ def main():
     frames = sorted(f for f in os.listdir(frames_dir) if f.lower().endswith(".png"))
     if not frames:
         raise SystemExit("no frames in " + frames_dir)
+    # The files are numbered by time (one per 1/30 s); a number the app dropped (full queue) holds the frame before,
+    # so that the video keeps real time. Names that are not numbers keep their order.
+    numbers = [int(os.path.splitext(f)[0]) if os.path.splitext(f)[0].isdigit() else None for f in frames]
+    if None not in numbers:
+        by_number = dict(zip(numbers, frames))
+        held, shown = [], frames[0]
+        for n in range(numbers[0], numbers[-1] + 1):
+            shown = by_number.get(n, shown)
+            held.append(shown)
+        frames = held
     first = bpy.data.images.load(os.path.join(frames_dir, frames[0]))
     width, height = first.size
     scene = bpy.context.scene

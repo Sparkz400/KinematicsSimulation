@@ -262,11 +262,12 @@ pub fn failures(c: &Candidate) -> Vec<&Verdict> {
 /// A failing check as a line: the check, the motor it concerns, value, limit and utilisation.
 pub fn failure_line(tr: &Translations, v: &Verdict, motor_keys: &[&str]) -> String {
     let motor = v.motor.and_then(|m| motor_keys.get(m)).map_or(String::new(), |key| format!(" ({})", tr.tr(key)));
+    let (value, limit) = crate::model::short_pair(v.value, v.limit, v.ok);
     format!(
         "{}{motor}: {} / {} = {}",
         tr.tr(&format!("check-{}", v.check)),
-        short(v.value),
-        short(v.limit),
+        value,
+        limit,
         short(utilisation(v))
     )
 }

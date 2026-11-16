@@ -337,7 +337,8 @@ const POINTS_KEYS: [&str; 3] = ["ui-analysis-motor", "ui-points-speed", "ui-poin
 const OVERLAY_KEYS: [&str; 3] = ["ui-overlay-torque", "ui-overlay-speed", "ui-overlay-error"];
 
 /// The labels of the run store and its comparison, the kinds of run and the quantities compared among them.
-const RUN_KEYS: [&str; 26] = [
+const RUN_KEYS: [&str; 27] = [
+    "ui-run-motor-side",
     "ui-run-live",
     "ui-run-ghost",
     "ui-run-cycle",
@@ -739,11 +740,26 @@ pub fn short(value: f64) -> String {
     match value.abs() {
         0.0 => "0.000".into(),
         size if (0.01..1e5).contains(&size) => {
+            let at = |exponent: i32| format!("{value:.*}", (3 - exponent).clamp(0, 3).max(2 - exponent) as usize);
             let exponent = size.log10().floor() as i32;
-            format!("{value:.*}", (3 - exponent).clamp(0, 3).max(2 - exponent) as usize)
+            let text = at(exponent);
+            // Rounding up into the next power of ten (9.9996) leaves one digit too many.
+            let carried = text.parse::<f64>().is_ok_and(|r| r.abs() >= 10f64.powi(exponent + 1));
+            if carried { at(exponent + 1) } else { text }
         }
         _ => format!("{value:.2e}"),
     }
+}
+
+/// A check's value and limit as `short` writes them; a failing one that would read the same gets as many digits as
+/// it takes to tell them apart (1.0004 against 1.000).
+pub fn short_pair(value: f64, limit: f64, ok: bool) -> (String, String) {
+    let (a, b) = (short(value), short(limit));
+    if ok || a != b || value == limit {
+        return (a, b);
+    }
+    let digits = (4..=17).find(|d| format!("{value:.*e}", d - 1) != format!("{limit:.*e}", d - 1)).unwrap_or(17);
+    (format!("{value:.*e}", digits - 1), format!("{limit:.*e}", digits - 1))
 }
 
 pub struct Model {
@@ -919,8 +935,12 @@ fn scopes_for(signals: &[SignalInfo]) -> Vec<Scope> {
 /// A factor and an SI prefix that bring a value of this size into a readable range:
 /// 0.00004 m reads as 40 µm.
 pub fn display_scale(peak: f64, unit: &str) -> (f64, &'static str) {
+    // Only plain SI units take a prefix: not %, 1/h, deg or rpm.
+    const PREFIXED: [&str; 17] = [
+        "m", "s", "N", "W", "V", "A", "J", "Hz", "rad", "N m", "m/s", "m/s2", "m/s²", "rad/s", "rad/s2", "rad/s²", "N m/rad",
+    ];
     match peak {
-        _ if unit.is_empty() || peak == 0.0 || !peak.is_finite() => (1.0, ""),
+        _ if !PREFIXED.contains(&unit) || peak == 0.0 || !peak.is_finite() => (1.0, ""),
         p if p < 1e-3 => (1e6, "µ"),
         p if p < 0.1 => (1e3, "m"),
         p if p >= 1e4 => (1e-3, "k"),
@@ -1528,7 +1548,12 @@ impl Model {
 
     /// `run` with what the config's machine says about its motors and resonances (`Run::rated`).
     pub fn rated(&self, run: Run) -> Run {
-        match Sim::new(self.entry, &self.config) {
+        self.rated_with(run, &self.config)
+    }
+
+    /// `rated` for a run made with another config of this machine (the compared ghost's).
+    pub fn rated_with(&self, run: Run, config: &Config) -> Run {
+        match Sim::new(self.entry, config) {
             Ok(sim) => run.rated(&sim),
             Err(_) => run,
         }
@@ -1639,6 +1664,9 @@ impl Model {
     /// "Motor A · run label" for a line of a run, or the run's label alone for the tool's error.
     fn run_line_name(&self, run: &Run, channel: Channel) -> String {
         match channel.quantity {
+            Quantity::ToolError if run.tool_error_is_motor_side() => {
+                format!("{} · {}", run.label, self.tr.tr("ui-run-motor-side"))
+            }
             Quantity::ToolError => run.label.clone(),
             _ => {
                 let id = format!("motor.{}.{}", run.motors[channel.motor], channel.quantity.signal().unwrap_or(""));
@@ -2247,7 +2275,10 @@ impl Model {
         let named = |v: &Verdict| vec![tr(&format!("check-{}", v.check)), v.motor.map_or(String::new(), motor)];
         let mut checks = vec![self.header(&VERDICT_KEYS)];
         checks.extend(
-            verdicts.iter().map(|v| [named(v), vec![short(v.value), short(v.limit), self.result(v.ok)]].concat()),
+            verdicts.iter().map(|v| {
+                let (value, limit) = short_pair(v.value, v.limit, v.ok);
+                [named(v), vec![value, limit, self.result(v.ok)]].concat()
+            }),
         );
         let mut tables = vec![summary, motors, checks];
         if let Some(bands) = bands {
@@ -2289,11 +2320,12 @@ impl Model {
                     .join(", ")
             };
             let motor = v.motor.map_or(String::new(), |k| tr(self.session.motors[k].key));
+            let (value, limit) = short_pair(v.value, v.limit, v.ok);
             rows.push(vec![
                 tr(&format!("check-{}", v.check)),
                 motor,
-                short(v.value),
-                short(v.limit),
+                value,
+                limit,
                 self.result(v.ok),
                 at(true),
                 at(false),
@@ -3104,6 +3136,11 @@ impl Model {
                 Some(motor) => format!("{label} · {}", self.tr.tr(motor.key)),
                 None => label,
             },
+            crate::insight::PathQuantity::TrackingError
+                if self.path_run.as_ref().is_some_and(|p| p.run.tool_error_is_motor_side()) =>
+            {
+                format!("{label} ({})", self.tr.tr("ui-run-motor-side"))
+            }
             _ => label,
         }
     }
@@ -3336,6 +3373,19 @@ impl Model {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    /// 9.9996 rounds up to 10.00 (four digits), not 10.000; a failing 1.0004 against 1.000 shows the difference
+    /// (1.0004e0 against 1.0000e0), a passing one does not; only plain SI units take a prefix.
+    #[test]
+    fn numbers_keep_four_digits_and_failing_checks_show_their_difference() {
+        assert_eq!(short(9.9996), "10.00");
+        assert_eq!(short(1.0004), "1.000");
+        assert_eq!(short_pair(1.0004, 1.0, false), ("1.0004e0".to_string(), "1.0000e0".to_string()));
+        assert_eq!(short_pair(1.0004, 1.0, true), ("1.000".to_string(), "1.000".to_string()));
+        assert_eq!(display_scale(0.05, "%"), (1.0, ""));
+        assert_eq!(display_scale(0.05, "1/h"), (1.0, ""));
+        assert_eq!(display_scale(0.05, "m"), (1e3, "m"));
+    }
 
     /// A background job whose thread ended without an answer (it panicked) left no message: the analysis
     /// was dropped without a word, and the tuning's spinner turned for ever.

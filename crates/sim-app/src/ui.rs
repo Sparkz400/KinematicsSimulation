@@ -385,8 +385,13 @@ fn margins(model: &Model) -> Vec<(&'static str, Option<f64>, bool)> {
 }
 
 /// A share as the gauges write it: a percentage, or "over" for a check over a limit of 0.
-fn share_text(model: &Model, used: f64) -> String {
-    if used.is_finite() { format!("{:.0} {}", used * 100.0, "%") } else { model.tr.tr("ui-verdict-over").to_string() }
+fn share_text(model: &Model, used: f64, passes: bool) -> String {
+    match used {
+        u if !u.is_finite() => model.tr.tr("ui-verdict-over").to_string(),
+        // A failing check that rounds to 100 is over it, not at it.
+        u if !passes && (u * 100.0).round() == 100.0 => "> 100 %".into(),
+        u => format!("{:.0} {}", u * 100.0, "%"),
+    }
 }
 
 /// A check's colour: red over its limit, amber within a tenth of it, green with room.
@@ -557,7 +562,7 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
                         });
                         ui.horizontal(|ui| {
                             gauge_bar(ui, 112.0, used, passes);
-                            ui.label(RichText::new(share_text(model, used)).small().color(margin_color(used, passes)));
+                            ui.label(RichText::new(share_text(model, used, passes)).small().color(margin_color(used, passes)));
                         });
                     });
                 })
@@ -912,12 +917,13 @@ fn picked_check(ui: &mut Ui, model: &Model, check: &'static str, panels: PanelSt
 
 /// A verdict's value, limit and share of the limit as cells of a grid row, and the row's end.
 fn verdict_cells(ui: &mut Ui, model: &Model, v: &Verdict) {
-    ui.label(sim_app::model::short(v.value));
-    ui.label(sim_app::model::short(v.limit));
+    let (value, limit) = sim_app::model::short_pair(v.value, v.limit, v.ok);
+    ui.label(value);
+    ui.label(limit);
     match usage(v) {
         Some(used) => drop(ui.horizontal(|ui| {
             gauge_bar(ui, 90.0, used, v.ok);
-            ui.label(RichText::new(share_text(model, used)).color(margin_color(used, v.ok)));
+            ui.label(RichText::new(share_text(model, used, v.ok)).color(margin_color(used, v.ok)));
         })),
         None => drop(ui.label(
             RichText::new(model.tr.tr(if v.ok { "ui-verdict-passes" } else { "ui-verdict-fails" })).color(if v.ok {
@@ -2290,16 +2296,13 @@ pub fn hertz(mark: GridMark, _: &std::ops::RangeInclusive<f64>) -> String {
     format!("{:.3}", 10f64.powf(mark.value)).trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-/// A phase over log10(f), unwrapped, so that a lag beyond half a turn does not jump to the top of the plot.
+/// A phase over log10(f), unwrapped in both directions, so that a lag beyond half a turn does not jump to the top of the plot.
 fn phase_line(points: &[sim_components::analysis::SweepPoint]) -> Vec<[f64; 2]> {
     let mut last = 0.0;
     points
         .iter()
         .map(|p| {
-            let mut phase = p.phase_deg;
-            while phase > last + 180.0 {
-                phase -= 360.0;
-            }
+            let phase = sim_app::frequency::unwrap_near(p.phase_deg, last);
             last = phase;
             [p.frequency.log10(), phase]
         })

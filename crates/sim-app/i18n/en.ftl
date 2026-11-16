@@ -488,6 +488,7 @@ ui-run-cycle = Cycle
 ui-run-path = Path
 ui-run-trace = Trace
 ui-run-tool-error = Tool position error
+ui-run-motor-side = Following error (motor side)
 ui-run-default = default
 ui-run-measured = measured
 ui-run-replayed = replayed
@@ -576,7 +577,7 @@ ui-loop-gain-margin = Gain margin
 ui-loop-peak = Peak sensitivity
 ui-loop-unstable = Unstable, or the measurement is not valid: the torque limit was hit or the loop oscillated on its own.
 ui-loop-open = Open loop L
-ui-loop-closed = Closed loop T
+ui-loop-closed = Complementary sensitivity T = L/(1+L) at the torque input, position loop closed (not the speed reference response)
 ui-loop-plant = Plant, motor torque to speed (dB of 1 rad/s per N m)
 ui-loop-mode = Resonance
 ui-loop-shaper = Input shaper
