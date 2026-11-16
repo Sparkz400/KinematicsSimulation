@@ -80,7 +80,7 @@ Next: the [overview and five-minute tour](docs/overview.md), the [user guide](do
 
 Every component and analysis figure is tested against a hand calculation. The arms' dynamics match MuJoCo to 1e-14, the deltas' match independent Lagrangian derivations, and the drive loop matches an independent Python implementation. One real machine, a ball screw bench of ISW Stuttgart, has been replayed: the simulated motor torque is within 5 to 13 % RMS of the measured one.
 
-The equations are checked; the parameters of a given machine (friction, damping, stiffness) are often estimates, and the configs mark which. Comparisons and trends are reliable; absolute numbers are as good as those values. Details and open points: [validation](docs/validation.md). Measured data from your machine is the most valuable contribution: see [datasets](datasets/README.md).
+The equations are checked; the parameters of a given machine (friction, damping, stiffness) are often estimates, and the configs mark which. Comparisons and trends are reliable; absolute numbers are as good as those values. Every check with its outcome and values: the [validation dashboard](https://sparkz400.github.io/KinematicsSimulation/validation/). Details and open points: [validation](docs/validation.md). Measured data from your machine is the most valuable contribution: see [datasets](datasets/README.md).
 
 ## Interfaces
 
@@ -95,7 +95,7 @@ The equations are checked; the parameters of a given machine (friction, damping,
 
 ## Documentation
 
-[User guide](docs/user-guide.md) · [Overview and tour](docs/overview.md) · [Machine files](docs/machine-files.md) · [Config reference](docs/config-reference.md) · [Model reference](docs/model-reference.md) · [Mechanisms](docs/mechanisms.md) · [Catalogue](docs/catalogue.md) · [Validation](docs/validation.md) · [Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md)
+[User guide](docs/user-guide.md) · [Overview and tour](docs/overview.md) · [Machine files](docs/machine-files.md) · [Config reference](docs/config-reference.md) · [Model reference](docs/model-reference.md) · [Mechanisms](docs/mechanisms.md) · [Catalogue](docs/catalogue.md) · [Validation](docs/validation.md) · [Validation dashboard](docs/dashboard.md) · [API docs](https://sparkz400.github.io/KinematicsSimulation/api/) · [Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md)
 
 ## Contributing
 

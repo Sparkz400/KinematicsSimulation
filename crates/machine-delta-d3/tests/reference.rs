@@ -39,6 +39,12 @@ fn delta_inverse_dynamics_matches_the_lagrangian() {
             let theirs = &row[column..column + 3];
             let scale = theirs.iter().fold(0.0f64, |m, t| m.max(t.abs()));
             for k in 0..3 {
+                sim_core::testkit::record_check(
+                    &format!("rods {rods}, motor {k} torque, N m"),
+                    theirs[k],
+                    ours[k],
+                    1e-8 * scale,
+                );
                 assert!(
                     (ours[k] - theirs[k]).abs() <= 1e-8 * scale,
                     "rods {rods}, state {:?}: motor {k} {} N m against {} N m",
@@ -92,6 +98,12 @@ fn open_loop_move_matches_scipy() {
     for (i, (ours, theirs)) in trace.iter().zip(&reference).enumerate() {
         assert!((i as f64 * 1e-3 - theirs[0]).abs() < 1e-9);
         for a in 0..3 {
+            sim_core::testkit::record_check(
+                &format!("axis {a} position, m"),
+                theirs[a + 1],
+                ours[a],
+                0.002 * travel[a],
+            );
             assert!(
                 (ours[a] - theirs[a + 1]).abs() < 0.002 * travel[a],
                 "axis {a} at t={}: {} against SciPy {}",

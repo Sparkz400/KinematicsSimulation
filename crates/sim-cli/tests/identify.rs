@@ -147,12 +147,15 @@ fn the_measured_ball_screw_has_the_inertia_its_masses_give() {
     assert!(out.status.success(), "{}", text(&out.stderr));
     let rows = table(&text(&out.stdout), 2);
     let inertia = rows.iter().find(|r| r.0 == "inertia_kg_m2").unwrap();
+    let record = sim_core::testkit::record_check;
+    record("ISW ball screw: identified inertia, kg m^2 (range from the masses)", 0.020205, inertia.1, 0.001925);
     assert!((0.01828..0.02213).contains(&inertia.1) && inertia.2 < 0.01 * inertia.1, "{inertia:?}");
     let machine = ["screw-axis", "--config", &path("machine.toml"), "--set", "start.pose=[0.01003171]"];
     let out = cli(&[&["fit"][..], &machine, &trace].concat());
     assert!(out.status.success(), "{}", text(&out.stderr));
     let rows = table(&text(&out.stdout), 3);
     let mass = rows.iter().find(|r| r.0 == "moved_mass_kg").unwrap();
+    record("ISW ball screw: fitted moved mass, kg (range from the masses)", 498.5, mass.1, 47.5);
     assert!((451.0..546.0).contains(&mass.1), "{rows:?}");
     let out = cli(&[&["replay"][..], &machine, &trace].concat());
     assert!(out.status.success(), "{}", text(&out.stderr));

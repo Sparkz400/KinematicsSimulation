@@ -30,6 +30,12 @@ fn linear_delta_inverse_dynamics_matches_the_lagrangian() {
             let theirs = &row[10..13];
             let scale = theirs.iter().fold(0.0f64, |m, t| m.max(t.abs()));
             for k in 0..3 {
+                sim_core::testkit::record_check(
+                    &format!("incline {incline}, motor {k} torque, N m"),
+                    theirs[k],
+                    ours[k],
+                    1e-8 * scale,
+                );
                 assert!(
                     (ours[k] - theirs[k]).abs() <= 1e-8 * scale,
                     "state {:?}: motor {k} {} N m against {} N m",

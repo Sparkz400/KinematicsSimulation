@@ -2,6 +2,8 @@ name: Pages
 
 # The sizing page (crates/sim-wasm/web) on GitHub Pages: https://sparkz400.github.io/KinematicsSimulation/
 # and the documentation (docs/, mdBook) beside it: https://sparkz400.github.io/KinematicsSimulation/docs/
+# the validation dashboard: https://sparkz400.github.io/KinematicsSimulation/validation/
+# and the API docs (rustdoc): https://sparkz400.github.io/KinematicsSimulation/api/
 on:
   push:
     branches: [main]
@@ -54,6 +56,39 @@ jobs:
           mdbook build docs
           lychee --offline --include-fragments --no-progress --exclude-path '404\.html$' target/book
           cp -r target/book site/docs
+      # The app's build scripts (ALSA, udev) need these to document and to test it, as in ci.yml.
+      - name: Linux system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libudev-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libwayland-dev libvulkan-dev
+      # The rustdoc of every crate under /api/, with a page that lists them (rustdoc on stable makes none).
+      - name: Build the API docs
+        run: |
+          cargo doc --no-deps --workspace --locked
+          cp -r target/doc site/api
+          {
+            echo '<!doctype html><meta charset="utf-8"><title>API docs</title><h1>Kinematics Simulation: API docs</h1><ul>'
+            for d in site/api/*/index.html; do c=$(basename "$(dirname "$d")"); echo "<li><a href=\"$c/index.html\">$c</a></li>"; done
+            echo '</ul>'
+          } > site/api/index.html
+      # The validation dashboard under /validation/: the tests docs/validation.md names, run with their values written to
+      # a file (KS_VALIDATION_OUT), and a page made from the tables, the run's JUnit file and the values. A failed test
+      # shows as failed on the page; CI's own jobs are the gate, so the page is published either way.
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest
+      - name: Run the validation tests and build the dashboard
+        run: |
+          python3 tools/validation_dashboard.py --nextest-filter > "$RUNNER_TEMP/filter.txt"
+          KS_VALIDATION_OUT="$RUNNER_TEMP/validation.jsonl" cargo nextest run --workspace --release --locked \
+            --exclude sim-py --profile full --no-fail-fast -E "$(cat "$RUNNER_TEMP/filter.txt")" || echo "::warning::a validation test failed"
+          python3 tools/validation_dashboard.py --junit target/nextest/full/junit.xml \
+            --records "$RUNNER_TEMP/validation.jsonl" --out site/validation \
+            --repo "https://github.com/${{ github.repository }}/blob/${{ github.sha }}" \
+            --stamp "Run of commit ${GITHUB_SHA::12} on $(date -u +'%Y-%m-%d %H:%M UTC')."
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: site

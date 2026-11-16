@@ -11,7 +11,9 @@ fn h4(edits: &[&str]) -> H4 {
     H4::new(&cfg).unwrap()
 }
 
+#[track_caller]
 fn close(a: f64, b: f64, tolerance: f64, what: &str) {
+    sim_core::testkit::record_check(what, b, a, tolerance * b.abs().max(1e-12));
     assert!((a - b).abs() <= tolerance * b.abs().max(1e-12), "{what}: {a} against {b} by hand");
 }
 

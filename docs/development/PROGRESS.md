@@ -4358,3 +4358,17 @@ Merged on main between the cut (19c2ad1, 14 November) and e7c41e5; the entries a
   the motors held; machine files that follow their crates' friction feedforward.
 - Last full run in this period: 1533 of 1538 tests passed at 54a2fca, before wave 3; the final count is a placeholder
   in docs/validation.md.
+
+## Validation dashboard and API docs (wave of 16 November 2026)
+
+- `sim_core::testkit::record_check(what, reference, simulated, allowed)` appends a JSON line to the file
+  `KS_VALIDATION_OUT` names, with the test (the thread's name) and the caller's source line; it asserts nothing and does
+  nothing without the variable. Called from the `close` helpers of the D2, D3, D4, four-arm delta, linear delta,
+  parallel SCARA and wafer handler tests, the reference tests against SymPy (D2, D3, linear delta), SciPy (D3's open-loop
+  move), MuJoCo (the arms) and the Python drive (single axis), and the ISW bench's identified inertia and fitted mass.
+- `tools/validation_dashboard.py` reads the tables of `docs/validation.md` (533 rows, 510 test names, each found in the
+  sources), prints a nextest filter of the Rust tests they name, and writes the dashboard from the JUnit file and the
+  records (the worst sample per value). The Pages workflow runs those tests in release and publishes the page under
+  `/validation/` and `cargo doc --no-deps --workspace` under `/api/`.
+- Not covered: values for the many tests that do not call `record_check` (their outcome only), the pytest tests (not
+  run by Pages), outcomes of a test name defined in two crates (merged).

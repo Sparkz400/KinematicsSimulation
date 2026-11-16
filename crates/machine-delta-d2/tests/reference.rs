@@ -25,6 +25,7 @@ fn d2_inverse_dynamics_matches_the_lagrangian() {
         let theirs = &row[6..8];
         let scale = theirs[0].abs().max(theirs[1].abs());
         for k in 0..2 {
+            sim_core::testkit::record_check(&format!("motor {k} torque, N m"), theirs[k], ours[k], 1e-8 * scale);
             assert!(
                 (ours[k] - theirs[k]).abs() <= 1e-8 * scale,
                 "state {:?}: motor {k} {} N m against {} N m",
