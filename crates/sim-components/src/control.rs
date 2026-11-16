@@ -25,6 +25,10 @@ pub enum Command {
     /// A path given as poses at times (seconds from its start, the first at 0 and at the present
     /// setpoint, the last at rest). The controller runs a smooth curve through them.
     Trajectory(Vec<(f64, Vec<f64>)>),
+    /// `Trajectory` with the speed and acceleration at every point given (`trace::replay` of a trace that carries the
+    /// tool's setpoints): a quintic through them (Hermite interpolation of position, speed and acceleration), so that at
+    /// the points the setpoints are exactly those given.
+    RatedTrajectory(Vec<(f64, Vec<f64>)>, Vec<Vec<f64>>, Vec<Vec<f64>>),
     /// Switch the drives off: no torque, and a move or cycle under way is dropped. Machines with holding
     /// brakes engage them. Until `Enable`, every other command is refused.
     Disable,
@@ -168,6 +172,8 @@ enum Motion {
     Trajectory {
         points: Vec<(f64, Vec<f64>)>,
         speeds: Vec<Vec<f64>>,
+        /// Given (`Command::RatedTrajectory`): the accelerations at the points, and a quintic in place of the cubic.
+        accelerations: Option<Vec<Vec<f64>>>,
         start_tick: u64,
     },
     /// A category 2 stop (`StopCategory::Two`): from `from` at the speeds `vel`, every axis decelerating evenly to rest in
@@ -1027,31 +1033,54 @@ impl Controller {
                 }
                 self.motion = Motion::Following { from: self.raw_pos.clone(), to: target, start_tick: u64::MAX };
             }
-            Command::Trajectory(points) => {
-                if !matches!(self.motion, Motion::Idle) || self.cycle.is_some() {
-                    return Err(CommandError { key: "error-busy" });
-                }
-                let rising = points.windows(2).all(|w| w[1].0 > w[0].0);
-                // The setpoint of a machine at rest is where its motors stand, which under belt stretch and gear
-                // twist is some hundredths of a millimetre from the tool: at an end of a stroke, beyond it. A
-                // path from there starts that far outside the range (`near_start`). Judged from the path's own start,
-                // which may be up to that slack off this setpoint (below): a path planned by another simulation from
-                // where this machine's tool stands starts where that one's motors stand, on an arm some mrad beyond a
-                // stop where this setpoint is on it, and was refused.
-                if points.len() < 2
-                    || points[0].0 != 0.0
-                    || !rising
-                    || !points.iter().all(|(t, pose)| t.is_finite() && near_start(machine, &points[0].1, pose))
-                {
+            Command::Trajectory(points) => self.command_trajectory(points, None, machine)?,
+            Command::RatedTrajectory(points, speeds, accelerations) => {
+                let fits = |rates: &[Vec<f64>]| {
+                    rates.len() == points.len() && rates.iter().all(|r| r.len() == self.set_pos.len())
+                };
+                if !fits(&speeds) || !fits(&accelerations) {
                     return Err(CommandError { key: "error-trajectory" });
                 }
-                // A path that starts elsewhere would make the setpoint jump.
-                if points[0].1.iter().zip(&self.raw_pos).any(|(p, s)| (p - s).abs() > machine.setpoint_slack()) {
-                    return Err(CommandError { key: "error-trajectory-start" });
-                }
-                self.motion = trajectory(points, self.spline_c2);
+                self.command_trajectory(points, Some((speeds, accelerations)), machine)?
             }
         }
+        Ok(())
+    }
+
+    /// `Command::Trajectory` and, with the speeds and accelerations at its points, `Command::RatedTrajectory`.
+    fn command_trajectory(
+        &mut self,
+        points: Vec<(f64, Vec<f64>)>,
+        rates: Option<(Vec<Vec<f64>>, Vec<Vec<f64>>)>,
+        machine: &dyn Machine,
+    ) -> std::result::Result<(), CommandError> {
+        if !matches!(self.motion, Motion::Idle) || self.cycle.is_some() {
+            return Err(CommandError { key: "error-busy" });
+        }
+        let rising = points.windows(2).all(|w| w[1].0 > w[0].0);
+        // The setpoint of a machine at rest is where its motors stand, which under belt stretch and gear
+        // twist is some hundredths of a millimetre from the tool: at an end of a stroke, beyond it. A
+        // path from there starts that far outside the range (`near_start`). Judged from the path's own start,
+        // which may be up to that slack off this setpoint (below): a path planned by another simulation from
+        // where this machine's tool stands starts where that one's motors stand, on an arm some mrad beyond a
+        // stop where this setpoint is on it, and was refused.
+        if points.len() < 2
+            || points[0].0 != 0.0
+            || !rising
+            || !points.iter().all(|(t, pose)| t.is_finite() && near_start(machine, &points[0].1, pose))
+        {
+            return Err(CommandError { key: "error-trajectory" });
+        }
+        // A path that starts elsewhere would make the setpoint jump.
+        if points[0].1.iter().zip(&self.raw_pos).any(|(p, s)| (p - s).abs() > machine.setpoint_slack()) {
+            return Err(CommandError { key: "error-trajectory-start" });
+        }
+        self.motion = match rates {
+            Some((speeds, accelerations)) => {
+                Motion::Trajectory { points, speeds, accelerations: Some(accelerations), start_tick: u64::MAX }
+            }
+            None => trajectory(points, self.spline_c2),
+        };
         Ok(())
     }
 
@@ -1776,7 +1805,7 @@ impl Controller {
                     self.motion = Motion::Dwell { until_tick };
                 }
             }
-            Motion::Trajectory { points, speeds, start_tick } => {
+            Motion::Trajectory { points, speeds, accelerations, start_tick } => {
                 let start_tick = if start_tick == u64::MAX { tick } else { start_tick };
                 let t = (tick - start_tick) as f64 * dt;
                 let last = points.len() - 1;
@@ -1793,7 +1822,7 @@ impl Controller {
                         self.motion = if t >= points[last].0 + lag * dt {
                             self.arrive(i, tick)
                         } else {
-                            Motion::Trajectory { points, speeds, start_tick }
+                            Motion::Trajectory { points, speeds, accelerations, start_tick }
                         };
                     }
                 } else {
@@ -1801,9 +1830,12 @@ impl Controller {
                     // taken, not by the rounding of the two times the end of the one before, whose acceleration differs.
                     let i = (points.partition_point(|(time, _)| *time <= t + 1e-6 * dt) - 1).min(last - 1);
                     for a in 0..self.set_pos.len() {
-                        [self.set_pos[a], self.set_vel[a], self.set_acc[a]] = hermite(&points, &speeds, i, a, t);
+                        [self.set_pos[a], self.set_vel[a], self.set_acc[a]] = match &accelerations {
+                            Some(acc) => quintic(&points, &speeds, acc, i, a, t),
+                            None => hermite(&points, &speeds, i, a, t),
+                        };
                     }
-                    self.motion = Motion::Trajectory { points, speeds, start_tick };
+                    self.motion = Motion::Trajectory { points, speeds, accelerations, start_tick };
                 }
             }
             Motion::Following { from, to, start_tick } => {
@@ -2218,7 +2250,7 @@ impl Controller {
 /// each point.
 fn trajectory(points: Vec<(f64, Vec<f64>)>, c2: bool) -> Motion {
     let speeds = if c2 { c2_speeds(&points) } else { neighbour_speeds(&points) };
-    Motion::Trajectory { points, speeds, start_tick: u64::MAX }
+    Motion::Trajectory { points, speeds, accelerations: None, start_tick: u64::MAX }
 }
 
 /// The speeds at the points of the Hermite cubics through them that make one C2 spline, clamped at rest at both ends:
@@ -2302,6 +2334,58 @@ pub(crate) fn hermite(points: &[(f64, Vec<f64>)], speeds: &[Vec<f64>], i: usize,
         b[0] * points[i].1[a] + b[1] * h * speeds[i][a] + b[2] * points[i + 1].1[a] + b[3] * h * speeds[i + 1][a]
     };
     [at(basis[0]), at(basis[1]) / h, at(basis[2]) / (h * h)]
+}
+
+/// Position, speed and acceleration of axis `a` at time `t` on the quintic from point i to point i + 1 with the speeds
+/// and accelerations there (Hermite interpolation of the fifth degree): at the points exactly those given.
+fn quintic(
+    points: &[(f64, Vec<f64>)],
+    speeds: &[Vec<f64>],
+    accelerations: &[Vec<f64>],
+    i: usize,
+    a: usize,
+    t: f64,
+) -> [f64; 3] {
+    let h = points[i + 1].0 - points[i].0;
+    let s = (t - points[i].0) / h;
+    let (s2, s3, s4, s5) = (s * s, s * s * s, s.powi(4), s.powi(5));
+    // The basis functions of p0, h v0, h² a0, h² a1, h v1, p1 and their first and second derivatives in s.
+    let basis = [
+        [
+            1.0 - 10.0 * s3 + 15.0 * s4 - 6.0 * s5,
+            s - 6.0 * s3 + 8.0 * s4 - 3.0 * s5,
+            0.5 * s2 - 1.5 * s3 + 1.5 * s4 - 0.5 * s5,
+            0.5 * s3 - s4 + 0.5 * s5,
+            -4.0 * s3 + 7.0 * s4 - 3.0 * s5,
+            10.0 * s3 - 15.0 * s4 + 6.0 * s5,
+        ],
+        [
+            -30.0 * s2 + 60.0 * s3 - 30.0 * s4,
+            1.0 - 18.0 * s2 + 32.0 * s3 - 15.0 * s4,
+            s - 4.5 * s2 + 6.0 * s3 - 2.5 * s4,
+            1.5 * s2 - 4.0 * s3 + 2.5 * s4,
+            -12.0 * s2 + 28.0 * s3 - 15.0 * s4,
+            30.0 * s2 - 60.0 * s3 + 30.0 * s4,
+        ],
+        [
+            -60.0 * s + 180.0 * s2 - 120.0 * s3,
+            -36.0 * s + 96.0 * s2 - 60.0 * s3,
+            1.0 - 9.0 * s + 18.0 * s2 - 10.0 * s3,
+            3.0 * s - 12.0 * s2 + 10.0 * s3,
+            -24.0 * s + 84.0 * s2 - 60.0 * s3,
+            60.0 * s - 180.0 * s2 + 120.0 * s3,
+        ],
+    ];
+    let given = [
+        points[i].1[a],
+        h * speeds[i][a],
+        h * h * accelerations[i][a],
+        h * h * accelerations[i + 1][a],
+        h * speeds[i + 1][a],
+        points[i + 1].1[a],
+    ];
+    let at = |b: &[f64; 6]| b.iter().zip(&given).map(|(b, g)| b * g).sum::<f64>();
+    [at(&basis[0]), at(&basis[1]) / h, at(&basis[2]) / (h * h)]
 }
 
 /// A string of the config.
@@ -2554,6 +2638,25 @@ mod tests {
     /// Acceleration of axis 0 just before and just after point i of a curve through `points` with `speeds`.
     fn around(points: &[(f64, Vec<f64>)], speeds: &[Vec<f64>], i: usize) -> (f64, f64) {
         (hermite(points, speeds, i - 1, 0, points[i].0)[2], hermite(points, speeds, i, 0, points[i].0)[2])
+    }
+
+    /// The quintic of `Command::RatedTrajectory` is a polynomial of the fifth degree where the points' positions, speeds
+    /// and accelerations are its own: p(t) = 1 - 2 t + 3 t^2 + t^3 - 4 t^4 + 0.5 t^5, points at 0.2 s and 0.7 s, by hand
+    /// at 0.45 s (position, speed and acceleration of the polynomial), and the given values at both points.
+    #[test]
+    fn the_quintic_reproduces_a_fifth_degree_polynomial() {
+        let c = [1.0, -2.0, 3.0, 1.0, -4.0, 0.5];
+        let p = |t: f64, d: usize| -> f64 {
+            (d..6).map(|k| c[k] * (k - d + 1..=k).map(|f| f as f64).product::<f64>() * t.powi((k - d) as i32)).sum()
+        };
+        let points = vec![(0.2, vec![p(0.2, 0)]), (0.7, vec![p(0.7, 0)])];
+        let (speeds, accelerations) = (vec![vec![p(0.2, 1)], vec![p(0.7, 1)]], vec![vec![p(0.2, 2)], vec![p(0.7, 2)]]);
+        for t in [0.2, 0.45, 0.7] {
+            let got = quintic(&points, &speeds, &accelerations, 0, 0, t);
+            for d in 0..3 {
+                assert!((got[d] - p(t, d)).abs() < 1e-12, "at {t} s, derivative {d}: {} against {}", got[d], p(t, d));
+            }
+        }
     }
 
     /// The C2 spline through (0 s, 0 m), (1 s, 1 m) and (3 s, 1 m), at rest at both ends. Its one inner speed m solves

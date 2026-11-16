@@ -786,59 +786,59 @@ hoist 40:1 on an 80 mm drum (500 rad/m).
 
 ## Friction feedforward in the shipped configs
 
-`sim-cli analyze` of every shipped config with `effects.friction_feedforward = false` and with it on and `drive.friction_feedforward_model = "machine"` (15 November 2026): the following error while moving (`tracking_error_peak`, the tool's distance from the setpoint; `_angle_` for the axes in rad) and the settling at pick and place (`dwell_error_peak`, the second half of the dwells). Place in um, turn in mrad; "–" where the machine has none (no dwell in a conveyor or cam cycle). **On** marks where it is switched on as shipped. The velocity loop's margins do not change with a feedforward (`sim-cli margins` gives the same figures with it on and off), so every config keeps the margins it was tuned to: `sim-cli margins MACHINE --bands` of every config switched on gives at least 35.8° and 8.0 dB (rotary knife; the T-gantry 48.9° and 8.63 dB, the D4 40.4° and 8.92 dB).
+`sim-cli analyze` of every shipped config with `effects.friction_feedforward = false` and with it on and `drive.friction_feedforward_model = "machine"` (15 November 2026, re-run 17 November: `sim-cli analyze ID [--config FILE | --machine-file FILE] --set effects.friction_feedforward=false`, and `=true --set 'drive.friction_feedforward_model="machine"'`): the following error while moving (`tracking_error_peak`, the tool's distance from the setpoint; `_angle_` for the axes in rad) and the settling at pick and place (`dwell_error_peak`, the second half of the dwells). Place in um, turn in mrad; "–" where the machine has none (no dwell in a conveyor or cam cycle). **On** marks where it is switched on as shipped. The velocity loop's margins do not change with a feedforward (`sim-cli margins` gives the same figures with it on and off), so every config keeps the margins it was tuned to: `sim-cli margins MACHINE --bands` of every config switched on gives (17 November) the rotary knife 45.6° and 10.98 dB, the T-gantry 46.2° and 8.38 dB, the D4 45.9° and 8.92 dB (35.8° and 8.0 dB, 48.9° and 8.63 dB, 40.4° and 8.92 dB on 15 November; the other configs not re-run).
 
 | Config | Following off → on | Settling off → on | On |
 | --- | --- | --- | --- |
-| T-gantry | 194.9 → 178.2 | 47.4 → 42.9 | yes |
-| T-gantry conveyor | 671.1 → 659.2 | – | yes |
-| T-gantry EXCT-30 | 535.9 → 512.0 | 39.5 → 34.8 | yes |
+| T-gantry | 199.5 → 181.4 | 47.6 → 42.5 | yes |
+| T-gantry conveyor | 677.2 → 664.1 | – | yes |
+| T-gantry EXCT-30 | 541.7 → 518.0 | 39.6 → 35.0 | yes |
 | Single axis | 201.1 → 126.3 (characteristic 118.5) | 20.8 → 42.5 (characteristic 38.8) | no |
 | D3 | 1461 → 1131 | 305.2 → 179.3 | yes |
 | D3 conveyor | 1428 → 1194 | – | yes |
-| D2 | 1062 → 1047 | 369.4 → 210.2 | yes |
+| D2 | 1062 → 1047 | 369.5 → 210.4 | yes |
 | D2 conveyor | 1120 → 1080 | – | yes |
 | D4 | 3656 → 3491; 5.833 → 5.373 mrad | 388.0 → 320.0; 0.192 → 0.187 mrad | yes |
 | D4 conveyor | 3156 → 3064; 3.321 → 2.860 mrad | – | yes |
-| H4 | 2485 → 2313; 24.48 → 26.51 mrad | 435.9 → 365.9; 3.655 → 3.052 mrad | no (turn follows worse) |
+| H4 | 2485 → 2313; 24.47 → 26.51 mrad | 435.9 → 365.9; 3.656 → 3.052 mrad | no (turn follows worse) |
 | Linear delta | 609.3 → 312.2 | 74.2 → 112.7 | no |
 | Linear delta conveyor | 666.5 → 350.8 | – | yes |
 | Parallel SCARA | 1021 → 1040; 1.366 → 0.481 mrad | 303.0 → 163.9; 0.117 → 0.022 mrad | no (place follows worse) |
-| Screw axis | 82.3 → 30.8 | 46.2 → 6.9 | yes |
-| Rack axis | 117.5 → 49.4 | 62.9 → 8.1 | yes |
-| Linear motor axis | 43.5 → 39.7 | 24.5 → 6.6 | yes |
-| Rotary table | 2.621 → 2.541 mrad | 0.0364 → 0.0264 mrad | yes |
-| Six-axis arm (joints) | 4.164 → 4.150 mrad | 2.069 → 2.008 mrad | no (gain under 3 %; its tool-space configs follow worse) |
-| Arm, 5- and 7-axis arm in tool space | 5759 → 5734, 6467 → 6432, 5758 → 5732; 7.667 → 7.697, 8.827 → 8.850, 7.692 → 7.722 mrad | 2362 → 2348, 2368 → 2353, 2365 → 2351; 3.185 → 3.252, 3.150 → 3.183, 3.178 → 3.234 mrad | no |
-| SCARA | 156.6 → 20.5; 1.788 → 1.713 mrad | 73.6 → 9.8; 0.279 → 0.082 mrad | yes |
-| SCARA in tool space | 592.7 → 543.6; 1.508 → 1.369 mrad | 91.6 → 28.3; 0.0199 → 0.0011 mrad | yes |
-| Palletiser | 5906 → 5890; 2.770 → 2.720 mrad | 2537 → 2533; 0.0130 → 0.0153 mrad | no |
+| Screw axis | 83.1 → 30.9 | 45.1 → 7.7 | yes |
+| Rack axis | 118.2 → 50.0 | 61.7 → 7.9 | yes |
+| Linear motor axis | 43.5 → 39.6 | 24.5 → 6.6 | yes |
+| Rotary table | 2.584 → 2.505 mrad | 0.0340 → 0.0224 mrad | yes |
+| Six-axis arm (joints) | 4.453 → 4.413 mrad | 1.968 → 1.921 mrad | no (gain under 3 %; its tool-space configs follow worse) |
+| Arm, 5- and 7-axis arm in tool space | 5869 → 5856, 6671 → 6655, 5868 → 5855; 7.910 → 7.946, 9.127 → 9.165, 7.920 → 7.960 mrad | 2303 → 2278, 2278 → 2262, 2309 → 2283; 3.089 → 3.163, 2.979 → 3.071, 3.072 → 3.147 mrad | no |
+| SCARA | 166.7 → 28.6; 1.776 → 1.701 mrad | 70.9 → 8.8; 0.270 → 0.079 mrad | yes |
+| SCARA in tool space | 542.4 → 512.8; 1.566 → 1.264 mrad | 84.3 → 30.8; 0.0215 → 0.0020 mrad | yes |
+| Palletiser | 6173 → 6177; 2.672 → 2.630 mrad | 2309 → 2304; 0.0060 → 0.0059 mrad | no |
 | Slider crank (and cam) | 4.444 → 4.467 mrad (2.265 → 2.269) | 0.134 → 0.047 mrad | no |
-| Rotary knife | 9.059 → 8.855 mrad | 0.155 → 0.042 mrad | yes |
-| Rotary knife cam | 4.715 → 4.718 mrad | – | yes (as the rotary knife: the cam configs are the shipped one running its cam) |
-| Flying saw (and cam) | 457.6 → 455.4 (519.0 → 418.7) | 192.6 → 22.4 | characteristic, as before: 455.1 and 23.1 (418.5) |
+| Rotary knife | 12.31 → 12.07 mrad | 0.248 → 0.072 mrad | yes |
+| Rotary knife cam | 5.693 → 5.696 mrad | – | yes (as the rotary knife: the cam configs are the shipped one running its cam) |
+| Flying saw (and cam) | 381.5 → 369.6 (428.9 → 342.0) | 179.8 → 25.7 | characteristic, as before: 369.3 and 26.3 (341.9) |
 | Disc cam | 0.319 → 0.232 mrad | 0.228 → 0.024 mrad | yes |
 | Disc cam cam | 0.158 → 0.158 mrad | – | yes |
 | Hexapod | 27.2 → 10.9; 0.081 → 0.026 mrad | 15.7 → 1.5; 0.034 → 0.004 mrad | yes |
-| Planar cable robot | 707.0 → 666.7 | 153.5 → 137.9 | yes |
-| Spatial cable robot | 355.2 → 283.1; 2.161 → 1.594 mrad | 105.1 → 67.0; 0.836 → 0.624 mrad | yes |
+| Planar cable robot | 714.0 → 663.3 | 157.6 → 147.3 | yes |
+| Spatial cable robot | 356.9 → 300.2; 2.149 → 1.651 mrad | 90.6 → 66.4; 0.828 → 0.942 mrad (the turn settles worse with it since 17 November) | yes |
 
 The machine files (`machines/*.toml`, `sim-cli analyze --machine-file`) by the same rule. The T-gantry, D3 and planar delta files are their crates' machines and follow their configs (on); the single axis's stays off as its crate's. The netlist machine tells the same steady friction as the crate it mirrors, to 1e-9 (`the_netlist_machines_are_their_crates`).
 
 | Machine file | Following off → on | Settling off → on | On |
 | --- | --- | --- | --- |
-| `t-gantry.toml` (no frame, no leaning Z) | 113.3 → 104.3 | 46.4 → 41.1 | yes |
+| `t-gantry.toml` (no frame, no leaning Z) | 115.5 → 105.3 | 46.2 → 40.9 | yes |
 | `delta-d3.toml`, `planar-delta.toml` | as the D3 and D2 above | | yes |
-| `screw-portal.toml` | 143.4 → 98.9 | 31.4 → 20.9 | yes |
-| `xyz-portal.toml` | 141.8 → 103.6 | 30.0 → 22.3 | yes |
+| `screw-portal.toml` | 143.4 → 99.6 | 31.4 → 22.1 | yes |
+| `xyz-portal.toml` | 141.8 → 104.2 | 29.9 → 22.3 | yes |
 | `corexy.toml` | 77.0 → 49.1 | 15.6 → 22.0 | no |
 | `h-bot.toml` | 119.4 → 108.8 | 13.1 → 18.7 | no |
 | `dual-gantry.toml` | 124.3 → 82.8 | 14.0 → 26.4 | no |
 | `rack-gantry.toml` | 81.5 → 56.7 | 14.7 → 22.3 | no |
-| `portal-c.toml` | 177.0 → 144.0; 0.576 → 0.587 mrad | 34.2 → 22.2; 7.3e-5 → 8.0e-5 mrad | no |
-| `five-axis.toml` | 201.2 → 131.5; 0.150 → 0.155 mrad | 34.1 → 32.4; 0.055 → 0.057 mrad | no |
-| `five-axis-table.toml` | 189.0 → 112.6; 0.088 → 0.099 mrad | 30.4 → 34.3; 0.022 → 0.010 mrad | no |
-| `induction-lift.toml` | 284.6 → 291.3 | 217.9 → 206.8 | no |
+| `portal-c.toml` | 177.0 → 144.6; 0.576 → 0.587 mrad | 34.2 → 23.5; 7.3e-5 → 8.0e-5 mrad | no |
+| `five-axis.toml` | 201.2 → 132.2; 0.150 → 0.154 mrad | 34.1 → 32.4; 0.055 → 0.059 mrad | no |
+| `five-axis-table.toml` | 189.0 → 112.6; 0.088 → 0.099 mrad | 30.4 → 34.4; 0.022 → 0.010 mrad | no |
+| `induction-lift.toml` | 284.6 → 291.5 | 217.9 → 202.8 | no |
 | `stepper-axis.toml`, `pneumatic-axis.toml`, `scissor-lift.toml` | unchanged (15.2 to 206.2) | unchanged | no |
 
 Where it settles worse (the single axis, the linear delta: belt axes whose guides have a LuGre contact), the cause is not worked out; the single axis does the same with its shipped characteristic, so it is not the machine model's value. The guides' feedforward fades in over their Stribeck speed (`Lugre::feedforward`), so that a stop puts no torque step on the axis (the plain steady value changed the figures above by under 10 %). The arm's joints, the slider crank and the palletiser change by under 3 %.
@@ -991,8 +991,10 @@ and the speed loop's gains read off the S-profile (below), not the dSPACE board'
 Fitted again on the S-profile, the config lands on the measurement within its standard errors but for the mass and the
 held force: viscous 766 against 773 ± 24 N s/m, Coulomb 320 against 324 ± 7 N, constant 15.6 against 15.2 ± 1.5 N;
 moved mass 550 against 496 ± 3 kg, held force −162 against −242 ± 6 N (before the screw's efficiency: viscous 792,
-Coulomb 325, moved mass 584 kg). The checks: moved mass 562 against 578 ± 8 kg on the sine, 557 against 529 ± 3 kg at
-constant speed (555 and 572 before).
+Coulomb 325, moved mass 584 kg). The checks (re-run 17 November 2026, `sim-cli fit screw-axis --config machine.toml --trace FILE --map map.toml`):
+moved mass 546 against 500 ± 135 kg on the sine, 545 against 510 ± 11 kg at constant speed (562 against 578 ± 8 and
+557 against 529 ± 3 as written on 16 November, before the error became that of fitted − config and the gearbox and
+friction fixes since; 555 and 572 before the screw's efficiency).
 
 **Not changed, and why.** The moved mass: the fit says 54 kg less than the config's 550 kg (92 kg less than 584 before
 the screw's efficiency). The table's 400 kg is the source's, and the sweeps put the load side at 0.0173 to 0.0214 kg m²
@@ -1003,7 +1005,7 @@ and the efficiency acts on the whole force the screw passes, inertial force incl
 (`Gearbox::loss_factor`). Neither is missing; both make the model heavier, not lighter. The efficiency was the wrong
 figure (above). The shaft: the remaining 54 kg is three fifths of the shaft's 88 kg, which fits a threaded part lighter
 than a solid shaft at the nominal diameter and journals thinner than it, but the source gives neither, and the three
-recordings disagree by more (moved mass 496, 578 and 529 kg). A carriage of 342 kg would make the torques fit and
+recordings do not pin it closer (moved mass 496 ± 3, 500 ± 135 and 510 ± 11 kg). A carriage of 342 kg would make the torques fit and
 would contradict the sweeps. The first mode stays at 137.02 Hz (`sim-cli modes`): the efficiency does not enter it.
 Against it, the torque per force at the table (below) reads as an efficiency of 0.77 to 0.81; at that efficiency the
 table alone would be 494 to 519 kg at the motor, more than the fit's 496 kg for everything, so the inertia does not
@@ -1016,11 +1018,11 @@ in sim-components):
 
 | Value | S-profile (fit) | Sine (check) | Constant speed (check) | Replay of the config now (S-profile, sine, constant) |
 | --- | --- | --- | --- | --- |
-| Coulomb, guides, nut and motor together, at the table | 324 ± 7 N | 315 ± 4 N | 426 ± 1 N (with the viscous share at 0.1 m/s) | 320, 318, 396 N |
-| Viscous | 773 ± 24 N s/m | 1222 ± 96 N s/m | (one speed: in the Coulomb value) | 766, 801 |
-| Held at rest after the last move | −242 ± 6 N | +230 ± 7 N | +354 ± 1 N | −162, +227, −184 N |
-| Breakaway (1 to 5 % of top speed, slowing) | (too few rows) | 255 ± 1 N | (too few rows) | (−), 305 |
-| Presliding stiffness σ, from the turn at reversals | (one reversal at 1 m/s², crossed in 2 ms: no row; 7.0e6 N/m from it alone) | 3.1e7 ± 0.6e7 N/m (four) | (one reversal: no row; 1.9e7 N/m from it alone) | (−), 1.8e7, (−) |
+| Coulomb, guides, nut and motor together, at the table | 324 ± 7 N | 317 ± 10 N | 427 ± 1 N (with the viscous share at 0.1 m/s) | 320, 319, 396 N |
+| Viscous | 773 ± 24 N s/m | 1169 ± 211 N s/m | (one speed: in the Coulomb value) | 766, 776 |
+| Held at rest after the last move | −242 ± 6 N | +231 ± 7 N | +355 ± 1 N | −162, +227, −184 N |
+| Breakaway (1 to 5 % of top speed, slowing) | (too few rows) | 252 ± 1 N | (too few rows) | (−), 304 |
+| Presliding stiffness σ, from the turn at reversals | (one reversal at 1 m/s², crossed in 2 ms: no row; 7.0e6 N/m from it alone) | 3.2e7 ± 0.04e7 N/m (four) | (one reversal: no row; 1.9e7 N/m from it alone) | (−), 1.8e7, (−) |
 
 - **Guides against nut.** The motor torque cannot tell them apart. The source's nut force sensors (`F_nut_sum`, now a
   column of the CSV) can: regressed on the S-profile, the torque is 0.00829 N m per N of nut force plus 1.48 N m of
@@ -1031,12 +1033,12 @@ in sim-components):
   400 / 264 the guides' share is 89 N, 0.63 N m.
 - **Stiction above Coulomb: none the data show.** On the sine, with the linear drive's force (below) and the inertia
   taken off by hand, the friction while slowing is 1.97 to 2.25 N m between 0.5 and 8 mm/s and 2.02 to 2.50 N m from
-  8 to 65 mm/s; the breakaway row's 255 N is the drive's force at the sine's ends (−75 N at 350 mm, +67 N at 150 mm,
+  8 to 65 mm/s; the breakaway row's 252 N is the drive's force at the sine's ends (−75 N at 350 mm, +67 N at 150 mm,
   both against the motion there), which the fit does not know. The S-profile has too few slow rows. So
   `slide.friction_breakaway_n` is the Coulomb level, and its Stribeck speed plays no part.
 - **The turn at a reversal.** At the sine's four reversals the friction (inertia and the drive's force off by hand)
   turns from +2.0 to −1.5 N m over 80 ms and 125 µm, through zero after 13.5 to 15.6 µm: σ = 315 N ln 2 / x = 1.4e7 to
-  1.6e7 N/m. The fit's 3.1e7 does not take the drive's force off (it pushes against the motion at both ends of the sine and
+  1.6e7 N/m. The fit's 3.2e7 does not take the drive's force off (it pushes against the motion at both ends of the sine and
   moves the crossing to 7 µm); the config's 2e7 lies between, and its replay gives 1.8e7 by the same estimate (2.0e7 before the screw's lead
   efficiency). Dahl's law
   with 1.5e7 would be within 1 % of the far level after 125 µm; the measured friction is at 68 %: it approaches the
@@ -1185,7 +1187,7 @@ The default configs of both machines are placeholders throughout.
 
 **Effect views.** The torque parts are a definition: the rest is what inertia, gravity and friction leave, so the sum cannot be wrong, and inertia is taken at the load's acceleration (see the model reference for why). The hand calculations check the three named parts where they can be worked out; a measurement could not check them, since no sensor sees a torque split into parts. The energy budget's electrical side is checked against itself (the integration's error), not against a measured supply.
 
-**Drive stability.** With the winding current integrated together with the mechanics (12 November), the old velocity gain of 0.08 N m s/rad left the default configs little margin (single axis 1° and 0.3 dB, T-gantry 12° and 2 dB, measured with `sim-cli margins`); the old drive model had hidden this behind a numerical phase lead. The default configs now have 0.025 (single axis) and 0.04 (T-gantry), with at least 35° and 6 dB in every one-at-a-time bounds run, with friction on and off; `across_the_bounds::*` (control, a test per config, run by CI; `the_shipped_velocity_loops_keep_their_margins` checks the configs as they are) holds that, and since its retuning from 0.6 to 0.45 the EXCT-30 too (measured 38.6° and 8.3 dB; it had 29.6° and 5.8 dB). The margins are measured on the simulated loop, at one amplitude, with the machine holding its start pose; 60 points from 10 Hz to 2 kHz can miss a sharp resonance between them. They are not checked against a real drive's measurement function. The sampled bands (`--samples`) are not run for the margins.
+**Drive stability.** With the winding current integrated together with the mechanics (12 November), the old velocity gain of 0.08 N m s/rad left the default configs little margin (single axis 1° and 0.3 dB, T-gantry 12° and 2 dB, measured with `sim-cli margins`); the old drive model had hidden this behind a numerical phase lead. The default configs now have 0.025 (single axis) and 0.04 (T-gantry), with at least 35° and 6 dB in every one-at-a-time bounds run, with friction on and off; `across_the_bounds::*` (control, a test per config, run by CI; `the_shipped_velocity_loops_keep_their_margins` checks the configs as they are) holds that, and since its retuning from 0.6 to 0.45 the EXCT-30 too (measured 39.4° and 8.46 dB on 17 November, `sim-cli margins t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --set effects.motor_friction=false --set effects.guide_friction=false`; 38.6° and 8.3 dB before; it had 29.6° and 5.8 dB). The margins are measured on the simulated loop, at one amplitude, with the machine holding its start pose; 60 points from 10 Hz to 2 kHz can miss a sharp resonance between them. They are not checked against a real drive's measurement function. The sampled bands (`--samples`) are not run for the margins.
 
 **Combinations.** Each effect has a test of its own. That all effects together give the right result is checked only by energy conservation (losses off), step-size convergence and determinism, not against an independent number.
 

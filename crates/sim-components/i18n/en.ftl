@@ -306,6 +306,7 @@ quantity-gearbox-torque = Torque at the gearbox output
 quantity-guide-load = Guide load
 fit-axis-skipped = Axis { $arg }: not fitted. The trace has to move it in both directions.
 fit-mass = Moved mass, axis { $arg }. Add this to the masses that move with the axis. The trace cannot tell load mass from rotor and pulley inertia.
+fit-mass-spread = The moved mass of axis { $arg } varies by this much over the poses of the trace (standard deviation, by the config's inertia), the larger part of its error: the fitted mass is its mean, and its error holds this spread. Correct the mass part that changes with the pose, or fit in the motors' coordinates, which follow it.
 fit-viscous = Viscous friction, axis { $arg }. Scale the viscous friction of the axis's guide and of the motor shafts by this factor; the trace cannot tell the two apart.
 fit-coulomb = Coulomb friction, axis { $arg }. Scale the Coulomb friction and stiction of the axis's guide and of the motor shafts by this factor; the trace cannot tell the two apart.
 fit-constant = Constant force, axis { $arg }. The measured axis needs this much more than the config gives: a weight, an incline or a cable pull the config lacks.

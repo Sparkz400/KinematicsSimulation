@@ -641,7 +641,7 @@ fn replay_refuses_a_trace_too_short_to_replay() {
                 speed: vec![0.0; rows],
                 torque: vec![0.0; rows],
             });
-            let trace = Trace { time: (0..rows).map(|i| i as f64 * 1e-3).collect(), motors: motors.collect() };
+            let trace = Trace { time: (0..rows).map(|i| i as f64 * 1e-3).collect(), motors: motors.collect(), ..Trace::default() };
             let replayed = replay(entry, &cfg, &trace);
             // Since 13 November a transformation that is not linear (the delta, the SCARA) replays as well.
             if rows < 4 {

@@ -28,6 +28,10 @@ pub struct AxisFit {
     /// What it gives on the trace, and the standard error of that.
     pub fitted: [f64; 4],
     pub error: [f64; 4],
+    /// How much the moved mass varies over the poses of the trace's rows that the fit takes (the config's inertia there,
+    /// as `mass_spread` takes it), in the mass's unit: in `error[0]` (in quadrature), and named in the advice where it is
+    /// the larger part of it.
+    pub mass_spread: f64,
     /// Where the payload was picked or dropped during the trace (`fit_rigid`), rising: the time and its standard error
     /// in s, then the change of the payload's factor there (+1 for the config's payload picked, −1 for it dropped) and
     /// its standard error. With steps, `fitted` holds the values before the first.
@@ -57,14 +61,17 @@ impl AxisFit {
         let factor = |q: usize| {
             format!("{axis}: × {:.3} ± {:.3}", self.fitted[q] / self.config[q], (self.error[q] / self.config[q]).abs())
         };
+        let spread = (self.mass_spread > (self.error[0].powi(2) - self.mass_spread.powi(2)).max(0.0).sqrt())
+            .then(|| ("fit-mass-spread", format!("{axis}: ± {:.2e} {}", self.mass_spread, self.units[0])));
         [("fit-mass", change(0)), ("fit-viscous", factor(1)), ("fit-coulomb", factor(2)), ("fit-constant", change(3))]
-        .into_iter()
-        // Viscous friction the trace does not tell from Coulomb friction (`rigid_values`) has no advice.
-        .filter(|(key, _)| *key != "fit-viscous" || (self.fitted[1].is_finite() && self.config[1].is_finite()))
-        .chain(self.payload_steps.iter().map(|(time, time_error, change, error)| {
-            ("fit-axis-payload-step", format!("{axis}: {time:.3} s ± {time_error:.3}, {change:+.3} ± {error:.3}"))
-        }))
-        .collect()
+            .into_iter()
+            .chain(spread)
+            // Viscous friction the trace does not tell from Coulomb friction (`rigid_values`) has no advice.
+            .filter(|(key, _)| *key != "fit-viscous" || (self.fitted[1].is_finite() && self.config[1].is_finite()))
+            .chain(self.payload_steps.iter().map(|(time, time_error, change, error)| {
+                ("fit-axis-payload-step", format!("{axis}: {time:.3} s ± {time_error:.3}, {change:+.3} ± {error:.3}"))
+            }))
+            .collect()
     }
 }
 
@@ -91,6 +98,68 @@ fn axis_view(machine: &dyn Machine, trace: &Trace) -> Vec<(Vec<f64>, Vec<f64>)> 
         }
     }
     out
+}
+
+/// The force on `axis` per unit of each axis's acceleration at a pose: the motor torques per unit of that acceleration
+/// (`Machine::feedforward_torque`, as `trace::per_axis_fit` probes them) through the transformation as `axis_view` takes
+/// a force. On the axis's own acceleration its moved mass, on the others' what their motion pushes on it.
+fn inertia_row(machine: &dyn Machine, pose: &[f64], axis: usize) -> Vec<f64> {
+    let (n, motors, h) = (pose.len(), machine.motors().len(), 1e-3);
+    let (mut rest, mut moved, mut base, mut shifted) =
+        (vec![0.0; motors], vec![0.0; motors], vec![0.0; motors], vec![0.0; motors]);
+    let unit = |i: usize| (0..n).map(|j| if j == i { 1.0 } else { 0.0 }).collect::<Vec<f64>>();
+    let ahead: Vec<f64> = pose.iter().zip(unit(axis)).map(|(p, a)| p + h * a).collect();
+    machine.inverse(pose, &mut base);
+    machine.inverse(&ahead, &mut shifted);
+    machine.feedforward_torque(pose, &vec![0.0; n], &mut rest);
+    (0..n)
+        .map(|i| {
+            machine.feedforward_torque(pose, &unit(i), &mut moved);
+            (0..motors).map(|k| (moved[k] - rest[k]) * (shifted[k] - base[k]) / h).sum()
+        })
+        .collect()
+}
+
+/// How far the inertial force on `axis` strays from one constant mass over the trace's rows that the fit takes
+/// (`samples`, every tenth): per row the force the config's inertia puts on the axis at that row's pose and with every
+/// axis's acceleration there (`inertia_row`, the accelerations from `travel` smoothed as `rigid_samples` smooths them),
+/// less the mass that fits those forces best times the axis's acceleration, as a mass: sqrt(Σ r² / Σ a²). 0 on a machine
+/// whose inertia does not change with the pose and does not couple its axes; on one the fit per axis takes although it
+/// does (up to `PER_AXIS_SPREAD`: the T-gantry's belt, the disc cam without its payload) the fitted mass is a mean over
+/// the trace, and what the config's mass is to change by is known no better than this.
+fn mass_spread(
+    machine: &dyn Machine,
+    trace: &Trace,
+    travel: &[Vec<f64>],
+    samples: &[Sample],
+    axis: usize,
+    h: usize,
+) -> f64 {
+    let time = &trace.time;
+    let mut pose = vec![0.0; travel.len()];
+    let forces: Vec<(f64, f64)> = samples
+        .iter()
+        .step_by(10)
+        .map(|(row, x, _)| {
+            machine.forward(&trace.motors.iter().map(|m| m.angle[*row]).collect::<Vec<f64>>(), &mut pose);
+            let acc = |i: usize| {
+                let slope = |a: usize| (travel[i][a + 1] - travel[i][a]) / (time[a + 1] - time[a]);
+                triangle(&|a| 2.0 * (slope(a) - slope(a - 1)) / (time[a + 1] - time[a - 1]), h, *row)
+            };
+            let force = inertia_row(machine, &pose, axis)
+                .iter()
+                .enumerate()
+                .map(|(i, m)| m * if i == axis { x[0] } else { acc(i) })
+                .sum::<f64>();
+            (force, x[0])
+        })
+        .collect();
+    let squares: f64 = forces.iter().map(|(_, a)| a * a).sum();
+    if squares <= 0.0 {
+        return 0.0;
+    }
+    let mass = forces.iter().map(|(f, a)| f * a).sum::<f64>() / squares;
+    (forces.iter().map(|(f, a)| (f - mass * a).powi(2)).sum::<f64>() / squares).sqrt()
 }
 
 /// Least squares of force = mass * acceleration + viscous * speed + coulomb * sign(speed) + constant + Σ the `extra`
@@ -412,7 +481,11 @@ pub fn fit_rigid(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Ve
             let replay_fit = rigid_values(&replayed, per, Some(&fit.basis))?;
             let share = difference_share(&fit.residuals, &replay_fit.residuals);
             let values = fit.values;
-            let errors: Vec<f64> = fit.errors.iter().map(|e| e * share).collect();
+            let mut errors: Vec<f64> = fit.errors.iter().map(|e| e * share).collect();
+            // The mass is the mean over the trace's poses of an inertia that may vary with them (`PER_AXIS_SPREAD`): its
+            // spread there, in the mass's error.
+            let mass_spread = mass_spread(machine.as_ref(), trace, &measured_travel, &samples, axis, h);
+            errors[0] = errors[0].hypot(mass_spread);
             let four = |v: &[f64]| -> [f64; 4] { std::array::from_fn(|q| v[q]) };
             let own = four(&replay_fit.values);
             let fitted = friction_details(&trace.time, &measured.0, &measured.1, &measured_travel[axis], &values);
@@ -429,6 +502,7 @@ pub fn fit_rigid(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Ve
                 config: own,
                 fitted: four(&values),
                 error: four(&errors),
+                mass_spread,
                 details,
                 units: fit_units(machine.axes()[axis].unit),
                 payload_steps: steps
@@ -1483,6 +1557,7 @@ mod tests {
             config: values.clone().try_into().unwrap(),
             fitted: values.try_into().unwrap(),
             error: [0.0; 4],
+            mass_spread: 0.0,
             payload_steps: Vec::new(),
             details: Vec::new(),
             units: fit_units("m"),

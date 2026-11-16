@@ -3,7 +3,7 @@
 //! payload picked during it, with noise on it, fitted against the unchanged config.
 
 use sim_components::Command;
-use sim_components::identify::{JointFit, JointValue, fit_joints};
+use sim_components::identify::{JointFit, JointValue, fit_joints, fit_rigid};
 use sim_components::sim::Sim;
 use sim_components::trace::{Trace, per_axis_fit};
 use sim_core::testkit::Noise;
@@ -405,6 +405,77 @@ fn two_payload_steps_in_one_trace_are_found_with_when() {
     }
     let steps: Vec<&str> = fit.advice().iter().filter(|(key, _)| *key == "fit-payload-step").map(|_| "step").collect();
     assert_eq!(steps.len(), 2);
+}
+
+/// The trace of `cfg`'s cycle as `sim-cli run --cycle --out` writes it: every signal to 9 digits, a row per millisecond,
+/// for 6.2 s, read back as a trace (with the tool's speed and acceleration setpoints, `Trace::tool_rates`).
+fn run_trace(entry: &MachineEntry, cfg: &Config) -> Trace {
+    let mut sim = Sim::new(entry, cfg).unwrap();
+    sim.command(Command::StartCycle).unwrap();
+    let header: Vec<String> = sim.signal_infos().iter().map(|s| format!("{}[{}]", s.id, s.unit)).collect();
+    let (mut csv, mut sample) = (header.join(",") + "\n", Vec::new());
+    let every = (1e-3 / sim.dt).round() as u64;
+    for step in 0..=(6.2 / sim.dt).round() as u64 {
+        if step % every == 0 {
+            sim.sample(&mut sample);
+            csv += &(sample.iter().map(|v| format!("{v:.9e}")).collect::<Vec<_>>().join(",") + "\n");
+        }
+        sim.step();
+    }
+    let trace = Trace::parse(&csv, sim.machine.motors()).unwrap();
+    assert_eq!(trace.tool_rates.len(), sim.machine.axes().len());
+    trace
+}
+
+/// A run's own trace (`run_trace`), fitted against the config that made it, lands within two standard errors in every
+/// value: the file carries the tool's speed and acceleration setpoints, which the replay runs
+/// (`Command::RatedTrajectory`). From the position setpoints alone, their slopes between the rows in place of the run's
+/// own (as a drive's trace has to be replayed), the D3's Coulomb friction of motors 2 and 3 came out 5.7 standard errors
+/// off (16 November 2026); with them, 0.00.
+#[test]
+fn a_run_s_own_trace_fits_its_config_within_two_standard_errors() {
+    let entry = sim_machines::find("delta-d3").unwrap();
+    let mut cfg = entry.config();
+    cfg.set_text("effects.payload = false").unwrap();
+    cfg.set_text("effects.encoder_resolution = false").unwrap();
+    let fit = fit_joints(entry, &cfg, &run_trace(entry, &cfg)).unwrap().unwrap();
+    for v in &fit.values {
+        assert!(
+            (v.fitted - v.config).abs() <= 2.0 * v.error,
+            "{}: {} against {} ± {}",
+            v.name(),
+            v.fitted,
+            v.config,
+            v.error
+        );
+    }
+}
+
+/// The disc cam without its payload is fitted per axis (`per_axis_fit`: its inertia varies by 4.1 % over the range, the
+/// follower's mass through the cam's slope), and its fitted moved mass is a mean over the trace's poses: its error holds
+/// how far the inertia strays from one constant over them (`AxisFit::mass_spread`, 2.49e-4 kg m², 0.6 % of the mass),
+/// named in the advice where that is the larger part. A machine whose disc is 0.002 kg m² heavier than the config's
+/// (0.0121 for 0.0101): the change found is +0.002024 kg m², 0.1 of its error; with the noise-free trace's own error
+/// alone (some 3e-6 kg m², 16 November 2026) it was 8 errors off.
+#[test]
+fn a_mass_that_varies_over_the_poses_carries_its_spread_in_its_error() {
+    let entry = sim_machines::find("disc-cam").unwrap();
+    let mut cfg = entry.config();
+    cfg.set_text("effects.payload = false").unwrap();
+    cfg.set_text("effects.encoder_resolution = false").unwrap();
+    let mut truth = cfg.clone();
+    truth.set_text("disc.inertia_kgm2 = 0.0121").unwrap();
+    let fit = fit_rigid(entry, &cfg, &run_trace(entry, &truth)).unwrap()[0].clone().unwrap();
+    let change = fit.fitted[0] - fit.config[0];
+    assert!((change - 0.002).abs() < 2.0 * fit.error[0], "{change} ± {}", fit.error[0]);
+    assert!(fit.mass_spread > 1e-4 && fit.mass_spread < 4e-4 && fit.error[0] >= fit.mass_spread, "{fit:?}");
+    assert!(fit.advice("disc").iter().any(|(key, _)| *key == "fit-mass-spread"));
+    // The single axis's inertia does not change with its pose: nothing added.
+    let single = sim_machines::find("single-axis").unwrap();
+    let mut cfg = single.config();
+    cfg.set_text("effects.encoder_resolution = false").unwrap();
+    let fit = fit_rigid(single, &cfg, &run_trace(single, &cfg)).unwrap()[0].clone().unwrap();
+    assert!(fit.mass_spread < 1e-9 * fit.fitted[0], "{}", fit.mass_spread);
 }
 
 /// The indexing machines' reflected inertia varies 5 to 7 times over the cam's turn, but 35 % and 60 % of the range both

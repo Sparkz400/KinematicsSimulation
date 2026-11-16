@@ -306,6 +306,7 @@ quantity-gearbox-torque = Getriebe-Abtriebsmoment
 quantity-guide-load = Führungsbelastung
 fit-axis-skipped = Achse { $arg }: nicht angepasst. Die Aufzeichnung muss sie in beide Richtungen bewegen.
 fit-mass = Bewegte Masse, Achse { $arg }. Um diesen Betrag sind die mit der Achse bewegten Massen zu ändern. Lastmasse und die Trägheit von Rotor und Scheibe kann die Aufzeichnung nicht trennen.
+fit-mass-spread = Die bewegte Masse der Achse { $arg } schwankt über die Stellungen der Aufzeichnung um so viel (Standardabweichung, nach der Trägheit der Konfiguration), der größere Teil ihres Fehlers: die angepasste Masse ist ihr Mittel, und ihr Fehler enthält diese Streuung. Den mit der Stellung veränderlichen Massenanteil korrigieren oder in den Koordinaten der Motoren anpassen, die ihm folgen.
 fit-viscous = Viskose Reibung, Achse { $arg }. Die viskose Reibung der Führung der Achse und der Motorwellen ist mit diesem Faktor zu multiplizieren; trennen kann die Aufzeichnung beide nicht.
 fit-coulomb = Coulomb-Reibung, Achse { $arg }. Coulomb- und Haftreibung der Führung der Achse und der Motorwellen sind mit diesem Faktor zu multiplizieren; trennen kann die Aufzeichnung beide nicht.
 fit-constant = Konstante Kraft, Achse { $arg }. So viel mehr braucht die gemessene Achse als die Konfiguration: ein Gewicht, eine Neigung oder ein Kabelzug, die der Konfiguration fehlen.
