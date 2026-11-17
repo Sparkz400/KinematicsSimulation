@@ -263,7 +263,7 @@ pub trait Machine: Send {
         self.rigid_tensions(tool_pos, tool_acc, out)
     }
     /// The band [least, most] (N) the time-optimal plan keeps `rigid_tensions` within, where the machine has it from
-    /// its own parts (a cable robot's cables); `None`: `ratings.belt_min_tension_n` and `belt_max_tension_n`.
+    /// its own parts (cables between winches and a platform); `None`: `ratings.belt_min_tension_n` and `belt_max_tension_n`.
     fn tension_band(&self) -> Option<[f64; 2]> {
         None
     }

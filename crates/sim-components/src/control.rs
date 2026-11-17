@@ -756,7 +756,7 @@ impl Controller {
         }
         // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
         // whatever the room (friction, the belt's vibration), which is roughly absolute, not a share of the room.
-        // A machine with a band of its own (a cable robot's cables) gives it; the ratings otherwise.
+        // A machine with a band of its own (cables between winches and a platform) gives it; the ratings otherwise.
         let band = machine.tension_band().map_or_else(
             || [cfg.f64("ratings.belt_min_tension_n").ok(), cfg.f64("ratings.belt_max_tension_n").ok()],
             |[low, high]| [Some(low), Some(high)],
