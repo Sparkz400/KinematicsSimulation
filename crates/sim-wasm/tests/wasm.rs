@@ -215,6 +215,40 @@ fn machine_files_are_listed_handed_in_and_run() {
     assert!(error.contains(&format!("broken.toml:{line}")) && error.contains("no_such_key"), "{error}");
 }
 
+/// A JSON machine file is read as the same machine as its TOML text (`sim_machines::json_to_toml` converts it): the same
+/// sizing check; a broken one is refused with its file name.
+#[test]
+fn a_json_machine_file_is_the_same_machine() {
+    let text = include_str!("../../../machines/single-axis.toml");
+    let value: toml::Value = toml::from_str(text).unwrap();
+    let as_json = serde_json::to_string(&value).unwrap();
+    let loaded = handle(4, &format!("mine.json\nen\n{as_json}")).unwrap();
+    assert!(loaded.starts_with("{\"id\":\"upload:mine.json\""), "{loaded}");
+    assert_eq!(handle(2, "upload:mine.json\nen\n").unwrap(), handle(2, "file:single-axis.toml\nen\n").unwrap());
+    assert!(handle(4, "broken.json\nen\n{\"machine\": ").unwrap_err().contains("line"));
+}
+
+/// The scopes of a path's run: one row a millisecond from the start of the path to 0.3 s after its end, time from 0.
+#[test]
+fn scopes_of_a_path_run_to_its_end() {
+    let entry = sim_machines::MACHINES[1];
+    let path = "line,0.5\nline,0.2\n";
+    let answer = json(&handle(10, &format!("{}\nen path\n\n---\n{path}", entry.id)).unwrap());
+    let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+    let end = sim.plan_path(&sim_components::path::parse(path).unwrap(), false).unwrap().last().unwrap().0;
+    let time = answer["time"].as_array().unwrap();
+    // The last row is the last whole millisecond within the path and the rest, and the first is the first one.
+    let (first, last) = (time[0].as_f64().unwrap(), time.last().unwrap().as_f64().unwrap());
+    assert!((first - 1e-3).abs() < 1e-9 && (last - (end + 0.3)).abs() < 2e-3, "{first} {last} {end}");
+    assert!(answer["motors"][0]["data"][1].as_array().unwrap().iter().any(|v| v.as_f64().is_some_and(|v| v != 0.0)));
+}
+
+/// A fit without a trace or a sweep says so.
+#[test]
+fn fit_wants_a_trace_or_a_sweep() {
+    assert!(handle(6, &format!("{}\nen\n\n---\n\n%%%\n\n%%%\n", first())).is_err());
+}
+
 /// The second machine's path from 0.1 m (its start pose) to 0.5 m and back to 0.2 m: the sizing check of the path is
 /// `analyse_trajectory` of the same planned poses, and the 3D view runs it to its end and stands where a native run
 /// of it stands.
