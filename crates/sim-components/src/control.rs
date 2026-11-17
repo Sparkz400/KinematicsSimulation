@@ -116,14 +116,32 @@ struct ShaperMode {
 const SHAPER_RAMP_RATE: f64 = 0.1;
 
 /// The motion that made the planned setpoints from the profile tick `first` on, its start ticks as it took them (on a
-/// conveyor with its pass and the simulated time at `first`): the input shaper reads the plan off it between two
-/// cycles. `key` tells it from the one before without comparing their curves (`plan_key`).
+/// conveyor with its pass and the simulated time at `first`, on a cam with the machine's cam curve then): the input
+/// shaper reads the plan off it between two cycles. `key` tells it from the one before without comparing their curves
+/// (`plan_key`).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Plan {
     first: u64,
     key: [u64; 4],
     motion: Motion,
     pass: Option<(Pass, f64)>,
+    #[serde(skip)]
+    cam: KeptCurve,
+    /// Noted after a changed config: the profile tick, between two cycles, from which it holds, the moment of the
+    /// change. Before it the plan noted before holds, also in the cycle that ends with `first`.
+    #[serde(default)]
+    from: Option<f64>,
+}
+
+/// A cam's curve kept with a `Plan` (`Machine::cam_curve`), shared with every copy of the controller. A closure is not
+/// saved with the controller's state: a plan read back from it reads the machine's cam as it is then.
+#[derive(Clone, Default)]
+struct KeptCurve(Option<sim_core::CamCurve>);
+
+impl std::fmt::Debug for KeptCurve {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "KeptCurve(Some)" } else { "KeptCurve(None)" })
+    }
 }
 
 /// The path of a cycle segment through its via points (`via` in `[[cycle.segment]]`): a line to the first, a smooth
@@ -288,6 +306,13 @@ pub struct Controller {
     /// The motions that made the stored setpoints (`history`), oldest first.
     #[serde(default)]
     plans: std::collections::VecDeque<Plan>,
+    /// A config changed between two profile cycles: the moment, in profile ticks, from which the plan's next motion is
+    /// noted anew (`Plan::from`).
+    #[serde(default)]
+    plan_changed_at: Option<f64>,
+    /// The base step `update` ran last.
+    #[serde(default)]
+    base_step: u64,
     /// The motion law of moves (`profile.shape`, `deceleration_ratio`, `vertical_axis`, `up_acceleration_ratio`).
     law: MotionLaw,
     /// A trajectory's curve: the C2 cubic spline (`profile.trajectory_spline = "c2"`), or the Hermite cubic with the
@@ -465,6 +490,8 @@ impl Controller {
             shaper_ramps: Vec::new(),
             shaper_targets: None,
             plans: Default::default(),
+            plan_changed_at: None,
+            base_step: 0,
             law: MotionLaw::default(),
             spline_c2: true,
             fieldbus_delay: 0,
@@ -936,6 +963,15 @@ impl Controller {
             (*speed, *ramp) = (new.speed, new.ramp_s);
         }
         self.cam = machine.cam();
+        // The plan of the next cycle is noted anew with the new machine, as from the next base step: a cam's curve may
+        // have changed under the same motion. (The profile cycle under way began at the base step of `clock`; in new
+        // profile ticks with a changed cycle.) A controller being built has no plan yet.
+        if !self.plans.is_empty() {
+            let (old_steps, cycle_ratio) = (self.n_profile as f64, self.profile_cycle / profile_cycle);
+            let tick_step = (self.clock * old_steps / self.profile_cycle).round();
+            let into = ((self.base_step + 1) as f64 - tick_step).max(0.0);
+            self.plan_changed_at = Some(self.tick as f64 + into / old_steps * cycle_ratio);
+        }
         // The valves keep their commands; a machine with other valves starts them as it says.
         let valves = machine.valves();
         if valves.len() != self.valves.len() {
@@ -1008,7 +1044,10 @@ impl Controller {
             | Motion::Halting { start_tick, .. } => scale(start_tick),
         };
         scale_motion(&mut self.motion);
+        let scale_at = |at: &mut f64| *at = new_now + (*at - now as f64) * ratio;
+        self.plan_changed_at.iter_mut().for_each(scale_at);
         for plan in &mut self.plans {
+            plan.from.iter_mut().for_each(scale_at);
             scale(&mut plan.first);
             scale_motion(&mut plan.motion);
             plan.key = plan_key(&plan.motion, plan.pass.as_ref().map(|(pass, _)| pass), plan.first);
@@ -1691,6 +1730,7 @@ impl Controller {
     /// (`winding_stepped`). Disabled, the drives give no torque, their windings cool and their DC links discharge,
     /// and `torque` is zero.
     pub fn update(&mut self, step: u64, machine: &dyn Machine, state: &[f64], torque: &mut [f64]) {
+        self.base_step = step;
         machine.motor_state(state, &mut self.motor_pos, &mut self.motor_vel);
         if !self.enabled {
             for (k, (drive, torque)) in self.drives.iter_mut().zip(torque).enumerate() {
@@ -1864,7 +1904,7 @@ impl Controller {
             self.next_cycle_segment(machine);
         }
         let motion = std::mem::replace(&mut self.motion, Motion::Idle);
-        self.record_plan(tick, &motion);
+        self.record_plan(tick, &motion, machine);
         match motion {
             Motion::Idle => {
                 self.set_vel.fill(0.0);
@@ -1937,7 +1977,7 @@ impl Controller {
                         self.passes += 1;
                     }
                     let out = [&mut self.set_pos, &mut self.set_vel, &mut self.set_acc];
-                    cam_slaves(machine, self.cam_master, run, &offset, out);
+                    cam_slaves(&|m, cam| machine.cam_at(m, cam), self.cam_master, run, &offset, out);
                     if stop.is_some_and(|s| t >= s.max(ramp) + ramp) {
                         // Run down: at rest where the cam has brought the slaves.
                         self.set_vel.fill(0.0);
@@ -1959,7 +1999,7 @@ impl Controller {
                         // This cycle is the stop's, not the cam's.
                         let halting =
                             Motion::Halting { from: from.clone(), vel: vel.clone(), time, start_tick: tick - 1 };
-                        self.record_plan(tick, &halting);
+                        self.record_plan(tick, &halting, machine);
                         if dt < time {
                             self.motion = Motion::Halting { from, vel, time, start_tick: tick - 1 };
                         }
@@ -2238,13 +2278,15 @@ impl Controller {
     }
 
     /// Notes the motion that makes the setpoints of the profile tick `tick` (`plans`), unless it is the one before.
-    fn record_plan(&mut self, tick: u64, motion: &Motion) {
+    fn record_plan(&mut self, tick: u64, motion: &Motion, machine: &dyn Machine) {
         if self.shaper.is_none() {
+            self.plan_changed_at = None;
             return;
         }
         let pass = self.pass.as_ref().filter(|_| matches!(motion, Motion::Conveyor));
         let key = plan_key(motion, pass, tick);
-        if self.plans.back().is_some_and(|plan| plan.key == key) {
+        let from = self.plan_changed_at.take();
+        if from.is_none() && self.plans.back().is_some_and(|plan| plan.key == key) {
             return;
         }
         let mut motion = motion.clone();
@@ -2263,7 +2305,8 @@ impl Controller {
             _ => {}
         }
         let pass = pass.map(|pass| (pass.clone(), self.clock));
-        self.plans.push_back(Plan { first: tick, key, motion, pass });
+        let cam = KeptCurve(if matches!(motion, Motion::Cam { .. }) { machine.cam_curve() } else { None });
+        self.plans.push_back(Plan { first: tick, key, motion, pass, cam, from });
     }
 
     /// The plan as `plan` makes it at the profile tick `x`, also between two cycles: position, speed and acceleration,
@@ -2296,7 +2339,12 @@ impl Controller {
             Motion::Cam { start_tick, stop, from, offset, from_speed, speed, ramp, .. } => {
                 let t = since(*start_tick);
                 let run = crate::cam::master_change(*from_speed, *speed, *ramp, t, *stop);
-                cam_slaves(machine, from + run[0], run, offset, [&mut pos, &mut vel, &mut acc]);
+                // The cam as it was when the plan was noted, also after a config has changed it.
+                let curve = |m: f64, cam: &mut [[f64; 4]]| match &plan.cam.0 {
+                    Some(curve) => curve(m, cam),
+                    None => machine.cam_at(m, cam),
+                };
+                cam_slaves(&curve, from + run[0], run, offset, [&mut pos, &mut vel, &mut acc]);
                 if stop.is_some_and(|s| t >= s.max(*ramp) + ramp) {
                     vel.fill(0.0);
                     acc.fill(0.0);
@@ -2411,7 +2459,10 @@ impl Controller {
         let newest = self.history.len() - 1;
         // The motions of the stored cycles but the oldest, which is read only as stored.
         let oldest = self.tick - newest as u64;
-        while self.plans.len() > 1 && self.plans[1].first <= oldest + 1 {
+        while self.plans.len() > 1
+            && self.plans[1].first <= oldest + 1
+            && self.plans[1].from.is_none_or(|from| from <= oldest as f64)
+        {
             self.plans.pop_front();
         }
         // The plan `delay` cycles ago: at a whole cycle as stored, between two the plan itself there; before the store
@@ -2425,9 +2476,10 @@ impl Controller {
             if delay == delay.floor() {
                 return self.history[owner].clone();
             }
-            let tick = self.tick - whole as u64;
-            let plan = self.plans.iter().rev().find(|plan| plan.first <= tick);
-            plan.and_then(|plan| self.plan_at(machine, plan, now - delay)).unwrap_or_else(|| {
+            let (tick, x) = (self.tick - whole as u64, now - delay);
+            let plan =
+                self.plans.iter().rev().find(|plan| plan.first <= tick && plan.from.is_none_or(|from| from <= x));
+            plan.and_then(|plan| self.plan_at(machine, plan, x)).unwrap_or_else(|| {
                 let n = self.set_pos.len();
                 [self.history[owner - 1][0].clone(), vec![0.0; n], vec![0.0; n]]
             })
@@ -2741,10 +2793,17 @@ fn halt(from: &[f64], vel: &[f64], time: f64, t: f64, [pos, speed, acc]: [&mut V
     }
 }
 
-/// The cam's slaves with the master at `master` and its speed and acceleration in `run`, each from its `offset`.
-fn cam_slaves(machine: &dyn Machine, master: f64, run: [f64; 3], offset: &[f64], [pos, vel, acc]: [&mut Vec<f64>; 3]) {
+/// The cam's slaves (`curve`, as `Machine::cam_at`) with the master at `master` and its speed and acceleration in `run`,
+/// each from its `offset`.
+fn cam_slaves(
+    curve: &dyn Fn(f64, &mut [[f64; 4]]),
+    master: f64,
+    run: [f64; 3],
+    offset: &[f64],
+    [pos, vel, acc]: [&mut Vec<f64>; 3],
+) {
     let mut cam = vec![[0.0; 4]; pos.len()];
-    machine.cam_at(master, &mut cam);
+    curve(master, &mut cam);
     for (i, c) in cam.iter().enumerate() {
         let [p, v, a] = crate::cam::slave_motion(*c, run);
         (pos[i], vel[i], acc[i]) = (p + offset[i], v, a);

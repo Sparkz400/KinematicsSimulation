@@ -333,6 +333,9 @@ pub trait Mechanism: Send {
         None
     }
     fn cam_at(&self, _master: f64, _out: &mut [[f64; 4]]) {}
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        None
+    }
 
     /// The mechanism's own signals, after the machine's: their infos, and their values from joint positions, speeds,
     /// accelerations and the force (torque) each transmission passes to its joint.
@@ -1115,6 +1118,9 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
     fn cam_at(&self, master: f64, out: &mut [[f64; 4]]) {
         self.mechanism.cam_at(master, out);
+    }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        self.mechanism.cam_curve()
     }
 
     /// NaN where the pose cannot be reached: the controller never asks for one (see `unreachable`).

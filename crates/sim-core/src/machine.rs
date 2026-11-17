@@ -143,6 +143,10 @@ pub const BASE_AXES: [[&str; 3]; 2] = [["x", "y", "z"], ["rx", "ry", "rz"]];
 /// The master of an electronic cam that a machine runs as its cycle instead of `[[cycle.segment]]` (`Machine::cam`): its
 /// steady speed (its unit per second), its travel per pass of the cycle, and how long it takes from rest to that speed
 /// and back (a sin^2 ramp, `sim_components::cam::master_at`).
+/// An electronic cam's curve as `Machine::cam_at` reads it, on its own (`Machine::cam_curve`): each slave at a master
+/// position, as [s, s', s'', s'''].
+pub type CamCurve = std::sync::Arc<dyn Fn(f64, &mut [[f64; 4]]) + Send + Sync>;
+
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CamMaster {
     pub speed: f64,
@@ -416,6 +420,11 @@ pub trait Machine: Send {
     /// With `cam`: each tool axis (the slaves) at the master position `master`, as [s, s', s'', s'''], the rates over
     /// the master.
     fn cam_at(&self, _master: f64, _out: &mut [[f64; 4]]) {}
+    /// With `cam`: the curve `cam_at` reads, apart from the machine, so that it still reads the same once the config
+    /// has changed (the input shaper reads the plan of past cycles off it). `None` without a cam.
+    fn cam_curve(&self) -> Option<crate::CamCurve> {
+        None
+    }
     /// A dual-drive gantry: the two motors that drive its axis side by side, the master first, for the drives'
     /// synchronisation (`gantry.sync`). `None` without one.
     fn gantry_motors(&self) -> Option<[usize; 2]> {
