@@ -68,9 +68,8 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         cam,
         master,
     };
-    let endless = knife.master.is_some();
     let phi = axis(cfg, "knife", "axis-knife", "rad", joint.range)?;
-    machine(cfg, knife, (joint, None, "rad"), phi, endless)
+    machine(cfg, knife, (joint, None, "rad"), phi, true)
 }
 
 impl RotaryKnife {

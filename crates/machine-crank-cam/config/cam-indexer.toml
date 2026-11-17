@@ -46,7 +46,8 @@ payload_kg = 3.0
 friction_coulomb_nm = 0.5
 friction_viscous_nm_s_rad = 0.05
 friction_smoothing_rad_s = 0.01
-# The stops leave the shipped cycle (180 to 540 degrees, one index) room; with cam.run the driver turns on and has none.
+# The axis range leaves the shipped cycle (180 to 540 degrees, one index) room; the driver turns on and has no stops of
+# its own (joint.stop_min_deg / stop_max_deg would put end stops with the stop_* below).
 # The middle of the range, 360 degrees, is the middle of an index, where the table moves.
 min_angle_deg = -180.0
 max_angle_deg = 900.0
@@ -333,6 +334,7 @@ ratings.gearbox_gearing_wohler_exponent = [6.6, 10.0]
 indexer.driver_inertia_kgm2 = [0.01, 0.014]
 indexer.wheel_inertia_kgm2 = [0.015, 0.025]
 indexer.locking_play_rad = [2.0e-5, 1.0e-4]
+indexer.cam_radius_m = [0.08, 0.125]
 table.inertia_kgm2 = [0.3, 0.5]
 table.stiffness_nm_rad = [100000.0, 400000.0]
 table.damping_ratio = [0.01, 0.06]

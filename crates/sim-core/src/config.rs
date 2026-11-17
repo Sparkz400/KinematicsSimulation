@@ -147,6 +147,10 @@ impl Config {
         let bad = || ConfigError::Parse(assignment.into());
         let (path, value) = assignment.split_once('=').ok_or_else(bad)?;
         let parsed: Table = format!("v = {value}").parse().map_err(|_| bad())?;
+        // One assignment: a second line ("a = 1\nb = 2") parsed beside `v` and was dropped without a word.
+        if parsed.len() != 1 {
+            return Err(bad());
+        }
         self.set(path.trim(), parsed["v"].clone())
     }
 
