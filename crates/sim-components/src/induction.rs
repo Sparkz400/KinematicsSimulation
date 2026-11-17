@@ -830,8 +830,8 @@ mod tests {
         let p = params(false, 4.5);
         let raw = |m: &Induction, d: &Drive| {
             let (is, _) = m.currents(&d.phases.x);
-            let air_gap = 1.5 * (d.phases.u[0] * is[0] + d.phases.u[1] * is[1])
-                - 1.5 * 4.5 * (is[0] * is[0] + is[1] * is[1]);
+            let air_gap =
+                1.5 * (d.phases.u[0] * is[0] + d.phases.u[1] * is[1]) - 1.5 * 4.5 * (is[0] * is[0] + is[1] * is[1]);
             m.pole_pairs * air_gap / d.phases.frame_speed
         };
         for tau in [0.47 / 3.5, 1e-3] {
@@ -841,7 +841,11 @@ mod tests {
             (d.phases.x, d.phases.u, d.phases.frame_speed) = ([0.3, 0.1, 0.2, 0.05], [100.0, 20.0], 100.0);
             let wanted = (1.0 - (-p.current_cycle / tau).exp()) * raw(&m, &d);
             m.stepped(&mut d, &p);
-            assert!((d.phases.estimate - wanted).abs() < 1e-12 * wanted.abs().max(1.0), "{} against {wanted}", d.phases.estimate);
+            assert!(
+                (d.phases.estimate - wanted).abs() < 1e-12 * wanted.abs().max(1.0),
+                "{} against {wanted}",
+                d.phases.estimate
+            );
         }
     }
 

@@ -365,8 +365,9 @@ fn poses(args: &Args, sim: &Sim, cfg: &Config, tr: &Translations) -> Result<Opti
     }
     let Some(file) = args.option("--path") else { return Ok(None) };
     let speed = sim_components::program::orientation_speed_of(cfg)?;
-    let runs = sim_components::program::read_with(file, &read(file)?, sim.machine.axes(), sim.control.planned_pos(), speed)
-        .map_err(|e| Failure(e.key, format!("{file}:{}: {}", e.line, e.detail)))?;
+    let runs =
+        sim_components::program::read_with(file, &read(file)?, sim.machine.axes(), sim.control.planned_pos(), speed)
+            .map_err(|e| Failure(e.key, format!("{file}:{}: {}", e.line, e.detail)))?;
     let refused = |e: sim_components::CommandError| Failure(e.key, String::new());
     // A program with feeds is planned run by run (`Sim::plan_program`); one run at the axes' limits as a path file is.
     let pieces = match runs.as_slice() {
