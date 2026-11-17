@@ -405,8 +405,12 @@ Geschwindigkeitsterm m s' s'' θ'² und das Moment von Feder und Gewicht (F0 + k
 F0 s + k s² / 2 + m g s): das Moment schwingt mit dem Hubgesetz und treibt die Scheibe beim Rückhub zurück. Signale: Hub,
 Geschwindigkeit und Beschleunigung des Stößels, die Kontaktkraft, der Druckwinkel, die Führungslast und J(θ); geprüft
 gegen `ratings.disc_max_contact_force_n` und `disc_max_pressure_angle_deg`. Mit `cam.run` dreht die Scheibe mit
-`disc.turns_per_min` weiter, ihr Leitwert virtuell. Die Rolle bleibt auf der Scheibe: wo N unter null fiele, höbe der
-Stößel ab, was das Signal zeigt und das Modell nicht trennt (eine so knapp ausgelegte Feder). Die Mitte des Bereichs der
+`disc.turns_per_min` weiter, ihr Leitwert virtuell. Mit `effects.follower_lift_off` hebt der Stößel ab, wo N unter null fiele: sein Spalt
+g zur Scheibe ist ein passives Gelenk (Hub s + g), der Kontakt eine Feder mit Dämpfer nur auf Druck
+(`follower.contact_stiffness_n_m`, `contact_damping_ratio`), die Kraft auf die Scheibe also nie negativ, dazu wirkt die Reibung
+der Führung (`follower.guide_friction_n`); die Leistung des Dämpfers wird als Verlust gebucht, die Bilanz schließt über einen
+Aufprall. Signale `follower.gap` und `follower.off_disc`. Aus, bleibt die Rolle auf der Scheibe, und nur das Signal zeigt, wo N
+unter null fiele. Die Mitte des Bereichs der
 Scheibe liegt auf der ersten Hälfte des Hubs, wo s'' > 0 ist und Feder und Gewicht die Scheibe dort halten, wo sie gegen
 sie gehalten wird; hinter der Mitte des Hubs drehen sie sie weg.
 
