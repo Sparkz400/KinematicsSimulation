@@ -566,3 +566,52 @@ fn the_carriages_carry_momentum_along_their_columns() {
         close(f.linear[k], by_hand, 1e-5, "linear momentum");
     }
 }
+
+/// The guide's moments from joints standing off the slide: a joint a = 0.05 m along the column from the centre gives
+/// M = a d cross f with f the pull on the carriage, so Mx = M.d = 0 and |M| = a F (F the pull's part across the
+/// column; the weight acts at the centre). With the ratings My = Mz = 20 N m the equivalent load is
+/// P = F + F_max (|My| + |Mz|) / 20, F_max = 3050 N. Without the ratings the load is F as before.
+#[test]
+fn the_guides_moments_from_the_joints_offset_add_to_its_equivalent_load() {
+    let plain = delta(&[]);
+    let m = delta(&[
+        "geometry.rod_joint_along_m = 0.05",
+        "ratings.guide_moment_y_nm = 20.0",
+        "ratings.guide_moment_z_nm = 20.0",
+    ]);
+    let h = plain.legs.inverse([0.1, 0.05, -1.0]).unwrap();
+    let across = plain.guide_loads(h, [0.0; 3]);
+    let p = m.pose(h).0;
+    let pull = m.legs.rod_pull(h, p, m.m_nt(), m.g, [0.0; 3]).unwrap();
+    for k in 0..3 {
+        let (load, moments) = m.guide_force_moments(h, [0.0; 3], k);
+        let (u, d) = (sub(p, m.legs.joint(k, h[k])), m.legs.dir[k]);
+        let rod = u.map(|x| pull[k] * x);
+        let along = dot(rod, d);
+        let rod_across = norm(std::array::from_fn::<f64, 3, _>(|i| rod[i] - along * d[i]));
+        assert!(moments[0].abs() < 1e-9, "Mx {moments:?}");
+        close(norm(moments), 0.05 * rod_across, 1e-9, "|M| = a F");
+        close(load, across[k] + 3050.0 * (moments[1].abs() + moments[2].abs()) / 20.0, 1e-12, "equivalent load");
+        assert!(load > across[k], "moments add");
+    }
+    assert_eq!(delta(&["geometry.rod_joint_along_m = 0.05"]).guide_loads(h, [0.0; 3]), across);
+}
+
+/// The friction's load factor under motion is the fixed point of scale -> acceleration -> load -> scale: put back
+/// into the acceleration, it gives the load that gives it back, and it is not below the factor at rest.
+#[test]
+fn the_frictions_load_factor_is_the_fixed_point_with_the_acceleration() {
+    let d = delta(&["effects.motor_friction = false", "effects.torque_ripple = false", "effects.belt_stretch = false"]);
+    let p = [0.0, 0.0, -1.17];
+    let (mut state, mut hold, mut torque) = (Vec::new(), [0.0; 3], [0.0; 3]);
+    d.equilibrium(&p, &mut state, &mut hold);
+    d.feedforward_torque(&p, &[8.0, 3.0, 10.0], &mut torque);
+    let h = d.heights(&state).0;
+    let scales = d.scales_at(&state, &torque);
+    let loads = d.moving_guide_loads_with(&state, d.carriage_acceleration_with(&state, &torque, scales));
+    let rest = d.load_scales(h);
+    for k in 0..3 {
+        close(scales[k], d.friction[k].load_scale(loads[k], 0.0), 1e-12, "fixed point");
+        assert!(scales[k] >= rest[k] - 1e-12, "moving load {} under rest {}", scales[k], rest[k]);
+    }
+}

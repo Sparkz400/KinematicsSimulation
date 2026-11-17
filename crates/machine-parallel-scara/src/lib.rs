@@ -39,8 +39,8 @@ use sim_components::joint::RotaryJoint;
 use sim_components::mech::{HardStop, ShaftFriction, ThermalFeedback};
 use sim_components::transmission::BallScrew;
 use sim_core::{
-    AxisInfo, Config, ConfigError, ENERGY_PARTS, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part,
-    RatingCheck, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart,
+    AxisInfo, Config, ConfigError, Label, Machine, MachineEntry, MotorInfo, Part, RatingCheck, Scene, Shape,
+    SignalInfo, ThermalPart, ENERGY_PARTS, LOSS_PREFIX, TORQUE_PARTS,
 };
 
 const I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("de", include_str!("../i18n/de.ftl"))];
@@ -141,7 +141,11 @@ pub fn condition_number(j: &M2) -> f64 {
         j[0][1] * j[0][1] + j[1][1] * j[1][1],
     );
     let (mean, half) = ((a + c) / 2.0, ((a - c) / 2.0).hypot(b));
-    if mean - half <= 0.0 { f64::INFINITY } else { ((mean + half) / (mean - half)).sqrt() }
+    if mean - half <= 0.0 {
+        f64::INFINITY
+    } else {
+        ((mean + half) / (mean - half)).sqrt()
+    }
 }
 
 /// The leg geometry and the kinematics, apart from masses and drives.
@@ -416,7 +420,11 @@ impl ParallelScara {
     }
 
     fn planar_len(&self) -> usize {
-        if self.elastic { N_ELASTIC } else { N_RIGID }
+        if self.elastic {
+            N_ELASTIC
+        } else {
+            N_RIGID
+        }
     }
 
     /// The Z stroke (motor 3): the carriage on a ball screw behind a coupling, `[slide]` and `[screw]` as for a screw
@@ -545,9 +553,13 @@ impl ParallelScara {
             extras,
             required_life: cfg.f64("ratings.required_life_h").ok(),
             arm_inertia: i_arm + la * la * elbow,
-            // shortcut: the arm's tube as a uniform rod (its weight is out of the plane, so the config gives its inertia
-            // and no mass): m L / 2 = 3 I / (2 L); give its mass and centre if a base's tilt under it has to be exact.
-            arm_moment: 1.5 * i_arm / la + la * elbow,
+            // The tube's first moment m c about its joint: mass.upper_arm_kg and upper_arm_cg_m where given (as on the
+            // D3); without them a uniform rod of the given inertia (m = 3 I / L^2, c = L / 2: m c = 3 I / (2 L)).
+            // Its weight is out of the plane, so only the frame's momentum takes it.
+            arm_moment: match (cfg.positive("mass.upper_arm_kg").ok(), cfg.positive("mass.upper_arm_cg_m").ok()) {
+                (None, None) => 1.5 * i_arm / la,
+                (m, c) => m.unwrap_or(3.0 * i_arm / (la * la)) * c.unwrap_or(0.5 * la),
+            } + la * elbow,
             g,
             m_platform: cfg.positive("mass.platform_kg")? + 2.0 * (1.0 - share) * m_fb + carried,
             m_payload,
@@ -772,7 +784,11 @@ impl ParallelScara {
     /// The working range's bottom below x: on the circle, or flat.
     fn bottom(&self, x: f64) -> f64 {
         let (centre, r) = self.circle;
-        if centre.is_finite() { centre - (r * r - x * x).max(0.0).sqrt() } else { self.axes[1].min }
+        if centre.is_finite() {
+            centre - (r * r - x * x).max(0.0).sqrt()
+        } else {
+            self.axes[1].min
+        }
     }
 
     /// Whether a pose is within the working range (the band |x| <= half width below the top, above the bottom
