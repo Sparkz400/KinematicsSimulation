@@ -173,26 +173,36 @@ fn the_rigid_friction_has_the_guides_load_scale() {
     assert!((on[0][1] - off[0][1]).abs() < 1e-12, "the viscous part is not load dependent");
 }
 
-/// A gantry's yaw left to its spring: the rack gantry's one rack drives the bridge at one end (0.5 m from its centre),
-/// the yaw is on, and the bridge's axis stands vertical so that its weight loads the rack. At rest the sum of the
-/// forces on every coordinate vanishes, the yaw's included: the spring holds the drive's moment, so the yaw is not 0
-/// and no coordinate (nor pulley nor rotor) accelerates.
-#[test]
-fn a_yaw_left_to_its_spring_rests_deflected_under_the_drives_moment() {
-    let file = text("rack-gantry.toml").replace("gantry_yaw = false", "gantry_yaw = true").replace(
-        "id = \"x\"\nstroke_m = \"geometry.stroke_x_m\"",
-        "id = \"x\"\nstroke_m = \"geometry.stroke_x_m\"\nincline_deg = 90.0",
+/// The H-bot standing up (its Y axis vertical) with its bridge's yaw on: the two motors set X and Y, the yaw is left to
+/// the spring (k = 5000 N m/rad). The belt that holds the head's weight W = (5 + 2) kg g along Y pulls the bridge's ends
+/// with the moment 0.3 m W (the file's comment: the belt's moment is -0.3 m times its pull on the head along Y), so at
+/// rest |psi| = 0.3 W / k = 4.119e-3 rad, and no coordinate accelerates.
+fn standing_hbot(changes: &[&str]) -> Box<dyn Machine> {
+    let file = text("h-bot.toml").replace("gantry_yaw = false", "gantry_yaw = true").replace(
+        "id = \"y\"\nstroke_m = \"geometry.stroke_y_m\"",
+        "id = \"y\"\nstroke_m = \"geometry.stroke_y_m\"\nincline_deg = 90.0",
     );
-    let machine = sim_netlist::build(&Config::parse(&file).unwrap()).unwrap();
-    let (state, torque) = at_rest(machine.as_ref(), &[0.3, 0.2]);
-    // The coordinates: x, y, the yaw; two motors.
-    let (n, m) = (3, 2);
-    let v = (state.len() - n - 1 - m) / 2;
-    assert!(state[2].abs() > 1e-9, "the yaw stands at {}", state[2]);
+    assert!(file.contains("incline_deg = 90.0"));
+    sim_netlist::build(&with(&Config::parse(&file).unwrap(), changes)).unwrap()
+}
+
+/// The standing H-bot's yaw at rest against the hand value, and the accelerations there zero.
+fn rests_on_its_spring(machine: &dyn Machine, velocities: std::ops::Range<usize>) {
+    let (state, torque) = at_rest(machine, &[0.5, 0.2]);
+    let by_hand = 0.3 * 7.0 * 9.80665 / 5000.0;
+    assert!((state[2].abs() - by_hand).abs() < 1e-6 * by_hand, "the yaw stands at {}, by hand {by_hand}", state[2]);
     let mut rates = vec![0.0; state.len()];
     machine.derivatives(&state, &torque, &mut rates);
-    let worst = rates[v..2 * v].iter().fold(0.0f64, |a, r| a.max(r.abs()));
+    let worst = rates[velocities].iter().fold(0.0f64, |a, r| a.max(r.abs()));
     assert!(worst < 1e-6, "an acceleration of {worst} at rest, yaw {}", state[2]);
+}
+
+#[test]
+fn a_yaw_left_to_its_spring_rests_deflected_under_the_belts_moment() {
+    let machine = standing_hbot(&["effects.belt_stretch = true"]);
+    // Elastic state: x, y, the yaw, two pulleys, two rotors, then their rates.
+    let v = 3 + 2 + 2;
+    rests_on_its_spring(machine.as_ref(), v..2 * v);
 }
 
 /// A rotary's bearing friction at the output (elastic model): the bearing's viscous drag acts on the axis, behind the
@@ -423,24 +433,12 @@ fn the_belts_runs_have_angular_momentum_about_the_middle_of_their_straight_piece
     }
 }
 
-/// A gantry's yaw left to its spring rests deflected in the rigid model too: the same machine as above (the rack gantry
-/// with its bridge's axis vertical), `effects.belt_stretch` off. The rigid model's torques carry the other coordinates
-/// against gravity, K^T P = -gravity, and what they put on the yaw less gravity's is held by the spring: no coordinate
-/// accelerates at rest and the yaw is not 0.
+/// The standing H-bot's yaw in the rigid model: the motors' torques carry X and Y, K^T P = -gravity there, and what P
+/// then puts on the yaw (the same 0.3 m W) the spring holds: the same deflection, and no coordinate accelerates.
 #[test]
 fn a_yaw_left_to_its_spring_rests_deflected_in_the_rigid_model_too() {
-    let file = text("rack-gantry.toml").replace("gantry_yaw = false", "gantry_yaw = true").replace(
-        "id = \"x\"\nstroke_m = \"geometry.stroke_x_m\"",
-        "id = \"x\"\nstroke_m = \"geometry.stroke_x_m\"\nincline_deg = 90.0",
-    );
-    let cfg = with(&Config::parse(&file).unwrap(), &["effects.belt_stretch = false"]);
-    let machine = sim_netlist::build(&cfg).unwrap();
-    let (state, torque) = at_rest(machine.as_ref(), &[0.3, 0.2]);
-    assert!(state[2].abs() > 1e-9, "the yaw stands at {}", state[2]);
-    let mut rates = vec![0.0; state.len()];
-    machine.derivatives(&state, &torque, &mut rates);
-    let worst = rates[3..6].iter().fold(0.0f64, |a, r| a.max(r.abs()));
-    assert!(worst < 1e-6, "an acceleration of {worst} at rest, yaw {}", state[2]);
+    let machine = standing_hbot(&["effects.belt_stretch = false"]);
+    rests_on_its_spring(machine.as_ref(), 3..6);
 }
 
 /// The guides' Stribeck rise reaches the planner: the T-gantry's X guide has Coulomb 15 N and stiction 20 N, so along X

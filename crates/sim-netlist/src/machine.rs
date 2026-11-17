@@ -888,6 +888,8 @@ impl ConfigMachine {
             k.iter_mut().for_each(|row| row.truncate(n));
         }
         let d = n + usize::from(yaw);
+        // The yaw coordinate has no bearing of its own; the per-coordinate tables are indexed up to d.
+        bearing.resize(d, [0.0; 3]);
         if let Some(g) = gantry_node.filter(|_| yaw) {
             sections.iter_mut().zip(&g.sections).for_each(|(s, c)| s.c.push(*c));
         }
@@ -2671,13 +2673,15 @@ impl ConfigMachine {
     /// against gravity, sum_s c_si T_s = gravity_i, and each closed belt keeps its material, sum over its sections of
     /// L_s / (1 + T_s / EA) = what it had at q = 0. Newton from the pretension; the first equations are linear, the
     /// others nearly so. The frame stands at 0: nothing pulls along its horizontal axis. An axis a screw, rack, linear
-    /// motor or rotary drives is held by that, not by the belt.
+    /// motor or rotary drives is held by that, not by the belt. A yaw left to its spring is not among the equations: its
+    /// balance sets the yaw (`settled_yaw`), which q brings.
     fn rest_tensions(&self, q: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let (n, geo, gravity) = (self.n(), self.geo(q), self.gravity(q));
         let (ea, slack) = (self.belt.ea, self.belt.slack);
         let taut = |t: f64| if slack { t.max(0.0) } else { t };
         let mut tension = vec![self.belt.pretension; self.sections.len()];
-        let belt_held: Vec<usize> = (0..n).filter(|&i| !self.driven(i)).collect();
+        let sprung = self.gantry.as_ref().filter(|_| self.yaw_sprung()).map(|g| g.coord);
+        let belt_held: Vec<usize> = (0..n).filter(|&i| !self.driven(i) && Some(i) != sprung).collect();
         for _ in 0..50 {
             let mut jac: Vec<Vec<f64>> =
                 belt_held.iter().map(|&i| self.sections.iter().map(|s| s.c[i]).collect()).collect();
