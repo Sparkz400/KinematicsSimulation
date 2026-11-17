@@ -2611,7 +2611,7 @@ pass 2                 measured from where pass 1 left the rises r_2: settles th
                        (winding: settled_rise(I_rms); part: R_th × its mean loss, as the thermal checks judge)
 pass 3                 measured with every rise put at s_2 at its start: r_3 = s_2
 pass k + 1             a secant step per rise: r_(k+1) = r_k + (s_k − r_k) / (1 − m),  m = (s_k − s_(k−1)) / (r_k − r_(k−1))
-                       clamped to [−20, 0.5]
+                       m clamped to [−20, 0.5]
 stop                   when max |s_k − r_k| ≤ 0.1 K (WARM_START_TOLERANCE_K), or after 4 warm passes (WARM_START_PASSES)
 ```
 
