@@ -258,6 +258,45 @@ fn a_new_master_speed_under_a_running_cam_ramps_to_it() {
     assert!((sim.control.cam_master() - cycle * 0.8 - from - 0.45).abs() < 1e-9);
 }
 
+/// The cam taken away while it runs (a config with cam.run = false): the flying saw's carriage, caught at its top speed
+/// along with the material, ramps down from its speed then, v0, at its acceleration limit a, at rest after v0 / a, its
+/// speed falling by a T every profile cycle T from the first on, with no step and no cycle standing still. (A rotary
+/// knife's roll, which the cam turns on past its range, meets the stops the new config gives its joint.)
+#[test]
+fn a_cam_taken_away_under_way_ramps_the_slave_down_within_its_limit() {
+    let mut sim = Sim::new(&FLYING_SAW, &with_cam(&FLYING_SAW)).unwrap();
+    sim.command(Command::StartCycle).unwrap();
+    sim.run(1.0, |_| {});
+    let cycle = with_cam(&FLYING_SAW).f64("profile.cycle_s").unwrap();
+    let steps = (cycle / sim.dt).round() as usize;
+    let a = sim.machine.axes()[0].max_acc;
+    let top = sim.machine.axes()[0].max_vel;
+    while sim.control.set_vel[0].abs() < 0.5 * top || sim.control.set_acc[0] != 0.0 {
+        sim.step();
+        assert!(sim.time() < 10.0, "the carriage runs with the material");
+    }
+    let mut off = with_cam(&FLYING_SAW);
+    off.set_text("cam.run = false").unwrap();
+    let v0 = sim.control.set_vel[0];
+    sim.reconfigure(&FLYING_SAW, &off).unwrap();
+    let (mut last, mut cycles) = (v0, 0);
+    while sim.control.set_vel[0] != 0.0 || cycles == 0 {
+        (0..steps).for_each(|_| sim.step());
+        let v = sim.control.set_vel[0];
+        // The first cycle may fall short of a whole a T: the profile tick lies somewhere in the cycle.
+        assert!((last - v).abs() <= a * cycle * (1.0 + 1e-9), "cycle {cycles}: {last} to {v} rad/s");
+        assert!(
+            cycles == 0 || v == 0.0 || (last - v).abs() >= a * cycle * (1.0 - 1e-9),
+            "cycle {cycles}: {last} to {v}"
+        );
+        (last, cycles) = (v, cycles + 1);
+        assert!(cycles < 10_000);
+    }
+    assert!((cycles as f64 * cycle - v0.abs() / a).abs() <= 2.0 * cycle, "{cycles} cycles for {} s", v0.abs() / a);
+    (0..10 * steps).for_each(|_| sim.step());
+    assert_eq!(sim.control.set_vel[0], 0.0);
+}
+
 /// The cam's limits are verdicts too: the knife's 3-4-5 at 1 m/s of web asks 15.17 rad/s of the roll (by hand in
 /// `the_rotary_knife_speeds_up_between_cuts_for_a_short_format_and_slows_for_a_long_one`); with the axis's speed limit at
 /// 10 rad/s "cam-speed" fails with 15.17 against 10, the acceleration and jerk pass. As shipped (20 rad/s) it passes.

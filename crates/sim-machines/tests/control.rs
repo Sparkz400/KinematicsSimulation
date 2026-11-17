@@ -1538,3 +1538,48 @@ fn the_motor_acceleration_setpoint_has_the_speed_term_of_the_kinematics() {
     }
     assert!(checked > 50, "{checked} cycles of the cruise with the motors accelerating");
 }
+
+/// With the shaper following the pose, its period changes along a move, and the shaped position runs at the plan's
+/// speed times (1 - the delays' rate) for each copy: the speed and acceleration setpoints are the shaped position's own
+/// rates. Checked by differencing the shaped position over two passes (central differences over the profile cycles):
+/// the speed within 5e-4 of the top speed (measured at most 1.3e-4; the delayed plan's rates were up to 7e-2 off on
+/// the cam indexer, 1.2e-2 on the slider crank), the acceleration within twice what the differencing shows with the
+/// period fixed (the plan's own steps in acceleration; measured at most 1.8 times, on the spatial cable robot).
+#[test]
+fn a_shaper_following_the_pose_gives_the_shaped_positions_own_rates() {
+    on_every_machine(|entry| {
+        // The largest difference of speed and acceleration from the differenced position, and the top speed.
+        let run = |follows: bool| {
+            let cfg =
+                config(entry, &["effects.input_shaping = true", &format!("effects.shaper_follows_pose = {follows}")]);
+            let mut sim = Sim::new(entry, &cfg).unwrap();
+            let (dt, cycle) = (cfg.f64("sim.dt_s").unwrap(), cfg.f64("profile.cycle_s").unwrap());
+            let n = (cycle / dt).round() as usize;
+            sim.command(Command::StartCycle).unwrap();
+            let (mut rows, mut step): (Vec<[Vec<f64>; 3]>, usize) = (Vec::new(), 0);
+            while sim.control.cycle_passes() < 2 && sim.time() < 30.0 {
+                sim.step();
+                step += 1;
+                if step % n == 0 {
+                    rows.push([sim.control.set_pos.clone(), sim.control.set_vel.clone(), sim.control.set_acc.clone()]);
+                }
+            }
+            let mut out = [0.0f64; 3];
+            for w in rows.windows(3) {
+                for a in 0..w[1][0].len() {
+                    let v = (w[2][0][a] - w[0][0][a]) / (2.0 * cycle);
+                    let acc = (w[2][0][a] - 2.0 * w[1][0][a] + w[0][0][a]) / (cycle * cycle);
+                    out = [
+                        out[0].max((v - w[1][1][a]).abs()),
+                        out[1].max((acc - w[1][2][a]).abs()),
+                        out[2].max(w[1][1][a].abs()),
+                    ];
+                }
+            }
+            out
+        };
+        let ([speed, acc, top], [_, fixed, _]) = (run(true), run(false));
+        assert!(speed < 5e-4 * top, "{}: speed {speed} off, top speed {top}", entry.id);
+        assert!(acc <= 2.0 * fixed + 1e-9, "{}: acceleration {acc} off, {fixed} with the period fixed", entry.id);
+    });
+}
