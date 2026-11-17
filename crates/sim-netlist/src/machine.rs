@@ -1927,40 +1927,46 @@ impl ConfigMachine {
     /// after its own acceleration, into = i (drive - J i K acc), of which the output gets o = into * output factor /
     /// rotor factor: rotor factor o + i^2 J K acc = output factor i drive.
     ///
-    /// A locking worm driven back (its output's power o w below 0, the rotor factor below 0) takes a drag
-    /// D = o - into = (1 - rotor factor) o_rest instead, o_rest the torque its output holds at rest against the axes'
-    /// forces (K^T o_rest = -base): o + i^2 J K acc = i drive + D. Its output standing still sticks (K acc = 0) while
-    /// the drag that takes, o - i drive, lies between what the worm gives raising the load, -(1 / eta - 1) o_rest, and
-    /// lowering it, (1 - eta_back) o_rest; beyond, it breaks loose with the drag at that bound.
+    /// A locking worm moving (`worm`, the module comment) drags D = into - o = s max((1 / e - 1) s o,
+    /// (1 - eta_back) max(-s o_rest, 0)) at the wheel, s the sign of its speed, e its forward efficiency times its
+    /// gearbox's, o_rest the torque its output holds at rest against the axes' forces (K^T o_rest = -base): its row is
+    /// the driving flank's, o + e i^2 J K acc = e i drive, or the drag's, o + i^2 J K acc = i drive - s C with
+    /// C = `worm::overhauling_drag`, whichever holds at the solution. That drag rises with o, so exactly one choice holds
+    /// (both at the seam, where they agree): every choice is solved and the one that holds is taken, no starting guess.
+    /// Its output at rest, or slower than `worm::STICK_SPEED`, sticks (K acc = -K v / `worm::STICK_TIME_S`, 0 at rest)
+    /// while the drag that takes, o - i drive, lies between what the worm gives raising the load, -(1 / eta - 1) o_rest,
+    /// and lowering it, (1 - eta_back) o_rest; beyond, it breaks loose with the drag at that bound.
     fn rigid_locking(&self, fixed: &[Vec<f64>], base: &[f64], drive: &[f64], v: &[f64], mut solved: Rigid) -> Rigid {
         let (n, m) = (self.n(), self.m());
         let kt: Vec<Vec<f64>> = (0..n).map(|i| (0..m).map(|kk| self.k[kk][i]).collect()).collect();
         let holds = lstsq(&kt, &base.iter().map(|f| -f).collect::<Vec<_>>()).unwrap_or_else(|| vec![0.0; m]);
         let locking: Vec<Option<WormNode>> =
             self.worms.iter().map(|w| w.filter(|w| w.back_efficiency <= 0.0)).collect();
-        // Per motor: (output factor, rotor factor), or the drag a locking worm takes, or (None) it sticks.
-        #[derive(Clone, Copy)]
+        // Per motor: (output factor, rotor factor), the drag a locking worm broken loose from rest takes, (Stuck) it
+        // sticks, or (Moving) a locking worm moving with its forward efficiency e and its overhauling flank's drag C.
+        #[derive(Clone, Copy, PartialEq)]
         enum Row {
             Factors(f64, f64),
             Drag(f64),
             Stuck,
+            Moving(f64, f64),
         }
         let speed = |kk: usize| self.pulley_angle(kk, v);
+        let sticks = |kk: usize| speed(kk).abs() < crate::worm::STICK_SPEED;
+        let moving_row = |kk: usize, w: &WormNode, out: f64| {
+            let e = w.efficiency * self.gears[kk].loss_factor(out.abs(), speed(kk).abs());
+            Row::Moving(e, crate::worm::overhauling_drag(w, holds[kk], speed(kk)))
+        };
         let mut rows: Vec<Row> = (0..m)
             .map(|kk| match locking[kk] {
-                Some(_) if speed(kk) == 0.0 => Row::Stuck,
-                Some(w) => Row::Factors(1.0, crate::worm::factors(&w, holds[kk] * speed(kk)).1),
+                Some(_) if sticks(kk) => Row::Stuck,
+                Some(w) => moving_row(kk, &w, 0.0),
                 None => Row::Factors(1.0, 1.0),
             })
             .collect();
-        // Three rounds, not to a fixed point: a locking worm moving with a motor torque between what drives it and what
-        // holds it back has none. Its rows alternate between driving (output factor eta, rotor factor 1) and driven back
-        // (the drag), because the drag form does not meet the factors at a rotor factor of 0 (measured 17 November 2026:
-        // over a sweep of the rotary table's worm at -2..2 rad/s and -1.2..1.2 N m, 57 % of the solves had not settled
-        // in 13 rounds, and their accelerations after 3 and after 13 rounds lay up to 19 rad/s2 apart). More rounds pick
-        // another phase, not a better answer; that band needs a model of its own (a moving worm's stick state, see `worm`,
-        // or a drag that fades in with the rotor factor).
-        for _ in 0..3 {
+        let moving: Vec<usize> = (0..m).filter(|&kk| matches!(rows[kk], Row::Moving(..))).collect();
+        // The solution with each moving worm on its driving flank (bit set in `flanks`) or dragging.
+        let solve_rows = |rows: &[Row], flanks: usize| -> Vec<f64> {
             let mut a = vec![vec![0.0; n + m]; n + m];
             let mut b = base.to_vec();
             for i in 0..n {
@@ -1972,16 +1978,13 @@ impl ConfigMachine {
             for (kk, row) in rows.iter().enumerate() {
                 let inertia = self.ratio[kk] * self.ratio[kk] * self.j_rotor[kk];
                 let into = self.ratio[kk] * drive[kk];
-                let row = match *row {
-                    Row::Factors(_, rotor) if locking[kk].is_some() && rotor <= 0.0 => {
-                        Row::Drag((1.0 - rotor) * holds[kk])
-                    }
-                    other => other,
-                };
-                let (at_acc, at_o, rhs) = match row {
+                let driving = moving.iter().position(|&j| j == kk).is_some_and(|bit| flanks >> bit & 1 == 1);
+                let (at_acc, at_o, rhs) = match *row {
                     Row::Factors(output, rotor) => (output * inertia, rotor, output * into),
                     Row::Drag(drag) => (inertia, 1.0, into + drag),
-                    Row::Stuck => (1.0, 0.0, 0.0),
+                    Row::Stuck => (1.0, 0.0, -speed(kk) / crate::worm::STICK_TIME_S),
+                    Row::Moving(e, _) if driving => (e * inertia, 1.0, e * into),
+                    Row::Moving(_, c) => (inertia, 1.0, into - speed(kk).signum() * c),
                 };
                 for l in 0..n {
                     a[n + kk][l] = at_acc * self.k[kk][l];
@@ -1989,16 +1992,42 @@ impl ConfigMachine {
                 a[n + kk][n + kk] = at_o;
                 b.push(rhs);
             }
-            let x = solve(a, b).unwrap_or_else(|| vec![0.0; n + m]);
+            solve(a, b).unwrap_or_else(|| vec![0.0; n + m])
+        };
+        // How far the moving worms' flanks miss the drag law at a solution: the driving flank's drag (1 / e - 1) s o
+        // has to reach C, the dragging one's must not exceed it.
+        let missed = |rows: &[Row], flanks: usize, x: &[f64]| -> f64 {
+            moving
+                .iter()
+                .enumerate()
+                .map(|(bit, &kk)| {
+                    let Row::Moving(e, c) = rows[kk] else { return 0.0 };
+                    let flank = (1.0 / e - 1.0) * speed(kk).signum() * x[n + kk];
+                    if flanks >> bit & 1 == 1 { (c - flank).max(0.0) } else { (flank - c).max(0.0) }
+                })
+                .sum()
+        };
+        // Rounds until the rows settle: a gearbox's loss factor fades over its power (`mech::settled_loss`), and a
+        // locking worm at rest that breaks loose takes its drag from the round that found it stuck.
+        for _ in 0..12 {
+            let x = (0..1usize << moving.len())
+                .map(|flanks| {
+                    let x = solve_rows(&rows, flanks);
+                    (missed(&rows, flanks, &x), x)
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, x)| x)
+                .unwrap_or_default();
             solved.acc = x[..n].to_vec();
             for kk in 0..m {
                 solved.into[kk] = self.ratio[kk]
                     * (drive[kk] - self.j_rotor[kk] * self.ratio[kk] * self.pulley_angle(kk, &solved.acc));
                 solved.out[kk] = x[n + kk];
             }
+            let before = rows.clone();
             for kk in 0..m {
                 rows[kk] = match (rows[kk], locking[kk]) {
-                    (Row::Stuck | Row::Drag(_), Some(worm)) if speed(kk) == 0.0 => {
+                    (Row::Stuck | Row::Drag(_), Some(worm)) if sticks(kk) => {
                         // Stuck, or broken loose this step: the bounds of the drag at rest.
                         let ends =
                             [-(1.0 / worm.efficiency - 1.0) * holds[kk], (1.0 - worm.back_efficiency) * holds[kk]];
@@ -2010,16 +2039,15 @@ impl ConfigMachine {
                             kept => kept,
                         }
                     }
-                    // By the output's power: o w is below 0 while the load drives back, whatever the rotor does.
-                    (_, Some(_)) => {
-                        let (output, rotor) = self.rigid_factors(kk, solved.out[kk], speed(kk));
-                        Row::Factors(output, rotor)
-                    }
+                    (_, Some(w)) => moving_row(kk, &w, solved.out[kk]),
                     (_, None) => {
                         let (output, rotor) = self.rigid_factors(kk, solved.into[kk], speed(kk));
                         Row::Factors(output, rotor)
                     }
                 };
+            }
+            if rows == before {
+                break;
             }
         }
         solved

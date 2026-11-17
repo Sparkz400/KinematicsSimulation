@@ -885,9 +885,12 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
 - Eine Schneckenstufe (`machine.worm`): der Abtrieb ihres Getriebes bekommt t eta^x und ihr Läufer t / i,
   x = tanh(t w / 0,5 W), mit dem Rückwirkungsgrad, wo die Last treibt (x unter 0); eine selbsthemmende gibt dem Läufer
   treibend x t / i und zurück angetrieben -x eta_back t / i, gegen die Bewegung. Im starren Modell werden mit einer
-  selbsthemmenden Schnecke die Abtriebe der Getriebe neben den Beschleunigungen gelöst; zurück angetrieben ist ihr
-  Bremsmoment am Rad (1 - Läuferfaktor) mal das Moment, das der Abtrieb in Ruhe gegen die Kräfte der Achsen hält (ein
-  Bremsmoment im Verhältnis zum dynamischen Moment hat dort keine widerspruchsfreie starre Lösung), und in Ruhe haftet
+  selbsthemmenden Schnecke die Abtriebe der Getriebe neben den Beschleunigungen gelöst, und eine bewegte selbsthemmende
+  Schnecke folgt ohne Einblendung dem Coulombschen Gesetz an ihrem Eingriff: ihr Bremsmoment am Rad ist das größere aus
+  dem der treibenden Flanke, (1 / eta - 1) mal das Moment, das das Rad aufnimmt, und dem der zurücktreibenden,
+  (1 - eta_back) mal das Moment, das der Abtrieb in Ruhe gegen die Kräfte der Achsen hält (ein Bremsmoment im
+  Verhältnis zum dynamischen Moment hat dort mit einem schweren Rad keine starre Lösung, Painlevés Paradox). Es steigt
+  mit dem Moment des Rads, also hat die Lösung eine Antwort. In Ruhe und unter 1e-3 rad/s (`worm::STICK_SPEED`) haftet
   der Abtrieb innerhalb der Grenzen der Schnecke (`ConfigMachine::rigid_locking`).
 - Ein sich neigender Körper (`machine.lean`, elastisches Modell): eine Koordinate w mehr neben den Achsen, die Masse des
   Körpers koppelt sie an seine Achse, [[M, m e_a], [m e_a^T, m]] [a; w''] = [F; tip p_a - k w - c w'], k und tip aus
@@ -906,10 +909,10 @@ Maschine; an ihnen ist nichts besonders für Maschinendateien.
   sind die der 3D-Ansicht: die Abschnittslängen werden nicht gegen sie geprüft.
 - `tool_flex`: ein sich neigender Körper, entlang einer waagrechten Achse; er neigt sich nur im elastischen Modell (wie
   im Crate).
-- Die Sperre einer selbsthemmenden Schnecke blendet, sobald sie sich bewegt, über die 0,5 W des Getriebes ein: aus der
-  Ruhe haftet sie (starres Modell), aber ein Motormoment, das die Last nicht ganz hebt, oder ein Schub, der sie nicht
-  ganz senkt, lässt sie mit der Geschwindigkeit kriechen, deren Leistung etwa 0,5 W atanh(Anteil des nötigen Moments)
-  ist. Im elastischen Modell ist das Haften allein die Einblendung.
+- Im elastischen Modell blendet die Sperre einer selbsthemmenden Schnecke, sobald sie sich bewegt, über die 0,5 W des
+  Getriebes ein: ein Motormoment, das die Last nicht ganz hebt, oder ein Schub, der sie nicht ganz senkt, lässt sie mit
+  der Geschwindigkeit kriechen, deren Leistung etwa 0,5 W atanh(Anteil des nötigen Moments) ist. Das starre Modell
+  haftet und hält sie an.
 - Die Lagerreibung eines Rundtischs wirkt am Läufer, vor Feder und Wirkungsgrad des Getriebes, wie die Vorspannung
   einer Spindel.
 - Der Eingriffswinkel einer Zahnstange ist für jede 20 Grad, und die Axialkraft ihres Ritzels bleibt aus der Last der
@@ -1008,7 +1011,9 @@ Scheibe von Hand in zwei Lagen (eine versetzte Umlenkrolle und eine Klemme, die 
 Schneckengetriebe gegen den Rundtisch des Gelenkbaukastens mit seiner Schnecke (starr und elastisch, treibend und
 zurück angetrieben), das Halten einer selbsthemmenden Schnecke und die Beschleunigung einer zurück angetriebenen von
 Hand, die selbsthemmende Schnecke, die eine sinkende Last ohne Moment abbremst, 0,05 N m Schub zum Senken braucht und
-aus der Ruhe haftet, solange nicht genug sie bewegt, die Umschlingungen des Spindelportals neben seiner Z-Spindel, und
+aus der Ruhe haftet, solange nicht genug sie bewegt, die eine Antwort der bewegten selbsthemmenden Schnecke über
+Geschwindigkeiten und Momente gegen beide Flanken von Hand und ihr Senken in Fahrt (die 5 W des Motors und die 10 W der
+Last gehen in der Schnecke verloren; ohne Moment bremst sie bis zum Stillstand und hält), die Umschlingungen des Spindelportals neben seiner Z-Spindel, und
 die Katalogsuche für den Z-Motor des XYZ-Portals allein.
 
 `crates/sim-machines/tests/machine_file_review.rs` hält fest, was eine unabhängige Durchsicht durch Versuch gefunden

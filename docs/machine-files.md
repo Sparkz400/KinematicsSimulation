@@ -839,10 +839,12 @@ derivations):
 - A worm stage (`machine.worm`): its gearbox's output gets t eta^x and its rotor t / i, x = tanh(t w / 0.5 W), with the
   back efficiency where the load drives (x below 0); a self-locking one gives the rotor x t / i driving and
   -x eta_back t / i driven back, against the motion. In the rigid model, with a self-locking worm, the gearboxes'
-  outputs are solved for beside the accelerations; driven back its drag at the wheel is (1 - rotor factor) times the
-  torque the output holds at rest against the axes' forces (a drag in proportion to the dynamic torque has no
-  consistent rigid solution there), and at rest the output sticks within the worm's bounds
-  (`ConfigMachine::rigid_locking`).
+  outputs are solved for beside the accelerations, and a moving self-locking worm follows Coulomb's law at its mesh
+  without the fade: its drag at the wheel is the larger of the driving flank's, (1 / eta - 1) times the torque the
+  wheel takes, and the overhauling flank's, (1 - eta_back) times the torque the output holds at rest against the axes'
+  forces (a drag in proportion to the dynamic torque there has no rigid solution with a heavy wheel, Painleve's
+  paradox). That drag rises with the wheel's torque, so the solve has one answer. At rest, and below 1e-3 rad/s
+  (`worm::STICK_SPEED`), the output sticks within the worm's bounds (`ConfigMachine::rigid_locking`).
 - A leaning body (`machine.lean`, elastic model): one more coordinate w beside the axes, the body's mass coupling it to
   its axis, [[M, m e_a], [m e_a^T, m]] [a; w''] = [F; tip p_a - k w - c w'], k and tip from `geometry::flex_at`.
 - The belt's wrap (`effects.belt_wrap`): `geometry::wrap` at each pulley from its neighbours' tangents, at the pose.
@@ -857,9 +859,9 @@ machine; nothing about them is particular to machine files.
 - A pulley stands where its `at_m` puts it (it rides on no body), and the wrap's places are the 3D view's: the section
   lengths are not checked against them.
 - `tool_flex`: one leaning body, along a horizontal axis; it leans in the elastic model only (as in the crate).
-- A self-locking worm's lock fades in over the gearbox's 0.5 W once it moves: from rest it sticks (rigid model), but a
-  motor torque short of lifting the load, or a push short of lowering it, creeps it at the speed whose power is about
-  0.5 W atanh(the share of the torque it would take). In the elastic model the stick is the fade alone.
+- In the elastic model a self-locking worm's lock fades in over the gearbox's 0.5 W once it moves: a motor torque short
+  of lifting the load, or a push short of lowering it, creeps it at the speed whose power is about 0.5 W atanh(the
+  share of the torque it would take). The rigid model sticks and stops it.
 - A rotary's bearing friction acts at the rotor, before the gearbox's spring and efficiency, as a screw's preload does.
 - A rack's pressure angle is 20 degrees for every rack, and its pinion's axial force is left out of the shaft's load.
 - The scissor lift's arms count with their vertical motion only (their turning and the feet's sideways motion are left
@@ -947,7 +949,9 @@ its force ratio n cot(alpha) at two heights is (`scissor.rs`), and its file pass
 hand at two poses (an offset idler and a clamp that is not level), the worm gear against the joint kit's table with its
 worm (rigid and elastic, driving and driven back), a self-locking worm's hold and a turning worm's back-driven
 acceleration by hand, the self-locking worm braking a lowering load with no torque, needing 0.05 N m of push to lower it
-and sticking from rest short of what moves it, the belts' wraps of the screw portal beside its Z screw, and the
+and sticking from rest short of what moves it, the moving self-locking worm's one answer over a sweep of speeds and
+torques against both flanks by hand and its lowering at speed (the motor's 5 W and the load's 10 W lost in the worm;
+with no torque it brakes to rest and holds), the belts' wraps of the screw portal beside its Z screw, and the
 catalogue search for the XYZ portal's Z motor alone.
 
 `crates/sim-machines/tests/machine_file_review.rs` holds what an independent review found by experiment and what was
