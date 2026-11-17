@@ -27,6 +27,20 @@ payload = true
 # the rope's snatch and setting down with a slack rope leaves the load standing. Off: the load hangs from the start and a
 # pick is quasi-static. The elastic rope only.
 floor_contact = false
+# The rope's own mass (rope.mass_per_m_kg_m): its inertia moves with the trolley, the load and the drum (a straight rope, its
+# velocity varying linearly along it, plus the rope wound on the drum), its weight hangs on the load and the drum, and the
+# tension differs along it by the weight below. Needs rope_stretch.
+rope_mass = false
+# The hook block hangs on the rope (crane.hook_mass_kg) and the load under it on a sling of crane.sling_length_m, swinging
+# on its own: a spherical double pendulum. Needs rope_stretch.
+hook_block = false
+# The three drives are elastic: each gearbox's stiffness, damping and backlash (gearbox.*) between the motor and the
+# wheel or drum, the rotors' angles states of their own. Off: rigid drives, the crane's give is its rope's. Needs
+# rope_stretch.
+joint_elasticity = false
+# The bridge is a rigid girder on two end carriages, each with its own drive of the bridge's motor config (the command
+# shared equally), the wheels' lateral stiffness holding the skew: the bridge's travel and its yaw. Needs rope_stretch.
+bridge_skew = false
 # The travels' guides: steel wheels on steel rails, the bridge and the trolley rolling against crane.rolling_coefficient
 # times the load on their wheels (their own weight and the rope's pull down), against the motion.
 guide_friction = true
@@ -251,6 +265,20 @@ hook_mass_kg = 15.0
 # box of the scene (0.4 m tall, its centre 0.3 m below the hook) on a floor at 0 m.
 floor_height_m = 0.5
 payload_kg = 250.0
+# [estimate] With effects.floor_contact: Coulomb friction between the standing load and the floor (steel or wood on
+# concrete, 0.3 as for a crate on a workshop floor), smoothed over crane.rolling_smoothing_m_s.
+floor_friction_coefficient = 0.3
+# [estimate] With effects.hook_block: the sling from the hook block to the load's centre of mass (m).
+sling_length_m = 1.0
+# [estimate] With effects.bridge_skew: the rails' distance, the girder with a 0.3 m margin outside the trolley's stroke
+# (the scene's rails), the two end carriages' wheelbase along the rails, and the lateral stiffness of one carriage's wheels
+# (flanges on the rail head, N/m). The wheels hold the bridge's yaw with the moment k_lat b^2 / 2 per rad (two carriages,
+# each two flanged wheel sets at +-b/2 sharing k_lat: M = 2 x (k_lat / 2)(psi b / 2)(b / 2) per carriage); the damping
+# (flange friction) is 5 % of the critical at the bridge's yaw inertia m_b gauge^2 / 12 (effects.guide_friction).
+bridge_gauge_m = 5.6
+bridge_wheelbase_m = 2.0
+bridge_wheel_lateral_stiffness_n_m = 2.0e6
+bridge_skew_damping_ratio = 0.05
 # [estimate] Travel between the runway's buffers and between the girder's buffers (m), from 0.
 bridge_stroke_m = 10.0
 trolley_stroke_m = 5.0
@@ -291,6 +319,9 @@ specific_damping_n_s = 1660.0
 breaking_load_n = 20000.0
 safety_factor = 4.5
 min_tension_n = 50.0
+# [estimate] With effects.rope_mass: the rope's mass per metre, 0.0035 d^2 kg/m with d in mm for a steel wire rope (6x19
+# fibre core, 6 mm: 0.126 kg/m).
+mass_per_m_kg_m = 0.126
 
 # The box the load may be in (x, y, z in m; z the load's height). The rope is 1 m long at the top, 4.5 m at the bottom.
 [workspace]
@@ -317,7 +348,8 @@ max_jerk_m_s3 = 2.0
 # [estimate] The bridge's and the trolley's planetary gearbox (the shared table; the hoist's is [gearbox.hoist]): 30:1
 # on the bridge's 80 mm wheels is 375 rad/m, so 0.8 m/s turns the motor at 300 rad/s, below its 314 rad/s rated speed.
 # Its values at the output, as on every machine. The drives are rigid here (the crane's give is the rope's): stiffness
-# and damping are read and not used, and backlash, lost motion and the stiffness's curve are set to none.
+# and damping are used with effects.joint_elasticity only, and backlash, lost motion and the stiffness's curve are set to
+# none.
 [gearbox]
 ratio = 30.0
 efficiency = 0.94
@@ -599,6 +631,13 @@ crane.trolley_mass_kg = [90.0, 160.0]
 crane.hook_mass_kg = [10.0, 25.0]
 crane.floor_height_m = [0.3, 0.6]
 crane.rolling_coefficient = [0.004, 0.01]
+crane.floor_friction_coefficient = [0.2, 0.5]
+crane.sling_length_m = [0.5, 2.0]
+crane.bridge_gauge_m = [4.0, 8.0]
+crane.bridge_wheelbase_m = [1.5, 3.0]
+crane.bridge_wheel_lateral_stiffness_n_m = [5.0e5, 1.0e7]
+crane.bridge_skew_damping_ratio = [0.01, 0.2]
+rope.mass_per_m_kg_m = [0.1, 0.16]
 crane.rolling_smoothing_m_s = [0.002, 0.01]
 crane.stop_stiffness_n_m = [5.0e5, 2.0e6]
 crane.stop_damping_n_s_m = [1000.0, 4000.0]
