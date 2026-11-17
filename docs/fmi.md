@@ -190,7 +190,7 @@ move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEve
 machines/h-bot.toml  (FMI 3.0): 0 validator problems, 90 outputs, 101 rows, worst 4.9e-10 (motor.b.torque_rest): ok
 ```
 
-Later on 14 November 2026 it gained a fifth part (the logs below are from that date; the FMUs exported with `sim-cli fmu` on 16 November 2026 have 114 outputs and 18 inputs for t-gantry, 60 and 13 for single-axis and 108 and 18 for h-bot (FMI 3.0), as signals were added since): the same target as a path file through `command.path_file` and `command.run_path` with the parameter `time_optimal`, against `sim-cli run --path FILE --time-optimal`; and the serialized state now carries the snapshot (format 3). Same setup:
+Later on 14 November 2026 it gained a fifth part (the logs below are from that date; for the counts of 17 November see the run after them): the same target as a path file through `command.path_file` and `command.run_path` with the parameter `time_optimal`, against `sim-cli run --path FILE --time-optimal`; and the serialized state now carries the snapshot (format 3). Same setup:
 
 ```
 FMU state: restored bit for bit, serialized 3840 bytes and restored bit for bit; directional derivative and finite difference zero
@@ -206,6 +206,30 @@ move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEve
 time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
 machines/h-bot.toml  (FMI 3.0): 0 validator problems, 96 outputs, 101 rows, worst 4.9e-10 (motor.b.torque): ok
 ```
+
+On 17 November 2026, with the FMUs of the final build of that day exported by `sim-cli fmu` (fmpy 0.3.32, numpy 2.5.4, Python 3.14.3; the FMI 2.0 FMUs of `t-gantry`, `single-axis` and `t-gantry` with `exct-30.toml`, the FMI 3.0 FMUs of `machines/h-bot.toml` and `t-gantry`), all five parts pass. The outputs are now 115 for t-gantry, 61 for single-axis, 113 for the EXCT-30 and 110 for h-bot; the inputs 18, 13, 18 and 18 (per axis a setpoint and a target, per motor a mode, a torque and a velocity, and eight more):
+
+```
+FMU state: restored bit for bit, serialized 5246 bytes and restored bit for bit; directional derivative and finite difference zero
+move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEvents message, none with logging off
+time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
+t-gantry  (FMI 2.0): 0 validator problems, 115 outputs, 101 rows, worst 5.0e-10 (axis.x.position): ok
+FMU state: restored bit for bit, serialized 3043 bytes and restored bit for bit; directional derivative and finite difference zero
+move input: worst 4.7e-10 against sim-cli run --move; log categories: one logEvents message, none with logging off
+time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
+single-axis  (FMI 2.0): 0 validator problems, 61 outputs, 101 rows, worst 5.0e-10 (axis.x.position): ok
+FMU state: restored bit for bit, serialized 8569 bytes and restored bit for bit; directional derivative and finite difference zero
+move input: worst 4.6e-10 against sim-cli run --move; log categories: one logEvents message, none with logging off
+time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
+t-gantry crates/machine-t-gantry/exct-30.toml (FMI 2.0): 0 validator problems, 113 outputs, 101 rows, worst 5.0e-10 (axis.z.friction_load_scale): ok
+FMU state: restored bit for bit, serialized 5145 bytes and restored bit for bit; directional derivative and finite difference zero
+move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEvents message, none with logging off
+time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
+machines/h-bot.toml  (FMI 3.0): 0 validator problems, 110 outputs, 101 rows, worst 4.9e-10 (motor.b.torque_command): ok
+t-gantry  (FMI 3.0): 0 validator problems, 115 outputs, 101 rows, worst 5.0e-10 (axis.x.position): ok
+```
+
+The logs above that date are kept as they were: their output counts are those of the FMUs then.
 
 Not run: the Modelica Association's `fmusim` (Reference-FMUs) and the FMU Compliance Checker. Neither is published on a package registry: `pip index versions` finds no distribution named `fmusim`, `reference-fmus`, `fmi-compliance-checker` or `fmucheck`, and conda is not installed here. Both are distributed as binaries on GitHub releases, which were not downloaded.
 
