@@ -73,6 +73,9 @@ pub struct MotorLoad {
     pub mains_energy: f64,
     pub line_module_energy: f64,
     pub peak_line_module_power: f64,
+    /// With the DC link simulated: what the drive's bleeder took out of the DC link while disabled (`Drive::disabled_step`;
+    /// each drive its own share of a shared link), J.
+    pub discharge_energy: f64,
     /// The torque at the gearbox output, where the machine reports it (signal `gearbox.<motor>.output_torque`): its
     /// peak, and its cubic mean weighted with the speed. Not the motor torque times the ratio: the rotor's
     /// own acceleration does not pass through the gearbox, and its losses come off or on top.
@@ -971,6 +974,7 @@ impl Tally {
                 (self.cubic[k].0 + torque.abs().powi(3) * self.speed[k].abs(), self.cubic[k].1 + self.speed[k].abs());
             let drive = &sim.control.drives[k];
             load.resistor_energy += drive.resistor_power * sim.dt;
+            load.discharge_energy += drive.discharge_power * sim.dt;
             load.peak_resistor_power = load.peak_resistor_power.max(drive.resistor_power);
             load.peak_dc_link_voltage = load.peak_dc_link_voltage.max(drive.dc_voltage);
             // The line module's load either way, on the DC link's side: drawn into it (the line gives 1 / efficiency of
@@ -2805,32 +2809,35 @@ pub struct FrontPoint {
 
 /// The energy a cycle takes from the supply, J: what the drives drew less what they fed back, plus what the braking
 /// resistor burned of what they fed back (with the DC link simulated; a shared one counted once). What the capacitors
-/// hold more at the end than at the start counts as fed back. With the regenerative supply (`effects.regenerative_supply`)
-/// also the line module's own loss and the bleeders' discharge. The line draws `drawn / eta` for the `drawn` it puts into
-/// the DC link and gives the mains `eta * fed` of the `fed` it takes out, so it loses `(1/eta - 1) drawn + (1 - eta) fed`;
-/// with `line_module_energy = drawn + fed` and `mains_energy = eta * fed` (the load's sums) `fed = mains_energy / eta`.
+/// hold more at the end than at the start counts as fed back. With the DC link simulated also what the bleeders took
+/// out of it and the line module's (or an S210's rectifier's) own loss, `effects.dc_link`'s
+/// `ratings.line_module_efficiency` eta both ways: it draws `drawn / eta` from the line for the `drawn` it puts into the
+/// DC link and gives the mains `eta * fed` of the `fed` it takes out (`effects.regenerative_supply`), so it loses
+/// `(1/eta - 1) drawn + (1 - eta) fed`; with the load's `line_module_energy = drawn + fed` and `mains_energy = eta * fed`,
+/// `fed = mains_energy / eta`. The DC link's balance, drawn - fed = net + burned + bleeders (+ what the capacitors gain),
+/// makes this the energy drawn from the line less what the mains got back. A shared link is counted once, with the
+/// shared config's efficiency; a link of its own with its motor's (`catalog::motor_config`).
 pub fn supply_energy(cfg: &Config, load: &CycleLoad) -> f64 {
     let net: f64 = load.motors.iter().map(|m| m.energy_in - m.energy_regenerated).sum();
-    let burned: f64 = if cfg.bool("effects.shared_dc_link").unwrap_or(false) {
-        load.motors.first().map_or(0.0, |m| m.resistor_energy)
-    } else {
-        load.motors.iter().map(|m| m.resistor_energy).sum()
-    };
-    let mut extra = 0.0;
-    if cfg.bool("effects.regenerative_supply").unwrap_or(false) {
-        let eta = cfg.positive("ratings.line_module_efficiency").unwrap_or(1.0);
-        let shared = cfg.bool("effects.shared_dc_link").unwrap_or(false);
-        let (through, mains) = if shared {
-            load.motors.first().map_or((0.0, 0.0), |m| (m.line_module_energy, m.mains_energy))
-        } else {
-            load.motors.iter().fold((0.0, 0.0), |a, m| (a.0 + m.line_module_energy, a.1 + m.mains_energy))
-        };
-        let fed = mains / eta;
-        extra += (1.0 / eta - 1.0) * (through - fed) + (1.0 - eta) * fed;
-        extra +=
-            load.budget.as_ref().map_or(0.0, |b| b.rows.iter().filter(|r| r.id == "discharge").map(|r| r.energy).sum());
+    let shared = cfg.bool("effects.shared_dc_link").unwrap_or(false);
+    // Every drive of a shared link reports the link's resistor and line module as its own.
+    let links: Vec<&MotorLoad> =
+        if shared { load.motors.iter().take(1).collect() } else { load.motors.iter().collect() };
+    let burned: f64 = links.iter().map(|m| m.resistor_energy).sum();
+    if !cfg.bool("effects.dc_link").unwrap_or(false) {
+        return net + burned;
     }
-    net + burned + extra
+    let bled: f64 = load.motors.iter().map(|m| m.discharge_energy).sum();
+    let line: f64 = links
+        .iter()
+        .map(|m| {
+            let own = if shared { None } else { crate::catalog::motor_config(cfg, &m.id).ok() };
+            let eta = own.as_ref().unwrap_or(cfg).positive("ratings.line_module_efficiency").unwrap_or(1.0);
+            let fed = m.mains_energy / eta;
+            (1.0 / eta - 1.0) * (m.line_module_energy - fed) + (1.0 - eta) * fed
+        })
+        .sum();
+    net + burned + bled + line
 }
 
 /// The points that no other one beats: none other is as good in all three figures and better in one. Fastest first;
@@ -4603,13 +4610,17 @@ pub fn compare_effect(entry: &MachineEntry, cfg: &Config, effect: &str) -> Resul
 mod tests {
     use super::*;
 
-    /// The line module's loss in the supply energy: efficiency eta = 0.9, the drives drew 100 J into the DC link and fed
-    /// 40 J out of it (mains 36 J arrive, through the module 140 J). The line draws 100 / 0.9 = 111.11 J and gives the mains
-    /// 36 J, so the supply gave 75.11 J: the DC side's net 60 J plus the loss (1 / 0.9 - 1) 100 + (1 - 0.9) 40 = 15.11 J.
+    /// The line module's loss in the supply energy: efficiency eta = 0.9, the drive drew 100 J out of the DC link and fed
+    /// 40 J into it, the bleeder took 2 J, so the module put 102 J in and took the 40 J out (mains 36 J arrive, through the
+    /// module 142 J). The line gives 102 / 0.9 = 113.33 J and gets 36 J back, 77.33 J from the supply: the DC side's net
+    /// 60 J, the bleeder's 2 J and the loss (1 / 0.9 - 1) 102 + (1 - 0.9) 40 = 15.33 J. Without the DC link simulated the
+    /// net 60 J alone.
     #[test]
     fn the_supply_energy_has_the_line_modules_loss() {
         let cfg = Config::parse(
-            "[effects]
+            "format_version = 1
+[effects]
+dc_link = true
 regenerative_supply = true
 [ratings]
 line_module_efficiency = 0.9
@@ -4620,11 +4631,14 @@ line_module_efficiency = 0.9
             energy_in: 100.0,
             energy_regenerated: 40.0,
             mains_energy: 36.0,
-            line_module_energy: 140.0,
+            line_module_energy: 142.0,
+            discharge_energy: 2.0,
             ..MotorLoad::default()
         };
         let load = CycleLoad { motors: vec![motor], ..CycleLoad::default() };
-        assert!((supply_energy(&cfg, &load) - (100.0 / 0.9 - 36.0)).abs() < 1e-9);
+        assert!((supply_energy(&cfg, &load) - (102.0 / 0.9 - 36.0)).abs() < 1e-9, "{}", supply_energy(&cfg, &load));
+        let off = Config::parse("format_version = 1\n[effects]\ndc_link = false\n").unwrap();
+        assert!((supply_energy(&off, &load) - 60.0).abs() < 1e-12);
     }
 
     /// The refinement finds a sharp resonance that the 60 points of the loop measurement miss. Two masses on a spring,
@@ -4970,7 +4984,8 @@ line_module_efficiency = 0.9
         };
         assert!((output_rpm(&cfg, &motor("a")) - 100.0).abs() < 1e-9);
         assert!((output_rpm(&cfg, &motor("b")) - 50.0).abs() < 1e-9);
-        let (a, b) = (pulley_bearing_life_h(&cfg, &motor("a")).unwrap(), pulley_bearing_life_h(&cfg, &motor("b")).unwrap());
+        let (a, b) =
+            (pulley_bearing_life_h(&cfg, &motor("a")).unwrap(), pulley_bearing_life_h(&cfg, &motor("b")).unwrap());
         assert!((a / 468696.16 - 1.0).abs() < 1e-5 && (b / a - 2.0).abs() < 1e-9, "{a} and {b}");
     }
 

@@ -1274,7 +1274,8 @@ fn the_optimiser_at_the_worst_corner_steps_back_to_a_setting_that_passes_there()
 /// loss on the way (4 Ohm * (0.0245 N m s^2/m * 1 m/s^2 / 0.45 N m/A)^2 = 0.012 W over the 0.9 s of a stop: 0.01 J). So
 /// the lower acceleration gives back 2 * 1.2026 = 2.405 J less per cycle, within 2 %. With the DC link at 4.7 uF the
 /// braking resistor burns all but 0.062 J of each stop, which the supply gives again at the next start: the energy from
-/// the supply falls by as much, within 3 % (the copper loss of the starts falls too, some 0.03 J).
+/// the supply falls by as much over the rectifier's efficiency 0.98 (it draws 1 / 0.98 from the line for each joule it
+/// puts into the DC link), within 3 % (the copper loss of the starts falls too, some 0.03 J).
 #[test]
 fn a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_supply() {
     use sim_components::analysis::supply_energy;
@@ -1312,9 +1313,36 @@ fn a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_s
         back_fast - back_slow
     );
     assert!(
-        ((supply_fast - supply_slow) / less - 1.0).abs() < 0.03,
-        "{supply_fast} J and {supply_slow} J from the supply, by hand {less} J less"
+        ((supply_fast - supply_slow) / (less / 0.98) - 1.0).abs() < 0.03,
+        "{supply_fast} J and {supply_slow} J from the supply, by hand {} J less",
+        less / 0.98
     );
+}
+
+/// The energy from the supply (`supply_energy`, from the drives' sums) against the DC link's own books (the energy
+/// budget): what the rectifier or line module drew from the line, less what the mains got back and what the capacitors
+/// hold more at the end. With the DC link and the regenerative supply (efficiency 0.98 both ways, the line module's loss
+/// counted on both) and with the DC link alone (the rectifier's loss on what it draws).
+#[test]
+fn the_supply_energy_closes_with_the_dc_links_books() {
+    use sim_components::analysis::supply_energy;
+    for regenerative in [true, false] {
+        let mut cfg = ideal_rigid();
+        for e in [
+            "effects.dc_link = true".to_string(),
+            format!("effects.regenerative_supply = {regenerative}"),
+            "ratings.dc_link_capacitance_uf = 4.7".into(),
+        ] {
+            cfg.set_text(&e).unwrap();
+        }
+        let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
+        let budget = load.budget.as_ref().unwrap();
+        let row = |id: &str| budget.rows.iter().filter(|r| r.id == id).map(|r| r.energy).sum::<f64>();
+        let books = budget.supply - row("mains") - row("capacitors");
+        let ours = supply_energy(&cfg, &load);
+        assert!(row("line_module") > 0.0 && (row("mains") > 0.0) == regenerative, "{:?}", budget.rows);
+        assert!((ours - books).abs() < 1e-6 * books.abs(), "{regenerative}: {ours} J against the books' {books} J");
+    }
 }
 
 /// The front of `sim-cli optimise --pareto` on the default config: the settings of the search that pass, and the
