@@ -811,10 +811,8 @@ impl std::str::FromStr for Drives {
 
 /// The drives of a supply (`SUPPLIES`) with their rated and maximum output current, smallest rated current first (of
 /// two alike, the higher maximum current first): the S210 converters for "230v" (1 AC and 3 AC) and "400v" (3 AC), the
-/// new 6SL5310 ones for "s210new-...", the Single Motor Modules for "s120", another maker's drives at the line
+/// new 6SL5310 ones for "s210new-...", the Single and Double Motor Modules for "s120" (a Double, "6SL3120-2...", with its per axis currents), another maker's drives at the line
 /// voltage. A maker that prints no maximum current (Mitsubishi) has NaN there.
-// shortcut: the S120 Double Motor Modules are left out (per axis they are the single ones' sizes); add them when a
-// search sizes two axes on one module.
 pub fn drives_for(supply: &str) -> Vec<(&'static str, f64, f64)> {
     let current = |r: &Row| {
         (r["part_number"], number(r, "rated_output_current_a"), number(r, "max_output_current_a").unwrap_or(f64::NAN))
@@ -825,9 +823,7 @@ pub fn drives_for(supply: &str) -> Vec<(&'static str, f64, f64)> {
             .into_iter()
             .filter(|r| (r["series"] == "S210 (New)") == new && (voltage == "230v" || r["supply"].ends_with("3 AC")))
             .collect(),
-        (.., "s120") => {
-            rows(table("siemens/motor_modules_s120.csv")).into_iter().filter(|r| r["axes"] == "1").collect()
-        }
+        (.., "s120") => rows(table("siemens/motor_modules_s120.csv")),
         _ => Vec::new(),
     };
     let mut out: Vec<(&'static str, f64, f64)> =
@@ -2568,6 +2564,17 @@ pub fn with_motor_part(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_s120_drives_include_the_double_motor_modules_with_their_per_axis_currents() {
+        // Catalogue D 21.4 N prints the 2 x 9 A Double Motor Module 6SL3120-2TE21-0AD0 with 9 A rated and 27 A maximum
+        // per axis (the Single's 9 A / 27 A), and the 2 x 18 A, type C, 6SL3120-2TE21-8AC0 with 18 A / 36 A.
+        let drives = drives_for("s120");
+        let find = |p: &str| drives.iter().find(|d| d.0 == p).copied().unwrap();
+        assert_eq!(find("6SL3120-2TE21-0AD0"), ("6SL3120-2TE21-0AD0", 9.0, 27.0));
+        assert_eq!(find("6SL3120-2TE21-8AC0"), ("6SL3120-2TE21-8AC0", 18.0, 36.0));
+        assert_eq!(drives.iter().filter(|d| d.0.starts_with("6SL3120-2")).count(), 5);
+    }
 
     #[test]
     fn a_guide_set_has_four_carriages_unless_the_config_says_and_a_rail_length_sets_the_weight() {
