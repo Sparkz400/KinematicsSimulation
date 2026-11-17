@@ -38,9 +38,14 @@
 //! speeddata vfast := [...];`); the zone is left out. In both every other line or statement without a move is skipped;
 //! other move instructions (PTP_REL, SPLINE, MoveAbsJ, named KRL points) are refused. A PTP or MoveJ is a straight line
 //! in the machine's axes, as a MoveL, at the move's speed along it.
-//! shortcut: a speed is along the path over all axes, as a path's length is (on an arm in tool space the rotation
-//! vector's radians count with the metres); a robot's TCP speed counts the position alone. Split the speed into the
-//! TCP's and the orientation's (RAPID's v_ori) where reorienting moves have to run at the robot's own speed.
+//!
+//! A robot's speed (KRL's `$VEL.CP`, RAPID's TCP speed) is the tool centre's, the position alone, and the reorientation
+//! is limited by its own: `program.orientation_speed_rad_s` (default 500 degrees per second, the default of RAPID's
+//! `v_ori`), on a machine whose tool space has rx, ry, rz. A move takes the longer of the tool centre's distance over
+//! its speed and the angle between the two orientations over that rate, so a move that only reorients runs at the
+//! rate; the planner's cap along the path (whose length counts the rotation vector's radians with the metres) is the
+//! path's length over that time. A move with no speed (PTP, MoveJ, `vmax`) stays at the axes' limits. G-code keeps its
+//! feed rule above.
 
 use crate::path::Piece;
 use sim_core::AxisInfo;
@@ -80,11 +85,23 @@ fn fail<T>(line: usize, key: &'static str, detail: impl Into<String>) -> Result<
 /// The program in `text`, read by the file's extension (see the module): G-code, KRL, RAPID, robot moves as CSV, else a
 /// path file (`path::parse`, one run at the axes' limits). Planned from `start`, on a machine with `axes`.
 pub fn read(file_name: &str, text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
+    read_with(file_name, text, axes, start, ORIENTATION_SPEED)
+}
+
+/// `read` with the tool's reorientation speed `orientation_speed` (rad/s) for the robot programs on a machine whose tool
+/// has an orientation (`program.orientation_speed_rad_s`).
+pub fn read_with(
+    file_name: &str,
+    text: &str,
+    axes: &[AxisInfo],
+    start: &[f64],
+    orientation_speed: f64,
+) -> Result<Vec<Run>> {
     let extension = file_name.rsplit_once('.').map_or("", |(_, e)| e).to_ascii_lowercase();
     match extension.as_str() {
         "nc" | "ngc" | "gcode" | "g" | "cnc" | "tap" => gcode(text, axes, start),
-        "src" => krl(text, axes, start),
-        "mod" | "prg" => rapid(text, axes, start),
+        "src" => krl_with(text, axes, start, orientation_speed),
+        "mod" | "prg" => rapid_with(text, axes, start, orientation_speed),
         _ if text.lines().any(|l| l.trim().to_ascii_lowercase().starts_with("move")) => robot_csv(text, axes, start),
         _ => crate::path::parse(text)
             .map(|pieces| vec![Run { feed: None, caps: Vec::new(), pieces }])
@@ -429,14 +446,77 @@ fn rotation_of_abc([a, b, c]: [f64; 3]) -> [f64; 3] {
     crate::rigid::log(&crate::rigid::rpy([c.to_radians(), b.to_radians(), a.to_radians()]))
 }
 
+/// The tool's reorientation speed a robot program runs at by default (rad/s): 500 degrees per second, the default of
+/// ABB's `v_ori` (RAPID speeddata); `program.orientation_speed_rad_s` sets it.
+pub const ORIENTATION_SPEED: f64 = 500.0 * std::f64::consts::PI / 180.0;
+
+/// The angle (rad) of the arc through `via` from `from` to `to` about `centre`, on the first three axes: the two
+/// parts from the start to `via` and from `via` to the end, each taken as at most a half turn.
+fn arc_angle(from: &[f64], via: &[f64], to: &[f64], centre: &[f64]) -> f64 {
+    let n = from.len().min(3);
+    let at = |p: &[f64]| (0..n).map(|i| p[i] - centre[i]).collect::<Vec<f64>>();
+    let angle = |a: &[f64], b: &[f64]| {
+        let (dot, size) = (a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>(), (norm(a) * norm(b)).max(1e-300));
+        (dot / size).clamp(-1.0, 1.0).acos()
+    };
+    let (a, v, b) = (at(from), at(via), at(to));
+    angle(&a, &v) + angle(&v, &b)
+}
+
+fn norm(a: &[f64]) -> f64 {
+    a.iter().map(|x| x * x).sum::<f64>().sqrt()
+}
+
+/// The cap along the path (the planner's units: the length counts the rotation vector's radians with the metres) of a
+/// piece that a robot program runs at the tool centre's speed `v` (`None`: the axes' limits) while the orientation
+/// (the axes `rotation`, a rotation vector) turns at no more than `omega` rad/s (RAPID's `v_ori`): the piece takes
+/// the longer of d / v for the tool centre's distance d (the axes that are not the rotation's, along the arc through
+/// `via` on an arc) and theta / omega for the angle theta between the two orientations, and its length over that time
+/// is the cap. A move that only reorients (d = 0) runs at `omega`. Without a rotation, `v` itself.
+fn tcp_cap(
+    rotation: Option<[usize; 3]>,
+    from: &[f64],
+    piece: &Piece,
+    via: Option<&[f64]>,
+    v: Option<f64>,
+    omega: f64,
+) -> Option<f64> {
+    let v = v?;
+    let Some(rotation) = rotation else { return Some(v) };
+    let (Piece::Line(to) | Piece::Arc { to, .. } | Piece::Spline(to)) = piece;
+    let others = |from_axis: usize| -> f64 {
+        (from_axis..from.len()).filter(|i| !rotation.contains(i)).map(|i| (to[i] - from[i]).powi(2)).sum::<f64>()
+    };
+    let position = match (piece, via) {
+        (Piece::Arc { centre, .. }, Some(via)) => {
+            let r = norm(&from.iter().zip(centre).take(3).map(|(f, c)| f - c).collect::<Vec<f64>>());
+            (r * arc_angle(from, via, to, centre)).hypot(others(3).sqrt())
+        }
+        _ => others(0).sqrt(),
+    };
+    use crate::rigid::{exp, log, matmul, transpose};
+    let (a, b) = (rotation.map(|i| from[i]), rotation.map(|i| to[i]));
+    let turn = log(&matmul(&exp(b), &transpose(&exp(a))));
+    let theta = (turn[0] * turn[0] + turn[1] * turn[1] + turn[2] * turn[2]).sqrt();
+    let chord = (0..3).map(|k| (b[k] - a[k]).powi(2)).sum::<f64>().sqrt();
+    let time = (position / v).max(theta / omega);
+    if time > 0.0 && time.is_finite() { Some(position.hypot(chord) / time) } else { Some(v) }
+}
+
 /// KUKA KRL (see the module).
 pub fn krl(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
+    krl_with(text, axes, start, ORIENTATION_SPEED)
+}
+
+/// `krl` with the tool's reorientation speed `orientation_speed` (rad/s).
+pub fn krl_with(text: &str, axes: &[AxisInfo], start: &[f64], orientation_speed: f64) -> Result<Vec<Run>> {
     let mut pos = start.to_vec();
     let mut runs = Vec::new();
     // The orientation as KUKA's A, B, C, where the machine has rx, ry, rz: components left out are kept.
     let rotation = rotation_axes(axes);
     let mut abc = rotation.map(|r| abc_of(r.map(|i| start[i])));
     let mut speed = None;
+    let mut last: Option<Option<f64>> = None;
     for (n, raw) in text.lines().enumerate() {
         let line = n + 1;
         let code = raw.split(';').next().unwrap_or("").trim();
@@ -493,26 +573,34 @@ pub fn krl(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
             }
             pose
         };
-        let (piece, feed) = match (keyword.as_str(), aggregates.as_slice()) {
-            ("PTP", [end]) => (Piece::Line(oriented(&pos, end)), None),
-            ("LIN", [end]) => (Piece::Line(oriented(&pos, end)), speed),
+        let (piece, via, feed) = match (keyword.as_str(), aggregates.as_slice()) {
+            ("PTP", [end]) => (Piece::Line(oriented(&pos, end)), None, None),
+            ("LIN", [end]) => (Piece::Line(oriented(&pos, end)), None, speed),
             ("CIRC", [aux, end]) => {
                 let via = robot_pose(axes, &pos, aux);
                 let to = oriented(&pos, end);
-                (circle(line, &pos, &via, &to)?, speed)
+                (circle(line, &pos, &via, &to)?, Some(via), speed)
             }
             _ => return fail(line, "program-error-named", code),
         };
+        let capped = tcp_cap(rotation, &pos, &piece, via.as_deref(), feed, orientation_speed);
         pos = match &piece {
             Piece::Line(to) | Piece::Arc { to, .. } | Piece::Spline(to) => to.clone(),
         };
-        push(&mut runs, feed, piece);
+        // Moves at the same programmed speed are one run, whatever each one's cap along the path is.
+        push_by(&mut runs, capped, piece, last == Some(feed));
+        last = Some(feed);
     }
     Ok(runs)
 }
 
 /// ABB RAPID (see the module).
 pub fn rapid(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
+    rapid_with(text, axes, start, ORIENTATION_SPEED)
+}
+
+/// `rapid` with the tool's reorientation speed `orientation_speed` (rad/s).
+pub fn rapid_with(text: &str, axes: &[AxisInfo], start: &[f64], orientation_speed: f64) -> Result<Vec<Run>> {
     // Statements end at ';'; a '!' starts a comment to the end of its line. Each statement keeps the line it starts on.
     let mut statements: Vec<(usize, String)> = Vec::new();
     let mut current = (0, String::new());
@@ -568,6 +656,7 @@ pub fn rapid(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
     let mut speeds: std::collections::HashMap<String, f64> = Default::default();
     let mut pos = start.to_vec();
     let mut runs = Vec::new();
+    let mut last: Option<Option<f64>> = None;
     for (line, statement) in statements {
         let statement = statement.split_whitespace().collect::<Vec<_>>().join(" ");
         let words: Vec<&str> = statement.split(' ').collect();
@@ -628,19 +717,21 @@ pub fn rapid(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
                 _ => fail(line, "program-error-named", arg),
             }
         };
-        let (piece, feed) = match instruction.to_ascii_lowercase().as_str() {
-            "movel" | "movej" => (Piece::Line(oriented(&pos, &target(args[0])?)), speed(args.get(1))?),
+        let (piece, via, feed) = match instruction.to_ascii_lowercase().as_str() {
+            "movel" | "movej" => (Piece::Line(oriented(&pos, &target(args[0])?)), None, speed(args.get(1))?),
             "movec" if args.len() >= 2 => {
                 let via = robot_pose(axes, &pos, &target(args[0])?);
                 let to = oriented(&pos, &target(args[1])?);
-                (circle(line, &pos, &via, &to)?, speed(args.get(2))?)
+                (circle(line, &pos, &via, &to)?, Some(via), speed(args.get(2))?)
             }
             _ => return fail(line, "program-error-word", instruction.to_string()),
         };
+        let capped = tcp_cap(rotation, &pos, &piece, via.as_deref(), feed, orientation_speed);
         pos = match &piece {
             Piece::Line(to) | Piece::Arc { to, .. } | Piece::Spline(to) => to.clone(),
         };
-        push(&mut runs, feed, piece);
+        push_by(&mut runs, capped, piece, last == Some(feed));
+        last = Some(feed);
     }
     Ok(runs)
 }
@@ -906,7 +997,17 @@ MoveC,0,0,0.5,0.5,0,0",
              vmax, fine, tool0;\n ENDPROC\nENDMODULE"
         );
         let runs = rapid(&module, &axes, &[0.0; 6]).unwrap();
-        assert_eq!(runs.iter().map(|r| r.feed).collect::<Vec<_>>(), [Some(0.1), Some(0.25), None]);
+        // The cap along the path is the path's length (the 0.1 m and the quarter turn's pi / 2 rad, counted together) over
+        // the move's time: 0.1 m at 0.1 m/s takes 1 s, 0.1 m at 0.25 m/s 0.4 s, and the quarter turn at 500 degrees per
+        // second only 0.18 s, so the tool centre's speed sets the time.
+        let length = 0.1_f64.hypot(PI / 2.0);
+        let feeds: Vec<_> = runs.iter().map(|r| r.feed).collect();
+        assert!(
+            feeds[0].is_some_and(|f| (f - length / 1.0).abs() < 1e-12)
+                && feeds[1].is_some_and(|f| (f - length / 0.4).abs() < 1e-12)
+                && feeds[2].is_none(),
+            "{feeds:?}"
+        );
         let Piece::Line(turned) = &runs[0].pieces[0] else { panic!() };
         assert!(
             turned.iter().zip([0.1, 0.0, 0.0, 0.0, 0.0, PI / 2.0]).all(|(a, b)| (a - b).abs() < 1e-12),
@@ -914,7 +1015,8 @@ MoveC,0,0,0.5,0.5,0,0",
         );
         let src = "DEF demo()\n  PTP {X 0, Y 0, Z 0}\n  $VEL.CP = 0.2\n  LIN {X 100, A 90}\nEND";
         let runs = krl(src, &axes, &[0.0; 6]).unwrap();
-        assert_eq!(runs.iter().map(|r| r.feed).collect::<Vec<_>>(), [None, Some(0.2)]);
+        // 0.1 m at 0.2 m/s takes 0.5 s, longer than the quarter turn's 0.18 s.
+        assert!(runs[0].feed.is_none() && runs[1].feed.is_some_and(|f| (f - length / 0.5).abs() < 1e-12));
         let Piece::Line(turned) = &runs[1].pieces[0] else { panic!() };
         assert!(
             turned.iter().zip([0.1, 0.0, 0.0, 0.0, 0.0, PI / 2.0]).all(|(a, b)| (a - b).abs() < 1e-12),
@@ -922,6 +1024,29 @@ MoveC,0,0,0.5,0.5,0,0",
         );
         let unknown = rapid("MoveL [[0,0,0],[1,0,0,0]], vslow, fine, tool0;", &axes, &[0.0; 6]).unwrap_err();
         assert_eq!((unknown.key, unknown.detail.as_str()), ("program-error-named", "vslow"));
+    }
+
+    /// The tool centre's speed and the reorientation's are limited on their own (`tcp_cap`): a move takes the longer of
+    /// its two times. 0.1 m at 1 m/s takes 0.1 s, the quarter turn (pi / 2 rad) at 500 degrees per second (8.7266 rad/s)
+    /// 0.18 s: the move takes 0.18 s, and the cap along the path (0.1 m and pi / 2 rad counted together) is its length
+    /// over that. A move that only reorients (v100, the position kept) runs at the 500 degrees per second: the cap is the
+    /// rate itself, as the rotation vector's length is the angle. With 90 degrees per second the same move takes 1 s.
+    #[test]
+    fn a_robot_move_with_a_turn_takes_the_longer_of_the_two_times() {
+        let axes = ["x", "y", "z", "rx", "ry", "rz"].map(axis);
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        let module = |x: u32, speed: &str| {
+            format!("MoveL [[{x},0,0],[{half},0,0,{half}],[0,0,0,0],[9E9,9E9,9E9,9E9,9E9,9E9]], {speed}, fine, tool0;")
+        };
+        let cap = |text: &str, omega: f64| rapid_with(text, &axes, &[0.0; 6], omega).unwrap()[0].feed.unwrap();
+        let omega = ORIENTATION_SPEED;
+        assert!((omega - 500.0_f64.to_radians()).abs() < 1e-15);
+        let time = (PI / 2.0) / omega;
+        assert!((time - 0.18).abs() < 1e-12);
+        assert!((cap(&module(100, "v1000"), omega) * 0.18 - 0.1_f64.hypot(PI / 2.0)).abs() < 1e-12);
+        assert!((cap(&module(0, "v100"), omega) - omega).abs() < 1e-12);
+        let slow = 90.0_f64.to_radians();
+        assert!((cap(&module(0, "v100"), slow) - slow).abs() < 1e-12);
     }
 
     /// The extension picks the reader; a path file stays a path file.

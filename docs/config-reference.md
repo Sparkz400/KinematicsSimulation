@@ -1431,6 +1431,14 @@ A path in place of the cycle, optional and in no shipped file: `sim-cli verdicts
 | `program` | text | The text of the path file or program |
 | `time_optimal` | true/false | Timed as fast as the motors allow (`--time-optimal`); else within the axis limits. Left out: false |
 
+## `[program]`
+
+Optional and in no shipped file; read with `[path]`. On a machine whose tool space has an orientation (axes x, y, z, rx, ry, rz) a robot program's speed (KRL `$VEL.CP`, RAPID's TCP speed) is the tool centre's, the position alone, and the reorientation is limited on its own: a move takes the longer of the tool centre's distance over its speed and the angle between the two orientations over this rate. A move that only reorients runs at it. G-code keeps its feed rule.
+
+| Key | Unit | Meaning |
+| --- | --- | --- |
+| `orientation_speed_rad_s` | rad/s | How fast a robot program turns the tool. Left out: 500 degrees per second (8.7266 rad/s), the default of ABB RAPID's `v_ori` |
+
 ## `[conveyor]`
 
 Picking from a moving belt conveyor (goal 3), for every machine whose tool axes are Cartesian positions: the deltas D3, D2 (x and z only: a belt along x), D4 and the linear delta, and the gantries. Only in C and the conveyor examples beside the other machines' defaults (T-gantry: a belt at 0.1 m/s, a part every 5.0 s, its pass about 3.6 s; D2, D4, linear delta: 0.3 m/s, a part every 1.0 s, each picking all 60 a minute); no default config has the table, and a config without it runs its `[[cycle.segment]]` as before. With it (and `enabled = true`) the cycle (`--cycle`, `analyze`, `verdicts`, the app's cycle) is one pass per part instead of the segments, which stay in the file unused: from rest above the place to above the part, meeting it with the belt's speed; down onto it, the grip moving with it, up; to above the place, down, the release (moving with a second belt, if the place is on one), up; and, from a moving place, to rest above it. How each move is planned, and what is a pick or a miss, is in the [model reference](model-reference.md#picking-from-a-conveyor). All keys are choices of the process, not properties of the machine: no `[bounds]`. Poses and directions are tool coordinates, one value per axis (0 on the D4's rotation).
