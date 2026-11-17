@@ -2452,8 +2452,25 @@ impl ConfigMachine {
             None => at,
         }
     }
-    /// A waypoint of a belt as a wheel in the belt's plane (x, z), its radius signed by the sense the belt runs round
-    /// it, and where the 3D view puts it at the pose `q`.
+    /// The belt's plane in the 3D view, as (its second coordinate, the depth): x-z seen from the front, or x-y seen from
+    /// above where the belt lies flat, a section's length changing with axes along x and along y and none along z (an
+    /// H-bot's, a CoreXY's).
+    fn belt_plane(&self) -> (usize, usize) {
+        let flat = self.sections.iter().any(|s| {
+            let along = |k: usize| (0..self.n()).any(|i| s.c[i] != 0.0 && self.dirs[i][k].abs() > 1e-9);
+            along(0) && along(1) && !along(2)
+        });
+        if flat { (1, 2) } else { (2, 1) }
+    }
+    /// A point of the belt's plane (`belt_plane`) at the depth `depth`, in the 3D view.
+    fn in_view(&self, p: [f64; 2], depth: f64) -> [f64; 3] {
+        let (second, deep) = self.belt_plane();
+        let mut out = [p[0]; 3];
+        (out[second], out[deep]) = (p[1], depth);
+        out
+    }
+    /// A waypoint of a belt as a wheel in the belt's plane (`belt_plane`), its radius signed by the sense the belt runs
+    /// round it, and where the 3D view puts it at the pose `q`.
     fn wheel(&self, w: Waypoint, q: &[f64]) -> (Wheel, [f64; 3]) {
         let sense = |clockwise: bool| if clockwise { -1.0 } else { 1.0 };
         let (at, radius) = match w {
@@ -2464,16 +2481,16 @@ impl ConfigMachine {
             }
             Waypoint::Body(b) => (self.scene_at(q, &self.bodies[b].axes), 0.0),
         };
-        (Wheel { centre: [at[0], at[2]], radius }, at)
+        (Wheel { centre: [at[0], at[self.belt_plane().0]], radius }, at)
     }
 
     /// The belt of section `s` as the 3D view draws it, a polyline in scene coordinates: its straight runs from tangent
     /// to tangent between the wheels of its route (`geometry::contacts`), round each wheel inside the route in the
-    /// wheel's sense (`geometry::arc`). Each point keeps the depth (y) of its wheel.
+    /// wheel's sense (`geometry::arc`). Each point keeps the depth of its wheel off the belt's plane.
     fn belt_line(&self, s: usize, q: &[f64]) -> Vec<[f64; 3]> {
         let route = self.route_waypoints(s);
         let wheels: Vec<(Wheel, [f64; 3])> = route.iter().map(|&w| self.wheel(w, q)).collect();
-        let at = |p: [f64; 2], y: f64| [p[0], y, p[1]];
+        let deep = self.belt_plane().1;
         let mut line = Vec::new();
         for (i, pair) in wheels.windows(2).enumerate() {
             let [(a, pa), (b, pb)] = [pair[0], pair[1]];
@@ -2481,11 +2498,11 @@ impl ConfigMachine {
             if i > 0 {
                 // Round wheel a from where the run before met it.
                 let came = contacts(wheels[i - 1].0, a)[1];
-                line.extend(arc(a, came, leave, ARC_PIECES).into_iter().skip(1).map(|p| at(p, pa[1])));
+                line.extend(arc(a, came, leave, ARC_PIECES).into_iter().skip(1).map(|p| self.in_view(p, pa[deep])));
             } else {
-                line.push(at(leave, pa[1]));
+                line.push(self.in_view(leave, pa[deep]));
             }
-            line.push(at(meet, pb[1]));
+            line.push(self.in_view(meet, pb[deep]));
         }
         line
     }
@@ -2505,7 +2522,8 @@ impl ConfigMachine {
                 let (before, after) = (*routes[section].iter().rev().nth(1)?, *routes[next].get(1)?);
                 let ((wheel, at), from, to) = (self.wheel(me, q), self.wheel(before, q).0, self.wheel(after, q).0);
                 let points = arc(wheel, contacts(from, wheel)[1], contacts(wheel, to)[0], ARC_PIECES);
-                Some((section, points.into_iter().map(|p| [p[0], at[1], p[1]]).collect()))
+                let deep = self.belt_plane().1;
+                Some((section, points.into_iter().map(|p| self.in_view(p, at[deep])).collect()))
             })
             .collect()
     }
@@ -2931,7 +2949,7 @@ impl Machine for ConfigMachine {
     }
 
     /// With effects.belt_wrap: per motor the wrap at its pulley (`geometry::wrap`), from where the 3D view puts it and
-    /// the wheels before and after it along the belt (`wrap_neighbours`) at this pose, in the belt's plane (x, z); NaN
+    /// the wheels before and after it along the belt (`wrap_neighbours`) at this pose, in the belt's plane (elt_plane); NaN
     /// for a motor that drives no belt (a screw, rack, linear motor or rotary).
     fn belt_wraps(&self, tool_pose: &[f64]) -> Vec<f64> {
         if self.wraps.is_empty() {

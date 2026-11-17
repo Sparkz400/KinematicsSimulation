@@ -55,7 +55,7 @@ const CLOCKWISE: Field = field(
     "clockwise",
     Kind::Bool,
     false,
-    "With effects.belt_wrap: the belt runs round it clockwise, seen from the front (x to the right, z up) and followed along the routes in their order. Default false (anticlockwise).",
+    "With effects.belt_wrap: the belt runs round it clockwise, seen from the front (x to the right, z up), or from above (x to the right, y away) where the belt lies flat, and followed along the routes in their order. Default false (anticlockwise).",
 );
 
 /// The node lists of `[machine]`, in the order they are read, each with its fields.
@@ -110,7 +110,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 "at_m",
                 Kind::Point,
                 false,
-                "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis. With effects.belt_wrap its place in the belt's plane (x, z), which the wrap is worked out from.",
+                "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis. With effects.belt_wrap its place in the belt's plane (x, z; x, y where the belt lies flat, its sections changing with axes along x and along y and none along z), which the wrap is worked out from.",
             ),
             CLOCKWISE,
             POS,
@@ -242,7 +242,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 "at_m",
                 Kind::Point,
                 false,
-                "Where the 3D view draws it, [x, y, z], m (from its body where it has one); with effects.belt_wrap its place in the belt's plane (x, z).",
+                "Where the 3D view draws it, [x, y, z], m (from its body where it has one); with effects.belt_wrap its place in the belt's plane (x, z; x, y where the belt lies flat).",
             ),
             CLOCKWISE,
             POS,

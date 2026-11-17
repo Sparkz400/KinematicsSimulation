@@ -123,6 +123,40 @@ fn the_h_bot_racks_with_the_head_s_pull_and_off_centre() {
     assert!(machine(&config("h-bot.toml", &[])).racking_moment(&[0.5, 0.25], &[0.0, 2.0]).is_none());
 }
 
+/// The belt points of a file's 3D view at a pose.
+fn belt_points(name: &str, pose: &[f64]) -> Vec<[f64; 3]> {
+    let entry = file(name);
+    let m = (entry.build)(&entry.config()).unwrap();
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
+    m.equilibrium(pose, &mut state, &mut torque);
+    let mut scene = sim_core::Scene::default();
+    m.scene(&state, &mut scene);
+    let belt = scene.parts.iter().filter(|p| p.id == "belt");
+    belt.flat_map(|p| match p.shape {
+        Shape::Segment { to, .. } => [p.pos, to],
+        _ => panic!("{:?}", p.shape),
+    })
+    .collect()
+}
+
+/// The H-bot's belt lies flat, its sections changing with x and with y: the 3D view draws it in its x-y plane at the
+/// height of the bodies (z = 0.06 m), from the motors at y = -0.05 m round the far idler on the head, 0.6 m back from the
+/// clamp. At y = 0.3 the head stands at -0.03 + 0.3 = 0.27 m, the far idler at -0.33 m with its radius of 0.012 m: the
+/// belt reaches down to -0.342 m round it. The T-gantry's belt runs up and down its Z axis: still in the x-z plane.
+#[test]
+fn the_h_bot_s_belt_is_drawn_flat() {
+    let points = belt_points("h-bot.toml", &[0.5, 0.3]);
+    assert!(points.len() > 20 && points.iter().all(|p| (p[2] - 0.06).abs() < 1e-12), "{points:?}");
+    let low = points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+    assert!((-0.342 - 1e-12..-0.341).contains(&low), "{low}");
+    let gantry = belt_points("t-gantry.toml", &[0.5, 0.3]);
+    let spread = |k: usize| {
+        let (lo, hi) = gantry.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p[k]), b.max(p[k])));
+        hi - lo
+    };
+    assert!(spread(1) < 0.05 && spread(2) > 0.3, "T-gantry depth spread {}, height spread {}", spread(1), spread(2));
+}
+
 /// The CoreXY's cancellation by hand (machines/corexy.toml with effects.gantry_yaw on). Each belt pulls both ends of
 /// the gantry: the moment is 0.3 m (T_a1 + T_a2 - T_b1 - T_b2), each belt's tension sum against the other's. The head
 /// (3 kg and the 1 kg payload) accelerated along x at 2 m/s2 in the middle (x = y = 0.25 m) takes 8 N: each belt's two

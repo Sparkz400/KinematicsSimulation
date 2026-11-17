@@ -549,7 +549,7 @@
             "additionalProperties": false,
             "properties": {
               "at_m": {
-                "description": "Where the 3D view draws it, [x, y, z], m (from its body where it has one); with effects.belt_wrap its place in the belt's plane (x, z).",
+                "description": "Where the 3D view draws it, [x, y, z], m (from its body where it has one); with effects.belt_wrap its place in the belt's plane (x, z; x, y where the belt lies flat).",
                 "items": {
                   "type": "number"
                 },
@@ -562,7 +562,7 @@
                 "type": "string"
               },
               "clockwise": {
-                "description": "With effects.belt_wrap: the belt runs round it clockwise, seen from the front (x to the right, z up) and followed along the routes in their order. Default false (anticlockwise).",
+                "description": "With effects.belt_wrap: the belt runs round it clockwise, seen from the front (x to the right, z up), or from above (x to the right, y away) where the belt lies flat, and followed along the routes in their order. Default false (anticlockwise).",
                 "type": "boolean"
               },
               "friction_nm": {
@@ -1210,7 +1210,7 @@
             "additionalProperties": false,
             "properties": {
               "at_m": {
-                "description": "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis. With effects.belt_wrap its place in the belt's plane (x, z), which the wrap is worked out from.",
+                "description": "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis. With effects.belt_wrap its place in the belt's plane (x, z; x, y where the belt lies flat, its sections changing with axes along x and along y and none along z), which the wrap is worked out from.",
                 "items": {
                   "type": "number"
                 },
@@ -1219,7 +1219,7 @@
                 "type": "array"
               },
               "clockwise": {
-                "description": "With effects.belt_wrap: the belt runs round it clockwise, seen from the front (x to the right, z up) and followed along the routes in their order. Default false (anticlockwise).",
+                "description": "With effects.belt_wrap: the belt runs round it clockwise, seen from the front (x to the right, z up), or from above (x to the right, y away) where the belt lies flat, and followed along the routes in their order. Default false (anticlockwise).",
                 "type": "boolean"
               },
               "gearbox": {

@@ -288,7 +288,7 @@ Motorsignale und von `--motor N`.
 | | `payload_inertia_kgm2` | | die seiner Last, solange `effects.payload` an ist und der Greifer sie hält, kg m² |
 | | `friction_coulomb_nm`, `friction_viscous_nm_s_rad` | | Coulomb- und viskose Reibung seines Lagers an der Achse, mit `effects.guide_friction`; Vorgabe 0 |
 | | `strain_wave` | | die Tabelle der Lebensdauerwerte seines Wellgetriebes, aufgebaut wie `[strain_wave]` |
-| `pulley`, `idler` | `clockwise` | | mit `effects.belt_wrap`: der Riemen läuft im Uhrzeigersinn um sie, von vorn gesehen (x nach rechts, z nach oben) und den Routen in ihrer Reihenfolge nach; Vorgabe false; `at_m` ist dann ihre Lage in der Ebene des Riemens (x, z) |
+| `pulley`, `idler` | `clockwise` | | mit `effects.belt_wrap`: der Riemen läuft im Uhrzeigersinn um sie, von vorn gesehen (x nach rechts, z nach oben), bei einem flach liegenden Riemen von oben (x nach rechts, y nach hinten), und den Routen in ihrer Reihenfolge nach; Vorgabe false; `at_m` ist dann ihre Lage in der Ebene des Riemens (x, z; x, y beim flach liegenden Riemen, dessen Abschnitte sich mit Achsen entlang x und entlang y und keiner entlang z ändern) |
 | `worm` | `gearbox` | Pflicht | dieses Getriebe ist eine Schneckenstufe ([unten](#schneckengetriebe)); eine Schnecke je Getriebe |
 | | `ratio` | Pflicht | ihre Übersetzung, anstelle der des Getriebes |
 | | `efficiency`, `back_efficiency` | Pflicht | angetrieben von der Schnecke (über 0, höchstens 1) und rückwärts vom Rad (höchstens 1; 0 oder weniger sperrt selbst, was ein angetriebenes eta unter 0,5 verlangt) |
@@ -597,7 +597,7 @@ Getriebes: 1 - eta wird in beide Richtungen zu (1 - eta) (1 - s + s nu / nu_ref)
 **Die Umschlingung des Riemens** (`effects.belt_wrap`). Mit ihr sind die eingreifenden Zähne an jeder getriebenen
 Scheibe Umschlingung r / p (p die Zahnteilung) anstelle von `ratings.belt_teeth_in_mesh`, im Gesetz des
 Zahnüberspringens und in der Zahnlast des Riemens. Die Umschlingung wird in der Lage aus den Orten der Räder in der
-Ebene des Riemens gerechnet (x und z der 3D-Ansicht): `at_m` der Scheibe und die Räder vor und nach ihr entlang des
+Ebene des Riemens gerechnet (x und z der 3D-Ansicht; x und y beim flach liegenden Riemen eines H-Bots oder CoreXY): `at_m` der Scheibe und die Räder vor und nach ihr entlang des
 Riemens, der vorletzte Punkt der Route des Abschnitts, der an der Scheibe endet, und der zweite der Route des
 Abschnitts, der dort beginnt (eine Umlenkrolle mit ihrem `at_m`, von ihrem Körper aus, wo sie auf einem mitfährt; ein
 Körper, eine Klemme an ihm, wo die 3D-Ansicht ihn zeichnet; eine andere Scheibe). `clockwise` jedes Rads sagt, in
