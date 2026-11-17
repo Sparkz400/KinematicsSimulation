@@ -316,6 +316,10 @@ fn parts_named_in_a_config_behave_like_their_numbers() {
             assert!(if heavier { gain >= own && gain < 2.0 * own } else { gain < own }, "{}: gain {gain}", entry.id);
         }
         numbers.set_text(&format!("drive.velocity_kp_nm_s_rad = {gain:?}")).unwrap();
+        // The position gain where the retune lowered it for the cascade's margin (`catalog::CASCADE_MARGIN`).
+        let kv = resolved.f64("drive.kv_1_s").unwrap();
+        assert!(kv <= numbers.f64("drive.kv_1_s").unwrap(), "{}: kv {kv}", entry.id);
+        numbers.set_text(&format!("drive.kv_1_s = {kv:?}")).unwrap();
         assert_eq!(resolved, numbers, "{}", entry.id);
         // Resolved once, a config names no part any more: doing it again changes nothing.
         assert_eq!(resolve(entry, &resolved).unwrap(), resolved, "{}", entry.id);
@@ -364,7 +368,9 @@ fn the_bounds_of_every_config_bracket_their_values() {
 /// config's crossover over the rotor's inertia (`retuned`: here the rotor's ratio, which is the smaller), it runs
 /// the cycle with about the torque of the config's own motor. The 1FK2104-5AF has a ninth of the rotor inertia:
 /// with the config's own gain (0.45 N m s/rad) its loop oscillates and the winding overheats, scaled with the
-/// inertia the motors turn alone (the rule before) it still oscillates, with the mean it runs calmly. (The config
+/// inertia the motors turn alone (the rule before) it still oscillates, with the mean (0.049) and the position gain
+/// lowered from 50 to 24.1 1/s for the cascade (`catalog::CASCADE_MARGIN`; at 50 it oscillated, 5.1 N m RMS) it runs
+/// calmly, 1.21 N m. (The config
 /// had 0.6 until its velocity loop was tuned for margin; with that the 1FK2204-6AF oscillated as well, with 0.45 it
 /// runs as calmly as retuned.)
 #[test]
@@ -436,6 +442,33 @@ fn the_search_retunes_the_velocity_loop_for_a_lighter_rotor() {
     let found = search_motors(entry, &cfg, "400v", &|article| article == "1FK2204-6AF", Some("NRK"));
     let direct = found.iter().find(|c| c.gearbox.is_empty()).unwrap();
     assert!(direct.passes() && found.len() > 1, "{:?}", direct.tightest());
+}
+
+/// The retune's position gain. A P position loop (Kv) on a PI velocity loop (Kp, Tn) on an inertia J is stable while
+/// (Kp / J) (Tn + 1/Kv) > 1 (Routh on s³ + ω s² + ω (1/Tn + Kv) s + ω Kv / Tn, ω = Kp / J). The EXCT-30 naming its own
+/// motor keeps every gain of the file. With the 1FK2104-5AF the gain held to the rotor's crossover leaves that figure
+/// at 0.73 with the file's Kv 50 (J the X axis's at the motor, the larger): Kv goes to 1 / (1.25 / ω - Tn), Tn stays.
+#[test]
+fn the_retune_keeps_the_position_cascade_off_its_edge_and_leaves_the_own_motor_alone() {
+    use sim_components::catalog::{CASCADE_MARGIN, inertia_ratios, resolve, with_parts};
+    let entry = &machine_t_gantry::ENTRY;
+    let cfg = sim_core::Config::parse(machine_t_gantry::EXCT_30_CONFIG).unwrap();
+    let keys = ["drive.velocity_kp_nm_s_rad", "drive.velocity_tn_s", "drive.kv_1_s"];
+    let own = resolve(entry, &cfg).unwrap();
+    for key in keys {
+        assert_eq!(own.f64(key).unwrap(), cfg.f64(key).unwrap(), "{key}");
+    }
+    let light = with_parts(entry, &cfg, "1FK2104-5AF", "400v", "").unwrap();
+    let omega = |c: &sim_core::Config| {
+        let ratio = inertia_ratios(entry, c).unwrap().into_iter().fold(0.0, f64::max);
+        c.f64(keys[0]).unwrap() / (c.f64("motor.rotor_inertia_kgm2").unwrap() * (1.0 + ratio))
+    };
+    let (w, tn) = (omega(&light), cfg.f64(keys[1]).unwrap());
+    let before = w * (tn + 1.0 / cfg.f64(keys[2]).unwrap());
+    assert!(close(before, 0.73, 0.02), "{before}");
+    assert_eq!(light.f64(keys[1]).unwrap(), tn);
+    let kv = light.f64(keys[2]).unwrap();
+    assert!(close(kv, 1.0 / (CASCADE_MARGIN / w - tn), 1e-9) && close(kv, 24.1, 0.01), "{kv}");
 }
 
 /// The gearbox search on the single axis (ratio 5, 1 m/s over a 20 mm pulley radius: 50 rad/s at the pulley).

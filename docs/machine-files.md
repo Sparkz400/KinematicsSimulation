@@ -358,7 +358,8 @@ refused there. What stays shared: the drives' cycle times, the noise seed, a sha
 `sim-cli search --machine-file FILE --motor-id ID` searches one motor alone: each candidate (with its paired drive, and
 with `--gearboxes` the fitting gearboxes for that motor's own ratio) becomes `[parts.<ID>]`, the other motors stay as
 the file has them, that motor's velocity gain `drive.<ID>.velocity_kp_nm_s_rad` is retuned for it as the shared one is
-for a shared part (by the inertia that motor turns and its rotor's), and the cost is that one motor's weight. On the
+for a shared part (by the inertia that motor turns and its rotor's; its kv_1_s lowered with it where its position
+loop needs it), and the cost is that one motor's weight. On the
 XYZ portal, `--motor-id mz` sizes the Z motor behind its gearbox of ratio 10 while X and Y keep theirs.
 The time-optimal path planner takes the shared `[drive]`'s torque curve for every motor.
 
