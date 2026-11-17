@@ -118,7 +118,9 @@ A vertical axis: `slide.incline_deg = 90` (gravity pulls along the travel by the
 beta). The check `rack-feed-force` holds the highest force on the teeth (signal `rack.1.feed_force`: the force the load
 gets over the rack's efficiency while the pinion drives, times it while the load drives back) against
 `rated_feed_force_n` over the application factor K_A (`service_factor`). Rack makers publish the permissible feed force of a pair, not a life formula, so the rack
-has no life check; the planetary gearbox before it has its own (`gearbox-life`).
+has no life check; the planetary gearbox before it has its own (`gearbox-life`). `pressure_angle_deg` (normal section, optional, 20 as DIN 867 where
+absent, below 45) gives the force pushing pinion and rack apart, F tan(alpha) / cos(beta), that the pinion's radial load on the
+gearbox shaft counts.
 
 ## Linear motor
 

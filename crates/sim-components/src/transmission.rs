@@ -7,7 +7,7 @@
 //! Units: lengths in m, forces in N, torques in N m, speeds of rotation in r/min where a catalogue gives them so.
 
 use crate::joint::RotaryJoint;
-use crate::mech::{BRISTLE_RATE_MAX, HoldingBrake, MESH_STIFFNESS};
+use crate::mech::{BRISTLE_RATE_MAX, HoldingBrake};
 use sim_core::{Config, ConfigError, RatingCheck, SignalInfo};
 use std::f64::consts::PI;
 
@@ -89,10 +89,21 @@ impl Converter {
     /// inertia seen at the load, so that a light output (a winch drum) does not stick to the housing at a frequency the
     /// step cannot follow.
     pub fn apply_to(&self, cfg: &Config, joint: &mut RotaryJoint, output: f64) -> Result<()> {
+        self.apply_back(cfg, joint, output, self.efficiency)
+    }
+
+    /// `apply_to` for a converter that loses `back_efficiency` where the load drives it back (`self.efficiency` driving):
+    /// the gearbox's back-driving efficiency becomes its own times back_efficiency / efficiency (`Gearbox::back_ratio`).
+    ///
+    /// The lost-motion band is the gearbox's angle times the lever, plus the stretch of the converter's spring under
+    /// the hysteresis torque T_h that the band's flanks carry: T_h / lever (force) over the converter's stiffness (m).
+    pub fn apply_back(&self, cfg: &Config, joint: &mut RotaryJoint, output: f64, back_efficiency: f64) -> Result<()> {
         let (g, l) = (&mut joint.gearbox, self.lever);
         let i = g.ratio;
         g.ratio = i / l;
         let converter = self.stiffness;
+        let mesh_factor = g.mesh_stiffness / g.stiffness;
+        let stretch = if g.band > 0.0 { g.hysteresis / l / converter } else { 0.0 };
         let series = move |k: f64| 1.0 / (l * l / k + 1.0 / converter);
         // The three segments are given in torque, so each is in series with the converter as K1 is; the knees and the
         // hysteresis are torques at the gearbox output, forces over the lever at the joint.
@@ -100,18 +111,17 @@ impl Converter {
             [g.stiffness, g.upper[0], g.upper[1], g.dahl_stiffness].map(series);
         g.knees = g.knees.map(|t| t / l);
         g.hysteresis /= l;
-        // shortcut: the lost-motion band is the gearbox's angle times the lever, as the backlash; the converter's
-        // spring in series stretches it a little more, left out (the band is a fraction of an arcmin).
-        g.band *= l;
+        g.band = g.band * l + stretch;
         g.damping /= l * l;
         g.half_backlash =
             g.half_backlash * l + if cfg.bool("effects.gearbox_backlash")? { 0.5 * self.backlash } else { 0.0 };
         if cfg.bool("effects.gearbox_efficiency")? {
             g.efficiency *= self.efficiency;
             joint.extra_efficiency *= self.efficiency;
+            g.back_ratio *= back_efficiency / self.efficiency;
         }
         joint.rotor_inertia += self.inertia / (i * i);
-        // The mesh friction's bristle is MESH_STIFFNESS times the converted series stiffness (N/m now, not N m/rad). No
+        // The mesh friction's bristle is `gearbox.mesh_stiffness_factor` (MESH_STIFFNESS) times the converted series stiffness (N/m now, not N m/rad). No
         // shipped machine reaches the cap below: rack, screw and both machines hung in cables run the full 2.6e7 to 5.6e7 N/m, and
         // their gearbox loss per cycle is the same at a tenth and at ten times it to 4e-4 J (rack 16.741 J, screw
         // 16.762 J, cable-planar 38.167 J, cable-spatial 53.544 to 53.548 J), with their energy budgets closed to 2e-5 J.
@@ -122,10 +132,35 @@ impl Converter {
         if g.mesh_stiffness > 0.0 {
             let lighter = (joint.rotor_inertia * g.ratio * g.ratio).min(output);
             let omega = BRISTLE_RATE_MAX / 4.0;
-            g.mesh_stiffness = (MESH_STIFFNESS * g.stiffness).min(lighter * omega * omega);
+            g.mesh_stiffness = (mesh_factor * g.stiffness).min(lighter * omega * omega);
         }
         joint.brake = HoldingBrake::from_config(cfg, joint.rotor_inertia)?;
         Ok(())
+    }
+}
+
+/// A converter with its own back-driving efficiency (`BallScrew::converter`): derefs to the `Converter`, and applies like
+/// it (`Converter::apply`, `apply_to`) with the back efficiency in the gearbox.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackDriven {
+    pub converter: Converter,
+    pub back_efficiency: f64,
+}
+
+impl std::ops::Deref for BackDriven {
+    type Target = Converter;
+    fn deref(&self) -> &Converter {
+        &self.converter
+    }
+}
+
+impl BackDriven {
+    pub fn apply(&self, cfg: &Config, joint: &mut RotaryJoint) -> Result<()> {
+        self.apply_to(cfg, joint, f64::INFINITY)
+    }
+
+    pub fn apply_to(&self, cfg: &Config, joint: &mut RotaryJoint, output: f64) -> Result<()> {
+        self.converter.apply_back(cfg, joint, output, self.back_efficiency)
     }
 }
 
@@ -145,6 +180,8 @@ pub struct BallScrew {
     pub length: f64,
     pub mounting: Mounting,
     pub efficiency: f64,
+    /// Driven back by the load, with effects.screw_lead_efficiency (`lead_back_efficiency`); the forward one otherwise.
+    pub back_efficiency: f64,
     pub nut_stiffness: f64,
     pub bearing_stiffness: f64,
     pub preload: f64,
@@ -175,11 +212,20 @@ impl BallScrew {
         }
         let lead = p("lead_m")?;
         // A config without the switch (one written before 16 November 2026) has it off.
-        let efficiency =
+        let (efficiency, back_efficiency) =
             if cfg.get("effects.screw_lead_efficiency").is_ok() && cfg.bool("effects.screw_lead_efficiency")? {
-                Self::lead_efficiency(lead, nominal, cfg.positive("screw.friction_coefficient")?)
+                let mu = cfg.positive("screw.friction_coefficient")?;
+                let back = Self::lead_back_efficiency(lead, nominal, mu);
+                if back <= 0.0 {
+                    return Err(ConfigError::Invalid(
+                        "screw.friction_coefficient (the screw locks itself driven back: its efficiency there is \
+                         not positive, and this gearbox does not model a self-locking screw)"
+                            .into(),
+                    ));
+                }
+                (Self::lead_efficiency(lead, nominal, mu), back)
             } else {
-                efficiency
+                (efficiency, efficiency)
             };
         Ok(Self {
             lead,
@@ -188,6 +234,7 @@ impl BallScrew {
             length: p("length_m")?,
             mounting,
             efficiency,
+            back_efficiency,
             nut_stiffness: p("nut_stiffness_n_m")?,
             bearing_stiffness: p("bearing_stiffness_n_m")?,
             preload: cfg.non_negative("screw.preload_n")?,
@@ -205,13 +252,17 @@ impl BallScrew {
     /// balls' friction coefficient mu (THK's formula): (1 - mu tan beta) / (1 + mu / tan beta), tan beta / tan(beta + rho)
     /// with mu = tan rho. effects.screw_lead_efficiency puts it in place of `screw.efficiency`, which is a catalogue's
     /// lumped figure that holds the nut's preload drag too; the preload drags apart (`preload_torque`).
-    ///
-    /// shortcut: driven back the screw loses by the same factor (`Gearbox::loss_factor`), where THK gives
-    /// (1 - mu / tan beta) / (1 + mu tan beta); the two differ by 1e-4 at the ISW bench's lead angle (17.7 degrees) and
-    /// by 6e-4 at 7 degrees. A gearbox with its own back-drive efficiency would be needed for a self-locking screw.
     pub fn lead_efficiency(lead: f64, nominal_diameter: f64, mu: f64) -> f64 {
         let tan_beta = lead / (PI * nominal_diameter);
         (1.0 - mu * tan_beta) / (1.0 + mu / tan_beta)
+    }
+
+    /// The efficiency of the load driving the screw back (THK): (1 - mu / tan beta) / (1 + mu tan beta). Zero or less
+    /// where tan beta <= mu: the screw locks itself (`from_config` refuses that). It is the driving one with force and
+    /// motion swapped, tan(beta - rho) / tan(beta) with mu = tan rho.
+    pub fn lead_back_efficiency(lead: f64, nominal_diameter: f64, mu: f64) -> f64 {
+        let tan_beta = lead / (PI * nominal_diameter);
+        (1.0 - mu / tan_beta) / (1.0 + mu * tan_beta)
     }
 
     /// Screw radians per metre of travel: 2 pi / lead.
@@ -298,17 +349,19 @@ impl BallScrew {
         self.nominal_diameter * 1e3 * rpm.abs()
     }
 
-    /// The screw as a `Converter`, stiff as it is with the nut at `x` from the fixed bearing.
-    ///
-    /// shortcut: one stiffness for the whole stroke (the joint's gearbox has one); pass the softest nut position
-    /// (the far end, the middle for fixed-fixed) to judge resonance and settling on the safe side.
-    pub fn converter(&self, x: f64) -> Converter {
-        Converter {
-            lever: 1.0 / self.ratio(),
-            stiffness: self.stiffness(x),
-            backlash: 0.0,
-            efficiency: self.efficiency,
-            inertia: self.inertia(),
+    /// The screw as a converter, stiff as it is with the nut at `x` from the fixed bearing. The joint's gearbox has one
+    /// stiffness for the whole stroke: every builder passes `softest_position()`, which judges resonance and settling on
+    /// the safe side.
+    pub fn converter(&self, x: f64) -> BackDriven {
+        BackDriven {
+            converter: Converter {
+                lever: 1.0 / self.ratio(),
+                stiffness: self.stiffness(x),
+                backlash: 0.0,
+                efficiency: self.efficiency,
+                inertia: self.inertia(),
+            },
+            back_efficiency: self.back_efficiency,
         }
     }
 
@@ -318,13 +371,13 @@ impl BallScrew {
     }
 }
 
-/// The standard pressure angle of a rack and pinion's teeth (DIN 867), in the normal section.
-/// shortcut: every rack is taken at 20 degrees; give `[rack]` a pressure angle if a file uses another.
+/// The standard pressure angle of a rack and pinion's teeth (DIN 867), in the normal section: the default of
+/// `rack.pressure_angle_deg`.
 const RACK_PRESSURE_ANGLE_DEG: f64 = 20.0;
 
 /// A pinion on a rack. Config `[rack]`: `module_m`, `teeth`, `helix_angle_deg`, `efficiency`, `stiffness_n_m` (mesh and
 /// rack mounting), `backlash_m`, `pinion_inertia_kgm2`, `rated_feed_force_n` (the maker's permissible feed force of the
-/// pair), `service_factor` (K_A).
+/// pair), `service_factor` (K_A), and optionally `pressure_angle_deg` (normal section, 20 where absent).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RackPinion {
     pub module: f64,
@@ -336,6 +389,8 @@ pub struct RackPinion {
     pub pinion_inertia: f64,
     pub rated_force: f64,
     pub service_factor: f64,
+    /// Normal pressure angle, rad.
+    pub pressure_angle: f64,
 }
 
 impl RackPinion {
@@ -348,7 +403,13 @@ impl RackPinion {
                 if helix >= 45.0 { "rack.helix_angle_deg" } else { "rack.efficiency" }.into(),
             ));
         }
+        let alpha =
+            if cfg.get("rack.pressure_angle_deg").is_ok() { p("pressure_angle_deg")? } else { RACK_PRESSURE_ANGLE_DEG };
+        if alpha >= 45.0 {
+            return Err(ConfigError::Invalid("rack.pressure_angle_deg".into()));
+        }
         Ok(Self {
+            pressure_angle: alpha.to_radians(),
             module: p("module_m")?,
             teeth: p("teeth")?,
             helix_angle: helix.to_radians(),
@@ -535,7 +596,7 @@ impl RackPinion {
     /// F tan(alpha_n) / cos(beta), at right angles to it: |F| sqrt(1 + (tan(alpha_n) / cos(beta))^2). The axial force of
     /// a helical pinion, F tan(beta), and the tilt it puts on the shaft are left out.
     pub fn radial_load(&self, tooth_force: f64) -> f64 {
-        let apart = RACK_PRESSURE_ANGLE_DEG.to_radians().tan() / self.helix_angle.cos();
+        let apart = self.pressure_angle.tan() / self.helix_angle.cos();
         tooth_force.abs() * (1.0 + apart * apart).sqrt()
     }
 
@@ -654,6 +715,7 @@ mod tests {
             length: 1.0,
             mounting: Mounting::FixedSupported,
             efficiency: 0.9,
+            back_efficiency: 0.9,
             nut_stiffness: 5e8,
             bearing_stiffness: 1e9,
             preload: 500.0,
@@ -738,6 +800,7 @@ mod tests {
             pinion_inertia: 1e-4,
             rated_force: 3000.0,
             service_factor: 1.5,
+            pressure_angle: 20f64.to_radians(),
         };
         close(r.radius() * 2.0 * PI, 0.2, "travel per turn");
         close(r.allowed_force(), 2000.0, "allowed force");
@@ -817,6 +880,7 @@ mod tests {
             pinion_inertia: 1e-4,
             rated_force: 3000.0,
             service_factor: 1.25,
+            pressure_angle: 20f64.to_radians(),
         };
         let c = &r.rating_checks("1", 0)[0];
         assert!(c.check == "rack-feed-force" && c.signal == "rack.1.feed_force" && c.limit == 2400.0 && !c.life);
@@ -825,5 +889,169 @@ mod tests {
         close(RackPinion::feed_force(970.0, -1.0, 0.97), 940.9, "braking");
         // Straight teeth: r = m z / 2 = 30 mm.
         close(r.converter().lever, 0.03, "lever");
+    }
+
+    /// THK's back-driving efficiency (1 - mu / tan beta) / (1 + mu tan beta) at mu = 0.003. The ISW bench (tan beta =
+    /// 0.318310): 0.9904525 / 1.0009549 = 0.989630 against 0.989717 driving (1e-4 apart); at a lead angle of 7 degrees
+    /// (tan beta = 0.122785): 0.975567 / 1.000368 = 0.975208 against 0.975790 (6e-4). tan beta = mu locks: 0.
+    #[test]
+    fn the_screw_driven_back_loses_by_thks_back_efficiency_and_a_locking_one_is_refused() {
+        close(BallScrew::lead_back_efficiency(0.04, 0.04, 0.003), 0.989_630, "ISW back");
+        let lead7 = 7f64.to_radians().tan() * PI * 0.04;
+        close(BallScrew::lead_efficiency(lead7, 0.04, 0.003), 0.975_790, "7 degrees driving");
+        close(BallScrew::lead_back_efficiency(lead7, 0.04, 0.003), 0.975_208, "7 degrees back");
+        assert!(BallScrew::lead_back_efficiency(0.003 * PI * 0.04, 0.04, 0.003).abs() < 1e-12);
+        let text = |mu: f64| {
+            format!(
+                "format_version = 1\n[effects]\nscrew_lead_efficiency = true\n[screw]\nlead_m = 0.04\nnominal_diameter_m = 0.04\n\
+                 root_diameter_m = 0.0337\nlength_m = 1.8\nmounting = \"fixed-supported\"\nefficiency = 0.9\n\
+                 friction_coefficient = {mu}\nnut_stiffness_n_m = 5e8\nbearing_stiffness_n_m = 1e9\npreload_n = 500.0\n\
+                 dynamic_load_rating_n = 15000.0\nstatic_load_rating_n = 30000.0\nload_factor = 1.2\n\
+                 static_safety_factor = 2.0\ncritical_speed_factor = 0.8\nbuckling_safety_factor = 2.0\nmax_dn = 0.0\n"
+            )
+        };
+        let screw = BallScrew::from_config(&Config::parse(&text(0.003)).unwrap()).unwrap();
+        close(screw.back_efficiency, 0.989_630, "from the config");
+        // mu 0.4 over tan beta 0.318: the screw holds its load.
+        let err = BallScrew::from_config(&Config::parse(&text(0.4)).unwrap()).unwrap_err();
+        assert!(format!("{err:?}").contains("locks itself"), "{err:?}");
+    }
+
+    /// The test gearbox of the winch (efficiency 0.9, mesh friction off), behind a converter of efficiency 0.95 that loses
+    /// 0.9 driven back: driving it loses 0.9 x 0.95 = 0.855, driven back the gear's own 1 / 0.9 and the converter's
+    /// 1 / 0.9: 1 / 0.81 = 1.234568 (a gear that loses alike both ways would give 1 / 0.855 = 1.169591), and the loss power
+    /// of a steady twist of 100 N m at 2 m/s backwards is 200 (1 / 0.81 - 1) = 46.9136 W against 200 (1 / 0.855 - 1) =
+    /// 33.9181 W alike, whatever the rotor's side of the budget (`Gearbox::loss_power`).
+    #[test]
+    fn a_converter_with_its_own_back_efficiency_loses_so_driven_back_and_the_budget_has_it() {
+        let text = "format_version = 1\n[effects]\njoint_friction = false\nhard_stops = false\nmotor_friction = false\n\
+            torque_ripple = false\ngearbox_backlash = false\ngearbox_efficiency = true\ngearbox_drag = false\n\
+            motor_stiction = false\ngearbox_lost_motion = false\ngearbox_stiffness_curve = false\nthermal_feedback = false\n\
+            holding_brake = false\ngearbox_mesh_friction = false\n\
+            [motor]\nrotor_inertia_kgm2 = 1e-4\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\n\
+            friction_smoothing_rad_s = 1e-3\nfriction_breakaway_nm = 0.0\nfriction_stribeck_rad_s = 2.0\nripple_fraction = 0.0\n\
+            ripple_order = 6.0\ncogging_nm = 0.0\ncogging_order = 6.0\nbrake_torque_nm = 5.0\n\
+            [gearbox]\nratio = 20.0\nefficiency = 0.9\nbacklash_rad = 0.0\nstiffness_nm_rad = 2e5\ndamping_nm_s_rad = 5.0\n\
+            inertia_at_input_kgm2 = 1e-4\nefficiency_torque_nm = 100.0\nno_load_torque_nm = 0.0\nno_load_speed_rpm = 3000.0\n\
+            lost_motion_band_rad = 0.0\nhysteresis_rad = 0.0\nstiffness_t1_nm = 100.0\nstiffness_t2_nm = 100.0\n\
+            stiffness_k2_nm_rad = 2e5\nstiffness_k3_nm_rad = 2e5\n\
+            [joint]\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 1e-3\n\
+            min_angle_deg = -45.0\nmax_angle_deg = 90.0\nstop_stiffness_nm_rad = 1e5\nstop_damping_nm_s_rad = 0.0\n";
+        let cfg = Config::parse(text).unwrap();
+        let converter =
+            Converter { lever: 1.0, stiffness: f64::INFINITY, backlash: 0.0, efficiency: 0.95, inertia: 0.0 };
+        let make = |back: f64| {
+            let mut j = RotaryJoint::from_config(&cfg).unwrap();
+            converter.apply_back(&cfg, &mut j, f64::INFINITY, back).unwrap();
+            j.gearbox
+        };
+        let (own, alike) = (make(0.9), make(0.95));
+        assert!(
+            (own.loss_factor(1.0, 1e3) - 0.855).abs() < 1e-12 && (alike.loss_factor(1.0, 1e3) - 0.855).abs() < 1e-12
+        );
+        assert!((own.loss_factor(1.0, -1e3) - 1.0 / 0.81).abs() < 1e-12, "{}", own.loss_factor(1.0, -1e3));
+        assert!((alike.loss_factor(1.0, -1e3) - 1.0 / 0.855).abs() < 1e-12);
+        // A twist of 0.0005 rad at 2e5 N m/rad holds 100 N m at the output; the output runs back at 2 rad/s, the rotor with
+        // it (twist constant).
+        let (ratio, out) = (own.ratio, -0.3);
+        let loss = |g: &crate::mech::Gearbox| g.loss_power(ratio * (out + 5e-4), -2.0 * ratio, out, -2.0);
+        assert!((loss(&own) - 200.0 * (1.0 / 0.81 - 1.0)).abs() < 1e-6, "{}", loss(&own));
+        assert!((loss(&alike) - 200.0 * (1.0 / 0.855 - 1.0)).abs() < 1e-6, "{}", loss(&alike));
+    }
+
+    /// The hysteresis loop's and the mesh friction's presliding stiffness are factors on K1, 1 where the key is absent
+    /// (the mesh one with the converted stiffness, as the K1 itself: 2e5 / 0.025^2 = 3.2e8 N/m behind the drum).
+    /// `hysteresis_stiffness_factor = 3`: 3 x 3.2e8 = 9.6e8 N/m; `mesh_stiffness_factor = 0.5`: 1.6e8 N/m.
+    #[test]
+    fn the_presliding_stiffnesses_are_factors_on_k1_that_default_to_one() {
+        let base = "format_version = 1\n[effects]\njoint_friction = false\nhard_stops = false\nmotor_friction = false\n\
+            torque_ripple = false\ngearbox_backlash = false\ngearbox_efficiency = true\ngearbox_drag = false\n\
+            motor_stiction = false\ngearbox_lost_motion = false\ngearbox_stiffness_curve = false\nthermal_feedback = false\n\
+            holding_brake = false\ngearbox_mesh_friction = true\n\
+            [motor]\nrotor_inertia_kgm2 = 1e-4\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\n\
+            friction_smoothing_rad_s = 1e-3\nfriction_breakaway_nm = 0.0\nfriction_stribeck_rad_s = 2.0\nripple_fraction = 0.0\n\
+            ripple_order = 6.0\ncogging_nm = 0.0\ncogging_order = 6.0\nbrake_torque_nm = 5.0\n\
+            [gearbox]\nratio = 20.0\nefficiency = 0.9\nbacklash_rad = 0.0\nstiffness_nm_rad = 2e5\ndamping_nm_s_rad = 5.0\n\
+            inertia_at_input_kgm2 = 1e-4\nefficiency_torque_nm = 100.0\nno_load_torque_nm = 0.0\nno_load_speed_rpm = 3000.0\n\
+            lost_motion_band_rad = 0.0\nhysteresis_rad = 0.0\nstiffness_t1_nm = 100.0\nstiffness_t2_nm = 100.0\n\
+            stiffness_k2_nm_rad = 2e5\nstiffness_k3_nm_rad = 2e5\n{extra}\
+            [joint]\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 1e-3\n\
+            min_angle_deg = -45.0\nmax_angle_deg = 90.0\nstop_stiffness_nm_rad = 1e5\nstop_damping_nm_s_rad = 0.0\n";
+        let drum = Converter { lever: 0.025, stiffness: f64::INFINITY, backlash: 0.0, efficiency: 1.0, inertia: 0.0 };
+        let make = |extra: &str| {
+            let cfg = Config::parse(&base.replace("{extra}", extra)).unwrap();
+            let mut j = RotaryJoint::from_config(&cfg).unwrap();
+            drum.apply(&cfg, &mut j).unwrap();
+            j.gearbox
+        };
+        let plain = make("");
+        assert!(
+            (plain.dahl_stiffness / 3.2e8 - 1.0).abs() < 1e-12 && (plain.mesh_stiffness / 3.2e8 - 1.0).abs() < 1e-12
+        );
+        let set = make("hysteresis_stiffness_factor = 3.0\nmesh_stiffness_factor = 0.5\n");
+        assert!((set.dahl_stiffness / 9.6e8 - 1.0).abs() < 1e-12, "{}", set.dahl_stiffness);
+        assert!((set.mesh_stiffness / 1.6e8 - 1.0).abs() < 1e-12, "{}", set.mesh_stiffness);
+    }
+
+    /// The lost-motion band behind a converter: band x lever plus the converter's spring stretched by the hysteresis
+    /// torque. K1 = 2e5 N m/rad, hysteresis_rad 2e-4: T_h = 0.5 x 2e5 x 2e-4 = 20 N m; band 1e-4 rad x lever 0.025 m/rad =
+    /// 2.5e-6 m; the force 20 / 0.025 = 800 N over 5e7 N/m = 1.6e-5 m: 1.85e-5 m. No band, none.
+    #[test]
+    fn the_band_behind_a_converter_has_the_stretch_of_its_spring_at_the_hysteresis_torque() {
+        let text = "format_version = 1\n[effects]\njoint_friction = false\nhard_stops = false\nmotor_friction = false\n\
+            torque_ripple = false\ngearbox_backlash = false\ngearbox_efficiency = false\ngearbox_drag = false\n\
+            motor_stiction = false\ngearbox_lost_motion = true\ngearbox_stiffness_curve = false\nthermal_feedback = false\n\
+            holding_brake = false\ngearbox_mesh_friction = false\n\
+            [motor]\nrotor_inertia_kgm2 = 1e-4\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\n\
+            friction_smoothing_rad_s = 1e-3\nfriction_breakaway_nm = 0.0\nfriction_stribeck_rad_s = 2.0\nripple_fraction = 0.0\n\
+            ripple_order = 6.0\ncogging_nm = 0.0\ncogging_order = 6.0\nbrake_torque_nm = 5.0\n\
+            [gearbox]\nratio = 20.0\nefficiency = 0.9\nbacklash_rad = 0.0\nstiffness_nm_rad = 2e5\ndamping_nm_s_rad = 5.0\n\
+            inertia_at_input_kgm2 = 1e-4\nefficiency_torque_nm = 100.0\nno_load_torque_nm = 0.0\nno_load_speed_rpm = 3000.0\n\
+            lost_motion_band_rad = BAND\nhysteresis_rad = 2e-4\nstiffness_t1_nm = 100.0\nstiffness_t2_nm = 100.0\n\
+            stiffness_k2_nm_rad = 2e5\nstiffness_k3_nm_rad = 2e5\n\
+            [joint]\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 1e-3\n\
+            min_angle_deg = -45.0\nmax_angle_deg = 90.0\nstop_stiffness_nm_rad = 1e5\nstop_damping_nm_s_rad = 0.0\n";
+        let screw = Converter { lever: 0.025, stiffness: 5e7, backlash: 0.0, efficiency: 1.0, inertia: 0.0 };
+        let band = |b: &str| {
+            let cfg = Config::parse(&text.replace("BAND", b)).unwrap();
+            let mut j = RotaryJoint::from_config(&cfg).unwrap();
+            screw.apply(&cfg, &mut j).unwrap();
+            j.gearbox.band
+        };
+        assert!((band("1e-4") - 1.85e-5).abs() < 1e-15, "{}", band("1e-4"));
+        assert_eq!(band("0.0"), 0.0);
+    }
+
+    /// The screw's stiffness is judged at the softest nut position: the far end of a fixed-supported shaft (1 m):
+    /// A E / x with A E = 7.1350e7 N, in series with 5e8 and 1e9 N/m: 1 / (1.4015e-8 + 2e-9 + 1e-9) = 5.8770e7 N/m; the
+    /// middle of a fixed-fixed one: A E L / (x (L - x)) = 2.8540e8 N/m, 1 / (3.5037e-9 + 3e-9) = 1.5376e8 N/m, which is
+    /// the least of the stroke there (the ends are stiffer).
+    #[test]
+    fn the_screw_converter_takes_the_softest_position_of_either_bearing_arrangement() {
+        let free = screw();
+        assert_eq!(free.softest_position(), 1.0);
+        close(free.converter(free.softest_position()).stiffness, 5.8770e7, "fixed-supported far end");
+        assert!((0..=100).all(|i| free.stiffness(0.01 * i as f64) >= free.stiffness(1.0) * (1.0 - 1e-12)));
+        let fixed = BallScrew { mounting: Mounting::FixedFixed, ..screw() };
+        assert_eq!(fixed.softest_position(), 0.5);
+        close(fixed.converter(fixed.softest_position()).stiffness, 1.5376e8, "fixed-fixed middle");
+        assert!((1..100).all(|i| fixed.stiffness(0.01 * i as f64) >= fixed.stiffness(0.5) * (1.0 - 1e-12)));
+    }
+
+    /// The pressure angle of the teeth: the force pushing pinion and rack apart is F tan(alpha) (straight teeth), the
+    /// radial load F / cos(alpha): 1000 N gives 1064.18 N at the default 20 degrees (as before) and 1103.38 N at 25.
+    #[test]
+    fn the_racks_pressure_angle_is_a_key_that_defaults_to_twenty_degrees() {
+        let text = |extra: &str| {
+            format!(
+                "format_version = 1\n[rack]\nmodule_m = 0.002\nteeth = 30.0\nhelix_angle_deg = 0.0\nefficiency = 0.97\n\
+                 stiffness_n_m = 1e8\nbacklash_m = 0.0\npinion_inertia_kgm2 = 1e-4\nrated_feed_force_n = 3000.0\n\
+                 service_factor = 1.5\n{extra}"
+            )
+        };
+        let rack = |extra: &str| RackPinion::from_config(&Config::parse(&text(extra)).unwrap()).unwrap();
+        close(rack("").radial_load(1000.0), 1064.18, "default 20 degrees");
+        close(rack("pressure_angle_deg = 25.0\n").radial_load(-1000.0), 1103.38, "25 degrees");
+        assert!(RackPinion::from_config(&Config::parse(&text("pressure_angle_deg = 60.0\n")).unwrap()).is_err());
     }
 }
