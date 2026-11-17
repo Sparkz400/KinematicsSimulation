@@ -567,7 +567,10 @@ begrenzt, die Drehung auf 4 rad/s und 36 rad/s² mit dem Wafer auf r = 0,05 m na
 k = 9,4e5 N/m, 150 N): Ihre Dehnung lässt Unterarm und Effektor hinter Säule und Oberarm zurückbleiben, der Wafer bleibt
 in r zurück, und der Effektor dreht sich aus seiner radialen Linie (`effector.direction_error`; beim Verweilen an einer
 Station geprüft, `effector-direction`); ein Trum, das seine ganze Vorspannung verliert, wird schlaff (`elbow-band-slack`,
-`wrist-band-slack` prüfen den Ausschlag gegen die Hälfte davon). Siehe die
+`wrist-band-slack` prüfen den Ausschlag gegen die Hälfte davon). Mit elastischen Getrieben (`effects.joint_elasticity`) sind
+Kupplung und Spindel des Hubs ebenfalls eine Feder (in Reihe 4,56e7 N/m am fernen Ende der Mutter): Die Säule schwingt
+darauf mit 321 Hz bei gehaltenem Läufer, was den Standardzyklus um weniger als 0,1 % verschiebt (die größte Kraft der
+Spindel 172,4 auf 172,5 N). Siehe die
 [Modellreferenz](../model-reference.md#wafer-handler) und die
 [Konfigurationsreferenz](../config-reference.md#wafer-handler).
 
@@ -755,6 +758,18 @@ u der Einheitsvektor vom Anlenkpunkt zum Ablaufpunkt.
   ihren Seilen, elastischer und geometrischer Anteil bei gehaltenen Trommeln, gibt ihre Eigenfrequenzen
   (`sim-cli modes`, die Resonanz des Input-Shapers): 24,6 Hz in der Mitte des ebenen Roboters. `effects.cable_damping`
   fügt `cable.specific_damping_n_s` / l hinzu. Starr (aus) behalten die Seile ihre Länge.
+- Die eigene Masse der Seile (`cable.mass_per_m_kg`, ausgeliefert 3 g/m und 10 g/m, [Schätzung]; 0 lässt sie weg): Die
+  Hälfte des Gewichts jedes Seilstücks hängt an der Plattform, und das Seil hängt durch (flache Parabel): Bei der
+  Sehnenkraft T ist es um (w l_h)² l_f / (24 T²) länger als seine Sehne, also mit t0 = EA (L − l) / l, der Kraft des
+  geraden Seils, t0 = T − c / (2 T²), c = (w l_h)² EA l_f / (12 L); seine Steifigkeit dT/dt0 ist Ernsts
+  Ersatzmodul E / (1 + (w l_h)² EA / (12 T³)), und ein schlaffes Seil hängt noch mit einer kleinen Kraft. Gegen die
+  genaue elastische Kettenlinie stimmt der Zug am Anlenkpunkt auf 9e-5 N bei 20 N und 2e-4 N bei 5 N (das gerade Seil
+  verfehlt ihn dort um 0,17 N und 1,6 N).
+- Trommeln und Läufer der Winden drehen sich um `frame.winch_spin_axes` (sonst waagerecht und quer zur Richtung des
+  Seils an der Winde; bei senkrechter die Achse der Rolle in Ruhe), und ihr Drall ist in der Last des Gestells.
+- Die zeitoptimale Planung hält die Kraft jedes Seils im Starrkörpermodell im Band (`cable.min_tension_n` bis zur
+  Nennkraft, `profile.tension_reserve` des Raums): Der Standardzyklus des ebenen Roboters braucht 1,684 s statt 1,653 s
+  ohne das Band, bei dem ein Seil bis auf 0,63 N fiel; cable-spatial 1,207 s statt 1,143 s.
 - Jede Winde ist ein `joint::RotaryJoint` in Metern Seil: Motor, Getriebe mit dem Trommelradius als Hebel, die Trägheit
   der Trommel, Reibung von Lagern und Rolle (`effects.winch_friction`), Anschläge bei leerer und voller Trommel.
   Elastisch sind Trommel und Läufer eigene Körper hinter der Feder des Getriebes; starr behalten die Seile ihre Länge,
@@ -1082,7 +1097,7 @@ und Bändern; bei φ = 60°, θ = 30° liegt das Handgelenk bei (0,277128, 0,16)
 (−0,5, 1,0) m/s²; ein Moment von 1 N m am Effektor dehnt die Bänder um β = 2,955083e-4 und γ = 5,819704e-4 rad
 (K₁ = 1692, K₂ = 2303 N m/rad) und dreht ihn um 3,300103e-4 rad aus seiner radialen Linie; die starren Bänder tragen
 dT₁ = −4,271710 N und dT₂ = 4,379926 N bei θ̈ = 10 rad/s² mit dem Handgelenk über der Säule; der Z-Motor hält 11,2276 kg
-mit 0,1752378 N m; die Eigenformen gegen die von numpy (18,20 bis 186,45 Hz); der Halt auf Pads, Vakuum und Kante; ein
+mit 0,1752378 N m; die Eigenformen gegen die von numpy (18,20 bis 186,45 Hz) und die Säule auf Spindel und Kupplung, von Hand 320,8907 Hz; der Halt auf Pads, Vakuum und Kante; ein
 Trum wird über seine Vorspannung hinaus schlaff; der Standardzyklus besteht alle Prüfungen, und eine Reichweite, die mit
 3 m/s² anläuft, lässt den Wafer rutschen.
 
@@ -1161,7 +1176,9 @@ Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels
   überschleifen; der Antrieb passt seinen Drehzahlregler nicht an die Trägheit des Wickels an (45-fach vom Kern bis
   voll), darum sind die ausgelieferten Verstärkungen die des ausgelieferten Abschnitts (`[drive.unwind]` eine eigene),
   und ein Lauf nahe dem Ende des Wickels braucht sie vertauscht.
-- Seilroboter: Masse und Durchhang der Seile fehlen; der kraftfähige Arbeitsraum ist der statische (die Beschleunigungen
-  des Zyklus beurteilen die Seilkraftprüfungen, die Planung weicht ihnen nicht aus); nahe am Rand des Arbeitsraums rechnet
+- Seilroboter: Die Trägheit der Seile fehlt (ein Drittel der Masse jedes Seils bewegt sich mit seinem Anlenkpunkt,
+  0,5 % der Masse der räumlichen Plattform), ebenso das mit der Lage wandernde Gewicht des Durchhangs (5e-5 N); der
+  kraftfähige Arbeitsraum der Lagen ist der statische (die Beschleunigungen eines Zyklus hält die zeitoptimale Planung
+  im Band, in den Achsgrenzen beurteilen sie die Seilkraftprüfungen); nahe am Rand des Arbeitsraums rechnet
   der Dehnungsausgleich der Motoren mit den Kräften der geschlossenen Form, wo die Verteilung ein Seil an einer Grenze
   hält.
