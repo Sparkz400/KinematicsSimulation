@@ -3182,8 +3182,8 @@ impl Machine for ConfigMachine {
     /// pulley, its rotor and the idlers turn about the normal of the belt's plane (`belt_plane`), a screw's rotor about
     /// its axis, I w each. The sense of a wheel: the belt along its section's route turns it as its `clockwise` says (seen
     /// from the front, from above for a flat belt), and a positive pulley turn and an idler's positive `speed` move the
-    /// belt as the first pulley of the section feeds it (`route_sense`). A rack's pinion turns about e x up (e the rack's
-    /// direction, the pinion above it; a vertical rack's e x y), a rotary's motor about the rotary's own axis, positive
+    /// belt as the first pulley of the section feeds it (`route_sense`). A rack's pinion turns about up x e (e the rack's
+    /// direction, the pinion riding with the axis above the rack fixed to the frame; a vertical rack's y x e), a rotary's motor about the rotary's own axis, positive
     /// as the axis grows. The belt's runs carry angular momentum m x (mu L y) too, each about the middle of its straight
     /// piece (`run_midpoints`); the arcs round the wheels are in the wheels' spin. What does not move is left out (see
     /// `FrameMomentum`).
@@ -3260,13 +3260,13 @@ impl Machine for ConfigMachine {
                 (Some(Direct { kind: DirectKind::Screw(_), axis, .. }), _) => {
                     ax(self.dirs[*axis], rotor_speed[kk], self.j_rotor[kk]);
                 }
-                // A rack's pinion turns about the horizontal across its rack (the pinion above the rack: a positive turn
-                // moves the rack along its direction e at the contact below, so the axis is e x up; a vertical rack's is
-                // e x y). A rotary's rotor turns about the rotary's own axis, as the rotaries outside it have turned it.
+                // A rack's pinion rides with the axis on the rack fixed to the frame, above it (a vertical rack's on its
+                // +y side): rolling forward along the rack's direction e it turns about up x e (y x e). A rotary's rotor
+                // turns about the rotary's own axis, as the rotaries outside it have turned it.
                 (Some(Direct { kind: DirectKind::Rack(_), axis, .. }), _) => {
                     let e = self.dirs[*axis];
                     let across = if e[2].abs() > 0.999 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
-                    let a = cross(e, across);
+                    let a = cross(across, e);
                     let size = dot(&a, &a).sqrt();
                     ax(a.map(|a| a / size), rotor_speed[kk], self.j_rotor[kk]);
                 }

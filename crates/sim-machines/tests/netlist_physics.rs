@@ -359,7 +359,8 @@ fn the_files_lowest_mode_is_the_crates() {
 }
 
 /// A rack's pinion and a rotary's motor spin in the frame momentum. A rotor of the inertia J turning at w adds J w about its
-/// axis: for the rack along x the pinion above it turns about e x up = -y (the rack moves along +x under it), for the
+/// axis: for the rack along x the pinion riding above it turns about up x e = +y (it rolls along +x on the fixed rack:
+/// its contact below stands, so its centre moves at w x (r up) = +r w x), for the
 /// rotary C about its own axis, here the vertical (A at 0). 1e-3 kg m^2 more rotor inertia adds 1e-3 w.
 #[test]
 fn a_racks_pinion_and_a_rotarys_motor_spin_in_the_frame_momentum() {
@@ -379,7 +380,8 @@ fn a_racks_pinion_and_a_rotarys_motor_spin_in_the_frame_momentum() {
     let (d, w) = more("rack-gantry.toml", &[0.5, 0.0], 0, &[0.3, 0.2]);
     assert!(w.abs() > 1.0, "the pinion turns at {w}");
     assert!(d[0].abs() < 1e-12 && d[2].abs() < 1e-12, "{d:?}");
-    assert!((d[1] + 1e-3 * w).abs() < 1e-9 * (1e-3 * w).abs(), "{d:?} against {}", -1e-3 * w);
+    assert!(w > 1.0, "the pinion turns forward at {w}");
+    assert!((d[1] - 1e-3 * w).abs() < 1e-9 * (1e-3 * w).abs(), "{d:?} against {}", 1e-3 * w);
     let (d, w) = more("five-axis-table.toml", &[0.0, 0.0, 0.0, 0.0, 0.8], 4, &[0.5, 0.25, -0.1, 0.0, 0.1]);
     assert!(w.abs() > 0.8, "the rotor turns at {w}");
     let size = d.iter().map(|x| x * x).sum::<f64>().sqrt();
