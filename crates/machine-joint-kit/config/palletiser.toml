@@ -29,6 +29,14 @@ joint_coupling = [
     [0.0, 0.0, -1.0, 0.0],
     [0.0, 0.0, 0.0, 1.0],
 ]
+# The parallelogram's bars (or any rigid piece the URDF leaves out) as bodies of their own, merged into the link they
+# move with: bar i on the URDF joint bars_on[i] (1-based), mass bars_mass_kg[i], its centre bars_com_m[3i..3i+3] in that
+# link's frame, its inertia about its centre bars_inertia_kgm2[6i..6i+6] (xx, yy, zz, xy, xz, yz; the array may stay
+# empty: 0). Empty: no bars (the URDF's links as they are).
+bars_on = []
+bars_mass_kg = []
+bars_com_m = []
+bars_inertia_kgm2 = []
 # With effects.payload_swing: the carton on a pivot at the flange, its centre 0.2 m below, with this spring and damper
 # per axis. [estimate] a vacuum gripper's bellows: 20 kg at 0.2 m swings at sqrt((k + m g l) / (m l^2 + I)) / 2 pi = 1.61 Hz
 # about the axis across its 0.6 m side (I = 0.75 kg m^2) and 1.82 Hz about the other (I = 0.4167).

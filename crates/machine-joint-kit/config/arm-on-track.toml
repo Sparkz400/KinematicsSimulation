@@ -30,6 +30,14 @@ payload_inertia_kgm2 = [0.03125, 0.01625, 0.025, 0.0, 0.0, 0.0]
 # The URDF's joints as sums of the motors' joints, one row per URDF joint (a parallelogram: see config/palletiser.toml);
 # [] for one motor per joint.
 joint_coupling = []
+# The parallelogram's bars (or any rigid piece the URDF leaves out) as bodies of their own, merged into the link they
+# move with: bar i on the URDF joint bars_on[i] (1-based), mass bars_mass_kg[i], its centre bars_com_m[3i..3i+3] in that
+# link's frame, its inertia about its centre bars_inertia_kgm2[6i..6i+6] (xx, yy, zz, xy, xz, yz; the array may stay
+# empty: 0). Empty: no bars (the URDF's links as they are).
+bars_on = []
+bars_mass_kg = []
+bars_com_m = []
+bars_inertia_kgm2 = []
 # With effects.payload_swing: the payload hangs on a pivot at the flange, its centre payload_offset_m from it, about two
 # axes across that line, with this spring and damper per axis. [estimate] a carton in a soft gripper.
 payload_swing_stiffness_nm_rad = 20.0

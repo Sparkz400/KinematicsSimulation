@@ -69,6 +69,9 @@ pub struct Arm {
     coupling: Option<Vec<Vec<f64>>>,
     /// Per motor joint: motor radians per joint unit.
     ratios: Vec<f64>,
+    /// Per motor joint: its rotor's inertia (kg m^2, with the gearbox's at its input), which spins at `ratios` times the
+    /// joint's speed (`guide_load`'s gyroscopic moment).
+    rotor_inertia: Vec<f64>,
     /// Per motor joint: whether it is a prismatic one.
     prismatic: Vec<bool>,
     screw: Option<BallScrew>,
@@ -89,9 +92,6 @@ pub struct Arm {
     bending: Vec<BentLink>,
     /// effects.link_bending_reaction: the modes two-way (`Mechanism::flex_coupling`).
     reaction: bool,
-    /// Whether the modes take the bodies beyond their link as rigid bodies on its tip (`field`): with the reaction or a
-    /// direction other than the plane its joint turns it in. Else the one-way bend in that plane as it was (`flex_loads`).
-    whole: bool,
     /// With rx, ry or rz among the tool axes: the smallest of their velocity and of their acceleration limits, which the
     /// planned flange's angular speed and acceleration are held to (`tool.angular_speed`, `tool.angular_acceleration`:
     /// shown as measured; kept by both planners and judged on the plan's rigid motion, see `rating_checks`).
@@ -104,9 +104,8 @@ pub struct Arm {
 /// it in (`across = axis x dir`), or across that plane (`across = dir x (axis x dir)`). A twist turns its tip about
 /// `turn = dir` by d (`across` none). All in its body's frame. Its own mass is the URDF link's, taken as spread evenly
 /// along it; what the chain carries beyond it sits on its tip.
-// shortcut: one mode per link and direction; a link along its joint's axis (the base column) has no bend. The one-way
-// bend in its joint's plane alone keeps the bodies beyond as a mass at its tip without their turning inertia (as it was
-// before the other directions); every other mode, and every two-way one, takes them whole.
+// One mode per link and direction; a link along its joint's axis (the base column) has no bend. Every mode, the one-way
+// bend in its joint's plane too, takes the bodies beyond whole (`field`): their mass and their turning inertia.
 #[derive(Debug, Clone, Copy)]
 struct BentLink {
     body: usize,
@@ -264,6 +263,44 @@ pub fn chain(cfg: &Config) -> Result<Chain, ConfigError> {
     Chain::from_urdf(&text)
 }
 
+/// The parallelogram's bars (or any rigid piece the URDF leaves out) as bodies of their own: bar i is fixed to the link
+/// of the URDF joint `arm.bars_on[i]` (1-based), its mass `bars_mass_kg[i]`, its centre `bars_com_m[3i..3i+3]` in that
+/// link's frame and its inertia about its centre `bars_inertia_kgm2[6i..6i+6]` (xx, yy, zz, xy, xz, yz, in that frame;
+/// the whole array may be empty: 0), merged into the link by the parallel axis theorem (`Inertial::merged`). A bar that
+/// stays parallel to a link turns with it, so as a rigid piece of it it has exactly the bar's mass and turning inertia;
+/// a coupler that only translates has inertia 0 and its mass at its centre. Empty arrays (the default): no bars.
+fn bars(cfg: &Config, chain: &mut Chain) -> Result<(), ConfigError> {
+    let Ok(on) = cfg.f64s("arm.bars_on") else { return Ok(()) };
+    let bad = |key: &str| ConfigError::Invalid(format!("arm.{key}"));
+    let (mass, com, inertia) =
+        (cfg.f64s("arm.bars_mass_kg")?, cfg.f64s("arm.bars_com_m")?, cfg.f64s("arm.bars_inertia_kgm2")?);
+    let n = on.len();
+    if mass.len() != n || com.len() != 3 * n {
+        return Err(bad("bars_mass_kg or arm.bars_com_m"));
+    }
+    if !inertia.is_empty() && inertia.len() != 6 * n {
+        return Err(bad("bars_inertia_kgm2"));
+    }
+    let identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    for i in 0..n {
+        if on[i].fract() != 0.0 || on[i] < 1.0 || on[i] > chain.len() as f64 {
+            return Err(bad("bars_on"));
+        }
+        if !(mass[i] >= 0.0 && mass[i].is_finite()) || com[3 * i..3 * i + 3].iter().any(|v| !v.is_finite()) {
+            return Err(bad("bars_mass_kg"));
+        }
+        let j = if inertia.is_empty() { [0.0; 6] } else { std::array::from_fn(|k| inertia[6 * i + k]) };
+        let own = Inertial {
+            mass: mass[i],
+            com: [com[3 * i], com[3 * i + 1], com[3 * i + 2]],
+            inertia: [[j[0], j[3], j[4]], [j[3], j[1], j[5]], [j[4], j[5], j[2]]],
+        };
+        let body = &mut chain.bodies[on[i] as usize - 1];
+        body.inertial = body.inertial.merged(&own, &identity, [0.0; 3]);
+    }
+    Ok(())
+}
+
 /// `arm.joint_coupling`: `None` for `[]`; else one row per URDF joint of one factor per motor joint, each motor joint in
 /// at least one row.
 fn coupling(cfg: &Config, urdf_joints: usize) -> Result<Option<Vec<Vec<f64>>>, ConfigError> {
@@ -319,7 +356,8 @@ fn frame_along(z: V3) -> M3 {
 }
 
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
-    let chain = chain(cfg)?;
+    let mut chain = chain(cfg)?;
+    bars(cfg, &mut chain)?;
     let u = chain.len();
     let coupling = coupling(cfg, u)?;
     let n = coupling.as_ref().map_or(u, |c| c[0].len());
@@ -470,7 +508,6 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
 
     let max_condition = cfg.positive("workspace.max_condition_number")?;
     let (bending, reaction) = bent_links(cfg, &chain)?;
-    let whole = reaction || bending.iter().any(|l| l.kind != FlexKind::Bend);
     let mut arm = Arm {
         chain,
         moving,
@@ -480,6 +517,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         attached: true,
         coupling,
         ratios: joints.iter().map(|(j, ..)| j.ratio()).collect(),
+        rotor_inertia: joints.iter().map(|(j, ..)| j.rotor_inertia).collect(),
         prismatic,
         screw,
         racks,
@@ -491,7 +529,6 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         tool: Tool::Joints,
         bending,
         reaction,
-        whole,
         angular_limits: None,
     };
     arm.built = arm.chain.bodies.iter().map(|b| b.inertial).collect();
@@ -663,6 +700,14 @@ impl Arm {
         (p, gravity, mass)
     }
 
+    /// The unit axis motor joint `k`'s rotor spins about in the base frame, for the bodies `bodies`: its joint's axis, a
+    /// rack's motor standing upright on the carriage, its pinion turning about the vertical against the rack on the side
+    /// of the rails.
+    fn rotor_axis(&self, bodies: &[BodyState], k: usize) -> V3 {
+        let body = &bodies[self.motor_body(k)];
+        if self.racks[k].is_some() { mul(&body.rot, [0.0, 0.0, 1.0]) } else { body.axis }
+    }
+
     /// The URDF joint (body) whose axis motor joint `k`'s motor turns about: the first it moves.
     fn motor_body(&self, k: usize) -> usize {
         match &self.coupling {
@@ -686,16 +731,23 @@ impl Arm {
     /// helical pinion's separating force F tan(alpha) / cos(beta) pushing the carriage off the rack, -s of it, so the
     /// blocks' F_y is the chain's plus s of it; the rack's push F_x, at y = s l, turns the carriage by -s l F_x about z,
     /// which the blocks carry as M_z + s l F_x (F_x the chain's reaction along the rails, the drive's).
-    /// shortcut: the arm's motor rotors' gyroscopic moments left out, and the load always on the four blocks of the
-    /// first joint.
+    /// The motors' rotors are part of what the carriage carries: each spins at its ratio times its joint's speed about
+    /// its axis (`rotor_axis`), its angular momentum J r q' along that axis is in H_O, so that the rate of H_O has the
+    /// gyroscopic moment (the axis turning with its body) and the reaction of the rotor's own acceleration. The load is
+    /// on the four blocks `[track]` describes (`GUIDE_CARRIAGES`), the first joint's carriage being the only guided one.
     fn guide_load(&self, q: &[f64], qd: &[f64], qdd: &[f64]) -> f64 {
         let Some((along, across, side, lever)) = self.track else { return 0.0 };
         let h = 1e-6;
         let momentum = |s: f64| {
             let q: Vec<f64> = q.iter().zip(qd).map(|(q, v)| q + s * v).collect();
             let qd: Vec<f64> = qd.iter().zip(qdd).map(|(v, a)| v + s * a).collect();
-            let ((chain, q), (_, qd)) = (self.loaded(&q), self.loaded(&qd));
-            chain.momentum(&q, &qd, self.extra())
+            let ((chain, q), (_, qm)) = (self.loaded(&q), self.loaded(&qd));
+            let (p, mut h) = chain.momentum(&q, &qm, self.extra());
+            let bodies = chain.body_states(&q, &qm, self.extra());
+            for k in 0..self.ratios.len() {
+                h = add(h, self.rotor_axis(&bodies, k).map(|a| a * self.rotor_inertia[k] * self.ratios[k] * qd[k]));
+            }
+            (p, h)
         };
         let ((p0, h0), (p1, h1)) = (momentum(-h), momentum(h));
         let rate = |a: V3, b: V3| -> V3 { std::array::from_fn(|i| (b[i] - a[i]) / (2.0 * h)) };
@@ -750,10 +802,7 @@ impl Mechanism for Arm {
             first_moment = add(first_moment, b.com.map(|c| c * b.inertial.mass));
         }
         for (k, spin) in rotor_spin.iter().enumerate() {
-            let body = &bodies[self.motor_body(k)];
-            // A rack's motor stands upright on the carriage, its pinion turning about the vertical against the rack on
-            // the side of the rails.
-            let axis = if self.racks[k].is_some() { mul(&body.rot, [0.0, 0.0, 1.0]) } else { body.axis };
+            let axis = self.rotor_axis(&bodies, k);
             angular = add(angular, axis.map(|a| a * spin));
         }
         Some(sim_core::FrameMomentum {
@@ -766,23 +815,19 @@ impl Mechanism for Arm {
         })
     }
 
-    /// Per mode: a bend in its joint's plane alone (not `whole`) is its cantilever mode (`beam::cantilever_mode`): its
-    /// own mass spread along it, everything the chain carries beyond it at its tip (a swinging payload too). Else the
-    /// diagonal of `modal`'s M_d at zero joints. The damping 2 zeta sqrt(m k).
+    /// Per mode the diagonal of `modal`'s M_d at zero joints: the link's own mass spread along it (a cantilever's m / 4)
+    /// and everything the chain carries beyond it at its tip, with its turning inertia (a swinging payload too). The
+    /// damping 2 zeta sqrt(m k).
     fn flex_modes(&self) -> Vec<FlexMode> {
         let (chain, zero) = self.loaded(&vec![0.0; self.ratios.len()]);
         let states = chain.body_states(&zero, &zero, self.extra());
-        let whole = self.whole.then(|| self.modal(&states).2);
-        let masses: Vec<f64> = states.iter().map(|b| b.inertial.mass).collect();
+        let whole = self.modal(&states).2;
         let f = self.bending.len();
         self.bending
             .iter()
             .enumerate()
             .map(|(i, l)| {
-                let mass = match &whole {
-                    Some(m) => m[i * f + i],
-                    None => 0.25 * masses[l.body] + masses[l.body + 1..].iter().sum::<f64>(),
-                };
+                let mass = whole[i * f + i];
                 let stiffness = l.stiffness;
                 let damping = 2.0 * l.damping_ratio * (mass * stiffness).sqrt();
                 FlexMode { link: l.body, mass, stiffness, damping, kind: l.kind }
@@ -790,45 +835,19 @@ impl Mechanism for Arm {
             .collect()
     }
 
-    /// Across each bending link: the force and the moment the bodies beyond it need from its tip to move as they do
-    /// against gravity (their m (a - g), the accelerations by central differences over +-1 us along q' and q''), taken
-    /// back, the moment through the tip's slope; and its own body's m (a - g), as a load spread evenly along it. A
-    /// swinging payload as if fixed where it hangs at rest. With the bodies `whole`: Q_g - dp/dt of `modal`, p's rate
-    /// by the same central differences (`FlexCoupling`'s F with B q'' in it).
+    /// Across each bending link the load on its mode: Q_g - dp/dt of `modal` (gravity's load less the rate of the mode's
+    /// momentum, the bodies beyond it whole and its own body's share of the mode), p's rate by central differences over
+    /// +-1 us along q' and q'' (`FlexCoupling`'s F with B q'' in it). A swinging payload as if fixed where it hangs.
     fn flex_loads(&self, q: &[f64], qd: &[f64], qdd: &[f64], out: &mut [f64]) {
         let h = 1e-6;
         let at = |s: f64| {
             let q: Vec<f64> = q.iter().zip(qd).map(|(q, v)| q + s * v).collect();
             let qd: Vec<f64> = qd.iter().zip(qdd).map(|(v, a)| v + s * a).collect();
-            self.states(&q, &qd)
+            self.modal(&self.states(&q, &qd))
         };
-        let (now, before, after) = (at(0.0), at(-h), at(h));
-        if self.whole {
-            let ((_, gravity, _), (behind, ..), (ahead, ..)) =
-                (self.modal(&now), self.modal(&before), self.modal(&after));
-            for (i, load) in out.iter_mut().enumerate() {
-                *load = gravity[i] - (ahead[i] - behind[i]) / (2.0 * h);
-            }
-            return;
-        }
-        let need: Vec<V3> = (0..now.len())
-            .map(|k| {
-                let a: V3 = std::array::from_fn(|i| (after[k].velocity[i] - before[k].velocity[i]) / (2.0 * h));
-                [a[0], a[1], a[2] + self.g].map(|v| v * now[k].inertial.mass)
-            })
-            .collect();
-        for (link, load) in self.bending.iter().zip(out.iter_mut()) {
-            let b = &now[link.body];
-            let tip = add(b.origin, mul(&b.rot, link.dir.map(|v| v * link.length)));
-            let (across, turn) = (mul(&b.rot, link.across), mul(&b.rot, cross(link.dir, link.across)));
-            let (mut force, mut moment) = ([0.0; 3], [0.0; 3]);
-            for k in link.body + 1..now.len() {
-                force = add(force, need[k]);
-                moment = add(moment, cross(std::array::from_fn(|i| now[k].com[i] - tip[i]), need[k]));
-            }
-            *load = -dot(across, force)
-                - CANTILEVER_PARTICIPATION * dot(across, need[link.body])
-                - dot(turn, moment) * CANTILEVER_TIP_SLOPE / link.length;
+        let ((_, gravity, _), (behind, ..), (ahead, ..)) = (at(0.0), at(-h), at(h));
+        for (i, load) in out.iter_mut().enumerate() {
+            *load = gravity[i] - (ahead[i] - behind[i]) / (2.0 * h);
         }
     }
 
@@ -908,9 +927,9 @@ impl Mechanism for Arm {
     }
 
     /// The moving chain's, taken to the motors' joints where the URDF's are coupled to them: with q_urdf = C q,
-    /// M = C^T M_urdf C and h = C^T h_urdf (C constant, so no term of its own; the coupling's forces do no work).
-    /// shortcut: the parallelogram's bars are in the links they move with, not bodies of their own; give them their own
-    /// inertia where they are heavy against the arms.
+    /// M = C^T M_urdf C and h = C^T h_urdf (C constant, so no term of its own; the coupling's forces do no work). The
+    /// parallelogram's bars are bodies of their own where the config has them (`arm.bars_*`, `bars`): their mass and
+    /// inertia are merged into the links they move with.
     fn dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         let all = q.len();
         let detached_swing = self.swing.is_some() && !(self.attached && self.payload.mass > 0.0);
