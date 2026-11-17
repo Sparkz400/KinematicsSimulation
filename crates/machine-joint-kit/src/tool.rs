@@ -416,10 +416,9 @@ impl Pose {
                 .map(|(i, &a)| (start[i] + s * (tool[i] - start[i])) * if is_turn(a) { self.length } else { 1.0 })
                 .collect();
             let (tol, iterations) = if k == steps { (1e-13, 200) } else { (1e-6, 30) };
-            // shortcut: a walk of one step (at most 20 mm and 0.05 rad, as along a cycle) is not checked for passing a
-            // singularity; check it too where an arm's singular poses lie that close to its working poses.
+            // The end of every step is judged, a walk of one step (at most 20 mm and 0.05 rad) too.
             if !self.settle(fk, q, &at, tol, iterations, k == steps)
-                || guard && steps > 1 && !(self.condition(fk, q) <= self.max_condition)
+                || guard && !(self.condition(fk, q) <= self.max_condition)
             {
                 return false;
             }

@@ -6,6 +6,9 @@
 //! tan(gamma - rho') / tan(gamma) (`WormGear`, gamma the lead angle, rho' the friction angle on the flank), which the
 //! gearbox carries as its back-drive ratio (`Gearbox::back_ratio`). A worm whose back efficiency is not positive locks
 //! itself, and the table refuses it: the gearbox does not model a gear that holds the table against its load.
+//!
+//! A worm's motor lies across the table's axis: its rotor's spin (momentum) is about the worm's own axis, `worm.motor_axis`
+//! (x, y, z; any length but 0; default along x), fixed to the base, while the other gears' rotors spin about z.
 
 use crate::{axis, machine, payload, required_life};
 use sim_components::chain::Mechanism;
@@ -21,6 +24,8 @@ pub struct Table {
     radius: f64,
     strain_wave: Option<(StrainWave, f64)>,
     ratio: f64,
+    /// The unit axis the motor's rotor spins about (fixed to the base).
+    rotor_axis: [f64; 3],
 }
 
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
@@ -47,6 +52,18 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         Some("worm") => {}
         _ => return Err(ConfigError::Invalid("table.gear".into())),
     }
+    let rotor_axis = if cfg.get("table.gear")?.as_str() == Some("worm") && cfg.get("worm.motor_axis").is_ok() {
+        let a = cfg.f64s("worm.motor_axis")?;
+        let size = a.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if a.len() != 3 || !(size > 0.0) || !size.is_finite() {
+            return Err(ConfigError::Invalid("worm.motor_axis".into()));
+        }
+        [a[0] / size, a[1] / size, a[2] / size]
+    } else if cfg.get("table.gear")?.as_str() == Some("worm") {
+        [1.0, 0.0, 0.0]
+    } else {
+        [0.0, 0.0, 1.0]
+    };
     let table = Table {
         inertia: cfg.positive("table.inertia_kgm2")?,
         payload: payload(cfg, "table.payload_inertia_kgm2")?,
@@ -54,18 +71,19 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         radius: cfg.positive("table.radius_m")?,
         strain_wave,
         ratio: joint.ratio(),
+        rotor_axis,
     };
     let c = axis(cfg, "c", "axis-c", "rad", joint.range)?;
     machine(cfg, table, vec![(joint, None, "rad")], vec![c])
 }
 
 impl Mechanism for Table {
-    /// The table, fixture and workpiece turning about z, and the motor beneath it.
-    // shortcut: a worm's motor lies across the table's axis; its rotor's spin is taken about z as the others', which
-    // only the base's tilt (not its twist) would tell apart.
+    /// The table, fixture and workpiece turning about z, and the motor's rotor about its own axis (`rotor_axis`).
     fn frame_momentum(&self, _q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
         let turning = self.inertia + if self.attached { self.payload } else { 0.0 };
-        Some(sim_core::FrameMomentum { angular: [0.0, 0.0, turning * qd[0] + rotor_spin[0]], ..Default::default() })
+        let mut angular = self.rotor_axis.map(|a| a * rotor_spin[0]);
+        angular[2] += turning * qd[0];
+        Some(sim_core::FrameMomentum { angular, ..Default::default() })
     }
     fn dynamics(&self, _q: &[f64], _qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         mass[0] = self.inertia + if self.attached { self.payload } else { 0.0 };
@@ -180,5 +198,30 @@ mod tests {
         cfg.set_text("worm.lead_angle_deg = 2.0").unwrap();
         let err = (ROTARY_TABLE.build)(&cfg).err().expect("a locking worm is refused");
         assert!(format!("{err:?}").contains("locks itself"), "{err:?}");
+    }
+
+    /// A worm's rotor spins about the worm's own axis (x by default, as given otherwise), the table about z: a table of
+    /// 3 kg m^2 at 2 rad/s with a rotor momentum of 0.5 kg m^2/s has [0.5, 0, 6] about x, and [0, 0.5, 6] with the axis
+    /// along y; a worm motor with no axis is refused.
+    #[test]
+    fn a_worm_rotor_spins_about_its_own_axis() {
+        use super::Table;
+        use sim_components::chain::Mechanism;
+        let table = |rotor_axis| Table {
+            inertia: 3.0,
+            payload: 0.0,
+            attached: true,
+            radius: 0.2,
+            strain_wave: None,
+            ratio: 1.0,
+            rotor_axis,
+        };
+        let spin = |t: &Table| t.frame_momentum(&[0.0], &[2.0], &[0.5]).unwrap().angular;
+        assert_eq!(spin(&table([1.0, 0.0, 0.0])), [0.5, 0.0, 6.0]);
+        assert_eq!(spin(&table([0.0, 1.0, 0.0])), [0.0, 0.5, 6.0]);
+        let mut cfg = ROTARY_TABLE.config();
+        cfg.set_text("table.gear = \"worm\"").unwrap();
+        cfg.set_text("worm.motor_axis = [0.0, 0.0, 0.0]").unwrap();
+        assert!((ROTARY_TABLE.build)(&cfg).is_err());
     }
 }

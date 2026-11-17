@@ -1541,8 +1541,11 @@ fn the_guide_blocks_carry_the_weight_and_the_tilting_moments_by_hand() {
     // on the four blocks: the total grows by it (F_y / 4 on each, all four on the loaded side).
     let apart = TRACK_MASS * 2.0 * (1.071978f64.powi(2) - 1.0).sqrt();
     assert!((apart - 100.8).abs() < 0.1, "{apart}");
-    let by_hand = block(2.0 * SUM_MZ / (2.0 * 0.4) + 2.0 * SUM_MY / (2.0 * 0.4) + apart / 4.0);
-    assert!((by_hand - 2757.65).abs() < 0.1, "{by_hand}");
+    // The carriage's rotor (1.7e-4 + 3.59e-5 + 1e-6 kg m^2 at its input) turns about z at 2 r rad/s^2: its reaction J r a
+    // is a yaw moment against the chain's -2 SUM_MY, so the blocks' share of it falls by that over 2 x 0.4.
+    let gyro = (1.7e-4 + 3.59e-5 + 1.0e-4 / 100.0) * track_ratio() * 2.0;
+    let by_hand = block(2.0 * SUM_MZ / (2.0 * 0.4) + (2.0 * SUM_MY - gyro) / (2.0 * 0.4) + apart / 4.0);
+    assert!((by_hand - 2757.65).abs() < 1.0, "{by_hand}");
     near(pushed, by_hand, 1e-6, "guide load accelerating");
     let teeth = track_signal(m.as_ref(), &sideways(), &acc, "rack.1.feed_force");
     near(teeth, TRACK_MASS * 2.0, 1e-6, "feed force");
@@ -1563,7 +1566,8 @@ fn the_racks_side_and_lever_move_the_guide_blocks_load_as_by_hand() {
     let push = TRACK_MASS * 2.0;
     let apart = push * (1.071978f64.powi(2) - 1.0).sqrt();
     let by_hand = |side: f64, lever: f64| {
-        let yaw = -2.0 * SUM_MY + side * lever * push;
+        let gyro = (1.7e-4 + 3.59e-5 + 1.0e-4 / 100.0) * track_ratio() * 2.0;
+        let yaw = -2.0 * SUM_MY + side * lever * push + gyro;
         4.0 * (TRACK_MASS * g / 4.0 + g * SUM_MY + 2.0 * SUM_MZ / 0.8 + (side * apart / 4.0 - yaw / 0.8).abs())
     };
     let mut acc = [0.0; 7];
@@ -1979,4 +1983,60 @@ fn the_condition_number_is_that_of_the_geometric_jacobian() {
         }
     }
     near(pose.condition(&fk, &home), tool::condition_number(&jac, 6, 6), 1e-3, "condition");
+}
+
+/// The one-way bend in its joint's plane takes the body beyond the link whole, its turning inertia too: the tube of
+/// 4.5 kg with 10 kg and 0.5 kg m^2 (about y) at its tip, k = 351467.3 N/m, modal mass m / 4 + M + (1.3765 / L)^2 J =
+/// 1.125 + 10 + (1.3765 / 0.8)^2 x 0.5 = 12.60528 kg (the tip turns by 1.3765 d / L): f = sqrt(k / M_d) / 2 pi =
+/// 26.5758 Hz, against 28.2887 Hz of the mass alone.
+#[test]
+fn the_one_way_bend_carries_the_turning_inertia_of_the_tip() {
+    let m = tube_with_tip(
+        "tip-inertia",
+        (4.5, [3.546e-3, 0.24, 0.24]),
+        (10.0, [0.5, 0.5, 0.5]),
+        -0.57,
+        &["effects.joint_elasticity = false", r#"link_bending.directions = ["in_plane"]"#],
+    );
+    let modes = m.modes(&[0.0, 0.0]);
+    assert_eq!(modes.len(), 1, "{modes:?}");
+    near(modes[0].hz, 26.5758, 1e-4, "bend with the tip's inertia");
+}
+
+/// A bar of its own (`arm.bars_*`): 5 kg on joint 2's link at (0, 0, 0.3) of its frame, 0.3 m from the joint's axis with
+/// the arm stretched along x (q2 = pi / 2): the gravity torque about joint 2 grows by 5 x 9.80665 x 0.3 = 14.70998 N m,
+/// held by 14.70998 / 120 = 0.122583 N m more at motor 2 (-1.47753 - 0.122583 = -1.600113); joint 3 and beyond do not
+/// carry it. A bar on a joint that is not there is refused.
+#[test]
+fn a_parallelogram_bar_is_a_body_of_its_own() {
+    let mut cfg = rigid(&URDF_ARM);
+    for edit in ["arm.bars_on = [2.0]", "arm.bars_mass_kg = [5.0]", "arm.bars_com_m = [0.0, 0.0, 0.3]"] {
+        cfg.set_text(edit).unwrap();
+    }
+    let m = (URDF_ARM.build)(&cfg).unwrap();
+    let mut torque = [0.0; 6];
+    m.feedforward_torque(&[0.0, std::f64::consts::FRAC_PI_2, 0.0, 0.0, 0.0, 0.0], &[0.0; 6], &mut torque);
+    near(torque[1], -1.600113, 1e-5, "motor 2 with the bar");
+    near(torque[2], -0.178154, 1e-5, "motor 3 without it");
+    cfg.set_text("arm.bars_on = [7.0]").unwrap();
+    assert!((URDF_ARM.build)(&cfg).is_err());
+}
+
+/// The carriage's motor rotor is part of what its guides carry: it spins about the vertical at the ratio times the
+/// carriage's speed, and the carriage accelerating at 2 m/s^2 turns its momentum J r a about z, a yaw moment the four
+/// blocks carry as +-M_z / (2 x 0.4) each. Doubling the rotor's inertia (1.7e-4 to 3.4e-4 kg m^2) changes nothing else of
+/// the guide load, so it changes by four times the most loaded block's share: 4 x 1.7e-4 x r x 2 / 0.8.
+#[test]
+fn the_rotor_of_the_track_adds_its_gyroscopic_moment_to_the_guide_load() {
+    let load = |edit: &str| {
+        let mut cfg = rigid(&ARM_ON_TRACK);
+        cfg.set_text(edit).unwrap();
+        let m = (ARM_ON_TRACK.build)(&cfg).unwrap();
+        let mut acc = [0.0; 7];
+        acc[0] = 2.0;
+        track_signal(m.as_ref(), &sideways(), &acc, "axis.j1.guide_load")
+    };
+    let (light, heavy) = (load("motor.rotor_inertia_kgm2 = 1.7e-4"), load("motor.rotor_inertia_kgm2 = 3.4e-4"));
+    let by_hand = 4.0 * 1.7e-4 * track_ratio() * 2.0 / 0.8;
+    assert!(((heavy - light).abs() - by_hand).abs() < 1e-3 * by_hand, "{} against {by_hand}", heavy - light);
 }
