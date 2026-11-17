@@ -2277,7 +2277,7 @@ impl Controller {
         // The position between two cycles is the cubic through both with their speeds: a straight line between them
         // has a kink at every stored cycle, which a delay sliding over it (the period following the pose) turns
         // into a step in the shaped position's speed, off its exact rates by up to the plan's acceleration times the
-        // delay's rate times T (measured 0.08 m/s^2 in 8 on the spatial cable robot).
+        // delay's rate times T (measured 0.08 m/s^2 in 8 on the spatial cable-driven platform).
         let ago = |which: usize, axis: usize, delay: f64| -> f64 {
             let (whole, part) = (delay.floor() as usize, delay.fract());
             let at = |n: usize, which: usize| self.history[newest - n.min(newest)][which][axis];

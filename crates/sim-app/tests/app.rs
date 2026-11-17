@@ -3009,7 +3009,7 @@ per_machine!(the_frequency_response_is_measured_in_the_app);
 /// EA = 500 kN (the linear delta's 600 kN); the app's config says 0.8 of it, 400 kN (480 kN). By hand the stiffness is
 /// off by 1 / 0.8 = 1.25, and the fit says so within its standard error, half a step of the sweep at the dip's flanks
 /// carried through f ~ k^s (`SweepFit::stiffness`; s a little below 1/2 where the gearbox or the frame shares the mode).
-/// The sweep has 40 points from 50 to 130 Hz, 2.5 % apart: on 30 (3.4 %) the single axis, its mode moving as k^0.47
+/// The sweep has 40 points from 50 to 130 Hz, 2.5 % apart: on 30 (3.4 %) the one-axis belt machine, its mode moving as k^0.47
 /// with the gearbox's spring in series, read 1.2503 with an error of 0.052, above the 0.05 asked.
 /// A file without a dip, a missing one and one that is no sweep are refused.
 fn the_belt_stiffness_is_fitted_to_a_measured_response_in_the_app(entry: &'static MachineEntry) {
