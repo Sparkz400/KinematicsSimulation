@@ -396,11 +396,14 @@ potential F0 s + k s² / 2 + m g s): the torque swings with the lift law, drivin
 the follower's lift, speed and acceleration, the contact force, the pressure angle, the guide's load and J(θ); judged
 against `ratings.disc_max_contact_force_n` and `disc_max_pressure_angle_deg`. With `cam.run` the disc turns on at
 `disc.turns_per_min`, its master virtual. With `effects.follower_lift_off` the follower leaves the disc where N would fall below
-zero: its gap g to the cam is a passive joint (lift s + g), the contact a spring and a damper in compression only
-(`follower.contact_stiffness_n_m`, `contact_damping_ratio`), so the force on the disc is never negative, and the guide's
-friction (`follower.guide_friction_n`) acts. Lagrange's equations: (J + m s'²) θ'' + m s' g'' + m s' s'' θ'² + (F0 + k (s + g) + m g + F_f) s' = torque
+zero: its gap g to the cam is a passive joint (lift s + g), the contact the roller's steel line contact (Palmgren's d =
+3.84e-5 Q^0.9 / l^0.8 in mm and N over its width l, `follower.roller_width_m`: 4e8 N/m at 160 N) and a damper at
+`contact_damping_ratio` of critical with that stiffness, in compression only, so the force on the disc is never negative
+and does not jump at the touch, and the guide's friction (`follower.guide_friction_n`) acts. At rest the roller sits
+pressed in by its load (0.45 µm). Lagrange's equations: (J + m s'²) θ'' + m s' g'' + m s' s'' θ'² + (F0 + k (s + g) + m g + F_f) s' = torque
 and m s' θ'' + m g'' + m s'' θ'² + F0 + k (s + g) + m g + F_f = F_c; the damper's power is booked as a loss, so the budget closes through an
-impact. Signals `follower.gap` and `follower.off_disc`. Off, the roller stays on the disc and the signal alone shows where N would
+impact (`power.follower_contact`). Signals `follower.gap` (negative: pressed in) and `follower.off_disc` (the contact
+carries nothing). Off, the roller stays on the disc and the signal alone shows where N would
 fall below zero. The middle of the disc's
 range lies on the first half of the rise, where s'' > 0 and spring and weight hold the disc where it is held against
 them; past the rise's middle they turn it away.
@@ -495,24 +498,28 @@ follows it over |theta - 2 pi k| < h and stands outside, a station on per turn (
   frequency between; peak acceleration 4 pi² / (4 + pi) = 5.528, peak speed 1.760) over `indexer.index_angle_deg` of its
   turn, and holds it on its dwell ridge over the rest. No step in acceleration at either end: its jerk is finite. The
   rollers on the turret's pitch radius take the turret's torque over that radius, along the normal with `indexer.cam_radius_m`
-(R_c): tan α = r_p φ' / R_c, N = F / cos α (shipped: α = 35° at the fastest).
+(R_c): tan α = r_p φ' / R_c, N = F / cos α (shipped: α = 35° at the fastest; the peak force, in the deceleration,
+2.1 % more: 359.8 N against 352.5 N at 60 indexes a minute).
 
 The wheel, the table and its parts (`mass.payload_kg` at `table.station_radius_m`) give J(theta) = J_driver + J_t phi'²
 and the speed term J_t phi' phi'' theta'²; the table is horizontal, so gravity does nothing (as process force and frame
 stretch, a switch these machines do not read). **Index accuracy** in the dwell is the lock's: half
 `indexer.locking_play_rad` at the station radius (`index-accuracy` against `ratings.index_max_error_m`), whatever the
 motor's following error, as the locking disc or the dwell ridge holds the table, not the servo. **Settling**: the table
-twists on its shaft against the held wheel (`table.stiffness_nm_rad`, `table.damping_ratio`); through the index its twist
-follows x'' + 2 zeta w_n x' + w_n² x = -phi'' theta'², and the ring left at the index's end dies as exp(-zeta w_n t). The
+twists on its shaft against the held wheel (`table.stiffness_nm_rad` k, `table.damping_ratio`); through the index its
+twist follows x'' + 2 zeta w_n x' + w_n² x = -phi'' theta'², w_n² = k / J_s with J_s the table and its parts (the
+wheel, held by the cam or the pin, is not in the mode), and the ring left at the index's end dies as exp(-zeta w_n t). The
 signal `table.settling_time` is the time the table rings beyond `ratings.index_settling_tolerance_m` (at the station
 radius) after an index run at the driver's present speed, solved over 2000 steps by the oscillator's exact solution for a
-held force; `index-settling` judges it against `ratings.index_max_settling_s`. On the shipped table (w_n = 603 rad/s,
-zeta 0.03) the Geneva's step leaves 63 µrad, 12.5 µm, settling to 10 µm in 12.5 ms at 60 indexes a minute and 66 ms on
-the servo cycle that runs the index at up to 10 rad/s; the cam indexer's modified sine leaves 9 µrad (its jerk over
-w_n³) and is settled when the index ends. The ring is worked out beside the dynamics, not in them: the drive does not see
+held force; `index-settling` judges it against `ratings.index_max_settling_s`. On the shipped table (w_n = 620 rad/s,
+zeta 0.03) the Geneva's step leaves 59 µrad, 11.9 µm, settling to 10 µm in 9.1 ms at 60 indexes a minute (9.6 ms in the
+run) and 60 ms on the servo cycle that runs the index at up to 10 rad/s; the cam indexer's modified sine leaves 8 µrad
+(its jerk over w_n³) and is settled when the index ends. The ring is worked out beside the dynamics, not in them: the drive does not see
 it. With `effects.table_twist` the twist is a passive joint x of its own: (J_d + J_t φ'²) θ'' + J_s φ' x'' + J_t φ' φ'' θ'²
 = torque and J_s (φ' θ'' + x'' + φ'' θ'²) = −k x − c x', J_s the table with its parts, J_t with the wheel, c = 2 ζ √(k J_s); the
-ring then acts back on the driver (signal `table.twist`).
+ring then acts back on the driver (signal `table.twist`, the damper's loss `power.table_twist`), and the cam's torque on
+the wheel is J_w a_w less the shaft's k x + c x'. The ring as a joint is the one worked out beside: 5.930e-5 rad against
+5.940e-5 after the Geneva's index at 60 a minute.
 
 The shipped cycle turns the driver one turn (one index) from the middle of a dwell and back; `config/geneva-drive-cam.toml`
 and `config/cam-indexer-cam.toml` turn it on at 60 turns a minute:
@@ -1172,8 +1179,7 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
 - No unbalance on the rotary table, no rack life formula (none published), no cross roller bearing check.
 - A cam's master cannot yet be the conveyor of `[conveyor]` (the cam's master is its own, with the conveyor's
   speed-and-ramp model); a new master speed starts its ramp from the master's speed without its acceleration (a step in
-  acceleration where it comes during a ramp); the crank's, the knife's and the disc's joint has no stops while the cam
-  turns it on; the disc cam's follower is a translating one (no swinging lever) and never lifts off the disc; the slider-crank's press force acts only on the way out (no springback), the toggle press's also at rest and fades as the ram rises (its frame's stretch is a massless spring, the links are rigid) and the knife's and saw's cut force
+  acceleration where it comes during a ramp); the disc cam's follower is a translating one (no swinging lever); the slider-crank's press force acts only on the way out (no springback), the toggle press's also at rest and fades as the ram rises (its frame's stretch is a massless spring, the links are rigid) and the knife's and saw's cut force
   only forwards.
 - The linear delta (`delta-linear`, three belt axes on columns that may lean, `geometry.column_incline_deg`) is a
   parallel machine, not one of these; see the [model reference](model-reference.md#linear-delta).

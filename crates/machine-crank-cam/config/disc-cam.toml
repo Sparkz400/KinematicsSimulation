@@ -49,12 +49,11 @@ roller_radius_m = 0.015
 offset_m = 0.01
 spring_n_m = 2000.0
 spring_preload_n = 100.0
-# With effects.follower_lift_off [estimate]: the contact of roller and disc as a spring and a damper in compression only.
-# 1e8 N/m: a steel line contact of this roller is some 3e8 N/m under the working load by Hertz, but the config carries no
-# roller width, and a stiffer contact would need a smaller step; the damping ratio takes most of the normal speed out at an
-# impact (the rebound is exp(-pi zeta / sqrt(1 - zeta^2)) = 0.16 of it); the guide's Coulomb friction is that of a linear
-# bushing with its seals.
-contact_stiffness_n_m = 1.0e8
+# With effects.follower_lift_off [estimate]: the contact of roller and disc, a steel line contact over the roller's
+# width (Palmgren's, 4e8 N/m at 160 N) and a damper in compression only. The width: a stud-type track roller of 30 mm is
+# 14 mm wide (Schaeffler KR 30); the damping ratio, taken with the contact's stiffness, takes most of the normal speed
+# out at an impact; the guide's Coulomb friction is that of a linear bushing with its seals.
+roller_width_m = 0.014
 contact_damping_ratio = 0.5
 guide_friction_n = 5.0
 
@@ -66,7 +65,8 @@ payload_kg = 1.0
 friction_coulomb_nm = 0.5
 friction_viscous_nm_s_rad = 0.05
 friction_smoothing_rad_s = 0.01
-# The stops leave the shipped cycle (0 to 180) room; with cam.run the disc turns on and has none. The middle of the
+# The axis range leaves the shipped cycle (0 to 180) room; the disc turns on and has no stops of its own
+# (joint.stop_min_deg / stop_max_deg would put end stops with the stop_* below). The middle of the
 # range, 50 degrees, lies on the first half of the rise, where the follower's acceleration s'' > 0 makes the spring and
 # the weight hold the disc where it is held against them (past the rise's middle they would turn it away).
 min_angle_deg = -90.0
@@ -351,4 +351,7 @@ disc.inertia_kgm2 = [0.009, 0.0115]
 follower.mass_kg = [1.5, 2.5]
 follower.spring_n_m = [1500.0, 2500.0]
 follower.spring_preload_n = [80.0, 120.0]
+follower.roller_width_m = [0.012, 0.016]
+follower.contact_damping_ratio = [0.3, 0.7]
+follower.guide_friction_n = [2.0, 10.0]
 mass.payload_kg = [0.5, 1.5]

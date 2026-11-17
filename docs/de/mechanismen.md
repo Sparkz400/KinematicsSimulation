@@ -411,10 +411,13 @@ F0 s + k s² / 2 + m g s): das Moment schwingt mit dem Hubgesetz und treibt die 
 Geschwindigkeit und Beschleunigung des Stößels, die Kontaktkraft, der Druckwinkel, die Führungslast und J(θ); geprüft
 gegen `ratings.disc_max_contact_force_n` und `disc_max_pressure_angle_deg`. Mit `cam.run` dreht die Scheibe mit
 `disc.turns_per_min` weiter, ihr Leitwert virtuell. Mit `effects.follower_lift_off` hebt der Stößel ab, wo N unter null fiele: sein Spalt
-g zur Scheibe ist ein passives Gelenk (Hub s + g), der Kontakt eine Feder mit Dämpfer nur auf Druck
-(`follower.contact_stiffness_n_m`, `contact_damping_ratio`), die Kraft auf die Scheibe also nie negativ, dazu wirkt die Reibung
-der Führung (`follower.guide_friction_n`); die Leistung des Dämpfers wird als Verlust gebucht, die Bilanz schließt über einen
-Aufprall. Signale `follower.gap` und `follower.off_disc`. Aus, bleibt die Rolle auf der Scheibe, und nur das Signal zeigt, wo N
+g zur Scheibe ist ein passives Gelenk (Hub s + g), der Kontakt der Linienkontakt der Stahlrolle (nach Palmgren d =
+3,84e-5 Q^0,9 / l^0,8 in mm und N über ihre Breite l, `follower.roller_width_m`: 4e8 N/m bei 160 N) mit einem Dämpfer bei
+`contact_damping_ratio` der kritischen Dämpfung mit dieser Steifigkeit, nur auf Druck, die Kraft auf die Scheibe also nie
+negativ und ohne Sprung bei der Berührung, dazu wirkt die Reibung der Führung (`follower.guide_friction_n`); in Ruhe ist
+die Rolle um ihre Last eingedrückt (0,45 µm). Die Leistung des Dämpfers wird als Verlust gebucht
+(`power.follower_contact`), die Bilanz schließt über einen Aufprall. Signale `follower.gap` (negativ: eingedrückt) und
+`follower.off_disc` (der Kontakt trägt nichts). Aus, bleibt die Rolle auf der Scheibe, und nur das Signal zeigt, wo N
 unter null fiele. Die Mitte des Bereichs der
 Scheibe liegt auf der ersten Hälfte des Hubs, wo s'' > 0 ist und Feder und Gewicht die Scheibe dort halten, wo sie gegen
 sie gehalten wird; hinter der Mitte des Hubs drehen sie sie weg.
@@ -1136,8 +1139,7 @@ Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels
 - Das Förderband aus `[conveyor]` kann noch nicht Leitwert einer Kurvenscheibe sein (der Leitwert ist ein eigener, mit
   dem Geschwindigkeits- und Rampenmodell des Bands); eine neue Leitgeschwindigkeit beginnt ihre Rampe bei der
   Geschwindigkeit des Leitwerts ohne seine Beschleunigung (ein Sprung der Beschleunigung, wo sie während einer Rampe
-  kommt); das Gelenk von Kurbel, Messer und Kurvenscheibe hat keine Anschläge, solange die Kurvenscheibe es weiterdreht;
-  der Stößel der Kurvenscheibe ist ein geradegeführter (kein Schwinghebel) und hebt nie von der Scheibe ab; die Presskraft der
+  kommt); der Stößel der Kurvenscheibe ist ein geradegeführter (kein Schwinghebel); die Presskraft der
   Schubkurbel wirkt nur beim Ausfahren (keine Rückfederung), die der Kniehebelpresse auch im Stillstand und klingt ab,
   wenn der Stößel steigt (die Auffederung des Gestells ist eine masselose Feder, die Hebel sind starr), die Schnittkraft von Messer und Säge nur vorwärts.
 - Der Linear-Delta (`delta-linear`, drei Riemenachsen an Säulen, die sich neigen können,

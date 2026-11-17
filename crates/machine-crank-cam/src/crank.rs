@@ -53,9 +53,8 @@ pub struct SliderCrank {
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let joint = RotaryJoint::from_config(cfg)?;
     let crank = SliderCrank::from_config(cfg)?;
-    let endless = crank.cam.as_ref().is_some_and(|(c, _)| c.advance != 0.0);
     let theta = axis(cfg, "crank", "axis-crank", "rad", joint.range)?;
-    machine(cfg, crank, (joint, None, "rad"), theta, endless)
+    machine(cfg, crank, (joint, None, "rad"), theta, true)
 }
 
 impl SliderCrank {

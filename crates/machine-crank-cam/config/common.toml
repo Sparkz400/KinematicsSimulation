@@ -129,7 +129,7 @@ frame_stretch = true
 # acts back on the driver: read by the two indexers alone. Off: the ring is worked out beside the dynamics.
 table_twist = false
 # The disc cam's follower may leave the disc where the contact force would go below zero: its gap to the cam is a joint of its
-# own with a one-sided contact spring and damper (follower.contact_stiffness_n_m, follower.contact_damping_ratio) and the
+# own with a one-sided contact spring and damper (follower.roller_width_m, follower.contact_damping_ratio) and the
 # guide's friction (follower.guide_friction_n), flying under its spring and weight until it meets the disc again. Read by
 # the disc cam alone. Off: the roller stays on the disc.
 follower_lift_off = false

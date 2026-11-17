@@ -1363,7 +1363,10 @@ pub struct Verdict {
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
 /// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
 /// own keys (`drive::Motor`: a stepper's and an induction motor's).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 79] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 81] = [
+    // Optional end stops of a joint that turns on without stops of its own.
+    "joint.stop_min_deg",
+    "joint.stop_max_deg",
     // A guide set's carriages and rail length for the catalogue's guides, and the share of the moved mass and of the guide
     // friction that the config's own guide carriages are (`catalog::mechanics`).
     "ratings.guide_carriages",
@@ -2291,7 +2294,10 @@ pub fn set_bounded(cfg: &mut Config, path: &str, value: f64) -> Result<(), Confi
 /// Values (by the start of their path) that only some effects use, and those effects: they change nothing while all
 /// of them are off. None: a value no cycle uses, the discharge of a disabled drive's DC link. The parts warm with
 /// effects.thermal_feedback too (`sim::heats`).
-const PATH_EFFECTS: [(&str, &[&str]); 34] = [
+const PATH_EFFECTS: [(&str, &[&str]); 37] = [
+    ("follower.roller_width_m", &["follower_lift_off"]),
+    ("follower.contact_", &["follower_lift_off"]),
+    ("follower.guide_friction_n", &["follower_lift_off"]),
     ("thermal.", &["part_heating", "thermal_feedback"]),
     ("motor.pole_pairs", &["field_weakening"]),
     ("motor.d_inductance_h", &["field_weakening"]),

@@ -41,8 +41,9 @@
 //!
 //! In the dwell the locking disc (the cam's dwell ridge) holds the wheel within its play (`indexer.locking_play_rad`):
 //! the table's index accuracy is half that play at the station radius, whatever the motor does. The table rings on
-//! its shaft (`table.stiffness_nm_rad`, `table.damping_ratio`) after each index: the twist x of the table against the
-//! wheel follows x'' + 2 zeta w_n x' + w_n^2 x = -phi'' theta'^2 through the index at the driver's speed, and what is
+//! its shaft (`table.stiffness_nm_rad` k, `table.damping_ratio`) after each index: the twist x of the table side (the
+//! table and its parts, J_s; the wheel is held by the cam) against the wheel follows x'' + 2 zeta w_n x' + w_n^2 x =
+//! -phi'' theta'^2, w_n^2 = k / J_s, through the index at the driver's speed, and what is
 //! left at its end, A, dies as exp(-zeta w_n t): the table settles to `ratings.index_settling_tolerance_m` at the station
 //! radius ln(A / tol) / (zeta w_n) after the index. The Geneva's step in acceleration at the end leaves A = tan(pi / n)
 //! theta'^2 / w_n^2; the modified sine's smooth end far less. That settling signal is worked out beside the dynamics at
@@ -58,10 +59,12 @@
 //!   J_s phi' theta'' + J_s x'' + J_s phi'' theta'^2 = -k x - c x',
 //!
 //! J_t = J_w + J_s, k = `table.stiffness_nm_rad`, c = 2 zeta sqrt(k J_s). The ring acts back on the driver through the
-//! mass coupling J_s phi', the drive's loop sees it, and the twist is a state (signal `table.twist`; its spring and
-//! damper are booked as the passive joints' are). The torque on the wheel is J_t (phi'' theta'^2 + phi' theta'') - (k x
-//! + c x'), the contact force that over the lever; the index error in the dwell adds |x| at the station radius. The
-//! feedforward knows the rigid table only (the twist held at zero), as a drive does.
+//! mass coupling J_s phi', the drive's loop sees it, and the twist is a state (signal `table.twist`; its spring's energy
+//! is elastic energy, its damper's power the loss row `power.table_twist`). The cam's torque on the wheel is then J_w
+//! (phi'' theta'^2 + phi' theta'') less the shaft's k x + c x' on it (= J_w a_w + J_s (a_w + x''), J_t a_w as the twist
+//! stiffens), the contact force that over the lever; the index error in the
+//! dwell adds |x| at the station radius. The feedforward knows the rigid table only (the twist held at zero), as a
+//! drive does.
 
 use crate::{axis, machine, master, payload};
 use sim_components::cam::{Cam, Law, Segment};
@@ -134,9 +137,8 @@ pub fn build_cam(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
 fn build(cfg: &Config, cam: bool) -> Result<Box<dyn Machine>, ConfigError> {
     let joint = RotaryJoint::from_config(cfg)?;
     let indexer = Indexer::from_config(cfg, cam)?;
-    let endless = indexer.master.is_some();
     let theta = axis(cfg, "driver", "axis-driver", "rad", joint.range)?;
-    machine(cfg, indexer, (joint, None, "rad"), theta, endless)
+    machine(cfg, indexer, (joint, None, "rad"), theta, true)
 }
 
 impl Indexer {
@@ -169,9 +171,10 @@ impl Indexer {
         let payload = payload(cfg)?;
         let j_all = j_wheel_table + payload * station_radius * station_radius;
         let stiffness = cfg.positive("table.stiffness_nm_rad")?;
-        let w_n = (stiffness / j_all).sqrt();
-        let zeta = cfg.positive("table.damping_ratio")?;
+        // The table side twists against the wheel, which the cam (or the locking disc) holds: the wheel is not in the mode.
         let j_side = j_all - j_wheel;
+        let w_n = (stiffness / j_side).sqrt();
+        let zeta = cfg.positive("table.damping_ratio")?;
         let twist = cfg.bool("effects.table_twist")?.then(|| (stiffness, 2.0 * zeta * (stiffness * j_side).sqrt()));
         let one_turn = Cam::from_segments(&[Segment { master: TAU, slave: TAU, law: Law::Linear }])
             .expect("one turn at constant speed");
@@ -264,14 +267,19 @@ impl Indexer {
     /// The torque the drive puts on the wheel (table and parts) and the contact force, at the driver's angle, speed and
     /// acceleration.
     pub fn loads(&self, theta: f64, speed: f64, acc: f64) -> [f64; 2] {
-        self.loads_twisted(theta, speed, acc, 0.0)
+        self.loads_twisted(theta, speed, acc, None)
     }
 
-    /// `loads` with the twist's spring and damper torque `held` (k x + c x', N m) taken off the wheel's torque, and the
-    /// contact force along the normal (1 / cos of the cam's pressure angle on the force along the turret's tangent).
-    fn loads_twisted(&self, theta: f64, speed: f64, acc: f64, held: f64) -> [f64; 2] {
+    /// `loads`, with the twist joint's shaft torque `held` (k x + c x', N m) where it is a state: the cam then turns the
+    /// wheel alone and the shaft's torque on it. The contact force along the normal (1 / cos of the cam's pressure angle
+    /// on the force along the turret's tangent).
+    fn loads_twisted(&self, theta: f64, speed: f64, acc: f64, held: Option<f64>) -> [f64; 2] {
         let [_, p1, p2] = self.motion(theta);
-        let torque = self.j_table() * (p2 * speed * speed + p1 * acc) - held;
+        let a_w = p2 * speed * speed + p1 * acc;
+        let torque = match held {
+            Some(held) => self.j_wheel * a_w - held,
+            None => self.j_table() * a_w,
+        };
         [torque, self.lever(theta).map_or(0.0, |r| torque / r / self.pressure_angle(theta).cos())]
     }
 
@@ -320,6 +328,15 @@ impl Mechanism for Indexer {
     fn passive_joints(&self) -> Vec<(f64, f64)> {
         self.twist.into_iter().collect()
     }
+    fn passive_signals(&self) -> Vec<SignalInfo> {
+        self.twist
+            .map(|_| SignalInfo::new("table.twist", "group-table", "quantity-table-twist", "rad"))
+            .into_iter()
+            .collect()
+    }
+    fn passive_loss_row(&self) -> Option<(&'static str, &'static str)> {
+        Some(("table_twist", "group-table"))
+    }
     fn forward(&self, q: &[f64], tool: &mut [f64]) {
         tool[0] = q[0];
     }
@@ -352,7 +369,6 @@ impl Mechanism for Indexer {
             ("indexer.inertia", "group-indexer", "quantity-driver-inertia", "kg m²"),
         ]
         .into_iter()
-        .chain(self.twist.map(|_| ("table.twist", "group-table", "quantity-table-twist", "rad")))
         .chain(matches!(self.drive, Drive::Cam { cam_radius: Some(_), .. }).then_some((
             "indexer.pressure_angle",
             "group-indexer",
@@ -365,14 +381,16 @@ impl Mechanism for Indexer {
     fn signals(&self, q: &[f64], qd: &[f64], qdd: &[f64], _force: &[f64], out: &mut Vec<f64>) {
         let [phi, p1, p2] = self.motion(q[0]);
         // The twist joint's angle and speed, where the state has it (the rigid feedforward's checks hold it at rest).
-        let (x, xd) = (q.get(1).copied().unwrap_or(0.0), qd.get(1).copied().unwrap_or(0.0));
-        let held = self.twist.map_or(0.0, |(k, c)| k * x + c * xd);
+        let at = |v: &[f64]| v.get(1).copied().unwrap_or(0.0);
+        let (x, xd, xdd) = (at(q), at(qd), at(qdd));
+        let held = self.twist.filter(|_| q.len() > 1).map(|(k, c)| k * x + c * xd);
         let [torque, contact] = self.loads_twisted(q[0], qd[0], qdd[0], held);
         let moving = self.phase(q[0]).0.is_some();
+        // The table turns with the wheel and its twist.
         out.extend([
-            phi,
-            p1 * qd[0],
-            p2 * qd[0] * qd[0] + p1 * qdd[0],
+            phi + x,
+            p1 * qd[0] + xd,
+            p2 * qd[0] * qd[0] + p1 * qdd[0] + xdd,
             torque,
             contact,
             // Held by the locking disc: half its play either way, at the stations.
@@ -380,9 +398,6 @@ impl Mechanism for Indexer {
             if moving { self.settling_time(qd[0]) } else { 0.0 },
             self.j_driver + self.j_table() * p1 * p1,
         ]);
-        if self.twist.is_some() {
-            out.push(x);
-        }
         if matches!(self.drive, Drive::Cam { cam_radius: Some(_), .. }) {
             out.push(self.pressure_angle(q[0]));
         }

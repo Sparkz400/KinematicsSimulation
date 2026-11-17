@@ -147,25 +147,25 @@ fn axis(
 }
 
 /// A joint machine of one joint (with its gear lever, `None` where it has no converter, and its unit) and its axis.
-/// Where a cam runs its slave on and on (`endless`), the joint's stops go out of its way: the axis range stays what
-/// moves and paths may use.
+/// A joint that turns on (`turns_on`: a crank, a knife roll, a disc, an indexer's driver) has no stops of its own: the
+/// axis range (`joint.min_angle_deg`, `max_angle_deg`) is what the cycle and paths may use, and a cam may run it on
+/// past that range, or ramp it down there when it is taken away. End stops are optional: `joint.stop_min_deg` /
+/// `joint.stop_max_deg` put the joint's stops (`effects.hard_stops`, `joint.stop_*`) at those angles, either alone or
+/// both.
 fn machine<M: Mechanism + 'static>(
     cfg: &Config,
     mechanism: M,
     (mut drive, gear_lever, unit): (RotaryJoint, Option<f64>, &'static str),
     axis: AxisInfo,
-    endless: bool,
+    turns_on: bool,
 ) -> Result<Box<dyn Machine>, ConfigError> {
-    if endless {
-        // The joint's stops go out of the way; a limit switch is optional: `cam.limit_min_deg` / `cam.limit_max_deg`
-        // put the joint's stops (`effects.hard_stops`) at those angles of the crank, knife roll, disc or driver, either
-        // alone or both; absent, the endless joint has none.
-        let limit = |key: &str, none: f64| -> Result<f64, ConfigError> {
+    if turns_on {
+        let stop = |key: &str, none: f64| -> Result<f64, ConfigError> {
             if cfg.get(key).is_ok() { cfg.f64(key).map(f64::to_radians) } else { Ok(none) }
         };
-        drive.range = (limit("cam.limit_min_deg", -1e12)?, limit("cam.limit_max_deg", 1e12)?);
+        drive.range = (stop("joint.stop_min_deg", -1e12)?, stop("joint.stop_max_deg", 1e12)?);
         if drive.range.0 >= drive.range.1 {
-            return Err(ConfigError::Invalid("cam.limit_min_deg".into()));
+            return Err(ConfigError::Invalid("joint.stop_min_deg".into()));
         }
     }
     let spec = JointSpec { drive, id: MOTOR_IDS[0], key: JOINT_KEYS[0], gear_lever, unit };
