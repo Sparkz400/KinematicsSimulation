@@ -251,6 +251,15 @@ pub trait Mechanism: Send {
     fn passive_joints(&self) -> Vec<(f64, f64)> {
         Vec::new()
     }
+    /// A loss row of the mechanism's own (a contact's damper, a guide's friction), booked beside the joints' and the
+    /// two-way modes': its id (`loss.<id>`) and the owner's key; `None` (no row) by default.
+    fn loss_row(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+    /// The power the row of `loss_row` takes out, W, at all joints' q and qd (passive ones included): 0 by default.
+    fn loss_power(&self, _q: &[f64], _qd: &[f64]) -> f64 {
+        0.0
+    }
     fn set_payload_attached(&mut self, attached: bool);
     /// Whether the motors are linear motors (their signals in m, m/s, N): `Machine::motor_linear`. False by default.
     fn linear_motor(&self) -> bool {
@@ -912,6 +921,10 @@ impl<M: Mechanism> JointMachine<M> {
             let rate = self.flex_state(s).1;
             powers.push(self.mechanism.flex_modes().iter().zip(rate).map(|(m, v)| m.damping * v * v).sum());
         }
+        if self.mechanism.loss_row().is_some() {
+            let (q, qd) = self.all_joints(s);
+            powers.push(self.mechanism.loss_power(&q, &qd));
+        }
         Losses { powers, gear_at_rotor }
     }
 
@@ -1011,6 +1024,9 @@ impl<M: Mechanism> JointMachine<M> {
                 "quantity-damping-power",
                 "W",
             ));
+        }
+        if let Some((id, owner)) = self.mechanism.loss_row() {
+            out.push(SignalInfo::new(format!("{LOSS_PREFIX}{id}"), owner, "quantity-damping-power", "W"));
         }
         out.extend(ENERGY_PARTS.map(|part| {
             SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")

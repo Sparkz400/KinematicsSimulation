@@ -49,6 +49,14 @@ roller_radius_m = 0.015
 offset_m = 0.01
 spring_n_m = 2000.0
 spring_preload_n = 100.0
+# With effects.follower_lift_off [estimate]: the contact of roller and disc as a spring and a damper in compression only.
+# 1e8 N/m: a steel line contact of this roller is some 3e8 N/m under the working load by Hertz, but the config carries no
+# roller width, and a stiffer contact would need a smaller step; the damping ratio takes most of the normal speed out at an
+# impact (the rebound is exp(-pi zeta / sqrt(1 - zeta^2)) = 0.16 of it); the guide's Coulomb friction is that of a linear
+# bushing with its seals.
+contact_stiffness_n_m = 1.0e8
+contact_damping_ratio = 0.5
+guide_friction_n = 5.0
 
 # The tool on the follower (effects.payload). [estimate]
 [mass]

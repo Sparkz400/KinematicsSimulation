@@ -229,6 +229,8 @@ fn forwards(v: f64, smoothing: f64) -> f64 {
 }
 
 #[cfg(test)]
+mod disc_tests;
+#[cfg(test)]
 mod indexer_tests;
 #[cfg(test)]
 mod tests;

@@ -392,8 +392,13 @@ J(θ) = J_disc + m s'², the speed term m s' s'' θ'², and the spring's and the
 potential F0 s + k s² / 2 + m g s): the torque swings with the lift law, driving the disc back on the return. Signals:
 the follower's lift, speed and acceleration, the contact force, the pressure angle, the guide's load and J(θ); judged
 against `ratings.disc_max_contact_force_n` and `disc_max_pressure_angle_deg`. With `cam.run` the disc turns on at
-`disc.turns_per_min`, its master virtual. The roller stays on the disc: where N would fall below zero the follower would
-lift off, which the signal shows and the model does not part (a spring sized that short). The middle of the disc's
+`disc.turns_per_min`, its master virtual. With `effects.follower_lift_off` the follower leaves the disc where N would fall below
+zero: its gap g to the cam is a passive joint (lift s + g), the contact a spring and a damper in compression only
+(`follower.contact_stiffness_n_m`, `contact_damping_ratio`), so the force on the disc is never negative, and the guide's
+friction (`follower.guide_friction_n`) acts. Lagrange's equations: (J + m s'²) θ'' + m s' g'' + m s' s'' θ'² + (F0 + k (s + g) + m g + F_f) s' = torque
+and m s' θ'' + m g'' + m s'' θ'² + F0 + k (s + g) + m g + F_f = F_c; the damper's power is booked as a loss, so the budget closes through an
+impact. Signals `follower.gap` and `follower.off_disc`. Off, the roller stays on the disc and the signal alone shows where N would
+fall below zero. The middle of the disc's
 range lies on the first half of the rise, where s'' > 0 and spring and weight hold the disc where it is held against
 them; past the rise's middle they turn it away.
 

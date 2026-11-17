@@ -19,12 +19,31 @@
 //! theta''. The disc feels J(theta) = J_disc + m s'^2, the speed term m s' s'' theta'^2 and the spring's and weight's
 //! torque (F0 + k s + m g) s' (the potential F0 s + k s^2 / 2 + m g s). The guide takes N sin(phi) across.
 //!
-//! shortcut: the roller stays on the disc; where N falls below zero the follower would lift off (the signal
-//! follower.contact_force shows it), and the model does not part them. Model the jump if a spring is ever sized that
-//! short.
+//! `effects.follower_lift_off` (off as shipped) lets the follower leave the disc. Its lift is then s_f = s(theta) + g,
+//! g the gap (the roller's centre above the pitch curve; negative: pressed into the disc), a passive joint after the
+//! disc's angle (`Mechanism::passive_joints`, no spring of its own). The follower's speed is v = s' theta' + g'. With
+//! T = J_disc theta'^2 / 2 + m v^2 / 2, the potential V = (F0 + m g) s_f + k s_f^2 / 2 and the guide's friction F_f =
+//! mu tanh(v / 1 mm/s) against v, Lagrange's equations are
+//!
+//!   (J_disc + m s'^2) theta'' + m s' g'' + m s' s'' theta'^2 + (F0 + k s_f + m g + F_f) s' = torque,
+//!   m s' theta'' + m g'' + m s'' theta'^2 + F0 + k s_f + m g + F_f = F_c.
+//!
+//! F_c, the contact force's component along the follower's axis, is the one force that acts on g alone: the disc's
+//! surface moves by s' d theta, the roller by s' d theta + d g, so its virtual work is F_c d g (the disc feels F_c s'
+//! through the mass coupling). The contact is one-sided: a spring and a damper in compression only, F_c = max(0, c_s d
+//! + c_d d') with the depth d = -g > 0, c_s = `follower.contact_stiffness_n_m`, c_d = 2 zeta sqrt(c_s m)
+//! (`follower.contact_damping_ratio`), 0 for d <= 0: the force on the disc is never negative. The spring's energy
+//! c_s d^2 / 2 is part of `potential`; the damper's power (F_c - c_s d) d' (the clamp's included) is the loss
+//! `loss_power` books, and F_f v the guide's, so the energy budget closes through an impact (the damper takes the
+//! normal speed out: the rebound is exp(-pi zeta / sqrt(1 - zeta^2)) of it). In free flight (g > 0) the follower
+//! moves under its spring, its weight and the guide's friction alone and meets the disc again where g reaches 0. The
+//! pressed-in depth under a load F is F / c_s (1 um under 100 N at 1e8 N/m); the shipped c_s is an `[estimate]`: the
+//! Hertz stiffness of the roller's line contact needs the roller's width, which the config does not carry. The contact
+//! force along the normal is F_c / cos phi (signal `follower.contact_force`); the lift-off shows in `follower.gap` and
+//! the flag `follower.off_disc`. The feedforward knows the follower on the disc (g = 0), as a drive does.
 //!
 //! Signals: the follower's lift, speed and acceleration, the contact force, the pressure angle, the guide's load
-//! across and J(theta); the contact force and the pressure angle are judged against `ratings.disc_max_contact_force_n`
+//! across and J(theta) (with the lift-off also the gap and its flag); the contact force and the pressure angle are judged against `ratings.disc_max_contact_force_n`
 //! and `ratings.disc_max_pressure_angle_deg`.
 
 use crate::{axis, gravity, machine, master, payload};
@@ -51,8 +70,24 @@ pub struct DiscCam {
     /// The electronic cam that turns the disc at its speed with cam.run: one turn over one turn of the master.
     pub cam: Cam,
     pub master: Option<CamMaster>,
+    /// With effects.follower_lift_off: the contact's stiffness and damping ratio, the guide's friction.
+    pub lift_off: Option<LiftOff>,
     limits: [f64; 2],
 }
+
+/// The follower's one-sided contact with the disc and its guide's friction (`effects.follower_lift_off`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LiftOff {
+    /// The contact spring, N/m (`follower.contact_stiffness_n_m`).
+    pub stiffness: f64,
+    /// The contact damper as a share of critical damping with the follower's mass (`follower.contact_damping_ratio`).
+    pub zeta: f64,
+    /// The guide's Coulomb friction, N (`follower.guide_friction_n`).
+    pub friction: f64,
+}
+
+/// The speed at which the guide's friction reaches its full level (tanh), m/s.
+const GUIDE_SMOOTHING: f64 = 1e-3;
 
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let joint = RotaryJoint::from_config(cfg)?;
@@ -92,6 +127,15 @@ impl DiscCam {
             g: gravity(cfg)?,
             cam,
             master,
+            lift_off: if cfg.bool("effects.follower_lift_off")? {
+                Some(LiftOff {
+                    stiffness: cfg.positive("follower.contact_stiffness_n_m")?,
+                    zeta: cfg.non_negative("follower.contact_damping_ratio")?,
+                    friction: cfg.non_negative("follower.guide_friction_n")?,
+                })
+            } else {
+                None
+            },
             limits: [
                 cfg.f64("ratings.disc_max_contact_force_n").unwrap_or(f64::INFINITY),
                 cfg.f64("ratings.disc_max_pressure_angle_deg").map_or(f64::INFINITY, f64::to_radians),
@@ -128,6 +172,30 @@ impl DiscCam {
         let contact = along / phi.cos();
         [contact, contact * phi.sin()]
     }
+
+    /// The contact force along the follower's axis F_c and its spring part c_s d, N, at the gap g and its rate g' (both
+    /// 0 off the disc and without `effects.follower_lift_off`).
+    pub fn contact_force(&self, g: f64, gd: f64) -> [f64; 2] {
+        let Some(lo) = self.lift_off else { return [0.0; 2] };
+        if g >= 0.0 {
+            return [0.0; 2];
+        }
+        let spring = -lo.stiffness * g;
+        let damper = 2.0 * lo.zeta * (lo.stiffness * self.m()).sqrt() * -gd;
+        [(spring + damper).max(0.0), spring]
+    }
+
+    /// The guide's friction force against the follower's speed v, N.
+    fn guide_friction(&self, v: f64) -> f64 {
+        self.lift_off.map_or(0.0, |lo| lo.friction * (v / GUIDE_SMOOTHING).tanh())
+    }
+
+    /// The gap, its rate and its acceleration from the joints' q, q' and q''; 0 where they hold the disc's angle only
+    /// (the rigid feedforward's checks).
+    fn gap(q: &[f64], qd: &[f64], qdd: &[f64]) -> [f64; 3] {
+        let at = |x: &[f64]| x.get(1).copied().unwrap_or(0.0);
+        [at(q), at(qd), at(qdd)]
+    }
 }
 
 impl Mechanism for DiscCam {
@@ -136,20 +204,49 @@ impl Mechanism for DiscCam {
     fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
         let [s, s1, ..] = self.lift.at(q[0]);
         let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
-        let at = [self.offset, 0.0, self.s0() + s];
-        sim_components::base::add_point(&mut f, self.m(), at, [0.0, 0.0, s1 * qd[0]]);
+        let [g, gd, _] = Self::gap(q, qd, &[]);
+        let at = [self.offset, 0.0, self.s0() + s + g];
+        sim_components::base::add_point(&mut f, self.m(), at, [0.0, 0.0, s1 * qd[0] + gd]);
         sim_components::base::add_spin(&mut f, [0.0, -1.0, 0.0], self.j_disc, qd[0]);
         f.angular[1] -= rotor_spin[0];
         Some(f)
     }
     fn dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         let [s, s1, s2, _] = self.lift.at(q[0]);
-        mass[0] = self.j_disc + self.m() * s1 * s1;
-        bias[0] = self.m() * s1 * s2 * qd[0] * qd[0] + self.held(s) * s1;
+        let m = self.m();
+        mass[0] = self.j_disc + m * s1 * s1;
+        bias[0] = m * s1 * s2 * qd[0] * qd[0] + self.held(s) * s1;
+        if self.lift_off.is_some() {
+            // With the gap as a joint: the matrix and forces of the doc comment (the disc first).
+            let [g, gd, _] = Self::gap(q, qd, &[]);
+            let push = self.held(s + g) + self.guide_friction(s1 * qd[0] + gd);
+            (mass[1], mass[2], mass[3]) = (m * s1, m * s1, m);
+            bias[0] = m * s1 * s2 * qd[0] * qd[0] + push * s1;
+            bias[1] = m * s2 * qd[0] * qd[0] + push - self.contact_force(g, gd)[0];
+        }
     }
     fn potential(&self, q: &[f64]) -> f64 {
-        let s = self.lift.at(q[0])[0];
-        (self.preload + self.m() * self.g) * s + 0.5 * self.spring * s * s
+        let g = q.get(1).copied().unwrap_or(0.0);
+        let s = self.lift.at(q[0])[0] + g;
+        let contact = self.lift_off.map_or(0.0, |lo| 0.5 * lo.stiffness * g.min(0.0) * g.min(0.0));
+        (self.preload + self.m() * self.g) * s + 0.5 * self.spring * s * s + contact
+    }
+    fn passive_joints(&self) -> Vec<(f64, f64)> {
+        self.lift_off.map(|_| (0.0, 0.0)).into_iter().collect()
+    }
+    /// The contact damper's and the guide's friction power, as a row of the loss budget.
+    fn loss_row(&self) -> Option<(&'static str, &'static str)> {
+        self.lift_off.map(|_| ("follower_contact", "group-follower"))
+    }
+    /// (F_c - c_s d) d' with d' = -g', and F_f v: the damper's (the clamp's included) and the guide's, W.
+    fn loss_power(&self, q: &[f64], qd: &[f64]) -> f64 {
+        let [g, gd, _] = Self::gap(q, qd, &[]);
+        let [force, spring] = self.contact_force(g, gd);
+        let v = self.lift.at(q[0])[1] * qd[0] + gd;
+        -(force - spring) * gd + self.guide_friction(v) * v
+    }
+    fn forward(&self, q: &[f64], tool: &mut [f64]) {
+        tool[0] = q[0];
     }
     fn set_payload_attached(&mut self, attached: bool) {
         self.attached = attached;
@@ -176,21 +273,33 @@ impl Mechanism for DiscCam {
             ("disc.inertia", "group-disc", "quantity-disc-inertia", "kg m²"),
         ]
         .into_iter()
+        .chain(self.lift_off.map(|_| ("follower.gap", "group-follower", "quantity-follower-gap", "m")))
+        .chain(self.lift_off.map(|_| ("follower.off_disc", "group-follower", "quantity-follower-off-disc", "")))
         .map(|(id, owner, quantity, unit)| SignalInfo::new(id, owner, quantity, unit))
         .collect()
     }
     fn signals(&self, q: &[f64], qd: &[f64], qdd: &[f64], _force: &[f64], out: &mut Vec<f64>) {
         let [s, s1, s2, _] = self.lift.at(q[0]);
-        let [contact, guide] = self.loads(q[0], qd[0], qdd[0]);
+        let [g, gd, gdd] = Self::gap(q, qd, qdd);
+        let [mut contact, mut guide] = self.loads(q[0], qd[0], qdd[0]);
+        if self.lift_off.is_some() {
+            // The contact's force, never below zero; the plan's (no gap in the state) is the rigid one, cut at zero.
+            let (cos, sin) = (self.pressure_angle(q[0]).cos(), self.pressure_angle(q[0]).sin());
+            let along = if q.len() > 1 { self.contact_force(g, gd)[0] } else { (contact * cos).max(0.0) };
+            (contact, guide) = (along / cos, along / cos * sin);
+        }
         out.extend([
-            s,
-            s1 * qd[0],
-            s2 * qd[0] * qd[0] + s1 * qdd[0],
+            s + g,
+            s1 * qd[0] + gd,
+            s2 * qd[0] * qd[0] + s1 * qdd[0] + gdd,
             contact,
             self.pressure_angle(q[0]),
             guide,
             self.j_disc + self.m() * s1 * s1,
         ]);
+        if self.lift_off.is_some() {
+            out.extend([g.max(0.0), f64::from(g > 0.0)]);
+        }
     }
     fn rating_checks(&self) -> Vec<RatingCheck> {
         [("disc-contact-force", "follower.contact_force"), ("disc-pressure-angle", "follower.pressure_angle")]
@@ -215,7 +324,7 @@ impl Mechanism for DiscCam {
     /// offset and lift, the follower above; the motor behind the disc.
     fn scene(&self, q: &[f64], rotors: &[f64], rotor_speeds: &[f64], out: &mut Scene) {
         let (r, e) = (self.base_radius, self.offset);
-        let s = self.lift.at(q[0])[0];
+        let s = self.lift.at(q[0])[0] + q.get(1).copied().unwrap_or(0.0);
         let roller = [e, 0.0, self.s0() + s];
         out.parts.push(Part::new("disc", Shape::Cylinder { radius: r, length: 0.02 }, [0.0; 3], [0.45, 0.47, 0.5]));
         out.parts.push(
