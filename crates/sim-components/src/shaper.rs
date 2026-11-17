@@ -18,9 +18,13 @@
 //! G(r) = sum A_i exp(pi r (t_i - t_n) g) exp(i pi r t_i) (the decay of the mode between the impulses and the phase of
 //! each). The three-impulse EI has A_1, A_2 (A_3 = 1 - A_1 - A_2), t_2, t_3 and the two flank frequencies r_1, r_2
 //! as unknowns, and six equations: G(r_1) = G(r_2) = 0 (two real each), |G(1)| = V and dV/dr = Re(conj(G) G') = 0 at
-//! the design frequency. The two-hump EI has A_1..A_3 (A_4 = 1 - their sum), the common spacing d of its four impulses
-//! (t_i = i d) and its two hump frequencies r_a, r_b, and six: G(1) = 0 (two), |G| = V and Re(conj(G) G') = 0 at each
-//! hump. Newton's method with a finite-difference Jacobian solves them, from the undamped closed form at zeta = 0
+//! the design frequency. The two-hump EI has A_1..A_3 (A_4 = 1 - their sum), t_2..t_4, the frequencies r_l, r_h of
+//! its two outer zeros and r_a, r_b of its humps as unknowns, and ten equations: G = 0 at 1, r_l and r_h (two each),
+//! |G| = V and Re(conj(G) G') = 0 at each hump; undamped that is the closed form (three zeros, two humps of V between),
+//! and damped it is Singhose's damped two-hump EI (its published curve fit for V = 5 % has the solved amplitudes to
+//! 6e-4 and times to 2 % at zeta up to 0.2, the fit's own accuracy). Four impulses at a common spacing are no solution
+//! with damping: at zeta 0.1 the closest such shaper misses the equations by 8e-4, at 0.2 by 3e-3.
+//! Newton's method with a finite-difference Jacobian solves them, from the undamped closed form at zeta = 0
 //! carried to the damping in steps of at most 0.01 (the solution moves continuously); the residual at the design
 //! frequency is V (EI) or 0 (two-hump) to 1e-12. Where the iteration does not converge (damping near 1) the shaper
 //! falls back to the undamped weights times K^i.
@@ -158,15 +162,18 @@ fn damped_ei(kind: Kind, damping: f64, v: f64) -> Option<Vec<(f64, f64)>> {
     let g_of = |zeta: f64| zeta / (1.0 - zeta * zeta).sqrt();
     let steps = (damping / 0.01).ceil().max(1.0) as usize;
     let three = kind == Kind::Ei;
-    // The undamped solution: amplitudes, spacing or times, and the two frequencies.
+    // The undamped solution: amplitudes, times, and the frequencies of the zeros (and humps). Undamped the two-hump
+    // EI's vibration is |2A cos(3x) + (1 - 2A) cos x|, x = pi r / 2: zeros where cos^2 x = (8A - 1) / (8A), humps
+    // where cos^2 x = (8A - 1) / (24A).
     let mut u: Vec<f64> = if three {
         let r1 = (-(1.0 - v) / (1.0 + v)).acos() / PI;
         vec![(1.0 + v) / 4.0, (1.0 - v) / 2.0, 1.0, 2.0, r1, 2.0 - r1]
     } else {
         let x = (v * v * ((1.0 - v * v).sqrt() + 1.0)).cbrt();
         let a = (3.0 * x * x + 2.0 * x + 3.0 * v * v) / (16.0 * x);
-        let ra = 2.0 / PI * ((8.0 * a - 1.0) / (24.0 * a)).sqrt().acos();
-        vec![a, 0.5 - a, 0.5 - a, 1.0, ra, 2.0 - ra]
+        let at = |c2: f64| 2.0 / PI * c2.sqrt().acos();
+        let (zero, hump) = (at((8.0 * a - 1.0) / (8.0 * a)), at((8.0 * a - 1.0) / (24.0 * a)));
+        vec![a, 0.5 - a, 0.5 - a, 1.0, 2.0, 3.0, zero, 2.0 - zero, hump, 2.0 - hump]
     };
     for step in 1..=steps {
         let g = g_of(damping * step as f64 / steps as f64);
@@ -179,10 +186,10 @@ fn damped_ei(kind: Kind, damping: f64, v: f64) -> Option<Vec<(f64, f64)>> {
             })
         } else {
             newton(&mut u, &|u| {
-                let (amps, taus) = ([u[0], u[1], u[2], 1.0 - u[0] - u[1] - u[2]], [0.0, u[3], 2.0 * u[3], 3.0 * u[3]]);
-                let zero = vibration(&amps, &taus, g, 1.0).0;
-                let (a, b) = (stationary(&amps, &taus, g, u[4], v), stationary(&amps, &taus, g, u[5], v));
-                vec![zero[0], zero[1], a[0], a[1], b[0], b[1]]
+                let (amps, taus) = ([u[0], u[1], u[2], 1.0 - u[0] - u[1] - u[2]], [0.0, u[3], u[4], u[5]]);
+                let zeros = [1.0, u[6], u[7]].map(|r| vibration(&amps, &taus, g, r).0);
+                let (a, b) = (stationary(&amps, &taus, g, u[8], v), stationary(&amps, &taus, g, u[9], v));
+                zeros.iter().flatten().copied().chain(a).chain(b).collect()
             })
         };
         if !ok {
@@ -192,7 +199,7 @@ fn damped_ei(kind: Kind, damping: f64, v: f64) -> Option<Vec<(f64, f64)>> {
     let impulses: Vec<(f64, f64)> = if three {
         vec![(0.0, u[0]), (u[2], u[1]), (u[3], 1.0 - u[0] - u[1])]
     } else {
-        vec![(0.0, u[0]), (u[3], u[1]), (2.0 * u[3], u[2]), (3.0 * u[3], 1.0 - u[0] - u[1] - u[2])]
+        vec![(0.0, u[0]), (u[3], u[1]), (u[4], u[2]), (u[5], 1.0 - u[0] - u[1] - u[2])]
     };
     impulses.iter().all(|(t, a)| t.is_finite() && *a > 0.0 && a.is_finite()).then_some(impulses)
 }
@@ -259,7 +266,7 @@ mod tests {
     /// The damped EI is solved (module doc): at zeta = 0.05, 0.1 and 0.2 it leaves V = 5 % at the design frequency (the
     /// weighted shaper left 0.04245 at 0.05, by hand 0.05 K^2 / (0.2625 + 0.475 K + 0.2625 K^2), K = 0.85447), has no
     /// slope there (|dV/df| < 1e-6 per Hz by central differences), leaves nothing at its flanks (the minimum over the
-    /// band below the design is under 1e-2: a scan of 0.1 % in frequency) and its amplitudes add up to one.
+    /// band below the design is under 1e-3: a scan in steps of 2.9 mHz, half a step off a zero where |dV/df| is at most 0.3 per Hz) and its amplitudes add up to one.
     #[test]
     fn the_damped_ei_leaves_its_tolerance_with_no_slope_at_the_design_frequency() {
         for zeta in [0.05, 0.1, 0.2] {
@@ -271,7 +278,7 @@ mod tests {
             for (lo, hi) in [(7.0, 9.9), (10.1, 13.0)] {
                 let least =
                     (0..=1000).map(|i| residual(&ei, lo + (hi - lo) * i as f64 / 1000.0, zeta)).fold(1.0, f64::min);
-                assert!(least < 1e-2, "{zeta} {lo}: {least}");
+                assert!(least < 1e-3, "{zeta} {lo}: {least}");
             }
         }
         // Without damping it is the closed form.
@@ -279,20 +286,31 @@ mod tests {
         assert!(ei.iter().zip([0.2625, 0.475, 0.2625]).all(|(i, a)| (i.1 - a).abs() < 1e-15));
     }
 
-    /// The damped two-hump EI leaves nothing at the design frequency (to 1e-9) and its two humps are V = 5 % each (the
-    /// largest vibration over 7 to 13 Hz, sampled finely, within 2e-4 of V, and the humps on both sides within 2e-4 of each
-    /// other); at zeta = 0.2 as at 0.1 the impulses are positive, add up to one and are about half a damped period apart.
+    /// The damped two-hump EI leaves nothing at the design frequency (to 1e-9), its two humps are V = 5 % each (the
+    /// largest vibration over 7 to 9.99 and 10.01 to 13 Hz, sampled every 1.5 mHz), and it leaves nothing at an outer
+    /// frequency on either side (the least over 5 to 7.5 and 13 to 16 Hz). At zeta = 0.1 its amplitudes are Singhose's
+    /// curve fit for V = 5 % (A_1 = 0.16054 + 0.76699 z + 2.2656 z^2 - 1.2275 z^3,
+    /// A_2 = 0.33911 + 0.45081 z - 2.5808 z^2 + 1.7365 z^3, A_3 = 0.34089 - 0.61533 z - 0.68765 z^2 + 0.42261 z^3:
+    /// 0.25867, 0.36012, 0.27290, 0.10831) within the fit's accuracy, 1e-3 (the run: 5.4e-4 at most).
     #[test]
     fn the_damped_two_hump_ei_has_two_humps_of_its_tolerance_and_no_vibration_at_its_frequency() {
         for zeta in [0.05, 0.1, 0.2] {
             let two = at_10_hz(Kind::TwoHumpEi, zeta);
             assert!((two.iter().map(|i| i.1).sum::<f64>() - 1.0).abs() < 1e-12 && two.iter().all(|i| i.1 > 0.0));
             assert!(residual(&two, 10.0, zeta) < 1e-9, "{zeta}: {}", residual(&two, 10.0, zeta));
-            let hump = |lo: f64, hi: f64| {
-                (0..=2000).map(|i| residual(&two, lo + (hi - lo) * i as f64 / 2000.0, zeta)).fold(0.0, f64::max)
+            let scan = |lo: f64, hi: f64, n: usize| {
+                (0..=n)
+                    .map(|i| residual(&two, lo + (hi - lo) * i as f64 / n as f64, zeta))
+                    .fold([1.0f64, 0.0f64], |[a, b], x| [a.min(x), b.max(x)])
             };
-            let (below, above) = (hump(7.0, 9.99), hump(10.01, 13.0));
-            assert!((below - 0.05).abs() < 2e-4 && (above - 0.05).abs() < 2e-4, "{zeta}: {below} {above}");
+            let (below, above) = (scan(7.0, 9.99, 2000)[1], scan(10.01, 13.0, 2000)[1]);
+            assert!((below - 0.05).abs() < 1e-6 && (above - 0.05).abs() < 1e-6, "{zeta}: {below} {above}");
+            let (low, high) = (scan(5.0, 7.5, 20000)[0], scan(13.0, 16.0, 20000)[0]);
+            assert!(low < 1e-4 && high < 1e-4, "{zeta}: {low} {high}");
+        }
+        let two = impulses(Kind::TwoHumpEi, 0.1, 0.05);
+        for (i, fit) in two.iter().zip([0.25867, 0.36012, 0.27290, 0.10831]) {
+            assert!((i.1 - fit).abs() < 1e-3, "{two:?}");
         }
     }
 

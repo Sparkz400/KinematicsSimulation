@@ -95,23 +95,29 @@ impl Converter {
     /// `apply_to` for a converter that loses `back_efficiency` where the load drives it back (`self.efficiency` driving):
     /// the gearbox's back-driving efficiency becomes its own times back_efficiency / efficiency (`Gearbox::back_ratio`).
     ///
-    /// The lost-motion band is the gearbox's angle times the lever, plus the stretch of the converter's spring under
-    /// the hysteresis torque T_h that the band's flanks carry: T_h / lever (force) over the converter's stiffness (m).
+    /// The converter's spring is in series with the whole gear. The lost-motion band is the gearbox's angle times the
+    /// lever, and over it the converter's spring stretches with the force as it does beyond (`Gearbox::band_compliance`);
+    /// the line beyond the band keeps its offset, b lever / 2. The hysteresis, a friction T_h in parallel with the
+    /// flanks' spring K1 (lever^2 / K1 in m/N at the joint): sliding, the force is K1' (x -+ lever T_h / K1) with K1' the
+    /// series stiffness, so its friction at the joint is T_h / lever times K1' lever^2 / K1, and its loop as wide as the
+    /// gear's, 2 lever T_h / K1; at a reversal the gear is K1 + sigma, in series K1' + sigma' with
+    /// sigma' = series(K1 + sigma) - series(K1).
     pub fn apply_back(&self, cfg: &Config, joint: &mut RotaryJoint, output: f64, back_efficiency: f64) -> Result<()> {
         let (g, l) = (&mut joint.gearbox, self.lever);
         let i = g.ratio;
         g.ratio = i / l;
         let converter = self.stiffness;
         let mesh_factor = g.mesh_stiffness / g.stiffness;
-        let stretch = if g.band > 0.0 { g.hysteresis / l / converter } else { 0.0 };
         let series = move |k: f64| 1.0 / (l * l / k + 1.0 / converter);
-        // The three segments are given in torque, so each is in series with the converter as K1 is; the knees and the
-        // hysteresis are torques at the gearbox output, forces over the lever at the joint.
-        [g.stiffness, g.upper[0], g.upper[1], g.dahl_stiffness] =
-            [g.stiffness, g.upper[0], g.upper[1], g.dahl_stiffness].map(series);
+        let (k1, sigma) = (g.stiffness, g.dahl_stiffness);
+        // The three segments are given in torque, so each is in series with the converter as K1 is; the knees are
+        // torques at the gearbox output, forces over the lever at the joint.
+        [g.stiffness, g.upper[0], g.upper[1]] = [g.stiffness, g.upper[0], g.upper[1]].map(series);
+        g.dahl_stiffness = series(k1 + sigma) - g.stiffness;
         g.knees = g.knees.map(|t| t / l);
-        g.hysteresis /= l;
-        g.band = g.band * l + stretch;
+        g.hysteresis *= g.stiffness * l / k1;
+        g.band *= l;
+        g.band_compliance = g.band_compliance * l * l + 1.0 / converter;
         g.damping /= l * l;
         g.half_backlash =
             g.half_backlash * l + if cfg.bool("effects.gearbox_backlash")? { 0.5 * self.backlash } else { 0.0 };
@@ -892,14 +898,14 @@ mod tests {
     }
 
     /// THK's back-driving efficiency (1 - mu / tan beta) / (1 + mu tan beta) at mu = 0.003. The ISW bench (tan beta =
-    /// 0.318310): 0.9904525 / 1.0009549 = 0.989630 against 0.989717 driving (1e-4 apart); at a lead angle of 7 degrees
+    /// 0.318310): 0.9905752 / 1.0009549 = 0.9896302 against 0.9897172 driving (8.7e-5 apart); at a lead angle of 7 degrees
     /// (tan beta = 0.122785): 0.975567 / 1.000368 = 0.975208 against 0.975790 (6e-4). tan beta = mu locks: 0.
     #[test]
     fn the_screw_driven_back_loses_by_thks_back_efficiency_and_a_locking_one_is_refused() {
-        close(BallScrew::lead_back_efficiency(0.04, 0.04, 0.003), 0.989_630, "ISW back");
+        assert!((BallScrew::lead_back_efficiency(0.04, 0.04, 0.003) - 0.989_630_2).abs() < 1e-7);
         let lead7 = 7f64.to_radians().tan() * PI * 0.04;
-        close(BallScrew::lead_efficiency(lead7, 0.04, 0.003), 0.975_790, "7 degrees driving");
-        close(BallScrew::lead_back_efficiency(lead7, 0.04, 0.003), 0.975_208, "7 degrees back");
+        assert!((BallScrew::lead_efficiency(lead7, 0.04, 0.003) - 0.975_790_1).abs() < 1e-7);
+        assert!((BallScrew::lead_back_efficiency(lead7, 0.04, 0.003) - 0.975_207_7).abs() < 1e-7);
         assert!(BallScrew::lead_back_efficiency(0.003 * PI * 0.04, 0.04, 0.003).abs() < 1e-12);
         let text = |mu: f64| {
             format!(
@@ -911,7 +917,7 @@ mod tests {
             )
         };
         let screw = BallScrew::from_config(&Config::parse(&text(0.003)).unwrap()).unwrap();
-        close(screw.back_efficiency, 0.989_630, "from the config");
+        assert!((screw.back_efficiency - 0.989_630_2).abs() < 1e-7);
         // mu 0.4 over tan beta 0.318: the screw holds its load.
         let err = BallScrew::from_config(&Config::parse(&text(0.4)).unwrap()).unwrap_err();
         assert!(format!("{err:?}").contains("locks itself"), "{err:?}");
@@ -993,11 +999,17 @@ mod tests {
         assert!((set.mesh_stiffness / 1.6e8 - 1.0).abs() < 1e-12, "{}", set.mesh_stiffness);
     }
 
-    /// The lost-motion band behind a converter: band x lever plus the converter's spring stretched by the hysteresis
-    /// torque. K1 = 2e5 N m/rad, hysteresis_rad 2e-4: T_h = 0.5 x 2e5 x 2e-4 = 20 N m; band 1e-4 rad x lever 0.025 m/rad =
-    /// 2.5e-6 m; the force 20 / 0.025 = 800 N over 5e7 N/m = 1.6e-5 m: 1.85e-5 m. No band, none.
+    /// The gear behind a converter is the gear and the converter's spring in series, band and hysteresis too. K1 = 2e5
+    /// N m/rad behind a lever of 0.025 m/rad (3.2e8 N/m) and a spring of 5e7 N/m: K1' = 1 / (3.125e-9 + 2e-8) =
+    /// 4.324324e7 N/m. A band of 1e-4 rad: the flanks leave it at T_b = 10 N m (400 N); at 100 N (2.5 N m) they twist
+    /// sqrt(2 x 1e-4 x 2.5 / 2e5) = 5e-5 rad = 1.25e-6 m and the spring 2e-6 m: 3.25e-6 m; at 800 N (20 N m) 1e-4 +
+    /// 5e-5 rad = 3.75e-6 m and 1.6e-5 m: 1.975e-5 m, an offset of the line of 1.25e-6 m, the gear's 5e-5 rad x lever.
+    /// hysteresis_rad 2e-4: T_h = 20 N m; sliding, the force at the joint is K1' (x -+ lever T_h / K1), so the friction
+    /// is 4.324324e7 x 0.025 x 20 / 2e5 = 108.108 N (not 20 / 0.025 = 800 N), and the loop at zero force 2 x 108.108 /
+    /// K1' = 5e-6 m wide, the gear's 2 T_h / K1 x lever; sigma' = series(4e5) - K1' = 1 / (1.5625e-9 + 2e-8) - K1' =
+    /// 3.133595e6 N/m. No band, none.
     #[test]
-    fn the_band_behind_a_converter_has_the_stretch_of_its_spring_at_the_hysteresis_torque() {
+    fn the_gear_behind_a_converter_is_in_series_with_its_spring_over_the_band_and_the_hysteresis() {
         let text = "format_version = 1\n[effects]\njoint_friction = false\nhard_stops = false\nmotor_friction = false\n\
             torque_ripple = false\ngearbox_backlash = false\ngearbox_efficiency = false\ngearbox_drag = false\n\
             motor_stiction = false\ngearbox_lost_motion = true\ngearbox_stiffness_curve = false\nthermal_feedback = false\n\
@@ -1012,14 +1024,22 @@ mod tests {
             [joint]\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 1e-3\n\
             min_angle_deg = -45.0\nmax_angle_deg = 90.0\nstop_stiffness_nm_rad = 1e5\nstop_damping_nm_s_rad = 0.0\n";
         let screw = Converter { lever: 0.025, stiffness: 5e7, backlash: 0.0, efficiency: 1.0, inertia: 0.0 };
-        let band = |b: &str| {
+        let gear = |b: &str| {
             let cfg = Config::parse(&text.replace("BAND", b)).unwrap();
             let mut j = RotaryJoint::from_config(&cfg).unwrap();
             screw.apply(&cfg, &mut j).unwrap();
-            j.gearbox.band
+            j.gearbox
         };
-        assert!((band("1e-4") - 1.85e-5).abs() < 1e-15, "{}", band("1e-4"));
-        assert_eq!(band("0.0"), 0.0);
+        let g = gear("1e-4");
+        let rel = |a: f64, b: f64| (a / b - 1.0).abs() < 1e-12;
+        assert!(rel(g.stiffness, 1.0 / 2.3125e-8) && rel(g.band, 2.5e-6), "{} {}", g.stiffness, g.band);
+        for (force, twist) in [(100.0, 3.25e-6), (400.0, 2.5e-6 + 8e-6), (800.0, 1.975e-5)] {
+            assert!(rel(g.static_twist(force), twist), "{force}: {}", g.static_twist(force));
+            assert!(rel(g.spring(twist).0, force), "{twist}: {}", g.spring(twist).0);
+        }
+        assert!(rel(g.hysteresis, 108.108_108_108_108_1) && rel(2.0 * g.hysteresis / g.stiffness, 5e-6));
+        assert!(rel(g.dahl_stiffness, 1.0 / 2.15625e-8 - 1.0 / 2.3125e-8), "{}", g.dahl_stiffness);
+        assert_eq!(gear("0.0").band, 0.0);
     }
 
     /// The screw's stiffness is judged at the softest nut position: the far end of a fixed-supported shaft (1 m):

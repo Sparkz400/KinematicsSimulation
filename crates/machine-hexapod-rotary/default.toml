@@ -239,8 +239,8 @@ stop_damping_nm_s_rad = 50.0
 
 # The box the tool may move in (x, y, z in m; rx, ry, rz in rad), and what is refused in it: a crank nearer its dead
 # centre than min_dead_centre_margin_deg, a rod steeper at a ball joint than it allows (out of the crank's plane at the
-# crank, against the platform's normal at the platform), two rods nearer than min_rod_clearance_m (axis to axis), a rod nearer than
-# min_body_clearance_m to an edge of the platform's or the base's hexagon (its own joints' edges apart), the
+# crank, against the platform's normal at the platform), two rods nearer than min_rod_clearance_m (axis to axis), a rod
+# nearer than min_body_clearance_m to an edge of the platform's or the base's hexagon (its own joints' edges apart), the
 # condition number above max_condition_number. [estimate] ball joints of +-35 and +-40 degrees; rods of 20 mm, so
 # min_body_clearance_m is the rod's radius of 10 mm and the plate's half thickness of 10 mm.
 [workspace]
@@ -382,6 +382,9 @@ friction_feedforward_torque_nm = [0.0]
 friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant (S120 p1429 balancing). 0: off.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad).
 load_encoder_step = 1.0e-6
 current_kp_v_a = 40.0

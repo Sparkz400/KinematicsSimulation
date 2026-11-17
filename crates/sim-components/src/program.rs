@@ -1047,7 +1047,8 @@ MoveC,0,0,0.5,0.5,0,0",
         };
         let cap = |text: &str, omega: f64| rapid_with(text, &axes, &[0.0; 6], omega).unwrap()[0].feed.unwrap();
         let omega = ORIENTATION_SPEED;
-        assert!((omega - 500.0_f64.to_radians()).abs() < 1e-15);
+        // To the rounding of the two ways of writing it (an ulp of 8.7 is 1.8e-15).
+        assert!((omega - 500.0_f64.to_radians()).abs() < 1e-14);
         let time = (PI / 2.0) / omega;
         assert!((time - 0.18).abs() < 1e-12);
         assert!((cap(&module(100, "v1000"), omega) * 0.18 - 0.1_f64.hypot(PI / 2.0)).abs() < 1e-12);

@@ -74,9 +74,10 @@ shaft_mass = true
 # The shaft twists in series with the tool's gearbox (with joint_elasticity): the tool rings against the motor. On in
 # the shipped config.
 shaft_torsion = true
-# With shaft_torsion and joint_elasticity: the tool gearbox's output is a body of its own (gearbox.4.output_inertia_kgm2)
-# between the gearbox's spring and the shaft's, two more states, instead of one spring in series. Adds the gearbox's own
-# mode (about 1.5 kHz) to the tool's 41 Hz. Off as shipped (the series spring is within 0.1 % at 41 Hz).
+# With shaft_torsion and joint_elasticity: the tool gearbox's output is a body of its own
+# (tool.gearbox_output_inertia_kgm2) between the gearbox's spring and the shaft's, two more states, instead of one
+# spring in series. Adds the gearbox's own motion (1.5 kHz, overdamped) to the tool's 41 Hz. Off as shipped (the series
+# spring is within 0.1 % at 41 Hz).
 tool_gearbox_body = false
 # The telescope's sliding friction along the shaft against its lengthening and shortening, a force on the platform
 # that the arms take. On in the shipped config.
@@ -424,10 +425,6 @@ stiffness_nm_rad = 8250.592
 # [estimate] as the arms' gearboxes; with effects.shaft_torsion the shaft's damping takes its place.
 damping_nm_s_rad = 5.0
 inertia_at_input_kgm2 = 8.8e-6
-# [estimate] the planet carrier and output flange of a 60 mm planetary (effects.tool_gearbox_body): a steel disc of
-# 50 mm diameter and 15 mm (0.231 kg, J = m r^2 / 2 = 7.2e-5 kg m2) and the carrier's share: 1.0e-4 kg m2, bounded 5e-5 to
-# 2e-4. With the gearbox's 8251 N m/rad and the shaft's 500 it makes the gearbox's mode 1.49 kHz.
-output_inertia_kgm2 = 1.0e-4
 
 # The tool on the platform: flange, gripper and the tool's shaft in its bearing.
 [tool]
@@ -439,6 +436,11 @@ payload_inertia_kgm2 = 5.0e-3
 friction_coulomb_nm = 0.02
 friction_viscous_nm_s_rad = 1.0e-4
 friction_smoothing_rad_s = 0.01
+# [estimate] the tool gearbox's planet carrier and output flange (effects.tool_gearbox_body), a share of
+# gearbox.4.inertia_at_input_kgm2 (which holds it as J / ratio^2): a steel disc of 50 mm diameter and 15 mm (0.231 kg,
+# m r^2 / 2 = 7.2e-5 kg m2) and the carrier: 1.0e-4 kg m2, bounded by the disc alone and twice it. With the gearbox's
+# 8251 N m/rad and the shaft's 500 it puts the gearbox's own motion at 1.49 kHz.
+gearbox_output_inertia_kgm2 = 1.0e-4
 
 # The telescopic shaft from the base's centre to the platform, a cardan joint at each end.
 [shaft]
@@ -503,6 +505,9 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 current_kp_v_a = 40.0
@@ -787,7 +792,6 @@ thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
 gearbox.backlash_rad = [5.818e-4, 1.1636e-3]
 gearbox.4.backlash_rad = [1.454e-4, 5.818e-4]
 gearbox.4.damping_nm_s_rad = [2.0, 10.0]
-gearbox.4.output_inertia_kgm2 = [5.0e-5, 2.0e-4]
 motor.4.friction_coulomb_nm = [0.01, 0.04]
 motor.4.friction_viscous_nm_s_rad = [4.0e-5, 1.6e-4]
 motor.4.resistance_ohm = [4.0, 9.0]
@@ -796,6 +800,7 @@ tool.inertia_kgm2 = [1.0e-3, 4.0e-3]
 tool.payload_inertia_kgm2 = [2.5e-3, 1.0e-2]
 tool.friction_coulomb_nm = [0.01, 0.05]
 tool.friction_viscous_nm_s_rad = [5.0e-5, 2.0e-4]
+tool.gearbox_output_inertia_kgm2 = [7.2e-5, 2.0e-4]
 shaft.upper_joint_z_m = [-0.05, 0.05]
 shaft.lower_joint_offset_m = [0.03, 0.08]
 shaft.min_length_m = [0.55, 0.62]

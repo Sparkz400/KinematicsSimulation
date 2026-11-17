@@ -446,10 +446,10 @@ fn the_part_thermal_verdicts_judge_where_the_parts_settle() {
         assert_eq!(load.part_rises.len(), (entry.build)(&cfg).unwrap().thermal_parts().len());
         for (part, rise) in &load.part_rises {
             let lost = budget.rows.iter().find(|r| r.id == format!("{LOSS_PREFIX}{}", part.id)).unwrap().energy;
-            let resistance = (entry.build)(&cfg).unwrap().thermal_values(part.id).map_or_else(
-                || cfg.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap(),
-                |own| own.0,
-            );
+            let resistance = (entry.build)(&cfg)
+                .unwrap()
+                .thermal_values(part.id)
+                .map_or_else(|| cfg.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap(), |own| own.0);
             let by_hand = resistance * lost / load.duration;
             assert!(
                 (rise - by_hand).abs() <= 1e-12 * by_hand.abs(),
@@ -619,4 +619,71 @@ fn the_bounds_of_an_effect_that_is_off_get_no_runs() {
             );
         }
     }
+}
+
+/// effects.iron_loss's drag (`DriveParams::iron_drag_rated`) on the single axis: a printed rated torque of 1.1 N m at
+/// the rated 2.822 A leaves k_t I_N (1 - s (I_N / I_max)^2) - M_N - friction = 1.25745 - 1.1 - 0.05140 = 0.10605 N m at
+/// 314 rad/s. The pass's budget closes with it as without (its power in the `emf` row, which is then positive), and
+/// on the loss-free level config with the holding brake off a rotor coasting with its drive disabled loses to the drag
+/// exactly the work the drive books, 0.15745 N m there without the motor friction.
+#[test]
+fn the_iron_drag_closes_the_budget_enabled_and_coasting_disabled() {
+    let entry = &machine_single_axis::ENTRY;
+    let drag = ["motor.stall_current_a = 3.2", "drive.rated_torque_nm = 1.1"];
+    let cfg = with(&entry.config(), &drag);
+    let p = sim_components::drive::DriveParams::from_config(&cfg, 62.5e-6, 125e-6).unwrap();
+    assert!((p.iron_drag_rated - 0.10605).abs() < 1e-5, "{} N m", p.iron_drag_rated);
+    let budget = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap().budget.unwrap();
+    let emf: f64 = budget.rows.iter().filter(|r| r.id.starts_with("emf.")).map(|r| r.energy).sum();
+    let (supply, unaccounted, electrical) = (budget.supply, budget.unaccounted(), budget.electrical_unaccounted());
+    println!("supply {supply} J, emf {emf} J, unaccounted {unaccounted:e} J, electrical {electrical:e} J");
+    assert!(
+        emf > 0.0 && unaccounted.abs() < BUDGET_TOLERANCE * supply && electrical.abs() < ELECTRICAL_TOLERANCE * supply
+    );
+    // Coasting with the drive disabled: the machine's energy falls by what the drive books as the drag's work.
+    let free = (entry.suite_configs)().remove(0);
+    let free = with(&free, &[&["effects.iron_loss = true", "effects.holding_brake = false"][..], &drag[..]].concat());
+    let mut sim = Sim::new(entry, &free).unwrap();
+    sim.command(Command::MoveTo(vec![sim.control.planned_pos()[0] + 0.5])).unwrap();
+    sim.run(0.2, |_| {});
+    sim.command(Command::Disable).unwrap();
+    sim.step();
+    let before = sim.machine.energy(&sim.state);
+    let (mut booked, mut start_speed) = (0.0, 0.0);
+    for _ in 0..8000 {
+        let (mut angle, mut speed) = ([0.0], [0.0]);
+        sim.machine.motor_state(&sim.state, &mut angle, &mut speed);
+        let speed = speed[0];
+        sim.step();
+        let d = &sim.control.drives[0];
+        booked += d.shaft_power * sim.dt;
+        // What the step start's speed alone would have booked.
+        start_speed -= sim.control.drive_params_of(0).iron_drag(speed) * speed * sim.dt;
+    }
+    let lost = sim.machine.energy(&sim.state) - before;
+    println!("lost {lost} J, booked {booked} J, by the step start's speed {start_speed} J");
+    assert!(booked < 0.0 && (lost - booked).abs() < 1e-6 * booked.abs(), "{lost} J against {booked} J");
+}
+
+/// drive.overmodulation: the six-step wave's fundamental over the sinusoidal limit, by the bridge. The single axis's
+/// servo on a three-phase bridge: 2 sqrt 3 / pi = 1.10266 (six-step's 2 U / pi over space vector's U / sqrt 3); the
+/// stepper axis's two H-bridges: 4 / pi = 1.27324 (a square wave of height U over a sine of amplitude U). Off: 1.
+#[test]
+fn overmodulation_takes_the_six_step_fundamental_of_the_bridge() {
+    use sim_components::drive::{DriveParams, WINDING_PER_DC_LINK};
+    let gain = |cfg: &Config| {
+        let p = DriveParams::from_config(cfg, 62.5e-6, 125e-6).unwrap();
+        assert!((p.max_voltage - WINDING_PER_DC_LINK * p.fundamental_gain * p.bus_voltage).abs() < 1e-9);
+        p.fundamental_gain
+    };
+    let servo = machine_single_axis::ENTRY.config();
+    let stepper = sim_machines::load_file(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../machines/stepper-axis.toml"),
+    )
+    .unwrap_or_else(|e| panic!("{e}"))
+    .config();
+    let on = ["drive.overmodulation = true"];
+    assert_eq!((gain(&servo), gain(&stepper)), (1.0, 1.0));
+    assert!((gain(&with(&servo, &on)) - 1.102_657_790_8).abs() < 1e-9);
+    assert!((gain(&with(&stepper, &on)) - 4.0 / std::f64::consts::PI).abs() < 1e-15);
 }

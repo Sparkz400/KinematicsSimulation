@@ -235,11 +235,15 @@ payload_inertia_kgm2 = [0.03125, 0.01625, 0.025, 0.0, 0.0, 0.0]
 # The URDF's joints as sums of the motors' joints, one row per URDF joint (a parallelogram: see config/palletiser.toml);
 # [] for one motor per joint.
 joint_coupling = []
-# The parallelogram's bars (or any rigid piece the URDF leaves out) as bodies of their own, merged into the link they
-# move with: bar i on the URDF joint bars_on[i] (1-based), mass bars_mass_kg[i], its centre bars_com_m[3i..3i+3] in that
-# link's frame, its inertia about its centre bars_inertia_kgm2[6i..6i+6] (xx, yy, zz, xy, xz, yz; the array may stay
-# empty: 0). Empty: no bars (the URDF's links as they are).
+# The parallelogram's bars (or any rigid piece the URDF leaves out) as bodies of their own: bar i pinned on the link of
+# the URDF joint bars_on[i] (1-based) at bars_pin_m[3i..3i+3] of its frame (empty: its origin), staying parallel to the
+# link of bars_turns_with[i] and so turning with it (empty: with the link it is pinned on, a rigid piece of that link),
+# mass bars_mass_kg[i], its centre bars_com_m[3i..3i+3] from the pin and its inertia about its centre
+# bars_inertia_kgm2[6i..6i+6] (xx, yy, zz, xy, xz, yz; the array may stay empty: 0), both in the frame of the link it
+# turns with. Empty: no bars (the URDF's links as they are).
 bars_on = []
+bars_turns_with = []
+bars_pin_m = []
 bars_mass_kg = []
 bars_com_m = []
 bars_inertia_kgm2 = []
@@ -464,6 +468,9 @@ friction_feedforward_model = "characteristic"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 current_kp_v_a = 40.0
@@ -551,14 +558,17 @@ velocity_kp_nm_s_rad = 0.05
 velocity_kp_nm_s_rad = 0.05
 
 [gearbox.4]
+ratio = 80.0
 stiffness_nm_rad = 25000.0
 inertia_at_input_kgm2 = 4.1e-5
 
 [gearbox.5]
+ratio = 80.0
 stiffness_nm_rad = 25000.0
 inertia_at_input_kgm2 = 4.1e-5
 
 [gearbox.6]
+ratio = 80.0
 stiffness_nm_rad = 25000.0
 inertia_at_input_kgm2 = 4.1e-5
 

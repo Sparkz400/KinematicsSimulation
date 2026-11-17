@@ -173,6 +173,13 @@ stroke_m = 0.7
 pulley_radius_m = 0.014324
 # Shortest free belt span between a carriage and either pulley.
 span_min_m = 0.1
+# Where each rod pair's joints stand from its guide's centre, m: along the column, outward from the machine's axis and
+# tangentially. Their pull then has moments about the guide (Festo's Mx, My, Mz: signals carriage.<k>.guide_moment_*),
+# which add to the guide's load where ratings.guide_moment_*_nm rate them. [estimate] zero, the pull through the centre:
+# the EGC-80's slide with the ball studs on its face, their standoff not in the sources at hand.
+rod_joint_along_m = 0.0
+rod_joint_outward_m = 0.0
+rod_joint_tangent_m = 0.0
 
 # The working range: a cylinder, as Festo draws it.
 # [catalogue] EXPT-95: nominal diameter 950 mm, nominal height 100 mm.
@@ -393,6 +400,9 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 # Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
@@ -459,8 +469,9 @@ pulley_max_torque_nm = 5.0
 shaft_max_radial_load_n = 1500.0
 # [catalogue] the EGC-80-TB-KF's recirculating ball guide, Fy max = Fz max for a service life of 5000 km: 3050 N (same
 # document, page 16; "must not be exceeded during dynamic operation"). The guide load is the force across the column
-# (`carriage.<k>.guide_load`); Festo's torques Mx, My, Mz are not judged (the rods' joints' offset from the slide is
-# not modelled).
+# (`carriage.<k>.guide_load`) plus, where ratings.guide_moment_x_nm, _y_nm, _z_nm are given (a config may add them;
+# Festo's moment values are not in the sources at hand), the moments of the rods' pull about the slide
+# (geometry.rod_joint_*_m) as F_max sum |M_i| / M_i,max: Festo's combined load F / F_max + sum M_i / M_i,max <= 1.
 guide_max_load_n = 3050.0
 # The dynamic load rating C of the guide life L10 = (C / P)^3 * 50 km, from the same figure: 3050 N for 5000 km gives
 # C = 3050 * (5000 / 50)^(1/3) = 14157 N; Festo's 100 km figure (page 17, 11236 N) gives 14156 N.

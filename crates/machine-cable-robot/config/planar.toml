@@ -164,6 +164,9 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 current_kp_v_a = 40.0
@@ -218,10 +221,6 @@ standstill_time_s = 1.0
 standstill_window_rad = 0.1
 torque_band = 0.0
 [ratings]
-# The band the time-optimal plan keeps every cable's tension within (`rigid_tensions_moving`): the same as cable.min_tension_n
-# and cable.breaking_load_n / cable.safety_factor, which the rating checks use; change them together.
-belt_min_tension_n = 10.0
-belt_max_tension_n = 400.0
 # [estimate] What a cable robot of this size is asked to hold at a dwell; the carriage settles to 0.15 mm (sim-cli analyze).
 settling_tolerance_m = 0.0003
 # The DC link of the S210 converter. [estimate] as for the delta picker.
@@ -300,6 +299,7 @@ platform.mass_kg = [2.5, 3.5]
 cable.ea_n = [0.6e5, 1.6e5]
 cable.specific_damping_n_s = [20.0, 150.0]
 cable.breaking_load_n = [3500.0, 4500.0]
+cable.mass_per_m_kg = [0.0025, 0.0035]
 winch.drum_inertia_kgm2 = [1.5e-4, 3.0e-4]
 winch.friction_coulomb_n = [1.0, 4.0]
 winch.friction_viscous_n_s_m = [0.5, 2.0]

@@ -476,11 +476,11 @@ fn a_motor_by_name_brings_its_brake_encoder_speed_and_winding_estimates() {
     assert!(!s120.bool("effects.shared_dc_link").unwrap());
 }
 
-/// Siemens' S1 check on the EXCT-30's 1FK2205-4AF at 400 V, on the curve Siemens prints (`s1_curves_s210.csv`, which
-/// the motor by name brings): at a mean speed of 157.08 rad/s it lies between its points (144.878 rad/s, 5.5400 N m) and
-/// (219.6515 rad/s, 5.1919 N m), 5.5400 - 0.3481 * 12.202 / 74.7735 = 5.4832 N m (the straight line from k_t I_0 = 6 N m
-/// to the rated 4.6 N m at 314.16 rad/s gave 5.3 N m). A cycle with 5 N m RMS there passes, 5.5 N m fails ("motor-s1");
-/// the peak speed is judged against 628.32 rad/s ("motor-speed").
+/// Siemens' S1 check on the EXCT-30's 1FK2205-4AF at 400 V, which brings its S1 curve read off the D 32 graph
+/// (`s1_curves_s210.csv`): at a mean speed of 157.08 rad/s it lies between (144.878 rad/s, 5.5400 N m) and
+/// (219.6515 rad/s, 5.1919 N m), 5.54 - 0.3481 x 12.202 / 74.7735 = 5.4832 N m (the straight line from the static
+/// torque 6 N m to the rated 4.6 N m at 314.16 rad/s gave 5.3 N m). A cycle with 5 N m RMS there passes, 5.5 N m fails
+/// ("motor-s1"); the peak speed is judged against 628.32 rad/s ("motor-speed").
 #[test]
 fn the_s1_check_judges_the_rms_torque_at_the_mean_speed_by_hand() {
     use sim_components::analysis::{CycleLoad, MotorLoad, s1_torque, verdicts};

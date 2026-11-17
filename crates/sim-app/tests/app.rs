@@ -3007,10 +3007,10 @@ per_machine!(the_frequency_response_is_measured_in_the_app);
 /// Stage 2 of the fit in the app, as `sim-cli fit --sweep` gives it (`identify::fit_sweep`, which `cli.rs` checks
 /// against the command line's output). The measured response is that of the default machine, whose belt has
 /// EA = 500 kN (the linear delta's 600 kN); the app's config says 0.8 of it, 400 kN (480 kN). By hand the stiffness is
-/// off by 1 / 0.8 = 1.25, and the fit says so within its standard error, half a step of the sweep at the dip's flanks.
-/// The sweep has 30 points from 50 to 130 Hz, 3.4 % apart, and 40 (2.5 %) for a broad dip (damping above 0.3; the
-/// gantries' is 0.08): the linear delta's (damping 0.35, flanks near 62 and 123 Hz) came to a standard error of
-/// 2 * 1.270 * 0.5 * 0.0335 * 123 / 87.6 = 0.060 on 30 points (above the 0.05 asked), 0.044 (1.268) on 40.
+/// off by 1 / 0.8 = 1.25, and the fit says so within its standard error, half a step of the sweep at the dip's flanks
+/// carried through f ~ k^s (`SweepFit::stiffness`; s a little below 1/2 where the gearbox or the frame shares the mode).
+/// The sweep has 40 points from 50 to 130 Hz, 2.5 % apart: on 30 (3.4 %) the one-axis belt machine, its mode moving as k^0.47
+/// with the gearbox's spring in series, read 1.2503 with an error of 0.052, above the 0.05 asked.
 /// A file without a dip, a missing one and one that is no sweep are refused.
 fn the_belt_stiffness_is_fitted_to_a_measured_response_in_the_app(entry: &'static MachineEntry) {
     // A machine with a belt.
@@ -3027,10 +3027,7 @@ fn the_belt_stiffness_is_fitted_to_a_measured_response_in_the_app(entry: &'stati
         )
         .unwrap()
     };
-    let mut points = sweep(30);
-    if sim_components::identify::resonance(&points).is_some_and(|dip| dip.damping > 0.3) {
-        points = sweep(40);
-    }
+    let points = sweep(40);
     let file = temp_file(entry, "sweep.csv");
     let text = sweep_csv(&points);
     std::fs::write(&file, &text).unwrap();

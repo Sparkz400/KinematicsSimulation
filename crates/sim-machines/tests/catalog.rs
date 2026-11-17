@@ -568,7 +568,7 @@ fn the_search_on_a_default_config_fails_motors_for_physical_reasons() {
 #[test]
 fn every_catalogue_motor_reaches_its_rated_point_inside_the_voltage_limit() {
     use sim_components::drive::DriveParams;
-    let (mut rows, mut beyond_the_dc_link) = (0, 0);
+    let (mut rows, mut beyond_the_dc_link, mut dragged, mut short) = (0, 0, 0, 0.0f64);
     for m in csv("siemens/motors_s210.csv") {
         for (supply, bus) in [("230v", 325.0), ("400v", 540.0)] {
             if m[&format!("rated_speed_{supply}_rad_s")].is_empty() {
@@ -585,13 +585,30 @@ fn every_catalogue_motor_reaches_its_rated_point_inside_the_voltage_limit() {
                 m["part_number"],
                 p.max_voltage
             );
-            // Without field weakening (i_d = 0) the rated current meets the back-EMF, R i and the winding's reactance
-            // p w L i (L from Siemens' short-circuit braking table, `apply_motor`; the config's 10 mH where it has no row) and
-            // R i (the config's estimate of 4 Ohm) inside the circle. The 1FK2106-6AF at 230 V: 12.471 A for 13.8 N m with
-            // saturation, |(4 * 12.471 + 1.11888 * 157.08, 4 * 157.08 * 9.4841 mH * 12.471)| = 237.6 V of the 398.0 V; the
-            // tightest row, the 1FK2210-4AC at 400 V, 627.6 V of 661.4 V (0.949).
+            // Without field weakening (i_d = 0) the rated current, or the current for the rated torque plus the iron's
+            // drag and the friction where that is more, meets the back-EMF, R i and the winding's reactance p w L i (L from
+            // Siemens' short-circuit braking table, `apply_motor`; the config's 10 mH where it has no row) and R i (the
+            // config's estimate of 4 Ohm) inside the circle. The 1FK2106-6AF at 230 V: 12.504 A for 13.8 + 0.0357 N m with
+            // saturation, |(4 * 12.504 + 1.11888 * 157.08, 4 * 157.08 * 9.4841 mH * 12.504)| = 237.7 V of the 398.0 V; the
+            // tightest row, the 1FK2210-4AC at 400 V, 629.7 V of 661.4 V (0.952).
             let plain = DriveParams { field_weakening: None, ..p.clone() };
-            let current = p.current_for(p.rated_torque);
+            // effects.iron_loss: at the rated current and speed the shaft gives the printed rated torque once the iron's
+            // drag and the motor's own friction are off the air-gap torque (`DriveParams::iron_drag_rated`); where the
+            // printed point leaves no drag (k_t I_N with saturation at or below M_N plus friction) it gives less, by the
+            // friction and the saturation curve's misfit at I_N (`short`, the air gap's alone: 2.91 % at most, the
+            // 1FT2108-5SB at 230 V; 97 rows have a drag; the friction is the single axis's estimate, not the catalogue
+            // motor's: 0.051 N m, a third of the 1FK2102-0AG's 0.16 N m).
+            let friction = cfg.f64("motor.friction_coulomb_nm").unwrap()
+                * (p.rated_speed / cfg.f64("motor.friction_smoothing_rad_s").unwrap()).tanh()
+                + cfg.f64("motor.friction_viscous_nm_s_rad").unwrap() * p.rated_speed;
+            let shaft = p.torque_of(p.rated_current) - p.iron_drag(p.rated_speed) - friction;
+            if p.iron_drag_rated > 0.0 {
+                assert!((shaft - p.rated_torque).abs() < 1e-9 * p.rated_torque, "{} at {supply}", m["part_number"]);
+                dragged += 1;
+            } else {
+                short = short.max(1.0 - p.torque_of(p.rated_current) / p.rated_torque);
+            }
+            let current = p.current_for(p.rated_torque + p.iron_drag(p.rated_speed) + friction).max(p.rated_current);
             assert!(
                 plain.voltage_limited_current(p.rated_speed, p.max_voltage, true) >= current,
                 "{} at {supply}: {current} A beyond the voltage circle at the rated speed",
@@ -614,6 +631,10 @@ fn every_catalogue_motor_reaches_its_rated_point_inside_the_voltage_limit() {
         }
     }
     assert!(rows > 120 && beyond_the_dc_link == 5, "{rows} rows, {beyond_the_dc_link} beyond the DC link voltage");
+    assert!(
+        dragged == 97 && short < 0.0292,
+        "{dragged} rows with an iron drag, the others' air gap {short} short of M_N"
+    );
 }
 
 /// A gearbox named for the whole search and the same gearbox found by the search give the same candidate.
@@ -1047,4 +1068,134 @@ fn the_retuned_gain_follows_the_inertia_the_machine_turns_and_stays_below_the_re
     assert!(close(kp(&heavy), scaled, 1e-6) && scaled < 4.0 * kp(&cfg) && scaled > 2.0 * kp(&cfg), "{}", kp(&heavy));
     let light = motor("1FK2103-4AH");
     assert!(close(kp(&light), kp(&cfg) * rotor(&light) / rotor(&cfg), 1e-6), "{}", kp(&light));
+}
+
+/// A named S210 motor brings its S1 curve (`s1_curves_s210.csv`) on the supply the curve is read for, its 400 V one where
+/// it has a rated point at 400 V; on the other supply, and for a motor without a curve, the config has none, also where
+/// it had one of the motor before.
+#[test]
+fn a_named_motor_brings_its_s1_curve_on_its_supply_and_no_other_motors() {
+    use sim_components::catalog::{Parts, with_named};
+    let entry = &machine_single_axis::ENTRY;
+    let rows: Vec<(f64, f64)> = csv("siemens/s1_curves_s210.csv")
+        .into_iter()
+        .filter(|r| r["article"] == "1FK2104-5AF")
+        .map(|r| (r["speed_rad_s"].parse().unwrap(), r["torque_nm"].parse().unwrap()))
+        .collect();
+    assert!(rows.len() >= 5);
+    let named = |cfg: &sim_core::Config, motor: &'static str, supply: &'static str| {
+        with_named(entry, cfg, &Parts { motor, supply, ..Parts::of(cfg).unwrap() }).unwrap()
+    };
+    let curve = |c: &sim_core::Config| {
+        let (w, t) = (c.f64s("motor.s1_curve_speed_rad_s"), c.f64s("motor.s1_curve_torque_nm"));
+        w.ok().zip(t.ok()).map(|(w, t)| w.into_iter().zip(t).collect::<Vec<_>>())
+    };
+    let with = named(&entry.config(), "1FK2104-5AF", "400v");
+    assert_eq!(curve(&with), Some(rows));
+    assert_eq!(curve(&named(&entry.config(), "1FK2104-5AF", "230v")), None);
+    // The curve of the motor before goes with it: the 1FK2106-6AF has none in the file.
+    assert_eq!(curve(&named(&with, "1FK2106-6AF", "400v")), None);
+    assert!(csv("siemens/s1_curves_s210.csv").iter().all(|r| r["article"] != "1FK2106-6AF"));
+}
+
+/// A motor named in `[parts.<id>]` has its velocity gain retuned as the shared one is for a motor named in `[parts]`
+/// (`with_named`): on a machine file with one motor the two give the same gain, the per-motor one in
+/// `drive.<id>.velocity_kp_nm_s_rad`, the shared gain staying the config's. A gain the config gives that motor stays.
+#[test]
+fn a_motor_named_per_motor_is_retuned_as_the_shared_one() {
+    let entry = sim_machines::load_file(&catalog().join("../machines/single-axis.toml")).unwrap();
+    let cfg = entry.config();
+    let kp = |c: &sim_core::Config, key: &str| c.f64(key).unwrap();
+    let mut shared = cfg.clone();
+    shared.set_text("parts.motor = \"1FK2204-5AF\"").unwrap();
+    let shared = sim_components::catalog::resolve(entry, &shared).unwrap();
+    let own = |extra: &str| {
+        let text = format!("{}\n[parts.m]\nmotor = \"1FK2204-5AF\"\n{extra}", cfg.to_text().unwrap());
+        sim_components::catalog::resolve(entry, &sim_core::Config::parse(&text).unwrap()).unwrap()
+    };
+    let per_motor = own("");
+    let gain = kp(&per_motor, "drive.m.velocity_kp_nm_s_rad");
+    assert!(close(gain, kp(&shared, "drive.velocity_kp_nm_s_rad"), 1e-12), "{gain}");
+    assert!(gain > 1.5 * kp(&cfg, "drive.velocity_kp_nm_s_rad"), "{gain}");
+    assert_eq!(kp(&per_motor, "drive.velocity_kp_nm_s_rad"), kp(&cfg, "drive.velocity_kp_nm_s_rad"));
+    assert_eq!(kp(&own("[drive.m]\nvelocity_kp_nm_s_rad = 0.0123\n"), "drive.m.velocity_kp_nm_s_rad"), 0.0123);
+}
+
+/// A guide set's carriage count that is not a whole number of at least 1 is refused where the config is resolved,
+/// not taken as the four of a config without it.
+#[test]
+fn a_carriage_count_that_is_no_whole_number_is_refused() {
+    let entry = &machine_single_axis::ENTRY;
+    for (count, ok) in [("2.0", true), ("2.5", false), ("0.0", false)] {
+        let text = format!("{}\n", entry.config().to_text().unwrap()).replacen(
+            "[ratings]\n",
+            &format!("[ratings]\nguide_carriages = {count}\n"),
+            1,
+        );
+        let cfg = sim_core::Config::parse(&text).unwrap();
+        let resolved = sim_components::catalog::resolve(entry, &cfg);
+        assert_eq!(resolved.is_ok(), ok, "{count}: {:?}", resolved.err());
+        if !ok {
+            assert_eq!(resolved.err(), Some(sim_core::ConfigError::Invalid("ratings.guide_carriages".into())));
+        }
+    }
+}
+
+/// Every registered config and every machine file in `machines/` loads and resolves, and each of its motors judges its
+/// S1 line by the curve of `s1_curves_s210.csv` where it names an S210 motor that has one at its supply's voltage (the
+/// shared `[parts]` or its own `[parts.<id>]`), by the straight line otherwise: the per-motor configs of the arms, whose
+/// default tables have no key of the curve, included.
+#[test]
+fn every_shipped_config_loads_and_judges_a_named_motor_by_its_s1_curve() {
+    let motors: std::collections::HashMap<String, bool> = csv("siemens/motors_s210.csv")
+        .into_iter()
+        .map(|r| (r["part_number"].clone(), !r["rated_speed_400v_rad_s"].is_empty()))
+        .collect();
+    let curves = csv("siemens/s1_curves_s210.csv");
+    let mut entries: Vec<&'static sim_core::MachineEntry> = sim_machines::MACHINES.iter().copied().collect();
+    let mut files: Vec<_> = fs::read_dir(catalog().join("../machines")).unwrap().map(|e| e.unwrap().path()).collect();
+    files.sort();
+    for path in files.iter().filter(|p| p.extension().is_some_and(|e| e == "toml")) {
+        entries.push(sim_machines::load_file(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())));
+    }
+    let (mut with_curve, mut refused) = (0, Vec::new());
+    for entry in entries {
+        let cfg = entry.config();
+        let loaded = sim_components::load_config(entry, &cfg.to_text().unwrap())
+            .and_then(|_| sim_components::catalog::resolve(entry, &cfg));
+        let resolved = match loaded {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                refused.push(format!("{}: {e:?}", entry.id));
+                continue;
+            }
+        };
+        let machine = (entry.build)(&resolved).unwrap();
+        for m in machine.motors() {
+            let name = |key: &str| {
+                let at = |path: String| cfg.get(&path).ok().and_then(|v| v.as_str().map(String::from));
+                at(format!("parts.{}.{key}", m.id)).or_else(|| at(format!("parts.{key}"))).unwrap_or_default()
+            };
+            let (article, mut supply) = (name("motor"), name("motor_supply"));
+            if supply.is_empty() {
+                supply = "400v".into(); // as `Parts::of` takes it
+            }
+            let voltage = supply.trim_start_matches("s210new-");
+            let expected: Vec<[f64; 2]> = match motors.get(&article) {
+                Some(&at_400) if voltage == if at_400 { "400v" } else { "230v" } => curves
+                    .iter()
+                    .filter(|r| r["article"] == article)
+                    .map(|r| [r["speed_rad_s"].parse().unwrap(), r["torque_nm"].parse().unwrap()])
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let own = sim_components::catalog::motor_config(&resolved, &m.id).unwrap();
+            let read = sim_components::drive::s1_curve_of(&own).unwrap();
+            assert_eq!(read, expected, "{} motor {} ({article} at {supply})", entry.id, m.id);
+            with_curve += usize::from(!read.is_empty());
+        }
+    }
+    assert!(refused.is_empty(), "{refused:?}");
+    // The arms' wrists, the SCARA, the palletiser and the arm on a track name the 1FK2104-5AF and others.
+    assert!(with_curve >= 15, "{with_curve} motors with a curve");
 }

@@ -397,16 +397,23 @@ impl Based {
         let (mut pose, mut vel) = (vec![0.0; n], vec![0.0; n]);
         self.inner.tool_state(&s[..self.n()], &mut pose, &mut vel);
         let from = self.inner.scene_point(&pose)?;
+        // A millimetre along each axis, read back per metre.
+        const STEP: f64 = 1e-3;
         let mut columns = [[0.0; 3]; 3];
         for (k, column) in columns.iter_mut().enumerate() {
             let mut unit = [0.0; 6];
-            unit[k] = 1.0;
+            unit[k] = STEP;
             let moved: Vec<f64> = pose.iter().zip(self.tool_shift(&pose, &unit)).map(|(p, d)| p + d).collect();
             let to = self.inner.scene_point(&moved)?;
-            *column = std::array::from_fn(|i| to[i] - from[i]);
-            // A direction the scene point does not show (a planar machine has no z axis): the scene's own axis.
-            if column.iter().all(|c| c.abs() < 1e-12) {
-                column[k] = 1.0;
+            *column = std::array::from_fn(|i| (to[i] - from[i]) / STEP);
+        }
+        // A direction the scene point does not show (a planar machine has no z axis): the scene's axis furthest from
+        // the directions it shows.
+        for k in 0..3 {
+            if columns[k].iter().all(|c| c.abs() < 1e-9) {
+                let shown = |i: usize| columns.iter().map(|c| c[i].abs()).sum::<f64>();
+                let free = (0..3).min_by(|&a, &b| shown(a).total_cmp(&shown(b))).unwrap_or(k);
+                columns[k] = std::array::from_fn(|i| if i == free { 1.0 } else { 0.0 });
             }
         }
         let map = |v: [f64; 3]| -> [f64; 3] { std::array::from_fn(|i| (0..3).map(|k| columns[k][i] * v[k]).sum()) };
@@ -419,11 +426,16 @@ impl Based {
         let t = map([d[0], d[1], d[2]]).map(|v| scale * v);
         let theta = map([d[3], d[4], d[5]]).map(|v| scale * v * if det < 0.0 { -1.0 } else { 1.0 });
         let axes = self.inner.axes();
-        let at_tool: [f64; 3] = std::array::from_fn(|k| {
-            axes.iter().position(|a| a.id == BASE_AXES[0][k]).map_or(0.0, |i| pose[i]) - self.pivot[k]
-        });
-        let away = map(at_tool);
-        let pivot: [f64; 3] = std::array::from_fn(|k| from[k] - away[k]);
+        let found = BASE_AXES[0].map(|id| axes.iter().position(|a| a.id == id));
+        let pivot: [f64; 3] = if found.iter().any(Option::is_some) {
+            let at_tool: [f64; 3] = std::array::from_fn(|k| found[k].map_or(0.0, |i| pose[i]) - self.pivot[k]);
+            let away = map(at_tool);
+            std::array::from_fn(|k| from[k] - away[k])
+        } else {
+            // Tool axes that are joints tell nothing of where the tool is in the frame: the scene's origin is the
+            // frame's (as the axes are where the scene shows no translation).
+            map(self.pivot)
+        };
         Some(move |p: [f64; 3]| {
             let turned = cross(theta, std::array::from_fn(|k| p[k] - pivot[k]));
             std::array::from_fn(|k| p[k] + t[k] + turned[k])
@@ -552,6 +564,9 @@ impl Machine for Based {
     fn rigid_tensions_moving(&self, tool_pos: &[f64], tool_vel: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
         self.inner.rigid_tensions_moving(tool_pos, tool_vel, tool_acc, out)
     }
+    fn tension_band(&self) -> Option<[f64; 2]> {
+        self.inner.tension_band()
+    }
     fn rigid_guide_loads(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_guide_loads(tool_pos, tool_acc, out)
     }
@@ -561,7 +576,7 @@ impl Machine for Based {
     fn rigid_friction(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_friction(tool_pos, tool_dir, out)
     }
-    fn rigid_friction_rise(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
+    fn rigid_friction_rise(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<Vec<[f64; 2]>>) {
         self.inner.rigid_friction_rise(tool_pos, tool_dir, out)
     }
     fn rigid_checks(&self, tool_pos: &[f64], tool_vel: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
@@ -786,6 +801,8 @@ mod tests {
         spring: f64,
         dwelling: bool,
         resonance: Option<f64>,
+        /// The scene shows x the other way (a reflection).
+        flipped: bool,
         axes: [AxisInfo; 1],
         motors: [MotorInfo; 1],
     }
@@ -797,6 +814,7 @@ mod tests {
             spring: 0.0,
             dwelling: false,
             resonance: None,
+            flipped: false,
             axes: [AxisInfo {
                 id: "x",
                 key: "",
@@ -877,7 +895,7 @@ mod tests {
         fn base_signals(&self, _: &[f64], _: &[f64], _: &mut Vec<f64>) {}
         fn scene(&self, _: &[f64], _: &mut Scene) {}
         fn scene_point(&self, tool: &[f64]) -> Option<[f64; 3]> {
-            Some([tool[0], 0.0, 0.0])
+            Some([if self.flipped { -tool[0] } else { tool[0] }, 0.0, 0.0])
         }
     }
 
@@ -1175,6 +1193,48 @@ mod tests {
         assert!((rows.last().unwrap() - 98.842).abs() < 1e-3, "{rows:?}");
     }
 
+    /// The budget closes with the process force on a moving base: the slider (dwelling under 50 N along x, its motor
+    /// pushing 30 N back) on a coupled base along x (200 kg, 8e5 N/m, damping ratio 0.05), integrated by RK4 over 50 ms
+    /// from rest. The motor's work and the process force's on the slider's own travel, int (tau + F) x' dt, equal the
+    /// change of the energy plus the base's row, int (c d'^2 - F d') dt (trapezoid on 1 us steps).
+    #[test]
+    fn the_budget_closes_with_the_process_force_on_a_moving_base() {
+        let config = base_config(true, 0.5, [8.0e5, 0.0, 0.0, 0.0, 0.0, 0.0], 0.05, [0.0; 3]);
+        let mut machine = mount(&config, Box::new(slider())).unwrap();
+        machine.set_dwelling(true);
+        let (dt, tau, force) = (1e-6, [-30.0], 50.0);
+        let mut s = vec![0.5, 0.0, 0.0, 0.0];
+        let row = |s: &[f64]| {
+            let mut rows = Vec::new();
+            machine.loss_powers(s, &tau, &mut rows);
+            *rows.last().unwrap()
+        };
+        let start = machine.energy(&s);
+        let (mut work, mut lost, mut last, mut fastest) = (0.0, 0.0, ((tau[0] + force) * s[1], row(&s)), 0.0f64);
+        let derivative = |s: &[f64]| {
+            let mut out = vec![0.0; s.len()];
+            machine.derivatives(s, &tau, &mut out);
+            out
+        };
+        for _ in 0..50_000 {
+            let k1 = derivative(&s);
+            let at = |k: &[f64], h: f64| s.iter().zip(k).map(|(x, d)| x + h * d).collect::<Vec<_>>();
+            let k2 = derivative(&at(&k1, 0.5 * dt));
+            let k3 = derivative(&at(&k2, 0.5 * dt));
+            let k4 = derivative(&at(&k3, dt));
+            for i in 0..s.len() {
+                s[i] += dt / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
+            }
+            let now = ((tau[0] + force) * s[1], row(&s));
+            (work, lost) = (work + 0.5 * dt * (now.0 + last.0), lost + 0.5 * dt * (now.1 + last.1));
+            last = now;
+            fastest = fastest.max(s[3].abs());
+        }
+        let stored = machine.energy(&s) - start;
+        assert!(fastest > 1e-3 && work > 0.01, "the base moves ({fastest} m/s), the slider is pushed ({work} J)");
+        assert!((work - stored - lost).abs() < 1e-9, "work {work} J, stored {stored} J, base row {lost} J");
+    }
+
     /// The scene tilts with the base. The base is moved 2e-4 m along x and tilted 1e-3 rad about y through the origin;
     /// a part at (0.2, 0, 0.5) and a belt strip's far end at (0.8, 0, -0.25) move by t + theta x p, theta = (0, 1e-3, 0):
     /// (2e-4 + 1e-3 * 0.5, 0, -1e-3 * 0.2) = (7e-4, 0, -2e-4) and (2e-4 - 2.5e-4, 0, -8e-4) = (-5e-5, 0, -8e-4).
@@ -1194,6 +1254,27 @@ mod tests {
         for k in 0..3 {
             assert!((part.pos[k] - [0.2, 0.0, 0.5][k] - a[k]).abs() < 1e-12, "{:?}", part.pos);
             assert!((to[k] - [0.8, 0.0, -0.25][k] - b[k]).abs() < 1e-12, "{to:?}");
+        }
+    }
+
+    /// The same base move on a scene that shows x the other way (a reflection, x -> -x): the point the scene shows at
+    /// (-0.2, 0, 0.5) is the machine's (0.2, 0, 0.5), which moves by (7e-4, 0, -2e-4) as above; in the scene that is
+    /// (-7e-4, 0, -2e-4). (Mapping the tilt as a plain vector, not as a pseudovector, gives +2e-4 in z.)
+    #[test]
+    fn the_scene_tilts_with_the_base_on_a_flipped_scene() {
+        let config = base_config(false, 0.5, [8.0e5, 0.0, 0.0, 0.0, 5.0e3, 0.0], 0.0, [0.0; 3]);
+        let machine = mount(&config, Box::new(Slider { flipped: true, ..slider() })).unwrap();
+        let mut scene = Scene::default();
+        scene.parts.push(sim_core::Part::new(
+            "box",
+            sim_core::Shape::Box { size: [0.1; 3] },
+            [-0.2, 0.0, 0.5],
+            [1.0; 3],
+        ));
+        machine.scene(&[0.5, 0.0, 2e-4, 1e-3, 0.0, 0.0], &mut scene);
+        let moved: [f64; 3] = std::array::from_fn(|k| scene.parts[0].pos[k] - [-0.2, 0.0, 0.5][k]);
+        for (m, want) in moved.iter().zip([-7e-4, 0.0, -2e-4]) {
+            assert!((m - want).abs() < 1e-12, "{moved:?}");
         }
     }
 

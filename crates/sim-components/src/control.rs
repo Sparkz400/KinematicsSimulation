@@ -200,8 +200,8 @@ pub struct Controller {
     /// How long before the end of a segment the next one may start; 0 with blending off.
     blend_time: f64,
     /// For a path timed as fast as the motors allow: the share of the torque limits it may use
-    /// (`profile.torque_reserve`), the belt tensions it may need (`ratings.belt_min_tension_n`, `belt_max_tension_n` less
-    /// `profile.tension_margin_n` on both; unbounded where the config has none) and the share of the room to them
+    /// (`profile.torque_reserve`), the belt tensions it may need (`ratings.belt_min_tension_n`, `belt_max_tension_n`, or the machine's
+    /// own `tension_band`, less `profile.tension_margin_n` on both; unbounded where the config has none) and the share of the room to them
     /// (`profile.tension_reserve`), each gearbox's output torque rating and the guides' load rating (`path::PlanLimits`).
     plan_limits: path::PlanLimits,
     /// Each motor's DC link room above the bus, J (`dc_link_room`).
@@ -286,9 +286,6 @@ pub struct Controller {
     tick: u64,
     /// Planned setpoints of the last cycles, newest last, as far back as the shaper reaches.
     history: std::collections::VecDeque<[Vec<f64>; 3]>,
-    /// Per axis the delays of the shaper's impulses (profile cycles) of the last cycle and how they changed over it
-    /// (`shape`); empty where the shaper has not run, then its delays are taken as steady.
-    shaper_delays: Vec<[Vec<f64>; 2]>,
     /// With `[conveyor]`: the cycle picks from the belt instead of running `segments`, one pass per part, and the pass
     /// under way or last run.
     conveyor: Option<Conveyor>,
@@ -454,7 +451,6 @@ impl Controller {
             pass: None,
             clock: 0.0,
             history: Default::default(),
-            shaper_delays: Vec::new(),
             inertias: Vec::new(),
             load_encoder: None,
             cam: None,
@@ -493,7 +489,6 @@ impl Controller {
             rate.fill(0.0);
         }
         self.history.clear();
-        self.shaper_delays.clear();
         self.fieldbus.clear();
         self.watch = vec![Watch::default(); motors];
         // Start holding the load: the torque that keeps the pose, and the feedforward's share of it. At the tool's pose,
@@ -761,9 +756,14 @@ impl Controller {
         }
         // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
         // whatever the room (friction, the belt's vibration), which is roughly absolute, not a share of the room.
+        // A machine with a band of its own (a cable robot's cables) gives it; the ratings otherwise.
+        let band = machine.tension_band().map_or_else(
+            || [cfg.f64("ratings.belt_min_tension_n").ok(), cfg.f64("ratings.belt_max_tension_n").ok()],
+            |[low, high]| [Some(low), Some(high)],
+        );
         let tension = [
-            cfg.f64("ratings.belt_min_tension_n").map_or(f64::NEG_INFINITY, |t| t + tension_margin),
-            cfg.f64("ratings.belt_max_tension_n").map_or(f64::INFINITY, |t| t - tension_margin),
+            band[0].map_or(f64::NEG_INFINITY, |t| t + tension_margin),
+            band[1].map_or(f64::INFINITY, |t| t - tension_margin),
             tension_reserve,
         ];
         // Each motor's shaft friction and gearbox drag as its own config has them (`mech::ShaftFriction`); none where the
@@ -991,13 +991,20 @@ impl Controller {
             }
             self.shaper_reach = 0;
         }
-        self.shaper_delays.clear();
-        // The fieldbus queue is resampled the same way: a frame of age `a` old cycles becomes the frame at age
-        // `a * ratio` new cycles, and its remaining delay (in cycles) is scaled with it, so the delay in seconds
-        // carries over; the configured delay in the new cycles takes hold as the queue runs through.
+        // The fieldbus queue is resampled the same way, its delays (in cycles) scaled with it: the frames under way
+        // arrive when they would have; the configured delay in the new cycles holds for the frames sent from now on.
         if !self.fieldbus.is_empty() {
             self.fieldbus = resample_fieldbus(&self.fieldbus, ratio);
             self.fieldbus_held = u64::MAX;
+        }
+    }
+
+    /// The setpoints `t` into a ramp down (`ramp_down`) from `from` at speeds `vel` to rest after `time`.
+    fn halt_at(&mut self, from: &[f64], vel: &[f64], time: f64, t: f64) {
+        for i in 0..from.len() {
+            self.set_pos[i] = from[i] + vel[i] * (t - 0.5 * t * t / time);
+            self.set_vel[i] = vel[i] * (1.0 - t / time);
+            self.set_acc[i] = if t < time { -vel[i] / time } else { 0.0 };
         }
     }
 
@@ -1006,8 +1013,9 @@ impl Controller {
         let axes = machine.axes();
         // The axis that needs longest to stop at its limit sets the time; the others decelerate in proportion.
         let mut time = self.raw_vel.iter().zip(axes).map(|(v, a)| v.abs() / a.max_acc).fold(0.0, f64::max);
-        // A stop that would end beyond the range (a plan decelerating at its limit into an end) ends shorter.
-        for _ in 0..8 {
+        // A stop that would end beyond the range (a plan decelerating at its limit into an end) ends shorter; one that
+        // starts beyond it (a cam's slave turning on past its range, as a rotary knife's does) at the limit.
+        for _ in 0..if in_range(machine, &self.raw_pos) { 8 } else { 0 } {
             let end: Vec<f64> = self.raw_pos.iter().zip(&self.raw_vel).map(|(x, v)| x + 0.5 * v * time).collect();
             if in_range(machine, &end) {
                 break;
@@ -1188,7 +1196,6 @@ impl Controller {
             }
             (self.motion, self.cycle, self.stopping) = (Motion::Idle, None, false);
             self.history.clear();
-            self.shaper_delays.clear();
             self.fieldbus.clear();
             for (drive, pos) in self.drives.iter_mut().zip(&self.motor_pos) {
                 if drive.mode() == DriveMode::Position {
@@ -1782,8 +1789,12 @@ impl Controller {
     /// its end. Then the shared DC link, and the trip.
     pub fn winding_stepped(&mut self, windings: &[f64], angle: &[f64], speed: &[f64]) {
         for (k, (drive, w)) in self.drives.iter_mut().zip(windings.as_chunks::<WINDING_STATES>().0).enumerate() {
-            // A drive whose pulses are off after a trip has had its disabled step (`react`).
-            if !drive.pulses_off {
+            // A drive whose pulses are off after a trip has had its disabled step (`react`); the iron's drag work over
+            // the step is the integrated one (`Sim::advance_with_windings`), not the step start's speed times the step.
+            if drive.pulses_off {
+                let dt = self.motor_params[k].current_cycle;
+                (drive.shaft_power, drive.emf_loss) = (w[3] / dt, -w[3] / dt);
+            } else {
                 (drive.phases.x, drive.phases.angle, drive.phases.speed) =
                     ([w[0], w[4], w[5], w[6]], angle[k], speed[k]);
                 drive.winding_stepped(&self.motor_params[k], w[0], [w[1], w[2], w[3]]);
@@ -1917,9 +1928,17 @@ impl Controller {
                     }
                 } else {
                     // A config without the cam now: the slaves ramp down from the speeds they have, every axis within
-                    // its acceleration limit, as in a category 2 stop, instead of a step in their speed.
+                    // its acceleration limit, as in a category 2 stop, instead of a step in their speed. (The cam's
+                    // curve went with the config, so they decelerate along their last direction.) Its first cycle is
+                    // this one, so the setpoint does not stand still for a cycle.
                     (self.cycle, self.stopping) = (None, false);
-                    self.motion = self.ramp_down(machine);
+                    self.set_acc.fill(0.0);
+                    if let Motion::Halting { from, vel, time, .. } = self.ramp_down(machine) {
+                        self.halt_at(&from, &vel, time, dt.min(time));
+                        if dt < time {
+                            self.motion = Motion::Halting { from, vel, time, start_tick: tick - 1 };
+                        }
+                    }
                 }
             }
             Motion::Dwell { mut until_tick } => {
@@ -1992,11 +2011,7 @@ impl Controller {
                 // From the cycle the stop came in, as a setpoint from outside is (`Following`).
                 let start_tick = if start_tick == u64::MAX { tick - 1 } else { start_tick };
                 let t = ((tick - start_tick) as f64 * dt).min(time);
-                for i in 0..from.len() {
-                    self.set_pos[i] = from[i] + vel[i] * (t - 0.5 * t * t / time);
-                    self.set_vel[i] = vel[i] * (1.0 - t / time);
-                    self.set_acc[i] = if t < time { -vel[i] / time } else { 0.0 };
-                }
+                self.halt_at(&from, &vel, time, t);
                 if t < time {
                     self.motion = Motion::Halting { from, vel, time, start_tick };
                 }
@@ -2216,17 +2231,44 @@ impl Controller {
     fn shape(&mut self, machine: &dyn Machine) {
         // The shaped position is x_s(t) = sum w_i x(t - D_i(t)) / sum w_i (D_i the impulses' delays in seconds, which
         // change with the period). Its exact rates are x_s' = sum w_i v (1 - D_i') / W and x_s'' = sum w_i (a (1 - D_i')^2
-        // - v D_i'') / W; D_i' is the change of the delay over one cycle (in cycles per cycle) and D_i'' its change
-        // over the cycle before, per second. With steady delays this is the plain weighted sum of the plan's rates.
-        let Some(halves) = self.mode_halves(machine, &self.raw_pos) else {
+        // - v D_i'') / W, v and a the plan's D_i ago. With steady delays this is the plain weighted sum of the plan's rates.
+        let Some(fresh) = self.mode_halves(machine, &self.raw_pos) else {
             self.history.clear();
-            self.shaper_delays.clear();
             self.shaper_reach = 0;
             return;
         };
         let standing = self.history.back().is_some_and(|past| past[0] == self.raw_pos);
-        let halves = self.shaper_held.take().filter(|held| standing && held.len() == halves.len()).unwrap_or(halves);
+        let held = self.shaper_held.take().filter(|held| standing && held.len() == fresh.len());
+        let steady = held.is_some() || !self.shaper.iter().flatten().any(|m| m.follows.is_some());
+        let halves = held.unwrap_or(fresh);
         let trains = self.trains(&halves);
+        // D_i' and D_i'' where the period follows the pose: the delays (cycles) with the plan one cycle ahead and one
+        // behind on its own Taylor expansion, central differences: D' = (d+ - d-) / 2, D'' = (d+ - 2 d + d-) / T (1/s).
+        let cycle = self.profile_cycle;
+        let zeros = || trains.iter().map(|train| [vec![0.0; train.len()], vec![0.0; train.len()]]).collect();
+        let changes: Vec<[Vec<f64>; 2]> = if steady {
+            zeros()
+        } else {
+            let off = |sign: f64| -> Option<Vec<Vec<(f64, f64)>>> {
+                let pose: Vec<f64> = (self.raw_pos.iter().zip(&self.raw_vel).zip(&self.raw_acc))
+                    .map(|((x, v), a)| x + sign * v * cycle + 0.5 * a * cycle * cycle)
+                    .collect();
+                Some(self.trains(&self.mode_halves(machine, &pose)?))
+            };
+            match (off(1.0), off(-1.0)) {
+                (Some(ahead), Some(behind)) => (trains.iter().zip(ahead.iter().zip(&behind)))
+                    .map(|(now, (ahead, behind))| {
+                        if ahead.len() != now.len() || behind.len() != now.len() {
+                            return [vec![0.0; now.len()], vec![0.0; now.len()]];
+                        }
+                        let d = |k: usize| (ahead[k].0, now[k].0, behind[k].0);
+                        let rate = (0..now.len()).map(|k| (d(k).0 - d(k).2) / 2.0).collect();
+                        [rate, (0..now.len()).map(|k| (d(k).0 - 2.0 * d(k).1 + d(k).2) / cycle).collect()]
+                    })
+                    .collect(),
+                _ => zeros(),
+            }
+        };
         self.shaper_held = Some(halves);
         self.history.push_back([self.raw_pos.clone(), self.raw_vel.clone(), self.raw_acc.clone()]);
         // The store keeps the longest span met so far: a period that grows again finds its past.
@@ -2237,28 +2279,24 @@ impl Controller {
         }
         let newest = self.history.len() - 1;
         // The plan `delay` cycles ago, between two stored cycles; before the store reaches back that far, its oldest.
+        // The position between two cycles is the cubic through both with their speeds: a straight line between them
+        // has a kink at every stored cycle, which a delay sliding over it (the period following the pose) turns
+        // into a step in the shaped position's speed, off its exact rates by up to the plan's acceleration times the
+        // delay's rate times T (measured 0.08 m/s^2 in 8 on the spatial cable-driven platform).
         let ago = |which: usize, axis: usize, delay: f64| -> f64 {
             let (whole, part) = (delay.floor() as usize, delay.fract());
-            let at = |n: usize| self.history[newest - n.min(newest)][which][axis];
-            at(whole) * (1.0 - part) + at(whole + 1) * part
+            let at = |n: usize, which: usize| self.history[newest - n.min(newest)][which][axis];
+            if which > 0 || whole + 1 > newest {
+                return at(whole, which) * (1.0 - part) + at(whole + 1, which) * part;
+            }
+            // u from the older cycle (0) to the newer (1).
+            let u = 1.0 - part;
+            let (u2, u3) = (u * u, u * u * u);
+            (2.0 * u3 - 3.0 * u2 + 1.0) * at(whole + 1, 0)
+                + (u3 - 2.0 * u2 + u) * cycle * at(whole + 1, 1)
+                + (3.0 * u2 - 2.0 * u3) * at(whole, 0)
+                + (u3 - u2) * cycle * at(whole, 1)
         };
-        // Per axis, per impulse: the delay's change over this cycle and its change since the cycle before, per second.
-        let cycle = self.profile_cycle;
-        let changes: Vec<[Vec<f64>; 2]> = trains
-            .iter()
-            .enumerate()
-            .map(|(axis, train)| {
-                let now: Vec<f64> = train.iter().map(|(t, _)| *t).collect();
-                match self.shaper_delays.get(axis) {
-                    Some([last, last_rate]) if last.len() == now.len() => {
-                        let rate: Vec<f64> = now.iter().zip(last).map(|(n, l)| n - l).collect();
-                        let second = rate.iter().zip(last_rate).map(|(r, l)| (r - l) / cycle).collect();
-                        [rate, second]
-                    }
-                    _ => [vec![0.0; now.len()], vec![0.0; now.len()]],
-                }
-            })
-            .collect();
         let shaped = |which: usize, axis: usize| {
             let train = &trains[axis];
             let [rate, second] = &changes[axis];
@@ -2278,11 +2316,6 @@ impl Controller {
             (0..axes).map(|a| shaped(2, a)).collect(),
         );
         (self.set_pos, self.set_vel, self.set_acc) = (pos, vel, acc);
-        self.shaper_delays = trains
-            .iter()
-            .zip(changes)
-            .map(|(train, [rate, _])| [train.iter().map(|(t, _)| *t).collect(), rate])
-            .collect();
     }
 
     /// Corner blending: the next cycle segment, if it should start now, while `current` still has
@@ -2518,26 +2551,29 @@ pub(crate) fn hermite(points: &[(f64, Vec<f64>)], speeds: &[Vec<f64>], i: usize,
     [at(basis[0]), at(basis[1]) / h, at(basis[2]) / (h * h)]
 }
 
-/// Position, speed and acceleration of axis `a` at time `t` on the quintic from point i to point i + 1 with the speeds
-/// and accelerations there (Hermite interpolation of the fifth degree): at the points exactly those given.
-/// The fieldbus queue (frames of setpoints newest last, each with the cycles it still has to travel) for a profile cycle
-/// `ratio` of the old ones to a new one: the frame at age `a` old cycles becomes the frame at age `a * ratio` new
-/// cycles, and its remaining delay is scaled with it, so the delay in seconds carries over.
+/// The fieldbus queue (frames of setpoints newest last, each with the cycles it takes to arrive) for a profile cycle
+/// `ratio` of the old ones to a new one: at age `b` new cycles stands what the old queue had at age `b / ratio` old
+/// cycles, between two frames in proportion (as the shaper's history), and the delay is scaled with it, so every frame
+/// arrives at the same time in seconds. Interpolated, not repeated: the drives take every frame as a fresh setpoint.
 fn resample_fieldbus(
     old: &std::collections::VecDeque<(usize, Vec<[f64; 5]>)>,
     ratio: f64,
 ) -> std::collections::VecDeque<(usize, Vec<[f64; 5]>)> {
-    let newest = old.len().saturating_sub(1);
-    let count = (newest as f64 * ratio).round() as usize + 1;
-    (0..count)
-        .filter_map(|j| {
-            let age = ((count - 1 - j) as f64 / ratio).round() as usize;
-            let (stamp, setpoints) = old.get(newest - age.min(newest))?;
-            Some(((*stamp as f64 * ratio).round() as usize, setpoints.clone()))
+    let Some(newest) = old.len().checked_sub(1) else { return Default::default() };
+    (0..=(newest as f64 * ratio).floor() as usize)
+        .rev()
+        .map(|back| {
+            let (whole, part) = ((back as f64 / ratio).floor() as usize, (back as f64 / ratio).fract());
+            let (a, b) = (&old[newest - whole.min(newest)], &old[newest - (whole + 1).min(newest)]);
+            let stamp = ((a.0 as f64 * (1.0 - part) + b.0 as f64 * part) * ratio).round() as usize;
+            let frames = a.1.iter().zip(&b.1).map(|(a, b)| std::array::from_fn(|k| a[k] * (1.0 - part) + b[k] * part));
+            (stamp, frames.collect())
         })
         .collect()
 }
 
+/// Position, speed and acceleration of axis `a` at time `t` on the quintic from point i to point i + 1 with the speeds
+/// and accelerations there (Hermite interpolation of the fifth degree): at the points exactly those given.
 fn quintic(
     points: &[(f64, Vec<f64>)],
     speeds: &[Vec<f64>],
@@ -2844,23 +2880,21 @@ mod tests {
         (hermite(points, speeds, i - 1, 0, points[i].0)[2], hermite(points, speeds, i, 0, points[i].0)[2])
     }
 
-    /// The fieldbus queue of four frames (delays 3, 2, 1, 0 cycles left, oldest first) after the profile cycle halves
-    /// (ratio 2): seven frames, 6 + 1 = 7, each pair of new frames from one old one, the delays doubled: 6, 4, 2, 0
-    /// at the frames that were there; the one between two old frames takes the older, `age = a / 2` rounded.
-    /// Newest first the ages 0..6 new cycles read the old ages 0, 0.5 -> 1 (round half away), 1, 1.5 -> 2, 2, 2.5 -> 3,
-    /// 3, so the delays (old stamp 0, 1, 1, 2, 2, 3, 3 times 2) are 0, 2, 2, 4, 4, 6, 6.
+    /// The fieldbus queue of four frames, oldest first setpoints 0, 1, 2, 3 and delays 3, 2, 1, 0 cycles, after the
+    /// profile cycle halves (ratio 2): seven frames (3 * 2 + 1); newest first the new ages 0..6 read the old ages 0,
+    /// 0.5, .., 3, so the setpoints are 3, 2.5, .., 0 and the delays (old 0, 0.5, .., 3 doubled) 0, 1, .., 6: every
+    /// frame arrives at the same time in seconds, and none repeats its neighbour (the drives take each as fresh).
     #[test]
     fn the_fieldbus_queue_keeps_its_delay_in_seconds_across_a_cycle_change() {
         let queue: std::collections::VecDeque<(usize, Vec<[f64; 5]>)> =
             (0..4).map(|k| (3 - k, vec![[k as f64; 5]])).collect();
         let new = resample_fieldbus(&queue, 2.0);
-        let stamps: Vec<usize> = new.iter().rev().map(|f| f.0).collect();
-        assert_eq!(stamps, [0, 2, 2, 4, 4, 6, 6]);
-        // The newest frame is still the newest, the oldest the oldest.
-        assert_eq!((new.back().unwrap().1[0][0], new.front().unwrap().1[0][0]), (3.0, 0.0));
-        // The same ratio back: the original stamps and frames (ages 0, 1, 2, 3 from 0, 2, 4, 6 halved).
+        assert_eq!(new.iter().rev().map(|f| f.0).collect::<Vec<_>>(), [0, 1, 2, 3, 4, 5, 6]);
+        let set: Vec<f64> = new.iter().rev().map(|f| f.1[0][0]).collect();
+        assert_eq!(set, [3.0, 2.5, 2.0, 1.5, 1.0, 0.5, 0.0]);
+        // The same ratio back: the original stamps and frames (new ages 0, 2, 4, 6).
         let back = resample_fieldbus(&new, 0.5);
-        assert_eq!(back.iter().map(|f| f.0).collect::<Vec<_>>(), [3, 2, 1, 0]);
+        assert_eq!(back, queue);
     }
 
     /// The quintic of `Command::RatedTrajectory` is a polynomial of the fifth degree where the points' positions, speeds

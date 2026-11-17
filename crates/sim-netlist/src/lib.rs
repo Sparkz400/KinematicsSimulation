@@ -25,7 +25,18 @@ use toml::{Table, Value};
 /// `MachineEntry::build` of every machine file: the netlist is in the config itself.
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let machine = build_without_cylinders(cfg)?;
-    sim_components::pneumatic::attach(cfg, &netlist::cylinders(cfg)?, machine)
+    let cylinders = netlist::cylinders(cfg)?;
+    if cylinders.is_empty() {
+        return Ok(machine);
+    }
+    // The tool's axes, as `ConfigMachine` lays them: the first along x, the others along y, each up by its incline.
+    let carrying: Vec<_> = (Netlist::parse(cfg)?.axes.iter().enumerate())
+        .map(|(i, a)| {
+            let (up, across) = a.incline_deg.to_radians().sin_cos();
+            (a.id.clone(), (!a.rotary).then_some(if i == 0 { [across, 0.0, up] } else { [0.0, across, up] }))
+        })
+        .collect();
+    sim_components::pneumatic::attach(cfg, &cylinders, &carrying, machine)
 }
 
 fn build_without_cylinders(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {

@@ -262,6 +262,11 @@ pub trait Machine: Send {
         let _ = tool_vel;
         self.rigid_tensions(tool_pos, tool_acc, out)
     }
+    /// The band [least, most] (N) the time-optimal plan keeps `rigid_tensions` within, where the machine has it from
+    /// its own parts (a cable robot's cables); `None`: `ratings.belt_min_tension_n` and `belt_max_tension_n`.
+    fn tension_band(&self) -> Option<[f64; 2]> {
+        None
+    }
     /// The load of each guide that reports `axis.<id>.guide_load` (N, in that order) in the loss-free rigid model at a
     /// tool pose and acceleration, as [rest, moving] for the load rest + |moving|: `moving` linear in the acceleration
     /// and zero without. The time-optimal plan keeps it within `ratings.guide_max_load_n`. Appends nothing where the
@@ -272,11 +277,12 @@ pub trait Machine: Send {
     /// (its rate per unit of path): [c, b] for c + b v at the speed v along the path, positive where the motor has to
     /// give positive torque against it. For the time-optimal plan. Appends nothing where the machine does not tell.
     fn rigid_friction(&self, _tool_pos: &[f64], _tool_dir: &[f64], _out: &mut Vec<[f64; 2]>) {}
-    /// What `rigid_friction`'s c + b v leaves out near a standstill, the Stribeck rise: per motor [level, speed], the
-    /// torque level exp(-(v / speed)^2) more at the speed v along the path (the friction is then c + level exp(..) + b v;
-    /// level signed as c, speed in the path's units, above 0). For the time-optimal plan, which holds the room for it
-    /// at the most it takes over the speeds up to v. Appends nothing where the machine has no rise (the default).
-    fn rigid_friction_rise(&self, _tool_pos: &[f64], _tool_dir: &[f64], _out: &mut Vec<[f64; 2]>) {}
+    /// What `rigid_friction`'s c + b v leaves out near a standstill, the Stribeck rise: per motor a [level, speed] for each
+    /// contact it drives, the torque level exp(-(v / speed)^2) more at the speed v along the path (the friction is then
+    /// c + sum level exp(..) + b v; level signed as c, speed in the path's units, above 0). For the time-optimal plan,
+    /// which holds the room for it at the most it takes over the speeds up to v. Appends nothing where the machine has no
+    /// rise (the default).
+    fn rigid_friction_rise(&self, _tool_pos: &[f64], _tool_dir: &[f64], _out: &mut Vec<Vec<[f64; 2]>>) {}
     /// The friction torque at each motor (N m, in the order of `motors`, into `out`) while the tool at `tool_pos` moves
     /// steadily at `tool_vel`: every friction of the machine's own model at that speed (guides at their steady sliding
     /// level, the motor shaft, the gearbox's drag, the joints, idlers, screws, the cable chain), carried to the motor as
@@ -310,8 +316,8 @@ pub trait Machine: Send {
     /// An external force on the tool, one component per axis in the tool's coordinates (N, or N m on a rotary axis;
     /// the generalised force of each axis), held until changed: an obstacle's push on the tool or its carriage
     /// (effects.crash). Returns whether the machine takes it; by default `false` (not supported), and the push then acts
-    /// on the motors through the rigid kinematics. The force's power is part of the machine's budget like the process
-    /// force's. Machines that take it: the machine files (`sim-netlist`) and the wrapper that forwards it; the machine
+    /// on the motors through the rigid kinematics. The force's power is not in the machine's loss rows: the simulation
+    /// integrates it as the obstacles' work (the budget's crash row). Machines that take it: the machine files (`sim-netlist`) and the wrapper that forwards it; the machine
     /// crates of their own keep the default and are pushed at the motors.
     fn set_tool_force(&mut self, _force: &[f64]) -> bool {
         false

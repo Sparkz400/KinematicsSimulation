@@ -149,6 +149,19 @@ fn a_cylinder_too_stiff_for_the_step_is_refused_in_a_file() {
     assert_eq!(error.key(), "error-cylinder-unstable", "{error:?}");
 }
 
+/// The cylinder rides on X without acting back on it: hanging down (-90 degrees) it pushes square to X, laid along X
+/// (0 degrees) it would push the carriage, and the file is refused.
+#[test]
+fn a_cylinder_pushing_along_the_axis_that_carries_it_is_refused_in_a_file() {
+    let text =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../machines/pneumatic-axis.toml"))
+            .unwrap();
+    let laid = text.replacen("incline_deg = -90.0", "incline_deg = 0.0", 1);
+    assert_ne!(laid, text);
+    let Err(error) = sim_machines::load_text(&laid, "laid") else { panic!("the cylinder along X was taken") };
+    assert!(format!("{error:?}").contains("pushes on the machine's axis x"), "{error:?}");
+}
+
 /// Every key the pneumatic Z brings has an English and a German entry: its signals' owner and quantity keys, its
 /// checks, its effect switches, its table's parameters and its refusal (the registered machines' test does not load
 /// machine files).

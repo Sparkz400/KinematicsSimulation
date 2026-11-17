@@ -485,15 +485,18 @@ impl Machine for ScissorMachine {
     }
 
     /// With the speed: theta' = z' / h', theta'' = (z'' - h'' theta'^2) / h', and J_screw theta'' + m h' z'' - Q_g at
-    /// the screw.
+    /// the screw, plus the arms' turning and sideways motion, M_a theta'' + 1/2 dM_a/dtheta theta'^2.
     fn feedforward_torque_moving(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut [f64]) {
         let theta = self.angle(pos[0]);
         let [_, d1, d2] = self.height(theta);
         let (_, _, gravity) = self.load(theta, 0.0);
         let w = vel[0] / d1;
         let theta_acc = (acc[0] - d2 * w * w) / d1;
+        let (turn, turn_rate) = self.geometry.arm_motion(theta, self.arms);
         let j = &self.joint;
-        out[0] = (self.screw_inertia * theta_acc + self.m_nt() * d1 * acc[0] - gravity) / j.ratio()
+        out[0] = (self.screw_inertia * theta_acc + self.m_nt() * d1 * acc[0] + turn * theta_acc + turn_rate * w * w
+            - gravity)
+            / j.ratio()
             + j.rotor_inertia * j.ratio() * theta_acc;
     }
 
