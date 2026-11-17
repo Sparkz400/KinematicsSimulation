@@ -559,7 +559,7 @@ fn the_corexy_moves_as_worked_out_by_hand() {
 
 /// The belts' mass run by run (`machine.span` with velocity_x, _y, _z) in the files whose belt runs move over ground,
 /// each derived from its belt path in the file's comment. Per file, without losses: rigid and elastic, the motors' power
-/// is the rate of the energy along the machine's own derivatives to 1e-7 of it (Richardson's central difference over
+/// is the rate of the energy along the machine's own derivatives to 2e-8 of it (Richardson's central difference over
 /// +-0.1 and 0.2 us, every state moved a little off rest); rigid, the feedforward at speed gives the commanded
 /// acceleration back; and the belts' kinetic energy is the sum over their runs by hand, 1/2 mu sum L_s |V_s v|^2: with
 /// the belt's mass per metre 0.1 kg/m more the energy grows by 0.05 times the sum below (2T / mu, at the pose and speed
@@ -601,7 +601,10 @@ fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
             ] {
                 cfg.set_text(&format!("effects.{effect} = false")).unwrap();
             }
-            for damping in ["gearbox.damping_nm_s_rad", "gantry.damping_nm_s_rad"] {
+            // The motors' own gearboxes ([gearbox.<motor>]) damp too.
+            let own = ["mx", "mx1", "mx2", "mz", "mc"].map(|m| format!("gearbox.{m}.damping_nm_s_rad"));
+            let shared = ["gearbox.damping_nm_s_rad", "gantry.damping_nm_s_rad"].map(String::from);
+            for damping in shared.iter().chain(&own) {
                 if cfg.get(damping).is_ok() {
                     cfg.set_text(&format!("{damping} = 0.0")).unwrap();
                 }
@@ -635,13 +638,10 @@ fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
             (rate_of_energy - power) / power
         };
         for elastic in [false, true] {
-            // The C portal (both models) and the dual gantry (elastic) are off by up to 9e-7 with the belt's mass at 0
-            // too: the C portal's gripper on its rotary has speed forces from body places differenced over 1e-6
-            // (`body_jacobian`), the dual gantry's bridge yaws. There the belt's own share is what is checked.
-            let (with, without) = (off(elastic, 0.1), off(elastic, 0.0));
-            let belt = if without.abs() < 1e-7 { with } else { with - without };
-            println!("{name}, elastic {elastic}: off {with:.2e}, without the belt's mass {without:.2e}");
-            assert!(belt.abs() < 1e-7, "{name}, elastic {elastic}: off {with}, without the belt's mass {without}");        }
+            let with = off(elastic, 0.1);
+            println!("{name}, elastic {elastic}: off {with:.2e}");
+            assert!(with.abs() < 2e-8, "{name}, elastic {elastic}: off {with}");
+        }
         let acc: Vec<f64> = (0..pose.len()).map(|i| 3.0 - 2.0 * i as f64).collect();
         let reached = |mu: f64| {
             let rigid = lossless(&["effects.belt_stretch = false", &format!("belt.mass_kg_m = {mu}")]);

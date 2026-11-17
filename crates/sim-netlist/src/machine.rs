@@ -431,9 +431,13 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 /// `v` turned by `angle` about the unit axis `u` (Rodrigues): v cos + (u x v) sin + u (u . v) (1 - cos).
 fn rotate(u: [f64; 3], angle: f64, v: [f64; 3]) -> [f64; 3] {
     let (s, c) = angle.sin_cos();
-    let cross = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    let cross = cross(u, v);
     let along = dot(&u, &v) * (1.0 - c);
     [0, 1, 2].map(|k| v[k] * c + cross[k] * s + u[k] * along)
+}
+
+fn cross(u: [f64; 3], v: [f64; 3]) -> [f64; 3] {
+    [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
 }
 
 /// The eigenvalues and eigenvectors (columns) of a symmetric matrix, by cyclic Jacobi rotations.
@@ -1250,20 +1254,43 @@ impl ConfigMachine {
         }
         v
     }
-    /// d body_point / d q_i, per coordinate, by central differences (the place is smooth and cheap to work out).
+    /// d body_point / d q_i, per coordinate, exactly: an axis's direction, the yaw's lever and the yaw on the lever's
+    /// axis, and for rotary r the outer rotaries turning turn_r x (r and the inner ones turning the offset).
     fn body_jacobian(&self, b: &Body, q: &[f64]) -> Vec<[f64; 3]> {
-        let h = 1e-6;
-        let mut at = q.to_vec();
-        (0..self.n())
-            .map(|i| {
-                at[i] = q[i] + h;
-                let ahead = self.body_point(b, &at);
-                at[i] = q[i] - h;
-                let behind = self.body_point(b, &at);
-                at[i] = q[i];
-                [0, 1, 2].map(|k| (ahead[k] - behind[k]) / (2.0 * h))
-            })
-            .collect()
+        let mut out: Vec<[f64; 3]> = (0..self.n()).map(|i| if b.axes[i] { self.dirs[i] } else { [0.0; 3] }).collect();
+        let mut add = |i: usize, dir: [f64; 3], t: f64| (0..3).for_each(|k| out[i][k] += dir[k] * t);
+        if let Some(g) = self.gantry.as_ref().filter(|g| b.axes[g.axis]) {
+            let across = g.across.filter(|&a| b.axes[a]);
+            add(g.coord, self.dirs[g.axis], across.map_or(0.0, |a| q[a] + g.shift));
+            if let Some(a) = across {
+                add(a, self.dirs[g.axis], q[g.coord]);
+            }
+        }
+        for (p, &r) in b.rotaries.iter().enumerate() {
+            let inner = self.turned_by(&b.rotaries[p..], q, b.offset);
+            add(r, self.turned_by(&b.rotaries[..p], q, cross(self.turn[r], inner)), 1.0);
+        }
+        out
+    }
+    /// The second derivative of body_point along the speeds v (dJ/dt v), exactly: 2 v_across v_yaw along the bridge's
+    /// axis, and through each rotary R (speed w about u) of what it turns, x'' -> R x'' + 2 w u x (R x') + w^2 u x (u x R x).
+    fn body_curve(&self, b: &Body, q: &[f64], v: &[f64]) -> [f64; 3] {
+        let (mut x, mut d1, mut d2) = (b.offset, [0.0; 3], [0.0; 3]);
+        for &r in b.rotaries.iter().rev() {
+            let (u, w) = (self.turn[r], v[r]);
+            let (y, y1) = (rotate(u, q[r], x), rotate(u, q[r], d1));
+            let (uy, uy1, uuy) = (cross(u, y), cross(u, y1), cross(u, cross(u, y)));
+            d2 = rotate(u, q[r], d2);
+            (0..3).for_each(|k| d2[k] += 2.0 * w * uy1[k] + w * w * uuy[k]);
+            d1 = [0, 1, 2].map(|k| y1[k] + w * uy[k]);
+            x = y;
+        }
+        if let Some(g) = self.gantry.as_ref().filter(|g| b.axes[g.axis])
+            && let Some(a) = g.across.filter(|&a| b.axes[a])
+        {
+            (0..3).for_each(|k| d2[k] += 2.0 * v[a] * v[g.coord] * self.dirs[g.axis][k]);
+        }
+        d2
     }
     /// The bodies whose place is not a sum of the axes' travels, as m J^T J at q (J = `body_jacobian`).
     fn general_mass(&self, q: &[f64], out: &mut [Vec<f64>]) {
@@ -1277,21 +1304,12 @@ impl ConfigMachine {
         }
     }
     /// What the speeds v ask of those bodies beside their mass matrix, as forces on the coordinates:
-    /// -m J^T (dJ/dt v), the centripetal and Coriolis forces, with dJ/dt v the second derivative of the body's place
-    /// along v (by differences over 0.1 mm of travel). With the mass matrix m J^T J these are Lagrange's equations, so
-    /// the energy keeps.
+    /// -m J^T (dJ/dt v), the centripetal and Coriolis forces (`body_curve`). With the mass matrix m J^T J these are
+    /// Lagrange's equations, so the energy keeps.
     fn inertial(&self, q: &[f64], v: &[f64]) -> Vec<f64> {
         let mut out = vec![0.0; self.n()];
-        let speed = v.iter().map(|x| x * x).sum::<f64>().sqrt();
-        if speed == 0.0 {
-            return out;
-        }
-        let h = 1e-4 / speed;
-        let shifted = |t: f64| -> Vec<f64> { q.iter().zip(v).map(|(q, v)| q + t * v).collect() };
-        let (ahead, behind) = (shifted(h), shifted(-h));
         for b in self.bodies.iter().filter(|b| b.general) {
-            let (p, a, z) = (self.body_point(b, q), self.body_point(b, &ahead), self.body_point(b, &behind));
-            let curve = [0, 1, 2].map(|k| (a[k] - 2.0 * p[k] + z[k]) / (h * h));
+            let curve = self.body_curve(b, q, v);
             let (j, m) = (self.body_jacobian(b, q), self.body_mass(b));
             for (i, f) in out.iter_mut().enumerate() {
                 *f -= m * (0..3).map(|k| j[i][k] * curve[k]).sum::<f64>();
