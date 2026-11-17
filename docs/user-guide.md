@@ -779,39 +779,39 @@ The tool is the platform's centre, x, y and z in metres, z up from the plane of 
 
 ```text
 $ sim-cli analyze delta-d3
-Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.009 K
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.007 K
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,...,rms_current_a,winding_rise_k,...
-1,0.720000,7.118146,2.512099,118.3922,0.4748,0.5461,,,2.3767,23.44,...
-2,0.720000,4.039190,1.521617,64.8553,0.2697,0.3308,,,1.4208,7.91,...
-3,0.720000,4.039190,1.521617,64.8553,0.2697,0.3308,,,1.4208,7.91,...
+1,0.720000,7.054946,2.507657,118.1266,0.4706,0.5451,,,2.3722,20.97,...
+2,0.720000,4.032147,1.521630,64.6741,0.2695,0.3308,,,1.4207,7.22,...
+3,0.720000,4.032147,1.521630,64.6741,0.2695,0.3308,,,1.4207,7.22,...
 ```
 
 The cycle lies along x, so arm 1 (pointing along +x) works hardest, and arms 2 and 3 alike. Its 0.720 s are the S-curves by hand (traverse d/v + v/a + a/j = 0.1817 s, a 25 mm lift 4 (d / 2j)^(1/3) = 0.0684 s, 0.7069 s with the dwells) on the controller's 1 ms profile cycle (`the_adept_cycle_takes_the_hand_calculated_time`). The makers' figures for the same cycle are shorter (ABB IRB 360-3/1130: 0.40 s at 1 kg, 0.52 s at 3 kg): they round the corners instead of stopping, and run faster than the 3 m/s and 50 m/s² this config allows each axis. `sim-cli optimise delta-d3` rounds the corners through via points (splines on three axes) and raises the limits as far as every check allows.
 
 ```text
 $ sim-cli verdicts delta-d3
-motor-peak,1,0.4748,1.000,ok
-motor-thermal,1,23.44,100.0,ok
-drive-current,1,2.377,5.000,ok
-gearbox-continuous,1,62.91,347.0,ok
-gearbox-peak,1,126.3,278.0,ok
-gearbox-life,1,16719950,20000,ok
+motor-peak,1,0.4706,1.000,ok
+motor-thermal,1,20.97,100.0,ok
+drive-current,1,2.372,5.000,ok
+gearbox-continuous,1,62.70,347.0,ok
+gearbox-peak,1,126.6,278.0,ok
+gearbox-life,1,16938396,20000,ok
 ...
-settling,,0.0002984,0.0005000,ok
+settling,,0.0001793,0.0005000,ok
 singularity,,2.072,5.000,ok
-thermal-warm-start,,0.009331,0.1000,ok
+thermal-warm-start,,0.007320,0.1000,ok
 ```
 
-Every check passes, with `--bands` too, at both bounds of every estimate (peak gearbox torque 117 to 135 N m, settling 0.25 to 0.34 mm); the search for the worst corner of all the estimates at once (`--bands --worst`) fails settling (0.54 mm). What to read from them:
+Every check passes, with `--bands` too, at both bounds of every estimate (peak gearbox torque 118 to 136 N m, settling 0.13 to 0.22 mm); the search for the worst corner of all the estimates at once (`--bands --worst`) fails settling (0.54 mm). What to read from them:
 
-- **Gearbox.** The arm's gearbox, Siemens' SP100 precision planetary (the SP+ 100 of WITTENSTEIN alpha), carries up to 126 N m of its 278 N m; the cubic mean, 63 N m, is what its 347 N m rating is for, and below it the gearing takes no damage. Its planet bearings last 16.7 million h. Its no-load torque (0.93 N m at the motor at 3000 r/min and 20 °C), the motor's breakaway and the flanks' lost motion with a hysteresis of half an arcmin are on (`effects.gearbox_drag`, `motor_stiction`, `gearbox_lost_motion`, see the [model reference](model-reference.md#gearbox)); the drag's heat warms the gearbox. Until 14 November 2026 the config had the economy NRB080 (192 N m maximum, 120 N m rated): its peaks above 120 N m wore its gearing to about 11600 h of the 20000 h required.
-- **Settling: a sizing finding, settled by the gearbox.** It is judged against 0.5 mm, an estimate of the positioning accuracy of the class (Festo EXPT: ±0.5 mm), not the 0.1 mm repeatability the makers state. The gearboxes' twist and backlash under the platform's weight leave the tool off where the motors' encoders put it, the same every pass, which repeatability does not see. With the economy NRB080's 9 arcmin the cycle failed: 0.64 mm at pick and place at rest, 0.68 mm in the dwell, up to 2.09 mm at the rim's lower edge; every economy gearbox of this size and ratio (NRB, NRK, NLC) has 7 to 9 arcmin. So the config takes the precision SP100 with the reduced-backlash option: at most 3 arcmin (a typical 2.25 taken, bounds 1.5 to 3) and three times as stiff (31 N m/arcmin). Siemens fits it to 1FT2 motors only, so the motor is the 1FT2105-4AF, whose torque, current and inertia in D 32 are the 1FK2105-4AF's Autonox names. 0.30 mm in the dwell, up to 0.66 mm at the rim's lower edge at rest.
+- **Gearbox.** The arm's gearbox, Siemens' SP100 precision planetary (the SP+ 100 of WITTENSTEIN alpha), carries up to 127 N m of its 278 N m; the cubic mean, 63 N m, is what its 347 N m rating is for, and below it the gearing takes no damage. Its planet bearings last 16.9 million h. Its no-load torque (0.93 N m at the motor at 3000 r/min and 20 °C), the motor's breakaway and the flanks' lost motion with a hysteresis of half an arcmin are on (`effects.gearbox_drag`, `motor_stiction`, `gearbox_lost_motion`, see the [model reference](model-reference.md#gearbox)); the drag's heat warms the gearbox. Until 14 November 2026 the config had the economy NRB080 (192 N m maximum, 120 N m rated): its peaks above 120 N m wore its gearing to about 11600 h of the 20000 h required.
+- **Settling: a sizing finding, settled by the gearbox.** It is judged against 0.5 mm, an estimate of the positioning accuracy of the class (Festo EXPT: ±0.5 mm), not the 0.1 mm repeatability the makers state. The gearboxes' twist and backlash under the platform's weight leave the tool off where the motors' encoders put it, the same every pass, which repeatability does not see. With the economy NRB080's 9 arcmin the cycle failed: 0.64 mm at pick and place at rest, 0.68 mm in the dwell, up to 2.09 mm at the rim's lower edge; every economy gearbox of this size and ratio (NRB, NRK, NLC) has 7 to 9 arcmin. So the config takes the precision SP100 with the reduced-backlash option: at most 3 arcmin (a typical 2.25 taken, bounds 1.5 to 3) and three times as stiff (31 N m/arcmin). Siemens fits it to 1FT2 motors only, so the motor is the 1FT2105-4AF, whose torque, current and inertia in D 32 are the 1FK2105-4AF's Autonox names. 0.18 mm in the dwell, up to 0.66 mm at the rim's lower edge at rest.
 - **Singularity**: the highest condition number of the Jacobian in the cycle, against `ratings.max_condition_number` (5). Near a singularity a little motor angle moves the platform a lot and the motor torques for a force grow without bound; the working range has up to 3.6, the cycle 2.07.
 - **No belt, pulley or guide checks**: the delta has none.
 
 To size for another payload, change `mass.payload_kg` (and `ratings` where the parts change); for another motor or gearbox, name them as on the other machines (`--motor`, `--gearbox`, `sim-cli search delta-d3`). Paths on three axes are written `line,x,y,z`, `spline,x,y,z` and `arc,x,y,z,cx,cy,cz,cw` (see [run a path](#run-a-path-and-read-path-error)).
 
-The forearms are rigid rods with their mass and rotational inertia, their spin about their own axes included (`effects.forearm_inertia`; off, the lumped model of Codourey and Olsson, which put 2.7 % more RMS torque on motor 1 in this cycle with the NRB080: 2.645 against 2.576 N m, peak 7.791 against 7.643 N m; the spin alone changes the peak by 1e-6 N m). With `effects.link_elasticity` (off by default; its stiffnesses are estimates) the upper arms bend, in the plane they turn in and out of it, and the platform rings after a move: the cycle's tracking error grew from 4.0 to 5.3 mm and the dwell error from 0.68 to 0.73 mm (with the NRB080). The lowest mode with the motors held (the gearboxes' springs, with the switch the arms' bending too) is what `effects.shaper_follows_pose` sets the input shaper to: at the centre with the arms level the platform's sideways mode, 49 Hz on the SP100s alone, 30 Hz with bending arms (the forearms lumped; 28 and 23 Hz with the NRB080's third of the stiffness). The forearm rods and the upper arms are collision bodies: a forearm or an arm that runs into an obstacle is a crash.
+The forearms are rigid rods with their mass and rotational inertia, their spin about their own axes included (`effects.forearm_inertia`; off, the lumped model of Codourey and Olsson, which put 2.7 % more RMS torque on motor 1 in this cycle with the NRB080: 2.645 against 2.576 N m, peak 7.791 against 7.643 N m; the spin alone changes the peak by 1e-6 N m). With `effects.link_elasticity` (off by default; its stiffnesses are estimates) the upper arms bend, in the plane they turn in and out of it, and the platform rings after a move: the cycle's tracking error grew from 4.0 to 5.3 mm and the dwell error from 0.68 to 0.73 mm (with the NRB080). The lowest mode with the motors held (the gearboxes' springs, with the switch the arms' bending too) is what `effects.shaper_follows_pose` sets the input shaper to: at the centre with the arms level the platform's sideways mode, 51 Hz on the SP100s alone, 32 Hz with bending arms (the forearms lumped; 28 and 23 Hz with the NRB080's third of the stiffness). The forearm rods and the upper arms are collision bodies: a forearm or an arm that runs into an obstacle is a crash.
 
 What the delta does not have: elastic rods and ball joints, the arms' bending out of the plane they turn in, the ball joints' cone limits (the stops and the working range stand in), a fourth axis, a transition curve where two arcs meet in different planes. Trace replay and fit take it since 13 November, the fit in its motors' coordinates (see [Replay a drive trace and fit parameters](#replay-a-drive-trace-and-fit-parameters)). Held by constant motor torques it is unstable in its vertical mode in the upper part of its range; the drives' position loops hold it (see the [model reference](model-reference.md#delta-picker-d3)).
 
@@ -821,16 +821,16 @@ What the delta does not have: elastic rods and ball joints, the arms' bending ou
 
 ```text
 $ sim-cli verdicts delta-d2
-motor-peak,1,0.5555,1.000,ok
-gearbox-continuous,1,67.58,347.0,ok
-gearbox-peak,1,147.9,278.0,ok
+motor-peak,1,0.5599,1.000,ok
+gearbox-continuous,1,67.45,347.0,ok
+gearbox-peak,1,150.1,278.0,ok
 ...
-settling,,0.0003769,0.0005000,ok
+settling,,0.0002105,0.0005000,ok
 singularity,,1.135,5.000,ok
-thermal-warm-start,,0.02977,0.1000,ok
+thermal-warm-start,,0.02322,0.1000,ok
 ```
 
-Every check passes, with `--bands` too (settling 0.33 to 0.42 mm, gearbox peak up to 155 N m); the search for the worst corner of all the estimates at once (`--bands --worst`) fails settling (0.74 mm). Two arms carry the 5 kg where the D3's three carry 3 kg, so the gearbox works nearer its rating: the lines planned within the axis limits take it to 233 N m of the SP100's 278 N m (the NRB080 the config had until 14 November 2026 was taken to 247 N m of its 192 N m). Its backlash, the SP100's typical 2.25 arcmin with reduced backlash, was an estimate of 1 arcmin before: with the NRB080's 9 arcmin the cycle failed settling, 0.85 mm, for the D3's reason: both arms always hold the plate up and rest at one side of their backlash. The model keeps the plate level, as the real machine's parallelograms do (see the [model reference](model-reference.md#delta-picker-d2)).
+Every check passes, with `--bands` too (settling 0.16 to 0.26 mm, gearbox peak up to 157 N m); the search for the worst corner of all the estimates at once (`--bands --worst`) fails settling (0.74 mm). Two arms carry the 5 kg where the D3's three carry 3 kg, so the gearbox works nearer its rating: the lines planned within the axis limits take it to 233 N m of the SP100's 278 N m (the NRB080 the config had until 14 November 2026 was taken to 247 N m of its 192 N m). Its backlash, the SP100's typical 2.25 arcmin with reduced backlash, was an estimate of 1 arcmin before: with the NRB080's 9 arcmin the cycle failed settling, 0.85 mm, for the D3's reason: both arms always hold the plate up and rest at one side of their backlash. The model keeps the plate level, as the real machine's parallelograms do (see the [model reference](model-reference.md#delta-picker-d2)).
 
 ## Size a linear delta
 
@@ -840,55 +840,55 @@ The tool is the plate's centre, x, y and z in metres, z up from the carriages' u
 
 ```text
 $ sim-cli analyze delta-linear
-Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.030 K
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.016 K
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,...
-1,0.720000,4.775703,2.025348,106.1601,0.4429,0.6751,143.23,527.74,1.6426,35.34,...
-2,0.720000,3.925325,1.367014,58.7263,0.3640,0.4557,143.23,527.74,1.1045,14.86,...
-3,0.720000,3.925325,1.367014,58.7263,0.3640,0.4557,143.23,527.74,1.1045,14.86,...
+1,0.720000,4.912547,2.036777,106.1231,0.4562,0.6789,149.52,536.27,1.6547,27.26,...
+2,0.720000,3.944539,1.368100,58.6634,0.3670,0.4560,149.52,536.27,1.1071,11.63,...
+3,0.720000,3.944840,1.368100,58.6631,0.3670,0.4560,149.52,536.27,1.1071,11.63,...
 ```
 
 The cycle lies along x, towards column 1 and away from it, so column 1 works hardest. Its 0.720 s are the D3's: the same cycle and axis limits. Festo times the EXPT-95 at up to 150 of these cycles a minute at light loads (0.4 s each) with rounded corners and up to 7 m/s and 110 m/s²; `sim-cli optimise delta-linear` rounds the corners and raises the limits as far as every check allows.
 
 ```text
 $ sim-cli verdicts delta-linear
-motor-peak,1,0.4424,1.000,ok
-motor-thermal,1,35.34,100.0,ok
-drive-current,1,1.643,3.000,ok
-pulley-torque,1,3.978,5.000,ok
-pulley-bearing-life,1,23536,20000,ok
-belt-tooth-load,1,0.7941,1.000,ok
+motor-peak,1,0.4562,1.000,ok
+motor-thermal,1,27.26,100.0,ok
+drive-current,1,1.655,3.000,ok
+pulley-torque,1,4.135,5.000,ok
+gearbox-radial-load,1,789.8,1500,ok
+pulley-bearing-life,1,23462,20000,ok
+belt-tooth-load,1,0.8254,1.000,ok
 ...
-settling,,0.00007418,0.0005000,ok
-belt-tension,,527.5,1000,ok
-belt-slack,,144.7,0,ok
-guide-load,1,116.1,3050,ok
-guide-life,1,468944829,20000,ok
+settling,,0.00007352,0.0005000,ok
+belt-tension,,536.3,1000,ok
+belt-slack,,149.5,0,ok
+guide-load,1,116.9,3050,ok
+guide-life,1,466602127,20000,ok
 ...
 singularity,,3.278,5.000,ok
-gearbox-radial-load,,782.8,1500,ok
-thermal-warm-start,,0.02983,0.1000,ok
+thermal-warm-start,,0.01605,0.1000,ok
 ```
 
-Every check passes. With `--bands` two fail at a bound of an estimate: the pulley bearing's life (5084 h on column 1 with C at its low bound of 3000 N; Festo publishes no bearing for the EGC's drive shaft) and the belt's teeth (1.11 with a service factor of 1.4 on Festo's 350 N). What to read from them:
+Every check passes. With `--bands` two fail at a bound of an estimate: the pulley bearing's life (5068 h on column 1 with C at its low bound of 3000 N; Festo publishes no bearing for the EGC's drive shaft) and the belt's teeth (1.16 with a service factor of 1.4 on Festo's 350 N). What to read from them:
 
-- **Motor.** A Compact motor, for its rotor: the High Dynamic 1FK2104-5AF has the torque (its 7.5 N m against 4.8 N m needed), but 0.65 kg cm² of rotor against about 6 kg cm² of carriage, plate and pulley at its shaft: its velocity loop rang near 450 Hz above 0.1 N m s/rad and the cycle settled to 2.5 mm, not 0.5 mm. The 1FK2205-2AF's 4.0 kg cm² take a gain of 0.25 with at least 38° of phase margin over the bounds, and an integral time of 0.012 s (0.01 s left 34°), short so that the integrator pushes the carriages through their guides' friction soon after a move.
-- **Belts.** Each column's belt carries the carriage's weight and its share of the plate's (22 N at the centre) and what accelerating them takes: 143 to 528 N in its two sections, against the pretension of 300 N.
+- **Motor.** A Compact motor, for its rotor: the High Dynamic 1FK2104-5AF has the torque (its 7.5 N m against 4.9 N m needed), but 0.65 kg cm² of rotor against about 6 kg cm² of carriage, plate and pulley at its shaft: its velocity loop rang near 450 Hz above 0.1 N m s/rad and the cycle settled to 2.5 mm, not 0.5 mm. The 1FK2205-2AF's 4.0 kg cm² take a gain of 0.25 with at least 38° of phase margin over the bounds, and an integral time of 0.012 s (0.01 s left 34°), short so that the integrator pushes the carriages through their guides' friction soon after a move.
+- **Belts.** Each column's belt carries the carriage's weight and its share of the plate's (22 N at the centre) and what accelerating them takes: 150 to 536 N in its two sections, against the pretension of 300 N.
 - **Singularity.** The condition number is 3.15 already at the centre: a metre of carriage moves the plate further sideways than up. The range has up to 3.98, at its bottom rim opposite a column.
-- **Guides, pulley bearings, belt teeth.** The EGC-80's guide carries at most 116 N across column 1 (3050 N allowed for Festo's 5000 km): it holds the plate's weight at rest (3.4 N at the centre) and, through the rods, what accelerating the plate sideways at 50 m/s² takes. Its life is far beyond the 20000 h. The pulley shaft's bearing carries both belt sections' pull, up to 783 N, and lasts 23536 h on column 1 with an estimated C of 5000 N. The belt's teeth are at 0.79 of what gives Festo's 350 N of feed force, as the pulley torque is at 3.978 of 5 N m: Festo gives one figure for both. No gearbox checks: the axes have none.
+- **Guides, pulley bearings, belt teeth.** The EGC-80's guide carries at most 117 N across column 1 (3050 N allowed for Festo's 5000 km): it holds the plate's weight at rest (3.4 N at the centre) and, through the rods, what accelerating the plate sideways at 50 m/s² takes. Its life is far beyond the 20000 h. The pulley shaft's bearing carries both belt sections' pull, up to 790 N, and lasts 23462 h on column 1 with an estimated C of 5000 N. The belt's teeth are at 0.83 of what gives Festo's 350 N of feed force, as the pulley torque is at 4.135 of 5 N m: Festo gives one figure for both. No gearbox checks: the axes have none.
 
 **Inclined columns.** `geometry.column_incline_deg` leans the columns, positive with their tops towards the axis; the carriages then travel along them (their stroke and upper stop count along the column), the belt holds the carriage's weight times the cosine and the guide the rest. The shipped machine stands upright. The default range and cycle suit an outward lean and small inward ones; at +20° the cycle's corner (−0.1525, 0, −1.13) is refused, column 1's rod standing 60° from its column:
 
 ```text
 $ sim-cli verdicts delta-linear --set geometry.column_incline_deg=-20
-pulley-torque,1,4.611,5.000,ok
-belt-tooth-load,1,0.9204,1.000,ok
-guide-load,1,31.84,3050,ok
+pulley-torque,1,4.653,5.000,ok
+belt-tooth-load,1,0.9289,1.000,ok
+settling,,0.0001084,0.0005000,ok
+guide-load,1,31.87,3050,ok
 singularity,,3.716,5.000,ok
-settling,,0.0001107,0.0005000,ok
 ...
 ```
 
-Leaning out, the columns run nearly along the rods: the guides carry less (32 N against 116 N upright), the condition number rises (3.72 against 3.28) and so do the motors' torques. Leaning in by 10° every check passes (guide 149 N); by 20° with `workspace.max_rod_angle_deg=65` too, but the pulley bearing of column 1 (16202 h against 20000 h; the guide carries 167 N).
+Leaning out, the columns run nearly along the rods: the guides carry less (32 N against 117 N upright), the condition number rises (3.72 against 3.28) and so do the motors' torques. Leaning in by 10° every check passes (guide 149 N); by 20° with `workspace.max_rod_angle_deg=65` too, but the pulley bearing of column 1 (16131 h against 20000 h; the guide carries 167 N).
 
 What the linear delta does not have: the rods' own rotational inertia, elastic frame, rods and joints, a fourth axis, the guides' moments, and warming belts and pulleys (its guides warm with `effects.part_heating`: 9.1 K on the cycle). Trace replay and fit take it, the fit in its motors' coordinates as on the D3. See the [model reference](model-reference.md#linear-delta).
 
@@ -903,17 +903,18 @@ payload. The tool pose is (x, y, z, c); paths are written `line,x,y,z,c`. The cy
 so every axis moves on each traverse: 0.906 s.
 
     $ sim-cli verdicts parallel-scara
-    motor-peak,1,0.5381,1.000,ok
-    gearbox-peak,1,144.8,192.0,ok
-    motor-peak,3,0.4530,1.000,ok
+    motor-peak,1,0.4959,1.000,ok
+    gearbox-peak,1,137.4,278.0,ok
+    motor-peak,3,0.4544,1.000,ok
     ...
-    settling,,0.0001873,0.0005000,ok
-    screw-speed,3,1535,5160,ok
+    settling,,0.0003025,0.0005000,ok
+    screw-speed,3,1536,5160,ok
     singularity,,1.135,5.000,ok
 
 Every check passes, with `--bands` too. The plate carries 12.8 kg (the two units, the carriage and the payload) against
-the D2's 6.4 kg, so the axes accelerate at 30 m/s² instead of 50: at 50 the arms' gearboxes would see 235 N m of their
-192 N m. Switch an axis off with `--set z_axis.enabled=false` or `--set tool_turn.enabled=false`, and give the cycle
+the D2's 6.4 kg, so the axes accelerate at 30 m/s² instead of 50. Their gearboxes are the D2's SP100 now, and at 50
+(`--set axis.x.max_acceleration_m_s2=50 --set axis.y.max_acceleration_m_s2=50`) every check still passes: the arms'
+gearboxes at 225 N m of their 278 N m, motor 1 at 0.83 of its peak. Switch an axis off with `--set z_axis.enabled=false` or `--set tool_turn.enabled=false`, and give the cycle
 targets and `start.pose` with as many values, e.g.
 
     $ sim-cli verdicts parallel-scara --set tool_turn.enabled=false --set 'start.pose=[0.1525,-0.5,0.075]' \
@@ -931,21 +932,21 @@ chamber while rising, extend and settle, lower the wafer onto it, draw back, tur
 next wafer and settle, lift it, draw it back to r = 0.05 m: 7.76 s.
 
     $ sim-cli verdicts wafer-handler
-    motor-peak,1,0.06734,1.000,ok
+    motor-peak,1,0.06877,1.000,ok
     ...
-    settling,,0.00003237,0.0001500,ok
-    settling-angle,,0.0001081,0.0002000,ok
+    settling,,0.00003343,0.0001500,ok
+    settling-angle,,0.0001133,0.0002000,ok
     wafer-slip,,1.831,2.452,ok
-    effector-direction,,0.00001265,0.0005000,ok
-    elbow-band-slack,,0.06468,0.5000,ok
-    wrist-band-slack,,0.01171,0.5000,ok
+    effector-direction,,0.00001268,0.0005000,ok
+    elbow-band-slack,,0.06467,0.5000,ok
+    wrist-band-slack,,0.01172,0.5000,ok
     singularity,,1.226,4.000,ok
 
 The motors are lightly loaded: what limits the cycle is the wafer on its friction pads (`wafer.hold = "pads"`, μ 0.3),
 `wafer-slip`, its in-plane acceleration against μ g over the safety factor 1.2. Turning fast pushes the wafer outwards
 (r θ̇²) and motor 2 holds the arm against it; extending during a turn adds the Coriolis acceleration 2 ṙ θ̇. So the turn
 happens with the wafer drawn back near the column's axis, and faster limits fail: `--set
-axis.r.max_acceleration_m_s2=3 --set axis.r.max_jerk_m_s3=30` slips the wafer (3 m/s² along its line). Vacuum
+axis.r.max_acceleration_m_s2=3 --set axis.r.max_jerk_m_s3=30` slips the wafer (`wafer-slip` 3.40 m/s² against 2.45). Vacuum
 pads (`wafer.hold = "vacuum"`) or an edge grip (`"edge"`) hold more. The bands stretch under the arm's acceleration
 (`effects.band_elasticity`): the forearm and the effector lag and ring on them near 20 Hz, the effector turns out of its
 radial line (`effector.direction_error`, judged at the stations by `effector-direction`), and each span's swing is
@@ -959,18 +960,19 @@ the [mechanisms](mechanisms.md#banded-r-theta-z-arm-wafer-handler) and the
 
 ```text
 $ sim-cli verdicts delta-d4
-motor-peak,1,0.5630,1.000,ok
-gearbox-peak,1,149.0,192.0,ok
+motor-peak,1,0.5534,1.000,ok
+gearbox-peak,1,146.8,192.0,ok
 ...
-motor-peak,4,0.1103,1.000,ok
-gearbox-peak,4,2.222,29.00,ok
+motor-peak,4,0.1086,1.000,ok
+gearbox-peak,4,2.223,29.00,ok
 ...
-settling,,0.0003707,0.0005000,ok
+settling,,0.0003088,0.0005000,ok
+settling-angle,,0.0001866,0.005000,ok
 singularity,,2.072,5.000,ok
-thermal-warm-start,,0.02011,0.1000,ok
+thermal-warm-start,,0.01540,0.1000,ok
 ```
 
-Every check passes. Motor 1 carries a little more than on the D3 with the same NRB080 gearbox the D4 keeps (peak 0.563 against 0.510 of its limit): the shaft's 0.7 kg at the platform and the telescope's friction. The fourth motor has its own motor, gearbox, drive and ratings (`[motor.4]`, `[gearbox.4]`, `[drive.4]`, `[ratings.4]` over the shared tables): a 1FK2104-4AF at 11 % of its peak, its gearbox judged by the common `gearbox-*` checks against its own 18 and 29 N m. The still smaller 1FK2103-2AH has the torque and passes the cycle, but its rotor is too light for the speed loop behind the soft shaft: tuned to settle the tool, its loop kept 24° of phase margin at the payload inertia's high bound. `sim-cli search delta-d4 --motor-id 4` sizes it alone. The gearboxes' backlash is an estimate of 3 arcmin on the arms and 1 arcmin on the tool (reduced-backlash precision planetaries, as on the D2): with the catalogue's 9 and 10 arcmin (`--set gearbox.backlash_rad=2.618e-3 --set gearbox.4.backlash_rad=2.909e-3`) settling fails, 1.39 mm, 0.6 mm of it the arms' sag and 1 mrad the tool resting in its backlash: settling counts the turn's error in rad with the position's in m, as on the SCARA. With `--bands` every check passes too (settling at most 0.43 mm). A path with a turn is written `line,x,y,z,c`; arcs and splines take three axes and are refused on the D4. `sim-cli modes delta-d4` lists the tool's torsion (41 Hz with the payload: the telescopic shaft twists) beside the arms' modes.
+Every check passes. Motor 1 carries more than on the D3 (peak 0.553 against 0.471 of its limit): the shaft's 0.7 kg at the platform and the telescope's friction, and the D4 keeps the NRB080 gearbox the D3 had until 14 November 2026. The fourth motor has its own motor, gearbox, drive and ratings (`[motor.4]`, `[gearbox.4]`, `[drive.4]`, `[ratings.4]` over the shared tables): a 1FK2104-4AF at 11 % of its peak, its gearbox judged by the common `gearbox-*` checks against its own 18 and 29 N m. The still smaller 1FK2103-2AH has the torque and passes the cycle, but its rotor is too light for the speed loop behind the soft shaft: tuned to settle the tool, its loop kept 24° of phase margin at the payload inertia's high bound. `sim-cli search delta-d4 --motor-id 4` sizes it alone. The gearboxes' backlash is an estimate of 3 arcmin on the arms and 1 arcmin on the tool (reduced-backlash precision planetaries, as on the D2): with the catalogue's 9 and 10 arcmin (`--set gearbox.backlash_rad=2.618e-3 --set gearbox.4.backlash_rad=2.909e-3`) settling fails, 0.69 mm, the arms' sag in their backlash; the tool rests 1.09 mrad off in its own, which `settling-angle` judges apart, against 5 mrad. With `--bands` every check passes too (settling at most 0.37 mm). A path with a turn is written `line,x,y,z,c`; arcs and splines take three axes and are refused on the D4. `sim-cli modes delta-d4` lists the tool's torsion (41 Hz with the payload: the telescopic shaft twists) beside the arms' modes.
 
 ### The Quattro-type delta H4
 
@@ -987,22 +989,22 @@ amplifier's twist at the tool.
 
 ```text
 $ sim-cli verdicts delta-h4
-motor-peak,1,0.5755,1.000,ok
-motor-thermal,1,48.15,100.0,ok
-gearbox-peak,1,242.5,416.0,ok
+motor-peak,1,0.5721,1.000,ok
+motor-thermal,1,33.48,100.0,ok
+gearbox-peak,1,244.8,416.0,ok
 ...
-settling,,0.004724,0.0005000,FAIL
+settling,,0.0004359,0.0005000,ok
 singularity,,2.028,5.000,ok
-thermal-warm-start,,0.01730,0.1000,ok
+thermal-warm-start,,0.009744,0.1000,ok
 ```
 
-Every check passes but `settling`, a finding of the type: the tool's turn is 30 times the plate's slide, so the arms'
-gearbox twist and backlash, which the motors' encoders do not see, and the ringing of the slide after the traverse turn
-the tool by 4.7 mrad in the dwell (counted as 4.7 mm, as every turning axis's error in rad). With the catalogue's
-9 arcmin backlash it is 9.9 mm; with 1 arcmin and an input shaper at 12 Hz
+Every check passes, `settling` narrowly, a finding of the type: the tool's turn is 30 times the plate's slide, so the
+arms' gearbox twist and backlash, which the motors' encoders do not see, and the ringing of the slide after the traverse
+turn the tool in the dwell: 0.44 mm of the 0.5 mm allowed (a turning axis's error in rad counted as mm). With the
+catalogue's 9 arcmin backlash (`--set gearbox.backlash_rad=2.618e-3`) it fails, 0.88 mm; with 1 arcmin and an input shaper at 12 Hz
 (`--set gearbox.backlash_rad=2.909e-4 --set effects.input_shaping=true --set profile.shaper_frequency_hz=12 --set profile.shaper_damping=0.1`)
-still 0.70 mm. Motor 1 (along +x, the cycle's direction) works hardest: 0.58 of its peak, 48 K winding rise; motors 2
-and 4 carry 0.26. `sim-cli modes delta-h4` lists the arms' four modes (30.5 Hz twice at the centre, 46.8 and 51.9 Hz;
+0.31 mm. Motor 1 (along +x, the cycle's direction) works hardest: 0.57 of its peak, 33 K winding rise; motors 2
+and 4 carry 0.26 and 0.27. `sim-cli modes delta-h4` lists the arms' four modes (30.5 Hz twice at the centre, 46.8 and 51.9 Hz;
 20 Hz at the rim) and the tool's turn on the amplifier (76.5 Hz with the payload).
 
 ### SCARA and six-axis arm in tool space
@@ -1017,7 +1019,7 @@ sim-cli verdicts scara --config crates/machine-joint-kit/config/scara-tool.toml
 sim-cli verdicts urdf-arm --config crates/machine-joint-kit/config/arm-tool.toml
 ```
 
-Both pass every check. The SCARA picks 100 mm down, carries the part 500 mm across at x = 0.4 m turning it by 1.5 rad, and back: 2.542 s, motor 1 at 5 % of its peak and 288 of its 314 rad/s (the arm swings fastest where the line passes nearest the base), settling 0.04 mm. The arm does the same with its flange pointing down all along (ry = π/2): 3.774 s, motor 2 at 23 % of its peak, settling 4.0 mm of the 5 the config allows: under the 6 kg payload the gears twist and the flange rests 4 mm below where the encoders put it (0.2 mm in the rigid model, `--set effects.joint_elasticity=false`). A path in tool space is written `line,x,y,z,c` (or six numbers on the arm); `--time-optimal` times it as fast as the motors allow through the inverse kinematics: the SCARA's line across takes 1.542 s instead of 1.750 s, motor 1 at 307.5 of its 314.2 rad/s. A target the arm cannot reach is refused with the reason (`The arm cannot reach the target.`), as is one too near a singularity (the SCARA's stretched arm: `workspace.max_condition_number`, 25), and a path through one. The SCARA's elbow is `kinematics.elbow` ("right" or "left"); the arm keeps the branch of `kinematics.home_joints` (shoulder, elbow and wrist as there).
+Both pass every check. The SCARA picks 100 mm down, carries the part 500 mm across at x = 0.4 m turning it by 1.5 rad, and back: 2.542 s, motor 1 at 5 % of its peak and 288 of its 615 rad/s (the arm swings fastest where the line passes nearest the base), settling 0.03 mm. The arm does the same with its flange pointing down all along (ry = π/2): 3.858 s, motor 2 at 23 % of its peak, settling 2.3 mm of the 5 the config allows and the flange's orientation 3.1 of 5 mrad (`settling-angle`): under the 6 kg payload the gears twist and the flange rests away from where the encoders put it (0.14 mm and 0.09 mrad in the rigid model, `--set effects.joint_elasticity=false`). A path in tool space is written `line,x,y,z,c` (or six numbers on the arm); `--time-optimal` times it as fast as the motors allow through the inverse kinematics: the SCARA's line across (`line,0.4,0.25,0.15,1.5` from the start pose) takes 0.750 s instead of 1.025 s, motor 1 at 549 of its 615 rad/s. A target the arm cannot reach is refused with the reason (`The arm cannot reach the target.`), as is one too near a singularity (the SCARA's stretched arm: `workspace.max_condition_number`, 25), and a path through one. The SCARA's elbow is `kinematics.elbow` ("right" or "left"); the arm keeps the branch of `kinematics.home_joints` (shoulder, elbow and wrist as there).
 
 ### Six-axis arm on a linear track
 
@@ -1034,7 +1036,7 @@ sim-cli verdicts arm-on-track --config crates/machine-joint-kit/config/arm-on-tr
 
 The default cycle picks at 0.5 m on the arm's left and places at 3.5 m on its right, the arm swinging round while the
 track travels, and back empty: 7.27 s, every check passes; the track's motor at 15 % of its peak torque and its rated
-3000 r/min, the rack's teeth at 583 of their 2400 N, the most loaded guide block at 895 N (3580 N for the set of four,
+3000 r/min, the rack's teeth at 583 of their 2400 N, the most loaded guide block at 927 N (3709 N for the set of four,
 against 320 N a block from the weight alone). In tool space the axes are the track's position beside the flange's
 x, y, z, rx, ry, rz (`kinematics.tool_axes = ["j1", "x", ...]`): seven axes for seven joints, the track given and the arm
 solved for the pose, so a line moves the track and the flange straight together.
