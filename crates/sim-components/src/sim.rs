@@ -808,7 +808,8 @@ impl Sim {
                     for (k, d) in drives.iter().enumerate() {
                         // A drive whose pulses are off after a trip: no current, no torque (`Controller::react`).
                         if d.pulses_off {
-                            stage_torque[k] = 0.0;
+                            // Only the iron's drag acts (`DriveParams::iron_drag`).
+                            stage_torque[k] = -control.drive_params_of(k).iron_drag(speed[k]);
                             dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].fill(0.0);
                             continue;
                         }

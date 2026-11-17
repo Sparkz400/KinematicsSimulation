@@ -2,7 +2,7 @@
 //! per motor. It works on any machine through the machine interface.
 
 use crate::conveyor::{Conveyor, Pass};
-use crate::drive::{Drive, DriveMode, DriveParams, WINDING_STATES, quantise, shared_dc_link};
+use crate::drive::{Drive, DriveMode, DriveParams, Motor, WINDING_STATES, quantise, shared_dc_link};
 use crate::fault::{self, Fault, Monitor, Watch};
 use crate::path::{self, Piece};
 use crate::profile::{MotionLaw, Move, Shape};
@@ -516,8 +516,15 @@ impl Controller {
                 (heat, d.resistor_rise, d.dc_voltage)
             })
             .collect();
+        // A stepper's electrical grid stays where it was across an enable (`Stepper::re_enabled`).
+        let origins: Vec<f64> = self.drives.iter().map(|d| d.phases.origin).collect();
         self.drives =
             (0..motors).map(|k| Drive::at_rest(&self.motor_params[k], self.motor_pos[k], hold[k], ff[k])).collect();
+        for (k, origin) in origins.into_iter().enumerate().take(motors) {
+            if let Motor::Stepper(s) = &self.motor_params[k].motor {
+                s.re_enabled(&mut self.drives[k], &self.motor_params[k], self.motor_pos[k], origin);
+            }
+        }
         let held = self.holding_torque(machine, at.unwrap_or(&self.set_pos));
         for (k, (drive, (heat, resistor_rise, voltage))) in self.drives.iter_mut().zip(kept).enumerate() {
             let p = &self.motor_params[k];
@@ -1296,8 +1303,8 @@ impl Controller {
                     continue;
                 }
             }
-            drive.disabled_step(p);
-            torque[k] = 0.0;
+            drive.disabled_step(p, self.motor_vel[k]);
+            torque[k] = drive.torque;
         }
         if self.params.shared_dc_link {
             shared_dc_link(&self.params, &mut self.drives);
@@ -1598,8 +1605,8 @@ impl Controller {
         machine.motor_state(state, &mut self.motor_pos, &mut self.motor_vel);
         if !self.enabled {
             for (k, (drive, torque)) in self.drives.iter_mut().zip(torque).enumerate() {
-                drive.disabled_step(&self.motor_params[k]);
-                *torque = 0.0;
+                drive.disabled_step(&self.motor_params[k], self.motor_vel[k]);
+                *torque = drive.torque;
             }
             if self.params.shared_dc_link {
                 shared_dc_link(&self.params, &mut self.drives);

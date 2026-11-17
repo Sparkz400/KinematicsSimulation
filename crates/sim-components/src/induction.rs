@@ -50,6 +50,9 @@ pub struct Induction {
     /// V/f: the boost's phase amplitude at 0 Hz, and whether the slip is compensated.
     pub boost: f64,
     pub slip_compensation: bool,
+    /// V/f slip compensation: the time constant of the filter on the estimated torque, s. `drive.slip_compensation_filter_s`;
+    /// absent, the rotor's own time constant L_r / R_r (the estimate then does not swing with the rotor).
+    pub slip_filter: f64,
     /// The rotor flux at the rated voltage and frequency, unloaded: the field-oriented drive's setpoint.
     pub rated_flux: f64,
 }
@@ -84,7 +87,13 @@ impl Induction {
             field_oriented,
             boost: PHASE_PER_LINE * cfg.non_negative("drive.vf_boost_v")?,
             slip_compensation: cfg.bool("drive.vf_slip_compensation")?,
+            slip_filter: 0.0,
             rated_flux: 0.0,
+        };
+        m.slip_filter = if cfg.get("drive.slip_compensation_filter_s").is_ok() {
+            cfg.positive("drive.slip_compensation_filter_s")?
+        } else {
+            m.rotor / m.rotor_resistance
         };
         let rs = cfg.positive("motor.resistance_ohm")?;
         m.rated_flux = magnetizing * m.rated_voltage / rs.hypot(rated_frequency * m.stator);
@@ -488,9 +497,8 @@ impl Induction {
             let air_gap =
                 1.5 * (u[0] * is[0] + u[1] * is[1]) - 1.5 * d.winding_resistance(p) * (is[0] * is[0] + is[1] * is[1]);
             let raw = if w_k.abs() > 1e-6 { self.pole_pairs * air_gap / w_k } else { 0.0 };
-            // shortcut: filtered with the rotor's time constant, so that the compensation does not swing with the
-            // rotor (unfiltered it rang at a few hertz); a converter's own filter time is a parameter of its own.
-            let share = 1.0 - (-p.current_cycle * self.rotor_resistance / self.rotor).exp();
+            // Filtered (unfiltered the compensation rang at a few hertz): first order, exactly per step.
+            let share = 1.0 - (-p.current_cycle / self.slip_filter).exp();
             d.phases.estimate += share * (raw - d.phases.estimate);
         }
     }
@@ -527,6 +535,7 @@ mod tests {
             field_oriented,
             boost: 0.0,
             slip_compensation: false,
+            slip_filter: 0.47 / 3.5,
             rated_flux: 0.0,
         };
         m.rated_flux = m.magnetizing * m.rated_voltage / rs.hypot(m.rated_frequency * m.stator);
@@ -811,6 +820,28 @@ mod tests {
             let trace = run(&p, &mut d, f64::INFINITY, speed, |_| 0.0, |_, d| d.torque_command = curve, 1.5);
             let delivered = trace.last().unwrap()[2];
             assert!((delivered / curve - 1.0).abs() < 0.01, "{speed} rad/s: {delivered} N m of {curve}");
+        }
+    }
+
+    /// The V/f slip compensation's estimate of the air-gap torque is first order with `slip_filter`, exact per step: from 0 it
+    /// reaches (1 - exp(-dt / T)) of the raw value, for the rotor's own L_r / R_r = 0.47 / 3.5 s and for a key of 1 ms.
+    #[test]
+    fn the_slip_estimate_follows_the_filter_time_of_the_key() {
+        let p = params(false, 4.5);
+        let raw = |m: &Induction, d: &Drive| {
+            let (is, _) = m.currents(&d.phases.x);
+            let air_gap = 1.5 * (d.phases.u[0] * is[0] + d.phases.u[1] * is[1])
+                - 1.5 * 4.5 * (is[0] * is[0] + is[1] * is[1]);
+            m.pole_pairs * air_gap / d.phases.frame_speed
+        };
+        for tau in [0.47 / 3.5, 1e-3] {
+            let m = Induction { slip_filter: tau, ..motor(&p).clone() };
+            let mut d = Drive::at_rest(&p, 0.0, 0.0, 0.0);
+            d.phases = Phases::default();
+            (d.phases.x, d.phases.u, d.phases.frame_speed) = ([0.3, 0.1, 0.2, 0.05], [100.0, 20.0], 100.0);
+            let wanted = (1.0 - (-p.current_cycle / tau).exp()) * raw(&m, &d);
+            m.stepped(&mut d, &p);
+            assert!((d.phases.estimate - wanted).abs() < 1e-12 * wanted.abs().max(1.0), "{} against {wanted}", d.phases.estimate);
         }
     }
 
