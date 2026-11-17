@@ -45,7 +45,9 @@ belt-span-7 = Belt span, motor B to the carriage idler
 belt-span-8 = Belt span, carriage idler up to the right clamp
 effect-z_axis_bending = Z axis bends as a cantilever from the carriage
 effect-beam_sag = X beam sags under the carriage (quasi-static)
+effect-beam_vertical_mode = X beam's first vertical mode with the carriage on it
 group-beam = X beam
+param-damping_ratio = Damping ratio of the beam's vertical mode
 param-span_m = Span between the posts [m]
 param-carriage_at_zero_m = Carriage from the left post at x = 0 [m]
 param-bending_stiffness_nm2 = Bending stiffness E I [N m²]

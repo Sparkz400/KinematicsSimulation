@@ -53,6 +53,11 @@ z_axis_bending = false
 # The X beam sags under the carriage and the Z axis, as a simple span between the posts ([beam]), and lowers the tool
 # by m g a^2 b^2 / (3 EI L); quasi-static. Off as shipped: the beam's stiffness is an [estimate].
 beam_sag = false
+# The beam's first vertical mode with the carriage on it as one more coordinate w (the beam's deflection under the
+# carriage, [beam]): its modal mass from the beam's mass per metre, its stiffness the quasi-static span's, so that it
+# rests at the beam_sag value; a Z move's acceleration and the carriage's weight riding along the beam excite it.
+# Supersedes the quasi-static beam_sag. Off as shipped: the beam's mass and damping are [estimate]s.
+beam_vertical_mode = false
 gravity = true
 payload = true
 belt_stretch = true
@@ -380,6 +385,11 @@ span_m = 1.354
 carriage_at_zero_m = 0.177
 # [estimate] an aluminium profile of about 80 x 80 mm, I = 1.2e-6 m^4, E = 70 GPa.
 bending_stiffness_nm2 = 8.4e4
+# With effects.beam_vertical_mode. [estimate] the same profile's mass per metre, about 3.5 kg/m (a light 80 x 80 mm
+# aluminium profile): the first mode's modal mass is 17/35 of the beam's mass in the middle.
+mass_kg_m = 3.5
+# [estimate] the damping ratio of the first mode, 1 %: a bolted aluminium structure (0.5 to 3 %).
+damping_ratio = 0.01
 
 # With effects.idlers: the four carriage idlers and the one at the bottom of the Z axis, all alike, turn
 # with the belt that passes them. Their inertia adds to what the belt accelerates, their bearings drag.
@@ -876,6 +886,8 @@ tool_flex.tilt_stiffness_nm_rad = [0.6e4, 2.4e4]
 tool_flex.damping_n_s_m = [40.0, 160.0]
 tool_flex.z_axis_bending_stiffness_nm2 = [0.7e4, 2.8e4]
 beam.bending_stiffness_nm2 = [4.2e4, 1.7e5]
+beam.mass_kg_m = [2.0, 6.0]
+beam.damping_ratio = [0.003, 0.03]
 idler.inertia_kgm2 = [1.0e-6, 4.0e-6]
 idler.radius_m = [0.010, 0.015]
 idler.friction_nm = [0.001, 0.004]

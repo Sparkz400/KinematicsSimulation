@@ -257,7 +257,16 @@ fn leaning_z_axis_matches_the_two_mass_hand_calculation() {
         m.derivatives(&state, &hold, &mut d);
         let (h, h_tool) = (0.3 - z, 0.7 - z);
         let k = 1.0 / (1.0 / lateral + h * h / tilt);
-        assert!((d[V + U] + u * k * (1.0 / m_z + 1.0 / m_c)).abs() < 1e-6 * u * k, "z = {z}: {} m/s2", d[V + U]);
+        // The lean's own spring k, the pendulum stiffness of the Z axis's weight and the belt runs' geometric stiffness
+        // (T / l per run: `lean_runs`) hold it back together.
+        let tensions = m.sections(&state).map(|f| f.tension);
+        let runs = m.lean_runs(z);
+        let k_lean = k + m.lean_weight_stiffness(z) + (0..3).map(|i| tensions[i] * runs[i]).sum::<f64>();
+        assert!(
+            (d[V + U] + u * k_lean * (1.0 / m_z + 1.0 / m_c)).abs() < 1e-6 * u * k_lean,
+            "z = {z}: {} m/s2",
+            d[V + U]
+        );
         let (mut pos, mut vel) = ([0.0; 2], [0.0; 2]);
         m.tool_state(&state, &mut pos, &mut vel);
         assert!(
@@ -2203,7 +2212,7 @@ fn the_belts_kinetic_energy_is_the_sum_over_its_runs() {
 /// +-0.1 and 0.2 us along the derivatives, whose error is far below that.
 #[test]
 fn the_motors_power_is_the_rate_of_the_energy_in_every_loss_free_configuration() {
-    let configs: [(&str, &[&str]); 4] = [
+    let configs: [(&str, &[&str]); 6] = [
         ("rigid", &["effects.belt_stretch = false"]),
         (
             "rigid, idlers, chain",
@@ -2218,6 +2227,19 @@ fn the_motors_power_is_the_rate_of_the_energy_in_every_loss_free_configuration()
                 "effects.belt_tooth_stiffness = true",
                 "effects.z_axis_bending = true",
                 "effects.beam_sag = true",
+            ],
+        ),
+        // The beam's vertical mode, loss-free (`lossless_config` has its damping off): w carries the carriage, the Z axis
+        // and the beam's modal mass, the weight of the carriage riding along the beam works on x through k(x).
+        ("elastic, beam mode", &["effects.beam_vertical_mode = true"]),
+        (
+            "elastic, beam mode, all",
+            &[
+                "effects.idlers = true",
+                "effects.cable_chain = true",
+                "effects.belt_tooth_stiffness = true",
+                "effects.z_axis_bending = true",
+                "effects.beam_vertical_mode = true",
             ],
         ),
     ];
@@ -2285,7 +2307,9 @@ fn the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held() {
         [18.75, 30.71, 84.59, 98.34],
         [19.98, 39.93, 83.24, 103.72],
     ];
-    for (mass_per_m, tolerance) in [(0.1, f64::INFINITY), (0.0, 0.25)] {
+    // The belt runs' geometric stiffness (T / l of the clamp's and the Z-bottom idler's sideways travel: a few per cent
+    // of the lean's spring) lifts the lean-like mode by a few Hz over the audit's figures, which had none.
+    for (mass_per_m, tolerance) in [(0.1, f64::INFINITY), (0.0, 3.0)] {
         let m = machine(
             lossless_config(),
             &["effects.gearbox_backlash = false", &format!("belt.mass_kg_m = {mass_per_m:?}")],
