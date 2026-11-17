@@ -433,8 +433,9 @@ In a machine file and on the arms, `[motor.<id>]`, `[gearbox.<id>]`, `[drive.<id
 `<id>` its own values over the shared tables, key by key; each key has to be one the shared table has, with its meaning,
 unit and mark there. `[parts.<id>]` takes `motor`, `motor_supply`, `gearbox` and `drive` (not `belt` or `axis`, which
 are the machine's). A motor with parts of its own and no `drive.<id>.velocity_kp_nm_s_rad` gets that gain retuned for
-them as `[parts]` retunes the shared one (from the shared gain, by its own inertia and rotor); one the config gives
-stays. See [machine files](machine-files.md#motors-that-differ). The portal of `machines/xyz-portal.toml`
+them as `[parts]` retunes the shared one (from the shared gain, by its own inertia and rotor; `drive.<id>.kv_1_s`
+lowered with it where its position loop needs it, see [user guide](user-guide.md#check-a-real-catalogue-machine)); one
+the config gives stays. See [machine files](machine-files.md#motors-that-differ). The portal of `machines/xyz-portal.toml`
 has them for its Z motor, the arms' configs for their wrists (`[motor.4]` to `[motor.6]` on the six-axis arm, joints 3 and 4 on the SCARA) and the palletiser for each of its joints. A config of a registered machine may give a motor its own tables though the default config has none for it (a seventh joint).
 
 ## A machine file's screws, racks, linear motors and strain wave gears

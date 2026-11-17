@@ -1929,7 +1929,8 @@ pub fn inertia_ratios(entry: &MachineEntry, cfg: &Config) -> Result<Vec<f64>, Co
 
 /// The velocity gain of `before` scaled for the parts of `after` as `with_parts` says: by the square root of the ratio
 /// of the inertia the motors turn (`inertia_seen`) times that of the rotor's (with the gearbox's), and on an elastic
-/// machine bounded by `bounded_gain`.
+/// machine bounded by `bounded_gain`; the position gain lowered where the cascade needs it (`cascade`, the largest
+/// spread any motor needs, the keys being shared).
 fn retuned(entry: &MachineEntry, before: &Config, after: &mut Config) -> Result<(), ConfigError> {
     let rotor = |cfg: &Config| {
         Ok::<f64, ConfigError>(
@@ -1950,7 +1951,61 @@ fn retuned(entry: &MachineEntry, before: &Config, after: &mut Config) -> Result<
     } else {
         bounded_gain(old * ratio.sqrt(), old, rotor_ratio, elastic)
     };
-    set(after, "drive.velocity_kp_nm_s_rad", gain)
+    set(after, "drive.velocity_kp_nm_s_rad", gain)?;
+    let (own, new) = (cascade_margins(entry, before)?, cascade_margins(entry, after)?);
+    let spread = (0..own.len()).map(|k| cascade_spread(own[k], new[k])).fold(1.0, f64::max);
+    for (key, value) in cascade(after, spread)? {
+        set(after, key, value)?;
+    }
+    Ok(())
+}
+
+/// The least position-cascade margin (`cascade_margins`) a retune leaves a motor [rule chosen from a sweep]: a quarter
+/// above the edge of stability, or the config's own margin where that is smaller. Swept on 17 November 2026 on the
+/// cases of `bounded_gain`'s comment (Kv alone lowered; Tn alone or both together settled worse at every floor): 1.0
+/// left the EXCT-30 with the 1FK2104-5AF warm-start drifts of 0.3 to 2.1 K (not periodic) under Kp x0.9 and x1.1, frame
+/// compliance or tool flex off; 1.5 took the ELZ-125 with its own motor, which passes at 1.07, to 0.175 mm settling
+/// (limit 0.1 mm); 1.25 keeps it passing (0.077 mm) and the 1FK2104-5AF calm in every variation.
+pub const CASCADE_MARGIN: f64 = 1.25;
+
+/// Per motor, the position cascade's margin from instability on a rigid inertia: ω (Tn + 1 / Kv), with ω = Kp / J the
+/// velocity loop's crossover over the inertia the motor turns (`inertia_ratios`: rotor, gearbox and load of the axis
+/// that gives the largest) and Tn, Kv, Kp the motor's own (`motor_config`). A P position loop (Kv) on a PI velocity
+/// loop (Kp, Tn) on an inertia J, torque Kp (1 + 1/(Tn s)) (Kv e - s x) with e the position error, has the
+/// characteristic polynomial s³ + ω s² + ω (1/Tn + Kv) s + ω Kv / Tn; by Routh it is stable while ω (1/Tn + Kv) >
+/// Kv / Tn, that is while this margin exceeds 1. It assumes a rigid inertia (the belt's resonance and the drive's delays
+/// left out: those `bounded_gain` holds) and takes the axis with the most inertia, so it errs low. NaN for a motor no
+/// axis moves.
+fn cascade_margins(entry: &MachineEntry, cfg: &Config) -> Result<Vec<f64>, ConfigError> {
+    let ratios = inertia_ratios(entry, cfg)?;
+    let machine = (entry.build)(cfg)?;
+    let mut out = Vec::new();
+    for (motor, ratio) in machine.motors().iter().zip(ratios) {
+        let own = motor_config(cfg, motor.id)?;
+        let inertia = own.positive("motor.rotor_inertia_kgm2")? * (1.0 + ratio);
+        let (tn, kv) = (own.positive("drive.velocity_tn_s")?, own.positive("drive.kv_1_s")?);
+        out.push(own.positive("drive.velocity_kp_nm_s_rad")? / inertia * (tn + 1.0 / kv));
+    }
+    Ok(out)
+}
+
+/// The factor the retuned margin `new` has to grow by to reach its floor: `CASCADE_MARGIN`, or the config's own margin
+/// `own` where that is smaller; 1 where it is there already (and for a motor no axis moves, NaN).
+fn cascade_spread(own: f64, new: f64) -> f64 {
+    let floor = own.min(CASCADE_MARGIN);
+    if new < floor { floor / new } else { 1.0 }
+}
+
+/// The position gain `drive.kv_1_s` that grows the cascade margin (`cascade_margins`) of `cfg` (the motor's config with
+/// its retuned gain) by `spread`: 1 / ((Tn + 1/Kv) spread - Tn), Tn as it is. Lowering Kv alone settled best: the
+/// integral, which holds the axis against friction in the dwell, keeps its speed. Empty for `spread` 1, so a part that
+/// leaves the margin at its floor or above (the config's own motor among them) leaves the key as the config has it.
+fn cascade(cfg: &Config, spread: f64) -> Result<Vec<(&'static str, f64)>, ConfigError> {
+    if spread <= 1.0 {
+        return Ok(Vec::new());
+    }
+    let (tn, kv) = (cfg.positive("drive.velocity_tn_s")?, cfg.positive("drive.kv_1_s")?);
+    Ok(vec![("drive.kv_1_s", 1.0 / ((tn + 1.0 / kv) * spread - tn))])
 }
 
 /// `retuned`'s gain `scaled` on a machine that reports a resonance (`elastic`): at most `old` times `rotor_ratio`, the
@@ -2009,6 +2064,28 @@ fn retuned(entry: &MachineEntry, before: &Config, after: &mut Config) -> Result<
 /// rotor (the bound old times the square root of `rotor_ratio`, 0.0171 for the 1FK2103-4AH) would take its phase
 /// margin on the ELZ-80 to about 37 degrees (44.3 at 0.015, 31.0 at 0.018): the allowed Kp / J_M depends on the load as
 /// well (1071 to 1720 for the same motor), which the inertias alone do not tell.
+///
+/// What those failing cases share is the position cascade: held to the rotor's crossover, a light rotor's Kp over the
+/// whole inertia falls toward 1 / (Tn + 1/Kv), the edge where the P position loop on the PI velocity loop turns
+/// unstable (`cascade_margins`). So `retuned` lowers Kv to keep that margin at `CASCADE_MARGIN` at least. Swept again on
+/// 17 November 2026 (with gravity in the guides' commanded acceleration; margin before, Kv 50 -> after, verdicts):
+///
+/// ```text
+/// case                                   margin  Kv     before                          after
+/// one-axis belt drive, ELZ-125           1.07    39.7   pass (settling 0.097 mm)        pass (0.077 mm)
+///   ELZ-125, 1FK2103-4AH                 0.51    15.7   oscillates, 3.1 N m RMS          calm 0.42 N m; settling 0.61 mm
+///   ELZ-80, 1FK2103-2AH                  0.91    32.1   settling 2.85 mm, warm start    settling 0.16 mm
+///   pulley x2, 1FK2103-4AH               0.84    28.7   settling 1.50 mm, warm start    settling 0.35 mm
+/// EXCT-30, 1FK2104-5AF                   0.73    24.1   oscillates, 5.1 N m RMS          calm 1.21 N m; settling 0.15 mm
+///   Kp x0.9 / x1.1                       0.66/0.80      5.6 N m / calm (warm start)      1.21 / 1.23 N m (x0.9: warm start 1.4 K)
+///   frame compliance / tool flex / guide friction off   calm / 5.5 / 5.6 N m       1.22 / 1.21 / 1.11 N m
+/// ```
+///
+/// Every other case of the tables above has a margin of 1.35 or more and keeps its Kv and its figures (the 1FK2204-6AF
+/// on the EXCT-30 1.98, the pulley x2 1.73, the gear ratio x0.5 1.68). The velocity loop's margins (`velocity_loop_margins`)
+/// move by at most 0.7 dB of gain margin, and the phase margins rise (ELZ-125 from 53.4 to 54.7, with the 1FK2103-4AH
+/// from 68.7 to 80.5 degrees). The settling misses that stay are motors whose Kp, held
+/// by the rotor, cannot both hold the cascade and settle within the dwell: what the verdicts are there to report.
 fn bounded_gain(scaled: f64, old: f64, rotor_ratio: f64, elastic: bool) -> f64 {
     if elastic { scaled.min(old * rotor_ratio) } else { scaled }
 }
@@ -2029,7 +2106,9 @@ fn bounded_gain(scaled: f64, old: f64, rotor_ratio: f64, elastic: bool) -> f64 {
 /// rotor alone, so the second ratio keeps its stability. The loop's crossover lies near the resonance,
 /// where neither holds alone. Scaling with the total inertia only left a rotor a quarter as heavy or
 /// lighter with several times too much gain above the resonance, and it oscillated; scaling with the
-/// rotor only makes the loop needlessly slow. On the EXCT-30 every 1FK2 runs calmly with the mean.
+/// rotor only makes the loop needlessly slow. Where the retuned gain leaves the position cascade too close to its edge
+/// (`cascade_margins` below `CASCADE_MARGIN` and below the config's own), `drive.kv_1_s` is lowered to keep it there;
+/// `drive.velocity_tn_s` stays. On the EXCT-30 every 1FK2 runs calmly so.
 pub fn with_parts(
     entry: &MachineEntry,
     cfg: &Config,
@@ -2060,7 +2139,8 @@ pub fn with_named(entry: &MachineEntry, cfg: &Config, parts: &Parts) -> Result<C
 /// The velocity gain of each motor that `[parts.<id>]` names parts for, written to `drive.<id>.velocity_kp_nm_s_rad`
 /// as `retuned` does for the shared one (the square root of the ratio of the inertia that motor turns times that of its
 /// rotor, `bounded_gain` on an elastic machine, a linear motor's by the whole mass), from the motor's gain in `cfg`
-/// without its own parts. A gain the config gives per motor stays.
+/// without its own parts, and its `drive.<id>.kv_1_s` where its cascade needs it (`cascade`). A gain the config gives
+/// per motor stays.
 fn retuned_per_motor(entry: &MachineEntry, cfg: &Config, out: &mut Config) -> Result<(), ConfigError> {
     let machine = (entry.build)(out)?;
     let ids: Vec<String> = machine.motors().iter().map(|m| m.id.to_string()).collect();
@@ -2088,16 +2168,40 @@ fn retuned_per_motor(entry: &MachineEntry, cfg: &Config, out: &mut Config) -> Re
         } else {
             bounded_gain(old * (total_ratio * rotor_ratio).sqrt(), old, rotor_ratio, elastic)
         };
-        let mut all = out.to_text()?.parse::<toml::Table>().map_err(|e| ConfigError::Parse(e.to_string()))?;
-        let drive = all.entry("drive").or_insert_with(|| toml::Value::Table(toml::Table::new()));
-        let drive = drive.as_table_mut().ok_or_else(|| ConfigError::Type("drive".into()))?;
-        let own = drive.entry(id.as_str()).or_insert_with(|| toml::Value::Table(toml::Table::new()));
-        own.as_table_mut()
-            .ok_or_else(|| ConfigError::Type(format!("drive.{id}")))?
-            .insert("velocity_kp_nm_s_rad".into(), toml::Value::Float(gain));
-        *out = Config::parse(&toml::to_string(&all).map_err(|e| ConfigError::Parse(e.to_string()))?)?;
+        *out = with_own_keys(out, "drive", id, &[("velocity_kp_nm_s_rad", toml::Value::Float(gain))])?;
+        *out = with_cascade(entry, &bare, out, index, id)?;
     }
     Ok(())
+}
+
+/// `cfg` with `<table>.<id>.<key>` set for each pair, the motor's table made where the config has none.
+fn with_own_keys(cfg: &Config, table: &str, id: &str, pairs: &[(&str, toml::Value)]) -> Result<Config, ConfigError> {
+    let mut all = cfg.to_text()?.parse::<toml::Table>().map_err(|e| ConfigError::Parse(e.to_string()))?;
+    let shared = all.entry(table).or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let shared = shared.as_table_mut().ok_or_else(|| ConfigError::Type(table.into()))?;
+    let mine = shared.entry(id).or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let mine = mine.as_table_mut().ok_or_else(|| ConfigError::Type(format!("{table}.{id}")))?;
+    for (key, value) in pairs {
+        mine.insert(key.to_string(), value.clone());
+    }
+    Config::parse(&toml::to_string(&all).map_err(|e| ConfigError::Parse(e.to_string()))?)
+}
+
+/// `out` with motor `index`'s (`id`) Kv lowered in its own `drive.<id>` table (`cascade`) so that its cascade margin is
+/// at least its floor, `own` being the config before the motor's parts.
+fn with_cascade(
+    entry: &MachineEntry,
+    own: &Config,
+    out: &Config,
+    index: usize,
+    id: &str,
+) -> Result<Config, ConfigError> {
+    let spread = cascade_spread(cascade_margins(entry, own)?[index], cascade_margins(entry, out)?[index]);
+    let keys: Vec<(&str, toml::Value)> = cascade(&motor_config(out, id)?, spread)?
+        .into_iter()
+        .map(|(key, value)| (key.trim_start_matches("drive."), toml::Value::Float(value)))
+        .collect();
+    if keys.is_empty() { Ok(out.clone()) } else { with_own_keys(out, "drive", id, &keys) }
 }
 
 /// A config with one value changed that moves what the motors turn (`gearbox.ratio`, `geometry.pulley_radius_m`), the
@@ -2552,7 +2656,8 @@ fn search_motor_with(
 /// The config with the catalogue motor `article` at `supply`, its drive `drive` and the gearbox `gearbox` ("" each: the
 /// motor's own) as motor `motor`'s own parts, `[parts.<motor>]` (`motor_config` puts them in), and that motor's velocity
 /// gain `drive.<motor>.velocity_kp_nm_s_rad` retuned for them as `with_named` retunes the shared one: by the square root
-/// of the ratio of the inertia that motor turns (`inertia_seen`, its column alone) times that of its rotor's.
+/// of the ratio of the inertia that motor turns (`inertia_seen`, its column alone) times that of its rotor's, and its
+/// `kv_1_s` lowered where its position cascade needs it (`cascade`).
 pub fn with_motor_part(
     entry: &MachineEntry,
     cfg: &Config,
@@ -2562,25 +2667,12 @@ pub fn with_motor_part(
     gearbox: &str,
     drive: &str,
 ) -> Result<Config, ConfigError> {
-    let parse = |text: &str| text.parse::<toml::Table>().map_err(|e| ConfigError::Parse(e.to_string()));
-    // Sets `<table>.<motor>.<key>`, making the motor's table where the config has none.
-    let own = |cfg: &Config, table: &str, pairs: &[(&str, toml::Value)]| -> Result<Config, ConfigError> {
-        let mut all = parse(&cfg.to_text()?)?;
-        let shared = all.entry(table).or_insert_with(|| toml::Value::Table(toml::Table::new()));
-        let shared = shared.as_table_mut().ok_or_else(|| ConfigError::Type(table.into()))?;
-        let mine = shared.entry(motor).or_insert_with(|| toml::Value::Table(toml::Table::new()));
-        let mine = mine.as_table_mut().ok_or_else(|| ConfigError::Type(format!("{table}.{motor}")))?;
-        for (key, value) in pairs {
-            mine.insert(key.to_string(), value.clone());
-        }
-        Config::parse(&toml::to_string(&all).map_err(|e| ConfigError::Parse(e.to_string()))?)
-    };
     let text = |t: &str| toml::Value::String(t.into());
     let mut parts = vec![("motor", text(article)), ("motor_supply", text(supply))];
     parts.extend(
         [("drive", drive), ("gearbox", gearbox)].into_iter().filter(|(_, t)| !t.is_empty()).map(|(k, t)| (k, text(t))),
     );
-    let out = own(cfg, "parts", &parts)?;
+    let out = with_own_keys(cfg, "parts", motor, &parts)?;
     let index =
         (entry.build)(cfg)?.motors().iter().position(|m| m.id == motor).ok_or_else(|| {
             ConfigError::Invalid(format!("machine.motor[{motor}] (no motor of the machine has this id)"))
@@ -2596,7 +2688,8 @@ pub fn with_motor_part(
     let seen = |cfg: &Config| -> Result<f64, ConfigError> { Ok(inertia_turned(entry, cfg)?[index]) };
     let ratio = seen(&out)? / seen(cfg)? * rotor(&out)?.0 / rotor(cfg)?.0;
     let gain = motor_config(cfg, motor)?.positive("drive.velocity_kp_nm_s_rad")? * ratio.sqrt();
-    own(&out, "drive", &[("velocity_kp_nm_s_rad", toml::Value::Float(gain))])
+    let out = with_own_keys(&out, "drive", motor, &[("velocity_kp_nm_s_rad", toml::Value::Float(gain))])?;
+    with_cascade(entry, cfg, &out, index, motor)
 }
 
 #[cfg(test)]
