@@ -229,7 +229,7 @@ machines/h-bot.toml  (FMI 3.0): 0 validator problems, 110 outputs, 101 rows, wor
 t-gantry  (FMI 3.0): 0 validator problems, 115 outputs, 101 rows, worst 5.0e-10 (axis.x.position): ok
 ```
 
-The serialized states are larger than on 14 November as the snapshot carries more of the simulation (the drives' and parts' thermal states among it). The logs above that date are kept as they were: their output counts are those of the FMUs then.
+The logs above that date are kept as they were: their output counts are those of the FMUs then.
 
 Not run: the Modelica Association's `fmusim` (Reference-FMUs) and the FMU Compliance Checker. Neither is published on a package registry: `pip index versions` finds no distribution named `fmusim`, `reference-fmus`, `fmi-compliance-checker` or `fmucheck`, and conda is not installed here. Both are distributed as binaries on GitHub releases, which were not downloaded.
 
