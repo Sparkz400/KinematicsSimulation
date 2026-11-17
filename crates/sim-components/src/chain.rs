@@ -251,8 +251,25 @@ pub trait Mechanism: Send {
     fn passive_joints(&self) -> Vec<(f64, f64)> {
         Vec::new()
     }
+    /// The passive joints' position signals, one per joint in their order (their values are the joints' positions):
+    /// by default those of a payload swinging on the flange, `swing.<k>.angle`.
+    fn passive_signals(&self) -> Vec<SignalInfo> {
+        (1..=self.passive_joints().len())
+            .map(|k| SignalInfo::new(format!("swing.{k}.angle"), "group-payload-swing", "quantity-swing-angle", "rad"))
+            .collect()
+    }
+    /// The id (`power.<id>`) and the owner's key of the loss row of the passive joints' dampers: by default the swinging
+    /// payload's. `None` (no row) only where every passive joint's damper is zero.
+    fn passive_loss_row(&self) -> Option<(&'static str, &'static str)> {
+        Some(("payload_swing", "group-payload-swing"))
+    }
+    /// The passive joints' positions at rest with the driven ones at `q` (a contact pressed in by its load): all zero by
+    /// default.
+    fn passive_rest(&self, _q: &[f64]) -> Vec<f64> {
+        vec![0.0; self.passive_joints().len()]
+    }
     /// A loss row of the mechanism's own (a contact's damper, a guide's friction), booked beside the joints' and the
-    /// two-way modes': its id (`loss.<id>`) and the owner's key; `None` (no row) by default.
+    /// two-way modes': its id (`power.<id>`) and the owner's key; `None` (no row) by default.
     fn loss_row(&self) -> Option<(&'static str, &'static str)> {
         None
     }
@@ -463,6 +480,8 @@ pub struct JointMachine<M: Mechanism> {
     payload_attached: bool,
     /// `Mechanism::passive_joints`: their angles and speeds follow the joint machine's own states.
     passive: Vec<(f64, f64)>,
+    /// `Mechanism::passive_loss_row`, where there are passive joints.
+    passive_row: Option<(&'static str, &'static str)>,
     /// How many bending modes the mechanism has (`Mechanism::flex_modes`); their deflections and rates end the state,
     /// after the passive joints'.
     flex: usize,
@@ -490,6 +509,9 @@ impl<M: Mechanism> JointMachine<M> {
     ) -> Self {
         assert!(axes.len() <= joints.len() && joints.len() == motors.len());
         let (passive, flex) = (mechanism.passive_joints(), mechanism.flex_modes().len());
+        // Without a row the dampers' heat would be lost from the budget.
+        let passive_row = if passive.is_empty() { None } else { mechanism.passive_loss_row() };
+        assert!(passive_row.is_some() || passive.iter().all(|(_, c)| *c == 0.0));
         let rest = vec![0.0; joints.len() + passive.len()];
         let two_way = flex > 0 && mechanism.flex_coupling(&rest, &rest, &vec![0.0; flex], &vec![0.0; flex]).is_some();
         Self {
@@ -504,6 +526,7 @@ impl<M: Mechanism> JointMachine<M> {
             rest_slack: std::sync::OnceLock::new(),
             payload_attached: true,
             passive,
+            passive_row,
             flex,
             two_way,
         }
@@ -888,10 +911,10 @@ impl<M: Mechanism> JointMachine<M> {
         let (q, qd) = self.arms(s);
         let (rotor, rotor_speed) = self.rotors(s);
         let brakes = self.brakes(s);
-        let p = self.passive.len();
-        let (mut powers, mut gear_at_rotor) = (vec![0.0; 3 * n + 2 + p.min(1)], vec![0.0; n]);
-        if p > 0 {
-            // The swing's dampers.
+        let row = usize::from(self.passive_row.is_some());
+        let (mut powers, mut gear_at_rotor) = (vec![0.0; 3 * n + 2 + row], vec![0.0; n]);
+        if row > 0 {
+            // The passive joints' dampers.
             let (_, qd) = self.all_joints(s);
             powers[3 * n + 2] = self.passive.iter().zip(&qd[n..]).map(|((_, c), w)| c * w * w).sum();
         }
@@ -1000,14 +1023,9 @@ impl<M: Mechanism> JointMachine<M> {
         }
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}hard_stops"), "group-joint", "quantity-damping-power", "W"));
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}other"), "loss-other", "quantity-power-given-off", "W"));
-        // In the order of `losses`: the swing's dampers, then the process.
-        if !self.passive.is_empty() {
-            out.push(SignalInfo::new(
-                format!("{LOSS_PREFIX}payload_swing"),
-                "group-payload-swing",
-                "quantity-damping-power",
-                "W",
-            ));
+        // In the order of `losses`: the passive joints' dampers, then the process.
+        if let Some((id, owner)) = self.passive_row {
+            out.push(SignalInfo::new(format!("{LOSS_PREFIX}{id}"), owner, "quantity-damping-power", "W"));
         }
         if self.mechanism.has_process() {
             out.push(SignalInfo::new(
@@ -1125,7 +1143,14 @@ impl<M: Mechanism> Machine for JointMachine<M> {
                 pose = tool.iter().zip(&shift).map(|(t, s)| t - s).collect();
             }
         }
-        let (_, gravity) = self.load(&q, &vec![0.0; n]);
+        // The passive joints where they rest (a contact pressed in by its load), the driven ones' weights with them.
+        let rest = self.mechanism.passive_rest(&q);
+        let gravity = if rest.iter().all(|x| *x == 0.0) {
+            self.load(&q, &vec![0.0; n]).1
+        } else {
+            let all: Vec<f64> = q.iter().chain(&rest).copied().collect();
+            self.load_all(&all, &vec![0.0; all.len()]).1[..n].to_vec()
+        };
         // Two-way, the bent links shift the weights: G of `FlexCoupling` at rest.
         let mut shift = vec![0.0; n];
         if self.two_way {
@@ -1149,6 +1174,8 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             }
             torque[k] = j.ripple.invert(out / j.ratio(), rotor);
         }
+        state.resize(self.passive_at(), 0.0);
+        state.extend(rest);
         state.resize(self.flex_at(), 0.0);
         state.extend(bent);
         state.resize(self.state_len(), 0.0);
@@ -1536,14 +1563,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
                 ));
             }
         }
-        for k in 0..self.passive.len() {
-            out.push(SignalInfo::new(
-                format!("swing.{}.angle", k + 1),
-                "group-payload-swing",
-                "quantity-swing-angle",
-                "rad",
-            ));
-        }
+        out.extend(self.mechanism.passive_signals());
         out.extend(self.mechanism.signal_infos());
         out.extend(self.mechanism.flex_modes().iter().map(|m| {
             let (id, quantity, unit) = m.kind.signal();
