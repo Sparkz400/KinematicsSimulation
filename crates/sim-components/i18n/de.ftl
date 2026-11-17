@@ -148,7 +148,7 @@ param-winding_time_constant_s = Thermische Zeitkonstante der Wicklung gegen das 
 param-current_kp_v_a = Stromverstärkung Kp [V/A]
 param-current_tn_s = Nachstellzeit Stromregler Tn [s]
 param-bus_voltage_v = Zwischenkreisspannung [V]
-param-overmodulation = Übermodulation (Rechteckspannung, 4/pi)
+param-overmodulation = Übermodulation (Blocktaktung, ihre Grundschwingung)
 param-slip_compensation_filter_s = Zeitkonstante des Schlupfkompensationsfilters [s]
 effect-back_emf = Gegen-EMK
 effect-voltage_limit = Spannungsgrenze Zwischenkreis
@@ -676,7 +676,7 @@ charts-frequency = Frequenz [Hz]
 charts-log-amplitude = lg Amplitude
 charts-residual = gemessen weniger simuliert
 # Schlüssel der Motor-, Antriebs-, Reibungs- und Getriebemodelle vom 14. November 2026.
-effect-iron_loss = Eisenverluste im Stator erwärmen den Motor
+effect-iron_loss = Eisenverluste erwärmen den Motor und bremsen seine Welle
 effect-magnet_temperature = Magnetfluss sinkt mit der Erwärmung der Magnete
 effect-braking_resistor_heating = Erwärmung des Bremswiderstands
 effect-gantry_yaw = Portalbrücke giert (Maschinendateien)

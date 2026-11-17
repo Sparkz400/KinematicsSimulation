@@ -547,16 +547,12 @@ impl Sim {
     pub fn plan_configured_path(&self) -> Option<Result<Vec<(f64, Vec<f64>)>, CommandError>> {
         let run = self.path.as_ref()?;
         let start = self.control.planned_pos();
-        let runs = match crate::program::read_with(
-            &run.file,
-            &run.program,
-            self.machine.axes(),
-            start,
-            run.orientation_speed,
-        ) {
-            Ok(runs) => runs,
-            Err(e) => return Some(Err(CommandError { key: e.key })),
-        };
+        let runs =
+            match crate::program::read_with(&run.file, &run.program, self.machine.axes(), start, run.orientation_speed)
+            {
+                Ok(runs) => runs,
+                Err(e) => return Some(Err(CommandError { key: e.key })),
+            };
         Some(match runs.as_slice() {
             [one] if one.feed.is_none() => self.plan_path(&one.pieces, run.time_optimal),
             _ => self.plan_program(&runs, run.time_optimal),
@@ -645,10 +641,29 @@ impl Sim {
         self.pushes();
         if self.control.enabled() {
             self.advance_with_windings();
-        } else if self.pushes.is_empty() {
-            advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
         } else {
-            self.advance_pushed();
+            // A disabled drive's torque (the iron's drag, `Drive::disabled_step`) is held over the step: its work is that
+            // torque times the angle turned, which the drive's books take in place of the step start's speed.
+            let dragged = self.control.drives.iter().any(|d| d.torque != 0.0).then(|| {
+                let [angle, speed, ..] = &mut self.motor_buffers;
+                self.machine.motor_state(&self.state, angle, speed);
+                angle.clone()
+            });
+            if self.pushes.is_empty() {
+                advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
+            } else {
+                self.advance_pushed();
+            }
+            if let Some(before) = dragged {
+                let [angle, speed, ..] = &mut self.motor_buffers;
+                self.machine.motor_state(&self.state, angle, speed);
+                for ((d, a), b) in self.control.drives.iter_mut().zip(angle.iter()).zip(&before) {
+                    if d.torque != 0.0 {
+                        let work = d.torque * (a - b) / self.dt;
+                        (d.shaft_power, d.emf_loss) = (work, -work);
+                    }
+                }
+            }
         }
         self.machine.after_step(&mut self.state, self.dt);
         let taken = self.pushed();
@@ -906,9 +921,11 @@ impl Sim {
                     for (k, d) in drives.iter().enumerate() {
                         // A drive whose pulses are off after a trip: no current, no torque (`Controller::react`).
                         if d.pulses_off {
-                            // Only the iron's drag acts (`DriveParams::iron_drag`).
+                            // Only the iron's drag acts (`DriveParams::iron_drag`); its work is integrated in the
+                            // winding's work slot, which `Controller::winding_stepped` books.
                             stage_torque[k] = -control.drive_params_of(k).iron_drag(speed[k]);
                             dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].fill(0.0);
+                            dwindings[WINDING_STATES * k + 3] = stage_torque[k] * speed[k];
                             continue;
                         }
                         let range = WINDING_STATES * k..WINDING_STATES * (k + 1);

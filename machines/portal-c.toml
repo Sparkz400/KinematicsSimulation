@@ -513,6 +513,9 @@ max_speed_rad_s = 420.0
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one
 # moment of inertia per motor (the rigid model's at the start pose) times its acceleration setpoint, as a drive's
 # speed/torque precontrol with the load inertia set (S120 p1498): no gravity, no coupling.

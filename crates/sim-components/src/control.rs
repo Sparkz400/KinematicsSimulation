@@ -1782,8 +1782,12 @@ impl Controller {
     /// its end. Then the shared DC link, and the trip.
     pub fn winding_stepped(&mut self, windings: &[f64], angle: &[f64], speed: &[f64]) {
         for (k, (drive, w)) in self.drives.iter_mut().zip(windings.as_chunks::<WINDING_STATES>().0).enumerate() {
-            // A drive whose pulses are off after a trip has had its disabled step (`react`).
-            if !drive.pulses_off {
+            // A drive whose pulses are off after a trip has had its disabled step (`react`); the iron's drag work over
+            // the step is the integrated one (`Sim::advance_with_windings`), not the step start's speed times the step.
+            if drive.pulses_off {
+                let dt = self.motor_params[k].current_cycle;
+                (drive.shaft_power, drive.emf_loss) = (w[3] / dt, -w[3] / dt);
+            } else {
                 (drive.phases.x, drive.phases.angle, drive.phases.speed) =
                     ([w[0], w[4], w[5], w[6]], angle[k], speed[k]);
                 drive.winding_stepped(&self.motor_params[k], w[0], [w[1], w[2], w[3]]);

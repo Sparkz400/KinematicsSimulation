@@ -568,7 +568,7 @@ fn the_search_on_a_default_config_fails_motors_for_physical_reasons() {
 #[test]
 fn every_catalogue_motor_reaches_its_rated_point_inside_the_voltage_limit() {
     use sim_components::drive::DriveParams;
-    let (mut rows, mut beyond_the_dc_link) = (0, 0);
+    let (mut rows, mut beyond_the_dc_link, mut dragged, mut short) = (0, 0, 0, 0.0f64);
     for m in csv("siemens/motors_s210.csv") {
         for (supply, bus) in [("230v", 325.0), ("400v", 540.0)] {
             if m[&format!("rated_speed_{supply}_rad_s")].is_empty() {
@@ -585,13 +585,30 @@ fn every_catalogue_motor_reaches_its_rated_point_inside_the_voltage_limit() {
                 m["part_number"],
                 p.max_voltage
             );
-            // Without field weakening (i_d = 0) the rated current meets the back-EMF, R i and the winding's reactance
-            // p w L i (L from Siemens' short-circuit braking table, `apply_motor`; the config's 10 mH where it has no row) and
-            // R i (the config's estimate of 4 Ohm) inside the circle. The 1FK2106-6AF at 230 V: 12.471 A for 13.8 N m with
-            // saturation, |(4 * 12.471 + 1.11888 * 157.08, 4 * 157.08 * 9.4841 mH * 12.471)| = 237.6 V of the 398.0 V; the
-            // tightest row, the 1FK2210-4AC at 400 V, 627.6 V of 661.4 V (0.949).
+            // Without field weakening (i_d = 0) the rated current, or the current for the rated torque plus the iron's
+            // drag and the friction where that is more, meets the back-EMF, R i and the winding's reactance p w L i (L from
+            // Siemens' short-circuit braking table, `apply_motor`; the config's 10 mH where it has no row) and R i (the
+            // config's estimate of 4 Ohm) inside the circle. The 1FK2106-6AF at 230 V: 12.504 A for 13.8 + 0.0357 N m with
+            // saturation, |(4 * 12.504 + 1.11888 * 157.08, 4 * 157.08 * 9.4841 mH * 12.504)| = 237.7 V of the 398.0 V; the
+            // tightest row, the 1FK2210-4AC at 400 V, 629.7 V of 661.4 V (0.952).
             let plain = DriveParams { field_weakening: None, ..p.clone() };
-            let current = p.current_for(p.rated_torque);
+            // effects.iron_loss: at the rated current and speed the shaft gives the printed rated torque once the iron's
+            // drag and the motor's own friction are off the air-gap torque (`DriveParams::iron_drag_rated`); where the
+            // printed point leaves no drag (k_t I_N with saturation at or below M_N plus friction) it gives less, by the
+            // friction and the saturation curve's misfit at I_N (`short`, the air gap's alone: 2.91 % at most, the
+            // 1FT2108-5SB at 230 V; 97 rows have a drag; the friction is the single axis's estimate, not the catalogue
+            // motor's: 0.051 N m, a third of the 1FK2102-0AG's 0.16 N m).
+            let friction = cfg.f64("motor.friction_coulomb_nm").unwrap()
+                * (p.rated_speed / cfg.f64("motor.friction_smoothing_rad_s").unwrap()).tanh()
+                + cfg.f64("motor.friction_viscous_nm_s_rad").unwrap() * p.rated_speed;
+            let shaft = p.torque_of(p.rated_current) - p.iron_drag(p.rated_speed) - friction;
+            if p.iron_drag_rated > 0.0 {
+                assert!((shaft - p.rated_torque).abs() < 1e-9 * p.rated_torque, "{} at {supply}", m["part_number"]);
+                dragged += 1;
+            } else {
+                short = short.max(1.0 - p.torque_of(p.rated_current) / p.rated_torque);
+            }
+            let current = p.current_for(p.rated_torque + p.iron_drag(p.rated_speed) + friction).max(p.rated_current);
             assert!(
                 plain.voltage_limited_current(p.rated_speed, p.max_voltage, true) >= current,
                 "{} at {supply}: {current} A beyond the voltage circle at the rated speed",
@@ -614,6 +631,10 @@ fn every_catalogue_motor_reaches_its_rated_point_inside_the_voltage_limit() {
         }
     }
     assert!(rows > 120 && beyond_the_dc_link == 5, "{rows} rows, {beyond_the_dc_link} beyond the DC link voltage");
+    assert!(
+        dragged == 97 && short < 0.0292,
+        "{dragged} rows with an iron drag, the others' air gap {short} short of M_N"
+    );
 }
 
 /// A gearbox named for the whole search and the same gearbox found by the search give the same candidate.
