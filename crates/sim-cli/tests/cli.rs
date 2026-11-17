@@ -1041,7 +1041,7 @@ fn parts_are_named_on_the_command_line() {
     }
 }
 
-/// `run --disable-at` switches the drives off on the way: from then on no motor gives torque and the axes do
+/// `run --disable-at` switches the drives off on the way: from then on no motor has current (a coasting rotor keeps its iron drag) and the axes do
 /// not go where the same run with the drives on takes them. A machine with holding brakes stands still when
 /// disabled at rest, and disabled on the way it stops elsewhere than without them (where an axis coasts or falls).
 #[test]
@@ -1061,9 +1061,16 @@ fn a_run_can_disable_the_drives_on_the_way() {
         // One row per millisecond: the same up to 0.3 s, then no torque.
         assert_eq!(on[..=300], off[..=300], "{}", entry.id);
         assert!(off[..=300].iter().any(|row| torques.iter().any(|&i| row[i] != 0.0)), "{}", entry.id);
+        // No current: what torque is left is the coasting rotor's iron drag (effects.iron_loss, `Drive::disabled_step`).
+        let currents: Vec<usize> = sim
+            .machine
+            .motors()
+            .iter()
+            .map(|m| sim.signal_index(&format!("motor.{}.current", m.id)).unwrap())
+            .collect();
         assert!(
-            off[301..].iter().all(|row| torques.iter().all(|&i| row[i] == 0.0)),
-            "{}: torque after disabling",
+            off[301..].iter().all(|row| currents.iter().all(|&i| row[i] == 0.0)),
+            "{}: current after disabling",
             entry.id
         );
         assert!(
