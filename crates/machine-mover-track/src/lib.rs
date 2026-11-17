@@ -893,7 +893,7 @@ impl Machine for MoverTrack {
     fn rigid_friction(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_friction(tool_pos, tool_dir, out)
     }
-    fn rigid_friction_rise(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
+    fn rigid_friction_rise(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<Vec<[f64; 2]>>) {
         self.inner.rigid_friction_rise(tool_pos, tool_dir, out)
     }
     /// The inner machine's, but NaN for the station error (a mover's error while its cam stands, which no planned pose
