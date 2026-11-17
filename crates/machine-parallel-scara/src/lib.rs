@@ -32,7 +32,9 @@
 //! `RotaryJoint`, elastic or rigid (effects.joint_elasticity). The Z stroke and the tool's turn are rigid
 //! `RotaryJoint`s from their motors' own config (`[motor.<id>]`, `[gearbox.<id>]`): the stroke's nut lifts the
 //! carriage, m_z q'' = F - m_z g, the turn spins the tool, J_c c'' = T. Both are perpendicular to the plane and about
-//! its normal, so the plane's motors feel their masses (in m_nt) and nothing else.
+//! its normal, so the plane's motors feel their masses (in m_nt) and nothing else. With effects.joint_elasticity both
+//! are elastic as the arms' joints are (`Extra`): the rotor is a body of its own and the gearbox's spring (the screw's
+//! and the coupling's stiffness in series for the stroke) passes the force between rotor and carriage.
 
 use sim_components::catalog::motor_config;
 use sim_components::joint::RotaryJoint;
@@ -238,10 +240,15 @@ impl Legs {
 }
 
 /// An axis at the plate beside the plane's two: the Z stroke on its ball screw (in N and m), or the
-/// tool's turn about z. Its state is [position, speed, brake].
-// shortcut: rigid, as the arms are in the rigid model: the screw's and the turn gearbox's twist and backlash are left
-// out (the carriage on its screw is a mode near 570 Hz); give them states as the arms have once their modes matter.
+/// tool's turn about z. Its state is [position, speed, brake]; with effects.joint_elasticity also [rotor angle, rotor
+/// speed]: the joint's gearbox (stiffness, damping and backlash as configured; for the stroke `Converter::apply` has put
+/// the nut's, the shaft's (at its softest place) and the bearings' stiffness in series with the coupling's, K = 1 / (1 /
+/// K_coupling + 1 / K_screw) in N/m) is a spring between the rotor (a body of its own, J_rotor) and the carriage (the
+/// tool): m q'' = F_gear + stops and friction + weight, J_rotor w' = motor torque - gear torque, as the arms' joints
+/// have it. With the rotor held the carriage rings at sqrt(K / m) / 2 pi (`Machine::modes`); at rest the spring carries
+/// the weight, a twist F / K (`equilibrium`).
 struct Extra {
+    elastic: bool,
     joint: RotaryJoint,
     /// What it moves (kg on the stroke, kg m^2 on the turn), and the payload's share while it is held.
     load: f64,
@@ -267,10 +274,21 @@ impl Extra {
         self.joint.ratio()
     }
 
-    /// The acceleration, and the force (torque) into the gearbox after the rotor's own acceleration and out of it, as
-    /// the arms' `rigid_solve`: (m + eta i^2 J_rotor) q'' = eta drive + weight + stops and friction.
+    /// The rotor's angle and speed.
+    fn rotor(&self, x: &[f64]) -> (f64, f64) {
+        if self.elastic { (x[3], x[4]) } else { (x[0] * self.ratio(), x[1] * self.ratio()) }
+    }
+
+    /// The acceleration, and the force (torque) into the gearbox after the rotor's own acceleration and out of it. Rigid,
+    /// as the arms' `rigid_solve`: (m + eta i^2 J_rotor) q'' = eta drive + weight + stops and friction. Elastic: the
+    /// gearbox's spring between the rotor and the carriage, m q'' = F_gear + weight + stops and friction.
     fn solve(&self, x: &[f64], torque: f64, engaged: bool, attached: bool) -> (f64, f64, f64) {
         let (j, i) = (&self.joint, self.ratio());
+        if self.elastic {
+            let (gear, ..) = j.rotor(torque, x[3], x[4], x[0], x[1], x[2], engaged);
+            let acc = (gear.output + j.output_torque(x[0], x[1]) + self.weight(attached)) / self.mass(attached);
+            return (acc, gear.rotor * i, gear.output);
+        }
         let drive = j.rigid_drive(torque, x[0] * i, x[1] * i, x[2], engaged).0;
         let rest = self.weight(attached) + j.output_torque(x[0], x[1]);
         let (m, r) = (self.mass(attached), j.reflected_inertia());
@@ -285,6 +303,11 @@ impl Extra {
 
     /// Kinetic, potential and elastic (stops) energy.
     fn energy(&self, x: &[f64], attached: bool) -> [f64; 3] {
+        if self.elastic {
+            let kinetic = 0.5 * self.mass(attached) * x[1] * x[1] + 0.5 * self.joint.rotor_inertia * x[4] * x[4];
+            let spring = self.joint.stop_energy(x[0]) + self.joint.gearbox.energy(x[3], x[0]);
+            return [kinetic, -self.weight(attached) * x[0], spring];
+        }
         let kinetic = 0.5 * (self.mass(attached) + self.joint.reflected_inertia()) * x[1] * x[1];
         [kinetic, -self.weight(attached) * x[0], self.joint.stop_energy(x[0])]
     }
@@ -293,9 +316,15 @@ impl Extra {
     /// and what the ripple gives off; and the gearbox's loss as a torque at the rotor.
     fn losses(&self, x: &[f64], torque: f64, engaged: bool, attached: bool) -> ([f64; 5], f64) {
         let i = self.ratio();
-        let [friction, stop, shaft, drag] = self.joint.losses(x[0], x[1], x[1] * i, x[2], engaged);
+        let (rotor, speed) = self.rotor(x);
+        let [friction, stop, shaft, drag] = self.joint.losses(x[0], x[1], speed, x[2], engaged);
+        let other = (torque - self.joint.ripple.apply(torque, rotor)) * speed;
+        if self.elastic {
+            let g = self.joint.gearbox.torque(rotor, speed, x[0], x[1]);
+            let loss = self.joint.gearbox.loss_power(rotor, speed, x[0], x[1]);
+            return ([friction, shaft, loss + drag, stop, other], g.rotor - g.output / i);
+        }
         let (_, into, out) = self.solve(x, torque, engaged, attached);
-        let other = (torque - self.joint.ripple.apply(torque, x[0] * i)) * x[1] * i;
         ([friction, shaft, (into - out) * x[1] + drag, stop, other], (into - out) / i)
     }
 
@@ -304,16 +333,25 @@ impl Extra {
         let (j, i) = (&self.joint, self.ratio());
         let (acc, ..) = self.solve(x, torque, engaged, attached);
         let (_, gear_at_rotor) = self.losses(x, torque, engaged, attached);
-        let held = j.brake.torque(engaged, x[1] * i, x[2]).0;
+        let speed = self.rotor(x).1;
+        let held = j.brake.torque(engaged, speed, x[2]).0;
+        // Elastic, the rotor accelerates on its own: m q'' / i + J_rotor w'.
+        let inertia = if self.elastic {
+            let rotor_acc = j.rotor(torque, x[3], x[4], x[0], x[1], x[2], engaged).1;
+            self.mass(attached) * acc / i + j.rotor_inertia * rotor_acc
+        } else {
+            (self.mass(attached) + j.reflected_inertia()) * acc / i
+        };
         let parts = [
-            (self.mass(attached) + j.reflected_inertia()) * acc / i,
+            inertia,
             -self.weight(attached) / i,
-            j.shaft.torque(x[1] * i) + held + gear_at_rotor + j.friction.torque(x[1]) / i,
+            j.shaft.torque(speed) + held + gear_at_rotor + j.friction.torque(x[1]) / i,
         ];
         [parts[0], parts[1], parts[2], torque - parts.iter().sum::<f64>()]
     }
 
-    /// Rigid, loss-free: (m q'' - weight) / i + J_rotor i q''.
+    /// Rigid, loss-free: (m q'' - weight) / i + J_rotor i q'' (also for the elastic joint, as the arms': the spring's
+    /// twist is not known to the feed-forward).
     fn feedforward(&self, acc: f64, attached: bool) -> f64 {
         (self.mass(attached) * acc - self.weight(attached)) / self.ratio()
             + self.joint.rotor_inertia * self.ratio() * acc
@@ -413,10 +451,16 @@ impl ParallelScara {
         tool
     }
 
-    /// The state of extra axis `e`: [position, speed, brake], after the arms'.
+    /// The state of extra axis `e`: [position, speed, brake] and with elastic gearboxes [rotor angle, rotor speed], after
+    /// the arms'.
     fn extra_state<'a>(&self, s: &'a [f64], e: usize) -> &'a [f64] {
-        let at = self.planar_len() + 3 * e;
-        &s[at..at + 3]
+        let at = self.planar_len() + self.extra_len() * e;
+        &s[at..at + self.extra_len()]
+    }
+
+    /// The number of states of each extra axis: 3, 5 with elastic gearboxes.
+    fn extra_len(&self) -> usize {
+        if self.elastic { 5 } else { 3 }
     }
 
     fn planar_len(&self) -> usize {
@@ -444,7 +488,8 @@ impl ParallelScara {
         let carriage = cfg.non_negative("z_axis.carriage_kg")?;
         let axis = Self::axis_info(cfg, "z", "axis-z", "m", joint.range)?;
         let carried = cfg.non_negative("z_axis.unit_kg")? + carriage;
-        Ok((Extra { joint, load: carriage, payload, g, screw: Some(screw), thermal: None }, axis, carried))
+        let elastic = cfg.bool("effects.joint_elasticity")?;
+        Ok((Extra { elastic, joint, load: carriage, payload, g, screw: Some(screw), thermal: None }, axis, carried))
     }
 
     /// The tool's turn (motor 4) through its gearbox, with no stops: the tool, and the payload's inertia while held;
@@ -464,6 +509,7 @@ impl ParallelScara {
         }
         let joint = RotaryJoint::with(&own, friction, HardStop { stiffness: 0.0, damping: 0.0 }, range)?;
         let extra = Extra {
+            elastic: cfg.bool("effects.joint_elasticity")?,
             joint,
             load: cfg.positive("tool_turn.inertia_kgm2")?,
             payload: if payload { cfg.non_negative("tool_turn.payload_inertia_kgm2")? } else { 0.0 },
@@ -895,8 +941,9 @@ impl Machine for ParallelScara {
         let mut plate = self.m_nt();
         let rotor_speed = self.rotors(s).1;
         for (e, x) in self.extras.iter().enumerate() {
-            let [q, v, _] = self.extra_state(s, e)[..] else { unreachable!() };
-            let (i, rotor) = (x.ratio(), x.joint.rotor_inertia);
+            let state = self.extra_state(s, e);
+            let (q, v, spin) = (state[0], state[1], x.rotor(state).1);
+            let rotor = x.joint.rotor_inertia;
             if x.screw.is_some() {
                 let moved = x.mass(self.payload_attached);
                 plate -= moved;
@@ -904,7 +951,7 @@ impl Machine for ParallelScara {
             } else {
                 add_spin(&mut f, [0.0, 0.0, 1.0], x.mass(self.payload_attached), v);
             }
-            add_spin(&mut f, [0.0, 0.0, 1.0], rotor, i * v);
+            add_spin(&mut f, [0.0, 0.0, 1.0], rotor, spin);
         }
         add_point(&mut f, plate, [p[0], p[1], 0.0], [pv[0], pv[1], 0.0]);
         for k in 0..2 {
@@ -943,7 +990,7 @@ impl Machine for ParallelScara {
     }
 
     fn state_len(&self) -> usize {
-        self.planar_len() + 3 * self.extras.len()
+        self.planar_len() + self.extra_len() * self.extras.len()
     }
 
     fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]) {
@@ -967,8 +1014,13 @@ impl Machine for ParallelScara {
             // The stroke holds the carriage's weight; the turn holds nothing.
             let (q, i) = (tool[2 + e], x.ratio());
             let out = -x.weight(self.payload_attached) - x.joint.output_torque(q, 0.0);
-            torque[2 + e] = x.joint.ripple.invert(out / i, q * i);
+            // Elastic, the spring holds it: the rotor is ahead by the static twist (`Gearbox::static_twist`).
+            let rotor = i * (q + if self.elastic { x.joint.gearbox.static_twist(out) } else { 0.0 });
+            torque[2 + e] = x.joint.ripple.invert(out / i, rotor);
             state.extend([q, 0.0, 0.0]);
+            if self.elastic {
+                state.extend([rotor, 0.0]);
+            }
         }
     }
 
@@ -994,16 +1046,26 @@ impl Machine for ParallelScara {
             for k in 0..2 {
                 state[4 + k] = after[k] + rotor[k] - before[k];
             }
+            // The stroke's and the turn's gearboxes the same way, their rotor angle after position, speed and brake.
+            for e in 0..self.extras.len() {
+                let at = self.planar_len() + self.extra_len() * e + 3;
+                state[at] = after[2 + e] + rotor[2 + e] - before[2 + e];
+            }
         }
         state
     }
 
     fn derivatives(&self, s: &[f64], torque: &[f64], out: &mut [f64]) {
         for (e, x) in self.extras.iter().enumerate() {
-            let (state, at) = (self.extra_state(s, e), self.planar_len() + 3 * e);
+            let (state, at) = (self.extra_state(s, e), self.planar_len() + self.extra_len() * e);
             out[at] = state[1];
             out[at + 1] = x.solve(state, torque[2 + e], self.brake_engaged, self.payload_attached).0;
-            out[at + 2] = x.joint.brake.torque(self.brake_engaged, state[1] * x.ratio(), state[2]).1;
+            out[at + 2] = x.joint.brake.torque(self.brake_engaged, x.rotor(state).1, state[2]).1;
+            if self.elastic {
+                let (j, engaged) = (&x.joint, self.brake_engaged);
+                let rotor_acc = j.rotor(torque[2 + e], state[3], state[4], state[0], state[1], state[2], engaged).1;
+                (out[at + 3], out[at + 4]) = (state[4], rotor_acc);
+            }
         }
         if !self.elastic {
             let (acc, ..) = self.rigid_solve(s, torque);
@@ -1052,8 +1114,12 @@ impl Machine for ParallelScara {
                 s[6 + k] = self.joints[k].ratio() * w[k];
             }
         }
-        for e in 0..self.extras.len() {
-            s[self.planar_len() + 3 * e + 1] = vel[2 + e];
+        for (e, x) in self.extras.iter().enumerate() {
+            let at = self.planar_len() + self.extra_len() * e;
+            s[at + 1] = vel[2 + e];
+            if self.elastic {
+                s[at + 4] = x.ratio() * vel[2 + e];
+            }
         }
     }
     fn motor_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
@@ -1061,8 +1127,7 @@ impl Machine for ParallelScara {
         pos[..2].copy_from_slice(&rotor);
         vel[..2].copy_from_slice(&speed);
         for (e, x) in self.extras.iter().enumerate() {
-            let state = self.extra_state(s, e);
-            (pos[2 + e], vel[2 + e]) = (state[0] * x.ratio(), state[1] * x.ratio());
+            (pos[2 + e], vel[2 + e]) = x.rotor(self.extra_state(s, e));
         }
     }
 
@@ -1138,6 +1203,10 @@ impl Machine for ParallelScara {
             for k in 0..2 {
                 self.joints[k].gearbox.commit(s[4 + k], s[k]);
             }
+            let (at, n) = (self.planar_len(), self.extra_len());
+            for (e, x) in self.extras.iter_mut().enumerate() {
+                x.joint.gearbox.commit(s[at + n * e + 3], s[at + n * e]);
+            }
         }
     }
 
@@ -1155,6 +1224,28 @@ impl Machine for ParallelScara {
                 x.joint.gearbox.efficiency = law.gearbox_efficiency(*rise) * x.joint.extra_efficiency;
             }
         }
+    }
+
+    /// With elastic gearboxes the stroke's carriage on its screw and the tool on its turn gearbox, each with its rotor
+    /// held: sqrt(K / m) / 2 pi, K the gearbox's stiffness at the joint (the screw's and the coupling's in series, N/m)
+    /// and m what it moves, damping ratio c / (2 sqrt(K m)). The arms' modes are not reported (the plane's pose-dependent
+    /// mass matrix is not worked out here).
+    fn modes(&self, _tool_pose: &[f64]) -> Vec<sim_core::Mode> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let mut modes: Vec<_> = (self.extras.iter())
+            .filter(|x| x.joint.gearbox.stiffness.is_finite())
+            .map(|x| {
+                let (k, m) = (x.joint.gearbox.stiffness, x.mass(self.payload_attached));
+                sim_core::Mode {
+                    hz: (k / m).sqrt() / std::f64::consts::TAU,
+                    damping: x.joint.gearbox.damping / (2.0 * (k * m).sqrt()),
+                }
+            })
+            .collect();
+        modes.sort_by(|a, b| a.hz.total_cmp(&b.hz));
+        modes
     }
 
     /// What the gearboxes can sag at rest anywhere in the working range (`rest_sag`).
@@ -1336,7 +1427,7 @@ impl Machine for ParallelScara {
         // it has one; the bar across the flange shows the tool's turn.
         for (e, x) in self.extras.iter().enumerate() {
             let k = 2 + e;
-            let (state, i) = (self.extra_state(s, e), x.ratio());
+            let state = self.extra_state(s, e);
             let at = |z: f64| [p[0], p[1] + if x.screw.is_some() { 0.08 } else { -0.08 }, z];
             out.parts.push(Part::new(
                 sim_core::scene::MOTOR_PART,
@@ -1349,12 +1440,12 @@ impl Machine for ParallelScara {
             }
             out.parts.push(
                 Part::new("rotor-bar", Shape::Box { size: [0.04, 0.004, 0.01] }, at(0.18), [0.1; 3])
-                    .turned(state[0] * i),
+                    .turned(x.rotor(state).0),
             );
             out.labels.push(Label {
                 pos: at(0.23),
                 owner_key: self.motors[k].key,
-                value: state[1] * i * 60.0 / std::f64::consts::TAU,
+                value: x.rotor(state).1 * 60.0 / std::f64::consts::TAU,
                 unit_key: "unit-rpm",
                 decimals: 0,
             });

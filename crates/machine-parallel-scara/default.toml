@@ -45,7 +45,7 @@ motor_encoder = ""
 [effects]
 gravity = true
 payload = true
-# The gearboxes twist under load (stiffness, damping, backlash): motor and arm are two bodies per joint. Off, the
+# The gearboxes twist under load (stiffness, damping, backlash), the Z stroke's coupling and screw and the tool turn's gearbox too: motor and joint are two bodies each. Off, the
 # machine is the rigid reference model, in which the motor turns with the arm times the ratio.
 joint_elasticity = true
 # Friction in the arms' bearings at the base (Coulomb and viscous, [joint]).
@@ -345,7 +345,7 @@ inertia_at_input_kgm2 = 5.0e-6
 
 # The tool turn's gearbox, on motor 4, the D4's. [catalogue] Siemens NRB060-03-8 for the 1FK2103
 # (catalog/siemens/gearbox_nrb.csv): ratio 8, 97 %, 8251 N m/rad, 0.067 kg cm2 at the input; 18 N m rated, 29 N m
-# maximum ([ratings.4]). Its backlash [estimate] 1 arcmin (catalogue: 10 arcmin), unused: the turn is rigid.
+# maximum ([ratings.4]). Its backlash [estimate] 1 arcmin (catalogue: 10 arcmin); with effects.joint_elasticity the turn takes it up as the arms do.
 [gearbox.4]
 ratio = 8.0
 efficiency = 0.97
