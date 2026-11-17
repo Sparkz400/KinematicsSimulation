@@ -1812,12 +1812,21 @@ fn resistor_excess(events: &[f64], room: f64) -> (f64, f64) {
 /// up to that point, so on a run at rest with noisy power the list stays at the few stretches before the link first
 /// emptied, where before it grew by one per sign change of the power (about 90 per cycle). Same figures as the two passes
 /// over the whole list, to rounding (the spills are summed in another order).
+///
+/// A link that neither empties nor fills (what is fed back and drawn stays within less than its room for the whole run)
+/// never lets the passes meet. Past `LINK_PREFIX_CAP` stretches the account keeps, instead of them, `LINK_GRID` passes
+/// entered at fills spread evenly over the voltage window, 0 to the room, and reads the cycle's figures between the two
+/// next to its entry: fill, spill and most are each at most 1:1 in the entry fill (what one enters with more is spilled,
+/// drawn less or held), so the figures are off by at most half the grid's step, room / (2 (LINK_GRID − 1)).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LinkAccount {
     /// The room it was kept for, J.
     pub room: f64,
     /// The stretches before the passes entered empty and full met.
     prefix: Vec<f64>,
+    /// Past `LINK_PREFIX_CAP` stretches in `prefix`: per entry fill j room / (LINK_GRID − 1) its fill, spill and most
+    /// over the stretches until the passes met, in place of them.
+    grid: Vec<[f64; 3]>,
     /// The fill of the pass entered empty, and of the one entered full, J; one fill once they have met.
     low: f64,
     high: f64,
@@ -1841,7 +1850,21 @@ impl LinkAccount {
                 (self.spilled + (fill - room).max(0.0), self.most.max(fill), fill.min(room));
             return;
         }
-        self.prefix.push(e);
+        if self.grid.is_empty() {
+            self.prefix.push(e);
+            if self.prefix.len() > LINK_PREFIX_CAP {
+                self.grid = (0..LINK_GRID)
+                    .map(|j| {
+                        let mut pass = [j as f64 * room / (LINK_GRID - 1) as f64, 0.0, 0.0];
+                        self.prefix.iter().for_each(|&e| link_step(&mut pass, e, room));
+                        pass
+                    })
+                    .collect();
+                self.prefix = Vec::new();
+            }
+        } else {
+            self.grid.iter_mut().for_each(|pass| link_step(pass, e, room));
+        }
         let step = |fill: f64| (fill + e).max(0.0).min(room);
         (self.low, self.high) = (step(self.low), step(self.high));
         // Both at 0 or both at the room, exactly.
@@ -1851,15 +1874,33 @@ impl LinkAccount {
     /// What the resistor takes per cycle, J, and the most the link would have to hold, J (`resistor_excess`): the cycle
     /// entered as it left, which is as the pass entered empty left it.
     pub fn finish(&self) -> (f64, f64) {
-        let (mut fill, mut excess, mut most) = (self.low, self.spilled, self.most);
-        for &e in &self.prefix {
-            fill = (fill + e).max(0.0);
-            most = most.max(fill);
-            excess += (fill - self.room).max(0.0);
-            fill = fill.min(self.room);
+        let mut pass = [self.low, self.spilled, self.most];
+        self.prefix.iter().for_each(|&e| link_step(&mut pass, e, self.room));
+        if self.grid.len() >= 2 {
+            // Between the two passes of the grid next to the entry fill.
+            let at = self.low / self.room * (self.grid.len() - 1) as f64;
+            let j = (at.floor() as usize).min(self.grid.len() - 2);
+            let (u, [a, b]) = (at - j as f64, [self.grid[j], self.grid[j + 1]]);
+            let between = |q: usize| a[q] + u * (b[q] - a[q]);
+            (pass[1], pass[2]) = (pass[1] + between(1), pass[2].max(between(2)));
         }
-        (excess, most)
+        (pass[1], pass[2])
     }
+}
+
+/// Stretches a link account keeps before it keeps passes over the voltage window in their place (`LinkAccount`): some
+/// 1500 cycles of a machine at rest whose power changes sign about 90 times per cycle.
+pub const LINK_PREFIX_CAP: usize = 1 << 17;
+
+/// Entry fills over the voltage window a link account keeps passes for past `LINK_PREFIX_CAP` (`LinkAccount`).
+pub const LINK_GRID: usize = 257;
+
+/// One stretch `e` on a pass of a link of `room` J: its fill, what it spilled and the most it held, J.
+fn link_step(pass: &mut [f64; 3], e: f64, room: f64) {
+    let fill = (pass[0] + e).max(0.0);
+    pass[2] = pass[2].max(fill);
+    pass[1] += (fill - room).max(0.0);
+    pass[0] = fill.min(room);
 }
 
 /// Nominal life of the guide that has the least, in km, where the machine reports guide loads and the config has
@@ -4880,6 +4921,33 @@ mod tests {
             assert!((a - c).abs() < 1e-9 && (b - d).abs() < 1e-12, "room {room}: {a} {b} against {c} {d}");
             // A link of 10 J never fills nor empties here: it keeps them all, as the two passes did.
             assert!(room > 2.0 || account.prefix.len() == 3, "room {room}: {} stretches kept", account.prefix.len());
+        }
+    }
+
+    /// A link of 10 J that neither empties nor fills over 400 000 stretches of noise (±1e-4 J, no net) keeps the passes
+    /// over its voltage window, not the stretches, and gives the two passes' figures within half the grid's step
+    /// (10 / 512 J). At both ends of the window: entered after a 0.3 J braking it sits near empty, after a 9.99 J one near
+    /// full (spilling the noise's 1e-4 J per stretch fed back where it is full: some 20 J). And once the passes meet
+    /// after the grid was taken (a 12 J braking), the figures are the two passes' to rounding again.
+    #[test]
+    fn a_dc_link_that_never_empties_nor_fills_keeps_a_bounded_account_at_both_ends() {
+        let two_passes = |events: &[f64], room: f64| {
+            let mut pass = [0.0, 0.0, 0.0];
+            events.iter().for_each(|&e| link_step(&mut pass, e, room));
+            pass[1..].fill(0.0);
+            events.iter().for_each(|&e| link_step(&mut pass, e, room));
+            (pass[1], pass[2])
+        };
+        let room = 10.0;
+        let noise = (0..400_000).map(|i| if i % 2 == 0 { 1e-4 } else { -1e-4 });
+        for (start, end, meets) in [(0.3, vec![], false), (9.99, vec![], false), (0.3, vec![12.0, -20.0], true)] {
+            let events: Vec<f64> = std::iter::once(start).chain(noise.clone()).chain(end).collect();
+            let mut account = LinkAccount::new(room);
+            events.iter().for_each(|&e| account.push(e));
+            assert!(account.prefix.is_empty() && account.grid.len() == LINK_GRID && account.met == meets);
+            let ((a, b), (c, d)) = (account.finish(), two_passes(&events, room));
+            let tolerance = if meets { 1e-9 } else { room / (2.0 * (LINK_GRID - 1) as f64) };
+            assert!((a - c).abs() <= tolerance && (b - d).abs() <= tolerance, "{start}: {a} {b} against {c} {d}");
         }
     }
 
