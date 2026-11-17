@@ -228,12 +228,11 @@ pub type Share = (&'static str, Vec<f64>);
 
 /// A motor's utilisation over a run, each as a share of its limit, 1 at the limit: torque against what is available at
 /// its speed; the phase current (q and d) against `current_limit`; the drive's two overload image nodes against the
-/// image's trip level (with effects.drive_overload); winding and housing rise against the rated rise (with
+/// image's trip level (with effects.drive_overload); winding and housing rise against the rated rise (the housing's
+/// against `ratings.housing_max_rise_k` where the config has it, else the same; with
 /// effects.winding_heating; the housing's with effects.motor_thermal_nodes); and the DC link voltage against the
 /// overvoltage trip, with the braking threshold below it. Only the lines whose signals the run has and whose effect
 /// was on.
-// shortcut: the housing is held against the winding's rated rise, as the config has no housing limit; give it its own
-// once a maker states one.
 pub fn utilisation(drive: &DriveParams, signals: &[SignalInfo], columns: &[Vec<f64>], motor: &str) -> Vec<Share> {
     let get = |name: &str| {
         let id = format!("motor.{motor}.{name}");
@@ -263,7 +262,7 @@ pub fn utilisation(drive: &DriveParams, signals: &[SignalInfo], columns: &[Vec<f
             out.push(("charts-winding", rise.iter().map(|r| r / drive.rated_rise).collect()));
         }
         if let (Some(_), Some(rise)) = (drive.thermal_nodes, get("housing_temperature")) {
-            out.push(("charts-housing", rise.iter().map(|r| r / drive.rated_rise).collect()));
+            out.push(("charts-housing", rise.iter().map(|r| r / drive.housing_max_rise).collect()));
         }
     }
     if let (true, Some(u)) =

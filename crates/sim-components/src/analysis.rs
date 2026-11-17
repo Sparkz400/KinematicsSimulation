@@ -1285,8 +1285,8 @@ pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, Comma
 
 /// Runs a path given as poses at times (see `Command::Trajectory`) and measures it, with 0.3 s of rest
 /// after its end so that the settling of the tool counts. With effects.thermal_warm_start as `analyse_cycle`: the
-/// path counts as a cycle that repeats, and between passes the machine goes back to the path's start
-/// (`Command::MoveTo`) and rests there, which the rises are then set over.
+/// path counts as a cycle that repeats, and every pass starts from a copy of the machine's start state
+/// (`Sim::snapshot`) with the rises the previous pass settled, so nothing that still rings carries over.
 pub fn analyse_trajectory(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>) -> Result<CycleLoad, CommandError> {
     analyse_trajectory_with(sim, points, true)
 }
@@ -1299,12 +1299,8 @@ pub fn analyse_trajectory_with(
 ) -> Result<CycleLoad, CommandError> {
     let end = points.last().map_or(0.0, |p| p.0) + 0.3;
     let warm = sim.warm_start && !fed_back_rises(sim).is_empty();
-    let first = points.first().map(|p| p.1.clone());
-    // Where the tool stands at the path's start: within the range, where the path's first pose (the setpoint at rest,
-    // where the motors stand) lies beyond an end of a stroke by what belts and gears give, and a move there is refused.
-    let axes = sim.machine.axes().len();
-    let (mut tool, mut speed) = (vec![0.0; axes], vec![0.0; axes]);
-    sim.machine.tool_state(&sim.state, &mut tool, &mut speed);
+    // Every pass starts from the machine's start state (a copy taken here), with the rises the previous one settled.
+    let start_state = sim.snapshot();
     let mut before = None;
     for passes in 0.. {
         let started_at = fed_back_rises(sim);
@@ -1327,17 +1323,8 @@ pub fn analyse_trajectory_with(
         if let Some(warm_start) = warm_pass(sim, &started_at, &load, passes, &mut before) {
             return Ok(CycleLoad { warm_start: Some(warm_start), ..load });
         }
-        // shortcut: the way back and the rest are left to the controller and the machine's damping, so a lightly damped
-        // machine starts the next pass with what still rings; a pass from the machine's start state would need a Sim
-        // that can be copied.
         let rises = fed_back_rises(sim);
-        if sim.command(Command::MoveTo(first.clone().unwrap_or_default())).is_err() {
-            sim.command(Command::MoveTo(tool.clone()))?;
-        }
-        while sim.control.busy() && sim.time() < 600.0 {
-            sim.step();
-        }
-        sim.run(0.3, |_| {});
+        sim.restore(&start_state).expect("a snapshot of this very simulation");
         set_rises(sim, &rises);
     }
     unreachable!()
@@ -1345,10 +1332,14 @@ pub fn analyse_trajectory_with(
 
 /// The motor's S1 torque at a speed, as Siemens sizes a cycle (RMS torque at the mean speed against it): from the static
 /// torque kt I_0 at standstill (`motor.stall_current_a`) straight to the rated torque at the rated speed, and on along
-/// that line above it. `None` where the config has no stall current.
-/// shortcut: Siemens prints the S1 curve as a graph only; the straight line is exact at its two printed points, and
-/// above the rated speed it ignores the bend the voltage limit gives. Take the printed curve if it is ever extracted.
+/// that line above it. `None` where the config has no stall current. Where it has the maker's printed curve
+/// (`motor.s1_curve_speed_rad_s` and `motor.s1_curve_torque_nm`, digitised from the graph) the torque is read from it,
+/// linearly between its points (`drive::s1_interpolated`), with the bend the voltage limit gives above the rated speed.
 pub fn s1_torque(cfg: &Config, speed: f64) -> Result<Option<f64>, ConfigError> {
+    let curve = crate::drive::s1_curve_of(cfg)?;
+    if !curve.is_empty() {
+        return Ok(Some(crate::drive::s1_interpolated(&curve, speed)));
+    }
     if cfg.get("motor.stall_current_a").is_err() {
         return Ok(None);
     }
@@ -1372,7 +1363,12 @@ pub struct Verdict {
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
 /// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
 /// own keys (`drive::Motor`: a stepper's and an induction motor's).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 65] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 68] = [
+    // The housing's highest rise (`charts::utilisation`).
+    "ratings.housing_max_rise_k",
+    // The maker's printed S1 curve (`s1_torque`).
+    "motor.s1_curve_speed_rad_s",
+    "motor.s1_curve_torque_nm",
     // What `stop::study` judges the worst stop against.
     "ratings.max_stopping_distance_m",
     "ratings.max_stopping_angle_rad",
@@ -2798,9 +2794,10 @@ pub struct FrontPoint {
 
 /// The energy a cycle takes from the supply, J: what the drives drew less what they fed back, plus what the braking
 /// resistor burned of what they fed back (with the DC link simulated; a shared one counted once). What the capacitors
-/// hold more at the end than at the start counts as fed back.
-// shortcut: the line module's own loss (effects.regenerative_supply) and the bleeder are left out, add them once a front
-// is drawn for a regenerative supply.
+/// hold more at the end than at the start counts as fed back. With the regenerative supply (`effects.regenerative_supply`)
+/// also the line module's own loss and the bleeders' discharge. The line draws `drawn / eta` for the `drawn` it puts into
+/// the DC link and gives the mains `eta * fed` of the `fed` it takes out, so it loses `(1/eta - 1) drawn + (1 - eta) fed`;
+/// with `line_module_energy = drawn + fed` and `mains_energy = eta * fed` (the load's sums) `fed = mains_energy / eta`.
 pub fn supply_energy(cfg: &Config, load: &CycleLoad) -> f64 {
     let net: f64 = load.motors.iter().map(|m| m.energy_in - m.energy_regenerated).sum();
     let burned: f64 = if cfg.bool("effects.shared_dc_link").unwrap_or(false) {
@@ -2808,7 +2805,21 @@ pub fn supply_energy(cfg: &Config, load: &CycleLoad) -> f64 {
     } else {
         load.motors.iter().map(|m| m.resistor_energy).sum()
     };
-    net + burned
+    let mut extra = 0.0;
+    if cfg.bool("effects.regenerative_supply").unwrap_or(false) {
+        let eta = cfg.positive("ratings.line_module_efficiency").unwrap_or(1.0);
+        let shared = cfg.bool("effects.shared_dc_link").unwrap_or(false);
+        let (through, mains) = if shared {
+            load.motors.first().map_or((0.0, 0.0), |m| (m.line_module_energy, m.mains_energy))
+        } else {
+            load.motors.iter().fold((0.0, 0.0), |a, m| (a.0 + m.line_module_energy, a.1 + m.mains_energy))
+        };
+        let fed = mains / eta;
+        extra += (1.0 / eta - 1.0) * (through - fed) + (1.0 - eta) * fed;
+        extra +=
+            load.budget.as_ref().map_or(0.0, |b| b.rows.iter().filter(|r| r.id == "discharge").map(|r| r.energy).sum());
+    }
+    net + burned + extra
 }
 
 /// The points that no other one beats: none other is as good in all three figures and better in one. Fastest first;
@@ -3649,16 +3660,22 @@ pub fn optimise_cycle_with(
         };
         // Bisection over the accepted steps: step 0 (the cycle as configured) passes what it is judged on by definition,
         // the fastest is judged first. Each search starts from the worst corners of the one before.
-        // shortcut: bisection takes pass or fail to follow the steps (a faster step fails where a slower one does); where
-        // it does not, the result still passes but may be slower than a step that passes, judge them all if that matters.
+        // Pass or fail need not follow the steps (a faster step may pass where a slower one fails), so after the
+        // bisection every step faster than its result that was not judged failing is judged too, fastest first, and the
+        // first that passes is taken: the cost is up to `last - lo - 1` more passes, each a search over the corners.
         let (mut lo, mut hi, mut result) = (0, last, accepted[0].clone());
+        let mut failed: Vec<usize> = Vec::new();
         if nominal_fails.is_empty() {
             (lo, result) = (last, (best.clone(), best_load.clone()));
-        } else if last > 0 && matches!(judged_on(&nominal_fails)[..], [] | ["collision"]) {
-            let (passed, worst) = pass(last, &from)?;
-            from = worst;
-            if let Some(passed) = passed {
-                (lo, result) = (last, passed);
+        } else {
+            failed.push(last);
+            if last > 0 && matches!(judged_on(&nominal_fails)[..], [] | ["collision"]) {
+                let (passed, worst) = pass(last, &from)?;
+                from = worst;
+                if let Some(passed) = passed {
+                    (lo, result) = (last, passed);
+                    failed.clear();
+                }
             }
         }
         while hi - lo > 1 {
@@ -3667,7 +3684,21 @@ pub fn optimise_cycle_with(
             from = worst;
             match passed {
                 Some(passed) => (lo, result) = (mid, passed),
-                None => hi = mid,
+                None => {
+                    hi = mid;
+                    failed.push(mid);
+                }
+            }
+        }
+        for k in (lo + 1..last).rev() {
+            if failed.contains(&k) {
+                continue;
+            }
+            let (passed, worst) = pass(k, &from)?;
+            from = worst;
+            if let Some(passed) = passed {
+                (lo, result) = (k, passed);
+                break;
             }
         }
         let (nominal_duration, steps_back) = (best_load.duration, last - lo);
@@ -4560,6 +4591,30 @@ pub fn compare_effect(entry: &MachineEntry, cfg: &Config, effect: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The line module's loss in the supply energy: efficiency eta = 0.9, the drives drew 100 J into the DC link and fed
+    /// 40 J out of it (mains 36 J arrive, through the module 140 J). The line draws 100 / 0.9 = 111.11 J and gives the mains
+    /// 36 J, so the supply gave 75.11 J: the DC side's net 60 J plus the loss (1 / 0.9 - 1) 100 + (1 - 0.9) 40 = 15.11 J.
+    #[test]
+    fn the_supply_energy_has_the_line_modules_loss() {
+        let cfg = Config::parse(
+            "[effects]
+regenerative_supply = true
+[ratings]
+line_module_efficiency = 0.9
+",
+        )
+        .unwrap();
+        let motor = MotorLoad {
+            energy_in: 100.0,
+            energy_regenerated: 40.0,
+            mains_energy: 36.0,
+            line_module_energy: 140.0,
+            ..MotorLoad::default()
+        };
+        let load = CycleLoad { motors: vec![motor], ..CycleLoad::default() };
+        assert!((supply_energy(&cfg, &load) - (100.0 / 0.9 - 36.0)).abs() < 1e-9);
+    }
 
     /// The refinement finds a sharp resonance that the 60 points of the loop measurement miss. Two masses on a spring,
     /// the motor's J1 = 1e-4 kg m², the load's J2 = 3e-4 kg m², k = 300 N m/rad, a damper c = 0.003 N m s/rad between

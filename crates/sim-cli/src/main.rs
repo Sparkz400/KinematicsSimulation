@@ -997,7 +997,7 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let mut found = sim_components::catalog::search(entry, &cfg, &supplies, &wanted, &options)?;
     rank_by(&mut found, &by);
     let on_front = front(&found);
-    let robust = robust.map(|top| robust_ranking(entry, &cfg, &found, top));
+    let robust = robust.map(|top| robust_ranking(entry, &cfg, &duties, &found, top));
     if let Some((_, changed)) = &robust {
         eprintln!("{}", tr.tr(if *changed { "cli-search-robust-changed" } else { "cli-search-robust-same" }));
     }

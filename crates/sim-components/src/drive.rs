@@ -70,6 +70,9 @@ pub struct DriveParams {
     /// current, the thermal time constant and the rise the simulation starts with.
     pub heating: bool,
     pub rated_rise: f64,
+    /// The housing's highest rise, K (`ratings.housing_max_rise_k`; absent: `rated_rise`), what the utilisation chart holds
+    /// its rise against.
+    pub housing_max_rise: f64,
     pub rated_current: f64,
     pub thermal_time_constant: f64,
     pub start_rise: f64,
@@ -119,6 +122,9 @@ pub struct DriveParams {
     /// The static torque k_t I_0 of the S1 curve, from `motor.stall_current_a` whether or not effects.iron_loss is on; 0
     /// where the config has no stall current (`s1_torque`).
     pub static_torque: f64,
+    /// The S1 curve the config prints (`motor.s1_curve_speed_rad_s`, `motor.s1_curve_torque_nm`) as (speed, torque) points,
+    /// speeds rising; empty where it has none (`s1_torque` then takes the straight line).
+    pub s1_curve: Vec<[f64; 2]>,
     /// effects.magnet_temperature: the magnets' flux per kelvin, `motor.magnet_temperature_coefficient_1_k` (negative); the
     /// torque constant and back-EMF are the catalogue's at the rated rise and change with it (`Drive::flux`). 0 off.
     pub magnet_coefficient: f64,
@@ -575,6 +581,7 @@ impl DriveParams {
                 true if servo && emf_constant > 0.0 => emf_constant,
                 true => kt,
             },
+            s1_curve: s1_curve_of(cfg)?,
             static_torque: if cfg.get("motor.stall_current_a").is_ok() {
                 kt * cfg.positive("motor.stall_current_a")?
             } else {
@@ -622,6 +629,7 @@ impl DriveParams {
             },
             heating: on("winding_heating")?,
             rated_rise,
+            housing_max_rise: if cfg.get("ratings.housing_max_rise_k").is_ok() { cfg.positive("ratings.housing_max_rise_k")? } else { rated_rise },
             rated_current,
             thermal_time_constant,
             start_rise: cfg.non_negative("motor.start_temperature_rise_k")?,
@@ -859,6 +867,9 @@ impl DriveParams {
     /// `s1_line` from the static torque k_t I_0 (`motor.stall_current_a`, read with effects.iron_loss off too); flat at the
     /// rated torque where the config has no stall current.
     pub fn s1_torque(&self, speed: f64) -> f64 {
+        if !self.s1_curve.is_empty() {
+            return s1_interpolated(&self.s1_curve, speed);
+        }
         let still = if self.static_torque > 0.0 { self.static_torque } else { self.rated_torque };
         s1_line(still, self.rated_torque, self.rated_speed, speed)
     }
@@ -956,6 +967,39 @@ impl DriveParams {
             Motor::Stepper(s) => s.rates(self, d, w, angle, speed, rates),
             Motor::Induction(m) => m.rates(self, d, w, speed, rates),
         }
+    }
+}
+
+/// The printed S1 curve of a config (`motor.s1_curve_speed_rad_s`, `motor.s1_curve_torque_nm`): the same number of points
+/// each, at least two, speeds rising from 0 or above, torques not negative. Empty where the config has neither key.
+pub fn s1_curve_of(cfg: &Config) -> Result<Vec<[f64; 2]>> {
+    let (sk, tk) = ("motor.s1_curve_speed_rad_s", "motor.s1_curve_torque_nm");
+    if cfg.get(sk).is_err() && cfg.get(tk).is_err() {
+        return Ok(Vec::new());
+    }
+    let (speeds, torques) = (cfg.f64s(sk)?, cfg.f64s(tk)?);
+    if speeds.len() != torques.len()
+        || speeds.len() < 2
+        || speeds[0] < 0.0
+        || speeds.windows(2).any(|w| w[1] <= w[0])
+        || torques.iter().any(|t| *t < 0.0)
+    {
+        return Err(ConfigError::Invalid(sk.into()));
+    }
+    Ok(speeds.into_iter().zip(torques).map(|(w, t)| [w, t]).collect())
+}
+
+/// The S1 torque at `speed` (either direction) from a printed curve: linear between its points, the first torque below
+/// the first speed and the last one beyond the last (the curve ends where the maker's graph does).
+pub fn s1_interpolated(curve: &[[f64; 2]], speed: f64) -> f64 {
+    let w = speed.abs();
+    match curve.iter().position(|p| p[0] >= w) {
+        Some(0) => curve[0][1],
+        Some(k) => {
+            let (a, b) = (curve[k - 1], curve[k]);
+            a[1] + (b[1] - a[1]) * (w - a[0]) / (b[0] - a[0])
+        }
+        None => curve[curve.len() - 1][1],
     }
 }
 
@@ -1676,6 +1720,7 @@ pub(crate) mod tests {
             pole_pairs: 0.0,
             heating: false,
             rated_rise: 100.0,
+            housing_max_rise: 100.0,
             rated_current: 1.27 / 0.45,
             thermal_time_constant: 1800.0,
             start_rise: 0.0,
@@ -1704,6 +1749,7 @@ pub(crate) mod tests {
             iron_loss_rated: 0.0,
             stall_current: 1.27 / 0.45,
             static_torque: 0.0,
+            s1_curve: Vec::new(),
             magnet_coefficient: 0.0,
             resistor_heating: None,
         }
@@ -2878,6 +2924,16 @@ pub(crate) mod tests {
 
     /// The S1 line from the static torque (the stall current's, 1.8 N m here) to the rated torque at the rated speed:
     /// at the rated speed 314 rad/s the rated 1.27 N m, halfway 1.535 N m, and flat at the rated torque without a static one.
+    /// The printed S1 curve (0, 2.0), (100, 1.5), (300, 0.5): linear between its points, the first torque below the first
+    /// speed, the last beyond the last, the same both ways: at 200 rad/s 1.5 - 0.5 * 100 / 200 = 1.0 N m.
+    #[test]
+    fn the_printed_s1_curve_is_read_linearly() {
+        let c = [[0.0, 2.0], [100.0, 1.5], [300.0, 0.5]];
+        assert_eq!(s1_interpolated(&c, 0.0), 2.0);
+        assert!((s1_interpolated(&c, -200.0) - 1.0).abs() < 1e-12);
+        assert_eq!(s1_interpolated(&c, 400.0), 0.5);
+    }
+
     #[test]
     fn the_s1_torque_runs_from_the_static_torque_to_the_rated_one() {
         let p = DriveParams { static_torque: 1.8, ..params() };
