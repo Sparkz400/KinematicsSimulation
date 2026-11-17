@@ -278,11 +278,16 @@ pub fn load_config(entry: &MachineEntry, text: &str) -> Result<Config, ConfigErr
 /// The keys a config for `entry` may have: its default config's, and a motor's own table (`[motor.<id>]` and the rest
 /// of `catalog::PER_MOTOR_TABLES`) for any motor `cfg` gives one, with the shared table's keys, though the default has
 /// none for that motor (a seven-joint URDF on the arm whose default has six).
-/// shortcut: any id passes here, a motor's that the machine does not have too (it is then not read); check the ids
-/// against the built machine's motors where a misspelt one has to be refused.
+/// An id of a table that the machine built from `cfg` has no motor of is refused (`ConfigError::Invalid` with
+/// `<table>.<id>`), so a misspelt one is not silently unread. Where `cfg` does not build, the ids are not checked here:
+/// building it reports that error itself.
 pub fn schema(entry: &MachineEntry, cfg: &Config) -> Result<Config, ConfigError> {
     let mut text = entry.default_config.to_string();
     let default = entry.config();
+    let motors: Option<Vec<String>> = crate::catalog::resolve(entry, cfg)
+        .and_then(|resolved| (entry.build)(&resolved))
+        .ok()
+        .map(|machine| machine.motors().iter().map(|m| m.id.to_string()).collect());
     for table in crate::catalog::PER_MOTOR_TABLES {
         let (Some(shared), Some(own)) =
             (default.get(table).ok().and_then(|v| v.as_table()), cfg.get(table).ok().and_then(|v| v.as_table()))
@@ -292,6 +297,9 @@ pub fn schema(entry: &MachineEntry, cfg: &Config) -> Result<Config, ConfigError>
         for (id, value) in own {
             if !value.is_table() || shared.contains_key(id) {
                 continue;
+            }
+            if motors.as_ref().is_some_and(|m| !m.contains(id)) {
+                return Err(ConfigError::Invalid(format!("{table}.{id}")));
             }
             text.push_str(&format!(
                 "

@@ -201,6 +201,11 @@ pub trait Machine: Send {
     fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]);
     fn derivatives(&self, state: &[f64], torque: &[f64], out: &mut [f64]);
     fn tool_state(&self, state: &[f64], pos: &mut [f64], vel: &mut [f64]);
+    /// What a load-side scale reads: the carriage (the tool) against the frame it is mounted on, so a frame's sway
+    /// and a tool's lean are not in it. By default the tool state, in the room, as `tool_state` reports it.
+    fn scale_state(&self, state: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+        self.tool_state(state, pos, vel);
+    }
     /// Gives a state at rest (see `equilibrium`) the tool speeds `vel`: everything that moves with the
     /// tool, motors included, moves along as the kinematics say.
     fn set_tool_velocity(&self, state: &mut [f64], vel: &[f64]);

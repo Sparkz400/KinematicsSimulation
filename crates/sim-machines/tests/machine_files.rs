@@ -733,6 +733,14 @@ fn a_motors_own_tables_are_checked() {
     assert_eq!(refused(belt).map(|e| e.key()), Some("error-config-invalid"));
 }
 
+/// A per-motor table for an id the built machine has no motor of is refused by its name (`motor.zz`).
+#[test]
+fn a_per_motor_table_of_a_motor_the_machine_lacks_is_refused() {
+    let entry = &machine_t_gantry::ENTRY;
+    let text = format!("{}\n[motor.zz]\nrotor_inertia_kgm2 = 1e-4\n", machine_t_gantry::EXCT_30_CONFIG);
+    assert_eq!(sim_components::load_config(entry, &text).err(), Some(ConfigError::Invalid("motor.zz".into())));
+}
+
 /// The belt's lowest mode by hand, on the single axis at x = 0.5 m: the carriage (4 kg and the 2 kg payload) between
 /// the two sections, 0.15 + x = 0.65 m and 2.45 - x = 1.95 m long, with the pulley held. Each section's stiffness is
 /// dT/dL = EA / l with l its unstretched belt (`Belt::section`): the axis lies flat, so both hold the pretension and

@@ -34,17 +34,18 @@
 //! L as above (its dp/dt along the machine's own rates), w = (g x theta, 0) the change of gravity in the machine's frame
 //! by the base's tilt theta. The base's kinetic energy 1/2 M_B d'^2 + d' . P, its spring's 1/2 k d^2 and the weight's
 //! work on its tilt, -theta . (c x g - c0 x g), are in `Machine::energy` and in the signals `energy.*`; its damping c d'^2
-//! is the signal `power.base`.
+//! is the signal `power.base`. The process force's work on the moving base, the outside force's wrench (about the pivot,
+//! less its value at the start pose) times the base's rates, is taken off that row (it is energy put in, so a negative
+//! loss), which closes the budget while a process force works on a swaying base.
 //!
-//! shortcut: the gyroscopic and centrifugal terms of the base's tilt rates on the machine (second order in the small
-//! tilt), and the change of the base's inertia with the machine's pose, are left out; the process force's work on the
-//! moving base is not in the budget. A gantry crate's and the machine files' own frame mode (effects.frame_compliance)
+//! The gyroscopic and centrifugal terms of the base's tilt rates on the machine (second order in the small tilt), and
+//! the change of the base's inertia with the machine's pose, are left out. A gantry crate's and the machine files' own frame mode (effects.frame_compliance)
 //! is the coupled one along one axis: the portal's posts swaying under its beam; the base is what the whole machine
 //! stands on, in series with it.
 
 use sim_core::{
-    AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FrameMomentum, FrictionContact, LOSS_PREFIX, Machine,
-    Mode, MotorInfo, RatingCheck, Scene, SignalInfo, ThermalPart,
+    AxisInfo, BASE_AXES, BeltSection, Config, ConfigError, ENERGY_PARTS, FrameMomentum, FrictionContact, LOSS_PREFIX,
+    Machine, Mode, MotorInfo, RatingCheck, Scene, SignalInfo, ThermalPart,
 };
 
 /// The base's directions: translation along x, y, z, tilt about x, y, z.
@@ -70,6 +71,8 @@ pub struct Based {
     pivot: [f64; 3],
     /// The static load at the start pose (about the origin), which the base was set up under.
     reference: [f64; 6],
+    /// The outside force's wrench at the start pose, about the origin (the part of `reference` that is not weight).
+    external_reference: [f64; 6],
     /// How many of the machine's signals are its base signals.
     inner_base_signals: usize,
     /// effects.base_reaction.
@@ -183,6 +186,7 @@ pub fn mount(cfg: &Config, machine: Box<dyn Machine>) -> Result<Box<dyn Machine>
         .then(|| Reaction::new(machine.as_ref(), &state, &torque, pivot, &at_rest));
     let based = Based {
         reference: static_load(&at_rest),
+        external_reference: external_wrench(&at_rest),
         inner_base_signals: signals.len(),
         inner: machine,
         dofs,
@@ -244,6 +248,12 @@ pub fn add_spin(f: &mut FrameMomentum, axis: [f64; 3], inertia: f64, speed: f64)
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+/// The outside force alone, as force and torque about the origin.
+fn external_wrench(m: &FrameMomentum) -> [f64; 6] {
+    let t = cross(m.external_at, m.external);
+    [m.external[0], m.external[1], m.external[2], t[0], t[1], t[2]]
 }
 
 /// The weight and the outside force of what moves, as force and torque about the origin.
@@ -342,10 +352,17 @@ impl Based {
         parts
     }
 
-    /// The base's damping loss, W.
+    /// The base's row of the loss budget, W: its damping loss less the work the process force does on it as it moves.
     fn damping_power(&self, s: &[f64]) -> f64 {
         let at = self.n() + self.dofs.len();
-        self.dofs.iter().enumerate().map(|(k, d)| d.damping * s[at + k] * s[at + k]).sum()
+        let damping: f64 = self.dofs.iter().enumerate().map(|(k, d)| d.damping * s[at + k] * s[at + k]).sum();
+        let f = self.inner.frame_momentum(&s[..self.n()]).unwrap_or_default();
+        let now = external_wrench(&f);
+        let mut w: [f64; 6] = std::array::from_fn(|j| now[j] - self.external_reference[j]);
+        let about = cross(self.pivot, [w[0], w[1], w[2]]);
+        (0..3).for_each(|k| w[3 + k] -= about[k]);
+        let rate = self.full(s, true);
+        damping - (0..6).map(|j| rate[j] * w[j]).sum::<f64>()
     }
 
     /// The base's deflection at rest under the machine at state `s` (its own).
@@ -369,15 +386,48 @@ impl Based {
         })
     }
 
-    /// The machine's pose alone (without the base) and the base's move of the scene at state `s`, `scale` times.
-    fn scene_shift(&self, s: &[f64], scale: f64) -> Option<[f64; 3]> {
+    /// Where the base's move (`scale` times) takes a point `p` of the scene: by the base's translation plus its tilt
+    /// about the pivot at the point's own place, p + t + theta x (p - pivot). The scene's axes are those of the
+    /// machine's frame up to the map the machine's `scene_point` makes (a permutation or a reflection): it is read
+    /// off from the scene move of a unit translation along each axis, and the tilt, a pseudovector, goes through it
+    /// with the sign of its determinant. The pivot in the scene lies where the tool's point lies, less its distance to
+    /// the pivot in the machine's frame. (A direction the scene point does not show is taken along the scene's own axis.)
+    fn scene_mover(&self, s: &[f64], scale: f64) -> Option<impl Fn([f64; 3]) -> [f64; 3]> {
         let n = self.inner.axes().len();
         let (mut pose, mut vel) = (vec![0.0; n], vec![0.0; n]);
         self.inner.tool_state(&s[..self.n()], &mut pose, &mut vel);
-        let shift = self.tool_shift(&pose, &self.full(s, false));
-        let moved: Vec<f64> = pose.iter().zip(&shift).map(|(p, d)| p + scale * d).collect();
-        let (from, to) = (self.inner.scene_point(&pose)?, self.inner.scene_point(&moved)?);
-        Some(std::array::from_fn(|k| to[k] - from[k]))
+        let from = self.inner.scene_point(&pose)?;
+        let mut columns = [[0.0; 3]; 3];
+        for (k, column) in columns.iter_mut().enumerate() {
+            let mut unit = [0.0; 6];
+            unit[k] = 1.0;
+            let moved: Vec<f64> = pose.iter().zip(self.tool_shift(&pose, &unit)).map(|(p, d)| p + d).collect();
+            let to = self.inner.scene_point(&moved)?;
+            *column = std::array::from_fn(|i| to[i] - from[i]);
+            // A direction the scene point does not show (a planar machine has no z axis): the scene's own axis.
+            if column.iter().all(|c| c.abs() < 1e-12) {
+                column[k] = 1.0;
+            }
+        }
+        let map = |v: [f64; 3]| -> [f64; 3] { std::array::from_fn(|i| (0..3).map(|k| columns[k][i] * v[k]).sum()) };
+        let det = {
+            let c = columns;
+            let x = cross(c[0], c[1]);
+            (0..3).map(|i| x[i] * c[2][i]).sum::<f64>().signum()
+        };
+        let d = self.full(s, false);
+        let t = map([d[0], d[1], d[2]]).map(|v| scale * v);
+        let theta = map([d[3], d[4], d[5]]).map(|v| scale * v * if det < 0.0 { -1.0 } else { 1.0 });
+        let axes = self.inner.axes();
+        let at_tool: [f64; 3] = std::array::from_fn(|k| {
+            axes.iter().position(|a| a.id == BASE_AXES[0][k]).map_or(0.0, |i| pose[i]) - self.pivot[k]
+        });
+        let away = map(at_tool);
+        let pivot: [f64; 3] = std::array::from_fn(|k| from[k] - away[k]);
+        Some(move |p: [f64; 3]| {
+            let turned = cross(theta, std::array::from_fn(|k| p[k] - pivot[k]));
+            std::array::from_fn(|k| p[k] + t[k] + turned[k])
+        })
     }
 }
 
@@ -469,6 +519,10 @@ impl Machine for Based {
         let rate = self.tool_shift(pos, &self.full(state, true));
         pos.iter_mut().zip(shift).for_each(|(p, d)| *p += d);
         vel.iter_mut().zip(rate).for_each(|(v, d)| *v += d);
+    }
+    /// The scale stands on the machine, so the base's deflection is not in it either.
+    fn scale_state(&self, state: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+        self.inner.scale_state(&state[..self.n()], pos, vel)
     }
     fn set_tool_velocity(&self, state: &mut [f64], vel: &[f64]) {
         let n = self.n();
@@ -657,35 +711,36 @@ impl Machine for Based {
             out.push(self.damping_power(state));
         }
     }
-    /// The machine's scene, moved as far as the base moves its tool, times the exaggeration.
-    // shortcut: the scene moves as a whole by the base's move at the tool, neither tilting nor moving the polylines of
-    // belts; enough to see the base sway, upgrade if a tilting base has to be drawn.
+    /// The machine's scene, moved with the base times the exaggeration: every point (the parts, the ends of a belt's
+    /// strips, labels, arrows) by the base's translation and its tilt at its own place (`scene_mover`).
     fn scene(&self, state: &[f64], out: &mut Scene) {
         self.inner.scene(&state[..self.n()], out);
-        let Some(d) = self.scene_shift(state, out.exaggeration) else { return };
-        let add = |p: &mut [f64; 3]| (0..3).for_each(|k| p[k] += d[k]);
-        out.parts.iter_mut().for_each(|p| add(&mut p.pos));
-        out.labels.iter_mut().for_each(|l| add(&mut l.pos));
-        out.arrows.iter_mut().for_each(|a| add(&mut a.pos));
+        let Some(mover) = self.scene_mover(state, out.exaggeration) else { return };
+        for part in &mut out.parts {
+            part.pos = mover(part.pos);
+            if let sim_core::Shape::Segment { to, .. } = &mut part.shape {
+                *to = mover(*to);
+            }
+        }
+        out.labels.iter_mut().for_each(|l| l.pos = mover(l.pos));
+        out.arrows.iter_mut().for_each(|a| a.pos = mover(a.pos));
     }
     fn scene_point(&self, tool_pose: &[f64]) -> Option<[f64; 3]> {
         self.inner.scene_point(tool_pose)
     }
     fn collision_bodies(&self, state: &[f64]) -> Vec<sim_core::Aabb> {
         let mut bodies = self.inner.collision_bodies(&state[..self.n()]);
-        if let Some(d) = self.scene_shift(state, 1.0) {
-            bodies.iter_mut().for_each(|b| (0..3).for_each(|k| b.centre[k] += d[k]));
+        // (A box keeps its axes: only its centre goes with the tilt.)
+        if let Some(mover) = self.scene_mover(state, 1.0) {
+            bodies.iter_mut().for_each(|b| b.centre = mover(b.centre));
         }
         bodies
     }
     fn collision_capsules(&self, state: &[f64]) -> Vec<sim_core::Capsule> {
         let mut capsules = self.inner.collision_capsules(&state[..self.n()]);
-        if let Some(d) = self.scene_shift(state, 1.0) {
+        if let Some(mover) = self.scene_mover(state, 1.0) {
             for c in &mut capsules {
-                for k in 0..3 {
-                    c.from[k] += d[k];
-                    c.to[k] += d[k];
-                }
+                (c.from, c.to) = (mover(c.from), mover(c.to));
             }
         }
         capsules
@@ -809,6 +864,9 @@ mod tests {
         }
         fn base_signals(&self, _: &[f64], _: &[f64], _: &mut Vec<f64>) {}
         fn scene(&self, _: &[f64], _: &mut Scene) {}
+        fn scene_point(&self, tool: &[f64]) -> Option<[f64; 3]> {
+            Some([tool[0], 0.0, 0.0])
+        }
     }
 
     /// An arm in the x-z plane turning about the y axis at the origin, its angle a from x towards z: a point mass `mass`
@@ -1054,6 +1112,7 @@ mod tests {
             dofs: dofs.clone(),
             pivot,
             reference: static_load(&at_rest),
+            external_reference: external_wrench(&at_rest),
             inner_base_signals: 0,
             reaction: Some(reaction),
         };
@@ -1088,6 +1147,42 @@ mod tests {
         let damped = on(0.05).unwrap();
         assert_eq!(damped.signal_infos().last().unwrap().id, "power.base");
         sim_core::testkit::loss_budget(damped.as_ref());
+    }
+
+    /// The process force's work on the moving base is in the base's row. The slider dwells under 50 N along x on a base
+    /// of 200 kg and 8e5 N/m (damping ratio 0.05: c = 2 * 0.05 * sqrt(8e5 * 200) = 1264.911 N s/m) moving at 0.3 m/s:
+    /// the row is c v^2 - F v = 113.842 - 15 = 98.842 W (the force was not on at the start pose, so none is taken off).
+    #[test]
+    fn the_process_force_works_on_the_moving_base_in_its_row() {
+        let config = base_config(true, 0.5, [8.0e5, 0.0, 0.0, 0.0, 0.0, 0.0], 0.05, [0.0; 3]);
+        let mut machine = mount(&config, Box::new(slider())).unwrap();
+        machine.set_dwelling(true);
+        let state = [0.5, 0.0, 1e-4, 0.3];
+        let mut rows = Vec::new();
+        machine.loss_powers(&state, &[0.0], &mut rows);
+        assert!((rows.last().unwrap() - 98.842).abs() < 1e-3, "{rows:?}");
+    }
+
+    /// The scene tilts with the base. The base is moved 2e-4 m along x and tilted 1e-3 rad about y through the origin;
+    /// a part at (0.2, 0, 0.5) and a belt strip's far end at (0.8, 0, -0.25) move by t + theta x p, theta = (0, 1e-3, 0):
+    /// (2e-4 + 1e-3 * 0.5, 0, -1e-3 * 0.2) = (7e-4, 0, -2e-4) and (2e-4 - 2.5e-4, 0, -8e-4) = (-5e-5, 0, -8e-4).
+    #[test]
+    fn the_scene_tilts_with_the_base_at_each_points_own_place() {
+        let config = base_config(false, 0.5, [8.0e5, 0.0, 0.0, 0.0, 5.0e3, 0.0], 0.0, [0.0; 3]);
+        let machine = mount(&config, Box::new(slider())).unwrap();
+        let mut scene = Scene::default();
+        let shape = sim_core::Shape::Segment { to: [0.8, 0.0, -0.25], width: 0.01 };
+        scene.parts.push(sim_core::Part::new("belt", shape, [0.2, 0.0, 0.5], [1.0; 3]));
+        // The slider at 0.5, then the base's x and tilt about y, then their rates.
+        let state = [0.5, 0.0, 2e-4, 1e-3, 0.0, 0.0];
+        machine.scene(&state, &mut scene);
+        let part = &scene.parts[0];
+        let sim_core::Shape::Segment { to, .. } = &part.shape else { unreachable!() };
+        let (a, b) = ([7e-4, 0.0, -2e-4], [-5e-5, 0.0, -8e-4]);
+        for k in 0..3 {
+            assert!((part.pos[k] - [0.2, 0.0, 0.5][k] - a[k]).abs() < 1e-12, "{:?}", part.pos);
+            assert!((to[k] - [0.8, 0.0, -0.25][k] - b[k]).abs() < 1e-12, "{to:?}");
+        }
     }
 
     /// A base lighter than what the machine moves on it cannot be: M_B - A M^-1 A^T would not be positive.
