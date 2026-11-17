@@ -35,15 +35,19 @@
 //! on the arms: the parallelograms hold the platform level.
 //!
 //! Each arm reads its own `[motor.<id>]`, `[gearbox.<id>]` and `[parts.<id>]` over the shared tables (ids 1 to 3, the
-//! tool's 4); without them the three share `[motor]` and `[gearbox]`. The arms' modes still take the first arm's
-//! gearbox for all three (`sim_netlist::spatial`).
+//! tool's 4); without them the three share `[motor]` and `[gearbox]`. Each arm's modes take its own gearbox.
 //!
 //! With effects.joint_elasticity the tool's gearbox twists, and with effects.shaft_torsion the shaft twists in series
 //! with it: one spring 1 / (1/k_gear + 1/k_shaft) between the gearbox and the tool, with the shaft's damping (the
-//! shaft's spin inertia sits at the tool and the gearbox's output has none, so the two springs are one).
+//! shaft's spin inertia sits at the tool and the gearbox's output has none, so the two springs are one). The shaft is
+//! in series with the whole gear as a screw's or a rack's converter is (`transmission::Converter`, lever 1): with
+//! effects.gearbox_lost_motion it stretches over the band too (`Gearbox::band_compliance`) and the hysteresis and its
+//! reversal stiffness are those of the series spring.
 //!
 //! With effects.tool_gearbox_body (and both of those) the gearbox's output is a body of its own, `J_o`
-//! (`gearbox.4.output_inertia_kgm2`: the planet carrier and output flange), between the two springs:
+//! (`tool.gearbox_output_inertia_kgm2`: the planet carrier and output flange), between the two springs. The
+//! catalogue's inertia at the input holds it as J_o / i^2, so that much leaves the rotor: the chain's inertia is the
+//! same with the body as without it.
 //!
 //! ```text
 //! J_o th_o'' = T_gear(rotor, th_o) - T_s        T_s = k_s (th_o - c) + c_s (th_o' - c')   the shaft's torque
@@ -54,17 +58,21 @@
 //!
 //! Two modes: the tool's (the lower, the series spring's when J_o -> 0: lambda -> k_g k_s / (J_c (k_g + k_s))) and
 //! the gearbox's against the shaft's spring (about (k_g + k_s) / J_o, above 1 kHz). Energy: the shaft's spring and
-//! J_o's kinetic energy are stored, the shaft's damping c_s (th_o' - c')^2 is booked with the gearbox's loss.
+//! J_o's kinetic energy are stored, the shaft's damping c_s (th_o' - c')^2 is booked with the gearbox's loss. The
+//! damping ratios are the undamped shapes' (phi^T C phi / (2 w phi^T M phi)): the tool's 0.02272 against 0.02267 of the
+//! damped system's roots (41.068 Hz against 41.083), and the gearbox's own 2.7 says it is overdamped (the roots are
+//! real, -1786 and -48963 1/s, with the gearbox's 5 N m s/rad on J_o = 1e-4). RK4 at the 15.6 us sub-step holds the
+//! fast root for h lambda < 2.785: 0.77 as shipped, 2.17 at the bounds' corner (10 N m s/rad on 7.2e-5 kg m^2).
 
-use machine_delta_d3::{Delta, PlatformDrag};
+use machine_delta_d3::{Arms, Delta, PlatformDrag};
 use sim_components::catalog::motor_config;
 use sim_components::joint::RotaryJoint;
-use sim_components::mech::{HardStop, ShaftFriction, ThermalFeedback};
+use sim_components::mech::{HardStop, HoldingBrake, ShaftFriction, ThermalFeedback};
+use sim_components::transmission::Converter;
 use sim_core::{
     AxisInfo, Config, ConfigError, LOSS_PREFIX, Label, Machine, MachineEntry, Mode, MotorInfo, Part, Scene, Shape,
     SignalInfo, TORQUE_PARTS, ThermalPart,
 };
-use sim_netlist::linkage::Arms;
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "delta-d4",
@@ -221,6 +229,8 @@ pub struct Delta4 {
     /// How many of the state's entries and of the base signals are the arms'.
     n3: usize,
     arm_base_signals: usize,
+    /// Where the arms' kinetic, potential and elastic energy stand among their effect signals.
+    arm_energy_at: usize,
     /// The tool's turn: motor, gearbox (twisted together with the shaft), brake, the tool bearing's friction.
     tool: RotaryJoint,
     elastic: bool,
@@ -316,8 +326,19 @@ impl Delta4 {
         let body = cfg.bool("effects.tool_gearbox_body")? && elastic && torsion;
         if torsion && !body {
             // One spring in series, damped by the shaft (the softer by far): the gearbox's output has no inertia.
-            tool.gearbox.stiffness = 1.0 / (1.0 / tool.gearbox.stiffness + 1.0 / k_shaft);
+            let shaft = Converter { lever: 1.0, stiffness: k_shaft, backlash: 0.0, efficiency: 1.0, inertia: 0.0 };
+            shaft.apply_to(&tcfg, &mut tool, cfg.positive("tool.inertia_kgm2")?)?;
             tool.gearbox.damping = c_shaft;
+        }
+        let out_inertia = if body { cfg.positive("tool.gearbox_output_inertia_kgm2")? } else { 0.0 };
+        if body {
+            // The body's share of the catalogue's inertia at the input leaves the rotor.
+            let share = out_inertia / (tool.ratio() * tool.ratio());
+            if share >= tcfg.non_negative("gearbox.inertia_at_input_kgm2")? {
+                return Err(ConfigError::Invalid("tool.gearbox_output_inertia_kgm2".into()));
+            }
+            tool.rotor_inertia -= share;
+            tool.brake = HoldingBrake::from_config(&tcfg, tool.rotor_inertia)?;
         }
         let j_shaft = if with_mass { cfg.non_negative("shaft.spin_inertia_kgm2")? } else { 0.0 };
         let mut axes: Vec<AxisInfo> = arms.axes().to_vec();
@@ -342,12 +363,16 @@ impl Delta4 {
         let (mut state, mut torque, mut signals) = (Vec::new(), [0.0; 3], Vec::new());
         arms.equilibrium(&[0.0, 0.0, mid[2]], &mut state, &mut torque);
         arms.base_signals(&state, &torque, &mut signals);
+        let infos = arms.signal_infos();
+        let arm_energy_at =
+            infos.iter().position(|i| i.id == "energy.kinetic").expect("the arms report their energy") - signals.len();
         Ok(Self {
             n3: arms.state_len(),
             arm_base_signals: signals.len(),
+            arm_energy_at,
             arms,
             elastic,
-            out_inertia: if body { cfg.positive("gearbox.4.output_inertia_kgm2")? } else { 0.0 },
+            out_inertia,
             k_shaft,
             c_shaft,
             j_tool: cfg.positive("tool.inertia_kgm2")? + j_shaft,
@@ -794,8 +819,8 @@ impl Machine for Delta4 {
     /// The arms' effect signals with the tool's energy added to theirs, then the tool motor's torque parts and the
     /// tool's losses.
     fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
+        let at = out.len() + self.arm_energy_at;
         self.arms.effect_signals(&s[..self.n3], &torque[..3], out);
-        let at = out.len() - 3;
         for (k, e) in self.tool_energy(s).into_iter().enumerate() {
             out[at + k] += e;
         }
@@ -806,7 +831,7 @@ impl Machine for Delta4 {
         let losses = self.tool_losses(s, torque[3]);
         let held = j.brake.torque(self.brake_engaged, speed, self.brake(s)).0;
         let parts = [
-            (self.tool_inertia() + j.reflected_inertia()) * rates[1] / j.ratio(),
+            ((self.tool_inertia() + j.reflected_inertia()) * rates[1] + self.out_inertia * rates[6]) / j.ratio(),
             0.0,
             j.shaft.torque(speed) + held + losses.gear_at_rotor + j.friction.torque(w) / j.ratio(),
         ];

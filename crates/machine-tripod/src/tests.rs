@@ -173,6 +173,20 @@ fn the_legs_hold_a_centred_load_with_the_hand_calculated_forces() {
     }
 }
 
+/// The same hold with the shipped legs' parts, by virtual work: the platform rising dz turns each leg's u_z = h / L by
+/// s dz / L (s = 0.0331565, L = 0.5491812 m), so the rod part (0.9 kg, centre 0.175 m below its joint) rises by
+/// (1 - 0.0105655) dz and the body part (2.1 kg, centre 0.1 m above the base joint) by 0.0060374 dz:
+/// f u_z = g (60 kg / 3 + 0.9 x 0.9894345 + 2.1 x 0.0060374) = g 20.903170 kg, f = 208.4754 N.
+#[test]
+fn the_legs_parts_add_their_hand_calculated_weight_to_the_hold() {
+    let mut cfg = ENTRY.config();
+    cfg.set_text("mass.payload_offset_m = [0.0, 0.0, 0.0]").unwrap();
+    let f = mechanism(&cfg).static_leg_forces(&LEVEL).unwrap();
+    for v in f {
+        assert!((v - 208.4754).abs() < 1e-3, "{f:?}");
+    }
+}
+
 /// The default payload sits 0.05 m off centre in x (and 0.1 m up, which a level platform does not feel): the centre of
 /// mass of all 62.7 kg is c = 40 x 0.05 / 62.7 = 0.031898 m out. The legs' vertical shares V_i balance the weight and
 /// its moment, V_i = m g (1/3 + 2 c cos t_i / (3 rp)) (sum V_i = m g, sum V_i rp cos t_i = m g c, sum V_i rp sin t_i =
@@ -284,10 +298,10 @@ fn the_default_cycle_passes_its_verdicts() {
 /// The legs' two parts as bodies of their own, lifting the platform level (all legs alike, qd_i = u_z v_z, the twist
 /// (0, 0, v_z, 0, 0, 0): the constraints e_i . v = 0 hold): with s = 1 - u_z^2 = 0.0331565, L = 0.5491812 m,
 /// u' = (v - (u . v) u) / L so |u'|^2 = v_z^2 s / L^2. The base part (2.1 kg, centre 0.1 m, inertia 0.044) turns about
-/// the base joint: T = 1/2 (m c^2 + I) |u'|^2. The rod part (0.9 kg, 0.17 m, 0.0092) moves at v - c u':
+/// the base joint: T = 1/2 (m c^2 + I) |u'|^2. The rod part (0.9 kg, 0.175 m, 0.0092) moves at v - c u':
 /// |.|^2 = v_z^2 (1 - 2 c s / L + c^2 s / L^2). The sum of all entries of M_q is 2 T / (u_z v_z)^2, so against the point
 /// legs of the old model it is larger by 3 (m_b c_b^2 + I_b) s / (L^2 u_z^2) = 0.0221726 and by
-/// 3 [m_p (c_p^2 s / L^2 - 2 c_p s / L) + I_p s / L^2] / u_z^2 = -0.0453137 kg: -0.0231411 kg together.
+/// 3 [m_p (c_p^2 s / L^2 - 2 c_p s / L) + I_p s / L^2] / u_z^2 = -0.0464701 kg: -0.0242976 kg together.
 #[test]
 fn the_legs_parts_add_the_hand_calculated_kinetic_energy() {
     // `centred` has the parts as points; the shipped parts are the default config's.
@@ -303,7 +317,7 @@ fn the_legs_parts_add_the_hand_calculated_kinetic_energy() {
         m.iter().sum::<f64>()
     };
     let delta = sum(&shipped) - sum(&points);
-    assert!((delta + 0.0231411).abs() < 1e-6, "{delta}");
+    assert!((delta + 0.0242976).abs() < 1e-6, "{delta}");
 }
 
 /// The dynamics with the legs' parts against Lagrange's equations by differences: at a pose off level and a speed,

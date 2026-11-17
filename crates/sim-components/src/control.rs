@@ -200,8 +200,8 @@ pub struct Controller {
     /// How long before the end of a segment the next one may start; 0 with blending off.
     blend_time: f64,
     /// For a path timed as fast as the motors allow: the share of the torque limits it may use
-    /// (`profile.torque_reserve`), the belt tensions it may need (`ratings.belt_min_tension_n`, `belt_max_tension_n` less
-    /// `profile.tension_margin_n` on both; unbounded where the config has none) and the share of the room to them
+    /// (`profile.torque_reserve`), the belt tensions it may need (`ratings.belt_min_tension_n`, `belt_max_tension_n`, or the machine's
+    /// own `tension_band`, less `profile.tension_margin_n` on both; unbounded where the config has none) and the share of the room to them
     /// (`profile.tension_reserve`), each gearbox's output torque rating and the guides' load rating (`path::PlanLimits`).
     plan_limits: path::PlanLimits,
     /// Each motor's DC link room above the bus, J (`dc_link_room`).
@@ -756,9 +756,14 @@ impl Controller {
         }
         // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
         // whatever the room (friction, the belt's vibration), which is roughly absolute, not a share of the room.
+        // A machine with a band of its own (a cable robot's cables) gives it; the ratings otherwise.
+        let band = machine.tension_band().map_or_else(
+            || [cfg.f64("ratings.belt_min_tension_n").ok(), cfg.f64("ratings.belt_max_tension_n").ok()],
+            |[low, high]| [Some(low), Some(high)],
+        );
         let tension = [
-            cfg.f64("ratings.belt_min_tension_n").map_or(f64::NEG_INFINITY, |t| t + tension_margin),
-            cfg.f64("ratings.belt_max_tension_n").map_or(f64::INFINITY, |t| t - tension_margin),
+            band[0].map_or(f64::NEG_INFINITY, |t| t + tension_margin),
+            band[1].map_or(f64::INFINITY, |t| t - tension_margin),
             tension_reserve,
         ];
         // Each motor's shaft friction and gearbox drag as its own config has them (`mech::ShaftFriction`); none where the
@@ -2277,7 +2282,7 @@ impl Controller {
         // The position between two cycles is the cubic through both with their speeds: a straight line between them
         // has a kink at every stored cycle, which a delay sliding over it (the period following the pose) turns
         // into a step in the shaped position's speed, off its exact rates by up to the plan's acceleration times the
-        // delay's rate times T (measured 0.08 m/s^2 in 8 on the spatial cable robot).
+        // delay's rate times T (measured 0.08 m/s^2 in 8 on the spatial cable-driven platform).
         let ago = |which: usize, axis: usize, delay: f64| -> f64 {
             let (whole, part) = (delay.floor() as usize, delay.fract());
             let at = |n: usize, which: usize| self.history[newest - n.min(newest)][which][axis];

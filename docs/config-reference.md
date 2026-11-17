@@ -621,7 +621,7 @@ What the parts allow. `sim-cli verdicts` judges a cycle against these. **A ratin
 | `gearbox_max_input_speed_rpm` | T S | r/min | Highest speed at the gearbox input. Not in the catalogue's gearbox files | `gearbox-input-speed` | placeholder |
 | `shaft_max_radial_load_n` | T E S | N | Radial load the belt may put on a pulley shaft; in a machine file and on the arm on a track also what a rack's pinion may put on the gearbox's output shaft (`rack.<motor>.radial_load`; the track's 2500 N, estimate). Not in the gearbox files; not published by Festo | `gearbox-radial-load` | placeholder (T S), estimate (E) |
 | `guide_max_load_n` | T E S | N | Highest load on a guide (on the arm on a track: its four blocks' set, C0 over 2 of four HGH20CA, 73360 N, catalogue). The time-optimal plan keeps the guides' loads in the rigid model within it where the machine gives them (T-gantry, single axis) | `guide-load` | placeholder (T S), estimate (E) |
-| `guide_carriages` | | – | Optional: the carriages of the guide set, a whole number of at least 1, which the catalogue's guide search (`search --axes`) sizes the set with. Absent = 4 (two rails with two carriages each) | – (the search) | absent |
+| `guide_carriages` | | – | Optional: the carriages of the guide set, a whole number of at least 1, which the catalogue's guide search (`search --axes`) sizes the set with. Absent = 4 (two rails with two carriages each); a value that is not a whole number of at least 1 is refused when the config is loaded | – (the search) | absent |
 | `guide_rail_length_m` | | m | Optional: the rails' length, which the catalogue's guide search takes the installed weight from. Absent = the stroke plus two carriage lengths | – (the search's cost) | absent |
 | `guide_moment_x_nm`, `guide_moment_y_nm`, `guide_moment_z_nm` | N m | Optional (linear delta): the guide's highest moments about the column, the tangential and the outward axis (Festo's Mx, My, Mz); an absent one leaves that moment out of the equivalent load | absent |
 | `guide_dynamic_load_rating_n` | T E S | N | Dynamic load rating C of the life estimate L10 = (C / P)³ · 50 km (on the arm on a track: four HGH20CA, 108400 N, catalogue) | `guide_life_km` of `analyze`; in hours `guide-life` | placeholder (T S), estimate (E) |
@@ -710,7 +710,7 @@ Low and high bound of the values that are estimates. The table mirrors the confi
 | D | 32 | The geometry and the masses (not the payload), the rods' spin inertia, the joint's friction, the motor's friction, ripple, cogging and winding resistance, the gearbox's stiffness and damping, `[thermal]`, three of `[thermal_feedback]`, the DC link's discharge and the line module's efficiency, the gearing's Wöhler exponent, the upper arms' bending stiffnesses and dampings (in and out of their planes) | The stop angles and stiffness, the working range, the axis limits, the loop gains, every `[catalogue]` value |
 | D2 | 26 | As D, with the gearbox's backlash in place of its stiffness (the stiffness is the catalogue's, the backlash an estimate) | As D |
 | D4 | 50 | As D, with the arms' backlash, and the estimates of `[gearbox.4]` (backlash, damping), `[motor.4]` (winding, friction), `[ratings.4]`, `[tool]` and `[shaft]` | As D; the shaft's slide smoothing speed |
-| H4 | 47 | As D, with the arms' backlash (an estimate here), and the estimates of `[plate]` (pinion radius, gear ratio, the amplifier's stiffness, damping and backlash) and `[tool]` | As D; the upper arms' bending (`[upper_arm]`, with `effects.arm_bending`) is bounded too, four keys more |
+| H4 | 49 | As D, with the arms' backlash (an estimate here), and the estimates of `[plate]` (pinion radius, gear ratio, the amplifier's stiffness, damping and backlash) and `[tool]` | As D; the upper arms' bending (`[upper_arm]`: the tube's diameter, wall and modulus and the two dampings, with `effects.arm_bending`) and the elbow block's twist inertia are bounded too |
 | E | 75 | Every `[estimate]` of the file, including geometry estimates, belt mass, all friction values, winding resistance and inductance, brake torque, pulley inertia, frame mass, idler, cable chain, process force, hard stops, sensor noise, the estimated ratings (the discharge time constant and the line module's efficiency among them), the thermal resistances and time constants, the tooth jump factor and the four estimates of `[thermal_feedback]` | The ripple and cogging orders and the loop gains; all `[catalogue]` values; the rated rises of `[thermal]`; the span resonance band (a limit) |
 
 Since 15 November 2026 every config with a holding brake also bounds `brake.engage_delay_s` and `brake.release_delay_s`, two more than the counts above. No cycle uses them (the brakes act only while the drives stop or start), so `verdicts --bands` runs nothing for them; `sim-cli stop` with the bounds set by hand shows what they do.
@@ -930,7 +930,7 @@ The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/de
 | --- | --- | --- | --- |
 | `effects.shaft_mass` | – | The shaft's weight share at the platform (on the arms) and its spin inertia at the tool | on |
 | `effects.shaft_torsion` | – | The shaft twists in series with the tool's gearbox (with `joint_elasticity`) | on |
-| `effects.tool_gearbox_body` | – | The tool gearbox's output is a body of its own, `gearbox.4.output_inertia_kgm2`, between the gearbox's spring and the shaft's (two more states; needs `joint_elasticity` and `shaft_torsion`, else ignored): the gearbox's mode (about 1.5 kHz) next to the tool's 41 Hz, the gearbox keeping its own damping. Off: the two springs are one in series | off |
+| `effects.tool_gearbox_body` | – | The tool gearbox's output is a body of its own, `tool.gearbox_output_inertia_kgm2`, between the gearbox's spring and the shaft's (two more states; needs `joint_elasticity` and `shaft_torsion`, else ignored): the gearbox's own motion (1.5 kHz, overdamped by its 5 N m s/rad) next to the tool's 41 Hz, the gearbox keeping its own damping; the body's J / ratio² leaves the inertia at the input. Off: the two springs are one in series (with `gearbox_lost_motion` the shaft stretches over the band too) | off |
 | `effects.telescope_friction` | – | The telescope's sliding friction along the shaft, a force on the platform that the arms take | on |
 | `axis.c.min_angle_deg`, `max_angle_deg` | ° | The controller's range of the tool's turn (the machine has no stops) | −360, 360, choice |
 | `axis.c.max_velocity_rad_s`, `max_acceleration_rad_s2`, `max_jerk_rad_s3` | rad/s, rad/s², rad/s³ | The turn's limits | 30, 600, 30000, estimates (ABB publishes none; 30 rad/s is the motor's 240 rad/s behind ratio 8) |
@@ -940,7 +940,6 @@ The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/de
 | `motor.4.brake_torque_nm` | N m | Its brake | 2, estimate |
 | `gearbox.4.ratio`, `efficiency`, `stiffness_nm_rad`, `inertia_at_input_kgm2` | | The tool's gearbox over `[gearbox]` | 8, 0.97, 8250.592, 8.8e-6, catalogue (Siemens NRB060-04-8) |
 | `gearbox.4.backlash_rad` | rad | Its backlash | 2.909e-4 (1 arcmin), estimate, bounded 0.5 to 2 arcmin (catalogue: 10 arcmin) |
-| `gearbox.4.output_inertia_kgm2` | kg m² | Its output's inertia (planet carrier and flange: a steel disc of 50 mm × 15 mm, m r²/2 = 7.2e-5, and the carrier), with `tool_gearbox_body` | 1e-4, estimate, bounded 5e-5 to 2e-4 |
 | `gearbox.4.damping_nm_s_rad` | N m s/rad | Its damping (replaced by the shaft's with `shaft_torsion`) | 5, estimate, bounded 2 to 10 |
 | `drive.4.peak_torque_nm`, `rated_torque_nm`, `rated_speed_rad_s`, `no_load_speed_rad_s` | | Its drive over `[drive]` | 3.75, 1.27, 314.159, 619.7016, catalogue (1FK2104-4AF; no-load speed √(3/2) · 540 V / kt) |
 | `drive.4.velocity_kp_nm_s_rad`, `velocity_tn_s`, `kv_1_s`, `current_kp_v_a` | | Its loops | 0.05, 0.02, 80, 120: tuned with `sim-cli margins delta-d4 --bands` (at least 37.7°, 9.4 dB; the 0.081 `catalog::with_motor_part` retunes to keeps 34.6°, 5.4 dB), the shorter integral time and higher position gain for `settling`; the current loop's L over 0.25 ms as the shared |
@@ -951,6 +950,7 @@ The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/de
 | `tool.inertia_kgm2` | kg m² | Flange and gripper about the tool's axis | 2e-3, estimate, bounded 1e-3 to 4e-3 |
 | `tool.payload_inertia_kgm2` | kg m² | The payload about the tool's axis (with `effects.payload`) | 5e-3, estimate (3 kg, 100 × 100 mm), bounded 2.5e-3 to 1e-2 |
 | `tool.friction_coulomb_nm`, `friction_viscous_nm_s_rad`, `friction_smoothing_rad_s` | | The tool bearing's friction (`effects.joint_friction`) | 0.02, 1e-4, 0.01, estimates; the first two bounded |
+| `tool.gearbox_output_inertia_kgm2` | kg m² | The tool gearbox's output (planet carrier and flange: a steel disc of 50 mm × 15 mm, m r²/2 = 7.2e-5, and the carrier), with `effects.tool_gearbox_body`; a share of `gearbox.4.inertia_at_input_kgm2`, refused above ratio² times it | 1e-4, estimate, bounded 7.2e-5 (the disc alone) to 2e-4 |
 | `shaft.upper_joint_z_m` | m | Height of the upper cardan joint on the base's axis | 0, estimate, bounded ±0.05 |
 | `shaft.lower_joint_offset_m` | m | The lower cardan joint above the platform's centre | 0.05, estimate, bounded 0.03 to 0.08 |
 | `shaft.min_length_m`, `max_length_m` | m | Shortest and longest the telescope can be; beyond: `error-delta-shaft-stroke` | 0.6, 1.1, estimates, bounded |
@@ -960,7 +960,7 @@ The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/de
 | `shaft.torsional_stiffness_nm_rad`, `torsional_damping_nm_s_rad` | N m/rad, N m s/rad | The shaft's twist (`effects.shaft_torsion`) | 500, 0.075, estimates, bounded 250 to 1000 and 0.03 to 0.2 |
 | `shaft.slide_friction_n`, `slide_friction_viscous_n_s_m`, `slide_friction_smoothing_m_s` | N, N s/m, m/s | The telescope's sliding friction (`effects.telescope_friction`) | 5, 2, 0.005, estimates; the first two bounded |
 
-The fourth motor has tables of its own, `[motor.4]`, `[gearbox.4]`, `[drive.4]`, `[ratings.4]`, over the shared ones as in a machine file (`catalog::motor_config`): its joint, its drive and its verdicts read them, and `sim-cli search delta-d4 --motor-id 4` sizes it alone. A key left out is the shared one. The arms share `[motor]` and `[gearbox]` unless an arm has tables of its own: `[motor.1]` to `[motor.3]`, `[gearbox.1]` to `[gearbox.3]` and `[parts.1]` to `[parts.3]` over the shared ones (a key left out is the shared one); the arms' modes still take the first arm's gearbox for all three. Until 14 November the fourth motor was the arms' 1FK2105-4AF with their drive, judged against their gearbox's ratings, and `[tool_gearbox]` with `ratings.tool_gearbox_max_torque_nm` (check `tool-gearbox-peak`) stood for its gearbox; a config with those keys now fails as having unknown keys: rename `[tool_gearbox]` to `[gearbox.4]` and the rating to `ratings.4.gearbox_max_torque_nm`.
+The fourth motor has tables of its own, `[motor.4]`, `[gearbox.4]`, `[drive.4]`, `[ratings.4]`, over the shared ones as in a machine file (`catalog::motor_config`): its joint, its drive and its verdicts read them, and `sim-cli search delta-d4 --motor-id 4` sizes it alone. A key left out is the shared one. The arms share `[motor]` and `[gearbox]` unless an arm has tables of its own: `[motor.1]` to `[motor.3]`, `[gearbox.1]` to `[gearbox.3]` and `[parts.1]` to `[parts.3]` over the shared ones (a key left out is the shared one), each arm's joint and modes taking its own. Until 14 November the fourth motor was the arms' 1FK2105-4AF with their drive, judged against their gearbox's ratings, and `[tool_gearbox]` with `ratings.tool_gearbox_max_torque_nm` (check `tool-gearbox-peak`) stood for its gearbox; a config with those keys now fails as having unknown keys: rename `[tool_gearbox]` to `[gearbox.4]` and the rating to `ratings.4.gearbox_max_torque_nm`.
 
 ## Quattro-type delta H4
 
@@ -981,11 +981,12 @@ with 0.1 ms filters (tuned with `sim-cli margins delta-h4 --bands`: at least 46.
 | --- | --- | --- | --- |
 | `effects.amplifier_compliance` | – | The tool turns on the amplifier's spring (rack, pinion and gear stage twist), a body of its own; off, it turns with the slide times the ratio | on |
 | `effects.amplifier_backlash` | – | With `amplifier_compliance`: the amplifier's play at the tool, a dead band in its spring | on |
-| `effects.arm_bending` | – | The upper arms bend as the D3's do with `link_elasticity`: in the plane they turn in, the elbow turns against the arm's root on a spring and damper; out of it, the elbow moves along its axis on the tube's lateral spring and damper. The tube stays with the root, the elbow block and the forearms' share move with the elbow; the plate rings after a move. Not taken: the D3's `arm_tube_inertia` | off |
-| `upper_arm.bending_stiffness_nm_rad` | N m/rad | With `effects.arm_bending`: the arm's bending as a turn of the elbow about the shoulder, 3 E I / L_a. The D3's carbon tube 50 × 2 mm, E 100 GPa (I = 8.70e-8 m⁴) at L_a = 0.5 m: 52200; bounds 32000 to 80000 | 52000, estimate |
-| `upper_arm.bending_damping_nm_s_rad` | N m s/rad | Its damping, about 2 % of critical at the plate's sideways mode; bounds 2 to 10 | 5.0, estimate |
-| `upper_arm.lateral_stiffness_n_m` | N/m | The arm's bending out of the plane it turns in, as a move of the elbow along its axis: 3 E I / L_a³ (the same round tube): 208800; bounds 125000 to 310000 | 210000, estimate |
-| `upper_arm.lateral_damping_n_s_m` | N s/m | Its damping, about 2 % of critical with the elbow's share of mass (0.47 kg with the rods); bounds 5 to 25 | 12.0, estimate |
+| `effects.arm_bending` | – | The upper arms bend as the D3's do with `link_elasticity`: in the plane they turn in, the elbow turns against the arm's root on a spring k_b = 3 E I / L_a and damper; out of it, the elbow moves along its axis on the tube's lateral spring k_l = 3 E I / L_a³ and damper, E I from the tube's keys. The tube stays with the root, the elbow block and the forearms' share move with the elbow; the plate rings after a move | off |
+| `effects.arm_tube_inertia` | – | With `arm_bending`: the tube's own share of the bending modes as a cantilever's first mode, its tube as much of `mass.upper_arm_kg` as `upper_arm_inertia_kgm2` allows a uniform tube (the rest a hub on the axis): a quarter of its mass, m L_a²/4 of its inertia and 0.3915 m L_a of its first moment move with the elbow, the cross term 0.2844 m L_a² θ' δ' of its kinetic energy joins the root to the elbow; out of the plane a quarter of its mass moves with the elbow, and the elbow block twists by 1.3765 y / L_a (`mass.elbow_twist_inertia_kgm2` and the forearms' share at the rods' ends) | off |
+| `mass.elbow_twist_inertia_kgm2` | kg m² | With `effects.arm_tube_inertia`: the elbow block's inertia about the arm's normal through it. The 0.35 kg block, 0.1 m across: m w² / 12 = 2.9e-4; bounds 1.5e-4 to 6e-4 | 2.9e-4, estimate |
+| `upper_arm.tube_outer_diameter_m`, `tube_wall_m`, `youngs_modulus_pa` | m, m, Pa | With `effects.arm_bending`: the arm tube, round: I = π (D⁴ − (D − 2 s)⁴) / 64, k_b = 3 E I / L_a, k_l = 3 E I / L_a³. A carbon tube 60 × 2.5 mm, E 100 GPa (the class's 6 kg payload on a 0.5 m arm): E I = 18699 N m², k_b = 112195 N m/rad, k_l = 448781 N/m; bounds 50 to 70 mm, 2 to 3 mm, 70 to 135 GPa; a wall over half the diameter is refused | 0.06, 0.0025, 1e11, estimates |
+| `upper_arm.bending_damping_nm_s_rad` | N m s/rad | Its damping in the plane: 2 % of critical at the plate's sideways bending mode with the roots held (33.3 Hz at the centre 950 mm down); bounds 8 to 42 | 21.0, estimate |
+| `upper_arm.lateral_damping_n_s_m` | N s/m | Its damping out of the plane, about 2 % of critical with the elbow's share of mass (0.58 kg with the rods' middles, 139.6 Hz); bounds 8 to 40 | 20.0, estimate |
 | `geometry.plate_radius_m` | m | From a plate part's centre to each of its two forearm pairs (both parts alike) | 0.07, estimate, bounded 0.06 to 0.08 |
 | `mass.plate_part_kg` | kg | Each of the two plate parts, without the forearms' share | 0.7, estimate, bounded 0.5 to 1.0 |
 | `mass.carriage_kg` | kg | The carriage between the parts at the tool's point: pinion, gear stage, flange | 1.0, estimate, bounded 0.7 to 1.4 |
@@ -1157,12 +1158,12 @@ legs' friction bounded):
 | `leg.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | Buffers at the stroke's ends (`effects.hard_stops`) | 2e6, 2000 |
 | `leg.mass_kg` | kg | A leg: body, motor, rod and nut | 4 |
 | `leg.platform_share` | – | The share of it that is the rod part on the platform joint; the rest is the body part on the base joint | 0.3 |
-| `leg.base_part_centre_m`, `leg.base_part_inertia_kgm2` | m, kg m² | The body part: its centre's distance from the base joint along the leg, its inertia about the centre across the leg (the part swings with the leg). Absent 0: no swing | 0.1, 0.058, estimates |
-| `leg.platform_part_centre_m`, `leg.platform_part_inertia_kgm2` | m, kg m² | The rod part: its centre's distance from the platform joint towards the base, its inertia about the centre across the leg. Absent 0: a point at the joint | 0.17, 0.012, estimates |
+| `leg.base_part_centre_m`, `leg.base_part_inertia_kgm2` | m, kg m² | The body part: its centre's distance from the base joint along the leg, its inertia about the centre across the leg (the part swings with the leg; 0, 0: no swing) | 0.1, 0.058, estimates, bounded |
+| `leg.platform_part_centre_m`, `leg.platform_part_inertia_kgm2` | m, kg m² | The rod part: its centre's distance from the platform joint towards the base, its inertia about the centre across the leg (0, 0: a point at the joint) | 0.175, 0.012, estimates, bounded |
 | `mass.platform_kg` | kg | The platform | 25 |
 | `mass.platform_inertia_kgm2` | kg m² | Its inertia about its centre, x, y, z (the legs' parts are separate bodies) | 0.4, 0.4, 0.7 |
 | `mass.payload_kg` | kg | Payload at the centre (`effects.payload`) | 30 |
-| `mass.payload_inertia_kgm2` | kg m² | Optional: the payload's inertia about the platform centre, x, y, z (platform frame; turns with the platform). Absent 0: a point mass | – |
+| `mass.payload_inertia_kgm2` | kg m² | The payload's inertia about the platform centre, x, y, z (platform frame; turns with the platform; with `effects.payload`). 0: a point mass | 0, 0, 0 |
 | `workspace.tool_min`, `tool_max` | m, rad | The tool's box, the axes' ranges | −0.06, −0.06, 0.44, −0.08, −0.08, −0.12 to 0.06, 0.06, 0.54, 0.08, 0.08, 0.12 |
 | `workspace.max_joint_angle_deg` | ° | Steepest leg against the base's or the platform's normal; beyond: `error-hexapod-joint-angle` | 40 |
 | `workspace.max_condition_number` | – | Of the Jacobian, turns weighed by the platform radius; beyond: `error-hexapod-singularity` | 20 |
@@ -1189,8 +1190,8 @@ estimates; the masses, the legs' friction and force bounded):
 | `leg.friction_coulomb_n`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | N, N s/m, m/s | The rod's guide and seal (`effects.joint_friction`), plus the nut's preload drag | 15, 40, 0.002 |
 | `leg.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | Buffers at the stroke's ends (`effects.hard_stops`) | 2e6, 2000 |
 | `leg.mass_kg`, `platform_share` | kg, – | A leg: body, motor, rod and nut; the share that is the rod part on the platform joint (the rest is the body part on the base joint) | 3, 0.3 |
-| `leg.base_part_centre_m`, `leg.base_part_inertia_kgm2` | m, kg m² | The body part: its centre's distance from the base joint along the leg, its inertia about the centre across the leg (the part swings with the leg). Absent 0: no swing | 0.1, 0.044, estimates |
-| `leg.platform_part_centre_m`, `leg.platform_part_inertia_kgm2` | m, kg m² | The rod part: its centre's distance from the platform joint towards the base, its inertia about the centre across the leg. Absent 0: a point at the joint | 0.17, 0.0092, estimates |
+| `leg.base_part_centre_m`, `leg.base_part_inertia_kgm2` | m, kg m² | The body part: its centre's distance from the base joint along the leg, its inertia about the centre across the leg (the part swings with the leg; 0, 0: no swing) | 0.1, 0.044, estimates, bounded |
+| `leg.platform_part_centre_m`, `leg.platform_part_inertia_kgm2` | m, kg m² | The rod part: its centre's distance from the platform joint towards the base, its inertia about the centre across the leg (0, 0: a point at the joint) | 0.175, 0.0092, estimates, bounded |
 | `leg.max_force_n` | N | The feed force the cylinder allows; judged by `tripod-leg-force` | 1500 |
 | `mass.platform_kg`, `platform_inertia_kgm2` | kg, kg m² | The platform; its inertia about its centre, x, y, z (the legs' parts are separate bodies) | 20; 0.35, 0.35, 0.65 |
 | `mass.payload_kg` | kg | Payload (`effects.payload`) | 40 |
@@ -1235,7 +1236,7 @@ this ratio). Its own keys (all estimates; the masses bounded):
 | `workspace.min_dead_centre_margin_deg` | ° | Least angle of a crank from its dead centre; nearer: `error-rss-dead-centre` | 10 |
 | `workspace.crank_joint_max_angle_deg`, `platform_joint_max_angle_deg` | ° | The ball joints' limits: the rod out of the crank's plane, against the platform's normal; beyond: `error-rss-ball-joint`; also the verdicts' limits | 35, 40 |
 | `workspace.min_rod_clearance_m` | m | Least distance between two rods' axes; nearer: `error-rss-rods-cross` | 0.03 |
-| `workspace.min_body_clearance_m` | m | Least distance of a rod's axis from the platform's and the base's hexagon edges (the edges at its own joints apart); nearer: `error-rss-rods-cross-body`; absent 0 (no check) | 0.02, estimate |
+| `workspace.min_body_clearance_m` | m | Least distance of a rod's axis from the platform's and the base's hexagon edges (the edges at its own joints apart); nearer: `error-rss-rods-cross-body`; 0: no check | 0.02, estimate |
 | `workspace.max_condition_number` | – | Of the inverse Jacobian, turns weighed by the platform radius; beyond: `error-rss-singularity` | 30 |
 | `ratings.crank_dead_centre_margin_deg` | ° | Verdict `crank-dead-centre`: the rod's angle from the crank's tangent at most 90° less this | 20 |
 | `ratings.rod_buckling_safety_factor` | – | Verdict `rod-buckling`: the rod's compression at most its Euler load over this | 3 |
@@ -1274,10 +1275,9 @@ estimates, values planar / spatial; bounded where they are a part's property):
 | `cable.specific_damping_n_s` | N s | Its damping times its free length: c = this / l (`effects.cable_damping`) | 60 / 150 |
 | `cable.breaking_load_n` | N | Its breaking load | 4000 / 10000 |
 | `cable.safety_factor` | – | The band's top is the breaking load over this (the rating of `cable-max-tension`) | 10 |
-| `cable.min_tension_n` | N | The band's bottom, the least tension that keeps a cable taut (`cable-min-tension`) | 10 / 20 |
+| `cable.min_tension_n` | N | The band's bottom, the least tension that keeps a cable taut (`cable-min-tension`); with the top, the band the time-optimal plan keeps each cable's tension within (`profile.tension_reserve` of the room) | 10 / 20 |
 | `cable.reference_tension_n` | N | The pretension the distribution keeps the tensions nearest to | 120 / 250 |
-| `cable.mass_per_m_kg` | kg/m | The cable's own mass: half the weight of its free span hangs on the platform (with its along-cable share), and the sag softens EA by Ernst's modulus E / (1 + (w l_h)² E A / (12 T³)); 0 or left out: both left out | 0.003 / 0.010 |
-| `ratings.belt_min_tension_n`, `belt_max_tension_n` | N | The band the time-optimal plan keeps each cable's tension within (`rigid_tensions_moving`); the same as `cable.min_tension_n` and the breaking load over the safety factor | 10, 400 / 20, 1000 |
+| `cable.mass_per_m_kg` | kg/m | The cable's own mass: half the weight of its free span hangs on the platform, and the cable sags (its stiffness Ernst's modulus E / (1 + (w l_h)² E A / (12 T³)), see the mechanisms); 0 or left out: both left out | 0.003 / 0.010 |
 | `winch.drum_radius_m` | m | The drum's radius: the lever behind the gearbox | 0.025 / 0.03 |
 | `winch.drum_inertia_kgm2` | kg m² | The drum's inertia | 2e-4 / 4e-4 |
 | `winch.capacity_m` | m | The cable a drum holds: its stops at 0 and here | 5 |
@@ -1297,7 +1297,7 @@ the lift (m). Its own keys:
 
 | Key | Unit | Meaning | Value, source |
 | --- | --- | --- | --- |
-| `effects.joint_elasticity` | | The gearboxes of motors 1 and 2 and the Z stroke's coupling and screw twist (two bodies per joint; the column rings on its screw at several hundred Hz); off, the rigid model | true |
+| `effects.joint_elasticity` | | The gearboxes of motors 1 and 2 and the Z stroke's coupling and screw twist (two bodies per joint; the column rings on its screw and coupling at 321 Hz with the rotor held); off, the rigid model | true |
 | `effects.band_elasticity` | | The bands in the links stretch: the forearm and the effector on the bands' springs; off, rigid bands | true |
 | `geometry.link_m` | m | Both links' length, shoulder to elbow and elbow to wrist (equal, or the bands would not keep the wrist on the radial line) | 0.32, estimate |
 | `geometry.effector_m` | m | The effector's length from the wrist to the wafer centre | 0.18, estimate |

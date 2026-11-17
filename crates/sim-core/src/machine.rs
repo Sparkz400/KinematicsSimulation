@@ -262,6 +262,11 @@ pub trait Machine: Send {
         let _ = tool_vel;
         self.rigid_tensions(tool_pos, tool_acc, out)
     }
+    /// The band [least, most] (N) the time-optimal plan keeps `rigid_tensions` within, where the machine has it from
+    /// its own parts (a cable robot's cables); `None`: `ratings.belt_min_tension_n` and `belt_max_tension_n`.
+    fn tension_band(&self) -> Option<[f64; 2]> {
+        None
+    }
     /// The load of each guide that reports `axis.<id>.guide_load` (N, in that order) in the loss-free rigid model at a
     /// tool pose and acceleration, as [rest, moving] for the load rest + |moving|: `moving` linear in the acceleration
     /// and zero without. The time-optimal plan keeps it within `ratings.guide_max_load_n`. Appends nothing where the

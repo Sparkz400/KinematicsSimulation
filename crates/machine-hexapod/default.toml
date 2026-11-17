@@ -207,7 +207,7 @@ platform_half_angle_deg = 10.0
 # platform_share is the rod part on the platform joint; the rest is the body part on the base joint. Each part is a
 # body of its own, swinging with the leg: its centre's distance from its joint along the leg (*_part_centre_m) and its
 # inertia about its centre across the leg (*_part_inertia_kgm2, a bar: m l^2 / 12). [estimate] The rod part a bar of
-# 0.35 m (centre 0.17 m), the body part with the motor 0.5 m long from 0.15 m behind the base joint (centre 0.1 m).
+# 0.35 m (centre 0.175 m), the body part with the motor 0.5 m long from 0.15 m behind the base joint (centre 0.1 m).
 [leg]
 closed_length_m = 0.45
 stroke_m = 0.2
@@ -220,16 +220,16 @@ mass_kg = 4.0
 platform_share = 0.3
 base_part_centre_m = 0.1
 base_part_inertia_kgm2 = 0.058
-platform_part_centre_m = 0.17
+platform_part_centre_m = 0.175
 platform_part_inertia_kgm2 = 0.012
 
-# [estimate] A welded aluminium platform of 400 mm across, its inertia about its centre (x, y, z); the payload a point
-# mass at the centre (mass.payload_inertia_kgm2, x, y, z about the centre, optional, absent 0, would give it an
-# inertia of its own).
+# [estimate] A welded aluminium platform of 400 mm across, its inertia about its centre (x, y, z); the payload a mass
+# at the centre with its inertia about the centre (x, y, z, platform frame; 0: a point mass).
 [mass]
 platform_kg = 25.0
 platform_inertia_kgm2 = [0.4, 0.4, 0.7]
 payload_kg = 30.0
+payload_inertia_kgm2 = [0.0, 0.0, 0.0]
 
 # The box the tool may move in (x, y, z in m; rx, ry, rz in rad), the steepest leg against the base's and the
 # platform's normal the joints allow, and the condition number of the Jacobian refused above. [estimate] universal
@@ -524,6 +524,10 @@ ratings.drive_max_current_time_s = [0.1, 1.0]
 mass.platform_kg = [20.0, 30.0]
 leg.mass_kg = [3.0, 5.0]
 leg.platform_share = [0.2, 0.4]
+leg.base_part_centre_m = [0.05, 0.15]
+leg.base_part_inertia_kgm2 = [0.04, 0.08]
+leg.platform_part_centre_m = [0.12, 0.22]
+leg.platform_part_inertia_kgm2 = [0.008, 0.017]
 leg.friction_coulomb_n = [10.0, 40.0]
 leg.friction_viscous_n_s_m = [30.0, 120.0]
 screw.efficiency = [0.85, 0.95]

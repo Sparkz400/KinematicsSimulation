@@ -54,7 +54,8 @@ winch_directions = [
     [0.0, 0.0, -1.0],
 ]
 # The axis each winch's drum and rotor turn about (one row per cable), for the winches' spin in the frame's load. Empty:
-# horizontal and square to the cable's direction at the winch (winch direction x e_z).
+# horizontal and square to the cable's direction at the winch (here, with vertical winch directions, the pulley's
+# axle at rest).
 winch_spin_axes = []
 
 [pulley]
@@ -281,10 +282,6 @@ standstill_time_s = 1.0
 standstill_window_rad = 0.1
 torque_band = 0.0
 [ratings]
-# The band the time-optimal plan keeps every cable's tension within (`rigid_tensions_moving`): the same as cable.min_tension_n
-# and cable.breaking_load_n / cable.safety_factor, which the rating checks use; change them together.
-belt_min_tension_n = 20.0
-belt_max_tension_n = 1000.0
 # [estimate] What a cable robot of this size is asked to hold at a dwell, the place and, on its own, the turn (2 mrad,
 # 0.28 mm at the anchors, as the SCARA's in tool space; the cycle's dwells reach 1.03 mrad, sim-cli verdicts).
 settling_tolerance_m = 0.001
@@ -365,6 +362,7 @@ platform.mass_kg = [3.5, 4.5]
 cable.ea_n = [2.0e5, 4.5e5]
 cable.specific_damping_n_s = [50.0, 400.0]
 cable.breaking_load_n = [9000.0, 11000.0]
+cable.mass_per_m_kg = [0.008, 0.012]
 winch.drum_inertia_kgm2 = [3.0e-4, 6.0e-4]
 winch.friction_coulomb_n = [1.5, 6.0]
 winch.friction_viscous_n_s_m = [1.0, 4.0]

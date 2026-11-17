@@ -568,6 +568,23 @@ fn the_slanted_pieces_and_the_tool_bar_are_capsules() {
     assert!(boxes.len() <= 2, "{} boxes", boxes.len());
 }
 
+/// The shipped tube's bending stiffness by hand: a carbon tube 60 x 2.5 mm, E 100 GPa, I = pi (0.06^4 - 0.055^4) / 64 =
+/// 1.869923e-7 m^4, as a cantilever of L_a = 0.5 m: k_b = 3 E I / L_a = 112195.35 N m/rad in its plane and
+/// k_l = 3 E I / L_a^3 = 448781.4 N/m out of it.
+const K_BEND: f64 = 112195.35;
+
+#[test]
+fn the_arms_bending_stiffnesses_are_the_tubes() {
+    let d = h4(&["effects.arm_bending = true"]);
+    let b = d.bending.unwrap();
+    close(b.k, K_BEND, 1e-7, "in the plane");
+    close(b.k_lateral, 448781.4, 1e-7, "out of it");
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.arm_bending = true").unwrap();
+    cfg.set_text("upper_arm.tube_wall_m = 0.031").unwrap();
+    assert!(H4::new(&cfg).is_err(), "a wall thicker than the tube's radius");
+}
+
 /// The bend of an arm at rest under a hand-calculated tip load (effects.arm_bending). At the centre, 850 mm down, the
 /// tool at c = 0, the forearms lumped: the arm's elbow is at t = -1.6975 degrees (`angle_by_hand`), by the four-fold
 /// symmetry each arm's forearm pair carries a quarter of the plate, and there is no force along the elbow's axis (the
@@ -575,7 +592,7 @@ fn the_slanted_pieces_and_the_tool_bar_are_capsules() {
 /// carries about the shoulder: the weight of what sits at the elbow, g m_tip cos t with
 /// m_tip = L_a (m_elbow + 2/3 m_fb) = 0.5 (0.35 + 0.6667 * 0.7) = 0.408335 kg m, and the plate's, m g |dz/dt| (m = 9.3332 kg,
 /// dz/dt = -0.12203 m/rad per arm as in the holding-torque test): Q = 4.0026 + 11.1696 = 15.172 N m, so
-/// delta = Q / k_b = 15.172 / 52000 = 2.918e-4 rad. The joint then stands short of the elbow by that, t - delta, and its
+/// delta = Q / k_b = 15.172 / 112195.35 = 1.3523e-4 rad (`K_BEND`). The joint then stands short of the elbow by that, t - delta, and its
 /// gearbox holds the tube's weight and Q: -(g 0.35 cos(t - delta) + Q) / 20 at the motor. The plate is where the pose says.
 #[test]
 fn an_arm_bends_by_the_tip_torque_over_its_stiffness_at_rest() {
@@ -593,7 +610,6 @@ fn an_arm_bends_by_the_tip_torque_over_its_stiffness_at_rest() {
         "effects.forearm_inertia = false",
         "effects.gearbox_backlash = false",
         "effects.amplifier_backlash = false",
-        "upper_arm.bending_stiffness_nm_rad = 52000.0",
     ] {
         cfg.set_text(e).unwrap();
     }
@@ -601,7 +617,7 @@ fn an_arm_bends_by_the_tip_torque_over_its_stiffness_at_rest() {
     let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
     d.equilibrium(&[0.0, 0.0, z, 0.0], &mut state, &mut torque);
     assert_eq!(state.len(), d.state_len());
-    let delta = q / 52000.0;
+    let delta = q / K_BEND;
     let at = d.bend_at();
     for k in 0..4 {
         close(state[at + k], delta, 1e-6, "bend");
@@ -628,7 +644,7 @@ fn an_arm_bends_by_the_tip_torque_over_its_stiffness_at_rest() {
 /// slide), z' = 4 J_z per rad, J_z = dz/dt per arm = -0.12203 m/rad. The elbows carry I_tip = L_a^2 (m_elbow + 2/3 m_fb)
 /// = 0.25 * 0.81669 = 0.204173 kg m^2 each and the plate m = 9.3332 kg, so with the springs k_b on the four elbows
 /// v = (1, 1, 1, 1) is an eigenvector of M with M v = (I_tip + 4 m J_z^2) v = 0.76009 v, and w^2 = k_b / 0.76009
-/// = 68413 1/s^2, 41.63 Hz. The forearms lie in the arms' planes, so the elbows' moves out of them are decoupled
+/// = 147607 1/s^2, 61.15 Hz. The forearms lie in the arms' planes, so the elbows' moves out of them are decoupled
 /// there. The eight modes of the bending alone include it.
 #[test]
 fn the_bend_mode_of_the_four_elbows_together_is_the_hand_calculated_one() {
@@ -638,15 +654,14 @@ fn the_bend_mode_of_the_four_elbows_together_is_the_hand_calculated_one() {
     let jz = la * (e * t.sin() - z * t.cos()) / (z + la * t.sin()) / 4.0;
     let m = 2.0 * (0.7 + 2.0 * (1.0 - 0.6667) * 0.7) + 1.0 + 6.0;
     let i_tip = la * la * (0.35 + 0.6667 * 0.7);
-    let w2 = 52000.0 / (i_tip + 4.0 * m * jz * jz);
+    let w2 = K_BEND / (i_tip + 4.0 * m * jz * jz);
     let by_hand = w2.sqrt() / std::f64::consts::TAU;
-    close(by_hand, 41.63, 2e-3, "the mode's frequency by hand");
+    close(by_hand, 61.15, 2e-4, "the mode's frequency by hand");
     let d = h4(&[
         "effects.arm_bending = true",
         "effects.forearm_inertia = false",
         "effects.joint_elasticity = false",
         "effects.amplifier_compliance = false",
-        "upper_arm.bending_stiffness_nm_rad = 52000.0",
     ]);
     let modes = d.modes_at(&[0.0, 0.0, z, 0.0], false);
     let all: Vec<f64> = modes.iter().map(|m| m.0).collect();
@@ -662,18 +677,23 @@ fn the_bend_mode_of_the_four_elbows_together_is_the_hand_calculated_one() {
 
 /// Free and loss-free (no friction, damping, backlash or ripple, the bending's dampers made zero), held by the constant
 /// motor torques of the pose and started at (1, -0.5, 0.3) m/s turning at 5 rad/s, the energy less the motors' work stays
-/// what it was with the arms bending in and out of their planes: over 0.1 s of RK4 at 10 us to 1e-7 of the kinetic
+/// what it was with the arms bending in and out of their planes: over 0.1 s of RK4 at 10 us to 1e-12 of the kinetic
 /// energy at the start, with and without the rods (their spin made 0.05 kg m^2 so that its share shows), on elastic and
-/// rigid joints, with the tool on the amplifier's spring and with it turning with the slide. A velocity term or a
-/// gravity that does not belong to the mass matrix of the 8 coordinates shows as a drift.
+/// rigid joints, with the tool on the amplifier's spring and with it turning with the slide, and with the tube's own
+/// share and the elbow's twist (effects.arm_tube_inertia). A velocity term or a gravity that does not belong to the mass
+/// matrix of the 8 coordinates shows as a drift.
 #[test]
 fn a_free_loss_free_motion_with_bending_arms_keeps_its_energy() {
-    for (rods, elastic, spring, spin) in
-        [(true, true, true, 0.05), (false, false, false, 1.8e-5), (true, false, true, 1.8e-5)]
-    {
+    for (rods, elastic, spring, spin, tube) in [
+        (true, true, true, 0.05, false),
+        (false, false, false, 1.8e-5, false),
+        (true, false, true, 1.8e-5, false),
+        (true, true, true, 0.05, true),
+    ] {
         let mut cfg = lossless_config();
         for e in [
             "effects.arm_bending = true".to_string(),
+            format!("effects.arm_tube_inertia = {tube}"),
             format!("effects.forearm_inertia = {rods}"),
             format!("effects.joint_elasticity = {elastic}"),
             format!("effects.amplifier_compliance = {spring}"),
@@ -714,8 +734,10 @@ fn a_free_loss_free_motion_with_bending_arms_keeps_its_energy() {
             bent = bent.max((0..4).map(|k| (s[at + k] - rest[at + k]).abs()).fold(0.0, f64::max));
         }
         let drift = (budget(&s) - start).abs();
-        println!("rods {rods}, elastic {elastic}, spring {spring}: drift {drift:.3e} J of {kinetic:.4} J, bend up to {bent:.2e} rad");
-        assert!(drift < 1e-7 * kinetic, "rods {rods}, elastic {elastic}, spring {spring}: {drift} J of {kinetic} J");
+        println!(
+            "rods {rods}, elastic {elastic}, spring {spring}: drift {drift:.3e} J of {kinetic:.4} J, bend up to {bent:.2e} rad"
+        );
+        assert!(drift < 1e-12 * kinetic, "rods {rods}, elastic {elastic}, spring {spring}: {drift} J of {kinetic} J");
         // The arms did bend further (the motion's own acceleration rings them), so the test sees the bending's terms.
         assert!(bent > 1e-6, "{bent} rad");
     }
@@ -738,4 +760,90 @@ fn the_bending_adds_its_states_and_its_loss_signal_and_nothing_with_the_switch_o
         assert_eq!(values.len(), infos.len());
         assert_eq!(infos.iter().any(|i| i.id.ends_with("arm_bending")), loss);
     }
+}
+
+/// The tube's own share (effects.arm_tube_inertia) by hand, at the centre 850 mm down with rigid gearboxes (the roots
+/// held), the forearms lumped (m_elbow + 2/3 m_fb = 0.816690 kg at each elbow). Out of the planes the forearms lie in
+/// the arms' planes, so each elbow's move is a mode of its own on k_l = 448781.4 N/m: the elbow, a quarter of the tube
+/// (0.35 kg) and the elbow's twist, J = 2.9e-4 + 2/3 0.7 (0.1 / 2)^2 = 1.456723e-3 kg m^2 times (1.37651 / 0.5)^2 =
+/// 7.579165: m = 0.816690 + 0.35 + 0.011041 = 1.177731 kg, 98.25 Hz (without the share 0.816690 kg, 117.98 Hz). In the
+/// planes the four elbows together (as `the_bend_mode_of_the_four_elbows_together_is_the_hand_calculated_one`) carry a
+/// quarter of the tube's inertia about the shoulder more, 1.4 0.25 / 4 = 0.0875 kg m^2: k_b / (0.76009 + 0.0875) =
+/// 132369 1/s^2, 57.91 Hz.
+#[test]
+fn the_tubes_share_moves_the_bend_modes_by_hand() {
+    let lateral = |tube: bool| 448781.4 / (0.816690 + if tube { 0.35 + 1.456723e-3 * 7.579165 } else { 0.0 });
+    let z = -0.85;
+    let t = angle_by_hand(0.0, 0.0, z);
+    let (e, la) = (0.18, 0.5);
+    let jz = la * (e * t.sin() - z * t.cos()) / (z + la * t.sin()) / 4.0;
+    let m = 2.0 * (0.7 + 2.0 * (1.0 - 0.6667) * 0.7) + 1.0 + 6.0;
+    let i_tip = la * la * (0.35 + 0.6667 * 0.7);
+    let together = |tube: bool| K_BEND / (i_tip + if tube { 0.0875 } else { 0.0 } + 4.0 * m * jz * jz);
+    let hz = |w2: f64| w2.sqrt() / std::f64::consts::TAU;
+    close(hz(lateral(true)), 98.25, 2e-4, "out of the planes, by hand");
+    close(hz(lateral(false)), 117.98, 2e-4, "without the share");
+    close(hz(together(true)), 57.91, 2e-4, "in the planes, by hand");
+    for tube in [false, true] {
+        let d = h4(&[
+            "effects.arm_bending = true",
+            &format!("effects.arm_tube_inertia = {tube}"),
+            "effects.forearm_inertia = false",
+            "effects.joint_elasticity = false",
+            "effects.amplifier_compliance = false",
+        ]);
+        let modes = d.modes_at(&[0.0, 0.0, z, 0.0], false);
+        let all: Vec<f64> = modes.iter().map(|m| m.0).collect();
+        let out = modes.iter().filter(|m| (m.0 - hz(lateral(tube))).abs() < 1e-6 * m.0).count();
+        assert_eq!(out, 4, "{tube}: {} Hz four times in {all:?}", hz(lateral(tube)));
+        assert!(all.iter().any(|f| (f - hz(together(tube))).abs() < 1e-6 * f), "{tube}: {all:?}");
+    }
+}
+
+/// With bending arms, the tube's share and the rods, the frame momentum's first moment moves at its linear momentum
+/// (`testkit::frame_momentum_moves_its_first_moment`): the elbow at its moved place with its whole speed, the tube's
+/// sections out of the plane (0.3915 of its mass) and the rods' middles at their true places.
+#[test]
+fn the_frame_momentum_follows_the_bending_arms() {
+    for tube in [false, true] {
+        let d = h4(&["effects.arm_bending = true", &format!("effects.arm_tube_inertia = {tube}")]);
+        sim_core::testkit::frame_momentum_moves_its_first_moment(&d);
+    }
+}
+
+/// The tube's kinetic energy with effects.arm_tube_inertia by hand. Its sections move at s theta' + phi(s) L delta':
+/// T = m L^2 (theta'^2 / 3 + 2 0.284413 theta' delta' + delta'^2 / 4) / 2 per arm, m L^2 = 1.4 * 0.25 = 0.35 kg m^2 and
+/// I_arm = 0.117 (the config's, a little above the uniform tube's 0.116667). The roots turning at 1 rad/s with the
+/// elbows still (delta' = -1): the tube 0.117 - 2 * 0.284413 * 0.35 + 0.35 / 4 = 5.4109e-3 kg m^2 per arm, so
+/// 4 * 5.4109e-3 / 2 = 0.0108218 J and nothing else moves. Turning whole (delta' = 0) the arms are the rigid model's: the
+/// same kinetic energy as without bending, to the bend's 1e-5 rad in the pose (9.4e-7 of it measured).
+#[test]
+fn the_tubes_kinetic_energy_is_the_cantilever_modes() {
+    let bent = h4(&["effects.arm_bending = true", "effects.arm_tube_inertia = true"]);
+    let (mut s, mut torque) = (Vec::new(), [0.0; 4]);
+    bent.equilibrium(&[0.1, -0.05, -0.9, 0.0], &mut s, &mut torque);
+    let at = bent.bend_at();
+    for k in 0..4 {
+        s[4 + k] = 1.0;
+        s[at + 4 + k] = -1.0;
+    }
+    close(bent.energy_parts(&s)[0], 0.0108218, 1e-5, "the roots turning, the elbows still");
+    let rigid = h4(&[]);
+    let (mut r, mut rt) = (Vec::new(), [0.0; 4]);
+    rigid.equilibrium(&[0.1, -0.05, -0.9, 0.0], &mut r, &mut rt);
+    bent.equilibrium(&[0.1, -0.05, -0.9, 0.0], &mut s, &mut torque);
+    for (m, state) in [(&rigid, &mut r), (&bent, &mut s)] {
+        m.set_tool_velocity(state, &[0.5, 0.2, -0.3, 0.0]);
+        for k in 12..16 {
+            state[k] = 0.0;
+        }
+    }
+    let (whole, split) = (rigid.energy_parts(&r)[0], bent.energy_parts(&s)[0]);
+    assert!((whole - split).abs() < 1e-5 * whole, "{whole} J rigid, {split} J bending");
+    // An arm lighter in inertia than a uniform tube of its mass: the tube is 3 I / L^2 = 0.96 kg of it, the rest a hub
+    // on the axis, and the root keeps 0.08 - 0.25 * 0.96 * 0.25 - 2 * 0.034413 * 0.96 * 0.25 = 3.4818e-3 kg m^2.
+    let light =
+        h4(&["effects.arm_bending = true", "effects.arm_tube_inertia = true", "mass.upper_arm_inertia_kgm2 = 0.08"]);
+    close(light.root_inertia, 3.4818e-3, 1e-4, "a hub on the axis");
+    close(light.tube_mass, 0.96, 1e-12, "the tube mass");
 }

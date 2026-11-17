@@ -350,24 +350,24 @@ fn the_modes_are_those_of_the_gearboxes_and_bands() {
     assert!(handler(&RIGID).modes(&[0.5, 0.0, 0.1]).is_empty());
 }
 
-/// The column on its screw and coupling (effects.joint_elasticity): the coupling's 3000 N m/rad at the screw's lever
-/// lead / (2 pi) = 1.5915e-3 m/rad is K_c = 3000 / (1.5915e-3)^2 = 1.1844e9 N/m, in series with the screw's (shaft, nut
-/// 2e8 and bearings 4e8 N/m at the softest nut position), 1 / K = 1 / K_c + 1 / K_s; with the rotor held the column of
-/// 11.2276 kg rings at sqrt(K / m) / 2 pi. At rest the spring is compressed by m g / K (the rotor sits that far ahead
-/// of the column, in rotor radians (2 pi / lead) m g / K), and the state derivative there is zero.
+/// The column on its screw and coupling (effects.joint_elasticity), by hand: the coupling's 3000 N m/rad at the screw's
+/// lever lead / (2 pi) = 1.591549e-3 m/rad is K_c = 3000 / (1.591549e-3)^2 = 1.184353e9 N/m. The screw, fixed-free, is
+/// softest with the nut at its far end, 0.4 m from the fixed bearing: the shaft of 13.5 mm root diameter, A = pi
+/// 0.0135^2 / 4 = 1.431388e-4 m^2, is E A / L = 2.06e11 x 1.431388e-4 / 0.4 = 7.371649e7 N/m, in series with the nut's
+/// 2e8 and the bearings' 4e8 N/m: K_s = 4.747102e7 N/m, and with the coupling K = 4.564162e7 N/m. The column carries
+/// 8 + 1.5 + 1.2 + 0.4 kg and the 0.1276 kg wafer, 11.2276 kg, so with the rotor held it rings at
+/// sqrt(4.564162e7 / 11.2276) / 2 pi = 320.8907 Hz, the fifth mode, above the arm's four (at most 186 Hz). At rest the
+/// spring is compressed by m g / K = 2.412 um (the rotor that far ahead of the column, in rotor radians (2 pi / lead)
+/// m g / K), and the state derivative there is zero.
 #[test]
 fn the_column_rings_on_its_screw_and_coupling() {
     let d = handler(&[]);
-    let screw = &d.lift.screw;
     let lever = 0.01 / std::f64::consts::TAU;
-    let k_c = 3000.0 / (lever * lever);
-    let k_s = screw.stiffness(screw.softest_position());
-    let k = 1.0 / (1.0 / k_c + 1.0 / k_s);
-    close(d.lift.joint.gearbox.stiffness, k, 1e-9, "stiffness in series");
-    let by_hand = (k / 11.2276).sqrt() / std::f64::consts::TAU;
-    assert!((300.0..900.0).contains(&by_hand), "several hundred Hz: {by_hand}");
+    let k = 4.564162e7;
+    close(d.lift.joint.gearbox.stiffness, k, 1e-6, "stiffness in series");
     let modes: Vec<f64> = d.modes(&[0.4, 0.0, 0.1]).iter().map(|m| m.hz).collect();
-    close(*modes.last().unwrap(), by_hand, 1e-9, "column mode");
+    assert_eq!(modes.len(), 5);
+    close(*modes.last().unwrap(), 320.8907, 1e-6, "column mode");
     assert!(handler(&RIGID).modes(&[0.4, 0.0, 0.1]).is_empty());
     let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
     d.equilibrium(&[0.4, 0.0, 0.1], &mut state, &mut torque);
@@ -404,7 +404,7 @@ fn the_hold_asks_the_hand_calculated_share_on_pads_vacuum_and_edge() {
 }
 
 /// The default cycle passes every verdict (`sim-cli verdicts wafer-handler`: the wafer at 1.83 m/s^2 of the 2.45 its
-/// pads hold over 1.2, settling 0.032 mm of 0.15 and 0.108 mrad of 0.2 (the column ringing after the first turn), the
+/// pads hold over 1.2, settling 0.033 mm of 0.15 and 0.113 mrad of 0.2 (the column ringing after the first turn), the
 /// effector's direction 12.7 urad of 0.5 mrad, the bands' swings 6.5 % and 1.2 % of their pretension); the reach speeding up at 3 m/s^2 instead of
 /// 1.5 (its jerk 30 m/s^3) slips the wafer: 3 m/s^2 along the radial line, more than the 2.45 allowed.
 #[test]

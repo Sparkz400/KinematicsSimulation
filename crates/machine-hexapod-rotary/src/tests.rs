@@ -192,6 +192,26 @@ fn a_rod_is_kept_off_the_platforms_and_the_bases_edges() {
     let legs = mechanism(&cfg).geo.legs(&HOME).unwrap();
     let least = mechanism(&cfg).geo.body_clearance(&legs);
     assert!((least - 0.0522934).abs() < 1e-6, "{least}");
+    // The sampling: 400 points on the rod against 400 on each other edge; a grid step h of about 1 mm leaves the least
+    // distance d at most h^2 / d = 2e-5 m too large.
+    let geo = mechanism(&cfg).geo;
+    let at = |a: [f64; 3], b: [f64; 3], s: f64| -> [f64; 3] { std::array::from_fn(|k| a[k] + (b[k] - a[k]) * s) };
+    let (mut platform, mut base) = (f64::INFINITY, f64::INFINITY);
+    for i in 0..6 {
+        for j in (0..6).filter(|&j| j != i && (j + 1) % 6 != i) {
+            let k = (j + 1) % 6;
+            for a in 0..=400 {
+                let p = at(legs[i].tip, legs[i].joint, a as f64 / 400.0);
+                for b in 0..=400 {
+                    let s = b as f64 / 400.0;
+                    let d = |q: [f64; 3]| (0..3).map(|n| (p[n] - q[n]).powi(2)).sum::<f64>().sqrt();
+                    platform = platform.min(d(at(legs[j].joint, legs[k].joint, s)));
+                    base = base.min(d(at(geo.base[j], geo.base[k], s)));
+                }
+            }
+        }
+    }
+    assert!((platform - 0.0522934).abs() < 5e-5 && (base - 0.268294).abs() < 5e-5, "{platform} {base}");
     cfg.set_text("workspace.min_body_clearance_m = 0.05").unwrap();
     assert_eq!((ENTRY.build)(&cfg).unwrap().unreachable(&HOME, 0.0), None);
     cfg.set_text("workspace.min_body_clearance_m = 0.06").unwrap();
