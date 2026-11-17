@@ -401,10 +401,16 @@ impl Crane {
             (tension, rolling, acc)
         };
         let guess = if self.elastic { rope.tension } else { m * self.g * -u[2] };
-        let (first_tension, _, first) = pass(guess, [1.0; 3]);
-        let loss: [f64; 3] = std::array::from_fn(|k| {
-            let j = &self.drives[k];
-            j.gearbox.loss_factor(drive[k] - j.reflected_inertia() * first[k], s[RATES + k])
+        // The loss factors of the torques going in, which depend on the accelerations they give: to the fixed point
+        // (`mech::settled_loss`), from the loss-free pass, the rigid rope's tension along.
+        let mut first_tension = guess;
+        let loss = sim_components::mech::settled_loss([1.0; 3], |loss| {
+            let (tension, _, acc) = pass(first_tension, *loss);
+            first_tension = tension;
+            std::array::from_fn(|k| {
+                let j = &self.drives[k];
+                j.gearbox.loss_factor(drive[k] - j.reflected_inertia() * acc[k], s[RATES + k])
+            })
         });
         // The rigid rope's tension depends on the loss factors (the hoist's eta moves it by some percent): the rolling
         // takes the tension of a pass with them.

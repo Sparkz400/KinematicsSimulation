@@ -807,8 +807,16 @@ impl Controller {
                     .map(|(capacitance, threshold)| 0.5 * capacitance * 1e-6 * (threshold * threshold - bus * bus)))
             })
             .collect::<Result<Vec<_>>>()?;
-        let plan_limits =
-            path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide, friction, ratings, margin };
+        let plan_limits = path::PlanLimits {
+            reserve: torque_reserve,
+            tension,
+            gearbox,
+            guide,
+            friction,
+            ratings,
+            margin,
+            hermite: !spline_c2,
+        };
         // A path through via points has to be one the planner times, from where the segment before ends; timed as fast as
         // the motors allow, so has the straight way of every other segment.
         for (i, segment) in segments.iter().enumerate() {

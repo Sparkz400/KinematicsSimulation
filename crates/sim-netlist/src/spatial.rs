@@ -1033,9 +1033,12 @@ impl Delta {
             let rhs: V3 = std::array::from_fn(|k| loss[k] * drive[k] + rest[k]);
             inverse(&m).map_or([f64::NAN; 3], |inv| mul(&inv, rhs))
         };
-        let first = solve([1.0; 3]);
-        let loss: V3 = std::array::from_fn(|k| {
-            self.joints[k].gearbox.loss_factor(drive[k] - self.joints[k].reflected_inertia() * first[k], w[k])
+        // The loss factors of the torques going in, at their fixed point (`mech::settled_loss`).
+        let loss = sim_components::mech::settled_loss([1.0; 3], |loss| {
+            let acc = solve(*loss);
+            std::array::from_fn(|k| {
+                self.joints[k].gearbox.loss_factor(drive[k] - self.joints[k].reflected_inertia() * acc[k], w[k])
+            })
         });
         let acc = solve(loss);
         let into: V3 = std::array::from_fn(|k| drive[k] - self.joints[k].reflected_inertia() * acc[k]);

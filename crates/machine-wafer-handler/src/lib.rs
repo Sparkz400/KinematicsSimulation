@@ -484,8 +484,10 @@ impl Lift {
         let drive = j.rigid_drive(torque, x[0] * i, x[1] * i, x[2], engaged).0;
         let rest = self.weight(attached) + j.output_torque(x[0], x[1]);
         let (m, r) = (self.mass(attached), j.reflected_inertia());
-        let first = (drive + rest) / (m + r);
-        let loss = j.gearbox.loss_factor(drive - r * first, x[1]);
+        // The loss factor of the torque going in, at its fixed point (`mech::settled_loss`).
+        let solve = |loss: f64| (loss * drive + rest) / (m + loss * r);
+        let [loss] =
+            sim_components::mech::settled_loss([1.0], |&[loss]| [j.gearbox.loss_factor(drive - r * solve(loss), x[1])]);
         let acc = (loss * drive + rest) / (m + loss * r);
         let into = drive - r * acc;
         (acc, into, loss * into)
@@ -844,9 +846,12 @@ impl WaferHandler {
             }
             solve(&m, &rhs, n).unwrap_or([f64::NAN; 4])
         };
-        let first = at([1.0; 2]);
-        let loss: V2 = std::array::from_fn(|k| {
-            self.joints[k].gearbox.loss_factor(drive[k] - self.joints[k].reflected_inertia() * first[k], qd[k])
+        // The loss factors of the torques going in, at their fixed point (`mech::settled_loss`).
+        let loss = sim_components::mech::settled_loss([1.0; 2], |loss| {
+            let acc = at(*loss);
+            std::array::from_fn(|k| {
+                self.joints[k].gearbox.loss_factor(drive[k] - self.joints[k].reflected_inertia() * acc[k], qd[k])
+            })
         });
         let acc = at(loss);
         let into: V2 = std::array::from_fn(|k| drive[k] - self.joints[k].reflected_inertia() * acc[k]);

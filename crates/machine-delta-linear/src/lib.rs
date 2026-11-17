@@ -665,9 +665,11 @@ impl LinearDelta {
             });
             inverse(&m).map_or([f64::NAN; 3], |inv| mul(&inv, std::array::from_fn(|k| loss[k] * drive[k] + rest[k])))
         };
-        let first = solve([1.0; 3]);
-        let loss: V3 =
-            std::array::from_fn(|k| self.gears[k].loss_factor((drive[k] - rotor_mass * first[k]) * r, v[k] / r));
+        // The loss factors of the torques going in, at their fixed point (`mech::settled_loss`).
+        let loss = sim_components::mech::settled_loss([1.0; 3], |loss| {
+            let acc = solve(*loss);
+            std::array::from_fn(|k| self.gears[k].loss_factor((drive[k] - rotor_mass * acc[k]) * r, v[k] / r))
+        });
         let acc = solve(loss);
         let into: V3 = std::array::from_fn(|k| (drive[k] - rotor_mass * acc[k]) * r);
         Rigid { acc, into, out: std::array::from_fn(|k| loss[k] * into[k]) }

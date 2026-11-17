@@ -863,9 +863,12 @@ impl H4 {
             });
             solve4(&m, std::array::from_fn(|k| loss[k] * drive[k] + rest[k])).unwrap_or([f64::NAN; 4])
         };
-        let first = solve([1.0; 4]);
-        let loss: V4 = std::array::from_fn(|k| {
-            self.joints[k].gearbox.loss_factor(drive[k] - self.joints[k].reflected_inertia() * first[k], w[k])
+        // The loss factors of the torques going in, at their fixed point (`mech::settled_loss`).
+        let loss = sim_components::mech::settled_loss([1.0; 4], |loss| {
+            let acc = solve(*loss);
+            std::array::from_fn(|k| {
+                self.joints[k].gearbox.loss_factor(drive[k] - self.joints[k].reflected_inertia() * acc[k], w[k])
+            })
         });
         let acc = solve(loss);
         let into: V4 = std::array::from_fn(|k| drive[k] - self.joints[k].reflected_inertia() * acc[k]);

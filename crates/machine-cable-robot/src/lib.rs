@@ -1105,13 +1105,16 @@ impl CableRobot {
         let length_acc = |acc: &[f64]| -> Vec<f64> {
             (0..m).map(|k| curve[k] - (0..n).map(|r| a[r * m + k] * acc[r]).sum::<f64>()).collect()
         };
-        let first = length_acc(&solve_with(&vec![1.0; m]));
-        let loss: Vec<f64> = (0..m)
-            .map(|k| {
-                let w = &self.winches[k];
-                w.gearbox.loss_factor(drive[k] - w.reflected_inertia() * first[k], rates[k])
-            })
-            .collect();
+        // The loss factors of the torques going in, at their fixed point (`mech::settled_loss`).
+        let loss = sim_components::mech::settled_loss(vec![1.0; m], |loss| {
+            let lacc = length_acc(&solve_with(loss));
+            (0..m)
+                .map(|k| {
+                    let w = &self.winches[k];
+                    w.gearbox.loss_factor(drive[k] - w.reflected_inertia() * lacc[k], rates[k])
+                })
+                .collect()
+        });
         let acc = solve_with(&loss);
         let lacc = length_acc(&acc);
         let into: Vec<f64> = (0..m).map(|k| drive[k] - self.winches[k].reflected_inertia() * lacc[k]).collect();

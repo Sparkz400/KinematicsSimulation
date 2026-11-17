@@ -322,8 +322,10 @@ impl SingleAxis {
             self.mesh.force(s[0]) - ff - m * self.g_along + self.stop_force(s[0], s[1]) + self.extra_force(s[0], s[1]);
         let rotor = ratio * ratio * self.j_rotor / (r * r);
         let solve = |loss: f64| (loss * drive + load) / (m + self.j_pulley / (r * r) + loss * rotor);
-        let through_gear = drive - rotor * solve(1.0);
-        let loss = self.gearbox.loss_factor(through_gear * r, s[1] / r);
+        // The loss factor of the force through the gearbox, at its fixed point (`mech::settled_loss`).
+        let [loss] = sim_components::mech::settled_loss([1.0], |&[loss]| {
+            [self.gearbox.loss_factor((drive - rotor * solve(loss)) * r, s[1] / r)]
+        });
         let a = solve(loss);
         // The gearbox output carries what the rotor's own acceleration and the losses leave of the motor's torque.
         (a, ff, ds, loss * (drive - rotor * a) * r, (drive - rotor * a) * r)

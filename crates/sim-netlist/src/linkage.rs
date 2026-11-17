@@ -393,7 +393,7 @@ pub fn inverse(m: &M2) -> Option<M2> {
 /// torque that goes in, output / loss, so it is found by fixed point (the efficiency's fade over the power makes the
 /// two differ by 1e-3 of the torque at 0.01 m/s on the linkage).
 pub fn steady_loss(gearbox: &sim_components::mech::Gearbox, output: f64, w: f64) -> f64 {
-    (0..4).fold(1.0, |loss, _| gearbox.loss_factor(output / loss, w))
+    sim_components::mech::settled_loss([1.0], |&[loss]| [gearbox.loss_factor(output / loss, w)])[0]
 }
 
 /// The 2-norm condition number of a 2 x 2 matrix: the square root of the larger over the smaller eigenvalue of
@@ -759,9 +759,12 @@ impl LinkageMachine {
             let rhs: V2 = std::array::from_fn(|k| loss[k] * drive[k] + rest[k]);
             inverse(&m).map_or([f64::NAN; 2], |inv| mul(&inv, rhs))
         };
-        let first = solve([1.0; 2]);
-        let loss: V2 = std::array::from_fn(|k| {
-            self.joints[k].gearbox.loss_factor(drive[k] - self.joints[k].reflected_inertia() * first[k], w[k])
+        // The loss factors of the torques going in, at their fixed point (`mech::settled_loss`).
+        let loss = sim_components::mech::settled_loss([1.0; 2], |loss| {
+            let acc = solve(*loss);
+            std::array::from_fn(|k| {
+                self.joints[k].gearbox.loss_factor(drive[k] - self.joints[k].reflected_inertia() * acc[k], w[k])
+            })
         });
         let acc = solve(loss);
         let into: V2 = std::array::from_fn(|k| drive[k] - self.joints[k].reflected_inertia() * acc[k]);

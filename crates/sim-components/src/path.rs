@@ -2053,6 +2053,10 @@ pub struct PlanLimits {
     /// `profile.time_optimal_margin`: the share of every limit the plan may use, on top of the reserves (1: all).
     #[serde(default = "one")]
     pub margin: f64,
+    /// The controller interpolates the plan's points with the Hermite cubic (`profile.trajectory_spline = "hermite"`);
+    /// false: with the C2 spline, as shipped. It sets what `piece_limits` keeps back for the cubics' overshoot.
+    #[serde(default)]
+    pub hermite: bool,
 }
 
 fn one() -> f64 {
@@ -2070,6 +2074,7 @@ impl PlanLimits {
             friction: Vec::new(),
             ratings: Vec::new(),
             margin: 1.0,
+            hermite: false,
         }
     }
 
@@ -2942,9 +2947,10 @@ fn piece_limits(
                 // A limit of the plan itself (`plan.` signals: the flange's spin) is judged on the planned motion, which the
                 // rigid model gives exactly: the margin's share, no reserve for what the model leaves out. Less, where it
                 // grows with the acceleration, what the controller's cubics between the plan's points add above the most
-                // acceleration of the motion they pass through: where a ramp of jerk J ends in a plateau, the Hermite cubic
-                // with the neighbours' slopes overshoots it by up to 2/3 J h (h the cycle), the C2 spline by 0.085 J h
-                // (worked out over every phase of the points against the ramp's end); at a peak of acceleration less. The
+                // acceleration of the motion they pass through: where a ramp of jerk J ends in a plateau, the C2 spline
+                // overshoots it by up to 0.0850 J h (h the cycle), the Hermite cubic by 0.138 J h with the five-point
+                // slopes and 2/3 J h with the neighbours' (which it takes next to the trajectory's ends), worked out over
+                // every phase of the points against the ramp's end; at a peak of acceleration less. The
                 // axes' jerk is the ramps' along p' and the bends' (each axis's limit less the ramps' share, where the
                 // piece bends that axis).
                 let plan = check.signal.starts_with("plan.");
@@ -2963,7 +2969,8 @@ fn piece_limits(
                             (values(&zero, &unit)[k] - e).abs() * (axes[i].max_jerk - jerk * d1[i].abs()).max(0.0)
                         })
                         .sum();
-                    2.0 / 3.0 * cycle * (c.abs() * jerk + bent)
+                    let overshoot = if limits.hermite { 2.0 / 3.0 } else { 0.0851 };
+                    overshoot * cycle * (c.abs() * jerk + bent)
                 } else {
                     0.0
                 };

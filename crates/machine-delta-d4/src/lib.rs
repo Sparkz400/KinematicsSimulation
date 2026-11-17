@@ -389,7 +389,10 @@ impl Delta4 {
         let drive = j.rigid_drive(torque, rotor, speed, self.brake(s), self.brake_engaged).0;
         let rest = j.output_torque(c, w);
         let solve = |loss: f64| (loss * drive + rest) / (self.tool_inertia() + loss * j.reflected_inertia());
-        let loss = j.gearbox.loss_factor(drive - j.reflected_inertia() * solve(1.0), w);
+        // The loss factor of the torque going in, at its fixed point (`mech::settled_loss`).
+        let [loss] = sim_components::mech::settled_loss([1.0], |&[loss]| {
+            [j.gearbox.loss_factor(drive - j.reflected_inertia() * solve(loss), w)]
+        });
         let acc = solve(loss);
         let into = drive - j.reflected_inertia() * acc;
         (acc, into, loss * into)
