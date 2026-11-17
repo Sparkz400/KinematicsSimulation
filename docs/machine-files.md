@@ -837,10 +837,15 @@ derivations):
 - A tool centre point (`machine.tcp`): the tool's pose maps to the axes and back through the rotaries' turn of
   `tool_m`; speeds and accelerations by differentiating that map.
 - A worm stage (`machine.worm`): its gearbox's output gets t eta^x and its rotor t / i, x = tanh(t w / 0.5 W), with the
-  back efficiency where the load drives (x below 0); a self-locking one gives the rotor x t / i driving and
-  -x eta_back t / i driven back, against the motion. In the rigid model, with a self-locking worm, the gearboxes'
-  outputs are solved for beside the accelerations, and a moving self-locking worm follows Coulomb's law at its mesh
-  without the fade: its drag at the wheel is the larger of the driving flank's, (1 / eta - 1) times the torque the
+  back efficiency where the load drives (x below 0). A self-locking one follows Coulomb's law at its mesh without the
+  fade, its friction (1 / eta - 1) times the torque on the driving flank and (1 - eta_back) times it on the overhauling
+  one, so the mesh only ever takes power. In the elastic model the torque is the gear spring's: the output gets it as
+  it is and the rotor the flank's friction besides; the friction never exceeds what stops the rotor within 1 ms
+  (`worm::STICK_TIME_S`), so it sticks at rest within the two flanks' levels and holds its load with no motor torque
+  (`ConfigMachine::worm_drag`). Lowering a heavy wheel with too little push it jams: the overhauling flank's friction
+  rises with the spring's torque as the rotor slows, the rotor stops within milliseconds and the wheel rings on the
+  spring. In the rigid model, with a self-locking worm, the gearboxes'
+  outputs are solved for beside the accelerations, and a moving self-locking worm's drag at the wheel is the larger of the driving flank's, (1 / eta - 1) times the torque the
   wheel takes, and the overhauling flank's, (1 - eta_back) times the torque the output holds at rest against the axes'
   forces (a drag in proportion to the dynamic torque there has no rigid solution with a heavy wheel, Painleve's
   paradox). That drag rises with the wheel's torque, so the solve has one answer. At rest, and below 1e-3 rad/s
@@ -859,9 +864,8 @@ machine; nothing about them is particular to machine files.
 - A pulley stands where its `at_m` puts it (it rides on no body), and the wrap's places are the 3D view's: the section
   lengths are not checked against them.
 - `tool_flex`: one leaning body, along a horizontal axis; it leans in the elastic model only (as in the crate).
-- In the elastic model a self-locking worm's lock fades in over the gearbox's 0.5 W once it moves: a motor torque short
-  of lifting the load, or a push short of lowering it, creeps it at the speed whose power is about 0.5 W atanh(the
-  share of the torque it would take). The rigid model sticks and stops it.
+- A self-locking worm's rigid model takes the overhauling flank's friction from the torque the wheel holds at rest, so
+  it brakes a heavy wheel smoothly where the elastic model jams; both agree at a steady speed.
 - A rotary's bearing friction acts at the rotor, before the gearbox's spring and efficiency, as a screw's preload does.
 - A rack's pressure angle is 20 degrees for every rack, and its pinion's axial force is left out of the shaft's load.
 - The scissor lift's arms count with their vertical motion only (their turning and the feet's sideways motion are left
@@ -951,7 +955,9 @@ worm (rigid and elastic, driving and driven back), a self-locking worm's hold an
 acceleration by hand, the self-locking worm braking a lowering load with no torque, needing 0.05 N m of push to lower it
 and sticking from rest short of what moves it, the moving self-locking worm's one answer over a sweep of speeds and
 torques against both flanks by hand and its lowering at speed (the motor's 5 W and the load's 10 W lost in the worm;
-with no torque it brakes to rest and holds), the belts' wraps of the screw portal beside its Z screw, and the
+with no torque it brakes to rest and holds), the elastic self-locking worm standing at rest under load, costing the
+rigid model's torques and losses at a steady speed both ways, and never giving power through breaking loose, a reversal
+and its jam with the loss budget closed, the belts' wraps of the screw portal beside its Z screw, and the
 catalogue search for the XYZ portal's Z motor alone.
 
 `crates/sim-machines/tests/machine_file_review.rs` holds what an independent review found by experiment and what was

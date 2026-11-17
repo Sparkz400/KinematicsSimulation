@@ -883,10 +883,16 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
 - Ein Werkzeugmittelpunkt (`machine.tcp`): die Stellung des Werkzeugs geht über die Drehung von `tool_m` durch die
   Drehachsen in die Achsen über und zurück; Geschwindigkeiten und Beschleunigungen durch Ableiten dieser Abbildung.
 - Eine Schneckenstufe (`machine.worm`): der Abtrieb ihres Getriebes bekommt t eta^x und ihr Läufer t / i,
-  x = tanh(t w / 0,5 W), mit dem Rückwirkungsgrad, wo die Last treibt (x unter 0); eine selbsthemmende gibt dem Läufer
-  treibend x t / i und zurück angetrieben -x eta_back t / i, gegen die Bewegung. Im starren Modell werden mit einer
-  selbsthemmenden Schnecke die Abtriebe der Getriebe neben den Beschleunigungen gelöst, und eine bewegte selbsthemmende
-  Schnecke folgt ohne Einblendung dem Coulombschen Gesetz an ihrem Eingriff: ihr Bremsmoment am Rad ist das größere aus
+  x = tanh(t w / 0,5 W), mit dem Rückwirkungsgrad, wo die Last treibt (x unter 0). Eine selbsthemmende folgt ohne
+  Einblendung dem Coulombschen Gesetz an ihrem Eingriff, ihre Reibung (1 / eta - 1) mal das Moment an der treibenden
+  Flanke und (1 - eta_back) mal es an der zurücktreibenden, so dass der Eingriff nur Leistung aufnimmt. Im elastischen
+  Modell ist das Moment das der Getriebefeder: der Abtrieb bekommt es unverändert und der Läufer zusätzlich die Reibung
+  der Flanke; die Reibung ist nie größer als das, was den Läufer in 1 ms anhält (`worm::STICK_TIME_S`), also haftet er
+  in Ruhe innerhalb der Grenzen beider Flanken und hält seine Last ohne Motormoment (`ConfigMachine::worm_drag`). Senkt
+  sie ein schweres Rad mit zu wenig Schub, klemmt sie: die Reibung der zurücktreibenden Flanke steigt mit dem Moment der
+  Feder, während der Läufer langsamer wird, der Läufer steht in Millisekunden und das Rad schwingt auf der Feder. Im
+  starren Modell werden mit einer selbsthemmenden Schnecke die Abtriebe der Getriebe neben den Beschleunigungen gelöst,
+  und das Bremsmoment einer bewegten selbsthemmenden Schnecke am Rad ist das größere aus
   dem der treibenden Flanke, (1 / eta - 1) mal das Moment, das das Rad aufnimmt, und dem der zurücktreibenden,
   (1 - eta_back) mal das Moment, das der Abtrieb in Ruhe gegen die Kräfte der Achsen hält (ein Bremsmoment im
   Verhältnis zum dynamischen Moment hat dort mit einem schweren Rad keine starre Lösung, Painlevés Paradox). Es steigt
@@ -909,10 +915,9 @@ Maschine; an ihnen ist nichts besonders für Maschinendateien.
   sind die der 3D-Ansicht: die Abschnittslängen werden nicht gegen sie geprüft.
 - `tool_flex`: ein sich neigender Körper, entlang einer waagrechten Achse; er neigt sich nur im elastischen Modell (wie
   im Crate).
-- Im elastischen Modell blendet die Sperre einer selbsthemmenden Schnecke, sobald sie sich bewegt, über die 0,5 W des
-  Getriebes ein: ein Motormoment, das die Last nicht ganz hebt, oder ein Schub, der sie nicht ganz senkt, lässt sie mit
-  der Geschwindigkeit kriechen, deren Leistung etwa 0,5 W atanh(Anteil des nötigen Moments) ist. Das starre Modell
-  haftet und hält sie an.
+- Das starre Modell einer selbsthemmenden Schnecke nimmt die Reibung der zurücktreibenden Flanke aus dem Moment, das das
+  Rad in Ruhe hält, also bremst es ein schweres Rad gleichmäßig, wo das elastische Modell klemmt; bei gleichbleibender
+  Geschwindigkeit stimmen beide überein.
 - Die Lagerreibung eines Rundtischs wirkt am Läufer, vor Feder und Wirkungsgrad des Getriebes, wie die Vorspannung
   einer Spindel.
 - Der Eingriffswinkel einer Zahnstange ist für jede 20 Grad, und die Axialkraft ihres Ritzels bleibt aus der Last der
@@ -1013,7 +1018,10 @@ zurück angetrieben), das Halten einer selbsthemmenden Schnecke und die Beschleu
 Hand, die selbsthemmende Schnecke, die eine sinkende Last ohne Moment abbremst, 0,05 N m Schub zum Senken braucht und
 aus der Ruhe haftet, solange nicht genug sie bewegt, die eine Antwort der bewegten selbsthemmenden Schnecke über
 Geschwindigkeiten und Momente gegen beide Flanken von Hand und ihr Senken in Fahrt (die 5 W des Motors und die 10 W der
-Last gehen in der Schnecke verloren; ohne Moment bremst sie bis zum Stillstand und hält), die Umschlingungen des Spindelportals neben seiner Z-Spindel, und
+Last gehen in der Schnecke verloren; ohne Moment bremst sie bis zum Stillstand und hält), die elastische selbsthemmende Schnecke, die unter Last in Ruhe
+steht, bei gleichbleibender Geschwindigkeit in beide Richtungen die Momente und Verluste des starren Modells kostet und
+beim Losbrechen, durch eine Umkehr und beim Klemmen nie Leistung abgibt, mit geschlossener Verlustbilanz, die
+Umschlingungen des Spindelportals neben seiner Z-Spindel, und
 die Katalogsuche für den Z-Motor des XYZ-Portals allein.
 
 `crates/sim-machines/tests/machine_file_review.rs` hält fest, was eine unabhängige Durchsicht durch Versuch gefunden
