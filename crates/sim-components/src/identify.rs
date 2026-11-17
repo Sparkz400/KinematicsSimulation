@@ -1318,9 +1318,13 @@ impl SweepFit {
 /// and the next one, at 94 Hz, was set against the measured 61.5 Hz (factor 0.42 for 1.25). `None` where the measured
 /// sweep shows no dip with both flanks, or the config's none at all.
 ///
-/// shortcut: the nearest dip is the same mode only while the stiffness is off by less than the ratio of neighbouring
-/// dips' frequencies (61.5 and 103 Hz on the T-shaped belt gantry: a factor of 1.3 either way); telling the mode by how its frequency
-/// moves with the stiffness would take a second sweep of the config.
+/// Which dip is the measured mode is told by how its frequency moves with the stiffness, not by being the nearest (that
+/// holds only while the stiffness is off by less than the ratio of neighbouring dips' frequencies, 61.5 and 103 Hz on the
+/// T-shaped belt gantry: a factor of 1.3 either way). The config is swept a second time with `BELT_STIFFNESS_KEY` raised
+/// by `STIFFNESS_PROBE` and each dip matched to the nearest dip of that sweep; a mode carried by the belt moves as
+/// f ~ sqrt(k), a ratio of sqrt(`STIFFNESS_PROBE`), one the belt does not carry stays. Dips that move at least half
+/// that (in the log) are the candidates, and the nearest of them to the measured one is taken; with no such dip, or no
+/// key `BELT_STIFFNESS_KEY` in the config, the nearest dip of all. The cost is a second sweep of the config.
 pub fn fit_sweep(
     entry: &MachineEntry,
     cfg: &Config,
@@ -1349,8 +1353,31 @@ pub fn fit_sweep(
     }
     let config = crate::analysis::frequency_sweep(entry, cfg, motor, &wider, amplitude)?;
     let apart = |r: &Resonance| (r.frequency / fitted.frequency).ln().abs();
-    Ok(dips(&config).into_iter().min_by(|a, b| apart(a).total_cmp(&apart(b))).map(|config| SweepFit { config, fitted }))
+    let all = dips(&config);
+    let mut moving = all.clone();
+    if let Ok(base) = cfg.f64(BELT_STIFFNESS_KEY) {
+        let mut stiffer = cfg.clone();
+        stiffer.set_text(&format!("{BELT_STIFFNESS_KEY} = {:?}", base * STIFFNESS_PROBE))?;
+        let probe = dips(&crate::analysis::frequency_sweep(entry, &stiffer, motor, &wider, amplitude)?);
+        let full = 0.5 * STIFFNESS_PROBE.ln();
+        let follows = |r: &Resonance| {
+            // The probe's dip of the same mode: the nearest, taken only within a factor 1.2 of its frequency.
+            probe
+                .iter()
+                .map(|q| (q.frequency / r.frequency).ln())
+                .filter(|m| m.abs() < 1.2f64.ln())
+                .min_by(|a, b| a.abs().total_cmp(&b.abs()))
+                .is_some_and(|moved| moved >= 0.5 * full)
+        };
+        moving.retain(follows);
+    }
+    let pool = if moving.is_empty() { all } else { moving };
+    Ok(pool.into_iter().min_by(|a, b| apart(a).total_cmp(&apart(b))).map(|config| SweepFit { config, fitted }))
 }
+
+/// The factor `fit_sweep` raises the stiffness by for its second sweep: small enough that a mode stays near where it was,
+/// large enough to tell a shift of 5 % from the sweep's resolution.
+const STIFFNESS_PROBE: f64 = 1.1;
 
 /// Above this standard error, over the factor, a trace is taken not to excite the mode enough (`fit_move_stiffness`).
 pub const MOVE_STIFFNESS_LIMIT: f64 = 0.1;

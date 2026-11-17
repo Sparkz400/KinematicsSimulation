@@ -13,8 +13,8 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 
 mod mechanics;
 pub use mechanics::{
-    GUIDE_CARRIAGES, GUIDE_STATIC_SAFETY, is_linear_motor, linear_motor_articles_for, magnet_track_weight, mech_axes,
-    motor_shaft_diameter,
+    GUIDE_CARRIAGES, GUIDE_STATIC_SAFETY, guide_carriages, is_linear_motor, linear_motor_articles_for,
+    magnet_track_weight, mech_axes, motor_shaft_diameter,
 };
 
 /// The catalogue's schema version this simulator reads. A catalogue of another version is refused.
@@ -29,6 +29,7 @@ const TABLES: &[(&str, &str)] = &tables![
     "siemens/motors_s210.csv",
     "siemens/motors_s210_oi.csv",
     "siemens/dynamic_braking_1fk2.csv",
+    "siemens/s1_curves_s210.csv",
     "siemens/encoders_1fk2_1ft2.csv",
     "siemens/dc_link_trip_s120.csv",
     "siemens/motors_1fk2_s120.csv",
@@ -170,6 +171,18 @@ fn vendor_supply(supply: &str) -> Option<(&str, f64)> {
         return None;
     }
     Some((vendor, line.strip_suffix('v')?.parse().ok()?))
+}
+
+/// Whether every drive of the maker at that line voltage says in its `supply` column that it is fed single-phase ("1 AC",
+/// "1 x ..."; "1 or 3 AC" is both and counts as three-phase, as a drive on three phases has the lower ripple and the
+/// higher bus of the two).
+fn single_phase_line(vendor: &str, line: f64) -> bool {
+    let drives = vendor_rows("drives_", vendor, line);
+    !drives.is_empty()
+        && drives.iter().all(|d| {
+            let text = d.get("supply").map_or(String::new(), |t| t.to_lowercase());
+            text.starts_with("1 ac") || text.starts_with("1 x") || text.starts_with("1x") || text.starts_with("single")
+        })
 }
 
 /// A supply of the S210 data: the voltage of its rated columns ("230v", "400v") and whether the converters are the
@@ -643,13 +656,27 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
         set_if_present(cfg, "linear_motor.attraction_force_n", attraction)?;
         set_if_present(cfg, "linear_motor.pole_pitch_m", pitch)?;
     }
+    // The S1 curve Siemens prints as a graph (`s1_curves_s210.csv`, digitised: article, speed, torque, rising speed), where
+    // the file has the article: it replaces the straight line between the printed standstill and rated points
+    // (`analysis::s1_torque`). A motor without rows leaves the config's keys as they are.
+    let curve: Vec<(f64, f64)> = rows(table("siemens/s1_curves_s210.csv"))
+        .into_iter()
+        .filter(|r| r.get("article") == Some(&article))
+        .filter_map(|r| Some((number(&r, "speed_rad_s")?, number(&r, "torque_nm")?)))
+        .collect();
+    if curve.len() >= 2 {
+        let list =
+            |f: fn(&(f64, f64)) -> f64| curve.iter().map(|p| format!("{:?}", f(p))).collect::<Vec<_>>().join(", ");
+        cfg.set_text(&format!("motor.s1_curve_speed_rad_s = [{}]", list(|p| p.0)))?;
+        cfg.set_text(&format!("motor.s1_curve_torque_nm = [{}]", list(|p| p.1)))?;
+    }
     cap_peak_torque(cfg, m.max_torque)?;
     set(cfg, "drive.rated_torque_nm", m.rated_torque)?;
     set(cfg, "drive.rated_speed_rad_s", rated_speed)?;
     set(cfg, "drive.max_speed_rad_s", m.max_speed)?;
-    // shortcut: another maker's line is taken as three-phase (1.35 times it); a single-phase one would have its peak.
+    // A rectified three-phase line gives 1.35 times its voltage, a single-phase one its peak, sqrt(2) times it.
     let bus = match vendor_supply(supply) {
-        Some((_, line)) => 1.35 * line,
+        Some((vendor, line)) => (if single_phase_line(vendor, line) { std::f64::consts::SQRT_2 } else { 1.35 }) * line,
         None if s210_supply(supply).is_some_and(|(voltage, _)| voltage == "230v") => 325.0,
         None => 540.0,
     };
@@ -1996,7 +2023,51 @@ pub fn with_named(entry: &MachineEntry, cfg: &Config, parts: &Parts) -> Result<C
     if parts.moves() {
         retuned(entry, cfg, &mut out)?;
     }
+    retuned_per_motor(entry, cfg, &mut out)?;
     Ok(out)
+}
+
+/// The velocity gain of each motor that `[parts.<id>]` names parts for, written to `drive.<id>.velocity_kp_nm_s_rad`
+/// as `retuned` does for the shared one (the square root of the ratio of the inertia that motor turns times that of its
+/// rotor, `bounded_gain` on an elastic machine, a linear motor's by the whole mass), from the motor's gain in `cfg`
+/// without its own parts. A gain the config gives per motor stays.
+fn retuned_per_motor(entry: &MachineEntry, cfg: &Config, out: &mut Config) -> Result<(), ConfigError> {
+    let machine = (entry.build)(out)?;
+    let ids: Vec<String> = machine.motors().iter().map(|m| m.id.to_string()).collect();
+    let elastic = machine.resonance_hz(&sim_core::testkit::mid_pose(machine.as_ref())).is_some();
+    for (index, id) in ids.iter().enumerate() {
+        let named = !id.is_empty() && cfg.get(&format!("parts.{id}")).ok().is_some_and(|v| v.is_table());
+        if !named || cfg.get(&format!("drive.{id}.velocity_kp_nm_s_rad")).is_ok() {
+            continue;
+        }
+        // The config as the file states it: without this motor's own parts.
+        let mut all = cfg.to_text()?.parse::<toml::Table>().map_err(|e| ConfigError::Parse(e.to_string()))?;
+        if let Some(parts) = all.get_mut("parts").and_then(|p| p.as_table_mut()) {
+            parts.remove(id.as_str());
+        }
+        let bare = Config::parse(&toml::to_string(&all).map_err(|e| ConfigError::Parse(e.to_string()))?)?;
+        let rotor = |c: &Config| -> Result<f64, ConfigError> {
+            let m = motor_config(c, id)?;
+            Ok(m.positive("motor.rotor_inertia_kgm2")? + m.non_negative("gearbox.inertia_at_input_kgm2")?)
+        };
+        let (rotor_ratio, total_ratio) =
+            (rotor(out)? / rotor(&bare)?, inertia_turned(entry, out)?[index] / inertia_turned(entry, &bare)?[index]);
+        let old = motor_config(&bare, id)?.positive("drive.velocity_kp_nm_s_rad")?;
+        let gain = if is_linear_motor(&motor_config(out, id)?) {
+            old * total_ratio
+        } else {
+            bounded_gain(old * (total_ratio * rotor_ratio).sqrt(), old, rotor_ratio, elastic)
+        };
+        let mut all = out.to_text()?.parse::<toml::Table>().map_err(|e| ConfigError::Parse(e.to_string()))?;
+        let drive = all.entry("drive").or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let drive = drive.as_table_mut().ok_or_else(|| ConfigError::Type("drive".into()))?;
+        let own = drive.entry(id.as_str()).or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        own.as_table_mut()
+            .ok_or_else(|| ConfigError::Type(format!("drive.{id}")))?
+            .insert("velocity_kp_nm_s_rad".into(), toml::Value::Float(gain));
+        *out = Config::parse(&toml::to_string(&all).map_err(|e| ConfigError::Parse(e.to_string()))?)?;
+    }
+    Ok(())
 }
 
 /// A config with one value changed that moves what the motors turn (`gearbox.ratio`, `geometry.pulley_radius_m`), the
@@ -2497,6 +2568,21 @@ pub fn with_motor_part(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_guide_set_has_four_carriages_unless_the_config_says_and_a_rail_length_sets_the_weight() {
+        // Hand: 2 rails x 1.45 kg/m x 0.5 m + 4 x 0.18 kg = 2.17 kg for an HGH15CA (rail 0.5 m); stroke 0.3 m plus two
+        // carriages of 0.0614 m would give 2 x 1.45 x 0.4228 + 0.72 = 1.946 kg.
+        let mut cfg = Config::parse("[ratings]
+guide_max_load_n = 1.0
+").unwrap();
+        assert_eq!(guide_carriages(&cfg), 4.0);
+        cfg.set_text("ratings.guide_carriages = 2.0").unwrap();
+        assert_eq!(guide_carriages(&cfg), 2.0);
+        let row = rows(table("hiwin/linear_guides.csv")).into_iter().find(|r| r["part_number"] == "HGH15CA").unwrap();
+        cfg.set_text("ratings.guide_rail_length_m = 0.5").unwrap();
+        assert!((mechanics::guide_weight(&cfg, &row, 4.0) - 2.17).abs() < 1e-12);
+    }
 
     #[test]
     fn a_missing_rated_current_is_the_rated_torque_over_the_torque_constant() {
