@@ -2149,3 +2149,88 @@ fn the_shipped_arms_give_each_motor_one_gear_ratio() {
         }
     }
 }
+
+/// A bar of its own (`arm.bars_turns_with`): 5 kg pinned at joint 3's origin (the elbow) and turning with link 1 (the
+/// turret), its centre 0.3 m along the turret's x from the pin, its inertia 0.1, 0.2, 0.3 kg m^2 about its centre. The
+/// arm stretched along x (q2 = pi / 2): the bar hangs on the elbow and does not turn with link 2 or 3, so it loads joint
+/// 2 by its weight at the elbow's lever, 5 g (x_elbow - x_2) (not at its centre's, 0.3 m further), and joint 3 not at
+/// all; turning the turret it adds I_zz + 5 r^2 (r its centre's distance from the vertical axis), swinging joint 2 it
+/// moves with the elbow alone, 5 d^2 (d the elbow's distance from joint 2's axis), and joint 3 not at all. All over the
+/// ratio 120 at the motors. Moving at speed with no torque the energy holds (the bar's speed terms are its mass
+/// matrix's): its rate along the state's from `derivatives` is 0 to 1e-6 W (runs give 0; the differences' rounding is
+/// about 5e-8 W; leaving out the bar's J' q' gives -0.11 W). A bar with the links bending is refused.
+#[test]
+fn a_parallelogram_bar_of_its_own_moves_with_its_pin_and_turns_with_its_link() {
+    let edits = [
+        "arm.bars_on = [3.0]",
+        "arm.bars_turns_with = [1.0]",
+        "arm.bars_mass_kg = [5.0]",
+        "arm.bars_com_m = [0.3, 0.0, 0.0]",
+        "arm.bars_inertia_kgm2 = [0.1, 0.2, 0.3, 0.0, 0.0, 0.0]",
+    ];
+    let plain = rigid(&URDF_ARM);
+    let mut cfg = plain.clone();
+    edits.iter().for_each(|e| cfg.set_text(e).unwrap());
+    let (with, without) = ((URDF_ARM.build)(&cfg).unwrap(), (URDF_ARM.build)(&plain).unwrap());
+    let pose = [0.0, std::f64::consts::FRAC_PI_2, 0.0, 0.0, 0.0, 0.0];
+    let added = |acc: [f64; 6]| -> Vec<f64> {
+        let (mut a, mut b) = ([0.0; 6], [0.0; 6]);
+        with.feedforward_torque(&pose, &acc, &mut a);
+        without.feedforward_torque(&pose, &acc, &mut b);
+        a.iter().zip(&b).map(|(a, b)| (a - b) * 120.0).collect()
+    };
+    let frames = arm::chain(&cfg).unwrap().frames(&pose);
+    let (turret, shoulder, elbow) = (frames[0], frames[1].1, frames[2].1);
+    let centre: Vec<f64> = (0..3).map(|i| elbow[i] + turret.0[i][0] * 0.3).collect();
+    let g = 9.80665;
+    let held = added([0.0; 6]);
+    near(held[1].abs(), 5.0 * g * (elbow[0] - shoulder[0]).abs(), 1e-9, "joint 2 holds the bar at the elbow");
+    assert!(held[2].abs() < 1e-9 && held[0].abs() < 1e-9, "{held:?}");
+    let r2 = (centre[0] - turret.1[0]).powi(2) + (centre[1] - turret.1[1]).powi(2);
+    let zz = (0..3).map(|k| turret.0[2][k] * turret.0[2][k] * [0.1, 0.2, 0.3][k]).sum::<f64>();
+    near(added([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])[0], zz + 5.0 * r2, 1e-9, "turret");
+    let axis2 = (0..3).map(|i| frames[1].0[i][1]).collect::<Vec<f64>>();
+    let arm: Vec<f64> = (0..3).map(|i| elbow[i] - shoulder[i]).collect();
+    let along = (0..3).map(|i| axis2[i] * arm[i]).sum::<f64>();
+    let d2 = (0..3).map(|i| arm[i] * arm[i]).sum::<f64>() - along * along;
+    let swung = added([0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+    near(swung[1] - held[1], 5.0 * d2, 1e-9, "joint 2");
+    assert!((added([0.0, 0.0, 1.0, 0.0, 0.0, 0.0])[2] - held[2]).abs() < 1e-9);
+    // Free, at speed.
+    let (mut state, mut hold) = (Vec::new(), vec![0.0; 6]);
+    with.equilibrium(&[0.3, 1.2, -0.6, 0.4, 0.8, -0.2], &mut state, &mut hold);
+    state[6..12].copy_from_slice(&[0.5, -0.4, 0.6, 0.3, -0.5, 0.4]);
+    let mut rates = vec![0.0; state.len()];
+    with.derivatives(&state, &[0.0; 6], &mut rates);
+    let h = 1e-7;
+    let along = |s: f64| -> Vec<f64> { state.iter().zip(&rates).map(|(x, r)| x + s * r).collect() };
+    let change = (with.energy(&along(h)) - with.energy(&along(-h))) / (2.0 * h);
+    assert!(change.abs() < 1e-6, "the energy changes by {change} W");
+    cfg.set_text("effects.link_bending = true").unwrap();
+    assert!((URDF_ARM.build)(&cfg).is_err());
+    // The palletiser, its joints coupled: a 4 kg rod pinned on the forearm (URDF joint 3) 0.1 m behind the elbow,
+    // parallel to the upper arm (joint 2), and its energy holds alike.
+    let mut cfg = rigid(&PALLETISER);
+    for edit in [
+        "arm.bars_on = [3.0]",
+        "arm.bars_turns_with = [2.0]",
+        "arm.bars_pin_m = [-0.1, 0.0, 0.0]",
+        "arm.bars_mass_kg = [4.0]",
+        "arm.bars_com_m = [0.0, 0.0, 0.3]",
+        "arm.bars_inertia_kgm2 = [0.12, 0.12, 0.001, 0.0, 0.0, 0.0]",
+    ] {
+        cfg.set_text(edit).unwrap();
+    }
+    let m = (PALLETISER.build)(&cfg).unwrap();
+    let (mut state, mut hold) = (Vec::new(), vec![0.0; 4]);
+    m.equilibrium(&[1.4, 0.0, 1.0, 0.0], &mut state, &mut hold);
+    state[4..8].copy_from_slice(&[0.3, -0.4, 0.5, 0.6]);
+    let mut rates = vec![0.0; state.len()];
+    m.derivatives(&state, &[0.0; 4], &mut rates);
+    let along = |s: f64| -> Vec<f64> { state.iter().zip(&rates).map(|(x, r)| x + s * r).collect() };
+    // The palletiser's energy is larger: its last bit, 2.3e-13 J, is 2.3e-6 W of the rate over 1e-7 s (as a run shows),
+    // 2.3e-8 W over 1e-5 s.
+    let h = 1e-5;
+    let change = (m.energy(&along(h)) - m.energy(&along(-h))) / (2.0 * h);
+    assert!(change.abs() < 1e-6, "palletiser: the energy changes by {change} W");
+}
