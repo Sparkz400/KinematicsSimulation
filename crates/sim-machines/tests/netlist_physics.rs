@@ -4,7 +4,7 @@
 
 use sim_components::mech::JUMP_STATES;
 use sim_core::{Config, Machine, Scene};
-use sim_machines::load_file;
+use sim_machines::{find, load_file};
 use std::path::{Path, PathBuf};
 
 fn root() -> PathBuf {
@@ -225,4 +225,237 @@ fn a_rotarys_bearing_friction_acts_behind_the_gearbox_spring() {
     let ((axis_off, rotor_off), (axis_on, rotor_on)) = (rates(&file), rates(&bearing));
     assert!((rotor_on - rotor_off).abs() < 1e-9 * (1.0 + rotor_off.abs()), "rotor {rotor_on} against {rotor_off}");
     assert!((axis_on - axis_off).abs() > 1e-6, "axis {axis_on} against {axis_off}");
+}
+
+/// The T-shaped belt gantry's file with the effects `on` switched on, everything that loses energy off (damping of the belt,
+/// the frame, the lean and the gearboxes, friction, ripple, tooth meshing, the brake).
+fn lossless_gantry(on: &[&str]) -> Box<dyn Machine> {
+    let mut changes: Vec<String> = [
+        "belt_damping",
+        "guide_friction",
+        "load_dependent_friction",
+        "motor_friction",
+        "gearbox_efficiency",
+        "gearbox_backlash",
+        "torque_ripple",
+        "tooth_meshing",
+        "holding_brake",
+    ]
+    .iter()
+    .map(|e| format!("effects.{e} = false"))
+    .collect();
+    changes.extend(
+        ["frame.damping_n_s_m", "tool_flex.damping_n_s_m", "gearbox.damping_nm_s_rad"].map(|k| format!("{k} = 0.0")),
+    );
+    changes.extend(on.iter().map(|e| format!("effects.{e} = true")));
+    let changes: Vec<&str> = changes.iter().map(String::as_str).collect();
+    sim_netlist::build(&with(&shipped("t-gantry.toml"), &changes)).unwrap()
+}
+
+/// The idlers' inertia rides on the axes' speeds alone, not on the swaying frame's: the belt's speed past a carriage is the
+/// difference of two speeds over ground, in which the sway cancels. With the frame swaying at 0.2 m/s the idlers' share of
+/// the kinetic energy is what it is without the sway: 1/2 (J / r^2) sum (s_d . v)^2 over the five idlers, whose belt speeds
+/// are vz (twice, the upper ones), 2 vx + vz and 2 vx - vz (the lower ones) and 2 vx (the one at the Z axis's bottom):
+/// 12 vx^2 + 4 vz^2 in all, 2.28 at (0.4, -0.3), times J / r^2 / 2 = 2e-6 / 0.012^2 / 2 = 6.9444e-3: 0.0158333 J.
+#[test]
+fn the_idlers_inertia_rides_on_the_axes_speeds_and_not_on_the_swaying_frame() {
+    let energy = |idlers: bool, sway: f64| {
+        let machine = lossless_gantry(if idlers { &["frame_compliance", "idlers"] } else { &["frame_compliance"] });
+        let (mut state, _) = at_rest(machine.as_ref(), &[0.5, 0.25]);
+        machine.set_tool_velocity(&mut state, &[0.4, -0.3]);
+        // 7 coordinates (two axes, two pulleys, two rotors, the frame): the frame's rate is the seventh velocity, after
+        // the seven positions and the six velocities before it.
+        state[7 + 6] = sway;
+        machine.energy(&state)
+    };
+    let hand = 0.5 * 2.0e-6 / 0.012_f64.powi(2) * (12.0 * 0.4 * 0.4 + 4.0 * 0.3 * 0.3);
+    assert!((hand - 0.015_833_3).abs() < 1e-6, "{hand}");
+    for sway in [0.0, 0.2] {
+        let (off, on) = (energy(false, sway), energy(true, sway));
+        assert!((on - off - hand).abs() < 1e-9, "sway {sway}: the idlers carry {} J, by hand {hand}", on - off);
+    }
+}
+
+/// The leaning body's weight rises as it leans: with the spring's force F = k w holding it out its centre of mass rises
+/// by F^2 r, r = 1/2 h (h / tilt)^2 for a guide tilting under the force (a bar turned by theta = F h / tilt along its
+/// whole length is shorter by theta^2 / 2 per length), so V = m g k^2 w^2 r = 1/2 c w^2, c = m g k^2 h^3 / tilt^2, h the
+/// centre of mass's distance below the carriage. The energy of a lean w at rest is then 1/2 (k + c) w^2 with k =
+/// 1 / (1 / lateral + h^2 / tilt); at z = 0.1 with h = 0.3 - 0.1 = 0.2 m, the Z axis 5 kg (the payload set down), lateral
+/// 2e7 N/m and tilt 1.2e4 N m/rad: k = 295 566 N/m. And the flow keeps that energy (the weight's stiffness and its rate
+/// with z are in the equations of motion): the energy's rate along a moving state with the lean out is the drives' power.
+#[test]
+fn the_leaning_bodys_weight_is_in_the_energy_and_the_flow_conserves_it() {
+    let mut machine = lossless_gantry(&["tool_flex"]);
+    machine.set_payload_attached(false);
+    let (mut state, _) = at_rest(machine.as_ref(), &[0.5, 0.1]);
+    let (h, lateral, tilt, m, g) = (0.2_f64, 2.0e7_f64, 1.2e4_f64, 5.0_f64, 9.80665_f64);
+    let k = 1.0 / (1.0 / lateral + h * h / tilt);
+    let c = m * g * k * k * h.powi(3) / (tilt * tilt);
+    let at_rest_energy = machine.energy(&state);
+    // Seven coordinates with the lean off the frame: two axes, two pulleys, two rotors, then the lean.
+    let w = 1.0e-4;
+    state[6] = w;
+    let by_hand = 0.5 * (k + c) * w * w;
+    let got = machine.energy(&state) - at_rest_energy;
+    assert!((got - by_hand).abs() < 1e-9 * by_hand, "{got} against {by_hand} (k {k}, c {c})");
+    machine.set_tool_velocity(&mut state, &[0.4, -0.3]);
+    let torque = [0.3, -0.2];
+    let mut rate = vec![0.0; state.len()];
+    machine.derivatives(&state, &torque, &mut rate);
+    let energy = |h: f64| machine.energy(&state.iter().zip(&rate).map(|(x, r)| x + h * r).collect::<Vec<_>>());
+    let h = 1e-7;
+    let rate_of_energy = (8.0 * (energy(h) - energy(-h)) - (energy(2.0 * h) - energy(-2.0 * h))) / (12.0 * h);
+    let (mut angle, mut speed) = (vec![0.0; 2], vec![0.0; 2]);
+    machine.motor_state(&state, &mut angle, &mut speed);
+    let power: f64 = torque.iter().zip(&speed).map(|(t, w)| t * w).sum();
+    assert!((rate_of_energy - power).abs() < 2e-8 * power.abs().max(1.0), "{rate_of_energy} against {power}");
+}
+
+/// The file's lowest belt mode is the crate's at a pose, with the Z axis leaning (its weight rising, its spring stiffening
+/// with z under the process force's lean) and with the frame swaying and the idlers on too, to 1e-7.
+#[test]
+fn the_files_lowest_mode_is_the_crates() {
+    let krate = find("t-gantry").unwrap();
+    let entry = load_file(&root().join("machines").join("t-gantry.toml")).unwrap_or_else(|e| panic!("{e}"));
+    for on in [vec!["tool_flex"], vec!["frame_compliance", "tool_flex", "idlers"]] {
+        let (mut a, mut b) = (krate.config(), entry.config());
+        for cfg in [&mut a, &mut b] {
+            for effect in ["frame_compliance", "tool_flex", "idlers"] {
+                cfg.set_text(&format!("effects.{effect} = {}", on.contains(&effect))).unwrap();
+            }
+            for text in ["effects.process_force = true", "process.force_x_n = 30.0"] {
+                cfg.set_text(text).unwrap();
+            }
+        }
+        let (mut ma, mut mb) = ((krate.build)(&a).unwrap(), (entry.build)(&b).unwrap());
+        for machine in [&mut ma, &mut mb] {
+            machine.set_payload_attached(true);
+            machine.set_dwelling(true);
+        }
+        for pose in [[0.5, 0.25], [0.9, 0.05]] {
+            let (fa, fb) = (ma.resonance_hz(&pose).unwrap(), mb.resonance_hz(&pose).unwrap());
+            assert!((fa - fb).abs() < 1e-7 * fa, "{on:?} at {pose:?}: crate {fa} Hz, file {fb} Hz");
+        }
+    }
+}
+
+/// A rack's pinion and a rotary's motor spin in the frame momentum. A rotor of the inertia J turning at w adds J w about its
+/// axis: for the rack along x the pinion above it turns about e x up = -y (the rack moves along +x under it), for the
+/// rotary C about its own axis, here the vertical (A at 0). 1e-3 kg m^2 more rotor inertia adds 1e-3 w.
+#[test]
+fn a_racks_pinion_and_a_rotarys_motor_spin_in_the_frame_momentum() {
+    let more = |name: &str, speed: &[f64], motor: usize, pose: &[f64]| {
+        let angular = |inertia: f64| {
+            let cfg = with(&shipped(name), &[&format!("motor.rotor_inertia_kgm2 = {inertia}")]);
+            let machine = sim_netlist::build(&cfg).unwrap();
+            let (mut state, _) = at_rest(machine.as_ref(), pose);
+            machine.set_tool_velocity(&mut state, speed);
+            let (mut angle, mut rotor) = (vec![0.0; machine.motors().len()], vec![0.0; machine.motors().len()]);
+            machine.motor_state(&state, &mut angle, &mut rotor);
+            (machine.frame_momentum(&state).unwrap().angular, rotor[motor])
+        };
+        let ((low, w), (high, _)) = (angular(0.3e-4), angular(0.3e-4 + 1e-3));
+        ([0, 1, 2].map(|k| high[k] - low[k]), w)
+    };
+    let (d, w) = more("rack-gantry.toml", &[0.5, 0.0], 0, &[0.3, 0.2]);
+    assert!(w.abs() > 1.0, "the pinion turns at {w}");
+    assert!(d[0].abs() < 1e-12 && d[2].abs() < 1e-12, "{d:?}");
+    assert!((d[1] + 1e-3 * w).abs() < 1e-9 * (1e-3 * w).abs(), "{d:?} against {}", -1e-3 * w);
+    let (d, w) = more("five-axis-table.toml", &[0.0, 0.0, 0.0, 0.0, 0.8], 4, &[0.5, 0.25, -0.1, 0.0, 0.1]);
+    assert!(w.abs() > 0.8, "the rotor turns at {w}");
+    let size = d.iter().map(|x| x * x).sum::<f64>().sqrt();
+    assert!((size - 1e-3 * w.abs()).abs() < 1e-9 * size, "{d:?} against {}", 1e-3 * w);
+    assert!((d[2].abs() - size).abs() < 1e-9 * size, "about the vertical: {d:?}");
+}
+
+/// A single belt axis whose pulley stands level with the carriage's clamp, with two spans (a run from the clamp to the
+/// pulley and one back) that move with the carriage.
+fn runs_axis(belt_mass: bool) -> Config {
+    let base = text("single-axis.toml");
+    let base = &base[..base.find("\n[machine]\n").unwrap() + 1];
+    let netlist = r#"
+[machine]
+version = 1
+id = "runs-axis"
+axis = [{ id = "x", stroke_m = "geometry.stroke_m" }]
+motor = [{ id = "m" }]
+gearbox = [{ id = "gearbox", motor = "m" }]
+pulley = [{ id = "pulley", gearbox = "gearbox", radius_m = "geometry.pulley_radius_m", inertia_kgm2 = "pulley.inertia_kgm2", at_m = [-0.2, -0.05, 0.06] }]
+section = [
+    { id = "1", length_m = 0.15, axes = { x = 1 }, pulleys = { pulley = 1 }, route = ["carriage", "pulley"] },
+    { id = "2", length_m = 2.45, axes = { x = -1 }, pulleys = { pulley = -1 }, route = ["pulley", "carriage"] },
+]
+span = [
+    { id = "out", section = "1", length_m = 0.6, velocity_x = { x = 1 } },
+    { id = "back", section = "2", length_m = 0.2, velocity_x = { x = 1 } },
+]
+body = [{ id = "carriage", mass_kg = "mass.carriage_kg", payload_kg = "mass.payload_kg", axes = ["x"] }]
+guide = [{ id = "guide_x", axis = "x", friction = "friction_x", carries = ["carriage"] }]
+"#;
+    with(
+        &Config::parse(&format!("{base}{netlist}")).unwrap(),
+        &["geometry.incline_deg = 0.0", "effects.idlers = false", &format!("effects.belt_mass = {belt_mass}")],
+    )
+}
+
+/// The belt's runs carry angular momentum about the origin of the bodies' places, m x (mu L y), each about the middle of its
+/// straight piece. The carriage at x = 0.4 (its clamp, a wheel of radius 0), the pulley (radius r = 0.02, anticlockwise) 0.6 m
+/// away at the same height: the straight run from the clamp to the pulley leans by alpha, sin alpha = r / 0.6, and meets
+/// the wheel at r cos(alpha) above the line (and the run back leaves it r cos(alpha) below), so the runs' middles are
+/// +-1/2 r cos(alpha) high. Both move at v = 0.5 m/s along x, the first 0.6 m long, the second 0.2 m, mu = 0.1 kg/m:
+/// L_y = mu v (0.6 - 0.2) r cos(alpha) / 2 = 0.1 * 0.5 * 0.4 * 0.02 * 0.99944 / 2 = 1.99889e-4 N m s (m_z y_x only, y_z 0).
+#[test]
+fn the_belts_runs_have_angular_momentum_about_the_middle_of_their_straight_piece() {
+    let angular = |belt: bool, stretch: bool| {
+        let cfg = with(&runs_axis(belt), &[&format!("effects.belt_stretch = {stretch}")]);
+        let machine = sim_netlist::build(&cfg).unwrap();
+        let (mut state, _) = at_rest(machine.as_ref(), &[0.4]);
+        machine.set_tool_velocity(&mut state, &[0.5]);
+        machine.frame_momentum(&state).unwrap().angular
+    };
+    let cos = (1.0 - (0.02_f64 / 0.6).powi(2)).sqrt();
+    let hand = 0.1 * 0.5 * (0.6 - 0.2) * 0.02 * cos / 2.0;
+    for stretch in [false, true] {
+        let (with_belt, without) = (angular(true, stretch), angular(false, stretch));
+        let d: Vec<f64> = (0..3).map(|k| with_belt[k] - without[k]).collect();
+        assert!(d[0].abs() < 1e-12 && d[2].abs() < 1e-12, "stretch {stretch}: {d:?}");
+        assert!((d[1] - hand).abs() < 1e-9 * hand, "stretch {stretch}: {} against {hand}", d[1]);
+    }
+}
+
+/// A gantry's yaw left to its spring rests deflected in the rigid model too: the same machine as above (the rack gantry
+/// with its bridge's axis vertical), `effects.belt_stretch` off. The rigid model's torques carry the other coordinates
+/// against gravity, K^T P = -gravity, and what they put on the yaw less gravity's is held by the spring: no coordinate
+/// accelerates at rest and the yaw is not 0.
+#[test]
+fn a_yaw_left_to_its_spring_rests_deflected_in_the_rigid_model_too() {
+    let file = text("rack-gantry.toml").replace("gantry_yaw = false", "gantry_yaw = true").replace(
+        "id = \"x\"\nstroke_m = \"geometry.stroke_x_m\"",
+        "id = \"x\"\nstroke_m = \"geometry.stroke_x_m\"\nincline_deg = 90.0",
+    );
+    let cfg = with(&Config::parse(&file).unwrap(), &["effects.belt_stretch = false"]);
+    let machine = sim_netlist::build(&cfg).unwrap();
+    let (state, torque) = at_rest(machine.as_ref(), &[0.3, 0.2]);
+    assert!(state[2].abs() > 1e-9, "the yaw stands at {}", state[2]);
+    let mut rates = vec![0.0; state.len()];
+    machine.derivatives(&state, &torque, &mut rates);
+    let worst = rates[3..6].iter().fold(0.0f64, |a, r| a.max(r.abs()));
+    assert!(worst < 1e-6, "an acceleration of {worst} at rest, yaw {}", state[2]);
+}
+
+/// The guides' Stribeck rise reaches the planner: the T-gantry's X guide has Coulomb 15 N and stiction 20 N, so along X
+/// the rise (20 - 15) is 5 / 15 of the Coulomb level at each motor (both are the guide's force times the same ratio to
+/// the motors), and it fades over the guide's Stribeck speed, 10 mm/s, along a path that moves X at 1 per unit.
+#[test]
+fn the_guides_stribeck_rise_is_offered_to_the_planner() {
+    let machine = sim_netlist::build(&shipped("t-gantry.toml")).unwrap();
+    let (mut plain, mut rise) = (Vec::new(), Vec::new());
+    machine.rigid_friction(&[0.5, 0.25], &[1.0, 0.0], &mut plain);
+    machine.rigid_friction_rise(&[0.5, 0.25], &[1.0, 0.0], &mut rise);
+    assert_eq!((plain.len(), rise.len()), (2, 2));
+    for (c, r) in plain.iter().zip(&rise) {
+        assert!(c[0].abs() > 0.0, "{plain:?}");
+        assert!((r[0] - c[0] * 5.0 / 15.0).abs() < 1e-12 * c[0].abs(), "{plain:?} against {rise:?}");
+        assert!((r[1] - 0.01).abs() < 1e-12, "{rise:?}");
+    }
 }

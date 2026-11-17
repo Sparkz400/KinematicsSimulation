@@ -2749,7 +2749,8 @@ impl ConfigMachine {
                 }
                 let ((a, pa), (b, pb)) = (self.wheel(route[at], q), self.wheel(route[at + 1], q));
                 let [from, to] = contacts(a, b);
-                let middle = self.in_view([0.5 * (from[0] + to[0]), 0.5 * (from[1] + to[1])], 0.5 * (pa[deep] + pb[deep]));
+                let middle =
+                    self.in_view([0.5 * (from[0] + to[0]), 0.5 * (from[1] + to[1])], 0.5 * (pa[deep] + pb[deep]));
                 let origin = scene_origin();
                 let place: [f64; 3] = std::array::from_fn(|k| middle[k] - origin[k]);
                 place.iter().all(|x| x.is_finite()).then_some(place)

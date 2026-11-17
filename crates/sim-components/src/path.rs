@@ -2582,6 +2582,35 @@ fn friction_range([c, b, level, speed]: [f64; 4], v: f64) -> (f64, f64) {
     (least, most)
 }
 
+#[cfg(test)]
+mod friction_range_tests {
+    use super::friction_range;
+
+    /// Without a rise [c, b] give the ends and 0: c = 1, b = -2 at v = 0.3: f runs from 1 to 0.4, with 0 below: (0, 1).
+    /// With a rise 0.5 over speed 0.1 and b = 0: the friction at a standstill is 1.5 and falls to 1 + 0.5 e^-9 at 0.3.
+    /// With level 1, speed 1, b = 0.5 the friction first rises (f' = b > 0 at 0) to a maximum where t e^(-t^2) = 0.25, the
+    /// smaller root t = 0.2685 (found by Newton below), which beats the standstill value: f = 0 + e^(-t^2) + 0.5 t.
+    #[test]
+    fn the_friction_range_has_its_ends_and_its_interior_extremes() {
+        assert_eq!(friction_range([1.0, -2.0, 0.0, 1.0], 0.3), (0.0, 1.0));
+        let (least, most) = friction_range([1.0, 0.0, 0.5, 0.1], 0.3);
+        assert!((most - 1.5).abs() < 1e-12 && least == 0.0, "{least} {most}");
+        let mut t: f64 = 0.27;
+        for _ in 0..20 {
+            let (g, dg) = (t * (-t * t).exp() - 0.25, (1.0 - 2.0 * t * t) * (-t * t).exp());
+            t -= g / dg;
+        }
+        let top = (-t * t).exp() + 0.5 * t;
+        assert!(top > 1.0 && (t - 0.2685).abs() < 1e-3, "{t} {top}");
+        // (At v = 2 the end, e^-4 + 1, is below that maximum; the second root, t = 1.28, is a minimum.)
+        let (_, most) = friction_range([0.0, 0.5, 1.0, 1.0], 2.0);
+        assert!((most - top).abs() < 1e-9, "{most} against {top}");
+        // Not reached below the speed: v = 0.1 stops before t = 0.2685.
+        let (_, most) = friction_range([0.0, 0.5, 1.0, 1.0], 0.1);
+        assert!((most - (1.0_f64.max((-0.01_f64).exp() + 0.05))).abs() < 1e-12, "{most}");
+    }
+}
+
 impl Place {
     /// The low and high of row `i` at the speed `v` along the path, and at every speed below it.
     fn bounds(&self, i: usize, v: f64) -> (f64, f64) {
