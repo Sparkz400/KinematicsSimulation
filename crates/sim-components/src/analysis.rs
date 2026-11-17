@@ -4926,9 +4926,10 @@ mod tests {
 
     /// A link of 10 J that neither empties nor fills over 400 000 stretches of noise (±1e-4 J, no net) keeps the passes
     /// over its voltage window, not the stretches, and gives the two passes' figures within half the grid's step
-    /// (10 / 512 J). At both ends of the window: entered after a 0.3 J braking it sits near empty, after a 9.99 J one near
-    /// full (spilling the noise's 1e-4 J per stretch fed back where it is full: some 20 J). And once the passes meet
-    /// after the grid was taken (a 12 J braking), the figures are the two passes' to rounding again.
+    /// (10 / 512 J). At both ends of the window: after a 0.3 J braking it sits near empty (by hand: nothing spilled, at
+    /// most 0.6001 J held, the cycle entered 0.3 J full), after a 9.99 J one near full (entered 9.99 J full, the braking
+    /// spills 9.98 J and the noise's first 1e-4 J: 9.9801 J, at most 19.98 J held). And once the passes meet after the grid
+    /// was taken (a 12 J braking and 20 J drawn), the figures are the two passes' to rounding again (2.3 J, 12.3 J).
     #[test]
     fn a_dc_link_that_never_empties_nor_fills_keeps_a_bounded_account_at_both_ends() {
         let two_passes = |events: &[f64], room: f64| {
@@ -4940,12 +4941,18 @@ mod tests {
         };
         let room = 10.0;
         let noise = (0..400_000).map(|i| if i % 2 == 0 { 1e-4 } else { -1e-4 });
-        for (start, end, meets) in [(0.3, vec![], false), (9.99, vec![], false), (0.3, vec![12.0, -20.0], true)] {
+        let cases = [
+            (0.3, vec![], false, (0.0, 0.6001)),
+            (9.99, vec![], false, (9.9801, 19.98)),
+            (0.3, vec![12.0, -20.0], true, (2.3, 12.3)),
+        ];
+        for (start, end, meets, by_hand) in cases {
             let events: Vec<f64> = std::iter::once(start).chain(noise.clone()).chain(end).collect();
             let mut account = LinkAccount::new(room);
             events.iter().for_each(|&e| account.push(e));
             assert!(account.prefix.is_empty() && account.grid.len() == LINK_GRID && account.met == meets);
             let ((a, b), (c, d)) = (account.finish(), two_passes(&events, room));
+            assert!((c - by_hand.0).abs() < 1e-9 && (d - by_hand.1).abs() < 1e-9, "{start}: {c} {d}");
             let tolerance = if meets { 1e-9 } else { room / (2.0 * (LINK_GRID - 1) as f64) };
             assert!((a - c).abs() <= tolerance && (b - d).abs() <= tolerance, "{start}: {a} {b} against {c} {d}");
         }
