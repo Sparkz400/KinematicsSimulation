@@ -1453,6 +1453,12 @@ impl Machine for TGantry {
             vel[1] -= slope * s[V + X];
         }
     }
+    /// The carriage on the beam, against the frame: neither the frame's sway nor the Z axis's lean is in it.
+    fn scale_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+        let v = if self.elastic { V } else { 2 };
+        pos.copy_from_slice(&s[0..2]);
+        vel.copy_from_slice(&s[v..v + 2]);
+    }
     fn set_tool_velocity(&self, s: &mut [f64], vel: &[f64]) {
         if !self.elastic {
             return s[2..4].copy_from_slice(vel);

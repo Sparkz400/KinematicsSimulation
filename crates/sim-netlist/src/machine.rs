@@ -3024,6 +3024,12 @@ impl Machine for ConfigMachine {
             vel[lean.axis] += tip * dw;
         }
     }
+    /// The carriage's position against the frame: the frame's sway and the lean are not in it.
+    fn scale_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+        let (q, v) = self.positions(s);
+        pos.copy_from_slice(&self.tool_of(q));
+        vel.copy_from_slice(&self.tool_speed(q, v));
+    }
     fn set_tool_velocity(&self, s: &mut [f64], vel: &[f64]) {
         let (n, m, v) = (self.n(), self.m(), self.vel());
         let tool = self.tool_of(&s[..n]);
