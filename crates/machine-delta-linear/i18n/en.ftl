@@ -15,6 +15,7 @@ belt-section-2-2 = Belt 2, round the idler
 belt-section-3-1 = Belt 3, motor to carriage
 belt-section-3-2 = Belt 3, round the idler
 quantity-carriage-height = Carriage travel along its column (upright: joint height)
+quantity-guide-moment = Guide moment (Mx, My, Mz) from the rods' joints standing off the slide
 quantity-condition-number = Condition number of the Jacobian
 group-kinematics = Kinematics
 group-workspace = Working range

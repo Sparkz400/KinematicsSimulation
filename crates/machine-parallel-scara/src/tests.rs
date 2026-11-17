@@ -102,7 +102,11 @@ fn centre_by_hand(d: &ParallelScara, y: f64) -> f64 {
     let (mut lo, mut hi) = (-60f64.to_radians(), 90f64.to_radians());
     for _ in 0..100 {
         let mid = 0.5 * (lo + hi);
-        if f(lo) * f(mid) <= 0.0 { hi = mid } else { lo = mid }
+        if f(lo) * f(mid) <= 0.0 {
+            hi = mid
+        } else {
+            lo = mid
+        }
     }
     0.5 * (lo + hi)
 }
@@ -289,4 +293,22 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
     assert!(integrator.abs() < 0.01 * expected, "the integrator carries {integrator} N m");
     let (ff, integrator) = cruise(false);
     assert!(ff == 0.0 && (integrator - expected).abs() < 0.02 * expected, "without: {integrator} N m");
+}
+
+/// The arm tube's first moment about its joint (`arm_moment`, less the elbow's l_a m_elbow): a uniform rod of the
+/// configured inertia I gives 3 I / (2 l_a); `mass.upper_arm_kg` m and `upper_arm_cg_m` c give m c, and one alone takes
+/// the rod's value for the other (m = 3 I / l_a^2, c = l_a / 2).
+#[test]
+fn the_arm_tubes_first_moment_takes_its_mass_and_centre_where_given() {
+    let base = scara(&[]);
+    let (la, i) = (base.legs.la, 0.064);
+    let tube = |d: &ParallelScara| d.arm_moment - base.arm_moment;
+    close(tube(&scara(&["mass.upper_arm_kg = 2.0", "mass.upper_arm_cg_m = 0.3"])), 0.6 - 1.5 * i / la, 1e-12, "m c");
+    close(tube(&scara(&["mass.upper_arm_kg = 2.0"])), 2.0 * 0.5 * la - 1.5 * i / la, 1e-12, "mass alone");
+    close(
+        tube(&scara(&["mass.upper_arm_cg_m = 0.3"])),
+        3.0 * i / (la * la) * 0.3 - 1.5 * i / la,
+        1e-12,
+        "centre alone",
+    );
 }

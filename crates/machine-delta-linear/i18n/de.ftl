@@ -15,6 +15,7 @@ belt-section-2-2 = Riemen 2, um die Umlenkrolle
 belt-section-3-1 = Riemen 3, Motor bis Schlitten
 belt-section-3-2 = Riemen 3, um die Umlenkrolle
 quantity-carriage-height = Schlittenweg längs der Säule (senkrecht: Gelenkhöhe)
+quantity-guide-moment = Führungsmoment (Mx, My, Mz) durch die seitlich der Führung liegenden Stabgelenke
 quantity-condition-number = Konditionszahl der Jacobi-Matrix
 group-kinematics = Kinematik
 group-workspace = Arbeitsraum
