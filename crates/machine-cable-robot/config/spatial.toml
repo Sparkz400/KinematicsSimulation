@@ -53,6 +53,9 @@ winch_directions = [
     [0.0, 0.0, -1.0],
     [0.0, 0.0, -1.0],
 ]
+# The axis each winch's drum and rotor turn about (one row per cable), for the winches' spin in the frame's load. Empty:
+# horizontal and square to the cable's direction at the winch (winch direction x e_z).
+winch_spin_axes = []
 
 [pulley]
 # [estimate] a swivelling deflection pulley for a 4 mm rope.
@@ -68,6 +71,9 @@ breaking_load_n = 10000.0
 safety_factor = 10.0
 min_tension_n = 20.0
 reference_tension_n = 250.0
+# [estimate] Its mass per metre: UHMWPE 0.97 g/cm3 over the 4 mm rope's section pi d^2 / 4 = 12.6 mm2, braided at about 0.8 fill.
+# Its weight (half of the free span on the platform) and its sag (Ernst's equivalent modulus) act with it; 0 leaves both out.
+mass_per_m_kg = 0.010
 
 # [estimate] The winch: its drum, the friction of its bearings and the pulley at the cable, its capacity, and buffers at
 # an empty and a full drum.
@@ -272,6 +278,10 @@ standstill_time_s = 1.0
 standstill_window_rad = 0.1
 torque_band = 0.0
 [ratings]
+# The band the time-optimal plan keeps every cable's tension within (`rigid_tensions_moving`): the same as cable.min_tension_n
+# and cable.breaking_load_n / cable.safety_factor, which the rating checks use; change them together.
+belt_min_tension_n = 20.0
+belt_max_tension_n = 1000.0
 # [estimate] What a cable robot of this size is asked to hold at a dwell, the place and, on its own, the turn (2 mrad,
 # 0.28 mm at the anchors, as the SCARA's in tool space; the cycle's dwells reach 1.03 mrad, sim-cli verdicts).
 settling_tolerance_m = 0.001

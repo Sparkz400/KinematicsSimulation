@@ -657,7 +657,14 @@ impl WaferHandler {
             joint.friction.coulomb += screw.preload_torque() * screw.ratio();
         }
         axes.push(Self::axis_info(cfg, "z", "axis-lift", "m", joint.range)?);
-        let lift = Lift { elastic: cfg.bool("effects.joint_elasticity")?, joint, load: carriage + arm.mass(false), payload: arm.wafer.mass, g, screw };
+        let lift = Lift {
+            elastic: cfg.bool("effects.joint_elasticity")?,
+            joint,
+            load: carriage + arm.mass(false),
+            payload: arm.wafer.mass,
+            g,
+            screw,
+        };
         let hold = Hold::from_config(cfg, wafer_kg)?;
         let factor = cfg.positive("ratings.wafer_slip_safety_factor")?;
         let mut handler = Self {
