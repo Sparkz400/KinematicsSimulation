@@ -557,12 +557,8 @@ impl Tripod {
         }
         let leg_mass = cfg.non_negative("leg.mass_kg")?;
         let part = |key: &str, on_platform: bool, mass: f64| -> Result<LegPart, ConfigError> {
-            let get = |what: &str| cfg.f64(&format!("leg.{key}_{what}")).or_else(|_| Ok::<f64, ConfigError>(0.0));
-            let (centre, inertia) = (get("centre_m")?, get("inertia_kgm2")?);
-            if !(centre >= 0.0 && inertia >= 0.0) {
-                return Err(ConfigError::Invalid(format!("leg.{key}_centre_m")));
-            }
-            Ok(LegPart { mass, centre, inertia, on_platform })
+            let get = |what: &str| cfg.non_negative(&format!("leg.{key}_{what}"));
+            Ok(LegPart { mass, centre: get("centre_m")?, inertia: get("inertia_kgm2")?, on_platform })
         };
         let parts =
             [part("base_part", false, (1.0 - share) * leg_mass)?, part("platform_part", true, share * leg_mass)?];

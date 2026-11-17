@@ -614,7 +614,7 @@ Hubenden und der Motor sind die der Kugelgewindeachse oben. Die Mechanik gibt Ki
   `leg.mass_kg`, Schwerpunkt `leg.platform_part_centre_m` vom Plattformgelenk) und das Gehäuseteil (der Rest,
   Schwerpunkt `leg.base_part_centre_m` vom Basisgelenk), jedes mit seiner Trägheit um den Schwerpunkt quer zum Bein; ihre
   kinetische Energie geht in M_xi und c ein, ihr Gewicht in g. Die Nutzlast kann eine eigene Trägheit haben
-  (`mass.payload_inertia_kgm2`, fehlend 0).
+  (`mass.payload_inertia_kgm2`, 0: eine Punktmasse).
 - Abgelehnt: ein Bein über seinen Hub hinaus (`error-joint-beyond-stop`), ein Bein steiler gegen die Normale der Basis
   oder der Plattform als `workspace.max_joint_angle_deg` (`error-hexapod-joint-angle`), eine Lage, deren Jacobi-Matrix
   eine Konditionszahl über `workspace.max_condition_number` hat, die Drehungen mit dem Plattformradius gewichtet

@@ -634,7 +634,7 @@ and the motor are those of the ball screw axis above. The mechanism gives the pl
   two bodies swinging with its direction: the rod part (`leg.platform_share` of `leg.mass_kg`, centre
   `leg.platform_part_centre_m` from the platform joint) and the body part (the rest, centre `leg.base_part_centre_m`
   from the base joint), each with its inertia about its centre across the leg; their kinetic energy enters M_xi and c,
-  their weight g. The payload may have an inertia of its own (`mass.payload_inertia_kgm2`, absent 0).
+  their weight g. The payload may have an inertia of its own (`mass.payload_inertia_kgm2`, 0: a point mass).
 - Refused: a leg beyond its stroke (`error-joint-beyond-stop`), a leg steeper against the base's or the platform's
   normal than `workspace.max_joint_angle_deg` (`error-hexapod-joint-angle`), a pose whose Jacobian has a condition
   number above `workspace.max_condition_number`, the turns weighed by the platform radius
