@@ -288,8 +288,6 @@ fn commanded_acc_vs_true_acc() {
         "gravity",
         "holding_brake",
         "gearbox_backlash",
-        // The guide load takes the acceleration without the belt's runs (`commanded_acc`); the H-bot's 0.32 kg on X.
-        "belt_mass",
     ] {
         cfg.set_text(&format!("effects.{e} = false")).unwrap();
     }
