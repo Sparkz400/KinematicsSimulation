@@ -239,29 +239,45 @@ impl Run {
     }
 
     /// With what `sim`, of the machine and config the run is of, says about them: per motor its rated and peak torque
-    /// and its drive, and the machine's resonances at the start pose.
-    /// The modes are asked at `MODE_POSES` poses along the run (its start, its end and between), read from the tool's
-    /// position signals; a run without them (a trace) has the modes at the pose `sim` stands at.
-    pub fn rated(self, sim: &Sim) -> Self {
+    /// and its drive, and the machine's resonances along the run. The modes are asked at `MODE_POSES` poses along the
+    /// run (its start, its end and between), read from the tool's position signals, each with the payload as the run's
+    /// signal `payload` has it there (the machine is left with the run's last); a run without them (a trace) has the
+    /// modes at the pose `sim` stands at.
+    pub fn rated(self, sim: &mut Sim) -> Self {
         let drives: Vec<DriveParams> =
             (0..sim.machine.motors().len()).map(|k| sim.control.drive_params_of(k).clone()).collect();
-        let axes = sim.machine.axes();
+        let axes = sim.machine.axes().to_vec();
         let columns: Option<Vec<&[f64]>> =
             axes.iter().map(|a| self.column(&format!("axis.{}.position", a.id)).filter(|c| !c.is_empty())).collect();
-        let at = |i: usize| -> Option<(f64, Vec<f64>)> {
+        let payload = self.column("payload").filter(|c| !c.is_empty());
+        let at = |i: usize| -> Option<(f64, Vec<f64>, Option<bool>)> {
             let columns = columns.as_ref()?;
-            Some((self.time().get(i).copied().unwrap_or(0.0), columns.iter().map(|c| c[i.min(c.len() - 1)]).collect()))
+            let held = payload.map(|c| c[i.min(c.len() - 1)] != 0.0);
+            Some((
+                self.time().get(i).copied().unwrap_or(0.0),
+                columns.iter().map(|c| c[i.min(c.len() - 1)]).collect(),
+                held,
+            ))
         };
-        let last = columns.as_ref().map_or(0, |c| c[0].len() - 1);
-        let mut poses: Vec<(f64, Vec<f64>)> =
-            (0..MODE_POSES).filter_map(|n| at(last * n / (MODE_POSES - 1))).collect();
+        let last = columns.as_ref().and_then(|c| c.first()).map_or(0, |c| c.len() - 1);
+        let mut poses: Vec<_> = (0..MODE_POSES).filter_map(|n| at(last * n / (MODE_POSES - 1))).collect();
         if poses.is_empty() {
             let (mut pose, mut rate) = (vec![0.0; axes.len()], vec![0.0; axes.len()]);
             sim.machine.tool_state(&sim.state, &mut pose, &mut rate);
-            poses.push((0.0, pose));
+            poses.push((0.0, pose, None));
         }
-        let modes_along: Vec<(f64, Vec<f64>)> =
-            poses.iter().map(|(t, pose)| (*t, sim.machine.modes(pose).iter().map(|m| m.hz).collect())).collect();
+        let modes_along: Vec<(f64, Vec<f64>)> = poses
+            .iter()
+            .map(|(t, pose, held)| {
+                if let Some(held) = held {
+                    sim.machine.set_payload_attached(*held);
+                }
+                (*t, sim.machine.modes(pose).iter().map(|m| m.hz).collect())
+            })
+            .collect();
+        if let Some(held) = poses.last().and_then(|p| p.2) {
+            sim.machine.set_payload_attached(held);
+        }
         let mut modes: Vec<f64> = modes_along.iter().flat_map(|(_, hz)| hz.iter().copied()).collect();
         modes.sort_by(f64::total_cmp);
         modes.dedup_by(|a, b| (*a - *b).abs() < 1e-6);

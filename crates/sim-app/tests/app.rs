@@ -2071,13 +2071,26 @@ fn the_modes_are_asked_along_the_run_and_each_motor_has_its_own_axis_unit(entry:
     let mut model = Model::new(entry, "en");
     model.run_analysis(Analysis::Cycle);
     wait_for_analysis(&mut model);
-    let machine = (entry.build)(&entry.config()).unwrap();
+    // The machine as the run's simulation builds it (the parts the config names from the catalogue), with the payload
+    // the run's first sample has.
+    let mut machine = (entry.build)(&sim_components::catalog::resolve(entry, &entry.config()).unwrap()).unwrap();
     let run = model.runs.get(model.runs.reference()).unwrap();
+    if let Some(payload) = run.column("payload") {
+        machine.set_payload_attached(payload[0] != 0.0);
+    }
     assert!(!run.modes_along.is_empty() && run.modes_along.len() <= sim_app::runs::MODE_POSES);
     assert_eq!(run.modes_along[0].0, 0.0);
     let pose: Vec<f64> =
         machine.axes().iter().map(|a| run.column(&format!("axis.{}.position", a.id)).unwrap()[0]).collect();
-    assert_eq!(run.modes_along[0].1, machine.modes(&pose).iter().map(|m| m.hz).collect::<Vec<_>>());
+    // To the float order of the eigen solve (the palletiser's differ by 2e-15 relative).
+    let hand: Vec<f64> = machine.modes(&pose).iter().map(|m| m.hz).collect();
+    assert!(
+        run.modes_along[0].1.len() == hand.len()
+            && run.modes_along[0].1.iter().zip(&hand).all(|(a, b)| (a - b).abs() <= 1e-9 * b.abs()),
+        "{}: {:?} against {hand:?}",
+        entry.id,
+        run.modes_along[0].1
+    );
     for hz in run.modes_along.iter().flat_map(|(_, hz)| hz) {
         assert!(run.modes.iter().any(|m| (m - hz).abs() < 1e-6), "{}: {hz} Hz", entry.id);
     }
@@ -2089,6 +2102,71 @@ fn the_modes_are_asked_along_the_run_and_each_motor_has_its_own_axis_unit(entry:
     }
 }
 per_machine!(the_modes_are_asked_along_the_run_and_each_motor_has_its_own_axis_unit);
+
+/// A path starts where the machine's setpoint stands (`start_at_setpoint`): the tool is pushed off it by the rest sag
+/// until the planned setpoint is the live one. On every machine with a sag (`setpoint_slack`), with each axis at each of
+/// its ends in turn: inside the strokes the planned setpoint is the pose to 1e-10; where the push would leave a stroke,
+/// the tool stands at that end exactly and only that axis keeps a gap (the URDF arm's second joint at -1.571 rad: its
+/// sag of 3.71 mrad); where it would leave the envelope, that push is refused. A setpoint beyond an end is refused.
+#[test]
+fn a_path_starts_at_the_setpoint_and_a_push_past_a_strokes_end_stops_at_the_end() {
+    let mut clamped = 0;
+    for entry in MACHINES.iter().copied() {
+        let config = entry.config();
+        let sim = sim_components::Sim::new(entry, &config).unwrap();
+        let (axes, slack) = (sim.machine.axes().to_vec(), sim.machine.setpoint_slack());
+        if slack == 0.0 {
+            continue;
+        }
+        let start = sim.control.planned_pos().to_vec();
+        for (k, axis) in axes.iter().enumerate() {
+            for end in [axis.min, axis.max] {
+                let mut pose = start.clone();
+                pose[k] = end;
+                let mut beyond = pose.clone();
+                beyond[k] += if end == axis.max { 1e-3 } else { -1e-3 } * (axis.max - axis.min);
+                // Refused where the machine refuses to start there (a closed track's movers have no end).
+                let mut cfg = config.clone();
+                cfg.set_text(&format!("start.pose = {beyond:?}")).unwrap();
+                assert_eq!(
+                    sim_app::model::start_at_setpoint(entry, &config, &beyond).is_err(),
+                    sim_components::Sim::new(entry, &cfg).is_err(),
+                    "{}: {beyond:?}",
+                    entry.id
+                );
+                // A pose off the machine's envelope is refused as a start of its own.
+                let Ok((planned, from)) = sim_app::model::start_at_setpoint(entry, &config, &pose) else { continue };
+                let tool = from.f64s("start.pose").unwrap();
+                assert!(tool.iter().zip(&axes).all(|(t, a)| (a.min..=a.max).contains(t)), "{}: {tool:?}", entry.id);
+                let off: Vec<f64> = pose.iter().zip(planned.control.planned_pos()).map(|(p, q)| p - q).collect();
+                if off.iter().any(|d| d.abs() >= 1e-10) {
+                    // The gap is left only on axes whose tool stands at a stroke's end (the others are planned to
+                    // the pose), or where the next push would put the tool where the machine cannot start (off its
+                    // envelope, beyond a joint's stop).
+                    let at_end = |i: usize| tool[i] == axes[i].min || tool[i] == axes[i].max;
+                    if (0..axes.len()).any(at_end) {
+                        assert!(
+                            (0..axes.len()).all(|i| off[i].abs() < 1e-10 || at_end(i)),
+                            "{}: axis {k} at {end}, pose {pose:?}, tool {tool:?}, off {off:?}",
+                            entry.id
+                        );
+                        clamped += 1;
+                    } else {
+                        let pushed: Vec<f64> = tool.iter().zip(&off).map(|(t, d)| t + d).collect();
+                        let mut cfg = config.clone();
+                        cfg.set_text(&format!("start.pose = {pushed:?}")).unwrap();
+                        assert!(
+                            sim_components::Sim::new(entry, &cfg).is_err(),
+                            "{}: {pose:?} planned {off:?} off, tool {tool:?}",
+                            entry.id
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(clamped > 0, "no push left a stroke");
+}
 
 /// Where an arm's tool is drawn off its pose by the gears' twist under its weight: the distance in the scene of the tool
 /// at `pose` and with every axis the machine's setpoint slack further. An arm's poses are joint angles, so its slack of
@@ -3141,7 +3219,7 @@ fn the_effect_views_show_torque_parts_energy_budget_and_friction(entry: &'static
             model.session.axes.iter().find(|a| a.key == contact.owner_key).map_or(fastest, |a| a.max_vel)
         });
         assert_eq!(view.rotary, machine.friction_rotary(i));
-        let unit = if view.rotary { "N m" } else { "N" };
+        let (unit, total_label) = if view.rotary { ("N m", "Friction torque") } else { ("N", "Friction force") };
         assert_eq!(view.title, model.tr.tr(contact.owner_key));
         let curve = &view.curves[0].1;
         assert!(
@@ -3171,7 +3249,7 @@ fn the_effect_views_show_torque_parts_energy_budget_and_friction(entry: &'static
         assert_eq!(view.now, Some([get("speed"), split.iter().sum::<f64>()]));
         assert!(
             shows(&row(&view.table, &format!("Coulomb friction [{unit}]"))[0], split[0])
-                && shows(&row(&view.table, &format!("Friction force [{unit}]"))[0], split.iter().sum()),
+                && shows(&row(&view.table, &format!("{total_label} [{unit}]"))[0], split.iter().sum()),
             "{:?}",
             view.table
         );
@@ -3474,10 +3552,10 @@ fn the_thermal_belt_and_comparison_views_show_the_simulation(entry: &'static Mac
     let budget = load.budget.as_ref().unwrap();
     for part in &parts {
         let lost = budget.rows.iter().find(|r| r.id == format!("power.{}", part.id)).unwrap().energy / load.duration;
-        let resistance = (entry.build)(&model.config).unwrap().thermal_values(part.id).map_or_else(
-            || model.config.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap(),
-            |own| own.0,
-        );
+        let resistance = (entry.build)(&model.config)
+            .unwrap()
+            .thermal_values(part.id)
+            .map_or_else(|| model.config.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap(), |own| own.0);
         let settles = lost * resistance;
         let cells = row(
             &view.table,

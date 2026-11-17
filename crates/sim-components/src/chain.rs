@@ -956,8 +956,7 @@ impl<M: Mechanism> JointMachine<M> {
         out.extend(&losses.powers);
         out.extend(self.energy_parts_with(s, &at_rest));
         for k in 0..n {
-            let f = &self.joints[k].drive.friction;
-            out.extend([qd[k], f.coulomb * (qd[k] / f.smoothing).tanh(), f.viscous * qd[k], 0.0, 1.0]);
+            out.extend(self.joints[k].drive.friction_signals(qd[k]));
         }
     }
 
@@ -1582,7 +1581,8 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         out.extend(self.losses(s, torque).powers);
     }
 
-    /// Each joint's friction (Coulomb and viscous, no stiction), owned by the joint's axis: the friction view spans that
+    /// Each joint's friction (`RotaryJoint::friction_split`: with a slide's presliding also the rise to its breakaway
+    /// level), owned by the joint's axis: the friction view spans that
     /// axis's speed limit (with the joint's own key it found no axis and spanned 1 m/s or rad/s).
     fn friction_contacts(&self) -> Vec<FrictionContact> {
         self.joints
@@ -1595,9 +1595,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         i < self.joints.len() && self.units(i).0 == "rad/s"
     }
     fn friction_curve(&self, i: usize, speed: f64, _load_scale: f64) -> [f64; 3] {
-        let Some(joint) = self.joints.get(i) else { return [0.0; 3] };
-        let f = &joint.drive.friction;
-        [f.coulomb * (speed / f.smoothing).tanh(), f.viscous * speed, 0.0]
+        self.joints.get(i).map_or([0.0; 3], |joint| joint.drive.friction_split(speed))
     }
 
     /// The gearboxes, where there are gearboxes (not on a direct drive).

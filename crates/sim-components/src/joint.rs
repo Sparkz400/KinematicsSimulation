@@ -328,5 +328,12 @@ stop_damping_n_s_m = 0.0
         assert!((c + v + s + j.friction.torque(-2.0)).abs() < 1e-12, "odd in the speed");
         assert_eq!(j.friction_signals(2.0), [2.0, c, v, s, 1.0]);
         assert_eq!(RotaryJoint::friction_infos("joint.1", "arm-1").len(), sim_core::FRICTION_SIGNALS.len());
+        // A breakaway level of 5 N m falling over 1 rad/s: at 1 rad/s the rise is (5 - 2) e^-1 = 1.10364 N m, the
+        // Coulomb part stays 2 N m; together the torque less the viscous part.
+        let mut j = j;
+        (j.friction.stiction, j.friction.stribeck) = (5.0, 1.0);
+        let [c, v, s] = j.friction_split(1.0);
+        assert!((c - 2.0).abs() < 1e-9 && (s - 3.0 * (-1.0f64).exp()).abs() < 1e-9 && (v - 0.5).abs() < 1e-12);
+        assert!((c + v + s - j.friction.torque(1.0)).abs() < 1e-12);
     }
 }

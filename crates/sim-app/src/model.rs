@@ -383,6 +383,8 @@ struct Cache {
     stats: Option<((u64, u64, u64), Arc<Vec<Option<Stats>>>)>,
     /// The machine the config builds, for the views that ask it (friction, thermal parts, belt sections, workspace).
     machine: Option<(Config, Option<Box<dyn Machine>>)>,
+    /// Each motor's highest rotor speed, for the config (`Model::motor_speeds`).
+    motor_speed: Option<(Config, Vec<f64>)>,
     /// The workspace map, for the config, the height asked for and the grid.
     workspace: Option<((Config, Option<u64>, usize), Option<Arc<WorkspaceSlice>>)>,
     /// The coloured path, for the quantity and the path run (the address and length of its time column).
@@ -442,7 +444,7 @@ pub struct RunLine {
 fn judged_run(
     kind: RunKind,
     label: &str,
-    sim: &Sim,
+    sim: &mut Sim,
     entry: &'static MachineEntry,
     rows: &[Vec<f64>],
     verdicts: &[Verdict],
@@ -465,7 +467,42 @@ fn cycle_run(entry: &'static MachineEntry, config: &Config, tr: &Translations) -
     });
     let (load, rows) = (load.map_err(|e| (e.key, String::new()))?, rows.map_err(refused)?);
     let verdicts = verdicts(config, &load).map_err(refused)?;
-    Ok(judged_run(RunKind::Cycle, &config_label(entry, config, tr), &sim, entry, &rows, &verdicts, tr))
+    Ok(judged_run(RunKind::Cycle, &config_label(entry, config, tr), &mut sim, entry, &rows, &verdicts, tr))
+}
+
+/// A simulation of `config` whose planned setpoint stands at `pose` (a running machine's setpoint), and the config it
+/// starts from. The planning model puts the tool at `start.pose` and its setpoint one rest sag off it (0.26 mm on the
+/// planar delta): the tool is moved by what is left until the setpoint is `pose`. A `pose` the machine cannot start
+/// at is refused; a push that would put the tool past a stroke's end puts it at that end (the setpoint then stands up
+/// to a sag off `pose` along that axis, where no tool on the stroke can put it). A push off the machine's envelope
+/// (not a stroke's end) keeps the last start: the tool moves less than a sag between two of them.
+pub fn start_at_setpoint(
+    entry: &'static MachineEntry,
+    config: &Config,
+    pose: &[f64],
+) -> Result<(Sim, Config), ConfigError> {
+    let mut from_here = config.clone();
+    from_here.set_text(&format!("start.pose = {pose:?}"))?;
+    let mut sim = Sim::new(entry, &from_here)?;
+    let mut tool = pose.to_vec();
+    for _ in 0..8 {
+        let off: Vec<f64> = pose.iter().zip(sim.control.planned_pos()).map(|(want, is)| want - is).collect();
+        if off.iter().all(|d| d.abs() < 1e-10) {
+            break;
+        }
+        tool.iter_mut().zip(&off).for_each(|(t, d)| *t += d);
+        tool.iter_mut().zip(sim.machine.axes()).for_each(|(t, a)| *t = t.clamp(a.min, a.max));
+        let mut closer = from_here.clone();
+        closer.set_text(&format!("start.pose = {tool:?}"))?;
+        let Ok(started) = Sim::new(entry, &closer) else { break };
+        // At a stroke's end the push cannot close the gap: the plan is as close as it gets.
+        let settled = started.control.planned_pos() == sim.control.planned_pos();
+        (sim, from_here) = (started, closer);
+        if settled {
+            break;
+        }
+    }
+    Ok((sim, from_here))
 }
 
 /// Runs `points` on a simulation of `config` and keeps every signal once per millisecond until the trajectory is
@@ -1561,7 +1598,7 @@ impl Model {
     /// `rated` for a run made with another config of this machine (the compared ghost's).
     pub fn rated_with(&self, run: Run, config: &Config) -> Run {
         match Sim::new(self.entry, config) {
-            Ok(sim) => run.rated(&sim),
+            Ok(mut sim) => run.rated(&mut sim),
             Err(_) => run,
         }
     }
@@ -1917,7 +1954,7 @@ impl Model {
                                 None,
                             )
                         };
-                        let run = judged_run(RunKind::Cycle, &label, &sim, entry, &rows, &verdicts, &tr);
+                        let run = judged_run(RunKind::Cycle, &label, &mut sim, entry, &rows, &verdicts, &tr);
                         let run = Run { off_path: load.path_error_series.clone(), ..run };
                         Report::Cycle(load, verdicts, bands, inputs.samples, run.torque_speed(), worst, run)
                     }
@@ -1949,37 +1986,10 @@ impl Model {
                     Analysis::Path => {
                         let unreadable = |line: String| ("ui-file-line", format!("{}: {line}", inputs.path_file));
                         let text = read(&inputs.path_file)?;
-                        let mut from_here = config.clone();
-                        if let Some(pose) = &standing {
-                            from_here.set_text(&format!("start.pose = {pose:?}")).map_err(refused)?;
-                        }
-                        let mut sim = Sim::new(entry, &from_here).map_err(refused)?;
-                        // The planning model puts the tool at `start.pose` and its setpoint one rest sag off it (0.26 mm
-                        // on the planar delta): the tool is moved by what is left until the setpoint is the live one.
-                        if let Some(pose) = &standing {
-                            let mut tool = pose.clone();
-                            for _ in 0..8 {
-                                let off: Vec<f64> =
-                                    pose.iter().zip(sim.control.planned_pos()).map(|(want, is)| want - is).collect();
-                                if off.iter().all(|d| d.abs() < 1e-10) {
-                                    break;
-                                }
-                                tool.iter_mut().zip(&off).for_each(|(t, d)| *t += d);
-                                // A pose pushed past a stroke's end is planned to the end (the setpoint then stands
-                                // that much off the live pose, which no stroke could reach); the live pose itself
-                                // beyond the end was refused by the first start above.
-                                tool.iter_mut().zip(sim.machine.axes()).for_each(|(t, a)| *t = t.clamp(a.min, a.max));
-                                let mut closer = from_here.clone();
-                                closer.set_text(&format!("start.pose = {tool:?}")).map_err(refused)?;
-                                let started = Sim::new(entry, &closer).map_err(refused)?;
-                                // At the end the push cannot close the gap: the plan is as close as it gets.
-                                let settled = started.control.planned_pos() == sim.control.planned_pos();
-                                (sim, from_here) = (started, closer);
-                                if settled {
-                                    break;
-                                }
-                            }
-                        }
+                        let (mut sim, from_here) = match &standing {
+                            Some(pose) => start_at_setpoint(entry, &config, pose).map_err(refused)?,
+                            None => (Sim::new(entry, &config).map_err(refused)?, config.clone()),
+                        };
                         let (points, deviations) = if inputs.path_timed {
                             (path::parse_trajectory(&text).map_err(unreadable)?, vec![0.0])
                         } else {
@@ -2016,7 +2026,7 @@ impl Model {
                         let verdicts = verdicts(&config, &load).map_err(refused)?;
                         let file = std::path::Path::new(&inputs.path_file).file_name().map(|f| f.to_string_lossy());
                         let label = format!("{} · {label}", file.unwrap_or_default());
-                        let recorded = judged_run(RunKind::Path, &label, &again, entry, &rows, &verdicts, &tr);
+                        let recorded = judged_run(RunKind::Path, &label, &mut again, entry, &rows, &verdicts, &tr);
                         let recorded = Run { off_path: load.path_error_series.clone(), ..recorded };
                         Report::Path(
                             PathRun {
@@ -2780,18 +2790,28 @@ impl Model {
     /// curve runs over the axis's speed limit both ways, with its points closer together near standstill, where the
     /// Stribeck drop is. Empty for a machine that tells no contacts, or a config it does not build.
     pub fn friction_views(&self) -> Vec<FrictionView> {
-        self.with_machine(|machine| self.friction_of(machine)).unwrap_or_default()
+        let motor_speed = self.motor_speeds();
+        self.with_machine(|machine| self.friction_of(machine, &motor_speed)).unwrap_or_default()
     }
 
-    fn friction_of(&self, machine: &dyn Machine) -> Vec<FrictionView> {
+    /// Each motor's highest rotor speed from its own drive (`DriveParams::max_speed`), once per config: building the
+    /// simulation takes longer than a frame. Empty for a config that does not start.
+    fn motor_speeds(&self) -> Vec<f64> {
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.motor_speed.as_ref().is_none_or(|(config, _)| *config != self.config) {
+            let speeds = Sim::new(self.entry, &self.config).map_or_else(
+                |_| Vec::new(),
+                |sim| (0..sim.machine.motors().len()).map(|k| sim.control.drive_params_of(k).max_speed).collect(),
+            );
+            cache.motor_speed = Some((self.config.clone(), speeds));
+        }
+        cache.motor_speed.as_ref().map(|(_, speeds)| speeds.clone()).unwrap_or_default()
+    }
+
+    fn friction_of(&self, machine: &dyn Machine, motor_speed: &[f64]) -> Vec<FrictionView> {
         let tr = |key: &str| self.tr.tr(key).to_string();
         let value = |id: String| -> Option<f64> {
             Some(self.history.back()?[self.session.signals.iter().position(|s| s.id == id)?])
-        };
-        // Each motor's highest rotor speed, from its own drive.
-        let motor_speed: Vec<f64> = match Sim::new(self.entry, &self.config) {
-            Ok(sim) => (0..machine.motors().len()).map(|k| sim.control.drive_params_of(k).max_speed).collect(),
-            Err(_) => Vec::new(),
         };
         let views = machine.friction_contacts().into_iter().enumerate().map(|(i, contact)| {
             let get = |part: &str| value(format!("{}.friction_{part}", contact.id));
@@ -2799,7 +2819,7 @@ impl Model {
             // The machine's own limit where it has one (a joint: its motor's top speed over the gearbox), else the
             // contact's axis, else the fastest axis (a carriage on no axis of its own).
             let fastest = self.session.axes.iter().map(|a| a.max_vel).fold(0.0, f64::max);
-            let top = machine.friction_speed_limit(i, &motor_speed).unwrap_or_else(|| {
+            let top = machine.friction_speed_limit(i, motor_speed).unwrap_or_else(|| {
                 self.session.axes.iter().find(|a| a.key == contact.owner_key).map_or(fastest, |a| a.max_vel)
             });
             let rotary = machine.friction_rotary(i);
@@ -2823,7 +2843,8 @@ impl Model {
             for (k, key) in FRICTION_KEYS.iter().enumerate() {
                 table.push(vec![format!("{} [{force_unit}]", tr(key)), cell(split.as_ref().map(|s| s[k]))]);
             }
-            table.push(vec![format!("{} [{force_unit}]", tr("ui-effects-total")), cell(total)]);
+            let total_key = if rotary { "ui-effects-total-torque" } else { "ui-effects-total" };
+            table.push(vec![format!("{} [{force_unit}]", tr(total_key)), cell(total)]);
             table.push(vec![tr("quantity-friction-load-scale"), cell(get("load_scale"))]);
             let mut curves = labels.zip(points);
             FrictionView {
