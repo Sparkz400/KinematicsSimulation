@@ -894,6 +894,10 @@ pub struct Gearbox {
     pub efficiency: f64,
     /// b, rad.
     pub band: f64,
+    /// c, rad / (N m): a spring in series with the gear's flanks that K1 (and K2, K3) already hold, 0 for a gear alone.
+    /// Behind a converter it is the converter's own compliance (`Converter::apply_to`): over the band the flanks stiffen
+    /// and the converter's spring does not, so the band's curve is the flanks' plus c T (`spring`).
+    pub band_compliance: f64,
     /// T_h, N m.
     pub hysteresis: f64,
     /// Dahl's sigma, the hysteresis's stiffness at a reversal, N m/rad: `gearbox.hysteresis_stiffness_factor` times K1,
@@ -982,6 +986,7 @@ impl Gearbox {
                 None => Self::configured_efficiency(cfg)?,
             },
             band: if lost { band } else { 0.0 },
+            band_compliance: 0.0,
             hysteresis: if lost { 0.5 * stiffness * width } else { 0.0 },
             dahl_stiffness: stiffness * Self::optional_factor(cfg, "gearbox.hysteresis_stiffness_factor")?,
             back_ratio: 1.0,
@@ -1030,15 +1035,33 @@ impl Gearbox {
         self.half_backlash > 0.0 || self.band > 0.0
     }
 
+    /// The flanks' own K1, k_f = K1 / (1 - c K1) (K1 itself without a series spring), and the torque T_b = k_f b / 2 at
+    /// which they leave the band.
+    fn flanks(&self) -> (f64, f64) {
+        let kf = self.stiffness / (1.0 - self.band_compliance * self.stiffness);
+        (kf, 0.5 * kf * self.band)
+    }
+
     /// The spring's (torque, energy) at a twist `e` >= 0 beyond the dead zone: the lost-motion band, then the three
     /// segments in x = e - b/2.
+    ///
+    /// In the band the flanks twist e_f = sqrt(2 b T / k_f) and the series spring c T, so e = e_f + c T, a quadratic in
+    /// sqrt(T), with the energy T e_f / 3 + c T^2 / 2; the band ends at e = b + c T_b. Beyond it the line K1 x reaches
+    /// T_b at x = b/2 + c T_b (1 / K1 = 1 / k_f + c), and the energy there is k_f b^2 / 24 + K1 x^2 / 2. Without the
+    /// series spring T = K1 e^2 / (2 b).
     pub fn spring(&self, e: f64) -> (f64, f64) {
-        let (k1, b) = (self.stiffness, self.band);
-        if e < b {
+        let (k1, b, c) = (self.stiffness, self.band, self.band_compliance);
+        let (kf, tb) = self.flanks();
+        if e < b && c == 0.0 {
             return (k1 * e * e / (2.0 * b), k1 * e * e * e / (6.0 * b));
         }
-        // At the band's end the energy is k1 b^2 / 6; the line k1 x from x = b/2 on adds k1 (x^2 - b^2/4) / 2.
-        let (x, base) = (e - 0.5 * b, k1 * b * b / 24.0);
+        if e < b + c * tb {
+            let a = (2.0 * b / kf).sqrt();
+            let s = 2.0 * e / (a + (a * a + 4.0 * c * e).sqrt());
+            let t = s * s;
+            return (t, t * (a * s / 3.0 + 0.5 * c * t));
+        }
+        let (x, base) = (e - 0.5 * b, kf * b * b / 24.0);
         let ([t1, t2], [k2, k3]) = (self.knees, self.upper);
         let x1 = t1 / k1;
         if x <= x1 {
@@ -1056,8 +1079,9 @@ impl Gearbox {
     /// The twist beyond the dead zone that the spring needs for `torque` >= 0: the inverse of `spring`.
     pub fn spring_twist(&self, torque: f64) -> f64 {
         let (k1, b) = (self.stiffness, self.band);
-        if torque < 0.5 * k1 * b {
-            return (2.0 * b * torque / k1).sqrt();
+        let (kf, tb) = self.flanks();
+        if torque < tb {
+            return (2.0 * b * torque / kf).sqrt() + self.band_compliance * torque;
         }
         let ([t1, t2], [k2, k3]) = (self.knees, self.upper);
         let x = if torque <= t1 {
@@ -1164,7 +1188,9 @@ impl Gearbox {
     /// passes `held` (its spring's and hysteresis's torque) at the output angle `out_angle`. It opposes the output's
     /// motion, bounded by mu |held| with mu = 1 - eta (eta the teeth's efficiency), so that driving the output gets
     /// eta held and driven back it takes (1 + mu) held: the back-driving efficiency is 1 / (1 + mu) = 1 / (2 - eta).
-    /// With a `back_ratio` r the back-driving efficiency is r / (2 - eta), the bound there (2 - eta) / r - 1. At
+    /// A gear with its own back efficiency (`back_ratio` r not 1: a screw's or a worm's lead angle) is driven back at
+    /// exactly eta r, as `loss_factor` has it: the bound there is 1 / (eta r) - 1 (a worm of 0.763 driving and 0.693
+    /// back would get 0.734 back from r / (2 - eta)). At
     /// rest it sticks: an elastic-plastic bristle of `mesh_stiffness` from the anchor where the last step left it, the
     /// friction sigma (out - anchor) up to the bound. 0 before the first step's commit (the gear then has the faded
     /// efficiency) and with the effect off.
@@ -1174,7 +1200,11 @@ impl Gearbox {
         }
         // The friction's sign against the held torque's: with it the output is driven (eta held), against it driven back.
         let driving = (1.0 - self.efficiency) * held.abs();
-        let back = ((2.0 - self.efficiency) / self.back_ratio - 1.0).max(0.0) * held.abs();
+        let back = if self.back_ratio == 1.0 {
+            driving
+        } else {
+            (1.0 / (self.efficiency * self.back_ratio) - 1.0).max(0.0) * held.abs()
+        };
         let (lo, hi) = if held >= 0.0 { (-back, driving) } else { (-driving, back) };
         (self.mesh_stiffness * (out_angle - self.mesh_anchor)).clamp(lo, hi)
     }
@@ -1532,6 +1562,7 @@ preload_n = 200.0
             half_backlash: 4e-4,
             efficiency: 1.0,
             band: 0.0,
+            band_compliance: 0.0,
             hysteresis: 0.0,
             dahl_stiffness: 1e4,
             back_ratio: 1.0,
@@ -1861,6 +1892,25 @@ preload_n = 200.0
         }
     }
 
+    /// The band with a spring of 1e4 N m/rad in series with the flanks of the test above (c = 1e-4 rad/N m, K1 = 5e3 in
+    /// series): the flanks twist sqrt(2 b T / 1e4) in the band, the spring c T. 0.25 N m: 1e-4 + 2.5e-5 = 1.25e-4 rad
+    /// beyond the backlash; the band ends at T_b = 1 N m at 2e-4 + 1e-4 = 3e-4 rad; 2 N m: 2 / 5e3 + 1e-4 = 5e-4 rad
+    /// (the flanks' 3e-4 and the spring's 2e-4). The energy's slope is the torque, also across the band's end.
+    #[test]
+    fn a_spring_in_series_with_the_band_adds_its_own_twist_to_the_flanks() {
+        let g = Gearbox { stiffness: 5e3, band: 2e-4, band_compliance: 1e-4, ..gearbox() };
+        let out = |twist: f64| g.torque(5.0 * twist, 0.0, 0.0, 0.0).output;
+        for (beyond, torque) in [(1.25e-4, 0.25), (3e-4, 1.0), (5e-4, 2.0)] {
+            assert!((out(4e-4 + beyond) - torque).abs() < 1e-9, "{beyond}: {}", out(4e-4 + beyond));
+            assert!((g.static_twist(torque) - 4e-4 - beyond).abs() < 1e-15, "{torque}: {}", g.static_twist(torque));
+        }
+        let h = 1e-9;
+        for twist in [5.25e-4, 7e-4 - 2.0 * h, 7e-4 + 2.0 * h, 9e-4] {
+            let slope = (g.energy(5.0 * (twist + h), 0.0) - g.energy(5.0 * (twist - h), 0.0)) / (2.0 * h);
+            assert!((slope - out(twist)).abs() < 1e-5, "{twist}: {slope}");
+        }
+    }
+
     /// A strain wave gear's hysteresis of 2.909e-4 rad (1 arcmin) on K1 1e4 N m/rad: a flanks' friction T_h of
     /// 1.4545 N m, sigma = K1. Loaded to 0.01 rad (sigma x / T_h = 68.75: z is T_h to the bit) and unloaded, the torque
     /// is K1 x - T_h + 2 T_h exp(-sigma (0.01 - x) / T_h), zero at x = +1.4545e-4 rad; loaded back from -0.01 rad, zero at
@@ -2077,12 +2127,12 @@ preload_n = 200.0
     }
 
     /// The mesh friction's bound by the direction: with the gear at an efficiency of 0.8 it takes 0.2 of the held torque
-    /// from the output it drives, and driven back (2 - 0.8) / r - 1 of it with a back ratio r: 0.2 at r = 1 (as before),
-    /// (1.2 / 0.5 - 1) = 1.4 at r = 0.5 (the back efficiency r / (2 - eta) = 0.41667, 1 / it = 2.4 = 1 + 1.4). Held 100 N m,
+    /// from the output it drives; driven back 0.2 of it too at a back ratio of 1 (as before), and at r = 0.5 the back
+    /// efficiency 0.8 x 0.5 = 0.4 exactly: the output must bring 100 / 0.4 = 250 N m, a friction of 150 N m. Held 100 N m,
     /// the bristle far from its anchor either way.
     #[test]
     fn the_mesh_friction_is_bounded_by_the_back_efficiency_when_driven_back() {
-        for (ratio, back) in [(1.0, 20.0), (0.5, 140.0)] {
+        for (ratio, back) in [(1.0, 20.0), (0.5, 150.0)] {
             let g = Gearbox { back_ratio: ratio, ..meshing() };
             assert!((g.mesh_friction(100.0, 1.0) - 20.0).abs() < 1e-12);
             assert!((g.mesh_friction(100.0, -1.0) + back).abs() < 1e-9, "{ratio}: {}", g.mesh_friction(100.0, -1.0));
