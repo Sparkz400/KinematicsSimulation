@@ -302,15 +302,15 @@ async fn streamed_setpoints_from_the_plc_are_followed() {
     assert_eq!(plc.numbers(&[setpoint]).await[0], start + 0.02, "the setpoint reads back what was written");
 }
 
-/// Disable and Enable from the PLC: disabled, no motor gives torque and a move is refused with the reason;
+/// Disable and Enable from the PLC: disabled, no motor has current (a coasting rotor keeps its iron drag) and a move is refused with the reason;
 /// enabled again, the move runs.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_plc_disables_and_enables_the_drives() {
     for entry in MACHINES.iter().copied() {
         let plc = connect(entry, &format!("enable-{}", entry.id)).await;
         let sim = Sim::new(entry, &entry.config()).unwrap();
-        let torque: Vec<String> =
-            sim.machine.motors().iter().map(|m| format!("signal.motor.{}.torque", m.id)).collect();
+        let current: Vec<String> =
+            sim.machine.motors().iter().map(|m| format!("signal.motor.{}.current", m.id)).collect();
         let set = |name: &str| vec![(name.to_string(), Variant::Boolean(true))];
         let refused = || async { plc.read(&["status.refused".to_string()]).await.remove(0) };
 
@@ -321,7 +321,7 @@ async fn the_plc_disables_and_enables_the_drives() {
 
         assert!(plc.write(set("command.disable")).await[0].is_good());
         plc.carried_out(0.1).await;
-        assert!(plc.numbers(&torque).await.iter().all(|t| *t == 0.0), "{}: torque while disabled", entry.id);
+        assert!(plc.numbers(&current).await.iter().all(|i| *i == 0.0), "{}: current while disabled", entry.id);
         assert!(!plc.busy().await, "{}: the cycle runs on", entry.id);
         plc.write(set("command.move")).await;
         plc.carried_out(0.1).await;

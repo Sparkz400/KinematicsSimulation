@@ -405,6 +405,14 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
             "effects.link_bending" | "effects.link_bending_reaction" => base.get("link_bending").is_err(),
             // A press frame's stretch where the config gives no frame to stretch (a shared common file's switch).
             "effects.frame_stretch" => base.get("frame.stretch_stiffness_n_m").is_err(),
+            // Two more such switches: a follower that may lift off its disc, a table that twists on its shaft. A machine
+            // that reads one shows its signal with it on.
+            "effects.follower_lift_off" | "effects.table_twist" => {
+                let mut on = base.clone();
+                on.set_text(&format!("{e} = true")).unwrap();
+                let signal = if e == "effects.follower_lift_off" { "follower.gap" } else { "table.twist" };
+                !(entry.build)(&on).unwrap().signal_infos().iter().any(|s| s.id == signal)
+            }
             "effects.braking_resistor_heating" => !base.bool("effects.dc_link").unwrap(),
             "effects.base_compliance" => {
                 let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
@@ -539,8 +547,10 @@ const UNREAD: [(usize, &str); 5] = [
 /// arms, whose weak drive moves it slower than its default cycle, never meets the voltage limit, so neither that switch
 /// nor field weakening changed anything within a cycle (14 November 2026). A crane's (31) weak drive keeps 1.5
 /// times the hoist's holding torque, 7.8 N m, for its bridge and trolley too, which its short positioning cycle (0.2 m
-/// at 0.4 m/s2) asks some 0.6 N m of (16 November 2026).
-const CANNOT_ACT: [(usize, &str); 10] = [
+/// at 0.4 m/s2) asks some 0.6 N m of (16 November 2026). Its hook stays 2.85 m high or more in the cycle, its load
+/// never down on the floor (crane.floor_height_m 0.5).
+const CANNOT_ACT: [(usize, &str); 11] = [
+    (31, "effects.floor_contact"),
     (31, "effects.torque_limit"),
     (17, "effects.torque_limit"),
     (17, "effects.voltage_limit"),
@@ -1240,7 +1250,7 @@ fn the_app_shows_and_applies_lower_lifts() {
     assert_eq!(lifted, 4);
 }
 
-/// Disable and Enable from the app: disabled, no motor gives torque and a move is refused with the reason;
+/// Disable and Enable from the app: disabled, no motor has current and a move is refused with the reason;
 /// enabled again, the drives hold and the move runs.
 fn the_drives_can_be_disabled_and_enabled_from_the_app(entry: &'static MachineEntry) {
     let mut model = Model::new(entry, "en");
@@ -1262,9 +1272,16 @@ fn the_drives_can_be_disabled_and_enabled_from_the_app(entry: &'static MachineEn
     run(&mut model, 0.5);
     assert!(pushing(&model, 100), "{}: no torque in the cycle", entry.id);
 
+    // Disabled, no motor has current: what torque is left is a coasting rotor's iron drag (`Drive::disabled_step`).
+    let currents: Vec<usize> = (model.session.signals.iter().enumerate())
+        .filter(|(_, s)| s.id.starts_with("motor.") && s.id.ends_with(".current"))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(currents.len(), model.session.motors.len());
     model.command(Command::Disable);
     run(&mut model, 0.3);
-    assert!(!pushing(&model, 100), "{}: torque while disabled", entry.id);
+    let flowing = model.history.iter().rev().take(100).any(|row| currents.iter().any(|&i| row[i] != 0.0));
+    assert!(!flowing, "{}: current while disabled", entry.id);
     model.command(Command::MoveTo(model.target.clone()));
     // The refusal comes back from the simulation's thread; on a slow machine after more than 0.1 s of simulated
     // time, so wait for it (10 s at most) rather than for the clock.

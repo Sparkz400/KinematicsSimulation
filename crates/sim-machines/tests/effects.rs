@@ -568,11 +568,13 @@ fn the_bounds_of_an_effect_that_is_off_get_no_runs() {
         let thermal =
             |cfg: &Config| bounds(cfg).unwrap().into_iter().filter(|(path, ..)| path.starts_with("thermal.")).count();
         assert_eq!(thermal(&cfg), 0, "{}", entry.id);
-        // A resistance and a time constant for each kind of part the machine has that warms (gearbox, guide).
-        let kinds = (entry.build)(&cfg)
-            .unwrap()
+        // A resistance and a time constant for each kind of part the machine has that warms (gearbox, guide), but those whose
+        // values the machine works out from the part's size (`Machine::thermal_values`: the linear delta's belts).
+        let machine = (entry.build)(&cfg).unwrap();
+        let kinds = machine
             .thermal_parts()
             .iter()
+            .filter(|p| machine.thermal_values(p.id).is_none())
             .map(|p| p.kind)
             .collect::<std::collections::BTreeSet<_>>()
             .len();
