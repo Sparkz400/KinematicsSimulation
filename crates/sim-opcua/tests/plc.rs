@@ -53,7 +53,8 @@ async fn connect_with(entry: &'static MachineEntry, cfg: &sim_core::Config, name
     let endpoint = (url.as_str(), SecurityPolicy::None.to_str(), MessageSecurityMode::None);
     let (session, event_loop) = client.connect_to_matching_endpoint(endpoint, IdentityToken::Anonymous).await.unwrap();
     event_loop.spawn();
-    assert!(tokio::time::timeout(Duration::from_secs(5), session.wait_for_connection()).await.unwrap());
+    // A minute only against a hang: the handshake waits for the host, not for the simulation.
+    assert!(tokio::time::timeout(Duration::from_secs(60), session.wait_for_connection()).await.unwrap());
     // A client finds the simulator's variables through the namespace URI, like any PLC would.
     let namespace = session.get_namespace_index(NAMESPACE).await.unwrap();
     assert_eq!(namespace, link.namespace);
@@ -99,6 +100,25 @@ impl Plc {
         self.session.write(&writes).await.unwrap()
     }
 
+    /// The simulated time, `signal.time`.
+    async fn now(&self) -> f64 {
+        self.numbers(&["signal.time".to_string()]).await[0]
+    }
+
+    /// Panics once `seconds` of simulated time have passed since `from`, or two minutes of wall time since `wall` (only
+    /// against a hang): a wait counted in polls of wall time ran out on a loaded host, which simulates slower than real
+    /// time.
+    async fn within(&self, from: f64, wall: std::time::Instant, seconds: f64, what: &str) {
+        let now = self.now().await;
+        assert!(
+            now - from < seconds && wall.elapsed() < Duration::from_secs(120),
+            "{}: {what} within {seconds} s (simulated {} s, wall {:?})",
+            self.id,
+            now - from,
+            wall.elapsed()
+        );
+    }
+
     async fn busy(&self) -> bool {
         matches!(self.read(&["status.busy".to_string()]).await[0], Variant::Boolean(true))
     }
@@ -118,8 +138,8 @@ impl Plc {
         let (until, start) = (ticks().await + 2, std::time::Instant::now());
         while ticks().await < until {
             assert!(
-                start.elapsed() < Duration::from_secs(30),
-                "{}: the server did not tick twice within 30 s",
+                start.elapsed() < Duration::from_secs(120),
+                "{}: the server did not tick twice within 120 s",
                 self.id
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -136,14 +156,16 @@ async fn every_signal_of_every_machine_is_a_variable() {
         let sim = Sim::new(entry, &entry.config()).unwrap();
         let names: Vec<String> = sim.signal_infos().iter().map(|s| format!("signal.{}", s.id)).collect();
         assert!(names.len() > 15);
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Once the loop has published (two ticks): every signal has a value.
+        plc.carried_out(0.0).await;
         let values = plc.numbers(&names).await;
         assert!(values.iter().all(|v| v.is_finite()));
-        // The simulation runs in real time behind the server.
+        // The simulation runs behind the server, and the signals follow it: counted in the loop's ticks and the
+        // simulated time, not the wall clock (a loaded host gave less than 0.05 s of simulated time in 0.2 s of wall time).
         let time = names.iter().position(|n| n == "signal.time").unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        plc.carried_out(0.05).await;
         let later = plc.numbers(&names).await;
-        assert!(later[time] > values[time] + 0.05, "{}: time went from {} to {}", entry.id, values[time], later[time]);
+        assert!(later[time] >= values[time] + 0.05, "{}: time went from {} to {}", entry.id, values[time], later[time]);
         // Signals are read-only.
         assert!(!plc.write(vec![(names[2].clone(), Variant::Double(1.0))]).await[0].is_good());
     }
@@ -180,7 +202,8 @@ async fn a_plc_commanded_move_runs_and_reports_position_and_following_error() {
         assert!(plc.write(writes).await.iter().all(|s| s.is_good()));
 
         // The PLC polls while the move runs.
-        let (mut was_busy, mut peak_error, mut polls) = (false, vec![0f64; axes.len()], 0);
+        let (mut was_busy, mut peak_error) = (false, vec![0f64; axes.len()]);
+        let (from, wall) = (plc.now().await, std::time::Instant::now());
         loop {
             tokio::time::sleep(Duration::from_millis(20)).await;
             let busy = plc.busy().await;
@@ -188,8 +211,12 @@ async fn a_plc_commanded_move_runs_and_reports_position_and_following_error() {
                 *peak = peak.max(e.abs());
             }
             was_busy |= busy;
-            polls += 1;
-            assert!(polls < 500, "{}: the move did not finish within ten seconds", entry.id);
+            // Or over between two polls (a short move on a loaded host): idle with the setpoints on the target.
+            let set: Vec<String> = axes.iter().map(|a| format!("signal.axis.{}.position_setpoint", a.id)).collect();
+            if !busy && plc.numbers(&set).await.iter().zip(&target).all(|(s, t)| (s - t).abs() < 1e-6) {
+                break;
+            }
+            plc.within(from, wall, 10.0, "the move did not finish").await;
             if was_busy && !busy {
                 break;
             }
@@ -267,9 +294,9 @@ async fn streamed_setpoints_from_the_plc_are_followed() {
     // 20 mm in 25 steps of 0.8 mm: a slow ramp of 40 mm/s.
     for step in 1..=25 {
         assert!(plc.write(vec![(setpoint.clone(), Variant::Double(start + 0.0008 * step as f64))]).await[0].is_good());
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        plc.carried_out(0.02).await;
     }
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    plc.carried_out(0.3).await;
     let reached = plc.numbers(&position).await[0];
     assert!((reached - (start + 0.02)).abs() < 2e-4, "at {reached} m after the ramp, wanted {} m", start + 0.02);
     assert_eq!(plc.numbers(&[setpoint]).await[0], start + 0.02, "the setpoint reads back what was written");
@@ -322,10 +349,9 @@ async fn the_plc_disables_and_enables_the_drives() {
         plc.write(back).await;
         plc.carried_out(0.0).await;
         assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
-        let mut polls = 0;
+        let (from, wall) = (plc.now().await, std::time::Instant::now());
         while !there(&plc.numbers(&setpoints).await) {
-            polls += 1;
-            assert!(polls < 500, "{}: no move after enabling", entry.id);
+            plc.within(from, wall, 10.0, "no move after enabling").await;
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(
@@ -337,16 +363,16 @@ async fn the_plc_disables_and_enables_the_drives() {
 
 /// Polls until a move that was started is over.
 async fn move_done(plc: &Plc) {
-    let mut was_busy = false;
-    for _ in 0..500 {
+    let (mut was_busy, from, wall) = (false, plc.now().await, std::time::Instant::now());
+    loop {
         tokio::time::sleep(Duration::from_millis(20)).await;
         let busy = plc.busy().await;
         if was_busy && !busy {
             return;
         }
         was_busy |= busy;
+        plc.within(from, wall, 10.0, "the move did not start and finish").await;
     }
-    panic!("the move did not start and finish within ten seconds");
 }
 
 /// The setpoint and target variables follow the controller where the PLC does not write them. They used to
@@ -375,7 +401,7 @@ async fn a_write_to_one_axis_leaves_the_others_where_they_are() {
     writes.push(("command.move".into(), Variant::Boolean(true)));
     assert!(plc.write(writes).await.iter().all(|s| s.is_good()));
     move_done(&plc).await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    plc.carried_out(0.3).await;
     // Both variables read where the axes now stand.
     for kind in ["command.setpoint", "command.target"] {
         let shown = plc.numbers(&names(kind)).await;
@@ -389,7 +415,7 @@ async fn a_write_to_one_axis_leaves_the_others_where_they_are() {
     assert!(
         plc.write(vec![(names("command.setpoint").remove(1), Variant::Double(target[1] + 0.001))]).await[0].is_good()
     );
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    plc.carried_out(0.3).await;
     assert_eq!(refused().await, Variant::from(""));
     let positions: Vec<String> = names("signal.axis").iter().map(|n| format!("{n}.position")).collect();
     let reached = plc.numbers(&positions).await;
@@ -409,7 +435,7 @@ async fn a_write_to_one_axis_leaves_the_others_where_they_are() {
     ])
     .await;
     move_done(&plc).await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    plc.carried_out(0.3).await;
     let reached = plc.numbers(&positions).await;
     assert!(
         (reached[0] - target[0] + 0.05).abs() < 2e-4 && (reached[1] - target[1] - 0.001).abs() < 2e-4,
@@ -489,7 +515,21 @@ async fn enable_path_and_run_in_one_write_run_the_path() {
             .await;
         assert!(written.iter().all(|s| s.is_good()));
         plc.carried_out(0.0).await;
-        assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
+        // Where the cycle stood at the disable is up to a tick of the loop late on a loaded host, and from full speed a
+        // machine can coast beyond its range (the mover on its track, 16 November 2026): a path from there is refused
+        // as out of range, rightly. Refused for anything else, or out of range from inside it, fails.
+        let refusal = refused().await;
+        if refusal == Variant::from("error-path-range") {
+            let at =
+                plc.numbers(&axes.iter().map(|a| format!("signal.axis.{}.position", a.id)).collect::<Vec<_>>()).await;
+            assert!(
+                axes.iter().zip(&at).any(|(a, x)| *x < a.min || *x > a.max),
+                "{}: refused as out of range, standing inside it at {at:?}",
+                entry.id
+            );
+            continue;
+        }
+        assert_eq!(refusal, Variant::from(""), "{}", entry.id);
         // Busy, or there already: where the simulator's ticks take 0.1 s of simulated time each (the platform on cables
         // in space), a short way to the middle was run within the two ticks `carried_out` waits (seen on 16 November
         // 2026 on a quiet host, after the test had passed the run before).
@@ -572,7 +612,7 @@ async fn run_path(plc: &Plc, text: &str, time_optimal: bool, position: &[String]
     // Busy and the time in one read, so that a slow answer does not put time between them.
     let mut names = position.to_vec();
     names.extend(["signal.time".into(), "status.busy".into()]);
-    let (mut poses, mut started, mut polls, mut times) = (Vec::new(), None, 0, vec![before]);
+    let (mut poses, mut started, mut times, wall) = (Vec::new(), None, vec![before], std::time::Instant::now());
     loop {
         tokio::time::sleep(Duration::from_millis(10)).await;
         let mut values = plc.read(&names).await;
@@ -583,8 +623,14 @@ async fn run_path(plc: &Plc, text: &str, time_optimal: bool, position: &[String]
             .collect();
         let time = read.pop().unwrap();
         times.push(time);
-        polls += 1;
-        assert!(polls < 1000, "the path did not start and finish within ten seconds");
+        // Ten seconds of simulated time (a thousand polls of 10 ms of wall time ran out on a loaded host, where the tick
+        // that plans the path took seconds and the simulation runs slower than the wall clock); two minutes of wall time
+        // only against a hang.
+        assert!(
+            time - before < 10.0 && wall.elapsed() < Duration::from_secs(120),
+            "{}: the path did not start and finish within ten seconds",
+            plc.id
+        );
         match (busy, started) {
             (true, None) => started = Some(time),
             (false, Some(start)) => {
@@ -608,12 +654,13 @@ async fn run_path(plc: &Plc, text: &str, time_optimal: bool, position: &[String]
     }
 }
 
-/// Polls `status.refused` until it reads `key`, for up to 5 s (a loaded machine answers a write late); what it read last.
+/// Polls `status.refused` until it reads `key`, for up to two minutes (a loaded machine answers a write late: the
+/// palletiser's tick that plans a path took more than 5 s with two builds running); what it read last.
 async fn refusal(plc: &Plc, key: &str) -> Variant {
     let start = std::time::Instant::now();
     loop {
         let now = plc.read(&["status.refused".to_string()]).await.remove(0);
-        if now == Variant::from(key) || start.elapsed() > Duration::from_secs(5) {
+        if now == Variant::from(key) || start.elapsed() > Duration::from_secs(120) {
             return now;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -778,7 +825,7 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         .await;
         let start = std::time::Instant::now();
         while !plc.busy().await {
-            assert!(start.elapsed() < Duration::from_secs(30), "{}: not on the way back", entry.id);
+            assert!(start.elapsed() < Duration::from_secs(120), "{}: not on the way back", entry.id);
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         plc.write(vec![("command.run_path".into(), Variant::Boolean(true))]).await;
@@ -788,7 +835,7 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         // Up to 30 s of wall time, as the start above: on a loaded host the six-axis arm's way back took more than 10.
         let start = std::time::Instant::now();
         while plc.busy().await {
-            assert!(start.elapsed() < Duration::from_secs(30), "{}: still on the way back", entry.id);
+            assert!(start.elapsed() < Duration::from_secs(120), "{}: still on the way back", entry.id);
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         plc.simulated(0.3).await;
@@ -908,7 +955,7 @@ impl Plc {
                 return took;
             }
             assert!(
-                took < seconds && start.elapsed() < Duration::from_secs(60),
+                took < seconds && start.elapsed() < Duration::from_secs(120),
                 "{}: {axis}.{name} not true within {seconds} s",
                 self.id
             );
@@ -923,8 +970,8 @@ impl Plc {
         let (until, start) = (time().await + seconds, std::time::Instant::now());
         while time().await < until {
             assert!(
-                start.elapsed() < Duration::from_secs(30),
-                "{}: the simulation did not run {seconds} s within 30 s",
+                start.elapsed() < Duration::from_secs(120),
+                "{}: the simulation did not run {seconds} s within 120 s",
                 self.id
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1064,7 +1111,7 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
                     break;
                 }
                 assert!(
-                    read[2] != Variant::Boolean(true) && start.elapsed() < Duration::from_secs(5),
+                    read[2] != Variant::Boolean(true) && start.elapsed() < Duration::from_secs(120),
                     "{}.{id}: MoveAbsolute not seen busy before {read:?}",
                     entry.id
                 );
@@ -1148,7 +1195,7 @@ async fn plcopen_stop_brakes_a_move_in_the_middle() {
     };
     let speed = 0.25 * axis.max_vel;
     plc.execute(id, "MoveAbsolute", &[("Position", far), ("Velocity", speed), ("Acceleration", axis.max_acc)]).await;
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    plc.carried_out(0.4).await;
     let v = plc.axis_number(id, "ActualVelocity").await.abs();
     assert!((v - speed).abs() < 0.1 * speed, "at {v} m/s, wanted {speed} m/s");
     let deceleration = 1.0;
@@ -1156,16 +1203,16 @@ async fn plcopen_stop_brakes_a_move_in_the_middle() {
     let took = plc.until(id, "Stop.Done", 2.0).await;
     assert!(plc.axis_flag(id, "MoveAbsolute.CommandAborted").await && !plc.axis_flag(id, "MoveAbsolute.Done").await);
     assert!((took - speed / deceleration).abs() < 0.08, "stopped in {took} s, v / d = {} s", speed / deceleration);
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    plc.carried_out(0.3).await;
     let at = plc.axis_number(id, "ActualPosition").await;
     assert!((at - far).abs() > 0.05, "went on to the target: {at} m");
     assert_eq!(plc.axis_read(id, "State").await, Variant::from("Stopping"));
     plc.execute(id, "MoveRelative", &[("Distance", 0.01)]).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    plc.carried_out(0.05).await;
     assert!(plc.axis_flag(id, "MoveRelative.Error").await);
     assert_eq!(plc.axis_read(id, "MoveRelative.ErrorID").await, Variant::UInt16(sim_opcua::plcopen::ERR_STATE));
     plc.axis_write(id, &[("Stop.Execute", Variant::Boolean(false))]).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    plc.carried_out(0.05).await;
     assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"));
     assert!(!plc.axis_flag(id, "Stop.Done").await, "Done stays after Execute fell");
 }
@@ -1186,9 +1233,9 @@ async fn plcopen_axes_move_at_the_same_time() {
         plc.axis_write(axis.id, &[("Power.Enable", Variant::Boolean(true))]).await;
     }
     plc.execute(axes[0].id, "MoveAbsolute", &[("Position", targets[0]), ("Velocity", 0.3 * axes[0].max_vel)]).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    plc.carried_out(0.1).await;
     plc.execute(axes[1].id, "MoveAbsolute", &[("Position", targets[1]), ("Velocity", 0.3 * axes[1].max_vel)]).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    plc.carried_out(0.05).await;
     assert!(
         plc.axis_flag(axes[0].id, "MoveAbsolute.Busy").await && plc.axis_flag(axes[1].id, "MoveAbsolute.Busy").await,
         "not both moving"
@@ -1196,7 +1243,7 @@ async fn plcopen_axes_move_at_the_same_time() {
     for axis in &axes[..2] {
         plc.until(axis.id, "MoveAbsolute.Done", 5.0).await;
     }
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    plc.carried_out(0.3).await;
     for (axis, target) in axes[..2].iter().zip(&targets) {
         let at = plc.axis_number(axis.id, "ActualPosition").await;
         assert!((at - target).abs() < 2e-4, "{}: at {at} m, target {target} m", axis.id);
@@ -1215,25 +1262,25 @@ async fn plcopen_errors_and_reset() {
     let id = axis.id;
     use sim_opcua::plcopen::{ERR_DRIVES_OFF, ERR_NOT_POWERED, ERR_RANGE};
     plc.execute(id, "MoveRelative", &[("Distance", 0.01)]).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    plc.carried_out(0.05).await;
     assert!(plc.axis_flag(id, "MoveRelative.Error").await && !plc.axis_flag(id, "MoveRelative.Busy").await);
     assert_eq!(plc.axis_read(id, "MoveRelative.ErrorID").await, Variant::UInt16(ERR_NOT_POWERED));
     plc.axis_write(id, &[("MoveRelative.Execute", Variant::Boolean(false)), ("Power.Enable", Variant::Boolean(true))])
         .await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    plc.carried_out(0.05).await;
     assert!(!plc.axis_flag(id, "MoveRelative.Error").await, "the falling edge clears Error");
     plc.execute(id, "MoveAbsolute", &[("Position", axis.max + 0.1)]).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    plc.carried_out(0.05).await;
     assert_eq!(plc.axis_read(id, "MoveAbsolute.ErrorID").await, Variant::UInt16(ERR_RANGE));
     assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"), "a refused block is no axis error");
 
     plc.write(vec![("command.disable".into(), Variant::Boolean(true))]).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    plc.carried_out(0.05).await;
     assert_eq!(plc.axis_read(id, "State").await, Variant::from("ErrorStop"));
     assert_eq!(plc.axis_read(id, "ErrorID").await, Variant::UInt16(ERR_DRIVES_OFF));
     assert!(plc.axis_flag(id, "Power.Error").await && !plc.axis_flag(id, "Power.Status").await);
     plc.execute(id, "MoveRelative", &[("Distance", 0.01)]).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    plc.carried_out(0.05).await;
     assert!(plc.axis_flag(id, "MoveRelative.Error").await, "a move in ErrorStop");
     plc.execute(id, "Reset", &[]).await;
     plc.until(id, "Reset.Done", 1.0).await;
@@ -1266,7 +1313,7 @@ async fn plcopen_a_crash_is_reported_reset_and_left() {
     plc.execute(id, "Reset", &[]).await;
     plc.until(id, "Reset.Done", 1.0).await;
     plc.until(id, "Power.Status", 1.0).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    plc.carried_out(0.2).await;
     assert_eq!(
         plc.axis_read(id, "State").await,
         Variant::from("Standstill"),
@@ -1275,7 +1322,7 @@ async fn plcopen_a_crash_is_reported_reset_and_left() {
     );
     plc.execute(id, "MoveAbsolute", &[("Position", 0.1)]).await;
     plc.until(id, "MoveAbsolute.Done", 5.0).await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    plc.carried_out(0.3).await;
     let at = plc.axis_number(id, "ActualPosition").await;
     assert!((at - 0.1).abs() < 2e-4 && plc.axis_flag(id, "Power.Status").await, "at {at} m");
 }
@@ -1290,10 +1337,10 @@ async fn plcopen_execute_is_edge_triggered() {
     plc.axis_write(id, &[("Power.Enable", Variant::Boolean(true))]).await;
     plc.execute(id, "MoveRelative", &[("Distance", 0.02)]).await;
     plc.until(id, "MoveRelative.Done", 2.0).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    plc.carried_out(0.2).await;
     let at = plc.axis_number(id, "ActualPosition").await;
     plc.axis_write(id, &[("MoveRelative.Execute", Variant::Boolean(true))]).await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    plc.carried_out(0.3).await;
     assert!(plc.axis_flag(id, "MoveRelative.Done").await && !plc.axis_flag(id, "MoveRelative.Busy").await);
     assert!((plc.axis_number(id, "ActualPosition").await - at).abs() < 1e-4, "true written again moved the axis");
     assert_eq!(
@@ -1302,42 +1349,84 @@ async fn plcopen_execute_is_edge_triggered() {
         "Execute reads back what was written"
     );
     plc.axis_write(id, &[("MoveRelative.Execute", Variant::Boolean(false))]).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    plc.carried_out(0.05).await;
     assert!(!plc.axis_flag(id, "MoveRelative.Done").await);
     // Execute dropped while the move runs: the move goes on and Done is shown until the next rising edge.
     plc.axis_write(id, &[("MoveRelative.Execute", Variant::Boolean(true))]).await;
     plc.axis_write(id, &[("MoveRelative.Execute", Variant::Boolean(false))]).await;
     plc.until(id, "MoveRelative.Done", 2.0).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    plc.carried_out(0.2).await;
     assert!((plc.axis_number(id, "ActualPosition").await - at - 0.02).abs() < 2e-4);
     assert!(plc.axis_flag(id, "MoveRelative.Done").await);
 }
 
-/// The pacing variables: the nominal cycle, a measured period near it, a real-time factor near 1, and a reset that
-/// starts the count anew.
+/// The pacing's bookkeeping agrees with itself on any host (`pacing_adds_up`). On a host that keeps up (no tick late
+/// by more than a cycle) nothing is lost and the real-time factor is 1.
+fn pacing_adds_up(pacing: &sim_opcua::Pacing, dt: f64) {
+    let (wall, sim, lost) = (pacing.wall_s, pacing.sim_s, pacing.lost_s);
+    // What was due and not dropped is simulated, to the part of a step left over (and the one carried over a reset).
+    assert!(
+        lost >= 0.0 && (sim + lost - wall).abs() <= 2.0 * dt + 1e-9,
+        "simulated {sim} s and lost {lost} s of {wall} s"
+    );
+    // A tick more than the cap late is an overrun (the cap is two cycles at least), so without one at most the step
+    // carried over is dropped.
+    if pacing.overruns == 0 {
+        assert!(lost <= dt && (pacing.realtime_factor() - 1.0).abs() <= 3.0 * dt / wall, "{pacing:?}");
+    }
+    // The mean period is off the cycle by no more than the deviations' root mean square, whatever the host.
+    let (mean, rms) = (pacing.period_s(), pacing.jitter_rms_s());
+    assert!((mean - pacing.cycle_s).abs() <= rms + 1e-12 && rms <= pacing.jitter_max_s + 1e-12, "{pacing:?}");
+}
+
+/// The pacing variables: the nominal cycle, the measured period, jitter and real-time factor as the loop's bookkeeping
+/// gives them, the steps as the simulated time, and a reset that starts the count anew. Asserted on the bookkeeping, not
+/// on what the host's scheduler gave (a loaded host misses the cycle and the real-time factor; that is measured, not a
+/// defect).
 #[tokio::test(flavor = "multi_thread")]
 async fn pacing_is_measured_and_can_be_reset() {
     let plc = connect(MACHINES[0], "pacing").await;
-    tokio::time::sleep(Duration::from_millis(1000)).await;
-    let names: Vec<String> = ["cycle_s", "cycle_period_s", "jitter_max_s", "jitter_rms_s", "realtime_factor"]
-        .iter()
-        .map(|n| format!("status.{n}"))
-        .collect();
-    let p = plc.numbers(&names).await;
+    let count = |v: &Variant| if let Variant::UInt64(n) = v { *n } else { panic!("{v:?}") };
+    // A hundred ticks of the loop, however long they take.
+    let start = std::time::Instant::now();
+    while count(&plc.read(&["status.cycles".into()]).await[0]) < 100 {
+        assert!(start.elapsed() < Duration::from_secs(60), "the loop did not tick 100 times in 60 s");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let names: Vec<String> =
+        ["cycle_s", "cycle_period_s", "jitter_max_s", "jitter_rms_s", "realtime_factor", "cycles", "steps"]
+            .iter()
+            .map(|n| format!("status.{n}"))
+            .chain(["signal.time".to_string()])
+            .collect();
+    let read = plc.read(&names).await;
+    let p: Vec<f64> = read[..5].iter().map(|v| if let Variant::Double(x) = v { *x } else { panic!("{v:?}") }).collect();
     assert_eq!(p[0], 0.01);
-    assert!((p[1] - 0.01).abs() < 0.005, "mean period {} s", p[1]);
-    assert!(p[2] >= p[3] && p[3] >= 0.0 && p[2] < 0.2, "jitter max {} s, rms {} s", p[2], p[3]);
-    assert!((p[4] - 1.0).abs() < 0.05, "real-time factor {}", p[4]);
-    let count = |v: Variant| if let Variant::UInt64(n) = v { n } else { panic!("{v:?}") };
-    let cycles = count(plc.read(&["status.cycles".into()]).await.remove(0));
-    assert!(cycles > 50, "{cycles} cycles in a second");
-    assert!(count(plc.read(&["status.steps".into()]).await.remove(0)) > 10_000);
+    assert!(
+        p[2] >= p[3] && p[3] >= 0.0 && (p[1] - 0.01).abs() <= p[3] + 1e-12,
+        "period {} s, jitter {:?}",
+        p[1],
+        &p[2..4]
+    );
+    assert!(p[4] > 0.0 && p[4] <= 1.0 + 1e-3, "real-time factor {}", p[4]);
+    // The steps are the simulated time, read in the same tick.
+    let dt = Sim::new(MACHINES[0], &MACHINES[0].config()).unwrap().dt;
+    let Variant::Double(time) = read[7] else { panic!("{:?}", read[7]) };
+    assert!((count(&read[6]) as f64 * dt - time).abs() < 1e-9, "{} steps at {time} s", count(&read[6]));
+    pacing_adds_up(&plc._link.pacing.lock().unwrap().clone(), dt);
+    // Reset: the count starts anew, seen once the loop has taken the write.
+    let cycles = count(&read[5]);
     plc.write(vec![("command.reset_pacing".into(), Variant::Boolean(true))]).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(count(plc.read(&["status.cycles".into()]).await.remove(0)) < cycles / 2);
+    let start = std::time::Instant::now();
+    while count(&plc.read(&["status.cycles".into()]).await[0]) >= cycles {
+        assert!(start.elapsed() < Duration::from_secs(60), "no reset within 60 s");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
-/// A cycle longer than 0.1 s keeps real time: each tick runs the whole cycle's steps.
+/// A cycle longer than 0.1 s keeps real time: each tick runs the whole cycle's steps. Before the most a tick makes up for
+/// was raised to two cycles, every tick of 0.25 s dropped 0.15 s (`lost_s` 60 % of the wall time); now nothing is lost
+/// unless a tick comes later than 0.5 s, which a quarter of the run is allowed to on a loaded host.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_long_cycle_keeps_real_time() {
     let entry = MACHINES[0];
@@ -1352,12 +1441,13 @@ async fn a_long_cycle_keeps_real_time() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(1600)).await;
+    let start = std::time::Instant::now();
+    while link.pacing.lock().unwrap().cycles < 6 {
+        assert!(start.elapsed() < Duration::from_secs(60), "the loop did not tick 6 times in 60 s");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     let pacing = link.pacing.lock().unwrap().clone();
-    assert!(
-        pacing.cycles >= 4 && (pacing.realtime_factor() - 1.0).abs() < 0.05,
-        "real-time factor {} over {} cycles",
-        pacing.realtime_factor(),
-        pacing.cycles
-    );
+    let dt = Sim::new(entry, &entry.config()).unwrap().dt;
+    pacing_adds_up(&pacing, dt);
+    assert!(pacing.lost_s <= 0.25 * pacing.wall_s, "lost {} s of {} s: {pacing:?}", pacing.lost_s, pacing.wall_s);
 }

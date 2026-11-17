@@ -88,6 +88,19 @@ async fn write(session: &Session, namespace: u16, name: &str, value: Variant) ->
 }
 
 /// The files in a folder of the server's pki.
+/// Reads `name` until it is `want` or a minute has passed (only against a hang): a written value is published at the
+/// loop's next tick, which a loaded host gives later than any fixed wait. What it read last.
+async fn read_until(session: &Session, namespace: u16, name: &str, want: &Variant) -> Variant {
+    let start = Instant::now();
+    loop {
+        let now = read(session, namespace, name).await;
+        if now == *want || start.elapsed() > Duration::from_secs(60) {
+            return now;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 fn certificates(dir: PathBuf) -> Vec<PathBuf> {
     std::fs::read_dir(dir).map(|d| d.filter_map(|e| Some(e.ok()?.path())).collect()).unwrap_or_default()
 }
@@ -176,8 +189,8 @@ async fn a_trusted_client_reads_and_writes_with_basic256sha256_sign_and_encrypt(
     let session = connect(&url, &client_pki, secured.0, secured.1, IdentityToken::Anonymous).await.unwrap();
     assert!(matches!(read(&session, ns, "status.busy").await, Variant::Boolean(false)));
     assert!(write(&session, ns, "command.path_time_optimal", true.into()).await);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(matches!(read(&session, ns, "command.path_time_optimal").await, Variant::Boolean(true)));
+    let want = Variant::Boolean(true);
+    assert_eq!(read_until(&session, ns, "command.path_time_optimal", &want).await, want);
     // Sign alone works as well.
     let signed =
         connect(&url, &client_pki, SecurityPolicy::Basic256Sha256, MessageSecurityMode::Sign, IdentityToken::Anonymous);
@@ -512,14 +525,7 @@ async fn unsigned_and_byte_integers_are_taken_as_numbers() {
         (Variant::Int64(-exact), -9_007_199_254_740_992.0),
     ] {
         assert!(write(&session, link.namespace, &name, value.clone()).await, "{value:?} refused");
-        let mut read_back = Variant::Empty;
-        for _ in 0..200 {
-            read_back = read(&session, link.namespace, &name).await;
-            if read_back == Variant::Double(number) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        let read_back = read_until(&session, link.namespace, &name, &Variant::Double(number)).await;
         assert_eq!(read_back, Variant::Double(number), "{value:?}");
     }
     for value in [Variant::UInt64(exact as u64 + 1), Variant::Int64(-exact - 1), Variant::from("1")] {

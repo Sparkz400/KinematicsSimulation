@@ -1663,10 +1663,16 @@ impl Controller {
     /// The tool setpoint at `time`: the last profile cycle's run on by its speed and acceleration, as the drives' fine
     /// interpolation runs the motors' on (at most one profile cycle). What the analysis measures the tool against.
     pub fn plan_now(&self, time: f64, out: &mut [f64]) {
-        let t = (time - self.clock).clamp(0.0, self.profile_cycle);
+        let t = self.setpoint_age(time);
         for (i, x) in out.iter_mut().enumerate() {
             *x = self.set_pos[i] + (self.set_vel[i] + 0.5 * self.set_acc[i] * t) * t;
         }
+    }
+
+    /// How long ago, at `time`, the profile cycle set `set_pos`, `set_vel` and `set_acc` (the signal `setpoint_age`):
+    /// `plan_now` is those run on by it.
+    pub fn setpoint_age(&self, time: f64) -> f64 {
+        (time - self.clock).clamp(0.0, self.profile_cycle)
     }
 
     /// The base step done (see `update`): per drive the current at its end and the electrical energy, copper loss and

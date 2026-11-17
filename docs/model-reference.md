@@ -1534,7 +1534,11 @@ The controller plans in tool coordinates and runs one drive per motor. Each prof
 4. The machine's rigid model gives the torque feedforward for the setpoint pose, speed and acceleration, or each motor's constant inertia times its acceleration (`drive.torque_feedforward_model`).
 5. With `effects.fieldbus_delay` the drives get what was computed `profile.fieldbus_delay_cycles` cycles ago. With `effects.fieldbus_jitter` each frame takes j more cycles, j drawn evenly from 0 to `profile.fieldbus_jitter_cycles` per frame (pseudo-random from `drive.noise_seed`, a stream of its own, so every run is the same), and the drives use the newest frame that has arrived: a late frame leaves them the one before, which they carry on from by its speed and acceleration (the time since the setpoint runs on, so the extrapolated setpoint does not stand still for a cycle and then jump two), and frames never arrive out of order. With N cycles of jitter the frame in use is older than the delay by more than i cycles with probability Π_{k=0..i} (N − k) / (N + 1): N = 1 gives 0 or 1 cycle, half each.
 
-The setpoint signals and the path error of the analysis are the controller's, before the fieldbus delay. The analysis measures the tool against the plan at the moment of each sample, the last profile cycle's setpoint run on by its speed and acceleration (`Controller::plan_now`), not against the setpoint held for the cycle, which at a 4 ms profile cycle would count the tool off the path by up to the way of a cycle.
+The setpoint signals and the path error of the analysis are the controller's, before the fieldbus delay. The signals `axis.<id>.position_setpoint`, `.velocity_setpoint` and `.acceleration_setpoint` are those the last profile cycle set, held until the next; `setpoint_age` is how long ago that was at the sample (0 to one profile cycle).
+
+### Tool position error
+
+The tool position error is the plan at the moment of the sample less where the tool is, the length over the axes in m (the axes in rad apart, in rad): per axis p + (v + a t / 2) t − x, with p, v, a the held setpoints above, t = `setpoint_age` and x = `axis.<id>.position` (the tool as the machine has it: belt stretch, sag and frame deflection included, unlike the drives' encoder-side `following_error`). The plan is the controller's, after shaping and before the fieldbus delay, so a fieldbus delay is part of the error. It is the analysis's "Tool position error, peak" (`tracking_error_peak_m`, `Controller::plan_now` at every sample of the pass), the desktop app's run figure, path colouring and Views tab chart (`charts::axis_errors`, from the run's columns; a run file without `setpoint_age` falls back to the held setpoint) and the report's chart. Not against the setpoint held for the cycle: that counts the tool off by up to a cycle's way at speed, 0.79 mm at 1 m/s on the T-gantry's 1 ms profile cycle where the error is 0.18 mm. Test: `the_tool_error_is_one_number_in_the_run_the_chart_and_the_analysis` (sim-app).
 
 | Command | Behaviour |
 | --- | --- |
@@ -1847,7 +1851,7 @@ For the machine, sampled once per millisecond:
 | Guide life | L10 = (C / P)³ · 50 km with C = `ratings.guide_dynamic_load_rating_n` and P that cubic mean |
 | Guide speed, guide life in hours | The mean \|speed\| of that guide's axis (the tool's speed along it, once per millisecond); L10 · 1000 / (v · 3600) h |
 | Path error | Distance from the tool position to the polyline of the setpoints of the last 0.5 s (the nearest of its pieces). Peak and RMS. The tool position is the machine's tool state: on the T-gantry the tool tip over the floor, frame deflection included |
-| Tracking error | Distance from the tool to the setpoint of the same moment. Peak |
+| Tracking error | The [tool position error](#tool-position-error): distance from the tool to the plan of the same moment. Peak |
 | Dwell error | In the second half of a dwell: distance from the tool to the planned target. Peak. With input shaping the dwell starts when the shaped setpoint has arrived |
 
 Notes:
