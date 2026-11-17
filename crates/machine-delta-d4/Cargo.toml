@@ -10,7 +10,6 @@ publish = false
 sim-core.workspace = true
 sim-components.workspace = true
 machine-delta-d3 = { path = "../machine-delta-d3" }
-sim-netlist.workspace = true
 
 [dev-dependencies]
 toml.workspace = true
