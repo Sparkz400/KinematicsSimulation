@@ -124,7 +124,7 @@ fn the_results_table_is_what_the_reports_give() {
 }
 
 /// The ISW ball screw's report gives the figures docs/validation.md "Against measured data" states for machine.toml as
-/// committed: S-profile 0.368 N m RMS and 2.20 N m worst, the whole sine 0.709 and 24.5, constant speed 0.896 and 3.65;
+/// committed: S-profile 0.368 N m RMS and 2.20 N m worst, the whole sine 0.709 and 24.5, constant speed 0.896 and 3.62;
 /// the fit's viscous 773 ± 24 N s/m, Coulomb 324 ± 7 N, moved mass 496 ± 3 kg; the sweeps' resonances 134, 123, 126 Hz
 /// against the model's 137 Hz. Each within one unit of the last digit the document gives.
 #[test]
@@ -141,7 +141,7 @@ fn the_ball_screw_report_gives_the_documented_figures() {
     for (file, rms, worst) in [
         ("s-profile-v300.csv", 0.368, 2.20),
         ("sine-a100-v100.csv", 0.709, 24.5),
-        ("constant-speed-v100.csv", 0.896, 3.65),
+        ("constant-speed-v100.csv", 0.896, 3.62),
     ] {
         let r = summary.iter().find(|r| r[0] == file).unwrap();
         let (got_rms, got_worst) = (r[5].parse::<f64>().unwrap(), r[6].parse::<f64>().unwrap());
