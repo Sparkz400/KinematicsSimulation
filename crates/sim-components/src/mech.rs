@@ -937,6 +937,24 @@ pub struct GearTorque {
 /// Below this power the efficiency fades out, so a gearbox at rest has no torque step.
 const EFFICIENCY_FADE_W: f64 = 0.5;
 
+/// A rigid solve's loss factors (`Gearbox::loss_factor`) at their fixed point: each is taken of the torque going into its
+/// gearbox, which depends on the acceleration the factors give, so `next` gives the factors at the acceleration solved
+/// with `loss`, from `start` (all 1, loss-free) until they settle to rounding. The efficiency's fade over the power is
+/// weak (each round takes some 0.1 of what is left, on the linkage at 0.01 m/s), so a few rounds do; a loss-free one
+/// settles in one.
+pub fn settled_loss<T: AsRef<[f64]>>(start: T, mut next: impl FnMut(&T) -> T) -> T {
+    let mut loss = start;
+    for _ in 0..12 {
+        let new = next(&loss);
+        let settled = new.as_ref().iter().zip(loss.as_ref()).all(|(a, b)| (a - b).abs() <= 1e-14);
+        loss = new;
+        if settled {
+            break;
+        }
+    }
+    loss
+}
+
 impl Gearbox {
     pub fn from_config(cfg: &Config) -> Result<Self> {
         // A negative backlash would turn the dead zone inside out (and `clamp` panics on that).

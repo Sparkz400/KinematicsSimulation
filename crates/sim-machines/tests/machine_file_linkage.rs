@@ -386,12 +386,11 @@ fn the_linkage_holds_the_plate_at_the_centre_with_the_hand_calculated_torque() {
 /// linkage with its losses, moving the plate at a steady 0.05 m/s up and down and sideways, the torques that leave the
 /// plate without acceleration (a Newton solve of the rigid model: the plate's acceleration from the tool's velocity a
 /// microsecond along the model's rates, the Jacobian by differences) are the loss-free feedforward plus
-/// `steady_friction`: as shipped (the gearbox's drag on, its efficiency at part load near 1) to 1e-12 N m, and with a
-/// plain efficiency of 0.94, where lifting takes more than lowering gives back (the loss on the weight), to 2e-4 of the
-/// torque: 7e-6 at 0.05 m/s up, down or sideways (4e-5 before `steady_friction` took the loss on the velocity terms too),
-/// 5.5e-5 at 0.05 m/s aslant and 1.3e-4 at 0.01 m/s, where the efficiency fades over the power and the model takes the
-/// factor of the torque going in at the loss-free acceleration. `linkage::steady_loss` takes it of the torque going in (output / loss); of the output it missed by
-/// 1.2e-3 there.
+/// `steady_friction`: as shipped (the gearbox's drag on, its efficiency at part load near 1) and with a plain efficiency
+/// of 0.94, where lifting takes more than lowering gives back (the loss on the weight), to 1e-11 of the torque (1.1e-12
+/// at most, the Newton solve's rounding). Until 17 November the rigid model took the efficiency's fade over the power at
+/// the loss-free acceleration and `linkage::steady_loss` stopped after four rounds: 5.5e-5 at 0.05 m/s aslant and
+/// 1.3e-4 at 0.01 m/s, 2.4e-8 with the model at its fixed point; both now at theirs (`mech::settled_loss`).
 #[test]
 fn the_linkage_friction_feedforward_takes_the_loss_on_the_weight() {
   for drag in [true, false] {
@@ -439,7 +438,7 @@ fn the_linkage_friction_feedforward_takes_the_loss_on_the_weight() {
         machine.steady_friction(&pos, &vel, &mut friction);
         for k in 0..2 {
             println!("drag {drag}, {vel:?}: motor {k}: off {:.2e} of the torque", (t[k] - ff[k] - friction[k]) / t[k]);
-            assert!((t[k] - ff[k] - friction[k]).abs() < 2e-4 * t[k].abs(), "drag {drag}, {vel:?}: motor {k}: {t:?} against {ff:?} + {friction:?}");
+            assert!((t[k] - ff[k] - friction[k]).abs() < 1e-11 * t[k].abs(), "drag {drag}, {vel:?}: motor {k}: {t:?} against {ff:?} + {friction:?}");
         }
         if vel[0] == 0.0 {
             vertical.push(friction[0]);

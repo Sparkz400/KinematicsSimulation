@@ -778,15 +778,18 @@ impl<M: Mechanism> JointMachine<M> {
                 Some(c) => self.flex_solve(Some(c), s, &m, &x),
             }
         };
-        let first = solve_with(&vec![1.0; n]);
-        let loss: Vec<f64> = (0..n)
-            .map(|k| {
-                self.joints[k]
-                    .drive
-                    .gearbox
-                    .loss_factor(drive[k] - self.joints[k].drive.reflected_inertia() * first[k], qd[k])
-            })
-            .collect();
+        // The loss factors of the torques going in, at their fixed point (`mech::settled_loss`).
+        let loss = crate::mech::settled_loss(vec![1.0; n], |loss| {
+            let acc = solve_with(loss);
+            (0..n)
+                .map(|k| {
+                    self.joints[k]
+                        .drive
+                        .gearbox
+                        .loss_factor(drive[k] - self.joints[k].drive.reflected_inertia() * acc[k], qd[k])
+                })
+                .collect()
+        });
         let acc = solve_with(&loss);
         let into: Vec<f64> = (0..n).map(|k| drive[k] - self.joints[k].drive.reflected_inertia() * acc[k]).collect();
         let out = (0..n).map(|k| loss[k] * into[k]).collect();
