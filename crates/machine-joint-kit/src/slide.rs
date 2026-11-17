@@ -49,7 +49,7 @@ pub fn build(cfg: &Config, kind: Kind) -> Result<Box<dyn Machine>, ConfigError> 
         return Err(ConfigError::Invalid("slide.incline_deg".into()));
     }
     // The mesh friction's bristle is capped by the lighter of the rotor and the carriage (without the payload, which
-    // may be off), as the cable robot's by its drum (`Converter::apply_to`).
+    // may be off), as a winch's by its drum (`Converter::apply_to`).
     let carriage = cfg.positive("mass.carriage_kg")?;
     let (drive, lever) = match kind {
         Kind::Screw => {

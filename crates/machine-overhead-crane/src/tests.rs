@@ -314,7 +314,7 @@ fn the_signals_at_rest_are_the_hand_calculated_ones() {
     assert!((sample[id(&sim, "energy.elastic")] - 4.6895).abs() < 0.01);
 }
 
-/// The mesh friction's bristle on the hoist is capped by the lighter of its rotor and its drum, as the cable robot's
+/// The mesh friction's bristle on the hoist is capped by the lighter of its rotor and its drum, as a cable winch's
 /// winch is (`Converter::apply_to`): with effects.gearbox_mesh_friction and a gearbox far stiffer than any shipped
 /// (1e12 N m/rad), the drum's 0.05 kg m2 at 0.08 m, 7.8125 kg at the rope, against the rotor's 1e-4 kg m2 and more times
 /// (40 / 0.08)^2, 25 kg and more: 7.8125 * (1e5 / 4)^2 = 4.8828125e9 N/m. Before, the rotor alone set it.

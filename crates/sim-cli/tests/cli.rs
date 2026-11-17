@@ -902,9 +902,9 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
             let [config, fitted, error] = [2, 3, 4].map(|c| row[c].parse::<f64>().unwrap());
             // Within three standard errors, which hold the noise and what else the trace has that the replay has not
             // (`identify::difference_share`, `row_errors`) and are never 0. Measured (17 November 2026) over all 430
-            // values of every machine: (fitted − config) / error 0.16 RMS, at most 0.89 (the planar cable robot); before
-            // the errors took the difference row by row 0.22 RMS without the cable robots, the SCARA at 2.07, the cable
-            // robots at 4.0 and 5.8, which a 1 % allowance hid.
+            // values of every machine: (fitted − config) / error 0.16 RMS, at most 0.89 (the planar cable-driven platform); before
+            // the errors took the difference row by row 0.22 RMS without the cable-driven platforms, the SCARA at 2.07, the cable-driven
+            // platforms at 4.0 and 5.8, which a 1 % allowance hid.
             assert!(config > 0.0 && error > 0.0 && (fitted - config).abs() < 3.0 * error, "{}: {row:?}", entry.id);
         }
 

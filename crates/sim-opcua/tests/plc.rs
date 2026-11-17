@@ -778,7 +778,7 @@ async fn a_path_from_the_plc_is_planned_and_run() {
                 entry.id
             );
         }
-        // Read once the tool rests, 1 s on: the spatial cable robot's platform still rings in rz 0.3 s after the path, at
+        // Read once the tool rests, 1 s on: the spatial cable-driven platform still rings in rz 0.3 s after the path, at
         // 5 Hz and 1e-4 rad decaying with 0.35 s, as its winches' meshes stick and leave the drives nothing to damp it
         // with but the cables' damping (it rests 2.3e-4 to 2.5e-4 rad off, its gears' play; 3.08e-4 was read at 0.3 s).
         plc.simulated(1.0).await;

@@ -1165,7 +1165,7 @@ pub fn fit_joints(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<O
     let Some(replayed) = solve(&split(&config, &at), Some(&fitted.basis), per) else { return Ok(None) };
     // The standard errors are those of fitted less config (`difference_share`), not the trace's alone, whose residual
     // holds what the rigid model misses of the machine in both; and at least those of the same difference taken row by
-    // row (`row_errors`): on the cable robots, whose gearbox mesh friction sticks at rest, a replay breaks away a row
+    // row (`row_errors`): on the cable-driven platforms, whose gearbox mesh friction sticks at rest, a replay breaks away a row
     // before or after its trace at a move's start (0.03 N m for a row), which the mean square over all rows spread thin:
     // their own traces missed the config by 4.0 (planar) and 5.8 (spatial) standard errors, 0.89 and 0.85 with it.
     let share = difference_share(&fitted.residuals, &replayed.residuals);
