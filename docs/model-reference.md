@@ -1198,8 +1198,12 @@ momentum    L = m v + w × s,  H_O = s × v + I_p w + p × L,  first moment m p 
 ```
 
 m, s_b and I_b (platform frame, about the centre) sum the platform (`mass.platform_kg`, `platform_inertia_kgm2`), the
-legs' platform shares (`leg.platform_share` of `leg.mass_kg` at each platform joint) and, attached, the payload
-(`mass.payload_kg` at `payload_offset_m` with its own `payload_inertia_kgm2`, by the parallel axis theorem). The
+and, attached, the payload (`mass.payload_kg` at `payload_offset_m` with its own `payload_inertia_kgm2`, by the
+parallel axis theorem). Each leg is two more bodies swinging with its direction u, added to M_xi and c + g by d'Alembert:
+the rod part (`leg.platform_share` of `leg.mass_kg`, centre `leg.platform_part_centre_m` from the platform joint) at
+X = P − c u and the body part (the rest, centre `leg.base_part_centre_m` from the base joint) at X = B + c u, each with
+its inertia about its centre across the leg (`leg.*_part_inertia_kgm2`; u' = (1 − u uᵀ) d' / L, d' the platform joint's
+velocity). The
 constraint forces at the base joints (along e_i) do no work along the platform's admissible motions, so projecting the
 Newton-Euler equations with Aᵀ removes them; at rest f = Aᵀ g. Level with the load centred each leg carries m g / (3
 u_z); off centre by c the vertical shares are m g (1/3 + 2 c · â_i / (3 rp)).

@@ -1155,9 +1155,11 @@ estimates; the masses, the legs' friction and force bounded):
 | `leg.closed_length_m`, `stroke_m` | m | A leg retracted, joint to joint; its stroke (the joint's range, its stops) | 0.45, 0.2 |
 | `leg.friction_coulomb_n`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | N, N s/m, m/s | The rod's guide and seal (`effects.joint_friction`), plus the nut's preload drag | 15, 40, 0.002 |
 | `leg.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | Buffers at the stroke's ends (`effects.hard_stops`) | 2e6, 2000 |
-| `leg.mass_kg`, `platform_share` | kg, – | A leg: body, motor, rod and nut; the share that moves with the platform joint | 3, 0.3 |
+| `leg.mass_kg`, `platform_share` | kg, – | A leg: body, motor, rod and nut; the share that is the rod part on the platform joint (the rest is the body part on the base joint) | 3, 0.3 |
+| `leg.base_part_centre_m`, `leg.base_part_inertia_kgm2` | m, kg m² | The body part: its centre's distance from the base joint along the leg, its inertia about the centre across the leg (the part swings with the leg). Absent 0: no swing | 0.1, 0.044, estimates |
+| `leg.platform_part_centre_m`, `leg.platform_part_inertia_kgm2` | m, kg m² | The rod part: its centre's distance from the platform joint towards the base, its inertia about the centre across the leg. Absent 0: a point at the joint | 0.17, 0.0092, estimates |
 | `leg.max_force_n` | N | The feed force the cylinder allows; judged by `tripod-leg-force` | 1500 |
-| `mass.platform_kg`, `platform_inertia_kgm2` | kg, kg m² | The platform; its inertia about its centre, x, y, z (the legs' shares are added) | 20; 0.35, 0.35, 0.65 |
+| `mass.platform_kg`, `platform_inertia_kgm2` | kg, kg m² | The platform; its inertia about its centre, x, y, z (the legs' parts are separate bodies) | 20; 0.35, 0.35, 0.65 |
 | `mass.payload_kg` | kg | Payload (`effects.payload`) | 40 |
 | `mass.payload_offset_m` | m | Its centre in the platform frame, from the platform centre | 0.05, 0, 0.1 |
 | `mass.payload_inertia_kgm2` | kg m² | Its inertia about its centre, x, y, z (platform frame) | 0.6, 0.6, 0.6 |
