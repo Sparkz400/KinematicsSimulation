@@ -314,6 +314,103 @@ fn a_self_locking_worm_holds_its_load_and_one_that_turns_back_loses_by_its_back_
     );
 }
 
+/// The self-locking worm table of the test above (rigid, eta 0.4, eta_back -0.5, ratio 40, process torque -10 N m, so
+/// the table holds o_rest = 10 N m; J_L = 4.5 kg m2, the rotor at the table R = 0.496 kg m2) moving at a speed of sign s
+/// with the motor torque t, by hand (`worm`): the wheel J_L a = o - 10, the rotor's into = 40 t - R a, and the mesh's
+/// drag into - o = s max(1.5 s o, C) with C = (1 + 0.5) max(-10 s, 0) (15 N m lowering, 0 lifting). Either
+///
+/// - the driving flank, o = 0.4 into: a = (16 t - 10) / (4.5 + 0.4 R) = (16 t - 10) / 4.6984, holding where 1.5 s o >= C,
+/// - or the drag, o = into - s C: a = (40 t - s C - 10) / 4.996, holding where 1.5 s o <= C.
+///
+/// Over the sweep that left 57 % of the solves unsettled (-2..2 rad/s, -1.2..1.2 N m), exactly one of the two holds at
+/// each point (or both, at the seam, with one answer), and the solve gives it: one answer with no starting guess.
+///
+/// Lowering at speed, -1 rad/s: the motor has to push it down with -eta_back 10 / 40 = 0.125 N m to hold the speed
+/// (a = (-5 + 15 - 10) / 4.996 = 0); it puts in 0.125 * 40 = 5 W, the load 10 W, and the worm loses both,
+/// (into - o) w = (-5 - 10) (-1) = 15 W. With no motor torque it brakes at (15 - 10) / 4.996 = 1.000801 rad/s2 and
+/// stops after 0.999200 s, 0.5 / 1.000801 = 0.499600 rad further down, and stays there: a self-locking worm holds.
+#[test]
+fn a_moving_self_locking_worm_has_one_answer_and_lowers_its_load_as_pushed() {
+    let cfg = with(
+        &kit_as_file("rotary-table", &worm_table("40", 0.4, -0.5)),
+        &[
+            "effects.belt_stretch = false",
+            "effects.gearbox_backlash = false",
+            "effects.motor_friction = false",
+            "effects.torque_ripple = false",
+            "effects.process_force = true",
+            "process.force_c_n = -10.0",
+        ],
+    );
+    let mut m = sim_netlist::build(&cfg).unwrap();
+    m.set_dwelling(true);
+    let m = m.as_ref();
+    let solve = |speed: f64, torque: f64| {
+        let state = [1.0, speed, 0.0, 0.0];
+        let mut out = [0.0; 4];
+        m.derivatives(&state, &[torque], &mut out);
+        (
+            out[1],
+            signal(m, &state, &[torque], "gearbox.1.output_torque"),
+            signal(m, &state, &[torque], "power.gearbox_1"),
+        )
+    };
+    let (mut both, mut points) = (0, 0);
+    for i in -20..=20 {
+        let speed = 0.1 * i as f64;
+        if speed == 0.0 {
+            continue;
+        }
+        let s = speed.signum();
+        let c = 1.5 * (-10.0 * s).max(0.0);
+        for j in -24..=24 {
+            let torque = 0.05 * j as f64;
+            let a_f = (16.0 * torque - 10.0) / 4.6984;
+            let a_b = (40.0 * torque - s * c - 10.0) / 4.996;
+            let (o_f, o_b) = (10.0 + 4.5 * a_f, 10.0 + 4.5 * a_b);
+            let (f_holds, b_holds) = (1.5 * s * o_f >= c - 1e-9, 1.5 * s * o_b <= c + 1e-9);
+            let (a, o) = match (f_holds, b_holds) {
+                (true, false) => (a_f, o_f),
+                (false, true) => (a_b, o_b),
+                (true, true) => {
+                    assert!((a_f - a_b).abs() < 1e-8, "two answers at {speed} rad/s, {torque} N m: {a_f}, {a_b}");
+                    both += 1;
+                    (a_f, o_f)
+                }
+                (false, false) => panic!("no answer at {speed} rad/s, {torque} N m"),
+            };
+            let (acc, output, _) = solve(speed, torque);
+            assert!((acc - a).abs() < 1e-9 && (output - o).abs() < 1e-9, "{speed} rad/s, {torque} N m: {acc} {output}");
+            points += 1;
+        }
+    }
+    assert!(points == 40 * 49 && both <= 2, "{points} points, {both} at the seam");
+    // Lowering at speed.
+    let (acc, output, loss) = solve(-1.0, -0.125);
+    assert!(acc.abs() < 1e-12 && (output - 10.0).abs() < 1e-9 && (loss - 15.0).abs() < 1e-9, "{acc} {output} {loss}");
+    assert!((solve(-1.0, 0.0).0 - 1.000_801).abs() < 1e-6);
+    let mut state = vec![1.0, -1.0, 0.0, 0.0];
+    let mut rk = sim_core::integrate::Rk4::new(4);
+    let h = sim_core::testkit::DT / f64::from(sim_core::testkit::SUBSTEPS);
+    let (mut band, mut at) = (None, 0.0);
+    for k in 1..=(1.5 / h).round() as usize {
+        rk.step(|s, out| m.derivatives(s, &[0.0], out), &mut state, h);
+        if band.is_none() && state[1] > -sim_netlist::worm::STICK_SPEED {
+            band = Some(k as f64 * h);
+        }
+        if k == (1.2 / h).round() as usize {
+            at = state[0];
+        }
+    }
+    // It brakes into the stick band (1e-3 rad/s) after (1 - 1e-3) / 1.000801 = 0.998200 s, 0.999999 / 2.001602 =
+    // 0.4995994 rad down, and takes out the rest over STICK_TIME_S = 1 ms, 1e-3 * 1e-3 = 1e-6 rad further: 0.4996004 rad.
+    let band = band.unwrap_or_else(|| panic!("the worm stops: {state:?}"));
+    assert!((band - 0.998_200).abs() < 2.0 * h, "{band} s");
+    assert!((at - (1.0 - 0.499_600_4)).abs() < 1e-6, "{at} rad");
+    assert!((state[0] - at).abs() < 1e-12 && state[1].abs() < 1e-12, "held at {} rad, {} rad/s", state[0], state[1]);
+    sim_core::testkit::loss_budget(m);
+}
+
 /// The catalogue search for the XYZ portal's Z motor alone: a 1FK2103-2AH (rotor 9.3e-6 kg m2, 1.18 kg without brake,
 /// on its paired S210) becomes [parts.mz], X and Y keep the shared motor, and the candidate costs that one motor's
 /// weight, 1.18 kg, not three. The Z motor's own velocity gain (0.01 N m s/rad) is retuned down for the lighter rotor.
