@@ -552,7 +552,12 @@ impl Tripod {
             HardStop { stiffness: 0.0, damping: 0.0 }
         };
         let mut joint = RotaryJoint::with(cfg, friction, stops, (0.0, geo.stroke))?;
-        screw.converter(screw.softest_position()).apply(cfg, &mut joint)?;
+        // The mesh friction's bristle capped by the lighter of the rotor and what the nut moves at least: the platform
+        // pushed at its joint, 1 / (1 / m + r^2 / I_min) whatever the other legs hold (`Converter::apply_to`).
+        let r2 = geo.anchors.iter().map(|a| dot(*a, *a)).fold(0.0, f64::max);
+        let i_min = (0..3).map(|k| platform_inertia[k][k]).fold(f64::INFINITY, f64::min);
+        let leg_output = 1.0 / (1.0 / cfg.positive("mass.platform_kg")? + r2 / i_min);
+        screw.converter(screw.softest_position()).apply_to(cfg, &mut joint, leg_output)?;
         // The nut's preload drags like friction in the rod's guide, as a force at the nut.
         if on {
             joint.friction.coulomb += screw.preload_torque() * screw.ratio();

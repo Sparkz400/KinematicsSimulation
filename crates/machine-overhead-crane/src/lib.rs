@@ -217,17 +217,21 @@ impl Crane {
         let levers = [wheel_radii[0], wheel_radii[1], drum_radius];
         let ranges = [(0.0, strokes[0]), (0.0, strokes[1]), (0.0, cfg.positive("hoist.capacity_m")?)];
         let tables = ["crane", "crane", "hoist"];
+        // What each drive's wheel or drum moves rigidly, at its travel: the mesh friction's bristle is capped by the
+        // lighter of it and the rotor (`Converter::apply_to`); the load hangs on the elastic rope.
+        let (bridge, trolley) = (cfg.positive("crane.bridge_mass_kg")?, cfg.positive("crane.trolley_mass_kg")?);
+        let masses =
+            [bridge + trolley, trolley, cfg.positive("hoist.drum_inertia_kgm2")? / (drum_radius * drum_radius)];
         let mut drives = Vec::new();
         for k in 0..3 {
             // Each drive with its own motor, gearbox and drive tables (`[motor.hoist]` over `[motor]`).
             let own = motor_config(cfg, MOTOR_IDS[k])?;
             let mut joint = RotaryJoint::with(&own, ShaftFriction::NONE, stops(tables[k])?, ranges[k])?;
             Converter { lever: levers[k], stiffness: f64::INFINITY, backlash: 0.0, efficiency: 1.0, inertia: 0.0 }
-                .apply(&own, &mut joint)?;
+                .apply_to(&own, &mut joint, masses[k])?;
             drives.push(joint);
         }
         let drives: [RotaryJoint; 3] = drives.try_into().map_err(|_| ConfigError::Invalid("motor".into()))?;
-        let (bridge, trolley) = (cfg.positive("crane.bridge_mass_kg")?, cfg.positive("crane.trolley_mass_kg")?);
         let height = cfg.positive("crane.rope_exit_height_m")?;
         let (min, max) = (cfg.f64s("workspace.tool_min")?, cfg.f64s("workspace.tool_max")?);
         let inside = |k: usize, lo: f64, hi: f64| min[k] >= lo && max[k] <= hi && min[k] < max[k];
@@ -256,7 +260,7 @@ impl Crane {
         let t_max = cfg.positive("rope.breaking_load_n")? / cfg.positive("rope.safety_factor")?;
         let hoist = motor_config(cfg, "hoist")?;
         Ok(Self {
-            masses: [bridge + trolley, trolley, cfg.positive("hoist.drum_inertia_kgm2")? / (drum_radius * drum_radius)],
+            masses,
             drives,
             bridge,
             trolley,

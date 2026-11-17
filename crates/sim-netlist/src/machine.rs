@@ -594,6 +594,14 @@ impl ConfigMachine {
             let free = ShaftFriction::NONE;
             let mut joint = RotaryJoint::with(own, free, HardStop { stiffness: 0.0, damping: 0.0 }, (0.0, stroke))?;
             let ratio = joint.ratio();
+            // What the screw or rack moves at least: the bodies on its axis without their payload, shared with the
+            // other drives of that axis (a gantry's). The mesh friction's bristle is capped by the lighter of it and the
+            // rotor (`Converter::apply_to`); with no body on it, the rotor's alone.
+            let on_axis: f64 = net.bodies.iter().filter(|b| b.axes.get(axis) == Some(&true)).map(|b| b.mass).sum();
+            let output = match on_axis / net.motors.iter().filter(|o| o.axis == Some(axis)).count() as f64 {
+                x if x > 0.0 => x,
+                _ => f64::INFINITY,
+            };
             let (kind, lever) = match &d.transmission {
                 Transmission::Screw { values } => {
                     let screw = BallScrew::from_config(&values_config(own, cfg, "screw", values)?)
@@ -604,7 +612,7 @@ impl ConfigMachine {
                             net.axes[axis].id
                         )));
                     }
-                    screw.converter(screw.softest_position()).apply(own, &mut joint)?;
+                    screw.converter(screw.softest_position()).apply_to(own, &mut joint, output)?;
                     // The nut's preload drags as friction at the screw, at the rotor through the gearbox.
                     if guide_friction {
                         joint.shaft.coulomb += screw.preload_torque() / ratio;
@@ -615,7 +623,7 @@ impl ConfigMachine {
                 Transmission::Rack { values } => {
                     let rack = RackPinion::from_config(&values_config(own, cfg, "rack", values)?)
                         .map_err(|e| renamed(e, "rack", values))?;
-                    rack.converter().apply(own, &mut joint)?;
+                    rack.converter().apply_to(own, &mut joint, output)?;
                     let lever = rack.radius();
                     (DirectKind::Rack(rack), Some(lever))
                 }

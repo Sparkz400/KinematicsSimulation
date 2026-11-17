@@ -48,13 +48,16 @@ pub fn build(cfg: &Config, kind: Kind) -> Result<Box<dyn Machine>, ConfigError> 
     if !(-90.0..=90.0).contains(&incline) {
         return Err(ConfigError::Invalid("slide.incline_deg".into()));
     }
+    // The mesh friction's bristle is capped by the lighter of the rotor and the carriage (without the payload, which
+    // may be off), as the cable robot's by its drum (`Converter::apply_to`).
+    let carriage = cfg.positive("mass.carriage_kg")?;
     let (drive, lever) = match kind {
         Kind::Screw => {
             let screw = BallScrew::from_config(cfg)?;
             if screw.length < joint.range.1 {
                 return Err(ConfigError::Invalid("screw.length_m".into()));
             }
-            screw.converter(screw.softest_position()).apply(cfg, &mut joint)?;
+            screw.converter(screw.softest_position()).apply_to(cfg, &mut joint, carriage)?;
             // The nut's preload drags like friction in the guides, as a force at the nut.
             if cfg.bool("effects.joint_friction")? {
                 joint.friction.coulomb += screw.preload_torque() * screw.ratio();
@@ -68,7 +71,7 @@ pub fn build(cfg: &Config, kind: Kind) -> Result<Box<dyn Machine>, ConfigError> 
         }
         Kind::Rack => {
             let rack = RackPinion::from_config(cfg)?;
-            rack.converter().apply(cfg, &mut joint)?;
+            rack.converter().apply_to(cfg, &mut joint, carriage)?;
             let lever = rack.radius();
             let efficiency = joint.extra_efficiency;
             (Drive::Rack(rack, efficiency), Some(lever))
@@ -90,7 +93,7 @@ pub fn build(cfg: &Config, kind: Kind) -> Result<Box<dyn Machine>, ConfigError> 
     };
     let slide = Slide {
         drive,
-        mass: cfg.positive("mass.carriage_kg")?,
+        mass: carriage,
         payload: payload(cfg, "mass.payload_kg")?,
         attached: true,
         g: gravity(cfg)?,
