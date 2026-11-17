@@ -148,11 +148,10 @@ fn the_life_loads_are_the_signals_added_up() {
 
 /// The T-gantry's two guides: each has its own distance-weighted load and speed, the life in km is the lowest
 /// (C / P)^3 50 km, the life in hours the lowest (C / P)^3 50 km / v times a1, and "guide-load" judges the highest peak of
-/// the two. On the shipped cycle (run 17 November 2026) the X guide carries P = 119.86 N at 0.2635 m/s, 3.826e6 h, the Z
-/// guide 6.28 N at 0.1974 m/s. (120.20 N and 5.97 N on 16 November, when the tilt's commanded acceleration took X's mass
-/// alone; over the rigid model's whole mass matrix, belt runs, idlers and chain, and with the Z axis's weight, it is
-/// 119.86 N; the SciPy reference's guide friction takes the acceleration so too. The audit: 120.1 N distance-weighted where the time
-/// weighting gave 109.9 N.)
+/// the two. On the shipped cycle (run 17 November 2026) the X guide carries P = 119.91 N at 0.2635 m/s, 3.822e6 h, the Z
+/// guide 5.97 N at 0.1974 m/s. (120.20 N on 16 November, when the tilt's commanded acceleration took X's mass alone; over
+/// the rigid model's whole mass matrix, belt runs, idlers and chain, it is 119.91 N; the SciPy reference's guide
+/// friction takes the acceleration so too. The audit: 120.1 N distance-weighted where the time weighting gave 109.9 N.)
 /// On the move to the middle of both strokes the two run at very different speeds (X four times Z's).
 #[test]
 fn each_guide_wears_by_its_own_load_and_speed() {
@@ -184,7 +183,7 @@ fn each_guide_wears_by_its_own_load_and_speed() {
         x.equivalent
     };
     let cycle = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
-    assert!((check(&cycle, 1.2) - 119.86).abs() < 0.05);
+    assert!((check(&cycle, 1.2) - 119.91).abs() < 0.05);
     let mut sim = Sim::new(entry, &cfg).unwrap();
     let middle: Vec<f64> = sim.machine.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect();
     let path = sim.plan_path(&[Piece::Line(middle)], false).unwrap();

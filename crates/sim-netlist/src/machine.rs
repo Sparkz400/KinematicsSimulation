@@ -1575,13 +1575,10 @@ impl ConfigMachine {
     /// The acceleration of each axis that the motor torques would give a loss-free rigid machine: what an overhang's
     /// tilt on a guide is worked out with. The true acceleration would make friction depend on itself, and its absolute
     /// value would turn every belt vibration into extra friction. Over the rigid model's whole mass matrix
-    /// (`rigid_mass`: bodies, chains, idlers, pulleys, rotors and the belt's runs), with gravity: a torque that holds an
-    /// axis against its weight accelerates nothing, neither that axis nor, through the coupling, another.
+    /// (`rigid_mass`: bodies, chains, idlers, pulleys, rotors and the belt's runs).
     fn commanded_acc(&self, q: &[f64], torque: &[f64]) -> Vec<f64> {
-        let forces: Vec<f64> = (0..self.n())
-            .zip(self.gravity(q))
-            .map(|(i, g)| g + (0..self.m()).map(|kk| self.ratio[kk] * self.k[kk][i] * torque[kk]).sum::<f64>())
-            .collect();
+        let forces: Vec<f64> =
+            (0..self.n()).map(|i| (0..self.m()).map(|kk| self.ratio[kk] * self.k[kk][i] * torque[kk]).sum()).collect();
         solve(self.rigid_mass(q), forces).unwrap_or_else(|| vec![0.0; self.n()])
     }
 
