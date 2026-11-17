@@ -1077,20 +1077,27 @@ impl Machine for LinkageMachine {
     /// The rigid model at a steady speed, theta' = J^-1 p': per arm the joint's friction f(theta') through the gearbox
     /// as `rigid_solve` takes it, f / (i loss), plus the motor shaft's friction (with the gearbox's drag) at i theta'.
     /// The loss factor is the one of what the gearbox passes at rest, f - Q_g, as in `rigid_solve`; the weight's lossless torque
-    /// is the rigid feedforward's, so the loss on the weight is part of what this returns. The brake is released and the
-    /// stops are not touched in a move.
+    /// is the rigid feedforward's, so the loss on the weight is part of what this returns; so is the loss on the speed's
+    /// own torque at the arm, I_b theta'' at p'' = 0 with theta'' = -J^-1 J_x^-1 w (the feedforward's, loss-free). The
+    /// brake is released and the stops are not touched in a move.
     fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
-        let t = self.legs.inverse([pos[0], pos[1]]).unwrap_or([f64::NAN; 2]);
+        let p = [pos[0], pos[1]];
+        let t = self.legs.inverse(p).unwrap_or([f64::NAN; 2]);
         let (_, j) = self.pose(t);
-        let w = inverse(&j).map_or([f64::NAN; 2], |inv| mul(&inv, [vel[0], vel[1]]));
+        let inv = inverse(&j).unwrap_or([[f64::NAN; 2]; 2]);
+        let pv = [vel[0], vel[1]];
+        let w = mul(&inv, pv);
+        let bend = self.legs.velocity_term(t, p, w, pv).unwrap_or([f64::NAN; 2]);
+        let arm_acc = mul(&inv, bend.map(|b| -b));
         let gravity = self.load(t, [0.0; 2]).2;
         for k in 0..2 {
             let joint = &self.joints[k];
-            let at_arm = joint.friction.torque(w[k]);
-            let loss = steady_loss(&joint.gearbox, at_arm - gravity[k], w[k]);
-            // The loss acts on the weight too: what it adds over the lossless weight torque (-gravity / i) is friction.
-            out[k] = joint.shaft.torque(joint.ratio() * w[k])
-                + ((at_arm - gravity[k]) / loss + gravity[k]) / joint.ratio();
+            let moving = self.arm_inertia * arm_acc[k];
+            let passed = moving + joint.friction.torque(w[k]) - gravity[k];
+            let loss = steady_loss(&joint.gearbox, passed, w[k]);
+            // The loss acts on the weight and the speed's torque too: what it adds over their lossless torques (the
+            // rigid feedforward's) is friction.
+            out[k] = joint.shaft.torque(joint.ratio() * w[k]) + (passed / loss - moving + gravity[k]) / joint.ratio();
         }
     }
 

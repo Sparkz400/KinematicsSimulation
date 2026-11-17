@@ -388,9 +388,9 @@ fn the_linkage_holds_the_plate_at_the_centre_with_the_hand_calculated_torque() {
 /// microsecond along the model's rates, the Jacobian by differences) are the loss-free feedforward plus
 /// `steady_friction`: as shipped (the gearbox's drag on, its efficiency at part load near 1) to 1e-12 N m, and with a
 /// plain efficiency of 0.94, where lifting takes more than lowering gives back (the loss on the weight), to 2e-4 of the
-/// torque: 4e-5 at 0.05 m/s (the loss on the velocity terms, which the feedforward leaves loss-free), 1.2e-4 at 0.01 m/s,
-/// where the efficiency fades over the power and the model takes the factor of the torque going in at the loss-free
-/// acceleration. `linkage::steady_loss` takes it of the torque going in (output / loss); of the output it missed by
+/// torque: 7e-6 at 0.05 m/s up, down or sideways (4e-5 before `steady_friction` took the loss on the velocity terms too),
+/// 5.5e-5 at 0.05 m/s aslant and 1.3e-4 at 0.01 m/s, where the efficiency fades over the power and the model takes the
+/// factor of the torque going in at the loss-free acceleration. `linkage::steady_loss` takes it of the torque going in (output / loss); of the output it missed by
 /// 1.2e-3 there.
 #[test]
 fn the_linkage_friction_feedforward_takes_the_loss_on_the_weight() {
@@ -438,6 +438,7 @@ fn the_linkage_friction_feedforward_takes_the_loss_on_the_weight() {
         machine.feedforward_torque_moving(&pos, &vel, &[0.0; 2], &mut ff);
         machine.steady_friction(&pos, &vel, &mut friction);
         for k in 0..2 {
+            println!("drag {drag}, {vel:?}: motor {k}: off {:.2e} of the torque", (t[k] - ff[k] - friction[k]) / t[k]);
             assert!((t[k] - ff[k] - friction[k]).abs() < 2e-4 * t[k].abs(), "drag {drag}, {vel:?}: motor {k}: {t:?} against {ff:?} + {friction:?}");
         }
         if vel[0] == 0.0 {
