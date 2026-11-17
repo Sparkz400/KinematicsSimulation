@@ -377,7 +377,8 @@ torque_constant_at_max_current_nm_a = 0.91743
 brake_torque_nm = 4.0
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 magnet_temperature_coefficient_1_k = -0.0012
-# The rated current: the motor is not named in [parts].
+# [catalogue] 1FK2104-6AF: static torque 3.2 N m at the stall current 3.0 A (motors_s210.csv), as a motor named in
+# [parts] brings it (its rated current is 3.0 A too); effects.iron_loss and the S1 check ("motor-s1") take it.
 stall_current_a = 3.0
 
 # The hoist's motor.
@@ -402,7 +403,9 @@ max_current_a = 24.0
 torque_constant_at_max_current_nm_a = 1.0
 # [estimate] the holding brake of a 1FK2 of shaft height 52
 brake_torque_nm = 12.0
-stall_current_a = 5.6
+# [catalogue] 1FK2105-6AF: static torque 8 N m at the stall current 6.7 A (motors_s210.csv), as a motor named in [parts]
+# brings it; effects.iron_loss and the S1 check ("motor-s1") take it.
+stall_current_a = 6.7
 
 # One drive per motor: the shared table for the bridge and the trolley, [drive.hoist] for the hoist. Cycle times must be
 # whole multiples of sim.dt_s.

@@ -289,11 +289,11 @@ friction_stribeck_rad_s = 2.0
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# [catalogue] 1FK2105-6AF: static torque 8 N m at the stall current 6.7 A (motors_s210.csv), as a motor named in
+# [parts] brings it. With effects.iron_loss the copper loss at it brings the winding to its rated
 # rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
 # starts at kt times it.
-stall_current_a = 4.35
+stall_current_a = 6.7
 [gearbox]
 ratio = 20.0
 efficiency = 0.94
@@ -436,7 +436,7 @@ braking_module = false
 # [estimate] The highest speed the motor may turn at (its datasheet's maximum speed); here the no-load speed, where the
 # torque-speed curve ends. The time-optimal plan turns the motor up to it along that curve; the verdict motor-speed
 # judges the cycle's peak speed against it. A motor by name sets the catalogue's.
-max_speed_rad_s = 615.07
+max_speed_rad_s = 553.9
 blocked_speed_rad_s = 12.57
 blocked_time_s = 3.0
 # effects.drive_monitoring: how a drive stops when the drives trip. "off1" ramps the speed setpoint down in off1_ramp_s

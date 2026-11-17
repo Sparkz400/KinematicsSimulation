@@ -859,8 +859,8 @@ impl TGantry {
     /// [ax, az, ffx, ffz, dsx, dsz, gear a, gear b, into gear a, into gear b].
     ///
     /// The gearbox loses torque only on what it transmits, which is the motor torque minus what
-    /// accelerates the rotor itself. That depends on the acceleration being solved for; three passes
-    /// settle it.
+    /// accelerates the rotor itself. That depends on the acceleration being solved for: the loss factors are taken at
+    /// their fixed point (`mech::settled_loss`).
     fn rigid_solve(&self, s: &[f64], torque: &[f64]) -> [f64; 10] {
         let (r, ratio) = (self.r, self.gearbox.ratio);
         let (mut pos, mut vel) = ([0.0; 2], [0.0; 2]);
@@ -889,8 +889,8 @@ impl TGantry {
             - self.chain_drag(s[2])
             - 0.5 * chain_growth * s[2] * s[2];
         let extra_z = process_z + self.stop_force(1, s[1], s[3]) - idler_z;
-        let (mut loss, mut out) = ([1.0; 2], [0.0; 10]);
-        for _ in 0..3 {
+        // One pass with the loss factors `loss`: the solution, and the factors of the torques it puts into the gearboxes.
+        let pass = |loss: &[f64; 2]| -> ([f64; 10], [f64; 2]) {
             let bx = loss[0] * drive[0] + loss[1] * drive[1] + mesh[0] + mesh[1] - ffx + extra_x + belt_x;
             let bz = loss[0] * drive[0] - loss[1] * drive[1] + mesh[0] - mesh[1] - ffz - self.m_z() * self.g
                 + extra_z
@@ -901,7 +901,7 @@ impl TGantry {
             let (ax, az) = ((bx * (mz + p) - q * bz) / det, ((mx + p) * bz - q * bx) / det);
             let through_gear = [drive[0] - rotor * (ax + az), drive[1] - rotor * (ax - az)];
             // The gearbox outputs carry what the rotors' own acceleration and the losses of this pass leave.
-            out = [
+            let out = [
                 ax,
                 az,
                 ffx,
@@ -913,9 +913,11 @@ impl TGantry {
                 through_gear[0] * r,
                 through_gear[1] * r,
             ];
-            loss = std::array::from_fn(|k| self.gears[k].loss_factor(through_gear[k] * r, vel[k] / ratio));
-        }
-        out
+            (out, std::array::from_fn(|k| self.gears[k].loss_factor(through_gear[k] * r, vel[k] / ratio)))
+        };
+        // The loss factors at their fixed point (`mech::settled_loss`); three passes left up to 1.5e-4 of the acceleration
+        // on the shipped configs' rigid model.
+        pass(&sim_components::mech::settled_loss([1.0; 2], |loss| pass(loss).1)).0
     }
 
     fn rigid_derivatives(&self, s: &[f64], torque: &[f64], out: &mut [f64]) {
