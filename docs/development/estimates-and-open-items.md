@@ -50,7 +50,8 @@ matter most, and the ones added in November 2026:
 | H4 upper-arm tube | carbon 60 × 2.5 mm, 100 GPa; bending damping 2 % of critical; elbow twist inertia 2.9e-4 kg m² | The D3's tube scaled; the H4 config had no tube. |
 | D4 tool gearbox output inertia | 1e-4 kg m² | Steel disc 50 × 15 mm (7.2e-5) plus the carrier's share. |
 | Five-bar arm tube | 1.2 kg, centre 0.2 m | The uniform tube with the config's inertia. |
-| Five-bar tool turn's velocity gain | 0.0443 N m s/rad | Chosen after the turn became elastic: 0.08 hammers across the play, 0.06 does not. |
+| Crane's gains: velocity gain 0.15 N m s/rad for bridge and trolley, integral time 0.1 s, position gain 10 1/s on all three drives | — | Chosen from measured sweeps so the loops are stable with the elastic drives on and off: the bridge's rotor drives 38 times its own inertia through the gearbox, and the old gain of 2.0 crossed at about 2.4 kHz on the rotor alone and ran away. Lowest phase margin across the bounds without friction 45.7° (40.3° at a position gain of 15, 28° at 30). The rigid bridge loop now crosses at 4.5 Hz; settling is 0.57 mm (was 0.036) against a 50 mm limit. |
+| Five-bar tool turn's velocity gain | 0.033 N m s/rad | Chosen for the loop's margin with the rotor inside the gear's play and no friction: 6.95 dB and 66.6° (18.8 dB with friction). At 0.0443 the margin without friction was 4.0 dB; 0.08 hammers across the play. |
 | Linear delta belt | 1500 J/(kg K), 15 W/(m² K), 60 K allowed rise | Polyurethane with steel cords; a moving belt in still air. |
 | Linear delta rod-joint offsets from the slide | 0 | Festo's moment ratings are not shipped; the guide moments are therefore not judged. |
 | T-gantry beam | 3.5 kg/m, damping 1 % | A light 80 × 80 mm aluminium profile, a bolted structure. |
@@ -69,13 +70,18 @@ matter most, and the ones added in November 2026:
 | Retuned velocity gain keeps the config's crossover over the rotor-side inertia; a linear motor by the whole moving mass | `catalog.rs` (`bounded_gain`, `retuned`) | Fitted on a sweep of 12 cases; knows inertias only. Motors with an inertia ratio above about 25 (EXCT-30, 360 candidates swept) get no stable gain and are rejected by the verdicts. The integral time and position gain did not follow the gain until the fix of 17 November (see section 8). |
 | Iron loss: the shaft's drag is the printed gap k_t·I_N − M_N less the motor's friction; the winding's heat is the thermal split R(I0² − I_N²); both scale with (n/n_N)^1.5 | `drive.rs` | Backed by the printed efficiencies of 144 1FK7/1FT7 rows (the gap is a median 2.9 times the thermal split). The friction subtracted is the config's estimate. |
 | The field-weakening d current uses the unsaturated back-EMF | `drive.rs` | With the saturated one braking beyond the curve ran away; costs 3.6 % torque at 380 rad/s on the test motor. |
+| The current controller's back-EMF feedforward uses the cold magnets' flux; the winding's own back-EMF follows the magnet temperature | `drive.rs` (`current_control`) | A drive does not measure its rotor's temperature. With `effects.magnet_temperature` on, the current integrator makes up the difference (the flux change, about 0.1 % per kelvin, of the back-EMF). The field-weakening d current does use the warm flux: an idealised controller there. |
+| Without `motor.stall_current_a` the torque-speed chart draws the rated torque as a flat S1 line and no `motor-s1` verdict is given | `drive.rs` (`s1_torque`), `analysis.rs` | The line is on the safe side below the rated speed; the motor is then judged by its thermal model alone. |
+| The loop measurement steps below 10 Hz, at the same spacing, until the loop gain exceeds 1, to 1 Hz at the lowest (`LOOP_FLOOR_HZ`) | `analysis.rs` | The floor is chosen. The old 10 Hz floor hid a hoist loop crossing at about 8 Hz with 29° to 31° at the bounds. A test that asked every machine for 4 Hz of position-loop band now asks for the smaller of 4 Hz and 0.8·Kv/2π: the crane has 1.6 to 1.9 Hz. |
 | Overmodulation carries the fundamental only (2√3/π three-phase, 4/π stepper bridges) | `drive.rs` | No harmonic loss. |
 | S1 curve of a Siemens S210 motor: the vendor's graph, scaled to the printed table when within 4 %; beyond its last point the last torque | `catalog/siemens/s1_curves_s210.csv`, `drive.rs` | 74 curves as read, 14 scaled by 0.985 to 1.036, 8 motors keep the straight line. |
 | A duty mix runs each duty in the order given, repeated; S1 and the thermal figure go through the motor's one node | `search.rs` | In the middle regime the order matters. Without `ratings.drive_overload_time_constant_s` the drive current of a mix is the time-weighted RMS. |
 | Planner shares: 0.3 of the jerk for the binormal; ½ of the acceleration limit for a slerp's bend; 0.8 torque and tension reserve; 1 % of the speed kept back at least (`speed_kept_of`); 32 grid steps for the tops; interpolation allowance 0.0851·J·h (C2) or 2/3·J·h (Hermite) | `path.rs` | A torsioned corner runs 9 % slower than a planar one; the tension reserve costs 1.9 % (planar) and 5.6 % (spatial) of the cable robots' time-optimal cycle; a fitting range narrower than 1/32 of the span can be missed. |
 | Friction is not counted as helping while braking | `path.rs` | Conservative. |
 | Fit statistics: `PER_AXIS_SPREAD` 0.05, `REPEATABILITY` 1e-3, the larger of two error estimates, a non-central window only when 10 times smoother | `identify.rs`, `trace.rs` | The row-wise error is conservative (about 8 times the seed scatter on the elastic arm). |
-| Sweep fit: the probe's exponent, at least half its step; S1 curve tolerance 2 % or half the last printed digit | `identify.rs`, `catalog/tools` | — |
+| Sweep fit: the stated error's exponent is measured over one whole probe step (a factor 1.1); S1 curve tolerance 2 % or half the last printed digit | `identify.rs`, `catalog/tools` | Half a step measured the sweep's resolution (0.23 where the T-gantry's belt mode moves as k^0.37). |
+| Input shaper on a machine that changes (a payload gripped or let go): the delays go from the old to the new period along a quintic smoothstep, none changing faster than 0.1 of elapsed time (`SHAPER_RAMP_RATE`) | `control.rs` | The rate is chosen, not derived. During the ramp the shaper is tuned between the two resonances; a higher rate shortens that but lets the delayed copies run further off the plan's speed (now 0.9 to 1.1 of it). A period that follows the pose alone does not ramp. |
+| An arm's rest-sag allowance (`rest_sag`): the largest sag over 5 places per axis in every combination, times 1.1 | `chain.rs` | Corners and centre alone missed the largest sag (3.75 mrad on the URDF arm against an allowance of 3.05; now 4.08). |
 | Self-locking worm: Coulomb friction on both flanks; in the rigid model the overhauling flank takes the statically held torque (a Painlevé regularisation); stick below 1e-3 rad/s over 1 ms | `sim-netlist/src/worm.rs` | Rigid and elastic models agree at steady speed and differ in a transient: the elastic worm jams within milliseconds when a lowering load is left to stop. |
 | Mesh friction of a gear with no back efficiency of its own gives 1/(2 − η) driven back, the loss factor η | `mech.rs` | About (1 − η)², 1 % at 0.9. |
 | Behind a converter Dahl's law acts on the combined twist | `transmission.rs` | Only the small-amplitude stiffness and the sliding level are exact. |
@@ -101,7 +107,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | --- | --- | --- |
 | The cables' own inertia; the lift of cable from the drum to the pulley; the sag's weight changing with the pose | cable robots | 0.5 % of the spatial platform's mass; 0.05 N; 5e-5 N. The sag model is a shallow parabola, 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
 | The rotors' gyroscopic coupling with the legs' swing (it is in the frame's reaction only); the rods' faces against platform and base | hexapod, tripod, rotary hexapod | About 0.015 N m (hand estimate). |
-| A slack sling: with the hook block and the floor contact on, the sling is a rod | crane | Not measured; the sling pushes where it should go slack. Only the hook block was run on a full cycle; rope mass, elastic drives and bridge skew passed their own tests and a 0.2 s run. |
+| A slack sling: with the hook block and the floor contact on, the sling is a rod | crane | Not measured; the sling pushes where it should go slack. The hook block and the elastic drives were run on a full cycle; rope mass and bridge skew passed their own tests and a 0.2 s run. |
 | Link bending together with parallelogram bars of their own (refused); the palletiser's rod and crank (shipped bar arrays empty) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured in the test case). |
 | The belt runs' sideways offset on the leaning Z axis; the belt runs riding on the beam's vertical mode | T-gantry | A first-order moment (T₁ − T₃)·0.04 m; the beam mode would fall 0.9 % (59.32 to 58.77 Hz). |
 | Angular momentum of the T-gantry crate against its machine file is not compared | T-gantry | Different origins and belt-run geometry. |
@@ -112,12 +118,13 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | A contact that is not at the tool is pushed at the motors (machine crates, linkage, delta, scissor files) | obstacle contact | A load on a soft belt swings on by the belt's stretch (millimetres at 1 m/s). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
 | The stepper's detent while disabled | stepper | Up to T_d/(4N) appears or disappears from the budget at an enable. |
 | A loop that crosses a backlash, in the margin measurement | `sim-cli margins` | It measures the motor alone inside its play and called a hammering loop stable (8.1 dB): such a loop needs a time run. |
+| A cam changed by a reconfigure while it runs | input shaper | A delayed copy is read against the new cam for up to one shaper span. A fix (each stored plan keeps its cam's curve) is written and its own test passes, but the other shaper tests were not re-run on it, so it is not merged: branch `worktree-agent-ae9f112be15454252`, uncommitted in its worktree. |
 | `mode_shape` of the five-bar | five-bar | Display only. |
 | Run files recorded before the signal `setpoint_age` | `charts.rs` | The tool error falls back to the held setpoint: up to one cycle's travel (0.79 against 0.18 mm on the T-gantry). |
 
-## 5. The 24 `shortcut:` comments still in the code
+## 5. The 26 `shortcut:` comments still in the code
 
-`git grep "shortcut:"` lists them. None is an effect that could be modelled with data at hand.
+`git grep "shortcut:"` lists them (23 in the Rust crates, 3 in the Python tools). None is an effect that could be modelled with data at hand.
 
 - **Need data (section 1):** standstill values, winding resistance, base-load current, adapter plates
   (`catalog.rs`, `catalog/mechanics.rs`); the S3 line (`charts.rs`); the rotor's temperature
@@ -145,7 +152,7 @@ verified the model by hand values and runs and found it ready to switch on.
 | `effects.table_twist` | cam and Geneva indexers | Fit. |
 | `effects.follower_lift_off` | disc cam | Fit; adds 5 N of guide friction that the model without it does not have. |
 | `effects.beam_vertical_mode` | T-gantry, its machine file | Fit; the beam's mass and stiffness are estimates. |
-| `effects.rope_mass`, `effects.hook_block`, `effects.joint_elasticity`, `effects.bridge_skew`, `effects.floor_contact` | crane | Verified by their own tests; see section 4 for what was not run. |
+| `effects.rope_mass`, `effects.hook_block`, `effects.joint_elasticity`, `effects.bridge_skew`, `effects.floor_contact` | crane | Verified by their own tests; see section 4 for what was not run. `effects.joint_elasticity` is fit to switch on since the gains of section 2 (bridge 177 Hz, 51.7°, 9.7 dB; trolley 183 Hz, 51.0°, 9.9 dB; hoist 49.5 Hz, 78.2°, 20.7 dB), and its cycle verdicts match the rigid ones. |
 | `drive.overmodulation` | every drive | Off; verified. |
 
 Always on since November 2026 (they changed shipped figures): the legs' bodies on the hexapod and
@@ -183,15 +190,72 @@ commanded acceleration.
   in the machine files' lowest mode (existing code: the five-axis file's resonance was 71.3 Hz, is
   43.6 Hz), the D3's tube inertia (existing code: gearbox modes about 40 % low), a config helper that
   silently dropped all but its first line.
-- **The final full run after all of this: see the end of this file.**
+- The final full run after all of this (17 November): 2,493 tests; 2,472 passed at first, 18 failed
+  and 3 timed out. After the fixes a second full run: 2,488 passed, 2 failed, 3 timed out (the app's
+  optimiser test on three machines, which passes alone in under five minutes). The two failures were
+  the input shaper's and were closed afterwards by reading the plan itself between cycles and by the
+  ramp of section 3; their fix ran the shaper's tests of every machine (40 of 40) and the shared
+  components' tests (394 of 394), not the whole suite again. Format, clippy, doc tests, the web
+  view's and the Python package's tests and the catalogue checks pass.
+- What the final run corrected in the models: thermal values not passed on through the base mount
+  (the linear delta on a base lost its belts' thermal resistance); the tool turn's gain of the
+  five-bar (section 2); the arm's sag allowance and the sweep fit's error (section 3). The measured
+  ball screw comparison moved in one figure: the constant-speed run's worst sample is 3.62 N m (was
+  3.65) since the screw is driven back at its own efficiency (0.98963 against 0.98972 forward); the
+  S-profile RMS stays 0.368 N m.
+- The synthetic belt dataset was recorded by an older model (its stiffness fitted as 1.027 ± 0.006
+  of the config's) and was regenerated; a test now checks a fresh trace fits its own config.
+- Verdicts of every shipped machine: all machine files pass; of the default configs only the crane
+  fails (residual sway 0.323 against 0.05, and the warm start that follows from it, with the gains of
+  section 2), which is what
+  it ships to show without input shaping.
 
-## 9. Documents that do not match the program yet
+## 9. Documents: what was regenerated and what was not
 
-- `docs/user-guide.md`, `docs/de/benutzerhandbuch.md`: worked command outputs (many were stale before
-  November 2026, and the figures moved again).
-- `docs/config-reference.md`, `docs/validation.md`, `docs/model-reference.md`: figures quoted from
-  runs (corner times, the delta line, the optimiser, T-gantry worst-corner figures, mode tables).
-- `docs/fmi.md`: FMU output counts and validation logs (signals were added).
-- `docs/de/*`: statements changed in the English docs.
+Regenerated on 17 November from runs on the merged build, or checked against the code:
 
-These are regenerated after the final run.
+- `docs/config-reference.md`: every key the program reads.
+- `docs/model-reference.md` from the top to "Motion controller": components, drive and every machine,
+  with new sections for the machines that had none.
+- `docs/user-guide.md` and `docs/de/benutzerhandbuch.md`: all sections except the blocks listed below.
+
+Not regenerated (the work was stopped at a deadline); old figures still stand there:
+
+- `docs/model-reference.md` from "Motion controller" to the end: not checked against the code. Its
+  "Known shortcuts" table has 5 rows against the 26 comments, three of them no longer in the code, and
+  five sentences in the text name shortcuts that are gone (rack feed force, `arc_on`'s slerp, the damped
+  EI shapers, the holding brake in the fault reaction, the conveyor's paragraph).
+- `docs/fmi.md` and `docs/validation.md` (apart from the measured ball screw and the margins text).
+- User guides, "Shorten a cycle": the EXCT-30 output block is new (2.048 to 1.756 s) but its prose
+  still says 1.49 s, 1.59 s and 387 cycles; the default gantry's figures (now 6.08 to 3.248 s) and the
+  `--worst`, clearance and box runs are old.
+- User guides, "Which drive works best" and "See which unknown parameters matter": the duty-mix
+  example, the `--robust` figures and the `--bands --worst` block with its paragraphs.
+- User guides, "Tune gains and use input shaping": outputs were regenerated before the shaper and
+  crane merges and not re-run after; the sentence "10 Hz to 2 kHz" lacks the step down to 1 Hz; the
+  gain-tuning paragraph has old margins.
+- User guides: the D3 and D2 `--bands --worst` settling values and the linear delta's phase margin.
+- Figures the agents could not reproduce and left as written are named in the commit messages of
+  17 November.
+
+## 10. Reported by the document agents, not investigated
+
+Each is an observation from a run or from reading, not a confirmed defect.
+
+- `fit --sweep` on the T-gantry against its own default sweep compares the measured 21.6 Hz dip with
+  59.7 Hz from the config and answers × 0.103 (EXCT-30: 20.7 against 60.6 Hz, × 0.400); the single
+  axis matches.
+- With a jerk limit of 2000 m/s³ the time-optimal corner path's motors reach 420.7 and 423.5 rad/s,
+  past the plan's 415.8 and the drive's 420.
+- The warm passes do not settle for a motor near its limit (the 1FK2104-4AF on the EXCT-30:
+  `thermal-warm-start` 6.9 K).
+- `sim-cli modes` prints a damping of 0 for every mode of the wafer handler, and 0.3524 Hz with
+  damping 0 for the crane at 0.5 m.
+- The optimiser reported 46 search cycles where `--runs` defaults to 40.
+- The linear delta at a +20° column incline is refused with "out of range: cycle.segment[2]" and no
+  reason.
+- The T-gantry's `belt-slack` row prints 169.8 against a limit of 0 and says ok (probably the lowest
+  tension).
+- Stale texts: the comment on 235 of 192 N m in the five-bar's default config; the H4's comment that
+  the D3 moves a quarter of the tube's inertia; the usage text saying `--machine-file` is not for
+  `fmu`; the app label "Line module loss while feeding back".
