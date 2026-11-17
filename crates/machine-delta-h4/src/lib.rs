@@ -69,7 +69,7 @@
 //! I_r theta'^2 / 2 + B theta' e' + m L_a^2 e'^2 / 8 with B = (0.284413 - 1/4) m L_a^2 and I_r = I_arm - m L_a^2 / 4 - 2 B.
 //! The coupling B joins the joints' equation to the elbows': (I_r - B^2 (M_d^-1)_ee) theta'' = tau + f_r - B (M_d^-1 f_d)_e
 //! (`joint_load_at`), then M_d q'' = f_d - B theta'' on the elbows' rows (`bend_rates`). (Moving only a quarter of the
-//! inertia, as the D3 does, keeps 1/4 of the cross term's 0.2844 and puts the root's inertia with the elbow held at
+//! inertia without B, as the D3 once did (it takes B the same way now, `sim-netlist`'s spatial delta), keeps 1/4 of the cross term's 0.2844 and puts the root's inertia with the elbow held at
 //! (1/3 - 1/4) m L_a^2 instead of 0.0145 m L_a^2: the gearboxes' modes then stand some 40 % low.)
 
 use sim_components::joint::RotaryJoint;
