@@ -584,9 +584,9 @@ impl Tally {
         let (losses, energies) = (own_named(LOSS_PREFIX), own_named("energy."));
         let mut machine_signals = Vec::new();
         if views {
-            sim.machine.signals(&sim.state, &sim.torque, &mut machine_signals);
+            sim.machine.signals(&sim.state, &sim.machine_torque(), &mut machine_signals);
         } else {
-            sim.machine.base_signals(&sim.state, &sim.torque, &mut machine_signals);
+            sim.machine.base_signals(&sim.state, &sim.machine_torque(), &mut machine_signals);
         }
         let (windings, capacitors) = stored_electrically(sim);
         let (tensions, radial, slack, jumps, detuning) = (
@@ -864,10 +864,10 @@ impl Tally {
         }
         if self.views && (self.parts.iter().any(Option::is_some) || !self.losses.is_empty()) {
             self.machine_signals.clear();
-            sim.machine.signals(&sim.state, &sim.torque, &mut self.machine_signals);
+            sim.machine.signals(&sim.state, &sim.machine_torque(), &mut self.machine_signals);
         } else if self.gear.iter().any(Option::is_some) {
             self.machine_signals.clear();
-            sim.machine.base_signals(&sim.state, &sim.torque, &mut self.machine_signals);
+            sim.machine.base_signals(&sim.state, &sim.machine_torque(), &mut self.machine_signals);
         }
         for (places, sums) in self.parts.iter().zip(&mut self.part_sums).filter_map(|(p, s)| Some((p.as_ref()?, s))) {
             for (&i, (peak, squares)) in places.iter().zip(sums) {
@@ -4196,7 +4196,7 @@ fn loop_point(mut sim: Sim, motor: usize, frequency: f64, amplitude: f64) -> Res
     let (mut seen, mut limited, mut pos, mut speed) =
         (Vec::new(), false, vec![0.0; sim.control.drives.len()], vec![0.0; sim.control.drives.len()]);
     for step in 0..total {
-        let due = sim.step % every == 0;
+        let due = sim.step.is_multiple_of(every);
         let (s, c) = (omega * (sim.time() - t0)).sin_cos();
         if due {
             sim.control.drives[motor].torque_injection = amplitude * s;
@@ -4425,7 +4425,7 @@ pub fn velocity_loop_responses(
     let mut frequencies = loop_frequencies(first)?;
     let machine = (entry.build)(first)?;
     let amplitudes =
-        machine.motors().iter().map(|m| loop_amplitude(entry, first, &m.id)).collect::<Result<Vec<_>, _>>()?;
+        machine.motors().iter().map(|m| loop_amplitude(entry, first, m.id)).collect::<Result<Vec<_>, _>>()?;
     let range = frequencies[0]..=frequencies[frequencies.len() - 1];
     frequencies.extend(machine.modes(&first.f64s("start.pose")?).iter().map(|m| m.hz).filter(|f| range.contains(f)));
     let motors = machine.motors().len();

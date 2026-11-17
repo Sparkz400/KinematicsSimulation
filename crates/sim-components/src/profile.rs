@@ -464,13 +464,15 @@ impl Move {
                 jerk: tightest(&|_, a, _| a.max_jerk),
             };
             // The flange's spin: |w| <= g1 v, and |dw/dt| <= g1 |a| + g2 v^2 with half of its limit at most for the second.
+            // A tool with fewer turn axes (the five-axis arm's rx, ry) leaves the others to the joints, and the flange's
+            // spin judged is the part about the turns it has (`Pose::angular_motion`): the path with the others at 0.
             let turn = ["rx", "ry", "rz"].map(|id| axes.iter().position(|a| a.id == id));
-            if let (Some([most_w, most_a]), [Some(x), Some(y), Some(z)]) = (law.spin, turn) {
-                let [g1, g2] = spin_rates([start[x], start[y], start[z]], [delta[x], delta[y], delta[z]]);
+            if let (Some([most_w, most_a]), true) = (law.spin, turn.iter().any(Option::is_some)) {
+                let (from, by) = (turn.map(|t| t.map_or(0.0, |i| start[i])), turn.map(|t| t.map_or(0.0, |i| delta[i])));
+                let [g1, g2] = spin_rates(from, by);
                 if g1 > 0.0 {
                     let by_curve = if g2 > 0.0 { (0.5 * most_a / g2).sqrt() } else { f64::INFINITY };
                     limits.vel = limits.vel.min(most_w / g1).min(by_curve);
-                    let (from, by) = ([start[x], start[y], start[z]], [delta[x], delta[y], delta[z]]);
                     limits = spun(limits, law.shape, from, by, [g1, g2], most_a);
                 }
             }

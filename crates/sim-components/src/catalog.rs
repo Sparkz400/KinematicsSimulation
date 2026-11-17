@@ -1107,10 +1107,11 @@ fn strain_wave(row: &Row) -> bool {
 /// gear: `STRAIN_WAVE_EFFICIENCY`) and "gearbox-mass" (no mass printed; the search ranks by the motor's alone).
 pub fn estimated_gearbox_data(name: &str) -> Vec<&'static str> {
     let mut out = Vec::new();
-    if let Some((g, _)) = mechanics::find_gearbox(name) {
-        if printed_efficiency(&g.row).is_none() && strain_wave(&g.row) {
-            out.push("gearbox-efficiency");
-        }
+    if let Some((g, _)) = mechanics::find_gearbox(name)
+        && printed_efficiency(&g.row).is_none()
+        && strain_wave(&g.row)
+    {
+        out.push("gearbox-efficiency");
     }
     if gearbox_mass(name).is_none() {
         out.push("gearbox-mass");

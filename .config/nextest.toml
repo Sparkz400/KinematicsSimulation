@@ -481,6 +481,13 @@ default-filter = "not ((package(sim-machines) & binary(control) & test(/^across_
 [profile.full.junit]
 path = "junit.xml"
 
+# The margin sweeps when run here (`--ignore-default-filter -E "not default()"`): the spatial cable robot's without
+# friction takes 768 s alone on 16 threads (17 November 2026), too close to the 15 minutes above for a machine under any
+# other load; 30 minutes is twice what it needs. Not in the default profile, whose overrides would also cut CI's 90.
+[[profile.full.overrides]]
+filter = "package(sim-machines) & binary(control) & test(/^across_the_bounds::/)"
+slow-timeout = { period = "60s", terminate-after = 30 }
+
 # CI on a push to main: everything `full` runs, with the CI time limit.
 [profile.ci-full]
 slow-timeout = { period = "60s", terminate-after = 30 }

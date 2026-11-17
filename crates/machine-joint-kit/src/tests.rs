@@ -1810,6 +1810,41 @@ fn the_flanges_angular_limits_are_judged_on_the_planned_motion() {
     println!("six-axis arm, too fast: {judged:?}");
     let speed = judged.iter().find(|v| v.check == "tool-angular-speed").unwrap();
     assert!(!speed.ok && speed.value > 2.0 && speed.limit == 1.5, "{speed:?}");
+    // The five-axis arm: what is judged is the turn of where the tool points, which its rx, ry stand for; the turn about
+    // it is the joints'. Its cycle's tilt of 0.3 rad about x runs at the rx limits (1.5 rad/s, 8 rad/s^2): the plan
+    // reaches 8.000 rad/s^2 and 1.350 rad/s (the S-curve's top speed on 0.3 rad). Judged whole, the flange's spin about
+    // where it points as the arm swings across (17 November 2026: 2.86 rad/s, 23.4 rad/s^2) failed both.
+    let cfg = tool_config(&URDF_ARM, ARM5_TOOL_CONFIG);
+    let load = analyse_cycle_with(&mut Sim::new(&URDF_ARM, &cfg).unwrap(), false).unwrap();
+    let judged = angular(&cfg, &load);
+    println!("five-axis arm: {judged:?}");
+    let value = |check: &str| judged.iter().find(|v| v.check == check).unwrap();
+    let (speed, acceleration) = (value("tool-angular-speed"), value("tool-angular-acceleration"));
+    assert!(speed.ok && (speed.value - 1.350).abs() < 1e-3, "{speed:?}");
+    assert!(acceleration.ok && (acceleration.value - 8.0).abs() < 1e-3, "{acceleration:?}");
+}
+
+/// The five-axis arm's rx, ry are where the tool points: the direction d = R R_0^T e_z, which is e_z at zero joints, is
+/// exp(rx, ry, 0) e_z at every pose, whatever the arm's turn about d (by hand: the shortest turn from e_z to d has its
+/// axis e_z x d in the x-y plane). Over the grid of `a_flange_pointing_down_at_zero_is_at_no_turn`, to 1e-9.
+#[test]
+fn the_five_axis_arms_turns_are_where_the_tool_points() {
+    use sim_components::rigid::{exp, matmul, transpose};
+    let cfg = tool_config(&URDF_ARM, ARM5_TOOL_CONFIG);
+    let m = (URDF_ARM.build)(&cfg).unwrap();
+    let chain = arm::chain(&cfg).unwrap();
+    let ratios = cfg.f64s("arm.gear_ratios").unwrap();
+    let zero = chain.tip(&[0.0; 5]).0;
+    let mut motors = [0.0; 5];
+    for k in 0..27 {
+        let f = |i: usize| ((k / 3usize.pow(i as u32)) % 3) as f64 - 1.0;
+        let pose = [0.9 + 0.1 * f(0), 0.2 * f(1), 0.7 + 0.1 * f(2), 0.2 * f(0) * f(1), 0.2 * f(2)];
+        m.inverse(&pose, &mut motors);
+        let joints: Vec<f64> = motors.iter().zip(&ratios).map(|(m, r)| m / r).collect();
+        let turned = matmul(&chain.tip(&joints).0, &transpose(&zero));
+        let want = exp([pose[3], pose[4], 0.0]);
+        assert!((0..3).all(|i| (turned[i][2] - want[i][2]).abs() < 1e-9), "{pose:?}");
+    }
 }
 
 /// The seven-joint arm resolves its spare joint by a walk from the last solution, settled to 1e-13, so the feedforward

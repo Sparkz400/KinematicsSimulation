@@ -280,8 +280,11 @@ Speicher.
   Stellung des ersten Gelenks zu einer Achse (die einer Schiene: siehe
   [Ein Roboter auf einer Schiene](#ein-roboter-auf-einer-schiene)). Die Orientierung ist der
   Drehvektor (Achse mal Winkel, im Basissystem) der Drehung gegen die Orientierung des Flanschs bei Gelenken null: Eine
-  URDF, deren Flansch bei null nach unten zeigt, steht dort bei 0, nicht eine halbe Drehung gegen das Basissystem. Eine
-  Lage bis auf 0,01 rad an einer halben Drehung dagegen wird abgelehnt (`error-arm-orientation-half-turn`): Dort springt
+  URDF, deren Flansch bei null nach unten zeigt, steht dort bei 0, nicht eine halbe Drehung gegen das Basissystem. Mit
+  zwei der drei Drehungen (rx, ry des Fünfachsarms) sagen sie, wohin das Werkzeug zeigt: die kürzeste Drehung von der
+  Richtung des Flanschs entlang der fehlenden Achse bei Gelenken null zu der, in die es jetzt zeigt, ihr fehlender Teil
+  0, wie auch immer die Gelenke das Werkzeug um diese Richtung drehen; die Winkelprüfungen des Flanschs beurteilen nur
+  diese Drehung, und eine Bewegung hält sie mit der fehlenden Drehung bei 0 ein. Eine Lage bis auf 0,01 rad an einer halben Drehung dagegen wird abgelehnt (`error-arm-orientation-half-turn`): Dort springt
   der Drehvektor. Die Gelenke mit gedämpften kleinsten Quadraten auf der Jacobi-Matrix der Werkzeugachsen (zentrale
   Differenzen; dq = J^T (J J^T + lambda^2 I)^-1 e, lambda 1 mm, die Drehungen mal dem Abstand des Flanschs von Gelenk 2
   in `kinematics.home_joints`), entlang der Geraden von der letzten Lösung zum Ziel in Schritten von höchstens 20 mm
