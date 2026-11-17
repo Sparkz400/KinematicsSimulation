@@ -804,7 +804,7 @@ id = "a1"
 length_m = 0.3
 axes = { x = 1, y = 1 }
 pulleys = { pulley_a = 1 }
-route = ["head", "gantry_left", "pulley_a"]
+route = ["head", "gantry_left_a", "pulley_a"]
 pos = [450, -80]
 
 [[machine.section]]
@@ -812,7 +812,7 @@ id = "a2"
 length_m = 1.6
 axes = { x = -1, y = -1 }
 pulleys = { pulley_a = -1 }
-route = ["pulley_a", "back_left", "back_right", "gantry_right", "head"]
+route = ["pulley_a", "back_left_a", "back_right_a", "gantry_right_a", "head"]
 pos = [450, 60]
 
 # Belt B, crossing A: 1.0 m + x - y from the head to motor B, 1.0 m - x + y back.
@@ -821,7 +821,7 @@ id = "b1"
 length_m = 1.0
 axes = { x = 1, y = -1 }
 pulleys = { pulley_b = 1 }
-route = ["head", "gantry_left", "back_left", "back_right", "pulley_b"]
+route = ["head", "gantry_left_b", "back_left_b", "back_right_b", "pulley_b"]
 pos = [450, 240]
 
 [[machine.section]]
@@ -829,7 +829,7 @@ id = "b2"
 length_m = 1.0
 axes = { x = -1, y = 1 }
 pulleys = { pulley_b = -1 }
-route = ["pulley_b", "gantry_right", "head"]
+route = ["pulley_b", "gantry_right_b", "head"]
 pos = [450, 380]
 
 [[machine.body]]
@@ -860,12 +860,11 @@ friction = "friction_z"
 carries = ["head"]
 pos = [900, 300]
 
-# The idlers the belts run over (effects.idlers): two at the back corners, where belt A passes at x + y and belt B at
-# x - y (both run past them), and one at each end of the gantry, which moves with Y.
-# shortcut: one idler per corner for both belts, with the speed of the faster; a real CoreXY has one per belt. The idler
-# table is the T-gantry's.
+# The idlers the belts run over (effects.idlers): one per belt at each corner both belts pass, two at the back corners,
+# where belt A runs at x + y and belt B at x - y over ground, and two at each end of the gantry, which moves with Y; there
+# a belt's speed relative to the gantry is the head's along X for both.
 [[machine.idler]]
-id = "back_left"
+id = "back_left_a"
 speed = { x = 1, y = 1 }
 radius_m = 0.012
 inertia_kgm2 = 2.0e-6
@@ -874,8 +873,17 @@ at_m = [-0.08, 0.63, 0.06]
 pos = [1050, 0]
 
 [[machine.idler]]
-id = "back_right"
+id = "back_left_b"
 speed = { x = 1, y = -1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+at_m = [-0.08, 0.63, 0.06]
+pos = [1200, 0]
+
+[[machine.idler]]
+id = "back_right_a"
+speed = { x = 1, y = 1 }
 radius_m = 0.012
 inertia_kgm2 = 2.0e-6
 friction_nm = 0.002
@@ -883,7 +891,16 @@ at_m = [0.58, 0.63, 0.06]
 pos = [1050, 100]
 
 [[machine.idler]]
-id = "gantry_left"
+id = "back_right_b"
+speed = { x = 1, y = -1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+at_m = [0.58, 0.63, 0.06]
+pos = [1200, 100]
+
+[[machine.idler]]
+id = "gantry_left_a"
 speed = { x = 1 }
 radius_m = 0.012
 inertia_kgm2 = 2.0e-6
@@ -893,7 +910,17 @@ at_m = [-0.08, 0.0, 0.0]
 pos = [1050, 200]
 
 [[machine.idler]]
-id = "gantry_right"
+id = "gantry_left_b"
+speed = { x = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "gantry"
+at_m = [-0.08, 0.0, 0.0]
+pos = [1200, 200]
+
+[[machine.idler]]
+id = "gantry_right_a"
 speed = { x = 1 }
 radius_m = 0.012
 inertia_kgm2 = 2.0e-6
@@ -901,6 +928,16 @@ friction_nm = 0.002
 body = "gantry"
 at_m = [0.58, 0.0, 0.0]
 pos = [1050, 300]
+
+[[machine.idler]]
+id = "gantry_right_b"
+speed = { x = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "gantry"
+at_m = [0.58, 0.0, 0.0]
+pos = [1200, 300]
 
 # The free spans along the routes, with the belt's speed over ground per speed of X and Y along x and y of the 3D view,
 # so that the belts' mass is summed run by run. Pulley A turns with r da = dx + dy, B with r db = dx - dy; the runs at

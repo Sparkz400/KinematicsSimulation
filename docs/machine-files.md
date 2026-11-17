@@ -881,8 +881,6 @@ machine; nothing about them is particular to machine files.
   `inertia_kgm2`. A tool centre point needs three straight axes square to each other (the 3D view's x, y, z) and the
   rotaries on the tool's side (a head), or a rotary table carrying the workpiece (`tcp.table`). The analysis's settling
   and path errors add a rotary axis's error in rad to the straight axes' in m.
-- `effects.belt_tooth_jump` together with a screw, rack, linear motor or rotary: its states are laid out per motor, and
-  a motor without a pulley has none; the file is refused.
 - A screw's stiffness is the one at its softest nut position for the whole stroke, as in the joint kit; its preload's
   drag sits at the motor with a smoothing in rad/s.
 - Modes other than the belt's: the frame enters the belt's mode where it sways, but the guides' and the motors' own
