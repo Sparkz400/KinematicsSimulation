@@ -1363,7 +1363,11 @@ pub struct Verdict {
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
 /// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
 /// own keys (`drive::Motor`: a stepper's and an induction motor's).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 70] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 73] = [
+    // The gear's presliding stiffnesses over K1 and the rack's pressure angle (`mech::Gearbox`, `transmission::RackPinion`).
+    "gearbox.hysteresis_stiffness_factor",
+    "gearbox.mesh_stiffness_factor",
+    "rack.pressure_angle_deg",
     // The housing's highest rise (`charts::utilisation`).
     "ratings.housing_max_rise_k",
     // The maker's printed S1 curve (`s1_torque`).

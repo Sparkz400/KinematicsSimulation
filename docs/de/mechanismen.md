@@ -112,7 +112,9 @@ Teilkreisradius m z / (2 cos beta). Die Prüfung `rack-feed-force` hält die hö
 `rack.1.feed_force`: die Kraft an der Last durch den Wirkungsgrad der Zahnstange, solange das Ritzel treibt, mal ihm,
 solange die Last zurücktreibt) gegen `rated_feed_force_n` durch den Anwendungsfaktor K_A (`service_factor`). Die Hersteller von Zahnstangen veröffentlichen die
 zulässige Vorschubkraft eines Paares, keine Lebensdauerformel; daher hat die Zahnstange keine Lebensdauerprüfung, das
-Planetengetriebe davor hat seine eigene (`gearbox-life`).
+Planetengetriebe davor hat seine eigene (`gearbox-life`). `pressure_angle_deg` (Normalschnitt, optional, 20 nach DIN 867,
+wo er fehlt, unter 45) ergibt die Kraft, die Ritzel und Zahnstange auseinanderdrückt, F tan(alpha) / cos(beta), die die
+Radiallast des Ritzels auf der Getriebewelle mitzählt.
 
 ## Linearmotor
 
