@@ -3526,12 +3526,12 @@ impl Machine for ConfigMachine {
 
     /// The guides' Stribeck rise per motor, [level, speed]: the friction beyond c + b v is level exp(-(v / speed)^2) at
     /// the speed v along the path, level the guides' (stiction - Coulomb) at their load at rest taken to the motor as
-    /// `rigid_friction` does, signed by the way each axis turns. A motor behind several guides gets their levels' sum and
-    /// the levels' weighted mean of their Stribeck speeds along the path (a guide's Stribeck speed over its axis's rate).
-    fn rigid_friction_rise(&self, pos: &[f64], dir: &[f64], out: &mut Vec<[f64; 2]>) {
+    /// `rigid_friction` does, signed by the way each axis turns, and its Stribeck speed along the path (the guide's over
+    /// its axis's rate): a pair per guide that reaches the motor.
+    fn rigid_friction_rise(&self, pos: &[f64], dir: &[f64], out: &mut Vec<Vec<[f64; 2]>>) {
         let (q, rate, _) = self.joint_motion(pos, dir, &vec![0.0; pos.len()]);
         let (n, m) = (self.n(), self.m());
-        let (mut level, mut weighted, mut size) = (vec![0.0; m], vec![0.0; m], vec![0.0; m]);
+        let mut rises = vec![Vec::new(); m];
         for (g, scale) in self.guides.iter().zip(self.load_scales(&q, &vec![0.0; m])) {
             let (axis, turning) = (g.axis, rate[g.axis]);
             if !g.friction.on || turning == 0.0 {
@@ -3540,13 +3540,11 @@ impl Machine for ConfigMachine {
             let mut rise = vec![0.0; n];
             rise[axis] = scale * (g.friction.stiction - g.friction.coulomb) * turning.signum();
             let speed = g.friction.stribeck_v / turning.abs();
-            for (kk, torque) in self.to_motors(&rise).into_iter().enumerate() {
-                level[kk] += torque;
-                weighted[kk] += torque.abs() * speed;
-                size[kk] += torque.abs();
+            for (kk, torque) in self.to_motors(&rise).into_iter().enumerate().filter(|(_, t)| *t != 0.0) {
+                rises[kk].push([torque, speed]);
             }
         }
-        out.extend((0..m).map(|kk| [level[kk], if size[kk] > 0.0 { weighted[kk] / size[kk] } else { 1.0 }]));
+        out.extend(rises);
     }
 
     /// `rigid_solve` at a steady speed: the guides (`Lugre::feedforward`, at their load at rest), idlers and cable chains

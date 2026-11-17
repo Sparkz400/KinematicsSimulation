@@ -462,7 +462,40 @@ fn the_guides_stribeck_rise_is_offered_to_the_planner() {
     assert_eq!((plain.len(), rise.len()), (2, 2));
     for (c, r) in plain.iter().zip(&rise) {
         assert!(c[0].abs() > 0.0, "{plain:?}");
-        assert!((r[0] - c[0] * 5.0 / 15.0).abs() < 1e-12 * c[0].abs(), "{plain:?} against {rise:?}");
-        assert!((r[1] - 0.01).abs() < 1e-12, "{rise:?}");
+        assert_eq!(r.len(), 1, "{rise:?}");
+        assert!((r[0][0] - c[0] * 5.0 / 15.0).abs() < 1e-12 * c[0].abs(), "{plain:?} against {rise:?}");
+        assert!((r[0][1] - 0.01).abs() < 1e-12, "{rise:?}");
+    }
+}
+
+/// Two guides on one motor keep their own rises: the CoreXY's motors both drive X (friction_z: Coulomb 10 N, stiction 14 N)
+/// and Y (friction_x: 15 N, 20 N), Stribeck speed 10 mm/s each. Along a path that moves X at 1 and Y at 0.5 per unit, each motor has the
+/// X guide's rise, 4 / 10 of the Coulomb torque X alone gives it, over 0.01 / 1 = 0.01, and the Y guide's, 5 / 15 of
+/// what Y alone gives, over 0.01 / 0.5 = 0.02: two Stribeck speeds, which no one pair can stand for.
+#[test]
+fn each_guide_on_a_motor_keeps_its_own_stribeck_rise() {
+    let machine = sim_netlist::build(&shipped("corexy.toml")).unwrap();
+    let alone = |dir: [f64; 2]| {
+        let mut plain = Vec::new();
+        machine.rigid_friction(&[0.25, 0.25], &dir, &mut plain);
+        plain
+    };
+    let (x, y) = (alone([1.0, 0.0]), alone([0.0, 1.0]));
+    let mut rise = Vec::new();
+    machine.rigid_friction_rise(&[0.25, 0.25], &[1.0, 0.5], &mut rise);
+    assert_eq!(rise.len(), 2);
+    for kk in 0..2 {
+        let mut pairs = rise[kk].clone();
+        pairs.sort_by(|a, b| a[1].total_cmp(&b[1]));
+        assert_eq!(pairs.len(), 2, "{rise:?}");
+        for ([level, speed], (by_hand, at)) in
+            pairs.iter().zip([(x[kk][0].abs() * 0.4, 0.01), (y[kk][0].abs() * 5.0 / 15.0, 0.02)])
+        {
+            assert!(
+                by_hand > 0.0 && (level.abs() - by_hand).abs() < 1e-12 * by_hand,
+                "motor {kk}: {pairs:?}, {by_hand}"
+            );
+            assert!((speed - at).abs() < 1e-12, "motor {kk}: {pairs:?}");
+        }
     }
 }
