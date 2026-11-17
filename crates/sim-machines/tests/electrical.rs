@@ -272,8 +272,9 @@ fn the_line_module_is_judged_against_its_ratings() {
 /// The braking resistor's mean power estimated without the simulated DC link (each braking fills the link's capacitors,
 /// what is above their room goes to the resistor, what the motor draws between empties them) stays on the safe side of
 /// the simulated link's: on the T-gantry's motor b the audit's run gave 0.90 W simulated, where the old estimate (all
-/// that is fed back) said 2.56 W. Now (16 November 2026) both give 0.9577 W, to 1e-13: the simulated link keeps the same
-/// energy account (it has no losses of its own), so the estimate is that link's figure; all of it fed back is 2.61 W.
+/// that is fed back) said 2.56 W. Now (17 November 2026) both give 0.95900 W, to 3e-14 (warm start on or off): the
+/// simulated link keeps the same energy account (it has no losses of its own), so the estimate is that link's figure and
+/// leaves nothing out; all of it fed back is 2.61 W.
 #[test]
 fn the_estimated_braking_resistor_power_is_not_below_the_simulated_one() {
     let entry = sim_machines::find("t-gantry").unwrap();
@@ -287,5 +288,6 @@ fn the_estimated_braking_resistor_power_is_not_below_the_simulated_one() {
     };
     let ((estimated, fed_back), (simulated, _)) = (mean(false), mean(true));
     println!("motor b: resistor {estimated} W estimated, {simulated} W simulated, {fed_back} W fed back");
-    assert!(simulated > 0.0 && estimated >= 0.97 * simulated && estimated < fed_back, "{estimated} {simulated}");
+    let same = (estimated - simulated).abs() < 1e-9 * simulated;
+    assert!(simulated > 0.0 && same && estimated < fed_back, "{estimated} {simulated}");
 }
