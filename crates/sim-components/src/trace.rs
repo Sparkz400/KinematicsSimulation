@@ -327,11 +327,16 @@ pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace
 }
 
 /// Speed and acceleration at point `k` of a curve given by its points (at least five), per axis from the quartic through
-/// five neighbouring points that hold `k`: of the five such windows the one whose fourth divided difference is the
-/// smallest (the most central of equals). A planned motion is a piecewise cubic in time (the jerk steps), so a window
+/// five neighbouring points that hold `k`: of the five such windows the most central one whose fourth divided difference
+/// is within `SMOOTHEST` of the smallest. A planned motion is a piecewise cubic in time (the jerk steps), so a window
 /// that does not straddle a step gives the plan's own speed and acceleration, where the central one, straddling it, was
-/// off by about jerk step x row interval in the acceleration and moved a fit by 5 of its standard errors.
+/// off by about jerk step x row interval in the acceleration and moved a fit by 5 of its standard errors. Where the rows
+/// carry noise (setpoints in encoder counts) the windows' differences are all of its size, and the central window,
+/// which amplifies it least (a fifth of what a window at the end does), is kept: always taking the smallest put the
+/// synthetic belt axis's replay at 0.00397 N m RMS, 0.00348 with the cubic before, 0.00311 now (datasets/RESULTS.md).
 fn slopes(points: &[(f64, Vec<f64>)], k: usize) -> [Vec<f64>; 2] {
+    /// How much smoother than the central window another has to be to be taken.
+    const SMOOTHEST: f64 = 10.0;
     let n = points.len();
     let t = |i: usize| points[i].0;
     let starts = || {
@@ -348,11 +353,8 @@ fn slopes(points: &[(f64, Vec<f64>)], k: usize) -> [Vec<f64>; 2] {
                 .sum::<f64>()
                 .abs()
         };
-        let s = starts().into_iter().fold(None, |best: Option<(usize, f64)>, s| match best {
-            Some((_, f)) if f <= fourth(s) => best,
-            _ => Some((s, fourth(s))),
-        });
-        let s = s.map_or(0, |(s, _)| s);
+        let smallest = starts().into_iter().map(fourth).fold(f64::INFINITY, f64::min);
+        let s = starts().into_iter().find(|&s| fourth(s) <= SMOOTHEST * smallest).unwrap_or(0);
         let times: Vec<f64> = (s..s + 5).map(t).collect();
         let w = fornberg(t(k), &times);
         speed[a] = (0..5).map(|j| w[j][1] * points[s + j].1[a]).sum();

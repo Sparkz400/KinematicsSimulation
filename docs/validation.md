@@ -943,9 +943,9 @@ is `machine.toml` as committed:
 
 | Recording | Role | Peak torque | RMS, 1.0.0 | RMS, now | Peak difference, 1.0.0 | now |
 | --- | --- | --- | --- | --- | --- | --- |
-| S-profile | fit | 8.07 N m | 0.857 N m, 10.6 % | 0.370 N m, 4.6 % | 7.39 N m, 92 % | 2.19 N m, 27 % |
-| Sine, 0.1 to 19.9 s | check | 3.52 N m | 0.502 N m, 14.3 % | 0.462 N m, 13.1 % | 1.88 N m, 53 % | 1.20 N m, 34 % |
-| Sine, whole file | check | 34.16 N m | 1.62 N m, 4.7 % | 0.789 N m, 2.3 % | 95 N m, 278 % | 30.0 N m, 88 % |
+| S-profile | fit | 8.07 N m | 0.857 N m, 10.6 % | 0.368 N m, 4.6 % | 7.39 N m, 92 % | 2.17 N m, 27 % |
+| Sine, 0.1 to 19.9 s | check | 3.52 N m | 0.502 N m, 14.3 % | 0.461 N m, 13.1 % | 1.88 N m, 53 % | 1.20 N m, 34 % |
+| Sine, whole file | check | 34.16 N m | 1.62 N m, 4.7 % | 0.719 N m, 2.1 % | 95 N m, 278 % | 27.5 N m, 80 % |
 | Constant speed 0.1 m/s | check | 14.63 N m | 0.746 N m, 5.1 % | 0.896 N m, 6.1 % | 6.17 N m, 42 % | 3.65 N m, 25 % |
 
 On the S-profile, step by step (RMS, peak): the setpoint on the simulator's clock (below) 0.842 N m, 7.23 N m; the
@@ -954,7 +954,10 @@ fitted friction and constant force 0.430, 2.27; the screw's efficiency from its 
 (`effects.screw_lead_efficiency`, 0.990 in place of 0.9) 0.441, 2.26; its Coulomb friction fitted again 0.370, 2.19.
 Before the last two steps (16 November 2026) the table's "now" read 0.430 N m, 5.3 % and 2.27 N m, 28 % on the S-profile;
 0.470, 13.3 % and 1.23, 35 % on the sine; 0.895, 6.1 % and 3.59, 25 % at constant speed. Replaying from the trace's own state changes nothing here (the
-S-profile starts at rest) and the whole sine's jolt from 95 to 30 N m.
+S-profile starts at rest) and the whole sine's jolt from 95 to 30 N m. Since 17 November 2026 the replay runs a drive's
+trace with speeds and accelerations derived per row from the rows around it (`trace::replay`), not a cubic whose
+acceleration steps at every row: S-profile 0.370 to 0.368 N m and 2.19 to 2.17 N m, the sine's window 0.462 to 0.461 and
+1.20 as it was, the whole sine 0.789 to 0.719 and 30.0 to 27.5 N m, constant speed unchanged.
 
 **Following error**, now on the source's clock: S-profile measured 0.0411 rad RMS, simulated 0.0399, their difference
 0.0022 rad (5 % of the measured); sine (0.1 to 19.9 s) 0.0078 against 0.0070, difference 0.0018 rad (23 %); constant
@@ -1079,7 +1082,7 @@ checks the lead read from the article number without the torque fit.
   column's coefficient is 0.0007 N m per N, 0.10 in the nut force: the drive's compensation there did what it should.)
 - The whole sine's start and end: its setpoint starts at 63 mm/s from rest and stops from it at 20 s; the bench jolts
   with 34 N m, the replay with up to 46 N m.
-- The moved mass (above), and the S-profile's peak difference of 2.19 N m at the start of the return (2.62 s), where
+- The moved mass (above), and the S-profile's peak difference of 2.17 N m at the start of the return (2.62 s), where
   the bench's speed loop overshoots more than the stand-in.
 - The torque per force at the table is 0.0078 to 0.0083 N m per N in both nut and drive regressions, 1.23 to 1.30 times
   the lead's 0.04 / 2π = 0.00637: an efficiency of 0.77 to 0.81, or a torque reading, sensor or lead off by that factor.
