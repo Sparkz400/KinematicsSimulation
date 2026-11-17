@@ -2047,6 +2047,7 @@ pub fn with_parts(
 
 /// The config with the parts of `parts` in it, retuned as `with_parts` says.
 pub fn with_named(entry: &MachineEntry, cfg: &Config, parts: &Parts) -> Result<Config, ConfigError> {
+    guide_carriages(cfg)?; // refused here, where every front end resolves its config, not only when a guide is searched
     let mut out = cfg.clone();
     apply_parts(&mut out, parts, Some(entry))?;
     if parts.moves() {
@@ -2616,15 +2617,25 @@ mod tests {
         let row = rows(table("hiwin/linear_guides.csv")).into_iter().find(|r| r["part_number"] == "HGH15CA").unwrap();
         let cfg =
             Config::parse("format_version = 1\n[ratings]\nguide_max_load_n = 1.0\n[slide]\nstroke_m = 0.3\n").unwrap();
-        assert_eq!(guide_carriages(&cfg), 4.0);
+        assert_eq!(guide_carriages(&cfg), Ok(4.0));
         assert!((mechanics::guide_weight(&cfg, &row, 4.0) - 1.94612).abs() < 1e-12);
         let cfg = Config::parse(
             "format_version = 1\n[ratings]\nguide_max_load_n = 1.0\nguide_carriages = 2.0\nguide_rail_length_m = 0.5\n\
              [slide]\nstroke_m = 0.3\n",
         )
         .unwrap();
-        assert_eq!(guide_carriages(&cfg), 2.0);
+        assert_eq!(guide_carriages(&cfg), Ok(2.0));
         assert!((mechanics::guide_weight(&cfg, &row, 4.0) - 2.17).abs() < 1e-12);
+        for bad in ["2.5", "0.0", "-4.0", "\"four\""] {
+            let cfg = Config::parse(&format!(
+                "format_version = 1
+[ratings]
+guide_carriages = {bad}
+"
+            ))
+            .unwrap();
+            assert!(guide_carriages(&cfg).is_err(), "{bad}");
+        }
     }
 
     #[test]
