@@ -814,9 +814,10 @@ fn the_torque_band_expects_the_held_weight_and_trips_on_a_lasting_extra_load() {
     );
 }
 
-/// The same with the guide's and the motor's friction on (no friction feedforward): the monitor expects the friction at
-/// the planned speed (`Machine::steady_friction`) as it expects the weight, so a band of the friction's size at the
-/// cycle's top speed, below the friction itself, trips nothing over the cycle; the lasting extra load still trips.
+/// The same with the guide's and the motor's friction on (no friction feedforward): the monitor expects the friction as
+/// it expects the weight (since 17 November 2026 the model's at the machine's state, before the steady friction at the
+/// planned speed, `Machine::steady_friction`), so a band of the friction's size at the cycle's top speed, below the
+/// friction itself, trips nothing over the cycle; the lasting extra load still trips.
 #[test]
 fn the_torque_band_expects_the_friction_at_the_planned_speed() {
     let run = |process: bool| {
@@ -858,6 +859,73 @@ fn the_torque_band_expects_the_friction_at_the_planned_speed() {
         fault.as_ref().is_some_and(|f| f.monitor == sim_components::fault::Monitor::TorqueBand) && dwelling,
         "{fault:?}, dwelling {dwelling}"
     );
+}
+
+/// The torque-band monitor at the cycle's reversals, the axis standing up with the guide's breakaway (20 N over its 15 N
+/// Coulomb level, Stribeck speed 10 mm/s) and the motor's (0.03 over 0.02 N m) on: it expects the friction the machine's
+/// own model takes of the torque at the machine's state (`motor.m.torque_friction`), so the bristles that hold the
+/// carriage in the dwell and let it go behind the plan are expected as they act. Measured (17 November 2026) over the
+/// reversals (the plan below a tenth of its top speed), where the friction reaches 0.098 N m: the torque less
+/// feedforward, weight and that friction is within 0.038 N m; less the steady friction at the planned speed instead (as
+/// the monitor took it before) 0.089 N m, nine tenths of the friction. What remains, 0.038, is the axis catching up with
+/// the plan after it broke away behind it (at that instant the old expectation is off by as much, 0.0386 against 0.0379:
+/// not friction); without friction 0.0028. So a band of 0.05 N m, half the friction, trips nothing over the cycle, where
+/// the old expectation's 0.089 tripped it; a lasting extra load (a process force of twice the weight) still trips.
+#[test]
+fn the_torque_band_expects_the_model_s_friction_through_a_reversal() {
+    let config = |friction: bool, band: f64, process: bool| {
+        let mut cfg = ideal_rigid();
+        for e in [
+            format!("effects.guide_friction = {friction}"),
+            format!("effects.motor_friction = {friction}"),
+            "effects.motor_stiction = true".into(),
+            "geometry.incline_deg = 90.0".into(),
+            "drive.torque_feedforward_model = \"inertia\"".into(),
+            "effects.drive_monitoring = true".into(),
+            format!("drive.torque_band = {:?}", band / cfg.f64("drive.peak_torque_nm").unwrap()),
+            format!("effects.process_force = {process}"),
+            format!("process.force_x_n = {:?}", 2.0 * 4.0 * G),
+        ] {
+            cfg.set_text(&e).unwrap();
+        }
+        cfg
+    };
+    // Over the reversals (the plan below a tenth of its top speed of 250 rad/s), the most the torque is off by with the
+    // model's friction at the state and with the steady friction at the planned speed, and the most friction there.
+    let reversals = |friction: bool| {
+        let mut sim = Sim::new(&ENTRY, &config(friction, 100.0, false)).unwrap();
+        let at = sim.machine.signal_infos().iter().position(|s| s.id == "motor.m.torque_friction").unwrap();
+        sim.run(0.5, |_| {});
+        sim.command(sim_components::Command::StartCycle).unwrap();
+        let (mut off, mut signals) = ([0.0f64; 3], Vec::new());
+        while sim.time() < 3.5 {
+            sim.step();
+            let d = &sim.control.drives[0];
+            if d.vel_set.abs() > 0.1 * 250.0 {
+                continue;
+            }
+            signals.clear();
+            sim.machine.signals(&sim.state, &[d.torque], &mut signals);
+            let mut steady = [0.0];
+            sim.machine.steady_friction(sim.control.planned_pos(), &sim.control.set_vel, &mut steady);
+            let rest = d.torque - d.torque_ff - d.torque_hold;
+            for (o, v) in off.iter_mut().zip([rest - signals[at], rest - steady[0], signals[at]]) {
+                *o = o.max(v.abs());
+            }
+        }
+        off
+    };
+    let (on, without) = (reversals(true), reversals(false));
+    assert!(on[0] < 0.45 * on[2] && on[1] > 0.85 * on[2] && without[0] < 0.005, "{on:?} {without:?}");
+    for (band, process, trips) in [(0.05, false, false), (0.05, true, true)] {
+        let mut sim = Sim::new(&ENTRY, &config(true, band, process)).unwrap();
+        sim.run(0.5, |_| {});
+        sim.command(sim_components::Command::StartCycle).unwrap();
+        sim.run(3.0, |_| {});
+        let fault = sim.control.fault.clone();
+        let tripped = fault.as_ref().is_some_and(|f| f.monitor == sim_components::fault::Monitor::TorqueBand);
+        assert_eq!(tripped, trips, "{fault:?}");
+    }
 }
 
 /// Fieldbus jitter against a hand calculation. Each frame takes the delay of 1 cycle plus j more, j drawn evenly from

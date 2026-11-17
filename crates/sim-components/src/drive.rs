@@ -1055,7 +1055,8 @@ pub struct Drive {
     pub emf_loss: f64,
     /// The torque the machine's rigid model needs to hold the planned pose, where the feedforward is the constant inertia
     /// (`drive.torque_feedforward_model = "inertia"`: no gravity in `torque_ff`) and the torque-band monitor is on, plus
-    /// with that monitor the friction at the planned speed (`fault::Settings::torque_band`); 0 otherwise. What the monitor
+    /// with that monitor, on a machine that does not report its friction torque, the friction at the planned speed
+    /// (`fault::Settings::torque_band`); 0 otherwise. What the monitor
     /// expects beside `torque_ff` (`fault::Watch::check`).
     #[serde(default)]
     pub torque_hold: f64,

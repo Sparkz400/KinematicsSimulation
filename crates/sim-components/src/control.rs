@@ -207,6 +207,10 @@ pub struct Controller {
     /// Each motor's DC link room above the bus, J (`dc_link_room`).
     #[serde(default)]
     dc_link_rooms: Vec<Option<f64>>,
+    /// Per motor where the machine's signals hold the friction its own model takes of that motor's torque at the
+    /// machine's state (`motor.<id>.torque_friction`, `TORQUE_PARTS`): what the torque-band monitor expects of friction.
+    #[serde(default)]
+    friction_signals: Vec<Option<usize>>,
     /// How far a planned path may leave its lines and arcs for transition curves (`path`) and to round a corner between
     /// two lines (`corner`).
     path_tolerance: path::Tolerance,
@@ -406,6 +410,7 @@ impl Controller {
             blend_time: 0.0,
             plan_limits: path::PlanLimits::new(1.0, [f64::NEG_INFINITY, f64::INFINITY, 1.0]),
             dc_link_rooms: Vec::new(),
+            friction_signals: Vec::new(),
             path_tolerance: path::Tolerance::default(),
             cycle_time_optimal: false,
             segments: Vec::new(),
@@ -888,6 +893,11 @@ impl Controller {
         (self.path_tolerance, self.cycle_time_optimal, self.plan_limits) =
             (path_tolerance, cycle_time_optimal, plan_limits);
         self.dc_link_rooms = dc_link_rooms;
+        self.friction_signals = machine
+            .motors()
+            .iter()
+            .map(|m| reported.iter().position(|s| s.id == format!("motor.{}.torque_friction", m.id)))
+            .collect();
         (self.law, self.spline_c2) = (law, spline_c2);
         (self.pending_shaper, self.fieldbus_delay, self.fieldbus_jitter) =
             (Some(shaper), fieldbus_delay, fieldbus_jitter);
@@ -1650,9 +1660,24 @@ impl Controller {
             drive.since_setpoint += dt;
         }
         if self.monitoring {
+            // The friction the torque-band monitor expects: what the machine's own friction model takes of each motor's
+            // torque at the machine's state (`friction_signals`), so with the guides' bristles and breakaway, the motor's
+            // Stribeck curve and the gearbox's mesh friction as they act through a start or a reversal.
+            let mut friction = vec![0.0; self.drives.len()];
+            let banded = |k: usize| {
+                self.fault_settings[k].torque_band > 0.0 && self.friction_signals.get(k).copied().flatten().is_some()
+            };
+            if (0..self.drives.len()).any(banded) {
+                let torques: Vec<f64> = self.drives.iter().map(|d| d.torque).collect();
+                let mut signals = Vec::new();
+                machine.signals(state, &torques, &mut signals);
+                for (k, f) in friction.iter_mut().enumerate().filter(|(k, _)| banded(*k)) {
+                    *f = self.friction_signals[k].and_then(|i| signals.get(i).copied()).unwrap_or(0.0);
+                }
+            }
             let tripped = (0..self.drives.len()).find_map(|k| {
                 let (s, peak) = (&self.fault_settings[k], self.motor_params[k].peak_torque);
-                self.watch[k].check(s, &self.drives[k], peak, dt).map(|m| (m, k))
+                self.watch[k].check(s, &self.drives[k], friction[k], peak, dt).map(|m| (m, k))
             });
             if let Some((monitor, k)) = tripped {
                 self.trip(monitor, k, step as f64 * dt, machine, state);
@@ -1938,10 +1963,15 @@ impl Controller {
         self.torque_feedforward(machine, &self.set_pos, &self.set_vel, &self.set_acc, &motor_acc, &mut ff);
         let hold = self.holding_torque(machine, &self.set_pos);
         // The friction of the machine's own model at the planned speed, for the drives that take it and for the
-        // torque-band monitor, which expects it in the torque as it expects the held load.
+        // torque-band monitor of a machine that does not report its friction torque (`friction_signals`; one that does
+        // has the monitor take it at its state every step, `update`), which expects it as it expects the held load.
         let mut friction = vec![0.0; motors];
         let banded: Vec<bool> = (0..motors)
-            .map(|k| self.monitoring && self.fault_settings.get(k).is_some_and(|s| s.torque_band > 0.0))
+            .map(|k| {
+                self.monitoring
+                    && self.fault_settings.get(k).is_some_and(|s| s.torque_band > 0.0)
+                    && self.friction_signals.get(k).is_none_or(|s| s.is_none())
+            })
             .collect();
         if self.motor_params.iter().any(|p| p.precontrol.machine_friction) || banded.contains(&true) {
             machine.steady_friction(&self.set_pos, &self.set_vel, &mut friction);

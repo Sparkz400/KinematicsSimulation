@@ -2171,11 +2171,10 @@ fn a_trace_is_replayed_and_fitted_in_the_app(entry: &'static MachineEntry) {
         for quantity in quantities {
             let cells = row(fitted, &format!("{} · {quantity}", model.tr.tr(owner)));
             let (config, fit, error) = (number(&cells[0]), number(&cells[1]), number(&cells[2]));
-            // Within 1 % or three standard errors, as on the command line: the errors hold the noise alone, and what a
-            // replay does not reproduce of a run can lie along the fit's columns
+            // Within three standard errors, as on the command line
             // (`a_trace_from_run_replays_onto_itself_and_fits_its_own_config`).
             assert!(
-                config > 0.0 && (fit - config).abs() < (0.01 * config).max(3.0 * error) && error > 0.0,
+                config > 0.0 && (fit - config).abs() < 3.0 * error && error > 0.0,
                 "{}: {quantity} {cells:?}",
                 entry.id
             );
