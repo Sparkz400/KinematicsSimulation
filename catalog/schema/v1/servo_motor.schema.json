@@ -406,6 +406,17 @@
         "equivalent_load_rating_n": {"type": "number", "exclusiveMinimum": 0, "unit": "N", "description": "Dynamic load rating C of one ball bearing with that life at that force and speed: F (L10h 60 n / 10^6)^(1/3), n in r/min."}
       },
       "description": "The radial force a motor's bearings allow for a rating life, from the maker's diagrams, and the load rating worked out from it."
+    },
+    "s1_curve": {
+      "type": "object",
+      "required": ["article", "speed_rad_s", "torque_nm"],
+      "additionalProperties": false,
+      "properties": {
+        "article": {"type": "string", "description": "The part number of the motor (up to the speed letter), as in the motor table it belongs to."},
+        "speed_rad_s": {"type": "number", "minimum": 0, "unit": "rad/s", "description": "A point of the S1 (continuous duty) torque limit: the speed."},
+        "torque_nm": {"type": "number", "minimum": 0, "unit": "N m", "description": "A point of the S1 torque limit: the torque at that speed. Linear between the points, first point at speed 0, last point where the maker's curve ends."}
+      },
+      "description": "The S1 curve of a motor, read off the maker's speed/torque graph: 5 to 12 points per motor, rows by article and rising speed."
     }
   }
 }
