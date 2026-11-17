@@ -102,11 +102,7 @@ fn centre_by_hand(d: &ParallelScara, y: f64) -> f64 {
     let (mut lo, mut hi) = (-60f64.to_radians(), 90f64.to_radians());
     for _ in 0..100 {
         let mid = 0.5 * (lo + hi);
-        if f(lo) * f(mid) <= 0.0 {
-            hi = mid
-        } else {
-            lo = mid
-        }
+        if f(lo) * f(mid) <= 0.0 { hi = mid } else { lo = mid }
     }
     0.5 * (lo + hi)
 }
@@ -165,6 +161,23 @@ fn an_acceleration_along_x_at_the_centre_takes_the_hand_calculated_torque() {
     assert!(rates[N_RIGID + 1].abs() < 1e-12 && rates[N_RIGID + 4].abs() < 1e-12, "{rates:?}");
 }
 
+/// Every rate of an equilibrium state is nothing: below 1e-9, but the elastic stroke's and turn's rotor accelerations,
+/// judged as the torque J_rotor w' they stand for, below 1e-11 N m. The rotor's angle, i (q + twist) up to 47 rad, holds
+/// the twist to its rounding, 7e-15 rad, and the spring at the rotor (the stroke's 4.75e7 N/m / i^2 = 481 N m/rad) turns
+/// that into 3.4e-12 N m: 2.4e-8 rad/s^2 on the Z rotor's 1.43e-5 kg m2 (seen: 1.4e-8 and 2.4e-8).
+fn assert_at_rest(d: &ParallelScara, state: &[f64], torque: &[f64], what: &str) {
+    let mut rates = vec![0.0; d.state_len()];
+    d.derivatives(state, torque, &mut rates);
+    let rotor_acc = |i: usize| d.elastic && i >= d.planar_len() && (i - d.planar_len()) % 5 == 4;
+    for (i, r) in rates.iter().enumerate() {
+        let (size, bound) = match rotor_acc(i) {
+            true => ((r * d.extras[(i - d.planar_len()) / 5].joint.rotor_inertia).abs(), 1e-11),
+            false => (r.abs(), 1e-9),
+        };
+        assert!(size < bound, "{what}: rate {i} is {r}: {rates:?}");
+    }
+}
+
 /// Gravity acts along -z, out of the plane: the arms' motors hold nothing anywhere in the range (their bearings carry
 /// the weight), the tool's turn holds nothing, and the Z motor holds the carriage and the payload, by hand
 /// m g lead / (2 pi) / ratio = (1 + 5) kg * 9.80665 m/s^2 * 0.02 m / (2 pi) / 1 = 0.187293 N m, 0.031216 N m without the
@@ -182,16 +195,16 @@ fn gravity_loads_no_arm_motor_and_the_z_motor_holds_the_carriage() {
             assert_eq!(&torque[..2], &[0.0, 0.0], "{pose:?}");
             assert_eq!(torque[3], 0.0);
             close(torque[2], by_hand(5.0), 1e-12, "Z motor");
-            let mut rates = vec![0.0; d.state_len()];
-            d.derivatives(&state, &torque, &mut rates);
-            assert!(rates.iter().all(|r| r.abs() < 1e-9), "elastic {elastic} at {pose:?}: {rates:?}");
+            assert_at_rest(&d, &state, &torque, &format!("elastic {elastic} at {pose:?}"));
             let mut signals = Vec::new();
             d.signals(&state, &torque, &mut signals);
             let infos = d.signal_infos();
             let at = |id: &str| signals[infos.iter().position(|s| s.id == id).unwrap()];
             assert_eq!([at("motor.1.torque_gravity"), at("motor.2.torque_gravity")], [0.0, 0.0]);
             close(at("motor.3.torque_gravity"), by_hand(5.0), 1e-12, "Z gravity part");
-            close(at("joint.z.force"), 6.0 * G, 1e-12, "the nut's force");
+            // Elastic, the spring's force K (rotor / i - q): the rotor angle's rounding (3.6e-15 rad at 31 rad) over i =
+            // 314 rad/m times K = 4.75e7 N/m is 5.4e-10 N, 9e-12 of the force (seen: 2.2e-12).
+            close(at("joint.z.force"), 6.0 * G, if elastic { 1e-11 } else { 1e-12 }, "the nut's force");
         }
     }
     let mut d = scara(&["effects.torque_ripple = false"]);
@@ -244,8 +257,8 @@ fn targets_outside_the_working_range_are_refused() {
 }
 
 /// The default cycle, the Adept cycle laid flat with the stroke and the turn, passes every verdict, the ball screw's
-/// among them (`sim-cli verdicts parallel-scara`: settling 0.19 mm of 0.5, the arms' gearboxes at most 145 N m of
-/// 192, the screw at 1535 r/min of the 5160 allowed).
+/// among them (`sim-cli verdicts parallel-scara`: settling 0.30 mm of 0.5, the arms' gearboxes at most 137 N m of
+/// 278, the screw at 1536 r/min of the 5160 allowed, the tool turn's motor at 0.39 of its peak torque).
 #[test]
 fn the_default_cycle_passes_its_verdicts() {
     let cfg = ENTRY.config();
@@ -295,22 +308,14 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
     assert!(ff == 0.0 && (integrator - expected).abs() < 0.02 * expected, "without: {integrator} N m");
 }
 
-/// The arm tube's first moment about its joint (`arm_moment`, less the elbow's l_a m_elbow): a uniform rod of the
-/// configured inertia I gives 3 I / (2 l_a); `mass.upper_arm_kg` m and `upper_arm_cg_m` c give m c, and one alone takes
-/// the rod's value for the other (m = 3 I / l_a^2, c = l_a / 2).
+/// The arm's first moment about its joint (`arm_moment`): the tube's m c, `mass.upper_arm_kg` and `upper_arm_cg_m`, and
+/// the elbow's l_a (m_elbow + share m_pair). Shipped, the uniform tube of the configured inertia, 1.2 kg x 0.2 m = 3 I /
+/// (2 l_a) = 0.24 kg m, plus 0.4 (0.4 + 0.6667 x 0.6) = 0.320016 kg m; 2 kg at 0.3 m gives 0.6 for the tube's part.
 #[test]
 fn the_arm_tubes_first_moment_takes_its_mass_and_centre_where_given() {
-    let base = scara(&[]);
-    let (la, i) = (base.legs.la, 0.064);
-    let tube = |d: &ParallelScara| d.arm_moment - base.arm_moment;
-    close(tube(&scara(&["mass.upper_arm_kg = 2.0", "mass.upper_arm_cg_m = 0.3"])), 0.6 - 1.5 * i / la, 1e-12, "m c");
-    close(tube(&scara(&["mass.upper_arm_kg = 2.0"])), 2.0 * 0.5 * la - 1.5 * i / la, 1e-12, "mass alone");
-    close(
-        tube(&scara(&["mass.upper_arm_cg_m = 0.3"])),
-        3.0 * i / (la * la) * 0.3 - 1.5 * i / la,
-        1e-12,
-        "centre alone",
-    );
+    let elbow = 0.4 * (0.4 + 0.6667 * 0.6);
+    close(scara(&[]).arm_moment, 1.5 * 0.064 / 0.4 + elbow, 1e-12, "the uniform tube");
+    close(scara(&["mass.upper_arm_kg = 2.0", "mass.upper_arm_cg_m = 0.3"]).arm_moment, 0.6 + elbow, 1e-12, "m c");
 }
 
 /// The loss-free scara with `edits`.
@@ -325,7 +330,8 @@ fn lossless(edits: &[&str]) -> ParallelScara {
 /// The stroke's gearbox stiffness at the joint by hand, N/m: the screw (16 x 20, root 13.5 mm, 0.3 m, fixed-free so
 /// softest at the far end) has the shaft's E A / x = 2.06e11 pi / 4 0.0135^2 / 0.3 = 9.82887e7 N/m, the nut's 2e8 and the
 /// bearings' 4e8 in series: 1 / (1.017411e-8 + 5e-9 + 2.5e-9) = 5.65797e7 N/m; the coupling's 3000 N m/rad over the
-/// lever l = 0.02 / 2 pi = 3.18310e-3 m per rad, 3000 / l^2 = 2.96086e8 N/m, in series with it: 4.75020e7 N/m.
+/// lever l = 0.02 / 2 pi = 3.18310e-3 m per rad, 3000 / l^2 = 2.96088e8 N/m, in series with it: 1 / (1.767410e-8 +
+/// 3.377373e-9) = 4.75026e7 N/m.
 fn stroke_stiffness_by_hand() -> f64 {
     let shaft = 2.06e11 * std::f64::consts::FRAC_PI_4 * 0.0135f64.powi(2) / 0.3;
     let screw = 1.0 / (1.0 / shaft + 1.0 / 2e8 + 1.0 / 4e8);
@@ -333,11 +339,18 @@ fn stroke_stiffness_by_hand() -> f64 {
     1.0 / (1.0 / screw + lever * lever / 3000.0)
 }
 
-/// The carriage on its screw rings with the rotor held at sqrt(K / m) / 2 pi, K = 4.75020e7 N/m (`stroke_stiffness_by_hand`),
-/// m = 1 kg carriage + 5 kg payload: sqrt(7.9170e6) / 2 pi = 447.8 Hz (not the 570 Hz the rigid model's comment guessed);
-/// the tool on the turn gearbox (8250.592 N m/rad, 2e-3 + 8.33e-3 kg m2): sqrt(7.98703e5) / 2 pi = 142.2 Hz. Found
-/// two ways: from the model's own accelerations (the carriage moved 1 um from where its rotor is: m a = -K dx), and
-/// the reported modes.
+/// The carriage on its screw rings with the rotor held at sqrt(K / m) / 2 pi, K = 4.75026e7 N/m (`stroke_stiffness_by_hand`),
+/// m = 1 kg carriage + 5 kg payload: sqrt(7.91710e6) / 2 pi = 447.8 Hz (not the 570 Hz the rigid model's comment guessed;
+/// with the rotor free, its 1.43e-5 kg m2 as (2 pi / 0.02)^2 1.43e-5 = 1.41 kg at the nut, the pair rings at
+/// sqrt(K (1 / 6 + 1 / 1.41)) / 2 pi = 1.03 kHz); the tool on the turn gearbox (8250.592 N m/rad, 2e-3 + 8.33e-3 kg m2):
+/// sqrt(7.98703e5) / 2 pi = 142.2 Hz. Found two ways: from the model's own accelerations (the carriage moved 1 um from
+/// where its rotor is: m a = -K dx), and the reported modes.
+///
+/// The plane's two at the centre (y = -0.5, `an_acceleration_along_x_at_the_centre_takes_the_hand_calculated_torque`
+/// has A, B, D): J = D J_x^-1 = [[-D / 2A, D / 2A], [D / 2B, D / 2B]], so the arms turning against each other move the
+/// plate along x, M_x = I_b + m_nt D^2 / (2 A^2) = 0.192003 + 12.78 x 0.080791 = 1.22451 kg m2, and together along y,
+/// M_y = I_b + m_nt D^2 / (2 B^2) = 1.26643 kg m2; each on its gearbox's 106570.15 N m/rad: 46.95 Hz along x, 46.17 Hz
+/// along y, damping ratios 5 / (2 sqrt(k M)). The lowest, y's, is `resonance_hz`.
 #[test]
 fn the_carriage_rings_on_its_screw_at_the_hand_calculated_frequency() {
     let d = lossless(&[]);
@@ -356,16 +369,37 @@ fn the_carriage_rings_on_its_screw_at_the_hand_calculated_frequency() {
     let hz = (-(rates[at + 1] - rest) / delta).sqrt() / std::f64::consts::TAU;
     let (k, m) = (stroke_stiffness_by_hand(), 6.0);
     let by_hand = (k / m).sqrt() / std::f64::consts::TAU;
-    close(k, 4.75020e7, 1e-5, "the stroke's stiffness");
+    close(k, 4.75026e7, 1e-5, "the stroke's stiffness");
     close(by_hand, 447.8, 1e-3, "the carriage's mode by hand");
     close(hz, by_hand, 1e-6, "the carriage's mode from the model");
     let turn = (8250.592f64 / (2.0e-3 + 8.33e-3)).sqrt() / std::f64::consts::TAU;
     close(turn, 142.2, 1e-3, "the tool's mode by hand");
+    // The plane's, by hand.
+    let t = centre_by_hand(&d, -0.5);
+    let (big_a, big_b) = (0.1 + 0.4 * t.cos(), -0.5 + 0.4 * t.sin());
+    let dd = big_a * 0.4 * t.sin() - big_b * 0.4 * t.cos();
+    let (i_b, m) = (0.064 + 0.16 * (0.4 + 0.6667 * 0.6), 1.0 + 2.0 * (1.0 - 0.6667) * 0.6 + 2.95 + 1.0 + 2.43 + 5.0);
+    let [along_x, along_y] = [big_a, big_b].map(|l| i_b + m * dd * dd / (2.0 * l * l));
+    close(along_x, 1.22451, 1e-5, "M_x");
+    close(along_y, 1.26643, 1e-5, "M_y");
+    let k_arm = 106570.15;
+    let [x_hz, y_hz] = [along_x, along_y].map(|inertia| (k_arm / inertia).sqrt() / std::f64::consts::TAU);
+    close(x_hz, 46.95, 1e-3, "along x by hand");
+    close(y_hz, 46.17, 1e-3, "along y by hand");
+    // The shipped damping (the loss-free config has none).
+    let d = scara(&[]);
     let modes = d.modes(&pose);
-    assert_eq!(modes.len(), 2);
-    close(modes[0].hz, turn, 1e-9, "the turn's reported mode");
-    close(modes[1].hz, by_hand, 1e-9, "the stroke's reported mode");
-    assert!(scara(&["effects.joint_elasticity = false"]).modes(&pose).is_empty());
+    let found: Vec<f64> = modes.iter().map(|m| m.hz).collect();
+    assert_eq!(found.len(), 4, "{found:?}");
+    close(modes[0].hz, y_hz, 1e-9, "the plane's mode along y");
+    close(modes[0].damping, 5.0 / (2.0 * (k_arm * along_y).sqrt()), 1e-9, "its damping");
+    close(modes[1].hz, x_hz, 1e-9, "the plane's mode along x");
+    close(modes[1].damping, 5.0 / (2.0 * (k_arm * along_x).sqrt()), 1e-9, "its damping");
+    close(modes[2].hz, turn, 1e-9, "the turn's reported mode");
+    close(modes[3].hz, by_hand, 1e-9, "the stroke's reported mode");
+    assert_eq!(d.resonance_hz(&pose), Some(modes[0].hz));
+    let rigid = scara(&["effects.joint_elasticity = false"]);
+    assert!(rigid.modes(&pose).is_empty() && rigid.resonance_hz(&pose).is_none());
 }
 
 /// At rest under the weight the screw carries 6 kg x g = 58.8399 N and is twisted by F / K = 58.8399 / 4.75020e7 =
@@ -384,19 +418,24 @@ fn the_screw_is_twisted_by_the_weight_at_rest() {
         close(state[at + 3], i * (0.1 + twist), 1e-9, "the stroke's rotor");
         close(state[at + 8], 8.0 * 1.0, 1e-12, "the turn's rotor");
         assert_eq!((state[at + 4], state[at + 9]), (0.0, 0.0));
-        let mut rates = vec![0.0; d.state_len()];
-        d.derivatives(&state, &torque, &mut rates);
-        assert!(rates.iter().all(|r| r.abs() < 1e-9), "{rates:?}");
+        assert_at_rest(&d, &state, &torque, &format!("payload {attached}"));
     }
 }
 
 /// Energy is conserved with the drives holding their torque: the stored energy (kinetic, potential, springs) less the
 /// work of the motors plus what the loss rows take stays where it started, with the carriage 2 um and the tool 1 mrad
 /// off the positions of their rotors, over 8 ms (3.6 periods of the carriage, 1.1 of the tool), RK4 at 2 us. The
-/// stored energy at the start is K dx^2 / 2 = 9.5e-5 J on the screw and 8250.592 x 1e-6 / 2 = 4.1e-3 J on the turn.
+/// stored energy at the start is K dx^2 / 2 = 9.5e-5 J on the screw and 8250.592 x 1e-6 / 2 = 4.1e-3 J on the turn;
+/// without and with the gearboxes' play (the turn's 1 arcmin, which it then crosses from flank to flank).
 #[test]
 fn the_screw_and_the_turn_conserve_energy_with_their_losses_booked() {
-    let d = lossless(&["effects.gearbox_backlash = false"]);
+    for backlash in [false, true] {
+        budget_of_the_screw_and_the_turn(backlash);
+    }
+}
+
+fn budget_of_the_screw_and_the_turn(backlash: bool) {
+    let d = lossless(&[&format!("effects.gearbox_backlash = {backlash}")]);
     let n = d.state_len();
     let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
     d.equilibrium(&[0.0, -0.5, 0.1, 0.0], &mut state, &mut torque);
@@ -430,5 +469,8 @@ fn the_screw_and_the_turn_conserve_energy_with_their_losses_booked() {
         last = now;
     }
     let drift = d.energy(&state) - e0 - work;
-    assert!(drift.abs() < 1e-4 * 4.2e-3, "the budget is off by {drift} J of 4.2e-3");
+    // With the play the step crosses the flanks' kink, and the budget closes to first order in the step: 3.26e-6 J at
+    // 2 us, 1.71e-6 at 1 us, 0.85e-6 at 0.5 us (a booking error would not shrink); 6.4e-10 J without it.
+    let bound = if backlash { 1e-3 } else { 1e-6 } * 4.2e-3;
+    assert!(drift.abs() < bound, "backlash {backlash}: the budget is off by {drift} J of 4.2e-3");
 }

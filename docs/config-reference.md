@@ -837,8 +837,8 @@ with none: switching an axis off needs the cycle's targets and `start.pose` chan
 | `geometry.forearm_spacing_m` | m | The rods of a pair apart along z (the joints' axis); for the 3D view only | 0.1 |
 | `workspace.near_y_m` | m | The range's near edge, y in front of the shoulder axes; the upper end of the y axis range. In place of the D2's `top_z_m` | −0.4, estimate |
 | `workspace.depth_edge_m`, `depth_centre_m` | m | The range's depth at the edges and at the centre; the far edge is an arc through both. In place of the D2's `height_edge_m`, `height_centre_m` | 0.25 estimate, 0.477 catalogue (the D2's) |
-| `mass.upper_arm_inertia_kgm2` | kg m² | The arm's tube about its joint; the D2's `upper_arm_kg` and `upper_arm_cg_m` are not needed (its weight is out of the plane) | 0.064, estimate |
-| `mass.upper_arm_kg`, `mass.upper_arm_cg_m` | kg, m | Optional (five-bar): the arm tube's mass and its centre's distance from the joint, for the frame's momentum (a base's tilt under it). Absent: a uniform rod of the given inertia, m = 3 I / L², c = L / 2; one given takes the rod's value for the other | absent |
+| `mass.upper_arm_inertia_kgm2` | kg m² | The arm's tube about its joint | 0.064, estimate |
+| `mass.upper_arm_kg`, `mass.upper_arm_cg_m` | kg, m | The arm tube's mass and its centre's distance from the joint; its weight is out of the plane, so only the frame's momentum (a base's tilt under it) takes them | 1.2, 0.2 (the uniform tube of the inertia, m L² / 3), estimates |
 | `z_axis.enabled` | | The Z stroke at the plate: axis z, motor 3 | true |
 | `z_axis.unit_kg` | kg | What the plate carries for it: housing, screw, Z motor with brake | 2.95, estimate (the motor's 1.55 kg catalogue) |
 | `z_axis.carriage_kg` | kg | What the screw lifts: quill, flange, gripper (the payload is added while held) | 1.0, estimate |
