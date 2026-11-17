@@ -22,6 +22,7 @@ One TOML file per machine. Units are in the key names. The key list below was ge
 | CP, CS | [`crates/machine-cable-robot/config/`](../crates/machine-cable-robot/config/) | Planar (4 cables) and spatial (8 cables) cable robots, generic proportions with Siemens 1FK2105-4AF. Each value marked `[catalogue]` or `[estimate]` in the file. Their keys are in [their own section](#cable-robots) |
 | W | [`crates/machine-wafer-handler/default.toml`](../crates/machine-wafer-handler/default.toml) | Wafer handler: an R-theta-Z arm of two equal links in the horizontal plane, its forearm and effector coupled to the shoulder by bands at 2:1 and 1:2, on a column that turns and lifts; sized as an atmospheric handler for 300 mm wafers with Siemens 1FK2103-2AH. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#wafer-handler) |
 | OC | [`crates/machine-overhead-crane/config/crane.toml`](../crates/machine-overhead-crane/config/crane.toml) | Overhead crane of 250 kg: bridge, trolley and hoist on Siemens 1FK2104-6AF and 1FK2105-6AF with S210, the load swinging on an elastic rope. Each value marked `[catalogue]`, `[estimate]` or `[hand]` in the file. Its keys are in [their own section](#overhead-crane) |
+| MT | [`crates/machine-mover-track/default.toml`](../crates/machine-mover-track/default.toml), [`flying.toml`](../crates/machine-mover-track/flying.toml) | Six movers on a closed track of two 1 m straights and two 180° clothoid curves, sized as a Beckhoff XTS (AT2000 modules, AT9014 movers); `flying.toml` runs its flying-process cam. Each value marked `[catalogue]` or `[estimate]` in the file. Its keys are in [their own section](#movers-on-a-closed-track-machine-mover-track) |
 
 | ST, IL | [`machines/stepper-axis.toml`](../machines/stepper-axis.toml), [`machines/induction-lift.toml`](../machines/induction-lift.toml) | Machine files with a stepper motor (a NEMA 23 stepper on a small belt axis) and an induction motor (a 1.5 kW four-pole motor on a frequency converter, gearbox 10, vertical belt lift). [estimate] values. Their own keys are in [motor kinds](#motor-kinds) |
 
@@ -112,6 +113,8 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `motor_stiction` | T E S D | off; on in D2 and D3 | The motor shaft breaks away at `motor.friction_breakaway_nm` and falls to its Coulomb level along a Stribeck curve. Needs `motor_friction` |
 | `slide_presliding` | the joint kit's slides (screw, rack, linear motor, the SCARA's quill) | off; on in the measured ball screw's `datasets/isw-ball-screw-axis/machine.toml` | The guides' friction (with a screw nut's preload drag and a linear motor's attraction friction) is a presliding state (Dahl's law, `slide.presliding_stiffness_n_m`) in place of the smoothed Coulomb step: it holds a load within its level at rest without creeping and turns over within a presliding travel at a reversal; its level the breakaway force `slide.friction_breakaway_n` at rest, falling to the Coulomb level over `friction_stribeck_m_s` (see the [model reference](model-reference.md#slide-presliding-friction)). Needs `joint_friction`. A config without the key has it off |
 | `screw_lead_efficiency` | every machine with a ball screw (`[screw]`: the joint kit's screw axis and SCARA, hexapod, tripod, parallel SCARA, wafer handler) | off; on in the measured ball screw's `datasets/isw-ball-screw-axis/machine.toml` | The screw's efficiency from its lead angle β = atan(lead / (π d)) and the balls' friction `screw.friction_coefficient` μ (THK): (1 − μ tan β) / (1 + μ / tan β), in place of `screw.efficiency`, which is a catalogue's lumped figure holding the nut's preload drag that the model drags apart (`screw.preload_n`). Acts on the whole force the screw passes, inertial force included, η driving and 1 / η driven back. Needs `gearbox_efficiency`. A config without the key has it off |
+| `thermal_growth` | none | off | The positioning accuracy test (`sim-cli accuracy`) only: the screw or belt of each axis in [`[accuracy]`](#accuracy) grows with its temperature, the real position the encoder's plus expansion × (rise) × (x − fixed end). Applied to the tool pose at rest, not fed back into the dynamics. Not with `load_encoder`. In no shipped config; a config may add it (absent: off) |
+| `lead_error` | none | off | The positioning accuracy test only: each axis in `[accuracy]` adds its lead (pitch) error table `lead_error` to the real position. As `thermal_growth`, not fed back and not with `load_encoder`. In no shipped config (absent: off) |
 | `gearbox_lost_motion` | T E S D | off; on in D2 and D3 | The flanks take the load over `gearbox.lost_motion_band_rad` beyond the backlash, the stiffness rising from 0, and a hysteresis `gearbox.hysteresis_rad` (a Dahl friction state per gearbox: see the model reference) |
 | `gearbox_stiffness_curve` | T E S D | off | A strain wave gear's three-segment stiffness, K1 (`stiffness_nm_rad`) to T1, K2 to T2, K3 beyond (`gearbox.stiffness_*`), as Harmonic Drive gives it |
 | `torque_ripple` | T E S | on | Torque ripple (proportional to torque) and cogging (independent of it) |
@@ -148,12 +151,12 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `notch_filter` | T E S | off; on in the flying saw (360 Hz, 250 Hz wide) | A notch on the torque setpoint. In `machine-crank-cam` each machine's own: the first key of its file, which follows `config/common.toml`'s `[effects]` table |
 | `torque_limit` | T E S | on | The torque setpoint is limited to the peak torque and the torque-speed curve |
 | `drive_current_limit` | T E S D | on | The drive gives no more than its maximum output current `ratings.drive_max_current_a`: the torque setpoint is held to the torque of that current where it is below the motor's limit, with the velocity loop's anti-windup, so a cycle that asks more lags behind (see the [model reference](model-reference.md#drive-current-limit)). Nothing is held without the rating. On in the shipped configs (the joint machines' `common.toml` and the machine files too); it changes nothing there, as every shipped drive gives more than its motor takes. Off, the drive's maximum current is only judged (`drive-peak-current`) |
-| `field_weakening` | T E S D | off | The motor as a permanent-magnet synchronous motor in d-q axes (`motor.pole_pairs`, `d_inductance_h`): above base speed the drive sets a negative d current within the voltage and current circles, and the torque-speed curve follows from the model instead of fading between rated and no-load speed (see the [model reference](model-reference.md#field-weakening)). On in the shipped configs since 14 November 2026 (a 1FK2 by name brings an inductance estimated from Siemens' short-circuit braking table; a 1FK7 or 1FT7 its data sheet's). Off, the curve fades linearly between rated and no-load speed, which on the shipped 1FK2205-4AF at 400 V leaves 1.6 N m at 500 rad/s where the d-q model gives 17.8 N m |
+| `field_weakening` | T E S D | on; off in the hexapod, the tripod, the hexapod with rotary actuators, the cable robots, the crane and the machine files `dual-gantry`, `five-axis`, `five-axis-table`, `portal-c`, `scissor-lift`, `stepper-axis`, `induction-lift`; absent: off | The motor as a permanent-magnet synchronous motor in d-q axes (`motor.pole_pairs`, `d_inductance_h`): above base speed the drive sets a negative d current within the voltage and current circles, and the torque-speed curve follows from the model instead of fading between rated and no-load speed (see the [model reference](model-reference.md#field-weakening)). On in most shipped configs since 14 November 2026 (a 1FK2 by name brings an inductance estimated from Siemens' short-circuit braking table; a 1FK7 or 1FT7 its data sheet's). Off, the curve fades linearly between rated and no-load speed, which on the shipped 1FK2205-4AF at 400 V leaves 1.6 N m at 500 rad/s where the d-q model gives 17.8 N m |
 | `drive_overload` | T E S D | off | The drive's thermal image (i²t, `ratings.drive_overload_time_constant_s`): once it reaches the level at which the drive has given its maximum current for `drive_max_current_time_s` from the rated load, the drive's current limit falls to its base load current `drive_base_load_current_a` until the image is back at the rated current's; in two nodes since 14 November 2026, the slow heat sink and the fast chips on it (`ratings.drive_chip_share`, `drive_chip_time_constant_s`; a share of 0 is the one node); judged by `drive-overload` (see the [model reference](model-reference.md#drive-overload)). Off in the shipped configs |
 | `motor_thermal_nodes` | T E S D | off | With `winding_heating`: the motor's heat in three nodes, winding, stator and housing, surroundings (`motor.winding_resistance_share`, `winding_time_constant_s`); the settled rise `motor-thermal` judges is the winding's and the same as the one node's (see the [model reference](model-reference.md#motor-thermal-nodes)). Off in the shipped configs |
-| `iron_loss` | T E S D | off | With `winding_heating`: the stator's iron loss, R (I_0² − I_N²) at the rated speed (what Siemens' rated data leave of the copper loss at the stall current `motor.stall_current_a`), times (speed / rated speed)^1.5, heats the motor (the housing's node with `motor_thermal_nodes`); the copper loss then reaches the rated rise at the stall current, not the rated one. A servo's shaft is dragged against the motion by the speed losses, T_N (ω/ω_N)^0.5 with T_N what the printed rated point leaves, k_t I_N (with saturation) − `drive.rated_torque_nm` − the motor's own friction at the rated speed (at least 0), so the shaft gives the printed rated torque at the rated current and speed; also with the drive disabled (the shaft power is the air-gap power less the drag's; the budget books it in the `emf` row). The two are different numbers on purpose: on the 1FK7/1FT7 rows with a printed resistance the drag's power at the rated speed is a median 2.9 times R (I_0² − I_N²) (iron and bearings heat the winding less than its copper does). Signal `motor.<id>.iron_loss`, `MotorLoad::iron_loss`. On in the shipped configs (no change where a config's stall current is its rated current) |
+| `iron_loss` | T E S D | on; off in `machines/stepper-axis.toml` and `machines/induction-lift.toml`; absent: off | With `winding_heating`: the stator's iron loss, R (I_0² − I_N²) at the rated speed (what Siemens' rated data leave of the copper loss at the stall current `motor.stall_current_a`), times (speed / rated speed)^1.5, heats the motor (the housing's node with `motor_thermal_nodes`); the copper loss then reaches the rated rise at the stall current, not the rated one. A servo's shaft is dragged against the motion by the speed losses, T_N (ω/ω_N)^0.5 with T_N what the printed rated point leaves, k_t I_N (with saturation) − `drive.rated_torque_nm` − the motor's own friction at the rated speed (at least 0), so the shaft gives the printed rated torque at the rated current and speed; also with the drive disabled (the shaft power is the air-gap power less the drag's; the budget books it in the `emf` row). The two are different numbers on purpose: on the 1FK7/1FT7 rows with a printed resistance the drag's power at the rated speed is a median 2.9 times R (I_0² − I_N²) (iron and bearings heat the winding less than its copper does). Signal `motor.<id>.iron_loss`, `MotorLoad::iron_loss`. On in the shipped configs but the stepper and induction motor files (no change where a config's stall current is its rated current) |
 | `magnet_temperature` | T E S D | off | With `winding_heating`: the magnets' flux, and so torque constant and back-EMF, change with the motor's temperature by `motor.magnet_temperature_coefficient_1_k` per kelvin from the catalogue's value at the rated rise (a cold motor has about 12 % more). The drive's back-EMF feedforward keeps the catalogue's. Off in the shipped configs |
-| `braking_resistor_heating` | T E S D | off | With `dc_link`: the braking resistor's temperature, one heat capacity with `ratings.braking_resistor_time_constant_s` that settles at `braking_resistor_rated_rise_k` at its continuous power; signal `motor.<id>.braking_resistor_temperature`. On in the shipped configs (a signal only; nothing trips on it) |
+| `braking_resistor_heating` | T E S D | on; absent: off | With `dc_link`: the braking resistor's temperature, one heat capacity with `ratings.braking_resistor_time_constant_s` that settles at `braking_resistor_rated_rise_k` at its continuous power; signal `motor.<id>.braking_resistor_temperature`. On in the shipped configs (a signal only; nothing trips on it) |
 | `back_emf` | T E S | on | Back-EMF of the turning rotor in the winding |
 | `voltage_limit` | T E S | on | The winding voltage is limited to sqrt(3/2) times the DC link voltage |
 | `winding_heating` | T E S | on | The winding warms with its copper loss and its resistance rises with it |
@@ -443,12 +446,115 @@ has them for its Z motor, the arms' configs for their wrists (`[motor.4]` to `[m
 In a machine file, each `screw`, `rack`, `linear_motor` node and each `rotary` node's `strain_wave` names a table of
 its values by its path (any name: `[screw_z]` in `machines/screw-portal.toml`, `[rack_x]` in
 `machines/rack-gantry.toml`). That table is laid out as the joint kit's `[screw]`, `[rack]`, `[linear_motor]` or
-`[strain_wave]` (keys, units and meanings in [mechanisms](mechanisms.md); every key is required there as in the kit),
-and is checked against that layout key by key. A screw's and a rack's dimensions and ratings are what its maker's
-catalogue lists for the article ([catalogue] where one is named, placeholders in the shipped files); efficiency,
-stiffness, preload and the load ratings of an unnamed size are [estimate] and have `[bounds]` entries, as
-`screw_z.efficiency = [0.85, 0.95]` and `rack_x.stiffness_n_m = [6.0e7, 1.5e8]`. A rotary node's axis takes its limits
-in rad (`[axis.<id>]` below).
+`[strain_wave]` (the tables below; every key is required there as in the kit; the models in
+[mechanisms](mechanisms.md)), and is checked against that layout key by key. A screw's and a rack's dimensions and
+ratings are what its maker's catalogue lists for the article ([catalogue] where one is named, placeholders in the
+shipped files); efficiency, stiffness, preload and the load ratings of an unnamed size are [estimate] and have
+`[bounds]` entries, as `screw_z.efficiency = [0.85, 0.95]` and `rack_x.stiffness_n_m = [6.0e7, 1.5e8]`. A rotary
+node's axis takes its limits in rad (`[axis.<id>]` below).
+
+The same tables, under their own names, are read by the joint kit (`crates/machine-joint-kit/config/`), the hexapod,
+the tripod, the parallel SCARA, the wafer handler, the flying saw and the mover track. Each key is required where its
+table is read, unless it says otherwise.
+
+### `[screw]`
+
+A ball screw (`transmission::BallScrew`) coupled straight to its motor. Read by the joint kit's screw axis
+(`screw.toml`), the SCARA's quill (`scara.toml`, `scara-tool.toml`), an arm's prismatic joint without `[rack]`, the
+hexapod's and the tripod's legs, the parallel SCARA's quill, the wafer handler's lift, the measured ball screw
+(`datasets/isw-ball-screw-axis/machine.toml`) and as `[screw_z]` the machine files `screw-portal`, `portal-c`,
+`five-axis` and `five-axis-table`. `parts.axis` with a ball screw by name (`catalog/hiwin/ball_screws.csv`) sets lead,
+both diameters and both load ratings, and where the row has them the nut's stiffness, preload, efficiency and `max_dn`;
+length and mounting stay the config's. Its signals are `screw.<id>.speed`, `.dn` and `.damage_rate`.
+
+Values in the order screw axis / SCARA and parallel SCARA (16 x 20) / hexapod (25 x 10) / tripod (Hiwin
+20-10K3-FDC) / wafer handler (16 x 10) / `[screw_z]` of the machine files (16 x 10) / measured ball screw (40 x 40).
+All [estimate] (placeholders in the machine files), except the tripod's diameters, lead, load ratings, nut stiffness
+and d n ([catalogue]) and the measured screw's nominal diameter and length (its source).
+
+| Key | Unit | Meaning | Default |
+| --- | --- | --- | --- |
+| `lead_m` | m | Travel per turn of the screw; the ratio is 2π / lead | 0.02 / 0.02 / 0.01 / 0.01 / 0.01 / 0.01 / 0.04 |
+| `nominal_diameter_m` | m | Nominal diameter d: the shaft's inertia (a solid steel cylinder of it), the lead angle atan(lead / (π d)), d n | 0.025 / 0.016 / 0.025 / 0.02 / 0.016 / 0.016 / 0.04 |
+| `root_diameter_m` | m | Root diameter: the section for the shaft's stiffness, critical speed and buckling load; at most the nominal diameter | 0.0212 / 0.0135 / 0.0212 / 0.017324 / 0.0135 / 0.0132 / 0.0337 |
+| `length_m` | m | Between the bearings (from the fixed bearing to the free end with `fixed-free`): the stroke, the nut and the run-outs | 1.0 / 0.3 / 0.35 / 0.35 / 0.4 / 0.45 / 1.8 |
+| `mounting` | – | The shaft's ends: `"fixed-free"`, `"supported-supported"`, `"fixed-supported"` or `"fixed-fixed"`; sets the factors of the critical speed and the buckling load, and with `"fixed-fixed"` the shaft's stiffness over the nut's place | fixed-supported / fixed-free / fixed-supported / fixed-supported / fixed-free / fixed-supported / fixed-supported |
+| `efficiency` | – | Above 0 and at most 1: a catalogue's lumped efficiency, driving and driven back. Replaced by the lead's efficiency with `effects.screw_lead_efficiency` | 0.9 in all; bounds 0.85 to 0.95 (screw axis, hexapod, tripod, machine files, measured screw) |
+| `friction_coefficient` | – | With `effects.screw_lead_efficiency` (read only then): the balls' rolling friction μ, η = (1 − μ tan β) / (1 + μ / tan β); a screw that locks itself driven back is refused. THK's general value | 0.003 (not in the machine files); bounds 0.002 to 0.01 |
+| `nut_stiffness_n_m` | N/m | The nut's axial stiffness, in series with the shaft and the bearings | 4e8 / 2e8 / 4e8 / 4.118793e8 / 2e8 / 2e8 / 1e9; bounds 2.5e8 to 6e8 (screw axis, hexapod), 1.2e8 to 3e8 (machine files), 5e8 to 2e9 (measured) |
+| `bearing_stiffness_n_m` | N/m | The fixed bearing's axial stiffness, in the same series | 7.5e8 / 4e8 / 7.5e8 / 5e8 / 4e8 / 3e8 / 1e9; bounds 5e8 to 1e9 (screw axis, hexapod), 3e8 to 8e8 (tripod), 2e8 to 4.5e8 (machine files), 5e8 to 2e9 (measured) |
+| `preload_n` | N | The nut's preload, at least 0: its drag torque K F l / (2π), K = 0.05 / sqrt(tan β) (THK), with `effects.guide_friction` or `joint_friction`, and the equivalent load of the life (Hiwin) | 600 / 200 / 600 / 400 / 200 / 150 / 1953; bounds 300 to 900 (screw axis, hexapod), 100 to 300 (SCARA, parallel SCARA, wafer handler), 200 to 600 (tripod), 75 to 225 (machine files), 1000 to 4000 (measured) |
+| `dynamic_load_rating_n` | N | Ca, for the life L10 = (Ca / (fw F))³ 10⁶ turns (ISO 3408-5); `screw-life` against `ratings.required_life_h` | 13000 / 7000 / 13000 / 11081.5145 / 7000 / 9000 / 40000; bounds 11000 to 15000 (screw axis, hexapod), 7500 to 10500 (machine files), 30000 to 60000 (measured) |
+| `static_load_rating_n` | N | C0a: `screw-static` holds the axial force within C0a over `static_safety_factor` | 26000 / 12000 / 26000 / 26085.689 / 12000 / 14000 / 80000 |
+| `load_factor` | – | fw on the load in the life: smooth running without shocks, 1.0 to 1.2 in the makers' tables | 1.2 in all |
+| `static_safety_factor` | – | See `static_load_rating_n` | 2 in all |
+| `critical_speed_factor` | – | `screw-speed`: the screw's speed within this share of its first bending mode's speed (makers ask 0.8) | 0.8 in all |
+| `buckling_safety_factor` | – | `screw-buckling`: the axial force (pulling too) within Euler's buckling load over this | 2 in all |
+| `max_dn` | mm r/min | `screw-dn`: d n allowed for the nut's ball return, d in mm; 0 judges none | 70000; tripod 220000, measured 160000 |
+
+### `[rack]`
+
+A pinion on a rack (`transmission::RackPinion`) behind the joint's gearbox. Read by the joint kit's rack axis
+(`rack.toml`), the arm on a track (`arm-on-track.toml`, `arm-on-track-tool.toml`, see [arms](#arms-six-axis-arm-scara-palletiser-arm-on-a-track)),
+the flying saw (`flying-saw.toml`, `flying-saw-cam.toml`) and as `[rack_x]` the machine files `rack-gantry` and
+`dual-gantry`. All shipped files have the same values, [estimate] a ground rack of module 2 as the makers' catalogues
+list it (placeholders in the machine files), with the same bounds. Signal `rack.<id>.feed_force`.
+
+| Key | Unit | Meaning | Default |
+| --- | --- | --- | --- |
+| `module_m` | m | Normal module m | 0.002 |
+| `teeth` | – | The pinion's teeth z; its pitch radius m z / (2 cos β) | 30 (31.831 mm, 200 mm per turn) |
+| `helix_angle_deg` | ° | Helix angle β, at least 0 and below 45 | 19.5283 |
+| `pressure_angle_deg` | ° | Optional: normal pressure angle α_n, above 0 and below 45; the separating force F tan(α_n) / cos(β) in the radial load on the gearbox's shaft (`ratings.shaft_max_radial_load_n`) | absent in all: 20 (DIN 867) |
+| `efficiency` | – | Above 0 and at most 1: the mesh's efficiency, driving and driven back | 0.97; bounds 0.95 to 0.98 |
+| `stiffness_n_m` | N/m | The mesh and the rack's mounting along the travel | 1e8; bounds 6e7 to 1.5e8 |
+| `backlash_m` | m | At least 0, along the travel | 0 (a preloaded dual pinion) |
+| `pinion_inertia_kgm2` | kg m² | The pinion's inertia | 1e-4 |
+| `rated_feed_force_n` | N | The pair's permissible feed force; `rack-feed-force` holds the force on the teeth within it over `service_factor` | 3000 |
+| `service_factor` | – | Application factor K_A for smooth running | 1.25 |
+
+### `[linear_motor]`
+
+An ironcore linear motor (`transmission::LinearMotor`): the forcer on the carriage, the magnets along the axis; its
+force constant, resistance and the rest are the drive's `[motor]` values, read with N for N m and m for rad. Read by the
+joint kit's linear motor axis (`linear-motor.toml`) and the mover track (each mover's magnet plate over the coils). A
+linear motor by name (`parts.motor`) sets `attraction_force_n` and `pole_pitch_m` where its catalogue row has them.
+All [estimate]: no maker of the shipped motors publishes them.
+
+| Key | Unit | Meaning | Default |
+| --- | --- | --- | --- |
+| `attraction_force_n` | N | At least 0: the magnetic attraction between forcer and magnets, a load on the guides (`axis.x.guide_load`, the guide ratings); on the mover track what holds a mover on its rollers against the centrifugal force in a curve | linear motor axis 2500 (bounds 2000 to 3000); mover track 300 (200 to 450) |
+| `pole_pitch_m` | m | North to north: the cogging repeats once per pole pitch (`motor.cogging_order` is replaced by 2π / pitch) | 0.024; mover track 0.012 (bounds 0.01 to 0.025) |
+| `guide_friction_coefficient` | – | At least 0: with `effects.joint_friction` the guides' Coulomb friction (and with presliding their breakaway) rises by this times the attraction | 0.005; bounds 0.003 to 0.01 (axis), 0.002 to 0.01 (mover track) |
+
+### `[strain_wave]`
+
+The life of a strain wave gear by Harmonic Drive's method (`transmission::StrainWave`): L10 = Ln (Tr / Tav)³ (nr /
+nav), Tav the cubic mean of the output torque weighted with the input speed, nav the mean input speed; `strain-wave-life`
+against `ratings.required_life_h`, signal `strain_wave.<id>.damage_rate`. Read by the arms (one gear per joint,
+`[strain_wave.<k>]` per joint over it, see [a motor's own tables](#a-motors-own-tables)) and by the rotary table with
+`table.gear = "strain-wave"` (as shipped). All [estimate].
+
+| Key | Unit | Meaning | Default |
+| --- | --- | --- | --- |
+| `rated_torque_nm` | N m | Tr, the rated output torque at the rated input speed | six-axis arm (`arm.toml`, `arm-tool.toml`, `arm5-tool.toml`, `arm7-tool.toml`, the arm on a track) and table 137 (size 32; bounds 120 to 150), the arm's `[strain_wave.4]` to `[strain_wave.6]` 40; SCARA 67 (bounds 60 to 75), its `[strain_wave.4]` 7.8; palletiser 600 (bounds 500 to 700), its `[strain_wave.4]` 67 |
+| `rated_input_speed_rpm` | r/min | nr, 2000 in the catalogues | 2000 |
+| `rated_life_h` | h | Ln: 7000 h for CSF, 10000 h for CSG | 10000 |
+
+### `[worm]`
+
+A worm gear (`transmission::WormGear`) at the rotary table, read with `table.gear = "worm"` (`table.toml` ships
+`"strain-wave"`, so it is not read as shipped); the ratio is the gearbox's. With `effects.gearbox_efficiency` its
+efficiency tan γ / tan(γ + ρ′), ρ′ = atan(μ / cos α_n), replaces `gearbox.efficiency`, and tan(γ − ρ′) / tan γ is the
+back-driving one; a worm that locks itself (back efficiency not positive) is refused. [estimate] in `table.toml`,
+no bounds.
+
+| Key | Unit | Meaning | Default |
+| --- | --- | --- | --- |
+| `lead_angle_deg` | ° | Lead angle γ, above 0 and below 45 | 8 |
+| `friction_coefficient` | – | μ on the flanks, at least 0 | 0.04 |
+| `pressure_angle_deg` | ° | Normal pressure angle α_n, at least 0 and below 45 | 20 |
+| `motor_axis` | – | Optional: the worm motor's axis (x, y, z fixed to the base, across the table's axis z, any length but 0), the one its rotor's spin is about; absent: x | (1, 0, 0) |
 
 ## A machine file's pneumatic cylinders
 
@@ -663,6 +769,29 @@ What the parts allow. `sim-cli verdicts` judges a cycle against these. **A ratin
 
 The DC link ratings of T and S are placeholders for the drive those configs were written for: a DC link of 155.13 V, with 6.2 J of room in 470 µF up to the threshold. When a catalogue motor goes into such a config, the threshold and the trip level keep their ratio to the DC link voltage (782 V and 897 V at 540 V); capacitance and resistor powers stay. See the [user guide](user-guide.md#check-a-real-catalogue-machine).
 
+## `[accuracy]`
+
+Read by the positioning accuracy test (`sim-cli accuracy`, `sim_components::accuracy`) with `effects.thermal_growth` or
+`effects.lead_error` on, and ignored with both off or with `effects.load_encoder` on. In no shipped config; any config
+may add it (`analysis::RATINGS_BEYOND_DEFAULT`). Without the table no axis grows or has a lead error. The test and its
+verdicts (`ratings.max_positioning_error_m`, `max_repeatability_m` and their `_rad` keys) are in the
+[user guide](user-guide.md#how-accurate-and-repeatable-is-an-axis).
+
+| Key | Unit | Meaning | Default |
+| --- | --- | --- | --- |
+| `screw_expansion_per_k` | 1/K | Linear expansion of a ball screw, taken by the entries with `drive = "screw"` | absent: 11.5e-6, hardened bearing steel (EN 1.3505 / 100Cr6; makers give 11 to 12e-6) |
+| `belt_expansion_per_k` | 1/K | Linear expansion of a toothed belt along its length, taken by the entries with `drive = "belt"` | absent: 11.5e-6, [estimate] that of its steel cords; no belt maker gives one (a glass fibre cord about 5e-6, an aramid one about −2e-6) |
+| `axes` | – | A list of tables, one per tool axis that grows or has a lead error; another key in an entry is refused (`accuracy.axes.<key>`) | absent: none |
+| `axes[].axis` | – | Required: the id of a tool axis (`"x"`, `"z"`, ...) | – |
+| `axes[].drive` | – | `"screw"` or `"belt"`: which expansion it takes | absent: `"screw"` |
+| `axes[].fixed_end` | axis unit | Where the axis does not grow from (a screw's fixed bearing, a belt axis's home) | absent: 0 |
+| `axes[].rise_k` | K | A temperature rise of the screw or belt the config gives, added to the heated part's | absent: 0 |
+| `axes[].heated_part` | – | The id of one of the machine's heated parts (`effects.part_heating`; the gearbox and guide ids of the [thermal view](model-reference.md#thermal-model-and-view)), whose rise is added during the test; without part heating its rise stays 0 | absent: none |
+| `axes[].lead_error` | axis unit | Rows `[position, error]`, positions rising: the error is linear between rows and that of the nearest row beyond them | absent: none |
+
+The real position is the one the motor encoder holds plus expansion × (`rise_k` + the heated part's rise) × (x −
+`fixed_end`) plus the table's error at x (`thermal_growth` adds the first term, `lead_error` the second).
+
 ## `[profile]`
 
 | Key | In | Unit | Meaning | Source | Effect switch |
@@ -856,7 +985,7 @@ with none: switching an axis off needs the cycle's targets and `start.pose` chan
 | `[motor.3]`, `[motor.4]` | | The Z and C motors over `[motor]` | 1FK2103-2AH at 400 V (catalogue), resistance and inductance estimates as the D4's tool motor |
 | `[gearbox.3]` | | The Z motor's coupling: ratio 1, nothing warms | estimates |
 | `[gearbox.4]` | | The turn's gearbox | NRB060-03-8, ratio 8 (catalogue) |
-| `[drive.3]`, `[drive.4]` | | The Z and C drives over `[drive]` | 1.95 N m peak, 0.59 rated (catalogue); velocity gain 0.0443 (Z), 0.1 with 10 ms (C) |
+| `[drive.3]`, `[drive.4]` | | The Z and C drives over `[drive]` | 1.95 N m peak, 0.59 rated (catalogue); velocity gain 0.0443 (Z), 0.033 with 10 ms (C: with friction 18.8 dB of gain margin, without it 6.95 dB, where 0.0443 left 4.0 dB) |
 | `drive.velocity_kp_nm_s_rad`, `velocity_tn_s` | | The arms' velocity loop | 0.33, 80 ms: the D2's 0.25 and 30 ms leave arm 2 at 31° phase margin with the heavier plate |
 | `[ratings.3]`, `[ratings.4]` | | The S210 6SL3210-5HE10-4UF0's currents and braking resistor; the turn's gearbox | catalogue |
 
@@ -1023,6 +1152,8 @@ in tool space. See [mechanisms](mechanisms.md#tool-space).
 
 | Key | Unit | Meaning | Value, source |
 | --- | --- | --- | --- |
+| `arm.urdf_file` | – | The chain's bodies, joints, masses and inertias: a path to a URDF file (no xacro), or `"builtin:six-axis"`, `"builtin:scara"`, `"builtin:five-axis"`, `"builtin:seven-axis"`, `"builtin:palletiser"`, `"builtin:arm-on-track"` for the files in `crates/machine-joint-kit/urdf/`; a file that cannot be read is refused | arm and `arm-tool` six-axis; SCARA scara; palletiser palletiser; arm on a track arm-on-track; `arm5-tool` five-axis; `arm7-tool` seven-axis; choice |
+| `kinematics.redundancy` | – | In tool space with the numerical inverse (not the SCARA's closed form): what a redundant arm (one joint more than tool axes) spends its spare joint on. `"home"` keeps the joints nearest `kinematics.home_joints`; `"joint_limits"` nearest the middles of their ranges, each joint's offset weighed by (narrowest range / its range)², off their stops. Another value is refused | `"home"` in all that have it (the arm, the palletiser, the arm on a track and the tool-space configs; not the SCARA's); choice |
 | `arm.payload_inertia_kgm2` | kg m² | The payload's inertia about its centre in the URDF's tip frame: xx, yy, zz, xy, xz, yz. With `effects.payload` | arm 0.03125, 0.01625, 0.025 (a 6 kg box of 0.1 x 0.2 x 0.15 m); SCARA 0.004375, 0.004375, 0.00375 (3 kg, 0.1 m across and high); palletiser 0.41667, 0.75, 0.86667 (a 20 kg carton of 0.6 x 0.4 x 0.3 m); estimates |
 | `arm.joint_coupling` | – | The URDF's joints as sums of the motors' joints, one row per URDF joint, one factor per motor (a parallelogram); `[]` one motor per URDF joint | `[]`; palletiser rows (1,0,0,0), (0,1,0,0), (0,−1,1,0), (0,0,−1,0), (0,0,0,1): its geometry, choice |
 | `arm.bars_on`, `arm.bars_turns_with`, `arm.bars_pin_m`, `arm.bars_mass_kg`, `arm.bars_com_m`, `arm.bars_inertia_kgm2` | –, –, m, kg, m, kg m² | Optional: the parallelogram's bars (or any rigid piece the URDF leaves out) as bodies of their own. Bar i is pinned on the link of the URDF joint `bars_on[i]` (1-based) at `bars_pin_m` (x, y, z in that link's frame, three per bar; empty: its origin) and stays parallel to the link of `bars_turns_with[i]`, turning with it (empty: with the link it is pinned on, a rigid piece of that link, merged into it); its points move at the pin's speed plus that link's turn (a palletiser's rod: pinned on the forearm's lever, parallel to the upper arm). Its mass, its centre from the pin (x, y, z) and its inertia about its centre (xx, yy, zz, xy, xz, yz, six per bar; the array may be empty: 0), both in the frame of the link it turns with. A bar that turns with another link than its pin's is refused with `effects.link_bending` (the links' cantilever modes have no loop). All empty: no bars | `[]`, none; estimates |
@@ -1068,7 +1199,8 @@ Beside each machine's config in `crates/machine-crank-cam/config/` lies `<id>-ca
 and the machine's file) with `cam.run = true` and nothing else changed (a test keeps it so): a whole config that runs
 the cam as its cycle, `sim-cli verdicts <id> --config crates/machine-crank-cam/config/<id>-cam.toml`.
 
-What the five machines of `machine-crank-cam` read beside `[motor]`, `[gearbox]`, `[drive]`, `[ratings]` and the rest (the
+What the seven machines of `machine-crank-cam` (slider-crank, rotary knife, flying saw, disc cam, toggle press, Geneva
+drive, cam indexer) read beside `[motor]`, `[gearbox]`, `[drive]`, `[ratings]` and the rest (the
 crank and the knife a `[joint]` as the rotary table's, the saw a `[slide]` and `[rack]` as the rack axis's). Formulas in
 [mechanisms](mechanisms.md#crank-and-cam-mechanisms-machine-crank-cam). `effects.process_force` switches the press force and the
 cuts (on in all three); `effects.frame_stretch` (in the crate's `common.toml`, read by the toggle press alone, on) the
@@ -1099,6 +1231,21 @@ press frame's stretch under the press force.
 | `saw.sync_acceleration_m_s2` | m/s² | The mean acceleration to the material's speed (peak 1.5 times it) | choice |
 | `cam.run` | true/false | The controller runs the cam as the cycle instead of `[[cycle.segment]]`. Off in the shipped configs | choice |
 | `joint.stop_min_deg`, `joint.stop_max_deg` | ° | Optional, on the crank, the knife, the disc cam and the indexers, whose joint turns on and has no stops of its own (`joint.min_angle_deg`, `max_angle_deg` are the axis range the cycle and paths use; a cam runs the joint on past it and ramps it down there when taken away): end stops (`effects.hard_stops`, `joint.stop_stiffness_nm_rad`, `stop_damping_nm_s_rad`) at these angles, either alone; absent, none | choice |
+| `indexer.stations` (Geneva drive, cam indexer) | – | The table's stations n, a whole number (at least 3 on the Geneva drive, 2 on the cam indexer): one index of 2π / n per turn of the driver | 6 in both, [estimate] |
+| `indexer.crank_radius_m` (Geneva drive) | m | The crank's radius a to its pin; the wheel's centre distance C = a / sin(π / n). The index runs over (n − 2) / (2 n) of the driver's turn | 0.06, [estimate] |
+| `indexer.index_angle_deg` (cam indexer) | ° | The cam's turn over which it moves the turret by the modified sine (VDI 2143), below 360; it holds the turret by its dwell ridge over the rest | 120, [estimate] |
+| `indexer.roller_pitch_radius_m` (cam indexer) | m | The turret's rollers' pitch radius r_p: the contact force along the turret's tangent is the wheel's torque over it | 0.08, [estimate] |
+| `indexer.driver_inertia_kgm2` | kg m² | The driver about its axis: the Geneva's crank with its pin and locking disc, the indexer's cam | Geneva 0.01 (bounds 0.008 to 0.012), cam 0.012 (0.01 to 0.014), [estimate] |
+| `indexer.wheel_inertia_kgm2` | kg m² | The Geneva wheel or the turret with its rollers; it turns with the table's angle φ(θ), and the locking disc or the cam holds it in the dwell | Geneva 0.03 (bounds 0.025 to 0.035), cam 0.02 (0.015 to 0.025), [estimate] |
+| `indexer.locking_play_rad` | rad | At least 0: the locking disc's (the dwell ridge's) play against the wheel; the index error in the dwell is half of it at `table.station_radius_m` (`table.index_error`) | Geneva 2e-4 (bounds 1e-4 to 3e-4), cam 5e-5 (2e-5 to 1e-4), [estimate] |
+| `indexer.turns_per_min` | 1/min | The driver's speed with `cam.run` (one turn, one index, per master period) | 60 in both, choice |
+| `table.inertia_kgm2` (indexers) | kg m² | The table with its fixtures, the parts apart | 0.4 (bounds 0.3 to 0.5), [estimate] |
+| `table.station_radius_m` (indexers) | m | Where the parts (`mass.payload_kg`, 3 kg: six of 0.5 kg; bounds 2 to 4) sit; the radius the index error and the settling tolerance are measured at | 0.2, [estimate] |
+| `table.stiffness_nm_rad`, `table.damping_ratio` (indexers) | N m/rad, – | The table's shaft against the held wheel: the mode the table rings in after each index, ω_n² = k / J (table and parts), damping ratio ζ; a passive joint of its own with `effects.table_twist` | 2e5 (bounds 1e5 to 4e5), 0.03 (0.01 to 0.06), [estimate] |
+| `ratings.indexer_max_contact_force_n` (indexers) | N | Verdict `indexer-contact-force` (signal `indexer.contact_force`): the pin's or the roller's load | Geneva 1500 (a stud-type track roller of 22 mm), cam 2000 (a cam follower of 26 mm), [estimate] |
+| `ratings.index_max_error_m` (indexers) | m | Verdict `index-accuracy` (signal `table.index_error`): the index error at the station radius in the dwell | 5e-5, [estimate] |
+| `ratings.index_settling_tolerance_m` (indexers) | m | Required: the band at the station radius the table's ring has to settle into after an index (signal `table.settling_time`) | 1e-5, [estimate] |
+| `ratings.index_max_settling_s` (indexers) | s | Verdict `index-settling`: how long the table may ring beyond that band after an index (15 % of the dwell at 60 indexes a minute) | 0.1, [estimate] |
 | `indexer.cam_radius_m` (cam indexer) | m | Optional: the cam's radius where the rollers touch. With it the contact force along the normal is the tangential force over cos α, tan α = r_p φ' / R_c (signal `indexer.pressure_angle`); absent, α = 0. 0.10 in the shipped config (bounds 0.08 to 0.125): the peak contact force 2.1 % more | [estimate] |
 | `effects.table_twist` (the two indexers) | true/false | The table's twist on its shaft is a passive joint of its own, so the ring acts back on the driver (signal `table.twist`, the index error adds it, its damper's loss `power.table_twist`); off: the ring is worked out beside the dynamics (the same ring to 0.2 %). Off as shipped | choice |
 | `cam.ramp_s` | s | The master's sin² ramp from rest to speed and back | choice |
@@ -1304,10 +1451,10 @@ the lift (m). Its own keys:
 | `geometry.effector_m` | m | The effector's length from the wrist to the wafer centre | 0.18, estimate |
 | `workspace.min_reach_m`, `max_reach_m` | m | The r axis's range; both must lie within the upper arm's stops and the condition number | 0.04, 0.78, estimates |
 | `workspace.max_condition_number` | | Targets where 1 / sin(phi) passes this are refused (near the full extension) | 5, estimate |
-| `mass.column_inertia_kgm2` | kg m² | What turns with the column: its head, motor 2 and its gearbox, the shoulder pulley | 0.05, estimate |
-| `mass.upper_arm_kg`, `_inertia_kgm2`, `_centre_m` | kg, kg m², m | The upper arm's mass, inertia about its own centre and the centre's distance from the shoulder | 1.5, 0.0128, 0.16, estimates |
-| `mass.forearm_kg`, `_inertia_kgm2`, `_centre_m` | kg, kg m², m | The forearm's, from the elbow | 1.2, 0.01024, 0.16, estimates |
-| `mass.effector_kg`, `_inertia_kgm2`, `_centre_m` | kg, kg m², m | The effector's (fork, pads, wrist pulley), from the wrist | 0.4, 0.004, 0.12, estimates |
+| `mass.column_inertia_kgm2` | kg m² | What turns with the column: its head, motor 2 and its gearbox, the shoulder pulley | 0.05 (bounds 0.03 to 0.08), estimate |
+| `mass.upper_arm_kg`, `mass.upper_arm_inertia_kgm2`, `mass.upper_arm_centre_m` | kg, kg m², m | The upper arm's mass, inertia about its own centre (a uniform bar, m L² / 12) and the centre's distance from the shoulder | 1.5 (bounds 1.2 to 1.8), 0.0128, 0.16, estimates |
+| `mass.forearm_kg`, `mass.forearm_inertia_kgm2`, `mass.forearm_centre_m` | kg, kg m², m | The forearm's, the centre's distance from the elbow | 1.2 (bounds 0.9 to 1.5), 0.01024, 0.16, estimates |
+| `mass.effector_kg`, `mass.effector_inertia_kgm2`, `mass.effector_centre_m` | kg, kg m², m | The effector's (fork, pads, wrist pulley), the centre's distance from the wrist | 0.4 (bounds 0.3 to 0.6), 0.004, 0.12 (bounds 0.1 to 0.14), estimates |
 | `mass.payload_kg`, `payload_inertia_kgm2` | kg, kg m² | The wafer, its centre at `geometry.effector_m`, and its inertia about its axis | 0.1276, 1.4355e-3: 300 mm, 775 µm of silicon, catalogue (SEMI M1) |
 | `elbow_band.pulley_radius_m` | m | The band in the upper arm: the elbow pulley's radius (the shoulder pulley's is twice it) | 0.03, estimate |
 | `wrist_band.pulley_radius_m` | m | The band in the forearm: the wrist pulley's radius (the elbow pulley's is half of it) | 0.035, estimate |
@@ -1433,6 +1580,60 @@ Its own keys (estimates, each with a `[bounds]` entry where it is a part's prope
 | `rope.specific_damping_n_s` | N s | Its damping times its free length, so c / l | 1660 |
 | `rope.breaking_load_n`, `safety_factor` | N, – | Verdict `rope-max-tension`: the tension at most their quotient | 20000, 4.5 |
 | `rope.min_tension_n` | N | Verdict `rope-min-tension`: the tension never below this (no slack rope) | 50 |
+
+## Movers on a closed track (`machine-mover-track`)
+
+The config of `mover-track` ([`machine-mover-track/default.toml`](../crates/machine-mover-track/default.toml)) has the
+tables of the joint kit's linear motor axis (`[parts]`, `[effects]`, `[thermal]`, `[thermal_feedback]`, `[profile]`,
+`[sim]`, `[slide]`, `[linear_motor]`, `[gearbox]`, `[motor]`, `[drive]`, `[ratings]`, `[base]`, `[brake]`, `[bounds]`,
+`[start]`, `[[cycle.segment]]`) with the same meanings, one motor and drive per mover, all alike: `[motor]` is the coils
+under one mover, read in N for N m and m for rad (100 N peak, 30 N continuous, 4 m/s on 48 V [catalogue], Beckhoff XTS
+AT2000 and AT9014; force constant 10 N/A, resistance 1 Ω, inductance 2 mH [estimate]; `rotor_inertia_kgm2` 0.2 is the
+magnet plate's mass), `[gearbox]` the plate's mount on the body (ratio 1, 2e7 N/m, bounds 1.5e7 to 5e7, [estimate]),
+the DC link the movers' shared 48 V supply (`effects.shared_dc_link` on). The tool pose, `start.pose` and the cycle's
+targets are each mover's distance along the loop's centre line (m), unwrapped. [`flying.toml`](../crates/machine-mover-track/flying.toml)
+is the same config with `track.cycle = "flying"`, `cam.run = true` and its start poses. Model in
+[mechanisms](mechanisms.md#movers-on-a-closed-track-machine-mover-track). Its own keys (MT: `default.toml`; flying:
+`flying.toml` where it differs):
+
+| Key | Unit | Meaning | Default |
+| --- | --- | --- | --- |
+| `track.straight_m` | m | Each of the two straights, a whole number of modules | 1.0 |
+| `track.module_m` | m | A motor module (segment) of a straight; each curve is one segment | 0.25, [catalogue] AT2000-0250 |
+| `track.curve_radius_m` | m | The radius R of each 180° curve's arc, between its clothoids | 0.1303 (bounds 0.125 to 0.1335), [estimate]: with the clothoids the curve is 267 mm across, [catalogue] |
+| `track.clothoid_m` | m | At least 0 and below π R: the length of the clothoid at each end of a curve, over which the curvature rises linearly; a curve is π R + this long | 0.1 (bounds 0 to 0.15), [estimate] |
+| `track.cycle` | – | The cam the controller runs with `cam.run`: `"index"` (every mover one station pitch, the loop over the movers, on and standing there) or `"flying"` (each mover in turn synchronous with a conveyor over the process, back round the loop for the rest) | `"index"`; flying `"flying"` |
+| `track.index_rate_hz` | 1/s | `"index"`: indexes per second | 1.5, choice |
+| `track.index_share` | – | `"index"`: the share of a period the index takes, below 1; the movers stand at their stations for the rest | 0.6, choice |
+| `track.index_law` | – | `"index"`: the move's law, `"3-4-5"`, `"4-5-6-7"`, `"cycloid"` or `"harmonic"` (VDI 2143) | `"4-5-6-7"`, choice |
+| `track.conveyor_speed_m_s` | m/s | `"flying"`: the conveyor's speed, the cam's master | 1.0, choice |
+| `track.product_pitch_m` | m | `"flying"`: the products' pitch on the conveyor; one mover goes round once per movers × pitch of conveyor | 0.3, choice |
+| `track.process_length_m` | m | `"flying"`: how far a mover runs synchronous with the conveyor; below movers × pitch and below the loop | 0.3, choice |
+| `track.return_law` | – | `"flying"`: the law of the return round the loop, blending into the synchronous run at both ends; laws as `index_law` | `"4-5-6-7"`, choice |
+| `cam.run`, `cam.ramp_s` | –, s | The controller runs the track's cam instead of `[[cycle.segment]]`; the master comes up to speed in `ramp_s` | false, 0.5; flying true |
+| `mass.mover_kg` | kg | A mover's body without its magnet plate (the plate is `motor.rotor_inertia_kgm2`) | 0.451 (bounds 0.42 to 0.48): [catalogue] 651 g of the AT9014 with its plate, less the plate's [estimate] 0.2 kg |
+| `mass.payload_kg` | kg | What each mover carries (`effects.payload`) | 0.6, [catalogue] the AT9014's life test |
+| `mass.centre_offset_m` | m | How far outside the centre line the body's and payload's mass centre runs: in a curve on R + e at v (1 + e k), its mass m (1 + e k)²; the plate stays on the centre line | 0 (the drawn mover is 35 mm out) |
+| `mover.length_m` | m | The body's length along the track: the gap between neighbours is the distance along the centre line less it; start poses closer than it are refused | 0.07, [catalogue] AT9014-x070 |
+| `mover.wheelbase_m` | m | At least 0: the rollers' spread; the body follows the curvature's mean over it | 0.05 (bounds 0.03 to 0.07), [estimate] |
+| `mover.magnet_length_m` | m | The magnet plate's length over the coils: a mover's current is shared among the segments by the plate's length on each | 0.06 (bounds 0.05 to 0.07), [estimate] |
+| `slide.friction_coulomb_n`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | N, N s/m, m/s | The rollers' rolling resistance and drag (`effects.joint_friction`), to which `linear_motor.guide_friction_coefficient` times the attraction is added | 0.1 (bounds 0.05 to 0.3), 0.5 (0.1 to 2.0), 0.002, [estimate] |
+| `slide.friction_breakaway_n`, `friction_stribeck_m_s`, `presliding_stiffness_n_m` | N, m/s, N/m | With `effects.slide_presliding` (off) | 0.15, 0.001, 1e6, [estimate] |
+| `slide.stroke_m`, `stop_stiffness_n_m`, `stop_damping_n_s_m` | m, N/m, N s/m | Read, not used: a closed track has no ends | 1.0, 2e6, 2000 |
+| `linear_motor.*` | | The plate's attraction to the coils (it holds the mover against the centrifugal force), the pole pitch and the rollers' friction from the attraction: see [`[linear_motor]`](#linear_motor) | 300 N, 0.012 m, 0.005, [estimate] |
+| `segment.thermal_resistance_k_w` | K/W | Each segment's thermal resistance to the surroundings; it warms with the copper loss of the movers' currents in it (`segment.<j>.temperature_rise`) | 2 (bounds 1 to 4), [estimate] |
+| `segment.thermal_time_constant_s` | s | Its thermal time constant | 600 (bounds 300 to 1200), [estimate] |
+| `axis.s1` to `axis.s6`: `max_velocity_m_s`, `max_acceleration_m_s2`, `max_jerk_m_s3` | m/s, m/s², m/s³ | One table per mover (up to `axis.s7`): its limits. The cams are not held to them | 3, 30, 2000, [estimate] (the motor's 4 m/s [catalogue]) |
+| `start.pose` | m | One position per mover, 1 to 7 movers, rising, each at least `mover.length_m` ahead of the one before and all within one loop | 0.125 and on by the station pitch 0.503116; flying 0.3, 0.6, 0.940636, 1.553169, 2.36553, 2.978063 |
+| `ratings.settling_tolerance_m` | m | As every machine's (`settling`) | 3e-5 |
+| `ratings.station_tolerance_m` | m | `station-settling`, per mover, with the index cam only: how far a standing mover may be off its station | 1e-5, [catalogue] AT20xx repeatability ±0.01 mm |
+| `ratings.min_gap_m` | m | `mover-gap`: the least gap between neighbours | 0.002, [catalogue] AT20xx |
+| `ratings.segment_max_current_a` | A | `segment-current`: the highest current in a segment, the sum of its movers' shares | 48, [catalogue] AT2000 peak |
+| `ratings.segment_max_rise_k` | K | `segment-temperature`: the rise a segment's loss, averaged over about a pass, settles at | 40 (bounds 30 to 60), [estimate] |
+| `ratings.mover_guide_max_load_n` | N | `mover-guide-load`, per mover: the rollers' load sqrt((F_a − m v² k)² + (m g)²) | 500 (bounds 300 to 800), [estimate] |
+| `ratings.mover_max_liftoff_ratio` | – | `curve-holding`, per mover: the share m v² k / F_a of the attraction the centrifugal force may take (at 1 the mover lifts off) | 0.7 (bounds 0.5 to 0.9), [estimate] |
+
+The movers' ratings are optional: one left out is not judged.
 
 ## `[[cycle.segment]]`
 
