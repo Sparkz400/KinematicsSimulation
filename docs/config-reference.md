@@ -1296,7 +1296,7 @@ the lift (m). Its own keys:
 
 | Key | Unit | Meaning | Value, source |
 | --- | --- | --- | --- |
-| `effects.joint_elasticity` | | The gearboxes of motors 1 and 2 and the Z stroke's coupling and screw twist (two bodies per joint; the column rings on its screw at several hundred Hz); off, the rigid model | true |
+| `effects.joint_elasticity` | | The gearboxes of motors 1 and 2 and the Z stroke's coupling and screw twist (two bodies per joint; the column rings on its screw and coupling at 321 Hz with the rotor held); off, the rigid model | true |
 | `effects.band_elasticity` | | The bands in the links stretch: the forearm and the effector on the bands' springs; off, rigid bands | true |
 | `geometry.link_m` | m | Both links' length, shoulder to elbow and elbow to wrist (equal, or the bands would not keep the wrist on the radial line) | 0.32, estimate |
 | `geometry.effector_m` | m | The effector's length from the wrist to the wafer centre | 0.18, estimate |

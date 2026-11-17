@@ -567,7 +567,10 @@ begrenzt, die Drehung auf 4 rad/s und 36 rad/s² mit dem Wafer auf r = 0,05 m na
 k = 9,4e5 N/m, 150 N): Ihre Dehnung lässt Unterarm und Effektor hinter Säule und Oberarm zurückbleiben, der Wafer bleibt
 in r zurück, und der Effektor dreht sich aus seiner radialen Linie (`effector.direction_error`; beim Verweilen an einer
 Station geprüft, `effector-direction`); ein Trum, das seine ganze Vorspannung verliert, wird schlaff (`elbow-band-slack`,
-`wrist-band-slack` prüfen den Ausschlag gegen die Hälfte davon). Siehe die
+`wrist-band-slack` prüfen den Ausschlag gegen die Hälfte davon). Mit elastischen Getrieben (`effects.joint_elasticity`) sind
+Kupplung und Spindel des Hubs ebenfalls eine Feder (in Reihe 4,56e7 N/m am fernen Ende der Mutter): Die Säule schwingt
+darauf mit 321 Hz bei gehaltenem Läufer, was den Standardzyklus um weniger als 0,1 % verschiebt (die größte Kraft der
+Spindel 172,4 auf 172,5 N). Siehe die
 [Modellreferenz](../model-reference.md#wafer-handler) und die
 [Konfigurationsreferenz](../config-reference.md#wafer-handler).
 
@@ -1094,7 +1097,7 @@ und Bändern; bei φ = 60°, θ = 30° liegt das Handgelenk bei (0,277128, 0,16)
 (−0,5, 1,0) m/s²; ein Moment von 1 N m am Effektor dehnt die Bänder um β = 2,955083e-4 und γ = 5,819704e-4 rad
 (K₁ = 1692, K₂ = 2303 N m/rad) und dreht ihn um 3,300103e-4 rad aus seiner radialen Linie; die starren Bänder tragen
 dT₁ = −4,271710 N und dT₂ = 4,379926 N bei θ̈ = 10 rad/s² mit dem Handgelenk über der Säule; der Z-Motor hält 11,2276 kg
-mit 0,1752378 N m; die Eigenformen gegen die von numpy (18,20 bis 186,45 Hz); der Halt auf Pads, Vakuum und Kante; ein
+mit 0,1752378 N m; die Eigenformen gegen die von numpy (18,20 bis 186,45 Hz) und die Säule auf Spindel und Kupplung, von Hand 320,8907 Hz; der Halt auf Pads, Vakuum und Kante; ein
 Trum wird über seine Vorspannung hinaus schlaff; der Standardzyklus besteht alle Prüfungen, und eine Reichweite, die mit
 3 m/s² anläuft, lässt den Wafer rutschen.
 

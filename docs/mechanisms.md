@@ -590,7 +590,9 @@ column's axis (0.8 m/s² outwards and 1.8 m/s² along); the wafer reaches 1.83 m
 k = 9.4e5 N/m, 150 N): their stretch lets the forearm and the effector lag behind the column and the upper arm, the
 wafer lags in r and the effector turns out of its radial line (`effector.direction_error`; judged while it dwells at a
 station, `effector-direction`); a span that loses all its pretension runs slack (`elbow-band-slack`, `wrist-band-slack`
-judge the swing against half of it). See the [model reference](model-reference.md#wafer-handler) and the
+judge the swing against half of it). With the gearboxes elastic (`effects.joint_elasticity`) the lift's coupling and screw
+are a spring too (in series 4.56e7 N/m at the nut's far end): the column rings on it at 321 Hz with the rotor held, which
+moves the default cycle by under 0.1 % (the screw's peak force 172.4 to 172.5 N). See the [model reference](model-reference.md#wafer-handler) and the
 [config reference](config-reference.md#wafer-handler).
 
 ## Parallel kinematics: hexapod and cable robots
@@ -1136,7 +1138,8 @@ dr/dφ = −0.554256 m/rad; the R motor's inertia by hand M_φφ = m₁ c₁² +
 turn at 1 rad/s at r = 0.5 m the wafer's acceleration is (−0.5, 1.0) m/s²; a torque of 1 N m on the effector stretches
 the bands by β = 2.955083e-4 and γ = 5.819704e-4 rad (K₁ = 1692, K₂ = 2303 N m/rad) and turns it out of its radial line by
 3.300103e-4 rad; the rigid bands carry dT₁ = −4.271710 N and dT₂ = 4.379926 N at θ̈ = 10 rad/s² with the wrist over the
-column; the Z motor holds 11.2276 kg with 0.1752378 N m; the modes against numpy's (18.20 to 186.45 Hz); the hold on
+column; the Z motor holds 11.2276 kg with 0.1752378 N m; the modes against numpy's (18.20 to 186.45 Hz) and the column on its
+screw and coupling, 320.8907 Hz by hand; the hold on
 pads, vacuum and edge; a span runs slack beyond its pretension; the default cycle passes all verdicts and the reach
 speeding up at 3 m/s² slips the wafer.
 
