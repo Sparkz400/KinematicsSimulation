@@ -443,7 +443,8 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
     // where it burns, so its chopper switches in just above the (low) bus; fine interpolation acts between profile
     // cycles, at a profile cycle of 2 ms against the position loop's 1 ms; the arm tube's inertia goes into the arms'
     // bending (effects.link_elasticity); the iron loss is what the stall current's copper loss has more than the
-    // rated current's (equal in the shipped motors), so the stall current is a fifth above the rated one; and the
+    // rated current's, none where a motor's two are equal and on either side where its catalogue prints them apart
+    // (the 1FK2105-4AF's 4.65 A against 4.35 A), so both runs set the stall current a fifth above the rated one; and the
     // shipped friction feedforward has no torque in its characteristic, so it gets 0.05 N m.
     let resistor =
         [format!("ratings.braking_threshold_v = {:?}", 1.05 * base.f64("drive.bus_voltage_v").unwrap_or(0.0))];
