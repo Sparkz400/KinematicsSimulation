@@ -1527,6 +1527,321 @@ R z)); `kinematics.condition`. The verdicts `crank-dead-centre`, `rod-buckling` 
 `ratings.rod_buckling_safety_factor`), `crank-ball-joint` and `platform-ball-joint` judge their peaks; the gearboxes'
 output torque (`gearbox.<i>.output_torque`) is judged by the common gearbox verdicts.
 
+## Four-arm delta H4
+
+Source: [`machine-delta-h4/src/lib.rs`](../crates/machine-delta-h4/src/lib.rs) (id `delta-h4`); the plate and its
+amplifier in [mechanisms](mechanisms.md#two-part-plate-with-a-rack-and-pinion-amplifier-delta-h4). Four arms at 90°,
+arms 1 and 2 carrying plate part A, arms 3 and 4 part B. The parts slide against each other along d = (1, −1, 0)/√2 by
+the half slide h each, A at p − h d and B at p + h d; a pinion between racks on the parts turns the tool through a gear
+stage, c = κ h, κ = i_p / r_p. The tool is (x, y, z, c).
+
+```text
+kinematics  per leg the D3's at q_k = p + σ_k h d (σ = −1 on A, +1 on B);  J_x row k = (u_k, σ_k u_k · d)
+dynamics    M(θ) θ̈ = τ_gear + Q_g − v + τ_joint      every body a point with its Jacobian P in θ: m Pᵀ P, m Pᵀ a0, −m g P_z
+            the parts m_part + 2 (1 − s) m_fb each (P = J_p ∓ d J_h), carriage and payload at p, the tool I_t κ² ḣ² / 2
+```
+
+With `effects.forearm_inertia` the forearms are rods as on the D3 (a sixth at each end, two thirds at the middle, and
+their spin). `effects.amplifier_compliance`: the tool is a body of its own on the amplifier's spring, τ_a = k (κ h − φ) +
+c (κ ḣ − φ̇), I_t φ̈ = τ_a, the arms feeling −κ J_hᵀ τ_a; with `effects.amplifier_backlash` a dead band in it.
+
+**Arm bending** (`effects.arm_bending`, off as shipped): each upper arm bends as the [D3's](#delta-picker-d3) do with
+`link_elasticity`, in its plane on k_b = 3 E I / L_a with a damper and out of it on k_l = 3 E I / L_a³ with a damper, E I
+from the arm tube's own dimensions (`[upper_arm]` `tube_outer_diameter_m` D, `tube_wall_m` s, `youngs_modulus_pa`;
+I = π (D⁴ − (D − 2s)⁴) / 64). The tube stays with the root at θ; the elbow block, the forearms' share and all beyond move
+with the elbow angle e = θ + δ and the moves y along the elbows' axes a_k:
+
+```text
+|q_k − c_k − y_k a_k|² = L_b²,   J_x ẋ = J_q ė + J_y ẏ,   J_y = diag(u_k · a_k)
+M_d (ë, ÿ) = Q_d − v_d − (k_b δ + c_b δ̇, k_l y + c_l ẏ) − κ P_hᵀ τ_a            (8 coordinates beyond the tubes)
+I_arm θ̈ = τ_gear + g m_arm l_cg cos θ + k_b δ + c_b δ̇
+```
+
+The springs' energy (k_b δ² + k_l y²)/2 is elastic energy, the dampers' power the loss `arm_bending`. With
+`effects.arm_tube_inertia` as well the tube takes its share of the bending in its first cantilever mode, with the
+coupling B and the elbow block's twist, exactly as on the [D3](#delta-picker-d3) (`joint_load_at`, `bend_rates`).
+
+The modes (`Machine::modes`): the arms on their gearboxes, bending springs and lateral springs with the motors held, as
+on the D3, plus the amplifier's; `modes_small_amplitude` with the hysteresis's stiffness for the arms. The rods' spin is
+in the frame's momentum.
+
+## Five-bar in the horizontal plane (parallel SCARA)
+
+Source: [`machine-parallel-scara/src/lib.rs`](../crates/machine-parallel-scara/src/lib.rs) (id `parallel-scara`). The
+[D2](#delta-picker-d2)'s five-bar laid flat in the x-y plane: two arms about vertical axes, each with a forearm pair to
+a plate that keeps its orientation; the same kinematics with y for z, the forward solution the point further from the
+shoulders. Optional at the plate: a Z stroke on a ball screw (`[z_axis]`, motor 3) and the tool's turn (`[tool_turn]`,
+motor 4); tool (x, y[, z][, c]).
+
+```text
+M(θ) θ̈ = τ_gear − m_nt Jᵀ J_x⁻¹ w + τ_joint,   M = I_b 1 + m_nt JᵀJ,   I_b = I_arm + L_a² (m_elbow + s m_fb)
+m_nt = plate + payload + 2 (1 − s) m_fb + what the plate carries (Z and C units, carriage)
+```
+
+Gravity acts along −z on the joints' bearings and gives the arms no torque; the stroke lifts its carriage, m_z q̈ = F −
+m_z g, the turn spins the tool, J_c c̈ = T, both felt by the plane's motors only through their masses in m_nt. With
+`effects.joint_elasticity` the stroke and the turn are elastic like the arms' joints: the rotor a body of its own and the
+gearbox's spring between rotor and carriage (for the stroke the screw's and the coupling's stiffness in series, N/m) or
+tool. The arm's first moment is m c from `mass.upper_arm_kg` and `upper_arm_cg_m`.
+
+**Modes** (with elastic gearboxes): the plane's two, the arms on K = diag(k_1, k_2) against the load's mass matrix at the
+pose, det M λ² − (k_1 M_22 + k_2 M_11) λ + k_1 k_2 = 0, damping vᵀCv / (2 ω vᵀMv); the stroke's carriage and the tool on
+their gearboxes with their rotors held, √(K / m) / 2π, damping c / (2 √(K m)); lowest first. `resonance_hz` is the
+plane's lowest (what a shaper on the path is for). Shipped, at x = −0.04 m on the start pose's line: 45.60 and 47.27 Hz in the plane, 142.24 Hz
+and 447.82 Hz (`sim-cli modes parallel-scara`).
+
+## Hexapod (six electric cylinders)
+
+Source: [`machine-hexapod/src/lib.rs`](../crates/machine-hexapod/src/lib.rs) (id `hexapod`); the geometry in
+[mechanisms](mechanisms.md#hexapod). A Stewart-Gough platform on six ball-screw cylinders, each a joint of
+`chain::JointMachine` (`RotaryJoint` with a `BallScrew`). Tool (x, y, z, rx, ry, rz), the orientation a rotation vector.
+
+```text
+inverse   P_i = p + R a_i,  d_i = P_i − B_i,  L_i = |d_i|,  q_i = L_i − L_closed
+twist     q̇_i = u_i · v + (b_i × u_i) · w   (rows of J),   forward: Newton on the twist from the home pose to 1e-13 m
+dynamics  M_ξ ξ̇ + c + g = Jᵀ f,   q̈ = J ξ̇ + a0,   M_q = J⁻ᵀ M_ξ J⁻¹,   h = J⁻ᵀ (c + g − M_ξ J⁻¹ a0),   M_q q̈ + h = f
+```
+
+Each leg is two bodies, as on the [tripod](#tripod): the rod part (`leg.platform_share` of `leg.mass_kg`, centre
+`leg.platform_part_centre_m` from the platform joint) and the body part (the rest, centre `leg.base_part_centre_m` from
+the base joint), each with its inertia across the leg, turning with u = d / L; each adds m Aᵀ A + I_t A_uᵀ A_u to M_ξ and
+m Aᵀ (a0 + g e_z) + I_t A_uᵀ ü to c + g. The payload is a point mass at the platform centre with its own inertia
+(`mass.payload_inertia_kgm2`, turning with the platform). The rotors spin along their legs (in the frame's momentum).
+**Refusals**: `error-hexapod-joint-angle`, a leg steeper than `workspace.max_joint_angle_deg` against the base's or
+the platform's normal (the rods checked against both), and `error-hexapod-singularity`. Verdicts: the screws'.
+Not modelled: the rotors' gyroscopic coupling with the legs' swing, friction and play in the joints.
+
+## Cable robots
+
+Source: [`machine-cable-robot/src/lib.rs`](../crates/machine-cable-robot/src/lib.rs): `cable-planar` (a point-mass
+carriage in a vertical plane on 4 cables, tool x, z) and `cable-spatial` (a platform on 8 cables, tool x, y, z, rx, ry,
+rz); geometry and statics in [mechanisms](mechanisms.md#cable-robots). Each cable leaves its winch over a swivelling
+pulley of radius r and runs straight to its anchor: L = r β + l_f, dL/dP = −u.
+
+**Tensions.** The structure matrix A (columns (u, b × u)) holds a wrench w with A t = w; the tensions are the ones
+nearest `cable.reference_tension_n` within `cable.min_tension_n` to `cable.breaking_load_n` / `cable.safety_factor`
+(a small QP, `distribute`). A pose whose weight no tensions in the band hold is refused. The time-optimal plan keeps
+the tensions of each pose, speed and acceleration in that band (`rigid_tensions_moving`, `tension_band`), with the share
+`profile.tension_reserve` of the room kept back.
+
+**Dynamics.** M ξ̇ + c + g = A t. Each winch is a `RotaryJoint` in metres of cable (the drum's radius the lever, its
+inertia J / r² at the cable, bearing friction `winch.friction_*`, stops at its capacity). Elastic (`effects.cable_stretch`)
+a cable of free length l pulls with t = EA (L − l) / l while taut, the drum with t (1 + (L − l) / (2l)); with
+`effects.cable_damping` a damper c / l (`cable.specific_damping_n_s`). Rigid, l = L(pose) and the winches' inertia joins
+the platform's through G = −Aᵀ.
+
+**Cable weight and sag** (`cable.mass_per_m_kg` ρ, always in when the key is set; 0 where it is left out). The free span
+hangs from both ends: V = ρ g L (z_P − z_E) / 2, at the anchor the force ρ g / 2 (L e_z − (z_P − z_E) u) and its moment.
+The sag is the shallow parabola: with w = ρ g, l_h the span's horizontal part and t0 = EA (L − l) / l,
+
+```text
+T³ − t0 T² − c / 2 = 0,   c = (w l_h)² EA l_f / (12 L)         the chord tension T, its one positive root (`sagged`)
+dT/dt0 = 1 / (1 + c / T³)                                       Ernst's equivalent modulus
+W = T² / 2 − c / T,   energy (l / EA) W                          the platform takes T, the drum T L / l − W / EA
+```
+
+so a cable is taut at any t0 (slack, it hangs at T = √(c / (2|t0|))). Rigid cables have no sag. Left out: W's change with
+the pose through c, and the cables' own inertia. The winches' spin is in the frame's momentum about
+`frame.winch_spin_axes`.
+
+The motor angles of a pose (`inverse`) are those of the free lengths that hold the platform at rest there with the
+distribution's tensions, l = L / (1 + t / EA), so position setpoints and torque feedforward ask the same pretension.
+
+## Overhead crane
+
+Source: [`machine-overhead-crane/src/lib.rs`](../crates/machine-overhead-crane/src/lib.rs), with the extended model in
+[`full.rs`](../crates/machine-overhead-crane/src/full.rs); the machine in [mechanisms](mechanisms.md#overhead-crane-machine-overhead-crane).
+A bridge on a runway (x), a trolley on its girder (y) and a hoist winding the rope on its drum; each drive a motor behind
+a gearbox with its wheel or drum as the lever (`RotaryJoint` with a `Converter`). The tool is the hook as the drives
+place it: x, y and the height the drum's rope gives the empty hook. The rope runs straight from the sheave T = (x_b, y_t,
+H) (`crane.rope_exit_height_m`) to the load P:
+
+```text
+L = |P − T|,  u = (P − T) / L,  e = L − l                  l the free rope the drum has paid out
+t = EA e / l + c / l (L̇ − l̇)  while e > 0, never below 0   (effects.rope_stretch; c with effects.rope_damping)
+(m_b + m_t) ẍ = drive_x + t u_x − F_roll,x + stops         m_t ÿ = drive_y + t u_y − F_roll,y + stops
+J_drum / r² l̈ = drive_l + t (1 + e / (2l)) + stops         m P̈ = −t u − m g e_z
+F_roll = w N tanh(v / v_s),  N = (wheels' mass) g + t (−u_z)   (effects.guide_friction, `crane.rolling_*`)
+```
+
+The drives are rigid with the rotors at the axis (i² J_rotor) and the gearbox's loss factor on the power it passes.
+`resonance_hz` is the pendulum's 1 / (2π) √(g / L) at the rope's length where the plan stands. At rest the load hangs on
+a rope stretched by its weight, l = L / (1 + m g / EA); the motor angles count on the empty hook's weight alone, so the
+drum stands still when the payload goes on or off. With `effects.rope_stretch` off the rope is rigid, L = l, its tension
+the constraint force.
+
+Five further effects, each its own switch (off as shipped; off, the model above exactly), solved together by one mass
+matrix over q = (x_c, y, l, P1 (3) [, a, b] [, ψ]), M(q) q̈ = f(q, q̇), each point mass adding m Jᵀ J to M and Jᵀ (F − m
+J̇ q̇) to f:
+
+- `effects.rope_mass` (`rope.mass_per_m_kg_m` μ): the free rope's material runs off the sheave at the drum's speed, its
+  velocity linear from v_A = v_S + l̇ u to v_P, K = μ l / 6 (|v_A|² + v_A · v_P + |v_P|²); the wound rope moves with the
+  trolley and the drum's surface, K_w = μ (capacity − l) (|v_S|² + l̇²) / 2; V = μ g [l (H + z_P) / 2 + (capacity − l)
+  H]. Lagrange's equations with the growing mass μ l; nothing is booked as loss. `rope.tension` is the drum's end, (m +
+  μ l) g at rest, `rope.shortfall` the hook's.
+- `effects.hook_block`: the hook block (`crane.hook_mass_kg`) at P1 on the rope, the load on a sling of
+  `crane.sling_length_m` at P2 = P1 + l_s (sin a cos b, sin b, −cos a cos b): a spherical double pendulum. The load's
+  signals are P2's.
+- `effects.joint_elasticity`: each drive the elastic joint of the other machines, the gearbox's stiffness, damping and
+  backlash between the rotor (a state) and the wheel or drum.
+- `effects.bridge_skew`: the bridge a rigid girder on two end carriages at x_A,B = x_c ∓ ψ g / 2 (g =
+  `crane.bridge_gauge_m`), each with a drive of the bridge's config sharing its command, Q_x = F_A + F_B, Q_ψ = (F_B −
+  F_A) g / 2; the wheels' lateral stiffness (`crane.bridge_wheel_lateral_stiffness_n_m`, over
+  `crane.bridge_wheelbase_m`) holds the yaw with k_ψ ψ, damped at `crane.bridge_skew_damping_ratio`. The trolley sits at
+  x_c + ψ (y − y_c) and its place shares the wheels' load between the two sides.
+- `effects.floor_contact`: the standing body (the load's point, or the hook block's) is a one-sided constraint a_z = 0 at
+  `crane.floor_height_m` with N ≥ 0, N = −a_z,free / (J_z M⁻¹ J_zᵀ), and Coulomb friction μ_f N
+  (`crane.floor_friction_coefficient`, smoothed over `crane.rolling_smoothing_m_s`) iterated with N; the rigid rope
+  respects the floor too, and a rope that comes taut lifts the load.
+
+Left out: the rope's bending at the sheave, the load's own turning (a point mass), and a slack sling: with the hook block
+and the floor contact on, the sling is a rod.
+
+## Crank and cam machines
+
+Source: [`machine-crank-cam`](../crates/machine-crank-cam/src/lib.rs); the mechanisms in
+[mechanisms](mechanisms.md#crank-and-cam-mechanisms-machine-crank-cam). Each is one motor-driven joint
+(`chain::JointMachine`), so motor, gearbox, drive, friction feedforward, `rigid_checks` and the two-mass mode are the
+joint machine's; each can run its electronic cam (`cam.run`, off as shipped: then the config's cycle segments run).
+The [toggle press](#toggle-press) is the sixth.
+
+**Slider-crank** (`slider-crank`, [`crank.rs`](../crates/machine-crank-cam/src/crank.rs)): x(θ) = r cos θ + √(l² − r²
+sin² θ) from the crank's centre, θ = 0 at the outer dead centre. The rod's mass is split at `rod.crank_end_share`:
+
+```text
+J(θ) = J_crank + m_pin r² + m_x x'²,   speed term m_x x' x'' θ̇²,   V = g (m_x x sin β + m_pin r sin(θ + β))
+```
+
+β = `slider.incline_deg`. The process force (`effects.process_force`, a table over the slider's distance from the outer
+dead centre) pushes back while the slider moves outwards, not on the way back: torque −F x'. Rod force, guide load and
+crank bearing load are judged (`ratings.rod_max_force_n`, `slider_guide_max_load_n`, `crank_bearing_max_load_n`).
+
+**Rotary knife** (`rotary-knife`, [`knife.rs`](../crates/machine-crank-cam/src/knife.rs)): a roll of radius R with n
+blades; in the synchronous zone ±α about each cut the blade runs with the web (slope 1/R), between cuts a VDI 2143 law
+takes the rest of the pitch 2π/n − 2α over L − 2Rα of web. The cut brakes the roll with a table over the angle while it
+turns forwards.
+
+**Flying saw** (`flying-saw`, [`saw.rs`](../crates/machine-crank-cam/src/saw.rs)): a carriage on a rack; per cut length
+it synchronises (speed blended as 3u² − 2u³, v²/(2a) of travel), runs with the material over the cut window W, leaves
+it, and returns by `saw.return_law` over the rest, L − 2v²/a − W of material. The cut pushes along the material with a
+table over the way into the window.
+
+**Disc cam** (`disc-cam`, [`disc.rs`](../crates/machine-crank-cam/src/disc.rs)): a roller follower on a slide, offset e,
+on a disc of base radius r_b; lift s(θ) from VDI 2143 segments, s0 = √((r_b + r_r)² − e²), tan φ = (s' − e) / (s0 + s).
+On the disc, N = (m s̈ + F0 + k s + m g) / cos φ, J(θ) = J_disc + m s'², spring and weight torque (F0 + k s + m g) s'.
+
+`effects.follower_lift_off` (off as shipped) lets the follower leave the disc: its lift is s + g with the gap g a passive
+joint, and with the guide's Coulomb friction F_f = F_g tanh(v / 1 mm/s) (F_g = `follower.guide_friction_n`), which the model
+without lift-off does not have:
+
+```text
+(J_disc + m s'²) θ̈ + m s' g̈ + m s' s'' θ̇² + (F0 + k s_f + m g + F_f) s' = τ
+m s' θ̈ + m g̈ + m s'' θ̇² + F0 + k s_f + m g + F_f = F_c
+F_c = max(0, Q(d) + c_d ḋ),  d = −g,  d = 3.84e-5 Q^0.9 / l^0.8 (mm, N, mm)     Palmgren's roller line contact
+c_d = 2 ζ √(Q / (0.9 d) m)   (`follower.contact_damping_ratio`),   energy 9/19 d Q
+```
+
+The damper's power and the guide's friction are booked as losses, so the energy budget closes through an impact. Signals
+`follower.gap`, `follower.off_disc`; the feedforward takes the follower on the disc.
+
+## Indexing tables (Geneva drive, cam indexer)
+
+Source: [`indexer.rs`](../crates/machine-crank-cam/src/indexer.rs) (`geneva-drive`, `cam-indexer`). A driver steps a
+table of n stations on by one per turn and holds it in the dwell. θ = 0 at mid-index; the index runs over |θ − 2πk| < h.
+
+```text
+Geneva   λ = sin(π/n),  tan φ = λ sin x / (1 − λ cos x),  φ' = λ (cos x − λ) / (1 − 2λ cos x + λ²),  h = π/2 − π/n
+cam      φ = (2π/n) s(u),  u = (x + h) / (2h),  s the modified sine (peak acceleration 5.528, speed 1.760)
+load     J(θ) = J_driver + J_t φ'²,  J_t = J_wheel + J_table + m r_s²,  speed term J_t φ' φ'' θ̇²
+```
+
+The Geneva's acceleration jumps by tan(π/n) θ̇² at the pin's entry (the driver does not feel it, φ' = 0 there); the pin
+pushes the slot with F = T / r. The cam's rollers on the pitch radius r_p take F = T / r_p; with `indexer.cam_radius_m`
+R_c the contact leans by the cam's pressure angle, tan α = r_p φ' / R_c, N = F / cos α (signal `indexer.pressure_angle`
+only with the key; without it α = 0). In the dwell the locking disc (dwell ridge) holds the wheel within
+`indexer.locking_play_rad`. The ring's ω_n² = k / J_s takes the table side's own inertia, the wheel held by the cam.
+
+The table rings on its shaft (`table.stiffness_nm_rad` k, `table.damping_ratio` ζ). By default that ring is worked out
+beside the dynamics, x'' + 2ζω_n x' + ω_n² x = −φ'' θ̇², ω_n² = k / J_s, its amplitude A at the index's end settling as
+exp(−ζ ω_n t) to `ratings.index_settling_tolerance_m` at the station radius, without acting back. With
+`effects.table_twist` (off as shipped) the twist x is a passive joint (J_s = J_table + m r_s²):
+
+```text
+(J_d + J_t φ'²) θ̈ + J_s φ' ẍ + J_t φ' φ'' θ̇² = τ
+J_s φ' θ̈ + J_s ẍ + J_s φ'' θ̇² = −k x − c ẋ,   c = 2ζ √(k J_s)
+```
+
+so the ring acts back on the driver and its loop; signal `table.twist`, loss `power.table_twist`; the index error in the
+dwell adds |x| at the station radius. The feedforward knows the rigid table.
+
+## Axes of the joint kit (screw, rack, linear motor, rotary table)
+
+Source: [`slide.rs`](../crates/machine-joint-kit/src/slide.rs), [`table.rs`](../crates/machine-joint-kit/src/table.rs);
+the transmissions in [mechanisms](mechanisms.md#ball-screw). One `chain::JointMachine` joint each.
+
+- `screw-axis`, `rack-axis`, `linear-motor-axis`: M = m (carriage and payload), h = m g sin(`slide.incline_deg`). Screw
+  and rack are `transmission::Converter`s behind the gearbox; the linear motor drives the carriage directly, its
+  `[motor]` read in N and m (the forcer's mass as the rotor's inertia), its attraction pressing on the guides
+  (`axis.x.guide_load`) and adding friction. The slides' presliding is [above](#slide-presliding-friction).
+- `rotary-table`: an inertia about z, no gravity torque, behind `table.gear` = "planetary", "strain-wave" or "worm". A
+  worm drives with tan γ / tan(γ + ρ') and is driven back with tan(γ − ρ') / tan γ (`WormGear`, the gearbox's back-drive
+  ratio); a worm whose back efficiency is not positive locks itself and the table refuses it (`worm.lead_angle_deg`).
+  The worm's motor spins about the worm's own axis (`worm.motor_axis`, across z), a planetary gear's rotor about z with
+  the table, a strain wave gear's against it.
+
+## Palletiser
+
+Source: [`arm.rs`](../crates/machine-joint-kit/src/arm.rs), [`config/palletiser.toml`](../crates/machine-joint-kit/config/palletiser.toml)
+(`palletiser`): a four-axis arm from `builtin:palletiser`, its URDF joints sums of the motors' joints (`arm.joint_coupling`)
+so that a parallelogram keeps the flange level; Newton-Euler on the chain as the [arms](#arms-in-tool-space-scara-six-axis-arm).
+The parallelogram's bars the URDF leaves out can be bodies of their own (`arm.bars_on`, `bars_turns_with`, `bars_pin_m`,
+`bars_mass_kg`, `bars_com_m`, `bars_inertia_kgm2`): bar i pinned at a point of one link, staying parallel to another and
+turning with it, its points moving at v_pin + ω_turns × (r − pin). The shipped arrays are empty. Bars together with
+`effects.link_bending` are refused. With `effects.payload_swing` the payload hangs on a pivot about two axes, two passive
+joints on `arm.payload_swing_stiffness_nm_rad` and `_damping_nm_s_rad`.
+
+## Mover track
+
+Source: [`machine-mover-track/src/lib.rs`](../crates/machine-mover-track/src/lib.rs) (`mover-track`); the track in
+[mechanisms](mechanisms.md#movers-on-a-closed-track-machine-mover-track). Independent movers on a closed loop of two
+straights and two 180° curves (constant radius or with clothoids), each a joint of `chain::JointMachine` along the
+centre line s (m), driven by the coils under it in N and m as the linear motor axis. The track is level: M = m per
+mover, no bias.
+
+```text
+k(s) = (θ(s + w/2) − θ(s − w/2)) / w                 the curvature over the wheelbase w
+guide load = √((F_a − m v² k)² + (m g)²)              attraction less centrifugal force, and the weight
+mass centre e outside: radius R + e, lateral acceleration v² k (1 + e k), mass m (1 + e k)²
+```
+
+Above m v² k = F_a the mover lifts off (`mover.<k>.liftoff_ratio`). A mover's current is that of its force, I = F / k_t
+less what saturation takes towards the maximum current (`DriveParams::current_for`), shared among the segments under its
+magnet plate by the plate's length on each; each segment's copper loss R I² warms it through one thermal resistance and
+time constant (`segment.temperature_rise`). The cycle is a cam (`track.cycle` "index" or "flying"), or with `cam.run =
+false` the config's segments.
+
+## Worm stage (machine files)
+
+Source: [`sim-netlist/src/worm.rs`](../crates/sim-netlist/src/worm.rs) (`machine.worm` of a [machine file](machine-files.md)).
+A worm that turns back (back efficiency above 0) passes its spring's torque t on as a gearbox does: t η forward, t
+η_back⁻¹ while the load drives it back, η fading in from rest over 0.5 W. A worm whose back efficiency is 0 or less locks
+itself and follows Coulomb's law at its mesh, without the fade, in both models. Of what the wheel takes, o, the mesh puts
+in a drag D = into − o of
+
+```text
+(1/η − 1) s o            on the driving flank (s o > 0),     η = tan g / tan(g + p)
+(1 − η_back) (−s o)       on the overhauling one (s o < 0),   η_back = tan(g − p) / tan g   (below 0 where g < p)
+```
+
+s the sign of its speed, so the mesh only ever takes power. At rest the friction holds anything between the two flanks'
+levels; a locking worm holds its load with no motor torque. Elastic (`worm_drag`): o is the gear spring's torque, the
+rotor gets the drag besides, and below 1e-3 rad/s of the wheel (`STICK_SPEED`, Karnopp's band) it sticks, the drag taking out the speed
+over 1 ms (`STICK_TIME_S`) inside the levels. Rigid (`rigid_locking`): o is solved beside the accelerations; on
+the overhauling flank, which has no unique rigid solution with a heavy wheel (Painlevé's paradox), the drag takes its
+load from the torque the wheel holds at rest, o_rest, the larger of the two flanks' drags joining them so that the
+solve has one answer; a worm moving under an overhauling load with no motor torque brakes by (1 − η_back) o_rest and
+stops, and sticks below the stick speed.
+
 ## Compliant base
 
 Source: [`sim-components/src/base.rs`](../crates/sim-components/src/base.rs). With `effects.base_compliance` every machine and machine file stands on a base that gives way: a rigid body on springs in up to six directions, translation along x, y, z and a small tilt about x, y, z through `base.pivot_m`, in the frame of the tool pose (x, y, z of the tool; the slides' x along their axis). Each direction with a stiffness above 0 is a state d and its rate after the machine's own:
