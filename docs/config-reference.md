@@ -1274,10 +1274,9 @@ estimates, values planar / spatial; bounded where they are a part's property):
 | `cable.specific_damping_n_s` | N s | Its damping times its free length: c = this / l (`effects.cable_damping`) | 60 / 150 |
 | `cable.breaking_load_n` | N | Its breaking load | 4000 / 10000 |
 | `cable.safety_factor` | – | The band's top is the breaking load over this (the rating of `cable-max-tension`) | 10 |
-| `cable.min_tension_n` | N | The band's bottom, the least tension that keeps a cable taut (`cable-min-tension`) | 10 / 20 |
+| `cable.min_tension_n` | N | The band's bottom, the least tension that keeps a cable taut (`cable-min-tension`); with the top, the band the time-optimal plan keeps each cable's tension within (`profile.tension_reserve` of the room) | 10 / 20 |
 | `cable.reference_tension_n` | N | The pretension the distribution keeps the tensions nearest to | 120 / 250 |
-| `cable.mass_per_m_kg` | kg/m | The cable's own mass: half the weight of its free span hangs on the platform (with its along-cable share), and the sag softens EA by Ernst's modulus E / (1 + (w l_h)² E A / (12 T³)); 0 or left out: both left out | 0.003 / 0.010 |
-| `ratings.belt_min_tension_n`, `belt_max_tension_n` | N | The band the time-optimal plan keeps each cable's tension within (`rigid_tensions_moving`); the same as `cable.min_tension_n` and the breaking load over the safety factor | 10, 400 / 20, 1000 |
+| `cable.mass_per_m_kg` | kg/m | The cable's own mass: half the weight of its free span hangs on the platform, and the cable sags (its stiffness Ernst's modulus E / (1 + (w l_h)² E A / (12 T³)), see the mechanisms); 0 or left out: both left out | 0.003 / 0.010 |
 | `winch.drum_radius_m` | m | The drum's radius: the lever behind the gearbox | 0.025 / 0.03 |
 | `winch.drum_inertia_kgm2` | kg m² | The drum's inertia | 2e-4 / 4e-4 |
 | `winch.capacity_m` | m | The cable a drum holds: its stops at 0 and here | 5 |

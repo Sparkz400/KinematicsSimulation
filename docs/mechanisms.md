@@ -765,6 +765,17 @@ arc r beta plus the tangent l_f = sqrt(m² − r²), and dL/dP = −u, u the uni
   with the drums held, gives its natural frequencies (`sim-cli modes`, the input shaper's resonance): 24.6 Hz at the
   planar robot's centre. `effects.cable_damping` adds `cable.specific_damping_n_s` / l. Rigid (off), the cables keep
   their length.
+- The cables' own mass (`cable.mass_per_m_kg`, 3 g/m and 10 g/m shipped, [estimate]; 0 leaves it out): half of each
+  span's weight hangs on the platform, and a cable sags (shallow parabola): at the chord tension T it is longer than its
+  chord by (w l_h)² l_f / (24 T²), so with t0 = EA (L − l) / l the straight cable's tension, t0 = T − c / (2 T²),
+  c = (w l_h)² EA l_f / (12 L); its stiffness dT/dt0 is Ernst's equivalent modulus E / (1 + (w l_h)² EA / (12 T³)), and
+  a slack cable still hangs with a small tension. Against the exact elastic catenary the pull on the anchor agrees to
+  9e-5 N at 20 N and 2e-4 N at 5 N (the straight cable misses it by 0.17 N and 1.6 N there).
+- The winches' drums and rotors spin about `frame.winch_spin_axes` (default horizontal and square to the cable's
+  direction at the winch; with a vertical one the pulley's axle at rest), and their spin is in the frame's load.
+- The time-optimal plan keeps every cable's tension of the rigid model within the band (`cable.min_tension_n` to the
+  rating, `profile.tension_reserve` of the room): the planar default cycle takes 1.684 s instead of 1.653 s without the
+  band, where a cable went down to 0.63 N; cable-spatial 1.207 s instead of 1.143 s.
 - Each winch is a `joint::RotaryJoint` in metres of cable: motor, gearbox with the drum's radius as its lever, the drum's
   inertia, friction of bearings and pulley (`effects.winch_friction`), stops at an empty and a full drum. Elastic, drum
   and rotor are bodies of their own behind the gearbox's spring; rigid, the cables keep their length and the winches'
@@ -1195,6 +1206,8 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
 
 - Hexapod with rotary actuators: the rods' spin about their own axes and the ball joints' friction are left out; of the
   parts that could cross only the rods are checked against each other; one crank branch for all legs.
-- Cable robots: the cables' mass and sag are left out; the wrench-feasible workspace is the static one (the cycle's
-  accelerations are judged by the tension verdicts, not planned around); near the workspace's edge the motors'
+- Cable robots: the cables' own inertia is left out (a third of each cable's mass moving with its anchor, 0.5 % of the
+  spatial platform's mass), and the sag's weight moving with the pose (5e-5 N); the wrench-feasible workspace of the
+  poses is the static one (a cycle's accelerations are held to the band by the time-optimal plan; within the axis limits
+  they are judged by the tension verdicts); near the workspace's edge the motors'
   stretch compensation counts on the closed form's tensions where the distribution holds a cable at a bound.
