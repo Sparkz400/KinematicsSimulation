@@ -1372,7 +1372,7 @@ pub struct Verdict {
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
 /// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
 /// own keys (`drive::Motor`: a stepper's and an induction motor's).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 65] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 67] = [
     // What `stop::study` judges the worst stop against.
     "ratings.max_stopping_distance_m",
     "ratings.max_stopping_angle_rad",
@@ -1396,6 +1396,9 @@ pub const RATINGS_BEYOND_DEFAULT: [&str; 65] = [
     "path.file",
     "path.program",
     "path.time_optimal",
+    // How fast a robot program turns the tool (`program::read_with`).
+    "program",
+    "program.orientation_speed_rad_s",
     "ratings.settling_tolerance_rad",
     "ratings.pulley_max_torque_nm",
     "ratings.motor_bearing_load_rating_n",
