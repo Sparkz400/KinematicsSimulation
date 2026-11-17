@@ -268,7 +268,9 @@ fn a_vendor_export_is_fitted_through_its_mapping_file() {
         std::fs::read_to_string(format!("{dir}trace.csv")).unwrap(),
         std::fs::read_to_string(format!("{dir}map.toml")).unwrap(),
     );
-    let entry = sim_machines::find("single-axis").unwrap();
+    // The machine the dataset was recorded on, by its own dataset.toml (the tests name no machine).
+    let dataset: toml::Value = toml::from_str(&std::fs::read_to_string(format!("{dir}dataset.toml")).unwrap()).unwrap();
+    let entry = sim_machines::find(dataset["machine"]["simulator"].as_str().unwrap()).unwrap();
     let mut cfg = entry.config();
     cfg.set_text("effects.payload = false").unwrap();
     let request = |options: &str| {

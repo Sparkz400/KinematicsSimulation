@@ -1185,7 +1185,7 @@ fn every_shipped_config_loads_and_judges_a_named_motor_by_its_s1_curve() {
         .map(|r| (r["part_number"].clone(), !r["rated_speed_400v_rad_s"].is_empty()))
         .collect();
     let curves = csv("siemens/s1_curves_s210.csv");
-    let mut entries: Vec<&'static sim_core::MachineEntry> = sim_machines::MACHINES.iter().copied().collect();
+    let mut entries: Vec<&'static sim_core::MachineEntry> = sim_machines::MACHINES.to_vec();
     let mut files: Vec<_> = fs::read_dir(catalog().join("../machines")).unwrap().map(|e| e.unwrap().path()).collect();
     files.sort();
     for path in files.iter().filter(|p| p.extension().is_some_and(|e| e == "toml")) {
@@ -1222,7 +1222,7 @@ fn every_shipped_config_loads_and_judges_a_named_motor_by_its_s1_curve() {
                     .collect(),
                 _ => Vec::new(),
             };
-            let own = sim_components::catalog::motor_config(&resolved, &m.id).unwrap();
+            let own = sim_components::catalog::motor_config(&resolved, m.id).unwrap();
             let read = sim_components::drive::s1_curve_of(&own).unwrap();
             assert_eq!(read, expected, "{} motor {} ({article} at {supply})", entry.id, m.id);
             with_curve += usize::from(!read.is_empty());
