@@ -2284,7 +2284,7 @@ Per motor, summed over every base step of the measured pass (N steps):
 | Thermal utilisation | RMS torque / `drive.rated_torque_nm`. Not judged; `motor-thermal` judges the winding rise |
 | RMS current | sqrt( Σ i² / N ) |
 | Peak current | max \|i\| |
-| Winding rise (settled) | With q = ϑ_rated / (1 + 0.0039 ϑ_rated) · (I_rms / I_rated)²: ϑ = q / (1 − 0.0039 q). The copper loss with the resistance at that temperature, against the loss at the rated current `motor.rated_current_a`. Infinite if 0.0039 q ≥ 1 |
+| Winding rise (settled) | With q = ϑ_rated / (1 + 0.0039 ϑ_rated) · (I_rms / I_ref)²: ϑ = (q + h) / (1 − 0.0039 q) (`DriveParams::settled_rise`). The copper loss with the resistance at that temperature, against the loss at I_ref: the rated current `motor.rated_current_a`, or with `effects.iron_loss` the stall current `motor.stall_current_a` (the rated current then carries iron loss too; an induction motor's I_ref takes its rotor's copper loss). h = ϑ_rated · P_iron / (R(ϑ_rated) I_ref²) is the mean iron loss's share (0 without the effect; with `effects.motor_thermal_nodes` the housing's share 1 − s of it). Infinite if 0.0039 q ≥ 1 |
 | Energy in | Σ P · dt over the steps with P ≥ 0 |
 | Energy regenerated | −Σ P · dt over the steps with P < 0 |
 | Peak regenerated power | max(−P) |
@@ -2343,10 +2343,12 @@ Per motor:
 | --- | --- | --- |
 | `motor-peak` | Utilisation | 1 |
 | `motor-thermal` | Settled winding rise | `motor.rated_temperature_rise_k` |
+| `motor-s1` | RMS torque, servo motors only, where the config has `motor.stall_current_a` (see [S1 check](#torque-speed-curve)) | The S1 torque at the mean speed (`s1_torque`) |
 | `stepper-synchronism` | A stepper's highest load angle over the pass, electrical rad (above π it has lost steps); only for `motor.kind = "stepper"` (see [stepper motor](#stepper-motor)) | π/2, the pull-out angle |
 | `motor-speed` | Peak motor speed in rad/s, where the config gives a maximum speed (a catalogue motor does) | `drive.max_speed_rad_s` |
 | `drive-current` | RMS current | `ratings.drive_rated_current_a`: the drive's rated output current (a drive by name sets it). The cycle's RMS against the rated current: the power unit warms in seconds to minutes, about as long as a cycle |
 | `drive-peak-current` | Peak current; with `effects.drive_current_limit` the current the velocity loop asks for where that is higher (see [drive current limit](#drive-current-limit)) | `ratings.drive_max_current_a`: the drive's maximum output current. With the effect the simulated current stays within it, and a cycle that needs more lags and fails here; without, the motor's maximum current stays the limit of the run |
+| `drive-overload` | With `effects.drive_overload`: the peak of the drive's thermal image when the cycle repeats for long (1 at the rated current held) | The image's trip level |
 | `pulley-torque` | Peak torque at the gearbox output | `ratings.pulley_max_torque_nm` |
 | `gearbox-continuous` | Cubic mean of the torque at the gearbox output, weighted with the speed | `ratings.gearbox_rated_torque_nm` |
 | `gearbox-input-speed` | Peak speed in r/min | `ratings.gearbox_max_input_speed_rpm` |
@@ -2359,6 +2361,8 @@ Per motor:
 | `line-module-peak` | Line module peak power either way; only with `effects.regenerative_supply` | `ratings.line_module_max_power_w` |
 | `pulley-bearing-life` | Rating life of the pulley shaft bearing, h. Passes at or **above** the limit | `ratings.required_life_h` |
 | `gearbox-life` | Life of the gearbox's planet bearings, h; needs `gearbox_rated_torque_nm` and `gearbox_reference_speed_rpm`. Passes at or **above** the limit | `ratings.required_life_h` |
+| `gearbox-gearing-life` | Life of the gearbox's gearing, h (see the lives above); no row where the cycle never exceeds M2N. Passes at or **above** the limit | `ratings.required_life_h` |
+| `motor-bearing-life` | Life of the motor's own bearings, h, where the pulley sits on the motor shaft. Passes at or **above** the limit | `ratings.required_life_h` |
 | `belt-tooth-load` | The belt's tooth load over its rating (see [analysis quantities](#analysis-quantities)) | 1 |
 
 The braking checks need `dc_link_capacitance_uf` and `braking_threshold_v`. They come in two forms:
@@ -2377,6 +2381,7 @@ For the machine:
 | Check | Value | Limit |
 | --- | --- | --- |
 | `settling` | Dwell error peak | `ratings.settling_tolerance_m` |
+| `settling-angle` | The same for the turning axes on their own (an arm's orientation, a turning tool or table), rad: no metres and radians added | `ratings.settling_tolerance_rad` |
 | `belt-tension` | Highest belt tension | `ratings.belt_max_tension_n` |
 | `belt-slack` | Lowest belt tension | Passes if it is **above** `ratings.belt_min_tension_n` and no section spent any time slack |
 | `gearbox-radial-load` | Radial load peak | `ratings.shaft_max_radial_load_n` |
