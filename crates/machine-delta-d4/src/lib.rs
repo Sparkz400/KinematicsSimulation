@@ -42,7 +42,6 @@
 //! with it: one spring 1 / (1/k_gear + 1/k_shaft) between the gearbox and the tool, with the shaft's damping.
 
 use machine_delta_d3::{Delta, PlatformDrag};
-use sim_netlist::linkage::Arms;
 use sim_components::catalog::motor_config;
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::{HardStop, ShaftFriction, ThermalFeedback};
@@ -50,6 +49,7 @@ use sim_core::{
     AxisInfo, Config, ConfigError, LOSS_PREFIX, Label, Machine, MachineEntry, Mode, MotorInfo, Part, Scene, Shape,
     SignalInfo, TORQUE_PARTS, ThermalPart,
 };
+use sim_netlist::linkage::Arms;
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "delta-d4",
