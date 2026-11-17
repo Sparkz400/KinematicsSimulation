@@ -413,6 +413,108 @@ fn a_moving_self_locking_worm_has_one_answer_and_lowers_its_load_as_pushed() {
     sim_core::testkit::loss_budget(m);
 }
 
+/// The self-locking worm table of the tests above (eta 0.4, eta_back -0.5, ratio 40, -10 N m on the table) in the
+/// elastic model, its gear spring (67000 N m/rad) twisted by 10 / 67000 so that it holds the 10 N m: 0.25 N m at the
+/// rotor (rotor 3.1e-4 kg m2). Its mesh slides at the levels of `worm::levels`, (1 / 0.4 - 1) 0.25 = 0.375 N m lifting
+/// and (1 + 0.5) 0.25 = 0.375 N m lowering, and sticks between them.
+///
+/// - At rest with no motor torque it stands: the rotor not by a bit over 2 s, the table within 1e-9 rad.
+/// - At a steady speed it costs what the rigid model's hand calculation says: lowering at -1 rad/s takes
+///   0.375 - 0.25 = 0.125 N m of push, lifting at +1 rad/s 0.25 + 0.375 = 0.625 N m, neither accelerating, and the worm
+///   loses 0.375 * 40 = 15 W both ways, as rigid; the output carries 10 N m.
+/// - Broken loose upwards (0.7 N m), pushed down through the reversal (-0.4 N m) and left to stop (0): the mesh never
+///   gives power (its loss, the drag times the rotor's speed, is never below 0), and the work of the motor equals what
+///   is stored plus what is lost within the loss budget's 1e-3. Left to stop it jams, as the rigid model cannot: the
+///   overhauling flank's drag rises with the spring's torque, which rises as the rotor slows under the heavy table
+///   (Painleve's instability, `worm`), so the rotor stops within milliseconds and the table rings on the spring.
+#[test]
+fn an_elastic_self_locking_worm_sticks_and_slides_as_the_rigid_one() {
+    let table = |elastic: bool| {
+        let cfg = with(
+            &kit_as_file("rotary-table", &worm_table("40", 0.4, -0.5)),
+            &[
+                &format!("effects.belt_stretch = {elastic}"),
+                "effects.gearbox_backlash = false",
+                "effects.motor_friction = false",
+                "effects.torque_ripple = false",
+                "effects.process_force = true",
+                "process.force_c_n = -10.0",
+            ],
+        );
+        let mut m = sim_netlist::build(&cfg).unwrap();
+        m.set_dwelling(true);
+        m
+    };
+    let (elastic, rigid) = (table(true), table(false));
+    let m = elastic.as_ref();
+    // [table, its gear output, rotor], their rates, the friction state, slack time, brake.
+    let at = |w: f64| [1.0, 1.0, 40.0 * (1.0 + 10.0 / 67000.0), w, w, 40.0 * w, 0.0, 0.0, 0.0];
+    for (w, torque) in [(-1.0, -0.125), (1.0, 0.625)] {
+        let mut out = [0.0; 9];
+        m.derivatives(&at(w), &[torque], &mut out);
+        assert!(out[3].abs() < 1e-9 && out[5].abs() < 1e-9, "{w} rad/s: table {}, rotor {}", out[3], out[5]);
+        let (loss, output) =
+            (signal(m, &at(w), &[torque], "power.gearbox_1"), signal(m, &at(w), &[torque], "gearbox.1.output_torque"));
+        let rigid_state = [1.0, w, 0.0, 0.0];
+        let rigid_loss = signal(rigid.as_ref(), &rigid_state, &[torque], "power.gearbox_1");
+        let mut rigid_out = [0.0; 4];
+        rigid.derivatives(&rigid_state, &[torque], &mut rigid_out);
+        assert!(
+            (loss - 15.0).abs() < 1e-6 && (rigid_loss - 15.0).abs() < 1e-9,
+            "{w} rad/s: {loss} W, rigid {rigid_loss} W"
+        );
+        assert!(
+            (output - 10.0).abs() < 1e-6 && rigid_out[1].abs() < 1e-9,
+            "{w} rad/s: {output} N m, rigid {}",
+            rigid_out[1]
+        );
+    }
+    let h = sim_core::testkit::DT / f64::from(sim_core::testkit::SUBSTEPS);
+    let mut rk = sim_core::integrate::Rk4::new(9);
+    // At rest.
+    let mut state = at(0.0).to_vec();
+    for _ in 0..(2.0 / h).round() as usize {
+        rk.step(|s, out| m.derivatives(s, &[0.0], out), &mut state, h);
+    }
+    assert!(state[2] == at(0.0)[2] && state[5] == 0.0, "the rotor moved: {state:?}");
+    assert!((state[0] - 1.0).abs() < 1e-9, "the table moved: {state:?}");
+    // Broken loose, through the reversal, and stopped.
+    let infos = m.signal_infos();
+    let losses: Vec<usize> =
+        infos.iter().enumerate().filter(|(_, s)| s.id.starts_with(sim_core::LOSS_PREFIX)).map(|(i, _)| i).collect();
+    let mesh = infos.iter().position(|s| s.id == "power.gearbox_1").unwrap();
+    let mut state = at(0.0).to_vec();
+    let (start, mut work, mut gross, mut lost, mut signals) = (m.energy(&state), 0.0, 0.0, 0.0, Vec::new());
+    let (mut up, mut down, mut least) = (0.0f64, 0.0f64, f64::INFINITY);
+    for k in 1..=(1.2 / h).round() as usize {
+        let t = k as f64 * h;
+        let torque = [if t <= 0.3 {
+            0.7
+        } else if t <= 0.6 {
+            -0.4
+        } else {
+            0.0
+        }];
+        let before = state[2];
+        rk.step(|s, out| m.derivatives(s, &torque, out), &mut state, h);
+        let step = torque[0] * (state[2] - before);
+        (work, gross) = (work + step, gross + step.abs());
+        signals.clear();
+        m.signals(&state, &torque, &mut signals);
+        lost += losses.iter().map(|&i| signals[i]).sum::<f64>() * h;
+        least = least.min(signals[mesh]);
+        (up, down) = (up.max(state[3]), down.min(state[3]));
+    }
+    assert!(up > 0.05 && down < -0.05, "broke loose up to {up} rad/s and reversed down to {down} rad/s");
+    assert!(least >= -1e-12, "the gearbox and its mesh gave {least} W");
+    // Lowering with no torque the worm jams (its rotor stops within milliseconds) and the table rings on the gear spring
+    // (up to some 450 N m): the rotor stays stuck through it.
+    assert!(state[5].abs() < 1e-9, "stopped: {state:?}");
+    let off = work - (m.energy(&state) - start) - lost;
+    assert!(off.abs() < sim_core::testkit::LOSS_BUDGET_TOLERANCE * gross, "work {work} J, lost {lost} J, off {off} J");
+    sim_core::testkit::loss_budget(m);
+}
+
 /// The catalogue search for the XYZ portal's Z motor alone: a 1FK2103-2AH (rotor 9.3e-6 kg m2, 1.18 kg without brake,
 /// on its paired S210) becomes [parts.mz], X and Y keep the shared motor, and the candidate costs that one motor's
 /// weight, 1.18 kg, not three. The Z motor's own velocity gain (0.01 N m s/rad) is retuned down for the lighter rotor.

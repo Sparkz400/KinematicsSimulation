@@ -1181,23 +1181,43 @@ impl ConfigMachine {
         self.lean.as_ref().map_or(0.0, |lean| flex_at(lean, q).2)
     }
 
-    /// Motor kk's gearbox (`Gearbox::torque`), with its worm stage's share where it has one (`worm::factors`, at the
-    /// power its spring's torque puts through the output).
+    /// Motor kk's gearbox (`Gearbox::torque`), with its worm stage's share where it has one that turns back
+    /// (`worm::factors`, at the power its spring's torque puts through the output). A self-locking worm passes the
+    /// gearbox's torques on as they are; its mesh's friction is `worm_drag`, at the rotor.
     fn gear_torque(&self, kk: usize, phi: f64, w_phi: f64, theta: f64, w_theta: f64) -> GearTorque {
         let gear = self.gears[kk].torque(phi, w_phi, theta, w_theta);
-        let Some(worm) = &self.worms[kk] else { return gear };
-        let (output, rotor) = crate::worm::factors(worm, gear.rotor * self.ratio[kk] * w_theta);
+        let Some(worm) = self.worms[kk].filter(|w| w.back_efficiency > 0.0) else { return gear };
+        let (output, rotor) = crate::worm::factors(&worm, gear.rotor * self.ratio[kk] * w_theta);
         GearTorque { output: gear.output * output, rotor: gear.rotor * rotor }
+    }
+    /// The friction torque a self-locking worm's mesh puts on motor kk's rotor in the elastic model, against its speed
+    /// `w_phi`, N m (0 without one): what would take the rotor's speed out over `worm::STICK_TIME_S` given its other
+    /// torques `drive` (motor less shaft and brake), held to Coulomb's level of the flank the gear's torque at the rotor
+    /// `rotor` loads (`worm::levels`) and never along the motion, so that the mesh only ever takes power
+    /// (`F w_phi >= 0`). At speed that is the level (sliding); where the level would stop the rotor within the time,
+    /// it stops it over that time (sticking), and at rest it holds anything within the levels. No speed band: the
+    /// rotor's own acceleration on the level (16000 rad/s2 for the table's jam) crosses any band of a step's width.
+    fn worm_drag(&self, kk: usize, rotor: f64, w_phi: f64, drive: f64) -> f64 {
+        let Some(worm) = self.worms[kk].filter(|w| w.back_efficiency <= 0.0) else { return 0.0 };
+        let (up, down) = crate::worm::levels(&worm, rotor);
+        let stuck = drive - rotor + self.j_rotor[kk] * w_phi / crate::worm::STICK_TIME_S;
+        let (low, high) = match w_phi.partial_cmp(&0.0) {
+            Some(std::cmp::Ordering::Greater) => (0.0, up),
+            Some(std::cmp::Ordering::Less) => (-down, 0.0),
+            _ => (-down, up),
+        };
+        stuck.clamp(low, high)
     }
     /// The share of the load motor kk holds at rest: none behind a self-locking worm, all of it otherwise.
     fn held(&self, kk: usize) -> f64 {
-        self.worms[kk].as_ref().map_or(1.0, |worm| crate::worm::factors(worm, 0.0).1)
+        if self.worms[kk].is_some_and(|w| w.back_efficiency <= 0.0) { 0.0 } else { 1.0 }
     }
-    /// What motor kk's gearbox loses, W (`Gearbox::loss_power`), with its worm stage's share.
-    fn gear_loss_power(&self, kk: usize, phi: f64, w_phi: f64, theta: f64, w_theta: f64) -> f64 {
+    /// What motor kk's gearbox loses, W (`Gearbox::loss_power`), with its worm stage's share, `drag` the self-locking
+    /// worm's (`worm_drag`).
+    fn gear_loss_power(&self, kk: usize, phi: f64, w_phi: f64, theta: f64, w_theta: f64, drag: f64) -> f64 {
         let (plain, worm) =
             (self.gears[kk].torque(phi, w_phi, theta, w_theta), self.gear_torque(kk, phi, w_phi, theta, w_theta));
-        self.gears[kk].loss_power(phi, w_phi, theta, w_theta) + (worm.rotor - plain.rotor) * w_phi
+        self.gears[kk].loss_power(phi, w_phi, theta, w_theta) + (worm.rotor - plain.rotor + drag) * w_phi
             - (worm.output - plain.output) * w_theta
     }
     /// The factors on motor kk's torque at its gearbox's output and at its rotor, in the rigid model, at the torque `into`
@@ -1821,9 +1841,9 @@ impl ConfigMachine {
                 }
             }
             let (brake, brake_rate) = self.brakes[kk].torque(self.brake_engaged, w_phi, s[ba + kk]);
+            let drive = self.ripples[kk].apply(torque[kk], phi) - self.shafts[kk].torque(w_phi) - brake;
             out[v + n + m + kk] =
-                (self.ripples[kk].apply(torque[kk], phi) - gear.rotor - self.shafts[kk].torque(w_phi) - brake)
-                    / self.j_rotor[kk];
+                (drive - gear.rotor - self.worm_drag(kk, gear.rotor, w_phi, drive)) / self.j_rotor[kk];
             out[ba + kk] = brake_rate;
         }
         out[self.slack_at()] = if sec.iter().any(|f| f.tension <= 0.0) { 1.0 } else { 0.0 };
@@ -2105,9 +2125,11 @@ impl ConfigMachine {
                 let (phi, w_phi) = (s[n + m + kk], s[v + n + m + kk]);
                 let (theta, w_theta) = self.output(s, kk);
                 let gear = self.gear_torque(kk, phi, w_phi, theta, w_theta);
-                gear_loss[kk] = gear.rotor - gear.output / self.ratio[kk];
-                gear_power[kk] = self.gear_loss_power(kk, phi, w_phi, theta, w_theta);
                 brake[kk] = self.brakes[kk].torque(self.brake_engaged, w_phi, s[self.brake_at() + kk]).0;
+                let drive = self.ripples[kk].apply(torque[kk], phi) - self.shafts[kk].torque(w_phi) - brake[kk];
+                let drag = self.worm_drag(kk, gear.rotor, w_phi, drive);
+                gear_loss[kk] = gear.rotor + drag - gear.output / self.ratio[kk];
+                gear_power[kk] = self.gear_loss_power(kk, phi, w_phi, theta, w_theta, drag);
                 mesh_in += self.r[kk] * self.mesh_force(kk, self.r[kk] * theta) * w_theta;
             }
             let (geo, mat, (_, rate)) = (self.geo(q), self.mat(s), self.fed(s));

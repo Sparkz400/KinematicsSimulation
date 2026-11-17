@@ -1,23 +1,30 @@
 //! A worm stage (`machine.worm`): what it passes on, driven forward by the motor and back by the load.
 //!
 //! A gearbox passes the torque t of its spring on as t eta to its output and t / i to its rotor (`mech::Gearbox`), and
-//! eta fades from 1 at rest to its value within a power t w of 0.5 W at the output. A worm does the same while the motor
-//! drives (with its forward efficiency), and while the load drives it back passes t eta_back^-1 (as the gearbox, with
-//! its back efficiency). A worm whose back efficiency is 0 or less locks itself: the wheel cannot turn the worm. While
-//! the load drives it back it passes t to the output and eta_back t / i to the rotor, which is against the motion where
-//! eta_back < 0: the motor has to push the load down, by -eta_back of the load's torque over i, and the load's power
-//! and the motor's both go into the worm's friction. At rest the rotor takes none of it, so the worm holds whatever the
-//! load with no motor torque; the rotor's share fades in as x t / i driving forward and -x eta_back t / i driven back
-//! (x = tanh of the power over 0.5 W, negative driven back), the output's as t eta^x forward.
+//! eta fades from 1 at rest to its value within a power t w of 0.5 W at the output. A worm that turns back (back
+//! efficiency above 0) does the same while the motor drives (with its forward efficiency), and while the load drives it
+//! back passes t eta_back^-1 (as the gearbox, with its back efficiency): `factors`.
 //!
-//! The rigid model (`ConfigMachine::rigid_locking`) moves a self-locking worm with Coulomb's law at its mesh, without
-//! the fade. A screw thread of lead angle g and friction angle p, sliding at the sign s of the wheel's speed, puts into
-//! the mesh (at the wheel, i times the worm's torque) what the wheel takes, o, and a drag D = into - o of s times
+//! A worm whose back efficiency is 0 or less locks itself: the wheel cannot turn the worm. It follows Coulomb's law at
+//! its mesh, without a fade, in both models. A screw thread of lead angle g and friction angle p, sliding at the sign s
+//! of its speed, puts into the mesh (at the wheel, i times the worm's torque) what the wheel takes, o, and a drag
+//! D = into - o of s times
 //!
 //! - (1 / eta - 1) s o on the driving flank (s o > 0, eta = tan g / tan(g + p)), and
-//! - (1 - eta_back) (-s o) on the overhauling one (s o < 0, eta_back = tan(g - p) / tan g, below 0 where g < p).
+//! - (1 - eta_back) (-s o) on the overhauling one (s o < 0, eta_back = tan(g - p) / tan g, below 0 where g < p),
 //!
-//! That second one has no rigid solution with a heavy wheel (Painleve's paradox): with the rotor's inertia at the wheel
+//! so the mesh only ever takes power (D w >= 0); while the load drives it back the motor has to push, by -eta_back of
+//! the load's torque over i, and the load's power and the motor's both go into the friction. At rest the friction holds
+//! anything between the two flanks' levels (`levels`), which take in 0 for a locking worm: it holds its load with no
+//! motor torque.
+//!
+//! The elastic model (`ConfigMachine::worm_drag`) has o as its gear spring's torque, a state: the wheel gets the
+//! gearbox's output torque as it is, and the rotor the flank's drag besides, sliding at the rotor's speed. Below
+//! `STICK_SPEED` it sticks (Karnopp), the drag taking out the rotor's speed over `STICK_TIME_S` within the levels and never
+//! along the motion: a locking worm at rest stands.
+//!
+//! The rigid model (`ConfigMachine::rigid_locking`) has o as an unknown beside the accelerations. The overhauling flank
+//! there has no rigid solution with a heavy wheel (Painleve's paradox): with the rotor's inertia at the wheel
 //! R = i^2 J and the wheel's J_L, the wheel's equation J_L a = o + L and the rotor's into = i t - R a give
 //! o (1 + R / J_L) + D(o) = i t - R L / J_L, whose left side falls with o on that flank where R / J_L < -eta_back: two
 //! solutions or none (a stiff mesh there is unstable and jams into stick-slip). So the overhauling flank takes its load
@@ -26,30 +33,31 @@
 //! which joins them continuously and rises with o, so the solve has exactly one answer. A worm moving with no motor
 //! torque under a load that drives it back brakes by (1 - eta_back) o_rest > o_rest and stops; at rest, and below
 //! `STICK_SPEED`, it sticks (`rigid_locking`).
-//!
-//! shortcut: the elastic model (`factors`) fades the lock in over 0.5 W in place of sticking: a motor torque short of what
-//! lifts the load creeps it up, and a push short of what lowers it creeps it down, at the speed whose power is about
-//! 0.5 W atanh(the share of the torque it would take), the output getting a little more than the rotor puts in (at
-//! most about 0.15 W) while it creeps up. It needs a stick state in the elastic model's states to hold without a fade.
 
 use crate::netlist::WormNode;
 
 /// The power at the output over which the efficiency fades in, W: the gearbox's (`mech::Gearbox::loss_factor`).
 const FADE_W: f64 = 0.5;
 
-/// (factor on the torque at the output, factor on the torque at the rotor) at the power `power` = t w at the output
-/// (positive while the motor drives).
+/// (factor on the torque at the output, factor on the torque at the rotor) of a worm that turns back, at the power
+/// `power` = t w at the output (positive while the motor drives).
 pub fn factors(worm: &WormNode, power: f64) -> (f64, f64) {
     let x = (power / FADE_W).tanh();
-    match (x >= 0.0, worm.back_efficiency > 0.0) {
-        (true, true) => (worm.efficiency.powf(x), 1.0),
-        (true, false) => (worm.efficiency.powf(x), x),
-        (false, true) => (worm.back_efficiency.powf(x), 1.0),
-        (false, false) => (1.0, -x * worm.back_efficiency),
-    }
+    ((if x >= 0.0 { worm.efficiency } else { worm.back_efficiency }).powf(x), 1.0)
 }
 
-/// Below this speed of its wheel, rad/s, a self-locking worm in the rigid model sticks where its friction can hold
+/// The levels of a self-locking worm's friction at its rotor while the gear's torque at the rotor is `rotor` (t / i):
+/// (sliding forward, sliding backward), both at least 0. Forward the flank that `rotor` loads is the driving one where
+/// it is above 0, (1 / eta - 1) rotor, the overhauling one where below, (1 - eta_back) (-rotor); backward the other way.
+pub fn levels(worm: &WormNode, rotor: f64) -> (f64, f64) {
+    let (driving, overhauling) = (1.0 / worm.efficiency - 1.0, 1.0 - worm.back_efficiency);
+    (
+        driving * rotor.max(0.0) + overhauling * (-rotor).max(0.0),
+        driving * (-rotor).max(0.0) + overhauling * rotor.max(0.0),
+    )
+}
+
+/// Below this speed of its wheel, rad/s, a self-locking worm sticks where its friction can hold
 /// (Karnopp's band): Coulomb's drag flips with the speed's sign, so a fixed step never lands on 0 but settles a step's
 /// worth of acceleration short of it (1.6e-5 rad/s at 1 rad/s2 on the 15.6 us sub-step), booking a drag its averaged
 /// motion does not have. Far below a commanded speed, far above that.
@@ -85,27 +93,27 @@ mod tests {
     use super::*;
 
     /// Far from rest the factors are the efficiencies: forward 0.8 at the output; back 1 / 0.5 = 2 at the output of a
-    /// worm that turns back; a locking one (eta_back = -0.2, so eta < 0.5: here 0.4) gives the output the torque t and
-    /// the rotor -0.2 t / i, against the motion: the motor pushes. At rest a turning worm passes t / i to the rotor, a
-    /// locking one nothing; at a forward power of 0.5 W the locking one passes tanh(1) = 0.761594 of t / i to the rotor
-    /// and 0.4^0.761594 = 0.497658 of t to the output, driven back at 0.5 W -0.2 tanh(1) = -0.152319 of t / i to the
-    /// rotor.
+    /// worm that turns back; at rest it passes t to both.
     #[test]
-    fn a_worm_passes_its_efficiencies_and_a_locking_one_holds_at_rest() {
+    fn a_worm_passes_its_efficiencies() {
         let turning = WormNode { ratio: 40.0, efficiency: 0.8, back_efficiency: 0.5 };
-        let locking = WormNode { efficiency: 0.4, back_efficiency: -0.2, ..turning };
         assert_eq!(factors(&turning, 100.0), (0.8, 1.0));
         assert_eq!(factors(&turning, -100.0), (2.0, 1.0));
-        assert_eq!(factors(&locking, 100.0), (0.4, 1.0));
-        assert_eq!(factors(&locking, -100.0), (1.0, -0.2));
-        let (_, back) = factors(&locking, -0.5);
-        assert!((back + 0.152_318_8).abs() < 1e-7, "{back}");
-        let (output, rotor) = factors(&locking, 0.5);
-        assert!((rotor - 0.761_594_2).abs() < 1e-7 && (output - 0.497_658).abs() < 1e-6, "{output} {rotor}");
         assert_eq!(factors(&turning, 0.0), (1.0, 1.0));
-        assert_eq!(factors(&locking, 0.0), (1.0, 0.0));
     }
 
+    /// A locking worm (eta 0.4, eta_back -0.2) with 10 N m on its wheel behind a ratio of 40, 0.25 N m at the rotor:
+    /// sliding forward lifts it, (1 / 0.4 - 1) 0.25 = 0.375 N m; backward lowers it, (1 + 0.2) 0.25 = 0.3 N m, so the
+    /// motor pushes 0.3 - 0.25 = 0.05 N m; at rest it holds anything from -0.3 to 0.375, the load's 0.25 among it. With
+    /// the load the other way the levels swap.
+    #[test]
+    fn a_locking_worm_slides_at_its_flanks_levels() {
+        let locking = WormNode { ratio: 40.0, efficiency: 0.4, back_efficiency: -0.2 };
+        let close = |(a, b): (f64, f64), (c, d): (f64, f64)| assert!((a - c).abs() < 1e-12 && (b - d).abs() < 1e-12);
+        close(levels(&locking, 0.25), (0.375, 0.3));
+        close(levels(&locking, -0.25), (0.3, 0.375));
+        close(levels(&locking, 0.0), (0.0, 0.0));
+    }
     /// Holding 10 N m at rest, the locking worm (eta_back = -0.2) lowering it (speed -1 against the held +10) drags
     /// (1 + 0.2) 10 = 12 N m; lifting it (speed +1) the overhauling flank carries nothing.
     #[test]
