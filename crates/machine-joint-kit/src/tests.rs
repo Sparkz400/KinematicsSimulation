@@ -1541,11 +1541,13 @@ fn the_guide_blocks_carry_the_weight_and_the_tilting_moments_by_hand() {
     // on the four blocks: the total grows by it (F_y / 4 on each, all four on the loaded side).
     let apart = TRACK_MASS * 2.0 * (1.071978f64.powi(2) - 1.0).sqrt();
     assert!((apart - 100.8).abs() < 0.1, "{apart}");
-    // The carriage's rotor (1.7e-4 + 3.59e-5 + 1e-6 kg m^2 at its input) turns about z at 2 r rad/s^2: its reaction J r a
-    // is a yaw moment against the chain's -2 SUM_MY, so the blocks' share of it falls by that over 2 x 0.4.
-    let gyro = (1.7e-4 + 3.59e-5 + 1.0e-4 / 100.0) * track_ratio() * 2.0;
+    // The carriage's rotors spin about +z (the rack on +y: the pinion's teeth there stand still, w = v / r): the motor's
+    // and the gearbox's input at r a = 2 x 314.159 rad/s^2, the pinion at a tenth of it, 1.7e-4 + 3.59e-5 + 1e-4 / 10 =
+    // 2.159e-4 kg m^2 of momentum per motor rad/s. Its rate, 0.135654 N m about +z, is part of the yaw moment the base
+    // passes, M_z = -2 SUM_MY + 0.135654: the most loaded block's yaw term falls by 0.135654 / 0.8 (4 x that = 0.678 N).
+    let gyro = (1.7e-4 + 3.59e-5 + 1.0e-4 / 10.0) * track_ratio() * 2.0;
     let by_hand = block(2.0 * SUM_MZ / (2.0 * 0.4) + (2.0 * SUM_MY - gyro) / (2.0 * 0.4) + apart / 4.0);
-    assert!((by_hand - 2757.65).abs() < 1.0, "{by_hand}");
+    assert!((by_hand - 2756.965).abs() < 0.01, "{by_hand}");
     near(pushed, by_hand, 1e-6, "guide load accelerating");
     let teeth = track_signal(m.as_ref(), &sideways(), &acc, "rack.1.feed_force");
     near(teeth, TRACK_MASS * 2.0, 1e-6, "feed force");
@@ -1559,15 +1561,17 @@ fn the_guide_blocks_carry_the_weight_and_the_tilting_moments_by_hand() {
 /// separating force F_sep = 261 * 0.386 = 100.8 N: the blocks' F_y is the chain's plus side * F_sep, and the yaw moment
 /// M_z = -2 * 14.505 + side * lever * 261 N m. The yaw term of the most loaded block, which the pitch moment keeps at
 /// s_x = -1, is |F_y / 4 - M_z / (2 * 0.4)|: 25.2 + 36.2625 = 61.4625 N at side +1 and no lever (as shipped), 25.2 + 3.6375
-/// at lever 0.1 m (M_z = -2.91 N m), |-25.2 + 36.2625| = 11.0625 N at side -1, 25.2 + 68.8875 at side -1 and lever 0.1 m.
+/// at lever 0.1 m (M_z = -2.91 N m), |-25.2 + 36.2625| = 11.0625 N at side -1, 25.2 + 68.8875 at side -1 and lever 0.1 m;
+/// and in M_z the rotors' momentum rate, side * 0.135654 N m (`the_guide_blocks_carry_the_weight_...`).
 #[test]
 fn the_racks_side_and_lever_move_the_guide_blocks_load_as_by_hand() {
     let g = 9.80665;
     let push = TRACK_MASS * 2.0;
     let apart = push * (1.071978f64.powi(2) - 1.0).sqrt();
     let by_hand = |side: f64, lever: f64| {
-        let gyro = (1.7e-4 + 3.59e-5 + 1.0e-4 / 100.0) * track_ratio() * 2.0;
-        let yaw = -2.0 * SUM_MY + side * lever * push + gyro;
+        // The rotors' momentum rate (above), about +z with the rack on +y and about -z with it on -y.
+        let gyro = (1.7e-4 + 3.59e-5 + 1.0e-4 / 10.0) * track_ratio() * 2.0;
+        let yaw = -2.0 * SUM_MY + side * lever * push + side * gyro;
         4.0 * (TRACK_MASS * g / 4.0 + g * SUM_MY + 2.0 * SUM_MZ / 0.8 + (side * apart / 4.0 - yaw / 0.8).abs())
     };
     let mut acc = [0.0; 7];
@@ -2059,19 +2063,174 @@ fn a_parallelogram_bar_is_a_body_of_its_own() {
 
 /// The carriage's motor rotor is part of what its guides carry: it spins about the vertical at the ratio times the
 /// carriage's speed, and the carriage accelerating at 2 m/s^2 turns its momentum J r a about z, a yaw moment the four
-/// blocks carry as +-M_z / (2 x 0.4) each. Doubling the rotor's inertia (1.7e-4 to 3.4e-4 kg m^2) changes nothing else of
-/// the guide load, so it changes by four times the most loaded block's share: 4 x 1.7e-4 x r x 2 / 0.8.
+/// blocks carry as +-M_z / (2 x 0.4) each. 1.7e-4 kg m^2 more at the motor (on the gearbox's input: the track's motor is
+/// named, its rotor the catalogue's) changes nothing else of the guide load at rest, so it moves by four times the most
+/// loaded block's share, 4 x 1.7e-4 x 314.159 x 2 / 0.8 = 0.534070 N: down, as the rotor's yaw (+z, the rack on +y)
+/// works against the chain's (-2 SUM_MY), up with the rack on -y.
 #[test]
 fn the_rotor_of_the_track_adds_its_gyroscopic_moment_to_the_guide_load() {
-    let load = |edit: &str| {
+    let load = |side: f64, input: f64| {
         let mut cfg = rigid(&ARM_ON_TRACK);
-        cfg.set_text(edit).unwrap();
+        cfg.set_text(&format!("track.rack_side = {side}")).unwrap();
+        cfg.set_text(&format!("gearbox.1.inertia_at_input_kgm2 = {input}")).unwrap();
         let m = (ARM_ON_TRACK.build)(&cfg).unwrap();
         let mut acc = [0.0; 7];
         acc[0] = 2.0;
         track_signal(m.as_ref(), &sideways(), &acc, "axis.j1.guide_load")
     };
-    let (light, heavy) = (load("motor.rotor_inertia_kgm2 = 1.7e-4"), load("motor.rotor_inertia_kgm2 = 3.4e-4"));
     let by_hand = 4.0 * 1.7e-4 * track_ratio() * 2.0 / 0.8;
-    assert!(((heavy - light).abs() - by_hand).abs() < 1e-3 * by_hand, "{} against {by_hand}", heavy - light);
+    for side in [1.0, -1.0] {
+        let moved = load(side, 3.59e-5 + 1.7e-4) - load(side, 3.59e-5);
+        assert!((moved + side * by_hand).abs() < 1e-6 * by_hand, "side {side}: {moved} against {by_hand}");
+    }
+}
+
+/// A walk of one step that crosses the wrist's singularity is refused although both its ends are clear of it: the
+/// six-axis arm at its home with joint 5 at +0.03 rad, walked to the tool pose of joint 5 at -0.03 (0.06 rad of turn
+/// about joint 5's axis and the flange's offset times that: one step of the walk), the condition number 128.8 and
+/// 130.0 at its ends, below a limit of 200; the determinant of the geometric Jacobian changes its sign between them. Unguarded the
+/// walk gets there (through the singular pose), and a step of the same size that stays on one side (0.33 to 0.27 rad)
+/// passes. (With the shipped limit of 30 the condition number is 3.86 / q5 here: the ends of a crossing would be 0.26
+/// rad apart, beyond a step's 0.05 rad, so the ends alone would tell there; the sign tells at any limit.)
+#[test]
+fn a_walk_of_one_step_through_a_singular_pose_is_refused() {
+    let cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    let chain = arm::chain(&cfg).unwrap();
+    let fk = |q: &[f64]| chain.tip(q);
+    let home = cfg.f64s("kinematics.home_joints").unwrap();
+    let pose = tool::Pose::new(&fk, home.clone(), vec![0, 1, 2, 3, 4, 5], 0.86, 200.0).unwrap();
+    let at = |q5: f64| {
+        let mut q = home.clone();
+        q[4] = q5;
+        q
+    };
+    let walk = |from: f64, to: f64, guard: bool| {
+        let mut tool = vec![0.0; 6];
+        pose.forward(&fk, &at(to), &mut tool);
+        let mut q = vec![0.0; 6];
+        let reached = pose.walk(&fk, &at(from), &tool, &mut q, guard);
+        (reached, q)
+    };
+    for q5 in [0.03, -0.03] {
+        let c = pose.condition(&fk, &at(q5));
+        assert!(c > 128.0 && c < 131.0, "condition {c} at joint 5 = {q5}");
+    }
+    assert!(!walk(0.03, -0.03, true).0, "the guarded walk crossed the singular pose");
+    let (reached, q) = walk(0.03, -0.03, false);
+    assert!(reached && (q[4] + 0.03).abs() < 1e-6, "{q:?}");
+    assert!(walk(0.33, 0.27, true).0);
+}
+
+/// Every shipped arm states each motor's ratio twice, as `arm.gear_ratios` (the simulation's) and as its gearbox's
+/// `gearbox.ratio` with its own `[gearbox.<id>]` over it (the gearbox life, its drag, the drives' tuning): the same.
+#[test]
+fn the_shipped_arms_give_each_motor_one_gear_ratio() {
+    let configs = [
+        URDF_ARM.config(),
+        SCARA.config(),
+        PALLETISER.config(),
+        ARM_ON_TRACK.config(),
+        tool_config(&SCARA, SCARA_TOOL_CONFIG),
+        tool_config(&URDF_ARM, ARM_TOOL_CONFIG),
+        tool_config(&URDF_ARM, ARM5_TOOL_CONFIG),
+        tool_config(&URDF_ARM, ARM7_TOOL_CONFIG),
+        tool_config(&ARM_ON_TRACK, ARM_ON_TRACK_TOOL_CONFIG),
+    ];
+    for cfg in &configs {
+        for (k, ratio) in cfg.f64s("arm.gear_ratios").unwrap().iter().enumerate() {
+            let own = sim_components::catalog::motor_config(cfg, sim_components::chain::MOTOR_IDS[k]).unwrap();
+            assert_eq!(
+                own.f64("gearbox.ratio").unwrap(),
+                *ratio,
+                "{}: motor {}",
+                cfg.f64s("arm.gear_ratios").unwrap().len(),
+                k + 1
+            );
+        }
+    }
+}
+
+/// A bar of its own (`arm.bars_turns_with`): 5 kg pinned at joint 3's origin (the elbow) and turning with link 1 (the
+/// turret), its centre 0.3 m along the turret's x from the pin, its inertia 0.1, 0.2, 0.3 kg m^2 about its centre. The
+/// arm stretched along x (q2 = pi / 2): the bar hangs on the elbow and does not turn with link 2 or 3, so it loads joint
+/// 2 by its weight at the elbow's lever, 5 g (x_elbow - x_2) (not at its centre's, 0.3 m further), and joint 3 not at
+/// all; turning the turret it adds I_zz + 5 r^2 (r its centre's distance from the vertical axis), swinging joint 2 it
+/// moves with the elbow alone, 5 d^2 (d the elbow's distance from joint 2's axis), and joint 3 not at all. All over the
+/// ratio 120 at the motors. Moving at speed with no torque the energy holds (the bar's speed terms are its mass
+/// matrix's): its rate along the state's from `derivatives` is 0 to 1e-6 W (runs give 0; the differences' rounding is
+/// about 5e-8 W; leaving out the bar's J' q' gives -0.11 W). A bar with the links bending is refused.
+#[test]
+fn a_parallelogram_bar_of_its_own_moves_with_its_pin_and_turns_with_its_link() {
+    let edits = [
+        "arm.bars_on = [3.0]",
+        "arm.bars_turns_with = [1.0]",
+        "arm.bars_mass_kg = [5.0]",
+        "arm.bars_com_m = [0.3, 0.0, 0.0]",
+        "arm.bars_inertia_kgm2 = [0.1, 0.2, 0.3, 0.0, 0.0, 0.0]",
+    ];
+    let plain = rigid(&URDF_ARM);
+    let mut cfg = plain.clone();
+    edits.iter().for_each(|e| cfg.set_text(e).unwrap());
+    let (with, without) = ((URDF_ARM.build)(&cfg).unwrap(), (URDF_ARM.build)(&plain).unwrap());
+    let pose = [0.0, std::f64::consts::FRAC_PI_2, 0.0, 0.0, 0.0, 0.0];
+    let added = |acc: [f64; 6]| -> Vec<f64> {
+        let (mut a, mut b) = ([0.0; 6], [0.0; 6]);
+        with.feedforward_torque(&pose, &acc, &mut a);
+        without.feedforward_torque(&pose, &acc, &mut b);
+        a.iter().zip(&b).map(|(a, b)| (a - b) * 120.0).collect()
+    };
+    let frames = arm::chain(&cfg).unwrap().frames(&pose);
+    let (turret, shoulder, elbow) = (frames[0], frames[1].1, frames[2].1);
+    let centre: Vec<f64> = (0..3).map(|i| elbow[i] + turret.0[i][0] * 0.3).collect();
+    let g = 9.80665;
+    let held = added([0.0; 6]);
+    near(held[1].abs(), 5.0 * g * (elbow[0] - shoulder[0]).abs(), 1e-9, "joint 2 holds the bar at the elbow");
+    assert!(held[2].abs() < 1e-9 && held[0].abs() < 1e-9, "{held:?}");
+    let r2 = (centre[0] - turret.1[0]).powi(2) + (centre[1] - turret.1[1]).powi(2);
+    let zz = (0..3).map(|k| turret.0[2][k] * turret.0[2][k] * [0.1, 0.2, 0.3][k]).sum::<f64>();
+    near(added([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])[0], zz + 5.0 * r2, 1e-9, "turret");
+    let axis2 = (0..3).map(|i| frames[1].0[i][1]).collect::<Vec<f64>>();
+    let arm: Vec<f64> = (0..3).map(|i| elbow[i] - shoulder[i]).collect();
+    let along = (0..3).map(|i| axis2[i] * arm[i]).sum::<f64>();
+    let d2 = (0..3).map(|i| arm[i] * arm[i]).sum::<f64>() - along * along;
+    let swung = added([0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+    near(swung[1] - held[1], 5.0 * d2, 1e-9, "joint 2");
+    assert!((added([0.0, 0.0, 1.0, 0.0, 0.0, 0.0])[2] - held[2]).abs() < 1e-9);
+    // Free, at speed.
+    let (mut state, mut hold) = (Vec::new(), vec![0.0; 6]);
+    with.equilibrium(&[0.3, 1.2, -0.6, 0.4, 0.8, -0.2], &mut state, &mut hold);
+    state[6..12].copy_from_slice(&[0.5, -0.4, 0.6, 0.3, -0.5, 0.4]);
+    let mut rates = vec![0.0; state.len()];
+    with.derivatives(&state, &[0.0; 6], &mut rates);
+    let h = 1e-7;
+    let along = |s: f64| -> Vec<f64> { state.iter().zip(&rates).map(|(x, r)| x + s * r).collect() };
+    let change = (with.energy(&along(h)) - with.energy(&along(-h))) / (2.0 * h);
+    assert!(change.abs() < 1e-6, "the energy changes by {change} W");
+    cfg.set_text("effects.link_bending = true").unwrap();
+    assert!((URDF_ARM.build)(&cfg).is_err());
+    // The palletiser, its joints coupled: a 4 kg rod pinned on the forearm (URDF joint 3) 0.1 m behind the elbow,
+    // parallel to the upper arm (joint 2), and its energy holds alike.
+    let mut cfg = rigid(&PALLETISER);
+    for edit in [
+        "arm.bars_on = [3.0]",
+        "arm.bars_turns_with = [2.0]",
+        "arm.bars_pin_m = [-0.1, 0.0, 0.0]",
+        "arm.bars_mass_kg = [4.0]",
+        "arm.bars_com_m = [0.0, 0.0, 0.3]",
+        "arm.bars_inertia_kgm2 = [0.12, 0.12, 0.001, 0.0, 0.0, 0.0]",
+    ] {
+        cfg.set_text(edit).unwrap();
+    }
+    let m = (PALLETISER.build)(&cfg).unwrap();
+    let (mut state, mut hold) = (Vec::new(), vec![0.0; 4]);
+    m.equilibrium(&[1.4, 0.0, 1.0, 0.0], &mut state, &mut hold);
+    state[4..8].copy_from_slice(&[0.3, -0.4, 0.5, 0.6]);
+    let mut rates = vec![0.0; state.len()];
+    m.derivatives(&state, &[0.0; 4], &mut rates);
+    let along = |s: f64| -> Vec<f64> { state.iter().zip(&rates).map(|(x, r)| x + s * r).collect() };
+    // The palletiser's energy is larger: its last bit, 2.3e-13 J, is 2.3e-6 W of the rate over 1e-7 s (as a run shows),
+    // 2.3e-8 W over 1e-5 s.
+    let h = 1e-5;
+    let change = (m.energy(&along(h)) - m.energy(&along(-h))) / (2.0 * h);
+    assert!(change.abs() < 1e-6, "palletiser: the energy changes by {change} W");
 }
