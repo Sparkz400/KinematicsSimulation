@@ -204,29 +204,29 @@ jobs:
         os: [windows-latest, ubuntu-latest]
         group:
           - name: delta-d4
-            filter: test(=across_the_bounds::delta_d4)
+            filter: test(/^across_the_bounds::delta_d4::/)
           - name: urdf-arm-and-exct-30-corner
-            filter: test(=across_the_bounds::urdf_arm) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
+            filter: test(/^across_the_bounds::urdf_arm::/) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
           - name: delta-d3-and-scara
-            filter: test(=across_the_bounds::delta_d3) | test(=across_the_bounds::scara)
+            filter: test(/^across_the_bounds::delta_d3::/) | test(/^across_the_bounds::scara::/)
           - name: hexapod-rotary
-            filter: test(=across_the_bounds::hexapod_rotary)
+            filter: test(/^across_the_bounds::hexapod_rotary::/)
           - name: cable-spatial
-            filter: test(=across_the_bounds::cable_spatial)
+            filter: test(/^across_the_bounds::cable_spatial::/)
           - name: hexapod
-            filter: test(=across_the_bounds::hexapod)
+            filter: test(/^across_the_bounds::hexapod::/)
           - name: delta-h4
-            filter: test(=across_the_bounds::delta_h4)
+            filter: test(/^across_the_bounds::delta_h4::/)
           - name: arm-on-track-and-tripod
-            filter: test(=across_the_bounds::arm_on_track) | test(=across_the_bounds::tripod)
+            filter: test(/^across_the_bounds::arm_on_track::/) | test(/^across_the_bounds::tripod::/)
           - name: palletiser-and-parallel-scara
-            filter: test(=across_the_bounds::palletiser) | test(=across_the_bounds::parallel_scara)
+            filter: test(/^across_the_bounds::palletiser::/) | test(/^across_the_bounds::parallel_scara::/)
           - name: wafer-handler-and-cable-planar
-            filter: test(=across_the_bounds::wafer_handler) | test(=across_the_bounds::cable_planar)
+            filter: test(/^across_the_bounds::wafer_handler::/) | test(/^across_the_bounds::cable_planar::/)
           - name: the-rest
             filter: >-
               (package(sim-machines) & binary(control) & test(/^across_the_bounds::/))
-              & not test(/^across_the_bounds::(delta_d4|urdf_arm|delta_d3|scara|hexapod_rotary|cable_spatial|hexapod|delta_h4|arm_on_track|tripod|cable_planar|palletiser|parallel_scara|wafer_handler)$/)
+              & not test(/^across_the_bounds::(delta_d4|urdf_arm|delta_d3|scara|hexapod_rotary|cable_spatial|hexapod|delta_h4|arm_on_track|tripod|cable_planar|palletiser|parallel_scara|wafer_handler)::/)
     name: sweeps (${{ matrix.os }}, ${{ matrix.group.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
