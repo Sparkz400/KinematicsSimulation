@@ -2344,12 +2344,16 @@ fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply:
     if !job.axis.is_empty() && axis_stroke_is_module_length(&job.axis) {
         estimated.push("axis-stroke");
     }
-    candidate.figures = Some(crate::search::figures(entry, &with_parts, &job.motor, &runs, estimated));
+    let Ok(figures) = crate::search::figures(entry, &with_parts, &job.motor, &runs, estimated) else {
+        candidate.refused = "config";
+        return Some(candidate);
+    };
+    candidate.figures = Some(figures);
     if runs.len() == 1 {
         let (_, load, v) = runs.pop()?;
         candidate.result = Some((load, v));
     } else {
-        let mixed = crate::search::mix_verdicts(&runs);
+        let mixed = crate::search::mix_verdicts(&with_parts, &runs).ok()?;
         candidate.duties = runs.iter().map(|(w, load, _)| (*w, load.clone())).collect();
         candidate.result = Some((runs.swap_remove(0).1, mixed));
     }

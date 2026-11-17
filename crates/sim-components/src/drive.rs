@@ -374,7 +374,7 @@ pub struct ThermalNodes {
 }
 
 /// Resistance of copper rises by this share per kelvin.
-const COPPER: f64 = 0.0039;
+pub(crate) const COPPER: f64 = 0.0039;
 
 /// Winding voltage per DC link voltage, sqrt(3/2): see the module comment.
 pub const WINDING_PER_DC_LINK: f64 = 1.224_744_871_391_589;
