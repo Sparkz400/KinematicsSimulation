@@ -4122,3 +4122,7 @@ impl Machine for ConfigMachine {
         t.axes.iter().any(|&i| q[i] < -slack || q[i] > self.stroke[i] + slack).then_some("error-tcp-joint-range")
     }
 }
+
+#[cfg(test)]
+#[path = "wheel_sense_tests.rs"]
+mod wheel_sense_tests;
