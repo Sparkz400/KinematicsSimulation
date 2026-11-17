@@ -96,8 +96,8 @@ pub struct Trace {
     pub time: Vec<f64>,
     pub motors: Vec<MotorTrace>,
     /// Per axis the tool's speed and acceleration setpoints row by row, where the trace carries them (a file written by
-    /// a run: `axis.<id>.velocity_setpoint`, `.acceleration_setpoint`); empty for a drive's trace. `replay` then runs
-    /// the setpoints the run had, not the slopes between the rows.
+    /// a run: `axis.<id>.velocity_setpoint`, `.acceleration_setpoint`); empty for a drive's trace, whose rates `replay`
+    /// derives from the rows.
     pub tool_rates: Vec<[Vec<f64>; 2]>,
 }
 
@@ -207,14 +207,14 @@ pub const RUN_UP_S: f64 = 0.25;
 /// machine stands at rest (a trace written by a run of the config) is replayed from that state with no run-up, the
 /// first row the machine at rest, as before the run-up existed: it replays onto itself to rounding.
 ///
-/// The setpoints become tool poses (the machine's forward transformation) and run as `Command::Trajectory`,
-/// so the simulator's own controller makes the speed and torque feedforward from them, as it does for any
-/// path. With a row per profile cycle the position setpoints are reproduced exactly; the speed and
-/// acceleration setpoints are slopes between rows. Where the trace carries the tool's speed and acceleration setpoints
-/// (`Trace::tool_rates`, a file written by a run), they run with the poses as `Command::RatedTrajectory`, and the replay
-/// has the run's own setpoints at every row: the slopes were off by up to jerk x row, which moved what the fit finds on
-/// a run's own trace by up to 0.63 % (11 of its standard errors on the hexapod). Behind the last row the motion carries
-/// on (below): the trace's end is not forced to rest.
+/// The setpoints become tool poses (the machine's forward transformation) and run with their speeds and accelerations
+/// as `Command::RatedTrajectory`, so the simulator's own controller makes the speed and torque feedforward from them, as
+/// it does for any path. With a row per profile cycle the position setpoints are reproduced exactly. Where the trace
+/// carries the tool's speed and acceleration setpoints (`Trace::tool_rates`, a file written by a run), those are the
+/// rates; a drive's trace has none, and they are derived from the rows (`slopes`: the quartic through the five rows
+/// around each that do not straddle a step of the jerk), which gives a planned motion's own. Slopes between rows were
+/// off by up to jerk x row, which moved what the fit finds on a run's own trace by up to 0.63 % (11 of its standard
+/// errors on the hexapod). Behind the last row the motion carries on (below): the trace's end is not forced to rest.
 pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace, TraceError> {
     // The rows are a stream, interpolated between neighbours as a drive does (the Hermite cubic, whatever the config's
     // `profile.trajectory_spline`): the C2 spline, clamped at rest at the end of the run-out below, rang back over
@@ -305,12 +305,15 @@ pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace
         let [v, acc] = rates[rates.len() - 1].clone();
         rates.push([v.iter().zip(&acc).map(|(v, a)| v + a * gap).collect(), acc]);
     }
-    let command = if rated {
-        let (speeds, accelerations) = rates.into_iter().map(|[v, a]| (v, a)).unzip();
-        Command::RatedTrajectory(points, speeds, accelerations)
-    } else {
-        Command::Trajectory(points)
-    };
+    // A drive's trace has no rate columns: its rows' speeds and accelerations come from the rows around them (`slopes`),
+    // so it runs as a run's trace does, a quintic through them, not a cubic whose acceleration steps at every row.
+    if !rated {
+        for k in run_up..points.len() {
+            rates[k] = slopes(&points, k);
+        }
+    }
+    let (speeds, accelerations) = rates.into_iter().map(|[v, a]| (v, a)).unzip();
+    let command = Command::RatedTrajectory(points, speeds, accelerations);
     sim.command(command).map_err(|e| TraceError { key: e.key, detail: String::new() })?;
     let mut out = Trace::default();
     for time in &trace.time {
@@ -321,6 +324,69 @@ pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace
     }
     out.time.clone_from(&trace.time);
     Ok(out)
+}
+
+/// Speed and acceleration at point `k` of a curve given by its points (at least five), per axis from the quartic through
+/// five neighbouring points that hold `k`: of the five such windows the one whose fourth divided difference is the
+/// smallest (the most central of equals). A planned motion is a piecewise cubic in time (the jerk steps), so a window
+/// that does not straddle a step gives the plan's own speed and acceleration, where the central one, straddling it, was
+/// off by about jerk step x row interval in the acceleration and moved a fit by 5 of its standard errors.
+fn slopes(points: &[(f64, Vec<f64>)], k: usize) -> [Vec<f64>; 2] {
+    let n = points.len();
+    let t = |i: usize| points[i].0;
+    let starts = || {
+        let mut s: Vec<usize> = (k.saturating_sub(4)..=k.min(n - 5)).collect();
+        s.sort_by_key(|&s| (2 * s + 4).abs_diff(2 * k));
+        s
+    };
+    let axes = points[k].1.len();
+    let (mut speed, mut acc) = (vec![0.0; axes], vec![0.0; axes]);
+    for a in 0..axes {
+        let fourth = |s: usize| {
+            (s..s + 5)
+                .map(|j| points[j].1[a] / (s..s + 5).filter(|&i| i != j).map(|i| t(j) - t(i)).product::<f64>())
+                .sum::<f64>()
+                .abs()
+        };
+        let s = starts().into_iter().fold(None, |best: Option<(usize, f64)>, s| match best {
+            Some((_, f)) if f <= fourth(s) => best,
+            _ => Some((s, fourth(s))),
+        });
+        let s = s.map_or(0, |(s, _)| s);
+        let times: Vec<f64> = (s..s + 5).map(t).collect();
+        let w = fornberg(t(k), &times);
+        speed[a] = (0..5).map(|j| w[j][1] * points[s + j].1[a]).sum();
+        acc[a] = (0..5).map(|j| w[j][2] * points[s + j].1[a]).sum();
+    }
+    [speed, acc]
+}
+
+/// Weights of the values at `x` for the value, first and second derivative at `z` of the polynomial through them
+/// (Fornberg 1988, Math. Comp. 51, 699): `w[j][m]`.
+fn fornberg(z: f64, x: &[f64]) -> Vec<[f64; 3]> {
+    let mut c = vec![[0.0; 3]; x.len()];
+    c[0][0] = 1.0;
+    let (mut c1, mut c4) = (1.0, x[0] - z);
+    for i in 1..x.len() {
+        let (mut c2, c5) = (1.0, c4);
+        c4 = x[i] - z;
+        for j in 0..i {
+            let c3 = x[i] - x[j];
+            c2 *= c3;
+            if j == i - 1 {
+                for m in (1..3).rev() {
+                    c[i][m] = c1 * (m as f64 * c[i - 1][m - 1] - c5 * c[i - 1][m]) / c2;
+                }
+                c[i][0] = -c1 * c5 * c[i - 1][0] / c2;
+            }
+            for m in (1..3).rev() {
+                c[j][m] = (c4 * c[j][m] - m as f64 * c[j][m - 1]) / c3;
+            }
+            c[j][0] = c4 * c[j][0] / c3;
+        }
+        c1 = c2;
+    }
+    c
 }
 
 /// Per motor how far a replay is from its trace: RMS and peak of the difference of the torques, then of the
@@ -360,4 +426,31 @@ pub fn overlay_csv(ids: &[&str], measured: &Trace, simulated: &Trace) -> String 
 pub fn difference(a: &[f64], b: &[f64]) -> (f64, f64) {
     let squares: f64 = a.iter().zip(b).map(|(a, b)| (a - b).powi(2)).sum();
     ((squares / a.len().max(1) as f64).sqrt(), a.iter().zip(b).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A jerk-limited start, a row every millisecond: jerk 1000 m/s³ for 13.5 ms, then none (the step lies between rows
+    /// 13 and 14). Every row's speed and acceleration are the curve's own: a = j min(t, T), v = j t² / 2 up to T and
+    /// j T (t - T / 2) after it.
+    #[test]
+    fn the_rates_of_a_row_are_those_of_the_piecewise_cubic_through_it() {
+        let (j, big_t) = (1000.0, 0.0135);
+        let x = |t: f64| {
+            if t <= big_t {
+                j * t.powi(3) / 6.0
+            } else {
+                j * big_t.powi(3) / 6.0 + j * big_t * big_t / 2.0 * (t - big_t) + j * big_t / 2.0 * (t - big_t).powi(2)
+            }
+        };
+        let points: Vec<(f64, Vec<f64>)> = (0..30).map(|i| (i as f64 * 1e-3, vec![x(i as f64 * 1e-3)])).collect();
+        for k in 0..points.len() {
+            let t = points[k].0;
+            let (v, a) = if t <= big_t { (j * t * t / 2.0, j * t) } else { (j * big_t * (t - big_t / 2.0), j * big_t) };
+            let [speed, acc] = slopes(&points, k);
+            assert!((speed[0] - v).abs() < 1e-9 && (acc[0] - a).abs() < 1e-6, "row {k}: {speed:?} {acc:?}, {v} {a}");
+        }
+    }
 }

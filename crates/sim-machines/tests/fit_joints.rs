@@ -451,6 +451,31 @@ fn a_run_s_own_trace_fits_its_config_within_two_standard_errors() {
     }
 }
 
+/// The same trace with its speed and acceleration setpoint columns dropped, as a drive's trace comes: the replay
+/// derives them from the rows (`trace::replay`), and the fit lands within two standard errors too: 0.01 at most (17
+/// November 2026). With the rows' slopes (a cubic whose acceleration steps at every row) it was 5.69 (the Coulomb
+/// friction of motors 2 and 3), with central five-point differences 5.14.
+#[test]
+fn a_run_s_trace_without_its_rate_columns_fits_its_config_within_two_standard_errors() {
+    let entry = sim_machines::find("delta-d3").unwrap();
+    let mut cfg = entry.config();
+    cfg.set_text("effects.payload = false").unwrap();
+    cfg.set_text("effects.encoder_resolution = false").unwrap();
+    let mut trace = run_trace(entry, &cfg);
+    trace.tool_rates.clear();
+    let fit = fit_joints(entry, &cfg, &trace).unwrap().unwrap();
+    for v in &fit.values {
+        assert!(
+            (v.fitted - v.config).abs() <= 2.0 * v.error,
+            "{}: {} against {} ± {}",
+            v.name(),
+            v.fitted,
+            v.config,
+            v.error
+        );
+    }
+}
+
 /// The disc cam without its payload is fitted per axis (`per_axis_fit`: its inertia varies by 4.1 % over the range, the
 /// follower's mass through the cam's slope), and its fitted moved mass is a mean over the trace's poses: its error holds
 /// how far the inertia strays from one constant over them (`AxisFit::mass_spread`, 2.49e-4 kg m², 0.6 % of the mass),
