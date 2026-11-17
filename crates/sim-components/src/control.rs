@@ -819,6 +819,18 @@ impl Controller {
                     .map(|(capacitance, threshold)| 0.5 * capacitance * 1e-6 * (threshold * threshold - bus * bus)))
             })
             .collect::<Result<Vec<_>>>()?;
+        // The share of each speed rating the plan keeps back for the velocity loops (`path::speed_kept_of`): the most over
+        // the motors, each at the inertia its precontrol is tuned for (the rigid model's at the start pose), the most
+        // acceleration its torque reserve gives it and the top speed it is held to. Not less than the fixed share.
+        let speed_kept = rigid_inertias(machine, &cfg.f64s("start.pose")?)
+            .iter()
+            .zip(&motor_params)
+            .filter(|(inertia, _)| **inertia > 0.0)
+            .map(|(&inertia, p)| {
+                let acc = torque_reserve * p.peak_torque / inertia;
+                path::speed_kept_of(p.ki, inertia, p.torque_ff, acc, p.max_speed)
+            })
+            .fold(path::PlanLimits::new(1.0, [0.0; 3]).speed_kept, f64::max);
         let plan_limits = path::PlanLimits {
             reserve: torque_reserve,
             tension,
@@ -828,6 +840,7 @@ impl Controller {
             ratings,
             margin,
             hermite: !spline_c2,
+            speed_kept,
         };
         // A path through via points has to be one the planner times, from where the segment before ends; timed as fast as
         // the motors allow, so has the straight way of every other segment.

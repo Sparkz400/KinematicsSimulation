@@ -1548,15 +1548,15 @@ type Plane = [[f64; 3]; 4];
 /// The deviation is the one in the plane, as the plane's coordinates keep distances. A line between two arcs in
 /// different planes lies in both; it is cut in half, and each half goes with its arc.
 ///
-/// Two arcs that meet in their direction in different planes keep their junction, which the path passes at the
-/// speed `junction_speed` allows: a curve between them has to turn from one plane into the other, with torsion, and
-/// the planar construction (each arc moved in within its plane, the curve fitted exactly between the two circles)
-/// has no counterpart there. A piece that lies off its run's plane by more than 1 nm (a line written with too few
-/// digits) ends the run, and its junctions stay as given.
+/// Where pieces do not share a plane, the junction is rounded in space, not here: a turn of more than 1 mrad between
+/// two pieces (also between two arcs in different planes) is a corner, which `round_corners` rounds before this runs
+/// (`Tolerance::corner`) by the G2 quintic of `hermite_curve`. The two tangents span a plane and the curve starts and
+/// ends on it; where the arcs' curvature vectors leave it the curve takes their out-of-plane part (a torsion) so
+/// that curvature stays continuous, and its distance to the given pieces is added to the reported deviation as for any
+/// corner. Two tangents that are parallel (a turn below 1 mrad) need no rounding: the piece off the run's plane
+/// (more than 1 nm) ends the run and the path passes the junction at the speed `junction_speed` allows, a step of
+/// curvature only. A helix or any piece with torsion keeps its own geometry.
 fn blend3(geo: Vec<Geo>, speed: &[f64], axes: &[AxisInfo], tolerance: f64) -> (Vec<Geo>, f64) {
-    // shortcut: a piece more than 1 nm off its run's plane ends the run, and two arcs in different planes keep their
-    // junction; project such pieces (adding the projection to the deviation) or build a space curve with torsion there
-    // if hand-written tilted paths or helix-like tool paths have to pass those junctions at speed.
     let plane_of =
         |g: &Geo| if let Geo::Arc3 { centre, u, w, .. } = g { Some([*centre, *u, *w, cross3(*u, *w)]) } else { None };
     let near =
@@ -2156,10 +2156,31 @@ pub struct PlanLimits {
     /// false: with the C2 spline, as shipped. It sets what `piece_limits` keeps back for the cubics' overshoot.
     #[serde(default)]
     pub hermite: bool,
+    /// The share of every speed rating the plan keeps back for the velocity loops' following (`speed_kept_of`, the
+    /// largest over the motors); at least `SPEED_KEPT`.
+    #[serde(default = "speed_kept")]
+    pub speed_kept: f64,
 }
 
 fn one() -> f64 {
     1.0
+}
+
+fn speed_kept() -> f64 {
+    SPEED_KEPT
+}
+
+/// The share of its top speed `top` (rad/s) that a motor's velocity loop follows a ramp of acceleration `acc` (rad/s^2)
+/// off by, at most, from the loop's integral gain `ki` (N m per rad), the inertia `inertia` (kg m^2) it is tuned for
+/// and the share `feedforward` of the torque J a that the precontrol gives. The speed error e of the PI loop on a ramp
+/// a t, with the loop's torque (1 - feedforward) J a to find, obeys J e'' + kp e' + ki e = 0 with e'(0) = (1 -
+/// feedforward) a, whose peak is at most (1 - feedforward) a / w_n for the natural frequency w_n = sqrt(ki / J)
+/// (the underdamped peak a/w_n exp(-z acos(z) / sqrt(1 - z^2)) is below it, as is the critical a/(e w_n)). The share is
+/// that over `top`, between `SPEED_KEPT` and `SPEED_KEPT_MOST`: a loop that follows a ramp closely keeps the least.
+pub fn speed_kept_of(ki: f64, inertia: f64, feedforward: f64, acc: f64, top: f64) -> f64 {
+    let peak = (1.0 - feedforward).max(0.0) * acc * (inertia / ki).sqrt();
+    let share = peak / top;
+    if share.is_finite() { share.clamp(SPEED_KEPT, SPEED_KEPT_MOST) } else { SPEED_KEPT }
 }
 
 impl PlanLimits {
@@ -2174,6 +2195,7 @@ impl PlanLimits {
             ratings: Vec::new(),
             margin: 1.0,
             hermite: false,
+            speed_kept: SPEED_KEPT,
         }
     }
 
@@ -2186,7 +2208,7 @@ impl PlanLimits {
     }
 
     /// Each motor's drive as the plan holds it: its maximum current no more than the drive's rating, and its maximum
-    /// speed no more than the gearbox's input speed rating, times the margin, less `SPEED_KEPT`.
+    /// speed no more than the gearbox's input speed rating, times the margin, less `speed_kept`.
     fn rated(&self, drives: &[&DriveParams]) -> Vec<DriveParams> {
         drives
             .iter()
@@ -2195,7 +2217,7 @@ impl PlanLimits {
                 let [current, speed, _] = self.ratings.get(m).copied().unwrap_or([f64::INFINITY; 3]);
                 let mut drive = (*drive).clone();
                 drive.drive_max_current = drive.drive_max_current.min(current);
-                drive.max_speed = drive.max_speed.min(speed) * self.margin * (1.0 - SPEED_KEPT);
+                drive.max_speed = drive.max_speed.min(speed) * self.margin * (1.0 - self.speed_kept);
                 drive
             })
             .collect()
@@ -2614,18 +2636,27 @@ const PLACES_MOST: usize = 1000;
 const KEPT_BACK: f64 = 2e-4;
 /// The share of each speed rating (a motor's maximum speed, a gearbox's input speed, a screw's speed) that the
 /// time-optimal plan keeps back for the following of the loops: a plan at the motors' 420 rad/s ran them up to 420.66
-/// rad/s (0.16 % over) on a belt gantry's cycle.
-/// shortcut: one fixed share; take it from the velocity loop's overshoot if a machine follows less closely.
+/// rad/s (0.16 % over) on a belt gantry's cycle. This is the least `PlanLimits::speed_kept` has; `speed_kept_of`
+/// raises it for a loop that follows less closely.
 const SPEED_KEPT: f64 = 0.01;
+/// The most `speed_kept_of` keeps back.
+const SPEED_KEPT_MOST: f64 = 0.5;
 /// Steps of the time-optimal plan's ramps per profile cycle.
 const STEPS_PER_CYCLE: f64 = 4.0;
 /// The step of the central differences by which the plan reads the motors' speed per speed along the path (m).
 const TURN_STEP: f64 = 1e-6;
-/// A motor that turns more than this per distance along the path (rad per m, or per rad in joint space) is at a
-/// singularity: a gearbox of 100 on an arm of 0.1 m turns 1e3, so this is far beyond any machine that moves.
-/// shortcut: one fixed bound; derive it from the motors' rated speed and the slowest speed a plan may crawl at if a
-/// machine ever needs more.
+/// The most a motor may turn per distance along the path (rad per m, or per rad in joint space) before it is at a
+/// singularity: a gearbox of 100 on an arm of 0.1 m turns 1e3, so this is far beyond any machine that moves. It is
+/// the cap of `singular_turn`, which takes the motor's own bound.
 const SINGULAR_TURN: f64 = 1e6;
+
+/// The most a motor of top speed `top` (rad/s) may turn per distance along a piece of `length`: a plan takes at most
+/// `PLAN_LONGEST` over the piece, so it crawls no slower than length / `PLAN_LONGEST`, and at that speed the motor,
+/// held to `top`, turns at most top / (length / `PLAN_LONGEST`) per unit of distance; more is a singularity (the plan
+/// would have to crawl below that). No more than `SINGULAR_TURN`.
+fn singular_turn(top: f64, length: f64) -> f64 {
+    SINGULAR_TURN.min(top * PLAN_LONGEST / length)
+}
 /// The longest a time-optimal plan may take (s): a path that crawls this slowly passes a singularity, or a pose where
 /// the motors nearly cannot move the tool, and its poses (one per profile cycle, a million at 1 ms) would be unbounded.
 const PLAN_LONGEST: f64 = 1000.0;
@@ -3026,7 +3057,9 @@ fn piece_limits(
         // path, and the plan would crawl or, with the rows not finite, run unbounded: refused.
         let bounded = |v: &[f64]| v.iter().all(|x| x.is_finite());
         if ![&hold, &per_acc, &per_speed, &ahead, &behind].iter().all(|v| bounded(v))
-            || ahead.iter().zip(&behind).any(|(a, b)| (a - b).abs() > 2.0 * TURN_STEP * SINGULAR_TURN)
+            || ahead.iter().zip(&behind).zip(curves.iter()).any(|((a, b), curve)| {
+                (a - b).abs() > 2.0 * TURN_STEP * singular_turn(curve.max_speed(), length)
+            })
         {
             return Err(CommandError { key: "error-path-singular" });
         }
@@ -3116,7 +3149,7 @@ fn piece_limits(
         // The machine's own parts (`Machine::rigid_checks`), each within its check's limit: a value read at rest, at the
         // acceleration 1 and at the speeds 1 and 2 along the path gives c a + b v + d v^2 + e. One that grows with the
         // acceleration keeps `reserve` of its limit, as the torques do; a speed alone, the margin's share less
-        // `SPEED_KEPT`; a limit of the plan itself, the margin's share.
+        // `speed_kept`; a limit of the plan itself, the margin's share.
         speed.resize(rows.len(), 0.0);
         if !checks.is_empty() {
             let values = |vel: &[f64], acc: &[f64]| {
@@ -3147,7 +3180,7 @@ fn piece_limits(
                 } else if c != 0.0 {
                     reserve
                 } else {
-                    limits.margin * (1.0 - SPEED_KEPT)
+                    limits.margin * (1.0 - limits.speed_kept)
                 };
                 let cubics = if plan && c != 0.0 {
                     let bent: f64 = (0..axes.len())
@@ -5229,5 +5262,73 @@ line,0.3,0.13",
         }
         let up = place(1.0, 0.03, 0.4).most(1.0, 1.0);
         assert!((up - 0.76 / 0.0453).abs() < 1e-9, "{up} m/s^2");
+    }
+
+    /// The share of the speed the plan keeps back (`speed_kept_of`): a loop with J = 0.01 kg m^2 and ki = 100 N m/rad has
+    /// w_n = sqrt(ki / J) = 100 rad/s; a ramp of 1000 rad/s^2 with half of its torque from the precontrol leaves a peak
+    /// error of 0.5 * 1000 / 100 = 5 rad/s, 0.025 of a top speed of 200 rad/s. With all of it from the precontrol 0 is
+    /// left, so the fixed share (0.01) stays; the most is 0.5.
+    #[test]
+    fn the_speed_kept_back_follows_the_velocity_loop() {
+        assert!((speed_kept_of(100.0, 0.01, 0.5, 1000.0, 200.0) - 0.025).abs() < 1e-12);
+        assert_eq!(speed_kept_of(100.0, 0.01, 1.0, 1000.0, 200.0), SPEED_KEPT);
+        assert_eq!(speed_kept_of(100.0, 0.01, 0.0, 1e6, 200.0), SPEED_KEPT_MOST);
+        assert_eq!(PlanLimits::new(0.8, [0.0; 3]).speed_kept, SPEED_KEPT);
+    }
+
+    /// The bound of a motor's turn per distance (`singular_turn`): at 400 rad/s on a piece of 2 m the slowest crawl is
+    /// 2 m / 1000 s = 2 mm/s, so 400 / 0.002 = 2e5 rad per m; on a piece of 1 mm the bound would be 4e8, held to the cap 1e6.
+    #[test]
+    fn a_motors_turn_per_distance_is_bounded_by_its_speed_over_the_slowest_crawl() {
+        assert!((singular_turn(400.0, 2.0) - 2e5).abs() < 1e-6);
+        assert_eq!(singular_turn(400.0, 1e-3), SINGULAR_TURN);
+    }
+
+    /// Two arcs of 0.1 m radius that meet with a tangent kink of 45 degrees, the first in the x-y plane and the second in
+    /// the x-z plane (the plane of the two tangents), against the same two arcs both in the x-z plane. Both are rounded
+    /// (`round_corners`) within the corner tolerance e = 0.1 mm: between lines 3 d sin(45) / 16 = e, d = 16 e / (3 sin 45)
+    /// = 0.754 mm; the arcs bend d^2 / (2 R) = 2.8e-6 m away from their tangents, 3 % of e, so the deviation is e within
+    /// the search's 2 % and that bend. The plans pass the junction without a stop and as fast as in one plane (the
+    /// curvature of the arcs, 10 per m, is small against the curve's 3 |tb - ta| / (d |ta + tb|^2) = 400 per m).
+    #[test]
+    fn two_arcs_in_perpendicular_planes_with_a_kink_are_rounded_and_passed_as_in_one_plane() {
+        let (axes, r, e) = (axes3(), 0.1, 1e-4);
+        let (s, c) = (45f64.to_radians().sin(), 45f64.to_radians().cos());
+        let at = |angle: f64| (r * angle.to_radians().cos(), r * angle.to_radians().sin());
+        let arc = |to: Vec<f64>, centre: Vec<f64>| Piece::Arc { to, centre, clockwise: false, plane: None };
+        let (x0, d0) = at(-120.0);
+        let (x1, d1) = at(-15.0);
+        // The first arc ends at (0, 0, -0.9) heading +x. The second leaves along (c, s) in the x-z plane, around the
+        // centre r (-s, c) from there, 30 degrees on.
+        let (xb, zb) = (-r * s, r * c);
+        let second = arc(vec![xb + x1, 0.0, -0.9 + zb + d1], vec![xb, 0.0, -0.9 + zb]);
+        let apart = [
+            // In the x-y plane: centre (0, r, -0.9).
+            (vec![x0, r + d0, -0.9], arc(vec![0.0, 0.0, -0.9], vec![0.0, r, -0.9])),
+            // In the x-z plane: centre (0, 0, -0.9 + r).
+            (vec![x0, 0.0, -0.9 + r + d0], arc(vec![0.0, 0.0, -0.9], vec![0.0, 0.0, -0.9 + r])),
+        ];
+        let tolerance = Tolerance { path: 0.0, corner: e };
+        let results: Vec<_> = apart
+            .iter()
+            .map(|(start, first)| {
+                let pieces = [first.clone(), second.clone()];
+                let (geo, off) = geometry(&axes, start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
+                assert_eq!(geo.len(), 3, "arc, curve, arc");
+                assert!((0.97e-4..=1.0e-4).contains(&off), "{off} m");
+                let points = plan(&axes, start, &pieces, 1e-3, tolerance, ARC_SLACK).unwrap();
+                // The slowest step within 5 mm of the junction is a speed, not a stop.
+                let junction = [0.0, 0.0, -0.9];
+                let slowest = points
+                    .windows(2)
+                    .filter(|w| distance(&w[0].1, &junction) < 5e-3)
+                    .map(|w| distance(&w[0].1, &w[1].1))
+                    .fold(f64::INFINITY, f64::min);
+                assert!(slowest > 1e-6, "stops at the kink");
+                (points.len(), slowest)
+            })
+            .collect();
+        let ((n_a, v_a), (n_b, v_b)) = (results[0], results[1]);
+        assert!((n_a as f64 / n_b as f64 - 1.0).abs() < 0.02 && (v_a / v_b - 1.0).abs() < 0.03, "{results:?}");
     }
 }
