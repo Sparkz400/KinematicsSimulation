@@ -441,14 +441,17 @@ Die Suche oben beantwortet „welcher ist der leichteste Motor, der besteht“. 
 
 **Nach dem ordnen, was zählt.** `--rank-by` ordnet die bestandenen Kandidaten nach `cost` (Vorgabe), `margin` (Auslastung der knappsten Prüfung), `energy`, `error` (Schleppfehler), `thermal`, `inertia` (Trägheitsverhältnis) oder `drive` (Nennstrom des Antriebs), oder nach einer gewichteten Mischung wie `--rank-by cost=1,energy=0.5`: jede Größe über der besten aller bestandenen Kandidaten, mal ihr Gewicht, summiert, sodass Kilogramm und Joule so zählen, wie die Gewichte sagen. Die nicht bestandenen folgen wie bisher.
 
-**Der Antrieb als Suchdimension.** `--drives neighbours` probiert jeden Motor mit dem Antrieb, den der Katalog ihm zuordnet, und mit der nächstkleineren und nächstgrößeren Baugröße nach Nennausgangsstrom: unter den S210-Umrichtern der Netzspannung (bei 230 V die 1 AC und 3 AC, bei 400 V die 3 AC), den S120 Single Motor Modules oder den Antrieben des Herstellers bei dieser Netzspannung. `--drives all` probiert jeden Antrieb der Netzspannung. Ein kleinerer Antrieb wird gegen seine eigenen Ströme beurteilt (`drive-current`, `drive-peak-current`) und begrenzt mit effects.drive_current_limit den simulierten Strom. Am EXCT-30 läuft der 1FK2104-4AF am 6SL3210-5HE10-4UF0 (1,2 A) mit 0,98 seines Nennstroms, an seinem zugeordneten 5HE10-8UF0 (2,3 A) mit 0,51:
+**Der Antrieb als Suchdimension.** `--drives neighbours` probiert jeden Motor mit dem Antrieb, den der Katalog ihm zuordnet, und mit der nächstkleineren und nächstgrößeren Baugröße nach Nennausgangsstrom: unter den S210-Umrichtern der Netzspannung (bei 230 V die 1 AC und 3 AC, bei 400 V die 3 AC), den S120 Single Motor Modules oder den Antrieben des Herstellers bei dieser Netzspannung. `--drives all` probiert jeden Antrieb der Netzspannung. Ein kleinerer Antrieb wird gegen seine eigenen Ströme beurteilt (`drive-current`, `drive-peak-current`) und begrenzt mit effects.drive_current_limit den simulierten Strom. Am EXCT-30 läuft der 1FK2204-5AF am 6SL3210-5HE10-4UF0 (1,2 A) mit 0,995 seines Nennstroms, an seinem zugeordneten 5HE10-8UF0 (2,3 A) mit 0,52:
 
 ```text
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2 --drives neighbours
+Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 0 / 77 candidates
+Search time on 16: 81.7 s
 motor,drive,cost_kg,result,tightest_check,tightest_utilisation,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,inertia_ratio,estimated
-1FK2104-4AF,6SL3210-5HE10-4UF0,4.10,ok,drive-current,0.9751,1,true,2.0480,179.78,0.9428,0.9751,55.723,motor-winding;motor-pole-pairs;drive-base-load
-1FK2104-4AF,6SL3210-5HE10-8UF0,4.10,ok,motor-thermal,0.9547,2,true,2.0480,179.78,0.9428,0.5088,55.723,motor-winding;motor-pole-pairs;drive-base-load
-1FK2104-5AF,6SL3210-5HE10-4UF0,5.70,ok,drive-current,0.8976,3,true,2.0480,176.85,0.5088,0.8976,34.827,motor-winding;motor-pole-pairs;drive-base-load
+1FK2204-5AF,6SL3210-5HE10-4UF0,5.80,ok,drive-current,0.9952,1,true,2.0480,186.54,0.5282,0.9952,16.507,motor-winding;motor-pole-pairs;drive-base-load
+1FK2204-5AF,6SL3210-5HE10-8UF0,5.80,ok,motor-s1,0.5344,2,true,2.0480,186.54,0.5282,0.5192,16.507,motor-winding;motor-pole-pairs;drive-base-load
+1FK2204-5AF,6SL3210-5HE11-0UF0,5.80,ok,motor-s1,0.5344,3,false,2.0480,186.54,0.5282,0.3981,16.507,motor-winding;motor-pole-pairs;drive-base-load
+1FK2204-5AK,6SL3210-5HE11-0UF0,5.80,ok,drive-current,0.7795,4,false,2.0480,217.53,1.4084,0.7795,16.507,motor-winding;motor-pole-pairs;drive-base-load
 ...
 ```
 
@@ -470,19 +473,20 @@ motor,drive,cost_kg,result,tightest_check,tightest_utilisation,rank,front,cycle_
 
 ```text
 $ sim-cli transmission t-gantry --config crates/machine-t-gantry/exct-30.toml --motor 1FK2104-5AF --from 1 --to 20 --count 7 --gearboxes NRK
-Classic optimum (least torque per unit acceleration) and best value for the cycle of gearbox.ratio: 5.1707, 1.6475
+Classic optimum (least torque per unit acceleration) and best value for the cycle of gearbox.ratio: 5.1970, 2.7144
 kind,value,gearbox,torque_per_acceleration,inertia_ratio,cycle_s,result,tightest_check,tightest_utilisation,torque_unit
-sweep,1.000000,,0.390498,34.8269,2.0480,ok,settling,0.5320
-sweep,1.647549,,0.251668,12.8303,2.0480,ok,gearbox-radial-load,0.5007
-sweep,2.714418,,0.176891,4.7267,2.0480,ok,motor-speed,0.6074
-sweep,4.472136,,0.147134,1.7413,2.0480,FAIL,belt-slack,inf
-classic,5.170667,,0.145598,1.3026,2.0480,FAIL,belt-slack,inf
+sweep,1.000000,,0.394342,35.3729,2.0480,FAIL,settling,1.5370,N m
+sweep,1.647549,,0.254001,13.0315,2.0480,ok,settling,0.7850,N m
+sweep,2.714418,,0.178307,4.8008,2.0480,ok,motor-speed,0.6071,N m
+sweep,4.472136,,0.147993,1.7686,2.0480,FAIL,motor-speed,1.0018,N m
+classic,5.197001,,0.146339,1.3097,2.0480,FAIL,motor-speed,1.1633,N m
 ...
-catalogue,3.000000,NRK070-04-3,0.182418,4.2179,2.0480,ok,motor-speed,0.6712
+catalogue,3.000000,NRK070-04-3,0.183699,4.2785,2.0480,ok,motor-speed,0.6710,N m
+catalogue,4.000000,NRK070-04-4,0.165260,2.4572,2.0480,ok,motor-speed,0.8944,N m
 ...
 ```
 
-Das klassische Optimum (5,2) braucht das kleinste Moment, besteht aber nicht: der Riemen wird schlaff. Bis zur Übersetzung 2,7 besteht der Zyklus, darüber naht die Höchstdrehzahl des Motors. Am besten für diesen Zyklus ist 1,65; das nächste NRK-Getriebe, das an den Flansch passt, hat die Übersetzung 3. `search --gearboxes BAUREIHE` macht dasselbe bei einem Direktantrieb: es probiert jeden Motor ohne Getriebe und mit den Getrieben der Baureihe um sein eigenes klassisches Optimum (die Wurzel aus Last- über Läuferträgheit); bei einer Maschine mit Getriebe wie bisher um die Übersetzung der Konfiguration.
+Das klassische Optimum (5,2) braucht das kleinste Moment, besteht aber nicht: Der Motor müsste das 1,16-Fache seiner Höchstdrehzahl drehen. Auch der Direktantrieb (Übersetzung 1) besteht nicht, an `settling` (siehe [Bauteile über den Namen](#eine-reale-katalogmaschine-prüfen)). Von 1,65 bis 2,7 besteht der Zyklus; bei 4,5 ist die Höchstdrehzahl des Motors überschritten. Am besten für diesen Zyklus ist 2,71; die NRK-Getriebe mit den Übersetzungen 3 und 4, die an den Flansch passen, bestehen, die mit 5 nicht. `search --gearboxes BAUREIHE` macht dasselbe bei einem Direktantrieb: es probiert jeden Motor ohne Getriebe und mit den Getrieben der Baureihe um sein eigenes klassisches Optimum (die Wurzel aus Last- über Läuferträgheit); bei einer Maschine mit Getriebe wie bisher um die Übersetzung der Konfiguration.
 
 **Querkraft am Getriebe je Motor.** `gearbox-radial-load` wird je Motor beurteilt: die höchste Querkraft jeder Welle gegen das eigene `ratings.shaft_max_radial_load_n` dieses Motors (ein kleineres Z-Getriebe hat sein eigenes, `[ratings.<id>]`). Vor dem 14. November wurde sie einmal für die Maschine beurteilt, die höchste Welle gegen das gemeinsame Rating; bei einer Maschine, die keine Welle ihrer eigenen Motoren meldet, ist das weiterhin so.
 
@@ -506,9 +510,9 @@ Jede Maschine bekommt den Zyklus: Start über der Aufnahme, hinab (der Greifer s
 ```text
 $ sim-cli compare-kinematics examples/pick-place-task.toml --machines t-gantry,delta-d3,delta-d2 --machine-file machines/h-bot.toml --series 1FK2
 machine,result,refused,motor,gearbox,drive,supply,cost_kg,cycle_s,target_s,meets,energy_j,tightest_check,tightest_utilisation,thermal_utilisation,following_error_m,inertia_ratio,passing,tried,estimated
-t-gantry,ok,,1FK2203-2AK,,6SL3210-5HE10-4UF0,400v,2.32,2.0720,1.5000,false,36.49,settling,0.4882,0.4124,4.0218e-4,4.368,26,28,motor-winding;motor-pole-pairs;drive-base-load
-delta-d3,ok,,1FK2104-5AF,,6SL3210-5HE10-8UF0,400v,8.55,0.7620,1.5000,true,26.07,settling,0.7638,0.7867,1.7895e-3,41.220,20,28,motor-winding;motor-pole-pairs;drive-base-load
-delta-d2,ok,,1FK2104-5AF,,6SL3210-5HE10-8UF0,400v,5.70,0.7620,1.5000,true,31.44,settling,0.8709,0.7025,1.1112e-3,24.979,21,28,motor-winding;motor-pole-pairs;drive-base-load
+t-gantry,ok,,1FK2203-2AK,,6SL3210-5HE10-4UF0,400v,2.32,2.0720,1.5000,false,37.40,gearbox-radial-load,0.4351,0.4217,3.8635e-4,4.496,28,28,motor-winding;motor-pole-pairs;drive-base-load
+delta-d3,ok,,1FK2104-5AF,,6SL3210-5HE10-8UF0,400v,8.55,0.7620,1.5000,true,26.67,motor-s1,0.7851,0.7852,1.1346e-3,41.220,22,28,motor-winding;motor-pole-pairs;drive-base-load
+delta-d2,ok,,1FK2104-5AF,,6SL3210-5HE10-8UF0,400v,5.70,0.7620,1.5000,true,32.09,dc-link-energy,0.7303,0.7031,8.8303e-4,24.979,22,28,motor-winding;motor-pole-pairs;drive-base-load
 h-bot,refused,task-axis-missing z,,,,,,,1.5000,false,,,,,,,0,0,
 ```
 
@@ -533,15 +537,15 @@ Ein Bauteil, das `[parts]` oder `--motor`, `--supply`, `--drive`, ... benennt, b
 ```text
 $ sim-cli sensitivity t-gantry --config crates/machine-t-gantry/exct-30.toml --group mass --group friction_x --group belt
 parameter,value,low,high,peak_torque_low,peak_torque_high,rms_torque_low,rms_torque_high,cycle_time_low,cycle_time_high,belt_tension_min_low_n,belt_tension_min_high_n
-friction_x.viscous_n_s_m,20.0,10.0,40.0,-0.0436,+0.0869,-0.0172,+0.0469,+0.0000,+0.0000,264.84,242.04
-mass.z_axis_kg,4.7,3.7600000000000002,5.64,-0.0620,+0.0624,-0.0675,+0.0689,+0.0000,+0.0000,268.68,246.11
-mass.carriage_kg,7.16,5.728000000000001,8.592,-0.0541,+0.0548,-0.0472,+0.0487,+0.0000,+0.0000,272.13,243.18
-mass.payload_kg,3.0,2.4000000000000004,3.5999999999999996,-0.0343,+0.0342,-0.0279,+0.0283,+0.0000,+0.0000,265.01,250.05
-friction_x.coulomb_n,20.0,12.0,26.0,-0.0190,+0.0143,-0.0096,+0.0078,+0.0000,+0.0000,263.44,253.31
+friction_x.viscous_n_s_m,20.0,10.0,40.0,-0.0430,+0.0862,-0.0169,+0.0459,+0.0000,+0.0000,263.54,240.35
+mass.z_axis_kg,4.7,3.7600000000000002,5.64,-0.0627,+0.0624,-0.0667,+0.0683,+0.0000,+0.0000,267.48,244.50
+mass.carriage_kg,7.16,5.728000000000001,8.592,-0.0556,+0.0554,-0.0468,+0.0484,+0.0000,+0.0000,270.41,241.35
+mass.payload_kg,3.0,2.4000000000000004,3.5999999999999996,-0.0339,+0.0342,-0.0272,+0.0277,+0.0000,+0.0000,263.51,248.29
+friction_x.coulomb_n,20.0,12.0,26.0,-0.0204,+0.0154,-0.0093,+0.0078,+0.0000,+0.0000,261.68,251.99
 ...
-belt.pretension_n,450.0,350.0,550.0,-0.0000,-0.0000,+0.0000,-0.0000,+0.0000,+0.0000,157.77,357.77
+belt.pretension_n,450.0,350.0,550.0,-0.0000,-0.0000,+0.0000,-0.0000,+0.0000,+0.0000,156.11,356.11
 ...
-belt.tooth_mesh_stiffness_n_m,5000000.0,2500000.0,10000000.0,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,257.77,257.77
+belt.tooth_mesh_stiffness_n_m,5000000.0,2500000.0,10000000.0,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,256.11,256.11
 ```
 
 | Spalte | Bedeutung |
@@ -558,7 +562,7 @@ belt.tooth_mesh_stiffness_n_m,5000000.0,2500000.0,10000000.0,+0.0000,+0.0000,+0.
 | `--group TABLE` | Nur diese Tabelle der Konfiguration variieren. Mehrfach möglich. Ohne die Option wird jede Tabelle variiert außer `sim`, `effects`, `drive`, `profile`, `start`, `axis` und `temperature` |
 | `--delta FRACTION` | Breite für Werte ohne Grenzen. Standard `0.2` |
 
-Die Massen im Beispiel haben in der Konfiguration keine Grenzen und wurden deshalb um 20 % variiert. Ein Parameter, dessen geänderten Wert die Maschine ablehnt, fehlt in der Tabelle. Die Vorspannung ändert die Momente kaum und steht deshalb weit unten, sie bestimmt aber die kleinste Riemenkraft: 158 N an ihrer unteren Grenze. Die letzte Zeile zeigt einen Parameter eines abgeschalteten Effekts: Er ändert nichts.
+Die Massen im Beispiel haben in der Konfiguration keine Grenzen und wurden deshalb um 20 % variiert. Ein Parameter, dessen geänderten Wert die Maschine ablehnt, fehlt in der Tabelle. Die Vorspannung ändert die Momente kaum und steht deshalb weit unten, sie bestimmt aber die kleinste Riemenkraft: 156 N an ihrer unteren Grenze. Die letzte Zeile zeigt einen Parameter eines abgeschalteten Effekts: Er ändert nichts.
 
 **Fehlerbänder zu den Prüfungen.**
 

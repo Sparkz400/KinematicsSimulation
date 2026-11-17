@@ -423,17 +423,17 @@ The search above answers "which is the lightest motor that passes". The same sea
 
 **Rank by what matters.** `--rank-by` orders the passing candidates by `cost` (the default), `margin` (the tightest check's utilisation), `energy`, `error` (following error), `thermal`, `inertia` (inertia ratio) or `drive` (the drive's rated current), or by a weighted mix such as `--rank-by cost=1,energy=0.5`: each figure over the best one of the passing candidates, times its weight, summed, so that kilograms and joules weigh as the weights say. Failing candidates follow as before.
 
-**The drive as a dimension.** `--drives neighbours` tries each motor with the drive the catalogue pairs with it and with the next size down and up by rated output current: among the S210 converters of the supply (at 230 V the 1 AC and 3 AC ones, at 400 V the 3 AC ones), the S120 Single Motor Modules, or the maker's drives at the line voltage. `--drives all` tries every drive of the supply. A smaller drive is judged against its own currents (`drive-current`, `drive-peak-current`) and, with effects.drive_current_limit, limits the simulated current. On the EXCT-30 the 1FK2104-4AF runs on the 6SL3210-5HE10-4UF0 (1.2 A) at 0.98 of its rated current, on its paired 5HE10-8UF0 (2.3 A) at 0.51:
+**The drive as a dimension.** `--drives neighbours` tries each motor with the drive the catalogue pairs with it and with the next size down and up by rated output current: among the S210 converters of the supply (at 230 V the 1 AC and 3 AC ones, at 400 V the 3 AC ones), the S120 Single Motor Modules, or the maker's drives at the line voltage. `--drives all` tries every drive of the supply. A smaller drive is judged against its own currents (`drive-current`, `drive-peak-current`) and, with effects.drive_current_limit, limits the simulated current. On the EXCT-30 the 1FK2204-5AF runs on the 6SL3210-5HE10-4UF0 (1.2 A) at 0.995 of its rated current, on its paired 5HE10-8UF0 (2.3 A) at 0.52:
 
 ```text
 $ sim-cli search t-gantry --config crates/machine-t-gantry/exct-30.toml --series 1FK2 --drives neighbours
 Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 0 / 77 candidates
-Search time on 16: 14.8 s
+Search time on 16: 81.7 s
 motor,drive,cost_kg,result,tightest_check,tightest_utilisation,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,inertia_ratio,estimated
-1FK2104-4AF,6SL3210-5HE10-4UF0,4.10,ok,drive-current,0.9751,1,true,2.0480,179.78,0.9428,0.9751,55.723,motor-winding;motor-pole-pairs;drive-base-load
-1FK2104-4AF,6SL3210-5HE10-8UF0,4.10,ok,motor-thermal,0.9547,2,true,2.0480,179.78,0.9428,0.5088,55.723,motor-winding;motor-pole-pairs;drive-base-load
-1FK2104-5AF,6SL3210-5HE10-4UF0,5.70,ok,drive-current,0.8976,3,true,2.0480,176.85,0.5088,0.8976,34.827,motor-winding;motor-pole-pairs;drive-base-load
-1FK2104-5AF,6SL3210-5HE10-8UF0,5.70,ok,settling,0.5320,4,true,2.0480,176.85,0.5088,0.4683,34.827,motor-winding;motor-pole-pairs;drive-base-load
+1FK2204-5AF,6SL3210-5HE10-4UF0,5.80,ok,drive-current,0.9952,1,true,2.0480,186.54,0.5282,0.9952,16.507,motor-winding;motor-pole-pairs;drive-base-load
+1FK2204-5AF,6SL3210-5HE10-8UF0,5.80,ok,motor-s1,0.5344,2,true,2.0480,186.54,0.5282,0.5192,16.507,motor-winding;motor-pole-pairs;drive-base-load
+1FK2204-5AF,6SL3210-5HE11-0UF0,5.80,ok,motor-s1,0.5344,3,false,2.0480,186.54,0.5282,0.3981,16.507,motor-winding;motor-pole-pairs;drive-base-load
+1FK2204-5AK,6SL3210-5HE11-0UF0,5.80,ok,drive-current,0.7795,4,false,2.0480,217.53,1.4084,0.7795,16.507,motor-winding;motor-pole-pairs;drive-base-load
 ...
 ```
 
@@ -456,19 +456,20 @@ motor,drive,cost_kg,result,tightest_check,tightest_utilisation,rank,front,cycle_
 
 ```text
 $ sim-cli transmission t-gantry --config crates/machine-t-gantry/exct-30.toml --motor 1FK2104-5AF --from 1 --to 20 --count 7 --gearboxes NRK
-Classic optimum (least torque per unit acceleration) and best value for the cycle of gearbox.ratio: 5.1707, 1.6475
+Classic optimum (least torque per unit acceleration) and best value for the cycle of gearbox.ratio: 5.1970, 2.7144
 kind,value,gearbox,torque_per_acceleration,inertia_ratio,cycle_s,result,tightest_check,tightest_utilisation,torque_unit
-sweep,1.000000,,0.390498,34.8269,2.0480,ok,settling,0.5320
-sweep,1.647549,,0.251668,12.8303,2.0480,ok,gearbox-radial-load,0.5007
-sweep,2.714418,,0.176891,4.7267,2.0480,ok,motor-speed,0.6074
-sweep,4.472136,,0.147134,1.7413,2.0480,FAIL,belt-slack,inf
-classic,5.170667,,0.145598,1.3026,2.0480,FAIL,belt-slack,inf
+sweep,1.000000,,0.394342,35.3729,2.0480,FAIL,settling,1.5370,N m
+sweep,1.647549,,0.254001,13.0315,2.0480,ok,settling,0.7850,N m
+sweep,2.714418,,0.178307,4.8008,2.0480,ok,motor-speed,0.6071,N m
+sweep,4.472136,,0.147993,1.7686,2.0480,FAIL,motor-speed,1.0018,N m
+classic,5.197001,,0.146339,1.3097,2.0480,FAIL,motor-speed,1.1633,N m
 ...
-catalogue,3.000000,NRK070-04-3,0.182418,4.2179,2.0480,ok,motor-speed,0.6712
+catalogue,3.000000,NRK070-04-3,0.183699,4.2785,2.0480,ok,motor-speed,0.6710,N m
+catalogue,4.000000,NRK070-04-4,0.165260,2.4572,2.0480,ok,motor-speed,0.8944,N m
 ...
 ```
 
-The classic optimum (5.2) needs the least torque but fails: the belt goes slack. Up to a ratio of 2.7 the cycle passes, beyond it the motor's speed limit nears. The best for this cycle is 1.65, and the NRK gearbox nearest it that fits the frame has the ratio 3. `search --gearboxes SERIES` does the same on a direct drive: it tries each motor without a gearbox and with the series' gearboxes around its own classic optimum (the square root of the load's inertia over its rotor's); on a geared machine around the config's ratio, as before.
+The classic optimum (5.2) needs the least torque but fails: the motor would have to turn 1.16 times its maximum speed. The direct drive (ratio 1) fails as well, on `settling` (see [parts by name](#check-a-real-catalogue-machine)). From 1.65 to 2.7 the cycle passes; at 4.5 the motor's speed limit is passed. The best for this cycle is 2.71, and the NRK gearboxes of ratio 3 and 4 that fit the frame pass, those of ratio 5 do not. `search --gearboxes SERIES` does the same on a direct drive: it tries each motor without a gearbox and with the series' gearboxes around its own classic optimum (the square root of the load's inertia over its rotor's); on a geared machine around the config's ratio, as before.
 
 **Gearbox radial load per motor.** `gearbox-radial-load` is judged per motor: each shaft's peak radial load against that motor's own `ratings.shaft_max_radial_load_n` (a smaller Z gearbox has its own, `[ratings.<id>]`). Before 14 November it was judged once for the machine, the highest shaft against the shared rating; a machine that reports no shaft of its own motors still is.
 
@@ -492,9 +493,9 @@ Each machine gets the cycle: start above the pick, down to it (the gripper close
 ```text
 $ sim-cli compare-kinematics examples/pick-place-task.toml --machines t-gantry,delta-d3,delta-d2 --machine-file machines/h-bot.toml --series 1FK2
 machine,result,refused,motor,gearbox,drive,supply,cost_kg,cycle_s,target_s,meets,energy_j,tightest_check,tightest_utilisation,thermal_utilisation,following_error_m,inertia_ratio,passing,tried,estimated
-t-gantry,ok,,1FK2203-2AK,,6SL3210-5HE10-4UF0,400v,2.32,2.0720,1.5000,false,36.49,settling,0.4882,0.4124,4.0218e-4,4.368,26,28,motor-winding;motor-pole-pairs;drive-base-load
-delta-d3,ok,,1FK2104-5AF,,6SL3210-5HE10-8UF0,400v,8.55,0.7620,1.5000,true,26.07,settling,0.7638,0.7867,1.7895e-3,41.220,20,28,motor-winding;motor-pole-pairs;drive-base-load
-delta-d2,ok,,1FK2104-5AF,,6SL3210-5HE10-8UF0,400v,5.70,0.7620,1.5000,true,31.44,settling,0.8709,0.7025,1.1112e-3,24.979,21,28,motor-winding;motor-pole-pairs;drive-base-load
+t-gantry,ok,,1FK2203-2AK,,6SL3210-5HE10-4UF0,400v,2.32,2.0720,1.5000,false,37.40,gearbox-radial-load,0.4351,0.4217,3.8635e-4,4.496,28,28,motor-winding;motor-pole-pairs;drive-base-load
+delta-d3,ok,,1FK2104-5AF,,6SL3210-5HE10-8UF0,400v,8.55,0.7620,1.5000,true,26.67,motor-s1,0.7851,0.7852,1.1346e-3,41.220,22,28,motor-winding;motor-pole-pairs;drive-base-load
+delta-d2,ok,,1FK2104-5AF,,6SL3210-5HE10-8UF0,400v,5.70,0.7620,1.5000,true,32.09,dc-link-energy,0.7303,0.7031,8.8303e-4,24.979,22,28,motor-winding;motor-pole-pairs;drive-base-load
 h-bot,refused,task-axis-missing z,,,,,,,1.5000,false,,,,,,,0,0,
 ```
 
@@ -519,15 +520,15 @@ A part named in `[parts]` or by `--motor`, `--supply`, `--drive`, ... carries it
 ```text
 $ sim-cli sensitivity t-gantry --config crates/machine-t-gantry/exct-30.toml --group mass --group friction_x --group belt
 parameter,value,low,high,peak_torque_low,peak_torque_high,rms_torque_low,rms_torque_high,cycle_time_low,cycle_time_high,belt_tension_min_low_n,belt_tension_min_high_n
-friction_x.viscous_n_s_m,20.0,10.0,40.0,-0.0436,+0.0869,-0.0172,+0.0469,+0.0000,+0.0000,264.84,242.04
-mass.z_axis_kg,4.7,3.7600000000000002,5.64,-0.0620,+0.0624,-0.0675,+0.0689,+0.0000,+0.0000,268.68,246.11
-mass.carriage_kg,7.16,5.728000000000001,8.592,-0.0541,+0.0548,-0.0472,+0.0487,+0.0000,+0.0000,272.13,243.18
-mass.payload_kg,3.0,2.4000000000000004,3.5999999999999996,-0.0343,+0.0342,-0.0279,+0.0283,+0.0000,+0.0000,265.01,250.05
-friction_x.coulomb_n,20.0,12.0,26.0,-0.0190,+0.0143,-0.0096,+0.0078,+0.0000,+0.0000,263.44,253.31
+friction_x.viscous_n_s_m,20.0,10.0,40.0,-0.0430,+0.0862,-0.0169,+0.0459,+0.0000,+0.0000,263.54,240.35
+mass.z_axis_kg,4.7,3.7600000000000002,5.64,-0.0627,+0.0624,-0.0667,+0.0683,+0.0000,+0.0000,267.48,244.50
+mass.carriage_kg,7.16,5.728000000000001,8.592,-0.0556,+0.0554,-0.0468,+0.0484,+0.0000,+0.0000,270.41,241.35
+mass.payload_kg,3.0,2.4000000000000004,3.5999999999999996,-0.0339,+0.0342,-0.0272,+0.0277,+0.0000,+0.0000,263.51,248.29
+friction_x.coulomb_n,20.0,12.0,26.0,-0.0204,+0.0154,-0.0093,+0.0078,+0.0000,+0.0000,261.68,251.99
 ...
-belt.pretension_n,450.0,350.0,550.0,-0.0000,-0.0000,+0.0000,-0.0000,+0.0000,+0.0000,157.77,357.77
+belt.pretension_n,450.0,350.0,550.0,-0.0000,-0.0000,+0.0000,-0.0000,+0.0000,+0.0000,156.11,356.11
 ...
-belt.tooth_mesh_stiffness_n_m,5000000.0,2500000.0,10000000.0,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,257.77,257.77
+belt.tooth_mesh_stiffness_n_m,5000000.0,2500000.0,10000000.0,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,+0.0000,256.11,256.11
 ```
 
 | Column | Meaning |
@@ -544,7 +545,7 @@ belt.tooth_mesh_stiffness_n_m,5000000.0,2500000.0,10000000.0,+0.0000,+0.0000,+0.
 | `--group TABLE` | Only vary this config table. Repeatable. Without it every table is varied except `sim`, `effects`, `drive`, `profile`, `start`, `axis` and `temperature` |
 | `--delta FRACTION` | Width for values without bounds. Default 0.2 |
 
-The masses in the example have no bounds in the config, so they were varied by 20 %. A parameter whose changed value the machine refuses is left out of the table. The pretension hardly moves the torques, so it stands far down, but it sets the lowest belt tension: 158 N at its low bound. The last row shows a parameter of an effect that is switched off: it changes nothing.
+The masses in the example have no bounds in the config, so they were varied by 20 %. A parameter whose changed value the machine refuses is left out of the table. The pretension hardly moves the torques, so it stands far down, but it sets the lowest belt tension: 156 N at its low bound. The last row shows a parameter of an effect that is switched off: it changes nothing.
 
 **Error bands on the verdicts.**
 
