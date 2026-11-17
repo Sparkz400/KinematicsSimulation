@@ -1319,6 +1319,35 @@ fn a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_s
     );
 }
 
+/// With effects.thermal_warm_start a path's passes after the first start from the machine's start state, with the
+/// winding at the rise the pass before settled it at (a winding's settled rise depends on its current alone, so the second
+/// pass starts at the cold pass's settled rise and the warm start ends there). That pass is the one a fresh machine runs
+/// whose winding is put at that rise once its drives hold it at rest: the same figures to the bit, as nothing of the
+/// first pass (the carriage's ringing, the loops' integrators) carries over. A machine whose winding starts at that rise
+/// by its config (`motor.start_temperature_rise_k`) differs by 5e-8 of the RMS torque: its current loop held the load
+/// with the warm winding's resistance from the start.
+#[test]
+fn a_warm_path_pass_starts_from_the_machines_start_state() {
+    use sim_components::analysis::{CycleLoad, analyse_trajectory};
+    let cfg = ENTRY.config();
+    assert!(cfg.bool("effects.thermal_warm_start").unwrap() && cfg.bool("effects.winding_heating").unwrap());
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    let (mut tool, mut speed) = (vec![0.0], vec![0.0]);
+    sim.machine.tool_state(&sim.state, &mut tool, &mut speed);
+    let path = vec![(0.0, tool.clone()), (0.4, vec![tool[0] + 0.3]), (0.8, tool.clone())];
+    let warm = analyse_trajectory(&mut sim, path.clone()).unwrap();
+    assert_eq!(warm.warm_start.as_ref().map(|w| w.passes), Some(1), "{:?}", warm.warm_start);
+    let mut cold = cfg.clone();
+    cold.set_text("effects.thermal_warm_start = false").unwrap();
+    let rise = analyse_trajectory(&mut Sim::new(&ENTRY, &cold).unwrap(), path.clone()).unwrap().motors[0].winding_rise;
+    let mut fresh = Sim::new(&ENTRY, &cold).unwrap();
+    fresh.control.drives[0].temperature_rise = rise;
+    let second = analyse_trajectory(&mut fresh, path.clone()).unwrap();
+    let figures =
+        |l: &CycleLoad| (l.motors[0].rms_torque, l.motors[0].winding_rise, l.tracking_error_peak, l.path_error_peak);
+    assert_eq!(figures(&warm), figures(&second));
+}
+
 /// The energy from the supply (`supply_energy`, from the drives' sums) against the DC link's own books (the energy
 /// budget): what the rectifier or line module drew from the line, less what the mains got back and what the capacitors
 /// hold more at the end. With the DC link and the regenerative supply (efficiency 0.98 both ways, the line module's loss
