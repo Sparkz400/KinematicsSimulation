@@ -1461,6 +1461,40 @@ impl Controller {
         }
     }
 
+    /// `path_deviation` per run of a program (`plan_program`: each run from where the one before ends, a run with a
+    /// feed within the axis limits). A run with a feed reads as without its feeds (`path::deviation`): never lower
+    /// than its own path's.
+    pub fn program_deviations(
+        &self,
+        machine: &dyn Machine,
+        runs: &[crate::program::Run],
+        time_optimal: bool,
+    ) -> std::result::Result<Vec<f64>, CommandError> {
+        let mut start = self.raw_pos.clone();
+        let mut out = Vec::new();
+        for run in runs.iter().filter(|run| !run.pieces.is_empty()) {
+            let optimal = time_optimal && run.feed.is_none();
+            let planned = self.plan_from(machine, &start, &run.pieces, optimal, run.caps().as_deref())?;
+            out.push(if optimal {
+                path::deviation_time_optimal(
+                    machine,
+                    &self.motor_drives(machine),
+                    &self.plan_limits,
+                    &start,
+                    &run.pieces,
+                    self.path_tolerance,
+                    machine.setpoint_slack(),
+                )?
+            } else {
+                path::deviation(machine.axes(), &start, &run.pieces, self.path_tolerance, machine.setpoint_slack())?
+            });
+            if let Some((_, end)) = planned.last() {
+                start.clone_from(end);
+            }
+        }
+        Ok(out)
+    }
+
     /// True while a move, a dwell or the cycle is under way.
     pub fn busy(&self) -> bool {
         self.cycle.is_some()

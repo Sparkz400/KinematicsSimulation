@@ -103,8 +103,8 @@ pub fn torque_speed_grid(
                 ui.label(RichText::new(&title).strong());
                 let drawn = plot((id, k))
                     .height(200.0)
-                    .x_axis_label(model.speed_label())
-                    .y_axis_label(model.torque_label())
+                    .x_axis_label(model.motor_speed_label(k))
+                    .y_axis_label(model.motor_torque_label(k))
                     .show(ui, |plot| {
                         for line in &chart.peak {
                             plot.line(
@@ -168,7 +168,7 @@ pub fn torque_speed_grid(
                     &drawn.response,
                     model,
                     &title,
-                    &model.speed_label(),
+                    &model.motor_speed_label(k),
                     || {
                         let mut series = Vec::new();
                         for (key, lines) in [("charts-peak", &chart.peak), ("charts-s1", &chart.s1)]
@@ -190,10 +190,12 @@ pub fn torque_speed_grid(
     }
 }
 
-/// The operating points of a run per motor in the speed unit `rpm` (a factor), with its RMS point; `run` its place.
-fn operating_of(run: &Run, place: usize, rpm: f64) -> Vec<Operating> {
+/// The operating points of a run per motor in the speed unit `rpm` (a factor per motor), with its RMS point; `run` its
+/// place.
+fn operating_of(run: &Run, place: usize, rpm: &[f64]) -> Vec<Operating> {
     (0..run.motors.len())
         .map(|k| {
+            let rpm = rpm.get(k).copied().unwrap_or(1.0);
             let get = |name: &str| run.column(&format!("motor.{}.{name}", run.motors[k])).unwrap_or(&[]);
             let (speed, torque) = (get("speed"), get("torque"));
             let [w, t] = charts::rms_point(speed, torque);
@@ -277,14 +279,15 @@ pub fn views(ui: &mut Ui, model: &Model, tolerance: Option<f64>, actions: &mut V
             ui.label(RichText::new(tr("ui-views-no-drives")).color(dim()));
             return;
         }
-        let rpm = model.speed_scale();
-        let curves: Vec<TorqueSpeed> = run.torque_speed().iter().map(|c| scaled_speeds(c, rpm)).collect();
+        let curves: Vec<TorqueSpeed> =
+            run.torque_speed().iter().enumerate().map(|(k, c)| scaled_speeds(c, model.motor_speed_scale(k))).collect();
         // Every shown run's points over the reference run's charts, motor by motor by their place.
         let mut operating: Vec<Vec<Operating>> = vec![Vec::new(); curves.len()];
         for (i, shown) in
             model.runs.iter().enumerate().filter(|(i, _)| model.runs.shown(*i) || *i == model.runs.reference())
         {
-            for (k, points) in operating_of(shown, i, rpm).into_iter().enumerate().take(curves.len()) {
+            let scale: Vec<f64> = (0..curves.len()).map(|k| model.motor_speed_scale(k)).collect();
+            for (k, points) in operating_of(shown, i, &scale).into_iter().enumerate().take(curves.len()) {
                 operating[k].push(points);
             }
         }
@@ -604,16 +607,34 @@ fn spectrum(ui: &mut Ui, model: &Model, run: &Run, names: &[String], actions: &m
     }
 }
 
+/// The linear interpolation of `values` (at the rising `times`) at `t`; the end values outside, 0 for no samples.
+fn value_at(times: &[f64], values: &[f64], t: f64) -> f64 {
+    let n = times.len().min(values.len());
+    if n == 0 {
+        return 0.0;
+    }
+    let upper = times[..n].partition_point(|x| *x <= t);
+    if upper == 0 {
+        return values[0];
+    }
+    if upper == n {
+        return values[n - 1];
+    }
+    let (t0, t1) = (times[upper - 1], times[upper]);
+    let w = if t1 > t0 { (t - t0) / (t1 - t0) } else { 0.0 };
+    values[upper - 1] + w * (values[upper] - values[upper - 1])
+}
+
 /// The trace's residual, measured less simulated, per motor for the torque and the following error, on the same time
 /// axis and cursor as the overlay above it (`ui::trace`).
 pub fn trace_residual(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
     let tr = |key: &str| model.tr.tr(key).to_string();
     let Some(fit) = &model.trace_fit else { return };
     let (measured, simulated) = (&fit.measured, &fit.simulated);
-    // shortcut: sample by sample, as the replay runs on the trace's own time stamps; align by time if a replay ever
-    // samples differently.
-    let n = measured.time.len().min(simulated.time.len());
-    let time = &measured.time[..n];
+    // At the measured time stamps: the simulated value interpolated linearly in time (held at its ends), so a replay
+    // that samples differently still lines up.
+    let time = &measured.time[..];
+    let n = time.len();
     for (key, unit, of) in [
         ("quantity-torque", TORQUE, (|m: &sim_components::trace::MotorTrace| m.torque.clone()) as fn(&_) -> Vec<f64>),
         ("quantity-following-error", "rad", |m| m.following_error()),
@@ -626,7 +647,8 @@ pub fn trace_residual(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
             .enumerate()
             .map(|(k, (motor, (a, b)))| {
                 let (a, b) = (of(a), of(b));
-                let residual: Vec<f64> = a.iter().zip(&b).take(n).map(|(a, b)| a - b).collect();
+                let residual: Vec<f64> =
+                    a.iter().take(n).enumerate().map(|(i, a)| a - value_at(&simulated.time, &b, time[i])).collect();
                 let points = plot_line(residual.len(), |i| [time[i], residual[i]]);
                 (tr(motor.key), PALETTE[k % PALETTE.len()], LineStyle::Solid, points)
             })
@@ -805,5 +827,22 @@ pub fn band_plots(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
             },
             actions,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::value_at;
+
+    /// A replay sampled at 0, 1 and 3 s with the values 0, 10 and 30 (a line of slope 10): read at 0.5 s it is 5, at 2 s
+    /// (between the second and third sample) 20, and past its ends it holds its end values.
+    #[test]
+    fn a_replay_is_read_at_the_measured_time_stamps() {
+        let (times, values) = ([0.0, 1.0, 3.0], [0.0, 10.0, 30.0]);
+        assert!((value_at(&times, &values, 0.5) - 5.0).abs() < 1e-12);
+        assert!((value_at(&times, &values, 2.0) - 20.0).abs() < 1e-12);
+        assert_eq!(value_at(&times, &values, 1.0), 10.0);
+        assert_eq!((value_at(&times, &values, -1.0), value_at(&times, &values, 9.0)), (0.0, 30.0));
+        assert_eq!(value_at(&[], &[], 1.0), 0.0);
     }
 }

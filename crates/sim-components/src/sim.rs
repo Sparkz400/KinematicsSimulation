@@ -583,6 +583,15 @@ impl Sim {
         self.control.path_deviation(self.machine.as_ref(), pieces, time_optimal)
     }
 
+    /// `path_deviation` per run of a program (`Controller::program_deviations`).
+    pub fn program_deviations(
+        &self,
+        runs: &[crate::program::Run],
+        time_optimal: bool,
+    ) -> Result<Vec<f64>, CommandError> {
+        self.control.program_deviations(self.machine.as_ref(), runs, time_optimal)
+    }
+
     /// One base step: the controller sets the windings' voltages, then windings and mechanics go through the step
     /// together (with the drives disabled, the mechanics alone without torque).
     pub fn step(&mut self) {

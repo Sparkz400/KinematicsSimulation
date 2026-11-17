@@ -449,6 +449,17 @@ pub trait Machine: Send {
     fn friction_curve(&self, _i: usize, _speed: f64, _load_scale: f64) -> [f64; 3] {
         [0.0; 3]
     }
+    /// Whether contact `i` is a rotary one (a joint's bearings): its speed signal is an angular speed (rad/s) and its
+    /// parts torques (N m), where a sliding one has m/s and N. The friction view draws the labels of its kind.
+    fn friction_rotary(&self, _i: usize) -> bool {
+        false
+    }
+    /// The speed (m/s, or rad/s for a rotary contact) up to which the friction view draws contact `i`'s curve, where
+    /// the machine knows it from the highest speed of each motor's rotor, `motor_speed` (rad/s, from its drive);
+    /// `None`: the owner axis's speed limit, or the fastest axis's.
+    fn friction_speed_limit(&self, _i: usize, _motor_speed: &[f64]) -> Option<f64> {
+        None
+    }
 
     /// The belt sections for the belt view. Empty where the machine tells none.
     fn belt_sections(&self) -> Vec<BeltSection> {

@@ -2051,8 +2051,44 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
         entry.id
     );
     assert!(shorter < 0.95 * given, "{}: {shorter} s with transition curves, {given} s without", entry.id);
+    // A program with a feed reports its deviation per run: the first run is planned from the setpoint as the path
+    // above, so its deviation is the library's for the same pieces (one value per run).
+    let run = |pieces: &str| sim_components::program::Run {
+        feed: Some(0.05),
+        caps: Vec::new(),
+        pieces: sim_components::path::parse(pieces).unwrap(),
+    };
+    let per_run =
+        sim_components::Sim::new(entry, &blended).unwrap().program_deviations(&[run(&pieces)], false).unwrap();
+    assert!(per_run.len() == 1 && (per_run[0] - reported).abs() < 1e-9, "{}: {per_run:?} against {reported}", entry.id);
 }
 per_machine!(a_path_is_planned_run_and_analysed_in_the_app);
+
+/// An analysed run has the machine's modes at poses along it (`Run::modes_along`, the start first, at most
+/// `MODE_POSES`): those at its first sample are what `Machine::modes` says at the pose its position signals give, and
+/// `Run::modes` holds every one of them. Each motor's chart axis has the unit of its own kind (`motor_speed_label`).
+fn the_modes_are_asked_along_the_run_and_each_motor_has_its_own_axis_unit(entry: &'static MachineEntry) {
+    let mut model = Model::new(entry, "en");
+    model.run_analysis(Analysis::Cycle);
+    wait_for_analysis(&mut model);
+    let machine = (entry.build)(&entry.config()).unwrap();
+    let run = model.runs.get(model.runs.reference()).unwrap();
+    assert!(!run.modes_along.is_empty() && run.modes_along.len() <= sim_app::runs::MODE_POSES);
+    assert_eq!(run.modes_along[0].0, 0.0);
+    let pose: Vec<f64> =
+        machine.axes().iter().map(|a| run.column(&format!("axis.{}.position", a.id)).unwrap()[0]).collect();
+    assert_eq!(run.modes_along[0].1, machine.modes(&pose).iter().map(|m| m.hz).collect::<Vec<_>>());
+    for hz in run.modes_along.iter().flat_map(|(_, hz)| hz) {
+        assert!(run.modes.iter().any(|m| (m - hz).abs() < 1e-6), "{}: {hz} Hz", entry.id);
+    }
+    for k in 0..machine.motors().len() {
+        assert_eq!(model.motor_is_linear(k), machine.motor_linear(k));
+        let (speed, torque) = (model.motor_speed_label(k), model.motor_torque_label(k));
+        assert_eq!(speed.contains("m/s") && !speed.contains("rad/s"), machine.motor_linear(k), "{speed}");
+        assert_eq!(torque.ends_with("[N]"), machine.motor_linear(k), "{torque}");
+    }
+}
+per_machine!(the_modes_are_asked_along_the_run_and_each_motor_has_its_own_axis_unit);
 
 /// Where an arm's tool is drawn off its pose by the gears' twist under its weight: the distance in the scene of the tool
 /// at `pose` and with every axis the machine's setpoint slack further. An arm's poses are joint angles, so its slack of
@@ -3093,14 +3129,22 @@ fn the_effect_views_show_torque_parts_energy_budget_and_friction(entry: &'static
     let machine = (entry.build)(&entry.config()).unwrap();
     let views = model.friction_views();
     assert_eq!(views.len(), machine.friction_contacts().len());
-    // Every belt machine has guides; the delta offers no contact to this view (its joints' friction is a torque).
+    // Every belt machine has guides; the arms of a delta offer their joints (a torque over an angular speed).
     assert!(!views.is_empty() || machine.belt_sections().is_empty());
     for (i, (view, contact)) in views.iter().zip(machine.friction_contacts()).enumerate() {
         let get = |part: &str| latest(&model, &format!("{}.friction_{part}", contact.id));
         let scale = get("load_scale");
-        // A guide on no axis of its own (a delta's carriage) spans the fastest axis's limit.
+        // The machine's own limit where it has one (a joint: its motor's top speed over the gearbox, in rad/s); else a
+        // guide on no axis of its own (a delta's carriage) spans the fastest axis's limit.
         let fastest = model.session.axes.iter().map(|a| a.max_vel).fold(0.0, f64::max);
-        let top = model.session.axes.iter().find(|a| a.key == contact.owner_key).map_or(fastest, |a| a.max_vel);
+        let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+        let motor_speed: Vec<f64> =
+            (0..machine.motors().len()).map(|k| sim.control.drive_params_of(k).max_speed).collect();
+        let top = machine.friction_speed_limit(i, &motor_speed).unwrap_or_else(|| {
+            model.session.axes.iter().find(|a| a.key == contact.owner_key).map_or(fastest, |a| a.max_vel)
+        });
+        assert_eq!(view.rotary, machine.friction_rotary(i));
+        let unit = if view.rotary { "N m" } else { "N" };
         assert_eq!(view.title, model.tr.tr(contact.owner_key));
         let curve = &view.curves[0].1;
         assert!(
@@ -3129,8 +3173,8 @@ fn the_effect_views_show_torque_parts_energy_budget_and_friction(entry: &'static
         );
         assert_eq!(view.now, Some([get("speed"), split.iter().sum::<f64>()]));
         assert!(
-            shows(&row(&view.table, "Coulomb friction [N]")[0], split[0])
-                && shows(&row(&view.table, "Friction force [N]")[0], split.iter().sum()),
+            shows(&row(&view.table, &format!("Coulomb friction [{unit}]"))[0], split[0])
+                && shows(&row(&view.table, &format!("Friction force [{unit}]"))[0], split.iter().sum()),
             "{:?}",
             view.table
         );

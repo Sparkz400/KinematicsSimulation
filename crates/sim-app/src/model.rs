@@ -180,8 +180,11 @@ pub struct PathRun {
     pub scene_line: Vec<[f64; 3]>,
     pub load: CycleLoad,
     pub verdicts: Vec<Verdict>,
-    /// How far the planned path is off the given one, at most: transition curves and arcs off their stated end.
+    /// How far the planned path is off the given one, at most: transition curves and arcs off their stated end. That of
+    /// the worst run for a program.
     pub deviation: f64,
+    /// The deviation of each run of a program from its pieces (one value for a path of one run).
+    pub deviations: Vec<f64>,
     /// The motors' torque-speed curves, for its operating points (`torque_speed_curves`).
     pub curves: Curves,
     /// The path as it was run, every signal once per millisecond, with the analysis's distance to the path
@@ -726,6 +729,8 @@ pub struct FrictionView {
     pub now: Option<[f64; 2]>,
     /// The newest sample as a table: speed, the three parts, the friction force and the load factor.
     pub table: Table,
+    /// A joint's bearings: the speed is an angular speed (rad/s) and the force a torque (N m).
+    pub rotary: bool,
 }
 
 /// The most stretches a band over a trace is drawn in (`Model::band_plots`): each is a filled shape of its own.
@@ -1960,20 +1965,23 @@ impl Model {
                                     break;
                                 }
                                 tool.iter_mut().zip(&off).for_each(|(t, d)| *t += d);
+                                // A pose pushed past a stroke's end is planned to the end (the setpoint then stands
+                                // that much off the live pose, which no stroke could reach); the live pose itself
+                                // beyond the end was refused by the first start above.
+                                tool.iter_mut().zip(sim.machine.axes()).for_each(|(t, a)| *t = t.clamp(a.min, a.max));
                                 let mut closer = from_here.clone();
                                 closer.set_text(&format!("start.pose = {tool:?}")).map_err(refused)?;
-                                // shortcut: a tool pose pushed past a stroke's end keeps the plan of the last one that
-                                // started, up to one sag off; a setpoint within a sag of the end is rare.
-                                // The config stays that of the last one too: the run store's simulation below starts
-                                // from it, and a refused pose refused the whole path.
-                                match Sim::new(entry, &closer) {
-                                    Ok(started) => (sim, from_here) = (started, closer),
-                                    Err(_) => break,
+                                let started = Sim::new(entry, &closer).map_err(refused)?;
+                                // At the end the push cannot close the gap: the plan is as close as it gets.
+                                let settled = started.control.planned_pos() == sim.control.planned_pos();
+                                (sim, from_here) = (started, closer);
+                                if settled {
+                                    break;
                                 }
                             }
                         }
-                        let (points, deviation) = if inputs.path_timed {
-                            (path::parse_trajectory(&text).map_err(unreadable)?, 0.0)
+                        let (points, deviations) = if inputs.path_timed {
+                            (path::parse_trajectory(&text).map_err(unreadable)?, vec![0.0])
                         } else {
                             // A path file, or a G-code or robot program (`program::read`, by the file's extension).
                             let runs = sim_components::program::read(
@@ -1986,13 +1994,17 @@ impl Model {
                             match runs.as_slice() {
                                 [run] if run.feed.is_none() => (
                                     sim.plan_path(&run.pieces, inputs.time_optimal).map_err(command)?,
-                                    sim.path_deviation(&run.pieces, inputs.time_optimal).map_err(command)?,
+                                    vec![sim.path_deviation(&run.pieces, inputs.time_optimal).map_err(command)?],
                                 ),
-                                // shortcut: a program with feeds shows no deviation from its pieces; tell it per run if
-                                // transition curves on programs matter.
-                                _ => (sim.plan_program(&runs, inputs.time_optimal).map_err(command)?, 0.0),
+                                // A program: the deviation of each run from its pieces, each from where the one
+                                // before ends.
+                                _ => (
+                                    sim.plan_program(&runs, inputs.time_optimal).map_err(command)?,
+                                    sim.program_deviations(&runs, inputs.time_optimal).map_err(command)?,
+                                ),
                             }
                         };
+                        let deviation = deviations.iter().copied().fold(0.0, f64::max);
                         let scene_line = points.iter().filter_map(|(_, pose)| sim.machine.scene_point(pose)).collect();
                         // The path's samples for the run store, on a simulation of its own that starts as this one.
                         let mut again = Sim::new(entry, &from_here).map_err(refused)?;
@@ -2010,6 +2022,7 @@ impl Model {
                                 load,
                                 verdicts,
                                 deviation,
+                                deviations,
                                 curves: recorded.torque_speed(),
                                 run: recorded.clone(),
                             },
@@ -2523,15 +2536,21 @@ impl Model {
     /// how many there are, and the header with the rows in `rows`. `None` until a cycle was analysed.
     pub fn points_table(&self, rows: std::ops::Range<usize>) -> Option<(usize, Table)> {
         let (load, _, _) = self.cycle_report.as_ref()?;
-        let rpm = self.speed_scale();
+        // A motor of the other kind than the header's gets its own units in its name cell.
+        let header_linear = self.motors_linear();
         let all = self
             .session
             .motors
             .iter()
             .zip(&load.motors)
-            .flat_map(|(motor, m)| m.points.iter().map(move |p| (motor, p)));
-        let shown = all.clone().skip(rows.start).take(rows.len()).map(|(motor, (speed, torque))| {
-            vec![self.tr.tr(motor.key).to_string(), short(*speed * rpm), short(*torque)]
+            .enumerate()
+            .flat_map(|(k, (motor, m))| m.points.iter().map(move |p| (k, motor, p)));
+        let shown = all.clone().skip(rows.start).take(rows.len()).map(|(k, motor, (speed, torque))| {
+            let mut name = self.tr.tr(motor.key).to_string();
+            if self.motor_is_linear(k) != header_linear {
+                name = format!("{name} [{}; {}]", self.motor_speed_label(k), self.motor_torque_label(k));
+            }
+            vec![name, short(*speed * self.motor_speed_scale(k)), short(*torque)]
         });
         let mut header = self.header(&POINTS_KEYS);
         (header[1], header[2]) = (self.speed_label(), self.torque_label());
@@ -2540,21 +2559,44 @@ impl Model {
 
     /// The label of the motor speed's axis in the unit chosen; m/s where every motor is linear.
     pub fn speed_label(&self) -> String {
+        self.speed_label_of(self.motors_linear())
+    }
+
+    /// The label of the motor torque's axis: a force in N where every motor is linear.
+    pub fn torque_label(&self) -> String {
+        self.torque_label_of(self.motors_linear())
+    }
+
+    /// The speed axis label of a linear (m/s) or a rotary (rad/s or rpm) motor.
+    fn speed_label_of(&self, linear: bool) -> String {
         let key = match () {
-            _ if self.motors_linear() => "ui-points-speed-linear",
+            _ if linear => "ui-points-speed-linear",
             _ if self.units.rpm => "ui-points-speed-rpm",
             _ => "ui-points-speed",
         };
         self.tr.tr(key).to_string()
     }
 
-    /// The label of the motor torque's axis: a force in N where every motor is linear.
-    pub fn torque_label(&self) -> String {
-        self.tr.tr(if self.motors_linear() { "ui-points-torque-linear" } else { "ui-points-torque" }).to_string()
+    fn torque_label_of(&self, linear: bool) -> String {
+        self.tr.tr(if linear { "ui-points-torque-linear" } else { "ui-points-torque" }).to_string()
+    }
+
+    /// Whether motor `k` is linear (`Machine::motor_linear`).
+    pub fn motor_is_linear(&self, k: usize) -> bool {
+        self.session.motor_linear.get(k).copied().unwrap_or(false)
+    }
+
+    /// The speed axis label of motor `k`'s chart: a machine with rotary and linear motors has each on its own unit.
+    pub fn motor_speed_label(&self, k: usize) -> String {
+        self.speed_label_of(self.motor_is_linear(k))
+    }
+
+    /// The torque axis label of motor `k`'s chart.
+    pub fn motor_torque_label(&self, k: usize) -> String {
+        self.torque_label_of(self.motor_is_linear(k))
     }
 
     /// Whether every motor of the machine is linear (`Machine::motor_linear`): speeds in m/s, forces in N.
-    // shortcut: a machine with rotary and linear motors gets the rotary labels on its one chart axis.
     pub fn motors_linear(&self) -> bool {
         !self.session.motor_linear.is_empty() && self.session.motor_linear.iter().all(|l| *l)
     }
@@ -2562,6 +2604,11 @@ impl Model {
     /// The factor of the motor speeds in the unit chosen: rpm applies to rotary motors only.
     pub fn speed_scale(&self) -> f64 {
         if self.motors_linear() { 1.0 } else { self.units.scale("rad/s").0 }
+    }
+
+    /// The factor of motor `k`'s speeds: 1 for a linear motor (m/s), else the unit chosen.
+    pub fn motor_speed_scale(&self, k: usize) -> f64 {
+        if self.motor_is_linear(k) { 1.0 } else { self.units.scale("rad/s").0 }
     }
 
     /// The operating points per motor as (speed, torque), and the torque-speed curves (`Curves`): of the analysed
@@ -2572,13 +2619,16 @@ impl Model {
             _ => self.cycle_report.as_ref().map(|(load, _, curves)| (load, curves))?,
         };
         // Speeds in the unit chosen (`units`).
-        let rpm = self.speed_scale();
         let points = load
             .motors
             .iter()
-            .map(|m| m.points.iter().map(|(speed, torque)| [*speed * rpm, *torque]).collect())
+            .enumerate()
+            .map(|(k, m)| {
+                let rpm = self.motor_speed_scale(k);
+                m.points.iter().map(|(speed, torque)| [*speed * rpm, *torque]).collect()
+            })
             .collect();
-        let curves = curves.iter().map(|chart| crate::runs::scaled_speeds(chart, rpm)).collect();
+        let curves = curves.iter().enumerate().map(|(k, chart)| crate::runs::scaled_speeds(chart, self.motor_speed_scale(k))).collect();
         Some((points, curves))
     }
 
@@ -2731,13 +2781,22 @@ impl Model {
         let value = |id: String| -> Option<f64> {
             Some(self.history.back()?[self.session.signals.iter().position(|s| s.id == id)?])
         };
+        // Each motor's highest rotor speed, from its own drive.
+        let motor_speed: Vec<f64> = match Sim::new(self.entry, &self.config) {
+            Ok(sim) => (0..machine.motors().len()).map(|k| sim.control.drive_params_of(k).max_speed).collect(),
+            Err(_) => Vec::new(),
+        };
         let views = machine.friction_contacts().into_iter().enumerate().map(|(i, contact)| {
             let get = |part: &str| value(format!("{}.friction_{part}", contact.id));
             let scale = get("load_scale").unwrap_or(1.0);
-            // shortcut: a contact on no axis of its own (a delta's carriage) spans the fastest axis's limit, which a
-            // carriage can exceed; a speed limit per contact from the machine would be exact.
+            // The machine's own limit where it has one (a joint: its motor's top speed over the gearbox), else the
+            // contact's axis, else the fastest axis (a carriage on no axis of its own).
             let fastest = self.session.axes.iter().map(|a| a.max_vel).fold(0.0, f64::max);
-            let top = self.session.axes.iter().find(|a| a.key == contact.owner_key).map_or(fastest, |a| a.max_vel);
+            let top = machine.friction_speed_limit(i, &motor_speed).unwrap_or_else(|| {
+                self.session.axes.iter().find(|a| a.key == contact.owner_key).map_or(fastest, |a| a.max_vel)
+            });
+            let rotary = machine.friction_rotary(i);
+            let (speed_unit, force_unit) = if rotary { ("rad/s", "N m") } else { ("m/s", "N") };
             let speeds = (1..=100)
                 .rev()
                 .map(|j| -top * (j as f64 / 100.0).powi(3))
@@ -2753,11 +2812,11 @@ impl Model {
             let (speed, total) = (get("speed"), split.as_ref().map(|s| s.iter().sum::<f64>()));
             let mut table = vec![self.header(&["ui-effects-part", "ui-effects-now"])];
             let cell = |value: Option<f64>| value.map_or(String::new(), short);
-            table.push(vec![format!("{} [m/s]", tr("quantity-friction-speed")), cell(speed)]);
+            table.push(vec![format!("{} [{speed_unit}]", tr("quantity-friction-speed")), cell(speed)]);
             for (k, key) in FRICTION_KEYS.iter().enumerate() {
-                table.push(vec![format!("{} [N]", tr(key)), cell(split.as_ref().map(|s| s[k]))]);
+                table.push(vec![format!("{} [{force_unit}]", tr(key)), cell(split.as_ref().map(|s| s[k]))]);
             }
-            table.push(vec![format!("{} [N]", tr("ui-effects-total")), cell(total)]);
+            table.push(vec![format!("{} [{force_unit}]", tr("ui-effects-total")), cell(total)]);
             table.push(vec![tr("quantity-friction-load-scale"), cell(get("load_scale"))]);
             let mut curves = labels.zip(points);
             FrictionView {
@@ -2765,6 +2824,7 @@ impl Model {
                 curves: std::array::from_fn(|_| curves.next().unwrap()),
                 now: speed.zip(total).map(|(v, f)| [v, f]),
                 table,
+                rotary,
             }
         });
         views.collect()
@@ -3299,8 +3359,14 @@ impl Model {
     /// torque-speed view; empty before the bounds were run.
     pub fn band_points(&self) -> Vec<Vec<[f64; 2]>> {
         let Some((_, runs)) = &self.insight.band_runs else { return Vec::new() };
-        let rpm = self.speed_scale();
-        runs.points.iter().map(|points| points.iter().map(|[w, t]| [w * rpm, *t]).collect()).collect()
+        runs.points
+            .iter()
+            .enumerate()
+            .map(|(k, points)| {
+                let rpm = self.motor_speed_scale(k);
+                points.iter().map(|[w, t]| [w * rpm, *t]).collect()
+            })
+            .collect()
     }
 
     /// Every translation key the panels and the 3D view can show for the current machine.

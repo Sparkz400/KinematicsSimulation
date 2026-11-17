@@ -1575,6 +1575,9 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             .map(|(j, axis)| FrictionContact { id: j.id_signal(), owner_key: axis.key })
             .collect()
     }
+    fn friction_rotary(&self, i: usize) -> bool {
+        i < self.joints.len() && self.units(i).0 == "rad/s"
+    }
     fn friction_curve(&self, i: usize, speed: f64, _load_scale: f64) -> [f64; 3] {
         let Some(joint) = self.joints.get(i) else { return [0.0; 3] };
         let f = &joint.drive.friction;

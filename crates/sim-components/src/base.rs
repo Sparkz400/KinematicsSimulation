@@ -751,6 +751,12 @@ impl Machine for Based {
     fn friction_curve(&self, i: usize, speed: f64, load_scale: f64) -> [f64; 3] {
         self.inner.friction_curve(i, speed, load_scale)
     }
+    fn friction_rotary(&self, i: usize) -> bool {
+        self.inner.friction_rotary(i)
+    }
+    fn friction_speed_limit(&self, i: usize, motor_speed: &[f64]) -> Option<f64> {
+        self.inner.friction_speed_limit(i, motor_speed)
+    }
     fn belt_sections(&self) -> Vec<BeltSection> {
         self.inner.belt_sections()
     }

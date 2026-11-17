@@ -1151,6 +1151,9 @@ impl H4 {
         }
         out.extend(&losses.powers[..self.loss_count()]);
         out.extend(self.energy_parts(s));
+        for k in 0..4 {
+            out.extend(self.joints[k].friction_signals(w[k]));
+        }
     }
 
     fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
@@ -1192,11 +1195,16 @@ impl H4 {
         out.extend(ENERGY_PARTS.map(|part| {
             SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")
         }));
+        for k in 0..4 {
+            out.extend(sim_components::joint::RotaryJoint::friction_infos(JOINT_CONTACTS[k], ARMS[k]));
+        }
     }
 }
 
 /// The arms' translation keys, in the motors' order.
 const ARMS: [&str; 4] = ["arm-1", "arm-2", "arm-3", "arm-4"];
+/// The ids of the joints' friction contacts (`<id>.friction_<part>`), in the motors' order.
+const JOINT_CONTACTS: [&str; 4] = ["joint.1", "joint.2", "joint.3", "joint.4"];
 
 impl Machine for H4 {
     /// In the tool's frame (z up): the plate's two parts at p -+ h d, the carriage with the payload at p, the rods'
@@ -1564,8 +1572,20 @@ impl Machine for H4 {
         out.extend(&self.losses(s, torque).powers[..self.loss_count()]);
     }
 
-    // shortcut: the joints' friction is not offered to the friction view, as on the D3 (a torque over an angular speed
-    // the view cannot draw yet).
+    /// The four joints' bearing friction, rotary contacts (N m over rad/s at the arm).
+    fn friction_contacts(&self) -> Vec<sim_core::FrictionContact> {
+        (0..4).map(|k| sim_core::FrictionContact { id: JOINT_CONTACTS[k], owner_key: ARMS[k] }).collect()
+    }
+    fn friction_rotary(&self, _i: usize) -> bool {
+        true
+    }
+    fn friction_curve(&self, i: usize, speed: f64, _load_scale: f64) -> [f64; 3] {
+        self.joints.get(i).map_or([0.0; 3], |j| j.friction_split(speed))
+    }
+    /// The arm turns at its motor's highest speed over the gearbox's ratio.
+    fn friction_speed_limit(&self, i: usize, motor_speed: &[f64]) -> Option<f64> {
+        Some(motor_speed.get(i)? / self.joints.get(i)?.ratio())
+    }
 
     /// The four gearboxes, where there are gearboxes (not on a direct drive).
     fn thermal_parts(&self) -> Vec<ThermalPart> {
