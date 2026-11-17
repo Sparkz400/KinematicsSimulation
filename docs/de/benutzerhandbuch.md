@@ -570,28 +570,30 @@ Die Massen im Beispiel haben in der Konfiguration keine Grenzen und wurden desha
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 check,motor,value,limit,result,low,high,worst_case
-motor-peak,a,0.2930,1.000,ok,0.2826,0.3150,ok
-motor-thermal,a,6.882,100.0,ok,6.640,7.565,ok
-drive-current,a,1.145,5.000,ok,1.125,1.198,ok
-drive-peak-current,a,2.876,19.00,ok,2.773,3.093,ok
-pulley-torque,a,3.126,12.50,ok,2.993,3.395,ok
-pulley-bearing-life,a,325762,20000,ok,73165,1194835,ok
-belt-tooth-load,a,0.3529,1.000,ok,0.2941,0.5042,ok
-dc-link-energy,a,9.943,9.943,ok,4.971,23.23,ok
-braking-resistor-continuous,a,8.284,100.0,ok,4.520,13.14,ok
-braking-resistor-peak,a,200.5,5700,ok,138.6,218.0,ok
-dc-link-overvoltage,a,770.0,820.0,ok,709.1,790.0,ok
+motor-peak,a,0.2973,1.000,ok,0.2868,0.3191,ok
+motor-thermal,a,9.024,100.0,ok,8.861,9.477,ok
+motor-s1,a,1.477,5.836,ok,1.452,1.545,ok
+motor-speed,a,157.0,628.3,ok,157.0,157.0,ok
+drive-current,a,1.165,5.000,ok,1.144,1.220,ok
+drive-peak-current,a,2.919,19.00,ok,2.815,3.134,ok
+pulley-torque,a,3.148,12.50,ok,3.017,3.416,ok
+gearbox-radial-load,a,983.9,2000,ok,783.9,1184,ok
+pulley-bearing-life,a,325753,20000,ok,73156,1194440,ok
+belt-tooth-load,a,0.3556,1.000,ok,0.2963,0.5079,ok
+dc-link-energy,a,9.943,9.943,ok,4.971,23.48,ok
+braking-resistor-continuous,a,8.125,100.0,ok,4.341,12.98,ok
+braking-resistor-peak,a,203.4,5700,ok,145.8,220.7,ok
+dc-link-overvoltage,a,770.0,820.0,ok,710.7,790.0,ok
 ...
-settling,,0.00003949,0.0001000,ok,0.00003447,0.00004435,ok
-belt-tension,,555.0,2140,ok,455.0,655.0,ok
-belt-slack,,257.8,0,ok,157.8,357.8,ok
-gearbox-radial-load,,1000,2000,ok,800.4,1200,ok
-guide-load,,185.0,2000,ok,177.0,276.7,ok
-guide-life,,3024374,20000,ok,378047,24194992,ok
-thermal-warm-start,,0.00002993,0.1000,ok,0.00002433,0.0001190,ok
+settling,,0.00003497,0.0001000,ok,0.00003096,0.00003944,ok
+belt-tension,,556.3,2140,ok,456.3,656.3,ok
+belt-slack,,256.1,0,ok,156.1,356.1,ok
+guide-load,,184.5,2000,ok,176.6,284.9,ok
+guide-life,,3768012,20000,ok,471001,30144096,ok
+thermal-warm-start,,0.00005389,0.1000,ok,0.00001714,0.00009401,ok
 ```
 
-`low` und `high` sind der kleinste und der größte Wert, den die Prüfung über alle Läufe angenommen hat: die Konfiguration, wie sie ist, und jeder Parameter mit Grenzen an seiner unteren und an seiner oberen Grenze. `worst_case` ist nur dann `ok`, wenn die Prüfung in jedem Lauf bestanden wurde. Hier besteht jede Prüfung in jedem Lauf: Mit der Vorspannung an ihrer unteren Grenze von 350 N behält das schlaffste Trum 158 N Riemenkraft, das Werkzeug steht beim Verweilen höchstens 0,044 mm neben seinem Ziel, und der Riemen zieht mit höchstens 1200 N an einer Scheibenwelle. Die Lager der Scheibenwellen halten 325800 h wie geschrieben und mindestens 73200 h, bei 20000 h gefordert. Ihre Tragzahl und die Schmierwerte hinter a_ISO sind Schätzungen (Festo veröffentlicht keine; siehe die Kommentare in der Konfiguration). Dieser Lauf hat 129 Zyklen simuliert (64 Werte mit Grenzen), auf allen Prozessorkernen, und dauerte etwa 4,6 s auf dem Rechner, auf dem dieses Handbuch entstand.
+`low` und `high` sind der kleinste und der größte Wert, den die Prüfung über alle Läufe angenommen hat: die Konfiguration, wie sie ist, und jeder Parameter mit Grenzen an seiner unteren und an seiner oberen Grenze. `worst_case` ist nur dann `ok`, wenn die Prüfung in jedem Lauf bestanden wurde. Hier besteht jede Prüfung in jedem Lauf: Mit der Vorspannung an ihrer unteren Grenze von 350 N behält das schlaffste Trum 156 N Riemenkraft, das Werkzeug steht beim Verweilen höchstens 0,039 mm neben seinem Ziel, und der Riemen zieht mit höchstens 1201 N an einer Scheibenwelle. Die Lager der Scheibenwellen halten 324200 h wie geschrieben und mindestens 72900 h, bei 20000 h gefordert (die von Motor B, die kürzeren). Ihre Tragzahl und die Schmierwerte hinter a_ISO sind Schätzungen (Festo veröffentlicht keine; siehe die Kommentare in der Konfiguration). Dieser Lauf hat 129 Zyklen simuliert (64 Werte mit Grenzen), auf allen Prozessorkernen.
 
 Ein früherer Stand dieser Konfiguration fiel hier durch: Mit 300 N Vorspannung wurde ein auf 200 N eingestellter Riemen schlaff, und am weichen Ende der Grenzen für das Gestell stand das Werkzeug beim Verweilen 0,16 mm neben seinem Ziel, bei einer Toleranz von 0,1 mm (die Werkzeugposition enthält das Schwanken des Gestells). Die Vorspannung wurde auf 450 N erhöht, der Ruckgrenzwert in X von 500 auf 150 m/s³ gesenkt, und Input Shaping und das Überschleifen wurden eingeschaltet; später kam für die ungünstigste Ecke (unten) ein zweiter Shaper bei 17,5 Hz hinzu. Der Zyklus dauert jetzt 2,048 s, vorher 2,136 s.
 
@@ -601,28 +603,30 @@ Ein früherer Stand dieser Konfiguration fiel hier durch: Mit 300 N Vorspannung 
 $ sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --samples 200
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 check,motor,value,limit,result,low,high,worst_case,pass_share
-motor-peak,a,0.2930,1.000,ok,0.2799,0.3440,ok,1.000
-motor-thermal,a,6.882,100.0,ok,6.423,8.347,ok,1.000
-drive-current,a,1.145,5.000,ok,1.107,1.257,ok,1.000
-drive-peak-current,a,2.876,19.00,ok,2.747,3.380,ok,1.000
-pulley-torque,a,3.126,12.50,ok,2.953,3.717,ok,1.000
-pulley-bearing-life,a,325762,20000,ok,33442,4107774,ok,1.000
-belt-tooth-load,a,0.3529,1.000,ok,0.2875,0.5661,ok,1.000
-dc-link-energy,a,9.943,9.943,ok,4.781,28.60,ok,1.000
-braking-resistor-continuous,a,8.284,100.0,ok,0.02972,13.42,ok,1.000
-braking-resistor-peak,a,200.5,5700,ok,6.115,231.4,ok,1.000
-dc-link-overvoltage,a,770.0,820.0,ok,675.2,789.5,ok,1.000
+motor-peak,a,0.2973,1.000,ok,0.2846,0.3451,ok,1.000
+motor-thermal,a,9.024,100.0,ok,8.758,9.898,ok,1.000
+motor-s1,a,1.477,5.836,ok,1.436,1.611,ok,1.000
+motor-speed,a,157.0,628.3,ok,157.0,157.0,ok,1.000
+drive-current,a,1.165,5.000,ok,1.131,1.269,ok,1.000
+drive-peak-current,a,2.919,19.00,ok,2.793,3.391,ok,1.000
+pulley-torque,a,3.148,12.50,ok,2.976,3.725,ok,1.000
+gearbox-radial-load,a,983.9,2000,ok,780.2,1192,ok,1.000
+pulley-bearing-life,a,325753,20000,ok,55660,5821420,ok,1.000
+belt-tooth-load,a,0.3556,1.000,ok,0.2905,0.5562,ok,1.000
+dc-link-energy,a,9.943,9.943,ok,4.968,31.45,ok,1.000
+braking-resistor-continuous,a,8.125,100.0,ok,0.04956,14.59,ok,1.000
+braking-resistor-peak,a,203.4,5700,ok,8.143,233.1,ok,1.000
+dc-link-overvoltage,a,770.0,820.0,ok,679.0,789.7,ok,1.000
 ...
-settling,,0.00003949,0.0001000,ok,0.00002566,0.00005005,ok,1.000
-belt-tension,,555.0,2140,ok,446.3,665.0,ok,1.000
-belt-slack,,257.8,0,ok,139.6,358.1,ok,1.000
-gearbox-radial-load,,1000,2000,ok,797.3,1209,ok,1.000
-guide-load,,185.0,2000,ok,173.0,308.2,ok,1.000
-guide-life,,3024374,20000,ok,187858,23944959,ok,1.000
-thermal-warm-start,,0.00002993,0.1000,ok,0.00001024,0.001698,ok,1.000
+settling,,0.00003497,0.0001000,ok,0.00002369,0.00004233,ok,1.000
+belt-tension,,556.3,2140,ok,448.1,666.3,ok,1.000
+belt-slack,,256.1,0,ok,138.8,356.8,ok,1.000
+guide-load,,184.5,2000,ok,172.4,329.6,ok,1.000
+guide-life,,3768012,20000,ok,186128,29594034,ok,1.000
+thermal-warm-start,,0.00005389,0.1000,ok,0.000007093,0.001165,ok,1.000
 ```
 
-Die Werte werden als lateinischer Hyperwürfel gezogen: Der Bereich jedes Werts wird in N gleiche Teile geschnitten, jeder Teil kommt in genau einem Lauf vor, und die Reihenfolge der Teile ist je Wert zufällig. Die Zufallszahlen stammen aus `--seed S` (Standard 1); derselbe Aufruf ergibt also dieselbe Tabelle. `low`, `high` und `worst_case` sind die Hüllkurve dieser Läufe und der Konfiguration, wie sie ist. `pass_share` ist der Anteil der Läufe, die Konfiguration, wie sie ist, eingeschlossen, in denen die Prüfung bestanden wurde. Hier sind die Bänder breiter als mit einem Wert allein (140 N statt 158 N im schlaffsten Trum, 0,050 mm statt 0,044 mm neben dem Ziel beim Verweilen, 1209 N an einer Scheibenwelle), und jede Prüfung besteht in allen 201 Läufen. Die Lager der Scheibenwellen halten mindestens 33400 h. Das dauerte etwa 7 s.
+Die Werte werden als lateinischer Hyperwürfel gezogen: Der Bereich jedes Werts wird in N gleiche Teile geschnitten, jeder Teil kommt in genau einem Lauf vor, und die Reihenfolge der Teile ist je Wert zufällig. Die Zufallszahlen stammen aus `--seed S` (Standard 1); derselbe Aufruf ergibt also dieselbe Tabelle. `low`, `high` und `worst_case` sind die Hüllkurve dieser Läufe und der Konfiguration, wie sie ist. `pass_share` ist der Anteil der Läufe, die Konfiguration, wie sie ist, eingeschlossen, in denen die Prüfung bestanden wurde. Hier sind die Bänder breiter als mit einem Wert allein (139 N statt 156 N im schlaffsten Trum, 0,042 mm statt 0,039 mm neben dem Ziel beim Verweilen, 1210 N an einer Scheibenwelle), und jede Prüfung besteht in allen 201 Läufen. Die Lager der Scheibenwellen halten mindestens 55400 h.
 
 `--samples` ohne `--bands`, 0 Stichproben, eine gebrochene Zahl und `--seed` ohne `--samples` werden abgelehnt (Code 2). Die Läufe beider Arten nutzen alle Prozessorkerne.
 
