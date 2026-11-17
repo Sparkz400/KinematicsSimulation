@@ -46,7 +46,8 @@
 //! With effects.arm_bending each upper arm bends as the D3's does (effects.link_elasticity there): in the plane it turns
 //! in, the elbow turns by delta_i against the arm's root on a spring k_b = 3 E I / L_a (a cantilever's tip deflection as
 //! a turn about the shoulder) with a damper; out of it, the elbow moves by y_i along its axis on the tube's lateral
-//! spring k_l = 3 E I / L_a^3 with a damper. The tube (I_arm, m_arm l_cg) stays with the root, at the joint's angle
+//! spring k_l = 3 E I / L_a^3 with a damper, E I the arm tube's (`[upper_arm]` tube_outer_diameter_m, tube_wall_m,
+//! youngs_modulus_pa: I = pi (D^4 - (D - 2 s)^4) / 64). The tube (I_arm, m_arm l_cg) stays with the root, at the joint's angle
 //! theta; the elbow block and the forearms' share, and all beyond, move with the elbow angle e = theta + delta and the
 //! moves y: the forearm constraint is |q_k - c_k - y_k a_k|^2 = L_b^2 (a_k the elbow's axis), so
 //! J_x x' = J_q e' + J_y y', J_y = diag(u_k . a_k), and w gains -|q' - c' e' - a y'|^2 (`Legs::velocity_term_moved`).
@@ -54,8 +55,22 @@
 //! M_d q'' = Q_d - v_d - (k_b delta + c_b delta', k_l y + c_l y') - kappa P_h^T tau_a, and the joints carry the root
 //! alone: I_arm theta'' = tau_gear + g m_arm l_cg cos theta + k_b delta + c_b delta'. Energy: the root's and the
 //! distal kinetic energy, the springs' (k_b delta^2 + k_l y^2) / 2, the weights; the dampers' power is the loss
-//! `arm_bending`. Not taken here: the D3's effects.arm_tube_inertia (the tube's own share of the modes), the load
-//! beyond the tubes counted whole at the elbow.
+//! `arm_bending`.
+//!
+//! With effects.arm_tube_inertia as well, the tube bends in its first cantilever mode phi (phi(L_a) = 1), as the D3's.
+//! The tube is as much of the arm's mass as its inertia allows a uniform tube, m = min(m_arm, 3 I_arm / L_a^2), the
+//! rest a hub on the shoulder's axis. A quarter of its mass (int phi^2) moves with the elbow's bend, so m L_a^2 / 4 of its inertia and
+//! 0.3915 m L_a of its first moment (int phi) go from the root to the elbow; out of its plane a quarter of its mass moves
+//! with the elbow's move y, and the elbow block turns with the tube's tip slope, 1.3765 y / L_a, about the arm's normal:
+//! its twist inertia (`mass.elbow_twist_inertia_kgm2`, and the forearms' share at the rods' ends, half the spacing off
+//! its middle) counts J (1.3765 / L_a)^2 on y. The tube's kinetic energy in the plane, its sections at
+//! s theta' + phi(s) L_a delta', is m L_a^2 (theta'^2 / 3 + 2 int(xi phi) theta' delta' + int(phi^2) delta'^2) / 2,
+//! int(xi phi) = 0.284413: in the root's and the elbow's angles theta and e = theta + delta that is
+//! I_r theta'^2 / 2 + B theta' e' + m L_a^2 e'^2 / 8 with B = (0.284413 - 1/4) m L_a^2 and I_r = I_arm - m L_a^2 / 4 - 2 B.
+//! The coupling B joins the joints' equation to the elbows': (I_r - B^2 (M_d^-1)_ee) theta'' = tau + f_r - B (M_d^-1 f_d)_e
+//! (`joint_load_at`), then M_d q'' = f_d - B theta'' on the elbows' rows (`bend_rates`). (Moving only a quarter of the
+//! inertia, as the D3 does, keeps 1/4 of the cross term's 0.2844 and puts the root's inertia with the elbow held at
+//! (1/3 - 1/4) m L_a^2 instead of 0.0145 m L_a^2: the gearboxes' modes then stand some 40 % low.)
 
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::ThermalFeedback;
@@ -243,14 +258,15 @@ fn add_turn<const N: usize>(load: &mut LoadN<N>, inertia: f64, row: [f64; N], a0
 /// The arms' modes with the motors held (by their position loops), as the D3's `arm_modes` for four arms: per arm the
 /// gearbox's spring k_g from the motor to the arm's root (inertia `root`; `k_gear` one per arm), the bending spring k_b
 /// from the root to the elbow, and the rest of the machine as the mass matrix `distal` (8 x 8) in the elbow angles and
-/// the elbows' moves out of the arms' planes, each on its lateral spring k_l. `None` for a rigid spring (infinite
+/// the elbows' moves out of the arms' planes, each on its lateral spring k_l; `coupling` the tube's inertia that joins
+/// each root to its elbow (`H4::tube_coupling`). `None` for a rigid spring (infinite
 /// stiffness: the two ends one body). The coordinates are (roots, elbow angles, elbow moves), the flexibility per arm
 /// K^-1 = [[1/k_g, 1/k_g], [1/k_g, 1/k_g + 1/k_b]] (root, elbow) and 1/k_l; with M = L L^T (Cholesky) the eigenvalues
 /// mu = 1/w^2 of the symmetric L^T K^-1 L, by Jacobi rotations, the shape v = K^-1 L z / mu. A rigid connection has
 /// mu = 0 and is no mode. Gravity's stiffness and the stops are left out. Returns w^2 and the shape per mode, lowest
 /// first.
 fn arm_modes(
-    root: f64,
+    (root, coupling): (f64, f64),
     distal: &[Vec<f64>],
     k_gear: Option<V4>,
     k_bend: f64,
@@ -261,6 +277,7 @@ fn arm_modes(
     let (mut m, mut f) = (vec![vec![0.0; n]; n], vec![vec![0.0; n]; n]);
     for i in 0..4 {
         m[i][i] = root;
+        (m[i][4 + i], m[4 + i][i]) = (coupling, coupling);
         let fg = k_gear.map_or(0.0, |k| 1.0 / k[i]);
         (f[i][i], f[i][4 + i], f[4 + i][i], f[4 + i][4 + i]) = (fg, fg, fg, fg + fb);
         f[8 + i][8 + i] = fl;
@@ -617,6 +634,13 @@ pub struct H4 {
     tip_inertia: f64,
     tip_moment: f64,
     m_lateral: f64,
+    /// What sits at the elbow as a point (the elbow block and the forearms' share), and with effects.arm_tube_inertia the
+    /// tube's mass and the elbow block's twist inertia (both 0 without it): the frame momentum takes them apart.
+    m_elbow: f64,
+    tube_mass: f64,
+    twist_inertia: f64,
+    /// B, the tube's inertia that joins each root to its elbow (effects.arm_tube_inertia, else 0), kg m^2.
+    tube_coupling: f64,
     /// effects.arm_bending: the upper arms' bending.
     bending: Option<Bending>,
     /// The mass at each forearm's middle and its rods' spin inertia (both rods; effects.forearm_inertia, else 0).
@@ -730,26 +754,65 @@ impl H4 {
         // effects.arm_bending: a config without the switch reads it as off. The tube stays with the root, the elbow
         // block and the forearms' share sit at the elbow.
         let bending = if cfg.get("effects.arm_bending").is_ok() && cfg.bool("effects.arm_bending")? {
+            // The tube a cantilever from the shoulder, round (E I alike both ways): its tip deflection F L^3 / (3 E I)
+            // as a turn about the shoulder in the plane, as a move along the elbow's axis out of it.
+            let (d, wall) = (cfg.positive("upper_arm.tube_outer_diameter_m")?, cfg.positive("upper_arm.tube_wall_m")?);
+            if 2.0 * wall > d {
+                return Err(ConfigError::Invalid("upper_arm.tube_wall_m".into()));
+            }
+            let ei = cfg.positive("upper_arm.youngs_modulus_pa")? * std::f64::consts::PI / 64.0
+                * (d.powi(4) - (d - 2.0 * wall).powi(4));
             Some(Bending {
-                k: cfg.positive("upper_arm.bending_stiffness_nm_rad")?,
+                k: 3.0 * ei / la,
                 c: cfg.non_negative("upper_arm.bending_damping_nm_s_rad")?,
-                k_lateral: cfg.positive("upper_arm.lateral_stiffness_n_m")?,
+                k_lateral: 3.0 * ei / la.powi(3),
                 c_lateral: cfg.non_negative("upper_arm.lateral_damping_n_s_m")?,
             })
         } else {
             None
         };
+        // effects.arm_tube_inertia (with the bending arms, see the crate's doc); a config without the switch reads it
+        // as off.
+        let rod_spacing = cfg.non_negative("geometry.forearm_spacing_m")?;
+        let (mut root_inertia, mut root_moment, mut tip_inertia, mut tip_moment, mut m_lateral) =
+            (i_arm, m_arm * cg, la * la * elbow, la * elbow, elbow);
+        let (mut tube_mass, mut twist_inertia, mut tube_coupling) = (0.0, 0.0, 0.0);
+        if bending.is_some() && cfg.get("effects.arm_tube_inertia").is_ok() && cfg.bool("effects.arm_tube_inertia")? {
+            use sim_components::beam::{CANTILEVER_PARTICIPATION, CANTILEVER_TIP_SLOPE};
+            // The tube: as much of the arm's mass as its inertia allows a uniform tube (m L^2 / 3), the rest a hub on
+            // the shoulder's axis. The root keeps I_arm - m_t L^2 / 4 - 2 B >= 0.0436 I_arm.
+            let m_tube = m_arm.min(3.0 * i_arm / (la * la));
+            let (inertia, moment) = (0.25 * m_tube * la * la, CANTILEVER_PARTICIPATION * m_tube * la);
+            tube_coupling = (TUBE_MOMENT - 0.25) * m_tube * la * la;
+            if moment > root_moment {
+                return Err(ConfigError::Invalid("mass.upper_arm_inertia_kgm2".into()));
+            }
+            (root_inertia, root_moment, tip_inertia, tip_moment) = (
+                root_inertia - inertia - 2.0 * tube_coupling,
+                root_moment - moment,
+                tip_inertia + inertia,
+                tip_moment + moment,
+            );
+            twist_inertia =
+                cfg.non_negative("mass.elbow_twist_inertia_kgm2")? + share * m_fb * rod_spacing * rod_spacing / 4.0;
+            m_lateral += 0.25 * m_tube + twist_inertia * (CANTILEVER_TIP_SLOPE / la).powi(2);
+            tube_mass = m_tube;
+        }
         let mut h4 = Self {
             legs: Legs::new(base_radius - plate_radius, la, lb),
-            root_inertia: i_arm,
-            root_moment: m_arm * cg,
-            tip_inertia: la * la * elbow,
-            tip_moment: la * elbow,
-            m_lateral: elbow,
+            root_inertia,
+            root_moment,
+            tip_inertia,
+            tip_moment,
+            m_lateral,
+            m_elbow: elbow,
+            tube_mass,
+            twist_inertia,
+            tube_coupling,
             bending,
             base_radius,
             plate_radius,
-            rod_spacing: cfg.non_negative("geometry.forearm_spacing_m")?,
+            rod_spacing,
             elastic: cfg.bool("effects.joint_elasticity")?,
             g: if cfg.bool("effects.gravity")? { G } else { 0.0 },
             arm_inertia: i_arm + la * la * elbow,
@@ -1044,15 +1107,7 @@ impl H4 {
     /// g = -sigma / (L (L^2 - sigma^2)) J_u^T (u x a); it adds I g g^T to the mass matrix and
     /// I (s0' g + s J_u^T (u' x u) / L^3) to the velocity term (s0' the spin's rate at no acceleration of the
     /// coordinates, u'' = `accel`).
-    fn add_spin<const N: usize>(
-        &self,
-        load: &mut LoadN<N>,
-        a: V3,
-        u: V3,
-        ju: &[[f64; N]; 3],
-        w: &[f64; N],
-        accel: V3,
-    ) {
+    fn add_spin<const N: usize>(&self, load: &mut LoadN<N>, a: V3, u: V3, ju: &[[f64; N]; 3], w: &[f64; N], accel: V3) {
         let l = self.legs.lb;
         let du: V3 = std::array::from_fn(|r| (0..N).map(|c| ju[r][c] * w[c]).sum());
         let (sigma, n) = (dot(a, u), dot(a, cross(du, u)));
@@ -1094,9 +1149,23 @@ impl H4 {
         if let Some(b) = self.bending {
             let ((e, _), (bend, rate), (y, _)) = (self.elbows(s), self.bend(s), self.lateral(s));
             let (.., tip) = self.load_n::<8>(e, y, *pose, [0.0; 4], [0.0; 4], self.carried(), 0.0, false);
-            let mass = std::array::from_fn(|r| std::array::from_fn(|c| if r == c { self.root_inertia } else { 0.0 }));
+            let mut mass: M4 =
+                std::array::from_fn(|r| std::array::from_fn(|c| if r == c { self.root_inertia } else { 0.0 }));
             let gravity = std::array::from_fn(|i| self.g * self.root_moment * t[i].cos() + tip[i]);
-            return (mass, std::array::from_fn(|i| tip[i] - b.k * bend[i] - b.c * rate[i]), gravity);
+            let mut velocity: V4 = std::array::from_fn(|i| tip[i] - b.k * bend[i] - b.c * rate[i]);
+            if self.tube_coupling > 0.0 {
+                // The elbows' equation solved for them: (I_r - B^2 (M_d^-1)_ee) theta'' = f_r - B (M_d^-1 f_d)_e.
+                let (m, f) = self.distal(s, pose, b);
+                let inv = sim_components::chain::Lu::new(&m).and_then(|lu| lu.inverse()).unwrap_or([[f64::NAN; 8]; 8]);
+                let bb = self.tube_coupling;
+                for r in 0..4 {
+                    for c in 0..4 {
+                        mass[r][c] -= bb * bb * inv[r][c];
+                    }
+                    velocity[r] += bb * (0..8).map(|c| inv[r][c] * f[c]).sum::<f64>();
+                }
+            }
+            return (mass, velocity, gravity);
         }
         let (x, j, _) = *pose;
         let mut load = self.load_with(t, x, j, w, self.carried(), 0.0);
@@ -1113,23 +1182,12 @@ impl H4 {
     /// with the slide where it is not on the amplifier's spring).
     fn bend_rates(&self, s: &[f64], pose: &Pose, acc: V4, out: &mut [f64]) {
         let Some(b) = self.bending else { return };
-        let ((e, speeds), (bend, rate), (y, yv)) = (self.elbows(s), self.bend(s), self.lateral(s));
-        let spin = if self.amplifier.is_some() { 0.0 } else { self.tool_inertia() };
-        let (mass, mut velocity, gravity) = self.load_n::<8>(e, y, *pose, speeds, yv, self.carried(), spin, false);
-        let torque = self.amplifier_torque_at(s, pose);
-        let (_, j, jy) = *pose;
-        let rhs: Vec<f64> = (0..8)
-            .map(|i| {
-                let slide = if i < 4 { j[3][i] } else { jy[3][i - 4] };
-                velocity[i] += self.kappa * slide * torque;
-                let spring = if i < 4 {
-                    b.k * bend[i] + b.c * rate[i]
-                } else {
-                    b.k_lateral * y[i - 4] + b.c_lateral * yv[i - 4]
-                };
-                gravity[i] - velocity[i] - spring
-            })
-            .collect();
+        let ((_, rate), (_, yv)) = (self.bend(s), self.lateral(s));
+        let (mass, mut rhs) = self.distal(s, pose, b);
+        // The tube's coupling to the root (effects.arm_tube_inertia): B theta'' on the elbows' rows.
+        for i in 0..4 {
+            rhs[i] -= self.tube_coupling * acc[i];
+        }
         let q = sim_components::chain::solve(mass.as_flattened(), &rhs).unwrap_or_else(|| vec![f64::NAN; 8]);
         let at = self.bend_at();
         out[at..at + 4].copy_from_slice(&rate);
@@ -1138,6 +1196,23 @@ impl H4 {
         }
         out[at + 8..at + 12].copy_from_slice(&yv);
         out[at + 12..at + 16].copy_from_slice(&q[4..]);
+    }
+
+    /// Beyond the tubes (bending arms): the mass matrix M_d in the elbows' angles and moves, and what drives them,
+    /// f_d = Q_d - v_d - (k_b delta + c_b delta', k_l y + c_l y') - kappa P_h^T tau_a.
+    fn distal(&self, s: &[f64], pose: &Pose, b: Bending) -> ([[f64; 8]; 8], [f64; 8]) {
+        let ((e, speeds), (bend, rate), (y, yv)) = (self.elbows(s), self.bend(s), self.lateral(s));
+        let spin = if self.amplifier.is_some() { 0.0 } else { self.tool_inertia() };
+        let (mass, velocity, gravity) = self.load_n::<8>(e, y, *pose, speeds, yv, self.carried(), spin, false);
+        let torque = self.amplifier_torque_at(s, pose);
+        let (_, j, jy) = *pose;
+        let rhs = std::array::from_fn(|i| {
+            let slide = if i < 4 { j[3][i] } else { jy[3][i - 4] };
+            let spring =
+                if i < 4 { b.k * bend[i] + b.c * rate[i] } else { b.k_lateral * y[i - 4] + b.c_lateral * yv[i - 4] };
+            gravity[i] - velocity[i] - self.kappa * slide * torque - spring
+        });
+        (mass, rhs)
     }
 
     /// At rest with the plate at x and the mass `carried` at the tool's point (bending arms): the joints' angles, the
@@ -1153,10 +1228,16 @@ impl H4 {
             };
             (e, self.load_n::<8>(e, y, pose, [0.0; 4], [0.0; 4], carried, 0.0, false).2)
         };
+        // Q_y hardly changes with y: each round takes some 1e-4 of what is left.
         let mut y = [0.0; 4];
-        for _ in 0..3 {
+        for _ in 0..20 {
             let (_, tip) = tip_at(y);
-            y = std::array::from_fn(|i| tip[4 + i] / b.k_lateral);
+            let next: V4 = std::array::from_fn(|i| tip[4 + i] / b.k_lateral);
+            let settled = (0..4).all(|i| (next[i] - y[i]).abs() <= 1e-15);
+            y = next;
+            if settled {
+                break;
+            }
         }
         let (e, tip) = tip_at(y);
         let bend: V4 = std::array::from_fn(|i| tip[i] / b.k);
@@ -1227,7 +1308,7 @@ impl H4 {
             let (mass, ..) = self.load_n::<8>(e, y, pose, ew, yv, self.carried(), spin, false);
             let q: [f64; 8] = std::array::from_fn(|i| if i < 4 { ew[i] } else { yv[i - 4] });
             let moving: f64 = (0..8).map(|r| q[r] * (0..8).map(|c| mass[r][c] * q[c]).sum::<f64>()).sum();
-            0.5 * moving + 0.5 * self.root_inertia * dot4(w, w)
+            0.5 * moving + 0.5 * self.root_inertia * dot4(w, w) + self.tube_coupling * dot4(w, ew)
         } else {
             let (mass, ..) = self.load_with(t, x, pose.1, w, self.carried(), spin);
             0.5 * dot4(w, mul4(&mass, w))
@@ -1439,17 +1520,18 @@ impl H4 {
             })
         });
         let c_gear: V4 = std::array::from_fn(|i| if self.elastic { self.joints[i].gearbox.damping } else { 0.0 });
-        arm_modes(self.root_inertia, &distal, k_gear, b.k, b.k_lateral)
+        arm_modes((self.root_inertia, self.tube_coupling), &distal, k_gear, b.k, b.k_lateral)
             .into_iter()
             .map(|(w2, v)| {
                 let distal_kinetic: f64 =
                     (0..8).map(|r| v[4 + r] * (0..8).map(|c| distal[r][c] * v[4 + c]).sum::<f64>()).sum();
-                let kinetic = self.root_inertia * (0..4).map(|i| v[i] * v[i]).sum::<f64>() + distal_kinetic;
+                let kinetic = (0..4)
+                    .map(|i| self.root_inertia * v[i] * v[i] + 2.0 * self.tube_coupling * v[i] * v[4 + i])
+                    .sum::<f64>()
+                    + distal_kinetic;
                 let damped: f64 = (0..4)
                     .map(|i| {
-                        c_gear[i] * v[i] * v[i]
-                            + b.c * (v[4 + i] - v[i]).powi(2)
-                            + b.c_lateral * v[8 + i] * v[8 + i]
+                        c_gear[i] * v[i] * v[i] + b.c * (v[4 + i] - v[i]).powi(2) + b.c_lateral * v[8 + i] * v[8 + i]
                     })
                     .sum();
                 let w = w2.sqrt();
@@ -1649,17 +1731,46 @@ impl Machine for H4 {
             let joint = self.legs.to_base(i, [self.base_radius, 0.0, 0.0]);
             let tangent = self.legs.tangent(i);
             if self.bending.is_some() {
-                // The tube turns with its joint, what sits at the elbow with the elbow (the bend added), and the
-                // elbow's move out of the plane (its turn is in the tip's share already) is a point of its own.
+                // The tube turns with its joint and its bent share with the elbow (the bend added); the elbow is a
+                // point at its moved place with its whole speed. Out of the plane the tube's sections move by
+                // phi(s) y: momentum int(phi) m y' = 0.3915 m y' at 0.7265 L_a along the arm (int(xi phi) / int(phi)),
+                // and the moved sections carry the in-plane momentum int(phi v0) = m L_a (0.2844 theta' +
+                // 0.25 delta') along the turn, at y off the plane. The elbow block twists about the arm's normal.
+                let la = self.legs.la;
                 add_turning(&mut f, joint, dir, ddir, w[i], self.root_inertia, self.root_moment);
                 let (sin, cos) = e[i].sin_cos();
-                let (tip, dtip) =
-                    (self.legs.to_base(i, [cos, 0.0, -sin]), self.legs.to_base(i, [-sin, 0.0, -cos]));
-                add_turning(&mut f, joint, tip, dtip, ew[i], self.tip_inertia, self.tip_moment);
-                let in_plane: V3 = std::array::from_fn(|k| joint[k] + self.legs.la * tip[k]);
-                let moved: V3 = std::array::from_fn(|k| in_plane[k] + y[i] * tangent[k]);
-                add_point(&mut f, self.m_lateral, moved, tangent.map(|v| v * yv[i]));
-                add_point(&mut f, -self.m_lateral, in_plane, [0.0; 3]);
+                let (tip, dtip) = (self.legs.to_base(i, [cos, 0.0, -sin]), self.legs.to_base(i, [-sin, 0.0, -cos]));
+                let point = la * la * self.m_elbow;
+                add_turning(
+                    &mut f,
+                    joint,
+                    tip,
+                    dtip,
+                    ew[i],
+                    self.tip_inertia - point,
+                    self.tip_moment - la * self.m_elbow,
+                );
+                // The coupling B theta' e' adds B (theta' + e') about the arm's axis.
+                add_spin(&mut f, cross(dir, ddir), self.tube_coupling, w[i] + ew[i]);
+                let elbow: V3 = std::array::from_fn(|k| joint[k] + la * tip[k] + y[i] * tangent[k]);
+                let elbow_v: V3 = std::array::from_fn(|k| la * ew[i] * dtip[k] + yv[i] * tangent[k]);
+                add_point(&mut f, self.m_elbow, elbow, elbow_v);
+                if self.tube_mass > 0.0 {
+                    use sim_components::beam::{CANTILEVER_PARTICIPATION, CANTILEVER_TIP_SLOPE};
+                    let m = CANTILEVER_PARTICIPATION * self.tube_mass;
+                    let at: V3 = std::array::from_fn(|k| joint[k] + TUBE_CENTROID * la * tip[k]);
+                    add_point(
+                        &mut f,
+                        m,
+                        std::array::from_fn(|k| at[k] + y[i] * tangent[k]),
+                        tangent.map(|v| v * yv[i]),
+                    );
+                    add_point(&mut f, -m, at, [0.0; 3]);
+                    let along = self.tube_mass * la * (TUBE_MOMENT * w[i] + 0.25 * (ew[i] - w[i]));
+                    let off = cross(tangent.map(|v| v * y[i]), dtip.map(|v| v * along));
+                    (0..3).for_each(|k| f.angular[k] += off[k]);
+                    add_spin(&mut f, cross(tip, tangent), self.twist_inertia, CANTILEVER_TIP_SLOPE * yv[i] / la);
+                }
             } else {
                 add_turning(&mut f, joint, dir, ddir, w[i], self.arm_inertia, self.arm_moment);
             }
@@ -1668,7 +1779,11 @@ impl Machine for H4 {
                 let (elbow, d1) = (self.legs.elbows_moved(e, y)[i], self.legs.elbow(i, e[i])[1]);
                 let (end, end_v) = point(SIDE[i]);
                 let elbow_v: V3 = std::array::from_fn(|k| d1[k] * ew[i] + tangent[k] * yv[i]);
-                let middle = std::array::from_fn(|k| 0.5 * (elbow[k] + end[k]));
+                // The legs fold the plate radius into the elbow (e = base less plate radius): the rod's ends lie that
+                // much further out along the arm's azimuth.
+                let (c, sn) = self.legs.azimuth[i];
+                let out = [self.plate_radius * c, self.plate_radius * sn, 0.0];
+                let middle = std::array::from_fn(|k| 0.5 * (elbow[k] + end[k]) + out[k]);
                 add_point(&mut f, self.m_rod_middle, middle, std::array::from_fn(|k| 0.5 * (elbow_v[k] + end_v[k])));
                 if self.rod_spin > 0.0 {
                     let (u, du) = (sub(end, elbow), std::array::from_fn(|k| end_v[k] - elbow_v[k]));
@@ -2217,6 +2332,11 @@ impl Machine for H4 {
 /// The forearm rods', upper arms', plate parts' and tool bar's width as drawn and as collision capsules (twice their
 /// radius), m.
 const ROD_WIDTH: f64 = 0.014;
+/// The first cantilever mode phi (phi(1) = 1) along the arm, xi = s / L_a: int(xi phi) = 0.284413 over
+/// int(phi) = 0.391496, where its momentum out of the plane acts; int(xi phi) itself, the tube's in-plane momentum
+/// that moves with its turn. By quadrature of phi = (cosh - cos - sigma (sinh - sin))(beta xi), beta = 1.875104.
+const TUBE_CENTROID: f64 = 0.726477;
+const TUBE_MOMENT: f64 = 0.284413;
 const ARM_WIDTH: f64 = 0.05;
 const PLATE_WIDTH: f64 = 0.03;
 const TOOL_BAR_WIDTH: f64 = 0.015;

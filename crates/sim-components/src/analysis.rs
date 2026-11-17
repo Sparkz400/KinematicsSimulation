@@ -1363,7 +1363,11 @@ pub struct Verdict {
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
 /// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
 /// own keys (`drive::Motor`: a stepper's and an induction motor's).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 79] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 82] = [
+    // A guide's moment ratings (Mx, My, Mz), which its equivalent load takes where a machine gives the moments.
+    "ratings.guide_moment_x_nm",
+    "ratings.guide_moment_y_nm",
+    "ratings.guide_moment_z_nm",
     // A guide set's carriages and rail length for the catalogue's guides, and the share of the moved mass and of the guide
     // friction that the config's own guide carriages are (`catalog::mechanics`).
     "ratings.guide_carriages",

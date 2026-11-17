@@ -41,8 +41,8 @@ use sim_components::joint::RotaryJoint;
 use sim_components::mech::{HardStop, ShaftFriction, ThermalFeedback};
 use sim_components::transmission::BallScrew;
 use sim_core::{
-    AxisInfo, Config, ConfigError, Label, Machine, MachineEntry, MotorInfo, Part, RatingCheck, Scene, Shape,
-    SignalInfo, ThermalPart, ENERGY_PARTS, LOSS_PREFIX, TORQUE_PARTS,
+    AxisInfo, Config, ConfigError, ENERGY_PARTS, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part,
+    RatingCheck, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart,
 };
 
 const I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("de", include_str!("../i18n/de.ftl"))];
@@ -143,11 +143,13 @@ pub fn condition_number(j: &M2) -> f64 {
         j[0][1] * j[0][1] + j[1][1] * j[1][1],
     );
     let (mean, half) = ((a + c) / 2.0, ((a - c) / 2.0).hypot(b));
-    if mean - half <= 0.0 {
-        f64::INFINITY
-    } else {
-        ((mean + half) / (mean - half)).sqrt()
-    }
+    if mean - half <= 0.0 { f64::INFINITY } else { ((mean + half) / (mean - half)).sqrt() }
+}
+
+/// A gearbox's stiffness for a mode: K1, the stiffness of the moves that excite it; for a small vibration (`small`)
+/// with hysteresis K1 + sigma, which a reversal shows.
+fn spring(g: &sim_components::mech::Gearbox, small: bool) -> f64 {
+    g.stiffness + if small && g.hysteresis > 0.0 { g.dahl_stiffness } else { 0.0 }
 }
 
 /// The leg geometry and the kinematics, apart from masses and drives.
@@ -464,11 +466,7 @@ impl ParallelScara {
     }
 
     fn planar_len(&self) -> usize {
-        if self.elastic {
-            N_ELASTIC
-        } else {
-            N_RIGID
-        }
+        if self.elastic { N_ELASTIC } else { N_RIGID }
     }
 
     /// The Z stroke (motor 3): the carriage on a ball screw behind a coupling, `[slide]` and `[screw]` as for a screw
@@ -599,13 +597,9 @@ impl ParallelScara {
             extras,
             required_life: cfg.f64("ratings.required_life_h").ok(),
             arm_inertia: i_arm + la * la * elbow,
-            // The tube's first moment m c about its joint: mass.upper_arm_kg and upper_arm_cg_m where given (as on the
-            // D3); without them a uniform rod of the given inertia (m = 3 I / L^2, c = L / 2: m c = 3 I / (2 L)).
-            // Its weight is out of the plane, so only the frame's momentum takes it.
-            arm_moment: match (cfg.positive("mass.upper_arm_kg").ok(), cfg.positive("mass.upper_arm_cg_m").ok()) {
-                (None, None) => 1.5 * i_arm / la,
-                (m, c) => m.unwrap_or(3.0 * i_arm / (la * la)) * c.unwrap_or(0.5 * la),
-            } + la * elbow,
+            // The tube's first moment m c about its joint (as on the D3). Its weight is out of the plane, so only the
+            // frame's momentum takes it.
+            arm_moment: cfg.positive("mass.upper_arm_kg")? * cfg.non_negative("mass.upper_arm_cg_m")? + la * elbow,
             g,
             m_platform: cfg.positive("mass.platform_kg")? + 2.0 * (1.0 - share) * m_fb + carried,
             m_payload,
@@ -628,12 +622,15 @@ impl ParallelScara {
     /// How far the motors' pose can be from the tool's at rest anywhere in the working range: each gearbox at either
     /// side of its backlash (all four combinations; nothing loads them at rest, gravity being out of the plane),
     /// through the forward kinematics. Over a grid of the range, 41 columns of 9 depths and the far edge; plus a tenth for what
-    /// the grid steps over and the joints' friction. At least the default 0.1 mm; that alone in the rigid model.
+    /// the grid steps over and the joints' friction. The stroke's screw twisted by the carriage's and the payload's weight
+    /// (`Gearbox::static_twist`, m) and the turn at either side of its play (rad: nothing loads it), each on its own
+    /// axis, where more. At least the default 0.1 mm; that alone in the rigid model.
     fn rest_sag(&self) -> f64 {
         if !self.elastic {
             return 1e-4;
         }
-        let mut most = 0f64;
+        let twist = |x: &Extra| x.joint.gearbox.static_twist(-x.weight(true)).abs().max(x.joint.gearbox.half_backlash);
+        let mut most = self.extras.iter().map(twist).fold(0f64, f64::max);
         for column in 0..=40 {
             let x = self.half_width * (column as f64 / 20.0 - 1.0);
             let lowest = self.bottom(x);
@@ -653,6 +650,53 @@ impl ParallelScara {
             }
         }
         (1.1 * most).max(1e-4)
+    }
+
+    /// The plane's two modes with the motors held: the arms on their gearboxes' springs K = diag(k_1, k_2) against the
+    /// load's mass matrix M at the pose (`load`), the roots of det(K - lambda M) = det M lambda^2 - (k_1 M_22 + k_2 M_11)
+    /// lambda + k_1 k_2 = 0, w^2 = lambda, lowest first; each with its shape v from (K - lambda M) v = 0 and the damping
+    /// ratio v'Cv / (2 w v'Mv), C = diag(c_1, c_2) (as `sim-netlist`'s spatial delta takes it). Empty in the rigid model
+    /// or out of reach.
+    fn plane_modes(&self, tool: &[f64], small: bool) -> Vec<sim_core::Mode> {
+        let Some(t) = self.legs.inverse([tool[0], tool[1]]).filter(|_| self.elastic) else { return Vec::new() };
+        let (m, _) = self.load(t, [0.0; 2]);
+        let k: V2 = std::array::from_fn(|i| spring(&self.joints[i].gearbox, small));
+        let (det, b) = (m[0][0] * m[1][1] - m[0][1] * m[1][0], k[0] * m[1][1] + k[1] * m[0][0]);
+        let root = (b * b - 4.0 * det * k[0] * k[1]).max(0.0).sqrt();
+        // The lower root as 2 c / (b + root): no cancellation.
+        [2.0 * k[0] * k[1] / (b + root), (b + root) / (2.0 * det)]
+            .map(|lambda| {
+                let rows = [[k[0] - lambda * m[0][0], -lambda * m[0][1]], [-lambda * m[1][0], k[1] - lambda * m[1][1]]];
+                let row = if norm(rows[0]) >= norm(rows[1]) { rows[0] } else { rows[1] };
+                // Orthogonal to the larger row; any shape where both rows vanish (M a multiple of K).
+                let v = if norm(row) > 0.0 { [-row[1], row[0]] } else { [1.0, 0.0] };
+                let w = lambda.sqrt();
+                let damped: f64 = (0..2).map(|i| self.joints[i].gearbox.damping * v[i] * v[i]).sum();
+                sim_core::Mode { hz: w / std::f64::consts::TAU, damping: damped / (2.0 * w * dot(v, mul(&m, v))) }
+            })
+            .into_iter()
+            .filter(|mode| mode.hz.is_finite())
+            .collect()
+    }
+
+    /// With elastic gearboxes: the plane's two (`plane_modes`), and the stroke's carriage on its screw and the tool on
+    /// its turn gearbox, each with its rotor held, sqrt(K / m) / 2 pi, K the gearbox's stiffness at the joint (the
+    /// screw's and the coupling's in series, N/m) and m what it moves, damping ratio c / (2 sqrt(K m)); lowest first.
+    /// `small`: with the hysteresis stiffness (`spring`).
+    fn modes_at(&self, tool: &[f64], small: bool) -> Vec<sim_core::Mode> {
+        let mut modes = self.plane_modes(tool, small);
+        if self.elastic {
+            modes.extend(self.extras.iter().map(|x| {
+                let (k, m) = (spring(&x.joint.gearbox, small), x.mass(self.payload_attached));
+                sim_core::Mode {
+                    hz: (k / m).sqrt() / std::f64::consts::TAU,
+                    damping: x.joint.gearbox.damping / (2.0 * (k * m).sqrt()),
+                }
+            }));
+        }
+        modes.retain(|mode| mode.hz.is_finite());
+        modes.sort_by(|a, b| a.hz.total_cmp(&b.hz));
+        modes
     }
 
     pub fn legs(&self) -> &Legs {
@@ -830,11 +874,7 @@ impl ParallelScara {
     /// The working range's bottom below x: on the circle, or flat.
     fn bottom(&self, x: f64) -> f64 {
         let (centre, r) = self.circle;
-        if centre.is_finite() {
-            centre - (r * r - x * x).max(0.0).sqrt()
-        } else {
-            self.axes[1].min
-        }
+        if centre.is_finite() { centre - (r * r - x * x).max(0.0).sqrt() } else { self.axes[1].min }
     }
 
     /// Whether a pose is within the working range (the band |x| <= half width below the top, above the bottom
@@ -1236,26 +1276,17 @@ impl Machine for ParallelScara {
         }
     }
 
-    /// With elastic gearboxes the stroke's carriage on its screw and the tool on its turn gearbox, each with its rotor
-    /// held: sqrt(K / m) / 2 pi, K the gearbox's stiffness at the joint (the screw's and the coupling's in series, N/m)
-    /// and m what it moves, damping ratio c / (2 sqrt(K m)). The arms' modes are not reported (the plane's pose-dependent
-    /// mass matrix is not worked out here).
-    fn modes(&self, _tool_pose: &[f64]) -> Vec<sim_core::Mode> {
-        if !self.elastic {
-            return Vec::new();
-        }
-        let mut modes: Vec<_> = (self.extras.iter())
-            .filter(|x| x.joint.gearbox.stiffness.is_finite())
-            .map(|x| {
-                let (k, m) = (x.joint.gearbox.stiffness, x.mass(self.payload_attached));
-                sim_core::Mode {
-                    hz: (k / m).sqrt() / std::f64::consts::TAU,
-                    damping: x.joint.gearbox.damping / (2.0 * (k * m).sqrt()),
-                }
-            })
-            .collect();
-        modes.sort_by(|a, b| a.hz.total_cmp(&b.hz));
-        modes
+    /// With elastic gearboxes, the motors held (`modes_at`), lowest first.
+    fn modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
+        self.modes_at(tool_pose, false)
+    }
+    /// `modes` with the gearboxes' hysteresis stiffness added (K1 + sigma): the frequencies of a small ringing.
+    fn modes_small_amplitude(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
+        self.modes_at(tool_pose, true)
+    }
+    /// The plane's lowest mode, which an input shaper on the path is for; the stroke's and the turn's are in `modes`.
+    fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
+        self.plane_modes(tool_pose, false).first().map(|m| m.hz)
     }
 
     /// What the gearboxes can sag at rest anywhere in the working range (`rest_sag`).

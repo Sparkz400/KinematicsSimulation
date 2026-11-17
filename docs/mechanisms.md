@@ -590,7 +590,9 @@ column's axis (0.8 m/s² outwards and 1.8 m/s² along); the wafer reaches 1.83 m
 k = 9.4e5 N/m, 150 N): their stretch lets the forearm and the effector lag behind the column and the upper arm, the
 wafer lags in r and the effector turns out of its radial line (`effector.direction_error`; judged while it dwells at a
 station, `effector-direction`); a span that loses all its pretension runs slack (`elbow-band-slack`, `wrist-band-slack`
-judge the swing against half of it). See the [model reference](model-reference.md#wafer-handler) and the
+judge the swing against half of it). With the gearboxes elastic (`effects.joint_elasticity`) the lift's coupling and screw
+are a spring too (in series 4.56e7 N/m at the nut's far end): the column rings on it at 321 Hz with the rotor held, which
+moves the default cycle by under 0.1 % (the screw's peak force 172.4 to 172.5 N). See the [model reference](model-reference.md#wafer-handler) and the
 [config reference](config-reference.md#wafer-handler).
 
 ## Parallel kinematics: hexapod and cable robots
@@ -634,7 +636,7 @@ and the motor are those of the ball screw axis above. The mechanism gives the pl
   two bodies swinging with its direction: the rod part (`leg.platform_share` of `leg.mass_kg`, centre
   `leg.platform_part_centre_m` from the platform joint) and the body part (the rest, centre `leg.base_part_centre_m`
   from the base joint), each with its inertia about its centre across the leg; their kinetic energy enters M_xi and c,
-  their weight g. The payload may have an inertia of its own (`mass.payload_inertia_kgm2`, absent 0).
+  their weight g. The payload may have an inertia of its own (`mass.payload_inertia_kgm2`, 0: a point mass).
 - Refused: a leg beyond its stroke (`error-joint-beyond-stop`), a leg steeper against the base's or the platform's
   normal than `workspace.max_joint_angle_deg` (`error-hexapod-joint-angle`), a pose whose Jacobian has a condition
   number above `workspace.max_condition_number`, the turns weighed by the platform radius
@@ -765,6 +767,17 @@ arc r beta plus the tangent l_f = sqrt(m² − r²), and dL/dP = −u, u the uni
   with the drums held, gives its natural frequencies (`sim-cli modes`, the input shaper's resonance): 24.6 Hz at the
   planar robot's centre. `effects.cable_damping` adds `cable.specific_damping_n_s` / l. Rigid (off), the cables keep
   their length.
+- The cables' own mass (`cable.mass_per_m_kg`, 3 g/m and 10 g/m shipped, [estimate]; 0 leaves it out): half of each
+  span's weight hangs on the platform, and a cable sags (shallow parabola): at the chord tension T it is longer than its
+  chord by (w l_h)² l_f / (24 T²), so with t0 = EA (L − l) / l the straight cable's tension, t0 = T − c / (2 T²),
+  c = (w l_h)² EA l_f / (12 L); its stiffness dT/dt0 is Ernst's equivalent modulus E / (1 + (w l_h)² EA / (12 T³)), and
+  a slack cable still hangs with a small tension. Against the exact elastic catenary the pull on the anchor agrees to
+  9e-5 N at 20 N and 2e-4 N at 5 N (the straight cable misses it by 0.17 N and 1.6 N there).
+- The winches' drums and rotors spin about `frame.winch_spin_axes` (default horizontal and square to the cable's
+  direction at the winch; with a vertical one the pulley's axle at rest), and their spin is in the frame's load.
+- The time-optimal plan keeps every cable's tension of the rigid model within the band (`cable.min_tension_n` to the
+  rating, `profile.tension_reserve` of the room): the planar default cycle takes 1.684 s instead of 1.653 s without the
+  band, where a cable went down to 0.63 N; cable-spatial 1.207 s instead of 1.143 s.
 - Each winch is a `joint::RotaryJoint` in metres of cable: motor, gearbox with the drum's radius as its lever, the drum's
   inertia, friction of bearings and pulley (`effects.winch_friction`), stops at an empty and a full drum. Elastic, drum
   and rotor are bodies of their own behind the gearbox's spring; rigid, the cables keep their length and the winches'
@@ -1125,7 +1138,8 @@ dr/dφ = −0.554256 m/rad; the R motor's inertia by hand M_φφ = m₁ c₁² +
 turn at 1 rad/s at r = 0.5 m the wafer's acceleration is (−0.5, 1.0) m/s²; a torque of 1 N m on the effector stretches
 the bands by β = 2.955083e-4 and γ = 5.819704e-4 rad (K₁ = 1692, K₂ = 2303 N m/rad) and turns it out of its radial line by
 3.300103e-4 rad; the rigid bands carry dT₁ = −4.271710 N and dT₂ = 4.379926 N at θ̈ = 10 rad/s² with the wrist over the
-column; the Z motor holds 11.2276 kg with 0.1752378 N m; the modes against numpy's (18.20 to 186.45 Hz); the hold on
+column; the Z motor holds 11.2276 kg with 0.1752378 N m; the modes against numpy's (18.20 to 186.45 Hz) and the column on its
+screw and coupling, 320.8907 Hz by hand; the hold on
 pads, vacuum and edge; a span runs slack beyond its pretension; the default cycle passes all verdicts and the reach
 speeding up at 3 m/s² slips the wafer.
 
@@ -1195,6 +1209,8 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
 
 - Hexapod with rotary actuators: the rods' spin about their own axes and the ball joints' friction are left out; of the
   parts that could cross only the rods are checked against each other; one crank branch for all legs.
-- Cable robots: the cables' mass and sag are left out; the wrench-feasible workspace is the static one (the cycle's
-  accelerations are judged by the tension verdicts, not planned around); near the workspace's edge the motors'
+- Cable robots: the cables' own inertia is left out (a third of each cable's mass moving with its anchor, 0.5 % of the
+  spatial platform's mass), and the sag's weight moving with the pose (5e-5 N); the wrench-feasible workspace of the
+  poses is the static one (a cycle's accelerations are held to the band by the time-optimal plan; within the axis limits
+  they are judged by the tension verdicts); near the workspace's edge the motors'
   stretch compensation counts on the closed form's tensions where the distribution holds a cable at a bound.

@@ -25,9 +25,9 @@
 //! tensions in the band hold is outside the wrench-feasible workspace and refused.
 //! The workspace of the poses is the static one (the weight at rest); the wrench of a cycle's accelerations is held to
 //! the band by the time-optimal plan: `Machine::rigid_tensions_moving` gives each cable's tension at a pose, speed and
-//! acceleration (the distribution for the wrench M xi' + c + g), and `ratings.belt_min_tension_n` and
-//! `belt_max_tension_n` (the band's two ends, as `cable.min_tension_n` and the rating above) are the limits the plan
-//! keeps them within, with the share `profile.tension_reserve` of the room.
+//! acceleration (the distribution for the wrench M xi' + c + g), and `Machine::tension_band` gives the plan the band
+//! itself (`cable.min_tension_n` to the rating above, the one source; `ratings.belt_*_tension_n` are not read here), which
+//! it keeps them within with the share `profile.tension_reserve` of the room.
 //!
 //! Dynamics. The platform (mass, inertia R I R^T about its centre, payload a point mass there) moves by its twist
 //! xi = (v, w): M xi' + c + g = A t, c = (0, w x I_w w), g = (0, 0, m g, 0, 0, 0). Each winch is a `joint::RotaryJoint`
@@ -42,15 +42,23 @@
 //!
 //! The cables' own mass (`cable.mass_per_m_kg` rho, 0 where the key is left out) acts in two ways. Its weight: the
 //! cable between the pulley's swivel point E and the anchor P (length L) hangs from both ends, so its potential is
-//! V = rho g L (z_P - z_E) / 2 (the mass of the free span at the height of its middle, taken from the drum at E), and
-//! the platform's equation has the wrench dV/dxi: at the anchor the force rho g / 2 (L e_z - (z_P - z_E) u), half the
-//! weight of the span along gravity and the share of its along-cable pull (dL/dP = -u), with the moment b x f; V joins the
-//! potential energy, so the budget closes. And the sag: a cable of weight w = rho g per metre over the horizontal span l_h
-//! at the tension T is softer than EA, by Ernst's equivalent modulus E_eq = E / (1 + (w l_h)^2 E A / (12 T^3)); with
-//! t0 = EA (L - l) / l the tension of the straight cable and c = (w l_h)^2 EA / 12 the cable pulls with
-//! t = t0 / (1 + c / t0^3) = t0^4 / (t0^3 + c) (smooth to zero strain, t0 - c / t0^2 for a taut one), its potential
-//! (l / EA) W(t0) with W the integral of t over t0 (closed form, `pull_work`) and the drum with t L / l - W / EA. Rigid
-//! cables do not stretch and have no sag.
+//! V = rho g L (z_P - z_E) / 2 (the mass of the free span at the height of its middle, the cable paid out counted from
+//! the pulley's height: the run from the drum to the pulley keeps its length, and lifting cable from the drum's height
+//! to the pulley's is the winch's, a force rho g h at the cable with h the winch's drop, which the config does not give:
+//! 0.05 N for 0.5 m at 10 g/m), and the platform's equation has the wrench dV/dxi: at the anchor the force
+//! rho g / 2 (L e_z - (z_P - z_E) u), half the weight of the span along gravity and the share of its along-cable pull
+//! (dL/dP = -u), with the moment b x f; V joins the potential energy, so the budget closes. And the sag (parabolic,
+//! shallow): a cable of weight w = rho g per metre hanging over its straight part l_f, whose horizontal part is l_h, at
+//! the chord tension T sags by d = w l_h l_f / (8 T) and is longer than its chord by (w l_h)^2 l_f / (24 T^2). The cable
+//! of free length l, stretched to l (1 + T / EA), spans that, so with t0 = EA (L - l) / l (the straight cable's tension)
+//! t0 = T - c / (2 T^2), c = (w l_h)^2 EA l_f / (12 L): the cable pulls with the one positive root T of
+//! T^3 - t0 T^2 - c / 2 = 0 (`sagged`), taut at any t0 (a slack cable hangs: T = sqrt(c / (2 |t0|)) far below zero),
+//! and its stiffness dT/dt0 = 1 / (1 + c / T^3) is Ernst's equivalent modulus E / (1 + (w l_h)^2 E A / (12 T^3)) (times
+//! l_f / L). Its energy, the stretch's and the sag's weight together, is (l / EA) W with W = T^2 / 2 - c / T, the integral
+//! of T over t0 (`pull_work`), so that the platform takes T along the chord and the drum T L / l - W / EA. Left out: W's
+//! change with c over the pose (the sag's weight moving with l_h, a force of about (w l_h)^2 l / (12 T l_h), 5e-5 N at
+//! 10 g/m and 20 N) and the cables' own inertia (about a third of each cable's mass moving with its anchor: 42 g on the
+//! spatial platform's 8 kg with the payload, 0.5 %). Rigid cables do not stretch and have no sag.
 //!
 //! The motor angles of a pose (`inverse`) are those of the free lengths that hold the platform at rest there with the
 //! tensions of the distribution, l = L / (1 + t / EA) (rigid: l = L), so that position setpoints and the torque
@@ -163,51 +171,38 @@ fn norm(a: V3) -> f64 {
     dot(a, a).sqrt()
 }
 
-/// The tension of a cable with sag constant `c` at the straight cable's tension `t0 = EA strain`: Ernst's equivalent
-/// modulus gives t0 / (1 + c / t0^3) = t0^4 / (t0^3 + c); none for a slack cable.
+/// The chord tension T of a cable with sag constant `c` at the straight cable's tension `t0 = EA strain`: the positive
+/// root of T^3 - t0 T^2 - c / 2 = 0 (t0 = T - c / (2 T^2)), by Newton from max(t0, 0) + (c / 2)^(1/3), which is above
+/// the root, where the cubic is convex and rising, so that the steps come down monotonically. Without sag max(t0, 0).
 fn sagged(t0: f64, c: f64) -> f64 {
-    if t0 <= 0.0 {
-        0.0
-    } else if c == 0.0 {
-        t0
-    } else {
-        t0.powi(4) / (t0.powi(3) + c)
+    if c == 0.0 {
+        return t0.max(0.0);
     }
-}
-
-/// `sagged`'s inverse: the straight cable's tension t0 for the tension t (Newton on t0^4 - t t0^3 - t c = 0 from
-/// t + c / t^2, where the function is above zero and convex, so that it comes down monotonically).
-fn unsagged(t: f64, c: f64) -> f64 {
-    if t <= 0.0 || c == 0.0 {
-        return t;
-    }
-    let mut t0 = t + c / (t * t);
-    for _ in 0..60 {
-        let step = (t0.powi(4) - t * t0.powi(3) - t * c) / (4.0 * t0.powi(3) - 3.0 * t * t0 * t0);
-        t0 -= step;
-        if step.abs() <= 1e-15 * t0 {
+    let mut t = t0.max(0.0) + (0.5 * c).cbrt();
+    for _ in 0..100 {
+        let step = (t * t * (t - t0) - 0.5 * c) / (t * (3.0 * t - 2.0 * t0));
+        t -= step;
+        if step <= 1e-15 * t {
             break;
         }
     }
-    t0
+    t
 }
 
-/// The integral of `sagged` over t0 from 0, closed form: with a = c^(1/3) and x / (x^3 + a^3) split into partial
-/// fractions, W(T) = T^2 / 2 - c J(T), J = (-ln((T + a) / a) + ln((T^2 - a T + a^2) / a^2) / 2
-/// + sqrt(3) (atan((2 T - a) / (a sqrt(3))) + pi / 6)) / (3 a).
+/// `sagged`'s inverse: the straight cable's tension t0 = T - c / (2 T^2) for the chord tension T.
+fn unsagged(t: f64, c: f64) -> f64 {
+    if t <= 0.0 || c == 0.0 { t } else { t - 0.5 * c / (t * t) }
+}
+
+/// W(t0), the integral of `sagged` over t0, so that (l / EA) W is the cable's energy: without sag max(t0, 0)^2 / 2;
+/// with it, by dt0 = (1 + c / T^3) dT, T^2 / 2 - c / T (the stretch's energy and the sag's weight), which goes to the
+/// former as c goes to 0.
 fn pull_work(t0: f64, c: f64) -> f64 {
-    if t0 <= 0.0 {
-        return 0.0;
-    }
     if c == 0.0 {
-        return 0.5 * t0 * t0;
+        return 0.5 * t0.max(0.0).powi(2);
     }
-    let (a, r3) = (c.cbrt(), 3f64.sqrt());
-    let j = (-((t0 + a) / a).ln()
-        + 0.5 * ((t0 * t0 - a * t0 + a * a) / (a * a)).ln()
-        + r3 * (((2.0 * t0 - a) / (a * r3)).atan() + PI / 6.0))
-        / (3.0 * a);
-    0.5 * t0 * t0 - c * j
+    let t = sagged(t0, c);
+    0.5 * t * t - c / t
 }
 
 fn transpose(m: &M3) -> M3 {
@@ -438,6 +433,8 @@ pub struct Span {
     pub u: V3,
     pub exit: V3,
     pub b: V3,
+    /// The anchor's height over the pulley's swivel point, z_P - z_E.
+    pub dz: f64,
 }
 
 /// The pulley's plane for an anchor at `p` (world): its direction e_u, the anchor in it (P_u, P_w), and its distance m
@@ -796,8 +793,9 @@ impl CableRobot {
         let mut out = Vec::with_capacity(self.m());
         for c in &self.cables {
             let b = mul(r, c.anchor);
-            let (length, straight, u, exit) = span(c, self.pulley, add(p, b))?;
-            out.push(Span { length, straight, u, exit, b });
+            let anchor = add(p, b);
+            let (length, straight, u, exit) = span(c, self.pulley, anchor)?;
+            out.push(Span { length, straight, u, exit, b, dz: anchor[2] - c.exit[2] });
         }
         Some(out)
     }
@@ -839,40 +837,52 @@ impl CableRobot {
         out
     }
 
-    /// What the cables have to give the platform besides its acceleration: c + g = (0, 0, m g, w x I_w w).
+    /// What the cables have to give the platform besides its acceleration: c + g = (0, 0, m g, w x I_w w), and the
+    /// cables' weight of the rigid model (`cable_weight`).
     fn platform_bias(&self, pose: &[f64], xi: &[f64]) -> Vec<f64> {
         let (p, r) = self.place(pose);
         // The cables' weight needs the spans; without it (rope 0) they are not looked at.
         match if self.rope > 0.0 { self.spans_at(p, &r) } else { Some(Vec::new()) } {
-            Some(spans) => self.platform_bias_at(p, &r, &spans, xi),
+            Some(spans) => self.platform_bias_at(&r, &spans, None, xi),
             None => vec![f64::NAN; self.n()],
         }
     }
 
-    /// `platform_bias` at the pose's place `p` and rotation `r`, with the cables `spans` there (not read where the
-    /// cables have no mass).
-    fn platform_bias_at(&self, p: V3, r: &M3, spans: &[Span], xi: &[f64]) -> Vec<f64> {
+    /// `platform_bias` at the pose's rotation `r`, with the cables `spans` there (not read where the cables have no
+    /// mass) and, elastic, their free lengths `free` (`cable_weight`).
+    fn platform_bias_at(&self, r: &M3, spans: &[Span], free: Option<&[f64]>, xi: &[f64]) -> Vec<f64> {
         let (_, w) = self.full(xi);
         let iw = matmul(&matmul(r, &self.inertia), &transpose(r));
         let gyro = cross(w, mul(&iw, w));
         let full = [0.0, 0.0, self.moving() * self.g, gyro[0], gyro[1], gyro[2]];
         let mut bias: Vec<f64> = self.dofs.iter().map(|d| full[*d]).collect();
-        bias.iter_mut().zip(self.cable_weight(spans, p).0).for_each(|(b, c)| *b += c);
+        bias.iter_mut().zip(self.cable_weight(spans, free).0).for_each(|(b, c)| *b += c);
         bias
     }
 
-    /// The cables' own weight (`rope` > 0): the wrench in the degrees of freedom that the platform's equation takes (the
-    /// gradient of the potential V = rho g L (z_P - z_E) / 2 summed over the cables, with dL/dP = -u: at the anchor the
-    /// force rho g / 2 (L e_z - (z_P - z_E) u), and its moment b x f), and V.
-    fn cable_weight(&self, spans: &[Span], p: V3) -> (Vec<f64>, f64) {
+    /// The cables' own weight (`rope` > 0): the wrench in the degrees of freedom that the platform's equation takes, and
+    /// the potential V. A span's mass hangs at the height of its middle, V = rho g l (z_P - z_E) / 2 with l the cable in
+    /// it: elastic, its free length, a state of its own, so the anchor takes the force rho g l / 2 e_z (half the span's
+    /// weight; the exact elastic catenary agrees to 7e-5 N, see the tests) and the drum -dV/dl = -rho g (z_P - z_E) / 2
+    /// (`tensions`); rigid, l = L(pose) and the tension t is the one at the drum, so dL/dP = -u brings that share to the
+    /// anchor: the force rho g / 2 (L e_z - (z_P - z_E) u). Each with its moment b x f.
+    fn cable_weight(&self, spans: &[Span], free: Option<&[f64]>) -> (Vec<f64>, f64) {
         let mut full = [0.0; 6];
         let mut potential = 0.0;
         if self.rope > 0.0 {
             let half = 0.5 * self.rope * self.g;
-            for (s, c) in spans.iter().zip(&self.cables) {
-                let dz = p[2] + s.b[2] - c.exit[2];
-                potential += half * s.length * dz;
-                let f = [-half * dz * s.u[0], -half * dz * s.u[1], half * (s.length - dz * s.u[2])];
+            for (k, s) in spans.iter().enumerate() {
+                let dz = s.dz;
+                let f = match free {
+                    Some(l) => {
+                        potential += half * l[k] * dz;
+                        [0.0, 0.0, half * l[k]]
+                    }
+                    None => {
+                        potential += half * s.length * dz;
+                        [-half * dz * s.u[0], -half * dz * s.u[1], half * (s.length - dz * s.u[2])]
+                    }
+                };
                 let moment = cross(s.b, f);
                 (0..3).for_each(|i| {
                     full[i] += f[i];
@@ -883,11 +893,11 @@ impl CableRobot {
         (self.dofs.iter().map(|d| full[*d]).collect(), potential)
     }
 
-    /// The sag constant c = (w l_h)^2 EA / 12 of a cable (Ernst's equivalent modulus, `sagged`): w its weight per metre,
-    /// l_h the horizontal part of its straight span.
+    /// The sag constant c = (w l_h)^2 EA l_f / (12 L) of a cable (`sagged`): w its weight per metre, l_f its straight
+    /// span, l_h that span's horizontal part, L its whole length.
     fn sag(&self, s: &Span) -> f64 {
         let w = self.rope * self.g;
-        (w * s.straight * s.u[0].hypot(s.u[1])).powi(2) * self.ea / 12.0
+        (w * s.straight * s.u[0].hypot(s.u[1])).powi(2) * self.ea * s.straight / (12.0 * s.length)
     }
 
     /// The free length of a cable that holds the tension `t` at the length L of `s`: l = L / (1 + t0 / EA), t0 the straight
@@ -903,28 +913,49 @@ impl CableRobot {
         if c == 0.0 { spring * (1.0 + e / (2.0 * l)) } else { spring * (1.0 + e / l) - pull_work(t0, c) / self.ea }
     }
 
-    /// The energy in a cable's spring at the free length `l`: EA e^2 / (2 l) for e = L - l > 0; with sag (l / EA) W(t0).
+    /// The energy in a cable's spring at the free length `l`: EA e^2 / (2 l) for e = L - l > 0, none slack; with sag
+    /// (l / EA) W(t0), slack too.
     fn spring_energy(&self, s: &Span, l: f64) -> f64 {
-        let e = (s.length - l).max(0.0);
         let c = self.sag(s);
-        if c == 0.0 { 0.5 * self.ea * e * e / l } else { l / self.ea * pull_work(self.ea * e / l, c) }
+        if c == 0.0 {
+            let e = (s.length - l).max(0.0);
+            0.5 * self.ea * e * e / l
+        } else {
+            l / self.ea * pull_work(self.ea * (s.length - l) / l, c)
+        }
     }
 
     /// The static wrench at a pose with the payload on, for the workspace: (0, 0, (m + payload) g), and the cables' own
-    /// weight at that pose.
-    fn weight(&self, spans: &[Span], p: V3) -> Vec<f64> {
+    /// weight at that pose (the rigid model's).
+    fn weight(&self, spans: &[Span]) -> Vec<f64> {
         let full = [0.0, 0.0, (self.mass + self.payload) * self.g, 0.0, 0.0, 0.0];
         let mut w: Vec<f64> = self.dofs.iter().map(|d| full[*d]).collect();
-        w.iter_mut().zip(self.cable_weight(spans, p).0).for_each(|(b, c)| *b += c);
+        w.iter_mut().zip(self.cable_weight(spans, None).0).for_each(|(b, c)| *b += c);
         w
+    }
+
+    /// The tensions `solve` gives for the wrench of the platform at rest at a pose. Elastic with heavy cables that wrench
+    /// holds the cables' free lengths, which the tensions set (`free_for`): from those of the reference tension, two
+    /// rounds more take it to about 1e-11 N (each one by a factor of rho g L / (2 EA), 2e-7).
+    fn at_rest(&self, spans: &[Span], pose: &[f64], solve: impl Fn(&[f64]) -> Option<Vec<f64>>) -> Option<Vec<f64>> {
+        if !(self.elastic && self.rope > 0.0) {
+            return solve(&self.platform_bias(pose, &vec![0.0; self.n()]));
+        }
+        let rot = self.place(pose).1;
+        let mut t = vec![self.t_ref; self.m()];
+        for _ in 0..3 {
+            let free: Vec<f64> = spans.iter().zip(&t).map(|(s, t)| self.free_for(s, *t)).collect();
+            t = solve(&self.platform_bias_at(&rot, spans, Some(&free), &vec![0.0; self.n()]))?;
+        }
+        Some(t)
     }
 
     /// The tensions that hold the platform at rest at a pose, by the distribution; `None` outside the wrench-feasible
     /// workspace.
     pub fn static_tensions(&self, pose: &[f64]) -> Option<Vec<f64>> {
         let spans = self.spans(pose)?;
-        let w = self.platform_bias(pose, &vec![0.0; self.n()]);
-        distribute(&self.structure(&spans), &w, self.t_min, self.t_max, self.t_ref)
+        let a = self.structure(&spans);
+        self.at_rest(&spans, pose, |w| distribute(&a, w, self.t_min, self.t_max, self.t_ref))
     }
 
     /// The tensions the motors' angles count on at rest at a pose: the distribution's (`static_tensions`), which the
@@ -934,16 +965,19 @@ impl CableRobot {
     /// 0.08): a slack cable, and the platform 1.5 mrad off. Where a cable reaches a bound the distribution has a kink
     /// in the pose, and the cables' speed setpoints one of L / EA times the jump in the tension's slope.
     fn rest_tensions(&self, spans: &[Span], pose: &[f64]) -> Option<Vec<f64>> {
-        let w = self.platform_bias(pose, &vec![0.0; self.n()]);
         let a = self.structure(spans);
-        if let Some(t) = distribute(&a, &w, self.t_min, self.t_max, self.t_ref) {
-            return Some(t);
-        }
         let (n, m) = (self.n(), self.m());
-        let aat: Vec<f64> = (0..n * n).map(|rc| (0..m).map(|k| a[rc / n * m + k] * a[rc % n * m + k]).sum()).collect();
-        let miss: Vec<f64> = (0..n).map(|r| w[r] - (0..m).map(|k| a[r * m + k] * self.t_ref).sum::<f64>()).collect();
-        let y = solve(&aat, &miss)?;
-        Some((0..m).map(|k| self.t_ref + (0..n).map(|r| a[r * m + k] * y[r]).sum::<f64>()).collect())
+        self.at_rest(spans, pose, |w| {
+            if let Some(t) = distribute(&a, w, self.t_min, self.t_max, self.t_ref) {
+                return Some(t);
+            }
+            let aat: Vec<f64> =
+                (0..n * n).map(|rc| (0..m).map(|k| a[rc / n * m + k] * a[rc % n * m + k]).sum()).collect();
+            let miss: Vec<f64> =
+                (0..n).map(|r| w[r] - (0..m).map(|k| a[r * m + k] * self.t_ref).sum::<f64>()).collect();
+            let y = solve(&aat, &miss)?;
+            Some((0..m).map(|k| self.t_ref + (0..n).map(|r| a[r * m + k] * y[r]).sum::<f64>()).collect())
+        })
     }
 
     /// The cables' free lengths that the motors' angles stand for at a pose, l = L / (1 + t / EA) at `rest_tensions`
@@ -987,7 +1021,7 @@ impl CableRobot {
             let (p, rot) = self.place(pose);
             let spans = self.spans_at(p, &rot)?;
             let t = self.tensions(&spans, &at_rest, &free, &at_rest).platform;
-            let (a, w) = (self.structure(&spans), self.platform_bias_at(p, &rot, &spans, &at_rest[..n]));
+            let (a, w) = (self.structure(&spans), self.platform_bias_at(&rot, &spans, Some(&free), &at_rest[..n]));
             Some((0..n).map(|r| (0..m).map(|k| a[r * m + k] * t[k]).sum::<f64>() - w[r]).collect())
         };
         // The potential the equilibrium is the least of: the platform's and the cables' weight and the taut cables'
@@ -996,7 +1030,7 @@ impl CableRobot {
             let (p, rot) = self.place(pose);
             let spans = self.spans_at(p, &rot)?;
             let springs = spans.iter().zip(&free).map(|(s, l)| self.spring_energy(s, *l));
-            Some(springs.sum::<f64>() + self.moving() * self.g * p[2] + self.cable_weight(&spans, p).1)
+            Some(springs.sum::<f64>() + self.moving() * self.g * p[2] + self.cable_weight(&spans, Some(&free)).1)
         };
         let size = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
         for _ in 0..50 {
@@ -1202,14 +1236,18 @@ impl CableRobot {
         let mut out = Tensions { platform: vec![0.0; m], drum: vec![0.0; m], damper: vec![0.0; m] };
         for k in 0..m {
             let e = spans[k].length - free[k];
-            if e > 0.0 {
-                let (t0, c) = (self.ea * e / free[k], self.sag(&spans[k]));
-                let spring = sagged(t0, c);
-                let total = (spring + self.damping / free[k] * (rates[k] - free_rates[k])).max(0.0);
+            let (t0, c) = (self.ea * e / free[k], self.sag(&spans[k]));
+            // A sagging cable pulls slack too; the damping is the stretch's, taut.
+            let spring = sagged(t0, c);
+            if spring > 0.0 {
+                let damping = if e > 0.0 { self.damping / free[k] * (rates[k] - free_rates[k]) } else { 0.0 };
+                let total = (spring + damping).max(0.0);
                 out.damper[k] = total - spring;
                 out.platform[k] = total;
                 out.drum[k] = self.drum_share(spring, t0, c, e, free[k]) + out.damper[k];
             }
+            // The span's weight on its free length (`cable_weight`): -dV/dl.
+            out.drum[k] -= 0.5 * self.rope * self.g * spans[k].dz;
         }
         out
     }
@@ -1322,11 +1360,11 @@ impl CableRobot {
         let t = self.static_tensions(pose)?;
         let (n, m) = (self.n(), self.m());
         let a = self.structure(&spans);
-        // EA / l = (EA + t0) / L of the straight cable, times the sag's slope d t / d t0 = t0^3 (t0^3 + 4 c) / (t0^3 + c)^2.
+        // EA / l = (EA + t0) / L of the straight cable, times the sag's slope dT / dt0 = T^3 / (T^3 + c) (Ernst's).
         let k: Vec<f64> = (0..m)
             .map(|k| {
                 let (c, t0) = (self.sag(&spans[k]), unsagged(t[k], self.sag(&spans[k])));
-                let slope = if c == 0.0 { 1.0 } else { t0.powi(3) * (t0.powi(3) + 4.0 * c) / (t0.powi(3) + c).powi(2) };
+                let slope = t[k].powi(3) / (t[k].powi(3) + c);
                 slope * (self.ea + t0) / spans[k].length
             })
             .collect();
@@ -1494,8 +1532,8 @@ impl CableRobot {
         let mass = self.platform_mass(pose);
         let mut kinetic = 0.5 * (0..n * n).map(|rc| xi[rc / n] * mass[rc] * xi[rc % n]).sum::<f64>();
         let (p, _) = self.place(pose);
-        let potential = self.moving() * self.g * p[2] + self.cable_weight(&spans, p).1;
         let (free, free_rates, rotor, speed) = self.winch_state(s, &spans);
+        let potential = self.moving() * self.g * p[2] + self.cable_weight(&spans, self.elastic.then_some(&free[..])).1;
         let mut elastic = 0.0;
         for k in 0..m {
             let j = &self.winches[k];
@@ -1643,7 +1681,8 @@ impl Machine for CableRobot {
             let (l, drum) = if self.elastic {
                 let l = self.free_for(&spans[k], t[k]);
                 let (e, c) = (spans[k].length - l, self.sag(&spans[k]));
-                (l, self.drum_share(t[k], self.ea * e / l, c, e, l))
+                let weight = 0.5 * self.rope * self.g * spans[k].dz;
+                (l, self.drum_share(t[k], self.ea * e / l, c, e, l) - weight)
             } else {
                 (spans[k].length, t[k])
             };
@@ -1693,7 +1732,7 @@ impl Machine for CableRobot {
         let a = self.structure(&spans);
         let rates = self.length_rates_with(&a, xi);
         let t = self.tensions(&spans, &rates, free, free_rates);
-        let bias = self.platform_bias_at(p, &rot, &spans, xi);
+        let bias = self.platform_bias_at(&rot, &spans, Some(free), xi);
         let mut acc: Vec<f64> =
             (0..n).map(|r| (0..m).map(|k| a[r * m + k] * t.platform[k]).sum::<f64>() - bias[r]).collect();
         if !solve_in_place(&mut self.platform_mass_at(&rot), &mut acc) {
@@ -1801,8 +1840,12 @@ impl Machine for CableRobot {
 
     /// Each cable's tension in the rigid loss-free model at a pose, speed and acceleration of the tool (the distribution
     /// for the wrench M xi' + c + g, the unbounded one where the band holds none, as the feedforward's): what the
-    /// time-optimal plan keeps within `ratings.belt_min_tension_n` and `belt_max_tension_n` (the cables' band).
+    /// time-optimal plan keeps within the cables' band (`tension_band`).
     /// Linear in the acceleration wherever no cable sits at a bound, as the plan fits it.
+    /// The cables' band: `cable.min_tension_n` to the breaking load over the safety factor, as the rating checks.
+    fn tension_band(&self) -> Option<[f64; 2]> {
+        Some([self.t_min, self.t_max])
+    }
     fn rigid_tensions(&self, pos: &[f64], acc: &[f64], out: &mut Vec<f64>) {
         self.rigid_tensions_moving(pos, &vec![0.0; self.n()], acc, out);
     }
@@ -1872,7 +1915,7 @@ impl Machine for CableRobot {
     fn unreachable(&self, tool: &[f64], slack: f64) -> Option<&'static str> {
         let Some(spans) = self.spans(tool) else { return Some("error-target-out-of-range") };
         let a = self.structure(&spans);
-        if distribute(&a, &self.weight(&spans, self.place(tool).0), self.t_min, self.t_max, self.t_ref).is_none() {
+        if distribute(&a, &self.weight(&spans), self.t_min, self.t_max, self.t_ref).is_none() {
             return Some("error-cable-wrench-infeasible");
         }
         let (min, max) = self.winches[0].range;
@@ -2052,6 +2095,9 @@ impl Machine for CableRobot {
     fn friction_contacts(&self) -> Vec<FrictionContact> {
         (0..self.m()).map(|k| FrictionContact { id: WINCH_CONTACTS[k], owner_key: WINCH_KEYS[k] }).collect()
     }
+    /// The winch's bearings and pulley at the cable (`winch.friction_coulomb_n`, `friction_viscous_n_s_m`): N against the
+    /// cable's speed in m/s, as the winch is a joint in metres of cable, so the contact is a sliding one (`friction_rotary`
+    /// false, the default).
     fn friction_curve(&self, i: usize, speed: f64, _load_scale: f64) -> [f64; 3] {
         let Some(w) = self.winches.get(i) else { return [0.0; 3] };
         [w.friction.coulomb * (speed / w.friction.smoothing).tanh(), w.friction.viscous * speed, 0.0]

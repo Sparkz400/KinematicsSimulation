@@ -486,11 +486,19 @@ fn a_table_table_tcp_keeps_the_tool_on_a_line_while_the_table_turns() {
 #[test]
 fn a_head_table_tcp_turns_the_tool_in_the_head_and_the_workpiece_on_the_table() {
     let text = std::fs::read_to_string(root().join("machines/five-axis-table.toml")).unwrap().replace("\r\n", "\n");
-    let changed = text.replacen("table = [\"a\", \"c\"]\n", "rotaries = [\"a\"]\ntable = [\"c\"]\n", 1);
-    assert_ne!(changed, text);
+    // The head's tilt narrows the table's box (the tip's offset 0.2 sin A, A in [0, 1], takes 0.168 m of Y's reach): the
+    // box in X is then 0.5 +- 0.082 m, so the start pose and the cycle's targets move in from x = 0.6 (Z under the C table
+    // alone keeps its own reach, which the tilted tool shifts up to -0.2 cos 1 = -0.108 m).
+    let changed = text
+        .replacen("table = [\"a\", \"c\"]\n", "rotaries = [\"a\"]\ntable = [\"c\"]\n", 1)
+        .replace("[0.6, 0.3, -0.1,", "[0.55, 0.3, -0.1,")
+        .replace("[0.45, 0.2, -0.12,", "[0.45, 0.2, -0.1,");
+    assert_eq!(changed.matches("0.3, -0.1,").count() + changed.matches("0.2, -0.1,").count(), 5);
     let known: Vec<Config> = MACHINES.iter().map(|m| m.config()).collect();
     let entry = sim_netlist::from_text(&changed, true, "head-table", &known).unwrap_or_else(|e| panic!("{:?}", e.0));
     let machine = (entry.build)(&entry.config()).unwrap();
+    let z = &machine.axes()[2];
+    assert!((z.min + 0.2 * 1f64.cos()).abs() < 1e-12, "Z under the C table from {}", z.min);
     let (w, a, c) = ([0.6, 0.3, -0.1], 0.4, 1.0);
     let q = [0.5119566, 0.2832785, 0.0842122];
     let mut motors = [0.0; 5];

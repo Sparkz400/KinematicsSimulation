@@ -608,3 +608,31 @@ fn the_scissor_lift_file_passes_the_standard_suite() {
     *LOSSLESS.lock().unwrap() = configs;
     sim_core::testkit::run_standard_suite(&MachineEntry { suite_configs: lossless, ..*shipped });
 }
+
+/// The scissor lift's moving feedforward is the inverse of its dynamics, the arms' turning and sideways motion included:
+/// rigid and loss-free at h = 1 m rising at 0.2 m/s, the torque it gives for 1.5 m/s^2 makes the derivatives accelerate
+/// the platform at 1.5 m/s^2.
+#[test]
+fn the_scissor_lifts_moving_feedforward_reaches_its_acceleration() {
+    let mut cfg = scissor_file().config();
+    for effect in sim_netlist::scissor::LOSSY_EFFECTS {
+        cfg.set_text(&format!("effects.{effect} = false")).unwrap();
+    }
+    cfg.set_text("effects.joint_elasticity = false").unwrap();
+    let machine = (scissor_file().build)(&cfg).unwrap();
+    let (pos, vel, acc) = ([1.0], [0.2], [1.5]);
+    let (mut state, mut held) = (Vec::new(), [0.0]);
+    machine.equilibrium(&pos, &mut state, &mut held);
+    machine.set_tool_velocity(&mut state, &vel);
+    let mut torque = [0.0];
+    machine.feedforward_torque_moving(&pos, &vel, &acc, &mut torque);
+    let mut rate = vec![0.0; state.len()];
+    machine.derivatives(&state, &torque, &mut rate);
+    let speed = |h: f64| {
+        let (mut p, mut v) = ([0.0], [0.0]);
+        machine.tool_state(&state.iter().zip(&rate).map(|(x, r)| x + h * r).collect::<Vec<_>>(), &mut p, &mut v);
+        v[0]
+    };
+    let reached = (speed(1e-6) - speed(-1e-6)) / 2e-6;
+    assert!((reached - acc[0]).abs() < 1e-6 * acc[0], "{reached} m/s^2 against {}", acc[0]);
+}

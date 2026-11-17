@@ -264,7 +264,7 @@ the file. The order of the motors in the file is the order of the motor signals 
 | `pulley` | `at_m` | | where the 3D view draws it, `[x, y, z]`, m; default at an end of the first axis; with `effects.belt_wrap` its place in the belt's plane (x, z; x, y where the belt lies flat, its sections changing with axes along x and along y and none along z) |
 | `pulley`, `idler` | `clockwise` | | with `effects.belt_wrap`: the belt runs round it clockwise, seen from the front (x right, z up), or from above (x right, y away) where the belt lies flat, and followed along the routes in their order; default false |
 | `section` | `route` | | the pulleys, idlers and bodies (a clamp on it) the section runs past, in order, for the 3D view; default its pulleys and the body it is clamped to |
-| `idler` | `speed` | required | belt speed past it per speed of each axis, m/s per m/s (`effects.idlers`) |
+| `idler` | `speed` | required | belt speed past it per speed of each axis, m/s per m/s (`effects.idlers`), positive the way a positive turn of the first pulley feeding its section moves the belt (the sense of its spin in the frame momentum) |
 | | `radius_m`, `inertia_kgm2`, `friction_nm` | required | its radius, inertia and bearing friction torque |
 | | `body`, `at_m` | | a body it rides on and where the 3D view draws it (from that body) |
 | `frame` | `axis` | required | the horizontal axis the frame sways along (`effects.frame_compliance`, elastic model); at most one |

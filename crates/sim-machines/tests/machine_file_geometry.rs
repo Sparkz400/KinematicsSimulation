@@ -160,7 +160,7 @@ rotary = [{{ id = "table", gearbox = "gear", axis = "c", inertia_kgm2 = "table.i
 }
 
 /// The joint kit's rotary table with its worm gear (table.gear = "worm": the gearbox with the efficiency of [worm],
-/// tan 8 deg / tan(8 deg + atan(0.04 / cos 20 deg)) = 0.762938, the same back) and the same table as a file with a worm
+/// tan 8 deg / tan(8 deg + atan(0.04 / cos 20 deg)) = 0.762938, back tan(8 deg - 2.4374 deg) / tan 8 deg = 0.692974) and the same table as a file with a worm
 /// node of the kit's ratio and that efficiency both ways: the same machine, rigid and elastic, driving forward and driven back. The kit's
 /// joint friction and the file's motor friction are off; the states are laid out as for the screw axis
 /// (machine_file_mechanisms.rs).
@@ -183,7 +183,7 @@ fn a_worm_gear_in_a_file_drives_as_the_joint_kits_table() {
         ] {
             kit.set_text(change).unwrap();
         }
-        let mut from_file = kit_as_file("rotary-table", &worm_table("\"gearbox.ratio\"", eta, eta));
+        let mut from_file = kit_as_file("rotary-table", &worm_table("\"gearbox.ratio\"", eta, worm.back_efficiency()));
         for change in [&format!("effects.belt_stretch = {elastic}"), "effects.motor_friction = false"] {
             from_file.set_text(change).unwrap();
         }

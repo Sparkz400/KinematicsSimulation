@@ -918,7 +918,7 @@ pos = [1050, -80]
 
 [[machine.idler]]
 id = "upper_right"
-speed = { y = 1 }
+speed = { y = -1 }
 radius_m = 0.012
 inertia_kgm2 = 2.0e-6
 friction_nm = 0.002

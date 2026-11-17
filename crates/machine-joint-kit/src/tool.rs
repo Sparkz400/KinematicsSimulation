@@ -68,6 +68,29 @@ pub struct Scara {
     elbow: f64,
 }
 
+/// The determinant of the n x n matrix `a` (row by row), by elimination with partial pivoting.
+fn determinant(a: &[f64], n: usize) -> f64 {
+    let mut a = a.to_vec();
+    let mut det = 1.0;
+    for c in 0..n {
+        let p = (c..n).max_by(|&x, &y| a[x * n + c].abs().total_cmp(&a[y * n + c].abs())).unwrap_or(c);
+        if p != c {
+            (0..n).for_each(|k| a.swap(p * n + k, c * n + k));
+            det = -det;
+        }
+        let pivot = a[c * n + c];
+        if pivot == 0.0 {
+            return 0.0;
+        }
+        det *= pivot;
+        for r in c + 1..n {
+            let f = a[r * n + c] / pivot;
+            (c..n).for_each(|k| a[r * n + k] -= f * a[c * n + k]);
+        }
+    }
+    det
+}
+
 /// Rows x cols matrix (row by row) J: the 2-norm condition number, sqrt of the largest over the smallest eigenvalue of
 /// J^T J by Jacobi rotations; infinite where it is singular.
 pub fn condition_number(j: &[f64], rows: usize, cols: usize) -> f64 {
@@ -433,8 +456,14 @@ impl Pose {
 
     /// From the joints `from` along the line in coordinates to the tool pose `tool`, in steps of at most 20 mm and 0.05
     /// rad, each settled to 1 um, the last to 1e-13 m (weighted). With `guard`, `false` where a step ends beyond
-    /// `max_condition`.
-    fn walk(&self, fk: Forward, from: &[f64], tool: &[f64], q: &mut [f64], guard: bool) -> bool {
+    /// `max_condition`, or where it passed a singularity between its ends, however short (a walk of one step too): with
+    /// as many tool axes as joints the geometric Jacobian's determinant changes its sign where the joints cross a
+    /// singular pose (the wrist turning through straight, the elbow through stretched), which is the branch changing.
+    /// A redundant arm's singular poses (rank m - 1 of m x n) lie n - m + 1 >= 2 dimensions below its joint space, so a
+    /// walk's joint path does not cross them but where the ends show it.
+    pub(crate) fn walk(&self, fk: Forward, from: &[f64], tool: &[f64], q: &mut [f64], guard: bool) -> bool {
+        let square = guard && self.axes.len() == from.len();
+        let sign = if square { determinant(&self.jacobian(fk, from, true), from.len()).signum() } else { 0.0 };
         let start = self.coordinates(fk, from, 1.0);
         let steps = self
             .axes
@@ -453,11 +482,15 @@ impl Pose {
                 .map(|(i, &a)| (start[i] + s * (tool[i] - start[i])) * if is_turn(a) { self.length } else { 1.0 })
                 .collect();
             let (tol, iterations) = if k == steps { (1e-13, 200) } else { (1e-6, 30) };
-            // The end of every step is judged, a walk of one step (at most 20 mm and 0.05 rad) too.
-            if !self.settle(fk, q, &at, tol, iterations, k == steps)
-                || guard && !(self.condition(fk, q) <= self.max_condition)
-            {
+            if !self.settle(fk, q, &at, tol, iterations, k == steps) {
                 return false;
+            }
+            if guard {
+                let j = self.jacobian(fk, q, true);
+                let now = if square { determinant(&j, q.len()).signum() } else { 0.0 };
+                if now != sign || !(self.condition_of(&j) <= self.max_condition) {
+                    return false;
+                }
             }
         }
         true

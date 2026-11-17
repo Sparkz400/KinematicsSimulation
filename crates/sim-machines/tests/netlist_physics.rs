@@ -173,32 +173,43 @@ fn the_rigid_friction_has_the_guides_load_scale() {
     assert!((on[0][1] - off[0][1]).abs() < 1e-12, "the viscous part is not load dependent");
 }
 
-/// A gantry's yaw left to its spring: the rack gantry's one rack drives the bridge at one end (0.5 m from its centre),
-/// the yaw is on, and the bridge's axis stands vertical so that its weight loads the rack. At rest the sum of the
-/// forces on every coordinate vanishes, the yaw's included: the spring holds the drive's moment, so the yaw is not 0
-/// and no coordinate (nor pulley nor rotor) accelerates.
-#[test]
-fn a_yaw_left_to_its_spring_rests_deflected_under_the_drives_moment() {
-    let file = text("rack-gantry.toml").replace("gantry_yaw = false", "gantry_yaw = true").replace(
-        "id = \"x\"\nstroke_m = \"geometry.stroke_x_m\"",
-        "id = \"x\"\nstroke_m = \"geometry.stroke_x_m\"\nincline_deg = 90.0",
+/// The H-bot standing up (its Y axis vertical) with its bridge's yaw on: the two motors set X and Y, the yaw is left to
+/// the spring (k = 5000 N m/rad). The belt that holds the head's weight W = (5 + 2) kg g along Y pulls the bridge's ends
+/// with the moment 0.3 m W (the file's comment: the belt's moment is -0.3 m times its pull on the head along Y), so at
+/// rest |psi| = 0.3 W / k = 4.119e-3 rad, and no coordinate accelerates.
+fn standing_hbot(changes: &[&str]) -> Box<dyn Machine> {
+    let file = text("h-bot.toml").replace("gantry_yaw = false", "gantry_yaw = true").replace(
+        "id = \"y\"\nstroke_m = \"geometry.stroke_y_m\"",
+        "id = \"y\"\nstroke_m = \"geometry.stroke_y_m\"\nincline_deg = 90.0",
     );
-    let machine = sim_netlist::build(&Config::parse(&file).unwrap()).unwrap();
-    let (state, torque) = at_rest(machine.as_ref(), &[0.3, 0.2]);
-    // The coordinates: x, y, the yaw; two motors.
-    let (n, m) = (3, 2);
-    let v = (state.len() - n - 1 - m) / 2;
-    assert!(state[2].abs() > 1e-9, "the yaw stands at {}", state[2]);
+    assert!(file.contains("incline_deg = 90.0"));
+    sim_netlist::build(&with(&Config::parse(&file).unwrap(), changes)).unwrap()
+}
+
+/// The standing H-bot's yaw at rest against the hand value, and the accelerations there zero.
+fn rests_on_its_spring(machine: &dyn Machine, velocities: std::ops::Range<usize>) {
+    let (state, torque) = at_rest(machine, &[0.5, 0.2]);
+    let by_hand = 0.3 * 7.0 * 9.80665 / 5000.0;
+    assert!((state[2].abs() - by_hand).abs() < 1e-6 * by_hand, "the yaw stands at {}, by hand {by_hand}", state[2]);
     let mut rates = vec![0.0; state.len()];
     machine.derivatives(&state, &torque, &mut rates);
-    let worst = rates[v..2 * v].iter().fold(0.0f64, |a, r| a.max(r.abs()));
+    let worst = rates[velocities].iter().fold(0.0f64, |a, r| a.max(r.abs()));
     assert!(worst < 1e-6, "an acceleration of {worst} at rest, yaw {}", state[2]);
+}
+
+#[test]
+fn a_yaw_left_to_its_spring_rests_deflected_under_the_belts_moment() {
+    let machine = standing_hbot(&["effects.belt_stretch = true"]);
+    // Elastic state: x, y, the yaw, two pulleys, two rotors, then their rates.
+    let v = 3 + 2 + 2;
+    rests_on_its_spring(machine.as_ref(), v..2 * v);
 }
 
 /// A rotary's bearing friction at the output (elastic model): the bearing's viscous drag acts on the axis, behind the
 /// gearbox's spring, so at the instant the axis turns the rotor's acceleration is the same as without the bearing (the
 /// spring has not twisted yet) and the axis's alone is slowed. At the rotor, as the rigid model has it, the rotor's
-/// would change.
+/// would change. By hand: the drag b w = 2 N m at w = 1 rad/s takes b w^2 = 2 W from the motion, so the energy's rate
+/// (kinetic plus potential, along the derivatives) falls by exactly 2 W, and the motor's shaft friction row books 2 W more.
 #[test]
 fn a_rotarys_bearing_friction_acts_behind_the_gearbox_spring() {
     let file = text("five-axis-table.toml");
@@ -220,11 +231,19 @@ fn a_rotarys_bearing_friction_acts_behind_the_gearbox_spring() {
         let v = (state.len() - n - 1 - m) / 2;
         let mut d = vec![0.0; state.len()];
         machine.derivatives(&state, &torque, &mut d);
-        (d[v + axis], d[v + n + m + motor])
+        let h = 1e-6;
+        let at = |sign: f64| state.iter().zip(&d).map(|(x, r)| x + sign * h * r).collect::<Vec<_>>();
+        let energy_rate = (machine.energy(&at(1.0)) - machine.energy(&at(-1.0))) / (2.0 * h);
+        let mut losses = Vec::new();
+        machine.loss_powers(&state, &torque, &mut losses);
+        (d[v + axis], d[v + n + m + motor], energy_rate, losses)
     };
-    let ((axis_off, rotor_off), (axis_on, rotor_on)) = (rates(&file), rates(&bearing));
+    let ((axis_off, rotor_off, e_off, l_off), (axis_on, rotor_on, e_on, l_on)) = (rates(&file), rates(&bearing));
     assert!((rotor_on - rotor_off).abs() < 1e-9 * (1.0 + rotor_off.abs()), "rotor {rotor_on} against {rotor_off}");
     assert!((axis_on - axis_off).abs() > 1e-6, "axis {axis_on} against {axis_off}");
+    assert!((e_on - e_off + 2.0).abs() < 1e-6, "energy rate {e_on} against {e_off}");
+    let more: f64 = l_on.iter().zip(&l_off).map(|(a, b)| a - b).sum();
+    assert!((more - 2.0).abs() < 1e-9, "losses {l_on:?} against {l_off:?}");
 }
 
 /// The T-shaped belt gantry's file with the effects `on` switched on, everything that loses energy off (damping of the belt,
@@ -350,7 +369,8 @@ fn the_files_lowest_mode_is_the_crates() {
 }
 
 /// A rack's pinion and a rotary's motor spin in the frame momentum. A rotor of the inertia J turning at w adds J w about its
-/// axis: for the rack along x the pinion above it turns about e x up = -y (the rack moves along +x under it), for the
+/// axis: for the rack along x the pinion riding above it turns about up x e = +y (it rolls along +x on the fixed rack:
+/// its contact below stands, so its centre moves at w x (r up) = +r w x), for the
 /// rotary C about its own axis, here the vertical (A at 0). 1e-3 kg m^2 more rotor inertia adds 1e-3 w.
 #[test]
 fn a_racks_pinion_and_a_rotarys_motor_spin_in_the_frame_momentum() {
@@ -370,7 +390,8 @@ fn a_racks_pinion_and_a_rotarys_motor_spin_in_the_frame_momentum() {
     let (d, w) = more("rack-gantry.toml", &[0.5, 0.0], 0, &[0.3, 0.2]);
     assert!(w.abs() > 1.0, "the pinion turns at {w}");
     assert!(d[0].abs() < 1e-12 && d[2].abs() < 1e-12, "{d:?}");
-    assert!((d[1] + 1e-3 * w).abs() < 1e-9 * (1e-3 * w).abs(), "{d:?} against {}", -1e-3 * w);
+    assert!(w > 1.0, "the pinion turns forward at {w}");
+    assert!((d[1] - 1e-3 * w).abs() < 1e-9 * (1e-3 * w).abs(), "{d:?} against {}", 1e-3 * w);
     let (d, w) = more("five-axis-table.toml", &[0.0, 0.0, 0.0, 0.0, 0.8], 4, &[0.5, 0.25, -0.1, 0.0, 0.1]);
     assert!(w.abs() > 0.8, "the rotor turns at {w}");
     let size = d.iter().map(|x| x * x).sum::<f64>().sqrt();
@@ -433,24 +454,12 @@ fn the_belts_runs_have_angular_momentum_about_the_middle_of_their_straight_piece
     }
 }
 
-/// A gantry's yaw left to its spring rests deflected in the rigid model too: the same machine as above (the rack gantry
-/// with its bridge's axis vertical), `effects.belt_stretch` off. The rigid model's torques carry the other coordinates
-/// against gravity, K^T P = -gravity, and what they put on the yaw less gravity's is held by the spring: no coordinate
-/// accelerates at rest and the yaw is not 0.
+/// The standing H-bot's yaw in the rigid model: the motors' torques carry X and Y, K^T P = -gravity there, and what P
+/// then puts on the yaw (the same 0.3 m W) the spring holds: the same deflection, and no coordinate accelerates.
 #[test]
 fn a_yaw_left_to_its_spring_rests_deflected_in_the_rigid_model_too() {
-    let file = text("rack-gantry.toml").replace("gantry_yaw = false", "gantry_yaw = true").replace(
-        "id = \"x\"\nstroke_m = \"geometry.stroke_x_m\"",
-        "id = \"x\"\nstroke_m = \"geometry.stroke_x_m\"\nincline_deg = 90.0",
-    );
-    let cfg = with(&Config::parse(&file).unwrap(), &["effects.belt_stretch = false"]);
-    let machine = sim_netlist::build(&cfg).unwrap();
-    let (state, torque) = at_rest(machine.as_ref(), &[0.3, 0.2]);
-    assert!(state[2].abs() > 1e-9, "the yaw stands at {}", state[2]);
-    let mut rates = vec![0.0; state.len()];
-    machine.derivatives(&state, &torque, &mut rates);
-    let worst = rates[3..6].iter().fold(0.0f64, |a, r| a.max(r.abs()));
-    assert!(worst < 1e-6, "an acceleration of {worst} at rest, yaw {}", state[2]);
+    let machine = standing_hbot(&["effects.belt_stretch = false"]);
+    rests_on_its_spring(machine.as_ref(), 3..6);
 }
 
 /// The guides' Stribeck rise reaches the planner: the T-gantry's X guide has Coulomb 15 N and stiction 20 N, so along X
@@ -465,7 +474,57 @@ fn the_guides_stribeck_rise_is_offered_to_the_planner() {
     assert_eq!((plain.len(), rise.len()), (2, 2));
     for (c, r) in plain.iter().zip(&rise) {
         assert!(c[0].abs() > 0.0, "{plain:?}");
-        assert!((r[0] - c[0] * 5.0 / 15.0).abs() < 1e-12 * c[0].abs(), "{plain:?} against {rise:?}");
-        assert!((r[1] - 0.01).abs() < 1e-12, "{rise:?}");
+        assert_eq!(r.len(), 1, "{rise:?}");
+        assert!((r[0][0] - c[0] * 5.0 / 15.0).abs() < 1e-12 * c[0].abs(), "{plain:?} against {rise:?}");
+        assert!((r[0][1] - 0.01).abs() < 1e-12, "{rise:?}");
     }
+}
+
+/// Two guides on one motor keep their own rises: the CoreXY's motors both drive X (friction_z: Coulomb 10 N, stiction 14 N)
+/// and Y (friction_x: 15 N, 20 N), Stribeck speed 10 mm/s each. Along a path that moves X at 1 and Y at 0.5 per unit, each motor has the
+/// X guide's rise, 4 / 10 of the Coulomb torque X alone gives it, over 0.01 / 1 = 0.01, and the Y guide's, 5 / 15 of
+/// what Y alone gives, over 0.01 / 0.5 = 0.02: two Stribeck speeds, which no one pair can stand for.
+#[test]
+fn each_guide_on_a_motor_keeps_its_own_stribeck_rise() {
+    let machine = sim_netlist::build(&shipped("corexy.toml")).unwrap();
+    let alone = |dir: [f64; 2]| {
+        let mut plain = Vec::new();
+        machine.rigid_friction(&[0.25, 0.25], &dir, &mut plain);
+        plain
+    };
+    let (x, y) = (alone([1.0, 0.0]), alone([0.0, 1.0]));
+    let mut rise = Vec::new();
+    machine.rigid_friction_rise(&[0.25, 0.25], &[1.0, 0.5], &mut rise);
+    assert_eq!(rise.len(), 2);
+    for kk in 0..2 {
+        let mut pairs = rise[kk].clone();
+        pairs.sort_by(|a, b| a[1].total_cmp(&b[1]));
+        assert_eq!(pairs.len(), 2, "{rise:?}");
+        for ([level, speed], (by_hand, at)) in
+            pairs.iter().zip([(x[kk][0].abs() * 0.4, 0.01), (y[kk][0].abs() * 5.0 / 15.0, 0.02)])
+        {
+            assert!(
+                by_hand > 0.0 && (level.abs() - by_hand).abs() < 1e-12 * by_hand,
+                "motor {kk}: {pairs:?}, {by_hand}"
+            );
+            assert!((speed - at).abs() < 1e-12, "motor {kk}: {pairs:?}");
+        }
+    }
+}
+
+/// A leaning body on a belt-driven lever axis needs the belt's vertical runs as spans (their T / l holds it back): the
+/// T-shaped belt gantry's file with its lean on and its spans taken out is refused by name, not built without the
+/// geometric stiffness; with them it builds.
+#[test]
+fn a_lean_on_a_belt_without_its_vertical_runs_is_refused() {
+    let lean = ["effects.tool_flex = true", "effects.belt_stretch = true"];
+    assert!(sim_netlist::build(&with(&shipped("t-gantry.toml"), &lean)).is_ok());
+    let mut all: toml::Table = shipped("t-gantry.toml").to_text().unwrap().parse().unwrap();
+    all["machine"].as_table_mut().unwrap().remove("span").unwrap();
+    for effect in ["belt_span_vibration", "belt_mass"] {
+        all["effects"].as_table_mut().unwrap().insert(effect.into(), toml::Value::Boolean(false));
+    }
+    let bare = Config::parse(&toml::to_string(&all).unwrap()).unwrap();
+    let refused = sim_netlist::build(&with(&bare, &lean)).err().expect("built without the spans");
+    assert!(refused.detail().contains("machine.span"), "{refused:?}");
 }

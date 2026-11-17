@@ -61,7 +61,7 @@
 use crate::geometry::{
     Wheel, arc, contacts, flex_at, lean_reach, lean_rise, lean_weight, rise_coefficients, tip_slope, wrap,
 };
-use crate::netlist::{LeanNode, Netlist, TcpNode, Transmission, Waypoint, WormNode};
+use crate::netlist::{LeanNode, Netlist, SpanNode, TcpNode, Transmission, Waypoint, WormNode};
 use sim_components::catalog::motor_config;
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::{
@@ -826,11 +826,17 @@ impl ConfigMachine {
                             let [low, high] = span.map_or([0.0; 2], |s| s[j]);
                             (high, net.axes[t.axes[j]].stroke + low)
                         };
+                        // A direction every table rotary turns about (Z under a C table alone) is not turned: its own reach.
+                        let about = |r: usize| net.axes[r].incline_deg.to_radians().sin_cos();
+                        let unturned = t.table.iter().all(|&r| {
+                            let (s, c) = about(r);
+                            [s, 0.0, c][k].abs() > 1.0 - 1e-12
+                        });
                         let half = (0..2)
                             .map(|j| (t.pivot[j] - reach(j).0).min(reach(j).1 - t.pivot[j]))
                             .fold(f64::INFINITY, f64::min)
                             .max(0.0);
-                        (t.pivot[k] - half, t.pivot[k] + half)
+                        if unturned { reach(k) } else { (t.pivot[k] - half, t.pivot[k] + half) }
                     }
                 };
                 Ok(AxisInfo {
@@ -907,6 +913,8 @@ impl ConfigMachine {
             k.iter_mut().for_each(|row| row.truncate(n));
         }
         let d = n + usize::from(yaw);
+        // The yaw coordinate has no bearing of its own; the per-coordinate tables are indexed up to d.
+        bearing.resize(d, [0.0; 3]);
         if let Some(g) = gantry_node.filter(|_| yaw) {
             sections.iter_mut().zip(&g.sections).for_each(|(s, c)| s.c.push(*c));
         }
@@ -1090,6 +1098,21 @@ impl ConfigMachine {
             // As in the machine crate with a leaning axis: the lean is a mode of the elastic model.
             (lean, flex) => lean.filter(|_| flex && elastic),
         };
+        // A belt that moves the lean's lever axis holds the lean back by its vertical runs (`lean_runs`), which the spans
+        // give: without one the geometric stiffness would silently be missing.
+        if let Some(z) = lean.as_ref().and_then(|l| l.lever_axis) {
+            let belted = sections.iter().any(|s| s.c.get(z).is_some_and(|c| *c != 0.0));
+            let vertical = |s: &SpanNode| {
+                s.axes.get(z).is_some_and(|c| c.abs() == 1.0)
+                    && s.axes.iter().enumerate().all(|(i, c)| i == z || *c == 0.0)
+            };
+            if belted && !net.spans.iter().any(vertical) {
+                return Err(ConfigError::Missing(format!(
+                    "machine.span (the belt's runs along {} that hold the leaning body back, effects.tool_flex)",
+                    net.axes[z].id
+                )));
+            }
+        }
         let beam = if elastic && on("beam_vertical_mode")? {
             let lean =
                 net.lean.ok_or_else(|| ConfigError::Missing("machine.lean (effects.beam_vertical_mode)".into()))?;
@@ -2702,13 +2725,15 @@ impl ConfigMachine {
     /// against gravity, sum_s c_si T_s = gravity_i, and each closed belt keeps its material, sum over its sections of
     /// L_s / (1 + T_s / EA) = what it had at q = 0. Newton from the pretension; the first equations are linear, the
     /// others nearly so. The frame stands at 0: nothing pulls along its horizontal axis. An axis a screw, rack, linear
-    /// motor or rotary drives is held by that, not by the belt.
+    /// motor or rotary drives is held by that, not by the belt. A yaw left to its spring is not among the equations: its
+    /// balance sets the yaw (`settled_yaw`), which q brings.
     fn rest_tensions(&self, q: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let (n, geo, gravity) = (self.n(), self.geo(q), self.gravity(q));
         let (ea, slack) = (self.belt.ea, self.belt.slack);
         let taut = |t: f64| if slack { t.max(0.0) } else { t };
         let mut tension = vec![self.belt.pretension; self.sections.len()];
-        let belt_held: Vec<usize> = (0..n).filter(|&i| !self.driven(i)).collect();
+        let sprung = self.gantry.as_ref().filter(|_| self.yaw_sprung()).map(|g| g.coord);
+        let belt_held: Vec<usize> = (0..n).filter(|&i| !self.driven(i) && Some(i) != sprung).collect();
         for _ in 0..50 {
             let mut jac: Vec<Vec<f64>> =
                 belt_held.iter().map(|&i| self.sections.iter().map(|s| s.c[i]).collect()).collect();
@@ -3190,8 +3215,8 @@ impl Machine for ConfigMachine {
     /// pulley, its rotor and the idlers turn about the normal of the belt's plane (`belt_plane`), a screw's rotor about
     /// its axis, I w each. The sense of a wheel: the belt along its section's route turns it as its `clockwise` says (seen
     /// from the front, from above for a flat belt), and a positive pulley turn and an idler's positive `speed` move the
-    /// belt as the first pulley of the section feeds it (`route_sense`). A rack's pinion turns about e x up (e the rack's
-    /// direction, the pinion above it; a vertical rack's e x y), a rotary's motor about the rotary's own axis, positive
+    /// belt as the first pulley of the section feeds it (`route_sense`). A rack's pinion turns about up x e (e the rack's
+    /// direction, the pinion riding with the axis above the rack fixed to the frame; a vertical rack's y x e), a rotary's motor about the rotary's own axis, positive
     /// as the axis grows. The belt's runs carry angular momentum m x (mu L y) too, each about the middle of its straight
     /// piece (`run_midpoints`); the arcs round the wheels are in the wheels' spin. What does not move is left out (see
     /// `FrameMomentum`).
@@ -3308,13 +3333,13 @@ impl Machine for ConfigMachine {
                 (Some(Direct { kind: DirectKind::Screw(_), axis, .. }), _) => {
                     ax(self.dirs[*axis], rotor_speed[kk], self.j_rotor[kk]);
                 }
-                // A rack's pinion turns about the horizontal across its rack (the pinion above the rack: a positive turn
-                // moves the rack along its direction e at the contact below, so the axis is e x up; a vertical rack's is
-                // e x y). A rotary's rotor turns about the rotary's own axis, as the rotaries outside it have turned it.
+                // A rack's pinion rides with the axis on the rack fixed to the frame, above it (a vertical rack's on its
+                // +y side): rolling forward along the rack's direction e it turns about up x e (y x e). A rotary's rotor
+                // turns about the rotary's own axis, as the rotaries outside it have turned it.
                 (Some(Direct { kind: DirectKind::Rack(_), axis, .. }), _) => {
                     let e = self.dirs[*axis];
                     let across = if e[2].abs() > 0.999 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
-                    let a = cross(e, across);
+                    let a = cross(across, e);
                     let size = dot(&a, &a).sqrt();
                     ax(a.map(|a| a / size), rotor_speed[kk], self.j_rotor[kk]);
                 }
@@ -3590,12 +3615,12 @@ impl Machine for ConfigMachine {
 
     /// The guides' Stribeck rise per motor, [level, speed]: the friction beyond c + b v is level exp(-(v / speed)^2) at
     /// the speed v along the path, level the guides' (stiction - Coulomb) at their load at rest taken to the motor as
-    /// `rigid_friction` does, signed by the way each axis turns. A motor behind several guides gets their levels' sum and
-    /// the levels' weighted mean of their Stribeck speeds along the path (a guide's Stribeck speed over its axis's rate).
-    fn rigid_friction_rise(&self, pos: &[f64], dir: &[f64], out: &mut Vec<[f64; 2]>) {
+    /// `rigid_friction` does, signed by the way each axis turns, and its Stribeck speed along the path (the guide's over
+    /// its axis's rate): a pair per guide that reaches the motor.
+    fn rigid_friction_rise(&self, pos: &[f64], dir: &[f64], out: &mut Vec<Vec<[f64; 2]>>) {
         let (q, rate, _) = self.joint_motion(pos, dir, &vec![0.0; pos.len()]);
         let (n, m) = (self.n(), self.m());
-        let (mut level, mut weighted, mut size) = (vec![0.0; m], vec![0.0; m], vec![0.0; m]);
+        let mut rises = vec![Vec::new(); m];
         for (g, scale) in self.guides.iter().zip(self.load_scales_at(&q, &vec![0.0; n])) {
             let (axis, turning) = (g.axis, rate[g.axis]);
             if !g.friction.on || turning == 0.0 {
@@ -3604,13 +3629,11 @@ impl Machine for ConfigMachine {
             let mut rise = vec![0.0; n];
             rise[axis] = scale * (g.friction.stiction - g.friction.coulomb) * turning.signum();
             let speed = g.friction.stribeck_v / turning.abs();
-            for (kk, torque) in self.to_motors(&rise).into_iter().enumerate() {
-                level[kk] += torque;
-                weighted[kk] += torque.abs() * speed;
-                size[kk] += torque.abs();
+            for (kk, torque) in self.to_motors(&rise).into_iter().enumerate().filter(|(_, t)| *t != 0.0) {
+                rises[kk].push([torque, speed]);
             }
         }
-        out.extend((0..m).map(|kk| [level[kk], if size[kk] > 0.0 { weighted[kk] / size[kk] } else { 1.0 }]));
+        out.extend(rises);
     }
 
     /// `rigid_solve` at a steady speed: the guides (`Lugre::feedforward`, at their load at rest), idlers and cable chains
@@ -4173,3 +4196,7 @@ impl Machine for ConfigMachine {
         t.axes.iter().any(|&i| q[i] < -slack || q[i] > self.stroke[i] + slack).then_some("error-tcp-joint-range")
     }
 }
+
+#[cfg(test)]
+#[path = "wheel_sense_tests.rs"]
+mod wheel_sense_tests;

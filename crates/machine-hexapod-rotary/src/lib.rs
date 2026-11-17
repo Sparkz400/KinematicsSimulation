@@ -626,10 +626,7 @@ impl RotaryPlatform {
         geo.max_crank_joint = cfg.positive("workspace.crank_joint_max_angle_deg")?.to_radians();
         geo.max_platform_joint = cfg.positive("workspace.platform_joint_max_angle_deg")?.to_radians();
         geo.min_clearance = cfg.non_negative("workspace.min_rod_clearance_m")?;
-        geo.min_body_clearance = cfg.f64("workspace.min_body_clearance_m").unwrap_or(0.0);
-        if !(geo.min_body_clearance >= 0.0) {
-            return Err(ConfigError::Invalid("workspace.min_body_clearance_m".into()));
-        }
+        geo.min_body_clearance = cfg.non_negative("workspace.min_body_clearance_m")?;
         geo.max_condition = cfg.positive("workspace.max_condition_number")?;
         let (min, max) = (cfg.f64s("workspace.tool_min")?, cfg.f64s("workspace.tool_max")?);
         if min.len() != 6 || max.len() != 6 {
@@ -961,7 +958,8 @@ impl Mechanism for RotaryPlatform {
         self.geo.inverse(tool, q)
     }
     /// Out of reach is told by the joint machine (`inverse`); here a crank too near its dead centre, a ball joint
-    /// beyond its angle, two rods too near each other or a rod too near the platform's or the base's edge, the kinematics near a singularity.
+    /// beyond its angle, two rods too near each other or a rod too near the platform's or the base's edge, the
+    /// kinematics near a singularity.
     fn unreachable(&self, tool: &[f64], _slack: f64) -> Option<&'static str> {
         let legs = self.geo.legs(tool)?;
         let angles = self.geo.angles(&legs, &Geometry::rotation(tool));

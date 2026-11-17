@@ -221,6 +221,46 @@ fn the_tools_torsional_mode_is_the_hand_calculated() {
     close(d4(&["effects.shaft_torsion = false"]).tool_joint().gearbox.stiffness, 8250.592, 1e-12, "the gearbox alone");
 }
 
+/// With lost motion the shaft (500 N m/rad) stays in series with the gearbox over the band too: the twist for a torque
+/// is the gearbox's own plus T / k_s. Band b = 1.454e-4 rad, K1 = 8250.592: at 0.3 N m (in the band, below
+/// K1 b / 2 = 0.5998) sqrt(2 b T / K1) + T / k_s = 1.028289e-4 + 6e-4 = 7.028289e-4 rad; at 2 N m T / K1 + b / 2 + T / k_s
+/// = 4.315107e-3 rad. The hysteresis friction in parallel with the flanks: sliding, T = K1' x +- T_h K1' / K1 with K1'
+/// = 471.4305 the series stiffness, so T_h' = 0.5 K1 w K1' / K1 = 0.034273 N m (w = 1.454e-4, the loop as wide in angle
+/// as the gearbox's), and at a reversal K1 + sigma = 2 K1 in series: 1 / (1 / 16501.184 + 1 / 500) - K1' = 13.8646.
+#[test]
+fn with_lost_motion_the_shaft_stays_in_series_over_the_band() {
+    let lost = d4(&["effects.gearbox_lost_motion = true"]);
+    let g = &lost.tool_joint().gearbox;
+    close(g.spring_twist(0.3), 7.028289e-4, 1e-6, "twist in the band");
+    close(g.spring_twist(2.0), 4.315107e-3, 1e-6, "twist beyond it");
+    for t in [0.05, 0.3, 0.8, 2.0] {
+        close(g.spring(g.spring_twist(t)).0, t, 1e-12, "spring of its twist");
+    }
+    close(g.stiffness, 471.4305, 1e-6, "series K1");
+    close(g.hysteresis, 0.034273, 1e-4, "hysteresis torque");
+    close(g.dahl_stiffness, 13.86464, 1e-5, "reversal stiffness");
+    // Without the shaft's twist, the gearbox alone.
+    let alone = d4(&["effects.gearbox_lost_motion = true", "effects.shaft_torsion = false"]);
+    close(alone.tool_joint().gearbox.spring_twist(0.3), 1.028289e-4, 1e-5, "gearbox alone");
+}
+
+/// With the gearbox's output a body, the catalogue's inertia at the input (8.8e-6 kg m^2, which holds the output's
+/// J_o / i^2 = 1e-4 / 64 = 1.5625e-6) gives that share up: the rotor turns J_m + 8.8e-6 - 1.5625e-6, and the turn's
+/// feedforward, J_c / i + J_o / i + J_rotor i, stays what it is without the body. A J_o above 64 x 8.8e-6 is refused.
+#[test]
+fn the_gearbox_body_takes_its_share_of_the_input_inertia() {
+    let (plain, body) = (d4(&[]), d4(&["effects.tool_gearbox_body = true"]));
+    close(plain.tool_joint().rotor_inertia - body.tool_joint().rotor_inertia, 1e-4 / 64.0, 1e-9, "share");
+    let (mut a, mut b) = ([0.0; 4], [0.0; 4]);
+    plain.feedforward_torque(&[0.0, 0.0, -0.8, 0.0], &[0.0, 0.0, 0.0, 100.0], &mut a);
+    body.feedforward_torque(&[0.0, 0.0, -0.8, 0.0], &[0.0, 0.0, 0.0, 100.0], &mut b);
+    close(b[3], a[3], 1e-12, "feedforward");
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.tool_gearbox_body = true").unwrap();
+    cfg.set_text("tool.gearbox_output_inertia_kgm2 = 6e-4").unwrap();
+    assert!(Delta4::new(&cfg).is_err());
+}
+
 #[test]
 fn the_d4_passes_the_standard_suite() {
     sim_core::testkit::run_standard_suite(&ENTRY);
@@ -555,9 +595,9 @@ fn on_a_compliant_base_the_capsules_stay_and_the_resonance_is_the_lower() {
 }
 
 /// The gearbox's output as a body (effects.tool_gearbox_body): k_g = 8250.592, k_s = 500 N m/rad, J_o = 1e-4, J_c =
-/// 7.08e-3 kg m^2 (with the payload), the rotor held. J_o J_c lambda^2 - b lambda + k_g k_s = 0 with b = J_c (k_g + k_s)
-/// + J_o k_s = 61.954191 + 0.05 = 62.004191, J_o J_c = 7.08e-7, k_g k_s = 4125296: the roots 66583 and 8.7511e7 1/s^2,
-/// so 41.068 Hz (the series spring's 41.0688 to 0.1 %) and 1488.9 Hz (about sqrt((k_g + k_s) / J_o) / 2 pi).
+/// 7.08e-3 kg m^2 (with the payload), the rotor held. J_o J_c lambda^2 - b lambda + k_g k_s = 0 with
+/// b = J_c (k_g + k_s) + J_o k_s = 61.954191 + 0.05 = 62.004191, J_o J_c = 7.08e-7, k_g k_s = 4125296: the roots 66583
+/// and 8.7511e7 1/s^2, so 41.068 Hz (the series spring's 41.0688 to 0.1 %) and 1488.9 Hz (about sqrt((k_g + k_s) / J_o) / 2 pi).
 /// With J_o -> 0 the lower root tends to the series spring's k_g k_s / (J_c (k_g + k_s)).
 #[test]
 fn the_gearbox_body_gives_the_two_hand_calculated_modes() {
@@ -575,7 +615,7 @@ fn the_gearbox_body_gives_the_two_hand_calculated_modes() {
     assert_eq!(m.tool_mode().unwrap().hz, modes[0].hz);
     assert!(m.state_len() == d4(&[]).state_len() + 2 && m.modes(&[0.0, 0.0, -0.8, 0.0]).len() == 5);
     // Without J_o the lower mode is the series spring's.
-    let tiny = d4(&["effects.tool_gearbox_body = true", "gearbox.4.output_inertia_kgm2 = 1e-12"]);
+    let tiny = d4(&["effects.tool_gearbox_body = true", "tool.gearbox_output_inertia_kgm2 = 1e-12"]);
     close(tiny.body_modes()[0].hz, d4(&[]).tool_mode().unwrap().hz, 1e-6, "series spring");
     // Switched off, or in the rigid model, nothing changes.
     assert!(d4(&[]).body_modes().is_empty());
@@ -585,7 +625,7 @@ fn the_gearbox_body_gives_the_two_hand_calculated_modes() {
 /// The body's rates by hand, no backlash, loss-free: the gearbox output turned 0.01 rad ahead of rotor and tool passes
 /// -k_g 0.01 = -82.50592 N m; the shaft passes k_s 0.01 = 5 N m to the tool: J_c c'' = 5 gives 706.2147 rad/s^2, J_o th'' =
 /// -82.50592 - 5 gives -875059.2 rad/s^2. With the drives off the energy stays, 1/2 k_g th^2 + 1/2 k_s (th - c)^2 +
-/// kinetic: 0.5 * 8250.592 * 1e-4 + 0.5 * 500 * 1e-4 = 0.4375296 J at the start, over 0.05 s of RK4 at the sub-step.
+/// kinetic: 0.5 * 8250.592 * 1e-4 + 0.5 * 500 * 1e-4 = 0.4375296 J at the start.
 #[test]
 fn the_gearbox_body_has_the_hand_calculated_rates_and_conserves_energy() {
     let mut cfg = lossless_config();
@@ -603,36 +643,57 @@ fn the_gearbox_body_has_the_hand_calculated_rates_and_conserves_energy() {
     close(rates[6], -(82.50592 + 5.0) / 1e-4, 1e-9, "body acceleration");
     let e0 = m.tool_energy(&s).iter().sum::<f64>();
     close(e0, 0.5 * 8250.592 * 1e-4 + 0.5 * 500.0 * 1e-4, 1e-9, "start energy");
-    let h = 62.5e-6 / 4.0;
     let f = |y: &[f64], d: &mut [f64]| {
         let mut full = s.clone();
         full[n..].copy_from_slice(y);
         m.tool_rates(&full, 0.0, d);
     };
-    let mut y = s[n..].to_vec();
-    let mut k = vec![vec![0.0; y.len()]; 4];
-    for _ in 0..800 {
-        let mut tmp = y.clone();
-        f(&y, &mut k[0]);
-        for i in 0..y.len() {
-            tmp[i] = y[i] + 0.5 * h * k[0][i];
+    // 12.5 ms of RK4 at the step h: the energy lost, relative.
+    let lost = |h: f64| {
+        let mut y = s[n..].to_vec();
+        let mut k = vec![vec![0.0; y.len()]; 4];
+        for _ in 0..(0.0125 / h).round() as usize {
+            let mut tmp = y.clone();
+            f(&y, &mut k[0]);
+            for i in 0..y.len() {
+                tmp[i] = y[i] + 0.5 * h * k[0][i];
+            }
+            f(&tmp, &mut k[1]);
+            for i in 0..y.len() {
+                tmp[i] = y[i] + 0.5 * h * k[1][i];
+            }
+            f(&tmp, &mut k[2]);
+            for i in 0..y.len() {
+                tmp[i] = y[i] + h * k[2][i];
+            }
+            f(&tmp, &mut k[3]);
+            for i in 0..y.len() {
+                y[i] += h / 6.0 * (k[0][i] + 2.0 * k[1][i] + 2.0 * k[2][i] + k[3][i]);
+            }
         }
-        f(&tmp, &mut k[1]);
-        for i in 0..y.len() {
-            tmp[i] = y[i] + 0.5 * h * k[1][i];
-        }
-        f(&tmp, &mut k[2]);
-        for i in 0..y.len() {
-            tmp[i] = y[i] + h * k[2][i];
-        }
-        f(&tmp, &mut k[3]);
-        for i in 0..y.len() {
-            y[i] += h / 6.0 * (k[0][i] + 2.0 * k[1][i] + 2.0 * k[2][i] + k[3][i]);
-        }
+        let mut end = s.clone();
+        end[n..].copy_from_slice(&y);
+        assert!((end[n + 5] - 0.01).abs() > 1e-4, "it moved");
+        1.0 - m.tool_energy(&end).iter().sum::<f64>() / e0
+    };
+    // What is lost is RK4's own damping of the 1.49 kHz mode, |R(i w h)|^2 = 1 - (w h)^6 / 72 per step, so h^5 over a
+    // time: at the machine's sub-step (w h = 0.146) 1.2e-4 of the energy in 12.5 ms, 32 times less at half the step, and
+    // under 1e-6 at a quarter of it. The model itself stores what it is given.
+    let h = 62.5e-6 / 4.0;
+    let (full, half, quarter) = (lost(h), lost(h / 2.0), lost(h / 4.0));
+    assert!(full > 0.0 && full < 2e-4, "{full} lost at the sub-step");
+    assert!((full / half - 32.0).abs() < 3.0, "{full} at h, {half} at h / 2");
+    assert!(quarter.abs() < 1e-6, "{quarter} at h / 4");
+}
+
+/// The energy budget closes with the gearbox's output a body (the shaft's damper booked with the gearbox's loss) and
+/// with lost motion on the shaft in series (`testkit::loss_budget`: the parts add up to the energy at every step, and
+/// work = stored + lost over a pulse run).
+#[test]
+fn the_budget_closes_with_the_gearbox_body_and_with_lost_motion() {
+    for edit in ["effects.tool_gearbox_body = true", "effects.gearbox_lost_motion = true"] {
+        let mut cfg = ENTRY.config();
+        cfg.set_text(edit).unwrap();
+        sim_core::testkit::loss_budget((ENTRY.build)(&cfg).unwrap().as_ref());
     }
-    let mut end = s.clone();
-    end[n..].copy_from_slice(&y);
-    assert!((end[n + 5] - 0.01).abs() > 1e-4, "it moved");
-    let e1 = m.tool_energy(&end).iter().sum::<f64>();
-    assert!((e1 - e0).abs() < 1e-6 * e0, "energy {e0} -> {e1}");
 }

@@ -874,13 +874,16 @@ impl Machine for Pneumatic {
     fn rigid_tensions_moving(&self, tool_pos: &[f64], tool_vel: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
         self.inner.rigid_tensions_moving(tool_pos, tool_vel, tool_acc, out)
     }
+    fn tension_band(&self) -> Option<[f64; 2]> {
+        self.inner.tension_band()
+    }
     fn rigid_guide_loads(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_guide_loads(tool_pos, tool_acc, out)
     }
     fn rigid_friction(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_friction(tool_pos, tool_dir, out)
     }
-    fn rigid_friction_rise(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
+    fn rigid_friction_rise(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<Vec<[f64; 2]>>) {
         self.inner.rigid_friction_rise(tool_pos, tool_dir, out)
     }
     /// The machine's alone: a cylinder is an open system, fed by the supply, and keeps its own balance (the signals

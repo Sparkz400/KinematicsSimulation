@@ -227,7 +227,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 "speed",
                 Kind::Coefficients("axis"),
                 true,
-                "Belt speed past it per speed of each axis (m/s per m/s).",
+                "Belt speed past it per speed of each axis (m/s per m/s), positive the way a positive turn of the first pulley that feeds its section moves the belt (the sense its spin in the frame momentum takes).",
             ),
             field("radius_m", Kind::Number, true, "Radius, m."),
             field("inertia_kgm2", Kind::Number, true, "Inertia, kg m^2."),

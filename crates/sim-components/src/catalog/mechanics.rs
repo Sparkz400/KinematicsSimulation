@@ -205,16 +205,22 @@ fn screw_tables(cfg: &Config) -> Vec<String> {
 pub const GUIDE_CARRIAGES: f64 = 4.0;
 
 /// The tables a machine's guide friction is in, with its sliding and breakaway levels, of which `apply_guides` takes the
-/// first the config has: a gantry's or single axis's X guide (LuGre), each carriage's guide of a linear delta, a slide.
+/// first the config has: a gantry's or one-axis machine's X guide (LuGre), each carriage's guide of a linear delta, a slide.
 const GUIDE_FRICTION: [(&str, [&str; 2]); 3] = [
     ("friction_x", ["coulomb_n", "stiction_n"]),
     ("friction", ["coulomb_n", "stiction_n"]),
     ("slide", ["friction_coulomb_n", "friction_breakaway_n"]),
 ];
 
-/// The carriages of a config's guide set: `ratings.guide_carriages` (a whole number of at least 1), else `GUIDE_CARRIAGES`.
-pub fn guide_carriages(cfg: &Config) -> f64 {
-    cfg.f64("ratings.guide_carriages").ok().filter(|n| *n >= 1.0 && n.fract() == 0.0).unwrap_or(GUIDE_CARRIAGES)
+/// The carriages of a config's guide set: `ratings.guide_carriages`, else `GUIDE_CARRIAGES`. A value that is not a whole
+/// number of at least 1 is refused.
+pub fn guide_carriages(cfg: &Config) -> Result<f64, ConfigError> {
+    const KEY: &str = "ratings.guide_carriages";
+    if cfg.get(KEY).is_err() {
+        return Ok(GUIDE_CARRIAGES);
+    }
+    let n = cfg.f64(KEY)?;
+    if n >= 1.0 && n.fract() == 0.0 { Ok(n) } else { Err(ConfigError::Invalid(KEY.into())) }
 }
 
 /// The static safety factor a guide set's highest load is held to, C0 / P: HIWIN's catalogue asks 1.0 to 3.5 for
@@ -459,8 +465,8 @@ pub fn mech_axes(cfg: &Config) -> Vec<(String, &'static str, f64)> {
     let screws: Vec<Row> = if screw_tables(cfg).is_empty() { Vec::new() } else { rows_of("ball_screws.csv") };
     let mech = !screws.is_empty() || is_linear_motor(cfg) || !tables_with(cfg, &["module_m", "teeth"]).is_empty();
     let mut guides: Vec<(String, f64)> = Vec::new();
-    if mech && rates_guides(cfg) {
-        let carriages = guide_carriages(cfg);
+    // (A config with an invalid carriage count is refused by `resolve`, so every candidate on it is: no guide is offered.)
+    if let (true, Ok(carriages)) = (mech && rates_guides(cfg), guide_carriages(cfg)) {
         let mut all: Vec<Row> = rows_of("linear_guides.csv")
             .into_iter()
             .filter(|r| guide_rating_50km(r).is_some() && guide_refusal(cfg, r, carriages).is_empty())
