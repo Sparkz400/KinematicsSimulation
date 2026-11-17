@@ -1728,9 +1728,9 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     // In mm where the tool moves, in mrad where it only turns (the rotary table): the tool's error is split into the
     // two since 13 November 2026.
     let (label, peak) = if load.tracking_error_peak > 0.0 {
-        ("Behind the setpoint, peak [mm]", load.tracking_error_peak)
+        ("Tool position error, peak [mm]", load.tracking_error_peak)
     } else {
-        ("Turn behind the setpoint, peak [mrad]", load.tracking_angle_error_peak)
+        ("Tool turn error, peak [mrad]", load.tracking_angle_error_peak)
     };
     let behind = number(&row(summary, label)[0]);
     // Behind at all, a micrometre and up, and shown as it is: the app writes the peak with three significant digits at
@@ -4259,15 +4259,27 @@ fn the_torque_and_error_views_hold_the_motor_model_and_add_up(entry: &'static Ma
         }
     }
     let error = charts::tool_error(&run.signals, &run.columns).unwrap_or_default();
-    // The real error: setpoint less where the tool is, of the axes in m.
-    let place: Vec<(&[f64], &[f64])> = run
+    // The real error: the plan at the sample (the held setpoint run on by `setpoint_age` with its speed and
+    // acceleration) less where the tool is, of the axes in m.
+    let age = run.column("setpoint_age").unwrap();
+    let place: Vec<[&[f64]; 4]> = run
         .signals
         .iter()
         .filter(|s| s.unit == "m" && s.id.starts_with("axis.") && s.id.ends_with(".position"))
-        .filter_map(|s| Some((run.column(&format!("{}_setpoint", s.id))?, run.column(&s.id)?)))
+        .filter_map(|s| {
+            let of = |what: &str| run.column(&s.id.replace(".position", what));
+            Some([
+                of(".position_setpoint")?,
+                of(".velocity_setpoint")?,
+                of(".acceleration_setpoint")?,
+                of(".position")?,
+            ])
+        })
         .collect();
     for i in (0..error.normal.len()).step_by(37).filter(|_| !place.is_empty()) {
-        let length = place.iter().map(|(s, a)| (s[i] - a[i]).powi(2)).sum::<f64>().sqrt();
+        let t = age[i];
+        let length =
+            place.iter().map(|[p, v, a, x]| (p[i] + (v[i] + 0.5 * a[i] * t) * t - x[i]).powi(2)).sum::<f64>().sqrt();
         let split = error.normal[i].hypot(error.tangential[i]);
         assert!((split - length).abs() <= 1e-9 * length.max(1e-9), "{}: {split} against {length}", entry.id);
     }
@@ -4569,4 +4581,37 @@ fn the_tool_error_of_a_run_without_setpoints_is_a_row_of_its_own() {
     let motor_side = table.iter().find(|r| r[0].starts_with(&side)).unwrap();
     assert!(!plain[1].is_empty() && plain[2].is_empty(), "{plain:?}");
     assert!(motor_side[1].is_empty() && !motor_side[2].is_empty(), "{motor_side:?}");
+}
+
+/// The tool position error is one number (docs/model-reference.md, "Tool position error"): on the default cycles of the
+/// T-gantry and the palletiser the run's figure (the compare panel, the path colouring), the Views tab's chart and the
+/// analysis's "Tool position error, peak" agree to 1 %. The run's rows, 1 ms apart, see the error at a phase of the
+/// profile cycle of their own; the analysis sees every one. Before the plan was run on by `setpoint_age`, the T-gantry's
+/// run read 0.794 mm against the analysis's 0.18 mm (the setpoint held up to a cycle while the tool moved on).
+#[test]
+fn the_tool_error_is_one_number_in_the_run_the_chart_and_the_analysis() {
+    use sim_app::runs::{Run, RunKind};
+    use sim_components::{Sim, analysis, charts};
+    for id in ["t-gantry", "palletiser"] {
+        let entry = MACHINES.iter().copied().find(|e| e.id == id).unwrap();
+        let cfg = entry.config();
+        let mut sim = Sim::new(entry, &cfg).unwrap();
+        let load = analysis::analyse_cycle(&mut sim).unwrap();
+        let rows = analysis::record_cycle(entry, &cfg).unwrap();
+        let run = Run::from_rows(
+            id.into(),
+            RunKind::Cycle,
+            id,
+            sim.signal_infos(),
+            sim.machine.motors(),
+            rows.iter().map(Vec::as_slice),
+        );
+        let figure = run.figures().tool_error_peak.unwrap();
+        let chart = charts::tool_error(&run.signals, &run.columns).unwrap();
+        let drawn = chart.normal.iter().zip(&chart.tangential).map(|(n, t)| n.hypot(*t)).fold(0.0, f64::max);
+        let analysed = load.tracking_error_peak;
+        println!("{id}: run {:.4} mm, chart {:.4} mm, analysis {:.4} mm", figure * 1e3, drawn * 1e3, analysed * 1e3);
+        assert!((figure - drawn).abs() < 1e-12, "{id}: run {figure} m, chart {drawn} m");
+        assert!((figure - analysed).abs() < 0.01 * analysed, "{id}: run {figure} m, analysis {analysed} m");
+    }
 }

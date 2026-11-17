@@ -149,14 +149,18 @@ pub struct Pacing {
     pub jitter_max_s: f64,
     /// Ticks that came more than a whole cycle late.
     pub overruns: u64,
+    /// Wall-clock time the loop did not simulate: what a tick came later than the most it makes up for (`simulate`).
+    /// `sim_s + lost_s` is `wall_s` to within a step on any host; `lost_s` is 0 on a host that keeps up.
+    pub lost_s: f64,
 }
 
 impl Pacing {
-    fn record(&mut self, period: f64, simulated: f64) {
+    fn record(&mut self, period: f64, simulated: f64, lost: f64) {
         let jitter = period - self.cycle_s;
         self.cycles += 1;
         self.wall_s += period;
         self.sim_s += simulated;
+        self.lost_s += lost;
         self.jitter_square_sum += jitter * jitter;
         self.jitter_max_s = self.jitter_max_s.max(jitter.abs());
         self.overruns += u64::from(period > 2.0 * self.cycle_s);
@@ -893,7 +897,9 @@ async fn simulate(mut s: SimLoop) {
         // piling up work; only lag beyond two cycles counts as falling behind, so that long cycles keep real time.
         let now = Instant::now();
         let period = (now - last).as_secs_f64();
-        owed = f64::min(owed + period, f64::max(0.1, 2.0 * s.cycle.as_secs_f64()));
+        let due = owed + period;
+        owed = f64::min(due, f64::max(0.1, 2.0 * s.cycle.as_secs_f64()));
+        let lost = due - owed;
         last = now;
         let steps_before = s.sim.step;
         while owed >= s.sim.dt {
@@ -905,7 +911,7 @@ async fn simulate(mut s: SimLoop) {
             s.sim.step();
             owed -= s.sim.dt;
         }
-        s.pacing.lock().unwrap().record(period, (s.sim.step - steps_before) as f64 * s.sim.dt);
+        s.pacing.lock().unwrap().record(period, (s.sim.step - steps_before) as f64 * s.sim.dt, lost);
         // Drives switched off by `command.disable`, a trip or a crash: an error for every powered axis.
         if !s.sim.control.enabled() {
             for axis in s.plc.iter_mut().filter(|a| a.enable && a.error_id == 0) {

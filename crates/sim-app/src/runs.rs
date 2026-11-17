@@ -287,28 +287,21 @@ impl Run {
         }
     }
 
-    /// Per axis in metres the tool's position error, setpoint minus actual position; a run without setpoints gets the
-    /// drives' following errors instead (`tool_error_is_motor_side`).
+    /// Per axis in metres the tool's position error, the plan now less the actual position (`charts::axis_errors`, as
+    /// the Views tab and the analysis have it); a run without setpoints gets the drives' following errors instead
+    /// (`tool_error_is_motor_side`).
     fn tool_errors(&self) -> Vec<Cow<'_, [f64]>> {
-        let in_metres = |suffix: &str| -> Vec<(&str, &[f64])> {
-            let signals = self.signals.iter().zip(&self.columns);
-            signals
-                .filter(|(s, _)| s.id.starts_with("axis.") && s.id.ends_with(suffix) && s.unit == "m")
-                .map(|(s, c)| (s.id.as_str(), c.as_slice()))
-                .collect()
-        };
-        // The encoder-side following error misses belt stretch and compliance; setpoint minus position does not.
-        let real: Vec<Cow<[f64]>> = in_metres(".position")
-            .into_iter()
-            .filter_map(|(id, actual)| {
-                let set = self.column(&format!("{id}_setpoint"))?;
-                Some(Cow::Owned(set.iter().zip(actual).map(|(s, a)| s - a).collect()))
-            })
-            .collect();
+        // The encoder-side following error misses belt stretch and compliance; the plan less the position does not.
+        let real: Vec<Cow<[f64]>> =
+            charts::axis_errors(&self.signals, &self.columns, "m").into_iter().map(|(e, _)| Cow::Owned(e)).collect();
         if !real.is_empty() {
             return real;
         }
-        in_metres(".following_error").into_iter().map(|(_, c)| Cow::Borrowed(c)).collect()
+        let signals = self.signals.iter().zip(&self.columns);
+        signals
+            .filter(|(s, _)| s.id.starts_with("axis.") && s.id.ends_with(".following_error") && s.unit == "m")
+            .map(|(_, c)| Cow::Borrowed(c.as_slice()))
+            .collect()
     }
 
     /// Whether the tool's error of this run is only the drives' following error (no setpoint signals to compare).

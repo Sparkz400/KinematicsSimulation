@@ -338,6 +338,9 @@ stiffness_k3_nm_rad = 35752.6
 rotor_inertia_kgm2 = 3.5e-5
 torque_constant_nm_a = 1.0672269
 rated_current_a = 1.19
+# [catalogue] its own stall current, not the arms': 1FK2104-4AF static torque 1.27 N m at 1.19 A (motors_s210.csv),
+# kt 1.0672 N m/A; the catalogue's static torque is its rated torque, so the S1 line stands flat at 1.27 N m.
+stall_current_a = 1.19
 thermal_time_constant_s = 1980.0
 max_current_a = 4.2
 torque_constant_at_max_current_nm_a = 0.8928571

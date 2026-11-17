@@ -83,8 +83,8 @@ pub fn split(error: &[f64], direction: &[f64]) -> (f64, f64) {
     ((total - along * along).max(0.0).sqrt(), along)
 }
 
-/// The tool's real error over a run (`split`): the axes' position setpoints less where the tool really is (`axis.<id>.
-/// position`, belt stretch and sag included, not the drives' encoder-side `following_error`), against the direction of
+/// The tool's real error over a run (`split`): the plan at each sample's time less where the tool really is (`axis_errors`;
+/// belt stretch and sag included, not the drives' encoder-side `following_error`), against the direction of
 /// their speed setpoints: of the axes in m (its place) in m, and of the axes in rad (its turn, an arm's
 /// orientation) the length in rad, apart, so that metres and radians are never added.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -98,24 +98,44 @@ pub struct ToolError {
     pub angle: Vec<f64>,
 }
 
-/// The `ToolError` of a run's columns; `None` where the run has no axis positions with setpoints (a trace).
-// shortcut: the setpoint is the one sampled with the position, held over the profile cycle, so the tangential part may
-// carry up to a cycle's way of setpoint lag at speed; take the plan at the sample's time (`Control::plan_now`) into the
-// run if that matters.
-pub fn tool_error(signals: &[SignalInfo], columns: &[Vec<f64>]) -> Option<ToolError> {
+/// Per axis whose unit is `unit`, the tool's error (docs/model-reference.md, "Tool position error"): the plan at the
+/// sample's time less where the tool is, `axis.<id>.position_setpoint` run on by `setpoint_age` with the speed and
+/// acceleration setpoints (`Controller::plan_now`, which the analysis measures against), less `axis.<id>.position`. A run
+/// without `setpoint_age` (a file from before it) takes the setpoint as it was held. Each with its axis's speed
+/// setpoint, where the run has it.
+pub fn axis_errors<'a>(
+    signals: &[SignalInfo],
+    columns: &'a [Vec<f64>],
+    unit: &str,
+) -> Vec<(Vec<f64>, Option<&'a [f64]>)> {
     let find = |id: &str| signals.iter().position(|s| s.id == id).map(|i| columns[i].as_slice());
-    let axes = |unit: &str| -> Vec<(Vec<f64>, Option<&[f64]>)> {
-        signals
-            .iter()
-            .zip(columns)
-            .filter(|(s, _)| s.unit == unit && s.id.starts_with("axis.") && s.id.ends_with(".position"))
-            .filter_map(|(s, actual)| {
-                let set = find(&format!("{}_setpoint", s.id))?;
-                let error = set.iter().zip(actual).map(|(s, a)| s - a).collect();
-                Some((error, find(&s.id.replace(".position", ".velocity_setpoint"))))
-            })
-            .collect()
-    };
+    let age = find("setpoint_age");
+    signals
+        .iter()
+        .zip(columns)
+        .filter(|(s, _)| s.unit == unit && s.id.starts_with("axis.") && s.id.ends_with(".position"))
+        .filter_map(|(s, actual)| {
+            let set = find(&format!("{}_setpoint", s.id))?;
+            let (vel, acc) = (
+                find(&s.id.replace(".position", ".velocity_setpoint")),
+                find(&s.id.replace(".position", ".acceleration_setpoint")),
+            );
+            let error = (0..actual.len())
+                .map(|i| {
+                    let t = age.map_or(0.0, |a| a[i]);
+                    let at = |c: Option<&[f64]>| c.map_or(0.0, |c| c[i]);
+                    set[i] + (at(vel) + 0.5 * at(acc) * t) * t - actual[i]
+                })
+                .collect();
+            Some((error, vel))
+        })
+        .collect()
+}
+
+/// The `ToolError` of a run's columns (`axis_errors`); `None` where the run has no axis positions with setpoints (a
+/// trace).
+pub fn tool_error(signals: &[SignalInfo], columns: &[Vec<f64>]) -> Option<ToolError> {
+    let axes = |unit: &str| axis_errors(signals, columns, unit);
     let (place, turn) = (axes("m"), axes("rad"));
     if place.is_empty() && turn.is_empty() {
         return None;
@@ -473,6 +493,25 @@ mod tests {
         let e = tool_error(&signals, &columns).unwrap();
         assert!(!e.place && e.normal.iter().all(|v| *v == 0.0), "{e:?}");
         assert!(e.angle.iter().all(|v| (v - 0.01).abs() < 1e-12), "{e:?}");
+    }
+
+    /// The setpoint held 0.8 ms at 1 m/s and 10 m/s²: the plan now is 0.1 + (1 + 5 * 0.0008) * 0.0008 = 0.1008032 m, so a
+    /// tool at 0.1008 m is 3.2 um behind it, not the 0.8 mm ahead of the held setpoint it reads as without the age.
+    #[test]
+    fn the_tool_error_is_against_the_plan_at_the_samples_time() {
+        let ids = ["time", "setpoint_age", "axis.x.position", "axis.x.position_setpoint", "axis.x.velocity_setpoint"];
+        let mut signals: Vec<SignalInfo> = ids.map(|id| SignalInfo::new(id, "k", "q", "m")).to_vec();
+        signals.push(SignalInfo::new("axis.x.acceleration_setpoint", "k", "q", "m/s²"));
+        let columns = vec![vec![0.0], vec![8e-4], vec![0.1008], vec![0.1], vec![1.0], vec![10.0]];
+        let e = tool_error(&signals, &columns).unwrap();
+        assert!((e.tangential[0] - 3.2e-6).abs() < 1e-12 && e.normal[0] < 1e-12, "{e:?}");
+        let held = tool_error(&signals[..1].iter().chain(&signals[2..]).cloned().collect::<Vec<_>>(), &{
+            let mut c = columns.clone();
+            c.remove(1);
+            c
+        })
+        .unwrap();
+        assert!((held.tangential[0] + 8e-4).abs() < 1e-12, "{held:?}");
     }
 
     /// The drawn line read at a speed, straight between its points.

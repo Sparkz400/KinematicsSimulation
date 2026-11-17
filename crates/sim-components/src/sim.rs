@@ -834,6 +834,8 @@ impl Sim {
         let mut out = vec![
             SignalInfo::new("time", "group-sim", "quantity-time", "s"),
             SignalInfo::new("payload", "effect-payload", "quantity-attached", ""),
+            // How long the axes' setpoints have been held: the plan now is `position_setpoint` run on by it.
+            SignalInfo::new("setpoint_age", "group-sim", "quantity-setpoint-age", "s"),
         ];
         for axis in self.machine.axes() {
             let (unit, rate, rate2) = (axis.unit, format!("{}/s", axis.unit), format!("{}/s²", axis.unit));
@@ -918,7 +920,7 @@ impl Sim {
         self.machine.motor_state(&self.state, &mut angle, &mut speed);
         let c = &self.control;
         out.clear();
-        out.extend([self.time(), if self.payload_attached { 1.0 } else { 0.0 }]);
+        out.extend([self.time(), if self.payload_attached { 1.0 } else { 0.0 }, c.setpoint_age(self.time())]);
         for i in 0..axes {
             out.extend([pos[i], vel[i], c.set_pos[i], c.set_vel[i], c.set_acc[i], c.tool_error[i]]);
         }
