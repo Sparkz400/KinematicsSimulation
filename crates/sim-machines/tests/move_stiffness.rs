@@ -28,6 +28,30 @@ fn move_trace(entry: &MachineEntry, cfg: &Config, targets: &[f64], rows: usize, 
     trace
 }
 
+/// On a trace made by the config itself the fit gives the config's stiffness, within about two of its own standard
+/// errors: the single axis's default cycle, 6 s without payload at 1 ms, 0.003 N m of noise on the torque (as the
+/// synthetic belt dataset was recorded). Its standard error is the scatter's: over 20 noise seeds (17 November 2026) the
+/// factors averaged 0.9974 with a standard deviation of 0.0061 between them, against the 0.0057 to 0.0062 each stated;
+/// seed 1 gives 0.9959 ± 0.0062. (The dataset as committed on 13 November, recorded by an older model, gave
+/// 1.027 ± 0.006; regenerated, 1.005 ± 0.006.)
+#[test]
+fn a_trace_of_the_config_itself_fits_to_its_own_stiffness() {
+    let entry = sim_machines::find("single-axis").unwrap();
+    let mut cfg = entry.config();
+    cfg.set_text("effects.payload = false").unwrap();
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    sim.command(Command::StartCycle).unwrap();
+    let mut trace = Trace::default();
+    for _ in 0..=6000 {
+        trace.record(&sim);
+        sim.run(1e-3, |_| {});
+    }
+    let mut noise = Noise(1);
+    trace.motors[0].torque.iter_mut().for_each(|t| *t += 0.003 * noise.next());
+    let fit = fit_move_stiffness(entry, &cfg, &trace, BELT_STIFFNESS_KEY).unwrap();
+    assert!((fit.factor - 1.0).abs() < 2.0 * fit.error && fit.error < 0.01, "{fit:?}");
+}
+
 /// The single axis with its belt 0.7 times as stiff as the config's (EA 350 kN for 500 kN), two moves of 0.8 m at the
 /// config's limits (1 m/s, 10 m/s², 100 m/s³), noise on torque, speed and angle as in the stage-1 test. The fit scales
 /// the belt's own key, so it has to find 0.7 itself (a sweep's dip gives 0.72, the gearbox being in series with the

@@ -13,7 +13,12 @@ the mapping and the checker have something to run on:
 | `torque actual` | N m | `motor.m.torque` plus normal noise of 0.003 N m |
 | `torque setpoint` | N m | `motor.m.torque_command` |
 
-Semicolons and decimal commas, as a German Windows writes CSV.
+Semicolons and decimal commas, as a German Windows writes CSV. Six significant digits; the noise is Python's
+`random.Random(1).gauss(0, 0.003)`, one draw per row.
+
+Regenerated on 17 November 2026 (`sim-cli run single-axis --cycle --time 6 --every 16 --set effects.payload=false`):
+the trace of 13 November had been recorded by an older model, whose belt rang so that `fit --stiffness` read
+× 1.027 ± 0.006 against this model's 1; the trace now reads × 1.005 ± 0.006.
 
 ```text
 sim-cli identify --trace trace.csv --map map.toml
