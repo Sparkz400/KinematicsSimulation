@@ -208,7 +208,8 @@ fn a_yaw_left_to_its_spring_rests_deflected_under_the_belts_moment() {
 /// A rotary's bearing friction at the output (elastic model): the bearing's viscous drag acts on the axis, behind the
 /// gearbox's spring, so at the instant the axis turns the rotor's acceleration is the same as without the bearing (the
 /// spring has not twisted yet) and the axis's alone is slowed. At the rotor, as the rigid model has it, the rotor's
-/// would change.
+/// would change. By hand: the drag b w = 2 N m at w = 1 rad/s takes b w^2 = 2 W from the motion, so the energy's rate
+/// (kinetic plus potential, along the derivatives) falls by exactly 2 W, and the motor's shaft friction row books 2 W more.
 #[test]
 fn a_rotarys_bearing_friction_acts_behind_the_gearbox_spring() {
     let file = text("five-axis-table.toml");
@@ -230,11 +231,19 @@ fn a_rotarys_bearing_friction_acts_behind_the_gearbox_spring() {
         let v = (state.len() - n - 1 - m) / 2;
         let mut d = vec![0.0; state.len()];
         machine.derivatives(&state, &torque, &mut d);
-        (d[v + axis], d[v + n + m + motor])
+        let h = 1e-6;
+        let at = |sign: f64| state.iter().zip(&d).map(|(x, r)| x + sign * h * r).collect::<Vec<_>>();
+        let energy_rate = (machine.energy(&at(1.0)) - machine.energy(&at(-1.0))) / (2.0 * h);
+        let mut losses = Vec::new();
+        machine.loss_powers(&state, &torque, &mut losses);
+        (d[v + axis], d[v + n + m + motor], energy_rate, losses)
     };
-    let ((axis_off, rotor_off), (axis_on, rotor_on)) = (rates(&file), rates(&bearing));
+    let ((axis_off, rotor_off, e_off, l_off), (axis_on, rotor_on, e_on, l_on)) = (rates(&file), rates(&bearing));
     assert!((rotor_on - rotor_off).abs() < 1e-9 * (1.0 + rotor_off.abs()), "rotor {rotor_on} against {rotor_off}");
     assert!((axis_on - axis_off).abs() > 1e-6, "axis {axis_on} against {axis_off}");
+    assert!((e_on - e_off + 2.0).abs() < 1e-6, "energy rate {e_on} against {e_off}");
+    let more: f64 = l_on.iter().zip(&l_off).map(|(a, b)| a - b).sum();
+    assert!((more - 2.0).abs() < 1e-9, "losses {l_on:?} against {l_off:?}");
 }
 
 /// The T-shaped belt gantry's file with the effects `on` switched on, everything that loses energy off (damping of the belt,
