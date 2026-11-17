@@ -631,7 +631,7 @@
                     }
                   ]
                 },
-                "description": "Belt speed past it per speed of each axis (m/s per m/s). Keys: ids of machine.axis nodes.",
+                "description": "Belt speed past it per speed of each axis (m/s per m/s), positive the way a positive turn of the first pulley that feeds its section moves the belt (the sense its spin in the frame momentum takes). Keys: ids of machine.axis nodes.",
                 "type": "object"
               }
             },
