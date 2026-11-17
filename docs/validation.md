@@ -793,7 +793,7 @@ hoist 40:1 on an 80 mm drum (500 rad/m).
 | --- | --- | --- | --- |
 | T-gantry | 199.3 → 181.3 | 47.5 → 42.5 | yes |
 | T-gantry conveyor | 676.2 → 663.1 | – | yes |
-| T-gantry EXCT-30 | 543.2 → 519.5 | 40.1 → 35.0 | yes |
+| T-gantry EXCT-30 | 543.4 → 519.8 | 40.0 → 35.0 | yes |
 | Single axis | 201.1 → 126.3 (characteristic 118.5) | 20.8 → 42.5 (characteristic 38.8) | no |
 | D3 | 1460 → 1130 | 305.2 → 179.3 | yes |
 | D3 conveyor | 1428 → 1194 | – | yes |
