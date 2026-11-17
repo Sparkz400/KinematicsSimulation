@@ -208,6 +208,21 @@ impl BeamMode {
         self.mass_per_m
             * (i(a, l * l - b * b) / (4.0 * a.powi(4) * b * b) + i(b, l * l - a * a) / (4.0 * a * a * b.powi(4)))
     }
+    /// The beam's own moments of its shape at x, [mu integral of phi, mu integral of s phi] (s from the left post; the
+    /// crate's `Beam::shape_moments`): left of the load int_0^a s (c - s^2) and int_0^a s^2 (c - s^2) over 2 a^2 b
+    /// (c = L^2 - b^2), right of it the same in s' = L - s over 2 a b^2 (c = L^2 - a^2). In the middle 5 mu L / 8.
+    fn shape_moments(&self, x: f64) -> [f64; 2] {
+        let (a, l, mu) = (self.at(x), self.span, self.mass_per_m);
+        let b = l - a;
+        let (c_left, c_right) = (l * l - b * b, l * l - a * a);
+        let one = |a: f64, c: f64| c * a * a / 2.0 - a.powi(4) / 4.0;
+        let two = |a: f64, c: f64| c * a.powi(3) / 3.0 - a.powi(5) / 5.0;
+        let (left, right) = (2.0 * a * a * b, 2.0 * a * b * b);
+        [
+            mu * (one(a, c_left) / left + one(b, c_right) / right),
+            mu * (two(a, c_left) / left + (l * one(b, c_right) - two(b, c_right)) / right),
+        ]
+    }
     /// (stiffness k, modal mass M, damping c, dk/dx, dM/dx) at x with the bodies of the mass `carried` on the beam; the
     /// slopes by central differences over 1e-6 m.
     fn at_x(&self, x: f64, carried: f64) -> [f64; 5] {
@@ -3199,6 +3214,23 @@ impl Machine for ConfigMachine {
                 f.first_moment[k] += fr.mass * u * e[k];
             }
         }
+        let mut beam_done = false;
+        // The cable chains' moving runs, mass mu (L0 + q / 2) at their axis's speed over ground, as on the crates: where the
+        // first body along that axis is (its first moment mu (L0 q + q^2 / 4) along the axis, whose rate that is, and the
+        // sway's on top).
+        for i in (0..self.n()).filter(|&i| self.chain_axes[i]) {
+            let (m, e) = (self.chain.mass(q[i]).0, self.dirs[i]);
+            let moment =
+                self.chain.mass_per_m * (self.chain.length0 * q[i] + 0.25 * q[i] * q[i]) + m * (place[i] - q[i]);
+            let at = self.bodies.iter().find(|b| b.axes[i]).map_or([0.0; 3], |b| self.body_point(b, &place));
+            let l = cross(at, e.map(|e| m * ground[i] * e));
+            for k in 0..3 {
+                f.linear[k] += m * ground[i] * e[k];
+                f.angular[k] += l[k];
+                f.first_moment[k] += moment * e[k];
+            }
+            f.mass += m;
+        }
         for (b, body) in self.bodies.iter().enumerate() {
             // Where the body is (straight axes, its offset turned by the rotaries it rides on) and how fast, by the
             // Jacobian of that place: a rotary's lever arm and omega x r come with it.
@@ -3222,6 +3254,29 @@ impl Machine for ConfigMachine {
                 (0..3).for_each(|k| (r[k], w[k]) = (r[k] - x * e[k], w[k] - dx * e[k]));
             }
             sim_components::base::add_point(&mut f, self.body_mass(body), r, w);
+            // The beam's own mass moves with its mode: its point s from the left post, at r_c + (s - a) e along the beam
+            // from the carriage's point r_c (a its place on the beam), by -phi(s; x) w along the vertical, at
+            // -(phi w' + phi_x x' w) (`BeamMode::shape_moments`, the x-rates by central differences over 1e-6 m).
+            if let Some(beam) = self.beam.as_ref().filter(|beam| body.axes[beam.axis] && !body.axes[beam.vertical])
+                && !std::mem::replace(&mut beam_done, true)
+            {
+                let (x, (dev, rate)) = (q[beam.axis], self.deflection(s));
+                let moments = |x: f64| beam.shape_moments(x);
+                let [p0, p1] = moments(x);
+                let dp: Vec<f64> = (0..2).map(|i| (moments(x + 1e-6)[i] - moments(x - 1e-6)[i]) / 2e-6).collect();
+                let (along, up, a) = (self.dirs[beam.axis], self.dirs[beam.vertical], beam.at(x));
+                let (m0, m1) = (
+                    p0 * rate + dp[0] * v[beam.axis] * dev,
+                    (p1 - a * p0) * rate + (dp[1] - a * dp[0]) * v[beam.axis] * dev,
+                );
+                let lever: [f64; 3] = std::array::from_fn(|k| m0 * r[k] + m1 * along[k]);
+                let turn = cross(lever, up);
+                for k in 0..3 {
+                    f.linear[k] -= m0 * up[k];
+                    f.angular[k] -= turn[k];
+                    f.first_moment[k] -= p0 * dev * up[k];
+                }
+            }
         }
         // Each rotary's own spin, about its axis as the rotaries outside it have turned it.
         let rotary_axis = |i: usize| {

@@ -462,7 +462,7 @@ fn input_shaping_leaves_under_a_tenth_of_the_tool_swing() {
 /// `the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held` checks against the model's own equations).
 /// A shaper fixed at 34.59 Hz suits the higher pose, but at 24.34 Hz its three copies are only 24.34 / 34.59 =
 /// 0.70 half periods apart and leave cos^2(pi / 2 * 0.70) = 0.21 of the swing. The shaper that takes the frequency from
-/// the machine leaves about a tenth at both heights: 0.047 at z = 0.05 m, 0.121 at 0.15 m, where the swing in the run,
+/// the machine leaves about a tenth at both heights: 0.048 at z = 0.05 m, 0.120 at 0.15 m, where the swing in the run,
 /// with the pulleys held by the servo and not fixed as `modes` takes them, is a little faster: fixed shapers at 34.59 /
 /// 36 / 38 Hz leave 0.121 / 0.111 / 0.128 of it, none less than 0.11 (it was 0.102 before the belt's runs had their
 /// mass); 0.13 is allowed.

@@ -207,9 +207,10 @@ struct Beam {
 /// c = 2 zeta sqrt(k (m_c + m_z + M)), so that zeta is the mode's damping ratio with the carriage on the beam. The carriage, the Z axis and the payload move with w (mass m_c + m_z + M; the Z axis's own z is
 /// relative to the carriage, so its speed over ground is z' - w'), so a Z move's acceleration drives it, and the carriage's
 /// weight, riding along the beam, drives it as k(x) changes (V = 1/2 k(x) w^2 - m g w, a force on x of -1/2 k' w^2).
-/// The Lagrangian keeps T = 1/2 M(x) w'^2 and drops what the shape's change with x adds (mu integral of (w phi_x x')^2:
-/// second order in the deflection, nanometres at the shipped values); the belt's own vertical runs' mass (about 0.5 kg)
-/// is not on w either.
+/// The Lagrangian keeps T = 1/2 M(x) w'^2 and drops what the shape's change with x adds: the coupling 1/2 M' w x' w'
+/// (w / L = 5e-5 of the kept terms at the 59 um sag) and 1/2 mu integral of (phi_x w x')^2 (1e-9). The belt is not on w:
+/// its vertical runs, mu (4 s + 2 sz) = 0.16 kg, and a third of its tilting horizontal runs, 0.09 kg, would lower the mode
+/// by 0.9 % (59.32 to 58.77 Hz in the middle), well inside the estimates of the beam's mass and stiffness.
 struct BeamMode {
     mass_per_m: f64,
     damping_ratio: f64,
@@ -233,6 +234,24 @@ impl Beam {
         let b = l - a;
         let i = |a: f64, c: f64| c * c * a.powi(3) / 3.0 - 2.0 * c * a.powi(5) / 5.0 + a.powi(7) / 7.0;
         mu * (i(a, l * l - b * b) / (4.0 * a.powi(4) * b * b) + i(b, l * l - a * a) / (4.0 * a * a * b.powi(4)))
+    }
+    /// The beam's own moments of its shape at x for the mass per metre `mu`, [mu integral of phi, mu integral of s phi]
+    /// (s from the left post): its vertical momentum is the first times -w', and its points s along it move by -phi w.
+    /// Left of the load int_0^a s (c - s^2) = c a^2 / 2 - a^4 / 4 and int_0^a s^2 (c - s^2) = c a^3 / 3 - a^5 / 5 over
+    /// 2 a^2 b (c = L^2 - b^2); right of it the same in s' = L - s over 2 a b^2 (c = L^2 - a^2). In the middle 5 mu L / 8.
+    fn shape_moments(&self, mu: f64, x: f64) -> [f64; 2] {
+        let (a, l) = (self.at(x), self.span);
+        let b = l - a;
+        let (c_left, c_right) = (l * l - b * b, l * l - a * a);
+        let (one, two) = (
+            |a: f64, c: f64| c * a * a / 2.0 - a.powi(4) / 4.0,
+            |a: f64, c: f64| c * a.powi(3) / 3.0 - a.powi(5) / 5.0,
+        );
+        let (left, right) = (2.0 * a * a * b, 2.0 * a * b * b);
+        [
+            mu * (one(a, c_left) / left + one(b, c_right) / right),
+            mu * (two(a, c_left) / left + (l * one(b, c_right) - two(b, c_right)) / right),
+        ]
     }
 }
 
@@ -1562,13 +1581,27 @@ impl Machine for TGantry {
             (s[0], s[1], s[2], s[3], 0.0, 0.0, 0.0, 0.0, (self.j_pulley + ratio * self.j_rotor) * pulleys)
         };
         // With effects.beam_vertical_mode the carriage hangs w lower and the Z axis with it (z is relative to the
-        // carriage); the beam's own modal mass is not counted (it belongs to the frame).
+        // carriage).
         let (w, vw) = if self.vertical().is_some() { (s[W], s[V + W]) } else { (0.0, 0.0) };
+        // The beam's own mass moves with its mode too: its point s from the left post, at s - start + q along the beam
+        // and at the carriage's height, by -phi(s; x) w, at -(phi w' + phi_x x' w) (`Beam::shape_moments`, the x-rates by
+        // central differences): vertical momentum -(p0 w' + p0' x' w), about y (p1 + (q - start) p0) w' and the same
+        // of the x-rates times x' w; first moment -p0 w.
+        let (beam_vertical, beam_angular, beam_moment) = match self.vertical() {
+            Some((beam, mode)) => {
+                let moments = |x: f64| beam.shape_moments(mode.mass_per_m, x);
+                let ([p0, p1], arm) = (moments(x), q - beam.start);
+                let (dp0, dp1) = (slope(|x| moments(x)[0], x), slope(|x| moments(x)[1], x));
+                (-(p0 * vw + dp0 * vx * w), (p1 + arm * p0) * vw + (dp1 + arm * dp0) * vx * w, -p0 * w)
+            }
+            None => (0.0, 0.0, 0.0),
+        };
         let chain = self.chain.mass(x).0;
         let chain_moment = self.chain.mass_per_m * (self.chain.length0 * x + 0.25 * x * x);
         let (m_carriage, m_z) = (self.m_carriage + chain, self.m_z());
         let frame = self.frame.as_ref().map_or(0.0, |f| f.mass);
-        let carriage = ([x + q, 0.0, self.z_com_drop - w], [m_carriage * (vx + vq), 0.0, -m_carriage * vw]);
+        // The chain lies on the beam and does not ride on the beam's mode (it is not on w in `elastic_mass`).
+        let carriage = ([x + q, 0.0, self.z_com_drop - w], [m_carriage * (vx + vq), 0.0, -self.m_carriage * vw]);
         let z_axis = ([x + q + u, 0.0, z - w], [m_z * (vx + vq + vu), 0.0, m_z * (vz - vw)]);
         let (lc, lz) = (cross(carriage.0, carriage.1), cross(z_axis.0, z_axis.1));
         let process = self.process_force();
@@ -1582,15 +1615,17 @@ impl Machine for TGantry {
             linear: [
                 carriage.1[0] + z_axis.1[0] + frame * vq + belt_cross * vx + belt * vq,
                 0.0,
-                carriage.1[2] + z_axis.1[2] + belt_cross * vz,
+                carriage.1[2] + z_axis.1[2] + belt_cross * vz + beam_vertical,
             ],
             angular: [
                 0.0,
                 lc[1]
+                    + chain * (vx + vq) * w
                     + lz[1]
                     + spin
                     + self.idler_angular(vx)
-                    + self.belt_angular(x + q, self.z_com_drop, z, [vx, vz, vq]),
+                    + self.belt_angular(x + q, self.z_com_drop, z, [vx, vz, vq])
+                    + beam_angular,
                 0.0,
             ],
             mass: m_carriage + m_z + belt,
@@ -1604,11 +1639,12 @@ impl Machine for TGantry {
                     + belt_cross * x
                     + belt * q,
                 0.0,
-                m_carriage * (self.z_com_drop - w) + m_z * (z - w) + belt_cross * z,
+                m_carriage * self.z_com_drop - self.m_carriage * w + m_z * (z - w) + belt_cross * z + beam_moment,
             ],
             gravity: [0.0, 0.0, -self.g],
             external: [process[0], 0.0, process[1]],
-            external_at: [tool[0], 0.0, tool[1]],
+            // The tool tip, z_tool_drop below the carriage where the Z axis's centre of mass (at z here) is z_com_drop below it.
+            external_at: [tool[0], 0.0, tool[1] - (self.z_tool_drop - self.z_com_drop)],
         })
     }
     fn axes(&self) -> &[AxisInfo] {

@@ -339,3 +339,51 @@ fn the_process_force_works_on_the_tool_it_moves() {
         }
     }
 }
+
+/// The beam's own mass in the frame momentum (effects.beam_vertical_mode): its moments of the shape (`shape_moments`)
+/// against a sum over 200 000 pieces of phi (5 mu L / 8 = 2.84375 kg in the middle), and the frame momentum against the
+/// rate of its first moment along the flow (central difference over 1e-6 s) at a moving state with the beam ringing: the
+/// beam's -(p0 w' + p0' x' w) is in the vertical momentum, which with the carried masses' alone would be 2.84 w' short.
+#[test]
+fn the_beams_own_mass_moves_in_the_frame_momentum() {
+    let m = machine(lossless_config(), &["effects.beam_vertical_mode = true"]);
+    let (beam, mode) = m.vertical().unwrap();
+    let (mu, l) = (mode.mass_per_m, beam.span);
+    assert!((beam.shape_moments(mu, 0.5)[0] - 5.0 / 8.0 * mu * l).abs() < 1e-12);
+    assert!((5.0 / 8.0 * 3.5 * 1.3 - 2.84375_f64).abs() < 1e-12);
+    for x in [0.2, 0.5, 0.9] {
+        let (a, pieces) = (0.15 + x, 200_000);
+        let b = l - a;
+        let (mut p0, mut p1) = (0.0, 0.0);
+        for i in 0..pieces {
+            let s = (i as f64 + 0.5) / pieces as f64 * l;
+            let phi = if s < a {
+                s * (l * l - b * b - s * s) / (2.0 * a * a * b)
+            } else {
+                (l - s) * (l * l - a * a - (l - s) * (l - s)) / (2.0 * a * b * b)
+            };
+            p0 += mu * phi * l / pieces as f64;
+            p1 += mu * s * phi * l / pieces as f64;
+        }
+        let got = beam.shape_moments(mu, x);
+        assert!(
+            (got[0] - p0).abs() < 1e-6 * p0 && (got[1] - p1).abs() < 1e-6 * p1,
+            "x = {x}: {got:?} against {p0} {p1}"
+        );
+    }
+    let (mut s, mut hold) = (Vec::new(), [0.0; 2]);
+    m.equilibrium(&[0.3, 0.2], &mut s, &mut hold);
+    m.set_tool_velocity(&mut s, &[0.6, -0.4]);
+    s[W] += 2e-5;
+    s[V + W] = 0.03;
+    let mut rate = vec![0.0; s.len()];
+    m.derivatives(&s, &[hold[0] + 0.3, hold[1] - 0.1], &mut rate);
+    let moment = |h: f64| {
+        m.frame_momentum(&s.iter().zip(&rate).map(|(x, r)| x + h * r).collect::<Vec<_>>()).unwrap().first_moment
+    };
+    let (ahead, behind, f) = (moment(1e-6), moment(-1e-6), m.frame_momentum(&s).unwrap());
+    for k in [0, 2] {
+        let d = (ahead[k] - behind[k]) / 2e-6;
+        assert!((d - f.linear[k]).abs() < 1e-7 * (1.0 + f.linear[k].abs()), "{k}: {d} against {}", f.linear[k]);
+    }
+}

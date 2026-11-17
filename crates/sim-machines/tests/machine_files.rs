@@ -173,6 +173,11 @@ fn same_machine(id: &str, name: &str, changes: &[&str], rises: &[f64], what: &st
         b.derivatives(&sb, &torque, &mut db);
         assert_close(&format!("{what}: derivatives"), &da, &crate_state(&db), 1e-9);
         assert!(close(a.energy(&sa), b.energy(&sb), 1e-9), "{what}: energy");
+        // The momentum over ground, which does not depend on where either takes its origin: the bodies, the frame's
+        // sway, the belt's runs and (with the beam's mode) the beam's own mass.
+        if let (Some(fa), Some(fb)) = (a.frame_momentum(&sa), b.frame_momentum(&sb)) {
+            assert_close(&format!("{what}: linear momentum"), &fa.linear, &fb.linear, 1e-9);
+        }
 
         let acc: Vec<f64> = [3.0, -2.0][..n].to_vec();
         let (mut fa, mut fb) = (vec![0.0; m], vec![0.0; m]);
