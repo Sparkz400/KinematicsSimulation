@@ -6,14 +6,15 @@ use sim_core::{Config, MachineEntry};
 use sim_machines::MACHINES;
 
 /// The switch between a machine's elastic model and its rigid reference model: belt stretch on a belt machine, the
-/// gearboxes' elasticity on one of arms, the web's stretch on a machine that winds a web.
+/// gearboxes' elasticity on one of arms, the web's stretch on a machine that winds a web, the rope's on the crane (whose
+/// drives' elasticity is a switch of its own, off as shipped).
 fn model_switch(cfg: &Config) -> &'static str {
     [
         "effects.belt_stretch",
+        "effects.rope_stretch",
         "effects.joint_elasticity",
         "effects.cable_stretch",
         "effects.web_stretch",
-        "effects.rope_stretch",
     ]
     .into_iter()
     .find(|key| cfg.bool(key).is_ok())

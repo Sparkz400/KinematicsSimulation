@@ -281,26 +281,23 @@ fn a_vendor_export_is_fitted_through_its_mapping_file() {
     let imported =
         sim_components::import::import(&trace, &sim_components::import::Mapping::parse(&map).unwrap()).unwrap().trace;
     let own = fit_rigid(entry, &resolved, &imported).unwrap()[0].clone().unwrap();
-    assert_eq!(rows.len(), 4, "{rows:?}");
-    for (q, row) in rows.iter().enumerate() {
-        assert_eq!(
-            (row.0.as_str(), row.2),
-            (
-                ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"][q],
-                Some(own.fitted[q])
-            )
-        );
-    }
+    // The rigid values, then the friction beyond its sliding level the trace shows, as `sim-cli fit` writes them.
+    let rigid = ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"];
+    let expected: Vec<(&str, Option<f64>)> = (rigid.iter().zip(own.fitted).map(|(q, v)| (*q, Some(v))))
+        .chain(own.details.iter().map(|d| (d.quantity, Some(d.fitted))))
+        .collect();
+    assert!(own.payload_steps.is_empty() && !own.details.is_empty(), "{own:?}");
+    assert_eq!(rows.iter().map(|r| (r.0.as_str(), r.2)).collect::<Vec<_>>(), expected);
     // The run had no payload: the fitted mass is the config's moved mass within the fit's error.
     assert!((own.fitted[0] - own.config[0]).abs() < 3.0 * own.error[0].max(1e-3 * own.config[0]), "{own:?}");
     match fit_move_stiffness(entry, &resolved, &imported, BELT_STIFFNESS_KEY) {
         Ok(fit) => {
             let rows = fitted_rows(&handle(6, &request(" stiffness")).unwrap());
             assert_eq!(
-                rows[4..7].iter().map(|r| r.2).collect::<Vec<_>>(),
+                rows[expected.len()..expected.len() + 3].iter().map(|r| r.2).collect::<Vec<_>>(),
                 [Some(fit.factor), Some(fit.ringing), Some(fit.residual)]
             );
-            assert_eq!(rows[4].1, BELT_STIFFNESS_KEY);
+            assert_eq!(rows[expected.len()].1, BELT_STIFFNESS_KEY);
         }
         Err(e) => assert!(handle(6, &request(" stiffness")).unwrap_err().contains(&e.detail), "{}", e.detail),
     }

@@ -1443,12 +1443,13 @@ pub fn fit_sweep(
     let ((ka, fa), (kb, fb)) = (points[points.len() - 2], points[points.len() - 1]);
     let slope = (fb - fa) / (kb - ka);
     let k = if (target - fa).abs() < 1e-5 { ka } else { kb + (target - fb) / slope };
-    // The exponent there, for the error: the chord from the solution to the nearest swept point at least half the
-    // probe's step away (two points closer than that, as the secant's last ones are, give the dip's resolution, not
-    // its slope: 0.04 for 0.41 at 2.5 times on the gantry).
+    // The exponent there, for the error: the chord from the solution to the nearest swept point at least the probe's
+    // step away (two points closer than that, as the secant's last ones are, give the dip's resolution, not its slope:
+    // 0.04 for 0.41 at 2.5 times on the gantry; at half the step, 1.8 % in frequency against the sweep's 3.9 % between
+    // points, still 0.23 there where the modes move as k^0.37).
     let exponent = points
         .iter()
-        .filter(|(kp, _)| (kp - k).abs() >= 0.5 * STIFFNESS_PROBE.ln())
+        .filter(|(kp, _)| (kp - k).abs() >= STIFFNESS_PROBE.ln())
         .min_by(|a, b| (a.0 - k).abs().total_cmp(&(b.0 - k).abs()))
         .map_or(slope, |(kp, fp)| (target - fp) / (k - kp));
     Ok(Some(SweepFit { config, fitted, factor: k.exp(), exponent }))

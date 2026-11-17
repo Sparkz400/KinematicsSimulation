@@ -554,11 +554,20 @@ impl<M: Mechanism> JointMachine<M> {
         if !self.elastic {
             return 1e-4;
         }
-        let mut poses: Vec<Vec<f64>> = (0..1usize << n)
-            .map(|c| self.axes.iter().enumerate().map(|(i, a)| if c >> i & 1 == 1 { a.max } else { a.min }).collect())
-            .collect();
-        poses.push(self.axes.iter().map(|a| 0.5 * (a.min + a.max)).collect());
+        // Five places along each axis, every combination: the sag is largest where a joint's weight arm is (where the
+        // links lie level), which a corner of the box need not be (the arm's second joint at its lower end with the
+        // first one between its ends sags 3.71 mrad, the corners and centre gave 2.77).
+        const LEVELS: usize = 5;
         let m = self.axes.len();
+        let poses: Vec<Vec<f64>> = (0..LEVELS.pow(m as u32))
+            .map(|c| {
+                (self.axes.iter().enumerate())
+                    .map(|(i, a)| {
+                        a.min + (a.max - a.min) * (c / LEVELS.pow(i as u32) % LEVELS) as f64 / (LEVELS - 1) as f64
+                    })
+                    .collect()
+            })
+            .collect();
         let (mut q, mut tool, mut sagged) = (vec![0.0; n], vec![0.0; m], vec![0.0; m]);
         let mut most = 0f64;
         for pose in poses {

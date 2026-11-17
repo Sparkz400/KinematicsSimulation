@@ -299,7 +299,9 @@ fn parts_named_in_a_config_behave_like_their_numbers() {
         named.set_text("parts.gearbox = \"NRK070-04-5\"").unwrap();
         let mut numbers = entry.config();
         apply_gearbox(&mut numbers, "NRK070-04-5").unwrap();
-        apply_motor(&mut numbers, "1FK2104-4AK", "400v").unwrap();
+        // At the supply the config names (the winder's S120: no S210 S1 curve), 400 V where it names none.
+        let supply = sim_components::catalog::Parts::of(&named).unwrap().supply;
+        apply_motor(&mut numbers, "1FK2104-4AK", supply).unwrap();
         let resolved = resolve(entry, &named).unwrap();
         let (gain, own) =
             (resolved.f64("drive.velocity_kp_nm_s_rad").unwrap(), numbers.f64("drive.velocity_kp_nm_s_rad").unwrap());
