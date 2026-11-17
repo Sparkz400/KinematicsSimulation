@@ -314,6 +314,15 @@ pub trait Mechanism: Send {
         Vec::new()
     }
     fn signals(&self, _q: &[f64], _qd: &[f64], _qdd: &[f64], _force: &[f64], _out: &mut Vec<f64>) {}
+    /// Whether a signal needs the joints' jerk q''' (`signals_with_jerk`): the chain works it out only then, as it costs
+    /// three more evaluations of the machine's derivatives.
+    fn reads_jerk(&self) -> bool {
+        false
+    }
+    /// `signals` with the joints' jerk as well, for a mechanism that `reads_jerk`; zeros where it does not.
+    fn signals_with_jerk(&self, q: &[f64], qd: &[f64], qdd: &[f64], _qddd: &[f64], force: &[f64], out: &mut Vec<f64>) {
+        self.signals(q, qd, qdd, force, out);
+    }
     fn rating_checks(&self) -> Vec<RatingCheck> {
         Vec::new()
     }
@@ -809,6 +818,20 @@ impl<M: Mechanism> JointMachine<M> {
             let (acc, _, out) = self.rigid_solve(s, torque);
             (acc, out)
         }
+    }
+
+    /// The joints' jerk (passive ones after the driven ones) at the motor torque held: the rate of `motion`'s
+    /// accelerations along the state's rate, a central difference over 1 us. Exact with elastic joints, whose
+    /// accelerations follow from the state alone; with rigid ones it leaves out the drive's torque rate, which the
+    /// machine does not know.
+    fn joint_jerk(&self, s: &[f64], torque: &[f64]) -> Vec<f64> {
+        let (mut rate, h) = (vec![0.0; s.len()], 1e-6);
+        self.derivatives(s, torque, &mut rate);
+        let at = |sign: f64| {
+            let moved: Vec<f64> = s.iter().zip(&rate).map(|(x, r)| x + sign * h * r).collect();
+            self.motion(&moved, torque).0
+        };
+        at(1.0).iter().zip(at(-1.0)).map(|(up, down)| (up - down) / (2.0 * h)).collect()
     }
 
     fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
@@ -1529,7 +1552,8 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         }
         let at = self.passive_at();
         out.extend(&s[at..at + self.passive.len()]);
-        self.mechanism.signals(q, qd, &acc, &force, out);
+        let jerk = if self.mechanism.reads_jerk() { self.joint_jerk(s, torque) } else { vec![0.0; acc.len()] };
+        self.mechanism.signals_with_jerk(q, qd, &acc, &jerk, &force, out);
         out.extend_from_slice(self.flex_state(s).0);
     }
     fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {

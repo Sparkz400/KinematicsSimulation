@@ -413,7 +413,16 @@ impl Mechanism for TogglePress {
         .map(|(id, owner, quantity, unit)| SignalInfo::new(id, owner, quantity, unit))
         .collect()
     }
-    fn signals(&self, q: &[f64], qd: &[f64], qdd: &[f64], _force: &[f64], out: &mut Vec<f64>) {
+    /// The signals along a crank motion without jerk.
+    fn signals(&self, q: &[f64], qd: &[f64], qdd: &[f64], force: &[f64], out: &mut Vec<f64>) {
+        self.signals_with_jerk(q, qd, qdd, &[0.0], force, out);
+    }
+    /// Where the press force fades as the ram rises, the frame's stretch follows the crank's speed, so the ram's
+    /// acceleration follows the crank's jerk.
+    fn reads_jerk(&self) -> bool {
+        self.process.is_some() && self.frame.is_some()
+    }
+    fn signals_with_jerk(&self, q: &[f64], qd: &[f64], qdd: &[f64], qddd: &[f64], _force: &[f64], out: &mut Vec<f64>) {
         let p = self.pose(q[0]);
         let (force, stretch) = self.press_force(q[0], qd[0]);
         let capacity = self.capacity(q[0]);
@@ -423,13 +432,14 @@ impl Mechanism for TogglePress {
         let (q, w, a) = (q[0], qd[0], qdd[0]);
         let stretch_rate =
             (at(q + h, w) - at(q - h, w)) / (2.0 * h) * w + (at(q, w + h) - at(q, w - h)) / (2.0 * h) * a;
-        // Its second derivative s_qq w^2 + 2 s_qw w a + s_ww a^2 + s_q a (a wider step: these divide by its square). Where
-        // the force fades as the ram rises it also follows the crank's jerk (s_w times it), which no signal knows.
+        // Its second derivative s_qq w^2 + 2 s_qw w a + s_ww a^2 + s_q a + s_w j (a wider step for the second
+        // derivatives: these divide by its square); s_w is not zero where the force fades as the ram rises.
         let (k, s) = (1e-5, at(q, w));
         let stretch_acc = (at(q + k, w) - 2.0 * s + at(q - k, w)) / (k * k) * w * w
             + (at(q + k, w + k) - at(q + k, w - k) - at(q - k, w + k) + at(q - k, w - k)) / (2.0 * k * k) * w * a
             + (at(q, w + k) - 2.0 * s + at(q, w - k)) / (k * k) * a * a
-            + (at(q + h, w) - at(q - h, w)) / (2.0 * h) * a;
+            + (at(q + h, w) - at(q - h, w)) / (2.0 * h) * a
+            + (at(q, w + h) - at(q, w - h)) / (2.0 * h) * qddd[0];
         out.extend([
             self.a + self.b - p.x[0] + stretch,
             // The height is a + b - x + stretch, so its derivatives carry the minus sign of x (x is positive down).
