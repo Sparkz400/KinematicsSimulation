@@ -60,7 +60,8 @@ fn the_beams_vertical_mode_is_where_the_hand_value_has_it() {
         ],
     );
     let modes = m.modal(&[0.5, 0.25]);
-    let by_hand = (48.0 * 8.4e4 / 1.3f64.powi(3) / (4.0 + 7.0 + 17.0 / 35.0 * 3.5 * 1.3)).sqrt() / std::f64::consts::TAU;
+    let by_hand =
+        (48.0 * 8.4e4 / 1.3f64.powi(3) / (4.0 + 7.0 + 17.0 / 35.0 * 3.5 * 1.3)).sqrt() / std::f64::consts::TAU;
     assert!((by_hand - 59.32).abs() < 0.01, "{by_hand}");
     let (mode, shape) = &modes[0];
     assert!((mode.hz - by_hand).abs() < 1e-3 * by_hand, "{} Hz against {by_hand} Hz", mode.hz);
@@ -72,8 +73,10 @@ fn the_beams_vertical_mode_is_where_the_hand_value_has_it() {
 
 /// The mass matrix of the beam's mode: w carries the carriage, the Z axis with its payload (4 + 7 kg) and the modal mass
 /// 17 mu L / 35 = 2.21 kg, and the Z axis's z is relative to the carriage, so its speed over ground z' - w' puts -m_z = -7 kg
-/// between z and w. With the frame and the lean off the coordinates are (x, z, w). A push on Z then moves the beam the
-/// other way, by about 7 / 13.21 of the Z axis's own acceleration.
+/// between z and w. With the frame and the lean off the coordinates are (x, z, w). A push of the belt on Z (both pulleys
+/// turned against each other by 1e-5 rad: section 2 tighter, 1 and 3 looser alike, no force along X) lifts the Z axis and
+/// pushes the carriage, and the beam with it, down (w grows): the belt acts between the carriage and the Z axis, so w
+/// gets no force of its own, M_wz az + M_ww aw = 0, aw / az = 7 / 13.21 = 0.5299.
 #[test]
 fn the_z_axis_acceleration_drives_the_beam_through_its_mass() {
     let m = machine(
@@ -88,17 +91,17 @@ fn the_z_axis_acceleration_drives_the_beam_through_its_mass() {
     m.equilibrium(&[0.5, 0.25], &mut state, &mut torque);
     let mut rest = vec![0.0; state.len()];
     m.derivatives(&state, &torque, &mut rest);
-    assert!(rest[V + W].abs() < 1e-6, "at rest the beam accelerates at {} m/s^2", rest[V + W]);
-    torque[0] += 0.05;
-    torque[1] -= 0.05;
+    assert!(rest[V + W].abs() < 1e-9, "at rest the beam accelerates at {} m/s^2", rest[V + W]);
+    let mut pushed_state = state.clone();
+    pushed_state[A] += 1e-5;
+    pushed_state[A + 1] -= 1e-5;
     let mut pushed = vec![0.0; state.len()];
-    m.derivatives(&state, &torque, &mut pushed);
-    let (az, aw) = (pushed[V + Z] - rest[V + Z], pushed[V + W] - rest[V + W]);
-    assert!(az > 0.0 && aw < 0.0, "{az} {aw}");
-    // The two accelerations share the push: M_zz az + M_zw aw = F, M_zw az + M_ww aw = 0 (the belt's own spring does not
-    // change in that instant), so aw / az = -M_zw / M_ww = 7 / 13.21.
-    let ratio = -aw / az;
-    assert!((ratio - 7.0 / 13.21).abs() < 0.02, "the beam moves {ratio} of the Z axis's push against it, by hand 7 / 13.21");
+    m.derivatives(&pushed_state, &torque, &mut pushed);
+    let (ax, az, aw) = (pushed[V + X] - rest[V + X], pushed[V + Z] - rest[V + Z], pushed[V + W] - rest[V + W]);
+    assert!(az > 0.0 && aw > 0.0, "{az} {aw}");
+    assert!(ax.abs() < 1e-3 * az, "{ax}");
+    let ratio = aw / az;
+    assert!((ratio - 7.0 / 13.21).abs() < 1e-9, "the beam moves {ratio} of the Z axis's push, by hand 7 / 13.21");
 }
 
 /// The beam at rest at the quasi-static sag: with effects.beam_vertical_mode the state's w is the sag m g a^2 b^2 / (3 E I L)
@@ -124,12 +127,17 @@ fn the_vertical_mode_rests_at_the_quasi_static_sag() {
         assert!((pos[1] - pose[1]).abs() < 1e-12, "the tool stands at {} m", pos[1]);
         let mut rates = vec![0.0; state.len()];
         m.derivatives(&state, &torque, &mut rates);
-        assert!(rates[V + Z].abs() < 1e-3 && rates[V + W].abs() < 1e-6, "{} {}", rates[V + Z], rates[V + W]);
+        // Nothing pushes on w: its row of M a, M_wz z'' + M_ww w'' (the Z axis's small residual z'' carries w'' along
+        // through -m_z), vanishes.
+        let (at, mass) = (m.coordinates(), m.elastic_mass(state[X], state[Z]));
+        let w = at.iter().position(|&c| c == W).unwrap();
+        let on_w: f64 = at.iter().enumerate().map(|(j, &c)| mass[w * at.len() + j] * rates[V + c]).sum();
+        assert!(rates[V + Z].abs() < 1e-3 && on_w.abs() < 1e-9 * 11.0 * G, "{} {on_w}", rates[V + Z]);
     }
 }
 
 /// The beam mode's damping row: with the mode lightly damped (zeta = 0.05) and moving at w' = 0.05 m/s, the energy rises by
-/// the motors' power less what `beam_loss` books, c w'^2 with c = 2 zeta sqrt(k M) (the other losses are off).
+/// the motors' power less what `beam_loss` books, c w'^2 with c = 2 zeta sqrt(k (m_c + m_z + M)) (the other losses are off).
 #[test]
 fn the_beams_damping_is_booked_as_its_loss() {
     let m = machine(lossless_config(), &["effects.beam_vertical_mode = true", "beam.damping_ratio = 0.05"]);
@@ -146,7 +154,8 @@ fn the_beams_damping_is_booked_as_its_loss() {
     m.motor_state(&s, &mut angle, &mut speed);
     let power = torque[0] * speed[0] + torque[1] * speed[1];
     let [k, mass, c, ..] = m.beam_mode(0.3);
-    assert!((c - 2.0 * 0.05 * (k * mass).sqrt()).abs() < 1e-9 * c);
+    // The mode's own damping ratio with the carriage and the Z axis (4 + 7 kg) on the beam.
+    assert!((c - 2.0 * 0.05 * (k * (mass + 11.0)).sqrt()).abs() < 1e-9 * c);
     let loss = m.beam_loss(&s);
     assert!((loss - c * 0.05 * 0.05).abs() < 1e-12 && loss > 0.1, "{loss} W");
     assert!(
@@ -206,14 +215,17 @@ fn the_modes_with_the_beam_follow_the_linearised_derivatives() {
     }
 }
 
-/// The belt runs' geometric stiffness. The clamp (s + z above the carriage's idlers) and the Z-bottom idler (s + sz - z
-/// below them) stand out sideways by k u g with the lean u, g = 1 / lateral + h d / tilt at the signed distance d below the
-/// carriage (the guide's tilt only, no bending); a run under tension T and of length l holds the end back with T delta / l,
-/// so the belt's energy has K_uu = (T1 + T3) (k g_clamp)^2 / (s + z) + 2 T2 (k g_bottom)^2 / (s + sz - z) on top of the
-/// lean's spring k and the weight's pendulum stiffness. By hand at z = 0.05 m (s = 0.15, sz = 0.5, h = 0.25 m, lateral
-/// 2e7, tilt 1.2e4, d = -0.2 and 0.6): k = 1 / (5e-8 + 0.0625 / 1.2e4) = 190.2e3 N/m, k g_clamp = -0.7805, k g_bottom =
-/// 2.3796, with the tensions of the rest state (section 2 higher by m_z g / 2). The energy's second derivative in u over
-/// 1e-4 m.
+/// The belt runs' geometric stiffness: the Z axis's vertical runs, from the carriage's idlers (at the carriage, where the
+/// guide tilts) to the clamp, d = -(s + z) below the carriage, and to the Z-bottom idler, d = s + sz - z, get longer as the
+/// Z axis leans, and their tensions hold it back. Brute force: under the spring's force F = k u the guide gives sideways by
+/// F / lateral and tilts by theta = F h / tilt (no bending), so the run's end is at (F / lateral + d sin theta, d cos theta)
+/// from the idler and the run sum T_i (hypot - |d|) longer; its second difference over u = +-1e-4 m is K_uu's share. By hand:
+/// a tilt alone turns the end about the idler and leaves the run's length; what is left is the give and its product with the
+/// tilt, c = k^2 (1 / (lateral^2 |d|) + 2 sign(d) h / (lateral tilt)) per 1/2 u^2. At z = 0.05 m (s = 0.15, sz = 0.5,
+/// h = 0.25 m, lateral 2e7, tilt 1.2e4): k = 1 / (5e-8 + 0.0625 / 1.2e4) = 190 174 N/m, c_clamp = -0.074894 and c_bottom =
+/// 0.075497 m^-1 per run, about 5 N/m in all with the rest tensions (section 2 higher by m_z g / 2): 3e-5 of the lean's
+/// spring. The energy's second derivative in u over 1e-4 m is the spring, the weight's pendulum stiffness k^2 m_z g h^3 /
+/// tilt^2 and that.
 #[test]
 fn the_belt_runs_hold_the_lean_back_with_t_over_l() {
     let m = machine(lossless_config(), &["effects.frame_compliance = false", "effects.z_axis_bending = false"]);
@@ -221,30 +233,40 @@ fn the_belt_runs_hold_the_lean_back_with_t_over_l() {
     let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
     m.equilibrium(&[0.5, z], &mut state, &mut torque);
     let t = m.sections(&state).map(|f| f.tension);
-    let (lateral, tilt, s, sz, h) = (2.0e7, 1.2e4, 0.15, 0.5, 0.3 - z);
+    let (lateral, tilt, s, sz, h) = (2.0e7_f64, 1.2e4_f64, 0.15, 0.5, 0.3 - z);
     let k = 1.0 / (1.0 / lateral + h * h / tilt);
-    let (g_clamp, g_bottom) = (k * (1.0 / lateral - h * (s + z) / tilt), k * (1.0 / lateral + h * (s + sz - z) / tilt));
-    assert!((g_clamp + 0.7805).abs() < 1e-3 && (g_bottom - 2.3796).abs() < 1e-3, "{g_clamp} {g_bottom}");
-    let by_hand = (t[0] + t[2]) * g_clamp * g_clamp / (s + z) + 2.0 * t[1] * g_bottom * g_bottom / (s + sz - z);
-    assert!(by_hand > 1e3, "{by_hand} N/m");
+    let c = |d: f64| k * k * (1.0 / (lateral * lateral * d.abs()) + 2.0 * d.signum() * h / (lateral * tilt));
+    let (clamp, bottom) = (-(s + z), s + sz - z);
+    assert!((k - 190_174.3).abs() < 0.1 && (c(clamp) + 0.074_894).abs() < 1e-6 && (c(bottom) - 0.075_497).abs() < 1e-6);
+    let longer = |d: f64, u: f64| {
+        let (f, theta) = (k * u, k * u * h / tilt);
+        (f / lateral + d * theta.sin()).hypot(d * theta.cos()) - d.abs()
+    };
+    let step = 1e-4;
+    let brute: f64 = [(clamp, t[0] + t[2]), (bottom, 2.0 * t[1])]
+        .iter()
+        .map(|&(d, tension)| tension * (longer(d, step) + longer(d, -step)) / (step * step))
+        .sum();
+    let by_hand = (t[0] + t[2]) * c(clamp) + 2.0 * t[1] * c(bottom);
+    assert!((brute - by_hand).abs() < 1e-6 * by_hand.abs() && (by_hand - 5.0).abs() < 1.0, "{brute} {by_hand}");
+    let runs = m.lean_runs(z);
+    let from_runs = (0..3).map(|i| t[i] * runs[i]).sum::<f64>();
+    assert!((from_runs - by_hand).abs() < 1e-9 * by_hand.abs(), "{from_runs} against {by_hand}");
     let energy = |u: f64| {
         let mut at = state.clone();
         at[U] = u;
         m.energy(&at)
     };
-    let step = 1e-4;
     let second = (energy(step) + energy(-step) - 2.0 * energy(0.0)) / (step * step);
-    let geometric = second - k - m.lean_weight_stiffness(z);
-    assert!((geometric - by_hand).abs() < 1e-3 * by_hand, "{geometric} N/m against {by_hand} N/m");
-    let runs = m.lean_runs(z);
-    let from_runs = (0..3).map(|i| t[i] * runs[i]).sum::<f64>();
-    assert!((from_runs - by_hand).abs() < 1e-9 * by_hand, "{from_runs} against {by_hand}");
+    let weight = k * k * 7.0 * G * h.powi(3) / (tilt * tilt);
+    let geometric = second - k - weight;
+    assert!((geometric - by_hand).abs() < 1e-2, "{geometric} N/m against {by_hand} N/m");
 }
 
 /// The process force's vertical part on the leaning axis. The tip, d = z_tool_drop - z below the carriage, rises as the Z axis
 /// leans under the spring force k u at its centre of mass (the guide's tilt only: the whole bar turns by theta = k u h /
-/// tilt): by theta^2 d / 2, which is `lean_rise`'s 1/2 (h / tilt)^2 d per F^2. At z = 0.25 m (h = 0.05, d = 0.45, k = 1 / (5e-8
-/// + 0.0025 / 1.2e4)) and u = 1 mm: theta = 0.01613, rise 5.85e-5 m. `tool_state` has it in the tool's height, and the
+/// tilt): by theta^2 d / 2, which is `lean_rise`'s 1/2 (h / tilt)^2 d per F^2. At z = 0.25 m (h = 0.05, d = 0.45,
+/// k = 1 / (5e-8 + 0.0025 / 1.2e4) = 3.871e6 N/m) and u = 1 mm: theta = 0.01613, rise 5.85e-5 m. `tool_state` has it in the tool's height, and the
 /// force's work on it is in the budget (`the_process_force_works_on_the_tool_it_moves`).
 #[test]
 fn the_leaning_tip_rises_by_half_theta_squared_times_its_distance() {

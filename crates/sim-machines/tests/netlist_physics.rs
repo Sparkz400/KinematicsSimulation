@@ -292,10 +292,18 @@ fn the_leaning_bodys_weight_is_in_the_energy_and_the_flow_conserves_it() {
     let k = 1.0 / (1.0 / lateral + h * h / tilt);
     let c = m * g * k * k * h.powi(3) / (tilt * tilt);
     let at_rest_energy = machine.energy(&state);
+    // The belt runs to the clamp (d = -0.25 m below the carriage) and to the bottom idler (d = 0.55 m) are longer by
+    // 1/2 c_run w^2, c_run = k^2 (1 / (lateral^2 |d|) + 2 sign(d) h / (lateral tilt)) (the guide's give; a tilt alone
+    // leaves them as long: `the_belt_runs_hold_the_lean_back_with_t_over_l`), at the tensions of the rest state.
+    let (mut values, infos) = (Vec::new(), machine.signal_infos());
+    machine.signals(&state, &[0.0, 0.0], &mut values);
+    let t: Vec<f64> = infos.iter().zip(&values).filter(|(i, _)| i.id.ends_with(".tension")).map(|(_, v)| *v).collect();
+    let run = |d: f64| k * k * (1.0 / (lateral * lateral * d.abs()) + 2.0 * d.signum() * h / (lateral * tilt));
+    let runs = (t[0] + t[2]) * run(-0.25) + 2.0 * t[1] * run(0.55);
     // Seven coordinates with the lean off the frame: two axes, two pulleys, two rotors, then the lean.
     let w = 1.0e-4;
     state[6] = w;
-    let by_hand = 0.5 * (k + c) * w * w;
+    let by_hand = 0.5 * (k + c + runs) * w * w;
     let got = machine.energy(&state) - at_rest_energy;
     assert!((got - by_hand).abs() < 1e-9 * by_hand, "{got} against {by_hand} (k {k}, c {c})");
     machine.set_tool_velocity(&mut state, &[0.4, -0.3]);
@@ -303,12 +311,14 @@ fn the_leaning_bodys_weight_is_in_the_energy_and_the_flow_conserves_it() {
     let mut rate = vec![0.0; state.len()];
     machine.derivatives(&state, &torque, &mut rate);
     let energy = |h: f64| machine.energy(&state.iter().zip(&rate).map(|(x, r)| x + h * r).collect::<Vec<_>>());
-    let h = 1e-7;
+    // Over 1e-5 s: a run shows the five-point rate 8e-10 W off the power there (rounding 7e-7 W at 1e-7 s, the step
+    // the test had; 2e-10 W at 1e-4 s).
+    let h = 1e-5;
     let rate_of_energy = (8.0 * (energy(h) - energy(-h)) - (energy(2.0 * h) - energy(-2.0 * h))) / (12.0 * h);
     let (mut angle, mut speed) = (vec![0.0; 2], vec![0.0; 2]);
     machine.motor_state(&state, &mut angle, &mut speed);
     let power: f64 = torque.iter().zip(&speed).map(|(t, w)| t * w).sum();
-    assert!((rate_of_energy - power).abs() < 2e-8 * power.abs().max(1.0), "{rate_of_energy} against {power}");
+    assert!((rate_of_energy - power).abs() < 1e-9 * power.abs().max(1.0), "{rate_of_energy} against {power}");
 }
 
 /// The file's lowest belt mode is the crate's at a pose, with the Z axis leaning (its weight rising, its spring stiffening

@@ -107,7 +107,7 @@ fn same_machine(id: &str, name: &str, changes: &[&str], rises: &[f64], what: &st
     // frame's where it sways, the leaning Z axis's where that leans and the beam's where it is a mode. Elsewhere the
     // states are laid out alike.
     let on = |effect: &str| cb.bool(&format!("effects.{effect}")).unwrap_or(false);
-    let elastic = on("belt_stretch");
+    let elastic = on("belt_stretch") && id == "t-gantry";
     let extra = [on("frame_compliance"), on("tool_flex"), on("beam_vertical_mode")];
     let crate_state = |s: &[f64]| {
         if !elastic {

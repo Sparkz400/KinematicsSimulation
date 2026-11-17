@@ -30,14 +30,14 @@ fn signals_ending(m: &dyn Machine, state: &[f64], torque: &[f64], suffix: &str) 
 }
 
 /// The belt runs' geometric stiffness on the lean (the crate's `the_belt_runs_hold_the_lean_back_with_t_over_l`). The
-/// clamp (s + z above the carriage's idlers) and the Z-bottom idler (s + sz - z below them) stand out sideways by k u g with
-/// the lean u, g = 1 / lateral + h d / tilt at the signed distance d below the carriage; a run of length l under the tension T
-/// holds the end back with T delta / l, so the belt's energy has K_uu = (T1 + T3) (k g_clamp)^2 / (s + z) + 2 T2 (k g_bottom)^2 /
-/// (s + sz - z) on top of the lean's spring k and the weight's pendulum stiffness c = k^2 m g h^3 / tilt^2 (the body
-/// m = 5 + 2 kg hangs h below the carriage, rises by h (k u h / tilt)^2 / 2 as it leans: V = m g F^2 r = c u^2 / 2, c =
-/// 2 k^2 m g r). By hand at z = 0.05 m (s = 0.15, sz = 0.5, h = 0.25 m, lateral 2e7, tilt 1.2e4, d = -0.2 and 0.6): k =
-/// 1 / (5e-8 + 0.0625 / 1.2e4) = 190.2e3 N/m, k g_clamp = -0.7805, k g_bottom = 2.3796, with the tensions of the rest
-/// state. The energy's second derivative in u over 1e-4 m.
+/// runs from the carriage's idlers to the clamp (d = -(s + z) below the carriage) and to the Z-bottom idler (d = s + sz - z)
+/// get longer as the Z axis leans under the spring's force F = k u: its guide gives sideways by F / lateral and tilts by
+/// theta = F h / tilt, so a run's end is at (F / lateral + d sin theta, d cos theta) from its idler. A tilt alone turns the
+/// end about the idler; the give and its product with the tilt are left, c = k^2 (1 / (lateral^2 |d|) + 2 sign(d) h /
+/// (lateral tilt)) per 1/2 u^2: at z = 0.05 m (s = 0.15, sz = 0.5, h = 0.25 m, lateral 2e7, tilt 1.2e4) k = 190 174 N/m,
+/// c_clamp = -0.074894, c_bottom = 0.075497 m^-1 per run, about 5 N/m with the rest tensions. On top: the lean's spring k
+/// and the weight's pendulum stiffness k^2 m g h^3 / tilt^2 (the body m = 5 + 2 kg rises by h theta^2 / 2). The energy's
+/// second derivative in u over 1e-4 m.
 #[test]
 fn the_belt_runs_hold_the_lean_back_with_t_over_l() {
     let m = file_machine(&["effects.tool_flex = true"]);
@@ -46,12 +46,13 @@ fn the_belt_runs_hold_the_lean_back_with_t_over_l() {
     m.equilibrium(&[0.5, z], &mut state, &mut torque);
     let t = signals_ending(m.as_ref(), &state, &torque, ".tension");
     assert_eq!(t.len(), 3);
-    let (lateral, tilt, s, sz, h, mass) = (2.0e7, 1.2e4, 0.15, 0.5, 0.3 - z, 7.0);
+    let (lateral, tilt, s, sz, h, mass) = (2.0e7_f64, 1.2e4_f64, 0.15, 0.5, 0.3 - z, 7.0);
     let k = 1.0 / (1.0 / lateral + h * h / tilt);
-    let (g_clamp, g_bottom) = (k * (1.0 / lateral - h * (s + z) / tilt), k * (1.0 / lateral + h * (s + sz - z) / tilt));
-    assert!((g_clamp + 0.7805).abs() < 1e-3 && (g_bottom - 2.3796).abs() < 1e-3, "{g_clamp} {g_bottom}");
-    let geometric = (t[0] + t[2]) * g_clamp * g_clamp / (s + z) + 2.0 * t[1] * g_bottom * g_bottom / (s + sz - z);
-    assert!(geometric > 1e3, "{geometric} N/m");
+    let c = |d: f64| k * k * (1.0 / (lateral * lateral * d.abs()) + 2.0 * d.signum() * h / (lateral * tilt));
+    let (clamp, bottom) = (-(s + z), s + sz - z);
+    assert!((c(clamp) + 0.074_894).abs() < 1e-6 && (c(bottom) - 0.075_497).abs() < 1e-6);
+    let geometric = (t[0] + t[2]) * c(clamp) + 2.0 * t[1] * c(bottom);
+    assert!((geometric - 5.0).abs() < 1.0, "{geometric} N/m");
     let weight = k * k * mass * G * h.powi(3) / (tilt * tilt);
     // The lean is the state after the rotors: x z a b pa pb u.
     let energy = |u: f64| {
@@ -62,7 +63,7 @@ fn the_belt_runs_hold_the_lean_back_with_t_over_l() {
     let step = 1e-4;
     let second = (energy(step) + energy(-step) - 2.0 * energy(0.0)) / (step * step);
     let found = second - k - weight;
-    assert!((found - geometric).abs() < 1e-3 * geometric, "{found} N/m against {geometric} N/m");
+    assert!((found - geometric).abs() < 1e-2, "{found} N/m against {geometric} N/m");
 }
 
 /// The process force's vertical part on the leaning axis (the crate's `the_leaning_tip_rises_by_half_theta_squared_times_its_distance`).
@@ -212,7 +213,8 @@ fn the_beams_vertical_mode_is_where_the_hand_value_has_it() {
 
 /// The beam at rest at the quasi-static sag m g a^2 b^2 / (3 E I L) = 11 x 9.80665 / 1.83523e6 = 58.78 um in the middle, the
 /// Z axis on its belt that much higher, the tool at its pose and nothing accelerating; the loss row is the beam's damping,
-/// c w'^2 with c = 2 zeta sqrt(k M) = 2 x 0.01 x sqrt(1.83523e6 x 2.21) = 40.28 N s/m, at w' = 0.1 m/s 0.4028 W.
+/// c w'^2 with c = 2 zeta sqrt(k (m + M)) = 2 x 0.01 x sqrt(1.83523e6 x 13.21) = 98.475 N s/m (zeta the mode's damping
+/// ratio with the carriage and the Z axis on the beam), at w' = 0.1 m/s 0.98475 W.
 #[test]
 fn the_beam_rests_at_its_sag_and_its_damping_is_in_the_budget() {
     let m = file_machine(&["effects.beam_vertical_mode = true"]);
@@ -229,8 +231,8 @@ fn the_beam_rests_at_its_sag_and_its_damping_is_in_the_budget() {
     m.tool_state(&state, &mut pos, &mut vel);
     assert!((pos[1] - 0.25).abs() < 1e-12, "the tool is at {}", pos[1]);
     state[7 + 6] = 0.1;
-    let c = 2.0 * 0.01 * (48.0 * 8.4e4 / 1.3f64.powi(3) * 17.0 / 35.0 * 3.5 * 1.3).sqrt();
-    assert!((c - 40.28).abs() < 0.01, "{c}");
+    let c = 2.0 * 0.01 * (48.0 * 8.4e4 / 1.3f64.powi(3) * (11.0 + 17.0 / 35.0 * 3.5 * 1.3)).sqrt();
+    assert!((c - 98.475).abs() < 0.001, "{c}");
     let power = signals_ending(m.as_ref(), &state, &torque, "power.beam");
     assert!((power[0] - c * 0.01).abs() < 1e-9 * c, "{} W against {} W", power[0], c * 0.01);
 }

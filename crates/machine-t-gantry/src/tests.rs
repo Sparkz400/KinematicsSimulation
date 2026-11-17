@@ -458,18 +458,18 @@ fn input_shaping_leaves_under_a_tenth_of_the_tool_swing() {
 /// z = 0.15 m: kb = 5e5 (1 / 1.35 + 1 / 0.55) (1 + 281.2 / 5e5) = 1.280e6 N/m, kz = 1 / (1 / 2e7 + 0.15^2 / 1.2e4) =
 ///   5.195e5 N/m, m1 = 4.40 kg: 35.52 Hz.
 /// At x = 0.9 m the two sections differ (k1 - k3 = -7.1e5 N/m) and so does the belt's X-Z mass, 2 mu (2 x - sx): the X
-/// mode pulls the Z axis on its belt along, which lowers it to 24.33 Hz and 34.58 Hz (`modes`, which
+/// mode pulls the Z axis on its belt along, which lowers it to 24.344 Hz and 34.590 Hz (`modes`, which
 /// `the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held` checks against the model's own equations).
-/// A shaper fixed at 34.58 Hz suits the higher pose, but at 24.33 Hz its three copies are only 24.33 / 34.58 =
+/// A shaper fixed at 34.59 Hz suits the higher pose, but at 24.34 Hz its three copies are only 24.34 / 34.59 =
 /// 0.70 half periods apart and leave cos^2(pi / 2 * 0.70) = 0.21 of the swing. The shaper that takes the frequency from
 /// the machine leaves about a tenth at both heights: 0.047 at z = 0.05 m, 0.121 at 0.15 m, where the swing in the run,
-/// with the pulleys held by the servo and not fixed as `modes` takes them, is a little faster: fixed shapers at 34.58 /
+/// with the pulleys held by the servo and not fixed as `modes` takes them, is a little faster: fixed shapers at 34.59 /
 /// 36 / 38 Hz leave 0.121 / 0.111 / 0.128 of it, none less than 0.11 (it was 0.102 before the belt's runs had their
 /// mass); 0.13 is allowed.
 #[test]
 fn a_shaper_that_follows_the_height_leaves_about_a_tenth_at_both_heights() {
     let m = machine(ENTRY.config(), &["effects.frame_compliance = false"]);
-    for (z, model, by_hand) in [(0.05, 24.33, 24.62), (0.15, 34.58, 35.52)] {
+    for (z, model, by_hand) in [(0.05, 24.344, 24.62), (0.15, 34.590, 35.52)] {
         let told = m.resonance_hz(&[0.9, z]).unwrap();
         assert!(
             (told - model).abs() < 0.005 && (told - by_hand).abs() < 1.0,
@@ -495,7 +495,7 @@ fn a_shaper_that_follows_the_height_leaves_about_a_tenth_at_both_heights() {
     for (z, fixed_is_enough) in [(0.15, true), (0.05, false)] {
         let (plain, fixed, following) = (swing(z, false, false), swing(z, true, false), swing(z, true, true));
         println!(
-            "z = {z} m: swing {plain:.3e} m plain, {fixed:.3e} m with the shaper fixed at 34.58 Hz, {following:.3e} m with the shaper following"
+            "z = {z} m: swing {plain:.3e} m plain, {fixed:.3e} m with the shaper fixed at 34.59 Hz, {following:.3e} m with the shaper following"
         );
         assert!(plain > 2e-6, "z = {z}: the plain move hardly swings: {plain} m");
         assert!(following < 0.13 * plain, "z = {z}: following, {following} m left of {plain} m");
@@ -1904,8 +1904,8 @@ fn the_modes_are_the_generalised_eigenvalues_of_the_carriage_the_frame_and_the_z
 
 /// With the shaper following the pose, the first shaper takes the machine's lowest mode that moves the tool where the plan
 /// stands, the second the next one (`modes`, which `the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held`
-/// checks): with the default frame at x = 0.9 m the frame swaying with the carriage on it, 18.7443 Hz at z = 0.05 m and
-/// 20.1202 Hz at 0.15 m, and the carriage swaying against the frame with the Z axis leaning, 30.6707 Hz and 41.5240 Hz, in
+/// checks): with the default frame at x = 0.9 m the frame swaying with the carriage on it, 18.7481 Hz at z = 0.05 m and
+/// 20.1208 Hz at 0.15 m, and the carriage swaying against the frame with the Z axis leaning, 30.6839 Hz and 41.5342 Hz, in
 /// place of the configured 25 Hz and 100 Hz. Not following, both stay as configured.
 #[test]
 fn the_second_shaper_follows_the_second_mode_at_each_pose() {
@@ -1922,7 +1922,7 @@ fn the_second_shaper_follows_the_second_mode_at_each_pose() {
     };
     let hz = |half: f64| 0.5 / (half * (1.0f64 - 0.03 * 0.03).sqrt() * 1e-3);
     let sim = shaper(true);
-    for (z, first, second) in [(0.05, 18.7443, 30.6707), (0.15, 20.1202, 41.5240)] {
+    for (z, first, second) in [(0.05, 18.7481, 30.6839), (0.15, 20.1208, 41.5342)] {
         let (half, half2) = sim.control.shaper_halves(sim.machine.as_ref(), &[0.9, z]).unwrap();
         assert!(
             (hz(half) - first).abs() < 1e-3 && (hz(half2) - second).abs() < 1e-3,
@@ -2294,22 +2294,29 @@ fn the_feedforward_at_speed_gives_the_commanded_acceleration() {
 /// The modes (`modal`) are those of the elastic model's own linearised equations with the pulleys held: at rest at the
 /// pose, the derivatives' accelerations of x, z, q and u per unit of each of them (central differences over 1e-7)
 /// are -M^-1 K, and each mode's shape v satisfies K v = w^2 M v. Loss-free default with the backlash off, at the four
-/// poses of the audit. With the belt's runs on the carriage (`belt_mass`) the modes are a little lower than the audit's
-/// figures, 18.81 / 30.77 / 78.51 / 119.46 Hz at (0.9, 0.05) and so on, which had no belt mass beyond the pulleys';
-/// with belt.mass_kg_m = 0 they are those, to within 0.25 Hz: the audit had no pendulum stiffness of the Z axis's weight
-/// (`lean_weight_stiffness`, about m_z g / h = 230 N/m of a lean spring of 1e5, which lifts a lean-like mode by up to 0.1 %).
+/// poses of the audit, against an independent reference (`reference/modes_reference.py`: K and M built from the physics,
+/// the belt's eight runs summed one by one, the sections' unstretched belt at rest found by bisection, the Z axis's
+/// pendulum stiffness k^2 m_z g h^3 / tilt^2 and the belt runs' geometric stiffness of the guide's give), with the belt's
+/// mass and without. The audit's own figures (18.81 / 30.77 / 78.51 / 119.46 Hz at (0.9, 0.05) without the belt's mass)
+/// are 0.002 to 0.04 Hz below these: it had no pendulum stiffness. The reference is printed to six places, so 1e-5 Hz.
 #[test]
 fn the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held() {
     let poses = [[0.9, 0.05], [0.5, 0.25], [0.5, 0.05], [0.1, 0.45]];
-    let audit = [
-        [18.81, 30.77, 78.51, 119.46],
-        [20.64, 53.91, 83.05, 206.52],
-        [18.75, 30.71, 84.59, 98.34],
-        [19.98, 39.93, 83.24, 103.72],
+    let reference = [
+        [
+            [18.748083, 30.683929, 76.045988, 116.302853],
+            [20.531127, 53.225412, 83.046572, 201.017830],
+            [18.689209, 30.622665, 84.594807, 92.682869],
+            [19.888173, 39.812853, 82.116594, 103.463213],
+        ],
+        [
+            [18.809186, 30.786054, 78.517072, 119.467942],
+            [20.642238, 53.908083, 83.046572, 206.559075],
+            [18.749948, 30.723047, 84.594807, 98.349870],
+            [19.983371, 39.921081, 83.240821, 103.705298],
+        ],
     ];
-    // The belt runs' geometric stiffness (T / l of the clamp's and the Z-bottom idler's sideways travel: a few per cent
-    // of the lean's spring) lifts the lean-like mode by a few Hz over the audit's figures, which had none.
-    for (mass_per_m, tolerance) in [(0.1, f64::INFINITY), (0.0, 3.0)] {
+    for (mass_per_m, audit) in [0.1, 0.0].into_iter().zip(reference) {
         let m = machine(
             lossless_config(),
             &["effects.gearbox_backlash = false", &format!("belt.mass_kg_m = {mass_per_m:?}")],
@@ -2353,7 +2360,7 @@ fn the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held() {
                     "{pose:?} {} Hz: K v {kv:?}, w^2 M v {mv:?}",
                     mode.hz
                 );
-                assert!((mode.hz - hand).abs() < tolerance, "{pose:?}: {} Hz against the audit's {hand}", mode.hz);
+                assert!((mode.hz - hand).abs() < 1e-5, "{pose:?}: {} Hz against the reference's {hand}", mode.hz);
                 line += &format!(" {:.2}", mode.hz);
             }
             println!("{line}");
@@ -2362,7 +2369,8 @@ fn the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held() {
 }
 
 /// The idlers' inertia rides on the carriage's speed along the beam alone, not on its speed over ground: with the frame's
-/// sway on, the mass matrix with the idlers differs from the one without by m_idlers[0] at (x, x) and nowhere else.
+/// sway on, the mass matrix with the idlers differs from the one without by m_idlers[0] at (x, x), their Z share
+/// m_idlers[1] at (z, z) (the upper idlers turn with vz, the lower ones with 2 vx +- vz) and nowhere else.
 #[test]
 fn the_idlers_ride_on_the_speed_along_the_beam_alone() {
     let sway = ["effects.frame_compliance = true", "effects.tool_flex = true"];
@@ -2372,7 +2380,12 @@ fn the_idlers_ride_on_the_speed_along_the_beam_alone() {
     let n = with.coordinates().len();
     assert!(n >= 4 && with.m_idlers[0] > 0.0);
     for rc in 0..n * n {
-        let want = if rc == 0 { with.m_idlers[0] } else { 0.0 };
+        // x on x (12 idler masses), z on z (4): nothing on the sway, the lean, or between them.
+        let want = match rc {
+            0 => with.m_idlers[0],
+            _ if rc == n + 1 => with.m_idlers[1],
+            _ => 0.0,
+        };
         assert!((a[rc] - b[rc] - want).abs() < 1e-12, "entry {rc}: {} against {want}", a[rc] - b[rc]);
     }
 }

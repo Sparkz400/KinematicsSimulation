@@ -74,7 +74,7 @@ pub fn flex_at(lean: &LeanNode, q: &[f64]) -> (f64, f64, f64) {
 /// centre of mass, `h` below the carriage, per F^2 (`lean_rise` of the crate with the guide's tilt only: a hanging bar
 /// turned by theta is shortened by theta^2 / 2 per length, and theta = F h / tilt along the whole of it, so the rise is
 /// 1/2 d (h / tilt)^2; where `h` is negative nothing hangs below the carriage and only the length beyond counts).
-fn lean_rise(lean: &LeanNode, d: f64, h: f64) -> f64 {
+pub fn lean_rise(lean: &LeanNode, d: f64, h: f64) -> f64 {
     let (theta, hanging) = (h / lean.tilt, h.max(0.0));
     let inside = d.min(hanging);
     0.5 * (inside + (d - inside).max(0.0)) * theta * theta
@@ -116,6 +116,20 @@ pub fn rise_coefficients(lean: &LeanNode, q: &[f64]) -> [f64; 3] {
     let (z, step) = (q[axis], 1e-4);
     let (here, ahead, behind) = (a(z), a(z + step), a(z - step));
     [here, (ahead - behind) / (2.0 * step), (ahead - 2.0 * here + behind) / (step * step)]
+}
+
+/// How the tool tip's travel per metre of lean (`flex_at`) changes along the lever axis: [d tip / dz, d2 tip / dz2] by
+/// central differences over 1e-4 m (`tip_slope` of the crate); zeros without a lever axis. The process force's sideways
+/// part works on tip(z) u, so it pushes on the lever axis with F tip' u.
+pub fn tip_slope(lean: &LeanNode, q: &[f64]) -> [f64; 2] {
+    let Some(axis) = lean.lever_axis else { return [0.0; 2] };
+    let tip = |step: f64| {
+        let mut at = q.to_vec();
+        at[axis] += step;
+        flex_at(lean, &at).2
+    };
+    let (here, ahead, behind, step) = (tip(0.0), tip(1e-4), tip(-1e-4), 1e-4);
+    [(ahead - behind) / (2.0 * step), (ahead - 2.0 * here + behind) / (step * step)]
 }
 
 #[cfg(test)]

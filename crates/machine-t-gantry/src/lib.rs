@@ -204,7 +204,7 @@ struct Beam {
 /// beam's deflection under the carriage, down. Its shape is the beam's static deflection under a point load at the
 /// carriage, taken to 1 under it: stiffness k = 1 / `span_compliance` (so that m g / k is the quasi-static sag, exactly),
 /// modal mass M = mu integral of the shape squared (`Beam::modal_mass`: 17 / 35 mu L in the middle) and the damping
-/// c = 2 zeta sqrt(k M). The carriage, the Z axis and the payload move with w (mass m_c + m_z + M; the Z axis's own z is
+/// c = 2 zeta sqrt(k (m_c + m_z + M)), so that zeta is the mode's damping ratio with the carriage on the beam. The carriage, the Z axis and the payload move with w (mass m_c + m_z + M; the Z axis's own z is
 /// relative to the carriage, so its speed over ground is z' - w'), so a Z move's acceleration drives it, and the carriage's
 /// weight, riding along the beam, drives it as k(x) changes (V = 1/2 k(x) w^2 - m g w, a force on x of -1/2 k' w^2).
 /// The Lagrangian keeps T = 1/2 M(x) w'^2 and drops what the shape's change with x adds (mu integral of (w phi_x x')^2:
@@ -618,13 +618,12 @@ impl TGantry {
     /// `tool_flex.damping_n_s_m` on u; the cross terms of a damping that is not proportional are left out.
     ///
     /// K also carries what the lean's own dynamics have beyond the spring (second order in the deflection, exact at the
-    /// pose): the Z axis hangs like a pendulum, its weight rising as it leans (`lean_weight_stiffness`, K_uu += c), and
-    /// the spring's stiffness k(z) rises with z, so at the lean u0 = tip process_x / k that the pose's sideways process
-    /// force holds K_uz = k' u0 and K_zz = k'' u0^2 / 2. Also in K and in the dynamics: the belt runs' geometric stiffness
-    /// (`lean_runs`: K_uu += sum T_i c_i = sum T / l (d delta / d u)^2 over the runs of the clamp's and the Z-bottom idler's
-    /// sideways travel with the lean, T_i the sections' tensions at rest), and the process force's vertical part riding
-    /// the leaning axis (`rise_coefficients`: the tip rises by a u^2, V = -F_z a u^2, K_uu += -2 F_z a,
-    /// K_uz += -2 F_z a' u0, K_zz += -F_z a'' u0^2). With effects.beam_vertical_mode the beam's deflection w is a
+    /// pose): the Z axis hangs like a pendulum, its weight rising as it leans (`lean_weight_stiffness`), the belt runs'
+    /// geometric stiffness (`lean_runs`, at the sections' tensions at rest) and the process force's vertical part riding
+    /// the leaning axis (`rise_coefficients`: the tip rises by a u^2, V = -F_z a u^2) are on the lean's spring k: k_u(z).
+    /// All of it changes with z, and so does the tip's travel per u, so at the lean u0 = tip F_x / k_u that the pose's
+    /// sideways process force holds, K_uz = k_u' u0 - F_x tip' and K_zz = k_u'' u0^2 / 2 - F_x tip'' u0.
+    /// With effects.beam_vertical_mode the beam's deflection w is a
     /// coordinate: V = 1/2 k(x) w^2 - m g w, so at the pose's w0 = m g / k: K_ww = k, K_xw = k' w0, K_xx += k'' w0^2 / 2;
     /// the tool moves by z - w in Z.
     fn modal(&self, tool_pose: &[f64]) -> Vec<(Mode, Vec<f64>)> {
@@ -660,26 +659,26 @@ impl TGantry {
             add(&mut damping, &[(q, 1.0)], f.damping);
         }
         if let (Some(f), Some(u)) = (&self.flex, index(U)) {
-            let (k, dk, tip) = self.flex_at(z);
-            add(&mut stiffness, &[(u, 1.0)], k);
             add(&mut damping, &[(u, 1.0)], f.damping);
-            let process_x = self.process_force()[0];
-            stiffness[u * n + u] += self.lean_weight_stiffness(z);
-            let (u0, step) = (tip * process_x / k, 1e-6);
-            let ddk = (self.flex_at(z + step).1 - self.flex_at(z - step).1) / (2.0 * step);
-            stiffness[u * n + 1] += dk * u0;
-            stiffness[n + u] += dk * u0;
-            stiffness[n + 1] += 0.5 * ddk * u0 * u0;
-            // The belt runs' geometric stiffness, and the process force's vertical part on the tip's rise.
+            let [process_x, process_z] = self.process_force();
+            // The lean's own stiffness at height z: its spring, the weight's pendulum stiffness, the belt runs' geometric
+            // stiffness (at the tensions of the pose) and the process force's vertical part on the tip's rise, so that
+            // V = 1/2 k_u(z) u^2 - F_x tip(z) u. At the lean u0 = tip F_x / k_u that the pose's sideways process force
+            // holds: K_uu = k_u, K_uz = k_u' u0 - F_x tip', K_zz = 1/2 k_u'' u0^2 - F_x tip'' u0 (central differences
+            // over 1e-4 m).
             let tensions: [f64; 3] = std::array::from_fn(|i| self.belt.section(geo[i], rest[i], 0.0, 0.0).tension);
-            let runs = self.lean_runs(z);
-            stiffness[u * n + u] += (0..3).map(|i| tensions[i] * runs[i]).sum::<f64>();
-            let [a, da, dda] = self.rise_coefficients(z);
-            let process_z = self.process_force()[1];
-            stiffness[u * n + u] -= 2.0 * process_z * a;
-            stiffness[u * n + 1] -= 2.0 * process_z * da * u0;
-            stiffness[n + u] -= 2.0 * process_z * da * u0;
-            stiffness[n + 1] -= process_z * dda * u0 * u0;
+            let k_u = |z: f64| {
+                let runs = self.lean_runs(z);
+                self.flex_at(z).0 + self.lean_weight_stiffness(z) + (0..3).map(|i| tensions[i] * runs[i]).sum::<f64>()
+                    - 2.0 * process_z * self.rise_coefficients(z)[0]
+            };
+            let (here, ahead, behind, step) = (k_u(z), k_u(z + 1e-4), k_u(z - 1e-4), 1e-4);
+            let (u0, [dtip, ddtip]) = (self.flex_at(z).2 * process_x / here, self.tip_slope(z));
+            let uz = (ahead - behind) / (2.0 * step) * u0 - process_x * dtip;
+            stiffness[u * n + u] += here;
+            stiffness[u * n + 1] += uz;
+            stiffness[n + u] += uz;
+            stiffness[n + 1] += 0.5 * (ahead - 2.0 * here + behind) / (step * step) * u0 * u0 - process_x * ddtip * u0;
         }
         if let (Some(w), Some(_)) = (index(W), self.vertical()) {
             let [k, _, c, dk, _] = self.beam_mode(x);
@@ -768,6 +767,14 @@ impl TGantry {
         )
     }
 
+    /// How the tool tip's travel per u (`flex_at`) changes with z: [d tip / dz, d2 tip / dz2] by central differences over
+    /// 1e-4 m. The process force's sideways part works on tip(z) u, so it pushes on Z with F_x tip' u.
+    fn tip_slope(&self, z: f64) -> [f64; 2] {
+        let (step, tip) = (1e-4, |z: f64| self.flex_at(z).2);
+        let (here, ahead, behind) = (tip(z), tip(z + step), tip(z - step));
+        [(ahead - behind) / (2.0 * step), (ahead - 2.0 * here + behind) / (step * step)]
+    }
+
     /// With effects.beam_sag: how far the beam sags under the carriage at x, and its rate of change with x.
     fn sag(&self, x: f64) -> (f64, f64) {
         let Some(beam) = &self.beam else { return (0.0, 0.0) };
@@ -786,7 +793,8 @@ impl TGantry {
     fn beam_mode(&self, x: f64) -> [f64; 5] {
         let Some((beam, mode)) = self.vertical() else { return [0.0; 5] };
         let (k, mass) = (beam.stiffness(x), beam.modal_mass(mode.mass_per_m, x));
-        let damping = 2.0 * mode.damping_ratio * (k * mass).sqrt();
+        // The key is the mode's damping ratio, the carriage and the Z axis on it.
+        let damping = 2.0 * mode.damping_ratio * (k * (mass + self.m_carriage + self.m_z())).sqrt();
         [k, mass, damping, slope(|x| beam.stiffness(x), x), slope(|x| beam.modal_mass(mode.mass_per_m, x), x)]
     }
 
@@ -813,22 +821,25 @@ impl TGantry {
         1.0 / f.lateral + h * d / f.tilt + bend / f.ei
     }
 
-    /// The belt runs' geometric stiffness (`lean_runs`): a belt run of length l under tension T whose far end is out
-    /// sideways by delta is longer by delta^2 / (2 l), so it holds the end back with T delta / l. The Z axis's clamp (at
-    /// the top, s + z above the carriage's idlers: the upper runs of sections 1 and 3) and its bottom idler (s + sz - z below
-    /// them: the two lower runs of section 2) are out by k u reach (`lean_reach` at -(s + z) and at s + sz - z). With
-    /// g the end's travel per u, the sections are longer by 1/2 c u^2: c = (g_clamp^2 / (s + z), 2 g_bottom^2 / (s + sz - z),
-    /// g_clamp^2 / (s + z)), and the energy of the belt (and its tension, its force on the lean, its damping) follow from
-    /// the lengths. Zero without the leaning Z axis.
+    /// The belt runs' geometric stiffness (`lean_runs`): how much longer the Z axis's vertical runs get as it leans, to second
+    /// order. A run goes from a carriage idler (at the carriage's height, where the guide tilts) to a point of the Z axis at
+    /// the signed distance d below the carriage: the clamp (d = -(s + z), the upper runs of sections 1 and 3) or the bottom
+    /// idler (d = s + sz - z, the two lower runs of section 2). Under the spring's force F = k u that point is out sideways
+    /// by delta = F `lean_reach`(d) and has risen by F^2 `lean_rise`(d) along the Z axis, so the run of length |d| is longer
+    /// by delta^2 / (2 |d|) - sign(d) rise: c = k^2 (reach^2 / |d| - 2 sign(d) lean_rise) per 1/2 u^2. A guide that only
+    /// tilts turns the end about the run's other end and leaves the run as long as it was (reach = h d / tilt, rise =
+    /// (h / tilt)^2 d / 2: c = 0); what is left is the guide's sideways give, 1 / lateral, and the Z axis's bending. The energy
+    /// of the belt (its tension, its force on the lean and on Z, its damping) follows from the lengths. Zero without the
+    /// leaning Z axis.
     fn lean_runs(&self, z: f64) -> [f64; 3] {
         if self.flex.is_none() {
             return [0.0; 3];
         }
         let (s, sz) = (self.span_min, self.axes[1].max);
         let (k, h) = (self.flex_at(z).0, self.z_com_drop - z);
-        let (clamp, bottom) = (k * self.lean_reach(-(s + z), h), k * self.lean_reach(s + sz - z, h));
-        let upper = clamp * clamp / (s + z);
-        [upper, 2.0 * bottom * bottom / (s + sz - z), upper]
+        let run = |d: f64| k * k * (self.lean_reach(d, h).powi(2) / d.abs() - 2.0 * d.signum() * self.lean_rise(d, h));
+        let upper = run(-(s + z));
+        [upper, 2.0 * run(s + sz - z), upper]
     }
 
     /// How much longer `lean_runs` make the three belt sections at the state's lean u and height z, and the rate of that.
@@ -839,9 +850,8 @@ impl TGantry {
         let (u, z) = (s[U], s[Z]);
         let (c, ahead, behind) = (self.lean_runs(z), self.lean_runs(z + 1e-6), self.lean_runs(z - 1e-6));
         let longer = std::array::from_fn(|i| 0.5 * c[i] * u * u);
-        let rate = std::array::from_fn(|i| {
-            c[i] * u * s[V + U] + 0.5 * (ahead[i] - behind[i]) / 2e-6 * s[V + Z] * u * u
-        });
+        let rate =
+            std::array::from_fn(|i| c[i] * u * s[V + U] + 0.5 * (ahead[i] - behind[i]) / 2e-6 * s[V + Z] * u * u);
         (longer, rate)
     }
 
@@ -1060,7 +1070,7 @@ impl TGantry {
         let (belt_x, belt_z) = self.belt_speed_terms(vx, vz);
         let (k, dk_dz, tip) = self.flex_at(s[Z]);
         // Lagrange's equations over `coordinates`, M a = F (`elastic_mass`). The process force acts at the tool tip, at
-        // x + q + tip u: on each of them. The lean's spring acts between the carriage and the Z axis, on u alone; it gets
+        // x + q + tip(z) u: on each of them, and with tip' u on z. The lean's spring acts between the carriage and the Z axis, on u alone; it gets
         // stiffer as the Z axis rises, which pushes back on Z: -dV/dz of k u^2 / 2. The idlers add inertia in Z but no
         // weight.
         //
@@ -1082,12 +1092,9 @@ impl TGantry {
         };
         let mut force = vec![
             fx + process_x + chain_growth * w * (0.5 * w - vx) + belt_x + beam_x,
-            fz_belt
-                - on_z
-                - ffz
-                - 0.5 * s[U] * s[U] * (dk_dz + self.lean_weight_rise_with_z(s[Z]))
-                - idler_z
+            fz_belt - on_z - ffz - 0.5 * s[U] * s[U] * (dk_dz + self.lean_weight_rise_with_z(s[Z])) - idler_z
                 + process_z * (1.0 + d_rise * s[U] * s[U])
+                + process_x * self.tip_slope(s[Z])[0] * s[U]
                 + self.stop_force(1, s[Z], vz)
                 - self.g * self.m_z()
                 + belt_z,
@@ -1257,7 +1264,8 @@ impl TGantry {
         let n = speeds.len();
         let kinetic = 0.5 * (0..n * n).map(|rc| speeds[rc / n] * mass[rc] * speeds[rc % n]).sum::<f64>() + turning;
         let mut potential = potential + 0.5 * self.lean_weight_stiffness(s[Z]) * s[U] * s[U];
-        let mut elastic = 0.5 * self.flex_at(s[Z]).0 * s[U] * s[U] + self.stop_energy(s[X], s[Z]) + belt + gears + frame;
+        let mut elastic =
+            0.5 * self.flex_at(s[Z]).0 * s[U] * s[U] + self.stop_energy(s[X], s[Z]) + belt + gears + frame;
         if self.vertical().is_some() {
             // The Z axis's weight at z - w, the carriage's at -w; the beam's spring.
             potential -= (self.m_carriage + self.m_z()) * self.g * s[W];
@@ -1305,7 +1313,7 @@ impl TGantry {
             let flex = self.flex.as_ref().map_or(0.0, |f| f.damping * s[V + U].powi(2));
             // The tool's velocity (`tool_state`): along X with the sway and the lean, along Z with the beam's deflection
             // and the leaning tip's rise.
-            let tool_vx = vx + s[V + Q] + self.flex_at(z).2 * s[V + U];
+            let tool_vx = vx + s[V + Q] + self.flex_at(z).2 * s[V + U] + self.tip_slope(z)[0] * s[U] * vz;
             let [rise, d_rise, _] = self.rise_coefficients(z);
             let tool_vz = vz + 2.0 * rise * s[U] * s[V + U] + d_rise * s[U] * s[U] * vz
                 - if self.vertical().is_some() { s[V + W] } else { 0.0 };
@@ -1683,7 +1691,7 @@ impl Machine for TGantry {
             // frame: the workpiece stands on the floor, so the frame's sway is the tool's too.
             let tip = self.flex_at(s[Z]).2;
             pos[0] += tip * s[U] + s[Q];
-            vel[0] += tip * s[V + U] + s[V + Q];
+            vel[0] += tip * s[V + U] + self.tip_slope(s[Z])[0] * s[U] * s[V + Z] + s[V + Q];
             // The leaning Z axis's tip rises by a u^2 (`rise_coefficients`).
             let [rise, d_rise, _] = self.rise_coefficients(s[Z]);
             pos[1] += rise * s[U] * s[U];
@@ -1800,7 +1808,7 @@ impl Machine for TGantry {
     /// Every mode of `modal` (those that move the tool), lowest first, so that the second shaper's `modes()[1]` is the
     /// next one that does: with the default frame and the leaning Z axis four, the frame swaying with the carriage on it,
     /// the carriage swaying against the frame with the Z axis leaning, the Z axis on its belt, and the Z axis's lean
-    /// against the carriage (18.7, 30.7, 76.0 and 116.3 Hz at (0.9, 0.05)).
+    /// against the carriage (18.75, 30.68, 76.05 and 116.30 Hz at (0.9, 0.05)).
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
         self.modal(tool_pose).into_iter().map(|(mode, _)| mode).collect()
     }
