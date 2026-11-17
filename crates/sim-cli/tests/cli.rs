@@ -341,7 +341,13 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         // An arm's joints carry their links on elastic gears, six joints of different inertia with one set of drive gains:
         // the band is not Kv's alone (the six-axis arm's j2 has 3.97 Hz, its j1 17 Hz with 27 % overshoot, at velocity
         // loops of some 80 Hz). There half the lower bound is asked.
-        let lowest = if entry.config().get("arm.urdf_file").is_ok() { 2.0 } else { 4.0 };
+        // A config tuned to a lower Kv is asked for the band that Kv gives, Kv / 2π (the position loop closed on a fast
+        // velocity loop), less a fifth for a velocity loop not far above it: a drive whose motor turns a load many times
+        // its own through a soft gear has a velocity loop of a few hertz and a Kv of 10 1/s to stay inside it (1.6 to
+        // 1.9 Hz measured on such travels).
+        let kv = entry.config().f64("drive.kv_1_s").unwrap_or(f64::INFINITY);
+        let lowest = (if entry.config().get("arm.urdf_file").is_ok() { 2.0f64 } else { 4.0 })
+            .min(0.8 * kv / std::f64::consts::TAU);
         // An axis that holds a weight through a lossy gearbox stops short of a small step at the tool, whatever its loops:
         // the palletiser's z holds 3.04 N m on motor 3, 486 N m at the gear (ratio 160); to lift it the gear must pass
         // 486 / 0.8 = 608 N m, and the motor first winds it by (608 - 486) / 2e5 N m/rad = 0.61 mrad, 0.71 mm of the 1 mm
@@ -410,7 +416,7 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
     // gain of 0.04 takes 12 times too: at 0.3, 7.5 times it, the SCARA's joint 3 is stable with 42 degrees.
     {
         let cfg = entry.config();
-        let sets: Vec<String> = cfg
+        let mut sets: Vec<String> = cfg
             .leaves()
             .iter()
             .filter(|(p, _)| p.starts_with("drive.") && p.ends_with("velocity_kp_nm_s_rad"))
@@ -419,6 +425,12 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
                 format!("{p}={}", if 7.5 * shipped < 0.3 { 0.3 } else { 12.0 * shipped })
             })
             .collect();
+        // With the gearboxes elastic, as every machine with the switch ships it but one: that one's gains are set for its
+        // gears' mode, which they cross on the rotor alone (some 40 times its own inertia on the travel), and its rigid
+        // drives stay stable far beyond 12 times them (at 1.8 N m s/rad: 53.7 Hz, 76.8 degrees on the travel).
+        if cfg.get("effects.joint_elasticity").is_ok() {
+            sets.push("effects.joint_elasticity=true".into());
+        }
         let margins = |sets: &[String]| {
             let out = cli(&[
                 &["margins", entry.id][..],
