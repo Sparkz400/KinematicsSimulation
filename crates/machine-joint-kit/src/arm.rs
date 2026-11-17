@@ -389,14 +389,6 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         return Err(ConfigError::Invalid("arm.gear_ratios".into()));
     }
     let owns: Vec<Config> = (0..n).map(|k| motor_config(cfg, MOTOR_IDS[k])).collect::<Result<_, _>>()?;
-    // shortcut: the gearbox life takes each motor's speed through its own `gearbox.ratio` (analysis::output_rpm), so it
-    // is refused where a motor's ratio is not the one its gearbox table says; report each motor's ratio to the analysis
-    // to allow it.
-    if cfg.f64("ratings.gearbox_reference_speed_rpm").is_ok()
-        && (0..n).any(|k| !prismatic[k] && Some(ratios[k]) != owns[k].f64("gearbox.ratio").ok())
-    {
-        return Err(ConfigError::Invalid("ratings.gearbox_reference_speed_rpm".into()));
-    }
     let rack = if cfg.get("rack").is_ok() { Some(RackPinion::from_config(cfg)?) } else { None };
     let screw = if rack.is_none() && prismatic.iter().any(|p| *p) { Some(BallScrew::from_config(cfg)?) } else { None };
     let mut racks = vec![None; n];

@@ -1958,9 +1958,17 @@ pub fn reliability_factor(cfg: &Config) -> Option<f64> {
     (90.0..=99.95).contains(&r).then(|| 0.95 * ((100.0 / r).ln() / (100.0_f64 / 90.0).ln()).powf(2.0 / 3.0) + 0.05)
 }
 
-/// The mean speed of the gearbox output (the pulley) in r/min: the motor's over `gearbox.ratio`.
+/// This motor's own `gearbox.ratio` (`catalog::motor_config`: a `[gearbox.<id>]` table over the shared one), so a machine
+/// whose motors have different ratios gets each gearbox's own speed. Applying it to a config that is already the
+/// motor's own changes nothing.
+fn own_ratio(cfg: &Config, m: &MotorLoad) -> f64 {
+    let own = crate::catalog::motor_config(cfg, &m.id);
+    own.as_ref().ok().unwrap_or(cfg).f64("gearbox.ratio").unwrap_or(1.0)
+}
+
+/// The mean speed of the gearbox output (the pulley) in r/min: the motor's over its own `gearbox.ratio`.
 fn output_rpm(cfg: &Config, m: &MotorLoad) -> f64 {
-    m.mean_speed * 30.0 / std::f64::consts::PI / cfg.f64("gearbox.ratio").unwrap_or(1.0)
+    m.mean_speed * 30.0 / std::f64::consts::PI / own_ratio(cfg, m)
 }
 
 /// The rating life of the bearing that takes the belt's pull on this motor's pulley shaft, in hours, where the machine
@@ -2116,7 +2124,7 @@ pub fn gearbox_gearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
         rating("gearbox_gearing_wohler_exponent")?,
     );
     m.gearbox_torque?;
-    let per_hour = 3600.0 / (2.0 * std::f64::consts::PI) / cfg.f64("gearbox.ratio").unwrap_or(1.0);
+    let per_hour = 3600.0 / (2.0 * std::f64::consts::PI) / own_ratio(cfg, m);
     let life = gearing_life_h(
         m.gearbox_torque_spectrum.iter().enumerate().map(|(i, speed)| (torque_band_floor(i + 1), speed * per_hour)),
         rated,
@@ -2135,7 +2143,7 @@ pub fn gearbox_gearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
 /// No a_ISO: Siemens' 25000 h are for its own grease and seals.
 pub fn motor_bearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
     let c = cfg.f64("ratings.motor_bearing_load_rating_n").ok()?;
-    if cfg.f64("gearbox.ratio").unwrap_or(1.0) != 1.0 {
+    if own_ratio(cfg, m) != 1.0 {
         return None;
     }
     Some(reliability_factor(cfg)? * rating_life_h(c, m.radial_load_equivalent?, output_rpm(cfg, m)))
@@ -2181,7 +2189,7 @@ pub fn belt_tooth_utilisation(cfg: &Config, m: &MotorLoad) -> Result<Option<f64>
             load[i - 1] + (load[i] - load[i - 1]) * (n - rpm[i - 1]) / (rpm[i] - rpm[i - 1])
         }
     };
-    let ratio = cfg.f64("gearbox.ratio").unwrap_or(1.0);
+    let ratio = own_ratio(cfg, m);
     let teeth = match m.belt_wrap {
         Some(wrap) => wrap * radius / cfg.positive("belt.tooth_pitch_m")?,
         None => teeth,
@@ -4944,6 +4952,26 @@ line_module_efficiency = 0.9
         geared.set_text("gearbox.ratio = 5.0").unwrap();
         assert_eq!(motor_bearing_life_h(&geared, &m), None);
         assert_eq!(motor_bearing_life_h(&cfg, &MotorLoad { radial_load_equivalent: None, ..m }), None);
+    }
+
+    /// Two motors of one machine with gearbox ratios 5 and 10 at 500 r/min: the pulleys turn at 100 and 50 r/min, so the
+    /// pulley bearing (C 8469 N, P 600 N, L10 = (C/P)^3 * 1e6 / (60 n) h) lives 468696.16 h and twice that.
+    #[test]
+    fn each_motor_gets_its_own_gearbox_ratio() {
+        let cfg = Config::parse(
+            "format_version = 1\n[gearbox]\nratio = 5.0\n[gearbox.b]\nratio = 10.0\n[ratings]\npulley_bearing_load_rating_n = 8469.0\nbearing_reliability_percent = 90.0\n",
+        )
+        .unwrap();
+        let motor = |id: &str| MotorLoad {
+            id: id.into(),
+            mean_speed: 500.0 * std::f64::consts::PI / 30.0,
+            radial_load_equivalent: Some(600.0),
+            ..MotorLoad::default()
+        };
+        assert!((output_rpm(&cfg, &motor("a")) - 100.0).abs() < 1e-9);
+        assert!((output_rpm(&cfg, &motor("b")) - 50.0).abs() < 1e-9);
+        let (a, b) = (pulley_bearing_life_h(&cfg, &motor("a")).unwrap(), pulley_bearing_life_h(&cfg, &motor("b")).unwrap());
+        assert!((a / 468696.16 - 1.0).abs() < 1e-5 && (b / a - 2.0).abs() < 1e-9, "{a} and {b}");
     }
 
     /// A guide at 100 N for 1 s at 1 m/s and at 200 N for 1 s at 3 m/s: the speed-weighted cubic mean is
