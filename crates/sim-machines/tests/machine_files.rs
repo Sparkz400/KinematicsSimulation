@@ -316,16 +316,21 @@ fn the_netlist_machines_run_their_crates_cycle() {
 /// in another order) flip one count a little earlier or later (on the T-gantry 0.2 s into the cycle), and stick-slip
 /// in the guides and the braking chopper switching a step earlier grow that. So the crate is run again with its
 /// carriage 1e-12 and 1e-9 heavier and, since the friction feedforward (15 November), with its X guide's Coulomb level
-/// 1e-12 and 1e-9 higher, which reach the drives' torque directly; the file has to give the same verdicts and lie within
-/// three times the crate's own spread of it, or within 1e-4 of it. Found on 2026-11-13: the T-gantry's peak braking
-/// power spreads by 0.5 % that way, and the file lies within that.
+/// 1e-12 and 1e-9 higher, which reach the drives' torque directly, and with its belt's pretension 1e-12 and 1e-9 higher;
+/// the file has to give the same verdicts and lie within three times the crate's own spread of it, or within 1e-4 of it.
+/// Found on 2026-11-13: the T-gantry's peak braking power spreads by 0.5 % that way, and the file lies within that. On
+/// 17 November the braking resistor's peak took three levels, 2.6191, 2.6196 and 2.6204 (the chopper switching a step
+/// earlier or later), under changes of 1e-12 to 1e-8 of the carriage, the Z axis, the guides' Coulomb levels or the
+/// pretension: the mass and the guide alone saw 7.8e-5 of it, the pretension 5.1e-4 at 1e-12; the file 4.8e-4.
 #[test]
 fn the_netlist_machines_give_their_crates_verdicts() {
     for (id, name) in PAIRS {
         let [(ea, ca), (eb, cb)] = pair(id, name, &[]);
         let (names, nominal) = cycle_numbers(ea, &ca);
         let mut spread = vec![0.0f64; nominal.len()];
-        for (key, factor) in ["mass.carriage_kg", "friction_x.coulomb_n"].iter().flat_map(|k| [(*k, 1e-12), (*k, 1e-9)])
+        for (key, factor) in ["mass.carriage_kg", "friction_x.coulomb_n", "belt.pretension_n"]
+            .iter()
+            .flat_map(|k| [(*k, 1e-12), (*k, 1e-9)])
         {
             let mut c = ca.clone();
             c.set_text(&format!("{key} = {:e}", ca.f64(key).unwrap() * (1.0 + factor))).unwrap();

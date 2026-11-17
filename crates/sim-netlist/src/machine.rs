@@ -1766,10 +1766,14 @@ impl ConfigMachine {
     /// The acceleration of each axis that the motor torques would give a loss-free rigid machine: what an overhang's
     /// tilt on a guide is worked out with. The true acceleration would make friction depend on itself, and its absolute
     /// value would turn every belt vibration into extra friction. Over the rigid model's whole mass matrix
-    /// (`rigid_mass`: bodies, chains, idlers, pulleys, rotors and the belt's runs).
+    /// (`rigid_mass`: bodies, chains, idlers, pulleys, rotors and the belt's runs), with gravity: M a = F + gravity, so
+    /// that a torque that holds an axis against its weight accelerates nothing, neither that axis nor, through the belt
+    /// runs' coupling, another.
     fn commanded_acc(&self, q: &[f64], torque: &[f64]) -> Vec<f64> {
-        let forces: Vec<f64> =
-            (0..self.n()).map(|i| (0..self.m()).map(|kk| self.ratio[kk] * self.k[kk][i] * torque[kk]).sum()).collect();
+        let forces: Vec<f64> = (0..self.n())
+            .zip(self.gravity(q))
+            .map(|(i, g)| g + (0..self.m()).map(|kk| self.ratio[kk] * self.k[kk][i] * torque[kk]).sum::<f64>())
+            .collect();
         solve(self.rigid_mass(q), forces).unwrap_or_else(|| vec![0.0; self.n()])
     }
 
@@ -1783,18 +1787,23 @@ impl ConfigMachine {
         let tilt = 2.0 * side * lever / o.spacing;
         weight + tilt.abs() + if o.side_load { side.abs() } else { 0.0 }
     }
-    /// Friction level factor per guide: its load against that of what it carries without the payload.
+    /// Friction level factor per guide at the motor torques `torque` (their commanded acceleration, `commanded_acc`).
     fn load_scales(&self, q: &[f64], torque: &[f64]) -> Vec<f64> {
         let acc = if self.guides.iter().any(|g| g.overhang.is_some()) {
             self.commanded_acc(q, torque)
         } else {
             vec![0.0; self.n()]
         };
+        self.load_scales_at(q, &acc)
+    }
+    /// Friction level factor per guide at the axes' acceleration `acc` (zeros: at rest): its load against that of what
+    /// it carries without the payload.
+    fn load_scales_at(&self, q: &[f64], acc: &[f64]) -> Vec<f64> {
         self.guides
             .iter()
             .map(|g| {
                 let nominal: f64 = g.carries.iter().map(|&b| self.bodies[b].mass * self.g_across[g.axis]).sum();
-                g.friction.load_scale(self.guide_load(g, q, &acc), nominal)
+                g.friction.load_scale(self.guide_load(g, q, acc), nominal)
             })
             .collect()
     }
@@ -3517,7 +3526,7 @@ impl Machine for ConfigMachine {
     fn rigid_friction(&self, pos: &[f64], dir: &[f64], out: &mut Vec<[f64; 2]>) {
         let (q, rate, _) = self.joint_motion(pos, dir, &vec![0.0; pos.len()]);
         let (mut coulomb, mut viscous) = (vec![0.0; self.n()], vec![0.0; self.n()]);
-        for (g, scale) in self.guides.iter().zip(self.load_scales(&q, &vec![0.0; self.m()])) {
+        for (g, scale) in self.guides.iter().zip(self.load_scales_at(&q, &vec![0.0; self.n()])) {
             let [c, b, _] = g.friction.steady(rate[g.axis], scale);
             (coulomb[g.axis], viscous[g.axis]) = (coulomb[g.axis] + c, viscous[g.axis] + b);
         }
@@ -3532,7 +3541,7 @@ impl Machine for ConfigMachine {
         let (q, rate, _) = self.joint_motion(pos, dir, &vec![0.0; pos.len()]);
         let (n, m) = (self.n(), self.m());
         let (mut level, mut weighted, mut size) = (vec![0.0; m], vec![0.0; m], vec![0.0; m]);
-        for (g, scale) in self.guides.iter().zip(self.load_scales(&q, &vec![0.0; m])) {
+        for (g, scale) in self.guides.iter().zip(self.load_scales_at(&q, &vec![0.0; n])) {
             let (axis, turning) = (g.axis, rate[g.axis]);
             if !g.friction.on || turning == 0.0 {
                 continue;
@@ -3556,7 +3565,7 @@ impl Machine for ConfigMachine {
         let (q, v, _) = self.joint_motion(pos, vel, &vec![0.0; pos.len()]);
         let n = self.n();
         let mut force = vec![0.0; n];
-        for (g, scale) in self.guides.iter().zip(self.load_scales(&q, &vec![0.0; self.m()])) {
+        for (g, scale) in self.guides.iter().zip(self.load_scales_at(&q, &vec![0.0; self.n()])) {
             force[g.axis] += g.friction.feedforward(v[g.axis], scale);
         }
         let ((idlers, _), drag, gravity) = (self.idler_friction(&v), self.chain_drag(&v), self.gravity(&q));
