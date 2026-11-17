@@ -350,6 +350,29 @@ fn the_modes_are_those_of_the_gearboxes_and_bands() {
     assert!(handler(&RIGID).modes(&[0.5, 0.0, 0.1]).is_empty());
 }
 
+/// The modes' damping ratios. With damping proportional to stiffness, C = alpha K (each band span 94 N s/m against its
+/// 9.4e5 N/m, the arm's gearboxes 2.5 N m s/rad against 2.5e4 N m/rad: alpha = 1e-4 s), every mode of M and K has the
+/// ratio alpha w / 2 = 1e-4 pi f, whatever its shape. The column, by hand: the coupling's 0.2 N m s/rad over the
+/// screw's lever (1.591549e-3 m/rad) squared is 78956.8 N s/m, against 2 sqrt(4.564162e7 N/m x 11.2276 kg) = 45274.5 N s/m
+/// critical: 1.743957 (the coupling's damper in parallel with the whole series spring, as `Converter::apply` puts it).
+#[test]
+fn the_modes_are_damped_by_the_gearboxes_and_bands() {
+    let d = handler(&[
+        "elbow_band.span_damping_n_s_m = 94.0",
+        "wrist_band.span_damping_n_s_m = 94.0",
+        "gearbox.damping_nm_s_rad = 2.5",
+    ]);
+    for r in [0.12, 0.75] {
+        let modes = d.modes(&[r, 0.0, 0.1]);
+        assert_eq!(modes.len(), 5);
+        for m in &modes[..4] {
+            close(m.damping, 1e-4 * std::f64::consts::PI * m.hz, 1e-6, "proportional damping");
+        }
+        close(modes[4].damping, 1.743957, 1e-5, "column damping");
+    }
+    assert!(handler(&[]).modes(&[0.4, 0.0, 0.1]).iter().all(|m| m.damping > 0.0));
+}
+
 /// The column on its screw and coupling (effects.joint_elasticity), by hand: the coupling's 3000 N m/rad at the screw's
 /// lever lead / (2 pi) = 1.591549e-3 m/rad is K_c = 3000 / (1.591549e-3)^2 = 1.184353e9 N/m. The screw, fixed-free, is
 /// softest with the nut at its far end, 0.4 m from the fixed bearing: the shaft of 13.5 mm root diameter, A = pi
