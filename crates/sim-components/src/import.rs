@@ -259,7 +259,8 @@ fn read_twincat(text: &str) -> Result<Vec<Channel>, TraceError> {
     }
     // Full timestamps are FILETIME (100 ns since 1601), counted from the earliest first stamp of all channels so that
     // channels starting at different times keep their offset; otherwise ms from the start of the export.
-    let origin = channels.iter().filter_map(|c| c.time.first().copied()).filter(|&t| t > 1e15).fold(f64::INFINITY, f64::min);
+    let origin =
+        channels.iter().filter_map(|c| c.time.first().copied()).filter(|&t| t > 1e15).fold(f64::INFINITY, f64::min);
     for channel in &mut channels {
         let full = channel.time.first().is_some_and(|&t| t > 1e15);
         channel.time.iter_mut().for_each(|t| *t = if full { (*t - origin) * 1e-7 } else { *t * 1e-3 });

@@ -31,7 +31,9 @@ fn the_inverse_is_continuous_where_the_half_angle_form_divided_by_zero() {
     let t = d.legs().inverse(p).unwrap();
     let back = d.legs().forward(t).unwrap();
     assert!((0..3).all(|a| (back[a] - p[a]).abs() < 1e-12), "{t:?}: {back:?}");
-    for step in [[1e-9, 0.0, 0.0], [-1e-9, 0.0, 0.0], [0.0, 1e-9, 0.0], [0.0, -1e-9, 0.0], [0.0, 0.0, 1e-9], [0.0, 0.0, -1e-9]] {
+    for step in
+        [[1e-9, 0.0, 0.0], [-1e-9, 0.0, 0.0], [0.0, 1e-9, 0.0], [0.0, -1e-9, 0.0], [0.0, 0.0, 1e-9], [0.0, 0.0, -1e-9]]
+    {
         let near = d.legs().inverse([p[0] + step[0], p[1] + step[1], p[2] + step[2]]).unwrap();
         assert!((0..3).all(|k| (near[k] - t[k]).abs() < 1e-6), "{step:?}: {near:?} against {t:?}");
     }
@@ -191,7 +193,9 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
     }
     println!("edge: {by_hand:?} N m");
     assert!(
-        (by_hand[0] + 22.887).abs() < 1e-3 && (by_hand[1] + 1.129).abs() < 1e-3 && (by_hand[1] - by_hand[2]).abs() < 1e-6
+        (by_hand[0] + 22.887).abs() < 1e-3
+            && (by_hand[1] + 1.129).abs() < 1e-3
+            && (by_hand[1] - by_hand[2]).abs() < 1e-6
     );
     // The rigid model held there stays put; so does the elastic one (the standard suite checks the middle).
     for elastic in [false, true] {
@@ -1154,5 +1158,8 @@ fn on_a_compliant_base_the_capsules_stay_and_the_resonance_is_the_lower() {
     assert_eq!((capsules(plain.as_ref()), capsules(based.as_ref())), (9, 9));
     let (own, on_base) = (plain.resonance_hz(&pose).unwrap(), based.resonance_hz(&pose).unwrap());
     let lowest = based.modes(&pose)[0].hz;
-    assert!(on_base <= own && (on_base - lowest).abs() < 1e-9 * lowest, "{own} Hz alone, {on_base} on the base, lowest mode {lowest}");
+    assert!(
+        on_base <= own && (on_base - lowest).abs() < 1e-9 * lowest,
+        "{own} Hz alone, {on_base} on the base, lowest mode {lowest}"
+    );
 }

@@ -7,7 +7,7 @@
 //! Units: lengths in m, forces in N, torques in N m, speeds of rotation in r/min where a catalogue gives them so.
 
 use crate::joint::RotaryJoint;
-use crate::mech::{HoldingBrake, BRISTLE_RATE_MAX, MESH_STIFFNESS};
+use crate::mech::{BRISTLE_RATE_MAX, HoldingBrake, MESH_STIFFNESS};
 use sim_core::{Config, ConfigError, RatingCheck, SignalInfo};
 use std::f64::consts::PI;
 
@@ -619,7 +619,8 @@ mod tests {
         let energy = |j: &RotaryJoint, s: [f64; 4]| {
             0.5 * j.rotor_inertia * s[1] * s[1] + 0.5 * mass * s[3] * s[3] + j.gearbox.energy(s[0], s[2])
         };
-        let power = |j: &RotaryJoint, s: [f64; 4], t: f64| (command(t) * s[1], j.gearbox.loss_power(s[0], s[1], s[2], s[3]));
+        let power =
+            |j: &RotaryJoint, s: [f64; 4], t: f64| (command(t) * s[1], j.gearbox.loss_power(s[0], s[1], s[2], s[3]));
         let (dt, mut s, mut t) = (15.625e-6, [0.0; 4], 0.0);
         let (start, mut work, mut through, mut lost, mut peak) = (energy(&j, s), 0.0, 0.0, 0.0, 0.0f64);
         for _ in 0..64000 {
@@ -632,12 +633,15 @@ mod tests {
             s = std::array::from_fn(|i| s[i] + dt / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]));
             t += dt;
             let (p1, l1) = power(&j, s, t);
-            (work, through, lost) = (work + 0.5 * dt * (p0 + p1), through + 0.5 * dt * (p0.abs() + p1.abs()), lost + 0.5 * dt * (l0 + l1));
+            (work, through, lost) =
+                (work + 0.5 * dt * (p0 + p1), through + 0.5 * dt * (p0.abs() + p1.abs()), lost + 0.5 * dt * (l0 + l1));
             j.gearbox.commit(s[0], s[2]);
             peak = peak.max(s[3].abs());
         }
         let off = work - (energy(&j, s) - start) - lost;
-        println!("peak speed {peak:.4} m/s, work {work:.6} J, lost {lost:.6} J, off {off:.3e} J of {through:.6} J through");
+        println!(
+            "peak speed {peak:.4} m/s, work {work:.6} J, lost {lost:.6} J, off {off:.3e} J of {through:.6} J through"
+        );
         assert!(s.iter().all(|x| x.is_finite()) && peak > 0.1 && peak < 2.0, "{s:?}, peak {peak} m/s");
         assert!(lost > 0.0 && off.abs() < 1e-6 * lost, "off by {off} J, lost {lost} J of {through} J through");
     }

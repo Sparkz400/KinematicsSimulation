@@ -986,8 +986,10 @@ fn plan_use(sim: &sim_components::Sim, cfg: &Config, points: &[(f64, Vec<f64>)])
     let pose = |i: isize| &points[i.clamp(0, points.len() as isize - 1) as usize].1;
     // The motor gives the load's torque (the rigid one less what turns rotor and gearbox input) over the gearbox's
     // efficiency where it drives the load, times it where the load drives it (braking).
-    let eta = if cfg.bool("effects.gearbox_efficiency").unwrap() { cfg.f64("gearbox.efficiency").unwrap() } else { 1.0 };
-    let inertia = cfg.f64("motor.rotor_inertia_kgm2").unwrap() + cfg.f64("gearbox.inertia_at_input_kgm2").unwrap_or(0.0);
+    let eta =
+        if cfg.bool("effects.gearbox_efficiency").unwrap() { cfg.f64("gearbox.efficiency").unwrap() } else { 1.0 };
+    let inertia =
+        cfg.f64("motor.rotor_inertia_kgm2").unwrap() + cfg.f64("gearbox.inertia_at_input_kgm2").unwrap_or(0.0);
     let mut all = Vec::new();
     for i in 0..points.len() as isize {
         let mut used = [0f64; 3];

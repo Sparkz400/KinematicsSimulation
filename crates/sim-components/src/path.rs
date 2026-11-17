@@ -572,8 +572,7 @@ fn geometry_fed(
     while at < geo.len() {
         let cap = caps[at];
         let end = at + caps[at..].iter().take_while(|c| **c == cap).count();
-        let (part, deviation) =
-            shape(axes, start.len(), geo[at..end].to_vec(), tolerance, &|g| speed(g).min(cap));
+        let (part, deviation) = shape(axes, start.len(), geo[at..end].to_vec(), tolerance, &|g| speed(g).min(cap));
         shaped.extend(part.iter().map(|_| cap));
         out.extend(part);
         moved = moved.max(deviation);
@@ -695,7 +694,9 @@ fn given_fed<'a>(
     let bad = Err(CommandError { key: "error-path" });
     let (mut here, mut out): (Vec<f64>, Vec<Geo>) = (start.to_vec(), Vec::new());
     let mut caps: Vec<f64> = Vec::new();
-    let feed = |from: usize, to: usize| (from..to).map(|i| feeds.get(i).copied().unwrap_or(f64::INFINITY)).fold(f64::INFINITY, f64::min);
+    let feed = |from: usize, to: usize| {
+        (from..to).map(|i| feeds.get(i).copied().unwrap_or(f64::INFINITY)).fold(f64::INFINITY, f64::min)
+    };
     // The end the file stated last; none before the first piece, where the path stands on the machine's setpoint.
     let (mut stated, mut off): (Option<&'a Vec<f64>>, f64) = (None, 0.0);
     let mut rest = pieces;
@@ -737,7 +738,9 @@ fn given_fed<'a>(
                         wide(&[-turn * (end[1] - centre[1]) / radius, turn * (end[0] - centre[0]) / radius])
                     }
                     Some(Piece::Arc { to, centre, clockwise, plane })
-                        if end.len() >= 3 && to.len() == end.len() && (centre.len() == 3 || centre.len() == end.len()) =>
+                        if end.len() >= 3
+                            && to.len() == end.len()
+                            && (centre.len() == 3 || centre.len() == end.len()) =>
                     {
                         arc_on(end, to, centre, *clockwise, *plane).and_then(|g| wide(&g.at(0.0)[1]))
                     }
@@ -1029,9 +1032,7 @@ fn off_corner(curve: &Geo, a: &Geo, back: f64, b: &Geo, ahead: f64) -> f64 {
         let p = &curve.at(curve.length() * u)[0];
         line.windows(2).map(|w| to_segment(p, &w[0], &w[1])).fold(f64::INFINITY, f64::min)
     };
-    let (best, _) = (0..=64)
-        .map(|k| (k, off(k as f64 / 64.0)))
-        .fold((0, 0.0), |m, c| if c.1 > m.1 { c } else { m });
+    let (best, _) = (0..=64).map(|k| (k, off(k as f64 / 64.0))).fold((0, 0.0), |m, c| if c.1 > m.1 { c } else { m });
     // The peak can lie between samples (the cusp next to an arc): golden-section it between the neighbours of the best.
     let (mut lo, mut hi) = ((best as f64 - 1.0).max(0.0) / 64.0, (best as f64 + 1.0).min(64.0) / 64.0);
     let phi = 0.5 * (5f64.sqrt() - 1.0);
@@ -1778,13 +1779,13 @@ fn limits(geo: &Geo, bounds: &[Bounds; 3]) -> [f64; 3] {
         Geo::Clothoid { k0, k1, length, .. } => {
             let r = 1.0 / k0.abs().max(k1.abs());
             curved(r, r * r, (k1 - k0).abs() / length, 0.0, any())
-        },
+        }
         // So does a spline span, with the fastest its curvature changes anywhere on it.
         // On three axes or more it also has the jerk v^3 kappa tau along the binormal (`binormal`).
         Geo::Spline { tightest, rate, binormal, .. } => {
             let r = 1.0 / tightest;
             curved(r, r * r, *rate, *binormal, any())
-        },
+        }
         // An arc with other axes carried along is a helix: with the share of the distance that is on the arc, its
         // curvature is the arc's times share^2 and its |p'''| is share^3 / R^2 (the jerk's radius squared R^2 / share^3).
         Geo::Carried { arc, length, .. } => {
@@ -2753,7 +2754,9 @@ fn ramp_share(axes: &[AxisInfo], derivatives: &[[Vec<f64>; 4]]) -> f64 {
     let used = derivatives
         .iter()
         .flat_map(|[_, _, d2, d3]| {
-            axes.iter().enumerate().map(move |(i, ax)| (3.0 * d2[i].abs() * v * a + d3[i].abs() * v.powi(3)) / ax.max_jerk)
+            axes.iter()
+                .enumerate()
+                .map(move |(i, ax)| (3.0 * d2[i].abs() * v * a + d3[i].abs() * v.powi(3)) / ax.max_jerk)
         })
         .fold(0.0, f64::max);
     if used.is_finite() { (1.0 - used).clamp(0.4, 1.0) } else { 0.4 }
@@ -3367,7 +3370,10 @@ arc,0.0,0.0,-0.7,0.0,0.0,-0.8,ccw
 arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw",
         )
         .unwrap();
-        assert_eq!(pieces[1], Piece::Arc { to: vec![0.0, 0.0, -0.7], centre: vec![0.0, 0.0, -0.8], clockwise: false, plane: None });
+        assert_eq!(
+            pieces[1],
+            Piece::Arc { to: vec![0.0, 0.0, -0.7], centre: vec![0.0, 0.0, -0.8], clockwise: false, plane: None }
+        );
         let geo = given(&[0.1, 0.0, -0.9], &pieces, ARC_SLACK).unwrap().0;
         assert_eq!(geo.len(), 3);
         let quarter = std::f64::consts::FRAC_PI_2 * 0.1;
@@ -3389,8 +3395,12 @@ arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw",
         assert!((flat[0].length() - quarter).abs() < 1e-12 && flat[0].at(0.5 * quarter)[0][1] > 0.0);
         // A half turn is laid in the x-y plane (the first plane that holds the start's radius): ccw from +x passes +y;
         // one whose radius lies in no coordinate plane stays refused.
-        let half = given(&[0.1, 0.0, -0.8], &parse("arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap(), ARC_SLACK).unwrap().0;
-        assert!((half[0].length() - 2.0 * quarter).abs() < 1e-12 && distance(&half[0].at(quarter)[0], &[0.0, 0.1, -0.8]) < 1e-12);
+        let half =
+            given(&[0.1, 0.0, -0.8], &parse("arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw").unwrap(), ARC_SLACK).unwrap().0;
+        assert!(
+            (half[0].length() - 2.0 * quarter).abs() < 1e-12
+                && distance(&half[0].at(quarter)[0], &[0.0, 0.1, -0.8]) < 1e-12
+        );
         let tilted = parse("arc,-0.1,-0.1,-0.9,0.0,0.0,-0.8,ccw").unwrap();
         assert_eq!(given(&[0.1, 0.1, -0.7], &tilted, ARC_SLACK).err().unwrap().key, "error-path");
         // Planned within the axis limits, the path ends where it was told.
@@ -3402,7 +3412,12 @@ arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw",
     /// of 0.1 m radius is 0.1 pi / 2 long, and a half turn there is laid in the x-y plane, 0.1 pi long.
     #[test]
     fn arcs_on_four_axes_take_a_centre_with_four_positions() {
-        let arc = |to: [f64; 4]| Piece::Arc { to: to.to_vec(), centre: vec![0.0, 0.0, -0.8, 0.0], clockwise: false, plane: None };
+        let arc = |to: [f64; 4]| Piece::Arc {
+            to: to.to_vec(),
+            centre: vec![0.0, 0.0, -0.8, 0.0],
+            clockwise: false,
+            plane: None,
+        };
         let start = [0.1, 0.0, -0.8, 0.0];
         let quarter = given(&start, &[arc([0.0, 0.1, -0.8, 0.0])], ARC_SLACK).unwrap().0;
         assert!((quarter[0].length() - 0.1 * std::f64::consts::FRAC_PI_2).abs() < 1e-12);
@@ -3426,7 +3441,10 @@ arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw",
             vec![(vec![1.0, 0.0, 0.0, 0.0], 100.0)],
         ];
         let [v, ..] = limits(&helix, &bounds);
-        assert!((v - (0.4_f64 * 100.0 * r * r / share.powi(3)).cbrt()).abs() < 1e-9 && (v - 0.35272).abs() < 1e-4, "{v}");
+        assert!(
+            (v - (0.4_f64 * 100.0 * r * r / share.powi(3)).cbrt()).abs() < 1e-9 && (v - 0.35272).abs() < 1e-4,
+            "{v}"
+        );
         assert!(v.powi(3) * share.powi(3) / (r * r) <= 0.4 * 100.0 * (1.0 + 1e-9));
     }
 
@@ -3436,7 +3454,8 @@ arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw",
     /// where the peak is 1/15 = 0.066667 (the samples at 21 / 64 and 22 / 64 give 0.065625).
     #[test]
     fn the_deviation_of_a_corner_curve_is_found_between_the_samples() {
-        let line = |from: [f64; 2], dir: [f64; 2], length: f64| Geo::Line { dir: dir.to_vec(), from: from.to_vec(), length };
+        let line =
+            |from: [f64; 2], dir: [f64; 2], length: f64| Geo::Line { dir: dir.to_vec(), from: from.to_vec(), length };
         let (a, b) = (line([0.0, 0.0], [1.0, 0.0], 1.0), line([1.0, 0.0], [0.0, 1.0], 1.0));
         let size = 0.05_f64.sqrt();
         let curve = line([0.9, 0.0], [0.1 / size, 0.2 / size], size);
@@ -3454,9 +3473,10 @@ arc,-0.1,0.0,-0.8,0.0,0.0,-0.8,ccw",
         let axes = axes();
         let pieces = parse("line,0.1,0.0\narc,0.2,0.1,0.1,0.1,ccw\nline,0.2,0.2\nline,0.3,0.2").unwrap();
         let tolerance = Tolerance { path: 1e-3, corner: 1e-3 };
-        let fed = geometry_fed(&axes, &[0.0; 2], &pieces, &[0.01, 0.02, 0.02, 0.01], tolerance, &axis_speed(&axes), 0.0)
-            .unwrap()
-            .1;
+        let fed =
+            geometry_fed(&axes, &[0.0; 2], &pieces, &[0.01, 0.02, 0.02, 0.01], tolerance, &axis_speed(&axes), 0.0)
+                .unwrap()
+                .1;
         let read = deviation(&axes, &[0.0; 2], &pieces, tolerance, 0.0).unwrap();
         assert!(fed <= read && read <= 1e-3 * (1.0 + 1e-9) && read > 0.0, "with the feeds {fed} m, read {read} m");
     }
@@ -3549,7 +3569,10 @@ line,0.2,0.0,-0.9",
             parse("# a corner rounded off\nline, 0.5, 0.35\n\narc,0.6,0.25,0.5,0.25,cw\nline,0.6,0.05\n").unwrap();
         assert_eq!(pieces.len(), 3);
         assert_eq!(pieces[0], Piece::Line(vec![0.5, 0.35]));
-        assert_eq!(pieces[1], Piece::Arc { to: vec![0.6, 0.25], centre: vec![0.5, 0.25], clockwise: true, plane: None });
+        assert_eq!(
+            pieces[1],
+            Piece::Arc { to: vec![0.6, 0.25], centre: vec![0.5, 0.25], clockwise: true, plane: None }
+        );
         assert_eq!(parse("spline, 0.7,0.2").unwrap(), [Piece::Spline(vec![0.7, 0.2])]);
         for bad in [
             "circle,1,2",
@@ -4055,8 +4078,12 @@ line,0.1,0.35";
         let c2 = [p1[0] + (c1[0] - p1[0]) * tight / wide, p1[1] + (c1[1] - p1[1]) * tight / wide];
         let p2 = on(c2, tight, a + b);
         let end = [p2[0] + 0.02 * (a + b).sin(), p2[1] + 0.02 * (a + b).cos()];
-        let arc =
-            |to: [f64; 2], centre: [f64; 2]| Piece::Arc { to: to.to_vec(), centre: centre.to_vec(), clockwise: true, plane: None };
+        let arc = |to: [f64; 2], centre: [f64; 2]| Piece::Arc {
+            to: to.to_vec(),
+            centre: centre.to_vec(),
+            clockwise: true,
+            plane: None,
+        };
         let pieces = [Piece::Line(vec![0.2, 0.2]), arc(p1, c1), arc(p2, c2), Piece::Line(end.to_vec())];
         let (geo, reported) = geometry(&axes, &start, &pieces, tolerance, &axis_speed(&axes), ARC_SLACK).unwrap();
         let turned: f64 = geo
@@ -4502,7 +4529,12 @@ line,0.1,0.35";
         let more = [
             pieces,
             vec![
-                Piece::Arc { to: (0..3).map(|i| centre[i] + 0.05 * e2[i]).collect(), centre, clockwise: false, plane: None },
+                Piece::Arc {
+                    to: (0..3).map(|i| centre[i] + 0.05 * e2[i]).collect(),
+                    centre,
+                    clockwise: false,
+                    plane: None,
+                },
                 Piece::Line(end.clone()),
             ],
         ]
@@ -4733,7 +4765,10 @@ line,0.3,0.13",
     #[test]
     fn a_four_axis_arc_keeps_its_fourth_axis_linear_in_the_arc_length() {
         let pieces = parse("arc,0.0,0.1,0.0,1.0,0.0,0.0,0.0,ccw").unwrap();
-        assert_eq!(pieces[0], Piece::Arc { to: vec![0.0, 0.1, 0.0, 1.0], centre: vec![0.0; 3], clockwise: false, plane: None });
+        assert_eq!(
+            pieces[0],
+            Piece::Arc { to: vec![0.0, 0.1, 0.0, 1.0], centre: vec![0.0; 3], clockwise: false, plane: None }
+        );
         let (geo, off) = given(&[0.1, 0.0, 0.0, 0.0], &pieces, ARC_SLACK).unwrap();
         let length = (0.05f64 * std::f64::consts::PI).hypot(1.0);
         assert!((length - 1.01226).abs() < 1e-5 && (geo[0].length() - length).abs() < 1e-12 && off < 1e-12);
@@ -4780,7 +4815,12 @@ line,0.3,0.13",
         assert!(near(half(Some([0.0, 1.0, 0.0])).unwrap(), [0.0, 0.0, 0.1]));
         assert!(near(half(Some([0.0, 0.0, 1.0])).unwrap(), [0.0, 0.1, 0.0]));
         assert!(near(half(None).unwrap(), [0.0, 0.1, 0.0]));
-        let up = [Piece::Arc { to: vec![0.0, 0.0, -0.1], centre: vec![0.0; 3], clockwise: false, plane: Some([0.0, 0.0, 1.0]) }];
+        let up = [Piece::Arc {
+            to: vec![0.0, 0.0, -0.1],
+            centre: vec![0.0; 3],
+            clockwise: false,
+            plane: Some([0.0, 0.0, 1.0]),
+        }];
         assert!(given(&[0.0, 0.0, 0.1], &up, ARC_SLACK).is_err());
     }
 

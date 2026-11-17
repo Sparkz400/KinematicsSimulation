@@ -310,7 +310,9 @@ fn a_self_locking_worm_holds_its_load_and_one_that_turns_back_loses_by_its_back_
     // Forward 0.8 with a back efficiency below 0 is no worm: one that locks has a lead angle below its friction angle.
     assert_eq!(
         refused(worm_table("40", 0.8, -0.2)),
-        Some(ConfigError::Invalid("machine.worm[worm].efficiency (a self-locking worm has an efficiency below 0.5)".into()))
+        Some(ConfigError::Invalid(
+            "machine.worm[worm].efficiency (a self-locking worm has an efficiency below 0.5)".into()
+        ))
     );
 }
 

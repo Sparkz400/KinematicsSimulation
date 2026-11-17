@@ -1614,7 +1614,8 @@ fn a_reorienting_time_optimal_line_keeps_the_flanges_angular_limits() {
     let points = sim.plan_path(&sim_components::path::parse(&text).unwrap(), true).unwrap();
     let chain = arm::chain(&cfg).unwrap();
     let fk = |q: &[f64]| chain.tip(q);
-    let pose = tool::Pose::new(&fk, cfg.f64s("kinematics.home_joints").unwrap(), vec![0, 1, 2, 3, 4, 5], 0.86, 30.0).unwrap();
+    let pose =
+        tool::Pose::new(&fk, cfg.f64s("kinematics.home_joints").unwrap(), vec![0, 1, 2, 3, 4, 5], 0.86, 30.0).unwrap();
     let ratios = cfg.f64s("arm.gear_ratios").unwrap();
     let joints: Vec<Vec<f64>> = points
         .iter()
@@ -1625,7 +1626,10 @@ fn a_reorienting_time_optimal_line_keeps_the_flanges_angular_limits() {
         })
         .collect();
     let spin = |i: usize, j: usize| {
-        let (ri, rj) = (exp([points[i].1[3], points[i].1[4], points[i].1[5]]), exp([points[j].1[3], points[j].1[4], points[j].1[5]]));
+        let (ri, rj) = (
+            exp([points[i].1[3], points[i].1[4], points[i].1[5]]),
+            exp([points[j].1[3], points[j].1[4], points[j].1[5]]),
+        );
         log(&matmul(&rj, &transpose(&ri))).map(|w| w / (points[j].0 - points[i].0))
     };
     let (mut fastest, mut hardest, mut worst) = (0.0f64, 0.0f64, [0.0f64; 2]);
@@ -1635,13 +1639,18 @@ fn a_reorienting_time_optimal_line_keeps_the_flanges_angular_limits() {
         let (w_ahead, w_behind) = (spin(k, k + 2), spin(k - 2, k));
         let dw: Vec<f64> = (0..3).map(|i| (w_ahead[i] - w_behind[i]) / (2.0 * dt)).collect();
         let qd: Vec<f64> = (0..6).map(|c| (joints[k + 1][c] - joints[k - 1][c]) / (2.0 * dt)).collect();
-        let qdd: Vec<f64> = (0..6).map(|c| (joints[k + 1][c] - 2.0 * joints[k][c] + joints[k - 1][c]) / (dt * dt)).collect();
+        let qdd: Vec<f64> =
+            (0..6).map(|c| (joints[k + 1][c] - 2.0 * joints[k][c] + joints[k - 1][c]) / (dt * dt)).collect();
         let (speed, acc) = pose.angular_motion(&fk, &joints[k], &qd, &qdd);
-        let (w_size, dw_size) = (w.iter().map(|v| v * v).sum::<f64>().sqrt(), dw.iter().map(|v| v * v).sum::<f64>().sqrt());
+        let (w_size, dw_size) =
+            (w.iter().map(|v| v * v).sum::<f64>().sqrt(), dw.iter().map(|v| v * v).sum::<f64>().sqrt());
         worst = [worst[0].max((speed - w_size).abs()), worst[1].max((acc - dw_size).abs())];
         (fastest, hardest) = (fastest.max(w_size), hardest.max(dw_size));
     }
-    println!("{} points: |w| {fastest:.4} of 1.5 rad/s, |dw/dt| {hardest:.4} of 8 rad/s^2, differences {worst:?}", points.len());
+    println!(
+        "{} points: |w| {fastest:.4} of 1.5 rad/s, |dw/dt| {hardest:.4} of 8 rad/s^2, differences {worst:?}",
+        points.len()
+    );
     assert!(worst[0] < 1e-5 * fastest && worst[1] < 5e-3 * hardest, "{worst:?}");
     assert!(fastest <= 1.5 * 1.001 && hardest <= 8.0 * 1.001, "{fastest} rad/s, {hardest} rad/s^2");
     assert!(fastest > 0.9 * 1.5 || hardest > 0.9 * 8.0, "the limits bind: {fastest} rad/s, {hardest} rad/s^2");
@@ -1820,7 +1829,9 @@ fn the_seven_joint_arms_second_difference_does_not_depend_on_the_call_before() {
         t
     };
     let mut torques = Vec::new();
-    for before in [start.clone(), at([0.15, -0.15, 0.1, -0.3, 0.3, 0.0]), at([-0.15, 0.15, -0.15, 0.3, 0.0, -0.3]), pose.clone()] {
+    for before in
+        [start.clone(), at([0.15, -0.15, 0.1, -0.3, 0.3, 0.0]), at([-0.15, 0.15, -0.15, 0.3, 0.0, -0.3]), pose.clone()]
+    {
         let mut motors = [0.0; 7];
         m.inverse(&before, &mut motors);
         torques.push(ff(m.as_ref()));
@@ -1840,7 +1851,10 @@ fn the_seven_joint_arms_second_difference_does_not_depend_on_the_call_before() {
         q
     };
     let along = |d: &[f64], s: f64| -> Vec<f64> { pose.iter().zip(d).map(|(p, d)| p + s * d).collect() };
-    let (hv, ha) = (0.25e-3 / vel.iter().map(|v| v * v).sum::<f64>().sqrt(), 0.25e-3 / acc.iter().map(|v| v * v).sum::<f64>().sqrt());
+    let (hv, ha) = (
+        0.25e-3 / vel.iter().map(|v| v * v).sum::<f64>().sqrt(),
+        0.25e-3 / acc.iter().map(|v| v * v).sum::<f64>().sqrt(),
+    );
     let (q, ahead, behind) = (motors_at(&pose), motors_at(&along(&vel, hv)), motors_at(&along(&vel, -hv)));
     let (a_ahead, a_behind) = (motors_at(&along(&acc, ha)), motors_at(&along(&acc, -ha)));
     let speed: Vec<f64> = (0..7).map(|k| (ahead[k] - behind[k]) / (2.0 * hv)).collect();
@@ -1851,7 +1865,12 @@ fn the_seven_joint_arms_second_difference_does_not_depend_on_the_call_before() {
     m.rigid_motor_torque(&q, &speed, &accel, &mut fine);
     let coarse = ff(m.as_ref());
     for k in 0..7 {
-        assert!((coarse[k] - fine[k]).abs() < 1e-3 * size, "motor {k}: {} against {} N m with a quarter step", coarse[k], fine[k]);
+        assert!(
+            (coarse[k] - fine[k]).abs() < 1e-3 * size,
+            "motor {k}: {} against {} N m with a quarter step",
+            coarse[k],
+            fine[k]
+        );
     }
     println!("step 1e-3 against a quarter: {:?}", (0..7).map(|k| (coarse[k] - fine[k]) / size).collect::<Vec<_>>());
     assert_eq!(ratios.len(), 7);

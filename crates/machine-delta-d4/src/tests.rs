@@ -500,7 +500,10 @@ fn the_friction_feedforward_takes_the_loss_on_the_weight() {
         machine.steady_friction(&pos, &vel, &mut friction);
         for k in 0..4 {
             let off = t[k] - ff[k] - friction[k];
-            println!("{vel:?}: motor {k}: Newton {:.6} N m, feedforward {:.6} + friction {:.6}, off {off:.2e}", t[k], ff[k], friction[k]);
+            println!(
+                "{vel:?}: motor {k}: Newton {:.6} N m, feedforward {:.6} + friction {:.6}, off {off:.2e}",
+                t[k], ff[k], friction[k]
+            );
             assert!(off.abs() < 5e-5 * t[k].abs(), "{vel:?}: motor {k}: {t:?} against {ff:?} + {friction:?}");
         }
     }
@@ -525,5 +528,8 @@ fn on_a_compliant_base_the_capsules_stay_and_the_resonance_is_the_lower() {
     assert_eq!((capsules(plain.as_ref()), capsules(based.as_ref())), (11, 11));
     let (own, on_base) = (plain.resonance_hz(&pose).unwrap(), based.resonance_hz(&pose).unwrap());
     let lowest = based.modes(&pose)[0].hz;
-    assert!(on_base <= own && (on_base - lowest).abs() < 1e-9 * lowest, "{own} Hz alone, {on_base} on the base, lowest mode {lowest}");
+    assert!(
+        on_base <= own && (on_base - lowest).abs() < 1e-9 * lowest,
+        "{own} Hz alone, {on_base} on the base, lowest mode {lowest}"
+    );
 }

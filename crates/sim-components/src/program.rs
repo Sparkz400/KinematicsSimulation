@@ -58,7 +58,8 @@ pub struct Run {
 impl Run {
     /// The cap of each piece, `None` where the run is at the axes' limits; a run built with a feed and no caps has it for all.
     pub fn caps(&self) -> Option<Vec<f64>> {
-        self.feed.map(|f| if self.caps.len() == self.pieces.len() { self.caps.clone() } else { vec![f; self.pieces.len()] })
+        self.feed
+            .map(|f| if self.caps.len() == self.pieces.len() { self.caps.clone() } else { vec![f; self.pieces.len()] })
     }
 }
 
@@ -85,11 +86,9 @@ pub fn read(file_name: &str, text: &str, axes: &[AxisInfo], start: &[f64]) -> Re
         "src" => krl(text, axes, start),
         "mod" | "prg" => rapid(text, axes, start),
         _ if text.lines().any(|l| l.trim().to_ascii_lowercase().starts_with("move")) => robot_csv(text, axes, start),
-        _ => crate::path::parse(text).map(|pieces| vec![Run { feed: None, caps: Vec::new(), pieces }]).map_err(|line| ProgramError {
-            line: 0,
-            key: "program-error-word",
-            detail: line,
-        }),
+        _ => crate::path::parse(text)
+            .map(|pieces| vec![Run { feed: None, caps: Vec::new(), pieces }])
+            .map_err(|line| ProgramError { line: 0, key: "program-error-word", detail: line }),
     }
 }
 
@@ -732,17 +731,23 @@ mod tests {
     #[test]
     fn a_feed_that_changes_between_blocks_is_a_cap_per_piece_in_one_run() {
         let axes = [axis("x"), axis("y")];
-        let runs = gcode("F600
+        let runs = gcode(
+            "F600
 G1 X10
 F1200
 G1 X20
 F600
-G1 X30", &axes, &[0.0; 2]).unwrap();
+G1 X30",
+            &axes,
+            &[0.0; 2],
+        )
+        .unwrap();
         assert_eq!(runs.len(), 1);
         let caps = runs[0].caps().unwrap();
         assert!(caps.iter().zip([0.01, 0.02, 0.01]).all(|(a, b)| (a - b).abs() < 1e-15) && runs[0].feed == Some(0.02));
-        let points = crate::path::plan_feeds(&axes, &[0.0; 2], &runs[0].pieces, &caps, 1e-3, 0.0, crate::path::ARC_SLACK)
-            .unwrap();
+        let points =
+            crate::path::plan_feeds(&axes, &[0.0; 2], &runs[0].pieces, &caps, 1e-3, 0.0, crate::path::ARC_SLACK)
+                .unwrap();
         let (time, k) = (points[points.len() - 1].0, points.iter().position(|(_, p)| p[0] >= 0.01).unwrap());
         let speed = (points[k + 1].1[0] - points[k - 1].1[0]) / 2e-3;
         assert!((time - 2.5).abs() < 0.03 && (speed - 0.01).abs() < 1e-4, "{time} s, {speed} m/s at 10 mm");
@@ -753,9 +758,14 @@ G1 X30", &axes, &[0.0; 2]).unwrap();
     #[test]
     fn a_full_circle_is_planned() {
         let axes = [axis("x"), axis("y")];
-        let runs = gcode("F600
+        let runs = gcode(
+            "F600
 G1 X1
-G2 I10", &axes, &[0.0; 2]).unwrap();
+G2 I10",
+            &axes,
+            &[0.0; 2],
+        )
+        .unwrap();
         let pieces = &runs[0].pieces;
         assert_eq!(pieces.len(), 4);
         let l = length(&axes, &[0.0; 2], pieces);
@@ -813,13 +823,23 @@ G2 I10", &axes, &[0.0; 2]).unwrap();
             points.iter().fold((0f64, 0f64), |(y, z), (_, p)| (y.max(p[1].abs()), z.max(p[2].abs())))
         };
         let start = [0.01, 0.0, 0.0];
-        let runs = gcode("G18 F600
-G2 X-10 Z0 I-10 K0", &axes, &start).unwrap();
+        let runs = gcode(
+            "G18 F600
+G2 X-10 Z0 I-10 K0",
+            &axes,
+            &start,
+        )
+        .unwrap();
         assert!(matches!(&runs[0].pieces[0], Piece::Arc { plane: Some(n), .. } if *n == [0.0, 1.0, 0.0]));
         let (y, z) = reach(&start, &runs[0].pieces);
         assert!(y < 1e-12 && (z - 0.01).abs() < 1e-4, "y {y} m, z {z} m");
-        let runs = robot_csv("MoveL,-0.5,0,0
-MoveC,0,0,0.5,0.5,0,0", &axes, &[0.0; 3]).unwrap();
+        let runs = robot_csv(
+            "MoveL,-0.5,0,0
+MoveC,0,0,0.5,0.5,0,0",
+            &axes,
+            &[0.0; 3],
+        )
+        .unwrap();
         let (y, z) = reach(&[0.0; 3], &runs[0].pieces);
         assert!(y < 1e-12 && (z - 0.5).abs() < 1e-3, "y {y} m, z {z} m");
     }

@@ -250,7 +250,8 @@ mod tests {
     #[test]
     fn a_converters_mesh_bristle_is_in_newtons_per_metre_and_capped() {
         use crate::transmission::Converter;
-        let text = joint_text().replace("gearbox_lost_motion = false", "gearbox_lost_motion = false\ngearbox_mesh_friction = true");
+        let text = joint_text()
+            .replace("gearbox_lost_motion = false", "gearbox_lost_motion = false\ngearbox_mesh_friction = true");
         let mut cfg = Config::parse(&text).unwrap();
         let mut j = RotaryJoint::from_config(&cfg).unwrap();
         Converter { lever: 0.05, stiffness: 1e7, backlash: 0.0, efficiency: 0.95, inertia: 0.04 }

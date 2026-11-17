@@ -125,7 +125,8 @@ pub fn make(
         tr.tr_arg("report-fail", &format!("{failed} / {}", judged.len()))
     };
     // The last row is stamped at the start of its sample: the cycle lasts one sample step longer.
-    let duration = rows.last().map_or(0.0, |r| r[0] + if rows.len() > 1 { r[0] - rows[rows.len() - 2][0] } else { 0.0 });
+    let duration =
+        rows.last().map_or(0.0, |r| r[0] + if rows.len() > 1 { r[0] - rows[rows.len() - 2][0] } else { 0.0 });
     let facts = [
         ("report-machine-name", tr.tr(entry.key).to_string()),
         ("report-config", source.to_string()),

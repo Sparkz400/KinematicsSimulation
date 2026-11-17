@@ -373,8 +373,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         if side.abs() != 1.0 {
             return Err(ConfigError::Invalid("track.rack_side".into()));
         }
-        let lever =
-            if cfg.get("track.rack_lever_m").is_ok() { cfg.non_negative("track.rack_lever_m")? } else { 0.0 };
+        let lever = if cfg.get("track.rack_lever_m").is_ok() { cfg.non_negative("track.rack_lever_m")? } else { 0.0 };
         Some((cfg.positive("track.block_spacing_m")?, cfg.positive("track.rail_spacing_m")?, side, lever))
     } else {
         None
@@ -547,9 +546,9 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
                 // The per-axis limits bound the rotation vector's rates; the spin they allow is bounded by these.
                 let least = |key: &str| -> Result<Option<f64>, ConfigError> {
                     let turns = picked.iter().filter(|a| (3..6).contains(*a));
-                    turns.map(|&a| cfg.f64(&format!("axis.{}.{key}", POSE_AXES[a].0))).try_fold(None, |m: Option<f64>, v| {
-                        v.map(|v| Some(m.map_or(v, |m| m.min(v))))
-                    })
+                    turns
+                        .map(|&a| cfg.f64(&format!("axis.{}.{key}", POSE_AXES[a].0)))
+                        .try_fold(None, |m: Option<f64>, v| v.map(|v| Some(m.map_or(v, |m| m.min(v)))))
                 };
                 if let (Some(v), Some(a)) = (least("max_velocity_rad_s")?, least("max_acceleration_rad_s2")?) {
                     arm.angular_limits = Some([v, a]);
@@ -1051,7 +1050,12 @@ impl Mechanism for Arm {
         if self.angular_limits.is_some() {
             out.extend([
                 SignalInfo::new("tool.angular_speed", "tool-orientation", "quantity-angular-speed", "rad/s"),
-                SignalInfo::new("tool.angular_acceleration", "tool-orientation", "quantity-angular-acceleration", "rad/s^2"),
+                SignalInfo::new(
+                    "tool.angular_acceleration",
+                    "tool-orientation",
+                    "quantity-angular-acceleration",
+                    "rad/s^2",
+                ),
             ]);
         }
         out
@@ -1103,7 +1107,13 @@ impl Mechanism for Arm {
         // the simulated pass they would count the gears' ringing: 22 rad/s2 on the arm's tool cycle, whose plan holds the
         // orientation (0 rad/s2), 6.4 with the joints rigid (the servo's steps).
         if let Some([speed, acceleration]) = self.angular_limits {
-            let check = |check, signal: &str, limit| RatingCheck { check, signal: signal.into(), motor: None, limit, life: false };
+            let check = |check, signal: &str, limit| RatingCheck {
+                check,
+                signal: signal.into(),
+                motor: None,
+                limit,
+                life: false,
+            };
             out.extend([
                 check("tool-angular-speed", "plan.tool.angular_speed", speed),
                 check("tool-angular-acceleration", "plan.tool.angular_acceleration", acceleration),

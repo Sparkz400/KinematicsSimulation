@@ -114,7 +114,11 @@ pub fn study(entry: &MachineEntry, cfg: &Config, category: StopCategory, grid: u
         (0..stops.len()).max_by(|&a, &b| stops[a].tool_distance.total_cmp(&stops[b].tool_distance)).unwrap_or(0);
     let mut verdicts = Vec::new();
     // The tool distance is in rad on a machine without an axis in m: it has its own limit.
-    let key = if axes.iter().any(|a| a.unit == "m") { "ratings.max_stopping_distance_m" } else { "ratings.max_stopping_angle_rad" };
+    let key = if axes.iter().any(|a| a.unit == "m") {
+        "ratings.max_stopping_distance_m"
+    } else {
+        "ratings.max_stopping_angle_rad"
+    };
     if let (Ok(limit), Some(w)) = (cfg.f64(key), stops.get(worst)) {
         let value = w.tool_distance;
         verdicts.push(Verdict { check: "stopping-distance", motor: None, value, limit, ok: value <= limit });

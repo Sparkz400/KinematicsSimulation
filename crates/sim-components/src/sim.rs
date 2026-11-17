@@ -857,7 +857,8 @@ impl Sim {
         }
         for (k, motor) in self.machine.motors().iter().enumerate() {
             // A linear motor's angle is a position (m), its speed m/s, its torque a force (N).
-            let (pos, rate, load) = if self.machine.motor_linear(k) { ("m", "m/s", "N") } else { ("rad", "rad/s", "N m") };
+            let (pos, rate, load) =
+                if self.machine.motor_linear(k) { ("m", "m/s", "N") } else { ("rad", "rad/s", "N m") };
             for (name, unit) in [
                 ("angle", pos),
                 ("speed", rate),

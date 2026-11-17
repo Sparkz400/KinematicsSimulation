@@ -1338,8 +1338,13 @@ impl Controller {
         let mut points = vec![(0.0, self.raw_pos.clone())];
         for run in runs.iter().filter(|run| !run.pieces.is_empty()) {
             let (t0, start) = points[points.len() - 1].clone();
-            let planned =
-                self.plan_from(machine, &start, &run.pieces, time_optimal && run.feed.is_none(), run.caps().as_deref())?;
+            let planned = self.plan_from(
+                machine,
+                &start,
+                &run.pieces,
+                time_optimal && run.feed.is_none(),
+                run.caps().as_deref(),
+            )?;
             // Each plan starts at its start at 0 s, which the one before has as its end.
             points.extend(planned.into_iter().skip(1).map(|(t, pose)| (t0 + t, pose)));
         }

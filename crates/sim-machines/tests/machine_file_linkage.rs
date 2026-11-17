@@ -393,64 +393,74 @@ fn the_linkage_holds_the_plate_at_the_centre_with_the_hand_calculated_torque() {
 /// 1.3e-4 at 0.01 m/s, 2.4e-8 with the model at its fixed point; both now at theirs (`mech::settled_loss`).
 #[test]
 fn the_linkage_friction_feedforward_takes_the_loss_on_the_weight() {
-  for drag in [true, false] {
-    let mut cfg = file().config();
-    for line in ["effects.joint_elasticity = false", "effects.torque_ripple = false", &format!("effects.gearbox_drag = {drag}")] {
-        cfg.set_text(line).unwrap();
-    }
-    let machine = (file().build)(&cfg).unwrap();
-    let pos = [0.05, -0.55];
-    let mut vertical = Vec::new();
-    for vel in [[0.0, 0.05], [0.0, -0.05], [0.05, 0.0], [-0.05, 0.02], [0.0, 0.01], [0.0, -0.01], [-0.01, 0.004]] {
-        let (mut state, mut held) = (Vec::new(), [0.0; 2]);
-        machine.equilibrium(&pos, &mut state, &mut held);
-        machine.set_tool_velocity(&mut state, &vel);
-        let acc = |t: [f64; 2]| {
-            let mut rates = vec![0.0; machine.state_len()];
-            machine.derivatives(&state, &t, &mut rates);
-            let velocity = |h: f64| {
-                let s: Vec<f64> = state.iter().zip(&rates).map(|(s, r)| s + h * r).collect();
-                let (mut p, mut v) = ([0.0; 2], [0.0; 2]);
-                machine.tool_state(&s, &mut p, &mut v);
-                v
+    for drag in [true, false] {
+        let mut cfg = file().config();
+        for line in [
+            "effects.joint_elasticity = false",
+            "effects.torque_ripple = false",
+            &format!("effects.gearbox_drag = {drag}"),
+        ] {
+            cfg.set_text(line).unwrap();
+        }
+        let machine = (file().build)(&cfg).unwrap();
+        let pos = [0.05, -0.55];
+        let mut vertical = Vec::new();
+        for vel in [[0.0, 0.05], [0.0, -0.05], [0.05, 0.0], [-0.05, 0.02], [0.0, 0.01], [0.0, -0.01], [-0.01, 0.004]] {
+            let (mut state, mut held) = (Vec::new(), [0.0; 2]);
+            machine.equilibrium(&pos, &mut state, &mut held);
+            machine.set_tool_velocity(&mut state, &vel);
+            let acc = |t: [f64; 2]| {
+                let mut rates = vec![0.0; machine.state_len()];
+                machine.derivatives(&state, &t, &mut rates);
+                let velocity = |h: f64| {
+                    let s: Vec<f64> = state.iter().zip(&rates).map(|(s, r)| s + h * r).collect();
+                    let (mut p, mut v) = ([0.0; 2], [0.0; 2]);
+                    machine.tool_state(&s, &mut p, &mut v);
+                    v
+                };
+                let (ahead, behind) = (velocity(1e-6), velocity(-1e-6));
+                [(ahead[0] - behind[0]) / 2e-6, (ahead[1] - behind[1]) / 2e-6]
             };
-            let (ahead, behind) = (velocity(1e-6), velocity(-1e-6));
-            [(ahead[0] - behind[0]) / 2e-6, (ahead[1] - behind[1]) / 2e-6]
-        };
-        let mut t = held;
-        for _ in 0..20 {
+            let mut t = held;
+            for _ in 0..20 {
+                let a = acc(t);
+                let j: [[f64; 2]; 2] = std::array::from_fn(|c| {
+                    let mut s = t;
+                    s[c] += 1e-6;
+                    let b = acc(s);
+                    [(b[0] - a[0]) / 1e-6, (b[1] - a[1]) / 1e-6]
+                });
+                // a + J dt = 0, J[c] the column of motor c.
+                let det = j[0][0] * j[1][1] - j[1][0] * j[0][1];
+                t[0] -= (a[0] * j[1][1] - a[1] * j[1][0]) / det;
+                t[1] -= (j[0][0] * a[1] - j[0][1] * a[0]) / det;
+            }
             let a = acc(t);
-            let j: [[f64; 2]; 2] = std::array::from_fn(|c| {
-                let mut s = t;
-                s[c] += 1e-6;
-                let b = acc(s);
-                [(b[0] - a[0]) / 1e-6, (b[1] - a[1]) / 1e-6]
-            });
-            // a + J dt = 0, J[c] the column of motor c.
-            let det = j[0][0] * j[1][1] - j[1][0] * j[0][1];
-            t[0] -= (a[0] * j[1][1] - a[1] * j[1][0]) / det;
-            t[1] -= (j[0][0] * a[1] - j[0][1] * a[0]) / det;
+            assert!(a[0].abs() < 1e-7 && a[1].abs() < 1e-7, "{a:?}");
+            let (mut ff, mut friction) = ([0.0; 2], [0.0; 2]);
+            machine.feedforward_torque_moving(&pos, &vel, &[0.0; 2], &mut ff);
+            machine.steady_friction(&pos, &vel, &mut friction);
+            for k in 0..2 {
+                println!(
+                    "drag {drag}, {vel:?}: motor {k}: off {:.2e} of the torque",
+                    (t[k] - ff[k] - friction[k]) / t[k]
+                );
+                assert!(
+                    (t[k] - ff[k] - friction[k]).abs() < 1e-11 * t[k].abs(),
+                    "drag {drag}, {vel:?}: motor {k}: {t:?} against {ff:?} + {friction:?}"
+                );
+            }
+            if vel[0] == 0.0 {
+                vertical.push(friction[0]);
+            }
         }
-        let a = acc(t);
-        assert!(a[0].abs() < 1e-7 && a[1].abs() < 1e-7, "{a:?}");
-        let (mut ff, mut friction) = ([0.0; 2], [0.0; 2]);
-        machine.feedforward_torque_moving(&pos, &vel, &[0.0; 2], &mut ff);
-        machine.steady_friction(&pos, &vel, &mut friction);
-        for k in 0..2 {
-            println!("drag {drag}, {vel:?}: motor {k}: off {:.2e} of the torque", (t[k] - ff[k] - friction[k]) / t[k]);
-            assert!((t[k] - ff[k] - friction[k]).abs() < 1e-11 * t[k].abs(), "drag {drag}, {vel:?}: motor {k}: {t:?} against {ff:?} + {friction:?}");
-        }
-        if vel[0] == 0.0 {
-            vertical.push(friction[0]);
-        }
+        // Up and down: the loss on the weight is what the two frictions do not cancel.
+        let net = vertical[0] + vertical[1];
+        println!("drag {drag}: friction up {} and down {} N m", vertical[0], vertical[1]);
+        // Without the loss on the weight they would cancel: lifting -g (1 / eta - 1) more, lowering -g (1 - eta) less, net
+        // -g (1 / eta + eta - 2) = 1.037 * 0.00383 = 0.0040 N m (and the friction's own loss).
+        assert!(drag || net < -0.003, "{net}");
     }
-    // Up and down: the loss on the weight is what the two frictions do not cancel.
-    let net = vertical[0] + vertical[1];
-    println!("drag {drag}: friction up {} and down {} N m", vertical[0], vertical[1]);
-    // Without the loss on the weight they would cancel: lifting -g (1 / eta - 1) more, lowering -g (1 - eta) less, net
-    // -g (1 / eta + eta - 2) = 1.037 * 0.00383 = 0.0040 N m (and the friction's own loss).
-    assert!(drag || net < -0.003, "{net}");
-  }
 }
 
 /// A broken linkage is refused with its key and line.
@@ -554,7 +564,8 @@ fn the_scissor_lifts_gearbox_carries_the_screws_loss_both_ways() {
         cfg.set_text(&format!("effects.{off} = false")).unwrap();
     }
     let machine = (scissor_file().build)(&cfg).unwrap();
-    let at = machine.signal_infos().iter().position(|s| s.id.starts_with("gearbox.") && s.id.ends_with(".output_torque"));
+    let at =
+        machine.signal_infos().iter().position(|s| s.id.starts_with("gearbox.") && s.id.ends_with(".output_torque"));
     for (speed, motor, by_hand) in [(0.05, 1.60763, 30.867), (-0.05, 1.20009, 25.002)] {
         let (mut state, mut held) = (Vec::new(), [0.0]);
         machine.equilibrium(&[0.6], &mut state, &mut held);
