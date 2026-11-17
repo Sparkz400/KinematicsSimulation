@@ -10,14 +10,20 @@
 //! (at most 9 unknowns). The trolley's S = (x_c + psi (y - y_c), y, H), the sling's end P2 = P1 + l_s e(a, b), e = (sin a
 //! cos b, sin b, -cos a cos b); a point of mass m with the acceleration a_p = J q'' + c (c = J' q', the velocity-product
 //! terms) gives M += m J^T J and f += J^T (F - m c). The rope, whose mass mu l varies with the paid-out l, is derived
-//! from its Lagrangian: with K = mu l / 6 (|v_S|^2 + v_S . v_P + |v_P|^2), the equation of coordinate i is
+//! from its Lagrangian. Its material runs off the sheave at the drum's speed l' along u: the free rope's velocity is
+//! linear from v_A = v_S + l' u at the top to v_P at the hook (a rope paid out straight down moves all of it at l'), so
+//! K = mu l / 6 (|v_A|^2 + v_A . v_P + |v_P|^2), and the wound rope moves with the trolley and the drum's surface,
+//! K_w = mu (capacity - l) (|v_S|^2 + l'^2) / 2. With J_A,i = J_S,i + delta_il u, a_A = J_A q'' + c_S + l' u',
+//! u' = (I - u u^T)(v_P - v_S) / L, the equation of coordinate i is
 //!
 //! ```text
-//! mu l / 3 [J_S,i . (a_S + a_P / 2) + J_P,i . (a_P + a_S / 2)] + mu l' / 3 [J_S,i . (v_S + v_P / 2) + J_P,i . (v_P + v_S / 2)]
-//!     - delta_il K / l = Q_i          (the J' terms cancel against dK/dq_i, J = dp/dq)
+//! mu l / 3 [J_A,i . (a_A + a_P / 2) + J_P,i . (a_P + a_A / 2)] + mu l' / 3 [J_A,i . (v_A + v_P / 2) + J_P,i . (v_P + v_A / 2)]
+//!     + mu l / 3 (delta_il u' - l' du/dq_i) . (v_A + v_P / 2) - delta_il K / l = Q_i
 //! ```
 //!
-//! plus the wound rope, K_w = mu (capacity - l) l'^2 / 2: mu (capacity - l) l'' - mu l'^2 / 2 = Q_l.
+//! (d/dt J_A,i - dv_A/dq_i = delta_il u' - l' du/dq_i, du/dq_i = (I - u u^T)(J_P,i - J_S,i) / L; S and P are functions of
+//! q, so their J' terms cancel against dK/dq_i), plus the wound rope's mu (capacity - l) (J_S,i . a_S + delta_il l'') -
+//! mu l' J_S,i . v_S + delta_il mu (|v_S|^2 - l'^2) / 2 = Q_i. K is quadratic in q', so K + V is conserved.
 //!
 //! The drives are rigid (the rotor's inertia reflected, the gearbox's loss factor at the power it passes, iterated like
 //! the plain model's) or elastic (`RotaryJoint::rotor`: the gearbox passes the torque between the rotor, a state, and
@@ -84,6 +90,19 @@ pub(crate) fn sling_dir(a: f64, b: f64) -> [V3; 6] {
         [-ca * sb, 0.0, -sa * sb],
         [-sa * cb, -sb, ca * cb],
     ]
+}
+
+/// q'' = q0 + sum_j lambda_j M^-1 d_j where each constraint (a, d, b) holds, a . q'' + b = 0: q'' and the lambdas.
+fn constrained(mm: &[f64], q0: &[f64], cons: &[(Vec<f64>, Vec<f64>, f64)]) -> (Vec<f64>, Vec<f64>) {
+    let (n, k) = (q0.len(), cons.len());
+    if k == 0 {
+        return (q0.to_vec(), vec![]);
+    }
+    let w: Vec<Vec<f64>> = cons.iter().map(|c| solve(mm, &c.1).unwrap_or_else(|| vec![f64::NAN; n])).collect();
+    let a: Vec<f64> = (0..k * k).map(|x| dn(&cons[x / k].0, &w[x % k])).collect();
+    let r: Vec<f64> = cons.iter().map(|c| -(dn(&c.0, q0) + c.2)).collect();
+    let lam = solve(&a, &r).unwrap_or_else(|| vec![f64::NAN; k]);
+    ((0..n).map(|i| q0[i] + (0..k).map(|j| lam[j] * w[j][i]).sum::<f64>()).collect(), lam)
 }
 
 /// A point of mass `m` with the Jacobian columns `jac`, the velocity-product terms `c` and the force `f`.
@@ -161,15 +180,16 @@ impl Crane {
         }
     }
 
-    /// The equations of motion at a state under the motor torques `torque`, with the rigid drives' loss factors `loss`.
-    fn assemble(&self, s: &[f64], torque: &[f64], loss: &[f64]) -> Sol {
+    /// The equations of motion at a state under the motor torques `torque`, with the rigid drives' loss factors `loss`;
+    /// the rigid rope's tension `t_roll` on the wheels (the rolling's fixed point, `full_motion`).
+    fn assemble(&self, s: &[f64], torque: &[f64], loss: &[f64], t_roll: f64) -> Sol {
         let lay = &self.layout;
         let (n, nd, g) = (lay.pos.len(), lay.drives, self.g);
         let mut mm = vec![0.0; n * n];
         let mut rhs = vec![0.0; n];
         let (psi, psid) = self.yaw(s);
         let (y, yd) = (s[1], s[RATES + 1]);
-        let rope = self.rope(s);
+        let mut rope = self.rope(s);
         let (u, t) = (rope.u, rope.tension);
         let (l, ld) = (s[2], s[RATES + 2]);
         let vs = self.sheave_speed(s);
@@ -217,20 +237,37 @@ impl Crane {
             mm[(n - 1) * n + n - 1] += k.inertia;
             rhs[n - 1] += -k.stiffness * psi - k.damping * psid;
         }
-        // The rope's mass: the free rope's kinetic energy and weight, the wound rope's.
+        // The rope's mass: the free rope's kinetic energy and weight, the wound rope's (module head).
         if self.rope_mass > 0.0 {
-            let (mu, mr) = (self.rope_mass, self.rope_mass * l);
+            let (mu, mr, wound) = (self.rope_mass, self.rope_mass * l, self.rope_mass * (self.capacity - l));
+            let across = |v: V3| sub(v, sc(u, dot(u, v)));
+            // The rope's top end A: v_A = v_S + l' u, its column J_S + u at l, c_A = c_S + l' u'.
+            let ud = sc(across(sub(vp, vs)), 1.0 / rope.length);
+            let mut ja = js.clone();
+            ja[2] = add(ja[2], u);
+            let va = add(vs, sc(u, ld));
+            let ca = add(cs, sc(ud, ld));
+            let (top, low) = (add(va, sc(vp, 0.5)), add(vp, sc(va, 0.5)));
+            // l' du/dq_i . top = l' (J_P,i - J_S,i) . (I - u u) top / L.
+            let turn = sc(across(top), ld / rope.length);
             for i in 0..n {
-                let bias = mr / 3.0 * (dot(js[i], cs) + 0.5 * dot(jp[i], cs))
-                    + mu * ld / 3.0 * (dot(js[i], add(vs, sc(vp, 0.5))) + dot(jp[i], add(vp, sc(vs, 0.5))));
+                let mut bias = mr / 3.0 * (dot(ja[i], ca) + 0.5 * dot(jp[i], ca))
+                    + mu * ld / 3.0 * (dot(ja[i], top) + dot(jp[i], low))
+                    - mr / 3.0 * dot(sub(jp[i], js[i]), turn)
+                    + wound * dot(js[i], cs)
+                    - mu * ld * dot(js[i], vs);
+                if i == 2 {
+                    bias += mr / 3.0 * dot(ud, top);
+                }
                 rhs[i] -= bias;
                 for j in 0..n {
                     mm[i * n + j] += mr / 3.0
-                        * (dot(js[i], js[j]) + 0.5 * dot(js[i], jp[j]) + 0.5 * dot(jp[i], js[j]) + dot(jp[i], jp[j]));
+                        * (dot(ja[i], ja[j]) + 0.5 * dot(ja[i], jp[j]) + 0.5 * dot(jp[i], ja[j]) + dot(jp[i], jp[j]))
+                        + wound * dot(js[i], js[j]);
                 }
             }
-            rhs[2] += mu / 6.0 * (dot(vs, vs) + dot(vs, vp) + dot(vp, vp));
-            mm[2 * n + 2] += mu * (self.capacity - l);
+            rhs[2] += mu / 6.0 * (dot(va, va) + dot(va, vp) + dot(vp, vp)) - 0.5 * mu * dot(vs, vs);
+            mm[2 * n + 2] += wound;
             rhs[2] += 0.5 * mu * ld * ld;
             // The weight V = mu g [l (H + z_P) / 2 + (capacity - l) H]: -dV/dl on the drum, -dV/dz_P on the load.
             rhs[2] += mu * g * (self.height - s[LOAD + 2]) / 2.0;
@@ -242,7 +279,7 @@ impl Crane {
         }
         rhs[2] += rope.drum;
         // The drives. The load on the bridge's and the trolley's wheels (the carriages share it by the trolley's place).
-        let down = t * -u[2] + 0.5 * self.rope_mass * g * l;
+        let down = if self.elastic { t } else { t_roll } * -u[2] + 0.5 * self.rope_mass * g * l;
         let phi = self.skew.map_or(0.5, |k| ((y - self.y_centre) / k.gauge + 0.5).clamp(0.0, 1.0));
         let wheels: Vec<f64> = (0..nd)
             .map(|d| match (d, self.skew) {
@@ -288,28 +325,50 @@ impl Crane {
             rows.push(row);
         }
         let nan = || vec![f64::NAN; n];
-        let mut acc = solve(&mm, &rhs).unwrap_or_else(nan);
-        // The floor under the standing body.
-        let (mut floor_force, mut floor_power) = (0.0, 0.0);
+        // The constraints, each a . q'' + b = 0 with the force lambda d. The rigid rope (effects.rope_stretch off) while
+        // taut: L = l, its tension t pulls with -t G, G = dL/dq - dl/dq = u . (J_P - J_S) - delta_l, and L'' - l'' = G q''
+        // + |(I - u u) (v_P - v_S)|^2 / L - u . c_S. A bilateral constraint as the plain rigid rope's, but on the floor.
+        let mut rope_row = None;
+        if !self.elastic && rope.stretch > -1e-6 {
+            let gr: Vec<f64> = (0..n).map(|i| dot(u, sub(jp[i], js[i])) - if i == 2 { 1.0 } else { 0.0 }).collect();
+            let dv = sub(vp, vs);
+            let b = (dot(dv, dv) - dot(u, dv).powi(2)) / rope.length - dot(u, cs);
+            rope_row = Some((gr.clone(), gr.iter().map(|v| -v).collect::<Vec<f64>>(), b));
+        }
+        // The floor under the standing body (one-sided, N >= 0), its friction iterated with N; standing, the rigid rope
+        // may go slack (t >= 0), as the plain model's.
         let (low, low_v) = self.lower(s);
-        if self.floor.is_some_and(|f| low[2] <= f && low_v[2] <= 0.0) {
-            let (jac, c) = if self.sling.is_some() && m2 > 0.0 { (&j2, c2) } else { (&jp, [0.0; 3]) };
-            let jz: Vec<f64> = jac.iter().map(|c| c[2]).collect();
-            if dn(&jz, &acc) + c[2] < 0.0 {
-                let w = solve(&mm, &jz).unwrap_or_else(nan);
-                let jw = dn(&jz, &w);
-                let vh = [low_v[0], low_v[1]];
-                let (mut push, mut fric) = (0.0, [0.0; 2]);
-                for _ in 0..6 {
-                    let rhs_f: Vec<f64> = (0..n).map(|i| rhs[i] + jac[i][0] * fric[0] + jac[i][1] * fric[1]).collect();
-                    let q0 = solve(&mm, &rhs_f).unwrap_or_else(nan);
-                    push = (-(dn(&jz, &q0) + c[2]) / jw).max(0.0);
-                    acc = (0..n).map(|i| q0[i] + w[i] * push).collect();
-                    fric = self.floor_friction_force(push, vh);
+        let vh = [low_v[0], low_v[1]];
+        let on_floor = self.floor.is_some_and(|f| low[2] <= f && low_v[2] <= 0.0);
+        let (jac, c) = if self.sling.is_some() && m2 > 0.0 { (&j2, c2) } else { (&jp, [0.0; 3]) };
+        let jz: Vec<f64> = jac.iter().map(|c| c[2]).collect();
+        let (mut acc, mut tension, mut push, mut fric) = (nan(), 0.0, 0.0, [0.0; 2]);
+        for _ in 0..6 {
+            let rhs_f: Vec<f64> = (0..n).map(|i| rhs[i] + jac[i][0] * fric[0] + jac[i][1] * fric[1]).collect();
+            let q0 = solve(&mm, &rhs_f).unwrap_or_else(nan);
+            let mut set: Vec<(Vec<f64>, Vec<f64>, f64)> = rope_row.iter().cloned().collect();
+            let mut taut = rope_row.is_some();
+            let (mut a, mut lam) = constrained(&mm, &q0, &set);
+            push = 0.0;
+            if on_floor && dn(&jz, &a) + c[2] < 0.0 {
+                set.push((jz.clone(), jz.clone(), c[2]));
+                (a, lam) = constrained(&mm, &q0, &set);
+                if taut && lam[0] < 0.0 {
+                    set.remove(0);
+                    taut = false;
+                    (a, lam) = constrained(&mm, &q0, &set);
                 }
-                floor_force = push;
-                floor_power = -(fric[0] * vh[0] + fric[1] * vh[1]);
+                push = lam.last().map_or(0.0, |n| n.max(0.0));
             }
+            (acc, tension) = (a, if taut { lam[0] } else { 0.0 });
+            fric = self.floor_friction_force(push, vh);
+            if push == 0.0 {
+                break;
+            }
+        }
+        let (floor_force, floor_power) = (push, -(fric[0] * vh[0] + fric[1] * vh[1]));
+        if !self.elastic {
+            (rope.tension, rope.drum) = (tension, tension);
         }
         Sol {
             acc,
@@ -327,14 +386,17 @@ impl Crane {
         }
     }
 
-    /// `Crane::motion` of the composite model.
+    /// `Crane::motion` of the composite model: the rigid drives' loss factors and the rigid rope's tension on the wheels
+    /// each to its fixed point (as the plain model's).
     pub(crate) fn full_motion(&self, s: &[f64], torque: &[f64]) -> Motion {
         let nd = self.layout.drives;
+        let mut t_roll = if self.elastic { 0.0 } else { self.load_mass() * self.g * -self.rope(s).u[2] };
         let loss: Vec<f64> = if self.elastic_drives {
             vec![1.0; nd]
         } else {
             sim_components::mech::settled_loss(vec![1.0; nd], |loss: &Vec<f64>| {
-                let sol = self.assemble(s, torque, loss);
+                let sol = self.assemble(s, torque, loss, t_roll);
+                t_roll = sol.rope.tension;
                 (0..nd)
                     .map(|d| {
                         let j = self.drive(d);
@@ -344,7 +406,14 @@ impl Crane {
                     .collect()
             })
         };
-        let sol = self.assemble(s, torque, &loss);
+        let mut sol = self.assemble(s, torque, &loss, t_roll);
+        for _ in 0..8 {
+            if self.elastic || (sol.rope.tension - t_roll).abs() <= 1e-12 * (1.0 + t_roll.abs()) {
+                break;
+            }
+            t_roll = sol.rope.tension;
+            sol = self.assemble(s, torque, &loss, t_roll);
+        }
         let (mut into, mut out) = (vec![0.0; nd], vec![0.0; nd]);
         if !self.elastic_drives {
             for d in 0..nd {
@@ -403,7 +472,9 @@ impl Crane {
             kinetic += 0.5 * k.inertia * psid * psid;
         }
         let mu = self.rope_mass;
-        kinetic += mu * l / 6.0 * (dot(vs, vs) + dot(vs, vp) + dot(vp, vp)) + 0.5 * mu * (self.capacity - l) * ld * ld;
+        let va = add(vs, sc(self.rope(s).u, ld));
+        kinetic += mu * l / 6.0 * (dot(va, va) + dot(va, vp) + dot(vp, vp))
+            + 0.5 * mu * (self.capacity - l) * (dot(vs, vs) + ld * ld);
         let mut potential = m1 * g * s[LOAD + 2] + m2 * g * low[2];
         potential += mu * g * (l * (self.height + s[LOAD + 2]) / 2.0 + (self.capacity - l) * self.height);
         let mut elastic = 0.0;
@@ -420,7 +491,7 @@ impl Crane {
             }
         }
         let stretch = self.rope(s).stretch;
-        if stretch > 0.0 {
+        if self.elastic && stretch > 0.0 {
             elastic += 0.5 * self.ea * stretch * stretch / l;
         }
         if let (Some(k), Some(i)) = (self.skew, self.layout.skew) {
@@ -476,8 +547,7 @@ impl Crane {
         state.resize(self.layout.len, 0.0);
         state[..3].copy_from_slice(&[tool[0], tool[1], l]);
         state[LOAD..LOAD + 3].copy_from_slice(&[tool[0], tool[1], load]);
-        let rope = self.rope(state);
-        let pull_l = rope.drum + 0.5 * self.rope_mass * self.g * rope.length;
+        let pull_l = self.rest_pull(l, self.load_mass());
         let mut held = vec![0.0; nd];
         for d in 0..nd {
             let j = self.drive(d);
