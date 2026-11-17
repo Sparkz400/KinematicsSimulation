@@ -382,24 +382,24 @@ fn the_gearbox_and_the_rack_carry_the_rack_losses() {
     near(teeth, force / 0.97, 1e-3, "feed force");
 }
 
-/// A screw joint of an arm is coupled to its motor: another ratio is refused. A gearbox life is not refused for joints
-/// of other ratios: the analysis reads each motor's own `gearbox.ratio`.
+/// A screw joint of an arm is coupled to its motor: another ratio is refused. The gearbox lives take each motor's own
+/// `gearbox.ratio`: a config that rates them (`ratings.gearbox_reference_speed_rpm`) is refused where a joint's gearbox
+/// table says 120 (the shared one) while the arm turns it through 80 (`arm.gear_ratios`), and taken where the tables
+/// say 80 too, or the arm 120; without the rating the arm is taken either way.
 #[test]
 fn an_arm_refuses_what_it_cannot_size() {
     let mut cfg = SCARA.config();
     cfg.set_text("arm.gear_ratios = [100.0, 80.0, 2.0, 50.0]").unwrap();
     assert!((SCARA.build)(&cfg).is_err());
-    let mut cfg = Config::parse(&URDF_ARM.default_config.replace(
-        "[ratings]
-",
-        "[ratings]
-gearbox_reference_speed_rpm = 400.0
-",
-    ))
-    .unwrap();
-    assert!((URDF_ARM.build)(&cfg).is_ok());
+    assert!((URDF_ARM.build)(&URDF_ARM.config()).is_ok());
+    let rated = URDF_ARM.default_config.replace("[ratings]\n", "[ratings]\ngearbox_reference_speed_rpm = 400.0\n");
+    let mut cfg = Config::parse(&rated).unwrap();
+    assert!((URDF_ARM.build)(&cfg).is_err());
     cfg.set_text("arm.gear_ratios = [120.0, 120.0, 120.0, 120.0, 120.0, 120.0]").unwrap();
     assert!((URDF_ARM.build)(&cfg).is_ok());
+    let own = (4..=6)
+        .fold(rated, |text, k| text.replace(&format!("[gearbox.{k}]\n"), &format!("[gearbox.{k}]\nratio = 80.0\n")));
+    assert!((URDF_ARM.build)(&Config::parse(&own).unwrap()).is_ok());
 }
 
 /// The mass matrix from the bodies' Jacobians is Newton-Euler's, one unit acceleration at a time, to rounding: on

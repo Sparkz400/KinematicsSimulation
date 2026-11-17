@@ -800,7 +800,7 @@ fn output(args: &Args, option: &str) -> Result<Box<dyn Write>, Failure> {
 /// The result passes every verdict in the error bands of the config's `[bounds]` too: where the fastest setting found
 /// fails there, the search's steps are gone back to the fastest that passes (rows `bands_*`, and on the error stream
 /// what the bands cost). `--worst` judges at the worst corner of all bounds at once instead (`verdict_worst`, rows
-/// `worst_*`), bisecting over the search's steps. `--nominal` judges the config as written alone. `--pareto FILE`
+/// `worst_*`), judging the search's steps from the fastest down. `--nominal` judges the config as written alone. `--pareto FILE`
 /// writes the settings that no other beats in cycle time, energy per cycle from the supply and peak motor utilisation at once, as CSV.
 fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
