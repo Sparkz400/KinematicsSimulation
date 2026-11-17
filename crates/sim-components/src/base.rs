@@ -601,6 +601,9 @@ impl Machine for Based {
     fn set_dwelling(&mut self, dwelling: bool) {
         self.inner.set_dwelling(dwelling)
     }
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.inner.set_tool_force(force)
+    }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.inner.set_brake_engaged(engaged)
     }

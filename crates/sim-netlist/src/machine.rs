@@ -331,6 +331,9 @@ pub struct ConfigMachine {
     chain_fade: Vec<f64>,
     /// Force on the tool along each axis while the cycle dwells; zero with effects.process_force off.
     process: Vec<f64>,
+    /// An obstacle's push on the tool (`Machine::set_tool_force`), per axis, held until changed; it acts like the process
+    /// force, whether or not the cycle dwells, and its power is in the same row of the budget.
+    tool_push: Vec<f64>,
     dwelling: bool,
     /// The netlist has a frame, and with effects.frame_compliance in the elastic model it sways.
     frame_node: bool,
@@ -1095,6 +1098,7 @@ impl ConfigMachine {
             chain_axes,
             chain_fade,
             process,
+            tool_push: Vec::new(),
             dwelling: false,
             frame_node: net.frame.is_some(),
             frame,
@@ -1678,7 +1682,9 @@ impl ConfigMachine {
         (force, on_frame)
     }
     fn process_force(&self) -> Vec<f64> {
-        if self.dwelling { self.process.clone() } else { vec![0.0; self.n()] }
+        let mut force = if self.dwelling { self.process.clone() } else { vec![0.0; self.n()] };
+        force.iter_mut().zip(&self.tool_push).for_each(|(f, p)| *f += p);
+        force
     }
     /// The hard stops at the ends of axis i's joint; none on the yaw.
     fn stop_force(&self, i: usize, pos: f64, vel: f64) -> f64 {
@@ -3196,6 +3202,11 @@ impl Machine for ConfigMachine {
     }
     fn set_dwelling(&mut self, dwelling: bool) {
         self.dwelling = dwelling;
+    }
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.tool_push.clear();
+        self.tool_push.extend_from_slice(force);
+        true
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
