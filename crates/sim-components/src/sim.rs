@@ -36,11 +36,11 @@ fn heated_parts(cfg: &Config, machine: &dyn Machine) -> Result<Vec<HeatedPart>, 
             .iter()
             .position(|s| s.id == format!("{LOSS_PREFIX}{}", part.id))
             .ok_or_else(|| ConfigError::Invalid(format!("{LOSS_PREFIX}{}", part.id)))?;
-        let (resistance, time_constant, max_rise) = (
-            cfg.non_negative(&key("resistance_k_w"))?,
-            cfg.positive(&key("time_constant_s"))?,
-            cfg.positive(&key("max_rise_k"))?,
-        );
+        let (resistance, time_constant) = match machine.thermal_values(part.id) {
+            Some(own) => own,
+            None => (cfg.non_negative(&key("resistance_k_w"))?, cfg.positive(&key("time_constant_s"))?),
+        };
+        let max_rise = cfg.positive(&key("max_rise_k"))?;
         parts.push(HeatedPart { part, loss, loss_power: 0.0, resistance, time_constant, max_rise, rise: 0.0 });
     }
     Ok(parts)

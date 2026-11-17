@@ -440,8 +440,14 @@ fn the_guide_load_over_the_motion_adds_the_rods_inertial_pull() {
 fn the_guides_warm_with_their_loss() {
     let parts = delta(&[]).thermal_parts();
     let named: Vec<_> = parts.iter().map(|p| (p.id, p.kind, p.scene_part, p.scene_index)).collect();
-    let guides =
-        [("guide_1", "guide", "carriage", 0), ("guide_2", "guide", "carriage", 1), ("guide_3", "guide", "carriage", 2)];
+    let guides = [
+        ("guide_1", "guide", "carriage", 0),
+        ("guide_2", "guide", "carriage", 1),
+        ("guide_3", "guide", "carriage", 2),
+        ("belt_1", "belt", "belt", 0),
+        ("belt_2", "belt", "belt", 7),
+        ("belt_3", "belt", "belt", 14),
+    ];
     assert_eq!(named, guides);
     let mut cfg = ENTRY.config();
     for edit in [
@@ -453,7 +459,7 @@ fn the_guides_warm_with_their_loss() {
         cfg.set_text(edit).unwrap();
     }
     let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
-    assert_eq!(sim.heated.len(), 3);
+    assert_eq!(sim.heated.len(), 6);
     sim.command(sim_components::control::Command::MoveTo(vec![0.3, 0.0, -1.15])).unwrap();
     let ids: Vec<[usize; 4]> = (1..=3)
         .map(|k| {
@@ -614,4 +620,40 @@ fn the_frictions_load_factor_is_the_fixed_point_with_the_acceleration() {
         close(scales[k], d.friction[k].load_scale(loads[k], 0.0), 1e-12, "fixed point");
         assert!(scales[k] >= rest[k] - 1e-12, "moving load {} under rest {}", scales[k], rest[k]);
     }
+}
+
+/// A belt is a thermal part of the loop's own size: the loop is 4 span + 2 stroke = 0.4 + 1.4 = 1.8 m long (the sections'
+/// geometric length less the teeth's), 19.3 mm wide, both sides in the air: A = 2 * 0.0193 * 1.8 = 0.06948 m^2, at
+/// 15 W/(m^2 K) R = 1 / 1.0422 = 0.959509 K/W; 0.07 kg/m * 1.8 m = 0.126 kg of 1500 J/(kg K) is C = 189 J/K, so tau = C R
+/// = 181.349 s. The belt warms with its damping loss, power.belt_k, as the guides do (rise += (1 - exp(-dt / tau)) (R P -
+/// rise)), so under a steady loss P it settles at R P; here with the specific heat at 1.5 J/(kg K) (tau 0.1813 s) so that
+/// a move of the carriages follows it.
+#[test]
+fn a_belt_warms_with_its_damping_loss_through_its_surface() {
+    let (r, tau) = delta(&[]).thermal_values("belt_2").unwrap();
+    close(r, 1.0 / (15.0 * 2.0 * 0.0193 * 1.8), 1e-12, "resistance");
+    close(r, 0.959509, 1e-6, "resistance by hand");
+    close(tau, 0.07 * 1.8 * 1500.0 * r, 1e-12, "time constant");
+    close(tau, 181.349, 1e-5, "time constant by hand");
+    assert!(delta(&[]).thermal_values("guide_1").is_none());
+    let mut cfg = ENTRY.config();
+    for edit in ["effects.part_heating = true", "belt.specific_heat_j_kg_k = 1.5", "start.pose = [-0.3, 0.0, -1.15]"] {
+        cfg.set_text(edit).unwrap();
+    }
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    let fast = 0.07 * 1.8 * 1.5 * r;
+    close(sim.heated[4].resistance, r, 1e-12, "resistance in the model");
+    close(sim.heated[4].time_constant, fast, 1e-12, "time constant in the model");
+    sim.command(sim_components::control::Command::MoveTo(vec![0.3, 0.0, -1.15])).unwrap();
+    let power = sim.signal_index("power.belt_2").unwrap();
+    let (mut row, mut by_hand) = (Vec::new(), 0.0);
+    let lag = 1.0 - (-sim.dt / fast).exp();
+    while sim.control.busy() {
+        sim.step();
+        row.clear();
+        sim.sample(&mut row);
+        by_hand += lag * (r * row[power] - by_hand);
+    }
+    assert!(by_hand > 0.0, "{by_hand} K");
+    close(sim.heated[4].rise, by_hand, 1e-9, "the belt's rise");
 }

@@ -446,7 +446,11 @@ fn the_part_thermal_verdicts_judge_where_the_parts_settle() {
         assert_eq!(load.part_rises.len(), (entry.build)(&cfg).unwrap().thermal_parts().len());
         for (part, rise) in &load.part_rises {
             let lost = budget.rows.iter().find(|r| r.id == format!("{LOSS_PREFIX}{}", part.id)).unwrap().energy;
-            let by_hand = cfg.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap() * lost / load.duration;
+            let resistance = (entry.build)(&cfg).unwrap().thermal_values(part.id).map_or_else(
+                || cfg.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap(),
+                |own| own.0,
+            );
+            let by_hand = resistance * lost / load.duration;
             assert!(
                 (rise - by_hand).abs() <= 1e-12 * by_hand.abs(),
                 "{} {name} {}: {rise} K against {by_hand} K",

@@ -900,7 +900,7 @@ The linear delta's config ([`machine-delta-linear/default.toml`](../crates/machi
 
 `[friction]`: each carriage's guide, the keys of the single axis's `[friction_x]`, its values.
 
-`[thermal]` (with effects.part_heating): `guide_resistance_k_w` 0.5 K/W, `guide_time_constant_s` 2400 s, `guide_max_rise_k` 40 K, estimates as the single axis's guide (the heat goes into the rail and the column's EGC-80 profile, about 0.35 m² at 10 W/(m² K), fin efficiency 0.6; about 5 kJ/K), bounded 0.25 to 1 K/W and 1200 to 4800 s; `gearbox_resistance_k_w` 1.5, `gearbox_time_constant_s` 1200, `gearbox_max_rise_k` 50 as the delta picker's, read only where a config has a gearbox (ratio not 1), so not bounded.
+`[belt]` `specific_heat_j_kg_k` 1500 J/(kg K) and `convection_w_m2_k` 15 W/(m² K), estimates (polyurethane with steel cords; a moving belt in still air), bounded 1200 to 1800 and 8 to 25: with `effects.part_heating` each column's belt is a thermal part heated by its damping loss (`power.belt_<k>`), its capacity the mass per metre (`belt.mass_kg_m`) times the loop's length (the sections' geometric length) times `specific_heat_j_kg_k`, its resistance to the air 1 / (h A) with A = 2 × `ratings.belt_width_mm` × the loop's length (both sides): 0.126 kg, 189 J/K and 0.96 K/W at the shipped 1.8 m loop and 19.3 mm, a time constant of 3 minutes; `thermal.belt_max_rise_k` 60 K, estimate (polyurethane belts are rated to about 80 °C at 20 °C around). `[thermal]` (with effects.part_heating): `guide_resistance_k_w` 0.5 K/W, `guide_time_constant_s` 2400 s, `guide_max_rise_k` 40 K, estimates as the single axis's guide (the heat goes into the rail and the column's EGC-80 profile, about 0.35 m² at 10 W/(m² K), fin efficiency 0.6; about 5 kJ/K), bounded 0.25 to 1 K/W and 1200 to 4800 s; `gearbox_resistance_k_w` 1.5, `gearbox_time_constant_s` 1200, `gearbox_max_rise_k` 50 as the delta picker's, read only where a config has a gearbox (ratio not 1), so not bounded.
 
 `[ratings]` of the EGC-80-TB-KF (Festo, "Toothed belt axes EGC-TB-KF", 2024/01):
 
@@ -927,6 +927,7 @@ The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/de
 | --- | --- | --- | --- |
 | `effects.shaft_mass` | – | The shaft's weight share at the platform (on the arms) and its spin inertia at the tool | on |
 | `effects.shaft_torsion` | – | The shaft twists in series with the tool's gearbox (with `joint_elasticity`) | on |
+| `effects.tool_gearbox_body` | – | The tool gearbox's output is a body of its own, `gearbox.4.output_inertia_kgm2`, between the gearbox's spring and the shaft's (two more states; needs `joint_elasticity` and `shaft_torsion`, else ignored): the gearbox's mode (about 1.5 kHz) next to the tool's 41 Hz, the gearbox keeping its own damping. Off: the two springs are one in series | off |
 | `effects.telescope_friction` | – | The telescope's sliding friction along the shaft, a force on the platform that the arms take | on |
 | `axis.c.min_angle_deg`, `max_angle_deg` | ° | The controller's range of the tool's turn (the machine has no stops) | −360, 360, choice |
 | `axis.c.max_velocity_rad_s`, `max_acceleration_rad_s2`, `max_jerk_rad_s3` | rad/s, rad/s², rad/s³ | The turn's limits | 30, 600, 30000, estimates (ABB publishes none; 30 rad/s is the motor's 240 rad/s behind ratio 8) |
@@ -936,6 +937,7 @@ The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/de
 | `motor.4.brake_torque_nm` | N m | Its brake | 2, estimate |
 | `gearbox.4.ratio`, `efficiency`, `stiffness_nm_rad`, `inertia_at_input_kgm2` | | The tool's gearbox over `[gearbox]` | 8, 0.97, 8250.592, 8.8e-6, catalogue (Siemens NRB060-04-8) |
 | `gearbox.4.backlash_rad` | rad | Its backlash | 2.909e-4 (1 arcmin), estimate, bounded 0.5 to 2 arcmin (catalogue: 10 arcmin) |
+| `gearbox.4.output_inertia_kgm2` | kg m² | Its output's inertia (planet carrier and flange: a steel disc of 50 mm × 15 mm, m r²/2 = 7.2e-5, and the carrier), with `tool_gearbox_body` | 1e-4, estimate, bounded 5e-5 to 2e-4 |
 | `gearbox.4.damping_nm_s_rad` | N m s/rad | Its damping (replaced by the shaft's with `shaft_torsion`) | 5, estimate, bounded 2 to 10 |
 | `drive.4.peak_torque_nm`, `rated_torque_nm`, `rated_speed_rad_s`, `no_load_speed_rad_s` | | Its drive over `[drive]` | 3.75, 1.27, 314.159, 619.7016, catalogue (1FK2104-4AF; no-load speed √(3/2) · 540 V / kt) |
 | `drive.4.velocity_kp_nm_s_rad`, `velocity_tn_s`, `kv_1_s`, `current_kp_v_a` | | Its loops | 0.05, 0.02, 80, 120: tuned with `sim-cli margins delta-d4 --bands` (at least 37.7°, 9.4 dB; the 0.081 `catalog::with_motor_part` retunes to keeps 34.6°, 5.4 dB), the shorter integral time and higher position gain for `settling`; the current loop's L over 0.25 ms as the shared |

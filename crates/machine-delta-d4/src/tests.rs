@@ -553,3 +553,86 @@ fn on_a_compliant_base_the_capsules_stay_and_the_resonance_is_the_lower() {
         "{own} Hz alone, {on_base} on the base, lowest mode {lowest}"
     );
 }
+
+/// The gearbox's output as a body (effects.tool_gearbox_body): k_g = 8250.592, k_s = 500 N m/rad, J_o = 1e-4, J_c =
+/// 7.08e-3 kg m^2 (with the payload), the rotor held. J_o J_c lambda^2 - b lambda + k_g k_s = 0 with b = J_c (k_g + k_s)
+/// + J_o k_s = 61.954191 + 0.05 = 62.004191, J_o J_c = 7.08e-7, k_g k_s = 4125296: the roots 66583 and 8.7511e7 1/s^2,
+/// so 41.068 Hz (the series spring's 41.0688 to 0.1 %) and 1488.9 Hz (about sqrt((k_g + k_s) / J_o) / 2 pi).
+/// With J_o -> 0 the lower root tends to the series spring's k_g k_s / (J_c (k_g + k_s)).
+#[test]
+fn the_gearbox_body_gives_the_two_hand_calculated_modes() {
+    let m = d4(&["effects.tool_gearbox_body = true"]);
+    let modes = m.body_modes();
+    let (kg, ks, jo, jc): (f64, f64, f64, f64) = (8250.592, 500.0, 1e-4, 7.08e-3);
+    let b = jc * (kg + ks) + jo * ks;
+    let (p, q) = (jo * jc, kg * ks);
+    let disc = (b * b - 4.0 * p * q).sqrt();
+    let hz = |l: f64| l.sqrt() / std::f64::consts::TAU;
+    close(modes[0].hz, hz((b - disc) / (2.0 * p)), 1e-9, "lower root");
+    close(modes[1].hz, hz((b + disc) / (2.0 * p)), 1e-9, "upper root");
+    close(modes[0].hz, 41.068, 2e-4, "lower, by hand");
+    close(modes[1].hz, 1488.9, 2e-4, "upper, by hand");
+    assert_eq!(m.tool_mode().unwrap().hz, modes[0].hz);
+    assert!(m.state_len() == d4(&[]).state_len() + 2 && m.modes(&[0.0, 0.0, -0.8, 0.0]).len() == 5);
+    // Without J_o the lower mode is the series spring's.
+    let tiny = d4(&["effects.tool_gearbox_body = true", "gearbox.4.output_inertia_kgm2 = 1e-12"]);
+    close(tiny.body_modes()[0].hz, d4(&[]).tool_mode().unwrap().hz, 1e-6, "series spring");
+    // Switched off, or in the rigid model, nothing changes.
+    assert!(d4(&[]).body_modes().is_empty());
+    assert!(d4(&["effects.tool_gearbox_body = true", "effects.joint_elasticity = false"]).body_modes().is_empty());
+}
+
+/// The body's rates by hand, no backlash, loss-free: the gearbox output turned 0.01 rad ahead of rotor and tool passes
+/// -k_g 0.01 = -82.50592 N m; the shaft passes k_s 0.01 = 5 N m to the tool: J_c c'' = 5 gives 706.2147 rad/s^2, J_o th'' =
+/// -82.50592 - 5 gives -875059.2 rad/s^2. With the drives off the energy stays, 1/2 k_g th^2 + 1/2 k_s (th - c)^2 +
+/// kinetic: 0.5 * 8250.592 * 1e-4 + 0.5 * 500 * 1e-4 = 0.4375296 J at the start, over 0.05 s of RK4 at the sub-step.
+#[test]
+fn the_gearbox_body_has_the_hand_calculated_rates_and_conserves_energy() {
+    let mut cfg = lossless_config();
+    for e in ["effects.tool_gearbox_body = true", "effects.gearbox_backlash = false"] {
+        cfg.set_text(e).unwrap();
+    }
+    let m = Delta4::new(&cfg).unwrap();
+    let (mut s, mut torque) = (Vec::new(), [0.0; 4]);
+    m.equilibrium(&[0.0, 0.0, -0.8, 0.0], &mut s, &mut torque);
+    let n = m.n3;
+    s[n + 5] = 0.01;
+    let mut rates = vec![0.0; s.len() - n];
+    m.tool_rates(&s, 0.0, &mut rates);
+    close(rates[1], 5.0 / 7.08e-3, 1e-9, "tool acceleration");
+    close(rates[6], -(82.50592 + 5.0) / 1e-4, 1e-9, "body acceleration");
+    let e0 = m.tool_energy(&s).iter().sum::<f64>();
+    close(e0, 0.5 * 8250.592 * 1e-4 + 0.5 * 500.0 * 1e-4, 1e-9, "start energy");
+    let h = 62.5e-6 / 4.0;
+    let f = |y: &[f64], d: &mut [f64]| {
+        let mut full = s.clone();
+        full[n..].copy_from_slice(y);
+        m.tool_rates(&full, 0.0, d);
+    };
+    let mut y = s[n..].to_vec();
+    let mut k = vec![vec![0.0; y.len()]; 4];
+    for _ in 0..800 {
+        let mut tmp = y.clone();
+        f(&y, &mut k[0]);
+        for i in 0..y.len() {
+            tmp[i] = y[i] + 0.5 * h * k[0][i];
+        }
+        f(&tmp, &mut k[1]);
+        for i in 0..y.len() {
+            tmp[i] = y[i] + 0.5 * h * k[1][i];
+        }
+        f(&tmp, &mut k[2]);
+        for i in 0..y.len() {
+            tmp[i] = y[i] + h * k[2][i];
+        }
+        f(&tmp, &mut k[3]);
+        for i in 0..y.len() {
+            y[i] += h / 6.0 * (k[0][i] + 2.0 * k[1][i] + 2.0 * k[2][i] + k[3][i]);
+        }
+    }
+    let mut end = s.clone();
+    end[n..].copy_from_slice(&y);
+    assert!((end[n + 5] - 0.01).abs() > 1e-4, "it moved");
+    let e1 = m.tool_energy(&end).iter().sum::<f64>();
+    assert!((e1 - e0).abs() < 1e-6 * e0, "energy {e0} -> {e1}");
+}

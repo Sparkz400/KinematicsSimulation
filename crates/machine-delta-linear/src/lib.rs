@@ -318,6 +318,8 @@ pub struct LinearDelta {
     r_mat: f64,
     span_min: f64,
     belt: Belt,
+    /// Each column's belt as a thermal part: its resistance to the air, K/W, and its time constant, s (`thermal_values`).
+    belt_thermal: (f64, f64),
     /// Unstretched belt per section at x = 0 with the pulley at angle 0.
     mat0: [f64; 2],
     /// Each carriage's guide; alike but for their temperatures (effects.thermal_feedback).
@@ -447,6 +449,7 @@ impl LinearDelta {
             r_mat: belt.rest_length(r),
             span_min: cfg.positive("geometry.span_min_m")?,
             mat0: [0.0; 2],
+            belt_thermal: (0.0, 0.0),
             friction: [
                 Lugre::from_config(cfg, "friction")?,
                 Lugre::from_config(cfg, "friction")?,
@@ -492,6 +495,15 @@ impl LinearDelta {
         m.mat0 = geo.map(|g| m.belt.rest_length(g));
         // The whole belt runs at carriage speed, so all of its mass sits on the pulley.
         m.j_pulley += m.belt.mass_per_m * (geo[0] + geo[1] - 2.0 * m.belt.tooth_length) * r * r;
+        // Each belt as a thermal part: a loop of length L (the sections' geometric length, as the mass above), width w,
+        // heated by its damping loss. Resistance to the air R = 1 / (h A) over both sides, A = 2 w L, h = belt.convection_w_m2_k;
+        // capacity C = (mass per metre) L cp, cp = belt.specific_heat_j_kg_k; time constant C R. A thin belt (3 mm,
+        // polyurethane 0.2 W/(m K)) is at one temperature through its thickness: Biot h t / 2 k = 0.1.
+        let length = geo[0] + geo[1] - 2.0 * m.belt.tooth_length;
+        let area = 2.0 * cfg.positive("ratings.belt_width_mm")? * 1e-3 * length;
+        let resistance = 1.0 / (cfg.positive("belt.convection_w_m2_k")? * area);
+        let capacity = cfg.positive("belt.mass_kg_m")? * length * cfg.positive("belt.specific_heat_j_kg_k")?;
+        m.belt_thermal = (resistance, capacity * resistance);
         Ok(m)
     }
 
@@ -1459,9 +1471,10 @@ impl Machine for LinearDelta {
             .collect()
     }
 
-    /// The gearboxes (not the shipped couplings, which lose nothing) and the three guides, each warming with its loss
-    /// (power.gearbox_<k>, power.guide_<k>); shown on the gearbox and the carriage of its column.
-    // shortcut: belts and pulleys do not warm (no such kind of part); the belt's damping loss is small beside the guides'.
+    /// The gearboxes (not the shipped couplings, which lose nothing), the three guides and the three belts, each warming
+    /// with its loss (power.gearbox_<k>, power.guide_<k>, power.belt_<k>, the belt's damping); shown on the gearbox and the
+    /// carriage of its column, the belt on the first segment drawn of its loop (seven to a column, never of zero length).
+    /// A belt's resistance and time constant follow from its size (`thermal_values`), its rated rise is `thermal.belt_max_rise_k`.
     fn thermal_parts(&self) -> Vec<ThermalPart> {
         let part =
             |id, kind, owner_key, scene_part, scene_index| ThermalPart { id, kind, owner_key, scene_part, scene_index };
@@ -1477,8 +1490,15 @@ impl Machine for LinearDelta {
             part("guide_1", "guide", CARRIAGES[0], "carriage", 0),
             part("guide_2", "guide", CARRIAGES[1], "carriage", 1),
             part("guide_3", "guide", CARRIAGES[2], "carriage", 2),
+            part("belt_1", "belt", CARRIAGES[0], "belt", 0),
+            part("belt_2", "belt", CARRIAGES[1], "belt", 7),
+            part("belt_3", "belt", CARRIAGES[2], "belt", 14),
         ]);
         out
+    }
+
+    fn thermal_values(&self, id: &str) -> Option<(f64, f64)> {
+        id.starts_with("belt_").then_some(self.belt_thermal)
     }
 
     /// With effects.thermal_feedback, in the order of `thermal_parts`: each gearbox's efficiency and each guide's viscous
