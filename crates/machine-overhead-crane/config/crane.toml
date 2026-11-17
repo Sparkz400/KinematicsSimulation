@@ -25,21 +25,20 @@ gravity = true
 payload = true
 # The load stands on the floor (crane.floor_height_m) until the rope carries it: a one-sided contact, so a fast lift shows
 # the rope's snatch and setting down with a slack rope leaves the load standing. Off: the load hangs from the start and a
-# pick is quasi-static. The elastic rope only.
+# pick is quasi-static. On the elastic and the rigid rope.
 floor_contact = false
 # The rope's own mass (rope.mass_per_m_kg_m): its inertia moves with the trolley, the load and the drum (a straight rope, its
 # velocity varying linearly along it, plus the rope wound on the drum), its weight hangs on the load and the drum, and the
-# tension differs along it by the weight below. Needs rope_stretch.
+# tension differs along it by the weight below.
 rope_mass = false
 # The hook block hangs on the rope (crane.hook_mass_kg) and the load under it on a sling of crane.sling_length_m, swinging
-# on its own: a spherical double pendulum. Needs rope_stretch.
+# on its own: a spherical double pendulum.
 hook_block = false
 # The three drives are elastic: each gearbox's stiffness, damping and backlash (gearbox.*) between the motor and the
-# wheel or drum, the rotors' angles states of their own. Off: rigid drives, the crane's give is its rope's. Needs
-# rope_stretch.
+# wheel or drum, the rotors' angles states of their own. Off: rigid drives, the crane's give is its rope's.
 joint_elasticity = false
 # The bridge is a rigid girder on two end carriages, each with its own drive of the bridge's motor config (the command
-# shared equally), the wheels' lateral stiffness holding the skew: the bridge's travel and its yaw. Needs rope_stretch.
+# shared equally), the wheels' lateral stiffness holding the skew: the bridge's travel and its yaw.
 bridge_skew = false
 # The travels' guides: steel wheels on steel rails, the bridge and the trolley rolling against crane.rolling_coefficient
 # times the load on their wheels (their own weight and the rope's pull down), against the motion.
@@ -320,7 +319,8 @@ breaking_load_n = 20000.0
 safety_factor = 4.5
 min_tension_n = 50.0
 # [estimate] With effects.rope_mass: the rope's mass per metre, 0.0035 d^2 kg/m with d in mm for a steel wire rope (6x19
-# fibre core, 6 mm: 0.126 kg/m).
+# fibre core, 6 mm: 0.126 kg/m; makers' EN 12385-4 tables for 6 mm 6x19 FC give 0.125 (6x19M, Pfeifer) to 0.129 kg/m
+# (6x19S); a steel core is some 10 % heavier, 0.14).
 mass_per_m_kg_m = 0.126
 
 # The box the load may be in (x, y, z in m; z the load's height). The rope is 1 m long at the top, 4.5 m at the bottom.

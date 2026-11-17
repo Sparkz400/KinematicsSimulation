@@ -37,14 +37,16 @@
 //! What the model leaves out: the rope's bending at the sheave and the load's own turning (a bulky load twisting on its
 //! sling: the load is a point mass).
 //!
-//! Four further effects, each its own switch (off: the model above, exactly), all on the elastic rope and solved together
-//! by one mass matrix (`full.rs`) over the coordinates x_c (bridge), y, l, the hook block's point P1 (3), with the effects
-//! the sling's two angles (a, b) and the bridge's yaw psi:
+//! Four further effects, each its own switch (off: the model above, exactly), solved together by one mass matrix
+//! (`full.rs`) over the coordinates x_c (bridge), y, l, the hook block's point P1 (3), with the effects the sling's two
+//! angles (a, b) and the bridge's yaw psi; the rigid rope there is the constraint L = l on these coordinates, its tension
+//! the multiplier:
 //!
 //! - effects.rope_mass: a rope of mass mu per metre (`rope.mass_per_m_kg_m`, 0.0035 d^2 kg/m for a steel wire rope of d mm).
-//!   A straight rope of free length l from the sheave S to P1, its velocity linear along it, has the kinetic energy
-//!   K = mu l / 2 (|v_S|^2 + v_S . w + |w|^2 / 3) = mu l / 6 (|v_S|^2 + v_S . v_P + |v_P|^2), w = v_P - v_S; the rope wound
-//!   on the drum, mu (capacity - l) of it, moves with the drum's surface, K = mu (capacity - l) l'^2 / 2. Its weight is
+//!   A straight rope of free length l from the sheave S to P1, its material's velocity linear along it from v_A = v_S + l'
+//!   u (the rope runs off the sheave at the drum's speed) to v_P, has the kinetic energy
+//!   K = mu l / 6 (|v_A|^2 + v_A . v_P + |v_P|^2); the rope wound on the drum, mu (capacity - l) of it, moves with the
+//!   trolley and the drum's surface, K = mu (capacity - l) (|v_S|^2 + l'^2) / 2. Its weight is
 //!   V = mu g [l (H + z_P) / 2 + (capacity - l) H] (the hanging part at its middle). Lagrange's equations (the mass mu l
 //!   grows with the paid-out l, so d/dt of the momentum has the mu l' terms and dK/dl is a force on the drum) give the
 //!   mass matrix and the speed terms of `full.rs`; nothing is booked as loss. The tension differs along the rope by the
@@ -369,10 +371,6 @@ impl Crane {
         let (rope_mass_on, hook_block, elastic_drives, skew_on) =
             (flag("rope_mass")?, flag("hook_block")?, flag("joint_elasticity")?, flag("bridge_skew")?);
         let full = rope_mass_on || hook_block || elastic_drives || skew_on;
-        if full && !cfg.bool("effects.rope_stretch")? {
-            // The rigid rope's constraint solve has no mass matrix to put these into.
-            return Err(ConfigError::Invalid("effects.rope_stretch".into()));
-        }
         let mass_per_m = cfg.non_negative("rope.mass_per_m_kg_m")?;
         let sling = cfg.positive("crane.sling_length_m")?;
         let (gauge, wheelbase) = (cfg.positive("crane.bridge_gauge_m")?, cfg.positive("crane.bridge_wheelbase_m")?);
@@ -454,6 +452,15 @@ impl Crane {
     /// spring's tension is the mean of its two ends'): L = l (1 + (m g + mu g l / 2) / EA).
     fn rest_stretch(&self, l: f64) -> f64 {
         if self.elastic { 1.0 + (self.load_mass() * self.g + 0.5 * self.rope_mass * self.g * l) / self.ea } else { 1.0 }
+    }
+
+    /// The pull on the drum of `mass` hanging at rest on the free length `l` under the sheave (N): the rope's tension at
+    /// the hook's end t = (mass + mu l / 2) g on the spring (its mean), with the spring's dV/dl share t (1 + e / 2l), e =
+    /// t l / EA, and the other half of the hanging rope's weight, mu g L / 2.
+    fn rest_pull(&self, l: f64, mass: f64) -> f64 {
+        let t = (mass + 0.5 * self.rope_mass * l) * self.g;
+        let e = if self.elastic { t * l / self.ea } else { 0.0 };
+        t * (1.0 + e / (2.0 * l)) + 0.5 * self.rope_mass * self.g * (l + e)
     }
 
     /// The payload's mass while it hangs on the hook.
@@ -720,12 +727,8 @@ impl Crane {
         }
     }
 
-    /// The rope's pull on the drum at the hoist's motor (N m): what its brake holds.
-    fn brake_load(&self, rope: &Rope) -> f64 {
-        self.brake_load_of(rope.drum)
-    }
-
-    fn brake_load_of(&self, drum: f64) -> f64 {
+    /// The rope's pull `drum` on the drum at the hoist's motor (N m): what its brake holds.
+    fn brake_load(&self, drum: f64) -> f64 {
         drum.abs() / self.drives[2].ratio()
     }
 
@@ -778,9 +781,9 @@ impl Crane {
 }
 
 impl Machine for Crane {
-    /// Bridge (at the middle of its girder), trolley, hook block, load on its sling and the rope (a point of its mass at
-    /// its middle, moving with the mean of its ends: the exact momentum of a linear velocity) as points; the drives' spin
-    /// is left out.
+    /// Bridge (at the middle of its girder), trolley, hook block, load on its sling and the rope (the free rope a point of
+    /// its mass at its middle, moving with the mean of its ends' material: the exact momentum of a linear velocity; the
+    /// wound rope at the sheave) as points; the drives' spin, and the wound rope's turning with the drum, are left out.
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
         let add_point = sim_components::base::add_point;
@@ -796,9 +799,12 @@ impl Machine for Crane {
             add_point(&mut f, self.payload_mass(), place, v);
         }
         if self.rope_mass > 0.0 {
+            // The free rope's top end runs off the sheave at the drum's speed along the rope; the wound rope at the sheave.
+            let (u, paid) = (self.rope(s).u, s[RATES + 2]);
             let mid = std::array::from_fn(|k| 0.5 * (sheave[k] + load[k]));
-            let v = std::array::from_fn(|k| 0.5 * (sheave_speed[k] + speed[k]));
+            let v = std::array::from_fn(|k| 0.5 * (sheave_speed[k] + paid * u[k] + speed[k]));
             add_point(&mut f, self.rope_mass * s[2], mid, v);
+            add_point(&mut f, self.rope_mass * (self.capacity - s[2]), sheave, sheave_speed);
         }
         Some(f)
     }
@@ -929,10 +935,16 @@ impl Machine for Crane {
         let tension = m * (self.g + acc[2]);
         let l = (self.height - pos[2]) / self.kinematic_stretch();
         let stretch = if self.elastic { l * tension / self.ea } else { 0.0 };
-        // The rope's own weight (effects.rope_mass) hangs on the drum as well.
-        let drum = tension * (1.0 + stretch / (2.0 * l)) + self.rope_mass * self.g * l;
+        // The rope's own mass (effects.rope_mass): all of it travels with the trolley, the hanging part's weight and
+        // inertia pull on the drum, the wound part turns with it.
+        let (rope, wound) = (self.rope_mass * self.capacity, self.rope_mass * (self.capacity - l));
+        let drum = tension * (1.0 + stretch / (2.0 * l)) + self.rope_mass * l * (self.g + acc[2]);
         let axis_acc = [acc[0], acc[1], -acc[2] / self.kinematic_stretch()];
-        let force = [(self.masses[0] + m) * acc[0], (self.masses[1] + m) * acc[1], self.masses[2] * axis_acc[2] - drum];
+        let force = [
+            (self.masses[0] + m + rope) * acc[0],
+            (self.masses[1] + m + rope) * acc[1],
+            (self.masses[2] + wound) * axis_acc[2] - drum,
+        ];
         for k in 0..3 {
             let j = &self.drives[k];
             // The bridge's two carriages' rotors turn for the one command (shared equally).
@@ -1017,11 +1029,31 @@ impl Machine for Crane {
             return;
         }
         let before = self.energy(s);
+        if self.layout.rotor.is_some() {
+            // The hoist's gearbox takes the new weight as quasi-statically as the rope: the servo holds the rotor, the
+            // drum gives by the change of the static twist (0.78 mm for the 250 kg at the shipped stiffness).
+            let j = &self.drives[2];
+            let old = self.load_mass() + if self.attached { -self.payload } else { self.payload };
+            let twist = |mass: f64, l: f64| j.gearbox.static_twist(-self.rest_pull(l, mass) - j.output_torque(l, 0.0));
+            let shift = twist(self.load_mass(), s[2]) - twist(old, s[2]);
+            s[2] -= shift;
+        }
         let factor = self.rest_stretch(s[2]);
         self.place_on_rope(s, s[2] * factor, factor);
         if let Some(a0) = self.layout.sling {
-            // The payload went on or off: the sling hangs down again.
+            // The payload went on: the sling continues the rope's line and turns with it, so a hook block caught swinging
+            // takes the payload into the pendulum's own (lower) mode instead of whipping it across the rope. Off: nothing
+            // hangs on the sling, its angles rest.
             s[a0..a0 + 4].fill(0.0);
+            if self.payload_mass() > 0.0 {
+                let rope = self.rope(s);
+                let (u, vs) = (rope.u, self.sheave_speed(s));
+                let rel = [s[LOAD_SPEED] - vs[0], s[LOAD_SPEED + 1] - vs[1], s[LOAD_SPEED + 2] - vs[2]];
+                let turn = sub(rel, u.map(|c| c * dot(u, rel))).map(|c| c / rope.length);
+                let (a, b) = (u[0].atan2(-u[2]), u[1].clamp(-1.0, 1.0).asin());
+                let [_, ea, eb, ..] = full::sling_dir(a, b);
+                s[a0..a0 + 4].copy_from_slice(&[a, b, dot(ea, turn) / dot(ea, ea), dot(eb, turn)]);
+            }
         }
         self.pick_loss += (before - self.energy(s)) / dt;
     }
@@ -1138,7 +1170,12 @@ impl Machine for Crane {
     }
 
     fn base_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
-        let rope = if self.elastic { self.rope(s) } else { self.motion(s, torque).rope_state };
+        // The rigid rope's tension is the motion's; `half` below adds the rope's weight to it.
+        let mut rope = self.rope(s);
+        if !self.elastic {
+            rope.tension = self.motion(s, torque).rope_state.tension;
+            rope.drum = rope.tension;
+        }
         let (d, _) = self.sway(s);
         let offset = d[0].hypot(d[1]);
         let residual = if self.dwelling { self.sway_amplitude(s) } else { 0.0 };
@@ -1154,7 +1191,7 @@ impl Machine for Crane {
             offset,
             residual,
             floor,
-            self.brake_load_of(rope.drum + half),
+            self.brake_load(rope.drum + half),
         ]);
         if let Some(a0) = self.layout.sling {
             out.push((full::sling_dir(s[a0], s[a0 + 1])[0][2].abs()).min(1.0).acos());
@@ -1238,8 +1275,18 @@ impl Machine for Crane {
                 out.parts.push(Part::new("column", column, [end, side, 0.5 * (rail - 0.075)], steel));
             }
         }
-        let girder = Shape::Box { size: [0.3, span + 0.9, 0.35] };
-        out.parts.push(Part::new("bridge", girder, [xc, 0.5 * span, rail + 0.25], [0.85, 0.65, 0.1]));
+        let yellow = [0.85, 0.65, 0.1];
+        let (psi, _) = self.yaw(s);
+        if self.skew.is_some() {
+            // The girder yawed by psi (x = x_c + psi (y - y_c)): drawn upright along z, turned by -psi, then laid flat.
+            let girder = Shape::Box { size: [0.3, 0.35, span + 0.9] };
+            let mut part = Part::new("bridge", girder, [xc, -(rail + 0.25), 0.5 * span], yellow).turned(-psi);
+            part.lay_flat();
+            out.parts.push(part);
+        } else {
+            let girder = Shape::Box { size: [0.3, span + 0.9, 0.35] };
+            out.parts.push(Part::new("bridge", girder, [xc, 0.5 * span, rail + 0.25], yellow));
+        }
         out.parts.push(Part::new("trolley", Shape::Box { size: [0.6, 0.5, 0.3] }, [x, y, h + 0.15], dark));
         out.parts.push(
             Part::new(
@@ -1251,7 +1298,8 @@ impl Machine for Crane {
             .turned(s[2] / self.drum_radius),
         );
         // Each drive: motor, its rotor's bar, gearbox; the bridge's at the girder's end, the others on the trolley.
-        let places = [[xc - 0.45, -0.3, rail + 0.15], [x - 0.45, y + 0.15, h + 0.15], [x + 0.45, y, h + 0.15]];
+        let side_a = self.travel(s, 0).0;
+        let places = [[side_a - 0.45, -0.3, rail + 0.15], [x - 0.45, y + 0.15, h + 0.15], [x + 0.45, y, h + 0.15]];
         for (k, place) in places.iter().enumerate() {
             let j = &self.drives[k];
             out.parts.push(Part::new(

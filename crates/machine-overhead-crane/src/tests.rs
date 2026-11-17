@@ -43,7 +43,7 @@ fn the_static_stretch_tension_and_holding_torque_are_the_hand_calculated_ones() 
     assert!(close(rope.drum, 2601.107, 1e-3) && close(hold[2], -5.20221, 1e-5), "{hold:?}");
     assert!(hold[0] == 0.0 && hold[1] == 0.0);
     // The brake's check: that torque against 12 N m / 1.6 = 7.5 N m.
-    assert!(close(m.brake_load(&rope), 5.20221, 1e-5) && m.brake_limit == 7.5);
+    assert!(close(m.brake_load(rope.drum), 5.20221, 1e-5) && m.brake_limit == 7.5);
     // The motors stand for the pose, the tool is where they put the hook.
     let (mut motors, mut speed, mut pose, mut rate) = ([0.0; 3], [0.0; 3], [0.0; 3], [0.0; 3]);
     m.motor_state(&state, &mut motors, &mut speed);

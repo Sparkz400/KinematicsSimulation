@@ -31,7 +31,7 @@ fn swing(m: &Crane, s: &mut [f64], dx: f64, dy: f64) {
 
 /// The largest drift over `seconds` of the energy less the work of the constant holding torques on the motor angles (the
 /// drives hold, and the losses are off): what the energy must keep.
-fn drift(m: &Crane, state: &mut Vec<f64>, hold: &[f64; 3], seconds: f64) -> f64 {
+fn drift(m: &Crane, state: &mut [f64], hold: &[f64; 3], seconds: f64) -> f64 {
     let mut rk = Rk4::new(m.state_len());
     let (mut pos, mut vel) = ([0.0; 3], [0.0; 3]);
     m.motor_state(state, &mut pos, &mut vel);
@@ -50,11 +50,19 @@ fn drift(m: &Crane, state: &mut Vec<f64>, hold: &[f64; 3], seconds: f64) -> f64 
 }
 
 /// With the rope's mass per metre set to 0 the composite model is the plain one: the same accelerations to rounding, on
-/// the shipped config (every loss, the rolling, the gearboxes' efficiency) at a swinging, moving state.
+/// the shipped config (every loss, the rolling, the gearboxes' efficiency) at a swinging, moving state; on the elastic
+/// rope and on the rigid one (its tension the constraint's multiplier, the rolling at it to the fixed point).
 #[test]
 fn the_composite_model_without_the_rope_s_mass_is_the_plain_model() {
-    let plain = Crane::new(&ENTRY.config()).unwrap();
+    for elastic in [true, false] {
+        composite_against_plain(elastic);
+    }
+}
+
+fn composite_against_plain(elastic: bool) {
     let mut cfg = ENTRY.config();
+    cfg.set_text(&format!("effects.rope_stretch = {elastic}")).unwrap();
+    let plain = Crane::new(&cfg).unwrap();
     cfg.set_text("effects.rope_mass = true").unwrap();
     cfg.set_text("rope.mass_per_m_kg_m = 0.0").unwrap();
     let full = Crane::new(&cfg).unwrap();
@@ -71,9 +79,13 @@ fn the_composite_model_without_the_rope_s_mass_is_the_plain_model() {
     plain.derivatives(&s, &torque, &mut a);
     full.derivatives(&s, &torque, &mut b);
     for i in 0..STATE_LEN {
-        assert!((a[i] - b[i]).abs() < 1e-8 * (1.0 + a[i].abs()), "{i}: {} against {}", a[i], b[i]);
+        assert!((a[i] - b[i]).abs() < 1e-8 * (1.0 + a[i].abs()), "{elastic} {i}: {} against {}", a[i], b[i]);
     }
     assert!((plain.energy(&s) - full.energy(&s)).abs() < 1e-8 * plain.energy(&s).abs());
+    let (mut x, mut y) = (Vec::new(), Vec::new());
+    plain.base_signals(&s, &torque, &mut x);
+    full.base_signals(&s, &torque, &mut y);
+    assert!(x.iter().zip(&y).all(|(x, y)| (x - y).abs() < 1e-8 * (1.0 + x.abs())), "{x:?} against {y:?}");
 }
 
 /// effects.rope_mass at rest, by hand. Pose z = 2 m, the rope 3 m, hook and payload m = 265 kg, mu = 0.126 kg/m: the
@@ -88,7 +100,7 @@ fn the_rope_s_tension_at_the_drum_is_the_load_plus_the_rope_s_weight() {
     let (mass, mu, length) = (m.load_mass(), m.rope_mass, s[2]);
     let drum = m.full_motion(&s, &hold).rope_state.drum;
     let hand = (mass + mu * length) * G;
-    assert!((drum - hand).abs() < 5e-3, "{drum} N against {hand} N");
+    assert!((drum - hand).abs() < 1e-3, "{drum} N against {hand} N");
     let rope = m.rope(&s);
     let (t, e) = (mass * G + 0.5 * mu * G * length, rope.stretch);
     assert!(
@@ -100,7 +112,101 @@ fn the_rope_s_tension_at_the_drum_is_the_load_plus_the_rope_s_weight() {
     assert!(out[RATES..RATES + 3].iter().chain(&out[LOAD_SPEED..LOAD_SPEED + 3]).all(|a| a.abs() < 1e-7), "{out:?}");
     let mut signals = Vec::new();
     m.base_signals(&s, &hold, &mut signals);
-    assert!((signals[0] - hand).abs() < 5e-3, "{signals:?}");
+    assert!((signals[0] - hand).abs() < 1e-3, "{signals:?}");
+    // The rigid rope: the same at its constraint's tension, without the stretch.
+    let m = crane(&lossless(&["effects.rope_mass = true", "effects.rope_stretch = false"]));
+    let (s, hold) = at_rest(&m, [5.0, 2.0, 2.0]);
+    let motion = m.full_motion(&s, &hold);
+    let (hand, t) = ((mass + mu * s[2]) * G, (mass + 0.5 * mu * s[2]) * G);
+    assert!(
+        (motion.rope_state.drum - hand).abs() < 1e-9 && (motion.rope_state.tension - t).abs() < 1e-9,
+        "{} {} {} {}",
+        motion.rope_state.drum,
+        hand,
+        motion.rope_state.tension,
+        t
+    );
+    let mut out = vec![0.0; m.state_len()];
+    m.derivatives(&s, &hold, &mut out);
+    assert!(out.iter().all(|a| a.abs() < 1e-9), "{out:?}");
+    signals.clear();
+    m.base_signals(&s, &hold, &mut signals);
+    assert!((signals[0] - hand).abs() < 1e-9, "{signals:?}");
+}
+
+/// The rope paid in along itself: all of it moves at the drum's speed, the free part straight up with the hook, the
+/// wound part with the drum's surface. Gravity off (nothing hangs, so the hanging length's weight does not change as it
+/// winds), the trolley and bridge still, a stiff rope (1e9 N) and a heavy one (mu = 5 kg/m, capacity 6 m), the hook
+/// only: the drum winds under an extra -0.05 N m at the motor, the axis force F = -0.05 i (i = 40 / 0.08 = 500 rad/m),
+/// with the mass at the drum M = J_drum / r^2 + i^2 J_rotor + mu capacity + m_hook = 7.8125 + 112.5 + 30 + 15 = 165.31 kg:
+/// l(t) = l0 + F t^2 / (2 M). (A rope whose top moved with the sheave alone, as a linear velocity from v_S to v_P has it,
+/// would count 2 mu l / 3 = 10 kg less, 6 % more travel.)
+#[test]
+fn a_rope_wound_in_moves_all_its_mass_with_the_drum() {
+    let m = crane(&lossless(&[
+        "effects.rope_mass = true",
+        "rope.mass_per_m_kg_m = 5.0",
+        "rope.ea_n = 1.0e9",
+        "effects.gravity = false",
+        "effects.payload = false",
+    ]));
+    let (mut state, mut hold) = at_rest(&m, [5.0, 2.0, 2.0]);
+    let (l0, j) = (state[2], &m.drives[2]);
+    hold[2] -= 0.05;
+    let mass = m.masses[2] + j.reflected_inertia() + 5.0 * m.capacity + m.hook;
+    let a = -0.05 * j.ratio() / mass;
+    let mut rk = Rk4::new(m.state_len());
+    let seconds = 0.1;
+    for _ in 0..(seconds / DT).round() as usize {
+        advance(&m, &mut rk, &mut state, &hold, DT, 4);
+    }
+    let (moved, hand) = (state[2] - l0, 0.5 * a * seconds * seconds);
+    // Measured 3.3e-6 off: the stiff rope's ringing as the drum's force steps on.
+    assert!((moved / hand - 1.0).abs() < 2e-5, "{moved} m against {hand} m");
+}
+
+/// A pick with elastic drives is as quasi-static as the rope's: the servo holds the hoist's rotor, the drum pays out by
+/// the change of the gearbox's static twist, some m_p g / k = 250 x 9.80665 / 3.125e6 = 0.7845 mm (k = 2e4 N m/rad /
+/// 0.08^2 at the drum; 0.7853 mm with the rope's stretch in the drum's pull), and the crane is then at rest under the new
+/// load's holding torques: nothing left to ring.
+#[test]
+fn a_pick_with_elastic_drives_leaves_the_gearbox_at_its_new_twist() {
+    let mut m = crane(&lossless(&["effects.joint_elasticity = true"]));
+    m.attached = false;
+    let (mut s, _) = at_rest(&m, [5.0, 2.0, 2.0]);
+    let (l0, r0) = (s[2], m.layout.rotor.unwrap());
+    let rotor = s[r0 + 2];
+    m.set_payload_attached(true);
+    m.after_step(&mut s, DT);
+    // The drum's pull t (1 + e / 2l), e = t l / EA, from t0 = m_hook g to t1 = (m_hook + m_p) g.
+    let (k, t0, t1) = (m.drives[2].gearbox.stiffness, m.hook * G, m.load_mass() * G);
+    let hand = (t1 - t0 + (t1 * t1 - t0 * t0) / (2.0 * m.ea)) / k;
+    assert!(s[r0 + 2] == rotor && ((s[2] - l0) / hand - 1.0).abs() < 1e-9, "{} m against {hand} m", s[2] - l0);
+    let (_, hold) = at_rest(&m, [5.0, 2.0, 2.0]);
+    let mut out = vec![0.0; m.state_len()];
+    m.derivatives(&s, &hold, &mut out);
+    assert!(out.iter().all(|a| a.abs() < 1e-6), "{out:?}");
+}
+
+/// A pick on a hook block caught swinging: the sling continues the rope's line and turns with it, the payload at
+/// P1 + l_s u moving with the line's turn, (v_P1 - v_S)(1 + l_s / L) across the rope.
+#[test]
+fn a_pick_on_a_swinging_hook_block_hangs_the_sling_in_the_rope_s_line() {
+    let mut m = crane(&lossless(&["effects.hook_block = true"]));
+    m.attached = false;
+    let (mut s, _) = at_rest(&m, [5.0, 2.0, 2.0]);
+    swing(&m, &mut s, 0.3, -0.2);
+    (s[LOAD_SPEED], s[LOAD_SPEED + 1]) = (0.2, 0.1);
+    m.set_payload_attached(true);
+    m.after_step(&mut s, DT);
+    let (rope, (low, low_v)) = (m.rope(&s), m.lower(&s));
+    let (p1, v1) = ([s[LOAD], s[LOAD + 1], s[LOAD + 2]], [s[LOAD_SPEED], s[LOAD_SPEED + 1], s[LOAD_SPEED + 2]]);
+    let k = 1.0 + m.sling.unwrap() / rope.length;
+    for i in 0..3 {
+        assert!((low[i] - p1[i] - m.sling.unwrap() * rope.u[i]).abs() < 1e-12, "{low:?}");
+        let across = |v: V3| v[i] - rope.u[i] * dot(rope.u, v);
+        assert!((across(low_v) - k * across(v1)).abs() < 1e-12, "{low_v:?} {v1:?}");
+    }
 }
 
 fn crane(cfg: &Config) -> Crane {
@@ -133,7 +239,8 @@ fn a_massive_rope_swings_with_the_closed_form_period() {
     let period = 2.0 * (crossings[n] - crossings[0]) / n as f64;
     let (mass, rope) = (m.load_mass(), m.rope_mass * length);
     let hand = TAU * (length * (mass + rope / 3.0) / (G * (mass + rope / 2.0))).sqrt();
-    assert!((period / hand - 1.0).abs() < 5e-4, "{period} s against {hand} s");
+    // Measured 2.3e-6 off (the swing's amplitude, 3.3e-3 rad, lengthens it by theta^2 / 16 = 7e-7).
+    assert!((period / hand - 1.0).abs() < 2e-5, "{period} s against {hand} s");
     // `Machine::resonance_hz` (the shaper's period) says the same.
     let hz = m.resonance_hz(&[5.0, 2.0, m.height - length]).unwrap();
     assert!((1.0 / hz / hand - 1.0).abs() < 1e-9);
@@ -145,7 +252,11 @@ fn a_massive_rope_swings_with_the_closed_form_period() {
 /// l2 theta2'' + g theta2 = 0. With theta'' = -w^2 theta the second gives theta2 / theta1 = l1 w^2 / (g - l2 w^2), and the
 /// determinant (m1 + m2)(g - l1 w^2)(g - l2 w^2) - m2 l1 l2 w^4 = 0 is m1 l1 l2 w^4 - (m1 + m2) g (l1 + l2) w^2 +
 /// (m1 + m2) g^2 = 0 (for m2 -> 0: w^2 = g / l1 and g / l2). Each root is excited alone in its own shape and its period read
-/// from the zero crossings of the hook block's sway.
+/// from the zero crossings of the hook block's sway. The swing is small, 1e-3 rad of the rope: in the upper mode hook
+/// block and load swing against each other and pull the hook block up and down at twice the frequency (30.2 rad/s), close
+/// to the load's bounce on the elastic rope (sqrt(EA / (l1 (m1 + m2))) = 42.6 rad/s), which lengthens the period by
+/// about 1.4 theta1^2 (measured: 1.36 % at 0.01 rad, 0.13 % at 3e-3, 1.5e-4 at 1e-3; the model's linearisation, its
+/// Jacobian's eigenvalues, gives both hand periods to 1e-6).
 #[test]
 fn the_hook_block_and_its_load_swing_at_the_double_pendulum_s_two_frequencies() {
     let mut cfg = lossless(&["effects.hook_block = true"]);
@@ -161,15 +272,26 @@ fn the_hook_block_and_its_load_swing_at_the_double_pendulum_s_two_frequencies() 
         let root = (b + if upper { 1.0 } else { -1.0 } * (b * b - 4.0 * m1 * l1 * l2 * (m1 + m2) * G * G).sqrt())
             / (2.0 * m1 * l1 * l2);
         let ratio = l1 * root / (G - l2 * root);
-        let theta1 = 0.01f64;
+        let theta1 = 1e-3f64;
         // The rope turned by theta1 about the sheave, the sling by theta2 = ratio theta1 (to the y direction).
         state[LOAD + 1] = state[1] + l1 * theta1.sin();
         state[LOAD + 2] = m.height - l1 * theta1.cos();
         state[a0 + 1] = ratio * theta1;
         let mut rk = Rk4::new(m.state_len());
         let (mut crossings, mut last) = (Vec::new(), state[LOAD + 1] - state[1]);
+        let mut dump = String::new();
         for step in 1..=(9.0 / DT) as usize {
             advance(&m, &mut rk, &mut state, &hold, DT, 4);
+            if step % 16 == 0 {
+                dump += &format!(
+                    "{} {} {} {} {}\n",
+                    step as f64 * DT,
+                    state[LOAD + 1] - state[1],
+                    state[a0 + 1],
+                    state[LOAD + 2],
+                    state[1]
+                );
+            }
             let sway = state[LOAD + 1] - state[1];
             if sway.signum() != last.signum() {
                 crossings.push((step as f64 - sway / (sway - last)) * DT);
@@ -179,16 +301,18 @@ fn the_hook_block_and_its_load_swing_at_the_double_pendulum_s_two_frequencies() 
         let n = crossings.len() - 1 - (crossings.len() - 1) % 2;
         let period = 2.0 * (crossings[n] - crossings[0]) / n as f64;
         let hand = TAU / root.sqrt();
-        assert!((period / hand - 1.0).abs() < 1e-3, "upper {upper}: {period} s against {hand} s");
+        assert!((period / hand - 1.0).abs() < 2e-4, "upper {upper}: {period} s against {hand} s");
     }
 }
 
 /// Energy: with the drives held and the losses off, kinetic + potential + elastic less the holding torques' work on the
 /// motor angles stays put, for each new effect and for all together (the sling and the rope swinging, the rotors twisted,
-/// the girder yawed with the trolley off its middle).
+/// the girder yawed with the trolley off its middle, the drum paying out), on the elastic rope and on the rigid one (the
+/// load put on it at its length and speed). Measured: 2e-11 J for each effect, 2.2e-10 J
+/// for all together, of some 8 kJ (rounding); the rope's mass without its l' du/dq term drifts 2.3e-3 J.
 #[test]
 fn the_new_effects_conserve_energy_with_the_drives_held() {
-    let cases: [(&[&str], [f64; 3]); 5] = [
+    let cases: [(&[&str], [f64; 3]); 7] = [
         (&["effects.rope_mass = true", "rope.mass_per_m_kg_m = 0.5"], [5.0, 2.0, 2.0]),
         (&["effects.hook_block = true"], [5.0, 2.0, 2.0]),
         (&["effects.joint_elasticity = true", "gearbox.damping_nm_s_rad = 0.0"], [5.0, 2.0, 2.0]),
@@ -203,11 +327,25 @@ fn the_new_effects_conserve_energy_with_the_drives_held() {
             ],
             [5.0, 4.0, 2.0],
         ),
+        (&["effects.rope_stretch = false", "effects.rope_mass = true", "rope.mass_per_m_kg_m = 0.5"], [5.0, 2.0, 2.0]),
+        (
+            &[
+                "effects.rope_stretch = false",
+                "effects.rope_mass = true",
+                "effects.hook_block = true",
+                "effects.joint_elasticity = true",
+                "effects.bridge_skew = true",
+                "gearbox.damping_nm_s_rad = 0.0",
+            ],
+            [5.0, 4.0, 2.0],
+        ),
     ];
     for (edits, tool) in cases {
         let m = crane(&lossless(edits));
         let (mut state, hold) = at_rest(&m, tool);
         swing(&m, &mut state, 0.3, -0.2);
+        // Everything on the move, the drum paying out (the rope's l' terms).
+        m.set_tool_velocity(&mut state, &[0.05, 0.04, -0.1]);
         state[LOAD_SPEED] = 0.1;
         if let Some(a0) = m.layout.sling {
             state[a0] = 0.3;
@@ -221,9 +359,13 @@ fn the_new_effects_conserve_energy_with_the_drives_held() {
         if let Some(k) = m.layout.skew {
             state[k] = 2e-4;
         }
+        if !m.elastic {
+            // The rigid rope's length and its rate as the drum's (the constraint's own place and speed).
+            let l = state[2];
+            m.place_on_rope(&mut state, l, 1.0);
+        }
         let worst = drift(&m, &mut state, &hold, 1.5);
-        println!("{edits:?}: energy drift {worst:.2e} J");
-        assert!(worst < 2e-3, "{edits:?}: {worst} J");
+        assert!(worst < 1e-8, "{edits:?}: {worst} J");
     }
 }
 
@@ -232,7 +374,11 @@ fn the_new_effects_conserve_energy_with_the_drives_held() {
 /// the rotor's inertia at the axis, k the gearbox's stiffness at the axis (2e4 N m/rad over the lever squared), M the mass
 /// the axis moves: bridge + trolley, trolley, and for the hoist the drum's J / r^2 and the hook. By hand for the bridge: i
 /// = 30 / 0.08 = 375 rad/m, J = 1.34e-4 x 375^2 = 18.84 kg, k = 2e4 / 0.08^2 = 3.125e6 N/m, M = 720 kg: w = sqrt(3.125e6
-/// (1/18.84 + 1/720)) = 412.9 rad/s, 65.7 Hz. The twist of the rotor over the axis is followed through ten of its periods.
+/// (1/18.84 + 1/720)) = 412.5 rad/s, 65.66 Hz. The twist of the rotor over the axis is followed through 20 of its periods.
+/// The rope of 1e11 N carries the hook with the drum: its own mode, sqrt(EA / (l m_hook)) = 58,200 rad/s, is 0.91 rad of
+/// the 15.6 us sub-step, inside RK4's stable 2.8, and moves the hoist's mode by 4e-5 (the Jacobian's eigenvalues: 405.896
+/// against 405.910 rad/s by hand; with the shipped rope the hoist's mode couples with the hook's bounce, 177 and 700 rad/s).
+/// Measured: 2e-9, 1.5e-7 and 2.0e-5 off the hand values.
 #[test]
 fn each_elastic_drive_rings_at_the_hand_calculated_frequency() {
     for d in 0..3 {
@@ -262,7 +408,7 @@ fn each_elastic_drive_rings_at_the_hand_calculated_frequency() {
         }
         let n = crossings.len() - 1 - (crossings.len() - 1) % 2;
         let measured = 1.0 / (2.0 * (crossings[n] - crossings[0]) / n as f64);
-        assert!((measured / hand - 1.0).abs() < 2e-3, "drive {d}: {measured} Hz against {hand} Hz");
+        assert!((measured / hand - 1.0).abs() < 5e-5, "drive {d}: {measured} Hz against {hand} Hz");
     }
 }
 
@@ -273,7 +419,9 @@ fn each_elastic_drive_rings_at_the_hand_calculated_frequency() {
 ///   (m_b + m_t + 2R) a + m_t d psi'' = F,      m_t d a + (J_b + m_t d^2 + R g^2 / 2) psi'' = (F_B - F_A) g / 2 = 0.
 /// (a) the trolley in the middle (d = 0): psi'' = 0 to rounding. (b) at d = 2 m: psi'' = -F m_t d / det with det = A C -
 /// B^2, A = m_b + m_t + 2R, B = m_t d, C = J_b + m_t d^2 + R g^2 / 2. (c) The wheels hold a steady skew where psi'' = 0
-/// under a steady acceleration a = F / A: psi_s = -m_t d a / k_psi, k_psi = k_lat b^2 / 2 = 2e6 x 2^2 / 2 = 4e6 N m/rad.
+/// under a steady acceleration a = F / A: psi_s = -m_t d a / k_psi, k_psi = k_lat b^2 / 2 = 2e6 x 2^2 / 2 = 4e6 N m/rad
+/// (the heavier side, B with the trolley at +d, lags: psi = (x_B - x_A) / gauge < 0), but for the rope's pull (7e-4 of
+/// (b)).
 #[test]
 fn the_skew_follows_the_moment_balance_of_the_trolley_s_place() {
     let m = crane(&lossless(&["effects.bridge_skew = true"]));
@@ -302,7 +450,11 @@ fn the_skew_follows_the_moment_balance_of_the_trolley_s_place() {
     let steady = f / am;
     let psi = -mt * d * steady / stiffness;
     let (_, alpha_s) = run(2.5 + d, psi);
-    assert!(alpha_s.abs() < 1e-3 * alpha.abs(), "{alpha_s} against {alpha}");
+    // What is left is the rope's: the yaw moves the sheave by delta = psi d off the load hanging at rest, and the rope
+    // pulls it back with t delta / L, in x and as the moment t delta d / L: psi'' = -t delta d (A - m_t) / (L det).
+    let (rope, delta) = (m.rope(&at_rest(&m, [5.0, 2.5 + d, 2.0]).0), psi * d);
+    let hand = -rope.tension * delta * d * (am - mt) / (rope.length * det);
+    assert!((alpha_s / hand - 1.0).abs() < 1e-6, "{alpha_s} against {hand} ({alpha})");
     // The two sides' travels and torques are signals; the skew angle is their difference over the gauge.
     let (mut s, hold) = at_rest(&m, [5.0, 2.5, 2.0]);
     s[k] = 1e-3;
@@ -311,6 +463,22 @@ fn the_skew_follows_the_moment_balance_of_the_trolley_s_place() {
     let n = signals.len();
     let (angle, a_travel, b_travel) = (signals[n - 5], signals[n - 4], signals[n - 3]);
     assert!((angle - 1e-3).abs() < 1e-15 && ((b_travel - a_travel) / gauge - 1e-3).abs() < 1e-12);
+}
+
+/// The scene draws the girder yawed: its long axis, upright along z, turned by `angle` from +x towards +z, (-sin, 0, cos),
+/// and laid flat, (x, z, -y), is (sin psi, cos psi, 0): x grows by psi per metre of y, as the trolley's x_c + psi (y - y_c).
+#[test]
+fn the_scene_draws_the_girder_yawed() {
+    let m = crane(&lossless(&["effects.bridge_skew = true"]));
+    let (mut s, _) = at_rest(&m, [5.0, 2.0, 2.0]);
+    let psi = 0.05;
+    s[m.layout.skew.unwrap()] = psi;
+    let mut scene = Scene::default();
+    m.scene(&s, &mut scene);
+    let girder = scene.parts.iter().find(|p| p.id == "bridge").unwrap();
+    let axis = girder.oriented([-girder.angle.sin(), 0.0, girder.angle.cos()]);
+    assert!(girder.flat && (axis[0] - psi.sin()).abs() < 1e-15 && (axis[1] - psi.cos()).abs() < 1e-15, "{axis:?}");
+    assert!(girder.pos == [5.0, 0.5 * m.strokes[1], m.height + 0.5]);
 }
 
 fn floor_crane(extra: &[&str]) -> Crane {
@@ -407,9 +575,15 @@ fn the_new_effects_run_the_shipped_cycle_without_a_hitch() {
         });
         assert!(sim.state.iter().all(|v| v.is_finite()), "{edits:?}");
     }
-    // The new effects need the elastic rope.
+    // And on the rigid rope, all together.
     let mut cfg = ENTRY.config();
-    cfg.set_text("effects.rope_stretch = false").unwrap();
-    cfg.set_text("effects.rope_mass = true").unwrap();
-    assert!(Crane::new(&cfg).is_err());
+    for e in ["effects.rope_stretch = false", "effects.rope_mass = true", "effects.hook_block = true"] {
+        cfg.set_text(e).unwrap();
+    }
+    for e in ["effects.joint_elasticity = true", "effects.bridge_skew = true", "effects.floor_contact = true"] {
+        cfg.set_text(e).unwrap();
+    }
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    sim.run(0.2, |_| {});
+    assert!(sim.state.iter().all(|v| v.is_finite()));
 }
