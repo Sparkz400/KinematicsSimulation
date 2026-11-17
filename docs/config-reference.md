@@ -927,6 +927,7 @@ The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/de
 | --- | --- | --- | --- |
 | `effects.shaft_mass` | – | The shaft's weight share at the platform (on the arms) and its spin inertia at the tool | on |
 | `effects.shaft_torsion` | – | The shaft twists in series with the tool's gearbox (with `joint_elasticity`) | on |
+| `effects.tool_gearbox_body` | – | The tool gearbox's output is a body of its own, `gearbox.4.output_inertia_kgm2`, between the gearbox's spring and the shaft's (two more states; needs `joint_elasticity` and `shaft_torsion`, else ignored): the gearbox's mode (about 1.5 kHz) next to the tool's 41 Hz, the gearbox keeping its own damping. Off: the two springs are one in series | off |
 | `effects.telescope_friction` | – | The telescope's sliding friction along the shaft, a force on the platform that the arms take | on |
 | `axis.c.min_angle_deg`, `max_angle_deg` | ° | The controller's range of the tool's turn (the machine has no stops) | −360, 360, choice |
 | `axis.c.max_velocity_rad_s`, `max_acceleration_rad_s2`, `max_jerk_rad_s3` | rad/s, rad/s², rad/s³ | The turn's limits | 30, 600, 30000, estimates (ABB publishes none; 30 rad/s is the motor's 240 rad/s behind ratio 8) |
@@ -936,6 +937,7 @@ The D4's config ([`machine-delta-d4/default.toml`](../crates/machine-delta-d4/de
 | `motor.4.brake_torque_nm` | N m | Its brake | 2, estimate |
 | `gearbox.4.ratio`, `efficiency`, `stiffness_nm_rad`, `inertia_at_input_kgm2` | | The tool's gearbox over `[gearbox]` | 8, 0.97, 8250.592, 8.8e-6, catalogue (Siemens NRB060-04-8) |
 | `gearbox.4.backlash_rad` | rad | Its backlash | 2.909e-4 (1 arcmin), estimate, bounded 0.5 to 2 arcmin (catalogue: 10 arcmin) |
+| `gearbox.4.output_inertia_kgm2` | kg m² | Its output's inertia (planet carrier and flange: a steel disc of 50 mm × 15 mm, m r²/2 = 7.2e-5, and the carrier), with `tool_gearbox_body` | 1e-4, estimate, bounded 5e-5 to 2e-4 |
 | `gearbox.4.damping_nm_s_rad` | N m s/rad | Its damping (replaced by the shaft's with `shaft_torsion`) | 5, estimate, bounded 2 to 10 |
 | `drive.4.peak_torque_nm`, `rated_torque_nm`, `rated_speed_rad_s`, `no_load_speed_rad_s` | | Its drive over `[drive]` | 3.75, 1.27, 314.159, 619.7016, catalogue (1FK2104-4AF; no-load speed √(3/2) · 540 V / kt) |
 | `drive.4.velocity_kp_nm_s_rad`, `velocity_tn_s`, `kv_1_s`, `current_kp_v_a` | | Its loops | 0.05, 0.02, 80, 120: tuned with `sim-cli margins delta-d4 --bands` (at least 37.7°, 9.4 dB; the 0.081 `catalog::with_motor_part` retunes to keeps 34.6°, 5.4 dB), the shorter integral time and higher position gain for `settling`; the current loop's L over 0.25 ms as the shared |
