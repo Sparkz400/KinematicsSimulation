@@ -567,3 +567,175 @@ fn the_slanted_pieces_and_the_tool_bar_are_capsules() {
     let boxes = m.collision_bodies(&state);
     assert!(boxes.len() <= 2, "{} boxes", boxes.len());
 }
+
+/// The bend of an arm at rest under a hand-calculated tip load (effects.arm_bending). At the centre, 850 mm down, the
+/// tool at c = 0, the forearms lumped: the arm's elbow is at t = -1.6975 degrees (`angle_by_hand`), by the four-fold
+/// symmetry each arm's forearm pair carries a quarter of the plate, and there is no force along the elbow's axis (the
+/// forearms lie in the arm's plane), so the elbows do not move out of it. What bends the arm is the torque the elbow
+/// carries about the shoulder: the weight of what sits at the elbow, g m_tip cos t with
+/// m_tip = L_a (m_elbow + 2/3 m_fb) = 0.5 (0.35 + 0.6667 * 0.7) = 0.408335 kg m, and the plate's, m g |dz/dt| (m = 9.3332 kg,
+/// dz/dt = -0.12203 m/rad per arm as in the holding-torque test): Q = 4.0026 + 11.1696 = 15.172 N m, so
+/// delta = Q / k_b = 15.172 / 52000 = 2.918e-4 rad. The joint then stands short of the elbow by that, t - delta, and its
+/// gearbox holds the tube's weight and Q: -(g 0.35 cos(t - delta) + Q) / 20 at the motor. The plate is where the pose says.
+#[test]
+fn an_arm_bends_by_the_tip_torque_over_its_stiffness_at_rest() {
+    let z = -0.85;
+    let t = angle_by_hand(0.0, 0.0, z);
+    let (e, la) = (0.18, 0.5);
+    let dz = la * (e * t.sin() - z * t.cos()) / (z + la * t.sin()) / 4.0;
+    let m = 2.0 * (0.7 + 2.0 * (1.0 - 0.6667) * 0.7) + 1.0 + 6.0;
+    let tip_moment = la * (0.35 + 0.6667 * 0.7);
+    let q = G * tip_moment * t.cos() - m * G * dz;
+    assert!((q - 15.172).abs() < 2e-3, "{q} N m");
+    let mut cfg = lossless_config();
+    for e in [
+        "effects.arm_bending = true",
+        "effects.forearm_inertia = false",
+        "effects.gearbox_backlash = false",
+        "effects.amplifier_backlash = false",
+        "upper_arm.bending_stiffness_nm_rad = 52000.0",
+    ] {
+        cfg.set_text(e).unwrap();
+    }
+    let d = H4::new(&cfg).unwrap();
+    let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
+    d.equilibrium(&[0.0, 0.0, z, 0.0], &mut state, &mut torque);
+    assert_eq!(state.len(), d.state_len());
+    let delta = q / 52000.0;
+    let at = d.bend_at();
+    for k in 0..4 {
+        close(state[at + k], delta, 1e-6, "bend");
+        assert!(state[at + 8 + k].abs() < 1e-12, "{}", state[at + 8 + k]);
+        close(state[k], t - delta, 1e-9, "joint angle");
+        close(torque[k], -(G * 0.35 * (t - delta).cos() + q) / 20.0, 1e-6, "motor torque");
+    }
+    let (mut pos, mut vel) = ([0.0; 4], [0.0; 4]);
+    d.tool_state(&state, &mut pos, &mut vel);
+    for (k, by_hand) in [0.0, 0.0, z, 0.0].into_iter().enumerate() {
+        assert!((pos[k] - by_hand).abs() < 1e-9, "{pos:?}");
+    }
+    // The state is at rest: nothing accelerates it.
+    let mut rate = vec![0.0; state.len()];
+    d.derivatives(&state, &torque, &mut rate);
+    for k in 4..8 {
+        assert!(rate[k].abs() < 1e-6, "arm {k}: {} rad/s^2", rate[k]);
+        assert!(rate[at + k].abs() < 1e-6, "bend {k}: {} rad/s^2", rate[at + k]);
+    }
+}
+
+/// The bend mode by hand. With rigid gearboxes (the roots held by the position loops) and the arms lumped, at the
+/// centre the four elbows moving together move the plate straight down (the symmetry of the four arms: no x, y or
+/// slide), z' = 4 J_z per rad, J_z = dz/dt per arm = -0.12203 m/rad. The elbows carry I_tip = L_a^2 (m_elbow + 2/3 m_fb)
+/// = 0.25 * 0.81669 = 0.204173 kg m^2 each and the plate m = 9.3332 kg, so with the springs k_b on the four elbows
+/// v = (1, 1, 1, 1) is an eigenvector of M with M v = (I_tip + 4 m J_z^2) v = 0.76009 v, and w^2 = k_b / 0.76009
+/// = 68413 1/s^2, 41.63 Hz. The forearms lie in the arms' planes, so the elbows' moves out of them are decoupled
+/// there. The eight modes of the bending alone include it.
+#[test]
+fn the_bend_mode_of_the_four_elbows_together_is_the_hand_calculated_one() {
+    let z = -0.85;
+    let t = angle_by_hand(0.0, 0.0, z);
+    let (e, la) = (0.18, 0.5);
+    let jz = la * (e * t.sin() - z * t.cos()) / (z + la * t.sin()) / 4.0;
+    let m = 2.0 * (0.7 + 2.0 * (1.0 - 0.6667) * 0.7) + 1.0 + 6.0;
+    let i_tip = la * la * (0.35 + 0.6667 * 0.7);
+    let w2 = 52000.0 / (i_tip + 4.0 * m * jz * jz);
+    let by_hand = w2.sqrt() / std::f64::consts::TAU;
+    close(by_hand, 41.63, 2e-3, "the mode's frequency by hand");
+    let d = h4(&[
+        "effects.arm_bending = true",
+        "effects.forearm_inertia = false",
+        "effects.joint_elasticity = false",
+        "effects.amplifier_compliance = false",
+        "upper_arm.bending_stiffness_nm_rad = 52000.0",
+    ]);
+    let modes = d.modes_at(&[0.0, 0.0, z, 0.0], false);
+    let all: Vec<f64> = modes.iter().map(|m| m.0).collect();
+    assert_eq!(modes.len(), 8, "{all:?}");
+    let found = modes.iter().find(|mode| (mode.0 - by_hand).abs() < 1e-6 * by_hand);
+    let (hz, _, shape) = found.unwrap_or_else(|| panic!("{by_hand} Hz not in {all:?}"));
+    // Its shape: the four elbows alike, the roots still.
+    for k in 0..4 {
+        assert!(shape[k].abs() < 1e-9 * shape[4].abs(), "root {k} moves: {shape:?}");
+        assert!((shape[4 + k] - shape[4]).abs() < 1e-6 * shape[4].abs(), "{hz} Hz: {shape:?}");
+    }
+}
+
+/// Free and loss-free (no friction, damping, backlash or ripple, the bending's dampers made zero), held by the constant
+/// motor torques of the pose and started at (1, -0.5, 0.3) m/s turning at 5 rad/s, the energy less the motors' work stays
+/// what it was with the arms bending in and out of their planes: over 0.1 s of RK4 at 10 us to 1e-7 of the kinetic
+/// energy at the start, with and without the rods (their spin made 0.05 kg m^2 so that its share shows), on elastic and
+/// rigid joints, with the tool on the amplifier's spring and with it turning with the slide. A velocity term or a
+/// gravity that does not belong to the mass matrix of the 8 coordinates shows as a drift.
+#[test]
+fn a_free_loss_free_motion_with_bending_arms_keeps_its_energy() {
+    for (rods, elastic, spring, spin) in
+        [(true, true, true, 0.05), (false, false, false, 1.8e-5), (true, false, true, 1.8e-5)]
+    {
+        let mut cfg = lossless_config();
+        for e in [
+            "effects.arm_bending = true".to_string(),
+            format!("effects.forearm_inertia = {rods}"),
+            format!("effects.joint_elasticity = {elastic}"),
+            format!("effects.amplifier_compliance = {spring}"),
+            format!("mass.forearm_rod_spin_inertia_kgm2 = {spin:?}"),
+            "effects.gearbox_backlash = false".into(),
+            "effects.amplifier_backlash = false".into(),
+            "upper_arm.bending_damping_nm_s_rad = 0.0".into(),
+            "upper_arm.lateral_damping_n_s_m = 0.0".into(),
+        ] {
+            cfg.set_text(&e).unwrap();
+        }
+        let d = H4::new(&cfg).unwrap();
+        let (mut s, mut torque) = (Vec::new(), [0.0; 4]);
+        d.equilibrium(&[0.1, -0.05, -0.9, 0.3], &mut s, &mut torque);
+        d.set_tool_velocity(&mut s, &[1.0, -0.5, 0.3, 5.0]);
+        let budget = |s: &[f64]| {
+            let (mut rotor, mut speed) = ([0.0; 4], [0.0; 4]);
+            d.motor_state(s, &mut rotor, &mut speed);
+            d.energy(s) - (0..4).map(|k| torque[k] * rotor[k]).sum::<f64>()
+        };
+        let (start, kinetic) = (budget(&s), d.energy_parts(&s)[0]);
+        let n = s.len();
+        let rate = |s: &[f64]| {
+            let mut r = vec![0.0; n];
+            d.derivatives(s, &torque, &mut r);
+            r
+        };
+        let h = 1e-5;
+        let (mut bent, at, rest) = (0f64, d.bend_at(), s.clone());
+        for _ in 0..10_000 {
+            let k1 = rate(&s);
+            let k2 = rate(&s.iter().zip(&k1).map(|(x, k)| x + 0.5 * h * k).collect::<Vec<_>>());
+            let k3 = rate(&s.iter().zip(&k2).map(|(x, k)| x + 0.5 * h * k).collect::<Vec<_>>());
+            let k4 = rate(&s.iter().zip(&k3).map(|(x, k)| x + h * k).collect::<Vec<_>>());
+            for i in 0..n {
+                s[i] += h / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
+            }
+            bent = bent.max((0..4).map(|k| (s[at + k] - rest[at + k]).abs()).fold(0.0, f64::max));
+        }
+        let drift = (budget(&s) - start).abs();
+        println!("rods {rods}, elastic {elastic}, spring {spring}: drift {drift:.3e} J of {kinetic:.4} J, bend up to {bent:.2e} rad");
+        assert!(drift < 1e-7 * kinetic, "rods {rods}, elastic {elastic}, spring {spring}: {drift} J of {kinetic} J");
+        // The arms did bend further (the motion's own acceleration rings them), so the test sees the bending's terms.
+        assert!(bent > 1e-6, "{bent} rad");
+    }
+}
+
+/// With the switch on the machine's signals add up: the base and effect values are as many as the infos, the bending's
+/// loss power among them, and with it off the state and the signals are as before (no bend states, no `arm_bending`).
+#[test]
+fn the_bending_adds_its_states_and_its_loss_signal_and_nothing_with_the_switch_off() {
+    let (on, off) = (h4(&["effects.arm_bending = true"]), h4(&[]));
+    assert_eq!(on.state_len(), off.state_len() + 16);
+    for (d, loss) in [(&on, true), (&off, false)] {
+        let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
+        d.equilibrium(&[0.1, 0.05, -0.9, 0.2], &mut state, &mut torque);
+        assert_eq!(state.len(), d.state_len());
+        let mut values = Vec::new();
+        d.base_signals(&state, &torque, &mut values);
+        d.effect_signals(&state, &torque, &mut values);
+        let infos = d.signal_infos();
+        assert_eq!(values.len(), infos.len());
+        assert_eq!(infos.iter().any(|i| i.id.ends_with("arm_bending")), loss);
+    }
+}

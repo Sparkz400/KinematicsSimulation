@@ -50,6 +50,10 @@ joint_elasticity = true
 # (mass.forearm_rod_spin_inertia_kgm2). Off: the lumped model of Codourey and Olsson, mass.forearm_elbow_share at the
 # elbow and the rest at the plate, the rods' rotational inertia left out. On in the shipped config.
 forearm_inertia = true
+# The upper arms bend (springs and dampers, [upper_arm]) as the three-arm delta's do: in the plane they turn in, the
+# elbow turns against the arm's root; out of it, the elbow moves along its axis. The plate rings after a move. Off in
+# the shipped config: the stiffnesses are estimates.
+arm_bending = false
 # The tool turns on the amplifier's spring ([plate] amplifier_stiffness_nm_rad and _damping_nm_s_rad): rack, pinion and
 # gear stage twist between the plate's slide and the tool, which is a body of its own. Off: the tool turns with the
 # slide times the ratio. On in the shipped config.
@@ -199,6 +203,20 @@ plate_part_kg = 0.7
 carriage_kg = 1.0
 # The rated payload of the class.
 payload_kg = 6.0
+
+# With effects.arm_bending: each upper arm bends in the plane it turns in, a turn of the elbow against the arm's root.
+# [estimate] the three-arm delta's tube (carbon 50 x 2 mm, E 100 GPa: I = pi (50^4 - 46^4) / 64 mm^4 = 8.70e-8 m^4) at
+# this arm's length: a cantilever's tip deflection F L^3 / (3 E I) as a turn about the shoulder, k = 3 E I / L_a =
+# 3 * 8700 / 0.5 = 52200 N m/rad. The damping about 2 % of critical at the plate's sideways mode.
+[upper_arm]
+bending_stiffness_nm_rad = 52000.0
+bending_damping_nm_s_rad = 5.0
+# Out of the plane the arm turns in, the elbow moves along its axis on the tube's lateral stiffness. [estimate] the
+# same tube (round, so EI is the same both ways): a cantilever's tip, 3 E I / L_a^3 = 3 * 8700 / 0.5^3 = 208800 N/m.
+# The damping about 2 % of critical with the elbow's share of mass (0.47 kg with the rods: 2 * 0.02 *
+# sqrt(2.1e5 * 0.47) = 12.6 N s/m).
+lateral_stiffness_n_m = 210000.0
+lateral_damping_n_s_m = 12.0
 
 # The plate's two parts and what turns the tool. Part A (arms 1 and 2) and part B (arms 3 and 4) slide against each
 # other along (1, -1, 0) / sqrt 2, each by h from the tool's point the other way; the pinion between a rack on each
@@ -595,6 +613,10 @@ mass.forearm_elbow_share = [0.5, 0.667]
 mass.forearm_rod_spin_inertia_kgm2 = [0.9e-5, 3.6e-5]
 mass.plate_part_kg = [0.5, 1.0]
 mass.carriage_kg = [0.7, 1.4]
+upper_arm.bending_stiffness_nm_rad = [32000.0, 80000.0]
+upper_arm.bending_damping_nm_s_rad = [2.0, 10.0]
+upper_arm.lateral_stiffness_n_m = [125000.0, 310000.0]
+upper_arm.lateral_damping_n_s_m = [5.0, 25.0]
 plate.pinion_radius_m = [0.038, 0.042]
 plate.gear_ratio = [1.1, 1.3]
 plate.amplifier_stiffness_nm_rad = [1500.0, 6000.0]

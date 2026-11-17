@@ -697,7 +697,7 @@ Low and high bound of the values that are estimates. The table mirrors the confi
 | D | 32 | The geometry and the masses (not the payload), the rods' spin inertia, the joint's friction, the motor's friction, ripple, cogging and winding resistance, the gearbox's stiffness and damping, `[thermal]`, three of `[thermal_feedback]`, the DC link's discharge and the line module's efficiency, the gearing's Wöhler exponent, the upper arms' bending stiffnesses and dampings (in and out of their planes) | The stop angles and stiffness, the working range, the axis limits, the loop gains, every `[catalogue]` value |
 | D2 | 26 | As D, with the gearbox's backlash in place of its stiffness (the stiffness is the catalogue's, the backlash an estimate) | As D |
 | D4 | 50 | As D, with the arms' backlash, and the estimates of `[gearbox.4]` (backlash, damping), `[motor.4]` (winding, friction), `[ratings.4]`, `[tool]` and `[shaft]` | As D; the shaft's slide smoothing speed |
-| H4 | 43 | As D, with the arms' backlash (an estimate here), and the estimates of `[plate]` (pinion radius, gear ratio, the amplifier's stiffness, damping and backlash) and `[tool]` | As D; the upper arms have no bending (no `[upper_arm]`) |
+| H4 | 47 | As D, with the arms' backlash (an estimate here), and the estimates of `[plate]` (pinion radius, gear ratio, the amplifier's stiffness, damping and backlash) and `[tool]` | As D; the upper arms' bending (`[upper_arm]`, with `effects.arm_bending`) is bounded too, four keys more |
 | E | 75 | Every `[estimate]` of the file, including geometry estimates, belt mass, all friction values, winding resistance and inductance, brake torque, pulley inertia, frame mass, idler, cable chain, process force, hard stops, sensor noise, the estimated ratings (the discharge time constant and the line module's efficiency among them), the thermal resistances and time constants, the tooth jump factor and the four estimates of `[thermal_feedback]` | The ripple and cogging orders and the loop gains; all `[catalogue]` values; the rated rises of `[thermal]`; the span resonance band (a limit) |
 
 Since 15 November 2026 every config with a holding brake also bounds `brake.engage_delay_s` and `brake.release_delay_s`, two more than the counts above. No cycle uses them (the brakes act only while the drives stop or start), so `verdicts --bands` runs nothing for them; `sim-cli stop` with the bounds set by hand shows what they do.
@@ -958,14 +958,19 @@ payload; motor 1FK2105-6AF at 400 V (catalogue: rotor 2.7 kg cm², 1.19403 N m/A
 rated, 24 A maximum), gearbox NRB120-05-20 (catalogue: ratio 20, 96 %, 75630 N m/rad, 1.57 kg cm², 260 N m rated,
 416 N m maximum; backlash 3 arcmin, an estimate for a reduced-backlash planetary, bounded 2 to 4 arcmin), converter
 6SL3210-5HE12-0UF0 (7 A, 24 A; its internal braking resistor 100 W, 6 kW), the velocity loop 0.5 N m s/rad, 0.03 s
-with 0.1 ms filters (tuned with `sim-cli margins delta-h4 --bands`: at least 46.4°, 8.88 dB). It has no `[upper_arm]` and no
-`effects.link_elasticity`: the upper arms do not bend. The tool pose, `start.pose` and the cycle's targets are
+with 0.1 ms filters (tuned with `sim-cli margins delta-h4 --bands`: at least 46.4°, 8.88 dB). Its upper arms bend as the D3's do with
+`effects.arm_bending` (off as shipped, `[upper_arm]`). The tool pose, `start.pose` and the cycle's targets are
 (x, y, z, c), c in rad. These keys are its own:
 
 | Key | Unit | Meaning | Value, source |
 | --- | --- | --- | --- |
 | `effects.amplifier_compliance` | – | The tool turns on the amplifier's spring (rack, pinion and gear stage twist), a body of its own; off, it turns with the slide times the ratio | on |
 | `effects.amplifier_backlash` | – | With `amplifier_compliance`: the amplifier's play at the tool, a dead band in its spring | on |
+| `effects.arm_bending` | – | The upper arms bend as the D3's do with `link_elasticity`: in the plane they turn in, the elbow turns against the arm's root on a spring and damper; out of it, the elbow moves along its axis on the tube's lateral spring and damper. The tube stays with the root, the elbow block and the forearms' share move with the elbow; the plate rings after a move. Not taken: the D3's `arm_tube_inertia` | off |
+| `upper_arm.bending_stiffness_nm_rad` | N m/rad | With `effects.arm_bending`: the arm's bending as a turn of the elbow about the shoulder, 3 E I / L_a. The D3's carbon tube 50 × 2 mm, E 100 GPa (I = 8.70e-8 m⁴) at L_a = 0.5 m: 52200; bounds 32000 to 80000 | 52000, estimate |
+| `upper_arm.bending_damping_nm_s_rad` | N m s/rad | Its damping, about 2 % of critical at the plate's sideways mode; bounds 2 to 10 | 5.0, estimate |
+| `upper_arm.lateral_stiffness_n_m` | N/m | The arm's bending out of the plane it turns in, as a move of the elbow along its axis: 3 E I / L_a³ (the same round tube): 208800; bounds 125000 to 310000 | 210000, estimate |
+| `upper_arm.lateral_damping_n_s_m` | N s/m | Its damping, about 2 % of critical with the elbow's share of mass (0.47 kg with the rods); bounds 5 to 25 | 12.0, estimate |
 | `geometry.plate_radius_m` | m | From a plate part's centre to each of its two forearm pairs (both parts alike) | 0.07, estimate, bounded 0.06 to 0.08 |
 | `mass.plate_part_kg` | kg | Each of the two plate parts, without the forearms' share | 0.7, estimate, bounded 0.5 to 1.0 |
 | `mass.carriage_kg` | kg | The carriage between the parts at the tool's point: pinion, gear stage, flange | 1.0, estimate, bounded 0.7 to 1.4 |
