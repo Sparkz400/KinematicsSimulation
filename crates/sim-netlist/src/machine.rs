@@ -59,7 +59,7 @@
 //! body: its rotary's inertia (and payload's) is its mass, no gravity along it.
 
 use crate::geometry::{Wheel, arc, contacts, flex_at, lean_reach, lean_weight, rise_coefficients, wrap};
-use crate::netlist::{LeanNode, Netlist, TcpNode, Transmission, Waypoint, WormNode};
+use crate::netlist::{LeanNode, Netlist, SpanNode, TcpNode, Transmission, Waypoint, WormNode};
 use sim_components::catalog::motor_config;
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::{
@@ -1079,6 +1079,21 @@ impl ConfigMachine {
             // As in the machine crate with a leaning axis: the lean is a mode of the elastic model.
             (lean, flex) => lean.filter(|_| flex && elastic),
         };
+        // A belt that moves the lean's lever axis holds the lean back by its vertical runs (`lean_runs`), which the spans
+        // give: without one the geometric stiffness would silently be missing.
+        if let Some(z) = lean.as_ref().and_then(|l| l.lever_axis) {
+            let belted = sections.iter().any(|s| s.c.get(z).is_some_and(|c| *c != 0.0));
+            let vertical = |s: &SpanNode| {
+                s.axes.get(z).is_some_and(|c| c.abs() == 1.0)
+                    && s.axes.iter().enumerate().all(|(i, c)| i == z || *c == 0.0)
+            };
+            if belted && !net.spans.iter().any(vertical) {
+                return Err(ConfigError::Missing(format!(
+                    "machine.span (the belt's runs along {} that hold the leaning body back, effects.tool_flex)",
+                    net.axes[z].id
+                )));
+            }
+        }
         let beam = if elastic && on("beam_vertical_mode")? {
             let lean =
                 net.lean.ok_or_else(|| ConfigError::Missing("machine.lean (effects.beam_vertical_mode)".into()))?;

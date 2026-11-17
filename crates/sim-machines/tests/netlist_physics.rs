@@ -499,3 +499,20 @@ fn each_guide_on_a_motor_keeps_its_own_stribeck_rise() {
         }
     }
 }
+
+/// A leaning body on a belt-driven lever axis needs the belt's vertical runs as spans (their T / l holds it back): the
+/// T-shaped belt gantry's file with its lean on and its spans taken out is refused by name, not built without the
+/// geometric stiffness; with them it builds.
+#[test]
+fn a_lean_on_a_belt_without_its_vertical_runs_is_refused() {
+    let lean = ["effects.tool_flex = true", "effects.belt_stretch = true"];
+    assert!(sim_netlist::build(&with(&shipped("t-gantry.toml"), &lean)).is_ok());
+    let mut all: toml::Table = shipped("t-gantry.toml").to_text().unwrap().parse().unwrap();
+    all["machine"].as_table_mut().unwrap().remove("span").unwrap();
+    for effect in ["belt_span_vibration", "belt_mass"] {
+        all["effects"].as_table_mut().unwrap().insert(effect.into(), toml::Value::Boolean(false));
+    }
+    let bare = Config::parse(&toml::to_string(&all).unwrap()).unwrap();
+    let refused = sim_netlist::build(&with(&bare, &lean)).err().expect("built without the spans");
+    assert!(refused.detail().contains("machine.span"), "{refused:?}");
+}
