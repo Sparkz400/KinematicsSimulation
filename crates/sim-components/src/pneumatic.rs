@@ -26,8 +26,11 @@
 //! shortcut: the flow law's last 0.5 % before the pressures meet is a straight line through zero (`LINEAR`), not
 //! the root: the root's slope is infinite there, which no fixed step integrates. ISO 6358-3 has a laminar region of
 //! its own there; take it in if a test against measured data ever needs the last 0.5 % of a pressure.
-//! shortcut: the cylinder rides on the machine without acting back on it (its weight and reaction are in the masses
-//! of the machine's body that carries it); exact for a cylinder at right angles to the axes that carry it.
+//! The cylinder rides on the machine without acting back on it: its weight and its reaction are in the masses of the
+//! machine's body that carries it. That is exact only for a cylinder at right angles to the axes that carry it, so
+//! `attach` checks it (`along_carrying_axis`): a cylinder extends in the x-z plane at `incline_deg` above x, so its
+//! force has the component cos on a linear axis x and sin on a linear axis z; a file whose cylinder has a component
+//! along such an axis of its machine is refused.
 
 use crate::mech::HardStop;
 use sim_core::{AxisInfo, BeltSection, FrictionContact, MotorInfo, ThermalPart};
@@ -734,11 +737,33 @@ pub fn attach(
     let h = cfg.positive("sim.dt_s")? / cfg.positive("sim.substeps")?;
     let cylinders =
         nodes.iter().map(|n| Cylinder::from_config(cfg, &n.id, &n.key, &n.values, h)).collect::<Result<Vec<_>, _>>()?;
+    for (c, n) in cylinders.iter().zip(nodes) {
+        if let Some(axis) = along_carrying_axis(c.incline, machine.axes()) {
+            return Err(ConfigError::Invalid(format!(
+                "{}.incline_deg (the cylinder {} pushes along the machine's axis {axis}, which carries it; the model \
+                 lets the cylinder ride without acting back and holds only at right angles to the carrying axes)",
+                n.values, n.id
+            )));
+        }
+    }
     let pose = crate::sim::start_pose(cfg, machine.as_ref())?;
     let (mut state, mut torque, mut signals) = (Vec::new(), vec![0.0; machine.motors().len()], Vec::new());
     machine.equilibrium(&pose, &mut state, &mut torque);
     machine.base_signals(&state, &torque, &mut signals);
     Ok(Box::new(Pneumatic { inner_base_signals: signals.len(), inner: machine, cylinders }))
+}
+
+/// The id of a linear axis x or z of the machine that a cylinder extending at `incline` (rad, above x in the x-z
+/// plane) pushes along, more than rounding (1e-9 of the force); None where it is at right angles to all of them.
+fn along_carrying_axis(incline: f64, axes: &[AxisInfo]) -> Option<&'static str> {
+    axes.iter()
+        .filter(|a| a.unit == "m")
+        .find(|a| match a.id {
+            "x" => incline.cos().abs() > 1e-9,
+            "z" => incline.sin().abs() > 1e-9,
+            _ => false,
+        })
+        .map(|a| a.id)
 }
 
 impl Pneumatic {
@@ -1014,6 +1039,20 @@ impl Machine for Pneumatic {
 mod tests {
     use super::*;
     use sim_core::Rk4;
+
+    /// A cylinder hanging down (-90 degrees) from a carriage on x pushes at right angles to x (cos = 6e-17): carried. At
+    /// 0 degrees it pushes along x, at 45 degrees partly along it, and on a machine with a z axis too, -90 pushes along z.
+    #[test]
+    fn a_cylinder_along_a_carrying_axis_is_found() {
+        let axis =
+            |id| AxisInfo { id, key: id, unit: "m", min: 0.0, max: 1.0, max_vel: 1.0, max_acc: 1.0, max_jerk: 1.0 };
+        let (x, z) = (axis("x"), axis("z"));
+        let down = -std::f64::consts::FRAC_PI_2;
+        assert_eq!(along_carrying_axis(down, std::slice::from_ref(&x)), None);
+        assert_eq!(along_carrying_axis(0.0, std::slice::from_ref(&x)), Some("x"));
+        assert_eq!(along_carrying_axis(0.25 * std::f64::consts::PI, std::slice::from_ref(&x)), Some("x"));
+        assert_eq!(along_carrying_axis(down, &[x, z]), Some("z"));
+    }
 
     /// A DSBC-32-like cylinder from `TABLE` (32 mm bore, 12 mm rod: A1 = 8.0425e-4 m2, A2 = 6.9115e-4 m2, 100 mm
     /// stroke, 0.5 kg, dead volumes 5 cm3, 6 bar gauge), horizontal, without friction and cushions unless `changes` say.

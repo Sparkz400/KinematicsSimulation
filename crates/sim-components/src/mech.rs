@@ -896,9 +896,12 @@ pub struct Gearbox {
     pub band: f64,
     /// T_h, N m.
     pub hysteresis: f64,
-    /// Dahl's sigma, the hysteresis's stiffness at a reversal, N m/rad.
-    /// shortcut: taken as K1 (no maker publishes the loop's shape at a reversal); a config key once a measured loop is.
+    /// Dahl's sigma, the hysteresis's stiffness at a reversal, N m/rad: `gearbox.hysteresis_stiffness_factor` times K1,
+    /// K1 itself where the key is absent (no maker publishes the loop's shape at a reversal).
     pub dahl_stiffness: f64,
+    /// The efficiency driven back over the efficiency driving, 1 for a gear that loses alike both ways (`loss_factor`).
+    /// A screw sets it from its lead angle (`Converter::apply_back`).
+    pub back_ratio: f64,
     /// The hysteresis's state where the last step ended: the contact twist x and its torque z there (`commit`). Within a
     /// step z follows Dahl's law exactly from it for a twist that runs one way (`hysteresis_torque`). A NaN twist: not
     /// stepped yet, z is 0 at the twist of the first step's end.
@@ -916,14 +919,14 @@ pub struct Gearbox {
     pub mesh_anchor: f64,
 }
 
-/// The mesh friction's bristle stiffness over K1: K1 itself, as the hysteresis's Dahl stiffness. Presliding then takes mu
+/// The mesh friction's bristle stiffness over K1 where `gearbox.mesh_stiffness_factor` is absent: K1 itself, as the
+/// hysteresis's Dahl stiffness (`gearbox.hysteresis_stiffness_factor`). Presliding then takes mu
 /// of the gear's twist under the same torque (20 % at an efficiency of 0.8), and the friction a reversal of 2 mu of an
 /// amplitude to turn round, which lowers the damping of a small ring below the friction law's (see the tests). The
 /// energy budget does not choose it: with the friction booked as its whole power the belt axes, whose light pulleys
 /// stick to the housing first, close their passes at K1, 3 K1 and 10 K1 alike (the one-axis belt drive under 1e-6 unaccounted,
 /// gearbox loss 3.04659 J at all three; the T-shaped belt gantry 4e-6, 8.70004, 8.70027 and 8.70029 J; with the friction off 3.04944
 /// and 8.82445 J). (The 1.4 and 2.0 % they missed at 10 K1 were the earlier bookkeeping's, of the store's rate.)
-/// shortcut: K1; a config key once a gear's presliding is measured.
 pub const MESH_STIFFNESS: f64 = 1.0;
 
 #[derive(Debug, Clone, Copy)]
@@ -980,7 +983,8 @@ impl Gearbox {
             },
             band: if lost { band } else { 0.0 },
             hysteresis: if lost { 0.5 * stiffness * width } else { 0.0 },
-            dahl_stiffness: stiffness,
+            dahl_stiffness: stiffness * Self::optional_factor(cfg, "gearbox.hysteresis_stiffness_factor")?,
+            back_ratio: 1.0,
             anchor: [f64::NAN, 0.0],
             knees: if cfg.bool("effects.gearbox_stiffness_curve")? { knees } else { [f64::INFINITY; 2] },
             upper,
@@ -988,12 +992,17 @@ impl Gearbox {
             mesh_stiffness: if cfg.get("effects.gearbox_mesh_friction").is_ok()
                 && cfg.bool("effects.gearbox_mesh_friction")?
             {
-                MESH_STIFFNESS * stiffness
+                stiffness * Self::optional_factor(cfg, "gearbox.mesh_stiffness_factor")?
             } else {
                 0.0
             },
             mesh_anchor: f64::NAN,
         })
+    }
+
+    /// An optional positive factor on K1 (1 where the key is absent, as the shipped files have it).
+    fn optional_factor(cfg: &Config, key: &str) -> Result<f64> {
+        if cfg.get(key).is_ok() { cfg.positive(key) } else { Ok(MESH_STIFFNESS) }
     }
 
     /// The efficiency as configured: 1 with effects.gearbox_efficiency off. With effects.gearbox_drag the teeth's
@@ -1067,9 +1076,11 @@ impl Gearbox {
         (twist, (twist.abs() - self.half_backlash).max(0.0))
     }
 
-    /// Factor on a torque at the output: efficiency when driving, 1/efficiency when driven back.
+    /// Factor on a torque at the output: efficiency when driving, 1 / (back efficiency) when driven back, the back
+    /// efficiency being the efficiency times `back_ratio` (the same, 1 / efficiency, for a gear that loses alike).
     pub fn loss_factor(&self, output_torque: f64, output_speed: f64) -> f64 {
-        self.efficiency.powf((output_torque * output_speed / EFFICIENCY_FADE_W).tanh())
+        let t = (output_torque * output_speed / EFFICIENCY_FADE_W).tanh();
+        if t >= 0.0 { self.efficiency.powf(t) } else { (self.efficiency * self.back_ratio).min(1.0).powf(t) }
     }
 
     /// The contact twist x: the twist beyond the dead zone with its sign, 0 inside it.
@@ -1152,7 +1163,8 @@ impl Gearbox {
     /// With effects.gearbox_mesh_friction: the friction in the mesh at the output, against the housing, when the gear
     /// passes `held` (its spring's and hysteresis's torque) at the output angle `out_angle`. It opposes the output's
     /// motion, bounded by mu |held| with mu = 1 - eta (eta the teeth's efficiency), so that driving the output gets
-    /// eta held and driven back it takes (1 + mu) held: the back-driving efficiency is 1 / (1 + mu) = 1 / (2 - eta). At
+    /// eta held and driven back it takes (1 + mu) held: the back-driving efficiency is 1 / (1 + mu) = 1 / (2 - eta).
+    /// With a `back_ratio` r the back-driving efficiency is r / (2 - eta), the bound there (2 - eta) / r - 1. At
     /// rest it sticks: an elastic-plastic bristle of `mesh_stiffness` from the anchor where the last step left it, the
     /// friction sigma (out - anchor) up to the bound. 0 before the first step's commit (the gear then has the faded
     /// efficiency) and with the effect off.
@@ -1160,8 +1172,11 @@ impl Gearbox {
         if self.mesh_stiffness == 0.0 || self.mesh_anchor.is_nan() {
             return 0.0;
         }
-        let bound = (1.0 - self.efficiency) * held.abs();
-        (self.mesh_stiffness * (out_angle - self.mesh_anchor)).clamp(-bound, bound)
+        // The friction's sign against the held torque's: with it the output is driven (eta held), against it driven back.
+        let driving = (1.0 - self.efficiency) * held.abs();
+        let back = ((2.0 - self.efficiency) / self.back_ratio - 1.0).max(0.0) * held.abs();
+        let (lo, hi) = if held >= 0.0 { (-back, driving) } else { (-driving, back) };
+        (self.mesh_stiffness * (out_angle - self.mesh_anchor)).clamp(lo, hi)
     }
 
     /// The torque the spring and hysteresis pass at the rotor and output angles at rest, the damping left out (the
@@ -1519,6 +1534,7 @@ preload_n = 200.0
             band: 0.0,
             hysteresis: 0.0,
             dahl_stiffness: 1e4,
+            back_ratio: 1.0,
             anchor: [f64::NAN, 0.0],
             knees: [f64::INFINITY; 2],
             upper: [1e4; 2],
@@ -2057,6 +2073,21 @@ preload_n = 200.0
             trace.windows(3).filter(|w| w[1].1 > w[0].1 && w[1].1 >= w[2].1 && w[1].1 > 0.0).map(|w| w[1].1).collect();
         for w in peaks.windows(2).take(4) {
             assert!((w[1] / w[0] - 7.0 / 9.0).abs() < 1e-4, "a cycle {}, by hand 0.777778 ({peaks:?})", w[1] / w[0]);
+        }
+    }
+
+    /// The mesh friction's bound by the direction: with the gear at an efficiency of 0.8 it takes 0.2 of the held torque
+    /// from the output it drives, and driven back (2 - 0.8) / r - 1 of it with a back ratio r: 0.2 at r = 1 (as before),
+    /// (1.2 / 0.5 - 1) = 1.4 at r = 0.5 (the back efficiency r / (2 - eta) = 0.41667, 1 / it = 2.4 = 1 + 1.4). Held 100 N m,
+    /// the bristle far from its anchor either way.
+    #[test]
+    fn the_mesh_friction_is_bounded_by_the_back_efficiency_when_driven_back() {
+        for (ratio, back) in [(1.0, 20.0), (0.5, 140.0)] {
+            let g = Gearbox { back_ratio: ratio, ..meshing() };
+            assert!((g.mesh_friction(100.0, 1.0) - 20.0).abs() < 1e-12);
+            assert!((g.mesh_friction(100.0, -1.0) + back).abs() < 1e-9, "{ratio}: {}", g.mesh_friction(100.0, -1.0));
+            assert!((g.mesh_friction(-100.0, -1.0) + 20.0).abs() < 1e-12);
+            assert!((g.mesh_friction(-100.0, 1.0) - back).abs() < 1e-9);
         }
     }
 }

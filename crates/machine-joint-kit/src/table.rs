@@ -2,8 +2,10 @@
 //! as payload, no gravity torque. Its gear (`table.gear`) is "planetary" (the `[gearbox]` as it is), "strain-wave"
 //! (the `[gearbox]` plus the life of `[strain_wave]`) or "worm" (the `[gearbox]` with the efficiency `[worm]` gives).
 //!
-//! shortcut: a worm gear driven back from the table loses as `Gearbox::loss_factor` says (1 / efficiency), not by
-//! its lower back efficiency, and never locks itself; model the self-locking if a cycle brakes the table through it.
+//! A worm drives the table with its efficiency tan(gamma) / tan(gamma + rho') and is driven back by the table with
+//! tan(gamma - rho') / tan(gamma) (`WormGear`, gamma the lead angle, rho' the friction angle on the flank), which the
+//! gearbox carries as its back-drive ratio (`Gearbox::back_ratio`). A worm whose back efficiency is not positive locks
+//! itself, and the table refuses it: the gearbox does not model a gear that holds the table against its load.
 
 use crate::{axis, machine, payload, required_life};
 use sim_components::chain::Mechanism;
@@ -30,9 +32,17 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
             strain_wave = Some((StrainWave::from_config(cfg)?, required_life(cfg).unwrap_or(f64::INFINITY)))
         }
         Some("worm") if cfg.bool("effects.gearbox_efficiency")? => {
-            let worm = WormGear::from_config(cfg)?.efficiency();
+            let gear = WormGear::from_config(cfg)?;
+            let (worm, back) = (gear.efficiency(), gear.back_efficiency());
+            if back <= 0.0 {
+                return Err(ConfigError::Invalid(
+                    "worm.lead_angle_deg (the worm locks itself: its back efficiency is not positive, and the table's gearbox does not model a gear that holds the table against its load)"
+                        .into(),
+                ));
+            }
             joint.extra_efficiency = worm / joint.gearbox.efficiency;
             joint.gearbox.efficiency = worm;
+            joint.gearbox.back_ratio = back / worm;
         }
         Some("worm") => {}
         _ => return Err(ConfigError::Invalid("table.gear".into())),
@@ -152,5 +162,23 @@ impl Mechanism for Table {
             unit_key: "unit-deg",
             decimals: 1,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ROTARY_TABLE;
+
+    /// The shipped worm (lead angle 8 degrees, mu 0.04, alpha_n 20 degrees): rho' = atan(0.04 / cos 20) = 2.4376 degrees,
+    /// driven back tan(8 - 2.4376 degrees) / tan(8 degrees) = 0.097383 / 0.140541 = 0.6929, so the table builds; at a lead
+    /// angle of 2 degrees (below rho') the worm locks itself and the table is refused.
+    #[test]
+    fn a_worm_that_locks_itself_is_refused() {
+        let mut cfg = ROTARY_TABLE.config();
+        cfg.set_text("table.gear = \"worm\"").unwrap();
+        assert!((ROTARY_TABLE.build)(&cfg).is_ok());
+        cfg.set_text("worm.lead_angle_deg = 2.0").unwrap();
+        let err = (ROTARY_TABLE.build)(&cfg).err().expect("a locking worm is refused");
+        assert!(format!("{err:?}").contains("locks itself"), "{err:?}");
     }
 }
