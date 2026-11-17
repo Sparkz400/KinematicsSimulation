@@ -95,6 +95,29 @@ pub fn lean_weight(lean: &LeanNode, q: &[f64], mass: f64, g: f64) -> (f64, f64) 
     (at(0.0), rate)
 }
 
+/// How far a point `d` below the carriage (above it where negative) is out sideways, per newton at the leaning body's
+/// centre of mass `h` below the carriage (`lean_reach` of the crate without bending): the guide's give 1 / lateral plus
+/// its tilt h d / tilt.
+pub fn lean_reach(lean: &LeanNode, d: f64, h: f64) -> f64 {
+    1.0 / lean.lateral + h * d / lean.tilt
+}
+
+/// The tool tip's rise as the body leans, rho = a(z) u^2 (`rise_coefficients` of the crate): the tip, `tool_drop - z`
+/// below the carriage, rises by k^2 `lean_rise` per u^2 (the leaning bar is shortened by theta^2 / 2 per length, with the
+/// spring's force F = k u). Returns [a, da/dz, d2a/dz2] by central differences over 1e-4 m of the lever axis; zeros
+/// without one (a body that leans with no axis to rise along).
+pub fn rise_coefficients(lean: &LeanNode, q: &[f64]) -> [f64; 3] {
+    let Some(axis) = lean.lever_axis else { return [0.0; 3] };
+    let a = |z: f64| {
+        let (h, h_tool) = (lean.com_drop - z, lean.tool_drop - z);
+        let k = 1.0 / (1.0 / lean.lateral + h * h / lean.tilt);
+        k * k * lean_rise(lean, h_tool, h)
+    };
+    let (z, step) = (q[axis], 1e-4);
+    let (here, ahead, behind) = (a(z), a(z + step), a(z - step));
+    [here, (ahead - behind) / (2.0 * step), (ahead - 2.0 * here + behind) / (step * step)]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

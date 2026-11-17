@@ -58,7 +58,7 @@
 //! belt (crates/sim-machines/tests/machine_files.rs checks the screw axis against its crate). A rotary axis has no
 //! body: its rotary's inertia (and payload's) is its mass, no gravity along it.
 
-use crate::geometry::{Wheel, arc, contacts, flex_at, lean_weight, wrap};
+use crate::geometry::{Wheel, arc, contacts, flex_at, lean_reach, lean_weight, rise_coefficients, wrap};
 use crate::netlist::{LeanNode, Netlist, TcpNode, Transmission, Waypoint, WormNode};
 use sim_components::catalog::motor_config;
 use sim_components::joint::RotaryJoint;
@@ -164,6 +164,60 @@ struct FrameMode {
     mass: f64,
     stiffness: f64,
     damping: f64,
+}
+
+/// The beam under the carriage's axis (effects.beam_vertical_mode, `machine.lean` names the axes): a simple span of `span`
+/// m and bending stiffness `ei`, the carriage `start` m from the left post at 0, whose first vertical mode with the carriage
+/// on it is one more coordinate w, the beam's deflection under the carriage, down. Shape: the span's static deflection
+/// under a point load at the carriage, taken to 1 under it: stiffness k = 1 / `span_compliance` (so that m g / k is the
+/// quasi-static sag, exactly), modal mass M = mu integral of the shape squared (`BeamMode::modal_mass`, 17 mu L / 35 in
+/// the middle), damping c = 2 zeta sqrt(k M). The bodies that move along the beam's axis hang w lower with it (mass
+/// sum m + M), and those that also move along the vertical axis have their speed over ground there as z' - w' (the axis's
+/// own coordinate is relative to the carriage), so a push on the vertical axis drives the beam through -m_z between z and
+/// w. V = 1/2 k(x) w^2 - m g w; T keeps 1/2 M(x) w'^2 and drops what the shape's change with x adds (second order in the
+/// deflection, as in the crate of the T-shaped belt gantry), so on x: 1/2 M' w'^2 - 1/2 k' w^2, on w: -M' x' w'. The belt's
+/// own runs' mass is not on w. The tool hangs w lower: pos_vertical -= w.
+struct BeamMode {
+    /// The coordinate along the beam, and the vertical one.
+    axis: usize,
+    vertical: usize,
+    span: f64,
+    start: f64,
+    ei: f64,
+    mass_per_m: f64,
+    damping_ratio: f64,
+}
+
+impl BeamMode {
+    /// The carriage's distance from the left post at x, kept off the posts where the span's stiffness is infinite.
+    fn at(&self, x: f64) -> f64 {
+        (self.start + x).clamp(1e-3 * self.span, (1.0 - 1e-3) * self.span)
+    }
+    fn stiffness(&self, x: f64) -> f64 {
+        1.0 / sim_components::beam::span_compliance(self.ei, self.span, self.at(x))
+    }
+    /// The modal mass at x: with the load at a (b = L - a) the shape is phi = s (L^2 - b^2 - s^2) / (2 a^2 b) left of it,
+    /// mirrored right of it; with I(a, c) = integral over 0..a of s^2 (c - s^2)^2 = c^2 a^3 / 3 - 2 c a^5 / 5 + a^7 / 7:
+    /// M = mu (I(a, L^2 - b^2) / (4 a^4 b^2) + I(b, L^2 - a^2) / (4 a^2 b^4)). In the middle 17 mu L / 35.
+    fn modal_mass(&self, x: f64) -> f64 {
+        let (a, l) = (self.at(x), self.span);
+        let b = l - a;
+        let i = |a: f64, c: f64| c * c * a.powi(3) / 3.0 - 2.0 * c * a.powi(5) / 5.0 + a.powi(7) / 7.0;
+        self.mass_per_m
+            * (i(a, l * l - b * b) / (4.0 * a.powi(4) * b * b) + i(b, l * l - a * a) / (4.0 * a * a * b.powi(4)))
+    }
+    /// (stiffness k, modal mass M, damping c, dk/dx, dM/dx) at x; the slopes by central differences over 1e-6 m.
+    fn at_x(&self, x: f64) -> [f64; 5] {
+        let (k, mass) = (self.stiffness(x), self.modal_mass(x));
+        let slope = |f: &dyn Fn(f64) -> f64| (f(x + 1e-6) - f(x - 1e-6)) / 2e-6;
+        [
+            k,
+            mass,
+            2.0 * self.damping_ratio * (k * mass).sqrt(),
+            slope(&|x| self.stiffness(x)),
+            slope(&|x| self.modal_mass(x)),
+        ]
+    }
 }
 
 struct Span {
@@ -377,6 +431,8 @@ pub struct ConfigMachine {
     /// The netlist has a leaning body, and with effects.tool_flex in the elastic model it leans (`machine.lean`).
     lean_node: Option<LeanNode>,
     lean: Option<LeanNode>,
+    /// With effects.beam_vertical_mode (elastic model, with a `machine.lean` node naming the axes): the beam's mode.
+    beam: Option<BeamMode>,
     /// Per motor: its worm stage while effects.gearbox_efficiency counts it (`worm::factors`), at its temperature; and
     /// as configured, at the reference temperature.
     worms: Vec<Option<WormNode>>,
@@ -1014,6 +1070,24 @@ impl ConfigMachine {
             // As in the machine crate with a leaning axis: the lean is a mode of the elastic model.
             (lean, flex) => lean.filter(|_| flex && elastic),
         };
+        let beam = if elastic && on("beam_vertical_mode")? {
+            let lean =
+                net.lean.ok_or_else(|| ConfigError::Missing("machine.lean (effects.beam_vertical_mode)".into()))?;
+            let vertical = lean
+                .lever_axis
+                .ok_or_else(|| ConfigError::Missing("machine.lean.lever_axis (effects.beam_vertical_mode)".into()))?;
+            Some(BeamMode {
+                axis: lean.axis,
+                vertical,
+                span: cfg.positive("beam.span_m")?,
+                start: cfg.non_negative("beam.carriage_at_zero_m")?,
+                ei: cfg.positive("beam.bending_stiffness_nm2")?,
+                mass_per_m: cfg.positive("beam.mass_kg_m")?,
+                damping_ratio: cfg.non_negative("beam.damping_ratio")?,
+            })
+        } else {
+            None
+        };
         let gantry = gantry_node.filter(|_| yaw).map(|g| Gantry {
             id: intern(&g.id),
             coord: n,
@@ -1135,6 +1209,7 @@ impl ConfigMachine {
             ),
             lean_node: net.lean,
             lean,
+            beam,
             worms_configured: worms.clone(),
             worms,
         })
@@ -1190,13 +1265,47 @@ impl ConfigMachine {
     // `JUMP_STATES` per belt motor.
     // Rigid state: [q, v, friction states, brakes].
     fn vel(&self) -> usize {
-        if self.elastic { self.lean_at() + usize::from(self.lean.is_some()) } else { self.n() }
+        if self.elastic { self.beam_at() + usize::from(self.beam.is_some()) } else { self.n() }
     }
     fn frame_at(&self) -> usize {
         self.n() + 2 * self.m()
     }
     fn lean_at(&self) -> usize {
         self.frame_at() + usize::from(self.frame.is_some())
+    }
+    fn beam_at(&self) -> usize {
+        self.lean_at() + usize::from(self.lean.is_some())
+    }
+    /// The rows of the lean and the beam's deflection in the elastic mass matrix: after the axes and the frame's sway.
+    fn lean_row(&self) -> usize {
+        self.n() + usize::from(self.frame.is_some())
+    }
+    fn beam_row(&self) -> usize {
+        self.lean_row() + usize::from(self.lean.is_some())
+    }
+    /// The beam's deflection under the carriage and its rate; zero without the beam mode.
+    fn deflection(&self, s: &[f64]) -> (f64, f64) {
+        if self.beam.is_some() { (s[self.beam_at()], s[self.vel() + self.beam_at()]) } else { (0.0, 0.0) }
+    }
+    /// The beam mode at the carriage's place: (k, M, c, dk/dx, dM/dx), zeros without it.
+    fn beam_mode(&self, q: &[f64]) -> [f64; 5] {
+        self.beam.as_ref().map_or([0.0; 5], |b| b.at_x(q[b.axis]))
+    }
+    /// The mass of the bodies that move along the beam's axis (the carriage and what rides on it, with the payload while
+    /// attached), and of those of them that also move along the vertical axis: what hangs on w.
+    fn beam_load(&self) -> (f64, f64) {
+        let Some(b) = &self.beam else { return (0.0, 0.0) };
+        let on = self.bodies.iter().filter(|body| body.axes[b.axis]);
+        let riding = on.clone().filter(|body| body.axes[b.vertical]);
+        (on.map(|body| self.body_mass(body)).sum(), riding.map(|body| self.body_mass(body)).sum())
+    }
+    /// With the beam mode, shifts `q` to where the Z axis stands on its belt above the beam's quasi-static sag
+    /// w0 = (carried weight) / k (its own coordinate is relative to the carriage) and returns w0; 0 and no change without it.
+    fn sag_at_rest(&self, q: &mut [f64]) -> f64 {
+        let Some(b) = &self.beam else { return 0.0 };
+        let w0 = self.beam_load().0 * self.g / b.stiffness(q[b.axis]);
+        q[b.vertical] += w0;
+        w0
     }
     /// The leaning body's sideways travel against its carriage and its rate; zero without it.
     fn leaning(&self, s: &[f64]) -> (f64, f64) {
@@ -1205,6 +1314,45 @@ impl ConfigMachine {
     /// The tool tip's travel along the leaning body's axis per metre it leans (`geometry::flex_at`); 0 without it.
     fn tip(&self, q: &[f64]) -> f64 {
         self.lean.as_ref().map_or(0.0, |lean| flex_at(lean, q).2)
+    }
+    /// The belt runs' geometric stiffness, per section: a belt run of length l under tension T whose far end is out
+    /// sideways by delta is longer by delta^2 / (2 l) (the chord of a right triangle), so it holds the end back with
+    /// T delta / l. The runs are the spans that change length with the lean's lever axis alone, one metre per metre (the
+    /// belt's vertical runs: the clamp's, whose far end is out with the leaning body at `-length` below the carriage's
+    /// idlers, and the idler at the body's bottom, `length` below them). With g the end's travel per metre of lean,
+    /// k reach (`lean_reach` at the end's distance d and the body's centre of mass h = com_drop - z below the carriage,
+    /// k the spring's stiffness), each section is longer by 1/2 c u^2 with c = sum over its runs of g^2 / l; its tension,
+    /// its force on the lean (sum T c u), on the lever axis (-1/2 u^2 sum T c') and its damping follow from the lengths. Zero
+    /// without the lean or a span to give the runs (the crate has them as s + z, 2 times s + sz - z, s + z).
+    fn lean_runs(&self, q: &[f64]) -> Vec<f64> {
+        let mut c = vec![0.0; self.sections.len()];
+        let Some((lean, z)) = self.lean.as_ref().and_then(|l| Some((l, l.lever_axis?))) else { return c };
+        let (k, h) = (flex_at(lean, q).0, lean.com_drop - q[z]);
+        for span in &self.spans {
+            let up = span.c[z];
+            if up.abs() != 1.0 || span.c.iter().enumerate().any(|(i, c)| i != z && *c != 0.0) {
+                continue;
+            }
+            let length = span.length + up * q[z];
+            let end = k * lean_reach(lean, -up * length, h);
+            c[span.section] += end * end / length;
+        }
+        c
+    }
+    /// How much longer `lean_runs` make the sections at the state's lean u and height z, and the rate of that:
+    /// 1/2 c u^2 and c u u' + 1/2 c' z' u^2 (c' by a central difference over 2e-6 m, as the crate takes it).
+    fn lean_lengths(&self, s: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let zero = vec![0.0; self.sections.len()];
+        let Some(z) = self.lean.as_ref().and_then(|l| l.lever_axis) else { return (zero.clone(), zero) };
+        let (n, v) = (self.n(), self.vel());
+        let ((u, du), q) = (self.leaning(s), &s[..n]);
+        let (c, mut ahead, mut behind) = (self.lean_runs(q), q.to_vec(), q.to_vec());
+        (ahead[z], behind[z]) = (q[z] + 1e-6, q[z] - 1e-6);
+        let (ahead, behind) = (self.lean_runs(&ahead), self.lean_runs(&behind));
+        let longer = c.iter().map(|c| 0.5 * c * u * u).collect();
+        let rate =
+            (0..c.len()).map(|i| c[i] * u * du + 0.5 * (ahead[i] - behind[i]) / 2e-6 * s[v + z] * u * u).collect();
+        (longer, rate)
     }
 
     /// Motor kk's gearbox (`Gearbox::torque`), with its worm stage's share where it has one that turns back
@@ -1579,13 +1727,15 @@ impl ConfigMachine {
     fn sections(&self, s: &[f64]) -> Vec<SectionForce> {
         let (n, v) = (self.n(), self.vel());
         let (angle, rate) = self.fed(s);
+        let (longer, longer_rate) = self.lean_lengths(s);
         self.sections
             .iter()
-            .map(|sec| {
-                let geo = sec.length + dot(&sec.c, &s[..n]);
+            .enumerate()
+            .map(|(i, sec)| {
+                let geo = sec.length + dot(&sec.c, &s[..n]) + longer[i];
                 let mat = sec.mat0 + (0..self.m()).map(|kk| sec.f[kk] * self.r_mat[kk] * angle[kk]).sum::<f64>();
                 let mat_rate: f64 = (0..self.m()).map(|kk| sec.f[kk] * self.r_mat[kk] * rate[kk]).sum();
-                self.belt.section(geo, mat, dot(&sec.c, &s[v..v + n]), mat_rate)
+                self.belt.section(geo, mat, dot(&sec.c, &s[v..v + n]) + longer_rate[i], mat_rate)
             })
             .collect()
     }
@@ -1776,7 +1926,8 @@ impl ConfigMachine {
     /// sway cancels, so the idlers are in the axes' block and not in the sway's row and column.
     fn elastic_mass(&self, q: &[f64]) -> Vec<Vec<f64>> {
         let n = self.n();
-        let d = n + usize::from(self.frame.is_some()) + usize::from(self.lean.is_some());
+        let d =
+            n + usize::from(self.frame.is_some()) + usize::from(self.lean.is_some()) + usize::from(self.beam.is_some());
         let mut mass = vec![vec![0.0; d]; d];
         let axis_mass = self.axis_mass(q);
         let (runs, column, belt) = self.runs_mass(q, self.sway_direction());
@@ -1796,11 +1947,18 @@ impl ConfigMachine {
             mass[n][n] = axis_mass[f.axis][f.axis] - idle[f.axis][f.axis] + self.frame_mass(f) + belt;
         }
         if let Some(lean) = &self.lean {
-            let (at, body) = (d - 1, self.body_mass(&self.bodies[lean.body]));
+            let (at, body) = (self.lean_row(), self.body_mass(&self.bodies[lean.body]));
             (mass[lean.axis][at], mass[at][lean.axis], mass[at][at]) = (body, body, body);
             if self.frame.as_ref().is_some_and(|f| f.axis == lean.axis) {
                 (mass[n][at], mass[at][n]) = (body, body);
             }
+        }
+        // The beam's deflection carries the bodies that move along the beam and its own modal mass; the vertical axis's
+        // coordinate is relative to the carriage, so the bodies that move along both have z' - w' over ground (`BeamMode`).
+        if let Some(b) = &self.beam {
+            let (at, (carried, riding)) = (self.beam_row(), self.beam_load());
+            mass[at][at] = carried + self.beam_mode(q)[1];
+            (mass[b.vertical][at], mass[at][b.vertical]) = (-riding, -riding);
         }
         mass
     }
@@ -1858,14 +2016,35 @@ impl ConfigMachine {
                 -f.stiffness * u - f.damping * du + chain_on_frame + chain[f.axis] + process[f.axis] + runs_on_frame,
             );
         }
+        //
+        // The belt runs' geometric stiffness (`lean_runs`) is in the section tensions through the lengths: it holds the lean
+        // back with sum T_i c_i u and pushes on the lever axis with -1/2 u^2 sum T_i c_i'. The process force's vertical part
+        // works on the tip's rise rho = a u^2 (`rise_coefficients`): 2 a u on the lean, a' u^2 on the lever axis.
         if let Some(lean) = &self.lean {
             let (w, dw) = self.leaning(s);
             let (k, dk, tip) = flex_at(lean, q);
             let (c, dc) = lean_weight(lean, q, self.body_mass(&self.bodies[lean.body]), self.g);
+            let mut on_lean = 0.0;
+            let mut rise = 0.0;
             if let Some(z) = lean.lever_axis {
-                force[z] -= 0.5 * w * w * (dk + dc);
+                let (runs, mut ahead, mut behind) = (self.lean_runs(q), q.to_vec(), q.to_vec());
+                (ahead[z], behind[z]) = (q[z] + 1e-6, q[z] - 1e-6);
+                let (ahead, behind) = (self.lean_runs(&ahead), self.lean_runs(&behind));
+                on_lean = (0..runs.len()).map(|i| sec[i].tension * runs[i]).sum::<f64>() * w;
+                let on_z: f64 =
+                    (0..runs.len()).map(|i| sec[i].tension * (ahead[i] - behind[i]) / 2e-6).sum::<f64>() * 0.5 * w * w;
+                let [a, da, _] = rise_coefficients(lean, q);
+                force[z] += -0.5 * w * w * (dk + dc) - on_z + process[z] * da * w * w;
+                rise = 2.0 * process[z] * a * w;
             }
-            force.push(tip * process[lean.axis] - (k + c) * w - lean.damping * dw);
+            force.push(tip * process[lean.axis] + rise - on_lean - (k + c) * w - lean.damping * dw);
+        }
+        // The beam mode (`BeamMode`): M(x) w'' + M' x' w' + c w' + k w = (carried weight) - F_vertical on w, and on the beam's
+        // axis the speed term 1/2 M' w'^2 less the stiffness's change with it, 1/2 k' w^2.
+        if let Some(b) = &self.beam {
+            let ((w, dw), [k, _, c, dk, dm]) = (self.deflection(s), self.beam_mode(q));
+            force[b.axis] += 0.5 * dm * dw * dw - 0.5 * dk * w * w;
+            force.push(self.beam_load().0 * self.g - process[b.vertical] - k * w - c * dw - dm * vq[b.axis] * dw);
         }
         let size = force.len();
         let acc = solve(self.elastic_mass(q), force).unwrap_or_else(|| vec![0.0; size]);
@@ -1874,7 +2053,10 @@ impl ConfigMachine {
             out[v + self.frame_at()] = acc[n];
         }
         if self.lean.is_some() {
-            out[v + self.lean_at()] = acc[size - 1];
+            out[v + self.lean_at()] = acc[self.lean_row()];
+        }
+        if self.beam.is_some() {
+            out[v + self.beam_at()] = acc[self.beam_row()];
         }
         for kk in 0..m {
             let (phi, w_phi) = (s[n + m + kk], s[v + n + m + kk]);
@@ -2153,6 +2335,7 @@ impl ConfigMachine {
         let mut speeds = vq.to_vec();
         speeds.extend(self.frame.as_ref().map(|_| du));
         speeds.extend(self.lean.as_ref().map(|_| self.leaning(s).1));
+        speeds.extend(self.beam.as_ref().map(|_| self.deflection(s).1));
         let elastic_mass = self.elastic_mass(q);
         let kinetic = 0.5 * speeds.iter().zip(&elastic_mass).map(|(a, row)| a * dot(row, &speeds)).sum::<f64>();
         let mut turning: f64 = (0..m)
@@ -2171,10 +2354,14 @@ impl ConfigMachine {
                 let c = lean_weight(lean, q, self.body_mass(&self.bodies[lean.body]), self.g).0;
                 0.5 * c * self.leaning(s).0.powi(2)
             });
-        let (geo, mat) = (self.geo(q), self.mat(s));
-        let belt: f64 = geo.iter().zip(&mat).map(|(g, l)| self.belt.energy(*g, *l)).sum();
+        let (geo, mat, longer) = (self.geo(q), self.mat(s), self.lean_lengths(s).0);
+        let belt: f64 = (0..geo.len()).map(|i| self.belt.energy(geo[i] + longer[i], mat[i])).sum();
         let gears: f64 = (0..m).map(|kk| self.gears[kk].energy(s[n + m + kk], self.output(s, kk).0)).sum();
-        [kinetic + turning, potential, stops + belt + gears + frame + lean]
+        // The beam: the carried weight at w lower, and its spring.
+        let (w, k) = (self.deflection(s).0, self.beam_mode(q)[0]);
+        let potential = potential - self.beam_load().0 * self.g * w;
+        let beam = 0.5 * k * w * w;
+        [kinetic + turning, potential, stops + belt + gears + frame + lean + beam]
     }
 
     /// The loss powers in the order of `effect_infos`, and per motor the gearbox loss as a torque at the rotor and the
@@ -2201,15 +2388,24 @@ impl ConfigMachine {
                 mesh_in += self.r[kk] * self.mesh_force(kk, self.r[kk] * theta) * w_theta;
             }
             let (geo, mat, (_, rate)) = (self.geo(q), self.mat(s), self.fed(s));
+            let (longer, longer_rate) = self.lean_lengths(s);
             for (i, sec) in self.sections.iter().enumerate() {
                 let mat_rate: f64 = (0..m).map(|kk| sec.f[kk] * self.r_mat[kk] * rate[kk]).sum();
-                belt += self.belt.loss_power(geo[i], mat[i], dot(&sec.c, vq), mat_rate);
+                belt += self.belt.loss_power(geo[i] + longer[i], mat[i], dot(&sec.c, vq) + longer_rate[i], mat_rate);
             }
             if let Some(f) = &self.frame {
                 tool_v[f.axis] += self.sway(s).1;
             }
+            // The tool's velocity (`tool_state`): with the lean's tip, its rise and the beam's deflection.
             if let Some(lean) = &self.lean {
-                tool_v[lean.axis] += self.tip(q) * self.leaning(s).1;
+                let ((u, du), [a, da, _]) = (self.leaning(s), rise_coefficients(lean, q));
+                tool_v[lean.axis] += self.tip(q) * du;
+                if let Some(z) = lean.lever_axis {
+                    tool_v[z] += 2.0 * a * u * du + da * u * u * vq[z];
+                }
+            }
+            if let Some(b) = &self.beam {
+                tool_v[b.vertical] -= self.deflection(s).1;
             }
         } else {
             let solved = self.rigid_solve(s, torque);
@@ -2260,6 +2456,9 @@ impl ConfigMachine {
         if !self.jumps.is_empty() {
             powers.push(self.jump_loss);
         }
+        if self.beam.is_some() {
+            powers.push(self.beam_mode(q)[2] * self.deflection(s).1.powi(2));
+        }
         (powers, gear_loss, brake)
     }
 
@@ -2285,6 +2484,7 @@ impl ConfigMachine {
             let mut all = d[self.vel()..self.vel() + n].to_vec();
             all.extend(self.frame.as_ref().map(|_| d[self.vel() + self.frame_at()]));
             all.extend(self.lean.as_ref().map(|_| d[self.vel() + self.lean_at()]));
+            all.extend(self.beam.as_ref().map(|_| d[self.vel() + self.beam_at()]));
             let mass = self.elastic_mass(q);
             (all[..n].to_vec(), (0..n).map(|i| dot(&mass[i], &all)).collect::<Vec<f64>>())
         } else {
@@ -2394,6 +2594,9 @@ impl ConfigMachine {
                 "quantity-tooth-jump-power",
                 "W",
             ));
+        }
+        if self.beam.is_some() {
+            out.push(SignalInfo::new(format!("{LOSS_PREFIX}beam"), "group-beam", "quantity-damping-power", "W"));
         }
         out.extend(ENERGY_PARTS.map(|part| {
             SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")
@@ -2593,7 +2796,8 @@ impl ConfigMachine {
         if let Some(lean) = &self.lean {
             let (k, dk, tip) = flex_at(lean, pose);
             let (c, _) = lean_weight(lean, pose, self.body_mass(&self.bodies[lean.body]), self.g);
-            stiffness[d - 1][d - 1] = k + c;
+            let lr = self.lean_row();
+            stiffness[lr][lr] = k + c;
             // The spring stiffens with the lever axis (k(z)), so at the lean u0 = tip F / k that the pose's sideways
             // process force F holds, K_uz = k' u0 and K_zz = k'' u0^2 / 2 (the crate's `modal`).
             if let Some(z) = lean.lever_axis {
@@ -2605,10 +2809,38 @@ impl ConfigMachine {
                     flex_at(lean, &at).1
                 };
                 let ddk = (rate(step) - rate(-step)) / (2.0 * step);
-                stiffness[d - 1][z] += dk * u0;
-                stiffness[z][d - 1] += dk * u0;
+                stiffness[lr][z] += dk * u0;
+                stiffness[z][lr] += dk * u0;
                 stiffness[z][z] += 0.5 * ddk * u0 * u0;
+                // The belt runs' geometric stiffness, K_uu += sum T_i c_i (`lean_runs`, T_i the tensions at rest), and the
+                // process force's vertical part on the tip's rise a u^2 (V = -F_z a u^2, `rise_coefficients`):
+                // K_uu += -2 F_z a, K_uz += -2 F_z a' u0, K_zz += -F_z a'' u0^2.
+                let (tension, runs) = (self.rest_tensions(pose).0, self.lean_runs(pose));
+                stiffness[lr][lr] += tension.iter().zip(&runs).map(|(t, c)| t * c).sum::<f64>();
+                let [a, da, dda] = rise_coefficients(lean, pose);
+                let process_z = self.process_force()[z];
+                stiffness[lr][lr] -= 2.0 * process_z * a;
+                stiffness[lr][z] -= 2.0 * process_z * da * u0;
+                stiffness[z][lr] -= 2.0 * process_z * da * u0;
+                stiffness[z][z] -= process_z * dda * u0 * u0;
             }
+        }
+        // The beam's deflection w: V = 1/2 k(x) w^2 - m g w, so at the pose's w0 = m g / k: K_ww = k, K_xw = k' w0 and
+        // K_xx += k'' w0^2 / 2 (k'' by a central difference over 1e-4 m, as the crate takes it).
+        if let Some(b) = &self.beam {
+            let (at, x) = (self.beam_row(), b.axis);
+            let [k, _, _, dk, _] = self.beam_mode(pose);
+            let w0 = self.beam_load().0 * self.g / k;
+            let slope = |h: f64| {
+                let mut moved = pose.to_vec();
+                moved[x] += h;
+                self.beam_mode(&moved)[3]
+            };
+            let ddk = (slope(1e-4) - slope(-1e-4)) / 2e-4;
+            stiffness[at][at] += k;
+            stiffness[at][x] += dk * w0;
+            stiffness[x][at] += dk * w0;
+            stiffness[x][x] += 0.5 * ddk * w0 * w0;
         }
         lowest_mode(&mass, &stiffness)
     }
@@ -2940,6 +3172,11 @@ impl Machine for ConfigMachine {
                 let (e, (x, dx)) = (self.dirs[lean.axis], self.leaning(s));
                 (0..3).for_each(|k| (r[k], w[k]) = (r[k] + x * e[k], w[k] + dx * e[k]));
             }
+            // The bodies that move along the beam hang w lower with it.
+            if let Some(beam) = self.beam.as_ref().filter(|beam| body.axes[beam.axis]) {
+                let (e, (x, dx)) = (self.dirs[beam.vertical], self.deflection(s));
+                (0..3).for_each(|k| (r[k], w[k]) = (r[k] - x * e[k], w[k] - dx * e[k]));
+            }
             sim_components::base::add_point(&mut f, self.body_mass(body), r, w);
         }
         // Each rotary's own spin, about its axis as the rotaries outside it have turned it.
@@ -3066,8 +3303,13 @@ impl Machine for ConfigMachine {
         if self.yaw_sprung() {
             q[self.gantry.as_ref().map_or(0, |g| g.coord)] = self.settled_yaw(&q);
         }
+        // With the beam mode the Z axis stands on its belt above the beam's sag, which the beam rests at.
+        let sag = self.sag_at_rest(&mut q);
         let tool = &q[..];
         state[..n].copy_from_slice(tool);
+        if self.beam.is_some() {
+            state[self.beam_at()] = sag;
+        }
         let gravity = self.gravity(tool);
         if !self.elastic {
             // K^T (pulley torque + r mesh force) = -gravity.
@@ -3146,6 +3388,18 @@ impl Machine for ConfigMachine {
             let ((w, dw), tip) = (self.leaning(s), self.tip(q));
             pos[lean.axis] += tip * w;
             vel[lean.axis] += tip * dw;
+            // The leaning body's tip rises by a u^2 along the lever axis (`rise_coefficients`).
+            if let Some(z) = lean.lever_axis {
+                let [rise, d_rise, _] = rise_coefficients(lean, q);
+                pos[z] += rise * w * w;
+                vel[z] += 2.0 * rise * w * dw + d_rise * w * w * v[z];
+            }
+        }
+        // The carriage hangs w lower on the beam, and the tool with it.
+        if let Some(b) = &self.beam {
+            let (w, dw) = self.deflection(s);
+            pos[b.vertical] -= w;
+            vel[b.vertical] -= dw;
         }
     }
     /// The carriage's position against the frame: the frame's sway and the lean are not in it.
@@ -3300,13 +3554,16 @@ impl Machine for ConfigMachine {
 
     /// The lowest belt mode (`belt_mode`), in the elastic model.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
-        self.belt_mode(&self.joints(tool_pose)).map(|(w2, _)| w2.sqrt() / std::f64::consts::TAU)
+        let mut q = self.joints(tool_pose);
+        self.sag_at_rest(&mut q);
+        self.belt_mode(&q).map(|(w2, _)| w2.sqrt() / std::f64::consts::TAU)
     }
 
     /// The mode of `resonance_hz`: the axes and the frame move, pulleys and rotors stand. Scaled so that the tool's
     /// largest travel along an axis is 1 m, positive (with the frame the tool moves with it, see `tool_state`).
     fn mode_shape(&self, tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
-        let q = self.joints(tool_pose);
+        let mut q = self.joints(tool_pose);
+        self.sag_at_rest(&mut q);
         let (w2, x) = self.belt_mode(&q)?;
         let n = self.n();
         let mut tool = x[..self.nt()].to_vec();
@@ -3314,7 +3571,10 @@ impl Machine for ConfigMachine {
             tool[f.axis] += x[n];
         }
         if let Some(lean) = &self.lean {
-            tool[lean.axis] += self.tip(&q) * x[x.len() - 1];
+            tool[lean.axis] += self.tip(&q) * x[self.lean_row()];
+        }
+        if let Some(b) = &self.beam {
+            tool[b.vertical] -= x[self.beam_row()];
         }
         let largest = tool.iter().copied().max_by(|a, b| a.abs().total_cmp(&b.abs())).filter(|t| t.abs() > 0.0)?;
         let mut shape = vec![0.0; self.state_len()];
@@ -3325,7 +3585,10 @@ impl Machine for ConfigMachine {
             shape[self.frame_at()] = x[n] / largest;
         }
         if self.lean.is_some() {
-            shape[self.lean_at()] = x[x.len() - 1] / largest;
+            shape[self.lean_at()] = x[self.lean_row()] / largest;
+        }
+        if self.beam.is_some() {
+            shape[self.beam_at()] = x[self.beam_row()] / largest;
         }
         Some((w2.sqrt() / std::f64::consts::TAU, shape))
     }
@@ -3436,6 +3699,9 @@ impl Machine for ConfigMachine {
                 "quantity-tool-deflection",
                 "m",
             ));
+        }
+        if self.beam.is_some() {
+            out.push(SignalInfo::new("beam.deflection", "group-beam", "quantity-deflection", "m"));
         }
         if let Some(g) = &self.gantry {
             for (name, quantity, unit) in [
@@ -3632,6 +3898,9 @@ impl Machine for ConfigMachine {
         }
         if self.lean_node.is_some() {
             out.push(self.tip(q) * self.leaning(s).0);
+        }
+        if self.beam.is_some() {
+            out.push(self.deflection(s).0);
         }
         if let Some(g) = &self.gantry {
             let (yaw, rate) = (q[g.coord], vq[g.coord]);
