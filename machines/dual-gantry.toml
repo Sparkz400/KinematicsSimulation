@@ -330,13 +330,15 @@ service_factor = 1.25
 
 # The bridge's yaw (effects.gantry_yaw) [estimate]: the distance between its two X guides, where the racks are; its own
 # inertia about a vertical axis through its centre (a 1.2 m beam of 10 kg, m L^2 / 12 = 1.2 kg m2, and the two drive
-# units of 2 kg at its ends, 2 * 2 * 0.6^2 = 1.44 kg m2); the stiffness of its joints on the X carriages against
-# yawing (the carriages' guide blocks in their moment direction and the bolted joints); its damping. The two drives
+# units of 2 kg at its ends, 2 * 2 * 0.6^2 = 1.44 kg m2, and the Y belt's loop, two strands of 1.0 m with the motor and
+# the far idler 0.5 m either side of the centre, 2 mu L^3 / 12 = 2 * 0.1 * 1.0^3 / 12 = 0.0167 kg m2); the stiffness of
+# its joints on the X carriages against yawing (the carriages' guide blocks in their moment direction and the bolted
+# joints); its damping. The two drives
 # hold the yaw far stiffer: each rack's 2.6e7 N/m at 0.6 m from the centre, 2 * 2.6e7 * 0.36 = 1.9e7 N m/rad.
 # The synchronisation tolerance the check gantry-sync holds the ends to.
 [gantry]
 width_m = 1.2
-inertia_kgm2 = 2.64
+inertia_kgm2 = 2.657
 stiffness_nm_rad = 2.0e5
 damping_nm_s_rad = 50.0
 sync_tolerance_m = 1.0e-4
@@ -858,9 +860,10 @@ pos = [450, 360]
 #   motor to far idler      0.1         (vx, -vy, 0)
 #   far idler to clamp      0.9 - y     (vx, vy, 0)
 # 2T / mu = 1.1 (vx^2 + vy^2) whatever the pose, where the lump on the pulley held 1.1 vy^2: the belt adds its 0.11 kg on
-# X, and no speed terms.
-# shortcut: the runs also move along x with the bridge's yaw (their place along the bridge times the yaw rate), left
-# out; add them once a span's speed over ground may depend on the pose.
+# X, and no speed terms. The bridge's yaw psi moves the belt at lever e from its centre along x by e psi' + u psi (u its
+# speed along the bridge): the loop lies symmetric about the centre (motor at -0.5, far idler at +0.5 m), so over its
+# strands the integrals of e and of u vanish and with them the terms in vx psi' and vx vy psi, at every y. What is left,
+# mu psi'^2 / 2 times the integral of e^2, is a constant yaw inertia, which [gantry] inertia_kgm2 holds.
 [[machine.span]]
 id = "y_1"
 section = "y1"
