@@ -338,7 +338,7 @@ T-gantry. With `effects.beam_sag`: the X beam as a simple span between the posts
 | `carriage_at_zero_m` | T E | m | The carriage's distance from the left post at x = 0. T 0.15, E 0.177 (the stroke in the middle) | T geometry, E estimate |
 | `bending_stiffness_nm2` | T E | N m² | The beam's E I: an aluminium profile of about 80 × 80 mm, 8.4e4; bounds 4.2e4 to 1.7e5 | estimate |
 | `mass_kg_m` | T E | kg/m | With `effects.beam_vertical_mode`: the beam's mass per metre, for the mode's modal mass. A light 80 × 80 mm aluminium profile: 3.5; bounds 2 to 6 | estimate |
-| `damping_ratio` | T E | | With `effects.beam_vertical_mode`: the mode's damping ratio ζ, c = 2 ζ √(k M). A bolted aluminium structure: 0.01; bounds 0.003 to 0.03 | estimate |
+| `damping_ratio` | T E | | With `effects.beam_vertical_mode`: the mode's damping ratio ζ with the carriage and the Z axis on the beam, c = 2 ζ √(k (m_c + m_z + M)). A bolted aluminium structure: 0.01; bounds 0.003 to 0.03 | estimate |
 
 ## `[base]`
 

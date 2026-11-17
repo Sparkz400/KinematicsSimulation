@@ -90,8 +90,9 @@ def lugre(p, v, s, scale):
 
 
 def guide_friction(x, z, vx, vz, s_x, s_z, torque):
-    # The X acceleration the torques give the loss-free rigid machine, over its mass matrix with the belt's runs.
-    fx, fz = ratio * (torque[0] + torque[1]) / r, ratio * (torque[0] - torque[1]) / r
+    # The X acceleration the torques give the loss-free rigid machine, over its mass matrix with the belt's runs, with
+    # the Z axis's weight (the torque that holds it up accelerates nothing through the coupling).
+    fx, fz = ratio * (torque[0] + torque[1]) / r, ratio * (torque[0] - torque[1]) / r - m_z * G
     xx, xz = belt_mass(x, z)
     ax = np.linalg.solve([[m_x + m_motors + xx, xz], [xz, m_z + m_motors]], [fx, fz])[0]
     side = m_z * ax
