@@ -4840,7 +4840,7 @@ line,0.3,0.13",
         assert!(v == 10.0 && (ramps - 40.0).abs() < 1e-12, "{v} m/s {ramps} m/s^3");
     }
 
-    /// A motor behind a gearbox of efficiency 0.9 (the single axis: its rotor 0.0075 N m per m/s^2, the load's 0.017 N m per
+    /// A motor behind a gearbox of efficiency 0.9 (the one-axis belt drive: its rotor 0.0075 N m per m/s^2, the load's 0.017 N m per
     /// m/s^2) with 0.4 N m to give either way: accelerating the load it gives 0.0075 + 0.017 / 0.9 = 0.026389 N m per
     /// m/s^2, so 0.4 / 0.026389 = 15.158 m/s^2; braking it the load drives the motor and it gives 0.0075 + 0.017 * 0.9 =
     /// 0.0228 N m per m/s^2 (negative), so 0.4 / 0.0228 = 17.544 m/s^2 (15.158 when braking took 1 / eta as well). The

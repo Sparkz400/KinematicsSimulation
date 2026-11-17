@@ -903,8 +903,8 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
             // Within three standard errors (which hold the noise and what else the trace has that the replay has not,
             // `identify::difference_share`, and are never 0), or within 1 %: what a replay does not reproduce of a run
             // (its setpoints interpolated between the rows) lies partly along the fit's columns, where no residual shows
-            // it. Measured (16 November 2026): within 2 standard errors on most machines, the worst the hexapod's motor
-            // 5 at 0.63 % (11 σ), the D3's motors 2 and 3 at 0.07 % (5.7 σ), the mover track's at 0.04 % (5.6 σ).
+            // it. Measured (16 November 2026): within 2 standard errors on most machines, the worst the six-strut platform's motor
+            // 5 at 0.63 % (11 σ), the D3's motors 2 and 3 at 0.07 % (5.7 σ), the track's movers at 0.04 % (5.6 σ).
             assert!(
                 config > 0.0 && error > 0.0 && (fitted - config).abs() < (0.01 * config).max(3.0 * error),
                 "{}: {row:?}",
@@ -1018,10 +1018,13 @@ fn parts_are_named_on_the_command_line() {
             };
             if geared { value("gearbox-peak") / value("motor-peak") } else { value("motor-peak") }
         };
-        // A linear motor machine (`[linear_motor]`, a track's movers) takes a linear motor, here Beckhoff's at its supply.
+        // A linear motor machine (`[linear_motor]`, a track's movers) takes a linear motor, here Beckhoff's at its supply:
+        // the AL8042-0E, 460 N peak, on a mover twice as heavy with its 1.5 kg coil (2.55 against 1.25 kg), uses 0.199 of
+        // its peak where the own coil set uses 0.445 of 104.5 N (by hand 46.5 N x 2.04 / 460 N = 0.206). The AL8021-0E's
+        // 120 N are used 0.480, too close to the own 0.445 to tell the part from the noise.
         let linear = sim_components::catalog::is_linear_motor(&entry.config());
         let parts: &[&str] = if linear {
-            &["--motor", "AL8021-0E", "--supply", "beckhoff-400v"]
+            &["--motor", "AL8042-0E", "--supply", "beckhoff-400v"]
         } else if geared {
             &["--motor", "1FK2104-5AK", "--gearbox", "NRK070-04-7"]
         } else {
@@ -1559,7 +1562,7 @@ fn compare(entry: &'static sim_core::MachineEntry) {
         // The first axis's position: not every machine has an axis x (the rotary table's c, the arms' j1), nor metres.
         let position = format!("axis.{}.position", sim.machine.axes()[0].id);
         let unit_of = |id: &str| sim.signal_infos().iter().find(|s| s.id == id).unwrap().unit.clone();
-        // N m on a rotary motor, N on a linear one (the linear-motor axis, the mover track).
+        // N m on a rotary motor, N on a linear one (the linear-motor axis, a track's movers).
         let (unit, torque_unit) = (unit_of(&position), unit_of(&torque));
         // The friction the machine has: of its guides, of its arms' joints, of the winches that pull a platform, or of the
         // dancer a web runs over.

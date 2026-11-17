@@ -70,7 +70,7 @@ pub fn per_axis_fit(machine: &dyn sim_core::Machine) -> bool {
 /// (`per_axis_fit`), of the largest: the fitted mass is then their mean over the trace, and how far the inertia strays
 /// from it over the trace's poses is in the mass's error (`AxisFit::mass_spread`), so this only chooses which of the two
 /// fits answers, and both answer honestly on either side of it (the disc cam per axis without its payload and in its
-/// motor's coordinates with it, `a_mass_that_varies_over_the_poses_carries_its_spread_in_its_error`). The T-gantry's belt (its runs on the vertical posts and its share in the
+/// motor's coordinates with it, `a_mass_that_varies_over_the_poses_carries_its_spread_in_its_error`). The T-shaped belt gantry's belt (its runs on the vertical posts and its share in the
 /// Z axis's moves) changes its torques by up to 3.9 % over the range (4.5 % without the payload); the other machines
 /// fitted per axis by 0; the disc cam by 6.2 % (4.1 % without the payload, so its config without one is fitted per
 /// axis); the slider-crank, the SCARA, the indexers' cams and the arm by 40 % and more.
@@ -213,7 +213,7 @@ pub const RUN_UP_S: f64 = 0.25;
 /// acceleration setpoints are slopes between rows. Where the trace carries the tool's speed and acceleration setpoints
 /// (`Trace::tool_rates`, a file written by a run), they run with the poses as `Command::RatedTrajectory`, and the replay
 /// has the run's own setpoints at every row: the slopes were off by up to jerk x row, which moved what the fit finds on
-/// a run's own trace by up to 0.63 % (11 of its standard errors on the hexapod). Behind the last row the motion carries
+/// a run's own trace by up to 0.63 % (11 of its standard errors on the six-strut platform). Behind the last row the motion carries
 /// on (below): the trace's end is not forced to rest.
 pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace, TraceError> {
     // The rows are a stream, interpolated between neighbours as a drive does (the Hermite cubic, whatever the config's

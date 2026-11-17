@@ -2767,7 +2767,7 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve(entry: &'static Ma
     let (count, table) = model.points_table(0..all.len()).unwrap();
     // One per millisecond of the cycle (0.72 s on the delta).
     assert!(count == all.len() && count > 700 * load.motors.len(), "{}: {count} points", entry.id);
-    // A machine of linear motors (the linear-motor axis, the mover track) in m/s and N.
+    // A machine of linear motors (the linear-motor axis, a track's movers) in m/s and N.
     let linear = model.motors_linear();
     let units =
         if linear { ["Motor speed [m/s]", "Motor force [N]"] } else { ["Motor speed [rad/s]", "Motor torque [N m]"] };
@@ -2802,7 +2802,7 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve(entry: &'static Ma
         // At standstill the peak torque; with field weakening (on by default since 13 November 2026) that of the d-q
         // model within the maximum current, a hair below it where the catalogue rounds (14.99994 of 15 N m).
         // The d-q model's current circle is the smaller of motor's and drive's: where the drive gives less current than
-        // the motor takes at its peak torque (the winder's 15 A Motor Module against the 1FK7's 17.8 A for 18 N m),
+        // the motor takes at its peak torque (a 15 A Motor Module against the 1FK7's 17.8 A for 18 N m),
         // the curve stands at the drive's torque.
         let peak = if drive.field_weakening.is_some() && drive.drive_max_current < drive.max_current {
             drive.peak_torque.min(drive.torque_of(drive.drive_max_current))
@@ -2816,7 +2816,7 @@ fn the_operating_points_are_shown_over_the_torque_speed_curve(entry: &'static Ma
         // torque without a stall current) wherever it is read, up to the rated speed both ways.
         let cfg = sim_components::catalog::motor_config(&entry.config(), &load.motors[k].id).unwrap();
         // Symmetric through standstill, straight between its corners (standstill, and where it falls to nothing: the
-        // parallel SCARA's and the D4's small motors, whose config gives them the arms' stall current).
+        // small Z and turn motors of the four-axis parallel arms, whose config gives them the arms' stall current).
         let line = &chart.s1[0];
         let n = line.len();
         assert!(n % 2 == 1 && line[n / 2][0] == 0.0, "{}: {line:?}", entry.id);
@@ -3041,7 +3041,7 @@ fn the_belt_stiffness_is_fitted_to_a_measured_response_in_the_app(entry: &'stati
         model.messages.last().unwrap().0
     };
     // The same response below its dip has no upper flank to it. (The points from 90 Hz on, taken here before, hold the
-    // T-gantry's second dip near 103 Hz, which the config's sweep, run beyond the file's range, shows with both flanks.)
+    // T-shaped belt gantry's second dip near 103 Hz, which the config's sweep, run beyond the file's range, shows with both flanks.)
     let other = temp_file(entry, "sweep-without-dip.csv");
     let below: Vec<_> = measured.iter().copied().filter(|p| p.frequency < fit.fitted.frequency).collect();
     std::fs::write(&other, sweep_csv(&below)).unwrap();
@@ -3069,7 +3069,7 @@ fn the_effect_views_show_torque_parts_energy_budget_and_friction(entry: &'static
     let lines = model.breakdown_lines();
     assert_eq!(lines.len(), model.session.motors.len());
     for ((title, parts), motor) in lines.iter().zip(&model.session.motors) {
-        // N on a linear motor (the linear-motor axis, the mover track).
+        // N on a linear motor (the linear-motor axis, a track's movers).
         let unit = if model.motors_linear() { "N" } else { "N m" };
         assert_eq!(title, &format!("{} [{unit}]", model.tr.tr(motor.key)));
         assert_eq!(
@@ -3447,7 +3447,7 @@ fn the_thermal_belt_and_comparison_views_show_the_simulation(entry: &'static Mac
 
     // The comparison: one line per motor for the torque, on and off, and the difference of each.
     let compare = model.compare_view().unwrap();
-    // N on a linear motor (the linear-motor axis, the mover track).
+    // N on a linear motor (the linear-motor axis, a track's movers).
     let torque_unit = if model.motors_linear() { "N" } else { "N m" };
     let (compared, label) = (effect, model.tr.tr(&format!("effect-{effect}")).to_string());
     let (effect, found) = model.comparison.as_ref().unwrap();
@@ -4584,16 +4584,17 @@ fn the_tool_error_of_a_run_without_setpoints_is_a_row_of_its_own() {
 }
 
 /// The tool position error is one number (docs/model-reference.md, "Tool position error"): on the default cycles of the
-/// T-gantry and the palletiser the run's figure (the compare panel, the path colouring), the Views tab's chart and the
+/// T-shaped belt gantry (the one with idlers) and the palletiser the run's figure (the compare panel, the path colouring), the Views tab's chart and the
 /// analysis's "Tool position error, peak" agree to 1 %. The run's rows, 1 ms apart, see the error at a phase of the
-/// profile cycle of their own; the analysis sees every one. Before the plan was run on by `setpoint_age`, the T-gantry's
+/// profile cycle of their own; the analysis sees every one. Before the plan was run on by `setpoint_age`, the gantry's
 /// run read 0.794 mm against the analysis's 0.18 mm (the setpoint held up to a cycle while the tool moved on).
 #[test]
 fn the_tool_error_is_one_number_in_the_run_the_chart_and_the_analysis() {
     use sim_app::runs::{Run, RunKind};
     use sim_components::{Sim, analysis, charts};
-    for id in ["t-gantry", "palletiser"] {
-        let entry = MACHINES.iter().copied().find(|e| e.id == id).unwrap();
+    let gantry = MACHINES.iter().copied().find(|e| e.config().get("idler.radius_m").is_ok()).unwrap();
+    for entry in [gantry, MACHINES.iter().copied().find(|e| e.id == "palletiser").unwrap()] {
+        let id = entry.id;
         let cfg = entry.config();
         let mut sim = Sim::new(entry, &cfg).unwrap();
         let load = analysis::analyse_cycle(&mut sim).unwrap();

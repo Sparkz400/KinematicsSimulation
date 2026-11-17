@@ -850,6 +850,32 @@ fn the_back_emf_constant_key_sets_the_servo_winding_apart_from_the_torque_consta
     assert_eq!(ke(&["drive.back_emf_constant_v_s_rad = 0.5", "effects.back_emf = false"]), 0.0);
 }
 
+/// A linear motor's coil moves with the mover, joined by nothing elastic: the retuned gain keeps the config's crossover
+/// over the whole moving mass. On the track the AL8021-0E's 0.6 kg coil makes the mover 1.651 kg against 1.251 kg (coil
+/// 0.2 kg times one plus the inertia ratio 5.255, against 0.6 kg times 2.752), so 800 becomes 800 x 1.651 / 1.251 = 1056.
+/// The geometric mean with the coil's ratio gave 1592, at which the loop rang at 2.6 times the motor's peak force.
+#[test]
+fn a_linear_motor_is_retuned_for_the_whole_moving_mass() {
+    use sim_components::catalog::{inertia_ratios, with_parts};
+    let entry = &machine_mover_track::ENTRY;
+    let cfg = entry.config();
+    let named = with_parts(entry, &cfg, "AL8021-0E", "beckhoff-400v", "").unwrap();
+    let mass = |c: &sim_core::Config| {
+        c.f64("motor.rotor_inertia_kgm2").unwrap() * (1.0 + inertia_ratios(entry, c).unwrap()[0])
+    };
+    assert!(close(mass(&cfg), 1.251, 1e-3) && close(mass(&named), 1.651, 1e-3), "{} {}", mass(&cfg), mass(&named));
+    let gain = named.f64("drive.velocity_kp_nm_s_rad").unwrap();
+    assert!(close(gain, 800.0 * 1.651 / 1.251, 1e-3), "{gain}");
+    let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &named).unwrap()).unwrap();
+    let failed: Vec<_> = sim_components::analysis::verdicts(&named, &load)
+        .unwrap()
+        .into_iter()
+        .filter(|v| !v.ok && v.check == "motor-peak")
+        .map(|v| v.value)
+        .collect();
+    assert!(failed.is_empty(), "{failed:?}");
+}
+
 /// The retuned velocity gain on the single axis (gain 0.025, rotor and gearbox 3.0e-5 kg m2, first resonance 65.8 Hz).
 /// The inertia the motor turns comes from the machine: pulley radius x2 takes it from 1.3416e-4 to 4.3464e-4 kg m2,
 /// a scaled gain of sqrt(3.24) = 1.800 times the config's, which the bound holds at the config's: the rotor is the same,

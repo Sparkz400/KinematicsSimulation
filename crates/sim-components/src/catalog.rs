@@ -1879,11 +1879,20 @@ fn retuned(entry: &MachineEntry, before: &Config, after: &mut Config) -> Result<
         )
     };
     let rotor_ratio = rotor(after)? / rotor(before)?;
-    let ratio = inertia_seen(entry, after)? / inertia_seen(entry, before)? * rotor(after)? / rotor(before)?;
+    let total_ratio = inertia_seen(entry, after)? / inertia_seen(entry, before)?;
+    let ratio = total_ratio * rotor(after)? / rotor(before)?;
     let old = before.positive("drive.velocity_kp_nm_s_rad")?;
     let machine = (entry.build)(after)?;
     let elastic = machine.resonance_hz(&sim_core::testkit::mid_pose(machine.as_ref())).is_some();
-    set(after, "drive.velocity_kp_nm_s_rad", bounded_gain(old * ratio.sqrt(), old, rotor_ratio, elastic))
+    // A linear motor's coil is the mover itself, joined to the load by no belt or gearbox: the loop sees the whole mass at
+    // every frequency, so its crossover over that mass is the config's (the geometric mean with the coil's ratio made
+    // the AL8021-0E's mover loop on the track oscillate, 1592 against 1056 that keeps the config's crossover).
+    let gain = if is_linear_motor(after) {
+        old * total_ratio
+    } else {
+        bounded_gain(old * ratio.sqrt(), old, rotor_ratio, elastic)
+    };
+    set(after, "drive.velocity_kp_nm_s_rad", gain)
 }
 
 /// `retuned`'s gain `scaled` on a machine that reports a resonance (`elastic`): at most `old` times `rotor_ratio`, the
@@ -1900,22 +1909,48 @@ fn retuned(entry: &MachineEntry, before: &Config, after: &mut Config) -> Result<
 ///
 /// ```text
 /// case (J_M, J_total kg m2; resonance Hz)          max at 45 deg  best tracking*  before   this rule
-/// single axis (3.0e-5, 1.34e-4; 65.8)              0.036          0.07            0.025    0.025
+/// one-axis belt drive (3.0e-5, 1.34e-4; 65.8)       0.036          0.07            0.025    0.025
 ///   pulley radius x0.5 / x2                        0.037 / 0.033  0.07 / 0.07     0.0166 / 0.025   same
 ///   gear ratio x0.5 / x2                           0.040 / 0.037  0.09 / 0.07     0.025 / 0.0162   same
 ///   Bahr ELZ-40 / ELZ-80 / ELZ-125 (r 16/31/48 mm) 0.037 / 0.026 / 0.03  0.07 / 0.055 / 0.037   0.0212 / 0.025 / 0.025   same
 ///   1FK2103-4AH (1.4e-5, 1.18e-4)                  0.019          0.045           0.016    0.0117
 ///   1FK2204-5AF (1.2e-4, 2.24e-4)                  0.127          0.2             0.025    0.0646
-/// T-gantry (3.0e-5, 1.28e-4; 20.5), its own 0.04   0.047          0.08            -        -
+/// T-shaped gantry (3.0e-5, 1.28e-4; 20.5), own 0.04 0.047          0.08            -        -
 ///   1FK2204-5AF (1.2e-4, 2.18e-4)                  0.13           0.2             0.04     0.108
-/// delta D3 (2.4e-4, 3.9e-3; 43.0), its own 0.25    0.31           0.6             -        -
+/// three-arm delta (2.4e-4, 3.9e-3; 43.0), own 0.25 0.31           0.6             -        -
 /// * every verdict passes, any phase margin (the tracking error falls with the gain up to the edge of stability)
 /// ```
 ///
 /// The bound replaces a third of the resonance times J_M, which held every grown gain at the config's own (the
-/// 1FK2204-5AF on the single axis at 0.025, crossover 21 Hz below the anti-resonance), and lowers a lighter rotor's gain
-/// where the geometric mean would raise its crossover (the 1FK2103-4AH from 0.016 to 0.0117, phase margin 71 degrees).
-/// The ELZ-125 scaled to 0.0573 ran at 2.05 times the motor's peak; bounded it keeps 0.025 and passes.
+/// 1FK2204-5AF on the one-axis belt drive at 0.025, crossover 21 Hz below the anti-resonance), and lowers a lighter
+/// rotor's gain where the geometric mean would raise its crossover (the 1FK2103-4AH from 0.016 to 0.0117, phase margin
+/// 71 degrees). The ELZ-125 scaled to 0.0573 ran at 2.05 times the motor's peak; bounded it keeps 0.025 and passes.
+///
+/// Neither a lower bound nor more gain for a lighter rotor fits, swept on 17 November 2026 (sim-cli verdicts and
+/// margins, kv 50 1/s, Tn 10 ms, the gains Kp / J_total in rad/s, failing / first passing):
+///
+/// ```text
+/// case (inertia ratio; J_total kg m2)    fails at  passes at  phase margin 45 deg at Kp / J_M
+/// ELZ-125, 1FK2103-4AH (48; 6.88e-4)    34.9      37.8 only  - (0.027 and above fail again)
+/// ELZ-125, own motor (22; 7.04e-4)       28.4      35.5       1000
+/// ELZ-125, 1FK2104-5AF (12; 7.30e-4)     37.0      41.1       - (40 degrees at most)
+/// ELZ-80, 1FK2103-4AH (18; 2.60e-4)      30.8      38.4       1071
+/// ELZ-80, 1FK2103-2AH (26; 2.55e-4)      39.2      47.0       1236
+/// pulley x2, 1FK2103-4AH (29; 4.19e-4)   35.8      43.0       1393
+/// one-axis belt drive, 1FK2103-4AH (7.4) -         -          1357
+/// one-axis belt drive, 1FK2103-2AH (11)  -         -          1720
+/// ```
+///
+/// A lower bound Kp >= 0.75 kv J_total (37.5 rad/s) took the ELZ-125 with its own motor from 0.025 (passes) to 0.0264,
+/// which misses the settling check (0.111 mm against 0.1 mm), and still left the ELZ-125 with the 1FK2103-4AH (0.0258:
+/// 0.145 mm), the pulley x2 with it (0.0157: 1.5 mm) and the gear ratio x0.5 with it (12 mm) failing. Below their
+/// windows these motors run at their peak (motor-peak 1.02 to 1.10, drive current over its rating) and the axis drags
+/// centimetres behind; their windows, where there are any, are a few hundredths of the gain wide and not monotonic
+/// (the ELZ-125 with the 1FK2103-4AH passes at 0.026 and fails at 0.024 and 0.027): motors too small for this cycle,
+/// which the verdicts report, not a gain a rule of inertias can find. More gain for a lighter
+/// rotor (the bound old times the square root of `rotor_ratio`, 0.0171 for the 1FK2103-4AH) would take its phase
+/// margin on the ELZ-80 to about 37 degrees (44.3 at 0.015, 31.0 at 0.018): the allowed Kp / J_M depends on the load as
+/// well (1071 to 1720 for the same motor), which the inertias alone do not tell.
 fn bounded_gain(scaled: f64, old: f64, rotor_ratio: f64, elastic: bool) -> f64 {
     if elastic { scaled.min(old * rotor_ratio) } else { scaled }
 }
