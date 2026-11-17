@@ -155,6 +155,29 @@ fn the_h_bot_s_belt_is_drawn_flat() {
         hi - lo
     };
     assert!(spread(1) < 0.05 && spread(2) > 0.3, "T-gantry depth spread {}, height spread {}", spread(1), spread(2));
+    // Its wheels lie flat with it: the pulleys where the file puts them, (-0.15, -0.05, 0.06) and (1.15, -0.05, 0.06), the
+    // far idler at (0.5, -0.33, 0.06), every part of a drive unit and an idler laid flat (`Part::flat`), the motors 0.15 m
+    // below the belt, at z = -0.09. The T-gantry's wheels stand upright.
+    let wheels = |name: &str| {
+        let entry = file(name);
+        let m = (entry.build)(&entry.config()).unwrap();
+        let (mut state, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
+        m.equilibrium(&[0.5, 0.3], &mut state, &mut torque);
+        let mut scene = sim_core::Scene::default();
+        m.scene(&state, &mut scene);
+        let ids = ["motor", "gearbox", "pulley", "pulley-spoke", "rotor-hub", "rotor-bar", "idler", "idler-bar"];
+        scene.parts.into_iter().filter(|p| ids.contains(&p.id)).collect::<Vec<_>>()
+    };
+    let flat = wheels("h-bot.toml");
+    assert!(flat.len() == 2 * 7 + 5 * 2 && flat.iter().all(|p| p.flat), "{flat:?}");
+    let at = |id: &str| flat.iter().filter(|p| p.id == id).map(|p| p.pos).collect::<Vec<_>>();
+    let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-12);
+    let pulleys = at("pulley");
+    assert!(near(pulleys[0], [-0.15, -0.05, 0.06]) && near(pulleys[1], [1.15, -0.05, 0.06]), "{pulleys:?}");
+    assert!(at("idler").iter().all(|p| (p[2] - 0.06).abs() < 1e-12), "{:?}", at("idler"));
+    assert!(at("idler").iter().any(|&p| near(p, [0.5, -0.33, 0.06])), "{:?}", at("idler"));
+    assert!(at("motor").iter().all(|p| (p[2] + 0.09).abs() < 1e-12), "{:?}", at("motor"));
+    assert!(wheels("t-gantry.toml").iter().all(|p| !p.flat));
 }
 
 /// The CoreXY's cancellation by hand (machines/corexy.toml with effects.gantry_yaw on). Each belt pulls both ends of
