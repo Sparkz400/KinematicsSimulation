@@ -4377,6 +4377,10 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
     m
 }
 
+/// The lowest frequency `velocity_loop_responses` follows a loop down to when its gain crossover lies below
+/// `loop_frequencies` (a loop with less band than this is no servo loop to judge).
+pub const LOOP_FLOOR_HZ: f64 = 1.0;
+
 /// Frequencies of the velocity-loop measurement of `velocity_loop_margins`: 10 Hz to
 /// a quarter of the velocity loop's sampling rate (2 kHz at 125 us; above it a period has fewer than four samples), 60 points.
 pub fn loop_frequencies(cfg: &Config) -> Result<Vec<f64>, ConfigError> {
@@ -4432,7 +4436,8 @@ pub const CANCELLED: &str = "cancelled";
 
 /// Per config of `configs` (of the same machine) per motor the open-loop response of its velocity loop
 /// (`velocity_loop_response`), in frequency order: at `loop_frequencies` and the machine's resonances at the start pose
-/// (`Machine::modes`) of the first config, and where the loop gain or the plant changes fast between two points at
+/// (`Machine::modes`) of the first config, below the band down to the gain crossover where it lies there (to
+/// `LOOP_FLOOR_HZ`), and where the loop gain or the plant changes fast between two points at
 /// their middle (`refinement`), in up to `REFINE_ROUNDS` rounds. Every point is measured on a simulation of its own:
 /// they share the processors. `progress` counts them and can stop the measurement.
 pub fn velocity_loop_responses(
@@ -4443,6 +4448,7 @@ pub fn velocity_loop_responses(
     use std::sync::atomic::Ordering::Relaxed;
     let first = &crate::catalog::resolve(entry, configs.first().ok_or_else(|| ConfigError::Invalid("config".into()))?)?;
     let mut frequencies = loop_frequencies(first)?;
+    let spacing = frequencies[1] / frequencies[0];
     let machine = (entry.build)(first)?;
     let amplitudes =
         machine.motors().iter().map(|m| loop_amplitude(entry, first, m.id)).collect::<Result<Vec<_>, _>>()?;
@@ -4482,6 +4488,28 @@ pub fn velocity_loop_responses(
     for round in 0..=REFINE_ROUNDS {
         for (&(run, motor, _), point) in jobs.iter().zip(measure(&jobs)?) {
             curves[run][motor].push(point);
+        }
+        // Below the band, once: where |L| < 1 at the lowest point the integrators put the gain crossover lower, and
+        // the loop is followed down by the band's own spacing (its points stay where they were) until |L| > 1 or
+        // `LOOP_FLOOR_HZ`. A loop with its crossover in the band is measured as before.
+        if round == 0 {
+            loop {
+                jobs.clear();
+                for (run, per_motor) in curves.iter().enumerate() {
+                    for (motor, curve) in per_motor.iter().enumerate() {
+                        let low = curve.iter().min_by(|a, b| a.frequency.total_cmp(&b.frequency)).unwrap();
+                        if low.re.hypot(low.im) < 1.0 && low.frequency / spacing >= LOOP_FLOOR_HZ {
+                            jobs.push((run, motor, low.frequency / spacing));
+                        }
+                    }
+                }
+                if jobs.is_empty() {
+                    break;
+                }
+                for (&(run, motor, _), point) in jobs.iter().zip(measure(&jobs)?) {
+                    curves[run][motor].push(point);
+                }
+            }
         }
         jobs.clear();
         for (run, per_motor) in curves.iter_mut().enumerate() {

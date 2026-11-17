@@ -1537,8 +1537,9 @@ The config of `overhead-crane` ([`machine-overhead-crane/config/crane.toml`](../
 has the common tables (`[parts]`, `[effects]`, `[thermal]`, `[thermal_feedback]`, `[profile]`, `[base]`, `[sim]`,
 `[motor]`, `[gearbox]`, `[drive]`, `[ratings]`, `[brake]`, `[bounds]`, `[start]`, `[[cycle.segment]]`) with the same
 meanings. Its three motors have the ids `bridge`, `trolley` and `hoist`: the shared `[motor]`, `[gearbox]`, `[drive]` and
-`[ratings]` are the bridge's, and `[gearbox.trolley]`, `[drive.trolley]`, `[motor.hoist]`, `[gearbox.hoist]`,
-`[drive.hoist]`, `[ratings.hoist]` give the others their own values over them (`catalog::motor_config`). The tool pose is
+`[ratings]` are the bridge's (the shared `[motor]` and `[drive]` the trolley's too), and `[gearbox.trolley]`,
+`[motor.hoist]`, `[gearbox.hoist]`, `[drive.hoist]`, `[ratings.hoist]` give the others their own values over them
+(`catalog::motor_config`; a `[drive.trolley]` would do so for the trolley's drive). The tool pose is
 the hook as the drives place it (the bridge's x, the trolley's y, the load's height z; m), `[axis.x]`, `[axis.y]`,
 `[axis.z]` their limits (0.8, 0.6, 0.25 m/s; 0.4 m/s²;
 2 m/s³; estimates); `[workspace]` `tool_min`, `tool_max` the box it may be in. `profile.vertical_axis` is "z",

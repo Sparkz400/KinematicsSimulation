@@ -24,8 +24,9 @@ One base step `sim.dt_s` (62.5 µs):
    - velocity loop, every `drive.velocity_cycle_s` (125 µs)
    - current loop, every base step: the voltage each winding gets over the step
 2. The machine is told whether the payload is attached, whether the cycle dwells and whether the drives are disabled.
-3. The mechanics and the winding currents are integrated together over the base step with the voltages held constant (zero-order hold, as an inverter holds its voltage over a PWM period); the motor torque follows the current within the step. With the drives disabled, the mechanics alone without torque.
+3. The mechanics and the winding currents are integrated together over the base step with the voltages held constant (zero-order hold, as an inverter holds its voltage over a PWM period); the motor torque follows the current within the step. With the drives disabled, the mechanics alone, with no torque from the current; a servo rotor that turns keeps the drag of its iron loss (`effects.iron_loss`), held over the step at the step start's speed ([iron loss](#motor-model-additions-of-14-november-2026)).
 4. The drives take the step's end: current, electrical energy, copper loss and shaft work; then the DC links (a shared one after all drives), the trip, and the winding's heating.
+5. The machine ends the step (`Machine::after_step`: tooth jumps, the gearboxes' and slides' friction anchors), and with `effects.part_heating` the parts warm by the losses at the step's end.
 
 The simulation never looks at the wall clock. The same config and the same commands give bit-identical results.
 
@@ -33,7 +34,7 @@ The simulation never looks at the wall clock. The same config and the same comma
 
 Source: [`integrate.rs`](../crates/sim-core/src/integrate.rs).
 
-Classical fourth-order Runge-Kutta with `sim.substeps` (4) sub-steps per base step, so the mechanical step is 15.6 µs. The integrator treats the state as one vector and does not know which entries are positions. The simulation (`Sim::step` in [`sim.rs`](../crates/sim-components/src/sim.rs)) hands it the machine's state with four entries per drive appended: the winding current and, from zero at the start of the step, the electrical energy ∫ u i dt, the copper loss ∫ R i² dt and the shaft work ∫ τ ω dt. The machine and the core know nothing of the windings; the drive gives their rates (`DriveParams::winding_rates`).
+Classical fourth-order Runge-Kutta with `sim.substeps` (4) sub-steps per base step, so the mechanical step is 15.6 µs. The integrator treats the state as one vector and does not know which entries are positions. The simulation (`Sim::step` in [`sim.rs`](../crates/sim-components/src/sim.rs)) hands it the machine's state with seven entries per drive appended (`WINDING_STATES`), and one more for the work of an obstacle's push (`effects.crash`). For the servo the first four are the winding current and, from zero at the start of the step, the electrical energy ∫ u i dt, the copper loss ∫ R i² dt and the shaft work ∫ τ ω dt; the other three rest. A stepper and an induction motor keep their phase currents or fluxes there. The machine and the core know nothing of the windings; the drive gives their rates (`DriveParams::winding_rates`).
 
 Assumptions: the winding voltages are held over a base step (zero-order hold), as an inverter would; the torque follows the current within the step. Friction, backlash and belt slack are not handled as events; they are integrated through with the fixed step. The step-size test (halving the step changes the travel by less than 1 %) is what justifies that.
 
@@ -59,7 +60,7 @@ tension  = max(0, T)                                   with effects.belt_slack
 | both on | `belt.damping_time_s` · EA / mat: in proportion to the section's stiffness, so a short section damps more |
 | `belt_damping` off | 0 |
 
-**Slack.** With `effects.belt_slack` the tension cannot go below zero. With the switch off the belt can push. Each machine counts the seconds during which any section has a tension of zero or less (signal `belt.slack_time`); the tooth jump itself is not modelled.
+**Slack.** With `effects.belt_slack` the tension cannot go below zero. With the switch off the belt can push. Each machine counts the seconds during which any section has a tension of zero or less (signal `belt.slack_time`). The teeth jumping over a pulley is an effect of its own ([belt tooth jump](#belt-tooth-jump)).
 
 **Energy-consistent form.** The force that pulls on the clamps and the load is `tension`. The force on the belt material that a pulley feeds into the section is larger:
 
@@ -76,11 +77,11 @@ Stretched belt carries its strain energy along when it passes a pulley, and `mat
 
 **Belt mass** (`effects.belt_mass`). Lumped on the pulleys as inertia, not spread along the belt: see each machine.
 
-**Temperature** (`effects.temperature`). EA is multiplied by `temperature.belt_stiffness_scale`.
+**Temperature** (`effects.temperature`). EA is multiplied by `temperature.belt_stiffness_scale`; with `effects.thermal_feedback` also by the belt's stiffness factor at its temperature (`ThermalFeedback::belt_stiffness_factor`, see [temperature feedback](#temperature-feedback)). A product that leaves EA at zero or below is refused.
 
 **At rest.** The unstretched belt per section at an equilibrium is found by bisection from two conditions: the tension differences the load needs, and the total amount of belt, which is fixed.
 
-Not modelled: sideways (string) vibration of the free spans, tooth contact, wear, a belt mass that moves with the load.
+Not modelled: the tooth's contact beyond its stiffness and the jump below, wear, a belt mass that moves with the load. The spans' sideways vibration is reported as a frequency only ([below](#sideways-vibration-of-the-belt-spans)).
 
 ## Belt tooth jump
 
@@ -102,7 +103,7 @@ J' · d²a/dt² = gear + r · F_s · sin(2π d / p) + mesh       pulley, J' = J_
 F_s = c · min(T_a, T_b) at the moment it climbed out, held over the jump
 ```
 
-m is the belt's mass that the machine lumps on that pulley (single axis: the whole belt; T-gantry: half of it on each). The belt moves on its own and the pulley holds it back with a ridge force, the potential F_s p / (2π) (1 − cos(2π d / p)); with its kinetic energy ½ m ((v + w)² − v²) on top of what the pulley's lumped inertia counts (v = r da/dt), the energy is exact. Where the belt crosses the next groove (|d| = p) the teeth fall in: u is set to u_start ± p, the jump is counted (`pulley.<motor>.tooth_jumps`), and belt and pulley run on at the speed that keeps their momentum (a plastic impact). Where it slides back over the groove it left, it falls in there, uncounted. Where the pull settles below the ridge the belt stays half out, carrying the load through the ridge. What changes the energy at once (the start, the landing) is reported as `power.tooth_jump` over that base step, so the energy budget closes; a jump is found at the end of a step and lands up to one step late, so in a run that ratchets the budget's remainder grows (0.33 % at the base step, 0.21 % at half, 0.14 % at a quarter, on the single axis at 90 N of pretension; `jumping_teeth_fail_the_check_and_close_the_energy_budget`).
+m is the belt's mass that the machine lumps on that pulley (single axis: the whole belt; T-gantry: half of it on each). The belt moves on its own and the pulley holds it back with a ridge force, the potential F_s p / (2π) (1 − cos(2π d / p)); with its kinetic energy ½ m ((v + w)² − v²) on top of what the pulley's lumped inertia counts (v = r da/dt), the energy is exact. Where the belt crosses the next groove (|d| = p) the teeth fall in: u is set to u_start ± p, the jump is counted (`pulley.<motor>.tooth_jumps`), and belt and pulley run on at the speed that keeps their momentum (a plastic impact). Where it slides back over the groove it left, it falls in there, uncounted. Where the pull settles below the ridge the belt stays half out, carrying the load through the ridge. What changes the energy at once (the start, the landing) is reported as `power.tooth_jump` over that base step, so the energy budget closes; a jump is found at the end of a step and lands up to one step late, so in a run that ratchets the budget's remainder grows (the single axis at 90 N of pretension, `sim-cli analyze single-axis --set effects.belt_tooth_jump=true --set belt.pretension_n=90 --budget FILE`: 11.18 J, 15 % of the 74.59 J supply, in the jumps and 0.37 % unaccounted at the base step; the test `jumping_teeth_fail_the_check_and_close_the_energy_budget` records 0.21 % at half the step and 0.14 % at a quarter and holds it within 1 %).
 
 Signals: `pulley.<motor>.tooth_jumps` (count) and `pulley.<motor>.tooth_slip` (u, m), `power.tooth_jump` (W). Verdict `belt-tooth-jump`: the jumps during the measured pass, which must be 0.
 
@@ -138,7 +139,7 @@ f1 = sqrt(T / μ) / (2 L)          μ = belt.mass_kg_m, L the span's length, T i
 
 The belt's own speed would lower it by 1 − v² / c² (c = sqrt(T / μ), 55 m/s at 300 N and 0.1 kg/m), below 0.2 % here, left out. The drives excite the belt at the tooth mesh |v_pulley| / p and, with `effects.torque_ripple`, at the motors' ripple and cogging orders times their turns per second. `belt.span_detuning` is the smallest min |f1 − f_e| / f1 over spans and excitations, capped at 1 (a span far from every excitation, a slack span or a machine at rest). Spans: single axis 3 (motor pulley to carriage, motor pulley to idler, idler to carriage), T-gantry 8 (clamp to carriage idler, carriage idler to motor A, motor A to the lower left carriage idler, down to the Z-bottom idler and up again, to motor B, motor B to the carriage idler, carriage idler to the clamp), their lengths those of the sections' geometry without the teeth in mesh.
 
-Verdict `belt-span-resonance`: the lowest `belt.span_detuning` while the axes run at a steady speed (every acceleration setpoint 0, some speed setpoint not), sampled once per millisecond, must stay at or above `ratings.belt_span_resonance_band` (0.1). A sweep through a resonance while speeding up passes in moments; a cruise on one does not. On a linear axis the spans' lengths change during a cruise, so their frequencies sweep, and a sweep across an excitation in a cruise fails the check as well: it is slow, the ±10 % band of a 200 Hz span 0.5 m long takes 0.2 L / v = 0.1 s at 1 m/s, 20 periods, enough for a lightly damped span to ring up. The default T-gantry fails it so (detuning 5e-6 when its Z axis runs at 0.4 m/s: the tooth mesh at 0.4 m / 5 mm = 80 Hz meets spans 4 and 5, down to and up from the Z-bottom idler, whose frequency changes with z). Belt makers ask to keep a span's natural frequency away from the drive's excitations without a figure; 10 % is the separation usually kept from a resonance (an estimate).
+Verdict `belt-span-resonance`: the lowest `belt.span_detuning` while the axes run at a steady speed (every acceleration setpoint 0, some speed setpoint not), sampled once per millisecond, must stay at or above `ratings.belt_span_resonance_band` (0.1). A sweep through a resonance while speeding up passes in moments; a cruise on one does not. On a linear axis the spans' lengths change during a cruise, so their frequencies sweep, and a sweep across an excitation in a cruise fails the check as well: it is slow, the ±10 % band of a 200 Hz span 0.5 m long takes 0.2 L / v = 0.1 s at 1 m/s, 20 periods, enough for a lightly damped span to ring up. The default T-gantry fails it so (`sim-cli verdicts t-gantry --set effects.belt_span_vibration=true`: detuning 6.44e-6; its Z axis runs at 0.4 m/s: the tooth mesh at 0.4 m / 5 mm = 80 Hz meets spans 4 and 5, down to and up from the Z-bottom idler, whose frequency changes with z). Belt makers ask to keep a span's natural frequency away from the drive's excitations without a figure; 10 % is the separation usually kept from a resonance (an estimate).
 
 Not built: the amplitude. A lumped first-mode oscillator driven by the tension's fluctuation would need a damping of the sideways motion that nobody publishes and a forcing term (tension times the span's curvature) that has no measurement to be checked against; the frequency and the check need neither. Only the first mode; its harmonics n f1 are not checked.
 
@@ -174,7 +175,16 @@ The bristle state settles at the rate σ₀ |v| / (λ g(v)). Stiff bristles on a
 
 with, on the T-gantry, side = m_z · a_x and tilt = 2 · side · (z_com_drop − z) / guide_spacing. The viscous term does not scale.
 
-**Simplification.** a_x here is not the true acceleration. It is the X acceleration that the commanded motor torques would give a loss-free rigid machine: a_x = i (τ_A + τ_B) / r / (m_x + 2J/r²). The true acceleration would make friction depend on itself, and its absolute value would turn every belt vibration into extra friction. The same loads are what the signals `axis.<id>.guide_load` report.
+**Simplification.** a_x here is not the true acceleration. It is the X acceleration that the commanded motor torques would give a loss-free rigid machine at the pose, over the rigid model's mass matrix (`commanded_ax` in the T-gantry crate):
+
+```text
+F_x = i (τ_A + τ_B) / r          F_z = i (τ_A − τ_B) / r − m_z g
+a_x = (F_x · M_z − M_xz · F_z) / (M_x · M_z − M_xz²)
+```
+
+M_x the masses X moves (carriage, Z axis, payload, the motors' and idlers' equivalent masses, the cable chain, the belt runs), M_z those Z moves, M_xz the belt runs' coupling of X and Z. The Z axis's weight is in F_z as the rigid model has it (M a = F + gravity): without it the torque that holds the Z axis up would, through the coupling, count as X acceleration. The true acceleration would make friction depend on itself, and its absolute value would turn every belt vibration into extra friction. The same loads are what the signals `axis.<id>.guide_load` report.
+
+**Feedforward and planner.** The friction feedforward (`Lugre::feedforward`, see [fine interpolation and precontrol](#fine-interpolation-and-precontrol)) takes g(v) · tanh(v / v_s) + b · v at the load at rest. The time-optimal planner takes each guide's Coulomb and viscous part as c + b v at the motors (`Machine::rigid_friction`) and its Stribeck rise apart, per guide (`Machine::rigid_friction_rise`): λ (F_s − F_c) · exp(−(v_p / v_s,p)²) at the path speed v_p, with v_s,p the guide's Stribeck speed over its axis's rate along the path, so that the planner holds room for the most it takes at the speeds up to v_p. The machine files give it ([path planners](#as-fast-as-the-motors-allow---time-optimal)).
 
 ## Motor shaft: friction, ripple, cogging
 
@@ -220,7 +230,7 @@ A force along the belt at each driven pulley, periodic in the belt travel:
 F_mesh = F_t · sin(2π · travel / pitch)
 ```
 
-F_t `belt.tooth_force_n`, pitch `belt.tooth_pitch_m`. It acts on the pulley as the torque r · F_mesh(r · angle).
+F_t `belt.tooth_force_n` (0 with `effects.tooth_meshing` off), pitch `belt.tooth_pitch_m`. It acts on the pulley as the torque r · F_mesh(r · angle).
 
 ## Gearbox
 
@@ -232,10 +242,13 @@ Between motor shaft (angle φ) and pulley (angle θ). Stiffness, damping and bac
 twist    = φ / i − θ
 e        = max(|twist| − β/2, 0)                       twist beyond the dead zone; β = backlash_rad
 ẇ        = dφ/dt / i − dθ/dt                           the twist's rate
-τ        = sign(twist) · f(e) + c_g · ẇ + T_h · tanh(ẇ / 1e-3 rad/s)    while e > 0, else 0
-τ_out    = τ · η^tanh(τ · ω_out / 0.5 W)               on the pulley
+τ        = sign(twist) · f(e) + z(x) + c_g · ẇ         while e > 0, else 0; z the hysteresis (below), x = sign(twist) · e
+τ_out    = τ · η^t                    t = tanh(τ · ω_out / 0.5 W) ≥ 0, driving
+τ_out    = τ · (η · r_b)^t            t < 0, driven back (η · r_b at most 1)
 τ_rotor  = τ / i                                       reaction on the motor shaft
 ```
+
+r_b (`Gearbox::back_ratio`) is the efficiency driven back over the one driving: 1 for a gear that loses alike both ways, so that the load driving back gets τ / η; a screw sets it from its lead angle ([screws and worms](#screws-and-worms-driven-back)). Without play (no backlash and no lost-motion band) the flanks touch at zero twist too, where the hysteresis holds.
 
 The spring f(e), as gearbox makers measure the torsional characteristic with the input locked:
 
@@ -247,10 +260,19 @@ F(x) = T1 + K2 · (x − T1 / K1)                         up to T2
 F(x) = T2 + K3 · (x − T1 / K1 − (T2 − T1) / K2)        beyond
 ```
 
+**The band behind a converter.** Behind a screw, rack or drum (`Converter::apply_back` in [`transmission.rs`](../crates/sim-components/src/transmission.rs)) the converter's spring (compliance c, in m/N) is in series with the flanks, and over the band the flanks stiffen while the converter's spring does not (`Gearbox::band_compliance`). With the flanks' own stiffness k_f = K1 / (1 − c K1) and T_b = k_f b / 2 the torque at which they leave the band:
+
+```text
+e = sqrt(2 b T / k_f) + c T                              T < T_b: in the band, a quadratic in sqrt(T)
+e = b/2 + T / K1  (and the segments above)               beyond it; 1 / K1 = 1 / k_f + c
+```
+
+The band itself is the gearbox's angle times the lever; the line beyond the band keeps its offset b/2. The hysteresis's friction is scaled so that its loop is as wide at the joint as the gear's, 2 · lever · T_h / K1, and its reversal stiffness becomes series(K1 + σ) − series(K1). Without the converter c = 0 and f(e) = K1 e² / (2 b) as above. Test: `the_gear_behind_a_converter_is_in_series_with_its_spring_over_the_band_and_the_hysteresis` (transmission.rs).
+
 b `lost_motion_band_rad` and T_h = K1 · w / 2 with w `hysteresis_rad` (`effects.gearbox_lost_motion`, else both 0); T1, T2, K2, K3 `stiffness_t1_nm`, `stiffness_t2_nm`, `stiffness_k2_nm_rad`, `stiffness_k3_nm_rad` (`effects.gearbox_stiffness_curve`, else T1 = T2 = ∞: one stiffness K1 = `stiffness_nm_rad`). The twist at a torque T is then Harmonic Drive's T / K1, T1 / K1 + (T − T1) / K2 or T1 / K1 + (T2 − T1) / K2 + (T − T2) / K3 (plus b/2 past the band). T_h is a friction in the flanks and bearings: loading and unloading run on curves apart by 2 T_h / K1 = w in angle, Harmonic Drive's "hysteresis loss" (1 arcmin for sizes 25 and 32 at ratio 50 and up). It is a state, Dahl's friction model on the contact twist x (the twist beyond the backlash, signed), in parallel with the spring:
 
 ```text
-dz/dx = σ · (1 − sign(ẋ) · z / T_h)        |z| < T_h, σ = K1
+dz/dx = σ · (1 − sign(ẋ) · z / T_h)        |z| < T_h, σ = gearbox.hysteresis_stiffness_factor · K1 (1 where the key is absent)
 τ     = f(e) · sign(twist) + c · ẋ + z
 ```
 
@@ -268,21 +290,47 @@ T_0,ref `no_load_torque_nm` at ω_ref `no_load_speed_rpm` and 20 °C (`thermal_f
 
 - **Stiffness and backlash.** Inside the dead zone nothing is transmitted. With `effects.gearbox_backlash` off, β = 0.
 - **Flanks cannot pull.** With backlash on, if the damping term would reverse the torque while the flanks separate (τ · engaged < 0), the torque is zero. With backlash off the connection is a plain spring-damper and can pull, as a coupling does.
-- **Efficiency.** The loss is on the output torque. When the gearbox drives the load (power positive) the output gets τ · η; when the load drives back it gets τ / η. The exponent fades with tanh below 0.5 W of transmitted power, so a gearbox at rest has no torque step. With `effects.gearbox_efficiency` off, η = 1.
+- **Efficiency.** The loss is on the output torque. When the gearbox drives the load (power positive) the output gets τ · η; when the load drives back it gets τ / (η · r_b), τ / η for a gear that loses alike both ways. The exponent fades with tanh below 0.5 W of transmitted power, so a gearbox at rest has no torque step. With `effects.gearbox_efficiency` off, η = 1.
 - **Mesh friction** (`effects.gearbox_mesh_friction`, in place of the faded factor). The efficiency's loss is a friction in the mesh, at the output against the housing, in proportion to the torque the gear passes and against the output's motion at any speed, and it sticks at rest:
 
   ```text
   τ_s     = sign(twist) · f(e) + z                          what the spring and hysteresis pass (the damping left out)
   μ       = 1 − η                                           η the teeth's efficiency (with the drag: η_teeth)
-  F       = clamp(σ_m · (θ − a), −μ |τ_s|, +μ |τ_s|)        σ_m = K1, a the anchor where the last step ended
+  μ_b     = μ                    for r_b = 1;    μ_b = max(0, 1 / (η · r_b) − 1)   for a gear with its own back efficiency
+  F       = clamp(σ_m · (θ − a), lower, upper)              [−μ_b |τ_s|, μ |τ_s|] for τ_s ≥ 0, [−μ |τ_s|, μ_b |τ_s|] below
   τ_out   = τ − F
   a      ← θ − F / σ_m                                       at each step's end (`Gearbox::commit`)
   ```
 
-  Sliding forward the output gets τ_s (1 − μ) = η τ_s, as with the efficiency; driven back it takes τ_s (1 + μ), so the back-driving efficiency follows as 1 / (1 + μ) = 1 / (2 − η): 0.833 at η = 0.8, where the faded factor gives η either way. At rest a gear holding a load L stands while τ_s lies between L / (2 − η) and L / η: it holds anything in between, and breaks away lifting at L / (i η) at the motor and lowering at L / (i (2 − η)) (`a_held_gear_stands_inside_its_friction_band_and_breaks_away_at_its_ends`). Around zero load the friction μ K |x| takes, from one turning point A₁ to the next, μ K (A₁² + A₂²) / 2 of the spring's K (A₁² − A₂²) / 2: the friction law alone keeps (1 − μ) / (1 + μ) of the amplitude a cycle, ζ = ln((1 + μ) / (1 − μ)) / 2π = 6.45 % at η = 0.8 (`a_ring_around_zero_load_decays_by_the_hand_calculated_damping`, with a stiff bristle). With the bristle of K1 the friction first turns round by sticking on 2 K, from the bound at A to the other at x₁ = A (1 − μ) / (1 + μ), then slides on K (1 − μ) and K (1 + μ): A₂² / A² = ((1 + μ²)(1 − r²) + (1 − μ) r²) / (1 + μ) with r = (1 − μ) / (1 + μ), 7/9 a half cycle at η = 0.8, so a cycle keeps 7/9 and ζ = ln(9/7) / 2π = 4.0 % (`the_shipped_bristle_rings_down_by_its_hand_calculated_ratio`), where the faded factor leaves a small ring (below its 0.5 W) about 1 %. With the no-load running torque (`effects.gearbox_drag`) the two make the efficiency map above: the catalogue's η at its rated point, less at part load (`mesh_friction_and_drag_give_the_catalogue_efficiency_and_less_at_part_load`: 0.9 at 50 N m, 0.774527 at 5 N m). The friction's power F ω is booked as its loss, where the gearbox's loss goes (its loss row, `part_heating`, `thermal_feedback`, which sets η and so μ); the bristle's store F² / (2 σ_m), at most (μ τ)² / (2 σ_m) (4e-7 J on the planar cable robot's winches), is counted with it and not in `Gearbox::energy`. Booking the store's rate instead, sticking or sliding as decided at a step's end, missed 1.80 J of the planar cable robot's 38.17 J: within a step the anchor stands and the friction slides at its bound throughout, also where the ends said it sticks. Shortcuts: σ_m is K1, as the hysteresis's Dahl stiffness (presliding takes μ of the twist). The energy budget does not choose it: with the friction booked as its whole power the belt axes, whose light pulleys stick to the housing first, close their passes at K1, 3 K1 and 10 K1 alike (the single axis under 1e-6 of its pass unaccounted, the T-gantry 4e-6, as with the friction off; gearbox loss per pass 3.04659 J on the single axis at all three, 8.70004, 8.70027 and 8.70029 J on the T-gantry, against 3.04944 and 8.82445 J with the friction off); the 1.4 and 2.0 % they missed at 10 K1 were the earlier bookkeeping's. It is off on the belt machines as shipped, and on in the arms, cable robots and mover. Behind a screw, rack or drum (`Converter::apply_to`) σ_m is capped where the bristle on the lighter of the rotor's inertia seen at the load and the output's own would settle faster than a quarter of the bristle rate limit (2e8 N/m for the cable robots' 0.32 kg drums; no shipped gear reaches it); before a gearbox's first step and in a machine that does not commit its gearboxes after each step (the four-arm delta's arms, the gearboxes of a rigid model) the faded factor stays; the rigid models' gearboxes keep it.
+  σ_m is `gearbox.mesh_stiffness_factor` times K1 (1 where the key is absent), a the anchor where the last step ended. Sliding forward the output gets τ_s (1 − μ) = η τ_s, as with the efficiency; driven back it takes τ_s (1 + μ), so the back-driving efficiency follows as 1 / (1 + μ) = 1 / (2 − η): 0.833 at η = 0.8, where the faded factor gives η either way. A gear with r_b ≠ 1 (a screw's or worm's lead angle) is driven back at exactly η r_b, as the faded factor has it (`the_mesh_friction_is_bounded_by_the_back_efficiency_when_driven_back`). At rest a gear holding a load L stands while τ_s lies between L / (2 − η) and L / η: it holds anything in between, and breaks away lifting at L / (i η) at the motor and lowering at L / (i (2 − η)) (`a_held_gear_stands_inside_its_friction_band_and_breaks_away_at_its_ends`). Around zero load the friction μ K |x| takes, from one turning point A₁ to the next, μ K (A₁² + A₂²) / 2 of the spring's K (A₁² − A₂²) / 2: the friction law alone keeps (1 − μ) / (1 + μ) of the amplitude a cycle, ζ = ln((1 + μ) / (1 − μ)) / 2π = 6.45 % at η = 0.8 (`a_ring_around_zero_load_decays_by_the_hand_calculated_damping`, with a stiff bristle). With the bristle of K1 the friction first turns round by sticking on 2 K, from the bound at A to the other at x₁ = A (1 − μ) / (1 + μ), then slides on K (1 − μ) and K (1 + μ): A₂² / A² = ((1 + μ²)(1 − r²) + (1 − μ) r²) / (1 + μ) with r = (1 − μ) / (1 + μ), 7/9 a half cycle at η = 0.8, so a cycle keeps 7/9 and ζ = ln(9/7) / 2π = 4.0 % (`the_shipped_bristle_rings_down_by_its_hand_calculated_ratio`), where the faded factor leaves a small ring (below its 0.5 W) about 1 %. With the no-load running torque (`effects.gearbox_drag`) the two make the efficiency map above: the catalogue's η at its rated point, less at part load (`mesh_friction_and_drag_give_the_catalogue_efficiency_and_less_at_part_load`: 0.9 at 50 N m, 0.774527 at 5 N m). The friction's power F ω is booked as its loss, where the gearbox's loss goes (its loss row, `part_heating`, `thermal_feedback`, which sets η and so μ); the bristle's store F² / (2 σ_m), at most (μ τ)² / (2 σ_m) (4e-7 J on the planar cable robot's winches), is counted with it and not in `Gearbox::energy`. Booking the store's rate instead, sticking or sliding as decided at a step's end, missed 1.80 J of the planar cable robot's 38.17 J: within a step the anchor stands and the friction slides at its bound throughout, also where the ends said it sticks. Shortcuts: σ_m is K1 unless the factor is set, as the hysteresis's Dahl stiffness (presliding takes μ of the twist). The energy budget does not choose it: with the friction booked as its whole power the belt axes, whose light pulleys stick to the housing first, close their passes at K1, 3 K1 and 10 K1 alike (the single axis under 1e-6 of its pass unaccounted, the T-gantry 4e-6, as with the friction off; gearbox loss per pass 3.04659 J on the single axis at all three, 8.70004, 8.70027 and 8.70029 J on the T-gantry, against 3.04944 and 8.82445 J with the friction off); the 1.4 and 2.0 % they missed at 10 K1 were the earlier bookkeeping's. It is off on the belt machines as shipped, and on in the arms, cable robots and mover. Behind a screw, rack or drum (`Converter::apply_to`) σ_m is capped where the bristle on the lighter of the rotor's inertia seen at the load and the output's own would settle faster than a quarter of the bristle rate limit (2e8 N/m for the cable robots' 0.32 kg drums; no shipped gear reaches it); before a gearbox's first step and in a machine that does not commit its gearboxes after each step (the four-arm delta's arms, the gearboxes of a rigid model) the faded factor stays; the rigid models' gearboxes keep it.
 - **At rest** under an output torque the twist is τ / k_g + β/2 on the matching side; without one it is 0, the middle of the backlash (`Gearbox::static_twist`).
 
-Assumptions: the hysteresis's stiffness at a reversal σ is taken as K1 (`shortcut`: no maker publishes the loop's shape at a reversal), so the D3 and D2 gearboxes (half an arcmin) are twice as stiff at small amplitudes: the D3's velocity loop crosses over at 305 Hz with it and 259 Hz without (the old rate-switched friction locked it at 19 Hz). Inside one base step a twist that turns back follows the curve from the step's start, not Dahl's reversal (the steps are 62.5 µs). The machine's state vector does not carry z: a state set from outside (a crash's stop, `adopt_state`) keeps the gearbox's anchor from before. The lost-motion band is in the gearbox's angle; behind a screw or rack its stretch by the converter's spring is left out. The drag acts on the motor shaft with its friction, but its loss is the gearbox's (`ShaftFriction::drag_power`): it is in the gearbox's loss row and with `part_heating` it warms the gearbox (`the_gearbox_drag_warms_the_gearbox_to_its_resistance_times_the_drag_power`: the single axis cruising at 250 rad/s at the motor, 0.107342 N m of drag, 26.8355 W, 53.671 K at 2 K/W). A worm's tooth efficiency does not fall with sliding speed. The tooth efficiency is at most 1: where the catalogue's no-load torque at its reference speed is more than its whole loss (the SP+ 100: 0.93 N m at 3000 r/min, where 6 % of 259 N m at ratio 20 is 0.78 N m), the gearbox reaches 93.3 % instead of 94 % at T2N and 20 °C. The gearbox's own inertia (`gearbox.inertia_at_input_kgm2`) turns with the rotor: J_rotor in the equations is `motor.rotor_inertia_kgm2` plus it.
+Assumptions: the hysteresis's stiffness at a reversal σ is K1 where `gearbox.hysteresis_stiffness_factor` is absent, as in every shipped file (no maker publishes the loop's shape at a reversal), so the D3 and D2 gearboxes (half an arcmin) are twice as stiff at small amplitudes: the D3's velocity loop crosses over at 305 Hz with it and 259 Hz without (the old rate-switched friction locked it at 19 Hz). Inside one base step a twist that turns back follows the curve from the step's start, not Dahl's reversal (the steps are 62.5 µs). The machine's state vector does not carry z: a state set from outside (a crash's stop, `adopt_state`) keeps the gearbox's anchor from before. The lost-motion band is in the gearbox's angle; behind a screw or rack its stretch by the converter's spring is left out. The drag acts on the motor shaft with its friction, but its loss is the gearbox's (`ShaftFriction::drag_power`): it is in the gearbox's loss row and with `part_heating` it warms the gearbox (`the_gearbox_drag_warms_the_gearbox_to_its_resistance_times_the_drag_power`: the single axis cruising at 250 rad/s at the motor, 0.107342 N m of drag, 26.8355 W, 53.671 K at 2 K/W). A worm's tooth efficiency does not fall with sliding speed. The tooth efficiency is at most 1: where the catalogue's no-load torque at its reference speed is more than its whole loss (the SP+ 100: 0.93 N m at 3000 r/min, where 6 % of 259 N m at ratio 20 is 0.78 N m), the gearbox reaches 93.3 % instead of 94 % at T2N and 20 °C. The gearbox's own inertia (`gearbox.inertia_at_input_kgm2`) turns with the rotor: J_rotor in the equations is `motor.rotor_inertia_kgm2` plus it.
+
+### Screws and worms driven back
+
+Source: `BallScrew`, `WormGear`, `Converter::apply_back` in [`transmission.rs`](../crates/sim-components/src/transmission.rs); [`sim-netlist/src/worm.rs`](../crates/sim-netlist/src/worm.rs).
+
+A thread of lead angle β (γ for a worm) and friction angle ρ loses differently driving and driven back. The gearbox carries the difference as its back ratio r_b = η_back / η (above): a converter applied behind it multiplies the gearbox's efficiency by its own η and r_b by η_back / η (`Converter::apply_back`, with `effects.gearbox_efficiency`).
+
+```text
+ball screw (THK), tan β = lead / (π d):   η      = (1 − μ tan β) / (1 + μ / tan β)      driving the nut
+                                           η_back = (1 − μ / tan β) / (1 + μ tan β)      the load driving the screw
+worm, ρ' = atan(μ / cos α_n):              η      = tan γ / tan(γ + ρ')                  the worm driving
+                                           η_back = tan(γ − ρ') / tan γ                  the wheel driving
+```
+
+- **Screw** (`effects.screw_lead_efficiency`; a config without the switch has it off). μ is `screw.friction_coefficient`, d `screw.nominal_diameter_m`; the two efficiencies replace `screw.efficiency`, which is a catalogue's lumped figure (the nut's preload drags apart). Off, both are `screw.efficiency`. A screw whose η_back is 0 or less (tan β ≤ μ) locks itself and is refused. Test: `the_screw_driven_back_loses_by_thks_back_efficiency_and_a_locking_one_is_refused` (μ = 0.003, tan β = 0.318310: 0.9896302 back against 0.9897172 driving).
+- **Worm in the joint kit's rotary table** (`table.gear = "worm"`, `[worm]` `lead_angle_deg`, `friction_coefficient`, `pressure_angle_deg`, both angles below 45°): the gearbox gets η and r_b = η_back / η. A worm with η_back ≤ 0 is refused. Test: `a_worm_gear_has_the_hand_calculated_efficiencies` (γ = 5°, μ = 0.05, α_n = 20°: η_back = 0.38997; at 2° below 0).
+- **Worm stage in a machine file** (`machine.worm`, counted with `effects.gearbox_efficiency`; the motor's gearbox then keeps only what a screw or rack behind it loses). A worm that turns back multiplies the gearbox's output torque by η^t driving and η_back^t driven back, t = tanh(τ ω / 0.5 W) as the gearbox's fade (`worm::factors`). With `effects.thermal_feedback` both efficiencies warm by the gearbox's law, 1 − η → (1 − η) f, forward at least 0.01; a locking worm stays locked.
+- **Self-locking worm** (η_back ≤ 0, machine files only). Coulomb's law at the mesh without a fade. With o the torque the wheel takes and s the sign of the speed, the mesh drags
+
+  ```text
+  D = (1 / η − 1) · s o            on the driving flank, s o > 0
+  D = (1 − η_back) · (−s o)        on the overhauling flank, s o < 0
+  ```
+
+  so D ω ≥ 0 always: driven back the motor has to push, by −η_back of the load's torque over i. Elastic model (`worm_drag`): the drag acts on the rotor, at the levels the gear spring's torque gives (`worm::levels`), never along the motion; where the level would stop the rotor within `STICK_TIME_S` (1 ms) it takes the rotor's speed out over that time, so at rest it holds anything between the two levels: a locking worm holds its load with no motor torque. Rigid model (`rigid_locking`): o is an unknown beside the accelerations; the overhauling flank takes its load from the torque the wheel holds at rest (`overhauling_drag`), since a heavy wheel on that flank has no unique rigid solution (Painlevé's paradox); below a wheel speed of `STICK_SPEED` (1e-3 rad/s) it sticks, decelerating at −v / `STICK_TIME_S`.
 
 ## Hard stops
 
@@ -307,10 +355,10 @@ The motor is one equivalent winding with resistance R, inductance L and the back
 
 ```text
 L · di/dt = u − R · i − k_e · ω
-τ         = k_t · i
+τ         = k_t · i − T_Fe(ω)
 ```
 
-k_e = k_t in SI units (`effects.back_emf` off: k_e = 0). Each base step the voltage u (and the resistance R, at the temperature the step starts with) is held, and the current is integrated together with the mechanics (see [integrator](#integrator)), with ω the motor's speed at each stage of the integration:
+k_e = k_t in SI units (`effects.back_emf` off: k_e = 0). T_Fe is the drag of the iron loss on the shaft, 0 without `effects.iron_loss` ([iron loss](#motor-model-additions-of-14-november-2026)); with field weakening the reluctance torque joins k_t i, with `effects.magnet_temperature` both constants scale with the magnets' flux. Each base step the voltage u (and the resistance R, at the temperature the step starts with) is held, and the current is integrated together with the mechanics (see [integrator](#integrator)), with ω the motor's speed at each stage of the integration:
 
 ```text
 di/dt = (u − R · i − k_e · ω) / L           in the integrated state, with the torque k_t · i(t) on the shaft
@@ -318,7 +366,7 @@ E_el  = ∫ u · i dt                           electrical energy of the step; P
 E_cu  = ∫ R · i² dt,   W = ∫ τ · ω dt         copper loss and shaft work of the step
 ```
 
-With the back-EMF on, u · i = R i² + d(½ L i²)/dt + τ · ω at every moment (also under saturation, see below), so the electrical energy, the copper loss, the winding's stored energy and the work on the shaft close to the integration's error (the [energy budget](#energy-budget) checks it). Before 12 November the current was stepped exactly over a base step with the speed of its start, its power taken by the trapezoid rule, and the mechanics turned under the torque of the current at the end of the step. That held torque was a numerical phase lead of half a step: on undamped elastic configs it put 3 to 5 % of the supply into the mechanics, and on damped ones it hid part of the ringing (peak motor torque 3 % lower on the default T-gantry, 8 % on the single axis; see [PROGRESS](../PROGRESS.md)).
+With the back-EMF on, u · i = R i² + d(½ L i²)/dt + τ · ω + T_Fe ω at every moment (also under saturation, see below), so the electrical energy, the copper loss, the winding's stored energy and the work on the shaft close to the integration's error (the [energy budget](#energy-budget) checks it). Before 12 November the current was stepped exactly over a base step with the speed of its start, its power taken by the trapezoid rule, and the mechanics turned under the torque of the current at the end of the step. That held torque was a numerical phase lead of half a step: on undamped elastic configs it put 3 to 5 % of the supply into the mechanics, and on damped ones it hid part of the ringing (peak motor torque 3 % lower on the default T-gantry, 8 % on the single axis; see [PROGRESS](../PROGRESS.md)).
 
 Assumptions: no three phases, no PWM, no inverter dead time. Field weakening (the winding as the q axis of a d-q model) and iron loss are effects of their own, below ([field weakening](#field-weakening)). Below the current loop there is nothing.
 
@@ -334,7 +382,7 @@ The current setpoint is the inverse of this curve, limited to `max_current_a` (N
 
 The back-EMF constant falls with the torque constant: e = k_e · ω · (1 − s · min(1, (i / i_max)²)). The electrical power u · i is then the copper loss plus the shaft power, with saturation as without.
 
-**A back-EMF constant of its own.** `drive.back_emf_constant_v_s_rad` (optional; absent or 0: equal to the torque constant, the shipped configs' behaviour) is the maker's printed voltage constant in the one winding's scale (√3 times the line-to-line RMS constant, as `catalog` converts it). The servo winding then has k_e ≠ k_t: the winding equation, the back-EMF feedforward of the current loop, the voltage limits (`voltage_limited_current`, field weakening's `d_current_for` and `field_weakened_torque`) and the DC link's power u · i use k_e, the torque stays k_t i. The electrical power is then the copper loss plus the shaft power plus (k_e − k_t) · i · ω (times the saturation and magnet factors both constants share). A real motor has one flux linkage: the two printed constants differ because they are measured apart, the voltage constant at no load with the magnets cold (about 20 °C), the torque constant at the rated point with the magnets warm (their flux falls by about 0.1 % per kelvin) and with the iron loss and saturation of the load taken off the shaft. (k_e − k_t) · i · ω is therefore not a loss the motor has but the model's bookkeeping of using both constants at once: the voltage side (conservative for the voltage limits) and the torque side each as printed. The drive books it as `Drive::emf_loss` (the winding's step energies less copper, shaft and stored energy, exact) and the energy budget shows it as the row `emf.<motor>` next to the copper loss, only where a constant is set apart from k_t; it is signed as i ω is: motoring it is positive (it then stands roughly for the iron loss), braking negative, the winding returning (k_e − k_t) |i| ω more than the shaft gives, which no real motor does; over a cycle the row is (k_e / k_t − 1) times the shaft's net work (the single axis with k_e 15 % above k_t: 11.34 J of a 90.50 J supply, the budget closing to 2e-9). It does not warm the winding model (the rated rise of the catalogue holds the real losses already). A stepper keeps one constant for both and an induction motor has none: the key is read for the servo only. Test: `drive::tests::a_back_emf_constant_apart_from_the_torque_constant_costs_voltage_and_books_the_difference` (k_e 0.5, k_t 0.45, R 4 Ω: 2.25 N m at 340 rad/s on 190 V where equal constants give 4.1625 N m; 100 rad/s at 2 A takes 116 W = 16 W copper + 90 W shaft + 10 W loss).
+**A back-EMF constant of its own.** `drive.back_emf_constant_v_s_rad` (optional; absent or 0: equal to the torque constant, the shipped configs' behaviour) is the maker's printed voltage constant in the one winding's scale (√3 times the line-to-line RMS constant, as `catalog` converts it). The servo winding then has k_e ≠ k_t: the winding equation, the back-EMF feedforward of the current loop, the voltage limits (`voltage_limited_current`, field weakening's `d_current_for` and `field_weakened_torque`) and the DC link's power u · i use k_e, the torque stays k_t i. The electrical power is then the copper loss plus the shaft power plus (k_e − k_t) · i · ω (times the saturation and magnet factors both constants share). A real motor has one flux linkage: the two printed constants differ because they are measured apart, the voltage constant at no load with the magnets cold (about 20 °C), the torque constant at the rated point with the magnets warm (their flux falls by about 0.1 % per kelvin) and with the iron loss and saturation of the load taken off the shaft. (k_e − k_t) · i · ω is therefore not a loss the motor has but the model's bookkeeping of using both constants at once: the voltage side (conservative for the voltage limits) and the torque side each as printed. The drive books it as `Drive::emf_loss` (the winding's step energies less copper, shaft and stored energy, exact) and the energy budget shows it as the row `emf.<motor>` next to the copper loss, where a constant is set apart from k_t or the iron loss drags the shaft (that drag's power is booked in the same row); the constants' share is signed as i ω is: motoring it is positive (it then stands roughly for the iron loss), braking negative, the winding returning (k_e − k_t) |i| ω more than the shaft gives, which no real motor does; over a cycle that share is (k_e / k_t − 1) times the shaft's net work (`sim-cli analyze single-axis --set drive.back_emf_constant_v_s_rad=0.5175 --set effects.iron_loss=false`, k_e 15 % above k_t: 11.34 J of a 90.50 J supply, the budget closing to 2e-9 of it). It does not warm the winding model (the rated rise of the catalogue holds the real losses already). A stepper keeps one constant for both and an induction motor has none: the key is read for the servo only. Test: `drive::tests::a_back_emf_constant_apart_from_the_torque_constant_costs_voltage_and_books_the_difference` (k_e 0.5, k_t 0.45, R 4 Ω: 2.25 N m at 340 rad/s on 190 V where equal constants give 4.1625 N m; 100 rad/s at 2 A takes 116 W = 16 W copper + 90 W shaft + 10 W loss).
 
 ### Winding heating
 
@@ -343,13 +391,13 @@ The back-EMF constant falls with the torque constant: e = k_e · ω · (1 − s 
 ```text
 R(ϑ)     = R · (1 + 0.0039 · ϑ)                          copper
 I_rated  = motor.rated_current_a
-P_rated  = R(ϑ_rated) · I_rated²
-dϑ/dt    = ( ϑ_rated · P_cu / P_rated − ϑ ) / τ_th            P_cu = E_cu / dt, the mean R(ϑ) · i² of the step
+P_rated  = R(ϑ_rated) · I_rated²                              with effects.iron_loss: R(ϑ_rated) · I_0², I_0 = motor.stall_current_a
+dϑ/dt    = ( ϑ_rated · (P_cu + P_Fe) / P_rated − ϑ ) / τ_th     P_cu = E_cu / dt, the mean R(ϑ) · i² of the step
 ```
 
-At the rated current the winding settles at `rated_temperature_rise_k`. The warmer resistance is used in the winding equation above. A disabled drive has no current, so its winding cools by the same equation with P_cu = 0: ϑ falls by the factor e every τ_th (`a_disabled_winding_cools_by_the_exponential`). Stepped once per base step (explicit Euler; with dt / τ_th of 3.5e-8 its error is far below anything that shows). The thermal time constant is half an hour, so a simulated cycle hardly warms the winding; the analysis therefore reports the rise the winding would *settle* at (see [analysis quantities](#analysis-quantities)).
+P_Fe is the iron loss's heat ([iron loss](#motor-model-additions-of-14-november-2026), 0 without it). At the rated current the winding settles at `rated_temperature_rise_k`; with the iron loss at the stall current at standstill and at the rated current at the rated speed. The warmer resistance is used in the winding equation above. A disabled drive has no current, so its winding cools by the same equation with P_cu = 0: ϑ falls by the factor e every τ_th (`a_disabled_winding_cools_by_the_exponential`). Stepped once per base step (explicit Euler; with dt / τ_th of 3.5e-8 its error is far below anything that shows). The thermal time constant is half an hour, so a simulated cycle hardly warms the winding; the analysis therefore reports the rise the winding would *settle* at (see [analysis quantities](#analysis-quantities)).
 
-Assumptions: only copper loss heats; the surroundings are at a fixed temperature; no housing, no second thermal mass (but see the three nodes below); the torque constant does not change with temperature.
+Assumptions: copper loss and, with `effects.iron_loss`, the iron loss heat; the surroundings are at a fixed temperature; no housing, no second thermal mass (but see the three nodes below); the torque constant does not change with temperature (but see the magnet temperature below).
 
 ### Motor thermal nodes
 
@@ -383,7 +431,25 @@ I_i     += (K_pi / T_ni) · e_i · dt                only while u is not clamped
 
 The d axis comes first. Its steady voltage is u_d = R · i_d − p · ω · L · i, the reactance of the q current with p the pole pairs (`motor.pole_pairs`; no reactance where the config has none) and, with `effects.field_weakening`, the d current i_d of the winding's own model (below). Without field weakening i_d = 0 and the winding meets (R i + k_E ω)² + (p ω L i)² ≤ U_max² at most (the torque-speed chart's voltage limit, `DriveParams::voltage_limited_current`; the kt = kE = 0.45, R = 4 Ω, L = 10 mH, 4 pole pairs, 190 V test winding has 3.474 N m at 300 rad/s, 2.709 at 330 and 1.956 at 360 where the reactance-free R i + k_E ω ≤ U gave the current limit's 4.275 at 300), and braking at the peak torque is held to the current that circle allows (beyond it the q voltage cannot oppose the back-EMF and the current runs away). Above the speed where k_E ω alone exceeds U the circle (k_E ω − R i)² + (p ω L i)² ≤ U² leaves an interval of braking currents; its smaller end is the current the inverter's diodes force (`forced_braking_current`), which the drive, with `effects.torque_limit`, does not command below; where the circle leaves none, the nearest current R k_E ω / (R² + (p ω L)²) (test `braking_above_the_back_emf_equal_to_the_voltage_solves_the_voltage_circle`: 3.9743 to 12.7267 A at 450 rad/s, the current loop settling on the smaller). With field weakening the d current follows its setpoint with the voltage that moves it, held within the circle first (d axis first), and the q current within the phase current's circle, i_q² + i_d² ≤ min(motor, drive maximum current)². `motor.<id>.voltage` is, for every motor kind, the amplitude of the phase voltage's space vector: the induction motor's and the stepper's vectors are phase amplitudes, the servo's (u, u_d), in the winding's units of three times the RMS phase voltage, is multiplied by sqrt(2) / 3 (a DC link U gives sqrt(3/2) · U at most, which is U / sqrt(3) at the phase).
 
-U_max is sqrt(3/2) times `drive.bus_voltage_v`, or sqrt(3/2) times the DC link voltage of the moment with `effects.dc_link`, or unlimited with `effects.voltage_limit` off. The factor: the one winding carries the RMS phase current I, and u · i is the power of all three phases, 3 · U_phase · I, so u is three times the RMS phase voltage. A DC link U gives a phase amplitude of U / sqrt(3), which is U / sqrt(6) RMS, and 3 / sqrt(6) = sqrt(3/2). `drive.bus_voltage_v` is the DC link voltage itself, and the DC link's energy bookkeeping below works with it unscaled. With K_pi = L / T and T_ni = L / R the current follows its setpoint with the time constant T (0.25 ms in the default configs).
+U_max is sqrt(3/2) times `drive.bus_voltage_v`, or sqrt(3/2) times the DC link voltage of the moment with `effects.dc_link`, or unlimited with `effects.voltage_limit` off; with `drive.overmodulation` both times the six-step gain below. The factor: the one winding carries the RMS phase current I, and u · i is the power of all three phases, 3 · U_phase · I, so u is three times the RMS phase voltage. A DC link U gives a phase amplitude of U / sqrt(3), which is U / sqrt(6) RMS, and 3 / sqrt(6) = sqrt(3/2). `drive.bus_voltage_v` is the DC link voltage itself, and the DC link's energy bookkeeping below works with it unscaled. With K_pi = L / T and T_ni = L / R the current follows its setpoint with the time constant T (0.25 ms in the default configs).
+
+**Overmodulation** (`drive.overmodulation`, a drive key, off in the shipped configs and where absent). The inverter runs into six-step (square-wave) operation, and the model raises the voltage limit to the square wave's fundamental, without its harmonics:
+
+```text
+U_max = g · sqrt(3/2) · U_dc       g = 2 sqrt(3) / π = 1.10266   three-phase bridge (servo, induction): six-step's 2 U / π over U / sqrt(3)
+                                   g = 4 / π                     a stepper's H-bridges: the square wave ±U over U
+```
+
+It acts wherever the voltage limit does: the current loop, the field weakening's d current, the voltage-limit curve of the torque-speed chart. The linear fade of the [torque-speed curve](#torque-speed-curve) holds at the sinusoidal limit, U_max / g; at the raised voltage its two speeds move as at any other voltage. Test: `overmodulation_raises_the_voltage_limit_to_the_six_step_fundamental` (440 rad/s, e = 198 V, R = 4 Ω on 190 V of winding voltage: (190 · 1.10266 − 198) / 4 = 2.87625 A, 1.29431 N m, where the sinusoidal limit leaves none).
+
+**Forced braking current.** Without field weakening and with `effects.torque_limit`, braking above the speed at which k_E ω alone exceeds U_max, the drive does not command less than the current the inverter's diodes force (`forced_braking_current`):
+
+```text
+i_forced = (R e − sqrt(a U² − x² e²)) / a,     e = k_E |ω|, x = p |ω| L, a = R² + x²     0 while e ≤ U
+i_forced = R e / a                              where a U² < x² e² (the circle leaves no current)
+```
+
+at most the motor's maximum current; a setpoint that brakes less, or motors, is set to −i_forced in the direction of the speed.
 
 ### Velocity loop
 
@@ -434,7 +500,7 @@ Tests: `a_step_at_twice_the_rated_current_clamps_after_the_hand_calculated_time`
 
 w_v and w_τ are the feedforward factors (0 with the switch off). The notch is a biquad with centre `notch_frequency_hz` and Q = frequency / bandwidth.
 
-**Margins.** `Drive::torque_injection` is a test torque d added to τ_notch before the limit; a drive's own measurement function works the same way. With the machine holding its start pose, a sine d on one motor gives the loop's answer u = τ_notch and the torque that acts e = u + d, both correlated with sine and cosine at the velocity cycle over whole periods (at least 0.1 s to settle, 0.1 s to measure). Then L = −U / E is the open-loop response at that motor, with everything in it: velocity filter, PI, torque filter, delays, current loop, the elastic mechanics (the other motors' loops closed) and the position loop around it; and |S| = |E| / |D| = 1 / |1 + L|. `analysis::loop_margins` follows the phase of L along the frequency axis without jumps and shifts it by whole turns so that it lies between −360° and 0° at the first gain crossover (without a crossover: between −270° and 90° at the lowest point). It reads off, interpolated in log |L| and phase between points, the phase margin 180° + ∠L at each gain crossover (the smallest counts; negative: unstable) and the peak of |S|. Stability is a Nyquist count of the crossings of the negative real axis (the phase through −180° or an odd multiple) beyond −1, |L| > 1: a falling one is an encirclement of −1, a later rising one undoes the last falling one not yet undone. The count starts at a phase of 0 at the gain of the lowest point, as the small circle of the Nyquist contour around s = 0 turns the phase by −90° per integrator, so a loop whose integrators lag past −180° below the measured range counts that crossing too. The loop is stable when no falling crossing is left. The gain margin is −20 log |L| at the worst falling crossing not undone: those with |L| < 1 (in practice above the crossover) give a positive margin, one left with |L| > 1 a negative one (L encircles −1, unstable). A falling crossing beyond −1 that a rising one undoes (the phase turned past −180° and back below the crossover) is the conditionally stable kind: a gain that falls would be the danger there, and the margin for that is not given. A point at which the torque limit was hit, or at which the loop moved on its own (what of e is neither the injected sine nor a constant is larger in RMS than the injection), is no measurement of L: it is NaN, the margins are not valid and NaN (`LoopMargins::valid`, `stable`); `sim-cli margins` says `FAIL` for an invalid or unstable loop. Tests: `margins_are_signed_and_say_an_unstable_loop_is_unstable` (L = ωc e^(−jωτ) / (jω): 100 Hz, 0.5 ms: 72°, 13.979 dB; 200 Hz, 0.5 ms: 54°, 7.959 dB; 300 Hz, 1 ms: −18°, −1.584 dB; 400 Hz, 1 ms: −54°, −4.082 dB), `a_conditionally_stable_loop_is_stable` (L = K (1 + s/a)² / (s (1 + s/b)² (1 + s/c)), a, b, c = 2π · 300, 30, 3000 Hz: stable at K = 3e5, 6.1e5, 1.2e6 with 30.7°, 41.6°, 42.4°), `a_lead_with_positive_phase_at_the_first_point_keeps_its_phase_margin` (a type-0 lead loop: 24.0° at 1516 Hz, not −336°), analysis; `an_unstable_velocity_loop_is_reported_unstable` (single axis at 0.3 N m s/rad), axis. `velocity_loop_margins` does this for every motor at 60 points from 10 Hz to a quarter of the velocity loop's rate (2 kHz), with a tenth of each motor's own rated torque, for the config and for each value of `[bounds]` at its low and at its high bound (`sim-cli margins MACHINE [--bands]`). The velocity gains of all three configs were chosen with it (see the [user guide](user-guide.md#tune-gains-and-use-input-shaping)). The measurement runs with `effects.gearbox_efficiency` off: at standstill the efficiency's fade with the transmitted power (η^tanh(P / 0.5 W)) acts as a large damper on the small test torque and would hide the loop. Without a gain crossover in the measured band the phase margin is NaN (not measurable), the gain margin infinite. Friction near standstill damps the loop at this amplitude (the motor's Coulomb friction is smoothed over 0.5 rad/s), so the margins are lower with friction off, as in a cruise.
+**Margins.** `Drive::torque_injection` is a test torque d added to τ_notch before the limit; a drive's own measurement function works the same way. With the machine holding its start pose, a sine d on one motor gives the loop's answer u = τ_notch and the torque that acts e = u + d, both correlated with sine and cosine at the velocity cycle over whole periods (at least 0.1 s to settle, 0.1 s to measure). Then L = −U / E is the open-loop response at that motor, with everything in it: velocity filter, PI, torque filter, delays, current loop, the elastic mechanics (the other motors' loops closed) and the position loop around it; and |S| = |E| / |D| = 1 / |1 + L|. `analysis::loop_margins` follows the phase of L along the frequency axis without jumps and shifts it by whole turns so that it lies between −360° and 0° at the first gain crossover (without a crossover: between −270° and 90° at the lowest point). It reads off, interpolated in log |L| and phase between points, the phase margin 180° + ∠L at each gain crossover (the smallest counts; negative: unstable) and the peak of |S|. Stability is a Nyquist count of the crossings of the negative real axis (the phase through −180° or an odd multiple) beyond −1, |L| > 1: a falling one is an encirclement of −1, a later rising one undoes the last falling one not yet undone. The count starts at a phase of 0 at the gain of the lowest point, as the small circle of the Nyquist contour around s = 0 turns the phase by −90° per integrator, so a loop whose integrators lag past −180° below the measured range counts that crossing too. The loop is stable when no falling crossing is left. The gain margin is −20 log |L| at the worst falling crossing not undone: those with |L| < 1 (in practice above the crossover) give a positive margin, one left with |L| > 1 a negative one (L encircles −1, unstable). A falling crossing beyond −1 that a rising one undoes (the phase turned past −180° and back below the crossover) is the conditionally stable kind: a gain that falls would be the danger there, and the margin for that is not given. A point at which the torque limit was hit, or at which the loop moved on its own (what of e is neither the injected sine nor a constant is larger in RMS than the injection), is no measurement of L: it is NaN, the margins are not valid and NaN (`LoopMargins::valid`, `stable`); `sim-cli margins` says `FAIL` for an invalid or unstable loop. Tests: `margins_are_signed_and_say_an_unstable_loop_is_unstable` (L = ωc e^(−jωτ) / (jω): 100 Hz, 0.5 ms: 72°, 13.979 dB; 200 Hz, 0.5 ms: 54°, 7.959 dB; 300 Hz, 1 ms: −18°, −1.584 dB; 400 Hz, 1 ms: −54°, −4.082 dB), `a_conditionally_stable_loop_is_stable` (L = K (1 + s/a)² / (s (1 + s/b)² (1 + s/c)), a, b, c = 2π · 300, 30, 3000 Hz: stable at K = 3e5, 6.1e5, 1.2e6 with 30.7°, 41.6°, 42.4°), `a_lead_with_positive_phase_at_the_first_point_keeps_its_phase_margin` (a type-0 lead loop: 24.0° at 1516 Hz, not −336°), analysis; `an_unstable_velocity_loop_is_reported_unstable` (single axis at 0.3 N m s/rad), axis. `velocity_loop_margins` does this for every motor at 60 points from 10 Hz to a quarter of the velocity loop's rate (2 kHz), and where |L| < 1 at 10 Hz (the gain crossover below the band: a soft-geared loop of a few hertz) on down at the same spacing until |L| > 1, to 1 Hz, plus the machine's resonances at the start pose (`Machine::modes`) inside that band, plus, in up to 8 rounds, the geometric middle of each two neighbours whose response turns by more than 30° or changes by more than 3 dB and that lie more than 0.1 % apart (`refinement`), each point on a simulation of its own started from one settled snapshot, with a tenth of each motor's own rated torque, for the config and for each value of `[bounds]` at its low and at its high bound (`sim-cli margins MACHINE [--bands]`). The velocity gains of all three configs were chosen with it (see the [user guide](user-guide.md#tune-gains-and-use-input-shaping)). The measurement runs with `effects.gearbox_efficiency` off: at standstill the efficiency's fade with the transmitted power (η^tanh(P / 0.5 W)) acts as a large damper on the small test torque and would hide the loop. Without a gain crossover in the measured band the phase margin is NaN (not measurable), the gain margin infinite. Friction near standstill damps the loop at this amplitude (the motor's Coulomb friction is smoothed over 0.5 rad/s), so the margins are lower with friction off, as in a cruise.
 
 ### Position loop
 
@@ -488,10 +554,10 @@ rest in the torque breakdown, and its power given to the process is `power.proce
 ```text
 fade     = clamp( (ω₀ − |ω|) / (ω₀ − ω_rated), 0, 1 )
 motoring : |τ| ≤ peak_torque · fade        in the direction of rotation
-braking  : |τ| ≤ peak_torque
+braking  : |τ| ≤ min(peak_torque, τ(i_brake))   i_brake the braking current the voltage circle allows (`voltage_limited_current`)
 ```
 
-ω₀ `no_load_speed_rad_s`. Full torque up to the rated speed, falling linearly to zero at the no-load speed. With `effects.torque_limit` off the torque setpoint is not limited; the analysis still judges against the curve. What it judges is the velocity loop's output before this limit (`torque_demand`), so a drive that sits on the limit shows as a utilisation above 1. This curve is a separate, configured limit; the voltage limit of the winding acts as well. It holds at the config's voltage (the sinusoidal limit of `drive.bus_voltage_v`); at another one (a sagging DC link, `drive.overmodulation`) each of ω_rated and ω₀ moves by the ratio of the speeds at which the voltage circle (R i + k_E ω)² + (p ω L i)² = U² still leaves that point's current (`voltage_limited_current` at the printed voltage) at the new and the printed voltage, solved for ω in closed form, so R, L and k_E enter; without R the speeds scale with the voltage (test `the_linear_fade_follows_r_and_ke_at_another_voltage`: 314 and 420 rad/s at 190 V move to 235.5 and 335.6 rad/s at 152 V, 1.3504 N m at 300 rad/s). With field weakening the curve follows from the d-q model instead (below).
+ω₀ `no_load_speed_rad_s`. Full torque up to the rated speed, falling linearly to zero at the no-load speed. Braking is held to the peak torque only, without the circle, where the config has no `motor.pole_pairs` or the voltage is unlimited. With `effects.torque_limit` off the torque setpoint is not limited; the analysis still judges against the curve. What it judges is the velocity loop's output before this limit (`torque_demand`), so a drive that sits on the limit shows as a utilisation above 1. This curve is a separate, configured limit; the voltage limit of the winding acts as well. It holds at the config's voltage (the sinusoidal limit of `drive.bus_voltage_v`); at another one (a sagging DC link, `drive.overmodulation`) each of ω_rated and ω₀ moves by the ratio of the speeds at which the voltage circle (R i + k_E ω)² + (p ω L i)² = U² still leaves that point's current (`voltage_limited_current` at the printed voltage) at the new and the printed voltage, solved for ω in closed form, so R, L and k_E enter; without R the speeds scale with the voltage (test `the_linear_fade_follows_r_and_ke_at_another_voltage`: 314 and 420 rad/s at 190 V move to 235.5 and 335.6 rad/s at 152 V, 1.3504 N m at 300 rad/s). With field weakening the curve follows from the d-q model instead (below).
 
 ### Field weakening
 
@@ -537,9 +603,14 @@ E      = ½ · C · U² − P · dt                            the capacitors gi
 fed    = clamp( E − ½ · C · U_bus², 0, P_line · dt )    with effects.regenerative_supply: the line module feeds back
 burned = clamp( E − fed − ½ · C · U_th², 0, P_peak · dt )   the chopper switches the resistor in above the threshold
 U      = sqrt( 2 · (E − fed − burned) / C )             but never below the bus voltage: the rectifier feeds from the line
-drawn  = ½ · C · U_bus² − (E − fed − burned)            what the rectifier draws from the line, where that is positive
+drawn  = ½ · C · U_bus² − (E − fed − burned)            what the rectifier puts into the link, where that is positive
+line   = drawn / η_line                                 what it takes from the line; η_line = ratings.line_module_efficiency
+mains  = η_line · fed                                   what a regenerative supply gives the mains
+loss   = (1 / η_line − 1) · drawn + (1 − η_line) · fed  the line module's (or the S210's rectifier's) loss, budget row line_module
 trip   : U > dc_link_overvoltage_v
 ```
+
+`ratings.line_module_efficiency` (at most 1) is read with `effects.dc_link`; the shipped configs have 0.98. Without the DC link simulated the supply gives what the motors draw, without loss.
 
 Stepping the energy instead of the voltage is exact for any step size. P is the step's electrical energy E_el over dt (see [winding](#winding)). When a drive trips, all drives go off as with a Disable command, and stay off until Enable. Without the effect the DC link voltage stays at `drive.bus_voltage_v`.
 
@@ -556,11 +627,18 @@ The same losses drag a servo's shaft. The printed rated point holds them too: th
 
 **Magnet temperature.** `effects.magnet_temperature` (off): k_t and k_e scale with 1 + α (ϑ − ϑ_rated), α = `motor.magnet_temperature_coefficient_1_k` (−0.0012/K), ϑ the winding's rise (the housing's with `motor_thermal_nodes`). The catalogue's k_t holds at the rated rise; a cold motor has 12 % more. With `motor_thermal_nodes` the magnets sit at the housing's rise, which at the rated state is (1 − s) times the rated rise, and the flux is compared with that: 1 at the rated state (it compared the housing's rise with the winding's rated one before, 1.03 at s = 0.25). Test: `cold_magnets_give_the_hand_calculated_torque_per_amp`.
 
-**S1 check.** `motor-s1` (servo motors only) judges the RMS torque at the mean speed against the S1 curve: the maker's graph where the config has it (`motor.s1_curve_*`; an S210 motor named in `[parts]` brings the one `catalog/siemens/s1_curves_s210.csv` has for its supply's voltage, 88 of the 96), linear between its points and its last torque beyond its end, else the line from k_t I_0 at standstill to the rated torque at the rated speed; `motor-speed` the peak speed against `drive.max_speed_rad_s`. Test: `the_s1_check_judges_the_rms_torque_at_the_mean_speed_by_hand` (1FK2205-4AF: 5.4832 N m at 157.08 rad/s on the graph's curve, 5.3 N m on the line), `the_printed_s1_curve_is_read_linearly`.
+**S1 check.** `motor-s1` (servo motors only) judges the RMS torque at the mean speed against the S1 curve:
+
+```text
+printed curve (ω_k, T_k):  T_S1(ω) = T_k−1 + (T_k − T_k−1) (|ω| − ω_k−1) / (ω_k − ω_k−1)    T_1 below ω_1, the last T beyond the last ω
+line:                      T_S1(ω) = max(0, k_t I_0 + (M_N − k_t I_0) |ω| / ω_N)                   continued beyond the rated speed
+```
+
+The printed curve is `motor.s1_curve_speed_rad_s` and `motor.s1_curve_torque_nm`: the same number of points, at least two, speeds rising from 0 or above, torques not negative, else the config is refused; both absent or empty: the line (`drive::s1_curve_of`, `s1_interpolated`). An S210 motor named in `[parts]` brings the curve `catalog/siemens/s1_curves_s210.csv` has for it, digitised from Siemens' graph: 88 of the 96 motors, each at one supply (400 V where it has a rated point at 400 V, else 230 V), and only when the motor is named at that supply; at another supply, or for a motor without a curve, the keys are taken out and the line holds (`catalog::set_s1_curve`). The line needs `motor.stall_current_a` (I_0, read whether or not `effects.iron_loss` is on); without it there is no `motor-s1` verdict, and the chart draws the rated torque flat. `motor-speed` judges the peak speed against `drive.max_speed_rad_s`. Test: `the_s1_check_judges_the_rms_torque_at_the_mean_speed_by_hand` (1FK2205-4AF: 5.4832 N m at 157.08 rad/s on the graph's curve, 5.3 N m on the line), `the_printed_s1_curve_is_read_linearly`.
 
 **Braking resistor heating.** `effects.braking_resistor_heating` (with `dc_link`): ϑ' = (ϑ_rated P / P_continuous − ϑ) / τ_R, stepped exactly. Test: `the_braking_resistor_warms_by_the_hand_calculated_rise_in_a_pulse` (100 kW for 1 s on the 1.5 kW resistor, τ_R 60 s, 200 K: 220.38 K, 72.15 K at the end of its 68 s cycle).
 
-**Line module loss when drawing.** With the DC link simulated, the line module (an S210's rectifier alike) draws P / η from the line for P into the DC link; the difference is its loss (`Drive::line_loss`, budget row `line_module`). Test: `a_regenerative_supply_feeds_back_into_the_mains_up_to_its_power` (49 W motoring: 50 W drawn, 0.1 J lost in 0.1 s).
+**Line module loss when drawing.** With the DC link simulated, the line module (an S210's rectifier alike, with or without `effects.regenerative_supply`) draws P / η from the line for P into the DC link; the difference is its loss (`Drive::line_loss`, budget row `line_module`; at η = 0.98 it is 1 / 0.98 − 1 = 2.04 % of what the rectifier puts into the link). Test: `a_regenerative_supply_feeds_back_into_the_mains_up_to_its_power` (49 W motoring: 50 W drawn, 0.1 J lost in 0.1 s; η = 1 draws the 4.9 J the motor takes, as before 14 November 2026).
 
 **Enable without DC link.** A drive enabled while holding a load draws its winding's L i² / 2 from the supply in its first step (`Drive::enable_energy`); with the DC link simulated it comes out of the link, as before.
 
@@ -570,7 +648,7 @@ Signals per motor: `d_current`, `housing_temperature`, `drive_overload_image`, `
 
 **Disabled.** A disabled drive's DC link discharges through its bleeder and the drive's own consumption, C dU/dt = −U / R_b: every step U ← U · exp(−dt / τ) with τ = `ratings.dc_link_discharge_time_constant_s`, exact for any step, then the step above with P = 0, so the rectifier catches it at the bus level and a regenerative supply takes what is above at once (`a_disabled_drives_dc_link_discharges_by_the_rc_exponential`: 220 V with τ = 0.2 s are 171.336 V after 0.05 s and the bus level after 69.9 ms).
 
-Assumptions: the rectifier is an ideal source at the bus voltage; no ripple; the chopper is an ideal power limiter up to `braking_resistor_peak_w`, not a switched resistor; the resistor itself does not heat (its continuous rating is judged against the cycle's mean power); the line module is an ideal power limiter with one efficiency at every power and feeds in without loss (its efficiency counts only on the way back); the bleeder draws only while the drive is disabled (enabled, its power, U² / R_b ≈ 0.1 W at 155 V, is left out).
+Assumptions: the rectifier holds the bus voltage as a source with one efficiency at every power; no ripple; the chopper is an ideal power limiter up to `braking_resistor_peak_w`, not a switched resistor; the resistor heats only with `effects.braking_resistor_heating` (above), else its continuous rating is judged against the cycle's mean power; the line module is an ideal power limiter with one efficiency at every power, both ways; the bleeder draws only while the drive is disabled (enabled, its power, U² / R_b ≈ 0.1 W at 155 V, is left out).
 
 **Shared DC link.** `effects.shared_dc_link` (with `effects.dc_link`): the drives of a machine have one DC link, as with one Line Module on a SINAMICS S120. After the current loops of all drives, one step of the same energy balance runs with the sum of their powers:
 
@@ -700,28 +778,35 @@ Belt mass: half of the free belt is lumped on each motor pulley, J_pulley += ½ 
 
 ### States of the elastic model
 
-21 states: positions x, z, a, b, φ_A, φ_B, q, u; their eight rates; the two LuGre states of the guides; the slack-time counter; the two brake states.
+23 states: positions x, z, a, b, φ_A, φ_B, q, u, w; their nine rates; the two LuGre states of the guides; the slack-time counter; the two brake states. With `effects.belt_tooth_jump` six more per motor pulley.
 
 - x is the carriage relative to the frame. q is the frame deflection in X.
 - u is the Z axis's centre of mass in X relative to the carriage.
+- w is the beam's deflection under the carriage ([beam's vertical mode](#beam-sag)).
+
+q, u and w stay 0 with their effects off.
 
 ### Equations of motion
 
-Masses: m_z = Z axis + payload (if attached); m_c = carriage + idler mass on X + moving chain mass m(x).
+Masses: m_z = Z axis + payload (if attached); m_car the carriage; m_c = m_car + moving chain mass m(x); m_idler,x and m_idler,z the [idlers](#idlers).
 
-Carriage, Z axis, frame and leaning Z axis, Lagrange's equations solved together over (x, z, q, u):
+Carriage, Z axis, frame, leaning Z axis and beam mode, Lagrange's equations solved together over (x, z, q, u, w), each coordinate only with its effect on:
 
 ```text
-T = ½ m_c w² + ½ m_z (w + u')² + ½ (m_z + m_idler,z) z'² + ½ m_f q'²                 w = x' + q'
-  + ½ m_xx x'² + m_xz x' z' + ρ (4s + 2s_z) q' x' + ½ ρ L_total q'²                 the belt's runs (above)
-M · (x'', z'', q'', u'') = (F_x, F_z, F_q, F_u)                                       M the mass matrix of T
-F_x = T₃ − T₁ − F_f,x − F_idler,x − F_chain drag + F_stop,x + F_p,x + m′ w (½ w − x') + 8ρ x' z'
-F_z = 2T₂ − T₁ − T₃ − F_f,z + f_z,flex − F_idler,z + F_p,z + F_stop,z − m_z g − 8ρ x'²
-F_q = −k_f q − c_f q' + F_p,x − m′ x' w
-F_u = tip · F_p,x − k(z) u − c_u u'
+T = ½ m_c v² + ½ m_z (v + u')² + ½ m_idler,x x'² + ½ (m_z + m_idler,z) z'² + ½ m_f q'²      v = x' + q'
+  + ½ m_xx x'² + m_xz x' z' + ρ (4s + 2s_z) q' x' + ½ ρ L_total q'²                        the belt's runs (above)
+  + ½ (m_car + m_z + M_b(x)) w'² − m_z z' w'                                                 the beam mode
+M · (x'', z'', q'', u'', w'') = (F_x, F_z, F_q, F_u, F_w)                                    M the mass matrix of T
+F_x = T₃ − T₁ − F_f,x − F_idler,x − F_chain drag + F_stop,x + F_p,x + m′ v (½ v − x') + 8ρ x' z'
+      + ½ M_b′ w'² − ½ k_b′ w²
+F_z = 2T₂ − T₁ − T₃ − F_f,z − ½ u² (dk/dz + dc_g/dz) − ½ u² Σ T_i c_i′ − F_idler,z
+      + F_p,z (1 + a′ u²) + F_p,x tip′ u + F_stop,z − m_z g − 8ρ x'²
+F_q = −k_f q − c_f q' + F_p,x − m′ x' v
+F_u = tip · F_p,x + 2 a F_p,z u − Σ T_i c_i u − (k(z) + c_g(z)) u − c_u u'
+F_w = (m_car + m_z) g − F_p,z − k_b(x) w − c_b w' − M_b′ x' w'
 ```
 
-The process force acts at the tool tip, at x + q + tip · u, so on each of them; the lean's spring acts between carriage and Z axis, on u alone. Without `effects.tool_flex` m_z rides on w and u stays 0; without `effects.frame_compliance` q stays 0.
+The process force acts at the tool tip, at x + q + tip · u, so on each of them; the lean's spring acts between carriage and Z axis, on u alone. The idlers spin with the belt's speed past the carriage, in which the frame's sway cancels, so they ride on x' alone. Without `effects.tool_flex` (and `effects.z_axis_bending`) m_z rides on v and u stays 0; without `effects.frame_compliance` q stays 0. c_g is the lean's [pendulum stiffness](#leaning-z-axis), c_i and a the belt runs' geometric stiffness and the tip's rise, k_b, M_b and c_b the [beam mode](#beam-sag).
 
 Pulleys and motor shafts, for k = A, B:
 
@@ -746,7 +831,15 @@ tip    = k · ( 1/k_lat + h · h_tool / k_tilt )           tool-tip travel per u
 f_z,flex = −½ · u² · dk/dz,     dk/dz = 2 · k² · h / k_tilt
 ```
 
-The axis is softer the further it hangs below the carriage. The spring gets stiffer as the Z axis rises, which pushes back on Z (the last line; it keeps the energy balance exact). **The X position the simulator reports is the tool tip over the floor: x + q + tip · u**, and its speed likewise. The workpiece stands on the floor, not on the frame, so the frame's sway is part of path error, tracking error and the settling verdict. q and tip · u are also signals of their own. The process force acts at the tool tip: the share `tip` of it bends the Z axis, the rest pushes the carriage.
+The axis is softer the further it hangs below the carriage. The spring gets stiffer as the Z axis rises, which pushes back on Z (the last line; it keeps the energy balance exact).
+
+The Z axis also hangs like a pendulum: held out by the spring's force F = k u, its centre of mass rises by F² r(h), r(d) = ½ ∫₀^d θ(s)² ds the shortening of the leaning bar (θ(s)/F = h/k_tilt + (h s' − s'²/2)/E I with s' = min(s, h), integrated by the 3-point Gauss rule, exact for it). Its weight adds the stiffness
+
+```text
+c_g(z) = 2 k² m_z g r(h)          (k² m_z g h³ / k_tilt² for a guide that only tilts)
+```
+
+on the lean, beside k, and −½ u² dc_g/dz on Z (`lean_weight_stiffness`). It is 0 without gravity. **The X position the simulator reports is the tool tip over the floor: x + q + tip · u**, and its speed likewise. The workpiece stands on the floor, not on the frame, so the frame's sway is part of path error, tracking error and the settling verdict. q and tip · u are also signals of their own. The process force acts at the tool tip: the share `tip` of it bends the Z axis, the rest pushes the carriage.
 
 A machine file's `machine.lean` node is the same for any body leaning along a horizontal axis, its lean w beside the axes with the body's mass coupling it to its axis, [[M, m e_a], [m e_a^T, m]] · [a; ẅ] = [F; tip · F_p,a − k w − c ẇ] ([machine files](machine-files.md#the-belts-wrap-and-a-leaning-axis)); the T-gantry's file gives this crate's numbers to 1e-9.
 
@@ -768,22 +861,22 @@ Assumptions: the Z axis is a rigid body on a compliant guide (with `z_axis_bendi
 
 ```text
 a = carriage_at_zero + x,  b = L − a
-sag(x) = (m_c + m_z) g · a² b² / (3 E I L)          (L³ / (48 E I) per newton in the middle)
+sag(x) = (m_car + m_z) g · a² b² / (3 E I L)          (L³ / (48 E I) per newton in the middle)
 z_tool = z − sag(x),   ż_tool = ż − sag'(x) ẋ
 ```
 
 At rest the Z axis stands sag(x) higher on its belt so that the tool is at its pose. With the default values: 107.87 N, L = 1.3 m, E I = 8.4e4 N m²: 58.8 µm in the middle, 9.8 µm at the ends of the stroke. This is quasi-static.
 
-With `effects.beam_vertical_mode` the beam's first vertical mode with the carriage on it is a coordinate w, the beam's deflection under the carriage (down), and the Z axis's z is relative to the carriage:
+With `effects.beam_vertical_mode` (elastic model; it takes the `[beam]` keys above even with `beam_sag` off) the beam's first vertical mode with the carriage on it is a coordinate w, the beam's deflection under the carriage (down), and the Z axis's z is relative to the carriage. Its keys: `beam.mass_kg_m` μ (3.5, an [estimate]) and `beam.damping_ratio` ζ (0.01). The carriage is kept 0.1 % of the span off the posts, where the stiffness would be infinite.
 
 ```text
 shape φ: the span's static deflection under a point load at the carriage, φ = 1 there
 k(x) = 1 / span_compliance = 3 E I L / (a² b²),   M(x) = μ ∫ φ² ds   (17 μ L / 35 in the middle)
-T = ½ (m_c + m_z + M(x)) w'² − m_z z' w' + …,   V = ½ k(x) w² − (m_c + m_z) g w,   damping c = 2 ζ √(k (m_c + m_z + M))
+T = ½ (m_car + m_z + M(x)) w'² − m_z z' w' + …,   V = ½ k(x) w² − (m_car + m_z) g w,   damping c = 2 ζ √(k (m_car + m_z + M))
 z_tool = z − w (+ the lean's rise)
 ```
 
-So the Z axis's acceleration drives the beam through −m_z, and the carriage's weight riding along the beam drives it through k(x) (a force on x of −½ k' w², and ½ M' w'² from the modal mass). At rest w is the quasi-static sag. By hand in the middle (k = 1.835e6 N/m, M = 2.21 kg, m_c + m_z = 11 kg): 59.3 Hz (the former estimate of about 100 Hz left out the carriage and the Z axis). The Lagrangian drops what the shape's change with x adds to the kinetic energy: a coupling ½ M′ w ẋ ẇ and ½ ∫ μ φₓ² w² ẋ², of the relative size w / L ≈ 5·10⁻⁵ and 10⁻⁹ of the kept terms at the 59 µm sag. The belt is not on w: its vertical runs (μ (4 s + 2 s_z) = 0.16 kg) would ride on it and its horizontal runs tilt with it (a third of μ (4 s + 2 s_x), 0.09 kg), 0.25 kg against 13.21 kg, which would lower the mode by 0.9 % (59.32 to 58.77 Hz), well inside the [estimate]s of the beam's mass and stiffness. The beam's own mass moves with the mode in the frame momentum (vertical momentum −(p₀ ẇ + p₀′ ẋ w), p₀ = μ ∫ φ, 5 μ L / 8 = 2.84 kg in the middle, beside the 11 kg it carries). ζ is the mode's damping ratio with the carriage and the Z axis on the beam. The damping is the loss row `power.beam`; the signal `beam.deflection` is w.
+So the Z axis's acceleration drives the beam through −m_z, and the carriage's weight riding along the beam drives it through k(x) (a force on x of −½ k' w², and ½ M' w'² from the modal mass). At rest w is the quasi-static sag. By hand in the middle (k = 1.835e6 N/m, M = 2.21 kg, m_car + m_z = 11 kg): 59.3 Hz (the former estimate of about 100 Hz left out the carriage and the Z axis). The Lagrangian drops what the shape's change with x adds to the kinetic energy: a coupling ½ M′ w ẋ ẇ and ½ ∫ μ φₓ² w² ẋ², of the relative size w / L ≈ 5·10⁻⁵ and 10⁻⁹ of the kept terms at the 59 µm sag. The belt is not on w: its vertical runs (μ (4 s + 2 s_z) = 0.16 kg) would ride on it and its horizontal runs tilt with it (a third of μ (4 s + 2 s_x), 0.09 kg), 0.25 kg against 13.21 kg, which would lower the mode by 0.9 % (59.32 to 58.77 Hz), well inside the [estimate]s of the beam's mass and stiffness. The beam's own mass moves with the mode in the frame momentum (vertical momentum −(p₀ ẇ + p₀′ ẋ w), p₀ = μ ∫ φ, 5 μ L / 8 = 2.84 kg in the middle, beside the 11 kg it carries). ζ is the mode's damping ratio with the carriage and the Z axis on the beam. The damping is the loss row `power.beam`; the signal `beam.deflection` is w.
 
 The belt's vertical runs hold the leaning Z axis back with their geometric stiffness. A run goes from a carriage idler, at the carriage where the guide tilts, to a point of the Z axis d below the carriage: the clamp (d = −(s + z)) or the Z-bottom idler (d = s + sz − z). Under the spring's force F = k u that point is out sideways by δ = F g(d) (g the guide's give, tilt and bending at that distance) and has risen along the Z axis by F² ρ(d) (ρ = ½ ∫ θ² of the leaning bar), so the run is longer by δ²/(2|d|) − sign(d) F² ρ(d), and K_uu gains Σ T_i c_i over the runs. A guide that only tilts turns the end about the idler and leaves the run as long as it was; what is left is the guide's sideways give and its product with the tilt, c = k² (1/(lateral² |d|) + 2 sign(d) h / (lateral · tilt)) per run without bending: about 5 N/m on the default gantry at z = 0.05 m, 3·10⁻⁵ of the lean's spring. (The belt's runs are taken on the Z axis's line; their offset e to either side of it would add the moment (T₁ − T₃) e of the tension difference, which the model leaves out.) The process force's vertical part works on the tip's rise a(z) u² (the leaning bar is shortened by θ² d / 2): it is in the lean's and the Z axis's equations, in the modes and in the process row of the budget, and `tool_state` has the rise in the tool's height.
 
@@ -851,11 +944,11 @@ Held, the shaft sits on a spring that reaches the brake torque at 1 mrad, with t
 `effects.belt_stretch = false`. Eight states: x, z, their rates, the two LuGre states, the two brake deflections. With belt force F_k = i · (ripple(τ_k) − τ_shaft − τ_brake,k) / r per motor (τ_brake,k the [holding brake](#holding-brakes) at the rotor speed i (v_x ± v_z) / r), reflected rotor mass m_r = i² J_rotor / r² and the gearbox loss factors λ_A, λ_B:
 
 ```text
-( m_X + (λ_A + λ_B) m_r ) · a_x + (λ_A − λ_B) m_r · a_z = λ_A F_A + λ_B F_B + mesh − F_f,x + extras_x
-(λ_A − λ_B) m_r · a_x + ( m_Z + (λ_A + λ_B) m_r ) · a_z = λ_A F_A − λ_B F_B + mesh − F_f,z − m_z g + extras_z
+( m_X + (λ_A + λ_B) m_r ) · a_x + ((λ_A − λ_B) m_r + m_xz) · a_z = λ_A F_A + λ_B F_B + mesh − F_f,x + 8ρ v_x v_z + extras_x
+((λ_A − λ_B) m_r + m_xz) · a_x + ( m_Z + (λ_A + λ_B) m_r ) · a_z = λ_A F_A − λ_B F_B + mesh − F_f,z − m_z g − 8ρ v_x² + extras_z
 ```
 
-m_X and m_Z include both pulleys (2 J_pulley / r²), the idlers and the chain. The gearbox loses torque only on what it transmits, which is the motor torque minus what accelerates the rotor itself; that depends on the acceleration being solved for, and the loss factors are iterated to their fixed point (`mech::settled_loss`; three passes left up to 1.5e-4 of the acceleration). With a loss-free gearbox this collapses to two independent axes:
+m_X includes both pulleys (2 J_pulley / r²), the idlers, the chain and the belt's runs m_xx; m_Z the pulleys and the idlers; extras_x holds the process force, the end stop, the idlers' and the chain's drag and the chain's −½ m′ v_x². The gearbox loses torque only on what it transmits, which is the motor torque minus what accelerates the rotor itself; that depends on the acceleration being solved for, and the loss factors are iterated to their fixed point (`mech::settled_loss`; three passes left up to 1.5e-4 of the acceleration). With a loss-free gearbox and a massless belt this collapses to two independent axes:
 
 ```text
 ( m_x + 2J/r² ) · a_x = F_x − F_f,x          ( m_z + 2J/r² ) · a_z = F_z − m_z g − F_f,z
@@ -865,25 +958,25 @@ The rigid model has no belt stretch, slack, damping, tooth stiffness, backlash, 
 
 ### Feedforward torque and static hold
 
-The torque feedforward and the motor-limit check use the loss-free rigid model:
+The torque feedforward and the motor-limit check use the loss-free rigid model, with the belt's runs and their speed terms at the tool's speed (`feedforward_torque_moving`; J = J_pulley + i² J_rotor):
 
 ```text
-f_x = ( m_x + 2J/r² + m_idler,x + m_chain(x) ) · a_x
-f_z = ( m_z + 2J/r² + m_idler,z ) · a_z + m_z g
+f_x = ( m_x + 2J/r² + m_idler,x + m_chain(x) + m_xx ) · a_x + m_xz a_z + ½ m′ v_x² − 8ρ v_x v_z
+f_z = ( m_z + 2J/r² + m_idler,z ) · a_z + m_xz a_x + m_z g + 8ρ v_x²
 τ_A = r/(2i) · (f_x + f_z)         τ_B = r/(2i) · (f_x − f_z)
 ```
 
-Friction is not in it. At rest each motor holds m_z g r / (2i), with opposite signs.
+Friction is not in it (the friction feedforward is `steady_friction`: guides at their load at rest, idlers, chain, the gearbox's loss on force and weight, the shaft's friction). At rest each motor holds m_z g r / (2i), with opposite signs.
 
 ### Signals
 
-Besides the signals every machine gets: `belt.1/2/3.tension`, `axis.x/z.belt_stretch` (tool position minus r/2 (a ± b)), `axis.x/z.friction`, `frame.deflection` (q), `axis.x.tool_deflection` (tip · u), `belt.slack_time`, `pulley.a/b.radial_load`, `axis.x/z.guide_load`, `gearbox.a/b.output_torque`. And those of the [effect views](#effect-views): torque parts, loss powers, energy parts, the friction split per guide and `belt.1/2/3.stretch`; the simulation adds `temperature.gearbox_a/b` and `temperature.guide_x/z`.
+Besides the signals every machine gets: `belt.1/2/3.tension`, `axis.x/z.belt_stretch` (tool position minus r/2 (a ± b)), `axis.x/z.friction`, `frame.deflection` (q), `axis.x.tool_deflection` (tip · u), `beam.deflection` (w), `belt.slack_time`, `belt.span_detuning` (with `effects.belt_span_vibration`), `pulley.a/b.radial_load`, `axis.x/z.guide_load`, `gearbox.a/b.output_torque`. And those of the [effect views](#effect-views): torque parts, loss powers, energy parts, the friction split per guide and `belt.1/2/3.stretch`; the simulation adds `temperature.gearbox_a/b` and `temperature.guide_x/z`.
 
 The gearbox output torque is the torque that turns the pulley, positive forwards. Elastic model: τ_gear,out, what the gear's spring and damper pass on, times the loss factor. Rigid model: λ_k · (F_drive,k − m_r · (a_x ± a_z)) · r from the solver's last pass, the motor's force less what its own rotor takes, times the loss factor.
 
 **Scene.** `Machine::scene_point` maps a tool pose to the place where the scene draws the tool, so that a front end can draw a path there: (span + x, −0.05, z − stroke_z − span − 0.042), the flange under the Z axis. The scene itself draws the flange at the carriage's place on the beam, so at rest the two coincide; in motion the tool tip is off the drawn flange by the frame's deflection and the lean of the Z axis.
 
-The belt wraps each motor pulley by half a turn, so the two sections that end there pull its shaft the same way: radial load A = T₁ + T₂, B = T₂ + T₃. The guide loads are those of the [friction model](#guide-friction-lugre): weight, side force and tilting moment from the commanded acceleration, without moments on single blocks.
+The belt wraps each motor pulley by half a turn, so the two sections that end there pull its shaft the same way: radial load A = T₁ + T₂, B = T₂ + T₃. The guide loads are those of the [friction model](#guide-friction-lugre): weight, side force and tilting moment from the commanded acceleration, without moments on single blocks. The X guide carries m_x g + |tilt|, the Z guide |m_z a_x| + |tilt|, tilt = 2 m_z a_x (z_com_drop − z) / guide_spacing. a_x is what the motor torques would give the loss-free rigid model (`commanded_ax`), over its mass matrix with the belt's runs, and with the Z axis's weight on the Z row: through the runs' coupling m_xz the torque that holds the Z axis up would otherwise count as X acceleration.
 
 ## Single axis
 
@@ -905,21 +998,21 @@ J_rotor · d²φ/dt²  = ripple(τ_motor, φ) − τ_gear,rotor − τ_shaft(dφ
 F_extra            = F_process (while dwelling) − drag − ½ · m′ · v²
 ```
 
-m is the carriage plus the payload if attached, plus the moving run of the [cable chain](#cable-chain) m_chain(x) with `effects.cable_chain`; drag and m′ are the chain's, with the Stribeck speed of `friction_x`. The chain's run has weight along an inclined axis like the carriage (lifting it from 0 to x takes mass_kg_m · (length_at_zero_m · x + x²/4) · g · sin(incline)), and does not load the guide. F_process is `process.force_x_n` with `effects.process_force`. τ_brake is the [holding brake](#holding-brakes) of the T-gantry, the same component (`HoldingBrake` in `mech.rs`, as `CableChain`), on the one motor shaft; in the rigid model (states x, v, the LuGre state and the brake deflection) it takes i · τ_brake / r off the drive force. The whole belt runs at carriage speed, so all of its mass sits on the pulley: J_pulley += ρ · L_total · r². The idler at the far end is free and has no inertia.
+m is the carriage plus the payload if attached, plus the moving run of the [cable chain](#cable-chain) m_chain(x) with `effects.cable_chain`; drag and m′ are the chain's, with the Stribeck speed of `friction_x`. The chain's run has weight along an inclined axis like the carriage (lifting it from 0 to x takes mass_kg_m · (length_at_zero_m · x + x²/4) · g · sin(incline)), and does not load the guide. F_process is `process.force_x_n` with `effects.process_force`. τ_brake is the [holding brake](#holding-brakes) of the T-gantry, the same component (`HoldingBrake` in `mech.rs`, as `CableChain`), on the one motor shaft; in the rigid model (states x, v, the LuGre state and the brake deflection) it takes i · τ_brake / r off the drive force. The whole belt runs at carriage speed, so all of its mass sits on the pulley: J_pulley += ρ · (L₁ + L₂ − 2 l_tooth) · r², the belt less the teeth in mesh. The idler at the far end is free and has no inertia.
 
-Rigid model, 3 states (x, v, LuGre state), with m_r = i² J_rotor / r²:
+Rigid model, 4 states (x, v, LuGre state, brake deflection), with m_r = i² J_rotor / r²:
 
 ```text
 a = ( λ · F_drive + F_mesh − F_f − m g sin(incline) + F_stop + F_extra ) / ( m + J_pulley/r² + λ · m_r )
 ```
 
-λ is the gearbox loss factor on the transmitted force, found in two passes.
+λ is the gearbox loss factor on the transmitted force, taken at its fixed point (`mech::settled_loss`).
 
 Signals: `belt.1/2.tension`, `axis.x.belt_stretch` (x − r · a), `axis.x.friction`, `belt.slack_time`, `pulley.m.radial_load` (T₁ + T₂), `axis.x.guide_load` (m · g · cos(incline), without the chain), `gearbox.m.output_torque` (elastic: τ_gear,out; rigid: λ · (F_drive − m_r · a) · r). And those of the [effect views](#effect-views), with `belt.1/2.stretch`; the simulation adds `temperature.gearbox_m` and `temperature.guide_x`.
 
 `Machine::scene_point` maps x to where the scene draws the carriage: (span + x, −0.03, 0.06).
 
-Not on the single axis: frame mode, leaning tool, idler inertia and friction, a resonance for the input shaper. In the rigid model, as in the elastic one, disabled drives leave it to the holding brake.
+Not on the single axis: frame mode, leaning tool, idler inertia and friction. Its one mode, the carriage on the belt, is described under the [T-gantry's modes](#beam-sag); none in the rigid model. In the rigid model, as in the elastic one, disabled drives leave it to the holding brake.
 
 ## Delta picker D3
 
@@ -950,12 +1043,12 @@ Lumped (`effects.forearm_inertia` off), each forearm pair's mass m_fb is split: 
 ```text
 m_nt = m_platform + m_payload + 3 (1 − s) m_fb
 I_b  = I_arm + L_a² (m_elbow + s m_fb)             (I_arm about the joint; rotor and gearbox not in it)
-m_LG = m_arm l_cg + L_a (m_elbow + s m_fb)
+m_LG = m_arm l_cg + L_a (m_elbow + ½ m_fb)
 M(θ) θ̈ = τ_out + Q_g − m_nt Jᵀ J_x⁻¹ w + τ_joint
-M = I_b · 1 + m_nt JᵀJ,   Q_g,i = g m_LG cos θ_i − m_nt g J_zi
+M = I_b · 1 + m_nt JᵀJ,   Q_g,i = g m_LG cos θ_i − (m_nt + 3 (s − ½) m_fb) g J_zi
 ```
 
-This is exact for the lumped model's kinetic energy (its weight keeps the share too, as an approximation; the D2 weights with 1/2, see there): the platform's kinetic energy ½ m_nt |J θ̇|² is what M holds, the velocity term is the platform's m_nt p̈ through Jᵀ with p̈ = J θ̈ + J_x⁻¹ w, and Q_g = −∂V/∂θ with V = m_nt g z − g m_LG Σ sin θ_i. τ_joint is the joint's friction (Coulomb, smoothed with tanh over `joint.friction_smoothing_rad_s`, and viscous; `effects.joint_friction`) and its stops (springs and dampers beyond the stop angles, `effects.hard_stops`).
+This is exact for the lumped model's kinetic energy: the platform's kinetic energy ½ m_nt |J θ̇|² is what M holds, the velocity term is the platform's m_nt p̈ through Jᵀ with p̈ = J θ̈ + J_x⁻¹ w, and Q_g = −∂V/∂θ with V = (m_nt + 3 (s − ½) m_fb) g z − g m_LG Σ sin θ_i. The weight is not the share's: (s − ½) m_fb of each pair's weight moves from the elbow to the platform (`weight_shift`), so it acts half at each end, as the D2's does. τ_joint is the joint's friction (Coulomb, smoothed with tanh over `joint.friction_smoothing_rad_s`, and viscous; `effects.joint_friction`) and its stops (springs and dampers beyond the stop angles, `effects.hard_stops`).
 
 **Elastic model** (`effects.joint_elasticity`), 15 states: θ, θ̇, rotor angles φ, rotor speeds, brake deflections. Each joint is a `RotaryJoint`: the gearbox's spring, damper, backlash and efficiency (the [gearbox](#gearbox)) pass τ_out to the arm, and
 
@@ -969,9 +1062,9 @@ with J_rotor the motor's rotor and the gearbox's input inertia. **Rigid model**,
 (M + diag(λ_i i² J_rotor)) θ̈ = λ ⊙ d + Q_g − m_nt Jᵀ J_x⁻¹ w + τ_joint
 ```
 
-λ_i the gearbox loss factor on what passes through it (d_i − i² J_rotor θ̈_i), found in two passes as on the other machines. Feedforward: the rigid, loss-free model, τ_motor = (I_b θ̈ + m_nt Jᵀ p̈ − Q_g) / i + J_rotor i θ̈ with θ̈ = J⁻¹ (p̈ − J_x⁻¹ w) and θ̇ = J⁻¹ ṗ (`feedforward_torque_moving`, which the controller uses; `feedforward_torque` is the same at rest). The velocity term changes the tool's following error in the Adept cycle little (1.20 mm without, 1.23 mm with; on a diagonal move 1.49 mm to 1.40 mm): what is left comes from the gearboxes' springs, which the rigid feedforward leaves out.
+λ_i the gearbox loss factor on what passes through it (d_i − i² J_rotor θ̈_i), taken at its fixed point (`mech::settled_loss`) as on the other machines. Feedforward: the rigid, loss-free model, τ_motor = (I_b θ̈ + m_nt Jᵀ p̈ − Q_g) / i + J_rotor i θ̈ with θ̈ = J⁻¹ (p̈ − J_x⁻¹ w) and θ̇ = J⁻¹ ṗ (`feedforward_torque_moving`, which the controller uses; `feedforward_torque` is the same at rest). The gearboxes' springs are not in it.
 
-**Static hold, and stability.** At rest each gearbox holds −Q_g,i (with the twist τ / k plus half the backlash in the elastic model). Held by constant motor torques, as the standard suite holds it after a pulse, the D3 is unstable in its vertical mode in the upper part of its range: the stiffness of V − τ θ in the symmetric mode is −1.68 N m/rad at the middle of the default range (868 mm below the shoulders) and +2.64 N m/rad at 1000 mm (`the_vertical_mode_under_constant_torques_is_unstable_high_up`). The drives' position loops hold it; the suite's loss-free configs put the range, the start pose and the cycle 175 mm lower, where it is stable, so that the suite's 10 s energy check measures the integration and not this. Their stops keep their springs and lose their damping. The gearboxes' twist and backlash under the weight put the motors' pose (the setpoint of the machine at rest) up to 2.09 mm from the tool at the lower edge of the range (with the catalogue's 9 arcmin; 1.02 mm with 3 arcmin), 0.64 mm at pick and place (0.29 mm). `Machine::setpoint_slack` follows from that: the delta works it out when it is built (`rest_sag`) as the most that each gearbox's twist under its holding torque plus half its backlash either way, all eight combinations, moves the forward kinematics over a grid of the range (5 radii, 24 directions, 9 heights and the bottom, payload on and off), plus a tenth: 2.30 mm (0.1 mm on the belt machines, and in the rigid model). The controller lets a path or trajectory start that far from the tool and beyond the range or the envelope, and no further: a pose further from the start than the slack has to lie in the range (`near_start`). No limit cycle at rest with either backlash: the tool stands still to 2e-8 m peak to peak at five poses.
+**Static hold, and stability.** At rest each gearbox holds −Q_g,i (with the twist τ / k plus half the backlash in the elastic model). Held by constant motor torques, as the standard suite holds it after a pulse, the D3 is unstable in its vertical mode in the upper part of its range: the stiffness of V − τ θ in the symmetric mode is −1.68 N m/rad at the middle of the default range (868 mm below the shoulders) and +2.64 N m/rad at 1000 mm (`the_vertical_mode_under_constant_torques_is_unstable_high_up`). The drives' position loops hold it; the suite's loss-free configs put the range, the start pose and the cycle 175 mm lower, where it is stable, so that the suite's 10 s energy check measures the integration and not this. Their stops keep their springs and lose their damping. The gearboxes' twist and backlash under the weight put the motors' pose (the setpoint of the machine at rest) off the tool: 0.66 mm at the rim's lower edge between two arms with the shipped 2.25 arcmin (`the_setpoint_slack_covers_the_sag_at_rest`, after 0.5 s at rest). `Machine::setpoint_slack` follows from that: the delta works it out when it is built (`rest_sag`) as the most that each gearbox's twist under its holding torque plus half its backlash either way, all eight combinations, moves the forward kinematics over a grid of the range (5 radii, 24 directions, 9 heights and the bottom, payload on and off), plus a tenth: 0.73 mm on the shipped config, by the same test's comment (0.1 mm on the belt machines, and in the rigid model). The controller lets a path or trajectory start that far from the tool and beyond the range or the envelope, and no further: a pose further from the start than the slack has to lie in the range (`near_start`).
 
 **Forearm inertia** (`effects.forearm_inertia`, on in the shipped config). Each forearm pair is a rigid slender rod from the elbow c_i to the platform p (the two rods of a pair move alike, the platform never turning; their spin about their own axis below). Its kinetic energy (m/6)(|ċ|² + ċ·ṗ + |ṗ|²) is exactly that of m/6 at each end and 2m/3 at its middle, and so is its weight (its centre is the middle). So the model above holds with s = 1/6 and m_nt = m_platform + m_payload + 3 m_fb / 6, plus per leg a point mass m_mid = 2 m_fb / 3 at (c_i + p) / 2:
 
@@ -982,7 +1075,7 @@ v    += Σ_i m_mid J_m,iᵀ (J_x⁻¹ w + ∂²c_i/∂θ² θ̇_i²) / 2
 Q_g  −= Σ_i m_mid g (J_m,i)_z
 ```
 
-(`Delta::load_n`, which builds every point mass's share from its Jacobian). With the arms level at the centre the rods translate and both models give the same torque for a vertical acceleration; sideways at 1 m/s the rods' kinetic energy is 0.313 J against the lumped 0.376 J. In the Adept cycle the lumped model puts 2.6 % more RMS torque on motor 1 (2.645 against 2.575 N m; peak 7.786 against 7.640 N m) and 1.8 % more on motors 2 and 3 (1.615 against 1.587 N m).
+(`Delta::load_n`, which builds every point mass's share from its Jacobian). With the arms level at the centre the rods translate and both models give the same torque for a vertical acceleration; sideways at 1 m/s the rods' kinetic energy is 0.313 J against the lumped 0.376 J. In the shipped Adept cycle (`sim-cli analyze delta-d3`) the lumped model puts 2.5 % more RMS torque on motor 1 (2.570 against 2.508 N m; peak 7.170 against 7.055 N m) and 1.8 % more on motors 2 and 3 (1.549 against 1.522 N m).
 
 **The rods' spin** (with `effects.forearm_inertia`: the rest of the same rigid body's inertia, so no switch of its own). The parallelogram keeps the plane of a pair through the elbow's axis a_i (fixed, along the base's tangent) and the forearm u_i = p − c_i, so each rod turns about its own axis as that plane does. With σ = a_i · u_i, n = a_i · (u̇_i × u_i) and L = L_b the spin is
 
@@ -991,7 +1084,7 @@ s_i = −σ n / (L (L² − σ²)) = g_i · q̇,   g_i = −σ / (L (L² − σ�
 M += Σ_i I_s g_i g_iᵀ,   v += Σ_i I_s (ṡ_i,0 g_i + s_i J_u,iᵀ (u̇_i × u_i) / L³)
 ```
 
-by Kane's equations with the rod's angular velocity e × ė + s e (e = u / L) and its angular momentum about its axis I s e; ṡ_i,0 is the spin's rate at no acceleration of the coordinates. I_s is both rods' `mass.forearm_rod_spin_inertia_kgm2`, the kinetic energy I_s s² / 2 (`Delta::add_spin`, `rod_spin`). Where a forearm lies square to its elbow's axis (σ = 0: at the centre, or a leg whose plane holds the platform) its rods do not spin. At (0, 0.1, −0.8) moving 1 m/s square to leg 1's forearm, leg 1's rods spin at 0.1114 rad/s. In the Adept cycle (on y = 0, so leg 1's rods never spin) the 1.3e-5 kg m² change the motors' peak torque by 1e-6 N m and their RMS torque by less: negligible, as expected of a slender rod.
+by Kane's equations with the rod's angular velocity e × ė + s e (e = u / L) and its angular momentum about its axis I s e; ṡ_i,0 is the spin's rate at no acceleration of the coordinates. I_s is twice `mass.forearm_rod_spin_inertia_kgm2` (the key is one rod's), the kinetic energy I_s s² / 2 (`Delta::add_spin`, `rod_spin`). Where a forearm lies square to its elbow's axis (σ = 0: at the centre, or a leg whose plane holds the platform) its rods do not spin. At (0, 0.1, −0.8) moving 1 m/s square to leg 1's forearm, leg 1's rods spin at 0.1114 rad/s. In the Adept cycle (on y = 0, so leg 1's rods never spin) the 1.3e-5 kg m² per rod change motor 1's peak torque by 3e-4 N m (7.0553 against 7.0549 N m) and the RMS torques by less than 1e-6 N m: negligible, as expected of a slender rod.
 
 **Bending arms** (`effects.link_elasticity`, off in the shipped config), 12 more states after the brakes: the bend δ_i and its rate, then the move y_i and its rate. Each upper arm bends in the plane it turns in; the elbow's angle is θ_i + δ_i, and a spring k_b = 3 E I / L_a (a cantilever's tip deflection F L³ / (3 E I) as a turn about the shoulder) with a damper c_b (`[upper_arm]`) joins it to the arm's root. The arm's tube stays with the root, the elbow and all beyond move with the elbow angle:
 
@@ -1000,11 +1093,11 @@ I_arm θ̈_i = τ_out,i + g m_arm l_cg cos θ_i + k_b δ_i + c_b δ̇_i + τ_joi
 M_d(θ + δ, y) (θ̈ + δ̈, ÿ) = Q_d − v_d − (k_b δ + c_b δ̇, k_l y + c_l ẏ)   (of the elbows and beyond, at the elbow angles and moves)
 ```
 
-and out of that plane the elbow moves by y_i along its axis a_i, on the tube's lateral stiffness k_l = 3 E I / L_a³ with a damper c_l (`upper_arm.lateral_stiffness_n_m`, `lateral_damping_n_s_m`). The elbow is then c_i + y_i a_i: the kinematics take it (the forward and inverse kinematics with the elbows moved, `Legs::forward_moved`, `inverse_moved`), and the platform's Jacobian by the moves is J_x⁻¹ diag(u_i · a_i) (`Legs::jacobians`), so a move pushes the platform only where the forearm is not square to the axis. M_d is 6 × 6: every point mass (platform, rods' middles, the elbow mass on the moves) with its Jacobian in (θ + δ, y), the rods' spin too. The kinematics (tool, condition number, scene, collision bodies) take the elbow angles and moves; the arm angle signal, the stops and the gearbox the joint's. At rest δ = Q_d / k_b and y = Q_y / k_l (three rounds from y = 0; Q_y hardly changes with y). Both dampers' loss is `power.arm_bending`, both springs' energy is elastic energy. The feedforward stays the rigid model's. In the Adept cycle the tracking error grows from 4.0 to 5.3 mm, the dwell error from 0.68 to 0.73 mm; the moves out of the plane add little (motor 1 RMS 2.6121 to 2.6122 N m, motors 2 and 3 peak 4.0400 to 4.0381 N m, dwell error 0.7295 to 0.7313 mm: the cycle runs on y = 0, where leg 1's forearm is square to its axis).
+and out of that plane the elbow moves by y_i along its axis a_i, on the tube's lateral stiffness k_l = 3 E I / L_a³ with a damper c_l (`upper_arm.lateral_stiffness_n_m`, `lateral_damping_n_s_m`). The elbow is then c_i + y_i a_i: the kinematics take it (the forward and inverse kinematics with the elbows moved, `Legs::forward_moved`, `inverse_moved`), and the platform's Jacobian by the moves is J_x⁻¹ diag(u_i · a_i) (`Legs::jacobians`), so a move pushes the platform only where the forearm is not square to the axis. M_d is 6 × 6: every point mass (platform, rods' middles, the elbow mass on the moves) with its Jacobian in (θ + δ, y), the rods' spin too. The kinematics (tool, condition number, scene, collision bodies) take the elbow angles and moves; the arm angle signal, the stops and the gearbox the joint's. At rest δ = Q_d / k_b and y = Q_y / k_l (three rounds from y = 0; Q_y hardly changes with y). Both dampers' loss is `power.arm_bending`, both springs' energy is elastic energy. The feedforward stays the rigid model's. In the Adept cycle the tracking error grows from 1.13 to 2.28 mm, the dwell error from 0.18 to 0.23 mm, motor 1's RMS torque from 2.508 to 2.534 N m. The moves out of the plane add little: with the lateral stiffness raised from 4e5 to 1e8 N/m the figures stay within 0.5 % (dwell error 0.228 against 0.229 mm; the cycle runs on y = 0, where leg 1's forearm is square to its axis).
 
-**The tube's own share and the elbow's twist** (`effects.arm_tube_inertia`, with `link_elasticity`; off as shipped). The tube bends in its first cantilever mode, φ(L) = 1 at the elbow: a quarter of its mass moves with the elbow's bend, so m L_a²/4 of its inertia about the shoulder and 0.3915 m L_a of its first moment (what its weight drives the mode with, ∫φ) go from the root to the elbow. The tube is as much of the arm's mass as its inertia allows a uniform tube, m = min(m_arm, 3 I_arm / L_a²), the rest a hub on the shoulder's axis. Its kinetic energy, its sections at s θ' + φ(s) L_a δ', is m L_a² (θ'²/3 + 2 · 0.284413 θ'δ' + δ'²/4) / 2: in θ and the elbow's angle e = θ + δ the root keeps I_arm − m L_a²/4 − 2B and is joined to the elbow by B θ' e', B = (0.284413 − 1/4) m L_a², which the joints' and the elbows' equations solve together; the arm turned whole keeps both sums. (Moving only the quarter of the inertia, as before, left the root with the elbow held at (1/3 − 1/4) m L_a² instead of 0.0145 m L_a², the gearboxes' modes some 40 % low.) Out of the plane a quarter of its mass moves with the elbow's move y, and the elbow block turns with the tube's tip slope, 1.3765 y / L_a, about the arm's normal: its twist inertia (`mass.elbow_twist_inertia_kgm2`, plus the forearms' share at the rods' ends, s m_fb (spacing/2)²) counts J (1.3765 / L_a)² on y. Default arm (all of it a uniform tube, 0.9 kg): 0.036 kg m² and 0.1409 kg m to the elbow, B = 0.004955 kg m² (the root keeps 0.002089 and 0.0391), the lateral mass 0.383 + 0.225 + 0.0054 = 0.614 kg, which lowers the elbows' lateral mode from sqrt(4e5 / 0.383) / 2π = 162.6 Hz to 128.5 Hz. The twist turns the rods' ends at the elbow in opposite senses along the arm; their mean, which the platform follows, stays (to first order the platform does not move).
+**The tube's own share and the elbow's twist** (`effects.arm_tube_inertia`, with `link_elasticity`; off as shipped). The tube bends in its first cantilever mode, φ(L) = 1 at the elbow: a quarter of its mass moves with the elbow's bend, so m L_a²/4 of its inertia about the shoulder and 0.3915 m L_a of its first moment (what its weight drives the mode with, ∫φ) go from the root to the elbow. The tube is as much of the arm's mass as its inertia allows a uniform tube, m = min(m_arm, 3 I_arm / L_a²), the rest a hub on the shoulder's axis. Its kinetic energy, its sections at s θ' + φ(s) L_a δ', is m L_a² (θ'²/3 + 2 · 0.284413 θ'δ' + δ'²/4) / 2: in θ and the elbow's angle e = θ + δ the root keeps I_arm − m L_a²/4 − 2B and is joined to the elbow by B θ' e', B = (0.284413 − 1/4) m L_a², which the joints' and the elbows' equations solve together; the arm turned whole keeps both sums. (Moving only the quarter of the inertia, as before, left the root with the elbow held at (1/3 − 1/4) m L_a² instead of 0.0145 m L_a², the gearboxes' modes some 40 % low.) Out of the plane a quarter of its mass moves with the elbow's move y, and the elbow block turns with the tube's tip slope, 1.3765 y / L_a, about the arm's normal: its twist inertia (`mass.elbow_twist_inertia_kgm2`, plus the forearms' share at the rods' ends, s m_fb (spacing/2)²) counts J (1.3765 / L_a)² on y. Default arm (all of it a uniform tube, 0.9 kg): 0.036 kg m² and 0.1409 kg m to the elbow, B = 0.004955 kg m² (the root keeps 0.002089 and 0.0391), the lateral mass 0.383 + 0.225 + 0.0054 = 0.614 kg, which lowers the elbows' lateral mode from sqrt(4e5 / 0.383) / 2π = 162.6 Hz to 128.5 Hz. The twist turns the rods' ends at the elbow in opposite senses along the arm; their mean, which the platform follows, stays (to first order the platform does not move). In the Adept cycle with the bending arms the tube's share raises the tracking error from 2.28 to 2.32 mm and the dwell error from 0.229 to 0.235 mm.
 
-**Resonance** (`Machine::modes`, `resonance_hz`, `mode_shape`; what `effects.shaper_follows_pose` sets the input shaper to). The modes with the motors held by their position loops: per arm the gearbox's spring k_g (with `joint_elasticity`) from the held rotor to the arm's root, the bending spring k_b (with `link_elasticity`) from the root to the elbow, the lateral spring k_l on the elbow's move, the root I_arm and everything beyond the mass matrix M_d at the elbow angles (and moves). The coordinates (roots, elbow angles, moves) with the flexibility per arm K⁻¹ = [[1/k_g, 1/k_g], [1/k_g, 1/k_g + 1/k_b]] and 1/k_l (a rigid spring 0): with M = L Lᵀ (Cholesky) the eigenvalues μ = 1/ω² of the symmetric Lᵀ K⁻¹ L by Jacobi rotations, a rigid connection's μ = 0 left out (`arm_modes`). Each mode's damping ratio is vᵀCv / (2 ω vᵀMv) with C the gearboxes', the bending's and the lateral dampers (the cross terms of a damping that is not proportional left out). 3 modes with the gearboxes alone, 6 with the bending alone, 9 with both; `resonance_hz` is the lowest. Gravity's stiffness (a few N m/rad) and backlash are left out. With rigid gearboxes and arms there is none. The gearbox's k_g is K1, its stiffness for the moves that excite the mode (twists above about 1e-3 rad); with `gearbox_lost_motion` and a non-zero `hysteresis_rad` its small-amplitude stiffness is K1 + σ = 2 K1 ([gearbox](#gearbox)), so a small vibration rings about 41 % higher: on the D3 at its start pose (0.1525, 0, -0.75) m 49.07 / 51.48 / 84.02 Hz become 69.39 / 72.80 / 118.82 Hz. `Machine::modes` reports the large-amplitude K1 (what a shaper for the move's own swing takes), `Machine::modes_small_amplitude` the same modes with K1 + σ (what a shaper for the residual ringing below about 1e-4 rad at the joint takes; the four-arm delta H4 does the same for its arms' four modes, its amplifier's mode unchanged, though it ships with no hysteresis, `the_small_amplitude_modes_stand_sqrt_two_above_the_large_ones_with_hysteresis` in its crate; the other machines return `modes`). At the centre with the arms level the lowest is the platform's sideways mode (twice): the forearms lumped, 28.14 Hz on the gearboxes alone, 38.76 Hz on the bending alone, 22.88 Hz with both (vertical: 68.39 Hz on the bending alone). There every forearm is square to its axis, so the elbows' moves ring on their own: lumped sqrt(k_l / (m_elbow + s m_fb)) / 2π = 126.48 Hz three times; with the rods, whose middles also move with the platform, 147.35 Hz for all three elbows moving the same way round and up to 0.3 % more for the two that couple to the sideways modes.
+**Resonance** (`Machine::modes`, `resonance_hz`, `mode_shape`; what `effects.shaper_follows_pose` sets the input shaper to). The modes with the motors held by their position loops: per arm the gearbox's spring k_g (with `joint_elasticity`) from the held rotor to the arm's root, the bending spring k_b (with `link_elasticity`) from the root to the elbow, the lateral spring k_l on the elbow's move, the root I_arm and everything beyond the mass matrix M_d at the elbow angles (and moves). The coordinates (roots, elbow angles, moves) with the flexibility per arm K⁻¹ = [[1/k_g, 1/k_g], [1/k_g, 1/k_g + 1/k_b]] and 1/k_l (a rigid spring 0): with M = L Lᵀ (Cholesky) the eigenvalues μ = 1/ω² of the symmetric Lᵀ K⁻¹ L by Jacobi rotations, a rigid connection's μ = 0 left out (`arm_modes`). Each mode's damping ratio is vᵀCv / (2 ω vᵀMv) with C the gearboxes', the bending's and the lateral dampers (the cross terms of a damping that is not proportional left out). 3 modes with the gearboxes alone, 6 with the bending alone, 9 with both; `resonance_hz` is the lowest. Gravity's stiffness (a few N m/rad) and backlash are left out. With rigid gearboxes and arms there is none. The gearbox's k_g is K1, its stiffness for the moves that excite the mode (twists above about 1e-3 rad); with `gearbox_lost_motion` and a non-zero `hysteresis_rad` its small-amplitude stiffness is K1 + σ = 2 K1 ([gearbox](#gearbox)), so a small vibration rings about 41 % higher: on the shipped D3 (which has the hysteresis) at (0, 0, −0.75) m 51.24 / 51.24 / 84.74 Hz become 72.46 / 72.46 / 119.84 Hz (`sim-cli modes delta-d3`). `Machine::modes` reports the large-amplitude K1 (what a shaper for the move's own swing takes), `Machine::modes_small_amplitude` the same modes with K1 + σ (what a shaper for the residual ringing below about 1e-4 rad at the joint takes; the four-arm delta H4 does the same for its arms' four modes, its amplifier's mode unchanged, though it ships with no hysteresis, `the_small_amplitude_modes_stand_sqrt_two_above_the_large_ones_with_hysteresis` in its crate; the other machines return `modes`). At the centre with the arms level the lowest is the platform's sideways mode (twice): the forearms lumped, 38.76 Hz on the bending alone (vertical: 68.39 Hz), 28.14 Hz on gearboxes alone of 35 752.6 N m/rad (the stiffness the config had until 14 November 2026, which the test keeps for its hand calculation). There every forearm is square to its axis, so the elbows' moves ring on their own: lumped sqrt(k_l / (m_elbow + s m_fb)) / 2π = 126.48 Hz three times; with the rods, whose middles also move with the platform, 147.35 Hz for all three elbows moving the same way round and up to 0.3 % more for the two that couple to the sideways modes.
 
 ### Signals
 
@@ -1012,7 +1105,7 @@ and out of that plane the elbow moves by y_i along its axis a_i, on the tube's l
 
 `Machine::scene_point` is the platform's centre: the machine's frame is the scene's. The scene: base plate, per arm a motor and a gearbox box with a bar turned by the rotor angle, the arm (to its elbow, bent or not) and the two rods of its forearm pair as segments, the platform as a box, the payload under it. The collision bodies are the platform and the payload as boxes, and each forearm rod and each upper arm as a capsule along its drawn segment, of half its drawn width (6 mm for a rod, 20 mm for an arm). An obstacle an upper arm runs into is a crash as any other.
 
-Not modelled: the tube's own share of the bending modes (it stays with the root in the plane and does not move out of it; 33/140 of a beam's mass would go to its tip), the elbow block's twist as the arm bends out of its plane (the elbow's axis stays as it is), elasticity of rods and ball joints (no figures published for any product), friction in the ball joints (lumped into the joint friction), the ball joints' cone angles (the stops and the working range stand in), collisions between the links, a fourth axis (see the [D4](#delta-picker-d4)).
+Not modelled: the tube's share of the bending modes beyond its first cantilever mode and its static stiffness 3 E I / L (one shape for both), elasticity of rods and ball joints (no figures published for any product), friction in the ball joints (lumped into the joint friction), the ball joints' cone angles (the stops and the working range stand in), collisions between the links, a fourth axis (see the [D4](#delta-picker-d4)).
 
 ## Delta picker D2
 
@@ -1027,7 +1120,7 @@ dynamics    m_nt = m_plate + m_payload + 2 (1 − s) m_fb,  M = I_b · 1 + m_nt 
             weight: Q_g,i = g m_LG,w cos θ_i − m_w g J_zi,  m_LG,w = m_arm l_cg + L_a (m_elbow + m_fb / 2),  m_w = m_plate + m_payload + m_fb
 ```
 
-The joints, the elastic and rigid models (10 and 6 states), the feedforward, the signals (`arm.1/2.angle`, `gearbox.1/2.output_torque`, `kinematics.condition`), the effect views, part heating and the refusals (`error-delta-*`) are the D3's. **Working range**: the band |x| ≤ `workspace.half_width_m` below `top_z_m`, its bottom an arc through both edges at `height_edge_m` and the centre at `height_centre_m` below the top. **Static hold, and stability**: held by constant motor torques the plate's vertical mode is unstable in the upper part of the range, −3.778 N m/rad at the middle of the default range (638.5 mm below the shoulders), +7.428 N m/rad at 788.5 mm; the sideways mode is stable (13.714 and 19.125 N m/rad; the forearms' weight a half at each end). The standard suite's loss-free configs put range, start and cycle 150 mm lower. `Machine::setpoint_slack` is `rest_sag` over 41 columns of the range: 0.42 mm with 1 arcmin backlash (at most 0.37 mm found at rest in the simulation).
+The joints, the elastic and rigid models (10 and 6 states), the feedforward, the signals (`arm.1/2.angle`, `gearbox.1/2.output_torque`, `kinematics.condition`), the effect views, part heating and the refusals (`error-delta-*`) are the D3's. **Working range**: the band |x| ≤ `workspace.half_width_m` below `top_z_m`, its bottom an arc through both edges at `height_edge_m` and the centre at `height_centre_m` below the top. **Static hold, and stability**: held by constant motor torques the plate's vertical mode is unstable in the upper part of the range, −3.778 N m/rad at the middle of the default range (638.5 mm below the shoulders), +7.428 N m/rad at 788.5 mm; the sideways mode is stable (13.714 and 19.125 N m/rad; the forearms' weight a half at each end). The standard suite's loss-free configs put range, start and cycle 150 mm lower. `Machine::setpoint_slack` is `rest_sag` over 41 columns of the range: 0.340 mm with the shipped SP+ 100 and its 2.25 arcmin backlash (at most 0.287 mm found at rest in the simulation at six poses, `the_setpoint_slack_covers_the_sag_at_rest`). The D2 reports no modes.
 
 The model takes the plate as kept level. The 3D view draws each forearm pair as two rods apart along y, as on the D3; in the plane, a plate on two legs needs a parallelogram in the x-z plane (or a third link) to keep it from turning about y, which real D2s have. The scene: a base beam, per arm a motor and gearbox box with the rotor bar, the arm, the two rods, the plate and the payload; the collision bodies are the plate and the payload. Not modelled: the forearms' rotational inertia (the D3's rods carry it, `effects.forearm_inertia`), elastic links, friction in the ball joints, collisions between links.
 
@@ -1072,7 +1165,17 @@ plate        m_nt p̈ = −m_nt g e_z − J_xᵀ λ        (force of rod pair i 
 guide load   G_i = |f_i − (f_i · d_i) d_i|,   f_i = λ_i u_i − m_c g e_z
 ```
 
-with p̈ = J ḧ + J_x⁻¹ w from the carriages' acceleration in the state (`carriage.<i>.guide_load`, so that the verdicts judge the cycle's highest load). The carriage moves along its column only: its own acceleration loads the belt, not the guide. With `effects.load_dependent_friction` the friction levels scale with the load that holds the plate at rest (p̈ = 0; the moving load would make the friction depend on the acceleration it changes), the levels holding for the guide under its preload alone. Upright at rest G_i = |λ_i| ρ_i, as before. The load is a force through the guide's centre: the moments of the rods' joints standing off the slide (Festo's Mx, My, Mz) are not modelled. The stops are springs and dampers beyond the stroke.
+with p̈ = J ḧ + J_x⁻¹ w from the carriages' acceleration in the state (`carriage.<i>.guide_load`, so that the verdicts judge the cycle's highest load). The carriage moves along its column only: its own acceleration loads the belt, not the guide. Upright at rest G_i = |λ_i| ρ_i.
+
+**Moments on the guide.** Where the rod pair's joints stand off the guide's centre by o = a d_i + b e_r + c e_t (`geometry.rod_joint_along_m`, `rod_joint_outward_m`, `rod_joint_tangent_m`; e_t the column's tangent, e_r = e_t × d_i), the pull has the moment M = o × λ_i u_i about it, Mx = M · d_i, My = M · e_t, Mz = M · e_r (Festo's axes; signals `carriage.<k>.guide_moment_x/y/z`, offered only with an offset). The catalogue's combination F/F_max + Σ M_j/M_j,max ≤ 1 makes the equivalent load
+
+```text
+P_i = G_i + F_max Σ_j |M_j| / M_j,max          F_max = ratings.guide_max_load_n, M_j,max = ratings.guide_moment_x/y/z_nm
+```
+
+over the moments that have a rating. P_i is the guide load and the friction's load. The shipped offsets are 0 (an [estimate]: the pull through the centre).
+
+**Friction with the load.** With `effects.load_dependent_friction` the factor x_i of each guide's LuGre force follows P_i while the plate accelerates. That load holds the acceleration the friction itself changes, so x is taken at its fixed point x = G(x) (`scales_at`, `mech::settled_loss`, from the factors at rest): the factors give the friction, the friction the carriages' acceleration (elastic: the carriages' balance with the belts' forces as they are; rigid: the rigid model solved anew, gearbox losses and all), that the plate's p̈ and the guides' load, the load the factors. The factor scales the bristles' force, F = x (σ₀ s + σ₁ ṡ) + b v with ṡ of the levels without load, the viscous b v unscaled; steady that slides at x g(v) + b v. The levels hold for the guide under its preload alone. The stops are springs and dampers beyond the stroke.
 
 **Elastic model** (`effects.belt_stretch`), 25 states: h, pulley angles, rotor angles, their speeds, the guides' friction states, the brakes and the time a belt section has spent without tension (`belt.slack_time`, as on the single axis). The pulley: J_pulley ä = τ_gear,out + r (m₂ − m₁); the rotor as on the single axis, behind the coupling (or gearbox). **Rigid model**, 12 states (h, ḣ, friction, brakes): x = r a, rotor = i a, and
 
@@ -1080,13 +1183,13 @@ with p̈ = J ḧ + J_x⁻¹ w from the carriages' acceleration in the state (`ca
 (M + diag(J_pulley / r² + λ_i i² J_rotor / r²)) ḧ = λ ⊙ d + Q_g − m_nt Jᵀ J_x⁻¹ w − F_guide + F_stop,   d_i = i (ripple(τ_i) − τ_shaft − τ_brake) / r
 ```
 
-λ_i the gearbox loss factor, in two passes as on the other machines. Feedforward: the rigid, loss-free model, τ_k = ((m_c + J_pulley / r²) ḧ_k + m_nt (Jᵀ p̈)_k − Q_g,k) r / i + J_rotor i ḧ_k / r with ḧ = J⁻¹ (p̈ − J_x⁻¹ w) (`feedforward_torque_moving`). `rigid_tensions` shares each carriage's force F = m_c ḧ_k + m_nt (Jᵀ p̈)_k − Q_g,k between its two sections so that the belt keeps its length: T₁ = P + F L₂ / (L₁ + L₂), T₂ = P − F L₁ / (L₁ + L₂).
+λ_i the gearbox loss factor, taken at its fixed point (`mech::settled_loss`) as on the other machines. Feedforward: the rigid, loss-free model, τ_k = ((m_c + J_pulley / r²) ḧ_k + m_nt (Jᵀ p̈)_k − Q_g,k) r / i + J_rotor i ḧ_k / r with ḧ = J⁻¹ (p̈ − J_x⁻¹ w) (`feedforward_torque_moving`). `rigid_tensions` shares each carriage's force F = m_c ḧ_k + m_nt (Jᵀ p̈)_k − Q_g,k between its two sections so that the belt keeps its length: T₁ = P + F L₂ / (L₁ + L₂), T₂ = P − F L₁ / (L₁ + L₂).
 
 **Static hold.** At rest each belt holds −Q_g,i: at the centre the carriage's weight and a third of the plate's, 22.07 N with the default masses (`the_belts_hold_the_carriages_and_the_plates_weight_through_the_jacobian`). Held by constant motor torques the hanging plate is stable sideways (it rises to second order when two carriages move apart) and neutral in the vertical mode, so the standard suite's loss-free configs keep the default range. The belts' stretch and the couplings' twist put the motors' pose 0.01 to 0.02 mm off the tool at rest; `setpoint_slack` is worked out over a grid of the range as on the D3 (`rest_sag`) and stays at the default 0.1 mm.
 
 **Guide ratings** (`Machine::rating_checks`): `guide-load` per carriage, the highest `carriage.<i>.guide_load` against `ratings.guide_max_load_n`, and `guide-life`, from the damage rate `carriage.<i>.guide_damage_rate` = 3600 |ḣ_i| (G_i / C)³ / 50 km per hour (the catalogue life L10 = (C / G)³ 50 km used up at the carriage's speed, C `ratings.guide_dynamic_load_rating_n`), the life 1 / its mean over the pass, against `ratings.required_life_h`. The generic guide checks follow a tool axis (`axis.<id>.guide_load`), which a carriage is not. The pulley shaft's bearing (`pulley-bearing-life`) and the belt's teeth (`belt-tooth-load`) are judged by the generic checks from `pulley.<i>.radial_load` and the coupling's output torque.
 
-**Part heating** (effects.part_heating): each guide warms with its friction loss `power.guide_<i>`, and each gearbox, where a config has one in place of the couplings, with `power.gearbox_<i>` (`thermal_parts`); the 3D view colours the carriage (and the gearbox) by its rise. With effects.thermal_feedback each guide's viscous friction follows its own temperature, each gearbox's efficiency its own (one `Lugre` and one `Gearbox` per column). Belts and pulleys do not warm.
+**Part heating** (effects.part_heating): each guide warms with its friction loss `power.guide_<i>`, each belt with its damping loss `power.belt_<i>`, and each gearbox, where a config has one in place of the couplings, with `power.gearbox_<i>` (`thermal_parts`); the 3D view colours the carriage, the belt (and the gearbox) by its rise. A belt is one node: resistance to the air R = 1 / (h · 2 w L) over both sides (h `belt.convection_w_m2_k`, w `ratings.belt_width_mm`, L the loop's length less the teeth in mesh), capacity C = ρ L c_p (`belt.specific_heat_j_kg_k`), time constant R C. With effects.thermal_feedback each guide's viscous friction follows its own temperature, each gearbox's efficiency its own (one `Lugre` and one `Gearbox` per column); the belts' warming changes nothing. Pulleys do not warm.
 
 ### Signals
 
@@ -1094,7 +1197,7 @@ Per column k: `carriage.<k>.height` (m), `belt.<2k−1>.tension` and `belt.<2k>.
 
 `Machine::scene_point` is the plate's centre. The scene: a frame plate, per column a column, its belt loop with motor, pulley and idler (drawn in the plane parallel to x–z through the column), the carriage and the two rods of its pair, the plate and the payload under it. An inclined column's belt loop is drawn upright in its x-z plane with z the travel along the column, then sheared onto the column, (x, y, z) → (x, y, 0) + z d_i: pulleys, belt, carriage and label follow the column, the pulleys' axes stay along y; the column is a strip from its foot to its head. The collision bodies (plate, payload) follow the plate.
 
-Not modelled: the rods' rotational inertia; elasticity of frame, columns, rods and ball joints; friction in the ball joints; collisions between the links; a fourth axis; the guides' moments (Mx, My, Mz); the warming of belts and pulleys; tooth meshing, tooth jump and belt-span vibration.
+Not modelled: the rods' rotational inertia; elasticity of frame, columns, rods and ball joints; friction in the ball joints; collisions between the links; a fourth axis; the warming of pulleys and the heat from belt to pulley; tooth meshing, tooth jump and belt-span vibration.
 
 ## Delta picker D4
 
@@ -1111,13 +1214,25 @@ arms        the D3's, with m_platform + r_s m_s at the platform, and Jᵀ F, F =
 
 **Why the pair cancels.** A single cardan joint bent by β turns its output unevenly, between cos β and 1/cos β of the input's speed, twice per turn. The D4's motor shaft and the tool's shaft are both vertical (the parallelograms keep the platform level), so the two joints are bent by the same β in the same plane: the Z arrangement. With the yokes of the intermediate shaft in phase the second joint undoes the first, and the tool turns exactly as the gearbox's output, c = θ_out, at any pose and while the platform moves. Only the shaft between the joints turns unevenly: the signal `shaft.speed` is the tool's speed times cos β / (1 − sin²β cos²(c − ψ)) (the platform's own motion adds a part to it that is left out). Its spin inertia J_s counts at the tool's speed: its mean over a turn would be J_s (1 + cos²β) / (2 cos β), 1 % more at 30° and of a part that is 1 % of J_c. Yokes out of phase (by 90°) would double the unevenness at the tool; that is a fault of assembly, not modelled.
 
-**The tool's joint** is a `RotaryJoint` ([`joint.rs`](../crates/sim-components/src/joint.rs)): motor 4's own `[motor.4]` and `[gearbox.4]` over the shared tables (`catalog::motor_config`, as its drive and verdicts read them: a 1FK2104-4AF on an NRB060-04-8), brake and ripple as on the arms, the tool bearing's friction (`[tool]`, effects.joint_friction), no stops (the turn is endless; `axis.c.min_angle_deg`/`max_angle_deg` are the controller's range). Rigid (effects.joint_elasticity off) the rotor turns with the tool times the ratio, with the gearbox's efficiency as on the arms; elastic, rotor and tool are two bodies behind the gearbox's spring, and with effects.shaft_torsion the shaft's torsional stiffness is in series with it, 1 / (1/k_gear + 1/k_shaft), damped by the shaft's `torsional_damping_nm_s_rad` (the shaft is the softer by far: 500 against 8251 N m/rad), in series with the whole gear as a lever-1 converter (`transmission::Converter`): with effects.gearbox_lost_motion it stretches over the band too, and the hysteresis is the series spring's. With effects.tool_gearbox_body (off as shipped) the gearbox's output is a body of its own between the two springs (`tool.gearbox_output_inertia_kgm2`, its J / i² taken out of the inertia at the input): the tool's mode 41.07 Hz, the gearbox's own motion at 1.49 kHz overdamped, two more states. The tool's torsional mode with the motor held, √(k/J_c), is among `Machine::modes`: 41.1 Hz with the payload, 75.8 Hz without, 2 % damping. `resonance_hz` and `mode_shape` stay the arms' (what an input shaper on the path is for). States: the D3's, then c, ċ, (rotor angle and speed, elastic), brake: 3 or 5 more, and the body's angle and speed with effects.tool_gearbox_body.
+**The tool's joint** is a `RotaryJoint` ([`joint.rs`](../crates/sim-components/src/joint.rs)): motor 4's own `[motor.4]` and `[gearbox.4]` over the shared tables (`catalog::motor_config`, as its drive and verdicts read them: a 1FK2104-4AF on an NRB060-04-8), brake and ripple as on the arms, the tool bearing's friction (`[tool]`, effects.joint_friction), no stops (the turn is endless; `axis.c.min_angle_deg`/`max_angle_deg` are the controller's range). Rigid (effects.joint_elasticity off) the rotor turns with the tool times the ratio, with the gearbox's efficiency as on the arms; elastic, rotor and tool are two bodies behind the gearbox's spring, and with effects.shaft_torsion the shaft's torsional stiffness is in series with it, 1 / (1/k_gear + 1/k_shaft), damped by the shaft's `torsional_damping_nm_s_rad` (the shaft is the softer by far: 500 against 8251 N m/rad), in series with the whole gear as a lever-1 converter (`transmission::Converter`): with effects.gearbox_lost_motion it stretches over the band too, and the hysteresis is the series spring's. **The gearbox's output as a body** (effects.tool_gearbox_body, off as shipped; it needs `joint_elasticity` and `shaft_torsion`): the planet carrier and output flange J_o (`tool.gearbox_output_inertia_kgm2`, 1e-4 kg m², an [estimate]) sit between the gearbox's spring and the shaft's. The catalogue's inertia at the input holds it as J_o / i², so that much leaves the rotor (a J_o / i² not below `gearbox.inertia_at_input_kgm2` is refused) and the chain's inertia is the same with the body as without it:
+
+```text
+J_o θ̈_o = τ_gear(rotor, θ_o) − τ_s          τ_s = k_s (θ_o − c) + c_s (θ̇_o − ċ)     the shaft's torque
+J_c c̈   = τ_s + τ_bearing                    the gearbox keeps its own stiffness, damping, band and hysteresis
+rotor held: J_o J_c λ² − (J_c (k_g + k_s) + J_o k_s) λ + k_g k_s = 0
+```
+
+Two modes: the tool's (the series spring's as J_o → 0) and the gearbox's against the shaft's spring. As shipped with the switch on (`sim-cli modes delta-d4`): 41.07 Hz at 2.27 % damping, and 1488.8 Hz with a damping ratio of 2.71, overdamped. The shaft's spring and J_o's kinetic energy are stored, the shaft's damping is booked with the gearbox's loss.
+
+The tool's torsional mode with the motor held, √(k/J_c), is among `Machine::modes`: 41.07 Hz with the payload (2.1 % damping), 75.77 Hz without (3.8 %). `resonance_hz` and `mode_shape` stay the arms' (what an input shaper on the path is for). States: the D3's, then c, ċ, (rotor angle and speed, elastic), brake: 3 or 5 more, and the body's angle and speed with effects.tool_gearbox_body.
+
+**Each arm's own drive.** Each arm reads its own `[motor.<id>]`, `[gearbox.<id>]` and `[parts.<id>]` (ids 1 to 3) over the shared tables (`catalog::motor_config`); without them the three share `[motor]` and `[gearbox]`. Each arm's modes take its own gearbox.
 
 **Coupling to the arms.** Nothing turns the parallelograms, so the shaft acts on the arms only through its weight (effects.shaft_mass: `shaft.platform_share` of `shaft.mass_kg` at the platform, the inner shaft and the lower joint; the outer tube hangs from the upper joint) and through the telescope's sliding friction (effects.telescope_friction, `shaft.slide_friction_n` Coulomb, smoothed over `slide_friction_smoothing_m_s`, and a viscous part), a force along the shaft against its lengthening which the arms take through Jᵀ. The torque the shaft passes and the joints' bending moments on the platform do no work on the arms: the platform cannot tilt or turn. The shaft's own swing about the upper joint is not counted (as the D3 leaves out the forearms' spin).
 
 **Signals** beyond the D3's: `tool.angle`, `gearbox.4.output_torque` (judged by the common `gearbox-*` checks of motor 4 against `[ratings.4]`), `shaft.length`, `shaft.cardan_angle`, `shaft.speed`, and in the effect views `motor.4.torque_*`, `power.joint_4` (tool bearing), `power.shaft_4`, `power.gearbox_4`, `power.telescope`, `power.other_4`; the energies include the tool's. The tool's gearbox warms as a fourth `gearbox_4`. **Refusals** beyond the D3's: `error-delta-shaft-stroke` (the telescope shorter than `min_length_m` or longer than `max_length_m`), `error-delta-cardan-angle` (a joint bent beyond `max_cardan_angle_deg`); with the defaults every pose the arms reach the shaft reaches too (0.625 m at the top of the centre, 1.020 m at the edge's bottom, at most 43.8° at the top of the edge). **Scene**: the D3's, then the fourth motor, gearbox and rotor bar in the base's centre, the telescope as an outer tube from the upper joint and an inner shaft from the lower one, the two joints, and a bar under the platform turned with the tool. **Collision bodies**: the D3's and the tube and the inner shaft as capsules along them, of half their drawn widths (15 and 8 mm).
 
-**Paths with a turn**: `line,x,y,z,c` (lines work on any number of axes); arcs and splines are on two and three axes only, so they are refused on the D4. Not modelled: yokes out of phase, the cardan joints' friction and play, the shaft's bending and swing; arms with motors or gearboxes of their own (the three share `[motor]` and `[gearbox]`; `[motor.1]` to `[motor.3]` are refused).
+**Paths with a turn**: `line,x,y,z,c` (lines work on any number of axes); arcs and splines are on two and three axes only, so they are refused on the D4. Not modelled: yokes out of phase, the cardan joints' friction and play, the shaft's bending and swing.
 
 ## Arms in tool space (SCARA, six-axis arm)
 
@@ -1134,22 +1249,21 @@ condition   κ = √(λ_max / λ_min) of Jᵀ J (Jacobi rotations): SCARA of ∂
 
 A redundant arm (fewer axes than joints) takes q̇ and q̈ from central differences of its inverse over 1e-3 of the tool's units, the null space settled by Newton steps to 1e-13 rad (to the rounding of J where that is not reached), so that the feed-forward does not depend on the call before.
 
-The limits of `rx`, `ry`, `rz` (`max_velocity_rad_s` and the rest) act on the rates of the rotation vector, not on the angular velocity: they differ by (θ/2) / sin(θ/2) about the vector's own axis and more across it, so at the home (θ = π/2) a limit of 1.5 rad/s on `rz` allows a spin of 1.91 rad/s. The machine's own checks `tool-angular-speed` and `tool-angular-acceleration` therefore hold the flange's angular speed |ω| and acceleration |dω/dt| (from the geometric Jacobian, `Pose::angular_motion`; signals `tool.angular_speed`, `tool.angular_acceleration`) to the smallest of the picked `rx`, `ry`, `rz` velocity and acceleration limits in the time-optimal plan, which fits them as c·a + b·v + d·v² of the rigid model (exact on a line, whose slerp turns about one axis: |ω| = |J_ω p′| v, |dω/dt| = |J_ω p′| |a|); the checks name the signals `plan.tool.angular_speed` and `plan.tool.angular_acceleration`, and the verdicts judge them on the setpoint's rigid motion (the plan's pose, speed and acceleration through `rigid_checks` once per millisecond), not on the simulated pass (there the gears' ringing alone gave 22 rad/s² on the arm's tool cycle, whose plan holds the orientation; 11.74 against 10 rad/s² on the palletiser): a cycle planned within them passes, one planned faster fails (`the_flanges_angular_limits_are_judged_on_the_planned_motion`). The signals show the simulated values. A cycle timed by `axis_limits` keeps them too (`MotionLaw::spin`, `profile::spin_rates`): a move straight in the rotation vector bounds its speed by |ω| ≤ g₁ ṡ and its acceleration by |dω/dt| ≤ g₁ |s̈| + g₂ ṡ² (g₁, g₂ the most |J ṙ| and |d(J ṙ)/ds| along it, sampled at 65 places; half the acceleration limit at most for g₂ ṡ²), then the acceleration raised while the move's own |dω/dt| = |J ṙ s̈ + d(J ṙ)/ds ṡ²| (the two as vectors, at 1024 times of the profile) stays within the limit, a slerp of `path::plan_within` (also on the arm on a track, whose rotation vector follows its track axis) by the angle over its length. At the home a pure 0.5 rad turn on rz spins at 1.351 rad/s: the rz limit binds there, as the flange turns at |J e_z| = 2√2/π = 0.900 of the rate across its rotation vector; 0.5 rad on rx and rz at once spun at 1.91 rad/s without the flange's limits and keeps 1.499 rad/s and 7.99 rad/s² with them (`the_flanges_spin_on_a_move_uses_its_limits`); moves of the place alone are timed as before (`a_reorientation_timed_by_the_axis_limits_keeps_the_flanges_angular_limits`).
+The limits of `rx`, `ry`, `rz` (`max_velocity_rad_s` and the rest) act on the rates of the rotation vector, not on the angular velocity: they differ by (θ/2) / sin(θ/2) about the vector's own axis and more across it, so at the home (θ = π/2) a limit of 1.5 rad/s on `rz` allows a spin of 1.91 rad/s. The machine's own checks `tool-angular-speed` and `tool-angular-acceleration` therefore hold the flange's angular speed |ω| and acceleration |dω/dt| (from the geometric Jacobian, `Pose::angular_motion`; signals `tool.angular_speed`, `tool.angular_acceleration`) to the smallest of the picked `rx`, `ry`, `rz` velocity and acceleration limits in the time-optimal plan, which fits them as c·a + b·v + d·v² of the rigid model (exact on a line, whose slerp turns about one axis: |ω| = |J_ω p′| v, |dω/dt| = |J_ω p′| |a|); the checks name the signals `plan.tool.angular_speed` and `plan.tool.angular_acceleration`, and the verdicts judge them on the setpoint's rigid motion (the plan's pose, speed and acceleration through `rigid_checks` once per millisecond), not on the simulated pass (there the gears' ringing alone gave 22 rad/s² on the arm's tool cycle, whose plan holds the orientation): a cycle planned within them passes, one planned faster fails (`the_flanges_angular_limits_are_judged_on_the_planned_motion`). The signals show the simulated values. A cycle timed by `axis_limits` keeps them too (`MotionLaw::spin`, `profile::spin_rates`): a move straight in the rotation vector bounds its speed by |ω| ≤ g₁ ṡ and its acceleration by |dω/dt| ≤ g₁ |s̈| + g₂ ṡ² (g₁, g₂ the most |J ṙ| and |d(J ṙ)/ds| along it, sampled at 65 places; half the acceleration limit at most for g₂ ṡ²), then the acceleration raised while the move's own |dω/dt| = |J ṙ s̈ + d(J ṙ)/ds ṡ²| (the two as vectors, at 1024 times of the profile) stays within the limit, a slerp of `path::plan_within` (also on the arm on a track, whose rotation vector follows its track axis) by the angle over its length. At the home a pure 0.5 rad turn on rz spins at 1.351 rad/s: the rz limit binds there, as the flange turns at |J e_z| = 2√2/π = 0.900 of the rate across its rotation vector; 0.5 rad on rx and rz at once spun at 1.91 rad/s without the flange's limits and keeps 1.499 rad/s and 7.99 rad/s² with them (`the_flanges_spin_on_a_move_uses_its_limits`); moves of the place alone are timed as before (`a_reorientation_timed_by_the_axis_limits_keeps_the_flanges_angular_limits`).
 
 **Link bending** (`effects.link_bending`, the arms only; off as shipped). Each link with a section in `[link_bending]` bends as a cantilever from its joint to the next (the flange after the last) in its first Euler-Bernoulli mode, in the plane its joint turns it in (across = axis × along), one state d (its tip's deflection) and its rate per link, after the joint machine's states (`chain::Mechanism::flex_modes`, `beam::cantilever_mode`):
 
 ```text
-E I = E π (D⁴ − d⁴) / 64,   L the link's length,   m its URDF mass (spread evenly),   M everything beyond it (payload too)
-m_mod = m / 4 + M,   k_mod = 1.875104⁴ / 4 · E I / L³ = 3.0906 E I / L³,   c = 2 ζ sqrt(k m)
-m_mod d̈ + c ḋ + k_mod d = −across · F_beyond − 0.3915 across · m (a_c − g) − 1.3765 / L · turn · M_beyond
-F_beyond = Σ_beyond m_k (a_k − g),   M_beyond = Σ_beyond (c_k − tip) × m_k (a_k − g),   turn = along × across
+E I = E π (D⁴ − d⁴) / 64,   L the link's length,   m its URDF mass (spread evenly)
+k_mod = 1.875104⁴ / 4 · E I / L³ = 3.0906 E I / L³,   c = 2 ζ sqrt(k_mod m_mod)
+m_mod d̈ + c ḋ + k_mod d = Q_g − ṗ                   (one-way; m_mod, Q_g and p below)
 ```
 
-so a link alone rings at the Euler-Bernoulli frequency 1.875104² / 2π · sqrt(E I / (m L³)) (a 60 × 4 mm steel tube of 0.8 m and 4.5 kg: 88.96 Hz), and a tip load F bends it F L³ / (3.09 E I), the static cantilever's within 3 %. The bodies' accelerations come from the joints' (central differences over ±1 µs along q̇ and q̈ of `Chain::body_states`). One-way, as the [compliant base](#compliant-base): the joints do not feel the links' bending (two-way with `effects.link_bending_reaction`, below). In tool space the flange moves with each link's tip and turns with its slope, d · across + 1.3765 d / L · turn × (flange − tip), its turn added to the rotation vector through exp and log; in joint space the tool pose is the joints, which the bending does not move (its signals `link.<n>.bend` show it). Default six-axis arm: the upper arm, 0.6 m, 12 kg with 20.5 kg beyond it, as a 140 × 8 mm aluminium tube rings at 88.5 Hz. A link along its joint's axis (the base column) has no bend (shortcut in `arm.rs`).
+turn = along × across. The bodies beyond the link ride on its tip whole, with their turning inertia (`field`; below), and m_mod is the diagonal of M_d at zero joints (m / 4 and everything beyond, a swinging payload as if fixed where it hangs). So a link alone rings at the Euler-Bernoulli frequency 1.875104² / 2π · sqrt(E I / (m L³)) (a 60 × 4 mm steel tube of 0.8 m and 4.5 kg: 88.96 Hz), and a tip load F bends it F L³ / (3.09 E I), the static cantilever's within 3 %. The bodies' accelerations come from the joints' (central differences over ±1 µs along q̇ and q̈ of `Chain::body_states`). One-way, as the [compliant base](#compliant-base): the joints do not feel the links' bending (two-way with `effects.link_bending_reaction`, below). In tool space the flange moves with each link's tip and turns with its slope, d · across + 1.3765 d / L · turn × (flange − tip), its turn added to the rotation vector through exp and log; in joint space the tool pose is the joints, which the bending does not move (its signals `link.<n>.bend` show it). A link along its joint's axis (the base column) has no bend (shortcut in `arm.rs`). Link bending and parallelogram bars that are bodies of their own (`arm.bars_turns_with`) are refused together: a bar closes a loop the links' cantilever modes do not have. Against the exact beam the one-mode method stands 1.2 to 2.6 % high (measured in the test case, `docs/development/estimates-and-open-items.md`).
 
 **Directions** (`link_bending.directions`, shipped `["in_plane"]`, the model above). `out_of_plane` adds the bend across that plane (across' = along × across, turning about along × across' = −across), `torsion` the twist about the link's length: one more first mode each per link, states after the others in the order of the list. The twist is a shaft from the joint, its tip turning by d (rad) about the link's line, stiffness k = G I_p / L, I_p = 2 I = π (D⁴ − d⁴) / 32 (`link_bending.shear_modulus_pa`), its shape growing evenly along the link. Signals `link.<n>.bend_across` (m) and `link.<n>.twist` (rad).
 
-With any direction beyond `in_plane`, or with the reaction (below), every mode takes the bodies beyond its link whole: each rides on the tip, its centre moving by t_k = u + r × (c_k − tip) and turning by r per unit of d (a bend: u = across, r = 1.3765 / L · turn; a twist: u = 0, r = along), its turning inertia counted. The link's own body takes its share: a bend 0.3915 u (its turning left out), a twist half of r and of r × (c − origin). Per mode
+Every mode, the one-way bend in the joint's plane too, takes the bodies beyond its link whole: each rides on the tip, its centre moving by t_k = u + r × (c_k − tip) and turning by r per unit of d (a bend: u = across, r = 1.3765 / L · turn; a twist: u = 0, r = along), its turning inertia counted. The link's own body takes its share: a bend 0.3915 u (its turning left out), a twist half of r and of r × (c − origin). Per mode
 
 ```text
 p_i   = Σ_k m_k t_ik · v_k + r_ik · I_k ω_k            the mode's momentum (B q̇: B's column j is p at unit speed of joint j)
@@ -1179,13 +1293,13 @@ The six-axis arm's cycle in tool space (`arm-tool.toml`, the shipped `[link_bend
 | Bending | Path error peak | Path error RMS | Tracking peak | Dwell peak (settling) | Dwell angle peak |
 | --- | --- | --- | --- | --- | --- |
 | off (shipped) | 3.781e-3 | 1.718e-3 | 5.869e-3 | 2.303e-3 | 3.089e-3 |
-| one-way, in_plane | 3.879e-3 | 1.777e-3 | 6.019e-3 | 2.397e-3 | 3.227e-3 |
+| one-way, in_plane | 3.881e-3 | 1.778e-3 | 6.017e-3 | 2.397e-3 | 3.228e-3 |
 | two-way, in_plane | 3.817e-3 | 1.774e-3 | 5.962e-3 | 2.389e-3 | 3.215e-3 |
 | two-way, all three directions | 3.823e-3 | 1.778e-3 | 5.962e-3 | 2.389e-3 | 3.215e-3 |
 
-The links' modes (the upper arm's bend at 88 Hz) lie well above the gears' modes and the position loops, so the reaction changes the tool's errors by 2 to 3 % (re-run 17 November 2026; under 1 % on 15 November) and the other directions by less again: the shipped default stays as it was (bending off, one-way when switched on); two-way is for links soft enough to come near the gears' or the loops' frequencies, and where the bending's energy or its load on the motors matters.
+The links' own modes (51.5, 91.9 and 485.9 Hz at 2 % damping, `sim-cli modes` with the bending on) lie above the arm's lowest modes (8 to 28 Hz) and the position loops, so the bending adds 1 to 4 % to the tool's errors and the reaction changes them against one-way by less than 2 % (re-run 17 November 2026 after the model changes), the other directions by less again: the shipped default stays as it was (bending off, one-way when switched on); two-way is for links soft enough to come near the gears' or the loops' frequencies, and where the bending's energy or its load on the motors matters.
 
-The joints' units are their own (`JointSpec::unit`), no longer the axes': a joint's position signal, its force's unit and whether it has a gearbox output torque follow the joint. The time-optimal planner reads the motors' limits through `feedforward_torque_moving`, so along a line of the tool it slows where a motor reaches its rated speed (on the SCARA's example line, joint 1 near the middle, 307.5 of 314.2 rad/s). Before timing a path as fast as the motors allow, `Controller::plan_path` checks the path as planned within the axis limits: a pose on it the machine cannot go to (a singularity, where the motors would have to turn infinitely fast) is refused with `error-path-range` at once, where the time-optimal timing would slow to a standstill there.
+The joints' units are their own (`JointSpec::unit`), no longer the axes': a joint's position signal, its force's unit and whether it has a gearbox output torque follow the joint. The time-optimal planner reads the motors' limits through `feedforward_torque_moving`, so along a line of the tool it slows where a motor reaches its rated speed. Before timing a path as fast as the motors allow, `Controller::plan_path` checks the path as planned within the axis limits: a pose on it the machine cannot go to (a singularity, where the motors would have to turn infinitely fast) is refused with `error-path-range` at once, where the time-optimal timing would slow to a standstill there.
 
 ## Tripod
 
@@ -1214,13 +1328,16 @@ potential   V = g (m p_z + s_z)
 momentum    L = m v + w × s,  H_O = s × v + I_p w + p × L,  first moment m p + s
 ```
 
-m, s_b and I_b (platform frame, about the centre) sum the platform (`mass.platform_kg`, `platform_inertia_kgm2`), the
+m, s_b and I_b (platform frame, about the centre) sum the platform (`mass.platform_kg`, `platform_inertia_kgm2`)
 and, attached, the payload (`mass.payload_kg` at `payload_offset_m` with its own `payload_inertia_kgm2`, by the
 parallel axis theorem). Each leg is two more bodies swinging with its direction u, added to M_xi and c + g by d'Alembert:
 the rod part (`leg.platform_share` of `leg.mass_kg`, centre `leg.platform_part_centre_m` from the platform joint) at
 X = P − c u and the body part (the rest, centre `leg.base_part_centre_m` from the base joint) at X = B + c u, each with
-its inertia about its centre across the leg (`leg.*_part_inertia_kgm2`; u' = (1 − u uᵀ) d' / L, d' the platform joint's
-velocity). The
+its inertia I_t about its centre across the leg (`leg.*_part_inertia_kgm2`, 0 a point mass; u' = (1 − u uᵀ) d' / L, d' the
+platform joint's velocity): m A_pᵀ A_p + I_t A_uᵀ A_u on M_xi and m A_pᵀ (a0 + g e_z) + I_t A_uᵀ u'' on c + g, with
+A_u = (1 − u uᵀ) [1, −[b]×] / L, A_p = c A_u (body part) or [1, −[b]×] − c A_u (rod part), a0 the part's acceleration
+at ξ' = 0. A `leg.platform_share` outside 0 to 1 is refused. Each part's spin about the leg's own axis is free between
+the two joints and nothing excites it. The
 constraint forces at the base joints (along e_i) do no work along the platform's admissible motions, so projecting the
 Newton-Euler equations with Aᵀ removes them; at rest f = Aᵀ g. Level with the load centred each leg carries m g / (3
 u_z); off centre by c the vertical shares are m g (1/3 + 2 c · â_i / (3 rp)).
@@ -1234,8 +1351,9 @@ p_y, 0), c = 2 rp |sin(g/2)|. **Verdicts**: `tripod-leg-force`, `tripod-leg-stro
 `error-tripod-revolute-angle`, `error-tripod-cone-angle`, `error-tripod-singularity`, and the joint machine's
 `error-joint-beyond-stop`. **Base**: `frame_momentum` as above with the rotors' spin along u_i, for `base::mount`.
 
-Not modelled: the legs' swing inertia about their base joints, friction and play in the revolute and spherical joints,
-the joints' and the platform's elasticity (the legs' screws are the only springs).
+Not modelled: the rotors' gyroscopic coupling with the legs' swing (it is in the frame's momentum only), the rods' faces
+against platform and base, friction and play in the revolute and spherical joints, the joints' and the platform's
+elasticity (the legs' screws are the only springs).
 
 ## Wafer handler
 
@@ -1255,15 +1373,15 @@ bands        s₁ = −r₁ β,  s₂ = r₂ (β / 2 − γ);  span tensions T�
 
 The bodies are the upper arm, the forearm, the effector and the wafer while it is held (each with its mass, its inertia about its centre and its centre on its link's line, `[mass]`), and the column's inertia J_c (`mass.column_inertia_kgm2`: the column's head, motor 2, the shoulder pulley) on θ. h carries the coupling of the two motors: turning at θ̇ pulls the arm outwards, h_φ = −½ ∂M_θθ/∂φ θ̇² (M_θφ is the same at every pose, so no other term at rest), which motor 2 holds; extending during a turn gives the wafer the Coriolis acceleration 2 ṙ θ̇ across its line, which motor 1 takes. M_θθ grows with r² (the wafer's m r², the effector's m (2 L cos φ + c₃)²); M_φφ seen along r, M_φφ / (dr/dφ)², grows without bound towards the full extension. Gravity acts along −z, on the joints' bearings: the plane's motors hold nothing at rest, the Z motor everything it lifts (column, motors 1 and 2, links, effector and wafer: m g lead / 2π).
 
-Motors 1 and 2 drive θ and φ through `RotaryJoint`s (`[joint]`, and `[joint.2]` for the upper arm's stops over it), elastic with `effects.joint_elasticity` (rotor and link two bodies on the gearbox's spring) or rigid (the rotor at i q, its inertia i² J_rotor on the diagonal of M), with friction, efficiency, brake and ripple as on every joint. With `effects.band_elasticity` β and γ are states on the bands' springs (`[elbow_band]`, `[wrist_band]`: the distal pulley's radius, a span's stiffness and damping, the pretension); off, the bands are rigid and the arm has θ and φ alone. The stroke is a rigid `RotaryJoint` on the shared `BallScrew` (`[slide]`, `[screw]`, motor 3's `[gearbox.3]` coupling). States: θ, φ (β, γ) and their rates; with elastic gearboxes the two rotors' angles and speeds; the two brakes; then z, ż and the Z brake.
+Motors 1 and 2 drive θ and φ through `RotaryJoint`s (`[joint]`, and `[joint.2]` for the upper arm's stops over it), elastic with `effects.joint_elasticity` (rotor and link two bodies on the gearbox's spring) or rigid (the rotor at i q, its inertia i² J_rotor on the diagonal of M), with friction, efficiency, brake and ripple as on every joint. With `effects.band_elasticity` β and γ are states on the bands' springs (`[elbow_band]`, `[wrist_band]`: the distal pulley's radius, a span's stiffness and damping, the pretension); off, the bands are rigid and the arm has θ and φ alone. The stroke is a `RotaryJoint` on the shared `BallScrew` (`[slide]`, `[screw]`, motor 3's `[gearbox.3]` coupling), elastic or rigid by the same `effects.joint_elasticity`: elastic, the coupling's and the screw's stiffness in series, K = 1 / (1/K_coupling + 1/K_screw) in N/m, is a spring between the rotor (J_rotor, a body of its own) and the column (m, what it lifts): m z̈ = F_gear + stops and friction + weight, J_rotor ω̇ = τ_motor − τ_gear. The screw's stiffness is taken once, at its softest place in the stroke (`BallScrew::softest_position`, the nut at the far end); a `screw.length_m` shorter than the stroke is refused. States: θ, φ (β, γ) and their rates; with elastic gearboxes the two rotors' angles and speeds; the two brakes; then z, ż and the Z brake, and with elastic gearboxes the Z rotor's angle and speed.
 
 **Signals**: `arm.1.angle` (θ), `arm.2.angle` (φ), `gearbox.1.output_torque`, `gearbox.2.output_torque`, `kinematics.condition`, `effector.direction_error` (the effector's angle a₃ less the wafer centre's polar angle: its turn out of the radial line through its wafer, from the bands' stretch; 0 with rigid bands), `effector.direction_error_at_station` (the same while the cycle dwells, else 0), `wafer.acceleration` (the wafer's in-plane acceleration from the arm's accelerations, as the in-plane acceleration that asks the same share of the hold at rest: |a_xy| (g + F/m) / (g + a_z + F/m) on pads and vacuum, |a_xy| on an edge grip), `band.elbow.pretension_share` and `band.wrist.pretension_share` (k s / T₀ of a span from the stretch; with rigid bands ΔT / 2T₀ from the forces G = M q̈ + h the rigid model asks on β and γ: ΔT₂ = G_γ / r₂, ΔT₁ = (G_β + G_γ / 2) / r₁), `joint.z.force` and the screw's; in the effect views the torque parts, losses (`power.band_elbow`, `power.band_wrist`: the spans' dampers) and energies.
 
 **Verdicts** beyond the common ones and the screw's: `wafer-slip` (the highest `wafer.acceleration` against the hold at rest over `ratings.wafer_slip_safety_factor`: μ g on friction pads, μ (g + A p / m) on vacuum pads, `wafer.edge_grip_acceleration_m_s2` on an edge grip; `[wafer]`), `effector-direction` (`effector.direction_error_at_station` against `ratings.direction_tolerance_rad`), `elbow-band-slack` and `wrist-band-slack` (the tension swing against `ratings.band_max_pretension_share` of the pretension). The settling verdicts judge the wafer centre's r and z (`settling`) and θ (`settling-angle`). The `gripper-hold` verdict of `gripper.rs` judges a cup above its part, which gravity pulls off; a wafer lies on its pads, which gravity presses on, so the hold is the machine's own (it takes `gripper::gravity` and the wafer's mass from `mass.payload_kg`). `rigid_checks` gives the time-optimal plan the screw's rows and the bands' swings (linear in the acceleration); `wafer-slip` is no row of it: the wafer's acceleration is a vector's length, and the plan's rows are linear in the acceleration and the speed squared along the path. The shipped cycle is timed within axis limits sized for the hold, and `sim-cli optimise` judges it with every verdict.
 
-**Modes**: with the motors held, the generalised eigenvalues of K and M over the coordinates that move (Cholesky, Jacobi rotations): the bands' K = [[K₁ + K₂/4, −K₂/2], [−K₂/2, K₂]] on β, γ (K = 2 k r²), the gearboxes' stiffness on θ and φ when they are elastic. Shipped: 18.2, 51.4, 70.6, 186.4 Hz at r = 0.12 m, 16.8, 42.3, 83.7, 175.3 Hz at r = 0.75 m.
+**Modes**: with the motors held, the generalised eigenvalues of K and M over the coordinates that move (Cholesky, Jacobi rotations): the bands' K = [[K₁ + K₂/4, −K₂/2], [−K₂/2, K₂]] on β, γ (K = 2 k r²), the gearboxes' stiffness on θ and φ when they are elastic; and the column on its screw, sqrt(K / m) / 2π with the Z rotor held. Shipped (`sim-cli modes wafer-handler`): 18.2, 51.6, 70.1, 186.3 Hz at r = 0.114 m, 16.8, 41.4, 83.5, 175.3 Hz at r = 0.743 m, and the column's 320.9 Hz at every r.
 
-**Shortcuts**: motor 2's rotor counts at its speed against the column (its own spin with the column, J_rotor θ̈, 1.0e-3 N m at the turn's 36 rad/s², is left out); the stroke is rigid; the wafer is fixed to the effector (its slip is judged, not simulated); the links' centres lie on their lines; the bands' own mass is in the links'.
+**Shortcuts**: motor 2's rotor counts at its speed against the column (its own spin with the column, J_rotor θ̈, 1.0e-3 N m at the turn's 36 rad/s², is left out); one screw stiffness for the whole stroke, the far end's, where it is softest (nearer the bearing the column would ring higher); the wafer is fixed to the effector (its slip is judged, not simulated); the links' centres lie on their lines; the bands' own mass is in the links'.
 
 ## Toggle press
 
@@ -1296,7 +1414,7 @@ s_i), F = (F_i + s_i (d − d_i)) / (1 − s_i / k), the first segment on which 
 ram moves down or stands, times clamp(1 + v / v_s, 0, 1) with v = x' q' the ram's speed down and v_s =
 `process.smoothing_m_s`: a dwell holds it, and it is gone once the ram rises at v_s (the part springs back). Its torque
 at the crank −F x' (`process_torque`, outside the feedforward); the frame's stretch F / k is the signal
-`frame.deflection`, and the ram's height above the bottom dead centre `ram.height` = d + F / k; `ram.speed` and `ram.acceleration` are its first and second derivatives, the stretch's included (by differences of F / k over the crank's angle and speed; where the force fades as the ram rises the stretch also follows the crank's jerk, which is left out). The energy the frame
+`frame.deflection`, and the ram's height above the bottom dead centre `ram.height` = d + F / k; `ram.speed` and `ram.acceleration` are its first and second derivatives, the stretch's included (by differences of F / k over the crank's angle and speed; where the force fades as the ram rises the stretch also follows the crank's speed, so the ram's acceleration takes the crank's jerk, s_w q⃛, which the machine reads with a process force and the frame on, `reads_jerk`). The energy the frame
 takes on the way down is lost when the force fades on the way up (no rebound into the drive).
 
 **Loads.** Ram along z: C_b w / b = m_x (ẍ − g) + F, w = x − a cos φ, C_b the lower link's compression. Upper link about
@@ -1325,7 +1443,7 @@ T_i = F_y/4 + s_x M_z/(2l)                    across it
 P_i = |R_i| + |T_i|,   axis.j1.guide_load = 4 max_i P_i
 ```
 
-dP/dt and dH/dt by central differences over ±1 µs along q̇ and q̈ (as the link bending's loads); F_x is the rack's. Four times the most loaded block, because the guide verdicts share a load equally among a set of `catalog::GUIDE_CARRIAGES` = 4 and rate the set (`guide-load` against `ratings.guide_max_load_n`, `guide-life` (C/P)³ 50 km over the track's mean speed). Shortcuts: the rack's force through o, the arm's rotors' gyroscopic moments left out, the blocks rigid and statically shared; `rigid_guide_loads` is not given, so the time-optimal plan does not keep the guide rating.
+dP/dt and dH/dt by central differences over ±1 µs along q̇ and q̈ (as the link bending's loads); F_x is the rack's. The motors' rotors are part of what the carriage carries: each spins at its ratio times its joint's speed about its axis, its angular momentum J i q̇ along that axis is in H_O, so dH_O/dt holds the gyroscopic moment (the axis turning with its body) and the reaction of the rotor's own acceleration. The rack on the side s at the lever λ: the helical pinion's separating force F_x tan α / cos β pushes the carriage off the rack, so the blocks' F_y is the chain's plus s of it, and the rack's push at y = s λ turns the carriage by −s λ F_x about z, which the blocks carry. Four times the most loaded block, because the guide verdicts share a load equally among a set of `catalog::GUIDE_CARRIAGES` = 4 and rate the set (`guide-load` against `ratings.guide_max_load_n`, `guide-life` (C/P)³ 50 km over the track's mean speed). Shortcuts: the rack's push along x through the carriage's origin but for its lever λ, the blocks rigid and statically shared; `rigid_guide_loads` is not given, so the time-optimal plan does not keep the guide rating.
 
 **Tool space with the track** (`kinematics.tool_axes = ["j1", "x", …, "rz"]`, `tool::FIRST_JOINT`): the first joint's position is a tool axis of its own ahead of the pose's, its row of the Jacobian (1, 0, …, 0) unweighted, so seven axes for seven joints: not redundant, the track given and the arm solved by the damped least squares above with it where it is. A line moves the track and the flange straight together.
 
@@ -1428,7 +1546,7 @@ the roller turning on the spans, R² (EA / L1 + EA / L2) on J_d.
 brakes each motor on its own OFF3 ramp, the same angular deceleration: the surfaces slow in proportion to their radii, so
 where the radii differ the rolls part and the web is overloaded or goes slack (tests
 `an_emergency_stop_along_the_line_keeps_the_web_within_its_limits`,
-`a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ`). Once the drives are off, the holding brakes
+`a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ`). A category 0 stop takes the torque off and the holding brakes take the rolls within some 50 ms, while the dancer's roller runs on and the web loses its tension: in the middle of the roll down to 0.068 N of its 30 N at least (the same test; it asserts below 0.1 N). What keeps the web from going slack there is the coasting rotors' drag from the stator's iron loss (`effects.iron_loss`, on as shipped: 0.0057 N m per motor at the rated speed, from the shipped motor's printed rated point; the [drive](#drive-and-motor) has the law); with it left out the web went slack for a while, so slack or not is no robust outcome of that stop. Once the drives are off, the holding brakes
 keep the rolls and with them the tension; meanwhile the trim takes up what the unwind paid out more than the rewind took
 (the dancer's travel), so that enabled again each motor holds where it stands and the dancer's loop brings the dancer
 back.
@@ -1487,6 +1605,323 @@ R z)); `kinematics.condition`. The verdicts `crank-dead-centre`, `rod-buckling` 
 `ratings.rod_buckling_safety_factor`), `crank-ball-joint` and `platform-ball-joint` judge their peaks; the gearboxes'
 output torque (`gearbox.<i>.output_torque`) is judged by the common gearbox verdicts.
 
+## Four-arm delta H4
+
+Source: [`machine-delta-h4/src/lib.rs`](../crates/machine-delta-h4/src/lib.rs) (id `delta-h4`); the plate and its
+amplifier in [mechanisms](mechanisms.md#two-part-plate-with-a-rack-and-pinion-amplifier-delta-h4). Four arms at 90°,
+arms 1 and 2 carrying plate part A, arms 3 and 4 part B. The parts slide against each other along d = (1, −1, 0)/√2 by
+the half slide h each, A at p − h d and B at p + h d; a pinion between racks on the parts turns the tool through a gear
+stage, c = κ h, κ = i_p / r_p. The tool is (x, y, z, c).
+
+```text
+kinematics  per leg the D3's at q_k = p + σ_k h d (σ = −1 on A, +1 on B);  J_x row k = (u_k, σ_k u_k · d)
+dynamics    M(θ) θ̈ = τ_gear + Q_g − v + τ_joint      every body a point with its Jacobian P in θ: m Pᵀ P, m Pᵀ a0, −m g P_z
+            the parts m_part + 2 (1 − s) m_fb each (P = J_p ∓ d J_h), carriage and payload at p, the tool I_t κ² ḣ² / 2
+```
+
+With `effects.forearm_inertia` the forearms are rods as on the D3 (a sixth at each end, two thirds at the middle, and
+their spin). `effects.amplifier_compliance`: the tool is a body of its own on the amplifier's spring, τ_a = k (κ h − φ) +
+c (κ ḣ − φ̇), I_t φ̈ = τ_a, the arms feeling −κ J_hᵀ τ_a; with `effects.amplifier_backlash` a dead band in it.
+
+**Arm bending** (`effects.arm_bending`, off as shipped): each upper arm bends as the [D3's](#delta-picker-d3) do with
+`link_elasticity`, in its plane on k_b = 3 E I / L_a with a damper and out of it on k_l = 3 E I / L_a³ with a damper, E I
+from the arm tube's own dimensions (`[upper_arm]` `tube_outer_diameter_m` D, `tube_wall_m` s, `youngs_modulus_pa`;
+I = π (D⁴ − (D − 2s)⁴) / 64). The tube stays with the root at θ; the elbow block, the forearms' share and all beyond move
+with the elbow angle e = θ + δ and the moves y along the elbows' axes a_k:
+
+```text
+|q_k − c_k − y_k a_k|² = L_b²,   J_x ẋ = J_q ė + J_y ẏ,   J_y = diag(u_k · a_k)
+M_d (ë, ÿ) = Q_d − v_d − (k_b δ + c_b δ̇, k_l y + c_l ẏ) − κ P_hᵀ τ_a            (8 coordinates beyond the tubes)
+I_arm θ̈ = τ_gear + g m_arm l_cg cos θ + k_b δ + c_b δ̇
+```
+
+The springs' energy (k_b δ² + k_l y²)/2 is elastic energy, the dampers' power the loss `arm_bending`. With
+`effects.arm_tube_inertia` as well the tube takes its share of the bending in its first cantilever mode, with the
+coupling B and the elbow block's twist, exactly as on the [D3](#delta-picker-d3) (`joint_load_at`, `bend_rates`).
+
+The modes (`Machine::modes`): the arms on their gearboxes, bending springs and lateral springs with the motors held, as
+on the D3, plus the amplifier's; `modes_small_amplitude` with the hysteresis's stiffness for the arms. The rods' spin is
+in the frame's momentum.
+
+## Five-bar in the horizontal plane (parallel SCARA)
+
+Source: [`machine-parallel-scara/src/lib.rs`](../crates/machine-parallel-scara/src/lib.rs) (id `parallel-scara`). The
+[D2](#delta-picker-d2)'s five-bar laid flat in the x-y plane: two arms about vertical axes, each with a forearm pair to
+a plate that keeps its orientation; the same kinematics with y for z, the forward solution the point further from the
+shoulders. Optional at the plate: a Z stroke on a ball screw (`[z_axis]`, motor 3) and the tool's turn (`[tool_turn]`,
+motor 4); tool (x, y[, z][, c]).
+
+```text
+M(θ) θ̈ = τ_gear − m_nt Jᵀ J_x⁻¹ w + τ_joint,   M = I_b 1 + m_nt JᵀJ,   I_b = I_arm + L_a² (m_elbow + s m_fb)
+m_nt = plate + payload + 2 (1 − s) m_fb + what the plate carries (Z and C units, carriage)
+```
+
+Gravity acts along −z on the joints' bearings and gives the arms no torque; the stroke lifts its carriage, m_z q̈ = F −
+m_z g, the turn spins the tool, J_c c̈ = T, both felt by the plane's motors only through their masses in m_nt. With
+`effects.joint_elasticity` the stroke and the turn are elastic like the arms' joints: the rotor a body of its own and the
+gearbox's spring between rotor and carriage (for the stroke the screw's and the coupling's stiffness in series, N/m) or
+tool. The arm's first moment is m c from `mass.upper_arm_kg` and `upper_arm_cg_m`.
+
+**Modes** (with elastic gearboxes): the plane's two, the arms on K = diag(k_1, k_2) against the load's mass matrix at the
+pose, det M λ² − (k_1 M_22 + k_2 M_11) λ + k_1 k_2 = 0, damping vᵀCv / (2 ω vᵀMv); the stroke's carriage and the tool on
+their gearboxes with their rotors held, √(K / m) / 2π, damping c / (2 √(K m)); lowest first. `resonance_hz` is the
+plane's lowest (what a shaper on the path is for). Shipped, at x = −0.04 m on the start pose's line: 45.60 and 47.27 Hz in the plane, 142.24 Hz
+and 447.82 Hz (`sim-cli modes parallel-scara`).
+
+## Hexapod (six electric cylinders)
+
+Source: [`machine-hexapod/src/lib.rs`](../crates/machine-hexapod/src/lib.rs) (id `hexapod`); the geometry in
+[mechanisms](mechanisms.md#hexapod). A Stewart-Gough platform on six ball-screw cylinders, each a joint of
+`chain::JointMachine` (`RotaryJoint` with a `BallScrew`). Tool (x, y, z, rx, ry, rz), the orientation a rotation vector.
+
+```text
+inverse   P_i = p + R a_i,  d_i = P_i − B_i,  L_i = |d_i|,  q_i = L_i − L_closed
+twist     q̇_i = u_i · v + (b_i × u_i) · w   (rows of J),   forward: Newton on the twist from the home pose to 1e-13 m
+dynamics  M_ξ ξ̇ + c + g = Jᵀ f,   q̈ = J ξ̇ + a0,   M_q = J⁻ᵀ M_ξ J⁻¹,   h = J⁻ᵀ (c + g − M_ξ J⁻¹ a0),   M_q q̈ + h = f
+```
+
+Each leg is two bodies, as on the [tripod](#tripod): the rod part (`leg.platform_share` of `leg.mass_kg`, centre
+`leg.platform_part_centre_m` from the platform joint) and the body part (the rest, centre `leg.base_part_centre_m` from
+the base joint), each with its inertia across the leg, turning with u = d / L; each adds m Aᵀ A + I_t A_uᵀ A_u to M_ξ and
+m Aᵀ (a0 + g e_z) + I_t A_uᵀ ü to c + g. The payload is a point mass at the platform centre with its own inertia
+(`mass.payload_inertia_kgm2`, turning with the platform). The rotors spin along their legs (in the frame's momentum).
+**Refusals**: `error-hexapod-joint-angle`, a leg steeper than `workspace.max_joint_angle_deg` against the base's or
+the platform's normal (the rods checked against both), and `error-hexapod-singularity`. Verdicts: the screws'.
+Not modelled: the rotors' gyroscopic coupling with the legs' swing, friction and play in the joints.
+
+## Cable robots
+
+Source: [`machine-cable-robot/src/lib.rs`](../crates/machine-cable-robot/src/lib.rs): `cable-planar` (a point-mass
+carriage in a vertical plane on 4 cables, tool x, z) and `cable-spatial` (a platform on 8 cables, tool x, y, z, rx, ry,
+rz); geometry and statics in [mechanisms](mechanisms.md#cable-robots). Each cable leaves its winch over a swivelling
+pulley of radius r and runs straight to its anchor: L = r β + l_f, dL/dP = −u.
+
+**Tensions.** The structure matrix A (columns (u, b × u)) holds a wrench w with A t = w; the tensions are the ones
+nearest `cable.reference_tension_n` within `cable.min_tension_n` to `cable.breaking_load_n` / `cable.safety_factor`
+(a small QP, `distribute`). A pose whose weight no tensions in the band hold is refused. The time-optimal plan keeps
+the tensions of each pose, speed and acceleration in that band (`rigid_tensions_moving`, `tension_band`), with the share
+`profile.tension_reserve` of the room kept back.
+
+**Dynamics.** M ξ̇ + c + g = A t. Each winch is a `RotaryJoint` in metres of cable (the drum's radius the lever, its
+inertia J / r² at the cable, bearing friction `winch.friction_*`, stops at its capacity). Elastic (`effects.cable_stretch`)
+a cable of free length l pulls with t = EA (L − l) / l while taut, the drum with t (1 + (L − l) / (2l)); with
+`effects.cable_damping` a damper c / l (`cable.specific_damping_n_s`). Rigid, l = L(pose) and the winches' inertia joins
+the platform's through G = −Aᵀ.
+
+**Cable weight and sag** (`cable.mass_per_m_kg` ρ, always in when the key is set; 0 where it is left out). The free span
+hangs from both ends: V = ρ g L (z_P − z_E) / 2, at the anchor the force ρ g / 2 (L e_z − (z_P − z_E) u) and its moment.
+The sag is the shallow parabola: with w = ρ g, l_h the span's horizontal part and t0 = EA (L − l) / l,
+
+```text
+T³ − t0 T² − c / 2 = 0,   c = (w l_h)² EA l_f / (12 L)         the chord tension T, its one positive root (`sagged`)
+dT/dt0 = 1 / (1 + c / T³)                                       Ernst's equivalent modulus
+W = T² / 2 − c / T,   energy (l / EA) W                          the platform takes T, the drum T L / l − W / EA
+```
+
+so a cable is taut at any t0 (slack, it hangs at T = √(c / (2|t0|))). Rigid cables have no sag. Left out: W's change with
+the pose through c, and the cables' own inertia. The winches' spin is in the frame's momentum about
+`frame.winch_spin_axes`.
+
+The motor angles of a pose (`inverse`) are those of the free lengths that hold the platform at rest there with the
+distribution's tensions, l = L / (1 + t / EA), so position setpoints and torque feedforward ask the same pretension.
+
+## Overhead crane
+
+Source: [`machine-overhead-crane/src/lib.rs`](../crates/machine-overhead-crane/src/lib.rs), with the extended model in
+[`full.rs`](../crates/machine-overhead-crane/src/full.rs); the machine in [mechanisms](mechanisms.md#overhead-crane-machine-overhead-crane).
+A bridge on a runway (x), a trolley on its girder (y) and a hoist winding the rope on its drum; each drive a motor behind
+a gearbox with its wheel or drum as the lever (`RotaryJoint` with a `Converter`). The tool is the hook as the drives
+place it: x, y and the height the drum's rope gives the empty hook. The rope runs straight from the sheave T = (x_b, y_t,
+H) (`crane.rope_exit_height_m`) to the load P:
+
+```text
+L = |P − T|,  u = (P − T) / L,  e = L − l                  l the free rope the drum has paid out
+t = EA e / l + c / l (L̇ − l̇)  while e > 0, never below 0   (effects.rope_stretch; c with effects.rope_damping)
+(m_b + m_t) ẍ = drive_x + t u_x − F_roll,x + stops         m_t ÿ = drive_y + t u_y − F_roll,y + stops
+J_drum / r² l̈ = drive_l + t (1 + e / (2l)) + stops         m P̈ = −t u − m g e_z
+F_roll = w N tanh(v / v_s),  N = (wheels' mass) g + t (−u_z)   (effects.guide_friction, `crane.rolling_*`)
+```
+
+The drives are rigid with the rotors at the axis (i² J_rotor) and the gearbox's loss factor on the power it passes.
+`resonance_hz` is the pendulum's 1 / (2π) √(g / L) at the rope's length where the plan stands. At rest the load hangs on
+a rope stretched by its weight, l = L / (1 + m g / EA); the motor angles count on the empty hook's weight alone, so the
+drum stands still when the payload goes on or off. With `effects.rope_stretch` off the rope is rigid, L = l, its tension
+the constraint force.
+
+Five further effects, each its own switch (off as shipped; off, the model above exactly), solved together by one mass
+matrix over q = (x_c, y, l, P1 (3) [, a, b] [, ψ]), M(q) q̈ = f(q, q̇), each point mass adding m Jᵀ J to M and Jᵀ (F − m
+J̇ q̇) to f:
+
+- `effects.rope_mass` (`rope.mass_per_m_kg_m` μ): the free rope's material runs off the sheave at the drum's speed, its
+  velocity linear from v_A = v_S + l̇ u to v_P, K = μ l / 6 (|v_A|² + v_A · v_P + |v_P|²); the wound rope moves with the
+  trolley and the drum's surface, K_w = μ (capacity − l) (|v_S|² + l̇²) / 2; V = μ g [l (H + z_P) / 2 + (capacity − l)
+  H]. Lagrange's equations with the growing mass μ l; nothing is booked as loss. `rope.tension` is the drum's end, (m +
+  μ l) g at rest, `rope.shortfall` the hook's.
+- `effects.hook_block`: the hook block (`crane.hook_mass_kg`) at P1 on the rope, the load on a sling of
+  `crane.sling_length_m` at P2 = P1 + l_s (sin a cos b, sin b, −cos a cos b): a spherical double pendulum. The load's
+  signals are P2's.
+- `effects.joint_elasticity`: each drive the elastic joint of the other machines, the gearbox's stiffness, damping and
+  backlash between the rotor (a state) and the wheel or drum. With it on the shipped loops are stable (`sim-cli margins
+  overhead-crane --set effects.joint_elasticity=true`): bridge 177.4 Hz, 51.7°, 9.68 dB; trolley 182.8 Hz, 51.0°,
+  9.86 dB; hoist 49.5 Hz, 78.2°, 20.68 dB.
+- `effects.bridge_skew`: the bridge a rigid girder on two end carriages at x_A,B = x_c ∓ ψ g / 2 (g =
+  `crane.bridge_gauge_m`), each with a drive of the bridge's config sharing its command, Q_x = F_A + F_B, Q_ψ = (F_B −
+  F_A) g / 2; the wheels' lateral stiffness (`crane.bridge_wheel_lateral_stiffness_n_m`, over
+  `crane.bridge_wheelbase_m`) holds the yaw with k_ψ ψ, damped at `crane.bridge_skew_damping_ratio`. The trolley sits at
+  x_c + ψ (y − y_c) and its place shares the wheels' load between the two sides.
+- `effects.floor_contact`: the standing body (the load's point, or the hook block's) is a one-sided constraint a_z = 0 at
+  `crane.floor_height_m` with N ≥ 0, N = −a_z,free / (J_z M⁻¹ J_zᵀ), and Coulomb friction μ_f N
+  (`crane.floor_friction_coefficient`, smoothed over `crane.rolling_smoothing_m_s`) iterated with N; the rigid rope
+  respects the floor too, and a rope that comes taut lifts the load.
+
+Left out: the rope's bending at the sheave, the load's own turning (a point mass), and a slack sling: with the hook block
+and the floor contact on, the sling is a rod.
+
+## Crank and cam machines
+
+Source: [`machine-crank-cam`](../crates/machine-crank-cam/src/lib.rs); the mechanisms in
+[mechanisms](mechanisms.md#crank-and-cam-mechanisms-machine-crank-cam). Each is one motor-driven joint
+(`chain::JointMachine`), so motor, gearbox, drive, friction feedforward, `rigid_checks` and the two-mass mode are the
+joint machine's; each can run its electronic cam (`cam.run`, off as shipped: then the config's cycle segments run).
+The [toggle press](#toggle-press) is the sixth.
+
+**Slider-crank** (`slider-crank`, [`crank.rs`](../crates/machine-crank-cam/src/crank.rs)): x(θ) = r cos θ + √(l² − r²
+sin² θ) from the crank's centre, θ = 0 at the outer dead centre. The rod's mass is split at `rod.crank_end_share`:
+
+```text
+J(θ) = J_crank + m_pin r² + m_x x'²,   speed term m_x x' x'' θ̇²,   V = g (m_x x sin β + m_pin r sin(θ + β))
+```
+
+β = `slider.incline_deg`. The process force (`effects.process_force`, a table over the slider's distance from the outer
+dead centre) pushes back while the slider moves outwards, not on the way back: torque −F x'. Rod force, guide load and
+crank bearing load are judged (`ratings.rod_max_force_n`, `slider_guide_max_load_n`, `crank_bearing_max_load_n`).
+
+**Rotary knife** (`rotary-knife`, [`knife.rs`](../crates/machine-crank-cam/src/knife.rs)): a roll of radius R with n
+blades; in the synchronous zone ±α about each cut the blade runs with the web (slope 1/R), between cuts a VDI 2143 law
+takes the rest of the pitch 2π/n − 2α over L − 2Rα of web. The cut brakes the roll with a table over the angle while it
+turns forwards.
+
+**Flying saw** (`flying-saw`, [`saw.rs`](../crates/machine-crank-cam/src/saw.rs)): a carriage on a rack; per cut length
+it synchronises (speed blended as 3u² − 2u³, v²/(2a) of travel), runs with the material over the cut window W, leaves
+it, and returns by `saw.return_law` over the rest, L − 2v²/a − W of material. The cut pushes along the material with a
+table over the way into the window.
+
+**Disc cam** (`disc-cam`, [`disc.rs`](../crates/machine-crank-cam/src/disc.rs)): a roller follower on a slide, offset e,
+on a disc of base radius r_b; lift s(θ) from VDI 2143 segments, s0 = √((r_b + r_r)² − e²), tan φ = (s' − e) / (s0 + s).
+On the disc, N = (m s̈ + F0 + k s + m g) / cos φ, J(θ) = J_disc + m s'², spring and weight torque (F0 + k s + m g) s'.
+
+`effects.follower_lift_off` (off as shipped) lets the follower leave the disc: its lift is s + g with the gap g a passive
+joint, and with the guide's Coulomb friction F_f = F_g tanh(v / 1 mm/s) (F_g = `follower.guide_friction_n`), which the model
+without lift-off does not have:
+
+```text
+(J_disc + m s'²) θ̈ + m s' g̈ + m s' s'' θ̇² + (F0 + k s_f + m g + F_f) s' = τ
+m s' θ̈ + m g̈ + m s'' θ̇² + F0 + k s_f + m g + F_f = F_c
+F_c = max(0, Q(d) + c_d ḋ),  d = −g,  d = 3.84e-5 Q^0.9 / l^0.8 (mm, N, mm)     Palmgren's roller line contact
+c_d = 2 ζ √(Q / (0.9 d) m)   (`follower.contact_damping_ratio`),   energy 9/19 d Q
+```
+
+The damper's power and the guide's friction are booked as losses, so the energy budget closes through an impact. Signals
+`follower.gap`, `follower.off_disc`; the feedforward takes the follower on the disc.
+
+## Indexing tables (Geneva drive, cam indexer)
+
+Source: [`indexer.rs`](../crates/machine-crank-cam/src/indexer.rs) (`geneva-drive`, `cam-indexer`). A driver steps a
+table of n stations on by one per turn and holds it in the dwell. θ = 0 at mid-index; the index runs over |θ − 2πk| < h.
+
+```text
+Geneva   λ = sin(π/n),  tan φ = λ sin x / (1 − λ cos x),  φ' = λ (cos x − λ) / (1 − 2λ cos x + λ²),  h = π/2 − π/n
+cam      φ = (2π/n) s(u),  u = (x + h) / (2h),  s the modified sine (peak acceleration 5.528, speed 1.760)
+load     J(θ) = J_driver + J_t φ'²,  J_t = J_wheel + J_table + m r_s²,  speed term J_t φ' φ'' θ̇²
+```
+
+The Geneva's acceleration jumps by tan(π/n) θ̇² at the pin's entry (the driver does not feel it, φ' = 0 there); the pin
+pushes the slot with F = T / r. The cam's rollers on the pitch radius r_p take F = T / r_p; with `indexer.cam_radius_m`
+R_c the contact leans by the cam's pressure angle, tan α = r_p φ' / R_c, N = F / cos α (signal `indexer.pressure_angle`
+only with the key; without it α = 0). In the dwell the locking disc (dwell ridge) holds the wheel within
+`indexer.locking_play_rad`. The ring's ω_n² = k / J_s takes the table side's own inertia, the wheel held by the cam.
+
+The table rings on its shaft (`table.stiffness_nm_rad` k, `table.damping_ratio` ζ). By default that ring is worked out
+beside the dynamics, x'' + 2ζω_n x' + ω_n² x = −φ'' θ̇², ω_n² = k / J_s, its amplitude A at the index's end settling as
+exp(−ζ ω_n t) to `ratings.index_settling_tolerance_m` at the station radius, without acting back. With
+`effects.table_twist` (off as shipped) the twist x is a passive joint (J_s = J_table + m r_s²):
+
+```text
+(J_d + J_t φ'²) θ̈ + J_s φ' ẍ + J_t φ' φ'' θ̇² = τ
+J_s φ' θ̈ + J_s ẍ + J_s φ'' θ̇² = −k x − c ẋ,   c = 2ζ √(k J_s)
+```
+
+so the ring acts back on the driver and its loop; signal `table.twist`, loss `power.table_twist`; the index error in the
+dwell adds |x| at the station radius. The feedforward knows the rigid table.
+
+## Axes of the joint kit (screw, rack, linear motor, rotary table)
+
+Source: [`slide.rs`](../crates/machine-joint-kit/src/slide.rs), [`table.rs`](../crates/machine-joint-kit/src/table.rs);
+the transmissions in [mechanisms](mechanisms.md#ball-screw). One `chain::JointMachine` joint each.
+
+- `screw-axis`, `rack-axis`, `linear-motor-axis`: M = m (carriage and payload), h = m g sin(`slide.incline_deg`). Screw
+  and rack are `transmission::Converter`s behind the gearbox; the linear motor drives the carriage directly, its
+  `[motor]` read in N and m (the forcer's mass as the rotor's inertia), its attraction pressing on the guides
+  (`axis.x.guide_load`) and adding friction. The slides' presliding is [above](#slide-presliding-friction).
+- `rotary-table`: an inertia about z, no gravity torque, behind `table.gear` = "planetary", "strain-wave" or "worm". A
+  worm drives with tan γ / tan(γ + ρ') and is driven back with tan(γ − ρ') / tan γ (`WormGear`, the gearbox's back-drive
+  ratio); a worm whose back efficiency is not positive locks itself and the table refuses it (`worm.lead_angle_deg`).
+  The worm's motor spins about the worm's own axis (`worm.motor_axis`, across z), a planetary gear's rotor about z with
+  the table, a strain wave gear's against it.
+
+## Palletiser
+
+Source: [`arm.rs`](../crates/machine-joint-kit/src/arm.rs), [`config/palletiser.toml`](../crates/machine-joint-kit/config/palletiser.toml)
+(`palletiser`): a four-axis arm from `builtin:palletiser`, its URDF joints sums of the motors' joints (`arm.joint_coupling`)
+so that a parallelogram keeps the flange level; Newton-Euler on the chain as the [arms](#arms-in-tool-space-scara-six-axis-arm).
+The parallelogram's bars the URDF leaves out can be bodies of their own (`arm.bars_on`, `bars_turns_with`, `bars_pin_m`,
+`bars_mass_kg`, `bars_com_m`, `bars_inertia_kgm2`): bar i pinned at a point of one link, staying parallel to another and
+turning with it, its points moving at v_pin + ω_turns × (r − pin). The shipped arrays are empty. Bars together with
+`effects.link_bending` are refused. With `effects.payload_swing` the payload hangs on a pivot about two axes, two passive
+joints on `arm.payload_swing_stiffness_nm_rad` and `_damping_nm_s_rad`.
+
+## Mover track
+
+Source: [`machine-mover-track/src/lib.rs`](../crates/machine-mover-track/src/lib.rs) (`mover-track`); the track in
+[mechanisms](mechanisms.md#movers-on-a-closed-track-machine-mover-track). Independent movers on a closed loop of two
+straights and two 180° curves (constant radius or with clothoids), each a joint of `chain::JointMachine` along the
+centre line s (m), driven by the coils under it in N and m as the linear motor axis. The track is level: M = m per
+mover, no bias.
+
+```text
+k(s) = (θ(s + w/2) − θ(s − w/2)) / w                 the curvature over the wheelbase w
+guide load = √((F_a − m v² k)² + (m g)²)              attraction less centrifugal force, and the weight
+mass centre e outside: radius R + e, lateral acceleration v² k (1 + e k), mass m (1 + e k)²
+```
+
+Above m v² k = F_a the mover lifts off (`mover.<k>.liftoff_ratio`). A mover's current is that of its force, I = F / k_t
+less what saturation takes towards the maximum current (`DriveParams::current_for`), shared among the segments under its
+magnet plate by the plate's length on each; each segment's copper loss R I² warms it through one thermal resistance and
+time constant (`segment.temperature_rise`). The cycle is a cam (`track.cycle` "index" or "flying"), or with `cam.run =
+false` the config's segments.
+
+## Worm stage (machine files)
+
+Source: [`sim-netlist/src/worm.rs`](../crates/sim-netlist/src/worm.rs) (`machine.worm` of a [machine file](machine-files.md)).
+A worm that turns back (back efficiency above 0) passes its spring's torque t on as a gearbox does: t η forward, t
+η_back⁻¹ while the load drives it back, η fading in from rest over 0.5 W. A worm whose back efficiency is 0 or less locks
+itself and follows Coulomb's law at its mesh, without the fade, in both models. Of what the wheel takes, o, the mesh puts
+in a drag D = into − o of
+
+```text
+(1/η − 1) s o            on the driving flank (s o > 0),     η = tan g / tan(g + p)
+(1 − η_back) (−s o)       on the overhauling one (s o < 0),   η_back = tan(g − p) / tan g   (below 0 where g < p)
+```
+
+s the sign of its speed, so the mesh only ever takes power. At rest the friction holds anything between the two flanks'
+levels; a locking worm holds its load with no motor torque. Elastic (`worm_drag`): o is the gear spring's torque, the
+rotor gets the drag besides, and below 1e-3 rad/s of the wheel (`STICK_SPEED`, Karnopp's band) it sticks, the drag taking out the speed
+over 1 ms (`STICK_TIME_S`) inside the levels. Rigid (`rigid_locking`): o is solved beside the accelerations; on
+the overhauling flank, which has no unique rigid solution with a heavy wheel (Painlevé's paradox), the drag takes its
+load from the torque the wheel holds at rest, o_rest, the larger of the two flanks' drags joining them so that the
+solve has one answer; a worm moving under an overhauling load with no motor torque brakes by (1 − η_back) o_rest and
+stops, and sticks below the stick speed.
+
 ## Compliant base
 
 Source: [`sim-components/src/base.rs`](../crates/sim-components/src/base.rs). With `effects.base_compliance` every machine and machine file stands on a base that gives way: a rigid body on springs in up to six directions, translation along x, y, z and a small tilt about x, y, z through `base.pivot_m`, in the frame of the tool pose (x, y, z of the tool; the slides' x along their axis). Each direction with a stiffness above 0 is a state d and its rate after the machine's own:
@@ -1514,20 +1949,20 @@ E_B = ½ M_B d'² + d' · P + ½ k d² − θ · (c × g − c₀ × g)
 
 E_B, the base's energy (its sway, its sway with the machine's momentum, its springs, the weight's work on its tilt), is in `Machine::energy` and in the signals `energy.kinetic`, `energy.elastic` and `energy.potential`; its damping c d'² is the signal `power.base`, so the loss budget closes with the base on. M_B − A M⁻¹ Aᵀ has to be positive: a base lighter than what the machine moves on it is refused (`base.mass_kg`, `base.inertia_*_kgm2`). The cost: each evaluation takes the machine's energy at 1 + n + n(n − 1)/2 speed settings and its momentum at n + 3 (n speeds: 4 on the rigid H4, 9 elastic with its amplifier).
 
-Assumptions (shortcut in `base.rs`): the gyroscopic and centrifugal terms of the base's tilt rates on the machine (second order in the small tilt; they do no work, so the energy stays conserved) and the change of the base's inertia with the machine's pose are left out; the process force's work on the moving base is not in the budget. The frame of the T-gantry and the machine files (`frame_compliance`) is the two-way base along one axis, in series with this one. The machine files' belt drives count their pulleys', rotors' and idlers' spin about the normal of the belt's plane (a screw's rotor about its axis); the table's worm motor is taken about z, the T-gantry's idlers are left out; the parallel SCARA's arm is taken as a uniform rod for its first moment (its config gives its inertia, its weight being out of the plane), the crank-cam machines' rotors turn about −y with their crank, roll or disc (the saw's pinion about y), and the knife's cut acts at the cut point.
+Assumptions (shortcut in `base.rs`): the gyroscopic and centrifugal terms of the base's tilt rates on the machine (second order in the small tilt; they do no work, so the energy stays conserved) and the change of the base's inertia with the machine's pose are left out; the process force's work on the moving base is not in the budget. The frame of the T-gantry and the machine files (`frame_compliance`) is the two-way base along one axis, in series with this one. The machine files' belt drives count their pulleys', rotors' and idlers' spin about the normal of the belt's plane (a screw's rotor about its axis); the table's worm motor spins about the worm's own axis (`worm.motor_axis`), the T-gantry counts its idlers' spin and its belt runs' angular momentum (`idler_angular`, `belt_angular`); the parallel SCARA's arm has its first moment m c from `mass.upper_arm_cg_m` (its weight being out of the plane), the crank-cam machines' rotors turn about −y with their crank, roll or disc (the saw's pinion about y), and the knife's cut acts at the cut point.
 
-The cycles of the default configs with the shipped estimates (`[base]` of each config): base off → on one-way → on two-way (`base_reaction`), tracking error peak and dwell error peak (what the settling verdict judges), m (rad where the tool is a turn or the joints). Measured on 15 November 2026, re-run 17 November (`sim-cli analyze ID --set effects.friction_feedforward=false`, with `--set effects.base_compliance=true` and then `--set effects.base_reaction=true`); the two-way runs took 3 to 10 times as long as the one-way ones (the H4 161 s against 17 s, the SCARA 301 s against 34 s).
+The cycles of the default configs with the shipped estimates (`[base]` of each config): base off → on one-way → on two-way (`base_reaction`), tracking error peak and dwell error peak (what the settling verdict judges), m (rad where the tool is a turn or the joints). Measured on 15 November 2026, re-run 17 November; after the model changes of November 2026 spot-checked on the D3 (off, one-way), the T-gantry (off) and the single axis (off, two-way), which agree to the third digit, the rest not re-run (`sim-cli analyze ID --set effects.friction_feedforward=false`, with `--set effects.base_compliance=true` and then `--set effects.base_reaction=true`); the two-way runs took 3 to 10 times as long as the one-way ones (the H4 161 s against 17 s, the SCARA 301 s against 34 s).
 
 | Machine | Base | Tracking peak off → one-way → two-way | Dwell peak off → one-way → two-way |
 | --- | --- | --- | --- |
 | D2 | 300 kg, 15/15/40 Hz | 1.062e-3 → 1.275e-3 → 1.283e-3 | 3.694e-4 → 3.682e-4 → 3.541e-4 |
-| D3 | 300 kg, 15/15/40 Hz | 1.461e-3 → 1.601e-3 → 1.626e-3 | 3.052e-4 → 3.177e-4 → 3.002e-4 |
+| D3 | 300 kg, 15/15/40 Hz | 1.460e-3 → 1.601e-3 → 1.626e-3 | 3.052e-4 → 3.177e-4 → 3.002e-4 |
 | D4 | 300 kg, 15/15/40 Hz | 3.656e-3 → 3.808e-3 → 3.845e-3 | 3.880e-4 → 3.463e-4 → 3.707e-4 |
 | H4 | 300 kg, 15/15/40 Hz | 2.485e-3 → 2.758e-3 → 2.778e-3 | 4.359e-4 → 4.254e-4 → 4.308e-4 |
 | H4, its turn c (rad) | | 2.448e-2 → 2.448e-2 → 2.402e-2 | 3.655e-3 → 3.655e-3 → 4.212e-3 |
 | Linear delta | 300 kg, 15/15/40 Hz | 6.093e-4 → 6.179e-4 → 5.886e-4 | 7.418e-5 → 9.054e-5 → 6.663e-5 |
 | Parallel SCARA | 300 kg, 15/15/40 Hz | 1.021e-3 → 1.231e-3 → 1.358e-3 | 3.030e-4 → 5.850e-4 → 3.127e-4 |
-| T-gantry | 150 kg, 20/20/50 Hz | 1.995e-4 → 2.729e-4 → 2.346e-4 | 4.76e-5 → 4.92e-5 → 5.43e-5 |
+| T-gantry | 150 kg, 20/20/50 Hz | 1.993e-4 → 2.729e-4 → 2.346e-4 | 4.75e-5 → 4.92e-5 → 5.43e-5 |
 | Single axis | 100 kg, 25 Hz along x | 2.011e-4 → 2.115e-4 → 2.078e-4 | 2.076e-5 → 2.534e-5 → 2.542e-5 |
 | Screw axis | 100 kg, 25 Hz along x | 8.31e-5 → 1.805e-4 → 1.859e-4 | 4.51e-5 → 1.181e-4 → 1.040e-4 |
 | Rack axis | 100 kg, 25 Hz along x | 1.182e-4 → 4.008e-4 → 3.640e-4 | 6.17e-5 → 1.633e-4 → 9.30e-5 |
@@ -1817,9 +2252,9 @@ T_half  = 1 / ( 2 · f · sqrt(1 − ζ²) )
 shaped(t) = ( plan(t) + 2K · plan(t − T_half) + K² · plan(t − 2 T_half) ) / (1 + K)²
 ```
 
-f `shaper_frequency_hz`, ζ `shaper_damping` (the ZVD; the other types likewise with their weights). The delays are interpolated between profile cycles. The weights add up to one, so once the plan has stood still for a whole shaper the setpoint is the plan exactly. Where a cycle segment has a dwell or switches the payload, both wait until the shaped setpoint has arrived, the ceiling of the longest axis's shaper in profile cycles after the plan (ZVD ceil(2 · T_half / cycle), with a second ZVD ceil(2 · (T_half + T_half,2) / cycle)); the process force starts with the dwell. Segments without a dwell and without a gripper action go on with the plan. A plain move (`Move`) is no longer busy when its plan has arrived.
+f `shaper_frequency_hz`, ζ `shaper_damping` (the ZVD; the other types likewise with their weights). A copy between two profile cycles is the plan itself at that moment, not an interpolation of the cycles around it: the shaper keeps the motion that made each stored cycle (a move with its blended tail, a path, a cam, a conveyor pass, a stop ramp, a setpoint from outside) and works it out there as the profile generator does at a cycle; where the plan stood (idle, a dwell, waiting for a part) it is where the cycle before left it. So the copies carry no interpolation error, and at a constant period the shaped setpoint steps per cycle by no more than the plan does (a cubic through the cycles overshot the speed limit by 2.6e-9 of it where the acceleration ended, straight lines kinked the shaped acceleration). The weights add up to one, so once the plan has stood still for a whole shaper the setpoint is the plan exactly. Where a cycle segment has a dwell or switches the payload, both wait until the shaped setpoint has arrived, the ceiling of the longest axis's shaper in profile cycles after the plan (ZVD ceil(2 · T_half / cycle), with a second ZVD ceil(2 · (T_half + T_half,2) / cycle)); the process force starts with the dwell. Segments without a dwell and without a gripper action go on with the plan. A plain move (`Move`) is no longer busy when its plan has arrived.
 
-With `effects.shaper_follows_pose` the half period of the first shaper is that of the resonance the machine reports for the planned pose, and that of a second shaper (`shaper2_frequency_hz` above 0) the machine's second mode there (`Machine::modes`); one the machine does not report stays at its frequency. The T-gantry reports two modes, the single axis one. `sim-cli modes` and the app's tuning panel show them over an axis's stroke. Its resonance also depends on the payload: when the gripper closes at the start of a dwell it drops (on the delta D3 from 41.5 to 27.2 Hz). While the plan stands still the period stays the one it had on arrival, so a setpoint that has arrived stays on the target (the longer period reached back into the lift and took it 0.1 mm off); the next move starts with the new period (on the D3 the standstill, 25 ms of shaper lag and the 35 ms dwell, is longer than its 37 ms).
+With `effects.shaper_follows_pose` the half period of the first shaper is that of the resonance the machine reports for the planned pose, and that of a second shaper (`shaper2_frequency_hz` above 0) the machine's second mode there (`Machine::modes`); one the machine does not report stays at its frequency. The T-gantry reports two modes, the single axis one. `sim-cli modes` and the app's tuning panel show them over an axis's stroke. Its resonance also depends on the payload: when the gripper closes at the start of a dwell it drops (on the delta D3 from 41.5 to 27.2 Hz, on the palletiser from 10.63 to 8.29 Hz). The period does not step with it: a step in the delays reads the copies off other points of the plan at once, a step in the setpoint wherever the plan has not stood still for the whole shaper (the palletiser's plan stands 3 ms at the pick; holding the period while the plan stood and taking the new one when it moved stepped the setpoint by 16 µm against its speed, and taken at once the longer period reached back into the D3's lift and took an arrived setpoint 0.1 mm off). A change of the machine is told from one of the pose by asking the machine again at the last cycle's pose. From that cycle on, the half periods go over from the old to the new by the quintic smoothstep 10u³ − 15u⁴ + 6u⁵, over 1.875 · Δτ_max / 0.1 (Δτ_max the change of the longest delay), so that no delay changes faster than a tenth of the time passing (`SHAPER_RAMP_RATE`; each copy runs at 0.9 to 1.1 times the plan's pace). The delays keep a continuous first and second derivative, and the speed and acceleration setpoints are the shaped position's own rates, with each copy's (1 − τ̇_i) and τ̈_i (x_s' = Σ A_i v (1 − τ̇_i), x_s'' = Σ A_i (a (1 − τ̇_i)² − v τ̈_i), v and a the plan's τ_i ago). As every delay changes slower than time passes, the moment each copy reads only moves forward: a setpoint that has arrived stays on its target while the period goes over at rest. During the ramp the shaper sits between the old and the new resonance, and a dwell or a grip waits for the longer of the two spans. Without a change of the machine nothing ramps: a constant period, and a period following the pose alone, shape as before.
 
 A changed shaper setting in a running simulation (the switch, the frequency, the damping, following the pose) is held back until the plan stands still and the shaper's store holds nothing but that pose. Then the setpoint is the plan with the old shaper and with the new one, and does not step. Taken at speed, the three copies of the plan were suddenly read at other delays, or two of them dropped, and the setpoint jumped by up to 16 mm on the T-gantry's X axis at 0.8 m/s.
 
@@ -2303,7 +2738,6 @@ Places where the code carries a `shortcut:` comment.
 | [`sim-components/src/pneumatic.rs`](../crates/sim-components/src/pneumatic.rs), module | A cylinder rides on the machine without acting back on it; its weight belongs in the carrying body's mass | A cylinder not at right angles to the axes that carry it |
 | [`machine-t-gantry/src/lib.rs`](../crates/machine-t-gantry/src/lib.rs), `elastic_derivatives` (line 381) | Idler and cable-chain inertia ride on the carriage's speed over ground, not on its speed along the beam. The two differ by the frame's own motion, which is a thousand times smaller | If the frame moves by more than a small fraction of the carriage's travel |
 | [`sim-components/src/control.rs`](../crates/sim-components/src/control.rs), `Controller::rescale_ticks` (line 302) | When `profile.cycle_s` changes, setpoints on the fieldbus keep their count of cycles, so the fieldbus delay changes with the cycle at once instead of after the queue has run through | Resample the queue, if that step ever matters |
-| [`sim-components/src/control.rs`](../crates/sim-components/src/control.rs), `Controller::shape` (line 707) | While the shaper's period changes (`shaper_follows_pose`), the speed and acceleration setpoints are the delayed plan's, not the exact rates of the shaped position. Off by the rate of the delay, a few percent in a Z move; they are feedforward only | Shape the position alone and difference it, if that matters |
 | [`sim-components/src/mech.rs`](../crates/sim-components/src/mech.rs), `Lugre::eval` (line 290) | Bristles that would settle faster than 1e5 1/s settle at that rate, with their force scaled so that sliding still takes the level | Step the friction state implicitly, if what bristles do within 10 µs ever matters |
 
 ## Other simplifications

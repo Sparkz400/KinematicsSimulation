@@ -333,7 +333,7 @@ pub fn replay(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<Trace
 /// off by about jerk step x row interval in the acceleration and moved a fit by 5 of its standard errors. Where the rows
 /// carry noise (setpoints in encoder counts) the windows' differences are all of its size, and the central window,
 /// which amplifies it least (a fifth of what a window at the end does), is kept: always taking the smallest put the
-/// synthetic belt axis's replay at 0.00397 N m RMS, 0.00348 with the cubic before, 0.00311 now (datasets/RESULTS.md).
+/// synthetic belt axis's replay at 0.00397 N m RMS, 0.00348 with the cubic before, 0.00311 now (datasets/RESULTS.md; 0.00307 on the trace regenerated on 17 November 2026).
 fn slopes(points: &[(f64, Vec<f64>)], k: usize) -> [Vec<f64>; 2] {
     /// How much smoother than the central window another has to be to be taken.
     const SMOOTHEST: f64 = 10.0;
