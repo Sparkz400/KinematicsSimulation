@@ -189,7 +189,7 @@ fn rigid_values(samples: &[Sample], per: f64, basis: Option<&[usize]>) -> Option
             let mut basis: Vec<usize> = (0..p).filter(|&j| samples.iter().any(|(_, x, _)| x[j] != 0.0)).collect();
             // At one speed each way (a constant-speed run, measured: inflation 223) the speed is its sign times a constant,
             // and viscous against Coulomb friction is noise: viscous is left out (NaN) and the Coulomb value holds both.
-            if inflation(&samples, &basis, 1).is_none_or(|f| f > WEAK) {
+            if inflation(samples, &basis, 1).is_none_or(|f| f > WEAK) {
                 basis.retain(|&j| j != 1);
             }
             basis
