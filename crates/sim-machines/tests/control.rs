@@ -1292,7 +1292,10 @@ fn the_shipped_velocity_loops_keep_their_margins() {
 /// amplitude, a tenth of the shared drive.rated_torque_nm 3.2 N m, it gives what the audit measured with the efficiency
 /// off: 48.5 Hz, 83.1 degrees, 21.31 dB (run: 48.504 Hz, 83.07 degrees, 21.305 dB). With its own, a tenth of the hoist's
 /// 6.6 N m, the larger test torque breaks the motor's friction more and so damps the loop less: 50.43 Hz, 73.73 degrees,
-/// 20.98 dB (run, 16 November 2026), what `velocity_loop_margins` reports.
+/// 20.98 dB (run, 16 November 2026), what `velocity_loop_margins` reports. Since 17 November the crane's Kv is 10 1/s for
+/// 30 (its position loop inside the travels' velocity loops of some 5 Hz, tuned for the elastic drives), which lags the
+/// hoist's loop less at its crossover: 48.44 Hz, 87.48 degrees, 21.273 dB, and with its own amplitude 50.5 Hz, 77.6
+/// degrees, 20.95 dB.
 #[test]
 fn each_loop_is_measured_at_its_own_amplitude_and_the_hoist_without_the_efficiency_fade() {
     use sim_components::analysis::{
@@ -1317,9 +1320,9 @@ fn each_loop_is_measured_at_its_own_amplitude_and_the_hoist_without_the_efficien
         );
     };
     let old = loop_margins(&velocity_loop_response(entry, &cfg, 2, &loop_frequencies(&cfg).unwrap(), 0.32).unwrap());
-    near(&old, 48.50, 83.07, 21.305);
+    near(&old, 48.44, 87.48, 21.273);
     let margins = &velocity_loop_margins(entry, &cfg, &[]).unwrap()[0].1;
-    near(margins.last().unwrap(), 50.43, 73.73, 20.98);
+    near(margins.last().unwrap(), 50.5, 77.6, 20.95);
 }
 
 /// The shipped velocity loops keep their margins across the bounds (`loops_keep_their_margins`), a module per config
