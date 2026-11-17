@@ -1363,7 +1363,15 @@ pub struct Verdict {
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
 /// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
 /// own keys (`drive::Motor`: a stepper's and an induction motor's).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 70] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 76] = [
+    // A guide set's carriages and rail length for the catalogue's guides, and the share of the moved mass and of the guide
+    // friction that the config's own guide carriages are (`catalog::mechanics`).
+    "ratings.guide_carriages",
+    "ratings.guide_rail_length_m",
+    "mass.guide_carriages_kg",
+    "friction_x.seal_drag_n",
+    "friction.seal_drag_n",
+    "slide.seal_drag_n",
     // The housing's highest rise (`charts::utilisation`).
     "ratings.housing_max_rise_k",
     // The maker's printed S1 curve (`s1_torque`).

@@ -1318,13 +1318,17 @@ impl SweepFit {
 /// and the next one, at 94 Hz, was set against the measured 61.5 Hz (factor 0.42 for 1.25). `None` where the measured
 /// sweep shows no dip with both flanks, or the config's none at all.
 ///
-/// Which dip is the measured mode is told by how its frequency moves with the stiffness, not by being the nearest (that
+/// Which dip is the measured mode is told by how the config's dips move with the stiffness, not by being the nearest (that
 /// holds only while the stiffness is off by less than the ratio of neighbouring dips' frequencies, 61.5 and 103 Hz on the
 /// T-shaped belt gantry: a factor of 1.3 either way). The config is swept a second time with `BELT_STIFFNESS_KEY` raised
-/// by `STIFFNESS_PROBE` and each dip matched to the nearest dip of that sweep; a mode carried by the belt moves as
-/// f ~ sqrt(k), a ratio of sqrt(`STIFFNESS_PROBE`), one the belt does not carry stays. Dips that move at least half
-/// that (in the log) are the candidates, and the nearest of them to the measured one is taken; with no such dip, or no
-/// key `BELT_STIFFNESS_KEY` in the config, the nearest dip of all. The cost is a second sweep of the config.
+/// by `STIFFNESS_PROBE`, and each dip matched to the nearest dip of that sweep gives its exponent s in f ~ k^s: 1/2 for a
+/// mode the belt carries alone, less for one it shares, 0 for one it does not carry. Each dip with s of at least 1/4 is
+/// tried as the measured one: the stiffness that puts it there moves every dip by its own exponent, and the one is taken
+/// whose moved dips meet the measured sweep's dips best (the sum of the log distances, each measured dip to the nearest
+/// moved one and each moved one inside the measured range to the nearest measured one; of equal sums the nearer). With no
+/// such dip, or no key `BELT_STIFFNESS_KEY` in the config, the nearest dip of all. The cost is a second sweep of the
+/// config. On the T-shaped belt gantry swept from 30 to 200 Hz this takes the 60 Hz dip for a belt from half to 2.5
+/// times as stiff (`sweep.rs`); the nearest dip took the 102 Hz one beyond 1.8 times.
 pub fn fit_sweep(
     entry: &MachineEntry,
     cfg: &Config,
@@ -1354,25 +1358,47 @@ pub fn fit_sweep(
     let config = crate::analysis::frequency_sweep(entry, cfg, motor, &wider, amplitude)?;
     let apart = |r: &Resonance| (r.frequency / fitted.frequency).ln().abs();
     let all = dips(&config);
-    let mut moving = all.clone();
-    if let Ok(base) = cfg.f64(BELT_STIFFNESS_KEY) {
-        let mut stiffer = cfg.clone();
-        stiffer.set_text(&format!("{BELT_STIFFNESS_KEY} = {:?}", base * STIFFNESS_PROBE))?;
-        let probe = dips(&crate::analysis::frequency_sweep(entry, &stiffer, motor, &wider, amplitude)?);
-        let full = 0.5 * STIFFNESS_PROBE.ln();
-        let follows = |r: &Resonance| {
-            // The probe's dip of the same mode: the nearest, taken only within a factor 1.2 of its frequency.
-            probe
-                .iter()
-                .map(|q| (q.frequency / r.frequency).ln())
-                .filter(|m| m.abs() < 1.2f64.ln())
-                .min_by(|a, b| a.abs().total_cmp(&b.abs()))
-                .is_some_and(|moved| moved >= 0.5 * full)
-        };
-        moving.retain(follows);
-    }
-    let pool = if moving.is_empty() { all } else { moving };
-    Ok(pool.into_iter().min_by(|a, b| apart(a).total_cmp(&apart(b))).map(|config| SweepFit { config, fitted }))
+    let nearest = || all.iter().copied().min_by(|a, b| apart(a).total_cmp(&apart(b)));
+    let Ok(base) = cfg.f64(BELT_STIFFNESS_KEY) else {
+        return Ok(nearest().map(|config| SweepFit { config, fitted }));
+    };
+    let mut stiffer = cfg.clone();
+    stiffer.set_text(&format!("{BELT_STIFFNESS_KEY} = {:?}", base * STIFFNESS_PROBE))?;
+    let probe = dips(&crate::analysis::frequency_sweep(entry, &stiffer, motor, &wider, amplitude)?);
+    // Each dip's exponent s of f ~ k^s: by how far the probe's dip of the same mode (the nearest, taken only within a
+    // factor 1.2) lies from it; 0 where the probe has none there.
+    let exponent = |r: &Resonance| {
+        probe
+            .iter()
+            .map(|q| (q.frequency / r.frequency).ln())
+            .filter(|m| m.abs() < 1.2f64.ln())
+            .min_by(|a, b| a.abs().total_cmp(&b.abs()))
+            .map_or(0.0, |moved| moved / STIFFNESS_PROBE.ln())
+    };
+    let modes: Vec<(Resonance, f64)> = all.iter().map(|r| (*r, exponent(r))).collect();
+    let measured_dips = dips(measured);
+    let (low, high) = (frequencies[0], frequencies[n - 1]);
+    let log_gap =
+        |f: f64, set: &mut dyn Iterator<Item = f64>| set.map(|g| (f / g).ln().abs()).fold(f64::INFINITY, f64::min);
+    // The config's dips moved to the stiffness at which dip `i` is the measured one, against the measured dips both ways
+    // (each measured dip to the nearest moved one, each moved one inside the measured range to the nearest measured).
+    let mismatch = |i: usize| {
+        let (r, s) = modes[i];
+        let k_log = (fitted.frequency / r.frequency).ln() / s;
+        let moved: Vec<f64> = modes.iter().map(|(q, t)| q.frequency * (t * k_log).exp()).collect();
+        let to_moved: f64 = measured_dips.iter().map(|m| log_gap(m.frequency, &mut moved.iter().copied())).sum();
+        let to_measured: f64 = moved
+            .iter()
+            .filter(|f| (low..=high).contains(*f))
+            .map(|f| log_gap(*f, &mut measured_dips.iter().map(|m| m.frequency)))
+            .sum();
+        to_moved + to_measured
+    };
+    let candidates: Vec<usize> = (0..modes.len()).filter(|&i| modes[i].1 >= 0.25).collect();
+    let best = candidates
+        .into_iter()
+        .min_by(|&a, &b| mismatch(a).total_cmp(&mismatch(b)).then(apart(&modes[a].0).total_cmp(&apart(&modes[b].0))));
+    Ok(best.map(|i| modes[i].0).or_else(nearest).map(|config| SweepFit { config, fitted }))
 }
 
 /// The factor `fit_sweep` raises the stiffness by for its second sweep: small enough that a mode stays near where it was,

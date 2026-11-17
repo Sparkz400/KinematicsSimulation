@@ -12,17 +12,35 @@ reduced by the Douglas-Peucker rule, no point between those the graph draws is i
 the points. The torque is the motor's, at the shaft, not at the converter's current limit.
 Which supply: the graphs show the curve per supply voltage (200 ... 240 V as 230 V 1 AC and 240 V 3 AC, 380 ... 480 V as
 400 V 3 AC and 480 V 3 AC). A motor of motors_s210.csv that has a rated point at 400 V (rated_*_400v) gets its curve
-for 400 V 3 AC, else the one for 240 V 3 AC. The curves for the other supplies are in the PDF, not here.
-Checks the script makes and tools/tests/test_s1_curves_s210.py repeats: the curve starts at the printed static torque and
-passes the printed rated point of its supply, each within 2 % or half of the last printed digit, whichever is more; the
-Mmax line of the same graph is at the printed maximum torque (same tolerance). A graph that fails a check, or that the
-script cannot read, gives no rows: such a motor has no curve here (the readings differ from the printed table by more
-than that, or the drawing of the page is not the usual one: two lines drawn twice, a tick label missing).
+for 400 V 3 AC, else the one for 240 V 3 AC; the simulator writes it into a config only at that voltage ("400v" or
+"230v", with the 6SL5310 converters too, whose DC link is the same). The curves for the other supplies are in the PDF.
+Checks, against the printed table (the numbers the configs are built from): the S1 line's start against the static
+torque, the graph's Mmax level against the maximum torque, the reduced curve at the rated speed of its supply against the
+rated torque, each within 2 % or half of the last printed digit, whichever is more (tools/tests/test_s1_curves_s210.py
+repeats the first and the last).
+Scaled to the table: where a graph misses one of the three, all its torques are scaled alike (its shape kept) by the
+factor nearest 1 that makes it meet all three, if that is within 4 %; else the motor has no curve. Scaled (factor on the
+graph's torques): 1FT2105-4AH 1.0363 (S1 start 4.82 N m on the graph, printed 5; 3.50 N m at the rated 4500 r/min,
+printed 3.7), 1FT2105-4AF 1.0139, 1FT2206-3AB 1.0116, 1FT2206-3AF 1.0103, 1FT2208-2AF 1.0079, 1FT2206-4AC 0.9853,
+1FT2104-5AK 0.9877, 1FK2106-3AF 0.9913, 1FK2104-5AK 0.9945, 1FT2203-4AK 0.9950, 1FK2106-4AF 0.9959, 1FT2103-4AH 0.9967,
+1FT2104-4AK 0.9971, 1FT2206-4AH 0.9980; every other curve is the graph's as read (factor 1).
+No curve (88 of the 96 motors have one), the straight line from the static to the rated point stays in the simulator:
+1FK2106-6AF, 1FK2203-2AK, 1FK2203-4AK, 1FT2205-2AH, 1FT2206-2AH, 1FT2208-3AF, 1FT2210-5AB, whose graphs no single factor
+within 4 % brings to the table (the S1 line passes 4 to 9 % off the printed rated point while its start and Mmax level
+meet theirs, or the other way round: 1FT2210-5AB starts at 48.6 N m against 50, has Mmax 149.7 against 150 and 37.4 N m
+at the rated point against 39); and 1FT2206-2AF, whose 400 V graph (page 153) draws one S1 line for its two supplies,
+which the script cannot tell by colour (cataloglib.pdfvec reads no separation colours).
+Reading: a graph drawn twice, the second set a little apart over the first (page 152), is read from the set drawn
+last, the one printed; a rectangle drawn with points along its edges (page 159 on) is a frame as any other; a level line
+broken by the "Mmax" label (page 160) is joined across the gap.
 The speed axis: its last printed label is not always the frame's right edge; where the Mmax lines of the 400 V graph stop
 at a speed other than the motor's maximum speed, the axis is taken from that stop when it is a whole number of grid lines
 of a multiple of 50 r/min each.
-Not in the graphs and so not here: the thermal limit of a duty other than S1, the S6 limits, the curves of the converters
-of the 6SL5310 line.
+Checked by eye on 17 November 2026 against the printed graphs (the CSV's points drawn over the rendered page, the axes
+from its tick labels): 1FK2102-0AG, 1FK2102-1AG, 1FK2104-5AF, 1FK2205-4AF, 1FT2105-4AH (lies 3.6 % above the drawn line,
+as scaled), 1FT2106-3AF, 1FT2108-5SB, 1FT2208-2AF: on the line, ending where it ends.
+Not in the graphs and so not here: the thermal limit of a duty other than S1, the S6 limits. The graphs are drawn with
+the 6SL3210 converters; none is printed for the 6SL5310 line.
 '''
 
 [[sources]]

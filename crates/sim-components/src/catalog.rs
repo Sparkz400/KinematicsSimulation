@@ -178,11 +178,13 @@ fn vendor_supply(supply: &str) -> Option<(&str, f64)> {
 /// higher bus of the two).
 fn single_phase_line(vendor: &str, line: f64) -> bool {
     let drives = vendor_rows("drives_", vendor, line);
-    !drives.is_empty()
-        && drives.iter().all(|d| {
-            let text = d.get("supply").map_or(String::new(), |t| t.to_lowercase());
-            text.starts_with("1 ac") || text.starts_with("1 x") || text.starts_with("1x") || text.starts_with("single")
-        })
+    !drives.is_empty() && drives.iter().all(|d| single_phase(d.get("supply").copied().unwrap_or("")))
+}
+
+/// Whether a drive's `supply` column says single-phase: "1 AC ...", "1 x ...", "1x ...", "single ...".
+fn single_phase(supply: &str) -> bool {
+    let text = supply.to_lowercase();
+    ["1 ac", "1 x", "1x", "single"].iter().any(|p| text.starts_with(p))
 }
 
 /// A supply of the S210 data: the voltage of its rated columns ("230v", "400v") and whether the converters are the
@@ -656,20 +658,7 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
         set_if_present(cfg, "linear_motor.attraction_force_n", attraction)?;
         set_if_present(cfg, "linear_motor.pole_pitch_m", pitch)?;
     }
-    // The S1 curve Siemens prints as a graph (`s1_curves_s210.csv`, digitised: article, speed, torque, rising speed), where
-    // the file has the article: it replaces the straight line between the printed standstill and rated points
-    // (`analysis::s1_torque`). A motor without rows leaves the config's keys as they are.
-    let curve: Vec<(f64, f64)> = rows(table("siemens/s1_curves_s210.csv"))
-        .into_iter()
-        .filter(|r| r.get("article") == Some(&article))
-        .filter_map(|r| Some((number(&r, "speed_rad_s")?, number(&r, "torque_nm")?)))
-        .collect();
-    if curve.len() >= 2 {
-        let list =
-            |f: fn(&(f64, f64)) -> f64| curve.iter().map(|p| format!("{:?}", f(p))).collect::<Vec<_>>().join(", ");
-        cfg.set_text(&format!("motor.s1_curve_speed_rad_s = [{}]", list(|p| p.0)))?;
-        cfg.set_text(&format!("motor.s1_curve_torque_nm = [{}]", list(|p| p.1)))?;
-    }
+    set_s1_curve(cfg, &s1_curve(article, supply))?;
     cap_peak_torque(cfg, m.max_torque)?;
     set(cfg, "drive.rated_torque_nm", m.rated_torque)?;
     set(cfg, "drive.rated_speed_rad_s", rated_speed)?;
@@ -693,6 +682,49 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     let ke = m.emf_constant.unwrap_or(kt);
     set_if_present(cfg, "drive.back_emf_constant_v_s_rad", m.emf_constant.unwrap_or(0.0))?;
     set(cfg, "drive.no_load_speed_rad_s", (crate::drive::WINDING_PER_DC_LINK * bus / ke).max(1.1 * rated_speed))
+}
+
+/// The S1 curve Siemens prints as a graph for an S210 motor at a supply (`s1_curves_s210.csv`, digitised: article, speed,
+/// torque, rising speed): the file holds one curve per motor, the 400 V 3 AC one for a motor with a rated point at 400 V
+/// and else the 240 V 3 AC one (its meta file), so it is the motor's only at that voltage, "400v" or "230v" (the 6SL5310
+/// converters, "s210new-...", give the same DC link and so the same curve, as they give the same motor values; not the
+/// S120). Empty where the file has no curve for it.
+fn s1_curve(article: &str, supply: &str) -> Vec<(f64, f64)> {
+    let Some(row) = rows(table("siemens/motors_s210.csv")).into_iter().find(|r| r["part_number"] == article) else {
+        return Vec::new();
+    };
+    let read_for = if number(&row, "rated_speed_400v_rad_s").is_some() { "400v" } else { "230v" };
+    if s210_supply(supply).map(|(voltage, _)| voltage) != Some(read_for) {
+        return Vec::new();
+    }
+    rows(table("siemens/s1_curves_s210.csv"))
+        .into_iter()
+        .filter(|r| r.get("article") == Some(&article))
+        .filter_map(|r| Some((number(&r, "speed_rad_s")?, number(&r, "torque_nm")?)))
+        .collect()
+}
+
+/// Puts a named motor's S1 curve into `motor.s1_curve_speed_rad_s` and `motor.s1_curve_torque_nm`, where it replaces
+/// the straight line between the printed standstill and rated points (`analysis::s1_torque`); without one (fewer than
+/// two points) it takes the keys out, as a curve the config had belongs to the motor it had.
+fn set_s1_curve(cfg: &mut Config, curve: &[(f64, f64)]) -> Result<(), ConfigError> {
+    const KEYS: [&str; 2] = ["s1_curve_speed_rad_s", "s1_curve_torque_nm"];
+    let has = KEYS.iter().any(|k| cfg.get(&format!("motor.{k}")).is_ok());
+    if curve.len() < 2 && !has {
+        return Ok(());
+    }
+    let parse = |e: toml::de::Error| ConfigError::Parse(e.to_string());
+    let mut all = cfg.to_text()?.parse::<toml::Table>().map_err(parse)?;
+    let motor = all.get_mut("motor").and_then(toml::Value::as_table_mut).ok_or(ConfigError::Missing("motor".into()))?;
+    for (key, pick) in KEYS.into_iter().zip([|p: &(f64, f64)| p.0, |p: &(f64, f64)| p.1]) {
+        if curve.len() < 2 {
+            motor.remove(key);
+        } else {
+            motor.insert(key.into(), toml::Value::Array(curve.iter().map(|p| toml::Value::Float(pick(p))).collect()));
+        }
+    }
+    *cfg = Config::parse(&toml::to_string(&all).map_err(|e| ConfigError::Parse(e.to_string()))?)?;
+    Ok(())
 }
 
 /// The motor's peak torque `uncapped` held within the pulley's rating. Braking, the pulley's torque is the motor's times
@@ -1689,8 +1721,8 @@ pub const PER_MOTOR_TABLES: [&str; 7] = ["parts", "motor", "gearbox", "drive", "
 /// motor, gearbox and drive its `[parts.<id>]` names applied from the catalogue over that. A key there has to be one
 /// the shared table has (`motor.<id>.rotor_inertia_kgm2` overrides `motor.rotor_inertia_kgm2`). Without such tables
 /// the config as it is. The drives, the machine files' drive trains and the per-motor verdicts read their motor's.
-/// shortcut: the drives' cycle times, the noise seed and a shared DC link stay those of the shared `[drive]`; the
-/// velocity gain is not retuned for a part named per motor (set `drive.<id>.velocity_kp_nm_s_rad` with it).
+/// shortcut: the drives' cycle times, the noise seed and a shared DC link stay those of the shared `[drive]`. (The
+/// velocity gain of a motor with parts of its own is retuned by `retuned_per_motor`.)
 pub fn motor_config(cfg: &Config, id: &str) -> Result<Config, ConfigError> {
     let mut out = cfg.clone();
     let mut named = false;
@@ -2579,17 +2611,57 @@ mod tests {
 
     #[test]
     fn a_guide_set_has_four_carriages_unless_the_config_says_and_a_rail_length_sets_the_weight() {
-        // Hand: 2 rails x 1.45 kg/m x 0.5 m + 4 x 0.18 kg = 2.17 kg for an HGH15CA (rail 0.5 m); stroke 0.3 m plus two
-        // carriages of 0.0614 m would give 2 x 1.45 x 0.4228 + 0.72 = 1.946 kg.
-        let mut cfg = Config::parse("[ratings]
-guide_max_load_n = 1.0
-").unwrap();
-        assert_eq!(guide_carriages(&cfg), 4.0);
-        cfg.set_text("ratings.guide_carriages = 2.0").unwrap();
-        assert_eq!(guide_carriages(&cfg), 2.0);
+        // Hand, HGH15CA (0.18 kg a carriage, 1.45 kg/m of rail, 0.0614 m long): rails of the stroke 0.3 m and two
+        // carriages, 2 x 1.45 x (0.3 + 0.1228) + 4 x 0.18 = 1.94612 kg; rails of 0.5 m, 2 x 1.45 x 0.5 + 0.72 = 2.17 kg.
         let row = rows(table("hiwin/linear_guides.csv")).into_iter().find(|r| r["part_number"] == "HGH15CA").unwrap();
-        cfg.set_text("ratings.guide_rail_length_m = 0.5").unwrap();
+        let cfg =
+            Config::parse("format_version = 1\n[ratings]\nguide_max_load_n = 1.0\n[slide]\nstroke_m = 0.3\n").unwrap();
+        assert_eq!(guide_carriages(&cfg), 4.0);
+        assert!((mechanics::guide_weight(&cfg, &row, 4.0) - 1.94612).abs() < 1e-12);
+        let cfg = Config::parse(
+            "format_version = 1\n[ratings]\nguide_max_load_n = 1.0\nguide_carriages = 2.0\nguide_rail_length_m = 0.5\n\
+             [slide]\nstroke_m = 0.3\n",
+        )
+        .unwrap();
+        assert_eq!(guide_carriages(&cfg), 2.0);
         assert!((mechanics::guide_weight(&cfg, &row, 4.0) - 2.17).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_named_guide_set_puts_its_carriages_mass_and_seal_drag_in_place_of_the_configs() {
+        // HGH15CA: 0.18 kg and 4.7 N of seal drag a carriage, four of them 0.72 kg and 18.8 N. Without the share keys
+        // the config's carriage (4 kg) and friction (15 N sliding, 20 N breakaway) hold no guide carriages: 4.72 kg,
+        // 33.8 N, 38.8 N. With 0.5 kg and 2 N of them its own: 4.22 kg, 31.8 N, 36.8 N, and the shares become the new.
+        let base = "format_version = 1\n[ratings]\nguide_max_load_n = 1.0\nguide_dynamic_load_rating_n = 1.0\n\
+                    [mass]\ncarriage_kg = 4.0\n";
+        let friction = "[friction_x]\ncoulomb_n = 15.0\nstiction_n = 20.0\n";
+        let named = |text: &str| {
+            let mut cfg = Config::parse(text).unwrap();
+            mechanics::apply_mech_axis(&mut cfg, "HGH15CAx4").unwrap().unwrap();
+            cfg
+        };
+        let levels = |cfg: &Config| {
+            ["mass.carriage_kg", "friction_x.coulomb_n", "friction_x.stiction_n"].map(|k| cfg.f64(k).unwrap())
+        };
+        let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-12);
+        assert!(close(levels(&named(&format!("{base}{friction}"))), [4.72, 33.8, 38.8]));
+        let cfg = named(&format!("{base}guide_carriages_kg = 0.5\n{friction}seal_drag_n = 2.0\n"));
+        assert!(close(levels(&cfg), [4.22, 31.8, 36.8]));
+        assert!((cfg.f64("mass.guide_carriages_kg").unwrap() - 0.72).abs() < 1e-12);
+        assert!((cfg.f64("friction_x.seal_drag_n").unwrap() - 18.8).abs() < 1e-12);
+        // C for 50 km 14700 N and C0 23470 N a carriage: 58800 N and 4 x 23470 / 2 = 46940 N.
+        assert_eq!(cfg.f64("ratings.guide_dynamic_load_rating_n").unwrap(), 58800.0);
+        assert_eq!(cfg.f64("ratings.guide_max_load_n").unwrap(), 46940.0);
+    }
+
+    #[test]
+    fn a_single_phase_supply_is_told_by_its_text_and_no_makers_line_is_single_phase() {
+        assert!(single_phase("1 AC 200 ... 240 V") && single_phase("1 x 230 V") && single_phase("Single-phase 230 V"));
+        assert!(!single_phase("1 or 3 AC 100 ... 240 V") && !single_phase("3 AC 240 V") && !single_phase("3x 200 VAC"));
+        // Every maker's line has a three-phase drive (the AKD's "1 or 3 AC" counts as three): 1.35 times the line.
+        for (vendor, line) in SUPPLIES.iter().filter_map(|s| vendor_supply(s)) {
+            assert!(!single_phase_line(vendor, line), "{vendor} {line}");
+        }
     }
 
     #[test]
