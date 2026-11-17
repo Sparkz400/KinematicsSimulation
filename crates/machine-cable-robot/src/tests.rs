@@ -11,8 +11,18 @@ fn the_spatial_cable_robot_passes_the_standard_suite() {
     sim_core::testkit::run_standard_suite(&SPATIAL);
 }
 
+/// The planar robot without its cables' own mass: the hand calculations below are those of massless cables.
 fn planar() -> CableRobot {
-    CableRobot::new(&PLANAR.config()).unwrap()
+    let mut cfg = PLANAR.config();
+    cfg.set_text("cable.mass_per_m_kg = 0.0").unwrap();
+    CableRobot::new(&cfg).unwrap()
+}
+
+/// The planar robot with its cables of `rope` kg/m.
+fn planar_with_rope(rope: f64) -> CableRobot {
+    let mut cfg = PLANAR.config();
+    cfg.set_text(&format!("cable.mass_per_m_kg = {rope:?}")).unwrap();
+    CableRobot::new(&cfg).unwrap()
 }
 
 const CENTRE: [f64; 2] = [0.0, 0.8];
@@ -47,6 +57,7 @@ fn the_planar_tensions_at_the_centre_are_the_hand_solved_ones() {
     // The machine holds it with the drums' torque over the gearbox: rigid, t r / i at each motor, pulling in.
     let mut cfg = lossless_config(&PLANAR);
     cfg.set_text("effects.cable_stretch = false").unwrap();
+    cfg.set_text("cable.mass_per_m_kg = 0.0").unwrap();
     let machine = (PLANAR.build)(&cfg).unwrap();
     let mut torque = vec![0.0; 4];
     machine.equilibrium(&CENTRE, &mut Vec::new(), &mut torque);
@@ -299,6 +310,153 @@ fn the_planar_carriage_has_the_hand_calculated_momentum() {
         assert!((got - want).abs() < 1e-9, "{f:?}");
     }
     assert!((f.mass - 5.0).abs() < 1e-12 && (f.gravity[2] + 9.80665).abs() < 1e-12);
+}
+
+/// The cables' tensions in motion (what the time-optimal plan keeps within the band): they hold the wrench M a + g. At
+/// the centre with the carriage accelerating at (2, -1) m/s^2, m = 5 kg: sum t_k u_k = (m a_x, m (a_z + g)) = (10 N,
+/// 5 x (9.80665 - 1) = 44.03325 N), by the unit vectors u_k of the spans (`centre_cable`). The tensions are linear in
+/// the acceleration (twice the acceleration moves them twice as far from the tensions at rest) and the point mass's
+/// do not change with its speed.
+#[test]
+fn the_cables_tensions_in_motion_hold_the_wrench_and_are_linear_in_the_acceleration() {
+    let robot = planar();
+    let tensions = |vel: [f64; 2], acc: [f64; 2]| {
+        let mut out = Vec::new();
+        robot.rigid_tensions_moving(&CENTRE, &vel, &acc, &mut out);
+        out
+    };
+    let spans = robot.spans(&CENTRE).unwrap();
+    let (rest, moving) = (tensions([0.0; 2], [0.0; 2]), tensions([0.0; 2], [2.0, -1.0]));
+    for (k, want) in [139.807643, 139.807643, 100.192357, 100.192357].iter().enumerate() {
+        assert!((rest[k] - want).abs() < 1e-5, "{rest:?}");
+    }
+    let held = |t: &[f64], axis: usize| (0..4).map(|k| t[k] * spans[k].u[axis]).sum::<f64>();
+    assert!((held(&moving, 0) - 10.0).abs() < 1e-7 && (held(&moving, 2) - 44.03325).abs() < 1e-5, "{moving:?}");
+    let double = tensions([0.0; 2], [4.0, -2.0]);
+    (0..4).for_each(|k| assert!(((double[k] - rest[k]) - 2.0 * (moving[k] - rest[k])).abs() < 1e-9));
+    let fast = tensions([0.5, 0.3], [0.0; 2]);
+    (0..4).for_each(|k| assert!((fast[k] - rest[k]).abs() < 1e-9));
+    let mut by_acc = Vec::new();
+    robot.rigid_tensions(&CENTRE, &[2.0, -1.0], &mut by_acc);
+    assert_eq!(by_acc, moving);
+}
+
+/// The cables' own weight at the centre, by hand: the potential V = rho g L (z_P - z_E) / 2 per cable has the force
+/// rho g / 2 (L e_z - (z_P - z_E) u) at the anchor. The four cables at the centre have L = 1.283539 m and (z_P - z_E)
+/// u_z = (-0.8)(0.618868) = (0.8)(-0.618868) = -0.495094 m, so each puts rho g / 2 (1.283539 + 0.495094) =
+/// 0.04903325 x 1.778633 = 0.087213 N on the platform at rho = 0.01 kg/m, 0.348850 N in all (the platform's own 5 kg
+/// weigh 49.03325 N); the mirror images cancel the horizontal part. And the wrench is the gradient of V in general:
+/// central differences of the potential over the pose (1 um) at an off-centre pose.
+#[test]
+fn the_cables_own_weight_is_the_gradient_of_its_potential() {
+    let robot = planar_with_rope(0.01);
+    let bias = robot.platform_bias(&CENTRE, &[0.0; 2]);
+    assert!(bias[0].abs() < 1e-9 && (bias[1] - (49.03325 + 0.348850)).abs() < 1e-5, "{bias:?}");
+    assert_eq!(planar().platform_bias(&CENTRE, &[0.0; 2])[1], 5.0 * G);
+    let pose = [0.3, 0.9];
+    let potential = |pose: &[f64]| {
+        let (p, r) = robot.place(pose);
+        robot.cable_weight(&robot.spans_at(p, &r).unwrap(), p).1
+    };
+    let (p, r) = robot.place(&pose);
+    let wrench = robot.cable_weight(&robot.spans_at(p, &r).unwrap(), p).0;
+    for (i, h) in [(0, [1e-6, 0.0]), (1, [0.0, 1e-6])] {
+        let (up, down) = ([pose[0] + h[0], pose[1] + h[1]], [pose[0] - h[0], pose[1] - h[1]]);
+        let gradient = (potential(&up) - potential(&down)) / 2e-6;
+        assert!((wrench[i] - gradient).abs() < 1e-7 * wrench[i].abs().max(1.0), "{i}: {} {gradient}", wrench[i]);
+    }
+}
+
+/// Ernst's equivalent modulus. By hand, a cable of 0.01 kg/m over 1 m horizontally at EA = 1e5 N: w l_h = 0.0980665 N,
+/// c = (w l_h)^2 EA / 12 = 80.1420 N^3; at a straight-cable tension of 100 N it pulls with 100 / (1 + c / 100^3) = 100
+/// (1 - 8.014198e-5 + 6.4e-9) = 99.99198644 N. The inverse gives the strain back, and the work W, the integral of the
+/// pull, is that of Simpson's rule over 0 to 50 N. The drum's pull is minus the derivative of the spring's energy over
+/// the free length, which also checks W against it, and the equilibrium holds the platform and the drums with it.
+#[test]
+fn the_sag_softens_the_cable_by_ernsts_modulus() {
+    let c = (0.0980665f64).powi(2) * 1e5 / 12.0;
+    assert!((c - 80.1420).abs() < 1e-3);
+    assert!((sagged(100.0, c) - 99.99198644).abs() < 1e-6, "{}", sagged(100.0, c));
+    assert_eq!(sagged(100.0, 0.0), 100.0);
+    assert_eq!(sagged(-1.0, c), 0.0);
+    for t0 in [0.5, 3.0, 20.0, 100.0, 5000.0] {
+        assert!((unsagged(sagged(t0, c), c) - t0).abs() < 1e-9 * t0, "{t0}");
+    }
+    let steps = 5000;
+    let h = 50.0 / steps as f64;
+    let simpson: f64 = (0..=steps)
+        .map(|i| {
+            let w = if i == 0 || i == steps {
+                1.0
+            } else if i % 2 == 1 {
+                4.0
+            } else {
+                2.0
+            };
+            w * sagged(i as f64 * h, c)
+        })
+        .sum::<f64>()
+        * h
+        / 3.0;
+    assert!((pull_work(50.0, c) - simpson).abs() < 1e-9 * simpson, "{} {simpson}", pull_work(50.0, c));
+    assert_eq!(pull_work(50.0, 0.0), 1250.0);
+
+    let robot = planar_with_rope(0.01);
+    let spans = robot.spans(&CENTRE).unwrap();
+    let s = &spans[0];
+    let (l, h) = (s.length / 1.01, 1e-7);
+    let (e, c) = (s.length - l, robot.sag(s));
+    let t0 = robot.ea * e / l;
+    assert!((t0 - 1000.0).abs() < 1e-9 * 1000.0);
+    // c at the horizontal part of the straight span, 1.260952 m x 0.785495 = 0.990472 m: 78.6221 N^3.
+    assert!((c - 78.6221).abs() < 2e-3, "{c}");
+    assert!((1000.0 - sagged(t0, c) - 7.86221e-5).abs() < 1e-6);
+    let pull = robot.drum_share(sagged(t0, c), t0, c, e, l);
+    let energy = |l: f64| robot.spring_energy(s, l);
+    assert!((pull + (energy(l + h) - energy(l - h)) / (2.0 * h)).abs() < 1e-5, "{pull}");
+    // At rest the platform and the drums hold with the sagged tensions (the elastic model's equilibrium).
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; 4]);
+    robot.equilibrium(&CENTRE, &mut state, &mut torque);
+    let mut rates = vec![0.0; robot.state_len()];
+    robot.derivatives(&state, &torque, &mut rates);
+    let (n, m) = (2, 4);
+    assert!(rates[n..2 * n].iter().all(|r| r.abs() < 1e-6), "platform: {rates:?}");
+    assert!(rates[2 * n + m..2 * n + 2 * m].iter().all(|r| r.abs() < 1e-3), "drums: {rates:?}");
+}
+
+/// The winches' spin in the frame's load: the platform's moment about y at (0.3, 0.9) moving at (0.5, -0.2) m/s (m p x
+/// v) plus each winch's drum and rotor, h (m_drum r L' + J_rotor i L'), with the default axes: horizontal and square to
+/// the cable's direction at the winch, in the planar plane about y: +y for the top left and the bottom right cable, -y
+/// for the others (h = ref_y = winch direction x the pulley's direction towards the centre). L' of each cable by
+/// central differences of its length. The spatial robot's axes are horizontal and square to the winch direction.
+#[test]
+fn the_winches_spin_is_in_the_frames_momentum() {
+    let robot = planar();
+    for (k, want) in [1.0, -1.0, 1.0, -1.0].into_iter().enumerate() {
+        assert_eq!(robot.spin[k], [0.0, want, 0.0], "{k}");
+    }
+    let (pose, vel) = ([0.3, 0.9], [0.5, -0.2]);
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; 4]);
+    robot.equilibrium(&pose, &mut state, &mut torque);
+    robot.set_tool_velocity(&mut state, &vel);
+    let f = robot.frame_momentum(&state).unwrap();
+    let length = |k: usize, dt: f64| robot.spans(&[pose[0] + vel[0] * dt, pose[1] + vel[1] * dt]).unwrap()[k].length;
+    let w = &robot.winches[0];
+    let spin: f64 = (0..4)
+        .map(|k| {
+            robot.spin[k][1]
+                * (robot.drum_mass * 0.025 + w.rotor_inertia * w.ratio())
+                * (length(k, 1e-6) - length(k, -1e-6))
+                / 2e-6
+        })
+        .sum();
+    let platform = 5.0 * (pose[1] * vel[0] - pose[0] * vel[1]);
+    assert!(spin.abs() > 1e-3, "the winches' spin is not nothing here: {spin}");
+    assert!((f.angular[1] - platform - spin).abs() < 1e-6, "{f:?} {platform} {spin}");
+    let spatial = CableRobot::new(&SPATIAL.config()).unwrap();
+    for (h, c) in spatial.spin.iter().zip(&spatial.cables) {
+        assert!(h[2].abs() < 1e-12 && dot(*h, c.axis).abs() < 1e-12 && (norm(*h) - 1.0).abs() < 1e-12, "{h:?}");
+    }
 }
 
 /// The planar winches' steady friction at the centre, moving across at 1 m/s, by hand: each cable runs at |L'| =

@@ -1240,6 +1240,7 @@ estimates, values planar / spatial; bounded where they are a part's property):
 | `platform.anchors_m` | m | Spatial: each cable's anchor on the platform, in its frame (the planar one's meet at its centre) | – / the corners of 200 x 200 x 100 mm |
 | `frame.exits_m` | m | Each cable's pulley, where the cable runs onto it (the swivel point); 4 or 8 entries, one per winch and motor | the corners of 2 x 1.6 m / of 2 x 1.6 x 1.8 m |
 | `frame.winch_directions` | – | The direction from each pulley to its winch (its swivel axis); the pulley faces the frame's centre at rest | up for the top pulleys, down for the bottom ones |
+| `frame.winch_spin_axes` | – | The axis each winch's drum and rotor turn about (one row per cable): their spin (J w) is in the frame's load. Empty: horizontal and square to the cable's direction at the winch | [] |
 | `pulley.radius_m` | m | The pulleys' radius | 0.025 / 0.03 |
 | `cable.ea_n` | N | The cable's EA: a cable of free length l is a spring of EA / l | 1e5 / 3e5 |
 | `cable.specific_damping_n_s` | N s | Its damping times its free length: c = this / l (`effects.cable_damping`) | 60 / 150 |
@@ -1247,6 +1248,8 @@ estimates, values planar / spatial; bounded where they are a part's property):
 | `cable.safety_factor` | – | The band's top is the breaking load over this (the rating of `cable-max-tension`) | 10 |
 | `cable.min_tension_n` | N | The band's bottom, the least tension that keeps a cable taut (`cable-min-tension`) | 10 / 20 |
 | `cable.reference_tension_n` | N | The pretension the distribution keeps the tensions nearest to | 120 / 250 |
+| `cable.mass_per_m_kg` | kg/m | The cable's own mass: half the weight of its free span hangs on the platform (with its along-cable share), and the sag softens EA by Ernst's modulus E / (1 + (w l_h)² E A / (12 T³)); 0 or left out: both left out | 0.003 / 0.010 |
+| `ratings.belt_min_tension_n`, `belt_max_tension_n` | N | The band the time-optimal plan keeps each cable's tension within (`rigid_tensions_moving`); the same as `cable.min_tension_n` and the breaking load over the safety factor | 10, 400 / 20, 1000 |
 | `winch.drum_radius_m` | m | The drum's radius: the lever behind the gearbox | 0.025 / 0.03 |
 | `winch.drum_inertia_kgm2` | kg m² | The drum's inertia | 2e-4 / 4e-4 |
 | `winch.capacity_m` | m | The cable a drum holds: its stops at 0 and here | 5 |
@@ -1266,7 +1269,7 @@ the lift (m). Its own keys:
 
 | Key | Unit | Meaning | Value, source |
 | --- | --- | --- | --- |
-| `effects.joint_elasticity` | | The gearboxes of motors 1 and 2 twist (two bodies per joint); off, the rigid model | true |
+| `effects.joint_elasticity` | | The gearboxes of motors 1 and 2 and the Z stroke's coupling and screw twist (two bodies per joint; the column rings on its screw at several hundred Hz); off, the rigid model | true |
 | `effects.band_elasticity` | | The bands in the links stretch: the forearm and the effector on the bands' springs; off, rigid bands | true |
 | `geometry.link_m` | m | Both links' length, shoulder to elbow and elbow to wrist (equal, or the bands would not keep the wrist on the radial line) | 0.32, estimate |
 | `geometry.effector_m` | m | The effector's length from the wrist to the wafer centre | 0.18, estimate |

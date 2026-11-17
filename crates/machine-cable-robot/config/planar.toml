@@ -20,6 +20,9 @@ payload_kg = 2.0
 [frame]
 exits_m = [[-1.0, 0.0, 1.6], [1.0, 0.0, 1.6], [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]]
 winch_directions = [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [0.0, 0.0, -1.0]]
+# The axis each winch's drum and rotor turn about (one row per cable), for the winches' spin in the frame's load. Empty:
+# horizontal and square to the cable's direction at the winch (here the normal of the x-z plane).
+winch_spin_axes = []
 
 [pulley]
 # [estimate] a deflection pulley for a 2 mm rope.
@@ -35,6 +38,9 @@ breaking_load_n = 4000.0
 safety_factor = 10.0
 min_tension_n = 10.0
 reference_tension_n = 120.0
+# [estimate] Its mass per metre: UHMWPE 0.97 g/cm3 over the 2 mm rope's section pi d^2 / 4 = 3.14 mm2, braided at about 0.9 fill.
+# Its weight (half of the free span on the platform) and its sag (Ernst's equivalent modulus) act with it; 0 leaves both out.
+mass_per_m_kg = 0.003
 
 # [estimate] The winch: its drum, the friction of its bearings and the pulley at the cable, its capacity, and buffers at
 # an empty and a full drum.
@@ -212,6 +218,10 @@ standstill_time_s = 1.0
 standstill_window_rad = 0.1
 torque_band = 0.0
 [ratings]
+# The band the time-optimal plan keeps every cable's tension within (`rigid_tensions_moving`): the same as cable.min_tension_n
+# and cable.breaking_load_n / cable.safety_factor, which the rating checks use; change them together.
+belt_min_tension_n = 10.0
+belt_max_tension_n = 400.0
 # [estimate] What a cable robot of this size is asked to hold at a dwell; the carriage settles to 0.15 mm (sim-cli analyze).
 settling_tolerance_m = 0.0003
 # The DC link of the S210 converter. [estimate] as for the delta picker.

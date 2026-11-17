@@ -338,14 +338,45 @@ fn the_modes_are_those_of_the_gearboxes_and_bands() {
         (0.12, [18.1952, 51.3514, 70.6454, 186.4465], [21.0252, 62.4203]),
         (0.75, [16.7646, 42.3221, 83.6696, 175.3323], [18.5831, 83.1553]),
     ] {
-        let modes: Vec<f64> = both.modes(&[r, 0.0, 0.1]).iter().map(|m| m.hz).collect();
-        assert_eq!(modes.len(), 4);
+        // The column on its screw is a fifth mode, far above these (`the_column_rings_on_its_screw_and_coupling`).
+        let mut modes: Vec<f64> = both.modes(&[r, 0.0, 0.1]).iter().map(|m| m.hz).collect();
+        assert_eq!(modes.len(), 5);
+        modes.pop();
         (0..4).for_each(|k| close(modes[k], all[k], 1e-5, "mode"));
         let modes: Vec<f64> = bands.modes(&[r, 0.0, 0.1]).iter().map(|m| m.hz).collect();
         (0..2).for_each(|k| close(modes[k], alone[k], 1e-5, "band mode"));
         close(both.resonance_hz(&[r, 0.0, 0.1]).unwrap(), all[0], 1e-5, "lowest");
     }
     assert!(handler(&RIGID).modes(&[0.5, 0.0, 0.1]).is_empty());
+}
+
+/// The column on its screw and coupling (effects.joint_elasticity): the coupling's 3000 N m/rad at the screw's lever
+/// lead / (2 pi) = 1.5915e-3 m/rad is K_c = 3000 / (1.5915e-3)^2 = 1.1844e9 N/m, in series with the screw's (shaft, nut
+/// 2e8 and bearings 4e8 N/m at the softest nut position), 1 / K = 1 / K_c + 1 / K_s; with the rotor held the column of
+/// 11.2276 kg rings at sqrt(K / m) / 2 pi. At rest the spring is compressed by m g / K (the rotor sits that far ahead
+/// of the column, in rotor radians (2 pi / lead) m g / K), and the state derivative there is zero.
+#[test]
+fn the_column_rings_on_its_screw_and_coupling() {
+    let d = handler(&[]);
+    let screw = &d.lift.screw;
+    let lever = 0.01 / std::f64::consts::TAU;
+    let k_c = 3000.0 / (lever * lever);
+    let k_s = screw.stiffness(screw.softest_position());
+    let k = 1.0 / (1.0 / k_c + 1.0 / k_s);
+    close(d.lift.joint.gearbox.stiffness, k, 1e-9, "stiffness in series");
+    let by_hand = (k / 11.2276).sqrt() / std::f64::consts::TAU;
+    assert!((300.0..900.0).contains(&by_hand), "several hundred Hz: {by_hand}");
+    let modes: Vec<f64> = d.modes(&[0.4, 0.0, 0.1]).iter().map(|m| m.hz).collect();
+    close(*modes.last().unwrap(), by_hand, 1e-9, "column mode");
+    assert!(handler(&RIGID).modes(&[0.4, 0.0, 0.1]).is_empty());
+    let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
+    d.equilibrium(&[0.4, 0.0, 0.1], &mut state, &mut torque);
+    let x = d.planar_len();
+    let twist = state[x + 3] - state[x] / lever;
+    close(twist, 11.2276 * 9.80665 / k / lever, 1e-6, "compression");
+    let mut rates = vec![0.0; d.state_len()];
+    d.derivatives(&state, &torque, &mut rates);
+    assert!(rates.iter().all(|r| r.abs() < 1e-6), "{rates:?}");
 }
 
 /// The hold at rest and on the move, by hand: pads mu g = 0.3 * 9.80665 = 2.941995 m/s^2, and while the lift

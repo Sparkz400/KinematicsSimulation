@@ -172,7 +172,7 @@ shaper_ei_tolerance = 0.05
 shaper_axes = []
 shaper_modes = []
 torque_reserve = 0.8
-# Read but not used: no belt (the cables' band is cable.min_tension_n to the rating).
+# The share of the room to the cables' band (ratings.belt_min_tension_n, belt_max_tension_n) that the plan may use.
 tension_reserve = 0.8
 tension_margin_n = 0.0
 # The share of every limit the time-optimal plan may use, on top of the reserves above (1: all; 0.9 plans at 90 %).
