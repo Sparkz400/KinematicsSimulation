@@ -893,6 +893,9 @@ impl Machine for MoverTrack {
     fn rigid_friction(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_friction(tool_pos, tool_dir, out)
     }
+    fn rigid_friction_rise(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
+        self.inner.rigid_friction_rise(tool_pos, tool_dir, out)
+    }
     /// The inner machine's, but NaN for the station error (a mover's error while its cam stands, which no planned pose
     /// has), then NaN for each own check (the rigid model tells no segment's warmth).
     fn rigid_checks(&self, tool_pos: &[f64], tool_vel: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {

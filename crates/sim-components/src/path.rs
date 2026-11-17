@@ -2668,9 +2668,10 @@ struct Place {
     /// are then those of its curve (`curves`) at that speed, not the row's own (which are those at a standstill).
     turn: Vec<f64>,
     curves: Arc<[MotorCurve]>,
-    /// Per motor the friction of the guides it drives (`Machine::rigid_friction`), as [c, b] for the torque c + b v it
-    /// gives against them at the speed v along the path; empty where the machine tells none.
-    guide: Vec<[f64; 2]>,
+    /// Per motor the friction of the guides it drives (`Machine::rigid_friction`, `rigid_friction_rise`), as [c, b, level,
+    /// speed] for the torque c + level exp(-(v / speed)^2) + b v it gives against them at the speed v along the path;
+    /// empty where the machine tells none.
+    guide: Vec<[f64; 4]>,
     /// Per row (after the motors' rows; none where empty) a part b v of its value that grows with the speed v along the
     /// path alone (a screw's speed): its value is then c a + b v + d v^2 + e (`Machine::rigid_checks`).
     speed: Vec<f64>,
@@ -2681,6 +2682,63 @@ struct Place {
     top: f64,
 }
 
+/// The least and the most of the friction f(w) = c + level exp(-(w / speed)^2) + b w over the speeds w from 0 to `v` (and
+/// of 0, the torque it gives at a standstill), for `friction` = [c, b, level, speed]. f is smooth, so they lie at the
+/// ends or where f' = b - 2 level w / speed^2 exp(-(w / speed)^2) = 0, i.e. t exp(-t^2) = b speed / (2 level) with
+/// t = w / speed: t exp(-t^2) rises to 1 / sqrt(2e) at t = 1 / sqrt(2) and falls after it, so there are up to two such
+/// speeds, one on each side, found by bisection.
+fn friction_range([c, b, level, speed]: [f64; 4], v: f64) -> (f64, f64) {
+    let f = |w: f64| c + level * (-(w / speed).powi(2)).exp() + b * w;
+    let mut candidates = vec![0.0, f(0.0), f(v)];
+    let target = if level != 0.0 && speed > 0.0 { b * speed / (2.0 * level) } else { f64::NAN };
+    let peak = std::f64::consts::FRAC_1_SQRT_2;
+    let h = |t: f64| t * (-t * t).exp();
+    if target > 0.0 && target <= h(peak) {
+        for (mut lo, mut hi, rising) in [(0.0, peak, true), (peak, 20.0, false)] {
+            for _ in 0..80 {
+                let mid = 0.5 * (lo + hi);
+                if (h(mid) < target) == rising { lo = mid } else { hi = mid }
+            }
+            let w = 0.5 * (lo + hi) * speed;
+            if w < v {
+                candidates.push(f(w));
+            }
+        }
+    }
+    let least = candidates.iter().copied().fold(f64::INFINITY, f64::min);
+    let most = candidates.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    (least, most)
+}
+
+#[cfg(test)]
+mod friction_range_tests {
+    use super::friction_range;
+
+    /// Without a rise [c, b] give the ends and 0: c = 1, b = -2 at v = 0.3: f runs from 1 to 0.4, with 0 below: (0, 1).
+    /// With a rise 0.5 over speed 0.1 and b = 0: the friction at a standstill is 1.5 and falls to 1 + 0.5 e^-9 at 0.3.
+    /// With level 1, speed 1, b = 0.5 the friction first rises (f' = b > 0 at 0) to a maximum where t e^(-t^2) = 0.25, the
+    /// smaller root t = 0.2685 (found by Newton below), which beats the standstill value: f = 0 + e^(-t^2) + 0.5 t.
+    #[test]
+    fn the_friction_range_has_its_ends_and_its_interior_extremes() {
+        assert_eq!(friction_range([1.0, -2.0, 0.0, 1.0], 0.3), (0.0, 1.0));
+        let (least, most) = friction_range([1.0, 0.0, 0.5, 0.1], 0.3);
+        assert!((most - 1.5).abs() < 1e-12 && least == 0.0, "{least} {most}");
+        let mut t: f64 = 0.27;
+        for _ in 0..20 {
+            let (g, dg) = (t * (-t * t).exp() - 0.25, (1.0 - 2.0 * t * t) * (-t * t).exp());
+            t -= g / dg;
+        }
+        let top = (-t * t).exp() + 0.5 * t;
+        assert!(top > 1.0 && (t - 0.2685).abs() < 1e-3, "{t} {top}");
+        // (At v = 2 the end, e^-4 + 1, is below that maximum; the second root, t = 1.28, is a minimum.)
+        let (_, most) = friction_range([0.0, 0.5, 1.0, 1.0], 2.0);
+        assert!((most - top).abs() < 1e-9, "{most} against {top}");
+        // Not reached below the speed: v = 0.1 stops before t = 0.2685.
+        let (_, most) = friction_range([0.0, 0.5, 1.0, 1.0], 0.1);
+        assert!((most - (1.0_f64.max((-0.01_f64).exp() + 0.05))).abs() < 1e-12, "{most}");
+    }
+}
+
 impl Place {
     /// The low and high of row `i` at the speed `v` along the path, and at every speed below it.
     fn bounds(&self, i: usize, v: f64) -> (f64, f64) {
@@ -2689,8 +2747,7 @@ impl Place {
                 let (low, high) = self.curves[i].range(turn * v);
                 // The guides' friction takes its torque off the room on its side, at its most over the speeds up to v
                 // (from none at a standstill).
-                let [c, b] = self.guide.get(i).copied().unwrap_or([0.0; 2]);
-                let (least, most) = (c.min(c + b * v).min(0.0), c.max(c + b * v).max(0.0));
+                let (least, most) = friction_range(self.guide.get(i).copied().unwrap_or([0.0; 4]), v);
                 (low - least, high - most)
             }
             None => {
@@ -3129,13 +3186,22 @@ fn piece_limits(
         for [_, p3, room] in bends.iter().filter(|b| b[1] > 0.0) {
             x = x.min((room / p3).max(0.0).powf(2.0 / 3.0));
         }
-        let mut guide = Vec::new();
-        machine.rigid_friction(pose, d1, &mut guide);
+        let (mut plain, mut rise) = (Vec::new(), Vec::new());
+        machine.rigid_friction(pose, d1, &mut plain);
+        machine.rigid_friction_rise(pose, d1, &mut rise);
+        let mut guide: Vec<[f64; 4]> = plain
+            .iter()
+            .enumerate()
+            .map(|(m, [c, b])| {
+                let [level, speed] = rise.get(m).copied().unwrap_or([0.0, 1.0]);
+                [*c, *b, level, speed]
+            })
+            .collect();
         // Behind a lossy gearbox the motor gives the friction's torque over the efficiency (as the load's, above). Friction
         // does help a motor that brakes, but not at a standstill, and the bounds hold at every speed up to v (`Place::bounds`).
         for (m, g) in guide.iter_mut().enumerate() {
             if let Some([.., efficiency]) = gearbox(m) {
-                *g = g.map(|t| t / efficiency);
+                (g[0], g[1], g[2]) = (g[0] / efficiency, g[1] / efficiency, g[2] / efficiency);
             }
         }
         let mut place = Place { rows, low, turn, curves: curves.clone(), guide, speed, bends, top: x.sqrt() };

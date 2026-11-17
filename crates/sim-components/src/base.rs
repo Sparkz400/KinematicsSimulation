@@ -561,6 +561,9 @@ impl Machine for Based {
     fn rigid_friction(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_friction(tool_pos, tool_dir, out)
     }
+    fn rigid_friction_rise(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
+        self.inner.rigid_friction_rise(tool_pos, tool_dir, out)
+    }
     fn rigid_checks(&self, tool_pos: &[f64], tool_vel: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
         self.inner.rigid_checks(tool_pos, tool_vel, tool_acc, out)
     }

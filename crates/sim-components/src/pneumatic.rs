@@ -882,6 +882,9 @@ impl Machine for Pneumatic {
     fn rigid_friction(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_friction(tool_pos, tool_dir, out)
     }
+    fn rigid_friction_rise(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
+        self.inner.rigid_friction_rise(tool_pos, tool_dir, out)
+    }
     /// The machine's alone: a cylinder is an open system, fed by the supply, and keeps its own balance (the signals
     /// `cylinder.<id>.*` and `Cylinder::mechanical_energy`, `gas_energy`).
     fn energy(&self, state: &[f64]) -> f64 {

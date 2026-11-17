@@ -950,9 +950,12 @@ at_m = [-0.042, -0.02, 0.032]
 clockwise = true
 pos = [1050, -80]
 
+# Its section 3 runs from motor B, whose positive turn takes belt out of it, to the clamp, which a rising Z axis pulls
+# the belt towards: the belt moves past this idler against the direction of the section's first pulley's feed, so
+# the speed is -vz (the crate turns the two upper idlers against each other: -vz / r at the left, +vz / r here).
 [[machine.idler]]
 id = "upper_right"
-speed = { z = 1 }
+speed = { z = -1 }
 radius_m = "idler.radius_m"
 inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
