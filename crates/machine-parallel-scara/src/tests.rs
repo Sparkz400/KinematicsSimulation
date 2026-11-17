@@ -312,3 +312,123 @@ fn the_arm_tubes_first_moment_takes_its_mass_and_centre_where_given() {
         "centre alone",
     );
 }
+
+/// The loss-free scara with `edits`.
+fn lossless(edits: &[&str]) -> ParallelScara {
+    let mut cfg = lossless_config();
+    for e in edits {
+        cfg.set_text(e).unwrap();
+    }
+    ParallelScara::new(&cfg).unwrap()
+}
+
+/// The stroke's gearbox stiffness at the joint by hand, N/m: the screw (16 x 20, root 13.5 mm, 0.3 m, fixed-free so
+/// softest at the far end) has the shaft's E A / x = 2.06e11 pi / 4 0.0135^2 / 0.3 = 9.82887e7 N/m, the nut's 2e8 and the
+/// bearings' 4e8 in series: 1 / (1.017411e-8 + 5e-9 + 2.5e-9) = 5.65797e7 N/m; the coupling's 3000 N m/rad over the
+/// lever l = 0.02 / 2 pi = 3.18310e-3 m per rad, 3000 / l^2 = 2.96086e8 N/m, in series with it: 4.75020e7 N/m.
+fn stroke_stiffness_by_hand() -> f64 {
+    let shaft = 2.06e11 * std::f64::consts::FRAC_PI_4 * 0.0135f64.powi(2) / 0.3;
+    let screw = 1.0 / (1.0 / shaft + 1.0 / 2e8 + 1.0 / 4e8);
+    let lever = 0.02 / std::f64::consts::TAU;
+    1.0 / (1.0 / screw + lever * lever / 3000.0)
+}
+
+/// The carriage on its screw rings with the rotor held at sqrt(K / m) / 2 pi, K = 4.75020e7 N/m (`stroke_stiffness_by_hand`),
+/// m = 1 kg carriage + 5 kg payload: sqrt(7.9170e6) / 2 pi = 447.8 Hz (not the 570 Hz the rigid model's comment guessed);
+/// the tool on the turn gearbox (8250.592 N m/rad, 2e-3 + 8.33e-3 kg m2): sqrt(7.98703e5) / 2 pi = 142.2 Hz. Found
+/// two ways: from the model's own accelerations (the carriage moved 1 um from where its rotor is: m a = -K dx), and
+/// the reported modes.
+#[test]
+fn the_carriage_rings_on_its_screw_at_the_hand_calculated_frequency() {
+    let d = lossless(&[]);
+    assert_eq!(d.state_len(), N_ELASTIC + 10);
+    assert_eq!(scara(&["effects.joint_elasticity = false"]).state_len(), N_RIGID + 6);
+    let pose = [0.0, -0.5, 0.1, 0.0];
+    let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
+    d.equilibrium(&pose, &mut state, &mut torque);
+    let (at, delta) = (d.planar_len(), 1e-6);
+    let mut rates = vec![0.0; d.state_len()];
+    d.derivatives(&state, &torque, &mut rates);
+    let rest = rates[at + 1];
+    assert!(rest.abs() < 1e-9, "at rest the carriage accelerates by {rest}");
+    state[at] += delta;
+    d.derivatives(&state, &torque, &mut rates);
+    let hz = (-(rates[at + 1] - rest) / delta).sqrt() / std::f64::consts::TAU;
+    let (k, m) = (stroke_stiffness_by_hand(), 6.0);
+    let by_hand = (k / m).sqrt() / std::f64::consts::TAU;
+    close(k, 4.75020e7, 1e-5, "the stroke's stiffness");
+    close(by_hand, 447.8, 1e-3, "the carriage's mode by hand");
+    close(hz, by_hand, 1e-6, "the carriage's mode from the model");
+    let turn = (8250.592f64 / (2.0e-3 + 8.33e-3)).sqrt() / std::f64::consts::TAU;
+    close(turn, 142.2, 1e-3, "the tool's mode by hand");
+    let modes = d.modes(&pose);
+    assert_eq!(modes.len(), 2);
+    close(modes[0].hz, turn, 1e-9, "the turn's reported mode");
+    close(modes[1].hz, by_hand, 1e-9, "the stroke's reported mode");
+    assert!(scara(&["effects.joint_elasticity = false"]).modes(&pose).is_empty());
+}
+
+/// At rest under the weight the screw carries 6 kg x g = 58.8399 N and is twisted by F / K = 58.8399 / 4.75020e7 =
+/// 1.23869e-6 m, the rotor ahead of the carriage by i times that (i = 2 pi / 0.02 = 314.159 rad/m): 3.8914e-4 rad. The
+/// turn holds nothing: its rotor is at 8 times the tool's angle. Without the payload the twist is 1 / 6 of it.
+#[test]
+fn the_screw_is_twisted_by_the_weight_at_rest() {
+    let mut d = lossless(&[]);
+    let (at, i) = (d.planar_len(), std::f64::consts::TAU / 0.02);
+    for (attached, kg) in [(true, 6.0), (false, 1.0)] {
+        d.set_payload_attached(attached);
+        let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
+        d.equilibrium(&[0.0, -0.5, 0.1, 1.0], &mut state, &mut torque);
+        let twist = kg * G / stroke_stiffness_by_hand();
+        close(state[at + 3] - i * state[at], i * twist, 1e-6, "the screw's twist");
+        close(state[at + 3], i * (0.1 + twist), 1e-9, "the stroke's rotor");
+        close(state[at + 8], 8.0 * 1.0, 1e-12, "the turn's rotor");
+        assert_eq!((state[at + 4], state[at + 9]), (0.0, 0.0));
+        let mut rates = vec![0.0; d.state_len()];
+        d.derivatives(&state, &torque, &mut rates);
+        assert!(rates.iter().all(|r| r.abs() < 1e-9), "{rates:?}");
+    }
+}
+
+/// Energy is conserved with the drives holding their torque: the stored energy (kinetic, potential, springs) less the
+/// work of the motors plus what the loss rows take stays where it started, with the carriage 2 um and the tool 1 mrad
+/// off the positions of their rotors, over 8 ms (3.6 periods of the carriage, 1.1 of the tool), RK4 at 2 us. The
+/// stored energy at the start is K dx^2 / 2 = 9.5e-5 J on the screw and 8250.592 x 1e-6 / 2 = 4.1e-3 J on the turn.
+#[test]
+fn the_screw_and_the_turn_conserve_energy_with_their_losses_booked() {
+    let d = lossless(&["effects.gearbox_backlash = false"]);
+    let n = d.state_len();
+    let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
+    d.equilibrium(&[0.0, -0.5, 0.1, 0.0], &mut state, &mut torque);
+    let at = d.planar_len();
+    state[at] += 2e-6;
+    state[at + 5] += 1e-3;
+    let f = |s: &[f64]| {
+        let mut r = vec![0.0; n];
+        d.derivatives(s, &torque, &mut r);
+        r
+    };
+    let advance = |s: &[f64], k: &[f64], h: f64| s.iter().zip(k).map(|(x, y)| x + h * y).collect::<Vec<f64>>();
+    // What the motors put in less what the loss rows take, W.
+    let power = |s: &[f64]| {
+        let (mut rotor, mut speed) = ([0.0; 4], [0.0; 4]);
+        d.motor_state(s, &mut rotor, &mut speed);
+        let mut loss = Vec::new();
+        d.loss_powers(s, &torque, &mut loss);
+        (0..4).map(|k| torque[k] * speed[k]).sum::<f64>() - loss.iter().sum::<f64>()
+    };
+    let (dt, e0) = (2e-6, d.energy(&state));
+    let (mut work, mut last) = (0.0, power(&state));
+    for _ in 0..4000 {
+        let k1 = f(&state);
+        let k2 = f(&advance(&state, &k1, dt / 2.0));
+        let k3 = f(&advance(&state, &k2, dt / 2.0));
+        let k4 = f(&advance(&state, &k3, dt));
+        state = (0..n).map(|i| state[i] + dt / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i])).collect();
+        let now = power(&state);
+        work += 0.5 * (last + now) * dt;
+        last = now;
+    }
+    let drift = d.energy(&state) - e0 - work;
+    assert!(drift.abs() < 1e-4 * 4.2e-3, "the budget is off by {drift} J of 4.2e-3");
+}
