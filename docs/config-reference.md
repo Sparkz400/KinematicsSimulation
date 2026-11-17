@@ -1362,6 +1362,8 @@ Its own keys (estimates, each with a `[bounds]` entry where it is a part's prope
 | `effects.rope_stretch` | true/false | The rope stretches (EA / l) and goes slack. **Off selects the rigid reference model**: the rope keeps its free length, its tension the constraint force (it may push) | true |
 | `effects.rope_damping` | true/false | With `rope_stretch`: the rope's material damping, `rope.specific_damping_n_s` / l | true |
 | `effects.guide_friction` | true/false | The bridge's and the trolley's wheels roll against `crane.rolling_coefficient` times their load | true |
+| `effects.floor_contact` | true/false | The load stands on the floor until the rope carries it (one-sided contact, smooth floor, elastic rope only): a fast lift shows the rope's snatch, setting down with a slack rope leaves the load standing; signal `load.floor_force`. Off: the load hangs from the start | false |
+| `crane.floor_height_m` | m | With `effects.floor_contact`: the hook's height when the load stands on the floor (the payload's box under it) | 0.5 |
 | `crane.rope_exit_height_m` | m | Where the rope leaves the trolley's sheave, over the floor | 5.0 |
 | `crane.bridge_mass_kg`, `trolley_mass_kg`, `hook_mass_kg` | kg | Girder with end carriages and its drive; trolley with the hoist; hook block | 600, 120, 15 |
 | `crane.payload_kg` | kg | The load on the hook, with `effects.payload` and a segment's `payload` | 250 |

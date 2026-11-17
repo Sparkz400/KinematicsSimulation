@@ -23,6 +23,10 @@ motor_encoder = ""
 [effects]
 gravity = true
 payload = true
+# The load stands on the floor (crane.floor_height_m) until the rope carries it: a one-sided contact, so a fast lift shows
+# the rope's snatch and setting down with a slack rope leaves the load standing. Off: the load hangs from the start and a
+# pick is quasi-static. The elastic rope only.
+floor_contact = false
 # The travels' guides: steel wheels on steel rails, the bridge and the trolley rolling against crane.rolling_coefficient
 # times the load on their wheels (their own weight and the rope's pull down), against the motion.
 guide_friction = true
@@ -243,6 +247,9 @@ rope_exit_height_m = 5.0
 bridge_mass_kg = 600.0
 trolley_mass_kg = 120.0
 hook_mass_kg = 15.0
+# [estimate] With effects.floor_contact: the height of the hook's point when the load stands on the floor, the payload's
+# box of the scene (0.4 m tall, its centre 0.3 m below the hook) on a floor at 0 m.
+floor_height_m = 0.5
 payload_kg = 250.0
 # [estimate] Travel between the runway's buffers and between the girder's buffers (m), from 0.
 bridge_stroke_m = 10.0
@@ -590,6 +597,7 @@ crane.rope_exit_height_m = [4.8, 5.2]
 crane.bridge_mass_kg = [450.0, 800.0]
 crane.trolley_mass_kg = [90.0, 160.0]
 crane.hook_mass_kg = [10.0, 25.0]
+crane.floor_height_m = [0.3, 0.6]
 crane.rolling_coefficient = [0.004, 0.01]
 crane.rolling_smoothing_m_s = [0.002, 0.01]
 crane.stop_stiffness_n_m = [5.0e5, 2.0e6]
