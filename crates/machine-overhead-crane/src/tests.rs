@@ -331,3 +331,85 @@ fn the_hoist_s_mesh_bristle_is_capped_by_its_drum() {
     let cap = drum * (1e5f64 / 4.0).powi(2);
     assert!((hoist.gearbox.mesh_stiffness / cap - 1.0).abs() < 1e-12 && (cap - 4.8828125e9).abs() < 1.0, "{cap}");
 }
+
+/// The rigid rope's rolling resistance takes the tension the same pass returns (fixed point), not one of an earlier pass:
+/// F_roll,k = mu (M_k g + t (-u_z)) tanh(v_k / v_s), M the bridge with the trolley and the trolley. By hand from the
+/// motion's own tension t, to 1e-9 N (the loop stops at 1e-12 of t).
+#[test]
+fn the_rigid_ropes_rolling_resistance_takes_its_own_tension() {
+    let m = crane(&with(&["effects.rope_stretch = false"]));
+    let (mut state, mut hold) = (Vec::new(), [0.0; 3]);
+    m.equilibrium(&[5.0, 2.0, 2.0], &mut state, &mut hold);
+    // A swing: the load 0.4 m aside with a speed, the carriages rolling at 0.01 m/s.
+    state[LOAD] += 0.4;
+    state[LOAD_SPEED] = 0.3;
+    state[RATES] = 0.01;
+    state[RATES + 1] = 0.02;
+    let motion = m.motion(&state, &hold);
+    let (t, u) = (motion.rope_state.tension, motion.rope_state.u);
+    let down = t * -u[2];
+    let wheels = [(m.bridge + m.trolley) * m.g + down, m.trolley * m.g + down];
+    for k in 0..2 {
+        let want = m.rolling * wheels[k] * (state[RATES + k] / m.rolling_smoothing).tanh();
+        assert!((motion.rolling[k] - want).abs() < 1e-9, "{k}: {} against {want}", motion.rolling[k]);
+    }
+}
+
+fn floor_crane(extra: &[&str]) -> Crane {
+    let mut edits = vec!["effects.floor_contact = true", "effects.rope_damping = false"];
+    edits.extend(extra);
+    crane(&with(&edits))
+}
+
+/// The load (hook and payload, m = 265 kg, m g = 2598.762 N) standing on the floor at 0.5 m under the sheave at 5 m, the
+/// drum's free length l: the rope's stretch e = 4.5 - l, its tension t = EA e / l. Slack (l = 5): the free load would
+/// fall with -g, the floor carries all of m g and the load's acceleration is 0. At l = 4.496, e = 4 mm,
+/// t = 1.44e6 x 0.004 / 4.496 = 1281.14 N: the floor carries the rest, m g - t = 1317.62 N. At l = 4.49, e = 10 mm,
+/// t = 3207.1 N > m g: no floor force, the load rises with (t - m g) / m = 2.30 m/s2. Without the effect it falls.
+#[test]
+fn the_load_stands_on_the_floor_until_the_rope_carries_it() {
+    let m = floor_crane(&[]);
+    let (mut state, mut hold) = (Vec::new(), [0.0; 3]);
+    m.equilibrium(&[8.0, 4.0, 1.0], &mut state, &mut hold);
+    state[LOAD + 2] = 0.5;
+    let weight = m.load_mass() * G;
+    let run = |l: f64| {
+        let mut s = state.clone();
+        s[2] = l;
+        let motion = m.motion(&s, &hold);
+        (motion.floor_force, motion.load_acc[2], m.rope(&s).tension)
+    };
+    let (n, a, t) = run(5.0);
+    assert!(t == 0.0 && (n - weight).abs() < 1e-9 && a == 0.0, "{n} {a}");
+    let (n, a, t) = run(4.496);
+    assert!((t - 1.44e6 * 0.004 / 4.496).abs() < 1e-6 && (n - (weight - t)).abs() < 1e-6 && a == 0.0, "{n} {t}");
+    assert!((n - 1317.62).abs() < 0.01, "{n}");
+    let (n, a, t) = run(4.49);
+    assert!(n == 0.0 && (a - (t - weight) / m.load_mass()).abs() < 1e-9 && (a - 2.30).abs() < 0.01, "{n} {a}");
+    // Off, the same slack rope lets the load fall freely.
+    let free = crane(&with(&["effects.rope_damping = false"]));
+    let mut s = state.clone();
+    s[2] = 5.0;
+    assert!((free.motion(&s, &hold).load_acc[2] + G).abs() < 1e-12);
+}
+
+/// The fall onto the floor is plastic: a load arriving at the floor at 1 m/s loses m v^2 / 2 = 132.5 J (265 kg), booked
+/// as `pick_loss` over the step (J / dt), and stays at the floor height with no speed; a payload put on while it stands
+/// is not moved up the rope (the quasi-static pick is for the load above the floor).
+#[test]
+fn the_fall_onto_the_floor_loses_its_kinetic_energy() {
+    let mut m = floor_crane(&[]);
+    let (mut state, mut hold) = (Vec::new(), [0.0; 3]);
+    m.equilibrium(&[8.0, 4.0, 1.0], &mut state, &mut hold);
+    state[2] = 5.0;
+    state[LOAD + 2] = 0.5;
+    state[LOAD_SPEED + 2] = -1.0;
+    m.after_step(&mut state, 1e-3);
+    assert!(state[LOAD + 2] == 0.5 && state[LOAD_SPEED + 2] == 0.0);
+    assert!((m.pick_loss * 1e-3 - 132.5).abs() < 1e-9, "{}", m.pick_loss);
+    m.set_payload_attached(false);
+    m.set_payload_attached(true);
+    let before = state.clone();
+    m.after_step(&mut state, 1e-3);
+    assert!(state == before && m.pick_loss == 0.0);
+}

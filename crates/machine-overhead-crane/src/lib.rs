@@ -30,7 +30,9 @@
 //! it travels is shaped for the length as it changes). At rest the load hangs under the sheave on a rope stretched by
 //! its weight, l = L / (1 + m g / EA); the motor angles of a pose (`inverse`) count on the empty hook's weight alone
 //! (`kinematic_stretch`), so the drum stands still when the payload goes on or off. Pick and set-down are quasi-static
-//! (`after_step`). With effects.rope_stretch off the rope is rigid, L = l, its tension the constraint force (`motion`).
+//! (`after_step`), or, with effects.floor_contact, the load stands on the floor until the rope carries it (`motion`).
+//! With effects.rope_stretch off the rope is rigid, L = l, its tension the constraint force (`motion`), and the floor is
+//! left out.
 //!
 //! shortcut: the rope's own mass (0.14 kg/m against 265 kg) and its bending at the sheave are left out, and hook and
 //! load are one point that does not turn (no double pendulum, no load twisting); add a second body where a long hook
@@ -160,6 +162,8 @@ struct Motion {
     /// What the rope gives each axis (its pull, the drum's for the hoist) and the rolling resistance (N).
     rope: [f64; 3],
     rolling: [f64; 3],
+    /// The floor's push on the load (N), 0 unless it stands on it.
+    floor_force: f64,
     rope_state: Rope,
 }
 
@@ -178,6 +182,9 @@ pub struct Crane {
     picked: bool,
     /// What that took out of the energy over the last step (W), booked with `power.other`.
     pick_loss: f64,
+    /// effects.floor_contact: the height of the load's point when it stands on the floor (`crane.floor_height_m`); the
+    /// elastic rope only.
+    floor: Option<f64>,
     height: f64,
     /// effects.rope_stretch: the elastic rope; off, the rigid reference.
     elastic: bool,
@@ -269,6 +276,11 @@ impl Crane {
             attached: true,
             picked: false,
             pick_loss: 0.0,
+            floor: if cfg.bool("effects.floor_contact")? && cfg.bool("effects.rope_stretch")? {
+                Some(cfg.non_negative("crane.floor_height_m")?)
+            } else {
+                None
+            },
             height,
             elastic: cfg.bool("effects.rope_stretch")?,
             ea: cfg.positive("rope.ea_n")?,
@@ -357,8 +369,6 @@ impl Crane {
     /// t = (kappa - g u_z - u_x alpha_x - u_y alpha_y - alpha_l) / (1 / m + u_x beta_x + u_y beta_y + beta_l).
     /// It is a bilateral constraint: where the load would leave the rope slack, t comes out below zero (the rope
     /// pushes). The reference for a taut rope; the elastic model is the one that goes slack.
-    // shortcut: the rigid rope's rolling resistance takes the tension of a pass before the last (they differ by what the
-    // rolling itself changes in it, some 1e-5); its losses are booked with the same, so the energy budget closes.
     fn motion(&self, s: &[f64], torque: &[f64]) -> Motion {
         let mut rope = self.rope(s);
         let m = self.load_mass();
@@ -412,20 +422,38 @@ impl Crane {
                 j.gearbox.loss_factor(drive[k] - j.reflected_inertia() * acc[k], s[RATES + k])
             })
         });
-        // The rigid rope's tension depends on the loss factors (the hoist's eta moves it by some percent): the rolling
-        // takes the tension of a pass with them.
-        let (tension, rolling, acc) = match self.elastic {
-            true => pass(first_tension, loss),
-            false => pass(pass(first_tension, loss).0, loss),
+        // The rigid rope's tension depends on the loss factors (the hoist's eta moves it by some percent) and on the
+        // rolling, which takes the tension: iterated to the fixed point (the rolling changes the tension by some 1e-5 of
+        // itself, so three passes reach 1e-12). The losses are booked with the rolling of the last pass.
+        let (tension, rolling, acc) = if self.elastic {
+            pass(first_tension, loss)
+        } else {
+            let mut t = pass(first_tension, loss).0;
+            let mut last = pass(t, loss);
+            for _ in 0..8 {
+                if (last.0 - t).abs() <= 1e-12 * (1.0 + t.abs()) {
+                    break;
+                }
+                t = last.0;
+                last = pass(t, loss);
+            }
+            last
         };
         if !self.elastic {
             (rope.tension, rope.drum) = (tension, tension);
         }
         let into: [f64; 3] = std::array::from_fn(|k| drive[k] - self.drives[k].reflected_inertia() * acc[k]);
         let out = std::array::from_fn(|k| loss[k] * into[k]);
-        let load_acc = [-tension * u[0] / m, -tension * u[1] / m, -tension * u[2] / m - self.g];
+        let mut load_acc = [-tension * u[0] / m, -tension * u[1] / m, -tension * u[2] / m - self.g];
+        // The floor under the load (one-sided: it pushes, never pulls): standing on it and sinking, the floor takes
+        // what keeps the load at its height.
+        let mut floor_force = 0.0;
+        if self.floor.is_some_and(|floor| s[LOAD + 2] <= floor && s[LOAD_SPEED + 2] <= 0.0) && load_acc[2] < 0.0 {
+            floor_force = -m * load_acc[2];
+            load_acc[2] = 0.0;
+        }
         let pull = [tension * u[0], tension * u[1], rope.drum];
-        Motion { acc, load_acc, into, out, brake_rates, rope: pull, rolling, rope_state: rope }
+        Motion { acc, load_acc, into, out, brake_rates, rope: pull, rolling, floor_force, rope_state: rope }
     }
 
     /// The load's horizontal offset from under the sheave and its rate.
@@ -642,11 +670,28 @@ impl Machine for Crane {
     /// (the rest across the rope, its sway, is kept). Not done, the rope would snatch the new load from rest (to twice its
     /// weight) and fling the empty hook up off a slack rope. What that changes in the energy (the floor's share of the
     /// lift, some 0.1 J) is booked with `power.other` over this step.
-    // shortcut: the payload is on the hook at once; model the floor's contact where the snatch of a load lifted fast
-    // off the floor, or set down with a slack rope, is the question.
+    ///
+    /// With effects.floor_contact the floor is modelled where the load stands on it (`motion`: the floor force N >= 0,
+    /// N = -m a_z of the free load, which then stays at `crane.floor_height_m`): a payload's mass goes on without a jump
+    /// of the rope (the floor carries it), the rope's tension takes the weight over as the drum winds (the snatch of a
+    /// fast lift is the rope's stretch at the drum's speed, t = EA e / l, until t |u_z| = m g), and a slack rope on
+    /// lowering leaves the load standing. The load's fall onto the floor is plastic: its downward speed is lost
+    /// (m v^2 / 2, booked with `power.other`). Above the floor the pick is quasi-static as before.
+    // shortcut: the floor is smooth: a load standing on it slides under a slanted rope; add Coulomb friction (and a
+    // key for it) where a drag on the floor is the question.
     fn after_step(&mut self, s: &mut [f64], dt: f64) {
         self.pick_loss = 0.0;
-        if !std::mem::take(&mut self.picked) {
+        let mut standing = false;
+        if let Some(floor) = self.floor {
+            standing = s[LOAD + 2] <= floor;
+            if standing && (s[LOAD + 2] < floor || s[LOAD_SPEED + 2] < 0.0) {
+                let before = self.energy(s);
+                s[LOAD + 2] = floor;
+                s[LOAD_SPEED + 2] = s[LOAD_SPEED + 2].max(0.0);
+                self.pick_loss += (before - self.energy(s)) / dt;
+            }
+        }
+        if !std::mem::take(&mut self.picked) || standing {
             return;
         }
         let before = self.energy(s);
@@ -659,7 +704,7 @@ impl Machine for Crane {
             s[LOAD + k] = sheave[k] + rope.u[k] * length;
             s[LOAD_SPEED + k] += rope.u[k] * along;
         }
-        self.pick_loss = (before - self.energy(s)) / dt;
+        self.pick_loss += (before - self.energy(s)) / dt;
     }
     fn set_dwelling(&mut self, dwelling: bool) {
         self.dwelling = dwelling;
@@ -695,6 +740,7 @@ impl Machine for Crane {
             SignalInfo::new("load.sway_angle", "group-load", "quantity-sway-angle", "rad"),
             SignalInfo::new("load.sway", "group-load", "quantity-sway", "m"),
             SignalInfo::new("load.residual_sway", "group-load", "quantity-residual-sway", "m"),
+            SignalInfo::new("load.floor_force", "group-load", "quantity-floor-force", "N"),
             SignalInfo::new("hoist.brake_load", "group-hoist", "quantity-brake-load", "N m"),
         ];
         for motor in &self.motors {
@@ -744,6 +790,7 @@ impl Machine for Crane {
         let (d, _) = self.sway(s);
         let offset = d[0].hypot(d[1]);
         let residual = if self.dwelling { self.sway_amplitude(s) } else { 0.0 };
+        let floor = if self.floor.is_some() { self.motion(s, torque).floor_force } else { 0.0 };
         out.extend([
             rope.tension,
             (self.t_min - rope.tension).max(0.0),
@@ -751,6 +798,7 @@ impl Machine for Crane {
             offset.atan2(self.height - s[LOAD + 2]),
             offset,
             residual,
+            floor,
             self.brake_load(&rope),
         ]);
     }
