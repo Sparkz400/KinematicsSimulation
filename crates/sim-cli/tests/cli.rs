@@ -900,16 +900,12 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         assert_eq!(core, 4 * count, "{}: {fit:?}", entry.id);
         for row in fit.iter().filter(|r| checked.contains(&r[0].as_str())) {
             let [config, fitted, error] = [2, 3, 4].map(|c| row[c].parse::<f64>().unwrap());
-            // Within three standard errors (which hold the noise and what else the trace has that the replay has not,
-            // `identify::difference_share`, and are never 0), or within 1 %: what a replay does not reproduce of a run
-            // (its setpoints interpolated between the rows) lies partly along the fit's columns, where no residual shows
-            // it. Measured (16 November 2026): within 2 standard errors on most machines, the worst the hexapod's motor
-            // 5 at 0.63 % (11 σ), the D3's motors 2 and 3 at 0.07 % (5.7 σ), the mover track's at 0.04 % (5.6 σ).
-            assert!(
-                config > 0.0 && error > 0.0 && (fitted - config).abs() < (0.01 * config).max(3.0 * error),
-                "{}: {row:?}",
-                entry.id
-            );
+            // Within three standard errors, which hold the noise and what else the trace has that the replay has not
+            // (`identify::difference_share`, `row_errors`) and are never 0. Measured (17 November 2026) over all 430
+            // values of every machine: (fitted − config) / error 0.16 RMS, at most 0.89 (the planar cable robot); before
+            // the errors took the difference row by row 0.22 RMS without the cable robots, the SCARA at 2.07, the cable
+            // robots at 4.0 and 5.8, which a 1 % allowance hid.
+            assert!(config > 0.0 && error > 0.0 && (fitted - config).abs() < 3.0 * error, "{}: {row:?}", entry.id);
         }
 
         // A file that is no trace is refused, in the chosen language.

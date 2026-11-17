@@ -947,6 +947,38 @@ fn solve(samples: &[Sample], basis: Option<&[usize]>, per: f64) -> Option<Solved
     Some(Solved { values, errors, combines, covariance, basis, residuals })
 }
 
+/// The standard errors of the values a fit on `samples` (`solve`) gives on the columns `basis`, from the residual `e`
+/// per sample taken row by row (White 1980: Σ (A'A)⁻¹ a_i e_i² a_i' (A'A)⁻¹, widened by `per` and the freedom as
+/// `solve` widens its variance), indexed by column as `Solved::errors`; NaN outside the basis. Where the residual sits
+/// in a few rows of high leverage, it is larger than the residual's mean square over all rows gives.
+fn row_errors(samples: &[Sample], basis: &[usize], e: &[f64], per: f64) -> Vec<f64> {
+    let p = samples.first().map_or(0, |s| s.1.len());
+    let m = basis.len();
+    let norm: Vec<f64> = (0..p).map(|j| samples.iter().map(|(_, x, _)| x[j] * x[j]).sum::<f64>().sqrt()).collect();
+    let mut gram = vec![vec![0.0; p]; p];
+    for (_, x, _) in samples {
+        for &a in basis {
+            for &b in basis {
+                gram[a][b] += x[a] / norm[a] * x[b] / norm[b];
+            }
+        }
+    }
+    let mut errors = vec![f64::NAN; p];
+    let Some(inverse) = inverse_of(&gram, basis) else { return errors };
+    let mut sum = vec![0.0; m];
+    for ((_, x, _), e) in samples.iter().zip(e) {
+        let z: Vec<f64> = basis.iter().map(|&j| x[j] / norm[j]).collect();
+        for (a, s) in sum.iter_mut().enumerate() {
+            *s += (e * (0..m).map(|b| inverse[a][b] * z[b]).sum::<f64>()).powi(2);
+        }
+    }
+    let freedom = samples.len() as f64 / (samples.len() as f64 - m as f64 * per).max(1.0);
+    for (a, &j) in basis.iter().enumerate() {
+        errors[j] = (sum[a] * per * freedom).sqrt() / norm[j];
+    }
+    errors
+}
+
 /// The inverse of the normal matrix `gram` on the columns `of`; `None` where it has none.
 fn inverse_of(gram: &[Vec<f64>], of: &[usize]) -> Option<Vec<Vec<f64>>> {
     let m = of.len();
@@ -1132,8 +1164,13 @@ pub fn fit_joints(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<O
     let Some(fitted) = solve(&split(&measured, &at), None, per) else { return Ok(None) };
     let Some(replayed) = solve(&split(&config, &at), Some(&fitted.basis), per) else { return Ok(None) };
     // The standard errors are those of fitted less config (`difference_share`), not the trace's alone, whose residual
-    // holds what the rigid model misses of the machine in both.
+    // holds what the rigid model misses of the machine in both; and at least those of the same difference taken row by
+    // row (`row_errors`): on the cable robots, whose gearbox mesh friction sticks at rest, a replay breaks away a row
+    // before or after its trace at a move's start (0.03 N m for a row), which the mean square over all rows spread thin:
+    // their own traces missed the config by 4.0 (planar) and 5.8 (spatial) standard errors, 0.89 and 0.85 with it.
     let share = difference_share(&fitted.residuals, &replayed.residuals);
+    let apart: Vec<f64> = fitted.residuals.iter().zip(&replayed.residuals).map(|(t, r)| t - r).collect();
+    let by_row = row_errors(&split(&measured, &at), &fitted.basis, &apart, per);
     let payload: Vec<(&'static str, String)> = match steps.len() {
         0 => vec![("payload_factor", "payload".to_string())],
         1 => PAYLOAD_STEP_QUANTITIES.iter().map(|q| (*q, "payload".to_string())).collect(),
@@ -1158,7 +1195,7 @@ pub fn fit_joints(entry: &MachineEntry, cfg: &Config, trace: &Trace) -> Result<O
             of: names[j].1.clone(),
             config: replayed.values[j] + shift(j),
             fitted: fitted.values[j] + shift(j),
-            error: fitted.errors[j] * share,
+            error: (fitted.errors[j] * share).max(by_row[j]),
             combines: fitted.combines[j].iter().map(|&(i, c)| (label(i), c)).collect(),
         })
         .collect();

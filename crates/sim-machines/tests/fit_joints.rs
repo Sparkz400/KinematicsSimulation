@@ -357,8 +357,11 @@ fn a_payload_picked_during_the_trace_is_found_with_when() {
 /// load is put where the twist that the motor's torque holds puts it (`Machine::twist`, a two-mass model per joint).
 ///
 /// By hand as for the rigid arm: link 1's factor into motor 1's inertia with 0.25 / 120² (to 1e-6); link 2's value up by
-/// 0.2 + 1.217 × 0.3 = 0.565 through what it combines. Measured (14 November): + 0.558 ± 0.025. Tolerance: every base
-/// value within three of its standard errors of the truth, link 2's error below 0.04, no payload step.
+/// 0.2 + 1.180 × 0.3 = 0.554 through what it combines. Measured (17 November): + 0.564 ± 0.054, the error since then at
+/// least that of the trace's and the replay's difference taken row by row (`identify::row_errors`; ± 0.025 from its mean
+/// square alone). Over 12 noise seeds the change scatters by 0.007 about 0.568: both errors hold the noise with room, and
+/// the rest is what the rigid model misses of the elastic gears. Tolerance: every base value within three of its
+/// standard errors of the truth, link 2's within 0.02 of it and its error below 0.06, no payload step.
 #[test]
 fn the_arm_fit_with_elastic_gears_finds_heavier_links() {
     let entry = sim_machines::find("urdf-arm").unwrap();
@@ -373,7 +376,8 @@ fn the_arm_fit_with_elastic_gears_finds_heavier_links() {
     let coefficient = folded_into(&fit, "link_mass_factor link1", "added_inertia_kg_m2 1");
     assert!((coefficient / (0.25 / 14400.0) - 1.0).abs() < 1e-6, "{coefficient:e}");
     let link2 = own(&fit, "link_mass_factor link2").unwrap();
-    assert!(link2.error < 0.04, "{link2:?}");
+    let expected = 0.2 + 0.3 * folded_into(&fit, "link_mass_factor link3", "link_mass_factor link2");
+    assert!((link2.fitted - link2.config - expected).abs() < 0.02 && link2.error < 0.06, "{expected}: {link2:?}");
     base_changes_are(&fit, &[("link_mass_factor link2", 0.2), ("link_mass_factor link3", 0.3)]);
     assert!(fit.payload_steps.is_empty(), "{:?}", fit.payload_steps);
 }
@@ -452,7 +456,7 @@ fn a_run_s_own_trace_fits_its_config_within_two_standard_errors() {
 }
 
 /// The same trace with its speed and acceleration setpoint columns dropped, as a drive's trace comes: the replay
-/// derives them from the rows (`trace::replay`), and the fit lands within two standard errors too: 0.01 at most (17
+/// derives them from the rows (`trace::replay`), and the fit lands within two standard errors too: 0.02 at most (17
 /// November 2026). With the rows' slopes (a cubic whose acceleration steps at every row) it was 5.69 (the Coulomb
 /// friction of motors 2 and 3), with central five-point differences 5.14.
 #[test]
