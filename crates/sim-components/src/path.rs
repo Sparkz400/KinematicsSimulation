@@ -1844,31 +1844,8 @@ fn limits(geo: &Geo, bounds: &[Bounds; 3]) -> [f64; 3] {
     let any = || tightest(&|row| row.iter().map(|w| w * w).sum::<f64>().sqrt());
     match geo {
         Geo::Line { dir, .. } => tightest(&|row| row.iter().zip(dir).map(|(w, d)| w * d).sum::<f64>().abs()),
-        // The most of a row's rate along the slerp: the rotation vector's rates by distance are not the chord's (the
-        // turn's curvature in rotation-vector coordinates, a few percent for a quarter turn about a tilted axis). The
-        // rate row . p'(s) is smooth in s, sampled at `SLERP_SAMPLES` + 1 places and the best place's parabola's top taken
-        // (error of the order h^4 of the piece's length share h = 1 / `SLERP_SAMPLES`, far below the rounding of `at`'s
-        // differences).
-        Geo::Slerp { .. } => {
-            let rates: Vec<Vec<f64>> = (0..=SLERP_SAMPLES)
-                .map(|k| geo.at(geo.length() * k as f64 / SLERP_SAMPLES as f64)[1].clone())
-                .collect();
-            tightest(&|row| {
-                let along: Vec<f64> =
-                    rates.iter().map(|d| row.iter().zip(d).map(|(w, d)| w * d).sum::<f64>()).collect();
-                let k = (0..along.len()).fold(0, |m, k| if along[k].abs() > along[m].abs() { k } else { m });
-                let mut top = along[k].abs();
-                if (1..SLERP_SAMPLES).contains(&k) {
-                    // The parabola through the best place and its neighbours has its vertex at -b / 2a from it.
-                    let (a, b) =
-                        ((along[k - 1] + along[k + 1] - 2.0 * along[k]) / 2.0, (along[k + 1] - along[k - 1]) / 2.0);
-                    if a * along[k] < 0.0 {
-                        top = (along[k] - b * b / (4.0 * a)).abs();
-                    }
-                }
-                top
-            })
-        }
+        Geo::Slerp { .. } => sampled(geo, bounds),
+        Geo::Carried { from, by, turn: Some(k), .. } if slerps(from, by, *k) => sampled(geo, bounds),
         Geo::Arc { radius, .. } | Geo::Arc3 { radius, .. } => curved(*radius, *radius * *radius, 0.0, 0.0, any()),
         // A transition curve counts as an arc of its tightest radius.
         Geo::Clothoid { k0, k1, length, .. } => {
@@ -1920,6 +1897,70 @@ fn curved(r: f64, r_jerk2: f64, dk: f64, binormal: f64, [v, a, j]: [f64; 3]) -> 
     let j_tn = j * (1.0 - g * g).sqrt();
     let (v, share) = (top(j_tn), if dk > 0.0 { 0.2 / 3.0 } else { 0.2 });
     [v, (0.6 * a).min(share * j_tn * r / v), 0.4 * j_tn]
+}
+
+/// `limits` on a piece whose derivatives by distance p', p'', p''' are read along it, not given in closed form: a slerp
+/// (whose rotation vector's rates are not the chord's and which bends, by up to 0.2 per rad on a quarter turn about a
+/// tilted axis) and an arc whose orientation turns by slerp. A row w's rate is w . p' v, its acceleration
+/// w . (p' v' + p'' v^2) and its jerk w . (p' v'' + 3 p'' v v' + p''' v^3); with P1, P2, P3 the most of |w . p'|,
+/// |w . p''|, |w . p'''| over the piece, each stays within its row's limit where P1 v, P1 a + P2 v^2 and P1 j + 3 P2 v a +
+/// P3 v^3 do. The speed keeps P2 v^2 within half the acceleration limit and P3 v^3 within a quarter of the jerk's, the
+/// acceleration 3 P2 v a within another quarter of it; the ramps take what is left. On a piece that does not bend (P2 =
+/// P3 = 0) that is v, a, j = the limits over P1.
+///
+/// P1 is read at `SLERP_SAMPLES` + 1 places with the best place's parabola's top (error of the order h^4 of the share h
+/// = 1 / `SLERP_SAMPLES`); P2 at the same places; P3 by the third differences of the pose at 33 places, a twentieth
+/// of the piece apart (on a short piece finer steps would read the rounding of the pose).
+fn sampled(geo: &Geo, bounds: &[Bounds; 3]) -> [f64; 3] {
+    let length = geo.length();
+    let at: Vec<[Vec<f64>; 3]> =
+        (0..=SLERP_SAMPLES).map(|k| geo.at(length * k as f64 / SLERP_SAMPLES as f64)).collect();
+    let pose = |t: f64| geo.at(length * t)[0].clone();
+    let d = 0.05;
+    // A straight piece (a turn about one axis, `one_axis`) has none: its differences would be the rounding alone.
+    let straight = at.iter().all(|[_, _, p2]| p2.iter().all(|x| *x == 0.0));
+    let third: Vec<Vec<f64>> = (0..=32)
+        .filter(|_| !straight)
+        .map(|k| {
+            let t = k as f64 / 32.0;
+            let (a, b, c, e) = (pose(t + 2.0 * d), pose(t + d), pose(t - d), pose(t - 2.0 * d));
+            (0..a.len()).map(|i| (a[i] - 2.0 * b[i] + 2.0 * c[i] - e[i]) / (2.0 * (d * length).powi(3))).collect()
+        })
+        .collect();
+    let dot = |row: &[f64], v: &[f64]| row.iter().zip(v).map(|(w, x)| w * x).sum::<f64>();
+    let most = |row: &[f64], of: &mut dyn Iterator<Item = &Vec<f64>>| of.map(|v| dot(row, v).abs()).fold(0.0, f64::max);
+    let first = |row: &[f64]| {
+        let along: Vec<f64> = at.iter().map(|[_, p1, _]| dot(row, p1)).collect();
+        let k = (0..along.len()).fold(0, |m, k| if along[k].abs() > along[m].abs() { k } else { m });
+        let mut top = along[k].abs();
+        if (1..SLERP_SAMPLES).contains(&k) {
+            // The parabola through the best place and its neighbours has its vertex at -b / 2a from it.
+            let (a, b) = ((along[k - 1] + along[k + 1] - 2.0 * along[k]) / 2.0, (along[k + 1] - along[k - 1]) / 2.0);
+            if a * along[k] < 0.0 {
+                top = (along[k] - b * b / (4.0 * a)).abs();
+            }
+        }
+        top
+    };
+    // Per bound and row: its limit, P1, P2, P3.
+    let rows = bounds.each_ref().map(|rows| {
+        rows.iter()
+            .map(|(row, limit)| {
+                (*limit, first(row), most(row, &mut at.iter().map(|[_, _, p2]| p2)), most(row, &mut third.iter()))
+            })
+            .collect::<Vec<_>>()
+    });
+    let fold =
+        |of: &dyn Fn(&(f64, f64, f64, f64)) -> f64, k: usize| rows[k].iter().map(of).fold(f64::INFINITY, f64::min);
+    let v = fold(&|&(l, p1, ..)| l / p1, 0)
+        .min(fold(&|&(l, _, p2, _)| (0.5 * l / p2).sqrt(), 1))
+        .min(fold(&|&(l, .., p3)| (0.25 * l / p3).cbrt(), 2));
+    // A part that is 0 stays 0 at any speed (no 0 * inf).
+    let times = |p: f64, x: f64| if p == 0.0 { 0.0 } else { p * x };
+    let a = fold(&|&(l, p1, p2, _)| (l - times(p2, v * v)) / p1, 1)
+        .min(fold(&|&(l, _, p2, _)| 0.25 * l / times(3.0 * p2, v), 2));
+    let j = fold(&|&(l, p1, p2, p3)| (l - times(3.0 * p2, v * a) - times(p3, v.powi(3))) / p1, 2);
+    [v, a, j]
 }
 
 /// The places along a slerp at which `limits` reads its rates, 256 intervals.
@@ -2512,7 +2553,10 @@ fn motor_limits<'a>(
             let mid = 0.5 * (low + high);
             if at_speed(mid)[0] >= mid { low = mid } else { high = mid }
         }
-        at_speed(low)
+        // Where the limit steps down at the fixed point (a step in a curve), the speed is held below that step.
+        let mut out = at_speed(low);
+        out[0] = out[0].min(high);
+        out
     }
 }
 
@@ -3057,9 +3101,11 @@ fn piece_limits(
         // path, and the plan would crawl or, with the rows not finite, run unbounded: refused.
         let bounded = |v: &[f64]| v.iter().all(|x| x.is_finite());
         if ![&hold, &per_acc, &per_speed, &ahead, &behind].iter().all(|v| bounded(v))
-            || ahead.iter().zip(&behind).zip(curves.iter()).any(|((a, b), curve)| {
-                (a - b).abs() > 2.0 * TURN_STEP * singular_turn(curve.max_speed(), length)
-            })
+            || ahead
+                .iter()
+                .zip(&behind)
+                .zip(curves.iter())
+                .any(|((a, b), curve)| (a - b).abs() > 2.0 * TURN_STEP * singular_turn(curve.max_speed(), length))
         {
             return Err(CommandError { key: "error-path-singular" });
         }
@@ -4934,13 +4980,14 @@ line,0.3,0.13",
         2.0 * qa.iter().zip(qb).map(|(x, y)| x * y).sum::<f64>().abs().clamp(0.0, 1.0).acos()
     }
 
-    /// An arc in tool space whose orientation turns from (0.3, 0, 0) to (0, 0.8, 0.5) rad, about an axis that changes
+    /// An arc in tool space whose orientation turns from (1.2, 0, 0) to (0, 1.0, 0.8) rad, about an axis that changes
     /// per component of the rotation vector: by slerp the tool turns about one fixed axis at an even rate, so the angle
     /// between its orientations at equal distances along the arc is the same all along it (a quarter circle of radius
-    /// 0.1 m, 10 steps). Evenly per component of the rotation vector it would differ between the steps.
+    /// 0.1 m, 10 steps). Evenly per component of the rotation vector it would differ between the steps (by 1e-6 of a
+    /// step for small turns such as (0.3, 0, 0) to (0, 0.8, 0.5); more for these).
     #[test]
     fn a_tool_space_arc_turns_the_tool_at_an_even_rate() {
-        let (from, to) = ([0.1, 0.0, 0.0, 0.3, 0.0, 0.0], [0.0, 0.1, 0.0, 0.0, 0.8, 0.5]);
+        let (from, to) = ([0.1, 0.0, 0.0, 1.2, 0.0, 0.0], [0.0, 0.1, 0.0, 0.0, 1.0, 0.8]);
         let Some(Geo::Carried { arc, from: tail, by, length, .. }) = arc_on(&from, &to, &[0.0; 3], false, None) else {
             panic!("an arc")
         };
@@ -4984,7 +5031,8 @@ line,0.3,0.13",
         let piece = Geo::Slerp { from: from.to_vec(), to: to.to_vec(), length, at: 3 };
         for axis in 3..6 {
             let row: Vec<f64> = (0..6).map(|k| (k == axis) as u8 as f64).collect();
-            let bounds: [Bounds; 3] = [vec![(row.clone(), 1.0)], vec![(row.clone(), 1.0)], vec![(row, 1.0)]];
+            // The speed row alone: the bend's own caps (`sampled`) out of the way.
+            let bounds: [Bounds; 3] = [vec![(row.clone(), 1.0)], vec![(row.clone(), 1e9)], vec![(row, 1e9)]];
             let h = 1e-6;
             let rate = |t: f64| {
                 let at = |t: f64| crate::rigid::slerp([0.5, 0.0, 0.0], [0.0, 0.9, 0.3], t)[axis - 3];
@@ -4996,12 +5044,133 @@ line,0.3,0.13",
         }
     }
 
-    /// Tops that fit in two ranges, [0, 1] and [3, 5] (a speed curve with two humps and a dip between them), are found in
-    /// the higher range: 5, where the halving from 0 alone settles at 1; with one range the result is the same as the
-    /// halving's.
+    /// A tool-space line from the orientation (3, 0, 0) to (0, 0, 1) rad (and 10 mm), planned within the axis limits
+    /// (rotation axes 3 rad/s, 5 rad/s^2, 1e4 rad/s^3): its slerp bends its rotation vector by up to 0.375 per rad, which
+    /// at 2.5 rad/s along it is 2.3 rad/s^2 beside the ramps'. Read from the plan's poses (second differences over 1 ms,
+    /// independent of `limits`), no rotation axis goes beyond its 5 rad/s^2 (measured 4.68); with the bend left out (P2
+    /// = P3 = 0 in `sampled`, the chord's rule) the plan reached 5.27 rad/s^2.
+    #[test]
+    fn a_slerp_planned_within_the_axis_limits_keeps_its_axes_accelerations() {
+        let axis = |id: &'static str, rotation: bool| AxisInfo {
+            id,
+            key: "",
+            unit: "",
+            min: -10.0,
+            max: 10.0,
+            max_vel: if rotation { 3.0 } else { 10.0 },
+            max_acc: if rotation { 5.0 } else { 1e3 },
+            max_jerk: if rotation { 1e4 } else { 1e6 },
+        };
+        let axes = [
+            axis("x", false),
+            axis("y", false),
+            axis("z", false),
+            axis("rx", true),
+            axis("ry", true),
+            axis("rz", true),
+        ];
+        let start = [0.0, 0.0, 0.0, 3.0, 0.0, 0.0];
+        let points =
+            plan(&axes, &start, &[Piece::Line(vec![0.01, 0.0, 0.0, 0.0, 0.0, 1.0])], 1e-3, 0.0, ARC_SLACK).unwrap();
+        let worst = points
+            .windows(3)
+            .map(|w| (3..6).map(|i| (w[2].1[i] - 2.0 * w[1].1[i] + w[0].1[i]).abs() / 1e-6).fold(0.0, f64::max))
+            .fold(0.0, f64::max);
+        assert!(worst <= 5.0 * (1.0 + 1e-6), "{worst} rad/s^2");
+    }
+
+    /// A table of 1 kg on two linear axes, each driven by a motor through a pinion of 10 mm (100 rad per m): the motor's
+    /// torque per acceleration is 0.01 N m per m/s^2.
+    struct Table {
+        axes: [AxisInfo; 2],
+        motors: [sim_core::MotorInfo; 2],
+    }
+
+    impl Machine for Table {
+        fn axes(&self) -> &[AxisInfo] {
+            &self.axes
+        }
+        fn motors(&self) -> &[sim_core::MotorInfo] {
+            &self.motors
+        }
+        fn inverse(&self, tool: &[f64], motors: &mut [f64]) {
+            (motors[0], motors[1]) = (tool[0] / 0.01, tool[1] / 0.01);
+        }
+        fn forward(&self, motors: &[f64], tool: &mut [f64]) {
+            (tool[0], tool[1]) = (motors[0] * 0.01, motors[1] * 0.01);
+        }
+        fn state_len(&self) -> usize {
+            4
+        }
+        fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]) {
+            *state = vec![tool[0], tool[1], 0.0, 0.0];
+            torque.fill(0.0);
+        }
+        fn derivatives(&self, s: &[f64], torque: &[f64], out: &mut [f64]) {
+            out.copy_from_slice(&[s[2], s[3], torque[0] / 0.01, torque[1] / 0.01]);
+        }
+        fn tool_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+            pos.copy_from_slice(&s[..2]);
+            vel.copy_from_slice(&s[2..]);
+        }
+        fn set_tool_velocity(&self, s: &mut [f64], vel: &[f64]) {
+            s[2..].copy_from_slice(vel);
+        }
+        fn motor_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+            (pos[0], pos[1], vel[0], vel[1]) = (s[0] / 0.01, s[1] / 0.01, s[2] / 0.01, s[3] / 0.01);
+        }
+        fn feedforward_torque(&self, _: &[f64], acc: &[f64], out: &mut [f64]) {
+            (out[0], out[1]) = (acc[0] * 0.01, acc[1] * 0.01);
+        }
+        fn energy(&self, s: &[f64]) -> f64 {
+            0.5 * (s[2] * s[2] + s[3] * s[3])
+        }
+        fn set_payload_attached(&mut self, _: bool) {}
+        fn signal_infos(&self) -> Vec<sim_core::SignalInfo> {
+            Vec::new()
+        }
+        fn base_signals(&self, _: &[f64], _: &[f64], _: &mut Vec<f64>) {}
+        fn scene(&self, _: &[f64], _: &mut sim_core::Scene) {}
+    }
+
+    /// The transition curves are sized with the motors' torque at the speed the piece runs at (`motor_limits`). On the
+    /// `Table` a half circle of r = 0.05 m from the bottom, ccw, turns each motor at up to 100 v; the arc's speed is
+    /// sqrt(0.8 a r) (`curved`) with a = T(100 v) / 0.01 for the motor's torque T, 3.8 N m up to 314 rad/s and falling
+    /// to 0 at 420 (the test drive). With the whole torque that is sqrt(0.8 * 0.05 * 380) = 3.899 m/s, 390 rad/s, on the
+    /// falling part: there 106 v^2 = 15.2 (420 - 100 v), v = 3.3958 m/s (340 rad/s). Without the fall (no-load speed
+    /// far up) it is 3.899.
+    #[test]
+    fn the_transition_speed_takes_the_motors_torque_at_the_speed_it_runs_at() {
+        let axis =
+            |id| AxisInfo { id, key: "", unit: "m", min: -1.0, max: 1.0, max_vel: 10.0, max_acc: 1e4, max_jerk: 1e12 };
+        let motor = |id| sim_core::MotorInfo { id, key: "" };
+        let table = Table { axes: [axis("x"), axis("y")], motors: [motor("a"), motor("b")] };
+        let r = 0.05;
+        let arc = Geo::Arc {
+            centre: [0.0, 0.0],
+            radius: r,
+            from_angle: -std::f64::consts::FRAC_PI_2,
+            turn: 1.0,
+            length: std::f64::consts::PI * r,
+        };
+        let plan = PlanLimits::new(1.0, [0.0; 3]);
+        let speed = |drive: &DriveParams| {
+            let drives = [drive, drive];
+            motor_limits(&table, &drives, &plan, [f64::NEG_INFINITY, f64::INFINITY, 1.0])(&arc)[0]
+        };
+        let falling = crate::drive::tests::params();
+        let hand = (-1520.0 + (1520.0_f64.powi(2) + 4.0 * 106.0 * 6384.0).sqrt()) / 212.0;
+        assert!((speed(&falling) - hand).abs() < 1e-9, "{} against {hand} m/s", speed(&falling));
+        let level = DriveParams { rated_speed: 1e4, no_load_speed: 2e4, max_speed: 1e4, ..falling.clone() };
+        assert!((speed(&level) - 15.2_f64.sqrt()).abs() < 1e-9, "{} m/s", speed(&level));
+    }
+
+    /// Tops that fit in two ranges, [0, 1] and [4, 5] (a speed curve with two humps and a dip between them), are found in
+    /// the higher range: 5, where the halving from 0 alone settles at 1 (its first try, 3, does not fit); with one range
+    /// the result is the same as the halving's.
     #[test]
     fn the_highest_fitting_top_is_searched_in_every_range() {
-        let two = |x: f64| x <= 1.0 || (3.0..=5.0).contains(&x);
+        let two = |x: f64| x <= 1.0 || (4.0..=5.0).contains(&x);
         assert!((highest_fitting_scan(0.0, 6.0, two) - 5.0).abs() < 1e-8);
         assert!((highest_fitting(0.0, 6.0, two) - 1.0).abs() < 1e-8);
         let one = |x: f64| x <= 2.5;
@@ -5329,6 +5498,39 @@ line,0.3,0.13",
             })
             .collect();
         let ((n_a, v_a), (n_b, v_b)) = (results[0], results[1]);
-        assert!((n_a as f64 / n_b as f64 - 1.0).abs() < 0.02 && (v_a / v_b - 1.0).abs() < 0.03, "{results:?}");
+        // Both curves' |p'''| is the quintic's 2.0e6 per m^2 (the curvature rising to ~950 per m over 1.43 mm). In one
+        // plane it is the change of curvature, which takes 0.4 of the jerk: v^3 2e6 = 0.4 * 2500 m/s^3, v = 0.0794 m/s.
+        // Across the planes the curve starts with the first arc's curvature (10 per m along y) and its jerk along z is
+        // binormal there (kappa tau = 2.0e6), which takes `BINORMAL_SHARE` = 0.3: v = cbrt(0.3 * 2500 / 2e6) = 0.0721
+        // m/s, cbrt(3 / 4) = 0.909 of the planar speed. Measured 0.0721 and 0.0794 (steps of 1 ms), ratio 0.9083.
+        assert!((n_a as f64 / n_b as f64 - 1.0).abs() < 0.02, "{results:?}");
+        assert!((v_a / v_b - 0.75f64.cbrt()).abs() < 0.005 && (v_b / 1e-3 - 0.0794).abs() < 1e-3, "{results:?}");
+    }
+
+    /// A line 50 mm long that ends where an arc starts but begins 1 um off the arc's plane: it turns into the arc by
+    /// 2e-5 rad, below the 1 mrad of a corner, and lies 1 um off the run's plane (more than its 1 nm), so it gets no
+    /// transition curve and the path passes the junction at `junction_speed`: the arc's curvature, 10 per m along y, is a
+    /// step of acceleration that half the y axis's jerk (1250 m/s^3) may make over one cycle of 1 ms: v^2 10 = 1250 *
+    /// 1e-3, v = 0.354 m/s (the z kink allows 1250 * 1e-6 / 2e-5 = 62 m/s). Not a stop. In the plane the line gets
+    /// its transition curve (15.5 mm for the 0.1 mm tolerance e: L^2 / (24 R) = e) and passes faster.
+    #[test]
+    fn a_line_one_micrometre_off_an_arcs_plane_passes_its_junction_at_the_curvature_step_speed() {
+        let (axes, r) = (axes3(), 0.1);
+        let arc = Piece::Arc { to: vec![r, r, -0.9], centre: vec![0.0, r, -0.9], clockwise: false, plane: None };
+        let junction = [0.0, 0.0, -0.9];
+        let slowest = |off: f64| {
+            let pieces = [Piece::Line(junction.to_vec()), arc.clone()];
+            let start = [-0.05, 0.0, -0.9 + off];
+            let points = plan(&axes, &start, &pieces[..], 1e-3, 1e-4, ARC_SLACK).unwrap();
+            points
+                .windows(2)
+                .filter(|w| distance(&w[0].1, &junction) < 3e-3)
+                .map(|w| distance(&w[0].1, &w[1].1))
+                .fold(f64::INFINITY, f64::min)
+        };
+        let (off, on) = (slowest(1e-6), slowest(0.0));
+        let hand = (1250.0 * 1e-3 / 10.0_f64).sqrt() * 1e-3;
+        assert!(off >= hand * 0.98 && off <= hand * 1.02, "{off} m per step against {hand}");
+        assert!(on > 1.5 * off, "{on} m per step in the plane");
     }
 }

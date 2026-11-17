@@ -273,11 +273,7 @@ fn path_run(cfg: &Config) -> Result<Option<PathRun>, ConfigError> {
         return Ok(None);
     }
     let time_optimal = cfg.get("path.time_optimal").is_ok() && cfg.bool("path.time_optimal")?;
-    let orientation_speed = if cfg.get("program.orientation_speed_rad_s").is_ok() {
-        cfg.positive("program.orientation_speed_rad_s")?
-    } else {
-        crate::program::ORIENTATION_SPEED
-    };
+    let orientation_speed = crate::program::orientation_speed_of(cfg)?;
     Ok(Some(PathRun { file: text("file")?, program, time_optimal, orientation_speed }))
 }
 
@@ -547,16 +543,12 @@ impl Sim {
     pub fn plan_configured_path(&self) -> Option<Result<Vec<(f64, Vec<f64>)>, CommandError>> {
         let run = self.path.as_ref()?;
         let start = self.control.planned_pos();
-        let runs = match crate::program::read_with(
-            &run.file,
-            &run.program,
-            self.machine.axes(),
-            start,
-            run.orientation_speed,
-        ) {
-            Ok(runs) => runs,
-            Err(e) => return Some(Err(CommandError { key: e.key })),
-        };
+        let runs =
+            match crate::program::read_with(&run.file, &run.program, self.machine.axes(), start, run.orientation_speed)
+            {
+                Ok(runs) => runs,
+                Err(e) => return Some(Err(CommandError { key: e.key })),
+            };
         Some(match runs.as_slice() {
             [one] if one.feed.is_none() => self.plan_path(&one.pieces, run.time_optimal),
             _ => self.plan_program(&runs, run.time_optimal),

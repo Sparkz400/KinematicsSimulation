@@ -1983,12 +1983,15 @@ impl Model {
                         let (points, deviations) = if inputs.path_timed {
                             (path::parse_trajectory(&text).map_err(unreadable)?, vec![0.0])
                         } else {
-                            // A path file, or a G-code or robot program (`program::read`, by the file's extension).
-                            let runs = sim_components::program::read(
+                            // A path file, or a G-code or robot program (`program::read`, by the file's extension),
+                            // a robot's reorientation at the config's `program.orientation_speed_rad_s`.
+                            let speed = sim_components::program::orientation_speed_of(&config).map_err(refused)?;
+                            let runs = sim_components::program::read_with(
                                 &inputs.path_file,
                                 &text,
                                 sim.machine.axes(),
                                 sim.control.planned_pos(),
+                                speed,
                             )
                             .map_err(|e| ("ui-file-line", format!("{}:{}: {}", inputs.path_file, e.line, e.detail)))?;
                             match runs.as_slice() {
@@ -2628,7 +2631,11 @@ impl Model {
                 m.points.iter().map(|(speed, torque)| [*speed * rpm, *torque]).collect()
             })
             .collect();
-        let curves = curves.iter().enumerate().map(|(k, chart)| crate::runs::scaled_speeds(chart, self.motor_speed_scale(k))).collect();
+        let curves = curves
+            .iter()
+            .enumerate()
+            .map(|(k, chart)| crate::runs::scaled_speeds(chart, self.motor_speed_scale(k)))
+            .collect();
         Some((points, curves))
     }
 
