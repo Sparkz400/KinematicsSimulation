@@ -602,7 +602,19 @@ impl Instance {
         let file = self.text_value(self.find(&Kind::PathFile));
         let text = if file.is_empty() { self.text_value(self.find(&Kind::PathText)) } else { read(&file)? };
         let time_optimal = self.bool_value(self.find(&Kind::TimeOptimal));
-        let runs = sim_components::program::read(&file, &text, sim.machine.axes(), sim.control.planned_pos())
+        // The config's own `program.orientation_speed_rad_s`, as the simulator's path run reads it.
+        let machine = self.text_value(self.find(&Kind::Machine));
+        let entry = if machine == self.model.entry.id {
+            self.model.entry
+        } else {
+            sim_machines::find(&machine).ok_or(("fmi-error-config", machine.clone()))?
+        };
+        let config_file = self.text_value(self.find(&Kind::ConfigFile));
+        let config_text = if config_file.is_empty() { self.model.config_text.clone() } else { read(&config_file)? };
+        let refused = |e: sim_core::ConfigError| ("fmi-error-config", self.tr.tr_arg(e.key(), e.detail()));
+        let cfg = load_config(entry, &config_text).map_err(refused)?;
+        let speed = sim_components::program::orientation_speed_of(&cfg).map_err(refused)?;
+        let runs = sim_components::program::read_with(&file, &text, sim.machine.axes(), sim.control.planned_pos(), speed)
             .map_err(|e| ("fmi-error-path", format!("{file}:{}: {}", e.line, self.tr.tr_arg(e.key, &e.detail))))?;
         // A program with feeds is planned run by run; one run at the axes' limits as a path file is.
         match runs.as_slice() {

@@ -450,6 +450,13 @@ fn rotation_of_abc([a, b, c]: [f64; 3]) -> [f64; 3] {
 /// ABB's `v_ori` (RAPID speeddata); `program.orientation_speed_rad_s` sets it.
 pub const ORIENTATION_SPEED: f64 = 500.0 * std::f64::consts::PI / 180.0;
 
+/// The config's `program.orientation_speed_rad_s` (above 0), `ORIENTATION_SPEED` where it has none: the value the front
+/// ends pass to `read_with`, as the simulator's own path run does.
+pub fn orientation_speed_of(cfg: &sim_core::Config) -> std::result::Result<f64, sim_core::ConfigError> {
+    let key = "program.orientation_speed_rad_s";
+    if cfg.get(key).is_ok() { cfg.positive(key) } else { std::result::Result::Ok(ORIENTATION_SPEED) }
+}
+
 /// The angle (rad) of the arc through `via` from `from` to `to` about `centre`, on the first three axes: the two
 /// parts from the start to `via` and from `via` to the end, each taken as at most a half turn.
 fn arc_angle(from: &[f64], via: &[f64], to: &[f64], centre: &[f64]) -> f64 {
