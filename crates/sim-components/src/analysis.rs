@@ -3902,7 +3902,7 @@ pub fn frequency_sweep(
 }
 
 /// A response is measured over whole periods: at 0 Hz that never ends, and below it means nothing.
-fn check_frequencies(frequencies: &[f64]) -> Result<(), ConfigError> {
+pub(crate) fn check_frequencies(frequencies: &[f64]) -> Result<(), ConfigError> {
     if frequencies.iter().all(|f| f.is_finite() && *f > 0.0) {
         Ok(())
     } else {

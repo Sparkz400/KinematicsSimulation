@@ -1240,9 +1240,11 @@ fn dips(sweep: &[SweepPoint]) -> Vec<Resonance> {
 }
 
 /// A frequency response as `sim-cli sweep` writes it: the columns `frequency_hz` and `gain_rad_s_per_nm`. A
-/// phase is not read; the fit does not use it.
+/// phase is not read; the fit does not use it. A frequency that is not finite and above zero is refused, as `sweep` refuses
+/// it: before, a file with 0 Hz in it got past to the fit, and was refused only when it had a dip.
 pub fn parse_sweep(text: &str) -> Result<Vec<SweepPoint>, TraceError> {
     let table = crate::trace::columns(text, &["frequency_hz".to_string(), "gain_rad_s_per_nm".to_string()])?;
+    crate::analysis::check_frequencies(&table[0])?;
     Ok(table[0]
         .iter()
         .zip(&table[1])
