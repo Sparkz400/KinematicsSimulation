@@ -45,7 +45,9 @@ belt-span-7 = Riementrum, Motor B bis Schlittenrolle
 belt-span-8 = Riementrum, Schlittenrolle bis rechte Klemmung
 effect-z_axis_bending = Z-Achse biegt sich als Kragarm vom Schlitten
 effect-beam_sag = X-Balken hängt unter dem Schlitten durch (quasistatisch)
+effect-beam_vertical_mode = Erste vertikale Schwingung des X-Balkens mit dem Schlitten darauf
 group-beam = X-Balken
+param-damping_ratio = Dämpfungsgrad der vertikalen Balkenschwingung
 param-span_m = Stützweite zwischen den Stützen [m]
 param-carriage_at_zero_m = Schlitten von der linken Stütze bei x = 0 [m]
 param-bending_stiffness_nm2 = Biegesteifigkeit E I [N m²]

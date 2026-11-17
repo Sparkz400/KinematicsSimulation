@@ -768,7 +768,20 @@ sag(x) = (m_c + m_z) g · a² b² / (3 E I L)          (L³ / (48 E I) per newto
 z_tool = z − sag(x),   ż_tool = ż − sag'(x) ẋ
 ```
 
-At rest the Z axis stands sag(x) higher on its belt so that the tool is at its pose. With the default values: 107.87 N, L = 1.3 m, E I = 8.4e4 N m²: 58.8 µm in the middle, 9.8 µm at the ends of the stroke. Quasi-static: the beam's vertical mode with the carriage on it (about 100 Hz) lies above the Z axis's mode on its belt, and the Z axis's acceleration does not add to the load (shortcut, `Beam`).
+At rest the Z axis stands sag(x) higher on its belt so that the tool is at its pose. With the default values: 107.87 N, L = 1.3 m, E I = 8.4e4 N m²: 58.8 µm in the middle, 9.8 µm at the ends of the stroke. This is quasi-static.
+
+With `effects.beam_vertical_mode` the beam's first vertical mode with the carriage on it is a coordinate w, the beam's deflection under the carriage (down), and the Z axis's z is relative to the carriage:
+
+```text
+shape φ: the span's static deflection under a point load at the carriage, φ = 1 there
+k(x) = 1 / span_compliance = 3 E I L / (a² b²),   M(x) = μ ∫ φ² ds   (17 μ L / 35 in the middle)
+T = ½ (m_c + m_z + M(x)) w'² − m_z z' w' + …,   V = ½ k(x) w² − (m_c + m_z) g w,   damping c = 2 ζ √(k M)
+z_tool = z − w (+ the lean's rise)
+```
+
+So the Z axis's acceleration drives the beam through −m_z, and the carriage's weight riding along the beam drives it through k(x) (a force on x of −½ k' w², and ½ M' w'² from the modal mass). At rest w is the quasi-static sag. By hand in the middle (k = 1.835e6 N/m, M = 2.21 kg, m_c + m_z = 11 kg): 59.3 Hz (the former estimate of about 100 Hz left out the carriage and the Z axis). The Lagrangian drops what the shape's change with x adds to the kinetic energy (second order in w), and the belt's vertical runs (0.5 kg) are not on w. The damping is the loss row `power.beam`; the signal `beam.deflection` is w.
+
+The belt's vertical runs hold the leaning Z axis back with their geometric stiffness: the clamp (s + z above the carriage's idlers) and the Z-bottom idler (s + sz − z below them) stand out sideways by k u g (g the guide's give, tilt and bending at that distance), a run of length l under tension T is longer by δ²/(2l) and holds the end back with T δ / l, so K_uu gains Σ T_i c_i with c = (g_clamp²/(s + z), 2 g_bottom²/(s + sz − z), g_clamp²/(s + z)) (a few per cent of the lean's spring). The process force's vertical part works on the tip's rise a(z) u² (the leaning bar is shortened by θ² d / 2): it is in the lean's and the Z axis's equations, in the modes and in the process row of the budget, and `tool_state` has the rise in the tool's height.
 
 The modes the machine reports (`modes`; the lowest is `resonance_hz`, the input shaper's) are the generalised eigenvalues K v = ω² M v over the elastic coordinates the model has at that pose (pulleys taken as held): the carriage x on the frame, the Z axis's z on its belt, with `effects.frame_compliance` the frame's sway q, with the leaning Z axis its lean u:
 

@@ -121,6 +121,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `base_reaction` | every machine and machine file | off | With `base_compliance`: two-way. The machine feels the base's acceleration (its motors see the sway and hold against it), base and machine solved together; the base's energy is in `energy.*` and its damping in `power.*` (`power.base`). Off: one-way, the base sways under the machine |
 | `z_axis_bending` | T E | off | The Z axis bends as a cantilever from the carriage (`tool_flex.z_axis_bending_stiffness_nm2`), in series with its guide's give; with `tool_flex` off it only bends. Elastic model |
 | `beam_sag` | T E | off | The X beam sags under the carriage and the Z axis as a simple span ([`[beam]`](#beam)), quasi-static, lowering the tool. Elastic model |
+| `beam_vertical_mode` | T E | off | The beam's first vertical mode with the carriage on it as one more coordinate ([`[beam]`](#beam)): rests at the `beam_sag` value, driven by the Z axis's acceleration and by the carriage's weight moving along the beam; supersedes `beam_sag`. Elastic model |
 | `tool_flex` | T E | on | The Z axis leans against the carriage; the reported X position is the tool tip. In a machine file the body its `machine.lean` node names leans (elastic model), off in `machines/t-gantry.toml` as compared with its crate |
 | `idlers` | T E | off | Inertia and bearing friction of the five idlers |
 | `gantry_yaw` | T E | off | Read by machine files only: the bridge of a `machine.gantry` node yaws, one more coordinate held by its drives, belts and joints' spring (values in `[gantry]`, see [machine files](machine-files.md#a-gantry-that-yaws-and-tools-on-rotary-axes)); signals `gantry.<id>.yaw`, `.sync_error`, `.moment`, check `gantry-sync`. On in `machines/dual-gantry.toml`, off in the H-bot, CoreXY and rack gantry files, so that earlier results stay as they were; the crates have no such bridge |
@@ -327,13 +328,15 @@ T-gantry, and machine files whose `machine.lean` node names these values (`machi
 
 ## `[beam]`
 
-T-gantry. With `effects.beam_sag`: the X beam as a simple span between the posts; carriage, Z axis and payload, m g, sag it under the carriage at a from the left post by m g a² b² / (3 E I L), b = L − a (L³ / (48 E I) per newton in the middle), and the tool is that much lower. Quasi-static: the beam's own vertical mode with the carriage (about 100 Hz) lies above the Z axis's on its belt.
+T-gantry. With `effects.beam_sag`: the X beam as a simple span between the posts; carriage, Z axis and payload, m g, sag it under the carriage at a from the left post by m g a² b² / (3 E I L), b = L − a (L³ / (48 E I) per newton in the middle), and the tool is that much lower. That is quasi-static; with `effects.beam_vertical_mode` the beam's first vertical mode with the carriage on it is a coordinate of its own (59 Hz in the middle of the default gantry, higher towards the posts): mass m_c + m_z + M, stiffness the span's `1 / span_compliance`, M = ∫ μ φ² for the span's static shape (17 μ L / 35 in the middle).
 
 | Key | In | Unit | Meaning | Source |
 | --- | --- | --- | --- | --- |
 | `span_m` | T E | m | Span between the posts. T: the motors at `geometry.span_min_m` beyond each end of the stroke, 1.3; E: Festo's drive heads 1354 mm apart | T geometry, E CAD |
 | `carriage_at_zero_m` | T E | m | The carriage's distance from the left post at x = 0. T 0.15, E 0.177 (the stroke in the middle) | T geometry, E estimate |
 | `bending_stiffness_nm2` | T E | N m² | The beam's E I: an aluminium profile of about 80 × 80 mm, 8.4e4; bounds 4.2e4 to 1.7e5 | estimate |
+| `mass_kg_m` | T E | kg/m | With `effects.beam_vertical_mode`: the beam's mass per metre, for the mode's modal mass. A light 80 × 80 mm aluminium profile: 3.5; bounds 2 to 6 | estimate |
+| `damping_ratio` | T E | | With `effects.beam_vertical_mode`: the mode's damping ratio ζ, c = 2 ζ √(k M). A bolted aluminium structure: 0.01; bounds 0.003 to 0.03 | estimate |
 
 ## `[base]`
 
