@@ -117,7 +117,7 @@ line,0.5,-0.4</textarea>
   <h2 data-t="web-fit">Fit to a trace</h2>
   <p class="muted" data-t="web-fit-help"></p>
   <div class="row">
-    <label class="button"><span data-t="web-fit-open">Open trace…</span><input type="file" id="trace" accept=".csv,text/plain"></label>
+    <label class="button"><span data-t="web-fit-open">Open trace…</span><input type="file" id="trace" accept=".csv,.txt,.trace,text/plain"></label>
     <label class="button"><span data-t="web-fit-map">Mapping file for a vendor export…</span><input type="file" id="tracemap" accept=".toml,text/plain"></label>
     <label class="button"><span data-t="web-fit-sweep">Open measured sweep…</span><input type="file" id="tracesweep" accept=".csv,text/plain"></label>
     <label><input type="checkbox" id="fitstiffness"> <span data-t="web-fit-stiffness">Stiffness from the trace's moves</span></label>
@@ -675,11 +675,17 @@ async function sweep() {
 }
 
 // The files of the fit (lib.rs `fit`): the trace, the mapping file of a vendor export, a measured sweep; each one opened
-// runs the fit with those opened so far.
+// runs the fit with those opened so far (a mapping file alone waits for its trace).
 const fitFiles = { trace: "", map: "", sweep: "", names: {} };
+// A file's text as sim-cli reads it (import.rs `decode`): UTF-16 by its byte order mark (a CODESYS .trace), else UTF-8.
+async function fileText(file) {
+  const b = new Uint8Array(await file.arrayBuffer());
+  return new TextDecoder(b[0] === 0xff && b[1] === 0xfe ? "utf-16le" : b[0] === 0xfe && b[1] === 0xff ? "utf-16be" : "utf-8").decode(b);
+}
 async function fitTrace(kind, file) {
-  fitFiles[kind] = await file.text(); fitFiles.names[kind] = file.name;
+  fitFiles[kind] = await fileText(file); fitFiles.names[kind] = file.name;
   $("error").textContent = "";
+  if (!fitFiles.trace && !fitFiles.sweep) { $("fitstatus").textContent = Object.values(fitFiles.names).join(", "); return; }
   $("fitstatus").textContent = tr("web-simulating");
   try {
     const options = ($("fitstiffness").checked && fitFiles.trace ? " stiffness" : "") + ($("sweepmotor").value ? ` motor=${$("sweepmotor").value}` : "");

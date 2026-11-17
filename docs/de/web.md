@@ -2,7 +2,7 @@
 
 Kern, Maschinen, Maschinendateien, Katalog und Analyse lassen sich für `wasm32-unknown-unknown` bauen. `crates/sim-wasm`
 stellt sie über einige C-ABI-Funktionen bereit, und `crates/sim-wasm/web/index.html` ist eine statische Seite, die das
-Modul lädt: eine Maschine wählen (eingebaut, eine der Maschinendateien aus `machines/` oder eine TOML-Maschinendatei,
+Modul lädt: eine Maschine wählen (eingebaut, eine der Maschinendateien aus `machines/` oder eine TOML- oder JSON-Maschinendatei,
 geöffnet oder in den Editor eingefügt), ihre Konfiguration bearbeiten, ihren Zyklus oder einen Pfad fahren, und die
 Seite zeigt die Maschine in 3D mit ihren Hindernissen und der Spur des Werkzeugs, Zeitverläufe von Moment, Drehzahl und
 Schleppfehler je Motor und eine Auslegungsprüfung mit jedem Prüfurteil, jeder Spalte von `sim-cli analyze` und den
@@ -65,9 +65,9 @@ Modul (`file:corexy.toml`) oder eine von der Seite übergebene (`upload:<Dateina
 | 1 | Maschine | `{"config"}`: die Standardkonfiguration (einer Maschinendatei: die Datei) |
 | 2 | Maschine, Sprache und Optionen, Konfiguration | die Auslegungsprüfung: `machine`, `cycle_s`, `tripped`, `warnings`, die maschinenweiten Spalten von `sim-cli analyze`, `motors` (jede Spalte je Motor von `sim-cli analyze` unter ihrem Namen, `points` die Arbeitspunkte, `curve` der Umriss der Spitzenkennlinie, `s1` der Dauerbetrieb), `verdicts` |
 | 3 | Maschine, Sprache und Optionen, Konfiguration | startet die 3D-Ansicht: `{"dt_s", "centre", "radius", "motors", "sample"}` |
-| 4 | Dateiname, Sprache, Maschinendatei (TOML) | `{"id", "name", "config"}`: die Datei geprüft wie von `sim-cli --machine-file` (ein Fehler nennt Datei und Zeile) |
+| 4 | Dateiname, Sprache, Maschinendatei (TOML, oder JSON nach der Endung `.json` des Namens) | `{"id", "name", "config"}`: die Datei geprüft wie von `sim-cli --machine-file` (ein Fehler nennt Datei und Zeile; eine JSON-Datei wird zuerst in TOML gewandelt wie von `sim_machines::load_file`) |
 | 5 | Maschine, Sprache und Optionen, Konfiguration | `{"motor", "amplitude_nm", "points": [[Frequenz Hz, Verstärkung rad/s je N m, Phase °]]}` wie `sim-cli sweep` |
-| 6 | Maschine, Sprache, Konfiguration, `---`, Aufzeichnung (CSV) | `{"rows": [[Größe, von, Konfiguration, angepasst, Standardfehler]], "advice"}` wie `sim-cli fit --trace` ohne `--map` |
+| 6 | Maschine, Sprache und Optionen, Konfiguration, `---`, Aufzeichnung, eine Zeile `%%%`, Zuordnungsdatei, eine Zeile `%%%`, gemessener Frequenzgang (jedes darf leer sein, nicht Aufzeichnung und Frequenzgang zugleich) | `{"rows": [[Größe, von, Konfiguration, angepasst, Standardfehler]], "advice", "units"}` wie `sim-cli fit`: die Aufzeichnung in den Spalten des Simulators oder über die Zuordnungsdatei (`--map`); Option `stiffness` (`stiffness-key=` für einen anderen Schlüssel als den der Riemen) wie `--stiffness`; der Frequenzgang mit `motor=K`, `amplitude=NM` wie `--sweep` |
 | 7 | Sprache, dann Übersetzungsschlüssel, einer je Zeile | `{Schlüssel: Text}`: die Texte der Seite (`crates/sim-wasm/i18n/*.ftl`) und diese Schlüssel aus den Übersetzungen des Simulators |
 
 Optionen: `path` fährt den Pfad nach `---` (Format: `sim_components::path`, die Datei von `sim-cli --path`) ab der
@@ -126,9 +126,11 @@ zeichnet Arbeitspunkte und Frequenzgang.
 ## Unterschiede zum nativen Programm
 
 WebAssembly startet keine Threads. Die Analysen, die nativ die Prozessoren teilen, laufen dort nacheinander. Die Seite
-bietet Auslegungsprüfung, Frequenzgang und Anpassung. Maschinendateien sind TOML; JSON-Maschinendateien liest `sim-cli`
-und die App, die Seite noch nicht. Die Anpassung nimmt eine Aufzeichnung in den Spalten des Simulators, keinen
-Herstellerexport mit Zuordnungsdatei, und passt nur Massen und Reibung an (keine Steifigkeit, keinen Frequenzgang).
+bietet Auslegungsprüfung, Frequenzgang und Anpassung. Maschinendateien sind TOML oder JSON. Die Anpassung nimmt eine
+Aufzeichnung in den Spalten des Simulators oder einen Herstellerexport über seine Zuordnungsdatei (zuerst öffnen; eine
+UTF-16-Datei wie ein CODESYS-`.trace` wird nach ihrer Bytereihenfolgemarke gelesen) und passt Massen und Reibung an, mit
+dem angekreuzten Feld die Steifigkeit aus den eigenen Fahrten der Aufzeichnung und aus einem gemessenen Frequenzgang
+(`frequency_hz`, `gain_rad_s_per_nm`) die Resonanz der Last am für den Frequenzgang gewählten Motor.
 
 ## Tests
 

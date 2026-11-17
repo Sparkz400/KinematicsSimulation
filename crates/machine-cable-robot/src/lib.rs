@@ -2102,6 +2102,10 @@ impl Machine for CableRobot {
         let Some(w) = self.winches.get(i) else { return [0.0; 3] };
         [w.friction.coulomb * (speed / w.friction.smoothing).tanh(), w.friction.viscous * speed, 0.0]
     }
+    /// The cable runs at most at its motor's highest speed through the gearbox and the drum (`ratio`: rad per m).
+    fn friction_speed_limit(&self, i: usize, motor_speed: &[f64]) -> Option<f64> {
+        Some(motor_speed.get(i)? / self.winches.get(i)?.ratio())
+    }
 
     fn thermal_parts(&self) -> Vec<ThermalPart> {
         (0..self.m())

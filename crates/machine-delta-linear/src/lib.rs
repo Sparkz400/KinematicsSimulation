@@ -1491,6 +1491,10 @@ impl Machine for LinearDelta {
     fn friction_curve(&self, i: usize, speed: f64, load_scale: f64) -> [f64; 3] {
         if i < 3 { self.friction[i].steady(speed, load_scale) } else { [0.0; 3] }
     }
+    /// A carriage runs at most at its motor's highest speed through the gearbox and the pulley (on no axis of its own).
+    fn friction_speed_limit(&self, i: usize, motor_speed: &[f64]) -> Option<f64> {
+        (i < 3).then(|| Some(motor_speed.get(i)? * self.r / self.gearbox.ratio)).flatten()
+    }
 
     /// Two sections per column, in the order of the signals `belt.<i>.tension`: column 1's to the carriage from above and
     /// round the idler, then column 2's and 3's.
