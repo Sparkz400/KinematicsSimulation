@@ -187,7 +187,7 @@ impl Mechanism for Table {
 mod tests {
     use crate::ROTARY_TABLE;
 
-    /// The shipped worm (lead angle 8 degrees, mu 0.04, alpha_n 20 degrees): rho' = atan(0.04 / cos 20) = 2.4376 degrees,
+    /// The shipped worm (lead angle 8 degrees, mu 0.04, alpha_n 20 degrees): rho' = atan(0.04 / cos 20) = 2.4374 degrees,
     /// driven back tan(8 - 2.4376 degrees) / tan(8 degrees) = 0.097383 / 0.140541 = 0.6929, so the table builds; at a lead
     /// angle of 2 degrees (below rho') the worm locks itself and the table is refused.
     #[test]
@@ -198,6 +198,74 @@ mod tests {
         cfg.set_text("worm.lead_angle_deg = 2.0").unwrap();
         let err = (ROTARY_TABLE.build)(&cfg).err().expect("a locking worm is refused");
         assert!(format!("{err:?}").contains("locks itself"), "{err:?}");
+    }
+
+    /// The table turning at 1 rad/s, braked by its motor (-0.5 N m, 0.025 s, the gear passing over 40 W: the efficiency
+    /// has not faded, tanh(80)) through the worm, with no loss but the worm's and a
+    /// rotor too light to hold energy (1e-8 kg m2, 1e-4 at the table against its 3): the table drives the worm back, so
+    /// of the energy the table gives up the motor takes in tan(gamma - rho') / tan(gamma) = 0.692974 (gamma 8 degrees,
+    /// rho' = atan(0.04 / cos 20 degrees) = 2.43744 degrees) and the gear loses the rest; the worm driving would have
+    /// passed 0.762938 (to 2e-5: the rotor's 2.2e-5 of the energy passes without loss). Rigid, through the loss factor;
+    /// elastic, with the mesh friction (bounded at that back efficiency, `Gearbox::mesh_friction`), the budget closes (work, stored
+    /// and the loss rows over the run).
+    #[test]
+    fn the_table_drives_the_worm_back_at_its_back_efficiency() {
+        for elastic in [false, true] {
+            let mut cfg = ROTARY_TABLE.config();
+            for edit in [
+                "table.gear = \"worm\"",
+                "effects.joint_friction = false",
+                "effects.motor_friction = false",
+                "effects.gearbox_drag = false",
+                "effects.torque_ripple = false",
+                "gearbox.inertia_at_input_kgm2 = 1e-12",
+            ] {
+                cfg.set_text(edit).unwrap();
+            }
+            cfg.set_text(&format!("effects.joint_elasticity = {elastic}")).unwrap();
+            // Elastic, the gear's damping of 30 N m s/rad on a rotor of 1e-8 (1e-4 at the table) would be past RK4's step.
+            cfg.set_text(if elastic { "motor.rotor_inertia_kgm2 = 1e-6" } else { "motor.rotor_inertia_kgm2 = 1e-8" })
+                .unwrap();
+            cfg.set_text(&format!("effects.gearbox_mesh_friction = {elastic}")).unwrap();
+            let mut m = (ROTARY_TABLE.build)(&cfg).unwrap();
+            let pose = cfg.f64s("start.pose").unwrap();
+            let (mut state, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
+            m.equilibrium(&pose, &mut state, &mut torque);
+            m.set_tool_velocity(&mut state, &[1.0]);
+            let motor = |m: &dyn sim_core::Machine, s: &[f64]| {
+                let (mut pos, mut vel) = (vec![0.0], vec![0.0]);
+                m.motor_state(s, &mut pos, &mut vel);
+                pos[0]
+            };
+            let loss = |m: &dyn sim_core::Machine, s: &[f64]| {
+                let mut signals = Vec::new();
+                m.signals(s, &[-0.5], &mut signals);
+                (m.signal_infos().iter().zip(signals))
+                    .filter(|(i, _)| i.id.starts_with(sim_core::LOSS_PREFIX))
+                    .map(|(_, p)| p)
+                    .sum::<f64>()
+            };
+            let (start, mut rk, mut work, mut lost) = (m.energy(&state), sim_core::Rk4::new(state.len()), 0.0, 0.0);
+            let (brake, h) = ([-0.5], 62.5e-6 / 4.0);
+            for _ in 0..400 {
+                for _ in 0..4 {
+                    let (before, p0) = (motor(m.as_ref(), &state), loss(m.as_ref(), &state));
+                    sim_core::advance(m.as_ref(), &mut rk, &mut state, &brake, h, 1);
+                    lost += 0.5 * h * (p0 + loss(m.as_ref(), &state));
+                    work += brake[0] * (motor(m.as_ref(), &state) - before);
+                }
+                m.after_step(&mut state, 62.5e-6);
+            }
+            let given = start - m.energy(&state);
+            let off = given + work - lost;
+            println!("elastic {elastic}: given {given} J, motor {work} J, lost {lost} J, off {off:e} J");
+            assert!(given > 0.1, "{given}");
+            // Closed to 2e-13 rigid and 9.3e-7 of what the table gave elastic (the mesh bristle's store is not booked).
+            assert!(off.abs() < 2e-6 * given, "elastic {elastic}: {given} J, {work} J, {lost} J");
+            if !elastic {
+                assert!((-work / given - 0.692_974).abs() < 2e-5, "{} of {given} J", -work / given);
+            }
+        }
     }
 
     /// A worm's rotor spins about the worm's own axis (x by default, as given otherwise), the table about z: a table of
