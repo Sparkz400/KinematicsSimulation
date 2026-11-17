@@ -414,7 +414,9 @@ fn to_bevy(p: [f64; 3]) -> Vec3 {
 
 fn part_transform(part: &Part) -> Transform {
     let at = to_bevy(part.pos);
-    match &part.shape {
+    // Laid flat (`Part::flat`): the scene's (x, y, z) to (x, z, -y) is a quarter turn back about Bevy's x axis.
+    let flat = if part.flat { Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2) } else { Quat::IDENTITY };
+    let transform = match &part.shape {
         // The part's angle turns from +x towards up, which is a turn about Bevy's z axis.
         Shape::Box { size } => Transform::from_translation(at)
             .with_rotation(Quat::from_rotation_z(part.angle as f32))
@@ -429,7 +431,8 @@ fn part_transform(part: &Part) -> Transform {
                 .with_rotation(Quat::from_rotation_arc(Vec3::X, along / length))
                 .with_scale(Vec3::new(length, 0.004, *width as f32))
         }
-    }
+    };
+    transform.with_rotation(flat * transform.rotation)
 }
 
 /// A part drawn from a vendor CAD mesh instead of a box: the index of its part in the scene.

@@ -4127,72 +4127,76 @@ pub fn velocity_loop_response(
     amplitude: f64,
 ) -> Result<Vec<LoopPoint>, ConfigError> {
     check_frequencies(frequencies)?;
+    let cfg = &lossless(cfg)?;
+    frequencies.iter().map(|&frequency| loop_point(settled(entry, cfg, 0)?.0, motor, frequency, amplitude)).collect()
+}
+
+/// The config a velocity loop is measured with (`velocity_loop_response`): effects.gearbox_efficiency off.
+fn lossless(cfg: &Config) -> Result<Config, ConfigError> {
     let mut lossless = cfg.clone();
     if lossless.get("effects.gearbox_efficiency").is_ok() {
         lossless.set_text("effects.gearbox_efficiency = false")?;
     }
-    let cfg = &lossless;
-    let mut out = Vec::new();
-    for &frequency in frequencies {
-        let (mut sim, _) = settled(entry, cfg, 0)?;
-        if motor >= sim.control.drives.len() {
-            return Err(ConfigError::Invalid("motor".into()));
-        }
-        let every = (sim.control.drive_params().velocity_cycle / sim.dt).round() as u64;
-        let (omega, t0, period) = (std::f64::consts::TAU * frequency, sim.time(), 1.0 / frequency);
-        let whole = |seconds: f64| ((seconds / period).ceil().max(5.0) * period / sim.dt).round() as u64;
-        let (settle_steps, total) = (whole(0.1), whole(0.1) + whole(0.1));
-        let (mut u_ab, mut e_ab, mut samples) = ([0.0; 2], [0.0; 2], 0.0);
-        let (mut torque_ab, mut speed_ab) = ([0.0; 2], [0.0; 2]);
-        let (mut seen, mut limited, mut pos, mut speed) =
-            (Vec::new(), false, vec![0.0; sim.control.drives.len()], vec![0.0; sim.control.drives.len()]);
-        for step in 0..total {
-            let due = sim.step % every == 0;
-            let (s, c) = (omega * (sim.time() - t0)).sin_cos();
-            if due {
-                sim.control.drives[motor].torque_injection = amplitude * s;
-            }
-            sim.step();
-            if due {
-                // What reaches the motor clipped by the torque limit is no longer the linear loop being measured.
-                sim.machine.motor_state(&sim.state, &mut pos, &mut speed);
-                let (p, drive) = (sim.control.drive_params_of(motor), &sim.control.drives[motor]);
-                let (low, high) = p.torque_range_at(speed[motor], drive.max_voltage(p));
-                let e = drive.torque_demand + drive.torque_injection;
-                limited |= !(low < e && e < high);
-                if step >= settle_steps {
-                    let u = drive.torque_demand;
-                    (u_ab[0], u_ab[1], e_ab[0], e_ab[1]) =
-                        (u_ab[0] + u * s, u_ab[1] + u * c, e_ab[0] + e * s, e_ab[1] + e * c);
-                    samples += 1.0;
-                    seen.push((s, c, e));
-                    let (t, v) = (drive.torque, speed[motor]);
-                    (torque_ab[0], torque_ab[1], speed_ab[0], speed_ab[1]) =
-                        (torque_ab[0] + t * s, torque_ab[1] + t * c, speed_ab[0] + v * s, speed_ab[1] + v * c);
-                }
-            }
-        }
-        // Phasors (sine part, cosine part) of u and e; L = -U / E.
-        let (u, e) =
-            ([2.0 * u_ab[0] / samples, 2.0 * u_ab[1] / samples], [2.0 * e_ab[0] / samples, 2.0 * e_ab[1] / samples]);
-        // What of e is not the sine of the injection and not a constant: a loop that moves on its own (unstable, or in a
-        // limit cycle) shows here. More of it than the injection itself, and the point is not a measurement of L.
-        let mean = seen.iter().map(|(_, _, x)| x).sum::<f64>() / samples;
-        let rest =
-            (seen.iter().map(|(s, c, x)| (x - mean - e[0] * s - e[1] * c).powi(2)).sum::<f64>() / samples).sqrt();
-        let e2 = e[0] * e[0] + e[1] * e[1];
-        let (re, im) = if limited || !(rest < amplitude) {
-            (f64::NAN, f64::NAN)
-        } else {
-            (-(u[0] * e[0] + u[1] * e[1]) / e2, -(u[1] * e[0] - u[0] * e[1]) / e2)
-        };
-        // Plant = speed / torque, phasors as (sine, cosine) parts; NaN with L.
-        let (t, v) = (torque_ab, speed_ab);
-        let t2 = (t[0] * t[0] + t[1] * t[1]) * if re.is_nan() { f64::NAN } else { 1.0 };
-        let plant = [(v[0] * t[0] + v[1] * t[1]) / t2, (v[1] * t[0] - v[0] * t[1]) / t2];
-        out.push(LoopPoint { frequency, re, im, sensitivity: e2.sqrt() / amplitude, plant });
+    Ok(lossless)
+}
+
+/// One point of `velocity_loop_response`, measured on `sim` settled at its start pose.
+fn loop_point(mut sim: Sim, motor: usize, frequency: f64, amplitude: f64) -> Result<LoopPoint, ConfigError> {
+    if motor >= sim.control.drives.len() {
+        return Err(ConfigError::Invalid("motor".into()));
     }
-    Ok(out)
+    let every = (sim.control.drive_params().velocity_cycle / sim.dt).round() as u64;
+    let (omega, t0, period) = (std::f64::consts::TAU * frequency, sim.time(), 1.0 / frequency);
+    let whole = |seconds: f64| ((seconds / period).ceil().max(5.0) * period / sim.dt).round() as u64;
+    let (settle_steps, total) = (whole(0.1), whole(0.1) + whole(0.1));
+    let (mut u_ab, mut e_ab, mut samples) = ([0.0; 2], [0.0; 2], 0.0);
+    let (mut torque_ab, mut speed_ab) = ([0.0; 2], [0.0; 2]);
+    let (mut seen, mut limited, mut pos, mut speed) =
+        (Vec::new(), false, vec![0.0; sim.control.drives.len()], vec![0.0; sim.control.drives.len()]);
+    for step in 0..total {
+        let due = sim.step % every == 0;
+        let (s, c) = (omega * (sim.time() - t0)).sin_cos();
+        if due {
+            sim.control.drives[motor].torque_injection = amplitude * s;
+        }
+        sim.step();
+        if due {
+            // What reaches the motor clipped by the torque limit is no longer the linear loop being measured.
+            sim.machine.motor_state(&sim.state, &mut pos, &mut speed);
+            let (p, drive) = (sim.control.drive_params_of(motor), &sim.control.drives[motor]);
+            let (low, high) = p.torque_range_at(speed[motor], drive.max_voltage(p));
+            let e = drive.torque_demand + drive.torque_injection;
+            limited |= !(low < e && e < high);
+            if step >= settle_steps {
+                let u = drive.torque_demand;
+                (u_ab[0], u_ab[1], e_ab[0], e_ab[1]) =
+                    (u_ab[0] + u * s, u_ab[1] + u * c, e_ab[0] + e * s, e_ab[1] + e * c);
+                samples += 1.0;
+                seen.push((s, c, e));
+                let (t, v) = (drive.torque, speed[motor]);
+                (torque_ab[0], torque_ab[1], speed_ab[0], speed_ab[1]) =
+                    (torque_ab[0] + t * s, torque_ab[1] + t * c, speed_ab[0] + v * s, speed_ab[1] + v * c);
+            }
+        }
+    }
+    // Phasors (sine part, cosine part) of u and e; L = -U / E.
+    let (u, e) =
+        ([2.0 * u_ab[0] / samples, 2.0 * u_ab[1] / samples], [2.0 * e_ab[0] / samples, 2.0 * e_ab[1] / samples]);
+    // What of e is not the sine of the injection and not a constant: a loop that moves on its own (unstable, or in a
+    // limit cycle) shows here. More of it than the injection itself, and the point is not a measurement of L.
+    let mean = seen.iter().map(|(_, _, x)| x).sum::<f64>() / samples;
+    let rest = (seen.iter().map(|(s, c, x)| (x - mean - e[0] * s - e[1] * c).powi(2)).sum::<f64>() / samples).sqrt();
+    let e2 = e[0] * e[0] + e[1] * e[1];
+    let (re, im) = if limited || !(rest < amplitude) {
+        (f64::NAN, f64::NAN)
+    } else {
+        (-(u[0] * e[0] + u[1] * e[1]) / e2, -(u[1] * e[0] - u[0] * e[1]) / e2)
+    };
+    // Plant = speed / torque, phasors as (sine, cosine) parts; NaN with L.
+    let (t, v) = (torque_ab, speed_ab);
+    let t2 = (t[0] * t[0] + t[1] * t[1]) * if re.is_nan() { f64::NAN } else { 1.0 };
+    let plant = [(v[0] * t[0] + v[1] * t[1]) / t2, (v[1] * t[0] - v[0] * t[1]) / t2];
+    Ok(LoopPoint { frequency, re, im, sensitivity: e2.sqrt() / amplitude, plant })
 }
 
 /// What an open-loop response says about the stability of the loop.
@@ -4383,6 +4387,12 @@ pub fn velocity_loop_responses(
     let range = frequencies[0]..=frequencies[frequencies.len() - 1];
     frequencies.extend(machine.modes(&first.f64s("start.pose")?).iter().map(|m| m.hz).filter(|f| range.contains(f)));
     let motors = machine.motors().len();
+    // Each run settled once, each point started from a copy of it (`Sim::snapshot`): the same start, bit for bit, as
+    // settling it anew, without the settling's share of the sweep's time.
+    let lossless = configs.iter().map(lossless).collect::<Result<Vec<_>, _>>()?;
+    let starts = on_all_cores(configs.len(), |run| settled(entry, &lossless[run], 0).map(|(sim, _)| sim.snapshot()))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
     let measure = |jobs: &[(usize, usize, f64)]| -> Result<Vec<LoopPoint>, ConfigError> {
         progress.total.fetch_add(jobs.len(), Relaxed);
         on_all_cores(jobs.len(), |j| {
@@ -4390,8 +4400,10 @@ pub fn velocity_loop_responses(
                 return Err(ConfigError::Invalid(CANCELLED.into()));
             }
             let (run, motor, frequency) = jobs[j];
-            let point =
-                velocity_loop_response(entry, &configs[run], motor, &[frequency], amplitudes[motor]).map(|p| p[0]);
+            check_frequencies(&[frequency])?;
+            let mut sim = Sim::new(entry, &lossless[run])?;
+            sim.restore(&starts[run])?;
+            let point = loop_point(sim, motor, frequency, amplitudes[motor]);
             progress.done.fetch_add(1, Relaxed);
             point
         })

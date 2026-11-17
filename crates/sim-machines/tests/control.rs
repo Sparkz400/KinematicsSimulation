@@ -705,9 +705,11 @@ fn every_effect_switch_changes_the_traces() {
         // The braking resistor warms only where it burns, so its chopper switches in just above the (low) bus. Fine
         // interpolation acts between profile cycles, which here are as long as the position loop's (1 ms), so it is
         // flipped at a profile cycle of 2 ms. The arm tube's inertia goes into the bending of the arms (with
-        // effects.link_elasticity), the links' bending acts back only where they bend. The iron loss is what the stall current's copper loss has more than the rated
-        // current's (the shipped motors have the two equal, so none), so the stall current is a fifth above the rated
-        // one. The shipped friction feedforward has no torque in its characteristic (it is off), so it gets 0.05 N m.
+        // effects.link_elasticity), the links' bending acts back only where they bend. The iron loss is what the stall
+        // current's copper loss has more than the rated current's: none where a motor's two are equal (the single axis's
+        // 2.822 A), and where the catalogue prints them apart the stall current can lie on either side (the
+        // 1FK2105-4AF's 4.65 A against 4.35 A rated; 2.822 A against 4.35 on the hexapod), so both runs set it a fifth
+        // above the rated one. The shipped friction feedforward has no torque in its characteristic (it is off), so it gets 0.05 N m.
         let resistor =
             [format!("ratings.braking_threshold_v = {:?}", 1.05 * base.f64("drive.bus_voltage_v").unwrap_or(0.0))];
         let stall = [format!("motor.stall_current_a = {:?}", 1.2 * base.f64("motor.rated_current_a").unwrap())];
@@ -1198,8 +1200,9 @@ fn shipped_configs() -> Vec<(String, Config, &'static MachineEntry)> {
 /// and guide friction off (in a cruise friction adds no damping to the loop): as configured, and with `across` also over
 /// the whole range of their `[bounds]` (each value at its low and at its high bound). All were tuned for at least 35
 /// degrees and 6 dB (measured at least 37.8 degrees and 7.3 dB on the default configs, 38.6 degrees and 8.3 dB on the
-/// EXCT-30 at 0.45 N m s/rad). Every measurement has to be valid and the loop stable (`LoopMargins::stable`).
-fn loops_keep_their_margins(names: &[&str], across: bool) {
+/// EXCT-30 at 0.45 N m s/rad). Every measurement has to be valid and the loop stable (`LoopMargins::stable`). `across`
+/// sweeps the bounds in the pass with friction as configured (`Some(true)`) or the one without (`Some(false)`).
+fn loops_keep_their_margins(names: &[&str], across: Option<bool>) {
     use sim_components::analysis::{bounds, velocity_loop_margins};
     let configs: Vec<_> = shipped_configs().into_iter().filter(|(name, ..)| names.contains(&name.as_str())).collect();
     assert_eq!(configs.len(), names.len(), "{names:?}");
@@ -1207,8 +1210,12 @@ fn loops_keep_their_margins(names: &[&str], across: bool) {
     let passes = configs.iter().flat_map(|(name, cfg, entry)| {
         // As configured, friction on, a registered machine's loops are judged to the same 35 degrees and 6 dB by sim-cli's
         // `step_bode_and_tuning_write_csv_for_every_machine` (its `margins`): not again here, but across the bounds.
-        let frictions: &[bool] = if across || name.as_str() != entry.id { &[true, false] } else { &[false] };
-        frictions.iter().map(move |&friction| {
+        let frictions = match across {
+            Some(friction) => vec![friction],
+            None if name.as_str() != entry.id => vec![true, false],
+            None => vec![false],
+        };
+        frictions.into_iter().map(move |friction| {
             // Motor friction, and the guides', the joints', the winches' or the dancer's (whichever the machine has).
             let other = [
                 "effects.guide_friction",
@@ -1225,7 +1232,7 @@ fn loops_keep_their_margins(names: &[&str], across: bool) {
             // to the bit (13 November 2026, on all four configs), so they are left out there. Not with the cable chain on:
             // its drag takes the guide's Stribeck speed (`friction_x.stribeck_m_s`) whether guide friction is on or not.
             let skip = !friction && !cfg.bool("effects.cable_chain").unwrap_or(false);
-            let mut bounded = if across { bounds(&cfg).unwrap() } else { Vec::new() };
+            let mut bounded = if across.is_some() { bounds(&cfg).unwrap() } else { Vec::new() };
             bounded.retain(|(path, ..)| {
                 !skip
                     || !["friction_", "motor.friction_", "joint.friction_", "winch.friction_"]
@@ -1261,7 +1268,7 @@ fn loops_keep_their_margins(names: &[&str], across: bool) {
 #[test]
 fn the_shipped_velocity_loops_keep_their_margins() {
     let configs = shipped_configs();
-    loops_keep_their_margins(&configs.iter().map(|(name, ..)| name.as_str()).collect::<Vec<_>>(), false);
+    loops_keep_their_margins(&configs.iter().map(|(name, ..)| name.as_str()).collect::<Vec<_>>(), None);
 }
 
 /// Each motor's loop is measured with a tenth of its own rated torque (`loop_amplitude`): the palletiser's motor 1 (a
@@ -1301,18 +1308,27 @@ fn each_loop_is_measured_at_its_own_amplitude_and_the_hoist_without_the_efficien
     near(margins.last().unwrap(), 50.43, 73.73, 20.98);
 }
 
-/// The shipped velocity loops keep their margins across the bounds (`loops_keep_their_margins`), a test per config: in all
-/// 8600 s of processor time in a full run, 10 minutes alone on the 16 threads of the 8-core development machine. The
-/// default filter of `.config/nextest.toml` leaves them out; CI runs them one at a time after the other tests.
+/// The shipped velocity loops keep their margins across the bounds (`loops_keep_their_margins`), a module per config
+/// with a test per pass, friction as configured and friction off: in all 8600 s of processor time in a full run, 10
+/// minutes alone on the 16 threads of the 8-core development machine. Split by pass since 17 November 2026: the platform
+/// on cables in space took 391 s with friction and 756 s without (its loops' sharp resonances refined to some 1000
+/// points a run against 590), more than the 15-minute limit together. The default filter of `.config/nextest.toml`
+/// leaves them out; CI runs them one at a time after the other tests.
 mod across_the_bounds {
     macro_rules! swept {
         ($($test:ident: $name:literal),* $(,)?) => {
             /// The configs swept here, in the order of `shipped_configs`.
             pub const SWEPT: &[&str] = &[$($name),*];
             $(
-                #[test]
-                fn $test() {
-                    super::loops_keep_their_margins(&[$name], true);
+                mod $test {
+                    #[test]
+                    fn with_friction() {
+                        super::super::loops_keep_their_margins(&[$name], Some(true));
+                    }
+                    #[test]
+                    fn without_friction() {
+                        super::super::loops_keep_their_margins(&[$name], Some(false));
+                    }
                 }
             )*
         };

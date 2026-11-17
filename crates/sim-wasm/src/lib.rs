@@ -414,7 +414,7 @@ pub fn record_obstacle(obstacle: &Obstacle, out: &mut Vec<f32>) {
 }
 
 /// One part as the page draws it, `RECORD` floats: the mesh (0 a cube of side 1, 1 a cylinder of diameter and length
-/// 1 along y, both centred on the origin), the matrix that takes the mesh to the part in scene coordinates (4 × 4,
+/// 1 along y, both centred on the origin; turned as `Part::flat` says), the matrix that takes the mesh to the part in scene coordinates (4 × 4,
 /// column by column, as WebGL takes it), and the colour (`part_color`, red, green, blue in 0..1).
 /// A segment is a cube stretched from `pos` to `to`, `width` wide in the depth (y) and 4 mm thick, as in sim-app.
 pub fn record(part: &Part, out: &mut Vec<f32>) {
@@ -450,6 +450,8 @@ pub fn record(part: &Part, out: &mut Vec<f32>) {
             (0.0, [u.map(|v| v * length), w.map(|v| v * size(*width)), n.map(|v| v * 0.004)], mid)
         }
     };
+    // A segment is never flat (`Part::flat`), so this turns only boxes and cylinders.
+    let columns = columns.map(|c| part.oriented(c));
     out.push(mesh);
     for c in columns {
         out.extend([c[0] as f32, c[1] as f32, c[2] as f32, 0.0]);

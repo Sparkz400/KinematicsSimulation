@@ -123,10 +123,18 @@ fn records_and_bounds_by_hand() {
     sim_wasm::record(&part.turned(std::f64::consts::FRAC_PI_2), &mut out);
     let strip = Part::new("belt", Shape::Segment { to: [3.0, 0.0, 4.0], width: 0.02 }, [0.0; 3], [0.1, 0.1, 0.1]);
     sim_wasm::record(&strip, &mut out);
-    let expected: [[f32; 20]; 2] = [
+    // A wheel of radius 0.1 m and length 0.03 m drawn upright at (1, -3, 2), laid flat: at (1, 2, 3), its axis (the
+    // mesh's y column) along -z, its x column along x and its z column along +y.
+    let mut wheel =
+        Part::new("idler", Shape::Cylinder { radius: 0.1, length: 0.03 }, [1.0, -3.0, 2.0], [0.5, 0.5, 0.5]);
+    wheel.lay_flat();
+    sim_wasm::record(&wheel, &mut out);
+    let expected: [[f32; 20]; 3] = [
         [0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.4, 0.0, 0.0, -0.6, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 1.0, 0.5, 0.5, 0.5],
         [0.0, 3.0, 0.0, 4.0, 0.0, 0.0, 0.02, 0.0, 0.0, -0.0032, 0.0, 0.0024, 0.0, 1.5, 0.0, 2.0, 1.0, 0.1, 0.1, 0.1],
+        [1.0, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, -0.03, 0.0, 0.0, 0.2, 0.0, 0.0, 1.0, 2.0, 3.0, 1.0, 0.5, 0.5, 0.5],
     ];
+    assert_eq!(out.len(), 3 * sim_wasm::RECORD);
     for (got, want) in out.as_chunks::<{ sim_wasm::RECORD }>().0.iter().zip(expected) {
         assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "{got:?}");
     }

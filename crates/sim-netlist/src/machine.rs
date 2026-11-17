@@ -3338,21 +3338,24 @@ impl Machine for ConfigMachine {
                 [shade, shade + 0.02, shade + 0.06],
             ));
         }
+        // A wheel of a belt that lies flat is drawn upright at its place in the belt's plane and laid flat
+        // (`Part::lay_flat`): it faces up, the motor below it.
+        let flat = self.belt_plane().1 == 2;
+        let upright = |at: [f64; 3]| if flat { ([at[0], at[1]], -at[2]) } else { ([at[0], at[2]], at[1]) };
+        let lay = |parts: &mut [Part]| {
+            if flat {
+                parts.iter_mut().for_each(Part::lay_flat)
+            }
+        };
         for kk in 0..m {
             let at = match &self.direct[kk] {
                 Some(d) => self.direct_scene(kk, d, q, out),
                 None => {
                     let at = self.pulley_scene_at(kk);
                     let pulley = if self.elastic { s[n + kk] } else { rotor[kk] / self.ratio[kk] };
-                    drive_unit(
-                        &mut out.parts,
-                        [at[0], at[2]],
-                        at[1],
-                        self.r[kk],
-                        -pulley,
-                        -rotor[kk],
-                        [0.9, 0.45, 0.1],
-                    );
+                    let (from, (centre, depth)) = (out.parts.len(), upright(at));
+                    drive_unit(&mut out.parts, centre, depth, self.r[kk], -pulley, -rotor[kk], [0.9, 0.45, 0.1]);
+                    lay(&mut out.parts[from..]);
                     at
                 }
             };
@@ -3365,8 +3368,9 @@ impl Machine for ConfigMachine {
             });
         }
         for d in &self.idlers {
-            let at = self.idler_scene_at(d, q);
-            idler(&mut out.parts, [at[0], at[2]], at[1], d.radius, -dot(&d.speed, q) / d.radius);
+            let (from, (centre, depth)) = (out.parts.len(), upright(self.idler_scene_at(d, q)));
+            idler(&mut out.parts, centre, depth, d.radius, -dot(&d.speed, q) / d.radius);
+            lay(&mut out.parts[from..]);
         }
         // A machine without idler nodes and one belt motor gets the idler at the far end the one-axis machine has.
         if m == 1 && self.idlers.is_empty() && self.direct[0].is_none() {
