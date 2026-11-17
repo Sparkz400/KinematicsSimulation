@@ -399,6 +399,9 @@ friction_feedforward_speed_rad_s = [10.0]
 friction_feedforward_torque_nm = [0.0]
 friction_feedforward_model = "machine"
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 load_encoder_step = 1.0e-6
 # [estimate] 6 V/A on 2 mH: 3000 rad/s; across the inductance's bounds (1.5 to 4 mH) the speed loop keeps at least
 # 42 degrees and 10 dB without friction (sim-cli margins); below 1.5 mH the 62.5 us current cycle leaves it unstable.

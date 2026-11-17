@@ -427,7 +427,10 @@ fn an_emergency_stop_along_the_line_keeps_the_web_within_its_limits() {
 /// m/s^2, the rewind's on its core (45 mm) by 0.404 m/s^2. They part at 0.942 m/s^2, the dancer rises at half that and
 /// meets its stop at 50 mm after sqrt(2 * 0.05 / 0.471) = 0.46 s, and the smaller roll, which would stand only after
 /// 2 m/s / (8.976 rad/s^2 r) = 4.8 s, stretches the web far beyond its 250 N. Category 0 in the middle: the torque goes off and the holding brakes take the
-/// rolls (10 N m at the motor, 70 N m at the roll) within some 50 ms, the dancer's roller runs on and the web goes slack.
+/// rolls (10 N m at the motor, 70 N m at the roll) within some 50 ms, the dancer's roller runs on and the web loses its
+/// tension: down to 0.068 N of its 30 N at least. With the motors' iron drag left out it went slack (0 N for a while);
+/// the drag of the coasting rotors (effects.iron_loss, 0.0057 N m each at the rated speed, from the shipped motor's
+/// printed rated point) holds those last few hundredths of a newton, so slack or not is no robust outcome here.
 #[test]
 fn a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ() {
     for start in [5.0, 1270.0] {
@@ -435,5 +438,5 @@ fn a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ() {
         assert!(high > 250.0 && travel > 0.05 && (met - 0.46).abs() < 0.05, "{start}: {high} {travel} {met}");
     }
     let (low, _, _, stood, slack) = stop_from_full_speed(640.0, StopCategory::Zero);
-    assert!(low < 1.0 && slack > 0.0 && stood < 0.1, "{low} {slack} {stood}");
+    assert!(low < 0.1 && stood < 0.1, "{low} {slack} {stood}");
 }

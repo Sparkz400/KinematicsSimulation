@@ -148,7 +148,7 @@ param-winding_time_constant_s = Thermal time constant of the winding against the
 param-current_kp_v_a = Current gain Kp [V/A]
 param-current_tn_s = Current integral time Tn [s]
 param-bus_voltage_v = DC link voltage [V]
-param-overmodulation = Overmodulation (square-wave voltage, 4/pi)
+param-overmodulation = Overmodulation (six-step voltage, its fundamental)
 param-slip_compensation_filter_s = Slip compensation filter time constant [s]
 effect-back_emf = Back-EMF
 effect-voltage_limit = Bus voltage limit
@@ -678,7 +678,7 @@ charts-frequency = Frequency [Hz]
 charts-log-amplitude = lg amplitude
 charts-residual = measured less simulated
 # Keys of the motor, drive, friction and gearbox models of 14 November 2026.
-effect-iron_loss = Iron loss in the stator heats the motor
+effect-iron_loss = Iron loss heats the motor and drags its shaft
 effect-magnet_temperature = Magnets' flux falls as they warm
 effect-braking_resistor_heating = Braking resistor heating
 effect-gantry_yaw = Gantry bridge yaws (machine files)

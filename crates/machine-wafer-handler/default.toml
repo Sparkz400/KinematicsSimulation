@@ -381,6 +381,9 @@ friction_feedforward_speed_rad_s = [10.0]
 friction_feedforward_torque_nm = [0.0]
 friction_feedforward_model = "characteristic"
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 load_encoder_step = 1.0e-6
 # [catalogue] the 1FK2103-2AH at 400 V (D 32): 1.95 N m maximum, 0.59 N m rated at 4500 r/min; no-load speed
 # sqrt(3/2) * 540 V / 0.6037736 N m/A. The current loop's gain for the winding's 45 mH.

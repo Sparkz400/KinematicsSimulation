@@ -263,6 +263,9 @@ friction_feedforward_speed_rad_s = [10.0]
 friction_feedforward_torque_nm = [0.0]
 friction_feedforward_model = "characteristic"
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scale, m of web.
 load_encoder_step = 1.0e-6
 current_kp_v_a = 48.0
