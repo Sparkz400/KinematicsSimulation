@@ -24,8 +24,9 @@ One base step `sim.dt_s` (62.5 µs):
    - velocity loop, every `drive.velocity_cycle_s` (125 µs)
    - current loop, every base step: the voltage each winding gets over the step
 2. The machine is told whether the payload is attached, whether the cycle dwells and whether the drives are disabled.
-3. The mechanics and the winding currents are integrated together over the base step with the voltages held constant (zero-order hold, as an inverter holds its voltage over a PWM period); the motor torque follows the current within the step. With the drives disabled, the mechanics alone without torque.
+3. The mechanics and the winding currents are integrated together over the base step with the voltages held constant (zero-order hold, as an inverter holds its voltage over a PWM period); the motor torque follows the current within the step. With the drives disabled, the mechanics alone, with no torque from the current; a servo rotor that turns keeps the drag of its iron loss (`effects.iron_loss`), held over the step at the step start's speed ([iron loss](#motor-model-additions-of-14-november-2026)).
 4. The drives take the step's end: current, electrical energy, copper loss and shaft work; then the DC links (a shared one after all drives), the trip, and the winding's heating.
+5. The machine ends the step (`Machine::after_step`: tooth jumps, the gearboxes' and slides' friction anchors), and with `effects.part_heating` the parts warm by the losses at the step's end.
 
 The simulation never looks at the wall clock. The same config and the same commands give bit-identical results.
 
@@ -33,7 +34,7 @@ The simulation never looks at the wall clock. The same config and the same comma
 
 Source: [`integrate.rs`](../crates/sim-core/src/integrate.rs).
 
-Classical fourth-order Runge-Kutta with `sim.substeps` (4) sub-steps per base step, so the mechanical step is 15.6 µs. The integrator treats the state as one vector and does not know which entries are positions. The simulation (`Sim::step` in [`sim.rs`](../crates/sim-components/src/sim.rs)) hands it the machine's state with four entries per drive appended: the winding current and, from zero at the start of the step, the electrical energy ∫ u i dt, the copper loss ∫ R i² dt and the shaft work ∫ τ ω dt. The machine and the core know nothing of the windings; the drive gives their rates (`DriveParams::winding_rates`).
+Classical fourth-order Runge-Kutta with `sim.substeps` (4) sub-steps per base step, so the mechanical step is 15.6 µs. The integrator treats the state as one vector and does not know which entries are positions. The simulation (`Sim::step` in [`sim.rs`](../crates/sim-components/src/sim.rs)) hands it the machine's state with seven entries per drive appended (`WINDING_STATES`), and one more for the work of an obstacle's push (`effects.crash`). For the servo the first four are the winding current and, from zero at the start of the step, the electrical energy ∫ u i dt, the copper loss ∫ R i² dt and the shaft work ∫ τ ω dt; the other three rest. A stepper and an induction motor keep their phase currents or fluxes there. The machine and the core know nothing of the windings; the drive gives their rates (`DriveParams::winding_rates`).
 
 Assumptions: the winding voltages are held over a base step (zero-order hold), as an inverter would; the torque follows the current within the step. Friction, backlash and belt slack are not handled as events; they are integrated through with the fixed step. The step-size test (halving the step changes the travel by less than 1 %) is what justifies that.
 
@@ -59,7 +60,7 @@ tension  = max(0, T)                                   with effects.belt_slack
 | both on | `belt.damping_time_s` · EA / mat: in proportion to the section's stiffness, so a short section damps more |
 | `belt_damping` off | 0 |
 
-**Slack.** With `effects.belt_slack` the tension cannot go below zero. With the switch off the belt can push. Each machine counts the seconds during which any section has a tension of zero or less (signal `belt.slack_time`); the tooth jump itself is not modelled.
+**Slack.** With `effects.belt_slack` the tension cannot go below zero. With the switch off the belt can push. Each machine counts the seconds during which any section has a tension of zero or less (signal `belt.slack_time`). The teeth jumping over a pulley is an effect of its own ([belt tooth jump](#belt-tooth-jump)).
 
 **Energy-consistent form.** The force that pulls on the clamps and the load is `tension`. The force on the belt material that a pulley feeds into the section is larger:
 
@@ -76,11 +77,11 @@ Stretched belt carries its strain energy along when it passes a pulley, and `mat
 
 **Belt mass** (`effects.belt_mass`). Lumped on the pulleys as inertia, not spread along the belt: see each machine.
 
-**Temperature** (`effects.temperature`). EA is multiplied by `temperature.belt_stiffness_scale`.
+**Temperature** (`effects.temperature`). EA is multiplied by `temperature.belt_stiffness_scale`; with `effects.thermal_feedback` also by the belt's stiffness factor at its temperature (`ThermalFeedback::belt_stiffness_factor`, see [temperature feedback](#temperature-feedback)). A product that leaves EA at zero or below is refused.
 
 **At rest.** The unstretched belt per section at an equilibrium is found by bisection from two conditions: the tension differences the load needs, and the total amount of belt, which is fixed.
 
-Not modelled: sideways (string) vibration of the free spans, tooth contact, wear, a belt mass that moves with the load.
+Not modelled: the tooth's contact beyond its stiffness and the jump below, wear, a belt mass that moves with the load. The spans' sideways vibration is reported as a frequency only ([below](#sideways-vibration-of-the-belt-spans)).
 
 ## Belt tooth jump
 
@@ -174,7 +175,16 @@ The bristle state settles at the rate σ₀ |v| / (λ g(v)). Stiff bristles on a
 
 with, on the T-gantry, side = m_z · a_x and tilt = 2 · side · (z_com_drop − z) / guide_spacing. The viscous term does not scale.
 
-**Simplification.** a_x here is not the true acceleration. It is the X acceleration that the commanded motor torques would give a loss-free rigid machine: a_x = i (τ_A + τ_B) / r / (m_x + 2J/r²). The true acceleration would make friction depend on itself, and its absolute value would turn every belt vibration into extra friction. The same loads are what the signals `axis.<id>.guide_load` report.
+**Simplification.** a_x here is not the true acceleration. It is the X acceleration that the commanded motor torques would give a loss-free rigid machine at the pose, over the rigid model's mass matrix (`commanded_ax` in the T-gantry crate):
+
+```text
+F_x = i (τ_A + τ_B) / r          F_z = i (τ_A − τ_B) / r − m_z g
+a_x = (F_x · M_z − M_xz · F_z) / (M_x · M_z − M_xz²)
+```
+
+M_x the masses X moves (carriage, Z axis, payload, the motors' and idlers' equivalent masses, the cable chain, the belt runs), M_z those Z moves, M_xz the belt runs' coupling of X and Z. The Z axis's weight is in F_z as the rigid model has it (M a = F + gravity): without it the torque that holds the Z axis up would, through the coupling, count as X acceleration. The true acceleration would make friction depend on itself, and its absolute value would turn every belt vibration into extra friction. The same loads are what the signals `axis.<id>.guide_load` report.
+
+**Feedforward and planner.** The friction feedforward (`Lugre::feedforward`, see [fine interpolation and precontrol](#fine-interpolation-and-precontrol)) takes g(v) · tanh(v / v_s) + b · v at the load at rest. The time-optimal planner takes each guide's Coulomb and viscous part as c + b v at the motors (`Machine::rigid_friction`) and its Stribeck rise apart, per guide (`Machine::rigid_friction_rise`): λ (F_s − F_c) · exp(−(v_p / v_s,p)²) at the path speed v_p, with v_s,p the guide's Stribeck speed over its axis's rate along the path, so that the planner holds room for the most it takes at the speeds up to v_p. The machine files give it ([path planners](#as-fast-as-the-motors-allow---time-optimal)).
 
 ## Motor shaft: friction, ripple, cogging
 
@@ -232,10 +242,13 @@ Between motor shaft (angle φ) and pulley (angle θ). Stiffness, damping and bac
 twist    = φ / i − θ
 e        = max(|twist| − β/2, 0)                       twist beyond the dead zone; β = backlash_rad
 ẇ        = dφ/dt / i − dθ/dt                           the twist's rate
-τ        = sign(twist) · f(e) + c_g · ẇ + T_h · tanh(ẇ / 1e-3 rad/s)    while e > 0, else 0
-τ_out    = τ · η^tanh(τ · ω_out / 0.5 W)               on the pulley
+τ        = sign(twist) · f(e) + z(x) + c_g · ẇ         while e > 0, else 0; z the hysteresis (below), x = sign(twist) · e
+τ_out    = τ · η^t                    t = tanh(τ · ω_out / 0.5 W) ≥ 0, driving
+τ_out    = τ · (η · r_b)^t            t < 0, driven back (η · r_b at most 1)
 τ_rotor  = τ / i                                       reaction on the motor shaft
 ```
+
+r_b (`Gearbox::back_ratio`) is the efficiency driven back over the one driving: 1 for a gear that loses alike both ways, so that the load driving back gets τ / η; a screw sets it from its lead angle ([screws and worms](#screws-and-worms-driven-back)). Without play (no backlash and no lost-motion band) the flanks touch at zero twist too, where the hysteresis holds.
 
 The spring f(e), as gearbox makers measure the torsional characteristic with the input locked:
 
@@ -247,10 +260,19 @@ F(x) = T1 + K2 · (x − T1 / K1)                         up to T2
 F(x) = T2 + K3 · (x − T1 / K1 − (T2 − T1) / K2)        beyond
 ```
 
+**The band behind a converter.** Behind a screw, rack or drum (`Converter::apply_back` in [`transmission.rs`](../crates/sim-components/src/transmission.rs)) the converter's spring (compliance c, in m/N) is in series with the flanks, and over the band the flanks stiffen while the converter's spring does not (`Gearbox::band_compliance`). With the flanks' own stiffness k_f = K1 / (1 − c K1) and T_b = k_f b / 2 the torque at which they leave the band:
+
+```text
+e = sqrt(2 b T / k_f) + c T                              T < T_b: in the band, a quadratic in sqrt(T)
+e = b/2 + T / K1  (and the segments above)               beyond it; 1 / K1 = 1 / k_f + c
+```
+
+The band itself is the gearbox's angle times the lever; the line beyond the band keeps its offset b/2. The hysteresis's friction is scaled so that its loop is as wide at the joint as the gear's, 2 · lever · T_h / K1, and its reversal stiffness becomes series(K1 + σ) − series(K1). Without the converter c = 0 and f(e) = K1 e² / (2 b) as above. Test: `the_gear_behind_a_converter_is_in_series_with_its_spring_over_the_band_and_the_hysteresis` (transmission.rs).
+
 b `lost_motion_band_rad` and T_h = K1 · w / 2 with w `hysteresis_rad` (`effects.gearbox_lost_motion`, else both 0); T1, T2, K2, K3 `stiffness_t1_nm`, `stiffness_t2_nm`, `stiffness_k2_nm_rad`, `stiffness_k3_nm_rad` (`effects.gearbox_stiffness_curve`, else T1 = T2 = ∞: one stiffness K1 = `stiffness_nm_rad`). The twist at a torque T is then Harmonic Drive's T / K1, T1 / K1 + (T − T1) / K2 or T1 / K1 + (T2 − T1) / K2 + (T − T2) / K3 (plus b/2 past the band). T_h is a friction in the flanks and bearings: loading and unloading run on curves apart by 2 T_h / K1 = w in angle, Harmonic Drive's "hysteresis loss" (1 arcmin for sizes 25 and 32 at ratio 50 and up). It is a state, Dahl's friction model on the contact twist x (the twist beyond the backlash, signed), in parallel with the spring:
 
 ```text
-dz/dx = σ · (1 − sign(ẋ) · z / T_h)        |z| < T_h, σ = K1
+dz/dx = σ · (1 − sign(ẋ) · z / T_h)        |z| < T_h, σ = gearbox.hysteresis_stiffness_factor · K1 (1 where the key is absent)
 τ     = f(e) · sign(twist) + c · ẋ + z
 ```
 
@@ -268,21 +290,47 @@ T_0,ref `no_load_torque_nm` at ω_ref `no_load_speed_rpm` and 20 °C (`thermal_f
 
 - **Stiffness and backlash.** Inside the dead zone nothing is transmitted. With `effects.gearbox_backlash` off, β = 0.
 - **Flanks cannot pull.** With backlash on, if the damping term would reverse the torque while the flanks separate (τ · engaged < 0), the torque is zero. With backlash off the connection is a plain spring-damper and can pull, as a coupling does.
-- **Efficiency.** The loss is on the output torque. When the gearbox drives the load (power positive) the output gets τ · η; when the load drives back it gets τ / η. The exponent fades with tanh below 0.5 W of transmitted power, so a gearbox at rest has no torque step. With `effects.gearbox_efficiency` off, η = 1.
+- **Efficiency.** The loss is on the output torque. When the gearbox drives the load (power positive) the output gets τ · η; when the load drives back it gets τ / (η · r_b), τ / η for a gear that loses alike both ways. The exponent fades with tanh below 0.5 W of transmitted power, so a gearbox at rest has no torque step. With `effects.gearbox_efficiency` off, η = 1.
 - **Mesh friction** (`effects.gearbox_mesh_friction`, in place of the faded factor). The efficiency's loss is a friction in the mesh, at the output against the housing, in proportion to the torque the gear passes and against the output's motion at any speed, and it sticks at rest:
 
   ```text
   τ_s     = sign(twist) · f(e) + z                          what the spring and hysteresis pass (the damping left out)
   μ       = 1 − η                                           η the teeth's efficiency (with the drag: η_teeth)
-  F       = clamp(σ_m · (θ − a), −μ |τ_s|, +μ |τ_s|)        σ_m = K1, a the anchor where the last step ended
+  μ_b     = μ                    for r_b = 1;    μ_b = max(0, 1 / (η · r_b) − 1)   for a gear with its own back efficiency
+  F       = clamp(σ_m · (θ − a), lower, upper)              [−μ_b |τ_s|, μ |τ_s|] for τ_s ≥ 0, [−μ |τ_s|, μ_b |τ_s|] below
   τ_out   = τ − F
   a      ← θ − F / σ_m                                       at each step's end (`Gearbox::commit`)
   ```
 
-  Sliding forward the output gets τ_s (1 − μ) = η τ_s, as with the efficiency; driven back it takes τ_s (1 + μ), so the back-driving efficiency follows as 1 / (1 + μ) = 1 / (2 − η): 0.833 at η = 0.8, where the faded factor gives η either way. At rest a gear holding a load L stands while τ_s lies between L / (2 − η) and L / η: it holds anything in between, and breaks away lifting at L / (i η) at the motor and lowering at L / (i (2 − η)) (`a_held_gear_stands_inside_its_friction_band_and_breaks_away_at_its_ends`). Around zero load the friction μ K |x| takes, from one turning point A₁ to the next, μ K (A₁² + A₂²) / 2 of the spring's K (A₁² − A₂²) / 2: the friction law alone keeps (1 − μ) / (1 + μ) of the amplitude a cycle, ζ = ln((1 + μ) / (1 − μ)) / 2π = 6.45 % at η = 0.8 (`a_ring_around_zero_load_decays_by_the_hand_calculated_damping`, with a stiff bristle). With the bristle of K1 the friction first turns round by sticking on 2 K, from the bound at A to the other at x₁ = A (1 − μ) / (1 + μ), then slides on K (1 − μ) and K (1 + μ): A₂² / A² = ((1 + μ²)(1 − r²) + (1 − μ) r²) / (1 + μ) with r = (1 − μ) / (1 + μ), 7/9 a half cycle at η = 0.8, so a cycle keeps 7/9 and ζ = ln(9/7) / 2π = 4.0 % (`the_shipped_bristle_rings_down_by_its_hand_calculated_ratio`), where the faded factor leaves a small ring (below its 0.5 W) about 1 %. With the no-load running torque (`effects.gearbox_drag`) the two make the efficiency map above: the catalogue's η at its rated point, less at part load (`mesh_friction_and_drag_give_the_catalogue_efficiency_and_less_at_part_load`: 0.9 at 50 N m, 0.774527 at 5 N m). The friction's power F ω is booked as its loss, where the gearbox's loss goes (its loss row, `part_heating`, `thermal_feedback`, which sets η and so μ); the bristle's store F² / (2 σ_m), at most (μ τ)² / (2 σ_m) (4e-7 J on the planar cable robot's winches), is counted with it and not in `Gearbox::energy`. Booking the store's rate instead, sticking or sliding as decided at a step's end, missed 1.80 J of the planar cable robot's 38.17 J: within a step the anchor stands and the friction slides at its bound throughout, also where the ends said it sticks. Shortcuts: σ_m is K1, as the hysteresis's Dahl stiffness (presliding takes μ of the twist). The energy budget does not choose it: with the friction booked as its whole power the belt axes, whose light pulleys stick to the housing first, close their passes at K1, 3 K1 and 10 K1 alike (the single axis under 1e-6 of its pass unaccounted, the T-gantry 4e-6, as with the friction off; gearbox loss per pass 3.04659 J on the single axis at all three, 8.70004, 8.70027 and 8.70029 J on the T-gantry, against 3.04944 and 8.82445 J with the friction off); the 1.4 and 2.0 % they missed at 10 K1 were the earlier bookkeeping's. It is off on the belt machines as shipped, and on in the arms, cable robots and mover. Behind a screw, rack or drum (`Converter::apply_to`) σ_m is capped where the bristle on the lighter of the rotor's inertia seen at the load and the output's own would settle faster than a quarter of the bristle rate limit (2e8 N/m for the cable robots' 0.32 kg drums; no shipped gear reaches it); before a gearbox's first step and in a machine that does not commit its gearboxes after each step (the four-arm delta's arms, the gearboxes of a rigid model) the faded factor stays; the rigid models' gearboxes keep it.
+  σ_m is `gearbox.mesh_stiffness_factor` times K1 (1 where the key is absent), a the anchor where the last step ended. Sliding forward the output gets τ_s (1 − μ) = η τ_s, as with the efficiency; driven back it takes τ_s (1 + μ), so the back-driving efficiency follows as 1 / (1 + μ) = 1 / (2 − η): 0.833 at η = 0.8, where the faded factor gives η either way. A gear with r_b ≠ 1 (a screw's or worm's lead angle) is driven back at exactly η r_b, as the faded factor has it (`the_mesh_friction_is_bounded_by_the_back_efficiency_when_driven_back`). At rest a gear holding a load L stands while τ_s lies between L / (2 − η) and L / η: it holds anything in between, and breaks away lifting at L / (i η) at the motor and lowering at L / (i (2 − η)) (`a_held_gear_stands_inside_its_friction_band_and_breaks_away_at_its_ends`). Around zero load the friction μ K |x| takes, from one turning point A₁ to the next, μ K (A₁² + A₂²) / 2 of the spring's K (A₁² − A₂²) / 2: the friction law alone keeps (1 − μ) / (1 + μ) of the amplitude a cycle, ζ = ln((1 + μ) / (1 − μ)) / 2π = 6.45 % at η = 0.8 (`a_ring_around_zero_load_decays_by_the_hand_calculated_damping`, with a stiff bristle). With the bristle of K1 the friction first turns round by sticking on 2 K, from the bound at A to the other at x₁ = A (1 − μ) / (1 + μ), then slides on K (1 − μ) and K (1 + μ): A₂² / A² = ((1 + μ²)(1 − r²) + (1 − μ) r²) / (1 + μ) with r = (1 − μ) / (1 + μ), 7/9 a half cycle at η = 0.8, so a cycle keeps 7/9 and ζ = ln(9/7) / 2π = 4.0 % (`the_shipped_bristle_rings_down_by_its_hand_calculated_ratio`), where the faded factor leaves a small ring (below its 0.5 W) about 1 %. With the no-load running torque (`effects.gearbox_drag`) the two make the efficiency map above: the catalogue's η at its rated point, less at part load (`mesh_friction_and_drag_give_the_catalogue_efficiency_and_less_at_part_load`: 0.9 at 50 N m, 0.774527 at 5 N m). The friction's power F ω is booked as its loss, where the gearbox's loss goes (its loss row, `part_heating`, `thermal_feedback`, which sets η and so μ); the bristle's store F² / (2 σ_m), at most (μ τ)² / (2 σ_m) (4e-7 J on the planar cable robot's winches), is counted with it and not in `Gearbox::energy`. Booking the store's rate instead, sticking or sliding as decided at a step's end, missed 1.80 J of the planar cable robot's 38.17 J: within a step the anchor stands and the friction slides at its bound throughout, also where the ends said it sticks. Shortcuts: σ_m is K1 unless the factor is set, as the hysteresis's Dahl stiffness (presliding takes μ of the twist). The energy budget does not choose it: with the friction booked as its whole power the belt axes, whose light pulleys stick to the housing first, close their passes at K1, 3 K1 and 10 K1 alike (the single axis under 1e-6 of its pass unaccounted, the T-gantry 4e-6, as with the friction off; gearbox loss per pass 3.04659 J on the single axis at all three, 8.70004, 8.70027 and 8.70029 J on the T-gantry, against 3.04944 and 8.82445 J with the friction off); the 1.4 and 2.0 % they missed at 10 K1 were the earlier bookkeeping's. It is off on the belt machines as shipped, and on in the arms, cable robots and mover. Behind a screw, rack or drum (`Converter::apply_to`) σ_m is capped where the bristle on the lighter of the rotor's inertia seen at the load and the output's own would settle faster than a quarter of the bristle rate limit (2e8 N/m for the cable robots' 0.32 kg drums; no shipped gear reaches it); before a gearbox's first step and in a machine that does not commit its gearboxes after each step (the four-arm delta's arms, the gearboxes of a rigid model) the faded factor stays; the rigid models' gearboxes keep it.
 - **At rest** under an output torque the twist is τ / k_g + β/2 on the matching side; without one it is 0, the middle of the backlash (`Gearbox::static_twist`).
 
-Assumptions: the hysteresis's stiffness at a reversal σ is taken as K1 (`shortcut`: no maker publishes the loop's shape at a reversal), so the D3 and D2 gearboxes (half an arcmin) are twice as stiff at small amplitudes: the D3's velocity loop crosses over at 305 Hz with it and 259 Hz without (the old rate-switched friction locked it at 19 Hz). Inside one base step a twist that turns back follows the curve from the step's start, not Dahl's reversal (the steps are 62.5 µs). The machine's state vector does not carry z: a state set from outside (a crash's stop, `adopt_state`) keeps the gearbox's anchor from before. The lost-motion band is in the gearbox's angle; behind a screw or rack its stretch by the converter's spring is left out. The drag acts on the motor shaft with its friction, but its loss is the gearbox's (`ShaftFriction::drag_power`): it is in the gearbox's loss row and with `part_heating` it warms the gearbox (`the_gearbox_drag_warms_the_gearbox_to_its_resistance_times_the_drag_power`: the single axis cruising at 250 rad/s at the motor, 0.107342 N m of drag, 26.8355 W, 53.671 K at 2 K/W). A worm's tooth efficiency does not fall with sliding speed. The tooth efficiency is at most 1: where the catalogue's no-load torque at its reference speed is more than its whole loss (the SP+ 100: 0.93 N m at 3000 r/min, where 6 % of 259 N m at ratio 20 is 0.78 N m), the gearbox reaches 93.3 % instead of 94 % at T2N and 20 °C. The gearbox's own inertia (`gearbox.inertia_at_input_kgm2`) turns with the rotor: J_rotor in the equations is `motor.rotor_inertia_kgm2` plus it.
+Assumptions: the hysteresis's stiffness at a reversal σ is K1 where `gearbox.hysteresis_stiffness_factor` is absent, as in every shipped file (no maker publishes the loop's shape at a reversal), so the D3 and D2 gearboxes (half an arcmin) are twice as stiff at small amplitudes: the D3's velocity loop crosses over at 305 Hz with it and 259 Hz without (the old rate-switched friction locked it at 19 Hz). Inside one base step a twist that turns back follows the curve from the step's start, not Dahl's reversal (the steps are 62.5 µs). The machine's state vector does not carry z: a state set from outside (a crash's stop, `adopt_state`) keeps the gearbox's anchor from before. The lost-motion band is in the gearbox's angle; behind a screw or rack its stretch by the converter's spring is left out. The drag acts on the motor shaft with its friction, but its loss is the gearbox's (`ShaftFriction::drag_power`): it is in the gearbox's loss row and with `part_heating` it warms the gearbox (`the_gearbox_drag_warms_the_gearbox_to_its_resistance_times_the_drag_power`: the single axis cruising at 250 rad/s at the motor, 0.107342 N m of drag, 26.8355 W, 53.671 K at 2 K/W). A worm's tooth efficiency does not fall with sliding speed. The tooth efficiency is at most 1: where the catalogue's no-load torque at its reference speed is more than its whole loss (the SP+ 100: 0.93 N m at 3000 r/min, where 6 % of 259 N m at ratio 20 is 0.78 N m), the gearbox reaches 93.3 % instead of 94 % at T2N and 20 °C. The gearbox's own inertia (`gearbox.inertia_at_input_kgm2`) turns with the rotor: J_rotor in the equations is `motor.rotor_inertia_kgm2` plus it.
+
+### Screws and worms driven back
+
+Source: `BallScrew`, `WormGear`, `Converter::apply_back` in [`transmission.rs`](../crates/sim-components/src/transmission.rs); [`sim-netlist/src/worm.rs`](../crates/sim-netlist/src/worm.rs).
+
+A thread of lead angle β (γ for a worm) and friction angle ρ loses differently driving and driven back. The gearbox carries the difference as its back ratio r_b = η_back / η (above): a converter applied behind it multiplies the gearbox's efficiency by its own η and r_b by η_back / η (`Converter::apply_back`, with `effects.gearbox_efficiency`).
+
+```text
+ball screw (THK), tan β = lead / (π d):   η      = (1 − μ tan β) / (1 + μ / tan β)      driving the nut
+                                           η_back = (1 − μ / tan β) / (1 + μ tan β)      the load driving the screw
+worm, ρ' = atan(μ / cos α_n):              η      = tan γ / tan(γ + ρ')                  the worm driving
+                                           η_back = tan(γ − ρ') / tan γ                  the wheel driving
+```
+
+- **Screw** (`effects.screw_lead_efficiency`; a config without the switch has it off). μ is `screw.friction_coefficient`, d `screw.nominal_diameter_m`; the two efficiencies replace `screw.efficiency`, which is a catalogue's lumped figure (the nut's preload drags apart). Off, both are `screw.efficiency`. A screw whose η_back is 0 or less (tan β ≤ μ) locks itself and is refused. Test: `the_screw_driven_back_loses_by_thks_back_efficiency_and_a_locking_one_is_refused` (μ = 0.003, tan β = 0.318310: 0.9896302 back against 0.9897172 driving).
+- **Worm in the joint kit's rotary table** (`table.gear = "worm"`, `[worm]` `lead_angle_deg`, `friction_coefficient`, `pressure_angle_deg`, both angles below 45°): the gearbox gets η and r_b = η_back / η. A worm with η_back ≤ 0 is refused. Test: `a_worm_gear_has_the_hand_calculated_efficiencies` (γ = 5°, μ = 0.05, α_n = 20°: η_back = 0.38997; at 2° below 0).
+- **Worm stage in a machine file** (`machine.worm`, counted with `effects.gearbox_efficiency`; the motor's gearbox then keeps only what a screw or rack behind it loses). A worm that turns back multiplies the gearbox's output torque by η^t driving and η_back^t driven back, t = tanh(τ ω / 0.5 W) as the gearbox's fade (`worm::factors`). With `effects.thermal_feedback` both efficiencies warm by the gearbox's law, 1 − η → (1 − η) f, forward at least 0.01; a locking worm stays locked.
+- **Self-locking worm** (η_back ≤ 0, machine files only). Coulomb's law at the mesh without a fade. With o the torque the wheel takes and s the sign of the speed, the mesh drags
+
+  ```text
+  D = (1 / η − 1) · s o            on the driving flank, s o > 0
+  D = (1 − η_back) · (−s o)        on the overhauling flank, s o < 0
+  ```
+
+  so D ω ≥ 0 always: driven back the motor has to push, by −η_back of the load's torque over i. Elastic model (`worm_drag`): the drag acts on the rotor, at the levels the gear spring's torque gives (`worm::levels`), never along the motion; where the level would stop the rotor within `STICK_TIME_S` (1 ms) it takes the rotor's speed out over that time, so at rest it holds anything between the two levels: a locking worm holds its load with no motor torque. Rigid model (`rigid_locking`): o is an unknown beside the accelerations; the overhauling flank takes its load from the torque the wheel holds at rest (`overhauling_drag`), since a heavy wheel on that flank has no unique rigid solution (Painlevé's paradox); below a wheel speed of `STICK_SPEED` (1e-3 rad/s) it sticks, decelerating at −v / `STICK_TIME_S`.
 
 ## Hard stops
 
