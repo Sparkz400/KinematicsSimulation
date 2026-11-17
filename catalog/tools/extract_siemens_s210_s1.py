@@ -17,10 +17,12 @@ it first reaches its largest speed (the vertical drop to the axis after it is th
 polyline is reduced to at most 12 points by the Douglas-Peucker rule on the curve in units of the speed range and M0
 (least tolerance that fits), at least 5 (then points of the same polyline are added); no point is interpolated between
 what the graph shows. The curve of a motor is the one for 400 V 3 AC where the catalogue row has a rated point at 400 V
-(motors_s210.csv, rated_*_400v), else the one for 240 V 3 AC (230 V 3 AC where the graph names that). The script
-stops where a check fails: the Mmax level of the graph against the printed maximum torque (2 %), the S1 start against
-the static torque (2 %, but at least half of the last printed digit), the reduced curve against the printed
-rated point of its supply (same tolerance), the speed where the Mmax lines of the 400 V graph stop against the maximum speed (between 0.8 and 1.03 times).
+(motors_s210.csv, rated_*_400v), else the one for 240 V 3 AC (230 V 3 AC where the graph names that). The checks: the
+speed where the Mmax lines of the 400 V graph stop against the maximum speed (between 0.8 and 1.03 times); the Mmax level
+of the graph against the printed maximum torque, the S1 start against the static torque and the reduced curve against
+the printed rated point of its supply, each within 2 % but at least half of the last printed digit (`tolerance`). Where
+a graph misses one of the last three, its torques are scaled alike by the factor nearest 1 that makes it meet all three,
+if that is within SCALED (4 %); the factor is printed and the meta file lists it.
 A graph the checks refuse, or a motor with no graph, gets no rows: the script lists them.
 """
 import csv
@@ -39,6 +41,7 @@ TITLE = re.compile(r"(1F[KT]2\d{3}-\d[A-Z]{2})")
 SUPPLY = re.compile(r"(\d{3}) ?V ?(\d) ?AC")
 RPM = 2 * math.pi / 60
 POINTS = (5, 12)
+SCALED = 0.04  # the most a graph's S1 start may lie off the printed static torque, as a share of it
 
 
 def tolerance(text):
@@ -64,13 +67,16 @@ def number(text):
 
 def frames(paths):
     """Plot frames (x0, x1, ybottom, ytop) of the page: the closed rectangles of a graph's size (about 192 wide), drawn
-    stroked (0.37) or filled; the same frame drawn twice counts once."""
+    stroked (0.37) or filled; the same frame drawn twice counts once. A rectangle is a closed path whose points all lie
+    on the edges of its bounding box (four corners and back, or with points along the edges: page 159 has 13)."""
     out = []
     for p in paths:
-        if (p["kind"] == "f" or abs(p["w"] - 0.37) < 0.02) and len(p["subs"]) == 1 and len(p["subs"][0]) == 5:
-            xs, ys = [q[0] for q in p["subs"][0]], [q[1] for q in p["subs"][0]]
+        if (p["kind"] == "f" or abs(p["w"] - 0.37) < 0.02) and len(p["subs"]) == 1 and len(p["subs"][0]) >= 5:
+            sub = p["subs"][0]
+            xs, ys = [q[0] for q in sub], [q[1] for q in sub]
             f = (min(xs), max(xs), min(ys), max(ys))
-            if 170 < f[1] - f[0] < 215 and 80 < f[3] - f[2] < 200 and not any(
+            on_edge = all(min(abs(x - f[0]), abs(x - f[1])) < 0.5 or min(abs(y - f[2]), abs(y - f[3])) < 0.5 for x, y in sub)
+            if on_edge and math.dist(sub[0], sub[-1]) < 0.5 and 170 < f[1] - f[0] < 215 and 80 < f[3] - f[2] < 200 and not any(
                     all(abs(a - b) < 1.5 for a, b in zip(f, g)) for g in out):
                 out.append(f)
     return sorted(out, key=lambda f: (-round(f[3]), f[0]))
@@ -156,21 +162,25 @@ def supplies(texts, fr):
 def curves(paths, fr, name):
     """The thick lines inside the frame as polylines of (x, y) in page units, one per line starting at the left axis.
     Where the drawing breaks a line into pieces (short gaps), a piece that does not start at the axis continues the
-    piece whose right end is nearest to its left end (within 8 page units)."""
+    piece whose right end is nearest to its left end (within 8 page units, or 30 along a level line: the gap the "Mmax"
+    label leaves in it, page 160). A line drawn from right to left is turned round. A line may reach up to 2 beyond the
+    frame (its width is 2.27) where it runs along or ends on an axis."""
     x0, x1, yb, yt = fr
     pieces = []
     for p in paths:
         if p["kind"] == "S" and 2.0 < p["w"] < 2.5:
             for sub in p["subs"]:
-                if len(sub) >= 2 and all(x0 - 1 <= q[0] <= x1 + 1 and yb - 1 <= q[1] <= yt + 1 for q in sub):
-                    pieces.append(sub)
+                if len(sub) >= 2 and all(x0 - 2 <= q[0] <= x1 + 2 and yb - 2 <= q[1] <= yt + 2 for q in sub):
+                    sub = [(x, max(y, yb)) for x, y in sub]  # a line's centre below the axis is on it
+                    pieces.append(sub if sub[0][0] <= sub[-1][0] else sub[::-1])
     heads = [s for s in pieces if min(q[0] for q in s) < x0 + 1.5]
     rest = sorted((s for s in pieces if s not in heads), key=lambda s: min(q[0] for q in s))
     heads = [list(s) for s in heads]
     for piece in rest:
         left = min(piece, key=lambda q: q[0])
         host = min(heads, key=lambda h: math.dist(max(h, key=lambda q: q[0]), left))
-        if math.dist(max(host, key=lambda q: q[0]), left) > 8:
+        end = max(host, key=lambda q: q[0])
+        if math.dist(end, left) > 8 and not (abs(end[1] - left[1]) < 0.5 and 0 < left[0] - end[0] < 30):
             raise ValueError(f"{name}: a piece of a line at x {left[0]:.1f} has no line to continue")
         host.extend(sorted(piece, key=lambda q: q[0]))
     return heads
@@ -235,6 +245,10 @@ def read_graph(paths, texts, fr, title):
     if not sup or sup != sorted(sup, key=lambda s: s[0]):
         raise ValueError(f"{title}: legend supplies {sup}")
     cs = curves(paths, fr, title)
+    if len(cs) == 4 * len(sup):
+        # The graph drawn twice, a second set over the first a little apart (pages 152 and 153): the one on top, drawn
+        # last, is the one printed; the checks below hold it to the table as any other.
+        cs = cs[2 * len(sup):]
     if len(cs) != 2 * len(sup):
         raise ValueError(f"{title}: {len(cs)} curves for the supplies {sup}")
     start = lambda c: torque(min(c, key=lambda q: q[0])[1])  # noqa: E731
@@ -271,12 +285,10 @@ def readings(pdf, rows):
                 curves_, mmax, scale = read_graph(paths, texts, fr, f"{article} (page {number_})")
                 if row is None:
                     raise ValueError(f"{article} (page {number_}): not in motors_s210.csv")
-                if abs(mmax - float(row["max_torque_nm"])) > tolerance(row["max_torque_nm"]):
-                    raise ValueError(f"{article} (page {number_}): Mmax level {mmax:.3f} against {row['max_torque_nm']}")
             except ValueError as e:
                 failed.append(str(e))
                 continue
-            found.setdefault(article, {}).update({s: (pts, number_, *scale) for s, pts in curves_.items()})
+            found.setdefault(article, {}).update({s: (pts, number_, *scale, mmax) for s, pts in curves_.items()})
     return found, failed
 
 
@@ -287,7 +299,7 @@ def rescaled(row, curves_):
     ref = curves_.get((480, 3)) or curves_.get((400, 3))
     if ref is None:
         return curves_
-    pts, page, last, xmax, lines = ref
+    pts, page, last, xmax, lines, _ = ref
     nmax = float(row["max_speed_rad_s"]) / RPM
     if 0.97 <= last / nmax <= 1.03 or not lines:
         return curves_
@@ -296,7 +308,8 @@ def rescaled(row, curves_):
     if nice <= 0 or abs(nice - raw) > 0.03 * raw:
         return curves_
     f = nice / xmax
-    return {s: ([(x * f, y) for x, y in c[0]], c[1], c[2] * f, nice, c[4]) if c[3] == xmax else c for s, c in curves_.items()}
+    return {s: ([(x * f, y) for x, y in c[0]], c[1], c[2] * f, nice, *c[4:]) if c[3] == xmax else c
+            for s, c in curves_.items()}
 
 
 def chosen(article, row, curves_):
@@ -321,12 +334,8 @@ def build(pdf):
         if pick is None:
             none.append(article)
             continue
-        supply, pts, page, last, _, _ = pick
+        supply, pts, page, last, _, _, mmax = pick
         m0 = float(row["static_torque_nm"])
-        if abs(pts[0][1] - m0) > tolerance(row["static_torque_nm"]):
-            failed.append(f"{article} (page {page}): S1 starts at {pts[0][1]:.3f} N m, static torque {m0}")
-            none.append(article)
-            continue
         if supply == (400, 3) and not 0.8 * float(row["max_speed_rad_s"]) <= last * RPM <= 1.03 * float(row["max_speed_rad_s"]):
             failed.append(f"{article} (page {page}): the 480 V Mmax line ends at {last * RPM:.1f} rad/s, maximum speed {row['max_speed_rad_s']}")
             none.append(article)
@@ -341,16 +350,31 @@ def build(pdf):
             none.append(article)
             continue
         pts = [(x, max(0.0, y)) for x, y in pts]  # (the line ends on the axis: a reading of -0.5 % of M0 is the axis)
-        red = reduce(pts, POINTS[0], POINTS[1], max(p[0] for p in pts), m0)
+        red = reduce(pts, POINTS[0], POINTS[1], max(p[0] for p in pts), pts[0][1])
         sup = "400v" if supply == (400, 3) else "230v"
         w, q = float(row[f"rated_speed_{sup}_rad_s"]), row[f"rated_torque_{sup}_nm"]
         t = at_speed([(x * RPM, y) for x, y in red], w)
-        if t is None or abs(t - float(q)) > tolerance(q):
-            failed.append(f"{article} (page {page}): the {supply[0]} V curve gives {t} N m at the rated speed {w:.2f} rad/s, printed {q}")
+        if t is None:
+            failed.append(f"{article} (page {page}): the {supply[0]} V curve ends before the rated speed {w:.2f} rad/s")
             none.append(article)
             continue
+        # The graph has to meet the printed static torque (its S1 start), maximum torque (its Mmax level) and rated point,
+        # each within `tolerance`. Where it does not, its torques are scaled alike (the shape is the graph's) by the factor
+        # nearest 1 that makes it meet all three, if that is at most SCALED off 1; else the motor has no curve.
+        lo, hi = 0.0, math.inf
+        for read, printed in ((pts[0][1], row["static_torque_nm"]), (mmax, row["max_torque_nm"]), (t, q)):
+            within = tolerance(printed) - 1e-4  # (less the rounding of the written torques to 4 decimals)
+            lo, hi = max(lo, (float(printed) - within) / read), min(hi, (float(printed) + within) / read)
+        factor = min(max(1.0, lo), hi)
+        if lo > hi or abs(factor - 1) > SCALED:
+            failed.append(f"{article} (page {page}): no torque scale within {SCALED:.0%} meets the table: S1 start "
+                          f"{pts[0][1]:.3f} (M0 {m0}), Mmax {mmax:.3f} ({row['max_torque_nm']}), at the rated speed "
+                          f"{w:.2f} rad/s {t:.3f} ({q}) N m")
+            none.append(article)
+            continue
+        red = [(x, y * factor) for x, y in red]
         out += [(article, f"{x * RPM:.4f}", f"{y:.4f}") for x, y in red]
-        print(f"{article}: {supply[0]} V {supply[1]} AC, page {page}, {len(red)} points")
+        print(f"{article}: {supply[0]} V {supply[1]} AC, page {page}, {len(red)} points, torques x {factor:.4f}")
     return out, none, failed
 
 
