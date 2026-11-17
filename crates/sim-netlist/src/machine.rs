@@ -807,11 +807,17 @@ impl ConfigMachine {
                             let [low, high] = span.map_or([0.0; 2], |s| s[j]);
                             (high, net.axes[t.axes[j]].stroke + low)
                         };
+                        // A direction every table rotary turns about (Z under a C table alone) is not turned: its own reach.
+                        let about = |r: usize| net.axes[r].incline_deg.to_radians().sin_cos();
+                        let unturned = t.table.iter().all(|&r| {
+                            let (s, c) = about(r);
+                            [s, 0.0, c][k].abs() > 1.0 - 1e-12
+                        });
                         let half = (0..2)
                             .map(|j| (t.pivot[j] - reach(j).0).min(reach(j).1 - t.pivot[j]))
                             .fold(f64::INFINITY, f64::min)
                             .max(0.0);
-                        (t.pivot[k] - half, t.pivot[k] + half)
+                        if unturned { reach(k) } else { (t.pivot[k] - half, t.pivot[k] + half) }
                     }
                 };
                 Ok(AxisInfo {
