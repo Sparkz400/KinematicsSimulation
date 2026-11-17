@@ -31,7 +31,7 @@ tools/tests/                 tests of the tools
 
 ## Schema 1
 
-Part classes, one schema file each: `servo_motor`, `drive`, `braking_resistor`, `gearbox`, `belt`, `belt_axis`, `ball_screw`, `linear_guide`, `linear_motor`, `pneumatic_cylinder`. A class can have further tables for data that is not one row per part, in the schema's `$defs`: `servo_motor/dynamic_braking`, `drive/braking`, `drive/dc_link_measurement`, `drive/line_module`, `servo_motor/shaft`, `gearbox/mass`, `ball_screw/mounting`, `belt/tooth_load`, `belt_axis/torque_formula`. A table's metadata names its `class` and, for these, its `table`.
+Part classes, one schema file each: `servo_motor`, `drive`, `braking_resistor`, `gearbox`, `belt`, `belt_axis`, `ball_screw`, `linear_guide`, `linear_motor`, `pneumatic_cylinder`. A class can have further tables for data that is not one row per part, in the schema's `$defs`: `servo_motor/dynamic_braking`, `drive/braking`, `drive/dc_link_measurement`, `drive/line_module`, `servo_motor/shaft`, `servo_motor/s1_curve`, `gearbox/mass`, `ball_screw/mounting`, `belt/tooth_load`, `belt_axis/torque_formula`. A table's metadata names its `class` and, for these, its `table`.
 
 Voltage constants are line to line (phase to phase), RMS, in every motor table: `voltage_constant_v_s_rad` of the rotary motors and `back_emf_constant_v_s_m` of the linear ones (force constant over it is about sqrt(3) for a sine-wave motor). A maker that prints phase to neutral is converted when read (the 1FN3: times sqrt(3)).
 

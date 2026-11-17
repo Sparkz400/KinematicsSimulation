@@ -1,0 +1,34 @@
+schema_version = 1
+class = "servo_motor"
+table = "s1_curve"
+key = ["article", "speed_rad_s"]
+default_source = "d32-graphs"
+notes = '''
+The S1 (continuous duty) torque limit over speed of the Siemens S-1FK2 and S-1FT2 servomotors of motors_s210.csv, read
+off the "Speed/torque characteristics" graphs of catalogue D 32 by catalog/tools/extract_siemens_s210_s1.py (the graphs
+are vector art: the script reads the line's own coordinates, not a picture). One row per point; rows by article, then
+rising speed; the first point is at speed 0, the last where the S1 line of the graph ends (5 to 12 points, the line
+reduced by the Douglas-Peucker rule, no point between those the graph draws is invented); the torque is linear between
+the points. The torque is the motor's, at the shaft, not at the converter's current limit.
+Which supply: the graphs show the curve per supply voltage (200 ... 240 V as 230 V 1 AC and 240 V 3 AC, 380 ... 480 V as
+400 V 3 AC and 480 V 3 AC). A motor of motors_s210.csv that has a rated point at 400 V (rated_*_400v) gets its curve
+for 400 V 3 AC, else the one for 240 V 3 AC. The curves for the other supplies are in the PDF, not here.
+Checks the script makes and tools/tests/test_s1_curves_s210.py repeats: the curve starts at the printed static torque and
+passes the printed rated point of its supply, each within 2 % or half of the last printed digit, whichever is more; the
+Mmax line of the same graph is at the printed maximum torque (same tolerance). A graph that fails a check, or that the
+script cannot read, gives no rows: such a motor has no curve here (the readings differ from the printed table by more
+than that, or the drawing of the page is not the usual one: two lines drawn twice, a tick label missing).
+The speed axis: its last printed label is not always the frame's right edge; where the Mmax lines of the 400 V graph stop
+at a speed other than the motor's maximum speed, the axis is taken from that stop when it is a whole number of grid lines
+of a multiple of 50 r/min each.
+Not in the graphs and so not here: the thermal limit of a duty other than S1, the S6 limits, the curves of the converters
+of the 6SL5310 line.
+'''
+
+[[sources]]
+id = "d32-graphs"
+document = "Siemens, catalogue D 32, SINAMICS S210 servo drive system"
+date = "2024-01"
+locator = "\"Speed/torque characteristics\" of each shaft height, PDF pages 99 to 172 (printed 3.1/20 ff.)"
+method = "script:tools/extract_siemens_s210_s1.py"
+url = "https://cache.industry.siemens.com/dl/files/381/109754381/att_1261452/v1/motion-control-drives-D32-complete-English-2024-01.pdf"
