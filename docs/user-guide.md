@@ -705,33 +705,32 @@ Limits for this task:
 ```text
 $ sim-cli optimise t-gantry --config crates/machine-t-gantry/exct-30.toml
 setting,before,after
-cycle_s,2.0480,1.5900
-dwell_error_peak_m,3.949e-5,5.295e-5
-bands_fastest_cycle_s,,1.4920
+cycle_s,2.0480,1.7560
+dwell_error_peak_m,3.497e-5,4.973e-5
+dwell_angle_error_peak_rad,0.000e0,0.000e0
+bands_fastest_cycle_s,,1.3900
 bands_fastest_fails,,belt-slack settling
-bands_steps_back,,1
+bands_steps_back,,4
 bands_excused,,
-Cycles simulated: search + error bands 40 + 387
-axis.x.max_acceleration_m_s2,25.0,53.99999999999999
-axis.x.max_jerk_m_s3,150.0,225.0
-axis.x.max_velocity_m_s,2.5,3.0
-axis.z.max_acceleration_m_s2,15.0,32.4
-axis.z.max_jerk_m_s3,500.0,750.0
-axis.z.max_velocity_m_s,1.5,1.7999999999999998
+Cycles simulated: search + error bands 46 + 834
+axis.x.max_acceleration_m_s2,25.0,56.25
+axis.x.max_velocity_m_s,2.5,3.75
+axis.z.max_acceleration_m_s2,15.0,33.75
+axis.z.max_velocity_m_s,1.5,2.25
 effects.input_shaping,true,false
 ```
 
-The optimiser tries corner blending and higher velocity, acceleration and jerk limits (all axes together, in steps of ×1.5 and ×1.2). It keeps a change if the cycle gets shorter and every verdict still passes, among them `settling`, so a faster move that leaves the tool swinging at the pick does not count. Input shaping makes no cycle shorter by itself, because every stop waits one period of the shaper. So it is tried where it can help: a faster setting that fails on `settling` alone is run again with the shaper (and with `effects.shaper_follows_pose` where the machine reports a resonance) and taken if it then passes and is shorter; one that still fails on `settling` alone with the shaper is run again with a second shaper (see [Tune gains and use input shaping](#tune-gains-and-use-input-shaping)). Where the shaper is on already, switching it off is tried too. The first two rows are the cycle time and the dwell error before and after. The other rows are what to change in the config. No config file is edited. The settings tried in one step of the search run side by side on the processor cores, a batch at a time (the first alone, as it is often taken, then twice as many each batch while they fail, up to one per core), and are then counted in their order as if they had run one after the other: the first faster one is taken and the runs after it are dropped, so the result and the number of runs are the same with any number of cores (with 16 threads the default single axis's 40 runs took 9 s instead of 26 s). The steps themselves follow each other, each from the setting the step before took.
+The optimiser tries corner blending and higher velocity, acceleration and jerk limits (all axes together, in steps of ×1.5 and ×1.2). It keeps a change if the cycle gets shorter and every verdict still passes, among them `settling`, so a faster move that leaves the tool swinging at the pick does not count. Input shaping makes no cycle shorter by itself, because every stop waits one period of the shaper. So it is tried where it can help: a faster setting that fails on `settling` alone is run again with the shaper (and with `effects.shaper_follows_pose` where the machine reports a resonance) and taken if it then passes and is shorter; one that still fails on `settling` alone with the shaper is run again with a second shaper (see [Tune gains and use input shaping](#tune-gains-and-use-input-shaping)). Where the shaper is on already, switching it off is tried too. The first rows are the cycle time and the dwell error (position and angle) before and after. The other rows are what to change in the config. No config file is edited. The settings tried in one step of the search run side by side on the processor cores, a batch at a time (the first alone, as it is often taken, then twice as many each batch while they fail, up to one per core), and are then counted in their order as if they had run one after the other: the first faster one is taken and the runs after it are dropped, so the result and the number of runs are the same with any number of cores (with 16 threads the default single axis's 40 runs took 9 s instead of 26 s). The steps themselves follow each other, each from the setting the step before took.
 
 **In the error bands.** The result also has to pass every check in the error bands of the config's `[bounds]` (one value at a time, as `verdicts --bands`), not only with the config as written. The search itself judges as written; then its fastest setting is judged in the bands, and where it fails there, the steps the search took are gone back, fastest first, until one passes (2n + 1 cycles per step judged, n the bounded values). A check that the cycle as configured fails in its bands already cannot be kept, so it is not judged: it is listed as `bands_excused`. The `bands_*` rows say how fast the search got on the config as written (`bands_fastest_cycle_s`), what that fails in the bands, and how many steps back the result is; the error stream says how many cycles the search and the bands took.
 
 The EXCT-30 config has corner blending and the shaper on already, so here the optimiser raises the limits and switches the shaper off (both shapers). On the config as written that gives 1.49 s, but with the values at their bounds the belt goes slack and the tool is 0.29 mm off in the dwell. One step back, with the jerk of the last step taken back, passes: 2.05 s to 1.59 s, the tool 0.053 mm off in the dwell instead of 0.039 mm. The shipped config passes every check in its bands, so nothing is excused (`bands_excused` is empty). The bands took 387 cycles (three settings at 129 each, 64 bounded values), the search 40; the whole run took about 20 s on 16 threads. The default T-gantry goes from 6.08 s to 5.36 s (5.34 s as written, which fails `settling` in the bands), with 159 cycles of bands.
 
-`--nominal` judges the config as written alone, as before: on the EXCT-30 1.49 s. `--runs N` limits the number of cycles of the search (default 40); the bands come on top.
+`--nominal` judges the config as written alone, as before: on the EXCT-30 1.39 s. `--runs N` limits the number of cycles of the search (default 40); the bands come on top.
 
 **At the worst corner.** `--worst` judges the result at the worst corner of all bounds at once (as `verdicts --bands --worst`) instead of in the bands, rows `worst_*` in place of `bands_*`. A worst-corner search costs some 2000 cycles where the bands cost 2n + 1, so it is kept down three ways: the search stops at the first batch of runs that fails a check the result is judged on (a failing step costs about as much as its bands); the steps are bisected (the fastest, then the middle of what is left), not gone back one at a time; and each search starts from the worst corners of the step judged before. All runs share the processors. A check the cycle as configured fails at its worst corner is excused, as in the bands; finding that out takes one whole search of the cycle as configured, where the fastest step fails. On the EXCT-30 no step the search took holds at the worst corner: the fastest, 1.492 s, leaves the belt slack and the tool swinging there, the cycle as configured fails `pulley-bearing-life` there already (excused), and the bisection over the seven steps ends at the cycle as configured, 2.048 s (`worst_steps_back,,7`): 3001 cycles of worst-corner search, 2 min 54 s on 16 threads. The default T-gantry goes from 6.08 s to 5.44 s (5.36 s in the bands; the search's 5.34 s fails `settling` at the corner), three steps back: 4964 cycles, 16 min 28 s, most of them in the whole searches of the cycle as configured and of the steps that pass (some 2500 each). That is too long for every run, so it is not the default: run it on a result before you build it. In the app, tick "worst corner" beside "with error bands" before you run the optimiser.
 
-**Energy against cycle time.** `--pareto FILE` writes the settings that no other beats in cycle time, energy per cycle from the supply and peak motor utilisation at once, fastest first, as CSV: `cycle_s,energy_j,peak_utilisation,velocity_factor,acceleration_factor,jerk_factor,corner_blending,input_shaping` (the factors on the axes' limits as configured). They come from the settings the search ran anyway that pass every check as written, and six slower ones from the result (acceleration and jerk, and all three limits, at 0.8, 0.6 and 0.4 times). The energy is what the drives drew less what they fed back, plus what the braking resistor burned; with no resistor (no DC link simulated) braking energy counts as fed back. On the EXCT-30 the front runs from 1.49 s at 269 J and a peak utilisation of 0.52 to 2.94 s at 118 J and 0.22; the result's 1.59 s takes 254 J. A slower acceleration saves the kinetic energy a stop burns in the resistor, ½ m v² where the move does not reach its top speed (`a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_supply`). The app draws the front below the optimiser's table.
+**Energy against cycle time.** `--pareto FILE` writes the settings that no other beats in cycle time, energy per cycle from the supply and peak motor utilisation at once, fastest first, as CSV: `cycle_s,energy_j,peak_utilisation,velocity_factor,acceleration_factor,jerk_factor,corner_blending,input_shaping` (the factors on the axes' limits as configured). They come from the settings the search ran anyway that pass every check as written, and six slower ones from the result (acceleration and jerk, and all three limits, at 0.8, 0.6 and 0.4 times). The energy is what the drives drew less what they fed back, plus what the braking resistor burned; with no resistor (no DC link simulated) braking energy counts as fed back. On the EXCT-30 the front runs from 1.39 s at 382 J and a peak utilisation of 0.58 to 2.66 s at 138 J and 0.22; the result's 1.76 s takes 243 J. A slower acceleration saves the kinetic energy a stop burns in the resistor, ½ m v² where the move does not reach its top speed (`a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_supply`). The app draws the front below the optimiser's table.
 
 **Lift heights and rounded lifts.** The cycle's geometry is a variable too. A lift, traverse and lower (lift straight up from the pick, traverse at that height, lower straight down to the place; the default T-gantry has two) is tried first as low as `profile.min_clearance_m` allows: that far above the higher of pick and place, and where the config has `obstacles`, that far above the obstacles in the way of the traverse, measured from the machine's collision bodies (see below). The shipped T-gantry configs set it to the lifts they have, so nothing changes there. With an obstacle of 0.1 m:
 
@@ -1187,7 +1186,7 @@ stroke, its swing at the trunnion and its cone at the ball joint against 30° an
 largest distance of a point of the joint circle from where a pure tilt would put it, 2.9 mm against the 5 mm of
 `ratings.parasitic_tolerance_m` (leave the key out to judge none). A target is refused where a leg would leave its
 stroke or a joint its range, or near a singularity (`workspace.max_condition_number`; level the condition number is
-√2). The velocity loops (`sim-cli margins tripod`) keep at least 121.9° and 11.36 dB, and 110.1° and 9.35 dB across the bounds (`--bands`).
+√2). The velocity loops (`sim-cli margins tripod`) keep at least 121.9° and 11.36 dB, and 101.0° and 9.53 dB across the bounds (`--bands`).
 
 ## Size a stepper or an induction motor
 
@@ -1280,10 +1279,10 @@ check,motor,value,limit,result
 ...
 web-tension,,102.6,250.0,ok
 web-slack,,0.3106,1.000,ok
-dancer-travel,,0.000007132,0.04000,ok
+dancer-travel,,0.000007135,0.04000,ok
 inertia-ratio,unwind,10.40,15.00,ok
-torque-at-full-roll,unwind,4.093,18.00,ok
-torque-at-core,unwind,1.207,18.00,ok
+torque-at-full-roll,unwind,4.088,18.00,ok
+torque-at-core,unwind,1.205,18.00,ok
 speed-at-core,unwind,311.1,508.8,ok
 tension-torque-at-full-roll,unwind,2.204,5.400,ok
 ...

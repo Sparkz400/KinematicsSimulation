@@ -672,33 +672,32 @@ Grenzen bei dieser Aufgabe:
 ```text
 $ sim-cli optimise t-gantry --config crates/machine-t-gantry/exct-30.toml
 setting,before,after
-cycle_s,2.0480,1.5900
-dwell_error_peak_m,3.949e-5,5.295e-5
-bands_fastest_cycle_s,,1.4920
+cycle_s,2.0480,1.7560
+dwell_error_peak_m,3.497e-5,4.973e-5
+dwell_angle_error_peak_rad,0.000e0,0.000e0
+bands_fastest_cycle_s,,1.3900
 bands_fastest_fails,,belt-slack settling
-bands_steps_back,,1
+bands_steps_back,,4
 bands_excused,,
-Cycles simulated: search + error bands 40 + 387
-axis.x.max_acceleration_m_s2,25.0,53.99999999999999
-axis.x.max_jerk_m_s3,150.0,225.0
-axis.x.max_velocity_m_s,2.5,3.0
-axis.z.max_acceleration_m_s2,15.0,32.4
-axis.z.max_jerk_m_s3,500.0,750.0
-axis.z.max_velocity_m_s,1.5,1.7999999999999998
+Cycles simulated: search + error bands 46 + 834
+axis.x.max_acceleration_m_s2,25.0,56.25
+axis.x.max_velocity_m_s,2.5,3.75
+axis.z.max_acceleration_m_s2,15.0,33.75
+axis.z.max_velocity_m_s,1.5,2.25
 effects.input_shaping,true,false
 ```
 
-Der Optimierer probiert das Überschleifen und höhere Grenzwerte für Geschwindigkeit, Beschleunigung und Ruck (alle Achsen gemeinsam, in Schritten von ×1,5 und ×1,2). Eine Änderung bleibt, wenn der Zyklus kürzer wird und weiterhin jede Prüfung besteht. Dazu gehört `settling`: Eine schnellere Bewegung, nach der das Werkzeug an der Greifposition noch schwingt, zählt nicht. Input Shaping allein macht keinen Zyklus kürzer, weil jeder Halt eine Periode des Shapers wartet. Es wird deshalb dort probiert, wo es helfen kann: Eine schnellere Einstellung, die nur an `settling` scheitert, wird mit dem Shaper noch einmal gefahren (und mit `effects.shaper_follows_pose`, wo die Maschine eine Resonanz meldet) und übernommen, wenn sie dann besteht und kürzer ist; eine, die mit dem Shaper noch allein an `settling` scheitert, wird mit einem zweiten Shaper noch einmal gefahren (siehe [Regler einstellen und Input Shaping nutzen](#regler-einstellen-und-input-shaping-nutzen)). Ist der Shaper schon eingeschaltet, wird auch das Abschalten probiert. Die ersten beiden Zeilen sind die Zykluszeit und der Abstand vom Ziel beim Verweilen, vorher und nachher. Die übrigen Zeilen nennen, was in der Konfiguration zu ändern ist. Es wird keine Konfigurationsdatei geändert. Die Einstellungen, die ein Schritt der Suche probiert, laufen nebeneinander auf den Prozessorkernen, in Gruppen (die erste allein, da sie oft genommen wird, dann jede Gruppe doppelt so groß, solange sie scheitern, bis zu einer je Kern), und werden dann in ihrer Reihenfolge gezählt, als wären sie nacheinander gelaufen: Die erste schnellere wird genommen, die Läufe nach ihr verworfen. Ergebnis und Zahl der Läufe sind daher bei jeder Zahl von Kernen gleich (mit 16 Threads brauchten die 40 Läufe der Standard-Einzelachse 9 s statt 26 s). Die Schritte selbst folgen aufeinander, jeder von der Einstellung aus, die der Schritt davor genommen hat.
+Der Optimierer probiert das Überschleifen und höhere Grenzwerte für Geschwindigkeit, Beschleunigung und Ruck (alle Achsen gemeinsam, in Schritten von ×1,5 und ×1,2). Eine Änderung bleibt, wenn der Zyklus kürzer wird und weiterhin jede Prüfung besteht. Dazu gehört `settling`: Eine schnellere Bewegung, nach der das Werkzeug an der Greifposition noch schwingt, zählt nicht. Input Shaping allein macht keinen Zyklus kürzer, weil jeder Halt eine Periode des Shapers wartet. Es wird deshalb dort probiert, wo es helfen kann: Eine schnellere Einstellung, die nur an `settling` scheitert, wird mit dem Shaper noch einmal gefahren (und mit `effects.shaper_follows_pose`, wo die Maschine eine Resonanz meldet) und übernommen, wenn sie dann besteht und kürzer ist; eine, die mit dem Shaper noch allein an `settling` scheitert, wird mit einem zweiten Shaper noch einmal gefahren (siehe [Regler einstellen und Input Shaping nutzen](#regler-einstellen-und-input-shaping-nutzen)). Ist der Shaper schon eingeschaltet, wird auch das Abschalten probiert. Die ersten Zeilen sind die Zykluszeit und der Abstand vom Ziel beim Verweilen (Lage und Winkel), vorher und nachher. Die übrigen Zeilen nennen, was in der Konfiguration zu ändern ist. Es wird keine Konfigurationsdatei geändert. Die Einstellungen, die ein Schritt der Suche probiert, laufen nebeneinander auf den Prozessorkernen, in Gruppen (die erste allein, da sie oft genommen wird, dann jede Gruppe doppelt so groß, solange sie scheitern, bis zu einer je Kern), und werden dann in ihrer Reihenfolge gezählt, als wären sie nacheinander gelaufen: Die erste schnellere wird genommen, die Läufe nach ihr verworfen. Ergebnis und Zahl der Läufe sind daher bei jeder Zahl von Kernen gleich (mit 16 Threads brauchten die 40 Läufe der Standard-Einzelachse 9 s statt 26 s). Die Schritte selbst folgen aufeinander, jeder von der Einstellung aus, die der Schritt davor genommen hat.
 
 **In den Fehlerbändern.** Das Ergebnis muss jede Prüfung auch in den Fehlerbändern der `[bounds]` der Konfiguration bestehen (ein Wert nach dem anderen, wie `verdicts --bands`), nicht nur mit der Konfiguration, wie sie dasteht. Die Suche selbst bewertet die Konfiguration, wie sie dasteht; danach wird ihre schnellste Einstellung in den Bändern bewertet, und wo sie dort scheitert, werden die Schritte der Suche zurückgegangen, die schnellsten zuerst, bis einer besteht (2n + 1 Zyklen je bewertetem Schritt, n die Zahl der begrenzten Werte). Eine Prüfung, an der schon der Zyklus wie konfiguriert in seinen Bändern scheitert, lässt sich nicht halten und wird deshalb nicht bewertet: Sie steht in `bands_excused`. Die Zeilen `bands_*` nennen, wie schnell die Suche mit der Konfiguration, wie sie dasteht, wurde (`bands_fastest_cycle_s`), woran das in den Bändern scheitert und wie viele Schritte das Ergebnis zurückliegt; die Fehlerausgabe nennt, wie viele Zyklen Suche und Bänder gekostet haben.
 
 In der Konfiguration der EXCT-30 sind das Überschleifen und der Shaper schon eingeschaltet. Der Optimierer erhöht hier deshalb die Grenzwerte und schaltet den Shaper ab (beide Shaper). Mit der Konfiguration, wie sie dasteht, ergibt das 1,49 s, aber mit den Werten an ihren Grenzen wird der Riemen schlaff und das Werkzeug steht beim Verweilen 0,29 mm neben seinem Ziel. Einen Schritt zurück, ohne den Ruck des letzten Schritts, besteht es: 2,05 s auf 1,59 s, das Werkzeug beim Verweilen 0,053 mm neben dem Ziel statt 0,039 mm. Die mitgelieferte Konfiguration besteht in ihren Bändern jede Prüfung, also wird nichts ausgenommen (`bands_excused` ist leer). Die Bänder haben 387 Zyklen gekostet (drei Einstellungen zu je 129, 64 begrenzte Werte), die Suche 40; der ganze Lauf dauerte etwa 20 s auf 16 Threads. Das Standard-T-Portal geht von 6,08 s auf 5,36 s (5,34 s nach der Konfiguration, wie sie dasteht, was in den Bändern an `settling` scheitert), mit 159 Zyklen für die Bänder.
 
-`--nominal` bewertet nur die Konfiguration, wie sie dasteht, wie bisher: an der EXCT-30 1,49 s. `--runs N` begrenzt die Zahl der Zyklen der Suche (Standard 40); die Bänder kommen hinzu.
+`--nominal` bewertet nur die Konfiguration, wie sie dasteht, wie bisher: an der EXCT-30 1,39 s. `--runs N` begrenzt die Zahl der Zyklen der Suche (Standard 40); die Bänder kommen hinzu.
 
 **An der ungünstigsten Ecke.** `--worst` bewertet das Ergebnis an der ungünstigsten Ecke aller Grenzen zugleich (wie `verdicts --bands --worst`) statt in den Bändern, Zeilen `worst_*` statt `bands_*`. Eine Suche nach der ungünstigsten Ecke kostet rund 2000 Zyklen, wo die Bänder 2n + 1 kosten; drei Dinge halten das klein: Die Suche endet nach dem ersten Satz von Läufen, in dem eine Prüfung scheitert, nach der das Ergebnis bewertet wird (ein scheiternder Schritt kostet etwa so viel wie seine Bänder); die Schritte werden halbiert (der schnellste, dann die Mitte des Rests), nicht einer nach dem anderen zurückgegangen; und jede Suche beginnt bei den ungünstigsten Ecken des zuvor bewerteten Schritts. Alle Läufe teilen sich die Prozessoren. Eine Prüfung, an der der Zyklus wie konfiguriert an seiner ungünstigsten Ecke schon scheitert, wird wie in den Bändern nicht bewertet; das herauszufinden kostet eine ganze Suche über den Zyklus wie konfiguriert, wo der schnellste Schritt scheitert. An der EXCT-30 hält kein Schritt der Suche an der ungünstigsten Ecke: Der schnellste, 1,492 s, lässt dort den Riemen schlaff werden und das Werkzeug schwingen, der Zyklus wie konfiguriert scheitert dort schon an `pulley-bearing-life` (nicht bewertet), und die Halbierung über die sieben Schritte endet beim Zyklus wie konfiguriert, 2,048 s (`worst_steps_back,,7`): 3001 Zyklen Suche nach der ungünstigsten Ecke, 2 min 54 s auf 16 Threads. Das Standard-T-Portal geht von 6,08 s auf 5,44 s (5,36 s in den Bändern; die 5,34 s der Suche scheitern an der Ecke an `settling`), drei Schritte zurück: 4964 Zyklen, 16 min 28 s, die meisten in den ganzen Suchen über den Zyklus wie konfiguriert und über die Schritte, die bestehen (je rund 2500). Das ist für jeden Lauf zu lang, also nicht die Voreinstellung: Lassen Sie es über ein Ergebnis laufen, bevor Sie es bauen. In der App „ungünstigste Ecke“ neben „mit Fehlerbändern“ ankreuzen, bevor der Optimierer läuft.
 
-**Energie gegen Zykluszeit.** `--pareto DATEI` schreibt die Einstellungen, die keine andere zugleich in Zykluszeit, Energie je Zyklus aus dem Netz und Spitzenauslastung der Motoren übertrifft, die schnellste zuerst, als CSV: `cycle_s,energy_j,peak_utilisation,velocity_factor,acceleration_factor,jerk_factor,corner_blending,input_shaping` (die Faktoren auf die Grenzwerte der Achsen, wie konfiguriert). Sie stammen aus den Einstellungen, die die Suche ohnehin gefahren hat und die jede Prüfung bestehen, und aus sechs langsameren ab dem Ergebnis (Beschleunigung und Ruck sowie alle drei Grenzwerte mal 0,8, 0,6 und 0,4). Die Energie ist, was die Antriebe aufgenommen haben, weniger was sie zurückgespeist haben, plus was der Bremswiderstand verheizt hat; ohne Widerstand (ohne simulierten Zwischenkreis) zählt Bremsenergie als zurückgespeist. An der EXCT-30 reicht die Front von 1,49 s bei 269 J und einer Spitzenauslastung von 0,52 bis 2,94 s bei 118 J und 0,22; das Ergebnis mit 1,59 s braucht 254 J. Eine langsamere Beschleunigung spart die Bewegungsenergie, die ein Halt im Widerstand verheizt, ½ m v², wo die Bewegung ihre Höchstgeschwindigkeit nicht erreicht (`a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_supply`). Die App zeichnet die Front unter die Tabelle des Optimierers.
+**Energie gegen Zykluszeit.** `--pareto DATEI` schreibt die Einstellungen, die keine andere zugleich in Zykluszeit, Energie je Zyklus aus dem Netz und Spitzenauslastung der Motoren übertrifft, die schnellste zuerst, als CSV: `cycle_s,energy_j,peak_utilisation,velocity_factor,acceleration_factor,jerk_factor,corner_blending,input_shaping` (die Faktoren auf die Grenzwerte der Achsen, wie konfiguriert). Sie stammen aus den Einstellungen, die die Suche ohnehin gefahren hat und die jede Prüfung bestehen, und aus sechs langsameren ab dem Ergebnis (Beschleunigung und Ruck sowie alle drei Grenzwerte mal 0,8, 0,6 und 0,4). Die Energie ist, was die Antriebe aufgenommen haben, weniger was sie zurückgespeist haben, plus was der Bremswiderstand verheizt hat; ohne Widerstand (ohne simulierten Zwischenkreis) zählt Bremsenergie als zurückgespeist. An der EXCT-30 reicht die Front von 1,39 s bei 382 J und einer Spitzenauslastung von 0,58 bis 2,66 s bei 138 J und 0,22; das Ergebnis mit 1,76 s braucht 243 J. Eine langsamere Beschleunigung spart die Bewegungsenergie, die ein Halt im Widerstand verheizt, ½ m v², wo die Bewegung ihre Höchstgeschwindigkeit nicht erreicht (`a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_supply`). Die App zeichnet die Front unter die Tabelle des Optimierers.
 
 **Hubhöhen und gerundete Hübe.** Auch die Geometrie des Zyklus ist eine Variable. Ein Heben, Verfahren und Senken (gerade nach oben von der Aufnahme, auf dieser Höhe verfahren, gerade nach unten zur Ablage; das Standard-T-Portal hat zwei) wird zuerst so niedrig probiert, wie `profile.min_clearance_m` es zulässt: so weit über der höheren von Aufnahme und Ablage, etwa die Höhe eines Hindernisses dazwischen. Die mitgelieferten T-Portal-Konfigurationen setzen den Wert auf ihre Hübe, dort ändert sich also nichts. Mit einem Hindernis von 0,1 m:
 
@@ -1165,7 +1164,7 @@ Kugelgelenk gegen 30° und 35°; `tripod-parasitic` prüft den größten Abstand
 wohin ihn eine reine Neigung brächte, 2,9 mm gegen die 5 mm von `ratings.parasitic_tolerance_m` (ohne den Schlüssel
 wird nichts geprüft). Ein Ziel wird abgelehnt, wo ein Bein seinen Hub oder ein Gelenk seinen Bereich verließe, oder
 nahe einer Singularität (`workspace.max_condition_number`; waagrecht ist die Konditionszahl √2). Die Drehzahlregler
-(`sim-cli margins tripod`) halten mindestens 121,9° und 11,36 dB, über die Grenzen (`--bands`) 110,1° und 9,35 dB.
+(`sim-cli margins tripod`) halten mindestens 121,9° und 11,36 dB, über die Grenzen (`--bands`) 101,0° und 9,53 dB.
 
 ## Einen Schrittmotor oder einen Asynchronmotor auslegen
 
@@ -1266,10 +1265,10 @@ check,motor,value,limit,result
 ...
 web-tension,,102.6,250.0,ok
 web-slack,,0.3106,1.000,ok
-dancer-travel,,0.000007132,0.04000,ok
+dancer-travel,,0.000007135,0.04000,ok
 inertia-ratio,unwind,10.40,15.00,ok
-torque-at-full-roll,unwind,4.093,18.00,ok
-torque-at-core,unwind,1.207,18.00,ok
+torque-at-full-roll,unwind,4.088,18.00,ok
+torque-at-core,unwind,1.205,18.00,ok
 speed-at-core,unwind,311.1,508.8,ok
 tension-torque-at-full-roll,unwind,2.204,5.400,ok
 ...
