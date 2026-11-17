@@ -112,13 +112,13 @@ impl Converter {
         }
         joint.rotor_inertia += self.inertia / (i * i);
         // The mesh friction's bristle is MESH_STIFFNESS times the converted series stiffness (N/m now, not N m/rad). No
-        // shipped machine reaches the cap below: rack, screw and both cable robots run the full 2.6e7 to 5.6e7 N/m, and
+        // shipped machine reaches the cap below: rack, screw and both machines hung in cables run the full 2.6e7 to 5.6e7 N/m, and
         // their gearbox loss per cycle is the same at a tenth and at ten times it to 4e-4 J (rack 16.741 J, screw
         // 16.762 J, cable-planar 38.167 J, cable-spatial 53.544 to 53.548 J), with their energy budgets closed to 2e-5 J.
         // A gear far stiffer than any shipped (1e12 N m/rad behind a rigid lever) is capped where the bristle on the
         // lighter of the rotor's inertia seen at the load and the output's own stays at a quarter of BRISTLE_RATE_MAX
         // (omega h = 0.39 at the 15.6 us step against RK4's 2.8). A winch drum of 0.32 kg at its radius puts the cap at
-        // 2e8 N/m, above what the cable robots' gears give.
+        // 2e8 N/m, above what the winches' gears give.
         if g.mesh_stiffness > 0.0 {
             let lighter = (joint.rotor_inertia * g.ratio * g.ratio).min(output);
             let omega = BRISTLE_RATE_MAX / 4.0;

@@ -920,8 +920,8 @@ pub struct Gearbox {
 /// of the gear's twist under the same torque (20 % at an efficiency of 0.8), and the friction a reversal of 2 mu of an
 /// amplitude to turn round, which lowers the damping of a small ring below the friction law's (see the tests). The
 /// energy budget does not choose it: with the friction booked as its whole power the belt axes, whose light pulleys
-/// stick to the housing first, close their passes at K1, 3 K1 and 10 K1 alike (single axis under 1e-6 unaccounted,
-/// gearbox loss 3.04659 J at all three; T-gantry 4e-6, 8.70004, 8.70027 and 8.70029 J; with the friction off 3.04944
+/// stick to the housing first, close their passes at K1, 3 K1 and 10 K1 alike (the one-axis belt drive under 1e-6 unaccounted,
+/// gearbox loss 3.04659 J at all three; the T-shaped belt gantry 4e-6, 8.70004, 8.70027 and 8.70029 J; with the friction off 3.04944
 /// and 8.82445 J). (The 1.4 and 2.0 % they missed at 10 K1 were the earlier bookkeeping's, of the store's rate.)
 /// shortcut: K1; a config key once a gear's presliding is measured.
 pub const MESH_STIFFNESS: f64 = 1.0;
@@ -1185,10 +1185,10 @@ impl Gearbox {
     /// nor taken off here. Its rate, F dF/dt / sigma, depends on whether the bristle sticks or slides, which at a
     /// step's end (where `commit` leaves it exactly at its bound) says nothing about the step itself: there the anchor
     /// stands, the output runs many bristle lengths (0.1 m/s over 62.5 us is 6e-6 m against mu |held| / sigma = 1e-7 m on
-    /// the planar cable robot) and the friction slides at the bound throughout, also where the bound grew faster than
-    /// sigma w at the ends. Booked that way it missed 1.80 J of 38.17 J on the planar cable robot's cycle, at any step
+    /// a carriage hung in four cables) and the friction slides at the bound throughout, also where the bound grew faster than
+    /// sigma w at the ends. Booked that way it missed 1.80 J of 38.17 J on that carriage's cycle, at any step
     /// (dt / 4 the same), and 10.8 J at 3 sigma. Left out, what is not booked is the store itself, at most
-    /// (mu |held|)^2 / (2 sigma) per gear: 4e-7 J on the planar cable robot.
+    /// (mu |held|)^2 / (2 sigma) per gear: 4e-7 J there.
     pub fn loss_power(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64) -> f64 {
         let t = self.torque(rotor_angle, rotor_speed, out_angle, out_speed);
         let (twist, e) = self.beyond(rotor_angle, out_angle);

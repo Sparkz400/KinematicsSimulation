@@ -125,7 +125,7 @@ fn inertia_row(machine: &dyn Machine, pose: &[f64], axis: usize) -> Vec<f64> {
 /// axis's acceleration there (`inertia_row`, the accelerations from `travel` smoothed as `rigid_samples` smooths them),
 /// less the mass that fits those forces best times the axis's acceleration, as a mass: sqrt(Σ r² / Σ a²). 0 on a machine
 /// whose inertia does not change with the pose and does not couple its axes; on one the fit per axis takes although it
-/// does (up to `PER_AXIS_SPREAD`: the T-gantry's belt, the disc cam without its payload) the fitted mass is a mean over
+/// does (up to `PER_AXIS_SPREAD`: the T-shaped belt gantry's belt, the disc cam without its payload) the fitted mass is a mean over
 /// the trace, and what the config's mass is to change by is known no better than this.
 fn mass_spread(
     machine: &dyn Machine,
@@ -247,7 +247,7 @@ fn common(
 /// so fitted − config does not hold it, only the noise and what else the trace has that the replay has not: their
 /// variance is that of the residual of (trace − replay), Σ (r_trace − r_replay)² / (N − m · per) times `per` as in
 /// `solve`, and so the factor sqrt(Σ (r_trace − r_replay)² / Σ r_trace²), as N, m and `per` are the trace's. Measured on
-/// the single axis's own config with the test noise (`the_fit_s_errors_cover_its_noise`, 80 seeds): (fitted − config) /
+/// the one-axis belt drive's own config with the test noise (`the_fit_s_errors_cover_its_noise`, 80 seeds): (fitted − config) /
 /// error has a standard deviation of 0.88 to 1.15 for mass, viscous and Coulomb friction (the audit found 0.40 to 0.43
 /// with the trace's residual alone). Not below `REPEATABILITY` of the trace's residual, so that a replay identical to
 /// its trace does not give an error of zero.
@@ -1274,13 +1274,13 @@ impl SweepFit {
 /// Stage 2 on a measured sweep, taken on `motor` with a torque `amplitude`: the measured sweep's resonance, and of the
 /// config's own sweep the dip nearest to it in frequency (by ratio). The config's sweep has the measured frequencies and,
 /// at the step of each end, more beyond them up to a factor of √2: its dip of the same mode may lie near an end, where
-/// the range misses one of its flanks. Before, the config's lowest dip with both flanks was taken: on the T-gantry with
+/// the range misses one of its flanks. Before, the config's lowest dip with both flanks was taken: on the T-shaped belt gantry with
 /// its belt at 0.8 of the stiffness, swept from 50 to 130 Hz, its dip at 55 Hz missed its lower flank by 0.1 of 726,
 /// and the next one, at 94 Hz, was set against the measured 61.5 Hz (factor 0.42 for 1.25). `None` where the measured
 /// sweep shows no dip with both flanks, or the config's none at all.
 ///
 /// shortcut: the nearest dip is the same mode only while the stiffness is off by less than the ratio of neighbouring
-/// dips' frequencies (61.5 and 103 Hz on the T-gantry: a factor of 1.3 either way); telling the mode by how its frequency
+/// dips' frequencies (61.5 and 103 Hz on the T-shaped belt gantry: a factor of 1.3 either way); telling the mode by how its frequency
 /// moves with the stiffness would take a second sweep of the config.
 pub fn fit_sweep(
     entry: &MachineEntry,

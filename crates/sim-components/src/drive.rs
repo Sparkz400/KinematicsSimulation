@@ -2446,7 +2446,7 @@ pub(crate) mod tests {
         assert!(d.phase_current() < 5.0 + 1e-3, "{} A", d.phase_current());
     }
 
-    /// Braking or motoring at the peak torque near the top speed does not run away. The audit's case, the t-gantry's
+    /// Braking or motoring at the peak torque near the top speed does not run away. The audit's case, the T-shaped belt gantry's
     /// motor (this test motor with field weakening, 190 V) with saturation off, a step to -3.8 N m held at 400 and
     /// 420 rad/s, gave -19.1 N m at 42.5 A of phase current before the d axis was held within the voltage circle (commit
     /// 1d098351). Now, stepped from rest to +-3.8 N m and to the curve's two torques (the velocity loop's clamp left out)
