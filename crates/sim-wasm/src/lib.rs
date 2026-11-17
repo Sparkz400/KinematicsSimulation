@@ -947,7 +947,7 @@ fn record_path(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>) -> Result<Vec<Vec<f6
     // A tripped drive never finishes the path.
     while sim.time() - start < end && sim.control.enabled() {
         sim.step();
-        if (sim.step - first) % every == 0 {
+        if (sim.step - first).is_multiple_of(every) {
             sim.sample(&mut sample);
             sample[0] = (sim.step - first) as f64 * sim.dt;
             rows.push(sample.clone());

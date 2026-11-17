@@ -249,6 +249,103 @@ fn fit_wants_a_trace_or_a_sweep() {
     assert!(handle(6, &format!("{}\nen\n\n---\n\n%%%\n\n%%%\n", first())).is_err());
 }
 
+/// The fit's rows (quantity, of, fitted) of the page's answer.
+fn fitted_rows(answer: &str) -> Vec<(String, String, Option<f64>)> {
+    let rows = json(answer)["rows"].as_array().unwrap().clone();
+    rows.iter()
+        .map(|r| (r[0].as_str().unwrap().to_string(), r[1].as_str().unwrap().to_string(), r[3].as_f64()))
+        .collect()
+}
+
+/// A vendor export through its mapping file, the dataset `example-synthetic-belt-axis` as `sim-cli fit --map` reads it:
+/// the page fits what `import` and `fit_rigid` fit, number for number, and with the option `stiffness` adds the
+/// stiffness rows of `fit_move_stiffness` on the same trace (or refuses with its message where its moves do not ring).
+#[test]
+fn a_vendor_export_is_fitted_through_its_mapping_file() {
+    use sim_components::identify::{BELT_STIFFNESS_KEY, fit_move_stiffness, fit_rigid};
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../datasets/example-synthetic-belt-axis/");
+    let (trace, map) = (
+        std::fs::read_to_string(format!("{dir}trace.csv")).unwrap(),
+        std::fs::read_to_string(format!("{dir}map.toml")).unwrap(),
+    );
+    let entry = sim_machines::find("single-axis").unwrap();
+    let mut cfg = entry.config();
+    cfg.set_text("effects.payload = false").unwrap();
+    let request = |options: &str| {
+        format!("{}\nen{options}\n{}\n---\n{trace}\n%%%\n{map}\n%%%\n", entry.id, cfg.to_text().unwrap())
+    };
+    let rows = fitted_rows(&handle(6, &request("")).unwrap());
+    let resolved = sim_components::catalog::resolve(entry, &cfg).unwrap();
+    let imported =
+        sim_components::import::import(&trace, &sim_components::import::Mapping::parse(&map).unwrap()).unwrap().trace;
+    let own = fit_rigid(entry, &resolved, &imported).unwrap()[0].clone().unwrap();
+    assert_eq!(rows.len(), 4, "{rows:?}");
+    for (q, row) in rows.iter().enumerate() {
+        assert_eq!(
+            (row.0.as_str(), row.2),
+            (
+                ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"][q],
+                Some(own.fitted[q])
+            )
+        );
+    }
+    // The run had no payload: the fitted mass is the config's moved mass within the fit's error.
+    assert!((own.fitted[0] - own.config[0]).abs() < 3.0 * own.error[0].max(1e-3 * own.config[0]), "{own:?}");
+    match fit_move_stiffness(entry, &resolved, &imported, BELT_STIFFNESS_KEY) {
+        Ok(fit) => {
+            let rows = fitted_rows(&handle(6, &request(" stiffness")).unwrap());
+            assert_eq!(
+                rows[4..7].iter().map(|r| r.2).collect::<Vec<_>>(),
+                [Some(fit.factor), Some(fit.ringing), Some(fit.residual)]
+            );
+            assert_eq!(rows[4].1, BELT_STIFFNESS_KEY);
+        }
+        Err(e) => assert!(handle(6, &request(" stiffness")).unwrap_err().contains(&e.detail), "{}", e.detail),
+    }
+}
+
+/// A measured sweep in the page's fit is `fit_sweep` of it: the config's own sweep of the first machine whose first motor
+/// has a resonance dip between 50 and 130 Hz (as `sim-cli fit --sweep` is tested) gives the config's resonance back to
+/// 1e-3, and the page's numbers are the library's.
+#[test]
+fn a_measured_sweep_is_fitted_in_the_page() {
+    use sim_components::analysis::{frequency_sweep, log_spaced};
+    let frequencies = log_spaced(50.0, 130.0, 30);
+    let (entry, cfg, points) = sim_machines::MACHINES
+        .iter()
+        .find_map(|entry| {
+            let mut cfg = entry.config();
+            if cfg.bool("effects.gearbox_lost_motion").is_ok() {
+                cfg.set_text("effects.gearbox_lost_motion = false").unwrap();
+            }
+            let points = frequency_sweep(entry, &cfg, 0, &frequencies, 1.5).ok()?;
+            sim_components::identify::resonance(&points).map(|_| (*entry, cfg, points))
+        })
+        .expect("a machine with a dip");
+    let csv: String = std::iter::once("frequency_hz,gain_rad_s_per_nm".to_string())
+        .chain(points.iter().map(|p| format!("{:?},{:?}", p.frequency, p.gain)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let answer = handle(
+        6,
+        &format!("{}\nen motor=0 amplitude=1.5\n{}\n---\n\n%%%\n\n%%%\n{csv}", entry.id, cfg.to_text().unwrap()),
+    )
+    .unwrap();
+    let rows = fitted_rows(&answer);
+    let measured = sim_components::identify::parse_sweep(&csv).unwrap();
+    let resolved = sim_components::catalog::resolve(entry, &cfg).unwrap();
+    let shared = sim_components::identify::fit_sweep(entry, &resolved, 0, &measured, 1.5).unwrap().unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        ["resonance_hz", "resonance_damping"],
+        "{}",
+        entry.id
+    );
+    assert_eq!((rows[0].2, rows[1].2), (Some(shared.fitted.frequency), Some(shared.fitted.damping)));
+    assert!((shared.fitted.frequency / shared.config.frequency - 1.0).abs() < 1e-3, "{}: {answer}", entry.id);
+    assert!(handle(6, &format!("{}\nen motor=7\n\n---\n\n%%%\n\n%%%\n{csv}", entry.id)).is_err());
+}
+
 /// The second machine's path from 0.1 m (its start pose) to 0.5 m and back to 0.2 m: the sizing check of the path is
 /// `analyse_trajectory` of the same planned poses, and the 3D view runs it to its end and stands where a native run
 /// of it stands.
