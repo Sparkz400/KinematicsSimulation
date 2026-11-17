@@ -587,3 +587,26 @@ fn the_new_effects_run_the_shipped_cycle_without_a_hitch() {
     sim.run(0.2, |_| {});
     assert!(sim.state.iter().all(|v| v.is_finite()));
 }
+
+/// The shipped gains hold the elastic drives: the default cycle with effects.joint_elasticity runs without a trip and
+/// no motor's peak torque nears its limit (tuned for the rigid drive, the bridge's loop ran away above the gearbox's mode
+/// and its command beat between +-10 N m: motor-peak 8.1), and every velocity loop's margins are measured, a crossover
+/// in the band, and meet the 35 degrees and 6 dB of the shipped loops' test (measured: bridge 51.7 degrees, 9.7 dB at
+/// 177 Hz; trolley 51.0 degrees, 9.9 dB at 183 Hz; hoist 78.2 degrees, 20.7 dB at 49.5 Hz).
+#[test]
+fn the_default_cycle_with_elastic_drives_keeps_its_loops_stable() {
+    use sim_components::analysis::{analyse_cycle, velocity_loop_margins, verdicts};
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.joint_elasticity = true").unwrap();
+    cfg.set_text("effects.thermal_warm_start = false").unwrap();
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    let load = analyse_cycle(&mut sim).unwrap();
+    assert!(!load.tripped);
+    for v in verdicts(&cfg, &load).unwrap().iter().filter(|v| v.check == "motor-peak") {
+        assert!(v.ok && v.value < 0.5, "motor-peak of {:?}: {}", v.motor, v.value);
+    }
+    for (k, m) in velocity_loop_margins(&ENTRY, &cfg, &[]).unwrap()[0].1.iter().enumerate() {
+        assert!(m.stable() && m.crossover_hz.is_finite(), "motor {k}: {m:?}");
+        assert!(m.phase_margin_deg >= 35.0 && m.gain_margin_db >= 6.0, "motor {k}: {m:?}");
+    }
+}
