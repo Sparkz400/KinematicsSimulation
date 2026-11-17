@@ -116,11 +116,13 @@ enum Geo {
     },
     /// A line of a tool whose axes are x, y, z and a rotation vector rx, ry, rz: the place on the straight line from
     /// `from` to `to`, the orientation by slerp between theirs, both at the share s / `length` of the way; `length` the
-    /// straight distance between the two poses, as a `Line` has it.
+    /// straight distance between the two poses, as a `Line` has it. `at`: the index of rx (3; 4 on an arm on a track, whose
+    /// track axis comes first).
     Slerp {
         from: Vec<f64>,
         to: Vec<f64>,
         length: f64,
+        at: usize,
     },
     /// `turn` is 1 counter-clockwise and -1 clockwise.
     Arc {
@@ -346,13 +348,15 @@ impl Geo {
             Geo::Line { from, dir, .. } => {
                 [from.iter().zip(dir).map(|(p, d)| p + d * s).collect(), dir.clone(), vec![0.0; dir.len()]]
             }
-            Geo::Slerp { from, to, length } => {
+            Geo::Slerp { from, to, length, at } => {
+                let (at, n) = (*at, from.len());
+                let turns = |i: usize| (at..at + 3).contains(&i);
                 let dir: Vec<f64> = from.iter().zip(to).map(|(f, t)| (t - f) / length).collect();
                 // Both orientations about one axis, on its same side: the turn goes along that axis, and its rotation
                 // vector along the straight line between them, with no bend. By the differences below its rounding
                 // (2e-8 rad/m^2 on a turn of 0.2 rad) marked it as bending, and the time-optimal plan gave its ramps
                 // 0.4 of those axes' jerk.
-                let (a, b) = ([from[3], from[4], from[5]], [to[3], to[4], to[5]]);
+                let (a, b) = ([from[at], from[at + 1], from[at + 2]], [to[at], to[at + 1], to[at + 2]]);
                 let size = |v: [f64; 3]| crate::rigid::dot(v, v).sqrt();
                 // To the rounding of the turns' sizes: a turn that ends a piece is the next one's start only to it (a
                 // level pose as 1e-17 rad about some axis), and the next turn bent by it.
@@ -361,20 +365,25 @@ impl Geo {
                     && crate::rigid::dot(a, b) >= -1e-12 * scale
                     && size(a).max(size(b)) < std::f64::consts::PI;
                 if one_axis {
-                    return [from.iter().zip(&dir).map(|(p, d)| p + d * s).collect(), dir.clone(), vec![0.0; 6]];
+                    return [from.iter().zip(&dir).map(|(p, d)| p + d * s).collect(), dir.clone(), vec![0.0; n]];
                 }
                 let pose = |s: f64| -> Vec<f64> {
-                    let turned = crate::rigid::slerp([from[3], from[4], from[5]], [to[3], to[4], to[5]], s / length);
-                    (0..6).map(|i| if i < 3 { from[i] + s * dir[i] } else { turned[i - 3] }).collect()
+                    let turned = crate::rigid::slerp(
+                        [from[at], from[at + 1], from[at + 2]],
+                        [to[at], to[at + 1], to[at + 2]],
+                        s / length,
+                    );
+                    (0..n).map(|i| if turns(i) { turned[i - at] } else { from[i] + s * dir[i] }).collect()
                 };
                 // The orientation's rates by central differences over 1e-4 of the piece (the slerp goes on smoothly past
                 // its ends): truncation ~1e-8 of them, rounding ~1e-16 / 1e-8 of the rotation vector. The place's are exact:
                 // by differences they were bends of rounding noise on every axis, which `piece_limits` cannot pass.
                 let h = 1e-4 * length;
                 let (ahead, here, behind) = (pose(s + h), pose(s), pose(s - h));
-                let first = (0..6).map(|i| if i < 3 { dir[i] } else { (ahead[i] - behind[i]) / (2.0 * h) }).collect();
-                let second = (0..6)
-                    .map(|i| if i < 3 { 0.0 } else { (ahead[i] - 2.0 * here[i] + behind[i]) / (h * h) })
+                let first =
+                    (0..n).map(|i| if turns(i) { (ahead[i] - behind[i]) / (2.0 * h) } else { dir[i] }).collect();
+                let second = (0..n)
+                    .map(|i| if turns(i) { (ahead[i] - 2.0 * here[i] + behind[i]) / (h * h) } else { 0.0 })
                     .collect();
                 [here, first, second]
             }
@@ -585,11 +594,13 @@ fn shape(
     let (mut geo, rounded) = round_corners(geo, corner);
     // An orientation as a rotation vector turns by slerp along a line (what is left of it after its corners are
     // rounded: the rounding curves pass the rotation vector as any other axis, within the corner tolerance).
-    if axes.len() == 6 && axes[3..].iter().map(|a| a.id).eq(["rx", "ry", "rz"]) {
+    // x, y, z, rx, ry, rz, or with an axis before them (an arm on a track).
+    let n = axes.len();
+    if (6..=7).contains(&n) && axes[n - 3..].iter().map(|a| a.id).eq(["rx", "ry", "rz"]) {
         for g in &mut geo {
             if let Geo::Line { from, dir, length } = g {
                 let to = from.iter().zip(dir.iter()).map(|(f, d)| f + *length * d).collect();
-                *g = Geo::Slerp { from: from.clone(), to, length: *length };
+                *g = Geo::Slerp { from: from.clone(), to, length: *length, at: n - 3 };
             }
         }
     }
@@ -1759,7 +1770,7 @@ fn limits(geo: &Geo, bounds: &[Bounds; 3]) -> [f64; 3] {
         // shortcut: as the straight line between the two poses; the slerp's orientation rates differ from the chord's by
         // the turn's curvature in rotation-vector coordinates (a few percent for a quarter turn about a tilted axis).
         // Take the most of `at`'s first derivative along it where a cycle runs its rotation axes at their limits.
-        Geo::Slerp { from, to, length } => tightest(&|row| {
+        Geo::Slerp { from, to, length, .. } => tightest(&|row| {
             row.iter().zip(from.iter().zip(to)).map(|(w, (f, t))| w * (t - f) / length).sum::<f64>().abs()
         }),
         Geo::Arc { radius, .. } | Geo::Arc3 { radius, .. } => curved(*radius, *radius * *radius, 0.0, 0.0, any()),
@@ -1909,9 +1920,10 @@ pub fn plan_within(
         .map(|(g, cap)| {
             let [v, a, j] = limits(g, &bounds);
             let per_length = match (spin, g) {
-                (Some(_), Geo::Slerp { from, to, length }) => {
+                (Some(_), Geo::Slerp { from, to, length, at }) => {
                     use crate::rigid::{exp, log, matmul, transpose};
-                    let turn = log(&matmul(&exp([to[3], to[4], to[5]]), &transpose(&exp([from[3], from[4], from[5]]))));
+                    let rotation = |p: &[f64]| exp([p[*at], p[at + 1], p[at + 2]]);
+                    let turn = log(&matmul(&rotation(to), &transpose(&rotation(from))));
                     norm(&turn) / length
                 }
                 _ => 0.0,
@@ -2227,7 +2239,7 @@ pub fn plan_time_optimal(
         .map(|(m, drive)| MotorCurve::new(drive, limits.reserve, limits.braking(m), |w| limits.shaft_friction(m, w)))
         .collect();
     let places =
-        geo.iter().map(|piece| piece_limits(machine, &curves, limits, piece)).collect::<Result<Vec<_>, _>>()?;
+        geo.iter().map(|piece| piece_limits(machine, &curves, limits, piece, cycle)).collect::<Result<Vec<_>, _>>()?;
     timed_by_motors(machine.axes(), &geo, &places, cycle)
 }
 
@@ -2750,6 +2762,7 @@ fn piece_limits(
     curves: &Arc<[MotorCurve]>,
     limits: &PlanLimits,
     geo: &Geo,
+    cycle: f64,
 ) -> Result<PieceLimits, CommandError> {
     let (reserve, [lowest, highest, share]) = (limits.reserve, limits.tension);
     let gearbox = |m: usize| limits.gearbox.get(m).copied().flatten();
@@ -2910,7 +2923,7 @@ fn piece_limits(
         // The machine's own parts (`Machine::rigid_checks`), each within its check's limit: a value read at rest, at the
         // acceleration 1 and at the speeds 1 and 2 along the path gives c a + b v + d v^2 + e. One that grows with the
         // acceleration keeps `reserve` of its limit, as the torques do; a speed alone, the margin's share less
-        // `SPEED_KEPT`.
+        // `SPEED_KEPT`; a limit of the plan itself, the margin's share.
         speed.resize(rows.len(), 0.0);
         if !checks.is_empty() {
             let values = |vel: &[f64], acc: &[f64]| {
@@ -2926,8 +2939,35 @@ fn piece_limits(
                     continue;
                 }
                 let (c, d) = (per_acc[k] - e, 0.5 * (fast[k] - 2.0 * once[k] + e));
-                let share = if c != 0.0 { reserve } else { limits.margin * (1.0 - SPEED_KEPT) };
-                let room = (1.0 - KEPT_BACK) * share * check.limit;
+                // A limit of the plan itself (`plan.` signals: the flange's spin) is judged on the planned motion, which the
+                // rigid model gives exactly: the margin's share, no reserve for what the model leaves out. Less, where it
+                // grows with the acceleration, what the controller's cubics between the plan's points add above the most
+                // acceleration of the motion they pass through: where a ramp of jerk J ends in a plateau, the Hermite cubic
+                // with the neighbours' slopes overshoots it by up to 2/3 J h (h the cycle), the C2 spline by 0.085 J h
+                // (worked out over every phase of the points against the ramp's end); at a peak of acceleration less. The
+                // axes' jerk is the ramps' along p' and the bends' (each axis's limit less the ramps' share, where the
+                // piece bends that axis).
+                let plan = check.signal.starts_with("plan.");
+                let share = if plan {
+                    limits.margin
+                } else if c != 0.0 {
+                    reserve
+                } else {
+                    limits.margin * (1.0 - SPEED_KEPT)
+                };
+                let cubics = if plan && c != 0.0 {
+                    let bent: f64 = (0..axes.len())
+                        .filter(|&i| d2[i] != 0.0 || d3[i] != 0.0)
+                        .map(|i| {
+                            let unit: Vec<f64> = (0..axes.len()).map(|k| if k == i { 1.0 } else { 0.0 }).collect();
+                            (values(&zero, &unit)[k] - e).abs() * (axes[i].max_jerk - jerk * d1[i].abs()).max(0.0)
+                        })
+                        .sum();
+                    2.0 / 3.0 * cycle * (c.abs() * jerk + bent)
+                } else {
+                    0.0
+                };
+                let room = (1.0 - KEPT_BACK) * share * check.limit - cubics;
                 if !(e.abs() < room) {
                     return Err(CommandError { key: "error-path-rating" });
                 }
@@ -4607,7 +4647,7 @@ line,0.3,0.13",
         let length = to.iter().map(|v| v * v).sum::<f64>().sqrt();
         // From no turn, from a level pose to the rounding (as a previous piece ends at it), and from along the axis.
         for from in [vec![0.0; 6], vec![0.0, 0.0, 0.0, 1e-17, -2e-17, 0.0], vec![0.0, 0.0, 0.0, 0.03, 0.03, 0.04]] {
-            let piece = Geo::Slerp { from: from.clone(), to: to.to_vec(), length };
+            let piece = Geo::Slerp { from: from.clone(), to: to.to_vec(), length, at: 3 };
             for s in [0.0, 0.3 * length, length] {
                 let [pose, d1, d2] = piece.at(s);
                 for i in 3..6 {
@@ -4617,7 +4657,7 @@ line,0.3,0.13",
                 }
             }
         }
-        let turning = Geo::Slerp { from: vec![0.0, 0.0, 0.0, 0.3, 0.0, 0.0], to: to.to_vec(), length };
+        let turning = Geo::Slerp { from: vec![0.0, 0.0, 0.0, 0.3, 0.0, 0.0], to: to.to_vec(), length, at: 3 };
         assert!(turning.at(0.5 * length)[2][3..].iter().any(|v| v.abs() > 1e-3));
     }
 

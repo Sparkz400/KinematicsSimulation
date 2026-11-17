@@ -293,26 +293,63 @@ impl Default for MotionLaw {
 /// Of a move whose rotation vector runs straight from `from` by `delta` (rad, over its share s from 0 to 1): the most
 /// |w| per unit of ds/dt and the most |dw/ds| per unit of (ds/dt)^2 anywhere on it, w the flange's angular velocity
 /// (w = J(r) r', J the rotation vector's Jacobian, which is not 1 away from no turn: at r = (0, pi/2, 0) a rate of 1
-/// rad/s on rz alone spins it at 1.27 rad/s). So |w| <= g1 ds/dt and |dw/dt| <= g1 |d2s/dt2| + g2 (ds/dt)^2. From
-/// the turn between orientations 1e-6 apart, at 65 places along the move (the largest between them a rounding above).
+/// rad/s on rz alone spins it at 2 sqrt(2) / pi = 0.900 rad/s). So |w| <= g1 ds/dt and |dw/dt| <= g1 |d2s/dt2| + g2
+/// (ds/dt)^2. At 65 places along the move (the largest between them a rounding above), by `spin_at`.
 pub fn spin_rates(from: [f64; 3], delta: [f64; 3]) -> [f64; 2] {
+    let size = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let (mut g1, mut g2) = (0.0f64, 0.0f64);
+    for i in 0..=64 {
+        let [w, bend] = spin_at(from, delta, i as f64 / 64.0);
+        (g1, g2) = (g1.max(size(w)), g2.max(size(bend)));
+    }
+    [g1, g2]
+}
+
+/// At the share s of the move of `spin_rates`: w per unit of ds/dt and dw/ds per unit of (ds/dt)^2, as vectors, so that
+/// dw/dt = w d2s/dt2 + (dw/ds) (ds/dt)^2. From the turn between orientations 1e-6 apart, and its central differences
+/// over 1e-4.
+fn spin_at(from: [f64; 3], delta: [f64; 3], s: f64) -> [[f64; 3]; 2] {
     use crate::rigid::{exp, log, matmul, transpose};
     let at = |s: f64| -> [f64; 3] { std::array::from_fn(|i| from[i] + s * delta[i]) };
     let spin = |s: f64| -> [f64; 3] {
         let h = 1e-6;
         log(&matmul(&exp(at(s + h)), &transpose(&exp(at(s - h))))).map(|v| v / (2.0 * h))
     };
-    let size = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
-    let (mut g1, mut g2) = (0.0f64, 0.0f64);
-    for i in 0..=64 {
-        let (s, k) = (i as f64 / 64.0, 1e-4);
-        let (ahead, behind) = (spin(s + k), spin(s - k));
-        g1 = g1.max(size(spin(s)));
-        g2 = g2.max(size(std::array::from_fn(|i| (ahead[i] - behind[i]) / (2.0 * k))));
-    }
-    [g1, g2]
+    let k = 1e-4;
+    let (ahead, behind) = (spin(s + k), spin(s - k));
+    [spin(s), std::array::from_fn(|i| (ahead[i] - behind[i]) / (2.0 * k))]
 }
 
+/// `limits` (over a distance of 1) with the acceleration and the deceleration as high as |dw/dt| <= `most_a` allows
+/// over the profile itself. (most_a - g2 v_top^2) / g1 holds wherever (both parts at their most and in line); a profile
+/// has its most acceleration below its top speed, and the two parts of dw/dt (`spin_at`) point apart, so the room is
+/// raised, by halving up to the axes' own, while |w a + (dw/ds) v^2| at 1024 times of the profile stays within most_a
+/// less 1e-3 of it (for what falls between). The sum of the two peaks left mixed turns 0.92 to 0.94 of the limit.
+fn spun(limits: Limits, shape: Shape, from: [f64; 3], delta: [f64; 3], [g1, g2]: [f64; 2], most_a: f64) -> Limits {
+    let with = |room: f64| Limits { acc: limits.acc.min(room), dec: limits.dec.min(room), ..limits };
+    let fits = |room: f64| {
+        let profile = Profile::new(1.0, shape, with(room));
+        let (n, duration) = (1024, profile.duration());
+        (0..=n).all(|k| {
+            let (s, v, a, _) = profile.at(duration * k as f64 / n as f64);
+            let [w, bend] = spin_at(from, delta, s);
+            let rate: f64 = (0..3).map(|i| (w[i] * a + bend[i] * v * v).powi(2)).sum();
+            rate.sqrt() <= (1.0 - 1e-3) * most_a
+        })
+    };
+    let (mut low, mut high) = ((most_a - g2 * limits.vel * limits.vel) / g1, limits.acc.max(limits.dec));
+    if high <= low {
+        return limits;
+    }
+    if fits(high) {
+        return with(high);
+    }
+    for _ in 0..30 {
+        let mid = 0.5 * (low + high);
+        if fits(mid) { low = mid } else { high = mid }
+    }
+    with(low)
+}
 /// Seven-segment S-curve over a distance, from rest to rest:
 /// jerk up, constant acceleration, jerk down, cruise, and the mirror image.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -433,8 +470,8 @@ impl Move {
                 if g1 > 0.0 {
                     let by_curve = if g2 > 0.0 { (0.5 * most_a / g2).sqrt() } else { f64::INFINITY };
                     limits.vel = limits.vel.min(most_w / g1).min(by_curve);
-                    let room = (most_a - g2 * limits.vel * limits.vel) / g1;
-                    (limits.acc, limits.dec) = (limits.acc.min(room), limits.dec.min(room));
+                    let (from, by) = ([start[x], start[y], start[z]], [delta[x], delta[y], delta[z]]);
+                    limits = spun(limits, law.shape, from, by, [g1, g2], most_a);
                 }
             }
             Profile::new(1.0, law.shape, limits)
@@ -478,6 +515,61 @@ impl Move {
 mod tests {
     use super::*;
 
+    /// The flange's spin on moves timed by the axis limits (1.5 rad/s, 8 rad/s^2, 150 rad/s^3 on rx, ry, rz) with its own
+    /// limits of 1.5 rad/s and 8 rad/s^2, from the six-axis arm's home r = (0, pi/2, 0), measured on the setpoint once per
+    /// millisecond. 0.5 rad on rz alone: the rz limit binds, not the spin's: across the rotation vector the flange turns at
+    /// |J e_z| = sqrt((sin t / t)^2 + ((1 - cos t) / t)^2) = 2 sqrt(2) / pi = 0.9003 of its rate (t = pi/2), 1.3505 rad/s
+    /// at 1.5 rad/s on rz (0.9012 at the move's end, 1.3518), and the move takes as long without the spin's limits. Turns
+    /// on two and three axes, which the spin binds: within both limits and up to them (before 17 November the acceleration
+    /// reached 7.37 to 7.52 rad/s^2, the bound adding the peaks of its two parts).
+    #[test]
+    fn the_flanges_spin_on_a_move_uses_its_limits() {
+        use crate::rigid::{exp, log, matmul, transpose};
+        let axes: Vec<AxisInfo> = ["x", "y", "z", "rx", "ry", "rz"]
+            .iter()
+            .map(|id| AxisInfo {
+                id,
+                min: -10.0,
+                max: 10.0,
+                max_vel: 1.5,
+                max_acc: 8.0,
+                max_jerk: 150.0,
+                ..axis(1.0, 1.0)
+            })
+            .collect();
+        let start = [0.9, -0.3, 0.7, 0.0, std::f64::consts::FRAC_PI_2, 0.0];
+        for d in [[0.0, 0.0, 0.5], [0.5, 0.0, 0.5], [0.8, 0.6, 0.9], [1.0, 1.0, 1.0]] {
+            let target: Vec<f64> = (0..6).map(|i| start[i] + if i >= 3 { d[i - 3] } else { 0.0 }).collect();
+            let run = |spin| {
+                let m = Move::with_law(&start, &target, &axes, &MotionLaw { spin, ..Default::default() });
+                let (mut p, mut v, mut a) = (vec![0.0; 6], vec![0.0; 6], vec![0.0; 6]);
+                let (mut fastest, mut hardest, mut last) = (0.0f64, 0.0f64, None::<[f64; 3]>);
+                let (dt, h) = (1e-3, 1e-6);
+                for k in 0..=((m.duration() / dt) as usize + 1) {
+                    m.at(k as f64 * dt, &mut p, &mut v, &mut a);
+                    let turned = |by: f64| exp(std::array::from_fn(|i| p[i + 3] + by * v[i + 3]));
+                    let w = log(&matmul(&turned(h), &transpose(&turned(-h)))).map(|x| x / (2.0 * h));
+                    fastest = fastest.max(w.iter().map(|x| x * x).sum::<f64>().sqrt());
+                    if let Some(l) = last {
+                        hardest = hardest.max((0..3).map(|i| ((w[i] - l[i]) / dt).powi(2)).sum::<f64>().sqrt());
+                    }
+                    last = Some(w);
+                }
+                (m.duration(), fastest, hardest)
+            };
+            let ((time, fastest, hardest), (free, ..)) = (run(Some([1.5, 8.0])), run(None));
+            println!(
+                "turn {d:?}: {time:.4} s ({free:.4} s without), |w| {fastest:.4} rad/s, |dw/dt| {hardest:.4} rad/s^2"
+            );
+            assert!(fastest <= 1.5 * 1.001 && hardest <= 8.0 * 1.001, "{d:?}: {fastest} rad/s, {hardest} rad/s^2");
+            if d[0] == 0.0 {
+                assert_eq!(time, free, "the rz limit binds");
+                assert!(fastest > 1.5 * 2.0 * 2f64.sqrt() / std::f64::consts::PI && fastest < 1.3518, "{fastest}");
+            } else {
+                assert!(fastest > 0.995 * 1.5 && hardest > 0.995 * 8.0, "{d:?}: {fastest} rad/s, {hardest} rad/s^2");
+            }
+        }
+    }
     /// Profile limits: velocity, acceleration and jerk never exceed their limits,
     /// in every regime (cruise reached or not, acceleration limit reached or not).
     #[test]

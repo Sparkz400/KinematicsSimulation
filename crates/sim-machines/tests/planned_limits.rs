@@ -173,7 +173,13 @@ fn measure(sim: &Sim, points: &[(f64, Vec<f64>)]) -> Worst {
                 if !values[k].is_finite() {
                     continue;
                 }
-                let share = if pushed[k] != still[k] { reserve } else { limits.margin * (1.0 - SPEED_KEPT) };
+                let share = if check.signal.starts_with("plan.") {
+                    limits.margin
+                } else if pushed[k] != still[k] {
+                    reserve
+                } else {
+                    limits.margin * (1.0 - SPEED_KEPT)
+                };
                 worst.note("own checks", values[k].abs() / (share * check.limit), t, || {
                     format!("{} {:.4} of {:.4}", check.check, values[k], share * check.limit)
                 });
@@ -445,6 +451,41 @@ fn the_single_axis_keeps_its_limits_braking_through_a_lossy_gearbox() {
             if worst > 1.0 + SLACK {
                 failed.push(format!("{label}: {worst:.5}"));
             }
+        }
+    }
+    assert!(failed.is_empty(), "{failed:?}");
+}
+
+/// The palletiser in tool space (x, y, z, rz), from its start (1.2, -0.5, 1.3, 0): the two lines of the OPC UA path test
+/// (to the middle of the range, then to three quarters of it, turning rz 0.85 rad), loss-free, as shipped and with twenty
+/// times the jerk. The flange's angular acceleration is a limit of the plan itself (`plan.tool.angular_acceleration`),
+/// judged on the planned motion, so the plan uses its 10 rad/s^2 less what the controller's cubics between the plan's
+/// points add (2/3 of rz's jerk 100 rad/s^3 times the 1 ms cycle: 0.067 rad/s^2, so 9.931 at most; 9.933 by the
+/// differences), not the torque reserve's 0.8
+/// of it (8 rad/s^2 before 17 November): 1.434 s as shipped against 1.477 s then, and 1.517 s within the axis limits.
+/// With twenty times the jerk the flange's angular speed binds instead (2.4995 of 2.5 rad/s).
+#[test]
+fn the_palletiser_keeps_its_limits_and_uses_the_flanges_in_full() {
+    let entry = sim_machines::find("palletiser").unwrap();
+    let mut failed = Vec::new();
+    for (kind, cfg) in both(entry.config(), &machine_joint_kit::lossless_config(entry)) {
+        let sim = Sim::new(entry, &cfg).unwrap();
+        let axes = sim.machine.axes();
+        let point = |share: f64| axes.iter().map(|a| a.min + share * (a.max - a.min)).collect::<Vec<_>>();
+        let pieces = vec![Piece::Line(point(0.5)), Piece::Line(point(0.75))];
+        let label = format!("palletiser {kind}");
+        let (duration, worst) = run(&label, &sim, &pieces);
+        let points = sim.plan_path(&pieces, true).unwrap();
+        let flange = measure(&sim, &points)
+            .0
+            .iter()
+            .find(|w| w.0 == "own checks" && w.3.starts_with("tool-angular"))
+            .map(|w| w.1);
+        if worst > 1.0 + SLACK || !flange.is_some_and(|share| share > 0.985) {
+            failed.push(format!("{label}: {duration} s, worst {worst:.5}, flange's acceleration {flange:?}"));
+        }
+        if kind == "shipped" && duration > 1.44 {
+            failed.push(format!("{label}: {duration} s, 1.434 s expected"));
         }
     }
     assert!(failed.is_empty(), "{failed:?}");
