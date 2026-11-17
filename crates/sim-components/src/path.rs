@@ -2755,9 +2755,9 @@ struct Place {
     /// The highest speed at which the place holds every row and bend without acceleration.
     top: f64,
 }
-
-/// A motor's friction against the guides it drives at the speed w along the path, f(w) = c + sum level exp(-(w / speed)^2)
-/// + b w, a [level, speed] per guide (`Machine::rigid_friction`, `rigid_friction_rise`), and the speeds where f has its
+/// A motor's friction against the guides it drives at the speed w along the path,
+/// f(w) = c + sum level exp(-(w / speed)^2) + b w, a [level, speed] per guide (`Machine::rigid_friction`,
+/// `rigid_friction_rise`), and the speeds of its interior extremes, f'(w) = b - sum 2 level w / speed^2 exp(-(w / speed)^2) = 0.
 /// interior extremes, f'(w) = b - sum 2 level w / speed^2 exp(-(w / speed)^2) = 0.
 #[derive(Clone, Debug, Default)]
 struct Friction {
