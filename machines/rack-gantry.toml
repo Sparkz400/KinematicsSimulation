@@ -325,10 +325,12 @@ service_factor = 1.25
 
 # The bridge's yaw with effects.gantry_yaw [estimate]: the distance between its two X guides (the rack at the first);
 # its own inertia about a vertical axis through its centre (10 kg over 1.0 m, m L^2 / 12, and the drive unit of 2 kg at
-# 0.5 m); the stiffness of its joints on the X carriages against yawing, and its damping.
+# 0.5 m, and the Y belt's loop, two strands of 0.7 m symmetric about the centre, 2 mu L^3 / 12 = 0.0057 kg m2: the
+# loop's terms in vx psi' and vx vy psi cancel, see machines/dual-gantry.toml); the stiffness of its joints on the X
+# carriages against yawing, and its damping.
 [gantry]
 width_m = 1.0
-inertia_kgm2 = 1.33
+inertia_kgm2 = 1.339
 stiffness_nm_rad = 2.0e5
 damping_nm_s_rad = 50.0
 

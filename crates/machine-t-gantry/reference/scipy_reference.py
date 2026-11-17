@@ -89,8 +89,11 @@ def lugre(p, v, s, scale):
     return p["bristle_stiffness_n_m"] * s + p["bristle_damping_n_s_m"] * s_dot + p["viscous_n_s_m"] * v, s_dot
 
 
-def guide_friction(z, vx, vz, s_x, s_z, torque):
-    ax = ratio * (torque[0] + torque[1]) / r / (m_x + m_motors)
+def guide_friction(x, z, vx, vz, s_x, s_z, torque):
+    # The X acceleration the torques give the loss-free rigid machine, over its mass matrix with the belt's runs.
+    fx, fz = ratio * (torque[0] + torque[1]) / r, ratio * (torque[0] - torque[1]) / r
+    xx, xz = belt_mass(x, z)
+    ax = np.linalg.solve([[m_x + m_motors + xx, xz], [xz, m_z + m_motors]], [fx, fz])[0]
     side = m_z * ax
     tilt = 2 * side * (geo_["z_com_drop_m"] - z) / geo_["guide_spacing_m"]
     fx, fz = cfg["friction_x"], cfg["friction_z"]
@@ -129,7 +132,7 @@ def rhs(t, y, torque_at):
     length_rate = (vx + vz, -2 * vz, vz - vx)
     rest_rate = (r_mat * va, r_mat * (vb - va), -r_mat * vb)
     tension, feed = zip(*(section(length[i], rest[i], length_rate[i], rest_rate[i]) for i in range(3)))
-    ffx, dsx, ffz, dsz = guide_friction(z, vx, vz, s_x, s_z, torque)
+    ffx, dsx, ffz, dsz = guide_friction(x, z, vx, vz, s_x, s_z, torque)
     # Lagrange's equations over (x on the frame, z, frame sway q): M (ax, az, aq) = F.
     xx, xz = belt_mass(x, z)
     cross = mu * (4 * span + 2 * sz)

@@ -261,8 +261,8 @@ the file. The order of the motors in the file is the order of the motor signals 
 | | `lever_axis` | | an axis whose travel shortens the lever |
 | | `side_load` | | the guide also carries the overhang's inertia force m a; default false |
 | `axis` | `cable_chain` | | the axis drags a cable chain fixed at its 0 end (`effects.cable_chain`, values in `[cable_chain]`); default false |
-| `pulley` | `at_m` | | where the 3D view draws it, `[x, y, z]`, m; default at an end of the first axis; with `effects.belt_wrap` its place in the belt's plane (x, z) |
-| `pulley`, `idler` | `clockwise` | | with `effects.belt_wrap`: the belt runs round it clockwise, seen from the front (x right, z up) and followed along the routes in their order; default false |
+| `pulley` | `at_m` | | where the 3D view draws it, `[x, y, z]`, m; default at an end of the first axis; with `effects.belt_wrap` its place in the belt's plane (x, z; x, y where the belt lies flat, its sections changing with axes along x and along y and none along z) |
+| `pulley`, `idler` | `clockwise` | | with `effects.belt_wrap`: the belt runs round it clockwise, seen from the front (x right, z up), or from above (x right, y away) where the belt lies flat, and followed along the routes in their order; default false |
 | `section` | `route` | | the pulleys, idlers and bodies (a clamp on it) the section runs past, in order, for the 3D view; default its pulleys and the body it is clamped to |
 | `idler` | `speed` | required | belt speed past it per speed of each axis, m/s per m/s (`effects.idlers`) |
 | | `radius_m`, `inertia_kgm2`, `friction_nm` | required | its radius, inertia and bearing friction torque |
@@ -571,7 +571,7 @@ beyond, it breaks loose. With the same efficiency both ways it is the joint kit'
 
 **The belt's wrap** (`effects.belt_wrap`). With it the teeth in mesh at each driven pulley are wrap r / p (p the tooth
 pitch) in place of `ratings.belt_teeth_in_mesh`, in the tooth-jump law and the belt's tooth load. The wrap is worked out
-at the pose from the places of the wheels in the belt's plane (x and z of the 3D view): the pulley's `at_m`, and the
+at the pose from the places of the wheels in the belt's plane (x and z of the 3D view; x and y where the belt lies flat, as an H-bot's or a CoreXY's): the pulley's `at_m`, and the
 wheels before and after it along the belt, the last point but one of the route of the section that ends at the pulley
 and the second of the route of the section that starts there (an idler with its `at_m`, from its body where it rides on
 one; a body, a clamp on it, where the 3D view draws it; another pulley). Each wheel's `clockwise` says which way the

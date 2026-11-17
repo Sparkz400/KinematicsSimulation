@@ -897,9 +897,9 @@ pos = [900, 300]
 # The idlers the belt runs round (effects.idlers, values as the T-gantry's [idler]), with the belt speed past each per
 # speed of X and Y: the two carriage idlers on the clamp's side pass the belt that follows the clamp, at vy; the two on
 # the other side the runs coming back from the motors, at 2 vx + vy and 2 vx - vy; the one at the head's far end at
-# 2 vx. Drawn as the T-gantry's (the 3D view draws a belt in its x-z plane).
-# shortcut: the belt is drawn in the view's x-z plane while the head moves along its y; draw it flat once the view draws
-# belts in other planes.
+# 2 vx. The belt lies flat (its sections change with x and with y): the 3D view draws it in its x-y plane, seen from
+# above, the carriage idlers 0.032 m either side of the carriage along y, as the T-gantry's are along z, and the far
+# idler at the head's other end, 0.6 m back from the clamp (beyond Y's stroke).
 [[machine.idler]]
 id = "upper_left"
 speed = { y = 1 }
@@ -907,7 +907,7 @@ radius_m = 0.012
 inertia_kgm2 = 2.0e-6
 friction_nm = 0.002
 body = "carriage"
-at_m = [-0.042, -0.02, 0.032]
+at_m = [-0.042, 0.032, 0.0]
 clockwise = true
 pos = [1050, -80]
 
@@ -918,7 +918,7 @@ radius_m = 0.012
 inertia_kgm2 = 2.0e-6
 friction_nm = 0.002
 body = "carriage"
-at_m = [0.042, -0.02, 0.032]
+at_m = [0.042, 0.032, 0.0]
 clockwise = true
 pos = [1050, 0]
 
@@ -929,7 +929,7 @@ radius_m = 0.012
 inertia_kgm2 = 2.0e-6
 friction_nm = 0.002
 body = "carriage"
-at_m = [-0.042, -0.02, -0.032]
+at_m = [-0.042, -0.032, 0.0]
 clockwise = true
 pos = [1050, 80]
 
@@ -940,7 +940,7 @@ radius_m = 0.012
 inertia_kgm2 = 2.0e-6
 friction_nm = 0.002
 body = "carriage"
-at_m = [0.042, -0.02, -0.032]
+at_m = [0.042, -0.032, 0.0]
 clockwise = true
 pos = [1050, 160]
 
@@ -951,7 +951,7 @@ radius_m = 0.012
 inertia_kgm2 = 2.0e-6
 friction_nm = 0.002
 body = "head"
-at_m = [0.0, -0.02, -0.08]
+at_m = [0.0, -0.6, 0.0]
 pos = [1050, 300]
 
 # The free spans, from the clamp, with the belt's speed over ground per speed of X and Y along x and y of the 3D view,

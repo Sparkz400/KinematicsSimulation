@@ -756,10 +756,16 @@ impl TGantry {
         )
     }
 
-    /// The X acceleration that the motor torques would give a loss-free rigid machine: what the guide
-    /// loads are worked out with.
-    fn commanded_ax(&self, torque: &[f64]) -> f64 {
-        self.gearbox.ratio * (torque[0] + torque[1]) / self.r / (self.m_x() + self.m_motors())
+    /// The X acceleration that the motor torques would give a loss-free rigid machine at (x, z): what the guide
+    /// loads are worked out with. Over the rigid model's mass matrix (`rigid_solve` with no losses): the moved masses,
+    /// idlers, chain, rotors and pulleys, and the belt's runs with their coupling to Z.
+    fn commanded_ax(&self, x: f64, z: f64, torque: &[f64]) -> f64 {
+        let k = self.gearbox.ratio / self.r;
+        let (fx, fz) = (k * (torque[0] + torque[1]), k * (torque[0] - torque[1]));
+        let (xx, xz) = self.belt_mass(x, z);
+        let mx = self.m_x() + self.m_motors() + self.m_idlers[0] + self.chain.mass(x).0 + xx;
+        let mz = self.m_z() + self.m_motors() + self.m_idlers[1];
+        (fx * mz - xz * fz) / (mx * mz - xz * xz)
     }
 
     /// Guide friction forces and friction state rates: (fx, fz, dsx, dsz).
@@ -767,8 +773,8 @@ impl TGantry {
     /// The guide load uses the X acceleration that the motor torques would give a loss-free rigid
     /// machine. The true acceleration would make friction depend on itself, and its absolute value
     /// would turn every belt vibration into extra friction.
-    fn guide_friction(&self, z: f64, vx: f64, vz: f64, sx: f64, sz: f64, torque: &[f64]) -> (f64, f64, f64, f64) {
-        let (scale_x, scale_z) = self.load_scales(z, self.commanded_ax(torque));
+    fn guide_friction(&self, x: f64, z: f64, v: [f64; 2], sx: f64, sz: f64, torque: &[f64]) -> (f64, f64, f64, f64) {
+        let ([vx, vz], (scale_x, scale_z)) = (v, self.load_scales(z, self.commanded_ax(x, z, torque)));
         let (fx, dsx) = self.friction_x.eval(vx, sx, scale_x);
         let (fz, dsz) = self.friction_z.eval(vz, sz, scale_z);
         (fx, fz, dsx, dsz)
@@ -779,7 +785,7 @@ impl TGantry {
         let sec = self.sections(s);
         let fx_belt = sec[2].tension - sec[0].tension;
         let fz_belt = 2.0 * sec[1].tension - sec[0].tension - sec[2].tension;
-        let (ffx, ffz, dsx, dsz) = self.guide_friction(s[Z], s[V + X], s[V + Z], s[S], s[S + 1], torque);
+        let (ffx, ffz, dsx, dsz) = self.guide_friction(s[X], s[Z], [s[V + X], s[V + Z]], s[S], s[S + 1], torque);
         out[..V].copy_from_slice(&s[V..S]);
         let (vx, vz) = (s[V + X], s[V + Z]);
         let (idler_x, idler_z) = self.idler_friction(vx, vz);
@@ -874,7 +880,7 @@ impl TGantry {
         let (mx, mz) =
             (self.m_x() + pulleys + self.m_idlers[0] + chain_mass + belt_xx, self.m_z() + pulleys + self.m_idlers[1]);
         let (belt_x, belt_z) = self.belt_speed_terms(s[2], s[3]);
-        let (ffx, ffz, dsx, dsz) = self.guide_friction(s[1], s[2], s[3], s[4], s[5], torque);
+        let (ffx, ffz, dsx, dsz) = self.guide_friction(s[0], s[1], [s[2], s[3]], s[4], s[5], torque);
         // Idlers, chain, process and end stops; the growing chain takes m' vx^2 / 2 (see the elastic model).
         let (idler_x, idler_z) = self.idler_friction(s[2], s[3]);
         let [process_x, process_z] = self.process_force();
@@ -963,7 +969,7 @@ impl TGantry {
         let v = if self.elastic { V } else { 2 };
         let (z, vx, vz) = (s[Z], s[v + X], s[v + Z]);
         let (sx, sz) = if self.elastic { (s[S], s[S + 1]) } else { (s[4], s[5]) };
-        let (ffx, ffz, ..) = self.guide_friction(z, vx, vz, sx, sz, torque);
+        let (ffx, ffz, ..) = self.guide_friction(s[X], z, [vx, vz], sx, sz, torque);
         let (idler_x, idler_z) = self.idler_friction(vx, vz);
         let drag = self.chain_drag(vx);
         let [process_x, process_z] = self.process_force();
@@ -1041,8 +1047,10 @@ impl TGantry {
         let v = if self.elastic { V } else { 2 };
         let (z, vx, vz) = (s[Z], s[v + X], s[v + Z]);
         let (sx, sz) = if self.elastic { (s[S], s[S + 1]) } else { (s[4], s[5]) };
-        let (scales, (ffx, ffz, ..)) =
-            (self.load_scales(z, self.commanded_ax(torque)), self.guide_friction(z, vx, vz, sx, sz, torque));
+        let (scales, (ffx, ffz, ..)) = (
+            self.load_scales(z, self.commanded_ax(s[X], z, torque)),
+            self.guide_friction(s[X], z, [vx, vz], sx, sz, torque),
+        );
         let (idler_x, idler_z) = self.idler_friction(vx, vz);
         let drag = self.chain_drag(vx);
         let (chain_mass, chain_growth) = self.chain.mass(s[X]);
@@ -1635,7 +1643,7 @@ impl Machine for TGantry {
     /// outputs, positive where they turn the pulley forwards: in the elastic model what the gear's spring
     /// passes on to the pulley, in the rigid one what its solver works out.
     fn base_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
-        let (load_x, load_z) = self.guide_loads(s[Z], self.commanded_ax(torque));
+        let (load_x, load_z) = self.guide_loads(s[Z], self.commanded_ax(s[X], s[Z], torque));
         if !self.elastic {
             let [_, _, ffx, ffz, _, _, gear_a, gear_b, ..] = self.rigid_solve(s, torque);
             out.extend([self.belt.pretension; 3]);
@@ -1647,7 +1655,7 @@ impl Machine for TGantry {
             return;
         }
         let sec = self.sections(s);
-        let (ffx, ffz, ..) = self.guide_friction(s[Z], s[V + X], s[V + Z], s[S], s[S + 1], torque);
+        let (ffx, ffz, ..) = self.guide_friction(s[X], s[Z], [s[V + X], s[V + Z]], s[S], s[S + 1], torque);
         let (a, b) = (s[A], s[A + 1]);
         out.extend(sec.iter().map(|f| f.tension));
         out.extend([

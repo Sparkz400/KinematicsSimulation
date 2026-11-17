@@ -431,9 +431,13 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 /// `v` turned by `angle` about the unit axis `u` (Rodrigues): v cos + (u x v) sin + u (u . v) (1 - cos).
 fn rotate(u: [f64; 3], angle: f64, v: [f64; 3]) -> [f64; 3] {
     let (s, c) = angle.sin_cos();
-    let cross = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    let cross = cross(u, v);
     let along = dot(&u, &v) * (1.0 - c);
     [0, 1, 2].map(|k| v[k] * c + cross[k] * s + u[k] * along)
+}
+
+fn cross(u: [f64; 3], v: [f64; 3]) -> [f64; 3] {
+    [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
 }
 
 /// The eigenvalues and eigenvectors (columns) of a symmetric matrix, by cyclic Jacobi rotations.
@@ -590,6 +594,14 @@ impl ConfigMachine {
             let free = ShaftFriction::NONE;
             let mut joint = RotaryJoint::with(own, free, HardStop { stiffness: 0.0, damping: 0.0 }, (0.0, stroke))?;
             let ratio = joint.ratio();
+            // What the screw or rack moves at least: the bodies on its axis without their payload, shared with the
+            // other drives of that axis (a gantry's). The mesh friction's bristle is capped by the lighter of it and the
+            // rotor (`Converter::apply_to`); with no body on it, the rotor's alone.
+            let on_axis: f64 = net.bodies.iter().filter(|b| b.axes.get(axis) == Some(&true)).map(|b| b.mass).sum();
+            let output = match on_axis / net.motors.iter().filter(|o| o.axis == Some(axis)).count() as f64 {
+                x if x > 0.0 => x,
+                _ => f64::INFINITY,
+            };
             let (kind, lever) = match &d.transmission {
                 Transmission::Screw { values } => {
                     let screw = BallScrew::from_config(&values_config(own, cfg, "screw", values)?)
@@ -600,7 +612,7 @@ impl ConfigMachine {
                             net.axes[axis].id
                         )));
                     }
-                    screw.converter(screw.softest_position()).apply(own, &mut joint)?;
+                    screw.converter(screw.softest_position()).apply_to(own, &mut joint, output)?;
                     // The nut's preload drags as friction at the screw, at the rotor through the gearbox.
                     if guide_friction {
                         joint.shaft.coulomb += screw.preload_torque() / ratio;
@@ -611,7 +623,7 @@ impl ConfigMachine {
                 Transmission::Rack { values } => {
                     let rack = RackPinion::from_config(&values_config(own, cfg, "rack", values)?)
                         .map_err(|e| renamed(e, "rack", values))?;
-                    rack.converter().apply(own, &mut joint)?;
+                    rack.converter().apply_to(own, &mut joint, output)?;
                     let lever = rack.radius();
                     (DirectKind::Rack(rack), Some(lever))
                 }
@@ -1250,20 +1262,43 @@ impl ConfigMachine {
         }
         v
     }
-    /// d body_point / d q_i, per coordinate, by central differences (the place is smooth and cheap to work out).
+    /// d body_point / d q_i, per coordinate, exactly: an axis's direction, the yaw's lever and the yaw on the lever's
+    /// axis, and for rotary r the outer rotaries turning turn_r x (r and the inner ones turning the offset).
     fn body_jacobian(&self, b: &Body, q: &[f64]) -> Vec<[f64; 3]> {
-        let h = 1e-6;
-        let mut at = q.to_vec();
-        (0..self.n())
-            .map(|i| {
-                at[i] = q[i] + h;
-                let ahead = self.body_point(b, &at);
-                at[i] = q[i] - h;
-                let behind = self.body_point(b, &at);
-                at[i] = q[i];
-                [0, 1, 2].map(|k| (ahead[k] - behind[k]) / (2.0 * h))
-            })
-            .collect()
+        let mut out: Vec<[f64; 3]> = (0..self.n()).map(|i| if b.axes[i] { self.dirs[i] } else { [0.0; 3] }).collect();
+        let mut add = |i: usize, dir: [f64; 3], t: f64| (0..3).for_each(|k| out[i][k] += dir[k] * t);
+        if let Some(g) = self.gantry.as_ref().filter(|g| b.axes[g.axis]) {
+            let across = g.across.filter(|&a| b.axes[a]);
+            add(g.coord, self.dirs[g.axis], across.map_or(0.0, |a| q[a] + g.shift));
+            if let Some(a) = across {
+                add(a, self.dirs[g.axis], q[g.coord]);
+            }
+        }
+        for (p, &r) in b.rotaries.iter().enumerate() {
+            let inner = self.turned_by(&b.rotaries[p..], q, b.offset);
+            add(r, self.turned_by(&b.rotaries[..p], q, cross(self.turn[r], inner)), 1.0);
+        }
+        out
+    }
+    /// The second derivative of body_point along the speeds v (dJ/dt v), exactly: 2 v_across v_yaw along the bridge's
+    /// axis, and through each rotary R (speed w about u) of what it turns, x'' -> R x'' + 2 w u x (R x') + w^2 u x (u x R x).
+    fn body_curve(&self, b: &Body, q: &[f64], v: &[f64]) -> [f64; 3] {
+        let (mut x, mut d1, mut d2) = (b.offset, [0.0; 3], [0.0; 3]);
+        for &r in b.rotaries.iter().rev() {
+            let (u, w) = (self.turn[r], v[r]);
+            let (y, y1) = (rotate(u, q[r], x), rotate(u, q[r], d1));
+            let (uy, uy1, uuy) = (cross(u, y), cross(u, y1), cross(u, cross(u, y)));
+            d2 = rotate(u, q[r], d2);
+            (0..3).for_each(|k| d2[k] += 2.0 * w * uy1[k] + w * w * uuy[k]);
+            d1 = [0, 1, 2].map(|k| y1[k] + w * uy[k]);
+            x = y;
+        }
+        if let Some(g) = self.gantry.as_ref().filter(|g| b.axes[g.axis])
+            && let Some(a) = g.across.filter(|&a| b.axes[a])
+        {
+            (0..3).for_each(|k| d2[k] += 2.0 * v[a] * v[g.coord] * self.dirs[g.axis][k]);
+        }
+        d2
     }
     /// The bodies whose place is not a sum of the axes' travels, as m J^T J at q (J = `body_jacobian`).
     fn general_mass(&self, q: &[f64], out: &mut [Vec<f64>]) {
@@ -1277,21 +1312,12 @@ impl ConfigMachine {
         }
     }
     /// What the speeds v ask of those bodies beside their mass matrix, as forces on the coordinates:
-    /// -m J^T (dJ/dt v), the centripetal and Coriolis forces, with dJ/dt v the second derivative of the body's place
-    /// along v (by differences over 0.1 mm of travel). With the mass matrix m J^T J these are Lagrange's equations, so
-    /// the energy keeps.
+    /// -m J^T (dJ/dt v), the centripetal and Coriolis forces (`body_curve`). With the mass matrix m J^T J these are
+    /// Lagrange's equations, so the energy keeps.
     fn inertial(&self, q: &[f64], v: &[f64]) -> Vec<f64> {
         let mut out = vec![0.0; self.n()];
-        let speed = v.iter().map(|x| x * x).sum::<f64>().sqrt();
-        if speed == 0.0 {
-            return out;
-        }
-        let h = 1e-4 / speed;
-        let shifted = |t: f64| -> Vec<f64> { q.iter().zip(v).map(|(q, v)| q + t * v).collect() };
-        let (ahead, behind) = (shifted(h), shifted(-h));
         for b in self.bodies.iter().filter(|b| b.general) {
-            let (p, a, z) = (self.body_point(b, q), self.body_point(b, &ahead), self.body_point(b, &behind));
-            let curve = [0, 1, 2].map(|k| (a[k] - 2.0 * p[k] + z[k]) / (h * h));
+            let curve = self.body_curve(b, q, v);
             let (j, m) = (self.body_jacobian(b, q), self.body_mass(b));
             for (i, f) in out.iter_mut().enumerate() {
                 *f -= m * (0..3).map(|k| j[i][k] * curve[k]).sum::<f64>();
@@ -1527,18 +1553,12 @@ impl ConfigMachine {
 
     /// The acceleration of each axis that the motor torques would give a loss-free rigid machine: what an overhang's
     /// tilt on a guide is worked out with. The true acceleration would make friction depend on itself, and its absolute
-    /// value would turn every belt vibration into extra friction. Bodies, pulleys and rotors only, as the crates take it:
-    /// chains, idlers and the belt's runs beyond its lumps on the pulleys (`runs_mass`) change it by a few per mille to
-    /// a few per cent.
+    /// value would turn every belt vibration into extra friction. Over the rigid model's whole mass matrix
+    /// (`rigid_mass`: bodies, chains, idlers, pulleys, rotors and the belt's runs).
     fn commanded_acc(&self, q: &[f64], torque: &[f64]) -> Vec<f64> {
         let forces: Vec<f64> =
             (0..self.n()).map(|i| (0..self.m()).map(|kk| self.ratio[kk] * self.k[kk][i] * torque[kk]).sum()).collect();
-        let mut mass = self.drive_mass();
-        for (i, m) in self.mass().into_iter().enumerate() {
-            mass[i][i] += m;
-        }
-        self.general_mass(q, &mut mass);
-        solve(mass, forces).unwrap_or_else(|| vec![0.0; self.n()])
+        solve(self.rigid_mass(q), forces).unwrap_or_else(|| vec![0.0; self.n()])
     }
 
     /// The load on a guide: the weight across its axis of what it carries, and with an overhang the tilt
@@ -2440,8 +2460,25 @@ impl ConfigMachine {
             None => at,
         }
     }
-    /// A waypoint of a belt as a wheel in the belt's plane (x, z), its radius signed by the sense the belt runs round
-    /// it, and where the 3D view puts it at the pose `q`.
+    /// The belt's plane in the 3D view, as (its second coordinate, the depth): x-z seen from the front, or x-y seen from
+    /// above where the belt lies flat, a section's length changing with axes along x and along y and none along z (an
+    /// H-bot's, a CoreXY's).
+    fn belt_plane(&self) -> (usize, usize) {
+        let flat = self.sections.iter().any(|s| {
+            let along = |k: usize| (0..self.n()).any(|i| s.c[i] != 0.0 && self.dirs[i][k].abs() > 1e-9);
+            along(0) && along(1) && !along(2)
+        });
+        if flat { (1, 2) } else { (2, 1) }
+    }
+    /// A point of the belt's plane (`belt_plane`) at the depth `depth`, in the 3D view.
+    fn in_view(&self, p: [f64; 2], depth: f64) -> [f64; 3] {
+        let (second, deep) = self.belt_plane();
+        let mut out = [p[0]; 3];
+        (out[second], out[deep]) = (p[1], depth);
+        out
+    }
+    /// A waypoint of a belt as a wheel in the belt's plane (`belt_plane`), its radius signed by the sense the belt runs
+    /// round it, and where the 3D view puts it at the pose `q`.
     fn wheel(&self, w: Waypoint, q: &[f64]) -> (Wheel, [f64; 3]) {
         let sense = |clockwise: bool| if clockwise { -1.0 } else { 1.0 };
         let (at, radius) = match w {
@@ -2452,16 +2489,16 @@ impl ConfigMachine {
             }
             Waypoint::Body(b) => (self.scene_at(q, &self.bodies[b].axes), 0.0),
         };
-        (Wheel { centre: [at[0], at[2]], radius }, at)
+        (Wheel { centre: [at[0], at[self.belt_plane().0]], radius }, at)
     }
 
     /// The belt of section `s` as the 3D view draws it, a polyline in scene coordinates: its straight runs from tangent
     /// to tangent between the wheels of its route (`geometry::contacts`), round each wheel inside the route in the
-    /// wheel's sense (`geometry::arc`). Each point keeps the depth (y) of its wheel.
+    /// wheel's sense (`geometry::arc`). Each point keeps the depth of its wheel off the belt's plane.
     fn belt_line(&self, s: usize, q: &[f64]) -> Vec<[f64; 3]> {
         let route = self.route_waypoints(s);
         let wheels: Vec<(Wheel, [f64; 3])> = route.iter().map(|&w| self.wheel(w, q)).collect();
-        let at = |p: [f64; 2], y: f64| [p[0], y, p[1]];
+        let deep = self.belt_plane().1;
         let mut line = Vec::new();
         for (i, pair) in wheels.windows(2).enumerate() {
             let [(a, pa), (b, pb)] = [pair[0], pair[1]];
@@ -2469,11 +2506,11 @@ impl ConfigMachine {
             if i > 0 {
                 // Round wheel a from where the run before met it.
                 let came = contacts(wheels[i - 1].0, a)[1];
-                line.extend(arc(a, came, leave, ARC_PIECES).into_iter().skip(1).map(|p| at(p, pa[1])));
+                line.extend(arc(a, came, leave, ARC_PIECES).into_iter().skip(1).map(|p| self.in_view(p, pa[deep])));
             } else {
-                line.push(at(leave, pa[1]));
+                line.push(self.in_view(leave, pa[deep]));
             }
-            line.push(at(meet, pb[1]));
+            line.push(self.in_view(meet, pb[deep]));
         }
         line
     }
@@ -2493,7 +2530,8 @@ impl ConfigMachine {
                 let (before, after) = (*routes[section].iter().rev().nth(1)?, *routes[next].get(1)?);
                 let ((wheel, at), from, to) = (self.wheel(me, q), self.wheel(before, q).0, self.wheel(after, q).0);
                 let points = arc(wheel, contacts(from, wheel)[1], contacts(wheel, to)[0], ARC_PIECES);
-                Some((section, points.into_iter().map(|p| [p[0], at[1], p[1]]).collect()))
+                let deep = self.belt_plane().1;
+                Some((section, points.into_iter().map(|p| self.in_view(p, at[deep])).collect()))
             })
             .collect()
     }
@@ -2919,7 +2957,7 @@ impl Machine for ConfigMachine {
     }
 
     /// With effects.belt_wrap: per motor the wrap at its pulley (`geometry::wrap`), from where the 3D view puts it and
-    /// the wheels before and after it along the belt (`wrap_neighbours`) at this pose, in the belt's plane (x, z); NaN
+    /// the wheels before and after it along the belt (`wrap_neighbours`) at this pose, in the belt's plane (elt_plane); NaN
     /// for a motor that drives no belt (a screw, rack, linear motor or rotary).
     fn belt_wraps(&self, tool_pose: &[f64]) -> Vec<f64> {
         if self.wraps.is_empty() {

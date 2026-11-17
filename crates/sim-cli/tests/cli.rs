@@ -1928,10 +1928,12 @@ fn report_lists_every_verdict_and_the_source_of_each_input() {
 }
 
 /// `modes` writes the reported modes over an axis's stroke for every machine (a header alone after "position" where the
-/// machine reports none). The belt axis's carriage, m = 6 kg on k = EA / L1 + EA / L2 with EA = 5e5 N:
-/// at x = 0, L = 0.15 m and 2.45 m, k = 3.537415e6 N/m, sqrt(k / m) / (2 pi) = 122.2046 Hz; at x = 0.5 m, 65.8025 Hz;
-/// at x = 1 m, L = 1.15 m and 1.45 m, k = 7.796102e5 N/m, 57.3698 Hz. Damping ratio 200 N s/m / (2 m w): 0.021706,
-/// 0.040311, 0.046237.
+/// machine reports none). The single belt axis's carriage, m = 6 kg on k = EA / l1 + EA / l2 with EA = 5e5 N, l the
+/// unstretched belt of each section under the 300 N pretension, l = L / (1 + 300 / 5e5) (as the machine's own
+/// `the_carriage_mode_is_the_hand_calculated_one_at_two_places`): at x = 0, L = 0.15 m and 2.45 m, k = 3.539537e6 N/m,
+/// sqrt(k / m) / (2 pi) = 122.2412 Hz; at x = 0.5 m, k = 1.026256e6 N/m, 65.8222 Hz; at x = 1 m, L = 1.15 m and 1.45 m,
+/// k = 7.800780e5 N/m, 57.3870 Hz. Damping ratio 200 N s/m / (2 m w): 0.021700, 0.040299, 0.046223. (EA / L of the
+/// stretched length gave 122.2046, 65.8025 and 57.3698 Hz.)
 #[test]
 fn modes_write_the_resonances_over_the_stroke() {
     for entry in MACHINES {
@@ -1944,10 +1946,11 @@ fn modes_write_the_resonances_over_the_stroke() {
     let rows: Vec<Vec<f64>> =
         text(&out.stdout).lines().skip(1).map(|l| l.split(',').map(|v| v.parse().unwrap()).collect()).collect();
     for (row, by_hand) in
-        rows.iter().zip([[0.0, 122.2046, 0.021706], [0.5, 65.8025, 0.040311], [1.0, 57.3698, 0.046237]])
+        rows.iter().zip([[0.0, 122.2412, 0.021700], [0.5, 65.8222, 0.040299], [1.0, 57.3870, 0.046223]])
     {
+        // To the table's rounding: 4 decimals in Hz, 5 in the damping ratio.
         assert!(
-            row.iter().zip(by_hand).all(|(a, b)| (a - b).abs() < 1e-3 * b.max(0.01)),
+            row.iter().zip(by_hand).zip([1e-6, 1e-4, 1e-5]).all(|((a, b), tol)| (a - b).abs() <= tol),
             "{row:?} against {by_hand:?} by hand"
         );
     }
