@@ -91,7 +91,7 @@ pub fn load_text(toml_text: &str, id: &str) -> Result<&'static MachineEntry, Con
 }
 
 /// A JSON machine file as the TOML text of the same config.
-fn json_to_toml(text: &str) -> Result<String, ConfigError> {
+pub fn json_to_toml(text: &str) -> Result<String, ConfigError> {
     let mut value: serde_json::Value =
         serde_json::from_str(text).map_err(|e| ConfigError::Parse(format!("line {}: {e}", e.line())))?;
     // JSON has one kind of number: a version written 1.0 is the version 1 the JSON Schema accepts.
