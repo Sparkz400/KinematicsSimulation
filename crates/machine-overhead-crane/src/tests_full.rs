@@ -188,6 +188,27 @@ fn a_pick_with_elastic_drives_leaves_the_gearbox_at_its_new_twist() {
     assert!(out.iter().all(|a| a.abs() < 1e-6), "{out:?}");
 }
 
+/// A pick on a hook block caught swinging: the sling continues the rope's line and turns with it, the payload at
+/// P1 + l_s u moving with the line's turn, (v_P1 - v_S)(1 + l_s / L) across the rope.
+#[test]
+fn a_pick_on_a_swinging_hook_block_hangs_the_sling_in_the_rope_s_line() {
+    let mut m = crane(&lossless(&["effects.hook_block = true"]));
+    m.attached = false;
+    let (mut s, _) = at_rest(&m, [5.0, 2.0, 2.0]);
+    swing(&m, &mut s, 0.3, -0.2);
+    (s[LOAD_SPEED], s[LOAD_SPEED + 1]) = (0.2, 0.1);
+    m.set_payload_attached(true);
+    m.after_step(&mut s, DT);
+    let (rope, (low, low_v)) = (m.rope(&s), m.lower(&s));
+    let (p1, v1) = ([s[LOAD], s[LOAD + 1], s[LOAD + 2]], [s[LOAD_SPEED], s[LOAD_SPEED + 1], s[LOAD_SPEED + 2]]);
+    let k = 1.0 + m.sling.unwrap() / rope.length;
+    for i in 0..3 {
+        assert!((low[i] - p1[i] - m.sling.unwrap() * rope.u[i]).abs() < 1e-12, "{low:?}");
+        let across = |v: V3| v[i] - rope.u[i] * dot(rope.u, v);
+        assert!((across(low_v) - k * across(v1)).abs() < 1e-12, "{low_v:?} {v1:?}");
+    }
+}
+
 fn crane(cfg: &Config) -> Crane {
     Crane::new(cfg).unwrap()
 }

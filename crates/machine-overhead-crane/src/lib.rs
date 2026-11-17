@@ -1041,8 +1041,19 @@ impl Machine for Crane {
         let factor = self.rest_stretch(s[2]);
         self.place_on_rope(s, s[2] * factor, factor);
         if let Some(a0) = self.layout.sling {
-            // The payload went on or off: the sling hangs down again.
+            // The payload went on: the sling continues the rope's line and turns with it, so a hook block caught swinging
+            // takes the payload into the pendulum's own (lower) mode instead of whipping it across the rope. Off: nothing
+            // hangs on the sling, its angles rest.
             s[a0..a0 + 4].fill(0.0);
+            if self.payload_mass() > 0.0 {
+                let rope = self.rope(s);
+                let (u, vs) = (rope.u, self.sheave_speed(s));
+                let rel = [s[LOAD_SPEED] - vs[0], s[LOAD_SPEED + 1] - vs[1], s[LOAD_SPEED + 2] - vs[2]];
+                let turn = sub(rel, u.map(|c| c * dot(u, rel))).map(|c| c / rope.length);
+                let (a, b) = (u[0].atan2(-u[2]), u[1].clamp(-1.0, 1.0).asin());
+                let [_, ea, eb, ..] = full::sling_dir(a, b);
+                s[a0..a0 + 4].copy_from_slice(&[a, b, dot(ea, turn) / dot(ea, ea), dot(eb, turn)]);
+            }
         }
         self.pick_loss += (before - self.energy(s)) / dt;
     }
