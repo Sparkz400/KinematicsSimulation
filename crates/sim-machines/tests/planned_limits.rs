@@ -460,9 +460,9 @@ fn the_single_axis_keeps_its_limits_braking_through_a_lossy_gearbox() {
 /// (to the middle of the range, then to three quarters of it, turning rz 0.85 rad), loss-free, as shipped and with twenty
 /// times the jerk. The flange's angular acceleration is a limit of the plan itself (`plan.tool.angular_acceleration`),
 /// judged on the planned motion, so the plan uses its 10 rad/s^2 less what the controller's cubics between the plan's
-/// points add (2/3 of rz's jerk 100 rad/s^3 times the 1 ms cycle: 0.067 rad/s^2, so 9.931 at most; 9.933 by the
-/// differences), not the torque reserve's 0.8
-/// of it (8 rad/s^2 before 17 November): 1.434 s as shipped against 1.477 s then, and 1.517 s within the axis limits.
+/// points add (the shipped C2 spline's 0.0851 of rz's jerk 100 rad/s^3 times the 1 ms cycle: 0.0085 rad/s^2, so
+/// 9.9915 at most; 9.9897 by the differences; the Hermite cubic's 2/3 gave 9.933 and 1.434 s), not the torque reserve's
+/// 0.8 of it (8 rad/s^2 before 17 November): 1.433 s as shipped against 1.477 s then, and 1.517 s within the axis limits.
 /// With twenty times the jerk the flange's angular speed binds instead (2.4995 of 2.5 rad/s).
 #[test]
 fn the_palletiser_keeps_its_limits_and_uses_the_flanges_in_full() {
