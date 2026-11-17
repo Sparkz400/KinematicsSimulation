@@ -205,7 +205,7 @@ fn screw_tables(cfg: &Config) -> Vec<String> {
 pub const GUIDE_CARRIAGES: f64 = 4.0;
 
 /// The tables a machine's guide friction is in, with its sliding and breakaway levels, of which `apply_guides` takes the
-/// first the config has: a gantry's or single axis's X guide (LuGre), each carriage's guide of a linear delta, a slide.
+/// first the config has: a gantry's or one-axis machine's X guide (LuGre), each carriage's guide of a linear delta, a slide.
 const GUIDE_FRICTION: [(&str, [&str; 2]); 3] = [
     ("friction_x", ["coulomb_n", "stiction_n"]),
     ("friction", ["coulomb_n", "stiction_n"]),
