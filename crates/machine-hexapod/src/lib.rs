@@ -38,7 +38,7 @@
 //! adds m A^T A + I_t A_u^T A_u to M_xi and m A^T (a0 + g e_z) + I_t A_u^T u'' to c + g (d'Alembert; I_t about the
 //! centre across the leg, whose turn is u x u'). The platform's mass and inertia are the platform's alone, the payload
 //! is a point mass at the platform centre with the inertia `mass.payload_inertia_kgm2` (x, y, z, about the centre,
-//! in the platform frame; absent 0) that turns with the platform. The legs' rotors spin along their legs; each part's
+//! in the platform frame) that turns with the platform. The legs' rotors spin along their legs; each part's
 //! spin about the leg's axis is free between the two joints and nothing excites it.
 
 use sim_components::chain::{
@@ -403,12 +403,8 @@ impl Hexapod {
         }
         let leg_mass = cfg.non_negative("leg.mass_kg")?;
         let part = |key: &str, on_platform: bool, mass: f64| -> Result<LegPart, ConfigError> {
-            let get = |what: &str| cfg.f64(&format!("leg.{key}_{what}")).or_else(|_| Ok::<f64, ConfigError>(0.0));
-            let (centre, inertia) = (get("centre_m")?, get("inertia_kgm2")?);
-            if !(centre >= 0.0 && inertia >= 0.0) {
-                return Err(ConfigError::Invalid(format!("leg.{key}_centre_m")));
-            }
-            Ok(LegPart { mass, centre, inertia, on_platform })
+            let get = |what: &str| cfg.non_negative(&format!("leg.{key}_{what}"));
+            Ok(LegPart { mass, centre: get("centre_m")?, inertia: get("inertia_kgm2")?, on_platform })
         };
         let parts =
             [part("base_part", false, (1.0 - share) * leg_mass)?, part("platform_part", true, share * leg_mass)?];
@@ -417,15 +413,13 @@ impl Hexapod {
             return Err(ConfigError::Invalid("mass.platform_inertia_kgm2".into()));
         }
         let inertia: M3 = std::array::from_fn(|i| std::array::from_fn(|j| if i == j { diag[i] } else { 0.0 }));
-        let payload_inertia: M3 = match cfg.f64s("mass.payload_inertia_kgm2") {
-            Ok(d) if d.len() == 3 && d.iter().all(|v| *v >= 0.0) && cfg.bool("effects.payload")? => {
-                std::array::from_fn(|i| std::array::from_fn(|j| if i == j { d[i] } else { 0.0 }))
-            }
-            Ok(d) if d.len() != 3 || d.iter().any(|v| !(*v >= 0.0)) => {
-                return Err(ConfigError::Invalid("mass.payload_inertia_kgm2".into()));
-            }
-            _ => [[0.0; 3]; 3],
-        };
+        let d = cfg.f64s("mass.payload_inertia_kgm2")?;
+        if d.len() != 3 || d.iter().any(|v| !(*v >= 0.0)) {
+            return Err(ConfigError::Invalid("mass.payload_inertia_kgm2".into()));
+        }
+        let on = cfg.bool("effects.payload")?;
+        let payload_inertia: M3 =
+            std::array::from_fn(|i| std::array::from_fn(|j| if i == j && on { d[i] } else { 0.0 }));
         let screw = BallScrew::from_config(cfg)?;
         if screw.length < geo.stroke {
             return Err(ConfigError::Invalid("screw.length_m".into()));

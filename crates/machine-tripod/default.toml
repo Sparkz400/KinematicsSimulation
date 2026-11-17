@@ -195,8 +195,8 @@ platform_radius_m = 0.2
 # parts (rod, nut) and its body with the motor weigh mass_kg together, of which platform_share is the rod part on the
 # platform joint; the rest is the body part on the base joint. Each part is a body of its own, swinging with the leg: its
 # centre's distance from its joint along the leg (*_part_centre_m) and its inertia about its centre across the leg
-# (*_part_inertia_kgm2, a bar: m l^2 / 12). [estimate] The rod part a bar of 0.35 m (centre 0.17 m), the body part with
-# the motor 0.5 m long from 0.15 m behind the base joint (centre 0.1 m).
+# (*_part_inertia_kgm2, a bar: m l^2 / 12). [estimate] The rod part a bar of 0.35 m (centre 0.175 m), the body part
+# with the motor 0.5 m long from 0.15 m behind the base joint (centre 0.1 m).
 [leg]
 closed_length_m = 0.45
 stroke_m = 0.2
@@ -209,7 +209,7 @@ mass_kg = 3.0
 platform_share = 0.3
 base_part_centre_m = 0.1
 base_part_inertia_kgm2 = 0.044
-platform_part_centre_m = 0.17
+platform_part_centre_m = 0.175
 platform_part_inertia_kgm2 = 0.0092
 max_force_n = 1500.0
 
@@ -503,6 +503,10 @@ ratings.drive_max_current_time_s = [0.1, 1.0]
 mass.platform_kg = [16.0, 24.0]
 leg.mass_kg = [2.5, 4.0]
 leg.platform_share = [0.2, 0.4]
+leg.base_part_centre_m = [0.05, 0.15]
+leg.base_part_inertia_kgm2 = [0.03, 0.065]
+leg.platform_part_centre_m = [0.12, 0.22]
+leg.platform_part_inertia_kgm2 = [0.006, 0.014]
 leg.friction_coulomb_n = [8.0, 30.0]
 leg.friction_viscous_n_s_m = [20.0, 80.0]
 leg.max_force_n = [1200.0, 2000.0]

@@ -82,6 +82,19 @@ fn the_legs_carry_the_hand_calculated_static_forces() {
     assert!((lift - 62.2 * 9.80665).abs() < 1e-9 && f.iter().any(|v| (v - f[0]).abs() > 1.0));
 }
 
+/// The same hold with the shipped legs' parts, by virtual work: the platform rising dz turns each leg's u_z = h / L by
+/// s dz / L (s = 1 - u_z^2 = 0.2302956, L = 0.5471158 m), so the rod part (1.2 kg, centre 0.175 m below its joint)
+/// rises by (1 - 0.175 s / L) dz and the body part (2.8 kg, centre 0.1 m above the base joint) by 0.1 s / L dz:
+/// f u_z = g (55 kg / 6 + 1.2 (1 - 0.0736622) + 2.8 x 0.0420927) = g 10.3965 kg, f = 116.2065 N (0.28 % above the
+/// point legs' 115.8772 N).
+#[test]
+fn the_legs_parts_add_their_hand_calculated_weight_to_the_hold() {
+    let f = mechanism(&ENTRY.config()).static_leg_forces(&[0.0, 0.0, 0.48, 0.0, 0.0, 0.0]).unwrap();
+    for v in f {
+        assert!((v - 116.2065).abs() < 1e-3, "{f:?}");
+    }
+}
+
 /// A pose that takes a leg beyond its stroke is refused, one that tilts the legs beyond the joints' 40 degrees too.
 #[test]
 fn poses_beyond_the_strokes_and_the_joints_are_refused() {
@@ -151,10 +164,10 @@ fn the_payload_inertia_adds_its_turning_momentum() {
 /// The legs' two parts as bodies of their own, lifting the platform at home (all legs alike, qd_i = u_z v_z, the twist
 /// (0, 0, v_z, 0, ...)): with s = 1 - u_z^2 = 0.2302955, L = 0.5471158 m, u' = (v - (u . v) u) / L so |u'|^2 = v_z^2 s / L^2.
 /// The base part (2.8 kg, centre 0.1 m, inertia 0.058) turns about the base joint: T = 1/2 (m c^2 + I) |u'|^2. The rod
-/// part (1.2 kg, 0.17 m, 0.012) moves at v - c u': |.|^2 = v_z^2 (1 - 2 c s / L + c^2 s / L^2). The sum of all entries
+/// part (1.2 kg, 0.175 m, 0.012) moves at v - c u': |.|^2 = v_z^2 (1 - 2 c s / L + c^2 s / L^2). The sum of all entries
 /// of M_q is 2 T / (u_z v_z)^2, so against the point legs of the old model it is larger by
 /// 6 (m_b c_b^2 + I_b) s / (L^2 u_z^2) = 0.5157661 and by 6 [m_p (c_p^2 s / L^2 - 2 c_p s / L) + I_p s / L^2] / u_z^2 =
-/// -1.0587792 kg (the rod part's mass sits nearer the base than the joint): -0.5430131 kg together.
+/// -1.0857397 kg (the rod part's mass sits nearer the base than the joint): -0.5699735 kg together.
 #[test]
 fn the_legs_parts_add_the_hand_calculated_kinetic_energy() {
     let cfg = ENTRY.config();
@@ -169,7 +182,7 @@ fn the_legs_parts_add_the_hand_calculated_kinetic_energy() {
         m.iter().sum::<f64>()
     };
     let delta = sum(&cfg) - sum(&points);
-    assert!((delta + 0.5430131).abs() < 1e-6, "{delta}");
+    assert!((delta + 0.5699735).abs() < 1e-6, "{delta}");
 }
 
 /// The dynamics with the legs' parts against Lagrange's equations by differences (as the platform's were checked): at a
@@ -239,39 +252,44 @@ fn the_steady_friction_of_a_rising_platform_is_the_hand_calculated_one() {
 /// 7e-5 (the energy motor 2 fed back), the peak torques by up to 3e-6, the path errors by up to 7e-5. The warm start
 /// moved them by up to 1.1e-4 (motor 1's peak torque), the rest by up to 2.4e-5. Another platform's maths library,
 /// which rounds sine and arc tangent differently in the last bit, moves them the same way. Hence 1e-3.
+/// Re-recorded on 17 November 2026 for the legs' two swinging parts: with the parts as points at their joints the
+/// cycle gives the old figures to within 1e-4; the body part's swing (inertia and weight) raises the torques by about
+/// 1 %, the rod part's centre 0.175 m in from the platform joint lowers them by more: the peak and RMS torques fall by
+/// 0.15 to 1.4 %, the energies drawn by up to 0.3 %, those fed back by up to 5.3 % (motor 2); motor 5's rise (peak
+/// 0.2 %, RMS 0.3 %, fed back 3.3 %).
 #[test]
 fn the_default_cycle_keeps_its_figures() {
     const BEFORE: [f64; 30] = [
-        1.0238642766029902,
-        0.3016328207315903,
-        11.35598111604051,
-        1.0662918666753929,
-        0.6731209803523748,
-        0.24765878931921972,
-        3.8058188974856435,
-        0.2416618732122005,
-        1.1352891515872892,
-        0.4745838805724037,
-        27.77392744463231,
-        4.011644741573468,
-        0.9709239740636022,
-        0.43370016807471123,
-        26.930640143609157,
-        3.1217933010061722,
-        0.8828807335625467,
-        0.3444132288264889,
-        18.296168477123118,
-        0.6172951651861794,
-        1.112991902901006,
-        0.3579193222117818,
-        13.641048059371764,
-        0.9276152855116253,
-        7.487774917033477e-6,
-        1.8896379227442919e-6,
-        1.0878115342107962e-5,
-        1.2753265421857873e-5,
-        4.072568415897281e-6,
-        2.5526454517594324e-5,
+        1.0187557331638284,
+        0.30024047807939985,
+        11.329690101523571,
+        1.0427038270655418,
+        0.6636914013521906,
+        0.24580392174634463,
+        3.7956909276443613,
+        0.2289608515788184,
+        1.125004382652838,
+        0.47213843745503165,
+        27.70035795394304,
+        3.9509046760466364,
+        0.9662561181134744,
+        0.4330364365843739,
+        26.898350916705887,
+        3.099945681838736,
+        0.884556185482163,
+        0.3454382491945182,
+        18.322470372506537,
+        0.6374572963102121,
+        1.1059700811572806,
+        0.35630530794646104,
+        13.615963383753575,
+        0.9045338507447626,
+        7.525983606095078e-06,
+        1.888920235611046e-06,
+        1.091940353062667e-05,
+        1.268024089500166e-05,
+        4.025535048803873e-06,
+        2.559479455028217e-05,
     ];
     assert_figures("hexapod", &cycle_figures(&ENTRY), &BEFORE, 1e-3);
 }
