@@ -520,6 +520,7 @@ fn lowest_mode(m: &[Vec<f64>], k: &[Vec<f64>]) -> Option<(f64, Vec<f64>)> {
 
 /// Generalised velocity of a rigid solve: accelerations, guide forces and states' rates, per motor the torque at the
 /// gearbox output and the torque that goes into it before its loss.
+#[derive(Clone)]
 struct Rigid {
     acc: Vec<f64>,
     rates: Vec<f64>,
@@ -1876,13 +1877,15 @@ impl ConfigMachine {
                 }
             }
         }
-        let (mut factors, mut solved) =
-            (vec![(1.0, 1.0); m], Rigid { acc: vec![0.0; n], rates, out: vec![0.0; m], into: vec![0.0; m] });
+        let solved = Rigid { acc: vec![0.0; n], rates, out: vec![0.0; m], into: vec![0.0; m] };
         if self.worms.iter().flatten().any(|w| w.back_efficiency <= 0.0) {
             return self.rigid_locking(&fixed, &base, &drive, v, solved);
         }
-        for _ in 0..3 {
-            let loss: Vec<f64> = factors.iter().map(|(output, rotor)| output / rotor).collect();
+        // One pass with the factors (output, rotor) of each motor's gear, flat: the solution, and the factors of the torques
+        // it puts into the gears.
+        let pass = |flat: &Vec<f64>| -> (Rigid, Vec<f64>) {
+            let mut solved = solved.clone();
+            let loss: Vec<f64> = flat.chunks(2).map(|f| f[0] / f[1]).collect();
             let mut a = fixed.clone();
             let mut b = base.clone();
             for kk in 0..m {
@@ -1902,9 +1905,19 @@ impl ConfigMachine {
                 (solved.out[kk], solved.into[kk]) = (loss[kk] * into, into);
             }
             solved.acc = acc;
-            factors = (0..m).map(|kk| self.rigid_factors(kk, solved.into[kk], self.pulley_angle(kk, v))).collect();
-        }
-        solved
+            let next = (0..m)
+                .flat_map(|kk| {
+                    let (output, rotor) = self.rigid_factors(kk, solved.into[kk], self.pulley_angle(kk, v));
+                    [output, rotor]
+                })
+                .collect();
+            (solved, next)
+        };
+        // The factors at their fixed point (`mech::settled_loss`): a gear's loss fades in smoothly over its power, and so
+        // does a worm's that turns back (`worm::factors`), so they settle as the other machines' do.
+        // Three passes left up to 1.6e-2 of the acceleration on the shipped files' rigid models and 1.2e-2 on a worm that
+        // turns back.
+        pass(&sim_components::mech::settled_loss(vec![1.0; 2 * m], |flat| pass(flat).1)).0
     }
 
     /// `rigid_solve` with a self-locking worm (`worm::factors`), whose rotor takes no share of the load at rest and
@@ -1940,6 +1953,13 @@ impl ConfigMachine {
                 None => Row::Factors(1.0, 1.0),
             })
             .collect();
+        // Three rounds, not to a fixed point: a locking worm moving with a motor torque between what drives it and what
+        // holds it back has none. Its rows alternate between driving (output factor eta, rotor factor 1) and driven back
+        // (the drag), because the drag form does not meet the factors at a rotor factor of 0 (measured 17 November 2026:
+        // over a sweep of the rotary table's worm at -2..2 rad/s and -1.2..1.2 N m, 57 % of the solves had not settled
+        // in 13 rounds, and their accelerations after 3 and after 13 rounds lay up to 19 rad/s2 apart). More rounds pick
+        // another phase, not a better answer; that band needs a model of its own (a moving worm's stick state, see `worm`,
+        // or a drag that fades in with the rotor factor).
         for _ in 0..3 {
             let mut a = vec![vec![0.0; n + m]; n + m];
             let mut b = base.to_vec();

@@ -838,7 +838,7 @@ Held, the shaft sits on a spring that reaches the brake torque at 1 mrad, with t
 (λ_A − λ_B) m_r · a_x + ( m_Z + (λ_A + λ_B) m_r ) · a_z = λ_A F_A − λ_B F_B + mesh − F_f,z − m_z g + extras_z
 ```
 
-m_X and m_Z include both pulleys (2 J_pulley / r²), the idlers and the chain. The gearbox loses torque only on what it transmits, which is the motor torque minus what accelerates the rotor itself; that depends on the acceleration being solved for, and three passes settle it. With a loss-free gearbox this collapses to two independent axes:
+m_X and m_Z include both pulleys (2 J_pulley / r²), the idlers and the chain. The gearbox loses torque only on what it transmits, which is the motor torque minus what accelerates the rotor itself; that depends on the acceleration being solved for, and the loss factors are iterated to their fixed point (`mech::settled_loss`; three passes left up to 1.5e-4 of the acceleration). With a loss-free gearbox this collapses to two independent axes:
 
 ```text
 ( m_x + 2J/r² ) · a_x = F_x − F_f,x          ( m_z + 2J/r² ) · a_z = F_z − m_z g − F_f,z

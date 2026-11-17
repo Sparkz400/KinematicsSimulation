@@ -135,9 +135,10 @@ rated_current_a = 4.35
 thermal_time_constant_s = 2220.0
 rated_temperature_rise_k = 100.0
 start_temperature_rise_k = 0.0
-# [estimate] the rated current, as the motor is an estimate here; with effects.iron_loss the copper loss at it brings
-# the winding to its rated rise, and the S1 check ("motor-s1") starts at kt times it.
-stall_current_a = 4.35
+# [catalogue] 1FK2105-4AF: static torque 5 N m at the stall current 4.65 A (motors_s210.csv), as a motor named in
+# [parts] brings it; with effects.iron_loss the copper loss at it brings the winding to its rated rise, and the S1
+# check ("motor-s1") starts at kt times it.
+stall_current_a = 4.65
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 magnet_temperature_coefficient_1_k = -0.0012
 max_current_a = 18.0

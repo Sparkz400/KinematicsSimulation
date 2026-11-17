@@ -247,6 +247,8 @@ bristle_damping_n_s_m = 1500.0
 preload_n = 200.0
 
 [motor]
+# A made-up motor, no catalogue motor: no row of catalog/ has these values (0.45 N m/A, 1.27 N m at 2.822 A, 9.5 A,
+# 0.3 kg cm2), so its stall current is its rated one. A motor named in [parts] replaces them.
 rotor_inertia_kgm2 = 0.3e-4
 friction_coulomb_nm = 0.02
 friction_viscous_nm_s_rad = 1.0e-4

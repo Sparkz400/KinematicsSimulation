@@ -246,18 +246,18 @@ d_inductance_h = 0.02
 # rest is the stator and housing's), and its time constant against the housing.
 winding_resistance_share = 0.3
 winding_time_constant_s = 60.0
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# [catalogue] 1FK2205-2AF: static torque 3.6 N m at the stall current 2.9 A (motors_s210.csv), as a motor named in
+# [parts] brings it. With effects.iron_loss the copper loss at it brings the winding to its rated
 # rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
 # starts at kt times it.
-stall_current_a = 2.5
+stall_current_a = 2.9
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
-# [catalogue] rated current 2.5 A at 400 V; 10.8 N m at the maximum current of 9.5 A. [estimate] the thermal time
-# constant, as the 1FK2105's 37 min scaled down.
+# [catalogue] rated current 2.5 A at 400 V; 10.8 N m at the maximum current of 9.5 A; thermal time constant 29 min
+# (motors_s210_oi.csv, the S120 1FK2 manual alike).
 rated_current_a = 2.5
-thermal_time_constant_s = 1800.0
+thermal_time_constant_s = 1740.0
 rated_temperature_rise_k = 100.0
 start_temperature_rise_k = 0.0
 max_current_a = 9.5

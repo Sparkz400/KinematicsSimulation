@@ -71,6 +71,7 @@ fn a_motor_by_name_gives_the_values_of_the_hand_written_config() {
         "motor.rated_current_a",
         "motor.torque_constant_at_max_current_nm_a",
         "motor.thermal_time_constant_s",
+        "motor.stall_current_a",
         "drive.peak_torque_nm",
         "drive.rated_torque_nm",
         "drive.rated_speed_rad_s",
@@ -102,6 +103,138 @@ fn a_motor_by_name_gives_the_values_of_the_hand_written_config() {
     // Not offered at 230 V single-phase data, and an unknown article, are refused.
     assert!(sim_components::catalog::apply_motor(&mut cfg, "1FK2205-4AF", "110v").is_err());
     assert!(sim_components::catalog::apply_motor(&mut cfg, "1FK9999-0AA", "400v").is_err());
+}
+
+/// Every shipped config whose motor is written out by hand for a catalogue motor (the one its comment names) has that
+/// motor's printed values: naming it at 400 V puts back the same stall current, torque constant, currents, thermal time
+/// constant, rotor (with the holding brake where the config says so) and the drive's torques and speeds. Winding
+/// resistance and inductance are estimates (Siemens prints neither for the 1FK2 and 1FT2) and are not compared; the
+/// peak torque is the motor's, not capped at a pulley's rating (`pulley-torque` judges that). The EXCT-30, which names
+/// its motor, is `a_motor_by_name_gives_the_values_of_the_hand_written_config`'s.
+#[test]
+fn shipped_motor_blocks_have_their_catalogue_motors_values() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let k = "1FK2105-4AF";
+    let mut blocks: Vec<(String, &str, &str, bool)> = Vec::new();
+    for name in [
+        "cam-indexer",
+        "cam-indexer-cam",
+        "disc-cam",
+        "disc-cam-cam",
+        "flying-saw",
+        "flying-saw-cam",
+        "geneva-drive",
+        "geneva-drive-cam",
+        "rotary-knife",
+        "rotary-knife-cam",
+        "slider-crank",
+        "slider-crank-cam",
+        "toggle-press",
+        "toggle-press-cam",
+    ] {
+        blocks.push((format!("crates/machine-crank-cam/config/{name}.toml"), "", k, false));
+    }
+    for name in [
+        "arm",
+        "arm-tool",
+        "arm-on-track",
+        "arm-on-track-tool",
+        "arm5-tool",
+        "arm7-tool",
+        "palletiser",
+        "rack",
+        "scara",
+        "scara-tool",
+        "screw",
+        "table",
+    ] {
+        blocks.push((format!("crates/machine-joint-kit/config/{name}.toml"), "", k, false));
+    }
+    for file in [
+        "crates/machine-cable-robot/config/planar.toml",
+        "crates/machine-cable-robot/config/spatial.toml",
+        "crates/machine-delta-d2/default.toml",
+        "crates/machine-delta-d2/conveyor.toml",
+        "crates/machine-delta-d3/default.toml",
+        "crates/machine-delta-d3/conveyor.toml",
+        "crates/machine-delta-d4/default.toml",
+        "crates/machine-delta-d4/conveyor.toml",
+        "crates/machine-hexapod/default.toml",
+        "crates/machine-parallel-scara/default.toml",
+        "machines/delta-d3.toml",
+        "machines/planar-delta.toml",
+        "machines/scissor-lift.toml",
+    ] {
+        blocks.push((file.to_string(), "", k, false));
+    }
+    for (file, own, article, brake) in [
+        ("crates/machine-delta-d4/default.toml", "4", "1FK2104-4AF", false),
+        ("crates/machine-delta-d4/conveyor.toml", "4", "1FK2104-4AF", false),
+        ("crates/machine-parallel-scara/default.toml", "3", "1FK2103-2AH", false),
+        ("crates/machine-parallel-scara/default.toml", "4", "1FK2103-2AH", false),
+        ("crates/machine-delta-h4/default.toml", "", "1FK2105-6AF", false),
+        ("crates/machine-delta-linear/default.toml", "", "1FK2205-2AF", true),
+        ("crates/machine-delta-linear/conveyor.toml", "", "1FK2205-2AF", true),
+        ("crates/machine-hexapod-rotary/default.toml", "", "1FT2104-5AF", false),
+        ("crates/machine-overhead-crane/config/crane.toml", "", "1FK2104-6AF", true),
+        ("crates/machine-overhead-crane/config/crane.toml", "hoist", "1FK2105-6AF", true),
+        ("crates/machine-tripod/default.toml", "", "1FK2104-4AF", false),
+        ("crates/machine-wafer-handler/default.toml", "", "1FK2103-2AH", false),
+        ("crates/machine-winder/default.toml", "", "1FK2206-2AF", false),
+    ] {
+        blocks.push((file.to_string(), own, article, brake));
+    }
+    let mut wrong = Vec::new();
+    for (file, own, article, brake) in &blocks {
+        let text = fs::read_to_string(root.join(file)).unwrap();
+        let table: toml::Table = text.parse().unwrap();
+        // The shared table's numbers with the motor's own table over them, for the motor and its drive.
+        let merged = |name: &str| {
+            let shared = table[name].as_table().unwrap();
+            let mut out: toml::Table =
+                shared.iter().filter(|(_, v)| !v.is_table()).map(|(k, v)| (k.clone(), v.clone())).collect();
+            if let Some(mine) = shared.get(*own).and_then(|v| v.as_table()) {
+                out.extend(mine.clone());
+            }
+            toml::Value::Table(out)
+        };
+        let mut cfg = toml::Table::new();
+        cfg.insert("format_version".into(), toml::Value::Integer(1));
+        cfg.insert("motor".into(), merged("motor"));
+        cfg.insert("drive".into(), merged("drive"));
+        let parts = toml::Table::from_iter([("motor_brake".to_string(), toml::Value::Boolean(*brake))]);
+        cfg.insert("parts".into(), toml::Value::Table(parts));
+        let by_hand = sim_core::Config::parse(&toml::to_string(&cfg).unwrap()).unwrap();
+        let mut named = by_hand.clone();
+        sim_components::catalog::apply_motor(&mut named, article, "400v").unwrap();
+        for path in [
+            "motor.stall_current_a",
+            "motor.torque_constant_nm_a",
+            "motor.rated_current_a",
+            "motor.max_current_a",
+            "motor.torque_constant_at_max_current_nm_a",
+            "motor.thermal_time_constant_s",
+            "motor.rotor_inertia_kgm2",
+            "drive.peak_torque_nm",
+            "drive.rated_torque_nm",
+            "drive.rated_speed_rad_s",
+            "drive.no_load_speed_rad_s",
+        ] {
+            let (hand, catalogue) = (by_hand.f64(path).unwrap(), named.f64(path).unwrap());
+            if !close(hand, catalogue, 1e-3) {
+                wrong.push(format!("{file} [{own}] {article}: {path} {hand} against {catalogue}"));
+            }
+        }
+        // The highest speed: the catalogue's, or the no-load speed where that is lower (the curve ends there).
+        let top = named.f64("drive.max_speed_rad_s").unwrap().min(named.f64("drive.no_load_speed_rad_s").unwrap());
+        if !close(by_hand.f64("drive.max_speed_rad_s").unwrap(), top, 1e-3) {
+            wrong.push(format!(
+                "{file} [{own}] {article}: max speed {} against {top}",
+                by_hand.f64("drive.max_speed_rad_s").unwrap()
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// A gearbox named by size, motor frame and ratio sets the gearbox of the config from the catalogue row.

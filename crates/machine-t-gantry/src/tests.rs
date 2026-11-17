@@ -210,6 +210,7 @@ fn exct_30_config_agrees_with_the_catalogue() {
         motor("static_torque_nm") / motor("stall_current_a"),
         1e-3
     ));
+    assert_eq!(cfg.f64("motor.stall_current_a").unwrap(), motor("stall_current_a"));
     assert!(cfg.f64("drive.peak_torque_nm").unwrap() <= motor("max_torque_nm"));
     assert!(close(cfg.f64("drive.rated_speed_rad_s").unwrap(), motor("rated_speed_400v_rad_s"), 1e-3));
 

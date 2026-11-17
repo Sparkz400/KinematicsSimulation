@@ -305,6 +305,8 @@ torque_constant_at_max_current_nm_a = 0.4936709
 # electrical time constant L / R = 5 ms; the current loop's gain drive.3.current_kp_v_a goes with L.
 resistance_ohm = 9.0
 inductance_h = 0.045
+# With effects.field_weakening: its own d-axis inductance, that of its q axis, not the arms'.
+d_inductance_h = 0.045
 # [estimate] the D 32 gives no brake torque; above the 1.95 N m the motor has, as the arms' 8 N m above their 15 N m
 # is not.
 brake_torque_nm = 1.0
@@ -326,6 +328,8 @@ torque_constant_at_max_current_nm_a = 0.4936709
 # electrical time constant L / R = 5 ms; the current loop's gain drive.4.current_kp_v_a goes with L.
 resistance_ohm = 9.0
 inductance_h = 0.045
+# With effects.field_weakening: its own d-axis inductance, that of its q axis, not the arms'.
+d_inductance_h = 0.045
 # [estimate] the D 32 gives no brake torque; above the 1.95 N m the motor has, as the arms' 8 N m above their 15 N m
 # is not.
 brake_torque_nm = 1.0
@@ -551,6 +555,8 @@ peak_torque_nm = 1.95
 rated_torque_nm = 0.59
 rated_speed_rad_s = 471.239
 no_load_speed_rad_s = 1095.38
+# [catalogue] its own highest speed, not the arms': 8000 r/min (motors_s210.csv), below its no-load speed.
+max_speed_rad_s = 837.758
 velocity_kp_nm_s_rad = 0.0443
 current_kp_v_a = 180.0
 
@@ -559,6 +565,8 @@ peak_torque_nm = 1.95
 rated_torque_nm = 0.59
 rated_speed_rad_s = 471.239
 no_load_speed_rad_s = 1095.38
+# [catalogue] its own highest speed, not the arms': 8000 r/min (motors_s210.csv), below its no-load speed.
+max_speed_rad_s = 837.758
 velocity_kp_nm_s_rad = 0.1
 velocity_tn_s = 0.01
 current_kp_v_a = 180.0

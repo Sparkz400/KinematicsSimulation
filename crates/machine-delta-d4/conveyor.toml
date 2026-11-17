@@ -347,6 +347,8 @@ rated_current_a = 1.19
 stall_current_a = 1.19
 thermal_time_constant_s = 1980.0
 max_current_a = 4.2
+# With effects.field_weakening: its own d-axis inductance, that of its q axis (inductance_h), not the arms'.
+d_inductance_h = 0.03
 torque_constant_at_max_current_nm_a = 0.8928571
 # [estimate] Siemens publishes no winding resistance for the 1FK2: three times the arms' motor's, a winding of about the
 # same torque constant with a quarter of the copper; its inductance three times too, so the electrical time constant
@@ -562,6 +564,8 @@ peak_torque_nm = 3.75
 rated_torque_nm = 1.27
 rated_speed_rad_s = 314.159
 no_load_speed_rad_s = 619.7016
+# Its own highest speed, not the arms': the no-load speed, below the catalogue's 7200 r/min.
+max_speed_rad_s = 619.7016
 velocity_kp_nm_s_rad = 0.05
 velocity_tn_s = 0.02
 kv_1_s = 80.0
