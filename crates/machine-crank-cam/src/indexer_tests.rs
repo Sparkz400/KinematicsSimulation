@@ -132,3 +132,46 @@ fn the_geneva_leaves_the_table_ringing_by_its_acceleration_step_and_the_cam_inde
     assert!((cam.residual(TAU) / 8.96e-6 - 1.0).abs() < 0.05, "{}", cam.residual(TAU));
     assert_eq!(cam.settling_time(TAU), 0.0);
 }
+
+/// The cam's pressure angle by hand, shipped cam indexer (r_p 0.08 m, R_c 0.10 m, J_t = 0.02 + 0.4 + 3 * 0.2^2 = 0.54 kg m2):
+/// in the middle of the index phi' = (2 pi / 6) * (4 pi / (4 + pi)) / (2 pi / 3) = 2 pi / (4 + pi) = 0.87980, so tan(alpha)
+/// = 0.08 * 0.87980 / 0.10 = 0.70384, cos(alpha) = 0.81775 (alpha = 35.1 degrees). At theta'' = 100 rad/s2 (phi'' = 0 there)
+/// the wheel's torque is 0.54 * 0.87980 * 100 = 47.509 N m, along the tangent 47.509 / 0.08 = 593.9 N, along the normal
+/// 593.9 / 0.81775 = 726.2 N. Without the key the force stays 593.9 N.
+#[test]
+fn the_cam_s_pressure_angle_raises_the_contact_force_by_one_over_its_cosine() {
+    let ix = Indexer::from_config(&CAM_INDEXER.config(), true).unwrap();
+    assert!((ix.pressure_angle(0.0).to_degrees() - 35.1).abs() < 0.05, "{}", ix.pressure_angle(0.0).to_degrees());
+    let [torque, force] = ix.loads(0.0, 0.0, 100.0);
+    assert!((torque - 47.509).abs() < 0.01 && (force - 726.2).abs() < 0.5, "{torque} {force}");
+    let mut cfg = CAM_INDEXER.config();
+    cfg.set_text("indexer.cam_radius_m = 1e9").unwrap();
+    let flat = Indexer::from_config(&cfg, true).unwrap().loads(0.0, 0.0, 100.0)[1];
+    assert!((flat - 593.9).abs() < 0.1, "{flat}");
+    // The Geneva has no cam: no angle, and no change.
+    assert_eq!(geneva(6).pressure_angle(0.0), 0.0);
+}
+
+/// effects.table_twist: the mass matrix of the doc comment by hand at the middle of the index (J_d 0.012, J_w 0.02, J_s =
+/// 0.4 + 0.12 = 0.52, J_t = 0.54, phi' = 0.87980): M00 = 0.012 + 0.54 * 0.77405 = 0.42999, M01 = 0.52 * 0.87980 = 0.45750,
+/// M11 = 0.52; phi'' = 0 there, so no speed terms. The joint's spring is 2e5 N m/rad and its damper 2 * 0.03 * sqrt(2e5 *
+/// 0.52) = 19.35 N m s/rad, and the state has the joint's angle and speed beyond the rigid machine's.
+#[test]
+fn the_table_twist_is_a_joint_of_its_own_with_the_matrix_of_the_two_inertias() {
+    let mut cfg = CAM_INDEXER.config();
+    cfg.set_text("effects.table_twist = true").unwrap();
+    let ix = Indexer::from_config(&cfg, true).unwrap();
+    let (mut mass, mut bias) = ([0.0; 4], [0.0; 2]);
+    ix.dynamics(&[0.0, 0.0], &[3.0, 0.0], &mut mass, &mut bias);
+    for (got, want) in mass.iter().zip([0.42999, 0.45750, 0.45750, 0.52]) {
+        assert!((got - want).abs() < 2e-5, "{mass:?}");
+    }
+    assert!(bias.iter().all(|b| b.abs() < 1e-9), "{bias:?}");
+    let (k, c) = ix.passive_joints()[0];
+    assert!((k - 2e5).abs() < 1e-6 && (c - 19.35).abs() < 0.01, "{k} {c}");
+    // Off, the machine has no such joint; on, two more states.
+    let on = (CAM_INDEXER.build)(&cfg).ok().unwrap();
+    let off = (CAM_INDEXER.build)(&CAM_INDEXER.config()).ok().unwrap();
+    assert_eq!(on.state_len(), off.state_len() + 2);
+    assert!(Indexer::from_config(&CAM_INDEXER.config(), true).unwrap().passive_joints().is_empty());
+}
