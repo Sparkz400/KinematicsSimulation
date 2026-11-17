@@ -204,6 +204,14 @@ fn screw_tables(cfg: &Config) -> Vec<String> {
 /// layout every shipped screw, rack and linear motor config states.
 pub const GUIDE_CARRIAGES: f64 = 4.0;
 
+/// The tables a machine's guide friction is in, with its sliding and breakaway levels, of which `apply_guides` takes the
+/// first the config has: a gantry's or single axis's X guide (LuGre), each carriage's guide of a linear delta, a slide.
+const GUIDE_FRICTION: [(&str, [&str; 2]); 3] = [
+    ("friction_x", ["coulomb_n", "stiction_n"]),
+    ("friction", ["coulomb_n", "stiction_n"]),
+    ("slide", ["friction_coulomb_n", "friction_breakaway_n"]),
+];
+
 /// The carriages of a config's guide set: `ratings.guide_carriages` (a whole number of at least 1), else `GUIDE_CARRIAGES`.
 pub fn guide_carriages(cfg: &Config) -> f64 {
     cfg.f64("ratings.guide_carriages").ok().filter(|n| *n >= 1.0 && n.fract() == 0.0).unwrap_or(GUIDE_CARRIAGES)
@@ -277,9 +285,12 @@ fn apply_screw(cfg: &mut Config, r: &Row) -> Result<(), ConfigError> {
 /// Puts a guide set into a config's ratings: `guide_dynamic_load_rating_n` the carriages' C (for 50 km) together, and
 /// `guide_max_load_n` their C0 together over `GUIDE_STATIC_SAFETY`, each where the config rates it. A config that rates
 /// neither is refused: the guide would change nothing it judges.
-/// The load is taken to share equally between the carriages. Where the row has the carriage's mass and seal drag they go
-/// to `guide.carriage_mass_kg` and `guide.seal_drag_n` (per carriage times `count`, in the tables the config has); a row
-/// without them leaves the config's.
+/// The load is taken to share equally between the carriages. The carriages' mass (per carriage times `count`) takes the
+/// place of the config's guide carriages in the moved mass `mass.carriage_kg`, and their seals' drag that of the config's
+/// in the guide's friction levels (`GUIDE_FRICTION`: Coulomb and breakaway, as the seals drag at any speed): the share of
+/// the config's own carriages is `mass.guide_carriages_kg` and `<friction table>.seal_drag_n`, absent = 0 (the config's
+/// numbers hold no guide carriages, and the named ones are added). Each only where the config has the key it changes and
+/// the row the column; the share keys, where the config has them, then hold the named carriages'.
 fn apply_guides(cfg: &mut Config, r: &Row, count: f64) -> Result<(), ConfigError> {
     let name = r["part_number"];
     let dynamic = guide_rating_50km(r).ok_or_else(|| unknown("axis", name))?;
@@ -287,10 +298,23 @@ fn apply_guides(cfg: &mut Config, r: &Row, count: f64) -> Result<(), ConfigError
     if !rates_guides(cfg) {
         return Err(ConfigError::Invalid("parts.axis (the config rates no guides)".into()));
     }
-    for (key, column) in [("guide.carriage_mass_kg", "carriage_mass_kg"), ("guide.seal_drag_n", "seal_drag_n")] {
-        if let Some(each) = number(r, column) {
-            set_if_present(cfg, key, count * each)?;
+    fn swap(cfg: &mut Config, share: &str, targets: &[String], new: f64) -> Result<(), ConfigError> {
+        let old = cfg.f64(share).unwrap_or(0.0);
+        for key in targets {
+            if let Ok(value) = cfg.f64(key) {
+                set(cfg, key, value - old + new)?;
+            }
         }
+        set_if_present(cfg, share, new)
+    }
+    if let Some(each) = number(r, "carriage_mass_kg") {
+        swap(cfg, "mass.guide_carriages_kg", &["mass.carriage_kg".into()], count * each)?;
+    }
+    if let (Some(each), Some((table, levels))) =
+        (number(r, "seal_drag_n"), GUIDE_FRICTION.iter().find(|(t, l)| cfg.get(&format!("{t}.{}", l[0])).is_ok()))
+    {
+        let targets: Vec<String> = levels.iter().map(|l| format!("{table}.{l}")).collect();
+        swap(cfg, &format!("{table}.seal_drag_n"), &targets, count * each)?;
     }
     set_if_present(cfg, "ratings.guide_dynamic_load_rating_n", count * dynamic)?;
     set_if_present(cfg, "ratings.guide_max_load_n", count * stat / GUIDE_STATIC_SAFETY)

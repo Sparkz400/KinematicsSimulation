@@ -155,7 +155,7 @@ thermal-warm-start,,0.00001281,0.1000,ok
 | --- | --- | --- | --- |
 | `motor-peak` | `utilisation` (the torque asked for, not the torque delivered) | 1 | fraction |
 | `motor-thermal` | `winding_rise_k` (with `effects.motor_thermal_nodes` the winding node's, which settles where the one node does) | `motor.rated_temperature_rise_k` | K |
-| `motor-s1` | `rms_torque_nm` at the cycle's mean speed, as Siemens sizes a cycle | the S1 curve there: the static torque k_t `motor.stall_current_a` at standstill, straight to `drive.rated_torque_nm` at the rated speed | N m |
+| `motor-s1` | `rms_torque_nm` at the cycle's mean speed, as Siemens sizes a cycle | the S1 curve there: the maker's graph (`motor.s1_curve_*`, which a named S210 motor brings), else the static torque k_t `motor.stall_current_a` at standstill, straight to `drive.rated_torque_nm` at the rated speed | N m |
 | `motor-speed` | `peak_speed_rad_s`, where the config gives `drive.max_speed_rad_s` (a catalogue motor sets it) | `drive.max_speed_rad_s` | rad/s |
 | `drive-overload` | `drive_overload`, with `effects.drive_overload` only | the image's trip level, r² − (r² − 1) exp(−`ratings.drive_max_current_time_s` / `drive_overload_time_constant_s`), r = maximum over rated current | 1 = rated current held |
 | `pulley-torque` | peak of the torque at the gearbox output (signal `gearbox.<motor id>.output_torque`) | `ratings.pulley_max_torque_nm` | N m |

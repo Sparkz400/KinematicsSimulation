@@ -1048,3 +1048,54 @@ fn the_retuned_gain_follows_the_inertia_the_machine_turns_and_stays_below_the_re
     let light = motor("1FK2103-4AH");
     assert!(close(kp(&light), kp(&cfg) * rotor(&light) / rotor(&cfg), 1e-6), "{}", kp(&light));
 }
+
+/// A named S210 motor brings its S1 curve (`s1_curves_s210.csv`) on the supply the curve is read for, its 400 V one where
+/// it has a rated point at 400 V; on the other supply, and for a motor without a curve, the config has none, also where
+/// it had one of the motor before.
+#[test]
+fn a_named_motor_brings_its_s1_curve_on_its_supply_and_no_other_motors() {
+    use sim_components::catalog::{Parts, with_named};
+    let entry = &machine_single_axis::ENTRY;
+    let rows: Vec<(f64, f64)> = csv("siemens/s1_curves_s210.csv")
+        .into_iter()
+        .filter(|r| r["article"] == "1FK2104-5AF")
+        .map(|r| (r["speed_rad_s"].parse().unwrap(), r["torque_nm"].parse().unwrap()))
+        .collect();
+    assert!(rows.len() >= 5);
+    let named = |cfg: &sim_core::Config, motor: &'static str, supply: &'static str| {
+        with_named(entry, cfg, &Parts { motor, supply, ..Parts::of(cfg).unwrap() }).unwrap()
+    };
+    let curve = |c: &sim_core::Config| {
+        let (w, t) = (c.f64s("motor.s1_curve_speed_rad_s"), c.f64s("motor.s1_curve_torque_nm"));
+        w.ok().zip(t.ok()).map(|(w, t)| w.into_iter().zip(t).collect::<Vec<_>>())
+    };
+    let with = named(&entry.config(), "1FK2104-5AF", "400v");
+    assert_eq!(curve(&with), Some(rows));
+    assert_eq!(curve(&named(&entry.config(), "1FK2104-5AF", "230v")), None);
+    // The curve of the motor before goes with it: the 1FK2106-6AF has none in the file.
+    assert_eq!(curve(&named(&with, "1FK2106-6AF", "400v")), None);
+    assert!(csv("siemens/s1_curves_s210.csv").iter().all(|r| r["article"] != "1FK2106-6AF"));
+}
+
+/// A motor named in `[parts.<id>]` has its velocity gain retuned as the shared one is for a motor named in `[parts]`
+/// (`with_named`): on a machine file with one motor the two give the same gain, the per-motor one in
+/// `drive.<id>.velocity_kp_nm_s_rad`, the shared gain staying the config's. A gain the config gives that motor stays.
+#[test]
+fn a_motor_named_per_motor_is_retuned_as_the_shared_one() {
+    let entry = sim_machines::load_file(&catalog().join("../machines/single-axis.toml")).unwrap();
+    let cfg = entry.config();
+    let kp = |c: &sim_core::Config, key: &str| c.f64(key).unwrap();
+    let mut shared = cfg.clone();
+    shared.set_text("parts.motor = \"1FK2204-5AF\"").unwrap();
+    let shared = sim_components::catalog::resolve(entry, &shared).unwrap();
+    let own = |extra: &str| {
+        let text = format!("{}\n[parts.m]\nmotor = \"1FK2204-5AF\"\n{extra}", cfg.to_text().unwrap());
+        sim_components::catalog::resolve(entry, &sim_core::Config::parse(&text).unwrap()).unwrap()
+    };
+    let per_motor = own("");
+    let gain = kp(&per_motor, "drive.m.velocity_kp_nm_s_rad");
+    assert!(close(gain, kp(&shared, "drive.velocity_kp_nm_s_rad"), 1e-12), "{gain}");
+    assert!(gain > 1.5 * kp(&cfg, "drive.velocity_kp_nm_s_rad"), "{gain}");
+    assert_eq!(kp(&per_motor, "drive.velocity_kp_nm_s_rad"), kp(&cfg, "drive.velocity_kp_nm_s_rad"));
+    assert_eq!(kp(&own("[drive.m]\nvelocity_kp_nm_s_rad = 0.0123\n"), "drive.m.velocity_kp_nm_s_rad"), 0.0123);
+}

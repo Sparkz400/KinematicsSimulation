@@ -205,6 +205,7 @@ One switch per effect. "Default" is the value in T, E and S; where they differ i
 | `carriage_kg` | T E S | kg | Carriage. On the T-gantry it moves in X only. E: chosen so that the simulator needs the torque Festo's formula gives | datasheet | always |
 | `z_axis_kg` | T E | kg | The vertical axis without payload. It moves in X and Z. E: the mass Festo's formula holds against gravity | datasheet | always |
 | `payload_kg` | T E S | kg | Payload, attached and released by the cycle | choice | `payload` |
+| `guide_carriages_kg` | | kg | Optional: the part of `carriage_kg` that is the guide set's carriages. A guide set named as axis (`parts.axis = "HGH25CAx4"`) puts its carriages' mass (per carriage times their number) in its place in `carriage_kg`, and here. Absent = 0: the carriage holds no guide carriages, and the named ones are added | catalogue (named guide) | always |
 
 ## `[belt]`
 
@@ -233,6 +234,7 @@ One table per linear guide. `[friction_z]` exists on the T-gantry only (T E). On
 | `bristle_stiffness_n_m` | T E S | N/m | LuGre bristle stiffness σ₀ | estimate | `guide_friction` |
 | `bristle_damping_n_s_m` | T E S | N s/m | LuGre bristle damping σ₁ | estimate | `guide_friction` |
 | `preload_n` | T E S | N | Guide preload. The friction levels scale with (preload + load) | estimate | `load_dependent_friction` |
+| `seal_drag_n` | | N | Optional: the part of `coulomb_n` and `stiction_n` that is the guide carriages' seals. A guide set named as axis (`parts.axis`) puts its seals' drag (HIWIN's printed maximum of two end seals per carriage, times the carriages) in its place in both levels, and here; in `[friction]` of the linear delta and in `[slide]` (`friction_coulomb_n`, `friction_breakaway_n`) alike where the config has no `[friction_x]`. Absent = 0: the levels hold no seal drag, and the named one is added | catalogue (named guide) | `guide_friction` |
 
 Festo gives the friction of the EXCT only as a graph of torque over speed, so all of these are estimates in E.
 
@@ -430,7 +432,9 @@ With `effects.process_force`: a force on the tool tip (single axis: on the carri
 In a machine file and on the arms, `[motor.<id>]`, `[gearbox.<id>]`, `[drive.<id>]`, `[ratings.<id>]`, `[strain_wave.<id>]`, `[joint.<id>]` and `[parts.<id>]` give the motor
 `<id>` its own values over the shared tables, key by key; each key has to be one the shared table has, with its meaning,
 unit and mark there. `[parts.<id>]` takes `motor`, `motor_supply`, `gearbox` and `drive` (not `belt` or `axis`, which
-are the machine's). See [machine files](machine-files.md#motors-that-differ). The portal of `machines/xyz-portal.toml`
+are the machine's). A motor with parts of its own and no `drive.<id>.velocity_kp_nm_s_rad` gets that gain retuned for
+them as `[parts]` retunes the shared one (from the shared gain, by its own inertia and rotor); one the config gives
+stays. See [machine files](machine-files.md#motors-that-differ). The portal of `machines/xyz-portal.toml`
 has them for its Z motor, the arms' configs for their wrists (`[motor.4]` to `[motor.6]` on the six-axis arm, joints 3 and 4 on the SCARA) and the palletiser for each of its joints. A config of a registered machine may give a motor its own tables though the default config has none for it (a seventh joint).
 
 ## A machine file's screws, racks, linear motors and strain wave gears
@@ -617,9 +621,8 @@ What the parts allow. `sim-cli verdicts` judges a cycle against these. **A ratin
 | `gearbox_max_input_speed_rpm` | T S | r/min | Highest speed at the gearbox input. Not in the catalogue's gearbox files | `gearbox-input-speed` | placeholder |
 | `shaft_max_radial_load_n` | T E S | N | Radial load the belt may put on a pulley shaft; in a machine file and on the arm on a track also what a rack's pinion may put on the gearbox's output shaft (`rack.<motor>.radial_load`; the track's 2500 N, estimate). Not in the gearbox files; not published by Festo | `gearbox-radial-load` | placeholder (T S), estimate (E) |
 | `guide_max_load_n` | T E S | N | Highest load on a guide (on the arm on a track: its four blocks' set, C0 over 2 of four HGH20CA, 73360 N, catalogue). The time-optimal plan keeps the guides' loads in the rigid model within it where the machine gives them (T-gantry, single axis) | `guide-load` | placeholder (T S), estimate (E) |
-| `guide_carriages` | | | Optional: the carriages of the guide set, a whole number of at least 1, which the catalogue's guide search (`parts.axis`) sizes the set with. Absent = 4 (two rails with two carriages each) | absent |
-| `guide_rail_length_m` | | m | Optional: the rails' length, which the catalogue's guide search takes the installed weight from. Absent = the stroke plus two carriage lengths | absent |
-| `guide.carriage_mass_kg`, `guide.seal_drag_n` | | kg, N | Written by a named guide set (`parts.axis = "HGH25CAx4"`) where the catalogue row has the carriage mass and seal drag: per carriage times the carriages, only into a config that has the keys. A row without them leaves the config's | absent |
+| `guide_carriages` | | – | Optional: the carriages of the guide set, a whole number of at least 1, which the catalogue's guide search (`search --axes`) sizes the set with. Absent = 4 (two rails with two carriages each) | – (the search) | absent |
+| `guide_rail_length_m` | | m | Optional: the rails' length, which the catalogue's guide search takes the installed weight from. Absent = the stroke plus two carriage lengths | – (the search's cost) | absent |
 | `guide_moment_x_nm`, `guide_moment_y_nm`, `guide_moment_z_nm` | N m | Optional (linear delta): the guide's highest moments about the column, the tangential and the outward axis (Festo's Mx, My, Mz); an absent one leaves that moment out of the equivalent load | absent |
 | `guide_dynamic_load_rating_n` | T E S | N | Dynamic load rating C of the life estimate L10 = (C / P)³ · 50 km (on the arm on a track: four HGH20CA, 108400 N, catalogue) | `guide_life_km` of `analyze`; in hours `guide-life` | placeholder (T S), estimate (E) |
 | `required_life_h` | T E S | h | The life bearings, gearbox, gearing and guide are to last. 20000 h in all three, the life Siemens rates its planetary gearboxes' planet bearings for | `pulley-bearing-life`, `gearbox-life`, `gearbox-gearing-life`, `motor-bearing-life`, `guide-life` (each passes at or above it) | choice |
