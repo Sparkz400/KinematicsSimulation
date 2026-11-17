@@ -229,6 +229,21 @@ pub fn generalised_eigenvalues(m: &Mat, k: &Mat, n: usize) -> Option<Vec<f64>> {
     Some(out)
 }
 
+/// The damping ratio of the mode of K v = lambda M v at `lambda` under the damping matrix C, over the leading `n`
+/// coordinates: v'Cv / (2 w v'Mv), w = sqrt(lambda), the shape v by inverse iteration on K - lambda (1 + 1e-9) M.
+pub fn modal_damping(m: &Mat, k: &Mat, c: &Mat, n: usize, lambda: f64) -> f64 {
+    let shift = lambda * (1.0 + 1e-9);
+    let a: Mat = std::array::from_fn(|i| std::array::from_fn(|j| k[i][j] - shift * m[i][j]));
+    let mut v: Q = [1.0, 0.7, 0.4, 0.2];
+    for _ in 0..3 {
+        let Some(next) = solve(&a, &v, n) else { break };
+        let size = dot(&next, &next).sqrt();
+        v = next.map(|x| x / size);
+    }
+    let quad = |p: &Mat| (0..n).map(|i| v[i] * (0..n).map(|j| p[i][j] * v[j]).sum::<f64>()).sum::<f64>();
+    quad(c) / (2.0 * lambda.sqrt() * quad(m))
+}
+
 /// The links' absolute angles over q = [theta, phi, beta, gamma]: upper arm, forearm, effector.
 pub const LINK_ANGLES: [Q; 3] = [[1.0, 1.0, 0.0, 0.0], [1.0, -1.0, 1.0, 0.0], [1.0, 0.0, 0.0, 1.0]];
 
@@ -1406,40 +1421,51 @@ impl Machine for WaferHandler {
         let phi = self.arm.phi(tool_pose[0]);
         let q = [tool_pose[1], phi, 0.0, 0.0];
         let (mass, _) = self.arm.dynamics(&q, &[0.0; 4], self.payload_attached);
-        let mut k = [[0.0; 4]; 4];
+        // K and the damping matrix C alike: the bands' 2 k r^2 and 2 c r^2, the gearboxes' stiffness and damping.
+        let (mut k, mut damper) = ([[0.0; 4]; 4], [[0.0; 4]; 4]);
         if self.bands_elastic {
-            let (k1, k2) = (self.bands[0].torsional_stiffness(), self.bands[1].torsional_stiffness());
-            k[2][2] = k1 + 0.25 * k2;
-            k[2][3] = -0.5 * k2;
-            k[3][2] = -0.5 * k2;
-            k[3][3] = k2;
+            let spans: [(&mut Mat, fn(&Band) -> f64); 2] = [(&mut k, |b| b.stiffness), (&mut damper, |b| b.damping)];
+            for (p, per_span) in spans {
+                let [t1, t2] = self.bands.map(|b| 2.0 * per_span(&b) * b.radius * b.radius);
+                p[2][2] = t1 + 0.25 * t2;
+                p[2][3] = -0.5 * t2;
+                p[3][2] = -0.5 * t2;
+                p[3][3] = t2;
+            }
         }
         // The coordinates that move: theta and phi only on elastic gearboxes.
         let free: Vec<usize> = (0..4).filter(|&c| if c < 2 { self.elastic } else { self.bands_elastic }).collect();
         // The column on its screw and coupling, the rotor held: it moves along z alone, apart from the arm's modes.
-        let lift = (self.elastic && self.lift.joint.gearbox.stiffness.is_finite()).then(|| Mode {
-            hz: (self.lift.joint.gearbox.stiffness / self.lift.mass(self.payload_attached)).sqrt()
-                / std::f64::consts::TAU,
-            damping: 0.0,
+        // Damping ratio c / (2 sqrt(K m)).
+        let gear = &self.lift.joint.gearbox;
+        let lift = (self.elastic && gear.stiffness.is_finite()).then(|| {
+            let mass = self.lift.mass(self.payload_attached);
+            Mode {
+                hz: (gear.stiffness / mass).sqrt() / std::f64::consts::TAU,
+                damping: gear.damping / (2.0 * (gear.stiffness * mass).sqrt()),
+            }
         });
         if free.is_empty() {
             return lift.into_iter().collect();
         }
         for c in 0..2 {
             k[c][c] = self.joints[c].gearbox.stiffness;
+            damper[c][c] = self.joints[c].gearbox.damping;
         }
-        let (mut m, mut kk) = ([[0.0; 4]; 4], [[0.0; 4]; 4]);
+        let (mut m, mut kk, mut cc) = ([[0.0; 4]; 4], [[0.0; 4]; 4], [[0.0; 4]; 4]);
         for (a, &i) in free.iter().enumerate() {
             for (b, &j) in free.iter().enumerate() {
                 m[a][b] = mass[i][j];
                 kk[a][b] = k[i][j];
+                cc[a][b] = damper[i][j];
             }
         }
-        let mut modes: Vec<Mode> = generalised_eigenvalues(&m, &kk, free.len()).map_or(Vec::new(), |values| {
+        let n = free.len();
+        let mut modes: Vec<Mode> = generalised_eigenvalues(&m, &kk, n).map_or(Vec::new(), |values| {
             values
                 .into_iter()
                 .filter(|v| *v > 0.0)
-                .map(|v| Mode { hz: v.sqrt() / std::f64::consts::TAU, damping: 0.0 })
+                .map(|v| Mode { hz: v.sqrt() / std::f64::consts::TAU, damping: modal_damping(&m, &kk, &cc, n, v) })
                 .collect()
         });
         modes.extend(lift);
