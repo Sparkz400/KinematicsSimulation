@@ -1598,8 +1598,10 @@ fn the_flanges_angular_speed_and_acceleration_follow_from_the_joint_axes() {
 /// A time-optimal line that turns the six-axis arm's flange 0.5 rad about the vertical and tilts it 0.2 rad (0.538 rad
 /// in all, the rotation vector staying in the tool range of +-0.6 rad) while it moves 0.05 m: along the plan, the flange's spin from its planned orientations, log(R(t + dt) R(t - dt)^T) / 2 dt, and
 /// its rate are what `Pose::angular_motion` gives from the joints (their rates differenced over the plan's 1 ms), and
-/// the plan keeps both within the smallest rx, ry, rz limits (1.5 rad/s, 8 rad/s^2), which bind: 1.4847 rad/s and
-/// 6.3987 rad/s^2 (the torque reserve's 0.8 of 8), the spin to 3e-7 rad/s, its rate to 0.01 rad/s^2.
+/// the plan keeps both within the smallest rx, ry, rz limits (1.5 rad/s, 8 rad/s^2), which bind: 1.4997 rad/s and
+/// 7.7354 rad/s^2 (a limit of the plan itself, judged on the planned motion, so no torque reserve: 6.3987, 0.8 of 8,
+/// before 17 November; less what the controller's cubics may add between the plan's points, `path::piece_limits`), the
+/// spin to 3e-7 rad/s, its rate to 0.01 rad/s^2.
 #[test]
 fn a_reorienting_time_optimal_line_keeps_the_flanges_angular_limits() {
     use sim_components::rigid::{exp, log, matmul, transpose};
@@ -1661,11 +1663,68 @@ fn a_reorienting_time_optimal_line_keeps_the_flanges_angular_limits() {
     assert!(fastest <= 2.5 * 1.001 && hardest <= 10.0 * 1.001, "{fastest} rad/s, {hardest} rad/s^2");
 }
 
+/// A path planned within the axis limits on the arm on a track in tool space (track, x, y, z, rx, ry, rz): a line that
+/// moves the track 0.1 m and the flange 0.05 m along y and its rotation vector from (0, pi/2, 0) to (0.5, pi/2, 0.5).
+/// Its orientation turns by slerp, about one axis (the turn from the start stays along the whole turn's axis, to 6e-16),
+/// and the flange's spin from the planned orientations, log(R(t + dt) R(t - dt)^T) / 2 dt, and its rate keep the
+/// flange's limits (1.5 rad/s, 8 rad/s^2) and reach them (1.5000, 8.0000: about a fixed axis the spin is the angle's
+/// rate). Before 17 November only an arm with exactly x, y, z, rx, ry, rz slerped and kept them; the track arm's rotation
+/// vector ran straight within its axes' limits alone. The same line timed by the axis limits without the flange's
+/// (`path::plan`) spins it at 1.91 rad/s, in 0.575 s against 0.654 s.
+#[test]
+fn a_reorienting_line_on_the_track_arm_keeps_the_flanges_angular_limits() {
+    use sim_components::rigid::{cross, exp, log, matmul, transpose};
+    let mut cfg = tool_config(&ARM_ON_TRACK, ARM_ON_TRACK_TOOL_CONFIG);
+    cfg.set_text("effects.joint_elasticity = false").unwrap();
+    let sim = Sim::new(&ARM_ON_TRACK, &cfg).unwrap();
+    let from = sim.control.planned_pos().to_vec();
+    let to = vec![from[0] + 0.1, from[1], from[2] + 0.05, from[3], from[4] + 0.5, from[5], from[6] + 0.5];
+    let pieces = [sim_components::path::Piece::Line(to.clone())];
+    let rotation = |p: &[f64]| exp([p[4], p[5], p[6]]);
+    let whole = log(&matmul(&rotation(&to), &transpose(&rotation(&from))));
+    let size = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let measured = |points: &[(f64, Vec<f64>)]| {
+        let spin = |i: usize, j: usize| {
+            log(&matmul(&rotation(&points[j].1), &transpose(&rotation(&points[i].1))))
+                .map(|w| w / (points[j].0 - points[i].0))
+        };
+        let (mut fastest, mut hardest, mut off_axis) = (0.0f64, 0.0f64, 0.0f64);
+        for k in 2..points.len() - 2 {
+            let dt = points[k + 1].0 - points[k].0;
+            let (w_ahead, w_behind) = (spin(k, k + 2), spin(k - 2, k));
+            fastest = fastest.max(size(spin(k - 1, k + 1)));
+            hardest = hardest.max(size(std::array::from_fn(|i| (w_ahead[i] - w_behind[i]) / (2.0 * dt))));
+            let turned = log(&matmul(&rotation(&points[k].1), &transpose(&rotation(&from))));
+            off_axis = off_axis.max(size(cross(turned, whole)) / size(whole));
+        }
+        (fastest, hardest, off_axis)
+    };
+    let planned = sim.plan_path(&pieces, false).unwrap();
+    let (fastest, hardest, off_axis) = measured(&planned);
+    let (cycle, tolerance) = (cfg.f64("profile.cycle_s").unwrap(), cfg.f64("profile.path_tolerance_m").unwrap());
+    let axes = sim.machine.axes();
+    let free =
+        sim_components::path::plan(axes, &from, &pieces, cycle, tolerance, sim.machine.setpoint_slack()).unwrap();
+    let (free_fastest, ..) = measured(&free);
+    println!(
+        "track arm: {} s, |w| {fastest:.4} of 1.5 rad/s, |dw/dt| {hardest:.4} of 8 rad/s^2, off the axis {off_axis:.2e} rad; \
+         without the flange's limits {} s, |w| {free_fastest:.4} rad/s",
+        planned.last().unwrap().0,
+        free.last().unwrap().0
+    );
+    assert!(off_axis < 1e-9, "the turn leaves its axis by {off_axis} rad");
+    assert!(fastest <= 1.5 * 1.001 && hardest <= 8.0 * 1.001, "{fastest} rad/s, {hardest} rad/s^2");
+    assert!(fastest > 0.99 * 1.5 || hardest > 0.99 * 8.0, "the limits bind: {fastest} rad/s, {hardest} rad/s^2");
+    assert!(free_fastest > 1.5 * 1.01, "without the flange's limits: {free_fastest} rad/s");
+}
+
 /// A pure reorientation timed by the axis limits (`cycle_timing = "axis_limits"`): at the six-axis arm's home, flange
-/// down (r = (0, pi/2, 0)), 0.5 rad more on rz. The rotation vector's rates alone kept to 1.5 rad/s let the flange spin
-/// at 1.91 rad/s there; the move keeps the flange's own limits too (`MotionLaw::spin`), so its spin from the setpoint,
-/// |log(exp(r + h r') exp(r - h r')^T)| / 2h, stays within 1.5 rad/s and its rate within 8 rad/s^2. A move of the place
-/// alone takes as long as before.
+/// down (r = (0, pi/2, 0)), 0.5 rad more on rz. The move keeps the flange's own limits too (`MotionLaw::spin`), so its
+/// spin from the setpoint, |log(exp(r + h r') exp(r - h r')^T)| / 2h, stays within 1.5 rad/s and its rate within 8
+/// rad/s^2. Here rz's own limit of 1.5 rad/s binds: across the rotation vector the flange turns at 2 sqrt(2) / pi = 0.9003
+/// of its rate, 1.3505 rad/s (0.9012 at the move's end, 1.3518; `profile::spin_rates`); turns the flange's limits bind
+/// use them in full (`profile::tests::the_flanges_spin_on_a_move_uses_its_limits`). A move of the place alone takes as
+/// long as before.
 #[test]
 fn a_reorientation_timed_by_the_axis_limits_keeps_the_flanges_angular_limits() {
     use sim_components::rigid::{exp, log, matmul, transpose};
@@ -1702,7 +1761,7 @@ fn a_reorientation_timed_by_the_axis_limits_keeps_the_flanges_angular_limits() {
     turned[5] += 0.5;
     let (fastest, hardest, _) = run(turned);
     println!("pure reorientation: |w| {fastest:.4} of 1.5 rad/s, |dw/dt| {hardest:.4} of 8 rad/s^2");
-    assert!(fastest <= 1.5 * (1.0 + 1e-3) && fastest > 1.2, "{fastest} rad/s");
+    assert!(fastest > 1.3505 * (1.0 - 1e-3) && fastest < 1.3518 * (1.0 + 1e-3), "{fastest} rad/s");
     assert!(hardest <= 8.0 * 1.01, "{hardest} rad/s^2");
     // The place alone: the same timing with and without the flange's limits (no turn, nothing to keep).
     let mut moved = start.clone();

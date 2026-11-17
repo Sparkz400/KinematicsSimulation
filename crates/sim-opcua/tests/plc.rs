@@ -599,7 +599,7 @@ struct Polled {
 }
 
 /// Runs `text` as a path from the PLC and polls until it is over.
-async fn run_path(plc: &Plc, text: &str, time_optimal: bool, position: &[String]) -> Polled {
+async fn run_path(plc: &Plc, text: &str, time_optimal: bool, planned: f64, position: &[String]) -> Polled {
     let writes = vec![
         ("command.path".to_string(), Variant::from(text)),
         ("command.path_time_optimal".to_string(), Variant::Boolean(time_optimal)),
@@ -623,12 +623,12 @@ async fn run_path(plc: &Plc, text: &str, time_optimal: bool, position: &[String]
             .collect();
         let time = read.pop().unwrap();
         times.push(time);
-        // Ten seconds of simulated time (a thousand polls of 10 ms of wall time ran out on a loaded host, where the tick
-        // that plans the path took seconds and the simulation runs slower than the wall clock); two minutes of wall time
+        // The planned time and ten seconds of simulated time (a thousand polls of 10 ms of wall time ran out on a loaded
+        // host, where the tick that plans the path took seconds and the simulation runs slower than the wall clock); two minutes of wall time
         // only against a hang.
         assert!(
-            time - before < 10.0 && wall.elapsed() < Duration::from_secs(120),
-            "{}: the path did not start and finish within ten seconds",
+            time - before < planned + 10.0 && wall.elapsed() < Duration::from_secs(120),
+            "{}: the path planned for {planned} s did not start and finish within ten seconds more",
             plc.id
         );
         match (busy, started) {
@@ -753,7 +753,7 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         }
         let groups =
             [false, true].map(|turn| (0..axes.len()).filter(|&i| (axes[i].unit == "rad") == turn).collect::<Vec<_>>());
-        let slow = run_path(&plc, &text, false, &position).await;
+        let slow = run_path(&plc, &text, false, planned.last().unwrap().0, &position).await;
         assert_eq!(refused().await, Variant::from(""), "{}: an accepted path leaves a refusal", entry.id);
         assert_eq!(
             plc.read(&["command.path".to_string()]).await[0],
@@ -842,7 +842,7 @@ async fn a_path_from_the_plc_is_planned_and_run() {
 
         // Time-optimal: the same path from the same pose finishes sooner, as in the command-line tool.
         let fast_plan = sim.plan_path(&pieces, true).unwrap().last().unwrap().0;
-        let fast = run_path(&plc, &text, true, &position).await;
+        let fast = run_path(&plc, &text, true, fast_plan, &position).await;
         assert_eq!(refused().await, Variant::from(""), "{}", entry.id);
         // The plans, where the motors bind before the belts: where the axis limits take a belt section below the tension
         // the time-optimal plan keeps, that plan is slower (the linear delta; the command-line tool's test runs this path
