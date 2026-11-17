@@ -382,8 +382,8 @@ fn the_gearbox_and_the_rack_carry_the_rack_losses() {
     near(teeth, force / 0.97, 1e-3, "feed force");
 }
 
-/// A screw joint of an arm is coupled to its motor: another ratio is refused, and so is a gearbox life the analysis
-/// would take through the one `gearbox.ratio` for joints of other ratios.
+/// A screw joint of an arm is coupled to its motor: another ratio is refused. A gearbox life is not refused for joints
+/// of other ratios: the analysis reads each motor's own `gearbox.ratio`.
 #[test]
 fn an_arm_refuses_what_it_cannot_size() {
     let mut cfg = SCARA.config();
@@ -397,7 +397,7 @@ gearbox_reference_speed_rpm = 400.0
 ",
     ))
     .unwrap();
-    assert!((URDF_ARM.build)(&cfg).is_err());
+    assert!((URDF_ARM.build)(&cfg).is_ok());
     cfg.set_text("arm.gear_ratios = [120.0, 120.0, 120.0, 120.0, 120.0, 120.0]").unwrap();
     assert!((URDF_ARM.build)(&cfg).is_ok());
 }

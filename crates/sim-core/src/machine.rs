@@ -302,6 +302,15 @@ pub trait Machine: Send {
     fn set_link_change(&mut self, _link: usize, _factor: f64, _moment: [f64; 3]) {}
     /// Told every step whether the cycle dwells at a target, for machines with a process force there.
     fn set_dwelling(&mut self, _dwelling: bool) {}
+    /// An external force on the tool, one component per axis in the tool's coordinates (N, or N m on a rotary axis;
+    /// the generalised force of each axis), held until changed: an obstacle's push on the tool or its carriage
+    /// (effects.crash). Returns whether the machine takes it; by default `false` (not supported), and the push then acts
+    /// on the motors through the rigid kinematics. The force's power is part of the machine's budget like the process
+    /// force's. Machines that take it: the machine files (`sim-netlist`) and the wrapper that forwards it; the machine
+    /// crates of their own keep the default and are pushed at the motors.
+    fn set_tool_force(&mut self, _force: &[f64]) -> bool {
+        false
+    }
     /// Told every step whether the drives are disabled, for machines with holding brakes.
     fn set_brake_engaged(&mut self, _engaged: bool) {}
     /// Actuators that a valve moves and no drive (pneumatic cylinders): each one's id and the valve command it starts

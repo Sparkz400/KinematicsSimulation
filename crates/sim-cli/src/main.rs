@@ -320,7 +320,7 @@ fn start(args: &Args, tr: &Translations) -> Result<Sim, Failure> {
         let bad = || Failure("cli-error-bad-argument", format!("--move {target}"));
         Some(Command::MoveTo(target.split(',').map(|v| v.trim().parse().map_err(|_| bad())).collect::<Result<_, _>>()?))
     } else {
-        poses(args, &sim, tr)?.map(Command::Trajectory)
+        poses(args, &sim, &cfg, tr)?.map(Command::Trajectory)
     };
     // Where the config has obstacles: what the motion keeps from them as planned, before it runs.
     let planned = match &command {
@@ -345,7 +345,8 @@ fn path_instead(args: &Args, entry: &MachineEntry, cfg: Config) -> Result<Config
     let Some(file) = args.option("--path") else { return Ok(cfg) };
     let text = read(file)?;
     let sim = Sim::new(entry, &cfg)?;
-    sim_components::program::read(file, &text, sim.machine.axes(), sim.control.planned_pos())
+    let speed = sim_components::program::orientation_speed_of(&cfg)?;
+    sim_components::program::read_with(file, &text, sim.machine.axes(), sim.control.planned_pos(), speed)
         .map_err(|e| Failure(e.key, format!("{file}:{}: {}", e.line, e.detail)))?;
     let cfg = sim_components::sim::with_path(&cfg, file, &text, args.flag("--time-optimal"))?;
     Sim::new(entry, &cfg)?.plan_configured_path().transpose().map_err(|e| Failure(e.key, file.to_string()))?;
@@ -357,13 +358,14 @@ fn path_instead(args: &Args, entry: &MachineEntry, cfg: Config) -> Result<Config
 /// timing planned here, within the axis limits or with `--time-optimal` as fast as the motors allow. Where transition
 /// curves or an arc beside its stated end take the planned path off the lines and arcs of the file
 /// (`profile.path_tolerance_m`), the error stream says by how much (for a program of moves at one feed).
-fn poses(args: &Args, sim: &Sim, tr: &Translations) -> Result<Option<Vec<(f64, Vec<f64>)>>, Failure> {
+fn poses(args: &Args, sim: &Sim, cfg: &Config, tr: &Translations) -> Result<Option<Vec<(f64, Vec<f64>)>>, Failure> {
     let unreadable = |file: &str, line: String| Failure("cli-error-bad-argument", format!("{file}: {line}"));
     if let Some(file) = args.option("--trajectory") {
         return sim_components::path::parse_trajectory(&read(file)?).map(Some).map_err(|line| unreadable(file, line));
     }
     let Some(file) = args.option("--path") else { return Ok(None) };
-    let runs = sim_components::program::read(file, &read(file)?, sim.machine.axes(), sim.control.planned_pos())
+    let speed = sim_components::program::orientation_speed_of(cfg)?;
+    let runs = sim_components::program::read_with(file, &read(file)?, sim.machine.axes(), sim.control.planned_pos(), speed)
         .map_err(|e| Failure(e.key, format!("{file}:{}: {}", e.line, e.detail)))?;
     let refused = |e: sim_components::CommandError| Failure(e.key, String::new());
     // A program with feeds is planned run by run (`Sim::plan_program`); one run at the axes' limits as a path file is.
@@ -1516,7 +1518,7 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let mut sim = Sim::new(entry, &cfg)?;
     // The effect views cost a machine evaluation per step: only when they are written.
     let views = args.option("--breakdown").is_some() || args.option("--budget").is_some();
-    let load = match poses(args, &sim, tr)? {
+    let load = match poses(args, &sim, &cfg, tr)? {
         Some(points) => analyse_trajectory_with(&mut sim, points, views),
         None => analyse_cycle_with(&mut sim, views),
     }

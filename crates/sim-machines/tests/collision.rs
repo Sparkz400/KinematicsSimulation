@@ -143,6 +143,24 @@ fn a_blocked_axis_pushes_with_the_hand_calculated_force_at_the_current_limit() {
     assert!((sim.contact_force - 950.0).abs() < 5.0, "{} N", sim.contact_force);
 }
 
+/// A machine file's belt axis takes the obstacle's push at its tool (`Machine::set_tool_force`), so the blocked carriage
+/// stands in the obstacle by what its contact spring gives, F / k with k = 1e7 N/m, and not by that plus the belt's
+/// stretch F / k_belt as when the push holds the motor (k_belt about EA / L = 5e5 N / (0.5 to 1 m): with F near 1 kN
+/// that is millimetres against the contact's 0.1 mm). The wall is wide and tall enough to meet any part of the carriage.
+#[test]
+fn a_push_at_the_tool_stops_a_load_on_a_belt_at_the_obstacles_face() {
+    let entry = load_file(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../machines/single-axis.toml"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let wall = r#"obstacles = [{ name = "wall", centre_m = [1.1, 0.0, 0.0], size_m = [1.0, 10.0, 10.0] }]"#;
+    let mut sim = Sim::new(entry, &with(entry, &[wall, "effects.crash = true"])).unwrap();
+    sim.command(Command::MoveTo(vec![0.9])).unwrap();
+    sim.run(2.5, |_| {});
+    let (force, depth) = (sim.contact_force, -sim.clearance);
+    println!("contact force {force} N, depth {depth} m");
+    assert!(sim.contact.is_some() && force > 100.0, "{force} N");
+    assert!((depth - force / 1e7).abs() < 0.05 * depth, "depth {depth} m against F / k = {} m", force / 1e7);
+}
+
 /// The xyz portal lowers onto a slab while it traverses: from (0.1, 0.1, 0.25) to (0.9, 0.1, 0.0), X cruising at its
 /// 0.8 m/s, Z at 0.25 m/s (the move takes as long on both). The parts' lowest point is 0.06 m below the tool, so the
 /// slab's top at z = 0.16 meets it at z = 0.10. Z is blocked there and trips on its following error after
