@@ -769,6 +769,17 @@ fn fit(r: &Request) -> Result<String, String> {
                     rows.push(row(name, axis.id, fit.config[q], fit.fitted[q], fit.error[q]));
                     units.push(quote(fit.units[q]));
                 }
+                // As `sim-cli fit` writes them: the friction beyond its sliding level, a payload picked or dropped.
+                for d in &fit.details {
+                    rows.push(row(d.quantity, axis.id, d.config, d.fitted, d.error));
+                    units.push(quote(""));
+                }
+                for (time, time_error, change, error) in &fit.payload_steps {
+                    rows.push(row("payload_step_s", axis.id, f64::NAN, *time, *time_error));
+                    units.push(quote("s"));
+                    rows.push(row("payload_factor_change", axis.id, 0.0, *change, *error));
+                    units.push(quote(""));
+                }
                 advice.extend(fit.advice(axis.id).iter().map(|(key, detail)| tr.tr_arg(key, detail)));
             }
         } else {

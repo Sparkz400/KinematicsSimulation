@@ -299,7 +299,9 @@ fn parts_named_in_a_config_behave_like_their_numbers() {
         named.set_text("parts.gearbox = \"NRK070-04-5\"").unwrap();
         let mut numbers = entry.config();
         apply_gearbox(&mut numbers, "NRK070-04-5").unwrap();
-        apply_motor(&mut numbers, "1FK2104-4AK", "400v").unwrap();
+        // At the supply the config names (the winder's S120: no S210 S1 curve), 400 V where it names none.
+        let supply = sim_components::catalog::Parts::of(&named).unwrap().supply;
+        apply_motor(&mut numbers, "1FK2104-4AK", supply).unwrap();
         let resolved = resolve(entry, &named).unwrap();
         let (gain, own) =
             (resolved.f64("drive.velocity_kp_nm_s_rad").unwrap(), numbers.f64("drive.velocity_kp_nm_s_rad").unwrap());
@@ -1185,7 +1187,7 @@ fn every_shipped_config_loads_and_judges_a_named_motor_by_its_s1_curve() {
         .map(|r| (r["part_number"].clone(), !r["rated_speed_400v_rad_s"].is_empty()))
         .collect();
     let curves = csv("siemens/s1_curves_s210.csv");
-    let mut entries: Vec<&'static sim_core::MachineEntry> = sim_machines::MACHINES.iter().copied().collect();
+    let mut entries: Vec<&'static sim_core::MachineEntry> = sim_machines::MACHINES.to_vec();
     let mut files: Vec<_> = fs::read_dir(catalog().join("../machines")).unwrap().map(|e| e.unwrap().path()).collect();
     files.sort();
     for path in files.iter().filter(|p| p.extension().is_some_and(|e| e == "toml")) {
@@ -1222,7 +1224,7 @@ fn every_shipped_config_loads_and_judges_a_named_motor_by_its_s1_curve() {
                     .collect(),
                 _ => Vec::new(),
             };
-            let own = sim_components::catalog::motor_config(&resolved, &m.id).unwrap();
+            let own = sim_components::catalog::motor_config(&resolved, m.id).unwrap();
             let read = sim_components::drive::s1_curve_of(&own).unwrap();
             assert_eq!(read, expected, "{} motor {} ({article} at {supply})", entry.id, m.id);
             with_curve += usize::from(!read.is_empty());

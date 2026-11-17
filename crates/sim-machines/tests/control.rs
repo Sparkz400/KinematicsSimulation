@@ -6,14 +6,15 @@ use sim_core::{Config, MachineEntry};
 use sim_machines::MACHINES;
 
 /// The switch between a machine's elastic model and its rigid reference model: belt stretch on a belt machine, the
-/// gearboxes' elasticity on one of arms, the web's stretch on a machine that winds a web.
+/// gearboxes' elasticity on one of arms, the web's stretch on a machine that winds a web, the rope's on the crane (whose
+/// drives' elasticity is a switch of its own, off as shipped).
 fn model_switch(cfg: &Config) -> &'static str {
     [
         "effects.belt_stretch",
+        "effects.rope_stretch",
         "effects.joint_elasticity",
         "effects.cable_stretch",
         "effects.web_stretch",
-        "effects.rope_stretch",
     ]
     .into_iter()
     .find(|key| cfg.bool(key).is_ok())
@@ -766,6 +767,19 @@ const UNREAD: &[(&str, &str)] = &[
     ("cam-indexer", "effects.gravity"),
     ("cam-indexer", "effects.process_force"),
     ("cam-indexer", "effects.frame_stretch"),
+    // The crank-cam crate's common switches: only the disc cam has a follower to lift off, only the two indexers a
+    // table to twist.
+    ("slider-crank", "effects.follower_lift_off"),
+    ("rotary-knife", "effects.follower_lift_off"),
+    ("flying-saw", "effects.follower_lift_off"),
+    ("toggle-press", "effects.follower_lift_off"),
+    ("geneva-drive", "effects.follower_lift_off"),
+    ("cam-indexer", "effects.follower_lift_off"),
+    ("disc-cam", "effects.table_twist"),
+    ("slider-crank", "effects.table_twist"),
+    ("rotary-knife", "effects.table_twist"),
+    ("flying-saw", "effects.table_twist"),
+    ("toggle-press", "effects.table_twist"),
     // Read by machine files' gantries only, as its config says.
     ("t-gantry", "effects.gantry_yaw"),
 ];

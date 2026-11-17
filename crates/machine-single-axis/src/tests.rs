@@ -1229,10 +1229,11 @@ fn the_robust_optimiser_steps_back_to_the_fastest_setting_that_passes_in_the_ban
 /// its low and high bound (2 * 2 + 1 = 5) and then corners, of which there are 2^2 = 4: 9 cycles at most. The search
 /// took three steps (velocity x1.5, above the motor's rated speed since 14 November, acceleration x1.5, jerk x1.5);
 /// judged are the fastest (5 + 3: its verdicts' sign corners are three of the four, one of them leaves the belt slack
-/// and the search stops there), the cycle as configured (5 + 4, whole, to find what it fails itself: nothing), then by
-/// bisection step 1 of 0 to 3 (5 + 4, passes) and step 2 of 1 to 3 (5 + 4, passes: 35.8 N left at the corner): 8 + 9 +
-/// 9 + 9 = 35 cycles, the result step 2, one step back. (Before 14 November the search took velocity x1.2 and the
-/// payload's bound was 18 kg, which leaves the belt slack alone at x1.5.) The bands' result fails `verdict_worst`, this
+/// and the search stops there), the cycle as configured (5 + 4, whole, to find what it fails itself: nothing), then the
+/// accepted steps from the fastest down (`fastest_passing`): step 2 (5 + 4, passes: 35.8 N left at the corner): 8 + 9 +
+/// 9 = 26 cycles, the result step 2, one step back (the bisection before 17 November judged step 1 too: 35 cycles).
+/// (Before 14 November the search took velocity x1.2 and the payload's bound was 18 kg, which leaves the belt slack
+/// alone at x1.5.) The bands' result fails `verdict_worst`, this
 /// one passes it.
 #[test]
 fn the_optimiser_at_the_worst_corner_steps_back_to_a_setting_that_passes_there() {
@@ -1246,7 +1247,7 @@ fn the_optimiser_at_the_worst_corner_steps_back_to_a_setting_that_passes_there()
     assert!(in_bands.nominal_fails.is_empty() && in_bands.steps_back == 0 && !in_bands.worst, "{in_bands:?}");
     assert_eq!(
         (at_worst.nominal_fails.as_slice(), at_worst.excused.len(), at_worst.steps_back, at_worst.runs, at_worst.worst),
-        (["belt-slack"].as_slice(), 0, 1, 35, true),
+        (["belt-slack"].as_slice(), 0, 1, 26, true),
         "{at_worst:?}"
     );
     assert!(

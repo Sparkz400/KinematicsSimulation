@@ -784,6 +784,9 @@ impl Machine for Based {
     fn thermal_parts(&self) -> Vec<ThermalPart> {
         self.inner.thermal_parts()
     }
+    fn thermal_values(&self, id: &str) -> Option<(f64, f64)> {
+        self.inner.thermal_values(id)
+    }
 }
 
 #[cfg(test)]

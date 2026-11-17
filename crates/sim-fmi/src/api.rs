@@ -614,8 +614,9 @@ impl Instance {
         let refused = |e: sim_core::ConfigError| ("fmi-error-config", self.tr.tr_arg(e.key(), e.detail()));
         let cfg = load_config(entry, &config_text).map_err(refused)?;
         let speed = sim_components::program::orientation_speed_of(&cfg).map_err(refused)?;
-        let runs = sim_components::program::read_with(&file, &text, sim.machine.axes(), sim.control.planned_pos(), speed)
-            .map_err(|e| ("fmi-error-path", format!("{file}:{}: {}", e.line, self.tr.tr_arg(e.key, &e.detail))))?;
+        let runs =
+            sim_components::program::read_with(&file, &text, sim.machine.axes(), sim.control.planned_pos(), speed)
+                .map_err(|e| ("fmi-error-path", format!("{file}:{}: {}", e.line, self.tr.tr_arg(e.key, &e.detail))))?;
         // A program with feeds is planned run by run; one run at the axes' limits as a path file is.
         match runs.as_slice() {
             [run] if run.feed.is_none() => sim.plan_path(&run.pieces, time_optimal),
