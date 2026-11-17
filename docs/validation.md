@@ -554,7 +554,7 @@ The D4's arms are the D3's (checked above); these check what the fourth axis add
 | The default cycle with a 90° turn | The tool at 90° in the pick to 1.5 mrad; every verdict passes (settling 0.39 mm); with the catalogue's 9 and 10 arcmin backlash settling fails alone (1.21 mm) | – | `the_default_cycle_turns_the_tool_and_passes_its_verdicts` |
 | Motor 4's own tables | The tool's joint turns 3.5e-5 + 8.8e-6 = 4.38e-5 kg m² behind ratio 8 at 97 %; drive 4 gives 3.75 N m (the arms' 15); `ratings.gearbox_max_torque_nm` 29 for motor 4, 192 for motor 1 | 1e-12 | `the_tool_motors_own_tables_are_read` |
 | Motor 4's values are the catalogue's | `[motor.4]`, `[gearbox.4]`, `[drive.4]`, `[ratings.4]` equal what `catalog::with_motor_part` puts in for 1FK2104-4AF, NRB060-04-8, 6SL3210-5HE10-4UF0 (backlash apart); its retuned velocity gain 0.25 · √(0.676413 · 0.207977) = 0.093768, above the shipped 0.05 (27.5°, 4.1 dB there) | 1e-6 (gain 1e-5) | `the_tool_motors_values_are_the_catalogues` |
-| An arm's own motor table | `[motor.2]` or `[gearbox.2]` refused: the arms share the D3's | – | `an_arms_own_motor_table_is_refused` |
+| An arm's own gearbox table | `[gearbox.2]` ratio 10 against the shared 20: motor 2's angle for one pose is half, motors 1 and 3 unchanged; the tool motor and gearbox above the base are collision boxes at z 0.16 and 0.065 m (`the_motor_and_gearbox_above_the_base_are_collision_bodies`) | 1e-12 | `an_arms_own_gearbox_table_is_read_by_that_arm_alone` |
 
 ## Hand calculations: wafer handler
 
