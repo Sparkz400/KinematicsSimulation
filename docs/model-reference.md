@@ -1761,7 +1761,9 @@ J̇ q̇) to f:
   `crane.sling_length_m` at P2 = P1 + l_s (sin a cos b, sin b, −cos a cos b): a spherical double pendulum. The load's
   signals are P2's.
 - `effects.joint_elasticity`: each drive the elastic joint of the other machines, the gearbox's stiffness, damping and
-  backlash between the rotor (a state) and the wheel or drum.
+  backlash between the rotor (a state) and the wheel or drum. With it on the shipped loops are stable (`sim-cli margins
+  overhead-crane --set effects.joint_elasticity=true`): bridge 177.4 Hz, 51.7°, 9.68 dB; trolley 182.8 Hz, 51.0°,
+  9.86 dB; hoist 49.5 Hz, 78.2°, 20.68 dB.
 - `effects.bridge_skew`: the bridge a rigid girder on two end carriages at x_A,B = x_c ∓ ψ g / 2 (g =
   `crane.bridge_gauge_m`), each with a drive of the bridge's config sharing its command, Q_x = F_A + F_B, Q_ψ = (F_B −
   F_A) g / 2; the wheels' lateral stiffness (`crane.bridge_wheel_lateral_stiffness_n_m`, over
