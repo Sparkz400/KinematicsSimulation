@@ -1050,11 +1050,11 @@ period at speed:
 ```text
 $ sim-cli analyze slider-crank --set cam.run=true          # 30 strokes a minute
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation
-1,2.000000,1.955907,0.779359,117.4226,0.1305,0.1694
+1,2.000000,1.961555,0.781834,117.4215,0.1308,0.1700
 $ sim-cli analyze rotary-knife --set cam.run=true          # 0.5 m formats at 1 m/s
-1,0.500000,2.896021,0.480603,151.7762,0.1947,0.1045
+1,0.500000,2.493662,0.501795,151.7643,0.1675,0.1091
 $ sim-cli analyze flying-saw --set cam.run=true            # 1.5 m lengths at 1 m/s
-1,1.500000,4.331545,1.942329,160.1879,0.2893,0.4222
+1,1.500000,4.536061,1.927122,159.0982,0.3028,0.4189
 ```
 
 All three pass every verdict. The knife's peak motor speed is the hand calculation's: between cuts on a 0.5 m format the
@@ -1072,7 +1072,9 @@ motor's checks, the press force against the force capacity at every pose (`press
 where the crank's torque over the ratio dx/dq gives less: 3989 N half way down the stroke), the links' and the rod's
 forces and the frame's stretch (`frame-deflection`, 0.23 mm under the 11.5 kN of the shipped part against 0.4 mm). Move
 the forming force up the stroke (`--set 'process.distance_m=[0.02, 0.021, 0.022, 0.023]'`) and `press-capacity` and
-`motor-peak` fail: far from the dead centre the mechanism gives little force. In the scope the ram's height stops
+`motor-peak` fail (1.70 and 27.6), and with them the drive's current, the motor's heating, the gearbox's peak and its
+gearing's life, and `settling-angle`: far from the dead centre the mechanism gives little force, and the crank stops
+1.18 rad short of its target. In the scope the ram's height stops
 0.23 mm above the bottom dead centre (`ram.height`, the frame's stretch, `effects.frame_stretch`), and in the dwell at
 the dead centre the press force stays while the motor's torque falls to almost nothing.
 
@@ -1089,11 +1091,11 @@ cycle shifts, tilts and turns the platform and back.
 ```text
 $ sim-cli analyze hexapod
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,...
-1,1.294000,1.022361,0.301841,109.8280,0.0683,...
-3,1.294000,1.138920,0.474881,161.0000,0.0762,...
+1,1.294000,1.018756,0.300240,109.8258,0.0680,...
+3,1.294000,1.125004,0.472138,160.9536,0.0753,...
 $ sim-cli verdicts hexapod
-settling,,0.00003501,0.00005000,ok
-screw-buckling,3,384.2,168353,ok
+settling,,0.000001477,0.00005000,ok
+screw-buckling,3,380.6,168353,ok
 ...
 ```
 
@@ -1110,7 +1112,7 @@ and brings it back level.
 
 ```text
 $ sim-cli verdicts hexapod-rotary
-settling,,0.0004184,0.001000,ok
+settling,,0.0004185,0.001000,ok
 singularity,,3.589,15.00,ok
 gearbox-peak,3,144.6,278.0,ok
 crank-dead-centre,1,0.4372,1.222,ok
@@ -1130,7 +1132,7 @@ angles. A target is refused where a rod cannot reach, a crank comes nearer its d
 On its cycle the motors use at most 37 % of their torque curve, the gearboxes see at most 145 of their 278 N m, the
 cranks keep at least 65° from their dead centres, the rods carry at most 767 N against the 3530 N their buckling allows,
 and the platform settles within 0.42 mm: much of it the gearboxes' twist and backlash under the seat's weight, which the
-motors' encoders do not see. The velocity loops' gain is 0.10 N m s/rad (47.1° and 11.1 dB at the
+motors' encoders do not see. The velocity loops' gain is 0.10 N m s/rad (46.8° and 11.1 dB at the
 level pose, 38.7° and 9.6 dB with the friction off; 0.12 left 34.2° there).
 
 `cable-planar` hangs a carriage of 3 kg (up to 2 kg on it) in a vertical plane from 4 cables, `cable-spatial` a platform
@@ -1140,13 +1142,13 @@ that carry the platform within the band from `cable.min_tension_n` to the breaki
 
 ```text
 $ sim-cli verdicts cable-planar
-settling,,0.0001535,0.0003000,ok
-cable-max-tension,2,187.9,400.0,ok
+settling,,0.0001485,0.0003000,ok
+cable-max-tension,2,186.7,400.0,ok
 cable-min-tension,2,0,0,ok
 ...
 $ sim-cli modes cable-planar
 position,mode1_hz,mode1_damping,mode2_hz,mode2_damping
--0.600000,26.2012,0.00000,31.8526,0.00000
+-0.600000,26.2007,0.00000,31.8525,0.00000
 ...
 ```
 
@@ -1156,7 +1158,8 @@ accelerated up and right at 10 m/s², which 120 N prevent. A target where no ten
 its payload is refused as outside the wrench-feasible workspace. The cables stretch with EA / l, so the stiffness and
 the modes change over the workspace (`sim-cli modes`): 24.6 Hz at the planar robot's centre. The spatial robot's cables
 run from corner to corner and hold little moment: turns of 0.05 rad already take some near the band's top, and its
-platform rings at up to 0.85 mrad in the dwells (settling 0.84 mm against the 1 mm the config asks).
+platform rests up to 1.03 mrad off its orientation in the dwells (`settling-angle`, against 2 mrad; its position
+0.04 mm off, against 1 mm).
 
 ## Size a tripod
 
@@ -1171,7 +1174,7 @@ y and its turn about its normal follow from the legs and are reported (`platform
 $ sim-cli verdicts tripod
 motor-peak,1,0.1955,1.000,ok
 ...
-tripod-leg-force,1,376.3,1500,ok
+tripod-leg-force,1,376.4,1500,ok
 tripod-leg-stroke,2,0.05161,0.1000,ok
 tripod-revolute-angle,2,0.2100,0.5236,ok
 tripod-cone-angle,2,0.3762,0.6109,ok
@@ -1184,7 +1187,7 @@ stroke, its swing at the trunnion and its cone at the ball joint against 30° an
 largest distance of a point of the joint circle from where a pure tilt would put it, 2.9 mm against the 5 mm of
 `ratings.parasitic_tolerance_m` (leave the key out to judge none). A target is refused where a leg would leave its
 stroke or a joint its range, or near a singularity (`workspace.max_condition_number`; level the condition number is
-√2). The velocity loops (`sim-cli margins tripod`) keep at least 128.9° and 11.35 dB, and 110.1° and 9.35 dB across the bounds (`--bands`).
+√2). The velocity loops (`sim-cli margins tripod`) keep at least 121.9° and 11.36 dB, and 110.1° and 9.35 dB across the bounds (`--bands`).
 
 ## Size a stepper or an induction motor
 

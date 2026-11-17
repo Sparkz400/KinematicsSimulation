@@ -1021,11 +1021,11 @@ voller Geschwindigkeit:
 ```text
 $ sim-cli analyze slider-crank --set cam.run=true          # 30 Hübe je Minute
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation
-1,2.000000,1.955907,0.779359,117.4226,0.1305,0.1694
+1,2.000000,1.961555,0.781834,117.4215,0.1308,0.1700
 $ sim-cli analyze rotary-knife --set cam.run=true          # Formate von 0,5 m bei 1 m/s
-1,0.500000,2.896021,0.480603,151.7762,0.1947,0.1045
+1,0.500000,2.493662,0.501795,151.7643,0.1675,0.1091
 $ sim-cli analyze flying-saw --set cam.run=true            # Längen von 1,5 m bei 1 m/s
-1,1.500000,4.331545,1.942329,160.1879,0.2893,0.4222
+1,1.500000,4.536061,1.927122,159.0982,0.3028,0.4189
 ```
 
 Alle drei bestehen jedes Urteil. Die höchste Motordrehzahl des Messers ist die der Handrechnung: zwischen den Schnitten
@@ -1044,8 +1044,10 @@ den Prüfungen des Motors die Presskraft gegen das Kraftvermögen in jeder Stell
 20 kN, oder weniger, wo das Kurbelmoment über die Übersetzung dx/dq weniger gibt: 3989 N auf halbem Hub), die Kräfte der
 Hebel und des Pleuels und die Auffederung des Gestells (`frame-deflection`, 0,23 mm unter den 11,5 kN des
 mitgelieferten Teils gegen 0,4 mm). Die Umformkraft im Hub nach oben gelegt
-(`--set 'process.distance_m=[0.02, 0.021, 0.022, 0.023]'`), und `press-capacity` und `motor-peak` verfehlen: fern vom
-Totpunkt gibt der Mechanismus wenig Kraft. Im Oszilloskop bleibt der Stößel 0,23 mm über dem unteren Totpunkt stehen
+(`--set 'process.distance_m=[0.02, 0.021, 0.022, 0.023]'`), und `press-capacity` und `motor-peak` verfehlen (1,70 und
+27,6), mit ihnen der Strom des Antriebs, die Erwärmung des Motors, die Getriebespitze und die Lebensdauer seiner
+Verzahnung und `settling-angle`: fern vom Totpunkt gibt der Mechanismus wenig Kraft, und die Kurbel bleibt 1,18 rad vor
+ihrem Ziel stehen. Im Oszilloskop bleibt der Stößel 0,23 mm über dem unteren Totpunkt stehen
 (`ram.height`, die Auffederung des Gestells, `effects.frame_stretch`), und in der Rast im Totpunkt bleibt die Presskraft,
 während das Moment des Motors fast auf nichts fällt.
 
@@ -1062,11 +1064,11 @@ Kugelgewindetrieb 25 x 10 an einem eigenen Motor. Die Werkzeuglage ist x, y, z (
 ```text
 $ sim-cli analyze hexapod
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,...
-1,1.294000,1.022361,0.301841,109.8280,0.0683,...
-3,1.294000,1.138920,0.474881,161.0000,0.0762,...
+1,1.294000,1.018756,0.300240,109.8258,0.0680,...
+3,1.294000,1.125004,0.472138,160.9536,0.0753,...
 $ sim-cli verdicts hexapod
-settling,,0.00003501,0.00005000,ok
-screw-buckling,3,384.2,168353,ok
+settling,,0.000001477,0.00005000,ok
+screw-buckling,3,380.6,168353,ok
 ...
 ```
 
@@ -1084,7 +1086,7 @@ rollt, nickt und giert sie, jeweils aus der Lage davor, und bringt sie waagrecht
 
 ```text
 $ sim-cli verdicts hexapod-rotary
-settling,,0.0004184,0.001000,ok
+settling,,0.0004185,0.001000,ok
 singularity,,3.589,15.00,ok
 gearbox-peak,3,144.6,278.0,ok
 crank-dead-centre,1,0.4372,1.222,ok
@@ -1105,7 +1107,7 @@ Im Zyklus nutzen die Motoren höchstens 37 % ihrer Momentenkennlinie, die Getrie
 die Kurbeln bleiben mindestens 65° von ihren Totpunkten, die Stangen tragen höchstens 767 N gegen die 3530 N, die ihr
 Knicken erlaubt, und die Plattform beruhigt sich auf 0,42 mm: vieles davon ist die Verdrehung und das Spiel der Getriebe
 unter dem Gewicht des Sitzes, die die Geber der Motoren nicht sehen. Die Drehzahlregler haben
-0,10 N m s/rad (47,1° und 11,1 dB in der waagrechten Lage, 38,7° und 9,6 dB ohne Reibung; 0,12 ließ dort 34,2°).
+0,10 N m s/rad (46,8° und 11,1 dB in der waagrechten Lage, 38,7° und 9,6 dB ohne Reibung; 0,12 ließ dort 34,2°).
 
 `cable-planar` hängt einen Schlitten von 3 kg (bis zu 2 kg darauf) in einer senkrechten Ebene an 4 Seile,
 `cable-spatial` eine Plattform von 4 kg (bis zu 4 kg) mit sechs Freiheitsgraden an 8; jedes Seil läuft über eine
@@ -1115,13 +1117,13 @@ Bruchlast durch die Sicherheit tragen:
 
 ```text
 $ sim-cli verdicts cable-planar
-settling,,0.0001535,0.0003000,ok
-cable-max-tension,2,187.9,400.0,ok
+settling,,0.0001485,0.0003000,ok
+cable-max-tension,2,186.7,400.0,ok
 cable-min-tension,2,0,0,ok
 ...
 $ sim-cli modes cable-planar
 position,mode1_hz,mode1_damping,mode2_hz,mode2_damping
--0.600000,26.2012,0.00000,31.8526,0.00000
+-0.600000,26.2007,0.00000,31.8525,0.00000
 ...
 ```
 
@@ -1131,8 +1133,9 @@ schlaff, während der Schlitten mit 10 m/s² nach rechts oben beschleunigte, was
 Seilkräfte im Band die Plattform mit Nutzlast halten, wird als außerhalb des kraftfähigen Arbeitsraums abgelehnt. Die
 Seile dehnen sich mit EA / l, daher ändern sich Steifigkeit und Eigenfrequenzen über den Arbeitsraum (`sim-cli modes`):
 24,6 Hz in der Mitte des ebenen Roboters. Die Seile des räumlichen laufen von Ecke zu Ecke und halten wenig Moment:
-schon Drehungen von 0,05 rad bringen einige nahe an die Obergrenze des Bands, und seine Plattform schwingt in den
-Verweilzeiten mit bis zu 0,85 mrad (Beruhigung 0,84 mm gegen die 1 mm, die die Konfiguration verlangt).
+schon Drehungen von 0,05 rad bringen einige nahe an die Obergrenze des Bands, und seine Plattform steht in den
+Verweilzeiten bis zu 1,03 mrad neben ihrer Orientierung (`settling-angle`, gegen 2 mrad; ihre Lage 0,04 mm daneben,
+gegen 1 mm).
 
 ## Einen Tripod auslegen
 
@@ -1148,7 +1151,7 @@ angehoben und um beide abgesenkt und fährt ohne es zurück waagrecht:
 $ sim-cli verdicts tripod
 motor-peak,1,0.1955,1.000,ok
 ...
-tripod-leg-force,1,376.3,1500,ok
+tripod-leg-force,1,376.4,1500,ok
 tripod-leg-stroke,2,0.05161,0.1000,ok
 tripod-revolute-angle,2,0.2100,0.5236,ok
 tripod-cone-angle,2,0.3762,0.6109,ok
@@ -1162,7 +1165,7 @@ Kugelgelenk gegen 30° und 35°; `tripod-parasitic` prüft den größten Abstand
 wohin ihn eine reine Neigung brächte, 2,9 mm gegen die 5 mm von `ratings.parasitic_tolerance_m` (ohne den Schlüssel
 wird nichts geprüft). Ein Ziel wird abgelehnt, wo ein Bein seinen Hub oder ein Gelenk seinen Bereich verließe, oder
 nahe einer Singularität (`workspace.max_condition_number`; waagrecht ist die Konditionszahl √2). Die Drehzahlregler
-(`sim-cli margins tripod`) halten mindestens 128,9° und 11,35 dB, über die Grenzen (`--bands`) 110,1° und 9,35 dB.
+(`sim-cli margins tripod`) halten mindestens 121,9° und 11,36 dB, über die Grenzen (`--bands`) 110,1° und 9,35 dB.
 
 ## Einen Schrittmotor oder einen Asynchronmotor auslegen
 
