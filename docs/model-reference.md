@@ -700,28 +700,35 @@ Belt mass: half of the free belt is lumped on each motor pulley, J_pulley += ½ 
 
 ### States of the elastic model
 
-21 states: positions x, z, a, b, φ_A, φ_B, q, u; their eight rates; the two LuGre states of the guides; the slack-time counter; the two brake states.
+23 states: positions x, z, a, b, φ_A, φ_B, q, u, w; their nine rates; the two LuGre states of the guides; the slack-time counter; the two brake states. With `effects.belt_tooth_jump` six more per motor pulley.
 
 - x is the carriage relative to the frame. q is the frame deflection in X.
 - u is the Z axis's centre of mass in X relative to the carriage.
+- w is the beam's deflection under the carriage ([beam's vertical mode](#beam-sag)).
+
+q, u and w stay 0 with their effects off.
 
 ### Equations of motion
 
-Masses: m_z = Z axis + payload (if attached); m_c = carriage + idler mass on X + moving chain mass m(x).
+Masses: m_z = Z axis + payload (if attached); m_car the carriage; m_c = m_car + moving chain mass m(x); m_idler,x and m_idler,z the [idlers](#idlers).
 
-Carriage, Z axis, frame and leaning Z axis, Lagrange's equations solved together over (x, z, q, u):
+Carriage, Z axis, frame, leaning Z axis and beam mode, Lagrange's equations solved together over (x, z, q, u, w), each coordinate only with its effect on:
 
 ```text
-T = ½ m_c w² + ½ m_z (w + u')² + ½ (m_z + m_idler,z) z'² + ½ m_f q'²                 w = x' + q'
-  + ½ m_xx x'² + m_xz x' z' + ρ (4s + 2s_z) q' x' + ½ ρ L_total q'²                 the belt's runs (above)
-M · (x'', z'', q'', u'') = (F_x, F_z, F_q, F_u)                                       M the mass matrix of T
-F_x = T₃ − T₁ − F_f,x − F_idler,x − F_chain drag + F_stop,x + F_p,x + m′ w (½ w − x') + 8ρ x' z'
-F_z = 2T₂ − T₁ − T₃ − F_f,z + f_z,flex − F_idler,z + F_p,z + F_stop,z − m_z g − 8ρ x'²
-F_q = −k_f q − c_f q' + F_p,x − m′ x' w
-F_u = tip · F_p,x − k(z) u − c_u u'
+T = ½ m_c v² + ½ m_z (v + u')² + ½ m_idler,x x'² + ½ (m_z + m_idler,z) z'² + ½ m_f q'²      v = x' + q'
+  + ½ m_xx x'² + m_xz x' z' + ρ (4s + 2s_z) q' x' + ½ ρ L_total q'²                        the belt's runs (above)
+  + ½ (m_car + m_z + M_b(x)) w'² − m_z z' w'                                                 the beam mode
+M · (x'', z'', q'', u'', w'') = (F_x, F_z, F_q, F_u, F_w)                                    M the mass matrix of T
+F_x = T₃ − T₁ − F_f,x − F_idler,x − F_chain drag + F_stop,x + F_p,x + m′ v (½ v − x') + 8ρ x' z'
+      + ½ M_b′ w'² − ½ k_b′ w²
+F_z = 2T₂ − T₁ − T₃ − F_f,z − ½ u² (dk/dz + dc_g/dz) − ½ u² Σ T_i c_i′ − F_idler,z
+      + F_p,z (1 + a′ u²) + F_p,x tip′ u + F_stop,z − m_z g − 8ρ x'²
+F_q = −k_f q − c_f q' + F_p,x − m′ x' v
+F_u = tip · F_p,x + 2 a F_p,z u − Σ T_i c_i u − (k(z) + c_g(z)) u − c_u u'
+F_w = (m_car + m_z) g − F_p,z − k_b(x) w − c_b w' − M_b′ x' w'
 ```
 
-The process force acts at the tool tip, at x + q + tip · u, so on each of them; the lean's spring acts between carriage and Z axis, on u alone. Without `effects.tool_flex` m_z rides on w and u stays 0; without `effects.frame_compliance` q stays 0.
+The process force acts at the tool tip, at x + q + tip · u, so on each of them; the lean's spring acts between carriage and Z axis, on u alone. The idlers spin with the belt's speed past the carriage, in which the frame's sway cancels, so they ride on x' alone. Without `effects.tool_flex` (and `effects.z_axis_bending`) m_z rides on v and u stays 0; without `effects.frame_compliance` q stays 0. c_g is the lean's [pendulum stiffness](#leaning-z-axis), c_i and a the belt runs' geometric stiffness and the tip's rise, k_b, M_b and c_b the [beam mode](#beam-sag).
 
 Pulleys and motor shafts, for k = A, B:
 
@@ -746,7 +753,15 @@ tip    = k · ( 1/k_lat + h · h_tool / k_tilt )           tool-tip travel per u
 f_z,flex = −½ · u² · dk/dz,     dk/dz = 2 · k² · h / k_tilt
 ```
 
-The axis is softer the further it hangs below the carriage. The spring gets stiffer as the Z axis rises, which pushes back on Z (the last line; it keeps the energy balance exact). **The X position the simulator reports is the tool tip over the floor: x + q + tip · u**, and its speed likewise. The workpiece stands on the floor, not on the frame, so the frame's sway is part of path error, tracking error and the settling verdict. q and tip · u are also signals of their own. The process force acts at the tool tip: the share `tip` of it bends the Z axis, the rest pushes the carriage.
+The axis is softer the further it hangs below the carriage. The spring gets stiffer as the Z axis rises, which pushes back on Z (the last line; it keeps the energy balance exact).
+
+The Z axis also hangs like a pendulum: held out by the spring's force F = k u, its centre of mass rises by F² r(h), r(d) = ½ ∫₀^d θ(s)² ds the shortening of the leaning bar (θ(s)/F = h/k_tilt + (h s' − s'²/2)/E I with s' = min(s, h), integrated by the 3-point Gauss rule, exact for it). Its weight adds the stiffness
+
+```text
+c_g(z) = 2 k² m_z g r(h)          (k² m_z g h³ / k_tilt² for a guide that only tilts)
+```
+
+on the lean, beside k, and −½ u² dc_g/dz on Z (`lean_weight_stiffness`). It is 0 without gravity. **The X position the simulator reports is the tool tip over the floor: x + q + tip · u**, and its speed likewise. The workpiece stands on the floor, not on the frame, so the frame's sway is part of path error, tracking error and the settling verdict. q and tip · u are also signals of their own. The process force acts at the tool tip: the share `tip` of it bends the Z axis, the rest pushes the carriage.
 
 A machine file's `machine.lean` node is the same for any body leaning along a horizontal axis, its lean w beside the axes with the body's mass coupling it to its axis, [[M, m e_a], [m e_a^T, m]] · [a; ẅ] = [F; tip · F_p,a − k w − c ẇ] ([machine files](machine-files.md#the-belts-wrap-and-a-leaning-axis)); the T-gantry's file gives this crate's numbers to 1e-9.
 
@@ -768,22 +783,22 @@ Assumptions: the Z axis is a rigid body on a compliant guide (with `z_axis_bendi
 
 ```text
 a = carriage_at_zero + x,  b = L − a
-sag(x) = (m_c + m_z) g · a² b² / (3 E I L)          (L³ / (48 E I) per newton in the middle)
+sag(x) = (m_car + m_z) g · a² b² / (3 E I L)          (L³ / (48 E I) per newton in the middle)
 z_tool = z − sag(x),   ż_tool = ż − sag'(x) ẋ
 ```
 
 At rest the Z axis stands sag(x) higher on its belt so that the tool is at its pose. With the default values: 107.87 N, L = 1.3 m, E I = 8.4e4 N m²: 58.8 µm in the middle, 9.8 µm at the ends of the stroke. This is quasi-static.
 
-With `effects.beam_vertical_mode` the beam's first vertical mode with the carriage on it is a coordinate w, the beam's deflection under the carriage (down), and the Z axis's z is relative to the carriage:
+With `effects.beam_vertical_mode` (elastic model; it takes the `[beam]` keys above even with `beam_sag` off) the beam's first vertical mode with the carriage on it is a coordinate w, the beam's deflection under the carriage (down), and the Z axis's z is relative to the carriage. Its keys: `beam.mass_kg_m` μ (3.5, an [estimate]) and `beam.damping_ratio` ζ (0.01). The carriage is kept 0.1 % of the span off the posts, where the stiffness would be infinite.
 
 ```text
 shape φ: the span's static deflection under a point load at the carriage, φ = 1 there
 k(x) = 1 / span_compliance = 3 E I L / (a² b²),   M(x) = μ ∫ φ² ds   (17 μ L / 35 in the middle)
-T = ½ (m_c + m_z + M(x)) w'² − m_z z' w' + …,   V = ½ k(x) w² − (m_c + m_z) g w,   damping c = 2 ζ √(k (m_c + m_z + M))
+T = ½ (m_car + m_z + M(x)) w'² − m_z z' w' + …,   V = ½ k(x) w² − (m_car + m_z) g w,   damping c = 2 ζ √(k (m_car + m_z + M))
 z_tool = z − w (+ the lean's rise)
 ```
 
-So the Z axis's acceleration drives the beam through −m_z, and the carriage's weight riding along the beam drives it through k(x) (a force on x of −½ k' w², and ½ M' w'² from the modal mass). At rest w is the quasi-static sag. By hand in the middle (k = 1.835e6 N/m, M = 2.21 kg, m_c + m_z = 11 kg): 59.3 Hz (the former estimate of about 100 Hz left out the carriage and the Z axis). The Lagrangian drops what the shape's change with x adds to the kinetic energy: a coupling ½ M′ w ẋ ẇ and ½ ∫ μ φₓ² w² ẋ², of the relative size w / L ≈ 5·10⁻⁵ and 10⁻⁹ of the kept terms at the 59 µm sag. The belt is not on w: its vertical runs (μ (4 s + 2 s_z) = 0.16 kg) would ride on it and its horizontal runs tilt with it (a third of μ (4 s + 2 s_x), 0.09 kg), 0.25 kg against 13.21 kg, which would lower the mode by 0.9 % (59.32 to 58.77 Hz), well inside the [estimate]s of the beam's mass and stiffness. The beam's own mass moves with the mode in the frame momentum (vertical momentum −(p₀ ẇ + p₀′ ẋ w), p₀ = μ ∫ φ, 5 μ L / 8 = 2.84 kg in the middle, beside the 11 kg it carries). ζ is the mode's damping ratio with the carriage and the Z axis on the beam. The damping is the loss row `power.beam`; the signal `beam.deflection` is w.
+So the Z axis's acceleration drives the beam through −m_z, and the carriage's weight riding along the beam drives it through k(x) (a force on x of −½ k' w², and ½ M' w'² from the modal mass). At rest w is the quasi-static sag. By hand in the middle (k = 1.835e6 N/m, M = 2.21 kg, m_car + m_z = 11 kg): 59.3 Hz (the former estimate of about 100 Hz left out the carriage and the Z axis). The Lagrangian drops what the shape's change with x adds to the kinetic energy: a coupling ½ M′ w ẋ ẇ and ½ ∫ μ φₓ² w² ẋ², of the relative size w / L ≈ 5·10⁻⁵ and 10⁻⁹ of the kept terms at the 59 µm sag. The belt is not on w: its vertical runs (μ (4 s + 2 s_z) = 0.16 kg) would ride on it and its horizontal runs tilt with it (a third of μ (4 s + 2 s_x), 0.09 kg), 0.25 kg against 13.21 kg, which would lower the mode by 0.9 % (59.32 to 58.77 Hz), well inside the [estimate]s of the beam's mass and stiffness. The beam's own mass moves with the mode in the frame momentum (vertical momentum −(p₀ ẇ + p₀′ ẋ w), p₀ = μ ∫ φ, 5 μ L / 8 = 2.84 kg in the middle, beside the 11 kg it carries). ζ is the mode's damping ratio with the carriage and the Z axis on the beam. The damping is the loss row `power.beam`; the signal `beam.deflection` is w.
 
 The belt's vertical runs hold the leaning Z axis back with their geometric stiffness. A run goes from a carriage idler, at the carriage where the guide tilts, to a point of the Z axis d below the carriage: the clamp (d = −(s + z)) or the Z-bottom idler (d = s + sz − z). Under the spring's force F = k u that point is out sideways by δ = F g(d) (g the guide's give, tilt and bending at that distance) and has risen along the Z axis by F² ρ(d) (ρ = ½ ∫ θ² of the leaning bar), so the run is longer by δ²/(2|d|) − sign(d) F² ρ(d), and K_uu gains Σ T_i c_i over the runs. A guide that only tilts turns the end about the idler and leaves the run as long as it was; what is left is the guide's sideways give and its product with the tilt, c = k² (1/(lateral² |d|) + 2 sign(d) h / (lateral · tilt)) per run without bending: about 5 N/m on the default gantry at z = 0.05 m, 3·10⁻⁵ of the lean's spring. (The belt's runs are taken on the Z axis's line; their offset e to either side of it would add the moment (T₁ − T₃) e of the tension difference, which the model leaves out.) The process force's vertical part works on the tip's rise a(z) u² (the leaning bar is shortened by θ² d / 2): it is in the lean's and the Z axis's equations, in the modes and in the process row of the budget, and `tool_state` has the rise in the tool's height.
 
@@ -851,11 +866,11 @@ Held, the shaft sits on a spring that reaches the brake torque at 1 mrad, with t
 `effects.belt_stretch = false`. Eight states: x, z, their rates, the two LuGre states, the two brake deflections. With belt force F_k = i · (ripple(τ_k) − τ_shaft − τ_brake,k) / r per motor (τ_brake,k the [holding brake](#holding-brakes) at the rotor speed i (v_x ± v_z) / r), reflected rotor mass m_r = i² J_rotor / r² and the gearbox loss factors λ_A, λ_B:
 
 ```text
-( m_X + (λ_A + λ_B) m_r ) · a_x + (λ_A − λ_B) m_r · a_z = λ_A F_A + λ_B F_B + mesh − F_f,x + extras_x
-(λ_A − λ_B) m_r · a_x + ( m_Z + (λ_A + λ_B) m_r ) · a_z = λ_A F_A − λ_B F_B + mesh − F_f,z − m_z g + extras_z
+( m_X + (λ_A + λ_B) m_r ) · a_x + ((λ_A − λ_B) m_r + m_xz) · a_z = λ_A F_A + λ_B F_B + mesh − F_f,x + 8ρ v_x v_z + extras_x
+((λ_A − λ_B) m_r + m_xz) · a_x + ( m_Z + (λ_A + λ_B) m_r ) · a_z = λ_A F_A − λ_B F_B + mesh − F_f,z − m_z g − 8ρ v_x² + extras_z
 ```
 
-m_X and m_Z include both pulleys (2 J_pulley / r²), the idlers and the chain. The gearbox loses torque only on what it transmits, which is the motor torque minus what accelerates the rotor itself; that depends on the acceleration being solved for, and the loss factors are iterated to their fixed point (`mech::settled_loss`; three passes left up to 1.5e-4 of the acceleration). With a loss-free gearbox this collapses to two independent axes:
+m_X includes both pulleys (2 J_pulley / r²), the idlers, the chain and the belt's runs m_xx; m_Z the pulleys and the idlers; extras_x holds the process force, the end stop, the idlers' and the chain's drag and the chain's −½ m′ v_x². The gearbox loses torque only on what it transmits, which is the motor torque minus what accelerates the rotor itself; that depends on the acceleration being solved for, and the loss factors are iterated to their fixed point (`mech::settled_loss`; three passes left up to 1.5e-4 of the acceleration). With a loss-free gearbox and a massless belt this collapses to two independent axes:
 
 ```text
 ( m_x + 2J/r² ) · a_x = F_x − F_f,x          ( m_z + 2J/r² ) · a_z = F_z − m_z g − F_f,z
@@ -865,25 +880,25 @@ The rigid model has no belt stretch, slack, damping, tooth stiffness, backlash, 
 
 ### Feedforward torque and static hold
 
-The torque feedforward and the motor-limit check use the loss-free rigid model:
+The torque feedforward and the motor-limit check use the loss-free rigid model, with the belt's runs and their speed terms at the tool's speed (`feedforward_torque_moving`; J = J_pulley + i² J_rotor):
 
 ```text
-f_x = ( m_x + 2J/r² + m_idler,x + m_chain(x) ) · a_x
-f_z = ( m_z + 2J/r² + m_idler,z ) · a_z + m_z g
+f_x = ( m_x + 2J/r² + m_idler,x + m_chain(x) + m_xx ) · a_x + m_xz a_z + ½ m′ v_x² − 8ρ v_x v_z
+f_z = ( m_z + 2J/r² + m_idler,z ) · a_z + m_xz a_x + m_z g + 8ρ v_x²
 τ_A = r/(2i) · (f_x + f_z)         τ_B = r/(2i) · (f_x − f_z)
 ```
 
-Friction is not in it. At rest each motor holds m_z g r / (2i), with opposite signs.
+Friction is not in it (the friction feedforward is `steady_friction`: guides at their load at rest, idlers, chain, the gearbox's loss on force and weight, the shaft's friction). At rest each motor holds m_z g r / (2i), with opposite signs.
 
 ### Signals
 
-Besides the signals every machine gets: `belt.1/2/3.tension`, `axis.x/z.belt_stretch` (tool position minus r/2 (a ± b)), `axis.x/z.friction`, `frame.deflection` (q), `axis.x.tool_deflection` (tip · u), `belt.slack_time`, `pulley.a/b.radial_load`, `axis.x/z.guide_load`, `gearbox.a/b.output_torque`. And those of the [effect views](#effect-views): torque parts, loss powers, energy parts, the friction split per guide and `belt.1/2/3.stretch`; the simulation adds `temperature.gearbox_a/b` and `temperature.guide_x/z`.
+Besides the signals every machine gets: `belt.1/2/3.tension`, `axis.x/z.belt_stretch` (tool position minus r/2 (a ± b)), `axis.x/z.friction`, `frame.deflection` (q), `axis.x.tool_deflection` (tip · u), `beam.deflection` (w), `belt.slack_time`, `belt.span_detuning` (with `effects.belt_span_vibration`), `pulley.a/b.radial_load`, `axis.x/z.guide_load`, `gearbox.a/b.output_torque`. And those of the [effect views](#effect-views): torque parts, loss powers, energy parts, the friction split per guide and `belt.1/2/3.stretch`; the simulation adds `temperature.gearbox_a/b` and `temperature.guide_x/z`.
 
 The gearbox output torque is the torque that turns the pulley, positive forwards. Elastic model: τ_gear,out, what the gear's spring and damper pass on, times the loss factor. Rigid model: λ_k · (F_drive,k − m_r · (a_x ± a_z)) · r from the solver's last pass, the motor's force less what its own rotor takes, times the loss factor.
 
 **Scene.** `Machine::scene_point` maps a tool pose to the place where the scene draws the tool, so that a front end can draw a path there: (span + x, −0.05, z − stroke_z − span − 0.042), the flange under the Z axis. The scene itself draws the flange at the carriage's place on the beam, so at rest the two coincide; in motion the tool tip is off the drawn flange by the frame's deflection and the lean of the Z axis.
 
-The belt wraps each motor pulley by half a turn, so the two sections that end there pull its shaft the same way: radial load A = T₁ + T₂, B = T₂ + T₃. The guide loads are those of the [friction model](#guide-friction-lugre): weight, side force and tilting moment from the commanded acceleration, without moments on single blocks.
+The belt wraps each motor pulley by half a turn, so the two sections that end there pull its shaft the same way: radial load A = T₁ + T₂, B = T₂ + T₃. The guide loads are those of the [friction model](#guide-friction-lugre): weight, side force and tilting moment from the commanded acceleration, without moments on single blocks. The X guide carries m_x g + |tilt|, the Z guide |m_z a_x| + |tilt|, tilt = 2 m_z a_x (z_com_drop − z) / guide_spacing. a_x is what the motor torques would give the loss-free rigid model (`commanded_ax`), over its mass matrix with the belt's runs, and with the Z axis's weight on the Z row: through the runs' coupling m_xz the torque that holds the Z axis up would otherwise count as X acceleration.
 
 ## Single axis
 
