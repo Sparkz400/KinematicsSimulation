@@ -214,48 +214,58 @@ commanded acceleration.
 
 Regenerated on 17 November from runs on the merged build, or checked against the code:
 
-- `docs/config-reference.md`: every key the program reads.
-- `docs/model-reference.md` from the top to "Motion controller": components, drive and every machine,
-  with new sections for the machines that had none.
-- `docs/user-guide.md` and `docs/de/benutzerhandbuch.md`: all sections except the blocks listed below.
+- `docs/config-reference.md`: every key the program reads (about 105 keys added; the defaults of
+  field weakening, iron loss and resistor heating corrected).
+- `docs/model-reference.md`: the whole file; every machine has a section; the "Known shortcuts" table
+  lists the 26 `shortcut:` comments; five verdicts that were missing are in the verdict table.
+- `docs/fmi.md`: output counts and a fresh check log of all five FMUs.
+- `docs/user-guide.md` and `docs/de/benutzerhandbuch.md`: every section except the blocks below.
 
-Not regenerated (the work was stopped at a deadline); old figures still stand there:
+Not re-run (old figures stand; each needs a long optimiser or worst-corner run):
 
-- `docs/model-reference.md` from "Motion controller" to the end: not checked against the code. Its
-  "Known shortcuts" table has 5 rows against the 26 comments, three of them no longer in the code, and
-  five sentences in the text name shortcuts that are gone (rack feed force, `arc_on`'s slerp, the damped
-  EI shapers, the holding brake in the fault reaction, the conveyor's paragraph).
-- `docs/fmi.md` and `docs/validation.md` (apart from the measured ball screw and the margins text).
-- User guides, "Shorten a cycle": the EXCT-30 output block is new (2.048 to 1.756 s) but its prose
-  still says 1.49 s, 1.59 s and 387 cycles; the default gantry's figures (now 6.08 to 3.248 s) and the
-  `--worst`, clearance and box runs are old.
-- User guides, "Which drive works best" and "See which unknown parameters matter": the duty-mix
-  example, the `--robust` figures and the `--bands --worst` block with its paragraphs.
-- User guides, "Tune gains and use input shaping": outputs were regenerated before the shaper and
-  crane merges and not re-run after; the sentence "10 Hz to 2 kHz" lacks the step down to 1 Hz; the
-  gain-tuning paragraph has old margins.
-- User guides: the D3 and D2 `--bands --worst` settling values and the linear delta's phase margin.
+- User guides, "Shorten a cycle": the `--worst` paragraph and its line in the limits list (they quote
+  1.492 s and 5.36 s from before the stage and contradict the regenerated paragraphs above them); the
+  clearance, box and two-box runs.
+- User guides: the duty-mix example and the `--robust` figures; the "129 cycles" count (`--bands`
+  prints none); the D3 and D2 `--bands --worst` settling values; the linear delta's phase margin;
+  the examples on `exct-30-empty.toml`, `swing.csv` and `pick.mod`, whose inputs are not in the repo.
+- `docs/validation.md`: the machine files of the friction feedforward table after the xyz portal; the
+  base-compliance table; the T-gantry budget; the EXCT-30 margins and worst corner.
+- `docs/model-reference.md` (from "Motion controller" on): the robust optimiser's 2.344 s, the
+  worst-corner times, the EXCT-30 band figures, the warm-start rises.
 - Figures the agents could not reproduce and left as written are named in the commit messages of
   17 November.
 
-## 10. Reported by the document agents, not investigated
+## 10. Reported by the document agents
 
-Each is an observation from a run or from reading, not a confirmed defect.
+Fixed:
+- `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another
+  mode (T-gantry × 0.103, EXCT-30 × 0.400 against their own sweeps): each belt mode is now paired with
+  the dip that matches; both give 1.000.
+- `sim-cli modes` printed a damping of 0 for the wafer handler's modes: the damping now reaches the
+  printout. The crane's 0 is right (the pendulum has no sway damping in the model).
+- Stale texts: the H4's comment on the D3's tube; `--machine-file` "not for fmu" in the usage text.
 
-- `fit --sweep` on the T-gantry against its own default sweep compares the measured 21.6 Hz dip with
-  59.7 Hz from the config and answers × 0.103 (EXCT-30: 20.7 against 60.6 Hz, × 0.400); the single
-  axis matches.
+Open, with the cause where it is known:
+- **A screw or rack behind a converter: the coupling's damping acts across the whole series spring**
+  (`Converter::apply_back`, `transmission.rs`). Its own doc comment says in series. The wafer
+  handler's column mode then reports a damping ratio of 1.74; in series it would be about 0.003. A
+  shared-code fix that moves every screw and rack machine's figures; not made.
 - With a jerk limit of 2000 m/s³ the time-optimal corner path's motors reach 420.7 and 423.5 rad/s,
-  past the plan's 415.8 and the drive's 420.
-- The warm passes do not settle for a motor near its limit (the 1FK2104-4AF on the EXCT-30:
-  `thermal-warm-start` 6.9 K).
-- `sim-cli modes` prints a damping of 0 for every mode of the wafer handler, and 0.3524 Hz with
-  damping 0 for the crane at 0.5 m.
-- The optimiser reported 46 search cycles where `--runs` defaults to 40.
-- The linear delta at a +20° column incline is refused with "out of range: cycle.segment[2]" and no
-  reason.
-- The T-gantry's `belt-slack` row prints 169.8 against a limit of 0 and says ok (probably the lowest
-  tension).
-- Stale texts: the comment on 235 of 192 N m in the five-bar's default config; the H4's comment that
-  the D3 moves a quarter of the tube's inertia; the usage text saying `--machine-file` is not for
-  `fmu`; the app label "Line module loss while feeding back".
+  past the plan's 415.8 (1 % kept back) and the drive's 420: up to 1.85 % over the plan. Cause not
+  found.
+- The warm start does not settle for a motor near its limit (1FK2104-4AF on the EXCT-30, 6.9 K): not
+  a numerical defect, the cycle repeats only every second pass (motor a's settled rise alternates
+  102 / 92 K). Needs a two-pass warm start or a message that says so.
+- The linear delta at a +20° column incline is refused with "out of range: cycle.segment[2]": the
+  machine's own reason (`unreachable`) is dropped in `control.rs`; the front ends' message has one
+  placeholder.
+- The T-gantry's `belt-slack` row prints 169.8 against a limit of 0 and says ok: it is the least
+  tension; a rename to `belt-min-tension` touches about 80 places.
+- The optimiser's run count: the search is capped at `--runs`; `--pareto` and raised lifts add
+  runs. The guide's "46 + 834" example is probably stale.
+- Stale comments: the five-bar's "235 of 192 N m" and "NRB080-05-20: 120 rated, 192 maximum" (the
+  gearbox is now 347 / 278 N m); the palletiser's `gearbox.efficiency_torque_nm` comment (137 against
+  600); the app label "Line module loss while feeding back" (the loss now counts while drawing too).
+- Machine files' `[screw_*]` tables have no `friction_coefficient`, which `effects.screw_lead_efficiency`
+  probably needs: not tried.
