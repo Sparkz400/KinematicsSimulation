@@ -70,6 +70,31 @@ pub fn flex_at(lean: &LeanNode, q: &[f64]) -> (f64, f64, f64) {
     (k, 2.0 * k * k * h / lean.tilt, k * (1.0 / lean.lateral + h * h_tool / lean.tilt))
 }
 
+/// How far a point at distance `d` below the carriage rises as the leaning body is held out by a sideways force F at its
+/// centre of mass, `h` below the carriage, per F^2 (`lean_rise` of the crate with the guide's tilt only: a hanging bar
+/// turned by theta is shortened by theta^2 / 2 per length, and theta = F h / tilt along the whole of it, so the rise is
+/// 1/2 d (h / tilt)^2; where `h` is negative nothing hangs below the carriage and only the length beyond counts).
+fn lean_rise(lean: &LeanNode, d: f64, h: f64) -> f64 {
+    let (theta, hanging) = (h / lean.tilt, h.max(0.0));
+    let inside = d.min(hanging);
+    0.5 * (inside + (d - inside).max(0.0)) * theta * theta
+}
+
+/// The weight's geometric stiffness of the lean, and its rate per metre of the lever axis: the body's weight m g at its
+/// centre of mass rises by F^2 `lean_rise` as the spring's force F = k u holds it out, V = m g F^2 r = 1/2 c u^2 with
+/// c = 2 k^2 m g r (the body hangs like a pendulum, c > 0 where its centre of mass is below the carriage). The rate is
+/// the central difference over 2e-6 m, as the crate has it. Both are 0 without gravity.
+pub fn lean_weight(lean: &LeanNode, q: &[f64], mass: f64, g: f64) -> (f64, f64) {
+    let at = |step: f64| {
+        let z = lean.lever_axis.map_or(0.0, |a| q[a]) + step;
+        let (k, h) = (1.0 / (1.0 / lean.lateral + (lean.com_drop - z).powi(2) / lean.tilt), lean.com_drop - z);
+        2.0 * k * k * mass * g * lean_rise(lean, h, h)
+    };
+    let step = 1e-6;
+    let rate = if lean.lever_axis.is_some() && g != 0.0 { (at(step) - at(-step)) / (2.0 * step) } else { 0.0 };
+    (at(0.0), rate)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -58,7 +58,7 @@
 //! belt (crates/sim-machines/tests/machine_files.rs checks the screw axis against its crate). A rotary axis has no
 //! body: its rotary's inertia (and payload's) is its mass, no gravity along it.
 
-use crate::geometry::{Wheel, arc, contacts, flex_at, wrap};
+use crate::geometry::{Wheel, arc, contacts, flex_at, lean_weight, wrap};
 use crate::netlist::{LeanNode, Netlist, TcpNode, Transmission, Waypoint, WormNode};
 use sim_components::catalog::motor_config;
 use sim_components::joint::RotaryJoint;
@@ -76,6 +76,11 @@ use sim_core::{
 const G: f64 = 9.80665;
 /// Straight pieces the 3D view draws a belt's arc round a wheel with.
 const ARC_PIECES: usize = 8;
+
+/// Where the 3D view puts a body with every axis at 0 (the bodies' places, `body_point`, start at the origin).
+fn scene_origin() -> [f64; 3] {
+    [0.0, -0.03, 0.06]
+}
 
 /// A `&'static str` for an id or key read from a file, which `AxisInfo` and the other machine descriptions take.
 /// Each distinct text is leaked once, so rebuilding a machine on every config change does not grow memory.
@@ -1442,6 +1447,16 @@ impl ConfigMachine {
             out[i][i] = m + if self.chain_axes[i] { self.chain.mass(q[i]).0 } else { 0.0 };
         }
         self.general_mass(q, &mut out);
+        for (row, idle) in out.iter_mut().zip(self.idler_mass()) {
+            row.iter_mut().zip(idle).for_each(|(a, b)| *a += b);
+        }
+        out
+    }
+    /// The idlers' share of the axes' mass matrix: each spins with the belt's speed past its carriage, s_d . v with v the
+    /// axes' speeds on the frame, J / r^2 (s_d s_d').
+    fn idler_mass(&self) -> Vec<Vec<f64>> {
+        let n = self.n();
+        let mut out = vec![vec![0.0; n]; n];
         for d in &self.idlers {
             for i in 0..n {
                 for l in 0..n {
@@ -1750,7 +1765,9 @@ impl ConfigMachine {
     /// sway and the lean, where they are; T = 1/2 y' M y of all but the pulleys and rotors (on their own states). The
     /// bodies, chains and idlers move at their axes' speed plus the sway along its axis (`axis_mass` on the speeds over
     /// ground), the bodies that do not move along it and the frame with the sway (`frame_mass`), the leaning body at its
-    /// axis's speed plus the lean's, and the belt's runs as `runs_mass` has them.
+    /// axis's speed plus the lean's, and the belt's runs as `runs_mass` has them. The idlers' inertia rides on their axes'
+    /// speeds alone: the belt's speed past a carriage is the difference of two speeds over ground, in which the frame's
+    /// sway cancels, so the idlers are in the axes' block and not in the sway's row and column.
     fn elastic_mass(&self, q: &[f64]) -> Vec<Vec<f64>> {
         let n = self.n();
         let d = n + usize::from(self.frame.is_some()) + usize::from(self.lean.is_some());
@@ -1763,10 +1780,14 @@ impl ConfigMachine {
             }
         }
         if let Some(f) = &self.frame {
+            let idle = self.idler_mass();
             for i in 0..n {
-                (mass[i][n], mass[n][i]) = (axis_mass[i][f.axis] + column[i], axis_mass[f.axis][i] + column[i]);
+                (mass[i][n], mass[n][i]) = (
+                    axis_mass[i][f.axis] - idle[i][f.axis] + column[i],
+                    axis_mass[f.axis][i] - idle[f.axis][i] + column[i],
+                );
             }
-            mass[n][n] = axis_mass[f.axis][f.axis] + self.frame_mass(f) + belt;
+            mass[n][n] = axis_mass[f.axis][f.axis] - idle[f.axis][f.axis] + self.frame_mass(f) + belt;
         }
         if let Some(lean) = &self.lean {
             let (at, body) = (d - 1, self.body_mass(&self.bodies[lean.body]));
@@ -1824,7 +1845,8 @@ impl ConfigMachine {
         // frame takes its spring and damper and what the chain's and the belt's runs' speeds ask of it; the forces between
         // it and the axes act inside. The process force acts on the tool, which the sway and the lean move too (`tip` per
         // unit of lean). The lean's spring acts between the carriage and the body, and stiffens as the lever axis
-        // travels: -w^2 / 2 dk/dz there.
+        // travels: -w^2 / 2 dk/dz there; and the body's weight rises as it leans, a pendulum's stiffness c on top of k
+        // (`lean_weight`), whose rate with the lever axis acts there too.
         if let Some(f) = &self.frame {
             force.push(
                 -f.stiffness * u - f.damping * du + chain_on_frame + chain[f.axis] + process[f.axis] + runs_on_frame,
@@ -1833,10 +1855,11 @@ impl ConfigMachine {
         if let Some(lean) = &self.lean {
             let (w, dw) = self.leaning(s);
             let (k, dk, tip) = flex_at(lean, q);
+            let (c, dc) = lean_weight(lean, q, self.body_mass(&self.bodies[lean.body]), self.g);
             if let Some(z) = lean.lever_axis {
-                force[z] -= 0.5 * w * w * dk;
+                force[z] -= 0.5 * w * w * (dk + dc);
             }
-            force.push(tip * process[lean.axis] - k * w - lean.damping * dw);
+            force.push(tip * process[lean.axis] - (k + c) * w - lean.damping * dw);
         }
         let size = force.len();
         let acc = solve(self.elastic_mass(q), force).unwrap_or_else(|| vec![0.0; size]);
@@ -2136,6 +2159,12 @@ impl ConfigMachine {
             turning += jump.slip_energy(&s[self.jump_at(j)..], self.r[kk] * s[v + n + kk]);
         }
         let lean = self.lean.as_ref().map_or(0.0, |lean| 0.5 * flex_at(lean, q).0 * self.leaning(s).0.powi(2));
+        // The leaning body's weight rises as it leans: its potential 1/2 c w^2 (`lean_weight`).
+        let potential = potential
+            + self.lean.as_ref().map_or(0.0, |lean| {
+                let c = lean_weight(lean, q, self.body_mass(&self.bodies[lean.body]), self.g).0;
+                0.5 * c * self.leaning(s).0.powi(2)
+            });
         let (geo, mat) = (self.geo(q), self.mat(s));
         let belt: f64 = geo.iter().zip(&mat).map(|(g, l)| self.belt.energy(*g, *l)).sum();
         let gears: f64 = (0..m).map(|kk| self.gears[kk].energy(s[n + m + kk], self.output(s, kk).0)).sum();
@@ -2478,6 +2507,18 @@ impl ConfigMachine {
         let residual = |psi: f64| -> f64 {
             let mut at = q.to_vec();
             at[g.coord] = psi;
+            if !self.elastic {
+                // The rigid model: the motors' torques at the pulleys carry the other coordinates against gravity, K^T P =
+                // -gravity there (least squares, the yaw's row left out), and what P then puts on the yaw less the spring's
+                // and gravity's leaves the residual, as the belts' pull does above.
+                let gravity = self.gravity(&at);
+                let rows: Vec<usize> = (0..self.n()).filter(|&i| i != g.coord).collect();
+                let kt: Vec<Vec<f64>> = rows.iter().map(|&i| (0..self.m()).map(|kk| self.k[kk][i]).collect()).collect();
+                let pulley = lstsq(&kt, &rows.iter().map(|&i| -gravity[i]).collect::<Vec<_>>())
+                    .unwrap_or_else(|| vec![0.0; self.m()]);
+                let moment: f64 = (0..self.m()).map(|kk| self.k[kk][g.coord] * pulley[kk]).sum();
+                return moment - g.stiffness * psi + gravity[g.coord];
+            }
             let (tension, _) = self.rest_tensions(&at);
             let held = self.held_forces(&at, &tension);
             let taut = |t: f64| if self.belt.slack { t.max(0.0) } else { t };
@@ -2544,14 +2585,31 @@ impl ConfigMachine {
             stiffness[n][n] = f.stiffness;
         }
         if let Some(lean) = &self.lean {
-            stiffness[d - 1][d - 1] = flex_at(lean, pose).0;
+            let (k, dk, tip) = flex_at(lean, pose);
+            let (c, _) = lean_weight(lean, pose, self.body_mass(&self.bodies[lean.body]), self.g);
+            stiffness[d - 1][d - 1] = k + c;
+            // The spring stiffens with the lever axis (k(z)), so at the lean u0 = tip F / k that the pose's sideways
+            // process force F holds, K_uz = k' u0 and K_zz = k'' u0^2 / 2 (the crate's `modal`).
+            if let Some(z) = lean.lever_axis {
+                let u0 = tip * self.process_force()[lean.axis] / k;
+                let step = 1e-6;
+                let rate = |h: f64| {
+                    let mut at = pose.to_vec();
+                    at[z] += h;
+                    flex_at(lean, &at).1
+                };
+                let ddk = (rate(step) - rate(-step)) / (2.0 * step);
+                stiffness[d - 1][z] += dk * u0;
+                stiffness[z][d - 1] += dk * u0;
+                stiffness[z][z] += 0.5 * ddk * u0 * u0;
+            }
         }
         lowest_mode(&mass, &stiffness)
     }
 
     /// Where the scene draws a pose: each axis runs from the origin along its incline in the x-z plane.
     fn scene_at(&self, q: &[f64], moves: &[bool]) -> [f64; 3] {
-        let mut p = [0.0, -0.03, 0.06];
+        let mut p = scene_origin();
         // Up by the incline, and across: the first axis along x, the others along y (`dirs`). A rotary axis turns
         // its table in place.
         for i in (0..self.n()).filter(|i| moves[*i]) {
@@ -2669,6 +2727,34 @@ impl ConfigMachine {
             Waypoint::Body(b) => (self.scene_at(q, &self.bodies[b].axes), 0.0),
         };
         (Wheel { centre: [at[0], at[self.belt_plane().0]], radius }, at)
+    }
+
+    /// Where each span (a straight run of the belt) lies at the pose `q`: the middle of the straight piece between the
+    /// tangent points on the two wheels of its section's route (`contacts`), in the frame of the bodies' places (the 3D
+    /// view's, less where `scene_at` starts). The section's spans are taken in order as the route's consecutive pairs of
+    /// waypoints; `None` for a section whose span count is not the route's pairs, and for a pair with no straight piece.
+    fn run_midpoints(&self, q: &[f64]) -> Vec<Option<[f64; 3]>> {
+        let mut next = vec![0usize; self.sections.len()];
+        let routes: Vec<Vec<Waypoint>> = (0..self.sections.len()).map(|s| self.route_waypoints(s)).collect();
+        let mut count = vec![0usize; self.sections.len()];
+        self.spans.iter().for_each(|span| count[span.section] += 1);
+        let deep = self.belt_plane().1;
+        self.spans
+            .iter()
+            .map(|span| {
+                let (route, at) = (&routes[span.section], next[span.section]);
+                next[span.section] += 1;
+                if count[span.section] + 1 != route.len() {
+                    return None;
+                }
+                let ((a, pa), (b, pb)) = (self.wheel(route[at], q), self.wheel(route[at + 1], q));
+                let [from, to] = contacts(a, b);
+                let middle = self.in_view([0.5 * (from[0] + to[0]), 0.5 * (from[1] + to[1])], 0.5 * (pa[deep] + pb[deep]));
+                let origin = scene_origin();
+                let place: [f64; 3] = std::array::from_fn(|k| middle[k] - origin[k]);
+                place.iter().all(|x| x.is_finite()).then_some(place)
+            })
+            .collect()
     }
 
     /// The belt of section `s` as the 3D view draws it, a polyline in scene coordinates: its straight runs from tangent
@@ -2806,7 +2892,10 @@ impl Machine for ConfigMachine {
     /// pulley, its rotor and the idlers turn about the normal of the belt's plane (`belt_plane`), a screw's rotor about
     /// its axis, I w each. The sense of a wheel: the belt along its section's route turns it as its `clockwise` says (seen
     /// from the front, from above for a flat belt), and a positive pulley turn and an idler's positive `speed` move the
-    /// belt as the first pulley of the section feeds it (`route_sense`). What does not move is left out (see
+    /// belt as the first pulley of the section feeds it (`route_sense`). A rack's pinion turns about e x up (e the rack's
+    /// direction, the pinion above it; a vertical rack's e x y), a rotary's motor about the rotary's own axis, positive
+    /// as the axis grows. The belt's runs carry angular momentum m x (mu L y) too, each about the middle of its straight
+    /// piece (`run_midpoints`); the arcs round the wheels are in the wheels' spin. What does not move is left out (see
     /// `FrameMomentum`).
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         // The axes, not the coordinates: a yawing gantry's yaw is one more, which no tool axis has.
@@ -2847,11 +2936,14 @@ impl Machine for ConfigMachine {
             sim_components::base::add_point(&mut f, self.body_mass(body), r, w);
         }
         // Each rotary's own spin, about its axis as the rotaries outside it have turned it.
-        for i in (0..n).filter(|&i| self.axes[i].unit == "rad") {
-            let turned = self.turned[i].0 + if self.payload_attached { self.turned[i].1 } else { 0.0 };
+        let rotary_axis = |i: usize| {
             let outer =
                 self.bodies.iter().find_map(|b| b.rotaries.iter().position(|&r| r == i).map(|at| &b.rotaries[..at]));
-            let axis = self.turned_by(outer.unwrap_or(&[]), q, self.turn[i]);
+            self.turned_by(outer.unwrap_or(&[]), q, self.turn[i])
+        };
+        for i in (0..n).filter(|&i| self.axes[i].unit == "rad") {
+            let turned = self.turned[i].0 + if self.payload_attached { self.turned[i].1 } else { 0.0 };
+            let axis = rotary_axis(i);
             (0..3).for_each(|k| f.angular[k] += turned * v[i] * axis[k]);
         }
         // The belt drives' spin (see above): pulleys, rotors and idlers.
@@ -2873,6 +2965,19 @@ impl Machine for ConfigMachine {
                 (Some(Direct { kind: DirectKind::Screw(_), axis, .. }), _) => {
                     ax(self.dirs[*axis], rotor_speed[kk], self.j_rotor[kk]);
                 }
+                // A rack's pinion turns about the horizontal across its rack (the pinion above the rack: a positive turn
+                // moves the rack along its direction e at the contact below, so the axis is e x up; a vertical rack's is
+                // e x y). A rotary's rotor turns about the rotary's own axis, as the rotaries outside it have turned it.
+                (Some(Direct { kind: DirectKind::Rack(_), axis, .. }), _) => {
+                    let e = self.dirs[*axis];
+                    let across = if e[2].abs() > 0.999 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
+                    let a = cross(e, across);
+                    let size = dot(&a, &a).sqrt();
+                    ax(a.map(|a| a / size), rotor_speed[kk], self.j_rotor[kk]);
+                }
+                (Some(Direct { kind: DirectKind::Rotary(_), axis, .. }), _) => {
+                    ax(rotary_axis(*axis), rotor_speed[kk], self.j_rotor[kk]);
+                }
                 _ => {}
             }
         }
@@ -2890,17 +2995,26 @@ impl Machine for ConfigMachine {
         // The belt's runs (`runs_mass`), each at V_s v over ground and the sway on top: momentum mu sum L_s y_s, and the
         // first moment mu sum (L0_s + c_s . q / 2) V_s q, whose rate that is (the belt's runs being one piece), with
         // mu L e u of the sway.
+        // The runs' angular momentum, m_s x (mu L_s y_s) about the origin of the bodies' places, from where each run lies
+        // (`run_midpoints`, the middle of its straight piece, the sway on top).
         if self.run_mass > 0.0 {
             let (e, (u, du)) = (self.sway_direction(), self.sway(s));
-            for span in &self.spans {
+            let middles = self.run_midpoints(q);
+            for (span, middle) in self.spans.iter().zip(middles) {
                 let Some(rows) = &span.velocity else { continue };
                 let weight = self.run_mass * (span.length + dot(&span.c, q));
                 let moment = self.run_mass * (span.length + 0.5 * dot(&span.c, q));
+                let y: [f64; 3] = std::array::from_fn(|k| dot(&rows[k], v) + e[k] * du);
                 for k in 0..3 {
-                    f.linear[k] += weight * (dot(&rows[k], v) + e[k] * du);
+                    f.linear[k] += weight * y[k];
                     f.first_moment[k] += moment * dot(&rows[k], q) + weight * e[k] * u;
                 }
                 f.mass += weight;
+                if let Some(m) = middle {
+                    let at = std::array::from_fn(|k| m[k] + e[k] * u);
+                    let turning = cross(at, y);
+                    (0..3).for_each(|k| f.angular[k] += weight * turning[k]);
+                }
             }
         }
         // The process force acts on the tool along the axes' directions, at the tool's place over ground.
@@ -2942,7 +3056,7 @@ impl Machine for ConfigMachine {
         *state = vec![0.0; self.state_len()];
         let mut q = self.joints(tool);
         // Where the motors leave a gantry's yaw to its spring, the drives' moment about it deflects the spring.
-        if self.elastic && self.yaw_sprung() {
+        if self.yaw_sprung() {
             q[self.gantry.as_ref().map_or(0, |g| g.coord)] = self.settled_yaw(&q);
         }
         let tool = &q[..];
@@ -2951,7 +3065,10 @@ impl Machine for ConfigMachine {
         if !self.elastic {
             // K^T (pulley torque + r mesh force) = -gravity.
             let kt: Vec<Vec<f64>> = (0..n).map(|i| (0..m).map(|kk| self.k[kk][i]).collect()).collect();
-            let at_pulley = lstsq(&kt, &gravity.iter().map(|g| -g).collect::<Vec<_>>()).unwrap_or_else(|| vec![0.0; m]);
+            // With the yaw on its spring (`settled_yaw`) the spring's force -k psi is among the forces to hold.
+            let spring = self.yaw_force(tool, &vec![0.0; n]);
+            let at_pulley = lstsq(&kt, &gravity.iter().zip(&spring).map(|(g, y)| -g - y).collect::<Vec<_>>())
+                .unwrap_or_else(|| vec![0.0; m]);
             for kk in 0..m {
                 let angle = self.ratio[kk] * self.pulley_angle(kk, tool);
                 let shaft = (at_pulley[kk] - self.r[kk] * self.mesh_force(kk, self.r[kk] * angle / self.ratio[kk]))
@@ -3093,7 +3210,7 @@ impl Machine for ConfigMachine {
     /// Each guide's level takes its load at rest at the pose (the load scale `load_scales` has, 1 without
     /// effects.load_dependent_friction); a moving overhang's added load follows the acceleration, which this does not
     /// see (`rigid_guide_loads` gives it). The pair [c, b] of c + b v has no room for the Stribeck rise, which fades
-    /// within a few v_s: the Coulomb level stands for the whole speed range.
+    /// within a few v_s: `rigid_friction_rise` gives it.
     fn rigid_friction(&self, pos: &[f64], dir: &[f64], out: &mut Vec<[f64; 2]>) {
         let (q, rate, _) = self.joint_motion(pos, dir, &vec![0.0; pos.len()]);
         let (mut coulomb, mut viscous) = (vec![0.0; self.n()], vec![0.0; self.n()]);
@@ -3102,6 +3219,31 @@ impl Machine for ConfigMachine {
             (coulomb[g.axis], viscous[g.axis]) = (coulomb[g.axis] + c, viscous[g.axis] + b);
         }
         out.extend(self.to_motors(&coulomb).into_iter().zip(self.to_motors(&viscous)).map(|(c, b)| [c, b]));
+    }
+
+    /// The guides' Stribeck rise per motor, [level, speed]: the friction beyond c + b v is level exp(-(v / speed)^2) at
+    /// the speed v along the path, level the guides' (stiction - Coulomb) at their load at rest taken to the motor as
+    /// `rigid_friction` does, signed by the way each axis turns. A motor behind several guides gets their levels' sum and
+    /// the levels' weighted mean of their Stribeck speeds along the path (a guide's Stribeck speed over its axis's rate).
+    fn rigid_friction_rise(&self, pos: &[f64], dir: &[f64], out: &mut Vec<[f64; 2]>) {
+        let (q, rate, _) = self.joint_motion(pos, dir, &vec![0.0; pos.len()]);
+        let (n, m) = (self.n(), self.m());
+        let (mut level, mut weighted, mut size) = (vec![0.0; m], vec![0.0; m], vec![0.0; m]);
+        for (g, scale) in self.guides.iter().zip(self.load_scales(&q, &vec![0.0; m])) {
+            let (axis, turning) = (g.axis, rate[g.axis]);
+            if !g.friction.on || turning == 0.0 {
+                continue;
+            }
+            let mut rise = vec![0.0; n];
+            rise[axis] = scale * (g.friction.stiction - g.friction.coulomb) * turning.signum();
+            let speed = g.friction.stribeck_v / turning.abs();
+            for (kk, torque) in self.to_motors(&rise).into_iter().enumerate() {
+                level[kk] += torque;
+                weighted[kk] += torque.abs() * speed;
+                size[kk] += torque.abs();
+            }
+        }
+        out.extend((0..m).map(|kk| [level[kk], if size[kk] > 0.0 { weighted[kk] / size[kk] } else { 1.0 }]));
     }
 
     /// `rigid_solve` at a steady speed: the guides (`Lugre::feedforward`, at their load at rest), idlers and cable chains
