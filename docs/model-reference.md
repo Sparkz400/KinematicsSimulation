@@ -355,10 +355,10 @@ The motor is one equivalent winding with resistance R, inductance L and the back
 
 ```text
 L · di/dt = u − R · i − k_e · ω
-τ         = k_t · i
+τ         = k_t · i − T_Fe(ω)
 ```
 
-k_e = k_t in SI units (`effects.back_emf` off: k_e = 0). Each base step the voltage u (and the resistance R, at the temperature the step starts with) is held, and the current is integrated together with the mechanics (see [integrator](#integrator)), with ω the motor's speed at each stage of the integration:
+k_e = k_t in SI units (`effects.back_emf` off: k_e = 0). T_Fe is the drag of the iron loss on the shaft, 0 without `effects.iron_loss` ([iron loss](#motor-model-additions-of-14-november-2026)); with field weakening the reluctance torque joins k_t i, with `effects.magnet_temperature` both constants scale with the magnets' flux. Each base step the voltage u (and the resistance R, at the temperature the step starts with) is held, and the current is integrated together with the mechanics (see [integrator](#integrator)), with ω the motor's speed at each stage of the integration:
 
 ```text
 di/dt = (u − R · i − k_e · ω) / L           in the integrated state, with the torque k_t · i(t) on the shaft
@@ -366,7 +366,7 @@ E_el  = ∫ u · i dt                           electrical energy of the step; P
 E_cu  = ∫ R · i² dt,   W = ∫ τ · ω dt         copper loss and shaft work of the step
 ```
 
-With the back-EMF on, u · i = R i² + d(½ L i²)/dt + τ · ω at every moment (also under saturation, see below), so the electrical energy, the copper loss, the winding's stored energy and the work on the shaft close to the integration's error (the [energy budget](#energy-budget) checks it). Before 12 November the current was stepped exactly over a base step with the speed of its start, its power taken by the trapezoid rule, and the mechanics turned under the torque of the current at the end of the step. That held torque was a numerical phase lead of half a step: on undamped elastic configs it put 3 to 5 % of the supply into the mechanics, and on damped ones it hid part of the ringing (peak motor torque 3 % lower on the default T-gantry, 8 % on the single axis; see [PROGRESS](../PROGRESS.md)).
+With the back-EMF on, u · i = R i² + d(½ L i²)/dt + τ · ω + T_Fe ω at every moment (also under saturation, see below), so the electrical energy, the copper loss, the winding's stored energy and the work on the shaft close to the integration's error (the [energy budget](#energy-budget) checks it). Before 12 November the current was stepped exactly over a base step with the speed of its start, its power taken by the trapezoid rule, and the mechanics turned under the torque of the current at the end of the step. That held torque was a numerical phase lead of half a step: on undamped elastic configs it put 3 to 5 % of the supply into the mechanics, and on damped ones it hid part of the ringing (peak motor torque 3 % lower on the default T-gantry, 8 % on the single axis; see [PROGRESS](../PROGRESS.md)).
 
 Assumptions: no three phases, no PWM, no inverter dead time. Field weakening (the winding as the q axis of a d-q model) and iron loss are effects of their own, below ([field weakening](#field-weakening)). Below the current loop there is nothing.
 
@@ -391,13 +391,13 @@ The back-EMF constant falls with the torque constant: e = k_e · ω · (1 − s 
 ```text
 R(ϑ)     = R · (1 + 0.0039 · ϑ)                          copper
 I_rated  = motor.rated_current_a
-P_rated  = R(ϑ_rated) · I_rated²
-dϑ/dt    = ( ϑ_rated · P_cu / P_rated − ϑ ) / τ_th            P_cu = E_cu / dt, the mean R(ϑ) · i² of the step
+P_rated  = R(ϑ_rated) · I_rated²                              with effects.iron_loss: R(ϑ_rated) · I_0², I_0 = motor.stall_current_a
+dϑ/dt    = ( ϑ_rated · (P_cu + P_Fe) / P_rated − ϑ ) / τ_th     P_cu = E_cu / dt, the mean R(ϑ) · i² of the step
 ```
 
-At the rated current the winding settles at `rated_temperature_rise_k`. The warmer resistance is used in the winding equation above. A disabled drive has no current, so its winding cools by the same equation with P_cu = 0: ϑ falls by the factor e every τ_th (`a_disabled_winding_cools_by_the_exponential`). Stepped once per base step (explicit Euler; with dt / τ_th of 3.5e-8 its error is far below anything that shows). The thermal time constant is half an hour, so a simulated cycle hardly warms the winding; the analysis therefore reports the rise the winding would *settle* at (see [analysis quantities](#analysis-quantities)).
+P_Fe is the iron loss's heat ([iron loss](#motor-model-additions-of-14-november-2026), 0 without it). At the rated current the winding settles at `rated_temperature_rise_k`; with the iron loss at the stall current at standstill and at the rated current at the rated speed. The warmer resistance is used in the winding equation above. A disabled drive has no current, so its winding cools by the same equation with P_cu = 0: ϑ falls by the factor e every τ_th (`a_disabled_winding_cools_by_the_exponential`). Stepped once per base step (explicit Euler; with dt / τ_th of 3.5e-8 its error is far below anything that shows). The thermal time constant is half an hour, so a simulated cycle hardly warms the winding; the analysis therefore reports the rise the winding would *settle* at (see [analysis quantities](#analysis-quantities)).
 
-Assumptions: only copper loss heats; the surroundings are at a fixed temperature; no housing, no second thermal mass (but see the three nodes below); the torque constant does not change with temperature.
+Assumptions: copper loss and, with `effects.iron_loss`, the iron loss heat; the surroundings are at a fixed temperature; no housing, no second thermal mass (but see the three nodes below); the torque constant does not change with temperature (but see the magnet temperature below).
 
 ### Motor thermal nodes
 
@@ -431,7 +431,25 @@ I_i     += (K_pi / T_ni) · e_i · dt                only while u is not clamped
 
 The d axis comes first. Its steady voltage is u_d = R · i_d − p · ω · L · i, the reactance of the q current with p the pole pairs (`motor.pole_pairs`; no reactance where the config has none) and, with `effects.field_weakening`, the d current i_d of the winding's own model (below). Without field weakening i_d = 0 and the winding meets (R i + k_E ω)² + (p ω L i)² ≤ U_max² at most (the torque-speed chart's voltage limit, `DriveParams::voltage_limited_current`; the kt = kE = 0.45, R = 4 Ω, L = 10 mH, 4 pole pairs, 190 V test winding has 3.474 N m at 300 rad/s, 2.709 at 330 and 1.956 at 360 where the reactance-free R i + k_E ω ≤ U gave the current limit's 4.275 at 300), and braking at the peak torque is held to the current that circle allows (beyond it the q voltage cannot oppose the back-EMF and the current runs away). Above the speed where k_E ω alone exceeds U the circle (k_E ω − R i)² + (p ω L i)² ≤ U² leaves an interval of braking currents; its smaller end is the current the inverter's diodes force (`forced_braking_current`), which the drive, with `effects.torque_limit`, does not command below; where the circle leaves none, the nearest current R k_E ω / (R² + (p ω L)²) (test `braking_above_the_back_emf_equal_to_the_voltage_solves_the_voltage_circle`: 3.9743 to 12.7267 A at 450 rad/s, the current loop settling on the smaller). With field weakening the d current follows its setpoint with the voltage that moves it, held within the circle first (d axis first), and the q current within the phase current's circle, i_q² + i_d² ≤ min(motor, drive maximum current)². `motor.<id>.voltage` is, for every motor kind, the amplitude of the phase voltage's space vector: the induction motor's and the stepper's vectors are phase amplitudes, the servo's (u, u_d), in the winding's units of three times the RMS phase voltage, is multiplied by sqrt(2) / 3 (a DC link U gives sqrt(3/2) · U at most, which is U / sqrt(3) at the phase).
 
-U_max is sqrt(3/2) times `drive.bus_voltage_v`, or sqrt(3/2) times the DC link voltage of the moment with `effects.dc_link`, or unlimited with `effects.voltage_limit` off. The factor: the one winding carries the RMS phase current I, and u · i is the power of all three phases, 3 · U_phase · I, so u is three times the RMS phase voltage. A DC link U gives a phase amplitude of U / sqrt(3), which is U / sqrt(6) RMS, and 3 / sqrt(6) = sqrt(3/2). `drive.bus_voltage_v` is the DC link voltage itself, and the DC link's energy bookkeeping below works with it unscaled. With K_pi = L / T and T_ni = L / R the current follows its setpoint with the time constant T (0.25 ms in the default configs).
+U_max is sqrt(3/2) times `drive.bus_voltage_v`, or sqrt(3/2) times the DC link voltage of the moment with `effects.dc_link`, or unlimited with `effects.voltage_limit` off; with `drive.overmodulation` both times the six-step gain below. The factor: the one winding carries the RMS phase current I, and u · i is the power of all three phases, 3 · U_phase · I, so u is three times the RMS phase voltage. A DC link U gives a phase amplitude of U / sqrt(3), which is U / sqrt(6) RMS, and 3 / sqrt(6) = sqrt(3/2). `drive.bus_voltage_v` is the DC link voltage itself, and the DC link's energy bookkeeping below works with it unscaled. With K_pi = L / T and T_ni = L / R the current follows its setpoint with the time constant T (0.25 ms in the default configs).
+
+**Overmodulation** (`drive.overmodulation`, a drive key, off in the shipped configs and where absent). The inverter runs into six-step (square-wave) operation, and the model raises the voltage limit to the square wave's fundamental, without its harmonics:
+
+```text
+U_max = g · sqrt(3/2) · U_dc       g = 2 sqrt(3) / π = 1.10266   three-phase bridge (servo, induction): six-step's 2 U / π over U / sqrt(3)
+                                   g = 4 / π                     a stepper's H-bridges: the square wave ±U over U
+```
+
+It acts wherever the voltage limit does: the current loop, the field weakening's d current, the voltage-limit curve of the torque-speed chart. The linear fade of the [torque-speed curve](#torque-speed-curve) holds at the sinusoidal limit, U_max / g; at the raised voltage its two speeds move as at any other voltage. Test: `overmodulation_raises_the_voltage_limit_to_the_six_step_fundamental` (440 rad/s, e = 198 V, R = 4 Ω on 190 V of winding voltage: (190 · 1.10266 − 198) / 4 = 2.87625 A, 1.29431 N m, where the sinusoidal limit leaves none).
+
+**Forced braking current.** Without field weakening and with `effects.torque_limit`, braking above the speed at which k_E ω alone exceeds U_max, the drive does not command less than the current the inverter's diodes force (`forced_braking_current`):
+
+```text
+i_forced = (R e − sqrt(a U² − x² e²)) / a,     e = k_E |ω|, x = p |ω| L, a = R² + x²     0 while e ≤ U
+i_forced = R e / a                              where a U² < x² e² (the circle leaves no current)
+```
+
+at most the motor's maximum current; a setpoint that brakes less, or motors, is set to −i_forced in the direction of the speed.
 
 ### Velocity loop
 
@@ -536,10 +554,10 @@ rest in the torque breakdown, and its power given to the process is `power.proce
 ```text
 fade     = clamp( (ω₀ − |ω|) / (ω₀ − ω_rated), 0, 1 )
 motoring : |τ| ≤ peak_torque · fade        in the direction of rotation
-braking  : |τ| ≤ peak_torque
+braking  : |τ| ≤ min(peak_torque, τ(i_brake))   i_brake the braking current the voltage circle allows (`voltage_limited_current`)
 ```
 
-ω₀ `no_load_speed_rad_s`. Full torque up to the rated speed, falling linearly to zero at the no-load speed. With `effects.torque_limit` off the torque setpoint is not limited; the analysis still judges against the curve. What it judges is the velocity loop's output before this limit (`torque_demand`), so a drive that sits on the limit shows as a utilisation above 1. This curve is a separate, configured limit; the voltage limit of the winding acts as well. It holds at the config's voltage (the sinusoidal limit of `drive.bus_voltage_v`); at another one (a sagging DC link, `drive.overmodulation`) each of ω_rated and ω₀ moves by the ratio of the speeds at which the voltage circle (R i + k_E ω)² + (p ω L i)² = U² still leaves that point's current (`voltage_limited_current` at the printed voltage) at the new and the printed voltage, solved for ω in closed form, so R, L and k_E enter; without R the speeds scale with the voltage (test `the_linear_fade_follows_r_and_ke_at_another_voltage`: 314 and 420 rad/s at 190 V move to 235.5 and 335.6 rad/s at 152 V, 1.3504 N m at 300 rad/s). With field weakening the curve follows from the d-q model instead (below).
+ω₀ `no_load_speed_rad_s`. Full torque up to the rated speed, falling linearly to zero at the no-load speed. Braking is held to the peak torque only, without the circle, where the config has no `motor.pole_pairs` or the voltage is unlimited. With `effects.torque_limit` off the torque setpoint is not limited; the analysis still judges against the curve. What it judges is the velocity loop's output before this limit (`torque_demand`), so a drive that sits on the limit shows as a utilisation above 1. This curve is a separate, configured limit; the voltage limit of the winding acts as well. It holds at the config's voltage (the sinusoidal limit of `drive.bus_voltage_v`); at another one (a sagging DC link, `drive.overmodulation`) each of ω_rated and ω₀ moves by the ratio of the speeds at which the voltage circle (R i + k_E ω)² + (p ω L i)² = U² still leaves that point's current (`voltage_limited_current` at the printed voltage) at the new and the printed voltage, solved for ω in closed form, so R, L and k_E enter; without R the speeds scale with the voltage (test `the_linear_fade_follows_r_and_ke_at_another_voltage`: 314 and 420 rad/s at 190 V move to 235.5 and 335.6 rad/s at 152 V, 1.3504 N m at 300 rad/s). With field weakening the curve follows from the d-q model instead (below).
 
 ### Field weakening
 
@@ -585,9 +603,14 @@ E      = ½ · C · U² − P · dt                            the capacitors gi
 fed    = clamp( E − ½ · C · U_bus², 0, P_line · dt )    with effects.regenerative_supply: the line module feeds back
 burned = clamp( E − fed − ½ · C · U_th², 0, P_peak · dt )   the chopper switches the resistor in above the threshold
 U      = sqrt( 2 · (E − fed − burned) / C )             but never below the bus voltage: the rectifier feeds from the line
-drawn  = ½ · C · U_bus² − (E − fed − burned)            what the rectifier draws from the line, where that is positive
+drawn  = ½ · C · U_bus² − (E − fed − burned)            what the rectifier puts into the link, where that is positive
+line   = drawn / η_line                                 what it takes from the line; η_line = ratings.line_module_efficiency
+mains  = η_line · fed                                   what a regenerative supply gives the mains
+loss   = (1 / η_line − 1) · drawn + (1 − η_line) · fed  the line module's (or the S210's rectifier's) loss, budget row line_module
 trip   : U > dc_link_overvoltage_v
 ```
+
+`ratings.line_module_efficiency` (at most 1) is read with `effects.dc_link`; the shipped configs have 0.98. Without the DC link simulated the supply gives what the motors draw, without loss.
 
 Stepping the energy instead of the voltage is exact for any step size. P is the step's electrical energy E_el over dt (see [winding](#winding)). When a drive trips, all drives go off as with a Disable command, and stay off until Enable. Without the effect the DC link voltage stays at `drive.bus_voltage_v`.
 
@@ -604,11 +627,18 @@ The same losses drag a servo's shaft. The printed rated point holds them too: th
 
 **Magnet temperature.** `effects.magnet_temperature` (off): k_t and k_e scale with 1 + α (ϑ − ϑ_rated), α = `motor.magnet_temperature_coefficient_1_k` (−0.0012/K), ϑ the winding's rise (the housing's with `motor_thermal_nodes`). The catalogue's k_t holds at the rated rise; a cold motor has 12 % more. With `motor_thermal_nodes` the magnets sit at the housing's rise, which at the rated state is (1 − s) times the rated rise, and the flux is compared with that: 1 at the rated state (it compared the housing's rise with the winding's rated one before, 1.03 at s = 0.25). Test: `cold_magnets_give_the_hand_calculated_torque_per_amp`.
 
-**S1 check.** `motor-s1` (servo motors only) judges the RMS torque at the mean speed against the S1 curve: the maker's graph where the config has it (`motor.s1_curve_*`; an S210 motor named in `[parts]` brings the one `catalog/siemens/s1_curves_s210.csv` has for its supply's voltage, 88 of the 96), linear between its points and its last torque beyond its end, else the line from k_t I_0 at standstill to the rated torque at the rated speed; `motor-speed` the peak speed against `drive.max_speed_rad_s`. Test: `the_s1_check_judges_the_rms_torque_at_the_mean_speed_by_hand` (1FK2205-4AF: 5.4832 N m at 157.08 rad/s on the graph's curve, 5.3 N m on the line), `the_printed_s1_curve_is_read_linearly`.
+**S1 check.** `motor-s1` (servo motors only) judges the RMS torque at the mean speed against the S1 curve:
+
+```text
+printed curve (ω_k, T_k):  T_S1(ω) = T_k−1 + (T_k − T_k−1) (|ω| − ω_k−1) / (ω_k − ω_k−1)    T_1 below ω_1, the last T beyond the last ω
+line:                      T_S1(ω) = max(0, k_t I_0 + (M_N − k_t I_0) |ω| / ω_N)                   continued beyond the rated speed
+```
+
+The printed curve is `motor.s1_curve_speed_rad_s` and `motor.s1_curve_torque_nm`: the same number of points, at least two, speeds rising from 0 or above, torques not negative, else the config is refused; both absent or empty: the line (`drive::s1_curve_of`, `s1_interpolated`). An S210 motor named in `[parts]` brings the curve `catalog/siemens/s1_curves_s210.csv` has for it, digitised from Siemens' graph: 88 of the 96 motors, each at one supply (400 V where it has a rated point at 400 V, else 230 V), and only when the motor is named at that supply; at another supply, or for a motor without a curve, the keys are taken out and the line holds (`catalog::set_s1_curve`). The line needs `motor.stall_current_a` (I_0, read whether or not `effects.iron_loss` is on); without it there is no `motor-s1` verdict, and the chart draws the rated torque flat. `motor-speed` judges the peak speed against `drive.max_speed_rad_s`. Test: `the_s1_check_judges_the_rms_torque_at_the_mean_speed_by_hand` (1FK2205-4AF: 5.4832 N m at 157.08 rad/s on the graph's curve, 5.3 N m on the line), `the_printed_s1_curve_is_read_linearly`.
 
 **Braking resistor heating.** `effects.braking_resistor_heating` (with `dc_link`): ϑ' = (ϑ_rated P / P_continuous − ϑ) / τ_R, stepped exactly. Test: `the_braking_resistor_warms_by_the_hand_calculated_rise_in_a_pulse` (100 kW for 1 s on the 1.5 kW resistor, τ_R 60 s, 200 K: 220.38 K, 72.15 K at the end of its 68 s cycle).
 
-**Line module loss when drawing.** With the DC link simulated, the line module (an S210's rectifier alike) draws P / η from the line for P into the DC link; the difference is its loss (`Drive::line_loss`, budget row `line_module`). Test: `a_regenerative_supply_feeds_back_into_the_mains_up_to_its_power` (49 W motoring: 50 W drawn, 0.1 J lost in 0.1 s).
+**Line module loss when drawing.** With the DC link simulated, the line module (an S210's rectifier alike, with or without `effects.regenerative_supply`) draws P / η from the line for P into the DC link; the difference is its loss (`Drive::line_loss`, budget row `line_module`; at η = 0.98 it is 1 / 0.98 − 1 = 2.04 % of what the rectifier puts into the link). Test: `a_regenerative_supply_feeds_back_into_the_mains_up_to_its_power` (49 W motoring: 50 W drawn, 0.1 J lost in 0.1 s; η = 1 draws the 4.9 J the motor takes, as before 14 November 2026).
 
 **Enable without DC link.** A drive enabled while holding a load draws its winding's L i² / 2 from the supply in its first step (`Drive::enable_energy`); with the DC link simulated it comes out of the link, as before.
 
@@ -618,7 +648,7 @@ Signals per motor: `d_current`, `housing_temperature`, `drive_overload_image`, `
 
 **Disabled.** A disabled drive's DC link discharges through its bleeder and the drive's own consumption, C dU/dt = −U / R_b: every step U ← U · exp(−dt / τ) with τ = `ratings.dc_link_discharge_time_constant_s`, exact for any step, then the step above with P = 0, so the rectifier catches it at the bus level and a regenerative supply takes what is above at once (`a_disabled_drives_dc_link_discharges_by_the_rc_exponential`: 220 V with τ = 0.2 s are 171.336 V after 0.05 s and the bus level after 69.9 ms).
 
-Assumptions: the rectifier is an ideal source at the bus voltage; no ripple; the chopper is an ideal power limiter up to `braking_resistor_peak_w`, not a switched resistor; the resistor itself does not heat (its continuous rating is judged against the cycle's mean power); the line module is an ideal power limiter with one efficiency at every power and feeds in without loss (its efficiency counts only on the way back); the bleeder draws only while the drive is disabled (enabled, its power, U² / R_b ≈ 0.1 W at 155 V, is left out).
+Assumptions: the rectifier holds the bus voltage as a source with one efficiency at every power; no ripple; the chopper is an ideal power limiter up to `braking_resistor_peak_w`, not a switched resistor; the resistor heats only with `effects.braking_resistor_heating` (above), else its continuous rating is judged against the cycle's mean power; the line module is an ideal power limiter with one efficiency at every power, both ways; the bleeder draws only while the drive is disabled (enabled, its power, U² / R_b ≈ 0.1 W at 155 V, is left out).
 
 **Shared DC link.** `effects.shared_dc_link` (with `effects.dc_link`): the drives of a machine have one DC link, as with one Line Module on a SINAMICS S120. After the current loops of all drives, one step of the same energy balance runs with the sum of their powers:
 
