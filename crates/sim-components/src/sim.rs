@@ -476,6 +476,8 @@ impl Sim {
         self.contact.clone_from(&s.contact);
         self.gaps.clone_from(&s.gaps);
         (self.contact_force, self.absorbed) = (s.contact_force, s.absorbed);
+        // The pushes are those of the next step, which works them out afresh; until then the restored state has none.
+        self.pushes.clear();
         // What the machine keeps between steps, as `step` sets it.
         self.payload_attached = s.payload_attached;
         self.machine.set_memory(&s.memory);
@@ -602,7 +604,8 @@ impl Sim {
         if self.part_heating && !self.heated.is_empty() {
             // The loss at the end of the step, held over it: the exact answer of the first-order lag to a held input.
             self.losses.clear();
-            self.machine.loss_powers(&self.state, &self.torque, &mut self.losses);
+            let torque = self.machine_torque();
+            self.machine.loss_powers(&self.state, &torque, &mut self.losses);
             for part in &mut self.heated {
                 part.loss_power = self.losses[part.loss];
                 let settled = part.resistance * part.loss_power;
@@ -698,6 +701,21 @@ impl Sim {
         let taken = self.joint.last().copied().unwrap_or(0.0);
         self.crash_energy += taken;
         taken
+    }
+
+    /// The torques the machine's mechanics take at the end of the last step: the drives' plus the obstacles' pushes
+    /// (`push_torques`), as the step integrated them. What a machine works out of its torques (a guide's load from the
+    /// acceleration they command, its friction and so its loss) is to be sampled with these, or the losses booked and
+    /// those the motion had part ways while a part touches an obstacle.
+    pub fn machine_torque(&self) -> Vec<f64> {
+        let mut out = self.torque.clone();
+        if !self.pushes.is_empty() {
+            let motors = out.len();
+            let (mut angle, mut speed) = (vec![0.0; motors], vec![0.0; motors]);
+            self.machine.motor_state(&self.state, &mut angle, &mut speed);
+            push_torques(&self.pushes, &self.push_from, &angle, &speed, &mut out);
+        }
+        out
     }
 
     /// A step with the drives disabled and the obstacles pushing: the mechanics alone, the pushes' torques worked out at
@@ -907,7 +925,7 @@ impl Sim {
     /// The current value of every signal, in the order of `signal_infos`.
     pub fn sample(&self, out: &mut Vec<f64>) {
         self.sample_base(out);
-        self.machine.effect_signals(&self.state, &self.torque, out);
+        self.machine.effect_signals(&self.state, &self.machine_torque(), out);
         out.extend(self.heated.iter().map(|h| h.rise));
     }
 
@@ -951,7 +969,7 @@ impl Sim {
                 d.resistor_rise,
             ]);
         }
-        self.machine.base_signals(&self.state, &self.torque, out);
+        self.machine.base_signals(&self.state, &self.machine_torque(), out);
     }
 
     /// Position of a signal in a sample.

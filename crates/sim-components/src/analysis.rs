@@ -584,9 +584,9 @@ impl Tally {
         let (losses, energies) = (own_named(LOSS_PREFIX), own_named("energy."));
         let mut machine_signals = Vec::new();
         if views {
-            sim.machine.signals(&sim.state, &sim.torque, &mut machine_signals);
+            sim.machine.signals(&sim.state, &sim.machine_torque(), &mut machine_signals);
         } else {
-            sim.machine.base_signals(&sim.state, &sim.torque, &mut machine_signals);
+            sim.machine.base_signals(&sim.state, &sim.machine_torque(), &mut machine_signals);
         }
         let (windings, capacitors) = stored_electrically(sim);
         let (tensions, radial, slack, jumps, detuning) = (
@@ -864,10 +864,10 @@ impl Tally {
         }
         if self.views && (self.parts.iter().any(Option::is_some) || !self.losses.is_empty()) {
             self.machine_signals.clear();
-            sim.machine.signals(&sim.state, &sim.torque, &mut self.machine_signals);
+            sim.machine.signals(&sim.state, &sim.machine_torque(), &mut self.machine_signals);
         } else if self.gear.iter().any(Option::is_some) {
             self.machine_signals.clear();
-            sim.machine.base_signals(&sim.state, &sim.torque, &mut self.machine_signals);
+            sim.machine.base_signals(&sim.state, &sim.machine_torque(), &mut self.machine_signals);
         }
         for (places, sums) in self.parts.iter().zip(&mut self.part_sums).filter_map(|(p, s)| Some((p.as_ref()?, s))) {
             for (&i, (peak, squares)) in places.iter().zip(sums) {

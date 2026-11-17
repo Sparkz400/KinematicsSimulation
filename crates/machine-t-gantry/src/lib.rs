@@ -758,10 +758,11 @@ impl TGantry {
 
     /// The X acceleration that the motor torques would give a loss-free rigid machine at (x, z): what the guide
     /// loads are worked out with. Over the rigid model's mass matrix (`rigid_solve` with no losses): the moved masses,
-    /// idlers, chain, rotors and pulleys, and the belt's runs with their coupling to Z.
+    /// idlers, chain, rotors and pulleys, and the belt's runs with their coupling to Z. With the Z axis's weight, as
+    /// `rigid_solve` has it: through the belt's coupling the torque that holds the Z axis up would else accelerate X.
     fn commanded_ax(&self, x: f64, z: f64, torque: &[f64]) -> f64 {
         let k = self.gearbox.ratio / self.r;
-        let (fx, fz) = (k * (torque[0] + torque[1]), k * (torque[0] - torque[1]));
+        let (fx, fz) = (k * (torque[0] + torque[1]), k * (torque[0] - torque[1]) - self.m_z() * self.g);
         let (xx, xz) = self.belt_mass(x, z);
         let mx = self.m_x() + self.m_motors() + self.m_idlers[0] + self.chain.mass(x).0 + xx;
         let mz = self.m_z() + self.m_motors() + self.m_idlers[1];
