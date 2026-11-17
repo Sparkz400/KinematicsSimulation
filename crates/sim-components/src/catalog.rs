@@ -658,17 +658,22 @@ pub fn apply_motor(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
     }
     // The S1 curve Siemens prints as a graph (`s1_curves_s210.csv`, digitised: article, speed, torque, rising speed), where
     // the file has the article: it replaces the straight line between the printed standstill and rated points
-    // (`analysis::s1_torque`). A motor without rows leaves the config's keys as they are.
+    // (`analysis::s1_torque`). A motor without rows gets empty arrays, the straight line, where the config had a curve
+    // (another motor's). The keys go into the `[motor]` table, as `Config::set` refuses a key the config lacks.
     let curve: Vec<(f64, f64)> = rows(table("siemens/s1_curves_s210.csv"))
         .into_iter()
         .filter(|r| r.get("article") == Some(&article))
         .filter_map(|r| Some((number(&r, "speed_rad_s")?, number(&r, "torque_nm")?)))
         .collect();
-    if curve.len() >= 2 {
-        let list =
-            |f: fn(&(f64, f64)) -> f64| curve.iter().map(|p| format!("{:?}", f(p))).collect::<Vec<_>>().join(", ");
-        cfg.set_text(&format!("motor.s1_curve_speed_rad_s = [{}]", list(|p| p.0)))?;
-        cfg.set_text(&format!("motor.s1_curve_torque_nm = [{}]", list(|p| p.1)))?;
+    if curve.len() >= 2 || cfg.get("motor.s1_curve_speed_rad_s").is_ok() {
+        let curve = if curve.len() >= 2 { curve } else { Vec::new() };
+        let mut motor = cfg.get("motor")?.clone();
+        let list = |f: fn(&(f64, f64)) -> f64| toml::Value::Array(curve.iter().map(|p| f(p).into()).collect());
+        if let Some(motor) = motor.as_table_mut() {
+            motor.insert("s1_curve_speed_rad_s".into(), list(|p| p.0));
+            motor.insert("s1_curve_torque_nm".into(), list(|p| p.1));
+        }
+        cfg.set("motor", motor)?;
     }
     cap_peak_torque(cfg, m.max_torque)?;
     set(cfg, "drive.rated_torque_nm", m.rated_torque)?;

@@ -38,11 +38,13 @@ pub fn torque_speed(drive: &DriveParams, dc_voltage: f64) -> TorqueSpeed {
     };
     // The verdict's line, from the same source (`DriveParams::s1_torque`, `analysis::s1_torque`).
     // Straight but for its kink at standstill and, where it falls to nothing before `top` (a static torque well above the
-    // rated one), at that speed.
+    // rated one), at that speed; a printed curve kinks at each of its points.
     let (still, rated) = (drive.s1_torque(0.0), drive.s1_torque(drive.rated_speed));
     let zero = drive.rated_speed * still / (still - rated);
     let mut speeds = vec![0.0, top];
-    if still > rated && zero < top {
+    if !drive.s1_curve.is_empty() {
+        speeds.splice(1..1, drive.s1_curve.iter().map(|p| p[0]).filter(|w| *w > 0.0 && *w < top));
+    } else if still > rated && zero < top {
         speeds.insert(1, zero);
     }
     let speeds: Vec<f64> = speeds.iter().rev().map(|w| -w).chain(speeds[1..].iter().copied()).collect();
@@ -532,6 +534,37 @@ mod tests {
         assert!((drawn(&c.s1[0], 150.0) - 0.9).abs() < 1e-9 && (drawn(&c.s1[0], -150.0) - 0.9).abs() < 1e-9);
         for w in [250.0, 300.0, 0.5 * (300.0 + top), top].into_iter().filter(|w| *w <= top) {
             assert!((drawn(&c.s1[0], w) - p.s1_torque(w)).abs() < 1e-9, "{w}: {:?}", c.s1[0]);
+        }
+    }
+
+    /// The housing's rise of 30 K against `ratings.housing_max_rise_k` = 60 K is 0.5 of it, the winding's 80 K against its
+    /// rated 100 K 0.8; without the key the housing is held against the winding's 100 K, 0.3, as before.
+    #[test]
+    fn the_housing_is_held_against_its_own_highest_rise() {
+        let signals = ["winding_temperature", "housing_temperature"]
+            .map(|q| SignalInfo::new(format!("motor.x.{q}"), "", "", "K"))
+            .to_vec();
+        let columns = vec![vec![80.0], vec![30.0]];
+        let nodes = Some(crate::drive::ThermalNodes { winding_share: 0.25, winding_time_constant: 60.0 });
+        let p =
+            DriveParams { heating: true, thermal_nodes: nodes, rated_rise: 100.0, housing_max_rise: 60.0, ..drive() };
+        let shares = |p: &DriveParams| utilisation(p, &signals, &columns, "x");
+        assert_eq!(shares(&p), [("charts-winding", vec![0.8]), ("charts-housing", vec![0.5])]);
+        assert_eq!(shares(&DriveParams { housing_max_rise: 100.0, ..p })[1], ("charts-housing", vec![0.3]));
+    }
+
+    /// A printed S1 curve, (0, 2.0), (50, 1.5), (150, 0.5) N m: the drawn line passes through each of its points both
+    /// ways (between them straight, as `s1_interpolated` reads it: at 100 rad/s 1.0 N m) and holds the last torque beyond,
+    /// up to the chart's top (220 rad/s for this drive).
+    #[test]
+    fn the_chart_draws_a_printed_s1_curve_through_its_points() {
+        let p = DriveParams { s1_curve: vec![[0.0, 2.0], [50.0, 1.5], [150.0, 0.5]], ..drive() };
+        let c = torque_speed(&p, 300.0);
+        let top = c.s1[0].last().unwrap()[0];
+        assert!(top > 150.0, "{top}");
+        for (w, t) in [(0.0, 2.0), (50.0, 1.5), (100.0, 1.0), (150.0, 0.5), (top, 0.5)] {
+            assert!((drawn(&c.s1[0], w) - t).abs() < 1e-12 && (drawn(&c.s1[0], -w) - t).abs() < 1e-12, "{w}: {c:?}");
+            assert!((drawn(&c.s1[1], w) + t).abs() < 1e-12, "{w}");
         }
     }
 
