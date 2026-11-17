@@ -1994,6 +1994,7 @@ Writes every signal as CSV, one column per signal with its unit in the header (`
 | `--time SECONDS` | Simulated time. Default 2 |
 | `--every STEPS` | Write every N-th base step. Default 16, which is one row per millisecond |
 | `--disable-at SECONDS` | Switch the drives off at that time |
+| `--stop-at SECONDS [--stop-category 0\|1\|2]` | Stop the machine at that time in that stop category (0 without it; see [emergency stop](#how-far-does-it-travel-after-an-emergency-stop)) |
 
 The signals:
 
@@ -2036,7 +2037,7 @@ In that run the Z axis is at 0.2276 m at 0.498 s, moving, and rests at 0.2191 m 
 cargo run --release -p sim-opcua -- t-gantry --port 4840 --lang en
 ```
 
-This prints `OPC UA server listening at opc.tcp://127.0.0.1:4840/` and runs the machine in real time until stopped. The machine name (or `--machine-file`), `--config`, `--set` and `--trajectory` as `sim-cli` reads them, `--port` (default 4840), `--lang`, `--host` (default 127.0.0.1), `--cycle-ms` (default 10) and the security options `--pki`, `--trust-all`, `--user`, `--user-cert` and `--renew-certificate` are the only arguments. A machine the simulator does not have, a config, port, language, address or cycle it cannot read and any other word are refused with a message and exit code 2. PLCopen function blocks per axis, the real-time pacing and its measurement, TwinCAT and CODESYS examples and the soak test are in [PLC virtual commissioning](plc.md).
+This prints `OPC UA server listening at opc.tcp://127.0.0.1:4840/` and the folder of its certificates (`Certificates in ...\pki: ...`), and runs the machine in real time until stopped. The machine name (or `--machine-file`), `--config`, `--set` and `--trajectory` as `sim-cli` reads them, `--port` (default 4840), `--lang`, `--host` (default 127.0.0.1), `--cycle-ms` (default 10) and the security options `--pki`, `--trust-all`, `--user`, `--user-cert` and `--renew-certificate` are the only arguments. A machine the simulator does not have, a config, port, language, address or cycle it cannot read and any other word are refused with a message and exit code 2. PLCopen function blocks per axis, the real-time pacing and its measurement, TwinCAT and CODESYS examples and the soak test are in [PLC virtual commissioning](plc.md).
 
 | Property | Value |
 | --- | --- |
