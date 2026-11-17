@@ -387,7 +387,11 @@ fn an_arms_own_motor_table_is_refused() {
 /// is on all of it, as on the linkage (the weight's lossless G / 20 is the rigid feedforward's): ((1.242740 - 12.045)
 /// x 0.96 + 12.045) / 20 = 0.083742 N m (without the loss on the weight it was 1.242740 x 0.96 / 20 = 0.059652, and
 /// 0.114165 in all), plus the shaft at 20 t' = 22.565 rad/s, 0.05 tanh(45) + 2e-4 x 22.565 = 0.054513 N m: 0.138255
-/// N m. The tool: the bearing 0.02 tanh(500) + 1e-4 x 5 = 0.0205 N m through ratio 8 at the efficiency
+/// N m. The loss is on the speed's own torque at the arm too (the loss-free feedforward's): the arms slow down,
+/// t'' = -0.557725 rad/s^2 (the constraint differentiated), and what turns with them, the arm 0.048 + 0.3 x 0.4^2 +
+/// 0.5 / 6 x 0.4^2 = 0.109333 kg m^2 and the rod pair's middle 2/3 x 0.5 kg at half the elbow's plus half the
+/// platform's velocity, gives back d(kinetic energy)/dt / t' = -0.079857 N m per arm, which the gearbox passes driven
+/// back too: -0.079857 x (0.96 - 1) / 20 = +0.000160, 0.138415 N m in all. The tool: the bearing 0.02 tanh(500) + 1e-4 x 5 = 0.0205 N m through ratio 8 at the efficiency
 /// 0.97^tanh(0.0205 x 5 / 0.5 W) = 0.993861 (the fade over 0.5 W), 0.002578 N m, plus the shaft at 40 rad/s,
 /// 0.02 tanh(80) + 8e-5 x 40 = 0.0232 N m: 0.025778 N m. In a vertical cruise of the shipped delta at 0.5 m/s the
 /// feedforward takes its own size off the arms' integrators.
@@ -396,7 +400,7 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
     let m = (ENTRY.build)(&ENTRY.config()).unwrap();
     let mut out = [0.0; 4];
     m.steady_friction(&[0.0, 0.0, -0.85, 0.0], &[0.0, 0.0, -0.5, 5.0], &mut out);
-    let expected = [0.138255, 0.138255, 0.138255, 0.025778];
+    let expected = [0.138415, 0.138415, 0.138415, 0.025778];
     for k in 0..4 {
         assert!((out[k] - expected[k]).abs() < 1e-5, "{out:?}, by hand {expected:?}");
     }
@@ -433,8 +437,9 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
 /// its losses, at z = -0.85 m going down and up at 0.5 m/s with the tool turning, and sideways, the torques that leave
 /// platform and tool without acceleration (a Newton solve of the rigid model: the tool's acceleration from its velocity a
 /// microsecond along the model's rates, the Jacobian by differences) are the loss-free feedforward plus
-/// `steady_friction`, to 5e-4 of the torque (seen: 3.5e-4 vertically, 7e-5 sideways, 3e-6 on the tool; what is left
-/// is the loss on the velocity terms, which the feedforward leaves loss-free).
+/// `steady_friction`, to 5e-5 of the torque (seen: 2e-12 vertically, 1.3e-5 sideways, 7e-8 on the tool; 3.5e-4 before
+/// `steady_friction` took the loss on the velocity terms too; what is left sideways is the efficiency's fade over the
+/// power, which the rigid model takes at its loss-free acceleration).
 #[test]
 fn the_friction_feedforward_takes_the_loss_on_the_weight() {
     let machine = (ENTRY.build)(&{
@@ -496,7 +501,7 @@ fn the_friction_feedforward_takes_the_loss_on_the_weight() {
         for k in 0..4 {
             let off = t[k] - ff[k] - friction[k];
             println!("{vel:?}: motor {k}: Newton {:.6} N m, feedforward {:.6} + friction {:.6}, off {off:.2e}", t[k], ff[k], friction[k]);
-            assert!(off.abs() < 5e-4 * t[k].abs(), "{vel:?}: motor {k}: {t:?} against {ff:?} + {friction:?}");
+            assert!(off.abs() < 5e-5 * t[k].abs(), "{vel:?}: motor {k}: {t:?} against {ff:?} + {friction:?}");
         }
     }
 }

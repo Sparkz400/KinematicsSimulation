@@ -1415,18 +1415,28 @@ impl Machine for Delta {
     /// the gearbox's drag) at i θ̇. The gearbox's loss factor is the one of what it passes at rest, the weight's −Q_g
     /// with the friction, as in `rigid_solve` (of the torque going in: `linkage::steady_loss`), and on all of it: the
     /// weight's lossless torque is the rigid feedforward's, so what the loss adds to it is part of what this returns
-    /// (as the linkage's, the trait's rule: the load goes through the efficiencies where the motor drives). The brake is
-    /// released and the stops are not touched in a move.
+    /// (as the linkage's, the trait's rule: the load goes through the efficiencies where the motor drives). The same holds
+    /// for the speed's own torque at the arm, M θ̈ + v at p̈ = 0 (the feedforward's, loss-free): the loss is taken of it
+    /// with the rest, and what it adds is returned here. The brake is released and the stops are not touched in a move.
     fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
-        let t = self.legs.inverse([pos[0], pos[1], pos[2]]).unwrap_or([f64::NAN; 3]);
+        let p = [pos[0], pos[1], pos[2]];
+        let t = self.legs.inverse(p).unwrap_or([f64::NAN; 3]);
         let (_, j) = self.pose(t);
-        let w = inverse(&j).map_or([f64::NAN; 3], |inv| mul(&inv, [vel[0], vel[1], vel[2]]));
-        let (drag, gravity) = (self.drag_torque(t, w), self.load(t, [0.0; 3]).2);
+        let inv = inverse(&j).unwrap_or([[f64::NAN; 3]; 3]);
+        let pv = [vel[0], vel[1], vel[2]];
+        let w = mul(&inv, pv);
+        let bend = self.legs.velocity_term(t, p, w, pv).unwrap_or([f64::NAN; 3]);
+        let arm_acc = mul(&inv, bend.map(|b| -b));
+        let (mass, velocity, gravity) = self.load(t, w);
+        let drag = self.drag_torque(t, w);
+        let at_mass = mul(&mass, arm_acc);
         for k in 0..3 {
             let joint = &self.joints[k];
+            let moving = at_mass[k] + velocity[k] + drag[k];
             let at_arm = joint.friction.torque(w[k]) - drag[k];
-            let loss = crate::linkage::steady_loss(&joint.gearbox, at_arm - gravity[k], w[k]);
-            out[k] = joint.shaft.torque(joint.ratio() * w[k]) + ((at_arm - gravity[k]) / loss + gravity[k]) / joint.ratio();
+            let passed = moving + at_arm - gravity[k];
+            let loss = crate::linkage::steady_loss(&joint.gearbox, passed, w[k]);
+            out[k] = joint.shaft.torque(joint.ratio() * w[k]) + (passed / loss - moving + gravity[k]) / joint.ratio();
         }
     }
 
