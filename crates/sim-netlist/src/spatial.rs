@@ -1233,9 +1233,9 @@ impl Machine for Delta {
     /// The platform (with the payload and the forearms' share), each arm's tube turning with its joint and what sits at
     /// its elbow turning with the elbow (the bend added), the elbow's move out of the arm's plane, the forearms' middles,
     /// and the rotors spinning about the joints' axes. The joints are where they are, at the base radius; the platform's
-    /// centre is the tool. What does not move is left out (see `FrameMomentum`).
-    // shortcut: the forearms' spin about their own axes is left out (effects.forearm_inertia; a few per cent of the
-    // reaction torque about z); add it if the base's twist under the D3 has to be exact.
+    /// centre is the tool. With effects.forearm_inertia each forearm pair's spin about its own axis e = u / L (u the
+    /// forearm, from the elbow to the platform joint): the angular momentum I s e of `add_spin` (`rod_spin` is s). What
+    /// does not move is left out (see `FrameMomentum`).
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         use sim_components::base::{add_point, add_spin, add_turning};
         let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
@@ -1264,6 +1264,11 @@ impl Machine for Delta {
             let middle: [f64; 3] = std::array::from_fn(|k| 0.5 * (elbow[k] + p[k] + at_platform[k]));
             add_point(&mut f, self.m_rod_middle, middle, std::array::from_fn(|k| 0.5 * (elbow_speed[k] + pv[k])));
             add_spin(&mut f, tangent, self.joints[i].rotor_inertia, rotor_speed[i]);
+            if self.rod_spin > 0.0 {
+                let u = sub(p, self.legs.elbows_moved(e, y)[i]);
+                let rod = u.map(|v| v / self.legs.lb);
+                add_spin(&mut f, rod, self.rod_spin, self.rod_spin(i, e, y, ew, yv));
+            }
         }
         Some(f)
     }

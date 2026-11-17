@@ -16,9 +16,17 @@
 //! Dynamics in theta, as the linkage's: M(theta) theta'' + m h' h'' theta'^2 = tau_gear + Q_g, M = J_screw + m h'^2,
 //! Q_g = -g m_g h'. m counts the platform, the payload and the arms' vertical motion, arms (4 n^2 - 1) / (12 n^2) (the
 //! centres of stage k's arms at (k - 1/2) h / n); m_g the platform, the payload and half the arms.
-//! shortcut: the arms' turning and the sideways motion of their centres and of the sliding feet are left out of the
-//! kinetic energy (about 16 % of the arms' share, 0.7 % of the total at mid height); add them to M if light platforms on heavy arms
-//! matter.
+//! The arms are uniform rods of mass m_a = arms / 2n, all 2n centres at the horizontal u / 2 (the stages stack on the
+//! same two feet columns) and at the heights (k - 1/2) s, the feet's rollers without mass of their own. Beside their
+//! vertical motion (m above) the centres move sideways at u' / 2 = -c theta' / 2, and each arm turns at
+//! alpha' = s' / u (tan alpha = s / u) about its centre, I = m_a L^2 / 12, with s' = c u theta' / s. Their kinetic
+//! energy 2n (m_a/2)(u'/2)^2 + 2n (I/2) alpha'^2 adds
+//!
+//! ```text
+//! M_a = arms c^2 (1/4 + L^2 / (12 s^2)),   1/2 dM_a/dtheta theta'^2 = -arms c^3 L^2 u theta'^2 / (12 s^4)
+//! ```
+//!
+//! to M and to the speed term (about 16 % of the vertical motion's share at mid height).
 //!
 //! The joint is a `RotaryJoint` on the motor's own config (motor, gearbox, brake), without joint friction or stops: the
 //! screw's efficiency counts with the gearbox's (effects.gearbox_efficiency); elastic or rigid with
@@ -193,6 +201,15 @@ impl Stages {
         [n * s, n * c * u / s, -n * c * c * l * l / s.powi(3)]
     }
 
+    /// What the arms' turning and sideways motion add at the screw angle theta, for arms of total mass `arms`: to the
+    /// mass M (arms c^2 (1/4 + L^2 / (12 s^2))) and to the speed term (1/2 dM/dtheta, per theta'^2).
+    pub fn arm_motion(&self, theta: f64, arms: f64) -> (f64, f64) {
+        let (c, l) = (self.lever, self.arm);
+        let u = self.span_low - c * theta;
+        let s = (self.height(theta)[0] / self.stages).max(1e-9);
+        (arms * c * c * (0.25 + l * l / (12.0 * s * s)), -arms * c.powi(3) * l * l * u / (12.0 * s.powi(4)))
+    }
+
     /// The screw's angle for a height; NaN out of reach.
     pub fn angle(&self, h: f64) -> f64 {
         let s = h / self.stages;
@@ -214,6 +231,8 @@ pub struct ScissorMachine {
     /// The screw's inertia at the gearbox output; the moving mass m (without the payload) and the weight's mass m_g.
     screw_inertia: f64,
     m_moving: f64,
+    /// The arms' total mass, for their turning and sideways motion.
+    arms: f64,
     m_weight: f64,
     m_payload: f64,
     payload_attached: bool,
@@ -252,6 +271,7 @@ impl ScissorMachine {
             max_height,
             screw_inertia: v("screw_inertia_kgm2"),
             m_moving: v("platform_kg") + arms * (4.0 * stages * stages - 1.0) / (12.0 * stages * stages),
+            arms,
             m_weight: v("platform_kg") + 0.5 * arms,
             m_payload: if cfg.bool("effects.payload")? { v("payload_kg") } else { 0.0 },
             payload_attached: true,
@@ -298,7 +318,12 @@ impl ScissorMachine {
     /// M, the velocity term m h' h'' w^2 and Q_g at theta and its speed w.
     fn load(&self, theta: f64, w: f64) -> (f64, f64, f64) {
         let [_, d1, d2] = self.height(theta);
-        (self.screw_inertia + self.m_nt() * d1 * d1, self.m_nt() * d1 * d2 * w * w, -self.g * self.m_g() * d1)
+        let (turn, turn_rate) = self.geometry.arm_motion(theta, self.arms);
+        (
+            self.screw_inertia + self.m_nt() * d1 * d1 + turn,
+            (self.m_nt() * d1 * d2 + turn_rate) * w * w,
+            -self.g * self.m_g() * d1,
+        )
     }
 
     fn rotor(&self, s: &[f64]) -> (f64, f64) {
@@ -706,6 +731,21 @@ mod tests {
         let step = 1e-3;
         let numeric = (lift.height(theta + step)[1] - lift.height(theta - step)[1]) / (2.0 * step);
         assert!((lift.height(theta)[2] - numeric).abs() < 1e-9 * numeric.abs().max(1e-9), "{numeric}");
+    }
+    /// The arms' turning and sideways motion, by hand: two stages of 1 m arms, 40 kg of arms, lever c = 0.01 m/rad, at
+    /// h = 1 m (s = 0.5, u = 0.866025). Sideways: 2n (m_a / 2) (c / 2)^2 per theta'^2 = arms c^2 / 8 = 5e-4, so M = 1e-3;
+    /// turning: 2n (m_a L^2 / 24) (s' / u)^2 with s' = c u / s gives arms L^2 c^2 / (24 s^2) = 40 * 1e-4 / 6 =
+    /// 6.6667e-4, M = 1.33333e-3: M_a = 2.33333e-3 kg m^2. The speed term is half the slope of M_a, which a central
+    /// difference of the mass confirms.
+    #[test]
+    fn the_arms_turning_and_sideways_motion_add_their_inertia() {
+        let lift = Stages { stages: 2.0, arm: 1.0, lever: 0.01, span_low: 0.99f64.sqrt() };
+        let theta = lift.angle(1.0);
+        let (m, rate) = lift.arm_motion(theta, 40.0);
+        assert!((m - 2.333_333e-3).abs() < 1e-8, "{m}");
+        let step = 1e-4;
+        let slope = (lift.arm_motion(theta + step, 40.0).0 - lift.arm_motion(theta - step, 40.0).0) / (2.0 * step);
+        assert!((rate - 0.5 * slope).abs() < 1e-6 * rate.abs(), "{rate} against {}", 0.5 * slope);
     }
     /// Screw 0.9, gearbox 0.96, ratio 20, the weight needing F c = 27.780 N m after both (motor 1.60763 N m lifting:
     /// 1.60763 * 20 * 0.96 * 0.9). Lifting the gearbox's own shaft carries 27.780 / 0.9 = 30.867 N m; lowering

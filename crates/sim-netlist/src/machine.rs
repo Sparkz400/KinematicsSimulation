@@ -2715,6 +2715,22 @@ impl ConfigMachine {
             .collect()
     }
 
+    /// The axis a wheel spins about per rad/s of the belt running along its section's route: the normal of the belt's
+    /// plane (`belt_plane`), pointing as a clockwise turn seen from the front (the viewer at -y) or, for a flat belt, from
+    /// above does, reversed for a wheel the belt runs round counter-clockwise.
+    fn wheel_axis(&self, clockwise: bool) -> [f64; 3] {
+        let cw = if self.belt_plane().1 == 2 { [0.0, 0.0, -1.0] } else { [0.0, 1.0, 0.0] };
+        cw.map(|c| if clockwise { c } else { -c })
+    }
+    /// +1 where a positive turn of pulley kk, or a positive speed past an idler of section `sec` (fed by that pulley),
+    /// moves the belt along the section's route, -1 against it: the belt goes from the pulley into a section it feeds
+    /// (`f` = +1), so along the route where the route starts at the pulley and against it where it ends there; reversed
+    /// for a section it takes from (`f` = -1).
+    fn route_sense(&self, sec: usize, kk: usize) -> f64 {
+        let f = self.sections[sec].f[kk];
+        if self.route_waypoints(sec).last() == Some(&Waypoint::Pulley(kk)) { -f } else { f }
+    }
+
     /// The waypoints a section's belt runs through: its `route`, else its pulleys and the body it is clamped to (the
     /// one that moves with most of the axes its length changes with, and the fewest others).
     fn route_waypoints(&self, s: usize) -> Vec<Waypoint> {
@@ -2786,14 +2802,15 @@ impl ConfigMachine {
 impl Machine for ConfigMachine {
     /// Each body moving with its axes (an axis with the id x, y or z along that direction), over ground with the frame's
     /// sway and the lean; the frame's own mass in its sway; a rotary axis's inertia turning about its own axis; the process
-    /// force on the tool. What does not move is left out (see `FrameMomentum`).
-    // shortcut: the pulleys', idlers' and rotors' spin is left out (their axes are not in the netlist), and a linear
-    // axis whose id is not x, y or z moves nothing; add them once the netlist places them.
+    /// force on the tool, each along its axis's direction (`dirs`, whatever the axis's id). The belt drives' spin: a
+    /// pulley, its rotor and the idlers turn about the normal of the belt's plane (`belt_plane`), a screw's rotor about
+    /// its axis, I w each. The sense of a wheel: the belt along its section's route turns it as its `clockwise` says (seen
+    /// from the front, from above for a flat belt), and a positive pulley turn and an idler's positive `speed` move the
+    /// belt as the first pulley of the section feeds it (`route_sense`). What does not move is left out (see
+    /// `FrameMomentum`).
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         // The axes, not the coordinates: a yawing gantry's yaw is one more, which no tool axis has.
         let n = self.axes.len();
-        let along: Vec<Option<usize>> =
-            self.axes.iter().map(|a| ["x", "y", "z"].iter().position(|id| *id == a.id)).collect();
         let g = self.g_along.first().zip(self.g_across.first()).map_or(0.0, |(a, b)| a.hypot(*b));
         let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -g], ..Default::default() };
         let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
@@ -2804,9 +2821,10 @@ impl Machine for ConfigMachine {
             let (u, du) = self.sway(s);
             ground[fr.axis] += du;
             place[fr.axis] += u;
-            if let Some(k) = along[fr.axis] {
-                f.linear[k] += fr.mass * du;
-                f.first_moment[k] += fr.mass * u;
+            let e = self.sway_direction();
+            for k in 0..3 {
+                f.linear[k] += fr.mass * du * e[k];
+                f.first_moment[k] += fr.mass * u * e[k];
             }
         }
         for (b, body) in self.bodies.iter().enumerate() {
@@ -2818,13 +2836,13 @@ impl Machine for ConfigMachine {
                 (0..3).for_each(|k| w[k] += column[k] * ground[i]);
             }
             // A body that does not move along the frame's axis rides on the frame.
-            if let Some(k) = self.frame.as_ref().filter(|fr| !body.axes[fr.axis]).and_then(|fr| along[fr.axis]) {
-                let (u, du) = self.sway(s);
-                (r[k], w[k]) = (r[k] + u, w[k] + du);
+            if self.frame.as_ref().is_some_and(|fr| !body.axes[fr.axis]) {
+                let (e, (u, du)) = (self.sway_direction(), self.sway(s));
+                (0..3).for_each(|k| (r[k], w[k]) = (r[k] + u * e[k], w[k] + du * e[k]));
             }
-            if let Some(k) = self.lean.as_ref().filter(|l| l.body == b).and_then(|lean| along[lean.axis]) {
-                let (x, dx) = self.leaning(s);
-                (r[k], w[k]) = (r[k] + x, w[k] + dx);
+            if let Some(lean) = self.lean.as_ref().filter(|l| l.body == b) {
+                let (e, (x, dx)) = (self.dirs[lean.axis], self.leaning(s));
+                (0..3).for_each(|k| (r[k], w[k]) = (r[k] + x * e[k], w[k] + dx * e[k]));
             }
             sim_components::base::add_point(&mut f, self.body_mass(body), r, w);
         }
@@ -2835,6 +2853,37 @@ impl Machine for ConfigMachine {
                 self.bodies.iter().find_map(|b| b.rotaries.iter().position(|&r| r == i).map(|at| &b.rotaries[..at]));
             let axis = self.turned_by(outer.unwrap_or(&[]), q, self.turn[i]);
             (0..3).for_each(|k| f.angular[k] += turned * v[i] * axis[k]);
+        }
+        // The belt drives' spin (see above): pulleys, rotors and idlers.
+        let (mut turn, mut rotor_speed) = (vec![0.0; self.m()], vec![0.0; self.m()]);
+        self.motor_state(s, &mut turn, &mut rotor_speed);
+        let (nn, vv) = (self.n(), self.vel());
+        for kk in 0..self.m() {
+            let mut ax = |axis: [f64; 3], w: f64, inertia: f64| (0..3).for_each(|k| f.angular[k] += inertia * w * axis[k]);
+            match (&self.direct[kk], self.sections.iter().position(|sec| sec.f[kk] != 0.0)) {
+                (None, Some(sec)) => {
+                    let w_pulley = if self.elastic { s[vv + nn + kk] } else { self.pulley_angle(kk, v) };
+                    let sense = self.route_sense(sec, kk);
+                    let (cw, r) = (self.clockwise.0[kk], self.r[kk]);
+                    let spin = self.wheel_axis(cw);
+                    ax(spin, sense * w_pulley, (self.j_pulley[kk] - self.lump * r * r).max(0.0));
+                    ax(spin, sense * rotor_speed[kk], self.j_rotor[kk]);
+                }
+                (Some(Direct { kind: DirectKind::Screw(_), axis, .. }), _) => {
+                    ax(self.dirs[*axis], rotor_speed[kk], self.j_rotor[kk]);
+                }
+                _ => {}
+            }
+        }
+        for (d, idler) in self.idlers.iter().enumerate() {
+            let Some(sec) = (0..self.sections.len()).find(|&sec| self.route_waypoints(sec).contains(&Waypoint::Idler(d)))
+            else {
+                continue;
+            };
+            let Some(first) = (0..self.m()).find(|&kk| self.sections[sec].f[kk] != 0.0) else { continue };
+            let w = self.route_sense(sec, first) * dot(&idler.speed, v) / idler.radius;
+            let spin = self.wheel_axis(self.clockwise.1[d]);
+            (0..3).for_each(|k| f.angular[k] += idler.mass * idler.radius * idler.radius * w * spin[k]);
         }
         // The belt's runs (`runs_mass`), each at V_s v over ground and the sway on top: momentum mu sum L_s y_s, and the
         // first moment mu sum (L0_s + c_s . q / 2) V_s q, whose rate that is (the belt's runs being one piece), with
@@ -2852,15 +2901,12 @@ impl Machine for ConfigMachine {
                 f.mass += weight;
             }
         }
+        // The process force acts on the tool along the axes' directions, at the tool's place over ground.
         for (i, force) in self.process_force().iter().enumerate().take(n) {
-            if let Some(k) = along[i] {
-                f.external[k] = *force;
-            }
+            (0..3).for_each(|k| f.external[k] += *force * self.dirs[i][k]);
         }
-        for (i, k) in along.iter().enumerate() {
-            if let Some(k) = k {
-                f.external_at[*k] = pos[i];
-            }
+        for i in (0..n).filter(|&i| self.axes[i].unit != "rad") {
+            (0..3).for_each(|k| f.external_at[k] += pos[i] * self.dirs[i][k]);
         }
         Some(f)
     }
