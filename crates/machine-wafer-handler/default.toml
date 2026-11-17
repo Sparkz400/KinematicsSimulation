@@ -38,7 +38,8 @@ motor_encoder = ""
 [effects]
 gravity = true
 payload = true
-# The gearboxes twist under load (stiffness, damping, backlash): motor and link are two bodies per joint. Off, the
+# The gearboxes twist under load (stiffness, damping, backlash), the Z stroke's coupling and screw too: motor and link
+# are two bodies per joint. Off, the
 # machine is the rigid reference model, in which the motor turns with the link times the ratio.
 joint_elasticity = true
 # The bands in the links stretch under load ([elbow_band], [wrist_band]): the forearm and the effector are bodies of
