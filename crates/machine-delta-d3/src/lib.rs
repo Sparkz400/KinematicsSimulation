@@ -7,6 +7,7 @@
 //! netlist, so a fix to the arms reaches both.
 
 use sim_core::{Config, ConfigError, Machine, MachineEntry};
+pub use sim_netlist::linkage::Arms;
 pub use sim_netlist::spatial::*;
 
 pub static ENTRY: MachineEntry = MachineEntry {
