@@ -20,13 +20,26 @@
 //!
 //! f_i is the force leg i pushes the platform with: what its screw passes on (`chain::JointMachine`, one
 //! `joint::RotaryJoint` with a `transmission::BallScrew` per leg: the screw and nut stiffness, the coupling, backlash,
-//! friction in the screw and the rod's guide, the motor). Each leg's mass is split between its ends: the share
-//! `leg.platform_share` moves with the platform joint (a point mass there, in the platform's mass and inertia), the rest
-//! sits at the base joint and does not move.
-//! shortcut: the legs' turning about their base joints (their inertia about it) is left out; add it where the legs
-//! weigh as much as the platform.
-//! shortcut: the payload is a point mass at the platform centre (no inertia of its own); give it an inertia where a
-//! large workpiece turns with the platform.
+//! friction in the screw and the rod's guide, the motor).
+//!
+//! Each leg is two bodies: the part on the platform joint (the rod and nut, mass `leg.platform_share` of `leg.mass_kg`,
+//! its centre `leg.platform_part_centre_m` from the platform joint towards the base) and the part on the base joint
+//! (cylinder and motor, the rest of the mass, its centre `leg.base_part_centre_m` from the base joint towards the
+//! platform), each with its inertia about its own centre across the leg (`leg.*_part_inertia_kgm2`, 0 = a point mass).
+//! Both turn with the leg's direction u = d / L. With d' = v + w x b (the platform joint's velocity) and L' = u . d':
+//!
+//! ```text
+//! u' = (d' - u L') / L,  L'' = u' . d' + u . d'',  u'' = (d'' - 2 u' L' - u L'') / L        (d'' = w x (w x b) at xi' = 0)
+//! base part  X = B + c u,        X' = c u' = A xi,    A = c A_u,           A_u = (1 - u u^T) [1, -[b]x] / L
+//! rod part   X = P - c u,        X' = P' - c u',      A = [1, -[b]x] - c A_u,  P = p + b
+//! ```
+//!
+//! and with `a0` the acceleration at xi' = 0 (c u'' for the base part, w x (w x b) - c u'' for the rod part) each part
+//! adds m A^T A + I_t A_u^T A_u to M_xi and m A^T (a0 + g e_z) + I_t A_u^T u'' to c + g (d'Alembert; I_t about the
+//! centre across the leg, whose turn is u x u'). The platform's mass and inertia are the platform's alone, the payload
+//! is a point mass at the platform centre with the inertia `mass.payload_inertia_kgm2` (x, y, z, about the centre,
+//! in the platform frame; absent 0) that turns with the platform. The legs' rotors spin along their legs; each part's
+//! spin about the leg's axis is free between the two joints and nothing excites it.
 
 use sim_components::chain::{
     JOINT_KEYS, JointMachine, JointSpec, Lu, MOTOR_IDS, MOTOR_KEYS, Mechanism, condition_number, solve,
@@ -320,6 +333,26 @@ impl Clone for LastFound {
     }
 }
 
+/// One body of a leg: its mass, its centre's distance from the joint it hangs on, its inertia across the leg about its
+/// centre, and whether it hangs on the platform joint (else on the base joint).
+#[derive(Debug, Clone, Copy)]
+struct LegPart {
+    mass: f64,
+    centre: f64,
+    inertia: f64,
+    on_platform: bool,
+}
+
+/// A leg part's motion at a pose and twist: A (its velocity per twist, as columns), its acceleration `a0` at zero twist
+/// acceleration, the leg direction's rate per twist `au` (columns) and its second derivative `u2` at zero twist
+/// acceleration.
+struct PartMotion {
+    a: [V3; 6],
+    a0: V3,
+    au: [V3; 6],
+    u2: V3,
+}
+
 #[derive(Clone)]
 pub struct Hexapod {
     pub geo: Geometry,
@@ -327,8 +360,11 @@ pub struct Hexapod {
     /// Platform with the legs' platform shares; payload; inertia about the centre in the platform frame.
     mass: f64,
     payload: f64,
+    payload_inertia: M3,
     attached: bool,
     inertia: M3,
+    /// The two bodies of each leg: the part on the base joint, the part on the platform joint.
+    parts: [LegPart; 2],
     g: f64,
     required_life: Option<f64>,
     /// The grid point's pose the dynamics' Newton starts from (`warm_pose`).
@@ -365,19 +401,31 @@ impl Hexapod {
         if share > 1.0 {
             return Err(ConfigError::Invalid("leg.platform_share".into()));
         }
-        let at_joint = share * cfg.non_negative("leg.mass_kg")?;
+        let leg_mass = cfg.non_negative("leg.mass_kg")?;
+        let part = |key: &str, on_platform: bool, mass: f64| -> Result<LegPart, ConfigError> {
+            let get = |what: &str| cfg.f64(&format!("leg.{key}_{what}")).or_else(|_| Ok::<f64, ConfigError>(0.0));
+            let (centre, inertia) = (get("centre_m")?, get("inertia_kgm2")?);
+            if !(centre >= 0.0 && inertia >= 0.0) {
+                return Err(ConfigError::Invalid(format!("leg.{key}_centre_m")));
+            }
+            Ok(LegPart { mass, centre, inertia, on_platform })
+        };
+        let parts =
+            [part("base_part", false, (1.0 - share) * leg_mass)?, part("platform_part", true, share * leg_mass)?];
         let diag = cfg.f64s("mass.platform_inertia_kgm2")?;
         if diag.len() != 3 || diag.iter().any(|v| !(*v > 0.0)) {
             return Err(ConfigError::Invalid("mass.platform_inertia_kgm2".into()));
         }
-        let mut inertia: M3 = std::array::from_fn(|i| std::array::from_fn(|j| if i == j { diag[i] } else { 0.0 }));
-        for a in geo.anchors {
-            for i in 0..3 {
-                for j in 0..3 {
-                    inertia[i][j] += at_joint * (if i == j { dot(a, a) } else { 0.0 } - a[i] * a[j]);
-                }
+        let inertia: M3 = std::array::from_fn(|i| std::array::from_fn(|j| if i == j { diag[i] } else { 0.0 }));
+        let payload_inertia: M3 = match cfg.f64s("mass.payload_inertia_kgm2") {
+            Ok(d) if d.len() == 3 && d.iter().all(|v| *v >= 0.0) && cfg.bool("effects.payload")? => {
+                std::array::from_fn(|i| std::array::from_fn(|j| if i == j { d[i] } else { 0.0 }))
             }
-        }
+            Ok(d) if d.len() != 3 || d.iter().any(|v| !(*v >= 0.0)) => {
+                return Err(ConfigError::Invalid("mass.payload_inertia_kgm2".into()));
+            }
+            _ => [[0.0; 3]; 3],
+        };
         let screw = BallScrew::from_config(cfg)?;
         if screw.length < geo.stroke {
             return Err(ConfigError::Invalid("screw.length_m".into()));
@@ -412,10 +460,12 @@ impl Hexapod {
         let mech = Hexapod {
             geo,
             screw,
-            mass: cfg.positive("mass.platform_kg")? + 6.0 * at_joint,
+            mass: cfg.positive("mass.platform_kg")?,
             payload: if cfg.bool("effects.payload")? { cfg.non_negative("mass.payload_kg")? } else { 0.0 },
+            payload_inertia,
             attached: true,
             inertia,
+            parts,
             g: if cfg.bool("effects.gravity")? { G } else { 0.0 },
             required_life: cfg.f64("ratings.required_life_h").ok(),
             last: LastFound::default(),
@@ -501,9 +551,72 @@ impl Hexapod {
         Some((legs, r, inverse(&Geometry::jacobian_rows(&legs))?))
     }
 
+    /// The platform's inertia about its centre in the platform frame, with the payload's as it is attached.
+    fn platform_inertia(&self) -> M3 {
+        let extra = if self.attached { self.payload_inertia } else { [[0.0; 3]; 3] };
+        std::array::from_fn(|i| std::array::from_fn(|j| self.inertia[i][j] + extra[i][j]))
+    }
+
+    /// Leg i's part `part` at a pose with the platform's twist `xi`: see the module's derivation.
+    fn part_motion(&self, i: usize, legs: &Legs, xi: &[f64; 6], part: &LegPart) -> PartMotion {
+        let (u, l, b) = (legs.u[i], legs.length[i], legs.b[i]);
+        let (v, w) = ([xi[0], xi[1], xi[2]], [xi[3], xi[4], xi[5]]);
+        let (d1, d2) = (add(v, cross(w, b)), cross(w, cross(w, b)));
+        let rate = dot(u, d1);
+        let up = sub(d1, u.map(|x| x * rate)).map(|x| x / l);
+        let rate2 = dot(up, d1) + dot(u, d2);
+        let u2: V3 = std::array::from_fn(|k| (d2[k] - 2.0 * up[k] * rate - u[k] * rate2) / l);
+        // The twist's unit columns: the platform joint's velocity per v_k (e_k) and per w_k (e_k x b).
+        let unit = |k: usize| -> V3 {
+            let e: V3 = std::array::from_fn(|r| if r == k % 3 { 1.0 } else { 0.0 });
+            if k < 3 { e } else { cross(e, b) }
+        };
+        let au: [V3; 6] = std::array::from_fn(|k| {
+            let d = unit(k);
+            let along = dot(u, d);
+            std::array::from_fn(|r| (d[r] - u[r] * along) / l)
+        });
+        let c = part.centre;
+        if part.on_platform {
+            PartMotion {
+                a: std::array::from_fn(|k| sub(unit(k), au[k].map(|x| x * c))),
+                a0: sub(d2, u2.map(|x| x * c)),
+                au,
+                u2,
+            }
+        } else {
+            PartMotion { a: au.map(|col| col.map(|x| x * c)), a0: u2.map(|x| x * c), au, u2 }
+        }
+    }
+
+    /// The leg parts' mass matrix over the twist (6 x 6) and their share of c + g at the twist `xi` (zero twist
+    /// acceleration), over all legs.
+    fn parts_terms(&self, legs: &Legs, xi: &[f64; 6]) -> ([[f64; 6]; 6], [f64; 6]) {
+        let (mut m, mut held) = ([[0.0; 6]; 6], [0.0; 6]);
+        for i in 0..6 {
+            for part in self.parts.iter().filter(|p| p.mass > 0.0 || p.inertia > 0.0) {
+                let pm = self.part_motion(i, legs, xi, part);
+                let accel = [pm.a0[0], pm.a0[1], pm.a0[2] + self.g];
+                for r in 0..6 {
+                    held[r] += part.mass * dot(pm.a[r], accel) + part.inertia * dot(pm.au[r], pm.u2);
+                    for c in 0..6 {
+                        m[r][c] += part.mass * dot(pm.a[r], pm.a[c]) + part.inertia * dot(pm.au[r], pm.au[c]);
+                    }
+                }
+            }
+        }
+        (m, held)
+    }
+
+    /// Where leg i's part `part` has its centre with the platform at `p`.
+    fn part_position(&self, i: usize, legs: &Legs, p: V3, part: &LegPart) -> V3 {
+        let u = legs.u[i].map(|x| x * part.centre);
+        if part.on_platform { sub(add(p, legs.b[i]), u) } else { add(self.geo.base[i], u) }
+    }
+
     /// The platform's mass matrix over its twist (6 x 6).
     fn twist_mass(&self, r: &M3) -> [[f64; 6]; 6] {
-        let iw = matmul(&matmul(r, &self.inertia), &transpose(r));
+        let iw = matmul(&matmul(r, &self.platform_inertia()), &transpose(r));
         let mut m = [[0.0; 6]; 6];
         for k in 0..3 {
             m[k][k] = self.moving();
@@ -520,7 +633,11 @@ impl Hexapod {
             let j = Geometry::jacobian(&self.geo.legs(tool));
             (0..36).map(|k| j[(k % 6) * 6 + k / 6]).collect()
         };
-        let f = solve(&jt, &[0.0, 0.0, self.moving() * self.g, 0.0, 0.0, 0.0])?;
+        // The weight is c + g at rest: the platform's and the payload's, and the leg parts' (m g times the z row of A).
+        let (_, parts) = self.parts_terms(&self.geo.legs(tool), &[0.0; 6]);
+        let mut weight = [0.0, 0.0, self.moving() * self.g, 0.0, 0.0, 0.0];
+        weight.iter_mut().zip(parts).for_each(|(w, p)| *w += p);
+        let f = solve(&jt, &weight)?;
         Some(std::array::from_fn(|i| f[i]))
     }
 }
@@ -539,12 +656,14 @@ impl Mechanism for Hexapod {
             let along = dot(legs.u[i], wi);
             (dot(wi, wi) - along * along) / legs.length[i] + dot(legs.u[i], cross(w, cross(w, legs.b[i])))
         });
-        let mx = self.twist_mass(&r);
+        let mut mx = self.twist_mass(&r);
         let iw = [[mx[3][3], mx[3][4], mx[3][5]], [mx[4][3], mx[4][4], mx[4][5]], [mx[5][3], mx[5][4], mx[5][5]]];
         let gyro = cross(w, mul(&iw, w));
+        let (parts_mass, parts_held) = self.parts_terms(&legs, &xi);
+        (0..6).for_each(|r| (0..6).for_each(|c| mx[r][c] += parts_mass[r][c]));
         let jinv_a0: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| jinv[r][c] * a0[c]).sum());
         let wrench: [f64; 6] = std::array::from_fn(|k| {
-            let held = [0.0, 0.0, self.moving() * self.g, gyro[0], gyro[1], gyro[2]][k];
+            let held = [0.0, 0.0, self.moving() * self.g, gyro[0], gyro[1], gyro[2]][k] + parts_held[k];
             held - (0..6).map(|c| mx[k][c] * jinv_a0[c]).sum::<f64>()
         });
         // M_xi J^-1, once for every column of M_q.
@@ -557,25 +676,50 @@ impl Mechanism for Hexapod {
             }
         }
     }
-    /// The platform (its joints' share of the legs and the payload with it) at its centre p with its twist (v, w):
-    /// m v, p x m v + R I R^T w; the platform joints lie symmetric about p, so their first moment is m p. Each leg's
-    /// rotor spins along the leg's u_i. The legs' shares at the base joints do not move.
+    /// The platform with the payload at its centre p with its twist (v, w): m v, p x m v + R I R^T w, its first moment
+    /// m p; each leg's two parts as points with their velocity A xi and their turn I_t u x u'. Each leg's rotor spins
+    /// along the leg's u_i.
     fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
         let (tool, legs, r) = self.pose(q)?;
         let jinv = inverse(&Geometry::jacobian_rows(&legs))?;
         let xi: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| jinv[r][c] * qd[c]).sum());
         let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
         sim_components::base::add_point(&mut f, self.moving(), [tool[0], tool[1], tool[2]], [xi[0], xi[1], xi[2]]);
-        let iw = matmul(&matmul(&r, &self.inertia), &transpose(&r));
+        let iw = matmul(&matmul(&r, &self.platform_inertia()), &transpose(&r));
         let turning = mul(&iw, [xi[3], xi[4], xi[5]]);
         (0..3).for_each(|k| f.angular[k] += turning[k]);
+        let p = [tool[0], tool[1], tool[2]];
+        for i in 0..6 {
+            for part in self.parts.iter().filter(|p| p.mass > 0.0 || p.inertia > 0.0) {
+                let pm = self.part_motion(i, &legs, &xi, part);
+                let speed: V3 = std::array::from_fn(|k| (0..6).map(|c| pm.a[c][k] * xi[c]).sum());
+                let at = self.part_position(i, &legs, p, part);
+                sim_components::base::add_point(&mut f, part.mass, at, speed);
+                if !part.on_platform {
+                    // The base-joint part's mass at its joint does not move (`FrameMomentum`): only its offset counts.
+                    f.mass -= part.mass;
+                    (0..3).for_each(|k| f.first_moment[k] -= part.mass * self.geo.base[i][k]);
+                }
+                // The part's turn about its own centre across the leg: u x u'.
+                let rate: V3 = std::array::from_fn(|k| (0..6).map(|c| pm.au[c][k] * xi[c]).sum());
+                let spin = cross(legs.u[i], rate);
+                (0..3).for_each(|k| f.angular[k] += part.inertia * spin[k]);
+            }
+        }
         for (u, spin) in legs.u.iter().zip(rotor_spin) {
             sim_components::base::add_spin(&mut f, *u, 1.0, *spin);
         }
         Some(f)
     }
     fn potential(&self, q: &[f64]) -> f64 {
-        self.pose(q).map_or(f64::NAN, |(tool, ..)| self.moving() * self.g * tool[2])
+        self.pose(q).map_or(f64::NAN, |(tool, legs, _)| {
+            let p = [tool[0], tool[1], tool[2]];
+            let parts: f64 = (0..6)
+                .flat_map(|i| self.parts.iter().map(move |part| (i, part)))
+                .map(|(i, part)| part.mass * self.part_position(i, &legs, p, part)[2])
+                .sum();
+            self.g * (self.moving() * tool[2] + parts)
+        })
     }
     fn set_payload_attached(&mut self, attached: bool) {
         self.attached = attached;

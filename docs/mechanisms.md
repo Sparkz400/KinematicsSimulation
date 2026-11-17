@@ -617,9 +617,11 @@ and the motor are those of the ball screw axis above. The mechanism gives the pl
   the pose moves them anyway.
 - J's rows are (u_i, b_i × u_i), u_i the leg's direction and b_i = R a_i. Dynamics by the platform's twist: M_xi xi' +
   c + g = J^T f, so in leg space M_q = J^-T M_xi J^-1 and h = J^-T (c + g − M_xi J^-1 a0), a0 the legs' length
-  acceleration at the twist (checked against the Lagrange equations of M_q by differences: equal to 1e-9). Each leg's
-  mass is split between its ends: `leg.platform_share` moves with the platform joint (a point mass in the platform's
-  mass and inertia), the rest sits still at the base.
+  acceleration at the twist (checked against the Lagrange equations of M_q by differences: equal to 1e-9). Each leg is
+  two bodies swinging with its direction: the rod part (`leg.platform_share` of `leg.mass_kg`, centre
+  `leg.platform_part_centre_m` from the platform joint) and the body part (the rest, centre `leg.base_part_centre_m`
+  from the base joint), each with its inertia about its centre across the leg; their kinetic energy enters M_xi and c,
+  their weight g. The payload may have an inertia of its own (`mass.payload_inertia_kgm2`, absent 0).
 - Refused: a leg beyond its stroke (`error-joint-beyond-stop`), a leg steeper against the base's or the platform's
   normal than `workspace.max_joint_angle_deg` (`error-hexapod-joint-angle`), a pose whose Jacobian has a condition
   number above `workspace.max_condition_number`, the turns weighed by the platform radius
@@ -707,7 +709,7 @@ pickers. See the [model reference](model-reference.md#hexapod-with-rotary-actuat
   of the crank and its axis, the torque arm zero) than `workspace.min_dead_centre_margin_deg` (`error-rss-dead-centre`),
   a ball joint beyond `workspace.crank_joint_max_angle_deg` (the rod out of the crank's plane) or
   `platform_joint_max_angle_deg` (against the platform's normal; `error-rss-ball-joint`), two rods nearer than
-  `workspace.min_rod_clearance_m` axis to axis (`error-rss-rods-cross`), a condition number above
+  `workspace.min_rod_clearance_m` axis to axis (`error-rss-rods-cross`), a rod nearer than `workspace.min_body_clearance_m` to an edge of the platform's or the base's hexagon (`error-rss-rods-cross-body`), a condition number above
   `workspace.max_condition_number` (`error-rss-singularity`), a crank beyond its stops.
 - Dynamics by virtual work in the crank angles: the platform and payload as one rigid body with its centre of mass off
   the platform centre, each rod as a slender rod (a sixth of its mass at each end and two thirds at its middle: exact
