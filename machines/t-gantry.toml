@@ -76,6 +76,11 @@ tooth_meshing = true
 frame_compliance = false
 # The Z axis leaning on its carriage ([tool_flex], machine.lean); elastic model only.
 tool_flex = false
+# The X beam's first vertical mode with the carriage on it as one more coordinate w, the beam's deflection under the
+# carriage ([beam]; machine.lean names the axes: the beam runs along its axis, w hangs the bodies on that axis lower and
+# the lean's lever axis is the vertical one); elastic model only. Off in the shipped files: the beam's mass and damping
+# are [estimate]s.
+beam_vertical_mode = false
 # The idlers' inertia and bearing friction ([idler], machine.idler).
 idlers = false
 cable_chain = false
@@ -329,6 +334,19 @@ damping_n_s_m = 190.0
 lateral_stiffness_n_m = 2.0e7
 tilt_stiffness_nm_rad = 1.2e4
 damping_n_s_m = 80.0
+
+# With effects.beam_vertical_mode: the X beam as a simple span between the posts (the crate's values).
+[beam]
+# The posts at the motors, geometry.span_min_m beyond each end of the stroke: 1.0 + 2 x 0.15 m.
+span_m = 1.3
+carriage_at_zero_m = 0.15
+# [estimate] an aluminium profile of about 80 x 80 mm, I = 1.2e-6 m^4, E = 70 GPa.
+bending_stiffness_nm2 = 8.4e4
+# [estimate] the same profile's mass per metre, about 3.5 kg/m: the first mode's modal mass is 17/35 of the beam's mass
+# in the middle.
+mass_kg_m = 3.5
+# [estimate] the damping ratio of the first mode, 1 %: a bolted aluminium structure (0.5 to 3 %).
+damping_ratio = 0.01
 
 # With effects.idlers: the four carriage idlers and the one at the bottom of the Z axis, all alike, turn
 # with the belt that passes them. Their inertia adds to what the belt accelerates, their bearings drag.

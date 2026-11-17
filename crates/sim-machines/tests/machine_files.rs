@@ -102,24 +102,36 @@ fn same_machine(id: &str, name: &str, changes: &[&str], rises: &[f64], what: &st
     for machine in [&mut a, &mut b] {
         machine.set_part_temperatures(rises);
     }
-    // The crate's elastic T-gantry keeps the states of its frame and tool flex (position and rate, 6 7 and 14 15)
-    // with those effects off; the file machine has its frame's where it sways and its leaning Z axis's where that
-    // leans, in that order after the rotors. Elsewhere the states are laid out alike.
+    // The crate's elastic T-gantry keeps the states of its frame, its tool flex and its beam (each a position and a rate,
+    // in that order after the rotors, the positions then the rates) with those effects off; the file machine has the
+    // frame's where it sways, the leaning Z axis's where that leans and the beam's where it is a mode. Elsewhere the
+    // states are laid out alike.
     let on = |effect: &str| cb.bool(&format!("effects.{effect}")).unwrap_or(false);
-    let gaps: &[usize] = match a.state_len() - b.state_len() {
-        0 => &[],
-        2 if on("tool_flex") && !on("frame_compliance") => &[6, 14],
-        2 => &[7, 15],
-        _ => &[6, 7, 14, 15],
-    };
-    assert_eq!(a.state_len(), b.state_len() + gaps.len(), "{what}: state length");
+    let elastic = on("belt_stretch");
+    let extra = [on("frame_compliance"), on("tool_flex"), on("beam_vertical_mode")];
     let crate_state = |s: &[f64]| {
-        let mut out = s.to_vec();
-        for &at in gaps {
-            out.insert(at, 0.0);
+        if !elastic {
+            return s.to_vec();
         }
+        let positions = 6 + extra.iter().filter(|e| **e).count();
+        let mut out = Vec::new();
+        for half in 0..2 {
+            let mut next = half * positions;
+            out.extend_from_slice(&s[next..next + 6]);
+            next += 6;
+            for present in extra {
+                out.push(if present {
+                    next += 1;
+                    s[next - 1]
+                } else {
+                    0.0
+                });
+            }
+        }
+        out.extend_from_slice(&s[2 * positions..]);
         out
     };
+    assert_eq!(a.state_len(), crate_state(&vec![0.0; b.state_len()]).len(), "{what}: state length");
     let n = a.axes().len();
     let m = a.motors().len();
     // With the payload on, then set down, then with the brakes holding.
@@ -223,6 +235,7 @@ fn the_effects_of_a_machine_file_are_its_crates() {
         "belt_span_vibration",
         "tool_flex",
         "belt_wrap",
+        "beam_vertical_mode",
     ];
     let rises = [10.0, 20.0, 30.0, 40.0];
     for rigid in [false, true] {
