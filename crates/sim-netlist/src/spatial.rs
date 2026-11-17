@@ -303,7 +303,7 @@ impl Legs {
 }
 
 /// The arms' modes with the motors held (by their position loops): per arm the gearbox's spring k_g from the motor to
-/// the arm's root (inertia `root`), the bending spring k_b from the root to the elbow, and the rest of the machine as
+/// the arm's root (inertia `root`; `k_gear` one per arm, each arm's own gearbox), the bending spring k_b from the root to the elbow, and the rest of the machine as
 /// the mass matrix `distal` in the elbow angles and, where it is 6 x 6, the elbows' moves out of the arms' planes, each
 /// on its lateral spring k_l. `None` for a rigid spring (infinite stiffness: the two ends one body). The coordinates
 /// are (roots, elbow angles, elbow moves), the flexibility per arm K^-1 = [[1/k_g, 1/k_g], [1/k_g, 1/k_g + 1/k_b]]
@@ -313,16 +313,17 @@ impl Legs {
 pub fn arm_modes(
     root: f64,
     distal: &[Vec<f64>],
-    k_gear: Option<f64>,
+    k_gear: Option<[f64; 3]>,
     k_bend: Option<f64>,
     k_lateral: Option<f64>,
 ) -> Vec<(f64, Vec<f64>)> {
     let flex = |k: Option<f64>| k.map_or(0.0, |k| 1.0 / k);
-    let (fg, fb, fl) = (flex(k_gear), flex(k_bend), flex(k_lateral));
+    let (fb, fl) = (flex(k_bend), flex(k_lateral));
     let n = 3 + distal.len();
     let (mut m, mut f) = (vec![vec![0.0; n]; n], vec![vec![0.0; n]; n]);
     for i in 0..3 {
         m[i][i] = root;
+        let fg = k_gear.map_or(0.0, |k| 1.0 / k[i]);
         (f[i][i], f[i][3 + i], f[3 + i][i], f[3 + i][3 + i]) = (fg, fg, fg, fg + fb);
         if n == 9 {
             f[6 + i][6 + i] = fl;
@@ -975,13 +976,14 @@ impl Delta {
     /// v'Cv / (2 w v'Mv) with C the gearboxes', the bending's and the lateral dampers (the cross terms of a damping that
     /// is not proportional left out). None with rigid gearboxes and rigid arms, or out of reach.
     fn modes_at(&self, tool: &[f64], small: bool) -> Vec<(f64, f64, Vec<f64>)> {
-        // shortcut: the modes take the first arm's gearbox for all three; give `arm_modes` one per arm once a file
-        // drives the arms through different gearboxes.
+        // Each arm's own gearbox (`arm_modes` takes one spring per arm).
         // K1, the stiffness of the moves that excite the mode; with hysteresis a small vibration (`small`) sees K1 + sigma
         // (2 K1 as shipped, about 41 % higher, docs/model-reference.md, Resonance).
         let k_gear = self.elastic.then(|| {
-            let g = &self.joints[0].gearbox;
-            g.stiffness + if small && g.hysteresis > 0.0 { g.dahl_stiffness } else { 0.0 }
+            std::array::from_fn(|i| {
+                let g = &self.joints[i].gearbox;
+                g.stiffness + if small && g.hysteresis > 0.0 { g.dahl_stiffness } else { 0.0 }
+            })
         });
         let elbows = if tool.len() == 3 { self.legs.inverse([tool[0], tool[1], tool[2]]) } else { None };
         let (Some(elbows), true) = (elbows, k_gear.is_some() || self.bending.is_some()) else { return Vec::new() };
@@ -991,7 +993,7 @@ impl Delta {
             }
             None => self.load_at(elbows, [0.0; 3], self.m_nt(), false).0.map(Vec::from).into(),
         };
-        let c_gear = if self.elastic { self.joints[0].gearbox.damping } else { 0.0 };
+        let c_gear: V3 = std::array::from_fn(|i| if self.elastic { self.joints[i].gearbox.damping } else { 0.0 });
         let b = self.bending;
         let modes = arm_modes(self.root_inertia, &distal, k_gear, b.map(|b| b.k), b.map(|b| b.k_lateral));
         modes
@@ -1003,7 +1005,7 @@ impl Delta {
                 let kinetic = self.root_inertia * (0..3).map(|i| v[i] * v[i]).sum::<f64>() + distal_kinetic;
                 let damped: f64 = (0..3)
                     .map(|i| {
-                        c_gear * v[i] * v[i]
+                        c_gear[i] * v[i] * v[i]
                             + b.map_or(0.0, |b| b.c * (v[3 + i] - v[i]).powi(2) + b.c_lateral * v[6 + i] * v[6 + i])
                     })
                     .sum();
@@ -1231,9 +1233,9 @@ impl Machine for Delta {
     /// The platform (with the payload and the forearms' share), each arm's tube turning with its joint and what sits at
     /// its elbow turning with the elbow (the bend added), the elbow's move out of the arm's plane, the forearms' middles,
     /// and the rotors spinning about the joints' axes. The joints are where they are, at the base radius; the platform's
-    /// centre is the tool. What does not move is left out (see `FrameMomentum`).
-    // shortcut: the forearms' spin about their own axes is left out (effects.forearm_inertia; a few per cent of the
-    // reaction torque about z); add it if the base's twist under the D3 has to be exact.
+    /// centre is the tool. With effects.forearm_inertia each forearm pair's spin about its own axis e = u / L (u the
+    /// forearm, from the elbow to the platform joint): the angular momentum I s e of `add_spin` (`rod_spin` is s). What
+    /// does not move is left out (see `FrameMomentum`).
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         use sim_components::base::{add_point, add_spin, add_turning};
         let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
@@ -1262,6 +1264,11 @@ impl Machine for Delta {
             let middle: [f64; 3] = std::array::from_fn(|k| 0.5 * (elbow[k] + p[k] + at_platform[k]));
             add_point(&mut f, self.m_rod_middle, middle, std::array::from_fn(|k| 0.5 * (elbow_speed[k] + pv[k])));
             add_spin(&mut f, tangent, self.joints[i].rotor_inertia, rotor_speed[i]);
+            if self.rod_spin > 0.0 {
+                let u = sub(p, self.legs.elbows_moved(e, y)[i]);
+                let rod = u.map(|v| v / self.legs.lb);
+                add_spin(&mut f, rod, self.rod_spin, self.rod_spin(i, e, y, ew, yv));
+            }
         }
         Some(f)
     }
@@ -1706,3 +1713,23 @@ impl Machine for Delta {
 /// The forearm rods' width and the upper arms', as drawn and as collision capsules (twice their radius), m.
 const ROD_WIDTH: f64 = 0.012;
 const ARM_WIDTH: f64 = 0.04;
+
+#[cfg(test)]
+mod tests {
+    use super::arm_modes;
+
+    /// Each arm on its own gearbox: with rigid arms the root (inertia I = 0.5) and the elbow's share of the rest
+    /// (D = 1 kg m^2, uncoupled between the arms) ride the gearbox's spring together, w^2 = k / (I + D) per arm. For
+    /// k = 900, 1500, 2400 N m/rad: 600, 1000, 1600 1/s^2, lowest first, where one stiffness for all three would have
+    /// given three equal modes.
+    #[test]
+    fn each_arm_has_its_own_gearbox_stiffness_in_the_modes() {
+        let distal: Vec<Vec<f64>> = (0..3).map(|r| (0..3).map(|c| if r == c { 1.0 } else { 0.0 }).collect()).collect();
+        let modes = arm_modes(0.5, &distal, Some([1500.0, 900.0, 2400.0]), None, None);
+        let w2: Vec<f64> = modes.iter().map(|m| m.0).collect();
+        assert_eq!(w2.len(), 3, "{w2:?}");
+        for (found, by_hand) in w2.iter().zip([600.0, 1000.0, 1600.0]) {
+            assert!((found - by_hand).abs() < 1e-6 * by_hand, "{w2:?}");
+        }
+    }
+}
