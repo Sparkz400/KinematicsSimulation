@@ -2859,7 +2859,8 @@ impl Machine for ConfigMachine {
         self.motor_state(s, &mut turn, &mut rotor_speed);
         let (nn, vv) = (self.n(), self.vel());
         for kk in 0..self.m() {
-            let mut ax = |axis: [f64; 3], w: f64, inertia: f64| (0..3).for_each(|k| f.angular[k] += inertia * w * axis[k]);
+            let mut ax =
+                |axis: [f64; 3], w: f64, inertia: f64| (0..3).for_each(|k| f.angular[k] += inertia * w * axis[k]);
             match (&self.direct[kk], self.sections.iter().position(|sec| sec.f[kk] != 0.0)) {
                 (None, Some(sec)) => {
                     let w_pulley = if self.elastic { s[vv + nn + kk] } else { self.pulley_angle(kk, v) };
@@ -2876,7 +2877,8 @@ impl Machine for ConfigMachine {
             }
         }
         for (d, idler) in self.idlers.iter().enumerate() {
-            let Some(sec) = (0..self.sections.len()).find(|&sec| self.route_waypoints(sec).contains(&Waypoint::Idler(d)))
+            let Some(sec) =
+                (0..self.sections.len()).find(|&sec| self.route_waypoints(sec).contains(&Waypoint::Idler(d)))
             else {
                 continue;
             };

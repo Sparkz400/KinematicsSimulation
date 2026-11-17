@@ -866,12 +866,13 @@ machine; nothing about them is particular to machine files.
 - `tool_flex`: one leaning body, along a horizontal axis; it leans in the elastic model only (as in the crate).
 - A self-locking worm's rigid model takes the overhauling flank's friction from the torque the wheel holds at rest, so
   it brakes a heavy wheel smoothly where the elastic model jams; both agree at a steady speed.
-- A rotary's bearing friction acts at the rotor, before the gearbox's spring and efficiency, as a screw's preload does.
+- A rotary's bearing friction acts at the axis behind the gearbox's spring and efficiency in the elastic model, at the rotor
+  (c / i + v w / i^2) in the rigid one; a screw's preload acts at the rotor in both.
 - A rack's pressure angle is 20 degrees for every rack, and its pinion's axial force is left out of the shaft's load.
-- The scissor lift's arms count with their vertical motion only (their turning and the feet's sideways motion are left
-  out of its mass), it has one screw on the lowest stage's foot (no cylinder between the arms), and it does not mix with
+- The scissor lift's arms count as uniform rods (their vertical and sideways motion and their turning are in its mass; the
+  sliding feet's rollers have none of their own), it has one screw on the lowest stage's foot (no cylinder between the arms), and it does not mix with
   belts, screws or bodies. A linkage's or scissor lift's file cannot carry other mechanisms beside it. The spatial
-  delta's modes take its first arm's gearbox for all three.
+  delta's modes take each arm's own gearbox.
 - A gantry's yaw: one per file, small angles (the sides move by the width times the angle); the drives each follow the
   common setpoint, so there is no master/slave or cross-coupled synchronisation in the drives (the controller's to add)
   and the sync error is what two equal position loops leave. A section's yaw coefficients are numbers from its routing,

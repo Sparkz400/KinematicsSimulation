@@ -1713,3 +1713,23 @@ impl Machine for Delta {
 /// The forearm rods' width and the upper arms', as drawn and as collision capsules (twice their radius), m.
 const ROD_WIDTH: f64 = 0.012;
 const ARM_WIDTH: f64 = 0.04;
+
+#[cfg(test)]
+mod tests {
+    use super::arm_modes;
+
+    /// Each arm on its own gearbox: with rigid arms the root (inertia I = 0.5) and the elbow's share of the rest
+    /// (D = 1 kg m^2, uncoupled between the arms) ride the gearbox's spring together, w^2 = k / (I + D) per arm. For
+    /// k = 900, 1500, 2400 N m/rad: 600, 1000, 1600 1/s^2, lowest first, where one stiffness for all three would have
+    /// given three equal modes.
+    #[test]
+    fn each_arm_has_its_own_gearbox_stiffness_in_the_modes() {
+        let distal: Vec<Vec<f64>> = (0..3).map(|r| (0..3).map(|c| if r == c { 1.0 } else { 0.0 }).collect()).collect();
+        let modes = arm_modes(0.5, &distal, Some([1500.0, 900.0, 2400.0]), None, None);
+        let w2: Vec<f64> = modes.iter().map(|m| m.0).collect();
+        assert_eq!(w2.len(), 3, "{w2:?}");
+        for (found, by_hand) in w2.iter().zip([600.0, 1000.0, 1600.0]) {
+            assert!((found - by_hand).abs() < 1e-6 * by_hand, "{w2:?}");
+        }
+    }
+}

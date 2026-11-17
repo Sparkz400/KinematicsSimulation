@@ -1163,3 +1163,36 @@ fn on_a_compliant_base_the_capsules_stay_and_the_resonance_is_the_lower() {
         "{own} Hz alone, {on_base} on the base, lowest mode {lowest}"
     );
 }
+
+/// The forearm pairs' spin in the frame momentum, by hand: the pose and motion of `the_rods_spin_is_the_hand_calculated_one`,
+/// where each leg's pair turns about its own axis e_i = u_i / L at s_i rad/s. A pair's spin inertia 2 I (I = 0.01 kg m^2
+/// a rod, the two rods alike) puts 2 I s_i e_i into the angular momentum, so the momentum with that inertia less that
+/// without is 0.02 sum_i s_i e_i.
+#[test]
+fn the_rods_spin_is_in_the_frame_momentum() {
+    let spin = |inertia: f64| {
+        loss_free(true, &["effects.gravity = false", &format!("mass.forearm_rod_spin_inertia_kgm2 = {inertia:?}")])
+    };
+    let (d, still) = (spin(0.01), spin(0.0));
+    let p = [0.0, 0.1, -0.8];
+    let t = d.legs().inverse(p).unwrap();
+    let u = sub(p, d.legs().elbow(0, t[0])[0]);
+    let pv = [u[2], 0.0, -u[0]].map(|v| v / u[0].hypot(u[2]));
+    let w = mul(&inverse(&d.legs().jacobian(t, p).unwrap()).unwrap(), pv);
+    let mut by_hand = [0.0; 3];
+    for i in 0..3 {
+        let e = sub(d.legs().forward(t).unwrap(), d.legs().elbow(i, t[i])[0]).map(|v| v / 0.95);
+        let s = d.rod_spin(i, t, [0.0; 3], w, [0.0; 3]);
+        (0..3).for_each(|k| by_hand[k] += 0.02 * s * e[k]);
+    }
+    let angular = |d: &Delta| {
+        let (mut s, mut hold) = (Vec::new(), [0.0; 3]);
+        d.equilibrium(&p, &mut s, &mut hold);
+        d.set_tool_velocity(&mut s, &pv);
+        d.frame_momentum(&s).unwrap().angular
+    };
+    let (with, without) = (angular(&d), angular(&still));
+    let found: V3 = std::array::from_fn(|k| with[k] - without[k]);
+    assert!(norm(by_hand) > 1e-5, "{by_hand:?}");
+    assert!(norm(sub(found, by_hand)) < 1e-6 * norm(by_hand), "{found:?} against {by_hand:?}");
+}
