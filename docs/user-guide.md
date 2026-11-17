@@ -644,9 +644,9 @@ Cycles simulated for the global sensitivity: 320
 Measure these first: motor-peak:a: gearbox.efficiency, friction_x.coulomb_n, motor.friction_coulomb_nm
 ...
 result,rank,parameter,mu_star,mu,sigma
-motor-thermal:a,1,motor.friction_coulomb_nm,0.2510,-0.2510,0.04316
-motor-thermal:a,2,friction_x.viscous_n_s_m,0.2241,-0.2241,0.02817
-motor-thermal:a,3,motor.friction_viscous_nm_s_rad,0.1659,-0.1659,0.02200
+motor-thermal:a,1,motor.friction_coulomb_nm,0.2511,-0.2511,0.04296
+motor-thermal:a,2,friction_x.viscous_n_s_m,0.2234,-0.2234,0.02750
+motor-thermal:a,3,motor.friction_viscous_nm_s_rad,0.1660,-0.1660,0.02197
 ...
 ```
 
@@ -670,20 +670,20 @@ motor-thermal:a,3,motor.friction_viscous_nm_s_rad,0.1659,-0.1659,0.02200
 | `--result NAME` | Only the rows of this result. Repeatable; an unknown name is refused (after the runs, which name the results) |
 | `--group TABLE` | Only the bounds of this config table. Repeatable |
 
-On the default T-gantry (31 bounded values that act on the cycle, 320 cycles, about 2 minutes on the machine this guide was written on) the ranking is what the physics says:
+On the default T-gantry (31 bounded values that act on the cycle, 320 cycles) the ranking is what the physics says:
 
 | Result | 1st | 2nd | 3rd |
 | --- | --- | --- | --- |
 | `motor-thermal:a` (K of room) | `motor.friction_coulomb_nm` 0.25 | `friction_x.viscous_n_s_m` 0.22 | `motor.friction_viscous_nm_s_rad` 0.17 |
 | `motor-peak:a` | `gearbox.efficiency` | `friction_x.coulomb_n` | `motor.friction_coulomb_nm` |
-| `settling` (m of room) | `belt.stiffness_ea_n` 1.2e-5 | `frame.stiffness_n_m` 4.2e-6 | `friction_z.stiction_n` 4.1e-6 |
-| `path-error-peak` (m) | `frame.stiffness_n_m` 7.3e-5 | `tool_flex.tilt_stiffness_nm_rad` 6.9e-5 | `belt.stiffness_ea_n` 2.4e-5 |
-| `belt-slack` (N of tension) | `belt.pretension_n` 200 | `friction_x.coulomb_n` 8.4 | `friction_x.viscous_n_s_m` 7.0 |
+| `settling` (m of room) | `belt.stiffness_ea_n` 1.2e-5 | `friction_z.stiction_n` 4.4e-6 | `frame.stiffness_n_m` 4.3e-6 |
+| `path-error-peak` (m) | `frame.stiffness_n_m` 7.7e-5 | `tool_flex.tilt_stiffness_nm_rad` 7.2e-5 | `belt.stiffness_ea_n` 2.3e-5 |
+| `belt-slack` (N of tension) | `belt.pretension_n` 200 | `friction_x.coulomb_n` 8.3 | `friction_x.viscous_n_s_m` 6.9 |
 | `pulley-bearing-life:a` (h) | `ratings.bearing_lubricant_viscosity_mm2_s` | `belt.pretension_n` | `ratings.bearing_contamination_factor` |
 
-The masses of the T-gantry have no bounds, so friction leads the heat: what is unknown about the drive train is its friction, and that is what to measure first (a constant-speed run per axis, see "Replay a drive trace and fit parameters"). The belt's slackest section moves one to one with the pretension (μ* 200 N for a range of 200 N, σ 0.002 N): a value that acts alone and in a straight line has σ near 0. The frame's stiffness has σ (8.6e-6 m) twice its μ* on settling: where the tool settles depends on it together with the shaper and the belt.
+The masses of the T-gantry have no bounds, so friction leads the heat: what is unknown about the drive train is its friction, and that is what to measure first (a constant-speed run per axis, see "Replay a drive trace and fit parameters"). The belt's slackest section moves one to one with the pretension (μ* 200 N for a range of 200 N, σ 0.003 N): a value that acts alone and in a straight line has σ near 0. The frame's stiffness has σ (8.4e-6 m) twice its μ* on settling: where the tool settles depends on it together with the shaper and the belt.
 
-On the D3 (36 values, 370 cycles, about 30 s) the masses lead every torque and heat result (`mass.platform_kg`, `mass.forearm_pair_kg`, `mass.elbow_kg`, then `geometry.upper_arm_m`; μ* of `rms-torque:1` 0.38, 0.24, 0.13 N m), and the gearbox's play leads the tool's accuracy (`gearbox.backlash_rad`, `gearbox.lost_motion_band_rad`, `gearbox.stiffness_nm_rad` for `path-error-peak` and `settling`). So: weigh the platform and the forearms, and measure the gearboxes' lost motion.
+On the D3 (36 values, 370 cycles) the masses lead every torque and heat result (`mass.platform_kg`, `mass.forearm_pair_kg`, `mass.elbow_kg`, then `geometry.upper_arm_m`; μ* of `rms-torque:1` 0.38, 0.24, 0.13 N m), and the gearbox's play leads the tool's accuracy: `gearbox.backlash_rad` leads `path-error-peak` and `settling`, followed for the path by `geometry.upper_arm_m` and `gearbox.stiffness_nm_rad`, for the dwell by `gearbox.lost_motion_band_rad`. So: weigh the platform and the forearms, and measure the gearboxes' lost motion.
 
 Sobol' on the D3's masses alone, for its first motor's RMS torque:
 

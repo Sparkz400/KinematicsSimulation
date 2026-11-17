@@ -657,17 +657,19 @@ An der EXCT-30 fand sie, was keine der beiden anderen Arten fand: Mit dem 25-Hz-
 
 ```text
 $ sim-cli sensitivity t-gantry --method morris --samples 10
-Für die globale Empfindlichkeit simulierte Zyklen: 320
-Diese zuerst messen: motor-peak:a: gearbox.efficiency, friction_x.coulomb_n, motor.friction_coulomb_nm
+Cycles simulated for the global sensitivity: 320
+Measure these first: motor-peak:a: gearbox.efficiency, friction_x.coulomb_n, motor.friction_coulomb_nm
 ...
 result,rank,parameter,mu_star,mu,sigma
-motor-thermal:a,1,motor.friction_coulomb_nm,0.2510,-0.2510,0.04316
+motor-thermal:a,1,motor.friction_coulomb_nm,0.2511,-0.2511,0.04296
+motor-thermal:a,2,friction_x.viscous_n_s_m,0.2234,-0.2234,0.02750
+motor-thermal:a,3,motor.friction_viscous_nm_s_rad,0.1660,-0.1660,0.02197
 ...
 ```
 
 `--method morris` ist das Screening nach Morris (Elementareffekte): `--samples` Trajektorien (Voreinstellung 10) auf einem Raster von vier Stufen je Wert, je Trajektorie wird jeder Wert einmal um 2/3 seines Bereichs verstellt; das kostet `samples` × (k + 1) Zyklen bei k Werten. `mu_star` (Mittel der Beträge der Effekte, in der Einheit des Ergebnisses je ganzen Bereich des Werts) ordnet, `mu` hat das Vorzeichen, `sigma` groß gegen `mu_star` heißt Wechselwirkung oder Krümmung. `--method sobol` gibt die Sobol-Indizes (Stichproben nach Saltelli, Schätzer nach Jansen) mit Bootstrap-Vertrauensbereichen (95 %, 200 Wiederholungen): `first` (Anteil an der Varianz des Ergebnisses allein) und `total` (mit allen Wechselwirkungen; ordnet), `--samples` N Grundzeilen (Voreinstellung 64), N × (k + 2) Zyklen. Ergebnisse sind die Reserven der Prüfungen (`check` oder `check:motor`, Abstand zum Grenzwert in der Einheit der Prüfung, negativ wo sie scheitert) und `peak-torque:motor`, `rms-torque:motor`, `winding-rise:motor`, `path-error-peak`, `path-error-rms`, `dwell-error-peak`. `--result NAME` behält nur dieses Ergebnis, `--group TABELLE` nur die Grenzen dieser Tabelle, `--seed S` (1) wählt andere Zufallszahlen; alle Läufe teilen sich die Prozessoren.
 
-Am Standard-T-Portal (31 wirksame Werte, 320 Zyklen, rund 2 Minuten) führt die Reibung bei Wärme und Effektivmoment (`motor.friction_coulomb_nm`, `friction_x.viscous_n_s_m`), die Riemensteifigkeit beim Einschwingen, die Rahmensteifigkeit beim Bahnfehler, und die Reserve des schlaffsten Riementrums folgt der Vorspannung eins zu eins (`mu_star` 200 N für 200 N Bereich, `sigma` 0,002 N). Am D3 (36 Werte, 370 Zyklen, rund 30 s) führen die Massen (Plattform, Unterarmpaar, Ellbogen) bei Moment und Wärme, das Spiel der Getriebe (`gearbox.backlash_rad`, `gearbox.lost_motion_band_rad`) bei Bahnfehler und Einschwingen. Erst mit Morris sichten, dann Sobol mit `--group` über die wenigen führenden Werte und `--samples` erhöhen, bis die Vertrauensbereiche eng genug sind. Python: `ks.global_sensitivity(...)`.
+Am Standard-T-Portal (31 wirksame Werte, 320 Zyklen) führt die Reibung bei Wärme und Effektivmoment (`motor.friction_coulomb_nm`, `friction_x.viscous_n_s_m`), die Riemensteifigkeit beim Einschwingen, die Rahmensteifigkeit beim Bahnfehler, und die Reserve des schlaffsten Riementrums folgt der Vorspannung eins zu eins (`mu_star` 200 N für 200 N Bereich, `sigma` 0,003 N). Am D3 (36 Werte, 370 Zyklen) führen die Massen (Plattform, Unterarmpaar, Ellbogen) bei Moment und Wärme, das Spiel der Getriebe (`gearbox.backlash_rad`) bei Bahnfehler und Einschwingen; beim Bahnfehler folgen `geometry.upper_arm_m` und `gearbox.stiffness_nm_rad`, beim Einschwingen `gearbox.lost_motion_band_rad`. Erst mit Morris sichten, dann Sobol mit `--group` über die wenigen führenden Werte und `--samples` erhöhen, bis die Vertrauensbereiche eng genug sind. Python: `ks.global_sensitivity(...)`.
 
 Grenzen bei dieser Aufgabe:
 
