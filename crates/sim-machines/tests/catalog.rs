@@ -1099,3 +1099,82 @@ fn a_motor_named_per_motor_is_retuned_as_the_shared_one() {
     assert_eq!(kp(&per_motor, "drive.velocity_kp_nm_s_rad"), kp(&cfg, "drive.velocity_kp_nm_s_rad"));
     assert_eq!(kp(&own("[drive.m]\nvelocity_kp_nm_s_rad = 0.0123\n"), "drive.m.velocity_kp_nm_s_rad"), 0.0123);
 }
+
+/// A guide set's carriage count that is not a whole number of at least 1 is refused where the config is resolved,
+/// not taken as the four of a config without it.
+#[test]
+fn a_carriage_count_that_is_no_whole_number_is_refused() {
+    let entry = &machine_single_axis::ENTRY;
+    for (count, ok) in [("2.0", true), ("2.5", false), ("0.0", false)] {
+        let text = format!("{}\n", entry.config().to_text().unwrap()).replacen(
+            "[ratings]\n",
+            &format!("[ratings]\nguide_carriages = {count}\n"),
+            1,
+        );
+        let cfg = sim_core::Config::parse(&text).unwrap();
+        let resolved = sim_components::catalog::resolve(entry, &cfg);
+        assert_eq!(resolved.is_ok(), ok, "{count}: {:?}", resolved.err());
+        if !ok {
+            assert_eq!(resolved.err(), Some(sim_core::ConfigError::Invalid("ratings.guide_carriages".into())));
+        }
+    }
+}
+
+/// Every registered config and every machine file in `machines/` loads and resolves, and each of its motors judges its
+/// S1 line by the curve of `s1_curves_s210.csv` where it names an S210 motor that has one at its supply's voltage (the
+/// shared `[parts]` or its own `[parts.<id>]`), by the straight line otherwise: the per-motor configs of the arms, whose
+/// default tables have no key of the curve, included.
+#[test]
+fn every_shipped_config_loads_and_judges_a_named_motor_by_its_s1_curve() {
+    let motors: std::collections::HashMap<String, bool> = csv("siemens/motors_s210.csv")
+        .into_iter()
+        .map(|r| (r["part_number"].clone(), !r["rated_speed_400v_rad_s"].is_empty()))
+        .collect();
+    let curves = csv("siemens/s1_curves_s210.csv");
+    let mut entries: Vec<&'static sim_core::MachineEntry> = sim_machines::MACHINES.iter().copied().collect();
+    let mut files: Vec<_> = fs::read_dir(catalog().join("../machines")).unwrap().map(|e| e.unwrap().path()).collect();
+    files.sort();
+    for path in files.iter().filter(|p| p.extension().is_some_and(|e| e == "toml")) {
+        entries.push(sim_machines::load_file(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())));
+    }
+    let (mut with_curve, mut refused) = (0, Vec::new());
+    for entry in entries {
+        let cfg = entry.config();
+        let loaded = sim_components::load_config(entry, &cfg.to_text().unwrap())
+            .and_then(|_| sim_components::catalog::resolve(entry, &cfg));
+        let resolved = match loaded {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                refused.push(format!("{}: {e:?}", entry.id));
+                continue;
+            }
+        };
+        let machine = (entry.build)(&resolved).unwrap();
+        for m in machine.motors() {
+            let name = |key: &str| {
+                let at = |path: String| cfg.get(&path).ok().and_then(|v| v.as_str().map(String::from));
+                at(format!("parts.{}.{key}", m.id)).or_else(|| at(format!("parts.{key}"))).unwrap_or_default()
+            };
+            let (article, mut supply) = (name("motor"), name("motor_supply"));
+            if supply.is_empty() {
+                supply = "400v".into(); // as `Parts::of` takes it
+            }
+            let voltage = supply.trim_start_matches("s210new-");
+            let expected: Vec<[f64; 2]> = match motors.get(&article) {
+                Some(&at_400) if voltage == if at_400 { "400v" } else { "230v" } => curves
+                    .iter()
+                    .filter(|r| r["article"] == article)
+                    .map(|r| [r["speed_rad_s"].parse().unwrap(), r["torque_nm"].parse().unwrap()])
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let own = sim_components::catalog::motor_config(&resolved, &m.id).unwrap();
+            let read = sim_components::drive::s1_curve_of(&own).unwrap();
+            assert_eq!(read, expected, "{} motor {} ({article} at {supply})", entry.id, m.id);
+            with_curve += usize::from(!read.is_empty());
+        }
+    }
+    assert!(refused.is_empty(), "{refused:?}");
+    // The arms' wrists, the SCARA, the palletiser and the arm on a track name the 1FK2104-5AF and others.
+    assert!(with_curve >= 15, "{with_curve} motors with a curve");
+}

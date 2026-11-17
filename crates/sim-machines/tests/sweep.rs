@@ -41,8 +41,9 @@ fn the_default_sweep_finds_the_lowest_dip_on_every_config() {
 /// (`identify::fit_sweep`): on the T-gantry swept from 30 to 200 Hz, "measured" on the config with its belt 0.5, 1.8 and
 /// 2.5 times as stiff, it takes the config's 60 Hz dip, the one the measured lowest dip is (it is the config's own at 1).
 /// At 2.5 the measured dip (84 Hz) lies nearer the config's 102 Hz dip, which the nearest dip took before (factor 0.68).
-/// The factor it then gives, (f_measured / f_config)^2, is the pure belt law's: the mode moves as k^0.37 to k^0.45 here,
-/// so it reads 0.539 for 0.5 and below 1.8 and 2.5 (`SweepFit::stiffness`).
+/// The factor is the one at which the config's dip is the measured one, found by sweeping the config at it: the mode
+/// moves as k^0.37 to k^0.45 here, so the pure belt law (f_measured / f_config)^2 read 0.539, 1.58 and 1.98. Each true
+/// factor is recovered within the standard error the fit states.
 #[test]
 fn the_sweep_fit_tells_the_belt_mode_by_how_it_moves() {
     let entry = sim_machines::find("t-gantry").unwrap();
@@ -59,12 +60,10 @@ fn the_sweep_fit_tells_the_belt_mode_by_how_it_moves() {
     assert!((own.config.frequency - 59.91).abs() < 0.01 && own.stiffness().0 == 1.0, "{own:?}");
     for factor in [0.5, 1.8, 2.5] {
         let found = fit(factor);
-        eprintln!("belt x {factor}: {:?} -> {:?}", (found.config.frequency, found.fitted.frequency), found.stiffness());
+        let (read, error) = found.stiffness();
+        eprintln!("belt x {factor}: {:?} -> x {read} +- {error}, exponent {}", found.fitted.frequency, found.exponent);
         assert_eq!(found.config.frequency, own.config.frequency, "x {factor}: {found:?}");
-        let (read, _) = found.stiffness();
-        assert!(
-            if factor < 1.0 { read > factor && read < 1.0 } else { read > 1.0 && read < factor },
-            "x {factor}: {read}"
-        );
+        assert!((read - factor).abs() < error && error < 0.1 * factor, "x {factor}: {read} +- {error}");
+        assert!(found.exponent > 0.3 && found.exponent < 0.5, "x {factor}: {}", found.exponent);
     }
 }

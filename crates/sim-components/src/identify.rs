@@ -1294,13 +1294,17 @@ pub fn parse_sweep(text: &str) -> Result<Vec<SweepPoint>, TraceError> {
 pub struct SweepFit {
     pub config: Resonance,
     pub fitted: Resonance,
+    /// The factor on the belt's stiffness at which the config's dip lies at the measured frequency (`fit_sweep`).
+    pub factor: f64,
+    /// d ln f / d ln k of the dip there: 1/2 for a mode the belt carries alone, less for one it shares.
+    pub exponent: f64,
 }
 
 impl SweepFit {
-    /// The factor the belt stiffness is off by, measured over config frequency squared, and its standard error.
+    /// The factor the belt stiffness is off by, and its standard error: the measured frequency's, carried through
+    /// f ~ k^exponent, factor x (error / f) / exponent (with the pure belt's 1/2: twice the frequency's relative error).
     pub fn stiffness(&self) -> (f64, f64) {
-        let factor = (self.fitted.frequency / self.config.frequency).powi(2);
-        (factor, 2.0 * factor * self.fitted.frequency_error / self.fitted.frequency)
+        (self.factor, self.factor * self.fitted.frequency_error / self.fitted.frequency / self.exponent)
     }
 
     /// What to change in the config, as a translation key with its argument.
@@ -1328,7 +1332,9 @@ impl SweepFit {
 /// moved one and each moved one inside the measured range to the nearest measured one; of equal sums the nearer). With no
 /// such dip, or no key `BELT_STIFFNESS_KEY` in the config, the nearest dip of all. The cost is a second sweep of the
 /// config. On the T-shaped belt gantry swept from 30 to 200 Hz this takes the 60 Hz dip for a belt from half to 2.5
-/// times as stiff (`sweep.rs`); the nearest dip took the 102 Hz one beyond 1.8 times.
+/// times as stiff (`sweep.rs`); the nearest dip took the 102 Hz one beyond 1.8 times. The factor (`SweepFit::factor`) is
+/// then the one at which the config's dip lies at the measured frequency, found by sweeping the config at it (a secant,
+/// `SECANT_STEPS` sweeps at most); without the key, the pure belt law (f_measured / f_config)^2.
 pub fn fit_sweep(
     entry: &MachineEntry,
     cfg: &Config,
@@ -1359,8 +1365,14 @@ pub fn fit_sweep(
     let apart = |r: &Resonance| (r.frequency / fitted.frequency).ln().abs();
     let all = dips(&config);
     let nearest = || all.iter().copied().min_by(|a, b| apart(a).total_cmp(&apart(b)));
+    let belt_law = |config: Resonance| SweepFit {
+        config,
+        fitted,
+        factor: (fitted.frequency / config.frequency).powi(2),
+        exponent: 0.5,
+    };
     let Ok(base) = cfg.f64(BELT_STIFFNESS_KEY) else {
-        return Ok(nearest().map(|config| SweepFit { config, fitted }));
+        return Ok(nearest().map(belt_law));
     };
     let mut stiffer = cfg.clone();
     stiffer.set_text(&format!("{BELT_STIFFNESS_KEY} = {:?}", base * STIFFNESS_PROBE))?;
@@ -1398,8 +1410,52 @@ pub fn fit_sweep(
     let best = candidates
         .into_iter()
         .min_by(|&a, &b| mismatch(a).total_cmp(&mismatch(b)).then(apart(&modes[a].0).total_cmp(&apart(&modes[b].0))));
-    Ok(best.map(|i| modes[i].0).or_else(nearest).map(|config| SweepFit { config, fitted }))
+    let Some(i) = best else { return Ok(nearest().map(belt_law)) };
+    // The factor at which the config's dip is the measured one, by sweeping the config at it: a secant on ln f over
+    // ln k from the config's own and the probe's dip, each step a sweep at the factor the last two give, its dip the
+    // one nearest where the secant puts it (within a factor 1.2). A mode the belt shares does not move as sqrt(k)
+    // (k^0.37 to k^0.45 on the T-shaped belt gantry), so the exponent the probe measures at 1.1 does not hold at 2.5.
+    let (config, s) = modes[i];
+    let target = fitted.frequency.ln();
+    let mut points =
+        vec![(0.0, config.frequency.ln()), (STIFFNESS_PROBE.ln(), config.frequency.ln() + s * STIFFNESS_PROBE.ln())];
+    for _ in 0..SECANT_STEPS {
+        let ((ka, fa), (kb, fb)) = (points[points.len() - 2], points[points.len() - 1]);
+        let slope = (fb - fa) / (kb - ka);
+        if (target - fb).abs() < 1e-5 || (target - fa).abs() < 1e-5 || slope < 0.05 {
+            break;
+        }
+        let k = kb + (target - fb) / slope;
+        let mut at = cfg.clone();
+        at.set_text(&format!("{BELT_STIFFNESS_KEY} = {:?}", base * k.exp()))?;
+        let expected = fb + slope * (k - kb);
+        let Some(f) = dips(&crate::analysis::frequency_sweep(entry, &at, motor, &wider, amplitude)?)
+            .iter()
+            .map(|q| q.frequency.ln())
+            .filter(|f| (f - expected).abs() < 1.2f64.ln())
+            .min_by(|a, b| (a - expected).abs().total_cmp(&(b - expected).abs()))
+        else {
+            break;
+        };
+        points.push((k, f));
+    }
+    // The last two points' secant read at the measured frequency (the nearer of them to it, when it is that).
+    let ((ka, fa), (kb, fb)) = (points[points.len() - 2], points[points.len() - 1]);
+    let slope = (fb - fa) / (kb - ka);
+    let k = if (target - fa).abs() < 1e-5 { ka } else { kb + (target - fb) / slope };
+    // The exponent there, for the error: the chord from the solution to the nearest swept point at least half the
+    // probe's step away (two points closer than that, as the secant's last ones are, give the dip's resolution, not
+    // its slope: 0.04 for 0.41 at 2.5 times on the gantry).
+    let exponent = points
+        .iter()
+        .filter(|(kp, _)| (kp - k).abs() >= 0.5 * STIFFNESS_PROBE.ln())
+        .min_by(|a, b| (a.0 - k).abs().total_cmp(&(b.0 - k).abs()))
+        .map_or(slope, |(kp, fp)| (target - fp) / (k - kp));
+    Ok(Some(SweepFit { config, fitted, factor: k.exp(), exponent }))
 }
+
+/// The most sweeps `fit_sweep` takes to put the config's dip on the measured one after the probe.
+const SECANT_STEPS: usize = 4;
 
 /// The factor `fit_sweep` raises the stiffness by for its second sweep: small enough that a mode stays near where it was,
 /// large enough to tell a shift of 5 % from the sweep's resolution.
