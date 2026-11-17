@@ -1690,7 +1690,7 @@ frequency_hz,gain_rad_s_per_nm,phase_deg
 131.5866,9.881837e1,-60.793
 ```
 
-A sine torque on one motor on top of the holding torques, measured at that motor's speed. Belt resonances show as peaks; the load swinging against the held motor shows as a dip. Options: `--motor N` (index, 0 is the first), `--from` (5), `--to` (500), `--count` (120), `--amplitude NM` (1.5 N m, or 40 % of the drive's peak torque where that is less). Frequencies have to be above zero: `--from 0` is refused (`Configuration value is out of range: frequency`). With friction on, a small amplitude mostly measures stiction: at 0.05 N m neither default machine shows a dip. The default amplitude finds it on every motor of both default configs and of `exct-30.toml` (21.6 Hz on the T-gantry, 20.7 Hz on the EXCT-30, 84.3 Hz on the single axis). A larger one is no better: at 2 N m the single axis shows a second, false dip at 62 Hz. The rows may be in any order of frequency, and `--from` may be above `--to`.
+A sine torque on one motor on top of the holding torques, measured at that motor's speed. Belt resonances show as peaks; the load swinging against the held motor shows as a dip. Options: `--motor N` (index, 0 is the first), `--from` (5), `--to` (500), `--count` (120), `--amplitude NM` (1.5 N m, or 40 % of the drive's peak torque where that is less). Frequencies have to be above zero: `--from 0` is refused (`Configuration value is out of range: frequency`). With friction on, a small amplitude mostly measures stiction: at 0.05 N m neither default machine shows a dip. The default amplitude finds it on every motor of both default configs and of `exct-30.toml` (21.6 Hz on the T-gantry, 20.7 Hz on the EXCT-30, 84.3 Hz on the single axis). A larger one is no better: at 2 N m the single axis shows a second, false dip at 61 Hz, which `fit --sweep` then takes as the lowest. The rows may be in any order of frequency, and `--from` may be above `--to`.
 
 **The notch filter:** `--set effects.notch_filter=true`, with `drive.notch_frequency_hz` and `drive.notch_bandwidth_hz`. It acts on the torque setpoint.
 
@@ -1706,7 +1706,7 @@ A sine torque on one motor on top of the holding torques, measured at that motor
 --set 'profile.shaper_axes = ["x"]' --set 'profile.shaper_modes = [{ frequency_hz = 42.0, damping = 0.02, type = "ei", axes = ["z"] }]'
 ```
 
-Set the frequency to the resonance of the tool. On the T-gantry that changes with the Z height, so `--set effects.shaper_follows_pose=true` lets the shaper take the frequency from the machine at the planned pose. The machine reports the lower mode of carriage-on-belt and Z-axis-on-guide (24.6 Hz at z = 0.05 m and 35.6 Hz at z = 0.15 m for the default config at x = 0.9 m). The single axis reports its carriage on the belt (65.8 Hz at x = 0.5 m). A second shaper (`profile.shaper2_frequency_hz` above 0) follows the machine's second mode as well: on the T-gantry carriage and Z axis swinging against each other, 104.2 Hz at z = 0.05 m.
+Set the frequency to the resonance of the tool. On the T-gantry that changes with the Z height, so `--set effects.shaper_follows_pose=true` lets the shaper take the frequency from the machine at the planned pose. The shaper takes the lowest mode the machine reports, on the T-gantry the frame swaying with the carriage on it (18.7 Hz at z = 0.05 m and 20.1 Hz at z = 0.15 m for the default config at x = 0.9 m, from `sim-cli modes t-gantry --axis-index 1 --points 11 --set 'start.pose=[0.9,0.35]'`). The single axis reports its carriage on the belt (65.8 Hz at x = 0.5 m). A second shaper (`profile.shaper2_frequency_hz` above 0) follows the machine's second mode as well: on the T-gantry the carriage swaying against the frame with the Z axis leaning, 30.7 Hz at z = 0.05 m.
 
 **Resonances over the stroke**, to choose the shaper frequencies: `modes` asks the machine for its modes at `--points` places (21 by default) over the stroke of one axis (`--axis-index`, the first by default), the other axes at the start pose. A machine that reports none writes the column `position` alone. The app's tuning panel plots the same over the axis it measures, under the shaper frequencies configured.
 
@@ -2105,19 +2105,21 @@ By default `fmu` takes the binary built next to `sim-cli` (`target/release/sim_f
 
 | Variable | Type | Causality | Meaning |
 | --- | --- | --- | --- |
-| `time` | Real | independent | Simulated time, s, from the start time of the experiment |
+| `time` | Real | independent | Simulated time, s, from the start time of the experiment. Declared in the FMI 3.0 model description only; FMI 2.0 leaves it out of the list, where it is implicit (importers such as OpenModelica's refuse it without a start value, which FMI 2.0 forbids it), and its value reference 0 still answers |
 | every other signal of the [signal table](#record-raw-signals-switch-the-drives-off) | Real | output | E.g. `axis.x.position`, `motor.a.torque`, `belt.1.tension`, with its unit |
 | `command.setpoint.<axis id>` | Real | input | Position setpoint, as `command.setpoint.<axis id>` over OPC UA. Start value: the start pose |
 | `command.enable` | Boolean | input | `false` switches the drives off (brakes engage), `true` on again. Start value `true` |
 | `command.cycle` | Boolean | input | Turning `true` starts the configured cycle, turning `false` stops it at the end of its segment |
 | `command.target.<axis id>`, `command.move` | Real, Boolean | input | `command.move` turning `true` moves to the targets (start value: the start pose) |
-| `command.path`, `command.path_file`, `command.run_path` | String, String, Boolean | input | `command.run_path` turning `true` plans the path (the text of a path file, or the file named) from where the machine stands and runs it |
+| `command.path`, `command.path_file`, `command.trajectory_file`, `command.run_path` | String, String, String, Boolean | input | `command.run_path` turning `true` plans the path (the text of a path file, or the file named) from where the machine stands and runs it; with `command.trajectory_file` set, it runs that file of poses at times (as `sim-cli run --trajectory` reads it) instead |
+| `command.stop_category` | String | input | How `command.enable` turning `false` stops the drives: "0" (start value) takes the torque off at once, "1" brakes on the quick-stop ramp, "2" brakes and holds with the torque on (see [emergency stop](#how-far-does-it-travel-after-an-emergency-stop)) |
 | `command.mode.<motor id>`, `command.torque.<motor id>`, `command.velocity.<motor id>` | String, Real, Real | input | The drive's mode, "position" (start value), "velocity" or "torque", and its speed or torque setpoint from your own controller ([below](#test-your-own-controller)) |
+| `time_optimal` | Boolean | parameter | `true` times paths as fast as the motors allow (as `--time-optimal`), `false` (start value) within the axis limits |
 | `machine` | String | parameter | The machine id |
 | `config_file` | String | parameter | A config file to use instead of the one in the FMU; empty (the start value) for the one in the FMU |
 | `effects.<name>` | Boolean | parameter | Each effect switch, start value as in the config; a value set here wins over the config file's |
 
-The names are the signal ids as in the CSV columns (naming convention "flat"). The value reference of a variable is its place in the list.
+The names are the signal ids as in the CSV columns (naming convention "flat"). The value reference of a variable is its place in the list, `time` counted as 0 (`command.stop_category` comes last, after the effects, so that the others keep theirs).
 
 How a step works:
 
@@ -2159,7 +2161,7 @@ the cycle, moves, paths and setpoints are refused.
 cargo run --release -p sim-app
 ```
 
-`sim-app --set path=value` (repeatable) starts with any config value changed, by its dotted path and with the value in TOML syntax, as `sim-cli --set` takes it: `cargo run --release -p sim-app -- --set mass.payload_kg=3.0`. It applies after `--machine-file`; a key the config does not have, a value of another type or one the machine refuses (outside its range) stops the start with the command line's message. "Save" then writes the value in place, keeping the file's order and comments.
+`sim-app --machine-file FILE` starts with a machine defined in a file ([machine files](machine-files.md)), `sim-app --catalog DIR` reads the catalogue from a directory instead of the built-in one. `sim-app --set path=value` (repeatable) starts with any config value changed, by its dotted path and with the value in TOML syntax, as `sim-cli --set` takes it: `cargo run --release -p sim-app -- --set mass.payload_kg=3.0`. It applies after `--machine-file`; a key the config does not have, a value of another type or one the machine refuses (outside its range) stops the start with the command line's message. "Save" then writes the value in place, keeping the file's order and comments.
 
 The window has a bar on top (machine, language, run controls, units, theme and the tightest checks), the 3D view in the middle, the setup on the left (motion, effects, parameters, config file), the tools on the right (analysis, effect views, search, path, trace, frequency response, tuning, runs, torque & error, loop response) and the scopes at the bottom. The tables below go through the controls by what they do; the panel each is in follows from that layout.
 
