@@ -580,17 +580,19 @@ fn the_carriages_carry_momentum_along_their_columns() {
 #[test]
 fn the_guides_moments_from_the_joints_offset_add_to_its_equivalent_load() {
     let plain = delta(&[]);
-    let m = delta(&[
-        "geometry.rod_joint_along_m = 0.05",
-        "ratings.guide_moment_y_nm = 20.0",
-        "ratings.guide_moment_z_nm = 20.0",
-    ]);
+    // The moment ratings are keys a config file may add (`analysis::RATINGS_BEYOND_DEFAULT`).
+    let rated = "\n[ratings]\nguide_moment_y_nm = 20.0\nguide_moment_z_nm = 20.0\n";
+    let mut cfg =
+        sim_components::load_config(&ENTRY, &ENTRY.default_config.replacen("\n[ratings]\n", rated, 1)).unwrap();
+    cfg.set_text("geometry.rod_joint_along_m = 0.05").unwrap();
+    let m = LinearDelta::new(&cfg).unwrap();
     let h = plain.legs.inverse([0.1, 0.05, -1.0]).unwrap();
     let across = plain.guide_loads(h, [0.0; 3]);
     let p = m.pose(h).0;
     let pull = m.legs.rod_pull(h, p, m.m_nt(), m.g, [0.0; 3]).unwrap();
+    let parts = m.guide_loads_at(h, p, [0.0; 3]);
     for k in 0..3 {
-        let (load, moments) = m.guide_force_moments(h, [0.0; 3], k);
+        let (load, moments) = parts[k];
         let (u, d) = (sub(p, m.legs.joint(k, h[k])), m.legs.dir[k]);
         let rod = u.map(|x| pull[k] * x);
         let along = dot(rod, d);
@@ -604,28 +606,45 @@ fn the_guides_moments_from_the_joints_offset_add_to_its_equivalent_load() {
 }
 
 /// The friction's load factor under motion is the fixed point of scale -> acceleration -> load -> scale: put back
-/// into the acceleration, it gives the load that gives it back, and it is not below the factor at rest.
+/// into the model's acceleration (`carriage_acceleration_with`), it gives the load that gives it back; and it is not the factor at rest, the plate accelerating at
+/// (8, 3, 10) m/s^2 (the load along one column falls, along another it rises). Rigid and elastic, with the guides
+/// sliding at 0.2 m/s (the bristles at their steady deflection) so that the friction acts. Without load-dependent
+/// friction every factor is 1.
 #[test]
 fn the_frictions_load_factor_is_the_fixed_point_with_the_acceleration() {
-    let d = delta(&["effects.motor_friction = false", "effects.torque_ripple = false", "effects.belt_stretch = false"]);
-    let p = [0.0, 0.0, -1.17];
-    let (mut state, mut hold, mut torque) = (Vec::new(), [0.0; 3], [0.0; 3]);
-    d.equilibrium(&p, &mut state, &mut hold);
-    d.feedforward_torque(&p, &[8.0, 3.0, 10.0], &mut torque);
-    let h = d.heights(&state).0;
-    let scales = d.scales_at(&state, &torque);
-    let loads = d.moving_guide_loads_with(&state, d.carriage_acceleration_with(&state, &torque, scales));
-    let rest = d.load_scales(h);
-    for k in 0..3 {
-        close(scales[k], d.friction[k].load_scale(loads[k], 0.0), 1e-12, "fixed point");
-        assert!(scales[k] >= rest[k] - 1e-12, "moving load {} under rest {}", scales[k], rest[k]);
+    for stretch in [false, true] {
+        let d = delta(&[
+            "effects.motor_friction = false",
+            "effects.torque_ripple = false",
+            &format!("effects.belt_stretch = {stretch}"),
+        ]);
+        let p = [0.0, 0.0, -1.17];
+        let (mut state, mut hold, mut torque) = (Vec::new(), [0.0; 3], [0.0; 3]);
+        d.equilibrium(&p, &mut state, &mut hold);
+        d.set_tool_velocity(&mut state, &[0.0, 0.0, 0.2]);
+        let (h, v) = d.heights(&state);
+        let at = if stretch { 18 } else { 6 };
+        for k in 0..3 {
+            state[at + k] = d.friction[k].level(v[k], d.load_scales(h)[k]) / d.friction[k].sigma0 * v[k].signum();
+        }
+        d.feedforward_torque(&p, &[8.0, 3.0, 10.0], &mut torque);
+        let scales = d.scales_at(&state, &torque);
+        let plate = d.plate_acceleration(&state, d.carriage_acceleration_with(&state, &torque, scales));
+        let loads = d.guide_loads(h, plate);
+        let rest = d.load_scales(h);
+        for k in 0..3 {
+            close(scales[k], d.friction[k].load_scale(loads[k], 0.0), 1e-12, "fixed point");
+            assert!((scales[k] - rest[k]).abs() > 1e-4, "stretch {stretch}: {scales:?} at rest {rest:?}");
+        }
+        let plain = delta(&["effects.load_dependent_friction = false", &format!("effects.belt_stretch = {stretch}")]);
+        assert_eq!(plain.scales_at(&state, &torque), [1.0; 3]);
     }
 }
 
 /// A belt is a thermal part of the loop's own size: the loop is 4 span + 2 stroke = 0.4 + 1.4 = 1.8 m long (the sections'
 /// geometric length less the teeth's), 19.3 mm wide, both sides in the air: A = 2 * 0.0193 * 1.8 = 0.06948 m^2, at
 /// 15 W/(m^2 K) R = 1 / 1.0422 = 0.959509 K/W; 0.07 kg/m * 1.8 m = 0.126 kg of 1500 J/(kg K) is C = 189 J/K, so tau = C R
-/// = 181.349 s. The belt warms with its damping loss, power.belt_k, as the guides do (rise += (1 - exp(-dt / tau)) (R P -
+/// = 181.347 s. The belt warms with its damping loss, power.belt_k, as the guides do (rise += (1 - exp(-dt / tau)) (R P -
 /// rise)), so under a steady loss P it settles at R P; here with the specific heat at 1.5 J/(kg K) (tau 0.1813 s) so that
 /// a move of the carriages follows it.
 #[test]
@@ -634,8 +653,17 @@ fn a_belt_warms_with_its_damping_loss_through_its_surface() {
     close(r, 1.0 / (15.0 * 2.0 * 0.0193 * 1.8), 1e-12, "resistance");
     close(r, 0.959509, 1e-6, "resistance by hand");
     close(tau, 0.07 * 1.8 * 1500.0 * r, 1e-12, "time constant");
-    close(tau, 181.349, 1e-5, "time constant by hand");
+    close(tau, 181.347, 1e-5, "time constant by hand");
     assert!(delta(&[]).thermal_values("guide_1").is_none());
+    // Each loop is drawn as seven strips (the belt parts 0, 7 and 14 are the loops' first), none of zero length: the
+    // pulleys stand `span_min_m` beyond the stops. At the working range's top and bottom.
+    let d = delta(&[]);
+    for z in [-1.12, -1.22] {
+        let (mut state, mut torque, mut scene) = (Vec::new(), [0.0; 3], sim_core::Scene::default());
+        d.equilibrium(&[0.0, 0.0, z], &mut state, &mut torque);
+        d.scene(&state, &mut scene);
+        assert_eq!(scene.parts.iter().filter(|p| p.id == "belt").count(), 21, "at z = {z}");
+    }
     let mut cfg = ENTRY.config();
     for edit in ["effects.part_heating = true", "belt.specific_heat_j_kg_k = 1.5", "start.pose = [-0.3, 0.0, -1.15]"] {
         cfg.set_text(edit).unwrap();
