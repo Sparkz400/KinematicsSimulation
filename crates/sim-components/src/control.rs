@@ -2565,7 +2565,6 @@ fn resample_fieldbus(
 
 /// Position, speed and acceleration of axis `a` at time `t` on the quintic from point i to point i + 1 with the speeds
 /// and accelerations there (Hermite interpolation of the fifth degree): at the points exactly those given.
-
 fn quintic(
     points: &[(f64, Vec<f64>)],
     speeds: &[Vec<f64>],

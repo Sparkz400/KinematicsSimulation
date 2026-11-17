@@ -159,12 +159,57 @@ fn a_push_at_the_tool_stops_a_load_on_a_belt_at_the_obstacles_face() {
     println!("contact force {force} N, depth {depth} m");
     assert!(sim.contact.is_some() && force > 100.0, "{force} N");
     assert!((depth - force / 1e7).abs() < 0.05 * depth, "depth {depth} m against F / k = {} m", force / 1e7);
+
+    // The budget closes with the push at the tool: what it took is the crash row, within `BUDGET_TOLERANCE`.
+    let mut sim = Sim::new(entry, &with(entry, &[wall, "effects.crash = true"])).unwrap();
+    let points = sim.plan_path(&[Piece::Line(vec![0.9])], false).unwrap();
+    let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
+    let budget = load.budget.unwrap();
+    let crash = budget.rows.iter().find(|r| r.id == "crash").unwrap().energy;
+    println!("crash {crash} J, {} J of {} J not accounted for", budget.unaccounted(), budget.supply);
+    assert!(load.contact.is_some() && crash > 0.0, "crash {crash} J");
+    assert!(
+        budget.unaccounted().abs() < sim_components::analysis::BUDGET_TOLERANCE * budget.supply,
+        "{} J of {} J not accounted for",
+        budget.unaccounted(),
+        budget.supply
+    );
+}
+
+/// On the five-axis file the tool's coordinates are its tip's, which the tilted head moves with every joint: the push
+/// at the tip goes to the joints as its virtual work on each (`ConfigMachine::on_coordinates`), and the budget closes
+/// with it, within `BUDGET_TOLERANCE`, while the head tilts its tip down onto a slab.
+#[test]
+fn a_push_at_a_tilted_tool_tip_keeps_the_budget() {
+    let entry = load_file(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../machines/five-axis.toml"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let slab = r#"obstacles = [{ name = "slab", centre_m = [0.5, 0.25, -0.52], size_m = [2.0, 2.0, 1.0] }]"#;
+    let mut sim = Sim::new(entry, &with(entry, &[slab, "effects.crash = true"])).unwrap();
+    let points = sim.plan_path(&[Piece::Line(vec![0.5, 0.25, -0.1, 0.6, 0.5])], false).unwrap();
+    let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
+    let budget = load.budget.unwrap();
+    let crash = budget.rows.iter().find(|r| r.id == "crash").unwrap().energy;
+    println!(
+        "contact {:?}, crash {crash} J, {} J of {} J not accounted for",
+        load.contact,
+        budget.unaccounted(),
+        budget.supply
+    );
+    assert!(load.contact.is_some() && crash > 0.0, "crash {crash} J");
+    assert!(
+        budget.unaccounted().abs() < sim_components::analysis::BUDGET_TOLERANCE * budget.supply,
+        "{} J of {} J not accounted for",
+        budget.unaccounted(),
+        budget.supply
+    );
 }
 
 /// The xyz portal lowers onto a slab while it traverses: from (0.1, 0.1, 0.25) to (0.9, 0.1, 0.0), X cruising at its
 /// 0.8 m/s, Z at 0.25 m/s (the move takes as long on both). The parts' lowest point is 0.06 m below the tool, so the
-/// slab's top at z = 0.16 meets it at z = 0.10. Z is blocked there and trips on its following error after
-/// 1 rad / (0.25 m/s * 10 / 0.02 m) = 8 ms (one position cycle, 1 ms, more at most). X is not touched and runs on until
+/// slab's top at z = 0.16 meets it at z = 0.10. Z is blocked there and trips on its following error: the setpoint runs
+/// on at 0.25 m/s * 10 / 0.02 m = 125 rad/s at the motor, the slab stops the slide and the motor turns on into the
+/// belt's and the gearbox's give (0.22 rad), so the error reaches 1 rad after (1 + 0.22) / 125 = 9.8 ms (one position
+/// cycle, 1 ms, more at most). X is not touched and runs on until
 /// its fault reaction stops it. OFF3: the rated speed 314 rad/s in 0.1 s at the motor is 3140 rad/s², times
 /// r / i = 0.02 / 5 m at the carriage 12.56 m/s²; from v = 0.8 m/s that takes v² / (2a) = 25.48 mm, give or take the
 /// speed loop's lag behind the ramp (about a millisecond, under 1.6 mm at 0.8 m/s). OFF1 (1 s from the rated speed,
@@ -188,28 +233,39 @@ fn the_axis_not_in_contact_stops_on_its_fault_reaction_ramp() {
         sim.command(Command::MoveTo(vec![0.9, 0.1, 0.0])).unwrap();
         // The tool's speed along x at the trip: the drives trip at the start of a step, on what the step before left.
         let (mut pos, mut vel, mut speed) = ([0.0; 3], [0.0; 3], 0.0);
+        let motors = sim.machine.motors().len();
+        let (mut angle, mut rate, mut at_contact) = (vec![0.0; motors], vec![0.0; motors], None);
         while sim.control.fault.is_none() && sim.time() < 2.0 {
             sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
             speed = vel[0];
             sim.step();
+            sim.machine.motor_state(&sim.state, &mut angle, &mut rate);
+            if sim.contact.is_some() && at_contact.is_none() {
+                at_contact = Some(angle[2]);
+            }
         }
+        let give = (angle[2] - at_contact.unwrap()).abs();
         sim.run(1.5, |_| {});
-        (sim, speed)
+        (sim, speed, give)
     };
-    let (sim, v) = run("off3");
+    let (sim, v, give) = run("off3");
     let (contact, fault) = (sim.contact.clone().unwrap(), sim.control.fault.clone().unwrap());
-    println!("contact {contact:?}\n{fault:?}, {v} m/s at the trip");
+    println!("contact {contact:?}\n{fault:?}, {v} m/s at the trip, Z motor {give} rad on after the contact");
     let after = fault.time - contact.time;
     assert!(fault.monitor == Monitor::FollowingError && fault.drive == 2, "{fault:?}");
-    assert!((0.008..0.010).contains(&after), "tripped {after} s after the contact");
+    let due = (1.0 + give) / (0.25 * 10.0 / 0.02);
+    assert!(
+        give < 0.5 && (due - 1e-9..due + 1e-3).contains(&after),
+        "tripped {after} s after the contact, not {due} s"
+    );
     assert!((v - 0.8).abs() < 0.01 && sim.crashed && !sim.control.enabled() && fault.stopped.is_some(), "{v} m/s");
     let off3 = v * v / (2.0 * 3140.0 * 0.02 / 5.0);
     // The ramp starts from the speed the drive measured, and the speed loop lags behind it: within 2 ms at v either way.
     assert!((fault.stopping[0] - off3).abs() < 0.002 * v, "{} m against {off3} m", fault.stopping[0]);
-    let (sim, v) = run("off1");
+    let (sim, v, _) = run("off1");
     let (stopping, off1) = (sim.control.fault.unwrap().stopping[0], v * v / (2.0 * 314.0 * 0.02 / 5.0));
     assert!((stopping - off1).abs() < 0.002 * v, "OFF1: {stopping} m against {off1} m");
-    let (sim, _) = run("sto");
+    let (sim, _, _) = run("sto");
     let coasted = sim.control.fault.unwrap().stopping[0];
     assert!(coasted > 3.0 * off3, "STO: {coasted} m");
 }
