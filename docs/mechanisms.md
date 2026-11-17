@@ -272,7 +272,10 @@ points (`error-path-torque`): where the motors allow only a crawl it would fill 
   names, as many as the motors or one fewer (a redundant arm); `"j1"` ahead of them makes the first joint's own position
   an axis (a track's: see [An arm on a track](#an-arm-on-a-track)). The orientation is the rotation vector (axis times angle,
   base frame) of the turn from the flange's orientation at zero joints: a URDF whose flange points down at zero is at
-  0 there, not half a turn from the base frame. A pose within 0.01 rad of half a turn from that is refused
+  0 there, not half a turn from the base frame. With two of the three turns (the five-axis arm's rx, ry) they are where
+  the tool points: the shortest turn from the flange's direction along the missing axis at zero joints to where it
+  points now, whose missing part is 0, whatever the joints turn the tool about that direction; the flange's angular
+  checks judge that turn alone, and a move keeps them with the missing turn at 0. A pose within 0.01 rad of half a turn from that is refused
   (`error-arm-orientation-half-turn`): there the rotation vector jumps. The joints by damped least squares on the
   Jacobian of the tool's axes (central differences; dq = J^T (J J^T + lambda^2 I)^-1 e, lambda 1 mm, the turns times
   the flange's distance from joint 2 at `kinematics.home_joints`), along the straight line from the last solution to

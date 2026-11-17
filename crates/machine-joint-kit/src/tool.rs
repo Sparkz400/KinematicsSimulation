@@ -243,9 +243,29 @@ impl Pose {
     }
 
     /// The tool's axes at joints `q`, the angles times `scale` (1 for the axes, `length` for the solver).
+    ///
+    /// With all three turns the rotation vector of the turn from the orientation at zero. With two (the five-axis arm's
+    /// rx, ry), where the tool points: the flange direction e_m along the missing axis m at zero joints is turned to
+    /// d = R R_0^T e_m, and the turns are the rotation vector of the shortest turn from e_m to d (axis e_m x d, angle
+    /// between them; its m-th part 0), whatever the joints turn the tool about d. The rotation vector's own parts would
+    /// change with that turn, so that the same rx, ry pointed the tool elsewhere at another twist.
     fn coordinates(&self, fk: Forward, q: &[f64], scale: f64) -> Vec<f64> {
         let (rot, pos) = fk(q);
-        let turn = log(&matmul(&rot, &transpose(&self.zero_rot)));
+        let relative = matmul(&rot, &transpose(&self.zero_rot));
+        let held: Vec<usize> = (0..3).filter(|k| self.axes.contains(&(3 + k))).collect();
+        let turn = match held[..] {
+            [a, b] => {
+                let m = 3 - a - b;
+                let d: V3 = std::array::from_fn(|i| relative[i][m]);
+                let mut e = [0.0; 3];
+                e[m] = 1.0;
+                let axis = [e[1] * d[2] - e[2] * d[1], e[2] * d[0] - e[0] * d[2], e[0] * d[1] - e[1] * d[0]];
+                let sine = dot(axis, axis).sqrt();
+                let angle = sine.atan2(dot(e, d));
+                if sine > 0.0 { axis.map(|v| v * angle / sine) } else { [0.0; 3] }
+            }
+            _ => log(&relative),
+        };
         self.axes
             .iter()
             .map(|&a| match a {
@@ -290,7 +310,13 @@ impl Pose {
     /// geometric Jacobian's turn rows, without the weighting length), and dw/dt = J_w qdd + (d J_w / dt) qd, the second
     /// term by a central difference of J_w along qd. What the tool axes' limits on rx, ry and rz have to bound: those
     /// act on the rotation vector's rates, not on this.
+    ///
+    /// A tool with fewer than three turn axes (the five-axis arm's rx, ry) leaves the turn about the others to the
+    /// joints: about where the tool points, which no limit of its own bounds. Only w's part about the flange's directions
+    /// that the tool's turns stand for counts then, each that which lies along base x, y or z at zero joints, d_k =
+    /// R(q) R_0^T e_k; the turn about the others is the joints' (their speeds are judged on their own).
     pub fn angular_motion(&self, fk: Forward, q: &[f64], qd: &[f64], qdd: &[f64]) -> (f64, f64) {
+        let held: Vec<usize> = (0..3).filter(|k| self.axes.contains(&(3 + k))).collect();
         let spin = |at: &[f64], v: &[f64]| -> V3 {
             let (mut w, mut p) = ([0.0; 3], at.to_vec());
             for c in (0..v.len()).filter(|&c| v[c] != 0.0) {
@@ -303,7 +329,18 @@ impl Pose {
                     w[k] += rel[k] / 2e-6 * v[c];
                 }
             }
-            w
+            if held.len() == 3 {
+                return w;
+            }
+            // Row k of R_0 is R_0^T e_k.
+            let r = fk(at).0;
+            let mut along = [0.0; 3];
+            for &k in &held {
+                let d: V3 = std::array::from_fn(|i| (0..3).map(|j| r[i][j] * self.zero_rot[k][j]).sum());
+                let part = dot(w, d);
+                (0..3).for_each(|i| along[i] += part * d[i]);
+            }
+            along
         };
         let w = spin(q, qd);
         let mut a = spin(q, qdd);
