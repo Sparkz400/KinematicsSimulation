@@ -2274,7 +2274,8 @@ fn the_feedforward_at_speed_gives_the_commanded_acceleration() {
 /// are -M^-1 K, and each mode's shape v satisfies K v = w^2 M v. Loss-free default with the backlash off, at the four
 /// poses of the audit. With the belt's runs on the carriage (`belt_mass`) the modes are a little lower than the audit's
 /// figures, 18.81 / 30.77 / 78.51 / 119.46 Hz at (0.9, 0.05) and so on, which had no belt mass beyond the pulleys';
-/// with belt.mass_kg_m = 0 they are those, to within 0.03 Hz.
+/// with belt.mass_kg_m = 0 they are those, to within 0.25 Hz: the audit had no pendulum stiffness of the Z axis's weight
+/// (`lean_weight_stiffness`, about m_z g / h = 230 N/m of a lean spring of 1e5, which lifts a lean-like mode by up to 0.1 %).
 #[test]
 fn the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held() {
     let poses = [[0.9, 0.05], [0.5, 0.25], [0.5, 0.05], [0.1, 0.45]];
@@ -2284,7 +2285,7 @@ fn the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held() {
         [18.75, 30.71, 84.59, 98.34],
         [19.98, 39.93, 83.24, 103.72],
     ];
-    for (mass_per_m, tolerance) in [(0.1, f64::INFINITY), (0.0, 0.03)] {
+    for (mass_per_m, tolerance) in [(0.1, f64::INFINITY), (0.0, 0.25)] {
         let m = machine(
             lossless_config(),
             &["effects.gearbox_backlash = false", &format!("belt.mass_kg_m = {mass_per_m:?}")],
@@ -2334,4 +2335,107 @@ fn the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held() {
             println!("{line}");
         }
     }
+}
+
+/// The idlers' inertia rides on the carriage's speed along the beam alone, not on its speed over ground: with the frame's
+/// sway on, the mass matrix with the idlers differs from the one without by m_idlers[0] at (x, x) and nowhere else.
+#[test]
+fn the_idlers_ride_on_the_speed_along_the_beam_alone() {
+    let sway = ["effects.frame_compliance = true", "effects.tool_flex = true"];
+    let with = machine(lossless_config(), &[&sway[..], &["effects.idlers = true"][..]].concat());
+    let without = machine(lossless_config(), &[&sway[..], &["effects.idlers = false"][..]].concat());
+    let (a, b) = (with.elastic_mass(0.4, 0.2), without.elastic_mass(0.4, 0.2));
+    let n = with.coordinates().len();
+    assert!(n >= 4 && with.m_idlers[0] > 0.0);
+    for rc in 0..n * n {
+        let want = if rc == 0 { with.m_idlers[0] } else { 0.0 };
+        assert!((a[rc] - b[rc] - want).abs() < 1e-12, "entry {rc}: {} against {want}", a[rc] - b[rc]);
+    }
+}
+
+/// The belt's runs' angular momentum about y against a brute-force sum over the runs of `belt_mass`'s table (every run cut
+/// into 4000 pieces of m (Z Vx - X Vz), the sway speed added to Vx): the closed form of `belt_angular` is the same.
+#[test]
+fn the_belt_angular_momentum_is_the_sum_over_its_runs() {
+    let m = machine(lossless_config(), &["effects.frame_compliance = true"]);
+    let (mu, s, sx, sz) = (m.belt.mass_per_m, m.span_min, m.axes[0].max, m.axes[1].max);
+    // The carriage at x = xc (no sway offset), the sway speed vq.
+    let (xc, h, z, vx, vz, vq) = (0.9, m.z_com_drop, 0.35, 0.8, -0.3, 0.05);
+    // (length, Z at its start, dZ/dl, Vx without the sway, Vz)
+    let (l, upper) = (s + sz - z, s + z);
+    let runs = [
+        (upper, h, 1.0, vx, vz),
+        (upper, h, 1.0, vx, vz),
+        (l, h, -1.0, vx, 2.0 * vx + vz),
+        (l, h, -1.0, vx, -(2.0 * vx - vz)),
+        (s + xc, h, 0.0, vx + vz, 0.0),
+        (s + xc, h, 0.0, -(vx + vz), 0.0),
+        (s + sx - xc, h, 0.0, -(vx - vz), 0.0),
+        (s + sx - xc, h, 0.0, vx - vz, 0.0),
+    ];
+    let pieces = 4000;
+    let mut sum = 0.0;
+    for (len, z0, dz, v_x, v_z) in runs {
+        for i in 0..pieces {
+            let at = (i as f64 + 0.5) / pieces as f64 * len;
+            sum += mu * len / pieces as f64 * ((z0 + dz * at) * (v_x + vq) - xc * v_z);
+        }
+    }
+    let got = m.belt_angular(xc, h, z, [vx, vz, vq]);
+    assert!((got - sum).abs() < 1e-9 * sum.abs().max(1.0), "{got} against the sum {sum}");
+}
+
+/// The idlers' spin in the frame's angular momentum: -2 (J / r) vx, the five idlers' turning with the belt past them
+/// (+2 vx at the Z-bottom one, -(2 vx + vz), -(2 vx - vz) at the lower ones, -+vz at the upper ones).
+#[test]
+fn the_idlers_spin_is_in_the_frame_momentum() {
+    let cfg = ENTRY.config();
+    let (j, r) = (cfg.f64("idler.inertia_kgm2").unwrap(), cfg.f64("idler.radius_m").unwrap());
+    let angular = |idlers: bool| {
+        let m = machine(lossless_config(), &[&format!("effects.idlers = {idlers}")]);
+        let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
+        m.equilibrium(&[0.5, 0.3], &mut state, &mut torque);
+        state[V + X] = 0.7;
+        state[V + Z] = 0.2;
+        m.frame_momentum(&state).unwrap().angular[1]
+    };
+    let hand = -2.0 * j / r * 0.7;
+    assert!((angular(true) - angular(false) - hand).abs() < 1e-12, "{} against {hand}", angular(true) - angular(false));
+}
+
+/// How far the leaning Z axis raises its weight (`lean_rise`), by hand. Guide tilt only (no bending): the bar turns by
+/// F h / tilt along its whole length, so the point at h rises by 1/2 (h / tilt)^2 h per F^2. Bending only: theta =
+/// F (h s - s^2 / 2) / EI, 1/2 integral of theta^2 = h^5 / (15 EI^2) F^2 at the load, and beyond it, at a constant angle
+/// F h^2 / (2 EI), 1/2 (d - h) h^4 / (4 EI^2) more. The pendulum stiffness of the weight is then c = 2 k^2 m_z g rise.
+#[test]
+fn the_lean_raises_the_weight_by_the_hand_formula() {
+    let tilt_only = machine(lossless_config(), &["effects.tool_flex = true", "effects.z_axis_bending = false"]);
+    let h = tilt_only.z_com_drop;
+    let tilt = tilt_only.flex.as_ref().unwrap().tilt;
+    let by_hand = 0.5 * (h / tilt).powi(2) * h;
+    assert!((tilt_only.lean_rise(h, h) - by_hand).abs() < 1e-12 * by_hand, "{}", tilt_only.lean_rise(h, h));
+    let k = tilt_only.flex_at(0.0).0;
+    let c = 2.0 * k * k * tilt_only.m_z() * tilt_only.g * by_hand;
+    assert!((tilt_only.lean_weight_stiffness(0.0) - c).abs() < 1e-9 * c);
+    let bend_only = machine(lossless_config(), &["effects.tool_flex = false", "effects.z_axis_bending = true"]);
+    let ei = bend_only.flex.as_ref().unwrap().ei;
+    let at_load = h.powi(5) / (15.0 * ei * ei);
+    assert!((bend_only.lean_rise(h, h) - at_load).abs() < 1e-12 * at_load);
+    let d = bend_only.z_tool_drop;
+    let beyond = at_load + 0.5 * (d - h) * h.powi(4) / (4.0 * ei * ei);
+    assert!((bend_only.lean_rise(d, h) - beyond).abs() < 1e-12 * beyond, "{}", bend_only.lean_rise(d, h));
+}
+
+/// A pose's sideways process force changes the modes through the lean it holds (the k' u0 cross term).
+#[test]
+fn a_sideways_process_force_moves_the_modes() {
+    let edit = ["effects.tool_flex = true", "effects.z_axis_bending = true", "effects.process_force = true"];
+    let mut m = machine(lossless_config(), &edit);
+    let hz = |m: &TGantry| m.modal(&[0.5, 0.3]).iter().map(|(mode, _)| mode.hz).collect::<Vec<f64>>();
+    let free = hz(&m);
+    m.dwelling = true;
+    m.process = [500.0, 0.0];
+    let loaded = hz(&m);
+    assert_eq!(free.len(), loaded.len());
+    assert!(free.iter().zip(&loaded).any(|(a, b)| (a - b).abs() > 1e-9 * a), "{free:?} {loaded:?}");
 }

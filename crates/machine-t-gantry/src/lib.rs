@@ -149,6 +149,9 @@ pub struct TGantry {
     /// Idler inertia as mass on [X, Z]: with m = J / r^2 per idler and the belt speeds of the module
     /// comment, 1/2 m (2 vz^2 + (2 vx + vz)^2 + (2 vx - vz)^2 + (2 vx)^2) = 1/2 (12 m) vx^2 + 1/2 (4 m) vz^2.
     m_idlers: [f64; 2],
+    /// One idler's inertia over its radius, kg m (0 with the effect off): the idlers' angular momentum is this times the
+    /// belt's speed past them over their radius (`idler_angular`).
+    idler_spin: f64,
     /// Belt force that one idler's bearing friction takes, and the belt speed below which it fades out.
     idler_drag: f64,
     idler_smoothing: f64,
@@ -361,6 +364,7 @@ impl TGantry {
             friction_x: Lugre::from_config(cfg, "friction_x")?,
             friction_z: Lugre::from_config(cfg, "friction_z")?,
             m_idlers: [12.0 * idler_mass, 4.0 * idler_mass],
+            idler_spin: on("idlers", cfg.non_negative("idler.inertia_kgm2")? / idler_radius)?,
             idler_drag: on("idlers", cfg.non_negative("idler.friction_nm")? / idler_radius)?,
             idler_smoothing: shaft.smoothing * idler_radius,
             chain: CableChain::from_config(cfg)?,
@@ -499,7 +503,10 @@ impl TGantry {
 
     /// The elastic model's mass matrix over `coordinates` at (x, z), row by row: T = 1/2 v' M v of all but the pulleys
     /// and rotors, which turn on their own states. With w = x' + q' the carriage's speed over ground:
-    ///   1/2 (mc + idlers' X share + chain) w^2 + 1/2 mz (w + u')^2 + 1/2 (mz + idlers' Z share) z'^2 + 1/2 mf q'^2,
+    ///   1/2 (mc + chain) w^2 + 1/2 mz (w + u')^2 + 1/2 (mz + idlers' Z share) z'^2 + 1/2 mf q'^2 + 1/2 (idlers' X share) x'^2,
+    /// exactly: the chain's moving run goes with the carriage over ground (w, and its growth m' of the Lagrange
+    /// equations is in `elastic_derivatives`), but an idler's spin follows the belt's speed past the carriage (module
+    /// comment), the difference of two speeds over ground in which the frame's sway q' cancels, so the idlers ride on x'.
     ///   and the belt's 1/2 xx x'^2 + xz x' z' + cross q' x' + 1/2 sway q'^2   (`belt_mass`, `belt_sway`)
     /// (without the lean mz rides on w). The derivatives, the energy, the modes and the frame's momentum all take this.
     fn elastic_mass(&self, x: f64, z: f64) -> Vec<f64> {
@@ -521,7 +528,9 @@ impl TGantry {
         };
         let mut carriage = vec![(0, 1.0)];
         carriage.extend(index(Q).map(|q| (q, 1.0)));
-        add(&mut mass, &carriage, self.m_x() - self.m_z() + self.m_idlers[0] + self.chain.mass(x).0);
+        add(&mut mass, &carriage, self.m_x() - self.m_z() + self.chain.mass(x).0);
+        // The idlers spin with the belt's speed past the carriage, which the frame's sway does not change: x' alone.
+        add(&mut mass, &[(0, 1.0)], self.m_idlers[0]);
         carriage.extend(index(U).map(|u| (u, 1.0)));
         add(&mut mass, &carriage, self.m_z());
         add(&mut mass, &[(1, 1.0)], self.m_z() + self.m_idlers[1]);
@@ -547,8 +556,14 @@ impl TGantry {
     /// in the same coordinates, v'Cv / (2 w v'Mv), with C the belt's sections (`belt.damping_n_s_m` each, or with
     /// effects.belt_material_damping `belt.damping_time_s` k_i more) on the same g_i, `frame.damping_n_s_m` on q and
     /// `tool_flex.damping_n_s_m` on u; the cross terms of a damping that is not proportional are left out.
-    // shortcut: the pose's gravity and process loads and the tool flex's rise with z (dk/dz) do not enter K; they are
-    // second order in the small deflections. Add them if a mode under a large process force has to be right.
+    ///
+    /// K also carries what the lean's own dynamics have beyond the spring (second order in the deflection, exact at the
+    /// pose): the Z axis hangs like a pendulum, its weight rising as it leans (`lean_weight_stiffness`, K_uu += c), and
+    /// the spring's stiffness k(z) rises with z, so at the lean u0 = tip process_x / k that the pose's sideways process
+    /// force holds K_uz = k' u0 and K_zz = k'' u0^2 / 2. Not in K, and not in the dynamics either: the belt runs' geometric
+    /// stiffness (T / l per run for the clamp's and the Z-bottom idler's sideways travel with the lean: no transverse
+    /// belt coordinate), and the process force's vertical part riding the leaning axis (its work on the tip's rise is not
+    /// in the budget's process row).
     fn modal(&self, tool_pose: &[f64]) -> Vec<(Mode, Vec<f64>)> {
         if !self.elastic {
             return Vec::new();
@@ -582,8 +597,16 @@ impl TGantry {
             add(&mut damping, &[(q, 1.0)], f.damping);
         }
         if let (Some(f), Some(u)) = (&self.flex, index(U)) {
-            add(&mut stiffness, &[(u, 1.0)], self.flex_at(z).0);
+            let (k, dk, tip) = self.flex_at(z);
+            add(&mut stiffness, &[(u, 1.0)], k);
             add(&mut damping, &[(u, 1.0)], f.damping);
+            let process_x = self.process_force()[0];
+            stiffness[u * n + u] += self.lean_weight_stiffness(z);
+            let (u0, step) = (tip * process_x / k, 1e-6);
+            let ddk = (self.flex_at(z + step).1 - self.flex_at(z - step).1) / (2.0 * step);
+            stiffness[u * n + 1] += dk * u0;
+            stiffness[n + u] += dk * u0;
+            stiffness[n + 1] += 0.5 * ddk * u0 * u0;
         }
         // Only modes the tool moves in, along X by x + q + tip u (`tool_state`) or along Z: one it stands still in is
         // neither seen nor shaped at the tool (it does at a single height, where tip u cancels x + q).
@@ -607,6 +630,44 @@ impl TGantry {
                 (Mode { hz: w / std::f64::consts::TAU, damping }, shape)
             })
             .collect()
+    }
+
+    /// How far a point at distance `d` below the carriage rises as the Z axis leans under a sideways force F at its
+    /// centre of mass, `h` below the carriage, per F^2: 1/2 times the integral of theta(s)^2 ds over 0..d (a hanging bar
+    /// turned by theta is shortened by theta^2 / 2 per length). theta(s) / F is the guide's tilt h / tilt plus the
+    /// bending's F (h s - s^2 / 2) / EI up to the load (s' = clamp(s, 0, h)), constant beyond it; the integrand is a
+    /// polynomial of degree 4, which the 3-point Gauss rule integrates exactly.
+    fn lean_rise(&self, d: f64, h: f64) -> f64 {
+        let Some(f) = &self.flex else { return 0.0 };
+        let (a, b, hb) = (h / f.tilt, 1.0 / f.ei, h.max(0.0));
+        let theta = |s: f64| {
+            let s = s.clamp(0.0, hb);
+            a + b * (hb * s - 0.5 * s * s)
+        };
+        let m = d.min(hb);
+        let spread = 0.5 * 0.6_f64.sqrt();
+        let inner: f64 = [(0.5 - spread, 5.0 / 18.0), (0.5, 8.0 / 18.0), (0.5 + spread, 5.0 / 18.0)]
+            .iter()
+            .map(|&(node, weight)| weight * m * theta(node * m).powi(2))
+            .sum();
+        0.5 * (inner + (d - m).max(0.0) * theta(hb).powi(2))
+    }
+
+    /// The weight's geometric stiffness of the lean: the Z axis's weight m_z g at its centre of mass rises by F^2
+    /// `lean_rise` as the spring's force F = k u holds it out, V = m_z g F^2 r = 1/2 c u^2 with c = 2 k^2 m_z g r, the
+    /// Z axis hanging like a pendulum (c > 0 where its centre of mass is below the carriage). 0 without the lean or gravity.
+    fn lean_weight_stiffness(&self, z: f64) -> f64 {
+        let (k, h) = (self.flex_at(z).0, self.z_com_drop - z);
+        2.0 * k * k * self.m_z() * self.g * self.lean_rise(h, h)
+    }
+
+    /// d c / d z of `lean_weight_stiffness`, by central difference (the force on Z of the lean's weight term).
+    fn lean_weight_rise_with_z(&self, z: f64) -> f64 {
+        if self.flex.is_none() || self.g == 0.0 {
+            return 0.0;
+        }
+        let step = 1e-6;
+        (self.lean_weight_stiffness(z + step) - self.lean_weight_stiffness(z - step)) / (2.0 * step)
     }
 
     /// The spring that holds the Z axis upright at height z: (stiffness k at the centre of mass, dk/dz,
@@ -683,6 +744,33 @@ impl TGantry {
         let sign = |v: f64| (v / self.idler_smoothing).tanh();
         let (left, right) = (sign(2.0 * vx + vz), sign(2.0 * vx - vz));
         (2.0 * self.idler_drag * (left + right + sign(2.0 * vx)), self.idler_drag * (2.0 * sign(vz) + left - right))
+    }
+
+    /// The five idlers' angular momentum about y (positive as x grows, the sense of the pulleys' `spin`), N m s. An idler
+    /// turns with the belt's speed past it over its radius, signed by which way the belt turns round it along the belt
+    /// path of the module comment (+ for a right turn seen with the path's heading, the pulleys' sense): the upper left
+    /// one -vz / r (path down, then left), the lower left -(2 vx + vz) / r (right, then down), the Z-bottom one
+    /// +2 vx / r (down, round, up), the lower right -(2 vx - vz) / r (up, then right), the upper right +vz / r (left,
+    /// then up). Their sum is -2 vx / r: with J / r = `idler_spin`, -2 idler_spin vx. (The same rule gives motor pulley A
+    /// (vx + vz) / r, its angle's rate.) vx is along the beam, relative to the frame.
+    fn idler_angular(&self, vx: f64) -> f64 {
+        -2.0 * self.idler_spin * vx
+    }
+
+    /// The belt's runs' angular momentum about y beyond the lumps on the pulleys (their spin is in `frame_momentum`'s
+    /// `spin`), for the carriage at `xc` over ground along the beam, the carriage idlers at height `h`, the Z axis at z,
+    /// with the carriage's speed along the beam vx, the Z axis's vz and the frame's sway speed vq. Per run the
+    /// table of `belt_mass` (horizontal ones at h, the vertical ones at the carriage's x; the sway adds (vq, 0) to every
+    /// speed) gives m (Z Vx - X Vz): the horizontal upper and lower runs cancel in pairs but for the sway; the vertical ones
+    /// are the upper pair, 2 (s + z) long, middle height h + (s + z) / 2, speed (vx, vz), and the lower pair, 2 l long
+    /// with l = s + sz - z, middle height h - l / 2, speeds (vx, 2 vx + vz) and (vx, -(2 vx - vz)). With mu and the
+    /// belt_cross = mu (4 s + 2 sz) of `belt_sway`: L = vx (h cross + mu (2 z - sz)(2 s + sz))
+    /// + vq (h mu L_belt + mu (2 z - sz)(2 s + sz)) - cross xc vz, using (s + z)^2 - l^2 = (2 z - sz)(2 s + sz).
+    fn belt_angular(&self, xc: f64, h: f64, z: f64, v: [f64; 3]) -> f64 {
+        let (mu, s, sz) = (self.belt.mass_per_m, self.span_min, self.axes[1].max);
+        let (cross, whole) = self.belt_sway();
+        let height = mu * (2.0 * z - sz) * (2.0 * s + sz);
+        v[0] * (h * cross + height) + v[2] * (h * whole + height) - cross * xc * v[1]
     }
 
     /// Chain drag opposing vx; it fades out at rest like the guide friction's Stribeck speed.
@@ -792,8 +880,6 @@ impl TGantry {
         let [process_x, process_z] = self.process_force();
         // Belt, guide, idlers, chain and end stop act between the carriage and the beam.
         let fx = fx_belt - ffx - idler_x - self.chain_drag(vx) + self.stop_force(0, s[X], vx);
-        // shortcut: idler and chain inertia ride on the carriage's speed over ground w, not on its speed along
-        // the beam; the two differ by the frame's own motion, which is a thousand times smaller.
         // The chain's mass m(x) grows as the carriage moves: of 1/2 m w^2, d/dt (m w) - m' w^2 / 2 on x and d/dt (m w) on
         // the frame's q, which leaves m' w (w / 2 - vx) and -m' vx w on their right sides.
         let chain_growth = self.chain.mass(s[X]).1;
@@ -806,7 +892,9 @@ impl TGantry {
         // weight.
         let mut force = vec![
             fx + process_x + chain_growth * w * (0.5 * w - vx) + belt_x,
-            fz_belt - ffz - 0.5 * s[U] * s[U] * dk_dz - idler_z + process_z + self.stop_force(1, s[Z], vz)
+            fz_belt - ffz - 0.5 * s[U] * s[U] * (dk_dz + self.lean_weight_rise_with_z(s[Z])) - idler_z
+                + process_z
+                + self.stop_force(1, s[Z], vz)
                 - self.g * self.m_z()
                 + belt_z,
         ];
@@ -814,7 +902,7 @@ impl TGantry {
             force.push(-f.stiffness * s[Q] - f.damping * s[V + Q] + process_x - chain_growth * vx * w);
         }
         if let Some(f) = &self.flex {
-            force.push(tip * process_x - k * s[U] - f.damping * s[V + U]);
+            force.push(tip * process_x - (k + self.lean_weight_stiffness(s[Z])) * s[U] - f.damping * s[V + U]);
         }
         let at = self.coordinates();
         let acc = sim_components::chain::solve(&self.elastic_mass(s[X], s[Z]), &force)
@@ -960,6 +1048,7 @@ impl TGantry {
         let mass = self.elastic_mass(s[X], s[Z]);
         let n = speeds.len();
         let kinetic = 0.5 * (0..n * n).map(|rc| speeds[rc / n] * mass[rc] * speeds[rc % n]).sum::<f64>() + turning;
+        let potential = potential + 0.5 * self.lean_weight_stiffness(s[Z]) * s[U] * s[U];
         let elastic = 0.5 * self.flex_at(s[Z]).0 * s[U] * s[U] + self.stop_energy(s[X], s[Z]) + belt + gears + frame;
         [kinetic, potential, elastic]
     }
@@ -1218,8 +1307,9 @@ impl Machine for TGantry {
     /// In the tool's frame (x along the beam, z up, the carriage at the height z_com_drop): the carriage with the
     /// chain's moving run at x + q, the Z axis's centre of mass at x + q + u and z, the portal's own frame mass with
     /// effects.frame_compliance at its sway q, and the pulleys and rotors turning about y, positive as x grows.
-    // shortcut: the idlers' spin, the frame's own first moment and the belt's angular momentum are left out (a few per
-    // cent of the reaction torque); add them if a base's tilt under the gantry has to be exact.
+    /// The idlers' spin (`idler_angular`) and the belt's runs' angular momentum (`belt_angular`) are in the angular
+    /// momentum; the frame's own mass stands still but for its sway q, so its first moment is `frame` q (its place at rest
+    /// is constant, which the base's load against the start pose cancels).
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         let cross = |r: [f64; 3], p: [f64; 3]| {
             [r[1] * p[2] - r[2] * p[1], r[2] * p[0] - r[0] * p[2], r[0] * p[1] - r[1] * p[0]]
@@ -1252,7 +1342,15 @@ impl Machine for TGantry {
                 0.0,
                 z_axis.1[2] + belt_cross * vz,
             ],
-            angular: [0.0, lc[1] + lz[1] + spin, 0.0],
+            angular: [
+                0.0,
+                lc[1]
+                    + lz[1]
+                    + spin
+                    + self.idler_angular(vx)
+                    + self.belt_angular(x + q, self.z_com_drop, z, [vx, vz, vq]),
+                0.0,
+            ],
             mass: m_carriage + m_z + belt,
             // The chain's moving run as on the one-axis machine: mu (L0 x + x^2 / 4), whose rate is its mass times vx.
             first_moment: [
@@ -1728,7 +1826,7 @@ impl Machine for TGantry {
             part("post", post, [end - span, 0.045, (floor - beam_half) / 2.0], [0.45, 0.47, 0.5]),
             part("carriage", Shape::Box { size: [0.16, 0.02, 0.16] }, [cx, -0.02, 0.0], [0.2, 0.22, 0.26]),
         ]);
-        cable_chain(&mut out.parts, end, x, cx, beam_half);
+        cable_chain(&mut out.parts, end, x, cx, beam_half, self.chain.length0);
         let (hanging, lean) = self.hanging(s, out.exaggeration);
         let q = if self.elastic { s[Q] } else { 0.0 };
         let turn = |p: [f64; 2]| {
@@ -1878,16 +1976,18 @@ fn span_sag(weight: f64, span: f64, tension: f64) -> f64 {
 
 /// The cable chain on top of the beam, link by link, as on the EXCT: fixed near the right end, its lower run lies
 /// on the beam, turns up in a loop and comes back on top to a bracket on the carriage. Its length stays, so the
-/// loop moves half as far as the carriage (its upper run is 0.02 m + x / 2 long), and each link keeps its place
+/// loop moves half as far as the carriage (its upper run is length_at_zero + x / 2 long), and each link keeps its place
 /// along the chain from the fixed end.
-/// shortcut: drawn only. Its force and mass follow effects.cable_chain, whose model has the chain fixed at x = 0;
-/// both are the same to the carriage (half the travel joins the moving run).
-fn cable_chain(parts: &mut Vec<Part>, end: f64, x: f64, cx: f64, beam_half: f64) {
+/// It is the model's chain (`effects.cable_chain`, `CableChain`): the run that moves with the carriage is
+/// `length_at_zero + x / 2` long, so it is drawn with exactly that upper run; the chain's fixed end sits at the far end of
+/// the beam (its loop is between that end and the bracket, half as far from it as the carriage), which is the same chain
+/// as the model's (the moving run grows by half of every metre the carriage travels).
+fn cable_chain(parts: &mut Vec<Part>, end: f64, x: f64, cx: f64, beam_half: f64, length0: f64) {
     use std::f64::consts::PI;
     // The EXCT-30's chain: 49 mm wide, 24 mm links, a loop of 90 mm radius just left of the bracket at x = 0.
     let (radius, height, width, pitch, depth) = (0.09, 0.024, 0.049, 0.03, 0.05);
     let (fixed, moving) = (end - 0.07, cx - 0.1);
-    let upper = 0.02 + x / 2.0;
+    let upper = length0 + x / 2.0;
     let turn = moving - upper;
     let (low, high) = (beam_half + height / 2.0, beam_half + height / 2.0 + 2.0 * radius);
     let lower = fixed - turn;

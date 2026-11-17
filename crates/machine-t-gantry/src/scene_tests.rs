@@ -63,8 +63,8 @@ fn deflections_drawn_larger_move_the_tool_by_the_factor() {
 }
 
 /// The chain's length stays: as many links at every pose, its bracket 0.1 m left of the carriage, and its loop
-/// (the leftmost link, half a link inside the loop's radius of 0.09 m) 0.02 m + x / 2 left of the bracket, so at
-/// span + x - 0.1 - 0.02 - x / 2 - 0.09. Also at the shortest span the EXCT-30's bounds allow, 0.10 m.
+/// (the leftmost link, half a link inside the loop's radius of 0.09 m) length_at_zero + x / 2 left of the bracket, so at
+/// span + x - 0.1 - length_at_zero - x / 2 - 0.09. Also at the shortest span the EXCT-30's bounds allow, 0.10 m.
 #[test]
 fn the_cable_chain_keeps_its_length_and_its_loop_moves_half_as_far() {
     for span in [0.15, 0.10] {
@@ -90,7 +90,7 @@ fn the_cable_chain_keeps_its_length_and_its_loop_moves_half_as_far() {
                 last.pos[0]
             );
             let loop_left = chain.iter().map(|p| p.pos[0]).fold(f64::MAX, f64::min);
-            let by_hand = span + x - 0.1 - 0.02 - x / 2.0 - 0.09;
+            let by_hand = span + x - 0.1 - m.chain.length0 - x / 2.0 - 0.09;
             assert!((loop_left - by_hand).abs() < 0.002, "span {span} at {x}: loop at {loop_left}, by hand {by_hand}");
         }
         assert!(links.iter().all(|&n| n == links[0]) && links[0] > 40, "span {span}: links {links:?}");
