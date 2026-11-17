@@ -2279,28 +2279,25 @@ impl Controller {
         }
         let newest = self.history.len() - 1;
         // The plan `delay` cycles ago, between two stored cycles; before the store reaches back that far, its oldest.
-        // The position between two cycles is the cubic through both with their speeds: a straight line between them
-        // has a kink at every stored cycle, which a delay sliding over it (the period following the pose) turns
+        // With steady delays the straight line between them: each copy then moves by a mean of the plan's steps, never
+        // more than the plan does in a cycle (the cubic below ran ahead of the speed limit by 2.6e-9 of it where the
+        // plan's acceleration ended, on the hexapod's ZVD shaper). With the period following the pose the cubic through
+        // both with their speeds: a straight line has a kink at every stored cycle, which a delay sliding over it turns
         // into a step in the shaped position's speed, off its exact rates by up to the plan's acceleration times the
         // delay's rate times T (measured 0.08 m/s^2 in 8 on the spatial cable-driven platform).
         let ago = |which: usize, axis: usize, delay: f64| -> f64 {
             let (whole, part) = (delay.floor() as usize, delay.fract());
             let at = |n: usize, which: usize| self.history[newest - n.min(newest)][which][axis];
-            if which > 0 || whole + 1 > newest {
+            if which > 0 || steady || whole + 1 > newest {
                 return at(whole, which) * (1.0 - part) + at(whole + 1, which) * part;
             }
-            // u from the older cycle (0) to the newer (1). The quintic through both with their speeds and accelerations:
-            // the plan itself where its jerk does not change between them (the cubic with the speeds alone ran ahead of
-            // the plan's speed limit by 2.6e-9 of it where the plan's acceleration ended, on the hexapod's ZVD shaper).
+            // u from the older cycle (0) to the newer (1).
             let u = 1.0 - part;
-            let (u2, u3, u4, u5) = (u * u, u * u * u, u * u * u * u, u * u * u * u * u);
-            let h2 = cycle * cycle;
-            (1.0 - 10.0 * u3 + 15.0 * u4 - 6.0 * u5) * at(whole + 1, 0)
-                + (u - 6.0 * u3 + 8.0 * u4 - 3.0 * u5) * cycle * at(whole + 1, 1)
-                + (0.5 * u2 - 1.5 * u3 + 1.5 * u4 - 0.5 * u5) * h2 * at(whole + 1, 2)
-                + (0.5 * u3 - u4 + 0.5 * u5) * h2 * at(whole, 2)
-                + (-4.0 * u3 + 7.0 * u4 - 3.0 * u5) * cycle * at(whole, 1)
-                + (10.0 * u3 - 15.0 * u4 + 6.0 * u5) * at(whole, 0)
+            let (u2, u3) = (u * u, u * u * u);
+            (2.0 * u3 - 3.0 * u2 + 1.0) * at(whole + 1, 0)
+                + (u3 - 2.0 * u2 + u) * cycle * at(whole + 1, 1)
+                + (3.0 * u2 - 2.0 * u3) * at(whole, 0)
+                + (u3 - u2) * cycle * at(whole, 1)
         };
         let shaped = |which: usize, axis: usize| {
             let train = &trains[axis];
