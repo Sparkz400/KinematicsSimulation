@@ -58,14 +58,50 @@ fn per_duty(runs: &[(f64, CycleLoad, Vec<Verdict>)], k: usize, f: &dyn Fn(&Motor
     runs.iter().filter_map(|(w, load, _)| load.motors.get(k).map(|m| (*w, f(m), load.duration))).collect()
 }
 
-/// The verdicts of a duty mix, (weight, cycle, verdicts) per duty: per check and motor the worst duty's (failing before
-/// passing, then the highest utilisation), but the heat over the mix, as the duties take turns: "motor-thermal" the
-/// winding rise as the time-weighted mean of the duties' (the rise follows the copper loss, the mean square current),
-/// "drive-current" the time-weighted RMS of the duties' RMS currents (`mix_rms`), and "motor-s1" the RMS torque of the
-/// mix against the S1 limit at the mix's mean speed.
-// shortcut: the mix is taken to alternate faster than the winding's and the drive's thermal time constants, so that their
-// heat is that of the mean; a mix that runs one duty for an hour and then another needs the worst duty's instead.
+/// The peak of a first-order node (time constant `tau`) that is driven by a sequence of steady values over and over:
+/// `parts` are (duration, the value the node would settle at) in order. The node follows x' = (target - x) / tau, so a
+/// segment of length L takes x to target + (x - target) e, e = exp(-L / tau); over the whole period x_end = a x_start + b,
+/// the periodic state is x_start = b / (1 - a), and as x moves monotonically within a segment the peak is at one of the
+/// segment ends. Short segments give the time-weighted mean, long ones the highest target; for two equal segments of the
+/// targets p then q (q the higher) it is (q + p e) / (1 + e), as the test works out. NaN for no time.
+pub fn periodic_peak(parts: &[(f64, f64)], tau: f64) -> f64 {
+    let (mut a, mut b) = (1.0, 0.0);
+    for &(len, target) in parts {
+        let e = (-len / tau).exp();
+        (a, b) = (a * e, target + (b - target) * e);
+    }
+    let mut x = b / (1.0 - a);
+    let mut peak = x;
+    for &(len, target) in parts {
+        x = target + (x - target) * (-len / tau).exp();
+        peak = peak.max(x);
+    }
+    if parts.is_empty() { f64::NAN } else { peak }
+}
+
+/// The verdicts of a duty mix with no thermal time constants known: the heat is the mean's (see `mix_verdicts_for`).
 pub fn mix_verdicts(runs: &[(f64, CycleLoad, Vec<Verdict>)]) -> Vec<Verdict> {
+    mix_verdicts_for(None, runs)
+}
+
+/// The verdicts of a duty mix, (weight, cycle, verdicts) per duty: per check and motor the worst duty's (failing before
+/// passing, then the highest utilisation), but the heat over the mix, as the duties take turns, each for its weight times
+/// its cycle time and in the order given, over and over: "motor-thermal" the highest winding rise in the periodic state
+/// of the winding's node (`periodic_peak`; time constant `motor.thermal_time_constant_s`, driven by each duty's settled
+/// rise, which follows its copper loss), "drive-current" the same for the drive's node on the mean square current
+/// (`ratings.drive_overload_time_constant_s`, the root of the peak). Duties much shorter than the time constant give the
+/// time-weighted mean (`mix_mean`, `mix_rms`), much longer ones the worst duty's own. Where `cfg` is `None` or lacks a
+/// time constant the mean is taken. "motor-s1" is the RMS torque of the mix against the S1 limit at the mix's mean speed.
+pub fn mix_verdicts_for(cfg: Option<&Config>, runs: &[(f64, CycleLoad, Vec<Verdict>)]) -> Vec<Verdict> {
+    let tau = |key: &str| cfg.and_then(|c| c.positive(key).ok());
+    let (winding_tau, drive_tau) =
+        (tau("motor.thermal_time_constant_s"), tau("ratings.drive_overload_time_constant_s"));
+    // The node's value is the figure itself, or its square (a heat) of which the root is the figure.
+    let periodic = |parts: &[(f64, f64, f64)], tau: f64, squared: bool| {
+        let heat = |x: f64| if squared { x * x } else { x };
+        let peak = periodic_peak(&parts.iter().map(|(w, x, t)| (w * t, heat(*x))).collect::<Vec<_>>(), tau);
+        if squared { peak.sqrt() } else { peak }
+    };
     let mut out: Vec<Verdict> = Vec::new();
     for v in runs.iter().flat_map(|(_, _, verdicts)| verdicts) {
         // Failing before passing, then the higher utilisation.
@@ -82,8 +118,14 @@ pub fn mix_verdicts(runs: &[(f64, CycleLoad, Vec<Verdict>)]) -> Vec<Verdict> {
     for o in &mut out {
         let Some(k) = o.motor else { continue };
         o.value = match o.check {
-            "motor-thermal" => mix_mean(&per_duty(runs, k, &|m| m.winding_rise)),
-            "drive-current" => mix_rms(&per_duty(runs, k, &|m| m.rms_current)),
+            "motor-thermal" => {
+                let parts = per_duty(runs, k, &|m| m.winding_rise);
+                winding_tau.map_or_else(|| mix_mean(&parts), |tau| periodic(&parts, tau, false))
+            }
+            "drive-current" => {
+                let parts = per_duty(runs, k, &|m| m.rms_current);
+                drive_tau.map_or_else(|| mix_rms(&parts), |tau| periodic(&parts, tau, true))
+            }
             "motor-s1" => {
                 // The S1 limit is a line in the mean speed (`analysis::s1_torque`), so at the mix's mean speed it is the
                 // time-weighted mean of the duties' limits.
@@ -113,7 +155,7 @@ pub fn figures(
     runs: &[(f64, CycleLoad, Vec<Verdict>)],
     estimated: Vec<&'static str>,
 ) -> Figures {
-    let verdicts = if runs.len() == 1 { runs[0].2.clone() } else { mix_verdicts(runs) };
+    let verdicts = if runs.len() == 1 { runs[0].2.clone() } else { mix_verdicts_for(Some(cfg), runs) };
     let Some((_, first, _)) = runs.first() else { return Figures::default() };
     let mut out = Figures { estimated, ..Figures::default() };
     for v in verdicts.iter().filter(|v| concerns(first, motor, v)) {
@@ -309,6 +351,18 @@ fn sweep_row(entry: &MachineEntry, cfg: Result<Config, ConfigError>, value: f64)
     row
 }
 
+/// `cfg` for a swept `value` of `path`: where that is the pulley radius (`geometry.pulley_radius_m`) the pulley's inertia
+/// (`pulley.inertia_kgm2`) goes with it as a disc of the same width and material: J = pi rho w r^4 / 2, so J r0^4 / r^4
+/// scales as (r / r0)^4 from the config's pulley (radius r0). Any other path: `cfg` as it is.
+fn pulley_scaled(cfg: &Config, path: &str, value: f64) -> Result<Config, ConfigError> {
+    let mut out = cfg.clone();
+    if path == "geometry.pulley_radius_m" {
+        let inertia = cfg.positive("pulley.inertia_kgm2")? * (value / cfg.positive(path)?).powi(4);
+        out.set_text(&format!("pulley.inertia_kgm2 = {inertia:?}"))?;
+    }
+    Ok(out)
+}
+
 /// Sweeps `path` (`gearbox.ratio` or `geometry.pulley_radius_m`) of a config over `count` values spaced logarithmically
 /// from `from` to `to`, each with the velocity gain retuned for it (`catalog::with_value`) and run on the cycle; finds the
 /// classic optimum by a golden-section search of the torque the motors need per unit acceleration over the same range
@@ -327,10 +381,8 @@ pub fn transmission_sweep(
         return Err(ConfigError::Invalid(format!("{path} from {from} to {to}, {count} values")));
     }
     cfg.positive(path)?;
-    // shortcut: a swept pulley radius keeps the config's pulley inertia (a bigger pulley is heavier); scale it with
-    // r^4 for a solid disc once the sweep picks pulleys from a catalogue.
     let need = |value: f64| -> Result<f64, ConfigError> {
-        let mut changed = cfg.clone();
+        let mut changed = pulley_scaled(cfg, path, value)?;
         changed.set_text(&format!("{path} = {value:?}"))?;
         torque_need(entry, &changed)
     };
@@ -346,7 +398,11 @@ pub fn transmission_sweep(
     values.push(classic);
     values.sort_by(f64::total_cmp);
     let rows = crate::analysis::on_all_cores(values.len(), |i| {
-        sweep_row(entry, catalog::with_value(entry, cfg, path, values[i]), values[i])
+        sweep_row(
+            entry,
+            pulley_scaled(cfg, path, values[i]).and_then(|c| catalog::with_value(entry, &c, path, values[i])),
+            values[i],
+        )
     });
     let key = |r: &SweepRow| (!r.passes, r.tightest.map_or(f64::INFINITY, |t| t.1));
     let best = rows
@@ -381,32 +437,52 @@ pub struct RobustRow {
 /// The first `top` passing candidates of a ranked search on `cfg` judged again at the worst corner of the bounds of
 /// their config (`analysis::verdict_worst`; the bounds follow a part put in, see `catalog::set`): the rows in the robust
 /// order, the ones that pass there first, each group in the order given; and whether that order differs from the one
-/// given. With a duty mix the first duty's config alone.
-// shortcut: the worst corner of the first duty only; judge every duty's corner once a mix is sized for robustness.
-pub fn robust_ranking(entry: &MachineEntry, cfg: &Config, found: &[Candidate], top: usize) -> (Vec<RobustRow>, bool) {
+/// given. With a duty mix (`duties`, each duty's config and weight; empty: `cfg` alone) every duty is judged at its own
+/// worst corner: a candidate passes where it passes in all of them, its tightest check is the tightest of any duty's,
+/// and the runs add up.
+pub fn robust_ranking(
+    entry: &MachineEntry,
+    cfg: &Config,
+    duties: &[(Config, f64)],
+    found: &[Candidate],
+    top: usize,
+) -> (Vec<RobustRow>, bool) {
+    let bases: Vec<&Config> = if duties.is_empty() { vec![cfg] } else { duties.iter().map(|d| &d.0).collect() };
     let chosen: Vec<usize> = (0..found.len()).filter(|&i| found[i].passes()).take(top).collect();
     let mut rows = crate::analysis::on_all_cores(chosen.len(), |n| {
         let (index, c) = (chosen[n], &found[chosen[n]]);
-        let judged = catalog::candidate_config(entry, cfg, c).and_then(|own| {
-            let bounds = crate::analysis::bounds(&own)?;
-            crate::analysis::verdict_worst(entry, &own, &bounds)
-        });
-        match judged {
-            Ok((worst, runs)) => {
-                let verdicts = worst.into_iter().map(|w| w.verdict).collect();
-                let load =
-                    c.result.as_ref().map(|r| r.0.clone()).unwrap_or_else(|| unreachable!("a passing candidate ran"));
-                let at_worst = Candidate { result: Some((load, verdicts)), ..c.clone() };
-                RobustRow {
-                    index,
-                    passes: at_worst.passes(),
-                    tightest: at_worst.tightest(),
-                    runs,
-                    refused: String::new(),
+        let mut row = RobustRow { index, passes: true, ..RobustRow::default() };
+        for base in &bases {
+            let judged = catalog::candidate_config(entry, base, c).and_then(|own| {
+                let bounds = crate::analysis::bounds(&own)?;
+                crate::analysis::verdict_worst(entry, &own, &bounds)
+            });
+            match judged {
+                Ok((worst, runs)) => {
+                    let verdicts = worst.into_iter().map(|w| w.verdict).collect();
+                    let load = c
+                        .result
+                        .as_ref()
+                        .map(|r| r.0.clone())
+                        .unwrap_or_else(|| unreachable!("a passing candidate ran"));
+                    let at_worst = Candidate { result: Some((load, verdicts)), ..c.clone() };
+                    row.passes &= at_worst.passes();
+                    row.tightest = match (row.tightest, at_worst.tightest()) {
+                        (Some(a), Some(b)) => Some(if b.1 > a.1 { b } else { a }),
+                        (a, b) => a.or(b),
+                    };
+                    row.runs += runs;
+                }
+                Err(e) => {
+                    return RobustRow {
+                        index,
+                        refused: format!("{}: {}", e.key(), e.detail()),
+                        ..RobustRow::default()
+                    };
                 }
             }
-            Err(e) => RobustRow { index, refused: format!("{}: {}", e.key(), e.detail()), ..RobustRow::default() },
         }
+        row
     });
     rows.sort_by_key(|r| (!r.passes, r.index));
     let changed = rows.iter().map(|r| r.index).ne(chosen.iter().copied());
@@ -714,6 +790,36 @@ mod tests {
         assert_eq!(get("motor-peak").value, 0.9);
         assert!((get("motor-thermal").value - 22.0).abs() < 1e-12 && get("motor-thermal").ok);
         assert!((get("drive-current").value - (44.0f64 / 5.0).sqrt()).abs() < 1e-12 && get("drive-current").ok);
+    }
+
+    /// Two duties of 1 s each, settling at 10 K and 30 K, on a node of time constant tau: with e = exp(-L / tau) the
+    /// periodic state ends the 30 K duty at x2 with x1 = 10 + (x2 - 10) e and x2 = 30 + (x1 - 30) e, so
+    /// x2 = (30 + 10 e) / (1 + e). For L = tau that is 20 + 10 (1 - e) / (1 + e) = 24.621 K; for L << tau the mean 20 K,
+    /// for L >> tau the worst duty's 30 K. The mix's winding rise takes `motor.thermal_time_constant_s` the same way.
+    #[test]
+    fn a_duty_mix_judges_the_periodic_peak_of_the_winding_node() {
+        let e = (-1.0f64).exp();
+        let parts = [(1.0, 10.0), (1.0, 30.0)];
+        assert!((periodic_peak(&parts, 1.0) - (30.0 + 10.0 * e) / (1.0 + e)).abs() < 1e-12);
+        assert!((periodic_peak(&parts, 1e6) - 20.0).abs() < 1e-3);
+        assert!((periodic_peak(&parts, 1e-6) - 30.0).abs() < 1e-9);
+        let load = |rise: f64| CycleLoad {
+            duration: 1.0,
+            motors: vec![MotorLoad { winding_rise: rise, ..MotorLoad::default() }],
+            ..test_load()
+        };
+        let verdict =
+            |rise: f64| Verdict { check: "motor-thermal", motor: Some(0), value: rise, limit: 40.0, ok: true };
+        let runs = vec![(1.0, load(10.0), vec![verdict(10.0)]), (1.0, load(30.0), vec![verdict(30.0)])];
+        let cfg = Config::parse(
+            "[motor]
+thermal_time_constant_s = 1.0
+",
+        )
+        .unwrap();
+        let mixed = mix_verdicts_for(Some(&cfg), &runs);
+        assert!((mixed[0].value - (30.0 + 10.0 * e) / (1.0 + e)).abs() < 1e-12);
+        assert!((mix_verdicts(&runs)[0].value - 20.0).abs() < 1e-12);
     }
 
     /// The S1 check over a mix: duty A (weight 3, 1 s) 2 N m RMS against a limit of 4.5 N m at its mean speed, duty B
