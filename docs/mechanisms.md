@@ -486,7 +486,8 @@ follows it over |theta - 2 pi k| < h and stands outside, a station on per turn (
   modified sine (VDI 2143: a quarter sine of acceleration over the first and last eighth, a half sine of a third the
   frequency between; peak acceleration 4 pi² / (4 + pi) = 5.528, peak speed 1.760) over `indexer.index_angle_deg` of its
   turn, and holds it on its dwell ridge over the rest. No step in acceleration at either end: its jerk is finite. The
-  rollers on the turret's pitch radius take the turret's torque over that radius (the cam's pressure angle left out).
+  rollers on the turret's pitch radius take the turret's torque over that radius, along the normal with `indexer.cam_radius_m`
+(R_c): tan α = r_p φ' / R_c, N = F / cos α (shipped: α = 35° at the fastest).
 
 The wheel, the table and its parts (`mass.payload_kg` at `table.station_radius_m`) give J(theta) = J_driver + J_t phi'²
 and the speed term J_t phi' phi'' theta'²; the table is horizontal, so gravity does nothing (as process force and frame
@@ -501,7 +502,9 @@ held force; `index-settling` judges it against `ratings.index_max_settling_s`. O
 zeta 0.03) the Geneva's step leaves 63 µrad, 12.5 µm, settling to 10 µm in 12.5 ms at 60 indexes a minute and 66 ms on
 the servo cycle that runs the index at up to 10 rad/s; the cam indexer's modified sine leaves 9 µrad (its jerk over
 w_n³) and is settled when the index ends. The ring is worked out beside the dynamics, not in them: the drive does not see
-it.
+it. With `effects.table_twist` the twist is a passive joint x of its own: (J_d + J_t φ'²) θ'' + J_s φ' x'' + J_t φ' φ'' θ'²
+= torque and J_s (φ' θ'' + x'' + φ'' θ'²) = −k x − c x', J_s the table with its parts, J_t with the wheel, c = 2 ζ √(k J_s); the
+ring then acts back on the driver (signal `table.twist`).
 
 The shipped cycle turns the driver one turn (one index) from the middle of a dwell and back; `config/geneva-drive-cam.toml`
 and `config/cam-indexer-cam.toml` turn it on at 60 turns a minute:

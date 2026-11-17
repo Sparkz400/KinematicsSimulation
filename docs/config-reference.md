@@ -1079,6 +1079,9 @@ press frame's stretch under the press force.
 | `saw.cut_length_m`, `saw.cut_window_m` | m | Material per cut, and the window the carriage runs with it while cutting; L > 2 v² / a + W | choice |
 | `saw.sync_acceleration_m_s2` | m/s² | The mean acceleration to the material's speed (peak 1.5 times it) | choice |
 | `cam.run` | true/false | The controller runs the cam as the cycle instead of `[[cycle.segment]]`. Off in the shipped configs | choice |
+| `cam.limit_min_deg`, `cam.limit_max_deg` | ° | Optional, with `cam.run` on a crank, knife, disc or indexer driver that turns on: a limit switch, the joint's stops (`effects.hard_stops`, `joint.stop_*`) at these angles, either alone; absent, the joint has no stops with a running cam | choice |
+| `indexer.cam_radius_m` (cam indexer) | m | Optional: the cam's radius where the rollers touch. With it the contact force along the normal is the tangential force over cos α, tan α = r_p φ' / R_c (signal `indexer.pressure_angle`); absent, α = 0. 0.10 in the shipped config | [estimate] |
+| `effects.table_twist` (the two indexers) | true/false | The table's twist on its shaft is a passive joint of its own, so the ring acts back on the driver (signal `table.twist`, the index error adds it); off: the ring is worked out beside the dynamics. Off as shipped | choice |
 | `cam.ramp_s` | s | The master's sin² ramp from rest to speed and back | choice |
 | `cam.table_file` (crank) | – | A CSV cam table (master, slave[, slope], a header and `#` lines skipped; the last row closes the period); `""`: the segments | choice |
 | `[[cam.segment]]` `master`, `slave`, `law` (crank) | rad | One segment: master span, slave rise, law (`linear`, `dwell`, `3-4-5`, `4-5-6-7`, `cycloid`, `harmonic`) | choice |

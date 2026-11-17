@@ -375,3 +375,17 @@ fn the_flying_saw_s_machine_friction_feedforward_is_its_characteristic_and_the_i
     let (ff, integrator) = cruise(false);
     assert!(ff == 0.0 && (integrator - expected).abs() < 0.02 * expected, "without: {integrator} N m");
 }
+
+/// The limit switch of a continuously turning joint: absent, none; given (either alone), the stops sit there; a lower
+/// angle not below the upper is refused.
+#[test]
+fn a_running_cam_may_have_a_limit_switch_and_refuses_an_inverted_one() {
+    let build = |extra: &str| {
+        let mut cfg = with_cam(&DISC_CAM);
+        cfg.set_text(extra).unwrap();
+        (DISC_CAM.build)(&cfg).is_ok()
+    };
+    assert!(build("cam.limit_max_deg = 720.0"));
+    assert!(build("cam.limit_min_deg = -90.0"));
+    assert!(!build("cam.limit_min_deg = 90.0\ncam.limit_max_deg = 45.0"));
+}

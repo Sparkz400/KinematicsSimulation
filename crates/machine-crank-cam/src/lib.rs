@@ -157,8 +157,16 @@ fn machine<M: Mechanism + 'static>(
     endless: bool,
 ) -> Result<Box<dyn Machine>, ConfigError> {
     if endless {
-        // shortcut: a crank or knife that turns on under the cam has no stops at all; model a limit switch if one matters.
-        drive.range = (-1e12, 1e12);
+        // The joint's stops go out of the way; a limit switch is optional: `cam.limit_min_deg` / `cam.limit_max_deg`
+        // put the joint's stops (`effects.hard_stops`) at those angles of the crank, knife roll, disc or driver, either
+        // alone or both; absent, the endless joint has none.
+        let limit = |key: &str, none: f64| -> Result<f64, ConfigError> {
+            if cfg.get(key).is_ok() { cfg.f64(key).map(f64::to_radians) } else { Ok(none) }
+        };
+        drive.range = (limit("cam.limit_min_deg", -1e12)?, limit("cam.limit_max_deg", 1e12)?);
+        if drive.range.0 >= drive.range.1 {
+            return Err(ConfigError::Invalid("cam.limit_min_deg".into()));
+        }
     }
     let spec = JointSpec { drive, id: MOTOR_IDS[0], key: JOINT_KEYS[0], gear_lever, unit };
     sim_components::base::mount(

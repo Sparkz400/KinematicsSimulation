@@ -20,6 +20,9 @@ substeps = 4
 stations = 6
 index_angle_deg = 120.0
 roller_pitch_radius_m = 0.08
+# [estimate] the cam's radius where the rollers touch (a globoid of 200 mm at the pitch line): the cam's pressure angle
+# tan(alpha) = r_p phi' / R_c reaches 35 degrees at the index's fastest (phi' 0.88); no maker prints it.
+cam_radius_m = 0.10
 driver_inertia_kgm2 = 0.012
 wheel_inertia_kgm2 = 0.02
 locking_play_rad = 5.0e-5
