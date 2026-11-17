@@ -746,12 +746,78 @@ fn a_motors_own_tables_are_checked() {
     assert_eq!(refused(belt).map(|e| e.key()), Some("error-config-invalid"));
 }
 
-/// A per-motor table for an id the built machine has no motor of is refused by its name (`motor.zz`).
+/// A per-motor table for an id the built machine has no motor of is refused by its name (`motor.zz`); one for a motor
+/// it has passes. No shipped config (every crate's `*.toml` and `config/*.toml`) and no machine file is refused by
+/// that check: each is either taken by some machine, or refused by every one for something else.
 #[test]
 fn a_per_motor_table_of_a_motor_the_machine_lacks_is_refused() {
     let entry = &machine_t_gantry::ENTRY;
-    let text = format!("{}\n[motor.zz]\nrotor_inertia_kgm2 = 1e-4\n", machine_t_gantry::EXCT_30_CONFIG);
-    assert_eq!(sim_components::load_config(entry, &text).err(), Some(ConfigError::Invalid("motor.zz".into())));
+    let cfg = entry.config();
+    let ids: Vec<String> = (entry.build)(&cfg).unwrap().motors().iter().map(|m| m.id.to_string()).collect();
+    let with = |id: &str| format!("{}\n[motor.{id}]\nrotor_inertia_kgm2 = 1e-4\n", entry.default_config);
+    assert_eq!(sim_components::load_config(entry, &with("zz")).err(), Some(ConfigError::Invalid("motor.zz".into())));
+    assert!(sim_components::load_config(entry, &with(&ids[0])).is_ok(), "{}", ids[0]);
+
+    let per_motor = |e: &ConfigError| {
+        matches!(e, ConfigError::Invalid(key) if key.split_once('.').is_some_and(|(table, id)|
+            sim_components::catalog::PER_MOTOR_TABLES.contains(&table) && !id.contains('.')))
+    };
+    let mut files: Vec<PathBuf> = Vec::new();
+    for dir in std::fs::read_dir(root().join("crates")).unwrap().flatten().map(|d| d.path()) {
+        for sub in [dir.clone(), dir.join("config")] {
+            let Ok(list) = std::fs::read_dir(&sub) else { continue };
+            files.extend(
+                list.flatten()
+                    .map(|f| f.path())
+                    .filter(|p| p.extension().is_some_and(|e| e == "toml") && !p.ends_with("Cargo.toml")),
+            );
+        }
+    }
+    assert!(files.len() > 40, "{} configs", files.len());
+    for path in &files {
+        let text = std::fs::read_to_string(path).unwrap().replace("\r\n", "\n");
+        let results: Vec<_> = MACHINES.iter().map(|m| sim_components::load_config(m, &text)).collect();
+        if results.iter().all(|r| r.is_err()) {
+            let motor = results.iter().filter_map(|r| r.as_ref().err()).find(|e| per_motor(e));
+            assert!(motor.is_none(), "{}: {motor:?}", path.display());
+        }
+    }
+    for path in std::fs::read_dir(root().join("machines")).unwrap().flatten().map(|f| f.path()) {
+        let Some(name) = path.file_name().and_then(|n| n.to_str()).filter(|n| n.ends_with(".toml")) else { continue };
+        // A file that does not load is refused by the netlist's own check, not by this one.
+        let Ok(entry) = load_file(&path) else { continue };
+        assert!(sim_components::load_config(entry, entry.default_config).is_ok(), "{name}");
+    }
+}
+
+/// A load-side scale is mounted on the frame: on the T-gantry's file with the frame swaying, through a cycle, it reads
+/// the tool less the frame's deflection along X (`frame.deflection`) and the tool's height as it is.
+/// The same on the gantry crate (the Z axis's lean off), along X; its Z scale rides on the carriage, so the beam's sag
+/// under it is not in what it reads.
+#[test]
+fn a_load_scale_reads_the_carriage_against_the_swaying_frame() {
+    for (entry, file) in [(file("t-gantry.toml"), true), (&machine_t_gantry::ENTRY, false)] {
+        let mut cfg = entry.config();
+        cfg.set_text("effects.frame_compliance = true").unwrap();
+        cfg.set_text("effects.tool_flex = false").unwrap();
+        let mut sim = Sim::new(entry, &cfg).unwrap();
+        let sway = sim.signal_index("frame.deflection").unwrap();
+        sim.command(sim_components::Command::StartCycle).unwrap();
+        let (mut tool, mut rate, mut scale, mut scale_rate, mut out) =
+            (vec![0.0; 2], vec![0.0; 2], vec![0.0; 2], vec![0.0; 2], Vec::new());
+        let mut largest = 0.0f64;
+        while sim.time() < 1.5 {
+            sim.step();
+            sim.machine.tool_state(&sim.state, &mut tool, &mut rate);
+            sim.machine.scale_state(&sim.state, &mut scale, &mut scale_rate);
+            sim.sample(&mut out);
+            let off = tool[0] - scale[0] - out[sway];
+            assert!(off.abs() < 1e-12, "{} at {} s: {tool:?} {scale:?} {}", entry.id, sim.time(), out[sway]);
+            assert!(!file || tool[1] == scale[1], "{tool:?} {scale:?}");
+            largest = largest.max(out[sway].abs());
+        }
+        assert!(largest > 1e-6, "{}: the frame sways ({largest} m)", entry.id);
+    }
 }
 
 /// The belt's lowest mode by hand, on the single axis at x = 0.5 m: the carriage (4 kg and the 2 kg payload) between

@@ -391,7 +391,8 @@ pub struct ConfigMachine {
     /// Force on the tool along each axis while the cycle dwells; zero with effects.process_force off.
     process: Vec<f64>,
     /// An obstacle's push on the tool (`Machine::set_tool_force`), per axis, held until changed; it acts like the process
-    /// force, whether or not the cycle dwells, and its power is in the same row of the budget.
+    /// force, whether or not the cycle dwells. Its power is not in the machine's rows: the simulation books it as the
+    /// crash's.
     tool_push: Vec<f64>,
     dwelling: bool,
     /// The netlist has a frame, and with effects.frame_compliance in the elastic model it sways.
@@ -1846,10 +1847,34 @@ impl ConfigMachine {
         }
         (force, on_frame)
     }
+    /// The force on the tool along each axis: the process force while the cycle dwells, and an obstacle's push.
     fn process_force(&self) -> Vec<f64> {
-        let mut force = if self.dwelling { self.process.clone() } else { vec![0.0; self.n()] };
+        let mut force = self.dwelling_force();
         force.iter_mut().zip(&self.tool_push).for_each(|(f, p)| *f += p);
         force
+    }
+    /// The process force alone (its power is the budget's process row; a push's is the crash row, `sim::Sim::pushed`).
+    fn dwelling_force(&self) -> Vec<f64> {
+        if self.dwelling { self.process.clone() } else { vec![0.0; self.n()] }
+    }
+    /// The generalised force on the coordinates q of a force on the tool along its axes (`process_force`): its virtual
+    /// work per unit of each coordinate, sum_i F_i d tool_i / d q_j. The tool's axes are the first coordinates, so
+    /// that is F itself unless a tcp or a yawing bridge moves the tool with other coordinates too (by central
+    /// differences of `tool_of` then).
+    fn on_coordinates(&self, q: &[f64], tool: &[f64]) -> Vec<f64> {
+        let (n, nt) = (self.n(), self.nt());
+        let mut out: Vec<f64> = (0..n).map(|j| tool.get(j).copied().unwrap_or(0.0)).collect();
+        if (self.tcp.is_none() && self.gantry.is_none()) || tool.iter().all(|f| *f == 0.0) {
+            return out;
+        }
+        const STEP: f64 = 1e-7;
+        for (j, out) in out.iter_mut().enumerate() {
+            let (mut ahead, mut behind) = (q.to_vec(), q.to_vec());
+            (ahead[j], behind[j]) = (q[j] + STEP, q[j] - STEP);
+            let (a, b) = (self.tool_of(&ahead), self.tool_of(&behind));
+            *out = (0..nt).map(|i| tool.get(i).copied().unwrap_or(0.0) * (a[i] - b[i]) / (2.0 * STEP)).sum();
+        }
+        out
     }
     /// The hard stops at the ends of axis i's joint; none on the yaw.
     fn stop_force(&self, i: usize, pos: f64, vel: f64) -> f64 {
@@ -2000,9 +2025,10 @@ impl ConfigMachine {
             .collect();
         let (chain, chain_on_frame) = self.chain_inertia(vq, du);
         let process = self.process_force();
+        let on_q = self.on_coordinates(q, &process);
         let (runs, runs_on_frame) = self.runs_speed(vq, self.sway_direction(), du);
         for i in 0..n {
-            force[i] += chain[i] + process[i] + runs[i];
+            force[i] += chain[i] + on_q[i] + runs[i];
         }
         out[fa..fa + n].copy_from_slice(&rates[..n]);
         // Lagrange's equations over the axes (on the frame), the frame's sway and the lean, M a = F (`elastic_mass`). The
@@ -2115,7 +2141,7 @@ impl ConfigMachine {
             self.idler_friction(v),
             self.chain_drag(v),
             self.chain_inertia(v, 0.0),
-            self.process_force(),
+            self.on_coordinates(q, &self.process_force()),
         );
         let (inertial, yaw, runs) = (self.inertial(q, v), self.yaw_force(q, v), self.runs_speed(v, [0.0; 3], 0.0).0);
         let base: Vec<f64> = (0..n)
@@ -2452,7 +2478,7 @@ impl ConfigMachine {
         let ripple: f64 =
             (0..m).map(|kk| (torque[kk] - self.ripples[kk].apply(torque[kk], angle[kk])) * speed[kk]).sum();
         let stops: f64 = (0..self.nt()).map(|i| self.stops.loss_power(q[i], vq[i], self.stroke[i])).sum();
-        powers.extend([stops, ripple - mesh_in - dot(&self.process_force(), &tool_v)]);
+        powers.extend([stops, ripple - mesh_in - dot(&self.dwelling_force(), &tool_v)]);
         if !self.jumps.is_empty() {
             powers.push(self.jump_loss);
         }
