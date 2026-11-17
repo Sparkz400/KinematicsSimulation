@@ -15,6 +15,8 @@ pub use sim_components::report::peak_keeping;
 
 /// At most this many stretches a drawn line is cut into (`peak_keeping`): two points each, some six thousand a line.
 pub const PLOT_BUCKETS: usize = 3000;
+/// How many poses along a run its modes are asked at (`Run::rated`): the start, the end and evenly between.
+pub const MODE_POSES: usize = 5;
 
 /// The points of a line for a plot: every point where there are few, else the lowest and highest of each of
 /// `PLOT_BUCKETS` stretches, so that a peak one sample wide still shows.
@@ -149,8 +151,11 @@ pub struct Run {
     pub ratings: Vec<(f64, f64)>,
     /// Per motor its drive, for the torque-speed chart and the utilisation (`charts`); empty where not known (a trace).
     pub drives: Vec<DriveParams>,
-    /// The machine's resonances at its start pose in Hz (`Machine::modes`), marked in the spectrum.
+    /// The machine's resonances in Hz (`Machine::modes`) at the poses of `modes_along`, all of them, marked in the
+    /// spectrum: a mode that moves with the pose is a band of lines.
     pub modes: Vec<f64>,
+    /// The resonances at a few poses along the run: (time in s from its start, Hz), the start first.
+    pub modes_along: Vec<(f64, Vec<f64>)>,
     /// For an analysed cycle or path: the tool's distance to the path every millisecond as the analysis measured it
     /// (`CycleLoad::path_error_series`, [time, place m, turn rad]); empty otherwise.
     pub off_path: Vec<[f64; 3]>,
@@ -187,6 +192,7 @@ impl Run {
             ratings: Vec::new(),
             drives: Vec::new(),
             modes: Vec::new(),
+            modes_along: Vec::new(),
             off_path: Vec::new(),
             columns,
             verdicts: None,
@@ -225,6 +231,7 @@ impl Run {
             ratings: Vec::new(),
             drives: Vec::new(),
             modes: Vec::new(),
+            modes_along: Vec::new(),
             off_path: Vec::new(),
             columns,
             verdicts: None,
@@ -233,17 +240,36 @@ impl Run {
 
     /// With what `sim`, of the machine and config the run is of, says about them: per motor its rated and peak torque
     /// and its drive, and the machine's resonances at the start pose.
-    // shortcut: the modes at the start pose only; take them along the run's poses once a view needs them moving.
+    /// The modes are asked at `MODE_POSES` poses along the run (its start, its end and between), read from the tool's
+    /// position signals; a run without them (a trace) has the modes at the pose `sim` stands at.
     pub fn rated(self, sim: &Sim) -> Self {
         let drives: Vec<DriveParams> =
             (0..sim.machine.motors().len()).map(|k| sim.control.drive_params_of(k).clone()).collect();
-        let axes = sim.machine.axes().len();
-        let (mut pose, mut rate) = (vec![0.0; axes], vec![0.0; axes]);
-        sim.machine.tool_state(&sim.state, &mut pose, &mut rate);
+        let axes = sim.machine.axes();
+        let columns: Option<Vec<&[f64]>> =
+            axes.iter().map(|a| self.column(&format!("axis.{}.position", a.id)).filter(|c| !c.is_empty())).collect();
+        let at = |i: usize| -> Option<(f64, Vec<f64>)> {
+            let columns = columns.as_ref()?;
+            Some((self.time().get(i).copied().unwrap_or(0.0), columns.iter().map(|c| c[i.min(c.len() - 1)]).collect()))
+        };
+        let last = columns.as_ref().map_or(0, |c| c[0].len() - 1);
+        let mut poses: Vec<(f64, Vec<f64>)> =
+            (0..MODE_POSES).filter_map(|n| at(last * n / (MODE_POSES - 1))).collect();
+        if poses.is_empty() {
+            let (mut pose, mut rate) = (vec![0.0; axes.len()], vec![0.0; axes.len()]);
+            sim.machine.tool_state(&sim.state, &mut pose, &mut rate);
+            poses.push((0.0, pose));
+        }
+        let modes_along: Vec<(f64, Vec<f64>)> =
+            poses.iter().map(|(t, pose)| (*t, sim.machine.modes(pose).iter().map(|m| m.hz).collect())).collect();
+        let mut modes: Vec<f64> = modes_along.iter().flat_map(|(_, hz)| hz.iter().copied()).collect();
+        modes.sort_by(f64::total_cmp);
+        modes.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
         Self {
             ratings: drives.iter().map(|d| (d.rated_torque, d.peak_torque)).collect(),
             drives,
-            modes: sim.machine.modes(&pose).iter().map(|m| m.hz).collect(),
+            modes,
+            modes_along,
             ..self
         }
     }

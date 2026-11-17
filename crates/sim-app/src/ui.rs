@@ -1726,8 +1726,8 @@ fn effects(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
         plot(("friction", &view.title))
             .height(180.0)
             .x_grid_spacer(log_grid_spacer(5))
-            .x_axis_label(tr("ui-effects-speed"))
-            .y_axis_label(tr("ui-effects-force"))
+            .x_axis_label(tr(if view.rotary { "ui-effects-speed-rotary" } else { "ui-effects-speed" }))
+            .y_axis_label(tr(if view.rotary { "ui-effects-torque" } else { "ui-effects-force" }))
             .show(ui, |plot| {
                 for (i, (label, points)) in view.curves.into_iter().enumerate() {
                     // The friction force solid, its parts dashed.

@@ -14,7 +14,7 @@
 //!   (effects.hard_stops).
 
 use crate::mech::{GearTorque, Gearbox, HardStop, HoldingBrake, Ripple, ShaftFriction};
-use sim_core::{Config, ConfigError};
+use sim_core::{Config, ConfigError, FRICTION_SIGNALS, SignalInfo};
 
 #[derive(Debug, Clone)]
 pub struct RotaryJoint {
@@ -165,6 +165,38 @@ impl RotaryJoint {
         (self.gearbox.ratio * (self.ripple.apply(command, rotor) - self.shaft.torque(rotor_speed) - held), rate)
     }
 
+    /// The joint's own friction torque at a steady speed at the output, split into [Coulomb, viscous, stiction] (N m;
+    /// they add up to `friction.torque(speed)` of a joint without gearbox drag): the level `level` is Coulomb plus the
+    /// Stribeck rise to the breakaway, both under the same tanh, the viscous part is linear. For the friction view.
+    pub fn friction_split(&self, speed: f64) -> [f64; 3] {
+        let f = &self.friction;
+        let (s, seals) = ((speed / f.smoothing).tanh(), f.oil.powf(f.seal_exponent));
+        [seals * f.coulomb * s, f.viscous * speed, (f.level(speed) - seals * f.coulomb) * s]
+    }
+
+    /// The values of the friction view's signals `<id>.friction_<part>` (`sim_core::FRICTION_SIGNALS`) of this joint at
+    /// an output speed: the speed, the three parts, and a load factor of 1 (a bearing's levels do not follow a load).
+    pub fn friction_signals(&self, speed: f64) -> [f64; 5] {
+        let [coulomb, viscous, stiction] = self.friction_split(speed);
+        [speed, coulomb, viscous, stiction, 1.0]
+    }
+
+    /// The infos of `friction_signals` for a joint `id` of the owner `owner_key`: rad/s and N m.
+    pub fn friction_infos(id: &str, owner_key: &str) -> Vec<SignalInfo> {
+        FRICTION_SIGNALS
+            .iter()
+            .map(|part| {
+                let unit = match *part {
+                    "speed" => "rad/s",
+                    "load_scale" => "",
+                    _ => "N m",
+                };
+                let quantity = format!("quantity-friction-{}", part.replace('_', "-"));
+                SignalInfo::new(format!("{id}.friction_{part}"), owner_key, &quantity, unit)
+            })
+            .collect()
+    }
+
     /// Energy in the stops' springs at an angle.
     pub fn stop_energy(&self, angle: f64) -> f64 {
         let (min, max) = self.range;
@@ -283,5 +315,18 @@ stop_damping_n_s_m = 0.0
         // 30 N + 40 N s/m * 0.5 m/s against the motion; 1 mm beyond the far stop, 2000 N back.
         assert!((j.output_torque(0.4, 0.5) + 50.0).abs() < 1e-9);
         assert!((j.output_torque(0.801, 0.0) + 2000.0).abs() < 1e-6);
+    }
+
+    /// Hand value: at 2 rad/s (far above the 1e-3 smoothing) the joint of the text has Coulomb 2 N m, viscous
+    /// 0.5 * 2 = 1 N m and no stiction rise; the parts add up to `friction.torque` and the signals carry them.
+    #[test]
+    fn friction_view_parts_add_up() {
+        let j = joint();
+        let [c, v, s] = j.friction_split(2.0);
+        assert!((c - 2.0).abs() < 1e-9 && (v - 1.0).abs() < 1e-12 && s.abs() < 1e-12);
+        assert!((c + v + s - j.friction.torque(2.0)).abs() < 1e-12);
+        assert!((c + v + s + j.friction.torque(-2.0)).abs() < 1e-12, "odd in the speed");
+        assert_eq!(j.friction_signals(2.0), [2.0, c, v, s, 1.0]);
+        assert_eq!(RotaryJoint::friction_infos("joint.1", "arm-1").len(), sim_core::FRICTION_SIGNALS.len());
     }
 }

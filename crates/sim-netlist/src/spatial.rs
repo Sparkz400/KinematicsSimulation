@@ -1182,6 +1182,9 @@ impl Delta {
         }
         out.extend(&losses.powers[..self.loss_count()]);
         out.extend(self.energy_parts(s));
+        for k in 0..3 {
+            out.extend(self.joints[k].friction_signals(w[k]));
+        }
     }
 
     fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
@@ -1224,8 +1227,14 @@ impl Delta {
         out.extend(ENERGY_PARTS.map(|part| {
             SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")
         }));
+        for k in 0..3 {
+            out.extend(RotaryJoint::friction_infos(JOINT_CONTACTS[k], ["arm-1", "arm-2", "arm-3"][k]));
+        }
     }
 }
+
+/// The ids of the arms' friction contacts (`<id>.friction_<part>`), in the motors' order.
+const JOINT_CONTACTS: [&str; 3] = ["joint.1", "joint.2", "joint.3"];
 
 impl Machine for Delta {
     /// The platform (with the payload and the forearms' share), each arm's tube turning with its joint and what sits at
@@ -1546,9 +1555,22 @@ impl Machine for Delta {
         out.extend(&self.losses(s, torque).powers[..self.loss_count()]);
     }
 
-    // shortcut: the joints' friction is not offered to the friction view, which draws a guide's force over its speed
-    // along an axis (N over m/s); the joints' losses are in the energy budget and the torque breakdown. Offer them as
-    // contacts once the view can draw a torque over an angular speed.
+    /// The three arms' bearing friction, rotary contacts (N m over rad/s at the arm).
+    fn friction_contacts(&self) -> Vec<sim_core::FrictionContact> {
+        (0..3)
+            .map(|k| sim_core::FrictionContact { id: JOINT_CONTACTS[k], owner_key: ["arm-1", "arm-2", "arm-3"][k] })
+            .collect()
+    }
+    fn friction_rotary(&self, _i: usize) -> bool {
+        true
+    }
+    fn friction_curve(&self, i: usize, speed: f64, _load_scale: f64) -> [f64; 3] {
+        self.joints.get(i).map_or([0.0; 3], |j| j.friction_split(speed))
+    }
+    /// The arm turns at its motor's highest speed over the gearbox's ratio.
+    fn friction_speed_limit(&self, i: usize, motor_speed: &[f64]) -> Option<f64> {
+        Some(motor_speed.get(i)? / self.joints.get(i)?.ratio())
+    }
 
     /// The gearboxes that are not couplings, by their nodes' ids.
     fn thermal_parts(&self) -> Vec<ThermalPart> {
