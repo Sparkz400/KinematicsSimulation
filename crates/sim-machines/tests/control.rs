@@ -1597,3 +1597,67 @@ fn a_shaper_following_the_pose_gives_the_shaped_positions_own_rates() {
         assert!(acc <= 2.0 * fixed + 1e-9, "{}: acceleration {acc} off, {fixed} with the period fixed", entry.id);
     });
 }
+
+/// A cam changed by a reconfigure while it runs: the shaper's copies of the cycles before the change are the plan as it
+/// ran then, on the old cam, and those after on the new one. The rotary knife's transition law turned from 3-4-5 into a
+/// cycloid 0.3 s into the master's run-up, between two cuts, with a ZVD shaper of half a period 1.5 profile cycles, so
+/// that two of its three copies fall between two cycles. The plan as it ran is that of a second simulation at half the
+/// profile cycle without the shaper, changed at the same moment: the shaped setpoint at each cycle is 1/4, 1/2 and 1/4
+/// of it 0, 1.5 and 3 cycles ago, to rounding, across the change too. A third, on the cycloid from the start, shows that
+/// the copies just before the change would be off by more than that on the new cam (which they used to read).
+#[test]
+fn a_cam_changed_under_way_leaves_the_shaper_the_plan_as_it_ran() {
+    let entry = MACHINES.iter().copied().find(|e| e.id == "rotary-knife").unwrap();
+    let base = [
+        "cam.run = true",
+        "drive.position_cycle_s = 0.5e-3",
+        "profile.shaper_type = \"zvd\"",
+        "profile.shaper_damping = 0.0",
+        "profile.shaper_frequency_hz = 333.3333333333333",
+        "effects.shaper_follows_pose = false",
+    ];
+    let cycloid = "knife.transition_law = \"cycloid\"";
+    // 0.3 s and 0.35 s in base steps of 62.5 us.
+    let (change, end) = (4800, 5600);
+    // Per profile cycle the shaped and the planned setpoint of the knife, the law changed after `change` base steps.
+    let run = |edit: &[&str], change: Option<u64>| {
+        let cfg = config(entry, &[&base[..], edit].concat());
+        let mut sim = Sim::new(entry, &cfg).unwrap();
+        let n = (cfg.f64("profile.cycle_s").unwrap() / cfg.f64("sim.dt_s").unwrap()).round() as u64;
+        sim.command(Command::StartCycle).unwrap();
+        let mut rows = Vec::new();
+        while sim.step < end {
+            if Some(sim.step) == change {
+                let mut changed = cfg.clone();
+                changed.set_text(cycloid).unwrap();
+                sim.reconfigure(entry, &changed).unwrap();
+            }
+            let due = sim.step.is_multiple_of(n);
+            sim.step();
+            if due {
+                rows.push((sim.control.set_pos[0], sim.control.planned_pos()[0]));
+            }
+        }
+        rows
+    };
+    let plan_of = |rows: Vec<(f64, f64)>| -> Vec<f64> { rows.iter().map(|row| row.1).collect() };
+    let fine = ["profile.cycle_s = 0.5e-3", "effects.input_shaping = false"];
+    let shaped = run(&["profile.cycle_s = 1.0e-3", "effects.input_shaping = true"], Some(change));
+    let plan = plan_of(run(&fine, Some(change)));
+    let new_cam = plan_of(run(&[&fine[..], &[cycloid]].concat(), None));
+    let axis = (entry.build)(&entry.config()).unwrap().axes()[0].clone();
+    let tolerance = 1e-12 * (axis.max - axis.min);
+    // The first cycle on the new cam is the 300th: from there on the plan is the cycloid's, and the copy 1.5 cycles
+    // before it differs between the two cams.
+    let at = 300;
+    assert!((plan[2 * at] - new_cam[2 * at]).abs() <= tolerance);
+    let apart = (plan[2 * at - 3] - new_cam[2 * at - 3]).abs();
+    assert!(apart > 1e3 * tolerance, "the two cams {apart} rad apart 1.5 cycles before the change");
+    let mut worst = 0f64;
+    for (k, (set, planned)) in shaped.iter().enumerate().skip(10) {
+        assert!((planned - plan[2 * k]).abs() <= tolerance, "cycle {k}: plan {planned} against {}", plan[2 * k]);
+        let copies = 0.25 * plan[2 * k] + 0.5 * plan[2 * k - 3] + 0.25 * plan[2 * k - 6];
+        worst = worst.max((set - copies).abs());
+    }
+    assert!(worst <= tolerance, "the shaped setpoint {worst} rad off the copies of the plan as it ran");
+}

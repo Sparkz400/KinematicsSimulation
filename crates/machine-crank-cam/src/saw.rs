@@ -155,6 +155,13 @@ impl Mechanism for FlyingSaw {
         out[0] = self.cam.at(master);
         out[0][0] += self.home;
     }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        let (cam, home) = (self.cam.clone(), self.home);
+        Some(std::sync::Arc::new(move |master, out: &mut [[f64; 4]]| {
+            out[0] = cam.at(master);
+            out[0][0] += home;
+        }))
+    }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {
         vec![

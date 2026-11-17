@@ -220,6 +220,10 @@ impl Mechanism for SliderCrank {
             out[0] = cam.at(master);
         }
     }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        let cam = self.cam.as_ref()?.0.clone();
+        Some(std::sync::Arc::new(move |master, out: &mut [[f64; 4]]| out[0] = cam.at(master)))
+    }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {
         [

@@ -516,6 +516,14 @@ impl Mechanism for Movers {
             *o = cycle.at(k, self.start[k], master);
         }
     }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        let (cycle, start) = (self.cycle.clone()?, self.start.clone());
+        Some(std::sync::Arc::new(move |master, out: &mut [[f64; 4]]| {
+            for (k, o) in out.iter_mut().enumerate().take(start.len()) {
+                *o = cycle.at(k, start[k], master);
+            }
+        }))
+    }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {
         let mut out = Vec::new();
@@ -1033,6 +1041,9 @@ impl Machine for MoverTrack {
     }
     fn cam_at(&self, master: f64, out: &mut [[f64; 4]]) {
         self.inner.cam_at(master, out)
+    }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        self.inner.cam_curve()
     }
     fn gantry_motors(&self) -> Option<[usize; 2]> {
         self.inner.gantry_motors()

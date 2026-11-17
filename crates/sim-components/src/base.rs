@@ -694,6 +694,9 @@ impl Machine for Based {
     fn cam_at(&self, master: f64, out: &mut [[f64; 4]]) {
         self.inner.cam_at(master, out)
     }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        self.inner.cam_curve()
+    }
     fn gantry_motors(&self) -> Option<[usize; 2]> {
         self.inner.gantry_motors()
     }
