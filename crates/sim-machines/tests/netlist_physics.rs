@@ -411,14 +411,14 @@ id = "runs-axis"
 axis = [{ id = "x", stroke_m = "geometry.stroke_m" }]
 motor = [{ id = "m" }]
 gearbox = [{ id = "gearbox", motor = "m" }]
-pulley = [{ id = "pulley", gearbox = "gearbox", radius_m = "geometry.pulley_radius_m", inertia_kgm2 = "pulley.inertia_kgm2", at_m = [-0.2, -0.05, 0.06] }]
+pulley = [{ id = "pulley", gearbox = "gearbox", radius_m = "geometry.pulley_radius_m", inertia_kgm2 = "pulley.inertia_kgm2", at_m = [-0.2, -0.03, 0.06] }]
 section = [
-    { id = "1", length_m = 0.15, axes = { x = 1 }, pulleys = { pulley = 1 }, route = ["carriage", "pulley"] },
-    { id = "2", length_m = 2.45, axes = { x = -1 }, pulleys = { pulley = -1 }, route = ["pulley", "carriage"] },
+    { id = "1", length_m = 0.2, axes = { x = 1 }, pulleys = { pulley = 1 }, route = ["carriage", "pulley"] },
+    { id = "2", length_m = 0.6, axes = { x = -1 }, pulleys = { pulley = -1 }, route = ["pulley", "carriage"] },
 ]
 span = [
-    { id = "out", section = "1", length_m = 0.6, velocity_x = { x = 1 } },
-    { id = "back", section = "2", length_m = 0.2, velocity_x = { x = 1 } },
+    { id = "out", section = "1", length_m = 0.2, axes = { x = 1 }, velocity_x = { x = 1 } },
+    { id = "back", section = "2", length_m = 0.6, axes = { x = -1 }, velocity_x = { x = 1 } },
 ]
 body = [{ id = "carriage", mass_kg = "mass.carriage_kg", payload_kg = "mass.payload_kg", axes = ["x"] }]
 guide = [{ id = "guide_x", axis = "x", friction = "friction_x", carries = ["carriage"] }]
@@ -431,7 +431,8 @@ guide = [{ id = "guide_x", axis = "x", friction = "friction_x", carries = ["carr
 
 /// The belt's runs carry angular momentum about the origin of the bodies' places, m x (mu L y), each about the middle of its
 /// straight piece. The carriage at x = 0.4 (its clamp, a wheel of radius 0), the pulley (radius r = 0.02, anticlockwise) 0.6 m
-/// away at the same height: the straight run from the clamp to the pulley leans by alpha, sin alpha = r / 0.6, and meets
+/// away at the same height and depth (the scene's [-0.2, -0.03, 0.06] is the bodies' place [-0.2, 0, 0]; the spans are
+/// the whole belt, 0.2 + x and 0.6 - x, as a belt with speeds over ground must be): the straight run from the clamp to the pulley leans by alpha, sin alpha = r / 0.6, and meets
 /// the wheel at r cos(alpha) above the line (and the run back leaves it r cos(alpha) below), so the runs' middles are
 /// +-1/2 r cos(alpha) high. Both move at v = 0.5 m/s along x, the first 0.6 m long, the second 0.2 m, mu = 0.1 kg/m:
 /// L_y = mu v (0.6 - 0.2) r cos(alpha) / 2 = 0.1 * 0.5 * 0.4 * 0.02 * 0.99944 / 2 = 1.99889e-4 N m s (m_z y_x only, y_z 0).

@@ -361,12 +361,23 @@ def run(spec):
             tau_queue.append(new_cmd)
             tau_cmd = tau_queue.pop(0)
         # current loop
-        e_i = current_for(tau_cmd) - i
+        i_set = current_for(tau_cmd)
+        u_max = math.sqrt(1.5) * u_dc if e("voltage_limit") else math.inf
+        # braking above the speed where k_E w alone exceeds U: the circle (k_E w - R i)^2 + (p w L i)^2 <= U^2 leaves
+        # braking currents from its smaller root up, the one the inverter's diodes force; with the torque limit the
+        # drive does not command less braking than that (the nearest current R k_E w / a where the circle leaves none)
+        back = ke * abs(w_f)
+        if e("torque_limit") and w_f != 0.0 and math.isfinite(u_max) and back > u_max:
+            x = pole_pairs * abs(w_f) * L
+            a = R * R + x * x
+            forced = min(max((R * back - math.sqrt(max(a * u_max * u_max - x * x * back * back, 0.0))) / a, 0.0), i_max)
+            if forced > 0.0 and i_set * math.copysign(1.0, w_f) > -forced:
+                i_set = -forced * math.copysign(1.0, w_f)
+        e_i = i_set - i
         # the back-EMF it expects: at the filtered speed, with the constant saturation leaves at the winding's current
         wanted_u = kpi * e_i + i_i + ke * w_f * kt_of(i) / kt
         # the d axis first: its steady voltage, the reactance at the filtered speed; the q axis gets the rest of the circle
         u_d = -pole_pairs * w_f * L * i
-        u_max = math.sqrt(1.5) * u_dc if e("voltage_limit") else math.inf
         u_max = math.sqrt(max(u_max * u_max - u_d * u_d, 0.0))
         new_u = min(max(wanted_u, -u_max), u_max)
         if new_u == wanted_u:
