@@ -329,7 +329,7 @@ struct MotorData {
     thermal_seconds: Option<f64>,
     /// Phase resistance at 20 °C in ohms and rotating field inductance in henries, where a data sheet prints them.
     winding: Option<(f64, f64)>,
-    /// Pole pairs, where the catalogue prints them (`motors_s120.csv`, the 1FK7 and 1FT7).
+    /// Pole pairs, where the catalogue prints them (the 1FK7 and 1FT7: half the data sheet's poles, else `motors_s120.csv`).
     pole_pairs: Option<f64>,
     mass: f64,
     /// A linear motor's force constant as printed (N/A), which stands in for the torque constant static over stall.
@@ -441,7 +441,9 @@ fn motor_data(article: &str, supply: &str) -> Result<MotorData, ConfigError> {
                 max_speed: get(&sheet, "max_speed_mechanical_rad_s")?.min(get(&sheet, "max_speed_inverter_rad_s")?),
                 thermal_seconds: number(&sheet, "thermal_time_constant_s"),
                 winding: number(&sheet, "phase_resistance_20c_ohm").zip(number(&sheet, "phase_inductance_h")),
-                pole_pairs: number(&m, "pole_pairs"),
+                // The motor's own data sheet before the catalogue's table, which prints 5 for every 1FT7 High Dynamic
+                // where their sheets give 6 and 8 poles (the 150 other motors agree in both).
+                pole_pairs: number(&sheet, "poles").map(|p| p / 2.0).or_else(|| number(&m, "pole_pairs")),
                 mass: get(&m, "mass_kg")?,
                 force_constant: None,
                 linear: None,
