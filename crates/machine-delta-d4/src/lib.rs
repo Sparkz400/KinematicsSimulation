@@ -34,6 +34,10 @@
 //! the D3, J^T F at the arms). The torque the shaft passes and the cardans' bending moments on the platform do no work
 //! on the arms: the parallelograms hold the platform level.
 //!
+//! Each arm reads its own `[motor.<id>]`, `[gearbox.<id>]` and `[parts.<id>]` over the shared tables (ids 1 to 3, the
+//! tool's 4); without them the three share `[motor]` and `[gearbox]`. The arms' modes still take the first arm's
+//! gearbox for all three (`sim_netlist::spatial`).
+//!
 //! With effects.joint_elasticity the tool's gearbox twists, and with effects.shaft_torsion the shaft twists in series
 //! with it: one spring 1 / (1/k_gear + 1/k_shaft) between the gearbox and the tool, with the shaft's damping.
 
@@ -45,6 +49,7 @@ use sim_core::{
     AxisInfo, Config, ConfigError, LOSS_PREFIX, Label, Machine, MachineEntry, Mode, MotorInfo, Part, Scene, Shape,
     SignalInfo, TORQUE_PARTS, ThermalPart,
 };
+use sim_netlist::linkage::Arms;
 
 pub static ENTRY: MachineEntry = MachineEntry {
     id: "delta-d4",
@@ -248,17 +253,14 @@ impl Delta4 {
             let platform = cfg.positive("mass.platform_kg")? + share * cfg.non_negative("shaft.mass_kg")?;
             inner.set_text(&format!("mass.platform_kg = {platform:?}"))?;
         }
-        // The arms are the D3's, which reads the shared [motor] and [gearbox]: an arm's own table there would size its
-        // drive and verdicts but not the arm it turns, so it is refused.
-        // shortcut: the three arms share one motor and gearbox; tables per arm if an arm ever needs another.
-        for id in ["1", "2", "3"] {
-            for table in ["parts", "motor", "gearbox"] {
-                if cfg.get(&format!("{table}.{id}")).is_ok_and(|v| v.is_table()) {
-                    return Err(ConfigError::Invalid(format!("{table}.{id} (the three arms share [{table}])")));
-                }
-            }
+        // The arms are the D3's (`Delta::build`) with, per arm, the joint of its own motor's config
+        // (`catalog::motor_config`: `[motor.<id>]`, `[gearbox.<id>]`, `[parts.<id>]` over the shared tables; absent =
+        // the shared ones, as before).
+        let mut drives = Arms::shared(&inner, [("x", "axis-x"), ("y", "axis-y"), ("z", "axis-z")])?;
+        for (k, id) in ["1", "2", "3"].into_iter().enumerate() {
+            drives.joints[k] = RotaryJoint::from_config(&motor_config(&inner, id)?)?;
         }
-        let mut arms = Delta::new(&inner)?;
+        let mut arms = Delta::build(&inner, &inner, drives)?;
         let drag = if cfg.bool("effects.telescope_friction")? {
             let friction = ShaftFriction {
                 coulomb: cfg.non_negative("shaft.slide_friction_n")?,
@@ -497,6 +499,9 @@ impl Delta4 {
 /// The telescope's outer tube and inner shaft as drawn and as collision capsules (twice their radius), m.
 const TUBE_WIDTH: f64 = 0.03;
 const INNER_WIDTH: f64 = 0.016;
+/// The tool motor and its gearbox on the base's axis as drawn and as collision boxes (centre and size, m).
+const MOTOR_BOX: sim_core::Aabb = sim_core::Aabb { centre: [0.0, 0.0, 0.16], size: [0.09, 0.09, 0.12] };
+const GEARBOX_BOX: sim_core::Aabb = sim_core::Aabb { centre: [0.0, 0.0, 0.065], size: [0.08, 0.08, 0.05] };
 
 impl Machine for Delta4 {
     /// The D3's, plus the tool's turn (tool, gripper, payload and the shaft's spin) and its rotor about z.
@@ -755,11 +760,11 @@ impl Machine for Delta4 {
         let dark = [0.25, 0.25, 0.28];
         out.parts.push(Part::new(
             sim_core::scene::MOTOR_PART,
-            Shape::Box { size: [0.09, 0.09, 0.12] },
-            [0.0, 0.0, 0.16],
+            Shape::Box { size: MOTOR_BOX.size },
+            MOTOR_BOX.centre,
             [0.9, 0.45, 0.1],
         ));
-        out.parts.push(Part::new("gearbox", Shape::Box { size: [0.08, 0.08, 0.05] }, [0.0, 0.0, 0.065], dark));
+        out.parts.push(Part::new("gearbox", Shape::Box { size: GEARBOX_BOX.size }, GEARBOX_BOX.centre, dark));
         out.parts.push(
             Part::new("rotor-bar", Shape::Box { size: [0.07, 0.004, 0.012] }, [0.0, 0.0, 0.225], [0.1, 0.1, 0.1])
                 .turned(rotor),
@@ -803,13 +808,15 @@ impl Machine for Delta4 {
         self.arms.scene_point(&tool_pose[..3])
     }
 
-    /// The D3's boxes: platform and payload.
+    /// The D3's boxes (platform and payload) and the tool motor and its gearbox above the base's centre, where `scene`
+    /// draws them (they stand still with the base).
     fn collision_bodies(&self, s: &[f64]) -> Vec<sim_core::Aabb> {
-        self.arms.collision_bodies(&s[..self.n3])
+        let mut out = self.arms.collision_bodies(&s[..self.n3]);
+        out.extend([MOTOR_BOX, GEARBOX_BOX]);
+        out
     }
 
     /// The D3's capsules (forearm rods, upper arms) and the telescopic shaft between its joints.
-    // shortcut: the motor and gearbox above the base are not bodies; add them if an obstacle above the base matters.
     fn collision_capsules(&self, s: &[f64]) -> Vec<sim_core::Capsule> {
         let mut out = self.arms.collision_capsules(&s[..self.n3]);
         out.extend(self.shaft_capsules(self.platform(s).0));

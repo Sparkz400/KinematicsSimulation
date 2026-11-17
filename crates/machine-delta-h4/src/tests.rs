@@ -496,3 +496,74 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
     assert!(with.abs() < 0.03 * ff, "the integrators carry {with} N m of {ff}");
     assert!((without - with - ff).abs() < 0.03 * ff, "without: {without} N m, with {with}, of {ff}");
 }
+
+/// The rods' spin about their own axes is in the frame momentum (effects.forearm_inertia): with the spin inertia
+/// 1.8e-5 kg m^2 per rod (3.6e-5 per pair) against none, the angular momentum differs by the sum over the four pairs of
+/// I s u / L. Each pair's plane (the elbow's axis a and the forearm u) rotates rigidly, so s is the turning rate of
+/// the frame (e, u x e, u) with e = a less its part along u, normalised: s = e' . (u x e), here by central differences
+/// of 1e-6 s along the tool's straight path at (0.3, -0.2, 0.4) m/s, an independent route from the closed form.
+#[test]
+fn the_rods_spin_is_in_the_frame_momentum_by_a_finite_difference() {
+    let (with, without) = (
+        h4(&["effects.forearm_inertia = true"]),
+        h4(&["effects.forearm_inertia = true", "mass.forearm_rod_spin_inertia_kgm2 = 0.0"]),
+    );
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; 4]);
+    with.equilibrium(&[0.1, 0.05, -0.9, 0.0], &mut state, &mut torque);
+    with.set_tool_velocity(&mut state, &[0.3, -0.2, 0.4, 0.0]);
+    let (t, w) = with.arms(&state);
+    let (x, j) = with.pose(t);
+    let xv = mul4(&j, w);
+    let frame = |at: f64, i: usize| -> (V3, V3) {
+        let xt: V4 = std::array::from_fn(|k| x[k] + at * xv[k]);
+        let tt = with.legs.inverse(xt).unwrap();
+        let u = sub(with.legs.end(i, xt), with.legs.elbow(i, tt[i])[0]);
+        let a = with.legs.tangent(i);
+        let uh = u.map(|v| v / norm(u));
+        let e = sub(a, uh.map(|v| v * dot(a, uh)));
+        (e.map(|v| v / norm(e)), uh)
+    };
+    let mut expected = [0.0; 3];
+    for i in 0..4 {
+        let (h, (e, uh)) = (1e-6, frame(0.0, i));
+        let (plus, minus) = (frame(h, i).0, frame(-h, i).0);
+        let de: V3 = std::array::from_fn(|k| (plus[k] - minus[k]) / (2.0 * h));
+        let spin = dot(de, cross(uh, e));
+        for k in 0..3 {
+            expected[k] += 3.6e-5 * spin * uh[k];
+        }
+    }
+    let (a, b) = (with.frame_momentum(&state).unwrap(), without.frame_momentum(&state).unwrap());
+    let seen: V3 = std::array::from_fn(|k| a.angular[k] - b.angular[k]);
+    assert!(norm(expected) > 1e-8, "{expected:?}");
+    for k in 0..3 {
+        close(seen[k], expected[k], 1e-5, &format!("rods' spin momentum, axis {k}"));
+    }
+}
+
+/// The slanted pieces are capsules along their own direction and the tool's bar is one: the two plate parts, eight
+/// forearm rods, four upper arms and the bar make 15, the bar of radius 7.5 mm from p - 0.06 (cos c, sin c, 0) to
+/// p + 0.06 (cos c, sin c, 0), 40 mm under the carriage's point (c = 0.5 rad here); the carriage and the payload stay
+/// boxes.
+#[test]
+fn the_slanted_pieces_and_the_tool_bar_are_capsules() {
+    let m = h4(&[]);
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; 4]);
+    m.equilibrium(&[0.1, 0.05, -0.9, 0.5], &mut state, &mut torque);
+    let capsules = m.collision_capsules(&state);
+    assert_eq!(capsules.len(), 15);
+    let (c, p) = (m.turn(&state).0, [0.1, 0.05, -0.9]);
+    close(c, 0.5, 1e-12, "the tool's turn");
+    let ends = [
+        [p[0] - 0.06 * c.cos(), p[1] - 0.06 * c.sin(), p[2] - 0.04],
+        [p[0] + 0.06 * c.cos(), p[1] + 0.06 * c.sin(), p[2] - 0.04],
+    ];
+    let near = |a: V3, b: V3| norm(sub(a, b)) < 1e-9;
+    assert!(
+        capsules.iter().any(|k| k.radius == 0.0075
+            && (near(k.from, ends[0]) && near(k.to, ends[1]) || near(k.from, ends[1]) && near(k.to, ends[0]))),
+        "no bar capsule at {ends:?}"
+    );
+    let boxes = m.collision_bodies(&state);
+    assert!(boxes.len() <= 2, "{} boxes", boxes.len());
+}

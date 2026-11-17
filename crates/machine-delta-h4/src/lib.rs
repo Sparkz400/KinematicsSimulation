@@ -1074,6 +1074,13 @@ impl H4 {
         })
     }
 
+    /// The tool's bar under the carriage at p, 0.12 m long, turned by `c`: its two ends.
+    fn tool_bar(&self, p: V3, c: f64) -> (V3, V3) {
+        let half = [0.06 * c.cos(), 0.06 * c.sin(), 0.0];
+        let under = [p[0], p[1], p[2] - 0.04];
+        (std::array::from_fn(|k| under[k] - half[k]), std::array::from_fn(|k| under[k] + half[k]))
+    }
+
     /// The two plate parts as drawn at x: each a bar between its two forearm pairs' ends (at the plate radius from the
     /// part's centre, at least 30 mm so that a bar is drawn).
     fn plate_bars(&self, x: V4) -> [(V3, V3); 2] {
@@ -1195,9 +1202,10 @@ impl Machine for H4 {
     /// In the tool's frame (z up): the plate's two parts at p -+ h d, the carriage with the payload at p, the rods'
     /// middles (effects.forearm_inertia) between elbow and plate as the dynamics has them; the arms turning about their
     /// joints at the base radius and their rotors about the elbows' axes; the tool's turn about z (its own angle with
-    /// effects.amplifier_compliance).
-    // shortcut: the rods' spin about their own axes (effects.forearm_inertia) is left out, as on the D3; add it if a
-    // base's tilt under the H4 has to be exact.
+    /// effects.amplifier_compliance). With effects.forearm_inertia each pair's rods spin about their own axis `u / L`
+    /// at the rate `add_spin` of the dynamics derives, s = -sigma n / (L (L^2 - sigma^2)) (sigma = a . u,
+    /// n = a . (u' x u), a the elbow's axis, u the forearm), and carry I s `u / L` of angular momentum: the plane of
+    /// the pair's rods rotates rigidly with the spin, so that is its angular velocity's component along the rod.
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         use sim_components::base::{add_point, add_spin, add_turning};
         let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
@@ -1221,10 +1229,17 @@ impl Machine for H4 {
             let joint = self.legs.to_base(i, [self.base_radius, 0.0, 0.0]);
             add_turning(&mut f, joint, dir, ddir, w[i], self.arm_inertia, self.arm_moment);
             add_spin(&mut f, self.legs.tangent(i), self.joints[i].rotor_inertia, rotor_speed[i]);
-            if self.m_rod_middle > 0.0 {
+            if self.m_rod_middle > 0.0 || self.rod_spin > 0.0 {
                 let ([elbow, d1, _], (end, end_v)) = (self.legs.elbow(i, t[i]), point(SIDE[i]));
                 let middle = std::array::from_fn(|k| 0.5 * (elbow[k] + end[k]));
                 add_point(&mut f, self.m_rod_middle, middle, std::array::from_fn(|k| 0.5 * (d1[k] * w[i] + end_v[k])));
+                if self.rod_spin > 0.0 {
+                    let (u, du) = (sub(end, elbow), std::array::from_fn(|k| end_v[k] - d1[k] * w[i]));
+                    let (l, a) = (self.legs.lb, self.legs.tangent(i));
+                    let sigma = dot(a, u);
+                    let spin = -sigma * dot(a, cross(du, u)) / (l * (l * l - sigma * sigma));
+                    add_spin(&mut f, u.map(|v| v / l), self.rod_spin, spin);
+                }
             }
         }
         let turn = match self.amplifier {
@@ -1638,14 +1653,8 @@ impl Machine for H4 {
         }
         out.parts.extend(self.on_carriage(p));
         // A bar under the carriage, turned with the tool.
-        let half = [0.06 * c.cos(), 0.06 * c.sin(), 0.0];
-        let under = [p[0], p[1], p[2] - 0.04];
-        out.parts.push(Part::new(
-            "tool",
-            Shape::Segment { to: std::array::from_fn(|k| under[k] + half[k]), width: 0.015 },
-            std::array::from_fn(|k| under[k] - half[k]),
-            [0.85, 0.75, 0.2],
-        ));
+        let (from, to) = self.tool_bar(p, c);
+        out.parts.push(Part::new("tool", Shape::Segment { to, width: TOOL_BAR_WIDTH }, from, [0.85, 0.75, 0.2]));
         out.labels.push(Label {
             pos: [p[0], p[1], p[2] - 0.2],
             owner_key: "axis-z",
@@ -1660,24 +1669,28 @@ impl Machine for H4 {
         Some([tool_pose[0], tool_pose[1], tool_pose[2]])
     }
 
-    /// The carriage and the payload under it, the two plate parts, the eight forearm rods and the four upper arms,
-    /// where `scene` draws them, without drawing the rest. Each segment is boxes along it, each the box around its piece
-    /// of the drawn segment widened by the segment's width.
-    // shortcut: a slanted segment's pieces are boxes along the scene's axes, as on the D3; the tool's bar is not a body.
+    /// The carriage and the payload under it as boxes, where `scene` draws them.
     fn collision_bodies(&self, s: &[f64]) -> Vec<sim_core::Aabb> {
         let (t, _) = self.arms(s);
         let (x, _) = self.pose(t);
-        let mut out = sim_core::scene::scene_boxes(&self.on_carriage([x[0], x[1], x[2]]), &["carriage", "payload"]);
-        for (from, to) in self.plate_bars(x) {
-            out.extend(segment_boxes(from, to, PLATE_WIDTH, PLATE_PIECES));
-        }
+        sim_core::scene::scene_boxes(&self.on_carriage([x[0], x[1], x[2]]), &["carriage", "payload"])
+    }
+
+    /// The two plate parts, the eight forearm rods, the four upper arms and the tool's bar under the carriage, each
+    /// the capsule along the segment `scene` draws, of half its width: exact for a round piece of that width, and no
+    /// wider than the drawn strip anywhere along it.
+    fn collision_capsules(&self, s: &[f64]) -> Vec<sim_core::Capsule> {
+        let (t, _) = self.arms(s);
+        let (x, _) = self.pose(t);
+        let capsule = |(from, to): (V3, V3), width: f64| sim_core::Capsule { from, to, radius: width / 2.0 };
+        let mut out: Vec<_> = self.plate_bars(x).into_iter().map(|bar| capsule(bar, PLATE_WIDTH)).collect();
         for k in 0..4 {
-            for (from, to) in self.legs.rods(k, t[k], x, self.plate_radius, self.rod_spacing) {
-                out.extend(segment_boxes(from, to, ROD_WIDTH, ROD_PIECES));
-            }
-            let (shoulder, arm_end) = self.arm(k, t);
-            out.extend(segment_boxes(shoulder, arm_end, ARM_WIDTH, ARM_PIECES));
+            out.extend(
+                self.legs.rods(k, t[k], x, self.plate_radius, self.rod_spacing).map(|rod| capsule(rod, ROD_WIDTH)),
+            );
+            out.push(capsule(self.arm(k, t), ARM_WIDTH));
         }
+        out.push(capsule(self.tool_bar([x[0], x[1], x[2]], self.turn(s).0), TOOL_BAR_WIDTH));
         out
     }
 
@@ -1715,26 +1728,12 @@ impl Machine for H4 {
     }
 }
 
-/// `pieces` boxes along the segment from `from` to `to`, each the box around its piece widened by `width`.
-fn segment_boxes(from: V3, to: V3, width: f64, pieces: usize) -> impl Iterator<Item = sim_core::Aabb> {
-    (0..pieces).map(move |n| {
-        let at = |f: f64| -> V3 { std::array::from_fn(|i| from[i] + f * (to[i] - from[i])) };
-        let (a, b) = (at(n as f64 / pieces as f64), at((n + 1) as f64 / pieces as f64));
-        sim_core::Aabb {
-            centre: std::array::from_fn(|i| 0.5 * (a[i] + b[i])),
-            size: std::array::from_fn(|i| (b[i] - a[i]).abs() + width),
-        }
-    })
-}
-
-/// The forearm rods', upper arms' and plate parts' width as drawn and as collision bodies, m, and the pieces their
-/// collision boxes cut each into.
+/// The forearm rods', upper arms', plate parts' and tool bar's width as drawn and as collision capsules (twice their
+/// radius), m.
 const ROD_WIDTH: f64 = 0.014;
-const ROD_PIECES: usize = 10;
 const ARM_WIDTH: f64 = 0.05;
-const ARM_PIECES: usize = 10;
 const PLATE_WIDTH: f64 = 0.03;
-const PLATE_PIECES: usize = 3;
+const TOOL_BAR_WIDTH: f64 = 0.015;
 
 #[cfg(test)]
 mod tests;

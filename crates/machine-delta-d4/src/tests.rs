@@ -362,19 +362,39 @@ fn the_tool_motors_values_are_the_catalogues() {
     assert!(mine.f64(gain).unwrap() < catalogue.f64(gain).unwrap());
 }
 
-/// The three arms share [motor] and [gearbox], which the D3's arms read: a table of an arm's own there is refused
-/// rather than sizing its drive with a motor the arm does not have. One for the tool's motor is taken.
+/// An arm's own `[gearbox.2]` is read by that arm alone: its ratio 10 against the shared 20 halves its motor's angle
+/// for the same arm angle (motor angle = ratio x arm angle, the pose being the same), the other two arms unchanged.
 #[test]
-fn an_arms_own_motor_table_is_refused() {
-    for table in ["motor", "gearbox"] {
+fn an_arms_own_gearbox_table_is_read_by_that_arm_alone() {
+    let pose = [0.1, 0.05, -0.8, 0.0];
+    let motors = |own: bool| {
         let mut all: toml::Table = ENTRY.config().to_text().unwrap().parse().unwrap();
-        let mut own = toml::Table::new();
-        own.insert("ratio".into(), toml::Value::Float(10.0));
-        all.get_mut(table).unwrap().as_table_mut().unwrap().insert("2".into(), toml::Value::Table(own));
+        if own {
+            let mut t = toml::Table::new();
+            t.insert("ratio".into(), toml::Value::Float(10.0));
+            all.get_mut("gearbox").unwrap().as_table_mut().unwrap().insert("2".into(), toml::Value::Table(t));
+        }
         let cfg = Config::parse(&toml::to_string(&all).unwrap()).unwrap();
-        assert!(Delta4::new(&cfg).is_err(), "{table}.2");
+        let (m, mut out) = (Delta4::new(&cfg).unwrap(), [0.0; 4]);
+        m.inverse(&pose, &mut out);
+        out
+    };
+    let (shared, own) = (motors(false), motors(true));
+    assert_eq!((own[0], own[2]), (shared[0], shared[2]));
+    assert!((own[1] - 0.5 * shared[1]).abs() < 1e-12 * shared[1].abs(), "{own:?} against {shared:?}");
+}
+
+/// The tool motor and its gearbox above the base's centre are collision boxes where `scene` draws them: the pair at
+/// (0, 0, 0.16) and (0, 0, 0.065), whatever the pose.
+#[test]
+fn the_motor_and_gearbox_above_the_base_are_collision_bodies() {
+    let m = Delta4::new(&ENTRY.config()).unwrap();
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; 4]);
+    m.equilibrium(&[0.0, 0.0, -0.75, 0.0], &mut state, &mut torque);
+    let boxes = m.collision_bodies(&state);
+    for at in [[0.0, 0.0, 0.16], [0.0, 0.0, 0.065]] {
+        assert!(boxes.iter().any(|b| b.centre == at), "no body at {at:?}");
     }
-    assert!(Delta4::new(&ENTRY.config()).is_ok());
 }
 
 /// Friction feedforward from the machine's own model (`steady_friction`), by hand, with the platform on the axis at

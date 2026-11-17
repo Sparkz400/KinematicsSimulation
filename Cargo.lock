@@ -4544,6 +4544,7 @@ dependencies = [
  "machine-delta-d3",
  "sim-components",
  "sim-core",
+ "sim-netlist",
  "toml",
 ]
 
