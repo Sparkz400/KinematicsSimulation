@@ -3275,6 +3275,23 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
     optimise_cycle_with(entry, cfg, &OptimiseOptions { max_runs, robust: false, pareto: false, worst: false })
 }
 
+/// The fastest of the steps 1 to `top` that passes, judged by `pass` from the fastest down and the first that passes
+/// taken; `None` where none does (step 0, the cycle as configured, passes by definition and is not judged). Pass and fail
+/// need not follow the steps (a faster step may pass where a slower one fails), so no step above the result is left out:
+/// the cost is one judgement per step above the result and the result's own, never more than a bisection followed by
+/// judging the steps above its result would take.
+fn fastest_passing<T, E>(
+    top: usize,
+    mut pass: impl FnMut(usize) -> Result<Option<T>, E>,
+) -> Result<Option<(usize, T)>, E> {
+    for k in (1..=top).rev() {
+        if let Some(passed) = pass(k)? {
+            return Ok(Some((k, passed)));
+        }
+    }
+    Ok(None)
+}
+
 /// `optimise_cycle`, and with `options.robust` a result that passes in the error bands: the fastest setting found is
 /// judged with `verdict_bands` over the config's `[bounds]`; where it fails, the accepted steps of the search are gone
 /// back one at a time, each judged in the bands, until one passes (2 n + 1 cycles each, n the bounds). With
@@ -3287,6 +3304,8 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
 /// lowest collision body reaches below the tool. A lift that an obstacle raises is tried rounded through a via point
 /// over that obstacle as well, its ends at the clearance above pick and place; every via point's path is checked
 /// against the obstacles before it runs.
+///
+/// With `options.worst` the accepted steps are judged at the worst corner from the fastest down (`fastest_passing`).
 pub fn optimise_cycle_with(
     entry: &MachineEntry,
     cfg: &Config,
@@ -3676,49 +3695,21 @@ pub fn optimise_cycle_with(
             }
             Ok((None, worst))
         };
-        // Bisection over the accepted steps: step 0 (the cycle as configured) passes what it is judged on by definition,
-        // the fastest is judged first. Each search starts from the worst corners of the one before.
-        // Pass or fail need not follow the steps (a faster step may pass where a slower one fails), so after the
-        // bisection every step faster than its result that was not judged failing is judged too, fastest first, and the
-        // first that passes is taken: the cost is up to `last - lo - 1` more passes, each a search over the corners.
-        let (mut lo, mut hi, mut result) = (0, last, accepted[0].clone());
-        let mut failed: Vec<usize> = Vec::new();
-        if nominal_fails.is_empty() {
-            (lo, result) = (last, (best.clone(), best_load.clone()));
+        // The accepted steps from the fastest down, the first that passes what it is judged on taken (`fastest_passing`);
+        // step 0 (the cycle as configured) passes by definition. Each search starts from the worst corners of the one
+        // before. The fastest is not judged again where the nominal search already failed it on a check not excused.
+        let (lo, result) = if nominal_fails.is_empty() {
+            (last, (best.clone(), best_load.clone()))
         } else {
-            failed.push(last);
-            if last > 0 && matches!(judged_on(&nominal_fails)[..], [] | ["collision"]) {
-                let (passed, worst) = pass(last, &from)?;
+            let top =
+                if matches!(judged_on(&nominal_fails)[..], [] | ["collision"]) { last } else { last.saturating_sub(1) };
+            let found = fastest_passing(top, |k| {
+                let (passed, worst) = pass(k, &from)?;
                 from = worst;
-                if let Some(passed) = passed {
-                    (lo, result) = (last, passed);
-                    failed.clear();
-                }
-            }
-        }
-        while hi - lo > 1 {
-            let mid = (lo + hi) / 2;
-            let (passed, worst) = pass(mid, &from)?;
-            from = worst;
-            match passed {
-                Some(passed) => (lo, result) = (mid, passed),
-                None => {
-                    hi = mid;
-                    failed.push(mid);
-                }
-            }
-        }
-        for k in (lo + 1..last).rev() {
-            if failed.contains(&k) {
-                continue;
-            }
-            let (passed, worst) = pass(k, &from)?;
-            from = worst;
-            if let Some(passed) = passed {
-                (lo, result) = (k, passed);
-                break;
-            }
-        }
+                Ok(passed)
+            })?;
+            found.unwrap_or_else(|| (0, accepted[0].clone()))
+        };
         let (nominal_duration, steps_back) = (best_load.duration, last - lo);
         (best, best_load) = result;
         robust = Some(Robust { nominal_duration, nominal_fails, excused, steps_back, runs: corner_runs, worst: true });
@@ -4609,6 +4600,22 @@ pub fn compare_effect(entry: &MachineEntry, cfg: &Config, effect: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Steps 1 to 5 where 5, 4 and 2 fail and 3 and 1 pass: the fastest that passes is 3, after judging 5, 4 and 3 (a
+    /// bisection from 0 and 5 would judge 2, fail, and end at step 1). None pass: `None`, all five judged.
+    #[test]
+    fn the_fastest_passing_step_is_found_where_pass_and_fail_do_not_follow_the_steps() {
+        let mut judged = Vec::new();
+        let passes = [true, true, false, true, false, false];
+        let found = fastest_passing(5, |k| -> Result<_, ()> {
+            judged.push(k);
+            Ok(passes[k].then_some(k * 10))
+        });
+        assert_eq!((found, judged), (Ok(Some((3, 30))), vec![5, 4, 3]));
+        let mut count = 0;
+        assert_eq!(fastest_passing(5, |_| -> Result<Option<()>, ()> { Ok((count += 1, None).1) }), Ok(None));
+        assert_eq!(count, 5);
+    }
 
     /// The line module's loss in the supply energy: efficiency eta = 0.9, the drive drew 100 J out of the DC link and fed
     /// 40 J into it, the bleeder took 2 J, so the module put 102 J in and took the 40 J out (mains 36 J arrive, through the
