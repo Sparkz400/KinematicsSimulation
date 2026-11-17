@@ -3477,7 +3477,11 @@ fn the_thermal_belt_and_comparison_views_show_the_simulation(entry: &'static Mac
     let budget = load.budget.as_ref().unwrap();
     for part in &parts {
         let lost = budget.rows.iter().find(|r| r.id == format!("power.{}", part.id)).unwrap().energy / load.duration;
-        let settles = lost * model.config.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap();
+        let resistance = (entry.build)(&model.config).unwrap().thermal_values(part.id).map_or_else(
+            || model.config.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap(),
+            |own| own.0,
+        );
+        let settles = lost * resistance;
         let cells = row(
             &view.table,
             &format!(

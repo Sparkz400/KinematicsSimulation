@@ -210,6 +210,12 @@ damping_n_s_m = 100.0
 mass_kg_m = 0.07
 tooth_mesh_stiffness_n_m = 5.0e6
 damping_time_s = 2.5e-4
+# With effects.part_heating each belt warms with its damping loss (power.belt_*). [estimate] polyurethane with steel cords:
+# 1500 J/(kg K) (PU about 1800, steel 500, by mass) for the heat capacity, mass_kg_m times the loop's length. [estimate]
+# 15 W/(m2 K) from the belt's two sides (width times loop length each) into still air, the belt moving: the resistance
+# to the air is 1 / (h A).
+specific_heat_j_kg_k = 1500.0
+convection_w_m2_k = 15.0
 
 # Each carriage's guide. [estimate] as the one-axis machine's ball guide.
 [friction]
@@ -319,6 +325,9 @@ guide_max_rise_k = 40.0
 gearbox_resistance_k_w = 1.5
 gearbox_time_constant_s = 1200.0
 gearbox_max_rise_k = 50.0
+# [estimate] a polyurethane belt is rated to 80 C at 20 C around (resistance and time constant of a belt follow from
+# [belt] specific_heat_j_kg_k and convection_w_m2_k, its mass and size).
+belt_max_rise_k = 60.0
 
 # With effects.thermal_feedback (see mech::ThermalFeedback). [estimate] as for the other machines.
 [thermal_feedback]
@@ -619,6 +628,8 @@ mass.plate_kg = [0.6, 1.0]
 belt.stiffness_ea_n = [4.5e5, 7.5e5]
 belt.pretension_n = [200.0, 400.0]
 belt.damping_n_s_m = [50.0, 200.0]
+belt.specific_heat_j_kg_k = [1200.0, 1800.0]
+belt.convection_w_m2_k = [8.0, 25.0]
 friction.coulomb_n = [10.0, 20.0]
 friction.stiction_n = [15.0, 30.0]
 friction.viscous_n_s_m = [10.0, 40.0]

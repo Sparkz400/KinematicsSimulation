@@ -74,7 +74,7 @@ pub struct BeltSection {
 /// The kinds of part that can warm with their loss power (`ThermalPart`); each has the config keys
 /// `thermal.<kind>_resistance_k_w`, `thermal.<kind>_time_constant_s` and `thermal.<kind>_max_rise_k`, and the quantity
 /// key `quantity-<kind>-temperature`.
-pub const THERMAL_KINDS: [&str; 2] = ["gearbox", "guide"];
+pub const THERMAL_KINDS: [&str; 3] = ["gearbox", "guide", "belt"];
 /// What the simulation calls the temperature rise of a `ThermalPart` (`temperature.<id>`, K).
 pub const TEMPERATURE_PREFIX: &str = "temperature.";
 
@@ -483,6 +483,13 @@ pub trait Machine: Send {
     /// The parts that warm with a loss power, for the thermal model and view. Empty where the machine tells none.
     fn thermal_parts(&self) -> Vec<ThermalPart> {
         Vec::new()
+    }
+
+    /// The resistance to ambient (K/W) and the time constant (s) of the thermal part `id`, where the machine works them
+    /// out from the part's own size (a belt: its surface and mass) in place of the config's `thermal.<kind>_resistance_k_w`
+    /// and `thermal.<kind>_time_constant_s`; `None`: the config's.
+    fn thermal_values(&self, _id: &str) -> Option<(f64, f64)> {
+        None
     }
 
     /// Carries a running state over to a machine rebuilt from a changed config.
