@@ -73,6 +73,9 @@ pub struct MotorLoad {
     pub mains_energy: f64,
     pub line_module_energy: f64,
     pub peak_line_module_power: f64,
+    /// With the DC link simulated: what the drive's bleeder took out of the DC link while disabled (`Drive::disabled_step`;
+    /// each drive its own share of a shared link), J.
+    pub discharge_energy: f64,
     /// The torque at the gearbox output, where the machine reports it (signal `gearbox.<motor>.output_torque`): its
     /// peak, and its cubic mean weighted with the speed. Not the motor torque times the ratio: the rotor's
     /// own acceleration does not pass through the gearbox, and its losses come off or on top.
@@ -971,6 +974,7 @@ impl Tally {
                 (self.cubic[k].0 + torque.abs().powi(3) * self.speed[k].abs(), self.cubic[k].1 + self.speed[k].abs());
             let drive = &sim.control.drives[k];
             load.resistor_energy += drive.resistor_power * sim.dt;
+            load.discharge_energy += drive.discharge_power * sim.dt;
             load.peak_resistor_power = load.peak_resistor_power.max(drive.resistor_power);
             load.peak_dc_link_voltage = load.peak_dc_link_voltage.max(drive.dc_voltage);
             // The line module's load either way, on the DC link's side: drawn into it (the line gives 1 / efficiency of
@@ -2821,32 +2825,35 @@ pub struct FrontPoint {
 
 /// The energy a cycle takes from the supply, J: what the drives drew less what they fed back, plus what the braking
 /// resistor burned of what they fed back (with the DC link simulated; a shared one counted once). What the capacitors
-/// hold more at the end than at the start counts as fed back. With the regenerative supply (`effects.regenerative_supply`)
-/// also the line module's own loss and the bleeders' discharge. The line draws `drawn / eta` for the `drawn` it puts into
-/// the DC link and gives the mains `eta * fed` of the `fed` it takes out, so it loses `(1/eta - 1) drawn + (1 - eta) fed`;
-/// with `line_module_energy = drawn + fed` and `mains_energy = eta * fed` (the load's sums) `fed = mains_energy / eta`.
+/// hold more at the end than at the start counts as fed back. With the DC link simulated also what the bleeders took
+/// out of it and the line module's (or an S210's rectifier's) own loss, `effects.dc_link`'s
+/// `ratings.line_module_efficiency` eta both ways: it draws `drawn / eta` from the line for the `drawn` it puts into the
+/// DC link and gives the mains `eta * fed` of the `fed` it takes out (`effects.regenerative_supply`), so it loses
+/// `(1/eta - 1) drawn + (1 - eta) fed`; with the load's `line_module_energy = drawn + fed` and `mains_energy = eta * fed`,
+/// `fed = mains_energy / eta`. The DC link's balance, drawn - fed = net + burned + bleeders (+ what the capacitors gain),
+/// makes this the energy drawn from the line less what the mains got back. A shared link is counted once, with the
+/// shared config's efficiency; a link of its own with its motor's (`catalog::motor_config`).
 pub fn supply_energy(cfg: &Config, load: &CycleLoad) -> f64 {
     let net: f64 = load.motors.iter().map(|m| m.energy_in - m.energy_regenerated).sum();
-    let burned: f64 = if cfg.bool("effects.shared_dc_link").unwrap_or(false) {
-        load.motors.first().map_or(0.0, |m| m.resistor_energy)
-    } else {
-        load.motors.iter().map(|m| m.resistor_energy).sum()
-    };
-    let mut extra = 0.0;
-    if cfg.bool("effects.regenerative_supply").unwrap_or(false) {
-        let eta = cfg.positive("ratings.line_module_efficiency").unwrap_or(1.0);
-        let shared = cfg.bool("effects.shared_dc_link").unwrap_or(false);
-        let (through, mains) = if shared {
-            load.motors.first().map_or((0.0, 0.0), |m| (m.line_module_energy, m.mains_energy))
-        } else {
-            load.motors.iter().fold((0.0, 0.0), |a, m| (a.0 + m.line_module_energy, a.1 + m.mains_energy))
-        };
-        let fed = mains / eta;
-        extra += (1.0 / eta - 1.0) * (through - fed) + (1.0 - eta) * fed;
-        extra +=
-            load.budget.as_ref().map_or(0.0, |b| b.rows.iter().filter(|r| r.id == "discharge").map(|r| r.energy).sum());
+    let shared = cfg.bool("effects.shared_dc_link").unwrap_or(false);
+    // Every drive of a shared link reports the link's resistor and line module as its own.
+    let links: Vec<&MotorLoad> =
+        if shared { load.motors.iter().take(1).collect() } else { load.motors.iter().collect() };
+    let burned: f64 = links.iter().map(|m| m.resistor_energy).sum();
+    if !cfg.bool("effects.dc_link").unwrap_or(false) {
+        return net + burned;
     }
-    net + burned + extra
+    let bled: f64 = load.motors.iter().map(|m| m.discharge_energy).sum();
+    let line: f64 = links
+        .iter()
+        .map(|m| {
+            let own = if shared { None } else { crate::catalog::motor_config(cfg, &m.id).ok() };
+            let eta = own.as_ref().unwrap_or(cfg).positive("ratings.line_module_efficiency").unwrap_or(1.0);
+            let fed = m.mains_energy / eta;
+            (1.0 / eta - 1.0) * (m.line_module_energy - fed) + (1.0 - eta) * fed
+        })
+        .sum();
+    net + burned + bled + line
 }
 
 /// The points that no other one beats: none other is as good in all three figures and better in one. Fastest first;
@@ -3284,6 +3291,23 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
     optimise_cycle_with(entry, cfg, &OptimiseOptions { max_runs, robust: false, pareto: false, worst: false })
 }
 
+/// The fastest of the steps 1 to `top` that passes, judged by `pass` from the fastest down and the first that passes
+/// taken; `None` where none does (step 0, the cycle as configured, passes by definition and is not judged). Pass and fail
+/// need not follow the steps (a faster step may pass where a slower one fails), so no step above the result is left out:
+/// the cost is one judgement per step above the result and the result's own, never more than a bisection followed by
+/// judging the steps above its result would take.
+fn fastest_passing<T, E>(
+    top: usize,
+    mut pass: impl FnMut(usize) -> Result<Option<T>, E>,
+) -> Result<Option<(usize, T)>, E> {
+    for k in (1..=top).rev() {
+        if let Some(passed) = pass(k)? {
+            return Ok(Some((k, passed)));
+        }
+    }
+    Ok(None)
+}
+
 /// `optimise_cycle`, and with `options.robust` a result that passes in the error bands: the fastest setting found is
 /// judged with `verdict_bands` over the config's `[bounds]`; where it fails, the accepted steps of the search are gone
 /// back one at a time, each judged in the bands, until one passes (2 n + 1 cycles each, n the bounds). With
@@ -3296,6 +3320,8 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
 /// lowest collision body reaches below the tool. A lift that an obstacle raises is tried rounded through a via point
 /// over that obstacle as well, its ends at the clearance above pick and place; every via point's path is checked
 /// against the obstacles before it runs.
+///
+/// With `options.worst` the accepted steps are judged at the worst corner from the fastest down (`fastest_passing`).
 pub fn optimise_cycle_with(
     entry: &MachineEntry,
     cfg: &Config,
@@ -3685,49 +3711,21 @@ pub fn optimise_cycle_with(
             }
             Ok((None, worst))
         };
-        // Bisection over the accepted steps: step 0 (the cycle as configured) passes what it is judged on by definition,
-        // the fastest is judged first. Each search starts from the worst corners of the one before.
-        // Pass or fail need not follow the steps (a faster step may pass where a slower one fails), so after the
-        // bisection every step faster than its result that was not judged failing is judged too, fastest first, and the
-        // first that passes is taken: the cost is up to `last - lo - 1` more passes, each a search over the corners.
-        let (mut lo, mut hi, mut result) = (0, last, accepted[0].clone());
-        let mut failed: Vec<usize> = Vec::new();
-        if nominal_fails.is_empty() {
-            (lo, result) = (last, (best.clone(), best_load.clone()));
+        // The accepted steps from the fastest down, the first that passes what it is judged on taken (`fastest_passing`);
+        // step 0 (the cycle as configured) passes by definition. Each search starts from the worst corners of the one
+        // before. The fastest is not judged again where the nominal search already failed it on a check not excused.
+        let (lo, result) = if nominal_fails.is_empty() {
+            (last, (best.clone(), best_load.clone()))
         } else {
-            failed.push(last);
-            if last > 0 && matches!(judged_on(&nominal_fails)[..], [] | ["collision"]) {
-                let (passed, worst) = pass(last, &from)?;
+            let top =
+                if matches!(judged_on(&nominal_fails)[..], [] | ["collision"]) { last } else { last.saturating_sub(1) };
+            let found = fastest_passing(top, |k| {
+                let (passed, worst) = pass(k, &from)?;
                 from = worst;
-                if let Some(passed) = passed {
-                    (lo, result) = (last, passed);
-                    failed.clear();
-                }
-            }
-        }
-        while hi - lo > 1 {
-            let mid = (lo + hi) / 2;
-            let (passed, worst) = pass(mid, &from)?;
-            from = worst;
-            match passed {
-                Some(passed) => (lo, result) = (mid, passed),
-                None => {
-                    hi = mid;
-                    failed.push(mid);
-                }
-            }
-        }
-        for k in (lo + 1..last).rev() {
-            if failed.contains(&k) {
-                continue;
-            }
-            let (passed, worst) = pass(k, &from)?;
-            from = worst;
-            if let Some(passed) = passed {
-                (lo, result) = (k, passed);
-                break;
-            }
-        }
+                Ok(passed)
+            })?;
+            found.unwrap_or_else(|| (0, accepted[0].clone()))
+        };
         let (nominal_duration, steps_back) = (best_load.duration, last - lo);
         (best, best_load) = result;
         robust = Some(Robust { nominal_duration, nominal_fails, excused, steps_back, runs: corner_runs, worst: true });
@@ -4619,13 +4617,33 @@ pub fn compare_effect(entry: &MachineEntry, cfg: &Config, effect: &str) -> Resul
 mod tests {
     use super::*;
 
-    /// The line module's loss in the supply energy: efficiency eta = 0.9, the drives drew 100 J into the DC link and fed
-    /// 40 J out of it (mains 36 J arrive, through the module 140 J). The line draws 100 / 0.9 = 111.11 J and gives the mains
-    /// 36 J, so the supply gave 75.11 J: the DC side's net 60 J plus the loss (1 / 0.9 - 1) 100 + (1 - 0.9) 40 = 15.11 J.
+    /// Steps 1 to 5 where 5, 4 and 2 fail and 3 and 1 pass: the fastest that passes is 3, after judging 5, 4 and 3 (a
+    /// bisection from 0 and 5 would judge 2, fail, and end at step 1). None pass: `None`, all five judged.
+    #[test]
+    fn the_fastest_passing_step_is_found_where_pass_and_fail_do_not_follow_the_steps() {
+        let mut judged = Vec::new();
+        let passes = [true, true, false, true, false, false];
+        let found = fastest_passing(5, |k| -> Result<_, ()> {
+            judged.push(k);
+            Ok(passes[k].then_some(k * 10))
+        });
+        assert_eq!((found, judged), (Ok(Some((3, 30))), vec![5, 4, 3]));
+        let mut count = 0;
+        assert_eq!(fastest_passing(5, |_| -> Result<Option<()>, ()> { Ok((count += 1, None).1) }), Ok(None));
+        assert_eq!(count, 5);
+    }
+
+    /// The line module's loss in the supply energy: efficiency eta = 0.9, the drive drew 100 J out of the DC link and fed
+    /// 40 J into it, the bleeder took 2 J, so the module put 102 J in and took the 40 J out (mains 36 J arrive, through the
+    /// module 142 J). The line gives 102 / 0.9 = 113.33 J and gets 36 J back, 77.33 J from the supply: the DC side's net
+    /// 60 J, the bleeder's 2 J and the loss (1 / 0.9 - 1) 102 + (1 - 0.9) 40 = 15.33 J. Without the DC link simulated the
+    /// net 60 J alone.
     #[test]
     fn the_supply_energy_has_the_line_modules_loss() {
         let cfg = Config::parse(
-            "[effects]
+            "format_version = 1
+[effects]
+dc_link = true
 regenerative_supply = true
 [ratings]
 line_module_efficiency = 0.9
@@ -4636,11 +4654,14 @@ line_module_efficiency = 0.9
             energy_in: 100.0,
             energy_regenerated: 40.0,
             mains_energy: 36.0,
-            line_module_energy: 140.0,
+            line_module_energy: 142.0,
+            discharge_energy: 2.0,
             ..MotorLoad::default()
         };
         let load = CycleLoad { motors: vec![motor], ..CycleLoad::default() };
-        assert!((supply_energy(&cfg, &load) - (100.0 / 0.9 - 36.0)).abs() < 1e-9);
+        assert!((supply_energy(&cfg, &load) - (102.0 / 0.9 - 36.0)).abs() < 1e-9, "{}", supply_energy(&cfg, &load));
+        let off = Config::parse("format_version = 1\n[effects]\ndc_link = false\n").unwrap();
+        assert!((supply_energy(&off, &load) - 60.0).abs() < 1e-12);
     }
 
     /// The refinement finds a sharp resonance that the 60 points of the loop measurement miss. Two masses on a spring,
@@ -4986,7 +5007,8 @@ line_module_efficiency = 0.9
         };
         assert!((output_rpm(&cfg, &motor("a")) - 100.0).abs() < 1e-9);
         assert!((output_rpm(&cfg, &motor("b")) - 50.0).abs() < 1e-9);
-        let (a, b) = (pulley_bearing_life_h(&cfg, &motor("a")).unwrap(), pulley_bearing_life_h(&cfg, &motor("b")).unwrap());
+        let (a, b) =
+            (pulley_bearing_life_h(&cfg, &motor("a")).unwrap(), pulley_bearing_life_h(&cfg, &motor("b")).unwrap());
         assert!((a / 468696.16 - 1.0).abs() < 1e-5 && (b / a - 2.0).abs() < 1e-9, "{a} and {b}");
     }
 

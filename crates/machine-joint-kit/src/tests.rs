@@ -382,24 +382,24 @@ fn the_gearbox_and_the_rack_carry_the_rack_losses() {
     near(teeth, force / 0.97, 1e-3, "feed force");
 }
 
-/// A screw joint of an arm is coupled to its motor: another ratio is refused. A gearbox life is not refused for joints
-/// of other ratios: the analysis reads each motor's own `gearbox.ratio`.
+/// A screw joint of an arm is coupled to its motor: another ratio is refused. The gearbox lives take each motor's own
+/// `gearbox.ratio`: a config that rates them (`ratings.gearbox_reference_speed_rpm`) is taken where every joint's gearbox
+/// table says the arm's ratio (the shipped arm: 120 and 80), and refused where the arm turns joints 4 to 6 through 120
+/// (`arm.gear_ratios`) while their tables say 80; without the rating the arm is taken either way.
 #[test]
 fn an_arm_refuses_what_it_cannot_size() {
     let mut cfg = SCARA.config();
     cfg.set_text("arm.gear_ratios = [100.0, 80.0, 2.0, 50.0]").unwrap();
     assert!((SCARA.build)(&cfg).is_err());
-    let mut cfg = Config::parse(&URDF_ARM.default_config.replace(
-        "[ratings]
-",
-        "[ratings]
-gearbox_reference_speed_rpm = 400.0
-",
-    ))
-    .unwrap();
-    assert!((URDF_ARM.build)(&cfg).is_ok());
-    cfg.set_text("arm.gear_ratios = [120.0, 120.0, 120.0, 120.0, 120.0, 120.0]").unwrap();
-    assert!((URDF_ARM.build)(&cfg).is_ok());
+    let all_120 = "arm.gear_ratios = [120.0, 120.0, 120.0, 120.0, 120.0, 120.0]";
+    let mut unrated = URDF_ARM.config();
+    unrated.set_text(all_120).unwrap();
+    assert!((URDF_ARM.build)(&unrated).is_ok());
+    let rated = URDF_ARM.default_config.replace("[ratings]\n", "[ratings]\ngearbox_reference_speed_rpm = 400.0\n");
+    let mut cfg = Config::parse(&rated).unwrap();
+    assert!(cfg.get("ratings.gearbox_reference_speed_rpm").is_ok() && (URDF_ARM.build)(&cfg).is_ok());
+    cfg.set_text(all_120).unwrap();
+    assert!((URDF_ARM.build)(&cfg).is_err());
 }
 
 /// The mass matrix from the bodies' Jacobians is Newton-Euler's, one unit acceleration at a time, to rounding: on

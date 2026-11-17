@@ -384,7 +384,7 @@ pub struct ThermalNodes {
 }
 
 /// Resistance of copper rises by this share per kelvin.
-const COPPER: f64 = 0.0039;
+pub(crate) const COPPER: f64 = 0.0039;
 
 /// Winding voltage per DC link voltage, sqrt(3/2): see the module comment.
 pub const WINDING_PER_DC_LINK: f64 = 1.224_744_871_391_589;
@@ -1094,15 +1094,20 @@ impl DriveParams {
 }
 
 /// The printed S1 curve of a config (`motor.s1_curve_speed_rad_s`, `motor.s1_curve_torque_nm`): the same number of points
-/// each, at least two, speeds rising from 0 or above, torques not negative. Empty where the config has neither key.
+/// each, at least two, finite, speeds rising from 0 or above, torques not negative. Empty where the config has neither
+/// key or both empty: the straight line.
 pub fn s1_curve_of(cfg: &Config) -> Result<Vec<[f64; 2]>> {
     let (sk, tk) = ("motor.s1_curve_speed_rad_s", "motor.s1_curve_torque_nm");
     if cfg.get(sk).is_err() && cfg.get(tk).is_err() {
         return Ok(Vec::new());
     }
     let (speeds, torques) = (cfg.f64s(sk)?, cfg.f64s(tk)?);
+    if speeds.is_empty() && torques.is_empty() {
+        return Ok(Vec::new());
+    }
     if speeds.len() != torques.len()
         || speeds.len() < 2
+        || speeds.iter().chain(&torques).any(|x| !x.is_finite())
         || speeds[0] < 0.0
         || speeds.windows(2).any(|w| w[1] <= w[0])
         || torques.iter().any(|t| *t < 0.0)
@@ -3078,18 +3083,39 @@ pub(crate) mod tests {
         assert_eq!(d.emf_loss, 0.0);
     }
 
-    /// The S1 line from the static torque (the stall current's, 1.8 N m here) to the rated torque at the rated speed:
-    /// at the rated speed 314 rad/s the rated 1.27 N m, halfway 1.535 N m, and flat at the rated torque without a static one.
-    /// The printed S1 curve (0, 2.0), (100, 1.5), (300, 0.5): linear between its points, the first torque below the first
-    /// speed, the last beyond the last, the same both ways: at 200 rad/s 1.5 - 0.5 * 100 / 200 = 1.0 N m.
+    /// The printed S1 curve (0, 2.0), (100, 1.5), (300, 0.5): linear between its points, the last beyond the last, the
+    /// same both ways: at 200 rad/s 1.5 - 0.5 * 100 / 200 = 1.0 N m; one starting at 50 rad/s holds its first torque below.
+    /// The config's arrays are read so (`s1_curve_of`), become the drive's `s1_torque`; empty ones are the straight line,
+    /// and arrays of different lengths, falling speeds or a negative torque are refused.
     #[test]
     fn the_printed_s1_curve_is_read_linearly() {
         let c = [[0.0, 2.0], [100.0, 1.5], [300.0, 0.5]];
         assert_eq!(s1_interpolated(&c, 0.0), 2.0);
         assert!((s1_interpolated(&c, -200.0) - 1.0).abs() < 1e-12);
         assert_eq!(s1_interpolated(&c, 400.0), 0.5);
+        assert_eq!(s1_interpolated(&[[50.0, 2.0], [100.0, 1.0]], 20.0), 2.0);
+        let read = |speeds: &str, torques: &str| {
+            s1_curve_of(
+                &Config::parse(&format!(
+                    "format_version = 1\n[motor]\ns1_curve_speed_rad_s = {speeds}\ns1_curve_torque_nm = {torques}\n"
+                ))
+                .unwrap(),
+            )
+        };
+        let curve = read("[0.0, 100.0, 300.0]", "[2.0, 1.5, 0.5]").unwrap();
+        let p = DriveParams { s1_curve: curve, static_torque: 1.8, ..params() };
+        assert!((p.s1_torque(-200.0) - 1.0).abs() < 1e-12 && p.s1_torque(0.0) == 2.0);
+        assert!(read("[]", "[]").unwrap().is_empty());
+        assert!(s1_curve_of(&Config::parse("format_version = 1\n").unwrap()).unwrap().is_empty());
+        for (speeds, torques) in
+            [("[0.0, 100.0]", "[2.0]"), ("[100.0, 50.0]", "[2.0, 1.0]"), ("[0.0, 1.0]", "[1.0, -1.0]")]
+        {
+            assert!(read(speeds, torques).is_err(), "{speeds} {torques}");
+        }
     }
 
+    /// The S1 line from the static torque (the stall current's, 1.8 N m here) to the rated torque at the rated speed:
+    /// at the rated speed 314 rad/s the rated 1.27 N m, halfway 1.535 N m, and flat at the rated torque without a static one.
     #[test]
     fn the_s1_torque_runs_from_the_static_torque_to_the_rated_one() {
         let p = DriveParams { static_torque: 1.8, ..params() };

@@ -1274,7 +1274,8 @@ fn the_optimiser_at_the_worst_corner_steps_back_to_a_setting_that_passes_there()
 /// loss on the way (4 Ohm * (0.0245 N m s^2/m * 1 m/s^2 / 0.45 N m/A)^2 = 0.012 W over the 0.9 s of a stop: 0.01 J). So
 /// the lower acceleration gives back 2 * 1.2026 = 2.405 J less per cycle, within 2 %. With the DC link at 4.7 uF the
 /// braking resistor burns all but 0.062 J of each stop, which the supply gives again at the next start: the energy from
-/// the supply falls by as much, within 3 % (the copper loss of the starts falls too, some 0.03 J).
+/// the supply falls by as much over the rectifier's efficiency 0.98 (it draws 1 / 0.98 from the line for each joule it
+/// puts into the DC link), within 3 % (the copper loss of the starts falls too, some 0.03 J).
 #[test]
 fn a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_supply() {
     use sim_components::analysis::supply_energy;
@@ -1312,9 +1313,65 @@ fn a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_s
         back_fast - back_slow
     );
     assert!(
-        ((supply_fast - supply_slow) / less - 1.0).abs() < 0.03,
-        "{supply_fast} J and {supply_slow} J from the supply, by hand {less} J less"
+        ((supply_fast - supply_slow) / (less / 0.98) - 1.0).abs() < 0.03,
+        "{supply_fast} J and {supply_slow} J from the supply, by hand {} J less",
+        less / 0.98
     );
+}
+
+/// With effects.thermal_warm_start a path's passes after the first start from the machine's start state, with the
+/// winding at the rise the pass before settled it at (a winding's settled rise depends on its current alone, so the second
+/// pass starts at the cold pass's settled rise and the warm start ends there). That pass is the one a fresh machine runs
+/// whose winding is put at that rise once its drives hold it at rest: the same figures to the bit, as nothing of the
+/// first pass (the carriage's ringing, the loops' integrators) carries over. A machine whose winding starts at that rise
+/// by its config (`motor.start_temperature_rise_k`) differs by 5e-8 of the RMS torque: its current loop held the load
+/// with the warm winding's resistance from the start.
+#[test]
+fn a_warm_path_pass_starts_from_the_machines_start_state() {
+    use sim_components::analysis::{CycleLoad, analyse_trajectory};
+    let cfg = ENTRY.config();
+    assert!(cfg.bool("effects.thermal_warm_start").unwrap() && cfg.bool("effects.winding_heating").unwrap());
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    let (mut tool, mut speed) = (vec![0.0], vec![0.0]);
+    sim.machine.tool_state(&sim.state, &mut tool, &mut speed);
+    let path = vec![(0.0, tool.clone()), (0.4, vec![tool[0] + 0.3]), (0.8, tool.clone())];
+    let warm = analyse_trajectory(&mut sim, path.clone()).unwrap();
+    assert_eq!(warm.warm_start.as_ref().map(|w| w.passes), Some(1), "{:?}", warm.warm_start);
+    let mut cold = cfg.clone();
+    cold.set_text("effects.thermal_warm_start = false").unwrap();
+    let rise = analyse_trajectory(&mut Sim::new(&ENTRY, &cold).unwrap(), path.clone()).unwrap().motors[0].winding_rise;
+    let mut fresh = Sim::new(&ENTRY, &cold).unwrap();
+    fresh.control.drives[0].temperature_rise = rise;
+    let second = analyse_trajectory(&mut fresh, path.clone()).unwrap();
+    let figures =
+        |l: &CycleLoad| (l.motors[0].rms_torque, l.motors[0].winding_rise, l.tracking_error_peak, l.path_error_peak);
+    assert_eq!(figures(&warm), figures(&second));
+}
+
+/// The energy from the supply (`supply_energy`, from the drives' sums) against the DC link's own books (the energy
+/// budget): what the rectifier or line module drew from the line, less what the mains got back and what the capacitors
+/// hold more at the end. With the DC link and the regenerative supply (efficiency 0.98 both ways, the line module's loss
+/// counted on both) and with the DC link alone (the rectifier's loss on what it draws).
+#[test]
+fn the_supply_energy_closes_with_the_dc_links_books() {
+    use sim_components::analysis::supply_energy;
+    for regenerative in [true, false] {
+        let mut cfg = ideal_rigid();
+        for e in [
+            "effects.dc_link = true".to_string(),
+            format!("effects.regenerative_supply = {regenerative}"),
+            "ratings.dc_link_capacitance_uf = 4.7".into(),
+        ] {
+            cfg.set_text(&e).unwrap();
+        }
+        let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
+        let budget = load.budget.as_ref().unwrap();
+        let row = |id: &str| budget.rows.iter().filter(|r| r.id == id).map(|r| r.energy).sum::<f64>();
+        let books = budget.supply - row("mains") - row("capacitors");
+        let ours = supply_energy(&cfg, &load);
+        assert!(row("line_module") > 0.0 && (row("mains") > 0.0) == regenerative, "{:?}", budget.rows);
+        assert!((ours - books).abs() < 1e-6 * books.abs(), "{regenerative}: {ours} J against the books' {books} J");
+    }
 }
 
 /// The front of `sim-cli optimise --pareto` on the default config: the settings of the search that pass, and the

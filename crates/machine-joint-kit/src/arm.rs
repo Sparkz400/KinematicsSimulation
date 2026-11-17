@@ -440,6 +440,21 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let owns: Vec<Config> = (0..n).map(|k| motor_config(cfg, MOTOR_IDS[k])).collect::<Result<_, _>>()?;
     let rack = if cfg.get("rack").is_ok() { Some(RackPinion::from_config(cfg)?) } else { None };
     let screw = if rack.is_none() && prismatic.iter().any(|p| *p) { Some(BallScrew::from_config(cfg)?) } else { None };
+    // The gearbox lives take a motor's speed through its own `gearbox.ratio` (`analysis::output_rpm`, the motor's table
+    // over the shared one), the arm its joint's `arm.gear_ratios`: where a joint with a gearbox (not a screw's coupling)
+    // has another, a config that rates those lives is refused, as they would be worked out at another output speed.
+    let rates_life = |own: &Config| {
+        ["ratings.gearbox_reference_speed_rpm", "ratings.gearbox_gearing_wohler_exponent"]
+            .iter()
+            .any(|k| own.get(k).is_ok())
+    };
+    if (0..n).any(|k| {
+        !(prismatic[k] && screw.is_some())
+            && rates_life(&owns[k])
+            && owns[k].f64("gearbox.ratio").ok() != Some(ratios[k])
+    }) {
+        return Err(ConfigError::Invalid("arm.gear_ratios (each joint's gearbox.<id>.ratio)".into()));
+    }
     let mut racks = vec![None; n];
     let track = if cfg.get("track").is_ok() {
         // The guide loads take the first joint's frame as the carriage's: x along the rails, its origin between the
