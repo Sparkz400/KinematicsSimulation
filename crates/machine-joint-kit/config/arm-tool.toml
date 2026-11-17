@@ -554,14 +554,17 @@ velocity_kp_nm_s_rad = 0.05
 velocity_kp_nm_s_rad = 0.05
 
 [gearbox.4]
+ratio = 80.0
 stiffness_nm_rad = 25000.0
 inertia_at_input_kgm2 = 4.1e-5
 
 [gearbox.5]
+ratio = 80.0
 stiffness_nm_rad = 25000.0
 inertia_at_input_kgm2 = 4.1e-5
 
 [gearbox.6]
+ratio = 80.0
 stiffness_nm_rad = 25000.0
 inertia_at_input_kgm2 = 4.1e-5
 

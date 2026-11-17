@@ -325,6 +325,7 @@ velocity_kp_nm_s_rad = 0.35
 velocity_kp_nm_s_rad = 0.05
 
 [gearbox.4]
+ratio = 50.0
 stiffness_nm_rad = 31000.0
 inertia_at_input_kgm2 = 4.1e-5
 damping_nm_s_rad = 10.0

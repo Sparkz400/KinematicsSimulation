@@ -69,8 +69,13 @@ pub struct Arm {
     coupling: Option<Vec<Vec<f64>>>,
     /// Per motor joint: motor radians per joint unit.
     ratios: Vec<f64>,
-    /// Per motor joint: its rotor's inertia (kg m^2, with the gearbox's at its input), which spins at `ratios` times the
-    /// joint's speed (`guide_load`'s gyroscopic moment).
+    /// Per motor joint: its rotors' angular momentum along `rotor_axis` per motor radian per second (kg m^2): the motor's
+    /// rotor and the gearbox's input at the motor's speed, a rack's pinion at 1 / i of it (J_p / i, where the joint's
+    /// inertia has it reflected, J_p / i^2), negative behind a strain wave gear, whose output turns against its input
+    /// (circular spline fixed, flexspline output). `guide_load`'s gyroscopic moment and `frame_momentum`.
+    spinning: Vec<f64>,
+    /// Per motor joint: its rotor inertia as the joint has it (motor, gearbox input, a converter reflected), which
+    /// `frame_momentum`'s rotor spin is the motor's speed times.
     rotor_inertia: Vec<f64>,
     /// Per motor joint: whether it is a prismatic one.
     prismatic: Vec<bool>,
@@ -509,6 +514,16 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         attached: true,
         coupling,
         ratios: joints.iter().map(|(j, ..)| j.ratio()).collect(),
+        spinning: joints
+            .iter()
+            .enumerate()
+            .map(|(k, (j, ..))| {
+                let pinion = racks[k]
+                    .as_ref()
+                    .map_or(0.0, |(r, ..)| r.pinion_inertia * (1.0 / ratios[k] - 1.0 / ratios[k].powi(2)));
+                (j.rotor_inertia + pinion) * if strain_waves[k].is_some() { -1.0 } else { 1.0 }
+            })
+            .collect(),
         rotor_inertia: joints.iter().map(|(j, ..)| j.rotor_inertia).collect(),
         prismatic,
         screw,
@@ -692,12 +707,14 @@ impl Arm {
         (p, gravity, mass)
     }
 
-    /// The unit axis motor joint `k`'s rotor spins about in the base frame, for the bodies `bodies`: its joint's axis, a
-    /// rack's motor standing upright on the carriage, its pinion turning about the vertical against the rack on the side
-    /// of the rails.
+    /// The unit axis motor joint `k`'s rotor spins about in the base frame, for the bodies `bodies`, positive where the
+    /// joint moves forward: its joint's axis; a rack's motor standing upright on the carriage, its pinion turning about
+    /// the vertical against the rack on the side s of the rails (`track.rack_side`): the pinion's teeth on that side
+    /// stand still against the rack, v + w z x (s r y) = 0, so w = s v / r about z.
     fn rotor_axis(&self, bodies: &[BodyState], k: usize) -> V3 {
         let body = &bodies[self.motor_body(k)];
-        if self.racks[k].is_some() { mul(&body.rot, [0.0, 0.0, 1.0]) } else { body.axis }
+        let side = self.track.map_or(1.0, |t| t.2);
+        if self.racks[k].is_some() { mul(&body.rot, [0.0, 0.0, side]) } else { body.axis }
     }
 
     /// The URDF joint (body) whose axis motor joint `k`'s motor turns about: the first it moves.
@@ -724,7 +741,7 @@ impl Arm {
     /// blocks' F_y is the chain's plus s of it; the rack's push F_x, at y = s l, turns the carriage by -s l F_x about z,
     /// which the blocks carry as M_z + s l F_x (F_x the chain's reaction along the rails, the drive's).
     /// The motors' rotors are part of what the carriage carries: each spins at its ratio times its joint's speed about
-    /// its axis (`rotor_axis`), its angular momentum J r q' along that axis is in H_O, so that the rate of H_O has the
+    /// its axis (`rotor_axis`), its angular momentum J r q' along that axis (J the rotors' `spinning`) is in H_O, so that the rate of H_O has the
     /// gyroscopic moment (the axis turning with its body) and the reaction of the rotor's own acceleration. The load is
     /// on the four blocks `[track]` describes (`GUIDE_CARRIAGES`), the first joint's carriage being the only guided one.
     fn guide_load(&self, q: &[f64], qd: &[f64], qdd: &[f64]) -> f64 {
@@ -737,7 +754,7 @@ impl Arm {
             let (p, mut h) = chain.momentum(&q, &qm, self.extra());
             let bodies = chain.body_states(&q, &qm, self.extra());
             for k in 0..self.ratios.len() {
-                h = add(h, self.rotor_axis(&bodies, k).map(|a| a * self.rotor_inertia[k] * self.ratios[k] * qd[k]));
+                h = add(h, self.rotor_axis(&bodies, k).map(|a| a * self.spinning[k] * self.ratios[k] * qd[k]));
             }
             (p, h)
         };
@@ -783,7 +800,8 @@ impl Arm {
 
 impl Mechanism for Arm {
     /// The bodies' (`Chain::momentum` of the chain the dynamics are of, the payload with the last or on the swing) and
-    /// each motor's rotor spinning about the axis of the joint it turns (`motor_body`).
+    /// each motor's rotor spinning about the axis of the joint it turns (`motor_body`, `rotor_axis`), its momentum the
+    /// rotors' `spinning` at the motor's speed.
     fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
         let ((chain, q), (_, qd)) = (self.loaded(q), self.loaded(qd));
         let (linear, mut angular) = chain.momentum(&q, &qd, self.extra());
@@ -795,7 +813,7 @@ impl Mechanism for Arm {
         }
         for (k, spin) in rotor_spin.iter().enumerate() {
             let axis = self.rotor_axis(&bodies, k);
-            angular = add(angular, axis.map(|a| a * spin));
+            angular = add(angular, axis.map(|a| a * spin * self.spinning[k] / self.rotor_inertia[k]));
         }
         Some(sim_core::FrameMomentum {
             linear,

@@ -540,7 +540,16 @@ velocity_kp_nm_s_rad = 0.04
 [drive.4]
 velocity_kp_nm_s_rad = 0.04
 
+# The joints' ratios where they are not the shared [gearbox]'s, as arm.gear_ratios has them (the gearbox
+# life, its drag and the drives' tuning read the gearbox's own; a screw sits on its motor without one).
+[gearbox.2]
+ratio = 80.0
+
+[gearbox.3]
+ratio = 1.0
+
 [gearbox.4]
+ratio = 50.0
 stiffness_nm_rad = 7000.0
 inertia_at_input_kgm2 = 3.3e-6
 
