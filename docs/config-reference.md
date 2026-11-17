@@ -1128,10 +1128,13 @@ legs' friction bounded):
 | `leg.friction_coulomb_n`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | N, N s/m, m/s | The rod's guide and seal (`effects.joint_friction`), plus the nut's preload drag | 20, 60, 0.002 |
 | `leg.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | Buffers at the stroke's ends (`effects.hard_stops`) | 2e6, 2000 |
 | `leg.mass_kg` | kg | A leg: body, motor, rod and nut | 4 |
-| `leg.platform_share` | – | The share of it that moves with the platform joint; the rest sits still at the base | 0.3 |
+| `leg.platform_share` | – | The share of it that is the rod part on the platform joint; the rest is the body part on the base joint | 0.3 |
+| `leg.base_part_centre_m`, `leg.base_part_inertia_kgm2` | m, kg m² | The body part: its centre's distance from the base joint along the leg, its inertia about the centre across the leg (the part swings with the leg). Absent 0: no swing | 0.1, 0.058, estimates |
+| `leg.platform_part_centre_m`, `leg.platform_part_inertia_kgm2` | m, kg m² | The rod part: its centre's distance from the platform joint towards the base, its inertia about the centre across the leg. Absent 0: a point at the joint | 0.17, 0.012, estimates |
 | `mass.platform_kg` | kg | The platform | 25 |
-| `mass.platform_inertia_kgm2` | kg m² | Its inertia about its centre, x, y, z (the legs' shares are added) | 0.4, 0.4, 0.7 |
-| `mass.payload_kg` | kg | Payload, a point mass at the centre (`effects.payload`) | 30 |
+| `mass.platform_inertia_kgm2` | kg m² | Its inertia about its centre, x, y, z (the legs' parts are separate bodies) | 0.4, 0.4, 0.7 |
+| `mass.payload_kg` | kg | Payload at the centre (`effects.payload`) | 30 |
+| `mass.payload_inertia_kgm2` | kg m² | Optional: the payload's inertia about the platform centre, x, y, z (platform frame; turns with the platform). Absent 0: a point mass | – |
 | `workspace.tool_min`, `tool_max` | m, rad | The tool's box, the axes' ranges | −0.06, −0.06, 0.44, −0.08, −0.08, −0.12 to 0.06, 0.06, 0.54, 0.08, 0.08, 0.12 |
 | `workspace.max_joint_angle_deg` | ° | Steepest leg against the base's or the platform's normal; beyond: `error-hexapod-joint-angle` | 40 |
 | `workspace.max_condition_number` | – | Of the Jacobian, turns weighed by the platform radius; beyond: `error-hexapod-singularity` | 20 |
@@ -1157,9 +1160,11 @@ estimates; the masses, the legs' friction and force bounded):
 | `leg.closed_length_m`, `stroke_m` | m | A leg retracted, joint to joint; its stroke (the joint's range, its stops) | 0.45, 0.2 |
 | `leg.friction_coulomb_n`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | N, N s/m, m/s | The rod's guide and seal (`effects.joint_friction`), plus the nut's preload drag | 15, 40, 0.002 |
 | `leg.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | Buffers at the stroke's ends (`effects.hard_stops`) | 2e6, 2000 |
-| `leg.mass_kg`, `platform_share` | kg, – | A leg: body, motor, rod and nut; the share that moves with the platform joint | 3, 0.3 |
+| `leg.mass_kg`, `platform_share` | kg, – | A leg: body, motor, rod and nut; the share that is the rod part on the platform joint (the rest is the body part on the base joint) | 3, 0.3 |
+| `leg.base_part_centre_m`, `leg.base_part_inertia_kgm2` | m, kg m² | The body part: its centre's distance from the base joint along the leg, its inertia about the centre across the leg (the part swings with the leg). Absent 0: no swing | 0.1, 0.044, estimates |
+| `leg.platform_part_centre_m`, `leg.platform_part_inertia_kgm2` | m, kg m² | The rod part: its centre's distance from the platform joint towards the base, its inertia about the centre across the leg. Absent 0: a point at the joint | 0.17, 0.0092, estimates |
 | `leg.max_force_n` | N | The feed force the cylinder allows; judged by `tripod-leg-force` | 1500 |
-| `mass.platform_kg`, `platform_inertia_kgm2` | kg, kg m² | The platform; its inertia about its centre, x, y, z (the legs' shares are added) | 20; 0.35, 0.35, 0.65 |
+| `mass.platform_kg`, `platform_inertia_kgm2` | kg, kg m² | The platform; its inertia about its centre, x, y, z (the legs' parts are separate bodies) | 20; 0.35, 0.35, 0.65 |
 | `mass.payload_kg` | kg | Payload (`effects.payload`) | 40 |
 | `mass.payload_offset_m` | m | Its centre in the platform frame, from the platform centre | 0.05, 0, 0.1 |
 | `mass.payload_inertia_kgm2` | kg m² | Its inertia about its centre, x, y, z (platform frame) | 0.6, 0.6, 0.6 |
@@ -1202,6 +1207,7 @@ this ratio). Its own keys (all estimates; the masses bounded):
 | `workspace.min_dead_centre_margin_deg` | ° | Least angle of a crank from its dead centre; nearer: `error-rss-dead-centre` | 10 |
 | `workspace.crank_joint_max_angle_deg`, `platform_joint_max_angle_deg` | ° | The ball joints' limits: the rod out of the crank's plane, against the platform's normal; beyond: `error-rss-ball-joint`; also the verdicts' limits | 35, 40 |
 | `workspace.min_rod_clearance_m` | m | Least distance between two rods' axes; nearer: `error-rss-rods-cross` | 0.03 |
+| `workspace.min_body_clearance_m` | m | Least distance of a rod's axis from the platform's and the base's hexagon edges (the edges at its own joints apart); nearer: `error-rss-rods-cross-body`; absent 0 (no check) | 0.02, estimate |
 | `workspace.max_condition_number` | – | Of the inverse Jacobian, turns weighed by the platform radius; beyond: `error-rss-singularity` | 30 |
 | `ratings.crank_dead_centre_margin_deg` | ° | Verdict `crank-dead-centre`: the rod's angle from the crank's tangent at most 90° less this | 20 |
 | `ratings.rod_buckling_safety_factor` | – | Verdict `rod-buckling`: the rod's compression at most its Euler load over this | 3 |

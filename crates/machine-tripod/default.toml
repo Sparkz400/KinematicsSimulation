@@ -192,8 +192,11 @@ platform_radius_m = 0.2
 
 # [estimate] Each electric cylinder: joint to joint 450 mm retracted, 200 mm stroke; its rod's guide and seal; rubber
 # buffers at the stroke's ends; the feed force its maker allows (an electric cylinder of this screw size). Its moving
-# parts (rod, nut) and its body with the motor weigh mass_kg together, of which platform_share moves with the platform
-# joint; the rest sits at the base joint.
+# parts (rod, nut) and its body with the motor weigh mass_kg together, of which platform_share is the rod part on the
+# platform joint; the rest is the body part on the base joint. Each part is a body of its own, swinging with the leg: its
+# centre's distance from its joint along the leg (*_part_centre_m) and its inertia about its centre across the leg
+# (*_part_inertia_kgm2, a bar: m l^2 / 12). [estimate] The rod part a bar of 0.35 m (centre 0.17 m), the body part with
+# the motor 0.5 m long from 0.15 m behind the base joint (centre 0.1 m).
 [leg]
 closed_length_m = 0.45
 stroke_m = 0.2
@@ -204,6 +207,10 @@ stop_stiffness_n_m = 2.0e6
 stop_damping_n_s_m = 2000.0
 mass_kg = 3.0
 platform_share = 0.3
+base_part_centre_m = 0.1
+base_part_inertia_kgm2 = 0.044
+platform_part_centre_m = 0.17
+platform_part_inertia_kgm2 = 0.0092
 max_force_n = 1500.0
 
 # [estimate] A welded aluminium table of 500 mm across, its inertia about its centre (x, y, z, platform frame); the

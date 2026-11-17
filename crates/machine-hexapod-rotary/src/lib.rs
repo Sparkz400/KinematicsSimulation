@@ -45,8 +45,12 @@
 //!
 //! The force along each rod (`rod_forces`, compression positive) follows from the platform: A^T f = W plus the rods'
 //! upper ends, the rod's own mass carried by its nodes (its upper sixth and half its middle at the platform joint).
-//! shortcut: the rods' spin about their own axes (free between two ball joints) is left out, as is the ball joints'
-//! friction; parts that cross are checked only for the rods among each other.
+//! The rods' spin about their own axes is free between two ball joints and nothing excites it, so it is not a state;
+//! the ball joints' friction has no published data and is left out.
+//!
+//! Parts that cross are checked among the rods (`workspace.min_rod_clearance_m`, axis to axis) and each rod against the
+//! platform's and the base's hexagon edges, the edges at its own two joints apart (`workspace.min_body_clearance_m`,
+//! axis to edge line; the rod's radius and the plate's half thickness make it).
 
 use sim_components::chain::{
     JOINT_KEYS, JointMachine, JointSpec, MOTOR_IDS, MOTOR_KEYS, Mechanism, condition_number, solve,
@@ -235,6 +239,8 @@ pub struct Geometry {
     pub max_crank_joint: f64,
     pub max_platform_joint: f64,
     pub min_clearance: f64,
+    /// The least distance of a rod's axis from the platform's and the base's hexagon edges (m).
+    pub min_body_clearance: f64,
     pub max_condition: f64,
     /// The pose Newton's forward kinematics starts from: the centre of the tool's box.
     pub home: [f64; 6],
@@ -281,6 +287,7 @@ impl Geometry {
             max_crank_joint: FRAC_PI_2,
             max_platform_joint: PI,
             min_clearance: 0.0,
+            min_body_clearance: 0.0,
             max_condition: f64::INFINITY,
             home: [0.0; 6],
             home_q: [0.0; 6],
@@ -468,6 +475,22 @@ impl Geometry {
         }
         least
     }
+
+    /// The least distance of a rod's axis from the platform's hexagon (its joints in order) and the base's (the crank
+    /// axes' centres in order): the edges that end at the rod's own platform joint, and at its own crank axis, apart.
+    pub fn body_clearance(&self, legs: &[Leg; 6]) -> f64 {
+        let mut least = f64::INFINITY;
+        for i in 0..6 {
+            for j in 0..6 {
+                let k = (j + 1) % 6;
+                if i != j && i != k {
+                    least = least.min(segment_distance(legs[i].tip, legs[i].joint, legs[j].joint, legs[k].joint));
+                    least = least.min(segment_distance(legs[i].tip, legs[i].joint, self.base[j], self.base[k]));
+                }
+            }
+        }
+        least
+    }
 }
 
 /// The platform with what it carries, as one rigid body in the platform frame: mass, first moment (kg m) and inertia
@@ -603,6 +626,10 @@ impl RotaryPlatform {
         geo.max_crank_joint = cfg.positive("workspace.crank_joint_max_angle_deg")?.to_radians();
         geo.max_platform_joint = cfg.positive("workspace.platform_joint_max_angle_deg")?.to_radians();
         geo.min_clearance = cfg.non_negative("workspace.min_rod_clearance_m")?;
+        geo.min_body_clearance = cfg.f64("workspace.min_body_clearance_m").unwrap_or(0.0);
+        if !(geo.min_body_clearance >= 0.0) {
+            return Err(ConfigError::Invalid("workspace.min_body_clearance_m".into()));
+        }
         geo.max_condition = cfg.positive("workspace.max_condition_number")?;
         let (min, max) = (cfg.f64s("workspace.tool_min")?, cfg.f64s("workspace.tool_max")?);
         if min.len() != 6 || max.len() != 6 {
@@ -934,7 +961,7 @@ impl Mechanism for RotaryPlatform {
         self.geo.inverse(tool, q)
     }
     /// Out of reach is told by the joint machine (`inverse`); here a crank too near its dead centre, a ball joint
-    /// beyond its angle, two rods too near each other, the kinematics near a singularity.
+    /// beyond its angle, two rods too near each other or a rod too near the platform's or the base's edge, the kinematics near a singularity.
     fn unreachable(&self, tool: &[f64], _slack: f64) -> Option<&'static str> {
         let legs = self.geo.legs(tool)?;
         let angles = self.geo.angles(&legs, &Geometry::rotation(tool));
@@ -946,6 +973,9 @@ impl Mechanism for RotaryPlatform {
         }
         if !(Geometry::clearance(&legs) >= self.geo.min_clearance) {
             return Some("error-rss-rods-cross");
+        }
+        if !(self.geo.body_clearance(&legs) >= self.geo.min_body_clearance) {
+            return Some("error-rss-rods-cross-body");
         }
         if !(self.geo.condition(tool) <= self.geo.max_condition) {
             return Some("error-rss-singularity");

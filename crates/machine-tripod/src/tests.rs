@@ -10,8 +10,18 @@ fn mechanism(cfg: &Config) -> Tripod {
     Tripod::from_config(cfg).unwrap().1
 }
 
+/// The config with each leg's two parts as point masses at their joints (centre 0, no inertia of their own): the model
+/// the hand calculations below were made for.
+fn point_legs(cfg: &mut Config) {
+    for key in ["base_part_centre_m", "base_part_inertia_kgm2", "platform_part_centre_m", "platform_part_inertia_kgm2"]
+    {
+        cfg.set_text(&format!("leg.{key} = 0.0")).unwrap();
+    }
+}
+
 fn centred() -> Config {
     let mut cfg = ENTRY.config();
+    point_legs(&mut cfg);
     cfg.set_text("mass.payload_offset_m = [0.0, 0.0, 0.0]").unwrap();
     cfg.set_text("effects.torque_ripple = false").unwrap();
     cfg
@@ -171,6 +181,7 @@ fn the_legs_hold_a_centred_load_with_the_hand_calculated_forces() {
 #[test]
 fn the_legs_hold_an_offset_load_with_the_hand_calculated_forces() {
     let mut cfg = ENTRY.config();
+    point_legs(&mut cfg);
     cfg.set_text("effects.torque_ripple = false").unwrap();
     let f = mechanism(&cfg).static_leg_forces(&LEVEL).unwrap();
     for (v, want) in f.iter().zip([274.9330, 175.1991, 175.1991]) {
@@ -200,7 +211,9 @@ fn a_leg_pushes_the_hand_calculated_force_for_an_acceleration_along_z() {
 /// 0) N m s from the offset, p x m v = 0.
 #[test]
 fn the_platform_has_the_hand_calculated_momentum() {
-    let mech = mechanism(&ENTRY.config());
+    let mut cfg = ENTRY.config();
+    point_legs(&mut cfg);
+    let mech = mechanism(&cfg);
     let mut q = [0.0; 3];
     assert!(mech.geo.inverse(&LEVEL, &mut q));
     let qd = [0.1 * 0.983282; 3];
@@ -220,6 +233,7 @@ fn the_platform_has_the_hand_calculated_momentum() {
 #[test]
 fn the_new_verdicts_have_the_hand_calculated_values_and_limits() {
     let mut cfg = ENTRY.config();
+    point_legs(&mut cfg);
     cfg.set_text("effects.torque_ripple = false").unwrap();
     let machine = (ENTRY.build)(&cfg).unwrap();
     let mut values = Vec::new();
@@ -264,5 +278,73 @@ fn the_default_cycle_passes_its_verdicts() {
     for v in sim_components::analysis::verdicts(&cfg, &load).unwrap() {
         println!("{} {:?} {} / {}", v.check, v.motor, v.value, v.limit);
         assert!(v.ok, "{} of motor {:?} is {} against {}", v.check, v.motor, v.value, v.limit);
+    }
+}
+
+/// The legs' two parts as bodies of their own, lifting the platform level (all legs alike, qd_i = u_z v_z, the twist
+/// (0, 0, v_z, 0, 0, 0): the constraints e_i . v = 0 hold): with s = 1 - u_z^2 = 0.0331565, L = 0.5491812 m,
+/// u' = (v - (u . v) u) / L so |u'|^2 = v_z^2 s / L^2. The base part (2.1 kg, centre 0.1 m, inertia 0.044) turns about
+/// the base joint: T = 1/2 (m c^2 + I) |u'|^2. The rod part (0.9 kg, 0.17 m, 0.0092) moves at v - c u':
+/// |.|^2 = v_z^2 (1 - 2 c s / L + c^2 s / L^2). The sum of all entries of M_q is 2 T / (u_z v_z)^2, so against the point
+/// legs of the old model it is larger by 3 (m_b c_b^2 + I_b) s / (L^2 u_z^2) = 0.0221726 and by
+/// 3 [m_p (c_p^2 s / L^2 - 2 c_p s / L) + I_p s / L^2] / u_z^2 = -0.0453137 kg: -0.0231411 kg together.
+#[test]
+fn the_legs_parts_add_the_hand_calculated_kinetic_energy() {
+    // `centred` has the parts as points; the shipped parts are the default config's.
+    let points = centred();
+    let mut shipped = ENTRY.config();
+    shipped.set_text("mass.payload_offset_m = [0.0, 0.0, 0.0]").unwrap();
+    let sum = |cfg: &Config| {
+        let mech = mechanism(cfg);
+        let mut q = [0.0; 3];
+        assert!(mech.geo.inverse(&LEVEL, &mut q));
+        let (mut m, mut b) = ([0.0; 9], [0.0; 3]);
+        Mechanism::dynamics(&mech, &q, &[0.0; 3], &mut m, &mut b);
+        m.iter().sum::<f64>()
+    };
+    let delta = sum(&shipped) - sum(&points);
+    assert!((delta + 0.0231411).abs() < 1e-6, "{delta}");
+}
+
+/// The dynamics with the legs' parts against Lagrange's equations by differences: at a pose off level and a speed,
+/// h_i = sum_jk dM_ij/dq_k qd_k qd_j - 1/2 sum_jk dM_jk/dq_i qd_j qd_k + dV/dq_i, and at rest h is the legs' holding
+/// force (`static_leg_forces`, with the parts' weights).
+#[test]
+fn the_dynamics_with_the_legs_parts_agree_with_the_lagrange_equations() {
+    let mech = mechanism(&ENTRY.config());
+    let tool = [0.56, 0.05, -0.04];
+    let mut q = [0.0; 3];
+    assert!(mech.geo.inverse(&tool, &mut q));
+    let qd = [0.08, -0.05, 0.06];
+    let eval = |q: &[f64; 3], qd: &[f64; 3]| {
+        let (mut m, mut b) = ([0.0; 9], [0.0; 3]);
+        Mechanism::dynamics(&mech, q, qd, &mut m, &mut b);
+        (m, b)
+    };
+    let (_, bias) = eval(&q, &qd);
+    let eps = 1e-5;
+    let shifted = |k: usize, sign: f64| {
+        let mut p = q;
+        p[k] += sign * eps;
+        p
+    };
+    let dm: Vec<[f64; 9]> = (0..3)
+        .map(|k| {
+            std::array::from_fn(|e| {
+                (eval(&shifted(k, 1.0), &qd).0[e] - eval(&shifted(k, -1.0), &qd).0[e]) / (2.0 * eps)
+            })
+        })
+        .collect();
+    for i in 0..3 {
+        let dv = (mech.potential(&shifted(i, 1.0)) - mech.potential(&shifted(i, -1.0))) / (2.0 * eps);
+        let rate: f64 = (0..3).map(|j| (0..3).map(|k| dm[k][i * 3 + j] * qd[k]).sum::<f64>() * qd[j]).sum();
+        let kinetic: f64 = (0..3).map(|j| (0..3).map(|k| dm[i][j * 3 + k] * qd[j] * qd[k]).sum::<f64>()).sum();
+        let h = rate - 0.5 * kinetic + dv;
+        assert!((bias[i] - h).abs() < 1e-4 * (1.0 + h.abs()), "leg {i}: {} against {h}", bias[i]);
+    }
+    let (_, rest) = eval(&q, &[0.0; 3]);
+    let hold = mech.static_leg_forces(&tool).unwrap();
+    for i in 0..3 {
+        assert!((rest[i] - hold[i]).abs() < 1e-9 * (1.0 + hold[i].abs()), "{rest:?} against {hold:?}");
     }
 }

@@ -10,6 +10,15 @@ fn mechanism(cfg: &Config) -> Hexapod {
     Hexapod::from_config(cfg).unwrap().1
 }
 
+/// The config with each leg's two parts as point masses at their joints (centre 0, no inertia of their own): the model
+/// the hand calculations below were made for.
+fn point_legs(cfg: &mut Config) {
+    for key in ["base_part_centre_m", "base_part_inertia_kgm2", "platform_part_centre_m", "platform_part_inertia_kgm2"]
+    {
+        cfg.set_text(&format!("leg.{key} = 0.0")).unwrap();
+    }
+}
+
 /// At the home pose (0, 0, 0.48 m, no turn) every leg spans the same: base joint at 0.4 m and -15 degrees, platform
 /// joint at 0.2 m and -50 degrees, 35 degrees apart. Seen from above they are d^2 = 0.4^2 + 0.2^2 - 2 0.4 0.2 cos 35 =
 /// 0.0689357 m^2 apart, so L = sqrt(0.48^2 + 0.0689357) = 0.5471158 m and the cylinder is out by L - 0.45 = 0.0971158 m.
@@ -53,6 +62,7 @@ fn the_forward_kinematics_undoes_the_inverse_at_three_poses() {
 fn the_legs_carry_the_hand_calculated_static_forces() {
     let mut cfg = ENTRY.config();
     cfg.set_text("effects.torque_ripple = false").unwrap();
+    point_legs(&mut cfg);
     let home = [0.0, 0.0, 0.48, 0.0, 0.0, 0.0];
     let f = mechanism(&cfg).static_leg_forces(&home).unwrap();
     for v in f {
@@ -101,7 +111,9 @@ fn the_default_cycle_passes_its_verdicts() {
 /// kg m^2 (the platform and its joints' share of the legs; the payload is a point at the centre): 0.1976 N m s.
 #[test]
 fn the_platform_has_the_hand_calculated_momentum() {
-    let mech = mechanism(&ENTRY.config());
+    let mut cfg = ENTRY.config();
+    point_legs(&mut cfg);
+    let mech = mechanism(&cfg);
     let home = [0.0, 0.0, 0.48, 0.0, 0.0, 0.0];
     let mut q = [0.0; 6];
     assert!(mech.geo.inverse(&home, &mut q));
@@ -113,6 +125,94 @@ fn the_platform_has_the_hand_calculated_momentum() {
         assert!((got - want).abs() < 1e-9, "{f:?}");
     }
     assert!((f.mass - 62.2).abs() < 1e-12 && (f.first_moment[2] - 62.2 * 0.48).abs() < 1e-9 && f.gravity[2] < 0.0);
+}
+
+/// A payload with an inertia of its own (`mass.payload_inertia_kgm2`) turns with the platform: the same pose and twist as
+/// above with the payload's 0.5, 0.5, 2.0 kg m^2 about the centre adds I_zz w_z = 2.0 x 0.2 = 0.4 N m s to the angular
+/// momentum about z and nothing about x and y (R = 1 at home); absent, the payload is the point mass of before.
+#[test]
+fn the_payload_inertia_adds_its_turning_momentum() {
+    let mut cfg = ENTRY.config();
+    point_legs(&mut cfg);
+    cfg.set_text("mass.payload_inertia_kgm2 = [0.5, 0.5, 2.0]").unwrap();
+    let mech = mechanism(&cfg);
+    let home = [0.0, 0.0, 0.48, 0.0, 0.0, 0.0];
+    let mut q = [0.0; 6];
+    assert!(mech.geo.inverse(&home, &mut q));
+    let j = Geometry::jacobian(&mech.geo.legs(&home));
+    let xi = [0.1, 0.0, 0.1, 0.0, 0.0, 0.2];
+    let qd: Vec<f64> = (0..6).map(|r| (0..6).map(|c| j[r * 6 + c] * xi[c]).sum()).collect();
+    let f = sim_components::chain::Mechanism::frame_momentum(&mech, &q, &qd, &[0.0; 6]).unwrap();
+    for (got, want) in f.angular.iter().zip([0.0, 2.9856, 0.5976]) {
+        assert!((got - want).abs() < 1e-9, "{f:?}");
+    }
+}
+
+/// The legs' two parts as bodies of their own, lifting the platform at home (all legs alike, qd_i = u_z v_z, the twist
+/// (0, 0, v_z, 0, ...)): with s = 1 - u_z^2 = 0.2302955, L = 0.5471158 m, u' = (v - (u . v) u) / L so |u'|^2 = v_z^2 s / L^2.
+/// The base part (2.8 kg, centre 0.1 m, inertia 0.058) turns about the base joint: T = 1/2 (m c^2 + I) |u'|^2. The rod
+/// part (1.2 kg, 0.17 m, 0.012) moves at v - c u': |.|^2 = v_z^2 (1 - 2 c s / L + c^2 s / L^2). The sum of all entries
+/// of M_q is 2 T / (u_z v_z)^2, so against the point legs of the old model it is larger by
+/// 6 (m_b c_b^2 + I_b) s / (L^2 u_z^2) = 0.5157661 and by 6 [m_p (c_p^2 s / L^2 - 2 c_p s / L) + I_p s / L^2] / u_z^2 =
+/// -1.0587792 kg (the rod part's mass sits nearer the base than the joint): -0.5430131 kg together.
+#[test]
+fn the_legs_parts_add_the_hand_calculated_kinetic_energy() {
+    let cfg = ENTRY.config();
+    let mut points = cfg.clone();
+    point_legs(&mut points);
+    let sum = |cfg: &Config| {
+        let mech = mechanism(cfg);
+        let mut q = [0.0; 6];
+        assert!(mech.geo.inverse(&[0.0, 0.0, 0.48, 0.0, 0.0, 0.0], &mut q));
+        let (mut m, mut b) = ([0.0; 36], [0.0; 6]);
+        mech.dynamics(&q, &[0.0; 6], &mut m, &mut b);
+        m.iter().sum::<f64>()
+    };
+    let delta = sum(&cfg) - sum(&points);
+    assert!((delta + 0.5430131).abs() < 1e-6, "{delta}");
+}
+
+/// The dynamics with the legs' parts against Lagrange's equations by differences (as the platform's were checked): at a
+/// pose off the middle and a speed, h_i = sum_jk dM_ij/dq_k qd_k qd_j - 1/2 sum_jk dM_jk/dq_i qd_j qd_k + dV/dq_i,
+/// and at rest h is the legs' holding force (`static_leg_forces`, with the parts' weights).
+#[test]
+fn the_dynamics_with_the_legs_parts_agree_with_the_lagrange_equations() {
+    let mech = mechanism(&ENTRY.config());
+    let tool = [0.03, -0.02, 0.5, 0.04, -0.03, 0.06];
+    let mut q = [0.0; 6];
+    assert!(mech.geo.inverse(&tool, &mut q));
+    let qd = [0.05, -0.08, 0.03, 0.07, -0.02, 0.06];
+    let eval = |q: &[f64; 6], qd: &[f64; 6]| {
+        let (mut m, mut b) = ([0.0; 36], [0.0; 6]);
+        mech.dynamics(q, qd, &mut m, &mut b);
+        (m, b)
+    };
+    let (_, bias) = eval(&q, &qd);
+    let eps = 1e-5;
+    let shifted = |k: usize, sign: f64| {
+        let mut p = q;
+        p[k] += sign * eps;
+        p
+    };
+    let dm: Vec<[f64; 36]> = (0..6)
+        .map(|k| {
+            std::array::from_fn(|e| {
+                (eval(&shifted(k, 1.0), &qd).0[e] - eval(&shifted(k, -1.0), &qd).0[e]) / (2.0 * eps)
+            })
+        })
+        .collect();
+    for i in 0..6 {
+        let dv = (mech.potential(&shifted(i, 1.0)) - mech.potential(&shifted(i, -1.0))) / (2.0 * eps);
+        let rate: f64 = (0..6).map(|j| (0..6).map(|k| dm[k][i * 6 + j] * qd[k]).sum::<f64>() * qd[j]).sum();
+        let kinetic: f64 = (0..6).map(|j| (0..6).map(|k| dm[i][j * 6 + k] * qd[j] * qd[k]).sum::<f64>()).sum();
+        let h = rate - 0.5 * kinetic + dv;
+        assert!((bias[i] - h).abs() < 1e-4 * (1.0 + h.abs()), "leg {i}: {} against {h}", bias[i]);
+    }
+    let (_, rest) = eval(&q, &[0.0; 6]);
+    let hold = mech.static_leg_forces(&tool).unwrap();
+    for i in 0..6 {
+        assert!((rest[i] - hold[i]).abs() < 1e-9 * (1.0 + hold[i].abs()), "{rest:?} against {hold:?}");
+    }
 }
 
 /// Friction feedforward from the machine's own model, by hand: the platform at home rising at 0.1 m/s. Each leg (L =

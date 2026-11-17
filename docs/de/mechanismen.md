@@ -601,8 +601,11 @@ Hubenden und der Motor sind die der Kugelgewindeachse oben. Die Mechanik gibt Ki
 - Die Zeilen von J sind (u_i, b_i × u_i), u_i die Richtung des Beins und b_i = R a_i. Dynamik über die Bewegung der
   Plattform: M_xi xi' + c + g = J^T f, also im Beinraum M_q = J^-T M_xi J^-1 und h = J^-T (c + g − M_xi J^-1 a0), a0
   die Längenbeschleunigung der Beine bei der Bewegung (gegen die Lagrange-Gleichungen von M_q mit Differenzen geprüft:
-  gleich auf 1e-9). Die Masse jedes Beins wird auf seine Enden aufgeteilt: `leg.platform_share` bewegt sich mit dem
-  Plattformgelenk (eine Punktmasse in Masse und Trägheit der Plattform), der Rest ruht an der Basis.
+  gleich auf 1e-9). Jedes Bein sind zwei Körper, die mit seiner Richtung schwenken: das Stangenteil (`leg.platform_share` von
+  `leg.mass_kg`, Schwerpunkt `leg.platform_part_centre_m` vom Plattformgelenk) und das Gehäuseteil (der Rest,
+  Schwerpunkt `leg.base_part_centre_m` vom Basisgelenk), jedes mit seiner Trägheit um den Schwerpunkt quer zum Bein; ihre
+  kinetische Energie geht in M_xi und c ein, ihr Gewicht in g. Die Nutzlast kann eine eigene Trägheit haben
+  (`mass.payload_inertia_kgm2`, fehlend 0).
 - Abgelehnt: ein Bein über seinen Hub hinaus (`error-joint-beyond-stop`), ein Bein steiler gegen die Normale der Basis
   oder der Plattform als `workspace.max_joint_angle_deg` (`error-hexapod-joint-angle`), eine Lage, deren Jacobi-Matrix
   eine Konditionszahl über `workspace.max_condition_number` hat, die Drehungen mit dem Plattformradius gewichtet
@@ -698,7 +701,7 @@ positiv hebt die Spitze). Jede Kurbel ist ein Gelenk von `chain::JointMachine` m
   Stange in der Ebene von Kurbel und Achse, der Hebelarm null) als `workspace.min_dead_centre_margin_deg`
   (`error-rss-dead-centre`), ein Kugelgelenk über `workspace.crank_joint_max_angle_deg` (die Stange aus der Kurbelebene)
   oder `platform_joint_max_angle_deg` (gegen die Normale der Plattform; `error-rss-ball-joint`), zwei Stangen näher als
-  `workspace.min_rod_clearance_m` Achse zu Achse (`error-rss-rods-cross`), eine Konditionszahl über
+  `workspace.min_rod_clearance_m` Achse zu Achse (`error-rss-rods-cross`), eine Stange näher als `workspace.min_body_clearance_m` an einer Kante der Plattform oder der Basis (`error-rss-rods-cross-body`), eine Konditionszahl über
   `workspace.max_condition_number` (`error-rss-singularity`), eine Kurbel über ihre Anschläge hinaus.
 - Dynamik über virtuelle Arbeit in den Kurbelwinkeln: Plattform und Nutzlast als ein starrer Körper mit Schwerpunkt
   außerhalb der Plattformmitte, jede Stange als schlanker Stab (ein Sechstel ihrer Masse an jedem Ende und zwei Drittel
