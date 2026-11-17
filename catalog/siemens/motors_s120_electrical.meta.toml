@@ -12,8 +12,9 @@ poles: number of poles (twice the pole pairs). torque_constant: at a winding tem
 voltage_constant: at 20 degC, line to line, RMS, per 1000 rpm. winding_resistance: of one phase at 20 degC.
 inductance: rotating field inductance. max_speed_inverter: what the DC link voltage allows.
 An empty field: the data sheet does not state the value.
-The data sheets give the sixteen 1FT7 High Dynamic motors 6 poles; the catalogue table in motors_s120.csv gives
-  them 5 pole pairs. Both files keep what their source prints.
+The data sheets give the sixteen 1FT7 High Dynamic motors 6 (1FT706.) and 8 poles (1FT708.); the catalogue table in motors_s120.csv gives
+  them 5 pole pairs. Both files keep what their source prints; the model takes the data sheet's poles (a
+  third-party copy of Siemens' sheet for the 1FT7085-7SH70-1CA0 also prints 8), see catalog.rs `motor_data`.
 The service has no data sheet for the 1FK7022-5AK7 under any article number tried.
 Kept as printed although it does not fit: voltage_constant of the 1FT7044-1AF7 is 49.0, less than half of what
   its torque constant of 1.79 N m/A implies.
