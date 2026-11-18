@@ -295,17 +295,24 @@ pub struct ConveyorLoad {
 /// K: a tenth of a kelvin moves a winding's resistance by 0.04 % and a guide's viscosity by 0.5 %.
 pub const WARM_START_TOLERANCE_K: f64 = 0.1;
 
-/// The most warm passes of a warm start (`analyse_cycle_with`) before the last is measured, converged or not.
+/// The most warm passes of a warm start (`analyse_cycle_with`) before the last is measured, converged or not; as many
+/// again of periods, where the passes it took repeat every few (`period_of`).
 pub const WARM_START_PASSES: usize = 4;
+
+/// The most passes a cycle's period may span for the warm start to find it (`period_of`).
+pub const WARM_START_PERIOD_MOST: usize = 3;
 
 /// A cycle analysis started warm (effects.thermal_warm_start): the measured pass ran with the windings (with
 /// effects.winding_heating) and the heated parts (with effects.thermal_feedback) at the rises the pass before settled
 /// at, by `passes` passes of cold → settled → warm → settled; `change` is the most a rise the measured pass started at
-/// lies from the one it settles at, K (infinite where a rise does not settle, or the run stopped).
+/// lies from the one it settles at, K (infinite where a rise does not settle, or the run stopped). `period`: the passes
+/// the measured span covers, more than one where the cycle repeats only every so many passes (a pick that alternates
+/// between two places loads the motors differently pass by pass): the rises then settle over the period, not per pass.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WarmStart {
     pub passes: usize,
     pub change: f64,
+    pub period: usize,
 }
 
 impl WarmStart {
@@ -350,9 +357,11 @@ fn set_rises(sim: &mut Sim, rises: &[f64]) {
     sim.feed_temperatures_back();
 }
 
-/// The warm start's next move after a measured pass that began at `started_at` and settles where `load` says: `None`
-/// to measure another pass from the next rises (already set), or the result. `before` is the pass before's start and
-/// settled rises, which this one replaces.
+/// The warm start's next move after a measured span (one period of `period` passes) that began at `started_at` and
+/// settles where `load` says: `None` to measure another span from the next rises (already set), or the result.
+/// `before` is the span before's start and settled rises, which this one replaces; `settled` the settled rises of every
+/// span so far of one pass, from which, where the passes do not converge, `period_of` finds a period of a few passes:
+/// the spans then cover it, from the mean of its passes' settled rises, again up to `WARM_START_PASSES` of them.
 ///
 /// The next start is a secant step per rise: s(r), the rise a pass settles at for the rise it starts at, falls with r
 /// where the warmth thins a lubricant (a warmer guide loses less), so plain substitution r = s oscillates and converges
@@ -365,6 +374,8 @@ fn warm_pass(
     load: &CycleLoad,
     passes: usize,
     before: &mut Option<(Vec<f64>, Vec<f64>)>,
+    period: &mut usize,
+    history: &mut Vec<Vec<f64>>,
 ) -> Option<WarmStart> {
     let settled = settled_rises(sim, load);
     let change = settled
@@ -372,10 +383,23 @@ fn warm_pass(
         .zip(started_at)
         .map(|(s, r)| if s.is_finite() { (s - r).abs() } else { f64::INFINITY })
         .fold(0.0, f64::max);
-    let done = WarmStart { passes, change };
+    let done = WarmStart { passes, change, period: *period };
     // A rise that does not settle (a winding loaded beyond what its copper can shed) cannot be started at.
-    if done.converged() || passes == WARM_START_PASSES || change.is_infinite() {
+    if done.converged() || change.is_infinite() {
         return Some(done);
+    }
+    if *period == 1 {
+        history.push(settled.clone());
+    }
+    if passes == WARM_START_PASSES {
+        let found = (*period == 1).then(|| period_of(history)).flatten();
+        let Some(p) = found else { return Some(done) };
+        // The next span covers the period, from the mean of its passes' settled rises.
+        let last = &history[history.len() - p..];
+        let mean: Vec<f64> = (0..settled.len()).map(|i| last.iter().map(|s| s[i]).sum::<f64>() / p as f64).collect();
+        (*period, *before) = (p, None);
+        set_rises(sim, &mean);
+        return None;
     }
     let next: Vec<f64> = (0..settled.len())
         .map(|i| {
@@ -390,6 +414,17 @@ fn warm_pass(
     *before = Some((started_at.to_vec(), settled));
     set_rises(sim, &next);
     None
+}
+
+/// The period, in passes, of a warm start whose passes do not converge: from the settled rises of its passes in order
+/// (the first from cold), the fewest passes p (2 to `WARM_START_PERIOD_MOST`) such that the last pass settles within a
+/// quarter as far from the one p before as from the one before it, the rises it starts at being about the same. `None`
+/// where none does: the passes drift or alternate as a convergence would, with no period.
+fn period_of(settled: &[Vec<f64>]) -> Option<usize> {
+    let apart = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
+    let (k, warm) = (settled.len().checked_sub(1)?, 1);
+    let next = apart(&settled[k], &settled[k.checked_sub(1)?]);
+    (2..=WARM_START_PERIOD_MOST).find(|&p| k >= warm + p && apart(&settled[k], &settled[k - p]) < 0.25 * next)
 }
 
 /// The highest a drive's thermal image (`drive::Overload`) reaches when a pass repeats for long. The pass ran from the
@@ -1241,21 +1276,28 @@ pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, Comma
     let mut tally = Tally::new(sim, views);
     let (mut passes, mut last, mut start) = (0usize, sim.control.cycle_passes(), 0.0);
     let (mut started_at, mut before) = (Vec::new(), None);
+    // The warm spans measured so far, of `period` passes each, from the pass `span_from`; the settled rises per pass.
+    let (mut spans, mut period, mut span_from, mut history) = (0usize, 1usize, 2usize, Vec::new());
     loop {
         sim.step();
         // The controller counts the passes: a cycle of one segment never changes its segment index.
         let now = sim.control.cycle_passes();
         if now != last {
             passes += 1;
-            if warm && passes >= 3 {
-                // A measured pass ended: it is the result, or the next starts at the rises it settles at.
+            let span_ends = passes == span_from + period;
+            if warm && passes >= 3 && span_ends {
+                // A measured span ended: it is the result, or the next starts at the rises it settles at.
                 let load = std::mem::replace(&mut tally, Tally::new(sim, views)).finish(sim, sim.time() - start);
-                if let Some(warm_start) = warm_pass(sim, &started_at, &load, passes - 3, &mut before) {
+                let was = period;
+                let next = warm_pass(sim, &started_at, &load, spans, &mut before, &mut period, &mut history);
+                if let Some(warm_start) = next {
                     let _ = sim.command(Command::Stop);
                     return Ok(CycleLoad { warm_start: Some(warm_start), ..load });
                 }
+                spans = if period == was { spans + 1 } else { 0 };
+                span_from = passes;
             }
-            if passes == 2 || warm && passes > 2 {
+            if passes == 2 || warm && passes > 2 && span_from == passes {
                 started_at = fed_back_rises(sim);
                 // The measured pass begins: what was added up on the way here goes. The energy budget starts from
                 // the state after this step, so it leaves the step out.
@@ -1283,7 +1325,7 @@ pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, Comma
     let duration = sim.time() - start;
     // Stopped before a measured pass ended (a trip, or a crash): not converged, where a warm pass had begun; before
     // that the run was measured from cold.
-    let warm_start = (warm && passes > 2).then(|| WarmStart { passes: passes - 2, change: f64::INFINITY });
+    let warm_start = (warm && passes > 2).then(|| WarmStart { passes: passes - 2, change: f64::INFINITY, period: 1 });
     Ok(CycleLoad { warm_start, ..tally.finish(sim, duration) })
 }
 
@@ -1320,11 +1362,13 @@ pub fn analyse_trajectory_with(
         }
         if !sim.control.enabled() {
             return Ok(CycleLoad {
-                warm_start: (passes > 0).then_some(WarmStart { passes, change: f64::INFINITY }),
+                warm_start: (passes > 0).then_some(WarmStart { passes, change: f64::INFINITY, period: 1 }),
                 ..load
             });
         }
-        if let Some(warm_start) = warm_pass(sim, &started_at, &load, passes, &mut before) {
+        // Every pass starts from the same state: the passes cannot differ but by their rises, so there is no period.
+        let (mut period, mut history) = (1, Vec::new());
+        if let Some(warm_start) = warm_pass(sim, &started_at, &load, passes, &mut before, &mut period, &mut history) {
             return Ok(CycleLoad { warm_start: Some(warm_start), ..load });
         }
         let rises = fed_back_rises(sim);
@@ -4650,6 +4694,20 @@ pub fn compare_effect(entry: &MachineEntry, cfg: &Config, effect: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// By hand: a winding that settles at 102 K on every odd pass and 92 K on every even one (a pick alternating between
+    /// two places) repeats every 2 passes; one at 100, 90, 80, 100, 90, 80 every 3; one that closes in on 95 K by halves
+    /// (100, 97.5, 96.25, ...) and one that swings about it by halves (100, 92.5, 96.25, 94.375) have no period.
+    #[test]
+    fn the_warm_start_finds_the_period_of_a_cycle() {
+        let rises = |r: &[f64]| r.iter().map(|&x| vec![x, 50.0]).collect::<Vec<_>>();
+        assert_eq!(period_of(&rises(&[90.0, 102.3, 92.2, 101.9, 92.4])), Some(2));
+        assert_eq!(period_of(&rises(&[60.0, 100.0, 90.0, 80.0, 100.0])), Some(3));
+        assert_eq!(period_of(&rises(&[60.0, 105.0, 100.0, 97.5, 96.25])), None);
+        assert_eq!(period_of(&rises(&[60.0, 110.0, 100.0, 92.5, 96.25])), None);
+        // Too few warm passes to tell a period of 3 from the cold one's.
+        assert_eq!(period_of(&rises(&[100.0, 90.0, 80.0, 100.0])), None);
+    }
 
     /// Steps 1 to 5 where 5, 4 and 2 fail and 3 and 1 pass: the fastest that passes is 3, after judging 5, 4 and 3 (a
     /// bisection from 0 and 5 would judge 2, fail, and end at step 1). None pass: `None`, all five judged.

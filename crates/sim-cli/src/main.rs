@@ -1525,6 +1525,9 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
     }
     .map_err(|e| Failure(e.key, String::new()))?;
     tell_start(tr, load.warm_start.map(|w| w.change));
+    if let Some(w) = load.warm_start.filter(|w| w.period > 1) {
+        eprintln!("{}", tr.tr_arg("cli-thermal-start-period", &w.period.to_string()));
+    }
     if let Some(c) = load.conveyor {
         let detail = format!(
             "{:.2} / min, {:.3} mm, {:.2} / min",
