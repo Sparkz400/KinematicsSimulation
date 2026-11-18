@@ -140,13 +140,13 @@ pub struct FrameMomentum {
 /// tilt about [x, y, z].
 pub const BASE_AXES: [[&str; 3]; 2] = [["x", "y", "z"], ["rx", "ry", "rz"]];
 
-/// The master of an electronic cam that a machine runs as its cycle instead of `[[cycle.segment]]` (`Machine::cam`): its
-/// steady speed (its unit per second), its travel per pass of the cycle, and how long it takes from rest to that speed
-/// and back (a sin^2 ramp, `sim_components::cam::master_at`).
 /// An electronic cam's curve as `Machine::cam_at` reads it, on its own (`Machine::cam_curve`): each slave at a master
 /// position, as [s, s', s'', s'''].
 pub type CamCurve = std::sync::Arc<dyn Fn(f64, &mut [[f64; 4]]) + Send + Sync>;
 
+/// The master of an electronic cam that a machine runs as its cycle instead of `[[cycle.segment]]` (`Machine::cam`): its
+/// steady speed (its unit per second), its travel per pass of the cycle, and how long it takes from rest to that speed
+/// and back (a sin^2 ramp, `sim_components::cam::master_at`).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CamMaster {
     pub speed: f64,
