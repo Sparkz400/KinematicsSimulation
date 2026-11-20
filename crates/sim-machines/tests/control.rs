@@ -235,16 +235,41 @@ fn torque_feedforward_cuts_the_following_error_while_accelerating() {
 /// encoder's quantisation off: under 0.011 mrad throughout). No torque feedforward removes that, so the peaks come out 0.91 and 0.88.
 const LEAD_AT_CONSTANT_ACCELERATION: &[&str] = &["geneva-drive", "cam-indexer"];
 
+/// Machines whose load hangs free and swings after an unshaped move, pulling the axis that carries it: the overhead
+/// crane's load on its rope. Their drives are judged with the input shaper on (`effects.input_shaping`), the machine's
+/// own means against the swing, as the process machines' without their process force: the swing is a load outside the
+/// feedforward, and its pull on the axis is the drive's give, not its settling or its tracking. The crane's bridge after
+/// its long move unshaped, its load swinging by 0.23 m on 2 m of rope at 0.35 Hz: 300 N of pull over the bridge drive's
+/// stiffness of 1.0 MN/m at that frequency, ratio^2 Kp |1 + 1 / (j w Tn)| |Kv + j w| = 375^2 x 0.15 x 4.63 x 10.24, is
+/// 0.30 mm either way (0.65 mm measured, span); with the stiff drives it had (Kp 2.0, Tn 0.03 s, Kv 30) 5 um. In the
+/// cycle the 0.32 m swing at a dwell put 0.55 mm on the bridge's following error. Nothing but the drive damps the swing,
+/// and its speed loop's integral part pumps it a little: 5.5 % more in 40 s at rest (0.06 % with the stiff drives).
+const SWINGING_LOAD: &[&str] = &["overhead-crane"];
+
+/// The config the drive tests judge a machine in: its own, with the input shaper on where its load swings free.
+fn unswung(entry: &MachineEntry) -> Config {
+    let mut cfg = entry.config();
+    if SWINGING_LOAD.contains(&entry.id) {
+        cfg.set_text("effects.input_shaping = true").unwrap();
+    }
+    cfg
+}
+
 #[test]
 fn a_move_arrives_and_comes_to_rest() {
     for entry in MACHINES {
-        let mut sim = Sim::new(entry, &entry.config()).unwrap();
+        let mut sim = Sim::new(entry, &unswung(entry)).unwrap();
         let target = long_move(&sim);
         sim.command(Command::MoveTo(target.clone())).unwrap_or_else(|e| panic!("{}: {}", entry.id, e.key));
-        while sim.control.busy() || sim.step == 0 {
+        // Shaped, the setpoint arrives one period of the shaper after the plan (the crane's 2.8 s).
+        let shaped = |s: &Sim| s.control.set_pos.iter().zip(s.control.planned_pos()).any(|(a, b)| (a - b).abs() > 1e-9);
+        while sim.control.busy() || sim.step == 0 || shaped(&sim) {
             sim.step();
         }
-        sim.run(0.3, |_| {});
+        // Nine time constants 1 / Kv of the position loop, 0.3 s at least: the crane's soft loop (Kv 10 1/s) crept 21 um
+        // in the window after 0.3 s, three of them, once across its mean and gone 1 s later.
+        let kv = unswung(entry).f64("drive.kv_1_s").unwrap();
+        sim.run((9.0 / kv).max(0.3), |_| {});
         let axis = sim.machine.axes()[0].clone();
         let position = sim.signal_index(&format!("axis.{}.position", axis.id)).unwrap();
         // The axis's position over `seconds`, one sample a base step.
@@ -314,7 +339,7 @@ const NO_GRIPPER: &[&str] =
 #[test]
 fn the_cycle_visits_every_segment_and_switches_the_payload() {
     on_every_machine(|entry| {
-        let mut cfg = entry.config();
+        let mut cfg = unswung(entry);
         // The process machines' cut and press forces are loads their loops take, outside the feedforward: their
         // tracking error under them is the process's, not the cycle's (the knife's 7.8 mrad, 0.31 without).
         if NO_GRIPPER.contains(&entry.id) {
@@ -328,7 +353,9 @@ fn the_cycle_visits_every_segment_and_switches_the_payload() {
         let (mut visited, mut payload_seen, mut worst_error) =
             (vec![0u32; segments], [false; 2], vec![0f64; axes.len()]);
         let (mut last, mut sample) = (None, Vec::new());
-        sim.run(8.0, |s| {
+        // The crane's pass takes 13 s shaped (7 s unshaped).
+        let seconds = if SWINGING_LOAD.contains(&entry.id) { 14.0 } else { 8.0 };
+        sim.run(seconds, |s| {
             let now = s.control.cycle_segment();
             if now != last {
                 if let Some(i) = now {
@@ -343,7 +370,7 @@ fn the_cycle_visits_every_segment_and_switches_the_payload() {
         // Every segment ran, and the cycle started over.
         assert!(
             visited.iter().all(|n| *n >= 1) && visited[0] >= 2,
-            "{}: segments run {visited:?} times in 8 s",
+            "{}: segments run {visited:?} times in {seconds} s",
             entry.id
         );
         let carried = if NO_GRIPPER.contains(&entry.id) { [false, true] } else { [true, true] };
@@ -1090,7 +1117,18 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
             // At this speed the tool is behind its setpoint by up to what it travels in a profile cycle.
             let mut behind = 0f64;
             sim.run(0.05, |s| behind = behind.max((tool(s).0[0] - s.control.set_pos[0]).abs()));
-            let (before, peak) = (tool(&sim), cfg.f64("drive.peak_torque_nm").unwrap());
+            // Each drive's own peak torque: the crane's hoist (24 N m) holds its 265 kg with 5.2 N m, half the travels'
+            // 10 N m of the shared table.
+            let peak: Vec<f64> = sim
+                .machine
+                .motors()
+                .iter()
+                .map(|m| {
+                    let own = sim_components::catalog::motor_config(&cfg, m.id).unwrap();
+                    own.f64("drive.peak_torque_nm").unwrap()
+                })
+                .collect();
+            let before = tool(&sim);
             let quiet = sim.control.drives.iter().map(|d| d.torque_command.abs()).fold(0.0, f64::max);
             let mut other = cfg.clone();
             other.set_text(&format!("{switch} = {}", !elastic)).unwrap();
@@ -1132,8 +1170,9 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
             assert!(before.1[0] > 0.95 * axes[0].max_vel);
             let (mut torque, mut off) = (0f64, 0f64);
             sim.run(0.2, |s| {
-                let over = s.control.drives.iter().zip(&kick).map(|(d, kick)| d.torque_command.abs() - kick);
-                torque = over.fold(torque, f64::max);
+                // Beyond the kick, as a share of the drive's own peak.
+                let over = s.control.drives.iter().zip(&kick).zip(&peak);
+                torque = over.map(|((d, kick), peak)| (d.torque_command.abs() - kick) / peak).fold(torque, f64::max);
                 off = off.max((tool(s).0[0] - s.control.set_pos[0]).abs());
             });
             // The lag the new model has of its own, where it grows in those 200 ms: the slider-crank's elastic crank,
@@ -1144,8 +1183,8 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
                 own.run(0.2, |s| behind = behind.max(lag(s)));
             }
             assert!(
-                torque < 0.5 * peak && off < behind + 2e-4,
-                "{}, from elastic {elastic}: {torque} N m beyond the kick {kick:?} N m (before {quiet} N m, limit {peak} N m), {off} m off the setpoint (before {behind} m)",
+                torque < 0.5 && off < behind + 2e-4,
+                "{}, from elastic {elastic}: {torque} of a drive's peak beyond the kick {kick:?} N m (before {quiet} N m, peaks {peak:?} N m), {off} m off the setpoint (before {behind} m)",
                 entry.id
             );
         }
