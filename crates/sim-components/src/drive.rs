@@ -1777,7 +1777,7 @@ impl Drive {
 }
 
 /// What a DC link did over one base step: its voltage after it, and the powers over it of the braking resistor, of
-/// the rectifier (drawn from the line), fed back into the mains and lost in the line module while feeding back.
+/// the rectifier (drawn from the line), fed back into the mains and lost in the line module, drawing and feeding back.
 #[derive(Debug, Clone, Copy)]
 struct DcLinkStep {
     voltage: f64,
