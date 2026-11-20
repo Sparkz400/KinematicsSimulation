@@ -622,8 +622,15 @@ impl CableRobot {
         let mut winch = RotaryJoint::with(cfg, friction, stops, (0.0, cfg.positive("winch.capacity_m")?))?;
         let drum_mass = cfg.positive("winch.drum_inertia_kgm2")? / (drum_radius * drum_radius);
         // The cap on the gear's mesh-friction bristle takes the lighter of the rotor (seen at the cable) and the drum.
-        Converter { lever: drum_radius, stiffness: f64::INFINITY, backlash: 0.0, efficiency: 1.0, inertia: 0.0 }
-            .apply_to(cfg, &mut winch, drum_mass)?;
+        Converter {
+            lever: drum_radius,
+            stiffness: f64::INFINITY,
+            backlash: 0.0,
+            efficiency: 1.0,
+            inertia: 0.0,
+            damping_ratio: 0.0,
+        }
+        .apply_to(cfg, &mut winch, drum_mass)?;
         let (min, max) = (cfg.f64s("workspace.tool_min")?, cfg.f64s("workspace.tool_max")?);
         if min.len() != n || max.len() != n || (0..n).any(|k| !(min[k] < max[k])) {
             return Err(ConfigError::Invalid("workspace.tool_max".into()));

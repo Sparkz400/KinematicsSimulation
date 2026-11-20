@@ -499,12 +499,13 @@ impl ParallelScara {
         if screw.length < joint.range.1 {
             return Err(ConfigError::Invalid("screw.length_m".into()));
         }
-        screw.converter(screw.softest_position()).apply(&own, &mut joint)?;
+        let carriage = cfg.non_negative("z_axis.carriage_kg")?;
+        // The carriage on the nut's spring, without the payload (`Converter::apply_back`'s damper of the screw).
+        screw.converter(screw.softest_position()).apply_to(&own, &mut joint, carriage)?;
         // The nut's preload drags like friction in the guides, as a force at the nut.
         if own.bool("effects.joint_friction")? {
             joint.friction.coulomb += screw.preload_torque() * screw.ratio();
         }
-        let carriage = cfg.non_negative("z_axis.carriage_kg")?;
         let axis = Self::axis_info(cfg, "z", "axis-z", "m", joint.range)?;
         let carried = cfg.non_negative("z_axis.unit_kg")? + carriage;
         let elastic = cfg.bool("effects.joint_elasticity")?;

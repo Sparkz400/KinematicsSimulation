@@ -483,6 +483,7 @@ and d n ([catalogue]) and the measured screw's nominal diameter and length (its 
 | `friction_coefficient` | – | With `effects.screw_lead_efficiency` (read only then): the balls' rolling friction μ, η = (1 − μ tan β) / (1 + μ / tan β); a screw that locks itself driven back is refused. THK's general value | 0.003 (not in the machine files); bounds 0.002 to 0.01 |
 | `nut_stiffness_n_m` | N/m | The nut's axial stiffness, in series with the shaft and the bearings | 4e8 / 2e8 / 4e8 / 4.118793e8 / 2e8 / 2e8 / 1e9; bounds 2.5e8 to 6e8 (screw axis, hexapod), 1.2e8 to 3e8 (machine files), 5e8 to 2e9 (measured) |
 | `bearing_stiffness_n_m` | N/m | The fixed bearing's axial stiffness, in the same series | 7.5e8 / 4e8 / 7.5e8 / 5e8 / 4e8 / 3e8 / 1e9; bounds 5e8 to 1e9 (screw axis, hexapod), 3e8 to 8e8 (tripod), 2e8 to 4.5e8 (machine files), 5e8 to 2e9 (measured) |
+| `axial_damping_ratio` | – | Optional, 0 where absent, below 1: the damping ratio ζ of the mass behind the nut on the screw's axial spring k (nut, bearings, guides), a damper c = 2ζ √(k m) across the screw's spring alone, m the mass the screw moves without the payload; the gearbox's damper bridges its own spring, the two in series (`transmission::Converter`) | 0.04 in all; bounds 0.02 to 0.06 (where the stiffnesses have bounds). [estimate] Hosseinkhani, PhD thesis, University of Waterloo 2013, Table 3.5: the axial mode of a ball screw drive at 865 rad/s, ζ 0.04 |
 | `preload_n` | N | The nut's preload, at least 0: its drag torque K F l / (2π), K = 0.05 / sqrt(tan β) (THK), with `effects.guide_friction` or `joint_friction`, and the equivalent load of the life (Hiwin) | 600 / 200 / 600 / 400 / 200 / 150 / 1953; bounds 300 to 900 (screw axis, hexapod), 100 to 300 (SCARA, parallel SCARA, wafer handler), 200 to 600 (tripod), 75 to 225 (machine files), 1000 to 4000 (measured) |
 | `dynamic_load_rating_n` | N | Ca, for the life L10 = (Ca / (fw F))³ 10⁶ turns (ISO 3408-5); `screw-life` against `ratings.required_life_h` | 13000 / 7000 / 13000 / 11081.5145 / 7000 / 9000 / 40000; bounds 11000 to 15000 (screw axis, hexapod), 7500 to 10500 (machine files), 30000 to 60000 (measured) |
 | `static_load_rating_n` | N | C0a: `screw-static` holds the axial force within C0a over `static_safety_factor` | 26000 / 12000 / 26000 / 26085.689 / 12000 / 14000 / 80000 |
@@ -508,6 +509,7 @@ list it (placeholders in the machine files), with the same bounds. Signal `rack.
 | `pressure_angle_deg` | ° | Optional: normal pressure angle α_n, above 0 and below 45; the separating force F tan(α_n) / cos(β) in the radial load on the gearbox's shaft (`ratings.shaft_max_radial_load_n`) | absent in all: 20 (DIN 867) |
 | `efficiency` | – | Above 0 and at most 1: the mesh's efficiency, driving and driven back | 0.97; bounds 0.95 to 0.98 |
 | `stiffness_n_m` | N/m | The mesh and the rack's mounting along the travel | 1e8; bounds 6e7 to 1.5e8 |
+| `damping_ratio` | – | Optional, 0 where absent, below 1: the damping ratio ζ of the mass behind the pinion on the mesh's spring k, a damper c = 2ζ √(k m) across that spring alone, as the screw's `axial_damping_ratio` | 0.026; bounds 0.01 to 0.05. [estimate] Franco, Beudaert, Erkorkmaz, J. Manuf. Mater. Process. 4 (2020) 33, Fig. 4b: 2.6 % at 35 Hz, the mode a rack and double-pinion drive's servo sees (carriage rocking and ram bending; none is published for the mesh alone) |
 | `backlash_m` | m | At least 0, along the travel | 0 (a preloaded dual pinion) |
 | `pinion_inertia_kgm2` | kg m² | The pinion's inertia | 1e-4 |
 | `rated_feed_force_n` | N | The pair's permissible feed force; `rack-feed-force` holds the force on the teeth within it over `service_factor` | 3000 |
@@ -985,7 +987,7 @@ with none: switching an axis off needs the cycle's targets and `start.pose` chan
 | `[motor.3]`, `[motor.4]` | | The Z and C motors over `[motor]` | 1FK2103-2AH at 400 V (catalogue), resistance and inductance estimates as the D4's tool motor |
 | `[gearbox.3]` | | The Z motor's coupling: ratio 1, nothing warms | estimates |
 | `[gearbox.4]` | | The turn's gearbox | NRB060-03-8, ratio 8 (catalogue) |
-| `[drive.3]`, `[drive.4]` | | The Z and C drives over `[drive]` | 1.95 N m peak, 0.59 rated (catalogue); velocity gain 0.0443 (Z), 0.033 with 10 ms (C: with friction 18.8 dB of gain margin, without it 6.95 dB, where 0.0443 left 4.0 dB) |
+| `[drive.3]`, `[drive.4]` | | The Z and C drives over `[drive]` | 1.95 N m peak, 0.59 rated (catalogue); velocity gain 0.035 with 0.16 s (Z: across the bounds at least 36.2° and 14.7 dB; 0.0443 rang the screw's axial mode at the peak torque), 0.033 with 10 ms (C: with friction 18.8 dB of gain margin, without it 6.95 dB, where 0.0443 left 4.0 dB) |
 | `drive.velocity_kp_nm_s_rad`, `velocity_tn_s` | | The arms' velocity loop | 0.33, 80 ms: the D2's 0.25 and 30 ms leave arm 2 at 31° phase margin with the heavier plate |
 | `[ratings.3]`, `[ratings.4]` | | The S210 6SL3210-5HE10-4UF0's currents and braking resistor; the turn's gearbox | catalogue |
 
@@ -1323,8 +1325,8 @@ with the same meanings, one motor, coupling, screw and drive per leg, all alike:
 (catalogue: diameters, lead, load ratings, nut stiffness, d n; `length_m` 0.35 and the rest estimates), the motor a
 1FK2104-4AF on an S210 6SL3210-5HE10-4UF0 (catalogue; its resistance an estimate, its inductance from the catalogue's
 short-circuit braking table, the current loop at 0.25 ms), the coupling 6000 N m/rad (estimate);
-`drive.velocity_kp_nm_s_rad` 0.15 (`sim-cli margins tripod`: at least 128.9° and 11.35 dB, across the bounds 110.1° and
-9.35 dB). The cycle carries the part through its three tilts and puts it off at the level pose. The tool pose,
+`drive.velocity_kp_nm_s_rad` 0.1 (`sim-cli margins tripod`, against the legs' axial modes damped through the nut: across
+the bounds at least 91.5° and 7.18 dB; 0.15 left 3.99 dB). The cycle carries the part through its three tilts and puts it off at the level pose. The tool pose,
 `start.pose` and the targets are z (m), rx, ry (rad: R = Rx(rx) Ry(ry) Rz(g), the turn g dependent); `[axis.z]` takes
 `max_velocity_m_s`, `max_acceleration_m_s2`, `max_jerk_m_s3` (0.2, 2, 50, estimates), `[axis.rx]`, `[axis.ry]` the same in
 rad (0.5, 5, 200, estimates); `profile.vertical_axis` "z". Its own keys and those that differ from the hexapod's (all

@@ -39,6 +39,11 @@ helix_angle_deg = 19.5283
 efficiency = 0.97
 # Mesh and the rack's mounting, along the travel.
 stiffness_n_m = 1.0e8
+# [estimate] The damping ratio of the mass behind the pinion on the mesh's spring (c = 2 zeta sqrt(k m)): 0.026, the
+# mode a rack and double-pinion feed drive's servo sees on a heavy machine tool (Franco, Beudaert, Erkorkmaz, Effect
+# of Rack and Pinion Feed Drive Control Parameters on Machine Tool Dynamics, J. Manuf. Mater. Process. 4 (2020) 33,
+# Fig. 4b: 35 Hz, 2.6 %), the carriage's rocking with the ram's bend, not the mesh's own: none is published.
+damping_ratio = 0.026
 backlash_m = 0.0
 pinion_inertia_kgm2 = 1.0e-4
 # The pair's permissible feed force, and the application factor K_A for smooth running.
@@ -329,6 +334,7 @@ slide.presliding_stiffness_n_m = [2.0e6, 5.0e7]
 slide.friction_viscous_n_s_m = [50.0, 200.0]
 rack.efficiency = [0.95, 0.98]
 rack.stiffness_n_m = [6.0e7, 1.5e8]
+rack.damping_ratio = [0.01, 0.05]
 gearbox.stiffness_nm_rad = [25000.0, 40000.0]
 gearbox.damping_nm_s_rad = [2.0, 10.0]
 gearbox.inertia_at_input_kgm2 = [3.0e-5, 5.0e-5]

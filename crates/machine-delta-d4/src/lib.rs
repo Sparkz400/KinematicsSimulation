@@ -326,7 +326,14 @@ impl Delta4 {
         let body = cfg.bool("effects.tool_gearbox_body")? && elastic && torsion;
         if torsion && !body {
             // One spring in series, damped by the shaft (the softer by far): the gearbox's output has no inertia.
-            let shaft = Converter { lever: 1.0, stiffness: k_shaft, backlash: 0.0, efficiency: 1.0, inertia: 0.0 };
+            let shaft = Converter {
+                lever: 1.0,
+                stiffness: k_shaft,
+                backlash: 0.0,
+                efficiency: 1.0,
+                inertia: 0.0,
+                damping_ratio: 0.0,
+            };
             shaft.apply_to(&tcfg, &mut tool, cfg.positive("tool.inertia_kgm2")?)?;
             // The shaft's damper across the series spring in place of the gear's (no Maxwell arm, `Gearbox::arm`).
             (tool.gearbox.damping, tool.gearbox.relax_stiffness) = (c_shaft, 0.0);

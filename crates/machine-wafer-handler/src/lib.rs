@@ -681,7 +681,8 @@ impl WaferHandler {
         if screw.length < joint.range.1 {
             return Err(ConfigError::Invalid("screw.length_m".into()));
         }
-        screw.converter(screw.softest_position()).apply(&z, &mut joint)?;
+        // The column on the nut's spring, without the wafer (`Converter::apply_back`'s damper of the screw).
+        screw.converter(screw.softest_position()).apply_to(&z, &mut joint, carriage + arm.mass(false))?;
         // The nut's preload drags like friction in the guides, as a force at the nut.
         if z.bool("effects.joint_friction")? {
             joint.friction.coulomb += screw.preload_torque() * screw.ratio();

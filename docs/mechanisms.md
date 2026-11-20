@@ -68,9 +68,11 @@ A joint's coordinate is an angle (rad) or a travel (m). A screw or rack turns th
 - ratio i / lever, the lever the travel per radian (lead / 2 pi, or the pinion's pitch radius);
 - stiffness 1 / (lever^2 / k_gearbox + 1 / k_converter): the gearbox's torsional stiffness seen at the joint, in series
   with the screw's or rack's own;
-- damping: the gearbox's over lever^2 across the gearbox's spring alone, not the screw's or rack's (a three-element
-  solid; the machine carries one more state for it, `Gearbox::arm`); with the gearbox's K_g = k_gearbox / lever^2 and
-  the converter's K_c, a mass on the pair rings with c (K_c / (K_c + K_g))^2 at low frequency, not c;
+- damping: the gearbox's over lever^2 across the gearbox's spring alone, and the screw's or rack's own across its
+  spring alone, c = 2 zeta sqrt(K_c m) from `screw.axial_damping_ratio` or `rack.damping_ratio` and the mass m it moves
+  (nut, bearings, guides); two damped springs in series, the machine carries one more state for them
+  (`Gearbox::arm`). With the gearbox's damper alone (K_g = k_gearbox / lever^2) a mass on the pair rings with
+  c (K_c / (K_c + K_g))^2 at low frequency, not c;
 - backlash: the gearbox's seen at the joint plus the converter's (with `effects.gearbox_backlash`);
 - efficiency: the product (with `effects.gearbox_efficiency`);
 - the screw shaft's or pinion's inertia added at the rotor over i^2.

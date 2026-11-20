@@ -484,13 +484,16 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let (mut joints, mut axes) = (Vec::new(), Vec::new());
     for k in 0..n {
         let own = &owns[k];
+        // What a prismatic joint moves at least: the bodies beyond it, without the payload (the damper of its screw's or
+        // rack's spring, `Converter::apply_back`).
+        let beyond: f64 = alone(k).map_or(0.0, |(i, _)| chain.bodies[i..].iter().map(|b| b.inertial.mass).sum());
         let (mut joint, lever) = match (&screw, &rack, prismatic[k]) {
             (_, Some(rack), true) => {
                 // The pinion on the gearbox's output, as on the rack axis (`slide`), the ratio arm.gear_ratios'.
                 let mut joint = RotaryJoint::linear_from_config(own)?;
                 joint.gearbox.ratio = ratios[k];
                 joint.coupled = ratios[k] == 1.0;
-                rack.converter().apply(own, &mut joint)?;
+                rack.converter().apply_to(own, &mut joint, beyond)?;
                 racks[k] =
                     Some((rack.clone(), joint.extra_efficiency, own.f64("ratings.shaft_max_radial_load_n").ok()));
                 (joint, Some(rack.radius()))
@@ -505,7 +508,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
                 joint.gearbox.efficiency = 1.0;
                 joint.coupled = true;
                 joint.rotor_inertia = own.positive("motor.rotor_inertia_kgm2")?;
-                screw.converter(screw.softest_position()).apply(own, &mut joint)?;
+                screw.converter(screw.softest_position()).apply_to(own, &mut joint, beyond)?;
                 if own.bool("effects.joint_friction")? {
                     joint.friction.coulomb += screw.preload_torque() * screw.ratio();
                     if joint.friction.presliding > 0.0 {
