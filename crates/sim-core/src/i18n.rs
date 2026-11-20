@@ -37,8 +37,15 @@ impl Translations {
         self.0.get(key).map_or(key, String::as_str)
     }
 
+    /// A message with its argument; one that has no place for it (a machine's reason why a pose cannot be reached,
+    /// given with the config value it was found at) shows it in front: "arg: message".
     pub fn tr_arg(&self, key: &str, arg: &str) -> String {
-        self.tr(key).replace("{ $arg }", arg)
+        let text = self.tr(key);
+        if arg.is_empty() || text.contains("{ $arg }") {
+            text.replace("{ $arg }", arg)
+        } else {
+            format!("{arg}: {text}")
+        }
     }
 }
 
@@ -52,6 +59,8 @@ mod tests {
         assert_eq!(t.tr("hello"), "Hallo");
         assert_eq!(t.tr("missing"), "missing");
         assert_eq!(t.tr_arg("bad-path", "a.b"), "Fehlt: a.b");
+        assert_eq!(t.tr_arg("hello", "a.b"), "a.b: Hallo");
+        assert_eq!(t.tr_arg("hello", ""), "Hallo");
         assert!(t.has("hello") && !t.has("comment"));
     }
 }
