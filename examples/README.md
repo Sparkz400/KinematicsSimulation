@@ -43,7 +43,7 @@ drive-current,a,0.3153,3.000,ok
 ...
 settling,,0.00004352,0.0001000,ok
 belt-tension,,333.2,1500,ok
-belt-slack,,205.6,0,ok
+belt-least-tension,,205.6,0,ok
 guide-load,,173.0,2000,ok
 guide-life,,5168670,20000,ok
 thermal-warm-start,,0.000005704,0.1000,ok

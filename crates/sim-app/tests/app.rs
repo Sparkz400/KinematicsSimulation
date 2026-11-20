@@ -1074,9 +1074,10 @@ fn the_regenerative_supply_shows_in_the_apps_tables(entry: &'static MachineEntry
     );
     let budget = load.budget.unwrap();
     let shown = model.budget_table().unwrap();
-    for (id, label) in
-        [("mains", "Drive · Fed back into the mains"), ("line_module", "Drive · Line module loss while feeding back")]
-    {
+    for (id, label) in [
+        ("mains", "Drive · Fed back into the mains"),
+        ("line_module", "Drive · Line module loss, drawing and feeding back"),
+    ] {
         let energy = budget.rows.iter().find(|r| r.id == id).unwrap().energy;
         assert!(energy > 0.0 && shows(&row(&shown, label)[0], energy), "{}: {label} {energy} in {shown:?}", entry.id);
     }

@@ -14,7 +14,8 @@ pub enum ConfigError {
     Invalid(String),
     /// A key that the machine's default config does not have.
     Unknown(String),
-    /// A part name that the catalogue does not have: the translation key for its kind, and the name.
+    /// A value refused for a reason with a message of its own: the translation key, and the value's name (a part name
+    /// that the catalogue does not have, under the key for its kind; a pose the machine cannot reach, at its path).
     Part(&'static str, String),
 }
 

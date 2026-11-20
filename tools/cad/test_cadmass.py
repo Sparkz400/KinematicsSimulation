@@ -247,7 +247,7 @@ class PureTests(unittest.TestCase, Close):
 
     def test_parse_verdicts_margin_direction(self):
         rows = cadmass.parse_verdicts("check,motor,value,limit,result\nmotor-peak,a,0.5,1.000,ok\n"
-                                      "guide-life,,40000,20000,ok\ngearbox-peak,a,80,64,FAIL\nbelt-slack,,10,0,ok\n")
+                                      "guide-life,,40000,20000,ok\ngearbox-peak,a,80,64,FAIL\nbelt-least-tension,,10,0,ok\n")
         self.assertEqual([r["margin"] for r in rows], [0.5, 0.5, -0.25, 1.0])
         self.assertEqual([r["ok"] for r in rows], [True, True, False, True])
 

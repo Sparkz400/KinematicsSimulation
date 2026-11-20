@@ -685,3 +685,22 @@ fn a_belt_warms_with_its_damping_loss_through_its_surface() {
     assert!(by_hand > 0.0, "{by_hand} K");
     close(sim.heated[4].rise, by_hand, 1e-9, "the belt's rise");
 }
+
+/// By hand: at a 20 degree incline the cycle's segment[2] target (-0.1525, 0, -1.13) lies q = (-0.6025, 0, -1.13) from
+/// column 0's joint line (through (0.45, 0, 0) along d = (-sin 20, 0, cos 20)): q . d = 0.206067 - 1.061853 =
+/// -0.855786, so the rod reaches sqrt(1.639906 - 0.732370) = 0.952648 m across the column, beyond l sin 60 = 0.952628:
+/// it would stand at 60.002 degrees, over the 60 its joints allow. The config is refused with the segment and that
+/// reason, not as a value out of range.
+#[test]
+fn a_cycle_target_beyond_the_rods_angle_is_refused_with_the_segment_and_the_reason() {
+    let (s, c) = 20f64.to_radians().sin_cos();
+    let q = [-0.1525 - 0.45, -1.13];
+    let along = q[0] * -s + q[1] * c;
+    let reach = (q[0] * q[0] + q[1] * q[1] - along * along).sqrt();
+    assert!((along + 0.855786).abs() < 1e-6 && (reach - 0.952648).abs() < 1e-6, "{along} {reach}");
+    assert!(reach > 1.1 * 60f64.to_radians().sin());
+    let mut cfg = ENTRY.config();
+    cfg.set_text("geometry.column_incline_deg = 20.0").unwrap();
+    let refused = Sim::new(&ENTRY, &cfg).err().expect("refused");
+    assert_eq!((refused.key(), refused.detail()), ("error-delta-linear-rod-angle", "cycle.segment[2]"));
+}
