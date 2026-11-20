@@ -353,8 +353,11 @@ fn the_modes_are_those_of_the_gearboxes_and_bands() {
 /// The modes' damping ratios. With damping proportional to stiffness, C = alpha K (each band span 94 N s/m against its
 /// 9.4e5 N/m, the arm's gearboxes 2.5 N m s/rad against 2.5e4 N m/rad: alpha = 1e-4 s), every mode of M and K has the
 /// ratio alpha w / 2 = 1e-4 pi f, whatever its shape. The column, by hand: the coupling's 0.2 N m s/rad over the
-/// screw's lever (1.591549e-3 m/rad) squared is 78956.8 N s/m, against 2 sqrt(4.564162e7 N/m x 11.2276 kg) = 45274.5 N s/m
-/// critical: 1.743957 (the coupling's damper in parallel with the whole series spring, as `Converter::apply` puts it).
+/// screw's lever (1.591549e-3 m/rad) squared is c = 78956.8 N s/m across the coupling's spring alone, K_g = 1.184353e9
+/// N/m, with the screw's K_c = 4.747102e7 N/m in series (`Gearbox::arm`): K_m = K_c^2 / (K_c + K_g) = 1.829400e6 N/m,
+/// tau = c / (K_c + K_g) = 6.409752e-5 s, and at the ring w = sqrt(4.564162e7 / 11.2276) = 2016.24 rad/s the arm damps
+/// K_m tau / (1 + (w tau)^2) = 115.3337 N s/m, against 2 sqrt(4.564162e7 N/m x 11.2276 kg) = 45274.5 N s/m critical:
+/// 0.0025474307 (the cubic's root gives 0.002548; with the damper across the whole series spring it was 1.743957).
 #[test]
 fn the_modes_are_damped_by_the_gearboxes_and_bands() {
     let d = handler(&[
@@ -368,7 +371,7 @@ fn the_modes_are_damped_by_the_gearboxes_and_bands() {
         for m in &modes[..4] {
             close(m.damping, 1e-4 * std::f64::consts::PI * m.hz, 1e-6, "proportional damping");
         }
-        close(modes[4].damping, 1.743957, 1e-5, "column damping");
+        close(modes[4].damping, 0.0025474307, 1e-6, "column damping");
     }
     assert!(handler(&[]).modes(&[0.4, 0.0, 0.1]).iter().all(|m| m.damping > 0.0));
 }

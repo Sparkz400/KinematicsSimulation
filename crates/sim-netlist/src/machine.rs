@@ -1398,11 +1398,11 @@ impl ConfigMachine {
         (longer, rate)
     }
 
-    /// Motor kk's gearbox (`Gearbox::torque`), with its worm stage's share where it has one that turns back
-    /// (`worm::factors`, at the power its spring's torque puts through the output). A self-locking worm passes the
-    /// gearbox's torques on as they are; its mesh's friction is `worm_drag`, at the rotor.
-    fn gear_torque(&self, kk: usize, phi: f64, w_phi: f64, theta: f64, w_theta: f64) -> GearTorque {
-        let gear = self.gears[kk].torque(phi, w_phi, theta, w_theta);
+    /// Motor kk's gearbox (`Gearbox::torque_with`, its Maxwell arm at `u`, `arm`), with its worm stage's share where it
+    /// has one that turns back (`worm::factors`, at the power its spring's torque puts through the output). A
+    /// self-locking worm passes the gearbox's torques on as they are; its mesh's friction is `worm_drag`, at the rotor.
+    fn gear_torque(&self, kk: usize, phi: f64, w_phi: f64, theta: f64, w_theta: f64, u: f64) -> GearTorque {
+        let gear = self.gears[kk].torque_with(phi, w_phi, theta, w_theta, u);
         let Some(worm) = self.worms[kk].filter(|w| w.back_efficiency > 0.0) else { return gear };
         let (output, rotor) = crate::worm::factors(&worm, gear.rotor * self.ratio[kk] * w_theta);
         GearTorque { output: gear.output * output, rotor: gear.rotor * rotor }
@@ -1431,10 +1431,13 @@ impl ConfigMachine {
     }
     /// What motor kk's gearbox loses, W (`Gearbox::loss_power`), with its worm stage's share, `drag` the self-locking
     /// worm's (`worm_drag`).
-    fn gear_loss_power(&self, kk: usize, phi: f64, w_phi: f64, theta: f64, w_theta: f64, drag: f64) -> f64 {
-        let (plain, worm) =
-            (self.gears[kk].torque(phi, w_phi, theta, w_theta), self.gear_torque(kk, phi, w_phi, theta, w_theta));
-        self.gears[kk].loss_power(phi, w_phi, theta, w_theta) + (worm.rotor - plain.rotor + drag) * w_phi
+    fn gear_loss_power(&self, kk: usize, angles: [f64; 4], u: f64, drag: f64) -> f64 {
+        let [phi, w_phi, theta, w_theta] = angles;
+        let (plain, worm) = (
+            self.gears[kk].torque_with(phi, w_phi, theta, w_theta, u),
+            self.gear_torque(kk, phi, w_phi, theta, w_theta, u),
+        );
+        self.gears[kk].loss_power_with(phi, w_phi, theta, w_theta, u) + (worm.rotor - plain.rotor + drag) * w_phi
             - (worm.output - plain.output) * w_theta
     }
     /// The factors on motor kk's torque at its gearbox's output and at its rotor, in the rigid model, at the torque `into`
@@ -1460,6 +1463,20 @@ impl ConfigMachine {
     }
     fn jump_at(&self, j: usize) -> usize {
         self.brake_at() + self.m() + JUMP_STATES * j
+    }
+    /// Where the gears' Maxwell arms' states start (`Gearbox::arm`), after the belt jumps': one each for the elastic
+    /// drives whose gear has an arm (a screw or rack behind a damped gear or coupling).
+    fn arm_at(&self) -> usize {
+        self.jump_at(self.jumps.len())
+    }
+    /// Motor kk's arm's place in the state, if its gear has one.
+    fn arm_slot(&self, kk: usize) -> Option<usize> {
+        let has = |i: usize| self.elastic && self.gears[i].relax_stiffness > 0.0;
+        has(kk).then(|| self.arm_at() + (0..kk).filter(|&i| has(i)).count())
+    }
+    /// Motor kk's arm's state, 0 where its gear has none.
+    fn arm(&self, s: &[f64], kk: usize) -> f64 {
+        self.arm_slot(kk).map_or(0.0, |i| s[i])
     }
 
     fn body_mass(&self, b: &Body) -> f64 {
@@ -2058,7 +2075,8 @@ impl ConfigMachine {
         for (kk, d) in self.direct.iter().enumerate() {
             if d.is_some() {
                 let (theta, w_theta) = self.output(s, kk);
-                let out = self.gear_torque(kk, s[n + m + kk], s[v + n + m + kk], theta, w_theta).output;
+                let out =
+                    self.gear_torque(kk, s[n + m + kk], s[v + n + m + kk], theta, w_theta, self.arm(s, kk)).output;
                 driven.iter_mut().zip(&self.k[kk]).for_each(|(f, k)| *f += k * out);
             }
         }
@@ -2140,7 +2158,10 @@ impl ConfigMachine {
         for kk in 0..m {
             let (phi, w_phi) = (s[n + m + kk], s[v + n + m + kk]);
             let (theta, w_theta) = self.output(s, kk);
-            let gear = self.gear_torque(kk, phi, w_phi, theta, w_theta);
+            let gear = self.gear_torque(kk, phi, w_phi, theta, w_theta, self.arm(s, kk));
+            if let Some(i) = self.arm_slot(kk) {
+                out[i] = self.gears[kk].arm(phi, theta, s[i]).1;
+            }
             if self.direct[kk].is_some() {
                 // Its pulley is the axis: the pulley's states follow it.
                 out[v + n + kk] = dot(&self.k[kk], &acc);
@@ -2435,7 +2456,8 @@ impl ConfigMachine {
             });
         let (geo, mat, longer) = (self.geo(q), self.mat(s), self.lean_lengths(s).0);
         let belt: f64 = (0..geo.len()).map(|i| self.belt.energy(geo[i] + longer[i], mat[i])).sum();
-        let gears: f64 = (0..m).map(|kk| self.gears[kk].energy(s[n + m + kk], self.output(s, kk).0)).sum();
+        let gears: f64 =
+            (0..m).map(|kk| self.gears[kk].energy_with(s[n + m + kk], self.output(s, kk).0, self.arm(s, kk))).sum();
         // The beam: the carried weight at w lower, and its spring.
         let (w, k) = (self.deflection(s).0, self.beam_mode(q)[0]);
         let potential = potential - self.beam_load().0 * self.g * w;
@@ -2458,12 +2480,12 @@ impl ConfigMachine {
             for kk in 0..m {
                 let (phi, w_phi) = (s[n + m + kk], s[v + n + m + kk]);
                 let (theta, w_theta) = self.output(s, kk);
-                let gear = self.gear_torque(kk, phi, w_phi, theta, w_theta);
+                let gear = self.gear_torque(kk, phi, w_phi, theta, w_theta, self.arm(s, kk));
                 brake[kk] = self.brakes[kk].torque(self.brake_engaged, w_phi, s[self.brake_at() + kk]).0;
                 let drive = self.ripples[kk].apply(torque[kk], phi) - self.shafts[kk].torque(w_phi) - brake[kk];
                 let drag = self.worm_drag(kk, gear.rotor, w_phi, drive);
                 gear_loss[kk] = gear.rotor + drag - gear.output / self.ratio[kk];
-                gear_power[kk] = self.gear_loss_power(kk, phi, w_phi, theta, w_theta, drag);
+                gear_power[kk] = self.gear_loss_power(kk, [phi, w_phi, theta, w_theta], self.arm(s, kk), drag);
                 mesh_in += self.r[kk] * self.mesh_force(kk, self.r[kk] * theta) * w_theta;
             }
             let (geo, mat, (_, rate)) = (self.geo(q), self.mat(s), self.fed(s));
@@ -3416,7 +3438,7 @@ impl Machine for ConfigMachine {
     }
 
     fn state_len(&self) -> usize {
-        self.brake_at() + self.m() + JUMP_STATES * self.jumps.len()
+        self.arm_at() + (0..self.m()).filter(|&kk| self.arm_slot(kk).is_some()).count()
     }
 
     fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]) {
@@ -3479,6 +3501,10 @@ impl Machine for ConfigMachine {
             state[n + kk] = theta;
             state[n + m + kk] = phi;
             torque[kk] = self.ripples[kk].invert(gear * self.held(kk) / self.ratio[kk], phi);
+            // The gear's arm at rest carries nothing.
+            if let Some(i) = self.arm_slot(kk) {
+                state[i] = self.gears[kk].arm_rest(phi, self.output(state, kk).0);
+            }
         }
     }
 
@@ -4005,7 +4031,8 @@ impl Machine for ConfigMachine {
             let outputs: Vec<f64> = (0..m)
                 .map(|kk| {
                     let (theta, w_theta) = self.output(s, kk);
-                    self.gear_torque(kk, s[n + m + kk], s[self.vel() + n + m + kk], theta, w_theta).output
+                    let u = self.arm(s, kk);
+                    self.gear_torque(kk, s[n + m + kk], s[self.vel() + n + m + kk], theta, w_theta, u).output
                 })
                 .collect();
             (stretch, s[self.slack_at()], outputs)

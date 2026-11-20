@@ -42,7 +42,7 @@
 
 use sim_components::catalog::motor_config;
 use sim_components::joint::RotaryJoint;
-use sim_components::mech::ThermalFeedback;
+use sim_components::mech::{GearTorque, ThermalFeedback};
 use sim_components::transmission::BallScrew;
 use sim_core::{
     AxisInfo, Config, ConfigError, ENERGY_PARTS, LOSS_PREFIX, Label, Machine, MachineEntry, Mode, MotorInfo, Part,
@@ -473,7 +473,8 @@ impl Hold {
 /// gearbox, `Converter::apply` having put the screw's in series, K = 1 / (1 / K_coupling + 1 / K_screw) in N/m) is a
 /// spring between the rotor (a body of its own, J_rotor) and the column (m): m z'' = F_gear + stops and friction + weight,
 /// J_rotor w' = motor torque - gear torque, as the arm's joints have it. With the rotor held the column rings at
-/// sqrt(K / m) / 2 pi (`modes`).
+/// sqrt(K / m) / 2 pi (`modes`). The coupling's damper bridges its own spring, not the screw's: with it the state ends in
+/// the gear's Maxwell arm's (`Gearbox::arm`).
 struct Lift {
     elastic: bool,
     joint: RotaryJoint,
@@ -498,13 +499,27 @@ impl Lift {
         self.joint.ratio()
     }
 
+    /// The gear has a Maxwell arm (a damped coupling before the screw), its state x[5].
+    fn relaxes(&self) -> bool {
+        self.elastic && self.joint.gearbox.relax_stiffness > 0.0
+    }
+
+    fn arm(&self, x: &[f64]) -> f64 {
+        if self.relaxes() { x[5] } else { 0.0 }
+    }
+
+    /// The elastic gear's torques, its arm with them.
+    fn gear(&self, x: &[f64]) -> GearTorque {
+        self.joint.gearbox.torque_with(x[3], x[4], x[0], x[1], self.arm(x))
+    }
+
     /// The acceleration, and the force into the screw after the rotor's own acceleration and out of it:
     /// (m + eta i^2 J_rotor) q'' = eta drive + weight + stops and friction.
     fn solve(&self, x: &[f64], torque: f64, engaged: bool, attached: bool) -> (f64, f64, f64) {
         let (j, i) = (&self.joint, self.ratio());
         if self.elastic {
             // The gearbox's spring between the rotor and the column: (acceleration, torque into it, force out of it).
-            let (gear, ..) = j.rotor(torque, x[3], x[4], x[0], x[1], x[2], engaged);
+            let gear = self.gear(x);
             let acc = (gear.output + j.output_torque(x[0], x[1]) + self.weight(attached)) / self.mass(attached);
             return (acc, gear.rotor * i, gear.output);
         }
@@ -524,7 +539,7 @@ impl Lift {
     fn energy(&self, x: &[f64], attached: bool) -> [f64; 3] {
         if self.elastic {
             let kinetic = 0.5 * self.mass(attached) * x[1] * x[1] + 0.5 * self.joint.rotor_inertia * x[4] * x[4];
-            let spring = self.joint.stop_energy(x[0]) + self.joint.gearbox.energy(x[3], x[0]);
+            let spring = self.joint.stop_energy(x[0]) + self.joint.gearbox.energy_with(x[3], x[0], self.arm(x));
             return [kinetic, -self.weight(attached) * x[0], spring];
         }
         let kinetic = 0.5 * (self.mass(attached) + self.joint.reflected_inertia()) * x[1] * x[1];
@@ -544,8 +559,8 @@ impl Lift {
         let [friction, stop, shaft, drag] = self.joint.losses(x[0], x[1], speed, x[2], engaged);
         let other = (torque - self.joint.ripple.apply(torque, rotor)) * speed;
         if self.elastic {
-            let g = self.joint.gearbox.torque(rotor, speed, x[0], x[1]);
-            let loss = self.joint.gearbox.loss_power(rotor, speed, x[0], x[1]);
+            let g = self.gear(x);
+            let loss = self.joint.gearbox.loss_power_with(rotor, speed, x[0], x[1], self.arm(x));
             return ([friction, shaft, loss + drag, stop, other], g.rotor - g.output / i);
         }
         let (_, into, out) = self.solve(x, torque, engaged, attached);
@@ -800,14 +815,21 @@ impl WaferHandler {
         [s[at], s[at + 1]]
     }
 
-    /// The Z stroke's state: [position, speed, brake], and with elastic gearboxes [rotor angle, rotor speed] after them.
+    /// The Z stroke's state: [position, speed, brake], and with elastic gearboxes [rotor angle, rotor speed] after them,
+    /// and the gear's arm's where it has one (`Lift::relaxes`).
     fn lift_state<'a>(&self, s: &'a [f64]) -> &'a [f64] {
         let at = self.planar_len();
         &s[at..at + self.lift_len()]
     }
 
     fn lift_len(&self) -> usize {
-        if self.elastic { 5 } else { 3 }
+        if self.lift.relaxes() {
+            6
+        } else if self.elastic {
+            5
+        } else {
+            3
+        }
     }
 
     /// The bands' stretches and their rates: s1 = -r1 beta, s2 = r2 (beta / 2 - gamma).
@@ -1197,6 +1219,9 @@ impl Machine for WaferHandler {
         if self.elastic {
             state.extend([rotor, 0.0]);
         }
+        if self.lift.relaxes() {
+            state.push(self.lift.joint.gearbox.arm_rest(rotor, z));
+        }
     }
 
     fn derivatives(&self, s: &[f64], torque: &[f64], out: &mut [f64]) {
@@ -1208,9 +1233,12 @@ impl Machine for WaferHandler {
         out[at + 2] = self.lift.joint.brake.torque(self.brake_engaged, self.lift.rotor(state).1, state[2]).1;
         if self.elastic {
             let j = &self.lift.joint;
-            let (_, rotor_acc, _) =
-                j.rotor(torque[2], state[3], state[4], state[0], state[1], state[2], self.brake_engaged);
+            let gear = self.lift.gear(state);
+            let (rotor_acc, _) = j.rotor_under(torque[2], state[3], state[4], gear, state[2], self.brake_engaged);
             (out[at + 3], out[at + 4]) = (state[4], rotor_acc);
+            if self.lift.relaxes() {
+                out[at + 5] = j.gearbox.arm(state[3], state[0], state[5]).1;
+            }
         }
         out[..n].copy_from_slice(&s[n..2 * n]);
         if !self.elastic {
@@ -1398,6 +1426,11 @@ impl Machine for WaferHandler {
             let scale = (at(self, h, 2)[2] - at(self, -h, 2)[2]) / (at(old, h, 2)[2] - at(old, -h, 2)[2]);
             state[x + 3] = after + scale * (rotor[2] - before);
             state[x + 4] = scale * speed[2];
+            // The gear's arm keeps its stretch over the twist it had.
+            if self.lift.relaxes() {
+                let g = &self.lift.joint.gearbox;
+                state[x + 5] += g.arm_rest(state[x + 3], state[x]) - g.arm_rest(old_state[x + 3], old_state[x]);
+            }
         }
         state
     }
@@ -1436,14 +1469,12 @@ impl Machine for WaferHandler {
         // The coordinates that move: theta and phi only on elastic gearboxes.
         let free: Vec<usize> = (0..4).filter(|&c| if c < 2 { self.elastic } else { self.bands_elastic }).collect();
         // The column on its screw and coupling, the rotor held: it moves along z alone, apart from the arm's modes.
-        // Damping ratio c / (2 sqrt(K m)).
+        // Damping ratio c / (2 sqrt(K m)), c the gear's at the ring (`Gearbox::damping_at`).
         let gear = &self.lift.joint.gearbox;
         let lift = (self.elastic && gear.stiffness.is_finite()).then(|| {
             let mass = self.lift.mass(self.payload_attached);
-            Mode {
-                hz: (gear.stiffness / mass).sqrt() / std::f64::consts::TAU,
-                damping: gear.damping / (2.0 * (gear.stiffness * mass).sqrt()),
-            }
+            let w = (gear.stiffness / mass).sqrt();
+            Mode { hz: w / std::f64::consts::TAU, damping: gear.damping_at(w) / (2.0 * (gear.stiffness * mass).sqrt()) }
         });
         if free.is_empty() {
             return lift.into_iter().collect();

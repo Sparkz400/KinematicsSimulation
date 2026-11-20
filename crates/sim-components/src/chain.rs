@@ -114,7 +114,7 @@ pub fn condition_number(j: &[f64], rows: usize, cols: usize) -> f64 {
 /// The modes of M x'' + C x' + K x = 0 (`n` coordinates, M row by row, K and C diagonal): w^2 of K x = w^2 M x, the
 /// eigenvalues of L^-1 K L^-T (M = L L^T) by Jacobi rotations, and each mode's damping ratio x^T C x / (2 w) with x
 /// normalised to x^T M x = 1. Empty where M is not positive definite.
-fn generalized_modes(m: &[f64], k: &[f64], c: &[f64], n: usize) -> Vec<sim_core::Mode> {
+fn generalized_modes(m: &[f64], k: &[f64], c: impl Fn(usize, f64) -> f64, n: usize) -> Vec<sim_core::Mode> {
     let mut l = vec![0.0; n * n];
     for i in 0..n {
         for j in 0..=i {
@@ -170,7 +170,7 @@ fn generalized_modes(m: &[f64], k: &[f64], c: &[f64], n: usize) -> Vec<sim_core:
             let omega = a[i * n + i].sqrt();
             // x = L^-T y, y the eigenvector.
             let x = (0..n).map(|r| (0..n).map(|p| w[p * n + r] * v[p * n + i]).sum::<f64>());
-            let damping = x.zip(c).map(|(x, c)| c * x * x).sum::<f64>() / (2.0 * omega);
+            let damping = x.enumerate().map(|(r, x)| c(r, omega) * x * x).sum::<f64>() / (2.0 * omega);
             (omega > 0.0 && omega.is_finite()).then_some(sim_core::Mode { hz: omega / std::f64::consts::TAU, damping })
         })
         .collect()
@@ -680,7 +680,7 @@ impl<M: Mechanism> JointMachine<M> {
         let (mut m, mut k, mut damping) = (rest(size * size), rest(size), rest(size));
         for r in 0..free {
             m[r * size..r * size + free].copy_from_slice(&load[r * n..r * n + free]);
-            (k[r], damping[r]) = (self.joints[r].drive.gearbox.stiffness, self.joints[r].drive.gearbox.damping);
+            k[r] = self.joints[r].drive.gearbox.stiffness;
         }
         for i in 0..f {
             for j in 0..free {
@@ -690,7 +690,8 @@ impl<M: Mechanism> JointMachine<M> {
             m[(free + i) * size + free..(free + i + 1) * size].copy_from_slice(&c.mass[i * f..(i + 1) * f]);
             (k[free + i], damping[free + i]) = (modes[i].stiffness, modes[i].damping);
         }
-        generalized_modes(&m, &k, &damping, size)
+        let c = |r: usize, w: f64| if r < free { self.joints[r].drive.gearbox.damping_at(w) } else { damping[r] };
+        generalized_modes(&m, &k, c, size)
     }
 
     /// An arm's joints on their gearboxes' springs with the motors held, at joints q (`Machine::modes`): K x = w^2 M x
@@ -704,8 +705,8 @@ impl<M: Mechanism> JointMachine<M> {
         }
         let (load, _) = self.load(q, &vec![0.0; n]);
         let gear = |k: usize| &self.joints[k].drive.gearbox;
-        let (k, c): (Vec<f64>, Vec<f64>) = (0..n).map(|j| (gear(j).stiffness, gear(j).damping)).unzip();
-        generalized_modes(&load[..n * n], &k, &c, n)
+        let k: Vec<f64> = (0..n).map(|j| gear(j).stiffness).collect();
+        generalized_modes(&load[..n * n], &k, |j, w| gear(j).damping_at(w), n)
     }
 
     /// The tool's move by the bending modes at joints q, deflections d: `Mechanism::flex_shift`.
@@ -715,6 +716,23 @@ impl<M: Mechanism> JointMachine<M> {
             self.mechanism.flex_shift(q, d, &mut out);
         }
         out
+    }
+
+    /// Where the gears' Maxwell arms' states start (`Gearbox::arm`), after the bending modes' rates: one each for the
+    /// elastic joints whose gear has an arm (a screw or rack with a damped gear before it).
+    fn arm_at(&self) -> usize {
+        self.flex_at() + 2 * self.flex
+    }
+
+    /// Joint k's arm's place in the state, if its gear has one.
+    fn arm_slot(&self, k: usize) -> Option<usize> {
+        let has = |i: usize| self.elastic && self.joints[i].drive.gearbox.relax_stiffness > 0.0;
+        has(k).then(|| self.arm_at() + (0..k).filter(|&i| has(i)).count())
+    }
+
+    /// Joint k's arm's state, 0 where its gear has none (`Gearbox::torque_with` then leaves it out).
+    fn arm(&self, s: &[f64], k: usize) -> f64 {
+        self.arm_slot(k).map_or(0.0, |i| s[i])
     }
 
     /// Joint positions and speeds of a state.
@@ -857,7 +875,13 @@ impl<M: Mechanism> JointMachine<M> {
             let mut d = vec![0.0; self.state_len()];
             self.derivatives(s, torque, &mut d);
             let gear = (0..n)
-                .map(|k| self.joints[k].drive.gearbox.torque(s[2 * n + k], s[3 * n + k], s[k], s[n + k]).output)
+                .map(|k| {
+                    self.joints[k]
+                        .drive
+                        .gearbox
+                        .torque_with(s[2 * n + k], s[3 * n + k], s[k], s[n + k], self.arm(s, k))
+                        .output
+                })
                 .collect();
             let at = self.passive_at() + self.passive.len();
             (d[n..2 * n].iter().chain(&d[at..at + self.passive.len()]).copied().collect(), gear)
@@ -910,7 +934,7 @@ impl<M: Mechanism> JointMachine<M> {
             let j = &self.joints[k].drive;
             if self.elastic {
                 kinetic += 0.5 * j.rotor_inertia * s[3 * n + k] * s[3 * n + k];
-                elastic += j.gearbox.energy(s[2 * n + k], s[k]);
+                elastic += j.gearbox.energy_with(s[2 * n + k], s[k], self.arm(s, k));
             } else {
                 kinetic += 0.5 * j.reflected_inertia() * qd[k] * qd[k];
             }
@@ -940,9 +964,10 @@ impl<M: Mechanism> JointMachine<M> {
                     (into[k] - out[k]) * qd[k]
                 }
                 None => {
-                    let g = j.gearbox.torque(s[2 * n + k], s[3 * n + k], s[k], s[n + k]);
+                    let u = self.arm(s, k);
+                    let g = j.gearbox.torque_with(s[2 * n + k], s[3 * n + k], s[k], s[n + k], u);
                     gear_at_rotor[k] = g.rotor - g.output / j.ratio();
-                    j.gearbox.loss_power(s[2 * n + k], s[3 * n + k], s[k], s[n + k])
+                    j.gearbox.loss_power_with(s[2 * n + k], s[3 * n + k], s[k], s[n + k], u)
                 }
             };
             powers[3 * k..3 * k + 3].copy_from_slice(&[friction, shaft, gear + drag]);
@@ -1137,7 +1162,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
 
     fn state_len(&self) -> usize {
-        self.flex_at() + 2 * self.flex
+        self.arm_at() + (0..self.n()).filter(|&k| self.arm_slot(k).is_some()).count()
     }
 
     /// With bending links, the tool (not the joints' pose) at `tool`: the links bent by their load at rest.
@@ -1193,6 +1218,12 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         state.resize(self.flex_at(), 0.0);
         state.extend(bent);
         state.resize(self.state_len(), 0.0);
+        // The arms at rest carry nothing.
+        for k in 0..n {
+            if let Some(i) = self.arm_slot(k) {
+                state[i] = self.joints[k].drive.gearbox.arm_rest(state[2 * n + k], q[k]);
+            }
+        }
     }
 
     fn derivatives(&self, s: &[f64], torque: &[f64], out: &mut [f64]) {
@@ -1239,8 +1270,13 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         }
         for k in 0..n {
             let j = &self.joints[k].drive;
-            let (gear, rotor_acc, brake_rate) =
-                j.rotor(torque[k], s[2 * n + k], s[3 * n + k], q[k], qd[k], s[4 * n + k], self.brake_engaged);
+            let u = self.arm(s, k);
+            let gear = j.gearbox.torque_with(s[2 * n + k], s[3 * n + k], q[k], qd[k], u);
+            let (rotor_acc, brake_rate) =
+                j.rotor_under(torque[k], s[2 * n + k], s[3 * n + k], gear, s[4 * n + k], self.brake_engaged);
+            if let Some(i) = self.arm_slot(k) {
+                out[i] = j.gearbox.arm(s[2 * n + k], q[k], u).1;
+            }
             rhs[k] = gear.output - bias[k] + j.output_torque(q[k], qd[k]) + process[k];
             out[2 * n + k] = s[3 * n + k];
             out[3 * n + k] = rotor_acc;
@@ -1794,13 +1830,13 @@ mod tests {
     #[test]
     fn held_joint_modes_are_the_hand_solved_eigenvalues() {
         let tau = std::f64::consts::TAU;
-        let coupled = generalized_modes(&[2.0, 0.5, 0.5, 1.0], &[100.0, 50.0], &[0.0, 0.0], 2);
+        let coupled = generalized_modes(&[2.0, 0.5, 0.5, 1.0], &[100.0, 50.0], |_, _| 0.0, 2);
         let mut hz: Vec<f64> = coupled.iter().map(|m| m.hz).collect();
         hz.sort_by(f64::total_cmp);
         let by_hand = [(200.0 - 5000f64.sqrt()) / 3.5, (200.0 + 5000f64.sqrt()) / 3.5].map(|l: f64| l.sqrt() / tau);
         assert!((hz[0] - 0.967314).abs() < 1e-6 && (hz[1] - 1.399712).abs() < 1e-6, "{hz:?}");
         assert!((hz[0] - by_hand[0]).abs() < 1e-12 && (hz[1] - by_hand[1]).abs() < 1e-12);
-        let alone = generalized_modes(&[2.0, 0.0, 0.0, 1.0], &[100.0, 50.0], &[2.0, 0.0], 2);
+        let alone = generalized_modes(&[2.0, 0.0, 0.0, 1.0], &[100.0, 50.0], |r, _| [2.0, 0.0][r], 2);
         for m in &alone {
             assert!((m.hz - 1.125395).abs() < 1e-6, "{alone:?}");
         }

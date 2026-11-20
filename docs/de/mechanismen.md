@@ -72,7 +72,11 @@ und m mit
 
 - Übersetzung i / Hebel, der Hebel ist der Weg je Radiant (Steigung / 2 pi oder der Teilkreisradius des Ritzels);
 - Steifigkeit 1 / (Hebel^2 / k_Getriebe + 1 / k_Wandler): die Torsionssteifigkeit des Getriebes am Gelenk gesehen, in
-  Reihe mit der von Spindel oder Zahnstange; die Dämpfung ebenso durch Hebel^2;
+  Reihe mit der von Spindel oder Zahnstange;
+- Dämpfung: die des Getriebes durch Hebel^2, nur über der Feder des Getriebes, nicht über der von Spindel oder
+  Zahnstange (ein Dreiparametermodell; die Maschine führt dafür einen Zustand mehr, `Gearbox::arm`); mit
+  K_g = k_Getriebe / Hebel^2 und K_c des Wandlers schwingt eine Masse daran bei tiefen Frequenzen mit
+  c (K_c / (K_c + K_g))^2 gedämpft, nicht mit c;
 - Spiel: das des Getriebes am Gelenk gesehen plus das des Wandlers (mit `effects.gearbox_backlash`);
 - Wirkungsgrad: das Produkt (mit `effects.gearbox_efficiency`);
 - die Trägheit von Spindelwelle oder Ritzel am Rotor, durch i^2.

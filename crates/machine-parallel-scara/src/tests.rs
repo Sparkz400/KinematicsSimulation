@@ -354,7 +354,8 @@ fn stroke_stiffness_by_hand() -> f64 {
 #[test]
 fn the_carriage_rings_on_its_screw_at_the_hand_calculated_frequency() {
     let d = lossless(&[]);
-    assert_eq!(d.state_len(), N_ELASTIC + 10);
+    // Each extra axis six states: the stroke's coupling has a Maxwell arm (`Gearbox::arm`), and so all of them a place.
+    assert_eq!(d.state_len(), N_ELASTIC + 12);
     assert_eq!(scara(&["effects.joint_elasticity = false"]).state_len(), N_RIGID + 6);
     let pose = [0.0, -0.5, 0.1, 0.0];
     let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
@@ -364,7 +365,10 @@ fn the_carriage_rings_on_its_screw_at_the_hand_calculated_frequency() {
     d.derivatives(&state, &torque, &mut rates);
     let rest = rates[at + 1];
     assert!(rest.abs() < 1e-9, "at rest the carriage accelerates by {rest}");
+    // The static stiffness: the coupling's damper (its Maxwell arm after the extra axes' five states, `Gearbox::arm`)
+    // relaxed at the new twist, which the carriage's move takes down by delta; held, the arm would add its K_m.
     state[at] += delta;
+    state[at + 5] -= delta;
     d.derivatives(&state, &torque, &mut rates);
     let hz = (-(rates[at + 1] - rest) / delta).sqrt() / std::f64::consts::TAU;
     let (k, m) = (stroke_stiffness_by_hand(), 6.0);
@@ -416,8 +420,8 @@ fn the_screw_is_twisted_by_the_weight_at_rest() {
         let twist = kg * G / stroke_stiffness_by_hand();
         close(state[at + 3] - i * state[at], i * twist, 1e-6, "the screw's twist");
         close(state[at + 3], i * (0.1 + twist), 1e-9, "the stroke's rotor");
-        close(state[at + 8], 8.0 * 1.0, 1e-12, "the turn's rotor");
-        assert_eq!((state[at + 4], state[at + 9]), (0.0, 0.0));
+        close(state[at + 9], 8.0 * 1.0, 1e-12, "the turn's rotor");
+        assert_eq!((state[at + 4], state[at + 10]), (0.0, 0.0));
         assert_at_rest(&d, &state, &torque, &format!("payload {attached}"));
     }
 }
@@ -441,7 +445,7 @@ fn budget_of_the_screw_and_the_turn(backlash: bool) {
     d.equilibrium(&[0.0, -0.5, 0.1, 0.0], &mut state, &mut torque);
     let at = d.planar_len();
     state[at] += 2e-6;
-    state[at + 5] += 1e-3;
+    state[at + 6] += 1e-3;
     let f = |s: &[f64]| {
         let mut r = vec![0.0; n];
         d.derivatives(s, &torque, &mut r);
@@ -456,9 +460,12 @@ fn budget_of_the_screw_and_the_turn(backlash: bool) {
         d.loss_powers(s, &torque, &mut loss);
         (0..4).map(|k| torque[k] * speed[k]).sum::<f64>() - loss.iter().sum::<f64>()
     };
-    let (dt, e0) = (2e-6, d.energy(&state));
+    // At 1 us: the coupling's damper bridges its own spring alone (`Gearbox::arm`), and its arm relaxes in 25 us, so the
+    // trapezoid's work is off by 8.6e-9 J at 2 us, 2.1e-9 at 1 us, 5.4e-10 at 0.5 us without the play (second order in
+    // the step, not a booking error).
+    let (dt, e0) = (1e-6, d.energy(&state));
     let (mut work, mut last) = (0.0, power(&state));
-    for _ in 0..4000 {
+    for _ in 0..8000 {
         let k1 = f(&state);
         let k2 = f(&advance(&state, &k1, dt / 2.0));
         let k3 = f(&advance(&state, &k2, dt / 2.0));
@@ -469,8 +476,8 @@ fn budget_of_the_screw_and_the_turn(backlash: bool) {
         last = now;
     }
     let drift = d.energy(&state) - e0 - work;
-    // With the play the step crosses the flanks' kink, and the budget closes to first order in the step: 3.26e-6 J at
-    // 2 us, 1.71e-6 at 1 us, 0.85e-6 at 0.5 us (a booking error would not shrink); 6.4e-10 J without it.
+    // With the play the step crosses the flanks' kink, and the budget closes to first order in the step: 1.71e-6 J at
+    // 1 us, 0.85e-6 at 0.5 us (a booking error would not shrink).
     let bound = if backlash { 1e-3 } else { 1e-6 } * 4.2e-3;
     assert!(drift.abs() < bound, "backlash {backlash}: the budget is off by {drift} J of 4.2e-3");
 }

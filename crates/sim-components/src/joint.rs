@@ -152,10 +152,25 @@ impl RotaryJoint {
         engaged: bool,
     ) -> (GearTorque, f64, f64) {
         let gear = self.gearbox.torque(rotor, rotor_speed, angle, speed);
+        let (acc, rate) = self.rotor_under(command, rotor, rotor_speed, gear, brake, engaged);
+        (gear, acc, rate)
+    }
+
+    /// `rotor` with the gearbox's torques `gear` given (a gear with its Maxwell arm, `Gearbox::torque_with`): the
+    /// rotor's acceleration and the brake's deflection rate.
+    pub fn rotor_under(
+        &self,
+        command: f64,
+        rotor: f64,
+        rotor_speed: f64,
+        gear: GearTorque,
+        brake: f64,
+        engaged: bool,
+    ) -> (f64, f64) {
         let (held, rate) = self.brake.torque(engaged, rotor_speed, brake);
         let acc = (self.ripple.apply(command, rotor) - gear.rotor - self.shaft.torque(rotor_speed) - held)
             / self.rotor_inertia;
-        (gear, acc, rate)
+        (acc, rate)
     }
 
     /// Rigid model: the torque the motor puts on the arm through a loss-free gearbox with a massless rotor at the
