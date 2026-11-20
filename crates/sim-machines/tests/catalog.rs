@@ -827,12 +827,12 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
     // The belt's slack counts once it fails (a section at -12 N against 0.5 N: infinitely far over), so a candidate
     // that fails it ranks behind every near miss; while it passes it says nothing of a limit and is left out. Before, it
     // was left out either way, and the failing candidate ranked by its motor-peak of 0.7.
-    let pushed = Verdict { motor: None, ..verdict("belt-slack", -12.0, 0.5, false) };
+    let pushed = Verdict { motor: None, ..verdict("belt-least-tension", -12.0, 0.5, false) };
     assert_eq!(
         candidate(vec![verdict("motor-peak", 0.7, 1.0, true), pushed]).tightest(),
-        Some(("belt-slack", f64::INFINITY))
+        Some(("belt-least-tension", f64::INFINITY))
     );
-    let taut = Verdict { motor: None, ..verdict("belt-slack", 200.0, 0.5, true) };
+    let taut = Verdict { motor: None, ..verdict("belt-least-tension", 200.0, 0.5, true) };
     assert_eq!(candidate(vec![verdict("motor-peak", 0.7, 1.0, true), taut]).tightest(), Some(("motor-peak", 0.7)));
 }
 
@@ -967,7 +967,7 @@ fn exct_30_passes_with_margin(mode: &str, bands: &[sim_components::analysis::Ban
     assert!(failed.is_empty(), "{mode}: {failed:?}");
     let bearing = band("pulley-bearing-life");
     assert!(bearing.ok && bearing.low > 40000.0, "{mode}: {bearing:?}");
-    let (slack, settling, radial) = (band("belt-slack"), band("settling"), band("gearbox-radial-load"));
+    let (slack, settling, radial) = (band("belt-least-tension"), band("settling"), band("gearbox-radial-load"));
     assert!(
         slack.low > 100.0 && settling.high < 0.7e-4 && radial.high < 1500.0,
         "{mode}: slackest {} N, settling {} m, radial {} N",

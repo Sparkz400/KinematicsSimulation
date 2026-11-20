@@ -583,7 +583,7 @@ const CHECKS: [&str; 52] = [
     "settling",
     "settling-angle",
     "belt-tension",
-    "belt-slack",
+    "belt-least-tension",
     "gearbox-input-speed",
     "gearbox-radial-load",
     "guide-load",

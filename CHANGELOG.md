@@ -62,6 +62,8 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   Jansen estimators) with bootstrap 95 % intervals; per result (the verdicts' margins, peak and RMS torque, winding rise,
   path and dwell error) a ranked CSV and "measure these first" on the error stream; runs on all cores, deterministic for
   a seed. Checked on the Ishigami function and a linear model with known indices.
+- The verdict `belt-slack` is now `belt-least-tension`: its value is the lowest belt tension, which has to stay above
+  `ratings.belt_min_tension_n`, and a row "belt-slack,,169.8,0,ok" read as 169.8 of slack against none allowed.
 
 ### Release polish (session 12)
 

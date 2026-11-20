@@ -1518,10 +1518,10 @@ fn at_least(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -
     Verdict { check, motor, value, limit, ok: value >= limit }
 }
 
-/// The checks whose value has to stay at or above its limit ("belt-slack": above); every other check's value has to
+/// The checks whose value has to stay at or above its limit ("belt-least-tension": above); every other check's value has to
 /// stay at or below it.
 pub const AT_LEAST: [&str; 10] = [
-    "belt-slack",
+    "belt-least-tension",
     "pulley-bearing-life",
     "gearbox-life",
     "gearbox-gearing-life",
@@ -1533,8 +1533,8 @@ pub const AT_LEAST: [&str; 10] = [
     "collision",
 ];
 
-/// Above 1 it fails (but "belt-slack" at exactly 1). A check of `AT_LEAST` at or below zero (a contact, "collision" at no
-/// clearance; a belt section pushed, "belt-slack" with a negative tension) is infinitely far over: limit over value would
+/// Above 1 it fails (but "belt-least-tension" at exactly 1). A check of `AT_LEAST` at or below zero (a contact, "collision" at no
+/// clearance; a belt section pushed, "belt-least-tension" with a negative tension) is infinitely far over: limit over value would
 /// be negative there, and read as a margin above 100 %.
 pub fn utilisation(v: &Verdict) -> f64 {
     if AT_LEAST.contains(&v.check) && v.value <= 0.0 {
@@ -1558,7 +1558,7 @@ pub fn utilisation(v: &Verdict) -> f64 {
 ///
 /// "gearbox-continuous" judges the cubic mean of that torque against the gearbox's rated torque, as gearbox
 /// makers do; it used to judge the RMS torque, which is for motors and their heat.
-/// "belt-slack" also fails when any belt section spent time without tension.
+/// "belt-least-tension" also fails when any belt section spent time without tension.
 /// With `effects.dc_link` the braking checks judge the simulated DC link: what the capacitors held at the
 /// highest voltage, the mean and peak power the resistor burned, and the highest voltage against the trip
 /// level. Without it they are estimated from the energy the motor fed back, as before.
@@ -1776,7 +1776,7 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
             // millisecond; the slack time also counts what falls between.
             let never_slack = load.belt_slack_time.is_none_or(|time| time <= 0.0);
             out.push(Verdict {
-                check: "belt-slack",
+                check: "belt-least-tension",
                 motor: None,
                 value: slackest,
                 limit,
@@ -4953,12 +4953,12 @@ line_module_efficiency = 0.9
         assert!(!v.ok && (utilisation(&v) - 2.88).abs() < 0.001 && (badness(&v) - 13055.556).abs() < 0.001);
     }
 
-    /// A check judged from below at or below zero is infinitely far over: a belt section pushed (belt-slack with a
+    /// A check judged from below at or below zero is infinitely far over: a belt section pushed (belt-least-tension with a
     /// tension of -12 N against 0.5 N) would otherwise have limit over value -0.0417, and the report a margin of
     /// +104.2 % beside "not ok". Above zero it stays limit over value: 0.5 / 2 = 0.25.
     #[test]
     fn an_at_least_check_at_or_below_zero_is_infinitely_far_over() {
-        let pushed = Verdict { check: "belt-slack", motor: None, value: -12.0, limit: 0.5, ok: false };
+        let pushed = Verdict { check: "belt-least-tension", motor: None, value: -12.0, limit: 0.5, ok: false };
         assert_eq!(utilisation(&pushed), f64::INFINITY);
         assert_eq!(utilisation(&Verdict { value: 0.0, ..pushed.clone() }), f64::INFINITY);
         assert_eq!(utilisation(&Verdict { value: 2.0, ok: true, ..pushed }), 0.25);

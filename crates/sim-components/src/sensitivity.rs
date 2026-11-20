@@ -185,7 +185,7 @@ pub struct SobolIndex {
 }
 
 /// A verdict's margin: the room its value leaves to its limit, in the check's unit, negative where it fails. Not the
-/// utilisation (value over limit): "belt-slack" has the limit 0, where that is 0 whatever the tension. A bound on a rating
+/// utilisation (value over limit): "belt-least-tension" has the limit 0, where that is 0 whatever the tension. A bound on a rating
 /// moves the margin through the limit.
 pub fn margin(v: &Verdict) -> f64 {
     if AT_LEAST.contains(&v.check) { v.value - v.limit } else { v.limit - v.value }

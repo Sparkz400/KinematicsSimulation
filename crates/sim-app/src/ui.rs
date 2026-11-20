@@ -361,8 +361,8 @@ fn usage(v: &Verdict) -> Option<f64> {
         return Some(if v.ok { 0.0 } else { f64::INFINITY });
     }
     let share = utilisation(v);
-    // "belt-slack" passes only above its limit, the others at it too.
-    let judged_by_share = v.ok == if v.check == "belt-slack" { share < 1.0 } else { share <= 1.0 };
+    // "belt-least-tension" passes only above its limit, the others at it too.
+    let judged_by_share = v.ok == if v.check == "belt-least-tension" { share < 1.0 } else { share <= 1.0 };
     // Infinitely far over (`utilisation`: an at-least check at or below zero) is a full gauge, as a limit of 0 failed.
     (share >= 0.0 && judged_by_share && (share.is_finite() || !v.ok)).then_some(share)
 }
@@ -907,7 +907,7 @@ fn picked_check(ui: &mut Ui, model: &Model, check: &'static str, panels: PanelSt
         let judged_otherwise = verdicts.iter().any(|v| v.check == check && v.limit != 0.0 && usage(v).is_none());
         let direction = if judged_otherwise {
             "ui-verdict-judged-otherwise"
-        } else if check == "belt-slack" {
+        } else if check == "belt-least-tension" {
             "ui-verdict-above"
         } else if AT_LEAST.contains(&check) {
             "ui-verdict-at-least"

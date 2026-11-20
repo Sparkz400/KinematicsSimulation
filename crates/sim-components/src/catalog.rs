@@ -1833,7 +1833,7 @@ impl Candidate {
             .iter()
             .filter(|v| (v.limit > 0.0 || !v.ok) && !by_design(v))
             // Slack while it passes and the warm start's convergence while it passes say nothing of a limit; failing, they count.
-            .filter(|v| !v.ok || !["belt-slack", "thermal-warm-start"].contains(&v.check))
+            .filter(|v| !v.ok || !["belt-least-tension", "thermal-warm-start"].contains(&v.check))
             // For one motor (`search_motor`): its own checks, and those of the whole machine where they fail.
             .filter(|v| {
                 self.motor.is_empty()

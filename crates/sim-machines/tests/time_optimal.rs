@@ -19,7 +19,7 @@ const KEPT: [&str; 10] = [
     "gearbox-input-speed",
     "guide-load",
     "belt-tension",
-    "belt-slack",
+    "belt-least-tension",
     "braking-resistor-peak",
 ];
 
