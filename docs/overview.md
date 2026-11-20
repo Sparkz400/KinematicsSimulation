@@ -131,7 +131,7 @@ braking-resistor-peak,b,35.18,500.0,ok
 dc-link-overvoltage,b,224.7,257.6,ok
 settling,,0.00004292,0.0001000,ok
 belt-tension,,333.5,1500,ok
-belt-slack,,205.1,0,ok
+belt-least-tension,,205.1,0,ok
 guide-load,,177.2,2000,ok
 guide-life,,4967636,20000,ok
 thermal-warm-start,,0.00001066,0.1000,ok
@@ -161,13 +161,13 @@ dc-link-overvoltage,a,770.0,820.0,ok
 ...
 settling,,0.00003477,0.0001000,ok
 belt-tension,,554.5,2140,ok
-belt-slack,,257.9,0,ok
+belt-least-tension,,257.9,0,ok
 guide-load,,184.4,2000,ok
 guide-life,,2996062,20000,ok
 thermal-warm-start,,0.00002397,0.1000,ok
 ```
 
-The lowest belt tension in the cycle is 258 N. With `--bands` the same command runs the cycle with each bounded value at its low and at its high bound, one at a time: the slackest section keeps 158 N and the tool is at most 0.039 mm off in the dwell. With `--bands --samples 200` all bounded values lie between their bounds at once in 200 runs: 140 N and 0.042 mm at worst. With `--bands --worst` (a search for the worst corner of the bounds) it is 90 N and 0.082 mm against 0.1 mm. Every check passes in all three, but one: the pulley shaft bearings last 324000 h as written and pass in both band modes (at least 72800 h one at a time, 55400 h in the samples), but fail 20000 h at the worst corner (9950 h, every bounded value against them at once); Festo publishes no data on them, and their load rating and lubrication values are estimates. An earlier state of this config failed `belt-slack` and `settling` in the worst case. For that the belt pretension was raised from 300 N to 450 N, the X jerk limit lowered from 500 to 150 m/s³, input shaping and corner blending switched on, and a second input shaper at 17.5 Hz added; the comments in the file give the reasons.
+The lowest belt tension in the cycle is 258 N. With `--bands` the same command runs the cycle with each bounded value at its low and at its high bound, one at a time: the slackest section keeps 158 N and the tool is at most 0.039 mm off in the dwell. With `--bands --samples 200` all bounded values lie between their bounds at once in 200 runs: 140 N and 0.042 mm at worst. With `--bands --worst` (a search for the worst corner of the bounds) it is 90 N and 0.082 mm against 0.1 mm. Every check passes in all three, but one: the pulley shaft bearings last 324000 h as written and pass in both band modes (at least 72800 h one at a time, 55400 h in the samples), but fail 20000 h at the worst corner (9950 h, every bounded value against them at once); Festo publishes no data on them, and their load rating and lubrication values are estimates. An earlier state of this config failed `belt-least-tension` and `settling` in the worst case. For that the belt pretension was raised from 300 N to 450 N, the X jerk limit lowered from 500 to 150 m/s³, input shaping and corner blending switched on, and a second input shaper at 17.5 Hz added; the comments in the file give the reasons.
 
 **A motor by name.** `--motor ARTICLE` puts a motor of the Siemens S210 catalogue into any config:
 
@@ -201,7 +201,7 @@ axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tig
 ,1FK2203-4AK,,6SL3210-5HE10-8UF0,siemens,400v,1.49,2.98,FAIL,motor-s1,1.0021,3.2601,97.80,...
 ,1FK2103-4AH,,6SL3210-5HE10-8UF0,siemens,400v,1.65,3.30,FAIL,motor-thermal,1.0161,3.2439,101.61,...
 ...
-,1FK2210-4AC,,6SL3210-5HE17-0UF0,siemens,400v,27.00,54.00,FAIL,belt-slack,inf,12.6807,20.73,...
+,1FK2210-4AC,,6SL3210-5HE17-0UF0,siemens,400v,27.00,54.00,FAIL,belt-least-tension,inf,12.6807,20.73,...
 ```
 
 The two lightest motors pass close to their limits: the 1FK2104-4AF at 0.98 of its drive's current, the 1FK2104-4AK at 0.996 of its winding's rise; the next ones are held by their S1 curve (0.51 to 0.56), and from the 1FK2104-6AF on the tightest check is the belt's pull on a pulley shaft (1000 N of 2000 N), which the motor hardly changes; `winding_rise_k` and `peak_torque_nm` tell those apart. `--supply s120` searches the S120 motors with their Motor Modules, `--gearboxes NRK` adds gearboxes on a machine that has one, and `--axes` tries every motor on every axis of the catalogue of the machine's kind as well (Festo EXCT and Bahr ELZI for this one: 338 candidates; the Bahr ELZI 40 comes out lighter than the EXCT-30). A drive, a belt or an axis can be named like a motor (`--drive`, `--belt AT5-25`, `--axis ELZI-40`). The table goes on with rank, energy, thermal and drive utilisation, following error, inertia ratio, the failing checks, what the catalogue left to estimates and one column per check; `--rank-by energy` (or a weighted mix) ranks by what matters, `--drives neighbours` tries the next drive sizes, several `--config` with `--weights` judge a duty mix, `--robust N` ranks the best again at the worst corner of their bounds, `sim-cli transmission` sweeps the gear ratio or pulley radius for its optimum, and `sim-cli compare-kinematics TASK.toml --machines t-gantry,delta-d3,...` runs one pick-and-place task on several kinematics side by side ([which drive works best](user-guide.md#which-drive-works-best-rank-mix-sweep-and-compare)).
@@ -215,7 +215,7 @@ cycle_s,2.0480,1.7560
 dwell_error_peak_m,3.477e-5,4.899e-5
 dwell_angle_error_peak_rad,-0.000e0,-0.000e0
 bands_fastest_cycle_s,,1.3900
-bands_fastest_fails,,belt-slack settling
+bands_fastest_fails,,belt-least-tension settling
 bands_steps_back,,4
 bands_excused,,
 Cycles simulated: search + error bands 40 + 834
@@ -226,7 +226,7 @@ axis.z.max_velocity_m_s,1.5,2.25
 effects.input_shaping,true,false
 ```
 
-The search judges the config as written; its fastest setting, 1.39 s, fails `belt-slack` and `settling` in the error bands (each bounded value at its low and at its high bound, as `verdicts --bands`). So the optimiser goes back four steps of its search, to 1.756 s, which passes there too. The bands are one value at a time: at the worst corner of the bounds (`verdicts --bands --worst` with the five settings above) this result fails `settling` (0.26 mm against 0.1 mm; the belt keeps 32 N), so it takes back the margins the config was given for its worst case. `optimise --worst` judges the result at that corner instead, at the cost of a far longer search.
+The search judges the config as written; its fastest setting, 1.39 s, fails `belt-least-tension` and `settling` in the error bands (each bounded value at its low and at its high bound, as `verdicts --bands`). So the optimiser goes back four steps of its search, to 1.756 s, which passes there too. The bands are one value at a time: at the worst corner of the bounds (`verdicts --bands --worst` with the five settings above) this result fails `settling` (0.26 mm against 0.1 mm; the belt keeps 32 N), so it takes back the margins the config was given for its worst case. `optimise --worst` judges the result at that corner instead, at the cost of a far longer search.
 
 **A path file.** Lines, arcs and splines, from where the machine stands (the default T-gantry starts at 0.1, 0.35):
 

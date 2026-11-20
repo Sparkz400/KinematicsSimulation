@@ -92,6 +92,36 @@ fn a_screw_axis_takes_the_hand_calculated_torque_and_has_its_critical_speed() {
     assert_eq!(names, ["screw-speed", "screw-buckling", "screw-static", "screw-dn", "screw-life"]);
 }
 
+/// The same Z axis with effects.screw_lead_efficiency, which reads [screw_z].friction_coefficient: by hand (THK) with
+/// tan beta = 0.01 / (pi 0.016) = 0.198944 and mu = 0.003, eta = (1 - mu tan beta) / (1 + mu / tan beta) =
+/// 0.999403 / 1.015080 = 0.984556 in place of the table's 0.9; the motor's torque for 2 m/s2 up gives 2 m/s2.
+#[test]
+fn a_machine_file_s_screw_takes_its_efficiency_from_its_lead_and_friction() {
+    let entry = file("screw-portal.toml");
+    let mut cfg = entry.config();
+    for off in ["belt_stretch", "guide_friction", "motor_friction", "torque_ripple", "tooth_meshing"] {
+        cfg.set_text(&format!("effects.{off} = false")).unwrap();
+    }
+    cfg.set_text("effects.screw_lead_efficiency = true").unwrap();
+    let machine = (entry.build)(&cfg).unwrap();
+    let tan_beta = 0.01 / (PI * 0.016);
+    let eta = (1.0 - 0.003 * tan_beta) / (1.0 + 0.003 / tan_beta);
+    assert!(close(tan_beta, 0.198944, 1e-6) && close(eta, 0.984556, 1e-6), "{tan_beta} {eta}");
+    let (lever, mass, acc) = (0.01 / (2.0 * PI), 3.5, 2.0);
+    let inertia = 1.5e-5 + 5.0e-6 + PI * 7850.0 * 0.45 * 0.016f64.powi(4) / 32.0;
+    let torque = inertia * acc / lever + mass * (acc + 9.80665) * lever / eta;
+    let (mut state, mut held) = (Vec::new(), [0.0; 3]);
+    machine.equilibrium(&[0.5, 0.25, 0.15], &mut state, &mut held);
+    machine.set_tool_velocity(&mut state, &[0.0, 0.0, 0.3]);
+    let mut rates = vec![0.0; state.len()];
+    machine.derivatives(&state, &[held[0], held[1], torque], &mut rates);
+    assert!(close(rates[3 + 2], acc, 1e-9), "Z acceleration {} against {acc} by hand", rates[5]);
+    // A coefficient of none is refused, naming the file's table.
+    cfg.set_text("screw_z.friction_coefficient = 0.0").unwrap();
+    let refused = (entry.build)(&cfg).err().map(|e| e.detail().to_string());
+    assert!(refused.as_ref().is_some_and(|d| d.starts_with("screw_z.friction_coefficient")), "{refused:?}");
+}
+
 /// The rack gantry's X by hand, rigid: the pinion (module 2, 30 teeth, 19.5283 degrees helix) has the pitch radius
 /// r = 0.002 * 30 / (2 cos 19.5283 deg) = 31.8310 mm, 200 mm per turn; behind ratio 10 the motor turns 10 x / r: at
 /// x = 1 m, 314.159 rad (five turns of the pinion, fifty of the motor). The bridge, Y carriage and payload and the Y

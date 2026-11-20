@@ -2680,7 +2680,7 @@ const PLACES_MOST: usize = 1000;
 const KEPT_BACK: f64 = 2e-4;
 /// The share of each speed rating (a motor's maximum speed, a gearbox's input speed, a screw's speed) that the
 /// time-optimal plan keeps back for the following of the loops: a plan at the motors' 420 rad/s ran them up to 420.66
-/// rad/s (0.16 % over) on a belt gantry's cycle. This is the least `PlanLimits::speed_kept` has; `speed_kept_of`
+/// rad/s (0.157 % over) on a belt gantry's cycle. This is the least `PlanLimits::speed_kept` has; `speed_kept_of`
 /// raises it for a loop that follows less closely.
 const SPEED_KEPT: f64 = 0.01;
 /// The most `speed_kept_of` keeps back.

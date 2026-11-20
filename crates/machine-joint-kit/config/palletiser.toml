@@ -132,8 +132,9 @@ damping_nm_s_rad = 150.0
 inertia_at_input_kgm2 = 4.0e-4
 
 # The life of each joint's gear, as a strain wave gear's (transmission::StrainWave). [estimate]
-# The torque at which `efficiency` holds: the strain wave gear's rated torque, as Harmonic Drive gives its efficiency
-# ([estimate] as strain_wave.rated_torque_nm).
+# The torque at which `efficiency` holds, as Harmonic Drive gives its efficiency at the rated torque: [estimate] the
+# size 32 gear's 137 N m, as on the arm, as are the hysteresis, drag and stiffness data here; not the 600 N m that
+# strain_wave.rated_torque_nm and the ratings take for this gear's life and load.
 efficiency_torque_nm = 137.0
 hysteresis_rad = 2.909e-4
 # With effects.gearbox_lost_motion: no backlash and no band (the flexspline's teeth are in mesh preloaded);

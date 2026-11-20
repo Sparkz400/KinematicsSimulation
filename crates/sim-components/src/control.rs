@@ -727,7 +727,7 @@ impl Controller {
             let target: Vec<f64> =
                 segment.get("target").and_then(|t| t.as_array()).ok_or_else(bad)?.iter().filter_map(number).collect();
             if !in_range(machine, &target) {
-                return Err(bad());
+                return Err(range_error(machine, &target, format!("cycle.segment[{i}]")));
             }
             let corner = match segment.get("corners_m") {
                 None => None,
@@ -748,8 +748,11 @@ impl Controller {
                         .map(|p| Some(p.as_array()?.iter().filter_map(number).collect()))
                         .collect::<Option<_>>()
                         .ok_or_else(bad)?;
-                    if points.is_empty() || !points.iter().all(|p| in_range(machine, p)) {
+                    if points.is_empty() {
                         return Err(bad());
+                    }
+                    if let Some(p) = points.iter().find(|p| !in_range(machine, p)) {
+                        return Err(range_error(machine, p, format!("cycle.segment[{i}].via")));
                     }
                     Some(if corner.is_some() { lines_through(&points, &target) } else { via_pieces(&points, &target) })
                 }
@@ -3038,6 +3041,19 @@ fn at_target(from: &[f64], target: &[f64]) -> bool {
 
 pub(crate) fn in_range(machine: &dyn Machine, target: &[f64]) -> bool {
     near_range(machine, target, 0.0)
+}
+
+/// A config's pose at `path` that `in_range` refuses: with the machine's own reason where it gives one (out of reach,
+/// beyond a joint's stop), so that every front end shows the place and the reason; outside an axis range, as a value
+/// out of range.
+fn range_error(machine: &dyn Machine, target: &[f64], path: String) -> ConfigError {
+    let axes = machine.axes();
+    let within =
+        target.len() == axes.len() && target.iter().zip(axes).all(|(t, a)| t.is_finite() && *t >= a.min && *t <= a.max);
+    match within.then(|| machine.unreachable(target, 0.0)).flatten() {
+        Some(why) => ConfigError::Part(why, path),
+        None => ConfigError::Invalid(path),
+    }
 }
 
 /// A pose a path from `start` may go to. The setpoint at rest is where the motors stand, up to

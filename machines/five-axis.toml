@@ -51,6 +51,10 @@ load_dependent_friction = true
 motor_friction = true
 gearbox_backlash = true
 gearbox_efficiency = true
+# The screws' efficiency from their lead and the balls' friction (screw_*.friction_coefficient, THK's formula) in
+# place of their efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart. Off here: the
+# sizing was done with the efficiency.
+screw_lead_efficiency = false
 torque_ripple = true
 tooth_meshing = true
 cable_chain = false
@@ -367,6 +371,9 @@ root_diameter_m = 0.0132
 length_m = 0.45
 mounting = "fixed-supported"
 efficiency = 0.9
+# With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
+# ball screws, not this screw's.
+friction_coefficient = 0.003
 nut_stiffness_n_m = 2.0e8
 bearing_stiffness_n_m = 3.0e8
 preload_n = 150.0

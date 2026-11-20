@@ -223,7 +223,7 @@ fn a_slack_belt_section_is_counted_and_a_tight_one_is_not() {
     assert!(loose > 0.5 && loose < 1.0, "{loose} s without tension");
     assert_eq!(tight, 0.0);
 
-    // The cycle analysis reports the time, and "belt-slack" fails on it. On the way back the long section is
+    // The cycle analysis reports the time, and "belt-least-tension" fails on it. On the way back the long section is
     // the one that slackens and takes less of the force, so the cycle has less than twice the move's time.
     let judged = |pretension: &str| {
         let mut cfg = ENTRY.config();
@@ -232,7 +232,7 @@ fn a_slack_belt_section_is_counted_and_a_tight_one_is_not() {
         let ok = sim_components::analysis::verdicts(&cfg, &load)
             .unwrap()
             .iter()
-            .find(|v| v.check == "belt-slack")
+            .find(|v| v.check == "belt-least-tension")
             .unwrap()
             .ok;
         (load.belt_slack_time.unwrap(), ok)
@@ -1197,7 +1197,7 @@ fn the_robust_optimiser_steps_back_to_the_fastest_setting_that_passes_in_the_ban
     let robust = found.robust.clone().unwrap();
     assert_eq!(
         (robust.nominal_fails.as_slice(), robust.excused.len(), robust.steps_back, robust.runs),
-        (["belt-slack"].as_slice(), 0, 2, 12),
+        (["belt-least-tension"].as_slice(), 0, 2, 12),
         "{robust:?}"
     );
     assert!(
@@ -1247,7 +1247,7 @@ fn the_optimiser_at_the_worst_corner_steps_back_to_a_setting_that_passes_there()
     assert!(in_bands.nominal_fails.is_empty() && in_bands.steps_back == 0 && !in_bands.worst, "{in_bands:?}");
     assert_eq!(
         (at_worst.nominal_fails.as_slice(), at_worst.excused.len(), at_worst.steps_back, at_worst.runs, at_worst.worst),
-        (["belt-slack"].as_slice(), 0, 1, 26, true),
+        (["belt-least-tension"].as_slice(), 0, 1, 26, true),
         "{at_worst:?}"
     );
     assert!(

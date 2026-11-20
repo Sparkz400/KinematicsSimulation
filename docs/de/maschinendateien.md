@@ -220,7 +220,7 @@ dc-link-energy,b,1.128,6.205,ok
 dc-link-overvoltage,b,169.9,257.6,ok
 settling,,0.00001314,0.0001000,ok
 belt-tension,,345.7,1500,ok
-belt-slack,,229.2,0,ok
+belt-least-tension,,229.2,0,ok
 gearbox-radial-load,,637.1,1500,ok
 guide-load,,107.9,2000,ok
 guide-life,,6789511,20000,ok

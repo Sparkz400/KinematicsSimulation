@@ -219,7 +219,7 @@ $ sim-cli verdicts t-gantry --set mass.payload_kg=40 | grep -v ',ok$'
 check,motor,value,limit,result
 braking-resistor-continuous,b,26.79,20.00,FAIL
 settling,,0.0003377,0.0001000,FAIL
-belt-slack,,0,0,FAIL
+belt-least-tension,,0,0,FAIL
 
 $ sim-cli verdicts t-gantry --bands
 check,motor,value,limit,result,low,high,worst_case
