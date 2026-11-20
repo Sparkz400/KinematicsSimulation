@@ -987,7 +987,7 @@ with none: switching an axis off needs the cycle's targets and `start.pose` chan
 | `[motor.3]`, `[motor.4]` | | The Z and C motors over `[motor]` | 1FK2103-2AH at 400 V (catalogue), resistance and inductance estimates as the D4's tool motor |
 | `[gearbox.3]` | | The Z motor's coupling: ratio 1, nothing warms | estimates |
 | `[gearbox.4]` | | The turn's gearbox | NRB060-03-8, ratio 8 (catalogue) |
-| `[drive.3]`, `[drive.4]` | | The Z and C drives over `[drive]` | 1.95 N m peak, 0.59 rated (catalogue); velocity gain 0.035 with 0.16 s (Z: across the bounds at least 36.2° and 14.7 dB; 0.0443 rang the screw's axial mode at the peak torque), 0.033 with 10 ms (C: with friction 18.8 dB of gain margin, without it 6.95 dB, where 0.0443 left 4.0 dB) |
+| `[drive.3]`, `[drive.4]` | | The Z and C drives over `[drive]` | 1.95 N m peak, 0.59 rated (catalogue); velocity gain 0.0443 (Z, behind a speed filter of 1 ms of its own: behind the shared 0.1 ms the screw's axial mode rang at the peak torque), 0.033 with 10 ms (C: with friction 18.8 dB of gain margin, without it 6.95 dB, where 0.0443 left 4.0 dB) |
 | `drive.velocity_kp_nm_s_rad`, `velocity_tn_s` | | The arms' velocity loop | 0.33, 80 ms: the D2's 0.25 and 30 ms leave arm 2 at 31° phase margin with the heavier plate |
 | `[ratings.3]`, `[ratings.4]` | | The S210 6SL3210-5HE10-4UF0's currents and braking resistor; the turn's gearbox | catalogue |
 

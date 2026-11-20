@@ -533,11 +533,11 @@ braking_module = false
 # The Z motor's and the tool turn motor's drives: their own values over [drive], the cycle times, filters, noise and
 # DC link the shared ones. [catalogue] the 1FK2103-2AH at 400 V (D 32): 1.95 N m maximum, 0.59 N m rated at
 # 4500 r/min; no-load speed sqrt(3/2) * 540 V / 0.6037736 N m/A. The current loop's gain for the winding's 45 mH, as
-# the D4's tool motor. The velocity loops, checked with `sim-cli margins parallel-scara`: the Z motor's 0.035 with
-# 0.16 s (at least 36.2 degrees and 14.7 dB across the bounds, --bands): the D4's tool motor's 0.0443 drove the
-# screw's axial mode (2.7 % damped, `screw.axial_damping_ratio`) into a ring at the peak torque that the linear margins
-# do not show (motor 3 at 1.80 of its peak in `sim-cli verdicts`); 0.04 does so at the bound's 0.02, 0.035 not; the turn's 0.033 with 10 ms: with friction 18.8 dB, without it (a cruise, where friction
-# adds no damping) 6.95 dB and 66.6 degrees at 23 Hz on the rotor in the gearbox's play, where 0.0443 left 4.0 dB.
+# the D4's tool motor. The velocity loops, checked with `sim-cli margins parallel-scara`: the Z motor's the D4's tool
+# motor's 0.0443 behind a speed filter of its own, 1 ms: the screw's axial mode (about 2.7 % damped through the nut,
+# `screw.axial_damping_ratio`) rang at the peak torque behind the shared 0.1 ms (motor 3 at 1.80 of its peak in
+# `sim-cli verdicts`); 1 ms takes 10.6 dB of gain margin at it without friction (0.5 ms 4.9 dB); the turn's 0.033
+# with 10 ms: with friction 18.8 dB, without it (a cruise, where friction adds no damping) 6.95 dB and 66.6 degrees at 23 Hz on the rotor in the gearbox's play, where 0.0443 left 4.0 dB.
 # 25.1 dB rigid at 0.0443. The shared 30 ms leaves the turn 1.4 mrad off for 0.15 s after it stops (the motor's friction,
 # 0.1 N m in a traverse, held by the integrator), and settling, which counts the turn's rad as m, fails at 0.75 mm. A
 # gain of 0.08 or more (0.1: 8.1 dB) lets the elastic turn hammer from flank to flank of its play at 710 Hz at the
@@ -576,8 +576,8 @@ rated_speed_rad_s = 471.239
 no_load_speed_rad_s = 1095.38
 # [catalogue] its own highest speed, not the arms': 8000 r/min (motors_s210.csv), below its no-load speed.
 max_speed_rad_s = 837.758
-velocity_kp_nm_s_rad = 0.035
-velocity_tn_s = 0.16
+velocity_kp_nm_s_rad = 0.0443
+velocity_filter_s = 1.0e-3
 current_kp_v_a = 180.0
 
 [drive.4]

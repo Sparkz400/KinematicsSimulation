@@ -129,7 +129,11 @@ impl Converter {
         // (`BRISTLE_RATE_MAX`, tau under 10 us) is its slow limit, u following x: a damper K_m tau beside b, off by
         // (omega tau)^2 at a ring of omega (0.4 % at 1 kHz). A rigid converter leaves the gear's damper across it.
         let damping = g.damping / (l * l);
-        let own = if output.is_finite() { 2.0 * self.damping_ratio * (converter * output).sqrt() } else { 0.0 };
+        let own = if output.is_finite() && converter.is_finite() {
+            2.0 * self.damping_ratio * (converter * output).sqrt()
+        } else {
+            0.0
+        };
         let (sum, dampers) = (converter + k1 / (l * l), damping + own);
         let (across, tau) = (if dampers > 0.0 { damping * own / dampers } else { 0.0 }, dampers / sum);
         let arm = if dampers > 0.0 {
