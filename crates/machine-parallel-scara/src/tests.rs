@@ -412,6 +412,23 @@ fn the_carriage_rings_on_its_screw_at_the_hand_calculated_frequency() {
     assert!(rigid.modes(&pose).is_empty() && rigid.resonance_hz(&pose).is_none());
 }
 
+/// The shipped config, its screw's stiffness following the nut: the fixed bearing at the plate, z = 0.25, so the nut is
+/// 0.25 - z from it, and the shaft's E A / a with E A = 2.06e11 pi / 4 0.0135^2 = 2.948660e7 N in place of the far
+/// end's: 1 / K = 1 / 4.75026e7 - (0.3 - a) / E A. z = 0.1 (a = 0.15): K = 6.26393e7 N/m, sqrt(K / 6) / 2 pi = 514.24
+/// Hz; z = 0.2 (a = 0.05): K = 7.95349e7 N/m, 579.46 Hz; z = 0 (a = 0.25): 467.02 Hz. The stroke's is the highest mode.
+#[test]
+fn the_carriage_rings_higher_with_the_nut_near_the_plate() {
+    let d = scara(&[]);
+    let ea = 2.06e11 * std::f64::consts::FRAC_PI_4 * 0.0135f64.powi(2);
+    for z in [0.0, 0.1, 0.2] {
+        let k = 1.0 / (1.0 / stroke_stiffness_by_hand() - (0.3 - (0.25 - z)) / ea);
+        let by_hand = (k / 6.0).sqrt() / std::f64::consts::TAU;
+        let found = d.modes(&[0.0, -0.5, z, 0.0]).iter().map(|m| m.hz).fold(0.0, f64::max);
+        close(found, by_hand, 1e-9, "the stroke's mode along the stroke");
+    }
+    close((6.26393e7f64 / 6.0).sqrt() / std::f64::consts::TAU, 514.24, 1e-5, "z = 0.1 by hand");
+}
+
 /// At rest under the weight the screw carries 6 kg x g = 58.8399 N and is twisted by F / K = 58.8399 / 4.75020e7 =
 /// 1.23869e-6 m, the rotor ahead of the carriage by i times that (i = 2 pi / 0.02 = 314.159 rad/m): 3.8914e-4 rad. The
 /// turn holds nothing: its rotor is at 8 times the tool's angle. Without the payload the twist is 1 / 6 of it.

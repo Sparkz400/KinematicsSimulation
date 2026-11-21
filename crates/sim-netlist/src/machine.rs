@@ -3500,8 +3500,8 @@ impl Machine for ConfigMachine {
             let phi = self.ratio[kk] * (theta + self.gears[kk].static_twist_at(theta, gear));
             state[n + kk] = theta;
             state[n + m + kk] = phi;
-            torque[kk] = self.ripples[kk]
-                .invert(self.gears[kk].held_at(theta, gear) * self.held(kk) / self.ratio[kk], phi);
+            torque[kk] =
+                self.ripples[kk].invert(self.gears[kk].held_at(theta, gear) * self.held(kk) / self.ratio[kk], phi);
             // The gear's arm at rest carries nothing.
             if let Some(i) = self.arm_slot(kk) {
                 state[i] = self.gears[kk].arm_rest(phi, self.output(state, kk).0);
@@ -3716,7 +3716,7 @@ impl Machine for ConfigMachine {
             .map(|kk| {
                 let belt: f64 = self.sections.iter().zip(&geo).map(|(s, l)| s.f[kk] * s.f[kk] * self.belt.ea / l).sum();
                 let belt = if belt > 0.0 { 1.0 / (self.r[kk] * self.r_mat[kk] * belt) } else { 0.0 };
-                let gear = &self.gears[kk];
+                let gear = self.gears[kk].at(self.pulley_angle(kk, tool_pose));
                 let spring = 1.0 / (1.0 / gear.stiffness + gear.band_compliance + belt);
                 sim_core::Train::of(spring / (self.ratio[kk] * self.ratio[kk]), self.j_rotor[kk], whole[kk])
             })

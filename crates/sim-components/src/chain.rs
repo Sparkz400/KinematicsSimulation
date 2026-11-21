@@ -1535,7 +1535,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         (0..self.n())
             .map(|k| {
                 let j = &self.joints[k].drive;
-                j.train(mass[k * self.n() + k] / (j.ratio() * j.ratio()) + j.rotor_inertia)
+                j.train_at(q[k], mass[k * self.n() + k] / (j.ratio() * j.ratio()) + j.rotor_inertia)
             })
             .collect()
     }

@@ -130,10 +130,19 @@ impl RotaryJoint {
     /// Its train for the time-optimal plan (`Machine::trains`): the gearbox's spring (K1, in series with a converter's
     /// own compliance behind it) between the rotor and the rest of `whole`, the motor's rigid inertia at a pose, all
     /// referred to the motor over the ratio squared.
+    /// Behind a screw whose stiffness follows its nut, the far end's (`train_at` takes the pose's).
     pub fn train(&self, whole: f64) -> Option<sim_core::Train> {
-        let (g, i2) = (&self.gearbox, self.ratio() * self.ratio());
+        Self::train_of(&self.gearbox, self.ratio(), self.rotor_inertia, whole)
+    }
+
+    /// `train` with the joint at `travel`, where a screw's stiffness follows its nut (`Gearbox::at`).
+    pub fn train_at(&self, travel: f64, whole: f64) -> Option<sim_core::Train> {
+        Self::train_of(&self.gearbox.at(travel), self.ratio(), self.rotor_inertia, whole)
+    }
+
+    fn train_of(g: &Gearbox, ratio: f64, rotor: f64, whole: f64) -> Option<sim_core::Train> {
         let spring = 1.0 / (1.0 / g.stiffness + g.band_compliance);
-        sim_core::Train::of(spring / i2, self.rotor_inertia, whole)
+        sim_core::Train::of(spring / (ratio * ratio), rotor, whole)
     }
 
     /// The rotor's inertia as the joint feels it in the rigid model.
