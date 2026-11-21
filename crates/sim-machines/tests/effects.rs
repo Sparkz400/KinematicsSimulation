@@ -731,14 +731,19 @@ fn a_switch_the_machine_does_not_model_is_refused_switched_on() {
 /// central differences over the states the rotors' angles and speeds do not hang on. The losses that do not linearise
 /// (friction, backlash, lost motion, efficiency, ripple) off; the rotors 1e-3 rad ahead so that each gear is in contact.
 /// With the far end's dampers the tripod's three came out 0.01574, 0.01726, 0.01977 against 0.01946, 0.02134, 0.02444,
-/// the hexapod's 19 % low, the parallel SCARA's quill at z = 0.18 m 0.0216 against 0.0400.
+/// the hexapod's 19 % low, the parallel SCARA's quill at z = 0.18 m 0.0216 against 0.0400. The SCARA with its links
+/// bending two-way (`JointMachine`'s coupled modes) too, up to its stroke's mode at 599 Hz (0.02710, 0.02282 with the
+/// far end's dampers): the links' pair above it, 680 and 737 Hz, is off by 2 % either way (0.0756 and 0.0844 against
+/// 0.0741 and 0.0860, the sum kept), `generalized_modes` taking each mode's damping on its undamped shape.
 #[test]
 fn the_modes_are_damped_as_the_linearised_machine_at_the_nut() {
-    for (name, pose) in [
-        ("tripod", None),
-        ("hexapod", None),
-        ("parallel-scara", Some(vec![0.0, -0.6, 0.18, 0.0])),
-        ("scara", Some(vec![0.3, 0.2, 0.1, 0.0])),
+    let two_way = ["effects.link_bending = true", "effects.link_bending_reaction = true"];
+    for (name, pose, edits, below) in [
+        ("tripod", None, &[][..], f64::INFINITY),
+        ("hexapod", None, &[], f64::INFINITY),
+        ("parallel-scara", Some(vec![0.0, -0.6, 0.18, 0.0]), &[], f64::INFINITY),
+        ("scara", Some(vec![0.3, 0.2, 0.1, 0.0]), &[], f64::INFINITY),
+        ("scara", Some(vec![0.3, 0.2, 0.1, 0.0]), &two_way, 650.0),
     ] {
         let entry = sim_machines::find(name).unwrap();
         let mut cfg = entry.config();
@@ -749,6 +754,7 @@ fn the_modes_are_damped_as_the_linearised_machine_at_the_nut() {
                 cfg.set_text(&format!("{key} = false")).unwrap();
             }
         }
+        let cfg = with(&cfg, edits);
         assert!(cfg.bool("effects.screw_stiffness_with_position").unwrap(), "{name}");
         let m = (entry.build)(&cfg).unwrap();
         let pose = pose.unwrap_or_else(|| sim_core::testkit::mid_pose(m.as_ref()));
@@ -787,7 +793,7 @@ fn the_modes_are_damped_as_the_linearised_machine_at_the_nut() {
         }
         let modes = m.modes(&pose);
         assert!(!modes.is_empty(), "{name}");
-        for mode in modes {
+        for mode in modes.into_iter().filter(|mode| mode.hz < below) {
             let (w, z) = (std::f64::consts::TAU * mode.hz, mode.damping);
             let ([re, im], _) =
                 sim_components::shapes::eigen_near(&a, size, [-z * w, w * (1.0 - z * z).sqrt()]).unwrap();

@@ -271,8 +271,10 @@ Fixed (after the second audit, 21 November):
   (`Gearbox::at`). Against the linearised machine with its rotors held (effects
   `the_modes_are_damped_as_the_linearised_machine_at_the_nut`): tripod 0.01946, 0.02134, 0.02444 (was 0.01574,
   0.01726, 0.01977), hexapod 0.01047 to 0.0480 (was 0.00872 to 0.0401), parallel SCARA's quill at z = 0.18 m 0.0399
-  (was 0.0216), joint-kit SCARA's stroke 0.0271 (was 0.0228). Only the printed damping moves: the shaper takes the
-  frequencies.
+  (was 0.0216), joint-kit SCARA's stroke 0.0271 (was 0.0228), also with its links bending two-way. Only the printed
+  damping moves: the shaper takes the frequencies. Open: with the links bending two-way the SCARA's pair of link
+  modes at 680 and 737 Hz is damped 0.0756 and 0.0844 against 0.0741 and 0.0860 linearised (the sum kept):
+  `generalized_modes` takes each mode's damping on its undamped shape.
 - The hysteresis behind a screw whose stiffness follows the nut (b253b9b5) picked its Dahl branch at the anchor by
   rounding: `at` rebuilt the anchor's twist as (x r) / r, an ulp to either side of x, and at the anchor the branch also
   went by x' where the state lives on y = r x. The torques were right, the slope and so the loss power wrong exactly
