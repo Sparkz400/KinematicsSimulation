@@ -1144,12 +1144,14 @@ impl<M: Mechanism> JointMachine<M> {
         let (mass, _) = self.load_all(&qa, &vec![0.0; all]);
         let drive = &self.joints[0].drive;
         let jr = drive.reflected_inertia();
+        // The gear's spring at the joint's travel (a screw's stiffness follows its nut, `Gearbox::at`).
+        let gear = drive.gearbox.at(q[0]);
         let sprung: Vec<usize> = (0..self.passive.len()).filter(|&p| self.passive[p].0 > 0.0).map(|p| p + 1).collect();
         if sprung.is_empty() {
             // The closed form, so that the frequency is the one `resonance_hz` always gave, to the bit; zeta = c w / 2k.
             let damping = |hz: f64| {
                 let w = std::f64::consts::TAU * hz;
-                drive.gearbox.damping_at(w) * w / (2.0 * drive.gearbox.stiffness)
+                gear.damping_at(w) * w / (2.0 * gear.stiffness)
             };
             return self
                 .two_mass_frequency(q)
@@ -1169,10 +1171,10 @@ impl<M: Mechanism> JointMachine<M> {
             }
         }
         (0..size * size).for_each(|rc| m[rc] -= to_q[rc / size] * to_q[rc % size] / m_qq);
-        let (k, c): (Vec<f64>, Vec<f64>) = std::iter::once((drive.gearbox.stiffness, drive.gearbox.damping))
+        let (k, c): (Vec<f64>, Vec<f64>) = std::iter::once((gear.stiffness, gear.damping))
             .chain(sprung.iter().map(|&p| self.passive[p - 1]))
             .unzip();
-        generalized_modes(&m, &k, |r, w| if r == 0 { drive.gearbox.damping_at(w) } else { c[r] }, size)
+        generalized_modes(&m, &k, |r, w| if r == 0 { gear.damping_at(w) } else { c[r] }, size)
     }
 }
 

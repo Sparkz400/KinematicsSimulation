@@ -3613,7 +3613,7 @@ fn curve_join(limits: &PieceLimits, length: f64, [v0, v1]: [f64; 2], hold: f64, 
     // the other at the same place and speed; only the acceleration steps. (Switching at the knot itself, with the cubic
     // from the rise's acceleration to the fall's next knot in between, left the speed short of the fall's by the step of
     // the acceleration times half that span: 1.05e-3 m/s where a rise at 2.02 m/s^2 met a fall braking at 5.14 m/s^2 on
-    // the single axis behind a lossy gearbox, which the profile cycle's differences read as 0.46 % more braking torque
+    // an axis behind a lossy gearbox, which the profile cycle's differences read as 0.46 % more braking torque
     // than the plan held.) Both are on the curve if their accelerations agree to the jerk of a few steps.
     let reach = length - fall[fall.len() - 1][1];
     let ahead = |t: f64| {

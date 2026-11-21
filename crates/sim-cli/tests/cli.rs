@@ -431,7 +431,7 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         if cfg.get("effects.joint_elasticity").is_ok() {
             sets.push("effects.joint_elasticity=true".into());
         }
-        // The screws at the far end's stiffness, as the gains were set for: following the nut, the parallel SCARA's
+        // The screws at the far end's stiffness, as the gains were set for: following the nut, a five-bar's screw
         // stroke measured at its start (the nut 0.175 m from the bearing, 501 against 448 Hz) stays stable at 12 times
         // its gain (7.8 dB).
         if cfg.get("effects.screw_stiffness_with_position").is_ok() {
