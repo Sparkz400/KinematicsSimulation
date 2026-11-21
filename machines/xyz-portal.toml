@@ -3,7 +3,8 @@
 # clamp, so the pulley cuts it into two sections: one longer by the axis's travel, the other shorter. The Z motor is
 # smaller and has a gearbox of ratio 10 ([motor.mz], [drive.mz], [gearbox.mz], [ratings.mz]); X and Y have the shared
 # [motor], [drive], [gearbox] and [ratings]. Its Z motor holds the slide and payload against gravity:
-# m g r / i = 3.5 kg * 9.80665 m/s2 * 0.02 m / 10 = 0.0686 N m.
+# m g r / i = 3.5 kg * 9.80665 m/s2 * 0.02 m / 10 = 0.0686 N m, and 0.04 kg of the Z belt's runs that its spans (below)
+# move up with the slide: 0.0694 N m.
 # The value tables are the H-bot's (machines/h-bot.toml), the T-gantry's placeholders; nothing here is a real machine.
 # Placeholder values; units are in the field names. See docs/machine-files.md.
 format_version = 1

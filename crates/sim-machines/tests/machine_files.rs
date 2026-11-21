@@ -700,9 +700,12 @@ fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
             assert_close(&format!("{name}: acceleration with and without the belt"), &with, &without, 1e-9);
             assert_close(&format!("{name}: acceleration"), &with, &acc, 1e-5);
         }
+        // Less the energy at rest at the pose: the runs that move with a vertical axis weigh there too.
         let kinetic = |mu: f64| {
             let m = lossless(&["effects.belt_stretch = false", &format!("belt.mass_kg_m = {mu}")]);
-            m.energy(&moving(m.as_ref()).0)
+            let (mut rest, mut hold) = (Vec::new(), vec![0.0; m.motors().len()]);
+            m.equilibrium(pose, &mut rest, &mut hold);
+            m.energy(&moving(m.as_ref()).0) - m.energy(&rest)
         };
         let (belt, hand) = (kinetic(0.2) - kinetic(0.1), 0.5 * 0.1 * by_hand(pose, vel));
         assert!(close(belt, hand, 1e-9), "{name}: the belt carries {belt} J more, by hand {hand} J");
@@ -712,7 +715,10 @@ fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
 /// The portal by hand. Each axis has a belt and a motor of its own, so the motor angle is i q / r: X and Y with the shared
 /// gearbox (i 5), Z with its own ([gearbox.mz], i 10): at q = 0.1 m 25, 25 and 50 rad, and at 0.2 m/s 50, 50 and 100
 /// rad/s. Its Z motor holds the slide (2.5 kg) and the payload (1 kg) against gravity: m g r / i = 3.5 * 9.80665 * 0.02
-/// / 10 = 0.0686466 N m (rigid, without tooth meshing and ripple); X and Y lie flat and hold nothing. The Z motor's own
+/// / 10 = 0.0686466 N m (rigid, without tooth meshing and ripple), and the Z belt's runs that its spans move with Z: 0.1 + z
+/// and 0.4 - z up, 0.1 down, 0.4 m of the belt's 0.1 kg/m rising with the slide (`runs_height` weighs them where the
+/// frame momentum has them; a loop's runs would cancel, the file shares its section lengths out as its comment says):
+/// 3.54 * 9.80665 * 0.02 / 10 = 0.0694311 N m. X and Y lie flat and hold nothing. The Z motor's own
 /// drive ([drive.mz]: rated torque 0.635 N m, the shared one 1.27) is the controller's, and its verdicts are judged
 /// against its own ratings ([ratings.mz]: drive current 1.5 A, gearbox 18 N m; the shared 3 A and 40 N m).
 #[test]
@@ -728,7 +734,7 @@ fn the_portal_moves_and_holds_as_worked_out_by_hand() {
     assert_close("motor angles", &motors, &[25.0, 25.0, 50.0], 1e-12);
     let (mut state, mut held) = (Vec::new(), [0.0; 3]);
     machine.equilibrium(&[0.5, 0.25, 0.15], &mut state, &mut held);
-    assert_close("holding torque", &held, &[0.0, 0.0, 3.5 * 9.80665 * 0.02 / 10.0], 1e-12);
+    assert_close("holding torque", &held, &[0.0, 0.0, (3.5 + 0.1 * 0.4) * 9.80665 * 0.02 / 10.0], 1e-12);
 
     // Elastic, the rotors turn at the speed the tool's sets.
     let elastic = (entry.build)(&entry.config()).unwrap();

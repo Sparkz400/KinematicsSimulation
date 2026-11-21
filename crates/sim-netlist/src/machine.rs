@@ -1690,7 +1690,29 @@ impl ConfigMachine {
             let (j, m) = (self.body_jacobian(b, q), self.body_mass(b));
             out.iter_mut().zip(&j).for_each(|(f, j)| *f -= m * self.g * j[2]);
         }
+        let (_, rise) = self.runs_height(q);
+        out.iter_mut().zip(rise).for_each(|(f, r)| *f -= self.g * r);
         out
+    }
+    /// The belt's runs' weight where the frame momentum has their mass: the height of their first moment (`runs_mass`'s
+    /// mu), mu sum_s (L0_s + c_s . q / 2) V_s,z . q, and its gradient by q, mu sum_s ((c_s / 2) V_s,z . q + (L0_s +
+    /// c_s . q / 2) V_s,z). On the T-gantry's file the vertical runs give mu (4 s + 2 s_z) z: their weight, 0.16 kg g,
+    /// on Z.
+    fn runs_height(&self, q: &[f64]) -> (f64, Vec<f64>) {
+        let (mut height, mut rise) = (0.0, vec![0.0; q.len()]);
+        if self.run_mass == 0.0 {
+            return (height, rise);
+        }
+        for s in &self.spans {
+            let Some(rows) = &s.velocity else { continue };
+            let (moment, up) = (self.run_mass * (s.length + 0.5 * dot(&s.c, q)), dot(&rows[2], q));
+            height += moment * up;
+            for (i, r) in rise.iter_mut().enumerate() {
+                *r += self.run_mass * (0.5 * s.c.get(i).copied().unwrap_or(0.0) * up)
+                    + moment * rows[2].get(i).copied().unwrap_or(0.0);
+            }
+        }
+        (height, rise)
     }
     /// The potential energy of gravity at q, from where it is with every coordinate at 0.
     fn potential(&self, q: &[f64]) -> f64 {
@@ -1701,7 +1723,7 @@ impl ConfigMachine {
             .filter(|b| b.general)
             .map(|b| self.body_mass(b) * self.g * self.body_point(b, q)[2])
             .sum();
-        straight + general
+        straight + general + self.g * self.runs_height(q).0
     }
     /// Pulleys and rotors seen on the axes, J_pulley + i^2 J_rotor per motor, through K.
     fn drive_mass(&self) -> Vec<Vec<f64>> {

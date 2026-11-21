@@ -177,7 +177,7 @@ What it does not cover: field weakening, iron loss, the drive's overload, the mo
 | --- | --- | --- | --- |
 | Acceleration under constant torque, rigid model | Force over effective mass | 1e-9 | `constant_torque_gives_force_over_effective_mass`, axis and gantry |
 | Holding torque of an inclined axis | m g sin · r / i | exact rigid; 0.1 % elastic | `inclined_axis_needs_holding_torque`, axis |
-| Holding torques on Z | ± m_z g r / (2i) | exact rigid; 0.1 % elastic | `static_hold_on_z_needs_opposite_torques`, gantry |
+| Holding torques on Z | ± W_z r / (2i), W_z = (m_z + ρ (4s + 2s_z)) g = 7.16 kg · g with the belt's vertical runs | exact rigid; 0.1 % elastic | `static_hold_on_z_needs_opposite_torques`, gantry |
 | A slide's presliding friction (`effects.slide_presliding`): Dahl's force from its anchor, held at rest, turned back, the Stribeck level; off, the smoothed step to the bit | g (1 − e^−1) = 94.8181 N; −59.9364 N; 118.394 N | 1e-4 N | `a_presliding_friction_holds_at_rest_and_turns_over_its_travel`, mech |
 | The screw axis inclined by 5°, drive off: held by its presliding friction, crept with the smoothed step | −g / σ ln(1 − F / g) = 2.40 µm taken up, < 1 µm in the second half second (Dahl ratchets 10 µm more while the screw rings); 0.002 · atanh(21.37 / 89.47) = 0.487 mm/s | 1 µm; 0.03 mm | `a_presliding_slide_holds_its_load_without_creeping`, joint kit |
 | Belt tension from stretch; damping on the stretch rate | EA · strain; c · rate | 1e-6 N; 1e-9 N | `belt_tension_is_ea_strain_and_pretension_at_rest`, `belt_damping_acts_on_the_stretch_rate`, mech |

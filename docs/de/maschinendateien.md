@@ -859,7 +859,10 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
   Riemen sind (sonst abgelehnt), bewegt sich jedes Trum, L_s = L0_s + c_s · q lang, mit V_s v über Grund, mit dem
   Schwingen des Rahmens e du obendrauf: die kinetische Energie des Riemens ½ mu Σ_s L_s |V_s v + e du|² ersetzt die
   Hälfte auf jeder Scheibe in der Massenmatrix der Achsen (und des Rahmens), mit den Geschwindigkeitstermen nach
-  Lagrange, und sein Impuls und erstes Moment gehen in den Impuls des Rahmens ein. Die Datei des T-Portals gibt ihre
+  Lagrange, und sein Impuls und erstes Moment gehen in den Impuls des Rahmens ein. Sein Gewicht sitzt an diesem
+  ersten Moment: die potentielle Energie hat g mu Σ_s (L0_s + c_s · q / 2) V_s,z · q, die Schwerkraft deren Gradient
+  (`runs_height`); so wiegen die senkrechten Trume des T-Portals 0,16 kg auf Z wie in seinem Crate, der Z-Riemen des
+  XYZ-Portals 0,04 kg. Die Datei des T-Portals gibt ihre
   Trume so an; ihr Crate leitet dasselbe aus dem Riemenweg ab (`belt_mass`). Ebenso die anderen Dateien, deren Trume sich
   über Grund bewegen, jede mit der Tabelle ihrer Trume im Kommentar: der H-Bot (der Riemenweg des T-Portals mit Y statt
   Z), der CoreXY (jeder Riemen bewegt sich entlang X und entlang Y als Ganzes, wie die Klumpen es hatten, und gibt

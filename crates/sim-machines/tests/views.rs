@@ -137,8 +137,8 @@ fn the_scene_colours_warm_parts_by_their_rise_over_the_rating() {
 
 /// At rest without gravity every section has the pretension, and is stretched by L P / (EA + P) over its length L.
 /// Held against gravity, the sections balance the held weight: on the single axis inclined by 30 degrees
-/// T2 - T1 = m g sin 30; on the T-gantry, whose Z axis hangs in a loop of section 2, 2 T2 - T1 - T3 = m_z g and
-/// T1 = T3. The 3D view colours each section by (T - P) / P, from the same tensions.
+/// T2 - T1 = m g sin 30; on the T-gantry, whose Z axis hangs in a loop of section 2, 2 T2 - T1 - T3 = m_z g plus the
+/// weight of the belt's vertical runs, and T1 = T3. The 3D view colours each section by (T - P) / P, from the same tensions.
 #[test]
 fn belt_sections_have_the_pretension_at_rest_and_carry_the_weight_in_a_static_hold() {
     for entry in MACHINES.iter().copied() {
@@ -177,8 +177,9 @@ fn belt_sections_have_the_pretension_at_rest_and_carry_the_weight_in_a_static_ho
             let weight = 6.0 * g * 0.5;
             assert!((t[1] - t[0] - weight).abs() < 1e-6, "{}: {t:?} against {weight} N", entry.id);
         } else {
-            // Z axis and payload, 5 + 2 kg: 68.6466 N.
-            let weight = 7.0 * g;
+            // Z axis and payload, 5 + 2 kg, and the belt's vertical runs, 0.1 kg/m (4 * 0.15 + 2 * 0.5) m = 0.16 kg:
+            // 70.2156 N.
+            let weight = 7.16 * g;
             assert!(
                 (2.0 * t[1] - t[0] - t[2] - weight).abs() < 1e-6 && (t[0] - t[2]).abs() < 1e-6,
                 "{}: {t:?} against {weight} N",

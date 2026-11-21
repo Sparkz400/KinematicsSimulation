@@ -813,7 +813,10 @@ derivations):
   `velocity_y`, `velocity_z`, along the 3D view's axes) and the spans together are the whole belt (refused otherwise),
   each run, L_s = L0_s + c_s . q long, moves at V_s v over ground, and with the frame's sway e du on top: the belt's
   kinetic energy ½ mu Σ_s L_s |V_s v + e du|² replaces the half of it on each pulley in the axes' (and the frame's)
-  mass matrix, with Lagrange's speed terms, and its momentum and first moment are in the frame's momentum. The
+  mass matrix, with Lagrange's speed terms, and its momentum and first moment are in the frame's momentum. Its weight
+  sits at that first moment: the potential has g mu Σ_s (L0_s + c_s . q / 2) V_s,z . q and gravity its gradient
+  (`runs_height`), so the T-gantry's vertical runs weigh 0.16 kg on Z as in its crate, and the XYZ portal's Z belt
+  0.04 kg (its spans move 0.4 m of belt up with the slide, the section lengths shared out as its comment says). The
   T-gantry's file gives its spans so; its crate derives the same from its belt path (`belt_mass`). So do the other
   files whose belt runs move over ground, each with its table of runs in its comment: the H-bot (the T-gantry's path
   with Y for Z: its belt weighs mu (L + 8 (0.65 - y)) on X, 0.86 kg at y = 0.1 m where the lumps had 0.42, and

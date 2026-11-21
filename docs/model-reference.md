@@ -178,7 +178,7 @@ with, on the T-gantry, side = m_z · a_x and tilt = 2 · side · (z_com_drop −
 **Simplification.** a_x here is not the true acceleration. It is the X acceleration that the commanded motor torques would give a loss-free rigid machine at the pose, over the rigid model's mass matrix (`commanded_ax` in the T-gantry crate):
 
 ```text
-F_x = i (τ_A + τ_B) / r          F_z = i (τ_A − τ_B) / r − m_z g
+F_x = i (τ_A + τ_B) / r          F_z = i (τ_A − τ_B) / r − W_z
 a_x = (F_x · M_z − M_xz · F_z) / (M_x · M_z − M_xz²)
 ```
 
@@ -778,6 +778,8 @@ F_z = 2 T₂ − T₁ − T₃                   belt force on the Z axis
 
 Belt mass: half of the free belt is lumped on each motor pulley, J_pulley += ½ · ρ · L_total · r², which is exact for the runs that move at pulley speed. Summed run by run along the belt path (`belt_mass`), the runs at the clamp move with it, (v_x, v_z), the upper runs at the pulleys' surface speeds v_x ± v_z and the lower ones back at −(v_x ± v_z), and the runs down the Z axis, which pass the lower carriage idlers at 2v_x ± v_z, at (v_x, 2v_x + v_z) and (v_x, −(2v_x − v_z)): 2T / ρ = L_total (v_x² + v_z²) + 8 (s + s_z − z) v_x² + 4 (2x − s_x) v_x v_z (s the free span at each end, s_x, s_z the strokes). Beyond the lumps that is T = ½ m_xx v_x² + m_xz v_x v_z with m_xx = 8ρ (s + s_z − z) and m_xz = 2ρ (2x − s_x): the X coefficient ρ (L_total + 8 (s + s_z − z)) in all and the cross term 2ρ (2x − s_x) v_x v_z. Lagrange's equations give the speed terms 8ρ v_x v_z on X and −8ρ v_x² on Z. Where the frame sways at q' the whole belt sways with it, which adds ρ (4s + 2s_z) q' v_x (the vertical runs; the horizontal ones cancel) and ½ ρ L_total q'². Both models, the energy, the modes, the frame's momentum (for a [base](#compliant-base)) and the feedforward at speed (`feedforward_torque_moving`) have all of it; the machine file sums it the same way from its spans' speeds over ground ([machine files](machine-files.md)).
 
+Belt weight: the vertical runs hang from the clamp, s + z long down to the upper carriage idlers, and from the lower idlers down to the Z bottom, s + s_z − z long; the horizontal runs keep their heights. The belt's potential is ρ g ((s + z)² − (s + s_z − z)²) + const = ρ g (2s + s_z)(2z − s_z) + const, so the belt holds up W_z = (m_z + ρ (4s + 2s_z)) g, the Z axis's weight and that of the runs that move with it (0.16 kg on the default gantry, `z_weight`): up a run the tension grows by ρ g per metre, so at rest 2T₂ − T₁ − T₃ = W_z (70.216 N, not m_z g = 68.647 N) in the sections' tension where they leave the pulleys. The potential energy is W_z z, the frame momentum's first moment has ρ (4s + 2s_z) z of the runs, and V + g · c stays the same along any motion (`the_belts_weight_is_at_its_first_moment`; until 21 November the runs moved in the momentum without their weight: V + g · c drifted by 0.4708 J = 0.16 kg · g · 0.3 m over the default cycle). The machine file weighs its runs where its frame momentum has them, from its spans' vertical speeds (`runs_height`), which gives the same 0.16 kg on its Z.
+
 ### States of the elastic model
 
 23 states: positions x, z, a, b, φ_A, φ_B, q, u, w; their nine rates; the two LuGre states of the guides; the slack-time counter; the two brake states. With `effects.belt_tooth_jump` six more per motor pulley.
@@ -802,7 +804,7 @@ M · (x'', z'', q'', u'', w'') = (F_x, F_z, F_q, F_u, F_w)                      
 F_x = T₃ − T₁ − F_f,x − F_idler,x − F_chain drag + F_stop,x + F_p,x + m′ v (½ v − x') + 8ρ x' z'
       + ½ M_b′ w'² − ½ k_b′ w²
 F_z = 2T₂ − T₁ − T₃ − F_f,z − ½ u² (dk/dz + dc_g/dz) − ½ u² Σ T_i c_i′ − F_idler,z
-      + F_p,z (1 + a′ u²) + F_p,x tip′ u + F_stop,z − m_z g − 8ρ x'²
+      + F_p,z (1 + a′ u²) + F_p,x tip′ u + F_stop,z − W_z − 8ρ x'²
 F_q = −k_f q − c_f q' + F_p,x − m′ x' v
 F_u = tip · F_p,x + 2 a F_p,z u − Σ T_i c_i u − (k(z) + c_g(z)) u − c_u u'
 F_w = (m_car + m_z) g − F_p,z − k_b(x) w − c_b w' − M_b′ x' w'
@@ -947,13 +949,13 @@ Held, the shaft sits on a spring that reaches the brake torque at 1 mrad, with t
 
 ```text
 ( m_X + (λ_A + λ_B) m_r ) · a_x + ((λ_A − λ_B) m_r + m_xz) · a_z = λ_A F_A + λ_B F_B + mesh − F_f,x + 8ρ v_x v_z + extras_x
-((λ_A − λ_B) m_r + m_xz) · a_x + ( m_Z + (λ_A + λ_B) m_r ) · a_z = λ_A F_A − λ_B F_B + mesh − F_f,z − m_z g − 8ρ v_x² + extras_z
+((λ_A − λ_B) m_r + m_xz) · a_x + ( m_Z + (λ_A + λ_B) m_r ) · a_z = λ_A F_A − λ_B F_B + mesh − F_f,z − W_z − 8ρ v_x² + extras_z
 ```
 
 m_X includes both pulleys (2 J_pulley / r²), the idlers, the chain and the belt's runs m_xx; m_Z the pulleys and the idlers; extras_x holds the process force, the end stop, the idlers' and the chain's drag and the chain's −½ m′ v_x². The gearbox loses torque only on what it transmits, which is the motor torque minus what accelerates the rotor itself; that depends on the acceleration being solved for, and the loss factors are iterated to their fixed point (`mech::settled_loss`; three passes left up to 1.5e-4 of the acceleration). With a loss-free gearbox and a massless belt this collapses to two independent axes:
 
 ```text
-( m_x + 2J/r² ) · a_x = F_x − F_f,x          ( m_z + 2J/r² ) · a_z = F_z − m_z g − F_f,z
+( m_x + 2J/r² ) · a_x = F_x − F_f,x          ( m_z + 2J/r² ) · a_z = F_z − W_z − F_f,z
 ```
 
 The rigid model has no belt stretch, slack, damping, tooth stiffness, backlash, gear stiffness, frame mode or leaning Z axis. Its brakes hold the whole machine on their spring (the damping is critical for the rotor alone, so held it rings a little before it stands). It reports the pretension as belt tension and twice the pretension as radial load.
@@ -964,11 +966,11 @@ The torque feedforward and the motor-limit check use the loss-free rigid model, 
 
 ```text
 f_x = ( m_x + 2J/r² + m_idler,x + m_chain(x) + m_xx ) · a_x + m_xz a_z + ½ m′ v_x² − 8ρ v_x v_z
-f_z = ( m_z + 2J/r² + m_idler,z ) · a_z + m_xz a_x + m_z g + 8ρ v_x²
+f_z = ( m_z + 2J/r² + m_idler,z ) · a_z + m_xz a_x + W_z + 8ρ v_x²
 τ_A = r/(2i) · (f_x + f_z)         τ_B = r/(2i) · (f_x − f_z)
 ```
 
-Friction is not in it (the friction feedforward is `steady_friction`: guides at their load at rest, idlers, chain, the gearbox's loss on force and weight, the shaft's friction). At rest each motor holds m_z g r / (2i), with opposite signs.
+Friction is not in it (the friction feedforward is `steady_friction`: guides at their load at rest, idlers, chain, the gearbox's loss on force and weight, the shaft's friction). At rest each motor holds W_z r / (2i), with opposite signs.
 
 ### Signals
 

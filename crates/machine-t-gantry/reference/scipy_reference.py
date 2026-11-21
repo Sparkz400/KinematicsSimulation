@@ -61,6 +61,9 @@ r_mat = r / (1 + T0 / EA)
 j_pulley = cfg["pulley"]["inertia_kgm2"] + 0.5 * belt["mass_kg_m"] * lengths(0, 0).sum() * r * r
 m_motors = 2 * (j_pulley + ratio**2 * j_rotor) / r**2
 mu, L = belt["mass_kg_m"], lengths(0, 0).sum()
+# What the belt holds up in Z: the Z axis and the belt's vertical runs, whose potential mu g ((span + z)^2 -
+# (span + sz - z)^2) rises by mu (4 span + 2 sz) g per metre of z (see `z_weight` in ../src/lib.rs).
+w_z = (m_z + mu * (4 * span + 2 * sz)) * G
 
 
 def belt_mass(x, z):
@@ -92,7 +95,7 @@ def lugre(p, v, s, scale):
 def guide_friction(x, z, vx, vz, s_x, s_z, torque):
     # The X acceleration the torques give the loss-free rigid machine, over its mass matrix with the belt's runs, with
     # the Z axis's weight (the torque that holds it up accelerates nothing through the coupling).
-    fx, fz = ratio * (torque[0] + torque[1]) / r, ratio * (torque[0] - torque[1]) / r - m_z * G
+    fx, fz = ratio * (torque[0] + torque[1]) / r, ratio * (torque[0] - torque[1]) / r - w_z
     xx, xz = belt_mass(x, z)
     ax = np.linalg.solve([[m_x + m_motors + xx, xz], [xz, m_z + m_motors]], [fx, fz])[0]
     side = m_z * ax
@@ -144,7 +147,7 @@ def rhs(t, y, torque_at):
     ])
     forces = np.array([
         tension[2] - tension[0] - ffx + 8 * mu * vx * vz,
-        2 * tension[1] - tension[0] - tension[2] - ffz - m_z * G - 8 * mu * vx * vx,
+        2 * tension[1] - tension[0] - tension[2] - ffz - w_z - 8 * mu * vx * vx,
         -frame["stiffness_n_m"] * q - frame["damping_n_s_m"] * vq,
     ])
     ax, az, aq = np.linalg.solve(mass_matrix, forces)
@@ -158,9 +161,9 @@ def rhs(t, y, torque_at):
 
 
 def equilibrium(x, z):
-    """State at rest and holding torques. X balance: T1 = T3; Z balance: 2 T2 - T1 - T3 = m_z g."""
+    """State at rest and holding torques. X balance: T1 = T3; Z balance: 2 T2 - T1 - T3 = w_z."""
     length = lengths(x, z)
-    offsets = np.array([0.0, m_z * G / 2, 0.0])
+    offsets = np.array([0.0, w_z / 2, 0.0])
     rest_at = lambda base: length / (1 + np.maximum(base + offsets, 0.0) / EA)
     base = brentq(lambda t: rest_at(t).sum() - rest0.sum(), -0.5 * EA, EA, xtol=1e-12, rtol=1e-15)
     rest = rest_at(base)
