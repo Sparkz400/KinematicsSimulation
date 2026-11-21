@@ -529,6 +529,83 @@ impl Crane {
         modes(&[yaw, 0.0, 0.0, rotors], &[skew.stiffness + k, -k, -k, k], &[skew.damping + c, -c, -c, c], 2)
     }
 
+    /// The modes along the rope and of the elastic drives with the motors held (the convention of `Machine::modes`), at
+    /// the drum's free length l of the pose. Along the rope, down positive: the drum (with effects.joint_elasticity, on
+    /// the hoist gearbox's k_g and damper, its J / r^2 and the wound rope mu (capacity - l)), the hook (the hook block
+    /// with effects.hook_block, else hook and payload) and the payload on its sling. The elastic rope's V = EA e^2 / 2l, e
+    /// = L - l, linearised at the rest stretch: K = EA / l [L^2 / l^2, -L / l; -L / l, 1] on (l, L), its damper c / l on L'
+    /// - l', and its own mass mu l / 6 [2, 1; 1, 2] (K = mu l / 6 (l'^2 + l' L' + L'^2), the drum's end at l'); the rigid
+    /// rope ties the hook to the drum (all of mu l with it). The sling EA / l_s and c / l_s between hook block and payload.
+    /// Held rigid drives hold the drum. The travels with effects.joint_elasticity: each axis on its gearbox (both
+    /// carriages' with effects.bridge_skew) with what it carries, its own masses, the wound rope and the free rope's mu l
+    /// / 3 at the sheave; the load on its pendulum stays behind (its swing's stiffness m g / L is 1e-4 of the gearbox's).
+    fn held_modes(&self, l: f64) -> Vec<sim_core::Mode> {
+        let modes = sim_components::chain::matrix_modes;
+        let (mu, j) = (self.rope_mass, &self.drives[2]);
+        let (sling, m2) = match self.sling {
+            Some(ls) if self.payload_mass() > 0.0 => (Some(ls), self.payload_mass()),
+            _ => (None, 0.0),
+        };
+        let m1 = self.load_mass() - m2;
+        // Coordinates: [drum], [hook on the elastic rope], [payload on the sling]. On the rigid rope the hook moves with
+        // the drum, or is held with it.
+        let (drum, hook) = (self.elastic_drives, self.elastic);
+        let at_hook = drum as usize;
+        let n = drum as usize + hook as usize + sling.is_some() as usize;
+        let (mut m, mut k, mut c) = (vec![0.0; n * n], vec![0.0; n * n], vec![0.0; n * n]);
+        let put = |a: &mut Vec<f64>, r: usize, col: usize, v: f64| a[r * n + col] += v;
+        if drum {
+            put(&mut m, 0, 0, self.masses[2] + mu * (self.capacity - l));
+            put(&mut k, 0, 0, j.gearbox.stiffness);
+            put(&mut c, 0, 0, j.gearbox.damping);
+        }
+        if self.elastic {
+            let length = l * self.rest_stretch(l);
+            let (ea, damper) = (self.ea / l, self.damping / l);
+            put(&mut m, at_hook, at_hook, m1 + mu * l / 3.0);
+            put(&mut k, at_hook, at_hook, ea);
+            put(&mut c, at_hook, at_hook, damper);
+            if drum {
+                let r = length / l;
+                put(&mut m, 0, 0, mu * l / 3.0);
+                put(&mut k, 0, 0, ea * r * r);
+                put(&mut c, 0, 0, damper);
+                for (a, b) in [(0, 1), (1, 0)] {
+                    put(&mut m, a, b, mu * l / 6.0);
+                    put(&mut k, a, b, -ea * r);
+                    put(&mut c, a, b, -damper);
+                }
+            }
+        } else if drum {
+            put(&mut m, 0, 0, m1 + mu * l);
+        }
+        if let Some(ls) = sling {
+            // Between the payload and the hook, which is held where neither the rope nor the drum gives.
+            let (p, (ks, cs)) = (n - 1, (self.ea / ls, self.damping / ls));
+            put(&mut m, p, p, m2);
+            put(&mut k, p, p, ks);
+            put(&mut c, p, p, cs);
+            if hook || drum {
+                let q = if hook { at_hook } else { 0 };
+                for (a, b, sign) in [(q, q, 1.0), (p, q, -1.0), (q, p, -1.0)] {
+                    put(&mut k, a, b, sign * ks);
+                    put(&mut c, a, b, sign * cs);
+                }
+            }
+        }
+        let mut out = if n > 0 { modes(&m, &k, &c, n) } else { Vec::new() };
+        if self.elastic_drives {
+            // The travels: the bridge's on both carriages' gearboxes with the skew.
+            let rope = mu * (self.capacity - l) + mu * l / 3.0;
+            let carriages = if self.skew.is_some() { 2.0 } else { 1.0 };
+            for (d, mass) in [(0, self.bridge + self.trolley + rope), (1, self.trolley + rope)] {
+                let (box_, k) = (&self.drives[d].gearbox, if d == 0 { carriages } else { 1.0 });
+                out.extend(modes(&[mass], &[k * box_.stiffness], &[k * box_.damping], 1));
+            }
+        }
+        out
+    }
+
     /// The bridge's yaw and its rate (0 without effects.bridge_skew).
     fn yaw(&self, s: &[f64]) -> (f64, f64) {
         self.layout.skew.map_or((0.0, 0.0), |k| (s[k], s[k + 1]))
@@ -1135,12 +1212,15 @@ impl Machine for Crane {
     }
 
     /// The swing of `resonance_hz` and, with the hook block, the double pendulum's upper mode (`sway_omegas`), with the
-    /// trolley held as `resonance_hz` has it (the swing has no damper of its own); with effects.bridge_skew the girder's
-    /// yaw (`skew_modes`). Lowest first.
+    /// trolley held as `resonance_hz` has it (the swing has no damper of its own); the load's bounce on the elastic rope
+    /// (and the sling), with effects.joint_elasticity the drives' modes, with the motors held (`held_modes`); with
+    /// effects.bridge_skew the girder's yaw (`skew_modes`). Lowest first.
     fn modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
-        let Some((lower, upper)) = self.sway_omegas(self.height - tool_pose[2]) else { return Vec::new() };
+        let length = self.height - tool_pose[2];
+        let (lower, upper) = self.sway_omegas(length).map_or((None, None), |(lower, upper)| (Some(lower), upper));
         let mut out: Vec<sim_core::Mode> =
-            [Some(lower), upper].into_iter().flatten().map(|w| sim_core::Mode { hz: w / TAU, damping: 0.0 }).collect();
+            [lower, upper].into_iter().flatten().map(|w| sim_core::Mode { hz: w / TAU, damping: 0.0 }).collect();
+        out.extend(self.held_modes(length / self.kinematic_stretch()));
         out.extend(self.skew_modes(tool_pose[1]));
         out.sort_by(|a, b| a.hz.total_cmp(&b.hz));
         out

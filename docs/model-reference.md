@@ -1782,6 +1782,18 @@ J̇ q̇) to f:
   step, which puts it back on the floor at rest (plastic, booked with `power.other`); the constraint holds a body that
   stands still only, so the floor's push does no work.
 
+**Modes** (`Machine::modes`, lowest first): the swing (and with the hook block the double pendulum's upper root), the
+modes along the rope with the motors held, and the girder's yaw. Along the rope, down positive: the drum with
+`effects.joint_elasticity` (J / r² and the wound rope on the hoist gearbox's k_g), the hook on the elastic rope, the
+payload on the sling. The rope linearised at its rest stretch, K = EA / l [L² / l², −L / l; −L / l, 1] on (l, L) and
+its damper c / l on L̇ − l̇, its own mass μ l / 6 [2, 1; 1, 2]; the rigid rope ties the hook to the drum. Held rigid
+drives hold the drum: the bounce is √(EA / (l m)), 6.77 Hz for the 265 kg at z = 2 m. With elastic drives the travels on
+their gearboxes too (the bridge on both carriages' with the skew), the load on its pendulum left behind: the bridge
+10.49 Hz, the trolley 41.09 Hz, the hoist and the bounce 108.2 and 6.30 Hz. The model linearised with its motors free has
+the rotors in and higher figures (the drives at 65.7, 88.0 and 111.0 Hz, the bounce at 11.4 Hz; on rigid drives 12.14 Hz
+with drum and rotor free). The held bridge mode is what the config calls the drive's anti-resonance: the shipped
+velocity loop (some 4.5 Hz on the rigid drive) does not hold the rotor there.
+
 Left out: the rope's bending at the sheave, the load's own turning (a point mass), and the hook block landing on the
 load: lowered by more than the sling's length onto a standing load, it passes through it.
 

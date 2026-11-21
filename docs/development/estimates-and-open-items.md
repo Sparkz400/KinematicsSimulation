@@ -269,6 +269,9 @@ Fixed:
   step by step and booked that as made energy (an audit's set-down cycle: `power.other` -1.30 J, 1.30 J of 42.1 J
   unaccounted; now -2.3e-10 J and -9.3e-10 J with the torque ripple, whose work is in that row, off), and the floor's
   push on a body still falling did work (0.21 J in a lift-off test): it now holds a body that stands still only.
+- The crane's mode list had the swing alone: it has the bounce along the rope (and the sling) and, with elastic drives,
+  the drives' modes, all with the motors held (6.77 Hz bounce at z = 2 m; bridge 10.49, trolley 41.09, hoist 108.2 Hz).
+  The brief's 12.14, 66, 88 and 111 Hz are the free-motor figures of the linearised model.
 
 Open, with the cause where it is known:
 - **A screw or rack behind a converter: the coupling's damping acts across the whole series spring**

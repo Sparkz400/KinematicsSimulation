@@ -727,8 +727,9 @@ fn the_default_cycle_with_elastic_drives_keeps_its_loops_stable() {
 
 /// The mode list (`Machine::modes`: the app's marks, `identify`, a shaper following its mode k) has, with the hook block,
 /// the double pendulum's upper root beside the lower one of `resonance_hz`: the roots of m1 l1 l2 w^4 - (m1 + m2) g
-/// (l1 + l2) w^2 + (m1 + m2) g^2 = 0 whose periods the ringing above measures (it listed the lower alone). Without the
-/// hook block the single swing alone.
+/// (l1 + l2) w^2 + (m1 + m2) g^2 = 0 whose periods the ringing above measures (it listed the lower alone), the two
+/// lowest; the bounces along the rope and the sling follow (`the_bounce_and_the_held_drives_are_among_the_modes`).
+/// Without the hook block one swing.
 #[test]
 fn the_mode_list_has_both_of_the_double_pendulum_s_roots() {
     let m = crane(&lossless(&["effects.hook_block = true"]));
@@ -740,12 +741,72 @@ fn the_mode_list_has_both_of_the_double_pendulum_s_roots() {
         ((b + sign * (b * b - 4.0 * m1 * l1 * l2 * (m1 + m2) * G * G).sqrt()) / (2.0 * m1 * l1 * l2)).sqrt() / TAU
     };
     let modes = m.modes(&pose);
-    assert!(modes.len() == 2 && modes[0].hz == m.resonance_hz(&pose).unwrap(), "{modes:?}");
+    assert!(modes.len() == 4 && modes[0].hz == m.resonance_hz(&pose).unwrap(), "{modes:?}");
     for (mode, hand) in modes.iter().zip([root(-1.0), root(1.0)]) {
         assert!((mode.hz / hand - 1.0).abs() < 1e-12, "{modes:?} against {hand} Hz");
     }
     let plain = crane(&lossless(&[]));
-    assert_eq!(plain.modes(&pose).len(), 1);
+    assert!(plain.modes(&pose).iter().filter(|mode| mode.hz < 1.0).count() == 1);
+}
+
+/// The modes along the rope and of the elastic drives, with the motors held (`held_modes`), at the pose z = 2 m: the drum's
+/// free length l = 3 / (1 + m_hook g / EA) = 2.99969 m, the rope at rest L = l (1 + m g / EA), m = 265 kg, EA = 1.44e6 N.
+/// (a) Rigid drives: the drum held, the load bounces on the rope, w = sqrt(EA / (l m)) = 42.56 rad/s, 6.774 Hz, its
+/// damping ratio c / l / (2 sqrt(EA / l m)) = 0.0245 with the rope's c = 1660 N s; the model linearised with the hoist's
+/// brake holding its motor has it too. (b) Elastic drives, gearbox damping off: the drum (J / r^2 = 7.8125 kg) on the
+/// gearbox's k_g = 2e4 / 0.08^2 = 3.125e6 N/m and the rope, K = [k_g + EA L^2 / l^3, -EA L / l^2; -EA L / l^2, EA / l],
+/// M = diag(7.8125, 265): the roots of det(K - w^2 M) = 0, 6.304 and 108.17 Hz; the bridge's 720 kg on its 3.125e6 N/m,
+/// 10.485 Hz, the trolley's 120 kg on 2e4 / 0.05^2 = 8e6 N/m, 41.09 Hz. (The model linearised with the motors free has
+/// the rotors in: the drives at 65.66, 87.96 and 110.97 Hz, the bounce at 11.39 Hz; rigid, 12.14 Hz with the drum and
+/// rotor free.) (c) The hook block
+/// (15 kg) on the rope and the payload (250 kg) on the sling EA / l_s: K = [EA / l + k_s, -k_s; -k_s, k_s], 5.939 and
+/// 57.90 Hz. (d) The rigid rope on rigid drives: the swing alone.
+#[test]
+fn the_bounce_and_the_held_drives_are_among_the_modes() {
+    use sim_components::shapes::{as_mode, eigen_near, linearised};
+    let pose = [5.0, 2.0, 2.0];
+    let roots = |m: [f64; 2], k: [f64; 3]| {
+        let (a, b, c) = (m[0] * m[1], m[0] * k[2] + m[1] * k[0], k[0] * k[2] - k[1] * k[1]);
+        [-1.0, 1.0].map(|sign: f64| ((b + sign * (b * b - 4.0 * a * c).sqrt()) / (2.0 * a)).sqrt() / TAU)
+    };
+    let near = |modes: &[sim_core::Mode], hz: f64| {
+        modes.iter().min_by(|a, b| (a.hz / hz - 1.0).abs().total_cmp(&(b.hz / hz - 1.0).abs())).unwrap().clone()
+    };
+    let mut m = crane(&lossless(&["effects.rope_damping = true", "effects.holding_brake = true"]));
+    let (ea, load) = (m.ea, m.load_mass());
+    let l = 3.0 / (1.0 + m.hook * G / ea);
+    let length = l * (1.0 + load * G / ea);
+    let w = (ea / (l * load)).sqrt();
+    let modes = m.modes(&pose);
+    let bounce = near(&modes, w / TAU);
+    let zeta = 1660.0 / l / (2.0 * (ea / l * load).sqrt());
+    assert!(modes.len() == 2 && (bounce.hz / (w / TAU) - 1.0).abs() < 1e-12, "{modes:?} against {} Hz", w / TAU);
+    assert!((bounce.damping / zeta - 1.0).abs() < 1e-9, "{} against {zeta}", bounce.damping);
+    m.set_brake_engaged(true);
+    let (_, jac) = linearised(&m, &pose);
+    let linear = as_mode(eigen_near(&jac, m.state_len(), [-zeta * w, w]).unwrap().0).hz;
+    assert!((linear / (w / TAU) - 1.0).abs() < 1e-3, "linearised {linear} Hz against {} Hz", w / TAU);
+    // (b)
+    let e = crane(&lossless(&["effects.joint_elasticity = true", "gearbox.damping_nm_s_rad = 0.0"]));
+    let modes = e.modes(&pose);
+    let (kg, md) = (e.drives[2].gearbox.stiffness, e.masses[2]);
+    let hoist = roots([md, load], [kg + ea * length * length / l.powi(3), -ea * length / (l * l), ea / l]);
+    let bridge = (e.drives[0].gearbox.stiffness / (e.bridge + e.trolley)).sqrt() / TAU;
+    let trolley = (e.drives[1].gearbox.stiffness / e.trolley).sqrt() / TAU;
+    assert!(modes.len() == 5, "{modes:?}");
+    for hand in [hoist[0], hoist[1], bridge, trolley] {
+        assert!((near(&modes, hand).hz / hand - 1.0).abs() < 1e-12, "{modes:?} against {hand} Hz");
+    }
+    // (c)
+    let h = crane(&lossless(&["effects.hook_block = true"]));
+    let ks = ea / h.sling.unwrap();
+    let both = roots([h.hook, h.payload], [ea / l + ks, -ks, ks]);
+    let modes = h.modes(&pose);
+    for hand in both {
+        assert!((near(&modes, hand).hz / hand - 1.0).abs() < 1e-12, "{modes:?} against {hand} Hz");
+    }
+    // (d)
+    assert_eq!(crane(&lossless(&["effects.rope_stretch = false"])).modes(&pose).len(), 1);
 }
 
 /// With effects.bridge_skew the girder's yaw is among the modes (it listed the swing alone): no loop holds it, the
@@ -765,8 +826,10 @@ fn the_bridge_s_skew_is_among_the_modes() {
     let (a, b, c) = (mb + mt + 2.0 * r, mt * d, jb + mt * d * d + 0.5 * r * gauge * gauge);
     let k_psi = 0.5 * 2.0e6 * 2.0 * 2.0;
     let held = (k_psi / c).sqrt() / TAU;
+    // Beside the swing and the load's bounce on the rope.
     let modes = m.modes(&pose);
-    assert!(modes.len() == 2 && (modes[1].hz / held - 1.0).abs() < 1e-12, "{modes:?} against {held} Hz");
+    let near = |modes: &[sim_core::Mode], hz: f64| modes.iter().map(|m| (m.hz / hz - 1.0).abs()).fold(1.0, f64::min);
+    assert!(modes.len() == 3 && near(&modes, held) < 1e-12, "{modes:?} against {held} Hz");
     let free = (k_psi / (c - b * b / a)).sqrt();
     let (_, jac) = linearised(&m, &pose);
     let linear = as_mode(eigen_near(&jac, m.state_len(), [0.0, free]).unwrap().0).hz;
@@ -776,6 +839,7 @@ fn the_bridge_s_skew_is_among_the_modes() {
     let (p, q) = (j * r2, j * k2 + r2 * (k_psi + k2));
     let low = ((q - (q * q - 4.0 * p * k_psi * k2).sqrt()) / (2.0 * p)).sqrt() / TAU;
     let modes = e.modes(&pose);
-    assert!(modes.len() == 3 && (modes[1].hz / low - 1.0).abs() < 1e-9, "{modes:?} against {low} Hz");
+    // Beside the swing, the bounce on the hoist's gearbox and the rope (two), the bridge's and the trolley's.
+    assert!(modes.len() == 7 && near(&modes, low) < 1e-9, "{modes:?} against {low} Hz");
     assert!(low < held && low > 0.995 * held, "{low} Hz against {held} Hz");
 }
