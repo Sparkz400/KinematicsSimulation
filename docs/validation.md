@@ -400,7 +400,7 @@ The stop analysis (`sim-cli stop`, `stop::study`) reports a worst stop with fini
 | `profile.time_optimal_margin` 0.9 on the single axis | Top speed and acceleration 0.9 of 1.2434 m/s and 16.327 m/s², 0.8 / v + v / a + a / j | 1.5 ms; 0.1 % | `the_time_optimal_margin_plans_at_its_share_of_the_limits`, axis |
 | A screw's speed rating as a limit of the time-optimal plan: the 1.6 m screw of the screw axis | Whirling at 1250 r/min on the 20 mm lead: top speed 0.99 · 1250 / 60 · 0.02 = 0.41250 m/s | 0.1 % | `the_time_optimal_plan_keeps_the_screws_speed_rating`, joint kit |
 | A rack's feed force as a limit of the time-optimal plan: rated 500 N, service factor 1.25 | 0.8 · 400 N / 80 kg = 4 m/s² | 0.2 % | `the_time_optimal_plan_keeps_the_racks_feed_force`, joint kit |
-| Every machine's cycle timed time-optimal, run with the shipped config | Every verdict the plan keeps passes ("motor-peak", "motor-speed", "drive-peak-current", "gearbox-peak", "pulley-torque", "gearbox-input-speed", "guide-load", "belt-tension", "belt-slack", "braking-resistor-peak", the machine's own checks with a rigid value); where "motor-thermal" fails (linear motor axis, flying saw, parallel SCARA, four-arm delta), with the winding at its starting temperature | exact | `time_optimal::machine_NN`, sim-machines |
+| Every machine's cycle timed time-optimal, run with the shipped config | Every verdict the plan keeps passes ("motor-peak", "motor-speed", "drive-peak-current", "gearbox-peak", "pulley-torque", "gearbox-input-speed", "guide-load", "belt-tension", "belt-least-tension", "braking-resistor-peak", the machine's own checks with a rigid value); where "motor-thermal" fails (linear motor axis, flying saw, parallel SCARA, four-arm delta), with the winding at its starting temperature | exact | `time_optimal::machine_NN`, sim-machines |
 | The guides' load rating as a limit of the time-optimal plan: default T-gantry, line along X at z = 0.35 m, rated 150 N | X guide 11 kg · 9.80665 + 5.833 kg · a_x, Z guide 12.833 kg · a_x (`guide_loads`); a = (150 − 107.87) / 5.833 = 7.222 m/s², 0.8 / 1.2559 + 1.2559 / 7.222 + 7.222 / 100 = 0.8831 s; no pose's load above 150 N; torque, speed and jerk within their limits | 0.2 %; 1.5 ms; 0.05 % | `the_guide_load_rating_limits_the_time_optimal_acceleration`, gantry |
 | The speed curve a piece follows (`path::smoothed`): places at 1 m/s and one at 0.5 m/s, 10 m/s², 10 mm apart | x = v² rises 0.25, 0.43, 0.61, 0.79, 0.97, 1 m²/s² from the slow place (0.18 per place = 2 · 0.01 · 0.9 · 10); at 50 m/s³ also x'' within ± 2 · 0.5 · 50 · 0.01² / v, never above a top or below the slow place | 1e-12; 1e-4 | `the_speed_curve_comes_down_to_a_slow_place_within_its_acceleration_and_jerk`, path |
 | A piece under a speed curve that falls faster than the jerk can follow (tops 4 to 2 m/s over 0.4 m, 50 m/s², 20 m/s³), rest to rest | The jerk alone bounds it: four phases of T = (d / 2j)^(1/3) = 0.215443 s, 0.861774 s in all, 0.928 m/s at most. Before 15 November the run stayed at rest under the falling curve and the piece was refused as a crawl (a turn about z alone of the hexapod and the platform on cranks: `a_turn_about_one_rotary_axis_alone_is_timed_on_every_machine`, time_optimal) | 2 ms; 5 mm/s | `a_piece_under_a_steeply_falling_speed_curve_takes_the_hand_calculated_time`, path |
@@ -443,7 +443,7 @@ The stop analysis (`sim-cli stop`, `stop::study`) reports a worst stop with fini
 | A lift's height profile over two boxes of different heights, T-gantry, clearance 0.05 m | Via heights top + clearance + payload below the tool: -0.7 + 0.05 + 0.802 = 0.152 m and -0.6 + 0.05 + 0.802 = 0.252 m, two each, in order around the boxes; one box: no profile; the cycle through the profile (raised for the spline's sag) runs with the crash on without contact | 1 µm; clearance within 1 mm (sway) | `the_lift_passes_two_boxes_each_at_its_own_height`, collision |
 | Braking energy of a 0.8 m move that does not reach its top speed, at 1 and 0.5 m/s² (loss-free rigid axis, DC link at 4.7 µF) | Peak of the jerk-limited triangle v² + (a²/j) v = a d: 0.88944 and 0.63121 m/s; ½ · 6.125 kg · v² per stop, 2.4228 and 1.2202 J; 2.405 J less per cycle fed back, and from the supply (the resistor burns all but 0.062 J of a stop) | 2 % (fed back), 3 % (supply) | `a_lower_acceleration_takes_the_hand_calculated_braking_energy_less_from_the_supply`, axis |
 | The EXCT-30 config in the worst case of both band modes (67 bounded values one at a time; 60 samples) | Every check passes, `pulley-bearing-life` too since a_ISO is in it (above 40000 h in both modes; it failed before); slackest belt section above 100 N (158 N and 137 N), settling below 0.07 mm (0.044 and 0.050), shaft load below 1500 N (1200 and 1201); cycle 2.048 s | As stated | `the_exct_30_config_passes_every_check_in_the_worst_case_of_both_band_modes`, catalog |
-| The EXCT-30 config at the worst corner of its bounds (`verdict_worst`; 3062 cycles on the command line on 17 November 2026, 2428 before the stage of modelled effects) | `settling` below 0.1 mm (0.095 mm, with the second shaper at 17.5 Hz; 0.115 mm without); every other check passes but `pulley-bearing-life` (about 10000 h there, with a_ISO's estimates at their bad bounds) | As stated | `the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds`, catalog |
+| The EXCT-30 config at the worst corner of its bounds (`verdict_worst`; 3101 cycles on the command line on 21 November 2026, 3062 on 17 November, 2428 before the stage of modelled effects) | `settling` below 0.1 mm (0.087 mm, with the second shaper at 17.5 Hz; 0.115 mm without, not re-run since 17 November); every other check passes but `pulley-bearing-life` (9955 h on motor B there, with a_ISO's estimates at their bad bounds) | As stated | `the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds`, catalog |
 | A tool pose mapped into the 3D scene, at five poses of each machine, rigid and elastic | Where the scene draws the tool part (flange, carriage); by hand (0.45, −0.05, −0.592) m and (0.45, −0.03, 0.06) m | 1e-12 m | `the_scene_point_of_a_tool_pose_is_where_the_scene_draws_the_tool`, gantry; `..._the_carriage`, axis |
 | Fit of a noisy simulated trace of a changed machine (1.5 kg heavier, friction × 1.4 and × 1.3, belt stiffness × 0.7) | The changes that were made | Within 3 standard errors plus what the rigid model mixes up on a changed machine, 5 % of the mass's change and 0.02 on the friction's factors (found + 1.570 kg, × 1.313, × 1.395); stiffness band below 0.03 | `the_fit_recovers_changed_masses_friction_and_belt_stiffness_from_noisy_measurements`, axis |
 | Fit on the axis's own config with the test noise, 40 seeds (by hand: `--run-ignored only`) | (fitted − config) / error has mean 0 and standard deviation 1 for mass, viscous and Coulomb friction | Mean within 0.4, standard deviation 0.8 to 1.25 (found 1.01, 1.13, 1.15; seeds 41 to 80: 0.88, 0.94, 0.90) | `the_fit_s_errors_cover_its_noise`, axis |
@@ -577,7 +577,7 @@ inertias and centres of [its config](../crates/machine-wafer-handler/default.tom
 | The Z holding torque | 11.2276 kg · 9.80665 · 0.01 / 2π = 0.1752378 N m (0.1732462 without the wafer); the arm's motors hold nothing; nothing moves, rigid or elastic, friction on | 1e-9; rates 1e-7 | `the_z_motor_holds_what_it_lifts_and_the_arm_motors_nothing` |
 | The modes, motors held | numpy's eigenvalues of the same K and M (scratch script): 18.1952, 51.3514, 70.6454, 186.4465 Hz at r = 0.12, 16.7646, 42.3221, 83.6696, 175.3323 Hz at r = 0.75; the bands alone 21.0252, 62.4203 and 18.5831, 83.1553 Hz | 1e-5 | `the_modes_are_those_of_the_gearboxes_and_bands` |
 | The hold | Pads μ g = 2.941995 m/s², lowering at 1 m/s² 2 · 9.80665 / 8.80665 = 2.227100 asked for 2; vacuum 18 N / 0.1276 kg: μ (g + 141.065831) = 45.261744; the edge 9.81 whatever the lift | 1e-6 | `the_hold_asks_the_hand_calculated_share_on_pads_vacuum_and_edge` |
-| The default cycle | Every verdict passes (`wafer-slip` 1.83 of 2.45 m/s², settling 0.032 mm and 0.108 mrad, `effector-direction` 12.7 µrad, the bands' swings 6.5 % and 1.2 %); the reach speeding up at 3 m/s² fails `wafer-slip` | – | `the_default_cycle_passes_its_verdicts_and_a_faster_reach_slips_the_wafer` |
+| The default cycle | Every verdict passes (`wafer-slip` 1.83 of 2.45 m/s², settling 0.048 mm and 0.113 mrad, `effector-direction` 12.7 µrad, the bands' swings 6.5 % and 1.2 %); the reach speeding up at 3 m/s² fails `wafer-slip` | – | `the_default_cycle_passes_its_verdicts_and_a_faster_reach_slips_the_wafer` |
 
 ## Hand calculations: arms in tool space
 
@@ -591,7 +591,7 @@ The SCARA and the six-axis arm with `kinematics.tool_space` on ([mechanisms](mec
 | The joint speeds at (0.325, 0.275) along y at 0.5 m/s | J = [[−0.275, −0.275], [0.325, 0]]: joint 1 0.5 / 0.325 = 1.538462 rad/s, joint 2 the opposite, joint 4 0; motors × 100, 80; condition number from the eigenvalues of Jᵀ J = [[0.18125, 0.075625], [0.075625, 0.075625]], 2.4691 | 1e-4 rad/s, 1e-9 | `the_joint_speeds_along_a_tool_line_are_the_inverse_jacobian_times_the_tool_speed` |
 | The stretched SCARA arm | At x = 0.598 the elbow acos((0.598² − L1² − L2²) / (2 L1 L2)) = 0.1639 rad, condition above 25: the move refused with `error-arm-singularity`; at 0.59 (0.3669 rad) it goes; at 0.61 `error-arm-out-of-reach`; a line ending at 0.6 refused with `error-path-range`, within the axis limits and time-optimal | – | `a_tool_path_into_the_stretched_scara_arm_is_refused_with_its_reason` |
 | The time-optimal plan of a line of the tool | No motor faster than its rated 314.159 rad/s (from differences of the planned poses' joints); the fastest above 0.9 of it and faster than within the axis limits, the plan shorter | 0.1 % | `the_time_optimal_plan_keeps_the_scara_motors_within_their_rated_speed_along_a_tool_line` |
-| The tool-space configs | The defaults but for `kinematics.tool_space`, `start.pose`, the cycle and the arm's settling tolerance; both cycles of straight lines pass every verdict (SCARA 2.542 s, settling 0.04 mm; arm 3.774 s, settling 4.0 of 5 mm) | – | `the_tool_configs_are_the_defaults_but_for_tool_space_start_cycle_and_settling`, `the_tool_space_cycles_pass_their_verdicts` |
+| The tool-space configs | The defaults but for `kinematics.tool_space`, `start.pose`, the cycle and the arm's settling tolerance; both cycles of straight lines pass every verdict (SCARA 2.542 s, settling 0.03 mm; arm 3.858 s, settling 2.3 of 5 mm) | – | `the_tool_configs_are_the_defaults_but_for_tool_space_start_cycle_and_settling`, `the_tool_space_cycles_pass_their_verdicts` |
 | A link that twists and bends (`link_bending.directions` all three): a 60 × 4 mm steel tube, 0.8 m, 4.5 kg, with 10 kg and 0.5 kg m² about its axis at its tip | Twist sqrt(G I_p / (L (J + J_own / 3))) / 2π = sqrt(56146.0 / 0.501182) / 2π = 53.2699 Hz (the tube's share J_own / 3 = 1.182e-3 kg m²; the exact root of β tan β = J_own / J 53.26988 Hz); both bends sqrt(3.0906 E I / L³ / (m / 4 + M)) / 2π = 28.2887 Hz | 1e-5 | `a_tube_twists_at_the_frequency_of_its_tip_inertia_and_bends_alike_in_both_planes` |
 | Two-way bending (`effects.link_bending_reaction`): the tube of 0.45 kg with 20 kg at its tip on a gearbox of 2e5 N m/rad, the motor held | The two-coordinate mode det(diag(k_g, k_b) − ω² M) = 0, M_qq = 12.897 kg m², B = 16.07219 kg m, M_d = 20.11546 kg: 14.43363 Hz, the lowest in `modes` (the series spring on the modal mass 14.43276 Hz); static sag L τ / k_g + Q_g / k_b = 1.197642 mm (M g / k_s = 1.185666 mm with the tip mass alone); let go from straight it rings about the sag with that amplitude at that frequency | 1e-5 (modes), 1e-4 (sag), 0.2 % (ringing), 1 % (amplitude, middle) | `a_bending_link_on_an_elastic_joint_rings_as_the_two_springs_in_series` |
 | Two-way bending, energy at an instant | The six-axis arm under gravity, loss-free, no motor torque, all three directions, links bent by 1 mm (1 mrad) and moving, joints turning: dE/dt along the state's own rates by central differences is zero (1e-5 W left; without G 0.22 W, without ½ Ṁ_d ḋ 0.012 W), rigid and elastic | 1e-4 W | `two_way_bending_trades_energy_without_loss_at_every_instant` |
@@ -617,7 +617,7 @@ retracted, 62.7 kg moving (20 kg platform, 3 x 0.9 kg of legs, 40 kg payload at 
 | A leg's force rising at 2 m/s² | m (g + a) / (3 u_z) = 250.9544 N with q'' = u_z a, from M_q q'' + h | 1e-3 N | `a_leg_pushes_the_hand_calculated_force_for_an_acceleration_along_z` |
 | Momentum on a compliant base, rising at 0.1 m/s | m v = (0, 0, 6.27) N s, s × v = (0, −0.2, 0) N m s from the payload's offset, first moment (2.0, 0, 37.858) kg m | 1e-5 | `the_platform_has_the_hand_calculated_momentum` |
 | The new verdicts at their limits | Level: `tripod-leg-force` the offset load's forces against 1500 N, `tripod-leg-stroke` −0.0008188 m against 0.1 m, `tripod-revolute-angle` −10.4915° and `tripod-cone-angle` 10.4915° against 30° and 35°, `tripod-parasitic` 0 against 5 mm; the base joints limited to 10.4° refuse the level pose, 10.5° take it; the cone at 10.4° refuses it; no tolerance, no parasitic check | 1e-7 (forces 1e-3 N) | `the_new_verdicts_have_the_hand_calculated_values_and_limits` |
-| The default cycle | Every verdict passes: legs to 376 N, swing 12.0°, cone 21.6°, pose error 2.87 of 5 mm, settling 2.8 µm of 50 µm | – | `the_default_cycle_passes_its_verdicts` |
+| The default cycle | Every verdict passes: legs to 382 N, swing 12.0°, cone 21.6°, pose error 2.87 of 5 mm, settling 3.1 µm of 50 µm | – | `the_default_cycle_passes_its_verdicts` |
 
 ## Hand calculations: arm on a track
 
@@ -787,13 +787,13 @@ hoist 40:1 on an 80 mm drum (500 rad/m).
 
 ## Friction feedforward in the shipped configs
 
-`sim-cli analyze` of every shipped config with `effects.friction_feedforward = false` and with it on and `drive.friction_feedforward_model = "machine"` (15 November 2026, re-run 17 November after the stage of modelled effects: `sim-cli analyze ID [--config FILE | --machine-file FILE] --set effects.friction_feedforward=false`, and `=true --set 'drive.friction_feedforward_model="machine"'`): the following error while moving (`tracking_error_peak`, the tool's distance from the setpoint; `_angle_` for the axes in rad) and the settling at pick and place (`dwell_error_peak`, the second half of the dwells). Place in um, turn in mrad; "–" where the machine has none (no dwell in a conveyor or cam cycle). **On** marks where it is switched on as shipped. The velocity loop's margins do not change with a feedforward (`sim-cli margins` gives the same figures with it on and off), so every config keeps the margins it was tuned to: `sim-cli margins MACHINE --bands` of every config switched on gives (17 November, the same after the stage of modelled effects) the rotary knife 45.6° and 10.98 dB, the T-gantry 46.2° and 8.38 dB, the D4 45.9° and 8.92 dB (35.8° and 8.0 dB, 48.9° and 8.63 dB, 40.4° and 8.92 dB on 15 November; the other configs not re-run).
+`sim-cli analyze` of every shipped config with `effects.friction_feedforward = false` and with it on and `drive.friction_feedforward_model = "machine"` (15 November 2026, re-run 17 November after the stage of modelled effects, and on 21 November 2026 after the screw and rack damping, the screw stiffness that follows the nut, the T-gantry's belt runs' weight and the XYZ portal's Z belt loop: `sim-cli analyze ID [--config FILE | --machine-file FILE] --set effects.friction_feedforward=false`, and `=true --set 'drive.friction_feedforward_model="machine"'`): the following error while moving (`tracking_error_peak`, the tool's distance from the setpoint; `_angle_` for the axes in rad) and the settling at pick and place (`dwell_error_peak`, the second half of the dwells). Place in um, turn in mrad; "–" where the machine has none (no dwell in a conveyor or cam cycle). **On** marks where it is switched on as shipped. The velocity loop's margins do not change with a feedforward (`sim-cli margins` gives the same figures with it on and off), so every config keeps the margins it was tuned to: `sim-cli margins MACHINE --bands` of every config switched on gives (17 November, the same after the stage of modelled effects) the rotary knife 45.6° and 10.98 dB, the T-gantry 46.2° and 8.38 dB, the D4 45.9° and 8.92 dB (35.8° and 8.0 dB, 48.9° and 8.63 dB, 40.4° and 8.92 dB on 15 November; the other configs not re-run).
 
 | Config | Following off → on | Settling off → on | On |
 | --- | --- | --- | --- |
-| T-gantry | 199.3 → 181.3 | 47.5 → 42.5 | yes |
-| T-gantry conveyor | 676.2 → 663.1 | – | yes |
-| T-gantry EXCT-30 | 543.4 → 519.8 | 40.0 → 35.0 | yes |
+| T-gantry | 199.9 → 182.0 | 48.4 → 43.4 | yes |
+| T-gantry conveyor | 676.8 → 664.0 | – | yes |
+| T-gantry EXCT-30 | 543.3 → 519.6 | 40.5 → 35.4 | yes |
 | Single axis | 201.1 → 126.3 (characteristic 118.5) | 20.8 → 42.5 (characteristic 38.8) | no |
 | D3 | 1460 → 1130 | 305.2 → 179.3 | yes |
 | D3 conveyor | 1428 → 1194 | – | yes |
@@ -804,23 +804,23 @@ hoist 40:1 on an 80 mm drum (500 rad/m).
 | H4 | 2477 → 2304; 24.51 → 26.54 mrad | 435.9 → 366.1; 3.589 → 3.043 mrad | no (turn follows worse) |
 | Linear delta | 700.4 → 334.0 | 73.5 → 109.8 | no |
 | Linear delta conveyor | 730.5 → 371.8 | – | yes |
-| Parallel SCARA | 1020 → 1038; 4.702 → 1.131 mrad | 302.5 → 163.7; 0.760 → 0.095 mrad | no (place follows worse) |
-| Screw axis | 83.2 → 31.0 | 45.1 → 7.7 | yes |
-| Rack axis | 118.3 → 50.2 | 61.7 → 7.9 | yes |
-| Linear motor axis | 43.5 → 39.7 | 24.5 → 6.6 | yes |
+| Parallel SCARA | 1012 → 1039; 4.702 → 1.131 mrad | 334.7 → 239.5; 0.760 → 0.095 mrad | no (place follows worse) |
+| Screw axis | 79.9 → 31.1 | 45.2 → 7.4 | yes |
+| Rack axis | 118.4 → 50.3 | 61.7 → 7.9 | yes |
+| Linear motor axis | 43.5 → 39.6 | 24.5 → 6.6 | yes |
 | Rotary table | 2.584 → 2.506 mrad | 0.0341 → 0.0224 mrad | yes |
 | Six-axis arm (joints) | 4.453 → 4.413 mrad | 1.968 → 1.921 mrad | no (gain under 3 %; its tool-space configs follow worse) |
 | Arm, 5- and 7-axis arm in tool space | 5869 → 5856, 6154 → 6136, 5868 → 5855; 7.910 → 7.946, 7.940 → 7.988, 7.920 → 7.960 mrad | 2303 → 2278, 2301 → 2285, 2309 → 2283; 3.089 → 3.163, 2.892 → 3.004, 3.072 → 3.147 mrad | no |
-| SCARA | 166.7 → 28.6; 1.776 → 1.701 mrad | 70.9 → 8.8; 0.270 → 0.079 mrad | yes |
-| SCARA in tool space | 542.4 → 512.8; 1.566 → 1.264 mrad | 84.3 → 30.8; 0.0215 → 0.0020 mrad | yes |
+| SCARA | 166.5 → 28.6; 1.776 → 1.701 mrad | 70.9 → 8.3; 0.270 → 0.080 mrad | yes |
+| SCARA in tool space | 542.5 → 512.8; 1.566 → 1.264 mrad | 84.3 → 30.6; 0.0215 → 0.0020 mrad | yes |
 | Palletiser | 6181 → 6185; 2.684 → 2.637 mrad | 2312 → 2308; 0.0038 → 0.0036 mrad | no |
 | Slider crank (and cam) | 4.444 → 4.467 mrad (2.265 → 2.269) | 0.134 → 0.047 mrad | no |
 | Rotary knife | 12.31 → 12.07 mrad | 0.248 → 0.072 mrad | yes |
 | Rotary knife cam | 5.694 → 5.697 mrad | – | yes (as the rotary knife: the cam configs are the shipped one running its cam) |
-| Flying saw (and cam) | 381.4 → 369.5 (428.9 → 342.0) | 179.9 → 25.7 | characteristic, as before: 369.2 and 26.3 (341.9) |
+| Flying saw (and cam) | 381.4 → 369.6 (428.9 → 342.1) | 179.9 → 25.7 | characteristic, as before: 369.3 and 26.3 (341.9) |
 | Disc cam | 0.319 → 0.232 mrad | 0.228 → 0.024 mrad | yes |
 | Disc cam cam | 0.158 → 0.158 mrad | – | yes |
-| Hexapod | 27.0 → 10.9; 0.080 → 0.026 mrad | 15.7 → 1.5; 0.034 → 0.004 mrad | yes |
+| Hexapod | 25.4 → 11.0; 0.077 → 0.025 mrad | 15.5 → 1.3; 0.034 → 0.004 mrad | yes |
 | Planar cable robot | 714.2 → 649.9 | 157.7 → 148.5 | yes |
 | Spatial cable robot | 297.7 → 204.5; 1.441 → 1.672 mrad | 36.7 → 35.7; 0.722 → 1.030 mrad (the turn follows and settles worse with it) | yes |
 
@@ -828,17 +828,17 @@ The machine files (`machines/*.toml`, `sim-cli analyze --machine-file`) by the s
 
 | Machine file | Following off → on | Settling off → on | On |
 | --- | --- | --- | --- |
-| `t-gantry.toml` (no frame, no leaning Z) | 115.4 → 105.3 | 46.2 → 40.9 | yes |
+| `t-gantry.toml` (no frame, no leaning Z) | 115.6 → 105.6 | 47.1 → 41.8 | yes |
 | `delta-d3.toml`, `planar-delta.toml` | as the D3 and D2 above | | yes |
-| `screw-portal.toml` | 143.5 → 99.6 | 31.4 → 22.1 | yes |
+| `screw-portal.toml` | 143.5 → 99.5 | 31.3 → 22.1 | yes |
 | `xyz-portal.toml` | 142.7 → 107.3 (141.9 → 104.4 before its Z belt was a loop, 21 November) | 30.6 → 22.7 (29.9 → 22.3) | yes |
 | `corexy.toml` | 77.0 → 49.1 | 15.6 → 22.0 | no |
 | `h-bot.toml` | 121.8 → 111.2 | 13.2 → 18.9 | no |
-| `dual-gantry.toml` | 165.4 → 109.7 | 10.3 → 31.7 | no |
-| `rack-gantry.toml` | 81.6 → 56.7 | 14.6 → 22.3 | no |
-| `portal-c.toml` | 177.4 → 144.9; 0.576 → 0.588 mrad | 34.2 → 23.5; 7.4e-5 → 8.4e-5 mrad | no |
-| `five-axis.toml` | 201.2 → 132.2; 0.150 → 0.154 mrad | 34.1 → 32.4; 0.055 → 0.059 mrad | no |
-| `five-axis-table.toml` | 189.0 → 112.6; 0.088 → 0.099 mrad | 30.4 → 34.4; 0.022 → 0.010 mrad | no |
+| `dual-gantry.toml` | 165.5 → 109.8 | 10.2 → 31.7 | no |
+| `rack-gantry.toml` | 81.6 → 56.8 | 14.6 → 22.2 | no |
+| `portal-c.toml` | 177.4 → 144.9; 0.576 → 0.588 mrad | 34.0 → 23.6; 7.3e-5 → 8.0e-5 mrad | no |
+| `five-axis.toml` | 201.1 → 132.1; 0.151 → 0.155 mrad | 33.6 → 32.3; 0.055 → 0.059 mrad | no |
+| `five-axis-table.toml` | 189.0 → 112.6; 0.088 → 0.099 mrad | 30.3 → 34.3; 0.022 → 0.010 mrad | no |
 | `induction-lift.toml` | 284.6 → 291.5 | 217.9 → 202.8 | no |
 | `stepper-axis.toml`, `pneumatic-axis.toml`, `scissor-lift.toml` | unchanged (15.2 to 206.2) | unchanged | no |
 
