@@ -250,20 +250,22 @@ Fixed (second audit, 21 November):
 - `config-reference.md`'s beam mode "59 Hz in the middle" is the stiff belt's; on the default belt it couples
   with Z's mode to 51.5 and 140.1 Hz.
 
-Open (second audit):
-- The XYZ portal's Z belt spans move 0.4 m of belt up with the slide (0.1 + z and 0.4 - z up, 0.1 down: the
-  section lengths shared out, as its comment says), where a loop's runs would cancel. Its momentum had that
-  before; since the runs weigh where their momentum is, its Z holds 3.54 kg instead of 3.5 (0.0694 N m, the
-  test's hand value follows the file). Re-splitting the spans so the falling run equals the rising ones is open.
-- The drive's current: the q setpoint is held inside the current circle, the phase current itself stands up to
-  0.74 % above it for 7.7 ms while the drive goes into field weakening at full current (1FK2205-4AF single axis at
-  200 m/s²: 10.98 A against 10.9 A). 0.035 A of the 0.081 A is the d current's lead over the q loop (the circle taken
-  from the larger of the d setpoint and the d current gives 10.946 A); the rest the q loop's tracking. A drive limits
-  its reference, so some excess is real; the d-setpoint clamp is the one a drive uses, not made here (it moves every
-  field-weakening machine's numbers and needs their reference and per-machine runs).
-- The H4's lumped model (`forearm_inertia` off; on as shipped) puts the forearms' weight at the inertia's split
-  (2/3 at the elbow), not at their middles as the D3 does: momentum and weight agree with each other, both at the
-  wrong place. Not changed.
+Fixed (after the second audit, 21 November):
+- The XYZ portal's Z belt is a loop: its section z2 is 0.9 m (0.5 m from the motor to the far idler and 0.4 m
+  back to the clamp), its span z_2 0.5 m, so the falling run is as long as the two rising with the slide. Its Z
+  holds 3.5 kg again, 0.0686466 N m (before 3.54 kg, 0.0694311 N m); its belts weigh 2T / mu = 3.1 vx² + 1.8 vy² +
+  1.0 vz² (2.7, 1.4, 0.6 before). Its X and Y sections still share their lengths out (0.1 m from the motor to the
+  far idler): they lie flat, so only their momentum along the axis has it.
+- The drive's current circle holds the q reference with the d reference, i_q,ref ≤ sqrt(I_max² − i_d,ref²), as a
+  drive limits its current reference vector, not with the d current that is there. 1FK2205-4AF single axis at
+  200 m/s²: 10.944 A against 10.9 A (0.41 %, above it for 8.75 ms), was 10.980 A (0.74 %). The rest is the q
+  loop's lag behind its falling reference: 10.926 A (0.24 %) with twice the current gain. No shipped config's
+  cycle reaches field weakening (the d current stays 0 on every registered machine's, machine file's and the
+  conveyor, EXCT-30, flying, cam and joint-kit configs' cycles), so their figures do not move.
+- The H4's lumped model (`forearm_inertia` off; on as shipped) put the forearms' weight and momentum at the
+  inertia's split (2/3 at the elbow); now the weight at their middles and the frame momentum as rods, as on the D3:
+  hold at the centre 850 mm down −18.58980 N m per gearbox (−18.60312 before), the vertical mode under constant
+  torques −4.71 N m/rad at 975 mm down (−4.30), +5.45 at 1175 mm (+5.66).
 
 Fixed:
 - `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another

@@ -149,7 +149,7 @@ pub fn lossless_config() -> Config {
 /// below the shoulders, the suite's middle pose 1175 mm down): held by constant motor torques, as the suite holds it
 /// for 10 s after a pulse, the plate is unstable in its vertical mode in the upper part of the range, where its weight
 /// pulls harder through the Jacobian the further it sinks (the potential's second derivative, by hand at the centre with
-/// the lumped forearms, 9.3 kg on the plate: -4.3 N m/rad at 975 mm down, +5.7 at 1175 mm; see
+/// the lumped forearms, 9.8 kg of weight on the plate: -4.7 N m/rad at 975 mm down, +5.45 at 1175 mm; see
 /// `the_vertical_mode_under_constant_torques_is_unstable_high_up`). The drives' position loops hold it.
 fn suite_configs() -> Vec<Config> {
     let mut out = Vec::new();
@@ -645,6 +645,13 @@ pub struct H4 {
     bending: Option<Bending>,
     /// The mass at each forearm's middle and its rods' spin inertia (both rods; effects.forearm_inertia, else 0).
     m_rod_middle: f64,
+    /// Each forearm pair's mass and the share of it the inertia puts at the elbow (a sixth with the rods), for the
+    /// weight and the frame momentum, which take the rods as rods: their weight at the middles, half at each end.
+    m_forearms: f64,
+    forearm_share: f64,
+    /// Per leg, the forearm weight the lumped split puts at the elbow beyond the half a rod's weight has there
+    /// ((share - 1/2) m_fb; 0 with the rods): the weight takes it from the elbow to the plate's end.
+    weight_shift: f64,
     rod_spin: f64,
     /// Each plate part with its forearms' share, the carriage, the payload.
     m_part: f64,
@@ -818,6 +825,9 @@ impl H4 {
             arm_inertia: i_arm + la * la * elbow,
             arm_moment: m_arm * cg + la * elbow,
             m_rod_middle: middle * m_fb,
+            m_forearms: m_fb,
+            forearm_share: share,
+            weight_shift: if rods { 0.0 } else { (share - 0.5) * m_fb },
             rod_spin: if rods { 2.0 * spin } else { 0.0 },
             m_part: cfg.non_negative("mass.plate_part_kg")? + 2.0 * (1.0 - share - middle) * m_fb,
             m_carriage: cfg.positive("mass.carriage_kg")?,
@@ -1069,6 +1079,12 @@ impl H4 {
                 // Along its axis the elbow mass has no acceleration at none of the coordinates', and no weight.
                 load.0[4 + i][4 + i] += self.m_lateral;
             }
+            if self.weight_shift != 0.0 {
+                // The lumped forearms' weight at their middles: the split's excess at the elbow weighs on the plate end.
+                load.2[i] -= self.g * self.weight_shift * self.legs.la * t[i].cos();
+                let (jq, _) = point(SIDE[i]);
+                (0..N).for_each(|c| load.2[c] -= self.weight_shift * self.g * jq[2][c]);
+            }
             if self.m_rod_middle == 0.0 && self.rod_spin == 0.0 {
                 continue;
             }
@@ -1315,16 +1331,19 @@ impl H4 {
         };
         let middles: f64 = (0..4).map(|i| 0.5 * (self.legs.elbow(i, e[i])[0][2] + x[2])).sum();
         let sines = |a: V4| a.iter().map(|v| v.sin()).sum::<f64>();
-        let potential = if self.bending.is_some() {
-            self.g
-                * ((2.0 * self.m_part + self.carried()) * x[2] + self.m_rod_middle * middles
-                    - self.root_moment * sines(t)
-                    - self.tip_moment * sines(e))
-        } else {
-            self.g
-                * ((2.0 * self.m_part + self.carried()) * x[2] + self.m_rod_middle * middles
-                    - self.arm_moment * sines(t))
-        };
+        // The lumped forearms' weight at their middles (`weight_shift`): the split's excess from the elbows to the plate.
+        let shifted = self.g * self.weight_shift * (4.0 * x[2] + self.legs.la * sines(e));
+        let potential = shifted
+            + if self.bending.is_some() {
+                self.g
+                    * ((2.0 * self.m_part + self.carried()) * x[2] + self.m_rod_middle * middles
+                        - self.root_moment * sines(t)
+                        - self.tip_moment * sines(e))
+            } else {
+                self.g
+                    * ((2.0 * self.m_part + self.carried()) * x[2] + self.m_rod_middle * middles
+                        - self.arm_moment * sines(t))
+            };
         let mut elastic: f64 = (0..4).map(|k| self.joints[k].stop_energy(t[k])).sum();
         if let Some(b) = self.bending {
             let (bend, _) = self.bend(s);
@@ -1775,7 +1794,7 @@ impl Machine for H4 {
                 add_turning(&mut f, joint, dir, ddir, w[i], self.arm_inertia, self.arm_moment);
             }
             add_spin(&mut f, tangent, self.joints[i].rotor_inertia, rotor_speed[i]);
-            if self.m_rod_middle > 0.0 || self.rod_spin > 0.0 {
+            if self.m_forearms > 0.0 || self.rod_spin > 0.0 {
                 let (elbow, d1) = (self.legs.elbows_moved(e, y)[i], self.legs.elbow(i, e[i])[1]);
                 let (end, end_v) = point(SIDE[i]);
                 let elbow_v: V3 = std::array::from_fn(|k| d1[k] * ew[i] + tangent[k] * yv[i]);
@@ -1784,7 +1803,15 @@ impl Machine for H4 {
                 let (c, sn) = self.legs.azimuth[i];
                 let out = [self.plate_radius * c, self.plate_radius * sn, 0.0];
                 let middle = std::array::from_fn(|k| 0.5 * (elbow[k] + end[k]) + out[k]);
-                add_point(&mut f, self.m_rod_middle, middle, std::array::from_fn(|k| 0.5 * (elbow_v[k] + end_v[k])));
+                // The forearms as the rods they are, whatever share of their inertia the lumped dynamics put at the
+                // elbow: a sixth at each end, two thirds at the middle, so that their weight sits where the potential
+                // has it. What the split puts at the elbow and at the plate part beyond those sixths comes off there.
+                let m_fb = self.m_forearms;
+                let at_elbow = (self.forearm_share - 1.0 / 6.0) * m_fb;
+                let at_plate = (5.0 / 6.0 - self.forearm_share) * m_fb - self.m_rod_middle;
+                add_point(&mut f, -at_elbow, std::array::from_fn(|k| elbow[k] + out[k]), elbow_v);
+                add_point(&mut f, -at_plate, end, end_v);
+                add_point(&mut f, 2.0 / 3.0 * m_fb, middle, std::array::from_fn(|k| 0.5 * (elbow_v[k] + end_v[k])));
                 if self.rod_spin > 0.0 {
                     let (u, du) = (sub(end, elbow), std::array::from_fn(|k| end_v[k] - elbow_v[k]));
                     let (l, a) = (self.legs.lb, self.legs.tangent(i));

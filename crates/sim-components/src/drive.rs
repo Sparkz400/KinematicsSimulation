@@ -1612,8 +1612,9 @@ impl Drive {
                 } else {
                     self.d_current += (u_d - steady_d) * p.current_cycle / fw.d_inductance;
                 }
-                // The phase current's circle: i_q within what the d current leaves of it.
-                let q_most = (limit * limit - self.d_current * self.d_current).max(0.0).sqrt();
+                // The phase current's circle on the references, as a drive limits its current reference vector:
+                // i_q,ref within what the d setpoint leaves of it. The currents follow through the loop.
+                let q_most = (limit * limit - wanted_d * wanted_d).max(0.0).sqrt();
                 setpoint = setpoint.clamp(-q_most, q_most);
                 (w * fw.d_inductance * self.d_current, u_d)
             }
@@ -2652,6 +2653,34 @@ pub(crate) mod tests {
             d.current_loop(&p, 500.0);
         }
         assert!(d.phase_current() < 5.0 + 1e-3, "{} A", d.phase_current());
+    }
+
+    /// The current circle holds the q reference with the d reference, as a drive limits its current reference vector:
+    /// i_q,ref <= sqrt(I_max^2 - i_d,ref^2), whatever d current is there; the currents follow through the loop. The test
+    /// motor (4 pole pairs, R left out) on a 5 A drive, asked for 5 A of q current, its d current at -2 A, one current
+    /// cycle. The q reference shows in the PI's integrator: Ki * cycle = 16000 * 62.5 us = 1, so it moves by the error.
+    /// At standstill the d setpoint is 0 and the q reference the whole 5 A (from the d current, -2 + 0.2212 * 2 =
+    /// -1.5576 A after the cycle's lag share 1 - exp(-1/4), it was sqrt(25 - 1.5576^2) = 4.7512 A). At 500 rad/s the d
+    /// setpoint is the circles' crossing, -2.725 A, and the q reference 4.1922 A (from the d current,
+    /// -2 - 0.2212 * 0.725 = -2.1604 A, it was 4.5092 A). The integrator starts at -50 V so that the q voltage stays
+    /// inside the circle (an integrator held at the voltage limit shows nothing).
+    #[test]
+    fn the_current_circle_holds_the_q_reference_with_the_d_reference() {
+        let p = DriveParams { drive_max_current: 5.0, pole_pairs: 4.0, ..weakening() };
+        for (speed, d_ref, q_ref) in [(0.0, 0.0, 5.0), (500.0, -2.725, 4.1922)] {
+            let mut d = Drive {
+                torque_command: 2.25,
+                current: 4.7,
+                d_current: -2.0,
+                current_integral: -50.0,
+                ..Drive::default()
+            };
+            d.current_control(&p, speed);
+            let moved = (d.current_integral + 50.0) / (p.current_ki * p.current_cycle);
+            let wanted = p.d_current_for(q_ref, speed, 190.0, 5.0, p.resistance, 1.0);
+            assert!((wanted - d_ref).abs() < 1e-3, "{speed} rad/s: d setpoint {wanted} A");
+            assert!((4.7 + moved - q_ref).abs() < 1e-3, "{speed} rad/s: q reference {} A", 4.7 + moved);
+        }
     }
 
     /// Braking or motoring at the peak torque near the top speed does not run away. The audit's case, the T-shaped belt gantry's

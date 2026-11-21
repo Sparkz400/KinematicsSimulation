@@ -120,10 +120,12 @@ fn the_tool_turns_by_the_gear_ratio_over_the_pinion_radius_times_the_half_slide(
 /// Static hold at the centre, 850 mm down, the tool at c = 0, the forearms lumped (effects.forearm_inertia off): by the
 /// four-fold symmetry each arm carries a quarter of the plate. By hand: t = -1.6975 degrees (`angle_by_hand`); the
 /// plate's descent per arm angle, all four turning together, from the leg's equation differentiated,
-/// dz/dt = L_a (e sin t - z cos t) / (z + L_a sin t), a quarter of it per arm: -0.12203 m/rad. On the plate
-/// m = 2 (0.7 + 2 (1/3) 0.7) + 1.0 + 6.0 = 9.3332 kg (the two parts with their forearms' third, carriage, payload);
-/// m_LG = 1.4 * 0.25 + 0.5 (0.35 + 0.6667 * 0.7) = 0.75835 kg m. Each gearbox holds -g m_LG cos t + m g dz/dt
-/// = -7.43356 - 11.16956 = -18.60312 N m (negative: the arm is held up), the motor that over 20: -0.930156 N m. The
+/// dz/dt = L_a (e sin t - z cos t) / (z + L_a sin t), a quarter of it per arm: -0.12203 m/rad. The inertia has the
+/// plate's m = 2 (0.7 + 2 (1/3) 0.7) + 1.0 + 6.0 = 9.3332 kg (the two parts with their forearms' third, carriage,
+/// payload) and m_LG = 1.4 * 0.25 + 0.5 (0.35 + 0.6667 * 0.7) = 0.75835 kg m; the weight has each forearm pair's at its
+/// middle, half at each end: on the plate 2 (0.7 + 0.7) + 7.0 = 9.8 kg, m_LG = 1.4 * 0.25 + 0.5 (0.35 + 0.35) =
+/// 0.70 kg m. Each gearbox holds -g m_LG cos t + m g dz/dt = -6.86164 - 11.72815 = -18.58980 N m (negative: the arm
+/// is held up), the motor that over 20: -0.929490 N m (with the weight at the inertia's split it held -18.60312). The
 /// same in the rigid model and without the amplifier's spring.
 #[test]
 fn the_holding_torque_at_the_centre_is_a_quarter_of_the_plates_weight_and_the_arms_own() {
@@ -133,8 +135,9 @@ fn the_holding_torque_at_the_centre_is_a_quarter_of_the_plates_weight_and_the_ar
     let dz = la * (e * t.sin() - z * t.cos()) / (z + la * t.sin()) / 4.0;
     close(dz, -0.12203, 1e-4, "dz/dt per arm");
     let (m, m_lg) = (2.0 * (0.7 + 2.0 * (1.0 - 0.6667) * 0.7) + 1.0 + 6.0, 1.4 * 0.25 + 0.5 * (0.35 + 0.6667 * 0.7));
-    let by_hand = -G * m_lg * t.cos() + m * G * dz;
-    assert!((by_hand + 18.603_12).abs() < 1e-5, "{by_hand} N m");
+    let (weight, weight_lg) = (2.0 * (0.7 + 0.7) + 1.0 + 6.0, 1.4 * 0.25 + 0.5 * (0.35 + 0.35));
+    let by_hand = -G * weight_lg * t.cos() + weight * G * dz;
+    assert!((by_hand + 18.589_80).abs() < 1e-5, "{by_hand} N m");
     for model in [
         ["effects.joint_elasticity = true", "effects.amplifier_compliance = true"],
         ["effects.joint_elasticity = false", "effects.amplifier_compliance = false"],
@@ -149,6 +152,38 @@ fn the_holding_torque_at_the_centre_is_a_quarter_of_the_plates_weight_and_the_ar
             close(torque[k], by_hand / 20.0, 1e-6, "motor torque");
         }
     }
+}
+
+/// The forearms' weight is at the frame momentum's first moment, lumped or rods, rigid or bending arms: the potential
+/// changes along a motion as -g . dc/dt (`testkit::weight_is_at_the_first_moment`). And along the default cycle with
+/// the forearms lumped (effects.forearm_inertia off), V + g . c stays what it was to 1e-6 J. Lumped, the weight and the
+/// frame momentum both had the forearms at the inertia's split (2/3 at the elbow), where a rod's weight is at its middle.
+#[test]
+fn the_forearms_weight_is_at_their_middles() {
+    for rods in [false, true] {
+        for bending in [false, true] {
+            sim_core::testkit::weight_is_at_the_first_moment(&h4(&[
+                &format!("effects.forearm_inertia = {rods}"),
+                &format!("effects.arm_bending = {bending}"),
+            ]));
+        }
+    }
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.forearm_inertia = false").unwrap();
+    let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
+    sim.command(sim_components::Command::StartCycle).unwrap();
+    let at = sim.machine.signal_infos().iter().position(|s| s.id == "energy.potential").unwrap();
+    let (start, mut out, mut sum) = (sim.control.cycle_passes(), Vec::new(), Vec::new());
+    while sim.control.cycle_passes() < start + 2 {
+        sim.step();
+        out.clear();
+        sim.machine.signals(&sim.state, &[0.0; 4], &mut out);
+        let f = sim.machine.frame_momentum(&sim.state).unwrap();
+        sum.push(out[at] + (0..3).map(|k| f.gravity[k] * f.first_moment[k]).sum::<f64>());
+    }
+    let spread =
+        sum.iter().copied().fold(f64::NEG_INFINITY, f64::max) - sum.iter().copied().fold(f64::INFINITY, f64::min);
+    assert!(sum.len() > 1000 && spread < 1e-6, "V + g . c spans {spread} J over {} steps", sum.len());
 }
 
 /// The feedforward with the speed is the rigid, loss-free model's torque: given it at a pose where the tool moves at
@@ -253,8 +288,9 @@ fn a_free_loss_free_motion_keeps_its_energy() {
 /// Held by constant torques (the holding torques of the pose), the stiffness of the potential gravity less torque times
 /// angle, by second differences, the rigid model with the lumped forearms: in the symmetric mode (all four arms
 /// together, the plate up and down) the Hessian's v^T H v / 4 with v = (1, 1, 1, 1). Worked out by hand (the potential
-/// g (m z(theta) - m_LG sum sin theta) by second differences of the forward kinematics, m = 9.333 kg, m_LG = 0.758 kg m)
-/// -4.3 N m/rad at the centre 975 mm down, the default range's middle, unstable; +5.7 N m/rad 1175 mm down, the suite's
+/// g (m z(theta) - m_LG sum sin theta) by second differences of the forward kinematics, the forearms' weight at their
+/// middles: m = 9.8 kg, m_LG = 0.70 kg m) -4.71 N m/rad at the centre 975 mm down, the default range's middle, unstable
+/// (-4.30 with the weight at the inertia's split, 9.333 kg and 0.758 kg m); +5.45 N m/rad 1175 mm down, the suite's
 /// middle, stable. The other three modes are stable at both.
 #[test]
 fn the_vertical_mode_under_constant_torques_is_unstable_high_up() {
@@ -292,7 +328,7 @@ fn the_vertical_mode_under_constant_torques_is_unstable_high_up() {
     };
     let ((high, high_modes), (low, low_modes)) = (hessian(-0.975), hessian(-1.175));
     println!("975 mm: {high:.3} N m/rad, {high_modes:?}; 1175 mm: {low:.3}, {low_modes:?}");
-    assert!((high + 4.3).abs() < 0.2 && (low - 5.7).abs() < 0.2, "{high}, {low}");
+    assert!((high + 4.71).abs() < 0.2 && (low - 5.45).abs() < 0.2, "{high}, {low}");
     // The lowest of each is the vertical; the other three are stable.
     assert!((high_modes[0] - high).abs() < 1e-3 && high_modes[1] > 0.0 && low_modes[0] > 0.0);
 }
@@ -589,10 +625,10 @@ fn the_arms_bending_stiffnesses_are_the_tubes() {
 /// tool at c = 0, the forearms lumped: the arm's elbow is at t = -1.6975 degrees (`angle_by_hand`), by the four-fold
 /// symmetry each arm's forearm pair carries a quarter of the plate, and there is no force along the elbow's axis (the
 /// forearms lie in the arm's plane), so the elbows do not move out of it. What bends the arm is the torque the elbow
-/// carries about the shoulder: the weight of what sits at the elbow, g m_tip cos t with
-/// m_tip = L_a (m_elbow + 2/3 m_fb) = 0.5 (0.35 + 0.6667 * 0.7) = 0.408335 kg m, and the plate's, m g |dz/dt| (m = 9.3332 kg,
-/// dz/dt = -0.12203 m/rad per arm as in the holding-torque test): Q = 4.0026 + 11.1696 = 15.172 N m, so
-/// delta = Q / k_b = 15.172 / 112195.35 = 1.3523e-4 rad (`K_BEND`). The joint then stands short of the elbow by that, t - delta, and its
+/// carries about the shoulder: the weight of what sits at the elbow, g m_tip cos t with the forearms' weight half at
+/// each end, m_tip = L_a (m_elbow + 1/2 m_fb) = 0.5 (0.35 + 0.35) = 0.35 kg m, and the plate's, m g |dz/dt| (m = 9.8 kg
+/// of weight, dz/dt = -0.12203 m/rad per arm as in the holding-torque test): Q = 3.4308 + 11.7282 = 15.159 N m, so
+/// delta = Q / k_b = 15.159 / 112195.35 = 1.3511e-4 rad (`K_BEND`). The joint then stands short of the elbow by that, t - delta, and its
 /// gearbox holds the tube's weight and Q: -(g 0.35 cos(t - delta) + Q) / 20 at the motor. The plate is where the pose says.
 #[test]
 fn an_arm_bends_by_the_tip_torque_over_its_stiffness_at_rest() {
@@ -600,10 +636,10 @@ fn an_arm_bends_by_the_tip_torque_over_its_stiffness_at_rest() {
     let t = angle_by_hand(0.0, 0.0, z);
     let (e, la) = (0.18, 0.5);
     let dz = la * (e * t.sin() - z * t.cos()) / (z + la * t.sin()) / 4.0;
-    let m = 2.0 * (0.7 + 2.0 * (1.0 - 0.6667) * 0.7) + 1.0 + 6.0;
-    let tip_moment = la * (0.35 + 0.6667 * 0.7);
+    let m = 2.0 * (0.7 + 0.7) + 1.0 + 6.0;
+    let tip_moment = la * (0.35 + 0.35);
     let q = G * tip_moment * t.cos() - m * G * dz;
-    assert!((q - 15.172).abs() < 2e-3, "{q} N m");
+    assert!((q - 15.159).abs() < 2e-3, "{q} N m");
     let mut cfg = lossless_config();
     for e in [
         "effects.arm_bending = true",
