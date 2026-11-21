@@ -309,7 +309,7 @@ pub const WARM_START_PERIOD_MOST: usize = 3;
 /// the measured span covers, more than one where the cycle repeats only every so many passes (a pick that alternates
 /// between two places loads the motors differently pass by pass): the rises then settle over the period, not per pass.
 /// `repeat`: where the passes converged neither per pass nor over a period, how far apart (K) the rises settle of two
-/// passes started at the same rises, the measured one and the one before it (`None` where not measured). Beyond the
+/// passes started at the same rises, the measured one and one more run after it (`None` where not measured). Beyond the
 /// tolerance the cycle's motion does not repeat itself: what one pass leaves moving (a load still swinging) carries into
 /// the next and loads the motors differently, which no start temperature can settle.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -375,8 +375,9 @@ fn set_rises(sim: &mut Sim, rises: &[f64]) {
 /// warm pass and where the start did not move. A winding's settled rise depends on its current alone: m = 0.
 ///
 /// Where the spans converge neither per pass nor over a period, and `repeat` is given (a cycle that runs on from pass to
-/// pass), one more span is measured from the rises the last one started at, and `WarmStart::repeat` says how far apart
-/// the two settle: the temperatures alike, what differs is the motion.
+/// pass), one more span is measured from the rises the last one started at (`repeat` holds the last one's settled rises
+/// and result meanwhile): the result is the last one's, with `WarmStart::repeat` how far apart the two settle, the
+/// temperatures alike, what differs being the motion. The caller keeps the last span's load as the measured one.
 #[allow(clippy::too_many_arguments)]
 fn warm_pass(
     sim: &mut Sim,
@@ -386,9 +387,14 @@ fn warm_pass(
     before: &mut Option<(Vec<f64>, Vec<f64>)>,
     period: &mut usize,
     history: &mut Vec<Vec<f64>>,
-    mut repeat: Option<&mut Option<Vec<f64>>>,
+    mut repeat: Option<&mut Option<(Vec<f64>, WarmStart)>>,
 ) -> Option<WarmStart> {
     let settled = settled_rises(sim, load);
+    if let Some((first, done)) = repeat.as_mut().and_then(|r| r.take()) {
+        // This span started where the one before did: how far apart the two settle.
+        let apart = settled.iter().zip(&first).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+        return Some(WarmStart { repeat: Some(apart), ..done });
+    }
     let change = settled
         .iter()
         .zip(started_at)
@@ -399,11 +405,6 @@ fn warm_pass(
     if done.converged() || change.is_infinite() {
         return Some(done);
     }
-    if let Some(first) = repeat.as_mut().and_then(|r| r.take()) {
-        // This span started where the one before did: how far apart the two settle.
-        let apart = settled.iter().zip(&first).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
-        return Some(WarmStart { repeat: Some(apart), ..done });
-    }
     if *period == 1 {
         history.push(settled.clone());
     }
@@ -412,7 +413,7 @@ fn warm_pass(
         let Some(p) = found else {
             let Some(r) = repeat else { return Some(done) };
             // No period: one more span from the same rises tells whether the passes repeat at all.
-            *r = Some(settled);
+            *r = Some((settled, done));
             set_rises(sim, started_at);
             return None;
         };
@@ -1300,7 +1301,7 @@ pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, Comma
     let (mut started_at, mut before) = (Vec::new(), None);
     // The warm spans measured so far, of `period` passes each, from the pass `span_from`; the settled rises per pass.
     let (mut spans, mut period, mut span_from, mut history) = (0usize, 1usize, 2usize, Vec::new());
-    let mut repeat = None;
+    let (mut repeat, mut measured) = (None, None);
     loop {
         sim.step();
         // The controller counts the passes: a cycle of one segment never changes its segment index.
@@ -1324,7 +1325,12 @@ pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, Comma
                 );
                 if let Some(warm_start) = next {
                     let _ = sim.command(Command::Stop);
+                    // After the repeat span (`warm_pass`) the span before it is the measured one.
+                    let load = if warm_start.repeat.is_some() { measured.take().unwrap_or(load) } else { load };
                     return Ok(CycleLoad { warm_start: Some(warm_start), ..load });
+                }
+                if repeat.is_some() {
+                    measured = Some(load);
                 }
                 spans = if period == was { spans + 1 } else { 0 };
                 span_from = passes;
@@ -1354,6 +1360,10 @@ pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, Comma
         }
     }
     let _ = sim.command(Command::Stop);
+    // Stopped in the repeat span: the span before it stays the measured one, the repeat not told.
+    if let (Some((_, done)), Some(load)) = (repeat, measured) {
+        return Ok(CycleLoad { warm_start: Some(done), ..load });
+    }
     let duration = sim.time() - start;
     // Stopped before a measured pass ended (a trip, or a crash): not converged, where a warm pass had begun; before
     // that the run was measured from cold.
