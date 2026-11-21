@@ -347,8 +347,10 @@ pub trait Machine: Send {
     /// the generalised force of each axis), held until changed: an obstacle's push on the tool or its carriage
     /// (effects.crash). Returns whether the machine takes it; by default `false` (not supported), and the push then acts
     /// on the motors through the rigid kinematics. The force's power is not in the machine's loss rows: the simulation
-    /// integrates it as the obstacles' work (the budget's crash row). Machines that take it: the machine files (`sim-netlist`) and the wrapper that forwards it; the machine
-    /// crates of their own keep the default and are pushed at the motors.
+    /// integrates it as the obstacles' work (the budget's crash row). Machines that take it put its generalised forces
+    /// into their equations beyond their transmissions, at every stage of the integration (`tool_force_on_rates`): the
+    /// machine files' `ConfigMachine`, the joint machines (`chain::JointMachine`) and most machine crates; the D2, D3
+    /// and D4 (the files' linkage and spatial delta), the crane (its tool is not its load) and the winder keep the default.
     fn set_tool_force(&mut self, _force: &[f64]) -> bool {
         false
     }
@@ -566,6 +568,31 @@ pub trait Machine: Send {
         self.set_tool_velocity(&mut state, &vel);
         state
     }
+}
+
+/// The generalised force of a force on the tool (`Machine::set_tool_force`, one component per axis) on each of the
+/// state's rates `rates`: its virtual power per unit of each rate, F . d v_tool / d s_j, with the tool's speed v_tool
+/// as `tool_state` gives it, which is linear in the rates (a unit step on each is exact). Its power on the rates is then
+/// F . v_tool, what the simulation books as the obstacles' work. `None` where the force is zero.
+pub fn tool_force_on_rates<M: Machine + ?Sized>(
+    machine: &M,
+    s: &[f64],
+    force: &[f64],
+    rates: std::ops::Range<usize>,
+) -> Option<Vec<f64>> {
+    if force.iter().all(|f| *f == 0.0) {
+        return None;
+    }
+    let n = force.len();
+    let (mut pos, mut base, mut vel, mut at) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], s.to_vec());
+    machine.tool_state(s, &mut pos, &mut base);
+    let mut on = |j: usize| -> f64 {
+        at[j] = s[j] + 1.0;
+        machine.tool_state(&at, &mut pos, &mut vel);
+        at[j] = s[j];
+        force.iter().zip(vel.iter().zip(&base)).map(|(f, (v, b))| f * (v - b)).sum()
+    };
+    Some(rates.map(on).collect())
 }
 
 /// One line of the registration list.

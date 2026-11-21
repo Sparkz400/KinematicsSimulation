@@ -729,9 +729,10 @@ impl Sim {
     /// `PUSH_RANGE` of. The depth and its slopes are those of the rigid kinematics at the motors' angles (`forward`,
     /// then `equilibrium`), so that the push is a spring on the motors' angles, which the step integrates with the rest.
     /// A machine that takes a force at its tool (`Machine::set_tool_force`) is pushed there: the push's slopes are then
-    /// the clearance's along the tool's coordinates, its force the generalised force of the contact on them (its
-    /// virtual work per unit of each, wherever on the moving parts it touches), worked out at every stage of the
-    /// integration, and a load on a soft belt stops at the obstacle's face. A machine without it is pushed at its
+    /// the clearance's along the tool's coordinates, its depth the clearance of the parts where they are, its force the
+    /// generalised force of the contact on them (its virtual work per unit of each, wherever on the moving parts it
+    /// touches), worked out at every stage of the integration, and a load on a soft belt stops at the obstacle's face.
+    /// A machine without it is pushed at its
     /// motors through the rigid kinematics, so that a load on a soft transmission swings on into the obstacle by the
     /// transmission's give. Either way the work the pushes take is the budget's crash row.
     fn pushes(&mut self) {
@@ -766,7 +767,14 @@ impl Sim {
             let bodies = crate::collision::Bodies::of(machine, &state);
             near.iter().map(|&k| bodies.gap(&self.obstacles[k].aabb).map_or(f64::INFINITY, |g| g.2)).collect()
         };
-        let depths: Vec<f64> = gaps_at(&angle).into_iter().map(|g| -g).collect();
+        // At the tool the depth is that of the parts where they are (the clearance after the last step), not where the
+        // rigid kinematics put them about the tool: a payload on a leaning axis stands back from its tool point by the
+        // lean, and is held at its face where it touches.
+        let depths: Vec<f64> = if tool_route {
+            near.iter().map(|&k| -self.gaps[k]).collect()
+        } else {
+            gaps_at(&angle).into_iter().map(|g| -g).collect()
+        };
         let mut slopes = vec![vec![0.0; dim]; near.len()];
         for m in 0..dim {
             let mut at = angle.clone();
@@ -799,7 +807,11 @@ impl Sim {
             return 0.0;
         }
         self.contact_force = if self.tool_push {
-            tool_push_forces(self.machine.as_ref(), &self.pushes, &self.push_from, &self.state).2
+            let (force, _, total) = tool_push_forces(self.machine.as_ref(), &self.pushes, &self.push_from, &self.state);
+            // What is sampled after the step (the losses of a gearbox or a guide the push loads) sees the push at its
+            // end, not at the integration's last stage.
+            self.machine.set_tool_force(&force);
+            total
         } else {
             let motors = self.push_from.len();
             let (mut angle, mut speed, mut torque) = (vec![0.0; motors], vec![0.0; motors], vec![0.0; motors]);
