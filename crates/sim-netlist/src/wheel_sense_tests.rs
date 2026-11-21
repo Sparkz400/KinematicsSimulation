@@ -129,6 +129,21 @@ fn the_shipped_files_wheels_turn_as_their_belts_run() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// The screw portal's family (screw portal, C portal, both five-axis files): with their far idlers in the routes each
+/// belt's second section is drawn as it runs, x2 along x (standing) and y2 along y (flat on the bridge), so both are
+/// checked against the belt's kinematics, and the far idlers' `speed` (+1, the sign the dual gantry's far idler has by
+/// hand) matches. Drawn without the far idlers (before 22 November) neither section was checked.
+#[test]
+fn the_screw_portals_far_idlers_turn_as_their_belts_run() {
+    for name in ["screw-portal.toml", "portal-c.toml", "five-axis.toml", "five-axis-table.toml"] {
+        let (wrong, checked) = mismatches(name, &["effects.idlers = true"]);
+        assert!(wrong.is_empty(), "{wrong:?}");
+        for c in ["x2/x", "y2/y"] {
+            assert!(checked.iter().any(|k| k.ends_with(c)), "{name}: {c} not in {checked:?}");
+        }
+    }
+}
+
 /// The dual and rack gantries' Y belts by hand (machines/dual-gantry.toml, rack-gantry.toml): a loop from the clamp on
 /// the Y carriage to the motor's pulley (section y1, 0.1 + y), round it and back along the other strand to the far idler
 /// on the bridge, 0.1 + stroke + 0.1 from the pulley, and round that to the clamp (y2). A positive turn of the pulley
