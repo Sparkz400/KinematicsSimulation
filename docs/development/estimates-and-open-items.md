@@ -115,7 +115,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The XYZ portal's X and Y belts are loops by their lengths but draw no far idler in their routes (the screw portal's family has them since 22 November); its Z pulley stands at its `at_m`, not on the Y carriage | XYZ portal file | Without the far idler in a route its runs' angular momentum is left out of the frame momentum (`run_midpoints`) and the wheels' check skips the second section; only with effects.base_compliance (off). |
 | Belt-to-pulley heat conduction | linear delta | Not sized. |
 | The tube's single-mode shape for inertia with the static stiffness 3EI/L | D3, D4, H4 arm bending | Not sized. |
-| An obstacle's push is a spring on the motors' angles where the machine does not take it at its tool: D2, D3, D4 (their arms are `sim_netlist`'s linkage and spatial delta, which need `set_tool_force`), the linkage, delta and scissor files, the overhead crane (its tool is bridge, trolley and hoist, not the swinging load: the push would need the contact point's own Jacobian) and the winder. Where it is taken at the tool it acts there, at the tool's coordinates and not at the touching part (a payload under a leaning Z axis is held through the tool point); with `effects.base_compliance` not on the base's coordinates | obstacle contact | A load on a soft belt swings on by the belt's stretch (D3: 6.7 mm deep at the impact against 0.11 mm F / k at rest). The crates' budgets of a move into a slab close to 3.5e-4 (T-gantry) and 2.8e-4 (hexapod) of the supply, against about 2e-5 with the push at the motors (measured, `collision.rs`). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
+| An obstacle's push is a spring on the motors' angles where the machine does not take it at its tool: the overhead crane (its tool is bridge, trolley and hoist, not the swinging load: the push would need the contact point's own Jacobian) and the winder. Where it is taken at the tool it acts there, at the tool's coordinates and not at the touching part (a payload under a leaning Z axis is held through the tool point); with `effects.base_compliance` not on the base's coordinates | obstacle contact | A load on a soft belt swings on by the belt's stretch (D3: 6.7 mm deep at the impact against 0.11 mm F / k at rest). The crates' budgets of a move into a slab close to 3.5e-4 (T-gantry) and 2.8e-4 (hexapod) of the supply, against about 2e-5 with the push at the motors (measured, `collision.rs`). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
 | The stepper's detent while disabled | stepper | Up to T_d/(4N) appears or disappears from the budget at an enable. |
 | `mode_shape` of the five-bar | five-bar | Display only. |
 | Run files recorded before the signal `setpoint_age` | `charts.rs` | The tool error falls back to the held setpoint: up to one cycle's travel (0.79 against 0.18 mm on the T-gantry). |
@@ -537,6 +537,18 @@ Fixed:
   261.0 -> 248.5 N. The softer return sections raise the following error (validation.md's friction feedforward table,
   re-run: screw portal on 99.5 -> 152.3 um, C portal off 177.4 -> 253.1 um), within every verdict. The screw portal
   and the five-axis files have no spans (their belt mass stays lumped).
+
+- An obstacle's push at the tool for the linkage, spatial delta and scissor machines (section 4's row: pushed at the
+  motors), and with them the D2, D3 and D4 crates, whose arms they are (22 November): `set_tool_force` puts J^T F
+  into the arms' outside forces (`load`; the spatial delta's `load_n` P^T F, on the elbows and their moves beyond the
+  tubes where the arms bend, on the joints through the bending springs; the scissor's h' F), the push in the frame
+  momentum's outside force; the D4 forwards x, y, z to its arms and puts c on its turn. Files
+  (`the_linkage_delta_and_scissor_files_are_pushed_at_their_tool`, fails without: planar delta 0.364 mm deep against F / k
+  0.123 mm): depth F / k to 1e-5 (planar delta 0.1219 mm at 1219 N, D3 0.1499 mm at 1499 N, scissor 2.826 mm at
+  28.26 kN), the push's power F . v to 1e-8; budgets 2.3e-6 (planar delta), 9.1e-7 (D3) and 3.4e-4 (scissor) of the
+  supply, the same moves without contact 9.1e-6, 3.5e-5, 2.8e-7, so the brief's 1e-6 is the integration's, not the
+  push's, on the deltas. Crates (`collision.rs`, no longer ignored): D2 98.07 um at 980.7 N, budget 2.6e-6, D3 111.5 um
+  at 1115 N, 1.3e-5, D4 111.7 um at 1117 N, 1.6e-5 of the supply and potential energy.
 
 - The angular momentum of the T-gantry crate against its file (section 4: not compared, different origins and belt-run
   geometry). Compared now over 1 s of the default cycle, every 50 steps, both about the place of the Z axis's centre of

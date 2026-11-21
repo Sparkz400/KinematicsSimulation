@@ -238,6 +238,8 @@ pub struct ScissorMachine {
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the platform along z (`Machine::set_tool_force`), N; held until changed.
+    tool_push: f64,
     /// The screw's efficiency (1 with effects.gearbox_efficiency off), which the gearbox's carries.
     screw_efficiency: f64,
     joint: RotaryJoint,
@@ -277,6 +279,7 @@ impl ScissorMachine {
             m_payload: if cfg.bool("effects.payload")? { v("payload_kg") } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
+            tool_push: 0.0,
             screw_efficiency,
             joint,
             thermal: ThermalFeedback::from_config(cfg)?,
@@ -316,14 +319,15 @@ impl ScissorMachine {
         self.m_weight + if self.payload_attached { self.m_payload } else { 0.0 }
     }
 
-    /// M, the velocity term m h' h'' w^2 and Q_g at theta and its speed w.
+    /// M, the velocity term m h' h'' w^2 and Q_g at theta and its speed w, with an obstacle's push F on the platform
+    /// (`set_tool_force`) as h' F among the outside forces.
     fn load(&self, theta: f64, w: f64) -> (f64, f64, f64) {
         let [_, d1, d2] = self.height(theta);
         let (turn, turn_rate) = self.geometry.arm_motion(theta, self.arms);
         (
             self.screw_inertia + self.m_nt() * d1 * d1 + turn,
             (self.m_nt() * d1 * d2 + turn_rate) * w * w,
-            -self.g * self.m_g() * d1,
+            (self.tool_push - self.g * self.m_g()) * d1,
         )
     }
 
@@ -506,6 +510,12 @@ impl Machine for ScissorMachine {
     }
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
+    }
+    /// The push acts on the platform, the tool (`load`): h' F on the arms' angle, whose power is F times the platform's
+    /// speed.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.tool_push = force[0];
+        true
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;

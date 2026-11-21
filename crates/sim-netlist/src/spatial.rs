@@ -480,6 +480,8 @@ pub struct Delta {
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the platform (`Machine::set_tool_force`), along x, y and z, N; held until changed.
+    tool_push: V3,
     joints: [RotaryJoint; 3],
     thermal: Option<ThermalFeedback>,
     /// The working range: radius, top, bottom sphere's centre height and radius; the condition number refused above.
@@ -643,6 +645,7 @@ impl Delta {
             m_payload: if cfg.bool("effects.payload")? { n.non_negative("mass.payload_kg")? } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
+            tool_push: [0.0; 3],
             joints: arms.joints.clone(),
             thermal: ThermalFeedback::from_config(cfg)?,
             radius,
@@ -871,6 +874,11 @@ impl Delta {
             for r in 0..N {
                 load.1[r] -= (0..3).map(|k| jp[k][r] * f[k]).sum::<f64>();
             }
+        }
+        // An obstacle's push on the platform (`set_tool_force`), P^T F with the outside forces: on the elbows (and
+        // their moves) beyond the tubes, so on the joints through the bending springs where the arms bend.
+        for r in 0..N {
+            load.2[r] += (0..3).map(|k| jp[k][r] * self.tool_push[k]).sum::<f64>();
         }
         let elbows = self.legs.elbows_moved(t, y);
         for i in 0..3 {
@@ -1368,6 +1376,8 @@ impl Machine for Delta {
                 add_spin(&mut f, rod, self.rod_spin, self.rod_spin(i, e, y, ew, yv));
             }
         }
+        // An obstacle's push on the platform comes from outside.
+        (f.external, f.external_at) = (self.tool_push, p);
         Some(f)
     }
     fn axes(&self) -> &[AxisInfo] {
@@ -1554,6 +1564,12 @@ impl Machine for Delta {
 
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
+    }
+    /// The push acts on the platform, the tool (`load_n`): its generalised forces P^T F on the coordinates its place
+    /// moves with, whose power F . v is the platform's speed times it.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.tool_push = [force[0], force[1], force[2]];
+        true
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;

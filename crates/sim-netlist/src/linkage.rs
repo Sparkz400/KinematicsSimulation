@@ -520,6 +520,8 @@ pub struct LinkageMachine {
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the plate (`Machine::set_tool_force`), along x and z, N; held until changed.
+    tool_push: V2,
     joints: [RotaryJoint; 2],
     thermal: Option<ThermalFeedback>,
     /// The working range: half width, top, bottom circle's centre height and radius; the condition number refused above.
@@ -628,6 +630,7 @@ impl LinkageMachine {
             m_payload: if cfg.bool("effects.payload")? { n.non_negative("mass.payload_kg")? } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
+            tool_push: [0.0; 2],
             thermal: ThermalFeedback::from_config(cfg)?,
             half_width,
             top,
@@ -731,7 +734,7 @@ impl LinkageMachine {
     }
 
     /// The load's mass matrix M, the velocity term m_nt J^T J' theta', and the generalised gravity Q_g at arm angles t
-    /// and speeds w.
+    /// and speeds w, with an obstacle's push on the plate F (`set_tool_force`) as J^T F among the outside forces.
     fn load(&self, t: V2, w: V2) -> (M2, V2, V2) {
         let (p, j) = self.pose(t);
         let jt = transpose(&j);
@@ -742,7 +745,9 @@ impl LinkageMachine {
         let pv = mul(&j, w);
         let velocity = self.legs.velocity_term(t, p, w, pv).map_or([f64::NAN; 2], |a| mul(&jt, a.map(|v| m * v)));
         let mw = self.weight_platform + if self.payload_attached { self.m_payload } else { 0.0 };
-        let gravity: V2 = std::array::from_fn(|k| self.g * self.weight_moment * t[k].cos() - mw * self.g * j[1][k]);
+        let push = mul(&jt, self.tool_push);
+        let gravity: V2 =
+            std::array::from_fn(|k| self.g * self.weight_moment * t[k].cos() - mw * self.g * j[1][k] + push[k]);
         (mass, velocity, gravity)
     }
 
@@ -974,6 +979,8 @@ impl Machine for LinkageMachine {
             add_point(&mut f, 2.0 / 3.0 * m_fb, middle, speed);
             add_spin(&mut f, [0.0, side, 0.0], self.joints[i].rotor_inertia, rotor_speed[i]);
         }
+        // An obstacle's push on the plate comes from outside.
+        (f.external, f.external_at) = ([self.tool_push[0], 0.0, self.tool_push[1]], [p[0], 0.0, p[1]]);
         Some(f)
     }
     fn axes(&self) -> &[AxisInfo] {
@@ -1150,6 +1157,12 @@ impl Machine for LinkageMachine {
 
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
+    }
+    /// The push acts on the plate, the tool (`load`): its generalised forces J^T F on the arms, whose power F . v is
+    /// the plate's speed times it.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.tool_push = [force[0], force[1]];
+        true
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
