@@ -67,6 +67,34 @@ fn the_belts_weight_is_at_its_first_moment() {
     sim_core::testkit::weight_is_at_the_first_moment(&machine(ENTRY.config(), &["effects.beam_vertical_mode = true"]));
 }
 
+/// With the beam's vertical mode the beam's own mass moves with it, -p0(x) w in the first moment (p0 = mu integral of the
+/// shape, `Beam::shape_moments`), so its weight is in the potential, -g p0 w; the beam's spring holds the stress of its
+/// own sag, whose cross term with the mode is +g p0 w by virtual work (EI u'''' = mu g), so the total and the dynamics
+/// keep what they had. Off the middle p0 changes with x: at x = 0.255 the potential fell at 1.572830 W against
+/// -g dc/dt 1.572586 W, and V + g . c drifted 2.5e-4 J over a free second from there (1.3e-8 J with the mode off).
+#[test]
+fn the_beams_own_weight_is_at_its_first_moment_off_the_middle() {
+    let edits = ["effects.beam_vertical_mode = true"];
+    for pose in [[0.255, 0.187], [0.15, 0.1], [0.8, 0.3]] {
+        sim_core::testkit::weight_is_at_the_first_moment_at(&machine(ENTRY.config(), &edits), &pose);
+    }
+    for edits in [&[][..], &edits[..]] {
+        let m = machine(ENTRY.config(), edits);
+        let potential = m.signal_infos().iter().position(|s| s.id == "energy.potential").unwrap();
+        let invariant = |s: &[f64], torque: &[f64]| {
+            let mut out = Vec::new();
+            m.signals(s, torque, &mut out);
+            let f = m.frame_momentum(s).unwrap();
+            out[potential] + (0..3).map(|k| f.gravity[k] * f.first_moment[k]).sum::<f64>()
+        };
+        let mut run = sim_core::testkit::PulseRun::new(&m, 62.5e-6, 0.5, 0.1);
+        let start = invariant(&run.state, &run.torque);
+        let mut drift = 0.0f64;
+        run.run(1.0, |r| drift = drift.max((invariant(&r.state, &r.torque) - start).abs()));
+        assert!(drift < 1e-7, "{edits:?}: V + g . c drifted by {drift} J");
+    }
+}
+
 /// Constant torque: acceleration equals force divided by effective mass.
 #[test]
 fn constant_torque_gives_force_over_effective_mass() {

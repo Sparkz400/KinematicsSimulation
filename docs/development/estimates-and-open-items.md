@@ -284,6 +284,14 @@ Fixed (after the second audit, 21 November):
   itself (r = 1) every number is the same to the bit. Still open: with the nut running the stroke (0.8 to 0 m in 1 s
   under the same load) 3.0e-5 J of 7.1e-4 J stays open (9.3e-5 before), and 1.8e-5 J without the stroke's compliance,
   where this fix changes nothing, at any step: not found.
+- With effects.beam_vertical_mode the frame momentum's first moment has the beam's own mass moving with the mode
+  (−p₀(x) w) but the potential did not weigh it: off the middle, where p₀ changes with x, V + g · c drifted (T-gantry,
+  1 s of free pulses: 2.5e-4 J while V moved 0.16 J; 1.3e-8 J with the mode off), and `weight_is_at_the_first_moment`
+  checked the middle only. The beam's weight on it, −g p₀ w, is now in the potential and the cross term of its own sag
+  with the mode, +g p₀ w, in the beam's elastic energy: they cancel, so the total energy and the dynamics are as
+  before. In the crate and the machine file; checked off the middle
+  (`testkit::weight_is_at_the_first_moment_at`, `the_beams_own_weight_is_at_its_first_moment_off_the_middle` in both)
+  and over the 1 s run (below 1e-7 J with the mode on and off).
 
 Fixed:
 - `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another

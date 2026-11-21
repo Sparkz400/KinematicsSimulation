@@ -1295,10 +1295,13 @@ impl TGantry {
         let mut potential = potential + 0.5 * self.lean_weight_stiffness(s[Z]) * s[U] * s[U];
         let mut elastic =
             0.5 * self.flex_at(s[Z]).0 * s[U] * s[U] + self.stop_energy(s[X], s[Z]) + belt + gears + frame;
-        if self.vertical().is_some() {
-            // The Z axis's weight at z - w, the carriage's at -w; the beam's spring.
-            potential -= (self.m_carriage + self.m_z()) * self.g * s[W];
-            elastic += 0.5 * self.beam_mode(s[X])[0] * s[W] * s[W];
+        if let Some((beam, mode)) = self.vertical() {
+            // The Z axis's weight at z - w, the carriage's at -w, the beam's own at -phi w (its first moment, -p0 w,
+            // `frame_momentum`); the beam's spring, which holds the stress of the beam's own sag: its cross term with
+            // the mode is +g p0 w by virtual work (EI u'''' = mu g), so the beam's weight does no work on w in all.
+            let own = self.g * beam.shape_moments(mode.mass_per_m, s[X])[0] * s[W];
+            potential -= (self.m_carriage + self.m_z()) * self.g * s[W] + own;
+            elastic += 0.5 * self.beam_mode(s[X])[0] * s[W] * s[W] + own;
         }
         [kinetic, potential, elastic]
     }

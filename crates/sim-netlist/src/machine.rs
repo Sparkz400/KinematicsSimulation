@@ -2480,10 +2480,13 @@ impl ConfigMachine {
         let belt: f64 = (0..geo.len()).map(|i| self.belt.energy(geo[i] + longer[i], mat[i])).sum();
         let gears: f64 =
             (0..m).map(|kk| self.gears[kk].energy_with(s[n + m + kk], self.output(s, kk).0, self.arm(s, kk))).sum();
-        // The beam: the carried weight at w lower, and its spring.
+        // The beam: the carried weight at w lower, the beam's own at -phi w (its first moment, -p0 w), and its spring,
+        // which holds the stress of the beam's own sag: its cross term with the mode is +g p0 w by virtual work
+        // (EI u'''' = mu g), so the beam's weight does no work on w in all.
         let (w, k) = (self.deflection(s).0, self.beam_mode(q)[0]);
-        let potential = potential - self.beam_load().0 * self.g * w;
-        let beam = 0.5 * k * w * w;
+        let own = self.beam.as_ref().map_or(0.0, |b| self.g * b.shape_moments(q[b.axis])[0] * w);
+        let potential = potential - self.beam_load().0 * self.g * w - own;
+        let beam = 0.5 * k * w * w + own;
         [kinetic + turning, potential, stops + belt + gears + frame + lean + beam]
     }
 
