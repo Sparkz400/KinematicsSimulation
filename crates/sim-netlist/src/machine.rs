@@ -3307,11 +3307,11 @@ impl ConfigMachine {
         (Wheel { centre: [at[plane[0]], at[plane[1]]], radius }, at)
     }
 
-    /// Where each span (a straight run of the belt) lies at the pose `q`: the middle of the straight piece between the
-    /// tangent points on the two wheels of its section's route (`contacts`), in the frame of the bodies' places (the 3D
+    /// Where each span (a straight run of the belt) lies at the pose `q`: the tangent points on the two wheels of its
+    /// section's route (`contacts`) it runs between, each with its waypoint, in the frame of the bodies' places (the 3D
     /// view's, less where `scene_at` starts). The section's spans are taken in order as the route's consecutive pairs of
     /// waypoints; `None` for a section whose span count is not the route's pairs, and for a pair with no straight piece.
-    fn run_midpoints(&self, q: &[f64]) -> Vec<Option<[f64; 3]>> {
+    fn run_ends(&self, q: &[f64]) -> Vec<Option<[(Waypoint, [f64; 3]); 2]>> {
         let mut next = vec![0usize; self.sections.len()];
         let routes: Vec<Vec<Waypoint>> = (0..self.sections.len()).map(|s| self.route_waypoints(s)).collect();
         let mut count = vec![0usize; self.sections.len()];
@@ -3327,15 +3327,13 @@ impl ConfigMachine {
                 let plane = self.plane(span.section);
                 let ((a, pa), (b, pb)) = (self.wheel(route[at], q, plane), self.wheel(route[at + 1], q, plane));
                 let [from, to] = contacts(a, b);
-                let deep = plane[2];
-                let middle = Self::in_view(
-                    [0.5 * (from[0] + to[0]), 0.5 * (from[1] + to[1])],
-                    0.5 * (pa[deep] + pb[deep]),
-                    plane,
-                );
-                let origin = scene_origin();
-                let place: [f64; 3] = std::array::from_fn(|k| middle[k] - origin[k]);
-                place.iter().all(|x| x.is_finite()).then_some(place)
+                let (deep, origin) = (plane[2], scene_origin());
+                let place = |p: [f64; 2], depth: f64| -> [f64; 3] {
+                    let at = Self::in_view(p, depth, plane);
+                    std::array::from_fn(|k| at[k] - origin[k])
+                };
+                let ends = [(route[at], place(from, pa[deep])), (route[at + 1], place(to, pb[deep]))];
+                ends.iter().all(|(_, p)| p.iter().all(|x| x.is_finite())).then_some(ends)
             })
             .collect()
     }
@@ -3483,7 +3481,7 @@ impl Machine for ConfigMachine {
     /// belt as the first pulley of the section feeds it (`route_sense`). A rack's pinion turns about up x e (e the rack's
     /// direction, the pinion riding with the axis above the rack fixed to the frame; a vertical rack's y x e), a rotary's motor about the rotary's own axis, positive
     /// as the axis grows. The belt's runs carry angular momentum m x (mu L y) too, each about the middle of its straight
-    /// piece (`run_midpoints`); the arcs round the wheels are in the wheels' spin. What does not move is left out (see
+    /// piece (`run_ends`); the arcs round the wheels are in the wheels' spin. What does not move is left out (see
     /// `FrameMomentum`).
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         // The axes, not the coordinates: a yawing gantry's yaw is one more, which no tool axis has.
@@ -3629,16 +3627,27 @@ impl Machine for ConfigMachine {
         // first moment mu sum (L0_s + c_s . q / 2) V_s q, whose rate that is (the belt's runs being one piece), with
         // mu L e u of the sway.
         // The runs' angular momentum, m_s x (mu L_s y_s) about the origin of the bodies' places, from where each run lies
-        // (`run_midpoints`, the middle of its straight piece, the sway on top).
+        // (`run_ends`, the middle of its straight piece, the sway on top).
         if self.run_mass > 0.0 {
             let (e, (u, du)) = (self.sway_direction(), self.sway(s));
-            let middles = self.run_midpoints(q);
+            let ends = self.run_ends(q);
             // With the beam's mode the runs riding on it (`riding_share`) go down by their share of w: the vertical ones
-            // whole, the tilting ones by w / 2 on average (their middle, where the crate takes them at the share's
-            // weighted point, 2/3 of the way to the carriage, for the angular momentum).
+            // whole, the tilting ones by w / 2 on average. A tilting run's point at the share xi of the way from its
+            // fixed end f to the end c on the carriage goes down by xi w: its first moment is w / 2 at the middle, its
+            // angular momentum from w' the weighted point's, f + 2/3 (c - f), as the crate has it.
             let (up, (dev, rate)) =
                 (self.beam.as_ref().map_or([0.0; 3], |b| self.dirs[b.vertical]), self.deflection(s));
-            for (span, middle) in self.spans.iter().zip(middles) {
+            let rides = |w: Waypoint| {
+                let Some(b) = &self.beam else { return false };
+                let body = match w {
+                    Waypoint::Body(body) => Some(body),
+                    Waypoint::Idler(d) => self.idlers[d].body,
+                    Waypoint::Pulley(kk) => self.pulley_body[kk],
+                };
+                body.is_some_and(|body| self.bodies[body].axes[b.axis])
+            };
+            for (span, ends) in self.spans.iter().zip(ends) {
+                let middle = ends.map(|[(_, a), (_, b)]| std::array::from_fn::<f64, 3, _>(|k| 0.5 * (a[k] + b[k])));
                 let Some(rows) = &span.velocity else { continue };
                 let weight = self.run_mass * (span.length + dot(&span.c, q));
                 let moment = self.run_mass * (span.length + 0.5 * dot(&span.c, q));
@@ -3649,9 +3658,16 @@ impl Machine for ConfigMachine {
                     f.first_moment[k] += moment * dot(&rows[k], q) + weight * (e[k] * u - share * dev * up[k]);
                 }
                 f.mass += weight;
-                if let Some(m) = middle {
+                if let (Some(m), Some([(wa, a), (wb, b)])) = (middle, ends) {
                     let at = std::array::from_fn(|k| m[k] + e[k] * u - share * dev * up[k]);
-                    let turning = cross(at, y);
+                    let mut turning = cross(at, y);
+                    // A tilting run: its w' at the weighted point, a sixth of the run from the middle towards the carriage.
+                    if share == 0.5 && rides(wa) != rides(wb) {
+                        let (fixed, carried) = if rides(wb) { (a, b) } else { (b, a) };
+                        let off: [f64; 3] = std::array::from_fn(|k| (carried[k] - fixed[k]) / 6.0);
+                        let more = cross(off, up.map(|c| -share * rate * c));
+                        (0..3).for_each(|k| turning[k] += more[k]);
+                    }
                     (0..3).for_each(|k| f.angular[k] += weight * turning[k]);
                 }
             }

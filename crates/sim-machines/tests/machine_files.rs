@@ -474,7 +474,7 @@ fn a_broken_machine_file_is_refused_with_its_key_and_line() {
     let (e, _) = refused(without_lean);
     assert_eq!(e, ConfigError::Missing("machine.lean (effects.tool_flex)".into()));
     let (e, _) = refused(|t: &str| {
-        t.replacen("belt_wrap = false", "belt_wrap = true", 1).replacen("at_m = [1.15, -0.05, 0.06]\n", "", 1)
+        t.replacen("belt_wrap = false", "belt_wrap = true", 1).replacen("at_m = [1.15, -0.03, 0.06]\n", "", 1)
     });
     assert_eq!(e, ConfigError::Invalid("effects.belt_wrap (pulley_b has no at_m)".into()));
     let (e, line) = refused(one("lever_axis = \"z\"\nlateral", "lever_axis = \"y\"\nlateral"));
@@ -913,6 +913,38 @@ fn the_t_gantry_file_tells_its_crates_modes() {
     }
 }
 
+/// The T-gantry's beam mode moving alone (effects.beam_vertical_mode, the state at rest at a pose with the beam's
+/// deflection rate w' = 1 m/s and every other rate 0), crate against file. The belt's runs ride on the beam: the vertical
+/// ones whole, the four horizontal ones tilting, a point at the share xi of the way from its post's pulley to the carriage
+/// going down by xi w. A tilting run's angular momentum about y is then mu w' times the integral of x xi along it, its
+/// weight times w' / 2 at the weighted point f + 2/3 (c - f), not at its middle (f its end at the pulley, c at the
+/// carriage): the file took the middle, a sixth of the run off (up to 0.025 N m s per m/s of w' with the carriage at an
+/// end). What is left about y is where the runs meet the carriage: the crate at the carriage's x, the file at its idlers,
+/// d = 0.042 m to the left (the two runs from motor A, s + x long each, s = 0.15 m) and right (the two from motor B,
+/// s + sx - x, sx = 1 m). A run's weighted point moves by 2/3 of that: the file's angular momentum about y is the crate's
+/// plus mu w' (d / 3) (2 (s + sx - x) - 2 (s + x)) = (2 / 3) mu d (sx - 2 x) w' (mu = 0.1 kg/m), 2.8e-3 N m s at x = 0,
+/// to rounding; about x and z both have none (the file's wheels in the bodies' plane).
+#[test]
+fn the_t_gantry_files_tilting_runs_turn_with_the_beam_as_the_crates() {
+    let changes = ["effects.beam_vertical_mode = true"];
+    let [(ea, ca), (eb, cb)] = pair("t-gantry", "t-gantry.toml", &changes);
+    let (krate, file) = ((ea.build)(&ca).unwrap(), (eb.build)(&cb).unwrap());
+    // The file's positions: x, z, the two pulleys, the two rotors, the beam's w; then their rates.
+    let w_rate = 7 + 6;
+    for x in [0.0, 0.5, 1.0] {
+        let (mut s, mut torque) = (Vec::new(), vec![0.0; 2]);
+        file.equilibrium(&[x, 0.15], &mut s, &mut torque);
+        s[w_rate] = 1.0;
+        let (fa, fb) =
+            (krate.frame_momentum(&crate_state("t-gantry", &cb, &s)).unwrap(), file.frame_momentum(&s).unwrap());
+        println!("x = {x}: crate {:?}, file {:?}", fa.angular, fb.angular);
+        assert_close("linear momentum", &fa.linear, &fb.linear, 1e-12);
+        let idlers = 2.0 / 3.0 * 0.1 * 0.042 * (1.0 - 2.0 * x);
+        let crate_and_idlers = [fa.angular[0], fa.angular[1] + idlers, fa.angular[2]];
+        assert_close("angular momentum", &crate_and_idlers, &fb.angular, 1e-12);
+    }
+}
+
 /// The T-gantry's angular momentum and first moment, crate against file, over 1 s of the default cycle (the file's run,
 /// each state the crate's too; frame and leaning Z off in both, as `pair` has them). Both take moments about the same
 /// point: the place of the Z axis's centre of mass at z = 0 under the carriage at x = 0. The bodies are the same there:
@@ -924,9 +956,12 @@ fn the_t_gantry_file_tells_its_crates_modes() {
 /// cancelling, the vertical ones at its x, from the carriage up s + z to the clamp and down s + sz - z round the bottom
 /// idler, the lumps on the pulleys spinning), the file each run's mass at the middle of its straight piece as the 3D view
 /// draws it from its wheels' places (the carriage idlers 0.032 m above and below the carriage, the bottom idler 0.08 m
-/// under the Z axis's point, the clamp at it, the pulleys and idlers 0.02 m in front of the bodies). Measured over the run
-/// (1.3e-3 N m s about y, 1.1e-3 about x at 0.25 m/s) and held under bounds, not hand values: about y a twentieth of a
-/// metre times the belt's 0.42 kg times its speed (`belt_y` below), about x and z 0.02 m times that.
+/// under the Z axis's point, the clamp at it). About x and z the two agree to rounding since the file's wheels lie in
+/// the bodies' plane (they were drawn 0.02 m in front of it: 1.1e-3 N m s about x at 0.25 m/s). About y the heights
+/// differ (the crate's clamp s + z over the carriage's idlers, both horizontal runs at their height; the file's clamp at
+/// the Z axis's drawn point, its idlers 0.032 m above and below the carriage, which the drawing of the bodies, at their
+/// axes' points, cannot move): measured 1.29e-3 N m s over the run, held under a twentieth of a metre times the belt's
+/// 0.42 kg times its speed (`belt_y` below), a bound, not a hand value.
 #[test]
 fn the_t_gantry_file_has_its_crates_angular_momentum() {
     // The carriage's offset names geometry.z_com_drop_m, which the crate reads too: moved, the two still agree.
@@ -959,7 +994,7 @@ fn the_t_gantry_file_has_its_crates_angular_momentum() {
         } else {
             let belt_y = 0.42 * 0.05 * speed;
             assert!(worst[1] > 1e-6 && worst[1] < belt_y, "{worst:?} against {belt_y}");
-            assert!(worst[0].max(worst[2]) < 0.42 * 0.02 * speed * 1.0001, "{worst:?}");
+            assert!(worst[0].max(worst[2]) < 1e-12, "{worst:?}");
         }
     }
 }
