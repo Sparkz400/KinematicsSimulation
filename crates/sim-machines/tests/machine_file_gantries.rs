@@ -281,7 +281,7 @@ fn the_five_axis_head_holds_its_tip_while_a_and_c_turn() {
 /// The files of gantries and rotary tools pass the standard suite of every machine (round trip, static hold,
 /// determinism, energy conservation without losses, the loss budget with them), elastic and rigid: the new ones as
 /// shipped, and the H-bot, CoreXY and rack gantry with their yaw on. X and Y lie flat: backlash off (machine_files.rs
-/// says why); the yaw's and the motors' own gearboxes' damping off with the rest.
+/// says why); the yaw's and the motors' own gearboxes' damping off with the rest, and the screws' and racks' own.
 #[test]
 fn the_gantry_and_rotary_files_pass_the_standard_suite() {
     use std::sync::Mutex;
@@ -321,6 +321,12 @@ fn the_gantry_and_rotary_files_pass_the_standard_suite() {
             }
             for motor in own {
                 cfg.set_text(&format!("gearbox.{motor}.damping_nm_s_rad = 0.0")).unwrap();
+            }
+            // The screws' and racks' own dampers across their springs (`Converter::apply_back`).
+            for damping in ["screw_z.axial_damping_ratio", "rack_x.damping_ratio"] {
+                if cfg.get(damping).is_ok() {
+                    cfg.set_text(&format!("{damping} = 0.0")).unwrap();
+                }
             }
             if cfg.get("gantry").is_ok() {
                 cfg.set_text("effects.gantry_yaw = true").unwrap();

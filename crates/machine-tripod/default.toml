@@ -354,10 +354,12 @@ position_cycle_s = 1.0e-3
 current_delay_cycles = 1
 velocity_delay_cycles = 1
 kv_1_s = 50.0
-# [estimate] tuned with `sim-cli margins tripod` against the legs' axial modes (2 % damped through the nut,
-# `screw.axial_damping_ratio`, 434 to 475 Hz): across the bounds (--bands) at least 91.5 degrees and 7.18 dB; 0.15
-# left 3.99 dB at their peak.
-velocity_kp_nm_s_rad = 0.1
+# [estimate] tuned with `sim-cli margins tripod` against the legs' axial modes (some 2 % damped through the nut,
+# `screw.axial_damping_ratio` 0.04; the loop's peak at 380 to 475 Hz): 60.5 degrees and 18.90 dB, with friction off
+# 57.7 degrees and 14.81 dB; across the bounds (--bands) at least 50.7 degrees and 17.87 dB, with friction off 38.6
+# degrees (axial_damping_ratio 0.02, the mode through 0 dB at 374 Hz) and 13.20 dB. With friction off 0.04 left 29.8
+# degrees there and 0.1 15.6 degrees and 4.80 dB as configured: the friction's small-signal damping hides the mode.
+velocity_kp_nm_s_rad = 0.03
 velocity_tn_s = 0.03
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
@@ -518,6 +520,7 @@ leg.friction_viscous_n_s_m = [20.0, 80.0]
 leg.max_force_n = [1200.0, 2000.0]
 screw.efficiency = [0.85, 0.95]
 screw.bearing_stiffness_n_m = [3.0e8, 8.0e8]
+screw.axial_damping_ratio = [0.02, 0.06]
 screw.preload_n = [200.0, 600.0]
 gearbox.stiffness_nm_rad = [4000.0, 9000.0]
 gearbox.damping_nm_s_rad = [0.1, 0.6]
