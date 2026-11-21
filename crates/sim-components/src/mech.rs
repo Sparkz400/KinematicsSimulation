@@ -2423,46 +2423,45 @@ preload_n = 200.0
         }
     }
 
-    /// The nut held at 0.3 m, the load 2 + 0.8 sin(2 pi 7 t) N m for a second, the anchor committed after each step:
-    /// the work put in less the store's change less the loss integrated (trapezoids) closes as without the screw's
-    /// compliance along the stroke. With the branch at the anchor from rounding 8.8e-5 J of 6.5e-4 J lost stayed open at
-    /// any step.
+    /// The load 2 + 0.8 sin(2 pi 7 t) N m for a second, the nut held at 0.3 m or running from 0.8 to 0 m, the anchor
+    /// committed after each step at the state the next step starts from: the work put in less the store's change less
+    /// the loss integrated (trapezoids) closes to rounding, with the screw's compliance along the stroke and without.
+    /// With the branch at the anchor from rounding 9.1e-5 J of 7.4e-4 J lost stayed open with the nut held, at any step.
     #[test]
     fn the_hysteresis_behind_a_screw_closes_its_budget_over_load_cycles() {
-        let open = |along: bool| {
-            let mut g = hysteresis_screw(along);
-            let n = 100_000;
-            let dt = 1.0 / n as f64;
-            let state = |g: &Gearbox, t: f64| {
-                let f = 2.0 + 0.8 * (std::f64::consts::TAU * 7.0 * t).sin();
-                (5.0 * (0.3 + f / g.at(0.3).stiffness), 0.3)
-            };
-            let power = |g: &Gearbox, t: f64| {
-                let h = 1e-7;
-                let ((r, o), (a, b)) = (state(g, t), (state(g, t + h), state(g, t - h)));
-                let w = (a.0 - b.0) / (2.0 * h);
-                let tq = g.torque(r, w, o, 0.0);
-                (tq.rotor * w, g.loss_power(r, w, o, 0.0))
-            };
-            let (r, o) = state(&g, 0.0);
-            g.commit(r, o);
-            let e0 = g.energy(r, o);
-            let (mut work, mut lost) = (0.0, 0.0);
-            for i in 0..n {
-                let t = i as f64 * dt;
-                let ((p0, l0), (p1, l1)) = (power(&g, t), power(&g, t + dt));
-                work += 0.5 * (p0 + p1) * dt;
-                lost += 0.5 * (l0 + l1) * dt;
-                let (r, o) = state(&g, t + dt);
+        for along in [false, true] {
+            for (q0, q1) in [(0.3, 0.3), (0.8, 0.0)] {
+                let mut g = hysteresis_screw(along);
+                let n = 100_000;
+                let dt = 1.0 / n as f64;
+                let state = |g: &Gearbox, t: f64| {
+                    let (q, f) = (q0 + (q1 - q0) * t, 2.0 + 0.8 * (std::f64::consts::TAU * 7.0 * t).sin());
+                    (5.0 * (q + f / g.at(q).stiffness), q)
+                };
+                let power = |g: &Gearbox, t: f64| {
+                    let h = 1e-7;
+                    let ((r, o), (a, b)) = (state(g, t), (state(g, t + h), state(g, t - h)));
+                    let (w, v) = ((a.0 - b.0) / (2.0 * h), (a.1 - b.1) / (2.0 * h));
+                    let tq = g.torque(r, w, o, v);
+                    (tq.rotor * w - tq.output * v, g.loss_power(r, w, o, v))
+                };
+                let (r, o) = state(&g, 0.0);
                 g.commit(r, o);
+                let e0 = g.energy(r, o);
+                let (mut work, mut lost) = (0.0, 0.0);
+                for i in 0..n {
+                    let (t0, t1) = (i as f64 * dt, (i + 1) as f64 * dt);
+                    let ((p0, l0), (p1, l1)) = (power(&g, t0), power(&g, t1));
+                    work += 0.5 * (p0 + p1) * dt;
+                    lost += 0.5 * (l0 + l1) * dt;
+                    let (r, o) = state(&g, t1);
+                    g.commit(r, o);
+                }
+                let (r, o) = state(&g, 1.0);
+                let open = work - (g.energy(r, o) - e0) - lost;
+                assert!(lost > 7e-4 && open.abs() < 1e-9, "{along} {q0}: {open} J open of {lost} J lost");
             }
-            let (r, o) = state(&g, 1.0);
-            (work - (g.energy(r, o) - e0) - lost, lost)
-        };
-        let ((plain, _), (screw, lost)) = (open(false), open(true));
-        println!("open {plain:e} J without the stroke, {screw:e} J with it, of {lost:e} J lost");
-        assert!(lost > 1e-4);
-        assert!(screw.abs() < 2.0 * plain.abs().max(1e-7), "{screw} J open, {plain} J without the stroke");
+        }
     }
 
     /// The lost-motion band, by hand. K1 1e4 N m/rad, half backlash 4e-4 rad, a band of 2e-4 rad: 1e-4 rad into the band

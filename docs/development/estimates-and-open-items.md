@@ -279,11 +279,11 @@ Fixed (after the second audit, 21 November):
   where `Sim::step` takes it (87 of 400 anchors off by more than 0.1 %, worst sign flipped; a nut travelling at a
   standing twist got a negative loss). The anchor's twist now stays y0 with r beside it (`Gearbox::twist_scale`), the
   branch compares x r with y0, and at the anchor goes by y' / r (`the_hysteresis_loss_at_the_anchor_goes_by_the_move`).
-  Nut held at 0.3 m under 7 Hz load cycles: 9.1e-5 J of 7.4e-4 J lost left open before, 1.5e-7 J after (1.8e-7 J
-  without the stroke's compliance; `the_hysteresis_behind_a_screw_closes_its_budget_over_load_cycles`). On the gear
-  itself (r = 1) every number is the same to the bit. Still open: with the nut running the stroke (0.8 to 0 m in 1 s
-  under the same load) 3.0e-5 J of 7.1e-4 J stays open (9.3e-5 before), and 1.8e-5 J without the stroke's compliance,
-  where this fix changes nothing, at any step: not found.
+  Nut held at 0.3 m under 7 Hz load cycles: 9.1e-5 J of 7.4e-4 J lost left open before, rounding (1e-13 J) after, and
+  as little with the nut running from 0.8 to 0 m (9.3e-5 J before)
+  (`the_hysteresis_behind_a_screw_closes_its_budget_over_load_cycles`; the review's ~1e-6 J "level without the
+  stroke" and its 1.8e-5 J on a running nut were its probe's: it committed at t + dt and started the next step at
+  (i + 1) dt, an ulp apart). On the gear itself (r = 1) every number is the same to the bit.
 - With effects.beam_vertical_mode the frame momentum's first moment has the beam's own mass moving with the mode
   (−p₀(x) w) but the potential did not weigh it: off the middle, where p₀ changes with x, V + g · c drifted (T-gantry,
   1 s of free pulses: 2.5e-4 J while V moved 0.16 J; 1.3e-8 J with the mode off), and `weight_is_at_the_first_moment`
