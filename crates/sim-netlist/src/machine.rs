@@ -1696,8 +1696,8 @@ impl ConfigMachine {
     }
     /// The belt's runs' weight where the frame momentum has their mass: the height of their first moment (`runs_mass`'s
     /// mu), mu sum_s (L0_s + c_s . q / 2) V_s,z . q, and its gradient by q, mu sum_s ((c_s / 2) V_s,z . q + (L0_s +
-    /// c_s . q / 2) V_s,z). On the T-gantry's file the vertical runs give mu (4 s + 2 s_z) z: their weight, 0.16 kg g,
-    /// on Z.
+    /// c_s . q / 2) V_s,z). Runs that hang from a clamp and down to an idler on a rising axis give mu (4 s + 2 s_z) z:
+    /// their weight on that axis.
     fn runs_height(&self, q: &[f64]) -> (f64, Vec<f64>) {
         let (mut height, mut rise) = (0.0, vec![0.0; q.len()]);
         if self.run_mass == 0.0 {

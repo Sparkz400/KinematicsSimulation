@@ -531,10 +531,10 @@ fn a_lean_on_a_belt_without_its_vertical_runs_is_refused() {
 }
 
 /// The belt's runs weigh where the frame momentum has their mass (`runs_height` in crates/sim-netlist): on the
-/// T-gantry's file the vertical runs, mu (4 s + 2 sz) = 0.1 (0.6 + 1.0) = 0.16 kg, hang on Z beside the Z axis's 7 kg, so each
-/// motor holds 7.16 g r / 2 / i = 70.216 * 0.02 / 2 / 5 = 0.140432 N m at rest, as the crate's do; along a motion the
-/// potential changes as -g . dc/dt (`testkit::weight_is_at_the_first_moment`), rigid and elastic. Without the runs'
-/// weight the file held 0.137293 N m.
+/// T-gantry's file the vertical runs, mu (4 s + 2 sz) = 0.1 (0.6 + 1.0) = 0.16 kg, hang on Z beside the Z axis's 7 kg,
+/// so each motor holds 7.16 g r / 2 / i = 70.216 * 0.02 / 2 / 5 = 0.140432 N m at rest, as the crate's do; along a
+/// motion the potential changes as -g . dc/dt (`testkit::weight_is_at_the_first_moment`), rigid and elastic. Without
+/// the runs' weight the file held 0.137293 N m.
 #[test]
 fn the_belts_runs_weigh_where_their_mass_is() {
     for rigid in [true, false] {

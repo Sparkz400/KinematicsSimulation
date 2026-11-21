@@ -712,13 +712,13 @@ fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
     }
 }
 
-/// The portal by hand. Each axis has a belt and a motor of its own, so the motor angle is i q / r: X and Y with the shared
-/// gearbox (i 5), Z with its own ([gearbox.mz], i 10): at q = 0.1 m 25, 25 and 50 rad, and at 0.2 m/s 50, 50 and 100
-/// rad/s. Its Z motor holds the slide (2.5 kg) and the payload (1 kg) against gravity: m g r / i = 3.5 * 9.80665 * 0.02
-/// / 10 = 0.0686466 N m (rigid, without tooth meshing and ripple), and the Z belt's runs that its spans move with Z: 0.1 + z
-/// and 0.4 - z up, 0.1 down, 0.4 m of the belt's 0.1 kg/m rising with the slide (`runs_height` weighs them where the
-/// frame momentum has them; a loop's runs would cancel, the file shares its section lengths out as its comment says):
-/// 3.54 * 9.80665 * 0.02 / 10 = 0.0694311 N m. X and Y lie flat and hold nothing. The Z motor's own
+/// The portal by hand. Each axis has a belt and a motor of its own, so the motor angle is i q / r: X and Y with the
+/// shared gearbox (i 5), Z with its own ([gearbox.mz], i 10): at q = 0.1 m 25, 25 and 50 rad, and at 0.2 m/s 50, 50 and
+/// 100 rad/s. Its Z motor holds the slide (2.5 kg) and the payload (1 kg) against gravity: m g r / i = 3.5 * 9.80665 *
+/// 0.02 / 10 = 0.0686466 N m (rigid, without tooth meshing and ripple), and the Z belt's runs that its spans move with
+/// Z: 0.1 + z and 0.4 - z up, 0.1 down, 0.4 m of the belt's 0.1 kg/m rising with the slide (`runs_height` weighs them
+/// where the frame momentum has them; a loop's runs would cancel, the file shares its section lengths out as its
+/// comment says): 3.54 * 9.80665 * 0.02 / 10 = 0.0694311 N m. X and Y lie flat and hold nothing. The Z motor's own
 /// drive ([drive.mz]: rated torque 0.635 N m, the shared one 1.27) is the controller's, and its verdicts are judged
 /// against its own ratings ([ratings.mz]: drive current 1.5 A, gearbox 18 N m; the shared 3 A and 40 N m).
 #[test]
