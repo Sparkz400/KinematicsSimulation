@@ -55,7 +55,8 @@ fn mismatches(name: &str, changes: &[&str]) -> (Vec<String>, Vec<String>) {
             };
             let rate = (length(&moved(1.0)) - length(&moved(-1.0))) / (2.0 * h);
             let wanted = dot(&machine.sections[sec].c, &v);
-            if (rate - wanted).abs() > 0.05 * (1.0 + wanted.abs()) {
+            // A route whose drawn wheels meet (a NaN length) says nothing either.
+            if !((rate - wanted).abs() <= 0.05 * (1.0 + wanted.abs())) {
                 continue;
             }
             checked.push(format!("{}/{}", machine.sections[sec].id, machine.axes[axis].id));
@@ -128,28 +129,17 @@ fn the_shipped_files_wheels_turn_as_their_belts_run() {
 /// The dual and rack gantries' Y belts by hand (machines/dual-gantry.toml, rack-gantry.toml): a loop from the clamp on
 /// the Y carriage to the motor's pulley (section y1, 0.1 + y), round it and back along the other strand to the far idler
 /// on the bridge, 0.1 + stroke + 0.1 from the pulley, and round that to the clamp (y2). A positive turn of the pulley
-/// feeds belt into y1 (its `pulleys` +1) and so takes it out of y2: the carriage moving at +vy draws y1 out, the pulley
-/// turns at vy / r, and the belt runs from the far idler towards the pulley on the strand from it (-vy), from the clamp
-/// towards the far idler on the other (+vy, with the clamp), so it passes the idler at vy the way the pulley's positive
-/// turn moves it: `speed = { y = 1 }`. Round both wheels anticlockwise seen from above: down the clamp's strand, a left
-/// turn round the pulley and up the other strand, a left turn round the idler back (their `clockwise` false; the pulley
-/// spins about +z at -vy / r; `frame_momentum` spins every wheel of these files about y, the normal of the x-z plane
-/// it draws a belt in where none changes with both x and y, which a belt along y cannot turn about). With the far idler in its route y2 is drawn as the belt
-/// runs, so its wheels are checked against the belt's own kinematics along y (they were not: drawn straight back from the
-/// pulley to the clamp its length did not change as the section's does), and match.
+/// feeds belt into y1 (its `pulleys` +1) and so takes it out of y2 (-1): the carriage moving at +vy draws y1 out and
+/// the pulley turns at vy / r. Relative to the bridge, which carries the far idler and moves along x only, the belt runs
+/// on y2's first span (pulley to far idler, along +y) at -vy and on its second (far idler to clamp, along -y) at +vy:
+/// both against the route, at vy, so it passes the idler at vy the way the pulley's positive turn moves it (the route's
+/// sense of y2's first pulley is -1): `speed = { y = 1 }`. Checked from the spans' own speeds over ground, not from the
+/// drawing: these files draw their belts in the x-z plane, where a belt along y has no length (its route's length is NaN
+/// there, which the wheels' check above skips). Every sign is as derived; the wheels' spin about y in the frame momentum,
+/// which a belt along y cannot turn about, is open.
 #[test]
 fn the_gantries_y_belts_turn_their_far_idlers_as_they_run() {
     for name in ["dual-gantry.toml", "rack-gantry.toml"] {
-        let (wrong, checked) = mismatches(name, &["effects.idlers = true"]);
-        assert!(
-            wrong.is_empty(),
-            "{}",
-            wrong.join(
-                "
-"
-            )
-        );
-        assert!(checked.iter().any(|c| c.ends_with("y2/y")), "{name}: {checked:?}");
         let cfg = shipped(name);
         let net = Netlist::parse(&cfg).unwrap();
         let machine = ConfigMachine::new(&cfg, &net).unwrap();
@@ -158,11 +148,22 @@ fn the_gantries_y_belts_turn_their_far_idlers_as_they_run() {
         let (y1, y2) = (section("y1"), section("y2"));
         let kk = (0..machine.m()).find(|&kk| machine.sections[y1].f[kk] != 0.0).unwrap();
         assert_eq!((machine.sections[y1].f[kk], machine.sections[y2].f[kk]), (1.0, -1.0), "{name}");
-        assert_eq!(machine.route_waypoints(y2)[1], Waypoint::Idler(far), "{name}");
-        // The idler passes vy, signed by the pulley's feed: +1 per unit of y, nothing per unit of x (it rides on the bridge).
-        assert_eq!(machine.idlers[far].speed[..2], [0.0, 1.0], "{name}");
         assert!((machine.k[kk][1] * machine.r[kk] - 1.0).abs() < 1e-12, "{name}");
-        // The pulley's turn in the route's sense: the belt runs into y1 against its route (clamp to pulley), -1.
-        assert_eq!(machine.route_sense(y1, kk), -1.0, "{name}");
+        assert_eq!(
+            machine.route_waypoints(y2),
+            [Waypoint::Pulley(kk), Waypoint::Idler(far), Waypoint::Body(1)],
+            "{name}"
+        );
+        // Per unit of vy: the spans' speed along y over ground less the bridge's (none along y), along each run's
+        // direction on the route (+y from the pulley to the far idler, -y back to the clamp).
+        let spans: Vec<_> = machine.spans.iter().filter(|s| s.section == y2).collect();
+        assert_eq!(spans.len(), 2, "{name}");
+        let along: Vec<f64> =
+            spans.iter().zip([1.0, -1.0]).map(|(s, dir)| dir * s.velocity.as_ref().unwrap()[1][1]).collect();
+        let claimed = machine.route_sense(y2, kk) * machine.idlers[far].speed[1];
+        assert_eq!(along, [claimed, claimed], "{name}");
+        assert_eq!((claimed, machine.idlers[far].speed[0]), (-1.0, 0.0), "{name}");
+        // The belt's speed past the pulley on y2's first run is its rim speed, r K v along the route's sense.
+        assert!((machine.route_sense(y2, kk) * machine.r[kk] * machine.k[kk][1] - along[0]).abs() < 1e-12, "{name}");
     }
 }

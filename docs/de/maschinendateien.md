@@ -718,7 +718,9 @@ tolerance_m = "gantry.sync_tolerance_m"
   starres Modell hat keins. (Im Text vom 14. November standen 0,80, 0,20 und 0,06 mm; sein eigener Stand gibt 1,07, 0,25
   und 0,06 mm. Die 1,07 mm des H-Bots wurden am 16. November (024b876a) 1,12 mm, die 0,224 mm des Zahnstangenportals
   0,225 mm: die Trume der Riemen der Dateien tragen ihre eigene Masse, beim H-Bot mu (L + 8 (0,65 - y)) auf X, wo die
-  Klumpen mu L hatten (0,86 gegen 0,42 kg bei y = 0,1 m), also fährt mehr Masse mit dem Kopf und lässt die Brücke gieren. Die 0,06 mm des CoreXY wurden
+  Klumpen mu L hatten (0,86 gegen 0,42 kg bei y = 0,1 m), und 2 mu (2 x - 1) zwischen X und Y; mit effects.belt_mass aus
+  sind es vorher und nachher 1,07 mm. Welcher der beiden Terme die Brücke mehr gieren lässt, ist nicht getrennt. Die
+  0,06 mm des CoreXY wurden
   am 14. November mit dem Merge d360b7ed 0,02 mm.)
 
 **Körper auf Drehachsen und der Werkzeugmittelpunkt.** Ein Körper darf mit Drehachsen fahren: `offset_m` ist sein

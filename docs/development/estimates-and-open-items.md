@@ -110,7 +110,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The hook block landing on the load: lowered by more than the sling's length onto a standing load, it passes through it (the sling, a rope since 21 November, goes slack below its length) | crane | None in the shipped cycle; the sling is 1 m. The hook block and the elastic drives were run on a full cycle; rope mass and bridge skew passed their own tests and a 0.2 s run. |
 | Link bending together with parallelogram bars of their own (refused); the palletiser's rod and crank (shipped bar arrays empty) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured in the test case). |
 | The belt runs' sideways offset on the leaning Z axis; the belt runs riding on the beam's vertical mode | T-gantry | A first-order moment (T₁ − T₃)·0.04 m; the beam mode would fall 0.9 % (59.32 to 58.77 Hz). |
-| The belt's angular momentum of the T-gantry file against its crate: the file takes each run's mass at the middle of its straight piece as drawn (carriage idlers 0.032 m above and below the carriage, bottom idler 0.08 m under the Z axis's point, every run 0.02 m in front of the bodies), the crate its belt path (horizontal runs at the carriage's height, vertical ones at its x, the lumps spinning on the pulleys) | T-gantry | Over 1 s of the default cycle up to 1.3e-3 N m s about y and 1.1e-3 about x (none in the crate) at up to 0.25 m/s, against 0.42 kg of belt; bodies, linear momentum and first moment agree to rounding (`the_t_gantry_file_has_its_crates_angular_momentum`). |
+| The belt's angular momentum of the T-gantry file against its crate: the file takes each run's mass at the middle of its straight piece as drawn (carriage idlers 0.032 m above and below the carriage, bottom idler 0.08 m under the Z axis's point, the pulleys and idlers drawn 0.02 m in front of the bodies), the crate its belt path (horizontal runs at the carriage's height, vertical ones at its x, the lumps spinning on the pulleys) | T-gantry | Over 1 s of the default cycle up to 1.3e-3 N m s about y and 1.1e-3 about x (none in the crate) at up to 0.25 m/s, against 0.42 kg of belt (measured; the test holds them under 0.42 kg x 0.05 m and 0.02 m times the speed, bounds, not hand values); bodies, linear momentum and first moment agree to rounding (`the_t_gantry_file_has_its_crates_angular_momentum`). |
 | The X and Y belts of the screw portal, the C portal and the five-axis files share their section lengths out (0.1 m from the motor to the far idler) and draw no far idler | machine files | As the XYZ portal's did before 21 November: there the X belt's mode at its far end 73.9 against 39.2 Hz as a loop. Without the far idler in a route its runs' angular momentum is left out of the frame momentum (`run_midpoints`). |
 | The screw's stiffness along the stroke keeps the far end's for the pose tolerance and the elastic feedforward's twist (`effects.screw_stiffness_with_position`, on in the shipped configs; the dynamics, modes and rest states follow the nut, the screw's damper at its ratio and the Zener arm with them; since 21 November the hysteresis too, on the gear's own twist with its store's place term); the mesh bristle stays the far end's (it holds the output against the housing, its bound follows the nut, its store is not booked, and its stiffness is an unpublished factor whose tenth to ten times leave the loss the same) | wafer handler, screws | The feedforward's twist up to the far end's: 2.4 against 1.5 um on the wafer handler's column with the nut 0.15 m from the bearing. The bristle's stiffness up to 1.87 times the far end's there (no shipped config has a hysteresis behind such a screw). |
 | Belt-to-pulley heat conduction | linear delta | Not sized. |
@@ -260,7 +260,8 @@ Not re-run on 21 November 2026 (the figures stand as dated in the text):
   only where it was lowest (151.7 Hz at y = 0, coupled with X). The 155.0 Hz was the test's, which also stiffened the
   belt (EA 5e8) to make the yaw the lowest; the 149.5 Hz was not reproduced. Now every mode with its damping: as
   shipped the belt 96.40 Hz (0.033), X 262.95 Hz (0.088) and the yaw 425.37 Hz (0.144) in the middle, at y = 0.8 the
-  belt 124.45 Hz and X with the yaw 256.12 and 395.01 Hz; with J = 20 the yaw 155.04 Hz in the middle, 151.65 Hz at an
+  belt 124.45 Hz and X with the yaw 256.12 and 395.01 Hz (since its Y belt is a loop, below: 82.21 Hz (0.039), 262.34 and
+  425.37 Hz; 71.56, 255.60 and 394.83 Hz); with J = 20 the yaw 155.04 Hz in the middle, 151.65 Hz at an
   end (`the_dual_gantry_reports_its_yaw_among_its_modes_by_hand`, a hand 2x2 of x and the yaw; the T-gantry file's modes
   and damping its crate's to 1e-9).
 - `docs/web.md`: the CoreXY path's sizing check (1.661 s, 14 November) names no path, and none of twenty lines and arcs
@@ -413,8 +414,9 @@ Fixed:
   rack gantry 0.2237 → 0.2250) is 024b876a (merged as 124d9120, 16 November), the belt runs' own mass in the files:
   that build's program on the file before it gives 1.070, the program before it on the file after it 1.120, and with
   effects.belt_mass off both give 1.070. The runs put mu (L + 8 (0.65 - y)) of belt on the H-bot's X (0.86 kg at
-  y = 0.1 m where the lumps had 0.42, the hand value of `the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand`),
-  more mass moving with the head that racks the bridge: the more correct figure, kept. Left out still: the runs do not
+  y = 0.1 m where the lumps had 0.42, the hand value of `the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand`)
+  and 2 mu (2 x - 1) between X and Y: the belt's own kinetic energy, so the more correct figure, kept (which of the two
+  terms racks the bridge more was not separated). Left out still: the runs do not
   follow the yaw (`machine.span`'s speeds are per axis speed). The CoreXY's 0.063 → 0.020 mm came with d360b7ed (14
   November, the gantry branch merged with that day's other branches), before the 17 November texts. The bisect logs in
   the earlier scratchpad (`bisect-*.log`) were the ISW screw's (worst sample 3.6487 N m), not these.
@@ -422,13 +424,15 @@ Fixed:
 - The idler signs of the dual and rack gantries' Y belts (section 4: not checked, the drawing not faithful). Neither file
   had an idler: the sections' and spans' signs were right by hand (a positive turn of pulley_y feeds y1, +1, and takes
   from y2, -1; the run from the motor to the far idler moves at -vy; the pulley turns at -vy / r about +z seen from
-  above), but y2's route ran straight back from the pulley to the clamp, its drawn length not the section's, so the
-  wheels' check against the belt's kinematics skipped it, its spans had no places (`run_midpoints`: their angular
-  momentum was left out of the frame momentum), and its spans shared their lengths out (0.1 m from the motor to the far
-  idler) where the yaw inertia took the loop's strands. Now each file names its far idler on the bridge (`far_y`,
+  above), but y2's route ran straight back from the pulley to the clamp and its spans shared their lengths out (0.1 m
+  from the motor to the far idler) where the yaw inertia took the loop's strands. The wheels' check against the belt's
+  kinematics cannot check these belts at all: the files draw them in the x-z plane, where a belt along y has no length
+  (with the far idler the route's length is NaN, which the check passed as matching before; it now skips non-finite
+  rates, so dual and rack report 0 sections checked, the other files as many as before or fewer). Now each file names its far idler on the bridge (`far_y`,
   0.1 + stroke + 0.1 from the pulley, `speed = { y = 1 }`, anticlockwise as the pulley) in y2's route, and its Y belt is
   a loop: y2 1.0 -> 1.9 m and 0.7 -> 1.3 m, y_2 0.1 -> 1.0 and 0.7 m, 2T / mu 1.1 -> 2.0 (vx² + vy²) and 0.8 -> 1.4
-  (`the_gantries_y_belts_turn_their_far_idlers_as_they_run`: y2 checked along x and y, no mismatch). Before/after:
+  (`the_gantries_y_belts_turn_their_far_idlers_as_they_run`: the far idler's sign from the spans' own speeds relative to
+  the bridge and the pulley's rim speed, not from the drawing; fails on the old files). Before/after:
   dual gantry Y belt mode with the pulley held 96.40 -> 82.21 Hz in the middle, 124.45 -> 71.56 Hz at y = 0.8,
   166.97 -> 163.34 at y = 0; X 262.95 -> 262.34 Hz; settling 10.2 -> 16.1 um, gantry-sync 14.15 -> 14.08 um, feed
   forces 110.4 / 95.8 -> 110.8 / 96.2 N, yaw path error 0.143 -> 0.149 mm; rack gantry Y belt 113.46 -> 98.26 Hz in
@@ -439,6 +443,10 @@ Fixed:
   belt's pulley turns about z. Size: the Y motor's rotor and pulley, J_rotor w + (J_pulley - lump r²) w / i, about
   1.6e-3 N m s at the dual gantry's Y peak of 47 rad/s, put about y instead of z. Which way a belt along y lies (flat
   about z, standing about x) a file does not say; a per-belt plane is needed (also for the XYZ and C portals' Y belts).
+  The same drawing places y2's runs for the frame momentum (`run_midpoints`): before, without the idler, none (left out);
+  now y_2 midway between the pulley (drawn standing at x = 1.5 m) and the far idler at the bridge's x, y_3 none (its
+  wheels meet in the plane). Size: 0.1 kg of belt up to 0.75 m off along x at the Y speed, about 0.014 N m s about z
+  at 0.19 m/s; only with effects.base_compliance, off in both files.
 
 - The angular momentum of the T-gantry crate against its file (section 4: not compared, different origins and belt-run
   geometry). Compared now over 1 s of the default cycle, every 50 steps, both about the place of the Z axis's centre of

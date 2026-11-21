@@ -873,22 +873,31 @@ fn a_machine_file_reports_its_belt_mode() {
     assert!(soft.resonance_hz(&[0.5, 0.25]).unwrap() < stiff.resonance_hz(&[0.5, 0.25]).unwrap());
 }
 
-/// The T-gantry's file tells the modes its crate tells (frame and leaning Z off, as the file has them): the belt's two
-/// modes with the pulleys held, their frequencies and their damping ratios (the belt sections' dampers on each mode's
-/// shape), at the middle and an end of X and two heights. Before the file machine told its modes it gave the lowest
+/// The T-gantry's file tells the modes its crate tells: the belt's two modes with the pulleys held, their frequencies and
+/// their damping ratios (the belt sections' dampers on each mode's shape), and with the frame's sway, the leaning Z axis
+/// or the beam's vertical mode switched on in both, that mode too with its own damper, at the middle and an end of X and
+/// two heights. Before the file machine told its modes it gave the lowest
 /// alone, undamped.
 #[test]
 fn the_t_gantry_file_tells_its_crates_modes() {
-    let [(ea, ca), (eb, cb)] = pair("t-gantry", "t-gantry.toml", &[]);
-    let (a, b) = ((ea.build)(&ca).unwrap(), (eb.build)(&cb).unwrap());
-    for pose in [[0.5, 0.25], [0.0, 0.25], [0.5, 0.45], [0.9, 0.05]] {
-        let (ma, mb) = (a.modes(&pose), b.modes(&pose));
-        assert!(ma.len() == 2 && mb.len() == ma.len(), "{pose:?}: crate {ma:?}, file {mb:?}");
-        for (x, y) in ma.iter().zip(&mb) {
-            assert!(
-                close(x.hz, y.hz, 1e-9) && close(x.damping, y.damping, 1e-9),
-                "{pose:?}: crate {ma:?}, file {mb:?}"
-            );
+    let variants: [&[&str]; 4] = [
+        &[],
+        &["effects.frame_compliance = true"],
+        &["effects.tool_flex = true"],
+        &["effects.beam_vertical_mode = true"],
+    ];
+    for changes in variants {
+        let [(ea, ca), (eb, cb)] = pair("t-gantry", "t-gantry.toml", changes);
+        let (a, b) = ((ea.build)(&ca).unwrap(), (eb.build)(&cb).unwrap());
+        for pose in [[0.5, 0.25], [0.0, 0.25], [0.5, 0.45], [0.9, 0.05]] {
+            let (ma, mb) = (a.modes(&pose), b.modes(&pose));
+            assert!(ma.len() >= 2 && mb.len() == ma.len(), "{changes:?} {pose:?}: crate {ma:?}, file {mb:?}");
+            for (x, y) in ma.iter().zip(&mb) {
+                assert!(
+                    close(x.hz, y.hz, 1e-9) && close(x.damping, y.damping, 1e-9),
+                    "{changes:?} {pose:?}: crate {ma:?}, file {mb:?}"
+                );
+            }
         }
     }
 }
@@ -904,9 +913,9 @@ fn the_t_gantry_file_tells_its_crates_modes() {
 /// cancelling, the vertical ones at its x, from the carriage up s + z to the clamp and down s + sz - z round the bottom
 /// idler, the lumps on the pulleys spinning), the file each run's mass at the middle of its straight piece as the 3D view
 /// draws it from its wheels' places (the carriage idlers 0.032 m above and below the carriage, the bottom idler 0.08 m
-/// under the Z axis's point, the clamp at it, every run 0.02 m in front of the bodies). Sized over the run: about y under
-/// a twentieth of a metre times the belt's 0.42 kg times its speed (`belt_y` below), about x and z under the 0.02 m in
-/// front times that.
+/// under the Z axis's point, the clamp at it, the pulleys and idlers 0.02 m in front of the bodies). Measured over the run
+/// (1.3e-3 N m s about y, 1.1e-3 about x at 0.25 m/s) and held under bounds, not hand values: about y a twentieth of a
+/// metre times the belt's 0.42 kg times its speed (`belt_y` below), about x and z 0.02 m times that.
 #[test]
 fn the_t_gantry_file_has_its_crates_angular_momentum() {
     for belt_mass in [false, true] {
