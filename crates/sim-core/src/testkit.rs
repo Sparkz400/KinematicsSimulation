@@ -290,6 +290,38 @@ pub fn frame_momentum_moves_its_first_moment(m: &dyn Machine) {
     }
 }
 
+/// Where a machine tells its `frame_momentum`, its weight sits at the first moment: at the middle of the axes, every
+/// axis moving at a tenth of its top speed, the potential energy (`energy.potential`) changes along the state's rate as
+/// -g . d/dt sum m r, by central differences over +-1 us, within 1e-6 of it (plus 1e-9 W). V + g . c is then the same
+/// along any motion, as it is for any body whose weight is m g at its centre of mass.
+pub fn weight_is_at_the_first_moment(m: &dyn Machine) {
+    let pose = mid_pose(m);
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
+    m.equilibrium(&pose, &mut state, &mut torque);
+    let Some(f) = m.frame_momentum(&state) else { return };
+    let potential = m.signal_infos().iter().position(|s| s.id == "energy.potential").expect("energy.potential");
+    let vel: Vec<f64> = m.axes().iter().map(|a| 0.1 * a.max_vel).collect();
+    m.set_tool_velocity(&mut state, &vel);
+    let mut rate = vec![0.0; state.len()];
+    m.derivatives(&state, &torque, &mut rate);
+    let h = 1e-6;
+    let at = |s: f64| {
+        let moved: Vec<f64> = state.iter().zip(&rate).map(|(x, r)| x + s * r).collect();
+        let mut out = Vec::new();
+        m.signals(&moved, &torque, &mut out);
+        let c = m.frame_momentum(&moved).unwrap().first_moment;
+        (out[potential], (0..3).map(|k| f.gravity[k] * c[k]).sum::<f64>())
+    };
+    let ((v0, c0), (v1, c1)) = (at(-h), at(h));
+    let (dv, dgc) = ((v1 - v0) / (2.0 * h), (c1 - c0) / (2.0 * h));
+    assert!(dgc.abs() > 1e-6, "the first moment did not move vertically, the check would be empty");
+    assert!(
+        (dv + dgc).abs() <= 1e-6 * dgc.abs() + 1e-9,
+        "the potential changes at {dv} W, the weight's -g.c at {}",
+        -dgc
+    );
+}
+
 /// The same config and the same commands give bit-identical traces.
 pub fn determinism(m: &dyn Machine) {
     let trace = || {

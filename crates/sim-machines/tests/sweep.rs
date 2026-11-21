@@ -68,7 +68,8 @@ fn the_sweep_fit_compares_like_modes_over_the_default_sweep() {
 /// 60 Hz mode moved to 84 Hz (at 2.5) against the config's 102 Hz dip, which the nearest dip took before (factor 0.68).
 /// The factor is the one at which the config's dip is the measured one, found by sweeping the config at it: the mode
 /// moves as k^0.37 to k^0.45 here, so the pure belt law (f_measured / f_config)^2 read 0.539, 1.58 and 1.98. Each true
-/// factor is recovered within the standard error the fit states.
+/// factor is recovered within the standard error the fit states. (The config's own dip at 59.90 Hz; 59.91 Hz before the
+/// belt's vertical runs weighed on Z, 21 November.)
 #[test]
 fn the_sweep_fit_tells_the_belt_mode_by_how_it_moves() {
     let entry = sim_machines::find("t-gantry").unwrap();
@@ -82,7 +83,7 @@ fn the_sweep_fit_tells_the_belt_mode_by_how_it_moves() {
         sim_components::identify::fit_sweep(entry, &cfg, 0, &measured, 1.5).unwrap().unwrap()
     };
     let own = fit(1.0);
-    assert!((own.config.frequency - 59.91).abs() < 0.01 && own.stiffness().0 == 1.0, "{own:?}");
+    assert!((own.config.frequency - 59.90).abs() < 0.01 && own.stiffness().0 == 1.0, "{own:?}");
     for factor in [0.5, 1.8, 2.5] {
         let found = fit(factor);
         let (read, error) = found.stiffness();

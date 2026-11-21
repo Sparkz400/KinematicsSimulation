@@ -238,6 +238,33 @@ Not re-run (old figures stand; each needs a long optimiser or worst-corner run):
 
 ## 10. Reported by the document agents
 
+Fixed (second audit, 21 November):
+- The lumped forearms (planar delta, D3/D4 with `forearm_inertia` off, parallel SCARA) had their momentum and
+  first moment at the inertia's split, their weight at the middle: V + g · c drifted (D2 0.060 N s, 2.6 N of
+  vertical reaction). The frame momentum now takes them as rods (a sixth at each end, two thirds at the middle);
+  after the fix 2e-11 N s and 1e-6 N on the audit's probe. The kinetic energy stays the split's (the model's).
+- The T-gantry's belt runs moved in the frame momentum but had no weight: the vertical runs' 0.16 kg now weigh on Z
+  (`z_weight`; hold 2T₂ − T₁ − T₃ = 70.216 N, not 68.647), in the crate and, from its spans, in the machine file
+  (`runs_height`, which weighs every file's runs where its momentum has them).
+  V + g · c drift over the default cycle 0.4708 J before, 1.3e-7 J after.
+- `config-reference.md`'s beam mode "59 Hz in the middle" is the stiff belt's; on the default belt it couples
+  with Z's mode to 51.5 and 140.1 Hz.
+
+Open (second audit):
+- The XYZ portal's Z belt spans move 0.4 m of belt up with the slide (0.1 + z and 0.4 - z up, 0.1 down: the
+  section lengths shared out, as its comment says), where a loop's runs would cancel. Its momentum had that
+  before; since the runs weigh where their momentum is, its Z holds 3.54 kg instead of 3.5 (0.0694 N m, the
+  test's hand value follows the file). Re-splitting the spans so the falling run equals the rising ones is open.
+- The drive's current: the q setpoint is held inside the current circle, the phase current itself stands up to
+  0.74 % above it for 7.7 ms while the drive goes into field weakening at full current (1FK2205-4AF single axis at
+  200 m/s²: 10.98 A against 10.9 A). 0.035 A of the 0.081 A is the d current's lead over the q loop (the circle taken
+  from the larger of the d setpoint and the d current gives 10.946 A); the rest the q loop's tracking. A drive limits
+  its reference, so some excess is real; the d-setpoint clamp is the one a drive uses, not made here (it moves every
+  field-weakening machine's numbers and needs their reference and per-machine runs).
+- The H4's lumped model (`forearm_inertia` off; on as shipped) puts the forearms' weight at the inertia's split
+  (2/3 at the elbow), not at their middles as the D3 does: momentum and weight agree with each other, both at the
+  wrong place. Not changed.
+
 Fixed:
 - `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another
   mode (T-gantry × 0.103, EXCT-30 × 0.400 against their own sweeps): each belt mode is now paired with

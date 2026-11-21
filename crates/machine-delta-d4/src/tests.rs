@@ -261,6 +261,15 @@ fn the_gearbox_body_takes_its_share_of_the_input_inertia() {
     assert!(Delta4::new(&cfg).is_err());
 }
 
+/// The forearms' weight is at the frame momentum's first moment, lumped or rods (the D3's arms): the potential changes
+/// along a motion as -g . dc/dt (`testkit::weight_is_at_the_first_moment`).
+#[test]
+fn the_forearms_weight_is_at_the_frame_momentums_first_moment() {
+    for rods in [false, true] {
+        sim_core::testkit::weight_is_at_the_first_moment(&d4(&[&format!("effects.forearm_inertia = {rods}")]));
+    }
+}
+
 #[test]
 fn the_d4_passes_the_standard_suite() {
     sim_core::testkit::run_standard_suite(&ENTRY);

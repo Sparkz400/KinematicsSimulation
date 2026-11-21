@@ -529,3 +529,22 @@ fn a_lean_on_a_belt_without_its_vertical_runs_is_refused() {
     let refused = sim_netlist::build(&with(&bare, &lean)).err().expect("built without the spans");
     assert!(refused.detail().contains("machine.span"), "{refused:?}");
 }
+
+/// The belt's runs weigh where the frame momentum has their mass (`runs_height` in crates/sim-netlist): on the
+/// T-gantry's file the vertical runs, mu (4 s + 2 sz) = 0.1 (0.6 + 1.0) = 0.16 kg, hang on Z beside the Z axis's 7 kg,
+/// so each motor holds 7.16 g r / 2 / i = 70.216 * 0.02 / 2 / 5 = 0.140432 N m at rest, as the crate's do; along a
+/// motion the potential changes as -g . dc/dt (`testkit::weight_is_at_the_first_moment`), rigid and elastic. Without
+/// the runs' weight the file held 0.137293 N m.
+#[test]
+fn the_belts_runs_weigh_where_their_mass_is() {
+    for rigid in [true, false] {
+        let stretch = format!("effects.belt_stretch = {}", !rigid);
+        let changes = [stretch.as_str(), "effects.torque_ripple = false", "effects.tooth_meshing = false"];
+        let machine = sim_netlist::build(&with(&shipped("t-gantry.toml"), &changes)).unwrap();
+        sim_core::testkit::weight_is_at_the_first_moment(machine.as_ref());
+        let (_, torque) = at_rest(machine.as_ref(), &[0.5, 0.25]);
+        let by_hand = (7.0 + 0.1 * (4.0 * 0.15 + 2.0 * 0.5)) * 9.80665 * 0.02 / 2.0 / 5.0;
+        let tolerance = if rigid { 1e-9 } else { 1e-3 * by_hand };
+        assert!((torque[0] - by_hand).abs() < tolerance && (torque[1] + by_hand).abs() < tolerance, "{torque:?}");
+    }
+}

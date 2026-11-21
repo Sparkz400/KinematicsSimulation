@@ -502,6 +502,15 @@ impl TGantry {
     fn m_z(&self) -> f64 {
         self.m_z_axis + self.payload()
     }
+    /// The weight the belt holds the Z axis up against: its own and that of the belt's vertical runs. Those hang from
+    /// the clamp, s + z long down to the upper idlers, and from the lower idlers down to the Z bottom, s + sz - z long,
+    /// so the belt's potential is mu g ((s + z)^2 - (s + sz - z)^2) + const = mu g (2 s + sz)(2 z - sz) + const, whose
+    /// rate in z is mu (4 s + 2 sz) g (`belt_sway`'s cross mass, 0.16 kg by default), whatever x: the horizontal runs
+    /// keep their heights. Up the runs the tension grows by mu g per metre, so the sections' tensions where they leave
+    /// the pulleys hold it: 2 T2 - T1 - T3 = (m_z + mu (4 s + 2 sz)) g at rest.
+    fn z_weight(&self) -> f64 {
+        (self.m_z() + self.belt_sway().0) * self.g
+    }
     /// Everything that moves in X: the carriage and the whole Z axis on it.
     fn m_x(&self) -> f64 {
         self.m_carriage + self.m_z()
@@ -653,7 +662,7 @@ impl TGantry {
         // unstretched belt what carries the weight; dT/dL = EA / l of `Belt::section` with l that belt.
         let (x, z) = (tool_pose[0], tool_pose[1] + self.sag(tool_pose[0]).0);
         let geo = self.geo(x, z);
-        let rest = self.belt.static_material(&geo, &[0.0, self.m_z() * self.g / 2.0, 0.0], self.mat0.iter().sum());
+        let rest = self.belt.static_material(&geo, &[0.0, self.z_weight() / 2.0, 0.0], self.mat0.iter().sum());
         let at = self.coordinates();
         let n = at.len();
         let index = |coordinate: usize| at.iter().position(|&c| c == coordinate);
@@ -1053,7 +1062,7 @@ impl TGantry {
     /// else accelerate X.
     fn commanded_ax(&self, x: f64, z: f64, torque: &[f64]) -> f64 {
         let k = self.gearbox.ratio / self.r;
-        let (fx, fz) = (k * (torque[0] + torque[1]), k * (torque[0] - torque[1]) - self.m_z() * self.g);
+        let (fx, fz) = (k * (torque[0] + torque[1]), k * (torque[0] - torque[1]) - self.z_weight());
         let (xx, xz) = self.belt_mass(x, z);
         let mx = self.m_x() + self.m_motors() + self.m_idlers[0] + self.chain.mass(x).0 + xx;
         let mz = self.m_z() + self.m_motors() + self.m_idlers[1];
@@ -1117,7 +1126,7 @@ impl TGantry {
                 + process_z * (1.0 + d_rise * s[U] * s[U])
                 + process_x * self.tip_slope(s[Z])[0] * s[U]
                 + self.stop_force(1, s[Z], vz)
-                - self.g * self.m_z()
+                - self.z_weight()
                 + belt_z,
         ];
         if let Some(f) = &self.frame {
@@ -1216,9 +1225,8 @@ impl TGantry {
         // One pass with the loss factors `loss`: the solution, and the factors of the torques it puts into the gearboxes.
         let pass = |loss: &[f64; 2]| -> ([f64; 10], [f64; 2]) {
             let bx = loss[0] * drive[0] + loss[1] * drive[1] + mesh[0] + mesh[1] - ffx + extra_x + belt_x;
-            let bz = loss[0] * drive[0] - loss[1] * drive[1] + mesh[0] - mesh[1] - ffz - self.m_z() * self.g
-                + extra_z
-                + belt_z;
+            let bz =
+                loss[0] * drive[0] - loss[1] * drive[1] + mesh[0] - mesh[1] - ffz - self.z_weight() + extra_z + belt_z;
             // (mx + p) ax + q az = bx,  q ax + (mz + p) az = bz
             let (p, q) = (rotor * (loss[0] + loss[1]), rotor * (loss[0] - loss[1]) + belt_xz);
             let det = (mx + p) * (mz + p) - q * q;
@@ -1256,7 +1264,7 @@ impl TGantry {
 
     /// Kinetic, potential and elastic energy (see `ENERGY_PARTS`).
     fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
-        let potential = self.m_z() * self.g * s[Z];
+        let potential = self.z_weight() * s[Z];
         if !self.elastic {
             let (belt_xx, belt_xz) = self.belt_mass(s[0], s[1]);
             let kinetic = 0.5
@@ -1381,7 +1389,8 @@ impl TGantry {
     /// Torque parts. Per motor k = A, B with s_k = +1, -1 and the rigid model's transpose k_r = r / (2 i):
     /// inertia = k_r (I_x + s_k I_z), with I what accelerates every moved mass at its own acceleration (carriage,
     /// leaning Z axis, idlers, chain with what picking it up costs) and both rotors and pulleys at the acceleration
-    /// of the carriage along the beam and of the Z axis, as a rigid machine would turn them; gravity = s_k k_r m_z g;
+    /// of the carriage along the beam and of the Z axis, as a rigid machine would turn them;
+    /// gravity = s_k k_r W_z (`z_weight`);
     /// friction = shaft friction + brake + gearbox loss at the rotor + k_r (F_x + s_k F_z), F the guide, idler and
     /// chain drag forces; rest = motor torque less these. So rotors and pulleys ringing against the load on the belt
     /// and in the gearbox backlash are in the rest.
@@ -1429,7 +1438,7 @@ impl TGantry {
             let sign = [1.0, -1.0][k];
             let parts = [
                 kr * (inertia[0] + sign * inertia[1]),
-                sign * kr * self.m_z() * self.g,
+                sign * kr * self.z_weight(),
                 self.shaft[k].torque(speed[k]) + brake[k] + gear_loss[k] + kr * (friction[0] + sign * friction[1]),
             ];
             out.extend(parts);
@@ -1681,17 +1690,17 @@ impl Machine for TGantry {
             *state = vec![x, z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
             let mut angle = [0.0; 2];
             self.inverse(tool, &mut angle);
-            let lift = self.m_z() * self.g * r / 2.0;
+            let lift = self.z_weight() * r / 2.0;
             for (k, at_pulley) in [lift, -lift].into_iter().enumerate() {
                 let shaft = (at_pulley - r * self.mesh.force(r * angle[k] / ratio)) / ratio;
                 torque[k] = self.ripple.invert(shaft, angle[k]);
             }
             return;
         }
-        // X balance: T1 = T3. Z balance: 2 T2 - T1 - T3 = m_z g. The belt total fixes the level.
+        // X balance: T1 = T3. Z balance: 2 T2 - T1 - T3 = W_z (`z_weight`). The belt total fixes the level.
         // The beam's sag lowers the tool under the Z axis's place on its belt: the belt holds the state's Z, not z.
         let geo = self.geo(x, z + self.sag(x).0);
-        let mat = self.belt.static_material(&geo, &[0.0, self.m_z() * self.g / 2.0, 0.0], self.mat0.iter().sum());
+        let mat = self.belt.static_material(&geo, &[0.0, self.z_weight() / 2.0, 0.0], self.mat0.iter().sum());
         let (a, b) = ((mat[0] - self.mat0[0]) / self.r_mat, (self.mat0[2] - mat[2]) / self.r_mat);
         let m: [f64; 3] = std::array::from_fn(|i| self.belt.section(geo[i], mat[i], 0.0, 0.0).material);
         *state = vec![0.0; self.state_len()];
@@ -1785,8 +1794,8 @@ impl Machine for TGantry {
             + belt_xz * acc[1]
             + 0.5 * chain_growth * vel[0] * vel[0]
             - belt_x;
-        let fz = (self.m_z() + self.m_motors() + self.m_idlers[1]) * acc[1] + belt_xz * acc[0] + self.m_z() * self.g
-            - belt_z;
+        let fz =
+            (self.m_z() + self.m_motors() + self.m_idlers[1]) * acc[1] + belt_xz * acc[0] + self.z_weight() - belt_z;
         let k = self.r / (2.0 * self.gearbox.ratio);
         out[0] = k * (fx + fz);
         out[1] = k * (fx - fz);
@@ -1794,7 +1803,8 @@ impl Machine for TGantry {
 
     /// The rigid model at a steady speed: the guides at their steady level (loads at rest), the idlers and the cable
     /// chain give F_x and F_z against the motion; motor a's belt force carries (F_x + F_z) / 2 and b's (F_x - F_z) / 2,
-    /// each through its gearbox, r / (i loss) (F + W) - r W / i with W = ±m_z g / 2 the Z axis's weight on that belt force,
+    /// each through its gearbox, r / (i loss) (F + W) - r W / i with W = ±W_z / 2 the weight on Z (`z_weight`) on that
+    /// belt force,
     /// plus the motor shaft's friction (with the gearbox's drag) at its speed. The loss factor is the one of what the
     /// gearbox passes, the weight with the friction, as in `rigid_solve`; the weight itself is the rigid feedforward's,
     /// its loss is here.
@@ -1804,7 +1814,7 @@ impl Machine for TGantry {
         let (idler_x, idler_z) = self.idler_friction(vx, vz);
         let fx = self.friction_x.feedforward(vx, scale_x) + idler_x + self.chain_drag(vx);
         let fz = self.friction_z.feedforward(vz, scale_z) + idler_z;
-        let lift = self.m_z() * self.g / 2.0;
+        let lift = self.z_weight() / 2.0;
         let mut speed = [0.0; 2];
         self.inverse(vel, &mut speed);
         for (k, (force, weight)) in [((fx + fz) / 2.0, lift), ((fx - fz) / 2.0, -lift)].into_iter().enumerate() {
@@ -1819,7 +1829,7 @@ impl Machine for TGantry {
     /// d1 = -((F_x + F_z) L2 / 2 + F_x L3) / (L1 + L2 + L3), d3 = d1 + F_x, d2 = d1 + (F_x + F_z) / 2.
     fn rigid_tensions(&self, pos: &[f64], acc: &[f64], out: &mut Vec<f64>) {
         let fx = (self.m_x() + self.m_idlers[0] + self.chain.mass(pos[0]).0) * acc[0];
-        let fz = (self.m_z() + self.m_idlers[1]) * acc[1] + self.m_z() * self.g;
+        let fz = (self.m_z() + self.m_idlers[1]) * acc[1] + self.z_weight();
         let l = self.geo(pos[0], pos[1]);
         let d1 = -((fx + fz) * l[1] / 2.0 + fx * l[2]) / (l[0] + l[1] + l[2]);
         let p = self.belt.pretension;
@@ -1847,7 +1857,7 @@ impl Machine for TGantry {
         }
         let (x, z) = (tool_pose[0], tool_pose[1] + self.sag(tool_pose[0]).0);
         let geo = self.geo(x, z);
-        let rest = self.belt.static_material(&geo, &[0.0, self.m_z() * self.g / 2.0, 0.0], self.mat0.iter().sum());
+        let rest = self.belt.static_material(&geo, &[0.0, self.z_weight() / 2.0, 0.0], self.mat0.iter().sum());
         let k = |i: usize| self.belt.ea / rest[i];
         let whole = sim_components::control::rigid_inertias(self, tool_pose);
         [k(0) + k(1), k(1) + k(2)]

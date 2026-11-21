@@ -512,6 +512,10 @@ pub struct LinkageMachine {
     /// half to the elbow and half to the plate whatever share their inertia is split by.
     weight_moment: f64,
     weight_platform: f64,
+    /// Each forearm pair's mass and the share of it the inertia puts at the elbow, for the frame momentum (the rods'
+    /// own, `frame_momentum`).
+    m_forearms: f64,
+    forearm_share: f64,
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
@@ -618,6 +622,8 @@ impl LinkageMachine {
             m_platform: n.positive("mass.platform_kg")? + 2.0 * (1.0 - share) * m_fb,
             weight_moment: m_arm * cg + la * (m_elbow + 0.5 * m_fb),
             weight_platform: n.positive("mass.platform_kg")? + m_fb,
+            m_forearms: m_fb,
+            forearm_share: share,
             m_payload: if cfg.bool("effects.payload")? { n.non_negative("mass.payload_kg")? } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
@@ -932,27 +938,39 @@ const JOINT_CONTACTS: [&str; 2] = ["joint.1", "joint.2"];
 
 impl Machine for LinkageMachine {
     /// As the registered planar delta's: the plate at the tool, the arms turning about their joints at the base radius,
-    /// the rotors about the joints' axes (+-y). What does not move is left out (see `FrameMomentum`).
+    /// the rotors about the joints' axes (+-y). The forearms are the rods they are, whatever share of their inertia the
+    /// dynamics lump at the elbow: a rod's momentum, first moment and angular momentum (its turn in the plane included)
+    /// are those of a sixth of it at each end and two thirds at its middle, so its weight sits where the potential has
+    /// it. What does not move is left out (see `FrameMomentum`).
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         use sim_components::base::{add_point, add_spin, add_turning};
         let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
         let (t, w) = self.arms(s);
         let (p, j) = self.pose(t);
         let pv = mul(&j, w);
-        add_point(&mut f, self.m_nt(), [p[0], 0.0, p[1]], [pv[0], 0.0, pv[1]]);
+        let (la, m_fb) = (self.legs.la, self.m_forearms);
+        // What the lumped split puts at the elbow and at the plate beyond a rod's sixth at each end.
+        let (at_elbow, at_plate) = ((self.forearm_share - 1.0 / 6.0) * m_fb, (5.0 / 6.0 - self.forearm_share) * m_fb);
+        add_point(&mut f, self.m_nt() - 2.0 * at_plate, [p[0], 0.0, p[1]], [pv[0], 0.0, pv[1]]);
         let rotor_speed = self.rotors(s).1;
         for i in 0..2 {
             let (side, (sin, cos)) = (SIDE[i], t[i].sin_cos());
             let (dir, ddir) = ([side * cos, 0.0, -sin], [-side * sin, 0.0, -cos]);
+            let joint = [side * self.base_radius, 0.0, 0.0];
             add_turning(
                 &mut f,
-                [side * self.base_radius, 0.0, 0.0],
+                joint,
                 dir,
                 ddir,
                 w[i],
-                self.arm_inertia,
-                self.arm_moment,
+                self.arm_inertia - la * la * at_elbow,
+                self.arm_moment - la * at_elbow,
             );
+            let middle: [f64; 3] = std::array::from_fn(|k| {
+                0.5 * (joint[k] + la * dir[k] + [p[0] + side * self.platform_radius, 0.0, p[1]][k])
+            });
+            let speed: [f64; 3] = std::array::from_fn(|k| 0.5 * (la * w[i] * ddir[k] + [pv[0], 0.0, pv[1]][k]));
+            add_point(&mut f, 2.0 / 3.0 * m_fb, middle, speed);
             add_spin(&mut f, [0.0, side, 0.0], self.joints[i].rotor_inertia, rotor_speed[i]);
         }
         Some(f)

@@ -15,10 +15,11 @@ def modes(x, z, frame=True, lean=True, mu=mu, g=G):
     mz = mzaxis + mpay
     # Geometric section lengths (no teeth): 2s + x + z, 4s + sx + 2sz - 2z, 2s + sx - x + z.
     geo = np.array([2 * s + x + z, 4 * s + sx + 2 * sz - 2 * z, 2 * s + sx - x + z])
-    # Unstretched belt at rest: tensions T0, T0 + mz g / 2, T0, total = that at pretension at x = z = 0.
+    # Unstretched belt at rest: tensions T0, T0 + w / 2, T0, total = that at pretension at x = z = 0; w the Z axis's
+    # weight and that of the belt's vertical runs, mu (4 s + 2 sz) g (their potential's rate in z).
     geo0 = np.array([2 * s, 4 * s + sx + 2 * sz, 2 * s + sx])
     total = (geo0 / (1 + P / EA)).sum()
-    off = np.array([0.0, mz * g / 2, 0.0])
+    off = np.array([0.0, (mz + mu * (4 * s + 2 * sz)) * g / 2, 0.0])
     lo, hi = -1e4, 1e4
     for _ in range(200):
         t0 = 0.5 * (lo + hi)

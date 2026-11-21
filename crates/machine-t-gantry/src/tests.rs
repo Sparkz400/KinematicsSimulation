@@ -29,10 +29,13 @@ fn kinematics_follow_the_plan() {
     assert!(tool[0].abs() < 1e-15 && (tool[1] - m.r).abs() < 1e-15);
 }
 
-/// Static hold on Z: each motor holds m_z g r / 2 at the pulley, with opposite signs.
+/// Static hold on Z: each motor holds (m_z + m_runs) g r / 2 at the pulley, with opposite signs. m_runs is the belt's
+/// vertical runs, mu (4 s + 2 sz) = 0.1 (0.6 + 1.0) = 0.16 kg, whose potential mu g ((s + z)^2 - (s + sz - z)^2) rises
+/// by that weight per metre of z (`TGantry::z_weight`): 2 T2 - T1 - T3 = 7.16 g = 70.216 N.
 #[test]
 fn static_hold_on_z_needs_opposite_torques() {
-    let expected = (5.0 + 2.0) * G * 0.02 / 2.0 / 5.0;
+    let weight = (5.0 + 2.0 + 0.1 * (4.0 * 0.15 + 2.0 * 0.5)) * G;
+    let expected = weight * 0.02 / 2.0 / 5.0;
     let (mut state, mut hold) = (Vec::new(), [0.0; 2]);
     let m = rigid(&[]);
     m.equilibrium(&[0.5, 0.25], &mut state, &mut hold);
@@ -48,9 +51,20 @@ fn static_hold_on_z_needs_opposite_torques() {
     let mut d = [0.0; N_ELASTIC];
     m.derivatives(&state, &hold, &mut d);
     assert!(d.iter().all(|v| v.abs() < 1e-6), "{d:?}");
-    // Belt tensions at rest: sections 1 and 3 equal, section 2 higher by m_z g / 2.
+    // Belt tensions at rest: sections 1 and 3 equal, section 2 higher by (m_z + m_runs) g / 2.
     let t = m.sections(&state).map(|f| f.tension);
-    assert!((t[0] - t[2]).abs() < 1e-6 && (t[1] - t[0] - 7.0 * G / 2.0).abs() < 1e-6, "{t:?}");
+    assert!((t[0] - t[2]).abs() < 1e-6 && (t[1] - t[0] - weight / 2.0).abs() < 1e-6, "{t:?}");
+    assert!((weight - 70.216).abs() < 1e-3);
+}
+
+/// The belt's weight is where its first moment is: along a motion the potential energy changes as -g . dc/dt
+/// (`testkit::weight_is_at_the_first_moment`), rigid and elastic, with and without the beam's vertical mode. Without
+/// the vertical runs' weight in the potential V + g . c drifted by 0.16 kg g per metre of z.
+#[test]
+fn the_belts_weight_is_at_its_first_moment() {
+    sim_core::testkit::weight_is_at_the_first_moment(&rigid(&[]));
+    sim_core::testkit::weight_is_at_the_first_moment(&machine(lossless_config(), &[]));
+    sim_core::testkit::weight_is_at_the_first_moment(&machine(ENTRY.config(), &["effects.beam_vertical_mode = true"]));
 }
 
 /// Constant torque: acceleration equals force divided by effective mass.
@@ -1036,19 +1050,19 @@ fn plan_use(sim: &sim_components::Sim, cfg: &Config, points: &[(f64, Vec<f64>)])
     all
 }
 
-/// The belt's tension is a limit of the time-optimal plan. Default config, jerk 300 m/s^3, a line along X from
-/// (0.7, 0.35) to (0.95, 0.35), and `ratings.belt_max_tension_n` = 400 N. The rigid model: the belt pulls the
-/// carriage, Z axis and payload, m = 4 + 5 + 2 = 11 kg, F_x = m a, and holds the Z axis, F_z = 7 kg * g = 68.65 N; the
-/// sections are L1 = 0.3 + x + z, L2 = 2.6 - 2 z, L3 = 1.3 - x + z long (4.2 m together at z = 0.35), and with
-/// sum (T_i - P) L_i = 0 section 3 carries T = 300 - 68.65 * 0.95 / 4.2 + m a (L1 + 0.95) / 4.2 accelerating. At rest
-/// that is 284.47 N; at x = 0.95 (L1 = 1.6, the pose of the line where it rises most) by 6.679 N per m/s^2, and with
-/// `profile.tension_margin_n` = 31 N and `profile.tension_reserve` = 0.5 the plan may use 0.5 * (400 - 31 - 284.47)
-/// = 42.26 N of it: a = 6.328 m/s^2. The plan without the belt as a limit goes to 19.3 m/s^2 and fails `belt-tension`
-/// on the full model (425 N). The plan with it takes the limit at each pose (`belt_bound`): where it accelerates,
-/// x = 0.7 to 0.8, 42.26 N / (11 kg * 2.3 / 4.2) = 7.02 m/s^2 at x = 0.7, more than the 6.328 m/s^2 of the far end
-/// (the plan with one limit per piece took that all along); no pose accelerates harder than its bound by 0.2 % and
-/// one reaches it within 0.5 %; its rigid tension reaches the 326.7 N the plan allows within 1 %, and the full model,
-/// friction and belt vibration on top, passes `belt-tension`.
+/// The belt's tension is a limit of the time-optimal plan. Default config, jerk 300 m/s^3, a line along X from (0.7,
+/// 0.35) to (0.95, 0.35), and `ratings.belt_max_tension_n` = 400 N. The rigid model: the belt pulls the carriage, Z
+/// axis and payload, m = 4 + 5 + 2 = 11 kg, F_x = m a, and holds the Z axis and the belt's vertical runs, F_z = (7 +
+/// 0.16) kg * g = 70.22 N; the sections are L1 = 0.3 + x + z, L2 = 2.6 - 2 z, L3 = 1.3 - x + z long (4.2 m together at
+/// z = 0.35), and with sum (T_i - P) L_i = 0 section 3 carries T = 300 - 70.22 * 0.95 / 4.2 + m a (L1 + 0.95) / 4.2
+/// accelerating. At rest that is 284.12 N; at x = 0.95 (L1 = 1.6, the pose of the line where it rises most) by 6.679 N
+/// per m/s^2, and with `profile.tension_margin_n` = 31 N and `profile.tension_reserve` = 0.5 the plan may use 0.5 *
+/// (400 - 31 - 284.12) = 42.44 N of it: a = 6.355 m/s^2. The plan without the belt as a limit goes to 19.3 m/s^2 and
+/// fails `belt-tension` on the full model (425 N). The plan with it takes the limit at each pose (`belt_bound`): where
+/// it accelerates, x = 0.7 to 0.8, 42.44 N / (11 kg * 2.3 / 4.2) = 7.05 m/s^2 at x = 0.7, more than the 6.355 m/s^2 of
+/// the far end (the plan with one limit per piece took that all along); no pose accelerates harder than its bound by
+/// 0.2 % and one reaches it within 0.5 %; its rigid tension reaches the 326.6 N the plan allows within 1 %, and the
+/// full model, friction and belt vibration on top, passes `belt-tension`.
 #[test]
 fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
     let pieces = sim_components::path::parse("line,0.95,0.35").unwrap();
@@ -1090,14 +1104,14 @@ fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
     let mut at = Vec::new();
     machine.rigid_tensions(&[0.9, 0.35], &[10.0, 0.0], &mut at);
     // At x = 0.9: L1 = 1.55, L3 = 0.75.
-    let weight = 7.0 * 9.80665;
+    let weight = 7.16 * 9.80665;
     assert!((at[2] - (300.0 - weight * 0.95 / 4.2 + 110.0 * 1.55 / 4.2 + 110.0 * 0.95 / 4.2)).abs() < 1e-9, "{at:?}");
     assert!((at[0] - (300.0 - weight * 0.95 / 4.2 - 110.0 * (0.95 + 0.75) / 4.2)).abs() < 1e-9, "{at:?}");
     let (still, room) = (300.0 - weight * 0.95 / 4.2, 0.5 * (400.0 - 31.0 - (300.0 - weight * 0.95 / 4.2)));
     let allowed = room / (11.0 * (1.6 + 0.95) / 4.2);
-    assert!((allowed - 6.328).abs() < 5e-3 && (still + room - 326.74).abs() < 0.01, "{allowed}");
+    assert!((allowed - 6.3548).abs() < 5e-4 && (still + room - 326.559).abs() < 0.01, "{allowed}");
     assert!(
-        (belt_bound(0.95) - allowed).abs() < 1e-9 && (belt_bound(0.7) - 7.016).abs() < 5e-3,
+        (belt_bound(0.95) - allowed).abs() < 1e-9 && (belt_bound(0.7) - 7.0456).abs() < 5e-4,
         "{} {}",
         belt_bound(0.95),
         belt_bound(0.7)
@@ -1127,16 +1141,18 @@ fn kept(sim: &sim_components::Sim, jerk: [f64; 2], top: f64) -> f64 {
 }
 
 /// The most acceleration along X that the belt allows the time-optimal plan at x on the default T-gantry (z = 0.35) rated
-/// 400 N, by hand: each section may change by 0.5 * (400 - 31 - 284.47) = 42.26 N either way (see the test above), and
+/// 400 N, by hand: each section may change by 0.5 * (400 - 31 - 284.12) = 42.44 N either way (see the test above), and
 /// accelerating 11 kg along X changes section 3 by 11 (L1 + 0.95) / 4.2 = 11 (1.6 + x) / 4.2 and section 1 by
 /// 11 (L3 + 0.95) / 4.2 = 11 (2.6 - x) / 4.2 per m/s^2.
 fn belt_bound(x: f64) -> f64 {
-    let room = 0.5 * (400.0 - 31.0 - (300.0 - 7.0 * 9.80665 * 0.95 / 4.2));
+    let room = 0.5 * (400.0 - 31.0 - (300.0 - 7.16 * 9.80665 * 0.95 / 4.2));
     room / (11.0 * (1.6 + x).max(2.6 - x) / 4.2)
 }
 
 /// Limits that change within a piece: a line along X from (0.1, 0.35) to (0.9, 0.35) at 300 m/s^3, the belt rated
-/// 400 N. The belt allows 42.26 N / (11 kg * 2.5 / 4.2) = 6.455 m/s^2 at both ends and up to 7.7 m/s^2 in the middle
+/// 400 N. The belt allows 42.44 N / (11 kg * 2.5 / 4.2) = 6.482 m/s^2 at both ends and up to 7.7 m/s^2 in the middle
+/// (with the belt's vertical runs' 0.16 kg in the weight since 21 November; 6.455 m/s^2 before, which the times below
+/// were worked out with: now 0.8583 s for the one-limit plan)
 /// (`belt_bound`). The plan with one limit per piece took 6.455 m/s^2 all along: distance / v + v / a + a / j =
 /// 0.8 / 1.2559 + 1.2559 / 6.455 + 6.455 / 300 = 0.8531 s (v the rated speed; it planned that; since 15 November the
 /// rated speed less 1 %, 1.2433 m/s, 0.8576 s; since 20 November less 1.31 % with the belts' twist (`kept`), 1.2394 m/s,
@@ -1169,7 +1185,7 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
     let v = (1.0 - kept(&sim, [300.0, 300.0], 314.0)) * 1.2559;
     let by_hand = 0.8 / v + v / belt_bound(0.9) + belt_bound(0.9) / 300.0;
     assert!(
-        (belt_bound(0.9) - 6.455).abs() < 1e-3 && (by_hand - 0.8590).abs() < 1e-4,
+        (belt_bound(0.9) - 6.4819).abs() < 1e-3 && (by_hand - 0.8583).abs() < 1e-4,
         "{} m/s^2, {by_hand} s",
         belt_bound(0.9)
     );
@@ -1184,7 +1200,7 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
         of_bound = of_bound.max(acc[0].abs() / belt_bound(w[1].1[0]));
         hardest = hardest.max(acc[0].abs());
     }
-    let room = 0.5 * (400.0 - 31.0 - (300.0 - 7.0 * 9.80665 * 0.95 / 4.2));
+    let room = 0.5 * (400.0 - 31.0 - (300.0 - 7.16 * 9.80665 * 0.95 / 4.2));
     assert!(
         of_bound <= 1.002 && of_bound > 0.995 && hardest > 1.03 * belt_bound(0.9),
         "{of_bound} of the bound, {hardest} m/s^2"
@@ -1759,15 +1775,16 @@ fn a_pure_inertia_move_is_all_inertia() {
     }
 }
 
-/// Holding Z, by hand: each motor holds m_z g r / (2 i) = 7 * 9.80665 * 0.02 / 10 = 0.137293 N m, A up and B down,
-/// which is the gravity part of the full elastic model at rest. Over 50 ms of standing (the controller dithers on
+/// Holding Z, by hand: each motor holds W_z r / (2 i), W_z = (m_z + mu (4 s + 2 sz)) g the Z axis's weight and that of
+/// the belt's vertical runs (`TGantry::z_weight`): 7.16 * 9.80665 * 0.02 / 10 = 0.140431 N m, A up and B down, which
+/// is the gravity part of the full elastic model at rest. Over 50 ms of standing (the controller dithers on
 /// the encoder counts, so one step alone is off by up to 0.5 %) the motor torque is the gravity part to within
 /// 0.2 %, and inertia, friction and the rest are below 0.2 % of it. Ripple, cogging and tooth meshing are off: they
-/// are part of the rest. The copper loss of that hold is R i^2 = 4 * (0.137293 / 0.45)^2 = 0.37235 W per motor.
+/// are part of the rest. The copper loss of that hold is R i^2 = 4 * (0.140431 / 0.45)^2 = 0.38955 W per motor.
 #[test]
 fn holding_z_is_all_gravity() {
-    let by_hand = 7.0 * G * 0.02 / 10.0;
-    assert!((by_hand - 0.137293).abs() < 1e-6);
+    let by_hand = 7.16 * G * 0.02 / 10.0;
+    assert!((by_hand - 0.140431).abs() < 1e-6);
     let sim_config = machine_config(&["effects.torque_ripple = false", "effects.tooth_meshing = false"]);
     let mut sim = sim_components::Sim::new(&ENTRY, &sim_config).unwrap();
     sim.run(0.2, |_| {});
@@ -1792,7 +1809,7 @@ fn holding_z_is_all_gravity() {
             [inertia, friction, rest].iter().all(|p| p.abs() < 2e-3 * by_hand),
             "{motor}: {inertia}, {friction}, {rest}"
         );
-        assert!((copper[k] - 0.37235).abs() < 2e-3 * 0.37235, "{motor}: {} W", copper[k]);
+        assert!((copper[k] - 0.38955).abs() < 2e-3 * 0.38955, "{motor}: {} W", copper[k]);
     }
 }
 
@@ -1890,19 +1907,19 @@ fn the_report_names_the_source_of_each_exct_30_value() {
 }
 
 /// The modes of the carriage on the belt and the frame (`modes`), by hand from the default config without the leaning Z
-/// axis, at x = 0.5 m, z = 0.25 m. The carriage with the Z axis, 4 + 5 + 2 = 11 kg, rides on the two sections that end at
-/// the clamp, both 1.05 m long and at the same tension, so the X-Z coupling k1 - k3 is nil there; they carry the base
-/// tension, 300 N less the Z axis's weight on section 2 shared out over the belt, 300 - 34.3233 x 2.1 / 4.2 = 282.838 N,
-/// on l = 1.05 / (1 + 282.838 / 5e5) of unstretched belt each: kb = 2 x 5e5 / l = 952 920 N/m. The belt's runs on the
-/// carriage (`belt_mass`) add 8 x 0.1 x (0.15 + 0.5 - 0.25) = 0.32 kg on x (the X-Z cross term 2 mu (2 x - sx) is nil), and
-/// with the frame (30 kg on 7.4e5 N/m) the whole belt, 0.42 kg, sways, its vertical runs, 1.6 m, coupling q' and x'
-/// (`belt_sway`). In the coordinates (x on the frame, frame q): M = [[11.32, 11.16], [11.16, 41.42]],
-/// K = diag(kb, 7.4e5), det(K - w^2 M) = 0: 20.60 and 55.64 Hz. The Z axis on its belt is a third mode above them. With
-/// the leaning Z axis the model has one more coordinate, so four modes. Without the frame and the lean: the carriage on
-/// the belt, sqrt(kb / 11.32) / 2 pi = 46.18 Hz.
+/// axis, at x = 0.5 m, z = 0.25 m. The carriage with the Z axis, 4 + 5 + 2 = 11 kg, rides on the two sections that end
+/// at the clamp, both 1.05 m long and at the same tension, so the X-Z coupling k1 - k3 is nil there; they carry the
+/// base tension, 300 N less the weight on Z (the Z axis's and the belt's vertical runs', 7.16 kg) on section 2 shared
+/// out over the belt, 300 - 35.1078 x 2.1 / 4.2 = 282.446 N, on l = 1.05 / (1 + 282.446 / 5e5) of unstretched belt
+/// each: kb = 2 x 5e5 / l = 952 919 N/m. The belt's runs on the carriage (`belt_mass`) add 8 x 0.1 x (0.15 + 0.5 -
+/// 0.25) = 0.32 kg on x (the X-Z cross term 2 mu (2 x - sx) is nil), and with the frame (30 kg on 7.4e5 N/m) the whole
+/// belt, 0.42 kg, sways, its vertical runs, 1.6 m, coupling q' and x' (`belt_sway`). In the coordinates (x on the
+/// frame, frame q): M = [[11.32, 11.16], [11.16, 41.42]], K = diag(kb, 7.4e5), det(K - w^2 M) = 0: 20.60 and 55.64 Hz.
+/// The Z axis on its belt is a third mode above them. With the leaning Z axis the model has one more coordinate, so
+/// four modes. Without the frame and the lean: the carriage on the belt, sqrt(kb / 11.32) / 2 pi = 46.18 Hz.
 #[test]
 fn the_modes_are_the_generalised_eigenvalues_of_the_carriage_the_frame_and_the_z_axis() {
-    let kb = 2.0 * 5e5 / (1.05 / (1.0 + (300.0 - 7.0 * G / 2.0 * 2.1 / 4.2) / 5e5));
+    let kb = 2.0 * 5e5 / (1.05 / (1.0 + (300.0 - 7.16 * G / 2.0 * 2.1 / 4.2) / 5e5));
     let (mx, mxq, mq, kq) = (11.32, 11.16, 41.42, 7.4e5);
     // a w^4 - b w^2 + c = 0.
     let (a, b, c) = (mx * mq - mxq * mxq, kb * mq + kq * mx, kb * kq);
@@ -2103,17 +2120,17 @@ fn a_coupled_base_along_x_moves_as_the_frame_mode() {
 }
 
 /// Friction feedforward from the machine's own model (`steady_friction`), by hand, in an X traverse at 0.8 m/s with the
-/// Z axis at 0.35 m. The X guide carries m_x g = 11 kg x 9.80665 = 107.873 N against its rated 9 kg: load scale
-/// (200 + 107.873) / (200 + 88.260) = 1.068040; it slides at 15 N x 1.068040 + 20 N s/m x 0.8 m/s = 32.0206 N (the
-/// Stribeck part exp(-(0.8 / 0.01)^2) is nothing), the Z guide stands. Each belt force carries half, 16.0103 N, through
-/// r / i = 0.02 / 5. The gearbox's loss factor is that of the whole belt force it passes, the friction and the Z axis's
-/// weight W = ±m_z g / 2 = ±34.3233 N (motor a lifts it, b holds it back), and the loss is on all of it, r / i ((F + W) /
-/// loss - W) with the weight's own r W / i in the rigid feedforward: a drives (F + W = 50.3336 N, / 0.95), b is driven back
-/// (F + W = -18.3130 N, x 0.95). The shafts at 0.8 / 0.02 x 5 = 200 rad/s: 0.02 tanh(400) + 1e-4 x 200 = 0.04 N m. So a:
-/// 0.04 + 0.004 (50.3336 / 0.95 - 34.3233) = 0.114638 N m, b: 0.04 + 0.004 (-18.3130 x 0.95 + 34.3233) = 0.107704 N m. In
-/// the cruise the feedforward takes exactly that off the velocity loop's integrator (to 2 %, shipped elastic machine and
-/// rigid one); in the rigid one what stays is a little more X guide friction from the tilt the guide loads take from the
-/// torques' acceleration (under 3 % of the friction).
+/// Z axis at 0.35 m. The X guide carries m_x g = 11 kg x 9.80665 = 107.873 N against its rated 9 kg: load scale (200 +
+/// 107.873) / (200 + 88.260) = 1.068040; it slides at 15 N x 1.068040 + 20 N s/m x 0.8 m/s = 32.0206 N (the Stribeck
+/// part exp(-(0.8 / 0.01)^2) is nothing), the Z guide stands. Each belt force carries half, 16.0103 N, through r / i =
+/// 0.02 / 5. The gearbox's loss factor is that of the whole belt force it passes, the friction and the Z axis's weight
+/// W = ±W_z / 2 = ±35.1078 N (the Z axis's and the belt's vertical runs'; motor a lifts it, b holds it back), and the
+/// loss is on all of it, r / i ((F + W) / loss - W) with the weight's own r W / i in the rigid feedforward: a drives (F
+/// + W = 51.1181 N, / 0.95), b is driven back (F + W = -19.0975 N, x 0.95). The shafts at 0.8 / 0.02 x 5 = 200 rad/s:
+/// 0.02 tanh(400) + 1e-4 x 200 = 0.04 N m. So a: 0.04 + 0.004 (51.1181 / 0.95 - 35.1078) = 0.114803 N m, b: 0.04 +
+/// 0.004 (-19.0975 x 0.95 + 35.1078) = 0.107861 N m. In the cruise the feedforward takes exactly that off the velocity
+/// loop's integrator (to 2 %, shipped elastic machine and rigid one); in the rigid one what stays is a little more X
+/// guide friction from the tilt the guide loads take from the torques' acceleration (under 3 % of the friction).
 #[test]
 fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing() {
     let cruise = |model: bool, elastic: bool| {
@@ -2141,10 +2158,11 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
         assert!(n > 1000, "{n} samples in the cruise");
         (ff, integrator.map(|i| i / n as f64))
     };
-    // The loss factor is the one of the whole torque the gearbox passes (belt force 16.0103 N with the weight W = +-34.3233 N
-    // = +-m_z g / 2): r / i ((F + W) / loss - W), a: 0.004 (50.3336 / 0.95 - 34.3233) = 0.074638, b (F + W = -18.3130 N
-    // is generating): 0.004 (-18.3130 x 0.95 + 34.3233) = 0.067704 N m on top of the shaft's 0.04.
-    let expected = [0.04 + 0.074638, 0.04 + 0.067704];
+    // The loss factor is the one of the whole torque the gearbox passes (belt force 16.0103 N with the weight W =
+    // +-35.1078 N = +-W_z / 2, the Z axis's 7 kg and the belt's vertical runs' 0.16 kg): r / i ((F + W) / loss - W), a:
+    // 0.004 (51.1181 / 0.95 - 35.1078) = 0.074803, b (F + W = -19.0975 N is generating): 0.004 (-19.0975 x 0.95 +
+    // 35.1078) = 0.067861 N m on top of the shaft's 0.04.
+    let expected = [0.04 + 0.074803, 0.04 + 0.067861];
     for elastic in [true, false] {
         let ((ff, with), (_, without)) = (cruise(true, elastic), cruise(false, elastic));
         for k in 0..2 {
@@ -2158,17 +2176,18 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
     }
 }
 
-/// The gearbox's loss on the Z axis's weight is in the friction feedforward (`steady_friction`). Rigid model at
-/// (0.5, 0.25) m, no guide friction, eta = 0.95, r / i = 0.004 m, the weight on each belt ±m_z g / 2 = ±34.3233 N (m_z =
-/// 7 kg). Z up at 0.5 m/s: motor a lifts (drives, / eta), motor b is driven forwards on its negative speed with a negative
-/// torque (also drives): ±0.004 x 34.3233 / 0.95 = ±0.144519 N m with the weight's own 0.137293 in the rigid
-/// feedforward (it gave ±0.137293). Down, the gearboxes are driven back: ±0.004 x 34.3233 x 0.95 = ±0.130428 N m.
-/// The model's own answer agrees: the torques under which the rigid model's `derivatives` give X and Z no acceleration
-/// at that speed (Newton, the Jacobian by differences) are the totals to 1e-9 N m.
+/// The gearbox's loss on the Z axis's weight is in the friction feedforward (`steady_friction`). Rigid model at (0.5,
+/// 0.25) m, no guide friction, eta = 0.95, r / i = 0.004 m, the weight on each belt ±W_z / 2 = ±35.1078 N (the Z axis's
+/// 7 kg and the belt's vertical runs' 0.16 kg). Z up at 0.5 m/s: motor a lifts (drives, / eta), motor b is driven
+/// forwards on its negative speed with a negative torque (also drives): ±0.004 x 35.1078 / 0.95 = ±0.147822 N m with
+/// the weight's own 0.140431 in the rigid feedforward (it gave ±0.140431). Down, the gearboxes are driven back: ±0.004
+/// x 35.1078 x 0.95 = ±0.133410 N m. The model's own answer agrees: the torques under which the rigid model's
+/// `derivatives` give X and Z no acceleration at that speed (Newton, the Jacobian by differences) are the totals to
+/// 1e-9 N m.
 #[test]
 fn the_steady_friction_has_the_gearbox_loss_on_the_weight() {
     let m = rigid(&["effects.gearbox_efficiency = true", "gearbox.efficiency = 0.95"]);
-    for (vz, by_hand) in [(0.5, 0.144519), (-0.5, 0.130428)] {
+    for (vz, by_hand) in [(0.5, 0.147822), (-0.5, 0.133410)] {
         let (mut weight, mut friction) = ([0.0; 2], [0.0; 2]);
         m.feedforward_torque(&[0.5, 0.25], &[0.0, 0.0], &mut weight);
         m.steady_friction(&[0.5, 0.25], &[0.0, vz], &mut friction);
@@ -2328,10 +2347,10 @@ fn the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held() {
     let poses = [[0.9, 0.05], [0.5, 0.25], [0.5, 0.05], [0.1, 0.45]];
     let reference = [
         [
-            [18.748083, 30.683929, 76.045988, 116.302853],
-            [20.531127, 53.225412, 83.046572, 201.017830],
-            [18.689209, 30.622665, 84.594807, 92.682869],
-            [19.888173, 39.812853, 82.116594, 103.463213],
+            [18.748084, 30.683934, 76.045975, 116.302811],
+            [20.531127, 53.225401, 83.046572, 201.018051],
+            [18.689210, 30.622670, 84.594794, 92.682836],
+            [19.888172, 39.812840, 82.116597, 103.463182],
         ],
         [
             [18.809186, 30.786054, 78.517072, 119.467942],
