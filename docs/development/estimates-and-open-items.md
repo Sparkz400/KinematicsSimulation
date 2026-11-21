@@ -107,7 +107,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | --- | --- | --- |
 | The cables' own inertia; the lift of cable from the drum to the pulley; the sag's weight changing with the pose | cable robots | 0.5 % of the spatial platform's mass; 0.05 N; 5e-5 N. The sag model is a shallow parabola, 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
 | The rotors' gyroscopic coupling with the legs' swing (it is in the frame's reaction only); the rods' faces against platform and base | hexapod, tripod, rotary hexapod | About 0.015 N m (hand estimate). |
-| The hook block landing on the load: lowered by more than the sling's length onto a standing load, it passes through it (the sling, a rope since 21 November, goes slack below its length) | crane | None in the shipped cycle; the sling is 1 m. The hook block and the elastic drives were run on a full cycle; rope mass and bridge skew passed their own tests and a 0.2 s run. |
+| The hook block against the payload's sides (it lands on its top only, since 21 November); a hook block already lower than the payload's top (a pick with it under 0.28 m over the payload's point) stays inside it; one resting on the payload drops through once the payload is let go; the landing on the rigid rope is untested | crane | None in the shipped cycle: the sling holds the hook block over the payload, and its picks hang the hook block 1 m over it. |
 | Link bending together with parallelogram bars of their own (refused); the palletiser's rod and crank (shipped bar arrays empty) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured in the test case). |
 | The belt runs' sideways offset on the leaning Z axis; the belt runs riding on the beam's vertical mode | T-gantry | A first-order moment (T₁ − T₃)·0.04 m; the beam mode would fall 0.9 % (59.32 to 58.77 Hz). |
 | Angular momentum of the T-gantry crate against its machine file is not compared | T-gantry | Different origins and belt-run geometry. |
@@ -318,6 +318,34 @@ Fixed (after the second audit, 21 November):
   before. In the crate and the machine file; checked off the middle
   (`testkit::weight_is_at_the_first_moment_at`, `the_beams_own_weight_is_at_its_first_moment_off_the_middle` in both)
   and over the 1 s run (below 1e-7 J with the mode on and off).
+- The app's path test (`a_path_is_planned_run_and_analysed_in_the_app`) failed on the crane under load (the bridge
+  1.37 mm from home) and passed alone; a 2 mm tolerance for the crane was put in. Cause, measured on the library: the
+  load's swing, which nothing but the drive damps, pulls the bridge to and fro by the drive's give, and the app starts
+  the path back at the phase the analysis's wall time leaves: over the phase, the bridge stands 0.06 to 1.49 mm (half
+  its span over a swing) off and up to 1.55 mm off 0.2 s after the path back; the middle of the span within 0.033 mm.
+  In the app with the path back started 1.4 s later: 1.364 mm off at the check after the unreadable line, the middle
+  0.001 mm. Not a regression of the crane's commits of 21 November (e4a90405, 074796e0, e9a65662: the library's figures
+  are the same to nine digits on 8754d55d before them); the drives' give is the retune of 17 November (389bbac7: 0.3 mm
+  either way after the long move where the stiff drives gave 5 um). The test now judges where an axis stands by the
+  middle of the span it covers over one period of the machine's lowest mode (`standing`), at the 1 mm it had; the
+  swing's amplitude itself is not judged there. (A probe's reversed point list was refused with `error-trajectory`:
+  its first time was the plan's end, not 0; the app's file pairs the forward times with the reversed poses.)
+- The mover track's modes: the shipped six movers report the held mode everywhere (modes, `resonance_hz` and so the
+  shaper, the plan's trains: 694.28 Hz, the plate held), as the convention has it; a track of one mover reported the
+  free two-mass mode (1736.39 Hz, the chain's single joint) to the shaper and the modes printout while its train was
+  the held one. One mover now reports the held mode too (`the_movers_modes_are_the_held_two_mass_mode`). The app's mode
+  list shows beside each mode the linearised model's nearest one: 102.0 Hz for the six movers' 694.28 Hz (not looked
+  into; the 1736 Hz of the brief is the plate-free figure).
+- The mover track and the indexers (Geneva, cam) had no frame momentum (`Machine::frame_momentum` None), so no
+  compliant base: they have it, as the joint kit's slide and the knife (`the_frame_momentum_is_the_hand_calculated_one`
+  in both crates; the standard suite's first-moment check now judges them). Both are level, so
+  `testkit::weight_is_at_the_first_moment` (which asks the first moment to move vertically) has nothing to judge there.
+- The crane's hook block lowered by more than the sling's length onto a standing payload passed through it (section 4):
+  0.035 m under the payload's point after a lowering 1.2 m past its touchdown. It now lands on the payload's top (the
+  scene's boxes, its point 0.28 m over the payload's), a one-sided contact on the sling's span held at rest only and a
+  plastic landing booked as the floor's (114.37 J of the fall, no step making energy), the floor then carrying both,
+  2598.762 N (`a_hook_block_lowered_beyond_the_sling_lands_on_the_payload`). No new switch or key: it acts with
+  `effects.hook_block`; no shipped cycle lowers the hook block that far.
 
 Fixed:
 - `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another

@@ -1803,7 +1803,15 @@ J̇ q̇) to f:
   taut again in its stretch (its damper, with `effects.rope_damping`, books what that loses as the rope's). At rest it is
   stretched to l_s (1 + m g / EA); a pick hangs the payload plumb under the hook block at that length, or, where that
   is under the floor, stands it on the floor with the sling slack. The load's
-  signals are P2's.
+  signals are P2's. Lowered further than that, the hook block lands on the payload: its box (0.16 m tall) on the
+  payload's (0.4 m), the scene's, its point h = 0.28 m over the payload's, over the payload's box. A one-sided contact on
+  the sling's span, d_z ≥ −h: at rest against it a constraint d̈_z = 0 whose push (hook block up, payload down) is
+  never negative, solved with the floor's; one coming down lands at the step's end, plastic, the two at one vertical
+  speed (the payload's where it stands on the floor, else their common momentum's), booked with `power.other` as the
+  floor's landing. Since 21 November 2026 (it passed through before): lowered 1.2 m past the payload's touchdown, the
+  hook block rests 0.28 m over it, the rope slack and the floor carrying both, (15 + 250) g = 2598.762 N; the fall's
+  114.37 J booked at the landing, no step made energy, and a taut rope lifts it off again
+  (`a_hook_block_lowered_beyond_the_sling_lands_on_the_payload`).
 - `effects.joint_elasticity`: each drive the elastic joint of the other machines, the gearbox's stiffness, damping and
   backlash between the rotor (a state) and the wheel or drum. With it on the shipped loops are stable (`sim-cli margins
   overhead-crane --set effects.joint_elasticity=true`): bridge 177.4 Hz, 51.7°, 9.68 dB; trolley 182.8 Hz, 51.0°,
@@ -1832,8 +1840,8 @@ the rotors in and higher figures (the drives at 65.7, 88.0 and 111.0 Hz, the bou
 with drum and rotor free). The held bridge mode is what the config calls the drive's anti-resonance: the shipped
 velocity loop (some 4.5 Hz on the rigid drive) does not hold the rotor there.
 
-Left out: the rope's bending at the sheave, the load's own turning (a point mass), and the hook block landing on the
-load: lowered by more than the sling's length onto a standing load, it passes through it.
+Left out: the rope's bending at the sheave and the load's own turning (a point mass; the hook block meets the payload
+only on its top, not on its sides).
 
 ## Crank and cam machines
 
@@ -1912,6 +1920,15 @@ J_s φ' θ̈ + J_s ẍ + J_s φ'' θ̇² = −k x − c ẋ,   c = 2ζ √(k J_s
 so the ring acts back on the driver and its loop; signal `table.twist`, loss `power.table_twist`; the index error in the
 dwell adds |x| at the station radius. The feedforward knows the rigid table.
 
+**Frame momentum** (for a [compliant base](#compliant-base); since 21 November 2026, before none): in the scene's frame
+the wheel turns about +y at φ' θ̇ and the table with its twist's rate on top, the parts a point each at the station
+radius (n of them evenly round the table: no momentum, their first moment at its centre), the driver and the rotor on
+the driver's shaft, the Geneva's crank about −y beside the wheel, the cam's shaft square to the turret's, along z. In
+the middle of the index at θ̇ = 2 rad/s with the rotor's 0.01 N m s: Geneva of six 1.1 − 0.02 − 0.01 = 1.07 N m s about
+y (1.33 with the twist turning at 0.5 rad/s), cam indexer 0.950186 about y and 0.034 about z
+(`the_frame_momentum_is_the_hand_calculated_one`). The table is level as the potential has it (0): its weight does no
+work and `testkit::weight_is_at_the_first_moment` has nothing to judge (it asks the first moment to move vertically).
+
 ## Axes of the joint kit (screw, rack, linear motor, rotary table)
 
 Source: [`slide.rs`](../crates/machine-joint-kit/src/slide.rs), [`table.rs`](../crates/machine-joint-kit/src/table.rs);
@@ -1957,6 +1974,24 @@ less what saturation takes towards the maximum current (`DriveParams::current_fo
 magnet plate by the plate's length on each; each segment's copper loss R I² warms it through one thermal resistance and
 time constant (`segment.temperature_rise`). The cycle is a cam (`track.cycle` "index" or "flying"), or with `cam.run =
 false` the config's segments.
+
+**Modes** (`Machine::modes`, `resonance_hz`, what the input shaper follows): with the motors held, each mover's body and
+payload on its coupling (`joint_elasticity`, the gearbox's stiffness k = 2e7 N/m as shipped) to the held plate,
+sqrt(k / m (1 + e k̄)²) / 2π: 694.28 Hz on the shipped mover (1.051 kg), its damping ratio c ω / 2k; the planner's
+train (`Machine::trains`) is the same, the load's share 1.051 / 1.251. With the plate free the two-mass mode is
+sqrt(k (1/m + 1/m_plate)) / 2π = 1736.39 Hz; until 21 November a track of one mover reported that one (the chain's
+single-joint mode) while its train was the held one (`the_movers_modes_are_the_held_two_mass_mode`).
+
+**Frame momentum** (for a [compliant base](#compliant-base); since 21 November 2026, before none), in the track's plane
+(x along the first straight, y across, z up): each mover's body and payload at its mass centre p(s) + e n(θ̄), θ̄ the
+heading averaged over the wheelbase (`Track::mean_heading`), whose rate along s is the curvature k̄ the dynamics take,
+so it runs at v t + e k̄ v along θ̄ (v (1 + e k) on a constant radius, as its mass m (1 + e k)² has it); the magnet plate,
+the rotor, on the centre line at the rotor's speed, as the joint kit's forcer. p(s) and its direction t are the curve's
+table's (`Track::tangent`), so the first moment moves at the momentum exactly. A mover on the second straight at 1.5 m/s:
+−1.8765 N s along x and d · 1.8765 N m s about z (d the track's width); in a constant-radius arc with e = 35 mm, about
+its centre 1.051 · 1.5 (R + e)² / R + 0.2 · 1.5 R = 0.36968 N m s (`the_frame_momentum_is_the_hand_calculated_one`).
+The track is level: the weight does no work, the first moment keeps its height, and
+`testkit::weight_is_at_the_first_moment` has nothing to judge.
 
 ## Worm stage (machine files)
 

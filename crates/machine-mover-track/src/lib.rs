@@ -256,6 +256,51 @@ impl Track {
         ((self.heading(b) - self.heading(a)) / w, (self.curvature(b) - self.curvature(a)) / w)
     }
 
+    /// The heading of a body on rollers `w` apart at `s`, its mean over [s - w/2, s + w/2]: its rate along s is
+    /// `mean_curvature`'s, the curvature the body follows.
+    pub fn mean_heading(&self, s: f64, w: f64) -> f64 {
+        if w <= 0.0 {
+            return self.heading(s);
+        }
+        // The integral of the heading from 0 to s, unwrapped (each loop adds 2 pi to the heading).
+        let integral = |s: f64| {
+            let (r, turns) = self.wrap(s);
+            let loop_ = self.heading_integral(self.length);
+            turns * loop_ + TAU * self.length * turns * (turns - 1.0) / 2.0 + TAU * turns * r + self.heading_integral(r)
+        };
+        (integral(s + 0.5 * w) - integral(s - 0.5 * w)) / w
+    }
+
+    /// The integral of the heading over the loop from 0 to `r` (0 to L), closed form piece by piece.
+    fn heading_integral(&self, r: f64) -> f64 {
+        let (a, c, rad, lc) = (self.straight, self.curve, self.radius, self.clothoid);
+        // Within a curve, from its start to u.
+        let curve = |u: f64| {
+            let u = u.clamp(0.0, c);
+            if lc == 0.0 {
+                return u * u / (2.0 * rad);
+            }
+            let entry = |u: f64| u.powi(3) / (6.0 * rad * lc);
+            let arc = |u: f64| entry(lc) + lc / (2.0 * rad) * (u - lc) + (u - lc).powi(2) / (2.0 * rad);
+            if u < lc {
+                entry(u)
+            } else if u <= c - lc {
+                arc(u)
+            } else {
+                arc(c - lc) + PI * (u - c + lc) - (lc.powi(3) - (c - u).powi(3)) / (6.0 * rad * lc)
+            }
+        };
+        if r < a {
+            0.0
+        } else if r < a + c {
+            curve(r - a)
+        } else if r < 2.0 * a + c {
+            curve(c) + PI * (r - a - c)
+        } else {
+            curve(c) + PI * a + PI * (r - 2.0 * a - c) + curve(r - 2.0 * a - c)
+        }
+    }
+
     /// The centre line's point at `s` (m, in the track's plane).
     pub fn point(&self, s: f64) -> [f64; 2] {
         let (r, _) = self.wrap(s);
@@ -276,6 +321,29 @@ impl Track {
         } else {
             let p = local(r - 2.0 * a - c);
             [-p[0], d - p[1]]
+        }
+    }
+
+    /// The centre line's direction at `s`, d `point` / ds: a unit vector, along the curve's chord between two of its
+    /// table's points, where `point` runs.
+    pub fn tangent(&self, s: f64) -> [f64; 2] {
+        let (r, _) = self.wrap(s);
+        let (a, c) = (self.straight, self.curve);
+        let local = |u: f64| {
+            let x = (u / c * CURVE_POINTS as f64).clamp(0.0, CURVE_POINTS as f64);
+            let i = (x.floor() as usize).min(CURVE_POINTS - 1);
+            let (p, q, h) = (self.points[i], self.points[i + 1], c / CURVE_POINTS as f64);
+            [(q[0] - p[0]) / h, (q[1] - p[1]) / h]
+        };
+        if r < a {
+            [1.0, 0.0]
+        } else if r < a + c {
+            local(r - a)
+        } else if r < 2.0 * a + c {
+            [-1.0, 0.0]
+        } else {
+            let t = local(r - 2.0 * a - c);
+            [-t[0], -t[1]]
         }
     }
 
@@ -503,6 +571,31 @@ impl Mechanism for Movers {
     }
     fn potential(&self, _q: &[f64]) -> f64 {
         0.0
+    }
+    /// For effects.base_compliance, in the track's frame (x, y in its plane, z up): each mover's body and payload at
+    /// its mass centre, e outside the centre line square to the body's heading, the mean over its rollers
+    /// (`Track::mean_heading`), which turns at the curvature the dynamics have (`mean_curvature`): it runs at
+    /// v t + e k v along that heading, v (1 + e k) where the two headings agree (a constant radius, a straight). The
+    /// magnet plate on the centre line at the rotor's speed (`rotor_spin`, its mass times that speed), as the joint kit's
+    /// forcer. The track lies level: the weight does no work and the first moment stays at its height.
+    fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<FrameMomentum> {
+        let mut f = FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        let (track, e, w) = (&self.track, self.centre_offset, self.wheelbase);
+        for k in 0..self.n() {
+            let (v, [px, py], [tx, ty]) = (qd[k], track.point(q[k]), track.tangent(q[k]));
+            let ((sin, cos), turn) = (track.mean_heading(q[k], w).sin_cos(), track.mean_curvature(q[k], w).0);
+            let at = [px + e * sin, py - e * cos, 0.0];
+            let speed = [v * (tx + e * turn * cos), v * (ty + e * turn * sin), 0.0];
+            sim_components::base::add_point(&mut f, self.moving(), at, speed);
+            let plate = [rotor_spin[k] * tx, rotor_spin[k] * ty];
+            f.linear[0] += plate[0];
+            f.linear[1] += plate[1];
+            f.angular[2] += px * plate[1] - py * plate[0];
+            f.first_moment[0] += self.plate_mass * px;
+            f.first_moment[1] += self.plate_mass * py;
+            f.mass += self.plate_mass;
+        }
+        Some(f)
     }
     fn set_payload_attached(&mut self, attached: bool) {
         self.attached = attached;
@@ -1018,13 +1111,28 @@ impl Machine for MoverTrack {
         self.inner.set_part_temperatures(rises)
     }
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
-        self.inner.resonance_hz(tool_pose)
+        self.modes(tool_pose).first().map(|m| m.hz)
     }
     fn mode_shape(&self, tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
         self.inner.mode_shape(tool_pose)
     }
+    /// With the motors held, as `Machine::modes` has them and the planner's `trains`: each mover's body and payload on
+    /// its coupling to the held plate, sqrt(k / m (1 + e k)^2) (694.28 Hz on the shipped mover, its damping c w / 2k).
+    /// `JointMachine` lists two movers and more so (`held_modes`), one alone as a single joint's two-mass mode with the
+    /// plate free (1736.39 Hz), which the shaper then followed while the plan's train was the held one.
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
-        self.inner.modes(tool_pose)
+        if self.movers().n() > 1 {
+            return self.inner.modes(tool_pose);
+        }
+        // Rigid couplings: none, as for six.
+        if !self.inner.elastic {
+            return Vec::new();
+        }
+        let (mut mass, mut bias) = ([0.0], [0.0]);
+        self.movers().dynamics(tool_pose, &[0.0], &mut mass, &mut bias);
+        let gear = self.inner.joints[0].drive.gearbox.at(tool_pose[0]);
+        let w = (gear.stiffness / mass[0]).sqrt();
+        vec![Mode { hz: w / TAU, damping: gear.damping_at(w) * w / (2.0 * gear.stiffness) }]
     }
     fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
         self.inner.trains(tool_pose)
