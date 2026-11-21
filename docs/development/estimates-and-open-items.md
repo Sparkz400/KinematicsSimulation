@@ -202,7 +202,7 @@ commanded acceleration.
   five-bar (section 2); the arm's sag allowance and the sweep fit's error (section 3). The measured
   ball screw comparison moved in one figure: the constant-speed run's worst sample is 3.62 N m (was
   3.65) since the screw is driven back at its own efficiency (0.98963 against 0.98972 forward); the
-  S-profile RMS stays 0.368 N m.
+  S-profile RMS stays 0.368 N m. Since the damping in series it is 3.65 N m again (section 10).
 - The synthetic belt dataset was recorded by an older model (its stiffness fitted as 1.027 ± 0.006
   of the config's) and was regenerated; a test now checks a fresh trace fits its own config.
 - Verdicts of every shipped machine: all machine files pass; of the default configs only the crane
@@ -275,6 +275,10 @@ Fixed:
   the same spring. The joint kit's screw axis's train was 0.73 of its two-mass mode; now equal
   (`the_screw_axis_train_is_its_two_mass_mode`). The wafer handler, the tripod and the hexapod have no
   train (`Machine::trains` empty): the planner keeps back no speed for their elastic screws.
+- The ISW ball screw's constant-speed worst sample is 3.65 N m (3.6487), not 3.62: the gear damper in
+  series (60e59797: 3.6156, the fit's S-profile RMS 0.3716) and the screw's own damping ratio 0.04
+  (e78913f3: 3.6487, S-profile 0.3681). The worst sample sits at 14.5 s, the simulated torque -1.1 N m
+  against the measured +2.5: a gap the damping moves by 0.03 N m, not one it makes.
 - Program reader: an arc through points near f64's range (`MoveL,2145413,-8.4e301` then `MoveC`) had a
   NaN centre and was taken; now refused (`program-error-arc`).
 
