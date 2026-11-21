@@ -725,6 +725,36 @@ fn a_switch_the_machine_does_not_model_is_refused_switched_on() {
     assert_eq!(refused, 4 * 4 + 3 * 3 + 2 + 4 * 2);
 }
 
+/// The fit's twist of a train (`Machine::twist_at`) behind a screw whose stiffness follows the nut is the spring's where
+/// the nut is, the rotor's angle over the ratio: the screw axis (fixed-supported, fixed bearing at -0.1 m, root 21.2
+/// mm, E A = 2.06e11 pi 0.0212^2 / 4 = 7.2716e7 N) with 1 N m at the motor and the nut 0.1 and 0.3 m along twists more at
+/// 0.3 by i^2 T 0.2 / (E A) = 314.159^2 0.2 / 7.2716e7 = 2.7146e-4 rad, i = 2 pi / 0.02 m the motor's rad per metre.
+/// The far end's spring (`twist`) has none of it.
+#[test]
+fn the_fits_twist_behind_a_screw_is_the_springs_at_the_nut() {
+    let entry = sim_machines::find("screw-axis").unwrap();
+    let cfg = entry.config();
+    assert!(
+        cfg.bool("effects.screw_stiffness_with_position").unwrap() && cfg.bool("effects.joint_elasticity").unwrap()
+    );
+    let m = (entry.build)(&cfg).unwrap();
+    let twist = |s: f64| {
+        let (mut angle, mut out) = ([0.0], [0.0]);
+        m.inverse(&[s], &mut angle);
+        m.twist_at(&angle, &[1.0], &[0.0], &mut out);
+        (angle[0] / s, out[0])
+    };
+    let ((ratio, near), (_, far)) = (twist(0.1), twist(0.3));
+    assert!((ratio - std::f64::consts::TAU / 0.02).abs() < 1e-9 * ratio, "{ratio}");
+    let ea = 2.06e11 * std::f64::consts::PI * 0.0212f64.powi(2) / 4.0;
+    let by_hand = ratio * ratio * 0.2 / ea;
+    assert!((by_hand - 2.7146e-4).abs() < 1e-8, "{by_hand}");
+    assert!(((far - near) / by_hand - 1.0).abs() < 1e-6, "{} against {by_hand} by hand", far - near);
+    let mut held = [0.0];
+    m.twist(&[1.0], &[0.0], &mut held);
+    assert!(held[0] > far, "the far end's {} against {far} at 0.3 m", held[0]);
+}
+
 /// Behind a screw whose stiffness follows the nut (effects.screw_stiffness_with_position) the gear's dampers are laid out
 /// where the nut is (`Gearbox::at`), as its spring is: the modes' damping ratios are the linearised machine's, its
 /// rotors held, from the eigenvalue nearest each mode's pole (`shapes::eigen_near`) of d(derivatives)/d(state) by

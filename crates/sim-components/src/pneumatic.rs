@@ -784,6 +784,9 @@ impl Machine for Pneumatic {
     fn twist(&self, torque: &[f64], acc: &[f64], out: &mut [f64]) {
         self.inner.twist(torque, acc, out)
     }
+    fn twist_at(&self, angle: &[f64], torque: &[f64], acc: &[f64], out: &mut [f64]) {
+        self.inner.twist_at(angle, torque, acc, out)
+    }
     fn rigid_split_torque(&self, angle: &[f64], speed: &[f64], acc: &[f64], rotor_acc: &[f64], out: &mut [f64]) {
         self.inner.rigid_split_torque(angle, speed, acc, rotor_acc, out)
     }

@@ -269,6 +269,12 @@ pub trait Machine: Send {
     fn twist(&self, _torque: &[f64], _acc: &[f64], out: &mut [f64]) {
         out.fill(0.0);
     }
+    /// `twist` with the motors at `angle` (motor radians, the trace's): behind a screw whose stiffness follows its nut,
+    /// the train's spring where the nut is, on the shaft's point the rotor has turned to it. By default `twist`, for a
+    /// machine whose trains have one stiffness along the stroke.
+    fn twist_at(&self, _angle: &[f64], torque: &[f64], acc: &[f64], out: &mut [f64]) {
+        self.twist(torque, acc, out)
+    }
     /// `rigid_motor_torque` with the load at `angle`, `speed`, `acc` (where the rigid model puts the motors for it) and
     /// the rotors at their own acceleration `rotor_acc`: what an elastic train (`twist`) needs. By default the rigid
     /// torques at the load's motion, the rotors turning with it.

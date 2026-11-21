@@ -1123,7 +1123,8 @@ impl Gearbox {
     /// the friction at the joint, K1 lever T_h / K_g, follows K1 as `Converter::apply_back` has it at the reference, the
     /// loop keeps its width 2 T_h / K1 in the twist, and a load carried along the stroke leaves the state where it was.
     /// Its store z^2 / (2 sigma) is the reference's in y; what the nut's place adds to y, x r'(s), is work on it the rotor
-    /// does (`hysteresis_place`). The mesh bristle keeps the reference's.
+    /// does (`hysteresis_place`). The mesh friction's bristle, a stiffness of the gear's own flanks as the hysteresis's
+    /// Dahl stiffness is, follows K1 as well: sigma_m r (its bound follows the spring's force there).
     pub fn at(&self, travel: f64) -> std::borrow::Cow<'_, Self> {
         let Some(t) = self.travel else { return std::borrow::Cow::Borrowed(self) };
         let dc = t.delta(travel).0;
@@ -1135,6 +1136,7 @@ impl Gearbox {
             band_compliance: self.band_compliance + dc,
             hysteresis: self.hysteresis * r,
             dahl_stiffness: self.dahl_stiffness * r * r,
+            mesh_stiffness: self.mesh_stiffness * r,
             anchor: [self.anchor[0], self.anchor[1] * r],
             twist_scale: r,
             travel: None,
@@ -1350,10 +1352,12 @@ impl Gearbox {
 
     /// Ends a step: the hysteresis's state moves on to the twist the step ended at (`Machine::after_step`).
     pub fn commit(&mut self, rotor_angle: f64, out_angle: f64) {
-        // The mesh friction first, with the hysteresis's torque from its anchor as the step had it.
+        // The mesh friction first, with the hysteresis's torque from its anchor as the step had it, and its bristle
+        // where the nut is (`at`).
         if self.mesh_stiffness > 0.0 {
-            let f = self.mesh_friction(self.held_torque(rotor_angle, out_angle), out_angle);
-            self.mesh_anchor = out_angle - f / self.mesh_stiffness;
+            let here = self.at(self.nut(rotor_angle));
+            let f = here.mesh_friction(self.held_torque(rotor_angle, out_angle), out_angle);
+            self.mesh_anchor = out_angle - f / here.mesh_stiffness;
         }
         if self.hysteresis == 0.0 {
             return;
@@ -2307,6 +2311,48 @@ preload_n = 200.0
             let dissipated = at.damping * rate * rate + force * arm_rate;
             assert!((g.loss_power_with(rotor, 2.0, q, 0.3, u) - dissipated).abs() < 1e-12, "{twist}");
         }
+    }
+
+    /// The mesh friction's bristle behind a screw whose compliance follows the nut follows K1 as the gear's own stiffness
+    /// (`at`): the screw below (K1 5e3 at the far end, 6666.67 with the nut at 0.3, r = 4/3), sigma_m 1e5 at the far end,
+    /// 1.3333e5 there; teeth of 0.8 (mu 0.2). The nut at 0.3 at a twist of 3e-4 (2 N), the output pushed on by 1e-5 m:
+    /// the twist 2.9e-4 holds 1.93333 N, the bristle slides at its bound mu |held| = 0.386667 N, and `commit` leaves the
+    /// anchor 0.386667 / 1.3333e5 = 2.9e-6 m behind the output; pulled back by 1.5e-6 m the bristle holds
+    /// 1.3333e5 x 1.4e-6 = 0.186667 N (its bound there 0.388667). With the anchor left at the far end's bristle
+    /// (0.386667 / 1e5 = 3.86667e-6 m behind) it read 0.315556 N.
+    #[test]
+    fn the_mesh_bristle_behind_a_screw_follows_the_nut() {
+        let mut g = Gearbox {
+            stiffness: 5e3,
+            upper: [5e3; 2],
+            half_backlash: 0.0,
+            efficiency: 0.8,
+            mesh_stiffness: 1e5,
+            travel: Some(TravelCompliance {
+                ae: 1e4,
+                length: 1.0,
+                both_ends: false,
+                fixed_bearing_at: -0.2,
+                reference: 1e-4,
+                gear: [0.0; 2],
+                converter: [0.0; 2],
+            }),
+            ..gearbox()
+        };
+        let rel = |a: f64, b: f64| (a / b - 1.0).abs() < 1e-9;
+        assert!(rel(g.at(0.3).mesh_stiffness, 1e5 * 4.0 / 3.0));
+        // The nut at 0.3: the rotor at 5 x 0.3, the output at 0.3 less the twist (and less how far it is pushed).
+        let (rotor, twist) = (1.5, 3e-4);
+        assert!(rel(g.at(0.3).spring(twist).0, 2.0));
+        let friction = |g: &Gearbox, push: f64| {
+            let out = 0.3 - twist + push;
+            g.at(0.3).mesh_friction(g.held_torque(rotor, out), out)
+        };
+        g.commit(rotor, 0.3 - twist);
+        g.commit(rotor, 0.3 - twist + 1e-5);
+        assert!(rel(friction(&g, 1e-5), 0.2 * 6666.666666666667 * 2.9e-4), "{}", friction(&g, 1e-5));
+        let back = friction(&g, 1e-5 - 1.5e-6);
+        assert!(rel(back, 4.0 / 3.0 * 1e5 * 1.4e-6), "{back}");
     }
 
     /// The hysteresis behind a screw whose compliance follows the nut acts on the gear's own twist (`at`): the screw of

@@ -1565,11 +1565,25 @@ impl<M: Mechanism> Machine for JointMachine<M> {
 
     /// Elastic: the gearbox's static twist under what reaches it, (torque − J_rotor acc) i at the joint (ripple, motor
     /// friction and the gearbox's losses and damping left out), times the ratio. Zeros where the joints are rigid.
+    /// Behind a screw whose stiffness follows the nut, the far end's: `twist_at` has the nut's place.
     fn twist(&self, torque: &[f64], acc: &[f64], out: &mut [f64]) {
         for (k, joint) in self.joints.iter().enumerate() {
             let j = &joint.drive;
             out[k] = if self.elastic {
                 j.ratio() * j.gearbox.static_twist((torque[k] - j.rotor_inertia * acc[k]) * j.ratio())
+            } else {
+                0.0
+            };
+        }
+    }
+
+    /// `twist` with the gear's spring where the nut is, the rotor's angle over the ratio (`Gearbox::at`).
+    fn twist_at(&self, angle: &[f64], torque: &[f64], acc: &[f64], out: &mut [f64]) {
+        for (k, joint) in self.joints.iter().enumerate() {
+            let j = &joint.drive;
+            let gear = j.gearbox.at(angle[k] / j.ratio());
+            out[k] = if self.elastic {
+                j.ratio() * gear.static_twist((torque[k] - j.rotor_inertia * acc[k]) * j.ratio())
             } else {
                 0.0
             };
