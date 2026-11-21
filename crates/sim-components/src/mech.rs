@@ -911,6 +911,10 @@ pub struct Gearbox {
     /// step z follows Dahl's law exactly from it for a twist that runs one way (`hysteresis_torque`). A NaN twist: not
     /// stepped yet, z is 0 at the twist of the first step's end.
     pub anchor: [f64; 2],
+    /// r of `at`, the gear's own twist y = r x over the contact twist x: 1 on the gear itself, where `anchor` is in x. On
+    /// `at`'s gear the anchor's twist stays the reference's y0, so that the branch at the anchor compares x r with it,
+    /// the same product `commit` stored, not x with y0 / r, which rounding puts an ulp to either side.
+    pub twist_scale: f64,
     /// [T1, T2], N m; infinite with the curve off.
     pub knees: [f64; 2],
     /// [K2, K3], N m/rad.
@@ -1085,6 +1089,7 @@ impl Gearbox {
             dahl_stiffness: stiffness * Self::optional_factor(cfg, "gearbox.hysteresis_stiffness_factor")?,
             back_ratio: 1.0,
             anchor: [f64::NAN, 0.0],
+            twist_scale: 1.0,
             knees: if cfg.bool("effects.gearbox_stiffness_curve")? { knees } else { [f64::INFINITY; 2] },
             upper,
             // A config without the switch (one written before 15 November 2026) has the faded efficiency.
@@ -1113,7 +1118,8 @@ impl Gearbox {
     /// The hysteresis is a friction across the gear's own flanks, so it acts on the gear's own twist, which the spring's
     /// force tells (F / K_g), not on the twist through the gear and the screw, which grows with the shaft at a force: its
     /// state lives on y = r x, x the contact twist and r = K1(here) / K1 (the reference's K1 x and K1(here) x are the
-    /// same force), with the reference's T_h and sigma. Seen in x that is T_h r, sigma r^2 and the anchor (x0 / r, r z0):
+    /// same force), with the reference's T_h and sigma. Seen in x that is T_h r, sigma r^2 and the anchor (y0 / r, r z0),
+    /// its twist kept as y0 with r beside it (`twist_scale`):
     /// the friction at the joint, K1 lever T_h / K_g, follows K1 as `Converter::apply_back` has it at the reference, the
     /// loop keeps its width 2 T_h / K1 in the twist, and a load carried along the stroke leaves the state where it was.
     /// Its store z^2 / (2 sigma) is the reference's in y; what the nut's place adds to y, x r'(s), is work on it the rotor
@@ -1129,7 +1135,8 @@ impl Gearbox {
             band_compliance: self.band_compliance + dc,
             hysteresis: self.hysteresis * r,
             dahl_stiffness: self.dahl_stiffness * r * r,
-            anchor: [self.anchor[0] / r, self.anchor[1] * r],
+            anchor: [self.anchor[0], self.anchor[1] * r],
+            twist_scale: r,
             travel: None,
             ..self.clone()
         };
@@ -1303,14 +1310,17 @@ impl Gearbox {
 
     /// The hysteresis torque z at the contact twist `x` and its slope dz/dx: Dahl's law solved from the anchor for a twist
     /// that ran one way to `x`, z = s T_h - (s T_h - z0) exp(-sigma |x - x0| / T_h), s the sign of x - x0, or of the
-    /// twist's `rate` at the anchor itself (where a step has just ended).
+    /// twist's `rate` at the anchor itself (where a step has just ended). Behind a screw whose stiffness follows the nut
+    /// the anchor's twist is y0 and x - x0 is (x r - y0) / r (`twist_scale`), and at the anchor `rate` is the gear's own
+    /// twist's, y' / r (`loss_arm`).
     pub fn hysteresis_torque(&self, x: f64, rate: f64) -> (f64, f64) {
-        let (th, [x0, z0]) = (self.hysteresis, self.anchor);
-        if th == 0.0 || x0.is_nan() {
+        let (th, [y0, z0], r) = (self.hysteresis, self.anchor, self.twist_scale);
+        if th == 0.0 || y0.is_nan() {
             return (0.0, 0.0);
         }
-        let s = if x > x0 || (x == x0 && rate >= 0.0) { 1.0 } else { -1.0 };
-        let z = s * th - (s * th - z0) * (-self.dahl_stiffness * (x - x0).abs() / th).exp();
+        let y = x * r;
+        let s = if y > y0 || (y == y0 && rate >= 0.0) { 1.0 } else { -1.0 };
+        let z = s * th - (s * th - z0) * (-self.dahl_stiffness * (y - y0).abs() / r / th).exp();
         (z, self.dahl_stiffness * (1.0 - s * z / th))
     }
 
@@ -1352,7 +1362,7 @@ impl Gearbox {
         let x = Self::contact(twist, e);
         // Behind a screw whose stiffness follows the nut, kept on the reference's twist y = r x (`at`).
         let here = self.at(self.nut(rotor_angle));
-        let r = here.stiffness / self.stiffness;
+        let r = here.twist_scale;
         self.anchor = [x * r, here.hysteresis_torque(x, 0.0).0 / r];
     }
 
@@ -1564,10 +1574,12 @@ impl Gearbox {
         let rate = rotor_speed / self.ratio - out_speed;
         let here = self.at(self.nut(rotor_angle));
         let x = Self::contact(twist, e);
-        let (z, slope) = here.hysteresis_torque(x, rate);
-        let stored = if z == 0.0 { 0.0 } else { z * slope / here.dahl_stiffness };
-        // The hysteresis's twist y = r x moves with the nut's place too (`hysteresis_place`): its store follows y.
+        // The hysteresis's twist y = r x moves with the nut's place too (`hysteresis_place`): its store follows y, and at
+        // the anchor its branch goes by y' / r = x' + moved s', which a nut travelling at a standing twist turns alone.
+        let z = here.hysteresis_torque(x, rate).0;
         let moved = if z == 0.0 { 0.0 } else { self.hysteresis_place(rotor_angle, out_angle, rate) / z };
+        let (z, slope) = here.hysteresis_torque(x, rate + moved * rotor_speed / self.ratio);
+        let stored = if z == 0.0 { 0.0 } else { z * slope / here.dahl_stiffness };
         // The store's change with the nut's place, -T^2 c' s' / 2 (`travel_force`), is not lost.
         t.rotor * rotor_speed
             - t.output * out_speed
@@ -1880,6 +1892,7 @@ preload_n = 200.0
             dahl_stiffness: 1e4,
             back_ratio: 1.0,
             anchor: [f64::NAN, 0.0],
+            twist_scale: 1.0,
             knees: [f64::INFINITY; 2],
             upper: [1e4; 2],
             mesh_stiffness: 0.0,
@@ -2349,6 +2362,107 @@ preload_n = 200.0
         let balance = t.rotor * w - t.output * v - rate;
         assert!((loss - balance).abs() < 1e-6, "{loss} against {balance}");
         assert!((loss - 0.0996063).abs() < 1e-6, "{loss}");
+    }
+
+    /// The screw of `the_hysteresis_behind_a_screw_acts_on_the_gears_own_twist`, its hysteresis along the stroke or not.
+    fn hysteresis_screw(along: bool) -> Gearbox {
+        let travel = TravelCompliance {
+            ae: 1e4,
+            length: 1.0,
+            both_ends: false,
+            fixed_bearing_at: -0.2,
+            reference: 1e-4,
+            gear: [0.0; 2],
+            converter: [0.0; 2],
+        };
+        Gearbox {
+            stiffness: 5e3,
+            upper: [5e3; 2],
+            half_backlash: 0.0,
+            hysteresis: 1.0,
+            dahl_stiffness: 5e3,
+            travel: along.then_some(travel),
+            ..gearbox()
+        }
+    }
+
+    /// Right after a step's end (where `Sim::step` takes the loss powers) the hysteresis's branch is the move's, not
+    /// rounding's: committed at a twist x with z > 0, the loss is z^2 |y'| / (r T_h) by hand, y' / r = x' - K c' x s'
+    /// the gear's own twist's rate (`hysteresis_place`, K and T_h at the nut, c' the shaft's compliance's slope, s' the
+    /// nut's speed), for the twist running on, turning back, and standing while the nut travels either way. 200 anchors
+    /// along the stroke. With the anchor's x rebuilt as (x r) / r, 87 of 400 were off by more than 0.1 % (worst 200 %,
+    /// the sign flipped) behind the screw, none without it.
+    #[test]
+    fn the_hysteresis_loss_at_the_anchor_goes_by_the_move() {
+        for along in [false, true] {
+            for k in 0..200 {
+                let mut g = hysteresis_screw(along);
+                let q = 0.3 + 1e-3 * k as f64;
+                let x = 2e-4 + 1e-7 * k as f64;
+                g.commit(5.0 * (q + 1e-4), q);
+                let (rotor, out) = (5.0 * (q + x), q);
+                g.commit(rotor, out);
+                let s = g.nut(rotor);
+                let here = g.at(s);
+                let z = here.hysteresis_torque(x, 0.0).0;
+                assert!(z > 0.0);
+                let shift = g.travel.map_or(0.0, |t| -here.stiffness * t.delta(s).1 * x);
+                // (rotor, output) speeds: the twist on and back with the output still, and the nut travelling at a
+                // standing twist.
+                for (w, v) in [(5e-3, 0.0), (-5e-3, 0.0), (5.0, 1.0), (-5.0, -1.0)] {
+                    let own = w / 5.0 - v + shift * w / 5.0;
+                    let hand = z * z * own.abs() / here.hysteresis;
+                    let loss = g.loss_power(rotor, w, out, v);
+                    if hand == 0.0 {
+                        assert!(loss.abs() < 1e-12, "{along} {k} {w}: {loss} W");
+                    } else {
+                        assert!((loss / hand - 1.0).abs() < 1e-6, "{along} {k} {w}: {loss} against {hand} W by hand");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The nut held at 0.3 m, the load 2 + 0.8 sin(2 pi 7 t) N m for a second, the anchor committed after each step:
+    /// the work put in less the store's change less the loss integrated (trapezoids) closes as without the screw's
+    /// compliance along the stroke. With the branch at the anchor from rounding 8.8e-5 J of 6.5e-4 J lost stayed open at
+    /// any step.
+    #[test]
+    fn the_hysteresis_behind_a_screw_closes_its_budget_over_load_cycles() {
+        let open = |along: bool| {
+            let mut g = hysteresis_screw(along);
+            let n = 100_000;
+            let dt = 1.0 / n as f64;
+            let state = |g: &Gearbox, t: f64| {
+                let f = 2.0 + 0.8 * (std::f64::consts::TAU * 7.0 * t).sin();
+                (5.0 * (0.3 + f / g.at(0.3).stiffness), 0.3)
+            };
+            let power = |g: &Gearbox, t: f64| {
+                let h = 1e-7;
+                let ((r, o), (a, b)) = (state(g, t), (state(g, t + h), state(g, t - h)));
+                let w = (a.0 - b.0) / (2.0 * h);
+                let tq = g.torque(r, w, o, 0.0);
+                (tq.rotor * w, g.loss_power(r, w, o, 0.0))
+            };
+            let (r, o) = state(&g, 0.0);
+            g.commit(r, o);
+            let e0 = g.energy(r, o);
+            let (mut work, mut lost) = (0.0, 0.0);
+            for i in 0..n {
+                let t = i as f64 * dt;
+                let ((p0, l0), (p1, l1)) = (power(&g, t), power(&g, t + dt));
+                work += 0.5 * (p0 + p1) * dt;
+                lost += 0.5 * (l0 + l1) * dt;
+                let (r, o) = state(&g, t + dt);
+                g.commit(r, o);
+            }
+            let (r, o) = state(&g, 1.0);
+            (work - (g.energy(r, o) - e0) - lost, lost)
+        };
+        let ((plain, _), (screw, lost)) = (open(false), open(true));
+        println!("open {plain:e} J without the stroke, {screw:e} J with it, of {lost:e} J lost");
+        assert!(lost > 1e-4);
+        assert!(screw.abs() < 2.0 * plain.abs().max(1e-7), "{screw} J open, {plain} J without the stroke");
     }
 
     /// The lost-motion band, by hand. K1 1e4 N m/rad, half backlash 4e-4 rad, a band of 2e-4 rad: 1e-4 rad into the band
