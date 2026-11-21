@@ -131,7 +131,7 @@ fn cross(u: [f64; 3], v: [f64; 3]) -> [f64; 3] {
 }
 
 /// The arc from `from` through `via` to `to` (two or three axes, by position): its centre and whether `path` reads it
-/// clockwise. `None` where the three points are on one line.
+/// clockwise. `None` where the three points are on one line or so far out that the centre overflows.
 fn arc_through(from: &[f64], via: &[f64], to: &[f64]) -> Option<(Vec<f64>, bool)> {
     let n = from.len();
     if !(2..=3).contains(&n) {
@@ -150,6 +150,10 @@ fn arc_through(from: &[f64], via: &[f64], to: &[f64]) -> Option<(Vec<f64>, bool)
     let (uu, ww) = (u.iter().map(|x| x * x).sum::<f64>(), w.iter().map(|x| x * x).sum::<f64>());
     let m = cross([uu * w[0] - ww * u[0], uu * w[1] - ww * u[1], uu * w[2] - ww * u[2]], normal);
     let centre: Vec<f64> = (0..n).map(|i| s[i] + m[i] / (2.0 * nn)).collect();
+    // Points near f64's range overflow the squares above: no centre to compute with.
+    if !centre.iter().all(|c| c.is_finite()) {
+        return None;
+    }
     // The travel turns about `normal`; the path's viewing normal is +z, else -y, else +x.
     let viewing = if normal[2].abs() > 1e-12 * nn.sqrt() {
         [0.0, 0.0, 1.0]

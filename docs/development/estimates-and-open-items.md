@@ -264,6 +264,8 @@ Fixed:
   on the rise's cubic, the fall's state on its own cubic), with the rise's and the fall's state as
   two knots at the same time: same place and speed, only the acceleration steps. Swept over 380 to
   420 rad/s in planned_limits; `path::tests::the_runs_meet_at_the_same_place_and_speed`.
+- Program reader: an arc through points near f64's range (`MoveL,2145413,-8.4e301` then `MoveC`) had a
+  NaN centre and was taken; now refused (`program-error-arc`).
 
 Open, with the cause where it is known:
 - **A screw or rack behind a converter: the coupling's damping acts across the whole series spring**

@@ -102,6 +102,14 @@ mod found {
         assert_eq!(read("p.src", krl, axes, &[0.0; 2]).unwrap_err().line, 3);
     }
 
+    /// A start at y = -8e301 overflows the squares of an arc's chords: the arc's centre came out NaN and was taken.
+    #[test]
+    fn an_arc_whose_centre_overflows_is_refused() {
+        let text = "MoveL,2145413,-8.379247051444001e301\nMoveC,0,1,1,0\nMoveJ,0.1,0.2";
+        let error = read("moves.csv", text, &machines()[0], &[0.0; 2]).unwrap_err();
+        assert_eq!((error.line, error.key), (2, "program-error-arc"));
+    }
+
     /// A slave of 1e308 next to one of 1 overflows the spline's slopes: the cam's rates were infinite.
     #[test]
     fn a_cam_table_whose_slopes_overflow_is_refused() {
