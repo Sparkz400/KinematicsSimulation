@@ -715,7 +715,11 @@ tolerance_m = "gantry.sync_tolerance_m"
   an wächst der Bahnfehler seines Zyklus von 0,06 auf 1,12 mm. Beim CoreXY zieht jeder Riemen an beiden Enden: sein
   Moment ist die Summe der Zugkräfte des einen Riemens gegen die des anderen, -0,19 N m für den Zug von 8 N, der einen
   H-Bot mit -2,4 gieren ließe, und sein Bahnfehler bleibt 0,02 mm. Ein starrer Riemen hält das Gieren eines CoreXY: sein
-  starres Modell hat keins.
+  starres Modell hat keins. (Im Text vom 14. November standen 0,80, 0,20 und 0,06 mm; sein eigener Stand gibt 1,07, 0,25
+  und 0,06 mm. Die 1,07 mm des H-Bots wurden am 16. November (024b876a) 1,12 mm, die 0,224 mm des Zahnstangenportals
+  0,225 mm: die Trume der Riemen der Dateien tragen ihre eigene Masse, beim H-Bot mu (L + 8 (0,65 - y)) auf X, wo die
+  Klumpen mu L hatten (0,86 gegen 0,42 kg bei y = 0,1 m), also fährt mehr Masse mit dem Kopf und lässt die Brücke gieren. Die 0,06 mm des CoreXY wurden
+  am 14. November mit dem Merge d360b7ed 0,02 mm.)
 
 **Körper auf Drehachsen und der Werkzeugmittelpunkt.** Ein Körper darf mit Drehachsen fahren: `offset_m` ist sein
 Schwerpunkt von dort, wo sich ihre Achsen bei Winkel 0 treffen, und er fährt auf ihnen herum, die erste in seinen

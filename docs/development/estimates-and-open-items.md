@@ -406,6 +406,19 @@ Fixed:
   rises the last one started at (on this cycle 0.69 K apart, seven times the tolerance): the verdict row
   `thermal-cycle-repeat` and the CLI's message name the cause.
 
+- The yaw path errors of `docs/machine-files.md` (H-bot 0.80 → 1.12 mm, rack gantry 0.20 → 0.23, CoreXY 0.06 → 0.02
+  between the text of 14 November and 21 November): measured with `sim-cli analyze --machine-file FILE --set
+  effects.gantry_yaw=true` on builds of main (and each commit's own files). The 0.80 and 0.20 mm were never the program's:
+  b954254b, the commit that wrote them, gives 1.070 and 0.249 mm. The H-bot's 1.070 → 1.120 mm (yaw off 0.060 → 0.063,
+  rack gantry 0.2237 → 0.2250) is 024b876a (merged as 124d9120, 16 November), the belt runs' own mass in the files:
+  that build's program on the file before it gives 1.070, the program before it on the file after it 1.120, and with
+  effects.belt_mass off both give 1.070. The runs put mu (L + 8 (0.65 - y)) of belt on the H-bot's X (0.86 kg at
+  y = 0.1 m where the lumps had 0.42, the hand value of `the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand`),
+  more mass moving with the head that racks the bridge: the more correct figure, kept. Left out still: the runs do not
+  follow the yaw (`machine.span`'s speeds are per axis speed). The CoreXY's 0.063 → 0.020 mm came with d360b7ed (14
+  November, the gantry branch merged with that day's other branches), before the 17 November texts. The bisect logs in
+  the earlier scratchpad (`bisect-*.log`) were the ISW screw's (worst sample 3.6487 N m), not these.
+
 Open, with the cause where it is known:
 - Fixed (21 November): the warm start for a motor near its limit (1FK2104-4AF on the EXCT-30) now
   converges; the motor fails settling (0.36 mm) with its winding settled at 98 K, and a cycle that

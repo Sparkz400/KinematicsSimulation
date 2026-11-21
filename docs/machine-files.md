@@ -683,7 +683,11 @@ tolerance_m = "gantry.sync_tolerance_m"
   motors held), so it racks in both models; with the effect on the path error of its cycle grows from 0.06 to 1.12 mm.
   In the CoreXY each belt pulls both ends: its moment is the one belt's tension sum against the other's, -0.19 N m for
   the 8 N pull that would rack an H-bot with -2.4, and its path error stays 0.02 mm. A rigid belt holds a CoreXY's yaw:
-  its rigid model has none.
+  its rigid model has none. (These figures were 0.80, 0.20 and 0.06 mm in the text of 14 November; its own build gives
+  1.07, 0.25 and 0.06 mm. The H-bot's 1.07 became 1.12 mm, the rack gantry's 0.224 0.225 mm, on 16 November (024b876a):
+  the files' belt runs carry their own mass, the H-bot's mu (L + 8 (0.65 - y)) on X where the lumps had mu L (0.86 against 0.42 kg at y = 0.1 m), so
+  more mass rides with the head and racks the bridge. The CoreXY's 0.06 became 0.02 mm on 14 November, with the merge
+  d360b7ed.)
 
 **Bodies on rotary axes, and the tool centre point.** A body may move with rotary axes: `offset_m` is its centre of
 mass from where their axes meet at angle 0, and it rides round on them, the first in its `axes` outermost. A rotary
