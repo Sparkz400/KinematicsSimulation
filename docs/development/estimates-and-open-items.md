@@ -254,8 +254,6 @@ Not re-run on 21 November 2026 (the figures stand as dated in the text):
   in the guides; the two-box height profile (4.72 s against 3.87 s, a test's figures).
 - The D3's Morris figures (36 values, 370 cycles; the D3 is unchanged by the changes above).
 - The base table's rows other than the five above (17 November).
-- The mode damping ratios of the tripod's, hexapod's and parallel SCARA's modes: another agent's fix of
-  the damping reported at the far end of a screw moves them; left for that fix.
 - `docs/machine-files.md`: the dual gantry's yaw mode (155.0 and 149.5 Hz with J raised to 20 kg m²):
   `sim-cli modes --axis-index 1` reports one mode only, and not the yaw's figures (96.4 Hz in the
   middle, 151.7 and 124.5 Hz at the ends, damping 0); not reproduced, the cause not looked into.
@@ -394,16 +392,16 @@ Fixed:
   `thermal-cycle-repeat` and the CLI's message name the cause.
 
 Open, with the cause where it is known:
-- The warm start does not settle for a motor near its limit (1FK2104-4AF on the EXCT-30, 6.9 K): not
-  a numerical defect, the cycle repeats only every second pass (motor a's settled rise alternates
-  102 / 92 K). Needs a two-pass warm start or a message that says so.
+- Fixed (21 November): the warm start for a motor near its limit (1FK2104-4AF on the EXCT-30) now
+  converges; the motor fails settling (0.36 mm) with its winding settled at 98 K, and a cycle that
+  repeats only every second pass is named by the `thermal-cycle-repeat` verdict.
 - The linear delta at a +20° column incline is refused with "out of range: cycle.segment[2]": the
   machine's own reason (`unreachable`) is dropped in `control.rs`; the front ends' message has one
   placeholder.
-- The T-gantry's `belt-slack` row prints 169.8 against a limit of 0 and says ok: it is the least
-  tension; a rename to `belt-min-tension` touches about 80 places.
+- Fixed: the T-gantry's least belt tension prints as `belt-least-tension` in the program and in the
+  guides.
 - The optimiser's run count: the search is capped at `--runs`; `--pareto` and raised lifts add
-  runs. The guide's "46 + 834" example is probably stale.
+  runs. The guide's example now reads 40 + 834 (21 November).
 - Stale comments: the five-bar's "235 of 192 N m" and "NRB080-05-20: 120 rated, 192 maximum" (the
   gearbox is now 347 / 278 N m); the palletiser's `gearbox.efficiency_torque_nm` comment (137 against
   600); the app label "Line module loss while feeding back" (the loss now counts while drawing too).
