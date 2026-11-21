@@ -211,7 +211,7 @@ pub fn build(entry: &MachineEntry, config: &Config) -> Result<Box<dyn Machine>, 
 /// The modes the machine reports at `pose`, lowest first, each with a shape: the machine's own for the mode it gives one
 /// of, else that of the oscillation nearest the reported one of its linearised model with the motors free (`linearised`)
 /// or with the rotors held (`linearised_held`, as `Machine::modes` has them), a real eigenvalue never (`eigen_near`;
-/// the mover track's held 694.28 Hz was paired with its rollers' friction pole, 101.8 Hz, until 21 November), scaled so
+/// a held 694.28 Hz mode was paired with a roller friction pole, 101.8 Hz, until 21 November), scaled so
 /// that the tool moves by at most 1 m per unit (or, where it does not move, the largest entry is 1).
 pub fn mode_views(entry: &MachineEntry, config: &Config, pose: &[f64]) -> Result<Vec<ModeView>, ConfigError> {
     let machine = build(entry, config)?;
