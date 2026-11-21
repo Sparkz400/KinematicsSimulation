@@ -419,19 +419,12 @@ Fixed:
   rises the last one started at (on this cycle 0.69 K apart, seven times the tolerance): the verdict row
   `thermal-cycle-repeat` and the CLI's message name the cause.
 
-Open, with the cause where it is known:
-- Fixed (21 November): the warm start for a motor near its limit (1FK2104-4AF on the EXCT-30) now
-  converges; the motor fails settling (0.36 mm) with its winding settled at 98 K, and a cycle that
-  repeats only every second pass is named by the `thermal-cycle-repeat` verdict.
-- The linear delta at a +20° column incline is refused with "out of range: cycle.segment[2]": the
-  machine's own reason (`unreachable`) is dropped in `control.rs`; the front ends' message has one
-  placeholder.
-- Fixed: the T-gantry's least belt tension prints as `belt-least-tension` in the program and in the
-  guides.
-- The optimiser's run count: the search is capped at `--runs`; `--pareto` and raised lifts add
-  runs. The guide's example now reads 40 + 834 (21 November).
-- Stale comments: the five-bar's "235 of 192 N m" and "NRB080-05-20: 120 rated, 192 maximum" (the
-  gearbox is now 347 / 278 N m); the palletiser's `gearbox.efficiency_torque_nm` comment (137 against
-  600); the app label "Line module loss while feeding back" (the loss now counts while drawing too).
-- Machine files' `[screw_*]` tables have no `friction_coefficient`, which `effects.screw_lead_efficiency`
-  probably needs: not tried.
+Fixed after the list of 17 November (in main, 20 November):
+- The warm start for a motor near its limit (1FK2104-4AF on the EXCT-30) converges; a cycle that repeats
+  only every second pass is named by the `thermal-cycle-repeat` verdict.
+- A target the machine cannot reach is refused with the segment and the machine's own reason
+  (732420e1; the linear delta at +20°: a rod would stand steeper than its joints allow).
+- The least belt tension prints as `belt-least-tension`; the optimiser example reads 40 + 834.
+- Stale comments: the five-bar's SP100 gearboxes, the palletiser's efficiency torque, the line module's
+  loss label (c5fafd68).
+- Machine files' `[screw_*]` tables carry `friction_coefficient` (3c0c73b6).
