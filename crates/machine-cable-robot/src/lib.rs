@@ -488,6 +488,8 @@ pub struct CableRobot {
     drum_radius: f64,
     thermal: Option<ThermalFeedback>,
     brake_engaged: bool,
+    /// An obstacle's push on the platform, per axis (`Machine::set_tool_force`), held until changed; empty for none.
+    push: Vec<f64>,
     axes: Vec<AxisInfo>,
     motors: Vec<MotorInfo>,
     /// The pose Gauss-Newton starts from: the centre of the tool's box.
@@ -702,6 +704,7 @@ impl CableRobot {
             drum_radius,
             thermal: ThermalFeedback::from_config(cfg)?,
             brake_engaged: false,
+            push: Vec::new(),
             axes,
             motors: (0..m).map(|k| MotorInfo { id: MOTOR_IDS[k], key: MOTOR_KEYS[k] }).collect(),
             home: (0..n).map(|k| 0.5 * (min[k] + max[k])).collect(),
@@ -1198,6 +1201,15 @@ impl CableRobot {
             .collect()
     }
 
+    /// The push at the tool on the platform, taken off its bias (M xi' = A t - bias): the wrench of its virtual power per
+    /// unit of each component of the twist (`sim_core::tool_force_on_rates`, through `pose_rate`).
+    fn pushed(&self, s: &[f64], bias: &mut [f64]) {
+        let n = self.n();
+        if let Some(push) = sim_core::tool_force_on_rates(self, s, &self.push, n..2 * n) {
+            bias.iter_mut().zip(push).for_each(|(b, p)| *b -= p);
+        }
+    }
+
     /// Pose and twist of a state.
     fn platform<'a>(&self, s: &'a [f64]) -> (&'a [f64], &'a [f64]) {
         let n = self.n();
@@ -1271,7 +1283,8 @@ impl CableRobot {
         let a = self.structure(&spans);
         let curve = self.length_curvature(&spans, pose, xi);
         let mass = self.platform_mass(pose);
-        let bias = self.platform_bias(pose, xi);
+        let mut bias = self.platform_bias(pose, xi);
+        self.pushed(s, &mut bias);
         let drive: Vec<f64> = (0..m)
             .map(|k| self.winches[k].rigid_drive(torque[k], rotor[k], speed[k], brakes[k], self.brake_engaged).0)
             .collect();
@@ -1756,7 +1769,8 @@ impl Machine for CableRobot {
         let a = self.structure(&spans);
         let rates = self.length_rates_with(&a, xi);
         let t = self.tensions(&spans, &rates, free, free_rates);
-        let bias = self.platform_bias_at(&rot, &spans, Some(free), xi);
+        let mut bias = self.platform_bias_at(&rot, &spans, Some(free), xi);
+        self.pushed(s, &mut bias);
         let mut acc: Vec<f64> =
             (0..n).map(|r| (0..m).map(|k| a[r * m + k] * t.platform[k]).sum::<f64>() - bias[r]).collect();
         if !solve_in_place(&mut self.platform_mass_at(&rot), &mut acc) {
@@ -1912,6 +1926,13 @@ impl Machine for CableRobot {
 
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+    /// The push acts on the platform, beyond the cables, in either model (`pushed`); its power is the budget's crash
+    /// row.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push.clear();
+        self.push.extend_from_slice(force);
+        true
     }
 
     /// The gearboxes, in the order of `thermal_parts`.

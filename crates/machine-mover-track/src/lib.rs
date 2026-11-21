@@ -576,8 +576,8 @@ impl Mechanism for Movers {
     /// its mass centre, e outside the centre line square to the body's heading, the mean over its rollers
     /// (`Track::mean_heading`), which turns at the curvature the dynamics have (`mean_curvature`): it runs at
     /// v t + e k v along that heading, v (1 + e k) where the two headings agree (a constant radius, a straight). The
-    /// magnet plate on the centre line at the rotor's speed (`rotor_spin`, its mass times that speed), as the joint kit's
-    /// forcer. The track lies level: the weight does no work and the first moment stays at its height.
+    /// magnet plate on the centre line at the rotor's speed (`rotor_spin`, its mass times that speed), as a linear
+    /// motor's forcer. The track lies level: the weight does no work and the first moment stays at its height.
     fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<FrameMomentum> {
         let mut f = FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
         let (track, e, w) = (&self.track, self.centre_offset, self.wheelbase);
@@ -1025,6 +1025,9 @@ impl Machine for MoverTrack {
     }
     fn set_dwelling(&mut self, dwelling: bool) {
         self.inner.set_dwelling(dwelling)
+    }
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.inner.set_tool_force(force)
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.inner.set_brake_engaged(engaged)

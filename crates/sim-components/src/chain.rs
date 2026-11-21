@@ -570,6 +570,8 @@ pub struct JointMachine<M: Mechanism> {
     flex: usize,
     /// Whether the modes are two-way (`Mechanism::flex_coupling`).
     two_way: bool,
+    /// An obstacle's push on the tool, per axis (`Machine::set_tool_force`), held until changed; empty for none.
+    push: Vec<f64>,
 }
 
 /// The losses of one moment: per joint its friction, its motor's friction with the brake, its gearbox; then the stops
@@ -612,7 +614,29 @@ impl<M: Mechanism> JointMachine<M> {
             passive_row,
             flex,
             two_way,
+            push: Vec::new(),
         }
+    }
+
+    /// The push at the tool (`push`) on the driven joints at q: its virtual work per unit of each, through the Jacobian
+    /// `tool_state` takes the tool's speed with, sum_i F_i d tool_i / d q_k. `None` without a push.
+    fn push_on_joints(&self, q: &[f64]) -> Option<Vec<f64>> {
+        if self.push.iter().all(|f| *f == 0.0) {
+            return None;
+        }
+        let (n, jac) = (self.n(), self.jacobian(q));
+        Some((0..n).map(|k| self.push.iter().enumerate().map(|(i, f)| f * jac[i * n + k]).sum()).collect())
+    }
+
+    /// The push at the tool on the bending modes at joints q: per mode the tool's move by a unit deflection
+    /// (`flex_shift`, linear in it) times the push. `None` without a push or modes.
+    fn push_on_modes(&self, q: &[f64]) -> Option<Vec<f64>> {
+        if self.flex == 0 || self.push.iter().all(|f| *f == 0.0) {
+            return None;
+        }
+        let unit = |m: usize| (0..self.flex).map(|i| if i == m { 1.0 } else { 0.0 }).collect::<Vec<f64>>();
+        let on = |m: usize| self.flex_shift(q, &unit(m)).iter().zip(&self.push).map(|(x, f)| x * f).sum();
+        Some((0..self.flex).map(on).collect())
     }
 
     /// `rest_sag` as it is at the build: worked out on first use, before anything it reads changes (the payload, a
@@ -703,6 +727,9 @@ impl<M: Mechanism> JointMachine<M> {
         let (q, qd) = self.arms(s);
         let mut load = vec![0.0; self.flex];
         self.mechanism.flex_loads(q, qd, &acc[..q.len()], &mut load);
+        if let Some(push) = self.push_on_modes(q) {
+            load.iter_mut().zip(push).for_each(|(l, p)| *l += p);
+        }
         let ((d, rate), at, m) = (self.flex_state(s), self.flex_at(), self.flex);
         for (k, mode) in self.mechanism.flex_modes().iter().enumerate() {
             out[at + k] = rate[k];
@@ -729,6 +756,7 @@ impl<M: Mechanism> JointMachine<M> {
         let (all, f) = (rhs.len(), self.flex);
         let size = all + f;
         let ((d, rate), modes) = (self.flex_state(s), self.mechanism.flex_modes());
+        let push = self.push_on_modes(&s[..self.n()]).unwrap_or_else(|| vec![0.0; f]);
         let (mut m, mut b) = (vec![0.0; size * size], vec![0.0; size]);
         for r in 0..all {
             m[r * size..r * size + all].copy_from_slice(&mass[r * all..(r + 1) * all]);
@@ -740,7 +768,7 @@ impl<M: Mechanism> JointMachine<M> {
                 m[j * size + all + i] = c.coupling[i * all + j];
             }
             m[(all + i) * size + all..(all + i + 1) * size].copy_from_slice(&c.mass[i * f..(i + 1) * f]);
-            b[all + i] = c.force[i] - modes[i].stiffness * d[i] - modes[i].damping * rate[i];
+            b[all + i] = c.force[i] - modes[i].stiffness * d[i] - modes[i].damping * rate[i] + push[i];
         }
         solve(&m, &b).unwrap_or_else(|| vec![f64::NAN; size])
     }
@@ -914,7 +942,10 @@ impl<M: Mechanism> JointMachine<M> {
                 self.joints[k].drive.rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0
             })
             .collect();
-        let process = self.process(q, qd);
+        let mut process = self.process(q, qd);
+        if let Some(push) = self.push_on_joints(q) {
+            process.iter_mut().zip(push).for_each(|(p, f)| *p += f);
+        }
         let rest: Vec<f64> = (0..n)
             .map(|k| self.joints[k].drive.output_torque(q[k], qd[k]) - bias[k] + process[k])
             .chain((0..p).map(|i| springs[i] - bias[n + i]))
@@ -1405,6 +1436,10 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         self.mechanism.dynamics(qa, qda, mass, bias);
         let springs = self.passive_torque(&qa[n..], &qda[n..]);
         self.mechanism.process_torque(q, qd, process);
+        // An obstacle's push at the tool acts on the joints beyond the gearboxes, as the process does.
+        if let Some(push) = self.push_on_joints(q) {
+            process.iter_mut().zip(push).for_each(|(p, f)| *p += f);
+        }
         for i in 0..p {
             rhs[n + i] = springs[i] - bias[n + i];
         }
@@ -1622,6 +1657,13 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+    /// The push acts on the joints beyond the gearboxes and on the links' bending modes, as the tool moves with each
+    /// (`push_on_joints`, `push_on_modes`), in either model; its power is the budget's crash row.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push.clear();
+        self.push.extend_from_slice(force);
+        true
     }
 
     /// The gearboxes, in the order of `thermal_parts`.

@@ -879,7 +879,8 @@ inertia_kgm2 = "pulley.inertia_kgm2"
 at_m = [0.5, 0.25, -0.05]
 pos = [300, 600]
 
-# X: clamp to motor (0.1 m + x) and motor round the far idler back to the clamp (0.1 m + stroke + 0.1 m - x).
+# X, a loop as Z's: the motor and the far idler 0.1 m + stroke + 0.1 m = 1.2 m apart, the clamp to the motor 0.1 m + x,
+# back from the motor round the far idler to the clamp 1.2 m + 1.1 m - x.
 [[machine.section]]
 id = "x1"
 length_m = 0.1
@@ -890,13 +891,14 @@ pos = [450, -60]
 
 [[machine.section]]
 id = "x2"
-length_m = 1.2
+length_m = 2.3
 axes = { x = -1 }
 pulleys = { pulley_x = -1 }
 route = ["pulley_x", "bridge"]
 pos = [450, 60]
 
-# Y, on the bridge.
+# Y, on the bridge, a loop too: the motor and the far idler 0.7 m apart, the clamp to the motor 0.1 m + y, back from the
+# motor round the far idler to the clamp 0.7 m + 0.6 m - y.
 [[machine.section]]
 id = "y1"
 length_m = 0.1
@@ -907,7 +909,7 @@ pos = [450, 240]
 
 [[machine.section]]
 id = "y2"
-length_m = 0.7
+length_m = 1.3
 axes = { y = -1 }
 pulleys = { pulley_y = -1 }
 route = ["pulley_y", "y_carriage"]
@@ -936,23 +938,21 @@ pos = [450, 660]
 # mass is summed run by run. Each belt is a loop clamped to its carriage: the run from the clamp to the motor and the
 # one from the far idler back to the clamp move with the carriage, the run from the motor to the far idler against it,
 # and a belt on a moving axis moves with that axis too (the Y belt rides on the bridge, the Z belt on the Y carriage).
-# Z's runs are its loop's: the run from the motor to the far idler is as long as the two with the slide together, so its
-# belt's momentum and weight along z cancel, and the slide's weight alone is on the Z motor. X's and Y's sections share
-# their lengths out (the run from the motor to the far idler takes 0.1 m of the second section; they lie flat, so only
-# their momentum along the axis has it):
+# Each run is its loop's: the run from the motor to the far idler is as long as the two with the carriage together, so
+# a belt's momentum along its own axis cancels (and Z's weight with it: the slide's weight alone is on the Z motor):
 #   belt  run                     length      speed over ground
 #   X     clamp to motor          0.1 + x     (vx, 0, 0)
-#         motor to far idler      0.1         (-vx, 0, 0)
+#         motor to far idler      1.2         (-vx, 0, 0)
 #         far idler to clamp      1.1 - x     (vx, 0, 0)
 #   Y     clamp to motor          0.1 + y     (vx, vy, 0)
-#         motor to far idler      0.1         (vx, -vy, 0)
+#         motor to far idler      0.7         (vx, -vy, 0)
 #         far idler to clamp      0.6 - y     (vx, vy, 0)
 #   Z     clamp to motor          0.1 + z     (vx, vy, vz)
 #         motor to far idler      0.5         (vx, vy, -vz)
 #         far idler to clamp      0.4 - z     (vx, vy, vz)
-# Every run moves at its axes' speeds squared, whatever the pose: 2T / mu = 3.1 vx^2 + 1.8 vy^2 + 1.0 vz^2, in place of
-# the lumps' third of the 3.1 m on each pulley (1.033 each): the belts add 0.207 kg on X, 0.077 kg on Y and -0.003 kg
-# on Z, and no speed terms.
+# Every run moves at its axes' speeds squared, whatever the pose: 2T / mu = 4.8 vx^2 + 2.4 vy^2 + 1.0 vz^2 (the belts
+# 2.4, 1.4 and 1.0 m long), in place of the lumps' third of the 4.8 m on each pulley (1.6 each): the belts add 0.32 kg on
+# X, 0.08 kg on Y and -0.06 kg on Z, and no speed terms.
 [[machine.span]]
 id = "x_1"
 section = "x1"
@@ -963,7 +963,7 @@ velocity_x = { x = 1 }
 [[machine.span]]
 id = "x_2"
 section = "x2"
-length_m = 0.1
+length_m = 1.2
 velocity_x = { x = -1 }
 
 [[machine.span]]
@@ -984,7 +984,7 @@ velocity_y = { y = 1 }
 [[machine.span]]
 id = "y_2"
 section = "y2"
-length_m = 0.1
+length_m = 0.7
 velocity_x = { x = 1 }
 velocity_y = { y = -1 }
 

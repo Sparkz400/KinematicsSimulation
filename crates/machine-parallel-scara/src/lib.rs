@@ -261,6 +261,8 @@ struct Extra {
     /// The stroke's screw; `None` on the turn.
     screw: Option<BallScrew>,
     thermal: Option<ThermalFeedback>,
+    /// An obstacle's push on its axis of the tool (`Machine::set_tool_force`), N or N m, held until changed.
+    push: f64,
 }
 
 impl Extra {
@@ -303,11 +305,12 @@ impl Extra {
         let (j, i) = (&self.joint, self.ratio());
         if self.elastic {
             let gear = self.gear(x);
-            let acc = (gear.output + j.output_torque(x[0], x[1]) + self.weight(attached)) / self.mass(attached);
+            let acc =
+                (gear.output + j.output_torque(x[0], x[1]) + self.weight(attached) + self.push) / self.mass(attached);
             return (acc, gear.rotor * i, gear.output);
         }
         let drive = j.rigid_drive(torque, x[0] * i, x[1] * i, x[2], engaged).0;
-        let rest = self.weight(attached) + j.output_torque(x[0], x[1]);
+        let rest = self.weight(attached) + j.output_torque(x[0], x[1]) + self.push;
         let (m, r) = (self.mass(attached), j.reflected_inertia());
         // The loss factor of the torque going in, at its fixed point (`mech::settled_loss`).
         let solve = |loss: f64| (loss * drive + rest) / (m + loss * r);
@@ -401,6 +404,9 @@ pub struct ParallelScara {
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the tool in the plane (`Machine::set_tool_force`), held until changed; the extra axes'
+    /// parts are theirs.
+    push: V2,
     joints: [RotaryJoint; 2],
     thermal: Option<ThermalFeedback>,
     /// The working range: half width, its near edge (y), its far arc's centre and radius; the condition number refused
@@ -513,7 +519,8 @@ impl ParallelScara {
         let axis = Self::axis_info(cfg, "z", "axis-z", "m", joint.range)?;
         let carried = cfg.non_negative("z_axis.unit_kg")? + carriage;
         let elastic = cfg.bool("effects.joint_elasticity")?;
-        Ok((Extra { elastic, joint, load: carriage, payload, g, screw: Some(screw), thermal: None }, axis, carried))
+        let extra = Extra { elastic, joint, load: carriage, payload, g, screw: Some(screw), thermal: None, push: 0.0 };
+        Ok((extra, axis, carried))
     }
 
     /// The tool's turn (motor 4) through its gearbox, with no stops: the tool, and the payload's inertia while held;
@@ -540,6 +547,7 @@ impl ParallelScara {
             g: 0.0,
             screw: None,
             thermal: ThermalFeedback::from_config(&own)?,
+            push: 0.0,
         };
         Ok((extra, Self::axis_info(cfg, "c", "axis-c", "rad", range)?, cfg.non_negative("tool_turn.unit_kg")?))
     }
@@ -633,6 +641,7 @@ impl ParallelScara {
             m_payload,
             payload_attached: true,
             brake_engaged: false,
+            push: [0.0; 2],
             joints: [joint.clone(), joint],
             thermal: ThermalFeedback::from_config(cfg)?,
             half_width,
@@ -792,6 +801,14 @@ impl ParallelScara {
 
     /// Rigid model: the arms' acceleration, and per joint the torque into its gearbox (after the rotor's own
     /// acceleration) and out of it, at the arm.
+    /// The push at the tool in the plane on the arms: its virtual power per unit of each arm's speed, through the
+    /// Jacobian (`sim_core::tool_force_on_rates`); zero without a push.
+    fn pushed(&self, s: &[f64]) -> V2 {
+        let force = [self.push[0], self.push[1], 0.0, 0.0];
+        let force = &force[..2 + self.extras.len()];
+        sim_core::tool_force_on_rates(self, s, force, 2..4).map_or([0.0; 2], |q| [q[0], q[1]])
+    }
+
     fn rigid_solve(&self, s: &[f64], torque: &[f64]) -> (V2, V2, V2) {
         let (t, w) = self.arms(s);
         let (rotor, rotor_speed) = self.rotors(s);
@@ -800,7 +817,8 @@ impl ParallelScara {
         let drive: V2 = std::array::from_fn(|k| {
             self.joints[k].rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0
         });
-        let rest: V2 = std::array::from_fn(|k| self.joints[k].output_torque(t[k], w[k]) - velocity[k]);
+        let push = self.pushed(s);
+        let rest: V2 = std::array::from_fn(|k| self.joints[k].output_torque(t[k], w[k]) - velocity[k] + push[k]);
         let solve = |loss: V2| -> V2 {
             let m: M2 = std::array::from_fn(|r| {
                 std::array::from_fn(|c| {
@@ -1185,12 +1203,12 @@ impl Machine for ParallelScara {
         }
         let (t, w) = self.arms(s);
         let (mass, velocity) = self.load(t, w);
-        let mut rhs = [0.0; 2];
+        let (mut rhs, push) = ([0.0; 2], self.pushed(s));
         for k in 0..2 {
             let joint = &self.joints[k];
             let (gear, rotor_acc, brake_rate) =
                 joint.rotor(torque[k], s[4 + k], s[6 + k], t[k], w[k], s[8 + k], self.brake_engaged);
-            rhs[k] = gear.output - velocity[k] + joint.output_torque(t[k], w[k]);
+            rhs[k] = gear.output - velocity[k] + joint.output_torque(t[k], w[k]) + push[k];
             out[4 + k] = s[6 + k];
             out[6 + k] = rotor_acc;
             out[8 + k] = brake_rate;
@@ -1300,6 +1318,13 @@ impl Machine for ParallelScara {
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+    /// The push acts on the arms beyond their gearboxes (`pushed`) and on each extra axis's load, in either model; its
+    /// power is the budget's crash row.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push = [force[0], force[1]];
+        self.extras.iter_mut().zip(&force[2..]).for_each(|(x, f)| x.push = *f);
+        true
     }
 
     /// The arms' gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).

@@ -99,6 +99,52 @@ fn the_dual_gantry_yaws_at_the_frequency_of_its_inertia_and_its_ends() {
     assert!(machine(&square).resonance_hz(&[1.5, 0.4]).unwrap() > hand * 1.2);
 }
 
+/// The dual-drive gantry's modes as shipped (J = 2.657 kg m2), every one with the pinions and the Y pulley held, by hand.
+/// x carries the bridge (14 kg), the Y carriage and payload (5 kg) and the Y belt's runs (its loop's 2.0 m, 0.2 kg, none
+/// of it on the pulley's lump along x): 19.2 kg on 2 k_end; the yaw J + 5 e^2 on 2 k_end 0.6^2 + 2e5 N m/rad; the Y
+/// carriage 5 kg on its belt's two sections, EA (1 + 300 / 5e5) (1 / (0.1 + y) + 1 / (1.9 - y)) (its runs' 0.2 kg all on
+/// the pulley's lump). The carriage at e = y - 0.4 from the bridge's centre couples x and the yaw by 5 e. In the middle
+/// (e = 0): the Y belt 82.21 Hz, x 262.34 Hz and the yaw sqrt(1.89797e7 / 2.657) / 2 pi = 425.37 Hz; at the end y = 0.8
+/// (e = 0.4) the belt 71.56 Hz and the pair of x and the yaw from det(K - w^2 M) = 0 with M = [[19.2, 2], [2, 3.457]],
+/// 255.60 and 394.83 Hz. The Y belt's damping ratio is its two sections' 100 N s/m each over 2 m w; the yaw's and x's
+/// take the racks' and the joints' dampers, more than none. Before the file machine told its modes (`Machine::modes`),
+/// it gave its lowest alone, undamped.
+#[test]
+fn the_dual_gantry_reports_its_yaw_among_its_modes_by_hand() {
+    let r = pinion_radius();
+    let end = 1.0 / (r * r / 35752.6 + 1.0 / 1e8);
+    let (k_x, k_yaw, j) = (2.0 * end, 2.0 * end * 0.36 + 2.0e5, 2.657);
+    let m = machine(&config("dual-gantry.toml", &[]));
+    let belt = |y: f64| 5e5 * (1.0 + 300.0 / 5e5) * (1.0 / (0.1 + y) + 1.0 / (1.9 - y));
+    for y in [0.4, 0.8] {
+        let e = y - 0.4;
+        // The x and yaw pair: a l^2 - b l + c = 0 for l = w^2.
+        let (m11, m12, m22) = (19.2, 5.0 * e, j + 5.0 * e * e);
+        let (a, b, c) = (m11 * m22 - m12 * m12, k_x * m22 + k_yaw * m11, k_x * k_yaw);
+        let root = (b * b - 4.0 * a * c).sqrt();
+        let w_belt = (belt(y) / 5.0).sqrt();
+        let mut hand = vec![w_belt, ((b - root) / (2.0 * a)).sqrt(), ((b + root) / (2.0 * a)).sqrt()];
+        hand.sort_by(f64::total_cmp);
+        let modes = m.modes(&[1.5, y]);
+        let hz: Vec<f64> = modes.iter().map(|mode| mode.hz).collect();
+        assert_eq!(hz.len(), 3, "at y = {y}: {modes:?}");
+        for (got, w) in hz.iter().zip(&hand) {
+            assert!(
+                close(*got, w / TAU, 1e-9),
+                "at y = {y}: {hz:?} against {:?} by hand",
+                hand.iter().map(|w| w / TAU).collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(m.resonance_hz(&[1.5, y]), Some(hz[0]));
+        let at = hand.iter().position(|w| *w == w_belt).unwrap();
+        assert!(close(modes[at].damping, 200.0 / (2.0 * 5.0 * w_belt), 1e-9), "{modes:?}");
+        assert!(modes.iter().all(|mode| mode.damping > 0.0), "{modes:?}");
+    }
+    let middle: Vec<f64> = m.modes(&[1.5, 0.4]).iter().map(|mode| mode.hz).collect();
+    assert!((middle[0] - 82.21).abs() < 0.01 && (middle[1] - 262.34).abs() < 0.01, "{middle:?}");
+    assert!((middle[2] - 425.37).abs() < 0.01 && close(middle[2], (k_yaw / j).sqrt() / TAU, 1e-9), "{middle:?}");
+}
+
 /// The H-bot's racking by hand (machines/h-bot.toml with effects.gantry_yaw on). Its belt pulls the bridge's ends along
 /// x: per rad of yaw section 1 gets longer by -0.3 m, section 2 by 0.6 m and section 3 by -0.3 m, so the belt's moment
 /// on the bridge is -sum(c T) = 0.3 (T1 - 2 T2 + T3), and the head's pull along y is -(T1 - 2 T2 + T3). Accelerating
@@ -341,9 +387,10 @@ fn the_gantry_and_rotary_files_pass_the_standard_suite() {
     }
 }
 
-/// Broken gantries and tools are refused by key: a second rack on X that no gantry names, a body's offset off the
-/// rotary axes, a tool centre point whose axes are not x, y and z in that order, and a gantry drive that drives another
-/// axis.
+/// Broken gantries and tools are refused by key: a second rack on X that no gantry names, a tool centre point whose axes
+/// are not x, y and z in that order, and a gantry drive that drives another axis. A body's offset off the rotary axes is
+/// taken since 21 November (a constant offset of its centre of mass): the bridge 0.1 m higher moves the frame momentum's
+/// first moment by 14 kg * 0.1 m and leaves the dynamics as they were.
 #[test]
 fn a_broken_gantry_or_tool_is_refused() {
     let known: Vec<Config> = MACHINES.iter().map(|m| m.config()).collect();
@@ -358,8 +405,22 @@ fn a_broken_gantry_or_tool_is_refused() {
     };
     let gantry = read("dual-gantry.toml");
     assert!(refused(&gantry, "drives = { mx1 = -0.6, mx2 = 0.6 }\n", "").starts_with("machine.rack[rack_x2].axis"));
-    let offset = refused(&gantry, "axes = [\"x\"]\npos = [750, 0]", "axes = [\"x\"]\noffset_m = [0.0, 0.0, 0.1]");
-    assert_eq!(offset, "machine.body[bridge].offset_m (only on rotary axes)");
+    let raised = gantry.replacen("axes = [\"x\"]\npos = [750, 0]", "axes = [\"x\"]\noffset_m = [0.0, 0.0, 0.1]", 1);
+    assert_ne!(raised, gantry, "the change applies");
+    let build = |text: &str| {
+        let entry = sim_netlist::from_text(text, true, "offset", &known).unwrap_or_else(|e| panic!("{e:?}"));
+        (entry.build)(&entry.config()).unwrap()
+    };
+    let (plain, high) = (build(&gantry), build(&raised));
+    let (mut state, mut held) = (Vec::new(), [0.0; 3]);
+    plain.equilibrium(&[1.5, 0.3], &mut state, &mut held);
+    plain.set_tool_velocity(&mut state, &[0.4, -0.2]);
+    let (a, b) = (plain.frame_momentum(&state).unwrap(), high.frame_momentum(&state).unwrap());
+    assert!(close(b.first_moment[2] - a.first_moment[2], 14.0 * 0.1, 1e-12), "{a:?}\n{b:?}");
+    let (mut da, mut db) = (vec![0.0; state.len()], vec![0.0; state.len()]);
+    plain.derivatives(&state, &held, &mut da);
+    high.derivatives(&state, &held, &mut db);
+    assert_eq!(da, db);
     let other = refused(&gantry, "mx2 = 0.6 }", "mx2 = 0.6, my = 0.0 }");
     assert!(other.starts_with("machine.gantry[bridge_yaw].drives.my"), "{other}");
     let portal = read("portal-c.toml");

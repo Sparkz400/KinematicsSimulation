@@ -2046,24 +2046,26 @@ fn the_belt_wraps_both_motor_pulleys_by_half_a_turn_and_the_teeth_climb_out_at_k
 }
 
 /// The X beam as a simple span (effects.beam_sag): with the carriage in its middle (x = 0.5 m, 0.15 + 0.5 = 0.65 m from
-/// the left post of the 1.3 m span) carriage, Z axis and payload, (4 + 5 + 2) 9.80665 = 107.873 N, sag it by
-/// F L^3 / (48 E I) = 107.873 x 1.3^3 / (48 x 8.4e4) = 58.78 um. At rest with the tool at a pose the Z axis stands that
-/// much higher on its belt, and the tool is where it was asked to be.
+/// the left post of the 1.3 m span) carriage, Z axis and payload and the belt's runs riding on it (`belt_on_beam`: the
+/// vertical runs' 0.16 kg and half of the horizontal ones' 0.26 kg), (4 + 5 + 2 + 0.29) 9.80665 = 110.717 N, sag it by
+/// F L^3 / (48 E I) = 110.717 x 1.3^3 / (48 x 8.4e4) = 60.33 um (58.78 um before 21 November, without the belt). At rest
+/// with the tool at a pose the Z axis stands that much higher on its belt, and the tool is where it was asked to be.
 #[test]
 fn the_beam_sags_under_a_central_carriage_by_f_l3_over_48_ei() {
     let m = machine(ENTRY.config(), &["effects.beam_sag = true"]);
     let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
     m.equilibrium(&[0.5, 0.25], &mut state, &mut torque);
-    let sag = 107.873_15 * 1.3f64.powi(3) / (48.0 * 8.4e4);
-    assert!((sag - 58.779e-6).abs() < 1e-9);
+    let weight = (11.0 + 0.16 + 0.13) * 9.80665;
+    let sag = weight * 1.3f64.powi(3) / (48.0 * 8.4e4);
+    assert!((weight - 110.717_08).abs() < 1e-5 && (sag - 60.329e-6).abs() < 1e-9, "{weight} N, {sag} m");
     assert!((state[Z] - 0.25 - sag).abs() < 1e-12, "the Z axis stands {} higher", state[Z] - 0.25);
     let (mut pos, mut vel) = ([0.0; 2], [0.0; 2]);
     m.tool_state(&state, &mut pos, &mut vel);
     assert!((pos[1] - 0.25).abs() < 1e-12 && (pos[0] - 0.5).abs() < 1e-12, "{pos:?}");
     // At the end of the stroke, 0.15 m from the post: a^2 b^2 / (3 E I L) = 0.0225 x 1.3225 / (3 x 8.4e4 x 1.3) per
-    // newton, 107.873 times that: 9.79 um.
+    // newton, 110.717 times that: 10.06 um.
     m.equilibrium(&[0.0, 0.25], &mut state, &mut torque);
-    assert!((state[Z] - 0.25 - 107.873_15 * 0.0225 * 1.3225 / (3.0 * 8.4e4 * 1.3)).abs() < 1e-12);
+    assert!((state[Z] - 0.25 - weight * 0.0225 * 1.3225 / (3.0 * 8.4e4 * 1.3)).abs() < 1e-12);
 }
 
 /// The Z axis bends as a cantilever from the carriage (effects.z_axis_bending, E I = 1.4e4 N m^2). Alone (no guide

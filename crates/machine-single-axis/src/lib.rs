@@ -110,6 +110,8 @@ pub struct SingleAxis {
     /// Force on the carriage towards +x while the cycle dwells.
     process: f64,
     dwelling: bool,
+    /// An obstacle's push on the carriage towards +x (`Machine::set_tool_force`), held until changed.
+    push: f64,
     brake: HoldingBrake,
     brake_engaged: bool,
     payload_attached: bool,
@@ -184,6 +186,7 @@ impl SingleAxis {
             chain: CableChain::from_config(cfg)?,
             process: if cfg.bool("effects.process_force")? { process } else { 0.0 },
             dwelling: false,
+            push: 0.0,
             brake: HoldingBrake::from_config(cfg, j_rotor)?,
             brake_engaged: false,
             payload_attached: true,
@@ -287,7 +290,10 @@ impl SingleAxis {
         out[..3].copy_from_slice(&s[3..6]);
         // The chain's moving run has inertia and, on an incline, weight like the carriage; it does not load the guide.
         let m = self.m() + self.chain.mass(s[0]).0;
-        out[3] = (sec[1].tension - sec[0].tension - ff + self.stop_force(s[0], s[3]) + self.extra_force(s[0], s[3]))
+        out[3] = (sec[1].tension - sec[0].tension - ff
+            + self.stop_force(s[0], s[3])
+            + self.extra_force(s[0], s[3])
+            + self.push)
             / m
             - self.g_along;
         let belt_torque = self.r_mat * (sec[0].material - sec[1].material);
@@ -318,8 +324,10 @@ impl SingleAxis {
         let drive = ratio * (self.ripple.apply(torque[0], angle) - self.shaft.torque(speed) - brake) / r;
         let (ff, ds) = self.friction.eval(s[1], s[2], self.load_scale());
         let m = self.m() + self.chain.mass(s[0]).0;
-        let load =
-            self.mesh.force(s[0]) - ff - m * self.g_along + self.stop_force(s[0], s[1]) + self.extra_force(s[0], s[1]);
+        let load = self.mesh.force(s[0]) - ff - m * self.g_along
+            + self.stop_force(s[0], s[1])
+            + self.extra_force(s[0], s[1])
+            + self.push;
         let rotor = ratio * ratio * self.j_rotor / (r * r);
         let solve = |loss: f64| (loss * drive + load) / (m + self.j_pulley / (r * r) + loss * rotor);
         // The loss factor of the force through the gearbox, at its fixed point (`mech::settled_loss`).
@@ -543,7 +551,7 @@ impl Machine for SingleAxis {
             mass: self.m() + chain,
             first_moment: [self.m() * x + chain_moment, 0.0, 0.0],
             gravity: [-self.g_along, 0.0, -self.g_normal],
-            external: [if self.dwelling { self.process } else { 0.0 }, 0.0, 0.0],
+            external: [if self.dwelling { self.process } else { 0.0 } + self.push, 0.0, 0.0],
             external_at: [x, 0.0, 0.0],
         })
     }
@@ -663,6 +671,12 @@ impl Machine for SingleAxis {
     }
     fn set_dwelling(&mut self, dwelling: bool) {
         self.dwelling = dwelling;
+    }
+    /// The push acts on the carriage, the tool, in either model; its power is the budget's crash row, not the
+    /// process's.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push = force[0];
+        true
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
