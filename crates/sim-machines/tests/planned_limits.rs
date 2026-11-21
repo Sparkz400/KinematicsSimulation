@@ -11,7 +11,7 @@
 //! whose inertia outweighs the load's and on an incline.
 
 use sim_components::path::{Piece, PlanLimits};
-use sim_components::{Sim, load_config};
+use sim_components::{load_config, Sim};
 use sim_core::{Config, MachineEntry};
 
 /// The share of every limit the plan may use: the plan keeps 2e-4 back, the differences over 1 ms round by less.
@@ -411,9 +411,17 @@ fn a_nearly_straight_arc_takes_about_as_long_as_its_chord() {
     assert!(bent < 1.01 * chord, "{bent} s against {chord} s");
 }
 
+/// The drive's top speeds (rad/s) the single axis on its incline is planned with as well: where the plan's runs meet at
+/// their peak of speed moves with it against the profile cycle's 1 ms.
+const SPEEDS: [f64; 12] = [380.0, 385.0, 390.0, 395.0, 399.1596, 400.0, 403.0, 405.0, 408.0, 410.0, 415.0, 420.0];
+
 /// The single axis loss-free and shipped, then behind a gearbox of efficiency 0.9: as it is, with a rotor ten times
 /// as heavy (its inertia then outweighs the load's), and on an incline of 30 degrees with the heavy rotor (the weight
-/// pushes the carriage down while the motor brakes or accelerates the rotor).
+/// pushes the carriage down while the motor brakes or accelerates the rotor); on the incline of -30 degrees also with
+/// the drive's top speed from 380 to 420 rad/s (`SPEEDS`). At 399.1596 rad/s (a top of 395 rad/s after the 1 % kept
+/// back) "out and back" braked at 1.00459 of the torque before 21 November: the run from the start met the run from the
+/// end at a peak of speed, and the plan switched from the one to the other a step late with a speed 1.05e-3 m/s apart
+/// (`path::curve_join`).
 #[test]
 fn the_single_axis_keeps_its_limits_braking_through_a_lossy_gearbox() {
     let entry = &machine_single_axis::ENTRY;
@@ -440,7 +448,14 @@ fn the_single_axis_keeps_its_limits_braking_through_a_lossy_gearbox() {
             "eta 0.9, heavy rotor, -30 deg",
             lossy(&["motor.rotor_inertia_kgm2 = 3.0e-4", "geometry.incline_deg = -30.0"]),
         ),
-    ] {
+    ]
+    .map(|(name, cfg)| (name.to_string(), cfg))
+    .into_iter()
+    .chain(SPEEDS.iter().map(|top| {
+        let speed = format!("drive.max_speed_rad_s = {top}");
+        let cfg = lossy(&["motor.rotor_inertia_kgm2 = 3.0e-4", "geometry.incline_deg = -30.0", &speed]);
+        (format!("eta 0.9, heavy rotor, -30 deg, drive at {top} rad/s"), cfg)
+    })) {
         let sim = Sim::new(entry, &cfg).unwrap();
         let start = sim.control.planned_pos().to_vec();
         for (case, pieces) in single_cases(&start) {

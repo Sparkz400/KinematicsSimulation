@@ -3562,6 +3562,21 @@ fn piece_timing(
     Some(knots)
 }
 
+/// The state [distance, speed, acceleration] of a run (`follow`'s knots, the jerk constant between them) at the time `t`
+/// from its start, on its cubic between the knots around `t`; at its last knot beyond that.
+fn run_at(knots: &[[f64; 4]], t: f64) -> [f64; 3] {
+    let k = knots.partition_point(|knot| knot[0] <= t).clamp(1, knots.len().max(2) - 1);
+    let Some(&[t1, .., a1]) = knots.get(k) else {
+        let [_, s, v, a] = knots[knots.len() - 1];
+        return [s, v, a];
+    };
+    let [t0, s, v, a] = knots[k - 1];
+    let h = t1 - t0;
+    let jerk = if h > 0.0 { (a1 - a) / h } else { 0.0 };
+    let tau = (t - t0).clamp(0.0, h.max(0.0));
+    [s + v * tau + a * tau * tau / 2.0 + jerk * tau.powi(3) / 6.0, v + a * tau + jerk * tau * tau / 2.0, a + jerk * tau]
+}
+
 /// The two runs of a piece (`follow`, from `v0` at its start and from `v1` at its end, each after its steady cycles),
 /// with no top: each follows the speed curve as far as the piece goes, and the plan takes the run from the start up to
 /// where it meets the run from the end, and that one from there. Where they meet both are on the speed curve, at its
@@ -3569,7 +3584,8 @@ fn piece_timing(
 /// acceleration that `piece_timing` joins them on: the plan when the runs meet while the curve rises or falls, and the
 /// only one where the piece has to slow down below both its end speeds somewhere. Knots as `piece_timing`'s; `None`
 /// where a run starts faster than the curve lets it slow down, or the runs meet off the curve (at a peak of speed,
-/// where `piece_timing` joins them).
+/// where `piece_timing` joins them; with a jerk so high that a few steps' worth of it spans any step of acceleration,
+/// a peak passes as on the curve, which holds as the switch keeps the place and the speed).
 fn curve_join(limits: &PieceLimits, length: f64, [v0, v1]: [f64; 2], hold: f64, step: f64) -> Option<Vec<[f64; 4]>> {
     let rise = follow(limits, v0, f64::INFINITY, [hold * v0, length - hold * v1], false, step)?;
     let fall = follow(limits, v1, f64::INFINITY, [hold * v1, length - hold * v0], true, step)?;
@@ -3577,19 +3593,45 @@ fn curve_join(limits: &PieceLimits, length: f64, [v0, v1]: [f64; 2], hold: f64, 
     if fall.len() < 2 {
         return None;
     }
-    // The fall's state at the distance `s` from the start, by straight lines between its knots: its time, speed and
-    // acceleration forwards (its own acceleration the other way round).
+    // The fall's state at the distance `s` from the start, on its own cubic between its knots (its time there found by
+    // halving, the distance rising with it): its time, speed and acceleration forwards (its own acceleration the other
+    // way round).
     let fall_at = |s: f64| {
         let back = length - s;
         let k = fall.partition_point(|knot| knot[1] <= back).clamp(1, fall.len() - 1);
-        let ([t0, s0, v0, a0], [t1, s1, v1, a1]) = (fall[k - 1], fall[k]);
-        let w = if s1 > s0 { ((back - s0) / (s1 - s0)).clamp(0.0, 1.0) } else { 0.0 };
-        [t0 + w * (t1 - t0), v0 + w * (v1 - v0), -(a0 + w * (a1 - a0))]
+        let (mut early, mut late) = (fall[k - 1][0], fall[k][0]);
+        for _ in 0..60 {
+            let mid = 0.5 * (early + late);
+            if run_at(&fall, mid)[0] < back { early = mid } else { late = mid }
+        }
+        let t = 0.5 * (early + late);
+        let [_, v, a] = run_at(&fall, t);
+        [t, v, -a]
     };
-    // The first knot of the rise at which it is as fast as the fall: there they meet, and both are on the curve if their
-    // accelerations agree to the jerk of a few steps.
-    let meet = rise.iter().position(|&[_, s, v, _]| s >= length - fall[fall.len() - 1][1] && v >= fall_at(s)[1])?;
-    let [t_meet, s_meet, v_meet, a_meet] = rise[meet];
+    // The rise meets the fall where it is first as fast as the fall at the same place: within the rise's step up to its
+    // first knot that is (`meet`), found by halving on the rise's own cubic. The plan switches there from the one run to
+    // the other at the same place and speed; only the acceleration steps. (Switching at the knot itself, with the cubic
+    // from the rise's acceleration to the fall's next knot in between, left the speed short of the fall's by the step of
+    // the acceleration times half that span: 1.05e-3 m/s where a rise at 2.02 m/s^2 met a fall braking at 5.14 m/s^2 on
+    // the single axis behind a lossy gearbox, which the profile cycle's differences read as 0.46 % more braking torque
+    // than the plan held.) Both are on the curve if their accelerations agree to the jerk of a few steps.
+    let reach = length - fall[fall.len() - 1][1];
+    let ahead = |t: f64| {
+        let [s, v, _] = run_at(&rise, t);
+        s >= reach && v >= fall_at(s)[1]
+    };
+    let meet = rise.iter().position(|&[_, s, v, _]| s >= reach && v >= fall_at(s)[1])?;
+    let t_meet = if meet == 0 {
+        rise[0][0]
+    } else {
+        let (mut early, mut late) = (rise[meet - 1][0], rise[meet][0]);
+        for _ in 0..60 {
+            let mid = 0.5 * (early + late);
+            if ahead(mid) { late = mid } else { early = mid }
+        }
+        late
+    };
+    let [s_meet, v_meet, a_meet] = run_at(&rise, t_meet);
     let [took, v_fall, a_fall] = fall_at(s_meet);
     if (v_meet - v_fall).abs() > KEPT_BACK * v_meet.max(1e-9) || (a_meet - a_fall).abs() > 4.0 * limits.jerk * step {
         return None;
@@ -3608,7 +3650,12 @@ fn curve_join(limits: &PieceLimits, length: f64, [v0, v1]: [f64; 2], hold: f64, 
         knots.push([hold, hold * v0, v0, 0.0]);
     }
     let t0 = knots[knots.len() - 1][0];
-    knots.extend(rise[1..=meet].iter().map(|[t, s, v, a]| [t0 + t, *s, *v, *a]));
+    knots.extend(rise[1..meet.max(1)].iter().map(|[t, s, v, a]| [t0 + t, *s, *v, *a]));
+    // The rise's state where they meet, then the fall's at the same time and place.
+    if meet > 0 {
+        knots.push([t0 + t_meet, s_meet, v_meet, a_meet]);
+    }
+    knots.push([t0 + t_meet, s_meet, v_fall, a_fall]);
     let t1 = t0 + t_meet + took;
     knots.extend(
         fall.iter().rev().filter(|knot| knot[1] < length - s_meet).map(|[t, s, v, a]| [t1 - t, length - s, *v, -a]),
@@ -5434,6 +5481,50 @@ line,0.3,0.13",
             (cruised - 0.3).abs() < 1e-9 && joined > 0.9 && quick < slow - 0.05,
             "{joined} m/s {quick} s against {cruised} m/s {slow} s"
         );
+    }
+
+    /// Where the run from the start meets the run from the end at a peak of speed, the plan switches from one to the other
+    /// at the same place and speed: each span between its knots, a cubic at constant jerk, ends on the next knot's
+    /// distance and speed. A line on which the motors accelerate at up to 2 m/s^2 and brake at up to 5 m/s^2, with a jerk
+    /// of 1e5 m/s^3 along it (the ramps take 0.05 ms, less than a step of 0.25 ms) and a top speed it does not reach, from
+    /// rest to rest, over lengths 0.30 to 0.70 m. Before 21 November the switch was the rise's knot past the meeting and
+    /// a cubic from it to the fall's next knot, which ended short of that knot's speed by the step of the acceleration
+    /// times half its span (up to 7 m/s^2 times 0.12 ms, 9e-4 m/s): a step in the speed the profile cycle reads as an
+    /// acceleration beyond the ceiling.
+    #[test]
+    fn the_runs_meet_at_the_same_place_and_speed() {
+        let (mut joined, mut worst) = (0, 0.0f64);
+        for k in 0..=40 {
+            let length = 0.3 + 0.01 * k as f64;
+            let count = 100;
+            let places = (0..=count)
+                .map(|_| Place {
+                    rows: vec![[1.0, 0.0, 0.0, -5.0, 2.0]],
+                    low: Vec::new(),
+                    turn: Vec::new(),
+                    curves: Arc::from([]),
+                    guide: Vec::new(),
+                    speed: Vec::new(),
+                    bends: Vec::new(),
+                    top: 10.0,
+                })
+                .collect();
+            let limits = piece_limits_of(places, length / count as f64, 1e5).unwrap();
+            let Some(knots) = curve_join(&limits, length, [0.0, 0.0], 2e-3, 1e-3 / STEPS_PER_CYCLE) else { continue };
+            joined += 1;
+            for pair in knots.windows(2) {
+                let ([t0, s0, v0, a0], [t1, s1, v1, a1]) = (pair[0], pair[1]);
+                let h = t1 - t0;
+                let jerk = if h > 0.0 { (a1 - a0) / h } else { 0.0 };
+                let (s, v) =
+                    (s0 + v0 * h + a0 * h * h / 2.0 + jerk * h.powi(3) / 6.0, v0 + a0 * h + jerk * h * h / 2.0);
+                // (The last knot is set onto the piece's end.)
+                if t1 < knots[knots.len() - 1][0] {
+                    worst = worst.max((s - s1).abs() / 1e-12).max((v - v1).abs() / 1e-9);
+                }
+            }
+        }
+        assert!(joined > 10 && worst <= 1.0, "{joined} joined, worst {worst} of the rounding");
     }
 
     /// The lowest of a range of values from the table of lowest values over powers of two, against looking at each.
