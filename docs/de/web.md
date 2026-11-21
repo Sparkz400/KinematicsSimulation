@@ -147,3 +147,15 @@ nativen Laufs Schritt für Schritt); die Spalten von `analyze`, die Ecken der Ke
 Die Seite selbst lief im kopflosen Chrome (puppeteer-core mit dem installierten Chrome, 14. November 2026): das T-Portal
 in Echtzeit mit seinen Verläufen, die Prüfung bestanden bei 6,080 s Zyklus; auf Deutsch die CoreXY-Maschinendatei mit
 einem Pfad aus Gerade, Bogen und Gerade samt Spur, ihre Prüfung (1,661 s) und ein Frequenzgang mit 40 Punkten (22 s).
+Den Pfad hat diese Sitzung nicht festgehalten, und keiner von zwanzig mit Geraden und Bögen auf dem Stand jenes Tages
+versuchten gibt 1,661 s. Benannt: der voreingestellte Pfad der Seite, in den Bereich des CoreXY verschoben,
+
+```text
+line,0.3,0.2
+arc,0.5,0.2,0.4,0.2,cw
+line,0.5,0.4
+```
+
+besteht jede Prüfung in 1,748 s in den Achsgrenzen und 1,641 s zeitoptimal (21. November 2026, `sim-cli analyze
+--machine-file machines/corexy.toml --path DATEI [--time-optimal]`, deren Zahlen die Prüfung der Seite gibt, wie die
+Tests oben prüfen; auf dem Stand vom 14. November 1,748 und 1,640 s).

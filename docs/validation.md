@@ -831,11 +831,11 @@ The machine files (`machines/*.toml`, `sim-cli analyze --machine-file`) by the s
 | `t-gantry.toml` (no frame, no leaning Z) | 115.6 → 105.6 | 47.1 → 41.8 | yes |
 | `delta-d3.toml`, `planar-delta.toml` | as the D3 and D2 above | | yes |
 | `screw-portal.toml` | 143.5 → 99.5 | 31.3 → 22.1 | yes |
-| `xyz-portal.toml` | 142.7 → 107.3 (141.9 → 104.4 before its Z belt was a loop, 21 November) | 30.6 → 22.7 (29.9 → 22.3) | yes |
+| `xyz-portal.toml` | 189.0 → 159.4 (142.7 → 107.3 before its X and Y belts were loops, 141.9 → 104.4 before its Z belt was, 21 November) | 31.7 → 27.5 (30.6 → 22.7, 29.9 → 22.3) | yes |
 | `corexy.toml` | 77.0 → 49.1 | 15.6 → 22.0 | no |
 | `h-bot.toml` | 121.8 → 111.2 | 13.2 → 18.9 | no |
-| `dual-gantry.toml` | 165.5 → 109.8 | 10.2 → 31.7 | no |
-| `rack-gantry.toml` | 81.6 → 56.8 | 14.6 → 22.2 | no |
+| `dual-gantry.toml` | 169.6 → 112.4 (165.5 → 109.8 before its Y belt was a loop, 21 November) | 16.1 → 37.9 (10.2 → 31.7) | no |
+| `rack-gantry.toml` | 82.3 → 57.5 (81.6 → 56.8 before its Y belt was a loop) | 16.7 → 24.6 (14.6 → 22.2) | no |
 | `portal-c.toml` | 177.4 → 144.9; 0.576 → 0.588 mrad | 34.0 → 23.6; 7.3e-5 → 8.0e-5 mrad | no |
 | `five-axis.toml` | 201.1 → 132.1; 0.151 → 0.155 mrad | 33.6 → 32.3; 0.055 → 0.059 mrad | no |
 | `five-axis-table.toml` | 189.0 → 112.6; 0.088 → 0.099 mrad | 30.3 → 34.3; 0.022 → 0.010 mrad | no |

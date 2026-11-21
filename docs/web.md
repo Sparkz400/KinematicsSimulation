@@ -204,4 +204,15 @@ the module before its tests).
 The page itself was run in headless Chrome (puppeteer-core driving the installed Chrome, 14 November 2026): the
 T-gantry's cycle at real time with its plots, the sizing check passing every check with a cycle of 6.080 s; in German,
 the CoreXY machine file running a path of a line, an arc and a line with its trail, its sizing check (1.661 s) and a
-40-point sweep (22 s).
+40-point sweep (22 s). That session did not keep the path, and none of twenty lines and arcs tried on the build of that
+day gives 1.661 s. Named: the page's default path moved into the CoreXY's range,
+
+```text
+line,0.3,0.2
+arc,0.5,0.2,0.4,0.2,cw
+line,0.5,0.4
+```
+
+passes every check in 1.748 s within the axis limits and 1.641 s time-optimal (21 November 2026, `sim-cli analyze
+--machine-file machines/corexy.toml --path FILE [--time-optimal]`, whose numbers the page's sizing check gives, as the
+tests above check; on the build of 14 November 1.748 and 1.640 s).

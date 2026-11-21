@@ -263,7 +263,7 @@ Motorsignale und von `--motor N`.
 | `body` | `mass_kg` | Pflicht | Masse, kg |
 | | `payload_kg` | | Nutzlast, die er trägt, solange `effects.payload` an ist und der Greifer sie hält, kg |
 | | `axes` | Pflicht | die Achsen, mit denen er sich bewegt |; Drehachsen darunter nehmen ihn mit herum, die erste ganz außen
-| | `offset_m` | | auf Drehachsen: sein Schwerpunkt von dort, wo sich ihre Achsen treffen, `[x, y, z]` bei Winkel 0, m ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)) |
+| | `offset_m` | | sein Schwerpunkt von dort, wo seine Achsen ihn hinstellen, `[x, y, z]`, m: auf Drehachsen von dort, wo sich ihre Achsen treffen, bei Winkel 0, mit ihnen gedreht ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)); auf geraden Achsen allein ein fester Versatz, den nur sein Ort im Impuls des Rahmens nimmt (der Wagen des T-Portals 0,3 m über seiner Z-Achse) |
 | `guide` | `axis` | Pflicht | die Achse, die sie führt; höchstens eine Führung je Achse; ihr Verlust ist `power.<id>` |
 | | `friction` | Pflicht | die Tabelle ihrer Reibwerte, aufgebaut wie `[friction_x]` |
 | | `carries` | | Körper, deren Gewicht quer zur Achse sie trägt |
@@ -302,6 +302,7 @@ Motorsignale und von `--motor N`.
 | | `com_drop_m`, `tool_drop_m` | Pflicht | sein Schwerpunkt und die Werkzeugspitze unter der Führung bei `lever_axis` auf 0, m |
 | | `lever_axis` | | eine Achse, deren Weg beide zur Führung hebt |
 | | `lateral_stiffness_n_m`, `tilt_stiffness_nm_rad`, `damping_n_s_m` | Pflicht | Steifigkeit der Führung seitlich und gegen Kippen, die Dämpfung der Neigung |
+| | `belt_offset_m` | | mit `effects.belt_run_offset`: wie weit die Trume, die den Körper von oben erreichen, ihn neben seiner Linie treffen (auf der Seite ihres anderen Rads), m; das Kippen der Führung macht das eine um es mal den Kippwinkel länger, das andere kürzer; Vorgabe 0 |
 | `gantry` | `axis` | Pflicht | eine Brücke, die entlang dieser waagrechten Linearachse fährt, giert (`effects.gantry_yaw`); höchstens eine ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)) |
 | | `across` | | die Linearachse entlang der Brücke; mit ihr ändert sich der Hebel ihrer Körper um die Mitte der Brücke |
 | | `width_m`, `inertia_kgm2` | Pflicht | Abstand der beiden Seiten der Brücke, m; ihre eigene Trägheit um eine senkrechte Achse durch ihre Mitte, kg m² |
@@ -431,7 +432,7 @@ Beschleunigung a zu heben (J Läufer, Kupplung und Spindel), und der Motor einer
   Schrägungswinkel), rechtwinklig dazu, zusammen |F| sqrt(1 + (tan(alpha_n) / cos(beta))²): `rack.<Motor>.radial_load`,
   geprüft als `gearbox-radial-load` gegen `ratings.shaft_max_radial_load_n` des Motors, wo das gesetzt ist. Die
   Axialkraft des schrägverzahnten Ritzels und das Kippen, das sie der Welle gibt, bleiben außen vor. Das X des
-  Zahnstangenportals: 207,4 N von 1500.
+  Zahnstangenportals: 208,0 N von 1500.
 - `effects.belt_stretch` schaltet das elastische Modell der ganzen Maschine: damit verdrehen sich auch die Getriebe der
   Spindeln, Zahnstangen und Rundtische (die Steifigkeit des Wandlers in Reihe), und die Eigenform des Riemens in einer
   Lage enthält sie, bei festgehaltenen Läufern.
@@ -640,11 +641,27 @@ lever_axis = "z"
 lateral_stiffness_n_m = "tool_flex.lateral_stiffness_n_m"
 tilt_stiffness_nm_rad = "tool_flex.tilt_stiffness_nm_rad"
 damping_n_s_m = "tool_flex.damping_n_s_m"
+belt_offset_m = "tool_flex.belt_offset_m"   # mit effects.belt_run_offset
 ```
 
 Die Datei des T-Portals hat beides, ausgeliefert aus (das Crate hat seine Neigung an): ihre Scheiben an den Enden von X
 auf Höhe des Wagens und ihre Wagenrollen r + r_Rolle darüber und darunter, sodass der Riemen beide Scheiben waagrecht
 verlässt, eine halbe Umdrehung in jeder Lage, wie im Crate; mit einem der beiden Effekte an ist sie ihr Crate auf 1e-9.
+
+Mit `effects.belt_run_offset` (wie ausgeliefert aus) treffen die Trume, die den sich neigenden Körper von oben erreichen
+(die der Klemme, deren Länge sich nur mit der Hebelachse ändert), ihn `belt_offset_m` neben seiner Linie, auf der Seite
+ihres anderen Rads: das Kippen der Führung theta = k w h / tilt hebt das Ende auf der +-Seite um e theta und senkt das
+andere, die Abschnitte werden je Meter Neigung um e k h / tilt länger und kürzer, in erster Ordnung. Ihr
+Spannungsunterschied dreht die Neigung, ihre Dehnung hält sie, Dämpfung, Energie und Eigenformen folgen aus den Längen
+(`lean_offset` des Crates). Mit `effects.beam_vertical_mode` fahren die Trume des Riemens wie im Crate auf der
+Eigenform w des Balkens (`belt_on_beam`): ein Trum, das sich entlang der senkrechten Achse bewegt, geht ganz mit dem
+Wagen nach unten, eines, dessen Länge sich nur mit der Achse des Balkens ändert, kippt von der Scheibe seines Pfostens,
+ein Drittel seiner Masse in der kinetischen Energie und die Hälfte im Gewicht, im ersten Moment und im Impuls; ihr
+Gewicht biegt den Balken durch, ihre Trägheit steht in seiner Dämpfung. Die Datei des T-Portals: ihre Eigenform des
+Balkens in der Mitte 58,776 Hz (59,32 Hz vor dem 21. November), ihre Durchbiegung in Ruhe 60,33 µm (58,78), die
+Handwerte von `machine_file_lean_beam.rs`; die mitfahrenden Trume müssen zusammen ihre Länge halten (eine Datei, deren
+Trume das nicht tun, wird abgelehnt). Beides ist ihr Crate auf 1e-9, einzeln und zusammen, mit dem Versatz an und
+aus.
 
 ## Ein Portal, das giert, und Werkzeuge auf Drehachsen
 
@@ -686,8 +703,12 @@ tolerance_m = "gantry.sync_tolerance_m"
   halten die Führungen die Brücke rechtwinklig, und beide teilen gleich. `machines/dual-gantry.toml` hat ein X von 3 m
   auf zwei Zahnstangen mit Katalogmotoren (1FK2103-4AH an S210) und ein Y von 0,8 m auf einem Riemen auf einer Brücke
   von 1,2 m. Es besteht jedes Urteil seines Zyklus: `gantry-sync` 14 µm von 100, und das Ende, nahe dem der Wagen
-  anfängt, trägt mehr (`rack-feed-force` 110 gegen 96 N). Sein Gieren schwingt mit sqrt((k + 2 k_Ende (B / 2)²) / J) / 2 pi,
-  155,0 Hz mit J auf 20 kg m² angehoben und dem Wagen in der Mitte, 149,5 Hz mit ihm an einem Ende (`sim-cli modes`).
+  anfängt, trägt mehr (`rack-feed-force` 111 gegen 96 N). Sein Gieren schwingt mit sqrt((k + 2 k_Ende (B / 2)²) / J) / 2 pi
+  mit dem Wagen in der Mitte: 425,4 Hz wie ausgeliefert (J = 2,657 kg m²), über dem Y-Riemen (82,2 Hz) und X auf seinen
+  Zahnstangen (262,3 Hz); der Wagen an einem Ende koppelt X und das Gieren (255,6 und 394,8 Hz). `sim-cli modes
+  --machine-file machines/dual-gantry.toml --axis-index 1` nennt alle drei mit ihren Dämpfungsgraden (das Gieren 0,144,
+  X 0,088, der Riemen 0,039 in der Mitte); mit J auf 20 kg m² angehoben schwingt das Gieren in der Mitte mit 155,0 Hz,
+  mit dem Wagen an einem Ende mit 151,7 Hz (`the_dual_gantry_reports_its_yaw_among_its_modes_by_hand`).
 - **Gleichlauf der beiden Antriebe** (`gantry.sync`, `gantry.sync_gain_1_s`, gelesen, wo ein Portal zwei Antriebe hat;
   der erste ist der Master). `"master_slave"`: der Lageregler des Slaves folgt der Istlage des Masters, seinem Sollwert
   weniger seinem Schleppfehler, so kommt der Nachlauf des Slaves auf den des Masters: bei stetiger Geschwindigkeit v,
@@ -711,7 +732,13 @@ tolerance_m = "gantry.sync_tolerance_m"
   an wächst der Bahnfehler seines Zyklus von 0,06 auf 1,12 mm. Beim CoreXY zieht jeder Riemen an beiden Enden: sein
   Moment ist die Summe der Zugkräfte des einen Riemens gegen die des anderen, -0,19 N m für den Zug von 8 N, der einen
   H-Bot mit -2,4 gieren ließe, und sein Bahnfehler bleibt 0,02 mm. Ein starrer Riemen hält das Gieren eines CoreXY: sein
-  starres Modell hat keins.
+  starres Modell hat keins. (Im Text vom 14. November standen 0,80, 0,20 und 0,06 mm; sein eigener Stand gibt 1,07, 0,25
+  und 0,06 mm. Die 1,07 mm des H-Bots wurden am 16. November (024b876a) 1,12 mm, die 0,224 mm des Zahnstangenportals
+  0,225 mm: die Trume der Riemen der Dateien tragen ihre eigene Masse, beim H-Bot mu (L + 8 (0,65 - y)) auf X, wo die
+  Klumpen mu L hatten (0,86 gegen 0,42 kg bei y = 0,1 m), und 2 mu (2 x - 1) zwischen X und Y; mit effects.belt_mass aus
+  sind es vorher und nachher 1,07 mm. Welcher der beiden Terme die Brücke mehr gieren lässt, ist nicht getrennt. Die
+  0,06 mm des CoreXY wurden
+  am 14. November mit dem Merge d360b7ed 0,02 mm.)
 
 **Körper auf Drehachsen und der Werkzeugmittelpunkt.** Ein Körper darf mit Drehachsen fahren: `offset_m` ist sein
 Schwerpunkt von dort, wo sich ihre Achsen bei Winkel 0 treffen, und er fährt auf ihnen herum, die erste in seinen
@@ -797,8 +824,8 @@ Eine Maschinendatei wird beim Laden vollständig geprüft, bevor etwas läuft:
 - die Maschine: Massen, Radien und Längen positiv, ein Getriebe je Motor (keins bei einem Linearmotor) und eine
   Scheibe, Spindel, Zahnstange oder ein Rundtisch je Getriebe, höchstens eins davon je Achse, eine Spindel mindestens so
   lang wie ihr Hub, so viele Motoren wie Achsen und einen mehr je Antrieb eines Portals über den ersten hinaus, die
-  Antriebe eines Portals auf seiner Achse, die Achsen eines Werkzeugmittelpunkts entlang x, y und z, das `offset_m`
-  eines Körpers nur auf Drehachsen, eine Riemenführung, die die Riemenlänge hält und jede Achse festlegt;
+  Antriebe eines Portals auf seiner Achse, die Achsen eines Werkzeugmittelpunkts entlang x, y und z, eine
+  Riemenführung, die die Riemenlänge hält und jede Achse festlegt;
 - jeder andere Schlüssel gegen die Schlüssel der Konfigurationen der eingetragenen Maschinen (so wird `pretensoin_n`
   beim Namen abgelehnt), dazu `[axis.<id>]` je Achse, eine Reibtabelle je Führung, die Wertetabellen von Spindeln,
   Zahnstangen, Linearmotoren und Wellgetrieben im Aufbau des Gelenkbaukastens und jeder Schlüssel, den die Netzliste
@@ -869,7 +896,8 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
   ersten Moment: die potentielle Energie hat g mu Σ_s (L0_s + c_s · q / 2) V_s,z · q, die Schwerkraft deren Gradient
   (`runs_height`); so wiegen die senkrechten Trume des T-Portals 0,16 kg auf Z wie in seinem Crate, der Z-Riemen des
   XYZ-Portals nichts (eine Schleife: das Trum vom Motor zur fernen Umlenkrolle, 0,5 m, sinkt, wie die beiden mit dem
-  Schlitten steigen). Die Datei des T-Portals gibt ihre
+  Schlitten steigen; seine X- und Y-Riemen sind ebenso Schleifen, 1,2 und 0,7 m vom Motor zur fernen Umlenkrolle). Die
+  Datei des T-Portals gibt ihre
   Trume so an; ihr Crate leitet dasselbe aus dem Riemenweg ab (`belt_mass`). Ebenso die anderen Dateien, deren Trume sich
   über Grund bewegen, jede mit der Tabelle ihrer Trume im Kommentar: der H-Bot (der Riemenweg des T-Portals mit Y statt
   Z), der CoreXY (jeder Riemen bewegt sich entlang X und entlang Y als Ganzes, wie die Klumpen es hatten, und gibt
@@ -877,7 +905,12 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
 - Die Eigenform des Riemens (elastisches Modell): die Achsen, und der Rahmen, wo er schwingt, auf der Steifigkeit des
   Riemens bei festgehaltenen Scheiben, K = Σ_s EA / l_s c_s c_s^T (l_s der ungedehnte Riemen des Abschnitts in Ruhe, wie in den Crates), gegen ihre Massenmatrix; die niedrigste ist
   `resonance_hz` in einer Lage, also stellt `effects.shaper_follows_pose` den Shaper darauf, und die App zeigt ihre
-  Form (auf 1 m Werkzeugweg skaliert).
+  Form (auf 1 m Werkzeugweg skaliert). `Machine::modes` (`sim-cli modes`, die Darstellung der App) gibt jede Eigenform
+  von K und M, die des Gierens und der Getriebe von Spindeln, Zahnstangen und Rundachsen mit, die niedrigste zuerst, jede
+  mit ihrem Dämpfungsgrad x^T C x / (2 w) (x ihre Form, x^T M x = 1): C die Dämpfer der Riemenabschnitte c + c_t EA / l,
+  die der Getriebe bei der Frequenz der Eigenform, des Gierens, des Rahmens, der Neigung und des Balkens. Die Datei des
+  T-Portals gibt die beiden Eigenformen ihres Crates samt Dämpfung auf 1e-9 (`the_t_gantry_file_tells_its_crates_modes`).
+  Bis zum 21. November 2026 gab eine Datei nur ihre niedrigste, mit Dämpfung 0.
 - Spindel, Zahnstange, Linearmotor oder Rundtisch (`machine.screw`, ...): das Getriebe seines Motors wird eines in der
   Einheit der Achse, der Übersetzung i / Hebel (der `RotaryJoint` des Gelenkbaukastens mit dem
   `transmission::Converter` dahinter), und seine "Scheibe" ist die Achse selbst: K hat für ihn die Zeile e_i, die Achse
