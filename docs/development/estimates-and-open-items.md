@@ -333,9 +333,19 @@ Fixed (after the second audit, 21 November):
 - The mover track's modes: the shipped six movers report the held mode everywhere (modes, `resonance_hz` and so the
   shaper, the plan's trains: 694.28 Hz, the plate held), as the convention has it; a track of one mover reported the
   free two-mass mode (1736.39 Hz, the chain's single joint) to the shaper and the modes printout while its train was
-  the held one. One mover now reports the held mode too (`the_movers_modes_are_the_held_two_mass_mode`). The app's mode
-  list shows beside each mode the linearised model's nearest one: 102.0 Hz for the six movers' 694.28 Hz (not looked
-  into; the 1736 Hz of the brief is the plate-free figure).
+  the held one. One mover now reports the held mode too (`the_movers_modes_are_the_held_two_mass_mode`). The 1736 Hz of
+  the brief is the plate-free figure.
+
+Open, found 21 November: the app's mode list (`shapes::mode_views`, also `sim-cli modes --shapes`' linear_hz) pairs each
+reported mode with the eigenvalue of the motor-free linearised model nearest it, whatever its kind. For the mover
+track's held 694.28 Hz that is no mode but a real pole, lambda = -639.7 1/s shown as 101.8 Hz with damping 1: the
+rollers' Coulomb friction smoothed over 2 mm/s, (0.1 + 0.005 * 300) / 0.002 + 0.5 = 800.5 N s/m on the 1.251 kg mover
+(-639.9 by hand, `the_linearised_model_has_the_friction_s_pole_and_the_plate_free_mode`). The machine's mode is right
+by the convention; the motor-free model has no held mode, only the plate-free one at 1735.8 Hz. Fix (in
+`sim-components/src/shapes.rs`, not this agent's): take only oscillatory eigenvalues (|Im lambda| > 1e-6 |lambda|) as a
+mode's partner, and none where the partner's frequency is more than some 20 % off the reported one (`linear: None`, the
+shape then the reported mode's own or none), or linearise with the motors held where the machine's modes are held
+(`linearised` holding the rotor states); a test: the mover's held mode gets no 101.8 Hz partner.
 - The mover track and the indexers (Geneva, cam) had no frame momentum (`Machine::frame_momentum` None), so no
   compliant base: they have it, as the joint kit's slide and the knife (`the_frame_momentum_is_the_hand_calculated_one`
   in both crates; the standard suite's first-moment check now judges them). Both are level, so

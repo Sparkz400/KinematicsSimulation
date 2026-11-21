@@ -59,6 +59,27 @@ fn the_movers_modes_are_the_held_two_mass_mode() {
     }
 }
 
+/// What the app's mode list shows beside the held 694.28 Hz (`shapes::mode_views`' `linear`, the linearised model's
+/// eigenvalue nearest it, the motors free): 101.8 Hz, damping 1, is no mode but a real pole, the rollers' smoothed
+/// Coulomb friction acting as a damper at rest. Its slope (0.1 + 0.005 * 300 N of attraction) / 0.002 m/s = 800 N s/m and
+/// the viscous 0.5 N s/m on the whole mover (1.251 kg): lambda = -800.5 / 1.251 = -639.9 1/s, |lambda| / 2 pi =
+/// 101.84 Hz. It lies nearer the held mode's eigenvalue (4362 rad/s) than the plate-free mode at sqrt(2e7 (1 / 1.051 + 1
+/// / 0.2)) = 1736.39 Hz, which the motor-free model has (damped, 1735.8 Hz). The pairing is `shapes.rs`'s (see the
+/// open items): the machine reports its mode as the convention has it.
+#[test]
+fn the_linearised_model_has_the_friction_s_pole_and_the_plate_free_mode() {
+    use sim_components::shapes::{as_mode, eigen_near, linearised};
+    let cfg = config(&["start.pose = [0.125]"]);
+    let m = (ENTRY.build)(&cfg).unwrap();
+    let (rest, a) = linearised(m.as_ref(), &[0.125]);
+    let pole = -(0.1 + 0.005 * 300.0) / 0.002 - 0.5;
+    let (lambda, _) = eigen_near(&a, rest.len(), [pole / 1.251, 0.0]).unwrap();
+    assert!((lambda[0] / (pole / 1.251) - 1.0).abs() < 1e-3 && lambda[1].abs() < 1e-6, "{lambda:?}");
+    let free = (2e7f64 * (1.0 / 1.051 + 1.0 / 0.2)).sqrt();
+    let (lambda, _) = eigen_near(&a, rest.len(), [0.0, free]).unwrap();
+    assert!((as_mode(lambda).hz / (free / TAU) - 1.0).abs() < 1e-3, "{lambda:?}");
+}
+
 #[test]
 fn passes_the_standard_suite() {
     sim_core::testkit::run_standard_suite(&ENTRY);
