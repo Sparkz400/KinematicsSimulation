@@ -872,6 +872,26 @@ fn a_machine_file_reports_its_belt_mode() {
     assert!(soft.resonance_hz(&[0.5, 0.25]).unwrap() < stiff.resonance_hz(&[0.5, 0.25]).unwrap());
 }
 
+/// The T-gantry's file tells the modes its crate tells (frame and leaning Z off, as the file has them): the belt's two
+/// modes with the pulleys held, their frequencies and their damping ratios (the belt sections' dampers on each mode's
+/// shape), at the middle and an end of X and two heights. Before the file machine told its modes it gave the lowest
+/// alone, undamped.
+#[test]
+fn the_t_gantry_file_tells_its_crates_modes() {
+    let [(ea, ca), (eb, cb)] = pair("t-gantry", "t-gantry.toml", &[]);
+    let (a, b) = ((ea.build)(&ca).unwrap(), (eb.build)(&cb).unwrap());
+    for pose in [[0.5, 0.25], [0.0, 0.25], [0.5, 0.45], [0.9, 0.05]] {
+        let (ma, mb) = (a.modes(&pose), b.modes(&pose));
+        assert!(ma.len() == 2 && mb.len() == ma.len(), "{pose:?}: crate {ma:?}, file {mb:?}");
+        for (x, y) in ma.iter().zip(&mb) {
+            assert!(
+                close(x.hz, y.hz, 1e-9) && close(x.damping, y.damping, 1e-9),
+                "{pose:?}: crate {ma:?}, file {mb:?}"
+            );
+        }
+    }
+}
+
 /// The XYZ portal's X and Y belts are loops (machines/xyz-portal.toml): the motor and the far idler 0.1 + stroke + 0.1 m
 /// apart (X 1.2 m, Y 0.7 m), the clamp to the motor 0.1 + q, back round the far idler 1.2 + 1.1 - x and 0.7 + 0.6 - y.
 /// With the pulleys held each axis rings on its two sections, k = EA (1 + 300 / 5e5) (1 / l1 + 1 / l2) (flat, both at

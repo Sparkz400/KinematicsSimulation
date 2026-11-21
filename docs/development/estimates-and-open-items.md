@@ -254,9 +254,15 @@ Not re-run on 21 November 2026 (the figures stand as dated in the text):
   in the guides; the two-box height profile (4.72 s against 3.87 s, a test's figures).
 - The D3's Morris figures (36 values, 370 cycles; the D3 is unchanged by the changes above).
 - The base table's rows other than the five above (17 November).
-- `docs/machine-files.md`: the dual gantry's yaw mode (155.0 and 149.5 Hz with J raised to 20 kg m²):
-  `sim-cli modes --axis-index 1` reports one mode only, and not the yaw's figures (96.4 Hz in the
-  middle, 151.7 and 124.5 Hz at the ends, damping 0); not reproduced, the cause not looked into.
+- Done (21 November): `docs/machine-files.md`'s dual gantry yaw mode (155.0 and 149.5 Hz with J raised to 20 kg m²).
+  The file machine had no `Machine::modes`: the trait's default gave `resonance_hz`, the lowest mode alone, with
+  damping 0, so `sim-cli modes` showed the Y belt (96.4 Hz in the middle, 124.5 at y = 0.8) and, with J = 20, the yaw
+  only where it was lowest (151.7 Hz at y = 0, coupled with X). The 155.0 Hz was the test's, which also stiffened the
+  belt (EA 5e8) to make the yaw the lowest; the 149.5 Hz was not reproduced. Now every mode with its damping: as
+  shipped the belt 96.40 Hz (0.033), X 262.95 Hz (0.088) and the yaw 425.37 Hz (0.144) in the middle, at y = 0.8 the
+  belt 124.45 Hz and X with the yaw 256.12 and 395.01 Hz; with J = 20 the yaw 155.04 Hz in the middle, 151.65 Hz at an
+  end (`the_dual_gantry_reports_its_yaw_among_its_modes_by_hand`, a hand 2x2 of x and the yaw; the T-gantry file's modes
+  and damping its crate's to 1e-9).
 - `docs/web.md`: the CoreXY path's sizing check (1.661 s, 14 November) names no path, and none of twenty lines and arcs
   tried on the build of that day gives it. The page now names one, the page's default path moved into the CoreXY's
   range, with its figures of 21 November 2026 (1.748 s within the axis limits, 1.641 s time-optimal, every check

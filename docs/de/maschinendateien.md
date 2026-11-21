@@ -686,8 +686,12 @@ tolerance_m = "gantry.sync_tolerance_m"
   halten die Führungen die Brücke rechtwinklig, und beide teilen gleich. `machines/dual-gantry.toml` hat ein X von 3 m
   auf zwei Zahnstangen mit Katalogmotoren (1FK2103-4AH an S210) und ein Y von 0,8 m auf einem Riemen auf einer Brücke
   von 1,2 m. Es besteht jedes Urteil seines Zyklus: `gantry-sync` 14 µm von 100, und das Ende, nahe dem der Wagen
-  anfängt, trägt mehr (`rack-feed-force` 110 gegen 96 N). Sein Gieren schwingt mit sqrt((k + 2 k_Ende (B / 2)²) / J) / 2 pi,
-  155,0 Hz mit J auf 20 kg m² angehoben und dem Wagen in der Mitte, 149,5 Hz mit ihm an einem Ende (`sim-cli modes`).
+  anfängt, trägt mehr (`rack-feed-force` 110 gegen 96 N). Sein Gieren schwingt mit sqrt((k + 2 k_Ende (B / 2)²) / J) / 2 pi
+  mit dem Wagen in der Mitte: 425,4 Hz wie ausgeliefert (J = 2,657 kg m²), über dem Y-Riemen (96,4 Hz) und X auf seinen
+  Zahnstangen (263,0 Hz); der Wagen an einem Ende koppelt X und das Gieren (256,1 und 395,0 Hz). `sim-cli modes
+  --machine-file machines/dual-gantry.toml --axis-index 1` nennt alle drei mit ihren Dämpfungsgraden (das Gieren 0,144,
+  X 0,088, der Riemen 0,033 in der Mitte); mit J auf 20 kg m² angehoben schwingt das Gieren in der Mitte mit 155,0 Hz,
+  mit dem Wagen an einem Ende mit 151,7 Hz (`the_dual_gantry_reports_its_yaw_among_its_modes_by_hand`).
 - **Gleichlauf der beiden Antriebe** (`gantry.sync`, `gantry.sync_gain_1_s`, gelesen, wo ein Portal zwei Antriebe hat;
   der erste ist der Master). `"master_slave"`: der Lageregler des Slaves folgt der Istlage des Masters, seinem Sollwert
   weniger seinem Schleppfehler, so kommt der Nachlauf des Slaves auf den des Masters: bei stetiger Geschwindigkeit v,
@@ -878,7 +882,12 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
 - Die Eigenform des Riemens (elastisches Modell): die Achsen, und der Rahmen, wo er schwingt, auf der Steifigkeit des
   Riemens bei festgehaltenen Scheiben, K = Σ_s EA / l_s c_s c_s^T (l_s der ungedehnte Riemen des Abschnitts in Ruhe, wie in den Crates), gegen ihre Massenmatrix; die niedrigste ist
   `resonance_hz` in einer Lage, also stellt `effects.shaper_follows_pose` den Shaper darauf, und die App zeigt ihre
-  Form (auf 1 m Werkzeugweg skaliert).
+  Form (auf 1 m Werkzeugweg skaliert). `Machine::modes` (`sim-cli modes`, die Darstellung der App) gibt jede Eigenform
+  von K und M, die des Gierens und der Getriebe von Spindeln, Zahnstangen und Rundachsen mit, die niedrigste zuerst, jede
+  mit ihrem Dämpfungsgrad x^T C x / (2 w) (x ihre Form, x^T M x = 1): C die Dämpfer der Riemenabschnitte c + c_t EA / l,
+  die der Getriebe bei der Frequenz der Eigenform, des Gierens, des Rahmens, der Neigung und des Balkens. Die Datei des
+  T-Portals gibt die beiden Eigenformen ihres Crates samt Dämpfung auf 1e-9 (`the_t_gantry_file_tells_its_crates_modes`).
+  Bis zum 21. November 2026 gab eine Datei nur ihre niedrigste, mit Dämpfung 0.
 - Spindel, Zahnstange, Linearmotor oder Rundtisch (`machine.screw`, ...): das Getriebe seines Motors wird eines in der
   Einheit der Achse, der Übersetzung i / Hebel (der `RotaryJoint` des Gelenkbaukastens mit dem
   `transmission::Converter` dahinter), und seine "Scheibe" ist die Achse selbst: K hat für ihn die Zeile e_i, die Achse

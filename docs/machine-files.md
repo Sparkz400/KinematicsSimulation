@@ -656,8 +656,12 @@ tolerance_m = "gantry.sync_tolerance_m"
   rule: F2 - F1 = 2 m e a / B for a carriage m at e accelerated at a. With the effect off the guides hold the bridge square and the two share equally.
   `machines/dual-gantry.toml` has a 3 m X on two racks with catalogue motors (1FK2103-4AH on S210) and a 0.8 m Y belt
   on a 1.2 m bridge. It passes every verdict on its cycle: `gantry-sync` 14 um of 100, and the end the carriage starts
-  near carries more (`rack-feed-force` 110 against 96 N). Its yaw rings at sqrt((k + 2 k_end (B / 2)²) / J) / 2 pi,
-  155.0 Hz with J raised to 20 kg m² and the carriage in the middle, 149.5 Hz with it at an end (`sim-cli modes`).
+  near carries more (`rack-feed-force` 110 against 96 N). Its yaw rings at sqrt((k + 2 k_end (B / 2)²) / J) / 2 pi with
+  the carriage in the middle: 425.4 Hz as shipped (J = 2.657 kg m²), above the Y belt (96.4 Hz) and X on its racks
+  (263.0 Hz); the carriage at an end couples X and the yaw (256.1 and 395.0 Hz). `sim-cli modes --machine-file
+  machines/dual-gantry.toml --axis-index 1` lists all three with their damping ratios (the yaw 0.144, X 0.088, the belt
+  0.033 in the middle); with J raised to 20 kg m² the yaw is 155.0 Hz in the middle, 151.7 Hz with the carriage at an end
+  (`the_dual_gantry_reports_its_yaw_among_its_modes_by_hand`).
 - **Synchronising the two drives** (`gantry.sync`, `gantry.sync_gain_1_s`, read where a gantry has two drives; the
   first is the master). `"master_slave"`: the slave's position loop follows the master's actual position, its
   setpoint less the master's following error, so the slave's lag comes on top of the master's: at a steady speed v with
@@ -835,6 +839,11 @@ derivations):
 - The belt's mode (elastic model): the axes, and the frame where it sways, on the belt's stiffness with the pulleys
   held, K = Σ_s EA / l_s c_s c_s^T (l_s the section's unstretched belt at rest, as the crates take it), against their mass matrix; the lowest is `resonance_hz` at a pose, so
   `effects.shaper_follows_pose` sets the shaper to it, and the app shows its shape (scaled to 1 m of tool travel).
+  `Machine::modes` (`sim-cli modes`, the app's plot) gives every mode of K and M, the yaw's, the screws', racks' and
+  rotaries' gearboxes with them, lowest first, each with its damping ratio x^T C x / (2 w) (x its shape, x^T M x = 1):
+  C the belt sections' c + c_t EA / l, the gearboxes' dampers at the mode's frequency, the yaw's, the frame's, the
+  lean's and the beam's. The T-gantry's file gives its crate's two modes and their damping to 1e-9
+  (`the_t_gantry_file_tells_its_crates_modes`). Until 21 November 2026 a file told its lowest mode alone, damping 0.
 - A screw, rack, linear motor or rotary (`machine.screw`, ...): its motor's gearbox becomes one in the axis's unit, of
   ratio i / lever (the joint kit's `RotaryJoint` with the `transmission::Converter` behind it), and its "pulley" is the
   axis itself: K has the row e_i for it, the axis takes the gearbox's output as its force, the belt's equations leave

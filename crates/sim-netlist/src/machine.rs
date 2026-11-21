@@ -72,7 +72,7 @@ use sim_components::transmission::{BallScrew, LinearMotor, RackPinion, StrainWav
 use sim_core::scene::{MOTOR_PART, drive_unit, idler};
 use sim_core::{
     AxisInfo, BeltSection, Config, ConfigError, ENERGY_PARTS, FRICTION_SIGNALS, FrictionContact, LOSS_PREFIX, Label,
-    Machine, MotorInfo, Part, RatingCheck, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart,
+    Machine, Mode, MotorInfo, Part, RatingCheck, Scene, Shape, SignalInfo, TORQUE_PARTS, ThermalPart,
 };
 
 const G: f64 = 9.80665;
@@ -570,15 +570,21 @@ fn symmetric_eigen(mut a: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
 }
 
 /// The lowest mode of K x = w^2 M x (M symmetric positive definite, K symmetric) whose w^2 is above zero: (w^2, x).
-/// Through the Cholesky factor M = L L^T: L^-1 K L^-T y = w^2 y, x = L^-T y.
 fn lowest_mode(m: &[Vec<f64>], k: &[Vec<f64>]) -> Option<(f64, Vec<f64>)> {
+    every_mode(m, k).into_iter().next()
+}
+
+/// Every mode of K x = w^2 M x whose w^2 is above zero (1e-9 of the largest), lowest first: (w^2, x), x normalised to
+/// x^T M x = 1. Through the Cholesky factor M = L L^T: L^-1 K L^-T y = w^2 y, x = L^-T y. Empty where M is not
+/// positive definite.
+fn every_mode(m: &[Vec<f64>], k: &[Vec<f64>]) -> Vec<(f64, Vec<f64>)> {
     let d = m.len();
     let mut l = vec![vec![0.0; d]; d];
     for i in 0..d {
         for j in 0..=i {
             let sum = m[i][j] - (0..j).map(|p| l[i][p] * l[j][p]).sum::<f64>();
             if i == j {
-                l[i][i] = if sum > 0.0 { sum.sqrt() } else { return None };
+                l[i][i] = if sum > 0.0 { sum.sqrt() } else { return Vec::new() };
             } else {
                 l[i][j] = sum / l[j][j];
             }
@@ -598,14 +604,20 @@ fn lowest_mode(m: &[Vec<f64>], k: &[Vec<f64>]) -> Option<(f64, Vec<f64>)> {
     let a: Vec<Vec<f64>> = (0..d).map(|i| (0..d).map(|j| 0.5 * (a[i][j] + a[j][i])).collect()).collect();
     let (values, vectors) = symmetric_eigen(a);
     let largest = values.iter().fold(0.0f64, |m, v| m.max(*v));
-    let (index, w2) =
-        values.iter().copied().enumerate().filter(|(_, v)| *v > 1e-9 * largest).min_by(|a, b| a.1.total_cmp(&b.1))?;
-    // x = L^-T y.
-    let mut out = vec![0.0; d];
-    for i in (0..d).rev() {
-        out[i] = (vectors[i][index] - (i + 1..d).map(|p| l[p][i] * out[p]).sum::<f64>()) / l[i][i];
-    }
-    Some((w2, out))
+    let mut found: Vec<(usize, f64)> =
+        values.iter().copied().enumerate().filter(|(_, v)| *v > 1e-9 * largest).collect();
+    found.sort_by(|a, b| a.1.total_cmp(&b.1));
+    found
+        .into_iter()
+        .map(|(index, w2)| {
+            // x = L^-T y.
+            let mut out = vec![0.0; d];
+            for i in (0..d).rev() {
+                out[i] = (vectors[i][index] - (i + 1..d).map(|p| l[p][i] * out[p]).sum::<f64>()) / l[i][i];
+            }
+            (w2, out)
+        })
+        .collect()
 }
 
 /// Generalised velocity of a rigid solve: accelerations, guide forces and states' rates, per motor the torque at the
@@ -2894,6 +2906,13 @@ impl ConfigMachine {
     /// unstretched belt at rest; plus the frame's and
     /// the lean's springs), against their mass matrix (see `energy_parts`): (w^2, the axes', frame's and lean's motion).
     fn belt_mode(&self, pose: &[f64]) -> Option<(f64, Vec<f64>)> {
+        let (mass, stiffness) = self.mode_matrices(pose)?;
+        lowest_mode(&mass, &stiffness)
+    }
+
+    /// The mass and stiffness matrices of the modes at a pose (`belt_mode`), over the axes, the yaw, the frame, the lean
+    /// and the beam; `None` in the rigid model.
+    fn mode_matrices(&self, pose: &[f64]) -> Option<(Vec<Vec<f64>>, Vec<Vec<f64>>)> {
         if !self.elastic {
             return None;
         }
@@ -2978,7 +2997,47 @@ impl ConfigMachine {
             stiffness[x][at] += dk * w0;
             stiffness[x][x] += 0.5 * ddk * w0 * w0;
         }
-        lowest_mode(&mass, &stiffness)
+        Some((mass, stiffness))
+    }
+
+    /// The damping matrix over the coordinates of `mode_matrices` at a pose, for a mode at w (rad/s): each belt section's
+    /// c + c_t EA / l on its length's rate (`Belt::section`, the pulleys held), the gearbox's damper behind a screw,
+    /// rack, linear motor or rotary at w (`Gearbox::damping_at`, a Zener arm damping by frequency) on its output's
+    /// travel, the yaw's, the frame's, the lean's and the beam's dampers.
+    fn mode_damping(&self, pose: &[f64], w: f64, dim: usize) -> Vec<Vec<f64>> {
+        let (n, rest) = (self.n(), self.rest_tensions(pose).1);
+        let mut c = vec![vec![0.0; dim]; dim];
+        for (sec, length) in self.sections.iter().zip(&rest) {
+            let damper = self.belt.damping + self.belt.damping_time * self.belt.ea / length;
+            for i in 0..n {
+                for l in 0..n {
+                    c[i][l] += damper * sec.c[i] * sec.c[l];
+                }
+            }
+        }
+        for (kk, d) in self.direct.iter().enumerate() {
+            if d.is_some() {
+                let (k, damper) = (&self.k[kk], self.gears[kk].at(self.pulley_angle(kk, pose)).damping_at(w));
+                for i in 0..n {
+                    for l in 0..n {
+                        c[i][l] += damper * k[i] * k[l];
+                    }
+                }
+            }
+        }
+        if let Some(g) = &self.gantry {
+            c[g.coord][g.coord] += g.damping;
+        }
+        if let Some(f) = &self.frame {
+            c[n][n] += f.damping;
+        }
+        if let Some(lean) = &self.lean {
+            c[self.lean_row()][self.lean_row()] += lean.damping;
+        }
+        if self.beam.is_some() {
+            c[self.beam_row()][self.beam_row()] += self.beam_mode(pose)[2];
+        }
+        c
     }
 
     /// Where the scene draws a pose: each axis runs from the origin along its incline in the x-z plane.
@@ -3758,6 +3817,24 @@ impl Machine for ConfigMachine {
         let mut q = self.joints(tool_pose);
         self.sag_at_rest(&mut q);
         self.belt_mode(&q).map(|(w2, _)| w2.sqrt() / std::f64::consts::TAU)
+    }
+
+    /// Every mode of `mode_matrices`, lowest first (the first is `resonance_hz`'s): the belts', a yawing bridge's, the
+    /// frame's, the lean's and the beam's, with the pulleys and rotors held. Each mode's damping ratio is x^T C(w) x /
+    /// (2 w), x its shape with x^T M x = 1 and C at its w (`mode_damping`), as the crates' `chain::matrix_modes` takes it.
+    fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        let mut q = self.joints(tool_pose);
+        self.sag_at_rest(&mut q);
+        let Some((mass, stiffness)) = self.mode_matrices(&q) else { return Vec::new() };
+        every_mode(&mass, &stiffness)
+            .into_iter()
+            .map(|(w2, x)| {
+                let w = w2.sqrt();
+                let c = self.mode_damping(&q, w, x.len());
+                let cx: f64 = (0..x.len()).map(|i| (0..x.len()).map(|l| x[i] * c[i][l] * x[l]).sum::<f64>()).sum();
+                Mode { hz: w / std::f64::consts::TAU, damping: cx / (2.0 * w) }
+            })
+            .collect()
     }
 
     /// The mode of `resonance_hz`: the axes and the frame move, pulleys and rotors stand. Scaled so that the tool's
