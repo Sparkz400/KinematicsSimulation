@@ -112,7 +112,6 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The belt runs' sideways offset on the leaning Z axis; the belt runs riding on the beam's vertical mode | T-gantry | A first-order moment (T₁ − T₃)·0.04 m; the beam mode would fall 0.9 % (59.32 to 58.77 Hz). |
 | Angular momentum of the T-gantry crate against its machine file is not compared | T-gantry | Different origins and belt-run geometry. |
 | Idler signs of the y belts of the dual gantry and the rack gantry | machine files | Not checked: the 3D drawing does not model those routes faithfully. |
-| The screw's stiffness along the stroke keeps the far end's for the wafer handler's and the parallel SCARA's pose tolerance (their own `rest_sag`, `machine-wafer-handler` and `machine-parallel-scara`: the column's m g / K with the far end's K, the stroke's `static_twist`), on the safe side; `chain.rs`'s takes the nut, and since 21 November the fit's twist (`Machine::twist_at`) and the mesh bristle (σ_m r, its store still not booked: at most (μ |held|)² / (2σ_m) per gear) follow the nut too | wafer handler, parallel SCARA | The tolerance up to the far end's sag over the pose's. |
 | Belt-to-pulley heat conduction | linear delta | Not sized. |
 | The tube's single-mode shape for inertia with the static stiffness 3EI/L | D3, D4, H4 arm bending | Not sized. |
 | A contact that is not at the tool is pushed at the motors (machine crates, linkage, delta, scissor files) | obstacle contact | A load on a soft belt swings on by the belt's stretch (millimetres at 1 m/s). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
@@ -283,8 +282,17 @@ Fixed (after the second audit, 21 November):
   faded. Five-bar's tool turn: -4.18 dB at 0.08, +3.56 dB at the shipped 0.033 (onset 0.0497); a time run with the
   friction off hammers from 0.048 (within 4 %), with it on from 0.078: the friction still damps the swing, which the
   figure leaves out on the safe side. Told, not judged (the time run stays the verdict); each run is measured once more
-  with the play closed (margins of the five-bar 20.5 to 23.8 s). Still open: the kicks and the margins are at the start
-  pose only; the margins across the bounds vary config values, not poses, so there was no pose list to reuse.
+  with the play closed (margins of the five-bar 20.5 to 23.8 s). Since 21 November (review fix) the
+  margins, the margin across the play and the kicks run at every pose the cycle stops at (`margin_poses`; model
+  reference, hammering across a backlash), the bounds at the start pose only. The five-bar's tool turn at 0.1 hammers
+  hardest over the pick (2.63 N m); its margin across the play is least at the start pose (3.56 dB). The T-gantry's
+  motor A has its least margins at [0.1, 0.05]: 46.4° and 8.44 dB (54.9° and 9.19 dB at the start). `sim-cli margins`
+  on 4 cores: five-bar 26.8 to 99.4 s, T-gantry 8.6 to 31.8 s. Each pose is measured in the start's payload state (the
+  segments' `payload` is not followed). Open, not retuned here: three arms' loops are stable but below the tuning's 35
+  degrees at a cycle pose: the URDF arm's motor 1 21.7 degrees at [0.8, 0.45, -0.55, 0.3, 0.5, 1], the palletiser's
+  motor 2 32.7 degrees at [1.6, 0.5, 1.3, pi/2], the arm on a track's motor 2 24.2 degrees at [3.5, -1.3, 0.45, -0.55,
+  0.3, 0.5, 1], all crossing near 8 Hz; sim-cli's `step_bode_and_tuning_write_csv_for_every_machine` judges 35 degrees
+  at every pose and fails on those three (machines 12, 17, 25) until they are retuned or the judgement is decided.
 - The hexapod's lowest held mode (183.2 Hz) lies below its planner trains (289.6 Hz, each leg's M_kk with the others
   held), and the trains are right for the allowance's jerk term: with one motor driven and the others held the twist
   rate is [K^-1 M]_kk j = M_kk j / K_k, the modal sum of its column over the held modes (model reference, the planner's

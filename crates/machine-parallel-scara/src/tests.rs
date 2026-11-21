@@ -277,8 +277,10 @@ fn the_default_cycle_passes_its_verdicts() {
 /// The tool turn's velocity loop at 0.08 N m s/rad hammers from flank to flank of its gearbox's 1 arcmin play, which
 /// the small-signal measurement inside the play does not see: there it reads 78.2 degrees and 10.54 dB, but after the
 /// swept kick at rest (`backlash_hammering`) the loop keeps swinging at 650 Hz with 0.77 N m peak of the 1.95 N m the
-/// motor has (`sim-cli margins`, run 21 November 2026), so `velocity_loop_margins` calls it not stable. At 0.1 it
-/// hammers at 705 Hz, the 710 Hz the config's note found in a traverse; at the shipped 0.033, and at 0.06, it does not.
+/// motor has (`sim-cli margins`, run 21 November 2026), so `velocity_loop_margins` calls it not stable at the start
+/// pose. At 0.1 it hammers at 705 to 710 Hz, the 710 Hz the config's note found in a traverse, hardest (2.63 N m) over
+/// the pick, the cycle's third pose (`margin_poses`: [-0.1525, -0.5, 0.095, pi / 2], the tool turned by 90 degrees);
+/// at the shipped 0.033, and at 0.06, it does not at any of the cycle's four poses.
 #[test]
 fn the_tool_turn_hammering_across_its_play_is_found_by_the_margins() {
     use sim_components::analysis::{backlash_hammering, velocity_loop_margins};
@@ -290,9 +292,10 @@ fn the_tool_turn_hammering_across_its_play_is_found_by_the_margins() {
     let m = velocity_loop_margins(&ENTRY, &at(0.08), &[]).unwrap()[0].1[3];
     let h = m.hammering.expect("0.08 hammers");
     assert!(m.valid && m.gain_margin_db > 0.0 && !m.stable(), "{m:?}");
-    assert!((h.frequency_hz - 650.0).abs() < 15.0 && h.torque_nm > 0.3, "{h:?}");
+    // The start pose's run (the first).
+    assert!((h.frequency_hz - 650.0).abs() < 15.0 && h.torque_nm > 0.3 && h.pose == 0, "{h:?}");
     let h = backlash_hammering(&ENTRY, &at(0.1), 3).unwrap().expect("0.1 hammers");
-    assert!((h.frequency_hz - 710.0).abs() < 15.0, "{h:?}");
+    assert!((h.frequency_hz - 710.0).abs() < 15.0 && h.pose == 2, "{h:?}");
     for kv in [0.033, 0.06] {
         assert_eq!(backlash_hammering(&ENTRY, &at(kv), 3).unwrap(), None, "{kv}");
     }

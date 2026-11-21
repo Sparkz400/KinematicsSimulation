@@ -770,7 +770,11 @@ fn the_margin_across_the_play_says_where_the_tool_turn_hammers() {
         }
         cfg
     };
-    let margin = |kv: f64| velocity_loop_margins(entry, &at(kv, true), &[]).unwrap()[0].1[3].play_margin_db;
+    // The least over the poses the cycle stops at (`margin_poses`), as the time run hammers at any of them.
+    let margin = |kv: f64| {
+        let runs = velocity_loop_margins(entry, &at(kv, true), &[]).unwrap();
+        runs.iter().map(|(_, m)| m[3].play_margin_db).fold(f64::INFINITY, f64::min)
+    };
     let (hammers, shipped) = (margin(0.08), margin(0.033));
     assert!(hammers < 0.0 && shipped > 0.0, "{hammers} dB at 0.08, {shipped} dB at 0.033");
     let onset = 0.033 * 10f64.powf(shipped / 20.0);

@@ -1619,10 +1619,17 @@ $ sim-cli margins t-gantry
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
 ,a,185.6,54.9,9.19,1.882,277.3,,ok
 ,b,179.8,52.1,9.09,1.878,277.3,,ok
+start.pose=[0.1 0.05],a,218.4,46.4,8.44,2.061,277.3,,ok
+start.pose=[0.1 0.05],b,179.0,53.0,9.46,1.827,277.3,,ok
+start.pose=[0.9 0.35],a,175.3,54.4,9.46,1.817,277.3,,ok
+start.pose=[0.9 0.35],b,189.3,53.2,8.82,1.946,277.3,,ok
+start.pose=[0.9 0.05],a,183.5,50.9,9.04,1.885,277.3,,ok
+start.pose=[0.9 0.05],b,214.5,48.8,8.85,1.994,277.3,,ok
 
 $ sim-cli margins single-axis --bands
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
 ,m,181.5,59.9,11.56,1.607,253.5,,ok
+start.pose=[0.9],m,143.4,62.0,11.35,1.496,211.8,,ok
 belt.damping_n_s_m=50.0,m,186.8,54.3,11.59,1.652,231.7,,ok
 belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 ...
@@ -1630,7 +1637,7 @@ belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 
 | Spalte | Einheit | Bedeutung |
 | --- | --- | --- |
-| `run` | | Leer für die Konfiguration, wie sie ist; mit `--bands` eine Zeile je Motor für jeden Wert aus `[bounds]` an seiner unteren und an seiner oberen Grenze |
+| `run` | | Leer für die Konfiguration, wie sie ist, in ihrer Startpose; `start.pose=[...]` für jede andere Pose, an der der Zyklus hält (die Ziele aus `cycle.segment`, jedes einmal, im Nutzlastzustand des Starts); mit `--bands` eine Zeile je Motor für jeden Wert aus `[bounds]` an seiner unteren und an seiner oberen Grenze, in der Startpose. Bei mehreren Posen nennt stderr je Motor die kleinste Phasenreserve, Amplitudenreserve und Reserve über das Spiel über sie, jede mit ihrer Pose |
 | `crossover_hz` | Hz | Durchtrittsfrequenz, bei der \|L\| = 1 ist, die mit der kleinsten Phasenreserve. Unter 10 Hz, wo die Messung nach unten weitergegangen ist (die Einzelachse mit der Coulomb-Reibung ihres Motors an der oberen Grenze: 4,4 Hz, 92,0°). Leer, wie auch `phase_margin_deg`, wo der Kreis bis hinab zu 1 Hz keinen Durchtritt hat; das Ergebnis ist dann das der Amplitudenreserve allein |
 | `phase_margin_deg` | ° | Phasenreserve: 180° plus die Phase von L dort (die Phase ohne Sprünge verfolgt, am ersten Durchtritt zwischen −360° und 0° genommen); negativ: der Kreis ist instabil |
 | `gain_margin_db` | dB | Amplitudenreserve: um wie viel die Verstärkung steigen darf, bis L −1 erreicht, an der ungünstigsten Stelle, an der die Phase durch −180° fällt und die kein späteres Steigen durch −180° mit \|L\| > 1 aufhebt (eine Nyquist-Zählung; Fallen und Steigen jenseits von −1 unterhalb des Durchtritts ist bedingt stabil und zählt nicht); negativ, wo dort \|L\| > 1 ist (instabil); `inf`, wenn es bis 2 kHz keine solche Stelle gibt |

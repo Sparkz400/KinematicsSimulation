@@ -397,6 +397,7 @@ not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | 
 | (binary_id(=sim-opcua::plc) & test(=plcopen_power_home_and_moves_reach_their_targets))
 | (binary_id(=sim-opcua::plc) & test(=the_plc_disables_and_enables_the_drives))
 | (binary_id(=sim-machines::effects) & test(=the_margin_across_the_play_says_where_the_tool_turn_hammers))
+| (binary_id(=machine-parallel-scara) & test(=tests::the_tool_turn_hammering_across_its_play_is_found_by_the_margins))
 | (binary_id(=sim-opcua::soak) & test(=the_link_runs_move_cycles_for_a_long_time_without_errors_or_drift))
 )
 """

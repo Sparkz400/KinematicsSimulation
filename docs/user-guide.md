@@ -1652,10 +1652,19 @@ $ sim-cli margins t-gantry
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
 ,a,185.6,54.9,9.19,1.882,277.3,,ok
 ,b,179.8,52.1,9.09,1.878,277.3,,ok
+start.pose=[0.1 0.05],a,218.4,46.4,8.44,2.061,277.3,,ok
+start.pose=[0.1 0.05],b,179.0,53.0,9.46,1.827,277.3,,ok
+start.pose=[0.9 0.35],a,175.3,54.4,9.46,1.817,277.3,,ok
+start.pose=[0.9 0.35],b,189.3,53.2,8.82,1.946,277.3,,ok
+start.pose=[0.9 0.05],a,183.5,50.9,9.04,1.885,277.3,,ok
+start.pose=[0.9 0.05],b,214.5,48.8,8.85,1.994,277.3,,ok
+Motor A: least over the poses the cycle stops at: 46.40 deg start.pose=[0.1 0.05], 8.44 dB start.pose=[0.1 0.05] (phase margin, gain margin, then the margin across the backlash, each at its pose)
+Motor B: least over the poses the cycle stops at: 48.80 deg start.pose=[0.9 0.05], 8.82 dB start.pose=[0.9 0.35] (phase margin, gain margin, then the margin across the backlash, each at its pose)
 
 $ sim-cli margins single-axis --bands
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
 ,m,181.5,59.9,11.56,1.607,253.5,,ok
+start.pose=[0.9],m,143.4,62.0,11.35,1.496,211.8,,ok
 belt.damping_n_s_m=50.0,m,186.8,54.3,11.59,1.652,231.7,,ok
 belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 ...
@@ -1663,7 +1672,7 @@ belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 
 | Column | Unit | Meaning |
 | --- | --- | --- |
-| `run` | | Empty for the config as it is; with `--bands` one row per motor for each value of `[bounds]` at its low and at its high bound |
+| `run` | | Empty for the config as it is at its start pose; `start.pose=[...]` for each other pose the cycle stops at (the targets of `cycle.segment`, once each, in the start's payload state); with `--bands` one row per motor for each value of `[bounds]` at its low and at its high bound, at the start pose. With several poses stderr names per motor the least phase margin, gain margin and margin across the play over them, each with its pose |
 | `crossover_hz` | Hz | Where \|L\| = 1, the crossover with the smallest phase margin. Below 10 Hz where the measurement stepped down (the single axis with its motor's Coulomb friction at the high bound: 4.4 Hz, 92.0°). Empty, as is `phase_margin_deg`, where the loop has no gain crossover down to 1 Hz; the result is then the gain margin's alone |
 | `phase_margin_deg` | ° | 180° plus the phase of L there (the phase followed without jumps, taken between −360° and 0° at the first crossover); negative: the loop is unstable |
 | `gain_margin_db` | dB | By how much the gain may rise before L reaches −1, at the worst place where the phase falls through −180° that a later rise through −180° with \|L\| > 1 does not undo (a Nyquist count; a fall and rise beyond −1 below the crossover is conditionally stable and not counted); negative where \|L\| > 1 there (unstable); `inf` if no such place up to 2 kHz |
