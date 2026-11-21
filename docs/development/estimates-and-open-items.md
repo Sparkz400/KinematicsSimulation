@@ -318,6 +318,18 @@ Fixed (after the second audit, 21 November):
   before. In the crate and the machine file; checked off the middle
   (`testkit::weight_is_at_the_first_moment_at`, `the_beams_own_weight_is_at_its_first_moment_off_the_middle` in both)
   and over the 1 s run (below 1e-7 J with the mode on and off).
+- The app's path test (`a_path_is_planned_run_and_analysed_in_the_app`) failed on the crane under load (the bridge
+  1.37 mm from home) and passed alone; a 2 mm tolerance for the crane was put in. Cause, measured on the library: the
+  load's swing, which nothing but the drive damps, pulls the bridge to and fro by the drive's give, and the app starts
+  the path back at the phase the analysis's wall time leaves: over the phase, the bridge stands 0.06 to 1.49 mm (half
+  its span over a swing) off and up to 1.55 mm off 0.2 s after the path back; the middle of the span within 0.033 mm.
+  In the app with the path back started 1.4 s later: 1.364 mm off at the check after the unreadable line, the middle
+  0.001 mm. Not a regression of the crane's commits of 21 November (e4a90405, 074796e0, e9a65662: the library's figures
+  are the same to nine digits on 8754d55d before them); the drives' give is the retune of 17 November (389bbac7: 0.3 mm
+  either way after the long move where the stiff drives gave 5 um). The test now judges where an axis stands by the
+  middle of the span it covers over one period of the machine's lowest mode (`standing`), at the 1 mm it had; the
+  swing's amplitude itself is not judged there. (A probe's reversed point list was refused with `error-trajectory`:
+  its first time was the plan's end, not 0; the app's file pairs the forward times with the reversed poses.)
 
 Fixed:
 - `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another
