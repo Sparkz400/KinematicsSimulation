@@ -633,3 +633,35 @@ fn the_mode_list_has_both_of_the_double_pendulum_s_roots() {
     let plain = crane(&lossless(&[]));
     assert_eq!(plain.modes(&pose).len(), 1);
 }
+
+/// With effects.bridge_skew the girder's yaw is among the modes (it listed the swing alone): no loop holds it, the
+/// carriages share the bridge's command and its loop holds their mean. By hand with the trolley 2 m off the middle (the
+/// skew test's A, B, C): rigid, sqrt(k_psi / C) on k_psi = k_lat b^2 / 2 = 4e6 N m/rad. The model linearised with the
+/// motors free, the carriages' mean free too, has it at sqrt(k_psi / (C - B^2 / A)), to the rope's pull. Elastic, the
+/// rotors' differential delta on the gearboxes: J R' w^4 - (J k' + R' (k_psi + k')) w^2 + k_psi k' = 0, J = J_b + m_t d^2,
+/// R' = R g^2 / 2, k' = k g^2 / 2; its lower root 0.1 % under the rigid one.
+#[test]
+fn the_bridge_s_skew_is_among_the_modes() {
+    use sim_components::shapes::{as_mode, eigen_near, linearised};
+    let (gauge, d) = (5.6, 2.0);
+    let pose = [5.0, 2.5 + d, 2.0];
+    let m = crane(&lossless(&["effects.bridge_skew = true"]));
+    let r = m.drives[0].reflected_inertia();
+    let (jb, mt, mb) = (m.bridge * gauge * gauge / 12.0, m.trolley, m.bridge);
+    let (a, b, c) = (mb + mt + 2.0 * r, mt * d, jb + mt * d * d + 0.5 * r * gauge * gauge);
+    let k_psi = 0.5 * 2.0e6 * 2.0 * 2.0;
+    let held = (k_psi / c).sqrt() / TAU;
+    let modes = m.modes(&pose);
+    assert!(modes.len() == 2 && (modes[1].hz / held - 1.0).abs() < 1e-12, "{modes:?} against {held} Hz");
+    let free = (k_psi / (c - b * b / a)).sqrt();
+    let (_, jac) = linearised(&m, &pose);
+    let linear = as_mode(eigen_near(&jac, m.state_len(), [0.0, free]).unwrap().0).hz;
+    assert!((linear / (free / TAU) - 1.0).abs() < 1e-3, "linearised {linear} Hz against {} Hz", free / TAU);
+    let e = crane(&lossless(&["effects.bridge_skew = true", "effects.joint_elasticity = true"]));
+    let (k2, r2, j) = (0.5 * e.drives[0].gearbox.stiffness * gauge * gauge, 0.5 * r * gauge * gauge, jb + mt * d * d);
+    let (p, q) = (j * r2, j * k2 + r2 * (k_psi + k2));
+    let low = ((q - (q * q - 4.0 * p * k_psi * k2).sqrt()) / (2.0 * p)).sqrt() / TAU;
+    let modes = e.modes(&pose);
+    assert!(modes.len() == 3 && (modes[1].hz / low - 1.0).abs() < 1e-9, "{modes:?} against {low} Hz");
+    assert!(low < held && low > 0.995 * held, "{low} Hz against {held} Hz");
+}

@@ -501,6 +501,22 @@ impl Crane {
         Some(((self.g / length * (1.0 + rope / (2.0 * m)) / (1.0 + rope / (3.0 * m))).sqrt(), None))
     }
 
+    /// effects.bridge_skew: the girder's yaw, which no loop holds (the carriages share the bridge's command, its loop
+    /// holds their mean, x_c): the girder's m_b g^2 / 12 and the trolley's m_t d^2 (at d from the middle, `y` the trolley's
+    /// place) on the wheels' k_psi and damper; rigid with the rotors' R g^2 / 2 on the yaw (R = J i^2 per carriage), elastic
+    /// those on the rotors' differential delta, tied to the yaw by the gearboxes' k g^2 / 2 and c g^2 / 2 on psi - delta.
+    fn skew_modes(&self, y: f64) -> Vec<sim_core::Mode> {
+        let Some(skew) = self.skew else { return Vec::new() };
+        let (j, d, half) = (&self.drives[0], y - self.y_centre, 0.5 * skew.gauge * skew.gauge);
+        let (yaw, rotors) = (skew.inertia + self.trolley * d * d, j.reflected_inertia() * half);
+        let modes = sim_components::chain::matrix_modes;
+        if !self.elastic_drives {
+            return modes(&[yaw + rotors], &[skew.stiffness], &[skew.damping], 1);
+        }
+        let (k, c) = (j.gearbox.stiffness * half, j.gearbox.damping * half);
+        modes(&[yaw, 0.0, 0.0, rotors], &[skew.stiffness + k, -k, -k, k], &[skew.damping + c, -c, -c, c], 2)
+    }
+
     /// The bridge's yaw and its rate (0 without effects.bridge_skew).
     fn yaw(&self, s: &[f64]) -> (f64, f64) {
         self.layout.skew.map_or((0.0, 0.0), |k| (s[k], s[k + 1]))
@@ -1105,10 +1121,15 @@ impl Machine for Crane {
     }
 
     /// The swing of `resonance_hz` and, with the hook block, the double pendulum's upper mode (`sway_omegas`), with the
-    /// trolley held as `resonance_hz` has it. The swing has no damper of its own.
+    /// trolley held as `resonance_hz` has it (the swing has no damper of its own); with effects.bridge_skew the girder's
+    /// yaw (`skew_modes`). Lowest first.
     fn modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
         let Some((lower, upper)) = self.sway_omegas(self.height - tool_pose[2]) else { return Vec::new() };
-        [Some(lower), upper].into_iter().flatten().map(|w| sim_core::Mode { hz: w / TAU, damping: 0.0 }).collect()
+        let mut out: Vec<sim_core::Mode> =
+            [Some(lower), upper].into_iter().flatten().map(|w| sim_core::Mode { hz: w / TAU, damping: 0.0 }).collect();
+        out.extend(self.skew_modes(tool_pose[1]));
+        out.sort_by(|a, b| a.hz.total_cmp(&b.hz));
+        out
     }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {
