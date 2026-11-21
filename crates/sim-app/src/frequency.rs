@@ -5,7 +5,9 @@
 //! long runs do. No text for the user is written here.
 
 use crate::model::Message;
-use sim_components::analysis::{CANCELLED, LoopMargins, LoopPoint, Progress, loop_margins, velocity_loop_responses};
+use sim_components::analysis::{
+    CANCELLED, LoopMargins, LoopPoint, Progress, backlash_hammering, loop_margins, velocity_loop_responses,
+};
 use sim_core::{Config, ConfigError, MachineEntry};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -89,13 +91,19 @@ impl Drop for LoopResponse {
     }
 }
 
-/// The measurement: the responses of the config's motors (`velocity_loop_responses`), their margins, and what the
-/// plots mark. A cancelled one answers `ConfigError::Invalid(CANCELLED)`.
+/// The measurement: the responses of the config's motors (`velocity_loop_responses`), their margins with the time run
+/// for hammering across a play (`backlash_hammering`), and what the plots mark. A cancelled one answers
+/// `ConfigError::Invalid(CANCELLED)`.
 pub fn measure(entry: &MachineEntry, config: &Config, progress: &Progress) -> Result<Response, ConfigError> {
     let cfg = &sim_components::catalog::resolve(entry, config)?;
     let curves = velocity_loop_responses(entry, std::slice::from_ref(cfg), progress)?.remove(0);
     let modes = (entry.build)(cfg)?.modes(&cfg.f64s("start.pose")?).iter().map(|m| m.hz).collect();
-    Ok(Response { margins: curves.iter().map(|c| loop_margins(c)).collect(), curves, modes, markers: markers(cfg) })
+    let margins = curves
+        .iter()
+        .enumerate()
+        .map(|(motor, c)| Ok(LoopMargins { hammering: backlash_hammering(entry, cfg, motor)?, ..loop_margins(c) }))
+        .collect::<Result<_, ConfigError>>()?;
+    Ok(Response { margins, curves, modes, markers: markers(cfg) })
 }
 
 /// Whether an error is the answer of a cancelled measurement.

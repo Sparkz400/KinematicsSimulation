@@ -4327,12 +4327,16 @@ pub struct LoopMargins {
     /// guarantees a gain margin of at least 6 dB and a phase margin of at least 29 degrees.
     pub peak_sensitivity: f64,
     pub peak_frequency_hz: f64,
+    /// The loop hammers across its gearbox's play (`backlash_hammering`), which the response does not show; `None`
+    /// from `loop_margins` alone, `velocity_loop_margins` runs the check.
+    pub hammering: Option<Hammering>,
 }
 
 impl LoopMargins {
-    /// A valid measurement, both margins positive (a phase margin that is NaN has no crossover to judge): stable.
+    /// A valid measurement, both margins positive (a phase margin that is NaN has no crossover to judge), and no
+    /// hammering across a play: stable.
     pub fn stable(&self) -> bool {
-        self.valid && !(self.phase_margin_deg <= 0.0) && self.gain_margin_db > 0.0
+        self.valid && !(self.phase_margin_deg <= 0.0) && self.gain_margin_db > 0.0 && self.hammering.is_none()
     }
 }
 
@@ -4348,6 +4352,7 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
         valid: points.iter().all(|p| measured(&p)),
         peak_sensitivity: 0.0,
         peak_frequency_hz: f64::NAN,
+        hammering: None,
     };
     let points: Vec<&LoopPoint> = points.iter().filter(measured).collect();
     for p in &points {
@@ -4598,11 +4603,100 @@ pub fn velocity_loop_margins(
     }
     let configs: Vec<Config> = runs.iter().map(|(_, c)| c.clone()).collect();
     let responses = velocity_loop_responses(entry, &configs, &Progress::default())?;
+    let motors = responses.first().map_or(0, Vec::len);
+    let hammering =
+        on_all_cores(configs.len() * motors, |j| backlash_hammering(entry, &configs[j / motors], j % motors))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
     Ok(runs
         .into_iter()
         .zip(responses)
-        .map(|((name, _), motors)| (name, motors.iter().map(|points| loop_margins(points)).collect()))
+        .enumerate()
+        .map(|(run, ((name, _), curves))| {
+            let margins = curves.iter().enumerate().map(|(motor, points)| LoopMargins {
+                hammering: hammering[run * motors + motor],
+                ..loop_margins(points)
+            });
+            (name, margins.collect())
+        })
         .collect())
+}
+
+/// A velocity loop that keeps oscillating on its own across a gearbox's play after a kick at rest
+/// (`backlash_hammering`): the frequency, and the peak of the torque the loop asks for about its mean (N m).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hammering {
+    pub frequency_hz: f64,
+    pub torque_nm: f64,
+}
+
+/// How long `backlash_hammering` sweeps, and the windows it watches the loop in afterwards.
+pub const HAMMER_SWEEP_S: f64 = 0.2;
+pub const HAMMER_WINDOW_S: f64 = 0.1;
+
+/// The torque one motor's loop asks for after a sweep at rest: a sine of `amplitude` (N m) added to it as the margin
+/// measurement adds its own, its frequency rising logarithmically over `loop_frequencies`' band (10 Hz to a quarter of
+/// the velocity loop's rate) in `HAMMER_SWEEP_S`, then taken off. Per window of `HAMMER_WINDOW_S` after it (three):
+/// the RMS about the window's mean, the number of times the torque crosses that mean, and its peak about it.
+fn after_a_sweep(sim: &mut Sim, motor: usize, amplitude: f64) -> [(f64, usize, f64); 3] {
+    let every = (sim.control.drive_params().velocity_cycle / sim.dt).round() as u64;
+    let (f0, f1) = (10.0, 0.25 / sim.control.drive_params().velocity_cycle);
+    let (t0, k) = (sim.time(), (f1 / f0).ln());
+    let mut windows: [Vec<f64>; 3] = Default::default();
+    loop {
+        let t = sim.time() - t0;
+        let window = ((t - HAMMER_SWEEP_S) / HAMMER_WINDOW_S).floor();
+        if window >= 3.0 {
+            break;
+        }
+        let due = sim.step.is_multiple_of(every);
+        if due {
+            // A logarithmic sweep: the phase is the integral of f0 e^(k t / T).
+            let phase = std::f64::consts::TAU * f0 * HAMMER_SWEEP_S / k * ((k * t / HAMMER_SWEEP_S).exp() - 1.0);
+            sim.control.drives[motor].torque_injection = if t < HAMMER_SWEEP_S { amplitude * phase.sin() } else { 0.0 };
+        }
+        sim.step();
+        if due && window >= 0.0 {
+            windows[window as usize].push(sim.control.drives[motor].torque_demand);
+        }
+    }
+    windows.map(|seen| {
+        let mean = seen.iter().sum::<f64>() / seen.len() as f64;
+        let rms = (seen.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / seen.len() as f64).sqrt();
+        let crossings = seen.windows(2).filter(|w| (w[0] > mean) != (w[1] > mean)).count();
+        (rms, crossings, seen.iter().map(|x| (x - mean).abs()).fold(0.0, f64::max))
+    })
+}
+
+/// Whether the velocity loop of `motor` hammers across its gearbox's play: a time run, as the small-signal measurement
+/// (`velocity_loop_response`) cannot tell. Inside the play the measurement sees the rotor alone; a loop that is stable
+/// there can still be unstable with the flanks in contact, and then the rotor swings from flank to flank in a limit
+/// cycle (the describing function of the play rises from 0 with the rotor inside it to the flanks' stiffness with it far
+/// beyond, so the loop crosses -1 at some amplitude). The motor's rated torque, swept over the band at rest
+/// (`after_a_sweep`), takes the rotor across the play at each frequency in turn. The loop hammers where, 0.1 to 0.3 s
+/// after the sweep, the torque it asks for still swings by more in RMS than the margin measurement's test torque
+/// (`loop_amplitude`, beyond which `loop_point` says a loop moves on its own) and has not fallen to half from the
+/// one window to the next, and where the same run with `effects.gearbox_backlash` off is quiet (otherwise the play is
+/// not the cause). On the measurement's config (`lossless`). `None` without the play.
+pub fn backlash_hammering(entry: &MachineEntry, cfg: &Config, motor: usize) -> Result<Option<Hammering>, ConfigError> {
+    if !cfg.bool("effects.gearbox_backlash").unwrap_or(false) {
+        return Ok(None);
+    }
+    let cfg = lossless(&crate::catalog::resolve(entry, cfg)?)?;
+    let run = |cfg: &Config| -> Result<_, ConfigError> {
+        let (mut sim, _) = settled(entry, cfg, 0)?;
+        let id = sim.machine.motors().get(motor).ok_or_else(|| ConfigError::Invalid("motor".into()))?.id;
+        let rated = 10.0 * loop_amplitude(entry, cfg, id)?;
+        let [_, early, late] = after_a_sweep(&mut sim, motor, rated);
+        Ok((early.0 > 0.1 * rated && late.0 > 0.1 * rated && late.0 > 0.5 * early.0).then_some(late))
+    };
+    let Some((_, crossings, peak)) = run(&cfg)? else { return Ok(None) };
+    let mut without = cfg;
+    without.set_text("effects.gearbox_backlash = false")?;
+    if run(&without)?.is_some() {
+        return Ok(None);
+    }
+    Ok(Some(Hammering { frequency_hz: crossings as f64 / (2.0 * HAMMER_WINDOW_S), torque_nm: peak }))
 }
 
 /// The same cycle run twice, once with an effect on and once with it off (`compare_effect`), for overlaying the two.
@@ -5187,7 +5281,8 @@ line_module_efficiency = 0.9
     }
 
     /// Without a gain crossover in the band the phase margin is NaN (not measurable) and `stable` judges the gain margin
-    /// alone; a valid measurement with a negative margin, or one not valid, is not stable.
+    /// alone; a valid measurement with a negative margin, or one not valid, is not stable, nor one that hammers across a
+    /// gearbox's play whatever its margins.
     #[test]
     fn a_loop_without_a_gain_crossover_is_judged_on_its_gain_margin() {
         let m = |phase: f64, gain: f64, valid: bool| LoopMargins {
@@ -5197,8 +5292,11 @@ line_module_efficiency = 0.9
             valid,
             peak_sensitivity: 1.0,
             peak_frequency_hz: 10.0,
+            hammering: None,
         };
         assert!(m(f64::NAN, 20.0, true).stable());
+        let hammering = Some(Hammering { frequency_hz: 645.0, torque_nm: 0.7 });
+        assert!(!LoopMargins { hammering, ..m(40.0, 6.0, true) }.stable());
         assert!(!m(f64::NAN, -1.0, true).stable());
         assert!(!m(f64::NAN, f64::NAN, true).stable());
         assert!(!m(-5.0, 20.0, true).stable() && m(40.0, 6.0, true).stable() && !m(40.0, 6.0, false).stable());

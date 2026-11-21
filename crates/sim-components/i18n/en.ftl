@@ -796,3 +796,4 @@ param-span_min_m = Shortest free belt span [m]
 param-max_velocity_rad_s = Highest speed [rad/s]
 param-max_acceleration_rad_s2 = Highest acceleration [rad/s²]
 param-max_jerk_rad_s3 = Highest jerk [rad/s³]
+loop-hammers = hammers across the backlash at { $arg } (frequency, peak of the torque the velocity loop asks for)

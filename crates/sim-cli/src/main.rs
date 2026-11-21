@@ -240,7 +240,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("step") => step(args),
         Some("bode") => bode(args),
         Some("tuning") => tuning(args),
-        Some("margins") => margins(args),
+        Some("margins") => margins(args, tr),
         Some("modes") => modes(args),
         Some("workspace") => workspace(args),
         Some("replay") => replay(args, tr),
@@ -1749,8 +1749,9 @@ fn tuning(args: &Args) -> Result<(), Failure> {
 
 /// `margins <machine> [--bands]`: per motor the stability margins of its velocity loop (`velocity_loop_margins`), for
 /// the config as it is and with `--bands` with each value of `[bounds]` at its low and at its high bound. A row whose
-/// loop is unstable or whose measurement is not valid (`LoopMargins::stable`) says FAIL.
-fn margins(args: &Args) -> Result<(), Failure> {
+/// loop is unstable, whose measurement is not valid or that hammers across its gearbox's play (`LoopMargins::stable`)
+/// says FAIL; one that hammers is named on stderr with the frequency and the torque's peak.
+fn margins(args: &Args, tr: &Translations) -> Result<(), Failure> {
     use sim_components::analysis::{bounds, velocity_loop_margins};
     let (entry, cfg) = machine_and_config(args)?;
     let motors = (entry.build)(&cfg)?.motors().to_vec();
@@ -1761,6 +1762,11 @@ fn margins(args: &Args) -> Result<(), Failure> {
     for (run, margins) in &runs {
         for (motor, m) in motors.iter().zip(margins) {
             let result = if m.stable() { "ok" } else { "FAIL" };
+            if let Some(h) = m.hammering {
+                let at = format!("{:.0} Hz, {:.2} N m", h.frequency_hz, h.torque_nm);
+                let run = if run.is_empty() { String::new() } else { format!("{run}, ") };
+                eprintln!("{run}{}: {}", tr.tr(motor.key), tr.tr_arg("loop-hammers", &at));
+            }
             // No gain crossover in the band (or no valid measurement): crossover and phase margin left empty, as a
             // missing band in `tuning`; the result is then the gain margin's alone.
             let cell = |x: f64| if x.is_nan() { String::new() } else { format!("{x:.1}") };
