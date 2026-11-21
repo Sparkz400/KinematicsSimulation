@@ -231,14 +231,18 @@ the planner's train allowance and exact run join, the retuned tripod and wafer Z
   corner (3101 cycles), Morris, Sobol', the duty mix (on a reconstructed `exct-30-empty.toml`:
   `exct-30.toml` with `effects.payload = false`), the swing fit (`swing.csv` rebuilt from the guide's
   description reproduces the printed fit to the last digit), the band count (139 cycles, 69 bounded
-  values), the tripod's and hexapod's margins and gains, the thermal-feedback figures.
+  values), the tripod's and hexapod's margins and gains, the thermal-feedback figures, the EXCT-30's
+  worst-corner optimiser (8 steps back to 2.048 s, 5371 corner runs) and its result at the worst
+  corner (settling 0.24 mm, belt 33 N), the D3's and D2's worst corners (they pass now: 0.37 and
+  0.496 mm), the linear delta's and the EXCT-30's margins across the bounds.
 - `docs/overview.md`, `docs/mcp.md`: every block.
 - `docs/validation.md`: the friction feedforward table, all rows and machine files; the EXCT-30 worst
   corner; the wafer, tool-space and tripod rows.
 - `docs/model-reference.md`: the base table's T-gantry, screw, rack, parallel SCARA and hexapod rows;
   the robust optimiser; the warm-start rises; the energy budget's tolerance; the wafer column's and the
   parallel SCARA stroke's modes (at the nut); the corner path's motor speeds.
-- `docs/config-reference.md`: the tripod's and hexapod's margins.
+- `docs/config-reference.md`: the tripod's, hexapod's and EXCT-30's margins (the T-gantry's unchanged);
+  the linear delta's integral time (0.012 s, as the config has it, not 0.02 s).
 - `docs/machine-files.md`, `docs/mechanisms.md` and their German twins: the H-bot block, the rack
   gantry's and dual gantry's figures, the yaw path errors, the wafer lift's screw, the crane's cycle,
   the arm's rest offset; and the claims the program contradicted (a screw's stiffness at the softest
