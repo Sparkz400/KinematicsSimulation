@@ -161,10 +161,25 @@ impl RotaryJoint {
         engaged: bool,
     ) -> (GearTorque, f64, f64) {
         let gear = self.gearbox.torque(rotor, rotor_speed, angle, speed);
+        let (acc, rate) = self.rotor_under(command, rotor, rotor_speed, gear, brake, engaged);
+        (gear, acc, rate)
+    }
+
+    /// `rotor` with the gearbox's torques `gear` given (a gear with its Maxwell arm, `Gearbox::torque_with`): the
+    /// rotor's acceleration and the brake's deflection rate.
+    pub fn rotor_under(
+        &self,
+        command: f64,
+        rotor: f64,
+        rotor_speed: f64,
+        gear: GearTorque,
+        brake: f64,
+        engaged: bool,
+    ) -> (f64, f64) {
         let (held, rate) = self.brake.torque(engaged, rotor_speed, brake);
         let acc = (self.ripple.apply(command, rotor) - gear.rotor - self.shaft.torque(rotor_speed) - held)
             / self.rotor_inertia;
-        (gear, acc, rate)
+        (acc, rate)
     }
 
     /// Rigid model: the torque the motor puts on the arm through a loss-free gearbox with a massless rotor at the
@@ -268,7 +283,14 @@ mod tests {
     #[test]
     fn a_converter_behind_the_gearbox_gives_the_hand_calculated_joint() {
         use crate::transmission::Converter;
-        let pinion = Converter { lever: 0.05, stiffness: 1e7, backlash: 1e-4, efficiency: 0.95, inertia: 0.04 };
+        let pinion = Converter {
+            lever: 0.05,
+            stiffness: 1e7,
+            backlash: 1e-4,
+            efficiency: 0.95,
+            inertia: 0.04,
+            damping_ratio: 0.0,
+        };
         let mut cfg = Config::parse(&joint_text()).unwrap();
         let mut j = RotaryJoint::from_config(&cfg).unwrap();
         pinion.apply(&cfg, &mut j).unwrap();
@@ -295,15 +317,22 @@ mod tests {
             .replace("gearbox_lost_motion = false", "gearbox_lost_motion = false\ngearbox_mesh_friction = true");
         let mut cfg = Config::parse(&text).unwrap();
         let mut j = RotaryJoint::from_config(&cfg).unwrap();
-        Converter { lever: 0.05, stiffness: 1e7, backlash: 0.0, efficiency: 0.95, inertia: 0.04 }
+        Converter { lever: 0.05, stiffness: 1e7, backlash: 0.0, efficiency: 0.95, inertia: 0.04, damping_ratio: 0.0 }
             .apply(&cfg, &mut j)
             .unwrap();
         assert!((j.gearbox.mesh_stiffness / 2.857142857e6 - 1.0).abs() < 1e-9);
         cfg.set_text("gearbox.stiffness_nm_rad = 1e12").unwrap();
         let mut j = RotaryJoint::from_config(&cfg).unwrap();
-        Converter { lever: 0.05, stiffness: f64::INFINITY, backlash: 0.0, efficiency: 1.0, inertia: 0.0 }
-            .apply(&cfg, &mut j)
-            .unwrap();
+        Converter {
+            lever: 0.05,
+            stiffness: f64::INFINITY,
+            backlash: 0.0,
+            efficiency: 1.0,
+            inertia: 0.0,
+            damping_ratio: 0.0,
+        }
+        .apply(&cfg, &mut j)
+        .unwrap();
         assert!((j.gearbox.mesh_stiffness / 2e10 - 1.0).abs() < 1e-9);
     }
 

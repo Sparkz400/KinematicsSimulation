@@ -921,6 +921,13 @@ pub struct Gearbox {
     /// The output angle at which the mesh friction's bristle is relaxed, where the last step ended (`commit`); NaN before
     /// the first step (no friction yet).
     pub mesh_anchor: f64,
+    /// Behind a converter with a damper (`Converter::apply_back`): the damper bridges the gear's spring and not the
+    /// converter's in series with it, a three-element (Zener) solid. It stands here in its Maxwell form, the series
+    /// spring as above in parallel with an arm of a spring K_m (`relax_stiffness`, N/m) and a damper of time constant
+    /// tau (`relax_time`, s) in series, whose end u is a state of the machine (`arm`). 0 for none: the damping then
+    /// bridges the whole spring (`damping`), as it does in the slow limit of an arm faster than the integrator follows.
+    pub relax_stiffness: f64,
+    pub relax_time: f64,
 }
 
 /// The mesh friction's bristle stiffness over K1 where `gearbox.mesh_stiffness_factor` is absent: K1 itself, as the
@@ -1002,6 +1009,8 @@ impl Gearbox {
                 0.0
             },
             mesh_anchor: f64::NAN,
+            relax_stiffness: 0.0,
+            relax_time: 0.0,
         })
     }
 
@@ -1164,7 +1173,28 @@ impl Gearbox {
         self.anchor = [x, self.hysteresis_torque(x, 0.0).0];
     }
 
+    /// The torques without the Maxwell arm (`arm`): a gear's whole torque where it has none.
     pub fn torque(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64) -> GearTorque {
+        debug_assert!(self.relax_stiffness == 0.0, "a gear with a Maxwell arm takes its state: `torque_with`");
+        self.torque_arm(rotor_angle, rotor_speed, out_angle, out_speed, 0.0)
+    }
+
+    /// `torque` with the Maxwell arm at its state `u` (`arm`).
+    pub fn torque_with(
+        &self,
+        rotor_angle: f64,
+        rotor_speed: f64,
+        out_angle: f64,
+        out_speed: f64,
+        u: f64,
+    ) -> GearTorque {
+        let arm = self.arm(rotor_angle, out_angle, u).0;
+        self.torque_arm(rotor_angle, rotor_speed, out_angle, out_speed, arm)
+    }
+
+    /// `torque` with the arm's force `arm` beside the damping: the flanks pass it as they do the damping's, nothing
+    /// within the dead zone.
+    fn torque_arm(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64, arm: f64) -> GearTorque {
         let (twist, e) = self.beyond(rotor_angle, out_angle);
         // In the backlash the flanks are apart; without play they touch at zero twist too, where the hysteresis holds.
         if e == 0.0 && (self.has_play() || self.hysteresis == 0.0) {
@@ -1172,7 +1202,7 @@ impl Gearbox {
         }
         let rate = rotor_speed / self.ratio - out_speed;
         let held = self.spring(e).0.copysign(twist) + self.hysteresis_torque(Self::contact(twist, e), rate).0;
-        let torque = held + self.damping * rate;
+        let torque = held + self.damping * rate + arm;
         // Tooth flanks can push but not pull: while they separate fast, the damping must not reverse the torque.
         if self.has_play() && torque * twist < 0.0 {
             return GearTorque { output: 0.0, rotor: 0.0 };
@@ -1219,6 +1249,47 @@ impl Gearbox {
         self.spring(e).0.copysign(twist) + self.hysteresis_torque(Self::contact(twist, e), 0.0).0
     }
 
+    /// The Maxwell arm's force and the rate of its state `u` (`relax_stiffness`): with x the contact twist (0 in the dead
+    /// zone), F = K_m (x - u) and du/dt = (x - u) / tau. At rest u = x and the arm carries nothing, so the static
+    /// stiffness is the series spring's. (0, 0) without an arm.
+    ///
+    /// For a gear of K1 at the joint, K_g, damping c across it and a converter of K_c in series (node between them
+    /// massless), the series pair is K_c (K_g + c s) / (K_c + K_g + c s); the arm's K_m = K_c^2 / (K_c + K_g) and
+    /// tau = c / (K_c + K_g) give the same beside K_s = K_c K_g / (K_c + K_g): K_s + K_m tau s / (1 + tau s). The arm
+    /// is the K1 line's: over the lost-motion band and the stiffness curve's upper segments the gear is softer, and
+    /// there the arm stays the K1 line's. In the dead zone its force does not reach the flanks (`torque_with`) and it
+    /// relaxes towards x = 0 by the same law.
+    pub fn arm(&self, rotor_angle: f64, out_angle: f64, u: f64) -> (f64, f64) {
+        if self.relax_stiffness == 0.0 {
+            return (0.0, 0.0);
+        }
+        let (twist, e) = self.beyond(rotor_angle, out_angle);
+        let d = Self::contact(twist, e) - u;
+        (self.relax_stiffness * d, d / self.relax_time)
+    }
+
+    /// The arm's state at rest: the contact twist, where it carries nothing.
+    pub fn arm_rest(&self, rotor_angle: f64, out_angle: f64) -> f64 {
+        let (twist, e) = self.beyond(rotor_angle, out_angle);
+        Self::contact(twist, e)
+    }
+
+    /// `energy` with the arm's spring at its state `u`, K_m (x - u)^2 / 2.
+    pub fn energy_with(&self, rotor_angle: f64, out_angle: f64, u: f64) -> f64 {
+        let f = self.arm(rotor_angle, out_angle, u).0;
+        self.energy(rotor_angle, out_angle) + if f == 0.0 { 0.0 } else { 0.5 * f * f / self.relax_stiffness }
+    }
+
+    /// The viscous damping the gear puts on a ring of `omega` rad/s for the modes: `damping`, and the arm's
+    /// K_m tau / (1 + (omega tau)^2) (the imaginary part of its K_m i omega tau / (1 + i omega tau) over omega).
+    pub fn damping_at(&self, omega: f64) -> f64 {
+        if self.relax_stiffness == 0.0 {
+            return self.damping;
+        }
+        let wt = omega * self.relax_time;
+        self.damping + self.relax_stiffness * self.relax_time / (1.0 + wt * wt)
+    }
+
     /// The twist beyond the backlash that transmits `output_torque` at rest, with its sign: the spring's alone.
     pub fn spring_twist_signed(&self, output_torque: f64) -> f64 {
         if output_torque == 0.0 { 0.0 } else { self.spring_twist(output_torque.abs()).copysign(output_torque) }
@@ -1253,16 +1324,30 @@ impl Gearbox {
     /// (dt / 4 the same), and 10.8 J at 3 sigma. Left out, what is not booked is the store itself, at most
     /// (mu |held|)^2 / (2 sigma) per gear: 4e-7 J there.
     pub fn loss_power(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64) -> f64 {
-        let t = self.torque(rotor_angle, rotor_speed, out_angle, out_speed);
+        self.loss_arm(rotor_angle, rotor_speed, out_angle, out_speed, (0.0, 0.0))
+    }
+
+    /// `loss_power` with the arm at its state `u`: the arm's store (`energy_with`) is taken off too, so that its damper's
+    /// power, K_m (x - u)^2 / tau, is in the loss.
+    pub fn loss_power_with(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64, u: f64) -> f64 {
+        self.loss_arm(rotor_angle, rotor_speed, out_angle, out_speed, self.arm(rotor_angle, out_angle, u))
+    }
+
+    fn loss_arm(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64, arm: (f64, f64)) -> f64 {
+        let (arm, arm_rate) = arm;
+        let t = self.torque_arm(rotor_angle, rotor_speed, out_angle, out_speed, arm);
         let (twist, e) = self.beyond(rotor_angle, out_angle);
         if e == 0.0 && self.has_play() {
-            return t.rotor * rotor_speed - t.output * out_speed;
+            // The contact twist stands at 0: the arm's store changes by -F du/dt alone.
+            return t.rotor * rotor_speed - t.output * out_speed + arm * arm_rate;
         }
         let (z, slope) = self.hysteresis_torque(Self::contact(twist, e), rotor_speed / self.ratio - out_speed);
         let stored = if z == 0.0 { 0.0 } else { z * slope / self.dahl_stiffness };
+        let rate = rotor_speed / self.ratio - out_speed;
         t.rotor * rotor_speed
             - t.output * out_speed
-            - (self.spring(e).0.copysign(twist) + stored) * (rotor_speed / self.ratio - out_speed)
+            - (self.spring(e).0.copysign(twist) + stored) * rate
+            - arm * (rate - arm_rate)
     }
 }
 
@@ -1571,6 +1656,8 @@ preload_n = 200.0
             upper: [1e4; 2],
             mesh_stiffness: 0.0,
             mesh_anchor: f64::NAN,
+            relax_stiffness: 0.0,
+            relax_time: 0.0,
         }
     }
 

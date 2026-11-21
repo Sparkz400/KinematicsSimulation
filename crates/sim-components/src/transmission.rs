@@ -59,8 +59,9 @@ impl Mounting {
 }
 
 /// What turns a gearbox's output rotation into a joint's travel (ball screw, rack and pinion): the travel per radian of
-/// its input (`lever`, m/rad), its own stiffness along the travel (N/m), its backlash (m), efficiency, and the inertia
-/// that turns with its input (screw shaft, pinion; kg m^2).
+/// its input (`lever`, m/rad), its own stiffness along the travel (N/m), its backlash (m), efficiency, the inertia
+/// that turns with its input (screw shaft, pinion; kg m^2), and the damping ratio of its spring's own mode (nut,
+/// bearings and guides; `apply_back`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Converter {
     pub lever: f64,
@@ -68,12 +69,14 @@ pub struct Converter {
     pub backlash: f64,
     pub efficiency: f64,
     pub inertia: f64,
+    pub damping_ratio: f64,
 }
 
 impl Converter {
     /// Puts the converter behind `joint`'s gearbox (read in N m and rad at the converter's input): the joint's gearbox
-    /// becomes gearbox and converter together, in N and m. Ratio i / lever; stiffness and damping of the gearbox seen at
-    /// the joint (over lever^2) in series with the converter's; backlash and efficiency added and multiplied as
+    /// becomes gearbox and converter together, in N and m. Ratio i / lever; stiffness of the gearbox seen at the joint
+    /// (over lever^2) in series with the converter's, the gearbox's damping across its own spring alone (a Zener solid,
+    /// `Gearbox::arm`); backlash and efficiency added and multiplied as
     /// effects.gearbox_backlash and effects.gearbox_efficiency say; the converter's inertia joins the rotor over i^2.
     ///
     /// With effects.thermal_feedback the gearbox's temperature changes the gearbox's share of the efficiency, not the
@@ -118,7 +121,33 @@ impl Converter {
         g.hysteresis *= g.stiffness * l / k1;
         g.band *= l;
         g.band_compliance = g.band_compliance * l * l + 1.0 / converter;
-        g.damping /= l * l;
+        // Two damped springs in series, the node between them massless: the gear's K_g = K1 / l^2 with its damper c_g
+        // across it alone, and the converter's K_c with c_c = 2 zeta sqrt(K_c m) across it alone, zeta its
+        // `damping_ratio` and m the mass behind it (`output`; none where it is not known). Their K_s + b s + K_m tau s /
+        // (1 + tau s) holds it exactly (`Gearbox::arm`): b = c_g c_c / C, tau = C / S, K_m = (K_g c_c - K_c c_g)^2 /
+        // (S C^2), with S = K_g + K_c, C = c_g + c_c. An arm that would settle faster than the integrator follows
+        // (`BRISTLE_RATE_MAX`, tau under 10 us) is its slow limit, u following x: a damper K_m tau beside b, off by
+        // (omega tau)^2 at a ring of omega (0.4 % at 1 kHz). A rigid converter leaves the gear's damper across it.
+        let damping = g.damping / (l * l);
+        let own = if output.is_finite() && converter.is_finite() {
+            2.0 * self.damping_ratio * (converter * output).sqrt()
+        } else {
+            0.0
+        };
+        let (sum, dampers) = (converter + k1 / (l * l), damping + own);
+        let (across, tau) = (if dampers > 0.0 { damping * own / dampers } else { 0.0 }, dampers / sum);
+        let arm = if dampers > 0.0 {
+            (k1 / (l * l) * own - converter * damping).powi(2) / (sum * dampers * dampers)
+        } else {
+            0.0
+        };
+        if !converter.is_finite() {
+            g.damping = damping;
+        } else if arm > 0.0 && tau * BRISTLE_RATE_MAX >= 1.0 {
+            (g.relax_stiffness, g.relax_time, g.damping) = (arm, tau, across);
+        } else {
+            g.damping = across + arm * tau;
+        }
         g.half_backlash =
             g.half_backlash * l + if cfg.bool("effects.gearbox_backlash")? { 0.5 * self.backlash } else { 0.0 };
         if cfg.bool("effects.gearbox_efficiency")? {
@@ -177,7 +206,8 @@ impl BackDriven {
 /// effects.screw_lead_efficiency, `lead_efficiency`), `nut_stiffness_n_m`,
 /// `bearing_stiffness_n_m`, `preload_n`, `dynamic_load_rating_n` (Ca), `static_load_rating_n` (C0a), `load_factor`
 /// (fw), `static_safety_factor`, `critical_speed_factor`, `buckling_safety_factor`, `max_dn` (d n with d in mm and n in
-/// r/min; 0 for none).
+/// r/min; 0 for none), and optionally `axial_damping_ratio` (the damping ratio of the mass behind the nut on the screw's
+/// axial spring, from the nut, the bearings and the guides: `Converter::apply_back`; 0 where it is absent).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BallScrew {
     pub lead: f64,
@@ -198,6 +228,19 @@ pub struct BallScrew {
     pub speed_factor: f64,
     pub buckling_safety: f64,
     pub max_dn: f64,
+    pub axial_damping_ratio: f64,
+}
+
+/// An optional damping ratio, 0 where the key is absent (a config written before 20 November 2026), below 1.
+fn damping_ratio(cfg: &Config, key: &str) -> Result<f64> {
+    if cfg.get(key).is_err() {
+        return Ok(0.0);
+    }
+    let zeta = cfg.non_negative(key)?;
+    if zeta >= 1.0 {
+        return Err(ConfigError::Invalid(key.into()));
+    }
+    Ok(zeta)
 }
 
 impl BallScrew {
@@ -251,6 +294,7 @@ impl BallScrew {
             speed_factor: p("critical_speed_factor")?,
             buckling_safety: p("buckling_safety_factor")?,
             max_dn: cfg.non_negative("screw.max_dn")?,
+            axial_damping_ratio: damping_ratio(cfg, "screw.axial_damping_ratio")?,
         })
     }
 
@@ -366,6 +410,7 @@ impl BallScrew {
                 backlash: 0.0,
                 efficiency: self.efficiency,
                 inertia: self.inertia(),
+                damping_ratio: self.axial_damping_ratio,
             },
             back_efficiency: self.back_efficiency,
         }
@@ -383,7 +428,9 @@ const RACK_PRESSURE_ANGLE_DEG: f64 = 20.0;
 
 /// A pinion on a rack. Config `[rack]`: `module_m`, `teeth`, `helix_angle_deg`, `efficiency`, `stiffness_n_m` (mesh and
 /// rack mounting), `backlash_m`, `pinion_inertia_kgm2`, `rated_feed_force_n` (the maker's permissible feed force of the
-/// pair), `service_factor` (K_A), and optionally `pressure_angle_deg` (normal section, 20 where absent).
+/// pair), `service_factor` (K_A), and optionally `pressure_angle_deg` (normal section, 20 where absent) and
+/// `damping_ratio` (the damping ratio of the mass behind the pinion on the mesh's spring: `Converter::apply_back`; 0
+/// where absent).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RackPinion {
     pub module: f64,
@@ -397,6 +444,7 @@ pub struct RackPinion {
     pub service_factor: f64,
     /// Normal pressure angle, rad.
     pub pressure_angle: f64,
+    pub damping_ratio: f64,
 }
 
 impl RackPinion {
@@ -425,6 +473,7 @@ impl RackPinion {
             pinion_inertia: p("pinion_inertia_kgm2")?,
             rated_force: p("rated_feed_force_n")?,
             service_factor: p("service_factor")?,
+            damping_ratio: damping_ratio(cfg, "rack.damping_ratio")?,
         })
     }
 
@@ -445,6 +494,7 @@ impl RackPinion {
             backlash: self.backlash,
             efficiency: self.efficiency,
             inertia: self.pinion_inertia,
+            damping_ratio: self.damping_ratio,
         }
     }
 }
@@ -667,7 +717,14 @@ mod tests {
             [joint]\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 1e-3\n\
             min_angle_deg = -45.0\nmax_angle_deg = 90.0\nstop_stiffness_nm_rad = 1e5\nstop_damping_nm_s_rad = 0.0\n";
         let cfg = Config::parse(text).unwrap();
-        let drum = Converter { lever: 0.025, stiffness: f64::INFINITY, backlash: 0.0, efficiency: 1.0, inertia: 0.0 };
+        let drum = Converter {
+            lever: 0.025,
+            stiffness: f64::INFINITY,
+            backlash: 0.0,
+            efficiency: 1.0,
+            inertia: 0.0,
+            damping_ratio: 0.0,
+        };
         let mass = 0.32;
         let joint = |output: f64| {
             let mut j = RotaryJoint::from_config(&cfg).unwrap();
@@ -732,6 +789,7 @@ mod tests {
             speed_factor: 0.8,
             buckling_safety: 2.0,
             max_dn: 70000.0,
+            axial_damping_ratio: 0.0,
         }
     }
 
@@ -807,6 +865,7 @@ mod tests {
             rated_force: 3000.0,
             service_factor: 1.5,
             pressure_angle: 20f64.to_radians(),
+            damping_ratio: 0.0,
         };
         close(r.radius() * 2.0 * PI, 0.2, "travel per turn");
         close(r.allowed_force(), 2000.0, "allowed force");
@@ -887,6 +946,7 @@ mod tests {
             rated_force: 3000.0,
             service_factor: 1.25,
             pressure_angle: 20f64.to_radians(),
+            damping_ratio: 0.0,
         };
         let c = &r.rating_checks("1", 0)[0];
         assert!(c.check == "rack-feed-force" && c.signal == "rack.1.feed_force" && c.limit == 2400.0 && !c.life);
@@ -944,8 +1004,14 @@ mod tests {
             [joint]\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 1e-3\n\
             min_angle_deg = -45.0\nmax_angle_deg = 90.0\nstop_stiffness_nm_rad = 1e5\nstop_damping_nm_s_rad = 0.0\n";
         let cfg = Config::parse(text).unwrap();
-        let converter =
-            Converter { lever: 1.0, stiffness: f64::INFINITY, backlash: 0.0, efficiency: 0.95, inertia: 0.0 };
+        let converter = Converter {
+            lever: 1.0,
+            stiffness: f64::INFINITY,
+            backlash: 0.0,
+            efficiency: 0.95,
+            inertia: 0.0,
+            damping_ratio: 0.0,
+        };
         let make = |back: f64| {
             let mut j = RotaryJoint::from_config(&cfg).unwrap();
             converter.apply_back(&cfg, &mut j, f64::INFINITY, back).unwrap();
@@ -983,7 +1049,14 @@ mod tests {
             stiffness_k2_nm_rad = 2e5\nstiffness_k3_nm_rad = 2e5\n{extra}\
             [joint]\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 1e-3\n\
             min_angle_deg = -45.0\nmax_angle_deg = 90.0\nstop_stiffness_nm_rad = 1e5\nstop_damping_nm_s_rad = 0.0\n";
-        let drum = Converter { lever: 0.025, stiffness: f64::INFINITY, backlash: 0.0, efficiency: 1.0, inertia: 0.0 };
+        let drum = Converter {
+            lever: 0.025,
+            stiffness: f64::INFINITY,
+            backlash: 0.0,
+            efficiency: 1.0,
+            inertia: 0.0,
+            damping_ratio: 0.0,
+        };
         let make = |extra: &str| {
             let cfg = Config::parse(&base.replace("{extra}", extra)).unwrap();
             let mut j = RotaryJoint::from_config(&cfg).unwrap();
@@ -1023,7 +1096,14 @@ mod tests {
             stiffness_k2_nm_rad = 2e5\nstiffness_k3_nm_rad = 2e5\n\
             [joint]\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 1e-3\n\
             min_angle_deg = -45.0\nmax_angle_deg = 90.0\nstop_stiffness_nm_rad = 1e5\nstop_damping_nm_s_rad = 0.0\n";
-        let screw = Converter { lever: 0.025, stiffness: 5e7, backlash: 0.0, efficiency: 1.0, inertia: 0.0 };
+        let screw = Converter {
+            lever: 0.025,
+            stiffness: 5e7,
+            backlash: 0.0,
+            efficiency: 1.0,
+            inertia: 0.0,
+            damping_ratio: 0.0,
+        };
         let gear = |b: &str| {
             let cfg = Config::parse(&text.replace("BAND", b)).unwrap();
             let mut j = RotaryJoint::from_config(&cfg).unwrap();
@@ -1040,6 +1120,109 @@ mod tests {
         assert!(rel(g.hysteresis, 108.108_108_108_108_1) && rel(2.0 * g.hysteresis / g.stiffness, 5e-6));
         assert!(rel(g.dahl_stiffness, 1.0 / 2.15625e-8 - 1.0 / 2.3125e-8), "{}", g.dahl_stiffness);
         assert_eq!(gear("0.0").band, 0.0);
+    }
+
+    /// The gear's damper bridges its own spring, not the converter's (a Zener solid, `Gearbox::arm`). A gear of
+    /// K1 = 100 N m/rad and 0.2828 N m s/rad behind a lever of 0.01 m/rad is K_g = 1e6 N/m and c = 2828 N s/m at the
+    /// joint, a converter of K_c = 1e6 N/m in series: K_s = 5e5 N/m at rest (the arm then carries nothing). A mass of
+    /// 1 kg on it, the rotor held, rings as the roots of m c s^3 + m (K_c + K_g) s^2 + K_c c s + K_c K_g = 0 say:
+    /// s = -152.099260 +- 924.266861i and -403.015059 (numpy.roots), so successive peaks fall by
+    /// exp(-2 pi 152.099260 / 924.266861) = 0.355591 (log decrement 1.033974), the real root's share gone after a few
+    /// periods. With the damper across the whole series spring (as the converter had it) zeta would be
+    /// 2828 / (2 sqrt(5e5)) = 2.0: no ring at all. The energy closes: the mass's and the springs' (the arm's with them)
+    /// and the arm's damper's loss stay the start's. Without damping, or behind a rigid converter, there is no arm and
+    /// the damping stays as it was, c / lever^2 across the spring; an arm faster than the integrator is its slow limit.
+    ///
+    /// With the screw's own damper too, zeta = 0.04 on the 1 kg: c_c = 2 x 0.04 sqrt(1e6 x 1) = 80 N s/m across K_c
+    /// alone. The pair's m C s^3 + (m S + c_g c_c) s^2 + (K_g c_c + K_c c_g) s + K_g K_c = 0 (S = K_g + K_c, C = c_g +
+    /// c_c) has s = -181.415607 +- 906.072216i: peaks fall by 0.284213; b = c_g c_c / C = 77.799175 N s/m beside the
+    /// arm's K_m = (K_g c_c - K_c c_g)^2 / (S C^2) = 446493.00 N/m and tau = C / S = 1.454 ms. Behind a near-rigid gear
+    /// (K1 = 1e8 N m/rad, no damper) the screw's own mode keeps its 0.04.
+    #[test]
+    fn the_gear_damper_behind_a_converter_bridges_the_gear_alone() {
+        let text = "format_version = 1\n[effects]\njoint_friction = false\nhard_stops = false\nmotor_friction = false\n\
+            torque_ripple = false\ngearbox_backlash = false\ngearbox_efficiency = false\ngearbox_drag = false\n\
+            motor_stiction = false\ngearbox_lost_motion = false\ngearbox_stiffness_curve = false\nthermal_feedback = false\n\
+            holding_brake = false\ngearbox_mesh_friction = false\n\
+            [motor]\nrotor_inertia_kgm2 = 1e-4\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\n\
+            friction_smoothing_rad_s = 1e-3\nfriction_breakaway_nm = 0.0\nfriction_stribeck_rad_s = 2.0\nripple_fraction = 0.0\n\
+            ripple_order = 6.0\ncogging_nm = 0.0\ncogging_order = 6.0\nbrake_torque_nm = 5.0\n\
+            [gearbox]\nratio = 1.0\nefficiency = 0.9\nbacklash_rad = 0.0\nstiffness_nm_rad = K1\ndamping_nm_s_rad = DAMPING\n\
+            inertia_at_input_kgm2 = 1e-4\nefficiency_torque_nm = 100.0\nno_load_torque_nm = 0.0\nno_load_speed_rpm = 3000.0\n\
+            lost_motion_band_rad = 0.0\nhysteresis_rad = 0.0\nstiffness_t1_nm = 100.0\nstiffness_t2_nm = 100.0\n\
+            stiffness_k2_nm_rad = 100.0\nstiffness_k3_nm_rad = 100.0\n\
+            [joint]\nfriction_coulomb_nm = 0.0\nfriction_viscous_nm_s_rad = 0.0\nfriction_smoothing_rad_s = 1e-3\n\
+            min_angle_deg = -45.0\nmax_angle_deg = 90.0\nstop_stiffness_nm_rad = 1e5\nstop_damping_nm_s_rad = 0.0\n";
+        let geared = |k1: &str, damping: &str, stiffness: f64, damping_ratio: f64| {
+            let cfg = Config::parse(&text.replace("K1", k1).replace("DAMPING", damping)).unwrap();
+            let mut j = RotaryJoint::from_config(&cfg).unwrap();
+            let converter =
+                Converter { lever: 0.01, stiffness, backlash: 0.0, efficiency: 1.0, inertia: 0.0, damping_ratio };
+            converter.apply_to(&cfg, &mut j, 1.0).unwrap();
+            j.gearbox
+        };
+        let gear = |damping: &str, stiffness: f64| geared("100.0", damping, stiffness, 0.0);
+        let rel = |a: f64, b: f64, tol: f64| (a / b - 1.0).abs() < tol;
+        // The limits: no damping, no arm (the series spring alone); a rigid converter, the damper across the gear.
+        let plain = gear("0.0", 1e6);
+        assert!(plain.relax_stiffness == 0.0 && plain.damping == 0.0 && rel(plain.stiffness, 5e5, 1e-12));
+        let rigid = gear("0.2828", f64::INFINITY);
+        assert!(rigid.relax_stiffness == 0.0 && rel(rigid.damping, 2828.0, 1e-12) && rel(rigid.stiffness, 1e6, 1e-12));
+        // 0.001 N m s/rad, c = 10 N s/m: tau = 10 / 2e6 = 5 us, faster than the integrator follows; its slow limit is
+        // a damper of c (K_c / (K_c + K_g))^2 = 2.5 N s/m across the series spring.
+        let fast = gear("0.001", 1e6);
+        assert!(fast.relax_stiffness == 0.0 && rel(fast.damping, 2.5, 1e-12), "{}", fast.damping);
+        let g = gear("0.2828", 1e6);
+        assert_eq!(g.damping, 0.0);
+        assert!(rel(g.relax_stiffness, 5e5, 1e-12) && rel(g.relax_time, 1.414e-3, 1e-12));
+        // At rest, the series stiffness: the arm relaxed carries nothing.
+        let x = 1e-3;
+        assert!(rel(g.static_twist(500.0), 1e-3, 1e-12));
+        assert!(rel(g.torque_with(0.0, 0.0, -x, 0.0, g.arm_rest(0.0, -x)).output, 500.0, 1e-12));
+        // Free decay from there, the rotor held: state [out, speed, arm]. The fall of the peaks after the real root's
+        // share is gone, and what the energy misses.
+        let decay = |g: &crate::mech::Gearbox| {
+            let (mass, dt) = (1.0, 1e-6);
+            let rates = |s: [f64; 3]| {
+                let force = g.torque_with(0.0, 0.0, s[0], s[1], s[2]).output;
+                [s[1], force / mass, g.arm(0.0, s[0], s[2]).1]
+            };
+            let energy = |s: [f64; 3]| 0.5 * mass * s[1] * s[1] + g.energy_with(0.0, s[0], s[2]);
+            let u0 = g.arm_rest(0.0, -x);
+            let (mut s, mut lost, start) = ([-x, 0.0, u0], 0.0, energy([-x, 0.0, u0]));
+            let mut peaks = Vec::new();
+            for _ in 0..80000 {
+                let add = |s: [f64; 3], k: [f64; 3], h: f64| std::array::from_fn(|i| s[i] + h * k[i]);
+                let k1 = rates(s);
+                let k2 = rates(add(s, k1, 0.5 * dt));
+                let k3 = rates(add(s, k2, 0.5 * dt));
+                let k4 = rates(add(s, k3, dt));
+                let l0 = g.loss_power_with(0.0, 0.0, s[0], s[1], s[2]);
+                let next: [f64; 3] =
+                    std::array::from_fn(|i| s[i] + dt / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]));
+                lost += 0.5 * dt * (l0 + g.loss_power_with(0.0, 0.0, next[0], next[1], next[2]));
+                if s[1] > 0.0 && next[1] <= 0.0 {
+                    peaks.push(next[0]);
+                }
+                s = next;
+            }
+            assert!(peaks.len() >= 10, "{}", peaks.len());
+            println!("peaks {peaks:?}");
+            (peaks[8] / peaks[7], (start - energy(s) - lost) / start)
+        };
+        let (fall, off) = decay(&g);
+        assert!(rel(fall, 0.355591, 2e-5) && off.abs() < 1e-9, "{fall} {off}");
+        let both = geared("100.0", "0.2828", 1e6, 0.04);
+        assert!(rel(both.damping, 77.799175, 1e-7) && rel(both.relax_stiffness, 446493.00, 1e-7), "{both:?}");
+        assert!(rel(both.relax_time, 1.454e-3, 1e-12));
+        let (fall, off) = decay(&both);
+        assert!(rel(fall, 0.284213, 2e-5) && off.abs() < 1e-9, "{fall} {off}");
+        let screw = geared("1e8", "0.0", 1e6, 0.04);
+        let zeta = screw.damping_at(0.0) / (2.0 * screw.stiffness.sqrt());
+        assert!(screw.relax_stiffness == 0.0 && rel(zeta, 0.04, 1e-5), "{zeta}");
+        // The modes' damping at the ring: K_m tau / (1 + (w tau)^2) at w = sqrt(K_s / m).
+        let w = 5e5f64.sqrt();
+        assert!(rel(g.damping_at(w), 5e5 * 1.414e-3 / (1.0 + (w * 1.414e-3).powi(2)), 1e-12));
     }
 
     /// The screw's stiffness is judged at the softest nut position: the far end of a fixed-supported shaft (1 m):

@@ -38,7 +38,7 @@
 
 use sim_components::catalog::motor_config;
 use sim_components::joint::RotaryJoint;
-use sim_components::mech::{HardStop, ShaftFriction, ThermalFeedback};
+use sim_components::mech::{GearTorque, HardStop, ShaftFriction, ThermalFeedback};
 use sim_components::transmission::BallScrew;
 use sim_core::{
     AxisInfo, Config, ConfigError, ENERGY_PARTS, LOSS_PREFIX, Label, Machine, MachineEntry, MotorInfo, Part,
@@ -248,7 +248,8 @@ impl Legs {
 /// K_coupling + 1 / K_screw) in N/m) is a spring between the rotor (a body of its own, J_rotor) and the carriage (the
 /// tool): m q'' = F_gear + stops and friction + weight, J_rotor w' = motor torque - gear torque, as the arms' joints
 /// have it. With the rotor held the carriage rings at sqrt(K / m) / 2 pi (`Machine::modes`); at rest the spring carries
-/// the weight, a twist F / K (`equilibrium`).
+/// the weight, a twist F / K (`equilibrium`). The coupling's damper bridges its own spring, not the screw's: with it the
+/// state ends in the gear's Maxwell arm's (`Gearbox::arm`), and so does every extra axis's.
 struct Extra {
     elastic: bool,
     joint: RotaryJoint,
@@ -281,13 +282,27 @@ impl Extra {
         if self.elastic { (x[3], x[4]) } else { (x[0] * self.ratio(), x[1] * self.ratio()) }
     }
 
+    /// The gear has a Maxwell arm (a damped coupling before the screw), its state x[5].
+    fn relaxes(&self) -> bool {
+        self.elastic && self.joint.gearbox.relax_stiffness > 0.0
+    }
+
+    fn arm(&self, x: &[f64]) -> f64 {
+        if self.relaxes() { x[5] } else { 0.0 }
+    }
+
+    /// The elastic gear's torques, its arm with them.
+    fn gear(&self, x: &[f64]) -> GearTorque {
+        self.joint.gearbox.torque_with(x[3], x[4], x[0], x[1], self.arm(x))
+    }
+
     /// The acceleration, and the force (torque) into the gearbox after the rotor's own acceleration and out of it. Rigid,
     /// as the arms' `rigid_solve`: (m + eta i^2 J_rotor) q'' = eta drive + weight + stops and friction. Elastic: the
     /// gearbox's spring between the rotor and the carriage, m q'' = F_gear + weight + stops and friction.
     fn solve(&self, x: &[f64], torque: f64, engaged: bool, attached: bool) -> (f64, f64, f64) {
         let (j, i) = (&self.joint, self.ratio());
         if self.elastic {
-            let (gear, ..) = j.rotor(torque, x[3], x[4], x[0], x[1], x[2], engaged);
+            let gear = self.gear(x);
             let acc = (gear.output + j.output_torque(x[0], x[1]) + self.weight(attached)) / self.mass(attached);
             return (acc, gear.rotor * i, gear.output);
         }
@@ -307,7 +322,7 @@ impl Extra {
     fn energy(&self, x: &[f64], attached: bool) -> [f64; 3] {
         if self.elastic {
             let kinetic = 0.5 * self.mass(attached) * x[1] * x[1] + 0.5 * self.joint.rotor_inertia * x[4] * x[4];
-            let spring = self.joint.stop_energy(x[0]) + self.joint.gearbox.energy(x[3], x[0]);
+            let spring = self.joint.stop_energy(x[0]) + self.joint.gearbox.energy_with(x[3], x[0], self.arm(x));
             return [kinetic, -self.weight(attached) * x[0], spring];
         }
         let kinetic = 0.5 * (self.mass(attached) + self.joint.reflected_inertia()) * x[1] * x[1];
@@ -322,8 +337,8 @@ impl Extra {
         let [friction, stop, shaft, drag] = self.joint.losses(x[0], x[1], speed, x[2], engaged);
         let other = (torque - self.joint.ripple.apply(torque, rotor)) * speed;
         if self.elastic {
-            let g = self.joint.gearbox.torque(rotor, speed, x[0], x[1]);
-            let loss = self.joint.gearbox.loss_power(rotor, speed, x[0], x[1]);
+            let g = self.gear(x);
+            let loss = self.joint.gearbox.loss_power_with(rotor, speed, x[0], x[1], self.arm(x));
             return ([friction, shaft, loss + drag, stop, other], g.rotor - g.output / i);
         }
         let (_, into, out) = self.solve(x, torque, engaged, attached);
@@ -339,7 +354,7 @@ impl Extra {
         let held = j.brake.torque(engaged, speed, x[2]).0;
         // Elastic, the rotor accelerates on its own: m q'' / i + J_rotor w'.
         let inertia = if self.elastic {
-            let rotor_acc = j.rotor(torque, x[3], x[4], x[0], x[1], x[2], engaged).1;
+            let rotor_acc = j.rotor_under(torque, x[3], x[4], self.gear(x), x[2], engaged).0;
             self.mass(attached) * acc / i + j.rotor_inertia * rotor_acc
         } else {
             (self.mass(attached) + j.reflected_inertia()) * acc / i
@@ -454,15 +469,21 @@ impl ParallelScara {
     }
 
     /// The state of extra axis `e`: [position, speed, brake] and with elastic gearboxes [rotor angle, rotor speed], after
-    /// the arms'.
+    /// the arms', and where an extra axis's gear has a Maxwell arm (`Extra::relaxes`) each one's arm (0 on the others).
     fn extra_state<'a>(&self, s: &'a [f64], e: usize) -> &'a [f64] {
         let at = self.planar_len() + self.extra_len() * e;
         &s[at..at + self.extra_len()]
     }
 
-    /// The number of states of each extra axis: 3, 5 with elastic gearboxes.
+    /// The number of states of each extra axis: 3, 5 with elastic gearboxes, 6 with an arm.
     fn extra_len(&self) -> usize {
-        if self.elastic { 5 } else { 3 }
+        if self.extras.iter().any(Extra::relaxes) {
+            6
+        } else if self.elastic {
+            5
+        } else {
+            3
+        }
     }
 
     fn planar_len(&self) -> usize {
@@ -478,12 +499,13 @@ impl ParallelScara {
         if screw.length < joint.range.1 {
             return Err(ConfigError::Invalid("screw.length_m".into()));
         }
-        screw.converter(screw.softest_position()).apply(&own, &mut joint)?;
+        let carriage = cfg.non_negative("z_axis.carriage_kg")?;
+        // The carriage on the nut's spring, without the payload (`Converter::apply_back`'s damper of the screw).
+        screw.converter(screw.softest_position()).apply_to(&own, &mut joint, carriage)?;
         // The nut's preload drags like friction in the guides, as a force at the nut.
         if own.bool("effects.joint_friction")? {
             joint.friction.coulomb += screw.preload_torque() * screw.ratio();
         }
-        let carriage = cfg.non_negative("z_axis.carriage_kg")?;
         let axis = Self::axis_info(cfg, "z", "axis-z", "m", joint.range)?;
         let carried = cfg.non_negative("z_axis.unit_kg")? + carriage;
         let elastic = cfg.bool("effects.joint_elasticity")?;
@@ -690,7 +712,7 @@ impl ParallelScara {
                 let (k, m) = (spring(&x.joint.gearbox, small), x.mass(self.payload_attached));
                 sim_core::Mode {
                     hz: (k / m).sqrt() / std::f64::consts::TAU,
-                    damping: x.joint.gearbox.damping / (2.0 * (k * m).sqrt()),
+                    damping: x.joint.gearbox.damping_at((k / m).sqrt()) / (2.0 * (k * m).sqrt()),
                 }
             }));
         }
@@ -1071,6 +1093,9 @@ impl Machine for ParallelScara {
             if self.elastic {
                 state.extend([rotor, 0.0]);
             }
+            if self.extra_len() == 6 {
+                state.push(x.joint.gearbox.arm_rest(rotor, q));
+            }
         }
     }
 
@@ -1100,6 +1125,12 @@ impl Machine for ParallelScara {
             for e in 0..self.extras.len() {
                 let at = self.planar_len() + self.extra_len() * e + 3;
                 state[at] = after[2 + e] + rotor[2 + e] - before[2 + e];
+                // The gear's arm keeps its stretch over the twist it had.
+                if self.extras[e].relaxes() {
+                    let (g, q) = (&self.extras[e].joint.gearbox, state[at - 3]);
+                    let stretch = g.arm_rest(old_state[at], old_state[at - 3]) - old_state[at + 2];
+                    state[at + 2] = g.arm_rest(state[at], q) - stretch;
+                }
             }
         }
         state
@@ -1113,8 +1144,11 @@ impl Machine for ParallelScara {
             out[at + 2] = x.joint.brake.torque(self.brake_engaged, x.rotor(state).1, state[2]).1;
             if self.elastic {
                 let (j, engaged) = (&x.joint, self.brake_engaged);
-                let rotor_acc = j.rotor(torque[2 + e], state[3], state[4], state[0], state[1], state[2], engaged).1;
+                let rotor_acc = j.rotor_under(torque[2 + e], state[3], state[4], x.gear(state), state[2], engaged).0;
                 (out[at + 3], out[at + 4]) = (state[4], rotor_acc);
+                if self.extra_len() == 6 {
+                    out[at + 5] = j.gearbox.arm(state[3], state[0], x.arm(state)).1;
+                }
             }
         }
         if !self.elastic {

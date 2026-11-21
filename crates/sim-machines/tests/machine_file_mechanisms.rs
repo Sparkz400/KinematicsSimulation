@@ -240,8 +240,9 @@ fn kit_screw(elastic: bool) -> [Box<dyn Machine>; 2] {
 /// machine file is the same machine, elastic and rigid, with the payload on, set down and with the brake holding: axes,
 /// kinematics, the rest state and holding torque, the derivatives of a moving state under torques, energy, feedforward,
 /// the screw's signals and the torque breakdown, and the screw's checks, to 1e-9. The states are laid out apart: the
-/// kit's elastic [q, q', rotor, rotor', brake] are the file's [q, a, rotor, q', a', rotor', friction, slack, brake] with
-/// its pulley a = q; rigid [q, q', brake] are [q, q', friction, brake]. Before writing this, `sim-cli verdicts` of the
+/// kit's elastic [q, q', rotor, rotor', brake, arm] are the file's [q, a, rotor, q', a', rotor', friction, slack, brake,
+/// arm] with its pulley a = q (the arm the coupling's Maxwell arm behind the screw, `Gearbox::arm`); rigid [q, q', brake]
+/// are [q, q', friction, brake]. Before writing this, `sim-cli verdicts` of the
 /// kit and the file gave the same digits for the screw, rack, linear motor and rotary table axes (encoder counts off).
 #[test]
 fn the_joint_kits_screw_axis_as_a_machine_file_is_its_crate() {
@@ -252,11 +253,15 @@ fn the_joint_kits_screw_axis_as_a_machine_file_is_its_crate() {
             |m: &dyn Machine| m.axes().iter().map(|a| (a.id, a.unit, a.min, a.max, a.max_vel)).collect::<Vec<_>>();
         assert_eq!(axes(kit.as_ref()), axes(from_file.as_ref()), "{what}");
         let file_state = |s: &[f64]| {
-            if elastic { vec![s[0], s[0], s[2], s[1], s[1], s[3], 0.0, 0.0, s[4]] } else { vec![s[0], s[1], 0.0, s[2]] }
+            if elastic {
+                vec![s[0], s[0], s[2], s[1], s[1], s[3], 0.0, 0.0, s[4], s[5]]
+            } else {
+                vec![s[0], s[1], 0.0, s[2]]
+            }
         };
-        // (kit, file) indices of the same rate: q', q'' (and rotor', rotor''), brake.
+        // (kit, file) indices of the same rate: q', q'' (and rotor', rotor''), brake (and the arm's).
         let rates: &[(usize, usize)] =
-            if elastic { &[(0, 0), (1, 3), (2, 2), (3, 5), (4, 8)] } else { &[(0, 0), (1, 1), (2, 3)] };
+            if elastic { &[(0, 0), (1, 3), (2, 2), (3, 5), (4, 8), (5, 9)] } else { &[(0, 0), (1, 1), (2, 3)] };
         assert_eq!(from_file.state_len(), file_state(&vec![0.0; kit.state_len()]).len(), "{what}");
         for (k, pose) in [0.1, 0.62, 0.4].into_iter().enumerate() {
             for m in [&mut kit, &mut from_file] {

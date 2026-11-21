@@ -332,8 +332,15 @@ impl Crane {
             // Each drive with its own motor, gearbox and drive tables (`[motor.hoist]` over `[motor]`).
             let own = motor_config(cfg, MOTOR_IDS[k])?;
             let mut joint = RotaryJoint::with(&own, ShaftFriction::NONE, stops(tables[k])?, ranges[k])?;
-            Converter { lever: levers[k], stiffness: f64::INFINITY, backlash: 0.0, efficiency: 1.0, inertia: 0.0 }
-                .apply_to(&own, &mut joint, masses[k])?;
+            Converter {
+                lever: levers[k],
+                stiffness: f64::INFINITY,
+                backlash: 0.0,
+                efficiency: 1.0,
+                inertia: 0.0,
+                damping_ratio: 0.0,
+            }
+            .apply_to(&own, &mut joint, masses[k])?;
             drives.push(joint);
         }
         let drives: [RotaryJoint; 3] = drives.try_into().map_err(|_| ConfigError::Invalid("motor".into()))?;

@@ -628,7 +628,14 @@ fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
             }
             // The motors' own gearboxes ([gearbox.<motor>]) damp too.
             let own = ["mx", "mx1", "mx2", "mz", "mc"].map(|m| format!("gearbox.{m}.damping_nm_s_rad"));
-            let shared = ["gearbox.damping_nm_s_rad", "gantry.damping_nm_s_rad"].map(String::from);
+            // And the screws' and racks' own dampers across their springs (`Converter::apply_back`).
+            let shared = [
+                "gearbox.damping_nm_s_rad",
+                "gantry.damping_nm_s_rad",
+                "screw_z.axial_damping_ratio",
+                "rack_x.damping_ratio",
+            ]
+            .map(String::from);
             for damping in shared.iter().chain(&own) {
                 if cfg.get(damping).is_ok() {
                     cfg.set_text(&format!("{damping} = 0.0")).unwrap();
