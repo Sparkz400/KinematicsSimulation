@@ -314,6 +314,34 @@ impl Indexer {
 }
 
 impl Mechanism for Indexer {
+    /// In the scene's frame: the wheel and the table turning about +y with phi' theta' (the table side with the twist's
+    /// rate on top), the parts a point each at the station radius on it, the driver and the rotor on its shaft: the
+    /// Geneva's crank about -y beside the wheel (it turns the wheel against itself), the cam's shaft square to the
+    /// turret's, along z, the turret's tangent where the cam meets it. Their centres stay put: the parts' first moment, n
+    /// of them evenly round the table, stays at its centre.
+    fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
+        use sim_components::base::{add_point, add_spin};
+        let [phi, p1, _] = self.motion(q[0]);
+        let (x, xd) = (q.get(1).copied().unwrap_or(0.0), qd.get(1).copied().unwrap_or(0.0));
+        let (wheel, table) = (p1 * qd[0], p1 * qd[0] + xd);
+        let mut f = sim_core::FrameMomentum::default();
+        add_spin(&mut f, [0.0, 1.0, 0.0], self.j_wheel, wheel);
+        add_spin(&mut f, [0.0, 1.0, 0.0], self.j_wheel_table - self.j_wheel, table);
+        let (parts, r) = (if self.attached { self.payload } else { 0.0 }, self.station_radius);
+        for i in 0..self.stations {
+            // The scene's angle from +x towards +z: the table turns it back by phi.
+            let a = self.step() * i as f64 - phi - x;
+            let (s, c) = a.sin_cos();
+            add_point(&mut f, parts / self.stations as f64, [r * c, 0.0, r * s], [r * s * table, 0.0, -r * c * table]);
+        }
+        let shaft = match self.drive {
+            Drive::Geneva { .. } => [0.0, -1.0, 0.0],
+            Drive::Cam { .. } => [0.0, 0.0, 1.0],
+        };
+        add_spin(&mut f, shaft, self.j_driver, qd[0]);
+        add_spin(&mut f, shaft, 1.0, rotor_spin[0]);
+        Some(f)
+    }
     fn dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         let [_, p1, p2] = self.motion(q[0]);
         mass[0] = self.j_driver + self.j_table() * p1 * p1;

@@ -594,6 +594,73 @@ fn a_hook_block_lowered_onto_a_standing_payload_hangs_on_the_rope_alone() {
     assert!(sling.tension == 0.0 && (sling.stretch - slack).abs() < 1e-7 && slack < -0.19, "{} m", sling.stretch);
 }
 
+/// The hook block lowered by more than the sling's length onto the standing payload lands on its top (effects.hook_block,
+/// effects.floor_contact, the losses off): the payload just over the floor (0.5 m) on its 1 m sling, the drum pays out that
+/// and 1.2 m more at once. The hook block falls on the slack rope until its box sits on the payload's, its point
+/// h = (0.16 + 0.4) / 2 = 0.28 m over the payload's (it passed through it before: 0.2 m under it at the end). By hand at
+/// rest: the rope slack (it has 0.48 m to spare), the floor carries both, (15 + 250) 9.80665 = 2598.762 N. The landing is
+/// plastic: the energy lost (the hook block's fall, some 15 g 0.72 m = 106 J) is what `after_step` booked, and no step
+/// booked a negative loss (made energy). Then the rope taut again, 2 mm short of the way to the hook block: it pulls the
+/// hook block up off the payload (EA 2 mm / l against m_hook g), and the floor carries the payload alone.
+#[test]
+fn a_hook_block_lowered_beyond_the_sling_lands_on_the_payload() {
+    let mut m = crane(&lossless(&[
+        "effects.hook_block = true",
+        "effects.floor_contact = true",
+        "effects.holding_brake = true",
+    ]));
+    m.set_brake_engaged(true);
+    let floor = m.floor.unwrap();
+    let (mut s, hold) = at_rest(&m, [5.0, 2.0, floor + m.sling.unwrap() + 0.01]);
+    let gap = m.lower(&s).0[2] - floor;
+    s[2] += gap + 1.2;
+    let (mut pos, mut vel, mut powers) = ([0.0; 3], [0.0; 3], Vec::new());
+    m.motor_state(&s, &mut pos, &mut vel);
+    let (e0, p0, mut booked, mut landed, mut least) = (m.energy(&s), pos, 0.0, 0.0, 0.0f64);
+    // The brake's and the other dampers' power (the losses but `power.other`, which carries `after_step`'s).
+    let mut damped = |m: &Crane, s: &[f64]| {
+        powers.clear();
+        m.loss_powers(s, &hold, &mut powers);
+        powers[..10].iter().sum::<f64>()
+    };
+    let mut rk = Rk4::new(m.state_len());
+    for _ in 0..(1.5 / DT) as usize {
+        for _ in 0..4 {
+            let before = damped(&m, &s);
+            advance(&m, &mut rk, &mut s, &hold, DT / 4.0, 1);
+            booked += 0.5 * (before + damped(&m, &s)) * DT / 4.0;
+        }
+        m.after_step(&mut s, DT);
+        (booked, landed) = (booked + m.pick_loss * DT, landed + m.pick_loss * DT);
+        least = least.min(m.pick_loss * DT);
+    }
+    let (p2, h) = (m.lower(&s).0[2], 0.5 * (0.16 + 0.4));
+    assert!((p2 - floor).abs() < 1e-12 && (s[LOAD + 2] - p2 - h).abs() < 1e-12, "hook {} payload {p2}", s[LOAD + 2]);
+    let mut signals = Vec::new();
+    m.base_signals(&s, &hold, &mut signals);
+    let both = (m.hook + m.payload) * G;
+    assert!(
+        signals[0] == 0.0 && (signals[6] / both - 1.0).abs() < 1e-9,
+        "rope {} N, floor {} N",
+        signals[0],
+        signals[6]
+    );
+    // The energy lost is the holding torques' work (on the brakes' give) less what was booked.
+    let lost = e0 - m.energy(&s);
+    // Measured: 114.372 J booked at the landing, 114.375 J in all with the brakes' damper.
+    assert!(landed > 100.0 && least > -1e-9, "{landed} J booked at the landing, a step {least} J");
+    m.motor_state(&s, &mut pos, &mut vel);
+    let work: f64 = (0..3).map(|k| hold[k] * (pos[k] - p0[k])).sum();
+    assert!((lost + work - booked).abs() < 0.01, "{lost} J lost, {work} J of work, {booked} J booked");
+    // Pulled up off it: the rope 2 mm short of the way to the hook block.
+    let length = m.rope(&s).length;
+    s[2] = length - 0.002;
+    let pulled = m.motion(&s, &hold);
+    let t = m.ea * 0.002 / s[2];
+    assert!((pulled.load_acc[2] - (t / m.hook - G)).abs() < 1e-6, "{:?}", pulled.load_acc);
+    assert!((pulled.floor_force / (m.payload * G) - 1.0).abs() < 1e-9, "{}", pulled.floor_force);
+}
+
 /// A pick from the floor on the sling (effects.hook_block, effects.floor_contact): the hook block hangs 0.8 m over the
 /// floor, less than the 1 m sling, and the payload goes on. It stands on the floor, the sling slack 0.2 m (the payload
 /// where it stands, not plumb at the sling's length under the floor), and the pick makes no energy: what it booked is
@@ -616,6 +683,19 @@ fn a_pick_from_the_floor_on_a_slack_sling_makes_no_energy() {
     assert!((low[2] - floor).abs() < 1e-12 && low_v == [s[LOAD_SPEED], s[LOAD_SPEED + 1], s[LOAD_SPEED + 2]]);
     let sling = m.sling_state(&s).unwrap();
     assert!(sling.tension == 0.0 && (sling.stretch + 0.2).abs() < 1e-3, "{} m", sling.stretch);
+    // With the hook block lower than the payload's top (0.28 m over its point) at the pick, the landing contact leaves it
+    // where it is: lifting it out would make energy (m_hook g 0.08 m at 0.2 m over the floor).
+    for over in [0.2, 0.0] {
+        let mut m = crane(&lossless(&["effects.hook_block = true", "effects.floor_contact = true"]));
+        m.attached = false;
+        let (mut s, _) = at_rest(&m, [5.0, 2.0, floor + over]);
+        m.after_step(&mut s, DT);
+        m.set_payload_attached(true);
+        let before = m.energy(&s);
+        m.after_step(&mut s, DT);
+        let lost = before - m.energy(&s);
+        assert!(lost >= 0.0 && (m.pick_loss * DT - lost).abs() < 1e-9, "{over} m over: {lost} J lost");
+    }
 }
 
 /// Energy through a lift-off from the floor on the sling (effects.hook_block, effects.floor_contact, the losses off): the
