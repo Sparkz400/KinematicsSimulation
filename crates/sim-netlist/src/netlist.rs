@@ -161,7 +161,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 "offset_m",
                 Kind::Point,
                 false,
-                "On rotary axes: its centre of mass from the point their axes meet, [x, y, z] at angle 0, m. Default [0, 0, 0].",
+                "Its centre of mass from where its axes put it, [x, y, z], m: on rotary axes from the point their axes meet at angle 0 (it turns with them); on straight axes alone a constant offset, which only its place in the frame momentum has (its angular momentum and first moment). Default [0, 0, 0].",
             ),
             POS,
         ],
@@ -1339,9 +1339,6 @@ impl Netlist {
                 return Err(ConfigError::Missing(node.at("axes")));
             }
             let offset = node.point("offset_m")?.unwrap_or_default();
-            if rotaries.is_empty() && node.get("offset_m").is_some() {
-                return Err(ConfigError::Invalid(format!("{} (only on rotary axes)", node.at("offset_m"))));
-            }
             body_nodes.push(BodyNode { id: id_of(node), mass, payload, axes: moves, rotaries, offset });
         }
 

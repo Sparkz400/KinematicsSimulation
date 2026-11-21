@@ -85,6 +85,35 @@ fn shared_signals(a: &dyn Machine, b: &dyn Machine, sa: &[f64], sb: &[f64], torq
     shared
 }
 
+/// The crate's elastic T-gantry keeps the states of its frame, its tool flex and its beam (each a position and a rate, in
+/// that order after the rotors, the positions then the rates) with those effects off; the file machine has the frame's
+/// where it sways, the leaning Z axis's where that leans and the beam's where it is a mode. Elsewhere the states are laid
+/// out alike: the crate's state of the file machine's `s` under the file's config `cb`.
+fn crate_state(id: &str, cb: &Config, s: &[f64]) -> Vec<f64> {
+    let on = |effect: &str| cb.bool(&format!("effects.{effect}")).unwrap_or(false);
+    if !(on("belt_stretch") && id == "t-gantry") {
+        return s.to_vec();
+    }
+    let extra = [on("frame_compliance"), on("tool_flex"), on("beam_vertical_mode")];
+    let positions = 6 + extra.iter().filter(|e| **e).count();
+    let mut out = Vec::new();
+    for half in 0..2 {
+        let mut next = half * positions;
+        out.extend_from_slice(&s[next..next + 6]);
+        next += 6;
+        for present in extra {
+            out.push(if present {
+                next += 1;
+                s[next - 1]
+            } else {
+                0.0
+            });
+        }
+    }
+    out.extend_from_slice(&s[2 * positions..]);
+    out
+}
+
 /// The machine of a crate and of its file, with the same changes made to both, agree: kinematics, the state at rest and
 /// the torque that holds it, the derivatives of a moving state under torques, the feedforward, the rigid tensions and
 /// every signal both have, to 1e-9. With the payload held and the cycle dwelling (for a process force), then set
@@ -102,35 +131,7 @@ fn same_machine(id: &str, name: &str, changes: &[&str], rises: &[f64], what: &st
     for machine in [&mut a, &mut b] {
         machine.set_part_temperatures(rises);
     }
-    // The crate's elastic T-gantry keeps the states of its frame, its tool flex and its beam (each a position and a rate,
-    // in that order after the rotors, the positions then the rates) with those effects off; the file machine has the
-    // frame's where it sways, the leaning Z axis's where that leans and the beam's where it is a mode. Elsewhere the
-    // states are laid out alike.
-    let on = |effect: &str| cb.bool(&format!("effects.{effect}")).unwrap_or(false);
-    let elastic = on("belt_stretch") && id == "t-gantry";
-    let extra = [on("frame_compliance"), on("tool_flex"), on("beam_vertical_mode")];
-    let crate_state = |s: &[f64]| {
-        if !elastic {
-            return s.to_vec();
-        }
-        let positions = 6 + extra.iter().filter(|e| **e).count();
-        let mut out = Vec::new();
-        for half in 0..2 {
-            let mut next = half * positions;
-            out.extend_from_slice(&s[next..next + 6]);
-            next += 6;
-            for present in extra {
-                out.push(if present {
-                    next += 1;
-                    s[next - 1]
-                } else {
-                    0.0
-                });
-            }
-        }
-        out.extend_from_slice(&s[2 * positions..]);
-        out
-    };
+    let crate_state = |s: &[f64]| crate_state(id, &cb, s);
     assert_eq!(a.state_len(), crate_state(&vec![0.0; b.state_len()]).len(), "{what}: state length");
     let n = a.axes().len();
     let m = a.motors().len();
@@ -888,6 +889,56 @@ fn the_t_gantry_file_tells_its_crates_modes() {
                 close(x.hz, y.hz, 1e-9) && close(x.damping, y.damping, 1e-9),
                 "{pose:?}: crate {ma:?}, file {mb:?}"
             );
+        }
+    }
+}
+
+/// The T-gantry's angular momentum and first moment, crate against file, over 1 s of the default cycle (the file's run,
+/// each state the crate's too; frame and leaning Z off in both, as `pair` has them). Both take moments about the same
+/// point: the place of the Z axis's centre of mass at z = 0 under the carriage at x = 0. The bodies are the same there:
+/// the Z axis at (x, 0, z), the carriage (and its chain) at (x, 0, 0.3), z_com_drop above it, which the file gives as its
+/// carriage's `offset_m` (before it the file had the carriage at 0: its angular momentum about y was 0.3 m * 4 kg * vx
+/// less, its first moment 1.2 kg m less). With the belt's mass off the two agree to rounding, the linear momentum and the
+/// first moment with it on too (the runs' first moment, mu sum (L0 + c q / 2) V q, has no place in it). The belt's
+/// angular momentum the two count differently: the crate by its path (the horizontal runs at the carriage's height
+/// cancelling, the vertical ones at its x, from the carriage up s + z to the clamp and down s + sz - z round the bottom
+/// idler, the lumps on the pulleys spinning), the file each run's mass at the middle of its straight piece as the 3D view
+/// draws it from its wheels' places (the carriage idlers 0.032 m above and below the carriage, the bottom idler 0.08 m
+/// under the Z axis's point, the clamp at it, every run 0.02 m in front of the bodies). Sized over the run: about y under
+/// a twentieth of a metre times the belt's 0.42 kg times its speed (`belt_y` below), about x and z under the 0.02 m in
+/// front times that.
+#[test]
+fn the_t_gantry_file_has_its_crates_angular_momentum() {
+    for belt_mass in [false, true] {
+        let changes: &[&str] = if belt_mass { &[] } else { &["effects.belt_mass = false"] };
+        let [(ea, ca), (eb, cb)] = pair("t-gantry", "t-gantry.toml", changes);
+        let krate = (ea.build)(&ca).unwrap();
+        let mut sim = Sim::new(eb, &cb).unwrap();
+        sim.command(sim_components::Command::StartCycle).unwrap();
+        let (mut worst, mut speed) = ([0.0f64; 3], 0.0f64);
+        for step in 0..16_000 {
+            sim.step();
+            if step % 50 != 0 {
+                continue;
+            }
+            let sb = sim.state.clone();
+            let fa = krate.frame_momentum(&crate_state("t-gantry", &cb, &sb)).unwrap();
+            let fb = sim.machine.frame_momentum(&sb).unwrap();
+            assert_close("linear momentum", &fa.linear, &fb.linear, 1e-9);
+            assert_close("first moment", &fa.first_moment, &fb.first_moment, 1e-9);
+            assert!(close(fa.mass, fb.mass, 1e-12), "{} against {}", fa.mass, fb.mass);
+            speed = speed.max(fa.linear[0].hypot(fa.linear[2]) / fa.mass);
+            for k in 0..3 {
+                worst[k] = worst[k].max((fa.angular[k] - fb.angular[k]).abs());
+            }
+        }
+        eprintln!("belt mass {belt_mass}: angular momentum apart by {worst:?} N m s, speed up to {speed} m/s");
+        if !belt_mass {
+            assert!(worst.iter().all(|w| *w < 1e-9), "{worst:?}");
+        } else {
+            let belt_y = 0.42 * 0.05 * speed;
+            assert!(worst[1] > 1e-6 && worst[1] < belt_y, "{worst:?} against {belt_y}");
+            assert!(worst[0].max(worst[2]) < 0.42 * 0.02 * speed * 1.0001, "{worst:?}");
         }
     }
 }

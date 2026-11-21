@@ -110,7 +110,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The hook block landing on the load: lowered by more than the sling's length onto a standing load, it passes through it (the sling, a rope since 21 November, goes slack below its length) | crane | None in the shipped cycle; the sling is 1 m. The hook block and the elastic drives were run on a full cycle; rope mass and bridge skew passed their own tests and a 0.2 s run. |
 | Link bending together with parallelogram bars of their own (refused); the palletiser's rod and crank (shipped bar arrays empty) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured in the test case). |
 | The belt runs' sideways offset on the leaning Z axis; the belt runs riding on the beam's vertical mode | T-gantry | A first-order moment (T₁ − T₃)·0.04 m; the beam mode would fall 0.9 % (59.32 to 58.77 Hz). |
-| Angular momentum of the T-gantry crate against its machine file is not compared | T-gantry | Different origins and belt-run geometry. |
+| The belt's angular momentum of the T-gantry file against its crate: the file takes each run's mass at the middle of its straight piece as drawn (carriage idlers 0.032 m above and below the carriage, bottom idler 0.08 m under the Z axis's point, every run 0.02 m in front of the bodies), the crate its belt path (horizontal runs at the carriage's height, vertical ones at its x, the lumps spinning on the pulleys) | T-gantry | Over 1 s of the default cycle up to 1.3e-3 N m s about y and 1.1e-3 about x (none in the crate) at up to 0.25 m/s, against 0.42 kg of belt; bodies, linear momentum and first moment agree to rounding (`the_t_gantry_file_has_its_crates_angular_momentum`). |
 | The X and Y belts of the screw portal, the C portal and the five-axis files share their section lengths out (0.1 m from the motor to the far idler) and draw no far idler | machine files | As the XYZ portal's did before 21 November: there the X belt's mode at its far end 73.9 against 39.2 Hz as a loop. Without the far idler in a route its runs' angular momentum is left out of the frame momentum (`run_midpoints`). |
 | The screw's stiffness along the stroke keeps the far end's for the pose tolerance and the elastic feedforward's twist (`effects.screw_stiffness_with_position`, on in the shipped configs; the dynamics, modes and rest states follow the nut, the screw's damper at its ratio and the Zener arm with them; since 21 November the hysteresis too, on the gear's own twist with its store's place term); the mesh bristle stays the far end's (it holds the output against the housing, its bound follows the nut, its store is not booked, and its stiffness is an unpublished factor whose tenth to ten times leave the loss the same) | wafer handler, screws | The feedforward's twist up to the far end's: 2.4 against 1.5 um on the wafer handler's column with the nut 0.15 m from the bearing. The bristle's stiffness up to 1.87 times the far end's there (no shipped config has a hysteresis behind such a screw). |
 | Belt-to-pulley heat conduction | linear delta | Not sized. |
@@ -439,6 +439,18 @@ Fixed:
   belt's pulley turns about z. Size: the Y motor's rotor and pulley, J_rotor w + (J_pulley - lump r²) w / i, about
   1.6e-3 N m s at the dual gantry's Y peak of 47 rad/s, put about y instead of z. Which way a belt along y lies (flat
   about z, standing about x) a file does not say; a per-belt plane is needed (also for the XYZ and C portals' Y belts).
+
+- The angular momentum of the T-gantry crate against its file (section 4: not compared, different origins and belt-run
+  geometry). Compared now over 1 s of the default cycle, every 50 steps, both about the place of the Z axis's centre of
+  mass at z = 0 under the carriage at x = 0 (the crate's tool frame, which the file's bodies share). One difference was
+  a body's place: the file put the carriage at the Z axis's height, the crate z_com_drop (0.3 m) above it, so the file's
+  angular momentum about y lacked 0.3 m x 4 kg x vx and its first moment 1.2 kg m. A body's `offset_m`, before refused
+  off rotary axes, may now set a constant offset on straight axes (only the frame momentum takes it: the mass matrix,
+  gravity and the drawing do not change), and the file's carriage has [0, 0, 0.3]. With effects.belt_mass off the two
+  agree to rounding (1e-16 N m s), the linear momentum and the first moment with the belt too. The belt's angular
+  momentum stays counted differently (section 4's row: the file at the runs' drawn places, the crate by its path):
+  1.3e-3 N m s about y and 1.1e-3 about x at up to 0.25 m/s. Test `the_t_gantry_file_has_its_crates_angular_momentum`
+  (fails without the carriage's offset).
 
 Open, with the cause where it is known:
 - Fixed (21 November): the warm start for a motor near its limit (1FK2104-4AF on the EXCT-30) now

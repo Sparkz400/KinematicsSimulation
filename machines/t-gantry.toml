@@ -917,10 +917,13 @@ pulleys = { pulley_b = -1 }
 route = ["pulley_b", "upper_right", "z_axis"]
 pos = [450, 380]
 
+# The carriage's centre of mass sits geometry.z_com_drop_m (0.3 m) above the Z axis's at z = 0, as in the crate's frame
+# momentum: its place for the angular momentum and first moment (an offset on straight axes changes nothing else).
 [[machine.body]]
 id = "carriage"
 mass_kg = "mass.carriage_kg"
 axes = ["x"]
+offset_m = [0.0, 0.0, 0.3]
 pos = [750, 0]
 
 # The Z axis rides on the carriage and carries the payload.

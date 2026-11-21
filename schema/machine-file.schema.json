@@ -120,7 +120,7 @@
                 ]
               },
               "offset_m": {
-                "description": "On rotary axes: its centre of mass from the point their axes meet, [x, y, z] at angle 0, m. Default [0, 0, 0].",
+                "description": "Its centre of mass from where its axes put it, [x, y, z], m: on rotary axes from the point their axes meet at angle 0 (it turns with them); on straight axes alone a constant offset, which only its place in the frame momentum has (its angular momentum and first moment). Default [0, 0, 0].",
                 "items": {
                   "type": "number"
                 },

@@ -263,7 +263,7 @@ Motorsignale und von `--motor N`.
 | `body` | `mass_kg` | Pflicht | Masse, kg |
 | | `payload_kg` | | Nutzlast, die er trägt, solange `effects.payload` an ist und der Greifer sie hält, kg |
 | | `axes` | Pflicht | die Achsen, mit denen er sich bewegt |; Drehachsen darunter nehmen ihn mit herum, die erste ganz außen
-| | `offset_m` | | auf Drehachsen: sein Schwerpunkt von dort, wo sich ihre Achsen treffen, `[x, y, z]` bei Winkel 0, m ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)) |
+| | `offset_m` | | sein Schwerpunkt von dort, wo seine Achsen ihn hinstellen, `[x, y, z]`, m: auf Drehachsen von dort, wo sich ihre Achsen treffen, bei Winkel 0, mit ihnen gedreht ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)); auf geraden Achsen allein ein fester Versatz, den nur sein Ort im Impuls des Rahmens nimmt (der Wagen des T-Portals 0,3 m über seiner Z-Achse) |
 | `guide` | `axis` | Pflicht | die Achse, die sie führt; höchstens eine Führung je Achse; ihr Verlust ist `power.<id>` |
 | | `friction` | Pflicht | die Tabelle ihrer Reibwerte, aufgebaut wie `[friction_x]` |
 | | `carries` | | Körper, deren Gewicht quer zur Achse sie trägt |
@@ -805,8 +805,8 @@ Eine Maschinendatei wird beim Laden vollständig geprüft, bevor etwas läuft:
 - die Maschine: Massen, Radien und Längen positiv, ein Getriebe je Motor (keins bei einem Linearmotor) und eine
   Scheibe, Spindel, Zahnstange oder ein Rundtisch je Getriebe, höchstens eins davon je Achse, eine Spindel mindestens so
   lang wie ihr Hub, so viele Motoren wie Achsen und einen mehr je Antrieb eines Portals über den ersten hinaus, die
-  Antriebe eines Portals auf seiner Achse, die Achsen eines Werkzeugmittelpunkts entlang x, y und z, das `offset_m`
-  eines Körpers nur auf Drehachsen, eine Riemenführung, die die Riemenlänge hält und jede Achse festlegt;
+  Antriebe eines Portals auf seiner Achse, die Achsen eines Werkzeugmittelpunkts entlang x, y und z, eine
+  Riemenführung, die die Riemenlänge hält und jede Achse festlegt;
 - jeder andere Schlüssel gegen die Schlüssel der Konfigurationen der eingetragenen Maschinen (so wird `pretensoin_n`
   beim Namen abgelehnt), dazu `[axis.<id>]` je Achse, eine Reibtabelle je Führung, die Wertetabellen von Spindeln,
   Zahnstangen, Linearmotoren und Wellgetrieben im Aufbau des Gelenkbaukastens und jeder Schlüssel, den die Netzliste

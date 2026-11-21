@@ -387,9 +387,10 @@ fn the_gantry_and_rotary_files_pass_the_standard_suite() {
     }
 }
 
-/// Broken gantries and tools are refused by key: a second rack on X that no gantry names, a body's offset off the
-/// rotary axes, a tool centre point whose axes are not x, y and z in that order, and a gantry drive that drives another
-/// axis.
+/// Broken gantries and tools are refused by key: a second rack on X that no gantry names, a tool centre point whose axes
+/// are not x, y and z in that order, and a gantry drive that drives another axis. A body's offset off the rotary axes is
+/// taken since 21 November (a constant offset of its centre of mass): the bridge 0.1 m higher moves the frame momentum's
+/// first moment by 14 kg * 0.1 m and leaves the dynamics as they were.
 #[test]
 fn a_broken_gantry_or_tool_is_refused() {
     let known: Vec<Config> = MACHINES.iter().map(|m| m.config()).collect();
@@ -404,8 +405,22 @@ fn a_broken_gantry_or_tool_is_refused() {
     };
     let gantry = read("dual-gantry.toml");
     assert!(refused(&gantry, "drives = { mx1 = -0.6, mx2 = 0.6 }\n", "").starts_with("machine.rack[rack_x2].axis"));
-    let offset = refused(&gantry, "axes = [\"x\"]\npos = [750, 0]", "axes = [\"x\"]\noffset_m = [0.0, 0.0, 0.1]");
-    assert_eq!(offset, "machine.body[bridge].offset_m (only on rotary axes)");
+    let raised = gantry.replacen("axes = [\"x\"]\npos = [750, 0]", "axes = [\"x\"]\noffset_m = [0.0, 0.0, 0.1]", 1);
+    assert_ne!(raised, gantry, "the change applies");
+    let build = |text: &str| {
+        let entry = sim_netlist::from_text(text, true, "offset", &known).unwrap_or_else(|e| panic!("{e:?}"));
+        (entry.build)(&entry.config()).unwrap()
+    };
+    let (plain, high) = (build(&gantry), build(&raised));
+    let (mut state, mut held) = (Vec::new(), [0.0; 3]);
+    plain.equilibrium(&[1.5, 0.3], &mut state, &mut held);
+    plain.set_tool_velocity(&mut state, &[0.4, -0.2]);
+    let (a, b) = (plain.frame_momentum(&state).unwrap(), high.frame_momentum(&state).unwrap());
+    assert!(close(b.first_moment[2] - a.first_moment[2], 14.0 * 0.1, 1e-12), "{a:?}\n{b:?}");
+    let (mut da, mut db) = (vec![0.0; state.len()], vec![0.0; state.len()]);
+    plain.derivatives(&state, &held, &mut da);
+    high.derivatives(&state, &held, &mut db);
+    assert_eq!(da, db);
     let other = refused(&gantry, "mx2 = 0.6 }", "mx2 = 0.6, my = 0.0 }");
     assert!(other.starts_with("machine.gantry[bridge_yaw].drives.my"), "{other}");
     let portal = read("portal-c.toml");

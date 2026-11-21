@@ -258,7 +258,7 @@ the file. The order of the motors in the file is the order of the motor signals 
 | `body` | `mass_kg` | required | mass, kg |
 | | `payload_kg` | | payload it carries while `effects.payload` is on and the gripper holds it, kg |
 | | `axes` | required | the axes it moves with; rotary axes among them carry it round, the first outermost |
-| | `offset_m` | | on rotary axes: its centre of mass from where their axes meet, `[x, y, z]` at angle 0, m ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)) |
+| | `offset_m` | | its centre of mass from where its axes put it, `[x, y, z]`, m: on rotary axes from where their axes meet at angle 0, turning with them ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)); on straight axes alone a constant offset that only its place in the frame momentum takes (the T-gantry's carriage 0.3 m above its Z axis) |
 | `guide` | `axis` | required | the axis it guides; one guide per axis at most; its loss is `power.<id>` |
 | | `friction` | required | the table of its friction values, laid out as `[friction_x]` |
 | | `carries` | | bodies whose weight across the axis it carries |
@@ -768,7 +768,7 @@ A machine file is checked in full when it is loaded, before anything runs:
 - the machine: masses, radii and lengths positive, one gearbox per motor (none for a linear motor) and one pulley,
   screw, rack or rotary per gearbox, at most one of these per axis (but two at a gantry's sides), a screw at least as
   long as its stroke, as many motors as axes and one more per gantry drive beyond the first, a gantry's drives on its
-  axis, a tool centre point's axes along x, y and z, a body's `offset_m` on rotary axes only, a routing that keeps the
+  axis, a tool centre point's axes along x, y and z, a routing that keeps the
   belt's length and sets every axis;
 - every other key against the keys the registered machines' configs have (so `pretensoin_n` is refused by name), plus
   `[axis.<id>]` for each axis, a friction table for each guide, the value tables of screws, racks, linear motors and
