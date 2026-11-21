@@ -161,6 +161,8 @@ pub struct TGantry {
     /// Force on the tool in [X, Z] while the cycle dwells.
     process: [f64; 2],
     dwelling: bool,
+    /// An obstacle's push on the tool in [X, Z] (`Machine::set_tool_force`), held until changed.
+    push: [f64; 2],
     stops: HardStop,
     /// Holding brake of one motor shaft.
     brake: HoldingBrake,
@@ -456,6 +458,7 @@ impl TGantry {
                 on("process_force", cfg.f64("process.force_z_n")?)?,
             ],
             dwelling: false,
+            push: [0.0; 2],
             stops: HardStop::from_config(cfg)?,
             brake,
             brake_engaged: false,
@@ -1204,6 +1207,11 @@ impl TGantry {
             force.push(self.on_beam_weight() - process_z - beam_k * s[W] - beam_c * s[V + W] - beam_dm * vx * s[V + W]);
         }
         let at = self.coordinates();
+        // An obstacle's push at the tool (`Machine::set_tool_force`): its virtual power per unit of each coordinate's rate,
+        // through the tip's place on all of them as `tool_state` has it (lean, sway, rise, the beam's deflection).
+        if let Some(push) = sim_core::tool_force_on_rates(self, s, &self.push, V..S) {
+            force.iter_mut().zip(&at).for_each(|(f, c)| *f += push[*c]);
+        }
         let acc = sim_components::chain::solve(&self.elastic_mass(s[X], s[Z]), &force)
             .unwrap_or_else(|| vec![f64::NAN; at.len()]);
         for c in [Q, U, W] {
@@ -1271,11 +1279,11 @@ impl TGantry {
         // Idlers, chain, process and end stops; the growing chain takes m' vx^2 / 2 (see the elastic model).
         let (idler_x, idler_z) = self.idler_friction(s[2], s[3]);
         let [process_x, process_z] = self.process_force();
-        let extra_x = process_x + self.stop_force(0, s[0], s[2])
+        let extra_x = process_x + self.push[0] + self.stop_force(0, s[0], s[2])
             - idler_x
             - self.chain_drag(s[2])
             - 0.5 * chain_growth * s[2] * s[2];
-        let extra_z = process_z + self.stop_force(1, s[1], s[3]) - idler_z;
+        let extra_z = process_z + self.push[1] + self.stop_force(1, s[1], s[3]) - idler_z;
         // One pass with the loss factors `loss`: the solution, and the factors of the torques it puts into the gearboxes.
         let pass = |loss: &[f64; 2]| -> ([f64; 10], [f64; 2]) {
             let bx = loss[0] * drive[0] + loss[1] * drive[1] + mesh[0] + mesh[1] - ffx + extra_x + belt_x;
@@ -1726,7 +1734,7 @@ impl Machine for TGantry {
                     - riding * w,
             ],
             gravity: [0.0, 0.0, -self.g],
-            external: [process[0], 0.0, process[1]],
+            external: [process[0] + self.push[0], 0.0, process[1] + self.push[1]],
             // The tool tip, z_tool_drop below the carriage where the Z axis's centre of mass (at z here) is z_com_drop below it.
             external_at: [tool[0], 0.0, tool[1] - (self.z_tool_drop - self.z_com_drop)],
         })
@@ -1993,6 +2001,11 @@ impl Machine for TGantry {
     }
     fn set_dwelling(&mut self, dwelling: bool) {
         self.dwelling = dwelling;
+    }
+    /// The push acts at the tool tip in either model; its power is the budget's crash row, not the process's.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push = [force[0], force[1]];
+        true
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
