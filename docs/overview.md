@@ -228,7 +228,7 @@ axis.z.max_velocity_m_s,1.5,2.25
 effects.input_shaping,true,false
 ```
 
-The search judges the config as written; its fastest setting, 1.39 s, fails `belt-least-tension` and `settling` in the error bands (each bounded value at its low and at its high bound, as `verdicts --bands`). So the optimiser goes back four steps of its search, to 1.756 s, which passes there too. The bands are one value at a time: at the worst corner of the bounds (`verdicts --bands --worst` with the five settings above) this result fails `settling` (0.26 mm against 0.1 mm; the belt keeps 32 N), so it takes back the margins the config was given for its worst case. `optimise --worst` judges the result at that corner instead, at the cost of a far longer search.
+The search judges the config as written; its fastest setting, 1.39 s, fails `belt-least-tension` and `settling` in the error bands (each bounded value at its low and at its high bound, as `verdicts --bands`). So the optimiser goes back four steps of its search, to 1.756 s, which passes there too. The bands are one value at a time: at the worst corner of the bounds (`verdicts --bands --worst` with the five settings above) this result fails `settling` (0.24 mm against 0.1 mm; the belt keeps 33 N; and `pulley-bearing-life`, as the config as written does there), so it takes back the margins the config was given for its worst case. `optimise --worst` judges the result at that corner instead, at the cost of a far longer search.
 
 **A path file.** Lines, arcs and splines, from where the machine stands (the default T-gantry starts at 0.1, 0.35):
 
