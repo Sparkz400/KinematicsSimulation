@@ -452,6 +452,29 @@ fn the_column_rings_stiffer_with_the_nut_near_its_bearing() {
     assert!(rates.iter().all(|r| r.abs() < 1e-7), "{rates:?}");
 }
 
+/// The planner's trains (`Machine::trains`) are the machine's own held modes, one motor at a time: the lift's is the
+/// column's ring on its screw at the stroke's height (438.4518 and 349.0392 Hz at z = 0.1 and 0.3 by hand above, the
+/// fixed bearing at z = 0); the turn's and the reach's are the arm's mode on that joint's gearbox with the other one
+/// rigid (its stiffness raised to 1e12 N m/rad) and the bands rigid, retracted and extended. The rigid model has none.
+#[test]
+fn the_trains_are_the_held_modes_one_motor_at_a_time() {
+    let edits = ["effects.band_elasticity = false", "screw.fixed_bearing_at_m = 0.0"];
+    let d = handler(&edits);
+    for (r, z, column) in [(0.12, 0.1, 438.4518), (0.75, 0.3, 349.0392)] {
+        let pose = [r, 0.0, z];
+        let trains = d.trains(&pose);
+        assert_eq!(trains.len(), 3);
+        close(trains[2].unwrap().hz, column, 1e-6, "lift's train");
+        for k in 0..2 {
+            let mut held = handler(&edits);
+            held.joints[1 - k].gearbox.stiffness = 1e12;
+            let own = held.modes(&pose)[0].hz;
+            close(trains[k].unwrap().hz, own, 1e-6, "joint's train");
+        }
+    }
+    assert!(handler(&RIGID).trains(&[0.4, 0.0, 0.1]).is_empty());
+}
+
 /// With the screw's stiffness following the nut, the loss-free configs keep their energy and the default config's
 /// budget closes (`testkit`): the spring's energy at the nut's travel and the force that travel takes from it agree.
 #[test]

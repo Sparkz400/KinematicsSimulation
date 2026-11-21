@@ -300,8 +300,16 @@ Fixed:
 - The planner's train (`RotaryJoint::train`, the machine files' `trains`) put a screw's or rack's
   compliance in series twice: K1 holds it already (`Converter::apply_back`) and `band_compliance` is
   the same spring. The joint kit's screw axis's train was 0.73 of its two-mass mode; now equal
-  (`the_screw_axis_train_is_its_two_mass_mode`). The wafer handler, the tripod and the hexapod have no
-  train (`Machine::trains` empty): the planner keeps back no speed for their elastic screws.
+  (`the_screw_axis_train_is_its_two_mass_mode`). The wafer handler had no train (`Machine::trains` empty): it has
+  one per motor since 21 November, the joints' with the other joint held and the bands rigid, the lift's at the
+  screw's stiffness at its height (`the_trains_are_the_held_modes_one_motor_at_a_time`: the column's 438.4518 and
+  349.0392 Hz at z = 0.1 and 0.3, the joints' the arm's mode with the other gearbox rigid). The tripod and the hexapod
+  (said here to have none) had theirs from `chain.rs` (`JointMachine`: each leg's M_kk with the others held, the screw
+  at the leg's length), now tested against the hand's sqrt(K / M_kk) at two poses. Kept back on the default cycles:
+  wafer handler 1.0000 to 1.0094 % (trains 63.3, 34.4, 432.2 Hz at the start), tripod 1.0010 %, hexapod 1.0025 %; the
+  wafer handler's cycle (axis limits) 7.762 s and its verdicts unchanged, timed time-optimal 6.135 s both ways, its
+  motors' peaks 0.01 % lower (188.138 to 188.120 rad/s) and its wafer-slip row failing as before (3.9464 against 2.4517
+  m/s^2, a check the plan does not keep).
 - The ISW ball screw's constant-speed worst sample is 3.65 N m (3.6487), not 3.62: the gear damper in
   series (60e59797: 3.6156, the fit's S-profile RMS 0.3716) and the screw's own damping ratio 0.04
   (e78913f3: 3.6487, S-profile 0.3681). The worst sample sits at 14.5 s, the simulated torque -1.1 N m
