@@ -572,7 +572,12 @@ pub struct JointMachine<M: Mechanism> {
     two_way: bool,
     /// An obstacle's push on the tool, per axis (`Machine::set_tool_force`), held until changed; empty for none.
     push: Vec<f64>,
+    /// The joints and the Jacobian the push was last taken through (`push_on_joints`).
+    push_jacobian: std::sync::Mutex<(Vec<f64>, Vec<f64>)>,
 }
+
+/// How far (m or rad) the joints may move before the push's Jacobian is worked out again (`push_on_joints`).
+const PUSH_JACOBIAN_REUSE: f64 = 1e-5;
 
 /// The losses of one moment: per joint its friction, its motor's friction with the brake, its gearbox; then the stops
 /// and what the ripple gives off. And per joint the gearbox loss as a torque at the rotor.
@@ -615,16 +620,26 @@ impl<M: Mechanism> JointMachine<M> {
             flex,
             two_way,
             push: Vec::new(),
+            push_jacobian: std::sync::Mutex::new((Vec::new(), Vec::new())),
         }
     }
 
     /// The push at the tool (`push`) on the driven joints at q: its virtual work per unit of each, through the Jacobian
-    /// `tool_state` takes the tool's speed with, sum_i F_i d tool_i / d q_k. `None` without a push.
+    /// `tool_state` takes the tool's speed with, sum_i F_i d tool_i / d q_k. `None` without a push. The Jacobian is
+    /// worked out again only where the joints have moved `PUSH_JACOBIAN_REUSE` from where it last was (a numerical one
+    /// is 2 n forward solutions, a Newton's each on a hexapod): what the push's power then misses of the tool's speed is
+    /// the Jacobian's change over that (the hexapod's move into a slab: 63 s against 39 s, its budget 1.94e-5 of the
+    /// supply against 1.91e-5).
     fn push_on_joints(&self, q: &[f64]) -> Option<Vec<f64>> {
         if self.push.iter().all(|f| *f == 0.0) {
             return None;
         }
-        let (n, jac) = (self.n(), self.jacobian(q));
+        let n = self.n();
+        let mut memo = self.push_jacobian.lock().unwrap_or_else(|e| e.into_inner());
+        if memo.0.len() != n || memo.0.iter().zip(q).any(|(a, b)| (a - b).abs() > PUSH_JACOBIAN_REUSE) {
+            *memo = (q.to_vec(), self.jacobian(q));
+        }
+        let jac = &memo.1;
         Some((0..n).map(|k| self.push.iter().enumerate().map(|(i, f)| f * jac[i * n + k]).sum()).collect())
     }
 
