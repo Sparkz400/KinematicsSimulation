@@ -483,6 +483,8 @@ struct Lift {
     payload: f64,
     g: f64,
     screw: BallScrew,
+    /// An obstacle's push on the tool along the stroke (`Machine::set_tool_force`), N, held until changed.
+    push: f64,
 }
 
 impl Lift {
@@ -520,11 +522,12 @@ impl Lift {
         if self.elastic {
             // The gearbox's spring between the rotor and the column: (acceleration, torque into it, force out of it).
             let gear = self.gear(x);
-            let acc = (gear.output + j.output_torque(x[0], x[1]) + self.weight(attached)) / self.mass(attached);
+            let acc =
+                (gear.output + j.output_torque(x[0], x[1]) + self.weight(attached) + self.push) / self.mass(attached);
             return (acc, gear.rotor * i, gear.output);
         }
         let drive = j.rigid_drive(torque, x[0] * i, x[1] * i, x[2], engaged).0;
-        let rest = self.weight(attached) + j.output_torque(x[0], x[1]);
+        let rest = self.weight(attached) + j.output_torque(x[0], x[1]) + self.push;
         let (m, r) = (self.mass(attached), j.reflected_inertia());
         // The loss factor of the torque going in, at its fixed point (`mech::settled_loss`).
         let solve = |loss: f64| (loss * drive + rest) / (m + loss * r);
@@ -612,6 +615,9 @@ pub struct WaferHandler {
     band_limit: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the tool in the plane, along its reach and its turn (`Machine::set_tool_force`), held
+    /// until changed; the lift's is the lift's.
+    push: V2,
     dwelling: bool,
     max_condition: f64,
     axes: Vec<AxisInfo>,
@@ -695,6 +701,7 @@ impl WaferHandler {
             payload: arm.wafer.mass,
             g,
             screw,
+            push: 0.0,
         };
         let hold = Hold::from_config(cfg, wafer_kg)?;
         let factor = cfg.positive("ratings.wafer_slip_safety_factor")?;
@@ -715,6 +722,7 @@ impl WaferHandler {
             band_limit: cfg.positive("ratings.band_max_pretension_share")?,
             payload_attached: true,
             brake_engaged: false,
+            push: [0.0; 2],
             dwelling: false,
             max_condition: cfg.positive("workspace.max_condition_number")?,
             axes,
@@ -904,6 +912,15 @@ impl WaferHandler {
 
     /// Rigid gearboxes: the arm's acceleration, and per joint the torque into its gearbox (after the rotor's own
     /// acceleration) and out of it.
+    /// The push at the tool in the plane on the arm's coordinates: its virtual power per unit of each one's rate
+    /// (`sim_core::tool_force_on_rates`, through `plane_tool`); zero without a push and beyond `nq`.
+    fn pushed(&self, s: &[f64]) -> Q {
+        let n = self.nq();
+        let force = [self.push[0], self.push[1], 0.0];
+        let q = sim_core::tool_force_on_rates(self, s, &force, n..2 * n);
+        q.map_or([0.0; 4], |q| std::array::from_fn(|k| q.get(k).copied().unwrap_or(0.0)))
+    }
+
     fn rigid_solve(&self, s: &[f64], torque: &[f64]) -> (Q, V2, V2) {
         let n = self.nq();
         let (q, qd) = self.coordinates(s);
@@ -914,8 +931,9 @@ impl WaferHandler {
         let drive: V2 = std::array::from_fn(|k| {
             self.joints[k].rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0
         });
+        let push = self.pushed(s);
         let rest: Q = std::array::from_fn(|k| {
-            bands[k] - h[k] + if k < 2 { self.joints[k].output_torque(q[k], qd[k]) } else { 0.0 }
+            bands[k] - h[k] + push[k] + if k < 2 { self.joints[k].output_torque(q[k], qd[k]) } else { 0.0 }
         });
         let at = |loss: V2| -> Q {
             let mut m = mass;
@@ -1255,9 +1273,9 @@ impl Machine for WaferHandler {
         }
         let (q, qd) = self.coordinates(s);
         let (mass, h) = self.arm.dynamics(&q, &qd, self.payload_attached);
-        let mut rhs = self.band_forces(&q, &qd);
+        let (mut rhs, push) = (self.band_forces(&q, &qd), self.pushed(s));
         for r in 0..4 {
-            rhs[r] -= h[r];
+            rhs[r] += push[r] - h[r];
         }
         for k in 0..2 {
             let joint = &self.joints[k];
@@ -1370,6 +1388,13 @@ impl Machine for WaferHandler {
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+    /// The push acts on the arm's coordinates beyond the gearboxes (`pushed`, on the bands' too where they are elastic)
+    /// and on the lift's load, in either model; its power is the budget's crash row.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push = [force[0], force[1]];
+        self.lift.push = force[2];
+        true
     }
     fn set_dwelling(&mut self, dwelling: bool) {
         self.dwelling = dwelling;
