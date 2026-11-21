@@ -3,8 +3,8 @@
 # clamp, so the pulley cuts it into two sections: one longer by the axis's travel, the other shorter. The Z motor is
 # smaller and has a gearbox of ratio 10 ([motor.mz], [drive.mz], [gearbox.mz], [ratings.mz]); X and Y have the shared
 # [motor], [drive], [gearbox] and [ratings]. Its Z motor holds the slide and payload against gravity:
-# m g r / i = 3.5 kg * 9.80665 m/s2 * 0.02 m / 10 = 0.0686 N m, and 0.04 kg of the Z belt's runs that its spans (below)
-# move up with the slide: 0.0694 N m.
+# m g r / i = 3.5 kg * 9.80665 m/s2 * 0.02 m / 10 = 0.0686 N m. Its belt's loop adds nothing: the runs that rise with
+# the slide are as long together as the one that falls (its spans, below).
 # The value tables are the H-bot's (machines/h-bot.toml), the T-gantry's placeholders; nothing here is a real machine.
 # Placeholder values; units are in the field names. See docs/machine-files.md.
 format_version = 1
@@ -913,7 +913,9 @@ pulleys = { pulley_y = -1 }
 route = ["pulley_y", "y_carriage"]
 pos = [450, 360]
 
-# Z, on the Y carriage: the motor at the bottom, so the slide hangs on the section above it, z1.
+# Z, on the Y carriage: the motor at the bottom, so the slide hangs on the section above it, z1. A loop: the motor and
+# the far idler 0.5 m apart, the clamp to the motor 0.1 m + z, back from the motor round the far idler to the clamp
+# 0.5 m + 0.4 m - z.
 [[machine.section]]
 id = "z1"
 length_m = 0.1
@@ -924,7 +926,7 @@ pos = [450, 540]
 
 [[machine.section]]
 id = "z2"
-length_m = 0.5
+length_m = 0.9
 axes = { z = -1 }
 pulleys = { pulley_z = -1 }
 route = ["pulley_z", "z_slide"]
@@ -933,8 +935,11 @@ pos = [450, 660]
 # The free spans, with the belt's speed over ground per axis speed along x, y and z of the 3D view, so that the belts'
 # mass is summed run by run. Each belt is a loop clamped to its carriage: the run from the clamp to the motor and the
 # one from the far idler back to the clamp move with the carriage, the run from the motor to the far idler against it,
-# and a belt on a moving axis moves with that axis too (the Y belt rides on the bridge, the Z belt on the Y carriage). The file's section lengths
-# shared out (the run from the motor to the far idler takes 0.1 m of the second section):
+# and a belt on a moving axis moves with that axis too (the Y belt rides on the bridge, the Z belt on the Y carriage).
+# Z's runs are its loop's: the run from the motor to the far idler is as long as the two with the slide together, so its
+# belt's momentum and weight along z cancel, and the slide's weight alone is on the Z motor. X's and Y's sections share
+# their lengths out (the run from the motor to the far idler takes 0.1 m of the second section; they lie flat, so only
+# their momentum along the axis has it):
 #   belt  run                     length      speed over ground
 #   X     clamp to motor          0.1 + x     (vx, 0, 0)
 #         motor to far idler      0.1         (-vx, 0, 0)
@@ -943,11 +948,11 @@ pos = [450, 660]
 #         motor to far idler      0.1         (vx, -vy, 0)
 #         far idler to clamp      0.6 - y     (vx, vy, 0)
 #   Z     clamp to motor          0.1 + z     (vx, vy, vz)
-#         motor to far idler      0.1         (vx, vy, -vz)
+#         motor to far idler      0.5         (vx, vy, -vz)
 #         far idler to clamp      0.4 - z     (vx, vy, vz)
-# Every run moves at its axes' speeds squared, whatever the pose: 2T / mu = 2.7 vx^2 + 1.4 vy^2 + 0.6 vz^2, in place of
-# the lumps' third of the 2.7 m on each pulley (0.9 each): the belts add 0.18 kg on X, 0.05 kg on Y and -0.03 kg on Z,
-# and no speed terms.
+# Every run moves at its axes' speeds squared, whatever the pose: 2T / mu = 3.1 vx^2 + 1.8 vy^2 + 1.0 vz^2, in place of
+# the lumps' third of the 3.1 m on each pulley (1.033 each): the belts add 0.207 kg on X, 0.077 kg on Y and -0.003 kg
+# on Z, and no speed terms.
 [[machine.span]]
 id = "x_1"
 section = "x1"
@@ -1003,7 +1008,7 @@ velocity_z = { z = 1 }
 [[machine.span]]
 id = "z_2"
 section = "z2"
-length_m = 0.1
+length_m = 0.5
 velocity_x = { x = 1 }
 velocity_y = { y = 1 }
 velocity_z = { z = -1 }

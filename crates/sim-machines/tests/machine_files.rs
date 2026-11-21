@@ -590,7 +590,7 @@ fn the_corexy_moves_as_worked_out_by_hand() {
 /// L = 4.2 m, so at x = 0.3, y = 0.1 the belt weighs mu (4.2 + 8 * 0.55) = 0.86 kg on X where the lumps had 0.42,
 /// 0.42 kg on Y, and -0.08 kg between them. The CoreXY's belts move as a whole along X and along Y (0.39 kg, as the
 /// lumps had it) and add -0.01 kg between them (belt A's 1.2 m off the clamps against B's 1.3 m). The portals' belts
-/// ride on the axes that carry them: X carries every belt (2.7 m on the XYZ portal, 2.1 m on the C portal, the Y belt's
+/// ride on the axes that carry them: X carries every belt (3.1 m on the XYZ portal, 2.1 m on the C portal, the Y belt's
 /// 1.1 and 0.8 m on the dual and rack gantries), Y the belts on it.
 #[test]
 fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
@@ -603,7 +603,7 @@ fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
         }),
         ("corexy.toml", &[0.3, 0.1], &[0.6, 0.2], |_, v| 3.9 * (v[0] * v[0] + v[1] * v[1]) - 0.2 * v[0] * v[1]),
         ("xyz-portal.toml", &[0.3, 0.2, 0.1], &[0.6, 0.4, 0.2], |_, v| {
-            2.7 * v[0] * v[0] + 1.4 * v[1] * v[1] + 0.6 * v[2] * v[2]
+            3.1 * v[0] * v[0] + 1.8 * v[1] * v[1] + 1.0 * v[2] * v[2]
         }),
         ("portal-c.toml", &[0.3, 0.2, 0.1, 0.0], &[0.6, 0.4, 0.2, 0.0], |_, v| 2.1 * v[0] * v[0] + 0.8 * v[1] * v[1]),
         ("dual-gantry.toml", &[1.0, 0.3], &[0.6, 0.4], |_, v| 1.1 * (v[0] * v[0] + v[1] * v[1])),
@@ -715,10 +715,10 @@ fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
 /// The portal by hand. Each axis has a belt and a motor of its own, so the motor angle is i q / r: X and Y with the
 /// shared gearbox (i 5), Z with its own ([gearbox.mz], i 10): at q = 0.1 m 25, 25 and 50 rad, and at 0.2 m/s 50, 50 and
 /// 100 rad/s. Its Z motor holds the slide (2.5 kg) and the payload (1 kg) against gravity: m g r / i = 3.5 * 9.80665 *
-/// 0.02 / 10 = 0.0686466 N m (rigid, without tooth meshing and ripple), and the Z belt's runs that its spans move with
-/// Z: 0.1 + z and 0.4 - z up, 0.1 down, 0.4 m of the belt's 0.1 kg/m rising with the slide (`runs_height` weighs them
-/// where the frame momentum has them; a loop's runs would cancel, the file shares its section lengths out as its
-/// comment says): 3.54 * 9.80665 * 0.02 / 10 = 0.0694311 N m. X and Y lie flat and hold nothing. The Z motor's own
+/// 0.02 / 10 = 0.0686466 N m (rigid, without tooth meshing and ripple), and nothing for its belt: its loop's runs, 0.1 + z
+/// and 0.4 - z up with the slide and 0.5 m down from the motor to the far idler, cancel (`runs_height` weighs them where
+/// the frame momentum has them; with the sections shared out, 0.1 m down, 0.4 m of the belt's 0.1 kg/m rose with the
+/// slide and it held 3.54 kg, 0.0694311 N m). X and Y lie flat and hold nothing. The Z motor's own
 /// drive ([drive.mz]: rated torque 0.635 N m, the shared one 1.27) is the controller's, and its verdicts are judged
 /// against its own ratings ([ratings.mz]: drive current 1.5 A, gearbox 18 N m; the shared 3 A and 40 N m).
 #[test]
@@ -734,7 +734,7 @@ fn the_portal_moves_and_holds_as_worked_out_by_hand() {
     assert_close("motor angles", &motors, &[25.0, 25.0, 50.0], 1e-12);
     let (mut state, mut held) = (Vec::new(), [0.0; 3]);
     machine.equilibrium(&[0.5, 0.25, 0.15], &mut state, &mut held);
-    assert_close("holding torque", &held, &[0.0, 0.0, (3.5 + 0.1 * 0.4) * 9.80665 * 0.02 / 10.0], 1e-12);
+    assert_close("holding torque", &held, &[0.0, 0.0, 3.5 * 9.80665 * 0.02 / 10.0], 1e-12);
 
     // Elastic, the rotors turn at the speed the tool's sets.
     let elastic = (entry.build)(&entry.config()).unwrap();

@@ -250,13 +250,12 @@ Fixed (second audit, 21 November):
 - `config-reference.md`'s beam mode "59 Hz in the middle" is the stiff belt's; on the default belt it couples
   with Z's mode to 51.5 and 140.1 Hz.
 
-Open (second audit):
-- The XYZ portal's Z belt spans move 0.4 m of belt up with the slide (0.1 + z and 0.4 - z up, 0.1 down: the
-  section lengths shared out, as its comment says), where a loop's runs would cancel. Its momentum had that
-  before; since the runs weigh where their momentum is, its Z holds 3.54 kg instead of 3.5 (0.0694 N m, the
-  test's hand value follows the file). Re-splitting the spans so the falling run equals the rising ones is open.
-
 Fixed (after the second audit, 21 November):
+- The XYZ portal's Z belt is a loop: its section z2 is 0.9 m (0.5 m from the motor to the far idler and 0.4 m
+  back to the clamp), its span z_2 0.5 m, so the falling run is as long as the two rising with the slide. Its Z
+  holds 3.5 kg again, 0.0686466 N m (before 3.54 kg, 0.0694311 N m); its belts weigh 2T / mu = 3.1 vx² + 1.8 vy² +
+  1.0 vz² (2.7, 1.4, 0.6 before). Its X and Y sections still share their lengths out (0.1 m from the motor to the
+  far idler): they lie flat, so only their momentum along the axis has it.
 - The drive's current circle holds the q reference with the d reference, i_q,ref ≤ sqrt(I_max² − i_d,ref²), as a
   drive limits its current reference vector, not with the d current that is there. 1FK2205-4AF single axis at
   200 m/s²: 10.944 A against 10.9 A (0.41 %, above it for 8.75 ms), was 10.980 A (0.74 %). The rest is the q
