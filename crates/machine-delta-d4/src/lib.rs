@@ -244,6 +244,8 @@ pub struct Delta4 {
     j_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's torque on the tool about its turn (`Machine::set_tool_force`, its c component), N m.
+    turn_push: f64,
     shaft: Shaft,
     /// The telescope's friction as the D3 has it, for its loss power; `None` with effects.telescope_friction off.
     drag: Option<PlatformDrag>,
@@ -387,6 +389,7 @@ impl Delta4 {
             j_payload: if cfg.bool("effects.payload")? { cfg.non_negative("tool.payload_inertia_kgm2")? } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
+            turn_push: 0.0,
             shaft,
             drag,
             thermal: ThermalFeedback::from_config(&tcfg)?,
@@ -463,7 +466,7 @@ impl Delta4 {
         let ((c, w), (rotor, speed)) = (self.turn(s), self.rotor(s));
         let j = &self.tool;
         let drive = j.rigid_drive(torque, rotor, speed, self.brake(s), self.brake_engaged).0;
-        let rest = j.output_torque(c, w);
+        let rest = j.output_torque(c, w) + self.turn_push;
         let solve = |loss: f64| (loss * drive + rest) / (self.tool_inertia() + loss * j.reflected_inertia());
         // The loss factor of the torque going in, at its fixed point (`mech::settled_loss`).
         let [loss] = sim_components::mech::settled_loss([1.0], |&[loss]| {
@@ -484,7 +487,7 @@ impl Delta4 {
             let (gear, rotor_acc, brake_rate) =
                 self.tool.rotor(torque, s[o + 2], s[o + 3], go, gw, s[o + 4], self.brake_engaged);
             let into_tool = if self.has_body() { self.shaft_torque(s).0 } else { gear.output };
-            out[1] = (into_tool + self.tool.output_torque(c, w)) / self.tool_inertia();
+            out[1] = (into_tool + self.tool.output_torque(c, w) + self.turn_push) / self.tool_inertia();
             out[2] = s[o + 3];
             out[3] = rotor_acc;
             out[4] = brake_rate;
@@ -720,6 +723,11 @@ impl Machine for Delta4 {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
         self.arms.set_brake_engaged(engaged);
+    }
+    /// The push on x, y and z goes to the arms (the D3's, at the platform); the torque about c turns the tool.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.turn_push = force[3];
+        self.arms.set_tool_force(&force[..3])
     }
 
     /// The arms' gearboxes, then the tool's: their hysteresis states move on to where the step ended.

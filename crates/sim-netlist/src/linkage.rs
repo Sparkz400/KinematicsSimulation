@@ -311,6 +311,7 @@ pub(crate) fn read(
             inertia: 0.0,
             pulley: String::new(),
             at: None,
+            body: None,
             clockwise: false,
             transmission: Transmission::Belt,
             axis: None,
@@ -519,6 +520,8 @@ pub struct LinkageMachine {
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the plate (`Machine::set_tool_force`), along x and z, N; held until changed.
+    tool_push: V2,
     joints: [RotaryJoint; 2],
     thermal: Option<ThermalFeedback>,
     /// The working range: half width, top, bottom circle's centre height and radius; the condition number refused above.
@@ -627,6 +630,7 @@ impl LinkageMachine {
             m_payload: if cfg.bool("effects.payload")? { n.non_negative("mass.payload_kg")? } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
+            tool_push: [0.0; 2],
             thermal: ThermalFeedback::from_config(cfg)?,
             half_width,
             top,
@@ -745,6 +749,12 @@ impl LinkageMachine {
         (mass, velocity, gravity)
     }
 
+    /// An obstacle's push on the plate F (`set_tool_force`) on the arms, J^T F: in the equations of motion only, not
+    /// in the feedforward or the state at rest (as the machine files' process force and push).
+    fn push(&self, t: V2) -> V2 {
+        mul(&transpose(&self.pose(t).1), self.tool_push)
+    }
+
     /// Rigid model: the arms' acceleration, and per joint the torque into its gearbox (after the rotor's own
     /// acceleration) and out of it, at the arm.
     fn rigid_solve(&self, s: &[f64], torque: &[f64]) -> (V2, V2, V2) {
@@ -755,7 +765,9 @@ impl LinkageMachine {
         let drive: V2 = std::array::from_fn(|k| {
             self.joints[k].rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0
         });
-        let rest: V2 = std::array::from_fn(|k| gravity[k] - velocity[k] + self.joints[k].output_torque(t[k], w[k]));
+        let push = self.push(t);
+        let rest: V2 =
+            std::array::from_fn(|k| gravity[k] + push[k] - velocity[k] + self.joints[k].output_torque(t[k], w[k]));
         let solve = |loss: V2| -> V2 {
             let m: M2 = std::array::from_fn(|r| {
                 std::array::from_fn(|c| {
@@ -973,6 +985,8 @@ impl Machine for LinkageMachine {
             add_point(&mut f, 2.0 / 3.0 * m_fb, middle, speed);
             add_spin(&mut f, [0.0, side, 0.0], self.joints[i].rotor_inertia, rotor_speed[i]);
         }
+        // An obstacle's push on the plate comes from outside.
+        (f.external, f.external_at) = ([self.tool_push[0], 0.0, self.tool_push[1]], [p[0], 0.0, p[1]]);
         Some(f)
     }
     fn axes(&self) -> &[AxisInfo] {
@@ -1032,13 +1046,13 @@ impl Machine for LinkageMachine {
             return;
         }
         let (t, w) = self.arms(s);
-        let (mass, velocity, gravity) = self.load(t, w);
+        let ((mass, velocity, gravity), push) = (self.load(t, w), self.push(t));
         let mut rhs = [0.0; 2];
         for k in 0..2 {
             let joint = &self.joints[k];
             let (gear, rotor_acc, brake_rate) =
                 joint.rotor(torque[k], s[4 + k], s[6 + k], t[k], w[k], s[8 + k], self.brake_engaged);
-            rhs[k] = gear.output + gravity[k] - velocity[k] + joint.output_torque(t[k], w[k]);
+            rhs[k] = gear.output + gravity[k] + push[k] - velocity[k] + joint.output_torque(t[k], w[k]);
             out[4 + k] = s[6 + k];
             out[6 + k] = rotor_acc;
             out[8 + k] = brake_rate;
@@ -1149,6 +1163,12 @@ impl Machine for LinkageMachine {
 
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
+    }
+    /// The push acts on the plate, the tool (`push`): its generalised forces J^T F on the arms, whose power F . v is
+    /// the plate's speed times it.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.tool_push = [force[0], force[1]];
+        true
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;

@@ -616,10 +616,9 @@ fn obstacles_stop_the_machine_with_its_drives_off() {
     );
 }
 
-/// The machines that keep an obstacle's push at their motors (`Machine::set_tool_force` false): the D2's and the D3's
-/// arms are the machine files' linkage and spatial delta (`sim_netlist`), the D4's are the D3's; the crane's tool is its
+/// The machines that keep an obstacle's push at their motors (`Machine::set_tool_force` false): the crane's tool is its
 /// bridge, trolley and hoist, not the load that swings under them; the winder's is the web.
-const PUSHED_AT_THE_MOTORS: [&str; 5] = ["delta-d2", "delta-d3", "delta-d4", "overhead-crane", "winder"];
+const PUSHED_AT_THE_MOTORS: [&str; 2] = ["overhead-crane", "winder"];
 
 /// Every machine but those of `PUSHED_AT_THE_MOTORS` takes the push at its tool, and its power goes into the motion: on
 /// its lossless suite config at the start pose, the tool moving at 5 % of each axis's range per second
@@ -835,20 +834,17 @@ fn the_planar_cable_robot_stops_at_the_face() {
 fn the_spatial_cable_robot_stops_at_the_face() {
     assert_stops_at_the_face("cable-spatial", &[0.0, 0.0, 0.85, 0.0, 0.0, 0.0], 2.5);
 }
-// The D2, D3 and D4 are pushed at their motors until the files' linkage and spatial delta (`sim_netlist::linkage`,
-// `sim_netlist::spatial::Delta`, the D4's arms) take the push (`PUSHED_AT_THE_MOTORS`).
+// The D2's and D3's arms are the machine files' linkage and spatial delta (`sim_netlist::linkage`,
+// `sim_netlist::spatial::Delta`), the D4's the D3's with the push about c on its turn.
 #[test]
-#[ignore = "pushed at the motors until sim_netlist's linkage takes the push at the tool"]
 fn the_delta_d2_stops_at_the_face() {
     assert_stops_at_the_face("delta-d2", &[0.15, -0.8], 2.5);
 }
 #[test]
-#[ignore = "pushed at the motors until sim_netlist's spatial delta takes the push at the tool"]
 fn the_delta_d3_stops_at_the_face() {
     assert_stops_at_the_face("delta-d3", &[0.15, 0.0, -1.0], 2.5);
 }
 #[test]
-#[ignore = "pushed at the motors until sim_netlist's spatial delta (its arms) takes the push at the tool"]
 fn the_delta_d4_stops_at_the_face() {
     assert_stops_at_the_face("delta-d4", &[0.15, 0.0, -1.0, 0.0], 2.5);
 }

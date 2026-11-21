@@ -104,19 +104,24 @@ fn the_belt_wraps_a_pulley_as_far_as_the_places_of_its_neighbours_say() {
 }
 
 /// The screw portal's belts wrap their pulleys beside its Z screw (effects.belt_wrap), whose motor drives no belt and
-/// has no wrap (NaN). Each belt runs from its carriage's clamp round its pulley (r = 0.02 m, anticlockwise) and back to
-/// the same clamp, both at z = 0.06 m in the belt's plane: the two runs are the tangents from one point at the distance
-/// D, each leaning asin(r / D) off the line of centres, so the belt wraps half a turn plus twice that,
-/// pi + 2 asin(r / D). With the tool at x = 0.3 m: X's pulley at x = -0.1 m, D = 0.4 m, pi + 2 asin(0.05) =
-/// 3.2416344 rad; Y's at x = 0.5 m, D = 0.2 m, pi + 2 asin(0.1) = 3.3419275 rad.
+/// has no wrap (NaN). Each belt is a loop in its plane: from its carriage's clamp round its pulley (r = 0.02 m,
+/// anticlockwise) and on to its far idler (r_f = 0.012 m, anticlockwise, d = 0.1 + stroke + 0.1 from the pulley on the
+/// same line). The run from the clamp, a point at the distance D, is the tangent leaning asin(r / D) off the line of
+/// centres; the run to the far idler the outer tangent of two wheels, leaning asin((r - r_f) / d): the belt wraps half a
+/// turn plus both, pi + asin(r / D) + asin((r - r_f) / d). With the tool at x = 0.3 m, y = 0.1 m: X's belt standing
+/// (x-z), its pulley at x = -0.1 m, D = 0.4 m, d = 1.2 m: 3.1982802 rad; Y's lying flat (x-y) on the bridge, its pulley
+/// 0.07 m before the Y carriage's y = 0, D = 0.17 m, d = 0.7 m: 3.2709416 rad. (Drawn without the far idlers, run from
+/// the clamp round the pulley and back to it, they wrapped pi + 2 asin(r / D), 3.2416344 and 3.3774330 rad.)
 #[test]
 fn the_belts_wrap_their_pulleys_beside_a_screw() {
     let cfg = with(&file("screw-portal.toml").config(), &["effects.belt_wrap = true"]);
     let machine = sim_netlist::build(&cfg).unwrap();
     let wraps = machine.belt_wraps(&[0.3, 0.1, 0.05]);
     assert_eq!(wraps.len(), 3, "{wraps:?}");
-    assert!(close(wraps[0], PI + 2.0 * 0.05f64.asin(), 1e-12) && (wraps[0] - 3.241_634_4).abs() < 1e-7, "{wraps:?}");
-    assert!(close(wraps[1], PI + 2.0 * 0.1f64.asin(), 1e-12) && (wraps[1] - 3.341_927_5).abs() < 1e-7, "{wraps:?}");
+    let wrap = |d_clamp: f64, d_far: f64| PI + (0.02 / d_clamp).asin() + (0.008 / d_far).asin();
+    let (x, y) = (wrap(0.4, 1.2), wrap(0.17, 0.7));
+    assert!(close(wraps[0], x, 1e-12) && (wraps[0] - 3.198_280_2).abs() < 1e-7, "{wraps:?} against {x}");
+    assert!(close(wraps[1], y, 1e-12) && (wraps[1] - 3.270_941_6).abs() < 1e-7, "{wraps:?} against {y}");
     assert!(wraps[2].is_nan(), "the screw's motor: {wraps:?}");
 }
 

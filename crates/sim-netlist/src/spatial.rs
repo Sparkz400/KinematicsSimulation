@@ -480,6 +480,8 @@ pub struct Delta {
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the platform (`Machine::set_tool_force`), along x, y and z, N; held until changed.
+    tool_push: V3,
     joints: [RotaryJoint; 3],
     thermal: Option<ThermalFeedback>,
     /// The working range: radius, top, bottom sphere's centre height and radius; the condition number refused above.
@@ -643,6 +645,7 @@ impl Delta {
             m_payload: if cfg.bool("effects.payload")? { n.non_negative("mass.payload_kg")? } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
+            tool_push: [0.0; 3],
             joints: arms.joints.clone(),
             thermal: ThermalFeedback::from_config(cfg)?,
             radius,
@@ -977,9 +980,15 @@ impl Delta {
     /// What the joints carry at state s, as `load` has it: mass matrix, velocity term, gravity. With bending arms only
     /// the tubes are on the joints, and the springs' torque stands in for the rest: its weight Q_d in the gravity, the
     /// remainder in the velocity term (so that the torque breakdown shows the weight as gravity).
+    /// An obstacle's push on the platform (`set_tool_force`) is in these equations of motion only, not in the
+    /// feedforward or the state at rest (`push`): with rigid arms in the gravity, with bending ones beyond the tubes.
     fn joint_load(&self, s: &[f64]) -> (M3, V3, V3) {
         let (t, w) = self.arms(s);
-        let Some(b) = self.bending else { return self.load(t, w) };
+        let Some(b) = self.bending else {
+            let (mass, velocity, gravity) = self.load(t, w);
+            let push = self.push::<3>(t, [0.0; 3]);
+            return (mass, velocity, std::array::from_fn(|i| gravity[i] + push[i]));
+        };
         let ((elbows, _), (bend, rate), (y, _)) = (self.elbows(s), self.bend(s), self.lateral(s));
         let (_, _, tip) = self.load_n::<6>(elbows, y, [0.0; 3], [0.0; 3], self.m_nt(), false);
         let mut mass: M3 =
@@ -1006,12 +1015,22 @@ impl Delta {
     fn distal(&self, s: &[f64], b: Bending) -> ([[f64; 6]; 6], [f64; 6]) {
         let ((elbows, speeds), (bend, rate), (y, yv)) = (self.elbows(s), self.bend(s), self.lateral(s));
         let (mass, velocity, gravity) = self.load_n::<6>(elbows, y, speeds, yv, self.m_nt(), false);
+        let push = self.push::<6>(elbows, y);
         let rhs = std::array::from_fn(|i| {
             let spring =
                 if i < 3 { b.k * bend[i] + b.c * rate[i] } else { b.k_lateral * y[i - 3] + b.c_lateral * yv[i - 3] };
-            gravity[i] - velocity[i] - spring
+            gravity[i] + push[i] - velocity[i] - spring
         });
         (mass, rhs)
+    }
+
+    /// An obstacle's push F on the platform (`set_tool_force`) at elbow angles t and moves y: P^T F on the angles and,
+    /// after them, on the moves (P = [J, J_y], the platform's Jacobian).
+    fn push<const N: usize>(&self, t: V3, y: V3) -> [f64; N] {
+        let (_, j, jy) = self.pose_moved(t, y);
+        std::array::from_fn(|c| {
+            (0..3).map(|k| if c < 3 { j[k][c] } else { jy[k][c - 3] } * self.tool_push[k]).sum::<f64>()
+        })
     }
 
     /// With bending arms, the rates of the bend states into `out`, from the joints' acceleration `acc`: the elbows'
@@ -1368,6 +1387,8 @@ impl Machine for Delta {
                 add_spin(&mut f, rod, self.rod_spin, self.rod_spin(i, e, y, ew, yv));
             }
         }
+        // An obstacle's push on the platform comes from outside.
+        (f.external, f.external_at) = (self.tool_push, p);
         Some(f)
     }
     fn axes(&self) -> &[AxisInfo] {
@@ -1554,6 +1575,12 @@ impl Machine for Delta {
 
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
+    }
+    /// The push acts on the platform, the tool (`push`, in `joint_load` and `distal`): its generalised forces P^T F on the coordinates its place
+    /// moves with, whose power F . v is the platform's speed times it.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.tool_push = [force[0], force[1], force[2]];
+        true
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
