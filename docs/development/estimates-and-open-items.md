@@ -274,6 +274,12 @@ Fixed (second audit, 21 November):
   with Z's mode to 51.5 and 140.1 Hz.
 
 Fixed (after the second audit, 21 November):
+- The hexapod's lowest held mode (183.2 Hz) lies below its planner trains (289.6 Hz, each leg's M_kk with the others
+  held), and the trains are right for the allowance's jerk term: with one motor driven and the others held the twist
+  rate is [K^-1 M]_kk j = M_kk j / K_k, the modal sum of its column over the held modes (model reference, the planner's
+  speed ratings). Only the cap after a step of the acceleration would see the lower modes; on the tripod's, hexapod's,
+  wafer handler's and joint-kit SCARA's default cycles the jerk term is taken by a factor 130 to 3600, so no figure
+  moves and the train is left as it is.
 - A cam changed by a reconfigure while it runs (was in section 4 as an unmerged fix): the fix is on main since
   dc454002 (17 November), each stored plan keeping its cam's curve (`Plan::cam`, `Machine::cam_curve`). Checked on 21
   November: `a_cam_changed_under_way_leaves_the_shaper_the_plan_as_it_ran` fails with the delayed copies read off the
