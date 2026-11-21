@@ -124,8 +124,12 @@ pub fn matrix_modes(m: &[f64], k: &[f64], c: &[f64], n: usize) -> Vec<sim_core::
 }
 
 /// The modes of M x'' + C x' + K x = 0 (`n` coordinates, M, K and C symmetric, row by row): w^2 of K x = w^2 M x, the
-/// eigenvalues of L^-1 K L^-T (M = L L^T) by Jacobi rotations, and each mode's damping ratio x^T C(w) x / (2 w) with x
-/// normalised to x^T M x = 1, C's entry (r, col) at the mode's w given by `c`. Empty where M is not positive definite.
+/// eigenvalues of L^-1 K L^-T (M = L L^T) by Jacobi rotations, C's entry (r, col) at a frequency given by `c`. `hz` is
+/// that undamped w (what a shaper following the mode takes). The damping ratio is the damped problem's (`damped_ratio`):
+/// -Re lambda / |lambda| of the eigenvalue of M lambda^2 + C lambda + K that belongs to the mode, C at |lambda|; where
+/// that is not found (an overdamped mode, or two modes' eigenvalues not told apart) the estimate on the undamped shape,
+/// x^T C(w) x / (2 w) with x^T M x = 1, which differs where C couples modes that lie close (C not proportional to M
+/// and K). Empty where M is not positive definite.
 fn matrix_modes_at(m: &[f64], k: &[f64], c: impl Fn(usize, usize, f64) -> f64, n: usize) -> Vec<sim_core::Mode> {
     let mut l = vec![0.0; n * n];
     for i in 0..n {
@@ -178,16 +182,78 @@ fn matrix_modes_at(m: &[f64], k: &[f64], c: impl Fn(usize, usize, f64) -> f64, n
             }
         }
     }
-    (0..n)
+    let undamped: Vec<(f64, f64)> = (0..n)
         .filter_map(|i| {
             let omega = a[i * n + i].sqrt();
             // x = L^-T y, y the eigenvector.
             let x: Vec<f64> = (0..n).map(|r| (0..n).map(|p| w[p * n + r] * v[p * n + i]).sum::<f64>()).collect();
             let damping =
                 (0..n * n).map(|rc| x[rc / n] * c(rc / n, rc % n, omega) * x[rc % n]).sum::<f64>() / (2.0 * omega);
-            (omega > 0.0 && omega.is_finite()).then_some(sim_core::Mode { hz: omega / std::f64::consts::TAU, damping })
+            (omega > 0.0 && omega.is_finite()).then_some((omega, damping))
+        })
+        .collect();
+    let seeds: Vec<[f64; 2]> = undamped.iter().map(|&(w, z)| seed(w, z)).collect();
+    // M^-1 = W^T W.
+    let m_inv: Vec<f64> = (0..n * n).map(|rc| (0..n).map(|p| w[p * n + rc / n] * w[p * n + rc % n]).sum()).collect();
+    undamped
+        .iter()
+        .map(|&(omega, estimate)| {
+            let damping = damped_ratio(&m_inv, k, &c, n, omega, estimate, &seeds).unwrap_or(estimate);
+            sim_core::Mode { hz: omega / std::f64::consts::TAU, damping }
         })
         .collect()
+}
+
+/// Where a mode of undamped frequency `w` and damping ratio `z` has its eigenvalue: -z w + i w sqrt(1 - z^2).
+fn seed(w: f64, z: f64) -> [f64; 2] {
+    [-z * w, w * (1.0 - z * z).max(0.0).sqrt()]
+}
+
+/// The damping ratio -Re lambda / |lambda| of the eigenvalue lambda of M lambda^2 + C(|lambda|) lambda + K (M^-1 given as
+/// `m_inv`) that belongs to the mode of undamped frequency `w0` and estimated ratio `z0`: the eigenvalue of the companion
+/// matrix [[0, I], [-M^-1 K, -M^-1 C]] nearest the mode's `seed` (`shapes::eigen_near`), C taken anew at |lambda| until
+/// it holds. `None` for an estimate of 0 (nothing to find: lambda = i w0) or of 1 and more (overdamped), where the one
+/// found is nearer another mode's seed of `seeds` than its own (two modes' eigenvalues not told apart), or where the
+/// iteration does not settle.
+fn damped_ratio(
+    m_inv: &[f64],
+    k: &[f64],
+    c: &impl Fn(usize, usize, f64) -> f64,
+    n: usize,
+    w0: f64,
+    z0: f64,
+    seeds: &[[f64; 2]],
+) -> Option<f64> {
+    if !(z0 > 0.0 && z0 < 1.0) {
+        return None;
+    }
+    let product = |b: &[f64]| -> Vec<f64> {
+        (0..n * n).map(|rc| (0..n).map(|p| m_inv[rc / n * n + p] * b[p * n + rc % n]).sum()).collect()
+    };
+    let stiffness = product(k);
+    let size = 2 * n;
+    let own = seed(w0, z0);
+    let (mut lambda, mut w) = (own, w0);
+    for _ in 0..50 {
+        let damper = product(&(0..n * n).map(|rc| c(rc / n, rc % n, w)).collect::<Vec<_>>());
+        let mut a = vec![0.0; size * size];
+        for r in 0..n {
+            a[r * size + n + r] = 1.0;
+            for col in 0..n {
+                a[(n + r) * size + col] = -stiffness[r * n + col];
+                a[(n + r) * size + n + col] = -damper[r * n + col];
+            }
+        }
+        (lambda, _) = crate::shapes::eigen_near(&a, size, lambda)?;
+        let next = lambda[0].hypot(lambda[1]);
+        if (next - w).abs() <= 1e-12 * w {
+            let distance = |s: &[f64; 2]| (lambda[0] - s[0]).hypot(lambda[1] - s[1]);
+            let nearest = seeds.iter().map(distance).fold(f64::INFINITY, f64::min);
+            return (lambda[1] > 0.0 && distance(&own) <= nearest).then(|| -lambda[0] / next);
+        }
+        w = next;
+    }
+    None
 }
 
 /// `solve`'s elimination of a fixed-size matrix, kept for several right-hand sides: each solve does the very operations
@@ -681,7 +747,8 @@ impl<M: Mechanism> JointMachine<M> {
 
     /// The two-way modes with the motors held (`Machine::modes`): the joints on their gearboxes' springs where they are
     /// elastic (held where rigid; passive joints held), the modes on theirs, coupled through the mass, K x = w^2 M x.
-    fn coupled_modes(&self, q: &[f64]) -> Vec<sim_core::Mode> {
+    /// Without `damped` the frequencies alone (damping 0), as `resonance_hz` wants them.
+    fn coupled_modes(&self, q: &[f64], damped: bool) -> Vec<sim_core::Mode> {
         let (n, f) = (self.n(), self.flex);
         let all = n + self.passive.len();
         let rest = |len: usize| vec![0.0; len];
@@ -705,16 +772,20 @@ impl<M: Mechanism> JointMachine<M> {
             m[(free + i) * size + free..(free + i + 1) * size].copy_from_slice(&c.mass[i * f..(i + 1) * f]);
             (k[free + i], damping[free + i]) = (modes[i].stiffness, modes[i].damping);
         }
-        let c =
-            |r: usize, w: f64| if r < free { self.joints[r].drive.gearbox.at(q[r]).damping_at(w) } else { damping[r] };
+        let c = |r: usize, w: f64| match r {
+            _ if !damped => 0.0,
+            r if r < free => self.joints[r].drive.gearbox.at(q[r]).damping_at(w),
+            r => damping[r],
+        };
         generalized_modes(&m, &k, c, size)
     }
 
     /// An arm's joints on their gearboxes' springs with the motors held, at joints q (`Machine::modes`): K x = w^2 M x
     /// with M the load's mass matrix there (passive joints held, the rotors left out: a velocity loop far stiffer than
     /// the mode holds them) and K, C the gearboxes' stiffnesses and dampings. Empty for one joint (`two_mass_frequency`
-    /// tells its mode) and in the rigid model. With the links' bending two-way these are among `coupled_modes`.
-    fn held_modes(&self, q: &[f64]) -> Vec<sim_core::Mode> {
+    /// tells its mode) and in the rigid model. With the links' bending two-way these are among `coupled_modes`. Without
+    /// `damped` the frequencies alone (damping 0).
+    fn held_modes(&self, q: &[f64], damped: bool) -> Vec<sim_core::Mode> {
         let n = self.n();
         if n < 2 || !self.elastic {
             return Vec::new();
@@ -722,7 +793,8 @@ impl<M: Mechanism> JointMachine<M> {
         let (load, _) = self.load(q, &vec![0.0; n]);
         let gear = |k: usize| &self.joints[k].drive.gearbox;
         let k: Vec<f64> = (0..n).map(|j| gear(j).at(q[j]).stiffness).collect();
-        generalized_modes(&load[..n * n], &k, |j, w| gear(j).at(q[j]).damping_at(w), n)
+        let c = |j: usize, w: f64| if damped { gear(j).at(q[j]).damping_at(w) } else { 0.0 };
+        generalized_modes(&load[..n * n], &k, c, n)
     }
 
     /// The tool's move by the bending modes at joints q, deflections d: `Mechanism::flex_shift`.
@@ -1139,7 +1211,8 @@ impl<M: Mechanism> JointMachine<M> {
     /// M_ss - M_sq M_qs / M_qq over s = (x, p); K, C the gearbox's and the passive joints' (`generalized_modes`).
     /// Without passive joints this is `two_mass_frequency`, damping c / (2 sqrt(k mu)), mu = M J i^2 / (M + J i^2).
     /// A passive joint with no spring of its own (a contact the mechanism's forces hold) is held, as `load` holds it.
-    fn single_joint_modes(&self, q: &[f64]) -> Vec<sim_core::Mode> {
+    /// Without `damped` the frequencies alone (damping 0).
+    fn single_joint_modes(&self, q: &[f64], damped: bool) -> Vec<sim_core::Mode> {
         let qa: Vec<f64> = q.iter().copied().chain(self.mechanism.passive_rest(q)).collect();
         let all = qa.len();
         let (mass, _) = self.load_all(&qa, &vec![0.0; all]);
@@ -1174,7 +1247,12 @@ impl<M: Mechanism> JointMachine<M> {
         (0..size * size).for_each(|rc| m[rc] -= to_q[rc / size] * to_q[rc % size] / m_qq);
         let (k, c): (Vec<f64>, Vec<f64>) =
             std::iter::once((gear.stiffness, gear.damping)).chain(sprung.iter().map(|&p| self.passive[p - 1])).unzip();
-        generalized_modes(&m, &k, |r, w| if r == 0 { gear.damping_at(w) } else { c[r] }, size)
+        let c = |r: usize, w: f64| match r {
+            _ if !damped => 0.0,
+            0 => gear.damping_at(w),
+            r => c[r],
+        };
+        generalized_modes(&m, &k, c, size)
     }
 }
 
@@ -1608,11 +1686,11 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             return None;
         }
         let modes = if self.n() == 1 {
-            self.single_joint_modes(&q)
+            self.single_joint_modes(&q, false)
         } else if self.two_way {
-            self.coupled_modes(&q)
+            self.coupled_modes(&q, false)
         } else {
-            self.held_modes(&q)
+            self.held_modes(&q, false)
         };
         modes.iter().map(|m| m.hz).reduce(f64::min)
     }
@@ -1623,16 +1701,16 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     fn modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
         let mut q = vec![0.0; self.n()];
         let mut out: Vec<sim_core::Mode> = if self.n() == 1 {
-            if self.mechanism.inverse(tool_pose, &mut q) { self.single_joint_modes(&q) } else { Vec::new() }
+            if self.mechanism.inverse(tool_pose, &mut q) { self.single_joint_modes(&q, true) } else { Vec::new() }
         } else if !self.two_way && self.mechanism.inverse(tool_pose, &mut q) {
-            self.held_modes(&q)
+            self.held_modes(&q, true)
         } else {
             Vec::new()
         };
         if self.two_way {
             let mut q = vec![0.0; self.n()];
             if self.mechanism.inverse(tool_pose, &mut q) {
-                out.extend(self.coupled_modes(&q));
+                out.extend(self.coupled_modes(&q, true));
             }
         } else {
             out.extend(self.mechanism.flex_modes().iter().map(|m| {
@@ -1923,6 +2001,49 @@ mod tests {
             assert!((m.hz - 1.125395).abs() < 1e-6, "{alone:?}");
         }
         assert!(alone.iter().any(|m| (m.damping - 0.070711).abs() < 1e-6), "{alone:?}");
+    }
+
+    /// The two joints above with a damper of 6 N m s/rad on the first and 0.5 on the second, C not proportional to M and
+    /// K: each mode's damping ratio is that of its root of det(M l^2 + C l + K) = (2 l^2 + 6 l + 100)(l^2 + 0.5 l + 50) -
+    /// (0.5 l^2)^2, found here by Newton's method from the undamped frequency (not through the companion matrix the code
+    /// takes), -Re l / |l|; the frequencies stay the undamped ones to the bit. The two roots' -Re l add up to half the
+    /// trace of M^-1 C, (1 x 6 + 2 x 0.5) / 1.75 / 2 = 2.0 (M^-1 = [[1, -0.5], [-0.5, 2]] / 1.75).
+    #[test]
+    fn coupled_modes_are_damped_as_the_damped_problems_roots() {
+        type Cx = (f64, f64);
+        let mul = |a: Cx, b: Cx| (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0);
+        let add = |a: Cx, b: Cx| (a.0 + b.0, a.1 + b.1);
+        let poly = |l: Cx, d: [f64; 3]| add(add(mul((d[0], 0.0), mul(l, l)), mul((d[1], 0.0), l)), (d[2], 0.0));
+        let det = |l: Cx| {
+            let off = mul((0.5, 0.0), mul(l, l));
+            let a = mul(poly(l, [2.0, 6.0, 100.0]), poly(l, [1.0, 0.5, 50.0]));
+            add(a, mul((-1.0, 0.0), mul(off, off)))
+        };
+        let root = |mut l: Cx| {
+            for _ in 0..100 {
+                let h = 1e-7 * l.0.hypot(l.1);
+                let (f, g) = (det(l), add(det((l.0 + h, l.1)), mul((-1.0, 0.0), det(l))));
+                let slope = (g.0 / h, g.1 / h);
+                let n = slope.0 * slope.0 + slope.1 * slope.1;
+                let step = ((f.0 * slope.0 + f.1 * slope.1) / n, (f.1 * slope.0 - f.0 * slope.1) / n);
+                l = (l.0 - step.0, l.1 - step.1);
+            }
+            l
+        };
+        let (m, k, c) = ([2.0, 0.5, 0.5, 1.0], [100.0, 50.0], [6.0, 0.5]);
+        let modes = generalized_modes(&m, &k, |r, _| c[r], 2);
+        let undamped = generalized_modes(&m, &k, |_, _| 0.0, 2);
+        let mut real_sum = 0.0;
+        for (mode, plain) in modes.iter().zip(&undamped) {
+            assert_eq!(mode.hz, plain.hz);
+            let w = std::f64::consts::TAU * mode.hz;
+            let l = root((-0.1 * w, w));
+            assert!(det(l).0.hypot(det(l).1) < 1e-9, "{l:?}");
+            let by_hand = -l.0 / l.0.hypot(l.1);
+            assert!((mode.damping - by_hand).abs() < 1e-9, "{mode:?} against {by_hand}");
+            real_sum -= l.0;
+        }
+        assert!((real_sum - 2.0).abs() < 1e-9, "{real_sum}");
     }
 
     #[test]
