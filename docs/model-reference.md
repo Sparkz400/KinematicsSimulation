@@ -1647,7 +1647,13 @@ dynamics    M(θ) θ̈ = τ_gear + Q_g − v + τ_joint      every body a point 
 ```
 
 With `effects.forearm_inertia` the forearms are rods as on the D3 (a sixth at each end, two thirds at the middle, and
-their spin). `effects.amplifier_compliance`: the tool is a body of its own on the amplifier's spring, τ_a = k (κ h − φ) +
+their spin). Lumped (off), the split s is the inertia's only, as on the D3: a rod's weight acts at its middle, so the
+weight takes (s − ½) m_fb of each pair from the elbow to its plate end (in Q_g and the potential), and the frame
+momentum takes the forearms as rods (a sixth at each end, two thirds at the middle); the kinetic energy stays the
+split's. Until 21 November the lumped H4 had weight and momentum both at the split, 2/3 at the elbow (test
+`the_holding_torque_at_the_centre_is_a_quarter_of_the_plates_weight_and_the_arms_own`: −18.58980 N m at each gearbox
+at the centre 850 mm down, −18.60312 before; `the_forearms_weight_is_at_their_middles`: V + g · c along the default
+cycle within 1e-6 J). `effects.amplifier_compliance`: the tool is a body of its own on the amplifier's spring, τ_a = k (κ h − φ) +
 c (κ ḣ − φ̇), I_t φ̈ = τ_a, the arms feeling −κ J_hᵀ τ_a; with `effects.amplifier_backlash` a dead band in it.
 
 **Arm bending** (`effects.arm_bending`, off as shipped): each upper arm bends as the [D3's](#delta-picker-d3) do with

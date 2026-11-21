@@ -255,9 +255,6 @@ Open (second audit):
   section lengths shared out, as its comment says), where a loop's runs would cancel. Its momentum had that
   before; since the runs weigh where their momentum is, its Z holds 3.54 kg instead of 3.5 (0.0694 N m, the
   test's hand value follows the file). Re-splitting the spans so the falling run equals the rising ones is open.
-- The H4's lumped model (`forearm_inertia` off; on as shipped) puts the forearms' weight at the inertia's split
-  (2/3 at the elbow), not at their middles as the D3 does: momentum and weight agree with each other, both at the
-  wrong place. Not changed.
 
 Fixed (after the second audit, 21 November):
 - The drive's current circle holds the q reference with the d reference, i_q,ref ≤ sqrt(I_max² − i_d,ref²), as a
@@ -266,6 +263,10 @@ Fixed (after the second audit, 21 November):
   loop's lag behind its falling reference: 10.926 A (0.24 %) with twice the current gain. No shipped config's
   cycle reaches field weakening (the d current stays 0 on every registered machine's, machine file's and the
   conveyor, EXCT-30, flying, cam and joint-kit configs' cycles), so their figures do not move.
+- The H4's lumped model (`forearm_inertia` off; on as shipped) put the forearms' weight and momentum at the
+  inertia's split (2/3 at the elbow); now the weight at their middles and the frame momentum as rods, as on the D3:
+  hold at the centre 850 mm down −18.58980 N m per gearbox (−18.60312 before), the vertical mode under constant
+  torques −4.71 N m/rad at 975 mm down (−4.30), +5.45 at 1175 mm (+5.66).
 
 Fixed:
 - `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another
