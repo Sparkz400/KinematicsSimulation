@@ -107,9 +107,9 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | --- | --- | --- |
 | The cables' own inertia; the lift of cable from the drum to the pulley; the sag's weight changing with the pose | cable robots | 0.5 % of the spatial platform's mass; 0.05 N; 5e-5 N. The sag model is a shallow parabola, 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
 | The rotors' gyroscopic coupling with the legs' swing (it is in the frame's reaction only); the rods' faces against platform and base | hexapod, tripod, rotary hexapod | About 0.015 N m (hand estimate). |
-| The hook block landing on the load: lowered by more than the sling's length onto a standing load, it passes through it (the sling, a rope since 21 November, goes slack below its length) | crane | None in the shipped cycle; the sling is 1 m. The hook block and the elastic drives were run on a full cycle; rope mass and bridge skew passed their own tests and a 0.2 s run. |
+| The hook block against the payload's sides (it lands on its top only, since 21 November); a hook block already lower than the payload's top (a pick with it under 0.28 m over the payload's point) stays inside it; one resting on the payload drops through once the payload is let go; the landing on the rigid rope is untested | crane | None in the shipped cycle: the sling holds the hook block over the payload, and its picks hang the hook block 1 m over it. |
 | Link bending together with parallelogram bars of their own (refused); the palletiser's rod and crank (shipped bar arrays empty) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured in the test case). |
-| The belt runs' sideways offset on the leaning Z axis; the belt runs riding on the beam's vertical mode | T-gantry | A first-order moment (T₁ − T₃)·0.04 m; the beam mode would fall 0.9 % (59.32 to 58.77 Hz). |
+| In the machine file (`machines/t-gantry.toml`, sim-netlist): the belt runs riding on the beam's vertical mode and the runs' offset on the leaning Z axis (the crate has both since 21 November, the offset behind `effects.belt_run_offset`, off as shipped) | T-gantry | The file's beam mode stays 0.93 % high (59.32 against the crate's 58.78 Hz); with the offset on, the crate's lean mode at x = 0.9, z = 0.05 m is 17.55 Hz against 18.75 Hz. |
 | The belt's angular momentum of the T-gantry file against its crate: the file takes each run's mass at the middle of its straight piece as drawn (carriage idlers 0.032 m above and below the carriage, bottom idler 0.08 m under the Z axis's point, the pulleys and idlers drawn 0.02 m in front of the bodies), the crate its belt path (horizontal runs at the carriage's height, vertical ones at its x, the lumps spinning on the pulleys) | T-gantry | Over 1 s of the default cycle up to 1.3e-3 N m s about y and 1.1e-3 about x (none in the crate) at up to 0.25 m/s, against 0.42 kg of belt (measured; the test holds them under 0.42 kg x 0.05 m and 0.02 m times the speed, bounds, not hand values); bodies, linear momentum and first moment agree to rounding (`the_t_gantry_file_has_its_crates_angular_momentum`). |
 | The X and Y belts of the screw portal, the C portal and the five-axis files share their section lengths out (0.1 m from the motor to the far idler) and draw no far idler | machine files | As the XYZ portal's did before 21 November: there the X belt's mode at its far end 73.9 against 39.2 Hz as a loop. Without the far idler in a route its runs' angular momentum is left out of the frame momentum (`run_midpoints`). |
 | The screw's stiffness along the stroke keeps the far end's for the pose tolerance and the elastic feedforward's twist (`effects.screw_stiffness_with_position`, on in the shipped configs; the dynamics, modes and rest states follow the nut, the screw's damper at its ratio and the Zener arm with them; since 21 November the hysteresis too, on the gear's own twist with its store's place term); the mesh bristle stays the far end's (it holds the output against the housing, its bound follows the nut, its store is not booked, and its stiffness is an unpublished factor whose tenth to ten times leave the loss the same) | wafer handler, screws | The feedforward's twist up to the far end's: 2.4 against 1.5 um on the wafer handler's column with the nut 0.15 m from the bearing. The bristle's stiffness up to 1.87 times the far end's there (no shipped config has a hysteresis behind such a screw). |
@@ -151,7 +151,8 @@ verified the model by hand values and runs and found it ready to switch on.
 | `effects.arm_bending`, `effects.arm_tube_inertia` | H4 (and the corrected tube model on the D3) | Fit; gearbox modes about 945 Hz with the tube on. |
 | `effects.table_twist` | cam and Geneva indexers | Fit. |
 | `effects.follower_lift_off` | disc cam | Fit; adds 5 N of guide friction that the model without it does not have. |
-| `effects.beam_vertical_mode` | T-gantry, its machine file | Fit; the beam's mass and stiffness are estimates. |
+| `effects.beam_vertical_mode` | T-gantry, its machine file | Fit; the beam's mass and stiffness are estimates. Since 21 November the belt rides on it in the crate (58.78 Hz in the middle; not yet in the file). |
+| `effects.belt_run_offset` | T-gantry (not its machine file) | Verified by its hand test, energy and budget (21 November); off: it lowers the lean's mode by some 6 % (18.75 to 17.55 Hz at x = 0.9, z = 0.05 m), so the shipped shaper tunings and the tests with recorded lean modes would move. The offset `tool_flex.belt_offset_m` is an estimate. |
 | `effects.rope_mass`, `effects.hook_block`, `effects.joint_elasticity`, `effects.bridge_skew`, `effects.floor_contact` | crane | Verified by their own tests; see section 4 for what was not run. `effects.joint_elasticity` is fit to switch on since the gains of section 2 (bridge 177 Hz, 51.7°, 9.7 dB; trolley 183 Hz, 51.0°, 9.9 dB; hoist 49.5 Hz, 78.2°, 20.7 dB), and its cycle verdicts match the rigid ones. |
 | `drive.overmodulation` | every drive | Off; verified. |
 
@@ -334,6 +335,44 @@ Fixed (after the second audit, 21 November):
   before. In the crate and the machine file; checked off the middle
   (`testkit::weight_is_at_the_first_moment_at`, `the_beams_own_weight_is_at_its_first_moment_off_the_middle` in both)
   and over the 1 s run (below 1e-7 J with the mode on and off).
+- The app's path test (`a_path_is_planned_run_and_analysed_in_the_app`) failed on the crane under load (the bridge
+  1.37 mm from home) and passed alone; a 2 mm tolerance for the crane was put in. Cause, measured on the library: the
+  load's swing, which nothing but the drive damps, pulls the bridge to and fro by the drive's give, and the app starts
+  the path back at the phase the analysis's wall time leaves: over the phase, the bridge stands 0.06 to 1.49 mm (half
+  its span over a swing) off and up to 1.55 mm off 0.2 s after the path back; the middle of the span within 0.033 mm.
+  In the app with the path back started 1.4 s later: 1.364 mm off at the check after the unreadable line, the middle
+  0.001 mm. Not a regression of the crane's commits of 21 November (e4a90405, 074796e0, e9a65662: the library's figures
+  are the same to nine digits on 8754d55d before them); the drives' give is the retune of 17 November (389bbac7: 0.3 mm
+  either way after the long move where the stiff drives gave 5 um). The test now judges where an axis stands by the
+  middle of the span it covers over one period of the machine's lowest mode (`standing`), at the 1 mm it had; the
+  swing's amplitude itself is not judged there. (A probe's reversed point list was refused with `error-trajectory`:
+  its first time was the plan's end, not 0; the app's file pairs the forward times with the reversed poses.)
+- The mover track's modes: the shipped six movers report the held mode everywhere (modes, `resonance_hz` and so the
+  shaper, the plan's trains: 694.28 Hz, the plate held), as the convention has it; a track of one mover reported the
+  free two-mass mode (1736.39 Hz, the chain's single joint) to the shaper and the modes printout while its train was
+  the held one. One mover now reports the held mode too (`the_movers_modes_are_the_held_two_mass_mode`). The 1736 Hz of
+  the brief is the plate-free figure.
+
+Open, found 21 November: the app's mode list (`shapes::mode_views`, also `sim-cli modes --shapes`' linear_hz) pairs each
+reported mode with the eigenvalue of the motor-free linearised model nearest it, whatever its kind. For the mover
+track's held 694.28 Hz that is no mode but a real pole, lambda = -639.7 1/s shown as 101.8 Hz with damping 1: the
+rollers' Coulomb friction smoothed over 2 mm/s, (0.1 + 0.005 * 300) / 0.002 + 0.5 = 800.5 N s/m on the 1.251 kg mover
+(-639.9 by hand, `the_linearised_model_has_the_friction_s_pole_and_the_plate_free_mode`). The machine's mode is right
+by the convention; the motor-free model has no held mode, only the plate-free one at 1735.8 Hz. Fix (in
+`sim-components/src/shapes.rs`, not this agent's): take only oscillatory eigenvalues (|Im lambda| > 1e-6 |lambda|) as a
+mode's partner, and none where the partner's frequency is more than some 20 % off the reported one (`linear: None`, the
+shape then the reported mode's own or none), or linearise with the motors held where the machine's modes are held
+(`linearised` holding the rotor states); a test: the mover's held mode gets no 101.8 Hz partner.
+- The mover track and the indexers (Geneva, cam) had no frame momentum (`Machine::frame_momentum` None), so no
+  compliant base: they have it, as the joint kit's slide and the knife (`the_frame_momentum_is_the_hand_calculated_one`
+  in both crates; the standard suite's first-moment check now judges them). Both are level, so
+  `testkit::weight_is_at_the_first_moment` (which asks the first moment to move vertically) has nothing to judge there.
+- The crane's hook block lowered by more than the sling's length onto a standing payload passed through it (section 4):
+  0.035 m under the payload's point after a lowering 1.2 m past its touchdown. It now lands on the payload's top (the
+  scene's boxes, its point 0.28 m over the payload's), a one-sided contact on the sling's span held at rest only and a
+  plastic landing booked as the floor's (114.37 J of the fall, no step making energy), the floor then carrying both,
+  2598.762 N (`a_hook_block_lowered_beyond_the_sling_lands_on_the_payload`). No new switch or key: it acts with
+  `effects.hook_block`; no shipped cycle lowers the hook block that far.
 
 Fixed:
 - `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another

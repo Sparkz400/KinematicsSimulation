@@ -75,6 +75,11 @@ fn dn(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
+/// How far over the payload's point the hook block's point stands when it sits on the payload's top (m).
+pub(crate) fn landing() -> f64 {
+    0.5 * (HOOK_BOX[2] + PAYLOAD_BOX[2])
+}
+
 fn sc(a: V3, k: f64) -> V3 {
     [a[0] * k, a[1] * k, a[2] * k]
 }
@@ -198,6 +203,15 @@ impl Crane {
             damper = tension - spring;
         }
         Some(Sling { span, rate, u, stretch, speed, tension, damper })
+    }
+
+    /// With effects.hook_block and a payload on the sling: the state index of the span's d_z where the hook block is down
+    /// on the payload, over its box and its bottom at the payload's top or lower (d_z >= -h, h half of each box's
+    /// height: the scene's boxes, 0.28 m); `None` elsewhere.
+    pub(crate) fn on_payload(&self, s: &[f64]) -> Option<usize> {
+        let a0 = self.layout.sling.filter(|_| self.payload_mass() > 0.0)?;
+        let over = (0..2).all(|k| s[a0 + k].abs() <= 0.5 * (HOOK_BOX[k] + PAYLOAD_BOX[k]));
+        (over && s[a0 + 2] >= -landing() - FLOOR_ROUNDING).then_some(a0 + 2)
     }
 
     /// The equations of motion at a state under the motor torques `torque`, with the rigid drives' loss factors `loss`;
@@ -367,6 +381,12 @@ impl Crane {
         let on_floor = self.floor.is_some_and(|f| low[2] <= f + FLOOR_ROUNDING && low_v[2].abs() <= FLOOR_ROUNDING);
         let jac = if self.sling.is_some() && m2 > 0.0 { &j2 } else { &jp };
         let jz: Vec<f64> = jac.iter().map(|c| c[2]).collect();
+        // The hook block resting on the payload's top (`on_payload`, still against it): a one-sided constraint on the
+        // sling's d_z, d_z'' = 0, its push lambda >= 0 the hook block's up and the payload's down, -lambda on d_z. As the
+        // floor's, it holds a body at rest only; one coming down lands at the step's end (`after_step`, plastic, booked).
+        let landing = self
+            .on_payload(s)
+            .filter(|&dz| (s[dz] + landing()).abs() <= FLOOR_ROUNDING && s[dz + 3].abs() <= FLOOR_ROUNDING);
         let (mut acc, mut tension, mut push, mut fric) = (nan(), 0.0, 0.0, [0.0; 2]);
         for _ in 0..6 {
             let rhs_f: Vec<f64> = (0..n).map(|i| rhs[i] + jac[i][0] * fric[0] + jac[i][1] * fric[1]).collect();
@@ -375,6 +395,7 @@ impl Crane {
             let mut taut = rope_row.is_some();
             let (mut a, mut lam) = constrained(&mm, &q0, &set);
             push = 0.0;
+            let mut floor_at = None;
             if on_floor && dn(&jz, &a) < 0.0 {
                 set.push((jz.clone(), jz.clone(), 0.0));
                 (a, lam) = constrained(&mm, &q0, &set);
@@ -383,7 +404,20 @@ impl Crane {
                     taut = false;
                     (a, lam) = constrained(&mm, &q0, &set);
                 }
-                push = lam.last().map_or(0.0, |n| n.max(0.0));
+                floor_at = Some(set.len() - 1);
+            }
+            // The span's d_z is coordinate 8 (`Layout`: x_c, y, l, P1, d).
+            if landing.is_some() && a[8] > 0.0 {
+                let row: Vec<f64> = (0..n).map(|i| if i == 8 { 1.0 } else { 0.0 }).collect();
+                set.push((row.clone(), row.iter().map(|v| -v).collect(), 0.0));
+                (a, lam) = constrained(&mm, &q0, &set);
+                if lam.last().is_some_and(|l| *l < 0.0) {
+                    set.pop();
+                    (a, lam) = constrained(&mm, &q0, &set);
+                }
+            }
+            if let Some(i) = floor_at {
+                push = lam[i].max(0.0);
             }
             (acc, tension) = (a, if taut { lam[0] } else { 0.0 });
             fric = self.floor_friction_force(push, vh);

@@ -830,6 +830,28 @@ fn simulate(model: &mut Model, seconds: f64) {
     }
 }
 
+/// Where a signal of the machine in the app stands: the middle of the span it covers while the machine runs on for one
+/// period of its lowest mode at `pose` (`Machine::resonance_hz`; the newest value where it reports none). A load that
+/// swings free pulls the axis that carries it to and fro by its drive's give: the crane's undamped swing, 0.35 Hz on
+/// its rope, puts up to 1.5 mm on the bridge after two moves whose swings add up (half the span over a period after the
+/// path back, measured on the library over the swing's phase at the path's start, 0.06 to 1.49 mm), and the app starts a
+/// path at the phase its analysis took to answer in, wall time. The middle of that span stands within 0.033 mm of the
+/// same place whatever the phase. In the app (the path back started 1.4 s of the machine's time later than the test
+/// runs it) the bridge stood 1.364 mm off home 0.2 s after the unreadable line, the middle of its span 0.001 mm. At
+/// most 5 s: the crane's longest rope, 4.5 m, swings in 4.3 s.
+fn standing(model: &mut Model, id: &str, pose: &[f64]) -> f64 {
+    let machine = (model.entry.build)(&model.config).unwrap();
+    let period =
+        machine.resonance_hz(pose).filter(|hz| hz.is_finite() && *hz > 0.0).map_or(0.0, |hz| (1.0 / hz).min(5.0));
+    let from = model.history.back().unwrap()[0];
+    simulate(model, period);
+    let column = model.session.signals.iter().position(|s| s.id == id).unwrap_or_else(|| panic!("no signal {id}"));
+    let rows = model.history.iter().skip(model.history.first_at(from));
+    let (low, high) =
+        rows.fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), row| (l.min(row[column]), h.max(row[column])));
+    0.5 * (low + high)
+}
+
 /// The newest value of a signal in the app.
 fn latest(model: &Model, id: &str) -> f64 {
     model.history.back().unwrap()
@@ -1725,11 +1747,6 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     let point = |share: f64| -> Vec<f64> { axes.iter().map(|a| a.min + share * (a.max - a.min)).collect() };
     let text = |pose: &[f64]| pose.iter().map(|v| format!("{v:?}")).collect::<Vec<_>>().join(",");
     let position = format!("axis.{}.position", axes[0].id);
-    // Where it arrives, the first axis within 1 mm, and the crane's bridge within 2 mm: nothing but its drive damps the
-    // load's swing, which pulls the bridge off its setpoint by the drive's give (0.43 mm after a 1 m move unshaped, and
-    // slowly more, `SWINGING_LOAD` in sim-machines' control tests). The path back starts at whatever phase of the swing
-    // the app's analysis took to answer in, so the two moves' swings add up to twice that (1.37 mm seen on a loaded run).
-    let arrived = if entry.id == "overhead-crane" { 2e-3 } else { 1e-3 };
     let home = entry.config().f64s("start.pose").unwrap();
     let (lines, timed) = (temp_file(entry, "path.csv"), temp_file(entry, "timed.csv"));
     std::fs::write(&lines, format!("# two lines\nline,{}\nline,{}\n", text(&point(0.5)), text(&point(0.75)))).unwrap();
@@ -1850,12 +1867,8 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
         assert!(model.trail.is_some(), "{}", entry.id);
         // And the machine in the app has been sent on its way: it arrives.
         simulate(&mut model, load.duration);
-        assert!(
-            (latest(&model, &position) - point(0.75)[0]).abs() < arrived,
-            "{}: the machine stands at {}",
-            entry.id,
-            latest(&model, &position)
-        );
+        let stands = standing(&mut model, &position, &point(0.75));
+        assert!((stands - point(0.75)[0]).abs() < 1e-3, "{}: the machine stands at {stands}", entry.id);
         // The path the tool took, as the scenes reported it on the way: from the start of the planned line to
         // its end, never far from it.
         let trail = model.trail.clone().unwrap();
@@ -1879,11 +1892,11 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     } else {
         assert!(run.scene_line.is_empty(), "{}", entry.id);
         simulate(&mut model, load.duration);
+        let stands = standing(&mut model, &position, &point(0.75));
         assert!(
-            model.trail.is_none() && (latest(&model, &position) - point(0.75)[0]).abs() < arrived,
-            "{}: the machine stands at {}",
-            entry.id,
-            latest(&model, &position)
+            model.trail.is_none() && (stands - point(0.75)[0]).abs() < 1e-3,
+            "{}: the machine stands at {stands}",
+            entry.id
         );
     }
 
@@ -1904,12 +1917,8 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
         model.path_tables()[0]
     );
     simulate(&mut model, load.duration);
-    assert!(
-        (latest(&model, &position) - home[0]).abs() < arrived,
-        "{}: the machine stands at {}",
-        entry.id,
-        latest(&model, &position)
-    );
+    let stands = standing(&mut model, &position, &home);
+    assert!((stands - home[0]).abs() < 1e-3, "{}: the machine stands at {stands}", entry.id);
 
     // What cannot be run says why, and leaves the last result and the machine alone: poses that start
     // where the machine is not, a file that is not there, and a line that is no piece of a path.
@@ -1929,13 +1938,12 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     assert!(message.0 == "ui-file-line" && message.1.ends_with("circle,1,2"), "{message:?}");
     assert!(model.tr.tr_arg(message.0, &message.1).starts_with("This line of the file cannot be read: "));
     simulate(&mut model, 0.2);
+    let stands = standing(&mut model, &position, &home);
     assert!(
-        model.path_tables().len() == 3 && (latest(&model, &position) - home[0]).abs() < arrived,
-        "{}: {} tables, the machine stands at {} (at {} s)",
+        model.path_tables().len() == 3 && (stands - home[0]).abs() < 1e-3,
+        "{}: {} tables, the machine stands at {stands}",
         entry.id,
-        model.path_tables().len(),
-        latest(&model, &position),
-        model.history.back().unwrap()[0]
+        model.path_tables().len()
     );
 
     // As fast as the motors allow, and the config changed while the plan was made: the analysis is shown,
@@ -1976,11 +1984,8 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
         );
     }
     simulate(&mut model, 0.5);
-    assert!(
-        (latest(&model, &position) - home[0]).abs() < arrived,
-        "{}: the machine ran a path planned for another config",
-        entry.id
-    );
+    let stands = standing(&mut model, &position, &home);
+    assert!((stands - home[0]).abs() < 1e-3, "{}: the machine ran a path planned for another config", entry.id);
     model.set_param(key, toml::Value::Float(payload));
     assert!(!model.outdated(Analysis::Path));
     model.clear(Analysis::Path);

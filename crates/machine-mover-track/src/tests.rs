@@ -26,6 +26,60 @@ fn judged(base: &str, edits: &[&str]) -> Vec<sim_components::analysis::Verdict> 
     verdicts(&cfg, &load).unwrap()
 }
 
+/// The movers' modes with the motors held (`Machine::modes`' convention), by hand as two masses on the coupling k = 2e7
+/// N/m: the plate (0.2 kg) held, the body and payload (1.051 kg) ring at sqrt(k / 1.051) / 2 pi = 694.2786 Hz; with the
+/// plate free sqrt(k (1 / 1.051 + 1 / 0.2)) / 2 pi = 1736.3906 Hz. The six shipped movers six times the held mode, and
+/// so one mover alone, its resonance (what the shaper follows) and its train (what the plan keeps back, the load's share
+/// 1.051 / 1.251): until 21 November one mover alone reported the free mode, its train the held one.
+#[test]
+fn the_movers_modes_are_the_held_two_mass_mode() {
+    let (k, body, plate): (f64, f64, f64) = (2e7, 1.051, 0.2);
+    let held = (k / body).sqrt() / TAU;
+    let free = (k * (1.0 / body + 1.0 / plate)).sqrt() / TAU;
+    assert!((held - 694.2786).abs() < 1e-4 && (free - 1736.3906).abs() < 1e-4, "{held} {free}");
+    let six = track(&[]);
+    let pose = six.movers().start.clone();
+    let modes = six.modes(&pose);
+    assert!(modes.len() == 6 && modes.iter().all(|m| (m.hz / held - 1.0).abs() < 1e-12), "{modes:?}");
+    for edits in [&[][..], &["start.pose = [0.125]"]] {
+        let m = track(edits);
+        let pose = m.movers().start.clone();
+        let (modes, trains) = (m.modes(&pose), m.trains(&pose));
+        assert!(modes.iter().all(|m| (m.hz / held - 1.0).abs() < 1e-12), "{modes:?}");
+        // Its damping as the six's (all on the straights here): c w / 2k with the coupling's damper.
+        assert!((modes[0].damping / six.modes(&six.movers().start)[0].damping - 1.0).abs() < 1e-12, "{modes:?}");
+        assert_eq!(m.resonance_hz(&pose), Some(modes[0].hz));
+        for train in trains {
+            let train = train.unwrap();
+            assert!((train.hz / held - 1.0).abs() < 1e-12 && (train.load_share - body / (body + plate)).abs() < 1e-12);
+        }
+        // Rigid couplings: no mode, one mover as six.
+        let rigid = track(&[edits, &["effects.joint_elasticity = false"]].concat());
+        assert!(rigid.modes(&pose).is_empty() && rigid.resonance_hz(&pose).is_none(), "{:?}", rigid.modes(&pose));
+    }
+}
+
+/// What the app's mode list shows beside the held 694.28 Hz (`shapes::mode_views`' `linear`, the linearised model's
+/// eigenvalue nearest it, the motors free): 101.8 Hz, damping 1, is no mode but a real pole, the rollers' smoothed
+/// Coulomb friction acting as a damper at rest. Its slope (0.1 + 0.005 * 300 N of attraction) / 0.002 m/s = 800 N s/m and
+/// the viscous 0.5 N s/m on the whole mover (1.251 kg): lambda = -800.5 / 1.251 = -639.9 1/s, |lambda| / 2 pi =
+/// 101.84 Hz. It lies nearer the held mode's eigenvalue (4362 rad/s) than the plate-free mode at sqrt(2e7 (1 / 1.051 + 1
+/// / 0.2)) = 1736.39 Hz, which the motor-free model has (damped, 1735.8 Hz). The pairing is `shapes.rs`'s (see the
+/// open items): the machine reports its mode as the convention has it.
+#[test]
+fn the_linearised_model_has_the_friction_s_pole_and_the_plate_free_mode() {
+    use sim_components::shapes::{as_mode, eigen_near, linearised};
+    let cfg = config(&["start.pose = [0.125]"]);
+    let m = (ENTRY.build)(&cfg).unwrap();
+    let (rest, a) = linearised(m.as_ref(), &[0.125]);
+    let pole = -(0.1 + 0.005 * 300.0) / 0.002 - 0.5;
+    let (lambda, _) = eigen_near(&a, rest.len(), [pole / 1.251, 0.0]).unwrap();
+    assert!((lambda[0] / (pole / 1.251) - 1.0).abs() < 1e-3 && lambda[1].abs() < 1e-6, "{lambda:?}");
+    let free = (2e7f64 * (1.0 / 1.051 + 1.0 / 0.2)).sqrt();
+    let (lambda, _) = eigen_near(&a, rest.len(), [0.0, free]).unwrap();
+    assert!((as_mode(lambda).hz / (free / TAU) - 1.0).abs() < 1e-3, "{lambda:?}");
+}
+
 #[test]
 fn passes_the_standard_suite() {
     sim_core::testkit::run_standard_suite(&ENTRY);
@@ -182,6 +236,65 @@ fn a_mass_centre_outside_the_centre_line_runs_the_longer_way_round() {
     let s = shipped.movers();
     let lateral = s.curve_loads(s.track.straight + 0.5 * s.track.curve, 2.0, 0.0)[0];
     assert!((lateral - 38.94).abs() < 0.01, "{lateral}");
+}
+
+/// The frame momentum (effects.base_compliance) by hand. A mover on the second straight at 1.5 m/s runs along -x at the
+/// track's width d = 0.267 m from the first: the whole mover, 1.251 kg with its plate, -1.8765 N s along x and
+/// d * 1.8765 N m s about z. In the arc's middle (no clothoid, R = 0.1303 m) with its mass centre e = 35 mm outside the
+/// centre line its body and payload (1.051 kg) run on R + e at v (1 + e / R) = 1.5 * 1.268611 m/s, the plate (0.2 kg)
+/// on the centre line at v, both square to the radius: about the arc's centre 1.051 * 1.5 * (R + e)^2 / R + 0.2 * 1.5 R
+/// = 0.36968 N m s (0.33059 + 0.03909), as m v r of a point running round a circle. The others stand.
+#[test]
+fn the_frame_momentum_is_the_hand_calculated_one() {
+    let (v, spin) = (1.5, 0.2 * 1.5);
+    let m = track(&[]);
+    let mv = m.movers();
+    let mut q = mv.start.clone();
+    q[0] = mv.track.straight + mv.track.curve + 0.5;
+    let mut qd = vec![0.0; q.len()];
+    qd[0] = v;
+    let mut rotor = vec![0.0; q.len()];
+    rotor[0] = spin;
+    let f = mv.frame_momentum(&q, &qd, &rotor).unwrap();
+    let d = mv.track.width;
+    assert!((d - 0.267).abs() < 5e-4);
+    assert!((f.linear[0] + 1.8765).abs() < 1e-12 && f.linear[1].abs() < 1e-12, "{:?}", f.linear);
+    assert!((f.angular[2] - d * 1.8765).abs() < 1e-12, "{:?}", f.angular);
+    let (r, e) = (0.1303, 0.035);
+    let arc = track(&["track.clothoid_m = 0.0", "mass.centre_offset_m = 0.035"]);
+    let mv = arc.movers();
+    let mid = mv.track.straight + 0.5 * mv.track.curve;
+    q[0] = mid;
+    let f = mv.frame_momentum(&q, &qd, &rotor).unwrap();
+    // The arc's centre: the curve's apex less R across it.
+    let apex = mv.track.point(mid);
+    let centre = [apex[0] - r, apex[1]];
+    let about = f.angular[2] - (centre[0] * f.linear[1] - centre[1] * f.linear[0]);
+    let hand = 1.051 * v * (r + e) * (r + e) / r + 0.2 * v * r;
+    assert!((hand - 0.36968).abs() < 1e-5, "{hand}");
+    // The curve's table turns its chord by 1 / 2000 of pi between two points: the heading within that of the hand's.
+    assert!((about / hand - 1.0).abs() < 1e-6, "{about} N m s about the arc's centre against {hand}");
+    let speed = f.linear[0].hypot(f.linear[1]);
+    assert!((speed / (1.051 * v * (1.0 + e / r) + 0.2 * v) - 1.0).abs() < 1e-6, "{speed}");
+    // Its first moment moves at its momentum with the mass centre outside, at the middle of the axes, and on the shipped
+    // clothoid where the rollers straddle its start (by central differences over +-1 us at 1.5 m/s).
+    for at in [&[][..], &["mass.centre_offset_m = 0.035"]] {
+        sim_core::testkit::frame_momentum_moves_its_first_moment(&MoverTrack::new(&config(at)).unwrap());
+    }
+    let clothoid = track(&["mass.centre_offset_m = 0.035"]);
+    let mv = clothoid.movers();
+    for s in [mv.track.straight + 0.01, mv.track.straight + 0.5 * mv.track.clothoid] {
+        let (h, mut q) = (1e-6, mv.start.clone());
+        let at = |s: f64, q: &mut Vec<f64>| {
+            q[0] = s;
+            mv.frame_momentum(q, &qd, &rotor).unwrap()
+        };
+        let (before, now, after) = (at(s - h * v, &mut q), at(s, &mut q), at(s + h * v, &mut q));
+        for k in 0..2 {
+            let moved = (after.first_moment[k] - before.first_moment[k]) / (2.0 * h);
+            assert!((moved - now.linear[k]).abs() < 1e-6 * now.linear[k].abs().max(1.0), "{s}, {k}: {moved} {now:?}");
+        }
+    }
 }
 
 /// The loss-free configs keep their energy with the mass centre 35 mm out: the clothoid's changing mass m (1 + e k)^2

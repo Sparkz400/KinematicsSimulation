@@ -903,13 +903,14 @@ With `effects.beam_vertical_mode` (elastic model; it takes the `[beam]` keys abo
 ```text
 shape φ: the span's static deflection under a point load at the carriage, φ = 1 there
 k(x) = 1 / span_compliance = 3 E I L / (a² b²),   M(x) = μ ∫ φ² ds   (17 μ L / 35 in the middle)
-T = ½ (m_car + m_z + M(x)) w'² − m_z z' w' + …,   V = ½ k(x) w² − (m_car + m_z) g w,   damping c = 2 ζ √(k (m_car + m_z + M))
+T = ½ (m_car + m_z + m_b + M(x)) w'² − (m_z + m_v) z' w' + …,   V = ½ k(x) w² − (m_car + m_z + m_g) g w,   c = 2 ζ √(k (m_car + m_z + m_b + M))
+m_v = μ (4 s + 2 s_z) the belt's vertical runs,  m_b = m_v + μ (4 s + 2 s_x) / 3,  m_g = m_v + μ (4 s + 2 s_x) / 2
 z_tool = z − w (+ the lean's rise)
 ```
 
-So the Z axis's acceleration drives the beam through −m_z, and the carriage's weight riding along the beam drives it through k(x) (a force on x of −½ k' w², and ½ M' w'² from the modal mass). At rest w is the quasi-static sag. By hand in the middle (k = 1.835e6 N/m, M = 2.21 kg, m_car + m_z = 11 kg): 59.3 Hz with the Z axis held on a stiff belt; on the default belt the Z axis's own mode there (83 Hz) rides on w through −m_z and the two couple to 51.5 and 140.1 Hz (`sim-cli modes`; M = [[13.21, −7], [−7, 7]] kg, K = diag(1.835·10⁶, 1.92·10⁶) N/m) (the former estimate of about 100 Hz left out the carriage and the Z axis). The Lagrangian drops what the shape's change with x adds to the kinetic energy: a coupling ½ M′ w ẋ ẇ and ½ ∫ μ φₓ² w² ẋ², of the relative size w / L ≈ 5·10⁻⁵ and 10⁻⁹ of the kept terms at the 59 µm sag. The belt is not on w: its vertical runs (μ (4 s + 2 s_z) = 0.16 kg) would ride on it and its horizontal runs tilt with it (a third of μ (4 s + 2 s_x), 0.09 kg), 0.25 kg against 13.21 kg, which would lower the mode by 0.9 % (59.32 to 58.77 Hz), well inside the [estimate]s of the beam's mass and stiffness. The beam's own mass moves with the mode in the frame momentum (vertical momentum −(p₀ ẇ + p₀′ ẋ w), p₀ = μ ∫ φ, 5 μ L / 8 = 2.84 kg in the middle, beside the 11 kg it carries); its weight on those points, −g p₀ w, is in the potential energy, and the beam's spring holds the stress of the beam's own sag, whose cross term with the mode is +g p₀ w (virtual work, EI u'''' = μ g): the two cancel, so V above and the dynamics stand, and the potential changes as −g · dc/dt at any x. ζ is the mode's damping ratio with the carriage and the Z axis on the beam. The damping is the loss row `power.beam`; the signal `beam.deflection` is w.
+So the Z axis's acceleration drives the beam through −m_z, and the carriage's weight riding along the beam drives it through k(x) (a force on x of −½ k' w², and ½ M' w'² from the modal mass). At rest w is the quasi-static sag. By hand in the middle (k = 1.835e6 N/m, M = 2.21 kg, m_car + m_z = 11 kg, the belt's 0.247 kg below): 58.78 Hz with the Z axis held on a stiff belt (59.32 Hz without the belt riding on w, before 21 November); on the default belt the Z axis's own mode there (83 Hz) rides on w through −m_z and the vertical runs and the two couple to 51.0 and 142.2 Hz by the same two masses (M = [[13.457, −7.16], [−7.16, 7]] kg, K = diag(1.835·10⁶, 1.92·10⁶) N/m; 51.5 and 140.0 Hz without the belt on w) (the former estimate of about 100 Hz left out the carriage and the Z axis). The Lagrangian drops what the shape's change with x adds to the kinetic energy: a coupling ½ M′ w ẋ ẇ and ½ ∫ μ φₓ² w² ẋ², of the relative size w / L ≈ 5·10⁻⁵ and 10⁻⁹ of the kept terms at the 59 µm sag. The belt rides on w (since 21 November 2026, `belt_on_beam`): its vertical runs (μ (4 s + 2 s_z) = 0.16 kg) go down with the carriage whole, at z' − w' in Z as the Z axis (−0.16 kg more between z and w), and its horizontal runs, from the posts' pulleys to the carriage's idlers, tilt with it, a point at the share ξ of the way going down by ξ w: a third of μ (4 s + 2 s_x) = 0.087 kg in the kinetic energy, half (0.13 kg) in the weight on w, the first moment and the vertical momentum; about y the vertical runs at the carriage's x, the tilting runs μ ẇ Σ len (x_post / 6 + x_c / 3), and their momenta along X w lower. The weight on the beam, carriage, Z axis and those 0.29 kg, also sags it quasi-statically (`effects.beam_sag`: 60.33 µm in the middle, 58.78 µm before). The mode falls by 0.93 % (59.32 to 58.78 Hz); the runs' lengths change with w only to second order, left out (`the_belt_riding_on_the_beam_is_in_its_momentum`, `the_beams_vertical_mode_is_where_the_hand_value_has_it`). The beam's own mass moves with the mode in the frame momentum (vertical momentum −(p₀ ẇ + p₀′ ẋ w), p₀ = μ ∫ φ, 5 μ L / 8 = 2.84 kg in the middle, beside the 11 kg it carries); its weight on those points, −g p₀ w, is in the potential energy, and the beam's spring holds the stress of the beam's own sag, whose cross term with the mode is +g p₀ w (virtual work, EI u'''' = μ g): the two cancel, so V above and the dynamics stand, and the potential changes as −g · dc/dt at any x. ζ is the mode's damping ratio with the carriage and the Z axis on the beam. The damping is the loss row `power.beam`; the signal `beam.deflection` is w.
 
-The belt's vertical runs hold the leaning Z axis back with their geometric stiffness. A run goes from a carriage idler, at the carriage where the guide tilts, to a point of the Z axis d below the carriage: the clamp (d = −(s + z)) or the Z-bottom idler (d = s + sz − z). Under the spring's force F = k u that point is out sideways by δ = F g(d) (g the guide's give, tilt and bending at that distance) and has risen along the Z axis by F² ρ(d) (ρ = ½ ∫ θ² of the leaning bar), so the run is longer by δ²/(2|d|) − sign(d) F² ρ(d), and K_uu gains Σ T_i c_i over the runs. A guide that only tilts turns the end about the idler and leaves the run as long as it was; what is left is the guide's sideways give and its product with the tilt, c = k² (1/(lateral² |d|) + 2 sign(d) h / (lateral · tilt)) per run without bending: about 5 N/m on the default gantry at z = 0.05 m, 3·10⁻⁵ of the lean's spring. (The belt's runs are taken on the Z axis's line; their offset e to either side of it would add the moment (T₁ − T₃) e of the tension difference, which the model leaves out.) The process force's vertical part works on the tip's rise a(z) u² (the leaning bar is shortened by θ² d / 2): it is in the lean's and the Z axis's equations, in the modes and in the process row of the budget, and `tool_state` has the rise in the tool's height.
+The belt's vertical runs hold the leaning Z axis back with their geometric stiffness. A run goes from a carriage idler, at the carriage where the guide tilts, to a point of the Z axis d below the carriage: the clamp (d = −(s + z)) or the Z-bottom idler (d = s + sz − z). Under the spring's force F = k u that point is out sideways by δ = F g(d) (g the guide's give, tilt and bending at that distance) and has risen along the Z axis by F² ρ(d) (ρ = ½ ∫ θ² of the leaning bar), so the run is longer by δ²/(2|d|) − sign(d) F² ρ(d), and K_uu gains Σ T_i c_i over the runs. A guide that only tilts turns the end about the idler and leaves the run as long as it was; what is left is the guide's sideways give and its product with the tilt, c = k² (1/(lateral² |d|) + 2 sign(d) h / (lateral · tilt)) per run without bending: about 5 N/m on the default gantry at z = 0.05 m, 3·10⁻⁵ of the lean's spring. With `effects.belt_run_offset` (off as shipped; since 21 November 2026) the upper runs of sections 1 and 3 reach the clamp e = `tool_flex.belt_offset_m` (0.04 m, the pulleys' diameter) to either side of the Z axis's line. The clamp, above the carriage, turns with the guide's tilt θ = k u h / tilt, so it lifts the right run's end by e θ and lowers the left one's: section 3 is longer and section 1 shorter by e k h u / tilt, first order in u (`lean_offset`; at z = 0.1 m 0.19704 u). In the lengths, the rest follows: the tensions put (T₁ − T₃) e k h / tilt on the lean (and its change with z on Z), the sections' own stiffness EA / l holds the lean with (k₁ + k₃)(e k h / tilt)² and couples it to X through K_xu = −(k₁ + k₃) e k h / tilt, and damping and energy go with them (`the_belt_runs_offset_puts_their_tension_difference_on_the_lean`). It is not small: the lean's lowest mode on the loss-free gantry at x = 0.9, z = 0.05 m falls from 18.75 to 17.55 Hz, which is why it has its own switch. Without it the runs are on the line. The process force's vertical part works on the tip's rise a(z) u² (the leaning bar is shortened by θ² d / 2): it is in the lean's and the Z axis's equations, in the modes and in the process row of the budget, and `tool_state` has the rise in the tool's height.
 
 The modes the machine reports (`modes`; the lowest is `resonance_hz`, the input shaper's) are the generalised eigenvalues K v = ω² M v over the elastic coordinates the model has at that pose (pulleys taken as held): the carriage x on the frame, the Z axis's z on its belt, with `effects.frame_compliance` the frame's sway q, with the leaning Z axis its lean u:
 
@@ -1803,7 +1804,15 @@ J̇ q̇) to f:
   taut again in its stretch (its damper, with `effects.rope_damping`, books what that loses as the rope's). At rest it is
   stretched to l_s (1 + m g / EA); a pick hangs the payload plumb under the hook block at that length, or, where that
   is under the floor, stands it on the floor with the sling slack. The load's
-  signals are P2's.
+  signals are P2's. Lowered further than that, the hook block lands on the payload: its box (0.16 m tall) on the
+  payload's (0.4 m), the scene's, its point h = 0.28 m over the payload's, over the payload's box. A one-sided contact on
+  the sling's span, d_z ≥ −h: at rest against it a constraint d̈_z = 0 whose push (hook block up, payload down) is
+  never negative, solved with the floor's; one coming down lands at the step's end, plastic, the two at one vertical
+  speed (the payload's where it stands on the floor, else their common momentum's), booked with `power.other` as the
+  floor's landing. Since 21 November 2026 (it passed through before): lowered 1.2 m past the payload's touchdown, the
+  hook block rests 0.28 m over it, the rope slack and the floor carrying both, (15 + 250) g = 2598.762 N; the fall's
+  114.37 J booked at the landing, no step made energy, and a taut rope lifts it off again
+  (`a_hook_block_lowered_beyond_the_sling_lands_on_the_payload`).
 - `effects.joint_elasticity`: each drive the elastic joint of the other machines, the gearbox's stiffness, damping and
   backlash between the rotor (a state) and the wheel or drum. With it on the shipped loops are stable (`sim-cli margins
   overhead-crane --set effects.joint_elasticity=true`): bridge 177.4 Hz, 51.7°, 9.68 dB; trolley 182.8 Hz, 51.0°,
@@ -1832,8 +1841,8 @@ the rotors in and higher figures (the drives at 65.7, 88.0 and 111.0 Hz, the bou
 with drum and rotor free). The held bridge mode is what the config calls the drive's anti-resonance: the shipped
 velocity loop (some 4.5 Hz on the rigid drive) does not hold the rotor there.
 
-Left out: the rope's bending at the sheave, the load's own turning (a point mass), and the hook block landing on the
-load: lowered by more than the sling's length onto a standing load, it passes through it.
+Left out: the rope's bending at the sheave and the load's own turning (a point mass; the hook block meets the payload
+only on its top, not on its sides).
 
 ## Crank and cam machines
 
@@ -1912,6 +1921,15 @@ J_s φ' θ̈ + J_s ẍ + J_s φ'' θ̇² = −k x − c ẋ,   c = 2ζ √(k J_s
 so the ring acts back on the driver and its loop; signal `table.twist`, loss `power.table_twist`; the index error in the
 dwell adds |x| at the station radius. The feedforward knows the rigid table.
 
+**Frame momentum** (for a [compliant base](#compliant-base); since 21 November 2026, before none): in the scene's frame
+the wheel turns about +y at φ' θ̇ and the table with its twist's rate on top, the parts a point each at the station
+radius (n of them evenly round the table: no momentum, their first moment at its centre), the driver and the rotor on
+the driver's shaft, the Geneva's crank about −y beside the wheel, the cam's shaft square to the turret's, along z. In
+the middle of the index at θ̇ = 2 rad/s with the rotor's 0.01 N m s: Geneva of six 1.1 − 0.02 − 0.01 = 1.07 N m s about
+y (1.33 with the twist turning at 0.5 rad/s), cam indexer 0.950186 about y and 0.034 about z
+(`the_frame_momentum_is_the_hand_calculated_one`). The table is level as the potential has it (0): its weight does no
+work and `testkit::weight_is_at_the_first_moment` has nothing to judge (it asks the first moment to move vertically).
+
 ## Axes of the joint kit (screw, rack, linear motor, rotary table)
 
 Source: [`slide.rs`](../crates/machine-joint-kit/src/slide.rs), [`table.rs`](../crates/machine-joint-kit/src/table.rs);
@@ -1957,6 +1975,24 @@ less what saturation takes towards the maximum current (`DriveParams::current_fo
 magnet plate by the plate's length on each; each segment's copper loss R I² warms it through one thermal resistance and
 time constant (`segment.temperature_rise`). The cycle is a cam (`track.cycle` "index" or "flying"), or with `cam.run =
 false` the config's segments.
+
+**Modes** (`Machine::modes`, `resonance_hz`, what the input shaper follows): with the motors held, each mover's body and
+payload on its coupling (`joint_elasticity`, the gearbox's stiffness k = 2e7 N/m as shipped) to the held plate,
+sqrt(k / m (1 + e k̄)²) / 2π: 694.28 Hz on the shipped mover (1.051 kg), its damping ratio c ω / 2k; the planner's
+train (`Machine::trains`) is the same, the load's share 1.051 / 1.251. With the plate free the two-mass mode is
+sqrt(k (1/m + 1/m_plate)) / 2π = 1736.39 Hz; until 21 November a track of one mover reported that one (the chain's
+single-joint mode) while its train was the held one (`the_movers_modes_are_the_held_two_mass_mode`).
+
+**Frame momentum** (for a [compliant base](#compliant-base); since 21 November 2026, before none), in the track's plane
+(x along the first straight, y across, z up): each mover's body and payload at its mass centre p(s) + e n(θ̄), θ̄ the
+heading averaged over the wheelbase (`Track::mean_heading`), whose rate along s is the curvature k̄ the dynamics take,
+so it runs at v t + e k̄ v along θ̄ (v (1 + e k) on a constant radius, as its mass m (1 + e k)² has it); the magnet plate,
+the rotor, on the centre line at the rotor's speed, as the joint kit's forcer. p(s) and its direction t are the curve's
+table's (`Track::tangent`), so the first moment moves at the momentum exactly. A mover on the second straight at 1.5 m/s:
+−1.8765 N s along x and d · 1.8765 N m s about z (d the track's width); in a constant-radius arc with e = 35 mm, about
+its centre 1.051 · 1.5 (R + e)² / R + 0.2 · 1.5 R = 0.36968 N m s (`the_frame_momentum_is_the_hand_calculated_one`).
+The track is level: the weight does no work, the first moment keeps its height, and
+`testkit::weight_is_at_the_first_moment` has nothing to judge.
 
 ## Worm stage (machine files)
 
