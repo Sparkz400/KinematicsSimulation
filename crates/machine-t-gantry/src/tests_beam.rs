@@ -45,7 +45,9 @@ fn the_beams_modal_mass_is_the_integral_of_its_shape_squared() {
 /// bending with them on it: f = sqrt(k / (m_c + m_z + M)) / 2 pi, in the middle (x = 0.5 m, 0.65 m from a post of the 1.3 m
 /// span) k = 48 E I / L^3 = 48 x 8.4e4 / 1.3^3 = 1.83523e6 N/m, M = 17 mu L / 35 = 2.2100 kg, m_c + m_z = 4 + 7 kg:
 /// 1.83523e6 / 13.2100 = 138 928 1/s^2, 372.73 rad/s, 59.32 Hz. (The old comment's 100 Hz had no carriage mass: the 11 kg
-/// of carriage and Z axis make it 59 Hz in the middle, higher towards the posts.) Its damping ratio is the key's.
+/// of carriage and Z axis make it 59 Hz in the middle, higher towards the posts.) With the belt riding on it since 21
+/// November (`belt_on_beam`): the vertical runs, 0.1 kg/m x (4 x 0.15 + 2 x 0.5) m = 0.16 kg, and a third of the tilting
+/// horizontal ones, 0.1 x (4 x 0.15 + 2 x 1.0) / 3 = 0.0867 kg: 13.4567 kg, 58.776 Hz. Its damping ratio is the key's.
 #[test]
 fn the_beams_vertical_mode_is_where_the_hand_value_has_it() {
     let m = machine(
@@ -60,9 +62,11 @@ fn the_beams_vertical_mode_is_where_the_hand_value_has_it() {
         ],
     );
     let modes = m.modal(&[0.5, 0.25]);
+    let bare = (48.0 * 8.4e4 / 1.3f64.powi(3) / (4.0 + 7.0 + 17.0 / 35.0 * 3.5 * 1.3)).sqrt() / std::f64::consts::TAU;
+    let belt = 0.1 * (4.0 * 0.15 + 2.0 * 0.5) + 0.1 * (4.0 * 0.15 + 2.0 * 1.0) / 3.0;
     let by_hand =
-        (48.0 * 8.4e4 / 1.3f64.powi(3) / (4.0 + 7.0 + 17.0 / 35.0 * 3.5 * 1.3)).sqrt() / std::f64::consts::TAU;
-    assert!((by_hand - 59.32).abs() < 0.01, "{by_hand}");
+        (48.0 * 8.4e4 / 1.3f64.powi(3) / (4.0 + 7.0 + 17.0 / 35.0 * 3.5 * 1.3 + belt)).sqrt() / std::f64::consts::TAU;
+    assert!((bare - 59.32).abs() < 0.01 && (by_hand - 58.776).abs() < 0.001, "{bare} {by_hand}");
     let (mode, shape) = &modes[0];
     assert!((mode.hz - by_hand).abs() < 1e-3 * by_hand, "{} Hz against {by_hand} Hz", mode.hz);
     assert!((mode.damping - 0.01).abs() < 1e-3, "damping ratio {}", mode.damping);
@@ -77,6 +81,28 @@ fn the_beams_vertical_mode_is_where_the_hand_value_has_it() {
 /// turned against each other by 1e-5 rad: section 2 tighter, 1 and 3 looser alike, no force along X) lifts the Z axis and
 /// pushes the carriage, and the beam with it, down (w grows): the belt acts between the carriage and the Z axis, so w
 /// gets no force of its own, M_wz az + M_ww aw = 0, aw / az = 7 / 13.21 = 0.5299.
+/// The belt rides on the beam's mode (`belt_on_beam`) in the frame momentum as in the mass matrix: everything at rest but
+/// the beam, w' = 0.01 m/s in the middle (x = 0.5 m), moves down the carriage and the Z axis (11 kg), the belt's vertical
+/// runs (0.16 kg) and half of its horizontal ones (0.13 kg: a point at the share xi of the way from its post goes down by
+/// xi w'), and the beam itself, p0 = 5 mu L / 8 = 5 x 3.5 x 1.3 / 8 = 2.84375 kg: -(11.29 + 2.84375) 0.01 =
+/// -0.1413375 N s. The first moment moves at that momentum (`frame_momentum_moves_its_first_moment`), and the weight sits at
+/// it off the middle (`weight_is_at_the_first_moment_at`), with the frame swaying and the Z axis leaning too.
+#[test]
+fn the_belt_riding_on_the_beam_is_in_its_momentum() {
+    let m = machine(ENTRY.config(), &["effects.beam_vertical_mode = true"]);
+    let (mut s, mut hold) = (Vec::new(), [0.0; 2]);
+    m.equilibrium(&[0.5, 0.25], &mut s, &mut hold);
+    s[V..].iter_mut().for_each(|v| *v = 0.0);
+    s[V + W] = 0.01;
+    let f = m.frame_momentum(&s).unwrap();
+    assert!((f.linear[2] + 0.141_337_5).abs() < 1e-9, "{:?}", f.linear);
+    let on = ["effects.beam_vertical_mode = true", "effects.frame_compliance = true", "effects.tool_flex = true"];
+    sim_core::testkit::frame_momentum_moves_its_first_moment(&machine(ENTRY.config(), &on));
+    for pose in [[0.1, 0.2], [0.8, 0.4]] {
+        sim_core::testkit::weight_is_at_the_first_moment_at(&machine(ENTRY.config(), &on), &pose);
+    }
+}
+
 #[test]
 fn the_z_axis_acceleration_drives_the_beam_through_its_mass() {
     let m = machine(
@@ -85,8 +111,9 @@ fn the_z_axis_acceleration_drives_the_beam_through_its_mass() {
     );
     assert_eq!(m.coordinates(), vec![X, Z, W]);
     let mass = m.elastic_mass(0.5, 0.25);
-    assert!((mass[5] + 7.0).abs() < 1e-12 && (mass[7] + 7.0).abs() < 1e-12, "{mass:?}");
-    assert!((mass[8] - (11.0 + 2.21)).abs() < 1e-9, "{}", mass[8]);
+    // The belt's vertical runs (0.16 kg) ride on z' - w' as the Z axis; a third of the tilting horizontal ones on w.
+    assert!((mass[5] + 7.16).abs() < 1e-12 && (mass[7] + 7.16).abs() < 1e-12, "{mass:?}");
+    assert!((mass[8] - (11.0 + 2.21 + 0.16 + 0.26 / 3.0)).abs() < 1e-9, "{}", mass[8]);
     let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
     m.equilibrium(&[0.5, 0.25], &mut state, &mut torque);
     let mut rest = vec![0.0; state.len()];
@@ -101,13 +128,17 @@ fn the_z_axis_acceleration_drives_the_beam_through_its_mass() {
     assert!(az > 0.0 && aw > 0.0, "{az} {aw}");
     assert!(ax.abs() < 1e-3 * az, "{ax}");
     let ratio = aw / az;
-    assert!((ratio - 7.0 / 13.21).abs() < 1e-9, "the beam moves {ratio} of the Z axis's push, by hand 7 / 13.21");
+    let hand = 7.16 / (13.21 + 0.16 + 0.26 / 3.0);
+    assert!(
+        (ratio - hand).abs() < 1e-9 && (hand - 0.532078).abs() < 1e-6,
+        "the beam moves {ratio} of the Z axis's push"
+    );
 }
 
 /// The beam at rest at the quasi-static sag: with effects.beam_vertical_mode the state's w is the sag m g a^2 b^2 / (3 E I L)
-/// (58.78 um in the middle, `the_beam_sags_under_a_central_carriage_by_f_l3_over_48_ei`), the Z axis stands that much
+/// (60.33 um in the middle, `the_beam_sags_under_a_central_carriage_by_f_l3_over_48_ei`), the Z axis stands that much
 /// higher on its belt, the tool is at its pose and nothing accelerates; the stiffness is the quasi-static span's,
-/// k sag = (m_c + m_z) g.
+/// k sag = (m_c + m_z + the belt's 0.29 kg) g.
 #[test]
 fn the_vertical_mode_rests_at_the_quasi_static_sag() {
     let m = machine(ENTRY.config(), &["effects.beam_vertical_mode = true"]);
@@ -119,7 +150,7 @@ fn the_vertical_mode_rests_at_the_quasi_static_sag() {
         let sag = quasi.sag(pose[0]).0;
         assert!((state[W] - sag).abs() < 1e-15 && (state[Z] - pose[1] - sag).abs() < 1e-12, "{pose:?}: w {}", state[W]);
         let k = m.beam_mode(pose[0])[0];
-        assert!((k * state[W] - 11.0 * G).abs() < 1e-6, "k w = {} N", k * state[W]);
+        assert!((k * state[W] - 11.29 * G).abs() < 1e-6, "k w = {} N", k * state[W]);
         assert!((state[X] - other[X]).abs() < 1e-15 && (state[Z] - other[Z]).abs() < 1e-15);
         assert!((torque[0] - other_torque[0]).abs() < 1e-12 && (torque[1] - other_torque[1]).abs() < 1e-12);
         let (mut pos, mut vel) = ([0.0; 2], [0.0; 2]);
@@ -154,8 +185,9 @@ fn the_beams_damping_is_booked_as_its_loss() {
     m.motor_state(&s, &mut angle, &mut speed);
     let power = torque[0] * speed[0] + torque[1] * speed[1];
     let [k, mass, c, ..] = m.beam_mode(0.3);
-    // The mode's own damping ratio with the carriage and the Z axis (4 + 7 kg) on the beam.
-    assert!((c - 2.0 * 0.05 * (k * (mass + 11.0)).sqrt()).abs() < 1e-9 * c);
+    // The mode's own damping ratio with the carriage and the Z axis (4 + 7 kg) and the belt's runs riding on it
+    // (0.16 + 0.26 / 3 kg, `belt_on_beam`) on the beam.
+    assert!((c - 2.0 * 0.05 * (k * (mass + 11.0 + 0.16 + 0.26 / 3.0)).sqrt()).abs() < 1e-9 * c);
     let loss = m.beam_loss(&s);
     assert!((loss - c * 0.05 * 0.05).abs() < 1e-12 && loss > 0.1, "{loss} W");
     assert!(
