@@ -138,25 +138,15 @@ fn a_move_into_a_box_is_blocked_at_its_face_and_trips_on_the_following_error() {
 
 /// The same move into the box without drive monitoring: nothing trips, and the blocked drive pushes on at its torque
 /// limit, the peak torque 3.8 N m (at the motor's maximum current 9.5 A, within the drive's 10.9 A). At rest the box
-/// holds it with F = T_max i / r = 3.8 N m * 5 / 0.02 m = 950 N. The box pushes the carriage (`Machine::set_tool_force`),
-/// so all of the transmission sits between the drive and the box, and at rest each friction in it holds what the
-/// impact's rebound left in either direction: the gearbox's efficiency, the motor's Coulomb friction (up to 0.02 N m,
-/// 5 N), the guide's (up to 15 N), the teeth's meshing (up to 2 N); and the torque ripple (2 %, by the angle the motor
-/// stands at) scales the drive's torque: 958.2 N with all of them measured. With those off the hand calculation is the
-/// drive's alone.
+/// holds it with F = T_max i / r = 3.8 N m * 5 / 0.02 m = 950 N, less what the motor's own Coulomb friction (at most
+/// 0.02 N m, 5 N at the box) takes. Without the torque ripple: it scales the drive's torque by up to 2 % at the angle
+/// the motor stands at, which with the push at the carriage is another than with the push at the motor (958.0 N with
+/// it; with the guide's, the teeth's, the motor's friction and the gearbox's efficiency off as well 958.0 N still).
 #[test]
 fn a_blocked_axis_pushes_with_the_hand_calculated_force_at_the_current_limit() {
     let entry = find("single-axis").unwrap();
     let wall = r#"obstacles = [{ name = "wall", centre_m = [0.75, -0.03, 0.06], size_m = [0.1, 0.2, 0.2] }]"#;
-    let settings = [
-        wall,
-        "effects.crash = true",
-        "effects.guide_friction = false",
-        "effects.tooth_meshing = false",
-        "effects.motor_friction = false",
-        "effects.gearbox_efficiency = false",
-        "effects.torque_ripple = false",
-    ];
+    let settings = [wall, "effects.crash = true", "effects.torque_ripple = false"];
     let mut sim = Sim::new(entry, &with(entry, &settings)).unwrap();
     sim.command(Command::MoveTo(vec![0.9])).unwrap();
     sim.run(1.5, |_| {});

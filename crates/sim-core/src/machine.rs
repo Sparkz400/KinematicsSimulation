@@ -349,8 +349,9 @@ pub trait Machine: Send {
     /// on the motors through the rigid kinematics. The force's power is not in the machine's loss rows: the simulation
     /// integrates it as the obstacles' work (the budget's crash row). Machines that take it put its generalised forces
     /// into their equations beyond their transmissions, at every stage of the integration (`tool_force_on_rates`): the
-    /// machine files' `ConfigMachine`, the joint machines (`chain::JointMachine`) and most machine crates; the D2, D3
-    /// and D4 (the files' linkage and spatial delta), the crane (its tool is not its load) and the winder keep the default.
+    /// machine files' `ConfigMachine`, the joint machines (`chain::JointMachine`) and most machine crates. The default
+    /// stays where the tool's coordinates are not where the parts that can touch move with (a load swinging under
+    /// them) or the machine's equations are another's that does not take it.
     fn set_tool_force(&mut self, _force: &[f64]) -> bool {
         false
     }
