@@ -280,3 +280,24 @@ fn the_geneva_s_ring_as_a_joint_is_the_ring_worked_out_beside() {
     let beside = ix.residual(TAU);
     assert!((ring / beside - 1.0).abs() < 0.01, "joint {ring} rad, beside {beside} rad (at {x} rad)");
 }
+
+/// effects.table_twist among the machine's modes (`Machine::modes`: the app's marks, `identify`, a shaper following its
+/// mode k; it listed the gearbox's alone). In the dwell (theta = pi, phi' = 0) the twist is free of the driver: w_n =
+/// sqrt(2e5 / 0.52) = 620.17 rad/s, 98.704 Hz, zeta 0.03 (c = 2 zeta sqrt(k J_s) over 2 sqrt(k J_s)), the lowest, so
+/// `resonance_hz` too; beside it the gearbox's two-mass mode as without the twist, with the gearbox's damper c = 5 N m
+/// s/rad: zeta = c / (2 sqrt(k mu)) = c w / (2 k), mu = k / w^2 (reported 0 before).
+#[test]
+fn the_table_twist_is_among_the_modes_with_its_damping() {
+    let mut cfg = CAM_INDEXER.config();
+    let off = (CAM_INDEXER.build)(&cfg).ok().unwrap().modes(&[PI]);
+    cfg.set_text("effects.table_twist = true").unwrap();
+    let m = (CAM_INDEXER.build)(&cfg).ok().unwrap();
+    let on = m.modes(&[PI]);
+    assert!(off.len() == 1 && on.len() == 2, "{off:?} {on:?}");
+    let gear = 5.0 * TAU * off[0].hz / (2.0 * 35752.6);
+    assert!((off[0].damping / gear - 1.0).abs() < 1e-9, "{off:?} against zeta {gear}");
+    let twist = (2e5f64 / 0.52).sqrt() / TAU;
+    assert!((on[0].hz / twist - 1.0).abs() < 1e-6 && (on[0].damping - 0.03).abs() < 1e-6, "{on:?} against {twist} Hz");
+    assert!((on[1].hz / off[0].hz - 1.0).abs() < 1e-9 && (on[1].damping / gear - 1.0).abs() < 1e-9, "{on:?} {off:?}");
+    assert_eq!(m.resonance_hz(&[PI]), Some(on[0].hz));
+}
