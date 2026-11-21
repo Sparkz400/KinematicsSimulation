@@ -264,6 +264,11 @@ Fixed:
   on the rise's cubic, the fall's state on its own cubic), with the rise's and the fall's state as
   two knots at the same time: same place and speed, only the acceleration steps. Swept over 380 to
   420 rad/s in planned_limits; `path::tests::the_runs_meet_at_the_same_place_and_speed`.
+- The planner's train (`RotaryJoint::train`, the machine files' `trains`) put a screw's or rack's
+  compliance in series twice: K1 holds it already (`Converter::apply_back`) and `band_compliance` is
+  the same spring. The joint kit's screw axis's train was 0.73 of its two-mass mode; now equal
+  (`the_screw_axis_train_is_its_two_mass_mode`). The wafer handler, the tripod and the hexapod have no
+  train (`Machine::trains` empty): the planner keeps back no speed for their elastic screws.
 - Program reader: an arc through points near f64's range (`MoveL,2145413,-8.4e301` then `MoveC`) had a
   NaN centre and was taken; now refused (`program-error-arc`).
 
