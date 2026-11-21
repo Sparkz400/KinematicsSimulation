@@ -103,8 +103,8 @@ A machine file is run like a registered machine: `sim-cli verdicts --machine-fil
 $ cargo run -q --release -p sim-cli -- analyze t-gantry
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,...
-a,6.080000,0.556283,0.166135,200.4497,0.1469,0.1308,...
-b,6.080000,0.461583,0.153897,200.4183,0.1215,0.1212,...
+a,6.080000,0.561042,0.168812,200.4456,0.1482,0.1329,...
+b,6.080000,0.467022,0.156754,200.4289,0.1230,0.1234,...
 ```
 
 **Verdicts.** The same cycle judged against the motor data and the `[ratings]` of the config:
@@ -113,28 +113,30 @@ b,6.080000,0.461583,0.153897,200.4183,0.1215,0.1212,...
 $ cargo run -q --release -p sim-cli -- verdicts t-gantry
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 check,motor,value,limit,result
-motor-peak,a,0.1469,1.000,ok
-motor-thermal,a,1.238,100.0,ok
-motor-s1,a,0.1661,1.270,ok
+motor-peak,a,0.1482,1.000,ok
+motor-thermal,a,1.279,100.0,ok
+motor-s1,a,0.1688,1.270,ok
 ...
-gearbox-peak,a,2.176,64.00,ok
-pulley-bearing-life,a,472048,20000,ok
-gearbox-life,a,6519740756,20000,ok
-belt-tooth-load,a,0.1910,1.000,ok
-dc-link-energy,a,6.114,6.205,ok
-dc-link-overvoltage,a,223.8,257.6,ok
-motor-peak,b,0.1215,1.000,ok
+gearbox-peak,a,2.204,64.00,ok
+pulley-bearing-life,a,472068,20000,ok
+gearbox-life,a,6135383249,20000,ok
+belt-tooth-load,a,0.1934,1.000,ok
+dc-link-energy,a,6.205,6.205,ok
+braking-resistor-continuous,a,0.006818,20.00,ok
+braking-resistor-peak,a,3.764,500.0,ok
+dc-link-overvoltage,a,224.7,257.6,ok
+motor-peak,b,0.1230,1.000,ok
 ...
 dc-link-energy,b,6.205,6.205,ok
-braking-resistor-continuous,b,0.9018,20.00,ok
-braking-resistor-peak,b,35.18,500.0,ok
+braking-resistor-continuous,b,1.069,20.00,ok
+braking-resistor-peak,b,35.75,500.0,ok
 dc-link-overvoltage,b,224.7,257.6,ok
-settling,,0.00004292,0.0001000,ok
-belt-tension,,333.5,1500,ok
-belt-least-tension,,205.1,0,ok
-guide-load,,177.2,2000,ok
-guide-life,,4967636,20000,ok
-thermal-warm-start,,0.00001066,0.1000,ok
+settling,,0.00004336,0.0001000,ok
+belt-tension,,334.1,1500,ok
+belt-least-tension,,203.9,0,ok
+guide-load,,177.0,2000,ok
+guide-life,,3823805,20000,ok
+thermal-warm-start,,0.000004422,0.1000,ok
 ```
 
 The three lives are in hours: the bearing that takes the belt's pull on each pulley shaft (ISO 281, with its a_ISO for lubrication and contamination), the gearbox's planet bearings (Siemens' formula) and the guide, each against the 20000 h of `ratings.required_life_h`. The cycle is judged warm: with the windings at the temperature rises they settle at when it repeats for long (the first line, on the error stream, and the row `thermal-warm-start`). `motor-s1` is the RMS torque at the mean speed against the motor's S1 curve. `belt-tooth-load` is the belt's tooth load over what its teeth allow at the pulley's speed (Megadyne's method): no belt maker publishes a life in hours.
@@ -147,27 +149,27 @@ The DC link is simulated (`effects.dc_link`). Motor B's braking fills the capaci
 $ cargo run -q --release -p sim-cli -- verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 check,motor,value,limit,result
-motor-peak,a,0.2927,1.000,ok
-motor-thermal,a,8.880,100.0,ok
+motor-peak,a,0.2981,1.000,ok
+motor-thermal,a,9.045,100.0,ok
 ...
-pulley-torque,a,3.125,12.50,ok
-gearbox-radial-load,a,982.9,2000,ok
-pulley-bearing-life,a,325634,20000,ok
-belt-tooth-load,a,0.3528,1.000,ok
+pulley-torque,a,3.158,12.50,ok
+gearbox-radial-load,a,983.9,2000,ok
+pulley-bearing-life,a,325701,20000,ok
+belt-tooth-load,a,0.3566,1.000,ok
 dc-link-energy,a,9.943,9.943,ok
-braking-resistor-continuous,a,8.461,100.0,ok
-braking-resistor-peak,a,204.2,5700,ok
+braking-resistor-continuous,a,8.273,100.0,ok
+braking-resistor-peak,a,204.4,5700,ok
 dc-link-overvoltage,a,770.0,820.0,ok
 ...
-settling,,0.00003477,0.0001000,ok
-belt-tension,,554.5,2140,ok
-belt-least-tension,,257.9,0,ok
-guide-load,,184.4,2000,ok
-guide-life,,2996062,20000,ok
-thermal-warm-start,,0.00002397,0.1000,ok
+settling,,0.00003544,0.0001000,ok
+belt-tension,,556.0,2140,ok
+belt-least-tension,,255.8,0,ok
+guide-load,,184.5,2000,ok
+guide-life,,3767969,20000,ok
+thermal-warm-start,,0.00002810,0.1000,ok
 ```
 
-The lowest belt tension in the cycle is 258 N. With `--bands` the same command runs the cycle with each bounded value at its low and at its high bound, one at a time: the slackest section keeps 158 N and the tool is at most 0.039 mm off in the dwell. With `--bands --samples 200` all bounded values lie between their bounds at once in 200 runs: 140 N and 0.042 mm at worst. With `--bands --worst` (a search for the worst corner of the bounds) it is 90 N and 0.082 mm against 0.1 mm. Every check passes in all three, but one: the pulley shaft bearings last 324000 h as written and pass in both band modes (at least 72800 h one at a time, 55400 h in the samples), but fail 20000 h at the worst corner (9950 h, every bounded value against them at once); Festo publishes no data on them, and their load rating and lubrication values are estimates. An earlier state of this config failed `belt-least-tension` and `settling` in the worst case. For that the belt pretension was raised from 300 N to 450 N, the X jerk limit lowered from 500 to 150 m/s³, input shaping and corner blending switched on, and a second input shaper at 17.5 Hz added; the comments in the file give the reasons.
+The lowest belt tension in the cycle is 256 N. With `--bands` the same command runs the cycle with each bounded value at its low and at its high bound, one at a time: the slackest section keeps 156 N and the tool is at most 0.040 mm off in the dwell. With `--bands --samples 200` all bounded values lie between their bounds at once in 200 runs: 139 N and 0.043 mm at worst. With `--bands --worst` (a search for the worst corner of the bounds) it is 88 N and 0.087 mm against 0.1 mm. Every check passes in all three, but one: the pulley shaft bearings last 324100 h as written and pass in both band modes (at least 72800 h one at a time, 55400 h in the samples), but fail 20000 h at the worst corner (9950 h, every bounded value against them at once); Festo publishes no data on them, and their load rating and lubrication values are estimates. An earlier state of this config failed `belt-least-tension` and `settling` in the worst case. For that the belt pretension was raised from 300 N to 450 N, the X jerk limit lowered from 500 to 150 m/s³, input shaping and corner blending switched on, and a second input shaper at 17.5 Hz added; the comments in the file give the reasons.
 
 **A motor by name.** `--motor ARTICLE` puts a motor of the Siemens S210 catalogue into any config:
 
@@ -175,11 +177,11 @@ The lowest belt tension in the cycle is 258 N. With `--bands` the same command r
 $ cargo run -q --release -p sim-cli -- verdicts t-gantry --motor 1FK2104-5AK
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 check,motor,value,limit,result
-motor-peak,a,0.07979,1.000,ok
-motor-thermal,a,4.528,100.0,ok
+motor-peak,a,0.1094,1.000,ok
+motor-thermal,a,4.539,100.0,ok
 ...
-dc-link-energy,a,6.436,75.18,ok
-dc-link-overvoltage,a,564.8,896.7,ok
+dc-link-energy,a,6.592,75.18,ok
+dc-link-overvoltage,a,565.4,896.7,ok
 ...
 ```
 
@@ -192,19 +194,19 @@ $ cargo run -q --release -p sim-cli -- search t-gantry --config crates/machine-t
 Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 0 / 28 candidates
 Search time on 16: ... s
 axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k,...
-,1FK2104-4AF,,6SL3210-5HE10-4UF0,siemens,400v,2.05,4.10,ok,drive-current,0.9843,3.2653,97.95,...
-,1FK2104-4AK,,6SL3210-5HE11-0UF0,siemens,400v,2.05,4.10,ok,motor-thermal,0.9956,3.2633,99.56,...
-,1FK2104-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.85,5.70,ok,motor-s1,0.5087,3.3377,20.42,...
+,1FK2204-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.90,5.80,ok,motor-s1,0.5361,3.3060,22.16,...
+,1FK2204-5AK,,6SL3210-5HE11-5UF0,siemens,400v,2.90,5.80,ok,motor-s1,0.5360,3.3052,26.00,...
+,1FK2104-6AF,,6SL3210-5HE11-0UF0,siemens,400v,3.40,6.80,ok,settling,0.6739,3.3929,10.87,...
 ...
-,1FK2205-4AF,,6SL3210-5HE11-5UF0,siemens,400v,5.20,10.40,ok,gearbox-radial-load,0.5002,3.6557,8.88,...
+,1FK2205-4AF,,6SL3210-5HE11-5UF0,siemens,400v,5.20,10.40,ok,gearbox-radial-load,0.5008,3.6903,9.05,...
 ...
-,1FK2203-4AK,,6SL3210-5HE10-8UF0,siemens,400v,1.49,2.98,FAIL,motor-s1,1.0021,3.2601,97.80,...
-,1FK2103-4AH,,6SL3210-5HE10-8UF0,siemens,400v,1.65,3.30,FAIL,motor-thermal,1.0161,3.2439,101.61,...
+,1FK2104-5AF,,6SL3210-5HE10-8UF0,siemens,400v,2.85,5.70,FAIL,settling,1.5331,3.3423,20.26,...
+,1FK2104-4AF,,6SL3210-5HE10-4UF0,siemens,400v,2.05,4.10,FAIL,settling,3.6107,3.2641,97.99,...
 ...
-,1FK2210-4AC,,6SL3210-5HE17-0UF0,siemens,400v,27.00,54.00,FAIL,belt-least-tension,inf,12.6807,20.73,...
+,1FK2210-4AC,,6SL3210-5HE17-0UF0,siemens,400v,27.00,54.00,FAIL,belt-least-tension,inf,13.1502,21.39,...
 ```
 
-The two lightest motors pass close to their limits: the 1FK2104-4AF at 0.98 of its drive's current, the 1FK2104-4AK at 0.996 of its winding's rise; the next ones are held by their S1 curve (0.51 to 0.56), and from the 1FK2104-6AF on the tightest check is the belt's pull on a pulley shaft (1000 N of 2000 N), which the motor hardly changes; `winding_rise_k` and `peak_torque_nm` tell those apart. `--supply s120` searches the S120 motors with their Motor Modules, `--gearboxes NRK` adds gearboxes on a machine that has one, and `--axes` tries every motor on every axis of the catalogue of the machine's kind as well (Festo EXCT and Bahr ELZI for this one: 338 candidates; the Bahr ELZI 40 comes out lighter than the EXCT-30). A drive, a belt or an axis can be named like a motor (`--drive`, `--belt AT5-25`, `--axis ELZI-40`). The table goes on with rank, energy, thermal and drive utilisation, following error, inertia ratio, the failing checks, what the catalogue left to estimates and one column per check; `--rank-by energy` (or a weighted mix) ranks by what matters, `--drives neighbours` tries the next drive sizes, several `--config` with `--weights` judge a duty mix, `--robust N` ranks the best again at the worst corner of their bounds, `sim-cli transmission` sweeps the gear ratio or pulley radius for its optimum, and `sim-cli compare-kinematics TASK.toml --machines t-gantry,delta-d3,...` runs one pick-and-place task on several kinematics side by side ([which drive works best](user-guide.md#which-drive-works-best-rank-mix-sweep-and-compare)).
+The lightest passing motors, the 1FK2204-5AF and -5AK (2.90 kg), are held by their S1 curve (0.54), the 1FK2104-6AF by the dwell (0.67 of the tolerance), and from the 1FK2204-6AF on the tightest check is the belt's pull on a pulley shaft (1000 N of 2000 N), which the motor hardly changes; the lighter 1FK2104 fail `settling` (0.15 mm and, the 4AF and 4AK, 0.36 mm against 0.1 mm); `winding_rise_k` and `peak_torque_nm` tell those apart. `--supply s120` searches the S120 motors with their Motor Modules, `--gearboxes NRK` adds gearboxes on a machine that has one, and `--axes` tries every motor on every axis of the catalogue of the machine's kind as well (Festo EXCT and Bahr ELZI for this one: 338 candidates; the Bahr ELZI 40 comes out lighter than the EXCT-30). A drive, a belt or an axis can be named like a motor (`--drive`, `--belt AT5-25`, `--axis ELZI-40`). The table goes on with rank, energy, thermal and drive utilisation, following error, inertia ratio, the failing checks, what the catalogue left to estimates and one column per check; `--rank-by energy` (or a weighted mix) ranks by what matters, `--drives neighbours` tries the next drive sizes, several `--config` with `--weights` judge a duty mix, `--robust N` ranks the best again at the worst corner of their bounds, `sim-cli transmission` sweeps the gear ratio or pulley radius for its optimum, and `sim-cli compare-kinematics TASK.toml --machines t-gantry,delta-d3,...` runs one pick-and-place task on several kinematics side by side ([which drive works best](user-guide.md#which-drive-works-best-rank-mix-sweep-and-compare)).
 
 **The optimiser.** A shorter cycle that still passes every verdict, in the error bands too:
 
@@ -212,8 +214,8 @@ The two lightest motors pass close to their limits: the 1FK2104-4AF at 0.98 of i
 $ cargo run -q --release -p sim-cli -- optimise t-gantry --config crates/machine-t-gantry/exct-30.toml
 setting,before,after
 cycle_s,2.0480,1.7560
-dwell_error_peak_m,3.477e-5,4.899e-5
-dwell_angle_error_peak_rad,-0.000e0,-0.000e0
+dwell_error_peak_m,3.544e-5,5.006e-5
+dwell_angle_error_peak_rad,0.000e0,0.000e0
 bands_fastest_cycle_s,,1.3900
 bands_fastest_fails,,belt-least-tension settling
 bands_steps_back,,4
@@ -239,13 +241,13 @@ arc,0.6,0.25,0.5,0.25,cw
 line,0.6,0.05
 
 $ cargo run -q --release -p sim-cli -- analyze t-gantry --path examples/corner.path
-Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.046 K
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 motor,cycle_s,peak_torque_nm,...,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,...
-a,2.128000,0.552014,...,1.268e-4,4.329e-5,1.746e-4,...
-b,2.128000,0.298401,...,1.268e-4,4.329e-5,1.746e-4,...
+a,2.128000,0.546983,...,1.324e-4,4.412e-5,1.779e-4,...
+b,2.128000,0.303047,...,1.324e-4,4.412e-5,1.779e-4,...
 ```
 
-With `--time-optimal` the same path takes 1.658 s instead of 2.128 s (both include 0.3 s of rest at the end), and the path error rises from 0.13 mm to 0.17 mm. That plan takes speed and acceleration from what the machine can give instead of from the axis limits, and keeps the jerk limits of the axes. It keeps, point by point along the path, every limit a verdict judges at a point: the motors' torque-speed curves and speeds, the drives' maximum current, the gearbox's torque and input speed, the pulley, the belt's tension, the guides, the braking resistor's peak power and the machine's own parts; not what is judged over the whole cycle (warming, S1, RMS current, the lives), which the analysis shows.
+With `--time-optimal` the same path takes 1.658 s instead of 2.128 s (both include 0.3 s of rest at the end), and the path error rises from 0.13 mm to 0.18 mm. That plan takes speed and acceleration from what the machine can give instead of from the axis limits, and keeps the jerk limits of the axes. It keeps, point by point along the path, every limit a verdict judges at a point: the motors' torque-speed curves and speeds, the drives' maximum current, the gearbox's torque and input speed, the pulley, the belt's tension, the guides, the braking resistor's peak power and the machine's own parts; not what is judged over the whole cycle (warming, S1, RMS current, the lives), which the analysis shows.
 
 Within the axis limits the path crawls into and out of the arc at 0.07 m/s, because the acceleration towards the centre steps there. `--set profile.path_tolerance_m=0.0001` lets the planner put transition curves at both ends of the arc: the path is then off the file's by up to 0.1 mm, enters the arc at 0.40 m/s and takes 1.890 s.
 
@@ -261,10 +263,10 @@ spline,0.55,0.15
 line,0.55,0.05
 
 $ cargo run -q --release -p sim-cli -- analyze t-gantry --path examples/curve.path
-Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.036 K
+Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 motor,cycle_s,peak_torque_nm,...,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,...
-a,2.101000,0.551950,...,1.318e-4,4.403e-5,1.780e-4,...
-b,2.101000,0.291156,...,1.318e-4,4.403e-5,1.780e-4,...
+a,2.101000,0.546394,...,1.400e-4,4.504e-5,1.779e-4,...
+b,2.101000,0.299182,...,1.400e-4,4.504e-5,1.779e-4,...
 ```
 
 The curve leaves the first line in its direction and ends in the direction of the last one. Where it joins a line the curvature steps, so the path is slow there, like a line into an arc.

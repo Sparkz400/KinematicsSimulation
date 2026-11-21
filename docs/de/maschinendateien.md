@@ -194,39 +194,45 @@ sim-cli verdicts --machine-file machines/h-bot.toml
 
 ```
 check,motor,value,limit,result
-motor-peak,a,0.09917,1.000,ok
-motor-thermal,a,0.4428,100.0,ok
-drive-current,a,0.2212,3.000,ok
-drive-peak-current,a,0.8356,10.90,ok
-gearbox-continuous,a,0.3766,40.00,ok
+motor-peak,a,0.09924,1.000,ok
+motor-thermal,a,0.4460,100.0,ok
+motor-s1,a,0.09988,1.270,ok
+motor-speed,a,200.4,420.0,ok
+drive-current,a,0.2220,3.000,ok
+drive-peak-current,a,0.8388,10.90,ok
+gearbox-radial-load,a,632.2,1500,ok
+gearbox-continuous,a,0.3802,40.00,ok
 gearbox-input-speed,a,1914,13000,ok
-gearbox-peak,a,1.326,64.00,ok
-pulley-bearing-life,a,213589,20000,ok
-gearbox-life,a,74415368568,20000,ok
-belt-tooth-load,a,0.1164,1.000,ok
-dc-link-energy,a,1.106,6.205,ok
-dc-link-overvoltage,a,169.6,257.6,ok
-motor-peak,b,0.09105,1.000,ok
-motor-thermal,b,0.4562,100.0,ok
-drive-current,b,0.2245,3.000,ok
-drive-peak-current,b,0.7675,10.90,ok
-gearbox-continuous,b,0.3850,40.00,ok
+gearbox-peak,a,1.334,64.00,ok
+pulley-bearing-life,a,475735,20000,ok
+gearbox-life,a,71921110348,20000,ok
+belt-tooth-load,a,0.1171,1.000,ok
+dc-link-energy,a,1.147,6.205,ok
+dc-link-overvoltage,a,170.1,257.6,ok
+motor-peak,b,0.09276,1.000,ok
+motor-thermal,b,0.4597,100.0,ok
+motor-s1,b,0.1014,1.270,ok
+motor-speed,b,200.5,420.0,ok
+drive-current,b,0.2254,3.000,ok
+drive-peak-current,b,0.7839,10.90,ok
+gearbox-radial-load,b,637.6,1500,ok
+gearbox-continuous,b,0.3887,40.00,ok
 gearbox-input-speed,b,1914,13000,ok
-gearbox-peak,b,1.182,64.00,ok
-pulley-bearing-life,b,213351,20000,ok
-gearbox-life,b,70668656880,20000,ok
-belt-tooth-load,b,0.1038,1.000,ok
-dc-link-energy,b,1.128,6.205,ok
-dc-link-overvoltage,b,169.9,257.6,ok
-settling,,0.00001314,0.0001000,ok
-belt-tension,,345.7,1500,ok
-belt-least-tension,,229.2,0,ok
-gearbox-radial-load,,637.1,1500,ok
+gearbox-peak,b,1.213,64.00,ok
+pulley-bearing-life,b,474906,20000,ok
+gearbox-life,b,68166077481,20000,ok
+belt-tooth-load,b,0.1065,1.000,ok
+dc-link-energy,b,1.146,6.205,ok
+dc-link-overvoltage,b,170.1,257.6,ok
+settling,,0.00001324,0.0001000,ok
+belt-tension,,346.8,1500,ok
+belt-least-tension,,228.3,0,ok
 guide-load,,107.9,2000,ok
-guide-life,,6789511,20000,ok
+guide-life,,6789383,20000,ok
+thermal-warm-start,,0.000009028,0.1000,ok
 ```
 
-Jede Prüfung besteht. Die Motoren bleiben kühler als beim T-Portal (`motor-thermal` 0,44 gegen dessen 1,23): nichts muss
+Jede Prüfung besteht. Die Motoren bleiben kühler als beim T-Portal (`motor-thermal` 0,45 gegen dessen 1,28): nichts muss
 gegen die Schwerkraft gehalten werden. Die Signale folgen den ids: `axis.y.position`, `motor.a.torque`, `belt.2.tension`, `power.guide_y`, ...
 
 ## Die Knoten

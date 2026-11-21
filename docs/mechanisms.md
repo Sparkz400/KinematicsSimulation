@@ -309,8 +309,8 @@ y: 70.5 degrees about their bisector halfway, the straight line's 63.6 degrees).
 SCARA's c, the palletiser's rz, the five-axis arm's rx, ry) run each axis straight.
 
 `config/scara-tool.toml` and `config/arm-tool.toml` are the default configs with tool space on, a start pose and a cycle
-of straight lines (the arm's settling tolerances 5 mm and 5 mrad: under the payload its flange rests 2.4 mm off the
-encoders' pose and turned 3.2 mrad). `config/arm5-tool.toml` and `config/arm7-tool.toml` are the five-axis example (`urdf/five-axis.urdf`:
+of straight lines (the arm's settling tolerances 5 mm and 5 mrad: under the payload its flange rests 2.3 mm off the
+encoders' pose and turned 3.1 mrad). `config/arm5-tool.toml` and `config/arm7-tool.toml` are the five-axis example (`urdf/five-axis.urdf`:
 the six-axis arm without the flange's roll, pointing down at zero; axes x, y, z, rx, ry, where the tool points) and the
 seven-axis one (`urdf/seven-axis.urdf`: a roll joint in the upper arm; axes x, y, z, rx, ry, rz), each with a cycle of
 straight lines, for `--config` with the `urdf-arm` machine. Their proportions are generic, every value an estimate.
