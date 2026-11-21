@@ -187,6 +187,9 @@ struct ToolFlex {
     tilt: f64,
     damping: f64,
     ei: f64,
+    /// How far the belt's two upper vertical runs (sections 1 and 3) reach the clamp to either side of the Z axis's line,
+    /// m (`TGantry::lean_offset`).
+    belt_offset: f64,
 }
 
 /// The X beam between the posts (effects.beam_sag, effects.beam_vertical_mode): a simple span of `span` m and bending
@@ -208,9 +211,12 @@ struct Beam {
 /// relative to the carriage, so its speed over ground is z' - w'), so a Z move's acceleration drives it, and the carriage's
 /// weight, riding along the beam, drives it as k(x) changes (V = 1/2 k(x) w^2 - m g w, a force on x of -1/2 k' w^2).
 /// The Lagrangian keeps T = 1/2 M(x) w'^2 and drops what the shape's change with x adds: the coupling 1/2 M' w x' w'
-/// (w / L = 5e-5 of the kept terms at the 59 um sag) and 1/2 mu integral of (phi_x w x')^2 (1e-9). The belt is not on w:
-/// its vertical runs, mu (4 s + 2 sz) = 0.16 kg, and a third of its tilting horizontal runs, 0.09 kg, would lower the mode
-/// by 0.9 % (59.32 to 58.77 Hz in the middle), well inside the estimates of the beam's mass and stiffness.
+/// (w / L = 5e-5 of the kept terms at the 59 um sag) and 1/2 mu integral of (phi_x w x')^2 (1e-9). The belt rides on w
+/// too (`belt_on_beam`, since 21 November 2026): its vertical runs, mu (4 s + 2 sz) = 0.16 kg, go down with the carriage
+/// whole (their speed over ground z' - w' as the Z axis's), and its horizontal runs, from the posts' pulleys to the
+/// carriage's idlers, tilt with it: a third of them, 0.087 kg, in the kinetic energy, half in the weight. That lowers
+/// the mode by 0.93 % (59.32 to 58.77 Hz in the middle). The runs' lengths change with w only to second order (w^2 / 2l),
+/// which is left out.
 struct BeamMode {
     mass_per_m: f64,
     damping_ratio: f64,
@@ -387,6 +393,11 @@ impl TGantry {
                 tilt: stiff(lean, "tool_flex.tilt_stiffness_nm_rad")?,
                 damping: cfg.non_negative("tool_flex.damping_n_s_m")?,
                 ei: stiff(bend, "tool_flex.z_axis_bending_stiffness_nm2")?,
+                belt_offset: if lean && cfg.bool("effects.belt_run_offset")? {
+                    cfg.non_negative("tool_flex.belt_offset_m")?
+                } else {
+                    0.0
+                },
             })
         } else {
             None
@@ -556,6 +567,18 @@ impl TGantry {
         let (mu, s) = (self.belt.mass_per_m, self.span_min);
         (8.0 * mu * (s + self.axes[1].max - z), 2.0 * mu * (2.0 * x - self.axes[0].max))
     }
+    /// With effects.beam_vertical_mode: the belt's runs that ride on the beam's mode w (`BeamMode`), as (inertia,
+    /// weight) in kg. The vertical runs, mu (4 s + 2 sz) (`belt_sway`'s cross mass), go down with w whole; the horizontal
+    /// ones, mu (4 s + 2 sx) from the posts' pulleys to the carriage's idlers, tilt with it, their point at the share xi of
+    /// the way to the carriage going down by xi w: a third of their mass in the kinetic energy, half in the weight and the
+    /// first moment. Default gantry: 0.16 + 0.26 / 3 and 0.16 + 0.26 / 2. The weight sags the beam quasi-statically too
+    /// (effects.beam_sag, `sag`).
+    fn belt_on_beam(&self) -> (f64, f64) {
+        let (mu, s, sx) = (self.belt.mass_per_m, self.span_min, self.axes[0].max);
+        let (vertical, flat) = (self.belt_sway().0, mu * (4.0 * s + 2.0 * sx));
+        (vertical + flat / 3.0, vertical + flat / 2.0)
+    }
+
     /// The belt's runs when the frame sways at q' along X (effects.frame_compliance): everything on the frame sways with
     /// it, the belt too, so its speed over ground is the table's plus (q', 0). That adds q' mu sum(length x X speed) =
     /// mu (4 s + 2 sz) q' vx (the horizontal runs cancel; the vertical ones, 4 s + 2 sz long, move at vx) and
@@ -626,9 +649,10 @@ impl TGantry {
         }
         // The beam's mode: the carriage, the Z axis and the payload move with w, the Z axis's z is relative to the carriage
         // (its speed over ground z' - w'), and the beam's own modal mass.
+        // The belt's vertical runs move at z' - w' in Z with the Z axis (their x-speeds cancel: `belt_mass`'s table).
         if let Some(w) = index(W) {
-            add(&mut mass, &[(w, 1.0)], self.m_carriage + self.m_z() + self.beam_mode(x)[1]);
-            cross(&mut mass, 1, w, -self.m_z());
+            add(&mut mass, &[(w, 1.0)], self.m_carriage + self.m_z() + self.beam_mode(x)[1] + self.belt_on_beam().0);
+            cross(&mut mass, 1, w, -self.m_z() - self.belt_sway().0);
         }
         mass
     }
@@ -676,7 +700,12 @@ impl TGantry {
         };
         let mass = self.elastic_mass(x, z);
         let (mut stiffness, mut damping) = (vec![0.0; n * n], vec![0.0; n * n]);
-        let sections = [[(0, 1.0), (1, 1.0)].as_slice(), &[(1, -2.0)], &[(0, -1.0), (1, 1.0)]];
+        // With the lean, sections 1 and 3 change with u by -+ the runs' offset (`lean_offset`).
+        let offset = index(U).map(|u| (u, self.lean_offset(z)));
+        let side = |sign: f64| offset.map(|(u, e)| (u, sign * e));
+        let one: Vec<(usize, f64)> = [(0, 1.0), (1, 1.0)].into_iter().chain(side(-1.0)).collect();
+        let three: Vec<(usize, f64)> = [(0, -1.0), (1, 1.0)].into_iter().chain(side(1.0)).collect();
+        let sections = [one.as_slice(), &[(1, -2.0)], three.as_slice()];
         for (g, length) in sections.into_iter().zip(rest.iter().copied()) {
             let k = self.belt.ea / length;
             add(&mut stiffness, g, k);
@@ -710,7 +739,7 @@ impl TGantry {
         }
         if let (Some(w), Some(_)) = (index(W), self.vertical()) {
             let [k, _, c, dk, _] = self.beam_mode(x);
-            let w0 = (self.m_carriage + self.m_z()) * self.g / k;
+            let w0 = self.on_beam_weight() / k;
             let ddk = (self.beam_mode(x + 1e-4)[3] - self.beam_mode(x - 1e-4)[3]) / 2e-4;
             add(&mut stiffness, &[(w, 1.0)], k);
             add(&mut damping, &[(w, 1.0)], c);
@@ -803,10 +832,16 @@ impl TGantry {
         [(ahead - behind) / (2.0 * step), (ahead - 2.0 * here + behind) / (step * step)]
     }
 
+    /// The weight on the beam under the carriage (N): the carriage, the Z axis with its payload and the belt's share riding
+    /// on it (`belt_on_beam`; since 21 November 2026, 0.29 kg of 11.29 on the default gantry).
+    fn on_beam_weight(&self) -> f64 {
+        (self.m_carriage + self.m_z() + self.belt_on_beam().1) * self.g
+    }
+
     /// With effects.beam_sag: how far the beam sags under the carriage at x, and its rate of change with x.
     fn sag(&self, x: f64) -> (f64, f64) {
         let Some(beam) = &self.beam else { return (0.0, 0.0) };
-        let weight = (self.m_carriage + self.m_z()) * self.g;
+        let weight = self.on_beam_weight();
         let at = |x: f64| weight * sim_components::beam::span_compliance(beam.ei, beam.span, beam.start + x);
         (at(x), (at(x + 1e-6) - at(x - 1e-6)) / 2e-6)
     }
@@ -822,7 +857,8 @@ impl TGantry {
         let Some((beam, mode)) = self.vertical() else { return [0.0; 5] };
         let (k, mass) = (beam.stiffness(x), beam.modal_mass(mode.mass_per_m, x));
         // The key is the mode's damping ratio, the carriage and the Z axis on it.
-        let damping = 2.0 * mode.damping_ratio * (k * (mass + self.m_carriage + self.m_z())).sqrt();
+        let riding = self.m_carriage + self.m_z() + self.belt_on_beam().0;
+        let damping = 2.0 * mode.damping_ratio * (k * (mass + riding)).sqrt();
         [k, mass, damping, slope(|x| beam.stiffness(x), x), slope(|x| beam.modal_mass(mode.mass_per_m, x), x)]
     }
 
@@ -870,16 +906,33 @@ impl TGantry {
         [upper, 2.0 * run(s + sz - z), upper]
     }
 
-    /// How much longer `lean_runs` make the three belt sections at the state's lean u and height z, and the rate of that.
+    /// The belt's upper vertical runs off the Z axis's line (`ToolFlex::belt_offset` e, to either side): the clamp, above
+    /// the carriage where the leaning Z axis is a rigid bar turned by the guide's tilt theta = F h / tilt (F = k u the
+    /// spring's force, h = z_com_drop - z), lifts the right run's end (section 3) by e theta and lowers the left one's
+    /// (section 1): section 3 longer by e theta, section 1 shorter, first order in u. Per u: e k h / tilt (0 with a rigid
+    /// guide or without the lean). The tensions then put the moment (T1 - T3) e theta' on the lean, the energy, modes and
+    /// damping following from the lengths.
+    fn lean_offset(&self, z: f64) -> f64 {
+        let Some(f) = &self.flex else { return 0.0 };
+        f.belt_offset * self.flex_at(z).0 * (self.z_com_drop - z) / f.tilt
+    }
+
+    /// How much longer `lean_runs` and `lean_offset` make the three belt sections at the state's lean u and height z, and
+    /// the rate of that.
     fn lean_lengths(&self, s: &[f64]) -> ([f64; 3], [f64; 3]) {
         if self.flex.is_none() {
             return ([0.0; 3], [0.0; 3]);
         }
         let (u, z) = (s[U], s[Z]);
         let (c, ahead, behind) = (self.lean_runs(z), self.lean_runs(z + 1e-6), self.lean_runs(z - 1e-6));
-        let longer = std::array::from_fn(|i| 0.5 * c[i] * u * u);
-        let rate =
-            std::array::from_fn(|i| c[i] * u * s[V + U] + 0.5 * (ahead[i] - behind[i]) / 2e-6 * s[V + Z] * u * u);
+        let (e, de) = (self.lean_offset(z), (self.lean_offset(z + 1e-6) - self.lean_offset(z - 1e-6)) / 2e-6);
+        let side = [-1.0, 0.0, 1.0];
+        let longer = std::array::from_fn(|i| 0.5 * c[i] * u * u + side[i] * e * u);
+        let rate = std::array::from_fn(|i| {
+            c[i] * u * s[V + U]
+                + 0.5 * (ahead[i] - behind[i]) / 2e-6 * s[V + Z] * u * u
+                + side[i] * (e * s[V + U] + de * s[V + Z] * u)
+        });
         (longer, rate)
     }
 
@@ -1110,9 +1163,16 @@ impl TGantry {
         let [rise, d_rise, _] = self.rise_coefficients(s[Z]);
         let tensions: [f64; 3] = std::array::from_fn(|i| sec[i].tension);
         let (runs, ahead, behind) = (self.lean_runs(s[Z]), self.lean_runs(s[Z] + 1e-6), self.lean_runs(s[Z] - 1e-6));
-        let on_lean: f64 = (0..3).map(|i| tensions[i] * runs[i]).sum::<f64>() * s[U];
-        let on_z: f64 = (0..3).map(|i| tensions[i] * (ahead[i] - behind[i]) / 2e-6).sum::<f64>() * 0.5 * s[U] * s[U];
-        // The beam mode (`BeamMode`): M(x) w'' + M' x' w' + c w' + k w = (m_c + m_z) g - F_z, and on x the speed term
+        // The runs' offset (`lean_offset`, sections 3 longer and 1 shorter by e u): (T3 - T1) e on the lean, its change
+        // with z on Z.
+        let (offset, offset_dz) =
+            (self.lean_offset(s[Z]), (self.lean_offset(s[Z] + 1e-6) - self.lean_offset(s[Z] - 1e-6)) / 2e-6);
+        let on_lean: f64 =
+            (0..3).map(|i| tensions[i] * runs[i]).sum::<f64>() * s[U] + (tensions[2] - tensions[0]) * offset;
+        let on_z: f64 = (0..3).map(|i| tensions[i] * (ahead[i] - behind[i]) / 2e-6).sum::<f64>() * 0.5 * s[U] * s[U]
+            + (tensions[2] - tensions[0]) * offset_dz * s[U];
+        // The beam mode (`BeamMode`): M(x) w'' + M' x' w' + c w' + k w = W - F_z, W the weight on it (`on_beam_weight`:
+        // carriage, Z axis and the belt riding on it), and on x the speed term
         // 1/2 M' w'^2 less the stiffness's change with x, 1/2 k' w^2.
         let [beam_k, _, beam_c, beam_dk, beam_dm] = self.beam_mode(s[X]);
         let beam_x = if self.vertical().is_some() {
@@ -1141,13 +1201,7 @@ impl TGantry {
             );
         }
         if self.vertical().is_some() {
-            force.push(
-                (self.m_carriage + self.m_z()) * self.g
-                    - process_z
-                    - beam_k * s[W]
-                    - beam_c * s[V + W]
-                    - beam_dm * vx * s[V + W],
-            );
+            force.push(self.on_beam_weight() - process_z - beam_k * s[W] - beam_c * s[V + W] - beam_dm * vx * s[V + W]);
         }
         let at = self.coordinates();
         let acc = sim_components::chain::solve(&self.elastic_mass(s[X], s[Z]), &force)
@@ -1300,7 +1354,7 @@ impl TGantry {
             // `frame_momentum`); the beam's spring, which holds the stress of the beam's own sag: its cross term with
             // the mode is +g p0 w by virtual work (EI u'''' = mu g), so the beam's weight does no work on w in all.
             let own = self.g * beam.shape_moments(mode.mass_per_m, s[X])[0] * s[W];
-            potential -= (self.m_carriage + self.m_z()) * self.g * s[W] + own;
+            potential -= self.on_beam_weight() * s[W] + own;
             elastic += 0.5 * self.beam_mode(s[X])[0] * s[W] * s[W] + own;
         }
         [kinetic, potential, elastic]
@@ -1623,11 +1677,27 @@ impl Machine for TGantry {
         // (vx, vz) with the carriage and the Z axis, and all of it sways with the frame (`belt_sway`); its first moment
         // moves with x and z alike, mu (4 s + 2 sz) (x, z), and with the frame.
         let (belt_cross, belt) = self.belt_sway();
+        // With the beam's mode the belt rides on w (`belt_on_beam`): the vertical runs at the carriage's x, down by w,
+        // their momentum -cross w'; the horizontal ones tilt, a point at the share xi of the way from its post's pulley
+        // (motor A at q - s, motor B at q + s + sx) to the carriage going down by xi w: momentum -flat w' / 2, about y
+        // mu w' (len_A (x_A / 6 + xc / 3) + len_B (x_B / 6 + xc / 3)). Lowered, the runs' momenta along X (the vertical
+        // runs' cross (vx + vq), the horizontal ones' sway flat vq) are w lower (the horizontal ones w / 2 on average).
+        let (_, riding) = self.belt_on_beam();
+        let belt_beam_angular = if self.vertical().is_some() {
+            let (mu, s, sx, xc) = (self.belt.mass_per_m, self.span_min, self.axes[0].max, x + q);
+            let flat = mu * (4.0 * s + 2.0 * sx);
+            let tilting = mu
+                * vw
+                * (2.0 * (s + x) * ((q - s) / 6.0 + xc / 3.0) + 2.0 * (s + sx - x) * ((q + s + sx) / 6.0 + xc / 3.0));
+            belt_cross * xc * vw + tilting - w * belt_cross * (vx + vq) - 0.5 * w * flat * vq
+        } else {
+            0.0
+        };
         Some(sim_core::FrameMomentum {
             linear: [
                 carriage.1[0] + z_axis.1[0] + frame * vq + belt_cross * vx + belt * vq,
                 0.0,
-                carriage.1[2] + z_axis.1[2] + belt_cross * vz + beam_vertical,
+                carriage.1[2] + z_axis.1[2] + belt_cross * vz + beam_vertical - riding * vw,
             ],
             angular: [
                 0.0,
@@ -1637,7 +1707,8 @@ impl Machine for TGantry {
                     + spin
                     + self.idler_angular(vx)
                     + self.belt_angular(x + q, self.z_com_drop, z, [vx, vz, vq])
-                    + beam_angular,
+                    + beam_angular
+                    + belt_beam_angular,
                 0.0,
             ],
             mass: m_carriage + m_z + belt,
@@ -1651,7 +1722,8 @@ impl Machine for TGantry {
                     + belt_cross * x
                     + belt * q,
                 0.0,
-                m_carriage * self.z_com_drop - self.m_carriage * w + m_z * (z - w) + belt_cross * z + beam_moment,
+                m_carriage * self.z_com_drop - self.m_carriage * w + m_z * (z - w) + belt_cross * z + beam_moment
+                    - riding * w,
             ],
             gravity: [0.0, 0.0, -self.g],
             external: [process[0], 0.0, process[1]],

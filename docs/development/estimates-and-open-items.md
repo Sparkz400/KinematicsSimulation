@@ -109,7 +109,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The rotors' gyroscopic coupling with the legs' swing (it is in the frame's reaction only); the rods' faces against platform and base | hexapod, tripod, rotary hexapod | About 0.015 N m (hand estimate). |
 | The hook block against the payload's sides (it lands on its top only, since 21 November); a hook block already lower than the payload's top (a pick with it under 0.28 m over the payload's point) stays inside it; one resting on the payload drops through once the payload is let go; the landing on the rigid rope is untested | crane | None in the shipped cycle: the sling holds the hook block over the payload, and its picks hang the hook block 1 m over it. |
 | Link bending together with parallelogram bars of their own (refused); the palletiser's rod and crank (shipped bar arrays empty) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured in the test case). |
-| The belt runs' sideways offset on the leaning Z axis; the belt runs riding on the beam's vertical mode | T-gantry | A first-order moment (T₁ − T₃)·0.04 m; the beam mode would fall 0.9 % (59.32 to 58.77 Hz). |
+| In the machine file (`machines/t-gantry.toml`, sim-netlist): the belt runs riding on the beam's vertical mode and the runs' offset on the leaning Z axis (the crate has both since 21 November, the offset behind `effects.belt_run_offset`, off as shipped) | T-gantry | The file's beam mode stays 0.93 % high (59.32 against the crate's 58.78 Hz); with the offset on, the crate's lean mode at x = 0.9, z = 0.05 m is 17.55 Hz against 18.75 Hz. |
 | Angular momentum of the T-gantry crate against its machine file is not compared | T-gantry | Different origins and belt-run geometry. |
 | Idler signs of the y belts of the dual gantry and the rack gantry | machine files | Not checked: the 3D drawing does not model those routes faithfully. |
 | The screw's stiffness along the stroke keeps the far end's for the wafer handler's and the parallel SCARA's pose tolerance (their own `rest_sag`, `machine-wafer-handler` and `machine-parallel-scara`: the column's m g / K with the far end's K, the stroke's `static_twist`), on the safe side; `chain.rs`'s takes the nut, and since 21 November the fit's twist (`Machine::twist_at`) and the mesh bristle (σ_m r, its store still not booked: at most (μ |held|)² / (2σ_m) per gear) follow the nut too | wafer handler, parallel SCARA | The tolerance up to the far end's sag over the pose's. |
@@ -149,7 +149,8 @@ verified the model by hand values and runs and found it ready to switch on.
 | `effects.arm_bending`, `effects.arm_tube_inertia` | H4 (and the corrected tube model on the D3) | Fit; gearbox modes about 945 Hz with the tube on. |
 | `effects.table_twist` | cam and Geneva indexers | Fit. |
 | `effects.follower_lift_off` | disc cam | Fit; adds 5 N of guide friction that the model without it does not have. |
-| `effects.beam_vertical_mode` | T-gantry, its machine file | Fit; the beam's mass and stiffness are estimates. |
+| `effects.beam_vertical_mode` | T-gantry, its machine file | Fit; the beam's mass and stiffness are estimates. Since 21 November the belt rides on it in the crate (58.78 Hz in the middle; not yet in the file). |
+| `effects.belt_run_offset` | T-gantry (not its machine file) | Verified by its hand test, energy and budget (21 November); off: it lowers the lean's mode by some 6 % (18.75 to 17.55 Hz at x = 0.9, z = 0.05 m), so the shipped shaper tunings and the tests with recorded lean modes would move. The offset `tool_flex.belt_offset_m` is an estimate. |
 | `effects.rope_mass`, `effects.hook_block`, `effects.joint_elasticity`, `effects.bridge_skew`, `effects.floor_contact` | crane | Verified by their own tests; see section 4 for what was not run. `effects.joint_elasticity` is fit to switch on since the gains of section 2 (bridge 177 Hz, 51.7°, 9.7 dB; trolley 183 Hz, 51.0°, 9.9 dB; hoist 49.5 Hz, 78.2°, 20.7 dB), and its cycle verdicts match the rigid ones. |
 | `drive.overmodulation` | every drive | Off; verified. |
 
@@ -357,9 +358,18 @@ Fixed (after the second audit, 21 November):
 - The mover track's modes: the shipped six movers report the held mode everywhere (modes, `resonance_hz` and so the
   shaper, the plan's trains: 694.28 Hz, the plate held), as the convention has it; a track of one mover reported the
   free two-mass mode (1736.39 Hz, the chain's single joint) to the shaper and the modes printout while its train was
-  the held one. One mover now reports the held mode too (`the_movers_modes_are_the_held_two_mass_mode`). The app's mode
-  list shows beside each mode the linearised model's nearest one: 102.0 Hz for the six movers' 694.28 Hz (not looked
-  into; the 1736 Hz of the brief is the plate-free figure).
+  the held one. One mover now reports the held mode too (`the_movers_modes_are_the_held_two_mass_mode`). The 1736 Hz of
+  the brief is the plate-free figure.
+
+- The app's mode list (`shapes::mode_views`, also `sim-cli modes --shapes`' linear_hz) paired each reported mode with
+  the eigenvalue of the motor-free linearised model nearest it, whatever its kind. For the mover track's held 694.28 Hz
+  that was no mode but a real pole, lambda = -639.7 1/s shown as 101.8 Hz with damping 1: the rollers' Coulomb friction
+  smoothed over 2 mm/s, (0.1 + 0.005 * 300) / 0.002 + 0.5 = 800.5 N s/m on the 1.251 kg mover (-639.9 by hand); the
+  motor-free model has no held mode, only the plate-free one at 1735.8 Hz. Now a real eigenvalue is no partner, and the
+  partner is the nearer of the motor-free model's and the model with the rotor states held (`shapes::linearised_held`:
+  the states that move a motor's angle or speed held, as `Machine::modes` has its modes): the mover's 694.28 Hz gets
+  the held model's 694.28 Hz to 1e-6, one mover and six
+  (`the_mode_list_pairs_the_held_mode_with_the_held_model_not_the_friction_s_pole`).
 - The mover track and the indexers (Geneva, cam) had no frame momentum (`Machine::frame_momentum` None), so no
   compliant base: they have it, as the joint kit's slide and the knife (`the_frame_momentum_is_the_hand_calculated_one`
   in both crates; the standard suite's first-moment check now judges them). Both are level, so

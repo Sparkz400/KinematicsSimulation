@@ -4478,9 +4478,11 @@ fn belt_axis() -> &'static MachineEntry {
 /// k2 = k_g / r_m^2 (r_m = r / (1 + P / EA), the belt fed per radian). k1 is the one `modes` reports its frequency with
 /// (carriage on the belt, pulley held): k1 = m1 (2 pi f)^2. The chain's two modes are the roots of
 /// w^4 - w^2 [k1 (1/m1 + 1/m2) + k2 (1/m2 + 1/m3)] + k1 k2 (m1 + m2 + m3) / (m1 m2 m3) = 0; the lower one, the two-mass
-/// mode of carriage against pulley and rotor, has the shape x1 = 1, x2 = 1 - m1 w^2 / k1, x3 = k2 x2 / (k2 - m3 w^2),
-/// so the motor turns by i x3 / r_m per metre of carriage, against it. The list reports the frequency `modes` reports,
-/// and its shape is the linearised model's; the belt holds most of its strain energy.
+/// mode of carriage against pulley and rotor. With the rotor held, as the reported mode has its motors, the chain is
+/// two masses on k1 and k2, and its lower mode, x1 = 1, x2 = 1 - m1 w^2 / k1, the rotor still, is the list's linearised
+/// partner since 21 November (the nearer of the two models' oscillations: `shapes::mode_views`; before, the motor-free
+/// one). The list reports the frequency `modes` reports, and its shape is the linearised model's; the belt holds most
+/// of its strain energy.
 #[test]
 fn the_belt_axis_two_mass_mode_has_the_hand_calculated_shape() {
     let entry = belt_axis();
@@ -4515,22 +4517,33 @@ fn the_belt_axis_two_mass_mode_has_the_hand_calculated_shape() {
     let m3 = (get("motor.rotor_inertia_kgm2") + get("gearbox.inertia_at_input_kgm2")) * ratio * ratio / (r_m * r_m);
     let k1 = m1 * (std::f64::consts::TAU * reported[0].hz).powi(2);
     let k2 = get("gearbox.stiffness_nm_rad") / (r_m * r_m);
+    // The motors free: three masses; the lower nonzero root, the two-mass mode of carriage against pulley and rotor.
     let b = k1 * (1.0 / m1 + 1.0 / m2) + k2 * (1.0 / m2 + 1.0 / m3);
     let c = k1 * k2 * (m1 + m2 + m3) / (m1 * m2 * m3);
-    let w2 = (b - (b * b - 4.0 * c).sqrt()) / 2.0;
+    let free = ((b - (b * b - 4.0 * c).sqrt()) / 2.0).sqrt() / std::f64::consts::TAU;
+    // The rotor held, as the reported mode has it: carriage and pulley on k1 and k2, m1 m2 w^4 - (k1 m2 + (k1 + k2) m1)
+    // w^2 + k1 k2 = 0, the lower root. The pulley held as well, `modes`' own k1 / m1, is the upper bound of it.
+    let b = k1 * m2 + (k1 + k2) * m1;
+    let w2 = (b - (b * b - 4.0 * m1 * m2 * k1 * k2).sqrt()) / (2.0 * m1 * m2);
     let x2 = 1.0 - m1 * w2 / k1;
-    let motor_per_metre = ratio * k2 * x2 / (k2 - m3 * w2) / r_m;
     let linear = mode.linear.expect("a linearised mode");
     let hand_hz = w2.sqrt() / std::f64::consts::TAU;
-    assert!((linear.hz / hand_hz - 1.0).abs() < 2e-3, "{} Hz against {hand_hz} Hz by hand", linear.hz);
-    // The elastic state starts [x, pulley angle, motor angle]: the motor's amplitude over the carriage's.
-    let (re, im) = (&mode.shape.re, &mode.shape.im);
-    let ratio_shown = (re[2] * re[0] + im[2] * im[0]) / (re[0] * re[0] + im[0] * im[0]);
+    // Of the two the list takes the one nearer the reported mode: until 21 November the motor-free one.
     assert!(
-        motor_per_metre < 0.0 && (ratio_shown / motor_per_metre - 1.0).abs() < 5e-3,
-        "{ratio_shown} rad per m against {motor_per_metre} by hand; pulley {} against {}; {} Hz, {hand_hz} by hand; pose {:?}",
-        (re[1] * re[0] + im[1] * im[0]) / (re[0] * re[0] + im[0] * im[0]),
-        x2 / r_m,
+        (linear.hz / hand_hz - 1.0).abs() < 2e-3 && (hand_hz - reported[0].hz).abs() < (free - reported[0].hz).abs(),
+        "{} Hz against {hand_hz} Hz by hand ({free} Hz motor-free, {} Hz reported)",
+        linear.hz,
+        reported[0].hz
+    );
+    // The elastic state starts [x, pulley angle, motor angle]: the pulley's amplitude over the carriage's, the motor still.
+    let (re, im) = (&mode.shape.re, &mode.shape.im);
+    let along = |i: usize| (re[i] * re[0] + im[i] * im[0]) / (re[0] * re[0] + im[0] * im[0]);
+    let pulley_per_metre = x2 / r_m;
+    assert!(
+        (along(1) / pulley_per_metre - 1.0).abs() < 5e-3 && along(2) == 0.0,
+        "pulley {} rad per m against {pulley_per_metre} by hand, motor {}; {} Hz, {hand_hz} by hand; pose {:?}",
+        along(1),
+        along(2),
         linear.hz,
         mode.shape.pose
     );

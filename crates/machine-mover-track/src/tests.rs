@@ -59,6 +59,37 @@ fn the_movers_modes_are_the_held_two_mass_mode() {
     }
 }
 
+/// What the app's mode list shows beside the held 694.28 Hz (`shapes::mode_views`' `linear`). Until 21 November it took
+/// the motor-free model's eigenvalue nearest it: 101.8 Hz, damping 1, no mode but a real pole, the rollers' smoothed
+/// Coulomb friction acting as a damper at rest. Its slope (0.1 + 0.005 * 300 N of attraction) / 0.002 m/s = 800 N s/m and
+/// the viscous 0.5 N s/m on the whole mover (1.251 kg): lambda = -800.5 / 1.251 = -639.9 1/s, |lambda| / 2 pi =
+/// 101.84 Hz, nearer the held mode's eigenvalue (4362 rad/s) than the plate-free mode at sqrt(2e7 (1 / 1.051 + 1
+/// / 0.2)) = 1736.39 Hz, which the motor-free model has (damped, 1735.8 Hz). Now a real eigenvalue is no partner, and the
+/// model with the rotors held (`linearised_held`) is asked too: the body on its coupling, |lambda| = sqrt(2e7 / 1.051),
+/// 694.28 Hz to rounding (the friction's slope damps it, it does not move its natural frequency); one mover and six.
+#[test]
+fn the_mode_list_pairs_the_held_mode_with_the_held_model_not_the_friction_s_pole() {
+    for edits in [&["start.pose = [0.125]"][..], &[]] {
+        let cfg = config(edits);
+        let views = sim_components::shapes::mode_views(&ENTRY, &cfg, &cfg.f64s("start.pose").unwrap()).unwrap();
+        let held = (2e7f64 / 1.051).sqrt() / TAU;
+        for view in &views {
+            let linear = view.linear.unwrap();
+            assert!((linear.hz / held - 1.0).abs() < 1e-6 && (view.hz / held - 1.0).abs() < 1e-12, "{linear:?}");
+        }
+    }
+    use sim_components::shapes::{as_mode, eigen_near, linearised};
+    let cfg = config(&["start.pose = [0.125]"]);
+    let m = (ENTRY.build)(&cfg).unwrap();
+    let (rest, a) = linearised(m.as_ref(), &[0.125]);
+    let pole = -(0.1 + 0.005 * 300.0) / 0.002 - 0.5;
+    let (lambda, _) = eigen_near(&a, rest.len(), [pole / 1.251, 0.0]).unwrap();
+    assert!((lambda[0] / (pole / 1.251) - 1.0).abs() < 1e-3 && lambda[1].abs() < 1e-6, "{lambda:?}");
+    let free = (2e7f64 * (1.0 / 1.051 + 1.0 / 0.2)).sqrt();
+    let (lambda, _) = eigen_near(&a, rest.len(), [0.0, free]).unwrap();
+    assert!((as_mode(lambda).hz / (free / TAU) - 1.0).abs() < 1e-3, "{lambda:?}");
+}
+
 #[test]
 fn passes_the_standard_suite() {
     sim_core::testkit::run_standard_suite(&ENTRY);
