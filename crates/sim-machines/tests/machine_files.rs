@@ -591,7 +591,7 @@ fn the_corexy_moves_as_worked_out_by_hand() {
 /// 0.42 kg on Y, and -0.08 kg between them. The CoreXY's belts move as a whole along X and along Y (0.39 kg, as the
 /// lumps had it) and add -0.01 kg between them (belt A's 1.2 m off the clamps against B's 1.3 m). The portals' belts
 /// ride on the axes that carry them: X carries every belt (4.8 m on the XYZ portal, 2.1 m on the C portal, the Y belt's
-/// 1.1 and 0.8 m on the dual and rack gantries), Y the belts on it.
+/// 2.0 and 1.4 m on the dual and rack gantries), Y the belts on it.
 #[test]
 fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
     type Sum = fn(&[f64], &[f64]) -> f64;
@@ -606,8 +606,8 @@ fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
             4.8 * v[0] * v[0] + 2.4 * v[1] * v[1] + 1.0 * v[2] * v[2]
         }),
         ("portal-c.toml", &[0.3, 0.2, 0.1, 0.0], &[0.6, 0.4, 0.2, 0.0], |_, v| 2.1 * v[0] * v[0] + 0.8 * v[1] * v[1]),
-        ("dual-gantry.toml", &[1.0, 0.3], &[0.6, 0.4], |_, v| 1.1 * (v[0] * v[0] + v[1] * v[1])),
-        ("rack-gantry.toml", &[1.0, 0.2], &[0.6, 0.4], |_, v| 0.8 * (v[0] * v[0] + v[1] * v[1])),
+        ("dual-gantry.toml", &[1.0, 0.3], &[0.6, 0.4], |_, v| 2.0 * (v[0] * v[0] + v[1] * v[1])),
+        ("rack-gantry.toml", &[1.0, 0.2], &[0.6, 0.4], |_, v| 1.4 * (v[0] * v[0] + v[1] * v[1])),
     ];
     for (name, pose, vel, by_hand) in cases {
         let entry = file(name);

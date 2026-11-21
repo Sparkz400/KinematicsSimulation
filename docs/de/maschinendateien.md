@@ -431,7 +431,7 @@ Beschleunigung a zu heben (J Läufer, Kupplung und Spindel), und der Motor einer
   Schrägungswinkel), rechtwinklig dazu, zusammen |F| sqrt(1 + (tan(alpha_n) / cos(beta))²): `rack.<Motor>.radial_load`,
   geprüft als `gearbox-radial-load` gegen `ratings.shaft_max_radial_load_n` des Motors, wo das gesetzt ist. Die
   Axialkraft des schrägverzahnten Ritzels und das Kippen, das sie der Welle gibt, bleiben außen vor. Das X des
-  Zahnstangenportals: 207,4 N von 1500.
+  Zahnstangenportals: 208,0 N von 1500.
 - `effects.belt_stretch` schaltet das elastische Modell der ganzen Maschine: damit verdrehen sich auch die Getriebe der
   Spindeln, Zahnstangen und Rundtische (die Steifigkeit des Wandlers in Reihe), und die Eigenform des Riemens in einer
   Lage enthält sie, bei festgehaltenen Läufern.
@@ -686,11 +686,11 @@ tolerance_m = "gantry.sync_tolerance_m"
   halten die Führungen die Brücke rechtwinklig, und beide teilen gleich. `machines/dual-gantry.toml` hat ein X von 3 m
   auf zwei Zahnstangen mit Katalogmotoren (1FK2103-4AH an S210) und ein Y von 0,8 m auf einem Riemen auf einer Brücke
   von 1,2 m. Es besteht jedes Urteil seines Zyklus: `gantry-sync` 14 µm von 100, und das Ende, nahe dem der Wagen
-  anfängt, trägt mehr (`rack-feed-force` 110 gegen 96 N). Sein Gieren schwingt mit sqrt((k + 2 k_Ende (B / 2)²) / J) / 2 pi
-  mit dem Wagen in der Mitte: 425,4 Hz wie ausgeliefert (J = 2,657 kg m²), über dem Y-Riemen (96,4 Hz) und X auf seinen
-  Zahnstangen (263,0 Hz); der Wagen an einem Ende koppelt X und das Gieren (256,1 und 395,0 Hz). `sim-cli modes
+  anfängt, trägt mehr (`rack-feed-force` 111 gegen 96 N). Sein Gieren schwingt mit sqrt((k + 2 k_Ende (B / 2)²) / J) / 2 pi
+  mit dem Wagen in der Mitte: 425,4 Hz wie ausgeliefert (J = 2,657 kg m²), über dem Y-Riemen (82,2 Hz) und X auf seinen
+  Zahnstangen (262,3 Hz); der Wagen an einem Ende koppelt X und das Gieren (255,6 und 394,8 Hz). `sim-cli modes
   --machine-file machines/dual-gantry.toml --axis-index 1` nennt alle drei mit ihren Dämpfungsgraden (das Gieren 0,144,
-  X 0,088, der Riemen 0,033 in der Mitte); mit J auf 20 kg m² angehoben schwingt das Gieren in der Mitte mit 155,0 Hz,
+  X 0,088, der Riemen 0,039 in der Mitte); mit J auf 20 kg m² angehoben schwingt das Gieren in der Mitte mit 155,0 Hz,
   mit dem Wagen an einem Ende mit 151,7 Hz (`the_dual_gantry_reports_its_yaw_among_its_modes_by_hand`).
 - **Gleichlauf der beiden Antriebe** (`gantry.sync`, `gantry.sync_gain_1_s`, gelesen, wo ein Portal zwei Antriebe hat;
   der erste ist der Master). `"master_slave"`: der Lageregler des Slaves folgt der Istlage des Masters, seinem Sollwert

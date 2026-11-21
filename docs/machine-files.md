@@ -416,7 +416,7 @@ and shaft), and a rack's motor turns i x / r.
   pinion and rack apart, F tan(alpha_n) / cos(beta) (alpha_n = 20 degrees, beta the helix angle), at right angles to it,
   |F| sqrt(1 + (tan(alpha_n) / cos(beta))²) together: `rack.<motor>.radial_load`, judged as `gearbox-radial-load`
   against the motor's `ratings.shaft_max_radial_load_n` where that is set. The helical pinion's axial force and the
-  tilt it puts on the shaft are left out. The rack gantry's X: 207.4 N of 1500.
+  tilt it puts on the shaft are left out. The rack gantry's X: 208.0 N of 1500.
 - `effects.belt_stretch` switches the elastic model of the whole machine: with it the screws', racks' and rotaries'
   gearboxes twist too (the converter's stiffness in series), and the belt's mode at a pose includes them, with the
   rotors held.
@@ -656,11 +656,11 @@ tolerance_m = "gantry.sync_tolerance_m"
   rule: F2 - F1 = 2 m e a / B for a carriage m at e accelerated at a. With the effect off the guides hold the bridge square and the two share equally.
   `machines/dual-gantry.toml` has a 3 m X on two racks with catalogue motors (1FK2103-4AH on S210) and a 0.8 m Y belt
   on a 1.2 m bridge. It passes every verdict on its cycle: `gantry-sync` 14 um of 100, and the end the carriage starts
-  near carries more (`rack-feed-force` 110 against 96 N). Its yaw rings at sqrt((k + 2 k_end (B / 2)²) / J) / 2 pi with
-  the carriage in the middle: 425.4 Hz as shipped (J = 2.657 kg m²), above the Y belt (96.4 Hz) and X on its racks
-  (263.0 Hz); the carriage at an end couples X and the yaw (256.1 and 395.0 Hz). `sim-cli modes --machine-file
+  near carries more (`rack-feed-force` 111 against 96 N). Its yaw rings at sqrt((k + 2 k_end (B / 2)²) / J) / 2 pi with
+  the carriage in the middle: 425.4 Hz as shipped (J = 2.657 kg m²), above the Y belt (82.2 Hz) and X on its racks
+  (262.3 Hz); the carriage at an end couples X and the yaw (255.6 and 394.8 Hz). `sim-cli modes --machine-file
   machines/dual-gantry.toml --axis-index 1` lists all three with their damping ratios (the yaw 0.144, X 0.088, the belt
-  0.033 in the middle); with J raised to 20 kg m² the yaw is 155.0 Hz in the middle, 151.7 Hz with the carriage at an end
+  0.039 in the middle); with J raised to 20 kg m² the yaw is 155.0 Hz in the middle, 151.7 Hz with the carriage at an end
   (`the_dual_gantry_reports_its_yaw_among_its_modes_by_hand`).
 - **Synchronising the two drives** (`gantry.sync`, `gantry.sync_gain_1_s`, read where a gantry has two drives; the
   first is the master). `"master_slave"`: the slave's position loop follows the master's actual position, its
@@ -837,7 +837,7 @@ derivations):
   with Y for Z: its belt weighs mu (L + 8 (0.65 - y)) on X, 0.86 kg at y = 0.1 m where the lumps had 0.42, and
   2 mu (2x - 1) between X and Y), the CoreXY (each belt moves as a whole along X and along Y, as the lumps had it, and
   adds mu (1.2 - 1.3) m = -0.01 kg between them), and the portals and gantries whose Y (and Z) belt rides on the axes
-  that carry it (on X 0.32 kg more on the XYZ portal, 0.105 kg on the C portal, 0.11 and 0.08 kg on the dual and rack
+  that carry it (on X 0.32 kg more on the XYZ portal, 0.105 kg on the C portal, 0.2 and 0.14 kg on the dual and rack
   gantries). Checked by hand and for energy and feedforward
   (`the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand`).
 - The belt's mode (elastic model): the axes, and the frame where it sways, on the belt's stiffness with the pulleys

@@ -17,19 +17,19 @@ fn shipped(name: &str) -> Config {
 }
 
 /// Every mismatch of a machine file's idlers and pulleys with the belt's kinematics, at a pose and per unit speed of
-/// each axis in turn.
-fn mismatches(name: &str, changes: &[&str]) -> Vec<String> {
+/// each axis in turn, and the sections checked (`section id/axis id`).
+fn mismatches(name: &str, changes: &[&str]) -> (Vec<String>, Vec<String>) {
     let mut cfg = shipped(name);
     for change in changes {
         let _ = cfg.set_text(change);
     }
     let net = Netlist::parse(&cfg).unwrap();
     if net.scissor.is_some() || net.linkage.is_some() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
     let machine = ConfigMachine::new(&cfg, &net).unwrap();
     let q: Vec<f64> = (0..machine.n()).map(|i| if i < machine.nt() { 0.37 * machine.stroke[i] } else { 0.0 }).collect();
-    let (mut wrong, mut checked) = (Vec::new(), 0);
+    let (mut wrong, mut checked) = (Vec::new(), Vec::new());
     for axis in 0..machine.nt() {
         let mut v = vec![0.0; machine.n()];
         v[axis] = 1.0;
@@ -58,7 +58,7 @@ fn mismatches(name: &str, changes: &[&str]) -> Vec<String> {
             if (rate - wanted).abs() > 0.05 * (1.0 + wanted.abs()) {
                 continue;
             }
-            checked += 1;
+            checked.push(format!("{}/{}", machine.sections[sec].id, machine.axes[axis].id));
             let Some(start) = route
                 .iter()
                 .position(|w| matches!(w, Waypoint::Body(_)))
@@ -108,8 +108,8 @@ fn mismatches(name: &str, changes: &[&str]) -> Vec<String> {
             }
         }
     }
-    eprintln!("{name}: {checked} sections checked");
-    wrong
+    eprintln!("{name}: {} sections checked", checked.len());
+    (wrong, checked)
 }
 
 #[test]
@@ -119,8 +119,50 @@ fn the_shipped_files_wheels_turn_as_their_belts_run() {
     for entry in std::fs::read_dir(dir).unwrap() {
         let name = entry.unwrap().file_name().into_string().unwrap();
         if name.ends_with(".toml") {
-            wrong.extend(mismatches(&name, &["effects.idlers = true"]));
+            wrong.extend(mismatches(&name, &["effects.idlers = true"]).0);
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The dual and rack gantries' Y belts by hand (machines/dual-gantry.toml, rack-gantry.toml): a loop from the clamp on
+/// the Y carriage to the motor's pulley (section y1, 0.1 + y), round it and back along the other strand to the far idler
+/// on the bridge, 0.1 + stroke + 0.1 from the pulley, and round that to the clamp (y2). A positive turn of the pulley
+/// feeds belt into y1 (its `pulleys` +1) and so takes it out of y2: the carriage moving at +vy draws y1 out, the pulley
+/// turns at vy / r, and the belt runs from the far idler towards the pulley on the strand from it (-vy), from the clamp
+/// towards the far idler on the other (+vy, with the clamp), so it passes the idler at vy the way the pulley's positive
+/// turn moves it: `speed = { y = 1 }`. Round both wheels anticlockwise seen from above: down the clamp's strand, a left
+/// turn round the pulley and up the other strand, a left turn round the idler back (their `clockwise` false; the pulley
+/// spins about +z at -vy / r; `frame_momentum` spins every wheel of these files about y, the normal of the x-z plane
+/// it draws a belt in where none changes with both x and y, which a belt along y cannot turn about). With the far idler in its route y2 is drawn as the belt
+/// runs, so its wheels are checked against the belt's own kinematics along y (they were not: drawn straight back from the
+/// pulley to the clamp its length did not change as the section's does), and match.
+#[test]
+fn the_gantries_y_belts_turn_their_far_idlers_as_they_run() {
+    for name in ["dual-gantry.toml", "rack-gantry.toml"] {
+        let (wrong, checked) = mismatches(name, &["effects.idlers = true"]);
+        assert!(
+            wrong.is_empty(),
+            "{}",
+            wrong.join(
+                "
+"
+            )
+        );
+        assert!(checked.iter().any(|c| c.ends_with("y2/y")), "{name}: {checked:?}");
+        let cfg = shipped(name);
+        let net = Netlist::parse(&cfg).unwrap();
+        let machine = ConfigMachine::new(&cfg, &net).unwrap();
+        let far = net.idlers.iter().position(|d| d.id == "far_y").unwrap();
+        let section = |id: &str| machine.sections.iter().position(|s| s.id.ends_with(id)).unwrap();
+        let (y1, y2) = (section("y1"), section("y2"));
+        let kk = (0..machine.m()).find(|&kk| machine.sections[y1].f[kk] != 0.0).unwrap();
+        assert_eq!((machine.sections[y1].f[kk], machine.sections[y2].f[kk]), (1.0, -1.0), "{name}");
+        assert_eq!(machine.route_waypoints(y2)[1], Waypoint::Idler(far), "{name}");
+        // The idler passes vy, signed by the pulley's feed: +1 per unit of y, nothing per unit of x (it rides on the bridge).
+        assert_eq!(machine.idlers[far].speed[..2], [0.0, 1.0], "{name}");
+        assert!((machine.k[kk][1] * machine.r[kk] - 1.0).abs() < 1e-12, "{name}");
+        // The pulley's turn in the route's sense: the belt runs into y1 against its route (clamp to pulley), -1.
+        assert_eq!(machine.route_sense(y1, kk), -1.0, "{name}");
+    }
 }

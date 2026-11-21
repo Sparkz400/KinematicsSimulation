@@ -100,25 +100,26 @@ fn the_dual_gantry_yaws_at_the_frequency_of_its_inertia_and_its_ends() {
 }
 
 /// The dual-drive gantry's modes as shipped (J = 2.657 kg m2), every one with the pinions and the Y pulley held, by hand.
-/// x carries the bridge (14 kg), the Y carriage and payload (5 kg) and the Y belt's runs (0.11 kg, none of it on the
-/// pulley's lump along x): 19.11 kg on 2 k_end; the yaw J + 5 e^2 on 2 k_end 0.6^2 + 2e5 N m/rad; the Y carriage 5 kg on its
-/// belt's two sections, EA (1 + 300 / 5e5) (1 / (0.1 + y) + 1 / (1.0 - y)) (its runs' 0.11 kg all on the pulley's lump).
-/// The carriage at e = y - 0.4 from the bridge's centre couples x and the yaw by 5 e. In the middle (e = 0): the Y belt
-/// 96.40 Hz, x 262.95 Hz and the yaw sqrt(1.89797e7 / 2.657) / 2 pi = 425.37 Hz; at the end y = 0.8 (e = 0.4) the pair of
-/// x and the yaw from det(K - w^2 M) = 0 with M = [[19.11, 2], [2, 3.457]], 256.12 and 395.01 Hz, and the belt 124.45 Hz. The Y belt's damping ratio is its two
-/// sections' 100 N s/m each over 2 m w; the yaw's and x's take the racks' and the joints' dampers, more than none.
-/// Before the file machine told its modes (`Machine::modes`), it gave its lowest alone, undamped.
+/// x carries the bridge (14 kg), the Y carriage and payload (5 kg) and the Y belt's runs (its loop's 2.0 m, 0.2 kg, none
+/// of it on the pulley's lump along x): 19.2 kg on 2 k_end; the yaw J + 5 e^2 on 2 k_end 0.6^2 + 2e5 N m/rad; the Y
+/// carriage 5 kg on its belt's two sections, EA (1 + 300 / 5e5) (1 / (0.1 + y) + 1 / (1.9 - y)) (its runs' 0.2 kg all on
+/// the pulley's lump). The carriage at e = y - 0.4 from the bridge's centre couples x and the yaw by 5 e. In the middle
+/// (e = 0): the Y belt 82.21 Hz, x 262.34 Hz and the yaw sqrt(1.89797e7 / 2.657) / 2 pi = 425.37 Hz; at the end y = 0.8
+/// (e = 0.4) the belt 71.56 Hz and the pair of x and the yaw from det(K - w^2 M) = 0 with M = [[19.2, 2], [2, 3.457]],
+/// 255.60 and 394.83 Hz. The Y belt's damping ratio is its two sections' 100 N s/m each over 2 m w; the yaw's and x's
+/// take the racks' and the joints' dampers, more than none. Before the file machine told its modes (`Machine::modes`),
+/// it gave its lowest alone, undamped.
 #[test]
 fn the_dual_gantry_reports_its_yaw_among_its_modes_by_hand() {
     let r = pinion_radius();
     let end = 1.0 / (r * r / 35752.6 + 1.0 / 1e8);
     let (k_x, k_yaw, j) = (2.0 * end, 2.0 * end * 0.36 + 2.0e5, 2.657);
     let m = machine(&config("dual-gantry.toml", &[]));
-    let belt = |y: f64| 5e5 * (1.0 + 300.0 / 5e5) * (1.0 / (0.1 + y) + 1.0 / (1.0 - y));
+    let belt = |y: f64| 5e5 * (1.0 + 300.0 / 5e5) * (1.0 / (0.1 + y) + 1.0 / (1.9 - y));
     for y in [0.4, 0.8] {
         let e = y - 0.4;
         // The x and yaw pair: a l^2 - b l + c = 0 for l = w^2.
-        let (m11, m12, m22) = (19.11, 5.0 * e, j + 5.0 * e * e);
+        let (m11, m12, m22) = (19.2, 5.0 * e, j + 5.0 * e * e);
         let (a, b, c) = (m11 * m22 - m12 * m12, k_x * m22 + k_yaw * m11, k_x * k_yaw);
         let root = (b * b - 4.0 * a * c).sqrt();
         let w_belt = (belt(y) / 5.0).sqrt();
@@ -140,7 +141,7 @@ fn the_dual_gantry_reports_its_yaw_among_its_modes_by_hand() {
         assert!(modes.iter().all(|mode| mode.damping > 0.0), "{modes:?}");
     }
     let middle: Vec<f64> = m.modes(&[1.5, 0.4]).iter().map(|mode| mode.hz).collect();
-    assert!((middle[0] - 96.40).abs() < 0.01 && (middle[1] - 262.95).abs() < 0.01, "{middle:?}");
+    assert!((middle[0] - 82.21).abs() < 0.01 && (middle[1] - 262.34).abs() < 0.01, "{middle:?}");
     assert!((middle[2] - 425.37).abs() < 0.01 && close(middle[2], (k_yaw / j).sqrt() / TAU, 1e-9), "{middle:?}");
 }
 
