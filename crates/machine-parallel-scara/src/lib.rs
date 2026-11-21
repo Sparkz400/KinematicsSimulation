@@ -394,6 +394,10 @@ pub struct ParallelScara {
     arm_moment: f64,
     g: f64,
     m_platform: f64,
+    /// Each forearm pair's mass and the share of it the inertia puts at the elbow, for the frame momentum (the rods'
+    /// own, `frame_momentum`).
+    m_forearms: f64,
+    forearm_share: f64,
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
@@ -624,6 +628,8 @@ impl ParallelScara {
             arm_moment: cfg.positive("mass.upper_arm_kg")? * cfg.non_negative("mass.upper_arm_cg_m")? + la * elbow,
             g,
             m_platform: cfg.positive("mass.platform_kg")? + 2.0 * (1.0 - share) * m_fb + carried,
+            m_forearms: m_fb,
+            forearm_share: share,
             m_payload,
             payload_attached: true,
             brake_engaged: false,
@@ -1025,12 +1031,22 @@ impl Machine for ParallelScara {
             }
             add_spin(&mut f, [0.0, 0.0, 1.0], rotor, spin);
         }
-        add_point(&mut f, plate, [p[0], p[1], 0.0], [pv[0], pv[1], 0.0]);
+        // The forearms as the rods they are, whatever share of their inertia the lumped dynamics put at the elbow: a
+        // sixth at each end and two thirds at the middle give a rod's momentum, first moment and angular momentum. What
+        // the split puts at the elbow and at the plate beyond those sixths:
+        let (la, m_fb) = (self.legs.la, self.m_forearms);
+        let (at_elbow, at_plate) = ((self.forearm_share - 1.0 / 6.0) * m_fb, (5.0 / 6.0 - self.forearm_share) * m_fb);
+        add_point(&mut f, plate - 2.0 * at_plate, [p[0], p[1], 0.0], [pv[0], pv[1], 0.0]);
         for k in 0..2 {
             let (side, (sin, cos)) = (SIDE[k], t[k].sin_cos());
             let (dir, ddir) = ([side * cos, -sin, 0.0], [-side * sin, -cos, 0.0]);
             let joint = [side * self.base_radius, 0.0, 0.0];
-            add_turning(&mut f, joint, dir, ddir, w[k], self.arm_inertia, self.arm_moment);
+            let (inertia, moment) = (self.arm_inertia - la * la * at_elbow, self.arm_moment - la * at_elbow);
+            add_turning(&mut f, joint, dir, ddir, w[k], inertia, moment);
+            let end = [p[0] + side * self.platform_radius, p[1], 0.0];
+            let middle: [f64; 3] = std::array::from_fn(|i| 0.5 * (joint[i] + la * dir[i] + end[i]));
+            let speed: [f64; 3] = std::array::from_fn(|i| 0.5 * (la * w[k] * ddir[i] + [pv[0], pv[1], 0.0][i]));
+            add_point(&mut f, 2.0 / 3.0 * m_fb, middle, speed);
             add_spin(&mut f, [0.0, 0.0, -side], self.joints[k].rotor_inertia, rotor_speed[k]);
         }
         Some(f)

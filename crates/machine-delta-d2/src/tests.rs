@@ -106,6 +106,32 @@ fn the_holding_torque_at_the_centre_is_the_plates_weight_shared_out_and_the_arms
     assert!((t.to_degrees() - 1.4290).abs() < 1e-3 && (by_hand + 18.368).abs() < 0.002, "{by_hand} N m");
 }
 
+/// The forearms are rods: their momentum and first moment are their mass at their middles, as their weight is, whatever
+/// share of their inertia the lumped model puts at the elbow. Along a motion the potential energy changes as -g . dc/dt
+/// (`testkit::weight_is_at_the_first_moment`), and at the centre 100 mm below the top 0.1 kg more on each forearm pair
+/// moves the first moment by 0.1 kg times the sum of the rods' middles (elbow at +-(R + L_a cos t), -L_a sin t, plate
+/// joint at +-r, z): x cancels, z = 0.1 (z - L_a sin t) = 0.1 (-0.5 - 0.4 sin 1.4290 deg) = -0.050998 kg m. With the
+/// inertia's share 2/3 at the elbow it took 0.2 (2/3 (-0.009976) + 1/3 (-0.5)) = -0.034664 kg m.
+#[test]
+fn the_forearms_momentum_and_first_moment_are_at_their_middles() {
+    for share in ["mass.forearm_elbow_share = 0.6667", "mass.forearm_elbow_share = 0.5"] {
+        sim_core::testkit::weight_is_at_the_first_moment(&delta(&[share]));
+        let z = -0.5;
+        let moment = |m: &str| {
+            let d = delta(&[share, m]);
+            let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
+            d.equilibrium(&[0.0, z], &mut state, &mut torque);
+            d.frame_momentum(&state).unwrap().first_moment
+        };
+        let (a, b) = (moment("mass.forearm_pair_kg = 0.6"), moment("mass.forearm_pair_kg = 0.7"));
+        let d = delta(&[]);
+        let (t, _) = centre_by_hand(&d, z);
+        let by_hand = 0.1 * (z - d.legs().la * t.sin());
+        close(b[2] - a[2], by_hand, 1e-9, "the first moment's height per 0.1 kg of forearm");
+        assert!((b[0] - a[0]).abs() < 1e-12 && (by_hand + 0.050998).abs() < 1e-6, "{by_hand}");
+    }
+}
+
 /// Static hold at the edge, x = 0.4 m, 100 mm below the top: by the Jacobian's transpose with the Jacobian from central
 /// differences of the forward kinematics (not the machine's own), tau_k = -g m_LG,w cos t_k + m_w g dz/dt_k (weights
 /// as above), at each gearbox. The arm on the far side (arm 2, at 62.5 degrees) carries little: -25.73 N m on arm 1

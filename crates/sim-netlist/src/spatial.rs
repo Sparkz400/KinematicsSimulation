@@ -457,6 +457,10 @@ pub struct Delta {
     /// Per leg, the forearm weight that the lumped inertia split puts at the elbow beyond the half a rod's weight has
     /// there ((share - 1/2) m_fb; 0 with the rods): the weight takes it from the elbow to the platform (`load_n`).
     weight_shift: f64,
+    /// Each forearm pair's mass and the share of it the inertia puts at the elbow (a sixth with the rods), for the
+    /// frame momentum (the rods' own, `frame_momentum`).
+    m_forearms: f64,
+    forearm_share: f64,
     /// The mass at each elbow (elbow block and the forearms' share), which moves with an arm's bend out of its plane.
     /// What moves with an arm's bend out of its plane, at the elbow: the elbow block and the forearms' share, with
     /// effects.arm_tube_inertia the tube's own share and the elbow block's twist too.
@@ -626,6 +630,8 @@ impl Delta {
             tip_moment,
             m_rod_middle: middle * m_fb,
             weight_shift: if rods { 0.0 } else { (share - 0.5) * m_fb },
+            m_forearms: m_fb,
+            forearm_share: share,
             m_lateral,
             m_elbow: elbow,
             tube_mass,
@@ -1311,7 +1317,13 @@ impl Machine for Delta {
         let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
         let ((t, w), (e, ew), (y, yv)) = (self.arms(s), self.elbows(s), self.lateral(s));
         let (p, pv) = self.platform(s);
-        add_point(&mut f, self.m_nt(), p, pv);
+        // The forearms as the rods they are, whatever share of their inertia the lumped dynamics put at the elbow: a
+        // sixth at each end, two thirds at the middle (as with effects.forearm_inertia), so that their weight sits
+        // where the potential has it. What the split puts at the elbow and at the platform beyond those sixths:
+        let m_fb = self.m_forearms;
+        let at_elbow = (self.forearm_share - 1.0 / 6.0) * m_fb;
+        let at_platform = (5.0 / 6.0 - self.forearm_share) * m_fb - self.m_rod_middle;
+        add_point(&mut f, self.m_nt() - 3.0 * at_platform, p, pv);
         let rotor_speed = self.rotors(s).1;
         for i in 0..3 {
             let joint = self.legs.to_base(i, [self.base_radius, 0.0, 0.0]);
@@ -1330,7 +1342,7 @@ impl Machine for Delta {
             add_spin(&mut f, cross(dir, ddir), self.tube_coupling, w[i] + ew[i]);
             let elbow: [f64; 3] = std::array::from_fn(|k| joint[k] + la * tip[k] + y[i] * tangent[k]);
             let elbow_speed: [f64; 3] = std::array::from_fn(|k| la * ew[i] * dtip[k] + yv[i] * tangent[k]);
-            add_point(&mut f, self.m_elbow, elbow, elbow_speed);
+            add_point(&mut f, self.m_elbow - at_elbow, elbow, elbow_speed);
             if self.tube_mass > 0.0 {
                 // Out of the plane the tube's sections move by phi(s) y: momentum int(phi) m y' = 0.3915 m y' at
                 // 0.7265 L_a along the arm (int(xi phi) / int(phi)); the moved sections carry the in-plane momentum
@@ -1348,7 +1360,7 @@ impl Machine for Delta {
             }
             let at_platform = self.legs.to_base(i, [self.platform_radius, 0.0, 0.0]);
             let middle: [f64; 3] = std::array::from_fn(|k| 0.5 * (elbow[k] + p[k] + at_platform[k]));
-            add_point(&mut f, self.m_rod_middle, middle, std::array::from_fn(|k| 0.5 * (elbow_speed[k] + pv[k])));
+            add_point(&mut f, 2.0 / 3.0 * m_fb, middle, std::array::from_fn(|k| 0.5 * (elbow_speed[k] + pv[k])));
             add_spin(&mut f, tangent, self.joints[i].rotor_inertia, rotor_speed[i]);
             if self.rod_spin > 0.0 {
                 let u = sub(p, self.legs.elbows_moved(e, y)[i]);

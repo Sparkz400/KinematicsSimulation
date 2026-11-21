@@ -342,6 +342,34 @@ fn the_arm_tubes_first_moment_takes_its_mass_and_centre_where_given() {
     close(scara(&["mass.upper_arm_kg = 2.0", "mass.upper_arm_cg_m = 0.3"]).arm_moment, 0.6 + elbow, 1e-12, "m c");
 }
 
+/// The forearms are rods: in the frame momentum their mass is at their middles, whatever share of their inertia the
+/// lumped model puts at the elbow, so that the plane's momentum is the rate of where their mass is. 0.1 kg more on each
+/// forearm pair moves the first moment by 0.1 kg times the sum of the rods' middles, (elbow + plate joint) / 2 with
+/// the elbow at (+-(R + L_a cos t), -L_a sin t) and the plate joint at (x +- r, y): at x = 0.1 m, y = -0.6 m,
+/// 0.1 ((elbow_1 + elbow_2) / 2 + (x, y)); the lumped split had 0.1 (2/3 (elbow_1 + elbow_2) + 2/3 (x, y)) there.
+#[test]
+fn the_forearms_first_moment_is_at_their_middles() {
+    let (x, y) = (0.1, -0.6);
+    for share in ["mass.forearm_elbow_share = 0.6667", "mass.forearm_elbow_share = 0.5"] {
+        let moment = |m: &str| {
+            let s = scara(&[share, m]);
+            let (mut state, mut torque) = (Vec::new(), vec![0.0; s.motors().len()]);
+            s.equilibrium(&[x, y, 0.0, 0.0][..s.axes().len()], &mut state, &mut torque);
+            s.frame_momentum(&state).unwrap().first_moment
+        };
+        let (a, b) = (moment("mass.forearm_pair_kg = 0.6"), moment("mass.forearm_pair_kg = 0.7"));
+        let s = scara(&[]);
+        let t = s.legs.inverse([x, y]).unwrap();
+        let (base, la) = (s.base_radius, s.legs.la);
+        let elbows = [0, 1].map(|k| [SIDE[k] * (base + la * t[k].cos()), -la * t[k].sin()]);
+        for i in 0..2 {
+            let by_hand = 0.1 * (0.5 * (elbows[0][i] + elbows[1][i]) + [x, y][i]);
+            close(b[i] - a[i], by_hand, 1e-9, "the first moment per 0.1 kg of forearm");
+        }
+        assert!((b[2] - a[2]).abs() < 1e-12);
+    }
+}
+
 /// The loss-free scara with `edits`.
 fn lossless(edits: &[&str]) -> ParallelScara {
     let mut cfg = lossless_config();

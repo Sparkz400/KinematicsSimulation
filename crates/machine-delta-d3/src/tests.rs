@@ -1173,6 +1173,21 @@ fn on_a_compliant_base_the_capsules_stay_and_the_resonance_is_the_lower() {
     );
 }
 
+/// The forearms' weight is at the frame momentum's first moment, lumped or rods: the potential changes along a motion
+/// as -g . dc/dt (`testkit::weight_is_at_the_first_moment`). Lumped, the frame momentum had their mass at the inertia's
+/// share 2/3 at the elbow where the weight has half.
+#[test]
+fn the_forearms_weight_is_at_the_frame_momentums_first_moment() {
+    for rods in [false, true] {
+        for bending in [false, true] {
+            sim_core::testkit::weight_is_at_the_first_moment(&delta(&[
+                &format!("effects.forearm_inertia = {rods}"),
+                &format!("effects.link_elasticity = {bending}"),
+            ]));
+        }
+    }
+}
+
 /// The forearm pairs' spin in the frame momentum, by hand: the pose and motion of `the_rods_spin_is_the_hand_calculated_one`,
 /// where each leg's pair turns about its own axis e_i = u_i / L at s_i rad/s. A pair's spin inertia 2 I (I = 0.01 kg m^2
 /// a rod, the two rods alike) puts 2 I s_i e_i into the angular momentum, so the momentum with that inertia less that
