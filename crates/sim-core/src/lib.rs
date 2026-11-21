@@ -13,6 +13,6 @@ pub use integrate::{Rk4, advance};
 pub use machine::{
     AxisInfo, BASE_AXES, BeltSection, CamCurve, CamMaster, ENERGY_PARTS, FRICTION_SIGNALS, FrameMomentum,
     FrictionContact, LOSS_PREFIX, Machine, MachineEntry, Mode, MotorInfo, RatingCheck, SignalInfo, TEMPERATURE_PREFIX,
-    THERMAL_KINDS, TORQUE_PARTS, ThermalPart, Train,
+    THERMAL_KINDS, TORQUE_PARTS, ThermalPart, Train, tool_force_on_rates,
 };
 pub use scene::{Aabb, Arrow, Capsule, Label, Obstacle, Part, Scene, Shape};

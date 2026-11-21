@@ -202,7 +202,8 @@ pub struct Sim {
 }
 
 /// The first contact of a run with an obstacle: when (the end of the base step that found it, s), at which tool pose,
-/// how fast the tool went then (the length of its speed vector, axis units per second) and which obstacle. With
+/// how fast the tool went into it (the length of its speed vector at the start of that step, before a push braked it,
+/// axis units per second) and which obstacle. With
 /// effects.crash, from then on: the largest force of the obstacles on the machine (N) and the impact energy, the most
 /// work their pushes had taken out of the machine at any time (J; at the deepest point of a blocked impact, the
 /// kinetic energy the impact took).
@@ -646,6 +647,14 @@ impl Sim {
         // The temperatures the last step ended with; fed back here and not after the parts warm, so that the losses
         // the parts warmed with are those the machine reports after the step.
         self.feed_temperatures_back();
+        // The tool's speed before the step, the impact's if it finds the first contact (its push may brake the tool in
+        // the step already, where it acts at the tool).
+        let approach = (self.contact.is_none() && !self.obstacles.is_empty()).then(|| {
+            let n = self.machine.axes().len();
+            let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+            self.machine.tool_state(&self.state, &mut pos, &mut vel);
+            vel.iter().map(|v| v * v).sum::<f64>().sqrt()
+        });
         self.pushes();
         if self.control.enabled() {
             self.advance_with_windings();
@@ -676,7 +685,7 @@ impl Sim {
         self.machine.after_step(&mut self.state, self.dt);
         let taken = self.pushed();
         if !self.obstacles.is_empty() {
-            self.check_obstacles();
+            self.check_obstacles(approach.unwrap_or(0.0));
         }
         if let Some(contact) = &mut self.contact {
             self.absorbed += taken;
@@ -698,8 +707,9 @@ impl Sim {
         self.step += 1;
     }
 
-    /// The clearance to the obstacles after a base step, which obstacles a part touches, and the first contact.
-    fn check_obstacles(&mut self) {
+    /// The clearance to the obstacles after a base step, which obstacles a part touches, and the first contact, the tool
+    /// at `speed` before the step.
+    fn check_obstacles(&mut self, speed: f64) {
         let bodies = crate::collision::Bodies::of(self.machine.as_ref(), &self.state);
         let mut nearest = (f64::INFINITY, 0);
         self.gaps.clear();
@@ -717,7 +727,6 @@ impl Sim {
             let n = self.machine.axes().len();
             let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
             self.machine.tool_state(&self.state, &mut pos, &mut vel);
-            let speed = vel.iter().map(|v| v * v).sum::<f64>().sqrt();
             // The step counter moves on after this check.
             let time = (self.step + 1) as f64 * self.dt;
             let (peak_force, impact_energy) = (self.contact_force, 0.0);
@@ -729,9 +738,10 @@ impl Sim {
     /// `PUSH_RANGE` of. The depth and its slopes are those of the rigid kinematics at the motors' angles (`forward`,
     /// then `equilibrium`), so that the push is a spring on the motors' angles, which the step integrates with the rest.
     /// A machine that takes a force at its tool (`Machine::set_tool_force`) is pushed there: the push's slopes are then
-    /// the clearance's along the tool's coordinates, its force the generalised force of the contact on them (its
-    /// virtual work per unit of each, wherever on the moving parts it touches), worked out at every stage of the
-    /// integration, and a load on a soft belt stops at the obstacle's face. A machine without it is pushed at its
+    /// the clearance's along the tool's coordinates, its depth the clearance of the parts where they are, its force the
+    /// generalised force of the contact on them (its virtual work per unit of each, wherever on the moving parts it
+    /// touches), worked out at every stage of the integration, and a load on a soft belt stops at the obstacle's face.
+    /// A machine without it is pushed at its
     /// motors through the rigid kinematics, so that a load on a soft transmission swings on into the obstacle by the
     /// transmission's give. Either way the work the pushes take is the budget's crash row.
     fn pushes(&mut self) {
@@ -766,7 +776,14 @@ impl Sim {
             let bodies = crate::collision::Bodies::of(machine, &state);
             near.iter().map(|&k| bodies.gap(&self.obstacles[k].aabb).map_or(f64::INFINITY, |g| g.2)).collect()
         };
-        let depths: Vec<f64> = gaps_at(&angle).into_iter().map(|g| -g).collect();
+        // At the tool the depth is that of the parts where they are (the clearance after the last step), not where the
+        // rigid kinematics put them about the tool: a payload on a leaning axis stands back from its tool point by the
+        // lean, and is held at its face where it touches.
+        let depths: Vec<f64> = if tool_route {
+            near.iter().map(|&k| -self.gaps[k]).collect()
+        } else {
+            gaps_at(&angle).into_iter().map(|g| -g).collect()
+        };
         let mut slopes = vec![vec![0.0; dim]; near.len()];
         for m in 0..dim {
             let mut at = angle.clone();
@@ -799,7 +816,11 @@ impl Sim {
             return 0.0;
         }
         self.contact_force = if self.tool_push {
-            tool_push_forces(self.machine.as_ref(), &self.pushes, &self.push_from, &self.state).2
+            let (force, _, total) = tool_push_forces(self.machine.as_ref(), &self.pushes, &self.push_from, &self.state);
+            // What is sampled after the step (the losses of a gearbox or a guide the push loads) sees the push at its
+            // end, not at the integration's last stage.
+            self.machine.set_tool_force(&force);
+            total
         } else {
             let motors = self.push_from.len();
             let (mut angle, mut speed, mut torque) = (vec![0.0; motors], vec![0.0; motors], vec![0.0; motors]);

@@ -308,6 +308,8 @@ pub struct LinearDelta {
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the tool (`Machine::set_tool_force`), held until changed.
+    push: V3,
     /// The belt axis on each column, all alike.
     r: f64,
     /// Unstretched belt fed per radian of pulley (the radius holds at pretension, as on the one-axis machine).
@@ -441,6 +443,7 @@ impl LinearDelta {
             m_payload: if cfg.bool("effects.payload")? { cfg.non_negative("mass.payload_kg")? } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
+            push: [0.0; 3],
             r,
             r_mat: belt.rest_length(r),
             span_min: cfg.positive("geometry.span_min_m")?,
@@ -738,10 +741,20 @@ impl LinearDelta {
         let (h, v) = self.heights(s);
         let (mass, velocity, gravity) = self.load(h, v);
         let sections: [[SectionForce; 2]; 3] = std::array::from_fn(|k| self.sections(s, k));
+        let push = self.pushed(s);
         let base = std::array::from_fn(|k| {
-            sections[k][0].tension - sections[k][1].tension + gravity[k] - velocity[k] + self.stop_force(h[k], v[k])
+            sections[k][0].tension - sections[k][1].tension + gravity[k] - velocity[k]
+                + self.stop_force(h[k], v[k])
+                + push[k]
         });
         (inverse(&mass).unwrap_or([[f64::NAN; 3]; 3]), base, sections)
+    }
+
+    /// The push at the tool on each carriage: its virtual power per unit of each carriage's speed, through the
+    /// platform's Jacobian (`sim_core::tool_force_on_rates`); zero without a push.
+    fn pushed(&self, s: &[f64]) -> V3 {
+        let rates = if self.elastic { 9..12 } else { 3..6 };
+        sim_core::tool_force_on_rates(self, s, &self.push, rates).map_or([0.0; 3], |q| [q[0], q[1], q[2]])
     }
 
     /// Force of the stops on carriage k.
@@ -770,9 +783,11 @@ impl LinearDelta {
                     - self.brake.torque(self.brake_engaged, speed[k], brakes[k]).0)
                 / r
         });
+        let push = self.pushed(s);
         let rest: V3 = std::array::from_fn(|k| {
             gravity[k] - velocity[k] - self.guide_friction(k, v[k], frictions[k], scales[k]).0
                 + self.stop_force(h[k], v[k])
+                + push[k]
         });
         let rotor_mass = ratio * ratio * self.j_rotor / (r * r);
         let solve = |loss: V3| -> V3 {
@@ -1326,6 +1341,11 @@ impl Machine for LinearDelta {
 
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+    /// The push acts on the platform, beyond the belts, in either model (`pushed`); its power is the budget's crash row.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push = [force[0], force[1], force[2]];
+        true
     }
 
     /// What the belts stretch and the couplings twist at rest anywhere in the working range (`rest_sag`).
