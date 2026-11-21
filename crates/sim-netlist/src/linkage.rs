@@ -734,7 +734,7 @@ impl LinkageMachine {
     }
 
     /// The load's mass matrix M, the velocity term m_nt J^T J' theta', and the generalised gravity Q_g at arm angles t
-    /// and speeds w, with an obstacle's push on the plate F (`set_tool_force`) as J^T F among the outside forces.
+    /// and speeds w.
     fn load(&self, t: V2, w: V2) -> (M2, V2, V2) {
         let (p, j) = self.pose(t);
         let jt = transpose(&j);
@@ -745,10 +745,14 @@ impl LinkageMachine {
         let pv = mul(&j, w);
         let velocity = self.legs.velocity_term(t, p, w, pv).map_or([f64::NAN; 2], |a| mul(&jt, a.map(|v| m * v)));
         let mw = self.weight_platform + if self.payload_attached { self.m_payload } else { 0.0 };
-        let push = mul(&jt, self.tool_push);
-        let gravity: V2 =
-            std::array::from_fn(|k| self.g * self.weight_moment * t[k].cos() - mw * self.g * j[1][k] + push[k]);
+        let gravity: V2 = std::array::from_fn(|k| self.g * self.weight_moment * t[k].cos() - mw * self.g * j[1][k]);
         (mass, velocity, gravity)
+    }
+
+    /// An obstacle's push on the plate F (`set_tool_force`) on the arms, J^T F: in the equations of motion only, not
+    /// in the feedforward or the state at rest (as the machine files' process force and push).
+    fn push(&self, t: V2) -> V2 {
+        mul(&transpose(&self.pose(t).1), self.tool_push)
     }
 
     /// Rigid model: the arms' acceleration, and per joint the torque into its gearbox (after the rotor's own
@@ -761,7 +765,9 @@ impl LinkageMachine {
         let drive: V2 = std::array::from_fn(|k| {
             self.joints[k].rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0
         });
-        let rest: V2 = std::array::from_fn(|k| gravity[k] - velocity[k] + self.joints[k].output_torque(t[k], w[k]));
+        let push = self.push(t);
+        let rest: V2 =
+            std::array::from_fn(|k| gravity[k] + push[k] - velocity[k] + self.joints[k].output_torque(t[k], w[k]));
         let solve = |loss: V2| -> V2 {
             let m: M2 = std::array::from_fn(|r| {
                 std::array::from_fn(|c| {
@@ -1040,13 +1046,13 @@ impl Machine for LinkageMachine {
             return;
         }
         let (t, w) = self.arms(s);
-        let (mass, velocity, gravity) = self.load(t, w);
+        let ((mass, velocity, gravity), push) = (self.load(t, w), self.push(t));
         let mut rhs = [0.0; 2];
         for k in 0..2 {
             let joint = &self.joints[k];
             let (gear, rotor_acc, brake_rate) =
                 joint.rotor(torque[k], s[4 + k], s[6 + k], t[k], w[k], s[8 + k], self.brake_engaged);
-            rhs[k] = gear.output + gravity[k] - velocity[k] + joint.output_torque(t[k], w[k]);
+            rhs[k] = gear.output + gravity[k] + push[k] - velocity[k] + joint.output_torque(t[k], w[k]);
             out[4 + k] = s[6 + k];
             out[6 + k] = rotor_acc;
             out[8 + k] = brake_rate;
@@ -1158,7 +1164,7 @@ impl Machine for LinkageMachine {
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
     }
-    /// The push acts on the plate, the tool (`load`): its generalised forces J^T F on the arms, whose power F . v is
+    /// The push acts on the plate, the tool (`push`): its generalised forces J^T F on the arms, whose power F . v is
     /// the plate's speed times it.
     fn set_tool_force(&mut self, force: &[f64]) -> bool {
         self.tool_push = [force[0], force[1]];

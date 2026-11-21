@@ -319,16 +319,21 @@ impl ScissorMachine {
         self.m_weight + if self.payload_attached { self.m_payload } else { 0.0 }
     }
 
-    /// M, the velocity term m h' h'' w^2 and Q_g at theta and its speed w, with an obstacle's push F on the platform
-    /// (`set_tool_force`) as h' F among the outside forces.
+    /// M, the velocity term m h' h'' w^2 and Q_g at theta and its speed w.
     fn load(&self, theta: f64, w: f64) -> (f64, f64, f64) {
         let [_, d1, d2] = self.height(theta);
         let (turn, turn_rate) = self.geometry.arm_motion(theta, self.arms);
         (
             self.screw_inertia + self.m_nt() * d1 * d1 + turn,
             (self.m_nt() * d1 * d2 + turn_rate) * w * w,
-            (self.tool_push - self.g * self.m_g()) * d1,
+            -self.g * self.m_g() * d1,
         )
+    }
+
+    /// An obstacle's push F on the platform (`set_tool_force`) on the arms' angle, h' F: in the equations of motion
+    /// only, not in the feedforward or the state at rest.
+    fn push(&self, theta: f64) -> f64 {
+        self.tool_push * self.height(theta)[1]
     }
 
     fn rotor(&self, s: &[f64]) -> (f64, f64) {
@@ -345,7 +350,7 @@ impl ScissorMachine {
         let (mass, velocity, gravity) = self.load(theta, w);
         let j = &self.joint;
         let drive = j.rigid_drive(torque, rotor, rotor_speed, self.brake(s), self.brake_engaged).0;
-        let rest = gravity - velocity + j.output_torque(theta, w);
+        let rest = gravity + self.push(theta) - velocity + j.output_torque(theta, w);
         let first = (drive + rest) / (mass + j.reflected_inertia());
         let loss = j.gearbox.loss_factor(drive - j.reflected_inertia() * first, w);
         let acc = (loss * drive + rest) / (mass + loss * j.reflected_inertia());
@@ -462,7 +467,7 @@ impl Machine for ScissorMachine {
         let (theta, w) = (s[0], s[1]);
         let (mass, velocity, gravity) = self.load(theta, w);
         let (gear, rotor_acc, brake_rate) = j.rotor(torque[0], s[2], s[3], theta, w, s[4], self.brake_engaged);
-        let acc = (gear.output + gravity - velocity + j.output_torque(theta, w)) / mass;
+        let acc = (gear.output + gravity + self.push(theta) - velocity + j.output_torque(theta, w)) / mass;
         out[..5].copy_from_slice(&[w, acc, s[3], rotor_acc, brake_rate]);
     }
 
@@ -511,7 +516,7 @@ impl Machine for ScissorMachine {
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
     }
-    /// The push acts on the platform, the tool (`load`): h' F on the arms' angle, whose power is F times the platform's
+    /// The push acts on the platform, the tool (`push`): h' F on the arms' angle, whose power is F times the platform's
     /// speed.
     fn set_tool_force(&mut self, force: &[f64]) -> bool {
         self.tool_push = force[0];

@@ -875,11 +875,6 @@ impl Delta {
                 load.1[r] -= (0..3).map(|k| jp[k][r] * f[k]).sum::<f64>();
             }
         }
-        // An obstacle's push on the platform (`set_tool_force`), P^T F with the outside forces: on the elbows (and
-        // their moves) beyond the tubes, so on the joints through the bending springs where the arms bend.
-        for r in 0..N {
-            load.2[r] += (0..3).map(|k| jp[k][r] * self.tool_push[k]).sum::<f64>();
-        }
         let elbows = self.legs.elbows_moved(t, y);
         for i in 0..3 {
             load.0[i][i] += inertia;
@@ -985,9 +980,15 @@ impl Delta {
     /// What the joints carry at state s, as `load` has it: mass matrix, velocity term, gravity. With bending arms only
     /// the tubes are on the joints, and the springs' torque stands in for the rest: its weight Q_d in the gravity, the
     /// remainder in the velocity term (so that the torque breakdown shows the weight as gravity).
+    /// An obstacle's push on the platform (`set_tool_force`) is in these equations of motion only, not in the
+    /// feedforward or the state at rest (`push`): with rigid arms in the gravity, with bending ones beyond the tubes.
     fn joint_load(&self, s: &[f64]) -> (M3, V3, V3) {
         let (t, w) = self.arms(s);
-        let Some(b) = self.bending else { return self.load(t, w) };
+        let Some(b) = self.bending else {
+            let (mass, velocity, gravity) = self.load(t, w);
+            let push = self.push::<3>(t, [0.0; 3]);
+            return (mass, velocity, std::array::from_fn(|i| gravity[i] + push[i]));
+        };
         let ((elbows, _), (bend, rate), (y, _)) = (self.elbows(s), self.bend(s), self.lateral(s));
         let (_, _, tip) = self.load_n::<6>(elbows, y, [0.0; 3], [0.0; 3], self.m_nt(), false);
         let mut mass: M3 =
@@ -1014,12 +1015,22 @@ impl Delta {
     fn distal(&self, s: &[f64], b: Bending) -> ([[f64; 6]; 6], [f64; 6]) {
         let ((elbows, speeds), (bend, rate), (y, yv)) = (self.elbows(s), self.bend(s), self.lateral(s));
         let (mass, velocity, gravity) = self.load_n::<6>(elbows, y, speeds, yv, self.m_nt(), false);
+        let push = self.push::<6>(elbows, y);
         let rhs = std::array::from_fn(|i| {
             let spring =
                 if i < 3 { b.k * bend[i] + b.c * rate[i] } else { b.k_lateral * y[i - 3] + b.c_lateral * yv[i - 3] };
-            gravity[i] - velocity[i] - spring
+            gravity[i] + push[i] - velocity[i] - spring
         });
         (mass, rhs)
+    }
+
+    /// An obstacle's push F on the platform (`set_tool_force`) at elbow angles t and moves y: P^T F on the angles and,
+    /// after them, on the moves (P = [J, J_y], the platform's Jacobian).
+    fn push<const N: usize>(&self, t: V3, y: V3) -> [f64; N] {
+        let (_, j, jy) = self.pose_moved(t, y);
+        std::array::from_fn(|c| {
+            (0..3).map(|k| if c < 3 { j[k][c] } else { jy[k][c - 3] } * self.tool_push[k]).sum::<f64>()
+        })
     }
 
     /// With bending arms, the rates of the bend states into `out`, from the joints' acceleration `acc`: the elbows'
@@ -1565,7 +1576,7 @@ impl Machine for Delta {
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
     }
-    /// The push acts on the platform, the tool (`load_n`): its generalised forces P^T F on the coordinates its place
+    /// The push acts on the platform, the tool (`push`, in `joint_load` and `distal`): its generalised forces P^T F on the coordinates its place
     /// moves with, whose power F . v is the platform's speed times it.
     fn set_tool_force(&mut self, force: &[f64]) -> bool {
         self.tool_push = [force[0], force[1], force[2]];

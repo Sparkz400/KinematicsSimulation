@@ -680,9 +680,9 @@ fn push_into_slab(entry: &'static MachineEntry, side: f64, gap: f64, travel: f64
 /// at the motors the arms and gearboxes gave way on top of it. The push's power goes into the motion exactly: at the
 /// start pose moving at 0.05 m/s along each axis, a push changes the rate of the machine's energy (`energy`'s gradient
 /// times the change of the state's rates) by F . v_tool, to 1e-6 (central differences of the energy). The budget of the
-/// move into the obstacle closes with the crash row within `BUDGET_TOLERANCE` (measured: planar delta 2.3e-6 of the
-/// supply, 9.1e-6 for the same move without a contact; D3 9.1e-7, 3.5e-5 without; the scissor lift 3.4e-4, 2.8e-7
-/// without, its screw pushing 28 kN into the ceiling). Planar delta and D3: the plate lowered 0.04 m
+/// move into the obstacle closes with the crash row within `BUDGET_TOLERANCE` (measured: planar delta 2.2e-6 of the
+/// supply, 9.1e-6 for the same move without a contact; D3 1.1e-6, 3.5e-5 without; the scissor lift 2.3e-4, 2.8e-7
+/// without, at 28 kN in the ceiling). Planar delta and D3: the plate lowered 0.04 m
 /// onto a slab 0.02 m under its lowest part; the scissor lift's platform raised 0.04 m into a ceiling 0.02 m over it.
 #[test]
 fn the_linkage_delta_and_scissor_files_are_pushed_at_their_tool() {
@@ -700,32 +700,43 @@ fn the_linkage_delta_and_scissor_files_are_pushed_at_their_tool() {
         let tolerance = sim_components::analysis::BUDGET_TOLERANCE;
         assert!(crash > 0.0 && rest.abs() < tolerance * supply, "{id}: {rest} J of {supply} J");
 
-        let Sim { mut machine, state, .. } = Sim::new(entry, &entry.config()).unwrap();
-        let (n, len) = (machine.axes().len(), machine.state_len());
-        let push: Vec<f64> = (0..n).map(|i| 50.0 * (1.0 + i as f64)).collect();
-        let mut s = state[..len].to_vec();
-        machine.set_tool_velocity(&mut s, &vec![0.05; n]);
-        let torque = vec![0.0; machine.motors().len()];
-        let (mut pushed, mut free) = (vec![0.0; len], vec![0.0; len]);
-        assert!(machine.set_tool_force(&push), "{id}");
-        machine.derivatives(&s, &torque, &mut pushed);
-        machine.set_tool_force(&vec![0.0; n]);
-        machine.derivatives(&s, &torque, &mut free);
-        let rate: f64 = (0..len)
-            .map(|i| {
-                let h = 1e-6 * s[i].abs().max(1.0);
-                let (mut up, mut down) = (s.clone(), s.clone());
-                (up[i], down[i]) = (s[i] + h, s[i] - h);
-                (machine.energy(&up) - machine.energy(&down)) / (2.0 * h) * (pushed[i] - free[i])
-            })
-            .sum();
-        let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
-        machine.tool_state(&s, &mut pos, &mut vel);
-        let power: f64 = push.iter().zip(&vel).map(|(f, v)| f * v).sum();
-        println!("{id}: {rate} W against F . v = {power} W");
-        assert!(
-            power.abs() > 1e-3 && (rate - power).abs() < 1e-6 * power.abs().max(1.0),
-            "{id}: {rate} W, not {power} W"
-        );
+        // The power identity as shipped, rigid without the gearbox loss (whose factor follows the load the push puts on
+        // it), and on the D3 with its arms bending (the push on the elbows' angles and
+        // moves beyond the tubes).
+        let mut models = vec![vec![], vec!["effects.joint_elasticity = false", "effects.gearbox_efficiency = false"]];
+        if entry.id == spatial_file().id {
+            models.push(vec!["effects.link_elasticity = true"]);
+        }
+        for changes in models {
+            let mut cfg = entry.config();
+            changes.iter().for_each(|c| cfg.set_text(c).unwrap());
+            let Sim { mut machine, state, .. } = Sim::new(entry, &cfg).unwrap();
+            let (n, len) = (machine.axes().len(), machine.state_len());
+            let push: Vec<f64> = (0..n).map(|i| 50.0 * (1.0 + i as f64)).collect();
+            let mut s = state[..len].to_vec();
+            machine.set_tool_velocity(&mut s, &vec![0.05; n]);
+            let torque = vec![0.0; machine.motors().len()];
+            let (mut pushed, mut free) = (vec![0.0; len], vec![0.0; len]);
+            assert!(machine.set_tool_force(&push), "{id}");
+            machine.derivatives(&s, &torque, &mut pushed);
+            machine.set_tool_force(&vec![0.0; n]);
+            machine.derivatives(&s, &torque, &mut free);
+            let rate: f64 = (0..len)
+                .map(|i| {
+                    let h = 1e-6 * s[i].abs().max(1.0);
+                    let (mut up, mut down) = (s.clone(), s.clone());
+                    (up[i], down[i]) = (s[i] + h, s[i] - h);
+                    (machine.energy(&up) - machine.energy(&down)) / (2.0 * h) * (pushed[i] - free[i])
+                })
+                .sum();
+            let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+            machine.tool_state(&s, &mut pos, &mut vel);
+            let power: f64 = push.iter().zip(&vel).map(|(f, v)| f * v).sum();
+            println!("{id} {changes:?}: {rate} W against F . v = {power} W");
+            assert!(
+                power.abs() > 1e-3 && (rate - power).abs() < 1e-6 * power.abs().max(1.0),
+                "{id} {changes:?}: {rate} W, not {power} W"
+            );
+        }
     }
 }

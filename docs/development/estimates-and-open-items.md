@@ -538,16 +538,18 @@ Fixed:
   and the five-axis files have no spans (their belt mass stays lumped).
 
 - An obstacle's push at the tool for the linkage, spatial delta and scissor machines (section 4's row: pushed at the
-  motors), and with them the D2, D3 and D4 crates, whose arms they are (22 November): `set_tool_force` puts J^T F
-  into the arms' outside forces (`load`; the spatial delta's `load_n` P^T F, on the elbows and their moves beyond the
-  tubes where the arms bend, on the joints through the bending springs; the scissor's h' F), the push in the frame
-  momentum's outside force; the D4 forwards x, y, z to its arms and puts c on its turn. Files
-  (`the_linkage_delta_and_scissor_files_are_pushed_at_their_tool`, fails without: planar delta 0.364 mm deep against F / k
-  0.123 mm): depth F / k to 1e-5 (planar delta 0.1219 mm at 1219 N, D3 0.1499 mm at 1499 N, scissor 2.826 mm at
-  28.26 kN), the push's power F . v to 1e-8; budgets 2.3e-6 (planar delta), 9.1e-7 (D3) and 3.4e-4 (scissor) of the
-  supply, the same moves without contact 9.1e-6, 3.5e-5, 2.8e-7, so the brief's 1e-6 is the integration's, not the
-  push's, on the deltas. Crates (`collision.rs`, no longer ignored): D2 98.07 um at 980.7 N, budget 2.6e-6, D3 111.5 um
-  at 1115 N, 1.3e-5, D4 111.7 um at 1117 N, 1.6e-5 of the supply and potential energy.
+  motors), and with them the D2, D3 and D4 crates, whose arms they are (22 November): `set_tool_force` puts J^T F on
+  the arms in their equations of motion only (`push`: the rigid solve and the elastic derivatives; not the feedforward
+  or the state at rest, as the machine files' process force and push; the spatial delta P^T F in `joint_load`, with
+  bending arms in `distal` on the elbows' angles and moves beyond the tubes; the scissor's h' F), and the push into the
+  frame momentum's outside force; the D4 forwards x, y, z to its arms and puts c on its turn. Files
+  (`the_linkage_delta_and_scissor_files_are_pushed_at_their_tool`, fails without: planar delta 0.364 mm deep against
+  F / k 0.123 mm): depth F / k to 1e-5 (planar delta 0.1219 mm at 1219 N, D3 0.1500 mm at 1500 N, scissor 2.827 mm at
+  28.27 kN), the push's power F . v to 1e-7 as shipped, rigid without the gearbox loss and with the D3's arms bending;
+  budgets 2.2e-6 (planar delta), 1.1e-6 (D3) and 2.3e-4 (scissor) of the supply, the same moves without contact
+  9.1e-6, 3.5e-5, 2.8e-7: on the deltas the brief's 1e-6 is the integration's floor, not the push's; the scissor's
+  2.3e-4 is not explained. Crates (`collision.rs`, no longer ignored): D2 98.07 um at 980.7 N, budget 6.9e-9, D3
+  111.5 um at 1115 N, 9.1e-6, D4 111.8 um at 1118 N, 8.1e-6 of the supply and potential energy.
 
 - The T-gantry file's tilting runs on the beam mode (section 4: their angular momentum at the run's middle): a point at
   the share xi of the way from the post's pulley f to the carriage end c goes down by xi w, so the run's angular
