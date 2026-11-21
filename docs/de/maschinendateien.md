@@ -440,7 +440,10 @@ Beschleunigung a zu heben (J Läufer, Kupplung und Spindel), und der Motor einer
   Lage enthält sie, bei festgehaltenen Läufern.
 
 `machines/screw-portal.toml` ist das XYZ-Portal, dessen Z-Riemen durch einen Kugelgewindetrieb 16 x 10 hinter einer
-Balgkupplung ersetzt ist; die Bremse des Z-Motors hält den Schlitten (0,055 N m von ihren 0,5).
+Balgkupplung ersetzt ist; die Bremse des Z-Motors hält den Schlitten (0,055 N m von ihren 0,5). Seine X- und
+Y-Riemen (und die des C-Portals und beider Fünfachsdateien, die auf ihm aufbauen) sind Schleifen um je eine ferne
+Umlenkrolle, `far_x` am Gestell und `far_y` auf der Brücke, 0,1 m + Hub + 0,1 m von der Scheibe (die Eigenform von X an
+seinem fernen Ende 39,69 Hz, 74,48, als sie ihre Längen aufteilten; `the_screw_portals_belts_ring_on_their_loops_by_hand`).
 `machines/rack-gantry.toml` ist ein Zweiachsportal mit einem 3 m langen X an Zahnstange und Ritzel (Modul 2, 200 mm je
 Umdrehung) hinter einem Getriebe der Übersetzung 10 und Y an einem Riemen. Beide bestehen jede Prüfung auf ihren
 Zyklen (`screw-speed` 2402 von zulässigen 9833 U/min, `rack-feed-force` 180 von 2400 N). Die Kugelgewinde-,
@@ -616,7 +619,8 @@ mitgelieferten Crates ist das `mech::wrap_angle`, eine halbe Umdrehung weniger d
 Spindel, Zahnstange, Linearmotor oder Rundtisch hat keine Umschlingung (NaN in `Machine::belt_wraps`; die Zahnlast
 übergeht ihn). Abgelehnt wird eine Datei, wo eine Riemenscheibe nicht eine Route beendet und eine andere beginnt, oder
 sie oder ein Rad neben ihr kein `at_m` hat. Das Spindelportal mit eingeschalteter Umschlingung: der Riemen von X läuft
-von der Klemme der Brücke um seine Scheibe und zur selben Klemme zurück, pi + 2 asin(r / D) um sie.
+von der Klemme der Brücke um seine Scheibe zur fernen Umlenkrolle am Gestell (eine Schleife), pi + asin(r / D) +
+asin((r - r_f) / d) um sie, D von der Klemme und d von der fernen Umlenkrolle.
 
 Die 3D-Ansicht zeichnet jeden Riemenabschnitt um seine Räder, wie die Umschlingung sie sieht: von Tangente zu Tangente
 zwischen den Rädern seiner Route und um jedes Rad innerhalb der Route in dessen Sinn, und um jede Motorscheibe zwischen

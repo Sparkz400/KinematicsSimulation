@@ -600,7 +600,7 @@ fn the_corexy_moves_as_worked_out_by_hand() {
 /// L = 4.2 m, so at x = 0.3, y = 0.1 the belt weighs mu (4.2 + 8 * 0.55) = 0.86 kg on X where the lumps had 0.42,
 /// 0.42 kg on Y, and -0.08 kg between them. The CoreXY's belts move as a whole along X and along Y (0.39 kg, as the
 /// lumps had it) and add -0.01 kg between them (belt A's 1.2 m off the clamps against B's 1.3 m). The portals' belts
-/// ride on the axes that carry them: X carries every belt (4.8 m on the XYZ portal, 2.1 m on the C portal, the Y belt's
+/// ride on the axes that carry them: X carries every belt (4.8 m on the XYZ portal, 3.8 m on the C portal, the Y belt's
 /// 2.0 and 1.4 m on the dual and rack gantries), Y the belts on it.
 #[test]
 fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
@@ -615,7 +615,7 @@ fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
         ("xyz-portal.toml", &[0.3, 0.2, 0.1], &[0.6, 0.4, 0.2], |_, v| {
             4.8 * v[0] * v[0] + 2.4 * v[1] * v[1] + 1.0 * v[2] * v[2]
         }),
-        ("portal-c.toml", &[0.3, 0.2, 0.1, 0.0], &[0.6, 0.4, 0.2, 0.0], |_, v| 2.1 * v[0] * v[0] + 0.8 * v[1] * v[1]),
+        ("portal-c.toml", &[0.3, 0.2, 0.1, 0.0], &[0.6, 0.4, 0.2, 0.0], |_, v| 3.8 * v[0] * v[0] + 1.4 * v[1] * v[1]),
         ("dual-gantry.toml", &[1.0, 0.3], &[0.6, 0.4], |_, v| 2.0 * (v[0] * v[0] + v[1] * v[1])),
         ("rack-gantry.toml", &[1.0, 0.2], &[0.6, 0.4], |_, v| 1.4 * (v[0] * v[0] + v[1] * v[1])),
     ];
@@ -984,6 +984,43 @@ fn the_portals_x_and_y_belts_ring_on_their_loops_by_hand() {
     let y = hz(0.6, 0.8, 7.5 + 0.1 * (2.4 - 1.6));
     let at_y = machine.resonance_hz(&[0.1, 0.5, 0.15]).unwrap();
     assert!(close(at_y, y, 1e-9) && (y - 69.8303).abs() < 1e-4, "Y: {at_y} against {y} by hand");
+}
+
+/// The screw portal's family (machines/screw-portal.toml, portal-c.toml, five-axis.toml, five-axis-table.toml) has the
+/// XYZ portal's X and Y loops, now with their far idlers in the routes (far_x on the frame at x = 1.1 m, far_y on the
+/// bridge 0.7 m from the Y pulley): sections x2 2.3 m and y2 1.3 m, the clamp to the motor 0.1 + q. With the pulleys held
+/// each axis rings on its two sections, k = EA (1 + 300 / 5e5) (1 / l1 + 1 / l2), carrying what rides on it: X at its
+/// far end (1.1 and 1.3 m) the bridge, the Y carriage, the Z slide and the payload, 13.5 kg, with the C portal's gripper
+/// 1.5 kg and its belts' runs beyond the half of the 3.8 m of belt lumped on each pulley, 0.1 (3.8 - 1.9) kg (the other
+/// files have no spans), the five-axis head's 3 + 4 kg (the five-axis table's file has the screw portal's belts, its
+/// tool's coordinates are the workpiece's on the table, so it is not compared at a pose here). Y in the
+/// middle of its stroke with X at its start (0.35 and 1.05 m) on the screw portal: the Y carriage, Z slide and payload,
+/// 7.5 kg. Each the lowest mode there. Before the loops (the run from the motor to the far idler 0.1 m) the screw
+/// portal's X far end rang at 74.48 Hz on a return section of 0.2 m, its Y in the middle at 92.64 Hz.
+#[test]
+fn the_screw_portals_belts_ring_on_their_loops_by_hand() {
+    let hz = |l1: f64, l2: f64, m: f64| {
+        (5e5 * (1.0 + 300.0 / 5e5) * (1.0 / l1 + 1.0 / l2) / m).sqrt() / std::f64::consts::TAU
+    };
+    for (name, x_mass, y_mass, pose_x, pose_y) in [
+        ("screw-portal.toml", 13.5, Some(7.5), vec![1.0, 0.25, 0.1], vec![0.0, 0.25, 0.1]),
+        // The C portal's tip is 0.1 m along x off its C axis at C = 0; its lowest mode with X at its start is the
+        // gripper turning C with Y (58.9 Hz), and the five-axis head's couples Y with its rotaries (55.7 Hz against the
+        // belt's 57.7 alone), so Y is not compared there.
+        ("portal-c.toml", 15.0 + 0.19, None, vec![1.1, 0.25, 0.1, 0.0], vec![0.1, 0.25, 0.1, 0.0]),
+        ("five-axis.toml", 20.5, None, vec![1.0, 0.25, 0.1, 0.0, 0.0], vec![0.0, 0.25, 0.1, 0.0, 0.0]),
+    ] {
+        let entry = file(name);
+        let machine = (entry.build)(&entry.config()).unwrap();
+        let x = hz(1.1, 1.3, x_mass);
+        let at_x = machine.resonance_hz(&pose_x).unwrap();
+        eprintln!("{name}: X {at_x} against {x} by hand, Y {:?}", machine.resonance_hz(&pose_y));
+        assert!(close(at_x, x, 1e-9), "{name} X: {at_x} against {x} by hand");
+        if let Some(m) = y_mass {
+            let (y, at_y) = (hz(0.35, 1.05, m), machine.resonance_hz(&pose_y).unwrap());
+            assert!(close(at_y, y, 1e-9), "{name} Y: {at_y} against {y} by hand");
+        }
+    }
 }
 
 /// The 3D view draws the belt round its wheels: a strip per straight run from tangent to tangent, and 8 round each

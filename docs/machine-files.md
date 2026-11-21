@@ -425,7 +425,10 @@ and shaft), and a rack's motor turns i x / r.
   rotors held.
 
 `machines/screw-portal.toml` is the XYZ portal with its Z belt replaced by a ball screw 16 x 10 behind a bellows coupling,
-the Z motor's brake holding the slide (0.055 N m of its 0.5); `machines/rack-gantry.toml` is a two-axis gantry with a
+the Z motor's brake holding the slide (0.055 N m of its 0.5); its X and Y belts (and those of the C portal and both
+five-axis files built on it) are loops round a far idler each, `far_x` on the frame and `far_y` on the bridge, 0.1 m +
+stroke + 0.1 m from the pulley (X's mode at its far end 39.69 Hz, 74.48 when they shared their lengths out;
+`the_screw_portals_belts_ring_on_their_loops_by_hand`); `machines/rack-gantry.toml` is a two-axis gantry with a
 3 m X on a rack and pinion (module 2, 200 mm per turn) behind a gearbox of ratio 10 and Y on a belt. Both pass every
 verdict on their cycles (`screw-speed` 2402 of 9833 r/min allowed, `rack-feed-force` 180 of 2400 N). The joint kit's
 screw, rack, linear motor and rotary table axes written as files give the kit's verdicts digit for digit.
@@ -590,7 +593,8 @@ far the belt turns round the pulley between them. For the shipped crates' layout
 turn less the lean of both runs. A motor with a screw, rack, linear motor or rotary has no wrap (NaN in
 `Machine::belt_wraps`; the tooth load passes it over). A file is refused where a belt pulley does not end one route
 and start another, or it or a wheel next to it has no `at_m`. The screw portal with the wrap on: X's belt runs from the
-bridge's clamp round its pulley and back to the same clamp, pi + 2 asin(r / D) round it.
+bridge's clamp round its pulley to the far idler on the frame (a loop), pi + asin(r / D) + asin((r - r_f) / d) round
+it, D from the clamp and d from the far idler.
 
 The 3D view draws each belt section round its wheels, as the wrap sees them: from tangent to tangent between the wheels
 of its route and round each wheel inside the route in the wheel's sense, and round each motor pulley between the
@@ -856,7 +860,7 @@ derivations):
   with Y for Z: its belt weighs mu (L + 8 (0.65 - y)) on X, 0.86 kg at y = 0.1 m where the lumps had 0.42, and
   2 mu (2x - 1) between X and Y), the CoreXY (each belt moves as a whole along X and along Y, as the lumps had it, and
   adds mu (1.2 - 1.3) m = -0.01 kg between them), and the portals and gantries whose Y (and Z) belt rides on the axes
-  that carry it (on X 0.32 kg more on the XYZ portal, 0.105 kg on the C portal, 0.2 and 0.14 kg on the dual and rack
+  that carry it (on X 0.32 kg more on the XYZ portal, 0.19 kg on the C portal, 0.2 and 0.14 kg on the dual and rack
   gantries). Checked by hand and for energy and feedforward
   (`the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand`).
 - The belt's mode (elastic model): the axes, and the frame where it sways, on the belt's stiffness with the pulleys

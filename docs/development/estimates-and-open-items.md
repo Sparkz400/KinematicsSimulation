@@ -112,7 +112,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The screw's stiffness along the stroke keeps the far end's for the wafer handler's and the parallel SCARA's pose tolerance (their own `rest_sag`, `machine-wafer-handler` and `machine-parallel-scara`: the column's m g / K with the far end's K, the stroke's `static_twist`), on the safe side; `chain.rs`'s takes the nut, and since 21 November the fit's twist (`Machine::twist_at`) and the mesh bristle (σ_m r, its store still not booked: at most (μ |held|)² / (2σ_m) per gear) follow the nut too | wafer handler, parallel SCARA | The tolerance up to the far end's sag over the pose's. |
 | The tilting runs' angular momentum on the beam's mode in the machine file: at the run's middle, where the crate has their tilt's weighted point (2/3 of the way to the carriage) | T-gantry file | The runs' linear momentum and first moment agree; about y their lever differs by a sixth of a run (up to 0.19 m) on 0.26 kg / 2: up to 0.025 N m s per m/s of w' (the beam vibrates at micrometres). Not compared by a test. |
 | The belt's angular momentum of the T-gantry file against its crate: the file takes each run's mass at the middle of its straight piece as drawn (carriage idlers 0.032 m above and below the carriage, bottom idler 0.08 m under the Z axis's point, the pulleys and idlers drawn 0.02 m in front of the bodies), the crate its belt path (horizontal runs at the carriage's height, vertical ones at its x, the lumps spinning on the pulleys) | T-gantry | Over 1 s of the default cycle up to 1.3e-3 N m s about y and 1.1e-3 about x (none in the crate) at up to 0.25 m/s, against 0.42 kg of belt (measured; the test holds them under 0.42 kg x 0.05 m and 0.02 m times the speed, bounds, not hand values); bodies, linear momentum and first moment agree to rounding (`the_t_gantry_file_has_its_crates_angular_momentum`). |
-| The X and Y belts of the screw portal, the C portal and the five-axis files share their section lengths out (0.1 m from the motor to the far idler) and draw no far idler | machine files | As the XYZ portal's did before 21 November: there the X belt's mode at its far end 73.9 against 39.2 Hz as a loop. Without the far idler in a route its runs' angular momentum is left out of the frame momentum (`run_midpoints`). |
+| The XYZ portal's X and Y belts are loops by their lengths but draw no far idler in their routes (the screw portal's family has them since 22 November); its Z pulley stands at its `at_m`, not on the Y carriage | XYZ portal file | Without the far idler in a route its runs' angular momentum is left out of the frame momentum (`run_midpoints`) and the wheels' check skips the second section; only with effects.base_compliance (off). |
 | Belt-to-pulley heat conduction | linear delta | Not sized. |
 | The tube's single-mode shape for inertia with the static stiffness 3EI/L | D3, D4, H4 arm bending | Not sized. |
 | A contact that is not at the tool is pushed at the motors (machine crates, linkage, delta, scissor files) | obstacle contact | A load on a soft belt swings on by the belt's stretch (millimetres at 1 m/s). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
@@ -521,6 +521,22 @@ Fixed:
   check covers y1 and y2 along y again (dual and rack 4 sections checked, before 0;
   `the_gantries_y_belts_turn_their_far_idlers_as_they_run`). The screw portal's Y wrap with effects.belt_wrap is the flat
   one, pi + 2 asin(r / (y + 0.07)) (3.3774330 rad at y = 0.1, was 3.3419275 from the standing drawing).
+
+- The screw portal's, C portal's and both five-axis files' X and Y belts (section 4: they shared their section lengths
+  out, 0.1 m from the motor to the far idler, and drew no far idler) are loops as the XYZ portal's, with their far
+  idlers in the routes (`far_x` on the frame at x = 1.1 m, `far_y` on the bridge 0.7 m from the Y pulley, `speed` +1,
+  anticlockwise as the pulleys): sections x2 1.2 -> 2.3 m, y2 0.7 -> 1.3 m; the C portal's spans x_2 0.1 -> 1.2,
+  y_2 0.1 -> 0.7 m, 2T / mu 2.1 vx² + 0.8 vy² -> 3.8 vx² + 1.4 vy² (on X 0.19 kg beyond the lumps, was 0.105; on Y
+  -0.05, was -0.025). Modes with the pulleys held (`the_screw_portals_belts_ring_on_their_loops_by_hand`, fails on the
+  old files): screw portal X at its far end 74.48 -> 39.69 Hz, Y in the middle 92.64 -> 80.23 Hz; C portal X 37.42 Hz,
+  five-axis X 32.21 Hz (Y couples with the rotaries there). Wraps with effects.belt_wrap at x = 0.3, y = 0.1:
+  3.1982802 and 3.2709416 rad (pi + asin(r / D) + asin((r - r_f) / d), was the clamp-and-back drawing's). Cycle
+  verdicts all pass; settling, largest and least belt tension before -> after: screw portal 22.1 -> 27.4 um,
+  330.5 -> 374.3 N, 181.1 -> 172.9 N; C portal 34.0 -> 34.9 um, 365.7 -> 422.0 N, 168.1 -> 146.8 N; five-axis
+  33.6 -> 35.3 um, 351.5 -> 362.7 N, 234.2 -> 210.8 N; five-axis table 30.3 -> 32.2 um, 343.3 -> 360.4 N,
+  261.0 -> 248.5 N. The softer return sections raise the following error (validation.md's friction feedforward table,
+  re-run: screw portal on 99.5 -> 152.3 um, C portal off 177.4 -> 253.1 um), within every verdict. The screw portal
+  and the five-axis files have no spans (their belt mass stays lumped).
 
 - The angular momentum of the T-gantry crate against its file (section 4: not compared, different origins and belt-run
   geometry). Compared now over 1 s of the default cycle, every 50 steps, both about the place of the Z axis's centre of

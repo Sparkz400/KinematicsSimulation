@@ -928,7 +928,8 @@ body = "bridge"
 at_m = [0.0, -0.07, 0.0]
 pos = [300, 150]
 
-# X: clamp to motor (0.1 m + x) and motor round the far idler back to the clamp (0.1 m + stroke + 0.1 m - x).
+# X, a loop: the motor and the far idler 0.1 m + stroke + 0.1 m = 1.2 m apart, the clamp to the motor 0.1 m + x, back
+# from the motor round the far idler (far_x) to the clamp 1.2 m + 1.1 m - x.
 [[machine.section]]
 id = "x1"
 length_m = 0.1
@@ -939,13 +940,14 @@ pos = [450, -40]
 
 [[machine.section]]
 id = "x2"
-length_m = 1.2
+length_m = 2.3
 axes = { x = -1 }
 pulleys = { pulley_x = -1 }
-route = ["pulley_x", "bridge"]
+route = ["pulley_x", "far_x", "bridge"]
 pos = [450, 40]
 
-# Y, on the bridge, lying flat (plane x-y: its wheels turn about z).
+# Y, on the bridge, a loop lying flat (plane x-y: its wheels turn about z): the motor and the far idler 0.7 m apart, the
+# clamp to the motor 0.1 m + y, back from the motor round the far idler (far_y) to the clamp 0.7 m + 0.6 m - y.
 [[machine.section]]
 id = "y1"
 length_m = 0.1
@@ -957,12 +959,35 @@ pos = [450, 110]
 
 [[machine.section]]
 id = "y2"
-length_m = 0.7
+length_m = 1.3
 axes = { y = -1 }
 pulleys = { pulley_y = -1 }
-route = ["pulley_y", "y_carriage"]
+route = ["pulley_y", "far_y", "y_carriage"]
 plane = "x-y"
 pos = [450, 190]
+
+# The belts' far idlers, 0.1 m + stroke + 0.1 m from their motors' pulleys. X's on the frame at x = 1.1 m; Y's on the
+# bridge, 0.63 m after the Y carriage's y = 0. Each belt passes its far idler at its axis's speed, the way a positive
+# turn of its pulley (which takes belt out of the second section) moves it: the run from the motor to the far idler
+# moves against the carriage, the one from the far idler to the clamp with it. Round both anticlockwise (`clockwise`
+# false), as round the pulley: down (X: to the left) the clamp's strand to the motor, round the pulley, back along the
+# other strand and round the far idler.
+[[machine.idler]]
+id = "far_x"
+speed = { x = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+at_m = [1.1, -0.05, 0.06]
+
+[[machine.idler]]
+id = "far_y"
+speed = { y = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "bridge"
+at_m = [0.0, 0.63, 0.0]
 
 # Z on its screw, on the Y carriage: the nut drives the slide.
 [[machine.screw]]
@@ -975,17 +1000,17 @@ pos = [300, 300]
 # The free spans, with the belt's speed over ground per axis speed along x, y and z of the 3D view, so that the belts'
 # mass is summed run by run. Each belt is a loop clamped to its carriage: the run from the clamp to the motor and the
 # one from the far idler back to the clamp move with the carriage, the run from the motor to the far idler against it,
-# and a belt on a moving axis moves with that axis too (the Y belt rides on the bridge). The file's section lengths
-# shared out (the run from the motor to the far idler takes 0.1 m of the second section):
+# and a belt on a moving axis moves with that axis too (the Y belt rides on the bridge). The run from the motor to the
+# far idler is as long as the two with the carriage together, so a belt's momentum along its own axis cancels:
 #   belt  run                     length      speed over ground
 #   X     clamp to motor          0.1 + x     (vx, 0, 0)
-#         motor to far idler      0.1         (-vx, 0, 0)
+#         motor to far idler      1.2         (-vx, 0, 0)
 #         far idler to clamp      1.1 - x     (vx, 0, 0)
 #   Y     clamp to motor          0.1 + y     (vx, vy, 0)
-#         motor to far idler      0.1         (vx, -vy, 0)
+#         motor to far idler      0.7         (vx, -vy, 0)
 #         far idler to clamp      0.6 - y     (vx, vy, 0)
-# 2T / mu = 2.1 vx^2 + 0.8 vy^2 whatever the pose, in place of the lumps' half of the 2.1 m on each pulley: the belts add
-# 0.105 kg on X and -0.025 kg on Y, and no speed terms.
+# 2T / mu = 3.8 vx^2 + 1.4 vy^2 whatever the pose (the belts 2.4 and 1.4 m long), in place of the lumps' half of the
+# 3.8 m on each pulley (1.9 each): the belts add 0.19 kg on X and -0.05 kg on Y, and no speed terms.
 [[machine.span]]
 id = "x_1"
 section = "x1"
@@ -996,7 +1021,7 @@ velocity_x = { x = 1 }
 [[machine.span]]
 id = "x_2"
 section = "x2"
-length_m = 0.1
+length_m = 1.2
 velocity_x = { x = -1 }
 
 [[machine.span]]
@@ -1017,7 +1042,7 @@ velocity_y = { y = 1 }
 [[machine.span]]
 id = "y_2"
 section = "y2"
-length_m = 0.1
+length_m = 0.7
 velocity_x = { x = 1 }
 velocity_y = { y = -1 }
 
