@@ -666,6 +666,8 @@ pub struct H4 {
     amplifier: Option<Amplifier>,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the tool (`Machine::set_tool_force`), held until changed.
+    push: V4,
     joints: [RotaryJoint; 4],
     thermal: Option<ThermalFeedback>,
     /// The working range: radius, top, bottom sphere's centre height and radius; the condition number refused above.
@@ -838,6 +840,7 @@ impl H4 {
             amplifier: cfg.bool("effects.amplifier_compliance")?.then_some(amplifier),
             payload_attached: true,
             brake_engaged: false,
+            push: [0.0; 4],
             joints: [joint.clone(), joint.clone(), joint.clone(), joint],
             thermal: ThermalFeedback::from_config(cfg)?,
             radius,
@@ -958,6 +961,18 @@ impl H4 {
         }
         let at = self.bend_at() + 8;
         ([s[at], s[at + 1], s[at + 2], s[at + 3]], [s[at + 4], s[at + 5], s[at + 6], s[at + 7]])
+    }
+
+    /// The push at the tool on the N rates from `at` in the state: its virtual power per unit of each
+    /// (`sim_core::tool_force_on_rates`); zero without a push.
+    fn pushed<const N: usize>(&self, s: &[f64], at: usize) -> [f64; N] {
+        sim_core::tool_force_on_rates(self, s, &self.push, at..at + N)
+            .map_or([0.0; N], |q| std::array::from_fn(|i| q[i]))
+    }
+
+    /// The push on the arms: none with bending arms, where it acts beyond the bend (`distal`).
+    fn pushed_on_arms(&self, s: &[f64]) -> V4 {
+        if self.bending.is_some() { [0.0; 4] } else { self.pushed(s, 4) }
     }
 
     /// The elbow angles and speeds, which the kinematics take: the arms' plus their bend.
@@ -1222,11 +1237,15 @@ impl H4 {
         let (mass, velocity, gravity) = self.load_n::<8>(e, y, *pose, speeds, yv, self.carried(), spin, false);
         let torque = self.amplifier_torque_at(s, pose);
         let (_, j, jy) = *pose;
+        // The push at the tool on the elbows (its power per unit of their bend's rates, which move them) and their moves.
+        let at = self.bend_at();
+        let (on_elbows, on_moves): (V4, V4) = (self.pushed(s, at + 4), self.pushed(s, at + 12));
         let rhs = std::array::from_fn(|i| {
             let slide = if i < 4 { j[3][i] } else { jy[3][i - 4] };
             let spring =
                 if i < 4 { b.k * bend[i] + b.c * rate[i] } else { b.k_lateral * y[i - 4] + b.c_lateral * yv[i - 4] };
-            gravity[i] - velocity[i] - self.kappa * slide * torque - spring
+            let push = if i < 4 { on_elbows[i] } else { on_moves[i - 4] };
+            gravity[i] - velocity[i] - self.kappa * slide * torque - spring + push
         });
         (mass, rhs)
     }
@@ -1271,7 +1290,9 @@ impl H4 {
         let drive: V4 = std::array::from_fn(|k| {
             self.joints[k].rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0
         });
-        let rest: V4 = std::array::from_fn(|k| gravity[k] - velocity[k] + self.joints[k].output_torque(t[k], w[k]));
+        let push = self.pushed_on_arms(s);
+        let rest: V4 =
+            std::array::from_fn(|k| gravity[k] - velocity[k] + self.joints[k].output_torque(t[k], w[k]) + push[k]);
         let solve = |loss: V4| -> V4 {
             let m: M4 = std::array::from_fn(|r| {
                 std::array::from_fn(|c| {
@@ -1896,7 +1917,7 @@ impl Machine for H4 {
         if let (Some(pose), true) = (&pose, self.amplifier.is_some()) {
             let at = self.turn_at();
             out[at] = s[at + 1];
-            out[at + 1] = self.amplifier_torque_at(s, pose) / self.tool_inertia();
+            out[at + 1] = (self.amplifier_torque_at(s, pose) + self.pushed::<1>(s, at + 1)[0]) / self.tool_inertia();
         }
         if !self.elastic {
             let (acc, ..) = self.rigid_solve(s, torque);
@@ -1917,12 +1938,12 @@ impl Machine for H4 {
             Some(pose) => self.joint_load_at(s, pose),
             None => self.joint_load(s),
         };
-        let mut rhs = [0.0; 4];
+        let (mut rhs, push) = ([0.0; 4], self.pushed_on_arms(s));
         for k in 0..4 {
             let joint = &self.joints[k];
             let (gear, rotor_acc, brake_rate) =
                 joint.rotor(torque[k], s[8 + k], s[12 + k], t[k], w[k], s[16 + k], self.brake_engaged);
-            rhs[k] = gear.output + gravity[k] - velocity[k] + joint.output_torque(t[k], w[k]);
+            rhs[k] = gear.output + gravity[k] - velocity[k] + joint.output_torque(t[k], w[k]) + push[k];
             out[8 + k] = s[12 + k];
             out[12 + k] = rotor_acc;
             out[16 + k] = brake_rate;
@@ -2071,6 +2092,13 @@ impl Machine for H4 {
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+    /// The push acts on the plate and the tool, beyond the gearboxes, in either model: on the arms, or with bending
+    /// arms on the elbows and their moves out of the arms' planes, and with the amplifier's compliance its turn on the
+    /// tool's (`pushed`); its power is the budget's crash row.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push = [force[0], force[1], force[2], force[3]];
+        true
     }
 
     /// The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
