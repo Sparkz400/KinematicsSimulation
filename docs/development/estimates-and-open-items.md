@@ -259,6 +259,29 @@ Not re-run on 21 November 2026 (the figures stand as dated in the text):
 
 ## 10. Reported by the document agents
 
+Figure shifts between the documents of 17 November and main 59a2aff7 (21 November), attributed by building sim-cli at
+the merges between (d0e28a32, 1a2f8873, b3f0da0d, 3fca3070, 9590fa82, c4aa156d, e8d75ee9, 59a2aff7, and 60e59797
+alone) and running each figure's command; none is a defect:
+- Hexapod margins (`sim-cli margins hexapod`, all six legs alike) 147.3 Hz, 87.2°, 10.53 dB on d0e28a32 (the docs' 145
+  Hz, 89°, 10.6 dB are older, `PROGRESS.md`'s gain choice): 60e59797 alone 252.5 Hz, 63.8°, 7.62 dB, the coupling's
+  damper bridging its own spring instead of coupling and screw together (it had overdamped the screw's mode); with
+  e78913f3's screw damping, b3f0da0d, 246.1 Hz, 66.8°, 7.71 dB; the screw's stiffness at the nut (ddd3bbc9, 3fca3070)
+  127.6 Hz, 100.1°, 7.76 dB (the crossover moves to the lower lobe); the screw damper's ratio along the stroke
+  (783849a5, c4aa156d) 127.7 Hz, 100.0°, 7.78 dB. The new figure is the better physics: the damper's place is the
+  correction of a model error, and the nut's place is the start pose's.
+- Wafer handler settling 33.4 um -> 47.2 um on b3f0da0d (60e59797 alone: 93.1 um, the column's mode no longer
+  overdamped; its Z velocity gain lowered 0.0443 -> 0.02 for it, 2400ebc6), 47.5 um with the nut (3fca3070). The
+  column's mode 320.9 -> 432.3 Hz is the nut's place at the start pose (ddd3bbc9): the far end's stiffness was the
+  safe-side stand-in. Both the better physics.
+- The EXCT-30 with the 1FK2104-5AF at Kv 50 (`verdicts ... --motor 1FK2104-5AF --set drive.kv_1_s=50`): 3.547 mm and
+  winding 28.45 K up to 3fca3070, 22.81 mm and `inf` from 9590fa82 on: the T-gantry's belt runs weighing on Z
+  (cb5f0a40, 0.16 kg). The loop is at the edge: on both builds Kv 49.9 stays calm (1.22 and 3.85 mm) and 50.1 swings
+  (22.0 and 21.9 mm, `inf`), so neither figure is robust; the guide's point (the edge of stability) holds and now says
+  so. The `inf` is the warm start not settling a swinging cycle, not a defect.
+- The default T-gantry's shared DC link 224.45 V (no resistor) -> 224.65 V at the threshold, 0.38 J in the resistor:
+  9590fa82, the same belt runs' weight on Z (cb5f0a40): Z holds and lowers 0.16 kg more, so it gives back more. The
+  better physics (the runs had momentum and no weight; V + g · c drifted 0.47 J per cycle).
+
 Fixed (second audit, 21 November):
 - The lumped forearms (planar delta, D3/D4 with `forearm_inertia` off, parallel SCARA) had their momentum and
   first moment at the inertia's split, their weight at the middle: V + g · c drifted (D2 0.060 N s, 2.6 N of

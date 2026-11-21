@@ -1291,7 +1291,7 @@ ball screw axis (`[parts]`, `[effects]`, `[thermal]`, `[thermal_feedback]`, `[pr
 here a coupling of ratio 1, `[motor]`, `[drive]`, `[ratings]`, `[bounds]`, `[start]`, `[[cycle.segment]]`) with the same
 meanings; one motor, coupling, screw and drive per leg, all alike. The screw is a 25 x 10 (`lead_m` 0.01, `length_m`
 0.35, estimates, bounded as the axis's); `drive.velocity_kp_nm_s_rad` 0.4 (tuned with `sim-cli margins hexapod`; on 21 November 2026, with the
-screw's damping and its stiffness at the nut: 127.7 Hz, 100.0 degrees, 7.78 dB, across the bounds at least 90.1 degrees and 7.48 dB; 145 Hz, 89 degrees, 10.6 dB before); `profile.vertical_axis` "z". The tool pose, `start.pose` and the targets are x, y, z (m), rx,
+screw's damping and its stiffness at the nut: 127.7 Hz, 100.0 degrees, 7.78 dB, across the bounds at least 90.1 degrees and 7.48 dB; 145 Hz, 89 degrees, 10.6 dB before: the coupling's damper bridging its own spring, not the screw's too, 60e59797, and the screw's stiffness at the nut, ddd3bbc9); `profile.vertical_axis` "z". The tool pose, `start.pose` and the targets are x, y, z (m), rx,
 ry, rz (rad, a rotation vector); `[axis.x]`, `[axis.y]`, `[axis.z]` take `max_velocity_m_s`, `max_acceleration_m_s2`,
 `max_jerk_m_s3` (0.2, 3, 100, estimates), `[axis.rx]`, `[axis.ry]`, `[axis.rz]` the same in rad (0.8, 10, 400,
 estimates). Effects as on the ball screw axis: `joint_elasticity` (each leg's coupling, screw, nut and bearings
