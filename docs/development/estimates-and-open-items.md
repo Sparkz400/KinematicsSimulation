@@ -257,7 +257,10 @@ Not re-run on 21 November 2026 (the figures stand as dated in the text):
 - `docs/machine-files.md`: the dual gantry's yaw mode (155.0 and 149.5 Hz with J raised to 20 kg m²):
   `sim-cli modes --axis-index 1` reports one mode only, and not the yaw's figures (96.4 Hz in the
   middle, 151.7 and 124.5 Hz at the ends, damping 0); not reproduced, the cause not looked into.
-- `docs/web.md`: the CoreXY path's sizing check (1.661 s), whose path the page does not name.
+- `docs/web.md`: the CoreXY path's sizing check (1.661 s, 14 November) names no path, and none of twenty lines and arcs
+  tried on the build of that day gives it. The page now names one, the page's default path moved into the CoreXY's
+  range, with its figures of 21 November 2026 (1.748 s within the axis limits, 1.641 s time-optimal, every check
+  passing; `sim-cli analyze`, which the page's sizing check equals); the 1.661 s stays as the session's, its path unknown.
 - The T-gantry budget named in the list of 17 November: no such table is in `docs/validation.md`.
 
 ## 10. Reported by the document agents
