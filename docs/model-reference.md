@@ -1967,6 +1967,13 @@ magnet plate by the plate's length on each; each segment's copper loss R I² war
 time constant (`segment.temperature_rise`). The cycle is a cam (`track.cycle` "index" or "flying"), or with `cam.run =
 false` the config's segments.
 
+**Modes** (`Machine::modes`, `resonance_hz`, what the input shaper follows): with the motors held, each mover's body and
+payload on its coupling (`joint_elasticity`, the gearbox's stiffness k = 2e7 N/m as shipped) to the held plate,
+sqrt(k / m (1 + e k̄)²) / 2π: 694.28 Hz on the shipped mover (1.051 kg), its damping ratio c ω / 2k; the planner's
+train (`Machine::trains`) is the same, the load's share 1.051 / 1.251. With the plate free the two-mass mode is
+sqrt(k (1/m + 1/m_plate)) / 2π = 1736.39 Hz; until 21 November a track of one mover reported that one (the chain's
+single-joint mode) while its train was the held one (`the_movers_modes_are_the_held_two_mass_mode`).
+
 **Frame momentum** (for a [compliant base](#compliant-base); since 21 November 2026, before none), in the track's plane
 (x along the first straight, y across, z up): each mover's body and payload at its mass centre p(s) + e n(θ̄), θ̄ the
 heading averaged over the wheelbase (`Track::mean_heading`), whose rate along s is the curvature k̄ the dynamics take,

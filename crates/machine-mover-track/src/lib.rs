@@ -1111,13 +1111,24 @@ impl Machine for MoverTrack {
         self.inner.set_part_temperatures(rises)
     }
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
-        self.inner.resonance_hz(tool_pose)
+        self.modes(tool_pose).first().map(|m| m.hz)
     }
     fn mode_shape(&self, tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
         self.inner.mode_shape(tool_pose)
     }
+    /// With the motors held, as `Machine::modes` has them and the planner's `trains`: each mover's body and payload on
+    /// its coupling to the held plate, sqrt(k / m (1 + e k)^2) (694.28 Hz on the shipped mover, its damping c w / 2k).
+    /// `JointMachine` lists two movers and more so (`held_modes`), one alone as a single joint's two-mass mode with the
+    /// plate free (1736.39 Hz), which the shaper then followed while the plan's train was the held one.
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
-        self.inner.modes(tool_pose)
+        if self.movers().n() > 1 || !self.inner.elastic {
+            return self.inner.modes(tool_pose);
+        }
+        let (mut mass, mut bias) = ([0.0], [0.0]);
+        self.movers().dynamics(tool_pose, &[0.0], &mut mass, &mut bias);
+        let gear = self.inner.joints[0].drive.gearbox.at(tool_pose[0]);
+        let w = (gear.stiffness / mass[0]).sqrt();
+        vec![Mode { hz: w / TAU, damping: gear.damping_at(w) * w / (2.0 * gear.stiffness) }]
     }
     fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
         self.inner.trains(tool_pose)

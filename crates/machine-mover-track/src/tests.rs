@@ -26,6 +26,36 @@ fn judged(base: &str, edits: &[&str]) -> Vec<sim_components::analysis::Verdict> 
     verdicts(&cfg, &load).unwrap()
 }
 
+/// The movers' modes with the motors held (`Machine::modes`' convention), by hand as two masses on the coupling k = 2e7
+/// N/m: the plate (0.2 kg) held, the body and payload (1.051 kg) ring at sqrt(k / 1.051) / 2 pi = 694.2786 Hz; with the
+/// plate free sqrt(k (1 / 1.051 + 1 / 0.2)) / 2 pi = 1736.3906 Hz. The six shipped movers six times the held mode, and
+/// so one mover alone, its resonance (what the shaper follows) and its train (what the plan keeps back, the load's share
+/// 1.051 / 1.251): until 21 November one mover alone reported the free mode, its train the held one.
+#[test]
+fn the_movers_modes_are_the_held_two_mass_mode() {
+    let (k, body, plate): (f64, f64, f64) = (2e7, 1.051, 0.2);
+    let held = (k / body).sqrt() / TAU;
+    let free = (k * (1.0 / body + 1.0 / plate)).sqrt() / TAU;
+    assert!((held - 694.2786).abs() < 1e-4 && (free - 1736.3906).abs() < 1e-4, "{held} {free}");
+    let six = track(&[]);
+    let pose = six.movers().start.clone();
+    let modes = six.modes(&pose);
+    assert!(modes.len() == 6 && modes.iter().all(|m| (m.hz / held - 1.0).abs() < 1e-12), "{modes:?}");
+    for edits in [&[][..], &["start.pose = [0.125]"]] {
+        let m = track(edits);
+        let pose = m.movers().start.clone();
+        let (modes, trains) = (m.modes(&pose), m.trains(&pose));
+        assert!(modes.iter().all(|m| (m.hz / held - 1.0).abs() < 1e-12), "{modes:?}");
+        // Its damping as the six's (all on the straights here): c w / 2k with the coupling's damper.
+        assert!((modes[0].damping / six.modes(&six.movers().start)[0].damping - 1.0).abs() < 1e-12, "{modes:?}");
+        assert_eq!(m.resonance_hz(&pose), Some(modes[0].hz));
+        for train in trains {
+            let train = train.unwrap();
+            assert!((train.hz / held - 1.0).abs() < 1e-12 && (train.load_share - body / (body + plate)).abs() < 1e-12);
+        }
+    }
+}
+
 #[test]
 fn passes_the_standard_suite() {
     sim_core::testkit::run_standard_suite(&ENTRY);

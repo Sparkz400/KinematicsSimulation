@@ -330,6 +330,12 @@ Fixed (after the second audit, 21 November):
   middle of the span it covers over one period of the machine's lowest mode (`standing`), at the 1 mm it had; the
   swing's amplitude itself is not judged there. (A probe's reversed point list was refused with `error-trajectory`:
   its first time was the plan's end, not 0; the app's file pairs the forward times with the reversed poses.)
+- The mover track's modes: the shipped six movers report the held mode everywhere (modes, `resonance_hz` and so the
+  shaper, the plan's trains: 694.28 Hz, the plate held), as the convention has it; a track of one mover reported the
+  free two-mass mode (1736.39 Hz, the chain's single joint) to the shaper and the modes printout while its train was
+  the held one. One mover now reports the held mode too (`the_movers_modes_are_the_held_two_mass_mode`). The app's mode
+  list shows beside each mode the linearised model's nearest one: 102.0 Hz for the six movers' 694.28 Hz (not looked
+  into; the 1736 Hz of the brief is the plate-free figure).
 - The mover track and the indexers (Geneva, cam) had no frame momentum (`Machine::frame_momentum` None), so no
   compliant base: they have it, as the joint kit's slide and the knife (`the_frame_momentum_is_the_hand_calculated_one`
   in both crates; the standard suite's first-moment check now judges them). Both are level, so
