@@ -481,17 +481,24 @@ impl Crane {
     /// mu per metre: w^2 = g (m + mu L / 2) / (L (m + mu L / 3)) (sqrt(g / L) for a light rope); with the hook block and a
     /// payload on its sling the lower root of m1 l1 l2 w^4 - (m1 + m2) g (l1 + l2) w^2 + (m1 + m2) g^2 = 0.
     pub fn sway_omega(&self, length: f64) -> Option<f64> {
+        self.sway_omegas(length).map(|(lower, _)| lower)
+    }
+
+    /// `sway_omega` and, with the hook block and a payload on its sling, the double pendulum's upper root, where hook
+    /// block and payload swing against each other.
+    fn sway_omegas(&self, length: f64) -> Option<(f64, Option<f64>)> {
         if !(self.g > 0.0 && length > 0.0) {
             return None;
         }
         if let Some(l2) = self.sling.filter(|_| self.payload_mass() > 0.0) {
             let (m1, m2, g) = (self.hook, self.payload_mass(), self.g);
             let b = (m1 + m2) * g * (length + l2);
-            let w2 = (b - (b * b - 4.0 * m1 * length * l2 * (m1 + m2) * g * g).sqrt()) / (2.0 * m1 * length * l2);
-            return Some(w2.sqrt());
+            let root = (b * b - 4.0 * m1 * length * l2 * (m1 + m2) * g * g).sqrt();
+            let w2 = |sign: f64| ((b + sign * root) / (2.0 * m1 * length * l2)).sqrt();
+            return Some((w2(-1.0), Some(w2(1.0))));
         }
         let (m, rope) = (self.load_mass(), self.rope_mass * length);
-        Some((self.g / length * (1.0 + rope / (2.0 * m)) / (1.0 + rope / (3.0 * m))).sqrt())
+        Some(((self.g / length * (1.0 + rope / (2.0 * m)) / (1.0 + rope / (3.0 * m))).sqrt(), None))
     }
 
     /// The bridge's yaw and its rate (0 without effects.bridge_skew).
@@ -1095,6 +1102,13 @@ impl Machine for Crane {
     /// The load's sway on its rope at the pose: sqrt(g / L) / (2 pi), L = H - z.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
         self.sway_omega(self.height - tool_pose[2]).map(|w| w / TAU)
+    }
+
+    /// The swing of `resonance_hz` and, with the hook block, the double pendulum's upper mode (`sway_omegas`), with the
+    /// trolley held as `resonance_hz` has it. The swing has no damper of its own.
+    fn modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
+        let Some((lower, upper)) = self.sway_omegas(self.height - tool_pose[2]) else { return Vec::new() };
+        [Some(lower), upper].into_iter().flatten().map(|w| sim_core::Mode { hz: w / TAU, damping: 0.0 }).collect()
     }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {

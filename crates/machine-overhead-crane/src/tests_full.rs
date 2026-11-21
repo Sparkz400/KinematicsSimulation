@@ -611,3 +611,25 @@ fn the_default_cycle_with_elastic_drives_keeps_its_loops_stable() {
         assert!(m.phase_margin_deg >= 35.0 && m.gain_margin_db >= 6.0, "motor {k}: {m:?}");
     }
 }
+
+/// The mode list (`Machine::modes`: the app's marks, `identify`, a shaper following its mode k) has, with the hook block,
+/// the double pendulum's upper root beside the lower one of `resonance_hz`: the roots of m1 l1 l2 w^4 - (m1 + m2) g
+/// (l1 + l2) w^2 + (m1 + m2) g^2 = 0 whose periods the ringing above measures (it listed the lower alone). Without the
+/// hook block the single swing alone.
+#[test]
+fn the_mode_list_has_both_of_the_double_pendulum_s_roots() {
+    let m = crane(&lossless(&["effects.hook_block = true"]));
+    let pose = [5.0, 2.0, 2.0];
+    let (l1, l2, m1, m2) = (m.height - pose[2], m.sling.unwrap(), m.hook, m.payload);
+    let b = (m1 + m2) * G * (l1 + l2);
+    let root = |sign: f64| {
+        ((b + sign * (b * b - 4.0 * m1 * l1 * l2 * (m1 + m2) * G * G).sqrt()) / (2.0 * m1 * l1 * l2)).sqrt() / TAU
+    };
+    let modes = m.modes(&pose);
+    assert!(modes.len() == 2 && modes[0].hz == m.resonance_hz(&pose).unwrap(), "{modes:?}");
+    for (mode, hand) in modes.iter().zip([root(-1.0), root(1.0)]) {
+        assert!((mode.hz / hand - 1.0).abs() < 1e-12, "{modes:?} against {hand} Hz");
+    }
+    let plain = crane(&lossless(&[]));
+    assert_eq!(plain.modes(&pose).len(), 1);
+}
