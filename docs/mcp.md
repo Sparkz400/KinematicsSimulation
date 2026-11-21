@@ -210,34 +210,34 @@ delta-d3	Delta picker (3 arms)
 
 $ sim-cli verdicts t-gantry
 check,motor,value,limit,result
-motor-peak,a,0.1469,1.000,ok
-motor-thermal,a,1.238,100.0,ok
-motor-s1,a,0.1661,1.270,ok
-...                                      (38 rows)
+motor-peak,a,0.1482,1.000,ok
+motor-thermal,a,1.279,100.0,ok
+motor-s1,a,0.1688,1.270,ok
+...                                      (40 rows)
 
 $ sim-cli verdicts t-gantry --set mass.payload_kg=40 | grep -v ',ok$'
 check,motor,value,limit,result
-braking-resistor-continuous,b,26.79,20.00,FAIL
-settling,,0.0003377,0.0001000,FAIL
+braking-resistor-continuous,b,26.86,20.00,FAIL
+settling,,0.0003396,0.0001000,FAIL
 belt-least-tension,,0,0,FAIL
 
 $ sim-cli verdicts t-gantry --bands
 check,motor,value,limit,result,low,high,worst_case
-motor-peak,a,0.1469,1.000,ok,0.1421,0.1540,ok
-motor-thermal,a,1.238,100.0,ok,1.164,1.412,ok
+motor-peak,a,0.1482,1.000,ok,0.1436,0.1554,ok
+motor-thermal,a,1.279,100.0,ok,1.205,1.453,ok
 ...
 
 $ sim-cli analyze t-gantry --set mass.payload_kg=3.5 --out load.csv
 $ cut -d, -f1-7,11 load.csv
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,winding_rise_k
-a,6.080000,0.623460,0.185715,200.5153,0.1645,0.1462,1.55
-b,6.080000,0.461734,0.165421,200.5064,0.1216,0.1303,1.23
+a,6.080000,0.630199,0.188265,200.5251,0.1664,0.1482,1.59
+b,6.080000,0.467014,0.168400,200.5256,0.1230,0.1326,1.27
 
 $ sim-cli search t-gantry --series 1FK2 --out search.csv
 Not simulated (a part the config cannot take, or a cycle that does not run; the reason is in the table): 0 / 28 candidates
 $ cut -d, -f2,4,7,9-11 search.csv | head -3
 motor,drive,mass_kg,result,tightest_check,tightest_utilisation
-1FK2203-2AK,6SL3210-5HE10-4UF0,1.16,ok,gearbox-radial-load,0.4298
+1FK2203-2AK,6SL3210-5HE10-4UF0,1.16,ok,settling,0.4324
 1FK2103-2AH,6SL3210-5HE10-4UF0,1.18,ok,gearbox-radial-load,0.4302
 
 $ sim-cli optimise t-gantry --runs 8
@@ -250,12 +250,12 @@ effects.corner_blending,false,true
 
 $ sim-cli margins t-gantry
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result
-,a,184.3,58.1,9.45,1.830,277.3,ok
-,b,177.6,55.7,9.35,1.830,277.3,ok
+,a,185.6,54.9,9.19,1.882,277.3,ok
+,b,179.8,52.1,9.09,1.878,277.3,ok
 
 $ sim-cli accuracy t-gantry --points 3 --repeats 2 --out acc.csv
-Accuracy along ISO 230-2, axis x [m]: B 2.919e-5, R 2.920e-5, E 5.272e-5, M 4.066e-5, A 5.272e-5 (...)
-Accuracy at the tool along ISO 9283, over the axes in metres: AP 5.544e-5, RP 2.172e-7, vAP 2.919e-5 (...)
+Accuracy along ISO 230-2, axis x [m]: B 2.657e-5, R 2.658e-5, E 5.119e-5, M 3.850e-5, A 5.120e-5 (...)
+Accuracy at the tool along ISO 9283, over the axes in metres: AP 5.625e-5, RP 1.569e-7, vAP 2.657e-5 (...)
 
 $ sim-cli sensitivity single-axis | cut -d, -f1-8 | head -3
 parameter,value,low,high,peak_torque_low,peak_torque_high,rms_torque_low,rms_torque_high
@@ -265,8 +265,8 @@ gearbox.ratio,5.0,4.0,6.0,+0.1650,-0.0906,+0.1631,-0.0982
 $ sim-cli analyze t-gantry --path corner.path --out path.csv
 $ cut -d, -f1-3,16-18 path.csv
 motor,cycle_s,peak_torque_nm,path_error_peak_m,path_error_rms_m,tracking_error_peak_m
-a,2.128000,0.552014,1.268e-4,4.329e-5,1.746e-4
-b,2.128000,0.298401,1.268e-4,4.329e-5,1.746e-4
+a,2.128000,0.546983,1.324e-4,4.412e-5,1.779e-4
+b,2.128000,0.303047,1.324e-4,4.412e-5,1.779e-4
 
 $ sim-cli fmu t-gantry --out t.fmu --binary target/release/sim_fmi.dll
 ```

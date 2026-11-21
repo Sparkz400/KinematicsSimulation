@@ -671,7 +671,7 @@ One drive per motor, all with the same settings.
 | `current_delay_cycles` | T E S | cycles | Current-loop cycles between computing the voltage and it acting. Whole number, 0 to 1000 | estimate | `drive_delay` |
 | `velocity_delay_cycles` | T E S | cycles | Velocity-loop cycles between computing the torque setpoint and it acting | estimate | `drive_delay` |
 | `kv_1_s` | T E S | 1/s | Position gain Kv | choice | always |
-| `velocity_kp_nm_s_rad` | T E S | N m s/rad | Velocity loop gain Kp. 0.04 in T, 0.025 in S (tuned with `sim-cli margins --bands` for at least 35° phase and 6 dB gain margin in every bounds run, with friction as configured and off; 0.08 before, which left T 12° and S 1°), 0.45 in E (tuned the same way: at least 38.6° and 8.3 dB; 0.6 before, 29.6° and 5.8 dB). Stated for the rotor, gearbox and masses the config has as numbers; a part by name retunes it from there (see [`[parts]`](#parts)) | choice | always |
+| `velocity_kp_nm_s_rad` | T E S | N m s/rad | Velocity loop gain Kp. 0.04 in T, 0.025 in S (tuned with `sim-cli margins --bands` for at least 35° phase and 6 dB gain margin in every bounds run, with friction as configured and off; 0.08 before, which left T 12° and S 1°), 0.45 in E (tuned the same way: at least 48.8° and 9.36 dB, with friction off 40.6° and 8.61 dB, re-run 21 November 2026; 0.6 before, 29.6° and 5.8 dB). Stated for the rotor, gearbox and masses the config has as numbers; a part by name retunes it from there (see [`[parts]`](#parts)) | choice | always |
 | `velocity_tn_s` | T E S | s | Velocity loop integral time Tn | choice | always |
 | `velocity_feedforward_factor` | T E S | factor | Weight of the velocity feedforward | choice | `velocity_feedforward` |
 | `torque_feedforward_factor` | T E S | factor | Weight of the torque feedforward | choice | `torque_feedforward` |
@@ -1054,7 +1054,7 @@ The linear delta's config ([`machine-delta-linear/default.toml`](../crates/machi
 
 The guide's moments (Mx, My, Mz) are not judged.
 
-L's values of the shared tables: motor 1FK2205-2AF at 400 V with brake (catalogue: rotor 4.0 kg cm², 1.241379 N m/A, 10.8 N m peak, 3.0 N m rated at 3000 r/min, 9.5 A and 2.5 A; R, L, thermal time constant and brake torque estimates; the High Dynamic 1FK2104-5AF, 0.65 kg cm², left the velocity loop ringing near 450 Hz against about 6 kg cm² of load), a coupling of ratio 1 (3000 N m/rad, estimate as the EXCT-30's), converter 6SL3210-5HE11-0UF0 (3 A, 10.9 A; its internal braking resistor 50 W, 3 kW, 820 V), belt EA 6e5 N and 300 N pretension (estimates as the EXCT-30's), `settling_tolerance_m` 0.5 mm (catalogue: EXPT positioning accuracy), `belt_max_tension_n` 1000, `pulley_max_torque_nm` 5 (catalogue, EGC-80) and `shaft_max_radial_load_n` 1500 (estimate), `ratings.max_condition_number` 5, the velocity loop 0.25 N m s/rad, 0.02 s with 0.2 ms filters (tuned with `sim-cli margins delta-linear --bands`). Its cycle is the D3's Adept cycle 25/305/25 mm at the top of the range; `start.pose` above the place position.
+L's values of the shared tables: motor 1FK2205-2AF at 400 V with brake (catalogue: rotor 4.0 kg cm², 1.241379 N m/A, 10.8 N m peak, 3.0 N m rated at 3000 r/min, 9.5 A and 2.5 A; R, L, thermal time constant and brake torque estimates; the High Dynamic 1FK2104-5AF, 0.65 kg cm², left the velocity loop ringing near 450 Hz against about 6 kg cm² of load), a coupling of ratio 1 (3000 N m/rad, estimate as the EXCT-30's), converter 6SL3210-5HE11-0UF0 (3 A, 10.9 A; its internal braking resistor 50 W, 3 kW, 820 V), belt EA 6e5 N and 300 N pretension (estimates as the EXCT-30's), `settling_tolerance_m` 0.5 mm (catalogue: EXPT positioning accuracy), `belt_max_tension_n` 1000, `pulley_max_torque_nm` 5 (catalogue, EGC-80) and `shaft_max_radial_load_n` 1500 (estimate), `ratings.max_condition_number` 5, the velocity loop 0.25 N m s/rad, 0.012 s with 0.2 ms filters (tuned with `sim-cli margins delta-linear --bands`). Its cycle is the D3's Adept cycle 25/305/25 mm at the top of the range; `start.pose` above the place position.
 
 ## Delta picker D4
 
@@ -1290,8 +1290,8 @@ The hexapod's config ([`machine-hexapod/default.toml`](../crates/machine-hexapod
 ball screw axis (`[parts]`, `[effects]`, `[thermal]`, `[thermal_feedback]`, `[profile]`, `[sim]`, `[screw]`, `[gearbox]`
 here a coupling of ratio 1, `[motor]`, `[drive]`, `[ratings]`, `[bounds]`, `[start]`, `[[cycle.segment]]`) with the same
 meanings; one motor, coupling, screw and drive per leg, all alike. The screw is a 25 x 10 (`lead_m` 0.01, `length_m`
-0.35, estimates, bounded as the axis's); `drive.velocity_kp_nm_s_rad` 0.4 (tuned with `sim-cli margins hexapod`: 145
-Hz, 89 degrees, 10.6 dB); `profile.vertical_axis` "z". The tool pose, `start.pose` and the targets are x, y, z (m), rx,
+0.35, estimates, bounded as the axis's); `drive.velocity_kp_nm_s_rad` 0.4 (tuned with `sim-cli margins hexapod`; on 21 November 2026, with the
+screw's damping and its stiffness at the nut: 127.7 Hz, 100.0 degrees, 7.78 dB, across the bounds at least 90.1 degrees and 7.48 dB; 145 Hz, 89 degrees, 10.6 dB before); `profile.vertical_axis` "z". The tool pose, `start.pose` and the targets are x, y, z (m), rx,
 ry, rz (rad, a rotation vector); `[axis.x]`, `[axis.y]`, `[axis.z]` take `max_velocity_m_s`, `max_acceleration_m_s2`,
 `max_jerk_m_s3` (0.2, 3, 100, estimates), `[axis.rx]`, `[axis.ry]`, `[axis.rz]` the same in rad (0.8, 10, 400,
 estimates). Effects as on the ball screw axis: `joint_elasticity` (each leg's coupling, screw, nut and bearings
@@ -1329,8 +1329,8 @@ with the same meanings, one motor, coupling, screw and drive per leg, all alike:
 1FK2104-4AF on an S210 6SL3210-5HE10-4UF0 (catalogue; its resistance an estimate, its inductance from the catalogue's
 short-circuit braking table, the current loop at 0.25 ms), the coupling 6000 N m/rad (estimate);
 `drive.velocity_kp_nm_s_rad` 0.03 (`sim-cli margins tripod`, against the legs' axial modes damped through the nut:
-60.5° and 18.90 dB, friction off 57.7° and 14.81 dB; across the bounds at least 50.7° and 17.87 dB, friction off 38.6°
-and 13.20 dB; with friction off 0.1 left 15.6° and 4.80 dB). The cycle carries the part through its three tilts and puts it off at the level pose. The tool pose,
+60.4° and 18.20 dB, friction off 57.7° and 12.54 dB; across the bounds at least 50.6° and 17.07 dB, friction off 36.3°
+and 10.64 dB (21 November 2026; 38.6° and 13.20 dB before); with friction off 0.1 left 6.9° and 2.20 dB). The cycle carries the part through its three tilts and puts it off at the level pose. The tool pose,
 `start.pose` and the targets are z (m), rx, ry (rad: R = Rx(rx) Ry(ry) Rz(g), the turn g dependent); `[axis.z]` takes
 `max_velocity_m_s`, `max_acceleration_m_s2`, `max_jerk_m_s3` (0.2, 2, 50, estimates), `[axis.rx]`, `[axis.ry]` the same in
 rad (0.5, 5, 200, estimates); `profile.vertical_axis` "z". Its own keys and those that differ from the hexapod's (all

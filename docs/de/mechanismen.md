@@ -101,7 +101,7 @@ aus `[slide]` (`RotaryJoint::linear_from_config`).
 | Knicken | F_k = Faktor pi^2 E I / L^2, Faktor 1/4, 1, 2,046, 4; zulässig F_k / `buckling_safety_factor`. |
 | Statische Last | C0a / `static_safety_factor`. |
 | d n | Nenndurchmesser (mm) mal Drehzahl (1/min), gegen `max_dn` (0 prüft nicht). |
-| Axialsteifigkeit | Welle A E / x (fest-fest: A E L / (x (L - x))), Mutter und Festlager in Reihe; an der weichsten Stellung der Mutter genommen. |
+| Axialsteifigkeit | Welle A E / x (fest-fest: A E L / (x (L - x))), Mutter und Festlager in Reihe; mit `effects.screw_stiffness_with_position` (in den mitgelieferten Konfigurationen an, außer in der des gemessenen Kugelgewindetriebs) an der Stelle der Mutter, sonst an der weichsten Stellung der Mutter genommen. |
 | Reibmoment der Vorspannung | T = K F_pr l / (2 pi), K = 0,05 / sqrt(tan beta) (THK); als T 2 pi / l zur Reibung der Führungen addiert. |
 | Lebensdauer | L10 = (Ca / (fw F_m))^3 10^6 Umdrehungen. Eine vorgespannte Mutter trägt F_pr (1 + F / (2,83 F_pr))^(3/2), bis die Kraft die Vorspannung abhebt (Hiwin). |
 
@@ -317,7 +317,7 @@ Orientierungsachsen (c des SCARA, rz des Palettierers, rx, ry des Fünfachsrobot
 
 `config/scara-tool.toml` und `config/arm-tool.toml` sind die Standardkonfigurationen mit eingeschaltetem Werkzeugraum,
 einer Startlage und einem Zyklus aus Geraden (die Einschwingtoleranzen des Arms 5 mm und 5 mrad: Unter der Nutzlast ruht
-sein Flansch 2,4 mm neben der Lage der Geber und um 3,2 mrad gedreht). `config/arm5-tool.toml` und `config/arm7-tool.toml` sind das
+sein Flansch 2,3 mm neben der Lage der Geber und um 3,1 mrad gedreht). `config/arm5-tool.toml` und `config/arm7-tool.toml` sind das
 Fünfachsbeispiel (`urdf/five-axis.urdf`: der Sechsachsroboter ohne die Drehung des Flanschs, bei null nach unten zeigend;
 Achsen x, y, z, rx, ry, wohin das Werkzeug zeigt) und das Siebenachsbeispiel (`urdf/seven-axis.urdf`: ein Drehgelenk im
 Oberarm; Achsen x, y, z, rx, ry, rz), jedes mit einem Zyklus aus Geraden, für `--config` mit der Maschine `urdf-arm`.
@@ -517,8 +517,9 @@ Steigung), und eine Drehung des Werkzeugs um z (`[tool_turn]`, Motor 4) hinter e
 Tabellen für Motor, Getriebe, Antrieb und Grenzwerte (`[motor.3]`, `[gearbox.4]`, ...). Alles an der Platte (die
 Einheiten mit ihren Motoren, der Schlitten, die Nutzlast) zählt zur Masse der Platte in der Ebene; Hub und Drehung
 stehen senkrecht zur Ebene und koppeln sonst nicht mit ihr. Die Werkzeugpose ist (x, y), (x, y, z), (x, y, c) oder
-(x, y, z, c), wie die beiden Schalter es sagen. Hub und Drehung sind starre Gelenke: Verdrehung und Spiel von Spindel
-und Drehgetriebe sind nicht modelliert. Siehe die [Modellreferenz](../model-reference.md).
+(x, y, z, c), wie die beiden Schalter es sagen. Mit `effects.joint_elasticity` (mitgeliefert an) sind Hub und Drehung
+elastisch wie die Gelenke der Arme: der Läufer ein eigener Körper, dazwischen die Feder von Kupplung und Spindel (in
+Reihe) oder des Drehgetriebes. Siehe die [Modellreferenz](../model-reference.md).
 
 ## Zweiteilige Plattform mit Zahnstangen-Übersetzung (delta-h4)
 
@@ -579,9 +580,9 @@ k = 9,4e5 N/m, 150 N): Ihre Dehnung lässt Unterarm und Effektor hinter Säule u
 in r zurück, und der Effektor dreht sich aus seiner radialen Linie (`effector.direction_error`; beim Verweilen an einer
 Station geprüft, `effector-direction`); ein Trum, das seine ganze Vorspannung verliert, wird schlaff (`elbow-band-slack`,
 `wrist-band-slack` prüfen den Ausschlag gegen die Hälfte davon). Mit elastischen Getrieben (`effects.joint_elasticity`) sind
-Kupplung und Spindel des Hubs ebenfalls eine Feder (in Reihe 4,56e7 N/m am fernen Ende der Mutter): Die Säule schwingt
-darauf mit 321 Hz bei gehaltenem Läufer, was den Standardzyklus um weniger als 0,1 % verschiebt (die größte Kraft der
-Spindel 172,4 auf 172,5 N). Siehe die
+Kupplung und Spindel des Hubs ebenfalls eine Feder (in Reihe 4,56e7 N/m am fernen Ende der Mutter; mit `effects.screw_stiffness_with_position`, mitgeliefert an, an der
+Stelle der Mutter): Die Säule schwingt darauf bei gehaltenem Läufer mit 432 Hz in der Höhe der Startpose (321 Hz am
+fernen Ende), und die größte Kraft der Spindel im Standardzyklus steigt von 171,9 N (starr) auf 184,5 N. Siehe die
 [Modellreferenz](../model-reference.md#wafer-handler) und die
 [Konfigurationsreferenz](../config-reference.md#wafer-handler).
 
@@ -983,10 +984,11 @@ Hebel: 30:1 auf Rädern von 80 mm, 25:1 auf 50 mm, 40:1 auf einer Trommel von 80
   0,124 m, einer für die am Anfang 0,105 m (ZVD, eine ganze Periode dahinter: 0,012, 0,047 und 0,041 m).
 - **Der Zyklus** (fahren und absenken, zurück, aufnehmen, heben) ist ein kurzer Positionierzyklus, 7,0 s je Durchgang
   (geformt 12,8 s), damit jede Prüfung über die Zyklen aller Maschinen ihn ganz sieht: aus der Fahrhöhe (z = 3 m, 2 m
-  Seil) 0,2 m und 0,1 m zur Ablage, dabei 0,15 m absenken. Geformt besteht er alle Prüfungen (Restpendeln 4,3 mm,
-  Seilkraft höchstens 2727 N und nie schlaff, Hubwerksbremse 5,5 von 7,5 N m belastet); ungeformt pendelt die Last
-  0,32 m, und `residual-sway` fällt durch, ebenso `thermal-warm-start` (das Pendeln eines Durchgangs ändert den
-  nächsten). Ein echter Werkstattkranzyklus über die Kranbahn dauert eine Minute: ein Ziel von [8.0, 4.0, 1.0].
+  Seil) 0,2 m und 0,1 m zur Ablage, dabei 0,15 m absenken. Geformt besteht er alle Prüfungen (Restpendeln 4,4 mm,
+  Seilkraft höchstens 2721 N und nie schlaff, Hubwerksbremse 5,4 von 7,5 N m belastet); ungeformt pendelt die Last
+  0,30 m, und `residual-sway` fällt durch (sein Warmstart konvergiert im Standardzyklus, 0,019 K; mit
+  `effects.hook_block` trägt sich das Pendeln eines Durchgangs in den nächsten, und die Prüfung `thermal-cycle-repeat`
+  nennt es). Ein echter Werkstattkranzyklus über die Kranbahn dauert eine Minute: ein Ziel von [8.0, 4.0, 1.0].
 - **Die Drehzahlregler** sind so steif eingestellt wie an den anderen Maschinen (Brücke und Katze etwa 60 Hz). Der des
   Hubwerks wird in Ruhe unter den 265 kg (`sim-cli margins`) mit ausgeschaltetem Wirkungsgradeffekt gemessen: Der
   Wirkungsgrad seines Getriebes (92 %), unter 0,5 W eingeblendet, wirkt sonst als Dämpfer von 1,1e6 N s/m am Seil,
@@ -1147,7 +1149,9 @@ Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels
 - Ein Glied biegt sich in einer Eigenform je Richtung (in der Ebene seines Gelenks; quer dazu und in Torsion mit
   `link_bending.directions`); mit `effects.link_bending_reaction` wirkt die Biegung auf die Gelenke zurück, ohne
   Lagranges Glieder zweiter Ordnung in der kleinen Biegung.
-- Die Steifigkeit einer Spindel wird für den ganzen Hub an der weichsten Stellung der Mutter genommen.
+- Die Steifigkeit einer Spindel folgt der Mutter nur mit `effects.screw_stiffness_with_position` (in den mitgelieferten
+  Konfigurationen an, außer in der des gemessenen Kugelgewindetriebs); aus, wird sie für den ganzen Hub an der
+  weichsten Stellung der Mutter genommen.
 - Der Roboter auf seiner Schiene: Der Schub der Zahnstange wird durch den Ursprung des Schlittens genommen (kein eigenes
   Moment auf die Wagen), die Kreiselmomente der Motorläufer des Arms fehlen in der Führungslast, und die Wagen sind
   starre Lager (keine Steifigkeit der Führung: der Schlitten kippt nicht auf ihnen); die Führungslast wird dem
@@ -1170,9 +1174,9 @@ Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels
   [Modellreferenz](../model-reference.md#linear-delta).
 
 - Hexapod: Das Drehen der Beine um ihre Basisgelenke und die Trägheit der Nutzlast fehlen; eine Steifigkeit je Bein
-  (an der weichsten Stellung der Mutter). Seine Eigenfrequenzen werden bei gehaltenen Motoren angegeben wie die der Roboter (`sim-cli modes hexapod`).
+  (die der Spindel an der Mutter, `effects.screw_stiffness_with_position`, mitgeliefert an). Seine Eigenfrequenzen werden bei gehaltenen Motoren angegeben wie die der Roboter (`sim-cli modes hexapod`).
 - Tripod: Das Schwenken der Beine um ihre Basisgelenke fehlt wie am Hexapod; keine Reibung und kein Spiel in Dreh- und
-  Kugelgelenken; eine Steifigkeit je Bein (an der weichsten Stellung der Mutter); die Konvergenz der Vorwärtskinematik
+  Kugelgelenken; eine Steifigkeit je Bein (die der Spindel an der Mutter, wie am Hexapod); die Konvergenz der Vorwärtskinematik
   ist für den ausgelieferten Quader gezeigt (eine Konfiguration mit anderer Geometrie oder anderem Quader sollte die
   Prüfung jenes Tests wiederholen).
 
