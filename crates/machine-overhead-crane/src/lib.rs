@@ -157,6 +157,9 @@ const STATE_LEN: usize = 15;
 /// How far over the floor (m), and how fast up from it (m/s), the payload on the sling still stands: its height and speed
 /// P1 + d, P1' + d' round by an ulp of P1's.
 const FLOOR_ROUNDING: f64 = 1e-12;
+/// The hook block's and the payload's boxes as the scene draws them, centred on their points (m, x y z).
+const HOOK_BOX: V3 = [0.12, 0.08, 0.16];
+const PAYLOAD_BOX: V3 = [0.6, 0.6, 0.4];
 
 /// Where the states of the new effects sit, and the generalised coordinates of `full.rs`.
 #[derive(Debug, Clone)]
@@ -1117,7 +1120,7 @@ impl Machine for Crane {
             }
         }
         let picked = std::mem::take(&mut self.picked);
-        if !picked && self.floor.is_none() {
+        if !picked && self.floor.is_none() && self.on_payload(s).is_none() {
             return;
         }
         let (before, empty) = (self.energy(s), self.payload_mass() == 0.0);
@@ -1146,9 +1149,22 @@ impl Machine for Crane {
                     s[rate] = -base_v;
                 }
             }
-            if !self.elastic && self.rope(s).stretch > 1e-9 {
-                self.place_on_rope(s, s[2], 1.0);
+        }
+        if let Some(dz) = self.on_payload(s) {
+            // The hook block down on the payload: plastic, put back on its top (the payload where it is) and the two at
+            // one vertical speed, the payload's where it stands on the floor, else their common momentum's. Booked with
+            // the pick's loss.
+            if s[dz] > -full::landing() || s[dz + 3] > 0.0 {
+                let (v1, v2) = (s[LOAD_SPEED + 2], s[LOAD_SPEED + 2] + s[dz + 3]);
+                let (m1, m2) = (self.hook, self.payload_mass());
+                let v = if standing { v2 } else { (m1 * v1 + m2 * v2) / (m1 + m2) };
+                s[LOAD + 2] += s[dz] + full::landing();
+                s[dz] = -full::landing();
+                (s[LOAD_SPEED + 2], s[dz + 3]) = (v, 0.0);
             }
+        }
+        if self.floor.is_some() && !self.elastic && self.rope(s).stretch > 1e-9 {
+            self.place_on_rope(s, s[2], 1.0);
         }
         if picked && !standing {
             if self.layout.rotor.is_some() {
@@ -1457,7 +1473,7 @@ impl Machine for Crane {
             Part::new("rope", Shape::Segment { to: load, width: 0.04 }, self.sheave(s), sim_core::scene::BELT_COLOR)
                 .highlighted(((rope.tension - weight) / weight).clamp(-1.0, 1.0) as f32),
         );
-        out.parts.push(Part::new("hook", Shape::Box { size: [0.12, 0.08, 0.16] }, load, [0.9, 0.75, 0.1]));
+        out.parts.push(Part::new("hook", Shape::Box { size: HOOK_BOX }, load, [0.9, 0.75, 0.1]));
         if self.attached && self.payload > 0.0 {
             // With the sling the payload hangs at its end (its centre there, the sling a line to the hook block).
             let place = if self.sling.is_some() {
@@ -1472,7 +1488,7 @@ impl Machine for Crane {
             } else {
                 add(load, [0.0, 0.0, -0.3])
             };
-            out.parts.push(Part::new("payload", Shape::Box { size: [0.6, 0.6, 0.4] }, place, [0.2, 0.5, 0.75]));
+            out.parts.push(Part::new("payload", Shape::Box { size: PAYLOAD_BOX }, place, [0.2, 0.5, 0.75]));
         }
         out.labels.push(Label {
             pos: add(self.sheave(s), [0.0, 0.0, -0.5 * rope.length]),

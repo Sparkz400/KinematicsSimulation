@@ -107,7 +107,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | --- | --- | --- |
 | The cables' own inertia; the lift of cable from the drum to the pulley; the sag's weight changing with the pose | cable robots | 0.5 % of the spatial platform's mass; 0.05 N; 5e-5 N. The sag model is a shallow parabola, 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
 | The rotors' gyroscopic coupling with the legs' swing (it is in the frame's reaction only); the rods' faces against platform and base | hexapod, tripod, rotary hexapod | About 0.015 N m (hand estimate). |
-| The hook block landing on the load: lowered by more than the sling's length onto a standing load, it passes through it (the sling, a rope since 21 November, goes slack below its length) | crane | None in the shipped cycle; the sling is 1 m. The hook block and the elastic drives were run on a full cycle; rope mass and bridge skew passed their own tests and a 0.2 s run. |
+| The hook block against the payload's sides (it lands on its top only, since 21 November) | crane | None in the shipped cycle: the sling holds the hook block over the payload. |
 | Link bending together with parallelogram bars of their own (refused); the palletiser's rod and crank (shipped bar arrays empty) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured in the test case). |
 | The belt runs' sideways offset on the leaning Z axis; the belt runs riding on the beam's vertical mode | T-gantry | A first-order moment (T₁ − T₃)·0.04 m; the beam mode would fall 0.9 % (59.32 to 58.77 Hz). |
 | Angular momentum of the T-gantry crate against its machine file is not compared | T-gantry | Different origins and belt-run geometry. |
@@ -340,6 +340,12 @@ Fixed (after the second audit, 21 November):
   compliant base: they have it, as the joint kit's slide and the knife (`the_frame_momentum_is_the_hand_calculated_one`
   in both crates; the standard suite's first-moment check now judges them). Both are level, so
   `testkit::weight_is_at_the_first_moment` (which asks the first moment to move vertically) has nothing to judge there.
+- The crane's hook block lowered by more than the sling's length onto a standing payload passed through it (section 4):
+  0.035 m under the payload's point after a lowering 1.2 m past its touchdown. It now lands on the payload's top (the
+  scene's boxes, its point 0.28 m over the payload's), a one-sided contact on the sling's span held at rest only and a
+  plastic landing booked as the floor's (114.37 J of the fall, no step making energy), the floor then carrying both,
+  2598.762 N (`a_hook_block_lowered_beyond_the_sling_lands_on_the_payload`). No new switch or key: it acts with
+  `effects.hook_block`; no shipped cycle lowers the hook block that far.
 
 Fixed:
 - `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another

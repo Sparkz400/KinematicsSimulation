@@ -1803,7 +1803,15 @@ J̇ q̇) to f:
   taut again in its stretch (its damper, with `effects.rope_damping`, books what that loses as the rope's). At rest it is
   stretched to l_s (1 + m g / EA); a pick hangs the payload plumb under the hook block at that length, or, where that
   is under the floor, stands it on the floor with the sling slack. The load's
-  signals are P2's.
+  signals are P2's. Lowered further than that, the hook block lands on the payload: its box (0.16 m tall) on the
+  payload's (0.4 m), the scene's, its point h = 0.28 m over the payload's, over the payload's box. A one-sided contact on
+  the sling's span, d_z ≥ −h: at rest against it a constraint d̈_z = 0 whose push (hook block up, payload down) is
+  never negative, solved with the floor's; one coming down lands at the step's end, plastic, the two at one vertical
+  speed (the payload's where it stands on the floor, else their common momentum's), booked with `power.other` as the
+  floor's landing. Since 21 November 2026 (it passed through before): lowered 1.2 m past the payload's touchdown, the
+  hook block rests 0.28 m over it, the rope slack and the floor carrying both, (15 + 250) g = 2598.762 N; the fall's
+  114.37 J booked at the landing, no step made energy, and a taut rope lifts it off again
+  (`a_hook_block_lowered_beyond_the_sling_lands_on_the_payload`).
 - `effects.joint_elasticity`: each drive the elastic joint of the other machines, the gearbox's stiffness, damping and
   backlash between the rotor (a state) and the wheel or drum. With it on the shipped loops are stable (`sim-cli margins
   overhead-crane --set effects.joint_elasticity=true`): bridge 177.4 Hz, 51.7°, 9.68 dB; trolley 182.8 Hz, 51.0°,
@@ -1832,8 +1840,8 @@ the rotors in and higher figures (the drives at 65.7, 88.0 and 111.0 Hz, the bou
 with drum and rotor free). The held bridge mode is what the config calls the drive's anti-resonance: the shipped
 velocity loop (some 4.5 Hz on the rigid drive) does not hold the rotor there.
 
-Left out: the rope's bending at the sheave, the load's own turning (a point mass), and the hook block landing on the
-load: lowered by more than the sling's length onto a standing load, it passes through it.
+Left out: the rope's bending at the sheave and the load's own turning (a point mass; the hook block meets the payload
+only on its top, not on its sides).
 
 ## Crank and cam machines
 
