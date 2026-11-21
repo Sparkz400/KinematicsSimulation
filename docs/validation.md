@@ -1153,8 +1153,8 @@ checked on functions whose indices are known in closed form; on the machines onl
   massless rope, the bridge one drive, the drives rigid, and pick and set-down are quasi-static. The switches
   `effects.rope_mass`, `hook_block` (hook and load a double pendulum), `joint_elasticity` (elastic drives),
   `bridge_skew` and `floor_contact` (the load standing on the floor, a snatch lift, a slack rope at set-down) add those
-  effects; each is checked by its own tests, not against a crane, and with the hook block and the floor contact on the
-  sling stays a rod where it should go slack. Not modelled either way: the rope's bending at the sheave and its twist.
+  effects; each is checked by its own tests, not against a crane (the hook block's sling is a rope that goes slack on the
+  floor). Not modelled either way: the rope's bending at the sheave and its twist.
   The residual sway is the amplitude of a free
   pendulum at the dwell, not what a sway sensor of a real crane reads; the input shaper is checked against the model's
   own pendulum only. The SciPy reference checks the integration, not the equations.

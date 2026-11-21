@@ -107,7 +107,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | --- | --- | --- |
 | The cables' own inertia; the lift of cable from the drum to the pulley; the sag's weight changing with the pose | cable robots | 0.5 % of the spatial platform's mass; 0.05 N; 5e-5 N. The sag model is a shallow parabola, 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
 | The rotors' gyroscopic coupling with the legs' swing (it is in the frame's reaction only); the rods' faces against platform and base | hexapod, tripod, rotary hexapod | About 0.015 N m (hand estimate). |
-| A slack sling: with the hook block and the floor contact on, the sling is a rod | crane | Not measured; the sling pushes where it should go slack. The hook block and the elastic drives were run on a full cycle; rope mass and bridge skew passed their own tests and a 0.2 s run. |
+| The hook block landing on the load: lowered by more than the sling's length onto a standing load, it passes through it (the sling, a rope since 21 November, goes slack below its length) | crane | None in the shipped cycle; the sling is 1 m. The hook block and the elastic drives were run on a full cycle; rope mass and bridge skew passed their own tests and a 0.2 s run. |
 | Link bending together with parallelogram bars of their own (refused); the palletiser's rod and crank (shipped bar arrays empty) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured in the test case). |
 | The belt runs' sideways offset on the leaning Z axis; the belt runs riding on the beam's vertical mode | T-gantry | A first-order moment (T₁ − T₃)·0.04 m; the beam mode would fall 0.9 % (59.32 to 58.77 Hz). |
 | Angular momentum of the T-gantry crate against its machine file is not compared | T-gantry | Different origins and belt-run geometry. |
@@ -264,6 +264,11 @@ Fixed:
   on the rise's cubic, the fall's state on its own cubic), with the rise's and the fall's state as
   two knots at the same time: same place and speed, only the acceleration steps. Swept over 380 to
   420 rad/s in planned_limits; `path::tests::the_runs_meet_at_the_same_place_and_speed`.
+- The crane's sling was a rod (section 4): it is a rope of the main rope's EA and damping that goes slack. With it the
+  floor contact under the hook block closes its energy budget: the floor lifted the hook block on the standing payload
+  step by step and booked that as made energy (an audit's set-down cycle: `power.other` -1.30 J, 1.30 J of 42.1 J
+  unaccounted; now -2.3e-10 J and -9.3e-10 J with the torque ripple, whose work is in that row, off), and the floor's
+  push on a body still falling did work (0.21 J in a lift-off test): it now holds a body that stands still only.
 
 Open, with the cause where it is known:
 - **A screw or rack behind a converter: the coupling's damping acts across the whole series spring**

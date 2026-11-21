@@ -1751,7 +1751,7 @@ drum stands still when the payload goes on or off. With `effects.rope_stretch` o
 the constraint force.
 
 Five further effects, each its own switch (off as shipped; off, the model above exactly), solved together by one mass
-matrix over q = (x_c, y, l, P1 (3) [, a, b] [, ψ]), M(q) q̈ = f(q, q̇), each point mass adding m Jᵀ J to M and Jᵀ (F − m
+matrix over q = (x_c, y, l, P1 (3) [, d (3)] [, ψ]), M(q) q̈ = f(q, q̇), each point mass adding m Jᵀ J to M and Jᵀ (F − m
 J̇ q̇) to f:
 
 - `effects.rope_mass` (`rope.mass_per_m_kg_m` μ): the free rope's material runs off the sheave at the drum's speed, its
@@ -1759,8 +1759,12 @@ J̇ q̇) to f:
   trolley and the drum's surface, K_w = μ (capacity − l) (|v_S|² + l̇²) / 2; V = μ g [l (H + z_P) / 2 + (capacity − l)
   H]. Lagrange's equations with the growing mass μ l; nothing is booked as loss. `rope.tension` is the drum's end, (m +
   μ l) g at rest, `rope.shortfall` the hook's.
-- `effects.hook_block`: the hook block (`crane.hook_mass_kg`) at P1 on the rope, the load on a sling of
-  `crane.sling_length_m` at P2 = P1 + l_s (sin a cos b, sin b, −cos a cos b): a spherical double pendulum. The load's
+- `effects.hook_block`: the hook block (`crane.hook_mass_kg`) at P1 on the rope, the load at P2 = P1 + d on a sling of
+  `crane.sling_length_m` l_s: a spherical double pendulum. The sling is a rope of the main rope's EA and specific
+  damping, t_s = EA e_s / l_s + c ė_s / l_s with e_s = |d| − l_s, never below 0 and 0 while e_s ≤ 0: it goes slack when
+  the load stands on the floor and the hook block is lowered further, or in a bounce, and takes the jerk when it comes
+  taut again in its stretch (its damper, with `effects.rope_damping`, books what that loses as the rope's). At rest it is
+  stretched to l_s (1 + m g / EA); a pick hangs the payload plumb under the hook block at that length. The load's
   signals are P2's.
 - `effects.joint_elasticity`: each drive the elastic joint of the other machines, the gearbox's stiffness, damping and
   backlash between the rotor (a state) and the wheel or drum. With it on the shipped loops are stable (`sim-cli margins
@@ -1774,10 +1778,12 @@ J̇ q̇) to f:
 - `effects.floor_contact`: the standing body (the load's point, or the hook block's) is a one-sided constraint a_z = 0 at
   `crane.floor_height_m` with N ≥ 0, N = −a_z,free / (J_z M⁻¹ J_zᵀ), and Coulomb friction μ_f N
   (`crane.floor_friction_coefficient`, smoothed over `crane.rolling_smoothing_m_s`) iterated with N; the rigid rope
-  respects the floor too, and a rope that comes taut lifts the load.
+  respects the floor too, and a rope that comes taut lifts the load. A body falling onto the floor runs on through the
+  step, which puts it back on the floor at rest (plastic, booked with `power.other`); the constraint holds a body that
+  stands still only, so the floor's push does no work.
 
-Left out: the rope's bending at the sheave, the load's own turning (a point mass), and a slack sling: with the hook block
-and the floor contact on, the sling is a rod.
+Left out: the rope's bending at the sheave, the load's own turning (a point mass), and the hook block landing on the
+load: lowered by more than the sling's length onto a standing load, it passes through it.
 
 ## Crank and cam machines
 

@@ -204,7 +204,8 @@ fn a_pick_on_a_swinging_hook_block_creates_no_energy() {
     m.after_step(&mut s, DT);
     let lost = before - m.energy(&s);
     assert!(lost >= 0.0 && (m.pick_loss * DT - lost).abs() < 1e-9, "{lost} J lost, {} J booked", m.pick_loss * DT);
-    let ((low, low_v), ls) = (m.lower(&s), m.sling.unwrap());
+    // At its rest stretch under the payload, l_s (1 + m_p g / EA).
+    let ((low, low_v), ls) = (m.lower(&s), m.sling.unwrap() * (1.0 + m.payload * G / m.ea));
     let (p1, v1) = ([s[LOAD], s[LOAD + 1], s[LOAD + 2]], [s[LOAD_SPEED], s[LOAD_SPEED + 1], s[LOAD_SPEED + 2]]);
     let off = |a: V3, b: V3| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
     assert!(off(sub(low, p1), [0.0, 0.0, -ls]) < 1e-12 && off(low_v, v1) < 1e-12, "{low:?} {low_v:?}");
@@ -253,11 +254,12 @@ fn a_massive_rope_swings_with_the_closed_form_period() {
 /// l2 theta2'' + g theta2 = 0. With theta'' = -w^2 theta the second gives theta2 / theta1 = l1 w^2 / (g - l2 w^2), and the
 /// determinant (m1 + m2)(g - l1 w^2)(g - l2 w^2) - m2 l1 l2 w^4 = 0 is m1 l1 l2 w^4 - (m1 + m2) g (l1 + l2) w^2 +
 /// (m1 + m2) g^2 = 0 (for m2 -> 0: w^2 = g / l1 and g / l2). Each root is excited alone in its own shape and its period read
-/// from the zero crossings of the hook block's sway. The swing is small, 1e-3 rad of the rope: in the upper mode hook
-/// block and load swing against each other and pull the hook block up and down at twice the frequency (30.2 rad/s), close
-/// to the load's bounce on the elastic rope (sqrt(EA / (l1 (m1 + m2))) = 42.6 rad/s), which lengthens the period by
-/// about 1.4 theta1^2 (measured: 1.36 % at 0.01 rad, 0.13 % at 3e-3, 1.5e-4 at 1e-3; the model's linearisation, its
-/// Jacobian's eigenvalues, gives both hand periods to 1e-6).
+/// from the zero crossings of the hook block's sway; l2 is the sling at its rest stretch, l_s (1 + m2 g / EA). The swing is
+/// small, 5e-4 rad of the rope: in the upper mode hook block and load swing against each other and pull the hook block up
+/// and down at twice the frequency (30.2 rad/s), close to the load's bounce on the elastic rope and sling in series (5.94
+/// Hz, 37.3 rad/s), which lengthens the period by some theta1^2 (measured: with the sling a rod and the bounce at 42.6
+/// rad/s, 1.36 % at 0.01 rad, 0.13 % at 3e-3, 1.5e-4 at 1e-3; with the elastic sling 2.1e-4 at 1e-3, 5.3e-5 at 5e-4;
+/// the model's linearisation, its Jacobian's eigenvalues, gives both hand periods to 1e-6).
 #[test]
 fn the_hook_block_and_its_load_swing_at_the_double_pendulum_s_two_frequencies() {
     let mut cfg = lossless(&["effects.hook_block = true"]);
@@ -267,17 +269,19 @@ fn the_hook_block_and_its_load_swing_at_the_double_pendulum_s_two_frequencies() 
         let mut m = crane(&cfg);
         m.set_brake_engaged(true);
         let (mut state, hold) = at_rest(&m, [5.0, 2.0, 2.0]);
-        let (l1, l2) = (m.rope(&state).length, m.sling.unwrap());
+        // The sling at its rest stretch under the payload.
+        let (l1, l2) = (m.rope(&state).length, m.sling.unwrap() * (1.0 + m.payload * G / m.ea));
         let (m1, m2) = (m.hook, m.payload);
         let b = (m1 + m2) * G * (l1 + l2);
         let root = (b + if upper { 1.0 } else { -1.0 } * (b * b - 4.0 * m1 * l1 * l2 * (m1 + m2) * G * G).sqrt())
             / (2.0 * m1 * l1 * l2);
         let ratio = l1 * root / (G - l2 * root);
-        let theta1 = 1e-3f64;
+        let theta1 = 5e-4f64;
         // The rope turned by theta1 about the sheave, the sling by theta2 = ratio theta1 (to the y direction).
         state[LOAD + 1] = state[1] + l1 * theta1.sin();
         state[LOAD + 2] = m.height - l1 * theta1.cos();
-        state[a0 + 1] = ratio * theta1;
+        state[a0 + 1] = l2 * (ratio * theta1).sin();
+        state[a0 + 2] = -l2 * (ratio * theta1).cos();
         let mut rk = Rk4::new(m.state_len());
         let (mut crossings, mut last) = (Vec::new(), state[LOAD + 1] - state[1]);
         let mut dump = String::new();
@@ -348,10 +352,13 @@ fn the_new_effects_conserve_energy_with_the_drives_held() {
         // Everything on the move, the drum paying out (the rope's l' terms).
         m.set_tool_velocity(&mut state, &[0.05, 0.04, -0.1]);
         state[LOAD_SPEED] = 0.1;
-        if let Some(a0) = m.layout.sling {
-            state[a0] = 0.3;
+        if let (Some(a0), Some(rest)) = (m.layout.sling, m.sling_rest()) {
+            // The sling turned aside and swinging, taut (its radial speed's swing, 0.03 m/s over 76 rad/s, inside its
+            // 1.7 mm rest stretch).
+            state[a0] = 0.29;
             state[a0 + 1] = -0.2;
-            state[a0 + 2] = 0.1;
+            state[a0 + 2] = -(rest * rest - 0.29 * 0.29 - 0.2 * 0.2).sqrt();
+            state[a0 + 3] = 0.1;
         }
         if let Some(r0) = m.layout.rotor {
             state[r0 + 2] += 2e-3;
@@ -546,6 +553,112 @@ fn the_rigid_rope_stands_the_load_on_the_floor() {
     assert!((s[LOAD + 2] - 1.0).abs() < 1e-12 && s[LOAD] == 8.0, "{s:?}");
 }
 
+/// The hook block, the payload and the floor (effects.hook_block, effects.floor_contact): the payload hanging 1.6 mm over
+/// the floor (0.5 m) on its 1 m sling, the drum pays out that and 0.2 m more, its brake then holding it. The payload stands
+/// on the floor, the sling, a rope, goes slack and pushes nothing, and the hook block hangs 0.2 m lower on the main rope
+/// alone. By hand at rest: the rope's tension t = m_hook g = 147.10 N, its length L = l (1 + t / EA) from the drum's free
+/// length l, so the hook block at H - L; the floor carries the payload's whole weight, m_p g = 2451.66 N; the sling's
+/// span 0.8 m less than the rope's lowering (`base_signals`: rope.tension and load.floor_force). A sling that was a rod
+/// held the hook block up on the standing payload: the main rope slack (0 N), the floor carrying both, 2598.76 N. The
+/// rope's damping (c / l on the rope) settles the hook block's drop onto it in the 4 s (after 2 s it still rang by 8e-8 m,
+/// 0.03 N).
+#[test]
+fn a_hook_block_lowered_onto_a_standing_payload_hangs_on_the_rope_alone() {
+    let mut m = crane(&lossless(&[
+        "effects.hook_block = true",
+        "effects.floor_contact = true",
+        "effects.rope_damping = true",
+        "effects.holding_brake = true",
+    ]));
+    m.set_brake_engaged(true);
+    let floor = m.floor.unwrap();
+    let (mut s, hold) = at_rest(&m, [5.0, 2.0, floor + m.sling.unwrap() + 0.01]);
+    let gap = m.lower(&s).0[2] - floor;
+    assert!(gap > 0.0 && gap < 0.01, "{gap}");
+    s[2] += gap + 0.2;
+    let mut rk = Rk4::new(m.state_len());
+    for _ in 0..(4.0 / DT) as usize {
+        advance(&m, &mut rk, &mut s, &hold, DT, 4);
+        m.after_step(&mut s, DT);
+    }
+    let mut signals = Vec::new();
+    m.base_signals(&s, &hold, &mut signals);
+    let (tension, floor_force) = (signals[0], signals[6]);
+    let (t, n) = (m.hook * G, m.payload * G);
+    let hook = m.height - s[2] * (1.0 + t / m.ea);
+    assert!((tension / t - 1.0).abs() < 1e-6, "rope {tension} N against {t} N");
+    assert!((floor_force / n - 1.0).abs() < 1e-9, "floor {floor_force} N against {n} N");
+    assert!((s[LOAD + 2] - hook).abs() < 1e-7 && (m.lower(&s).0[2] - floor).abs() < 1e-12, "{s:?}");
+    let sling = m.sling_state(&s).unwrap();
+    let slack = hook - floor - m.sling.unwrap();
+    assert!(sling.tension == 0.0 && (sling.stretch - slack).abs() < 1e-7 && slack < -0.19, "{} m", sling.stretch);
+}
+
+/// Energy through a lift-off from the floor on the sling (effects.hook_block, effects.floor_contact, the losses off): the
+/// payload stands, the sling slack 0.2 m, and the hoist's torque rises over 2 s from what holds the hook block to 1.2
+/// times what holds both. The drum takes the slack in, the sling comes taut with a jerk (the rope's and the sling's
+/// stretch take it), the payload lifts off and may fall back (a plastic fall, booked with `power.other`). The energy less
+/// the motor torque's work on the motor angles plus what `after_step` booked and what the rope's and the sling's dampers
+/// took (effects.rope_damping on, the shipped setting: their power trapezoid-integrated over each sub-step) stays put; with
+/// the damping off the jerk is elastic.
+#[test]
+fn a_lift_off_on_a_slack_sling_keeps_the_energy() {
+    for damping in [false, true] {
+        let mut m = crane(&lossless(&[
+            "effects.hook_block = true",
+            "effects.floor_contact = true",
+            "crane.floor_friction_coefficient = 0.0",
+            &format!("effects.rope_damping = {damping}"),
+        ]));
+        let floor = m.floor.unwrap();
+        let (mut s, hold) = at_rest(&m, [5.0, 2.0, floor + m.sling.unwrap() + 0.01]);
+        let gap = m.lower(&s).0[2] - floor;
+        s[2] += gap + 0.2;
+        let (m1, mm) = (m.hook, m.load_mass());
+        let mut rk = Rk4::new(m.state_len());
+        let (mut pos, mut vel, mut powers) = ([0.0; 3], [0.0; 3], Vec::new());
+        let e0 = m.energy(&s);
+        let (mut work, mut booked, mut worst, mut lift, mut least) = (0.0, 0.0, 0.0f64, 0.0f64, 0.0f64);
+        // The dampers' power (`power.rope`): the losses but `power.other`, which carries `after_step`'s.
+        let mut damped = |m: &Crane, s: &[f64], torque: &[f64]| {
+            powers.clear();
+            m.loss_powers(s, torque, &mut powers);
+            powers[..10].iter().sum::<f64>()
+        };
+        for step in 0..(2.0 / DT) as usize {
+            let ramp = (step as f64 * DT / 2.0).min(1.0);
+            let mut torque = hold;
+            torque[2] = hold[2] * (m1 + ramp * (1.2 * mm - m1)) / mm;
+            m.motor_state(&s, &mut pos, &mut vel);
+            let before = pos;
+            // The integrator's four sub-steps one by one, the dampers' power trapezoid-integrated over each.
+            for _ in 0..4 {
+                let p0 = damped(&m, &s, &torque);
+                advance(&m, &mut rk, &mut s, &torque, DT / 4.0, 1);
+                booked += 0.5 * (p0 + damped(&m, &s, &torque)) * DT / 4.0;
+            }
+            m.after_step(&mut s, DT);
+            booked += m.pick_loss * DT;
+            least = least.min(m.pick_loss * DT);
+            m.motor_state(&s, &mut pos, &mut vel);
+            work += (0..3).map(|k| torque[k] * (pos[k] - before[k])).sum::<f64>();
+            worst = worst.max((m.energy(&s) - work + booked - e0).abs());
+            lift = lift.max(m.lower(&s).0[2] - floor);
+        }
+        assert!(s.iter().all(|v| v.is_finite()) && lift > 0.02, "lifted {lift} m");
+        // Measured: 6.4e-4 J undamped (of 302 J of work, 66.6 J booked at the floor); damped 0.032 J of 135 J booked,
+        // the trapezoid's error where the dampers' power jumps (a tension clamped at 0 while the rope or sling is still
+        // stretched): first order, 0.147 J with one trapezoid per step instead of per sub-step.
+        // No step books a negative loss (energy made) beyond rounding: measured -1.1e-12 J. With the sling a rod the floor
+        // lifted the hook block on the standing payload each step, booked as made energy (the audit's crane cycle with
+        // the hook block on the floor: power.other -1.30 J, 1.30 J unaccounted; now -2.3e-10 J and -9.3e-10 J with
+        // the torque ripple, whose work is in that row, off).
+        assert!(least > -1e-9, "damping {damping}: a step booked {least} J");
+        let tolerance = if damping { 0.05 } else { 1e-3 };
+        assert!(worst < tolerance, "damping {damping}: {worst} J of {work} J of work, {booked} J booked");
+    }
+}
+
 /// Every new effect builds and runs: the shipped cycle for a moment with each of them and with all together (and the
 /// floor), finite, with the signal list as long as the samples.
 #[test]
@@ -620,7 +733,8 @@ fn the_default_cycle_with_elastic_drives_keeps_its_loops_stable() {
 fn the_mode_list_has_both_of_the_double_pendulum_s_roots() {
     let m = crane(&lossless(&["effects.hook_block = true"]));
     let pose = [5.0, 2.0, 2.0];
-    let (l1, l2, m1, m2) = (m.height - pose[2], m.sling.unwrap(), m.hook, m.payload);
+    let (l1, m1, m2) = (m.height - pose[2], m.hook, m.payload);
+    let l2 = m.sling.unwrap() * (1.0 + m2 * G / m.ea);
     let b = (m1 + m2) * G * (l1 + l2);
     let root = |sign: f64| {
         ((b + sign * (b * b - 4.0 * m1 * l1 * l2 * (m1 + m2) * G * G).sqrt()) / (2.0 * m1 * l1 * l2)).sqrt() / TAU

@@ -38,9 +38,9 @@
 //! sling: the load is a point mass).
 //!
 //! Four further effects, each its own switch (off: the model above, exactly), solved together by one mass matrix
-//! (`full.rs`) over the coordinates x_c (bridge), y, l, the hook block's point P1 (3), with the effects the sling's two
-//! angles (a, b) and the bridge's yaw psi; the rigid rope there is the constraint L = l on these coordinates, its tension
-//! the multiplier:
+//! (`full.rs`) over the coordinates x_c (bridge), y, l, the hook block's point P1 (3), with the effects the sling's span
+//! d = P2 - P1 (3) and the bridge's yaw psi; the rigid rope there is the constraint L = l on these coordinates, its
+//! tension the multiplier:
 //!
 //! - effects.rope_mass: a rope of mass mu per metre (`rope.mass_per_m_kg_m`, 0.0035 d^2 kg/m for a steel wire rope of d mm).
 //!   A straight rope of free length l from the sheave S to P1, its material's velocity linear along it from v_A = v_S + l'
@@ -52,9 +52,11 @@
 //!   mass matrix and the speed terms of `full.rs`; nothing is booked as loss. The tension differs along the rope by the
 //!   weight below: at the drum the load's weight plus mu g times the height hanging, (m + mu l) g, at the hook m g; the
 //!   signal `rope.tension` is the drum's end (the highest), `rope.shortfall` is judged at the hook's end.
-//! - effects.hook_block: the hook block (`crane.hook_mass_kg`) hangs on the rope at P1, the load under it on a sling of
-//!   fixed length `crane.sling_length_m` at P2 = P1 + ls e(a, b), e = (sin a cos b, sin b, -cos a cos b): a spherical
-//!   double pendulum (the sling's two angles). Signals of the load (sway, position) are P2's.
+//! - effects.hook_block: the hook block (`crane.hook_mass_kg`) hangs on the rope at P1, the load under it at P2 = P1 + d
+//!   on a sling of length l_s (`crane.sling_length_m`): a spherical double pendulum. The sling is a rope of the main
+//!   rope's EA and damping, t_s = EA e_s / l_s + c e_s' / l_s, e_s = |d| - l_s, never below 0 and 0 while e_s <= 0: it
+//!   goes slack where the load stands on the floor and the hook block goes lower, or in a bounce, and takes the jerk in
+//!   its stretch when it comes taut again. Signals of the load (sway, position) are P2's.
 //! - effects.joint_elasticity: each drive is the elastic joint other machines use (`RotaryJoint::rotor`): the gearbox's
 //!   stiffness, damping and backlash between the rotor (an angle and a speed of its own) and the wheel or drum.
 //! - effects.bridge_skew: the bridge a rigid girder on two end carriages, each with a drive of the bridge's motor config
@@ -146,19 +148,22 @@ const AXIS_KEYS: [&str; 3] = ["axis-x", "axis-y", "axis-z"];
 
 /// The state: bridge x, trolley y, the rope's free length l, their rates; the load's place P and its speed; the three
 /// brakes' deflections. With the new effects more follow (`Layout`): the bridge's yaw, its rate and the second carriage's
-/// brake; the sling's two angles and rates; the rotors' angles and speeds.
+/// brake; the sling's span and its rate; the rotors' angles and speeds.
 const RATES: usize = 3;
 const LOAD: usize = 6;
 const LOAD_SPEED: usize = 9;
 const BRAKES: usize = 12;
 const STATE_LEN: usize = 15;
+/// How far over the floor (m), and how fast up from it (m/s), the payload on the sling still stands: its height and speed
+/// P1 + d, P1' + d' round by an ulp of P1's.
+const FLOOR_ROUNDING: f64 = 1e-12;
 
 /// Where the states of the new effects sit, and the generalised coordinates of `full.rs`.
 #[derive(Debug, Clone)]
 struct Layout {
     /// effects.bridge_skew: the state index of the yaw psi (then psi', the second carriage's brake).
     skew: Option<usize>,
-    /// effects.hook_block: the sling's a, b, a', b'.
+    /// effects.hook_block: the sling's span d = P2 - P1 from the hook block to the payload, and its rate.
     sling: Option<usize>,
     /// effects.joint_elasticity: the rotors' angles, then their speeds (one each per drive).
     rotor: Option<usize>,
@@ -181,11 +186,11 @@ impl Layout {
             len - n
         };
         let sk = skew.then(|| take(3));
-        let sl = sling.then(|| take(4));
+        let sl = sling.then(|| take(6));
         let ro = elastic.then(|| take(2 * drives));
         if let Some(a) = sl {
-            pos.extend([a, a + 1]);
-            vel.extend([a + 2, a + 3]);
+            pos.extend([a, a + 1, a + 2]);
+            vel.extend([a + 3, a + 4, a + 5]);
         }
         if let Some(k) = sk {
             pos.push(k);
@@ -497,7 +502,7 @@ impl Crane {
         if !(self.g > 0.0 && length > 0.0) {
             return None;
         }
-        if let Some(l2) = self.sling.filter(|_| self.payload_mass() > 0.0) {
+        if let Some(l2) = self.sling_rest().filter(|_| self.payload_mass() > 0.0) {
             let (m1, m2, g) = (self.hook, self.payload_mass(), self.g);
             let b = (m1 + m2) * g * (length + l2);
             let root = (b * b - 4.0 * m1 * length * l2 * (m1 + m2) * g * g).sqrt();
@@ -1034,49 +1039,51 @@ impl Machine for Crane {
                 self.drive_mut(d).gearbox.commit(s[r0 + d], pos);
             }
         }
-        let mut standing = false;
-        if let Some(floor) = self.floor {
-            let (low, low_v) = self.lower(s);
-            standing = low[2] <= floor;
-            if standing && (low[2] < floor || low_v[2] < 0.0) {
-                let before = self.energy(s);
-                if self.sling.is_some() && self.payload_mass() > 0.0 {
-                    s[LOAD + 2] += floor - low[2];
-                    s[LOAD_SPEED + 2] -= low_v[2].min(0.0);
-                } else {
-                    s[LOAD + 2] = floor;
-                    s[LOAD_SPEED + 2] = s[LOAD_SPEED + 2].max(0.0);
-                }
-                self.pick_loss += (before - self.energy(s)) / dt;
-            }
-            if !self.elastic && self.rope(s).stretch > 1e-9 {
-                let before = self.energy(s);
-                self.place_on_rope(s, s[2], 1.0);
-                self.pick_loss += (before - self.energy(s)) / dt;
-            }
-        }
-        if !std::mem::take(&mut self.picked) || standing {
+        let picked = std::mem::take(&mut self.picked);
+        if !picked && self.floor.is_none() {
             return;
         }
         let before = self.energy(s);
-        if self.layout.rotor.is_some() {
-            // The hoist's gearbox takes the new weight as quasi-statically as the rope: the servo holds the rotor, the
-            // drum gives by the change of the static twist (0.78 mm for the 250 kg at the shipped stiffness).
-            let j = &self.drives[2];
-            let old = self.load_mass() + if self.attached { -self.payload } else { self.payload };
-            let twist = |mass: f64, l: f64| j.gearbox.static_twist(-self.rest_pull(l, mass) - j.output_torque(l, 0.0));
-            let shift = twist(self.load_mass(), s[2]) - twist(old, s[2]);
-            s[2] -= shift;
+        if let (true, Some(a0), Some(rest)) = (picked, self.layout.sling, self.sling_rest()) {
+            // The payload goes on plumb under the hook block at its speed, the sling at its rest stretch (the sling at
+            // rest when it was picked: what the payload's energy was counted at); turning the sling into the rope's line
+            // here would lift the payload and spin it at the rope's rate, energy from nowhere. Off: nothing hangs on the
+            // sling, it rests plumb at its length.
+            s[a0..a0 + 6].copy_from_slice(&[0.0, 0.0, -rest, 0.0, 0.0, 0.0]);
         }
-        let factor = self.rest_stretch(s[2]);
-        self.place_on_rope(s, s[2] * factor, factor);
-        if let Some(a0) = self.layout.sling {
-            // The payload went on plumb under the hook block at its speed (the sling at rest when it was picked: what the
-            // payload's energy was counted at); turning the sling into the rope's line here would lift the payload and
-            // spin it at the rope's rate, energy from nowhere. Off: nothing hangs on the sling, its angles rest.
-            if self.payload_mass() == 0.0 {
-                s[a0..a0 + 4].fill(0.0);
+        let mut standing = false;
+        if let Some(floor) = self.floor {
+            let (low, low_v) = self.lower(s);
+            // P2 = P1 + d rounds: the sling's payload stands within 1e-12 m of the floor.
+            standing = low[2] <= floor + FLOOR_ROUNDING;
+            if standing && (low[2] < floor || low_v[2] < 0.0) {
+                // With the sling the payload stands (its span shortens, the sling going slack), not the hook block.
+                let (at, rate, (base, base_v)) = match self.layout.sling {
+                    Some(a0) if self.payload_mass() > 0.0 => (a0 + 2, a0 + 5, (s[LOAD + 2], s[LOAD_SPEED + 2])),
+                    _ => (LOAD + 2, LOAD_SPEED + 2, (0.0, 0.0)),
+                };
+                s[at] = floor - base;
+                if low_v[2] < 0.0 {
+                    s[rate] = -base_v;
+                }
             }
+            if !self.elastic && self.rope(s).stretch > 1e-9 {
+                self.place_on_rope(s, s[2], 1.0);
+            }
+        }
+        if picked && !standing {
+            if self.layout.rotor.is_some() {
+                // The hoist's gearbox takes the new weight as quasi-statically as the rope: the servo holds the rotor,
+                // the drum gives by the change of the static twist (0.78 mm for the 250 kg at the shipped stiffness).
+                let j = &self.drives[2];
+                let old = self.load_mass() + if self.attached { -self.payload } else { self.payload };
+                let twist =
+                    |mass: f64, l: f64| j.gearbox.static_twist(-self.rest_pull(l, mass) - j.output_torque(l, 0.0));
+                let shift = twist(self.load_mass(), s[2]) - twist(old, s[2]);
+                s[2] -= shift;
+            }
+            let factor = self.rest_stretch(s[2]);
+            self.place_on_rope(s, s[2] * factor, factor);
         }
         self.pick_loss += (before - self.energy(s)) / dt;
     }
@@ -1228,8 +1235,8 @@ impl Machine for Crane {
             floor,
             self.brake_load(rope.drum + half),
         ]);
-        if let Some(a0) = self.layout.sling {
-            out.push((full::sling_dir(s[a0], s[a0 + 1])[0][2].abs()).min(1.0).acos());
+        if let Some(sl) = self.sling_state(s) {
+            out.push(sl.u[2].abs().min(1.0).acos());
         }
         if let (Some(_), Some(i)) = (self.skew, self.layout.skew) {
             let torque_of = |d: usize| {
