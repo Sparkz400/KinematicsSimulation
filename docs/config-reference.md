@@ -1290,8 +1290,8 @@ The hexapod's config ([`machine-hexapod/default.toml`](../crates/machine-hexapod
 ball screw axis (`[parts]`, `[effects]`, `[thermal]`, `[thermal_feedback]`, `[profile]`, `[sim]`, `[screw]`, `[gearbox]`
 here a coupling of ratio 1, `[motor]`, `[drive]`, `[ratings]`, `[bounds]`, `[start]`, `[[cycle.segment]]`) with the same
 meanings; one motor, coupling, screw and drive per leg, all alike. The screw is a 25 x 10 (`lead_m` 0.01, `length_m`
-0.35, estimates, bounded as the axis's); `drive.velocity_kp_nm_s_rad` 0.4 (tuned with `sim-cli margins hexapod`: 145
-Hz, 89 degrees, 10.6 dB); `profile.vertical_axis` "z". The tool pose, `start.pose` and the targets are x, y, z (m), rx,
+0.35, estimates, bounded as the axis's); `drive.velocity_kp_nm_s_rad` 0.4 (tuned with `sim-cli margins hexapod`; on 21 November 2026, with the
+screw's damping and its stiffness at the nut: 127.7 Hz, 100.0 degrees, 7.78 dB; 145 Hz, 89 degrees, 10.6 dB before); `profile.vertical_axis` "z". The tool pose, `start.pose` and the targets are x, y, z (m), rx,
 ry, rz (rad, a rotation vector); `[axis.x]`, `[axis.y]`, `[axis.z]` take `max_velocity_m_s`, `max_acceleration_m_s2`,
 `max_jerk_m_s3` (0.2, 3, 100, estimates), `[axis.rx]`, `[axis.ry]`, `[axis.rz]` the same in rad (0.8, 10, 400,
 estimates). Effects as on the ball screw axis: `joint_elasticity` (each leg's coupling, screw, nut and bearings
@@ -1329,8 +1329,8 @@ with the same meanings, one motor, coupling, screw and drive per leg, all alike:
 1FK2104-4AF on an S210 6SL3210-5HE10-4UF0 (catalogue; its resistance an estimate, its inductance from the catalogue's
 short-circuit braking table, the current loop at 0.25 ms), the coupling 6000 N m/rad (estimate);
 `drive.velocity_kp_nm_s_rad` 0.03 (`sim-cli margins tripod`, against the legs' axial modes damped through the nut:
-60.5° and 18.90 dB, friction off 57.7° and 14.81 dB; across the bounds at least 50.7° and 17.87 dB, friction off 38.6°
-and 13.20 dB; with friction off 0.1 left 15.6° and 4.80 dB). The cycle carries the part through its three tilts and puts it off at the level pose. The tool pose,
+60.4° and 18.20 dB, friction off 57.7° and 12.54 dB; across the bounds at least 50.6° and 17.07 dB, friction off 38.6°
+and 13.20 dB (not re-run on 21 November 2026); with friction off 0.1 left 6.9° and 2.20 dB). The cycle carries the part through its three tilts and puts it off at the level pose. The tool pose,
 `start.pose` and the targets are z (m), rx, ry (rad: R = Rx(rx) Ry(ry) Rz(g), the turn g dependent); `[axis.z]` takes
 `max_velocity_m_s`, `max_acceleration_m_s2`, `max_jerk_m_s3` (0.2, 2, 50, estimates), `[axis.rx]`, `[axis.ry]` the same in
 rad (0.5, 5, 200, estimates); `profile.vertical_axis` "z". Its own keys and those that differ from the hexapod's (all
