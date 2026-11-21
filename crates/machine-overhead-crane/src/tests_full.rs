@@ -725,6 +725,32 @@ fn the_default_cycle_with_elastic_drives_keeps_its_loops_stable() {
     }
 }
 
+/// The shipped cycle with the hook block, unshaped, does not repeat itself: the double pendulum carries the swing one pass
+/// leaves (0.5 m at the dwells, `residual-sway`) into the next, and the bridge's winding settles at 1.9 to 4.7 K from
+/// pass to pass started at about the same rises. The warm start converges neither per pass nor over a period; a last
+/// pass from the rises the one before started at settles 0.69 K from it (measured), seven times the tolerance, and the
+/// verdict row `thermal-cycle-repeat` says so (`WarmStart::repeat`; before, the message said only "not converged", 3.88
+/// K). Shaped (effects.input_shaping, the
+/// swing taken out) the same cycle converges (0.015 K) and has no such row.
+#[test]
+fn the_unshaped_cycle_on_the_hook_block_does_not_repeat_and_the_warm_start_says_so() {
+    use sim_components::analysis::{analyse_cycle, verdicts};
+    for shaped in [false, true] {
+        let mut cfg = ENTRY.config();
+        cfg.set_text("effects.hook_block = true").unwrap();
+        cfg.set_text(&format!("effects.input_shaping = {shaped}")).unwrap();
+        let load = analyse_cycle(&mut Sim::new(&ENTRY, &cfg).unwrap()).unwrap();
+        let start = load.warm_start.unwrap();
+        let rows = verdicts(&cfg, &load).unwrap();
+        let repeat = rows.iter().find(|v| v.check == "thermal-cycle-repeat");
+        if shaped {
+            assert!(start.converged() && repeat.is_none(), "{start:?}");
+        } else {
+            assert!(!start.converged() && repeat.is_some_and(|v| !v.ok), "{start:?} {repeat:?}");
+        }
+    }
+}
+
 /// The mode list (`Machine::modes`: the app's marks, `identify`, a shaper following its mode k) has, with the hook block,
 /// the double pendulum's upper root beside the lower one of `resonance_hz`: the roots of m1 l1 l2 w^4 - (m1 + m2) g
 /// (l1 + l2) w^2 + (m1 + m2) g^2 = 0 whose periods the ringing above measures (it listed the lower alone), the two

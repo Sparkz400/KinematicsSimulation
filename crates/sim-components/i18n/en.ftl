@@ -402,6 +402,7 @@ quantity-section-stretch = Section stretch
 effect-thermal_feedback = Temperatures act on friction, gearbox losses and belt stiffness
 effect-thermal_warm_start = Cycle analysis starts warm: windings and parts at the rises they settle at
 check-thermal-warm-start = Warm start: settled rise against the rise the pass started at, largest difference [K]
+check-thermal-cycle-repeat = Warm start not converged: two passes started at the same rises, how far apart they settle; beyond the tolerance the cycle's motion does not repeat itself [K]
 check-pick-tracking = Pick from the conveyor: tool against part along the belt during the grip, most [m]
 check-parts-missed = Pick from the conveyor: parts that pass the window unpicked [1/min]
 effect-drive_current_limit = Drive's maximum current limits the motor current

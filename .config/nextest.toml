@@ -54,6 +54,7 @@ not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | 
 | (binary_id(=machine-joint-kit) & test(=tests::two_way_bending_keeps_the_energy_of_a_hanging_link))
 | (binary_id(=machine-joint-kit) & test(=tests::two_way_bending_keeps_the_six_axis_arms_energy))
 | (binary_id(=machine-joint-kit) & test(=tests::urdf_arm_passes_the_standard_suite))
+| (binary_id(=machine-overhead-crane) & test(=tests_full::the_unshaped_cycle_on_the_hook_block_does_not_repeat_and_the_warm_start_says_so))
 | (binary_id(=machine-single-axis) & test(=tests::the_gripper_hold_judges_the_held_part_against_the_cup_and_the_optimiser_keeps_to_it))
 | (binary_id(=machine-single-axis) & test(=tests::the_optimiser_at_the_worst_corner_steps_back_to_a_setting_that_passes_there))
 | (binary_id(=machine-single-axis) & test(=tests::the_robust_optimiser_steps_back_to_the_fastest_setting_that_passes_in_the_bands))

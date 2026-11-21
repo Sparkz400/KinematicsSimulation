@@ -30,6 +30,7 @@ cli-run-stopping = Run: stopping distance per axis from the trip (the machine st
 cli-thermal-start-cold = Thermal start: cold (the parts and windings at the temperatures the run began with)
 cli-thermal-start-warm = Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass { $arg } K
 cli-thermal-start-unsettled = Thermal start: warm, but NOT converged within the warm passes, nor over a period of up to 3 passes; largest change of a rise over the measured pass { $arg } K
+cli-thermal-start-aperiodic = Thermal start: warm, but NOT converged: the cycle does not repeat itself. Two passes started at the same rises settled up to { $arg } K apart: motion left over from one pass (a load still swinging) carries into the next and loads the motors differently, which no start temperature settles
 cli-thermal-start-period = Thermal start: the cycle repeats only every { $arg } passes; its rises settle over that period, which is measured as one
 cli-conveyor = Conveyor: picks, tracking error during the grip along the belt, parts missed { $arg }
 cli-stop-worst = Worst stop: triggered at { $arg }

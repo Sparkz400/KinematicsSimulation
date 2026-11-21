@@ -187,6 +187,7 @@ thermal-warm-start,,0.000003115,0.1000,ok
 | `belt-tooth-jump` | how often the belt's teeth jumped over a driven pulley in the cycle (only with `effects.belt_tooth_jump`) | 0 | count |
 | `belt-span-resonance` | how close a free belt span's first sideways mode came to what the drive excites, at steady speed, as a share of the mode (only with `effects.belt_span_vibration`); passes at or above the limit | `ratings.belt_span_resonance_band` | fraction |
 | `thermal-warm-start` | how far the rises the measured pass started at lie from those it settles at (only with `effects.thermal_warm_start`, where something that warms acts back on the run) | 0.1 | K |
+| `thermal-cycle-repeat` | only where the warm start converged neither per pass nor over a period: how far apart two passes started at the same rises settle; beyond the limit the cycle's motion does not repeat itself (a load still swinging from the pass before), which no start temperature settles | 0.1 | K |
 
 Limits for this task:
 

@@ -272,6 +272,13 @@ Fixed:
 - The crane's mode list had the swing alone: it has the bounce along the rope (and the sling) and, with elastic drives,
   the drives' modes, all with the motors held (6.77 Hz bounce at z = 2 m; bridge 10.49, trolley 41.09, hoist 108.2 Hz).
   The brief's 12.14, 66, 88 and 111 Hz are the free-motor figures of the linearised model.
+- The crane's warm start with `effects.hook_block` did not converge (3.88 K; 0.019 K without it). Not a defect: the
+  unshaped cycle does not repeat itself. The double pendulum carries the swing a pass leaves (0.5 m at the dwells)
+  into the next; over 30 warm passes the bridge's winding settled anywhere from 1.3 to 5.1 K, bounded and irregular,
+  passes started at about the same rises (3.1 to 3.2 K) settling 1.4 to 4.9 K apart; shaped, the same cycle converges
+  (0.015 K). Where the warm start converges neither per pass nor over a period it now measures one more pass from the
+  rises the last one started at (on this cycle 0.69 K apart, seven times the tolerance): the verdict row
+  `thermal-cycle-repeat` and the CLI's message name the cause.
 
 Open, with the cause where it is known:
 - **A screw or rack behind a converter: the coupling's damping acts across the whole series spring**

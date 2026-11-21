@@ -190,6 +190,7 @@ Die Namen der Prüfungen sind Bezeichner. In der App heißt jede Prüfung so, wi
 | `belt-tooth-jump` | Zahnsprünge des Riemens im Zyklus | wie oft die Zähne des Riemens über eine angetriebene Scheibe gesprungen sind (nur mit `effects.belt_tooth_jump`) | 0 | Anzahl |
 | `belt-span-resonance` | Erste Eigenform eines Riementrums, Abstand von einer Anregung bei konstanter Geschwindigkeit (Anteil) | wie nahe die erste Quereigenfrequenz eines freien Trums dem kam, was der Antrieb anregt, bei konstanter Geschwindigkeit, als Anteil der Eigenfrequenz (nur mit `effects.belt_span_vibration`); besteht ab dem Grenzwert | `ratings.belt_span_resonance_band` | Anteil |
 | `thermal-warm-start` | Warmstart: eingeschwungene gegen anfängliche Übertemperatur des Durchlaufs, größter Unterschied | wie weit die Übertemperaturen am Anfang des gemessenen Durchlaufs von den eingeschwungenen abliegen (nur mit `effects.thermal_warm_start`, wo etwas, das sich erwärmt, auf den Lauf zurückwirkt) | 0,1 | K |
+| `thermal-cycle-repeat` | Warmstart nicht konvergiert: zwei Durchläufe, bei denselben Übertemperaturen begonnen, wie weit sie auseinander einschwingen | nur wo der Warmstart weder je Durchlauf noch über eine Periode konvergierte; über dem Grenzwert wiederholt sich die Bewegung des Zyklus nicht (eine Last, die vom Durchlauf davor noch pendelt), was keine Starttemperatur einschwingen lässt | 0,1 | K |
 
 Grenzen bei dieser Aufgabe:
 

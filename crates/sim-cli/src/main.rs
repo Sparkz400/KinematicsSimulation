@@ -388,14 +388,15 @@ fn pose_text(pose: &[f64]) -> String {
 }
 
 /// On the error stream: how the cycle's measured pass was started (effects.thermal_warm_start), by the largest change of
-/// a rise over it (`analysis::WarmStart::change`); `None`: from cold.
-fn tell_start(tr: &Translations, change: Option<f64>) {
-    let (key, arg) = match change {
-        None => ("cli-thermal-start-cold", String::new()),
-        Some(c) if c <= sim_components::analysis::WARM_START_TOLERANCE_K => {
-            ("cli-thermal-start-warm", format!("{c:.3}"))
-        }
-        Some(c) => ("cli-thermal-start-unsettled", format!("{c:.3}")),
+/// a rise over it (`analysis::WarmStart::change`); `None`: from cold. Not converged, with `repeat`
+/// (`analysis::WarmStart::repeat`) beyond the tolerance, the cause: the cycle's motion does not repeat itself.
+fn tell_start(tr: &Translations, change: Option<f64>, repeat: Option<f64>) {
+    let tolerance = sim_components::analysis::WARM_START_TOLERANCE_K;
+    let (key, arg) = match (change, repeat) {
+        (None, _) => ("cli-thermal-start-cold", String::new()),
+        (Some(c), _) if c <= tolerance => ("cli-thermal-start-warm", format!("{c:.3}")),
+        (Some(_), Some(r)) if r > tolerance => ("cli-thermal-start-aperiodic", format!("{r:.3}")),
+        (Some(c), _) => ("cli-thermal-start-unsettled", format!("{c:.3}")),
     };
     eprintln!("{}", tr.tr_arg(key, &arg));
 }
@@ -1337,7 +1338,8 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
         }
         None => verdict_bands(entry, &cfg, &if args.flag("--bands") { bounds(&cfg)? } else { Vec::new() })?,
     };
-    tell_start(tr, bands.iter().find(|b| b.verdict.check == "thermal-warm-start").map(|b| b.verdict.value));
+    let row = |check: &str| bands.iter().find(|b| b.verdict.check == check).map(|b| b.verdict.value);
+    tell_start(tr, row("thermal-warm-start"), row("thermal-cycle-repeat"));
     let result = |ok: bool| if ok { "ok" } else { "FAIL" };
     let mut out = output(args, "--out")?;
     let share = if samples.is_some() { ",pass_share" } else { "" };
@@ -1524,7 +1526,7 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
         None => analyse_cycle_with(&mut sim, views),
     }
     .map_err(|e| Failure(e.key, String::new()))?;
-    tell_start(tr, load.warm_start.map(|w| w.change));
+    tell_start(tr, load.warm_start.map(|w| w.change), load.warm_start.and_then(|w| w.repeat));
     if let Some(w) = load.warm_start.filter(|w| w.period > 1) {
         eprintln!("{}", tr.tr_arg("cli-thermal-start-period", &w.period.to_string()));
     }
