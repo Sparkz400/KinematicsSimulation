@@ -1120,13 +1120,15 @@ impl Machine for Crane {
         if !picked && self.floor.is_none() {
             return;
         }
-        let before = self.energy(s);
-        if let (true, Some(a0), Some(rest)) = (picked, self.layout.sling, self.sling_rest()) {
+        let (before, empty) = (self.energy(s), self.payload_mass() == 0.0);
+        if let (true, Some(a0), Some(rest)) = (picked || empty, self.layout.sling, self.sling_rest()) {
             // The payload goes on plumb under the hook block at its speed, the sling at its rest stretch (the sling at
             // rest when it was picked: what the payload's energy was counted at); turning the sling into the rope's line
-            // here would lift the payload and spin it at the rope's rate, energy from nowhere. Off: nothing hangs on the
-            // sling, it rests plumb at its length.
-            s[a0..a0 + 6].copy_from_slice(&[0.0, 0.0, -rest, 0.0, 0.0, 0.0]);
+            // here would lift the payload and spin it at the rope's rate, energy from nowhere. Nothing on it, the sling
+            // rests plumb at its length. Neither below the floor: a payload picked there stands on it, the sling slack,
+            // and the empty sling's span follows the floor so that the payload is counted where it stands.
+            let z = self.floor.map_or(-rest, |floor| (-rest).max(floor - s[LOAD + 2]));
+            s[a0..a0 + 6].copy_from_slice(&[0.0, 0.0, z, 0.0, 0.0, 0.0]);
         }
         let mut standing = false;
         if let Some(floor) = self.floor {

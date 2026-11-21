@@ -1764,7 +1764,8 @@ J̇ q̇) to f:
   damping, t_s = EA e_s / l_s + c ė_s / l_s with e_s = |d| − l_s, never below 0 and 0 while e_s ≤ 0: it goes slack when
   the load stands on the floor and the hook block is lowered further, or in a bounce, and takes the jerk when it comes
   taut again in its stretch (its damper, with `effects.rope_damping`, books what that loses as the rope's). At rest it is
-  stretched to l_s (1 + m g / EA); a pick hangs the payload plumb under the hook block at that length. The load's
+  stretched to l_s (1 + m g / EA); a pick hangs the payload plumb under the hook block at that length, or, where that
+  is under the floor, stands it on the floor with the sling slack. The load's
   signals are P2's.
 - `effects.joint_elasticity`: each drive the elastic joint of the other machines, the gearbox's stiffness, damping and
   backlash between the rotor (a state) and the wheel or drum. With it on the shipped loops are stable (`sim-cli margins
@@ -2642,8 +2643,8 @@ The last measured pass is the result; `CycleLoad::warm_start` has the warm passe
 
 Where the passes do not converge within the 4 warm passes, the settled rises may repeat over a period of 2 or 3 passes
 (a pick that alternates between two places): `period_of` finds it, and the warm start goes on with spans of that period,
-measured as one. Where there is none, one more span is measured from the rises the last one started at
-(`WarmStart::repeat`, verdict row `thermal-cycle-repeat`): two passes started at the same rises settle alike unless the
+measured as one. Where there is none, one more span is run from the rises the last one started at, the last one staying
+the measured pass (`WarmStart::repeat`, verdict row `thermal-cycle-repeat`): two passes started at the same rises settle alike unless the
 cycle's motion itself differs from pass to pass, so a gap beyond the tolerance says the cycle does not repeat. The crane
 with `effects.hook_block` on its unshaped cycle is such a one: the double pendulum carries the swing one pass leaves
 (0.5 m at the dwells) into the next, the bridge's winding settles at 1.9 to 4.7 K pass by pass at about the same start,

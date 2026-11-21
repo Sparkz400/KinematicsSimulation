@@ -594,6 +594,30 @@ fn a_hook_block_lowered_onto_a_standing_payload_hangs_on_the_rope_alone() {
     assert!(sling.tension == 0.0 && (sling.stretch - slack).abs() < 1e-7 && slack < -0.19, "{} m", sling.stretch);
 }
 
+/// A pick from the floor on the sling (effects.hook_block, effects.floor_contact): the hook block hangs 0.8 m over the
+/// floor, less than the 1 m sling, and the payload goes on. It stands on the floor, the sling slack 0.2 m (the payload
+/// where it stands, not plumb at the sling's length under the floor), and the pick makes no energy: what it booked is
+/// the energy's change, at least 0. The empty sling's span follows the floor while nothing hangs on it, so the payload
+/// is counted where it stands when it goes on; at the sling's length under the floor it was lifted 0.2 m by the floor at
+/// the pick, -490 J booked.
+#[test]
+fn a_pick_from_the_floor_on_a_slack_sling_makes_no_energy() {
+    let mut m = crane(&lossless(&["effects.hook_block = true", "effects.floor_contact = true"]));
+    m.attached = false;
+    let floor = m.floor.unwrap();
+    let (mut s, _) = at_rest(&m, [5.0, 2.0, floor + 0.8]);
+    m.after_step(&mut s, DT);
+    m.set_payload_attached(true);
+    let before = m.energy(&s);
+    m.after_step(&mut s, DT);
+    let lost = before - m.energy(&s);
+    assert!(lost >= 0.0 && (m.pick_loss * DT - lost).abs() < 1e-9, "{lost} J lost, {} J booked", m.pick_loss * DT);
+    let (low, low_v) = m.lower(&s);
+    assert!((low[2] - floor).abs() < 1e-12 && low_v == [s[LOAD_SPEED], s[LOAD_SPEED + 1], s[LOAD_SPEED + 2]]);
+    let sling = m.sling_state(&s).unwrap();
+    assert!(sling.tension == 0.0 && (sling.stretch + 0.2).abs() < 1e-3, "{} m", sling.stretch);
+}
+
 /// Energy through a lift-off from the floor on the sling (effects.hook_block, effects.floor_contact, the losses off): the
 /// payload stands, the sling slack 0.2 m, and the hoist's torque rises over 2 s from what holds the hook block to 1.2
 /// times what holds both. The drum takes the slack in, the sling comes taut with a jerk (the rope's and the sling's
