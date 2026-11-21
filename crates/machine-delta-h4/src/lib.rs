@@ -2284,6 +2284,16 @@ impl Machine for H4 {
         out
     }
 
+    /// With effects.joint_elasticity: per arm its gearbox's spring (K1) between the rotor and the rest of the motor's
+    /// rigid inertia at the pose, over the ratio squared; the arms' bending and the amplifier are left out.
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let whole = sim_components::control::rigid_inertias(self, tool_pose);
+        self.joints.iter().zip(whole).map(|(j, whole)| j.train(whole)).collect()
+    }
+
     /// The lowest of the arms' modes (`modes_at`), with the gearboxes' springs (effects.joint_elasticity): what an input
     /// shaper on the path is for. The tool's turn on the amplifier is in `modes`.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {

@@ -3675,6 +3675,27 @@ impl Machine for ConfigMachine {
         self.energy_parts(s).iter().sum()
     }
 
+    /// Elastic model: per motor its gearbox's spring (with a screw's or rack's own compliance behind it) in series with
+    /// the belt sections its pulley feeds or takes from, r r_mat sum f^2 EA / l at the pulley over the sections' lengths
+    /// at the pose; the rotor (and gearbox input) on the motor's side, the pulley with the load (so more is kept back).
+    /// Referred to the motor over the ratio. A drive with no spring (a linear motor) has none.
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let geo = self.geo(&self.joints(tool_pose));
+        let whole = sim_components::control::rigid_inertias(self, tool_pose);
+        (0..self.m())
+            .map(|kk| {
+                let belt: f64 = self.sections.iter().zip(&geo).map(|(s, l)| s.f[kk] * s.f[kk] * self.belt.ea / l).sum();
+                let belt = if belt > 0.0 { 1.0 / (self.r[kk] * self.r_mat[kk] * belt) } else { 0.0 };
+                let gear = &self.gears[kk];
+                let spring = 1.0 / (1.0 / gear.stiffness + gear.band_compliance + belt);
+                sim_core::Train::of(spring / (self.ratio[kk] * self.ratio[kk]), self.j_rotor[kk], whole[kk])
+            })
+            .collect()
+    }
+
     /// The lowest belt mode (`belt_mode`), in the elastic model.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
         let mut q = self.joints(tool_pose);

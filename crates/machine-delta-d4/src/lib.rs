@@ -751,6 +751,17 @@ impl Machine for Delta4 {
         out.sort_by(|a, b| a.hz.total_cmp(&b.hz));
         out
     }
+    /// The arms' (the D3's) and, with effects.joint_elasticity, the tool's gearbox spring between its rotor and the rest
+    /// of its rigid inertia; the shaft's torsion is left out.
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let mut out = self.arms.trains(&tool_pose[..3]);
+        out.resize(3, None);
+        out.push(self.tool.train(sim_components::control::rigid_inertias(self, tool_pose)[3]));
+        out
+    }
     /// The arms' lowest mode, which an input shaper on the path is for; the tool's torsion is in `modes`.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
         self.arms.resonance_hz(&tool_pose[..3])

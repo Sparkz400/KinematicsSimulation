@@ -1284,6 +1284,18 @@ impl Machine for ParallelScara {
     fn modes_small_amplitude(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
         self.modes_at(tool_pose, true)
     }
+    /// With effects.joint_elasticity: per arm its gearbox's spring between the rotor and the rest of the motor's rigid
+    /// inertia at the pose (`RotaryJoint::train`); the stroke's and the turn's trains are left out.
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let whole = sim_components::control::rigid_inertias(self, tool_pose);
+        let mut out: Vec<_> = self.joints.iter().zip(whole).map(|(j, whole)| j.train(whole)).collect();
+        out.resize(self.motors().len(), None);
+        out
+    }
+
     /// The plane's lowest mode, which an input shaper on the path is for; the stroke's and the turn's are in `modes`.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
         self.plane_modes(tool_pose, false).first().map(|m| m.hz)

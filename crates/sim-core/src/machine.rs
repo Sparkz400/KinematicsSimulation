@@ -106,6 +106,26 @@ pub struct RatingCheck {
     pub life: bool,
 }
 
+/// A motor's elastic drive train as the time-optimal plan allows for it (`Machine::trains`), reduced to two masses on a
+/// spring: the rotor's side and the load's, referred to the motor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Train {
+    /// The load's frequency against the motor held, sqrt(k / J_load), Hz.
+    pub hz: f64,
+    /// The load's share of the motor's rigid inertia, J_load / (J_load + J_rotor side).
+    pub load_share: f64,
+}
+
+impl Train {
+    /// From the train's stiffness at the motor with the load held (N m/rad), the inertia on the motor's side of it and
+    /// the motor's whole rigid inertia (kg m^2). `None` for a train with no stiffness to tell or no load beyond it.
+    pub fn of(stiffness: f64, rotor_side: f64, whole: f64) -> Option<Self> {
+        let load = whole - rotor_side;
+        (stiffness > 0.0 && stiffness.is_finite() && load > 0.0 && whole.is_finite())
+            .then(|| Self { hz: (stiffness / load).sqrt() / std::f64::consts::TAU, load_share: load / whole })
+    }
+}
+
 /// A structural mode of a machine at a pose, from `Machine::modes`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Mode {
@@ -355,6 +375,12 @@ pub trait Machine: Send {
     /// With effects.thermal_feedback: the temperature rise (K) of each part of `thermal_parts`, in that order, for
     /// the friction and losses that change with it.
     fn set_part_temperatures(&mut self, _rises: &[f64]) {}
+
+    /// Per motor at a tool pose its elastic drive train (`Train`), for the time-optimal plan to keep back the speed the
+    /// train's twist adds to the motor's: `None`, or no entry, where the train is rigid (no allowance).
+    fn trains(&self, _tool_pose: &[f64]) -> Vec<Option<Train>> {
+        Vec::new()
+    }
 
     /// The lowest structural resonance at a tool pose, for a controller that sets its input shaper by it.
     /// `None` where the machine has none to tell.

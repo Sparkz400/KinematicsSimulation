@@ -1767,6 +1767,16 @@ impl Machine for Delta {
         out
     }
 
+    /// With effects.joint_elasticity: per arm its gearbox's spring (K1) between the rotor and the rest of the motor's
+    /// rigid inertia at the pose, over the ratio squared. The arms' bending (effects.link_elasticity) is left out.
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let whole = sim_components::control::rigid_inertias(self, tool_pose);
+        self.joints.iter().zip(whole).map(|(j, whole)| j.train(whole)).collect()
+    }
+
     /// The lowest of `modes`: the gearboxes' springs (effects.joint_elasticity) and the arms' bending in and out of
     /// their planes (effects.link_elasticity), in series where both are on. At the centre the lowest is sideways
     /// (twice).

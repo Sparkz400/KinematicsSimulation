@@ -2217,11 +2217,30 @@ fn speed_kept() -> f64 {
 /// a t, with the loop's torque (1 - feedforward) J a to find, obeys J e'' + kp e' + ki e = 0 with e'(0) = (1 -
 /// feedforward) a, whose peak is at most (1 - feedforward) a / w_n for the natural frequency w_n = sqrt(ki / J)
 /// (the underdamped peak a/w_n exp(-z acos(z) / sqrt(1 - z^2)) is below it, as is the critical a/(e w_n)). The share is
-/// that over `top`, between `SPEED_KEPT` and `SPEED_KEPT_MOST`: a loop that follows a ramp closely keeps the least.
-pub fn speed_kept_of(ki: f64, inertia: f64, feedforward: f64, acc: f64, top: f64) -> f64 {
+/// that over `top`, at least `SPEED_KEPT`: a loop that follows a ramp closely keeps the least. On top of it the speed
+/// `train` (rad/s) that an elastic drive train adds (`train_speed`); at most `SPEED_KEPT_MOST` in all.
+pub fn speed_kept_of(ki: f64, inertia: f64, feedforward: f64, acc: f64, top: f64, train: f64) -> f64 {
     let peak = (1.0 - feedforward).max(0.0) * acc * (inertia / ki).sqrt();
     let share = peak / top;
-    if share.is_finite() { share.clamp(SPEED_KEPT, SPEED_KEPT_MOST) } else { SPEED_KEPT }
+    let share = if share.is_finite() { share.max(SPEED_KEPT) } else { SPEED_KEPT };
+    let train = train / top;
+    (share + if train.is_finite() { train.max(0.0) } else { 0.0 }).min(SPEED_KEPT_MOST)
+}
+
+/// How much faster than the plan's rigid motion a motor runs with an elastic drive train (`Machine::trains`) while its
+/// acceleration changes at the jerk `jerk` (rad/s^3), rad/s. Two masses on a spring k, the rotor's side J_m and the
+/// load's J_L (s = J_L / (J_m + J_L), w^2 = k / J_L the load's frequency against the motor held), the motor's torque the
+/// rigid (J_m + J_L) a(t): the twist x = theta_m - theta_L obeys x'' + k (1/J_m + 1/J_L) x = (J_m + J_L) / J_m a, so at
+/// a steady a it holds x = a / w^2, and while a changes at j it grows at x' = j / w^2 (to which the free swing
+/// (j / w^2) (1 - cos) settles about its mean). The motor runs ahead of the masses' common speed by s x', so by
+/// s j / w^2; the swing's peak is twice that, which the velocity loop damps. A ramp quicker than the train's swing is
+/// a step of the acceleration `acc` (rad/s^2, the most the motor has): x = acc / w^2 (1 - cos W t) at the swing's own
+/// frequency W = sqrt(k (1/J_m + 1/J_L)) = w / sqrt(1 - s), so x' peaks at acc W / w^2 however high the jerk limit;
+/// the lower of the two.
+pub fn train_speed(train: sim_core::Train, jerk: f64, acc: f64) -> f64 {
+    let w = std::f64::consts::TAU * train.hz;
+    let swing = w / (1.0 - train.load_share).sqrt();
+    train.load_share * jerk.abs().min(acc.abs() * swing) / (w * w)
 }
 
 impl PlanLimits {
@@ -5491,10 +5510,78 @@ line,0.3,0.13",
     /// left, so the fixed share (0.01) stays; the most is 0.5.
     #[test]
     fn the_speed_kept_back_follows_the_velocity_loop() {
-        assert!((speed_kept_of(100.0, 0.01, 0.5, 1000.0, 200.0) - 0.025).abs() < 1e-12);
-        assert_eq!(speed_kept_of(100.0, 0.01, 1.0, 1000.0, 200.0), SPEED_KEPT);
-        assert_eq!(speed_kept_of(100.0, 0.01, 0.0, 1e6, 200.0), SPEED_KEPT_MOST);
+        assert!((speed_kept_of(100.0, 0.01, 0.5, 1000.0, 200.0, 0.0) - 0.025).abs() < 1e-12);
+        assert_eq!(speed_kept_of(100.0, 0.01, 1.0, 1000.0, 200.0, 0.0), SPEED_KEPT);
+        assert_eq!(speed_kept_of(100.0, 0.01, 0.0, 1e6, 200.0, 0.0), SPEED_KEPT_MOST);
         assert_eq!(PlanLimits::new(0.8, [0.0; 3]).speed_kept, SPEED_KEPT);
+        // An elastic train's 4 rad/s on top: 0.01 + 4 / 200 = 0.03.
+        assert!((speed_kept_of(100.0, 0.01, 1.0, 1000.0, 200.0, 4.0) - 0.03).abs() < 1e-12);
+    }
+
+    /// The speed an elastic train adds (`train_speed`), by hand: rotor side J_m = 1e-4, load J_L = 3e-4 kg m^2 and
+    /// k = 30 N m/rad give w^2 = k / J_L = 1e5 1/s^2 (50.33 Hz) and s = 0.75, so a jerk of 1e6 rad/s^3 puts the motor
+    /// 0.75 * 1e6 / 1e5 = 7.5 rad/s ahead. Integrated (the motor's torque the rigid (J_m + J_L) a(t), a going 0 -> 1e5
+    /// rad/s^2 at that jerk over 0.1 s, five swings, held, back to 0): the motor leads the common speed by 7.5 rad/s on
+    /// average over the ramp's jerk phase, and by at most twice that in it. (Undamped, the swings of the ramp's two jerk
+    /// phases add: 17.8 rad/s after the second; the velocity loop damps them.)
+    #[test]
+    fn an_elastic_train_puts_the_motor_ahead_by_the_hand_calculated_speed() {
+        let train = sim_core::Train::of(30.0, 1e-4, 4e-4).unwrap();
+        assert!(
+            (train.load_share - 0.75).abs() < 1e-12 && (train.hz - 1e5f64.sqrt() / std::f64::consts::TAU).abs() < 1e-9,
+            "{train:?}"
+        );
+        assert!((train_speed(train, 1e6, 1e5) - 7.5).abs() < 1e-9);
+        let (jm, jl, k, jerk, top) = (1e-4, 3e-4, 30.0, 1e6, 1e5);
+        let rise = top / jerk;
+        let acc = |t: f64| {
+            if t < rise {
+                jerk * t
+            } else if t < 3.0 * rise {
+                top
+            } else {
+                (top - jerk * (t - 3.0 * rise)).max(0.0)
+            }
+        };
+        let (mut th, mut w, mut thl, mut wl, dt) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 1e-6);
+        let (mut lead_sum, mut most, mut samples) = (0.0, 0f64, 0.0);
+        let mut t = 0.0;
+        while t < 6.0 * rise {
+            let twist = th - thl;
+            let torque = (jm + jl) * acc(t);
+            let (am, al) = ((torque - k * twist) / jm, k * twist / jl);
+            (w, wl) = (w + am * dt, wl + al * dt);
+            (th, thl) = (th + w * dt, thl + wl * dt);
+            t += dt;
+            let lead = w - (jm * w + jl * wl) / (jm + jl);
+            if t < rise {
+                (lead_sum, samples, most) = (lead_sum + lead, samples + 1.0, most.max(lead.abs()));
+            }
+        }
+        let mean = lead_sum / samples;
+        assert!((mean - 7.5).abs() < 0.1 * 7.5 && most <= 2.0 * 7.5 * 1.01, "mean {mean}, most {most}");
+    }
+
+    /// A jerk limit far quicker than the train's swing (`train_speed`), by hand: the train above (w^2 = 1e5 1/s^2,
+    /// s = 0.75) swings at W = sqrt(30 (1e4 + 1e4 / 3)) = sqrt(4e5) = 632.5 rad/s, so a step of 1e3 rad/s^2 puts the motor
+    /// at most 0.75 * 1e3 * 632.5 / 1e5 = 4.743 rad/s ahead, not the 0.75 * 1e9 / 1e5 = 7500 rad/s a jerk of 1e9 rad/s^3
+    /// would say. Integrated (the step held for 20 ms, two swings): the lead peaks at that.
+    #[test]
+    fn an_elastic_train_after_a_step_of_acceleration_leads_by_the_swing() {
+        let train = sim_core::Train::of(30.0, 1e-4, 4e-4).unwrap();
+        let by_hand = 0.75 * 1e3 * 4e5f64.sqrt() / 1e5;
+        assert!((by_hand - 4.743).abs() < 1e-3 && (train_speed(train, 1e9, 1e3) - by_hand).abs() < 1e-9);
+        let (jm, jl, k, step) = (1e-4, 3e-4, 30.0, 1e3);
+        let (mut th, mut w, mut thl, mut wl, dt) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 1e-7);
+        let mut most = 0f64;
+        for _ in 0..200_000 {
+            let twist = th - thl;
+            let (am, al) = (((jm + jl) * step - k * twist) / jm, k * twist / jl);
+            (w, wl) = (w + am * dt, wl + al * dt);
+            (th, thl) = (th + w * dt, thl + wl * dt);
+            most = most.max(w - (jm * w + jl * wl) / (jm + jl));
+        }
+        assert!((most - by_hand).abs() < 1e-3 * by_hand, "{most}");
     }
 
     /// The bound of a motor's turn per distance (`singular_turn`): at 400 rad/s on a piece of 2 m the slowest crawl is

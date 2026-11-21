@@ -1113,6 +1113,18 @@ impl Machine for LinkageMachine {
         }
     }
 
+    /// With effects.joint_elasticity: per arm its gearbox's spring between the rotor and the rest of the motor's rigid
+    /// inertia at the pose (`RotaryJoint::train`).
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let whole = sim_components::control::rigid_inertias(self, tool_pose);
+        let mut out: Vec<_> = self.joints.iter().zip(whole).map(|(j, whole)| j.train(whole)).collect();
+        out.resize(self.motors().len(), None);
+        out
+    }
+
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }

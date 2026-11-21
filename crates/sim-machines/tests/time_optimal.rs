@@ -125,3 +125,35 @@ fn a_turn_about_one_rotary_axis_alone_is_timed_on_every_machine() {
     }
     assert!(failed.is_empty(), "{failed:?}");
 }
+
+/// The corner of the belt gantry (line, quarter arc, line from (0.1, 0.35)) timed as fast as the motors allow with the
+/// axes' jerk at 2000 m/s^3, 20 times the shipped: the belts' twist ran the motors to 420.7 and 423.5 rad/s past the
+/// drive's 420 while the plan kept back only the velocity loops' 1 %. With the trains' allowance (`Machine::trains`,
+/// `path::train_speed`) the plan keeps more back and the motors stay below 420, within 3 % of it. At 1e5 m/s^3 the ramps
+/// are steps for the trains (the motors reached 444.0 and 442.7 rad/s): the allowance is then the swing after a step of
+/// the motor's most acceleration (28 % kept back, the motors at 323 and 330 rad/s), not the twist at that jerk, which
+/// kept back the most there is, half (the motors at 231 rad/s). The step's acceleration is the motor's own torque on
+/// its rigid inertia, more than the belts' tension limits let the plan use, so more is kept back than the 6 % the
+/// motors overshot by.
+#[test]
+fn a_jerky_corner_on_the_belt_gantry_keeps_its_motors_within_their_speed() {
+    let entry = sim_machines::find("t-gantry").unwrap();
+    for (jerk, least) in [(2000.0, 0.97), (1e5, 0.7)] {
+        let mut cfg = entry.config();
+        cfg.set_text(&format!("axis.x.max_jerk_m_s3 = {jerk:?}")).unwrap();
+        cfg.set_text(&format!("axis.z.max_jerk_m_s3 = {jerk:?}")).unwrap();
+        let top = cfg.f64("drive.max_speed_rad_s").unwrap();
+        let mut sim = Sim::new(entry, &cfg).unwrap();
+        let pieces = [
+            Piece::Line(vec![0.5, 0.35]),
+            Piece::Arc { to: vec![0.6, 0.25], centre: vec![0.5, 0.25], clockwise: true, plane: None },
+            Piece::Line(vec![0.6, 0.05]),
+        ];
+        let points = sim.plan_path(&pieces, true).unwrap();
+        let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
+        for (k, motor) in load.motors.iter().enumerate() {
+            let peak = motor.peak_speed;
+            assert!(peak < top && peak > least * top, "jerk {jerk}, motor {k}: {peak} rad/s");
+        }
+    }
+}

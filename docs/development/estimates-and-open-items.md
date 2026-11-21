@@ -245,15 +245,23 @@ Fixed:
 - `sim-cli modes` printed a damping of 0 for the wafer handler's modes: the damping now reaches the
   printout. The crane's 0 is right (the pendulum has no sway damping in the model).
 - Stale texts: the H4's comment on the D3's tube; `--machine-file` "not for fmu" in the usage text.
+- With a jerk limit of 2000 m/s³ the time-optimal corner path's motors reached 420.7 and 423.5 rad/s
+  past the drive's 420, though the plan held them to 415.8: the belts' twist (with them rigid 416.5).
+  The plan now keeps back the speed an elastic train adds, s j / w², at most the swing after a step of
+  the acceleration (`Machine::trains`, `path::train_speed`): 414.4 and 416.7 rad/s. Taken at the start
+  pose only, and the step's acceleration is the motor's own torque on its rigid inertia, so at a very
+  high jerk limit more is kept back than needed (T-gantry at 1e5 m/s³: 28 % kept, 6 % overshot).
 
 Open, with the cause where it is known:
 - **A screw or rack behind a converter: the coupling's damping acts across the whole series spring**
   (`Converter::apply_back`, `transmission.rs`). Its own doc comment says in series. The wafer
   handler's column mode then reports a damping ratio of 1.74; in series it would be about 0.003. A
   shared-code fix that moves every screw and rack machine's figures; not made.
-- With a jerk limit of 2000 m/s³ the time-optimal corner path's motors reach 420.7 and 423.5 rad/s,
-  past the plan's 415.8 (1 % kept back) and the drive's 420: up to 1.85 % over the plan. Cause not
-  found.
+- The time-optimal plan runs the single axis 0.19 % past its torque while braking at a top speed of
+  395 rad/s: with `effects.gearbox_efficiency`, `gearbox.efficiency = 0.9`, `drive.peak_torque_nm = 0.5`,
+  `axis.x.max_jerk_m_s3 = 1e5`, `motor.rotor_inertia_kgm2 = 3e-4`, `geometry.incline_deg = -30` and
+  `drive.max_speed_rad_s = 399.1596`, "out and back" (planned_limits' check) reaches 0.4007 of 0.4 N m
+  at -387 rad/s (1.00187). At the shipped 420 rad/s it passes. Cause not found.
 - The warm start does not settle for a motor near its limit (1FK2104-4AF on the EXCT-30, 6.9 K): not
   a numerical defect, the cycle repeats only every second pass (motor a's settled rise alternates
   102 / 92 K). Needs a two-pass warm start or a message that says so.
