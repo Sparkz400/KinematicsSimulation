@@ -705,7 +705,8 @@ impl<M: Mechanism> JointMachine<M> {
             m[(free + i) * size + free..(free + i + 1) * size].copy_from_slice(&c.mass[i * f..(i + 1) * f]);
             (k[free + i], damping[free + i]) = (modes[i].stiffness, modes[i].damping);
         }
-        let c = |r: usize, w: f64| if r < free { self.joints[r].drive.gearbox.damping_at(w) } else { damping[r] };
+        let c =
+            |r: usize, w: f64| if r < free { self.joints[r].drive.gearbox.at(q[r]).damping_at(w) } else { damping[r] };
         generalized_modes(&m, &k, c, size)
     }
 
@@ -721,7 +722,7 @@ impl<M: Mechanism> JointMachine<M> {
         let (load, _) = self.load(q, &vec![0.0; n]);
         let gear = |k: usize| &self.joints[k].drive.gearbox;
         let k: Vec<f64> = (0..n).map(|j| gear(j).at(q[j]).stiffness).collect();
-        generalized_modes(&load[..n * n], &k, |j, w| gear(j).damping_at(w), n)
+        generalized_modes(&load[..n * n], &k, |j, w| gear(j).at(q[j]).damping_at(w), n)
     }
 
     /// The tool's move by the bending modes at joints q, deflections d: `Mechanism::flex_shift`.
@@ -1171,9 +1172,8 @@ impl<M: Mechanism> JointMachine<M> {
             }
         }
         (0..size * size).for_each(|rc| m[rc] -= to_q[rc / size] * to_q[rc % size] / m_qq);
-        let (k, c): (Vec<f64>, Vec<f64>) = std::iter::once((gear.stiffness, gear.damping))
-            .chain(sprung.iter().map(|&p| self.passive[p - 1]))
-            .unzip();
+        let (k, c): (Vec<f64>, Vec<f64>) =
+            std::iter::once((gear.stiffness, gear.damping)).chain(sprung.iter().map(|&p| self.passive[p - 1])).unzip();
         generalized_modes(&m, &k, |r, w| if r == 0 { gear.damping_at(w) } else { c[r] }, size)
     }
 }

@@ -724,3 +724,79 @@ fn a_switch_the_machine_does_not_model_is_refused_switched_on() {
     }
     assert_eq!(refused, 4 * 4 + 3 * 3 + 2 + 4 * 2);
 }
+
+/// Behind a screw whose stiffness follows the nut (effects.screw_stiffness_with_position) the gear's dampers are laid out
+/// where the nut is (`Gearbox::at`), as its spring is: the modes' damping ratios are the linearised machine's, its
+/// rotors held, from the eigenvalue nearest each mode's pole (`shapes::eigen_near`) of d(derivatives)/d(state) by
+/// central differences over the states the rotors' angles and speeds do not hang on. The losses that do not linearise
+/// (friction, backlash, lost motion, efficiency, ripple) off; the rotors 1e-3 rad ahead so that each gear is in contact.
+/// With the far end's dampers the tripod's three came out 0.01574, 0.01726, 0.01977 against 0.01946, 0.02134, 0.02444,
+/// the hexapod's 19 % low, the parallel SCARA's quill at z = 0.18 m 0.0216 against 0.0400.
+#[test]
+fn the_modes_are_damped_as_the_linearised_machine_at_the_nut() {
+    for (name, pose) in [
+        ("tripod", None),
+        ("hexapod", None),
+        ("parallel-scara", Some(vec![0.0, -0.6, 0.18, 0.0])),
+        ("scara", Some(vec![0.3, 0.2, 0.1, 0.0])),
+    ] {
+        let entry = sim_machines::find(name).unwrap();
+        let mut cfg = entry.config();
+        let quiet =
+            ["friction", "backlash", "lost_motion", "efficiency", "ripple", "meshing", "cogging", "drag", "thermal"];
+        for (key, _) in entry.config().leaves() {
+            if key.starts_with("effects.") && quiet.iter().any(|q| key.contains(q)) && cfg.bool(&key).is_ok() {
+                cfg.set_text(&format!("{key} = false")).unwrap();
+            }
+        }
+        assert!(cfg.bool("effects.screw_stiffness_with_position").unwrap(), "{name}");
+        let m = (entry.build)(&cfg).unwrap();
+        let pose = pose.unwrap_or_else(|| sim_core::testkit::mid_pose(m.as_ref()));
+        let (mut s, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
+        m.equilibrium(&pose, &mut s, &mut torque);
+        let (n, k) = (s.len(), m.motors().len());
+        let motors = |s: &[f64]| {
+            let (mut p, mut v) = (vec![0.0; k], vec![0.0; k]);
+            m.motor_state(s, &mut p, &mut v);
+            (p, v)
+        };
+        let (p0, v0) = motors(&s);
+        let (mut keep, mut rotors) = (Vec::new(), Vec::new());
+        for i in 0..n {
+            let mut t = s.clone();
+            t[i] += 1e-3;
+            let (p, v) = motors(&t);
+            let moved = |a: &[f64], b: &[f64]| a.iter().zip(b).any(|(a, b)| (a - b).abs() > 1e-9);
+            if moved(&p, &p0) {
+                rotors.push(i);
+            } else if !moved(&v, &v0) {
+                keep.push(i);
+            }
+        }
+        rotors.iter().for_each(|&i| s[i] += 1e-3);
+        let size = keep.len();
+        let mut a = vec![0.0; size * size];
+        for (c, &i) in keep.iter().enumerate() {
+            let h = 1e-7 * s[i].abs().max(1e-3);
+            let (mut up, mut down) = (s.clone(), s.clone());
+            (up[i], down[i]) = (s[i] + h, s[i] - h);
+            let (mut fu, mut fd) = (vec![0.0; n], vec![0.0; n]);
+            m.derivatives(&up, &torque, &mut fu);
+            m.derivatives(&down, &torque, &mut fd);
+            keep.iter().enumerate().for_each(|(r, &row)| a[r * size + c] = (fu[row] - fd[row]) / (2.0 * h));
+        }
+        let modes = m.modes(&pose);
+        assert!(!modes.is_empty(), "{name}");
+        for mode in modes {
+            let (w, z) = (std::f64::consts::TAU * mode.hz, mode.damping);
+            let ([re, im], _) =
+                sim_components::shapes::eigen_near(&a, size, [-z * w, w * (1.0 - z * z).sqrt()]).unwrap();
+            let linear = -re / re.hypot(im);
+            assert!(
+                (z / linear - 1.0).abs() < 5e-3,
+                "{name} at {} Hz: damping ratio {z} against {linear} linearised",
+                mode.hz
+            );
+        }
+    }
+}

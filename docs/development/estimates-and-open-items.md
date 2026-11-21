@@ -266,6 +266,13 @@ Fixed (after the second audit, 21 November):
   inertia's split (2/3 at the elbow); now the weight at their middles and the frame momentum as rods, as on the D3:
   hold at the centre 850 mm down −18.58980 N m per gearbox (−18.60312 before), the vertical mode under constant
   torques −4.71 N m/rad at 975 mm down (−4.30), +5.45 at 1175 mm (+5.66).
+- The modes' damping behind a screw whose stiffness follows the nut took the far end's dampers with the stiffness at
+  the nut (`chain.rs` held and coupled modes, the parallel SCARA's stroke and turn): now both at the nut
+  (`Gearbox::at`). Against the linearised machine with its rotors held (effects
+  `the_modes_are_damped_as_the_linearised_machine_at_the_nut`): tripod 0.01946, 0.02134, 0.02444 (was 0.01574,
+  0.01726, 0.01977), hexapod 0.01047 to 0.0480 (was 0.00872 to 0.0401), parallel SCARA's quill at z = 0.18 m 0.0399
+  (was 0.0216), joint-kit SCARA's stroke 0.0271 (was 0.0228). Only the printed damping moves: the shaper takes the
+  frequencies.
 
 Fixed:
 - `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another
