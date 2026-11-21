@@ -2484,7 +2484,12 @@ impl ConfigMachine {
         // which holds the stress of the beam's own sag: its cross term with the mode is +g p0 w by virtual work
         // (EI u'''' = mu g), so the beam's weight does no work on w in all.
         let (w, k) = (self.deflection(s).0, self.beam_mode(q)[0]);
-        let own = self.beam.as_ref().map_or(0.0, |b| self.g * b.shape_moments(q[b.axis])[0] * w);
+        // As the frame momentum has the beam's own mass: with a body on the beam's axis that does not ride the vertical.
+        let own = self
+            .beam
+            .as_ref()
+            .filter(|b| self.bodies.iter().any(|body| body.axes[b.axis] && !body.axes[b.vertical]))
+            .map_or(0.0, |b| self.g * b.shape_moments(q[b.axis])[0] * w);
         let potential = potential - self.beam_load().0 * self.g * w - own;
         let beam = 0.5 * k * w * w + own;
         [kinetic + turning, potential, stops + belt + gears + frame + lean + beam]
