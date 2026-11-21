@@ -719,6 +719,7 @@ effect-cylinder_cushion = Endlagendämpfung des Zylinders
 check-cushion-energy = Bewegungsenergie beim Eintritt in die Endlagendämpfung, höchste [J]
 check-load-factor = Last des Zylinders zu seiner theoretischen Kraft beim Versorgungsdruck
 error-cylinder-unstable = Der Pneumatikzylinder ist für den Integrationsschritt zu steif (den Schritt kleiner, ein Totvolumen oder die Durchflüsse größer wählen): { $arg }
+error-effect-not-modelled = Diese Maschine bildet den Effekt nicht ab, eingeschaltet änderte er nichts; bitte ausschalten: { $arg }
 quantity-cylinder-position = Kolbenstellung
 quantity-cylinder-velocity = Kolbengeschwindigkeit
 quantity-cylinder-pressure-cap = Druck, Kolbenseite (absolut)

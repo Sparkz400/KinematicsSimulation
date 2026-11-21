@@ -1176,7 +1176,8 @@ in tool space. See [mechanisms](mechanisms.md#tool-space).
 These are choices and design rules, not properties of a part, so they have no `[bounds]` (the swing's spring and damper
 have theirs).
 
-`effects.link_bending` (in all joint kit configs, acting on the arms only; off as shipped) and `[link_bending]` (in the
+`effects.link_bending` (in all joint kit configs, acting on the arms only, the slides and the table refuse it on, as do the
+crank-cam machines and the mover track, which have the key too; off as shipped) and `[link_bending]` (in the
 arms' configs): each link from its joint to the next joint (the flange after the last) bends as a cantilever in its
 first Euler-Bernoulli mode, in the plane its joint turns it in; its own URDF mass spread along it, everything beyond at
 its tip. Signals `link.<n>.bend` (m, its tip's deflection), `link.<n>.bend_across` (m) and `link.<n>.twist` (rad)
@@ -1247,7 +1248,7 @@ press frame's stretch under the press force.
 | `ratings.index_settling_tolerance_m` (indexers) | m | Required: the band at the station radius the table's ring has to settle into after an index (signal `table.settling_time`) | 1e-5, [estimate] |
 | `ratings.index_max_settling_s` (indexers) | s | Verdict `index-settling`: how long the table may ring beyond that band after an index (15 % of the dwell at 60 indexes a minute) | 0.1, [estimate] |
 | `indexer.cam_radius_m` (cam indexer) | m | Optional: the cam's radius where the rollers touch. With it the contact force along the normal is the tangential force over cos α, tan α = r_p φ' / R_c (signal `indexer.pressure_angle`); absent, α = 0. 0.10 in the shipped config (bounds 0.08 to 0.125): the peak contact force 2.1 % more | [estimate] |
-| `effects.table_twist` (the two indexers) | true/false | The table's twist on its shaft is a passive joint of its own, so the ring acts back on the driver (signal `table.twist`, the index error adds it, its damper's loss `power.table_twist`); off: the ring is worked out beside the dynamics (the same ring to 0.2 %). Off as shipped | choice |
+| `effects.table_twist` (the two indexers) | true/false | The table's twist on its shaft is a passive joint of its own, so the ring acts back on the driver (signal `table.twist`, the index error adds it, its damper's loss `power.table_twist`); off: the ring is worked out beside the dynamics (the same ring to 0.2 %). Its mode is among the machine's modes (`sim-cli modes`). Off as shipped; the other crank-cam machines refuse it on | choice |
 | `cam.ramp_s` | s | The master's sin² ramp from rest to speed and back | choice |
 | `cam.table_file` (crank) | – | A CSV cam table (master, slave[, slope], a header and `#` lines skipped; the last row closes the period); `""`: the segments | choice |
 | `[[cam.segment]]` `master`, `slave`, `law` (crank) | rad | One segment: master span, slave rise, law (`linear`, `dwell`, `3-4-5`, `4-5-6-7`, `cycloid`, `harmonic`) | choice |
@@ -1258,7 +1259,7 @@ press frame's stretch under the press force.
 | `follower.mass_kg` (disc cam) | kg | The follower, its slide and roller, the tool on it apart (`mass.payload_kg`) | [estimate], [bounds] |
 | `follower.roller_radius_m`, `follower.offset_m` (disc cam) | m | The roller's radius, and the follower's axis off the disc's centre (lowers the pressure angle on the rise where positive) | [estimate] |
 | `follower.spring_n_m`, `follower.spring_preload_n` (disc cam) | N/m, N | The return spring that holds the roller on the disc, and its force at the base circle | [estimate], [bounds] |
-| `effects.follower_lift_off` (disc cam) | true/false | The follower may leave the disc: its gap g to the cam is a passive joint, the contact a one-sided spring and damper (compression only, so the force on the disc is never negative), the guide's friction acts; the damper's and the friction's power is the loss `power.follower_contact`; signals `follower.gap` (negative: pressed in), `follower.off_disc` (the contact carries nothing). Off as shipped: the roller stays on the disc | choice |
+| `effects.follower_lift_off` (disc cam) | true/false | The follower may leave the disc: its gap g to the cam is a passive joint, the contact a one-sided spring and damper (compression only, so the force on the disc is never negative), the guide's friction acts; the damper's and the friction's power is the loss `power.follower_contact`; signals `follower.gap` (negative: pressed in), `follower.off_disc` (the contact carries nothing). Off as shipped: the roller stays on the disc; the other crank-cam machines refuse it on | choice |
 | `follower.roller_width_m`, `follower.contact_damping_ratio` (disc cam, with `effects.follower_lift_off`) | m, – | The roller's width for its steel line contact (Palmgren: d = 3.84e-5 Q^0.9 / l^0.8, mm and N; 0.014, a stud-type track roller of 30 mm, bounds 0.012 to 0.016) and the damper as a share of critical damping with the follower's mass and the contact's stiffness at its depth (0.5, bounds 0.3 to 0.7) | [estimate] |
 | `follower.guide_friction_n` (disc cam, with `effects.follower_lift_off`) | N | The guide's Coulomb friction against the follower's speed (tanh over 1 mm/s; bounds 2 to 10) | [estimate] |
 | `ratings.disc_max_contact_force_n`, `ratings.disc_max_pressure_angle_deg` (disc cam) | N, ° | The verdicts `disc-contact-force` (the roller's load) and `disc-pressure-angle` (30° for a translating follower) | [estimate] |

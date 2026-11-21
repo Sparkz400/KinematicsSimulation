@@ -48,3 +48,13 @@ pub mod transmission;
 pub use control::{Command, CommandError, Controller, LimitViolation, StopCategory, check_limits};
 pub use drive::DriveMode;
 pub use sim::{Contact, Sim, Snapshot, load_config, schema};
+
+/// Refuses each of `effects` (`effects.<name>`) switched on in `cfg` (`error-effect-not-modelled`): switches a machine's
+/// config has with the others of its crate but that this machine does not model, so that one turned on is not silently
+/// without effect.
+pub fn refuse_unmodelled(cfg: &sim_core::Config, effects: &[&str]) -> Result<(), sim_core::ConfigError> {
+    match effects.iter().find(|e| cfg.bool(&format!("effects.{e}")) == Ok(true)) {
+        Some(e) => Err(sim_core::ConfigError::Part("error-effect-not-modelled", format!("effects.{e}"))),
+        None => Ok(()),
+    }
+}

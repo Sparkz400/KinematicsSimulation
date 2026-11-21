@@ -30,6 +30,8 @@ pub struct Table {
 }
 
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
+    // The table has no links to bend.
+    sim_components::refuse_unmodelled(cfg, &["link_bending", "link_bending_reaction"])?;
     let mut joint = RotaryJoint::from_config(cfg)?;
     let mut strain_wave = None;
     match cfg.get("table.gear")?.as_str() {

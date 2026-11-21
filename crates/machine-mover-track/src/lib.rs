@@ -105,7 +105,9 @@ pub const LOSSY_EFFECTS: [&str; 7] = [
     "holding_brake",
 ];
 
+/// The movers have no links to bend: `effects.link_bending` (and its reaction) on is refused.
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
+    sim_components::refuse_unmodelled(cfg, &["link_bending", "link_bending_reaction"])?;
     sim_components::base::mount(cfg, Box::new(MoverTrack::new(cfg)?))
 }
 
