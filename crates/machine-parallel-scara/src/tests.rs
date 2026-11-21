@@ -269,6 +269,30 @@ fn the_default_cycle_passes_its_verdicts() {
     assert!(verdicts.iter().any(|v| v.check == "screw-speed"));
 }
 
+/// The tool turn's velocity loop at 0.08 N m s/rad hammers from flank to flank of its gearbox's 1 arcmin play, which
+/// the small-signal measurement inside the play does not see: there it reads 78.2 degrees and 10.54 dB, but after the
+/// swept kick at rest (`backlash_hammering`) the loop keeps swinging at 650 Hz with 0.77 N m peak of the 1.95 N m the
+/// motor has (`sim-cli margins`, run 21 November 2026), so `velocity_loop_margins` calls it not stable. At 0.1 it
+/// hammers at 705 Hz, the 710 Hz the config's note found in a traverse; at the shipped 0.033, and at 0.06, it does not.
+#[test]
+fn the_tool_turn_hammering_across_its_play_is_found_by_the_margins() {
+    use sim_components::analysis::{backlash_hammering, velocity_loop_margins};
+    let at = |kv: f64| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text(&format!("drive.4.velocity_kp_nm_s_rad = {kv}")).unwrap();
+        cfg
+    };
+    let m = velocity_loop_margins(&ENTRY, &at(0.08), &[]).unwrap()[0].1[3];
+    let h = m.hammering.expect("0.08 hammers");
+    assert!(m.valid && m.gain_margin_db > 0.0 && !m.stable(), "{m:?}");
+    assert!((h.frequency_hz - 650.0).abs() < 15.0 && h.torque_nm > 0.3, "{h:?}");
+    let h = backlash_hammering(&ENTRY, &at(0.1), 3).unwrap().expect("0.1 hammers");
+    assert!((h.frequency_hz - 710.0).abs() < 15.0, "{h:?}");
+    for kv in [0.033, 0.06] {
+        assert_eq!(backlash_hammering(&ENTRY, &at(kv), 3).unwrap(), None, "{kv}");
+    }
+}
+
 /// Friction feedforward from the machine's own model, by hand, on the tool turn (motor 4) in its cruise at 30 rad/s
 /// (the turn 0 -> 6 rad, the plate at rest). The quill's friction 0.02 tanh(30 / 0.01) + 1e-4 x 30 = 0.023 N m passes
 /// the gearbox 8, whose teeth (its 97 % at 259 N m with the drag 0.93 N m at the input taken out) pass 1 / (1 / 0.97 -

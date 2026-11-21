@@ -86,7 +86,10 @@ pub fn loop_response(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
         }
         ui.weak(format!("{} {}", points.len(), tr("ui-loop-points")));
     });
-    if !m.stable() {
+    if let Some(h) = m.hammering {
+        let at = format!("{:.0} {}, {:.2} N m", h.frequency_hz, tr("unit-hz"), h.torque_nm);
+        ui.label(RichText::new(model.tr.tr_arg("loop-hammers", &at)).color(LIMIT));
+    } else if !m.stable() {
         ui.label(RichText::new(tr("ui-loop-unstable")).color(LIMIT));
     }
     let mut keys = vec![
