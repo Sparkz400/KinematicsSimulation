@@ -1778,7 +1778,7 @@ drum stands still when the payload goes on or off. With `effects.rope_stretch` o
 the constraint force.
 
 Five further effects, each its own switch (off as shipped; off, the model above exactly), solved together by one mass
-matrix over q = (x_c, y, l, P1 (3) [, a, b] [, ψ]), M(q) q̈ = f(q, q̇), each point mass adding m Jᵀ J to M and Jᵀ (F − m
+matrix over q = (x_c, y, l, P1 (3) [, d (3)] [, ψ]), M(q) q̈ = f(q, q̇), each point mass adding m Jᵀ J to M and Jᵀ (F − m
 J̇ q̇) to f:
 
 - `effects.rope_mass` (`rope.mass_per_m_kg_m` μ): the free rope's material runs off the sheave at the drum's speed, its
@@ -1786,8 +1786,13 @@ J̇ q̇) to f:
   trolley and the drum's surface, K_w = μ (capacity − l) (|v_S|² + l̇²) / 2; V = μ g [l (H + z_P) / 2 + (capacity − l)
   H]. Lagrange's equations with the growing mass μ l; nothing is booked as loss. `rope.tension` is the drum's end, (m +
   μ l) g at rest, `rope.shortfall` the hook's.
-- `effects.hook_block`: the hook block (`crane.hook_mass_kg`) at P1 on the rope, the load on a sling of
-  `crane.sling_length_m` at P2 = P1 + l_s (sin a cos b, sin b, −cos a cos b): a spherical double pendulum. The load's
+- `effects.hook_block`: the hook block (`crane.hook_mass_kg`) at P1 on the rope, the load at P2 = P1 + d on a sling of
+  `crane.sling_length_m` l_s: a spherical double pendulum. The sling is a rope of the main rope's EA and specific
+  damping, t_s = EA e_s / l_s + c ė_s / l_s with e_s = |d| − l_s, never below 0 and 0 while e_s ≤ 0: it goes slack when
+  the load stands on the floor and the hook block is lowered further, or in a bounce, and takes the jerk when it comes
+  taut again in its stretch (its damper, with `effects.rope_damping`, books what that loses as the rope's). At rest it is
+  stretched to l_s (1 + m g / EA); a pick hangs the payload plumb under the hook block at that length, or, where that
+  is under the floor, stands it on the floor with the sling slack. The load's
   signals are P2's.
 - `effects.joint_elasticity`: each drive the elastic joint of the other machines, the gearbox's stiffness, damping and
   backlash between the rotor (a state) and the wheel or drum. With it on the shipped loops are stable (`sim-cli margins
@@ -1801,10 +1806,24 @@ J̇ q̇) to f:
 - `effects.floor_contact`: the standing body (the load's point, or the hook block's) is a one-sided constraint a_z = 0 at
   `crane.floor_height_m` with N ≥ 0, N = −a_z,free / (J_z M⁻¹ J_zᵀ), and Coulomb friction μ_f N
   (`crane.floor_friction_coefficient`, smoothed over `crane.rolling_smoothing_m_s`) iterated with N; the rigid rope
-  respects the floor too, and a rope that comes taut lifts the load.
+  respects the floor too, and a rope that comes taut lifts the load. A body falling onto the floor runs on through the
+  step, which puts it back on the floor at rest (plastic, booked with `power.other`); the constraint holds a body that
+  stands still only, so the floor's push does no work.
 
-Left out: the rope's bending at the sheave, the load's own turning (a point mass), and a slack sling: with the hook block
-and the floor contact on, the sling is a rod.
+**Modes** (`Machine::modes`, lowest first): the swing (and with the hook block the double pendulum's upper root), the
+modes along the rope with the motors held, and the girder's yaw. Along the rope, down positive: the drum with
+`effects.joint_elasticity` (J / r² and the wound rope on the hoist gearbox's k_g), the hook on the elastic rope, the
+payload on the sling. The rope linearised at its rest stretch, K = EA / l [L² / l², −L / l; −L / l, 1] on (l, L) and
+its damper c / l on L̇ − l̇, its own mass μ l / 6 [2, 1; 1, 2]; the rigid rope ties the hook to the drum. Held rigid
+drives hold the drum: the bounce is √(EA / (l m)), 6.77 Hz for the 265 kg at z = 2 m. With elastic drives the travels on
+their gearboxes too (the bridge on both carriages' with the skew), the load on its pendulum left behind: the bridge
+10.49 Hz, the trolley 41.09 Hz, the hoist and the bounce 108.2 and 6.30 Hz. The model linearised with its motors free has
+the rotors in and higher figures (the drives at 65.7, 88.0 and 111.0 Hz, the bounce at 11.4 Hz; on rigid drives 12.14 Hz
+with drum and rotor free). The held bridge mode is what the config calls the drive's anti-resonance: the shipped
+velocity loop (some 4.5 Hz on the rigid drive) does not hold the rotor there.
+
+Left out: the rope's bending at the sheave, the load's own turning (a point mass), and the hook block landing on the
+load: lowered by more than the sling's length onto a standing load, it passes through it.
 
 ## Crank and cam machines
 
@@ -2421,6 +2440,7 @@ For the machine:
 | `gearbox-thermal` | With `effects.part_heating`: where the hottest gearbox settles on the cycle, R_th × its mean loss (`CycleLoad::part_rises`, see [thermal model](#thermal-model-and-view)); not judged on a direct drive, which has no gearbox | `thermal.gearbox_max_rise_k` |
 | `guide-thermal` | With `effects.part_heating`: where the hottest guide settles on the cycle | `thermal.guide_max_rise_k` |
 | `thermal-warm-start` | With `effects.thermal_warm_start`, where something that warms acts back on the run: the most a rise the measured pass started at lies from the one it settles at, K (see [thermal warm start](#thermal-warm-start)). No row: the pass started cold, or the change has no value (a run that stopped, a winding that does not settle), whose cause fails its own row (the trip's, `collision`, `motor-thermal`) | 0.1 K (`WARM_START_TOLERANCE_K`) |
+| `thermal-cycle-repeat` | Only where the warm start converged neither per pass nor over a period: how far apart two passes started at the same rises settle, K. Beyond the tolerance the cycle's motion does not repeat itself (motion left over from one pass, a load still swinging, carries into the next), which no start temperature settles | 0.1 K (`WARM_START_TOLERANCE_K`) |
 | `collision` | Where the config has obstacles: the least clearance to them over the run, m (see [obstacles and crash](#obstacles-and-crash)). Passes at or **above** the limit, never at a contact (clearance 0 or less). Without obstacles it is not judged, so it cannot fail | `profile.min_clearance_m` |
 
 Without `effects.part_heating` (or `effects.thermal_feedback`, which warms the parts too) the two thermal checks are not judged, as a rating left out is not.
@@ -2647,6 +2667,15 @@ stop                   when max |s_k − r_k| ≤ 0.1 K (WARM_START_TOLERANCE_K)
 The secant step: a warmer guide or gearbox loses less (its lubricant thins), so the rise a pass settles at falls with the rise it starts at, and plain substitution r = s oscillates towards the fixed point; on the EXCT-30's guide (slope about −0.4) it was still 0.3 K off after four passes. A winding's settled rise depends on its current alone (m = 0).
 
 The last measured pass is the result; `CycleLoad::warm_start` has the warm passes and the last change, and the verdicts a row `thermal-warm-start` (that change against 0.1 K). A rise that does not settle (a winding loaded beyond what its copper can shed) ends the iteration at once, not converged. So does a run that stops (a drive trips, the machine hits an obstacle) in a warm pass; one that stops before a warm pass began was measured from cold, as `CycleLoad::warm_start` then says. Neither has a `thermal-warm-start` row: the trip, the crash or `motor-thermal` fails for it. Over a measured pass the rises drift with their time constants, by a hundredth of a kelvin in a cycle of seconds. A trajectory or path (`analyze --path`) counts as a cycle that repeats: between passes the machine goes back to its start (`Command::MoveTo`) and rests 0.3 s; the rises are set after that, and what the way back left ringing in a lightly damped machine is in the next pass. Each warm pass costs one more cycle. On the shipped configs one (the windings alone converge in one: their settled rise depends only on the current); with part heating and the feedback on, two (T-gantry, delta picker) or three (single axis, EXCT-30, which ends 0.045 K off). `verdicts` on the default T-gantry with the feedback on took 3.8 s against 2.9 s from cold.
+
+Where the passes do not converge within the 4 warm passes, the settled rises may repeat over a period of 2 or 3 passes
+(a pick that alternates between two places): `period_of` finds it, and the warm start goes on with spans of that period,
+measured as one. Where there is none, one more span is run from the rises the last one started at, the last one staying
+the measured pass (`WarmStart::repeat`, verdict row `thermal-cycle-repeat`): two passes started at the same rises settle alike unless the
+cycle's motion itself differs from pass to pass, so a gap beyond the tolerance says the cycle does not repeat. The crane
+with `effects.hook_block` on its unshaped cycle is such a one: the double pendulum carries the swing one pass leaves
+(0.5 m at the dwells) into the next, the bridge's winding settles at 1.9 to 4.7 K pass by pass at about the same start,
+and no start temperature settles that; shaped, the swing taken out, it converges to 0.015 K.
 
 What it moves: the windings settle at 1 to 2 K on the shipped cycles, so the shipped verdicts move in the fourth digit. With part heating and the feedback on, the single axis's guide settles at 10.03 K instead of 12.51 K (its viscous friction is 0.637 of the cold one there, not 1) and its `gearbox-continuous` falls from 0.806 to 0.695 N m; the T-gantry's guide at 3.86 K instead of 4.20 K; the EXCT-30's X guide at 15.90 K instead of 23.70 K, its windings at 8.81 and 8.46 K instead of 8.98 and 8.56 K (`sim-cli verdicts` with `--set effects.part_heating=true`, and `--set effects.thermal_feedback=true` added, 17 November 2026; 6.62 and 6.08 K instead of 6.88 and 6.24 K before). A 0.5 A-rated winding (single axis) settles at 73.8 K, and the measured pass's copper loss is R (1 + 0.0039 · 73.8) I² = 1.026 W instead of the cold 0.797 W.
 

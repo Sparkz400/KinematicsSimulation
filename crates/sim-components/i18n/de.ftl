@@ -403,6 +403,7 @@ quantity-section-stretch = Dehnung des Abschnitts
 effect-thermal_feedback = Temperaturen wirken auf Reibung, Getriebeverluste und Riemensteifigkeit
 effect-thermal_warm_start = Zyklusanalyse beginnt warm: Wicklungen und Teile bei ihrer eingeschwungenen Übertemperatur
 check-thermal-warm-start = Warmstart: eingeschwungene gegen anfängliche Übertemperatur des Durchlaufs, größter Unterschied [K]
+check-thermal-cycle-repeat = Warmstart nicht konvergiert: zwei Durchläufe, bei denselben Übertemperaturen begonnen, wie weit sie auseinander einschwingen; über der Toleranz wiederholt sich die Bewegung des Zyklus nicht [K]
 check-pick-tracking = Griff vom Förderband: Werkzeug gegen Teil längs des Bands beim Greifen, größter Wert [m]
 check-parts-missed = Griff vom Förderband: ungegriffen durch das Fenster laufende Teile [1/min]
 effect-drive_current_limit = Maximalstrom des Antriebs begrenzt den Motorstrom

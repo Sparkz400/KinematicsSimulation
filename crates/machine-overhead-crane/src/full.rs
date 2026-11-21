@@ -2,13 +2,13 @@
 //! carriages (effects.rope_mass, hook_block, joint_elasticity, bridge_skew; one of them on). The generalised coordinates are
 //!
 //! ```text
-//! q = (x_c, y, l, P1x, P1y, P1z [, a, b] [, psi])      bridge centre, trolley, free rope, the rope's lower end,
-//!                                                       the sling's two angles, the bridge's yaw
+//! q = (x_c, y, l, P1x, P1y, P1z [, dx, dy, dz] [, psi])  bridge centre, trolley, free rope, the rope's lower end,
+//!                                                         the sling's span P2 - P1, the bridge's yaw
 //! ```
 //!
 //! and the equations of motion `M(q) q'' = f(q, q')` are assembled from the Jacobians of the bodies' points, solved densely
-//! (at most 9 unknowns). The trolley's S = (x_c + psi (y - y_c), y, H), the sling's end P2 = P1 + l_s e(a, b), e = (sin a
-//! cos b, sin b, -cos a cos b); a point of mass m with the acceleration a_p = J q'' + c (c = J' q', the velocity-product
+//! (at most 10 unknowns). The trolley's S = (x_c + psi (y - y_c), y, H), the sling's end P2 = P1 + d, the sling a
+//! tension-only spring (`Sling`); a point of mass m with the acceleration a_p = J q'' + c (c = J' q', the velocity-product
 //! terms) gives M += m J^T J and f += J^T (F - m c). The rope, whose mass mu l varies with the paid-out l, is derived
 //! from its Lagrangian. Its material runs off the sheave at the drum's speed l' along u: the free rope's velocity is
 //! linear from v_A = v_S + l' u at the top to v_P at the hook (a rope paid out straight down moves all of it at l'), so
@@ -33,7 +33,7 @@
 //!
 //! The floor under the standing body (the load's point: the hook block's, or the payload's with the sling) is a
 //! one-sided constraint a_z = 0 with the push N >= 0 and its Coulomb friction, solved with the coordinates' equations
-//! (N = -a_z,free / (J_z M^-1 J_z^T), the friction iterated with N).
+//! (N = -a_z,free / (J_z M^-1 J_z^T), the friction iterated with N), while it stands still on it.
 
 use super::*;
 use sim_components::chain::solve;
@@ -79,17 +79,19 @@ fn sc(a: V3, k: f64) -> V3 {
     [a[0] * k, a[1] * k, a[2] * k]
 }
 
-/// e(a, b) and its first and second derivatives: e, e_a, e_b, e_aa, e_ab, e_bb.
-pub(crate) fn sling_dir(a: f64, b: f64) -> [V3; 6] {
-    let (sa, ca, sb, cb) = (a.sin(), a.cos(), b.sin(), b.cos());
-    [
-        [sa * cb, sb, -ca * cb],
-        [ca * cb, 0.0, sa * cb],
-        [-sa * sb, cb, ca * sb],
-        [-sa * cb, 0.0, ca * cb],
-        [-ca * sb, 0.0, -sa * sb],
-        [-sa * cb, -sb, ca * cb],
-    ]
+/// The sling at one moment (effects.hook_block): a rope of the main rope's EA and damping over its length l_s, from the
+/// hook block P1 to the payload P2.
+pub(crate) struct Sling {
+    /// Its span d = P2 - P1 and d's rate; the unit vector along d.
+    pub span: V3,
+    pub rate: V3,
+    pub u: V3,
+    /// Its stretch e = |d| - l_s and e'; its tension t = EA e / l_s + c e' / l_s, never below 0, 0 while slack (e <= 0)
+    /// or with nothing on it; the damper's share of t.
+    pub stretch: f64,
+    pub speed: f64,
+    pub tension: f64,
+    pub damper: f64,
 }
 
 /// q'' = q0 + sum_j lambda_j M^-1 d_j where each constraint (a, d, b) holds, a . q'' + b = 0: q'' and the lambdas.
@@ -171,13 +173,31 @@ impl Crane {
     pub(crate) fn lower(&self, s: &[f64]) -> (V3, V3) {
         let p = [s[LOAD], s[LOAD + 1], s[LOAD + 2]];
         let v = [s[LOAD_SPEED], s[LOAD_SPEED + 1], s[LOAD_SPEED + 2]];
-        match (self.sling, self.layout.sling) {
-            (Some(ls), Some(a0)) if self.payload_mass() > 0.0 => {
-                let [e, ea, eb, ..] = sling_dir(s[a0], s[a0 + 1]);
-                (add(p, sc(e, ls)), add(v, sc(add(sc(ea, s[a0 + 2]), sc(eb, s[a0 + 3])), ls)))
-            }
+        match self.sling_state(s) {
+            Some(sl) if self.payload_mass() > 0.0 => (add(p, sl.span), add(v, sl.rate)),
             _ => (p, v),
         }
+    }
+
+    /// The sling's length with the payload hanging on it at rest, l_s (1 + m_p g / EA); l_s with none.
+    pub(crate) fn sling_rest(&self) -> Option<f64> {
+        self.sling.map(|ls| ls * (1.0 + self.payload_mass() * self.g / self.ea))
+    }
+
+    /// The sling at a state (`Sling`); `None` without effects.hook_block.
+    pub(crate) fn sling_state(&self, s: &[f64]) -> Option<Sling> {
+        let (ls, a0) = (self.sling?, self.layout.sling?);
+        let (span, rate) = ([s[a0], s[a0 + 1], s[a0 + 2]], [s[a0 + 3], s[a0 + 4], s[a0 + 5]]);
+        let length = norm(span);
+        let u = if length > 0.0 { sc(span, 1.0 / length) } else { [0.0, 0.0, -1.0] };
+        let (stretch, speed) = (length - ls, dot(u, rate));
+        let (mut tension, mut damper) = (0.0, 0.0);
+        if stretch > 0.0 && self.payload_mass() > 0.0 {
+            let spring = self.ea * stretch / ls;
+            tension = (spring + self.damping / ls * speed).max(0.0);
+            damper = tension - spring;
+        }
+        Some(Sling { span, rate, u, stretch, speed, tension, damper })
     }
 
     /// The equations of motion at a state under the motor torques `torque`, with the rigid drives' loss factors `loss`;
@@ -210,27 +230,30 @@ impl Crane {
             Some(_) => (self.hook, self.payload_mass()),
             None => (self.load_mass(), 0.0),
         };
+        // P2 = P1 + d: the sling's span d is coordinates 6 to 8.
         let mut j2 = jp.clone();
-        let mut c2 = [0.0; 3];
-        if let (Some(ls), Some(a0)) = (self.sling, lay.sling) {
-            let (a, b, ad, bd) = (s[a0], s[a0 + 1], s[a0 + 2], s[a0 + 3]);
-            let [_, ea, eb, eaa, eab, ebb] = sling_dir(a, b);
-            j2[6] = sc(ea, ls);
-            j2[7] = sc(eb, ls);
-            c2 = sc(add(add(sc(eaa, ad * ad), sc(eab, 2.0 * ad * bd)), sc(ebb, bd * bd)), ls);
+        if self.sling.is_some() {
+            for k in 0..3 {
+                j2[6 + k][k] = 1.0;
+            }
         }
         // Bridge (the girder at its middle, its yaw inertia), trolley, drum, hook block and load.
         mm[0] += self.bridge;
         add_body(&mut mm, &mut rhs, self.trolley, &js, cs, [0.0; 3]);
         mm[2 * n + 2] += self.masses[2];
         add_body(&mut mm, &mut rhs, m1, &jp, [0.0; 3], [0.0, 0.0, -m1 * g]);
-        if self.sling.is_some() {
+        if let Some(sl) = self.sling_state(s) {
             if m2 > 0.0 {
-                add_body(&mut mm, &mut rhs, m2, &j2, c2, [0.0, 0.0, -m2 * g]);
+                add_body(&mut mm, &mut rhs, m2, &j2, [0.0; 3], [0.0, 0.0, -m2 * g]);
+                // The sling pulls P2 with -t u and P1 with t u: on d alone.
+                for k in 0..3 {
+                    rhs[6 + k] -= sl.tension * sl.u[k];
+                }
             } else {
-                // No load on the sling: its angles carry no mass and stay where they are.
-                mm[6 * n + 6] += 1.0;
-                mm[7 * n + 7] += 1.0;
+                // No load on the sling: its span carries no mass and stays as it is.
+                for k in 6..9 {
+                    mm[k * n + k] += 1.0;
+                }
             }
         }
         if let Some(k) = self.skew {
@@ -339,8 +362,10 @@ impl Crane {
         // may go slack (t >= 0), as the plain model's.
         let (low, low_v) = self.lower(s);
         let vh = [low_v[0], low_v[1]];
-        let on_floor = self.floor.is_some_and(|f| low[2] <= f && low_v[2] <= 0.0);
-        let (jac, c) = if self.sling.is_some() && m2 > 0.0 { (&j2, c2) } else { (&jp, [0.0; 3]) };
+        // Standing: on the floor and still. Falling onto it, the body runs on through the step, whose end puts it back
+        // on the floor at rest (`after_step`, plastic, booked); a push on a body still moving down would do work.
+        let on_floor = self.floor.is_some_and(|f| low[2] <= f + FLOOR_ROUNDING && low_v[2].abs() <= FLOOR_ROUNDING);
+        let jac = if self.sling.is_some() && m2 > 0.0 { &j2 } else { &jp };
         let jz: Vec<f64> = jac.iter().map(|c| c[2]).collect();
         let (mut acc, mut tension, mut push, mut fric) = (nan(), 0.0, 0.0, [0.0; 2]);
         for _ in 0..6 {
@@ -350,8 +375,8 @@ impl Crane {
             let mut taut = rope_row.is_some();
             let (mut a, mut lam) = constrained(&mm, &q0, &set);
             push = 0.0;
-            if on_floor && dn(&jz, &a) + c[2] < 0.0 {
-                set.push((jz.clone(), jz.clone(), c[2]));
+            if on_floor && dn(&jz, &a) < 0.0 {
+                set.push((jz.clone(), jz.clone(), 0.0));
                 (a, lam) = constrained(&mm, &q0, &set);
                 if taut && lam[0] < 0.0 {
                     set.remove(0);
@@ -497,6 +522,11 @@ impl Crane {
         if let (Some(k), Some(i)) = (self.skew, self.layout.skew) {
             elastic += 0.5 * k.stiffness * s[i] * s[i];
         }
+        if let (Some(sl), Some(ls)) = (self.sling_state(s), self.sling) {
+            if sl.stretch > 0.0 && m2 > 0.0 {
+                elastic += 0.5 * self.ea * sl.stretch * sl.stretch / ls;
+            }
+        }
         [kinetic, potential, elastic]
     }
 
@@ -534,6 +564,9 @@ impl Crane {
         powers[10] += self.pick_loss + motion.floor_power;
         let rope = &motion.rope_state;
         powers[8] = rope.damper * (rope.rate - s[RATES + 2]);
+        if let Some(sl) = self.sling_state(s) {
+            powers[8] += sl.damper * sl.speed;
+        }
         (powers, at_rotor)
     }
 
@@ -547,6 +580,9 @@ impl Crane {
         state.resize(self.layout.len, 0.0);
         state[..3].copy_from_slice(&[tool[0], tool[1], l]);
         state[LOAD..LOAD + 3].copy_from_slice(&[tool[0], tool[1], load]);
+        if let (Some(a0), Some(rest)) = (self.layout.sling, self.sling_rest()) {
+            state[a0 + 2] = -rest;
+        }
         let pull_l = self.rest_pull(l, self.load_mass());
         let mut held = vec![0.0; nd];
         for d in 0..nd {

@@ -30,6 +30,7 @@ cli-run-stopping = Lauf: Anhalteweg je Achse ab der Abschaltung (die Maschine st
 cli-thermal-start-cold = Thermischer Start: kalt (Teile und Wicklungen bei den Temperaturen, mit denen der Lauf begann)
 cli-thermal-start-warm = Thermischer Start: warm, bei den Übertemperaturen, auf die der Zyklus einschwingt; größte Änderung einer Übertemperatur im gemessenen Durchlauf { $arg } K
 cli-thermal-start-unsettled = Thermischer Start: warm, aber in den Warmdurchläufen NICHT konvergiert, auch nicht über eine Periode von bis zu 3 Durchläufen; größte Änderung einer Übertemperatur im gemessenen Durchlauf { $arg } K
+cli-thermal-start-aperiodic = Thermischer Start: warm, aber NICHT konvergiert: der Zyklus wiederholt sich nicht. Zwei Durchläufe, bei denselben Übertemperaturen begonnen, schwangen bis zu { $arg } K auseinander ein: was ein Durchlauf in Bewegung lässt (eine noch pendelnde Last), trägt sich in den nächsten und belastet die Motoren anders, was keine Starttemperatur einschwingen lässt
 cli-thermal-start-period = Thermischer Start: der Zyklus wiederholt sich erst alle { $arg } Durchläufe; seine Übertemperaturen schwingen über diese Periode ein, die als eine gemessen wird
 cli-conveyor = Förderband: Griffe, Folgefehler beim Greifen längs des Bands, verpasste Teile { $arg }
 cli-stop-worst = Ungünstigster Stopp: ausgelöst bei { $arg }

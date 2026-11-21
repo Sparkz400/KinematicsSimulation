@@ -107,7 +107,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | --- | --- | --- |
 | The cables' own inertia; the lift of cable from the drum to the pulley; the sag's weight changing with the pose | cable robots | 0.5 % of the spatial platform's mass; 0.05 N; 5e-5 N. The sag model is a shallow parabola, 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
 | The rotors' gyroscopic coupling with the legs' swing (it is in the frame's reaction only); the rods' faces against platform and base | hexapod, tripod, rotary hexapod | About 0.015 N m (hand estimate). |
-| A slack sling: with the hook block and the floor contact on, the sling is a rod | crane | Not measured; the sling pushes where it should go slack. The hook block and the elastic drives were run on a full cycle; rope mass and bridge skew passed their own tests and a 0.2 s run. |
+| The hook block landing on the load: lowered by more than the sling's length onto a standing load, it passes through it (the sling, a rope since 21 November, goes slack below its length) | crane | None in the shipped cycle; the sling is 1 m. The hook block and the elastic drives were run on a full cycle; rope mass and bridge skew passed their own tests and a 0.2 s run. |
 | Link bending together with parallelogram bars of their own (refused); the palletiser's rod and crank (shipped bar arrays empty) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured in the test case). |
 | The belt runs' sideways offset on the leaning Z axis; the belt runs riding on the beam's vertical mode | T-gantry | A first-order moment (T₁ − T₃)·0.04 m; the beam mode would fall 0.9 % (59.32 to 58.77 Hz). |
 | Angular momentum of the T-gantry crate against its machine file is not compared | T-gantry | Different origins and belt-run geometry. |
@@ -308,6 +308,21 @@ Fixed:
   against the measured +2.5: a gap the damping moves by 0.03 N m, not one it makes.
 - Program reader: an arc through points near f64's range (`MoveL,2145413,-8.4e301` then `MoveC`) had a
   NaN centre and was taken; now refused (`program-error-arc`).
+- The crane's sling was a rod (section 4): it is a rope of the main rope's EA and damping that goes slack. With it the
+  floor contact under the hook block closes its energy budget: the floor lifted the hook block on the standing payload
+  step by step and booked that as made energy (an audit's set-down cycle: `power.other` -1.30 J, 1.30 J of 42.1 J
+  unaccounted; now -2.3e-10 J and -9.3e-10 J with the torque ripple, whose work is in that row, off), and the floor's
+  push on a body still falling did work (0.21 J in a lift-off test): it now holds a body that stands still only.
+- The crane's mode list had the swing alone: it has the bounce along the rope (and the sling) and, with elastic drives,
+  the drives' modes, all with the motors held (6.77 Hz bounce at z = 2 m; bridge 10.49, trolley 41.09, hoist 108.2 Hz).
+  The brief's 12.14, 66, 88 and 111 Hz are the free-motor figures of the linearised model.
+- The crane's warm start with `effects.hook_block` did not converge (3.88 K; 0.019 K without it). Not a defect: the
+  unshaped cycle does not repeat itself. The double pendulum carries the swing a pass leaves (0.5 m at the dwells)
+  into the next; over 30 warm passes the bridge's winding settled anywhere from 1.3 to 5.1 K, bounded and irregular,
+  passes started at about the same rises (3.1 to 3.2 K) settling 1.4 to 4.9 K apart; shaped, the same cycle converges
+  (0.015 K). Where the warm start converges neither per pass nor over a period it now measures one more pass from the
+  rises the last one started at (on this cycle 0.69 K apart, seven times the tolerance): the verdict row
+  `thermal-cycle-repeat` and the CLI's message name the cause.
 
 Open, with the cause where it is known:
 - The warm start does not settle for a motor near its limit (1FK2104-4AF on the EXCT-30, 6.9 K): not
