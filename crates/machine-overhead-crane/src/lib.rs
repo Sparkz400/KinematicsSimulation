@@ -1247,6 +1247,13 @@ impl Machine for Crane {
         out
     }
 
+    /// The swings alone (the shaper acts on them, not on the bounce, the drives or the skew): the load's, and with the
+    /// hook block the double pendulum's upper one.
+    fn sway_modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
+        let (lower, upper) = self.sway_omegas(self.height - tool_pose[2]).map_or((None, None), |(l, u)| (Some(l), u));
+        [lower, upper].into_iter().flatten().map(|w| sim_core::Mode { hz: w / TAU, damping: 0.0 }).collect()
+    }
+
     fn signal_infos(&self) -> Vec<SignalInfo> {
         let mut out = vec![
             SignalInfo::new("rope.tension", "group-rope", "quantity-rope-tension", "N"),

@@ -725,6 +725,90 @@ fn a_switch_the_machine_does_not_model_is_refused_switched_on() {
     assert_eq!(refused, 4 * 4 + 3 * 3 + 2 + 4 * 2);
 }
 
+/// The cycle optimiser's second input shaper on the crane (`second_shaper_frequency`) is a swing the shaper acts on
+/// (`Machine::sway_modes`), not the load's bounce on its rope, which the mode list has as its second mode without the
+/// hook block (8.30 Hz at the start pose, z = 3 m). With the hook block it is the double pendulum's upper swing (2.55
+/// Hz there); without it there is one swing alone, at the first shaper's frequency, and no second shaper to try. A
+/// shaper that follows the pose takes the same list for its second mode (`Controller::shaper_halves`).
+#[test]
+fn the_cranes_second_shaper_is_its_upper_swing_not_the_bounce() {
+    let entry = sim_machines::find("overhead-crane").unwrap();
+    let pose = entry.config().f64s("start.pose").unwrap();
+    for hook in [false, true] {
+        let cfg = with(&entry.config(), &[&format!("effects.hook_block = {hook}")]);
+        let m = (entry.build)(&cfg).unwrap();
+        let second = sim_components::analysis::second_shaper_frequency(m.as_ref(), &pose, &cfg).unwrap();
+        let (modes, sways) = (m.modes(&pose), m.sway_modes(&pose));
+        if hook {
+            assert!(sways.len() == 2 && (sways[1].hz - 2.55).abs() < 0.01, "{sways:?}");
+            assert_eq!(second, Some(sways[1].hz));
+        } else {
+            assert!((modes[1].hz - 8.30).abs() < 0.01 && sways.len() == 1, "{modes:?} {sways:?}");
+            assert_eq!(second, None, "{modes:?}");
+        }
+    }
+}
+
+/// The margin across a gearbox's play (`play_margin`, the describing function's) on the five-bar's tool turn, whose
+/// loop hammers across its 1 arcmin play at 0.08 N m s/rad (650 Hz): there it reads -4.18 dB, at the shipped 0.033
+/// +3.56 dB, both saying the loop hammers from 0.0494 to 0.0497 (the loop gain is kv times the rest). That is the
+/// swing with the rotor's friction faded; the time run with the friction off (`backlash_hammering`, bisected: quiet at
+/// 0.04758, hammering at 0.04797) hammers within 5 % of it, quiet at 0.95 times it and hammering at 1.05 times. With
+/// the friction on it hammers only from 0.078 (the friction still damps a swing of some rad/s at the rotor). The arms'
+/// loops, whose play hardly opens, read 7.46 and 7.68 dB.
+#[test]
+fn the_margin_across_the_play_says_where_the_tool_turn_hammers() {
+    use sim_components::analysis::{backlash_hammering, velocity_loop_margins};
+    let entry = sim_machines::find("parallel-scara").unwrap();
+    let at = |kv: f64, friction: bool| {
+        let mut cfg = entry.config();
+        cfg.set_text(&format!("drive.4.velocity_kp_nm_s_rad = {kv}")).unwrap();
+        if !friction {
+            for key in ["joint_friction", "motor_friction", "gearbox_drag", "motor_stiction", "iron_loss"] {
+                cfg.set_text(&format!("effects.{key} = false")).unwrap();
+            }
+        }
+        cfg
+    };
+    let margin = |kv: f64| velocity_loop_margins(entry, &at(kv, true), &[]).unwrap()[0].1[3].play_margin_db;
+    let (hammers, shipped) = (margin(0.08), margin(0.033));
+    assert!(hammers < 0.0 && shipped > 0.0, "{hammers} dB at 0.08, {shipped} dB at 0.033");
+    let onset = 0.033 * 10f64.powf(shipped / 20.0);
+    assert!((onset / (0.08 * 10f64.powf(hammers / 20.0)) - 1.0).abs() < 0.01, "{onset}");
+    assert_eq!(backlash_hammering(entry, &at(0.95 * onset, false), 3).unwrap(), None, "{onset}");
+    assert!(backlash_hammering(entry, &at(1.05 * onset, false), 3).unwrap().is_some(), "{onset}");
+}
+
+/// The fit's twist of a train (`Machine::twist_at`) behind a screw whose stiffness follows the nut is the spring's where
+/// the nut is, the rotor's angle over the ratio: the screw axis (fixed-supported, fixed bearing at -0.1 m, root 21.2
+/// mm, E A = 2.06e11 pi 0.0212^2 / 4 = 7.2716e7 N) with 1 N m at the motor and the nut 0.1 and 0.3 m along twists more at
+/// 0.3 by i^2 T 0.2 / (E A) = 314.159^2 0.2 / 7.2716e7 = 2.7146e-4 rad, i = 2 pi / 0.02 m the motor's rad per metre.
+/// The far end's spring (`twist`) has none of it.
+#[test]
+fn the_fits_twist_behind_a_screw_is_the_springs_at_the_nut() {
+    let entry = sim_machines::find("screw-axis").unwrap();
+    let cfg = entry.config();
+    assert!(
+        cfg.bool("effects.screw_stiffness_with_position").unwrap() && cfg.bool("effects.joint_elasticity").unwrap()
+    );
+    let m = (entry.build)(&cfg).unwrap();
+    let twist = |s: f64| {
+        let (mut angle, mut out) = ([0.0], [0.0]);
+        m.inverse(&[s], &mut angle);
+        m.twist_at(&angle, &[1.0], &[0.0], &mut out);
+        (angle[0] / s, out[0])
+    };
+    let ((ratio, near), (_, far)) = (twist(0.1), twist(0.3));
+    assert!((ratio - std::f64::consts::TAU / 0.02).abs() < 1e-9 * ratio, "{ratio}");
+    let ea = 2.06e11 * std::f64::consts::PI * 0.0212f64.powi(2) / 4.0;
+    let by_hand = ratio * ratio * 0.2 / ea;
+    assert!((by_hand - 2.7146e-4).abs() < 1e-8, "{by_hand}");
+    assert!(((far - near) / by_hand - 1.0).abs() < 1e-6, "{} against {by_hand} by hand", far - near);
+    let mut held = [0.0];
+    m.twist(&[1.0], &[0.0], &mut held);
+    assert!(held[0] > far, "the far end's {} against {far} at 0.3 m", held[0]);
+}
+
 /// Behind a screw whose stiffness follows the nut (effects.screw_stiffness_with_position) the gear's dampers are laid out
 /// where the nut is (`Gearbox::at`), as its spring is: the modes' damping ratios are the linearised machine's, its
 /// rotors held, from the eigenvalue nearest each mode's pole (`shapes::eigen_near`) of d(derivatives)/d(state) by
@@ -732,18 +816,19 @@ fn a_switch_the_machine_does_not_model_is_refused_switched_on() {
 /// (friction, backlash, lost motion, efficiency, ripple) off; the rotors 1e-3 rad ahead so that each gear is in contact.
 /// With the far end's dampers the tripod's three came out 0.01574, 0.01726, 0.01977 against 0.01946, 0.02134, 0.02444,
 /// the hexapod's 19 % low, the parallel SCARA's quill at z = 0.18 m 0.0216 against 0.0400. The SCARA with its links
-/// bending two-way (`JointMachine`'s coupled modes) too, up to its stroke's mode at 599 Hz (0.02710, 0.02282 with the
-/// far end's dampers): the links' pair above it, 680 and 737 Hz, is off by 2 % either way (0.0756 and 0.0844 against
-/// 0.0741 and 0.0860, the sum kept), `generalized_modes` taking each mode's damping on its undamped shape.
+/// bending two-way (`JointMachine`'s coupled modes) too: its stroke's mode at 599 Hz (0.02710, 0.02282 with the far
+/// end's dampers) and the links' pair above it, 680 and 737 Hz, whose ratios come from the damped problem's eigenvalues
+/// (`matrix_modes_at`); taken on each mode's undamped shape they were off by 2 % either way (0.0756 and 0.0844 against
+/// 0.0741 and 0.0860 linearised, the sum kept).
 #[test]
 fn the_modes_are_damped_as_the_linearised_machine_at_the_nut() {
     let two_way = ["effects.link_bending = true", "effects.link_bending_reaction = true"];
-    for (name, pose, edits, below) in [
-        ("tripod", None, &[][..], f64::INFINITY),
-        ("hexapod", None, &[], f64::INFINITY),
-        ("parallel-scara", Some(vec![0.0, -0.6, 0.18, 0.0]), &[], f64::INFINITY),
-        ("scara", Some(vec![0.3, 0.2, 0.1, 0.0]), &[], f64::INFINITY),
-        ("scara", Some(vec![0.3, 0.2, 0.1, 0.0]), &two_way, 650.0),
+    for (name, pose, edits) in [
+        ("tripod", None, &[][..]),
+        ("hexapod", None, &[]),
+        ("parallel-scara", Some(vec![0.0, -0.6, 0.18, 0.0]), &[]),
+        ("scara", Some(vec![0.3, 0.2, 0.1, 0.0]), &[]),
+        ("scara", Some(vec![0.3, 0.2, 0.1, 0.0]), &two_way),
     ] {
         let entry = sim_machines::find(name).unwrap();
         let mut cfg = entry.config();
@@ -793,7 +878,7 @@ fn the_modes_are_damped_as_the_linearised_machine_at_the_nut() {
         }
         let modes = m.modes(&pose);
         assert!(!modes.is_empty(), "{name}");
-        for mode in modes.into_iter().filter(|mode| mode.hz < below) {
+        for mode in modes {
             let (w, z) = (std::f64::consts::TAU * mode.hz, mode.damping);
             let ([re, im], _) =
                 sim_components::shapes::eigen_near(&a, size, [-z * w, w * (1.0 - z * z).sqrt()]).unwrap();

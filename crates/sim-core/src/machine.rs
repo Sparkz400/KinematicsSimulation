@@ -269,6 +269,12 @@ pub trait Machine: Send {
     fn twist(&self, _torque: &[f64], _acc: &[f64], out: &mut [f64]) {
         out.fill(0.0);
     }
+    /// `twist` with the motors at `angle` (motor radians, the trace's): behind a screw whose stiffness follows its nut,
+    /// the train's spring where the nut is, on the shaft's point the rotor has turned to it. By default `twist`, for a
+    /// machine whose trains have one stiffness along the stroke.
+    fn twist_at(&self, _angle: &[f64], torque: &[f64], acc: &[f64], out: &mut [f64]) {
+        self.twist(torque, acc, out)
+    }
     /// `rigid_motor_torque` with the load at `angle`, `speed`, `acc` (where the rigid model puts the motors for it) and
     /// the rotors at their own acceleration `rotor_acc`: what an elastic train (`twist`) needs. By default the rigid
     /// torques at the load's motion, the rotors turning with it.
@@ -405,6 +411,13 @@ pub trait Machine: Send {
     /// move's own swing takes `modes` (the twists of the move are far above the hysteresis loop); one for the residual
     /// ringing below about 1e-4 rad at the joint takes these. By default the same as `modes`.
     fn modes_small_amplitude(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        self.modes(tool_pose)
+    }
+    /// The modes an input shaper that follows the pose takes beyond the first (`profile.shaper_modes`, the shaping
+    /// optimiser's second shaper), lowest first: by default `modes`. A machine whose `modes` hold modes the shaper does
+    /// not act on (a crane's bounce of the load on its rope) gives the ones it does (the swing, and the hook block's
+    /// upper swing).
+    fn sway_modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
         self.modes(tool_pose)
     }
     /// With effects.belt_wrap: the angle (rad) by which the belt wraps each driven pulley at a tool pose, from the places
