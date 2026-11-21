@@ -118,7 +118,6 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | A contact that is not at the tool is pushed at the motors (machine crates, linkage, delta, scissor files) | obstacle contact | A load on a soft belt swings on by the belt's stretch (millimetres at 1 m/s). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
 | The stepper's detent while disabled | stepper | Up to T_d/(4N) appears or disappears from the budget at an enable. |
 | A margin figure for a loop across a backlash | `sim-cli margins` | The small-signal margins are still those of the motor alone inside its play. Since 21 November 2026 a time run (`backlash_hammering`: a swept kick of the rated torque at the start pose) finds a loop that hammers across the play and fails it (the five-bar's tool turn at 0.08: 650 Hz, 0.77 N m, where the margins read 10.54 dB); how far a loop that does not hammer is from it (the describing function's margin) is not given, and only the start pose is kicked. |
-| A cam changed by a reconfigure while it runs | input shaper | A delayed copy is read against the new cam for up to one shaper span. A fix (each stored plan keeps its cam's curve) is written and its own test passes, but the other shaper tests were not re-run on it, so it is not merged: branch `worktree-agent-ae9f112be15454252`, uncommitted in its worktree. |
 | `mode_shape` of the five-bar | five-bar | Display only. |
 | Run files recorded before the signal `setpoint_age` | `charts.rs` | The tool error falls back to the held setpoint: up to one cycle's travel (0.79 against 0.18 mm on the T-gantry). |
 
@@ -275,6 +274,11 @@ Fixed (second audit, 21 November):
   with Z's mode to 51.5 and 140.1 Hz.
 
 Fixed (after the second audit, 21 November):
+- A cam changed by a reconfigure while it runs (was in section 4 as an unmerged fix): the fix is on main since
+  dc454002 (17 November), each stored plan keeping its cam's curve (`Plan::cam`, `Machine::cam_curve`). Checked on 21
+  November: `a_cam_changed_under_way_leaves_the_shaper_the_plan_as_it_ran` fails with the delayed copies read off the
+  machine's cam (2.16e-3 rad off the copies of the plan as it ran) and passes with the fix; the shaper tests of every
+  crate and the control tests pass (41 tests, 30 s).
 - The XYZ portal's Z belt is a loop: its section z2 is 0.9 m (0.5 m from the motor to the far idler and 0.4 m
   back to the clamp), its span z_2 0.5 m, so the falling run is as long as the two rising with the slide. Its Z
   holds 3.5 kg again, 0.0686466 N m (before 3.54 kg, 0.0694311 N m); its belts weigh 2T / mu = 3.1 vx² + 1.8 vy² +
