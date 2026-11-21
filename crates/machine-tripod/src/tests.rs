@@ -295,6 +295,35 @@ fn the_default_cycle_passes_its_verdicts() {
     }
 }
 
+/// The planner's trains (`Machine::trains`) are each leg's own mode with the other legs held: its coupling (6000 N m/rad
+/// over the screw's lever 0.01 / 2 pi m/rad squared, 2.368705e9 N/m) in series with the screw at the nut's place (the
+/// cylinder's extension q plus the 0.075 m from the fixed bearing to its start, `BallScrew::stiffness`) against the
+/// leg's own entry M_kk of the mechanism's mass matrix with the others standing: sqrt(K / M_kk) / 2 pi. Level and
+/// tilted, where the legs stand out unequally. Each lies between the lowest and the highest of the machine's modes with
+/// all legs on their springs (Rayleigh's quotient of the leg's unit shape).
+#[test]
+fn the_trains_are_each_legs_mode_with_the_others_held() {
+    let cfg = ENTRY.config();
+    let (machine, mech) = Tripod::from_config(&cfg).unwrap();
+    let screw = BallScrew::from_config(&cfg).unwrap();
+    let coupling = 6000.0 / (0.01 / TAU).powi(2);
+    for pose in [LEVEL, [0.52, 0.15, -0.1]] {
+        let trains = machine.trains(&pose);
+        let modes: Vec<f64> = machine.modes(&pose).iter().map(|m| m.hz).collect();
+        let mut q = [0.0; 3];
+        assert!(mech.inverse(&pose, &mut q));
+        let (mut mass, mut bias) = (vec![0.0; 9], vec![0.0; 3]);
+        mech.dynamics(&q, &[0.0; 3], &mut mass, &mut bias);
+        for k in 0..3 {
+            let k_leg = 1.0 / (1.0 / coupling + 1.0 / screw.stiffness(q[k] + 0.075));
+            let hz = (k_leg / mass[k * 3 + k]).sqrt() / TAU;
+            let train = trains[k].unwrap().hz;
+            assert!((train / hz - 1.0).abs() < 1e-9, "{pose:?} leg {k}: {train} against {hz} Hz by hand");
+            assert!(train >= modes[0] && train <= modes[2], "{pose:?} leg {k}: {train} outside {modes:?}");
+        }
+    }
+}
+
 /// The legs' two parts as bodies of their own, lifting the platform level (all legs alike, qd_i = u_z v_z, the twist
 /// (0, 0, v_z, 0, 0, 0): the constraints e_i . v = 0 hold): with s = 1 - u_z^2 = 0.0331565, L = 0.5491812 m,
 /// u' = (v - (u . v) u) / L so |u'|^2 = v_z^2 s / L^2. The base part (2.1 kg, centre 0.1 m, inertia 0.044) turns about

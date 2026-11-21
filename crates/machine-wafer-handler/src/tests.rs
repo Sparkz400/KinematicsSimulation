@@ -452,6 +452,29 @@ fn the_column_rings_stiffer_with_the_nut_near_its_bearing() {
     assert!(rates.iter().all(|r| r.abs() < 1e-7), "{rates:?}");
 }
 
+/// The planner's trains (`Machine::trains`) are the machine's own held modes, one motor at a time: the lift's is the
+/// column's ring on its screw at the stroke's height (438.4518 and 349.0392 Hz at z = 0.1 and 0.3 by hand above, the
+/// fixed bearing at z = 0); the turn's and the reach's are the arm's mode on that joint's gearbox with the other one
+/// rigid (its stiffness raised to 1e12 N m/rad) and the bands rigid, retracted and extended. The rigid model has none.
+#[test]
+fn the_trains_are_the_held_modes_one_motor_at_a_time() {
+    let edits = ["effects.band_elasticity = false", "screw.fixed_bearing_at_m = 0.0"];
+    let d = handler(&edits);
+    for (r, z, column) in [(0.12, 0.1, 438.4518), (0.75, 0.3, 349.0392)] {
+        let pose = [r, 0.0, z];
+        let trains = d.trains(&pose);
+        assert_eq!(trains.len(), 3);
+        close(trains[2].unwrap().hz, column, 1e-6, "lift's train");
+        for k in 0..2 {
+            let mut held = handler(&edits);
+            held.joints[1 - k].gearbox.stiffness = 1e12;
+            let own = held.modes(&pose)[0].hz;
+            close(trains[k].unwrap().hz, own, 1e-6, "joint's train");
+        }
+    }
+    assert!(handler(&RIGID).trains(&[0.4, 0.0, 0.1]).is_empty());
+}
+
 /// With the screw's stiffness following the nut, the loss-free configs keep their energy and the default config's
 /// budget closes (`testkit`): the spring's energy at the nut's travel and the force that travel takes from it agree.
 #[test]
@@ -464,6 +487,37 @@ fn the_energy_closes_with_the_screw_stiffness_following_the_nut() {
         }
         sim_core::testkit::loss_budget(&m);
     }
+}
+
+/// With a hysteresis in the gears and the lift's coupling (`gearbox.hysteresis_rad` 1e-3, which the coupling takes from
+/// [gearbox]; the standard suite cannot tell, it never commits the gears' states) the default cycle's budget closes as
+/// without it: the hysteresis's state behind the screw lives on the gear's own twist (`Gearbox::at`), and the work the
+/// nut's place does on it is booked as stored. Measured: 6.4e-6 J of 48.13 J unaccounted (4.7e-6 J without the hysteresis,
+/// 5.1e-6 J on the twist through gear and screw before 21 November), the gearbox rows 1.7e-3 J more.
+#[test]
+fn the_budget_closes_with_a_hysteresis_behind_the_screw() {
+    let budget = |hysteresis: bool| {
+        let mut cfg = ENTRY.config();
+        if hysteresis {
+            cfg.set_text("gearbox.hysteresis_rad = 1e-3").unwrap();
+            assert!(WaferHandler::new(&cfg).unwrap().lift.joint.gearbox.hysteresis > 0.0);
+        }
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim_components::analysis::analyse_cycle(&mut sim).unwrap().budget.unwrap()
+    };
+    let (plain, looped) = (budget(false), budget(true));
+    let gears = |b: &sim_components::analysis::EnergyBudget| -> f64 {
+        b.rows.iter().filter(|r| r.id.contains("gearbox")).map(|r| r.energy).sum()
+    };
+    println!(
+        "{} J of {} J unaccounted, gearboxes {} J against {} J",
+        looped.unaccounted(),
+        looped.supply,
+        gears(&looped),
+        gears(&plain)
+    );
+    assert!(looped.unaccounted().abs() < 1e-6 * looped.supply, "{} J of {} J", looped.unaccounted(), looped.supply);
+    assert!(gears(&looped) > gears(&plain));
 }
 
 /// The hold at rest and on the move, by hand: pads mu g = 0.3 * 9.80665 = 2.941995 m/s^2, and while the lift

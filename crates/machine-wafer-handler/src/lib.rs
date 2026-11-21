@@ -1510,6 +1510,25 @@ impl Machine for WaferHandler {
         self.modes(tool_pose).first().map(|m| m.hz)
     }
 
+    /// With effects.joint_elasticity: per motor its gearbox's spring between the rotor and the rest of the motor's rigid
+    /// inertia at the pose, M_kk over the ratio squared with the other joints held and the bands rigid
+    /// (`RotaryJoint::train`); the lift's with the screw's stiffness at its height (`train_at`), whose frequency is the
+    /// column's mode on it (`modes`).
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let q = [tool_pose[1], self.arm.phi(tool_pose[0]), 0.0, 0.0];
+        let (mass, _) = self.arm.dynamics(&q, &[0.0; 4], self.payload_attached);
+        let whole = |j: &RotaryJoint, m: f64| m / (j.ratio() * j.ratio()) + j.rotor_inertia;
+        let lift = &self.lift.joint;
+        vec![
+            self.joints[0].train(whole(&self.joints[0], mass[0][0])),
+            self.joints[1].train(whole(&self.joints[1], mass[1][1])),
+            lift.train_at(tool_pose[2], whole(lift, self.lift.mass(self.payload_attached))),
+        ]
+    }
+
     /// How far the reach's motor is from the singular full extension: 1 / sin(phi), the most dr/dphi over this one (1
     /// with the wrist over the column, without bound at full extension); infinite out of reach.
     fn condition(&self, tool_pose: &[f64]) -> Option<f64> {

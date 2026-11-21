@@ -118,6 +118,35 @@ fn the_default_cycle_passes_its_verdicts() {
     }
 }
 
+/// The planner's trains (`Machine::trains`) are each leg's own mode with the other legs held: its coupling (9000 N m/rad
+/// over the screw's lever 0.01 / 2 pi m/rad squared, 3.553058e9 N/m) in series with the screw at the nut's place (the
+/// cylinder's extension q plus the 0.075 m from the fixed bearing to its start, `BallScrew::stiffness`) against the
+/// leg's own entry M_kk of the mechanism's mass matrix with the others standing: sqrt(K / M_kk) / 2 pi. At home, where
+/// all six are alike, and moved and turned off it, where they differ. Each lies between the lowest and the highest of
+/// the machine's modes with all legs on their springs (Rayleigh's quotient of the leg's unit shape).
+#[test]
+fn the_trains_are_each_legs_mode_with_the_others_held() {
+    let cfg = ENTRY.config();
+    let (machine, mech) = Hexapod::from_config(&cfg).unwrap();
+    let screw = BallScrew::from_config(&cfg).unwrap();
+    let coupling = 9000.0 / (0.01 / TAU).powi(2);
+    for pose in [[0.0, 0.0, 0.48, 0.0, 0.0, 0.0], [0.03, -0.02, 0.5, 0.05, -0.03, 0.08]] {
+        let trains = machine.trains(&pose);
+        let modes: Vec<f64> = machine.modes(&pose).iter().map(|m| m.hz).collect();
+        let mut q = [0.0; 6];
+        assert!(mech.inverse(&pose, &mut q));
+        let (mut mass, mut bias) = (vec![0.0; 36], vec![0.0; 6]);
+        mech.dynamics(&q, &[0.0; 6], &mut mass, &mut bias);
+        for k in 0..6 {
+            let k_leg = 1.0 / (1.0 / coupling + 1.0 / screw.stiffness(q[k] + 0.075));
+            let hz = (k_leg / mass[k * 6 + k]).sqrt() / TAU;
+            let train = trains[k].unwrap().hz;
+            assert!((train / hz - 1.0).abs() < 1e-9, "{pose:?} leg {k}: {train} against {hz} Hz by hand");
+            assert!(train >= modes[0] && train <= modes[5], "{pose:?} leg {k}: {train} outside {modes:?}");
+        }
+    }
+}
+
 /// What the platform puts on a compliant base at home (0, 0, 0.48 m), moving at v = (0.1, 0, 0.1) m/s and turning at
 /// w = (0, 0, 0.2) rad/s, the rotors at rest: m = 62.2 kg (as above), so m v = (6.22, 0, 6.22) N s; about the origin
 /// p x m v = (0, 0.48 x 6.22, 0) = (0, 2.9856, 0) N m s and I_zz w with I_zz = 0.7 + 6 x 1.2 kg x 0.2^2 m^2 = 0.988
