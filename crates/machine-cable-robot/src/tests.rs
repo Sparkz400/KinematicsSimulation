@@ -86,6 +86,22 @@ fn the_cable_stiffness_and_natural_frequency_at_the_centre_are_the_hand_calculat
     assert!(robot.cable_stiffness(&[0.5, 0.8]).unwrap()[3] > 1.4 * k[3]);
 }
 
+/// The modes' damping from the cables' dampers (effects.cable_damping, c = 60 N s): cable k's c / l_k on its stretch's
+/// rate, l_k = L / (1 + t_k / EA), so at the centre C_zz = sum c u_z^2 (1 + t_k / EA) / L = (c / EA) K_zz of the cables
+/// alone, 6e-4 x 119499.9 = 71.700 N s/m. The vertical mode (x and z apart by the mirror images) with the whole stiffness
+/// 119734.8 N/m on the 5 kg: w = 154.748 rad/s, 24.629 Hz, zeta = C_zz / (2 m w) = 0.046333 (it was reported 0).
+#[test]
+fn the_modes_carry_the_damping_of_the_cables() {
+    let robot = planar();
+    let modes = robot.modes(&CENTRE);
+    let w = (119734.8f64 / 5.0).sqrt();
+    let zeta = 6e-4 * 119499.9 / (2.0 * 5.0 * w);
+    assert!((modes[0].hz / (w / TAU) - 1.0).abs() < 2e-5, "{modes:?} against {} Hz", w / TAU);
+    assert!((modes[0].damping / zeta - 1.0).abs() < 2e-5, "{modes:?} against zeta {zeta}");
+    assert_eq!(modes.len(), 2);
+    assert!((modes[0].hz / robot.resonance_hz(&CENTRE).unwrap() - 1.0).abs() < 1e-12, "{modes:?}");
+}
+
 /// 5 cm below the top pulleys the top cables pull almost flat. By hand, at (0, 1.55): each top cable rises 0.0256 per
 /// unit of its length, each bottom one falls 0.8391; the top ones have to lift the 49.03 N and pull down the bottom
 /// ones' 10 N at the least: t_1 + t_2 >= (49.03 + 2 x 10 x 0.8391) / 0.0256, 1284 N each, beyond the 400 N rating.

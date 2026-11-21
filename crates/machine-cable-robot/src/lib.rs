@@ -1371,6 +1371,23 @@ impl CableRobot {
         Some((0..n * n).map(|rc| (0..m).map(|c| a[rc / n * m + c] * k[c] * a[rc % n * m + c]).sum()).collect())
     }
 
+    /// The cables' dampers on the platform held at rest at `pose`, the drums held: a taut cable's c / l on its stretch's
+    /// rate L' = -a^T xi (`tensions`), summed as C = sum c / l_k a_k a_k^T (n x n, in the degrees of freedom), l_k the
+    /// free length of rest. Zero without effects.cable_damping.
+    pub fn cable_damping(&self, pose: &[f64]) -> Option<Vec<f64>> {
+        let spans = self.spans(pose)?;
+        let t = self.static_tensions(pose)?;
+        let (n, m) = (self.n(), self.m());
+        let a = self.structure(&spans);
+        let c: Vec<f64> = (0..m)
+            .map(|k| {
+                let free = self.free_for(&spans[k], t[k]);
+                if spans[k].length > free { self.damping / free } else { 0.0 }
+            })
+            .collect();
+        Some((0..n * n).map(|rc| (0..m).map(|k| a[rc / n * m + k] * c[k] * a[rc % n * m + k]).sum()).collect())
+    }
+
     /// The whole stiffness of the platform with the drums held at the free lengths of rest at `pose`: minus the
     /// derivative of the cables' wrench on it over a small twist (central differences of 1 um and 1 urad), so with
     /// the stiffness of the tensions turning with the cables (the geometric part) and the pulleys.
@@ -1902,12 +1919,12 @@ impl Machine for CableRobot {
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
         self.natural_frequencies(tool_pose)?.first().copied()
     }
+    /// `natural_frequencies` with each mode's damping ratio from the cables' dampers (`cable_damping`).
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
-        self.natural_frequencies(tool_pose)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|hz| Mode { hz, damping: 0.0 })
-            .collect()
+        let (Some(k), Some(c)) = (self.stiffness(tool_pose), self.cable_damping(tool_pose)) else { return Vec::new() };
+        let mut modes = sim_components::chain::matrix_modes(&self.platform_mass(tool_pose), &k, &c, self.n());
+        modes.sort_by(|a, b| a.hz.total_cmp(&b.hz));
+        modes
     }
 
     /// Out of the cables' reach (an anchor at its pulley), outside the wrench-feasible workspace (no tensions within
