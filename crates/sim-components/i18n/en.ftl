@@ -721,6 +721,7 @@ effect-cylinder_cushion = Cylinder end-position cushioning
 check-cushion-energy = Kinetic energy entering the end-position cushion, highest [J]
 check-load-factor = Cylinder load over its theoretical force at supply pressure
 error-cylinder-unstable = The pneumatic cylinder is too stiff for the integration step (make the step smaller, or a dead volume or the flows larger): { $arg }
+error-effect-not-modelled = This machine does not model the effect, so switched on it would change nothing; switch it off: { $arg }
 quantity-cylinder-position = Piston position
 quantity-cylinder-velocity = Piston speed
 quantity-cylinder-pressure-cap = Pressure, cap side (absolute)

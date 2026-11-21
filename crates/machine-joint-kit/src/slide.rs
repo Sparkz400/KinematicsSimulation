@@ -43,6 +43,8 @@ pub struct Slide {
 }
 
 pub fn build(cfg: &Config, kind: Kind) -> Result<Box<dyn Machine>, ConfigError> {
+    // A slide has no links to bend.
+    sim_components::refuse_unmodelled(cfg, &["link_bending", "link_bending_reaction"])?;
     let mut joint = RotaryJoint::linear_from_config(cfg)?;
     let incline = cfg.f64("slide.incline_deg")?;
     if !(-90.0..=90.0).contains(&incline) {

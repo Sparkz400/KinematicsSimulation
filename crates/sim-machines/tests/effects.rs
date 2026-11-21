@@ -689,3 +689,38 @@ fn overmodulation_takes_the_six_step_fundamental_of_the_bridge() {
     assert!((gain(&with(&servo, &on)) - 1.102_657_790_8).abs() < 1e-9);
     assert!((gain(&with(&stepper, &on)) - 4.0 / std::f64::consts::PI).abs() < 1e-15);
 }
+
+/// A switch that a machine's config has with the others of its crate but that the machine does not model is refused
+/// switched on (`error-effect-not-modelled`), not silently without effect; where the machine models it, not for that
+/// reason. The table's twist is the indexers', the follower's lift-off the disc cam's, the links' bending (and its
+/// reaction) the joint kit's arms'. Refused: on the four other crank-cam machines all four, on the disc cam and the two
+/// indexers the three others, on the mover track and the joint kit's three slides and table the two of the links.
+#[test]
+fn a_switch_the_machine_does_not_model_is_refused_switched_on() {
+    let arms: &[&str] = &["urdf-arm", "scara", "palletiser", "arm-on-track"];
+    let modelled: [(&str, &[&str]); 4] = [
+        ("table_twist", &["geneva-drive", "cam-indexer"]),
+        ("follower_lift_off", &["disc-cam"]),
+        ("link_bending", arms),
+        ("link_bending_reaction", arms),
+    ];
+    let mut refused = 0;
+    for entry in MACHINES.iter().copied() {
+        for (effect, models) in modelled {
+            let key = format!("effects.{effect}");
+            let Ok(on) = entry.config().bool(&key) else { continue };
+            assert!(!on, "{} ships {key} on", entry.id);
+            let error = (entry.build)(&with(&entry.config(), &[&format!("{key} = true")])).err();
+            let ours = error.as_ref().is_some_and(|e| e.key() == "error-effect-not-modelled" && e.detail() == key);
+            assert_eq!(
+                ours,
+                !models.contains(&entry.id),
+                "{} {key}: {:?}",
+                entry.id,
+                error.map(|e| e.detail().to_string())
+            );
+            refused += usize::from(ours);
+        }
+    }
+    assert_eq!(refused, 4 * 4 + 3 * 3 + 2 + 4 * 2);
+}

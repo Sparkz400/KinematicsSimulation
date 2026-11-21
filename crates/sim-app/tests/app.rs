@@ -406,12 +406,18 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
             // A press frame's stretch where the config gives no frame to stretch (a shared common file's switch).
             "effects.frame_stretch" => base.get("frame.stretch_stiffness_n_m").is_err(),
             // Two more such switches: a follower that may lift off its disc, a table that twists on its shaft. A machine
-            // that reads one shows its signal with it on.
+            // that reads one shows its signal with it on; the others refuse it on (`error-effect-not-modelled`).
             "effects.follower_lift_off" | "effects.table_twist" => {
                 let mut on = base.clone();
                 on.set_text(&format!("{e} = true")).unwrap();
                 let signal = if e == "effects.follower_lift_off" { "follower.gap" } else { "table.twist" };
-                !(entry.build)(&on).unwrap().signal_infos().iter().any(|s| s.id == signal)
+                match (entry.build)(&on) {
+                    Ok(machine) => !machine.signal_infos().iter().any(|s| s.id == signal),
+                    Err(error) => {
+                        assert_eq!(error.key(), "error-effect-not-modelled", "{}: {e}", entry.id);
+                        true
+                    }
+                }
             }
             "effects.braking_resistor_heating" => !base.bool("effects.dc_link").unwrap(),
             "effects.base_compliance" => {

@@ -188,25 +188,26 @@ fn a_pick_with_elastic_drives_leaves_the_gearbox_at_its_new_twist() {
     assert!(out.iter().all(|a| a.abs() < 1e-6), "{out:?}");
 }
 
-/// A pick on a hook block caught swinging: the sling continues the rope's line and turns with it, the payload at
-/// P1 + l_s u moving with the line's turn, (v_P1 - v_S)(1 + l_s / L) across the rope.
+/// A pick on a hook block caught swinging is a plastic attach: the payload hangs plumb under the hook block at its
+/// speed (the sling at rest), so the pick can only lose energy (the rope's settling to its new stretch), never make it.
+/// The sling turned into the rope's line at the rope's rate made it: with this swing (0.36 m aside, 0.22 m/s) the
+/// payload's lift of l_s (1 - cos theta) and the faster turn at L + l_s instead of L gave the pick a loss of -16.4 J.
 #[test]
-fn a_pick_on_a_swinging_hook_block_hangs_the_sling_in_the_rope_s_line() {
+fn a_pick_on_a_swinging_hook_block_creates_no_energy() {
     let mut m = crane(&lossless(&["effects.hook_block = true"]));
     m.attached = false;
     let (mut s, _) = at_rest(&m, [5.0, 2.0, 2.0]);
     swing(&m, &mut s, 0.3, -0.2);
     (s[LOAD_SPEED], s[LOAD_SPEED + 1]) = (0.2, 0.1);
     m.set_payload_attached(true);
+    let before = m.energy(&s);
     m.after_step(&mut s, DT);
-    let (rope, (low, low_v)) = (m.rope(&s), m.lower(&s));
+    let lost = before - m.energy(&s);
+    assert!(lost >= 0.0 && (m.pick_loss * DT - lost).abs() < 1e-9, "{lost} J lost, {} J booked", m.pick_loss * DT);
+    let ((low, low_v), ls) = (m.lower(&s), m.sling.unwrap());
     let (p1, v1) = ([s[LOAD], s[LOAD + 1], s[LOAD + 2]], [s[LOAD_SPEED], s[LOAD_SPEED + 1], s[LOAD_SPEED + 2]]);
-    let k = 1.0 + m.sling.unwrap() / rope.length;
-    for i in 0..3 {
-        assert!((low[i] - p1[i] - m.sling.unwrap() * rope.u[i]).abs() < 1e-12, "{low:?}");
-        let across = |v: V3| v[i] - rope.u[i] * dot(rope.u, v);
-        assert!((across(low_v) - k * across(v1)).abs() < 1e-12, "{low_v:?} {v1:?}");
-    }
+    let off = |a: V3, b: V3| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
+    assert!(off(sub(low, p1), [0.0, 0.0, -ls]) < 1e-12 && off(low_v, v1) < 1e-12, "{low:?} {low_v:?}");
 }
 
 fn crane(cfg: &Config) -> Crane {
@@ -609,4 +610,58 @@ fn the_default_cycle_with_elastic_drives_keeps_its_loops_stable() {
         assert!(m.stable() && m.crossover_hz.is_finite(), "motor {k}: {m:?}");
         assert!(m.phase_margin_deg >= 35.0 && m.gain_margin_db >= 6.0, "motor {k}: {m:?}");
     }
+}
+
+/// The mode list (`Machine::modes`: the app's marks, `identify`, a shaper following its mode k) has, with the hook block,
+/// the double pendulum's upper root beside the lower one of `resonance_hz`: the roots of m1 l1 l2 w^4 - (m1 + m2) g
+/// (l1 + l2) w^2 + (m1 + m2) g^2 = 0 whose periods the ringing above measures (it listed the lower alone). Without the
+/// hook block the single swing alone.
+#[test]
+fn the_mode_list_has_both_of_the_double_pendulum_s_roots() {
+    let m = crane(&lossless(&["effects.hook_block = true"]));
+    let pose = [5.0, 2.0, 2.0];
+    let (l1, l2, m1, m2) = (m.height - pose[2], m.sling.unwrap(), m.hook, m.payload);
+    let b = (m1 + m2) * G * (l1 + l2);
+    let root = |sign: f64| {
+        ((b + sign * (b * b - 4.0 * m1 * l1 * l2 * (m1 + m2) * G * G).sqrt()) / (2.0 * m1 * l1 * l2)).sqrt() / TAU
+    };
+    let modes = m.modes(&pose);
+    assert!(modes.len() == 2 && modes[0].hz == m.resonance_hz(&pose).unwrap(), "{modes:?}");
+    for (mode, hand) in modes.iter().zip([root(-1.0), root(1.0)]) {
+        assert!((mode.hz / hand - 1.0).abs() < 1e-12, "{modes:?} against {hand} Hz");
+    }
+    let plain = crane(&lossless(&[]));
+    assert_eq!(plain.modes(&pose).len(), 1);
+}
+
+/// With effects.bridge_skew the girder's yaw is among the modes (it listed the swing alone): no loop holds it, the
+/// carriages share the bridge's command and its loop holds their mean. By hand with the trolley 2 m off the middle (the
+/// skew test's A, B, C): rigid, sqrt(k_psi / C) on k_psi = k_lat b^2 / 2 = 4e6 N m/rad. The model linearised with the
+/// motors free, the carriages' mean free too, has it at sqrt(k_psi / (C - B^2 / A)), to the rope's pull. Elastic, the
+/// rotors' differential delta on the gearboxes: J R' w^4 - (J k' + R' (k_psi + k')) w^2 + k_psi k' = 0, J = J_b + m_t d^2,
+/// R' = R g^2 / 2, k' = k g^2 / 2; its lower root 0.1 % under the rigid one.
+#[test]
+fn the_bridge_s_skew_is_among_the_modes() {
+    use sim_components::shapes::{as_mode, eigen_near, linearised};
+    let (gauge, d) = (5.6, 2.0);
+    let pose = [5.0, 2.5 + d, 2.0];
+    let m = crane(&lossless(&["effects.bridge_skew = true"]));
+    let r = m.drives[0].reflected_inertia();
+    let (jb, mt, mb) = (m.bridge * gauge * gauge / 12.0, m.trolley, m.bridge);
+    let (a, b, c) = (mb + mt + 2.0 * r, mt * d, jb + mt * d * d + 0.5 * r * gauge * gauge);
+    let k_psi = 0.5 * 2.0e6 * 2.0 * 2.0;
+    let held = (k_psi / c).sqrt() / TAU;
+    let modes = m.modes(&pose);
+    assert!(modes.len() == 2 && (modes[1].hz / held - 1.0).abs() < 1e-12, "{modes:?} against {held} Hz");
+    let free = (k_psi / (c - b * b / a)).sqrt();
+    let (_, jac) = linearised(&m, &pose);
+    let linear = as_mode(eigen_near(&jac, m.state_len(), [0.0, free]).unwrap().0).hz;
+    assert!((linear / (free / TAU) - 1.0).abs() < 1e-3, "linearised {linear} Hz against {} Hz", free / TAU);
+    let e = crane(&lossless(&["effects.bridge_skew = true", "effects.joint_elasticity = true"]));
+    let (k2, r2, j) = (0.5 * e.drives[0].gearbox.stiffness * gauge * gauge, 0.5 * r * gauge * gauge, jb + mt * d * d);
+    let (p, q) = (j * r2, j * k2 + r2 * (k_psi + k2));
+    let low = ((q - (q * q - 4.0 * p * k_psi * k2).sqrt()) / (2.0 * p)).sqrt() / TAU;
+    let modes = e.modes(&pose);
+    assert!(modes.len() == 3 && (modes[1].hz / low - 1.0).abs() < 1e-9, "{modes:?} against {low} Hz");
+    assert!(low < held && low > 0.995 * held, "{low} Hz against {held} Hz");
 }

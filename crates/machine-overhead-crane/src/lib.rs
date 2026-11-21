@@ -488,17 +488,40 @@ impl Crane {
     /// mu per metre: w^2 = g (m + mu L / 2) / (L (m + mu L / 3)) (sqrt(g / L) for a light rope); with the hook block and a
     /// payload on its sling the lower root of m1 l1 l2 w^4 - (m1 + m2) g (l1 + l2) w^2 + (m1 + m2) g^2 = 0.
     pub fn sway_omega(&self, length: f64) -> Option<f64> {
+        self.sway_omegas(length).map(|(lower, _)| lower)
+    }
+
+    /// `sway_omega` and, with the hook block and a payload on its sling, the double pendulum's upper root, where hook
+    /// block and payload swing against each other.
+    fn sway_omegas(&self, length: f64) -> Option<(f64, Option<f64>)> {
         if !(self.g > 0.0 && length > 0.0) {
             return None;
         }
         if let Some(l2) = self.sling.filter(|_| self.payload_mass() > 0.0) {
             let (m1, m2, g) = (self.hook, self.payload_mass(), self.g);
             let b = (m1 + m2) * g * (length + l2);
-            let w2 = (b - (b * b - 4.0 * m1 * length * l2 * (m1 + m2) * g * g).sqrt()) / (2.0 * m1 * length * l2);
-            return Some(w2.sqrt());
+            let root = (b * b - 4.0 * m1 * length * l2 * (m1 + m2) * g * g).sqrt();
+            let w2 = |sign: f64| ((b + sign * root) / (2.0 * m1 * length * l2)).sqrt();
+            return Some((w2(-1.0), Some(w2(1.0))));
         }
         let (m, rope) = (self.load_mass(), self.rope_mass * length);
-        Some((self.g / length * (1.0 + rope / (2.0 * m)) / (1.0 + rope / (3.0 * m))).sqrt())
+        Some(((self.g / length * (1.0 + rope / (2.0 * m)) / (1.0 + rope / (3.0 * m))).sqrt(), None))
+    }
+
+    /// effects.bridge_skew: the girder's yaw, which no loop holds (the carriages share the bridge's command, its loop
+    /// holds their mean, x_c): the girder's m_b g^2 / 12 and the trolley's m_t d^2 (at d from the middle, `y` the trolley's
+    /// place) on the wheels' k_psi and damper; rigid with the rotors' R g^2 / 2 on the yaw (R = J i^2 per carriage), elastic
+    /// those on the rotors' differential delta, tied to the yaw by the gearboxes' k g^2 / 2 and c g^2 / 2 on psi - delta.
+    fn skew_modes(&self, y: f64) -> Vec<sim_core::Mode> {
+        let Some(skew) = self.skew else { return Vec::new() };
+        let (j, d, half) = (&self.drives[0], y - self.y_centre, 0.5 * skew.gauge * skew.gauge);
+        let (yaw, rotors) = (skew.inertia + self.trolley * d * d, j.reflected_inertia() * half);
+        let modes = sim_components::chain::matrix_modes;
+        if !self.elastic_drives {
+            return modes(&[yaw + rotors], &[skew.stiffness], &[skew.damping], 1);
+        }
+        let (k, c) = (j.gearbox.stiffness * half, j.gearbox.damping * half);
+        modes(&[yaw, 0.0, 0.0, rotors], &[skew.stiffness + k, -k, -k, k], &[skew.damping + c, -c, -c, c], 2)
     }
 
     /// The bridge's yaw and its rate (0 without effects.bridge_skew).
@@ -1048,18 +1071,11 @@ impl Machine for Crane {
         let factor = self.rest_stretch(s[2]);
         self.place_on_rope(s, s[2] * factor, factor);
         if let Some(a0) = self.layout.sling {
-            // The payload went on: the sling continues the rope's line and turns with it, so a hook block caught swinging
-            // takes the payload into the pendulum's own (lower) mode instead of whipping it across the rope. Off: nothing
-            // hangs on the sling, its angles rest.
-            s[a0..a0 + 4].fill(0.0);
-            if self.payload_mass() > 0.0 {
-                let rope = self.rope(s);
-                let (u, vs) = (rope.u, self.sheave_speed(s));
-                let rel = [s[LOAD_SPEED] - vs[0], s[LOAD_SPEED + 1] - vs[1], s[LOAD_SPEED + 2] - vs[2]];
-                let turn = sub(rel, u.map(|c| c * dot(u, rel))).map(|c| c / rope.length);
-                let (a, b) = (u[0].atan2(-u[2]), u[1].clamp(-1.0, 1.0).asin());
-                let [_, ea, eb, ..] = full::sling_dir(a, b);
-                s[a0..a0 + 4].copy_from_slice(&[a, b, dot(ea, turn) / dot(ea, ea), dot(eb, turn)]);
+            // The payload went on plumb under the hook block at its speed (the sling at rest when it was picked: what the
+            // payload's energy was counted at); turning the sling into the rope's line here would lift the payload and
+            // spin it at the rope's rate, energy from nowhere. Off: nothing hangs on the sling, its angles rest.
+            if self.payload_mass() == 0.0 {
+                s[a0..a0 + 4].fill(0.0);
             }
         }
         self.pick_loss += (before - self.energy(s)) / dt;
@@ -1109,6 +1125,18 @@ impl Machine for Crane {
     /// The load's sway on its rope at the pose: sqrt(g / L) / (2 pi), L = H - z.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
         self.sway_omega(self.height - tool_pose[2]).map(|w| w / TAU)
+    }
+
+    /// The swing of `resonance_hz` and, with the hook block, the double pendulum's upper mode (`sway_omegas`), with the
+    /// trolley held as `resonance_hz` has it (the swing has no damper of its own); with effects.bridge_skew the girder's
+    /// yaw (`skew_modes`). Lowest first.
+    fn modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
+        let Some((lower, upper)) = self.sway_omegas(self.height - tool_pose[2]) else { return Vec::new() };
+        let mut out: Vec<sim_core::Mode> =
+            [Some(lower), upper].into_iter().flatten().map(|w| sim_core::Mode { hz: w / TAU, damping: 0.0 }).collect();
+        out.extend(self.skew_modes(tool_pose[1]));
+        out.sort_by(|a, b| a.hz.total_cmp(&b.hz));
+        out
     }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {

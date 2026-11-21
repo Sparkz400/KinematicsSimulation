@@ -42,8 +42,13 @@ pub use toggle::TogglePress;
 
 const I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("de", include_str!("../i18n/de.ftl"))];
 
+/// The effects of `common.toml` that the machine does not model, refused switched on (`refuse_unmodelled`): the table's
+/// twist is the indexers', the follower's lift-off the disc cam's, and none has links to bend.
+const NO_TWIST_LIFT_OFF_OR_LINKS: &[&str] =
+    &["table_twist", "follower_lift_off", "link_bending", "link_bending_reaction"];
+
 macro_rules! entry {
-    ($name:ident, $id:literal, $file:literal, $build:expr) => {
+    ($name:ident, $id:literal, $file:literal, $build:expr, $unmodelled:expr) => {
         pub static $name: MachineEntry = MachineEntry {
             id: $id,
             key: concat!("machine-", $id),
@@ -53,19 +58,23 @@ macro_rules! entry {
                 include_str!(concat!("../config/", $file))
             ),
             i18n: I18N,
-            build: $build,
+            build: |cfg| {
+                sim_components::refuse_unmodelled(cfg, $unmodelled)?;
+                $build(cfg)
+            },
             suite_configs: || suite_configs(&$name),
         };
     };
 }
 
-entry!(SLIDER_CRANK, "slider-crank", "slider-crank.toml", crank::build);
-entry!(ROTARY_KNIFE, "rotary-knife", "rotary-knife.toml", knife::build);
-entry!(FLYING_SAW, "flying-saw", "flying-saw.toml", saw::build);
-entry!(DISC_CAM, "disc-cam", "disc-cam.toml", disc::build);
-entry!(TOGGLE_PRESS, "toggle-press", "toggle-press.toml", toggle::build);
-entry!(GENEVA_DRIVE, "geneva-drive", "geneva-drive.toml", indexer::build_geneva);
-entry!(CAM_INDEXER, "cam-indexer", "cam-indexer.toml", indexer::build_cam);
+entry!(SLIDER_CRANK, "slider-crank", "slider-crank.toml", crank::build, NO_TWIST_LIFT_OFF_OR_LINKS);
+entry!(ROTARY_KNIFE, "rotary-knife", "rotary-knife.toml", knife::build, NO_TWIST_LIFT_OFF_OR_LINKS);
+entry!(FLYING_SAW, "flying-saw", "flying-saw.toml", saw::build, NO_TWIST_LIFT_OFF_OR_LINKS);
+entry!(DISC_CAM, "disc-cam", "disc-cam.toml", disc::build, &["table_twist", "link_bending", "link_bending_reaction"]);
+entry!(TOGGLE_PRESS, "toggle-press", "toggle-press.toml", toggle::build, NO_TWIST_LIFT_OFF_OR_LINKS);
+const INDEXER: &[&str] = &["follower_lift_off", "link_bending", "link_bending_reaction"];
+entry!(GENEVA_DRIVE, "geneva-drive", "geneva-drive.toml", indexer::build_geneva, INDEXER);
+entry!(CAM_INDEXER, "cam-indexer", "cam-indexer.toml", indexer::build_cam, INDEXER);
 
 const G: f64 = 9.80665;
 
