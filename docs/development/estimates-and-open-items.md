@@ -547,8 +547,12 @@ Fixed:
   F / k 0.123 mm): depth F / k to 1e-5 (planar delta 0.1219 mm at 1219 N, D3 0.1500 mm at 1500 N, scissor 2.827 mm at
   28.27 kN), the push's power F . v to 1e-7 as shipped, rigid without the gearbox loss and with the D3's arms bending;
   budgets 2.2e-6 (planar delta), 1.1e-6 (D3) and 2.3e-4 (scissor) of the supply, the same moves without contact
-  9.1e-6, 3.5e-5, 2.8e-7: on the deltas the brief's 1e-6 is the integration's floor, not the push's; the scissor's
-  2.3e-4 is not explained. Crates (`collision.rs`, no longer ignored): D2 98.07 um at 980.7 N, budget 6.9e-9, D3
+  9.1e-6, 3.5e-5, 2.8e-7: on the deltas the brief's 1e-6 is the integration's floor, not the push's. The scissor's
+  2.3e-4 is the integration's too: holding 28 kN against the ceiling its gearbox's efficiency changes between driving
+  and driven back within 0.5 W (`Gearbox::loss_factor`'s fade), a few mm/s of the platform at that force, which 4
+  substeps of 15.6 us do not follow: 1.2e-4 with 8 substeps, 6.9e-6 with 16, 4.2e-8 with 32 and 64, 4.6e-8 with 4 and
+  the gearbox efficiency off. The test runs it with 32 and holds every file's budget to its no-contact move's (or
+  1e-6); the shipped file keeps 4 (32 makes its verdicts 5.6 times slower: 3.9 s against 21.5 s). Crates (`collision.rs`, no longer ignored): D2 98.07 um at 980.7 N, budget 6.9e-9, D3
   111.5 um at 1115 N, 9.1e-6, D4 111.8 um at 1118 N, 8.1e-6 of the supply and potential energy.
 
 - The T-gantry file's tilting runs on the beam mode (section 4: their angular momentum at the run's middle): a point at
