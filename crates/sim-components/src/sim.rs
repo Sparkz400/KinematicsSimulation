@@ -51,6 +51,13 @@ fn heated_parts(cfg: &Config, machine: &dyn Machine) -> Result<Vec<HeatedPart>, 
 /// (a carriage swinging on its belt).
 const PUSH_RANGE: f64 = 0.01;
 
+/// How many times finer the integration's sub-steps are over a base step with a push at the tool: the contact's
+/// spring then acts on the load's own coordinates (not through the transmission's give), the highest frequency of the
+/// machine, and with `sim.substeps` = 4 the fourth-order steps took 3.5e-4 of the supply out of the budget of the
+/// T-gantry's move into a slab (2.8e-4 on the hexapod; falling with the third and second power of the sub-step), 5e-6
+/// and 1.9e-5 four times finer.
+const PUSH_SUBSTEPS: u32 = 4;
+
 /// The step in a motor's angle (or a linear motor's position) by which the slope of a clearance is worked out, by
 /// central differences.
 const SLOPE_STEP: f64 = 1e-6;
@@ -872,9 +879,10 @@ impl Sim {
         joint.clear();
         joint.extend_from_slice(state);
         joint.resize(n + WINDING_STATES * torque.len() + 1, 0.0);
-        let h = *dt / *substeps as f64;
+        let substeps = if *tool_push { *substeps * PUSH_SUBSTEPS } else { *substeps };
+        let h = *dt / substeps as f64;
         let [pos, vel, force] = tool_buffers;
-        for _ in 0..*substeps {
+        for _ in 0..substeps {
             rk_joint.step(
                 |y, dy| {
                     let (mech, (dmech, rest)) = (&y[..n], dy.split_at_mut(n));
@@ -937,8 +945,9 @@ impl Sim {
         }
         // The work the obstacles' pushes take out of the machine over the step (`pushed`).
         joint.push(0.0);
-        let h = *dt / *substeps as f64;
-        for _ in 0..*substeps {
+        let substeps = if *tool_push { *substeps * PUSH_SUBSTEPS } else { *substeps };
+        let h = *dt / substeps as f64;
+        for _ in 0..substeps {
             rk_joint.step(
                 |y, dy| {
                     let ((mech, windings), (dmech, dwindings)) = (y.split_at(n), dy.split_at_mut(n));

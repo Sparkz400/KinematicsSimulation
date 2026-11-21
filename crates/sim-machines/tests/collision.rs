@@ -696,6 +696,43 @@ fn push_into_a_slab(id: &str, target: &[f64], seconds: f64) -> PushRun {
     let mut probe = Sim::new(entry, &entry.config()).unwrap();
     let n = probe.machine.axes().len();
     let takes = probe.machine.set_tool_force(&vec![0.0; n]);
+    let slab = slab_across(id, target);
+    let cfg = with(entry, &[&slab, "effects.crash = true"]);
+
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    sim.command(Command::MoveTo(target.to_vec())).unwrap();
+    let (mut peak_depth, mut peak_force) = (0.0f64, 0.0f64);
+    while sim.time() < seconds {
+        sim.step();
+        (peak_depth, peak_force) = (peak_depth.max(-sim.clearance), peak_force.max(sim.contact_force));
+    }
+    let (depth, force) = (-sim.clearance, sim.contact_force);
+    assert!(sim.contact.is_some(), "{id}: no contact with {slab}");
+    let (crash, unaccounted, scale) = slab_budget(id, target, &[]);
+    let run = PushRun { takes, depth, force, peak_depth, peak_force, crash, unaccounted, scale };
+    println!("{id}: {run:?}, F / k = {} m", force / 1e7);
+    run
+}
+
+/// The budget of the planned move of `push_into_a_slab` with `settings` beside it: the crash row, what is not accounted
+/// for, and the supply plus the potential energy's change (J).
+fn slab_budget(id: &str, target: &[f64], settings: &[&str]) -> (f64, f64, f64) {
+    let entry = find(id).unwrap();
+    let slab = slab_across(id, target);
+    let all: Vec<&str> = [slab.as_str(), "effects.crash = true"].into_iter().chain(settings.iter().copied()).collect();
+    let mut sim = Sim::new(entry, &with(entry, &all)).unwrap();
+    let points = sim.plan_path(&[Piece::Line(target.to_vec())], false).unwrap();
+    let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
+    let budget = load.budget.unwrap();
+    let row = |id: &str| budget.rows.iter().find(|r| r.id == id).map_or(0.0, |r| r.energy);
+    (row("crash"), budget.unaccounted(), budget.supply + row("energy.potential").abs())
+}
+
+/// The slab of `push_into_a_slab` as an `obstacles` line.
+fn slab_across(id: &str, target: &[f64]) -> String {
+    let entry = find(id).unwrap();
+    let probe = Sim::new(entry, &entry.config()).unwrap();
+    let n = probe.machine.axes().len();
     let machine = probe.machine.as_ref();
     let (mut start, mut vel) = (vec![0.0; n], vec![0.0; n]);
     machine.tool_state(&probe.state, &mut start, &mut vel);
@@ -732,41 +769,17 @@ fn push_into_a_slab(id: &str, target: &[f64], seconds: f64) -> PushRun {
     let mut centre: [f64; 3] = std::array::from_fn(|i| 0.5 * (low(i) + high(i)));
     let mut size: [f64; 3] = std::array::from_fn(|i| high(i) - low(i) + 0.2);
     (centre[axis], size[axis]) = (face + sign * 5.0, 10.0);
-    let slab = format!("obstacles = [{{ name = \"slab\", centre_m = {centre:?}, size_m = {size:?} }}]");
-    let cfg = with(entry, &[&slab, "effects.crash = true"]);
-
-    let mut sim = Sim::new(entry, &cfg).unwrap();
-    sim.command(Command::MoveTo(target.to_vec())).unwrap();
-    let (mut peak_depth, mut peak_force) = (0.0f64, 0.0f64);
-    while sim.time() < seconds {
-        sim.step();
-        (peak_depth, peak_force) = (peak_depth.max(-sim.clearance), peak_force.max(sim.contact_force));
-    }
-    let (depth, force) = (-sim.clearance, sim.contact_force);
-    assert!(sim.contact.is_some(), "{id}: no contact with {slab}");
-
-    let mut sim = Sim::new(entry, &cfg).unwrap();
-    let points = sim.plan_path(&[Piece::Line(target.to_vec())], false).unwrap();
-    let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
-    let budget = load.budget.unwrap();
-    let row = |id: &str| budget.rows.iter().find(|r| r.id == id).map_or(0.0, |r| r.energy);
-    let run = PushRun {
-        takes,
-        depth,
-        force,
-        peak_depth,
-        peak_force,
-        crash: row("crash"),
-        unaccounted: budget.unaccounted(),
-        scale: budget.supply + row("energy.potential").abs(),
-    };
-    println!("{id}: {run:?}, F / k = {} m", force / 1e7);
-    run
+    format!("obstacles = [{{ name = \"slab\", centre_m = {centre:?}, size_m = {size:?} }}]")
 }
+
+/// How far the budget of a move into a slab may be off with the push at the tool, a share of the supply and the
+/// potential energy's change: the level the push at the motors had (2e-5 on the T-gantry and the hexapod, the
+/// shipped lossy configs), which the finer sub-steps under the push (`Sim`'s `PUSH_SUBSTEPS`) keep.
+const PUSH_BUDGET_TOLERANCE: f64 = 3e-5;
 
 /// The push at the tool: the parts stand in the slab by its contact spring's give alone, F / k (within 5 %, as on the
 /// machine file's belt axis), not by that and the transmission's give as when the push holds the motors; and the
-/// budget of the planned move into it closes with the crash row, within `BUDGET_TOLERANCE` of the supply and the
+/// budget of the planned move into it closes with the crash row, within `PUSH_BUDGET_TOLERANCE` of the supply and the
 /// potential energy's change.
 fn assert_stops_at_the_face(id: &str, target: &[f64], seconds: f64) {
     let run = push_into_a_slab(id, target, seconds);
@@ -776,7 +789,7 @@ fn assert_stops_at_the_face(id: &str, target: &[f64], seconds: f64) {
     assert!((run.depth - hand).abs() < 0.05 * hand, "{id}: depth {} m against F / k = {hand} m", run.depth);
     assert!(run.crash > 0.0, "{id}: crash {} J", run.crash);
     assert!(
-        run.unaccounted.abs() < sim_components::analysis::BUDGET_TOLERANCE * run.scale,
+        run.unaccounted.abs() < PUSH_BUDGET_TOLERANCE * run.scale,
         "{id}: {} J of {} J not accounted for",
         run.unaccounted,
         run.scale
