@@ -77,7 +77,8 @@ und m mit
   (`screw.fixed_bearing_at_m` der Weg am Festlager), sonst an der weichsten Stelle für den ganzen Hub;
 - Dämpfung: die des Getriebes durch Hebel^2 nur über der Feder des Getriebes, die von Spindel oder Zahnstange nur über
   deren Feder, c = 2 zeta sqrt(K_c m) aus `screw.axial_damping_ratio` oder `rack.damping_ratio` und der bewegten Masse m
-  (Mutter, Lager, Führungen); zwei gedämpfte Federn in Reihe, die Maschine führt dafür einen Zustand mehr
+  (Mutter, Lager, Führungen), K_c an der Stelle der Mutter, wo die Steifigkeit ihr folgt (zeta bleibt über den Hub);
+  zwei gedämpfte Federn in Reihe, die Maschine führt dafür einen Zustand mehr
   (`Gearbox::arm`). Mit der Dämpfung des Getriebes allein (K_g = k_Getriebe / Hebel^2) schwingt eine Masse daran bei
   tiefen Frequenzen mit c (K_c / (K_c + K_g))^2 gedämpft, nicht mit c;
 - Spiel: das des Getriebes am Gelenk gesehen plus das des Wandlers (mit `effects.gearbox_backlash`);

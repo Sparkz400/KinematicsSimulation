@@ -112,7 +112,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The belt runs' sideways offset on the leaning Z axis; the belt runs riding on the beam's vertical mode | T-gantry | A first-order moment (T₁ − T₃)·0.04 m; the beam mode would fall 0.9 % (59.32 to 58.77 Hz). |
 | Angular momentum of the T-gantry crate against its machine file is not compared | T-gantry | Different origins and belt-run geometry. |
 | Idler signs of the y belts of the dual gantry and the rack gantry | machine files | Not checked: the 3D drawing does not model those routes faithfully. |
-| The screw's stiffness along the stroke keeps the far end's for the pose tolerance and the elastic feedforward's twist (`effects.screw_stiffness_with_position`, on in the shipped configs; the dynamics, modes and rest states follow the nut); the Zener arm and damper of the screw stay the far end's | wafer handler, screws | The feedforward's twist up to the far end's: 2.4 against 1.5 um on the wafer handler's column with the nut 0.15 m from the bearing. The column's damping ratio falls from 0.040 at the far end to 0.031 at z = 0.1 m (the damper c held). |
+| The screw's stiffness along the stroke keeps the far end's for the pose tolerance and the elastic feedforward's twist (`effects.screw_stiffness_with_position`, on in the shipped configs; the dynamics, modes and rest states follow the nut, the screw's damper at its ratio and the Zener arm with them); the hysteresis and the mesh bristle stay the far end's | wafer handler, screws | The feedforward's twist up to the far end's: 2.4 against 1.5 um on the wafer handler's column with the nut 0.15 m from the bearing. The hysteresis's and the bristle's stores would need their own place terms, as the spring's and the arm's have. |
 | Belt-to-pulley heat conduction | linear delta | Not sized. |
 | The tube's single-mode shape for inertia with the static stiffness 3EI/L | D3, D4, H4 arm bending | Not sized. |
 | A contact that is not at the tool is pushed at the motors (machine crates, linkage, delta, scissor files) | obstacle contact | A load on a soft belt swings on by the belt's stretch (millimetres at 1 m/s). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
@@ -264,6 +264,12 @@ Fixed:
   on the rise's cubic, the fall's state on its own cubic), with the rise's and the fall's state as
   two knots at the same time: same place and speed, only the acceleration steps. Swept over 380 to
   420 rad/s in planned_limits; `path::tests::the_runs_meet_at_the_same_place_and_speed`.
+- A screw or rack behind a converter: the coupling's damping acted across the whole series spring (the
+  wafer handler's column 1.74): since the gear damper in series (`Converter::apply_back`, a Zener
+  solid) it bridges the gear's spring alone, 0.0401 with the screw's own damping. The screw's damper
+  held at the far end's value let the column's ratio fall to 0.029 with the nut 0.1 m from the
+  bearing: it now keeps `screw.axial_damping_ratio` along the stroke (0.042 there with the coupling's
+  share).
 - The planner's train (`RotaryJoint::train`, the machine files' `trains`) put a screw's or rack's
   compliance in series twice: K1 holds it already (`Converter::apply_back`) and `band_compliance` is
   the same spring. The joint kit's screw axis's train was 0.73 of its two-mass mode; now equal
@@ -273,10 +279,6 @@ Fixed:
   NaN centre and was taken; now refused (`program-error-arc`).
 
 Open, with the cause where it is known:
-- **A screw or rack behind a converter: the coupling's damping acts across the whole series spring**
-  (`Converter::apply_back`, `transmission.rs`). Its own doc comment says in series. The wafer
-  handler's column mode then reports a damping ratio of 1.74; in series it would be about 0.003. A
-  shared-code fix that moves every screw and rack machine's figures; not made.
 - The warm start does not settle for a motor near its limit (1FK2104-4AF on the EXCT-30, 6.9 K): not
   a numerical defect, the cycle repeats only every second pass (motor a's settled rise alternates
   102 / 92 K). Needs a two-pass warm start or a message that says so.

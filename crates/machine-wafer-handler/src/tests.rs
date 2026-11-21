@@ -424,12 +424,22 @@ fn the_column_rings_on_its_screw_and_coupling() {
 /// the nut where the rotor has turned it, 0.2 m plus the compression x: x = W / K (1 + W / E A) (6 pm more than
 /// W / K), and the rotor holds W less the place's own W^2 / (2 E A) (`Gearbox::travel_force`): the state derivative is
 /// zero.
+///
+/// The damping follows too (`the_modes_are_damped_by_the_gearboxes_and_bands` at the far end): the screw's own damper
+/// keeps its ratio 0.04 on the 11.1 kg, c_c = 2 x 0.04 sqrt(K_c x 11.1) with K_c = 1 / (z / 2.948660e7 + 7.5e-9) =
+/// 9.181580e7, 7.001456e7, 5.657992e7 N/m at z = 0.1, 0.2, 0.3; with the coupling's c_g = 78956.8 N s/m across
+/// K_g = 1.184353e9 N/m in series, b + K_m tau / (1 + (w tau)^2) over the critical 2 sqrt(K m) is 0.0420995,
+/// 0.0409748, 0.0404020 (0.0400776 at the far end): the coupling's damper takes a larger share where the screw is
+/// stiffer. The far end's dampers held gave 0.0293, 0.0333, 0.0368.
 #[test]
 fn the_column_rings_stiffer_with_the_nut_near_its_bearing() {
     let d = handler(&["effects.screw_stiffness_with_position = true", "screw.fixed_bearing_at_m = 0.0"]);
-    for (z, hz) in [(0.1, 438.4518), (0.2, 386.1882), (0.3, 349.0392), (0.4, 320.8907)] {
-        let modes: Vec<f64> = d.modes(&[0.4, 0.0, z]).iter().map(|m| m.hz).collect();
-        close(*modes.last().unwrap(), hz, 1e-6, "column mode along the stroke");
+    for (z, hz, zeta) in
+        [(0.1, 438.4518, 0.0420995), (0.2, 386.1882, 0.0409748), (0.3, 349.0392, 0.0404020), (0.4, 320.8907, 0.0400776)]
+    {
+        let column = *d.modes(&[0.4, 0.0, z]).last().unwrap();
+        close(column.hz, hz, 1e-6, "column mode along the stroke");
+        close(column.damping, zeta, 1e-5, "column damping along the stroke");
     }
     let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
     d.equilibrium(&[0.4, 0.0, 0.2], &mut state, &mut torque);

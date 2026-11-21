@@ -7,7 +7,7 @@
 //! Units: lengths in m, forces in N, torques in N m, speeds of rotation in r/min where a catalogue gives them so.
 
 use crate::joint::RotaryJoint;
-use crate::mech::{BRISTLE_RATE_MAX, HoldingBrake, TravelCompliance};
+use crate::mech::{BRISTLE_RATE_MAX, HoldingBrake, TravelCompliance, series_dampers};
 use sim_core::{Config, ConfigError, RatingCheck, SignalInfo};
 use std::f64::consts::PI;
 
@@ -129,18 +129,8 @@ impl Converter {
         // (`BRISTLE_RATE_MAX`, tau under 10 us) is its slow limit, u following x: a damper K_m tau beside b, off by
         // (omega tau)^2 at a ring of omega (0.4 % at 1 kHz). A rigid converter leaves the gear's damper across it.
         let damping = g.damping / (l * l);
-        let own = if output.is_finite() && converter.is_finite() {
-            2.0 * self.damping_ratio * (converter * output).sqrt()
-        } else {
-            0.0
-        };
-        let (sum, dampers) = (converter + k1 / (l * l), damping + own);
-        let (across, tau) = (if dampers > 0.0 { damping * own / dampers } else { 0.0 }, dampers / sum);
-        let arm = if dampers > 0.0 {
-            (k1 / (l * l) * own - converter * damping).powi(2) / (sum * dampers * dampers)
-        } else {
-            0.0
-        };
+        let own = self.own_damping(output);
+        let (across, arm, tau) = series_dampers(k1 / (l * l), damping, converter, own);
         if !converter.is_finite() {
             g.damping = damping;
         } else if arm > 0.0 && tau * BRISTLE_RATE_MAX >= 1.0 {
@@ -172,6 +162,16 @@ impl Converter {
         joint.brake = HoldingBrake::from_config(cfg, joint.rotor_inertia)?;
         Ok(())
     }
+
+    /// The damper across the converter's spring alone, c_c = 2 zeta sqrt(K_c m) for the mass m behind it (`output`): 0
+    /// where that is not known or the converter is rigid.
+    fn own_damping(&self, output: f64) -> f64 {
+        if output.is_finite() && self.stiffness.is_finite() {
+            2.0 * self.damping_ratio * (self.stiffness * output).sqrt()
+        } else {
+            0.0
+        }
+    }
 }
 
 /// A converter with its own back-driving efficiency (`BallScrew::converter`): derefs to the `Converter`, and applies like
@@ -197,8 +197,13 @@ impl BackDriven {
     }
 
     pub fn apply_to(&self, cfg: &Config, joint: &mut RotaryJoint, output: f64) -> Result<()> {
+        // The gear's spring and damper at the joint, before they go in series with the screw: its dampers are laid out
+        // anew where the nut is (`Gearbox::at`).
+        let l2 = self.lever * self.lever;
+        let gear = [joint.gearbox.stiffness / l2, joint.gearbox.damping / l2];
         self.converter.apply_back(cfg, joint, output, self.back_efficiency)?;
-        joint.gearbox.travel = self.travel;
+        joint.gearbox.travel =
+            self.travel.map(|t| TravelCompliance { gear, converter: [self.stiffness, self.own_damping(output)], ..t });
         Ok(())
     }
 }
@@ -443,6 +448,8 @@ impl BallScrew {
             both_ends: self.mounting == Mounting::FixedFixed,
             fixed_bearing_at,
             reference: 0.0,
+            gear: [0.0; 2],
+            converter: [0.0; 2],
         };
         t.reference = t.shaft(x).0;
         Some(t)
@@ -1256,6 +1263,45 @@ mod tests {
         // The modes' damping at the ring: K_m tau / (1 + (w tau)^2) at w = sqrt(K_s / m).
         let w = 5e5f64.sqrt();
         assert!(rel(g.damping_at(w), 5e5 * 1.414e-3 / (1.0 + (w * 1.414e-3).powi(2)), 1e-12));
+        // Along the stroke (effects.screw_stiffness_with_position) the screw's damper keeps its ratio: a shaft of
+        // E A = 1e6 N (fixed-free over 1 m, the bearing at 0) built at its far end, K_c = 1e6 N/m, is 4e6, 2e6 and
+        // 1.333e6 N/m with the nut at 0.25, 0.5 and 0.75; the 1 kg behind it, the rotor held, rings with zeta = 0.04
+        // at each, where the far end's damper held gave 0.04 sqrt(K_c / K): 0.02, 0.0283, 0.0346.
+        let along = |k1: &str, damping: &str| {
+            let cfg = Config::parse(&text.replace("K1", k1).replace("DAMPING", damping)).unwrap();
+            let mut j = RotaryJoint::from_config(&cfg).unwrap();
+            let travel = TravelCompliance {
+                ae: 1e6,
+                length: 1.0,
+                both_ends: false,
+                fixed_bearing_at: 0.0,
+                reference: 1e-6,
+                gear: [0.0; 2],
+                converter: [0.0; 2],
+            };
+            let converter = Converter {
+                lever: 0.01,
+                stiffness: 1e6,
+                backlash: 0.0,
+                efficiency: 1.0,
+                inertia: 0.0,
+                damping_ratio: 0.04,
+            };
+            BackDriven { converter, back_efficiency: 1.0, travel: Some(travel) }.apply_to(&cfg, &mut j, 1.0).unwrap();
+            j.gearbox
+        };
+        let screw = along("1e8", "0.0");
+        for (q, k) in [(0.25, 4e6), (0.5, 2e6), (0.75, 1e6 / 0.75), (1.0, 1e6)] {
+            let g = screw.at(q);
+            let w = g.stiffness.sqrt();
+            let zeta = g.damping_at(w) * w / (2.0 * g.stiffness);
+            assert!(rel(g.stiffness, k, 1e-5) && rel(zeta, 0.04, 1e-5), "{q}: {} {zeta}", g.stiffness);
+        }
+        // A gear of 1e6 N/m with its damper too keeps the arm (tau 1.45e-3 s); laid out at the far end it is the build's.
+        let both = along("100.0", "0.2828");
+        let [b, arm, tau, _] = both.travel.unwrap().dampers(0.0).unwrap();
+        assert!(both.relax_stiffness > 0.0 && rel(arm, both.relax_stiffness, 1e-12), "{both:?}");
+        assert!(rel(b, both.damping, 1e-12) && rel(tau, both.relax_time, 1e-12));
     }
 
     /// The screw's stiffness is judged at the softest nut position: the far end of a fixed-supported shaft (1 m):
