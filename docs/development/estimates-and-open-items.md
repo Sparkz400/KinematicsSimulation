@@ -251,17 +251,25 @@ Fixed:
   the acceleration (`Machine::trains`, `path::train_speed`): 414.4 and 416.7 rad/s. Taken at the start
   pose only, and the step's acceleration is the motor's own torque on its rigid inertia, so at a very
   high jerk limit more is kept back than needed (T-gantry at 1e5 m/s³: 28 % kept, 6 % overshot).
+- The time-optimal plan ran the single axis past its torque while braking (gearbox efficiency 0.9,
+  peak 0.5 N m, jerk 1e5 m/s³, rotor 3e-4 kg m², incline -30°, `drive.max_speed_rad_s = 399.1596`;
+  "out and back" 1.00459 of 0.4 N m at -387 rad/s on the current main). Not the torque limits
+  (`motor_limits`, the curve, friction, efficiency): where the run from the start met the run from
+  the end at their peak of speed (`path::curve_join`), the plan switched at the rise's first knot
+  past the meeting and laid a cubic from the rise's acceleration (2.02 m/s²) to the fall's next knot
+  (-5.14 m/s²), which ended 1.05e-3 m/s off that knot's speed; the 1 ms differences read that step
+  of the speed as braking beyond the ceiling. The acceleration gate (4 × jerk × step) is 100 m/s² at
+  that jerk and let it pass; the speed gate (2e-4 of the speed) caught most such joins by chance,
+  which is why only some top speeds failed. The switch now lies at the runs' exact crossing (halved
+  on the rise's cubic, the fall's state on its own cubic), with the rise's and the fall's state as
+  two knots at the same time: same place and speed, only the acceleration steps. Swept over 380 to
+  420 rad/s in planned_limits; `path::tests::the_runs_meet_at_the_same_place_and_speed`.
 
 Open, with the cause where it is known:
 - **A screw or rack behind a converter: the coupling's damping acts across the whole series spring**
   (`Converter::apply_back`, `transmission.rs`). Its own doc comment says in series. The wafer
   handler's column mode then reports a damping ratio of 1.74; in series it would be about 0.003. A
   shared-code fix that moves every screw and rack machine's figures; not made.
-- The time-optimal plan runs the single axis 0.19 % past its torque while braking at a top speed of
-  395 rad/s: with `effects.gearbox_efficiency`, `gearbox.efficiency = 0.9`, `drive.peak_torque_nm = 0.5`,
-  `axis.x.max_jerk_m_s3 = 1e5`, `motor.rotor_inertia_kgm2 = 3e-4`, `geometry.incline_deg = -30` and
-  `drive.max_speed_rad_s = 399.1596`, "out and back" (planned_limits' check) reaches 0.4007 of 0.4 N m
-  at -387 rad/s (1.00187). At the shipped 420 rad/s it passes. Cause not found.
 - The warm start does not settle for a motor near its limit (1FK2104-4AF on the EXCT-30, 6.9 K): not
   a numerical defect, the cycle repeats only every second pass (motor a's settled rise alternates
   102 / 92 K). Needs a two-pass warm start or a message that says so.
