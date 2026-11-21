@@ -425,7 +425,7 @@ Beschleunigung a zu heben (J Läufer, Kupplung und Spindel), und der Motor einer
   Schrägungswinkel), rechtwinklig dazu, zusammen |F| sqrt(1 + (tan(alpha_n) / cos(beta))²): `rack.<Motor>.radial_load`,
   geprüft als `gearbox-radial-load` gegen `ratings.shaft_max_radial_load_n` des Motors, wo das gesetzt ist. Die
   Axialkraft des schrägverzahnten Ritzels und das Kippen, das sie der Welle gibt, bleiben außen vor. Das X des
-  Zahnstangenportals: 192,9 N von 1500.
+  Zahnstangenportals: 207,4 N von 1500.
 - `effects.belt_stretch` schaltet das elastische Modell der ganzen Maschine: damit verdrehen sich auch die Getriebe der
   Spindeln, Zahnstangen und Rundtische (die Steifigkeit des Wandlers in Reihe), und die Eigenform des Riemens in einer
   Lage enthält sie, bei festgehaltenen Läufern.
@@ -679,8 +679,8 @@ tolerance_m = "gantry.sync_tolerance_m"
   Last nach dem Hebelgesetz: F2 - F1 = 2 m e a / B für einen Wagen m bei e, mit a beschleunigt. Mit dem Effekt aus
   halten die Führungen die Brücke rechtwinklig, und beide teilen gleich. `machines/dual-gantry.toml` hat ein X von 3 m
   auf zwei Zahnstangen mit Katalogmotoren (1FK2103-4AH an S210) und ein Y von 0,8 m auf einem Riemen auf einer Brücke
-  von 1,2 m. Es besteht jedes Urteil seines Zyklus: `gantry-sync` 16 µm von 100, und das Ende, nahe dem der Wagen
-  anfängt, trägt mehr (`rack-feed-force` 109 gegen 95 N). Sein Gieren schwingt mit sqrt((k + 2 k_Ende (B / 2)²) / J) / 2 pi,
+  von 1,2 m. Es besteht jedes Urteil seines Zyklus: `gantry-sync` 14 µm von 100, und das Ende, nahe dem der Wagen
+  anfängt, trägt mehr (`rack-feed-force` 110 gegen 96 N). Sein Gieren schwingt mit sqrt((k + 2 k_Ende (B / 2)²) / J) / 2 pi,
   155,0 Hz mit J auf 20 kg m² angehoben und dem Wagen in der Mitte, 149,5 Hz mit ihm an einem Ende (`sim-cli modes`).
 - **Gleichlauf der beiden Antriebe** (`gantry.sync`, `gantry.sync_gain_1_s`, gelesen, wo ein Portal zwei Antriebe hat;
   der erste ist der Master). `"master_slave"`: der Lageregler des Slaves folgt der Istlage des Masters, seinem Sollwert
@@ -696,15 +696,15 @@ tolerance_m = "gantry.sync_tolerance_m"
   (sim-machines `machine_file_gantries.rs`).
 - **Ein Antrieb.** Die eine Zahnstange des Zahnstangenportals treibt seine Brücke an einem Ende
   (`drives = { mx = -0.5 }`): das ferne Ende hält nur die Feder der Anbindung, und es bleibt zurück, solange die Brücke
-  beschleunigt; mit dem Effekt an wächst der Bahnfehler seines Zyklus von 0,07 auf 0,20 mm.
+  beschleunigt; mit dem Effekt an wächst der Bahnfehler seines Zyklus von 0,07 auf 0,23 mm.
 - **H-Bot und CoreXY.** Riemen ziehen an den Enden der Brücke. Beim H-Bot (`sections = { "1" = -0.3, "2" = 0.6, "3" = -0.3 }`)
   ist das Moment des Riemens auf die Brücke -0,3 m mal sein Zug am Kopf entlang der Brücke: sie giert, sobald der Kopf
   entlang der Brücke geschoben wird, wo er auch steht (-4,2 N m für den Kopf von 7 kg bei 2 m/s²), und ein Kopf
   außerhalb der Mitte lässt sie gieren, wenn die Brücke beschleunigt (-m e a). Ein starrer Riemen lässt den H-Bot gieren
   (der Kopf kann bei festgehaltenen Motoren entlang der Brücke fahren), er giert also in beiden Modellen; mit dem Effekt
-  an wächst der Bahnfehler seines Zyklus von 0,09 auf 0,80 mm. Beim CoreXY zieht jeder Riemen an beiden Enden: sein
+  an wächst der Bahnfehler seines Zyklus von 0,06 auf 1,12 mm. Beim CoreXY zieht jeder Riemen an beiden Enden: sein
   Moment ist die Summe der Zugkräfte des einen Riemens gegen die des anderen, -0,19 N m für den Zug von 8 N, der einen
-  H-Bot mit -2,4 gieren ließe, und sein Bahnfehler bleibt 0,06 mm. Ein starrer Riemen hält das Gieren eines CoreXY: sein
+  H-Bot mit -2,4 gieren ließe, und sein Bahnfehler bleibt 0,02 mm. Ein starrer Riemen hält das Gieren eines CoreXY: sein
   starres Modell hat keins.
 
 **Körper auf Drehachsen und der Werkzeugmittelpunkt.** Ein Körper darf mit Drehachsen fahren: `offset_m` ist sein
@@ -942,8 +942,9 @@ Maschine; an ihnen ist nichts besonders für Maschinendateien.
   Linearachsen in m.
 - `effects.belt_tooth_jump` zusammen mit Spindel, Zahnstange, Linearmotor oder Rundtisch: seine Zustände liegen je
   Motor, und ein Motor ohne Scheibe hat keine; die Datei wird abgelehnt.
-- Die Steifigkeit einer Spindel ist die bei der weichsten Mutterstellung für den ganzen Hub, wie im Gelenkbaukasten;
-  das Bremsmoment ihrer Vorspannung sitzt am Motor, mit einer Glättung in rad/s.
+- Die Steifigkeit einer Spindel folgt mit `effects.screw_stiffness_with_position` (in den mitgelieferten Dateien mit
+  Spindel an) der Mutter, wie im Gelenkbaukasten; aus, ist es die bei der weichsten Mutterstellung für den ganzen Hub.
+  Das Bremsmoment ihrer Vorspannung sitzt am Motor, mit einer Glättung in rad/s.
 - Andere Eigenformen als die des Riemens: der Rahmen geht in die des Riemens ein, wo er schwingt, die eigene
   Steifigkeit der Führungen und Motoren nicht, und die Biegung eines Körpers ist nicht modelliert.
 - Abschnitts- und Trumlängen sind Zahlen (oder Pfade), keine Formeln: eine, die von einem Hub abhängt, folgt einer

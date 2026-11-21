@@ -410,7 +410,7 @@ and shaft), and a rack's motor turns i x / r.
   pinion and rack apart, F tan(alpha_n) / cos(beta) (alpha_n = 20 degrees, beta the helix angle), at right angles to it,
   |F| sqrt(1 + (tan(alpha_n) / cos(beta))²) together: `rack.<motor>.radial_load`, judged as `gearbox-radial-load`
   against the motor's `ratings.shaft_max_radial_load_n` where that is set. The helical pinion's axial force and the
-  tilt it puts on the shaft are left out. The rack gantry's X: 192.9 N of 1500.
+  tilt it puts on the shaft are left out. The rack gantry's X: 207.4 N of 1500.
 - `effects.belt_stretch` switches the elastic model of the whole machine: with it the screws', racks' and rotaries'
   gearboxes twist too (the converter's stiffness in series), and the belt's mode at a pose includes them, with the
   rotors held.
@@ -649,8 +649,8 @@ tolerance_m = "gantry.sync_tolerance_m"
   (setpoint coupling), so the two position loops keep the bridge square, and their torques share the load by the lever
   rule: F2 - F1 = 2 m e a / B for a carriage m at e accelerated at a. With the effect off the guides hold the bridge square and the two share equally.
   `machines/dual-gantry.toml` has a 3 m X on two racks with catalogue motors (1FK2103-4AH on S210) and a 0.8 m Y belt
-  on a 1.2 m bridge. It passes every verdict on its cycle: `gantry-sync` 16 um of 100, and the end the carriage starts
-  near carries more (`rack-feed-force` 109 against 95 N). Its yaw rings at sqrt((k + 2 k_end (B / 2)²) / J) / 2 pi,
+  on a 1.2 m bridge. It passes every verdict on its cycle: `gantry-sync` 14 um of 100, and the end the carriage starts
+  near carries more (`rack-feed-force` 110 against 96 N). Its yaw rings at sqrt((k + 2 k_end (B / 2)²) / J) / 2 pi,
   155.0 Hz with J raised to 20 kg m² and the carriage in the middle, 149.5 Hz with it at an end (`sim-cli modes`).
 - **Synchronising the two drives** (`gantry.sync`, `gantry.sync_gain_1_s`, read where a gantry has two drives; the
   first is the master). `"master_slave"`: the slave's position loop follows the master's actual position, its
@@ -665,14 +665,14 @@ tolerance_m = "gantry.sync_tolerance_m"
   `the_cross_coupled_gain_halves_the_yaw_of_unequal_loops` (sim-machines `machine_file_gantries.rs`).
 - **One drive.** The rack gantry's one rack drives its bridge at one end (`drives = { mx = -0.5 }`): the joints' spring
   alone holds the far end, which lags while the bridge accelerates; with the effect on the path error of its cycle
-  grows from 0.07 to 0.20 mm.
+  grows from 0.07 to 0.23 mm.
 - **H-bot and CoreXY.** Belts pull the bridge's ends. In the H-bot (`sections = { "1" = -0.3, "2" = 0.6, "3" = -0.3 }`)
   the belt's moment on the bridge is -0.3 m times its pull on the head along the bridge: it racks whenever the head is
   pushed along the bridge, wherever the head is (-4.2 N m for the 7 kg head at 2 m/s²), and a head off the centre racks
   it as the bridge accelerates (-m e a). A rigid belt lets the H-bot rack (the head can move along the bridge with the
-  motors held), so it racks in both models; with the effect on the path error of its cycle grows from 0.09 to 0.80 mm.
+  motors held), so it racks in both models; with the effect on the path error of its cycle grows from 0.06 to 1.12 mm.
   In the CoreXY each belt pulls both ends: its moment is the one belt's tension sum against the other's, -0.19 N m for
-  the 8 N pull that would rack an H-bot with -2.4, and its path error stays 0.06 mm. A rigid belt holds a CoreXY's yaw:
+  the 8 N pull that would rack an H-bot with -2.4, and its path error stays 0.02 mm. A rigid belt holds a CoreXY's yaw:
   its rigid model has none.
 
 **Bodies on rotary axes, and the tool centre point.** A body may move with rotary axes: `offset_m` is its centre of
@@ -886,7 +886,8 @@ machine; nothing about them is particular to machine files.
   `inertia_kgm2`. A tool centre point needs three straight axes square to each other (the 3D view's x, y, z) and the
   rotaries on the tool's side (a head), or a rotary table carrying the workpiece (`tcp.table`). The analysis's settling
   and path errors add a rotary axis's error in rad to the straight axes' in m.
-- A screw's stiffness is the one at its softest nut position for the whole stroke, as in the joint kit; its preload's
+- A screw's stiffness follows the nut with `effects.screw_stiffness_with_position` (on in the shipped screw files), as in
+  the joint kit; off, the one at its softest nut position for the whole stroke. Its preload's
   drag sits at the motor with a smoothing in rad/s.
 - Modes other than the belt's: the frame enters the belt's mode where it sways, but the guides' and the motors' own
   stiffness do not, and a body's bending is not modelled.

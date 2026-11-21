@@ -108,7 +108,7 @@ slide config of the kit (screw, rack, linear motor, the SCARA's quill):
 | Buckling | F_k = factor pi^2 E I / L^2, factor 1/4, 1, 2.046, 4; allowed F_k / `buckling_safety_factor`. |
 | Static load | C0a / `static_safety_factor`. |
 | d n | nominal diameter (mm) times speed (r/min), against `max_dn` (0 judges none). |
-| Axial stiffness | shaft A E / x (fixed-fixed: A E L / (x (L - x))), nut and fixed bearing in series; taken at the softest nut position. |
+| Axial stiffness | shaft A E / x (fixed-fixed: A E L / (x (L - x))), nut and fixed bearing in series; at the nut's place with `effects.screw_stiffness_with_position` (on in the shipped configs but the measured ball screw's), else at the softest nut position. |
 | Preload drag | T = K F_pr l / (2 pi), K = 0.05 / sqrt(tan beta) (THK); added to the guides' friction as T 2 pi / l. |
 | Life | L10 = (Ca / (fw F_m))^3 10^6 turns. A preloaded nut carries F_pr (1 + F / (2.83 F_pr))^(3/2) until the force lifts the preload (Hiwin). |
 
@@ -550,8 +550,9 @@ for 6 kg on a 20 mm lead), and a turn of the tool about z (`[tool_turn]`, motor 
 its own motor, gearbox, drive and ratings tables (`[motor.3]`, `[gearbox.4]`, ...). Everything at the plate (the units
 with their motors, the carriage, the payload) adds to the plate's mass in the plane; the stroke and the turn are
 perpendicular to the plane, so they do not couple with it otherwise. The tool pose is (x, y), (x, y, z), (x, y, c) or
-(x, y, z, c), as the two switches say. The stroke and the turn are rigid joints: the screw's and the turn gearbox's
-twist and backlash are not modelled. See the [model reference](model-reference.md).
+(x, y, z, c), as the two switches say. With `effects.joint_elasticity` (on as shipped) the stroke and the turn are
+elastic like the arms' joints: the rotor a body of its own and the coupling's and screw's spring (in series) or the
+turn gearbox's between it and what it moves. See the [model reference](model-reference.md).
 
 ## Two-part plate with a rack-and-pinion amplifier (delta-h4)
 
@@ -606,8 +607,9 @@ k = 9.4e5 N/m, 150 N): their stretch lets the forearm and the effector lag behin
 wafer lags in r and the effector turns out of its radial line (`effector.direction_error`; judged while it dwells at a
 station, `effector-direction`); a span that loses all its pretension runs slack (`elbow-band-slack`, `wrist-band-slack`
 judge the swing against half of it). With the gearboxes elastic (`effects.joint_elasticity`) the lift's coupling and screw
-are a spring too (in series 4.56e7 N/m at the nut's far end): the column rings on it at 321 Hz with the rotor held, which
-moves the default cycle by under 0.1 % (the screw's peak force 172.4 to 172.5 N). See the [model reference](model-reference.md#wafer-handler) and the
+are a spring too (in series 4.56e7 N/m at the nut's far end; with `effects.screw_stiffness_with_position`, on as
+shipped, at the nut's place): the column rings on it with the rotor held at 432 Hz at the start pose's lift (321 Hz at the
+far end), and the screw's peak force on the default cycle rises from 171.9 N (rigid) to 184.5 N. See the [model reference](model-reference.md#wafer-handler) and the
 [config reference](config-reference.md#wafer-handler).
 
 ## Parallel kinematics: hexapod and cable robots
@@ -1025,10 +1027,10 @@ hoist, S210 drives), its wheel or drum the lever: 30:1 on 80 mm wheels, 25:1 on 
   pick place the load travels 0.2 m and 0.1 m to the place while it is lowered by 0.15 m, and is let go; the empty hook
   goes up and back in one move, down to the next load, 0.3 s to sling it, and hoists it. Every move but the pick's
   lowering and hoisting travels and changes the rope's length at once, so every drive moves from the start. Shaped,
-  every verdict passes (residual sway 4.3 mm, the rope 2727 N at most and never below its least tension, the hoist brake
-  loaded to 5.5 of 7.5 N m); unshaped, the load is left swinging by 0.32 m and `residual-sway` fails, and so does
-  `thermal-warm-start` (the sway left from one pass changes the next, so the passes never repeat: a winding's rise
-  1.1 K apart). A workshop crane's real cycle over the runway takes a minute: a segment's target of [8.0, 4.0, 1.0].
+  every verdict passes (residual sway 4.4 mm, the rope 2721 N at most and never below its least tension, the hoist brake
+  loaded to 5.4 of 7.5 N m); unshaped, the load is left swinging by 0.30 m and `residual-sway` fails (its warm start
+  converges on the default cycle, 0.019 K; with `effects.hook_block` the sway one pass leaves carries into the next and
+  the verdict `thermal-cycle-repeat` names it). A workshop crane's real cycle over the runway takes a minute: a segment's target of [8.0, 4.0, 1.0].
 - **The drives' velocity loops** are tuned as stiff as the other machines' (bridge and trolley some 60 Hz, 2.0 and 0.24
   N m s/rad). The hoist's is measured at rest under the 265 kg (`sim-cli margins`) with the gearbox's efficiency effect off: with it on, the 92 % gearbox's efficiency, faded in below 0.5 W, is a damper of 2601² ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope, 4.5 N m s/rad at the motor, which the test torque does not break away from, and the loop shows no gain crossover. Without the gear's losses, with a tenth of the hoist's own rated torque (0.66 N m) as the test torque, it crosses over at 50.4 Hz with 73.7° and 21.0 dB (at 0.32 N m, a tenth of the shared drive's rating: 48.5 Hz, 83.1°, 21.3 dB, where the motor's friction damps the smaller signal more).
 - **Verdicts of its own:** `rope-max-tension` (the highest tension against `rope.breaking_load_n` / `safety_factor`,
@@ -1186,7 +1188,8 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
 
 ## Limits
 
-- A screw's stiffness is taken at its softest nut position for the whole stroke.
+- A screw's stiffness follows the nut only with `effects.screw_stiffness_with_position` (on in the shipped configs but
+  the measured ball screw's); off, it is taken at its softest nut position for the whole stroke.
 - The arm on its track: the rack's push is taken through the carriage's origin (no moment of its own on the blocks),
   the arm's motor rotors' gyroscopic moments are left out of the guide load, and the blocks are rigid supports (no
   guide stiffness: the carriage does not tilt on them); the guide load is not told to the time-optimal plan
@@ -1207,9 +1210,9 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
   parallel machine, not one of these; see the [model reference](model-reference.md#linear-delta).
 
 - Hexapod: the legs' own turning about their base joints and the payload's inertia are left out; one stiffness per leg
-  (the screw's softest nut position). Its modes are reported with the motors held, as the arms' (`sim-cli modes hexapod`).
+  (the screw's at the nut, `effects.screw_stiffness_with_position`, on as shipped). Its modes are reported with the motors held, as the arms' (`sim-cli modes hexapod`).
 - Tripod: the legs' swing about their base joints is left out, as on the hexapod; no friction or play in the revolute
-  and spherical joints; one stiffness per leg (the screw's softest nut position); the forward kinematics' convergence is
+  and spherical joints; one stiffness per leg (the screw's at the nut, as on the hexapod); the forward kinematics' convergence is
   shown for the shipped box (a config with another geometry or box should run that test's check again).
 
 - Winder: both rolls have the same core, full radius, motor and gearbox; the web's mass in the spans, the change of the
