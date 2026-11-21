@@ -522,10 +522,11 @@ impl Crane {
         if let (Some(k), Some(i)) = (self.skew, self.layout.skew) {
             elastic += 0.5 * k.stiffness * s[i] * s[i];
         }
-        if let (Some(sl), Some(ls)) = (self.sling_state(s), self.sling) {
-            if sl.stretch > 0.0 && m2 > 0.0 {
-                elastic += 0.5 * self.ea * sl.stretch * sl.stretch / ls;
-            }
+        if let (Some(sl), Some(ls)) = (self.sling_state(s), self.sling)
+            && sl.stretch > 0.0
+            && m2 > 0.0
+        {
+            elastic += 0.5 * self.ea * sl.stretch * sl.stretch / ls;
         }
         [kinetic, potential, elastic]
     }

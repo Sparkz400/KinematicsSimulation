@@ -1725,6 +1725,11 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     let point = |share: f64| -> Vec<f64> { axes.iter().map(|a| a.min + share * (a.max - a.min)).collect() };
     let text = |pose: &[f64]| pose.iter().map(|v| format!("{v:?}")).collect::<Vec<_>>().join(",");
     let position = format!("axis.{}.position", axes[0].id);
+    // Where it arrives, the first axis within 1 mm, and the crane's bridge within 2 mm: nothing but its drive damps the
+    // load's swing, which pulls the bridge off its setpoint by the drive's give (0.43 mm after a 1 m move unshaped, and
+    // slowly more, `SWINGING_LOAD` in sim-machines' control tests). The path back starts at whatever phase of the swing
+    // the app's analysis took to answer in, so the two moves' swings add up to twice that (1.37 mm seen on a loaded run).
+    let arrived = if entry.id == "overhead-crane" { 2e-3 } else { 1e-3 };
     let home = entry.config().f64s("start.pose").unwrap();
     let (lines, timed) = (temp_file(entry, "path.csv"), temp_file(entry, "timed.csv"));
     std::fs::write(&lines, format!("# two lines\nline,{}\nline,{}\n", text(&point(0.5)), text(&point(0.75)))).unwrap();
@@ -1846,7 +1851,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
         // And the machine in the app has been sent on its way: it arrives.
         simulate(&mut model, load.duration);
         assert!(
-            (latest(&model, &position) - point(0.75)[0]).abs() < 1e-3,
+            (latest(&model, &position) - point(0.75)[0]).abs() < arrived,
             "{}: the machine stands at {}",
             entry.id,
             latest(&model, &position)
@@ -1875,7 +1880,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
         assert!(run.scene_line.is_empty(), "{}", entry.id);
         simulate(&mut model, load.duration);
         assert!(
-            model.trail.is_none() && (latest(&model, &position) - point(0.75)[0]).abs() < 1e-3,
+            model.trail.is_none() && (latest(&model, &position) - point(0.75)[0]).abs() < arrived,
             "{}: the machine stands at {}",
             entry.id,
             latest(&model, &position)
@@ -1900,7 +1905,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     );
     simulate(&mut model, load.duration);
     assert!(
-        (latest(&model, &position) - home[0]).abs() < 1e-3,
+        (latest(&model, &position) - home[0]).abs() < arrived,
         "{}: the machine stands at {}",
         entry.id,
         latest(&model, &position)
@@ -1924,7 +1929,14 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     assert!(message.0 == "ui-file-line" && message.1.ends_with("circle,1,2"), "{message:?}");
     assert!(model.tr.tr_arg(message.0, &message.1).starts_with("This line of the file cannot be read: "));
     simulate(&mut model, 0.2);
-    assert!(model.path_tables().len() == 3 && (latest(&model, &position) - home[0]).abs() < 1e-3);
+    assert!(
+        model.path_tables().len() == 3 && (latest(&model, &position) - home[0]).abs() < arrived,
+        "{}: {} tables, the machine stands at {} (at {} s)",
+        entry.id,
+        model.path_tables().len(),
+        latest(&model, &position),
+        model.history.back().unwrap()[0]
+    );
 
     // As fast as the motors allow, and the config changed while the plan was made: the analysis is shown,
     // marked as of an earlier config, and the machine does not run a path planned for another config.
@@ -1965,7 +1977,7 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
     }
     simulate(&mut model, 0.5);
     assert!(
-        (latest(&model, &position) - home[0]).abs() < 1e-3,
+        (latest(&model, &position) - home[0]).abs() < arrived,
         "{}: the machine ran a path planned for another config",
         entry.id
     );

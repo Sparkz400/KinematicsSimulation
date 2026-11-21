@@ -820,7 +820,7 @@ fn the_bounce_and_the_held_drives_are_among_the_modes() {
         [-1.0, 1.0].map(|sign: f64| ((b + sign * (b * b - 4.0 * a * c).sqrt()) / (2.0 * a)).sqrt() / TAU)
     };
     let near = |modes: &[sim_core::Mode], hz: f64| {
-        modes.iter().min_by(|a, b| (a.hz / hz - 1.0).abs().total_cmp(&(b.hz / hz - 1.0).abs())).unwrap().clone()
+        *modes.iter().min_by(|a, b| (a.hz / hz - 1.0).abs().total_cmp(&(b.hz / hz - 1.0).abs())).unwrap()
     };
     let mut m = crane(&lossless(&["effects.rope_damping = true", "effects.holding_brake = true"]));
     let (ea, load) = (m.ea, m.load_mass());

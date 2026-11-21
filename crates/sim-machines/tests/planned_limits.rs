@@ -11,7 +11,7 @@
 //! whose inertia outweighs the load's and on an incline.
 
 use sim_components::path::{Piece, PlanLimits};
-use sim_components::{load_config, Sim};
+use sim_components::{Sim, load_config};
 use sim_core::{Config, MachineEntry};
 
 /// The share of every limit the plan may use: the plan keeps 2e-4 back, the differences over 1 ms round by less.

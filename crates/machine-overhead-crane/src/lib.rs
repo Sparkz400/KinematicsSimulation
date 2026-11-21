@@ -533,8 +533,8 @@ impl Crane {
     /// the drum's free length l of the pose. Along the rope, down positive: the drum (with effects.joint_elasticity, on
     /// the hoist gearbox's k_g and damper, its J / r^2 and the wound rope mu (capacity - l)), the hook (the hook block
     /// with effects.hook_block, else hook and payload) and the payload on its sling. The elastic rope's V = EA e^2 / 2l, e
-    /// = L - l, linearised at the rest stretch: K = EA / l [L^2 / l^2, -L / l; -L / l, 1] on (l, L), its damper c / l on L'
-    /// - l', and its own mass mu l / 6 [2, 1; 1, 2] (K = mu l / 6 (l'^2 + l' L' + L'^2), the drum's end at l'); the rigid
+    /// = L - l, linearised at the rest stretch: K = EA / l [L^2 / l^2, -L / l; -L / l, 1] on (l, L), its damper c / l on
+    /// L' - l', and its own mass mu l / 6 [2, 1; 1, 2] (K = mu l / 6 (l'^2 + l' L' + L'^2), the drum's end at l'); the rigid
     /// rope ties the hook to the drum (all of mu l with it). The sling EA / l_s and c / l_s between hook block and payload.
     /// Held rigid drives hold the drum. The travels with effects.joint_elasticity: each axis on its gearbox (both
     /// carriages' with effects.bridge_skew) with what it carries, its own masses, the wound rope and the free rope's mu l

@@ -2153,8 +2153,8 @@ fn a_coupled_base_along_x_moves_as_the_frame_mode() {
 /// part exp(-(0.8 / 0.01)^2) is nothing), the Z guide stands. Each belt force carries half, 16.0103 N, through r / i =
 /// 0.02 / 5. The gearbox's loss factor is that of the whole belt force it passes, the friction and the Z axis's weight
 /// W = ±W_z / 2 = ±35.1078 N (the Z axis's and the belt's vertical runs'; motor a lifts it, b holds it back), and the
-/// loss is on all of it, r / i ((F + W) / loss - W) with the weight's own r W / i in the rigid feedforward: a drives (F
-/// + W = 51.1181 N, / 0.95), b is driven back (F + W = -19.0975 N, x 0.95). The shafts at 0.8 / 0.02 x 5 = 200 rad/s:
+/// loss is on all of it, r / i ((F + W) / loss - W) with the weight's own r W / i in the rigid feedforward: a drives
+/// (F + W = 51.1181 N, / 0.95), b is driven back (F + W = -19.0975 N, x 0.95). The shafts at 0.8 / 0.02 x 5 = 200 rad/s:
 /// 0.02 tanh(400) + 1e-4 x 200 = 0.04 N m. So a: 0.04 + 0.004 (51.1181 / 0.95 - 35.1078) = 0.114803 N m, b: 0.04 +
 /// 0.004 (-19.0975 x 0.95 + 35.1078) = 0.107861 N m. In the cruise the feedforward takes exactly that off the velocity
 /// loop's integrator (to 2 %, shipped elastic machine and rigid one); in the rigid one what stays is a little more X
