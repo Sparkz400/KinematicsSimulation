@@ -53,6 +53,9 @@ fn the_movers_modes_are_the_held_two_mass_mode() {
             let train = train.unwrap();
             assert!((train.hz / held - 1.0).abs() < 1e-12 && (train.load_share - body / (body + plate)).abs() < 1e-12);
         }
+        // Rigid couplings: no mode, one mover as six.
+        let rigid = track(&[edits, &["effects.joint_elasticity = false"]].concat());
+        assert!(rigid.modes(&pose).is_empty() && rigid.resonance_hz(&pose).is_none(), "{:?}", rigid.modes(&pose));
     }
 }
 

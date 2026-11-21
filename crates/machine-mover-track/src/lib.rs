@@ -1121,8 +1121,12 @@ impl Machine for MoverTrack {
     /// `JointMachine` lists two movers and more so (`held_modes`), one alone as a single joint's two-mass mode with the
     /// plate free (1736.39 Hz), which the shaper then followed while the plan's train was the held one.
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
-        if self.movers().n() > 1 || !self.inner.elastic {
+        if self.movers().n() > 1 {
             return self.inner.modes(tool_pose);
+        }
+        // Rigid couplings: none, as for six.
+        if !self.inner.elastic {
+            return Vec::new();
         }
         let (mut mass, mut bias) = ([0.0], [0.0]);
         self.movers().dynamics(tool_pose, &[0.0], &mut mass, &mut bias);
