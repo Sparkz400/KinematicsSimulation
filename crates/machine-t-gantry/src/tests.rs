@@ -888,7 +888,16 @@ line,0.6,0.05",
         }
         let sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
         let points = sim.plan_path(&pieces, true).unwrap();
-        let used = plan_use(&sim, &cfg, &points);
+        // The speed as a share of what the plan may use, 0.99 of the maximum as before the belts' share (`kept`).
+        let jerk = ["x", "z"].map(|a| cfg.f64(&format!("axis.{a}.max_jerk_m_s3")).unwrap());
+        let scale = 0.99 / (1.0 - kept(&sim, jerk, 314.0));
+        let used: Vec<_> = plan_use(&sim, &cfg, &points)
+            .into_iter()
+            .map(|mut u| {
+                u[1] *= scale;
+                u
+            })
+            .collect();
         let active = |limit: usize| used.iter().filter(|u| u[limit] >= 0.97).count() as f64 / used.len() as f64;
         let share = used.iter().filter(|u| u.iter().any(|u| *u >= 0.97)).count() as f64 / used.len() as f64;
         let most = most_used(&used);
@@ -906,7 +915,7 @@ line,0.6,0.05",
         (sim, points, most)
     };
     let (mut sim, points, most) = plan(&[]);
-    // The speed to the 0.99 of the motors' maximum the plan keeps (`path::SPEED_KEPT`).
+    // The speed to the 0.99 of what the plan may use (`path::SPEED_KEPT`, the belts' `kept` scaled out above).
     assert!(most[1] > 0.989 && most[2] > 0.999, "speed and jerk used to {most:?}");
     let (duration, within_axis_limits) = (points[points.len() - 1].0, sim.plan_path(&pieces, false).unwrap());
     let slow = within_axis_limits[within_axis_limits.len() - 1].0;
@@ -1104,6 +1113,19 @@ fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
     assert!(new.ok, "{new:?}");
 }
 
+/// The share of a motor's top speed `top` that the time-optimal plan keeps back on the T-gantry with the axes' jerk
+/// limits `jerk` (X, Z): the velocity loops' 1 % (`path::SPEED_KEPT`, the precontrol full) and the belt trains' twist
+/// (`Machine::trains`, `path::train_speed`) at the motors' jerk (jx + jz) ratio / r, each motor turning (x +- z) ratio
+/// / r, the more of the two motors. The jerks these tests use are far slower than the trains' swing, so the jerk binds,
+/// not a step of the motors' acceleration.
+fn kept(sim: &sim_components::Sim, jerk: [f64; 2], top: f64) -> f64 {
+    let j = (jerk[0] + jerk[1]) * 5.0 / 0.02;
+    let trains = sim.machine.trains(sim.control.planned_pos());
+    let most =
+        trains.iter().flatten().map(|t| sim_components::path::train_speed(*t, j, f64::INFINITY)).fold(0.0, f64::max);
+    0.01 + most / top
+}
+
 /// The most acceleration along X that the belt allows the time-optimal plan at x on the default T-gantry (z = 0.35) rated
 /// 400 N, by hand: each section may change by 0.5 * (400 - 31 - 284.47) = 42.26 N either way (see the test above), and
 /// accelerating 11 kg along X changes section 3 by 11 (L1 + 0.95) / 4.2 = 11 (1.6 + x) / 4.2 and section 1 by
@@ -1117,7 +1139,8 @@ fn belt_bound(x: f64) -> f64 {
 /// 400 N. The belt allows 42.26 N / (11 kg * 2.5 / 4.2) = 6.455 m/s^2 at both ends and up to 7.7 m/s^2 in the middle
 /// (`belt_bound`). The plan with one limit per piece took 6.455 m/s^2 all along: distance / v + v / a + a / j =
 /// 0.8 / 1.2559 + 1.2559 / 6.455 + 6.455 / 300 = 0.8531 s (v the rated speed; it planned that; since 15 November the
-/// rated speed less 1 %, 1.2433 m/s, 0.8576 s, and the point-by-point plan is quicker by less than the 1 ms it is read to). The plan point by
+/// rated speed less 1 %, 1.2433 m/s, 0.8576 s; since 20 November less 1.31 % with the belts' twist (`kept`), 1.2394 m/s,
+/// 0.8590 s; and the point-by-point plan is quicker by less than the 1 ms it is read to). The plan point by
 /// point accelerates as the bound rises along its ramp, 6.455 m/s^2 at x = 0.1 to 6.73 m/s^2 at x = 0.23 where the ramp
 /// ends: the ramp takes the integral of dv / a(x), with x = 0.1 + v^2 / (2 * 6.6), 1.2559 * 2.5 / 16.137 - 1.2559^3 /
 /// (6 * 6.6) / 16.137 = 0.1915 s instead of 0.1946 s, but covers less of the line at the top speed, so the line takes
@@ -1141,11 +1164,12 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
     let sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
     let points = sim.plan_path(&sim_components::path::parse("line,0.9,0.35").unwrap(), true).unwrap();
     let duration = points[points.len() - 1].0;
-    // The top speed: the rated 1.2559 m/s less the 1 % the plan keeps back of a speed rating (15 November).
-    let v = 0.99 * 1.2559;
+    // The top speed: the rated 1.2559 m/s less what the plan keeps back of a speed rating (15 November: 1 %; 20 November
+    // the belts' twist on top, `kept`).
+    let v = (1.0 - kept(&sim, [300.0, 300.0], 314.0)) * 1.2559;
     let by_hand = 0.8 / v + v / belt_bound(0.9) + belt_bound(0.9) / 300.0;
     assert!(
-        (belt_bound(0.9) - 6.455).abs() < 1e-3 && (by_hand - 0.8576).abs() < 1e-4,
+        (belt_bound(0.9) - 6.455).abs() < 1e-3 && (by_hand - 0.8590).abs() < 1e-4,
         "{} m/s^2, {by_hand} s",
         belt_bound(0.9)
     );

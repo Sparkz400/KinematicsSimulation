@@ -16,8 +16,6 @@ use sim_core::{Config, MachineEntry};
 
 /// The share of every limit the plan may use: the plan keeps 2e-4 back, the differences over 1 ms round by less.
 const SLACK: f64 = 1e-4;
-/// The share of each speed rating the plan keeps back (`path::SPEED_KEPT`).
-const SPEED_KEPT: f64 = 0.01;
 
 /// The worst share of each kind of limit over a plan, with the time and what it was.
 #[derive(Default)]
@@ -41,7 +39,7 @@ fn rated(sim: &Sim, limits: &PlanLimits, m: usize) -> sim_components::drive::Dri
     let [current, speed, _] = limits.ratings.get(m).copied().unwrap_or([f64::INFINITY; 3]);
     let mut drive = sim.control.drive_params_of(m).clone();
     drive.drive_max_current = drive.drive_max_current.min(current);
-    drive.max_speed = drive.max_speed.min(speed) * limits.margin * (1.0 - SPEED_KEPT);
+    drive.max_speed = drive.max_speed.min(speed) * limits.margin * (1.0 - limits.speed_kept);
     drive
 }
 
@@ -178,7 +176,7 @@ fn measure(sim: &Sim, points: &[(f64, Vec<f64>)]) -> Worst {
                 } else if pushed[k] != still[k] {
                     reserve
                 } else {
-                    limits.margin * (1.0 - SPEED_KEPT)
+                    limits.margin * (1.0 - limits.speed_kept)
                 };
                 worst.note("own checks", values[k].abs() / (share * check.limit), t, || {
                     format!("{} {:.4} of {:.4}", check.check, values[k], share * check.limit)

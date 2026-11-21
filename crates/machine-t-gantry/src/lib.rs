@@ -1837,6 +1837,30 @@ impl Machine for TGantry {
         self.energy_parts(s).iter().sum()
     }
 
+    /// Elastic: per motor its gearbox's spring in series with the two belt sections its pulley feeds and takes from (a:
+    /// sections 1 and 2, b: 2 and 3), dT/dL = EA / l at the belt that carries the weight at rest at the pose (as `modal`),
+    /// r r_mat sum EA / l at the pulley; the rotor (and gearbox input) on the motor's side, the pulley with the load (so
+    /// the load's share and frequency err high and low: more is kept back). Referred to the motor over the ratio.
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let (x, z) = (tool_pose[0], tool_pose[1] + self.sag(tool_pose[0]).0);
+        let geo = self.geo(x, z);
+        let rest = self.belt.static_material(&geo, &[0.0, self.m_z() * self.g / 2.0, 0.0], self.mat0.iter().sum());
+        let k = |i: usize| self.belt.ea / rest[i];
+        let whole = sim_components::control::rigid_inertias(self, tool_pose);
+        [k(0) + k(1), k(1) + k(2)]
+            .iter()
+            .enumerate()
+            .map(|(m, belt)| {
+                let (gear, i2) = (&self.gears[m], self.gearbox.ratio * self.gearbox.ratio);
+                let spring = 1.0 / (1.0 / gear.stiffness + gear.band_compliance + 1.0 / (self.r * self.r_mat * belt));
+                sim_core::Train::of(spring / i2, self.j_rotor, whole[m])
+            })
+            .collect()
+    }
+
     /// The lowest of `modes`: the lowest mode that moves the tool, which the input shaper aims at (with the default frame
     /// the frame swaying with the carriage on it, 18.7 Hz at (0.9, 0.05)).
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {

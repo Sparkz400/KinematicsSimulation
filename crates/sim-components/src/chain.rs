@@ -1485,6 +1485,22 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         }
     }
 
+    /// Elastic: per joint its gearbox's spring (K1, in series with a converter's own compliance behind it) between the
+    /// rotor and the joint's rigid inertia M_kk with the other joints held, referred to the motor over the ratio.
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        let mut q = vec![0.0; self.n()];
+        if !self.elastic || !self.mechanism.inverse(tool_pose, &mut q) {
+            return Vec::new();
+        }
+        let (mass, _) = self.load(&q, &vec![0.0; self.n()]);
+        (0..self.n())
+            .map(|k| {
+                let j = &self.joints[k].drive;
+                j.train(mass[k * self.n() + k] / (j.ratio() * j.ratio()) + j.rotor_inertia)
+            })
+            .collect()
+    }
+
     /// One joint: its two-mass mode. An arm: the lowest of its joints' modes with the motors held (`held_modes`, or with
     /// the links' bending two-way `coupled_modes`): each turns the joints and so moves the tool.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {

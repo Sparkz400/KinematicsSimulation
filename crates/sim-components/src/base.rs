@@ -676,6 +676,9 @@ impl Machine for Based {
         modes.sort_by(|a, b| a.hz.total_cmp(&b.hz));
         modes
     }
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        self.inner.trains(tool_pose)
+    }
     fn belt_wraps(&self, tool_pose: &[f64]) -> Vec<f64> {
         self.inner.belt_wraps(tool_pose)
     }

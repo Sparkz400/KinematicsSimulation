@@ -677,6 +677,18 @@ impl Machine for SingleAxis {
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
         self.modes(tool_pose).first().map(|mode| mode.hz)
     }
+    /// Elastic: the gearbox's spring in series with the two sections, r r_mat (EA / l1 + EA / l2) at the pulley as in
+    /// `modes`; the rotor (and gearbox input) on the motor's side, the pulley with the load. Over the ratio squared.
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let mat = self.rest_material(tool_pose[0]);
+        let belt = self.r * self.r_mat * (self.belt.ea / mat[0] + self.belt.ea / mat[1]);
+        let spring = 1.0 / (1.0 / self.gearbox.stiffness + self.gearbox.band_compliance + 1.0 / belt);
+        let whole = sim_components::control::rigid_inertias(self, tool_pose);
+        vec![sim_core::Train::of(spring / (self.gearbox.ratio * self.gearbox.ratio), self.j_rotor, whole[0])]
+    }
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
         if !self.elastic {
             return Vec::new();

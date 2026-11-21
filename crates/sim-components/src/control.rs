@@ -435,6 +435,31 @@ pub fn rigid_inertias(machine: &dyn Machine, pose: &[f64]) -> Vec<f64> {
         .collect()
 }
 
+/// Per motor the most jerk (motor units per s^3) the axes' jerk limits give it at a tool pose: sum over the axes of
+/// |d motor / d axis| times the axis's limit, the motor's travel per axis by central differences of the inverse
+/// kinematics (over 1e-6 of the axis's range). Linear at the pose: the speed and acceleration terms of a curved
+/// kinematics are left out, as the inertia of `rigid_inertias` is the pose's.
+pub(crate) fn motor_jerks(machine: &dyn Machine, pose: &[f64]) -> Vec<f64> {
+    let (axes, motors) = (machine.axes(), machine.motors().len());
+    let mut jerks = vec![0.0; motors];
+    let (mut ahead, mut behind) = (vec![0.0; motors], vec![0.0; motors]);
+    for (i, axis) in axes.iter().enumerate().take(pose.len()) {
+        let h = 1e-6 * (axis.max - axis.min).abs().max(1e-3);
+        let mut at = pose.to_vec();
+        at[i] = pose[i] + h;
+        machine.inverse(&at, &mut ahead);
+        at[i] = pose[i] - h;
+        machine.inverse(&at, &mut behind);
+        for k in 0..motors {
+            let per = (ahead[k] - behind[k]) / (2.0 * h);
+            if per.is_finite() {
+                jerks[k] += per.abs() * axis.max_jerk;
+            }
+        }
+    }
+    jerks
+}
+
 fn steps(cfg: &Config, path: &str, dt: f64) -> Result<u64> {
     let n = (cfg.positive(path)? / dt).round();
     // A loop cycle must be a whole number of base steps.
@@ -879,14 +904,22 @@ impl Controller {
             .collect::<Result<Vec<_>>>()?;
         // The share of each speed rating the plan keeps back for the velocity loops (`path::speed_kept_of`): the most over
         // the motors, each at the inertia its precontrol is tuned for (the rigid model's at the start pose), the most
-        // acceleration its torque reserve gives it and the top speed it is held to. Not less than the fixed share.
-        let speed_kept = rigid_inertias(machine, &cfg.f64s("start.pose")?)
+        // acceleration its torque reserve gives it and the top speed it is held to. Not less than the fixed share. On
+        // top, where the motor's drive train is elastic (`Machine::trains`), the speed its twist adds at the most jerk
+        // the axes' limits give the motor there, or at a step of that acceleration where the jerk limit is quicker than the
+        // train's swing (`path::train_speed`, `motor_jerks`).
+        let start_pose = cfg.f64s("start.pose")?;
+        let trains = machine.trains(&start_pose);
+        let jerks = motor_jerks(machine, &start_pose);
+        let speed_kept = rigid_inertias(machine, &start_pose)
             .iter()
             .zip(&motor_params)
-            .filter(|(inertia, _)| **inertia > 0.0)
-            .map(|(&inertia, p)| {
+            .enumerate()
+            .filter(|(_, (inertia, _))| **inertia > 0.0)
+            .map(|(k, (&inertia, p))| {
                 let acc = torque_reserve * p.peak_torque / inertia;
-                path::speed_kept_of(p.ki, inertia, p.torque_ff, acc, p.max_speed)
+                let train = trains.get(k).copied().flatten().map_or(0.0, |t| path::train_speed(t, jerks[k], acc));
+                path::speed_kept_of(p.ki, inertia, p.torque_ff, acc, p.max_speed, train)
             })
             .fold(path::PlanLimits::new(1.0, [0.0; 3]).speed_kept, f64::max);
         let plan_limits = path::PlanLimits {
