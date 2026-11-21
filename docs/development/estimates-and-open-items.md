@@ -337,16 +337,15 @@ Fixed (after the second audit, 21 November):
   the held one. One mover now reports the held mode too (`the_movers_modes_are_the_held_two_mass_mode`). The 1736 Hz of
   the brief is the plate-free figure.
 
-Open, found 21 November: the app's mode list (`shapes::mode_views`, also `sim-cli modes --shapes`' linear_hz) pairs each
-reported mode with the eigenvalue of the motor-free linearised model nearest it, whatever its kind. For the mover
-track's held 694.28 Hz that is no mode but a real pole, lambda = -639.7 1/s shown as 101.8 Hz with damping 1: the
-rollers' Coulomb friction smoothed over 2 mm/s, (0.1 + 0.005 * 300) / 0.002 + 0.5 = 800.5 N s/m on the 1.251 kg mover
-(-639.9 by hand, `the_linearised_model_has_the_friction_s_pole_and_the_plate_free_mode`). The machine's mode is right
-by the convention; the motor-free model has no held mode, only the plate-free one at 1735.8 Hz. Fix (in
-`sim-components/src/shapes.rs`, not this agent's): take only oscillatory eigenvalues (|Im lambda| > 1e-6 |lambda|) as a
-mode's partner, and none where the partner's frequency is more than some 20 % off the reported one (`linear: None`, the
-shape then the reported mode's own or none), or linearise with the motors held where the machine's modes are held
-(`linearised` holding the rotor states); a test: the mover's held mode gets no 101.8 Hz partner.
+- The app's mode list (`shapes::mode_views`, also `sim-cli modes --shapes`' linear_hz) paired each reported mode with
+  the eigenvalue of the motor-free linearised model nearest it, whatever its kind. For the mover track's held 694.28 Hz
+  that was no mode but a real pole, lambda = -639.7 1/s shown as 101.8 Hz with damping 1: the rollers' Coulomb friction
+  smoothed over 2 mm/s, (0.1 + 0.005 * 300) / 0.002 + 0.5 = 800.5 N s/m on the 1.251 kg mover (-639.9 by hand); the
+  motor-free model has no held mode, only the plate-free one at 1735.8 Hz. Now a real eigenvalue is no partner, and the
+  partner is the nearer of the motor-free model's and the model with the rotor states held (`shapes::linearised_held`:
+  the states that move a motor's angle or speed held, as `Machine::modes` has its modes): the mover's 694.28 Hz gets
+  the held model's 694.28 Hz to 1e-6, one mover and six
+  (`the_mode_list_pairs_the_held_mode_with_the_held_model_not_the_friction_s_pole`).
 - The mover track and the indexers (Geneva, cam) had no frame momentum (`Machine::frame_momentum` None), so no
   compliant base: they have it, as the joint kit's slide and the knife (`the_frame_momentum_is_the_hand_calculated_one`
   in both crates; the standard suite's first-moment check now judges them). Both are level, so
