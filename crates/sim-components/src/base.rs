@@ -679,6 +679,13 @@ impl Machine for Based {
         modes.sort_by(|a, b| a.hz.total_cmp(&b.hz));
         modes
     }
+    /// The machine's own with the base's, as `modes`.
+    fn sway_modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        let mut modes = self.inner.sway_modes(tool_pose);
+        modes.extend(self.base_modes().map(|(mode, _)| mode));
+        modes.sort_by(|a, b| a.hz.total_cmp(&b.hz));
+        modes
+    }
     fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
         self.inner.trains(tool_pose)
     }

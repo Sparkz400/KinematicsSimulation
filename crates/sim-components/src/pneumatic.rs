@@ -955,6 +955,9 @@ impl Machine for Pneumatic {
     fn modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
         self.inner.modes(tool_pose)
     }
+    fn sway_modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
+        self.inner.sway_modes(tool_pose)
+    }
     fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
         self.inner.trains(tool_pose)
     }

@@ -413,6 +413,13 @@ pub trait Machine: Send {
     fn modes_small_amplitude(&self, tool_pose: &[f64]) -> Vec<Mode> {
         self.modes(tool_pose)
     }
+    /// The modes an input shaper that follows the pose takes beyond the first (`profile.shaper_modes`, the shaping
+    /// optimiser's second shaper), lowest first: by default `modes`. A machine whose `modes` hold modes the shaper does
+    /// not act on (a crane's bounce of the load on its rope) gives the ones it does (the swing, and the hook block's
+    /// upper swing).
+    fn sway_modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        self.modes(tool_pose)
+    }
     /// With effects.belt_wrap: the angle (rad) by which the belt wraps each driven pulley at a tool pose, from the places
     /// of the pulleys and idlers, in the order of `motors`; NaN for a motor that drives no belt. Empty where the machine
     /// gives no belt geometry or the effect is off: then `ratings.belt_teeth_in_mesh` stands for the teeth in mesh.

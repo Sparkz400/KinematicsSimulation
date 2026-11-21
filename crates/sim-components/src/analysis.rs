@@ -3413,6 +3413,20 @@ fn fastest_passing<T, E>(
     Ok(None)
 }
 
+/// The second input shaper's frequency the cycle optimiser tries (Hz) with the plan at `pose`: `profile.shaper2_frequency_hz`
+/// where set (above 0); otherwise the second of the modes the shaper acts on (`Machine::sway_modes`: a crane's upper swing
+/// with the hook block, not the load's bounce on its rope), or, where the machine tells only one, its resonance where
+/// that is more than 10 % off `profile.shaper_frequency_hz`. `None`: no second shaper to try.
+pub fn second_shaper_frequency(machine: &dyn Machine, pose: &[f64], cfg: &Config) -> Result<Option<f64>, ConfigError> {
+    let (first, configured) =
+        (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper2_frequency_hz")?);
+    if configured > 0.0 {
+        return Ok(Some(configured));
+    }
+    let second = machine.sway_modes(pose).get(1).map(|mode| mode.hz);
+    Ok(second.or(machine.resonance_hz(pose).filter(|f| (f / first - 1.0).abs() > 0.1)))
+}
+
 /// `optimise_cycle`, and with `options.robust` a result that passes in the error bands: the fastest setting found is
 /// judged with `verdict_bands` over the config's `[bounds]`; where it fails, the accepted steps of the search are gone
 /// back one at a time, each judged in the bands, until one passes (2 n + 1 cycles each, n the bounds). With
@@ -3457,14 +3471,8 @@ pub fn optimise_cycle_with(
         }
     }
     let resonance = probe.machine.resonance_hz(probe.control.planned_pos());
-    let (first, configured) =
-        (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper2_frequency_hz")?);
-    let second_mode = probe.machine.modes(probe.control.planned_pos()).get(1).map(|mode| mode.hz);
-    let second_frequency = if configured > 0.0 {
-        Some(configured)
-    } else {
-        second_mode.or(resonance.filter(|f| (f / first - 1.0).abs() > 0.1))
-    };
+    let configured = cfg.non_negative("profile.shaper2_frequency_hz")?;
+    let second_frequency = second_shaper_frequency(probe.machine.as_ref(), probe.control.planned_pos(), cfg)?;
     // In the axis's own unit: `axis.x.max_velocity_m_s`, `axis.c.max_velocity_rad_s` (with metres alone, a machine with an
     // axis in rad could not be built and its cycle was said to fail a verdict).
     let limits = ["max_velocity_{unit}_s", "max_acceleration_{unit}_s2", "max_jerk_{unit}_s3"];

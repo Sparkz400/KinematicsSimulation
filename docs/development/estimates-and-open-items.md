@@ -273,6 +273,11 @@ Fixed (second audit, 21 November):
   with Z's mode to 51.5 and 140.1 Hz.
 
 Fixed (after the second audit, 21 November):
+- The crane's shaping optimiser took its second shaper from the second mode of `Machine::modes`, and a shaper following
+  the pose its second mode there: since the bounce along the rope is in the crane's modes, without the hook block that
+  was the bounce (8.30 Hz at the start pose) where it should be none. Both take `Machine::sway_modes` now (by default
+  `modes`; the crane's swings alone): with the hook block the upper swing (2.55 Hz), without it no second shaper
+  (`the_cranes_second_shaper_is_its_upper_swing_not_the_bounce`).
 - A margin figure for a loop across a backlash (was in section 4): `sim-cli margins` prints the describing function's
   margin across the play (`play_margin_db`, model reference, hammering across a backlash), with the rotor's friction
   faded. Five-bar's tool turn: -4.18 dB at 0.08, +3.56 dB at the shipped 0.033 (onset 0.0497); a time run with the

@@ -725,6 +725,30 @@ fn a_switch_the_machine_does_not_model_is_refused_switched_on() {
     assert_eq!(refused, 4 * 4 + 3 * 3 + 2 + 4 * 2);
 }
 
+/// The cycle optimiser's second input shaper on the crane (`second_shaper_frequency`) is a swing the shaper acts on
+/// (`Machine::sway_modes`), not the load's bounce on its rope, which the mode list has as its second mode without the
+/// hook block (8.30 Hz at the start pose, z = 3 m). With the hook block it is the double pendulum's upper swing (2.55
+/// Hz there); without it there is one swing alone, at the first shaper's frequency, and no second shaper to try. A
+/// shaper that follows the pose takes the same list for its second mode (`Controller::shaper_halves`).
+#[test]
+fn the_cranes_second_shaper_is_its_upper_swing_not_the_bounce() {
+    let entry = sim_machines::find("overhead-crane").unwrap();
+    let pose = entry.config().f64s("start.pose").unwrap();
+    for hook in [false, true] {
+        let cfg = with(&entry.config(), &[&format!("effects.hook_block = {hook}")]);
+        let m = (entry.build)(&cfg).unwrap();
+        let second = sim_components::analysis::second_shaper_frequency(m.as_ref(), &pose, &cfg).unwrap();
+        let (modes, sways) = (m.modes(&pose), m.sway_modes(&pose));
+        if hook {
+            assert!(sways.len() == 2 && (sways[1].hz - 2.55).abs() < 0.01, "{sways:?}");
+            assert_eq!(second, Some(sways[1].hz));
+        } else {
+            assert!((modes[1].hz - 8.30).abs() < 0.01 && sways.len() == 1, "{modes:?} {sways:?}");
+            assert_eq!(second, None, "{modes:?}");
+        }
+    }
+}
+
 /// The margin across a gearbox's play (`play_margin`, the describing function's) on the five-bar's tool turn, whose
 /// loop hammers across its 1 arcmin play at 0.08 N m s/rad (650 Hz): there it reads -4.18 dB, at the shipped 0.033
 /// +3.56 dB, both saying the loop hammers from 0.0494 to 0.0497 (the loop gain is kv times the rest). That is the
