@@ -18,6 +18,7 @@ param-mass_kg = Mass [kg]
 param-stiffness_n_m = Stiffness [N/m]
 effect-frame_compliance = Frame compliance
 effect-tool_flex = Z axis leaning (tool-tip flexibility)
+effect-belt_run_offset = Belt runs beside the leaning Z axis (their tension difference turns it)
 group-tool_flex = Z axis guide
 param-lateral_stiffness_n_m = Lateral stiffness [N/m]
 param-tilt_stiffness_nm_rad = Tilt stiffness [N m/rad]
@@ -52,3 +53,4 @@ param-span_m = Span between the posts [m]
 param-carriage_at_zero_m = Carriage from the left post at x = 0 [m]
 param-bending_stiffness_nm2 = Bending stiffness E I [N m²]
 param-z_axis_bending_stiffness_nm2 = Z axis bending stiffness E I [N m²]
+param-belt_offset_m = Belt runs beside the Z axis's line at the clamp [m]

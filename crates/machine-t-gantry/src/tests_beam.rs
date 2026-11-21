@@ -295,6 +295,71 @@ fn the_belt_runs_hold_the_lean_back_with_t_over_l() {
     assert!((geometric - by_hand).abs() < 1e-2, "{geometric} N/m against {by_hand} N/m");
 }
 
+/// The belt's upper vertical runs reach the clamp e = 0.04 m to either side of the Z axis's line (`lean_offset`). The
+/// clamp, above the carriage, turns with the guide's tilt theta = k u h / tilt: at z = 0.1 m (h = 0.2 m, lateral 2e7,
+/// tilt 1.2e4, no bending) k = 1 / (5e-8 + 0.04 / 1.2e4) = 295 566.5 N/m and theta / u = 4.926108 1/m, so section 3 is
+/// longer and section 1 shorter by e theta = 0.1970443 u (first order; the runs' geometric second order apart). With the
+/// pulley A turned by 1e-2 rad from rest the tensions part (T3 - T1 = dT) and at u = 0 the lean's generalised force is
+/// the one with the runs on the line less dT 0.1970443, the moment (T1 - T3) e on the tilt; Z and X get nothing more. The
+/// energy's second derivative in u gains (k1 + k3) 0.1970443^2, the sections' own stiffness EA / l on the offset.
+#[test]
+fn the_belt_runs_offset_puts_their_tension_difference_on_the_lean() {
+    let edits = ["effects.frame_compliance = false", "effects.z_axis_bending = false"];
+    let m = machine(lossless_config(), &[edits.as_slice(), &["effects.belt_run_offset = true"]].concat());
+    let on_line = machine(lossless_config(), &edits);
+    let z = 0.1;
+    let k: f64 = 1.0 / (1.0 / 2.0e7 + 0.04 / 1.2e4);
+    let per_u = 0.04 * k * 0.2 / 1.2e4;
+    assert!((k - 295_566.5).abs() < 0.1 && (per_u - 0.197_044_3).abs() < 1e-7, "{k} {per_u}");
+    assert!((m.lean_offset(z) / per_u - 1.0).abs() < 1e-12);
+    let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
+    m.equilibrium(&[0.5, z], &mut state, &mut torque);
+    let mut leaning = state.clone();
+    leaning[U] = 1e-5;
+    let (longer, plain) = (m.lean_lengths(&leaning).0, on_line.lean_lengths(&leaning).0);
+    assert!((longer[2] - plain[2] - per_u * 1e-5).abs() < 1e-18 && (longer[0] - plain[0] + per_u * 1e-5).abs() < 1e-18);
+    // The force: M a over the coordinates, with the offset and without.
+    state[A] += 1e-2;
+    let t = m.sections(&state).map(|f| f.tension);
+    let force = |machine: &TGantry| {
+        let mut rates = vec![0.0; state.len()];
+        machine.derivatives(&state, &torque, &mut rates);
+        let (at, mass) = (machine.coordinates(), machine.elastic_mass(state[X], state[Z]));
+        let n = at.len();
+        (0..n).map(|i| (0..n).map(|j| mass[i * n + j] * rates[V + at[j]]).sum::<f64>()).collect::<Vec<f64>>()
+    };
+    let (with, without) = (force(&m), force(&on_line));
+    let at = m.coordinates();
+    let u = at.iter().position(|&c| c == U).unwrap();
+    let moment = -(t[2] - t[0]) * per_u;
+    assert!((t[2] - t[0]).abs() > 10.0, "{t:?}");
+    assert!((with[u] - without[u] - moment).abs() < 1e-6 * moment.abs(), "{} against {moment}", with[u] - without[u]);
+    assert!((with[0] - without[0]).abs() < 1e-9 && (with[1] - without[1]).abs() < 1e-9, "{with:?} {without:?}");
+    // The stiffness on the lean.
+    let energy = |machine: &TGantry, u: f64| {
+        let mut at = state.clone();
+        at[A] -= 1e-2;
+        at[U] = u;
+        machine.energy(&at)
+    };
+    let second =
+        |machine: &TGantry| (energy(machine, 1e-5) + energy(machine, -1e-5) - 2.0 * energy(machine, 0.0)) / 1e-10;
+    let rest = m.belt.static_material(&m.geo(0.5, state[Z]), &[0.0, m.z_weight() / 2.0, 0.0], m.mat0.iter().sum());
+    let sections = m.belt.ea / rest[0] + m.belt.ea / rest[2];
+    let added = second(&m) - second(&on_line);
+    assert!(
+        (added / (sections * per_u * per_u) - 1.0).abs() < 1e-3,
+        "{added} N/m against {}",
+        sections * per_u * per_u
+    );
+    // The energy keeps and the budget closes with the offset (the lengths carry it into tension, damping and energy).
+    let mut cfg = lossless_config();
+    cfg.set_text("effects.belt_run_offset = true").unwrap();
+    let loss_free = TGantry::new(&cfg).unwrap();
+    sim_core::testkit::energy_conservation(&loss_free);
+    sim_core::testkit::loss_budget(&machine(ENTRY.config(), &["effects.belt_run_offset = true"]));
+}
+
 /// The process force's vertical part on the leaning axis. The tip, d = z_tool_drop - z below the carriage, rises as the Z axis
 /// leans under the spring force k u at its centre of mass (the guide's tilt only: the whole bar turns by theta = k u h /
 /// tilt): by theta^2 d / 2, which is `lean_rise`'s 1/2 (h / tilt)^2 d per F^2. At z = 0.25 m (h = 0.05, d = 0.45,

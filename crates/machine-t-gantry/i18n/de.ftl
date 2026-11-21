@@ -18,6 +18,7 @@ param-mass_kg = Masse [kg]
 param-stiffness_n_m = Steifigkeit [N/m]
 effect-frame_compliance = Gestellnachgiebigkeit
 effect-tool_flex = Neigen der Z-Achse (Nachgiebigkeit am Werkzeug)
+effect-belt_run_offset = Riementrume neben der geneigten Z-Achse (ihr Zugkraftunterschied neigt sie)
 group-tool_flex = Führung der Z-Achse
 param-lateral_stiffness_n_m = Quersteifigkeit [N/m]
 param-tilt_stiffness_nm_rad = Kippsteifigkeit [N m/rad]
@@ -52,3 +53,4 @@ param-span_m = Stützweite zwischen den Stützen [m]
 param-carriage_at_zero_m = Schlitten von der linken Stütze bei x = 0 [m]
 param-bending_stiffness_nm2 = Biegesteifigkeit E I [N m²]
 param-z_axis_bending_stiffness_nm2 = Biegesteifigkeit E I der Z-Achse [N m²]
+param-belt_offset_m = Abstand der Riementrume von der Z-Achse an der Klemme [m]

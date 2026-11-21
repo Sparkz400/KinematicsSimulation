@@ -187,6 +187,9 @@ struct ToolFlex {
     tilt: f64,
     damping: f64,
     ei: f64,
+    /// How far the belt's two upper vertical runs (sections 1 and 3) reach the clamp to either side of the Z axis's line,
+    /// m (`TGantry::lean_offset`).
+    belt_offset: f64,
 }
 
 /// The X beam between the posts (effects.beam_sag, effects.beam_vertical_mode): a simple span of `span` m and bending
@@ -390,6 +393,11 @@ impl TGantry {
                 tilt: stiff(lean, "tool_flex.tilt_stiffness_nm_rad")?,
                 damping: cfg.non_negative("tool_flex.damping_n_s_m")?,
                 ei: stiff(bend, "tool_flex.z_axis_bending_stiffness_nm2")?,
+                belt_offset: if lean && cfg.bool("effects.belt_run_offset")? {
+                    cfg.non_negative("tool_flex.belt_offset_m")?
+                } else {
+                    0.0
+                },
             })
         } else {
             None
@@ -692,7 +700,12 @@ impl TGantry {
         };
         let mass = self.elastic_mass(x, z);
         let (mut stiffness, mut damping) = (vec![0.0; n * n], vec![0.0; n * n]);
-        let sections = [[(0, 1.0), (1, 1.0)].as_slice(), &[(1, -2.0)], &[(0, -1.0), (1, 1.0)]];
+        // With the lean, sections 1 and 3 change with u by -+ the runs' offset (`lean_offset`).
+        let offset = index(U).map(|u| (u, self.lean_offset(z)));
+        let side = |sign: f64| offset.map(|(u, e)| (u, sign * e));
+        let one: Vec<(usize, f64)> = [(0, 1.0), (1, 1.0)].into_iter().chain(side(-1.0)).collect();
+        let three: Vec<(usize, f64)> = [(0, -1.0), (1, 1.0)].into_iter().chain(side(1.0)).collect();
+        let sections = [one.as_slice(), &[(1, -2.0)], three.as_slice()];
         for (g, length) in sections.into_iter().zip(rest.iter().copied()) {
             let k = self.belt.ea / length;
             add(&mut stiffness, g, k);
@@ -893,16 +906,33 @@ impl TGantry {
         [upper, 2.0 * run(s + sz - z), upper]
     }
 
-    /// How much longer `lean_runs` make the three belt sections at the state's lean u and height z, and the rate of that.
+    /// The belt's upper vertical runs off the Z axis's line (`ToolFlex::belt_offset` e, to either side): the clamp, above
+    /// the carriage where the leaning Z axis is a rigid bar turned by the guide's tilt theta = F h / tilt (F = k u the
+    /// spring's force, h = z_com_drop - z), lifts the right run's end (section 3) by e theta and lowers the left one's
+    /// (section 1): section 3 longer by e theta, section 1 shorter, first order in u. Per u: e k h / tilt (0 with a rigid
+    /// guide or without the lean). The tensions then put the moment (T1 - T3) e theta' on the lean, the energy, modes and
+    /// damping following from the lengths.
+    fn lean_offset(&self, z: f64) -> f64 {
+        let Some(f) = &self.flex else { return 0.0 };
+        f.belt_offset * self.flex_at(z).0 * (self.z_com_drop - z) / f.tilt
+    }
+
+    /// How much longer `lean_runs` and `lean_offset` make the three belt sections at the state's lean u and height z, and
+    /// the rate of that.
     fn lean_lengths(&self, s: &[f64]) -> ([f64; 3], [f64; 3]) {
         if self.flex.is_none() {
             return ([0.0; 3], [0.0; 3]);
         }
         let (u, z) = (s[U], s[Z]);
         let (c, ahead, behind) = (self.lean_runs(z), self.lean_runs(z + 1e-6), self.lean_runs(z - 1e-6));
-        let longer = std::array::from_fn(|i| 0.5 * c[i] * u * u);
-        let rate =
-            std::array::from_fn(|i| c[i] * u * s[V + U] + 0.5 * (ahead[i] - behind[i]) / 2e-6 * s[V + Z] * u * u);
+        let (e, de) = (self.lean_offset(z), (self.lean_offset(z + 1e-6) - self.lean_offset(z - 1e-6)) / 2e-6);
+        let side = [-1.0, 0.0, 1.0];
+        let longer = std::array::from_fn(|i| 0.5 * c[i] * u * u + side[i] * e * u);
+        let rate = std::array::from_fn(|i| {
+            c[i] * u * s[V + U]
+                + 0.5 * (ahead[i] - behind[i]) / 2e-6 * s[V + Z] * u * u
+                + side[i] * (e * s[V + U] + de * s[V + Z] * u)
+        });
         (longer, rate)
     }
 
@@ -1133,8 +1163,14 @@ impl TGantry {
         let [rise, d_rise, _] = self.rise_coefficients(s[Z]);
         let tensions: [f64; 3] = std::array::from_fn(|i| sec[i].tension);
         let (runs, ahead, behind) = (self.lean_runs(s[Z]), self.lean_runs(s[Z] + 1e-6), self.lean_runs(s[Z] - 1e-6));
-        let on_lean: f64 = (0..3).map(|i| tensions[i] * runs[i]).sum::<f64>() * s[U];
-        let on_z: f64 = (0..3).map(|i| tensions[i] * (ahead[i] - behind[i]) / 2e-6).sum::<f64>() * 0.5 * s[U] * s[U];
+        // The runs' offset (`lean_offset`, sections 3 longer and 1 shorter by e u): (T3 - T1) e on the lean, its change
+        // with z on Z.
+        let (offset, offset_dz) =
+            (self.lean_offset(s[Z]), (self.lean_offset(s[Z] + 1e-6) - self.lean_offset(s[Z] - 1e-6)) / 2e-6);
+        let on_lean: f64 =
+            (0..3).map(|i| tensions[i] * runs[i]).sum::<f64>() * s[U] + (tensions[2] - tensions[0]) * offset;
+        let on_z: f64 = (0..3).map(|i| tensions[i] * (ahead[i] - behind[i]) / 2e-6).sum::<f64>() * 0.5 * s[U] * s[U]
+            + (tensions[2] - tensions[0]) * offset_dz * s[U];
         // The beam mode (`BeamMode`): M(x) w'' + M' x' w' + c w' + k w = W - F_z, W the weight on it (`on_beam_weight`:
         // carriage, Z axis and the belt riding on it), and on x the speed term
         // 1/2 M' w'^2 less the stiffness's change with x, 1/2 k' w^2.

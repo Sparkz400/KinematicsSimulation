@@ -89,6 +89,10 @@ torque_ripple = true
 tooth_meshing = true
 frame_compliance = true
 tool_flex = true
+# With tool_flex: the belt's upper vertical runs reach the clamp tool_flex.belt_offset_m to either side of the Z axis's
+# line, so the guide's tilt lengthens one and shortens the other: their tension difference turns the lean and their
+# stretch holds it. Off: on the line, as before.
+belt_run_offset = false
 idlers = false
 cable_chain = false
 process_force = false
@@ -376,6 +380,10 @@ damping_n_s_m = 80.0
 # With effects.z_axis_bending [estimate]: the Z axis's bending stiffness E I, an aluminium profile of about 60 x 40 mm
 # (I = 2e-7 m^4, E = 70 GPa); its centre of mass h below the carriage gives way h^3 / (3 E I) more.
 z_axis_bending_stiffness_nm2 = 1.4e4
+# [estimate] How far the belt's two upper vertical runs reach the clamp to either side of the Z axis's line (the pulleys'
+# diameter, 2 x 0.01591 m): as the guide tilts the Z axis by theta the clamp lifts one run's end and lowers the other's
+# by this times theta, which puts the moment (T1 - T3) times it on the lean.
+belt_offset_m = 0.0318
 
 # With effects.beam_sag: the X beam as a simple span between the posts, which sags under the carriage and the Z
 # axis by m g a^2 b^2 / (3 E I L) (L^3 / (48 E I) per newton in the middle).
