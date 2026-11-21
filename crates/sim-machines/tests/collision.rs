@@ -48,11 +48,11 @@ fn a_box_beside_a_straight_move_keeps_the_clearance_by_hand() {
 /// x = 0.47. The move from 0.1 to 0.9 at 1 m/s, 10 m/s² and 100 m/s³ is at its top speed from 0.1 m after the start
 /// (a jerk-limited ramp of 0.2 s covers v T / 2 = 0.1 m) until 0.1 m before the end: at 0.37 m from the start it is
 /// cruising at 1 m/s. With effects.crash the box pushes back and blocks the axis. With effects.drive_monitoring the
-/// blocked motor's following error grows at the setpoint's speed, 1 m/s * i / r = 1 * 5 / 0.02 = 250 rad/s, and crosses
-/// its 1 rad window 1 / 250 = 4 ms after the contact; the position loop sees it at its next cycle (1 ms) and the motor
-/// takes some 0.1 rad more before it stands, so the drive trips 4 to 6 ms after the contact, on its following error.
-/// It stops (OFF3, the motor already nearly at rest) and the carriage comes to rest at the face: at most 3 mm in (it
-/// swings on its belt, as the push holds the motor: `Sim::pushes`), at most 20 mm back where the box pushed it.
+/// setpoint runs on at 1 m/s * i / r = 1 * 5 / 0.02 = 250 rad/s at the motor; the box stops the carriage
+/// (`Machine::set_tool_force`) and the motor turns on into the belt's and the gearbox's give, so its following error
+/// crosses the 1 rad window (1 + give) / 250 s after the contact; the position loop sees it at its next cycle (1 ms),
+/// and the drive trips on its following error within 2 ms of that. It stops (OFF3) and the carriage comes to rest at
+/// the face, at most 20 mm back where the box pushed it.
 /// Without the crash the carriage runs through.
 #[test]
 fn a_move_into_a_box_is_blocked_at_its_face_and_trips_on_the_following_error() {
@@ -79,9 +79,19 @@ fn a_move_into_a_box_is_blocked_at_its_face_and_trips_on_the_following_error() {
     assert!((contact.speed - 1.0).abs() < 0.03, "impact at {} m/s", contact.speed);
     // From rest at 0.1: 0.1 m in 0.2 s, then 0.27 m at 1 m/s, and the tool lags by the following error.
     assert!((contact.time - 0.47).abs() < 0.03, "contact at {} s", contact.time);
+    // The motor's turn from the contact to the trip: into the belt's and the gearbox's give.
+    let (mut angle, mut rate) = ([0.0], [0.0]);
+    sim.machine.motor_state(&sim.state, &mut angle, &mut rate);
+    let at_contact = angle[0];
+    while sim.control.fault.is_none() && sim.time() < contact.time + 0.5 {
+        sim.step();
+        sim.machine.motor_state(&sim.state, &mut angle, &mut rate);
+    }
+    let give = angle[0] - at_contact;
     sim.run(0.5, |_| {});
     let fault = sim.control.fault.clone().expect("the drive trips");
-    let after = fault.time - (contact.time + 1.0 / 250.0);
+    let after = fault.time - (contact.time + (1.0 + give) / 250.0);
+    println!("the motor gave {give} rad after the contact");
     assert!(fault.monitor == Monitor::FollowingError && fault.drive == 0, "{fault:?}");
     assert!((0.0..0.002).contains(&after), "tripped {after} s after the window crossing");
     assert!(sim.crashed && !sim.control.enabled() && fault.stopped.is_some(), "{fault:?}");
@@ -91,6 +101,7 @@ fn a_move_into_a_box_is_blocked_at_its_face_and_trips_on_the_following_error() {
     assert!(front < 0.703 && front > 0.68 && vel[0].abs() < 1e-3, "front {front}, speed {}", vel[0]);
     // The impact is harder than the push at the current limit (950 N, below).
     let impact = sim.contact.clone().unwrap();
+    println!("{impact:?}");
     assert!(impact.peak_force > 950.0 && impact.impact_energy > 0.0, "{impact:?}");
 
     let mut through = Sim::new(entry, &with(entry, &[wall])).unwrap();
@@ -127,13 +138,26 @@ fn a_move_into_a_box_is_blocked_at_its_face_and_trips_on_the_following_error() {
 
 /// The same move into the box without drive monitoring: nothing trips, and the blocked drive pushes on at its torque
 /// limit, the peak torque 3.8 N m (at the motor's maximum current 9.5 A, within the drive's 10.9 A). At rest the box
-/// holds it with F = T_max i / r = 3.8 N m * 5 / 0.02 m = 950 N, less what the motor's own Coulomb friction (at most
-/// 0.02 N m, 5 N at the box) takes.
+/// holds it with F = T_max i / r = 3.8 N m * 5 / 0.02 m = 950 N. The box pushes the carriage (`Machine::set_tool_force`),
+/// so all of the transmission sits between the drive and the box, and at rest each friction in it holds what the
+/// impact's rebound left in either direction: the gearbox's efficiency, the motor's Coulomb friction (up to 0.02 N m,
+/// 5 N), the guide's (up to 15 N), the teeth's meshing (up to 2 N); and the torque ripple (2 %, by the angle the motor
+/// stands at) scales the drive's torque: 958.2 N with all of them measured. With those off the hand calculation is the
+/// drive's alone.
 #[test]
 fn a_blocked_axis_pushes_with_the_hand_calculated_force_at_the_current_limit() {
     let entry = find("single-axis").unwrap();
     let wall = r#"obstacles = [{ name = "wall", centre_m = [0.75, -0.03, 0.06], size_m = [0.1, 0.2, 0.2] }]"#;
-    let mut sim = Sim::new(entry, &with(entry, &[wall, "effects.crash = true"])).unwrap();
+    let settings = [
+        wall,
+        "effects.crash = true",
+        "effects.guide_friction = false",
+        "effects.tooth_meshing = false",
+        "effects.motor_friction = false",
+        "effects.gearbox_efficiency = false",
+        "effects.torque_ripple = false",
+    ];
+    let mut sim = Sim::new(entry, &with(entry, &settings)).unwrap();
     sim.command(Command::MoveTo(vec![0.9])).unwrap();
     sim.run(1.5, |_| {});
     let torque = sim.control.drives[0].torque;
