@@ -184,6 +184,65 @@ fn a_mass_centre_outside_the_centre_line_runs_the_longer_way_round() {
     assert!((lateral - 38.94).abs() < 0.01, "{lateral}");
 }
 
+/// The frame momentum (effects.base_compliance) by hand. A mover on the second straight at 1.5 m/s runs along -x at the
+/// track's width d = 0.267 m from the first: the whole mover, 1.251 kg with its plate, -1.8765 N s along x and
+/// d * 1.8765 N m s about z. In the arc's middle (no clothoid, R = 0.1303 m) with its mass centre e = 35 mm outside the
+/// centre line its body and payload (1.051 kg) run on R + e at v (1 + e / R) = 1.5 * 1.268611 m/s, the plate (0.2 kg)
+/// on the centre line at v, both square to the radius: about the arc's centre 1.051 * 1.5 * (R + e)^2 / R + 0.2 * 1.5 R
+/// = 0.36968 N m s (0.33059 + 0.03909), as m v r of a point running round a circle. The others stand.
+#[test]
+fn the_frame_momentum_is_the_hand_calculated_one() {
+    let (v, spin) = (1.5, 0.2 * 1.5);
+    let m = track(&[]);
+    let mv = m.movers();
+    let mut q = mv.start.clone();
+    q[0] = mv.track.straight + mv.track.curve + 0.5;
+    let mut qd = vec![0.0; q.len()];
+    qd[0] = v;
+    let mut rotor = vec![0.0; q.len()];
+    rotor[0] = spin;
+    let f = mv.frame_momentum(&q, &qd, &rotor).unwrap();
+    let d = mv.track.width;
+    assert!((d - 0.267).abs() < 5e-4);
+    assert!((f.linear[0] + 1.8765).abs() < 1e-12 && f.linear[1].abs() < 1e-12, "{:?}", f.linear);
+    assert!((f.angular[2] - d * 1.8765).abs() < 1e-12, "{:?}", f.angular);
+    let (r, e) = (0.1303, 0.035);
+    let arc = track(&["track.clothoid_m = 0.0", "mass.centre_offset_m = 0.035"]);
+    let mv = arc.movers();
+    let mid = mv.track.straight + 0.5 * mv.track.curve;
+    q[0] = mid;
+    let f = mv.frame_momentum(&q, &qd, &rotor).unwrap();
+    // The arc's centre: the curve's apex less R across it.
+    let apex = mv.track.point(mid);
+    let centre = [apex[0] - r, apex[1]];
+    let about = f.angular[2] - (centre[0] * f.linear[1] - centre[1] * f.linear[0]);
+    let hand = 1.051 * v * (r + e) * (r + e) / r + 0.2 * v * r;
+    assert!((hand - 0.36968).abs() < 1e-5, "{hand}");
+    // The curve's table turns its chord by 1 / 2000 of pi between two points: the heading within that of the hand's.
+    assert!((about / hand - 1.0).abs() < 1e-6, "{about} N m s about the arc's centre against {hand}");
+    let speed = f.linear[0].hypot(f.linear[1]);
+    assert!((speed / (1.051 * v * (1.0 + e / r) + 0.2 * v) - 1.0).abs() < 1e-6, "{speed}");
+    // Its first moment moves at its momentum with the mass centre outside, at the middle of the axes, and on the shipped
+    // clothoid where the rollers straddle its start (by central differences over +-1 us at 1.5 m/s).
+    for at in [&[][..], &["mass.centre_offset_m = 0.035"]] {
+        sim_core::testkit::frame_momentum_moves_its_first_moment(&MoverTrack::new(&config(at)).unwrap());
+    }
+    let clothoid = track(&["mass.centre_offset_m = 0.035"]);
+    let mv = clothoid.movers();
+    for s in [mv.track.straight + 0.01, mv.track.straight + 0.5 * mv.track.clothoid] {
+        let (h, mut q) = (1e-6, mv.start.clone());
+        let at = |s: f64, q: &mut Vec<f64>| {
+            q[0] = s;
+            mv.frame_momentum(q, &qd, &rotor).unwrap()
+        };
+        let (before, now, after) = (at(s - h * v, &mut q), at(s, &mut q), at(s + h * v, &mut q));
+        for k in 0..2 {
+            let moved = (after.first_moment[k] - before.first_moment[k]) / (2.0 * h);
+            assert!((moved - now.linear[k]).abs() < 1e-6 * now.linear[k].abs().max(1.0), "{s}, {k}: {moved} {now:?}");
+        }
+    }
+}
+
 /// The loss-free configs keep their energy with the mass centre 35 mm out: the clothoid's changing mass m (1 + e k)^2
 /// has its tangential force in the dynamics (`sim_core::testkit::energy_conservation`).
 #[test]

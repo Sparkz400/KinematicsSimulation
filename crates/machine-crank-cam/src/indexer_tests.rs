@@ -301,3 +301,27 @@ fn the_table_twist_is_among_the_modes_with_its_damping() {
     assert!((on[1].hz / off[0].hz - 1.0).abs() < 1e-9 && (on[1].damping / gear - 1.0).abs() < 1e-9, "{on:?} {off:?}");
     assert_eq!(m.resonance_hz(&[PI]), Some(on[0].hz));
 }
+
+/// The frame momentum (effects.base_compliance) by hand, in the middle of the index (theta = 0) at theta' = 2 rad/s with
+/// the rotor's spin 0.01 N m s. Geneva of six slots: phi' = lambda / (1 - lambda) = 1, the table side (wheel 0.03, table
+/// 0.4, six parts of 0.5 kg at 0.2 m: 0.55 kg m^2) 1.1 N m s about +y, the crank (0.01 kg m^2) and the rotor against it,
+/// 1.1 - 0.02 - 0.01 = 1.07. With the table's twist turning at 0.5 rad/s on top the table and parts (0.52) turn at 2.5:
+/// 0.03 * 2 + 0.52 * 2.5 - 0.03 = 1.33. The cam indexer's modified sine over 120 degrees: phi' = (pi / 3) 1.759603 /
+/// (2 pi / 3) = 0.879802, 0.54 * 0.879802 * 2 = 0.950186 about +y, its shaft (0.012 kg m^2) square to it, 0.024 + 0.01
+/// = 0.034 about z. The parts sit evenly round the table: no momentum, their first moment at its centre, 3 kg.
+#[test]
+fn the_frame_momentum_is_the_hand_calculated_one() {
+    let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-9);
+    let mut cfg = GENEVA_DRIVE.config();
+    let f = Indexer::from_config(&cfg, false).unwrap().frame_momentum(&[0.0], &[2.0], &[0.01]).unwrap();
+    assert!(near(f.angular, [0.0, 1.07, 0.0]) && near(f.linear, [0.0; 3]), "{f:?}");
+    assert!(near(f.first_moment, [0.0; 3]) && (f.mass - 3.0).abs() < 1e-12, "{f:?}");
+    cfg.set_text("effects.table_twist = true").unwrap();
+    let f = Indexer::from_config(&cfg, false).unwrap().frame_momentum(&[0.0, 0.0], &[2.0, 0.5], &[0.01]).unwrap();
+    assert!(near(f.angular, [0.0, 1.33, 0.0]), "{f:?}");
+    let f = Indexer::from_config(&CAM_INDEXER.config(), true).unwrap().frame_momentum(&[0.0], &[2.0], &[0.01]).unwrap();
+    assert!((f.angular[1] - 0.950186).abs() < 1e-6 && (f.angular[2] - 0.034).abs() < 1e-12, "{f:?}");
+    // Its first moment moves at its momentum with the twist too (`frame_momentum_moves_its_first_moment`; the standard
+    // suite's runs without it).
+    sim_core::testkit::frame_momentum_moves_its_first_moment((GENEVA_DRIVE.build)(&cfg).ok().unwrap().as_ref());
+}

@@ -330,6 +330,10 @@ Fixed (after the second audit, 21 November):
   middle of the span it covers over one period of the machine's lowest mode (`standing`), at the 1 mm it had; the
   swing's amplitude itself is not judged there. (A probe's reversed point list was refused with `error-trajectory`:
   its first time was the plan's end, not 0; the app's file pairs the forward times with the reversed poses.)
+- The mover track and the indexers (Geneva, cam) had no frame momentum (`Machine::frame_momentum` None), so no
+  compliant base: they have it, as the joint kit's slide and the knife (`the_frame_momentum_is_the_hand_calculated_one`
+  in both crates; the standard suite's first-moment check now judges them). Both are level, so
+  `testkit::weight_is_at_the_first_moment` (which asks the first moment to move vertically) has nothing to judge there.
 
 Fixed:
 - `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another
