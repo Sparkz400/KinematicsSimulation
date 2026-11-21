@@ -683,6 +683,19 @@ fn a_pick_from_the_floor_on_a_slack_sling_makes_no_energy() {
     assert!((low[2] - floor).abs() < 1e-12 && low_v == [s[LOAD_SPEED], s[LOAD_SPEED + 1], s[LOAD_SPEED + 2]]);
     let sling = m.sling_state(&s).unwrap();
     assert!(sling.tension == 0.0 && (sling.stretch + 0.2).abs() < 1e-3, "{} m", sling.stretch);
+    // With the hook block lower than the payload's top (0.28 m over its point) at the pick, the landing contact leaves it
+    // where it is: lifting it out would make energy (m_hook g 0.08 m at 0.2 m over the floor).
+    for over in [0.2, 0.0] {
+        let mut m = crane(&lossless(&["effects.hook_block = true", "effects.floor_contact = true"]));
+        m.attached = false;
+        let (mut s, _) = at_rest(&m, [5.0, 2.0, floor + over]);
+        m.after_step(&mut s, DT);
+        m.set_payload_attached(true);
+        let before = m.energy(&s);
+        m.after_step(&mut s, DT);
+        let lost = before - m.energy(&s);
+        assert!(lost >= 0.0 && (m.pick_loss * DT - lost).abs() < 1e-9, "{over} m over: {lost} J lost");
+    }
 }
 
 /// Energy through a lift-off from the floor on the sling (effects.hook_block, effects.floor_contact, the losses off): the

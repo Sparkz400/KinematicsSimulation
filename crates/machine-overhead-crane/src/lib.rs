@@ -1153,8 +1153,11 @@ impl Machine for Crane {
         if let Some(dz) = self.on_payload(s) {
             // The hook block down on the payload: plastic, put back on its top (the payload where it is) and the two at
             // one vertical speed, the payload's where it stands on the floor, else their common momentum's. Booked with
-            // the pick's loss.
-            if s[dz] > -full::landing() || s[dz + 3] > 0.0 {
+            // the pick's loss. Only what came down onto the top within this step: a hook block already deeper (a payload
+            // picked under a hook block hanging lower than 0.28 m over it) is left as it was, which lifting it would make
+            // energy.
+            let into = s[dz] + full::landing();
+            if (into > 0.0 || s[dz + 3] > 0.0) && into <= s[dz + 3].max(0.0) * dt + FLOOR_ROUNDING {
                 let (v1, v2) = (s[LOAD_SPEED + 2], s[LOAD_SPEED + 2] + s[dz + 3]);
                 let (m1, m2) = (self.hook, self.payload_mass());
                 let v = if standing { v2 } else { (m1 * v1 + m2 * v2) / (m1 + m2) };
