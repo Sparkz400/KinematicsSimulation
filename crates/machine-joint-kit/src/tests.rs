@@ -168,6 +168,22 @@ fn a_presliding_slide_holds_its_load_without_creeping() {
     assert!((crept + 0.2435e-3).abs() < 0.03e-3, "{crept}");
 }
 
+/// The screw axis's drive train for the planner (`Machine::trains`) is the elastic model's own mode: the coupling and
+/// the screw in series, K1 (`Converter::apply_back` puts the screw's compliance into it), between the rotor and the
+/// carriage, referred to the motor. The train's frequency with the motor held, over sqrt(1 - the load's share), is the
+/// two-mass mode with the rotor free (`resonance_hz`), with the nut 0.1, 0.4 and 0.7 m along. The train put the screw's
+/// compliance in series a second time (`band_compliance`): 0.73 of the mode here.
+#[test]
+fn the_screw_axis_train_is_its_two_mass_mode() {
+    let sim = Sim::new(&SCREW, &SCREW.config()).unwrap();
+    for x in [0.1, 0.4, 0.7] {
+        let train = sim.machine.trains(&[x])[0].unwrap();
+        let free = train.hz / (1.0 - train.load_share).sqrt();
+        let mode = sim.machine.resonance_hz(&[x]).unwrap();
+        assert!((free / mode - 1.0).abs() < 1e-9, "{x}: {free} against {mode} Hz");
+    }
+}
+
 /// By hand: on the rack m a of 60 kg (80 with the payload), at the gearbox output that force times the pinion's
 /// 31.831 mm; 0.95 m/s is 0.95 / 0.031831 = 29.85 rad/s of the pinion, 2850 r/min at the motor behind ratio 10.
 #[test]

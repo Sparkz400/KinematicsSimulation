@@ -938,6 +938,11 @@ pub struct Gearbox {
 /// axially (fixed-fixed); a = |q - fixed_bearing_at| for the joint's travel q. The gear's springs were put in series with
 /// the screw at `reference` (m/N, the shaft's compliance there); at q they are in series with the difference too
 /// (`Gearbox::at`). The nut's distance is clamped as `transmission::BallScrew::stiffness` clamps it.
+///
+/// The screw's damper keeps its damping ratio along the stroke: c_c = 2 zeta sqrt(K_c m) at the screw's stiffness K_c
+/// where the nut is (a loss factor eta = 2 zeta gives the same, eta K_c / omega at the screw's own omega =
+/// sqrt(K_c / m)), so c_c(q) = c_c sqrt(K_c(q) / K_c) of the reference's; with the gear's damper the two in series are
+/// laid out anew there (`series_dampers`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TravelCompliance {
     /// E A of the root section, N.
@@ -947,9 +952,49 @@ pub struct TravelCompliance {
     /// The joint's travel at which the fixed bearing stands, m.
     pub fixed_bearing_at: f64,
     pub reference: f64,
+    /// The gear's own spring and damper at the joint, K_g (N/m) and c_g (N s/m), as `Converter::apply_back` puts them
+    /// in series with the screw (`BackDriven::apply_to`).
+    pub gear: [f64; 2],
+    /// The screw's K_c (N/m) and its damper c_c (N s/m) at the reference; K_c 0: the dampers keep the reference's.
+    pub converter: [f64; 2],
+}
+
+/// Two damped springs in series with a massless node between them (`transmission::Converter::apply_back`): the gear's
+/// K_g with c_g across it alone, the converter's K_c with c_c across it alone. Beside their series spring they are a
+/// damper b = c_g c_c / C and a Maxwell arm K_m = (K_g c_c - K_c c_g)^2 / (S C^2) of time constant tau = C / S, with
+/// S = K_g + K_c and C = c_g + c_c: (b, K_m, tau). All 0 where neither has a damper.
+pub fn series_dampers(k_g: f64, c_g: f64, k_c: f64, c_c: f64) -> (f64, f64, f64) {
+    let (sum, dampers) = (k_c + k_g, c_g + c_c);
+    if dampers <= 0.0 {
+        return (0.0, 0.0, 0.0);
+    }
+    (c_g * c_c / dampers, (k_g * c_c - k_c * c_g).powi(2) / (sum * dampers * dampers), dampers / sum)
 }
 
 impl TravelCompliance {
+    /// The series dampers (`series_dampers`) with the screw's compliance dc from the reference's: K_c = 1 / (1 / K_c0 +
+    /// dc), c_c = c_c0 sqrt(K_c / K_c0). [b, K_m, tau, dK_m / d(dc)]; None where `converter` is not set.
+    pub fn dampers(&self, dc: f64) -> Option<[f64; 4]> {
+        let ([k_g, c_g], [k0, c0]) = (self.gear, self.converter);
+        if k0 <= 0.0 {
+            return None;
+        }
+        let k_c = 1.0 / (1.0 / k0 + dc);
+        let c_c = c0 * (k_c / k0).sqrt();
+        let (b, arm, tau) = series_dampers(k_g, c_g, k_c, c_c);
+        let (sum, dampers) = (k_c + k_g, c_g + c_c);
+        // dK_m / dK_c with c_c' = c_c / (2 K_c): 2 N N' / (S C^2) - K_m / S - 2 K_m c_c' / C, N = K_g c_c - K_c c_g.
+        let slope = if dampers > 0.0 {
+            let rate = c_c / (2.0 * k_c);
+            let n = k_g * c_c - k_c * c_g;
+            2.0 * n * (k_g * rate - c_g) / (sum * dampers * dampers) - arm / sum - 2.0 * arm * rate / dampers
+        } else {
+            0.0
+        };
+        // dK_c / d(dc) = -K_c^2.
+        Some([b, arm, tau, -slope * k_c * k_c])
+    }
+
     /// The shaft's compliance with the nut `a` from the fixed bearing, and its slope in a.
     pub fn shaft(&self, a: f64) -> (f64, f64) {
         let (l, lo) = (self.length, 1e-3 * self.length);
@@ -1058,20 +1103,45 @@ impl Gearbox {
 
     /// The gear with the nut at `travel` along the screw: behind a screw whose stiffness follows the nut (`travel`), its
     /// springs K1, K2, K3 each in series with the shaft's compliance there less the reference's, dc, and the band's
-    /// series spring c + dc (the flanks' own k_f stays: 1 / k_f = 1 / K1 - c). The hysteresis, the mesh bristle, the
-    /// damper and its arm keep the reference's. Itself otherwise. The nut sits on the shaft's point the rotor has turned
-    /// to it, the rotor's angle over the ratio (`nut`); at a pose the joint's travel, which is that less the twist.
+    /// series spring c + dc (the flanks' own k_f stays: 1 / k_f = 1 / K1 - c). The screw's damper keeps its damping
+    /// ratio, and it and the gear's damper in series are laid out at the screw's stiffness there, the damper and the
+    /// Maxwell arm (`TravelCompliance::dampers`; an arm the build folded into the damper, faster than the integrator
+    /// follows, stays folded). The hysteresis and the mesh bristle keep the reference's. Itself otherwise. The nut sits
+    /// on the shaft's point the rotor has turned to it, the rotor's angle over the ratio (`nut`); at a pose the joint's
+    /// travel, which is that less the twist.
     pub fn at(&self, travel: f64) -> std::borrow::Cow<'_, Self> {
         let Some(t) = self.travel else { return std::borrow::Cow::Borrowed(self) };
         let dc = t.delta(travel).0;
         let series = |k: f64| 1.0 / (1.0 / k + dc);
-        std::borrow::Cow::Owned(Self {
+        let mut here = Self {
             stiffness: series(self.stiffness),
             upper: self.upper.map(series),
             band_compliance: self.band_compliance + dc,
             travel: None,
             ..self.clone()
-        })
+        };
+        // At the reference itself the build's dampers, to the bit.
+        if let Some([b, arm, tau, _]) = t.dampers(dc).filter(|_| dc != 0.0) {
+            if self.relax_stiffness > 0.0 {
+                (here.damping, here.relax_stiffness, here.relax_time) = (b, arm, tau);
+            } else {
+                here.damping = b + arm * tau;
+            }
+        }
+        std::borrow::Cow::Owned(here)
+    }
+
+    /// F^2 K_m'(s) / (2 K_m^2): what the Maxwell arm's store K_m (x - u)^2 / 2 gains per unit of the nut's place s at a
+    /// fixed x and u, F = K_m (x - u) the arm's force (`at`: K_m follows the screw's stiffness). As with the spring's
+    /// `travel_force`, the rotor feels it. 0 without an arm or with the dampers not laid out along the stroke.
+    fn arm_place(&self, s: f64, force: f64) -> f64 {
+        let Some(t) = self.travel else { return 0.0 };
+        if self.relax_stiffness == 0.0 || force == 0.0 {
+            return 0.0;
+        }
+        let (dc, slope) = t.delta(s);
+        let Some([_, arm, _, rate]) = t.dampers(dc) else { return 0.0 };
+        0.5 * force * force * rate * slope / (arm * arm)
     }
 
     /// The nut's place along the screw in the dynamics: the shaft's point the rotor has turned to it, s = phi / i.
@@ -1277,10 +1347,11 @@ impl Gearbox {
     fn torque_arm(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64, arm: f64) -> GearTorque {
         if self.travel.is_some() {
             // The springs at the nut's place, and where the flanks pass a torque the rotor feels the place's own force:
-            // its reaction is dV / dphi = (T - T^2 c' / 2) / i.
-            let mut t = self.at(self.nut(rotor_angle)).torque_arm(rotor_angle, rotor_speed, out_angle, out_speed, arm);
+            // its reaction is dV / dphi = (T - T^2 c' / 2 + F^2 K_m' / (2 K_m^2)) / i, the arm's store's too.
+            let s = self.nut(rotor_angle);
+            let mut t = self.at(s).torque_arm(rotor_angle, rotor_speed, out_angle, out_speed, arm);
             if t.rotor != 0.0 {
-                t.rotor -= self.travel_force(rotor_angle, out_angle) / self.ratio;
+                t.rotor -= (self.travel_force(rotor_angle, out_angle) - self.arm_place(s, arm)) / self.ratio;
             }
             return t;
         }
@@ -1353,9 +1424,10 @@ impl Gearbox {
         if self.relax_stiffness == 0.0 {
             return (0.0, 0.0);
         }
+        let here = self.at(self.nut(rotor_angle));
         let (twist, e) = self.beyond(rotor_angle, out_angle);
         let d = Self::contact(twist, e) - u;
-        (self.relax_stiffness * d, d / self.relax_time)
+        (here.relax_stiffness * d, d / here.relax_time)
     }
 
     /// The arm's state at rest: the contact twist, where it carries nothing.
@@ -1364,10 +1436,11 @@ impl Gearbox {
         Self::contact(twist, e)
     }
 
-    /// `energy` with the arm's spring at its state `u`, K_m (x - u)^2 / 2.
+    /// `energy` with the arm's spring at its state `u`, K_m (x - u)^2 / 2 (K_m at the nut's place, `at`).
     pub fn energy_with(&self, rotor_angle: f64, out_angle: f64, u: f64) -> f64 {
         let f = self.arm(rotor_angle, out_angle, u).0;
-        self.energy(rotor_angle, out_angle) + if f == 0.0 { 0.0 } else { 0.5 * f * f / self.relax_stiffness }
+        let store = || 0.5 * f * f / self.at(self.nut(rotor_angle)).relax_stiffness;
+        self.energy(rotor_angle, out_angle) + if f == 0.0 { 0.0 } else { store() }
     }
 
     /// The viscous damping the gear puts on a ring of `omega` rad/s for the modes: `damping`, and the arm's
@@ -1445,9 +1518,11 @@ impl Gearbox {
         let (arm, arm_rate) = arm;
         let t = self.torque_arm(rotor_angle, rotor_speed, out_angle, out_speed, arm);
         let (twist, e) = self.beyond(rotor_angle, out_angle);
+        // The arm's store's change with the nut's place (`arm_place`) is stored, not lost.
+        let place = self.arm_place(self.nut(rotor_angle), arm) * rotor_speed / self.ratio;
         if e == 0.0 && self.has_play() {
-            // The contact twist stands at 0: the arm's store changes by -F du/dt alone.
-            return t.rotor * rotor_speed - t.output * out_speed + arm * arm_rate;
+            // The contact twist stands at 0: the arm's store changes by -F du/dt and with its place alone.
+            return t.rotor * rotor_speed - t.output * out_speed + arm * arm_rate - place;
         }
         let (z, slope) = self.hysteresis_torque(Self::contact(twist, e), rotor_speed / self.ratio - out_speed);
         let stored = if z == 0.0 { 0.0 } else { z * slope / self.dahl_stiffness };
@@ -1457,6 +1532,7 @@ impl Gearbox {
             - t.output * out_speed
             - (self.at(self.nut(rotor_angle)).spring(e).0.copysign(twist) + stored) * rate
             - arm * (rate - arm_rate)
+            - place
             + self.travel_force(rotor_angle, out_angle) * rotor_speed / self.ratio
     }
 }
@@ -2097,6 +2173,8 @@ preload_n = 200.0
                 both_ends: false,
                 fixed_bearing_at: -0.2,
                 reference: 1e-4,
+                gear: [0.0; 2],
+                converter: [0.0; 2],
             }),
             ..gearbox()
         };
@@ -2114,6 +2192,65 @@ preload_n = 200.0
             assert!((t.output - spring).abs() < 1e-12, "{twist}");
             assert!((5.0 * t.rotor - spring + 0.5 * spring * spring * 1e-4).abs() < 1e-12, "{twist}");
             assert!(g.loss_power(rotor, 2.0, q, 0.3).abs() < 1e-12);
+        }
+    }
+
+    /// The dampers follow the nut with the screw's stiffness (`TravelCompliance::dampers`): a gear of K_g = 2e4 with
+    /// c_g = 10 in series with a screw that is all shaft, K_c = 1e4 with c_c = 20 at the far end (E A = 1e4, fixed-free
+    /// over 1, the bearing at -0.2, built at 0.8). There b = 200 / 30 = 6.6667, K_m = (4e5 - 1e5)^2 / (3e4 * 900) =
+    /// 3333.33, tau = 30 / 3e4 = 1e-3. At q = 0.3 the shaft is 0.5: K_c = 2e4, c_c = 20 sqrt(2) = 28.284 (the damping
+    /// ratio kept), so b = 282.84 / 38.284 = 7.3880, K_m = (2e4 (28.284 - 10))^2 / (4e4 * 38.284^2) = 2280.9 and
+    /// tau = 38.284 / 4e4 = 9.5711e-4; dK_m / d(dc) against a difference quotient. With the arm at a state u its store
+    /// K_m (x - u)^2 / 2 follows the nut as the spring's does: the rotor's reaction is the energy's slope along its angle
+    /// at fixed u and the output's force the slope along the output, and on a move the loss is the dampers' alone,
+    /// b x'^2 + K_m (x - u)^2 / tau, at the nut's place.
+    #[test]
+    fn the_dampers_behind_a_screw_follow_the_nut() {
+        let (k_g, c_g, k_c, c_c) = (2e4, 10.0, 1e4, 20.0);
+        let (b, arm, tau) = series_dampers(k_g, c_g, k_c, c_c);
+        let g = Gearbox {
+            stiffness: 1.0 / (1.0 / k_g + 1.0 / k_c),
+            upper: [1.0 / (1.0 / k_g + 1.0 / k_c); 2],
+            half_backlash: 0.0,
+            band_compliance: 1e-4,
+            damping: b,
+            relax_stiffness: arm,
+            relax_time: tau,
+            travel: Some(TravelCompliance {
+                ae: 1e4,
+                length: 1.0,
+                both_ends: false,
+                fixed_bearing_at: -0.2,
+                reference: 1e-4,
+                gear: [k_g, c_g],
+                converter: [k_c, c_c],
+            }),
+            ..gearbox()
+        };
+        let rel = |a: f64, b: f64, tol: f64| (a / b - 1.0).abs() < tol;
+        assert!(rel(b, 6.666667, 1e-6) && rel(arm, 3333.333, 1e-6) && rel(tau, 1e-3, 1e-12));
+        let far = g.at(0.8);
+        assert!(far.damping == b && far.relax_stiffness == arm && far.relax_time == tau);
+        let here = g.at(0.3);
+        assert!(rel(here.damping, 7.387961, 1e-6) && rel(here.relax_time, 9.571068e-4, 1e-6), "{here:?}");
+        assert!(rel(here.relax_stiffness, 2280.944, 1e-6), "{}", here.relax_stiffness);
+        let t = g.travel.unwrap();
+        let h = 1e-9;
+        let quotient = (t.dampers(-5e-5 + h).unwrap()[1] - t.dampers(-5e-5 - h).unwrap()[1]) / (2.0 * h);
+        assert!(rel(t.dampers(-5e-5).unwrap()[3], quotient, 1e-6), "{quotient}");
+        let (q, h) = (0.3, 1e-8);
+        for (twist, u) in [(1e-4, 0.0), (4e-4, 1e-4), (8e-4, 9e-4)] {
+            let rotor = 5.0 * (twist + q);
+            let t = g.torque_with(rotor, 0.0, q, 0.0, u);
+            let along = -(g.energy_with(rotor, q + h, u) - g.energy_with(rotor, q - h, u)) / (2.0 * h);
+            let turning = (g.energy_with(rotor + 5.0 * h, q, u) - g.energy_with(rotor - 5.0 * h, q, u)) / (10.0 * h);
+            assert!((t.output - along).abs() < 1e-6, "{twist}: {} against {along}", t.output);
+            assert!((t.rotor - turning).abs() < 2e-7, "{twist}: {} against {turning}", t.rotor);
+            let (rate, s) = (2.0 / 5.0 - 0.3, g.nut(rotor));
+            let at = g.at(s);
+            let (force, arm_rate) = g.arm(rotor, q, u);
+            let dissipated = at.damping * rate * rate + force * arm_rate;
+            assert!((g.loss_power_with(rotor, 2.0, q, 0.3, u) - dissipated).abs() < 1e-12, "{twist}");
         }
     }
 

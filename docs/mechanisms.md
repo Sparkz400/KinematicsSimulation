@@ -72,7 +72,8 @@ A joint's coordinate is an angle (rad) or a travel (m). A screw or rack turns th
   the travel at the bearing), otherwise at the softest place for the whole stroke;
 - damping: the gearbox's over lever^2 across the gearbox's spring alone, and the screw's or rack's own across its
   spring alone, c = 2 zeta sqrt(K_c m) from `screw.axial_damping_ratio` or `rack.damping_ratio` and the mass m it moves
-  (nut, bearings, guides); two damped springs in series, the machine carries one more state for them
+  (nut, bearings, guides), K_c at the nut's place where the stiffness follows it (zeta kept along the stroke); two
+  damped springs in series, the machine carries one more state for them
   (`Gearbox::arm`). With the gearbox's damper alone (K_g = k_gearbox / lever^2) a mass on the pair rings with
   c (K_c / (K_c + K_g))^2 at low frequency, not c;
 - backlash: the gearbox's seen at the joint plus the converter's (with `effects.gearbox_backlash`);

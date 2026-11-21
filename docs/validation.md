@@ -946,7 +946,7 @@ is `machine.toml` as committed:
 | S-profile | fit | 8.07 N m | 0.857 N m, 10.6 % | 0.368 N m, 4.6 % | 7.39 N m, 92 % | 2.20 N m, 27 % |
 | Sine, 0.1 to 19.9 s | check | 3.52 N m | 0.502 N m, 14.3 % | 0.461 N m, 13.1 % | 1.88 N m, 53 % | 1.20 N m, 34 % |
 | Sine, whole file | check | 34.16 N m | 1.62 N m, 4.7 % | 0.709 N m, 2.1 % | 95 N m, 278 % | 24.5 N m, 72 % |
-| Constant speed 0.1 m/s | check | 14.63 N m | 0.746 N m, 5.1 % | 0.896 N m, 6.1 % | 6.17 N m, 42 % | 3.62 N m, 25 % |
+| Constant speed 0.1 m/s | check | 14.63 N m | 0.746 N m, 5.1 % | 0.896 N m, 6.1 % | 6.17 N m, 42 % | 3.65 N m, 25 % |
 
 On the S-profile, step by step (RMS, peak): the setpoint on the simulator's clock (below) 0.842 N m, 7.23 N m; the
 torque feedforward off 0.711, 3.85; the speed loop's gains 0.686, 2.75; the guides' presliding friction 0.425, 2.24; the
@@ -964,7 +964,11 @@ sine 0.719 to 0.709 and 27.5 to 24.5 N m (the jolt at its end: L di/dt against t
 inductance), the sine's window and constant speed unchanged. Since 17 November 2026 the screw driven back by the load
 loses by its own efficiency, THK's (1 − μ / tan β) / (1 + μ tan β) = 0.98963 in place of the driving 0.98972: the
 constant speed's worst sample 3.65 to 3.62 N m, the rest within their last digit. That one sample is as sensitive to
-anything near it: 3.615 and 3.616 N m with the screw's μ 1 % lower or higher.
+anything near it: 3.615 and 3.616 N m with the screw's μ 1 % lower or higher. Since 20 November 2026 the coupling's damper bridges its own spring, not the
+screw's too (two damped springs in series, `Converter::apply_back`), and the screw has its own damping ratio 0.04
+(`screw.axial_damping_ratio`): the first alone gives 3.6156 N m at constant speed and an S-profile RMS of 0.3716 N m, both
+together 3.6487 and 0.3681 (3.62 to 3.65 N m, the rest within their last digit). That worst sample lies at 14.5 s, where
+the replay gives −1.1 N m against the measured +2.5 N m: a gap the damping moves by 0.03 N m, not one it makes.
 
 **Following error**, now on the source's clock: S-profile measured 0.0411 rad RMS, simulated 0.0399, their difference
 0.0022 rad (5 % of the measured); sine (0.1 to 19.9 s) 0.0078 against 0.0070, difference 0.0018 rad (23 %); constant
