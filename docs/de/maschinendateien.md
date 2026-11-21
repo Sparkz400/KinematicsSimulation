@@ -869,7 +869,8 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
   ersten Moment: die potentielle Energie hat g mu Σ_s (L0_s + c_s · q / 2) V_s,z · q, die Schwerkraft deren Gradient
   (`runs_height`); so wiegen die senkrechten Trume des T-Portals 0,16 kg auf Z wie in seinem Crate, der Z-Riemen des
   XYZ-Portals nichts (eine Schleife: das Trum vom Motor zur fernen Umlenkrolle, 0,5 m, sinkt, wie die beiden mit dem
-  Schlitten steigen). Die Datei des T-Portals gibt ihre
+  Schlitten steigen; seine X- und Y-Riemen sind ebenso Schleifen, 1,2 und 0,7 m vom Motor zur fernen Umlenkrolle). Die
+  Datei des T-Portals gibt ihre
   Trume so an; ihr Crate leitet dasselbe aus dem Riemenweg ab (`belt_mass`). Ebenso die anderen Dateien, deren Trume sich
   über Grund bewegen, jede mit der Tabelle ihrer Trume im Kommentar: der H-Bot (der Riemenweg des T-Portals mit Y statt
   Z), der CoreXY (jeder Riemen bewegt sich entlang X und entlang Y als Ganzes, wie die Klumpen es hatten, und gibt

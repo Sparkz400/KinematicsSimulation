@@ -831,7 +831,7 @@ The machine files (`machines/*.toml`, `sim-cli analyze --machine-file`) by the s
 | `t-gantry.toml` (no frame, no leaning Z) | 115.6 → 105.6 | 47.1 → 41.8 | yes |
 | `delta-d3.toml`, `planar-delta.toml` | as the D3 and D2 above | | yes |
 | `screw-portal.toml` | 143.5 → 99.5 | 31.3 → 22.1 | yes |
-| `xyz-portal.toml` | 142.7 → 107.3 (141.9 → 104.4 before its Z belt was a loop, 21 November) | 30.6 → 22.7 (29.9 → 22.3) | yes |
+| `xyz-portal.toml` | 189.0 → 159.4 (142.7 → 107.3 before its X and Y belts were loops, 141.9 → 104.4 before its Z belt was, 21 November) | 31.7 → 27.5 (30.6 → 22.7, 29.9 → 22.3) | yes |
 | `corexy.toml` | 77.0 → 49.1 | 15.6 → 22.0 | no |
 | `h-bot.toml` | 121.8 → 111.2 | 13.2 → 18.9 | no |
 | `dual-gantry.toml` | 165.5 → 109.8 | 10.2 → 31.7 | no |

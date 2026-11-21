@@ -278,8 +278,14 @@ Fixed (after the second audit, 21 November):
 - The XYZ portal's Z belt is a loop: its section z2 is 0.9 m (0.5 m from the motor to the far idler and 0.4 m
   back to the clamp), its span z_2 0.5 m, so the falling run is as long as the two rising with the slide. Its Z
   holds 3.5 kg again, 0.0686466 N m (before 3.54 kg, 0.0694311 N m); its belts weigh 2T / mu = 3.1 vx² + 1.8 vy² +
-  1.0 vz² (2.7, 1.4, 0.6 before). Its X and Y sections still share their lengths out (0.1 m from the motor to the
-  far idler): they lie flat, so only their momentum along the axis has it.
+  1.0 vz² (2.7, 1.4, 0.6 before). Its X and Y belts are loops the same way since (they shared their lengths out, 0.1 m
+  from the motor to the far idler): sections x2 2.3 m and y2 1.3 m, spans x_2 1.2 m and y_2 0.7 m (0.1 + stroke + 0.1),
+  so 2T / mu = 4.8 vx² + 2.4 vy² + 1.0 vz² (the belts 2.4, 1.4 and 1.0 m; on X 0.32 kg beyond the pulleys' lumps, was
+  0.207). The return sections are longer, so the belts are softer: X's mode with the pulleys held 39.23 Hz at its far
+  end (73.91 before), 45.1 Hz in the middle (53.5), 97.8 Hz at its start (100.1); Y's 69.83 Hz in the middle with X at
+  its start (`the_portals_x_and_y_belts_ring_on_their_loops_by_hand`). The cycle passes every verdict as before:
+  settling 27.5 um (22.7), belt tension 376.0 N (330.9), least 170.0 N (179.6), X motor RMS 0.3691 A (0.3669);
+  following error 159.4 um (107.3), with the friction feedforward off 189.0 (142.7).
 - The drive's current circle holds the q reference with the d reference, i_q,ref ≤ sqrt(I_max² − i_d,ref²), as a
   drive limits its current reference vector, not with the d current that is there. 1FK2205-4AF single axis at
   200 m/s²: 10.944 A against 10.9 A (0.41 %, above it for 8.75 ms), was 10.980 A (0.74 %). The rest is the q
