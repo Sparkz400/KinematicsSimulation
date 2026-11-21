@@ -117,7 +117,6 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The tube's single-mode shape for inertia with the static stiffness 3EI/L | D3, D4, H4 arm bending | Not sized. |
 | A contact that is not at the tool is pushed at the motors (machine crates, linkage, delta, scissor files) | obstacle contact | A load on a soft belt swings on by the belt's stretch (millimetres at 1 m/s). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
 | The stepper's detent while disabled | stepper | Up to T_d/(4N) appears or disappears from the budget at an enable. |
-| A margin figure for a loop across a backlash | `sim-cli margins` | The small-signal margins are still those of the motor alone inside its play. Since 21 November 2026 a time run (`backlash_hammering`: a swept kick of the rated torque at the start pose) finds a loop that hammers across the play and fails it (the five-bar's tool turn at 0.08: 650 Hz, 0.77 N m, where the margins read 10.54 dB); how far a loop that does not hammer is from it (the describing function's margin) is not given, and only the start pose is kicked. |
 | `mode_shape` of the five-bar | five-bar | Display only. |
 | Run files recorded before the signal `setpoint_age` | `charts.rs` | The tool error falls back to the held setpoint: up to one cycle's travel (0.79 against 0.18 mm on the T-gantry). |
 
@@ -274,6 +273,13 @@ Fixed (second audit, 21 November):
   with Z's mode to 51.5 and 140.1 Hz.
 
 Fixed (after the second audit, 21 November):
+- A margin figure for a loop across a backlash (was in section 4): `sim-cli margins` prints the describing function's
+  margin across the play (`play_margin_db`, model reference, hammering across a backlash), with the rotor's friction
+  faded. Five-bar's tool turn: -4.18 dB at 0.08, +3.56 dB at the shipped 0.033 (onset 0.0497); a time run with the
+  friction off hammers from 0.048 (within 4 %), with it on from 0.078: the friction still damps the swing, which the
+  figure leaves out on the safe side. Told, not judged (the time run stays the verdict); each run is measured once more
+  with the play closed (margins of the five-bar 20.5 to 23.8 s). Still open: the kicks and the margins are at the start
+  pose only; the margins across the bounds vary config values, not poses, so there was no pose list to reuse.
 - The hexapod's lowest held mode (183.2 Hz) lies below its planner trains (289.6 Hz, each leg's M_kk with the others
   held), and the trains are right for the allowance's jerk term: with one motor driven and the others held the twist
   rate is [K^-1 M]_kk j = M_kk j / K_k, the modal sum of its column over the held modes (model reference, the planner's

@@ -377,7 +377,7 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         let margins = table(&["margins", entry.id]);
         assert_eq!(
             margins.lines().next().unwrap(),
-            "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result"
+            "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result,play_margin_db"
         );
         let rows: Vec<Vec<&str>> = margins.lines().skip(1).map(|l| l.split(',').collect()).collect();
         // A loop without a gain crossover in the band (below) has no phase margin to measure: crossover and phase

@@ -4385,11 +4385,16 @@ pub struct LoopMargins {
     /// The loop hammers across its gearbox's play (`backlash_hammering`), which the response does not show; `None`
     /// from `loop_margins` alone, `velocity_loop_margins` runs the check.
     pub hammering: Option<Hammering>,
+    /// With a gearbox's play in the loop: by how much the gain may rise before the loop hammers across it, in dB, the
+    /// describing function's margin (`play_margin`). NaN without play acting on the loop and from `loop_margins` alone;
+    /// negative: the loop crosses -1 at some amplitude of the swing across the play.
+    pub play_margin_db: f64,
 }
 
 impl LoopMargins {
     /// A valid measurement, both margins positive (a phase margin that is NaN has no crossover to judge), and no
-    /// hammering across a play: stable.
+    /// hammering across a play: stable. The margin across the play (`play_margin_db`) is told, not judged: the time run
+    /// is the verdict.
     pub fn stable(&self) -> bool {
         self.valid && !(self.phase_margin_deg <= 0.0) && self.gain_margin_db > 0.0 && self.hammering.is_none()
     }
@@ -4408,6 +4413,7 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
         peak_sensitivity: 0.0,
         peak_frequency_hz: f64::NAN,
         hammering: None,
+        play_margin_db: f64::NAN,
     };
     let points: Vec<&LoopPoint> = points.iter().filter(measured).collect();
     for p in &points {
@@ -4656,25 +4662,129 @@ pub fn velocity_loop_margins(
             runs.push((format!("{path}={value:?}"), changed));
         }
     }
-    let configs: Vec<Config> = runs.iter().map(|(_, c)| c.clone()).collect();
+    let mut configs: Vec<Config> = runs.iter().map(|(_, c)| c.clone()).collect();
+    // With the play: each run once more with the flanks held together, for the margin across the play.
+    let count = configs.len();
+    let play = cfg.bool("effects.gearbox_backlash").unwrap_or(false);
+    if play {
+        for run in 0..count {
+            let mut closed = configs[run].clone();
+            closed.set_text("effects.gearbox_backlash = false")?;
+            configs.push(closed);
+        }
+    }
     let responses = velocity_loop_responses(entry, &configs, &Progress::default())?;
     let motors = responses.first().map_or(0, Vec::len);
-    let hammering =
-        on_all_cores(configs.len() * motors, |j| backlash_hammering(entry, &configs[j / motors], j % motors))
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?;
+    let hammering = on_all_cores(count * motors, |j| backlash_hammering(entry, &configs[j / motors], j % motors))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(runs
         .into_iter()
-        .zip(responses)
+        .zip(&responses)
         .enumerate()
         .map(|(run, ((name, _), curves))| {
             let margins = curves.iter().enumerate().map(|(motor, points)| LoopMargins {
                 hammering: hammering[run * motors + motor],
+                play_margin_db: if play { play_margin(points, &responses[count + run][motor]) } else { f64::NAN },
                 ..loop_margins(points)
             });
             (name, margins.collect())
         })
         .collect())
+}
+
+/// The describing function's gain margin of a velocity loop across its gearbox's play, dB, from the loop measured with
+/// the play (`play`: small signals, the rotor swinging inside it) and with the flanks held together (`closed`, the
+/// config with `effects.gearbox_backlash` off). Two things in the loop depend on the swing's amplitude A. Across the
+/// play the flanks pass their spring's and their damper's force only while in contact (`Gearbox::torque`): over a swing
+/// about it the first harmonic of both is kappa(A) = 1 - (2 / pi) (asin(b / A) + (b / A) sqrt(1 - (b / A)^2)) of the
+/// gear's impedance y (b the half play), 0 inside the play, 1 far beyond it. And the friction on the rotor (its seals,
+/// the gearbox's drag, the mesh), which damps the small-signal measurement (Re(1/P) some 0.2 N m s/rad on the five-bar's
+/// tool turn, three times its J w at 650 Hz), is a Coulomb force whose first harmonic, 4 F / (pi A w), fades as the
+/// swing grows. The margin is taken with it faded: the rotor alone, J_m s (J_m the median of Im(1/P) / w over the upper
+/// half of the play's band), on kappa y to the load J_L (J_m + J_L from the closed plant at its lowest frequency),
+/// 1 / P(kappa) = J_m s + kappa y J_L s / (kappa y + J_L s), y at each frequency from the closed plant (which so holds
+/// the friction's small-signal share, scaled with kappa), and the rest of the loop, C = L / P, from the closed
+/// measurement. The least gain margin (`loop_margins`) of L(kappa) = C P(kappa) over kappa from 1e-3 to 1 (301 values,
+/// log spaced), each on 3000 frequencies over the band (C's log gain and unwrapped phase and y interpolated in log f).
+/// A swing that the friction still damps is quieter: the five-bar's tool turn reads -3.07 dB at 0.08 N m s/rad, so it
+/// would hammer from 0.0562, where the time run (`backlash_hammering`, bisected) hammers from 0.0782 with its friction
+/// and from 0.0478 with it off (the impacts' harmonics and the damper that cannot pull, which the first harmonic leaves
+/// out). NaN where the play does not change the loop (none on that motor: the two measurements within 1e-3 at every
+/// common frequency), where a measurement is not valid, or the inertias do not come out positive.
+pub fn play_margin(play: &[LoopPoint], closed: &[LoopPoint]) -> f64 {
+    type Cx = [f64; 2];
+    let mul = |a: Cx, b: Cx| [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
+    let div = |a: Cx, b: Cx| {
+        let n = b[0] * b[0] + b[1] * b[1];
+        [(a[0] * b[0] + a[1] * b[1]) / n, (a[1] * b[0] - a[0] * b[1]) / n]
+    };
+    let add = |a: Cx, b: Cx| [a[0] + b[0], a[1] + b[1]];
+    let sub = |a: Cx, b: Cx| [a[0] - b[0], a[1] - b[1]];
+    let valid = |p: &LoopPoint| [p.re, p.im, p.plant[0], p.plant[1]].iter().all(|x| x.is_finite());
+    if play.len() < 2 || closed.len() < 2 || !play.iter().chain(closed).all(valid) {
+        return f64::NAN;
+    }
+    let same = closed.iter().all(|c| {
+        play.iter()
+            .find(|p| p.frequency == c.frequency)
+            .is_none_or(|p| (p.re - c.re).hypot(p.im - c.im) <= 1e-3 * c.re.hypot(c.im))
+    });
+    if same {
+        return f64::NAN;
+    }
+    let tau = std::f64::consts::TAU;
+    let s = |f: f64| [0.0, tau * f];
+    // The impedance 1 / P = J s of an inertia: J = Im(1 / P) / w.
+    let inertia = |p: &LoopPoint| div([1.0, 0.0], p.plant)[1] / (tau * p.frequency);
+    let mut upper: Vec<f64> = play[play.len() / 2..].iter().map(inertia).collect();
+    upper.sort_by(f64::total_cmp);
+    let rotor = upper[upper.len() / 2];
+    let load = inertia(closed.iter().min_by(|a, b| a.frequency.total_cmp(&b.frequency)).unwrap()) - rotor;
+    if !(rotor > 0.0 && load > 0.0) {
+        return f64::NAN;
+    }
+    // Per measured frequency: ln f, C's ln gain and unwrapped phase, and y.
+    let mut rows: Vec<(f64, f64, f64, Cx)> = Vec::with_capacity(closed.len());
+    for p in closed {
+        let (sv, plant) = (s(p.frequency), p.plant);
+        let c = div([p.re, p.im], plant);
+        let ls = mul([load, 0.0], sv);
+        let load_side = sub(div([1.0, 0.0], plant), mul([rotor, 0.0], sv));
+        let y = div(mul(load_side, ls), sub(ls, load_side));
+        let raw = c[1].atan2(c[0]);
+        let phase = rows.last().map_or(raw, |r| raw + tau * ((r.2 - raw) / tau).round());
+        rows.push((p.frequency.ln(), c[0].hypot(c[1]).ln(), phase, y));
+    }
+    let (low, high) = (rows[0].0, rows[rows.len() - 1].0);
+    const FINE: usize = 3000;
+    let fine: Vec<(f64, Cx, Cx)> = (0..FINE)
+        .map(|i| {
+            let x = low + (high - low) * i as f64 / (FINE - 1) as f64;
+            let k = rows.partition_point(|r| r.0 <= x).clamp(1, rows.len() - 1);
+            let (a, b) = (&rows[k - 1], &rows[k]);
+            let t = if b.0 > a.0 { ((x - a.0) / (b.0 - a.0)).clamp(0.0, 1.0) } else { 0.0 };
+            let (gain, phase) = ((a.1 + (b.1 - a.1) * t).exp(), a.2 + (b.2 - a.2) * t);
+            (x.exp(), [gain * phase.cos(), gain * phase.sin()], add(a.3, mul([t, 0.0], sub(b.3, a.3))))
+        })
+        .collect();
+    (0..=300)
+        .map(|j| {
+            let kappa = 10f64.powf(-3.0 + 3.0 * j as f64 / 300.0);
+            let points: Vec<LoopPoint> = fine
+                .iter()
+                .map(|&(f, c, y)| {
+                    let (sv, ky) = (s(f), mul([kappa, 0.0], y));
+                    let ls = mul([load, 0.0], sv);
+                    let impedance = add(mul([rotor, 0.0], sv), div(mul(ky, ls), add(ky, ls)));
+                    let plant = div([1.0, 0.0], impedance);
+                    let l = mul(c, plant);
+                    LoopPoint { frequency: f, re: l[0], im: l[1], sensitivity: 1.0 / (1.0 + l[0]).hypot(l[1]), plant }
+                })
+                .collect();
+            loop_margins(&points).gain_margin_db
+        })
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// A velocity loop that keeps oscillating on its own across a gearbox's play after a kick at rest
@@ -5348,6 +5458,7 @@ line_module_efficiency = 0.9
             peak_sensitivity: 1.0,
             peak_frequency_hz: 10.0,
             hammering: None,
+            play_margin_db: f64::NAN,
         };
         assert!(m(f64::NAN, 20.0, true).stable());
         let hammering = Some(Hammering { frequency_hz: 645.0, torque_nm: 0.7 });

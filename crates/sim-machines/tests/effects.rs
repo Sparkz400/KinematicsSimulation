@@ -725,6 +725,36 @@ fn a_switch_the_machine_does_not_model_is_refused_switched_on() {
     assert_eq!(refused, 4 * 4 + 3 * 3 + 2 + 4 * 2);
 }
 
+/// The margin across a gearbox's play (`play_margin`, the describing function's) on the five-bar's tool turn, whose
+/// loop hammers across its 1 arcmin play at 0.08 N m s/rad (650 Hz): there it reads -4.18 dB, at the shipped 0.033
+/// +3.56 dB, both saying the loop hammers from 0.0494 to 0.0497 (the loop gain is kv times the rest). That is the
+/// swing with the rotor's friction faded; the time run with the friction off (`backlash_hammering`, bisected: quiet at
+/// 0.04758, hammering at 0.04797) hammers within 5 % of it, quiet at 0.95 times it and hammering at 1.05 times. With
+/// the friction on it hammers only from 0.078 (the friction still damps a swing of some rad/s at the rotor). The arms'
+/// loops, whose play hardly opens, read 7.46 and 7.68 dB.
+#[test]
+fn the_margin_across_the_play_says_where_the_tool_turn_hammers() {
+    use sim_components::analysis::{backlash_hammering, velocity_loop_margins};
+    let entry = sim_machines::find("parallel-scara").unwrap();
+    let at = |kv: f64, friction: bool| {
+        let mut cfg = entry.config();
+        cfg.set_text(&format!("drive.4.velocity_kp_nm_s_rad = {kv}")).unwrap();
+        if !friction {
+            for key in ["joint_friction", "motor_friction", "gearbox_drag", "motor_stiction", "iron_loss"] {
+                cfg.set_text(&format!("effects.{key} = false")).unwrap();
+            }
+        }
+        cfg
+    };
+    let margin = |kv: f64| velocity_loop_margins(entry, &at(kv, true), &[]).unwrap()[0].1[3].play_margin_db;
+    let (hammers, shipped) = (margin(0.08), margin(0.033));
+    assert!(hammers < 0.0 && shipped > 0.0, "{hammers} dB at 0.08, {shipped} dB at 0.033");
+    let onset = 0.033 * 10f64.powf(shipped / 20.0);
+    assert!((onset / (0.08 * 10f64.powf(hammers / 20.0)) - 1.0).abs() < 0.01, "{onset}");
+    assert_eq!(backlash_hammering(entry, &at(0.95 * onset, false), 3).unwrap(), None, "{onset}");
+    assert!(backlash_hammering(entry, &at(1.05 * onset, false), 3).unwrap().is_some(), "{onset}");
+}
+
 /// The fit's twist of a train (`Machine::twist_at`) behind a screw whose stiffness follows the nut is the spring's where
 /// the nut is, the rotor's angle over the ratio: the screw axis (fixed-supported, fixed bearing at -0.1 m, root 21.2
 /// mm, E A = 2.06e11 pi 0.0212^2 / 4 = 7.2716e7 N) with 1 N m at the motor and the nut 0.1 and 0.3 m along twists more at
