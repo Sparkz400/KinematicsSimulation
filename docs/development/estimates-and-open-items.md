@@ -238,6 +238,27 @@ Not re-run (old figures stand; each needs a long optimiser or worst-corner run):
 
 ## 10. Reported by the document agents
 
+Fixed (second audit, 21 November):
+- The lumped forearms (planar delta, D3/D4 with `forearm_inertia` off, parallel SCARA) had their momentum and
+  first moment at the inertia's split, their weight at the middle: V + g · c drifted (D2 0.060 N s, 2.6 N of
+  vertical reaction). The frame momentum now takes them as rods (a sixth at each end, two thirds at the middle);
+  after the fix 2e-11 N s and 1e-6 N on the audit's probe. The kinetic energy stays the split's (the model's).
+- The T-gantry's belt runs moved in the frame momentum but had no weight: the vertical runs' 0.16 kg now weigh on Z
+  (`z_weight`; hold 2T₂ − T₁ − T₃ = 70.216 N, not 68.647), in the crate and, from its spans, in the machine file
+  (`runs_height`, which weighs every file's runs where its momentum has them: the XYZ portal's Z belt too).
+  V + g · c drift over the default cycle 0.4708 J before, 1.3e-7 J after.
+- `config-reference.md`'s beam mode "59 Hz in the middle" is the stiff belt's; on the default belt it couples
+  with Z's mode to 51.5 and 140.1 Hz.
+
+Open (second audit):
+- The drive's current: the q setpoint is held inside the current circle, the q current itself stands up to 2 %
+  above it while the drive goes into field weakening at full current (1FK2205-4AF single axis: 10.98 A against
+  10.9 A). Not the d current's lag (taking the circle from the d setpoint changes it by 5 %); the q loop's error
+  scales with 1 / current gain, with voltage to spare. Cause not found; documented in model-reference.
+- The H4's lumped model (`forearm_inertia` off; on as shipped) puts the forearms' weight at the inertia's split
+  (2/3 at the elbow), not at their middles as the D3 does: momentum and weight agree with each other, both at the
+  wrong place. Not changed.
+
 Fixed:
 - `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another
   mode (T-gantry × 0.103, EXCT-30 × 0.400 against their own sweeps): each belt mode is now paired with
