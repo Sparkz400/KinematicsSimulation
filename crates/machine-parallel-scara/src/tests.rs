@@ -396,6 +396,30 @@ fn stroke_stiffness_by_hand() -> f64 {
     1.0 / (1.0 / screw + lever * lever / 3000.0)
 }
 
+/// The rest sag's allowance (`rest_sag`) holds the whole stroke with the screw's stiffness following the nut: the
+/// stroke's half play and the 6 kg's weight over the screw where it is softest on the stroke 0..0.2 m, plus a tenth
+/// (the stroke's term the largest here). With the shaft fixed at one end (the shipped fixed bearing at 0.25 m) that is
+/// the stroke's bottom, the nut a = 0.25 m from it, not the shaft's far end a = 0.3 m beyond the stroke
+/// (`stroke_stiffness_by_hand`); held at both ends the shaft's middle a = 0.15 m (z = 0.1), a (L - a) / (E A L). The
+/// coupling's play of 1 rad [test value] is 0.5 x 0.02 / 2 pi = 1.591549e-3 m at the carriage. The flanks' band off, so
+/// the spring is linear; the shipped allowance is the arms' play's (unchanged).
+#[test]
+fn the_rest_sag_takes_the_screw_where_it_is_softest_on_the_stroke() {
+    let ea = 2.06e11 * std::f64::consts::FRAC_PI_4 * 0.0135f64.powi(2);
+    let lever = 0.02 / std::f64::consts::TAU;
+    let series = |shaft: f64| 1.0 / (shaft + 1.0 / 2e8 + 1.0 / 4e8 + lever * lever / 3000.0);
+    let (weight, half) = (6.0 * 9.80665, 0.5 * lever);
+    for (mounting, k) in [("fixed-free", series(0.25 / ea)), ("fixed-fixed", series(0.15 * 0.15 / (0.3 * ea)))] {
+        let d = scara(&[
+            "effects.screw_stiffness_with_position = true",
+            "effects.gearbox_lost_motion = false",
+            "gearbox.3.backlash_rad = 1.0",
+            &format!("screw.mounting = \"{mounting}\""),
+        ]);
+        close(d.rest_sag(), 1.1 * (half + weight / k), 1e-6, mounting);
+    }
+}
+
 /// The carriage on its screw rings with the rotor held at sqrt(K / m) / 2 pi, K = 4.75026e7 N/m (`stroke_stiffness_by_hand`),
 /// m = 1 kg carriage + 5 kg payload: sqrt(7.91710e6) / 2 pi = 447.8 Hz (not the 570 Hz the rigid model's comment guessed;
 /// with the rotor free, its 1.43e-5 kg m2 as (2 pi / 0.02)^2 1.43e-5 = 1.41 kg at the nut, the pair rings at

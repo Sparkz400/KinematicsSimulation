@@ -757,14 +757,15 @@ impl WaferHandler {
 
     /// How far the motors' pose can be from the wafer's at rest: each gearbox at either side of its backlash (nothing
     /// loads them at rest, gravity being out of the plane): the column's half play in rad on theta, the upper arm's
-    /// times the most dr/dphi, 2 L, on r; plus a tenth. At least the default 0.1 mm; that alone in the rigid model.
+    /// times the most dr/dphi, 2 L, on r; plus a tenth. At least the default 0.1 mm; that alone in the rigid model. The
+    /// allowance holds anywhere on the stroke: the screw's stiffness where it is softest there (`Gearbox::softest`).
     fn rest_sag(&self) -> f64 {
         if !self.elastic {
             return 1e-4;
         }
         let [theta, phi] = [&self.joints[0], &self.joints[1]].map(|j| j.gearbox.half_backlash);
         // The stroke's: half its play and what its weight compresses the screw by, m g / K, in m.
-        let k = self.lift.joint.gearbox.stiffness;
+        let k = self.lift.joint.gearbox.softest(self.lift.joint.range).stiffness;
         let lift = self.lift.joint.gearbox.half_backlash + if k > 0.0 { -self.lift.weight(true) / k } else { 0.0 };
         (1.1 * theta.max(2.0 * self.arm.link * phi).max(lift)).max(1e-4)
     }

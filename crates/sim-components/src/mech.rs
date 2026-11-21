@@ -1153,6 +1153,16 @@ impl Gearbox {
         std::borrow::Cow::Owned(here)
     }
 
+    /// The gear where the screw behind it is softest over the joint's travel `lo..=hi` (`at`): the shaft's compliance
+    /// grows with the nut's distance from the fixed bearing, so an end of the travel, or with both ends held the
+    /// shaft's middle where the travel reaches it. Itself without a screw that follows the nut.
+    pub fn softest(&self, (lo, hi): (f64, f64)) -> std::borrow::Cow<'_, Self> {
+        let Some(t) = self.travel else { return std::borrow::Cow::Borrowed(self) };
+        let middle = [-0.5, 0.5].map(|s| (t.fixed_bearing_at + s * t.length).clamp(lo, hi));
+        let at = [lo, hi, middle[0], middle[1]].into_iter().max_by(|a, b| t.delta(*a).0.total_cmp(&t.delta(*b).0));
+        self.at(at.unwrap_or(lo))
+    }
+
     /// F^2 K_m'(s) / (2 K_m^2): what the Maxwell arm's store K_m (x - u)^2 / 2 gains per unit of the nut's place s at a
     /// fixed x and u, F = K_m (x - u) the arm's force (`at`: K_m follows the screw's stiffness). As with the spring's
     /// `travel_force`, the rotor feels it. 0 without an arm or with the dampers not laid out along the stroke.
