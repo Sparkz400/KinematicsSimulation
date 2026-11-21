@@ -333,7 +333,7 @@ T-gantry, and machine files whose `machine.lean` node names these values (`machi
 
 ## `[beam]`
 
-T-gantry. With `effects.beam_sag`: the X beam as a simple span between the posts; carriage, Z axis and payload, m g, sag it under the carriage at a from the left post by m g a² b² / (3 E I L), b = L − a (L³ / (48 E I) per newton in the middle), and the tool is that much lower. That is quasi-static; with `effects.beam_vertical_mode` the beam's first vertical mode with the carriage on it is a coordinate of its own (59 Hz in the middle of the default gantry, higher towards the posts): mass m_c + m_z + M, stiffness the span's `1 / span_compliance`, M = ∫ μ φ² for the span's static shape (17 μ L / 35 in the middle).
+T-gantry. With `effects.beam_sag`: the X beam as a simple span between the posts; carriage, Z axis and payload, m g, sag it under the carriage at a from the left post by m g a² b² / (3 E I L), b = L − a (L³ / (48 E I) per newton in the middle), and the tool is that much lower. That is quasi-static; with `effects.beam_vertical_mode` the beam's first vertical mode with the carriage on it is a coordinate of its own (in the middle of the default gantry 59.3 Hz with a stiff belt; on the default belt the Z axis's own mode on it, 83 Hz, rides on the beam through −m_z and the two couple to 51.5 and 140.1 Hz: M = [[13.21, −7], [−7, 7]] kg in (w, z), K = diag(1.835·10⁶, 1.92·10⁶) N/m; higher towards the posts): mass m_c + m_z + M, stiffness the span's `1 / span_compliance`, M = ∫ μ φ² for the span's static shape (17 μ L / 35 in the middle).
 
 | Key | In | Unit | Meaning | Source |
 | --- | --- | --- | --- | --- |
