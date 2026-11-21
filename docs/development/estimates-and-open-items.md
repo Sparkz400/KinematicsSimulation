@@ -206,9 +206,9 @@ commanded acceleration.
 - The synthetic belt dataset was recorded by an older model (its stiffness fitted as 1.027 ± 0.006
   of the config's) and was regenerated; a test now checks a fresh trace fits its own config.
 - Verdicts of every shipped machine: all machine files pass; of the default configs only the crane
-  fails (residual sway 0.323 against 0.05, and the warm start that follows from it, with the gains of
-  section 2), which is what
-  it ships to show without input shaping.
+  fails (residual sway 0.300 against 0.05 on 21 November 2026, 0.323 on 17 November, with the gains of
+  section 2; its warm start converges now, 0.019 K), which is what it ships to show
+  without input shaping.
 
 ## 9. Documents: what was regenerated and what was not
 
@@ -221,20 +221,42 @@ Regenerated on 17 November from runs on the merged build, or checked against the
 - `docs/fmi.md`: output counts and a fresh check log of all five FMUs.
 - `docs/user-guide.md` and `docs/de/benutzerhandbuch.md`: every section except the blocks below.
 
-Not re-run (old figures stand; each needs a long optimiser or worst-corner run):
+Re-run on 21 November 2026 on the build of main 59a2aff7 (after the screw and rack damping in series and
+sourced, the screw stiffness that follows the nut, the T-gantry's belt runs' weight, the XYZ portal's Z belt loop,
+the planner's train allowance and exact run join, the retuned tripod and wafer Z gains, the crane's slack sling):
 
-- User guides, "Shorten a cycle": the `--worst` paragraph and its line in the limits list (they quote
-  1.492 s and 5.36 s from before the stage and contradict the regenerated paragraphs above them); the
-  clearance, box and two-box runs.
-- User guides: the duty-mix example and the `--robust` figures; the "129 cycles" count (`--bands`
-  prints none); the D3 and D2 `--bands --worst` settling values; the linear delta's phase margin;
-  the examples on `exct-30-empty.toml`, `swing.csv` and `pick.mod`, whose inputs are not in the repo.
-- `docs/validation.md`: the machine files of the friction feedforward table after the xyz portal; the
-  base-compliance table; the T-gantry budget; the EXCT-30 margins and worst corner.
-- `docs/model-reference.md` (from "Motion controller" on): the robust optimiser's 2.344 s, the
-  worst-corner times, the EXCT-30 band figures, the warm-start rises.
-- Figures the agents could not reproduce and left as written are named in the commit messages of
-  17 November.
+- `docs/user-guide.md` and `docs/de/benutzerhandbuch.md`: every `$ sim-cli` block and the figures
+  quoted from them, among them those the list of 17 November left out: the clearance (2.344 s, 2.228 s
+  nominal) and box (3.052 s) optimiser runs, the EXCT-30 optimiser and its pareto front, the worst
+  corner (3101 cycles), Morris, Sobol', the duty mix (on a reconstructed `exct-30-empty.toml`:
+  `exct-30.toml` with `effects.payload = false`), the swing fit (`swing.csv` rebuilt from the guide's
+  description reproduces the printed fit to the last digit), the band count (139 cycles, 69 bounded
+  values), the tripod's and hexapod's margins and gains, the thermal-feedback figures.
+- `docs/overview.md`, `docs/mcp.md`: every block.
+- `docs/validation.md`: the friction feedforward table, all rows and machine files; the EXCT-30 worst
+  corner; the wafer, tool-space and tripod rows.
+- `docs/model-reference.md`: the base table's T-gantry, screw, rack, parallel SCARA and hexapod rows;
+  the robust optimiser; the warm-start rises; the energy budget's tolerance; the wafer column's and the
+  parallel SCARA stroke's modes (at the nut); the corner path's motor speeds.
+- `docs/config-reference.md`: the tripod's and hexapod's margins.
+- `docs/machine-files.md`, `docs/mechanisms.md` and their German twins: the H-bot block, the rack
+  gantry's and dual gantry's figures, the yaw path errors, the wafer lift's screw, the crane's cycle,
+  the arm's rest offset; and the claims the program contradicted (a screw's stiffness at the softest
+  place, the parallel SCARA's rigid stroke and turn, the crane's failing warm start).
+
+Not re-run on 21 November 2026 (the figures stand as dated in the text):
+
+- The T-gantry's `optimise --worst` (some 5000 corner runs, over an hour on 4 threads) and `--robust`
+  in the guides; the two-box height profile (4.72 s against 3.87 s, a test's figures).
+- The D3's Morris figures (36 values, 370 cycles; the D3 is unchanged by the changes above).
+- The base table's rows other than the five above (17 November).
+- The mode damping ratios of the tripod's, hexapod's and parallel SCARA's modes: another agent's fix of
+  the damping reported at the far end of a screw moves them; left for that fix.
+- `docs/machine-files.md`: the dual gantry's yaw mode (155.0 and 149.5 Hz with J raised to 20 kg m²):
+  `sim-cli modes --axis-index 1` reports one mode only, and not the yaw's figures (96.4 Hz in the
+  middle, 151.7 and 124.5 Hz at the ends, damping 0); not reproduced, the cause not looked into.
+- `docs/web.md`: the CoreXY path's sizing check (1.661 s), whose path the page does not name.
+- The T-gantry budget named in the list of 17 November: no such table is in `docs/validation.md`.
 
 ## 10. Reported by the document agents
 
