@@ -509,6 +509,18 @@ Fixed:
   now y_2 midway between the pulley (drawn standing at x = 1.5 m) and the far idler at the bridge's x, y_3 none (its
   wheels meet in the plane). Size: 0.1 kg of belt up to 0.75 m off along x at the Y speed, about 0.014 N m s about z
   at 0.19 m/s; only with effects.base_compliance, off in both files.
+  Fixed since (22 November): each section names its belt's plane (`plane`: "x-z" standing along x, "x-y" flat,
+  "y-z" standing along y; default as before, so the H-bot, CoreXY and T-gantry do not change; sections sharing a wheel
+  share it, else refused), and a pulley may ride on a body (`body`, its `at_m` from it). The wheels' check, the wraps,
+  the frame momentum's wheel spin (about the plane's normal, -(along x up) for clockwise) and the runs' places
+  (`run_midpoints`) take each section's plane. The dual, rack, XYZ, screw and C portals' and both five-axis files' Y belts
+  lie flat (`plane = "x-y"`) with the Y pulley on the bridge, 0.07 m before its y = 0. Dual gantry at x = 1.0, y = 0.3,
+  vy = 0.2 m/s: angular momentum [4.0e-4, 2.5e-3, 0.98500] N m s before, [0, 0, 0.997028] after, the hand value to
+  1e-16 (`the_dual_gantrys_frame_momentum_with_its_y_belt_flat_by_hand`: the Y carriage's 5 x vy, the pulley's and
+  rotor's -(J_p + i J_r) vy / r about z, the runs' -4.72e-4 from their middles' offsets off the wheels' line); the wheels'
+  check covers y1 and y2 along y again (dual and rack 4 sections checked, before 0;
+  `the_gantries_y_belts_turn_their_far_idlers_as_they_run`). The screw portal's Y wrap with effects.belt_wrap is the flat
+  one, pi + 2 asin(r / (y + 0.07)) (3.3774330 rad at y = 0.1, was 3.3419275 from the standing drawing).
 
 - The angular momentum of the T-gantry crate against its file (section 4: not compared, different origins and belt-run
   geometry). Compared now over 1 s of the default cycle, every 50 steps, both about the place of the Z axis's centre of

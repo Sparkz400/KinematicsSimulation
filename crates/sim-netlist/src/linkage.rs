@@ -311,6 +311,7 @@ pub(crate) fn read(
             inertia: 0.0,
             pulley: String::new(),
             at: None,
+            body: None,
             clockwise: false,
             transmission: Transmission::Belt,
             axis: None,

@@ -105,10 +105,11 @@ fn the_belt_wraps_a_pulley_as_far_as_the_places_of_its_neighbours_say() {
 
 /// The screw portal's belts wrap their pulleys beside its Z screw (effects.belt_wrap), whose motor drives no belt and
 /// has no wrap (NaN). Each belt runs from its carriage's clamp round its pulley (r = 0.02 m, anticlockwise) and back to
-/// the same clamp, both at z = 0.06 m in the belt's plane: the two runs are the tangents from one point at the distance
-/// D, each leaning asin(r / D) off the line of centres, so the belt wraps half a turn plus twice that,
-/// pi + 2 asin(r / D). With the tool at x = 0.3 m: X's pulley at x = -0.1 m, D = 0.4 m, pi + 2 asin(0.05) =
-/// 3.2416344 rad; Y's at x = 0.5 m, D = 0.2 m, pi + 2 asin(0.1) = 3.3419275 rad.
+/// the same clamp, in the belt's plane: the two runs are the tangents from one point at the distance D, each leaning
+/// asin(r / D) off the line of centres, so the belt wraps half a turn plus twice that, pi + 2 asin(r / D). With the tool
+/// at x = 0.3 m, y = 0.1 m: X's belt standing (x-z), its pulley at x = -0.1 m, D = 0.4 m, pi + 2 asin(0.05) =
+/// 3.2416344 rad; Y's lying flat (x-y) on the bridge, its pulley 0.07 m before the Y carriage's y = 0, D = 0.17 m,
+/// pi + 2 asin(2 / 17) = 3.3774330 rad.
 #[test]
 fn the_belts_wrap_their_pulleys_beside_a_screw() {
     let cfg = with(&file("screw-portal.toml").config(), &["effects.belt_wrap = true"]);
@@ -116,7 +117,8 @@ fn the_belts_wrap_their_pulleys_beside_a_screw() {
     let wraps = machine.belt_wraps(&[0.3, 0.1, 0.05]);
     assert_eq!(wraps.len(), 3, "{wraps:?}");
     assert!(close(wraps[0], PI + 2.0 * 0.05f64.asin(), 1e-12) && (wraps[0] - 3.241_634_4).abs() < 1e-7, "{wraps:?}");
-    assert!(close(wraps[1], PI + 2.0 * 0.1f64.asin(), 1e-12) && (wraps[1] - 3.341_927_5).abs() < 1e-7, "{wraps:?}");
+    let y = PI + 2.0 * (2.0f64 / 17.0).asin();
+    assert!(close(wraps[1], y, 1e-12) && (wraps[1] - 3.377_433_0).abs() < 1e-7, "{wraps:?} against {y}");
     assert!(wraps[2].is_nan(), "the screw's motor: {wraps:?}");
 }
 

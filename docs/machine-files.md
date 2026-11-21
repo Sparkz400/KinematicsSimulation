@@ -267,9 +267,11 @@ the file. The order of the motors in the file is the order of the motor signals 
 | | `lever_axis` | | an axis whose travel shortens the lever |
 | | `side_load` | | the guide also carries the overhang's inertia force m a; default false |
 | `axis` | `cable_chain` | | the axis drags a cable chain fixed at its 0 end (`effects.cable_chain`, values in `[cable_chain]`); default false |
-| `pulley` | `at_m` | | where the 3D view draws it, `[x, y, z]`, m; default at an end of the first axis; with `effects.belt_wrap` its place in the belt's plane (x, z; x, y where the belt lies flat, its sections changing with axes along x and along y and none along z) |
-| `pulley`, `idler` | `clockwise` | | with `effects.belt_wrap`: the belt runs round it clockwise, seen from the front (x right, z up), or from above (x right, y away) where the belt lies flat, and followed along the routes in their order; default false |
+| `pulley` | `at_m` | | where the 3D view draws it, `[x, y, z]`, m (from its body where it has one); default at an end of the first axis; its place in its belt's plane (the section's `plane`), which the wrap (`effects.belt_wrap`) and the places of the belt's runs in the frame momentum are worked out from |
+| | `body` | | a body it rides on (a motor on a moving axis, as the portals' Y motor on the bridge): `at_m` is then from that body |
+| `pulley`, `idler` | `clockwise` | | the belt runs round it clockwise, followed along the routes in their order, seen in its belt's plane: from the front (x right, z up) in x-z, from above (x right, y away) in x-y, from +x (y right, z up) in y-z; its spin in the frame momentum and the wrap take this sense; default false |
 | `section` | `route` | | the pulleys, idlers and bodies (a clamp on it) the section runs past, in order, for the 3D view; default its pulleys and the body it is clamped to |
+| | `plane` | | the plane its belt runs in, whose normal its wheels turn about: `"x-z"` standing along x (about y), `"x-y"` flat (about z), `"y-z"` standing along y (about x); the places of its route's wheels in it give the belt's runs their places in the frame momentum, the wrap and the wheels' check; sections that share a pulley or an idler lie in one plane (else refused); default `"x-z"`, or `"x-y"` for every section where one section's length changes with axes along x and along y and none along z (an H-bot's, a CoreXY's). The shipped portals' and gantries' Y belts lie flat (`"x-y"`, the pulley on the bridge); the 3D view draws a `"y-z"` belt's wheels facing the front |
 | `idler` | `speed` | required | belt speed past it per speed of each axis, m/s per m/s (`effects.idlers`), positive the way a positive turn of the first pulley feeding its section moves the belt (the sense of its spin in the frame momentum) |
 | | `radius_m`, `inertia_kgm2`, `friction_nm` | required | its radius, inertia and bearing friction torque |
 | | `body`, `at_m` | | a body it rides on and where the 3D view draws it (from that body) |
@@ -579,7 +581,7 @@ beyond, it breaks loose. With the same efficiency both ways it is the joint kit'
 
 **The belt's wrap** (`effects.belt_wrap`). With it the teeth in mesh at each driven pulley are wrap r / p (p the tooth
 pitch) in place of `ratings.belt_teeth_in_mesh`, in the tooth-jump law and the belt's tooth load. The wrap is worked out
-at the pose from the places of the wheels in the belt's plane (x and z of the 3D view; x and y where the belt lies flat, as an H-bot's or a CoreXY's): the pulley's `at_m`, and the
+at the pose from the places of the wheels in the belt's plane (the section's `plane`: x and z of the 3D view by default; x and y where the belt lies flat, as an H-bot's or a CoreXY's): the pulley's `at_m` (from its body where it rides on one), and the
 wheels before and after it along the belt, the last point but one of the route of the section that ends at the pulley
 and the second of the route of the section that starts there (an idler with its `at_m`, from its body where it rides on
 one; a body, a clamp on it, where the 3D view draws it; another pulley). Each wheel's `clockwise` says which way the
@@ -902,8 +904,9 @@ machine; nothing about them is particular to machine files.
 
 ## What machine files cannot do yet
 
-- A pulley stands where its `at_m` puts it (it rides on no body), and the wrap's places are the 3D view's: the section
-  lengths are not checked against them.
+- The wrap's places are the 3D view's: the section lengths are not checked against them by a file's reading (the
+  wheels' check of the shipped files in `sim-netlist` compares them). The XYZ portal's Z pulley stands where its `at_m`
+  puts it, not on the Y carriage it rides on.
 - `tool_flex`: one leaning body, along a horizontal axis; it leans in the elastic model only (as in the crate).
 - A self-locking worm's rigid model takes the overhauling flank's friction from the torque the wheel holds at rest, so
   it brakes a heavy wheel smoothly where the elastic model jams; both agree at a steady speed.

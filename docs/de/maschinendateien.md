@@ -273,8 +273,10 @@ Motorsignale und von `--motor N`.
 | | `side_load` | | die Führung trägt auch die Trägheitskraft m a des Überhangs; Vorgabe false |
 
 | `axis` | `cable_chain` | | die Achse schleppt eine am Ende 0 befestigte Energiekette (`effects.cable_chain`, Werte in `[cable_chain]`); Vorgabe false |
-| `pulley` | `at_m` | | wo die 3D-Ansicht sie zeichnet, `[x, y, z]`, m; Vorgabe an einem Ende der ersten Achse |
+| `pulley` | `at_m` | | wo die 3D-Ansicht sie zeichnet, `[x, y, z]`, m (von ihrem Körper aus, wo sie einen hat); Vorgabe an einem Ende der ersten Achse; ihre Lage in der Ebene ihres Riemens (`plane` des Abschnitts), aus der die Umschlingung (`effects.belt_wrap`) und die Orte der Trume des Riemens im Rahmenimpuls gerechnet werden |
+| | `body` | | ein Körper, auf dem sie mitfährt (ein Motor auf einer bewegten Achse, wie der Y-Motor der Portale auf der Brücke): `at_m` ist dann von diesem Körper aus |
 | `section` | `route` | | die Scheiben, Umlenkrollen und Körper (eine Klemme daran), an denen der Abschnitt vorbeiläuft, der Reihe nach, für die 3D-Ansicht; Vorgabe seine Scheiben und der Körper, an dem er geklemmt ist |
+| | `plane` | | die Ebene, in der sein Riemen läuft und um deren Normale seine Räder drehen: `"x-z"` stehend entlang x (um y), `"x-y"` flach (um z), `"y-z"` stehend entlang y (um x); die Orte der Räder seiner Route in ihr geben den Trumen des Riemens ihre Orte im Rahmenimpuls, der Umschlingung und der Prüfung der Räder; Abschnitte, die sich eine Scheibe oder Umlenkrolle teilen, liegen in einer Ebene (sonst abgelehnt); Vorgabe `"x-z"`, oder `"x-y"` für alle Abschnitte, wo sich die Länge eines Abschnitts mit Achsen entlang x und entlang y und keiner entlang z ändert (beim H-Bot, beim CoreXY). Die Y-Riemen der mitgelieferten Portale und Gantrys liegen flach (`"x-y"`, die Scheibe auf der Brücke); die 3D-Ansicht zeichnet die Räder eines `"y-z"`-Riemens nach vorn gewandt |
 | `idler` | `speed` | Pflicht | Riemengeschwindigkeit an ihr je Geschwindigkeit jeder Achse, m/s je m/s (`effects.idlers`), positiv in der Richtung, in die eine positive Drehung der ersten Scheibe, die ihren Abschnitt speist, den Riemen bewegt (der Drehsinn ihres Dralls im Rahmenimpuls) |
 | | `radius_m`, `inertia_kgm2`, `friction_nm` | Pflicht | ihr Radius, ihre Trägheit und ihr Lagerreibmoment |
 | | `body`, `at_m` | | ein Körper, auf dem sie mitfährt, und wo die 3D-Ansicht sie zeichnet (von diesem Körper aus) |
@@ -294,7 +296,7 @@ Motorsignale und von `--motor N`.
 | | `payload_inertia_kgm2` | | die seiner Last, solange `effects.payload` an ist und der Greifer sie hält, kg m² |
 | | `friction_coulomb_nm`, `friction_viscous_nm_s_rad` | | Coulomb- und viskose Reibung seines Lagers an der Achse, mit `effects.guide_friction`; Vorgabe 0 |
 | | `strain_wave` | | die Tabelle der Lebensdauerwerte seines Wellgetriebes, aufgebaut wie `[strain_wave]` |
-| `pulley`, `idler` | `clockwise` | | mit `effects.belt_wrap`: der Riemen läuft im Uhrzeigersinn um sie, von vorn gesehen (x nach rechts, z nach oben), bei einem flach liegenden Riemen von oben (x nach rechts, y nach hinten), und den Routen in ihrer Reihenfolge nach; Vorgabe false; `at_m` ist dann ihre Lage in der Ebene des Riemens (x, z; x, y beim flach liegenden Riemen, dessen Abschnitte sich mit Achsen entlang x und entlang y und keiner entlang z ändern) |
+| `pulley`, `idler` | `clockwise` | | der Riemen läuft im Uhrzeigersinn um sie, den Routen in ihrer Reihenfolge nach, in der Ebene ihres Riemens gesehen: von vorn (x nach rechts, z nach oben) in x-z, von oben (x nach rechts, y nach hinten) in x-y, von +x (y nach rechts, z nach oben) in y-z; ihr Drall im Rahmenimpuls und die Umschlingung nehmen diesen Sinn; Vorgabe false; `at_m` ist ihre Lage in dieser Ebene |
 | `worm` | `gearbox` | Pflicht | dieses Getriebe ist eine Schneckenstufe ([unten](#schneckengetriebe)); eine Schnecke je Getriebe |
 | | `ratio` | Pflicht | ihre Übersetzung, anstelle der des Getriebes |
 | | `efficiency`, `back_efficiency` | Pflicht | angetrieben von der Schnecke (über 0, höchstens 1) und rückwärts vom Rad (höchstens 1; 0 oder weniger sperrt selbst, was ein angetriebenes eta unter 0,5 verlangt) |
@@ -604,7 +606,7 @@ Getriebes: 1 - eta wird in beide Richtungen zu (1 - eta) (1 - s + s nu / nu_ref)
 **Die Umschlingung des Riemens** (`effects.belt_wrap`). Mit ihr sind die eingreifenden Zähne an jeder getriebenen
 Scheibe Umschlingung r / p (p die Zahnteilung) anstelle von `ratings.belt_teeth_in_mesh`, im Gesetz des
 Zahnüberspringens und in der Zahnlast des Riemens. Die Umschlingung wird in der Lage aus den Orten der Räder in der
-Ebene des Riemens gerechnet (x und z der 3D-Ansicht; x und y beim flach liegenden Riemen eines H-Bots oder CoreXY): `at_m` der Scheibe und die Räder vor und nach ihr entlang des
+Ebene des Riemens gerechnet (`plane` des Abschnitts: x und z der 3D-Ansicht als Vorgabe; x und y beim flach liegenden Riemen eines H-Bots oder CoreXY): `at_m` der Scheibe (von ihrem Körper aus, wo sie auf einem mitfährt) und die Räder vor und nach ihr entlang des
 Riemens, der vorletzte Punkt der Route des Abschnitts, der an der Scheibe endet, und der zweite der Route des
 Abschnitts, der dort beginnt (eine Umlenkrolle mit ihrem `at_m`, von ihrem Körper aus, wo sie auf einem mitfährt; ein
 Körper, eine Klemme an ihm, wo die 3D-Ansicht ihn zeichnet; eine andere Scheibe). `clockwise` jedes Rads sagt, in
@@ -954,8 +956,9 @@ Maschine; an ihnen ist nichts besonders für Maschinendateien.
 
 ## Was Maschinendateien noch nicht können
 
-- Eine Scheibe steht, wo ihr `at_m` sie hinstellt (sie fährt auf keinem Körper mit), und die Lagen der Umschlingung
-  sind die der 3D-Ansicht: die Abschnittslängen werden nicht gegen sie geprüft.
+- Die Lagen der Umschlingung sind die der 3D-Ansicht: beim Lesen einer Datei werden die Abschnittslängen nicht gegen
+  sie geprüft (die Prüfung der Räder der mitgelieferten Dateien in `sim-netlist` vergleicht sie). Die Z-Scheibe des
+  XYZ-Portals steht, wo ihr `at_m` sie hinstellt, nicht auf dem Y-Wagen, auf dem sie mitfährt.
 - `tool_flex`: ein sich neigender Körper, entlang einer waagrechten Achse; er neigt sich nur im elastischen Modell (wie
   im Crate).
 - Das starre Modell einer selbsthemmenden Schnecke nimmt die Reibung der zurücktreibenden Flanke aus dem Moment, das das

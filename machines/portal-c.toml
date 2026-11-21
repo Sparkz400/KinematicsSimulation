@@ -923,7 +923,9 @@ id = "pulley_y"
 gearbox = "gearbox_y"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
-at_m = [0.5, -0.1, 0.06]
+# The Y motor rides on the bridge, its pulley 0.1 m before the Y carriage's y = 0 (the bridge drawn 0.03 m before it).
+body = "bridge"
+at_m = [0.0, -0.07, 0.0]
 pos = [300, 150]
 
 # X: clamp to motor (0.1 m + x) and motor round the far idler back to the clamp (0.1 m + stroke + 0.1 m - x).
@@ -943,13 +945,14 @@ pulleys = { pulley_x = -1 }
 route = ["pulley_x", "bridge"]
 pos = [450, 40]
 
-# Y, on the bridge.
+# Y, on the bridge, lying flat (plane x-y: its wheels turn about z).
 [[machine.section]]
 id = "y1"
 length_m = 0.1
 axes = { y = 1 }
 pulleys = { pulley_y = 1 }
 route = ["y_carriage", "pulley_y"]
+plane = "x-y"
 pos = [450, 110]
 
 [[machine.section]]
@@ -958,6 +961,7 @@ length_m = 0.7
 axes = { y = -1 }
 pulleys = { pulley_y = -1 }
 route = ["pulley_y", "y_carriage"]
+plane = "x-y"
 pos = [450, 190]
 
 # Z on its screw, on the Y carriage: the nut drives the slide.
