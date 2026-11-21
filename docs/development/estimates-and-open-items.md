@@ -112,7 +112,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The belt runs' sideways offset on the leaning Z axis; the belt runs riding on the beam's vertical mode | T-gantry | A first-order moment (T₁ − T₃)·0.04 m; the beam mode would fall 0.9 % (59.32 to 58.77 Hz). |
 | Angular momentum of the T-gantry crate against its machine file is not compared | T-gantry | Different origins and belt-run geometry. |
 | Idler signs of the y belts of the dual gantry and the rack gantry | machine files | Not checked: the 3D drawing does not model those routes faithfully. |
-| The screw's stiffness along the stroke keeps the far end's for the pose tolerance and the elastic feedforward's twist (`effects.screw_stiffness_with_position`, on in the shipped configs; the dynamics, modes and rest states follow the nut, the screw's damper at its ratio and the Zener arm with them); the hysteresis and the mesh bristle stay the far end's | wafer handler, screws | The feedforward's twist up to the far end's: 2.4 against 1.5 um on the wafer handler's column with the nut 0.15 m from the bearing. The hysteresis's and the bristle's stores would need their own place terms, as the spring's and the arm's have. |
+| The screw's stiffness along the stroke keeps the far end's for the pose tolerance and the elastic feedforward's twist (`effects.screw_stiffness_with_position`, on in the shipped configs; the dynamics, modes and rest states follow the nut, the screw's damper at its ratio and the Zener arm with them; since 21 November the hysteresis too, on the gear's own twist with its store's place term); the mesh bristle stays the far end's (it holds the output against the housing, its bound follows the nut, its store is not booked, and its stiffness is an unpublished factor whose tenth to ten times leave the loss the same) | wafer handler, screws | The feedforward's twist up to the far end's: 2.4 against 1.5 um on the wafer handler's column with the nut 0.15 m from the bearing. The bristle's stiffness up to 1.87 times the far end's there (no shipped config has a hysteresis behind such a screw). |
 | Belt-to-pulley heat conduction | linear delta | Not sized. |
 | The tube's single-mode shape for inertia with the static stiffness 3EI/L | D3, D4, H4 arm bending | Not sized. |
 | A contact that is not at the tool is pushed at the motors (machine crates, linkage, delta, scissor files) | obstacle contact | A load on a soft belt swings on by the belt's stretch (millimetres at 1 m/s). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
@@ -310,6 +310,11 @@ Fixed:
   wafer handler's cycle (axis limits) 7.762 s and its verdicts unchanged, timed time-optimal 6.135 s both ways, its
   motors' peaks 0.01 % lower (188.138 to 188.120 rad/s) and its wafer-slip row failing as before (3.9464 against 2.4517
   m/s^2, a check the plan does not keep).
+- The hysteresis behind a screw whose stiffness follows the nut kept the far end's values on the twist through gear and
+  screw: a load carried along the stroke wound it up (the twist changes by F dc at a force). It now acts on the gear's
+  own twist (y = r x, r = K1 here / K1 at the far end; the friction follows K1, the loop keeps its width), its store's
+  change with the place booked as stored (`the_hysteresis_behind_a_screw_acts_on_the_gears_own_twist`). No shipped
+  config has a hysteresis there: no shipped figure moves.
 - The ISW ball screw's constant-speed worst sample is 3.65 N m (3.6487), not 3.62: the gear damper in
   series (60e59797: 3.6156, the fit's S-profile RMS 0.3716) and the screw's own damping ratio 0.04
   (e78913f3: 3.6487, S-profile 0.3681). The worst sample sits at 14.5 s, the simulated torque -1.1 N m

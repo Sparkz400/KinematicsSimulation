@@ -489,6 +489,37 @@ fn the_energy_closes_with_the_screw_stiffness_following_the_nut() {
     }
 }
 
+/// With a hysteresis in the gears and the lift's coupling (`gearbox.hysteresis_rad` 1e-3, which the coupling takes from
+/// [gearbox]; the standard suite cannot tell, it never commits the gears' states) the default cycle's budget closes as
+/// without it: the hysteresis's state behind the screw lives on the gear's own twist (`Gearbox::at`), and the work the
+/// nut's place does on it is booked as stored. Measured: 6.4e-6 J of 48.13 J unaccounted (4.7e-6 J without the hysteresis,
+/// 5.1e-6 J on the twist through gear and screw before 21 November), the gearbox rows 1.7e-3 J more.
+#[test]
+fn the_budget_closes_with_a_hysteresis_behind_the_screw() {
+    let budget = |hysteresis: bool| {
+        let mut cfg = ENTRY.config();
+        if hysteresis {
+            cfg.set_text("gearbox.hysteresis_rad = 1e-3").unwrap();
+            assert!(WaferHandler::new(&cfg).unwrap().lift.joint.gearbox.hysteresis > 0.0);
+        }
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim_components::analysis::analyse_cycle(&mut sim).unwrap().budget.unwrap()
+    };
+    let (plain, looped) = (budget(false), budget(true));
+    let gears = |b: &sim_components::analysis::EnergyBudget| -> f64 {
+        b.rows.iter().filter(|r| r.id.contains("gearbox")).map(|r| r.energy).sum()
+    };
+    println!(
+        "{} J of {} J unaccounted, gearboxes {} J against {} J",
+        looped.unaccounted(),
+        looped.supply,
+        gears(&looped),
+        gears(&plain)
+    );
+    assert!(looped.unaccounted().abs() < 1e-6 * looped.supply, "{} J of {} J", looped.unaccounted(), looped.supply);
+    assert!(gears(&looped) > gears(&plain));
+}
+
 /// The hold at rest and on the move, by hand: pads mu g = 0.3 * 9.80665 = 2.941995 m/s^2, and while the lift
 /// accelerates down at 1 m/s^2 an in-plane 2 m/s^2 asks as much as 2 * 9.80665 / 8.80665 = 2.227100 at rest. Vacuum
 /// pads of 3 cm^2 at 60 kPa pull 18 N on the 0.1276 kg wafer, 141.065831 m/s^2: mu (g + 141.065831) = 45.261744 m/s^2.
