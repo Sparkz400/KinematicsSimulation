@@ -2883,10 +2883,10 @@ impl ConfigMachine {
         // A screw's, rack's, linear motor's or rotary's gearbox (with its converter) holds its axis on the rotor.
         for (kk, d) in self.direct.iter().enumerate() {
             if d.is_some() {
-                let k = &self.k[kk];
+                let (k, gear) = (&self.k[kk], self.gears[kk].at(self.pulley_angle(kk, pose)));
                 for i in 0..n {
                     for l in 0..n {
-                        stiffness[i][l] += self.gears[kk].stiffness * k[i] * k[l];
+                        stiffness[i][l] += gear.stiffness * k[i] * k[l];
                     }
                 }
             }
@@ -3497,10 +3497,11 @@ impl Machine for ConfigMachine {
                     (angles[kk], -belt - self.r[kk] * self.mesh.force(self.r[kk] * angles[kk]))
                 }
             };
-            let phi = self.ratio[kk] * (theta + self.gears[kk].static_twist(gear));
+            let phi = self.ratio[kk] * (theta + self.gears[kk].static_twist_at(theta, gear));
             state[n + kk] = theta;
             state[n + m + kk] = phi;
-            torque[kk] = self.ripples[kk].invert(gear * self.held(kk) / self.ratio[kk], phi);
+            torque[kk] = self.ripples[kk]
+                .invert(self.gears[kk].held_at(theta, gear) * self.held(kk) / self.ratio[kk], phi);
             // The gear's arm at rest carries nothing.
             if let Some(i) = self.arm_slot(kk) {
                 state[i] = self.gears[kk].arm_rest(phi, self.output(state, kk).0);

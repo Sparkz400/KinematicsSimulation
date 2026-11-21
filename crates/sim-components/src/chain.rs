@@ -581,8 +581,9 @@ impl<M: Mechanism> JointMachine<M> {
             // A process force that holds at rest (a press's force through a dwell) twists the gearbox too; the
             // mechanisms whose process acts only in motion put none here.
             let process = self.process(&q, &vec![0.0; n]);
-            let twisted: Vec<f64> =
-                (0..n).map(|k| q[k] + self.joints[k].drive.gearbox.static_twist(gravity[k] - process[k])).collect();
+            let twisted: Vec<f64> = (0..n)
+                .map(|k| q[k] + self.joints[k].drive.gearbox.static_twist_at(q[k], gravity[k] - process[k]))
+                .collect();
             self.mechanism.forward(&q, &mut tool);
             self.mechanism.forward(&twisted, &mut sagged);
             most = most.max(tool.iter().zip(&sagged).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max));
@@ -680,7 +681,7 @@ impl<M: Mechanism> JointMachine<M> {
         let (mut m, mut k, mut damping) = (rest(size * size), rest(size), rest(size));
         for r in 0..free {
             m[r * size..r * size + free].copy_from_slice(&load[r * n..r * n + free]);
-            k[r] = self.joints[r].drive.gearbox.stiffness;
+            k[r] = self.joints[r].drive.gearbox.at(q[r]).stiffness;
         }
         for i in 0..f {
             for j in 0..free {
@@ -705,7 +706,7 @@ impl<M: Mechanism> JointMachine<M> {
         }
         let (load, _) = self.load(q, &vec![0.0; n]);
         let gear = |k: usize| &self.joints[k].drive.gearbox;
-        let k: Vec<f64> = (0..n).map(|j| gear(j).stiffness).collect();
+        let k: Vec<f64> = (0..n).map(|j| gear(j).at(q[j]).stiffness).collect();
         generalized_modes(&load[..n * n], &k, |j, w| gear(j).damping_at(w), n)
     }
 
@@ -1112,7 +1113,8 @@ impl<M: Mechanism> JointMachine<M> {
         let (mass, _) = self.load(q, &[0.0]);
         let j = &self.joints[0].drive;
         Some(
-            (j.gearbox.stiffness * (1.0 / mass[0] + 1.0 / j.reflected_inertia())).sqrt() / (2.0 * std::f64::consts::PI),
+            (j.gearbox.at(q[0]).stiffness * (1.0 / mass[0] + 1.0 / j.reflected_inertia())).sqrt()
+                / (2.0 * std::f64::consts::PI),
         )
     }
 }
@@ -1207,11 +1209,12 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             let j = &self.joints[k].drive;
             // At rest the transmission holds the load against gravity and the stops.
             let out = gravity[k] - shift[k] - j.output_torque(q[k], 0.0);
-            let rotor = j.ratio() * (q[k] + if self.elastic { j.gearbox.static_twist(out) } else { 0.0 });
+            let rotor = j.ratio() * (q[k] + if self.elastic { j.gearbox.static_twist_at(q[k], out) } else { 0.0 });
             if self.elastic {
                 state.push(rotor);
             }
-            torque[k] = j.ripple.invert(out / j.ratio(), rotor);
+            let held = if self.elastic { j.gearbox.held_at(q[k], out) } else { out };
+            torque[k] = j.ripple.invert(held / j.ratio(), rotor);
         }
         state.resize(self.passive_at(), 0.0);
         state.extend(rest);

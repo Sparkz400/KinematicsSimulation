@@ -7,7 +7,7 @@
 //! Units: lengths in m, forces in N, torques in N m, speeds of rotation in r/min where a catalogue gives them so.
 
 use crate::joint::RotaryJoint;
-use crate::mech::{BRISTLE_RATE_MAX, HoldingBrake};
+use crate::mech::{BRISTLE_RATE_MAX, HoldingBrake, TravelCompliance};
 use sim_core::{Config, ConfigError, RatingCheck, SignalInfo};
 use std::f64::consts::PI;
 
@@ -175,11 +175,13 @@ impl Converter {
 }
 
 /// A converter with its own back-driving efficiency (`BallScrew::converter`): derefs to the `Converter`, and applies like
-/// it (`Converter::apply`, `apply_to`) with the back efficiency in the gearbox.
+/// it (`Converter::apply`, `apply_to`) with the back efficiency in the gearbox, and the screw's compliance along the
+/// travel where it follows the nut (`Gearbox::travel`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackDriven {
     pub converter: Converter,
     pub back_efficiency: f64,
+    pub travel: Option<TravelCompliance>,
 }
 
 impl std::ops::Deref for BackDriven {
@@ -195,7 +197,9 @@ impl BackDriven {
     }
 
     pub fn apply_to(&self, cfg: &Config, joint: &mut RotaryJoint, output: f64) -> Result<()> {
-        self.converter.apply_back(cfg, joint, output, self.back_efficiency)
+        self.converter.apply_back(cfg, joint, output, self.back_efficiency)?;
+        joint.gearbox.travel = self.travel;
+        Ok(())
     }
 }
 
@@ -207,7 +211,9 @@ impl BackDriven {
 /// `bearing_stiffness_n_m`, `preload_n`, `dynamic_load_rating_n` (Ca), `static_load_rating_n` (C0a), `load_factor`
 /// (fw), `static_safety_factor`, `critical_speed_factor`, `buckling_safety_factor`, `max_dn` (d n with d in mm and n in
 /// r/min; 0 for none), and optionally `axial_damping_ratio` (the damping ratio of the mass behind the nut on the screw's
-/// axial spring, from the nut, the bearings and the guides: `Converter::apply_back`; 0 where it is absent).
+/// axial spring, from the nut, the bearings and the guides: `Converter::apply_back`; 0 where it is absent). With
+/// effects.screw_stiffness_with_position (off where absent), `fixed_bearing_at_m`: the joint's travel at which the fixed
+/// bearing stands (`TravelCompliance`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BallScrew {
     pub lead: f64,
@@ -229,6 +235,9 @@ pub struct BallScrew {
     pub buckling_safety: f64,
     pub max_dn: f64,
     pub axial_damping_ratio: f64,
+    /// With effects.screw_stiffness_with_position: the joint's travel at the fixed bearing, m. None: the stiffness is
+    /// the one at the position `converter` is given for the whole stroke.
+    pub fixed_bearing_at: Option<f64>,
 }
 
 /// An optional damping ratio, 0 where the key is absent (a config written before 20 November 2026), below 1.
@@ -295,6 +304,14 @@ impl BallScrew {
             buckling_safety: p("buckling_safety_factor")?,
             max_dn: cfg.non_negative("screw.max_dn")?,
             axial_damping_ratio: damping_ratio(cfg, "screw.axial_damping_ratio")?,
+            // A config without the switch (one written before 21 November 2026) has it off.
+            fixed_bearing_at: if cfg.get("effects.screw_stiffness_with_position").is_ok()
+                && cfg.bool("effects.screw_stiffness_with_position")?
+            {
+                Some(cfg.f64("screw.fixed_bearing_at_m")?)
+            } else {
+                None
+            },
         })
     }
 
@@ -399,9 +416,9 @@ impl BallScrew {
         self.nominal_diameter * 1e3 * rpm.abs()
     }
 
-    /// The screw as a converter, stiff as it is with the nut at `x` from the fixed bearing. The joint's gearbox has one
-    /// stiffness for the whole stroke: every builder passes `softest_position()`, which judges resonance and settling on
-    /// the safe side.
+    /// The screw as a converter, stiff as it is with the nut at `x` from the fixed bearing. Every builder passes
+    /// `softest_position()`. Without `fixed_bearing_at` that is the joint gearbox's stiffness for the whole stroke, which
+    /// judges resonance and settling on the safe side; with it the gearbox follows the nut from there (`travel`).
     pub fn converter(&self, x: f64) -> BackDriven {
         BackDriven {
             converter: Converter {
@@ -413,7 +430,22 @@ impl BallScrew {
                 damping_ratio: self.axial_damping_ratio,
             },
             back_efficiency: self.back_efficiency,
+            travel: self.travel(x),
         }
+    }
+
+    /// The shaft's compliance along the travel with `x` as the reference (`TravelCompliance`), where it follows the nut.
+    pub fn travel(&self, x: f64) -> Option<TravelCompliance> {
+        let fixed_bearing_at = self.fixed_bearing_at?;
+        let mut t = TravelCompliance {
+            ae: STEEL_E * self.section().1,
+            length: self.length,
+            both_ends: self.mounting == Mounting::FixedFixed,
+            fixed_bearing_at,
+            reference: 0.0,
+        };
+        t.reference = t.shaft(x).0;
+        Some(t)
     }
 
     /// Where the shaft is softest: its far end, or its middle where both ends are fixed.
@@ -790,6 +822,7 @@ mod tests {
             buckling_safety: 2.0,
             max_dn: 70000.0,
             axial_damping_ratio: 0.0,
+            fixed_bearing_at: None,
         }
     }
 
@@ -1239,6 +1272,41 @@ mod tests {
         assert_eq!(fixed.softest_position(), 0.5);
         close(fixed.converter(fixed.softest_position()).stiffness, 1.5376e8, "fixed-fixed middle");
         assert!((1..100).all(|i| fixed.stiffness(0.01 * i as f64) >= fixed.stiffness(0.5) * (1.0 - 1e-12)));
+    }
+
+    /// With the stiffness following the nut (`travel`), the shaft's compliance along the travel is the one `stiffness`
+    /// puts in series, for either bearing arrangement: with the fixed bearing at travel -0.1, the nut 0.25 from it at
+    /// 0.15 has 1 / stiffness(0.25) - 1 / stiffness(1) more than the far end (fixed-supported: 0.25 / A E - 1 / A E =
+    /// -1.0512e-8 m/N), and its slope is 1 / A E = 1.4015e-8 m/N per m. The switch and `fixed_bearing_at_m` from a
+    /// config; without the switch there is none.
+    #[test]
+    fn the_screw_compliance_along_the_travel_is_the_stiffness_at_the_nut() {
+        for mounting in [Mounting::FixedSupported, Mounting::FixedFixed] {
+            let s = BallScrew { mounting, fixed_bearing_at: Some(-0.1), ..screw() };
+            let t = s.travel(s.softest_position()).unwrap();
+            for x in [0.05, 0.25, 0.5, 0.9] {
+                let by_stiffness = 1.0 / s.stiffness(x) - 1.0 / s.stiffness(s.softest_position());
+                assert!((t.delta(x - 0.1).0 - by_stiffness).abs() < 1e-20, "{mounting:?} at {x}");
+                let h = 1e-6;
+                let slope = (t.delta(x - 0.1 + h).0 - t.delta(x - 0.1 - h).0) / (2.0 * h);
+                assert!((t.delta(x - 0.1).1 - slope).abs() < 1e-14, "{mounting:?} slope at {x}");
+            }
+        }
+        let t = BallScrew { fixed_bearing_at: Some(-0.1), ..screw() }.travel(1.0).unwrap();
+        close(t.delta(0.15).0, -1.0512e-8, "compliance less the far end's");
+        close(t.delta(0.15).1, 1.4015e-8, "slope");
+        assert!(screw().converter(1.0).travel.is_none());
+        let text = |on: bool| {
+            format!(
+                "format_version = 1\n[effects]\nscrew_stiffness_with_position = {on}\n[screw]\nlead_m = 0.01\n\
+                 nominal_diameter_m = 0.025\nroot_diameter_m = 0.021\nlength_m = 1.0\nmounting = \"fixed-supported\"\n\
+                 efficiency = 0.9\nnut_stiffness_n_m = 5e8\nbearing_stiffness_n_m = 1e9\npreload_n = 0.0\n\
+                 dynamic_load_rating_n = 1e4\nstatic_load_rating_n = 2e4\nload_factor = 1.2\nstatic_safety_factor = 2.0\n\
+                 critical_speed_factor = 0.8\nbuckling_safety_factor = 2.0\nmax_dn = 0.0\nfixed_bearing_at_m = -0.1\n"
+            )
+        };
+        let read = |on| BallScrew::from_config(&Config::parse(&text(on)).unwrap()).unwrap().fixed_bearing_at;
+        assert_eq!((read(true), read(false)), (Some(-0.1), None));
     }
 
     /// The pressure angle of the teeth: the force pushing pinion and rack apart is F tan(alpha) (straight teeth), the

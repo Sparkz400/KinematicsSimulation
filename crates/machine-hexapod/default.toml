@@ -41,6 +41,10 @@ gearbox_efficiency = true
 # formula) in place of screw.efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart.
 # Off in the shipped configs: their sizing was done with screw.efficiency.
 screw_lead_efficiency = false
+# The screw's axial stiffness follows its nut: the shaft between the fixed bearing and the nut, E A / a (held at both
+# ends a (L - a) / (E A L)), with the nut a from the bearing at its travel (screw.fixed_bearing_at_m), in place of the
+# far end's for the whole stroke.
+screw_stiffness_with_position = true
 # The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
 # gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
 # pickers D2 and D3, whose sizing was redone with them.
@@ -249,6 +253,9 @@ root_diameter_m = 0.0212
 # Between the bearings: the stroke, the nut's length and the run-outs.
 length_m = 0.35
 mounting = "fixed-supported"
+# [estimate] The fixed bearing at the motor, 0.075 m behind the nut with the leg retracted: half the run-out of the
+# 0.35 m shaft beyond the 0.2 m stroke. With effects.screw_stiffness_with_position.
+fixed_bearing_at_m = -0.075
 efficiency = 0.9
 # With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
 # ball screws, not this screw's.

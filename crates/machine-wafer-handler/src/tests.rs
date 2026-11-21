@@ -307,7 +307,11 @@ fn the_z_motor_holds_what_it_lifts_and_the_arm_motors_nothing() {
     let by_hand = |m: f64| m * 9.80665 * 0.01 / std::f64::consts::TAU;
     close(by_hand(11.2276), 0.1752378, 1e-6, "by hand");
     close(by_hand(11.1), 0.1732462, 1e-6, "without the wafer");
-    for edits in [vec!["effects.torque_ripple = false"], RIGID.to_vec()] {
+    // The far end's screw stiffness for the whole stroke: with it following the nut the rotor holds W^2 / (2 E A)
+    // less (`Gearbox::held_at`), 1.9e-6 of it.
+    for edits in
+        [vec!["effects.torque_ripple = false", "effects.screw_stiffness_with_position = false"], RIGID.to_vec()]
+    {
         let mut d = handler(&edits);
         for pose in [[0.12, 0.0, 0.1], [0.75, 3.0, 0.2], [0.4, -2.0, 0.05]] {
             let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
@@ -362,7 +366,10 @@ fn the_modes_are_those_of_the_gearboxes_and_bands() {
 /// damper alone gave 0.0025474; across the whole series spring, as the converter had it, 1.743957.
 #[test]
 fn the_modes_are_damped_by_the_gearboxes_and_bands() {
+    // At the far end, as the column's figures (`the_column_rings_stiffer_with_the_nut_near_its_bearing` has it
+    // follow the nut).
     let d = handler(&[
+        "effects.screw_stiffness_with_position = false",
         "elbow_band.span_damping_n_s_m = 94.0",
         "wrist_band.span_damping_n_s_m = 94.0",
         "gearbox.damping_nm_s_rad = 2.5",
@@ -389,7 +396,9 @@ fn the_modes_are_damped_by_the_gearboxes_and_bands() {
 /// m g / K), and the state derivative there is zero.
 #[test]
 fn the_column_rings_on_its_screw_and_coupling() {
-    let d = handler(&[]);
+    // One stiffness for the stroke, the far end's (`the_column_rings_stiffer_with_the_nut_near_its_bearing` has it
+    // follow the nut).
+    let d = handler(&["effects.screw_stiffness_with_position = false"]);
     let lever = 0.01 / std::f64::consts::TAU;
     let k = 4.564162e7;
     close(d.lift.joint.gearbox.stiffness, k, 1e-6, "stiffness in series");
@@ -405,6 +414,46 @@ fn the_column_rings_on_its_screw_and_coupling() {
     let mut rates = vec![0.0; d.state_len()];
     d.derivatives(&state, &torque, &mut rates);
     assert!(rates.iter().all(|r| r.abs() < 1e-6), "{rates:?}");
+}
+
+/// The column's ring with the screw's stiffness following the nut (effects.screw_stiffness_with_position), by hand as
+/// above with the fixed bearing at z = 0: the shaft E A / a = 2.948660e7 / a N/m with the nut a = z from it, in
+/// series with nut, bearings and coupling. z = 0.1: K = 1 / (0.1 / 2.948660e7 + 5e-9 + 2.5e-9 + 8.443430e-10) =
+/// 8.520998e7 N/m, sqrt(K / 11.2276) / 2 pi = 438.4518 Hz; z = 0.2: 6.610658e7, 386.1882 Hz; z = 0.3: 5.400018e7,
+/// 349.0392 Hz (at the far end 0.4 the 320.8907 Hz above). At rest at z = 0.2 the spring carries the weight W = m g,
+/// the nut where the rotor has turned it, 0.2 m plus the compression x: x = W / K (1 + W / E A) (6 pm more than
+/// W / K), and the rotor holds W less the place's own W^2 / (2 E A) (`Gearbox::travel_force`): the state derivative is
+/// zero.
+#[test]
+fn the_column_rings_stiffer_with_the_nut_near_its_bearing() {
+    let d = handler(&["effects.screw_stiffness_with_position = true", "screw.fixed_bearing_at_m = 0.0"]);
+    for (z, hz) in [(0.1, 438.4518), (0.2, 386.1882), (0.3, 349.0392), (0.4, 320.8907)] {
+        let modes: Vec<f64> = d.modes(&[0.4, 0.0, z]).iter().map(|m| m.hz).collect();
+        close(*modes.last().unwrap(), hz, 1e-6, "column mode along the stroke");
+    }
+    let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
+    d.equilibrium(&[0.4, 0.0, 0.2], &mut state, &mut torque);
+    let (x, lever) = (d.planar_len(), 0.01 / std::f64::consts::TAU);
+    let w: f64 = 11.2276 * 9.80665;
+    let compression = w / 6.610658e7 * (1.0 + w / 2.948660e7);
+    close(state[x + 3] - state[x] / lever, compression / lever, 1e-6, "compression at 0.2");
+    let mut rates = vec![0.0; d.state_len()];
+    d.derivatives(&state, &torque, &mut rates);
+    assert!(rates.iter().all(|r| r.abs() < 1e-7), "{rates:?}");
+}
+
+/// With the screw's stiffness following the nut, the loss-free configs keep their energy and the default config's
+/// budget closes (`testkit`): the spring's energy at the nut's travel and the force that travel takes from it agree.
+#[test]
+fn the_energy_closes_with_the_screw_stiffness_following_the_nut() {
+    for mut cfg in suite_configs().into_iter().chain([ENTRY.config()]) {
+        cfg.set_text("effects.screw_stiffness_with_position = true").unwrap();
+        let m = WaferHandler::new(&cfg).unwrap();
+        if !cfg.bool("effects.joint_friction").unwrap() {
+            sim_core::testkit::energy_conservation(&m);
+        }
+        sim_core::testkit::loss_budget(&m);
+    }
 }
 
 /// The hold at rest and on the move, by hand: pads mu g = 0.3 * 9.80665 = 2.941995 m/s^2, and while the lift

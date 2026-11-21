@@ -1214,8 +1214,9 @@ impl Machine for WaferHandler {
         // The stroke holds what it lifts.
         let (z, i) = (tool[2], self.lift.ratio());
         let out = -self.lift.weight(self.payload_attached) - self.lift.joint.output_torque(z, 0.0);
-        let rotor = i * (z + if self.elastic { self.lift.joint.gearbox.static_twist(out) } else { 0.0 });
-        torque[2] = self.lift.joint.ripple.invert(out / i, rotor);
+        let rotor = i * (z + if self.elastic { self.lift.joint.gearbox.static_twist_at(z, out) } else { 0.0 });
+        let held = if self.elastic { self.lift.joint.gearbox.held_at(z, out) } else { out };
+        torque[2] = self.lift.joint.ripple.invert(held / i, rotor);
         state.extend([z, 0.0, 0.0]);
         if self.elastic {
             state.extend([rotor, 0.0]);
@@ -1471,7 +1472,7 @@ impl Machine for WaferHandler {
         let free: Vec<usize> = (0..4).filter(|&c| if c < 2 { self.elastic } else { self.bands_elastic }).collect();
         // The column on its screw and coupling, the rotor held: it moves along z alone, apart from the arm's modes.
         // Damping ratio c / (2 sqrt(K m)), c the gear's at the ring (`Gearbox::damping_at`).
-        let gear = &self.lift.joint.gearbox;
+        let gear = self.lift.joint.gearbox.at(tool_pose[2]);
         let lift = (self.elastic && gear.stiffness.is_finite()).then(|| {
             let mass = self.lift.mass(self.payload_attached);
             let w = (gear.stiffness / mass).sqrt();

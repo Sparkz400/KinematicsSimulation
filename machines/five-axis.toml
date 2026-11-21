@@ -55,6 +55,9 @@ gearbox_efficiency = true
 # place of their efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart. Off here: the
 # sizing was done with the efficiency.
 screw_lead_efficiency = false
+# The screws' axial stiffness follows their nut: the shaft between the fixed bearing and the nut, E A / a, with the
+# nut a from the bearing at its travel (screw_*.fixed_bearing_at_m), in place of the far end's for the whole stroke.
+screw_stiffness_with_position = true
 torque_ripple = true
 tooth_meshing = true
 cable_chain = false
@@ -370,6 +373,9 @@ root_diameter_m = 0.0132
 # Between the bearings: the stroke, the nut and the run-outs.
 length_m = 0.45
 mounting = "fixed-supported"
+# [estimate] The fixed bearing at the motor above the stroke, 0.075 m over the nut at its top (z = 0.3): half the
+# run-out of the 0.45 m shaft beyond the 0.3 m stroke. With effects.screw_stiffness_with_position.
+fixed_bearing_at_m = 0.375
 efficiency = 0.9
 # With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
 # ball screws, not this screw's.

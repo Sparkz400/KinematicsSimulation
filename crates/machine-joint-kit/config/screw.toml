@@ -39,6 +39,9 @@ root_diameter_m = 0.0212
 # Between the bearings: the stroke, the nut's length and the run-outs.
 length_m = 1.0
 mounting = "fixed-supported"
+# [estimate] The fixed bearing at the motor, 0.1 m before the nut at the stroke's start: half the run-out of the 1 m
+# shaft beyond the 0.8 m stroke. With effects.screw_stiffness_with_position.
+fixed_bearing_at_m = -0.1
 efficiency = 0.9
 # With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
 # ball screws, not this screw's.

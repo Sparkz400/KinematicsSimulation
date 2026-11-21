@@ -682,6 +682,10 @@ fn every_effect_switch_changes_the_traces() {
             "effects.screw_lead_efficiency" => {
                 base.get("screw.friction_coefficient").is_err() || !base.bool("effects.gearbox_efficiency").unwrap()
             }
+            // A machine without a screw whose stiffness can follow its nut, or whose joints are rigid.
+            "effects.screw_stiffness_with_position" => {
+                base.get("screw.fixed_bearing_at_m").is_err() || !base.bool("effects.joint_elasticity").unwrap_or(false)
+            }
             "effects.gearbox_stiffness_curve" => ["gearbox.stiffness_k2_nm_rad", "gearbox.stiffness_k3_nm_rad"]
                 .iter()
                 .all(|k| base.f64(k).unwrap() == base.f64("gearbox.stiffness_nm_rad").unwrap()),

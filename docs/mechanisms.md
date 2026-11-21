@@ -67,7 +67,9 @@ A joint's coordinate is an angle (rad) or a travel (m). A screw or rack turns th
 
 - ratio i / lever, the lever the travel per radian (lead / 2 pi, or the pinion's pitch radius);
 - stiffness 1 / (lever^2 / k_gearbox + 1 / k_converter): the gearbox's torsional stiffness seen at the joint, in series
-  with the screw's or rack's own;
+  with the screw's or rack's own. A screw's own is its shaft between the fixed bearing and the nut, E A / a, in series
+  with nut and bearings: with `effects.screw_stiffness_with_position` at the nut's place (`screw.fixed_bearing_at_m`
+  the travel at the bearing), otherwise at the softest place for the whole stroke;
 - damping: the gearbox's over lever^2 across the gearbox's spring alone, and the screw's or rack's own across its
   spring alone, c = 2 zeta sqrt(K_c m) from `screw.axial_damping_ratio` or `rack.damping_ratio` and the mass m it moves
   (nut, bearings, guides); two damped springs in series, the machine carries one more state for them

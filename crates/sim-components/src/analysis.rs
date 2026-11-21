@@ -2346,7 +2346,7 @@ pub fn set_bounded(cfg: &mut Config, path: &str, value: f64) -> Result<(), Confi
 /// Values (by the start of their path) that only some effects use, and those effects: they change nothing while all
 /// of them are off. None: a value no cycle uses, the discharge of a disabled drive's DC link. The parts warm with
 /// effects.thermal_feedback too (`sim::heats`).
-const PATH_EFFECTS: [(&str, &[&str]); 37] = [
+const PATH_EFFECTS: [(&str, &[&str]); 38] = [
     ("follower.roller_width_m", &["follower_lift_off"]),
     ("follower.contact_", &["follower_lift_off"]),
     ("follower.guide_friction_n", &["follower_lift_off"]),
@@ -2375,6 +2375,7 @@ const PATH_EFFECTS: [(&str, &[&str]); 37] = [
     ("slide.friction_stribeck_m_s", &["slide_presliding"]),
     ("slide.presliding_stiffness_n_m", &["slide_presliding"]),
     ("screw.friction_coefficient", &["screw_lead_efficiency"]),
+    ("screw.fixed_bearing_at_m", &["screw_stiffness_with_position"]),
     ("gearbox.no_load_", &["gearbox_drag"]),
     ("gearbox.lost_motion_band_rad", &["gearbox_lost_motion"]),
     ("gearbox.hysteresis_rad", &["gearbox_lost_motion"]),

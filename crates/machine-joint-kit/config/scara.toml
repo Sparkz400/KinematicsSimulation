@@ -134,6 +134,9 @@ nominal_diameter_m = 0.016
 root_diameter_m = 0.0135
 length_m = 0.3
 mounting = "fixed-free"
+# [estimate] The fixed bearing at the motor on the arm, 0.05 m above the nut with the quill up (joint 3 at 0; it
+# travels down): half the run-out of the 0.3 m shaft beyond the 0.2 m stroke. With effects.screw_stiffness_with_position.
+fixed_bearing_at_m = -0.05
 efficiency = 0.9
 # With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
 # ball screws, not this screw's.
