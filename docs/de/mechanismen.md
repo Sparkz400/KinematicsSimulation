@@ -72,7 +72,9 @@ und m mit
 
 - Übersetzung i / Hebel, der Hebel ist der Weg je Radiant (Steigung / 2 pi oder der Teilkreisradius des Ritzels);
 - Steifigkeit 1 / (Hebel^2 / k_Getriebe + 1 / k_Wandler): die Torsionssteifigkeit des Getriebes am Gelenk gesehen, in
-  Reihe mit der von Spindel oder Zahnstange;
+  Reihe mit der von Spindel oder Zahnstange. Die der Spindel ist ihre Welle zwischen Festlager und Mutter, E A / a, in
+  Reihe mit Mutter und Lagern: mit `effects.screw_stiffness_with_position` an der Stelle der Mutter
+  (`screw.fixed_bearing_at_m` der Weg am Festlager), sonst an der weichsten Stelle für den ganzen Hub;
 - Dämpfung: die des Getriebes durch Hebel^2 nur über der Feder des Getriebes, die von Spindel oder Zahnstange nur über
   deren Feder, c = 2 zeta sqrt(K_c m) aus `screw.axial_damping_ratio` oder `rack.damping_ratio` und der bewegten Masse m
   (Mutter, Lager, Führungen); zwei gedämpfte Federn in Reihe, die Maschine führt dafür einen Zustand mehr

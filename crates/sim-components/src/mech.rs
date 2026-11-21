@@ -928,6 +928,47 @@ pub struct Gearbox {
     /// bridges the whole spring (`damping`), as it does in the slow limit of an arm faster than the integrator follows.
     pub relax_stiffness: f64,
     pub relax_time: f64,
+    /// Behind a ball screw with effects.screw_stiffness_with_position: the shaft's compliance follows the nut
+    /// (`TravelCompliance`); the fields above hold it at the reference position. None: one stiffness for the stroke.
+    pub travel: Option<TravelCompliance>,
+}
+
+/// A ball screw shaft's axial compliance as the nut travels (effects.screw_stiffness_with_position): the shaft between
+/// the fixed bearing and the nut, a / (E A) with the nut `a` from it, or a (L - a) / (E A L) where both ends hold it
+/// axially (fixed-fixed); a = |q - fixed_bearing_at| for the joint's travel q. The gear's springs were put in series with
+/// the screw at `reference` (m/N, the shaft's compliance there); at q they are in series with the difference too
+/// (`Gearbox::at`). The nut's distance is clamped as `transmission::BallScrew::stiffness` clamps it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TravelCompliance {
+    /// E A of the root section, N.
+    pub ae: f64,
+    pub length: f64,
+    pub both_ends: bool,
+    /// The joint's travel at which the fixed bearing stands, m.
+    pub fixed_bearing_at: f64,
+    pub reference: f64,
+}
+
+impl TravelCompliance {
+    /// The shaft's compliance with the nut `a` from the fixed bearing, and its slope in a.
+    pub fn shaft(&self, a: f64) -> (f64, f64) {
+        let (l, lo) = (self.length, 1e-3 * self.length);
+        let inside = a > lo && a < l;
+        let x = a.clamp(lo, l);
+        if self.both_ends {
+            let rest = (l - x).max(lo);
+            (x * rest / (self.ae * l), if inside && l - x > lo { (l - 2.0 * x) / (self.ae * l) } else { 0.0 })
+        } else {
+            (x / self.ae, if inside { 1.0 / self.ae } else { 0.0 })
+        }
+    }
+
+    /// The compliance at travel q less the reference's, and its slope in q.
+    pub fn delta(&self, q: f64) -> (f64, f64) {
+        let d = q - self.fixed_bearing_at;
+        let (c, slope) = self.shaft(d.abs());
+        (c - self.reference, slope * d.signum())
+    }
 }
 
 /// The mesh friction's bristle stiffness over K1 where `gearbox.mesh_stiffness_factor` is absent: K1 itself, as the
@@ -1011,7 +1052,46 @@ impl Gearbox {
             mesh_anchor: f64::NAN,
             relax_stiffness: 0.0,
             relax_time: 0.0,
+            travel: None,
         })
+    }
+
+    /// The gear with the nut at `travel` along the screw: behind a screw whose stiffness follows the nut (`travel`), its
+    /// springs K1, K2, K3 each in series with the shaft's compliance there less the reference's, dc, and the band's
+    /// series spring c + dc (the flanks' own k_f stays: 1 / k_f = 1 / K1 - c). The hysteresis, the mesh bristle, the
+    /// damper and its arm keep the reference's. Itself otherwise. The nut sits on the shaft's point the rotor has turned
+    /// to it, the rotor's angle over the ratio (`nut`); at a pose the joint's travel, which is that less the twist.
+    pub fn at(&self, travel: f64) -> std::borrow::Cow<'_, Self> {
+        let Some(t) = self.travel else { return std::borrow::Cow::Borrowed(self) };
+        let dc = t.delta(travel).0;
+        let series = |k: f64| 1.0 / (1.0 / k + dc);
+        std::borrow::Cow::Owned(Self {
+            stiffness: series(self.stiffness),
+            upper: self.upper.map(series),
+            band_compliance: self.band_compliance + dc,
+            travel: None,
+            ..self.clone()
+        })
+    }
+
+    /// The nut's place along the screw in the dynamics: the shaft's point the rotor has turned to it, s = phi / i.
+    fn nut(&self, rotor_angle: f64) -> f64 {
+        rotor_angle / self.ratio
+    }
+
+    /// T^2 c'(s) / 2, what the spring's energy falls by per unit of the nut's place s at a fixed twist, T the spring's
+    /// force (`spring`): its complementary energy holds c T^2 / 2 of the compliance c(s) in series, so at a fixed twist
+    /// dV / dc = -T^2 / 2. With s = phi / i the rotor feels it, not the nut: the shaft between the bearing and the nut
+    /// grows by the material the rotor turns into it, and the nut passes the shaft's force T alone. 0 without `travel`.
+    fn travel_force(&self, rotor_angle: f64, out_angle: f64) -> f64 {
+        let Some(t) = self.travel else { return 0.0 };
+        let (_, e) = self.beyond(rotor_angle, out_angle);
+        if e == 0.0 {
+            return 0.0;
+        }
+        let s = self.nut(rotor_angle);
+        let spring = self.at(s).spring(e).0;
+        0.5 * spring * spring * t.delta(s).1
     }
 
     /// An optional positive factor on K1 (1 where the key is absent, as the shipped files have it).
@@ -1195,6 +1275,15 @@ impl Gearbox {
     /// `torque` with the arm's force `arm` beside the damping: the flanks pass it as they do the damping's, nothing
     /// within the dead zone.
     fn torque_arm(&self, rotor_angle: f64, rotor_speed: f64, out_angle: f64, out_speed: f64, arm: f64) -> GearTorque {
+        if self.travel.is_some() {
+            // The springs at the nut's place, and where the flanks pass a torque the rotor feels the place's own force:
+            // its reaction is dV / dphi = (T - T^2 c' / 2) / i.
+            let mut t = self.at(self.nut(rotor_angle)).torque_arm(rotor_angle, rotor_speed, out_angle, out_speed, arm);
+            if t.rotor != 0.0 {
+                t.rotor -= self.travel_force(rotor_angle, out_angle) / self.ratio;
+            }
+            return t;
+        }
         let (twist, e) = self.beyond(rotor_angle, out_angle);
         // In the backlash the flanks are apart; without play they touch at zero twist too, where the hysteresis holds.
         if e == 0.0 && (self.has_play() || self.hysteresis == 0.0) {
@@ -1246,7 +1335,8 @@ impl Gearbox {
         if e == 0.0 && (self.has_play() || self.hysteresis == 0.0) {
             return 0.0;
         }
-        self.spring(e).0.copysign(twist) + self.hysteresis_torque(Self::contact(twist, e), 0.0).0
+        self.at(self.nut(rotor_angle)).spring(e).0.copysign(twist)
+            + self.hysteresis_torque(Self::contact(twist, e), 0.0).0
     }
 
     /// The Maxwell arm's force and the rate of its state `u` (`relax_stiffness`): with x the contact twist (0 in the dead
@@ -1304,12 +1394,30 @@ impl Gearbox {
         }
     }
 
+    /// `static_twist` at the joint's travel `travel`: the nut on the shaft's point `travel` plus the twist (`at`), which
+    /// one step from the twist at `travel` finds to (c' x)^2 of it.
+    pub fn static_twist_at(&self, travel: f64, output_torque: f64) -> f64 {
+        let first = self.at(travel).static_twist(output_torque);
+        if self.travel.is_none() {
+            return first;
+        }
+        self.at(travel + first).static_twist(output_torque)
+    }
+
+    /// What the rotor holds at rest, times the ratio, against a torque F at the output with the nut at `travel`: the
+    /// spring passes F, and behind a screw whose stiffness follows the nut the rotor feels F - F^2 c' / 2
+    /// (`travel_force`). F itself otherwise.
+    pub fn held_at(&self, travel: f64, output_torque: f64) -> f64 {
+        let slope = self.travel.map_or(0.0, |t| t.delta(travel).1);
+        output_torque - 0.5 * output_torque * output_torque * slope
+    }
+
     /// The energy in the spring and in the hysteresis's state, z^2 / (2 sigma). Not the mesh friction's bristle: see
     /// `loss_power`.
     pub fn energy(&self, rotor_angle: f64, out_angle: f64) -> f64 {
         let (twist, e) = self.beyond(rotor_angle, out_angle);
         let z = self.hysteresis_torque(Self::contact(twist, e), 0.0).0;
-        self.spring(e).1 + if z == 0.0 { 0.0 } else { z * z / (2.0 * self.dahl_stiffness) }
+        self.at(self.nut(rotor_angle)).spring(e).1 + if z == 0.0 { 0.0 } else { z * z / (2.0 * self.dahl_stiffness) }
     }
 
     /// Power the gearbox takes, W: what the rotor puts in less what the output gives the pulley and what spring and
@@ -1344,10 +1452,12 @@ impl Gearbox {
         let (z, slope) = self.hysteresis_torque(Self::contact(twist, e), rotor_speed / self.ratio - out_speed);
         let stored = if z == 0.0 { 0.0 } else { z * slope / self.dahl_stiffness };
         let rate = rotor_speed / self.ratio - out_speed;
+        // The store's change with the nut's place, -T^2 c' s' / 2 (`travel_force`), is not lost.
         t.rotor * rotor_speed
             - t.output * out_speed
-            - (self.spring(e).0.copysign(twist) + stored) * rate
+            - (self.at(self.nut(rotor_angle)).spring(e).0.copysign(twist) + stored) * rate
             - arm * (rate - arm_rate)
+            + self.travel_force(rotor_angle, out_angle) * rotor_speed / self.ratio
     }
 }
 
@@ -1658,6 +1768,7 @@ preload_n = 200.0
             mesh_anchor: f64::NAN,
             relax_stiffness: 0.0,
             relax_time: 0.0,
+            travel: None,
         }
     }
 
@@ -1961,6 +2072,49 @@ preload_n = 200.0
             (Gearbox { stiffness: 6.7e4, half_backlash: 0.0, ..gearbox() }.static_twist(137.0) - 137.0 / 6.7e4).abs()
                 < 1e-15
         );
+    }
+
+    /// A gear behind a screw whose compliance follows the nut (`TravelCompliance`): E A = 1e4, fixed-free over 1, the
+    /// fixed bearing at -0.2 of the travel and the gear built at the far end (reference 1e-4, all of the band's series
+    /// spring). With the nut 0.3 along the travel it is 0.5 from the bearing: dc = -5e-5, K1 = 1 / (2e-4 - 5e-5) =
+    /// 6666.67, and so for K2 and K3. The nut sits where the rotor has turned it, s = phi / 5. The output's force is the
+    /// spring's T, the energy's slope along the output at a fixed rotor angle; the rotor's reaction is the energy's slope
+    /// along its angle, (T - T^2 c' / 2) / 5 (c' = 1e-4), through the band and the three segments; without the place's
+    /// own term it misses by up to 1.2e-4. At the far end the gear is the reference's. Loss-free, the loss power is 0 on
+    /// the move.
+    #[test]
+    fn a_gear_behind_a_screw_takes_the_nuts_travel_force_from_its_energy() {
+        let g = Gearbox {
+            stiffness: 5e3,
+            half_backlash: 0.0,
+            band: 2e-4,
+            band_compliance: 1e-4,
+            knees: [1.5, 3.0],
+            upper: [4e3, 3e3],
+            travel: Some(TravelCompliance {
+                ae: 1e4,
+                length: 1.0,
+                both_ends: false,
+                fixed_bearing_at: -0.2,
+                reference: 1e-4,
+            }),
+            ..gearbox()
+        };
+        assert!((g.at(0.3).stiffness - 1.0 / 1.5e-4).abs() < 1e-8 && (g.at(0.3).upper[0] - 1.0 / 2.0e-4).abs() < 1e-8);
+        assert!((g.at(0.8).stiffness - 5e3).abs() < 1e-9 && g.at(0.8).band_compliance == 1e-4);
+        let (q, h) = (0.3, 1e-8);
+        for twist in [1e-4, 4e-4, 6e-4, 8e-4, 1.2e-3] {
+            let rotor = 5.0 * (twist + q);
+            let t = g.torque(rotor, 0.0, q, 0.0);
+            let along = -(g.energy(rotor, q + h) - g.energy(rotor, q - h)) / (2.0 * h);
+            let turning = (g.energy(rotor + 5.0 * h, q) - g.energy(rotor - 5.0 * h, q)) / (10.0 * h);
+            let spring = g.at(twist + q).spring(twist).0;
+            assert!((t.output - along).abs() < 1e-7, "{twist}: {} against {along}", t.output);
+            assert!((t.rotor - turning).abs() < 2e-8, "{twist}: {} against {turning}", t.rotor);
+            assert!((t.output - spring).abs() < 1e-12, "{twist}");
+            assert!((5.0 * t.rotor - spring + 0.5 * spring * spring * 1e-4).abs() < 1e-12, "{twist}");
+            assert!(g.loss_power(rotor, 2.0, q, 0.3).abs() < 1e-12);
+        }
     }
 
     /// The lost-motion band, by hand. K1 1e4 N m/rad, half backlash 4e-4 rad, a band of 2e-4 rad: 1e-4 rad into the band

@@ -188,7 +188,12 @@ fn gravity_loads_no_arm_motor_and_the_z_motor_holds_the_carriage() {
     let by_hand = |payload: f64| (1.0 + payload) * G * 0.02 / std::f64::consts::TAU;
     assert!((by_hand(5.0) - 0.187293).abs() < 1e-6 && (by_hand(0.0) - 0.031216).abs() < 1e-6);
     for elastic in [false, true] {
-        let d = scara(&["effects.torque_ripple = false", &format!("effects.joint_elasticity = {elastic}")]);
+        // The far end's screw stiffness: with it following the nut the rotor holds F^2 / (2 E A) less.
+        let d = scara(&[
+            "effects.torque_ripple = false",
+            "effects.screw_stiffness_with_position = false",
+            &format!("effects.joint_elasticity = {elastic}"),
+        ]);
         for pose in [[0.0, -0.5, 0.1, 0.0], [0.4, -0.5, 0.05, 1.0], [-0.3, -0.75, 0.15, -3.0]] {
             let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
             d.equilibrium(&pose, &mut state, &mut torque);
@@ -207,7 +212,7 @@ fn gravity_loads_no_arm_motor_and_the_z_motor_holds_the_carriage() {
             close(at("joint.z.force"), 6.0 * G, if elastic { 1e-11 } else { 1e-12 }, "the nut's force");
         }
     }
-    let mut d = scara(&["effects.torque_ripple = false"]);
+    let mut d = scara(&["effects.torque_ripple = false", "effects.screw_stiffness_with_position = false"]);
     d.set_payload_attached(false);
     let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
     d.equilibrium(&[0.0, -0.5, 0.1, 0.0], &mut state, &mut torque);
@@ -377,7 +382,8 @@ fn stroke_stiffness_by_hand() -> f64 {
 /// along y, damping ratios 5 / (2 sqrt(k M)). The lowest, y's, is `resonance_hz`.
 #[test]
 fn the_carriage_rings_on_its_screw_at_the_hand_calculated_frequency() {
-    let d = lossless(&[]);
+    // One screw stiffness for the stroke, the far end's, as `stroke_stiffness_by_hand`.
+    let d = lossless(&["effects.screw_stiffness_with_position = false"]);
     // Each extra axis six states: the stroke's coupling has a Maxwell arm (`Gearbox::arm`), and so all of them a place.
     assert_eq!(d.state_len(), N_ELASTIC + 12);
     assert_eq!(scara(&["effects.joint_elasticity = false"]).state_len(), N_RIGID + 6);
@@ -414,8 +420,8 @@ fn the_carriage_rings_on_its_screw_at_the_hand_calculated_frequency() {
     let [x_hz, y_hz] = [along_x, along_y].map(|inertia| (k_arm / inertia).sqrt() / std::f64::consts::TAU);
     close(x_hz, 46.95, 1e-3, "along x by hand");
     close(y_hz, 46.17, 1e-3, "along y by hand");
-    // The shipped damping (the loss-free config has none).
-    let d = scara(&[]);
+    // The shipped damping (the loss-free config has none), the far end's stiffness.
+    let d = scara(&["effects.screw_stiffness_with_position = false"]);
     let modes = d.modes(&pose);
     let found: Vec<f64> = modes.iter().map(|m| m.hz).collect();
     assert_eq!(found.len(), 4, "{found:?}");
@@ -430,12 +436,30 @@ fn the_carriage_rings_on_its_screw_at_the_hand_calculated_frequency() {
     assert!(rigid.modes(&pose).is_empty() && rigid.resonance_hz(&pose).is_none());
 }
 
+/// The shipped config, its screw's stiffness following the nut: the fixed bearing at the plate, z = 0.25, so the nut is
+/// 0.25 - z from it, and the shaft's E A / a with E A = 2.06e11 pi / 4 0.0135^2 = 2.948660e7 N in place of the far
+/// end's: 1 / K = 1 / 4.75026e7 - (0.3 - a) / E A. z = 0.1 (a = 0.15): K = 6.26393e7 N/m, sqrt(K / 6) / 2 pi = 514.24
+/// Hz; z = 0.2 (a = 0.05): K = 7.95349e7 N/m, 579.46 Hz; z = 0 (a = 0.25): 467.02 Hz. The stroke's is the highest mode.
+#[test]
+fn the_carriage_rings_higher_with_the_nut_near_the_plate() {
+    let d = scara(&[]);
+    let ea = 2.06e11 * std::f64::consts::FRAC_PI_4 * 0.0135f64.powi(2);
+    for z in [0.0, 0.1, 0.2] {
+        let k = 1.0 / (1.0 / stroke_stiffness_by_hand() - (0.3 - (0.25 - z)) / ea);
+        let by_hand = (k / 6.0).sqrt() / std::f64::consts::TAU;
+        let found = d.modes(&[0.0, -0.5, z, 0.0]).iter().map(|m| m.hz).fold(0.0, f64::max);
+        close(found, by_hand, 1e-9, "the stroke's mode along the stroke");
+    }
+    close((6.26393e7f64 / 6.0).sqrt() / std::f64::consts::TAU, 514.24, 1e-5, "z = 0.1 by hand");
+}
+
 /// At rest under the weight the screw carries 6 kg x g = 58.8399 N and is twisted by F / K = 58.8399 / 4.75020e7 =
 /// 1.23869e-6 m, the rotor ahead of the carriage by i times that (i = 2 pi / 0.02 = 314.159 rad/m): 3.8914e-4 rad. The
 /// turn holds nothing: its rotor is at 8 times the tool's angle. Without the payload the twist is 1 / 6 of it.
 #[test]
 fn the_screw_is_twisted_by_the_weight_at_rest() {
-    let mut d = lossless(&[]);
+    // One screw stiffness for the stroke, the far end's, as `stroke_stiffness_by_hand`.
+    let mut d = lossless(&["effects.screw_stiffness_with_position = false"]);
     let (at, i) = (d.planar_len(), std::f64::consts::TAU / 0.02);
     for (attached, kg) in [(true, 6.0), (false, 1.0)] {
         d.set_payload_attached(attached);

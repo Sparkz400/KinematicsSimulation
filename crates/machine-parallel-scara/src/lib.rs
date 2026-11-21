@@ -708,8 +708,8 @@ impl ParallelScara {
     fn modes_at(&self, tool: &[f64], small: bool) -> Vec<sim_core::Mode> {
         let mut modes = self.plane_modes(tool, small);
         if self.elastic {
-            modes.extend(self.extras.iter().map(|x| {
-                let (k, m) = (spring(&x.joint.gearbox, small), x.mass(self.payload_attached));
+            modes.extend(self.extras.iter().enumerate().map(|(e, x)| {
+                let (k, m) = (spring(&x.joint.gearbox.at(tool[2 + e]), small), x.mass(self.payload_attached));
                 sim_core::Mode {
                     hz: (k / m).sqrt() / std::f64::consts::TAU,
                     damping: x.joint.gearbox.damping_at((k / m).sqrt()) / (2.0 * (k * m).sqrt()),
@@ -1087,8 +1087,9 @@ impl Machine for ParallelScara {
             let (q, i) = (tool[2 + e], x.ratio());
             let out = -x.weight(self.payload_attached) - x.joint.output_torque(q, 0.0);
             // Elastic, the spring holds it: the rotor is ahead by the static twist (`Gearbox::static_twist`).
-            let rotor = i * (q + if self.elastic { x.joint.gearbox.static_twist(out) } else { 0.0 });
-            torque[2 + e] = x.joint.ripple.invert(out / i, rotor);
+            let rotor = i * (q + if self.elastic { x.joint.gearbox.static_twist_at(q, out) } else { 0.0 });
+            let held = if self.elastic { x.joint.gearbox.held_at(q, out) } else { out };
+            torque[2 + e] = x.joint.ripple.invert(held / i, rotor);
             state.extend([q, 0.0, 0.0]);
             if self.elastic {
                 state.extend([rotor, 0.0]);

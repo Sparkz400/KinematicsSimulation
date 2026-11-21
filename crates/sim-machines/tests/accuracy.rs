@@ -32,10 +32,10 @@ fn the_reversal_error_takes_the_gearbox_backlash() {
 
 /// The screw axis standing up (slide.incline_deg 90) with no friction, no efficiency loss and no ripple: the encoder
 /// holds the motor at the target and the carriage sags by its weight over the drive's stiffness, from either side.
-/// Weight 25 kg * 9.81 = 245.25 N. Screw (root 21.2 mm, A = 3.530e-4 m^2, E A = 7.272e7 N, over its whole 1 m: the
-/// model takes the softest place for the stroke) in series with nut 4e8 and bearings 7.5e8 N/m: 1.7585e-8 m/N;
-/// coupling 9000 N m/rad seen at the nut over (lead / 2 pi)^2 = (3.1831e-3 m)^2: 1.1258e-9 m/N; together 1.8711e-8
-/// m/N, a sag of 4.589 um.
+/// Weight 25 kg * 9.81 = 245.25 N. Screw (root 21.2 mm, A = 3.530e-4 m^2, E A = 7.272e7 N, over its whole 1 m: with
+/// effects.screw_stiffness_with_position off, the softest place for the stroke) in series with nut 4e8 and bearings
+/// 7.5e8 N/m: 1.7585e-8 m/N; coupling 9000 N m/rad seen at the nut over (lead / 2 pi)^2 = (3.1831e-3 m)^2: 1.1258e-9
+/// m/N; together 1.8711e-8 m/N, a sag of 4.589 um.
 #[test]
 fn a_vertical_screw_sags_by_its_load_over_its_stiffness() {
     let mut cfg = config("screw-axis", "", "");
@@ -45,6 +45,7 @@ fn a_vertical_screw_sags_by_its_load_over_its_stiffness() {
         ("effects.motor_friction", false),
         ("effects.gearbox_mesh_friction", false),
         ("effects.torque_ripple", false),
+        ("effects.screw_stiffness_with_position", false),
     ] {
         cfg = cfg.with(key, on);
     }

@@ -9,6 +9,10 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
 
 ### Added
 
+- `effects.screw_stiffness_with_position` and `screw.fixed_bearing_at_m`: a ball screw's axial stiffness follows the
+  nut (the shaft E A / a between the fixed bearing and the nut, in series with nut and bearings) in the dynamics, the
+  modes and the equilibrium at a pose, with the nut's travel force T² c′ / 2 from the spring's energy. The wafer
+  handler's column rings at 438 Hz with the nut 0.1 m from the bearing against 321 Hz at the far end.
 - MCP server for LLM clients (`kinematics_sim.mcp`, the extra `kinematics-sim[mcp]` with `mcp>=2.3,<3`, the console
   script `kinematics-sim-mcp`; `uvx --from "kinematics-sim[mcp]" kinematics-sim-mcp`): 17 tools (machines, configs as
   named sessions with dotted-path get and set and a diff, sizing verdicts with margins, meanings and bands, cycle
