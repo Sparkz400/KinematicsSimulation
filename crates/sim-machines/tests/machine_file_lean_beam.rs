@@ -127,9 +127,19 @@ fn close(a: f64, b: f64, tol: f64) -> bool {
 /// the cycle dwelling in its process force: the derivatives (the accelerations of the lean, of Z and of the beam among
 /// them), the energy and every signal both have, to 1e-9.
 fn same_leaning_state(beam: bool) {
+    for offset in [false, true] {
+        same_leaning_state_with(beam, offset);
+    }
+}
+
+/// `same_leaning_state` with the belt's upper runs beside the leaning Z axis (effects.belt_run_offset) on or off.
+fn same_leaning_state_with(beam: bool, offset: bool) {
     let mut changes = vec!["effects.tool_flex = true", "effects.process_force = true"];
     if beam {
         changes.push("effects.beam_vertical_mode = true");
+    }
+    if offset {
+        changes.push("effects.belt_run_offset = true");
     }
     let (krate, from_file) = (find("t-gantry").unwrap(), file());
     let (mut a, mut b) = (krate.config(), from_file.config());
@@ -196,32 +206,37 @@ fn the_file_and_the_crate_agree_with_the_beam_mode_at_a_leaning_state() {
 
 /// The beam's mode (effects.beam_vertical_mode) against the hand value (the crate's `the_beams_vertical_mode_is_where_the_hand_value_has_it`).
 /// The belt stiff (EA = 1e11 N), the carriage and the Z axis cannot move on the beam or against it and the lowest mode is
-/// the beam's bending with them on it: f = sqrt(k / (m_c + m_z + M)) / 2 pi, in the middle (x = 0.5 m, 0.65 m from a post
-/// of the 1.3 m span) k = 48 E I / L^3 = 48 x 8.4e4 / 1.3^3 = 1.83523e6 N/m, M = 17 mu L / 35 = 2.2100 kg, m_c + m_z = 4 + 7
-/// kg: 1.83523e6 / 13.2100 = 138 928 1/s^2, 372.73 rad/s, 59.32 Hz.
+/// the beam's bending with them on it: f = sqrt(k / (m_c + m_z + belt + M)) / 2 pi, in the middle (x = 0.5 m, 0.65 m from
+/// a post of the 1.3 m span) k = 48 E I / L^3 = 48 x 8.4e4 / 1.3^3 = 1.83523e6 N/m, M = 17 mu L / 35 = 2.2100 kg, m_c + m_z
+/// = 4 + 7 kg, and the belt's runs riding on it (the crate's `belt_on_beam`): the vertical ones whole, mu (4 s + 2 sz) =
+/// 0.1 (0.6 + 1.0) = 0.16 kg, and a third of the horizontal ones tilting from the posts' pulleys to the carriage,
+/// mu (4 s + 2 sx) / 3 = 0.26 / 3 kg: 1.83523e6 / 13.4567 = 136 381 1/s^2, 369.30 rad/s, 58.776 Hz (59.32 Hz without
+/// the belt on it, before 21 November).
 #[test]
 fn the_beams_vertical_mode_is_where_the_hand_value_has_it() {
     let m = file_machine(&["effects.beam_vertical_mode = true", "belt.stiffness_ea_n = 1.0e11"]);
+    let riding = 0.1 * (4.0 * 0.15 + 2.0 * 0.5) + 0.1 * (4.0 * 0.15 + 2.0 * 1.0) / 3.0;
     let by_hand =
-        (48.0 * 8.4e4 / 1.3f64.powi(3) / (4.0 + 7.0 + 17.0 / 35.0 * 3.5 * 1.3)).sqrt() / std::f64::consts::TAU;
-    assert!((by_hand - 59.32).abs() < 0.01, "{by_hand}");
+        (48.0 * 8.4e4 / 1.3f64.powi(3) / (4.0 + 7.0 + riding + 17.0 / 35.0 * 3.5 * 1.3)).sqrt() / std::f64::consts::TAU;
+    assert!((by_hand - 58.776).abs() < 0.001, "{by_hand}");
     let hz = m.resonance_hz(&[0.5, 0.25]).unwrap();
     assert!((hz - by_hand).abs() < 1e-3 * by_hand, "{hz} Hz against {by_hand} Hz");
     // Nearer a post the beam is stiffer: 0.15 m from it (x = 0) the mode is higher.
     assert!(m.resonance_hz(&[0.0, 0.25]).unwrap() > hz);
 }
 
-/// The beam at rest at the quasi-static sag m g a^2 b^2 / (3 E I L) = 11 x 9.80665 / 1.83523e6 = 58.78 um in the middle, the
-/// Z axis on its belt that much higher, the tool at its pose and nothing accelerating; the loss row is the beam's damping,
-/// c w'^2 with c = 2 zeta sqrt(k (m + M)) = 2 x 0.01 x sqrt(1.83523e6 x 13.21) = 98.475 N s/m (zeta the mode's damping
-/// ratio with the carriage and the Z axis on the beam), at w' = 0.1 m/s 0.98475 W.
+/// The beam at rest at the quasi-static sag m g a^2 b^2 / (3 E I L) = 11.29 x 9.80665 / 1.83523e6 = 60.33 um in the middle
+/// (the carriage, the Z axis and the belt's runs' weight on it, 0.16 + 0.26 / 2 kg; 58.78 um before 21 November), the Z
+/// axis on its belt that much higher, the tool at its pose and nothing accelerating; the loss row is the beam's damping,
+/// c w'^2 with c = 2 zeta sqrt(k (m + M)) = 2 x 0.01 x sqrt(1.83523e6 x 13.4567) = 99.390 N s/m (zeta the mode's damping
+/// ratio with the carriage, the Z axis and the belt's riding inertia on the beam), at w' = 0.1 m/s 0.99390 W.
 #[test]
 fn the_beam_rests_at_its_sag_and_its_damping_is_in_the_budget() {
     let m = file_machine(&["effects.beam_vertical_mode = true"]);
     let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
     m.equilibrium(&[0.5, 0.25], &mut state, &mut torque);
-    let sag = 11.0 * G / (48.0 * 8.4e4 / 1.3f64.powi(3));
-    assert!((sag - 58.78e-6).abs() < 1e-8, "{sag}");
+    let sag = 11.29 * G / (48.0 * 8.4e4 / 1.3f64.powi(3));
+    assert!((sag - 60.33e-6).abs() < 1e-8, "{sag}");
     // x z a b pa pb w: the beam's deflection is state 6, the Z axis stands on its belt at 0.25 + sag.
     assert!((state[6] - sag).abs() < 1e-9 * sag && (state[1] - 0.25 - sag).abs() < 1e-12, "{state:?}");
     let mut rest = vec![0.0; state.len()];
@@ -231,8 +246,8 @@ fn the_beam_rests_at_its_sag_and_its_damping_is_in_the_budget() {
     m.tool_state(&state, &mut pos, &mut vel);
     assert!((pos[1] - 0.25).abs() < 1e-12, "the tool is at {}", pos[1]);
     state[7 + 6] = 0.1;
-    let c = 2.0 * 0.01 * (48.0 * 8.4e4 / 1.3f64.powi(3) * (11.0 + 17.0 / 35.0 * 3.5 * 1.3)).sqrt();
-    assert!((c - 98.475).abs() < 0.001, "{c}");
+    let c = 2.0 * 0.01 * (48.0 * 8.4e4 / 1.3f64.powi(3) * (11.0 + 0.26 / 3.0 + 0.16 + 17.0 / 35.0 * 3.5 * 1.3)).sqrt();
+    assert!((c - 99.390).abs() < 0.001, "{c}");
     let power = signals_ending(m.as_ref(), &state, &torque, "power.beam");
     assert!((power[0] - c * 0.01).abs() < 1e-9 * c, "{} W against {} W", power[0], c * 0.01);
 }

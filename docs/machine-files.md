@@ -296,6 +296,7 @@ the file. The order of the motors in the file is the order of the motor signals 
 | | `com_drop_m`, `tool_drop_m` | required | its centre of mass and the tool tip below the guide with `lever_axis` at 0, m |
 | | `lever_axis` | | an axis whose travel raises both towards the guide |
 | | `lateral_stiffness_n_m`, `tilt_stiffness_nm_rad`, `damping_n_s_m` | required | the guide's stiffness sideways and in tilt, the lean's damping |
+| | `belt_offset_m` | | with `effects.belt_run_offset`: how far the belt's runs that reach the body from above meet it to either side of its line (the side their other wheel is on), m; the guide's tilt lengthens one and shortens the other by it times the tilt; default 0 |
 | `gantry` | `axis` | required | a bridge travelling along this horizontal straight axis yaws (`effects.gantry_yaw`); at most one ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)) |
 | | `across` | | the straight axis along the bridge; its bodies' lever about the bridge's centre changes with it |
 | | `width_m`, `inertia_kgm2` | required | the distance between the bridge's two sides, m; its own inertia about a vertical axis through its centre, kg m² |
@@ -613,11 +614,26 @@ lever_axis = "z"
 lateral_stiffness_n_m = "tool_flex.lateral_stiffness_n_m"
 tilt_stiffness_nm_rad = "tool_flex.tilt_stiffness_nm_rad"
 damping_n_s_m = "tool_flex.damping_n_s_m"
+belt_offset_m = "tool_flex.belt_offset_m"   # with effects.belt_run_offset
 ```
 
 The T-gantry's file has both, off as shipped (the crate has its tool flex on): its pulleys at the ends of X at the
 carriage's height and its carriage idlers r + r_idler above and below, so the belt leaves both pulleys level, half a
 turn at every pose, as in the crate; with either effect on it is its crate to 1e-9.
+
+With `effects.belt_run_offset` (off as shipped) the runs that reach the leaning body from above (the clamp's, whose
+length changes with the lever axis alone) meet it `belt_offset_m` to the side their other wheel is on: the guide's tilt
+theta = k w h / tilt lifts the end on the + side by e theta and lowers the other, so those sections are longer and
+shorter by e k h / tilt per metre of lean, first order. Their tension difference turns the lean, their stretch holds it,
+and damping, energy and modes follow from the lengths (the crate's `lean_offset`). With `effects.beam_vertical_mode`
+the belt's runs ride on the beam's mode w as in the crate (`belt_on_beam`): a run that moves along the vertical axis
+goes down with the carriage whole, one whose length changes with the beam's axis alone tilts from its post's pulley,
+a third of its mass in the kinetic energy and half in the weight, the first moment and the momentum; their weight sags
+the beam and their inertia is in its damping. The T-gantry file: its beam mode in the middle 58.776 Hz (59.32 Hz before
+21 November), its rest sag 60.33 um (58.78), the hand values of `machine_file_lean_beam.rs`; the riding runs must keep
+their length together (a file whose do not is refused). Both are their crate to 1e-9, alone and together
+(`the_effects_of_a_machine_file_are_its_crates`, `the_file_and_the_crate_agree_with_the_beam_mode_at_a_leaning_state`,
+with the offset on and off, and the modes, `the_t_gantry_file_tells_its_crates_modes`).
 
 ## A gantry that yaws, and tools on rotary axes
 

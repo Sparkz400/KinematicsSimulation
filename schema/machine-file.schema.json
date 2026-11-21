@@ -655,6 +655,19 @@
                 "description": "The horizontal axis it leans along. Id of a machine.axis node.",
                 "type": "string"
               },
+              "belt_offset_m": {
+                "description": "With effects.belt_run_offset: how far the belt's runs that reach the body from above meet it to either side of its line (the side their other wheel is on), m; as the guide tilts the body they get longer and shorter by it times the tilt. Default 0.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
+              },
               "body": {
                 "description": "The body that leans; it moves with axis. Id of a machine.body node.",
                 "type": "string"

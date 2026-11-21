@@ -256,7 +256,16 @@ fn the_effects_of_a_machine_file_are_its_crates() {
                 &format!("{effect}, rigid {rigid}"),
             );
         }
-        let all: Vec<String> = effects.iter().map(|e| format!("effects.{e} = true")).collect();
+        // The belt's upper runs beside the leaning Z axis act with it (effects.belt_run_offset).
+        same_machine(
+            "t-gantry",
+            "t-gantry.toml",
+            &[&stretch, "effects.tool_flex = true", "effects.belt_run_offset = true", "effects.part_heating = true"],
+            &rises,
+            &format!("belt_run_offset, rigid {rigid}"),
+        );
+        let all: Vec<String> =
+            effects.iter().chain(&["belt_run_offset"]).map(|e| format!("effects.{e} = true")).collect();
         let mut changes: Vec<&str> = all.iter().map(String::as_str).collect();
         changes.extend([stretch.as_str(), "effects.part_heating = true"]);
         same_machine("t-gantry", "t-gantry.toml", &changes, &rises, &format!("all, rigid {rigid}"));
@@ -880,11 +889,13 @@ fn a_machine_file_reports_its_belt_mode() {
 /// alone, undamped.
 #[test]
 fn the_t_gantry_file_tells_its_crates_modes() {
-    let variants: [&[&str]; 4] = [
+    let variants: [&[&str]; 6] = [
         &[],
         &["effects.frame_compliance = true"],
         &["effects.tool_flex = true"],
         &["effects.beam_vertical_mode = true"],
+        &["effects.tool_flex = true", "effects.belt_run_offset = true"],
+        &["effects.tool_flex = true", "effects.belt_run_offset = true", "effects.beam_vertical_mode = true"],
     ];
     for changes in variants {
         let [(ea, ca), (eb, cb)] = pair("t-gantry", "t-gantry.toml", changes);

@@ -302,6 +302,7 @@ Motorsignale und von `--motor N`.
 | | `com_drop_m`, `tool_drop_m` | Pflicht | sein Schwerpunkt und die Werkzeugspitze unter der Führung bei `lever_axis` auf 0, m |
 | | `lever_axis` | | eine Achse, deren Weg beide zur Führung hebt |
 | | `lateral_stiffness_n_m`, `tilt_stiffness_nm_rad`, `damping_n_s_m` | Pflicht | Steifigkeit der Führung seitlich und gegen Kippen, die Dämpfung der Neigung |
+| | `belt_offset_m` | | mit `effects.belt_run_offset`: wie weit die Trume, die den Körper von oben erreichen, ihn neben seiner Linie treffen (auf der Seite ihres anderen Rads), m; das Kippen der Führung macht das eine um es mal den Kippwinkel länger, das andere kürzer; Vorgabe 0 |
 | `gantry` | `axis` | Pflicht | eine Brücke, die entlang dieser waagrechten Linearachse fährt, giert (`effects.gantry_yaw`); höchstens eine ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)) |
 | | `across` | | die Linearachse entlang der Brücke; mit ihr ändert sich der Hebel ihrer Körper um die Mitte der Brücke |
 | | `width_m`, `inertia_kgm2` | Pflicht | Abstand der beiden Seiten der Brücke, m; ihre eigene Trägheit um eine senkrechte Achse durch ihre Mitte, kg m² |
@@ -640,11 +641,27 @@ lever_axis = "z"
 lateral_stiffness_n_m = "tool_flex.lateral_stiffness_n_m"
 tilt_stiffness_nm_rad = "tool_flex.tilt_stiffness_nm_rad"
 damping_n_s_m = "tool_flex.damping_n_s_m"
+belt_offset_m = "tool_flex.belt_offset_m"   # mit effects.belt_run_offset
 ```
 
 Die Datei des T-Portals hat beides, ausgeliefert aus (das Crate hat seine Neigung an): ihre Scheiben an den Enden von X
 auf Höhe des Wagens und ihre Wagenrollen r + r_Rolle darüber und darunter, sodass der Riemen beide Scheiben waagrecht
 verlässt, eine halbe Umdrehung in jeder Lage, wie im Crate; mit einem der beiden Effekte an ist sie ihr Crate auf 1e-9.
+
+Mit `effects.belt_run_offset` (wie ausgeliefert aus) treffen die Trume, die den sich neigenden Körper von oben erreichen
+(die der Klemme, deren Länge sich nur mit der Hebelachse ändert), ihn `belt_offset_m` neben seiner Linie, auf der Seite
+ihres anderen Rads: das Kippen der Führung theta = k w h / tilt hebt das Ende auf der +-Seite um e theta und senkt das
+andere, die Abschnitte werden je Meter Neigung um e k h / tilt länger und kürzer, in erster Ordnung. Ihr
+Spannungsunterschied dreht die Neigung, ihre Dehnung hält sie, Dämpfung, Energie und Eigenformen folgen aus den Längen
+(`lean_offset` des Crates). Mit `effects.beam_vertical_mode` fahren die Trume des Riemens wie im Crate auf der
+Eigenform w des Balkens (`belt_on_beam`): ein Trum, das sich entlang der senkrechten Achse bewegt, geht ganz mit dem
+Wagen nach unten, eines, dessen Länge sich nur mit der Achse des Balkens ändert, kippt von der Scheibe seines Pfostens,
+ein Drittel seiner Masse in der kinetischen Energie und die Hälfte im Gewicht, im ersten Moment und im Impuls; ihr
+Gewicht biegt den Balken durch, ihre Trägheit steht in seiner Dämpfung. Die Datei des T-Portals: ihre Eigenform des
+Balkens in der Mitte 58,776 Hz (59,32 Hz vor dem 21. November), ihre Durchbiegung in Ruhe 60,33 µm (58,78), die
+Handwerte von `machine_file_lean_beam.rs`; die mitfahrenden Trume müssen zusammen ihre Länge halten (eine Datei, deren
+Trume das nicht tun, wird abgelehnt). Beides ist ihr Crate auf 1e-9, einzeln und zusammen, mit dem Versatz an und
+aus.
 
 ## Ein Portal, das giert, und Werkzeuge auf Drehachsen
 

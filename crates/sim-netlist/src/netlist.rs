@@ -524,6 +524,12 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
             field("lateral_stiffness_n_m", Kind::Number, true, "The guide's stiffness sideways, N/m."),
             field("tilt_stiffness_nm_rad", Kind::Number, true, "The guide's stiffness in tilt, N m/rad."),
             field("damping_n_s_m", Kind::Number, true, "The damping of the lean at the centre of mass, N s/m."),
+            field(
+                "belt_offset_m",
+                Kind::Number,
+                false,
+                "With effects.belt_run_offset: how far the belt's runs that reach the body from above meet it to either side of its line (the side their other wheel is on), m; as the guide tilts the body they get longer and shorter by it times the tilt. Default 0.",
+            ),
             POS,
         ],
     ),
@@ -742,6 +748,9 @@ pub struct LeanNode {
     pub lateral: f64,
     pub tilt: f64,
     pub damping: f64,
+    /// With effects.belt_run_offset: how far the belt's runs that reach the body from above meet it to either side of
+    /// its line, m (`belt_offset_m`); 0 otherwise.
+    pub belt_offset: f64,
 }
 
 pub struct SectionNode {
@@ -1589,11 +1598,26 @@ fn lean_node(
         lateral: value("lateral_stiffness_n_m", refs)?,
         tilt: value("tilt_stiffness_nm_rad", refs)?,
         damping: value("damping_n_s_m", refs)?,
+        belt_offset: 0.0,
+    };
+    // The offset counts with its switch (a file written before it may leave the switch out: off).
+    let offset = match node.get("belt_offset_m") {
+        Some(item) => number(cfg, item, &node.at("belt_offset_m"), refs)?,
+        None => 0.0,
+    };
+    let lean = LeanNode {
+        belt_offset: match cfg.bool("effects.belt_run_offset") {
+            Ok(true) => offset,
+            Ok(false) | Err(ConfigError::Missing(_)) => 0.0,
+            Err(e) => return Err(e),
+        },
+        ..lean
     };
     for (name, bad) in [
         ("lateral_stiffness_n_m", lean.lateral <= 0.0),
         ("tilt_stiffness_nm_rad", lean.tilt <= 0.0),
         ("damping_n_s_m", lean.damping < 0.0),
+        ("belt_offset_m", offset < 0.0),
     ] {
         if bad {
             return Err(ConfigError::Invalid(node.at(name)));
