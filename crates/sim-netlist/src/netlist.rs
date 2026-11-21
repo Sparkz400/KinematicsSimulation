@@ -31,7 +31,7 @@ pub enum Kind {
     Coefficients(&'static str),
     /// Where an editor draws the node, [x, y]; the simulation does not read it.
     Position,
-    /// Where the 3D view draws the node, [x, y, z] in metres.
+    /// A point [x, y, z] in metres, each a number or the dotted path of one (as `Number`).
     Point,
     /// Ids of nodes of any of the named lists, in an order that means something (a belt's way past them).
     Route(&'static [&'static str]),
@@ -925,19 +925,14 @@ impl Node<'_> {
     fn bool(&self, name: &str) -> Result<bool> {
         self.get(name).map_or(Ok(false), |v| v.as_bool().ok_or_else(|| ConfigError::Type(self.at(name))))
     }
-    /// An optional [x, y, z] of numbers.
-    fn point(&self, name: &str) -> Result<Option<[f64; 3]>> {
+    /// An optional [x, y, z], each a number or the path of one (as a number field).
+    fn point(&self, cfg: &Config, name: &str, refs: &mut Vec<String>) -> Result<Option<[f64; 3]>> {
         let Some(value) = self.get(name) else { return Ok(None) };
-        let numbers: Option<Vec<f64>> = value.as_array().and_then(|p| {
-            p.iter()
-                .map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
-                .map(|f| f.filter(|f| sim_core::config::number(*f, name).is_ok()))
-                .collect()
-        });
-        match numbers.as_deref() {
-            Some(&[x, y, z]) => Ok(Some([x, y, z])),
-            _ => Err(ConfigError::Type(self.at(name))),
-        }
+        let Some([x, y, z]) = value.as_array().map(Vec::as_slice) else {
+            return Err(ConfigError::Type(self.at(name)));
+        };
+        let mut at = |v: &Value| number(cfg, v, &self.at(name), refs);
+        Ok(Some([at(x)?, at(y)?, at(z)?]))
     }
     pub(crate) fn id_list(&self, name: &str) -> Result<Vec<&str>> {
         let Some(value) = self.get(name) else { return Ok(Vec::new()) };
@@ -1204,7 +1199,7 @@ impl Netlist {
                                     radius,
                                     inertia,
                                     pulley: id_of(pulley),
-                                    at: pulley.point("at_m")?,
+                                    at: pulley.point(cfg, "at_m", &mut refs)?,
                                     body: pulley
                                         .text("body")?
                                         .map(|id| find(&bodies, pulley, "body", id))
@@ -1394,7 +1389,7 @@ impl Netlist {
             if !moves.contains(&true) {
                 return Err(ConfigError::Missing(node.at("axes")));
             }
-            let offset = node.point("offset_m")?.unwrap_or_default();
+            let offset = node.point(cfg, "offset_m", &mut refs)?.unwrap_or_default();
             body_nodes.push(BodyNode { id: id_of(node), mass, payload, axes: moves, rotaries, offset });
         }
 
@@ -1475,7 +1470,7 @@ impl Netlist {
                 inertia,
                 friction,
                 body,
-                at: node.point("at_m")?,
+                at: node.point(cfg, "at_m", &mut refs)?,
                 clockwise: node.bool("clockwise")?,
             });
         }
@@ -1540,7 +1535,7 @@ impl Netlist {
             return Err(ConfigError::Invalid(format!("machine.axis[{}] (no body moves with it)", axis_nodes[i].id)));
         }
         let gantry = gantry_node(cfg, &gantries, &axes, &axis_nodes, &motor_nodes, &section_nodes, &mut refs)?;
-        let tcp = tcp_node(&tcps, &axes, &axis_nodes)?;
+        let tcp = tcp_node(cfg, &tcps, &axes, &axis_nodes, &mut refs)?;
         // A gantry's drives beyond the first are motors beyond the axes.
         let extra = gantry.as_ref().map_or(0, |g| g.drives.iter().flatten().count().saturating_sub(1));
         if motor_nodes.len() != axis_nodes.len() + extra {
@@ -1773,7 +1768,13 @@ fn gantry_node(
 
 /// The tool centre point (`machine.tcp`), at most one: three straight axes along x (the file's first), y (horizontal)
 /// and z (vertical), so that they stand square to each other in the 3D view, and the rotary axes that carry the tool.
-fn tcp_node(tcps: &[Node], axes: &[Node], axis_nodes: &[AxisNode]) -> Result<Option<TcpNode>> {
+fn tcp_node(
+    cfg: &Config,
+    tcps: &[Node],
+    axes: &[Node],
+    axis_nodes: &[AxisNode],
+    refs: &mut Vec<String>,
+) -> Result<Option<TcpNode>> {
     let node = match tcps {
         [] => return Ok(None),
         [node] => node,
@@ -1819,8 +1820,8 @@ fn tcp_node(tcps: &[Node], axes: &[Node], axis_nodes: &[AxisNode]) -> Result<Opt
     if rotaries.is_empty() && table.is_empty() {
         return Err(ConfigError::Missing(format!("{} (or table)", node.at("rotaries"))));
     }
-    let tool = node.point("tool_m")?.ok_or_else(|| ConfigError::Missing(node.at("tool_m")))?;
-    let pivot = node.point("table_pivot_m")?.unwrap_or_default();
+    let tool = node.point(cfg, "tool_m", refs)?.ok_or_else(|| ConfigError::Missing(node.at("tool_m")))?;
+    let pivot = node.point(cfg, "table_pivot_m", refs)?.unwrap_or_default();
     Ok(Some(TcpNode { axes, rotaries, tool, table, pivot }))
 }
 
@@ -1874,7 +1875,7 @@ pub fn json_schema() -> Value {
                 Kind::Point => (
                     obj([
                         ("type", text("array")),
-                        ("items", obj([("type", text("number"))])),
+                        ("items", number.clone()),
                         ("minItems", Value::Integer(3)),
                         ("maxItems", Value::Integer(3)),
                     ]),

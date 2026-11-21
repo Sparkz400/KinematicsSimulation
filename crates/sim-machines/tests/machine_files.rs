@@ -917,7 +917,7 @@ fn the_t_gantry_file_tells_its_crates_modes() {
 /// each state the crate's too; frame and leaning Z off in both, as `pair` has them). Both take moments about the same
 /// point: the place of the Z axis's centre of mass at z = 0 under the carriage at x = 0. The bodies are the same there:
 /// the Z axis at (x, 0, z), the carriage (and its chain) at (x, 0, 0.3), z_com_drop above it, which the file gives as its
-/// carriage's `offset_m` (before it the file had the carriage at 0: its angular momentum about y was 0.3 m * 4 kg * vx
+/// carriage's `offset_m`, naming geometry.z_com_drop_m (checked with it moved to 0.45 m too; before it the file had the carriage at 0: its angular momentum about y was 0.3 m * 4 kg * vx
 /// less, its first moment 1.2 kg m less). With the belt's mass off the two agree to rounding, the linear momentum and the
 /// first moment with it on too (the runs' first moment, mu sum (L0 + c q / 2) V q, has no place in it). The belt's
 /// angular momentum the two count differently: the crate by its path (the horizontal runs at the carriage's height
@@ -929,8 +929,9 @@ fn the_t_gantry_file_tells_its_crates_modes() {
 /// metre times the belt's 0.42 kg times its speed (`belt_y` below), about x and z 0.02 m times that.
 #[test]
 fn the_t_gantry_file_has_its_crates_angular_momentum() {
-    for belt_mass in [false, true] {
-        let changes: &[&str] = if belt_mass { &[] } else { &["effects.belt_mass = false"] };
+    // The carriage's offset names geometry.z_com_drop_m, which the crate reads too: moved, the two still agree.
+    let moved = ["effects.belt_mass = false", "geometry.z_com_drop_m = 0.45"];
+    for (belt_mass, changes) in [(false, &moved[..1]), (false, &moved[..]), (true, &[][..])] {
         let [(ea, ca), (eb, cb)] = pair("t-gantry", "t-gantry.toml", changes);
         let krate = (ea.build)(&ca).unwrap();
         let mut sim = Sim::new(eb, &cb).unwrap();

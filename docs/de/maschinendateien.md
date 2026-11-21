@@ -263,7 +263,7 @@ Motorsignale und von `--motor N`.
 | `body` | `mass_kg` | Pflicht | Masse, kg |
 | | `payload_kg` | | Nutzlast, die er trägt, solange `effects.payload` an ist und der Greifer sie hält, kg |
 | | `axes` | Pflicht | die Achsen, mit denen er sich bewegt |; Drehachsen darunter nehmen ihn mit herum, die erste ganz außen
-| | `offset_m` | | sein Schwerpunkt von dort, wo seine Achsen ihn hinstellen, `[x, y, z]`, m: auf Drehachsen von dort, wo sich ihre Achsen treffen, bei Winkel 0, mit ihnen gedreht ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)); auf geraden Achsen allein ein fester Versatz, den nur sein Ort im Impuls des Rahmens nimmt (der Wagen des T-Portals 0,3 m über seiner Z-Achse) |
+| | `offset_m` | | sein Schwerpunkt von dort, wo seine Achsen ihn hinstellen, `[x, y, z]`, m: auf Drehachsen von dort, wo sich ihre Achsen treffen, bei Winkel 0, mit ihnen gedreht ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)); auf geraden Achsen allein ein fester Versatz, den nur sein Ort im Impuls des Rahmens nimmt (der Wagen des T-Portals `geometry.z_com_drop_m` über seiner Z-Achse: jeder Eintrag eines Punkts, hier und in jedem `at_m`, `tool_m` und `table_pivot_m`, ist eine Zahl oder der Pfad einer, wie in einem Zahlenfeld) |
 | `guide` | `axis` | Pflicht | die Achse, die sie führt; höchstens eine Führung je Achse; ihr Verlust ist `power.<id>` |
 | | `friction` | Pflicht | die Tabelle ihrer Reibwerte, aufgebaut wie `[friction_x]` |
 | | `carries` | | Körper, deren Gewicht quer zur Achse sie trägt |

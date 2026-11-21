@@ -258,7 +258,7 @@ the file. The order of the motors in the file is the order of the motor signals 
 | `body` | `mass_kg` | required | mass, kg |
 | | `payload_kg` | | payload it carries while `effects.payload` is on and the gripper holds it, kg |
 | | `axes` | required | the axes it moves with; rotary axes among them carry it round, the first outermost |
-| | `offset_m` | | its centre of mass from where its axes put it, `[x, y, z]`, m: on rotary axes from where their axes meet at angle 0, turning with them ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)); on straight axes alone a constant offset that only its place in the frame momentum takes (the T-gantry's carriage 0.3 m above its Z axis) |
+| | `offset_m` | | its centre of mass from where its axes put it, `[x, y, z]`, m: on rotary axes from where their axes meet at angle 0, turning with them ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)); on straight axes alone a constant offset that only its place in the frame momentum takes (the T-gantry's carriage `geometry.z_com_drop_m` above its Z axis: each entry of a point, here and in every `at_m`, `tool_m` and `table_pivot_m`, is a number or the path of one, as a number field) |
 | `guide` | `axis` | required | the axis it guides; one guide per axis at most; its loss is `power.<id>` |
 | | `friction` | required | the table of its friction values, laid out as `[friction_x]` |
 | | `carries` | | bodies whose weight across the axis it carries |

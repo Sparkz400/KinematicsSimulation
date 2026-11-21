@@ -548,7 +548,10 @@ Fixed:
   agree to rounding (1e-16 N m s), the linear momentum and the first moment with the belt too. The belt's angular
   momentum stays counted differently (section 4's row: the file at the runs' drawn places, the crate by its path):
   1.3e-3 N m s about y and 1.1e-3 about x at up to 0.25 m/s. Test `the_t_gantry_file_has_its_crates_angular_momentum`
-  (fails without the carriage's offset).
+  (fails without the carriage's offset). Since 22 November the offset names its one source,
+  `offset_m = [0.0, 0.0, "geometry.z_com_drop_m"]` (a point's entries may each be the path of a number, as a number
+  field's; the crate reads the same key): with z_com_drop moved to 0.45 m crate and file still agree to 1e-16; with the
+  literal 0.3 the test fails (first moment along z 3.65 against the crate's 4.25 kg m).
 
 Fixed after the list of 17 November (in main, 20 November):
 - The warm start for a motor near its limit (1FK2104-4AF on the EXCT-30) converges; a cycle that repeats
