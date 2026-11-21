@@ -1616,15 +1616,15 @@ Mit Kv = 50 1/s verhält sich der Lageregelkreis wie ein Verzögerungsglied erst
 
 ```text
 $ sim-cli margins t-gantry
-run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result,play_margin_db
-,a,185.6,54.9,9.19,1.882,277.3,ok,
-,b,179.8,52.1,9.09,1.878,277.3,ok,
+run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
+,a,185.6,54.9,9.19,1.882,277.3,,ok
+,b,179.8,52.1,9.09,1.878,277.3,,ok
 
 $ sim-cli margins single-axis --bands
-run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result,play_margin_db
-,m,181.5,59.9,11.56,1.607,253.5,ok,
-belt.damping_n_s_m=50.0,m,186.8,54.3,11.59,1.652,231.7,ok,
-belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,ok,
+run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
+,m,181.5,59.9,11.56,1.607,253.5,,ok
+belt.damping_n_s_m=50.0,m,186.8,54.3,11.59,1.652,231.7,,ok
+belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 ...
 ```
 

@@ -249,9 +249,9 @@ effects.corner_blending,false,true
 ...
 
 $ sim-cli margins t-gantry
-run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result,play_margin_db
-,a,185.6,54.9,9.19,1.882,277.3,ok,
-,b,179.8,52.1,9.09,1.878,277.3,ok,
+run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
+,a,185.6,54.9,9.19,1.882,277.3,,ok
+,b,179.8,52.1,9.09,1.878,277.3,,ok
 
 $ sim-cli accuracy t-gantry --points 3 --repeats 2 --out acc.csv
 Accuracy along ISO 230-2, axis x [m]: B 2.657e-5, R 2.658e-5, E 5.119e-5, M 3.850e-5, A 5.120e-5 (...)
