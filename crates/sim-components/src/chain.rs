@@ -1111,6 +1111,16 @@ impl<M: Mechanism> JointMachine<M> {
         let drive = &self.joints[0].drive;
         let jr = drive.reflected_inertia();
         let sprung: Vec<usize> = (0..self.passive.len()).filter(|&p| self.passive[p].0 > 0.0).map(|p| p + 1).collect();
+        if sprung.is_empty() {
+            // The closed form, so that the frequency is the one `resonance_hz` always gave, to the bit; zeta = c w / 2k.
+            let damping =
+                |hz: f64| drive.gearbox.damping * std::f64::consts::TAU * hz / (2.0 * drive.gearbox.stiffness);
+            return self
+                .two_mass_frequency(q)
+                .map(|hz| sim_core::Mode { hz, damping: damping(hz) })
+                .into_iter()
+                .collect();
+        }
         let size = 1 + sprung.len();
         // The coordinates' rows of M over (x, q, p): x couples to q by -J i^2, a passive joint by M's own entries.
         let to_q: Vec<f64> = std::iter::once(-jr).chain(sprung.iter().map(|&p| mass[p * all])).collect();
