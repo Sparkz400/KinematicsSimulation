@@ -718,7 +718,7 @@ impl ParallelScara {
                 let (k, m) = (spring(&x.joint.gearbox.at(tool[2 + e]), small), x.mass(self.payload_attached));
                 sim_core::Mode {
                     hz: (k / m).sqrt() / std::f64::consts::TAU,
-                    damping: x.joint.gearbox.damping_at((k / m).sqrt()) / (2.0 * (k * m).sqrt()),
+                    damping: x.joint.gearbox.at(tool[2 + e]).damping_at((k / m).sqrt()) / (2.0 * (k * m).sqrt()),
                 }
             }));
         }

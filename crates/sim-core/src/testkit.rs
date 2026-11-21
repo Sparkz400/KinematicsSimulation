@@ -295,7 +295,13 @@ pub fn frame_momentum_moves_its_first_moment(m: &dyn Machine) {
 /// -g . d/dt sum m r, by central differences over +-1 us, within 1e-6 of it (plus 1e-9 W). V + g . c is then the same
 /// along any motion, as it is for any body whose weight is m g at its centre of mass.
 pub fn weight_is_at_the_first_moment(m: &dyn Machine) {
-    let pose = mid_pose(m);
+    weight_is_at_the_first_moment_at(m, &mid_pose(m));
+}
+
+/// `weight_is_at_the_first_moment` at `pose`: off the middle a part whose shape changes with the pose (a beam's mode
+/// under a carriage) moves its first moment with the pose too.
+pub fn weight_is_at_the_first_moment_at(m: &dyn Machine, pose: &[f64]) {
+    let pose = pose.to_vec();
     let (mut state, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
     m.equilibrium(&pose, &mut state, &mut torque);
     let Some(f) = m.frame_momentum(&state) else { return };

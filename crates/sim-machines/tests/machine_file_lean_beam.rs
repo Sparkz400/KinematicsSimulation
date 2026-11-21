@@ -236,3 +236,17 @@ fn the_beam_rests_at_its_sag_and_its_damping_is_in_the_budget() {
     let power = signals_ending(m.as_ref(), &state, &torque, "power.beam");
     assert!((power[0] - c * 0.01).abs() < 1e-9 * c, "{} W against {} W", power[0], c * 0.01);
 }
+
+/// The beam's own weight is where its first moment is, off the middle too (the crate's
+/// `the_beams_own_weight_is_at_its_first_moment_off_the_middle`): the first moment has the beam's points at -phi w, so
+/// the potential has its weight there, -g p0 w, and the beam's spring the cross term of its own sag, +g p0 w.
+#[test]
+fn the_beams_own_weight_is_at_its_first_moment_off_the_middle() {
+    let m = file_machine(&["effects.beam_vertical_mode = true"]);
+    let axes = m.axes();
+    for f in [0.255, 0.5, 0.8] {
+        let pose: Vec<f64> =
+            axes.iter().enumerate().map(|(i, a)| a.min + (a.max - a.min) * if i == 0 { f } else { 0.4 }).collect();
+        sim_core::testkit::weight_is_at_the_first_moment_at(m.as_ref(), &pose);
+    }
+}

@@ -266,6 +266,34 @@ Fixed (after the second audit, 21 November):
   inertia's split (2/3 at the elbow); now the weight at their middles and the frame momentum as rods, as on the D3:
   hold at the centre 850 mm down −18.58980 N m per gearbox (−18.60312 before), the vertical mode under constant
   torques −4.71 N m/rad at 975 mm down (−4.30), +5.45 at 1175 mm (+5.66).
+- The modes' damping behind a screw whose stiffness follows the nut took the far end's dampers with the stiffness at
+  the nut (`chain.rs` held and coupled modes, the parallel SCARA's stroke and turn): now both at the nut
+  (`Gearbox::at`). Against the linearised machine with its rotors held (effects
+  `the_modes_are_damped_as_the_linearised_machine_at_the_nut`): tripod 0.01946, 0.02134, 0.02444 (was 0.01574,
+  0.01726, 0.01977), hexapod 0.01047 to 0.0480 (was 0.00872 to 0.0401), parallel SCARA's quill at z = 0.18 m 0.0399
+  (was 0.0216), joint-kit SCARA's stroke 0.0271 (was 0.0228), also with its links bending two-way. Only the printed
+  damping moves: the shaper takes the frequencies. Open: with the links bending two-way the SCARA's pair of link
+  modes at 680 and 737 Hz is damped 0.0756 and 0.0844 against 0.0741 and 0.0860 linearised (the sum kept):
+  `generalized_modes` takes each mode's damping on its undamped shape.
+- The hysteresis behind a screw whose stiffness follows the nut (b253b9b5) picked its Dahl branch at the anchor by
+  rounding: `at` rebuilt the anchor's twist as (x r) / r, an ulp to either side of x, and at the anchor the branch also
+  went by x' where the state lives on y = r x. The torques were right, the slope and so the loss power wrong exactly
+  where `Sim::step` takes it (87 of 400 anchors off by more than 0.1 %, worst sign flipped; a nut travelling at a
+  standing twist got a negative loss). The anchor's twist now stays y0 with r beside it (`Gearbox::twist_scale`), the
+  branch compares x r with y0, and at the anchor goes by y' / r (`the_hysteresis_loss_at_the_anchor_goes_by_the_move`).
+  Nut held at 0.3 m under 7 Hz load cycles: 9.1e-5 J of 7.4e-4 J lost left open before, rounding (1e-13 J) after, and
+  as little with the nut running from 0.8 to 0 m (9.3e-5 J before)
+  (`the_hysteresis_behind_a_screw_closes_its_budget_over_load_cycles`; the review's ~1e-6 J "level without the
+  stroke" and its 1.8e-5 J on a running nut were its probe's: it committed at t + dt and started the next step at
+  (i + 1) dt, an ulp apart). On the gear itself (r = 1) every number is the same to the bit.
+- With effects.beam_vertical_mode the frame momentum's first moment has the beam's own mass moving with the mode
+  (−p₀(x) w) but the potential did not weigh it: off the middle, where p₀ changes with x, V + g · c drifted (T-gantry,
+  1 s of free pulses: 2.5e-4 J while V moved 0.16 J; 1.3e-8 J with the mode off), and `weight_is_at_the_first_moment`
+  checked the middle only. The beam's weight on it, −g p₀ w, is now in the potential and the cross term of its own sag
+  with the mode, +g p₀ w, in the beam's elastic energy: they cancel, so the total energy and the dynamics are as
+  before. In the crate and the machine file; checked off the middle
+  (`testkit::weight_is_at_the_first_moment_at`, `the_beams_own_weight_is_at_its_first_moment_off_the_middle` in both)
+  and over the 1 s run (below 1e-7 J with the mode on and off).
 
 Fixed:
 - `fit --sweep` compared the sweep's lowest dip with the belt mode even where that dip is another
