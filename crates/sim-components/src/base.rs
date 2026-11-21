@@ -555,6 +555,9 @@ impl Machine for Based {
     fn twist(&self, torque: &[f64], acc: &[f64], out: &mut [f64]) {
         self.inner.twist(torque, acc, out)
     }
+    fn twist_at(&self, angle: &[f64], torque: &[f64], acc: &[f64], out: &mut [f64]) {
+        self.inner.twist_at(angle, torque, acc, out)
+    }
     fn rigid_split_torque(&self, angle: &[f64], speed: &[f64], acc: &[f64], rotor_acc: &[f64], out: &mut [f64]) {
         self.inner.rigid_split_torque(angle, speed, acc, rotor_acc, out)
     }
@@ -672,6 +675,13 @@ impl Machine for Based {
     }
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
         let mut modes = self.inner.modes(tool_pose);
+        modes.extend(self.base_modes().map(|(mode, _)| mode));
+        modes.sort_by(|a, b| a.hz.total_cmp(&b.hz));
+        modes
+    }
+    /// The machine's own with the base's, as `modes`.
+    fn sway_modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        let mut modes = self.inner.sway_modes(tool_pose);
         modes.extend(self.base_modes().map(|(mode, _)| mode));
         modes.sort_by(|a, b| a.hz.total_cmp(&b.hz));
         modes

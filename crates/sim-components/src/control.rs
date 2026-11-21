@@ -2240,7 +2240,7 @@ impl Controller {
 
     /// Half the period in profile cycles of the first shaper and of the second (0 without one) with the plan at `pose`:
     /// as configured, or, when the shaper follows the pose, that of the resonance the machine reports there for the
-    /// first and that of its second mode (`Machine::modes`) for the second; one the machine does not report stays as
+    /// first and that of its second mode (`Machine::sway_modes`) for the second; one the machine does not report stays as
     /// configured. `None` with the shaper off.
     pub fn shaper_halves(&self, machine: &dyn Machine, pose: &[f64]) -> Option<(f64, f64)> {
         let halves = self.mode_halves(machine, pose)?;
@@ -2252,7 +2252,7 @@ impl Controller {
     fn mode_halves(&self, machine: &dyn Machine, pose: &[f64]) -> Option<Vec<f64>> {
         let modes = self.shaper.as_ref()?;
         let following = modes.iter().any(|m| m.follows.is_some());
-        let reported = if following { machine.modes(pose) } else { Vec::new() };
+        let reported = if following { machine.sway_modes(pose) } else { Vec::new() };
         Some(
             modes
                 .iter()

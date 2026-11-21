@@ -778,7 +778,7 @@ fn regressor(machine: &mut dyn Machine, trace: &Trace, h: usize) -> Option<Vec<S
     let second = |x: &dyn Fn(usize) -> f64, a: usize| {
         2.0 * ((x(a + 1) - x(a)) / (t[a + 1] - t[a]) - (x(a) - x(a - 1)) / (t[a] - t[a - 1])) / (t[a + 1] - t[a - 1])
     };
-    // Each motor's acceleration and the twist of its train (`Machine::twist`), row by row: the load is where the motor's
+    // Each motor's acceleration and the twist of its train (`Machine::twist_at`), row by row: the load is where the motor's
     // angle less the twist puts it, a two-mass model per joint whose spring's force the motor's torque tells.
     let rotor_acc: Vec<Vec<f64>> = (0..rows)
         .map(|i| {
@@ -790,7 +790,9 @@ fn regressor(machine: &mut dyn Machine, trace: &Trace, h: usize) -> Option<Vec<S
     let twist: Vec<Vec<f64>> = (0..rows)
         .map(|i| {
             let mut out = vec![0.0; n];
-            machine.twist(&trace.motors.iter().map(|m| m.torque[i]).collect::<Vec<f64>>(), &rotor_acc[i], &mut out);
+            let angle: Vec<f64> = trace.motors.iter().map(|m| m.angle[i]).collect();
+            let torque: Vec<f64> = trace.motors.iter().map(|m| m.torque[i]).collect();
+            machine.twist_at(&angle, &torque, &rotor_acc[i], &mut out);
             out
         })
         .collect();

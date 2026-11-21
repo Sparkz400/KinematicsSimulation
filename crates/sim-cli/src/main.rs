@@ -1752,14 +1752,16 @@ fn tuning(args: &Args) -> Result<(), Failure> {
 /// `margins <machine> [--bands]`: per motor the stability margins of its velocity loop (`velocity_loop_margins`), for
 /// the config as it is and with `--bands` with each value of `[bounds]` at its low and at its high bound. A row whose
 /// loop is unstable, whose measurement is not valid or that hammers across its gearbox's play (`LoopMargins::stable`)
-/// says FAIL; one that hammers is named on stderr with the frequency and the torque's peak.
+/// says FAIL; one that hammers is named on stderr with the frequency and the torque's peak. The column before it is the
+/// describing function's gain margin across the play (`LoopMargins::play_margin_db`, dB; empty where no play acts on the
+/// loop), told and not judged.
 fn margins(args: &Args, tr: &Translations) -> Result<(), Failure> {
     use sim_components::analysis::{bounds, velocity_loop_margins};
     let (entry, cfg) = machine_and_config(args)?;
     let motors = (entry.build)(&cfg)?.motors().to_vec();
     let runs = velocity_loop_margins(entry, &cfg, &if args.flag("--bands") { bounds(&cfg)? } else { Vec::new() })?;
     let mut out = output(args, "--out")?;
-    writeln!(out, "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result")
+    writeln!(out, "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result")
         .map_err(io)?;
     for (run, margins) in &runs {
         for (motor, m) in motors.iter().zip(margins) {
@@ -1772,9 +1774,10 @@ fn margins(args: &Args, tr: &Translations) -> Result<(), Failure> {
             // No gain crossover in the band (or no valid measurement): crossover and phase margin left empty, as a
             // missing band in `tuning`; the result is then the gain margin's alone.
             let cell = |x: f64| if x.is_nan() { String::new() } else { format!("{x:.1}") };
+            let play = if m.play_margin_db.is_nan() { String::new() } else { format!("{:.2}", m.play_margin_db) };
             writeln!(
                 out,
-                "{run},{},{},{},{:.2},{:.3},{:.1},{result}",
+                "{run},{},{},{},{:.2},{:.3},{:.1},{play},{result}",
                 motor.id,
                 cell(m.crossover_hz),
                 cell(m.phase_margin_deg),

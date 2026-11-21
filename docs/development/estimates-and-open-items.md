@@ -112,13 +112,11 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | In the machine file (`machines/t-gantry.toml`, sim-netlist): the belt runs riding on the beam's vertical mode and the runs' offset on the leaning Z axis (the crate has both since 21 November, the offset behind `effects.belt_run_offset`, off as shipped) | T-gantry | The file's beam mode stays 0.93 % high (59.32 against the crate's 58.78 Hz); with the offset on, the crate's lean mode at x = 0.9, z = 0.05 m is 17.55 Hz against 18.75 Hz. |
 | Angular momentum of the T-gantry crate against its machine file is not compared | T-gantry | Different origins and belt-run geometry. |
 | Idler signs of the y belts of the dual gantry and the rack gantry | machine files | Not checked: the 3D drawing does not model those routes faithfully. |
-| The screw's stiffness along the stroke keeps the far end's for the pose tolerance and the elastic feedforward's twist (`effects.screw_stiffness_with_position`, on in the shipped configs; the dynamics, modes and rest states follow the nut, the screw's damper at its ratio and the Zener arm with them; since 21 November the hysteresis too, on the gear's own twist with its store's place term); the mesh bristle stays the far end's (it holds the output against the housing, its bound follows the nut, its store is not booked, and its stiffness is an unpublished factor whose tenth to ten times leave the loss the same) | wafer handler, screws | The feedforward's twist up to the far end's: 2.4 against 1.5 um on the wafer handler's column with the nut 0.15 m from the bearing. The bristle's stiffness up to 1.87 times the far end's there (no shipped config has a hysteresis behind such a screw). |
+| The screw's stiffness along the stroke keeps the far end's for the wafer handler's and the parallel SCARA's pose tolerance (their own `rest_sag`, `machine-wafer-handler` and `machine-parallel-scara`: the column's m g / K with the far end's K, the stroke's `static_twist`), on the safe side; `chain.rs`'s takes the nut, and since 21 November the fit's twist (`Machine::twist_at`) and the mesh bristle (σ_m r, its store still not booked: at most (μ |held|)² / (2σ_m) per gear) follow the nut too | wafer handler, parallel SCARA | The tolerance up to the far end's sag over the pose's. |
 | Belt-to-pulley heat conduction | linear delta | Not sized. |
 | The tube's single-mode shape for inertia with the static stiffness 3EI/L | D3, D4, H4 arm bending | Not sized. |
 | A contact that is not at the tool is pushed at the motors (machine crates, linkage, delta, scissor files) | obstacle contact | A load on a soft belt swings on by the belt's stretch (millimetres at 1 m/s). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
 | The stepper's detent while disabled | stepper | Up to T_d/(4N) appears or disappears from the budget at an enable. |
-| A margin figure for a loop across a backlash | `sim-cli margins` | The small-signal margins are still those of the motor alone inside its play. Since 21 November 2026 a time run (`backlash_hammering`: a swept kick of the rated torque at the start pose) finds a loop that hammers across the play and fails it (the five-bar's tool turn at 0.08: 650 Hz, 0.77 N m, where the margins read 10.54 dB); how far a loop that does not hammer is from it (the describing function's margin) is not given, and only the start pose is kicked. |
-| A cam changed by a reconfigure while it runs | input shaper | A delayed copy is read against the new cam for up to one shaper span. A fix (each stored plan keeps its cam's curve) is written and its own test passes, but the other shaper tests were not re-run on it, so it is not merged: branch `worktree-agent-ae9f112be15454252`, uncommitted in its worktree. |
 | `mode_shape` of the five-bar | five-bar | Display only. |
 | Run files recorded before the signal `setpoint_age` | `charts.rs` | The tool error falls back to the held setpoint: up to one cycle's travel (0.79 against 0.18 mm on the T-gantry). |
 
@@ -276,6 +274,29 @@ Fixed (second audit, 21 November):
   with Z's mode to 51.5 and 140.1 Hz.
 
 Fixed (after the second audit, 21 November):
+- The crane's shaping optimiser took its second shaper from the second mode of `Machine::modes`, and a shaper following
+  the pose its second mode there: since the bounce along the rope is in the crane's modes, without the hook block that
+  was the bounce (8.30 Hz at the start pose) where it should be none. Both take `Machine::sway_modes` now (by default
+  `modes`; the crane's swings alone): with the hook block the upper swing (2.55 Hz), without it no second shaper
+  (`the_cranes_second_shaper_is_its_upper_swing_not_the_bounce`).
+- A margin figure for a loop across a backlash (was in section 4): `sim-cli margins` prints the describing function's
+  margin across the play (`play_margin_db`, model reference, hammering across a backlash), with the rotor's friction
+  faded. Five-bar's tool turn: -4.18 dB at 0.08, +3.56 dB at the shipped 0.033 (onset 0.0497); a time run with the
+  friction off hammers from 0.048 (within 4 %), with it on from 0.078: the friction still damps the swing, which the
+  figure leaves out on the safe side. Told, not judged (the time run stays the verdict); each run is measured once more
+  with the play closed (margins of the five-bar 20.5 to 23.8 s). Still open: the kicks and the margins are at the start
+  pose only; the margins across the bounds vary config values, not poses, so there was no pose list to reuse.
+- The hexapod's lowest held mode (183.2 Hz) lies below its planner trains (289.6 Hz, each leg's M_kk with the others
+  held), and the trains are right for the allowance's jerk term: with one motor driven and the others held the twist
+  rate is [K^-1 M]_kk j = M_kk j / K_k, the modal sum of its column over the held modes (model reference, the planner's
+  speed ratings). Only the cap after a step of the acceleration would see the lower modes; on the tripod's, hexapod's,
+  wafer handler's and joint-kit SCARA's default cycles the jerk term is taken by a factor 130 to 3600, so no figure
+  moves and the train is left as it is.
+- A cam changed by a reconfigure while it runs (was in section 4 as an unmerged fix): the fix is on main since
+  dc454002 (17 November), each stored plan keeping its cam's curve (`Plan::cam`, `Machine::cam_curve`). Checked on 21
+  November: `a_cam_changed_under_way_leaves_the_shaper_the_plan_as_it_ran` fails with the delayed copies read off the
+  machine's cam (2.16e-3 rad off the copies of the plan as it ran) and passes with the fix; the shaper tests of every
+  crate and the control tests pass (41 tests, 30 s).
 - The XYZ portal's Z belt is a loop: its section z2 is 0.9 m (0.5 m from the motor to the far idler and 0.4 m
   back to the clamp), its span z_2 0.5 m, so the falling run is as long as the two rising with the slide. Its Z
   holds 3.5 kg again, 0.0686466 N m (before 3.54 kg, 0.0694311 N m); its belts weigh 2T / mu = 3.1 vx² + 1.8 vy² +
@@ -297,9 +318,12 @@ Fixed (after the second audit, 21 November):
   `the_modes_are_damped_as_the_linearised_machine_at_the_nut`): tripod 0.01946, 0.02134, 0.02444 (was 0.01574,
   0.01726, 0.01977), hexapod 0.01047 to 0.0480 (was 0.00872 to 0.0401), parallel SCARA's quill at z = 0.18 m 0.0399
   (was 0.0216), joint-kit SCARA's stroke 0.0271 (was 0.0228), also with its links bending two-way. Only the printed
-  damping moves: the shaper takes the frequencies. Open: with the links bending two-way the SCARA's pair of link
-  modes at 680 and 737 Hz is damped 0.0756 and 0.0844 against 0.0741 and 0.0860 linearised (the sum kept):
-  `generalized_modes` takes each mode's damping on its undamped shape.
+  damping moves: the shaper takes the frequencies. With the links bending two-way the SCARA's pair of link modes at
+  680 and 737 Hz was damped 0.0756 and 0.0844 against 0.0741 and 0.0860 linearised (the sum kept), each mode's damping
+  taken on its undamped shape: since 21 November it is the damped problem's, -Re lambda / |lambda| of the eigenvalue of
+  M lambda^2 + C lambda + K at the mode, C iterated to |lambda| (`chain::matrix_modes_at`), 0.074087 and 0.085952 against
+  0.074087 and 0.085952; the test checks every mode now (it stopped below 650 Hz). `Mode::hz` stays the undamped
+  frequency (the shaper's); the pair's |lambda| is 687.4 and 729.7 Hz against 680.1 and 737.5 undamped.
 - The hysteresis behind a screw whose stiffness follows the nut (b253b9b5) picked its Dahl branch at the anchor by
   rounding: `at` rebuilt the anchor's twist as (x r) / r, an ulp to either side of x, and at the anchor the branch also
   went by x' where the state lives on y = r x. The torques were right, the slope and so the loss power wrong exactly
@@ -429,19 +453,12 @@ Fixed:
   rises the last one started at (on this cycle 0.69 K apart, seven times the tolerance): the verdict row
   `thermal-cycle-repeat` and the CLI's message name the cause.
 
-Open, with the cause where it is known:
-- Fixed (21 November): the warm start for a motor near its limit (1FK2104-4AF on the EXCT-30) now
-  converges; the motor fails settling (0.36 mm) with its winding settled at 98 K, and a cycle that
-  repeats only every second pass is named by the `thermal-cycle-repeat` verdict.
-- The linear delta at a +20° column incline is refused with "out of range: cycle.segment[2]": the
-  machine's own reason (`unreachable`) is dropped in `control.rs`; the front ends' message has one
-  placeholder.
-- Fixed: the T-gantry's least belt tension prints as `belt-least-tension` in the program and in the
-  guides.
-- The optimiser's run count: the search is capped at `--runs`; `--pareto` and raised lifts add
-  runs. The guide's example now reads 40 + 834 (21 November).
-- Stale comments: the five-bar's "235 of 192 N m" and "NRB080-05-20: 120 rated, 192 maximum" (the
-  gearbox is now 347 / 278 N m); the palletiser's `gearbox.efficiency_torque_nm` comment (137 against
-  600); the app label "Line module loss while feeding back" (the loss now counts while drawing too).
-- Machine files' `[screw_*]` tables have no `friction_coefficient`, which `effects.screw_lead_efficiency`
-  probably needs: not tried.
+Fixed after the list of 17 November (in main, 20 November):
+- The warm start for a motor near its limit (1FK2104-4AF on the EXCT-30) converges; a cycle that repeats
+  only every second pass is named by the `thermal-cycle-repeat` verdict.
+- A target the machine cannot reach is refused with the segment and the machine's own reason
+  (732420e1; the linear delta at +20°: a rod would stand steeper than its joints allow).
+- The least belt tension prints as `belt-least-tension`; the optimiser example reads 40 + 834.
+- Stale comments: the five-bar's SP100 gearboxes, the palletiser's efficiency torque, the line module's
+  loss label (c5fafd68).
+- Machine files' `[screw_*]` tables carry `friction_coefficient` (3c0c73b6).

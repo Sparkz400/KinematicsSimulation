@@ -377,7 +377,7 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         let margins = table(&["margins", entry.id]);
         assert_eq!(
             margins.lines().next().unwrap(),
-            "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result"
+            "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result"
         );
         let rows: Vec<Vec<&str>> = margins.lines().skip(1).map(|l| l.split(',').collect()).collect();
         // A loop without a gain crossover in the band (below) has no phase margin to measure: crossover and phase
@@ -385,7 +385,7 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         for row in &rows {
             let gain: f64 = row[4].parse().unwrap();
             let phase_ok = if row[2].is_empty() { row[3].is_empty() } else { row[3].parse::<f64>().unwrap() > 35.0 };
-            assert!(phase_ok && gain > 6.0 && row[7] == "ok", "{}: {row:?}", entry.id);
+            assert!(phase_ok && gain > 6.0 && row[8] == "ok", "{}: {row:?}", entry.id);
         }
         assert_eq!(rows.len(), (entry.build)(&entry.config()).unwrap().motors().len());
         // They are the figures of `velocity_loop_margins`, which the command line prints alike for every machine: checked on
