@@ -1139,12 +1139,14 @@ fn the_parallelogram_holds_the_forearm_against_the_upper_arms_bend() {
     assert!((unheld - by_hand).abs() > 0.05 * by_hand, "without the bars {unheld} Hz");
     // Acting back on the joints (effects.link_bending_reaction), the bars' fields in the coupling with their rates: its
     // energy holds over the suite's run with gravity (`testkit::energy_conservation`): 1.8e-8 J of the 2.8 mJ put in over
-    // 10 s, the arm without its bars 6.9e-9 J of 3.2 mJ (the integrator's level). The joints' stops off: with the
-    // bars the swinging upper arm reaches its stop at 0.9 rad, and the stiff stop's integration error (1.3e-5 J at
-    // 62.5 us, 1.3e-6 J at 31.25 us, in steps at each contact) is no term of the model.
-    let mut cfg = bent_config(true, true);
-    cfg.set_text("effects.hard_stops = false").unwrap();
-    sim_core::testkit::energy_conservation((PALLETISER.build)(&cfg).unwrap().as_ref());
+    // 10 s with the joints' stops off, the arm without its bars 6.9e-9 J of 3.2 mJ (the integrator's level). With the
+    // bars the swinging upper arm reaches its stop at 0.9 rad: the steps that meet it cut 16 times finer
+    // (`mech::STOP_SUBSTEPS`), 5.3e-9 J. Before 22 November 1.3e-5 J, in steps at each contact (1.3e-6 J at half the
+    // step): the stop's damper taking hold within a step, integrated across.
+    let cfg = bent_config(true, true);
+    let (drift, injected) = sim_core::testkit::energy_drift((PALLETISER.build)(&cfg).unwrap().as_ref());
+    println!("with the stops: {drift} J of {injected} J");
+    assert!(injected > 0.0 && drift < 1e-5 * injected, "{drift} J of {injected} J");
 }
 
 /// The palletiser rigid and loss-free in joint space, its upper arm bending in its plane (a steel tube 150 x 10 mm,
@@ -1500,7 +1502,7 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
 
 /// The palletiser's turret on its gear, as it rings after a long move in x (its arm out to 1.79 m): the machine reports
 /// its joints' modes with the motors held, K x = w^2 M x (`JointMachine::held_modes`), 8.21 Hz at the move's start (8.30
-/// before the parallelogram's rod and crank came in, 22 November: their 14 kg turn with the turret too) and
+/// before the parallelogram's rod and crank were added, 22 November: their 14 kg turn with the turret too) and
 /// 5.95 Hz at its end, the turret's (4 mm of its sway in x 0.3 s after the move, `a_move_arrives_and_comes_to_rest`).
 /// The ring measured from the tool's speed rings lower, at 5.30 Hz: the velocity loop does not hold the motor rigidly.
 /// Its cascade (Kv, then PI with Kp and Tn) holds the rotor with Z = Kp (1 + 1 / (j w Tn)) (Kv + j w) - w^2 J at the

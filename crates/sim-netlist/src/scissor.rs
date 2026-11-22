@@ -251,8 +251,6 @@ pub struct ScissorMachine {
     gearbox_id: &'static str,
     id: &'static str,
     rest_slack: f64,
-    /// The integrator's sub-step (`Machine::set_substep`).
-    substep: Option<f64>,
 }
 
 impl ScissorMachine {
@@ -302,7 +300,6 @@ impl ScissorMachine {
             gearbox_id: intern(&format!("gearbox_{}", net.motors[0].id)),
             id: intern(&node.id),
             rest_slack: 0.0,
-            substep: None,
         };
         machine.rest_slack = machine.rest_sag();
         Ok(machine)
@@ -553,13 +550,10 @@ impl Machine for ScissorMachine {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
-    fn set_substep(&mut self, h: f64) {
-        self.substep = Some(h);
-    }
     /// The gear's efficiency switch near zero power at the step's start (`mech::Gearbox::fade_damping`) on the screw's
     /// inertia M(theta) there.
-    fn substeps_wanted(&self, s: &[f64], torque: &[f64]) -> u32 {
-        let Some(h) = self.substep else { return 1 };
+    fn substeps_wanted(&self, s: &[f64], torque: &[f64], dt: f64, substeps: u32) -> u32 {
+        let h = dt / f64::from(substeps);
         let gear = &self.joint.gearbox;
         let output = if self.elastic {
             gear.torque(s[2], s[3], s[0], s[1]).rotor * gear.ratio

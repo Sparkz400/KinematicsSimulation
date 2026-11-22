@@ -1114,6 +1114,15 @@ impl Machine for Crane {
         self.attached = attached;
     }
 
+    /// With the hook block and the floor: the payload stands on the floor under the hook block (`after_step`), so a hook
+    /// block hanging lower over the floor than the two boxes' half heights (0.28 m, `full::faces`) would already be
+    /// inside it, which pushing it out would make energy.
+    fn refuses_pick(&self, tool_pose: &[f64]) -> Option<&'static str> {
+        let floor = self.floor.filter(|_| self.layout.sling.is_some())?;
+        (tool_pose.len() == 3 && tool_pose[2] - floor < 0.5 * (HOOK_BOX[2] + PAYLOAD_BOX[2]))
+            .then_some("error-pick-hook-in-payload")
+    }
+
     /// Pick and set-down are quasi-static: a load slung on the floor goes on as the hoist takes its weight up slowly,
     /// and comes off as it is set down. So once the payload went on or off, the load moves along the rope to where the
     /// rope's free length holds the new mass at rest, L = l (1 + m g / EA), and its speed along the rope to the drum's

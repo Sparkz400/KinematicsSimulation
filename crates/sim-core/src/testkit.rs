@@ -2,7 +2,7 @@
 //! transformation round trip, static hold, energy conservation, step-size convergence, determinism, and the
 //! energy balance with the losses the machine reports.
 
-use crate::{ENERGY_PARTS, LOSS_PREFIX, Machine, MachineEntry, Rk4, advance};
+use crate::{ENERGY_PARTS, LOSS_PREFIX, Machine, MachineEntry, Rk4, advance, advance_refined};
 
 pub const DT: f64 = 62.5e-6;
 pub const SUBSTEPS: u32 = 4;
@@ -167,7 +167,7 @@ impl<'a> PulseRun<'a> {
             let t = self.step as f64 * self.dt;
             let pulse = if t < self.pulse_s { (std::f64::consts::PI * t / self.pulse_s).sin().powi(2) } else { 0.0 };
             self.torque = self.hold.iter().zip(&self.delta).map(|(h, d)| h + d * pulse).collect();
-            advance(self.m, &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
+            advance_refined(self.m, &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
             self.step += 1;
             each(self);
         }
@@ -185,15 +185,21 @@ impl<'a> PulseRun<'a> {
 /// The drift is measured against the energy the pulse put in, which is far stricter than
 /// measuring against the gravitational potential.
 pub fn energy_conservation(m: &dyn Machine) {
+    let (worst, injected) = energy_drift(m);
+    assert!(injected > 0.0, "the pulse put in no energy ({injected})");
+    assert!(worst < 1e-3 * injected, "energy drifted by {:.4} % of the {injected} J put in", 100.0 * worst / injected);
+}
+
+/// The run of `energy_conservation`: how far the energy drifted at most over the 10 s after the pulse, and what the
+/// pulse put in (J).
+pub fn energy_drift(m: &dyn Machine) -> (f64, f64) {
     let mut run = PulseRun::new(m, DT, PULSE_ACC, PULSE_S);
     let before = run.invariant();
     run.run(PULSE_S, |_| {});
     let after = run.invariant();
-    let injected = after - before;
-    assert!(injected > 0.0, "the pulse put in no energy ({injected})");
     let mut worst = 0f64;
     run.run(10.0, |r| worst = worst.max((r.invariant() - after).abs()));
-    assert!(worst < 1e-3 * injected, "energy drifted by {:.4} % of the {injected} J put in", 100.0 * worst / injected);
+    (worst, after - before)
 }
 
 /// Tolerance of `loss_budget`, as a share of the work the motor torques did either way.

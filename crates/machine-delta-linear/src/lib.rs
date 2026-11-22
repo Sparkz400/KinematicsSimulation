@@ -1351,6 +1351,12 @@ impl Machine for LinearDelta {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
+    /// A carriage meeting its stop within the step (`HardStop::met_within`): `mech::STOP_SUBSTEPS`.
+    fn substeps_wanted(&self, s: &[f64], _torque: &[f64], dt: f64, _substeps: u32) -> u32 {
+        let (h, v) = self.heights(s);
+        let met = (0..3).any(|k| self.stops.met_within(h[k] - self.h_min(), v[k], self.stroke, dt));
+        if met { sim_components::mech::STOP_SUBSTEPS } else { 1 }
+    }
     /// The push acts on the platform, beyond the belts, in either model (`pushed`); its power is the budget's crash row.
     fn set_tool_force(&mut self, force: &[f64]) -> bool {
         self.push = [force[0], force[1], force[2]];

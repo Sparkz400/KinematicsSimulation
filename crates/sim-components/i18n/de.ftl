@@ -128,6 +128,7 @@ quantity-torque = Drehmoment
 quantity-torque-command = Momentensollwert
 quantity-speed-command = Drehzahlsollwert
 error-target-out-of-range = Das Ziel liegt außerhalb des Verfahrbereichs.
+error-pick-hook-in-payload = Beim Aufnehmen hinge die Hakenflasche hier in der Last.
 error-busy = Eine Bewegung oder der Zyklus läuft noch.
 error-no-cycle = Die Konfiguration definiert keinen Zyklus.
 error-trajectory = Die zeitlich vorgegebene Bahn braucht mindestens zwei Punkte im Verfahrbereich, mit steigenden Zeiten ab 0.

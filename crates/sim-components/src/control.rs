@@ -837,6 +837,16 @@ impl Controller {
                 law: MotionLaw { shape, ..law.clone() },
             });
         }
+        // A pick (a segment that attaches the payload after one that left it off, the cycle running round) the machine
+        // refuses for its own reason, with the segment.
+        for (i, segment) in segments.iter().enumerate() {
+            let before = &segments[(i + segments.len() - 1) % segments.len()];
+            if let Some(why) =
+                (segment.payload && !before.payload).then(|| machine.refuses_pick(&segment.target)).flatten()
+            {
+                return Err(ConfigError::Part(why, format!("cycle.segment[{i}]")));
+            }
+        }
         // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
         // whatever the room (friction, the belt's vibration), which is roughly absolute, not a share of the room.
         // A machine with a band of its own (cables between winches and a platform) gives it; the ratings otherwise.
@@ -1434,6 +1444,10 @@ impl Controller {
                 }
             }
             drive.disabled_step(p, self.motor_vel[k]);
+            // A stepper's magnets hold their detent without current (`Sim::advance_with_windings` integrates it).
+            if let Motor::Stepper(s) = &p.motor {
+                drive.torque += s.detent_torque(self.motor_pos[k], drive.phases.origin);
+            }
             torque[k] = drive.torque;
         }
         if self.params.shared_dc_link {
