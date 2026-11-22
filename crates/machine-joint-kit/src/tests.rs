@@ -726,8 +726,8 @@ fn one_bending_link() -> Box<dyn Machine> {
 }
 
 /// The one-way bend's Ritz pair over w = a xi^2 + b xi^3 (`arm::BentLink`) by hand: a cantilever of E I `ei`, its own
-/// mass `m` over `length`, `tip` and a tip inertia `j` at its end. M = m [[1/5, 1/6], [1/6, 1/7]] + tip [[1, 1], [1, 1]]
-/// + j / L^2 [[4, 6], [6, 9]] (the tip's deflection a + b, its slope (2 a + 3 b) / L), K = E I / L^3 [[4, 6], [6, 12]]
+/// mass `m` over `length`, `tip` and a tip inertia `j` at its end. M = m [[1/5, 1/6], [1/6, 1/7]] + tip [[1, 1], [1, 1]] +
+/// j / L^2 [[4, 6], [6, 9]] (the tip's deflection a + b, its slope (2 a + 3 b) / L), K = E I / L^3 [[4, 6], [6, 12]]
 /// (int w''^2), det(K - w^2 M) = 0: both frequencies (Hz), lowest first.
 fn ritz_hz(ei: f64, m: f64, length: f64, tip: f64, j: f64) -> [f64; 2] {
     let r = j / (length * length);

@@ -423,6 +423,10 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
                     }
                 }
             }
+            // An arm without a parallelogram rod (no bar with an axial stiffness) has nothing to stretch or rock on.
+            "effects.bar_elasticity" | "effects.bar_rocking" => {
+                base.f64s("arm.bars_axial_stiffness_n_m").map_or(true, |k| k.iter().all(|&k| k == 0.0))
+            }
             "effects.braking_resistor_heating" => !base.bool("effects.dc_link").unwrap(),
             "effects.base_compliance" => {
                 let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);

@@ -546,7 +546,7 @@ fn the_sags_gradient_is_its_differences() {
         (&SPATIAL, {
             let mut v = vec![vec![0.3, -0.2, 1.3, 0.05, -0.03, 0.08], vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0]];
             for i in 0..200 {
-                let f = |k: f64| ((i as f64 * k).sin());
+                let f = |k: f64| (i as f64 * k).sin();
                 v.push(vec![0.4 * f(1.3), 0.4 * f(2.1), 1.0 + 0.3 * f(0.7), 0.1 * f(3.3), 0.1 * f(1.9), 0.1 * f(2.9)]);
             }
             v
@@ -688,7 +688,7 @@ fn the_cables_run_along_with_the_drums() {
             robot.energy_parts(s)[1] + (0..3).map(|i| f.gravity[i] * f.first_moment[i]).sum::<f64>()
         };
         let mut other = Vec::new();
-        robot.equilibrium(&[-0.2, 0.6], &mut other, &mut vec![0.0; 4]);
+        robot.equilibrium(&[-0.2, 0.6], &mut other, &mut [0.0; 4]);
         if stretch {
             let n = robot.n();
             (0..4).for_each(|k| other[2 * n + k] *= 1.001);

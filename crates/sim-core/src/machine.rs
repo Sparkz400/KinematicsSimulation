@@ -619,7 +619,7 @@ pub fn tool_force_on_rates<M: Machine + ?Sized>(
     let n = force.len();
     let (mut pos, mut base, mut vel, mut at) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], s.to_vec());
     machine.contact_state(s, &mut pos, &mut base);
-    let mut on = |j: usize| -> f64 {
+    let on = |j: usize| -> f64 {
         at[j] = s[j] + 1.0;
         machine.contact_state(&at, &mut pos, &mut vel);
         at[j] = s[j];

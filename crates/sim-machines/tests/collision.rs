@@ -728,8 +728,10 @@ struct PushRun {
     depth: f64,
     force: f64,
     /// The most of each over the run: the impact's (with the push at the motors a load on a soft transmission swings
-    /// on into the slab by the transmission's give and springs back).
+    /// on into the slab by the transmission's give and springs back). Printed with the run, not asserted.
+    #[allow(dead_code)]
     peak_depth: f64,
+    #[allow(dead_code)]
     peak_force: f64,
     /// The planned move into it: the budget's crash row, what is not accounted for, and the supply plus the potential
     /// energy's change, which the budget's error scales with (J).

@@ -318,7 +318,8 @@ fn a_run_file_without_the_setpoint_age_has_it_from_its_timing() {
         assert!(off < 1e-12, "every {every}: the age off by {off} s");
         let with = tool_error(&signals, &columns).unwrap();
         let (mut old_signals, mut old_columns) = (signals.clone(), columns.clone());
-        (old_signals.remove(at), old_columns.remove(at));
+        old_signals.remove(at);
+        old_columns.remove(at);
         let without = tool_error(&old_signals, &old_columns).unwrap();
         let gap = (with.normal.iter().zip(&without.normal)).chain(with.tangential.iter().zip(&without.tangential));
         let gap = gap.fold(0f64, |m, (a, b)| m.max((a - b).abs()));

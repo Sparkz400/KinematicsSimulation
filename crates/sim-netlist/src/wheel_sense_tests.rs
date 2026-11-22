@@ -257,8 +257,9 @@ fn the_gantries_y_belts_turn_their_far_idlers_as_they_run() {
 ///   offsets: from a point at D from a wheel's centre the tangent touches r sqrt(D^2 - r^2) / D off the line, so the
 ///   run's middle half that, e1 = r sqrt(D1^2 - r^2) / (2 D1), D1 = y + 0.07, and e3 likewise with r_f and D3 = 0.93 - y;
 ///   between the pulley and the far idler (d = 1.0 m apart) e2 = (r + r_f) / 2 sqrt(1 - ((r - r_f) / d)^2). Their
-///   momenta along y give about z mu vy (-(0.1 + y) e1 - 1.0 e2 - (0.9 - y) e3) (the bridge's x cancels: 0.1 + y - 1.0
-///   + 0.9 - y = 0).
+///   momenta along y give about z mu vy (-(0.1 + y) e1 - 1.0 e2 - (0.9 - y) e3) (the bridge's x cancels: 0.1 + y - 1.0 +
+///   0.9 - y = 0).
+///
 /// Nothing about x or y: every wheel turns about z and every run lies in the plane z = 0 moving along y. Drawn standing in
 /// x-z as before, the wheels spun about y (2.5e-3 N m s of the 2.5e-3) and the runs lay at the pulley's drawn x = 1.5 m.
 #[test]

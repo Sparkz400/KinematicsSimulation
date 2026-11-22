@@ -1529,7 +1529,7 @@ impl Mechanism for Arm {
             let (rot, origin) = frames[link.body];
             let tip = add(origin, mul(&rot, link.dir.map(|v| v * link.length)));
             // A flange a parallelogram holds against the mode moves with the tip and does not turn (`held_from`).
-            let held = frames.len() - 1 >= link.held_from;
+            let held = frames.len() > link.held_from;
             let turn = mul(&rot, link.turn).map(|v| if held { 0.0 } else { v * link.tip_turn() * d });
             let swing = cross(turn, std::array::from_fn(|i| flange[i] - tip[i]));
             moved = add(moved, add(mul(&rot, link.across).map(|v| v * link.tip() * d), swing));
