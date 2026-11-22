@@ -391,3 +391,41 @@ fn the_dynamics_with_the_legs_parts_agree_with_the_lagrange_equations() {
         assert!((rest[i] - hold[i]).abs() < 1e-9 * (1.0 + hold[i].abs()), "{rest:?} against {hold:?}");
     }
 }
+
+/// The rotors' gyroscopic moment has nothing to do on the platform: a leg swings in its plane about its trunnion's axis
+/// e_i, so u and u' both lie square to e_i and the moment the rotor needs, h u', lies square to e_i too, which the
+/// trunnion's bearing carries; were it passed to the platform as the hexapod's couple, its force there, h (u x u') / L,
+/// would lie along e_i, the constraint's direction, and A^T of its wrench (the generalised force on q) is 0. So no
+/// term in the equations; the rotors' spin stays in the frame's momentum, whose rate the base feels.
+#[test]
+fn the_rotors_turning_with_their_legs_do_not_push_the_platform() {
+    let mech = mechanism(&ENTRY.config());
+    let tool = [0.52, 0.12, -0.08];
+    let mut q = [0.0; 3];
+    assert!(mech.geo.inverse(&tool, &mut q));
+    let legs = mech.geo.legs(&tool);
+    let a = Lu::new(&mech.geo.constraint_matrix(&legs)).unwrap().columns();
+    let qd = [0.07, -0.05, 0.04];
+    let xi: [f64; 6] = std::array::from_fn(|r| (0..3).map(|c| a[c][r] * qd[c]).sum());
+    let (v, w) = ([xi[0], xi[1], xi[2]], [xi[3], xi[4], xi[5]]);
+    let mut wrench = [0.0; 6];
+    let mut size = 0.0f64;
+    for i in 0..3 {
+        let d = add(v, cross(w, legs.b[i]));
+        let along = dot(legs.u[i], d);
+        let turn: V3 = std::array::from_fn(|k| (d[k] - legs.u[i][k] * along) / legs.length[i]);
+        let force = cross(legs.u[i], turn).map(|f| f / legs.length[i]);
+        let e = mech.geo.tangents[i];
+        assert!(dot(turn, e).abs() < 1e-15 && dot(legs.u[i], e).abs() < 1e-15, "leg {i} leaves its plane");
+        let off = cross(force, e);
+        assert!(dot(off, off).sqrt() < 1e-12 * dot(force, force).sqrt(), "leg {i}: {force:?} not along {e:?}");
+        size = size.max(dot(force, force).sqrt());
+        let moment = cross(legs.b[i], force);
+        (0..3).for_each(|k| (wrench[k], wrench[3 + k]) = (wrench[k] + force[k], wrench[3 + k] + moment[k]));
+    }
+    assert!(size > 1e-3, "{size}");
+    for c in 0..3 {
+        let generalised: f64 = (0..6).map(|r| a[c][r] * wrench[r]).sum();
+        assert!(generalised.abs() < 1e-12 * size, "{c}: {generalised}");
+    }
+}

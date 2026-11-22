@@ -1296,7 +1296,7 @@ meanings; one motor, coupling, screw and drive per leg, all alike. The screw is 
 screw's damping and its stiffness at the nut: 127.7 Hz, 100.0 degrees, 7.78 dB, across the bounds at least 90.1 degrees and 7.48 dB; 145 Hz, 89 degrees, 10.6 dB before); `profile.vertical_axis` "z". The tool pose, `start.pose` and the targets are x, y, z (m), rx,
 ry, rz (rad, a rotation vector); `[axis.x]`, `[axis.y]`, `[axis.z]` take `max_velocity_m_s`, `max_acceleration_m_s2`,
 `max_jerk_m_s3` (0.2, 3, 100, estimates), `[axis.rx]`, `[axis.ry]`, `[axis.rz]` the same in rad (0.8, 10, 400,
-estimates). Effects as on the ball screw axis: `joint_elasticity` (each leg's coupling, screw, nut and bearings
+estimates). Its own effect: `rotor_gyroscopic` (off as shipped, since on it moves the default cycle's peak torques by up to 0.078 %; each leg's rotor, spinning along its leg, turns with it and pushes the platform by the couple F = J i q' (u × u') / L at its joint, which does no work; off, the spin is in the frame's momentum only; a config without the key has it off). Effects as on the ball screw axis: `joint_elasticity` (each leg's coupling, screw, nut and bearings
 stretch; off: the rigid reference model), `joint_friction` (the rod's guide and the nut's preload), `hard_stops` (the
 legs' stroke ends), the gearbox and motor effects; shipped as there. Its own keys (all estimates; the masses and the
 legs' friction bounded):

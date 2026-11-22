@@ -2463,36 +2463,66 @@ fn the_idlers_ride_on_the_speed_along_the_beam_alone() {
     }
 }
 
-/// The belt's runs' angular momentum about y against a brute-force sum over the runs of `belt_mass`'s table (every run cut
-/// into 4000 pieces of m (Z Vx - X Vz), the sway speed added to Vx): the closed form of `belt_angular` is the same.
+/// The belt's runs where the wheels stand (`runs`): r = 0.02 m, r_i = 0.012 m, the carriage at 0.9 m (the frame swayed by
+/// 0.01 m), the Z axis's point at 0.35 m. The four runs to the motor pulleys are level at +-r = +-0.02 m, from the posts
+/// (-0.14 and 1.16 m with the sway) to the carriage idlers' sides 0.9 -+ 0.042 m; every run's end lies on its wheel and
+/// square to its radius there (tangent). Their angular momentum about y is each run's mass, mu times its length of
+/// `belt_mass`, at the middle of the run with its speed: by hand from those ends.
 #[test]
 fn the_belt_angular_momentum_is_the_sum_over_its_runs() {
     let m = machine(lossless_config(), &["effects.frame_compliance = true"]);
     let (mu, s, sx, sz) = (m.belt.mass_per_m, m.span_min, m.axes[0].max, m.axes[1].max);
-    // The carriage at x = xc (no sway offset), the sway speed vq.
-    let (xc, h, z, vx, vz, vq) = (0.9, m.z_com_drop, 0.35, 0.8, -0.3, 0.05);
-    // (length, Z at its start, dZ/dl, Vx without the sway, Vz)
-    let (l, upper) = (s + sz - z, s + z);
-    let runs = [
-        (upper, h, 1.0, vx, vz),
-        (upper, h, 1.0, vx, vz),
-        (l, h, -1.0, vx, 2.0 * vx + vz),
-        (l, h, -1.0, vx, -(2.0 * vx - vz)),
-        (s + xc, h, 0.0, vx + vz, 0.0),
-        (s + xc, h, 0.0, -(vx + vz), 0.0),
-        (s + sx - xc, h, 0.0, -(vx - vz), 0.0),
-        (s + sx - xc, h, 0.0, vx - vz, 0.0),
-    ];
-    let pieces = 4000;
-    let mut sum = 0.0;
-    for (len, z0, dz, v_x, v_z) in runs {
-        for i in 0..pieces {
-            let at = (i as f64 + 0.5) / pieces as f64 * len;
-            sum += mu * len / pieces as f64 * ((z0 + dz * at) * (v_x + vq) - xc * v_z);
+    let (xc, sway, z, vx, vz, vq) = (0.9, 0.01, 0.35, 0.8, -0.3, 0.05);
+    assert!(m.r == 0.02 && m.idler_radius == 0.012);
+    let runs = m.runs(xc, sway, z);
+    let level = [(1, [0.858, 0.02], [-0.14, 0.02]), (2, [-0.14, -0.02], [0.858, -0.02])];
+    let level = level.into_iter().chain([(5, [0.942, -0.02], [1.16, -0.02]), (6, [1.16, 0.02], [0.942, 0.02])]);
+    for (k, a, b) in level {
+        for (got, want) in runs[k].iter().zip([a, b]) {
+            assert!((got[0] - want[0]).abs() < 1e-12 && (got[1] - want[1]).abs() < 1e-12, "run {k}: {runs:?}");
         }
     }
-    let got = m.belt_angular(xc, h, z, [vx, vz, vq]);
-    assert!((got - sum).abs() < 1e-9 * sum.abs().max(1.0), "{got} against the sum {sum}");
+    // The wheels' centres and radii along the path, each run between two of them.
+    let wheels = [
+        ([xc, z], 0.0),
+        ([xc - 0.042, 0.032], 0.012),
+        ([sway - s, 0.0], 0.02),
+        ([xc - 0.042, -0.032], 0.012),
+        ([xc, z - 0.08], 0.012),
+        ([xc + 0.042, -0.032], 0.012),
+        ([sway + s + sx, 0.0], 0.02),
+        ([xc + 0.042, 0.032], 0.012),
+        ([xc, z], 0.0),
+    ];
+    for (k, [a, b]) in runs.iter().enumerate() {
+        let t = [b[0] - a[0], b[1] - a[1]];
+        for (p, (c, radius)) in [(a, wheels[k]), (b, wheels[k + 1])] {
+            let off = [p[0] - c[0], p[1] - c[1]];
+            assert!((off[0].hypot(off[1]) - radius).abs() < 1e-12, "run {k} off its wheel");
+            assert!((off[0] * t[0] + off[1] * t[1]).abs() < 1e-12, "run {k} not tangent");
+        }
+    }
+    let lengths =
+        [s + z, s + xc - sway, s + xc - sway, s + sz - z, s + sz - z, s + sx - xc + sway, s + sx - xc + sway, s + z];
+    let speeds = [
+        [vx, vz],
+        [vx + vz, 0.0],
+        [-(vx + vz), 0.0],
+        [vx, 2.0 * vx + vz],
+        [vx, -(2.0 * vx - vz)],
+        [-(vx - vz), 0.0],
+        [vx - vz, 0.0],
+        [vx, vz],
+    ];
+    let by_hand: f64 = (0..8)
+        .map(|k| {
+            let [a, b] = runs[k];
+            let (mx, mz) = (0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]));
+            mu * lengths[k] * (mz * (speeds[k][0] + vq) - mx * speeds[k][1])
+        })
+        .sum();
+    let got = m.belt_angular(xc, sway, z, [vx, vz, vq]);
+    assert!((got - by_hand).abs() < 1e-15 * by_hand.abs().max(1.0), "{got} against {by_hand}");
 }
 
 /// The idlers' spin in the frame's angular momentum: -2 (J / r) vx, the five idlers' turning with the belt past them

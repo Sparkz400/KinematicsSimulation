@@ -152,6 +152,14 @@ fn spring(g: &sim_components::mech::Gearbox, small: bool) -> f64 {
     g.stiffness + if small && g.hysteresis > 0.0 { g.dahl_stiffness } else { 0.0 }
 }
 
+/// The shape v of (K - lambda M) v = 0, K = diag(k): orthogonal to the larger row; any shape where both rows vanish
+/// (M a multiple of K).
+fn mode_vector(k: V2, m: &M2, lambda: f64) -> V2 {
+    let rows = [[k[0] - lambda * m[0][0], -lambda * m[0][1]], [-lambda * m[1][0], k[1] - lambda * m[1][1]]];
+    let row = if norm(rows[0]) >= norm(rows[1]) { rows[0] } else { rows[1] };
+    if norm(row) > 0.0 { [-row[1], row[0]] } else { [1.0, 0.0] }
+}
+
 /// The leg geometry and the kinematics, apart from masses and drives.
 #[derive(Debug, Clone)]
 pub struct Legs {
@@ -703,10 +711,7 @@ impl ParallelScara {
         // The lower root as 2 c / (b + root): no cancellation.
         [2.0 * k[0] * k[1] / (b + root), (b + root) / (2.0 * det)]
             .map(|lambda| {
-                let rows = [[k[0] - lambda * m[0][0], -lambda * m[0][1]], [-lambda * m[1][0], k[1] - lambda * m[1][1]]];
-                let row = if norm(rows[0]) >= norm(rows[1]) { rows[0] } else { rows[1] };
-                // Orthogonal to the larger row; any shape where both rows vanish (M a multiple of K).
-                let v = if norm(row) > 0.0 { [-row[1], row[0]] } else { [1.0, 0.0] };
+                let v = mode_vector(k, &m, lambda);
                 let w = lambda.sqrt();
                 let damped: f64 = (0..2).map(|i| self.joints[i].gearbox.damping * v[i] * v[i]).sum();
                 sim_core::Mode { hz: w / std::f64::consts::TAU, damping: damped / (2.0 * w * dot(v, mul(&m, v))) }
@@ -1375,6 +1380,24 @@ impl Machine for ParallelScara {
     /// The plane's lowest mode, which an input shaper on the path is for; the stroke's and the turn's are in `modes`.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
         self.plane_modes(tool_pose, false).first().map(|m| m.hz)
+    }
+
+    /// The mode of `resonance_hz` and its shape: the arms' angles along its eigenvector v of (K - lambda M) v = 0
+    /// (`plane_modes`), the rotors held (their angles 0 in it), the stroke and the turn still; scaled so that the plate
+    /// moves 1 m along x (J v), or, where the mode moves it across x alone, 1 m along y.
+    fn mode_shape(&self, tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
+        let hz = self.resonance_hz(tool_pose)?;
+        let t = self.legs.inverse([tool_pose[0], tool_pose[1]])?;
+        let (m, _) = self.load(t, [0.0; 2]);
+        let k: V2 = std::array::from_fn(|i| spring(&self.joints[i].gearbox, false));
+        let lambda = (std::f64::consts::TAU * hz).powi(2);
+        let v = mode_vector(k, &m, lambda);
+        let (_, j) = self.pose(t);
+        let moved = mul(&j, v);
+        let along = if moved[0].abs() > 1e-9 * norm(moved) { moved[0] } else { moved[1] };
+        let mut shape = vec![0.0; self.state_len()];
+        (shape[0], shape[1]) = (v[0] / along, v[1] / along);
+        Some((hz, shape))
     }
 
     /// What the gearboxes can sag at rest anywhere in the working range (`rest_sag`).
