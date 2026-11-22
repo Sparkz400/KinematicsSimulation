@@ -438,14 +438,15 @@ position_cycle_s = 1.0e-3
 # the current loop for the voltage, of the velocity loop for the torque setpoint.
 current_delay_cycles = 1
 velocity_delay_cycles = 1
-kv_1_s = 50.0
+# 45 and 0.037 below since 22 November 2026, as the crate's (`crates/machine-t-gantry/default.toml`, the reasons there).
+kv_1_s = 45.0
 # Velocity loop gain, tuned with `sim-cli margins t-gantry --bands` (the open-loop response of each motor's velocity
 # loop, with every [bounds] value at its low and at its high bound) for a phase margin of at least 35 degrees and a
 # gain margin of at least 6 dB in every run, also with effects.motor_friction and guide_friction off (in a cruise
 # friction adds no damping to the loop). Found: at least 47.4 degrees and 8.2 dB (config as it is: 54 degrees,
 # 9.0 dB); friction off at least 39.1 degrees and 7.3 dB. 0.08 left 12 degrees and 2 dB: motor B hunted in the
 # gearbox backlash at a cruise.
-velocity_kp_nm_s_rad = 0.04
+velocity_kp_nm_s_rad = 0.037
 velocity_tn_s = 0.01
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0

@@ -342,23 +342,27 @@ brake_torque_nm = 22.0
 [motor.4]
 brake_torque_nm = 3.2
 
+# The base turn (22 November 2026): with 0.4 over its bounds at the start its loop read 20.9 degrees with motor and joint
+# friction off at the gear's stiffest (230000 N m/rad), crossover 8 Hz against the integrator's corner with 18.4 dB of
+# gain margin unused; at 1.2 there 49.8 degrees and 8.6 dB. Its position gain 20 1/s: at 50 the tuning's 1 mm step in
+# y overshot by 42 % (39 % at 1.2), at 20 by 5.3 % (9.8 Hz).
 [drive.1]
-velocity_kp_nm_s_rad = 0.4
+velocity_kp_nm_s_rad = 1.2
+kv_1_s = 20.0
 
 # The arm's two (22 November 2026): with 0.35 the cycle's poses left motor 2 30.2 degrees (23.8 with motor and joint
 # friction off) with the arm reaching up ([1.6, 0.5, 1.3, pi/2]) and motor 3 29.7 friction off there, against 73.0 and
 # 65.9 at the start: the crossover there 8 Hz, against the integrator's corner, and 19 dB of gain margin unused. At
 # 1.2 over the poses at least 54.0 / 53.1 degrees and 8.9 / 8.7 dB, friction off 51.0 / 50.2 degrees and 8.7 / 8.5 dB
-# (1.4: 47.5 degrees and 7.5 dB). Their position gain 24 1/s: at the shared 50 the tuning's 1 mm step in x overshot by
-# 42 % (`sim-cli tuning palletiser`), at 24 by 9.4 % (4.3 Hz; 25 11.3 %, 23 left 3.9 Hz). The base turn keeps 50 (y 42
-# %): the turret's ring test holds its loop's hand model there (at 20 the model reads 5.08 Hz against a ring of 5.72).
+# (1.4: 47.5 degrees and 7.5 dB). Their position gain 26 1/s: at the shared 50 the tuning's 1 mm step in x overshot by
+# 42 % (`sim-cli tuning palletiser`), with the base turn's 20 at 26 by 7.7 % (4.2 Hz; 28 10.9 %).
 [drive.2]
 velocity_kp_nm_s_rad = 1.2
-kv_1_s = 24.0
+kv_1_s = 26.0
 
 [drive.3]
 velocity_kp_nm_s_rad = 1.2
-kv_1_s = 24.0
+kv_1_s = 26.0
 
 [drive.4]
 velocity_kp_nm_s_rad = 0.05

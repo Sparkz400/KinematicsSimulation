@@ -1531,70 +1531,90 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
 /// its joints' modes with the motors held, K x = w^2 M x (`JointMachine::held_modes`), 8.21 Hz at the move's start (8.30
 /// before the parallelogram's rod and crank were added, 22 November: their 14 kg turn with the turret too) and
 /// 5.95 Hz at its end, the turret's (4 mm of its sway in x 0.3 s after the move, `a_move_arrives_and_comes_to_rest`).
-/// The ring measured from the tool's speed rings lower, at 5.30 Hz: the velocity loop does not hold the motor rigidly.
-/// Its cascade (Kv, then PI with Kp and Tn) holds the rotor with Z = Kp (1 + 1 / (j w Tn)) (Kv + j w) - w^2 J at the
-/// motor, i^2 Z at the joint, in series with the gear's k: the mode then rings at the held one times sqrt(Re(k_s) / k),
-/// k_s = k i^2 Z / (k + i^2 Z), worked out at its own frequency: at 5.3 Hz Z = 0.4 (1 - 1.0 j)(50 + 33.3 j) = 33.3 -
-/// 6.7 j N m/rad, i^2 Z about 8.5e5 N m/rad against k = 2e5: 5.95 sqrt(0.81) = 5.36 Hz, within 2 % of the ring (1.0 %).
+/// The ring measured from the tool's speed rings lower: the velocity loop does not hold the motor rigidly. Its cascade
+/// (Kv, then PI with Kp and Tn) holds the rotor with Z = Kp (1 + 1 / (j w Tn)) (Kv + j w) - w^2 J at the motor, i^2 Z at
+/// the joint, in series with the gear's k: the mode then rings at the held one times sqrt(Re(k_s) / k),
+/// k_s = k i^2 Z / (k + i^2 Z), worked out at its own frequency. A linear model of the loop: it is checked on the run
+/// whose rotor is linear too (its motor's and joint's Coulomb friction and the gear's efficiency off; the efficiency
+/// fades in below 0.5 W, a damper on a small ring), at two gain sets: the shipped Kp 1.2, Kv 20 (22 November 2026)
+/// 5.636 Hz against a ring of 5.628, and Kp 0.4, Kv 50 (before) 5.351 against 5.345. With the friction on the rotor
+/// sticks part of each swing and holds the turret stiffer: 5.774 and 5.340 Hz, which the linear model cannot follow
+/// (at Kp 0.4 and Kv 20 it read 5.08 Hz against such a ring of 5.73, and 5.22 with the friction off).
 #[test]
 fn the_palletisers_turret_rings_at_its_held_mode_softened_by_the_velocity_loop() {
     use sim_components::{Command, Sim};
-    // Without the gears' mesh friction, which sticks the turret to its housing more and more as the ring dies away and
-    // so raises its frequency (5.60 Hz over the 3 s with it).
-    let mut cfg = PALLETISER.config();
-    cfg.set_text("effects.gearbox_mesh_friction = false").unwrap();
-    let mut sim = Sim::new(&PALLETISER, &cfg).unwrap();
-    let axis = sim.machine.axes()[0].clone();
-    let (start, mut end) = (sim.control.set_pos.clone(), sim.control.set_pos.clone());
-    end[0] = axis.min + 0.9 * (axis.max - axis.min);
-    let held = sim.machine.resonance_hz(&end).unwrap();
-    let at_start = sim.machine.resonance_hz(&start).unwrap();
+    // The ring after the move, from 0.5 s after it (when the move's own transient has passed) over 3 s, and the held
+    // mode at the move's end and start. Without the gears' mesh friction, which sticks the turret to its housing more
+    // and more as the ring dies away and so raises its frequency (5.60 Hz over the 3 s with it at Kp 0.4, Kv 50).
+    let ring = |edits: &[&str]| {
+        let mut cfg = PALLETISER.config();
+        cfg.set_text("effects.gearbox_mesh_friction = false").unwrap();
+        for e in edits {
+            cfg.set_text(e).unwrap();
+        }
+        let mut sim = Sim::new(&PALLETISER, &cfg).unwrap();
+        let axis = sim.machine.axes()[0].clone();
+        let (start, mut end) = (sim.control.set_pos.clone(), sim.control.set_pos.clone());
+        end[0] = axis.min + 0.9 * (axis.max - axis.min);
+        let held = sim.machine.resonance_hz(&end).unwrap();
+        let at_start = sim.machine.resonance_hz(&start).unwrap();
+        sim.command(Command::MoveTo(end)).unwrap();
+        while sim.control.busy() || sim.step == 0 {
+            sim.step();
+        }
+        sim.run(0.5, |_| {});
+        let n = sim.machine.axes().len();
+        let (mut last, mut crossings) = (0.0, Vec::new());
+        sim.run(3.0, |s| {
+            let (mut p, mut v) = (vec![0.0; n], vec![0.0; n]);
+            s.machine.tool_state(&s.state, &mut p, &mut v);
+            if last * v[1] < 0.0 {
+                crossings.push(s.time());
+            }
+            last = v[1];
+        });
+        let ring = (crossings.len() - 1) as f64 / (2.0 * (crossings[crossings.len() - 1] - crossings[0]));
+        (ring, held, at_start, cfg)
+    };
+    let (shipped, held, at_start, _) = ring(&[]);
     assert!(
         (held - 5.95).abs() < 0.02 && (at_start - 8.21).abs() < 0.02,
         "{at_start} Hz at the start, {held} at the end"
     );
-    sim.command(Command::MoveTo(end)).unwrap();
-    while sim.control.busy() || sim.step == 0 {
-        sim.step();
-    }
-    // The free ring, from 0.5 s after the move (when the move's own transient has passed) over 3 s.
-    sim.run(0.5, |_| {});
-    let n = sim.machine.axes().len();
-    let (mut last, mut crossings) = (0.0, Vec::new());
-    sim.run(3.0, |s| {
-        let (mut p, mut v) = (vec![0.0; n], vec![0.0; n]);
-        s.machine.tool_state(&s.state, &mut p, &mut v);
-        if last * v[1] < 0.0 {
-            crossings.push(s.time());
+    assert!(shipped < held, "the ring {shipped} Hz above the held mode {held} Hz");
+    let linear =
+        ["effects.motor_friction = false", "effects.joint_friction = false", "effects.gearbox_efficiency = false"];
+    for gains in [&[][..], &["drive.1.velocity_kp_nm_s_rad = 0.4", "drive.1.kv_1_s = 50.0"]] {
+        let (ring, held, _, cfg) = ring(&[&linear[..], gains].concat());
+        // The turret's motor, drive and gear as resolved (its named motor's rotor, the gear's inertia at its input).
+        let resolved = sim_components::catalog::resolve(&PALLETISER, &cfg).unwrap();
+        let own = sim_components::catalog::motor_config(&resolved, "1").unwrap();
+        let (kp, tn, kv) = (
+            own.f64("drive.velocity_kp_nm_s_rad").unwrap(),
+            own.f64("drive.velocity_tn_s").unwrap(),
+            own.f64("drive.kv_1_s").unwrap(),
+        );
+        let rotor = own.f64("motor.rotor_inertia_kgm2").unwrap() + own.f64("gearbox.inertia_at_input_kgm2").unwrap();
+        let (ratio, k) = (own.f64("gearbox.ratio").unwrap(), own.f64("gearbox.stiffness_nm_rad").unwrap());
+        let mut f = held;
+        for _ in 0..20 {
+            let w = std::f64::consts::TAU * f;
+            // (1 - j / (w Tn)) (Kv + j w), times Kp, less w^2 J: (re, im).
+            let (a, b) = (1.0, -1.0 / (w * tn));
+            let (re, im) = (kp * (a * kv - b * w) - w * w * rotor, kp * (a * w + b * kv));
+            let (zr, zi) = (ratio * ratio * re, ratio * ratio * im);
+            // k z / (k + z) for complex z.
+            let (dr, di) = (k + zr, zi);
+            let d2 = dr * dr + di * di;
+            let series_re = k * (zr * dr + zi * di) / d2;
+            f = held * (series_re / k).sqrt();
         }
-        last = v[1];
-    });
-    let ring = (crossings.len() - 1) as f64 / (2.0 * (crossings[crossings.len() - 1] - crossings[0]));
-    // The turret's motor, drive and gear as resolved (its named motor's rotor, the gear's inertia at its input).
-    let resolved = sim_components::catalog::resolve(&PALLETISER, &cfg).unwrap();
-    let own = sim_components::catalog::motor_config(&resolved, "1").unwrap();
-    let (kp, tn, kv) = (
-        own.f64("drive.velocity_kp_nm_s_rad").unwrap(),
-        own.f64("drive.velocity_tn_s").unwrap(),
-        own.f64("drive.kv_1_s").unwrap(),
-    );
-    let rotor = own.f64("motor.rotor_inertia_kgm2").unwrap() + own.f64("gearbox.inertia_at_input_kgm2").unwrap();
-    let (ratio, k) = (own.f64("gearbox.ratio").unwrap(), own.f64("gearbox.stiffness_nm_rad").unwrap());
-    let mut f = held;
-    for _ in 0..20 {
-        let w = std::f64::consts::TAU * f;
-        // (1 - j / (w Tn)) (Kv + j w), times Kp, less w^2 J: (re, im).
-        let (a, b) = (1.0, -1.0 / (w * tn));
-        let (re, im) = (kp * (a * kv - b * w) - w * w * rotor, kp * (a * w + b * kv));
-        let (zr, zi) = (ratio * ratio * re, ratio * ratio * im);
-        // k z / (k + z) for complex z.
-        let (dr, di) = (k + zr, zi);
-        let d2 = dr * dr + di * di;
-        let series_re = k * (zr * dr + zi * di) / d2;
-        f = held * (series_re / k).sqrt();
+        assert!(ring < held, "{gains:?}: the ring {ring} Hz above the held mode {held} Hz");
+        assert!(
+            (f / ring - 1.0).abs() < 0.02,
+            "{gains:?}: the loop's estimate {f} Hz against the ring {ring} Hz (held {held} Hz)"
+        );
     }
-    assert!(ring < held, "the ring {ring} Hz above the held mode {held} Hz");
-    assert!((f / ring - 1.0).abs() < 0.02, "the loop's estimate {f} Hz against the ring {ring} Hz (held {held} Hz)");
 }
 
 // ---------------------------------------------------------------------------------------------
