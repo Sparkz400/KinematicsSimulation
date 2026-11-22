@@ -274,7 +274,7 @@ Figure shifts between the documents of 17 November and main 59a2aff7 (21 Novembe
 the merges between (d0e28a32, 1a2f8873, b3f0da0d, 3fca3070, 9590fa82, c4aa156d, e8d75ee9, 59a2aff7, and 60e59797
 alone) and running each figure's command; none is a defect:
 - Hexapod margins (`sim-cli margins hexapod`, all six legs alike) 147.3 Hz, 87.2°, 10.53 dB on d0e28a32 (the docs' 145
-  Hz, 89°, 10.6 dB are older, `PROGRESS.md`'s gain choice): 60e59797 alone 252.5 Hz, 63.8°, 7.62 dB, the coupling's
+  Hz, 89°, 10.6 dB date from the hexapod's introduction, f567532b, 14 November, not re-run on 17 November): 60e59797 alone 252.5 Hz, 63.8°, 7.62 dB, the coupling's
   damper bridging its own spring instead of coupling and screw together (it had overdamped the screw's mode); with
   e78913f3's screw damping, b3f0da0d, 246.1 Hz, 66.8°, 7.71 dB; the screw's stiffness at the nut (ddd3bbc9, 3fca3070)
   127.6 Hz, 100.1°, 7.76 dB (the crossover moves to the lower lobe); the screw damper's ratio along the stroke
@@ -288,7 +288,9 @@ alone) and running each figure's command; none is a defect:
   winding 28.45 K up to 3fca3070, 22.81 mm and `inf` from 9590fa82 on: the T-gantry's belt runs weighing on Z
   (cb5f0a40, 0.16 kg). The loop is at the edge: on both builds Kv 49.9 stays calm (1.22 and 3.85 mm) and 50.1 swings
   (22.0 and 21.9 mm, `inf`), so neither figure is robust; the guide's point (the edge of stability) holds and now says
-  so. The `inf` is the warm start not settling a swinging cycle, not a defect.
+  so. The `inf` is no artefact: swinging, each motor draws 5.15 A RMS (over the drive's 5.0 A, `motor-s1` 5.3 of 2.4
+  N m, the belt slack at times), and at that current the winding's copper loss grows with its temperature faster than
+  it sheds it, so it has no steady rise (`Drive::settled_rise`); the run is then measured from cold.
 - The default T-gantry's shared DC link 224.45 V (no resistor) -> 224.65 V at the threshold, 0.38 J in the resistor:
   9590fa82, the same belt runs' weight on Z (cb5f0a40): Z holds and lowers 0.16 kg more, so it gives back more. The
   better physics (the runs had momentum and no weight; V + g · c drifted 0.47 J per cycle).
@@ -322,11 +324,19 @@ Fixed (after the second audit, 21 November):
   hardest over the pick (2.63 N m); its margin across the play is least at the start pose (3.56 dB). The T-gantry's
   motor A has its least margins at [0.1, 0.05]: 46.4° and 8.44 dB (54.9° and 9.19 dB at the start). `sim-cli margins`
   on 4 cores: five-bar 26.8 to 99.4 s, T-gantry 8.6 to 31.8 s. Each pose is measured in the start's payload state (the
-  segments' `payload` is not followed). Open, not retuned here: three arms' loops are stable but below the tuning's 35
-  degrees at a cycle pose: the URDF arm's motor 1 21.7 degrees at [0.8, 0.45, -0.55, 0.3, 0.5, 1], the palletiser's
-  motor 2 32.7 degrees at [1.6, 0.5, 1.3, pi/2], the arm on a track's motor 2 24.2 degrees at [3.5, -1.3, 0.45, -0.55,
-  0.3, 0.5, 1], all crossing near 8 Hz; sim-cli's `step_bode_and_tuning_write_csv_for_every_machine` judges 35 degrees
-  at every pose and fails on those three (machines 12, 17, 25) until they are retuned or the judgement is decided.
+  segments' `payload` is not followed). Open, a decision, not retuned here: every loop stays stable
+  (`ok`) at every cycle pose, but these fall below the tuning's 35 degrees at a pose other than the start (`sim-cli
+  margins`, as shipped / motor and guide friction off; start pose in brackets): URDF arm motor 1 at [0.8, 0.45, -0.55,
+  0.3, 0.5, 1] 21.7 / 16.6 degrees (52.7 / 41.5); arm on a track motor 2 at [3.5, -1.3, 0.45, -0.55, 0.3, 0.5, 1]
+  24.2 / 16.7 (59.4 / 63.0); palletiser motor 2 at [1.6, 0.5, 1.3, pi/2] 32.7 / 26.4 (73.0 / 68.1), friction off also
+  motor 2 at z 0.8 29.5 and motor 3 32.1 (49.9); friction off only: T-gantry motor A at [0.1, 0.05] 33.0 (43.6), motor
+  B at [0.9, 0.05] 34.0 (42.3), rotary knife at pi 34.0 (52.5). All gain margins stay above 7 dB. So sim-cli's
+  `step_bode_and_tuning_write_csv_for_every_machine` (machines 12, 17, 25) and sim-machines' control
+  `the_shipped_velocity_loops_keep_their_margins` (T-gantry first, and past its 15 minutes: 126 s before) fail: either
+  the criterion holds at every pose (retunes; the shipped test split per machine) or it stays the start pose's (the
+  pose runs judged on stability alone). Time of `sim-cli margins` over the poses on 4 cores, as shipped / friction off:
+  mover track 769 / 359 s, rotary hexapod 456 / 678 s, spatial cable robot 361 / 1059 s, hexapod 182 / 200 s, tripod
+  203 / 167 s, the rest under 160 s.
 - The hexapod's lowest held mode (183.2 Hz) lies below its planner trains (289.6 Hz, each leg's M_kk with the others
   held), and the trains are right for the allowance's jerk term: with one motor driven and the others held the twist
   rate is [K^-1 M]_kk j = M_kk j / K_k, the modal sum of its column over the held modes (model reference, the planner's

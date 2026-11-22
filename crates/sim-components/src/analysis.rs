@@ -4897,10 +4897,10 @@ pub fn backlash_hammering(entry: &MachineEntry, cfg: &Config, motor: usize) -> R
     let found = on_all_cores(poses.len(), |k| hammering_at(entry, &at_pose(cfg, &poses[k])?, motor));
     let mut worst: Option<Hammering> = None;
     for (pose, h) in found.into_iter().enumerate() {
-        if let Some(h) = h? {
-            if worst.is_none_or(|w| h.torque_nm > w.torque_nm) {
-                worst = Some(Hammering { pose, ..h });
-            }
+        if let Some(h) = h?
+            && worst.is_none_or(|w| h.torque_nm > w.torque_nm)
+        {
+            worst = Some(Hammering { pose, ..h });
         }
     }
     Ok(worst)

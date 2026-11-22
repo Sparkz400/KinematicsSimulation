@@ -89,10 +89,10 @@ pub fn loop_response(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
     if let Some(h) = m.hammering {
         let mut at = format!("{:.0} {}, {:.2} N m", h.frequency_hz, tr("unit-hz"), h.torque_nm);
         // Away from the start pose the curves are not: the cycle's pose it hammers at (`margin_poses`).
-        if let Some(pose) = sim_components::analysis::margin_poses(config).ok().and_then(|p| p.get(h.pose).cloned()) {
-            if h.pose > 0 {
-                at += &format!(", start.pose = {pose:?}");
-            }
+        if let Some(pose) = sim_components::analysis::margin_poses(config).ok().and_then(|p| p.get(h.pose).cloned())
+            && h.pose > 0
+        {
+            at += &format!(", start.pose = {pose:?}");
         }
         ui.label(RichText::new(model.tr.tr_arg("loop-hammers", &at)).color(LIMIT));
     } else if !m.stable() {

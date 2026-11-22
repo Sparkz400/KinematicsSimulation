@@ -1658,8 +1658,8 @@ start.pose=[0.9 0.35],a,175.3,54.4,9.46,1.817,277.3,,ok
 start.pose=[0.9 0.35],b,189.3,53.2,8.82,1.946,277.3,,ok
 start.pose=[0.9 0.05],a,183.5,50.9,9.04,1.885,277.3,,ok
 start.pose=[0.9 0.05],b,214.5,48.8,8.85,1.994,277.3,,ok
-Motor A: least over the poses the cycle stops at: 46.40 deg start.pose=[0.1 0.05], 8.44 dB start.pose=[0.1 0.05] (phase margin, gain margin, then the margin across the backlash, each at its pose)
-Motor B: least over the poses the cycle stops at: 48.80 deg start.pose=[0.9 0.05], 8.82 dB start.pose=[0.9 0.35] (phase margin, gain margin, then the margin across the backlash, each at its pose)
+Motor A: least over the poses the cycle stops at: 46.43 deg start.pose=[0.1 0.05], 8.44 dB start.pose=[0.1 0.05] (phase margin, gain margin, then the margin across the backlash, each at its pose)
+Motor B: least over the poses the cycle stops at: 48.81 deg start.pose=[0.9 0.05], 8.82 dB start.pose=[0.9 0.35] (phase margin, gain margin, then the margin across the backlash, each at its pose)
 
 $ sim-cli margins single-axis --bands
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
