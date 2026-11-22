@@ -1262,7 +1262,14 @@ fn shipped_configs() -> Vec<(String, Config, &'static MachineEntry)> {
 /// EXCT-30 at 0.45 N m s/rad). Every measurement has to be valid and the loop stable (`LoopMargins::stable`). `across`
 /// sweeps the bounds in the pass with friction as configured (`Some(true)`) or the one without (`Some(false)`).
 fn loops_keep_their_margins(names: &[&str], across: Option<bool>) {
-    use sim_components::analysis::{bounds, velocity_loop_margins};
+    loops_keep_their_margins_at(names, across, None)
+}
+
+/// `loops_keep_their_margins` at one of the poses of `margin_poses` alone (`Some(k)`): the config started there without
+/// its cycle, which measures that pose's run as the whole measurement does (each pose's run is settled at its own start
+/// pose, with its own modes among the frequencies), so that a slow config's poses can be tests of their own.
+fn loops_keep_their_margins_at(names: &[&str], across: Option<bool>, pose: Option<usize>) {
+    use sim_components::analysis::{bounds, margin_poses, velocity_loop_margins};
     let configs: Vec<_> = shipped_configs().into_iter().filter(|(name, ..)| names.contains(&name.as_str())).collect();
     assert_eq!(configs.len(), names.len(), "{names:?}");
     let (phase, gain) = (35.0, 6.0);
@@ -1291,6 +1298,13 @@ fn loops_keep_their_margins(names: &[&str], across: Option<bool>) {
             // to the bit (13 November 2026, on all four configs), so they are left out there. Not with the cable chain on:
             // its drag takes the guide's Stribeck speed (`friction_x.stribeck_m_s`) whether guide friction is on or not.
             let skip = !friction && !cfg.bool("effects.cable_chain").unwrap_or(false);
+            let cfg = match pose {
+                Some(k) => {
+                    let at = &margin_poses(&cfg).unwrap()[k];
+                    config_of(&cfg, &[format!("start.pose = {at:?}"), "cycle.segment = []".into()])
+                }
+                None => cfg,
+            };
             let mut bounded = if across.is_some() { bounds(&cfg).unwrap() } else { Vec::new() };
             bounded.retain(|(path, ..)| {
                 !skip
@@ -1370,19 +1384,12 @@ fn each_loop_is_measured_at_its_own_amplitude_and_the_hoist_without_the_efficien
 /// leaves them out; CI runs them one at a time after the other tests.
 mod across_the_bounds {
     macro_rules! swept {
-        ($($test:ident: $name:literal),* $(,)?) => {
+        ($($test:ident: $name:literal $([$($pose:ident $k:literal),+])?),* $(,)?) => {
             /// The configs swept here, in the order of `shipped_configs`.
             pub const SWEPT: &[&str] = &[$($name),*];
             $(
                 mod $test {
-                    /// The config as it is at each pose its cycle stops at, without friction and, the EXCT-30, with it
-                    /// (`loops_keep_their_margins`): a test per config since 22 November 2026, when the margins took
-                    /// the cycle's poses (all of them in one test ran past the 15-minute limit). Not over the bounds, so
-                    /// the default filter keeps it.
-                    #[test]
-                    fn as_configured() {
-                        super::super::loops_keep_their_margins(&[$name], None);
-                    }
+                    swept!(@configured $name $([$($pose $k),+])?);
                     #[test]
                     fn with_friction() {
                         super::super::loops_keep_their_margins(&[$name], Some(true));
@@ -1393,6 +1400,24 @@ mod across_the_bounds {
                     }
                 }
             )*
+        };
+        // The config as it is at each pose its cycle stops at, without friction and, the EXCT-30, with it
+        // (`loops_keep_their_margins`): a test per config since 22 November 2026, when the margins took the cycle's
+        // poses (all of them in one test ran past the 15-minute limit), and one per pose where a config's poses
+        // together do (`loops_keep_their_margins_at`). Not over the bounds, so the default filter keeps them.
+        (@configured $name:literal) => {
+            #[test]
+            fn as_configured() {
+                super::super::loops_keep_their_margins(&[$name], None);
+            }
+        };
+        (@configured $name:literal [$($pose:ident $k:literal),+]) => {
+            $(
+                #[test]
+                fn $pose() {
+                    super::super::loops_keep_their_margins_at(&[$name], None, Some($k));
+                }
+            )+
         };
     }
     swept!(
@@ -1416,7 +1441,7 @@ mod across_the_bounds {
         palletiser: "palletiser",
         hexapod: "hexapod",
         cable_planar: "cable-planar",
-        cable_spatial: "cable-spatial",
+        cable_spatial: "cable-spatial" [as_configured_at_start 0, as_configured_at_pose_1 1, as_configured_at_pose_2 2],
         disc_cam: "disc-cam",
         tripod: "tripod",
         wafer_handler: "wafer-handler",

@@ -356,7 +356,7 @@ not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::.*_fri
 | (binary_id(=sim-machines::control) & test(=switching_the_model_at_speed_carries_the_motion_over))
 | (binary_id(=sim-machines::control) & test(=the_cycle_visits_every_segment_and_switches_the_payload))
 | (binary_id(=sim-machines::control) & test(=the_same_run_twice_is_bit_identical))
-| (binary_id(=sim-machines::control) & test(/^across_the_bounds::.*::as_configured$/))
+| (binary_id(=sim-machines::control) & test(/^across_the_bounds::.*::as_configured/))
 | (binary_id(=sim-machines::control) & test(=velocity_feedforward_removes_the_following_error))
 | (binary_id(=sim-machines::control) & test(=with_input_shaping_a_dwell_starts_when_the_setpoint_has_arrived))
 | (binary_id(=sim-machines::conveyor) & test(=every_conveyor_example_picks_a_part_each_pitch))
@@ -470,7 +470,7 @@ test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
 | test(=the_regenerative_supply_shows_in_the_apps_tables)
 | test(=verdicts_judge_the_default_cycle_of_every_machine)
 | test(=changing_the_profile_cycle_on_the_way_does_not_move_the_setpoint)
-| test(/^across_the_bounds::.*::as_configured$/)
+| test(/^across_the_bounds::.*::as_configured/)
 | test(=the_app_searches_motors_and_names_one_in_the_config)
 """
 priority = 50
