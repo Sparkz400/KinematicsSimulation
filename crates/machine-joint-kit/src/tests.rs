@@ -1080,6 +1080,36 @@ fn the_palletiser_keeps_its_flange_level_over_its_range() {
     near(turret, 0.3f64.atan2(1.4), 1e-9, "turret towards the flange");
 }
 
+/// The palletiser's forearm drive parallelogram as shipped ([estimate] `arm.bars_*`): the crank (6 kg) turns with the
+/// forearm about the upper arm's pivot, its centre 0.15 m behind it; the rod (8 kg) stays parallel to the upper arm,
+/// pinned on the forearm's rear lever 0.3 m behind the elbow. With the upper arm upright and the forearm level (the
+/// motors' joints 2 and 3 at 0) both centres lie behind the pivots: by virtual work the rod's weight acts on the
+/// forearm's angle (motor 3) at its pin, 8 g x 0.3 = 23.536 N m, the crank's at its centre, 6 g x 0.15 = 8.826 N m,
+/// 32.362 N m against the forearm's weight, and nothing on the upper arm's angle (its turn moves the rod's centre
+/// across, not up). The motors hold that through their 160:1 gears: 0.20226 N m less on motor 3, none on motor 2.
+#[test]
+fn the_palletisers_rod_and_crank_hold_by_hand() {
+    let mut cfg = rigid(&PALLETISER);
+    cfg.set_text("kinematics.tool_space = false").unwrap();
+    cfg.set_text("effects.gravity = true").unwrap();
+    let hold = |cfg: &Config| {
+        let (mut state, mut hold) = (Vec::new(), vec![0.0; 4]);
+        (PALLETISER.build)(cfg).unwrap().equilibrium(&[0.0; 4], &mut state, &mut hold);
+        hold
+    };
+    let with = hold(&cfg);
+    for key in ["on", "turns_with", "pin_m", "mass_kg", "com_m", "inertia_kgm2"] {
+        cfg.set_text(&format!("arm.bars_{key} = []")).unwrap();
+    }
+    let without = hold(&cfg);
+    let g = 9.80665;
+    let by_hand = (8.0 * 0.3 + 6.0 * 0.15) * g / 160.0;
+    println!("with {with:?}, without {without:?}, by hand {by_hand} N m");
+    assert!((with[1] - without[1]).abs() < 1e-9, "{with:?} {without:?}");
+    near((without[2] - with[2]).abs(), by_hand, 1e-9, "motor 3");
+    assert!(with[2].abs() < without[2].abs(), "the bars balance the forearm: {with:?} {without:?}");
+}
+
 /// The palletiser's carton swinging on the flange (effects.payload_swing), at rest with the arm still, the flange level
 /// and the carton hanging 0.2 m below it. By hand: turned by 0.1 rad about the swing's first axis (across the carton's
 /// 0.6 m side, the flange's y) its weight rises by m g l (1 - cos 0.1) = 20 * 9.80665 * 0.2 * 0.0049958 = 0.19597 J and
@@ -1406,7 +1436,8 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
 }
 
 /// The palletiser's turret on its gear, as it rings after a long move in x (its arm out to 1.79 m): the machine reports
-/// its joints' modes with the motors held, K x = w^2 M x (`JointMachine::held_modes`), 8.30 Hz at the move's start and
+/// its joints' modes with the motors held, K x = w^2 M x (`JointMachine::held_modes`), 8.21 Hz at the move's start (8.30
+/// before the parallelogram's rod and crank came in, 22 November: their 14 kg turn with the turret too) and
 /// 5.95 Hz at its end, the turret's (4 mm of its sway in x 0.3 s after the move, `a_move_arrives_and_comes_to_rest`).
 /// The ring measured from the tool's speed rings lower, at 5.30 Hz: the velocity loop does not hold the motor rigidly.
 /// Its cascade (Kv, then PI with Kp and Tn) holds the rotor with Z = Kp (1 + 1 / (j w Tn)) (Kv + j w) - w^2 J at the
@@ -1427,7 +1458,7 @@ fn the_palletisers_turret_rings_at_its_held_mode_softened_by_the_velocity_loop()
     let held = sim.machine.resonance_hz(&end).unwrap();
     let at_start = sim.machine.resonance_hz(&start).unwrap();
     assert!(
-        (held - 5.95).abs() < 0.02 && (at_start - 8.30).abs() < 0.02,
+        (held - 5.95).abs() < 0.02 && (at_start - 8.21).abs() < 0.02,
         "{at_start} Hz at the start, {held} at the end"
     );
     sim.command(Command::MoveTo(end)).unwrap();
