@@ -30,7 +30,9 @@
 
 use crate::tool::{FIRST_JOINT, POSE_AXES, Pose, Scara, Tool, turn_length};
 use crate::{axis, gravity, machine, payload, required_life};
-use sim_components::beam::{CANTILEVER_PARTICIPATION, CANTILEVER_TIP_SLOPE, cantilever_mode, tube_second_moment};
+use sim_components::beam::{
+    CANTILEVER_PARTICIPATION, CANTILEVER_TIP_SLOPE, cantilever_mode, cantilever_shape, tube_second_moment,
+};
 use sim_components::catalog::{GUIDE_CARRIAGES, motor_config};
 use sim_components::chain::{FlexCoupling, FlexKind, FlexMode, JOINT_KEYS, MOTOR_IDS, MOTOR_KEYS, Mechanism};
 use sim_components::joint::RotaryJoint;
@@ -112,10 +114,18 @@ pub struct Arm {
 /// `turn = dir` by d (`across` none). All in its body's frame. Its own mass is the URDF link's, taken as spread evenly
 /// along it; what the chain carries beyond it sits on its tip.
 // One mode per link and direction; a link along its joint's axis (the base column) has no bend. Every mode, the one-way
-// bend in its joint's plane too, takes the bodies beyond whole (`field`): their mass and their turning inertia.
+// bend in its joint's plane too, takes the bodies beyond whole (`field`): their mass and their turning inertia, but for
+// those a parallelogram holds (`held_from`).
 #[derive(Debug, Clone, Copy)]
 struct BentLink {
     body: usize,
+    /// The first body whose orientation a parallelogram's bar holds against this mode (`parallelograms`): a bar pinned
+    /// on a body before this link that turns with one beyond it drives that body's turn from before the link, so a bend
+    /// in the joints' plane moves it and all beyond with the link's tip but does not turn them. `usize::MAX`: none.
+    held_from: usize,
+    /// Whether the mode bends in the plane the link's joint turns in (its turn about the joint's axis): the plane the
+    /// parallelograms' pins turn in.
+    in_plane: bool,
     length: f64,
     dir: V3,
     across: V3,
@@ -187,8 +197,11 @@ fn bent_links(cfg: &Config, chain: &Chain) -> Result<(Vec<BentLink>, bool), Conf
                 FlexKind::Twist => (dir, 1.0, 1.0, shear * 2.0 * second_moment / length),
                 _ => (cross(dir, across), CANTILEVER_TIP_SLOPE, length, bend),
             };
+            let in_plane = matches!(kind, FlexKind::Bend);
             links.push(BentLink {
                 body,
+                held_from: usize::MAX,
+                in_plane,
                 length,
                 dir,
                 across,
@@ -222,8 +235,53 @@ fn field(link: &BentLink, states: &[BodyState], k: usize) -> (V3, V3) {
             _ => (u.map(|v| CANTILEVER_PARTICIPATION * v), [0.0; 3]),
         };
     }
+    if k >= link.held_from {
+        return (u, [0.0; 3]);
+    }
     let tip = add(b.origin, mul(&b.rot, link.dir.map(|v| v * link.length)));
     (add(u, cross(r, sub(states[k].com, tip))), r)
+}
+
+/// Mode `link`'s field on bar `bar` (its state `state` among `states`, the chain's bodies first): its pin, on its body,
+/// moves as that body's points do (`field` there; on the bent link itself at the mode's shape where it sits along it,
+/// `beam::cantilever_shape`, none behind the joint), and it turns as the body it turns with (`field`'s turn). A bar that
+/// turns with the bent link itself while pinned beyond it is a parallelogram's side across from the link, its other end
+/// before it: it turns with the link's chord, d / L about the mode's turn axis, in the joints' plane; pinned before the
+/// link it does not turn.
+fn bar_field(link: &BentLink, states: &[BodyState], bar: &Bar, state: &BodyState) -> (V3, V3) {
+    let pin = state.origin;
+    let b = &states[link.body];
+    let shape = |at: V3| -> f64 {
+        let along = dot(sub(at, b.origin), mul(&b.rot, link.dir)) / link.length;
+        if along <= 0.0 { 0.0 } else { cantilever_shape(along.min(1.0)) }
+    };
+    let moved = |on: usize| -> V3 {
+        match on.cmp(&link.body) {
+            std::cmp::Ordering::Less => [0.0; 3],
+            std::cmp::Ordering::Equal => match link.kind {
+                FlexKind::Twist => {
+                    let r = mul(&b.rot, link.turn);
+                    let along = (dot(sub(pin, b.origin), mul(&b.rot, link.dir)) / link.length).clamp(0.0, 1.0);
+                    cross(r.map(|v| v * along), sub(pin, b.origin))
+                }
+                _ => mul(&b.rot, link.across).map(|v| v * shape(pin)),
+            },
+            std::cmp::Ordering::Greater => {
+                let (t, r) = field(link, states, on);
+                add(t, cross(r, sub(pin, states[on].com)))
+            }
+        }
+    };
+    let at_pin = moved(bar.on);
+    let turn = match bar.turns.cmp(&link.body) {
+        std::cmp::Ordering::Less => [0.0; 3],
+        std::cmp::Ordering::Equal if link.in_plane && bar.on > link.body => {
+            mul(&b.rot, link.turn).map(|v| v / link.length)
+        }
+        std::cmp::Ordering::Equal => [0.0; 3],
+        std::cmp::Ordering::Greater => field(link, states, bar.turns).1,
+    };
+    (add(at_pin, cross(turn, sub(state.com, pin))), turn)
 }
 
 /// The rate of `field` as the joints move at the speeds of `states`: everything of the link turns with its spin w,
@@ -232,7 +290,7 @@ fn field_rate(link: &BentLink, states: &[BodyState], k: usize) -> V3 {
     let b = &states[link.body];
     let w = b.spin;
     let (t, _) = field(link, states, k);
-    if k == link.body {
+    if k == link.body || k >= link.held_from {
         return cross(w, t);
     }
     let (u, r) = (mul(&b.rot, link.across), mul(&b.rot, link.turn).map(|v| v * link.slope / link.span));
@@ -566,13 +624,17 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     };
 
     let max_condition = cfg.positive("workspace.max_condition_number")?;
-    let (bending, reaction) = bent_links(cfg, &chain)?;
-    if !bars.is_empty() && !bending.is_empty() {
-        // The links' modes are each a cantilever's, clamped at its joint and free at its tip; a bar of its own closes a
-        // loop across the links (a parallelogram), which holds a tip and changes the modes' shapes.
-        return Err(ConfigError::Invalid(
-            "arm.bars_turns_with (a bar of its own closes a loop that the links' cantilever modes do not have: effects.link_bending off)".into(),
-        ));
+    let (mut bending, reaction) = bent_links(cfg, &chain)?;
+    // The parallelograms: a bar pinned on a body before a bent link that turns with a body beyond it drives that body's
+    // turn from before the link, so the link's bend in the joints' plane moves the body and all beyond it with the
+    // link's tip without turning them (`BentLink::held_from`, `field`); the bars' own fields `bar_field`.
+    for link in bending.iter_mut().filter(|l| l.in_plane) {
+        link.held_from = bars
+            .iter()
+            .filter(|b| b.on < link.body && link.body < b.turns)
+            .map(|b| b.turns)
+            .min()
+            .unwrap_or(usize::MAX);
     }
     let mut arm = Arm {
         chain,
@@ -800,12 +862,20 @@ impl Arm {
         self.modal_in(states, &self.fields(states))
     }
 
-    /// Every mode's `field` on every body of `states` (none before its link).
+    /// Every mode's `field` on every body of `states` (none before its link), the bars' (`bar_field`) after them: `states`
+    /// as `with_bars` gives them.
     fn fields(&self, states: &[BodyState]) -> Vec<Vec<(V3, V3)>> {
+        let bodies = states.len() - self.bars.len();
         self.bending
             .iter()
             .map(|l| {
-                (0..states.len()).map(|k| if k < l.body { ([0.0; 3], [0.0; 3]) } else { field(l, states, k) }).collect()
+                (0..states.len())
+                    .map(|k| match k {
+                        _ if k >= bodies => bar_field(l, &states[..bodies], &self.bars[k - bodies], &states[k]),
+                        _ if k < l.body => ([0.0; 3], [0.0; 3]),
+                        _ => field(l, states, k),
+                    })
+                    .collect()
             })
             .collect()
     }
@@ -956,7 +1026,7 @@ impl Mechanism for Arm {
     /// damping 2 zeta sqrt(m k).
     fn flex_modes(&self) -> Vec<FlexMode> {
         let (chain, zero) = self.loaded(&vec![0.0; self.ratios.len()]);
-        let states = chain.body_states(&zero, &zero, self.extra());
+        let states = self.with_bars(chain.body_states(&zero, &zero, self.extra()));
         let whole = self.modal(&states).2;
         let f = self.bending.len();
         self.bending
@@ -979,7 +1049,7 @@ impl Mechanism for Arm {
         let at = |s: f64| {
             let q: Vec<f64> = q.iter().zip(qd).map(|(q, v)| q + s * v).collect();
             let qd: Vec<f64> = qd.iter().zip(qdd).map(|(v, a)| v + s * a).collect();
-            self.modal(&self.states(&q, &qd))
+            self.modal(&self.with_bars(self.states(&q, &qd)))
         };
         let ((_, gravity, _), (behind, ..), (ahead, ..)) = (at(0.0), at(-h), at(h));
         for (i, load) in out.iter_mut().enumerate() {
@@ -996,11 +1066,13 @@ impl Mechanism for Arm {
         }
         let (h, f, all) = (1e-6, self.bending.len(), q.len());
         let shifted = |s: f64| -> Vec<f64> { q.iter().zip(qd).map(|(q, v)| q + s * v).collect() };
-        let now = self.states(q, qd);
+        let now = self.with_bars(self.states(q, qd));
         let fields = self.fields(&now);
         let (momentum, gravity, mass) = self.modal_in(&now, &fields);
-        let ((behind, _, mass_behind), (ahead, _, mass_ahead)) =
-            (self.modal(&self.states(&shifted(-h), qd)), self.modal(&self.states(&shifted(h), qd)));
+        let ((behind, _, mass_behind), (ahead, _, mass_ahead)) = (
+            self.modal(&self.with_bars(self.states(&shifted(-h), qd))),
+            self.modal(&self.with_bars(self.states(&shifted(h), qd))),
+        );
         let force = (0..f)
             .map(|i| {
                 let changing: f64 = (0..f).map(|k| (mass_ahead[i * f + k] - mass_behind[i * f + k]) * dd[k]).sum();
@@ -1008,16 +1080,33 @@ impl Mechanism for Arm {
             })
             .collect();
         let (mut coupling, mut joint) = (vec![0.0; f * all], vec![0.0; all]);
+        let bodies = now.len() - self.bars.len();
         for j in 0..all {
             let unit: Vec<f64> = (0..all).map(|c| f64::from(u8::from(c == j))).collect();
-            let states = self.states(q, &unit);
+            let states = self.with_bars(self.states(q, &unit));
             let (column, ..) = self.modal_in(&states, &fields);
+            // The bars' fields' rates along joint j by central differences over +-1 us at its unit speed.
+            let bar_rates = (!self.bars.is_empty() && self.g != 0.0).then(|| {
+                let at = |s: f64| {
+                    self.fields(&self.with_bars(
+                        self.states(&q.iter().zip(&unit).map(|(q, u)| q + s * u).collect::<Vec<_>>(), &unit),
+                    ))
+                };
+                (at(-h), at(h))
+            });
             for (i, link) in self.bending.iter().enumerate() {
                 coupling[i * all + j] = column[i];
                 if d[i] != 0.0 && self.g != 0.0 {
-                    let lift: f64 = (link.body..states.len())
+                    let mut lift: f64 = (link.body..bodies)
                         .map(|k| -states[k].inertial.mass * self.g * field_rate(link, &states, k)[2])
                         .sum();
+                    if let Some((behind, ahead)) = &bar_rates {
+                        lift -= (bodies..states.len())
+                            .map(|k| {
+                                states[k].inertial.mass * self.g * (ahead[i][k].0[2] - behind[i][k].0[2]) / (2.0 * h)
+                            })
+                            .sum::<f64>();
+                    }
                     joint[j] += d[i] * lift;
                 }
             }
@@ -1041,7 +1130,9 @@ impl Mechanism for Arm {
         for (link, d) in self.bending.iter().zip(d) {
             let (rot, origin) = frames[link.body];
             let tip = add(origin, mul(&rot, link.dir.map(|v| v * link.length)));
-            let turn = mul(&rot, link.turn).map(|v| v * link.slope * d / link.span);
+            // A flange a parallelogram holds against the mode moves with the tip and does not turn (`held_from`).
+            let held = frames.len() - 1 >= link.held_from;
+            let turn = mul(&rot, link.turn).map(|v| if held { 0.0 } else { v * link.slope * d / link.span });
             let swing = cross(turn, std::array::from_fn(|i| flange[i] - tip[i]));
             moved = add(moved, add(mul(&rot, link.across).map(|v| v * d), swing));
             turned = add(turned, turn);

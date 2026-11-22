@@ -202,7 +202,7 @@ URDF has no closed chains. A parallelogram that couples joints, as a palletiser'
 has one motor per column; the dynamics are the chain's taken to the motors' joints, M = C^T M_urdf C and h = C^T h_urdf
 (C is constant, so it adds no term; the coupling's forces do no work). A motor joint alone in a row of factor c takes
 that URDF joint's limits over c. `[]` is one motor per URDF joint.
-shortcut: the parallelogram's bars are in the links they move with, not bodies of their own.
+The bars the URDF leaves out can be bodies of their own (`arm.bars_*`): the palletiser's rod and crank are (model reference).
 
 The palletiser (`palletiser`, `urdf/palletiser.urdf`, about 20 kg payload, 1.6 m reach) has five URDF joints and four
 motors: the turret, the upper arm, the forearm's angle against the base (a parallelogram from the base drives it: joint 3
