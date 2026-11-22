@@ -38,7 +38,9 @@
 //! adds m A^T A + I_t A_u^T A_u to M_xi and m A^T (a0 + g e_z) + I_t A_u^T u'' to c + g (d'Alembert; I_t about the
 //! centre across the leg, whose turn is u x u'). The platform's mass and inertia are the platform's alone, the payload
 //! is a point mass at the platform centre with the inertia `mass.payload_inertia_kgm2` (x, y, z, about the centre,
-//! in the platform frame) that turns with the platform. The legs' rotors spin along their legs; each part's
+//! in the platform frame) that turns with the platform. The legs' rotors spin along their legs and turn with them
+//! (`effects.rotor_gyroscopic`): the moment h u' (h = J i q') reaches the platform as a couple across the leg,
+//! F = h (u x u') / L at its joint and b x F, which does no work (`rotor_gyroscopic`); each part's
 //! spin about the leg's axis is free between the two joints and nothing excites it.
 
 use sim_components::chain::{
@@ -369,6 +371,10 @@ pub struct Hexapod {
     required_life: Option<f64>,
     /// The grid point's pose the dynamics' Newton starts from (`warm_pose`).
     last: LastFound,
+    /// Each leg's rotor's angular momentum per m/s of its leg, J i (the rotor's inertia times the screw's ratio), N m s
+    /// per m/s, for `rotor_gyroscopic` (0 with `effects.rotor_gyroscopic` off). The rotor's speed taken as i q', the
+    /// elastic model's own rotor speed differing by the screw's stretch rate.
+    rotor_spin: f64,
 }
 
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
@@ -463,6 +469,11 @@ impl Hexapod {
             g: if cfg.bool("effects.gravity")? { G } else { 0.0 },
             required_life: cfg.f64("ratings.required_life_h").ok(),
             last: LastFound::default(),
+            rotor_spin: if cfg.get("effects.rotor_gyroscopic").is_ok() && cfg.bool("effects.rotor_gyroscopic")? {
+                joint.rotor_inertia * joint.ratio()
+            } else {
+                0.0
+            },
         };
         let axes = (0..6)
             .map(|k| {
@@ -608,6 +619,25 @@ impl Hexapod {
         if part.on_platform { sub(add(p, legs.b[i]), u) } else { add(self.geo.base[i], u) }
     }
 
+    /// The wrench on the platform (force, its moment about the centre) from the legs' rotors turning with their legs: a
+    /// rotor's angular momentum h = J i q' along its leg's u turns as u does, so the leg must give it the moment
+    /// h u' (u' = (d' - u L') / L, d' the platform joint's velocity), which its two joints pass on as a couple across
+    /// it: on the platform at the joint F = h (u x u') / L, with its moment b x F. Gyroscopic: it does no work
+    /// (u x u' . d' = 0). Zero while the legs do not turn or the rotors stand.
+    fn rotor_gyroscopic(&self, legs: &Legs, xi: &[f64; 6], qd: &[f64]) -> [f64; 6] {
+        let (v, w) = ([xi[0], xi[1], xi[2]], [xi[3], xi[4], xi[5]]);
+        let mut out = [0.0; 6];
+        for i in 0..6 {
+            let d = add(v, cross(w, legs.b[i]));
+            let along = dot(legs.u[i], d);
+            let turn: V3 = std::array::from_fn(|k| (d[k] - legs.u[i][k] * along) / legs.length[i]);
+            let force = cross(legs.u[i], turn).map(|f| f * self.rotor_spin * qd[i] / legs.length[i]);
+            let moment = cross(legs.b[i], force);
+            (0..3).for_each(|k| (out[k], out[3 + k]) = (out[k] + force[k], out[3 + k] + moment[k]));
+        }
+        out
+    }
+
     /// The platform's mass matrix over its twist (6 x 6).
     fn twist_mass(&self, r: &M3) -> [[f64; 6]; 6] {
         let iw = matmul(&matmul(r, &self.platform_inertia()), &transpose(r));
@@ -656,8 +686,9 @@ impl Mechanism for Hexapod {
         let (parts_mass, parts_held) = self.parts_terms(&legs, &xi);
         (0..6).for_each(|r| (0..6).for_each(|c| mx[r][c] += parts_mass[r][c]));
         let jinv_a0: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| jinv[r][c] * a0[c]).sum());
+        let rotors = self.rotor_gyroscopic(&legs, &xi, qd);
         let wrench: [f64; 6] = std::array::from_fn(|k| {
-            let held = [0.0, 0.0, self.moving() * self.g, gyro[0], gyro[1], gyro[2]][k] + parts_held[k];
+            let held = [0.0, 0.0, self.moving() * self.g, gyro[0], gyro[1], gyro[2]][k] + parts_held[k] - rotors[k];
             held - (0..6).map(|c| mx[k][c] * jinv_a0[c]).sum::<f64>()
         });
         // M_xi J^-1, once for every column of M_q.

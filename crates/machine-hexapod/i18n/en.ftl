@@ -27,6 +27,7 @@ group-hexapod = Hexapod
 group-leg = Legs (electric cylinders)
 group-mass = Masses
 group-workspace = Working range
+effect-rotor_gyroscopic = The rotors turning with their legs push the platform (gyroscopic)
 quantity-condition-number = Condition number of the Jacobian
 param-base_radius_m = Base joints' circle radius [m]
 param-base_half_angle_deg = Half the angle between a base pair's joints [°]

@@ -27,6 +27,7 @@ group-hexapod = Hexapod
 group-leg = Beine (elektrische Zylinder)
 group-mass = Massen
 group-workspace = Arbeitsraum
+effect-rotor_gyroscopic = Die mit ihren Beinen schwenkenden Rotoren drücken auf die Plattform (gyroskopisch)
 quantity-condition-number = Konditionszahl der Jacobi-Matrix
 param-base_radius_m = Radius des Kreises der Basisgelenke [m]
 param-base_half_angle_deg = Halber Winkel zwischen den Gelenken eines Basispaars [°]

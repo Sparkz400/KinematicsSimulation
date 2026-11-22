@@ -106,7 +106,6 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | Left out | Machine | Size |
 | --- | --- | --- |
 | The run from the drum to the pulley (its length not in the config); the drums' drop below their pulleys (`winch.drop_m`, 0 as shipped: not in the frame's data); the cables' momentum in the frame's (their mass, like their weight, not in its first moment), so a base under the robot does not feel it | cable robots | The drop: 0.049 N a cable at 0.5 m, the spatial cycle's peak torque -0.01 % (a run). The cables' momentum: rho l l' along and rho l_f v_perp / 2 across a cable, with `cable_inertia` on only. The sag model is a shallow parabola, 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
-| The rotors' gyroscopic coupling with the legs' swing (it is in the frame's reaction only); the rods' faces against platform and base | hexapod, tripod, rotary hexapod | About 0.015 N m (hand estimate). |
 | The hook block against the payload's sides (it lands on its top only, since 21 November); a hook block already lower than the payload's top (a pick with it under 0.28 m over the payload's point) stays inside it; one resting on the payload drops through once the payload is let go; the landing on the rigid rope is untested | crane | None in the shipped cycle: the sling holds the hook block over the payload, and its picks hang the hook block 1 m over it. |
 | A parallelogram loop's own stiffness beyond holding a body's turn (rod and crank rigid), and loops other than the parallelogram's (the rule: a bar pinned before a bent link turning with a body beyond holds that body's turn; one turning with the bent link while pinned beyond turns with its chord) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured: the test case, and 1.22 % for the palletiser's held upper arm). |
 | The screw's stiffness along the stroke keeps the far end's for the wafer handler's and the parallel SCARA's pose tolerance (their own `rest_sag`, `machine-wafer-handler` and `machine-parallel-scara`: the column's m g / K with the far end's K, the stroke's `static_twist`), on the safe side; `chain.rs`'s takes the nut, and since 21 November the fit's twist (`Machine::twist_at`) and the mesh bristle (σ_m r, its store still not booked: at most (μ |held|)² / (2σ_m) per gear) follow the nut too | wafer handler, parallel SCARA | The tolerance up to the far end's sag over the pose's. |
@@ -114,6 +113,22 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The stepper's detent after a trip took its pulses off (`Sim::advance_with_windings` gives such a drive the iron's drag only) | stepper | The detent's torque, T_d, is missing while it coasts; the books stay closed (its potential is never stored since 22 November). |
 
 Fixed since (22 November), each was a row of the table above:
+- The rotors' gyroscopic coupling with the legs' swing. Hexapod: in the equations (`effects.rotor_gyroscopic`, off
+  as shipped, since it moves the figures; on, the platform no longer misses the moment the frame's reaction had): the leg passes h u' (h = J i q')
+  to the platform as a couple, F = h (u x u') / L at its joint, no work; to 1e-7 against the rate of the rotors'
+  momentum in `frame_momentum` (0.030 N, 1.3e-3 N m at the test's twist), the bias -J^-T of it
+  (`the_rotors_turning_with_their_legs_push_the_platform_as_their_momentum_turns`, fails with the term out of the
+  dynamics; J i = 0.185583 N m s per m/s, the chain's own h on a rigid state; at home moving along x at 0.1 m/s leg 1
+  gives its rotor 1.410e-3 N m by hand, about a tenth of the 0.015 N m estimated; the energy holds with it on); on,
+  the default cycle's peak torques +0.078 % (motor 2) and -0.067 % (motor 4), the rest under 0.04 %. h takes the
+  rotor's speed as i q'. Tripod: none to add (premise): the leg swings in its plane, the
+  moment lies square to the trunnion's axis and its bearing carries it; passed to the platform it would be a force
+  along e_i, a constraint force (`the_rotors_turning_with_their_legs_do_not_push_the_platform`). Rotary hexapod:
+  none (premise): its rotors turn about the base's fixed crank axes, their momentum never turns. The rods' faces
+  against platform and base, read as the rods' bodies touching the plates: no plate or joint housing in the configs,
+  so not modelled; sized by a run over the hexapod's box (5^6 poses): the steepest leg 41.4 degrees from the base's
+  normal and 47.0 from the platform's, the joint-angle refusal (40 degrees) keeps accepted poses at least 50 degrees
+  from either face.
 - `mode_shape` of the five-bar (parallel SCARA; it had none, the app showed no mode): the lowest plane mode's
   eigenvector of (K - lambda M) v = 0, the rotors held, scaled to 1 m of the plate along x. Tested against the
   linearised machine: moved by 1e-7 times the shape, both arms accelerate by -w^2 times it to 1e-5
@@ -200,6 +215,7 @@ verified the model by hand values and runs and found it ready to switch on.
 | `effects.belt_run_offset` | T-gantry and its machine file (`machine.lean`'s `belt_offset_m`) | Verified by its hand test, energy and budget (21 November); off: it lowers the lean's mode by some 6 % (18.75 to 17.55 Hz at x = 0.9, z = 0.05 m), so the shipped shaper tunings and the tests with recorded lean modes would move. The offset `tool_flex.belt_offset_m` is an estimate. |
 | `effects.rope_mass`, `effects.hook_block`, `effects.joint_elasticity`, `effects.bridge_skew`, `effects.floor_contact` | crane | Verified by their own tests; see section 4 for what was not run. `effects.joint_elasticity` is fit to switch on since the gains of section 2 (bridge 177 Hz, 51.7°, 9.7 dB; trolley 183 Hz, 51.0°, 9.9 dB; hoist 49.5 Hz, 78.2°, 20.7 dB), and its cycle verdicts match the rigid ones. |
 | `drive.overmodulation` | every drive | Off; verified. |
+| `effects.rotor_gyroscopic` | hexapod | Verified by its hand test against the frame's momentum (22 November); off as shipped: on, the default cycle's peak torques move by up to 0.078 % (motor 2). |
 | `effects.cable_inertia` | cable robots | Verified by its hand tests, energy and power (22 November); along-motion and swing; off: it moves the cycles' figures (spatial peak torque +0.09 %, tracking 0.2045 -> 0.2055 mm) and doubles the spatial run's time. |
 
 Always on since November 2026 (they changed shipped figures): the legs' bodies on the hexapod and

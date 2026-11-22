@@ -1387,8 +1387,11 @@ p_y, 0), c = 2 rp |sin(g/2)|. **Verdicts**: `tripod-leg-force`, `tripod-leg-stro
 `error-tripod-revolute-angle`, `error-tripod-cone-angle`, `error-tripod-singularity`, and the joint machine's
 `error-joint-beyond-stop`. **Base**: `frame_momentum` as above with the rotors' spin along u_i, for `base::mount`.
 
-Not modelled: the rotors' gyroscopic coupling with the legs' swing (it is in the frame's momentum only), the rods' faces
-against platform and base, friction and play in the revolute and spherical joints, the joints' and the platform's
+The rotors' gyroscopic moment h u' needs no term: a leg swings in its plane, so u' and the moment lie square to the
+trunnion's axis e_i, which its bearing carries (passed to the platform it would be a force along e_i, a constraint
+force, A^T of it 0: `the_rotors_turning_with_their_legs_do_not_push_the_platform`); it is in the frame's momentum.
+Not modelled: the rods' faces against platform and base (no plates or housings in the config; the revolute and cone
+angle verdicts bound the legs' slant), friction and play in the revolute and spherical joints, the joints' and the platform's
 elasticity (the legs' screws are the only springs).
 
 ## Wafer handler
@@ -1726,10 +1729,10 @@ Each leg is two bodies, as on the [tripod](#tripod): the rod part (`leg.platform
 `leg.platform_part_centre_m` from the platform joint) and the body part (the rest, centre `leg.base_part_centre_m` from
 the base joint), each with its inertia across the leg, turning with u = d / L; each adds m Aᵀ A + I_t A_uᵀ A_u to M_ξ and
 m Aᵀ (a0 + g e_z) + I_t A_uᵀ ü to c + g. The payload is a point mass at the platform centre with its own inertia
-(`mass.payload_inertia_kgm2`, turning with the platform). The rotors spin along their legs (in the frame's momentum).
+(`mass.payload_inertia_kgm2`, turning with the platform). The rotors spin along their legs (in the frame's momentum) and turn with them (`effects.rotor_gyroscopic`, off as shipped): a rotor's angular momentum h = J i q' along u turns as u does, so its leg must give it the moment h u'; the base's universal joint carries no moment square to the leg, so the leg passes it to the platform as a couple across its joints, F = h (u × u') / L at the platform joint with its moment b × F (`rotor_gyroscopic`). F is square to the joint's velocity: it does no work. h takes the rotor's speed as i q' (the elastic model's rotor differs by the screw's stretch rate). Checked against the rate of the rotors' momentum in `frame_momentum` to 1e-7 (`the_rotors_turning_with_their_legs_push_the_platform_as_their_momentum_turns`: J i = 0.185583 N m s per m/s, the rotor's 2.9537e-4 kg m² being the motor's with the screw's and the coupling's, the chain's own h; at home moving along x at 0.1 m/s leg 1 gives its rotor 1.410e-3 N m and the platform (0, −2.563e-3, −2.653e-4) N; 0.030 N and 1.3e-3 N m at the test's twist; the energy holds with it on); on, the default cycle's peak torques move by up to 0.078 % (motor 2), so it is off as shipped.
 **Refusals**: `error-hexapod-joint-angle`, a leg steeper than `workspace.max_joint_angle_deg` against the base's or
 the platform's normal (the rods checked against both), and `error-hexapod-singularity`. Verdicts: the screws'.
-Not modelled: the rotors' gyroscopic coupling with the legs' swing, friction and play in the joints.
+Not modelled: friction and play in the joints. The rods' bodies against the platform's and the base's faces: the config has no plate or joint housing, so no contact; the joint-angle refusal (`workspace.max_joint_angle_deg`, 40°) keeps every accepted pose's legs at least 50° from either face (over the shipped box, 5⁶ poses, the steepest leg stands 41.4° from the base's normal and 47.0° from the platform's, the corners beyond 40° refused).
 
 ## Cable robots
 
