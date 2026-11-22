@@ -394,7 +394,7 @@ fn the_dynamics_with_the_legs_parts_agree_with_the_lagrange_equations() {
 
 /// The rotors' gyroscopic moment has nothing to do on the platform: a leg swings in its plane about its trunnion's axis
 /// e_i, so u and u' both lie square to e_i and the moment the rotor needs, h u', lies square to e_i too, which the
-/// trunnion's bearing carries; were it passed to the platform as the hexapod's couple, its force there, h (u x u') / L,
+/// trunnion's bearing carries; were it passed to the platform as a six-legged platform's couple, its force there, h (u x u') / L,
 /// would lie along e_i, the constraint's direction, and A^T of its wrench (the generalised force on q) is 0. So no
 /// term in the equations; the rotors' spin stays in the frame's momentum, whose rate the base feels.
 #[test]
