@@ -16,6 +16,9 @@ ignore = [
     { id = "RUSTSEC-2023-0071", reason = "applies to sim-opcua's secured endpoints; no async-opcua release on rsa 0.10 yet; mitigations in docs/plc.md#security" },
     # Unmaintained, no fix to take: atomic-polyfill (heapless 0.7 via postcard via async-opcua-server).
     { id = "RUSTSEC-2023-0089", reason = "unmaintained, via async-opcua 0.19; no release without it" },
+    # Unmaintained, no fix to take: chrono (all versions; announced 22 November 2026), via async-opcua 0.19's types,
+    # core, crypto, client and server; async-opcua has no release without it.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained, via async-opcua 0.19; no release without it" },
     # Unmaintained, no fix to take: unsafe-libyaml (serde_yaml via async-opcua-core).
     { id = "RUSTSEC-2024-0449", reason = "unmaintained, via async-opcua 0.19; no release without it" },
     # Unmaintained, no fix to take: ttf-parser (ab_glyph via sctk-adwaita via winit via Bevy), the Wayland window frame.
