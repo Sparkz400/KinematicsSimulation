@@ -53,9 +53,9 @@ const PUSH_RANGE: f64 = 0.01;
 
 /// How many times finer the integration's sub-steps are over a base step with a push at the tool: the contact's
 /// spring then acts on the load's own coordinates (not through the transmission's give), the highest frequency of the
-/// machine, and with `sim.substeps` = 4 the fourth-order steps took 3.5e-4 of the supply out of the budget of the
-/// T-gantry's move into a slab (2.8e-4 on the hexapod; falling with the third and second power of the sub-step), 5e-6
-/// and 1.9e-5 four times finer.
+/// machine, and with `sim.substeps` = 4 the fourth-order steps took 3.5e-4 of the supply out of the budget of a belt
+/// gantry's move into a slab (2.8e-4 on a six-leg platform; falling with the third and second power of the sub-step),
+/// 5e-6 and 1.9e-5 four times finer (`sim-machines`' collision tests).
 const PUSH_SUBSTEPS: u32 = 4;
 
 /// The step in a motor's angle (or a linear motor's position) by which the slope of a clearance is worked out, by

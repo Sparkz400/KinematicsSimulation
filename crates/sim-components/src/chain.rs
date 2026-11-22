@@ -627,9 +627,9 @@ impl<M: Mechanism> JointMachine<M> {
     /// The push at the tool (`push`) on the driven joints at q: its virtual work per unit of each, through the Jacobian
     /// `tool_state` takes the tool's speed with, sum_i F_i d tool_i / d q_k. `None` without a push. The Jacobian is
     /// worked out again only where the joints have moved `PUSH_JACOBIAN_REUSE` from where it last was (a numerical one
-    /// is 2 n forward solutions, a Newton's each on a hexapod): what the push's power then misses of the tool's speed is
-    /// the Jacobian's change over that (the hexapod's move into a slab: 63 s against 39 s, its budget 1.94e-5 of the
-    /// supply against 1.91e-5).
+    /// is 2 n forward solutions, each a Newton's iteration on a parallel platform): what the push's power then misses of
+    /// the tool's speed is the Jacobian's change over that (a six-leg platform's move into a slab: 63 s against 39 s, its
+    /// budget 1.94e-5 of the supply against 1.91e-5; `sim-machines`' collision tests).
     fn push_on_joints(&self, q: &[f64]) -> Option<Vec<f64>> {
         if self.push.iter().all(|f| *f == 0.0) {
             return None;
