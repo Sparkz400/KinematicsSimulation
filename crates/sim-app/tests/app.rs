@@ -471,7 +471,7 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
         "drive.friction_feedforward_torque_nm = {:?}",
         vec![0.05; base.f64s("drive.friction_feedforward_speed_rad_s").map_or(0, |v| v.len())]
     )];
-    let through: [(&str, &[String]); 9] = [
+    let through: [(&str, &[String]); 10] = [
         ("effects.belt_wrap", &["effects.belt_tooth_jump = true".into()]),
         ("effects.drive_current_limit", &capped),
         ("effects.drive_overload", &overload),
@@ -481,6 +481,7 @@ fn switching_an_effect_changes_the_traces_within_one_cycle(entry: &'static Machi
         ("effects.iron_loss", &stall),
         ("effects.friction_feedforward", &characteristic),
         ("effects.link_bending_reaction", &["effects.link_bending = true".into()]),
+        ("effects.belt_pulley_conduction", &["effects.part_heating = true".into()]),
     ];
     // The 0.5 s before the switch run once per config, as two runs that must agree; each switch starts both of its runs
     // from a snapshot of them (`Sim::restore`, bit for bit). Run anew for every switch they took most of the six-axis

@@ -502,8 +502,17 @@ impl LinearDelta {
         // capacity C = (mass per metre) L cp, cp = belt.specific_heat_j_kg_k; time constant C R. A thin belt (3 mm,
         // polyurethane 0.2 W/(m K)) is at one temperature through its thickness: Biot h t / 2 k = 0.1.
         let length = geo[0] + geo[1] - 2.0 * m.belt.tooth_length;
-        let area = 2.0 * cfg.positive("ratings.belt_width_mm")? * 1e-3 * length;
-        let resistance = 1.0 / (cfg.positive("belt.convection_w_m2_k")? * area);
+        let width = cfg.positive("ratings.belt_width_mm")? * 1e-3;
+        let mut conductance = cfg.positive("belt.convection_w_m2_k")? * 2.0 * width * length;
+        // effects.belt_pulley_conduction: the belt also gives heat to its two pulleys through the half wrap (pi r) it lies
+        // on each, from its middle through half its thickness, G = 2 pi r w k / (t / 2), in parallel with the air. The
+        // pulleys sit in the axis's end housings and stay at the air's temperature; the contact's own resistance is left
+        // out (a PU belt pressed on aluminium, some kW/(m^2 K) against k / (t / 2) = 133 W/(m^2 K)).
+        if cfg.get("effects.belt_pulley_conduction").is_ok() && cfg.bool("effects.belt_pulley_conduction")? {
+            let (thickness, k) = (cfg.positive("belt.thickness_m")?, cfg.positive("belt.thermal_conductivity_w_m_k")?);
+            conductance += std::f64::consts::TAU * r * width * k / (0.5 * thickness);
+        }
+        let resistance = 1.0 / conductance;
         let capacity = cfg.positive("belt.mass_kg_m")? * length * cfg.positive("belt.specific_heat_j_kg_k")?;
         m.belt_thermal = (resistance, capacity * resistance);
         Ok(m)
