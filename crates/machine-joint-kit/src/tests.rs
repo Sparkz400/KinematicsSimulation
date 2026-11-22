@@ -1151,6 +1151,33 @@ fn the_parallelogram_holds_the_forearm_against_the_upper_arms_bend() {
 
 /// The palletiser rigid and loss-free in joint space, its upper arm bending in its plane (a steel tube 150 x 10 mm,
 /// undamped), with or without its parallelogram's bars, with or without the bend acting back on the joints.
+/// The palletiser's rod stretching under the torque it passes (effects.bar_elasticity, [estimate] E A / L = 2.14e8 N/m
+/// on the forearm's 0.3 m lever, carrying motor 3): k c^2 = 2.14e8 x 0.09 = 1.926e7 N m/rad in series with the
+/// gearbox's 2e5, K = 1 / (1 / 2e5 + 1 / 1.926e7) = 197944.6 N m/rad. Motor 3's train (the planner's) then rings
+/// sqrt(K / 2e5) = 0.994834 times as high, the other motors' as before; the held modes see it too (one lower, none
+/// higher).
+#[test]
+fn the_parallelogram_rod_stretches_in_series_with_motor_threes_gearbox() {
+    let machine = |on: bool| {
+        let mut cfg = PALLETISER.config();
+        cfg.set_text(&format!("effects.bar_elasticity = {on}")).unwrap();
+        (PALLETISER.build)(&cfg).unwrap()
+    };
+    let (off, on) = (machine(false), machine(true));
+    let pose = [1.2, -0.5, 1.3, 0.0];
+    let (a, b) = (off.trains(&pose), on.trains(&pose));
+    let k: f64 = 1.0 / (1.0 / 2e5 + 1.0 / (2.14e8 * 0.09));
+    assert!((k - 197_944.6).abs() < 0.1, "{k}");
+    for m in 0..4 {
+        let (a, b) = (a[m].unwrap().hz, b[m].unwrap().hz);
+        let want = if m == 2 { (k / 2e5).sqrt() } else { 1.0 };
+        assert!((b / a - want).abs() < 1e-9, "motor {}: {} against {want}", m + 1, b / a);
+    }
+    let (a, b) = (off.modes(&pose), on.modes(&pose));
+    assert!(a.len() == b.len() && a.iter().zip(&b).all(|(a, b)| b.hz <= a.hz * (1.0 + 1e-12)), "{a:?} {b:?}");
+    assert!(a.iter().zip(&b).any(|(a, b)| b.hz < a.hz * (1.0 - 1e-4)), "{a:?} {b:?}");
+}
+
 fn bent_config(bars: bool, reaction: bool) -> Config {
     {
         let mut cfg = rigid(&PALLETISER);
@@ -2171,6 +2198,89 @@ fn a_parallelogram_bar_is_a_body_of_its_own() {
     near(torque[2], -0.178154, 1e-5, "motor 3 without it");
     cfg.set_text("arm.bars_on = [7.0]").unwrap();
     assert!((URDF_ARM.build)(&cfg).is_err());
+}
+
+/// A four-bar of unequal links on the SCARA (`arm.four_bar_*`): the follower's pivot F at (0.15, 0.06, 0) of link 1, the
+/// crank point C 0.08 m out along link 2 from joint 2 (at (0.325, 0) of link 1), a 0.2 m coupler (0.5 kg) from C to T
+/// and a 0.12 m follower (0.3 kg) from F to T, in link 1's plane. The exact loop by hand in link 1's frame:
+/// C = (0.325 + 0.08 cos q2, 0.08 sin q2), d = C - F, cos a = (l_f^2 + |d|^2 - l_c^2) / (2 l_f |d|),
+/// T = F + l_f (cos a e + sin a e_perp); each bar a slender rod, its centre at its middle, m l^2 / 12 about it. Its share
+/// of the mass matrix over (q1, q2) is sum m dc/dq_i . dc/dq_j + I db/dq_i db/dq_j (c the centre, b the bar's angle in
+/// the base frame, by central differences of the closed form), which the machine's (the feedforward's torques at unit
+/// accelerations, at rest, less the SCARA's own, times the ratios 100 and 80) matches to 1e-7 at q2 = 0.3 and 1.2
+/// (q1 = 0.4). Its energy holds over the suite's pulse and ring (loss-free).
+#[test]
+fn a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand() {
+    let keys = [
+        "arm.four_bar_ground_on = 1",
+        "arm.four_bar_ground_pin_m = [0.15, 0.06, 0.0]",
+        "arm.four_bar_crank_on = 2",
+        "arm.four_bar_crank_pin_m = [0.08, 0.0, 0.0]",
+        "arm.four_bar_normal = [0.0, 0.0, 1.0]",
+        "arm.four_bar_lengths_m = [0.2, 0.12]",
+        "arm.four_bar_masses_kg = [0.5, 0.3]",
+        "arm.four_bar_branch = 1",
+    ];
+    let mut with = rigid(&SCARA);
+    keys.iter().for_each(|k| with.set_text(k).unwrap());
+    let (plain, looped) = ((SCARA.build)(&rigid(&SCARA)).unwrap(), (SCARA.build)(&with).unwrap());
+    // The bars' centres and angles in the base frame at (q1, q2), by the closed form.
+    let bars = |q1: f64, q2: f64| -> [(f64, [f64; 2], f64); 2] {
+        let (lc, lf, f) = (0.2f64, 0.12f64, [0.15f64, 0.06]);
+        let c = [0.325 + 0.08 * q2.cos(), 0.08 * q2.sin()];
+        let d = [c[0] - f[0], c[1] - f[1]];
+        let dd = d[0].hypot(d[1]);
+        let e = [d[0] / dd, d[1] / dd];
+        let cos = (lf * lf + dd * dd - lc * lc) / (2.0 * lf * dd);
+        let sin = (1.0 - cos * cos).sqrt();
+        let t = [f[0] + lf * (cos * e[0] - sin * e[1]), f[1] + lf * (cos * e[1] + sin * e[0])];
+        let world = |p: [f64; 2]| [p[0] * q1.cos() - p[1] * q1.sin(), p[0] * q1.sin() + p[1] * q1.cos()];
+        let mid = |a: [f64; 2], b: [f64; 2]| world([0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])]);
+        let angle = |a: [f64; 2], b: [f64; 2]| (b[1] - a[1]).atan2(b[0] - a[0]) + q1;
+        [(0.5, mid(c, t), angle(c, t)), (0.3, mid(f, t), angle(f, t))]
+    };
+    for q2 in [0.3, 1.2] {
+        let q = [0.4, q2];
+        let h = 1e-6;
+        let rate = |j: usize| {
+            let (mut a, mut b) = (q, q);
+            a[j] -= h;
+            b[j] += h;
+            let (lo, hi) = (bars(a[0], a[1]), bars(b[0], b[1]));
+            std::array::from_fn::<_, 2, _>(|k| {
+                (
+                    [(hi[k].1[0] - lo[k].1[0]) / (2.0 * h), (hi[k].1[1] - lo[k].1[1]) / (2.0 * h)],
+                    (hi[k].2 - lo[k].2) / (2.0 * h),
+                )
+            })
+        };
+        let (r0, r1) = (rate(0), rate(1));
+        let by_hand = |i: usize, j: usize| -> f64 {
+            let (ri, rj) = (if i == 0 { r0 } else { r1 }, if j == 0 { r0 } else { r1 });
+            (0..2)
+                .map(|k| {
+                    let (m, l) = ([0.5, 0.3][k], [0.2, 0.12][k]);
+                    m * (ri[k].0[0] * rj[k].0[0] + ri[k].0[1] * rj[k].0[1]) + m * l * l / 12.0 * ri[k].1 * rj[k].1
+                })
+                .sum()
+        };
+        let pose = [q[0], q[1], 0.1, 0.0];
+        for j in 0..2 {
+            let mut acc = [0.0; 4];
+            acc[j] = 1.0;
+            let (mut a, mut b) = ([0.0; 4], [0.0; 4]);
+            looped.feedforward_torque(&pose, &acc, &mut a);
+            plain.feedforward_torque(&pose, &acc, &mut b);
+            for i in 0..2 {
+                let got = [100.0, 80.0][i] * (a[i] - b[i]);
+                let want = by_hand(i, j);
+                assert!((got - want).abs() < 1e-7 * want.abs().max(1e-3), "q2 {q2}: M[{i}][{j}] {got} against {want}");
+            }
+        }
+    }
+    let mut lossless = (SCARA.suite_configs)()[0].clone();
+    keys.iter().for_each(|k| lossless.set_text(k).unwrap());
+    sim_core::testkit::energy_conservation((SCARA.build)(&lossless).unwrap().as_ref());
 }
 
 /// The carriage's motor rotor is part of what its guides carry: it spins about the vertical at the ratio times the

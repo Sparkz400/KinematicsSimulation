@@ -1793,8 +1793,9 @@ r) of it, the wound cable at D, the run from D to E moving along it at l', the f
 the kinetic energy has them: first moment ρ ((capacity − l) D + r (D + E) / 2 + l (E + P) / 2), momentum
 ρ (l' (E − D) + l (a + P') / 2), its rate exactly, angular momentum ρ (l' D × E + l (E × (a + P') / 2 + (P − E) ×
 (a / 6 + P' / 3))); against 4000 points of each span summed by hand to 1e-9, the first moment moving at the momentum
-and the weight at the first moment (testkit), rigid and elastic. Left: the weight's V counts the span's mass as ρ L
-(stretched) where the first moment has ρ l, a strain's share (1e-3) of the cable's weight.
+and the weight at the first moment (testkit), rigid and elastic. The weight's V and the first moment take the same mass
+for the span, ρ l (elastic, l the free length, a state; rigid, l = L): V + g · c is the same at any two states to
+rounding (1e-12, `the_cables_run_along_with_the_drums`).
 
 **The cables' own inertia** (`effects.cable_inertia`, off as shipped, with ρ). The cable runs along itself at the
 drum's speed l': the turns on the drum with it (at the drum's radius, so at l'), the paid-out cable along its run and
@@ -2028,6 +2029,26 @@ with the forearm, its centre 0.15 m behind the pivot; the rod, 8 kg, from the cr
 (8 × 0.3 + 6 × 0.15) g = 32.36 N m off the forearm's joint, 0.2023 N m at motor 3, nothing at motor 2
 (`the_palletisers_rod_and_crank_hold_by_hand`); the turret's held mode at the start pose is 8.21 Hz (8.30 without
 them). The MuJoCo reference compares the URDF's chain alone.
+
+**The rod's stretch** (`effects.bar_elasticity`, off as shipped; `arm.bars_axial_stiffness_n_m`, `bars_carries`). The
+forearm is pinned at the upper arm's tip and turned by the rod alone, so the rod's axial stiffness k does not lie in
+series with the arm's bend (the bend moves the rod's end across it, a change of its length of second order) but with
+the gearbox of the joint whose turn it carries, on the lever c of its pin's distance from its link's joint:
+K = 1 / (1 / k_g + 1 / (k c²)). The palletiser's rod, a 1 m steel tube of its 8 kg, E A / L = 2.14e8 N/m on 0.3 m:
+1.926e7 N m/rad beside motor 3's 2e5, K = 197944.6 N m/rad, its train 0.9948 times as high
+(`the_parallelogram_rod_stretches_in_series_with_motor_threes_gearbox`). The gearbox's damper stays in parallel with K.
+
+**A four-bar of unequal links** (`arm.four_bar_*`, since 22 November). A loop the URDF leaves out whose bars do not
+stay parallel to a link: a crank point C on one link drives a coupler of length l_c to the point T, which a follower of
+length l_f holds from its pivot F on another, in the plane square to n. T from the loop's closure: d the in-plane part
+of C − F, e = d / |d|, cos a = (l_f² + |d|² − l_c²) / (2 l_f |d|), T = F + l_f (cos a e ± sin a n × e). The rates from
+the loop's Jacobian in the pivot's link's frame (turning at ω_g): C moves at c' there, the follower turns at λ n with
+λ = (T − C) · c' / ((T − C) · (n × (T − F))), the coupler at μ n with μ = (T'_rel − c') · (n × (T − C)) / l_c². Each bar a
+uniform rod; their mass matrix and bias by Kane's equations as the parallel bars' (`bar_dynamics`), their weight in the
+potential. On the SCARA (follower 0.12 m and 0.3 kg on link 1, coupler 0.2 m and 0.5 kg from 0.08 m out on link 2) the
+mass matrix over joints 1 and 2 matches the closed form's to 1e-7 at two poses, and the energy holds
+(`a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand`). Not with bending links (refused: their
+fields take parallel bars).
 
 **Bending links with bars** (since 22 November; refused before). A bar pinned on a body before a bent link that turns
 with a body beyond it (the crank: pinned on the turret, turning with the forearm, across the upper arm) drives that

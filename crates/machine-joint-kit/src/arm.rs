@@ -339,6 +339,57 @@ struct Bar {
     turns: usize,
     pin: V3,
     inertial: Inertial,
+    /// A four-bar's coupler or follower (`four_bar`): its place and turn from the loop's closure, not from `turns`.
+    closure: Option<Closure>,
+}
+
+/// A planar four-bar the URDF leaves out (`arm.four_bar_*`): a crank point C on body `crank` (at `crank_pin` of its
+/// frame) drives a coupler of length l_c to the point T, which a follower of length l_f holds at l_f from its pivot F on
+/// body `ground` (`Bar::on`, at `Bar::pin`), all in the plane square to `normal` (in the ground's frame). T from the
+/// loop's closure: with d the in-plane part of C - F, D = |d|, e = d / D, cos a = (l_f^2 + D^2 - l_c^2) / (2 l_f D),
+/// T = F + l_f (cos a e + branch sin a n x e). Its rates from the loop's Jacobian: in the ground's frame (turning at w_g)
+/// C moves at c' = C' - F' - w_g x (C - F); the follower turns at lambda n with lambda = (T - C) . c' / ((T - C) . (n x
+/// (T - F))) (the coupler keeps its length), the coupler at mu n with mu = (T'_rel - c') . (n x (T - C)) / l_c^2. Each
+/// bar a uniform slender rod from its pin along its x (its mass at its middle, m l^2 / 12 across it).
+#[derive(Debug, Clone, Copy)]
+struct Closure {
+    crank: usize,
+    crank_pin: V3,
+    normal: V3,
+    coupler: f64,
+    follower: f64,
+    branch: f64,
+    /// This bar is the coupler (from C to T); else the follower (from F to T).
+    is_coupler: bool,
+}
+
+impl Closure {
+    /// The loop's point T and the follower's and the coupler's turn rates about n relative to the ground (`Closure`),
+    /// with C, F and n; `None` where it does not close.
+    fn solve(&self, states: &[BodyState], ground: usize, pin: V3) -> Option<[V3; 7]> {
+        let (g, c) = (&states[ground], &states[self.crank]);
+        let n = mul(&g.rot, self.normal);
+        let crank = add(c.origin, mul(&c.rot, self.crank_pin));
+        let pivot = add(g.origin, mul(&g.rot, pin));
+        let speed = |b: &BodyState, at: V3| add(b.velocity, cross(b.spin, sub(at, b.com)));
+        let (cv, fv) = (speed(c, crank), speed(g, pivot));
+        let raw = sub(crank, pivot);
+        let d = sub(raw, n.map(|v| v * dot(n, raw)));
+        let length = dot(d, d).sqrt();
+        let e = d.map(|v| v / length);
+        let cos = (self.follower.powi(2) + length * length - self.coupler.powi(2)) / (2.0 * self.follower * length);
+        if !(cos.abs() <= 1.0) {
+            return None;
+        }
+        let sin = self.branch * (1.0 - cos * cos).sqrt();
+        let tip = add(pivot, add(e.map(|v| v * self.follower * cos), cross(n, e).map(|v| v * self.follower * sin)));
+        let rel = sub(sub(cv, fv), cross(g.spin, sub(crank, pivot)));
+        let (from_crank, from_pivot) = (sub(tip, crank), sub(tip, pivot));
+        let lambda = dot(from_crank, rel) / dot(from_crank, cross(n, from_pivot));
+        let tip_rel = cross(n, from_pivot).map(|v| v * lambda);
+        let mu = dot(sub(tip_rel, rel), cross(n, from_crank)) / self.coupler.powi(2);
+        Some([tip, crank, pivot, n, [lambda, mu, 0.0], cv, fv])
+    }
 }
 
 /// The parallelogram's bars (or any rigid piece the URDF leaves out) as bodies of their own: bar i is pinned on the link
@@ -349,7 +400,7 @@ struct Bar {
 /// that turns with the link it is pinned on is a rigid piece of it, merged into it by the parallel axis theorem
 /// (`Inertial::merged`); the others are `Bar`s. Empty arrays (the default): no bars.
 fn bars(cfg: &Config, chain: &mut Chain) -> Result<Vec<Bar>, ConfigError> {
-    let Ok(on) = cfg.f64s("arm.bars_on") else { return Ok(Vec::new()) };
+    let Ok(on) = cfg.f64s("arm.bars_on") else { return four_bar(cfg, chain.len()) };
     let bad = |key: &str| ConfigError::Invalid(format!("arm.{key}"));
     let optional = |key: &str| if cfg.get(key).is_ok() { cfg.f64s(key) } else { Ok(Vec::new()) };
     let (mass, com, inertia) =
@@ -390,10 +441,100 @@ fn bars(cfg: &Config, chain: &mut Chain) -> Result<Vec<Bar>, ConfigError> {
             let body = &mut chain.bodies[on];
             body.inertial = body.inertial.merged(&own, &[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], pin);
         } else {
-            out.push(Bar { on, turns, pin, inertial: own });
+            out.push(Bar { on, turns, pin, inertial: own, closure: None });
         }
     }
+    out.extend(four_bar(cfg, chain.len())?);
     Ok(out)
+}
+
+/// The four-bar of `arm.four_bar_*` (`Closure`), two `Bar`s: its coupler and its follower; none where
+/// `arm.four_bar_ground_on` is left out. Keys: `four_bar_ground_on` and `four_bar_crank_on` (URDF joints, 1-based),
+/// `four_bar_ground_pin_m` (F) and `four_bar_crank_pin_m` (C) in their links' frames, `four_bar_normal` (the loop's
+/// plane's normal in the ground's frame), `four_bar_lengths_m` [l_c, l_f], `four_bar_masses_kg` [m_c, m_f],
+/// `four_bar_branch` (+1 or -1: T on the side n x e of the line F to C, or the other); `four_bar_ground_on` 0: none.
+fn four_bar(cfg: &Config, links: usize) -> Result<Vec<Bar>, ConfigError> {
+    if cfg.get("arm.four_bar_ground_on").is_err() || cfg.f64("arm.four_bar_ground_on")? == 0.0 {
+        return Ok(Vec::new());
+    }
+    let bad = |key: &str| ConfigError::Invalid(format!("arm.four_bar_{key}"));
+    let link = |key: &str| -> Result<usize, ConfigError> {
+        let v = cfg.f64(&format!("arm.four_bar_{key}"))?;
+        if v.fract() == 0.0 && v >= 1.0 && v <= links as f64 { Ok(v as usize - 1) } else { Err(bad(key)) }
+    };
+    let point = |key: &str| -> Result<V3, ConfigError> {
+        match cfg.f64s(&format!("arm.four_bar_{key}"))?[..] {
+            [x, y, z] if [x, y, z].iter().all(|v| v.is_finite()) => Ok([x, y, z]),
+            _ => Err(bad(key)),
+        }
+    };
+    let (ground, crank, pin, crank_pin, normal) =
+        (link("ground_on")?, link("crank_on")?, point("ground_pin_m")?, point("crank_pin_m")?, point("normal")?);
+    let size = dot(normal, normal).sqrt();
+    let (lengths, masses, branch) =
+        (cfg.f64s("arm.four_bar_lengths_m")?, cfg.f64s("arm.four_bar_masses_kg")?, cfg.f64("arm.four_bar_branch")?);
+    if !(size > 0.0) || branch.abs() != 1.0 {
+        return Err(bad("normal or arm.four_bar_branch"));
+    }
+    let (&[coupler, follower], &[m_c, m_f]) = (&lengths[..], &masses[..]) else { return Err(bad("lengths_m")) };
+    if !(coupler > 0.0 && follower > 0.0 && m_c >= 0.0 && m_f >= 0.0) {
+        return Err(bad("lengths_m or arm.four_bar_masses_kg"));
+    }
+    let rod = |m: f64, l: f64| Inertial {
+        mass: m,
+        com: [0.5 * l, 0.0, 0.0],
+        inertia: [[0.0; 3], [0.0, m * l * l / 12.0, 0.0], [0.0, 0.0, m * l * l / 12.0]],
+    };
+    let closure =
+        Closure { crank, crank_pin, normal: normal.map(|v| v / size), coupler, follower, branch, is_coupler: true };
+    Ok(vec![
+        Bar { on: ground, turns: ground, pin, inertial: rod(m_c, coupler), closure: Some(closure) },
+        Bar {
+            on: ground,
+            turns: ground,
+            pin,
+            inertial: rod(m_f, follower),
+            closure: Some(Closure { is_coupler: false, ..closure }),
+        },
+    ])
+}
+
+/// effects.bar_elasticity: a parallelogram's rod stretches under the torque it passes. Bar i with an axial stiffness
+/// `arm.bars_axial_stiffness_n_m[i]` k (0: rigid) carries the turn of motor joint `arm.bars_carries[i]` (1-based) on a
+/// lever of c = |`bars_pin_m`| (its pin's distance from its link's joint), so its k c^2 (N m/rad at that joint) lies in
+/// series with that joint's gearbox: K = 1 / (1 / k_g + 1 / (k c^2)), which the dynamics, the held modes and the
+/// planner's trains then take. The rod's own mass stays on its bar; the gearbox's damper stays as it was (in parallel
+/// with K, not in series with the rod), and so do a stiffness curve's upper segments. A config without the switch has
+/// it off.
+fn bar_springs(cfg: &Config, joints: &mut [(RotaryJoint, Option<f64>, &str)]) -> Result<(), ConfigError> {
+    if !(cfg.get("effects.bar_elasticity").is_ok() && cfg.bool("effects.bar_elasticity")?) {
+        return Ok(());
+    }
+    let bad = |key: &str| ConfigError::Invalid(format!("arm.{key}"));
+    let (stiffness, carries, pins) =
+        (cfg.f64s("arm.bars_axial_stiffness_n_m")?, cfg.f64s("arm.bars_carries")?, cfg.f64s("arm.bars_pin_m")?);
+    if stiffness.is_empty() {
+        return Ok(());
+    }
+    if carries.len() != stiffness.len() || pins.len() != 3 * stiffness.len() {
+        return Err(bad("bars_carries"));
+    }
+    for (i, (k, motor)) in stiffness.iter().zip(&carries).enumerate() {
+        if *k == 0.0 {
+            continue;
+        }
+        let at = *motor as usize;
+        if !(*k > 0.0) || motor.fract() != 0.0 || at == 0 || at > joints.len() {
+            return Err(bad("bars_axial_stiffness_n_m or arm.bars_carries"));
+        }
+        let lever = pins[3 * i..3 * i + 3].iter().map(|v| v * v).sum::<f64>();
+        if !(lever > 0.0) {
+            return Err(bad("bars_pin_m"));
+        }
+        let gearbox = &mut joints[at - 1].0.gearbox;
+        gearbox.stiffness = 1.0 / (1.0 / gearbox.stiffness + 1.0 / (k * lever));
+    }
+    Ok(())
 }
 
 /// The momentum of `bodies` about the base's origin: sum m v and sum c x m v + I w.
@@ -591,6 +732,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         axes.push(axis(cfg, AXIS_IDS[k], JOINT_KEYS[k], unit, joint.range)?);
         joints.push((joint, lever, unit));
     }
+    bar_springs(cfg, &mut joints)?;
 
     let offset = cfg.f64s("arm.payload_offset_m")?;
     let &[x, y, z] = &offset[..] else { return Err(ConfigError::Invalid("arm.payload_offset_m".into())) };
@@ -625,6 +767,11 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
 
     let max_condition = cfg.positive("workspace.max_condition_number")?;
     let (mut bending, reaction) = bent_links(cfg, &chain)?;
+    // shortcut: a four-bar's bars have no field of the links' modes (`bar_field` takes parallel bars), so the two are
+    // refused together; upgrade when a bent link carries a four-bar.
+    if !bending.is_empty() && bars.iter().any(|b| b.closure.is_some()) {
+        return Err(ConfigError::Invalid("arm.four_bar_* with effects.link_bending".into()));
+    }
     // The parallelograms: a bar pinned on a body before a bent link that turns with a body beyond it drives that body's
     // turn from before the link, so the link's bend in the joints' plane moves the body and all beyond it with the
     // link's tip without turning them (`BentLink::held_from`, `field`); the bars' own fields `bar_field`.
@@ -804,6 +951,32 @@ impl Arm {
     /// pin + R' c_bar moving at v_pin + w' x (centre - pin).
     fn with_bars(&self, mut states: Vec<BodyState>) -> Vec<BodyState> {
         for bar in &self.bars {
+            if let Some(c) = &bar.closure {
+                let state = match c.solve(&states, bar.on, bar.pin) {
+                    Some([tip, crank, pivot, n, [lambda, mu, _], cv, fv]) => {
+                        let (start, speed, rate, length) =
+                            if c.is_coupler { (crank, cv, mu, c.coupler) } else { (pivot, fv, lambda, c.follower) };
+                        let x = sub(tip, start).map(|v| v / length);
+                        let y = cross(n, x);
+                        let rot = [[x[0], y[0], n[0]], [x[1], y[1], n[1]], [x[2], y[2], n[2]]];
+                        let spin = add(states[bar.on].spin, n.map(|v| v * rate));
+                        let com = add(start, x.map(|v| v * 0.5 * length));
+                        let velocity = add(speed, cross(spin, sub(com, start)));
+                        BodyState { inertial: bar.inertial, rot, origin: start, axis: [0.0; 3], com, velocity, spin }
+                    }
+                    None => BodyState {
+                        inertial: bar.inertial,
+                        rot: [[f64::NAN; 3]; 3],
+                        origin: [f64::NAN; 3],
+                        axis: [0.0; 3],
+                        com: [f64::NAN; 3],
+                        velocity: [f64::NAN; 3],
+                        spin: [f64::NAN; 3],
+                    },
+                };
+                states.push(state);
+                continue;
+            }
             let (a, b) = (&states[bar.on], &states[bar.turns]);
             let pin = add(a.origin, mul(&a.rot, bar.pin));
             let at_pin = add(a.velocity, cross(a.spin, sub(pin, a.com)));

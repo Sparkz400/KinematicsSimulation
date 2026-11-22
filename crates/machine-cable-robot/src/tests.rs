@@ -681,6 +681,20 @@ fn the_cables_run_along_with_the_drums() {
         assert!(linear[0].abs() > 1e-4 && angular[1].abs() > 1e-4, "{linear:?} {angular:?}");
         sim_core::testkit::frame_momentum_moves_its_first_moment(&robot);
         sim_core::testkit::weight_is_at_the_first_moment(&robot);
+        // Tighter: the weight is the first moment's exactly, the span's mass rho l in both (elastic, l the free length,
+        // a state; rigid l = L): V + gravity . c is the same at another pose with other free lengths, to rounding.
+        let held = |robot: &CableRobot, s: &[f64]| {
+            let f = robot.frame_momentum(s).unwrap();
+            robot.energy_parts(s)[1] + (0..3).map(|i| f.gravity[i] * f.first_moment[i]).sum::<f64>()
+        };
+        let mut other = Vec::new();
+        robot.equilibrium(&[-0.2, 0.6], &mut other, &mut vec![0.0; 4]);
+        if stretch {
+            let n = robot.n();
+            (0..4).for_each(|k| other[2 * n + k] *= 1.001);
+        }
+        let (a, b) = (held(&robot, &s), held(&robot, &other));
+        assert!((a - b).abs() < 1e-12 * a.abs().max(1.0), "{stretch}: {a} against {b}");
     }
     let mut cfg = PLANAR.config();
     cfg.set_text("cable.mass_per_m_kg = 0.01").unwrap();
