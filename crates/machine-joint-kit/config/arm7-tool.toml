@@ -138,6 +138,8 @@ link_bending = false
 # The links' bending acts back on the joints (with link_bending): joints, gearboxes and links one coupled system, the
 # bending's energy in the machine's. Off in the shipped configs.
 link_bending_reaction = false
+# A parallelogram rod's axial stiffness in series with the gearbox of the joint it carries. Off as shipped.
+bar_elasticity = false
 # The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
 # the motor encoder, which stays for the speed loop.
 load_encoder = false

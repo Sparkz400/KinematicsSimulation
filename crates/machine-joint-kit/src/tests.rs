@@ -1149,6 +1149,33 @@ fn the_parallelogram_holds_the_forearm_against_the_upper_arms_bend() {
 
 /// The palletiser rigid and loss-free in joint space, its upper arm bending in its plane (a steel tube 150 x 10 mm,
 /// undamped), with or without its parallelogram's bars, with or without the bend acting back on the joints.
+/// The palletiser's rod stretching under the torque it passes (effects.bar_elasticity, [estimate] E A / L = 2.14e8 N/m
+/// on the forearm's 0.3 m lever, carrying motor 3): k c^2 = 2.14e8 x 0.09 = 1.926e7 N m/rad in series with the
+/// gearbox's 2e5, K = 1 / (1 / 2e5 + 1 / 1.926e7) = 197944.6 N m/rad. Motor 3's train (the planner's) then rings
+/// sqrt(K / 2e5) = 0.994834 times as high, the other motors' as before; the held modes see it too (one lower, none
+/// higher).
+#[test]
+fn the_parallelogram_rod_stretches_in_series_with_motor_threes_gearbox() {
+    let machine = |on: bool| {
+        let mut cfg = PALLETISER.config();
+        cfg.set_text(&format!("effects.bar_elasticity = {on}")).unwrap();
+        (PALLETISER.build)(&cfg).unwrap()
+    };
+    let (off, on) = (machine(false), machine(true));
+    let pose = [1.2, -0.5, 1.3, 0.0];
+    let (a, b) = (off.trains(&pose), on.trains(&pose));
+    let k: f64 = 1.0 / (1.0 / 2e5 + 1.0 / (2.14e8 * 0.09));
+    assert!((k - 197_944.6).abs() < 0.1, "{k}");
+    for m in 0..4 {
+        let (a, b) = (a[m].unwrap().hz, b[m].unwrap().hz);
+        let want = if m == 2 { (k / 2e5).sqrt() } else { 1.0 };
+        assert!((b / a - want).abs() < 1e-9, "motor {}: {} against {want}", m + 1, b / a);
+    }
+    let (a, b) = (off.modes(&pose), on.modes(&pose));
+    assert!(a.len() == b.len() && a.iter().zip(&b).all(|(a, b)| b.hz <= a.hz * (1.0 + 1e-12)), "{a:?} {b:?}");
+    assert!(a.iter().zip(&b).any(|(a, b)| b.hz < a.hz * (1.0 - 1e-4)), "{a:?} {b:?}");
+}
+
 fn bent_config(bars: bool, reaction: bool) -> Config {
     {
         let mut cfg = rigid(&PALLETISER);

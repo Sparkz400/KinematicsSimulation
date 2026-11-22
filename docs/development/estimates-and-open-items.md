@@ -113,6 +113,10 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The stepper's detent after a trip took its pulses off (`Sim::advance_with_windings` gives such a drive the iron's drag only) | stepper | The detent's torque, T_d, is missing while it coasts; the books stay closed (its potential is never stored since 22 November). |
 
 Fixed since (22 November), each was a row of the table above:
+- Joint kit, a parallelogram rod's own stiffness: not in series with the link's bend (the forearm, pinned at the tip,
+  is turned by the rod alone, which the bend does not stretch to first order) but with the gearbox of the joint the
+  rod carries, k c^2 (`effects.bar_elasticity`, off as shipped; `arm.bars_axial_stiffness_n_m`, `bars_carries`):
+  the palletiser's motor 3 train 0.9948 times as high (`the_parallelogram_rod_stretches_in_series_with_motor_threes_gearbox`).
 - Cable robots, the run from the drum to the pulley and the cables in the frame's momentum (with
   `effects.cable_inertia`, off as shipped): the drums' places as config keys (`frame.run_lengths_m`, [estimate]
   0.15 m along each winch's direction, replacing `winch.drop_m`); the run's mass runs at the drum's speed (spatial
@@ -231,6 +235,7 @@ verified the model by hand values and runs and found it ready to switch on.
 | `effects.rope_mass`, `effects.hook_block`, `effects.joint_elasticity`, `effects.bridge_skew`, `effects.floor_contact` | crane | Verified by their own tests; see section 4 for what was not run. `effects.joint_elasticity` is fit to switch on since the gains of section 2 (bridge 177 Hz, 51.7°, 9.7 dB; trolley 183 Hz, 51.0°, 9.9 dB; hoist 49.5 Hz, 78.2°, 20.7 dB), and its cycle verdicts match the rigid ones. |
 | `drive.overmodulation` | every drive | Off; verified. |
 | `effects.rotor_gyroscopic` | hexapod | Verified by its hand test against the frame's momentum (22 November); off as shipped: on, the default cycle's peak torques move by up to 0.078 % (motor 2). |
+| `effects.bar_elasticity` | palletiser (joint kit) | Verified by its hand test (22 November); off as shipped: motor 3's train -0.52 %. The rod's stiffness is an estimate. |
 | `effects.cable_inertia` | cable robots | Verified by its hand tests, energy and power (22 November); along-motion and swing; off: it moves the cycles' figures (spatial peak torque +0.09 %, tracking 0.2045 -> 0.2055 mm) and doubles the spatial run's time. |
 
 Always on since November 2026 (they changed shipped figures): the legs' bodies on the hexapod and

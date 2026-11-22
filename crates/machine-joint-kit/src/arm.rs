@@ -396,6 +396,41 @@ fn bars(cfg: &Config, chain: &mut Chain) -> Result<Vec<Bar>, ConfigError> {
     Ok(out)
 }
 
+/// effects.bar_elasticity: a parallelogram's rod stretches under the torque it passes. Bar i with an axial stiffness
+/// `arm.bars_axial_stiffness_n_m[i]` k (0: rigid) carries the turn of motor joint `arm.bars_carries[i]` (1-based) on a
+/// lever of c = |`bars_pin_m`| (its pin's distance from its link's joint), so its k c^2 (N m/rad at that joint) lies in
+/// series with that joint's gearbox: K = 1 / (1 / k_g + 1 / (k c^2)), which the dynamics, the held modes and the
+/// planner's trains then take. The rod's own mass stays on its bar; the gearbox's damper stays as it was (in parallel
+/// with K, not in series with the rod), and so do a stiffness curve's upper segments. A config without the switch has
+/// it off.
+fn bar_springs(cfg: &Config, joints: &mut [(RotaryJoint, Option<f64>, &str)]) -> Result<(), ConfigError> {
+    if !(cfg.get("effects.bar_elasticity").is_ok() && cfg.bool("effects.bar_elasticity")?) {
+        return Ok(());
+    }
+    let bad = |key: &str| ConfigError::Invalid(format!("arm.{key}"));
+    let (stiffness, carries, pins) =
+        (cfg.f64s("arm.bars_axial_stiffness_n_m")?, cfg.f64s("arm.bars_carries")?, cfg.f64s("arm.bars_pin_m")?);
+    if carries.len() != stiffness.len() || pins.len() != 3 * stiffness.len() {
+        return Err(bad("bars_carries"));
+    }
+    for (i, (k, motor)) in stiffness.iter().zip(&carries).enumerate() {
+        if *k == 0.0 {
+            continue;
+        }
+        let at = *motor as usize;
+        if !(*k > 0.0) || motor.fract() != 0.0 || at == 0 || at > joints.len() {
+            return Err(bad("bars_axial_stiffness_n_m or arm.bars_carries"));
+        }
+        let lever = pins[3 * i..3 * i + 3].iter().map(|v| v * v).sum::<f64>();
+        if !(lever > 0.0) {
+            return Err(bad("bars_pin_m"));
+        }
+        let gearbox = &mut joints[at - 1].0.gearbox;
+        gearbox.stiffness = 1.0 / (1.0 / gearbox.stiffness + 1.0 / (k * lever));
+    }
+    Ok(())
+}
+
 /// The momentum of `bodies` about the base's origin: sum m v and sum c x m v + I w.
 fn momentum_of(bodies: &[BodyState]) -> (V3, V3) {
     let (mut linear, mut angular) = ([0.0; 3], [0.0; 3]);
@@ -591,6 +626,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         axes.push(axis(cfg, AXIS_IDS[k], JOINT_KEYS[k], unit, joint.range)?);
         joints.push((joint, lever, unit));
     }
+    bar_springs(cfg, &mut joints)?;
 
     let offset = cfg.f64s("arm.payload_offset_m")?;
     let &[x, y, z] = &offset[..] else { return Err(ConfigError::Invalid("arm.payload_offset_m".into())) };

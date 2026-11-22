@@ -69,6 +69,7 @@ param-youngs_modulus_pa = Elastizitätsmodul [Pa]
 param-damping_ratio = Dämpfungsgrad
 quantity-link-bend = Biegung des Glieds an seiner Spitze
 effect-link_bending_reaction = Die Biegung der Glieder wirkt auf die Gelenke zurück (beidseitig)
+effect-bar_elasticity = Die Schubstange des Parallelogramms dehnt sich (in Reihe zum Getriebe)
 param-shear_modulus_pa = Schubmodul [Pa]
 param-directions = Richtungen: in_plane, out_of_plane, torsion
 quantity-link-bend-across = Biegung des Glieds an seiner Spitze, quer zur Ebene seines Gelenks

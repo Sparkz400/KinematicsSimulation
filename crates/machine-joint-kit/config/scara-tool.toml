@@ -37,6 +37,8 @@ link_bending = false
 # The links' bending acts back on the joints (with link_bending): joints, gearboxes and links one coupled system, the
 # bending's energy in the machine's. Off in the shipped configs.
 link_bending_reaction = false
+# A parallelogram rod's axial stiffness in series with the gearbox of the joint it carries. Off as shipped.
+bar_elasticity = false
 gravity = true
 payload = true
 # The arms' payload swings on a pivot at the flange (arm.payload_swing_*): two joints no motor drives. Off here; read

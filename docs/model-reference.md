@@ -2027,6 +2027,14 @@ with the forearm, its centre 0.15 m behind the pivot; the rod, 8 kg, from the cr
 (`the_palletisers_rod_and_crank_hold_by_hand`); the turret's held mode at the start pose is 8.21 Hz (8.30 without
 them). The MuJoCo reference compares the URDF's chain alone.
 
+**The rod's stretch** (`effects.bar_elasticity`, off as shipped; `arm.bars_axial_stiffness_n_m`, `bars_carries`). The
+forearm is pinned at the upper arm's tip and turned by the rod alone, so the rod's axial stiffness k does not lie in
+series with the arm's bend (the bend moves the rod's end across it, a change of its length of second order) but with
+the gearbox of the joint whose turn it carries, on the lever c of its pin's distance from its link's joint:
+K = 1 / (1 / k_g + 1 / (k c²)). The palletiser's rod, a 1 m steel tube of its 8 kg, E A / L = 2.14e8 N/m on 0.3 m:
+1.926e7 N m/rad beside motor 3's 2e5, K = 197944.6 N m/rad, its train 0.9948 times as high
+(`the_parallelogram_rod_stretches_in_series_with_motor_threes_gearbox`). The gearbox's damper stays in parallel with K.
+
 **Bending links with bars** (since 22 November; refused before). A bar pinned on a body before a bent link that turns
 with a body beyond it (the crank: pinned on the turret, turning with the forearm, across the upper arm) drives that
 body's turn from before the link: the link's bend in its joints' plane (the plane the pins turn in) moves that body and

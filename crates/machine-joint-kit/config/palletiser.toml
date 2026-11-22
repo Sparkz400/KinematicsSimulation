@@ -46,6 +46,13 @@ bars_pin_m = [0.25, 0.0, 0.45, -0.3, 0.0, 0.0]
 bars_mass_kg = [6.0, 8.0]
 bars_com_m = [-0.15, 0.0, 0.0, 0.0, 0.0, -0.5]
 bars_inertia_kgm2 = [0.004, 0.045, 0.045, 0.0, 0.0, 0.0, 0.66667, 0.66667, 0.006, 0.0, 0.0, 0.0]
+# With effects.bar_elasticity: each bar's axial stiffness (0: rigid) and the motor joint (1-based, 0: none) whose turn
+# it carries on the lever of its pin's distance from its link's joint, k c^2 in series with that joint's gearbox.
+# [estimate] the rod a 1 m steel tube of its 8 kg (A = 8 / 7850 = 1.019e-3 m^2): E A / L = 2.14e8 N/m, on the
+# forearm's 0.3 m lever, carrying motor 3's turn: 1.926e7 N m/rad beside the gearbox's 2e5 (K -1.03 %). The crank, a
+# lever, is stiff along itself.
+bars_axial_stiffness_n_m = [0.0, 2.14e8]
+bars_carries = [0, 3]
 # With effects.payload_swing: the carton on a pivot at the flange, its centre 0.2 m below, with this spring and damper
 # per axis. [estimate] a vacuum gripper's bellows: 20 kg at 0.2 m swings at sqrt((k + m g l) / (m l^2 + I)) / 2 pi = 1.61 Hz
 # about the axis across its 0.6 m side (I = 0.75 kg m^2) and 1.82 Hz about the other (I = 0.4167).
