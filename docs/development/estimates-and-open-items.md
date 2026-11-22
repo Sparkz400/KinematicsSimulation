@@ -376,8 +376,12 @@ Fixed (after the second audit, 21 November):
   overshot a 1 mm step by 22 to 24 % at Kv 50 (20.0 and 20.6 Hz on the arm's mode). Retuned too: the T-gantry's Kv 50
   -> 45 (x 8.75 Hz, 5.5 %; the velocity loops at least 35.7 degrees and 7.7 dB over the poses friction off), the URDF
   arm's and the arm on a track's base turn Kv 30 (3.8 and 2.6 %, 7.5 and 7.8 Hz; 42.1 and 47.4 degrees friction off).
-  Still open: the palletiser's motor 2 at [1.6, 0.5, 1.3, pi/2] 32.7 / 26.4 (73.0 / 68.1), at z 0.8 29.5 friction off,
-  and motor 3 32.1 friction off (49.9), waiting for its rod and crank. The T-gantry's analyze, verdicts, tuning, margins, step and
+  The palletiser, after its rod and crank (af529961): motor 2 at [1.6, 0.5, 1.3, pi/2] 30.2 / 23.8 degrees (73.0 /
+  68.7 at the start), motor 3 29.7 friction off (45.2), crossover 8 Hz with 19 dB of gain margin unused: the arm's two
+  0.35 -> 1.2, at least 54.0 / 51.0 and 53.1 / 50.2 degrees, 8.9 / 8.7 dB over the poses; and its position gains, whose
+  1 mm step in x overshot 42 % at Kv 50: the arm's two at 24 1/s, 9.4 % (4.3 Hz). The base turn keeps 50 and y its
+  42 % overshoot (open): at 20 y overshot 7 %, but the turret's ring left its loop's hand model (5.08 Hz against 5.72,
+  `the_palletisers_turret_rings_at_its_held_mode_softened_by_the_velocity_loop`). Settling see the report table. The T-gantry's analyze, verdicts, tuning, margins, step and
   Bode blocks of the guides are re-run with the new gains; its optimise, sensitivity, stop, accuracy and path blocks
   are from Kp 0.04 and Kv 50 and not re-run. The shipped margins test is one per
   config now (`across_the_bounds::<config>::as_configured`). Time of `sim-cli margins` over the poses on 4 cores, as
