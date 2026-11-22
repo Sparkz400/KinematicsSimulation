@@ -1293,7 +1293,7 @@ k_mod = 1.875104⁴ / 4 · E I / L³ = 3.0906 E I / L³,   c = 2 ζ sqrt(k_mod m
 m_mod d̈ + c ḋ + k_mod d = Q_g − ṗ                   (one-way; m_mod, Q_g and p below)
 ```
 
-turn = along × across. The bodies beyond the link ride on its tip whole, with their turning inertia (`field`; below), and m_mod is the diagonal of M_d at zero joints (m / 4 and everything beyond, a swinging payload as if fixed where it hangs). So a link alone rings at the Euler-Bernoulli frequency 1.875104² / 2π · sqrt(E I / (m L³)) (a 60 × 4 mm steel tube of 0.8 m and 4.5 kg: 88.96 Hz), and a tip load F bends it F L³ / (3.09 E I), the static cantilever's within 3 %. The bodies' accelerations come from the joints' (central differences over ±1 µs along q̇ and q̈ of `Chain::body_states`). One-way, as the [compliant base](#compliant-base): the joints do not feel the links' bending (two-way with `effects.link_bending_reaction`, below). In tool space the flange moves with each link's tip and turns with its slope, d · across + 1.3765 d / L · turn × (flange − tip), its turn added to the rotation vector through exp and log; in joint space the tool pose is the joints, which the bending does not move (its signals `link.<n>.bend` show it). A link along its joint's axis (the base column) has no bend (shortcut in `arm.rs`). Link bending and parallelogram bars that are bodies of their own (`arm.bars_turns_with`) are refused together: a bar closes a loop the links' cantilever modes do not have. Against the exact beam the one-mode method stands 1.2 to 2.6 % high (measured in the test case, `docs/development/estimates-and-open-items.md`).
+turn = along × across. The bodies beyond the link ride on its tip whole, with their turning inertia (`field`; below; those a parallelogram's bar holds move with the tip without turning, see "Bending links with bars"), and m_mod is the diagonal of M_d at zero joints (m / 4 and everything beyond, a swinging payload as if fixed where it hangs). So a link alone rings at the Euler-Bernoulli frequency 1.875104² / 2π · sqrt(E I / (m L³)) (a 60 × 4 mm steel tube of 0.8 m and 4.5 kg: 88.96 Hz), and a tip load F bends it F L³ / (3.09 E I), the static cantilever's within 3 %. The bodies' accelerations come from the joints' (central differences over ±1 µs along q̇ and q̈ of `Chain::body_states`). One-way, as the [compliant base](#compliant-base): the joints do not feel the links' bending (two-way with `effects.link_bending_reaction`, below). In tool space the flange moves with each link's tip and turns with its slope, d · across + 1.3765 d / L · turn × (flange − tip), its turn added to the rotation vector through exp and log; in joint space the tool pose is the joints, which the bending does not move (its signals `link.<n>.bend` show it). A link along its joint's axis (the base column) has no bend (shortcut in `arm.rs`). Link bending and parallelogram bars that are bodies of their own (`arm.bars_turns_with`) are refused together: a bar closes a loop the links' cantilever modes do not have. Against the exact beam the one-mode method stands 1.2 to 2.6 % high (measured in the test case, `docs/development/estimates-and-open-items.md`).
 
 **Directions** (`link_bending.directions`, shipped `["in_plane"]`, the model above). `out_of_plane` adds the bend across that plane (across' = along × across, turning about along × across' = −across), `torsion` the twist about the link's length: one more first mode each per link, states after the others in the order of the list. The twist is a shaft from the joint, its tip turning by d (rad) about the link's line, stiffness k = G I_p / L, I_p = 2 I = π (D⁴ − d⁴) / 32 (`link_bending.shear_modulus_pa`), its shape growing evenly along the link. Signals `link.<n>.bend_across` (m) and `link.<n>.twist` (rad).
 
@@ -1762,12 +1762,19 @@ W = T² / 2 − c / T,   energy (l / EA) W                          the platform
 
 so a cable is taut at any t0 (slack, it hangs at T = √(c / (2|t0|))). Rigid cables have no sag. W changes with the pose
 through c too (since 22 November): at a fixed t0, dW/dc = −1/(2T) (from dT/dc = T / (2 (T³ + c))), so the anchor takes
-F = l / (2 EA T) ∇_P c beside T u, with its moment (`sag_pull`, ∇_P c by forward differences of 1 µm): 1.9e-5 N on the
+F = l / (2 EA T) ∇_P c beside T u, with its moment (`sag_pull`). ∇_P c in closed form (`sag_gradient`):
+c (2 ∇l_h / l_h + ∇l_f / l_f + u / L), ∇l_f = q / l_f (q from the pulley's centre to the anchor; the swivelling pulley's
+centre moves across its plane only), and the cable's direction turning by ∇u = −n nᵀ / l_f + (e_z × u) e_vᵀ / P_u (n its
+normal in the pulley's plane, e_v the plane's normal, P_u the anchor's distance from the swivel's axis), l_h = l_f |u_h|;
+within 1.2e-14 N of central differences over 202 spatial poses (`the_sags_gradient_is_its_differences`) and within
+1e-9 N along the whole spatial cycle (checked once by a run). 1.9e-5 N on the
 planar robot at 0.01 kg/m and 100 N, 3.6e-3 N on a spatial cable hanging nearly slack at 0.4 N, against the at-rest
 tensions' 1e-11 N. The dynamics, the state at rest and the elastic `forward` take it, so the cables' force is the
 gradient of their energy (`the_sagging_cables_pull_is_the_gradient_of_their_energy`: 1.2e-9 N, 1.9e-5 N without it).
-The spatial cycle's figures move by its peak torque's last digit (2.454134 -> 2.454135 N m); its run takes 9.4 s instead
-of 4.9 s (the three span evaluations a cable per evaluation of the dynamics).
+The spatial cycle's run takes 6.5 s against 5.0 s without the pull (9.4 s with forward differences). Its figures: the
+RMS torques and errors unchanged to their digits; motor 1's peak torque 2.454134 N m without the pull, 2.454051 with
+it (2.454135 with the differences, whose force differs by about 1e-11 N: the peak sits on a moment that small forces
+shift), the other motors' within 4e-6 N m.
 
 **The lift from drum to pulley** (`winch.drop_m` h, the drum's drop below its pulley; 0 as shipped, the frame's data
 not at hand): the cable paid out is lifted by h, its potential ρ g h l, the drum pulled back by ρ g h (0.049 N at
@@ -1779,13 +1786,20 @@ span. All of it, the drum's `winch.capacity_m` from its end on the drum to the a
 at the cable beside the drum's J / r² (0.05 kg beside 0.444 kg on the spatial robot, 0.015 kg beside 0.32 kg on the
 planar), in the equations of either model, the feedforward and the kinetic energy. In the frame's momentum the cable
 on the drum, ρ (capacity − l), turns with it about h; the paid-out cable's momentum along its span, ρ l l' a cable, is left
-out with its mass (not in the frame's mass and first moment, as the cables' weight is the potential's). Left out: the fixed run
-from the drum to the pulley (its length not in the config) and the span's swing across itself, the sections moving
-with the anchor at their share s / L of its speed across the cable, ρ L / 3 of each cable with the anchor (42 g on the
-spatial platform's 8 kg with the payload); added whole to the platform's mass (an upper bound, a run) it moves the
-spatial cycle's tracking error from 0.2045 to 0.2060 mm and its peak torque by 0.07 % (the planar's 5.2 g: 0.6499 to
-0.6505 mm). Switched on, the cables' along-motion raises the spatial cycle's peak torque from 2.4541 to 2.4578 N m
-(+0.15 %, RMS +0.005 %, the tracking error unchanged at 0.2045 mm), a drum 0.5 m below its pulley moves it by -0.01 %.
+out with its mass (not in the frame's mass and first moment, as the cables' weight is the potential's; so the swing below is
+not in it either, and a base under the robot does not feel the cables' momentum). Since 22 November the switch also
+takes the span's swing across itself: the straight span pivots at its exit point, its sections at s / l_f of the
+anchor's speed across the cable, so T = μ |v_⊥|² / 2 with μ = ρ l_f / 3: a mass M = μ (1 − u uᵀ) at the anchor that
+changes with its place, in the platform's mass matrix (`platform_mass_at`, the feedforward's and the modes' too) and
+the kinetic energy. Its velocity terms by Lagrange on the anchor as a particle (`swing_bias`):
+F = M (w × (w × b)) + μ' v_⊥ − μ (u' (u · v) + u (u' · v)) − ρ/6 ∇l_f |v_⊥|² + μ (u · v) ∇uᵀ v, μ' = ρ/3 ∇l_f · v,
+u' = ∇u v (the gradients of `span_gradients`), with its moment b × F. Tests: the planar robot's mass at the centre
+by hand, the swing's power along a motion of the spatial one against its energy's rate to 4.5e-7
+(`the_cables_swing_with_their_anchors`), the energy budget closed rigid and elastic. Left out: the fixed run from the
+drum to the pulley (its length not in the config). Switched on (along-motion and swing), the spatial cycle's peak
+torque goes from 2.4541 to 2.4562 N m (+0.09 %), its tracking error from 0.2045 to 0.2055 mm, its dwell error from
+0.0357 to 0.0344 mm; the planar's tracking error from 0.6499 to 0.6502 mm. The run takes 14.7 s against 6.5 s off.
+A drum 0.5 m below its pulley moves the spatial peak torque by −0.01 %.
 The winches' spin is in the frame's momentum about
 `frame.winch_spin_axes`.
 
@@ -1979,8 +1993,30 @@ Source: [`arm.rs`](../crates/machine-joint-kit/src/arm.rs), [`config/palletiser.
 so that a parallelogram keeps the flange level; Newton-Euler on the chain as the [arms](#arms-in-tool-space-scara-six-axis-arm).
 The parallelogram's bars the URDF leaves out can be bodies of their own (`arm.bars_on`, `bars_turns_with`, `bars_pin_m`,
 `bars_mass_kg`, `bars_com_m`, `bars_inertia_kgm2`): bar i pinned at a point of one link, staying parallel to another and
-turning with it, its points moving at v_pin + ω_turns × (r − pin). The shipped arrays are empty. Bars together with
-`effects.link_bending` are refused. With `effects.payload_swing` the payload hangs on a pivot about two axes, two passive
+turning with it, its points moving at v_pin + ω_turns × (r − pin). The palletiser ships its forearm's drive
+parallelogram so since 22 November (estimates): the crank, 6 kg, on motor 3's shaft at the upper arm's pivot, turning
+with the forearm, its centre 0.15 m behind the pivot; the rod, 8 kg, from the crank's end to the forearm's rear lever
+(0.3 m behind the elbow), parallel to the upper arm. With the arm upright and the forearm level their weights take
+(8 × 0.3 + 6 × 0.15) g = 32.36 N m off the forearm's joint, 0.2023 N m at motor 3, nothing at motor 2
+(`the_palletisers_rod_and_crank_hold_by_hand`); the turret's held mode at the start pose is 8.21 Hz (8.30 without
+them). The MuJoCo reference compares the URDF's chain alone.
+
+**Bending links with bars** (since 22 November; refused before). A bar pinned on a body before a bent link that turns
+with a body beyond it (the crank: pinned on the turret, turning with the forearm, across the upper arm) drives that
+body's turn from before the link: the link's bend in its joints' plane (the plane the pins turn in) moves that body and
+all beyond it with the tip but does not turn them (`BentLink::held_from`; `field` gives them the tip's move only, as
+`field_rate` and the flange's shift do), so they count with their mass and not their turning inertia, as on a
+cantilever with a tip mass and no tip inertia. The bars have fields of their own (`bar_field`): the pin moves as the
+points of its body (on the bent link itself at the mode's shape where it sits, `beam::cantilever_shape`, nothing behind
+the joint), the bar turns as the body it turns with; a bar turning with the bent link while pinned beyond it (the rod)
+is the parallelogram's side across from the link and turns with its chord, d / L, so it swings about its other end.
+Out of the joints' plane and in twist the pins do not hold, and the bodies take the tip's slope as before. The
+palletiser's upper arm (steel tube 150 × 10 mm, 25 kg) in its plane: by hand 25/4 + 53 + 8/3 = 61.92 kg on
+(βL)⁴/4 E I / L³, 53.626 Hz, which the machine's mode gives; the exact Euler-Bernoulli cantilever with that tip mass
+and no tip inertia rings at 52.980 Hz (the bend-mode method's known +1.2 %); without the bars, the forearm turning with
+the tip's slope, 35.17 Hz. Two-way the energy holds with gravity to the integrator's level, 1.8e-8 J of the 2.8 mJ a pulse puts in over 10 s (6.9e-9 J without the bars; `the_parallelogram_holds_the_forearm_against_the_upper_arms_bend`, the joints' stops off). With the stops on the swinging upper arm reaches its stop at 0.9 rad, whose stiff contact the fixed step integrates to 1.3e-5 J at 62.5 µs and 1.3e-6 J at 31.25 µs, in a step at each contact: the integrator's, not a term of the model.
+Left out: the loop's own stiffness beyond holding the turn (the rod and crank rigid), and a loop's general geometry: the
+rule is the parallelogram's (the rod parallel to the link's chord). With `effects.payload_swing` the payload hangs on a pivot about two axes, two passive
 joints on `arm.payload_swing_stiffness_nm_rad` and `_damping_nm_s_rad`.
 
 ## Mover track

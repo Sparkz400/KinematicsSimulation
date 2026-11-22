@@ -536,6 +536,88 @@ fn the_sagging_cables_pull_is_the_gradient_of_their_energy() {
     assert!(off < 1e-8, "{off} N");
 }
 
+/// The sag constant's gradient over the anchor's place (`sag_gradient`, in closed form) against its central differences
+/// (1 um) for every cable of the spatial robot at 202 poses over its box, turned and not, and the planar one at two: as
+/// the pull it gives a cable of 100 N at its free length, l / (2 EA T) grad c, within 1e-9 N (measured 1.2e-14 N).
+#[test]
+fn the_sags_gradient_is_its_differences() {
+    let mut worst = 0f64;
+    for (entry, poses) in [
+        (&SPATIAL, {
+            let mut v = vec![vec![0.3, -0.2, 1.3, 0.05, -0.03, 0.08], vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0]];
+            for i in 0..200 {
+                let f = |k: f64| ((i as f64 * k).sin());
+                v.push(vec![0.4 * f(1.3), 0.4 * f(2.1), 1.0 + 0.3 * f(0.7), 0.1 * f(3.3), 0.1 * f(1.9), 0.1 * f(2.9)]);
+            }
+            v
+        }),
+        (&PLANAR, vec![vec![0.3, 0.9], vec![-0.4, 0.5]]),
+    ] {
+        let mut cfg = entry.config();
+        cfg.set_text("cable.mass_per_m_kg = 0.01").unwrap();
+        let robot = CableRobot::new(&cfg).unwrap();
+        for pose in poses {
+            let Some(spans) = robot.spans(&pose) else { continue };
+            for (k, s) in spans.iter().enumerate() {
+                let anchor = sub(s.exit, scale(s.u, s.straight));
+                let at = |p: V3| {
+                    let (length, straight, u, exit) = span(&robot.cables[k], robot.pulley, p).unwrap();
+                    robot.sag(&Span { length, straight, u, exit, b: s.b, dz: 0.0 })
+                };
+                let exact = robot.sag_gradient(k, s).unwrap();
+                let pull = s.length / (2.0 * robot.ea * 100.0);
+                for i in 0..3 {
+                    let (mut up, mut down) = (anchor, anchor);
+                    (up[i], down[i]) = (anchor[i] + 1e-6, anchor[i] - 1e-6);
+                    let differences = (at(up) - at(down)) / 2e-6;
+                    let off = pull * (exact[i] - differences).abs();
+                    worst = worst.max(off);
+                }
+            }
+        }
+    }
+    println!("the closed form off the differences by {worst:e} N");
+    assert!(worst < 1e-9, "{worst} N");
+}
+
+/// The cables' swing across themselves (effects.cable_inertia). Planar at the centre: each cable's straight span l_f
+/// carries rho l_f / 3 at the anchor across its direction, so the platform's mass grows by sum rho l_f / 3 u_z^2 along x
+/// and sum rho l_f / 3 u_x^2 along z (the four alike by symmetry). Its velocity terms are Lagrange's: along any motion at
+/// a held twist the swing's kinetic energy changes at the rate twist . (its velocity terms), by central differences
+/// over the pose (1e-6 s), spatial at a pose turned and moving and turning, within 1e-9 of it; and the energy closes
+/// with it (`the_cables_run_along_with_the_drums`, `testkit::loss_budget`).
+#[test]
+fn the_cables_swing_with_their_anchors() {
+    let mut cfg = PLANAR.config();
+    cfg.set_text("effects.cable_inertia = true").unwrap();
+    let robot = CableRobot::new(&cfg).unwrap();
+    let plain = planar_with_rope(0.003);
+    let spans = robot.spans(&CENTRE).unwrap();
+    let mu = |s: &Span| 0.003 * s.straight / 3.0;
+    let (xx, zz): (f64, f64) =
+        (spans.iter().map(|s| mu(s) * s.u[2] * s.u[2]).sum(), spans.iter().map(|s| mu(s) * s.u[0] * s.u[0]).sum());
+    let (with, without) = (robot.platform_mass(&CENTRE), plain.platform_mass(&CENTRE));
+    assert!((with[0] - without[0] - xx).abs() < 1e-12 && (with[3] - without[3] - zz).abs() < 1e-12, "{with:?}");
+    assert!(with[1].abs() < 1e-15 && xx > 1e-3, "{with:?} {xx}");
+    let mut cfg = SPATIAL.config();
+    cfg.set_text("effects.cable_inertia = true").unwrap();
+    let robot = CableRobot::new(&cfg).unwrap();
+    let (pose, xi) = (vec![0.2, -0.1, 1.2, 0.05, -0.03, 0.08], vec![0.4, -0.3, 0.2, 0.3, -0.2, 0.5]);
+    let swing = |pose: &[f64]| {
+        let (all, plain) = (robot.platform_mass(pose), {
+            let (_, r) = robot.place(pose);
+            robot.platform_mass_at(&r, &[])
+        });
+        0.5 * (0..36).map(|rc| xi[rc / 6] * (all[rc] - plain[rc]) * xi[rc % 6]).sum::<f64>()
+    };
+    let h = 1e-6;
+    let step = |s: f64| robot.moved(&pose, &xi.iter().map(|x| x * s).collect::<Vec<_>>());
+    let rate = (swing(&step(h)) - swing(&step(-h))) / (2.0 * h);
+    let power: f64 = robot.swing_bias(&robot.spans(&pose).unwrap(), &xi).iter().zip(&xi).map(|(f, x)| f * x).sum();
+    println!("the swing's energy changes at {rate} W, its velocity terms' power {power} W");
+    assert!(rate.abs() > 1e-4 && (rate - power).abs() < 1e-6 * rate.abs(), "{rate} {power}");
+}
+
 /// effects.cable_inertia: the cable runs along itself at the drum's speed, all of the drum's 5 m. Spatial: the drum's
 /// 4e-4 / 0.03^2 = 0.444444 kg at the cable and 0.01 x 5 = 0.05 kg of cable, 0.494444 kg. Planar, rigid, at (0.3, 0.9)
 /// moving at (0.5, -0.2) m/s: of its 0.003 x 5 = 0.015 kg the cable still on each drum, 0.003 (5 - L), turns with it

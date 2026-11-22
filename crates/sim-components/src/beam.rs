@@ -20,6 +20,13 @@ pub const CANTILEVER_PARTICIPATION: f64 = 0.391_496;
 /// The first mode's slope at the tip times L, taken to its tip: what a moment at the tip drives it with, times 1 / L.
 pub const CANTILEVER_TIP_SLOPE: f64 = 1.376_51;
 
+/// The cantilever's first mode shape taken to its tip, phi(xi) / phi(1) at xi = x / L in [0, 1] (the module's phi).
+pub fn cantilever_shape(xi: f64) -> f64 {
+    let (b, s) = (CANTILEVER_BETA_L, 0.734_095_514);
+    let phi = |x: f64| (b * x).cosh() - (b * x).cos() - s * ((b * x).sinh() - (b * x).sin());
+    phi(xi) / phi(1.0)
+}
+
 /// A cantilever's static deflection shape under a tip load, taken to its tip: psi(xi) = (3 xi^2 - xi^3) / 2, xi = x / L.
 /// With the static stiffness 3 E I / L^3 it is the consistent single mode (Rayleigh): the tip deflects as the exact
 /// beam's under a tip load and under its own weight (int psi = 3/8: q L^4 / (8 E I)), and the first frequency is the

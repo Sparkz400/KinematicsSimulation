@@ -35,12 +35,17 @@ joint_coupling = [
 # mass bars_mass_kg[i], its centre bars_com_m[3i..3i+3] from the pin and its inertia about its centre
 # bars_inertia_kgm2[6i..6i+6] (xx, yy, zz, xy, xz, yz; the array may stay empty: 0), both in the frame of the link it
 # turns with. Empty: no bars (the URDF's links as they are).
-bars_on = []
-bars_turns_with = []
-bars_pin_m = []
-bars_mass_kg = []
-bars_com_m = []
-bars_inertia_kgm2 = []
+# [estimate] the forearm's drive parallelogram: the crank on motor 3's shaft at the upper arm's pivot (the turret's
+# link, joint 2's axis at (0.25, 0, 0.45)), turning with the forearm, 6 kg, a 0.3 m steel lever with its hub, its
+# centre 0.15 m behind the pivot (-x of the forearm); the rod from its end to the forearm's rear lever (0.3 m behind
+# the elbow), parallel to the upper arm, 8 kg, a 1 m steel tube, its centre 0.5 m below that lever. Each a slender
+# bar: m L^2 / 12 across it (6 x 0.09 / 12 = 0.045, 8 x 1 / 12 = 0.66667 kg m^2), its spin about its length small.
+bars_on = [1, 3]
+bars_turns_with = [3, 2]
+bars_pin_m = [0.25, 0.0, 0.45, -0.3, 0.0, 0.0]
+bars_mass_kg = [6.0, 8.0]
+bars_com_m = [-0.15, 0.0, 0.0, 0.0, 0.0, -0.5]
+bars_inertia_kgm2 = [0.004, 0.045, 0.045, 0.0, 0.0, 0.0, 0.66667, 0.66667, 0.006, 0.0, 0.0, 0.0]
 # With effects.payload_swing: the carton on a pivot at the flange, its centre 0.2 m below, with this spring and damper
 # per axis. [estimate] a vacuum gripper's bellows: 20 kg at 0.2 m swings at sqrt((k + m g l) / (m l^2 + I)) / 2 pi = 1.61 Hz
 # about the axis across its 0.6 m side (I = 0.75 kg m^2) and 1.82 Hz about the other (I = 0.4167).

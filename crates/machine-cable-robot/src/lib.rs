@@ -58,9 +58,9 @@
 //! of T over t0 (`pull_work`), so that the platform takes T along the chord and the drum T L / l - W / EA, and W's
 //! change with c over the pose too (the sag's weight moving with l_h, about (w l_h)^2 l / (12 T l_h), 5e-5 N at 10 g/m
 //! and 20 N: `sag_pull`). With effects.cable_inertia the cable runs along itself at the drum's speed, the whole of the
-//! drum's capacity a mass rho capacity at the cable beside J / r^2. Left out: the span's swing across itself (about a
-//! third of each cable's mass moving with its anchor across the cable: 42 g on the spatial platform's 8 kg with the
-//! payload, 0.5 %). Rigid cables do not stretch and have no sag.
+//! drum's capacity a mass rho capacity at the cable beside J / r^2. And each straight span swings across
+//! itself with its anchor, rho l_f / 3 (1 - u u^T) at the anchor with its velocity terms (`swing_bias`; 42 g on the
+//! spatial platform's 8 kg with the payload, 0.5 %). Rigid cables do not stretch and have no sag.
 //!
 //! The motor angles of a pose (`inverse`) are those of the free lengths that hold the platform at rest there with the
 //! tensions of the distribution, l = L / (1 + t / EA) (rigid: l = L), so that position setpoints and the torque
@@ -845,13 +845,16 @@ impl CableRobot {
         a
     }
 
-    /// The platform's mass matrix over its twist, in the degrees of freedom (n x n).
+    /// The platform's mass matrix over its twist, in the degrees of freedom (n x n), with the cables' swing
+    /// (`swing_mass`).
     fn platform_mass(&self, pose: &[f64]) -> Vec<f64> {
-        self.platform_mass_at(&self.place(pose).1)
+        let (p, r) = self.place(pose);
+        let spans = if self.cable_moving > 0.0 { self.spans_at(p, &r).unwrap_or_default() } else { Vec::new() };
+        self.platform_mass_at(&r, &spans)
     }
 
-    /// `platform_mass` at the pose's rotation `r`.
-    fn platform_mass_at(&self, r: &M3) -> Vec<f64> {
+    /// `platform_mass` at the pose's rotation `r` and the cables' `spans` there (not read without effects.cable_inertia).
+    fn platform_mass_at(&self, r: &M3, spans: &[Span]) -> Vec<f64> {
         let iw = matmul(&matmul(r, &self.inertia), &transpose(r));
         let n = self.n();
         let mut out = vec![0.0; n * n];
@@ -864,7 +867,58 @@ impl CableRobot {
                 };
             }
         }
+        if self.cable_moving > 0.0 {
+            for s in spans {
+                let mu = self.rope * s.straight / 3.0;
+                // The anchor's velocity per twist component: e_i for v, e_i x b for w.
+                let column = |d: usize| -> V3 {
+                    let mut e = [0.0; 3];
+                    e[d % 3] = 1.0;
+                    if d < 3 { e } else { cross(e, s.b) }
+                };
+                for (i, di) in self.dofs.iter().enumerate() {
+                    let ci = column(*di);
+                    for (j, dj) in self.dofs.iter().enumerate() {
+                        let cj = column(*dj);
+                        out[i * n + j] += mu * (dot(ci, cj) - dot(ci, s.u) * dot(cj, s.u));
+                    }
+                }
+            }
+        }
         out
+    }
+
+    /// With effects.cable_inertia, the cables' swing across themselves: each straight span pivots at its exit point, its
+    /// sections at s / l_f of the anchor's speed across the cable, v_P - u (u . v_P), so it carries
+    /// T = mu |v_perp|^2 / 2 with mu = rho l_f / 3: a mass M = mu (1 - u u^T) at the anchor that changes with its place
+    /// (`swing_mass` in `platform_mass_at`). Its velocity terms by Lagrange on the anchor P as a particle,
+    /// F = M a + M' v - grad_P (v^T M v) / 2 with a = J xi' + w x (w x b): M' v = mu' v_perp - mu (u' (u . v) + u (u' . v)),
+    /// mu' = rho / 3 grad l_f . v, u' = grad u v, and grad_P (v^T M v) / 2 = rho / 6 grad l_f |v_perp|^2 - mu (u . v)
+    /// grad u^T v (`span_gradients`); the wrench (F, b x F) without M J xi' in the degrees of freedom.
+    fn swing_bias(&self, spans: &[Span], xi: &[f64]) -> Vec<f64> {
+        let mut full = [0.0; 6];
+        let (v, w) = self.full(xi);
+        for (k, s) in spans.iter().enumerate() {
+            let Some((grad_lf, grad_u)) = self.span_gradients(k, s) else { continue };
+            let vp = add(v, cross(w, s.b));
+            let mu = self.rope * s.straight / 3.0;
+            let along = dot(s.u, vp);
+            let across = sub(vp, scale(s.u, along));
+            let turn: V3 = std::array::from_fn(|i| dot(grad_u[i], vp));
+            let back: V3 = std::array::from_fn(|j| (0..3).map(|i| grad_u[i][j] * vp[i]).sum());
+            let mu_rate = self.rope / 3.0 * dot(grad_lf, vp);
+            let centripetal = cross(w, cross(w, s.b));
+            let at_rest = sub(centripetal, scale(s.u, dot(s.u, centripetal)));
+            let f: V3 = std::array::from_fn(|i| {
+                mu * at_rest[i] + mu_rate * across[i]
+                    - mu * (turn[i] * along + s.u[i] * dot(turn, vp))
+                    - self.rope / 6.0 * grad_lf[i] * dot(across, across)
+                    + mu * along * back[i]
+            });
+            let moment = cross(s.b, f);
+            (0..3).for_each(|i| (full[i], full[3 + i]) = (full[i] + f[i], full[3 + i] + moment[i]));
+        }
+        self.dofs.iter().map(|d| full[*d]).collect()
     }
 
     /// What the cables have to give the platform besides its acceleration: c + g = (0, 0, m g, w x I_w w), and the
@@ -887,6 +941,9 @@ impl CableRobot {
         let full = [0.0, 0.0, self.moving() * self.g, gyro[0], gyro[1], gyro[2]];
         let mut bias: Vec<f64> = self.dofs.iter().map(|d| full[*d]).collect();
         bias.iter_mut().zip(self.cable_weight(spans, free).0).for_each(|(b, c)| *b += c);
+        if self.cable_moving > 0.0 {
+            bias.iter_mut().zip(self.swing_bias(spans, xi)).for_each(|(b, c)| *b += c);
+        }
         bias
     }
 
@@ -936,32 +993,57 @@ impl CableRobot {
     /// takes (elastic, `rope` > 0; zero otherwise): the cable's energy (l / EA) W(t0, c) changes with the sag constant c
     /// over the anchor's place too (the span's horizontal part and its length), and dW/dc = -1 / (2 T) at a fixed t0
     /// (T^3 - t0 T^2 - c / 2 = 0 gives dT/dc = T / (2 (T^3 + c))), so the anchor takes F = l / (2 EA T) grad_P c, with
-    /// its moment b x F; grad_P c by forward differences of 1 um. About (w l_h)^2 l / (12 T l_h): 5e-5 N at 10 g/m and
-    /// 20 N, where the at-rest tensions settle to 1e-11 N.
+    /// its moment b x F (`sag_gradient`). About (w l_h)^2 l / (12 T l_h): 5e-5 N at 10 g/m and 20 N, where the at-rest
+    /// tensions settle to 1e-11 N.
     fn sag_pull(&self, spans: &[Span], free: &[f64], tension: &[f64]) -> Vec<f64> {
         let mut full = [0.0; 6];
         if !(self.elastic && self.rope > 0.0) {
             return vec![0.0; self.n()];
         }
-        const STEP: f64 = 1e-6;
         for (k, s) in spans.iter().enumerate() {
-            let c = self.sag(s);
-            if !(c > 0.0 && tension[k] > 0.0) {
+            if !(tension[k] > 0.0) {
                 continue;
             }
-            let anchor = sub(s.exit, scale(s.u, s.straight));
-            let mut f = [0.0; 3];
-            for (i, fi) in f.iter_mut().enumerate() {
-                let mut moved = anchor;
-                moved[i] += STEP;
-                let Some((length, straight, u, exit)) = span(&self.cables[k], self.pulley, moved) else { continue };
-                let c_moved = self.sag(&Span { length, straight, u, exit, b: s.b, dz: 0.0 });
-                *fi = free[k] / (2.0 * self.ea * tension[k]) * (c_moved - c) / STEP;
-            }
+            let Some(gradient) = self.sag_gradient(k, s) else { continue };
+            let f = scale(gradient, free[k] / (2.0 * self.ea * tension[k]));
             let moment = cross(s.b, f);
             (0..3).for_each(|i| (full[i], full[3 + i]) = (full[i] + f[i], full[3 + i] + moment[i]));
         }
         self.dofs.iter().map(|d| full[*d]).collect()
+    }
+
+    /// The gradient over the anchor's place of cable `k`'s sag constant c = (w l_h)^2 EA l_f / (12 L) at its span `s`,
+    /// c (2 grad l_h / l_h + grad l_f / l_f - grad L / L); `None` where c is 0. grad L = -u. The straight part
+    /// l_f = sqrt(m^2 - r^2), m the anchor's distance q from the pulley's centre M; the pulley swivels so that its plane
+    /// holds the anchor and M moves across that plane only, so grad m = q / m and grad l_f = q / l_f. The cable's
+    /// direction u turns by -n (dP . n) / l_f for a step dP along the plane's normal n to it (the tangent point slides
+    /// along u), and with the swivel, d gamma = dP . e_v / P_u (e_v = e_z x e_u, P_u the anchor's distance from the
+    /// swivel's axis), about the axis: grad u = -n n^T / l_f + (e_z x u) e_v^T / P_u. l_h = l_f |u_h| (u_h u's
+    /// horizontal part) has grad l_h = |u_h| grad l_f + l_f (u_x grad u_x + u_y grad u_y) / |u_h|.
+    fn sag_gradient(&self, k: usize, s: &Span) -> Option<V3> {
+        let (c, horizontal) = (self.sag(s), s.u[0].hypot(s.u[1]));
+        if !(c > 0.0 && horizontal > 0.0) {
+            return None;
+        }
+        let (straight, [dx, dy, _]) = self.span_gradients(k, s)?;
+        let level: V3 = std::array::from_fn(|j| {
+            horizontal * straight[j] + s.straight * (s.u[0] * dx[j] + s.u[1] * dy[j]) / horizontal
+        });
+        let level_h = s.straight * horizontal;
+        Some(std::array::from_fn(|j| c * (2.0 * level[j] / level_h + straight[j] / s.straight + s.u[j] / s.length)))
+    }
+
+    /// The gradients over the anchor's place of cable `k`'s straight part l_f and of its direction u (the rows d u_i / dP)
+    /// at its span `s` (`sag_gradient`): grad l_f = q / l_f, grad u = -n n^T / l_f + (e_z x u) e_v^T / P_u.
+    fn span_gradients(&self, k: usize, s: &Span) -> Option<(V3, [V3; 3])> {
+        let cable = &self.cables[k];
+        let anchor = sub(s.exit, scale(s.u, s.straight));
+        let (eu, pu, ..) = pulley_plane(cable, self.pulley, anchor)?;
+        let straight = scale(sub(anchor, add(cable.exit, scale(eu, self.pulley))), 1.0 / s.straight);
+        let ev = cross(cable.axis, eu);
+        let (n, turn) = (cross(ev, s.u), cross(cable.axis, s.u));
+        let du = |i: usize| -> V3 { std::array::from_fn(|j| -n[i] * n[j] / s.straight + turn[i] * ev[j] / pu) };
+        Some((straight, [du(0), du(1), du(2)]))
     }
 
     /// The free length of a cable that holds the tension `t` at the length L of `s`: l = L / (1 + t0 / EA), t0 the straight
@@ -1839,7 +1921,7 @@ impl Machine for CableRobot {
         self.pushed(s, &mut bias);
         let mut acc: Vec<f64> =
             (0..n).map(|r| (0..m).map(|k| a[r * m + k] * t.platform[k]).sum::<f64>() - bias[r]).collect();
-        if !solve_in_place(&mut self.platform_mass_at(&rot), &mut acc) {
+        if !solve_in_place(&mut self.platform_mass_at(&rot, &spans), &mut acc) {
             acc.fill(f64::NAN);
         }
         out[n..2 * n].copy_from_slice(&acc);
