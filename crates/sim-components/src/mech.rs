@@ -1043,8 +1043,10 @@ pub struct GearTorque {
 const EFFICIENCY_FADE_W: f64 = 0.5;
 
 /// What a sub-step h may be of the efficiency switch's time J / c on the inertia J it acts on (`fade_substeps`), kappa:
-/// c h' / J = kappa within the refined sub-step h'.
-const FADE_KAPPA: f64 = 0.5;
+/// c h' / J = kappa within the refined sub-step h'. 1 gives the holds of 0.5 to 1e-8 of their force and the budgets to
+/// three digits at half the cuts; 2, inside RK4's bound of 2.8 for a pure damper, does not (a lift on a compliant base
+/// held 27 350.0 N instead of 27 346.75 N, its budget 1.5e-5 off).
+const FADE_KAPPA: f64 = 1.0;
 
 /// How far off zero power (in widths of the switch, 0.5 W) a gear's power counts as near it at a step's start, where the
 /// step is refined for the switch (`Gearbox::fade_damping`): a step can carry a gear that far into it.
