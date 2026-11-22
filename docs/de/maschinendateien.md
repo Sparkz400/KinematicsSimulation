@@ -961,8 +961,7 @@ Maschine; an ihnen ist nichts besonders für Maschinendateien.
 ## Was Maschinendateien noch nicht können
 
 - Die Lagen der Umschlingung sind die der 3D-Ansicht: beim Lesen einer Datei werden die Abschnittslängen nicht gegen
-  sie geprüft (die Prüfung der Räder der mitgelieferten Dateien in `sim-netlist` vergleicht sie). Die Z-Scheibe des
-  XYZ-Portals steht, wo ihr `at_m` sie hinstellt, nicht auf dem Y-Wagen, auf dem sie mitfährt.
+  sie geprüft (die Prüfung der Räder der mitgelieferten Dateien in `sim-netlist` vergleicht sie).
 - `tool_flex`: ein sich neigender Körper, entlang einer waagrechten Achse; er neigt sich nur im elastischen Modell (wie
   im Crate).
 - Das starre Modell einer selbsthemmenden Schnecke nimmt die Reibung der zurücktreibenden Flanke aus dem Moment, das das
