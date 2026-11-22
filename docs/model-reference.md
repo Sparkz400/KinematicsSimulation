@@ -1786,13 +1786,20 @@ span. All of it, the drum's `winch.capacity_m` from its end on the drum to the a
 at the cable beside the drum's J / r² (0.05 kg beside 0.444 kg on the spatial robot, 0.015 kg beside 0.32 kg on the
 planar), in the equations of either model, the feedforward and the kinetic energy. In the frame's momentum the cable
 on the drum, ρ (capacity − l), turns with it about h; the paid-out cable's momentum along its span, ρ l l' a cable, is left
-out with its mass (not in the frame's mass and first moment, as the cables' weight is the potential's). Left out: the fixed run
-from the drum to the pulley (its length not in the config) and the span's swing across itself, the sections moving
-with the anchor at their share s / L of its speed across the cable, ρ L / 3 of each cable with the anchor (42 g on the
-spatial platform's 8 kg with the payload); added whole to the platform's mass (an upper bound, a run) it moves the
-spatial cycle's tracking error from 0.2045 to 0.2060 mm and its peak torque by 0.07 % (the planar's 5.2 g: 0.6499 to
-0.6505 mm). Switched on, the cables' along-motion raises the spatial cycle's peak torque from 2.4541 to 2.4578 N m
-(+0.15 %, RMS +0.005 %, the tracking error unchanged at 0.2045 mm), a drum 0.5 m below its pulley moves it by -0.01 %.
+out with its mass (not in the frame's mass and first moment, as the cables' weight is the potential's; so the swing below is
+not in it either, and a base under the robot does not feel the cables' momentum). Since 22 November the switch also
+takes the span's swing across itself: the straight span pivots at its exit point, its sections at s / l_f of the
+anchor's speed across the cable, so T = μ |v_⊥|² / 2 with μ = ρ l_f / 3: a mass M = μ (1 − u uᵀ) at the anchor that
+changes with its place, in the platform's mass matrix (`platform_mass_at`, the feedforward's and the modes' too) and
+the kinetic energy. Its velocity terms by Lagrange on the anchor as a particle (`swing_bias`):
+F = M (w × (w × b)) + μ' v_⊥ − μ (u' (u · v) + u (u' · v)) − ρ/6 ∇l_f |v_⊥|² + μ (u · v) ∇uᵀ v, μ' = ρ/3 ∇l_f · v,
+u' = ∇u v (the gradients of `span_gradients`), with its moment b × F. Tests: the planar robot's mass at the centre
+by hand, the swing's power along a motion of the spatial one against its energy's rate to 4.5e-7
+(`the_cables_swing_with_their_anchors`), the energy budget closed rigid and elastic. Left out: the fixed run from the
+drum to the pulley (its length not in the config). Switched on (along-motion and swing), the spatial cycle's peak
+torque goes from 2.4541 to 2.4562 N m (+0.09 %), its tracking error from 0.2045 to 0.2055 mm, its dwell error from
+0.0357 to 0.0344 mm; the planar's tracking error from 0.6499 to 0.6502 mm. The run takes 14.7 s against 6.5 s off.
+A drum 0.5 m below its pulley moves the spatial peak torque by −0.01 %.
 The winches' spin is in the frame's momentum about
 `frame.winch_spin_axes`.
 

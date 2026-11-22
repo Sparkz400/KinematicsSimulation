@@ -1411,7 +1411,7 @@ requirement of their size (estimate). Effects:
 | --- | --- | --- |
 | `cable_stretch` | on | The cables stretch (EA / l) and go slack, each winch's gearbox twists: platform, drums and rotors are bodies of their own. **Off selects the rigid reference model**: the cables keep their length, the motors turn with them |
 | `cable_damping` | on | With `cable_stretch`: the cables' material damping, `cable.specific_damping_n_s` / l |
-| `cable_inertia` | off | With `cable.mass_per_m_kg`: the cable runs along itself at the drum's speed, all of `winch.capacity_m` a mass at the cable beside the drum's J / r², and in the frame's momentum the cable on the drum turns with it (the paid-out cable's momentum left out, as its mass is) |
+| `cable_inertia` | off | With `cable.mass_per_m_kg`: the cable runs along itself at the drum's speed, all of `winch.capacity_m` a mass at the cable beside the drum's J / r², and each straight span swings across itself with its anchor, ρ l_f / 3 (1 − u uᵀ) there with its velocity terms; in the frame's momentum the cable on the drum turns with it (the paid-out cable's momentum left out, as its mass is) |
 | `winch_friction` | on | Friction of the winches' bearings and the pulleys, at the cable |
 
 The gearbox, motor and drive effects as on every machine (`hard_stops`: an empty and a full drum). Own keys (all
