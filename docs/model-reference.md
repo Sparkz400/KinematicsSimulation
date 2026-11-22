@@ -1856,7 +1856,19 @@ J̇ q̇) to f:
   floor's landing. Since 21 November 2026 (it passed through before): lowered 1.2 m past the payload's touchdown, the
   hook block rests 0.28 m over it, the rope slack and the floor carrying both, (15 + 250) g = 2598.762 N; the fall's
   114.37 J booked at the landing, no step made energy, and a taut rope lifts it off again
-  (`a_hook_block_lowered_beyond_the_sling_lands_on_the_payload`).
+  (`a_hook_block_lowered_beyond_the_sling_lands_on_the_payload`; on the rigid rope the same, and the rope taken in
+  lifts the hook block alone, the payload standing where it was: `a_hook_block_on_the_rigid_rope_lands_on_the_payload_and_lifts_off_alone`,
+  2 mm of the payload's lift before 22 November). Since 22 November its sides too (`Crane::faces`): with the boxes
+  overlapping in height and along a side, h = 0.36 m along x and 0.34 m along y, the same one-sided contact on the
+  span's d_x or d_y, resting and landing (plastic, at the common momentum's speed; the top first where both qualify);
+  0.5 m/s into a standing payload's side leaves both at 15 x 0.5 / 265 m/s and books 1.769 J
+  (`the_hook_block_meets_the_payloads_sides`). No friction along the faces, and no bottom face. A payload set down
+  standing on the floor and let go stays there as a box the hook block meets the same way (`left`, drawn as
+  `payload-set-down`), until the next pick: a hook block resting on it stays (it dropped through before,
+  `a_hook_block_on_the_payload_stays_on_it_when_the_payload_is_let_go`); one let go in the air is gone. A set-down
+  on a slack rope no longer puts the hook block at the rope's end (28 J made before). A hook block already deeper
+  than the payload's top at a pick (hanging under 0.28 m over the payload's point) is neither pushed out, which would
+  make energy, nor held in (`a_hook_block_inside_the_payload_at_a_pick_is_neither_pushed_out_nor_held`).
 - `effects.joint_elasticity`: each drive the elastic joint of the other machines, the gearbox's stiffness, damping and
   backlash between the rotor (a state) and the wheel or drum. With it on the shipped loops are stable (`sim-cli margins
   overhead-crane --set effects.joint_elasticity=true`): bridge 177.4 Hz, 51.7°, 9.68 dB; trolley 182.8 Hz, 51.0°,
@@ -1886,7 +1898,7 @@ with drum and rotor free). The held bridge mode is what the config calls the dri
 velocity loop (some 4.5 Hz on the rigid drive) does not hold the rotor there.
 
 Left out: the rope's bending at the sheave and the load's own turning (a point mass; the hook block meets the payload
-only on its top, not on its sides).
+on its top and sides, not its bottom, and without friction along them).
 
 ## Crank and cam machines
 

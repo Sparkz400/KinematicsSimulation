@@ -75,13 +75,19 @@ fn dn(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-/// How far over the payload's point the hook block's point stands when it sits on the payload's top (m).
-pub(crate) fn landing() -> f64 {
-    0.5 * (HOOK_BOX[2] + PAYLOAD_BOX[2])
-}
-
 fn sc(a: V3, k: f64) -> V3 {
     [a[0] * k, a[1] * k, a[2] * k]
+}
+
+/// A face of the payload's box the hook block's box meets (`Crane::faces`): along the span's coordinate `k` (0 x, 1 y,
+/// 2 z) on the payload's side `sigma` (+1: the hook block on its +k side, d_k = -sigma h_k there), how far the hook
+/// block is in across it (>= 0 in) and how fast it goes in.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Face {
+    pub k: usize,
+    pub sigma: f64,
+    pub depth: f64,
+    pub rate: f64,
 }
 
 /// The sling at one moment (effects.hook_block): a rope of the main rope's EA and damping over its length l_s, from the
@@ -205,13 +211,42 @@ impl Crane {
         Some(Sling { span, rate, u, stretch, speed, tension, damper })
     }
 
-    /// With effects.hook_block and a payload on the sling: the state index of the span's d_z where the hook block is down
-    /// on the payload, over its box and its bottom at the payload's top or lower (d_z >= -h, h half of each box's
-    /// height: the scene's boxes, 0.28 m); `None` elsewhere.
-    pub(crate) fn on_payload(&self, s: &[f64]) -> Option<usize> {
-        let a0 = self.layout.sling.filter(|_| self.payload_mass() > 0.0)?;
-        let over = (0..2).all(|k| s[a0 + k].abs() <= 0.5 * (HOOK_BOX[k] + PAYLOAD_BOX[k]));
-        (over && s[a0 + 2] >= -landing() - FLOOR_ROUNDING).then_some(a0 + 2)
+    /// With effects.hook_block: the span d from the hook block's point to the payload's (P2 - P1) and its rate, the
+    /// sling's while a payload hangs on it, else to the payload set down on the floor (`left`, standing still); `None`
+    /// with neither.
+    pub(crate) fn payload_span(&self, s: &[f64]) -> Option<(V3, V3)> {
+        if let Some(a0) = self.layout.sling.filter(|_| self.payload_mass() > 0.0) {
+            return Some(([s[a0], s[a0 + 1], s[a0 + 2]], [s[a0 + 3], s[a0 + 4], s[a0 + 5]]));
+        }
+        let c = self.left?;
+        Some((sub(c, [s[LOAD], s[LOAD + 1], s[LOAD + 2]]), [-s[LOAD_SPEED], -s[LOAD_SPEED + 1], -s[LOAD_SPEED + 2]]))
+    }
+
+    /// The faces of the payload's box the hook block's box is against or in (`payload_span`): the top (the hook block
+    /// over the payload's box, touching counts, its bottom at the top or lower: d_z >= -h_z) and the four sides (the two
+    /// boxes overlapping in height and along the side, the hook block's point on that side's half of the payload). h is
+    /// half of the two boxes' sizes, the scene's: 0.36, 0.34 and 0.28 m. Not the bottom: the payload hangs under the
+    /// hook block or stands on the floor.
+    pub(crate) fn faces(&self, s: &[f64]) -> Vec<Face> {
+        let Some((d, rate)) = self.payload_span(s) else { return Vec::new() };
+        let h: V3 = std::array::from_fn(|k| 0.5 * (HOOK_BOX[k] + PAYLOAD_BOX[k]));
+        let mut out = Vec::new();
+        if (0..2).all(|j| d[j].abs() <= h[j]) && d[2] >= -h[2] - FLOOR_ROUNDING {
+            out.push(Face { k: 2, sigma: 1.0, depth: h[2] + d[2], rate: rate[2] });
+        }
+        for k in 0..2 {
+            let across = 1 - k;
+            if d[across].abs() >= h[across] - FLOOR_ROUNDING || d[2].abs() >= h[2] - FLOOR_ROUNDING {
+                continue;
+            }
+            for sigma in [1.0, -1.0] {
+                let depth = h[k] + sigma * d[k];
+                if (-FLOOR_ROUNDING..=h[k]).contains(&depth) {
+                    out.push(Face { k, sigma, depth, rate: sigma * rate[k] });
+                }
+            }
+        }
+        out
     }
 
     /// The equations of motion at a state under the motor torques `torque`, with the rigid drives' loss factors `loss`;
@@ -384,12 +419,25 @@ impl Crane {
         let on_floor = self.floor.is_some_and(|f| low[2] <= f + FLOOR_ROUNDING && low_v[2].abs() <= FLOOR_ROUNDING);
         let jac = if self.sling.is_some() && m2 > 0.0 { &j2 } else { &jp };
         let jz: Vec<f64> = jac.iter().map(|c| c[2]).collect();
-        // The hook block resting on the payload's top (`on_payload`, still against it): a one-sided constraint on the
-        // sling's d_z, d_z'' = 0, its push lambda >= 0 the hook block's up and the payload's down, -lambda on d_z. As the
-        // floor's, it holds a body at rest only; one coming down lands at the step's end (`after_step`, plastic, booked).
-        let landing = self
-            .on_payload(s)
-            .filter(|&dz| (s[dz] + landing()).abs() <= FLOOR_ROUNDING && s[dz + 3].abs() <= FLOOR_ROUNDING);
+        // The hook block resting against the payload's top or a side (`faces`, touching and still across it): a
+        // one-sided constraint, the depth's acceleration r . q'' = 0 where it would go in, its push lambda >= 0 out of
+        // the payload on the hook block and back on the payload (on the span's coordinate; against the payload set down
+        // on the hook block's own). As the floor's, it holds a body at rest only; one coming in lands at the step's end
+        // (`after_step`, plastic, booked). Nothing along the faces: no friction there.
+        let resting: Vec<Vec<f64>> = self
+            .faces(s)
+            .iter()
+            .filter(|f| f.depth.abs() <= FLOOR_ROUNDING && f.rate.abs() <= FLOOR_ROUNDING)
+            .map(|f| {
+                let (state, sign) = match lay.sling.filter(|_| m2 > 0.0) {
+                    Some(a0) => (a0 + f.k, f.sigma),
+                    None => (LOAD + f.k, -f.sigma),
+                };
+                let mut row = vec![0.0; n];
+                row[lay.pos.iter().position(|&p| p == state).expect("a coordinate")] = sign;
+                row
+            })
+            .collect();
         let (mut acc, mut tension, mut push, mut fric) = (nan(), 0.0, 0.0, [0.0; 2]);
         for _ in 0..6 {
             let rhs_f: Vec<f64> = (0..n).map(|i| rhs[i] + jac[i][0] * fric[0] + jac[i][1] * fric[1]).collect();
@@ -409,14 +457,14 @@ impl Crane {
                 }
                 floor_at = Some(set.len() - 1);
             }
-            // The span's d_z is coordinate 8 (`Layout`: x_c, y, l, P1, d).
-            if landing.is_some() && a[8] > 0.0 {
-                let row: Vec<f64> = (0..n).map(|i| if i == 8 { 1.0 } else { 0.0 }).collect();
-                set.push((row.clone(), row.iter().map(|v| -v).collect(), 0.0));
-                (a, lam) = constrained(&mm, &q0, &set);
-                if lam.last().is_some_and(|l| *l < 0.0) {
-                    set.pop();
+            for row in &resting {
+                if dn(row, &a) > 0.0 {
+                    set.push((row.clone(), row.iter().map(|v| -v).collect(), 0.0));
                     (a, lam) = constrained(&mm, &q0, &set);
+                    if lam.last().is_some_and(|l| *l < 0.0) {
+                        set.pop();
+                        (a, lam) = constrained(&mm, &q0, &set);
+                    }
                 }
             }
             if let Some(i) = floor_at {

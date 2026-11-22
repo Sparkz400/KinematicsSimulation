@@ -661,6 +661,179 @@ fn a_hook_block_lowered_beyond_the_sling_lands_on_the_payload() {
     assert!((pulled.floor_force / (m.payload * G) - 1.0).abs() < 1e-9, "{}", pulled.floor_force);
 }
 
+/// The landing of `a_hook_block_lowered_beyond_the_sling_lands_on_the_payload` on the rigid rope (effects.rope_stretch
+/// off): the drum pays out 1.2 m past the payload's touchdown, the hook block lands on the payload's top and stays there,
+/// the rope slack (0 N) and the floor carrying both, 2598.762 N, no step booking made energy. Then the drum takes the
+/// rope in to 2 mm short of the hook block: the rope lifts the hook block alone to its length (`after_step`), the
+/// payload stays standing on the floor where it was.
+#[test]
+fn a_hook_block_on_the_rigid_rope_lands_on_the_payload_and_lifts_off_alone() {
+    let mut m = crane(&lossless(&[
+        "effects.hook_block = true",
+        "effects.floor_contact = true",
+        "effects.holding_brake = true",
+        "effects.rope_stretch = false",
+    ]));
+    m.set_brake_engaged(true);
+    let floor = m.floor.unwrap();
+    let (mut s, hold) = at_rest(&m, [5.0, 2.0, floor + m.sling.unwrap() + 0.01]);
+    let gap = m.lower(&s).0[2] - floor;
+    s[2] += gap + 1.2;
+    let (mut least, mut landed) = (0.0f64, 0.0);
+    let mut rk = Rk4::new(m.state_len());
+    for _ in 0..(1.5 / DT) as usize {
+        advance(&m, &mut rk, &mut s, &hold, DT, 4);
+        m.after_step(&mut s, DT);
+        least = least.min(m.pick_loss * DT);
+        landed += m.pick_loss * DT;
+    }
+    let (p2, h) = (m.lower(&s).0, 0.28);
+    assert!(
+        (p2[2] - floor).abs() < 1e-12 && (s[LOAD + 2] - p2[2] - h).abs() < 1e-12,
+        "hook {} payload {p2:?}",
+        s[LOAD + 2]
+    );
+    let mut signals = Vec::new();
+    m.base_signals(&s, &hold, &mut signals);
+    let both = (m.hook + m.payload) * G;
+    assert!(
+        signals[0] == 0.0 && (signals[6] / both - 1.0).abs() < 1e-9,
+        "rope {} N, floor {} N",
+        signals[0],
+        signals[6]
+    );
+    assert!(landed > 100.0 && least > -1e-9, "{landed} J booked, a step {least} J");
+    // Taken in to 2 mm short: the hook block goes up to the rope's length, the payload stays where it stands.
+    s[2] = m.rope(&s).length - 0.002;
+    m.after_step(&mut s, DT);
+    let after = m.lower(&s).0;
+    assert!((m.rope(&s).length - s[2]).abs() < 1e-9, "{} against {}", m.rope(&s).length, s[2]);
+    assert!((0..3).all(|k| (after[k] - p2[k]).abs() < 1e-12), "the payload went from {p2:?} to {after:?}");
+}
+
+/// The hook block meets the payload's sides as it meets its top (`faces`): the payload standing on the floor (0.5 m),
+/// the hook block beside it at its height, 0.5 m off along x (more than h_x = (0.12 + 0.6) / 2 = 0.36 m), moving at
+/// 0.5 m/s towards it with the sling slack. Within the step that takes it in, it is put back on the face, d_x = 0.36 m
+/// (the hook block on the payload's -x side), and the two go on at their common momentum's speed, 15 x 0.5 / 265 =
+/// 0.0283 m/s along x; the energy that takes (m_h m_p / (m_h + m_p) v^2 / 2 = 1.769 J) is booked, never made. From -y the
+/// same with h_y = 0.34 m. Resting still against the side, the hook block pushed towards it (the rope pulling it in)
+/// is held there by a push that is never negative.
+#[test]
+fn the_hook_block_meets_the_payloads_sides() {
+    for (k, sign) in [(0, -1.0), (1, -1.0), (0, 1.0)] {
+        let mut m = crane(&lossless(&[
+            "effects.hook_block = true",
+            "effects.floor_contact = true",
+            "crane.floor_friction_coefficient = 0.0",
+        ]));
+        let floor = m.floor.unwrap();
+        let (mut s, _) = at_rest(&m, [5.0, 2.0, floor + m.sling.unwrap() + 0.01]);
+        let a0 = m.layout.sling.unwrap();
+        // The payload on the floor at (5, 2, floor); the hook block beside it at its height, 0.5 m off.
+        let p2 = [5.0, 2.0, floor];
+        let mut p1 = p2;
+        p1[k] += sign * 0.5;
+        for j in 0..3 {
+            s[LOAD + j] = p1[j];
+            s[a0 + j] = p2[j] - p1[j];
+            s[LOAD_SPEED + j] = 0.0;
+            s[a0 + 3 + j] = 0.0;
+        }
+        s[LOAD_SPEED + k] = -sign * 0.5;
+        s[a0 + 3 + k] = sign * 0.5;
+        let h = [0.36, 0.34][k];
+        // Moved in by 0.5 m/s over 0.15 m: the step that takes it 4 mm past the face; the rope slack 0.1 m.
+        s[LOAD + k] -= sign * (0.5 - h + 0.004);
+        s[a0 + k] += sign * (0.5 - h + 0.004);
+        s[2] = m.rope(&s).length + 0.1;
+        m.after_step(&mut s, 0.01);
+        let v = 15.0 * 0.5 / 265.0;
+        assert!((s[a0 + k] + sign * h).abs() < 1e-12, "{k} {sign}: span {}", s[a0 + k]);
+        assert!((s[LOAD_SPEED + k] + sign * v).abs() < 1e-12 && s[a0 + 3 + k] == 0.0, "{}", s[LOAD_SPEED + k]);
+        assert!((m.lower(&s).0[k] - p2[k]).abs() < 1e-12, "the payload moved");
+        let lost = m.pick_loss * 0.01;
+        assert!((lost - 15.0 * 250.0 / 265.0 * 0.125).abs() < 1e-9, "{lost} J booked");
+        // At rest against the face, the rope taut 10 mm and leaning it in (the sheave over the payload): held.
+        s[2] = m.rope(&s).length - 0.01;
+        for j in 0..3 {
+            s[LOAD_SPEED + j] = 0.0;
+            s[a0 + 3 + j] = 0.0;
+        }
+        let mut out = vec![0.0; s.len()];
+        m.derivatives(&s, &[0.0; 3], &mut out);
+        assert!(out[a0 + 3 + k].abs() < 1e-9, "{k} {sign}: the span goes in at {}", out[a0 + 3 + k]);
+        assert!(out[LOAD_SPEED + k] * sign < -0.1, "{k} {sign}: the rope does not lean it in, {}", out[LOAD_SPEED + k]);
+    }
+}
+
+/// A hook block resting on the payload's top stays there once the payload is let go (effects.hook_block, with the
+/// floor): the payload set down stays where it stands, a box the hook block meets (`left`), drawn as such and not as
+/// a part that rides with the load. Over 1 s the hook block stays 0.28 m over its point (it dropped through before);
+/// the next pick takes the box away.
+#[test]
+fn a_hook_block_on_the_payload_stays_on_it_when_the_payload_is_let_go() {
+    let mut m = crane(&lossless(&[
+        "effects.hook_block = true",
+        "effects.floor_contact = true",
+        "effects.holding_brake = true",
+    ]));
+    m.set_brake_engaged(true);
+    let floor = m.floor.unwrap();
+    let (mut s, hold) = at_rest(&m, [5.0, 2.0, floor + m.sling.unwrap() + 0.01]);
+    let gap = m.lower(&s).0[2] - floor;
+    s[2] += gap + 1.2;
+    let mut rk = Rk4::new(m.state_len());
+    let mut run = |m: &mut Crane, s: &mut Vec<f64>, seconds: f64| {
+        for _ in 0..(seconds / DT) as usize {
+            advance(m, &mut rk, s, &hold, DT, 4);
+            m.after_step(s, DT);
+            assert!(m.pick_loss * DT > -1e-9, "a step made {} J", -m.pick_loss * DT);
+        }
+    };
+    run(&mut m, &mut s, 1.5);
+    let p2 = m.lower(&s).0;
+    assert!((s[LOAD + 2] - p2[2] - 0.28).abs() < 1e-12);
+    m.set_payload_attached(false);
+    run(&mut m, &mut s, 1.0);
+    assert!(m.left.is_some_and(|c| (0..3).all(|k| (c[k] - p2[k]).abs() < 1e-9)), "{:?}", m.left);
+    assert!((s[LOAD + 2] - p2[2] - 0.28).abs() < 1e-9, "the hook block at {} over the floor", s[LOAD + 2] - floor);
+    let mut scene = Scene::default();
+    m.scene(&s, &mut scene);
+    assert!(scene.parts.iter().any(|p| p.id == "payload-set-down") && !scene.parts.iter().any(|p| p.id == "payload"));
+    m.set_payload_attached(true);
+    m.after_step(&mut s, DT);
+    assert!(m.left.is_none());
+}
+
+/// A hook block already deeper than the payload's top at a pick (0.2 m over the floor, the payload's top 0.4 m) is
+/// neither pushed out (that would make energy) nor held in: moved out sideways at 0.5 m/s it leaves through the side
+/// with that speed, no face stopping it.
+#[test]
+fn a_hook_block_inside_the_payload_at_a_pick_is_neither_pushed_out_nor_held() {
+    let mut m = crane(&lossless(&[
+        "effects.hook_block = true",
+        "effects.floor_contact = true",
+        "crane.floor_friction_coefficient = 0.0",
+    ]));
+    m.attached = false;
+    let floor = m.floor.unwrap();
+    let (mut s, _) = at_rest(&m, [5.0, 2.0, floor + 0.2]);
+    m.after_step(&mut s, DT);
+    m.set_payload_attached(true);
+    let before = s.clone();
+    m.after_step(&mut s, DT);
+    assert!((0..3).all(|k| s[LOAD + k] == before[LOAD + k]), "pushed out at the pick");
+    let a0 = m.layout.sling.unwrap();
+    s[LOAD_SPEED] = 0.5;
+    s[a0 + 3] = -0.5;
+    for step in 1..=100 {
+        s[LOAD] += 0.5 * 0.01;
+        s[a0] -= 0.5 * 0.01;
+        m.after_step(&mut s, 0.01);
+        assert!(s[LOAD_SPEED] == 0.5, "stopped at step {step}, {} m out", s[LOAD] - 5.0);
+    }
+}
+
 /// A pick from the floor on the sling (effects.hook_block, effects.floor_contact): the hook block hangs 0.8 m over the
 /// floor, less than the 1 m sling, and the payload goes on. It stands on the floor, the sling slack 0.2 m (the payload
 /// where it stands, not plumb at the sling's length under the floor), and the pick makes no energy: what it booked is
