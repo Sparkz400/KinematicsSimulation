@@ -112,9 +112,12 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The screw's stiffness along the stroke keeps the far end's for the wafer handler's and the parallel SCARA's pose tolerance (their own `rest_sag`, `machine-wafer-handler` and `machine-parallel-scara`: the column's m g / K with the far end's K, the stroke's `static_twist`), on the safe side; `chain.rs`'s takes the nut, and since 21 November the fit's twist (`Machine::twist_at`) and the mesh bristle (σ_m r, its store still not booked: at most (μ |held|)² / (2σ_m) per gear) follow the nut too | wafer handler, parallel SCARA | The tolerance up to the far end's sag over the pose's. |
 | Every machine takes an obstacle's push on its contact coordinates (the tool's, the crane's load, the winder's dancer) since 22 November, not at the touching part's own point (a payload under a leaning Z axis is held through the tool point). One-way base compliance (without `effects.base_reaction`) keeps its base outside the budget: the push's work on the base is in no row (the contact's damping does not see the base's speed there) | obstacle contact | One-way: the push deflects the base by F / k_base all the same, the budget closes to 7e-7 (measured). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
 | The stepper's detent after a trip took its pulses off (`Sim::advance_with_windings` gives such a drive the iron's drag only) | stepper | The detent's torque, T_d, is missing while it coasts; the books stay closed (its potential is never stored since 22 November). |
-| `mode_shape` of the five-bar | five-bar | Display only. |
 
 Fixed since (22 November), each was a row of the table above:
+- `mode_shape` of the five-bar (parallel SCARA; it had none, the app showed no mode): the lowest plane mode's
+  eigenvector of (K - lambda M) v = 0, the rotors held, scaled to 1 m of the plate along x. Tested against the
+  linearised machine: moved by 1e-7 times the shape, both arms accelerate by -w^2 times it to 1e-5
+  (`the_mode_shape_is_the_linearised_machines_eigenvector`, at two poses).
 - The T-gantry belt's angular momentum about y, crate against file (1.29e-3 N m s over the default cycle, held by
   a bound): the crate now takes each run between the wheels' tangent points as the file draws them (carriage idlers
   0.032 m above and below and 0.042 m to the sides, the bottom idler 0.08 m under Z's point, the clamp at that point;
