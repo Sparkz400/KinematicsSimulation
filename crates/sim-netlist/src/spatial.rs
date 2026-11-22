@@ -39,15 +39,16 @@
 //! The arm's tube stays with the root (I_arm, m_arm l_cg), the elbow and all beyond move with the elbow angle
 //! theta + delta: I_arm theta'' = tau_gear + g m_arm l_cg cos theta + k_b delta + c_b delta' + tau_joint, and the rest of
 //! the machine as above at the elbow angles with the spring's -k_b delta - c_b delta' in place of the gearbox.
-//! With effects.arm_tube_inertia as well the tube bends in its first cantilever mode phi (phi(L_a) = 1): the tube is as
+//! With effects.arm_tube_inertia as well the tube bends in the static shape of a cantilever under a tip load,
+//! psi = (3 xi^2 - xi^3) / 2 (psi(L_a) = 1), the mode consistent with k_b (Rayleigh; `beam::STATIC_SHAPE_MASS`): the tube is as
 //! much of the arm's mass as its inertia allows a uniform tube, m = min(m_arm, 3 I_arm / L_a^2), the rest a hub on the
-//! shoulder's axis. Its kinetic energy, its sections at s theta' + phi(s) L_a delta', is
-//! m L_a^2 (theta'^2 / 3 + 2 int(xi phi) theta' delta' + int(phi^2) delta'^2) / 2, int(xi phi) = 0.284413,
-//! int(phi^2) = 1/4: in theta and e = theta + delta, I_r theta'^2 / 2 + B theta' e' + m L_a^2 e'^2 / 8 with
-//! B = (0.284413 - 1/4) m L_a^2 and I_r = I_arm - m L_a^2 / 4 - 2 B; 0.3915 m L_a of its first moment (int phi) moves to
+//! shoulder's axis. Its kinetic energy, its sections at s theta' + psi(s) L_a delta', is
+//! m L_a^2 (theta'^2 / 3 + 2 int(xi psi) theta' delta' + int(psi^2) delta'^2) / 2, int(xi psi) = 11/40,
+//! int(psi^2) = 33/140: in theta and e = theta + delta, I_r theta'^2 / 2 + B theta' e' + 33/280 m L_a^2 e'^2 with
+//! B = (11/40 - 33/140) m L_a^2 and I_r = I_arm - 33/140 m L_a^2 - 2 B; 3/8 m L_a of its first moment (int psi) moves to
 //! the elbow. The joints' equation takes the elbows' solved, (I_r - B^2 (M_d^-1)_ee) theta'' = f_r - B (M_d^-1 f_d)_e
-//! (`joint_load`), then M_d q'' = f_d - B theta'' on the elbows' rows (`bend_rates`). Out of its plane a quarter of the
-//! tube's mass moves with the elbow's move y, and the elbow block turns with the tube's tip slope 1.3765 y / L_a.
+//! (`joint_load`), then M_d q'' = f_d - B theta'' on the elbows' rows (`bend_rates`). Out of its plane 33/140 of the
+//! tube's mass moves with the elbow's move y, and the elbow block turns with the tube's tip slope 3/2 y / L_a.
 //! Each joint is a `RotaryJoint` (gearbox with stiffness, backlash and
 //! efficiency, motor with friction, ripple and brake, joint friction, stops). Elastic (effects.joint_elasticity) the
 //! rotors are states of their own behind the gearboxes' springs; rigid, each rotor turns with its arm times the ratio and
@@ -591,19 +592,19 @@ impl Delta {
             (f64::INFINITY, f64::INFINITY)
         };
         // effects.arm_tube_inertia (with the bending arms, see the module comment): the tube is as much of the arm's mass
-        // as its inertia allows a uniform tube (m L^2 / 3), the rest a hub on the shoulder's axis; it bends in its first
-        // cantilever mode (`beam`). A config without the switch reads it as off.
+        // as its inertia allows a uniform tube (m L^2 / 3), the rest a hub on the shoulder's axis; it bends in the
+        // cantilever's static shape (`beam::STATIC_SHAPE_MASS`). A config without the switch reads it as off.
         let rod_spacing = n.non_negative("geometry.forearm_spacing_m")?;
         let (mut root_inertia, mut root_moment, mut tip_inertia, mut tip_moment, mut m_lateral) =
             (i_arm, m_arm * cg, la * la * elbow, la * elbow, elbow);
         let (mut tube_mass, mut twist_inertia, mut tube_coupling) = (0.0, 0.0, 0.0);
         let tube = cfg.get("effects.arm_tube_inertia").is_ok() && cfg.bool("effects.arm_tube_inertia")?;
         if tube && cfg.bool("effects.link_elasticity")? {
-            use sim_components::beam::{CANTILEVER_PARTICIPATION, CANTILEVER_TIP_SLOPE};
-            // The root keeps I_arm - m_t L^2 / 4 - 2 B >= (1/3 + 1/4 - 2 * 0.284413) m_t L^2 = 0.0145 m_t L^2.
+            use sim_components::beam::{STATIC_SHAPE_MASS, STATIC_SHAPE_PARTICIPATION, STATIC_SHAPE_TIP_SLOPE};
+            // The root keeps I_arm - 33/140 m_t L^2 - 2 B >= (1/3 + 33/140 - 2 * 11/40) m_t L^2 = 0.0190 m_t L^2.
             let m_tube = m_arm.min(3.0 * i_arm / (la * la));
-            let (inertia, moment) = (0.25 * m_tube * la * la, CANTILEVER_PARTICIPATION * m_tube * la);
-            tube_coupling = (TUBE_MOMENT - 0.25) * m_tube * la * la;
+            let (inertia, moment) = (STATIC_SHAPE_MASS * m_tube * la * la, STATIC_SHAPE_PARTICIPATION * m_tube * la);
+            tube_coupling = (TUBE_MOMENT - STATIC_SHAPE_MASS) * m_tube * la * la;
             if moment > root_moment {
                 return Err(n.invalid("mass.upper_arm_inertia_kgm2"));
             }
@@ -615,7 +616,7 @@ impl Delta {
             );
             twist_inertia =
                 n.non_negative("mass.elbow_twist_inertia_kgm2")? + share * m_fb * rod_spacing * rod_spacing / 4.0;
-            m_lateral += 0.25 * m_tube + twist_inertia * (CANTILEVER_TIP_SLOPE / la).powi(2);
+            m_lateral += STATIC_SHAPE_MASS * m_tube + twist_inertia * (STATIC_SHAPE_TIP_SLOPE / la).powi(2);
             tube_mass = m_tube;
         }
         let mut delta = Self {
@@ -1363,19 +1364,19 @@ impl Machine for Delta {
             let elbow_speed: [f64; 3] = std::array::from_fn(|k| la * ew[i] * dtip[k] + yv[i] * tangent[k]);
             add_point(&mut f, self.m_elbow - at_elbow, elbow, elbow_speed);
             if self.tube_mass > 0.0 {
-                // Out of the plane the tube's sections move by phi(s) y: momentum int(phi) m y' = 0.3915 m y' at
-                // 0.7265 L_a along the arm (int(xi phi) / int(phi)); the moved sections carry the in-plane momentum
-                // m L_a (0.2844 theta' + 0.25 delta') along the turn, y off the plane. The elbow block twists about the
+                // Out of the plane the tube's sections move by psi(s) y: momentum int(psi) m y' = 3/8 m y' at
+                // 11/15 L_a along the arm (int(xi psi) / int(psi)); the moved sections carry the in-plane momentum
+                // m L_a (11/40 theta' + 33/140 delta') along the turn, y off the plane. The elbow block twists about the
                 // arm's normal with the tube's tip slope.
-                use sim_components::beam::{CANTILEVER_PARTICIPATION, CANTILEVER_TIP_SLOPE};
-                let m = CANTILEVER_PARTICIPATION * self.tube_mass;
+                use sim_components::beam::{STATIC_SHAPE_MASS, STATIC_SHAPE_PARTICIPATION, STATIC_SHAPE_TIP_SLOPE};
+                let m = STATIC_SHAPE_PARTICIPATION * self.tube_mass;
                 let at: V3 = std::array::from_fn(|k| joint[k] + TUBE_CENTROID * la * tip[k]);
                 add_point(&mut f, m, std::array::from_fn(|k| at[k] + y[i] * tangent[k]), tangent.map(|v| v * yv[i]));
                 add_point(&mut f, -m, at, [0.0; 3]);
-                let along = self.tube_mass * la * (TUBE_MOMENT * w[i] + 0.25 * (ew[i] - w[i]));
+                let along = self.tube_mass * la * (TUBE_MOMENT * w[i] + STATIC_SHAPE_MASS * (ew[i] - w[i]));
                 let off = cross(tangent.map(|v| v * y[i]), dtip.map(|v| v * along));
                 (0..3).for_each(|k| f.angular[k] += off[k]);
-                add_spin(&mut f, cross(tip, tangent), self.twist_inertia, CANTILEVER_TIP_SLOPE * yv[i] / la);
+                add_spin(&mut f, cross(tip, tangent), self.twist_inertia, STATIC_SHAPE_TIP_SLOPE * yv[i] / la);
             }
             let at_platform = self.legs.to_base(i, [self.platform_radius, 0.0, 0.0]);
             let middle: [f64; 3] = std::array::from_fn(|k| 0.5 * (elbow[k] + p[k] + at_platform[k]));
@@ -1858,11 +1859,11 @@ impl Machine for Delta {
     }
 }
 
-/// The first cantilever mode phi (phi(1) = 1) along the arm, xi = s / L_a: int(xi phi) = 0.284413 over
-/// int(phi) = 0.391496, where its momentum out of the plane acts; int(xi phi) itself, the tube's in-plane momentum that
-/// moves with its turn. By quadrature of phi = (cosh - cos - sigma (sinh - sin))(beta xi), beta = 1.875104.
-const TUBE_CENTROID: f64 = 0.726477;
-const TUBE_MOMENT: f64 = 0.284413;
+/// The tube's mode, the static shape psi = (3 xi^2 - xi^3) / 2 along the arm (xi = s / L_a, consistent with
+/// k_b = 3 E I / L_a, `beam::STATIC_SHAPE_MASS`): int(xi psi) = 11/40 over int(psi) = 3/8, 11/15, where its momentum out
+/// of the plane acts; int(xi psi) itself, the tube's in-plane momentum that moves with its turn.
+const TUBE_CENTROID: f64 = sim_components::beam::STATIC_SHAPE_MOMENT / sim_components::beam::STATIC_SHAPE_PARTICIPATION;
+const TUBE_MOMENT: f64 = sim_components::beam::STATIC_SHAPE_MOMENT;
 
 /// The forearm rods' width and the upper arms', as drawn and as collision capsules (twice their radius), m.
 const ROD_WIDTH: f64 = 0.012;

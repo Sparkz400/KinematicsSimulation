@@ -54,8 +54,8 @@ forearm_inertia = true
 # elbow turns against the arm's root; out of it, the elbow moves along its axis. The plate rings after a move. Off in
 # the shipped config: the tube is an estimate.
 arm_bending = false
-# With arm_bending: the arm tube's own share of the bending modes (a quarter of its mass in each, as a cantilever's first
-# mode) and the elbow block's twist as an arm bends out of its plane (mass.elbow_twist_inertia_kgm2). Off as shipped,
+# With arm_bending: the arm tube's own share of the bending modes (33/140 of its mass in each, in a cantilever's static
+# deflection shape) and the elbow block's twist as an arm bends out of its plane (mass.elbow_twist_inertia_kgm2). Off as shipped,
 # with arm_bending.
 arm_tube_inertia = false
 # The tool turns on the amplifier's spring ([plate] amplifier_stiffness_nm_rad and _damping_nm_s_rad): rack, pinion and

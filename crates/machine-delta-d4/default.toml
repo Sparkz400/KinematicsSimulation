@@ -64,8 +64,8 @@ forearm_inertia = true
 # root; out of it, the elbow moves along its axis. The platform rings after a move. Off in the shipped config: the
 # stiffnesses are estimates.
 link_elasticity = false
-# With link_elasticity: the arm tube's own share of the bending modes (a quarter of its mass in each, as a
-# cantilever's first mode) and the elbow block's twist as an arm bends out of its plane. Off as shipped, with
+# With link_elasticity: the arm tube's own share of the bending modes (33/140 of its mass in each, in a
+# cantilever's static deflection shape) and the elbow block's twist as an arm bends out of its plane. Off as shipped, with
 # link_elasticity.
 arm_tube_inertia = false
 # The telescopic shaft's weight: [shaft] platform_share of its mass at the platform (on the arms), its spin inertia at
