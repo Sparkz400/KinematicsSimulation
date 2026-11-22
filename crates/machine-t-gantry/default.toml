@@ -450,7 +450,11 @@ position_cycle_s = 1.0e-3
 # the current loop for the voltage, of the velocity loop for the torque setpoint.
 current_delay_cycles = 1
 velocity_delay_cycles = 1
-kv_1_s = 50.0
+# 45 since 22 November 2026: with the velocity gain at 0.037 (below) the x axis's closed position loop stayed above
+# 1/sqrt(2) up to the 19 Hz mode at 50 (0.708 at 11.7 Hz, a band of 20.5 Hz); at 45 it falls to 0.64 there (band 8.75
+# Hz, overshoot 5.5 %), the velocity loops keep at least 35.7 degrees and 7.7 dB over the poses friction off, settling
+# 42.96 um (43.31 at 50). A longer integral time did as much with less room (0.015 s: 0.68 at 11.6 Hz).
+kv_1_s = 45.0
 # Velocity loop gain, tuned with `sim-cli margins t-gantry --bands` (the open-loop response of each motor's velocity
 # loop, with every [bounds] value at its low and at its high bound) for a phase margin of at least 35 degrees and a
 # gain margin of at least 6 dB in every run, also with effects.motor_friction and guide_friction off (in a cruise

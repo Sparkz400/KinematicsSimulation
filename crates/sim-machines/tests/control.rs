@@ -148,8 +148,9 @@ fn cruise_following_error(entry: &MachineEntry, edit: &[&str]) -> (f64, f64) {
     let mut lagging: Vec<f64> = sim.control.drives.iter().map(|d| d.pos_set - d.following_error).collect();
     while sim.control.busy() || sim.step == 0 {
         sim.step();
-        for (m, d) in lagging.iter_mut().zip(&sim.control.drives) {
-            *m += sim.dt * kv * (d.pos_set - *m);
+        // Each drive at its own Kv (`[drive.<id>]`: the arms' base turns have theirs).
+        for (k, (m, d)) in lagging.iter_mut().zip(&sim.control.drives).enumerate() {
+            *m += sim.dt * sim.control.drive_params_of(k).kv * (d.pos_set - *m);
         }
         if sim.control.set_vel[0] < v_max * (1.0 - 1e-9) {
             cruise_since = None;

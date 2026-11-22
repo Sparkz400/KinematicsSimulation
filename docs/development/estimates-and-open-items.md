@@ -333,16 +333,16 @@ Fixed (after the second audit, 21 November):
   degrees at 0.4; T-gantry friction off motor A at [0.1, 0.05] 33.0 (43.6), motor B at [0.9, 0.05] 34.0 (42.3): 0.04
   -> 0.037, at least 35.5 / 36.6 degrees, 50.9 degrees with friction; rotary knife friction off at pi 34.0 (52.5):
   0.18 -> 0.20, 36.6 degrees, over the bounds 35.5. Their cycles' verdicts all pass before and after (settling: T-gantry
-  43.36 -> 43.31 um, arm on a track 24.49 -> 24.45 um, URDF arm 1.968 -> 1.980 mrad, rotary knife 71.7 -> 60.8 urad).
-  These retunes trip sim-cli's tuning check (`step_bode_and_tuning_write_csv_for_every_machine`, the position loop's
-  band under 20 Hz) on three machines, a decision open: T-gantry x 11.30 -> 20.54 Hz, the closed loop's gain at 11.7
-  Hz 0.699 -> 0.708, just above 1/sqrt(2), below the 19 Hz mode's peak, so the first fall under it is past the mode
-  (the step itself the same: rise 28.75 -> 28.50 ms; 0.034 to 0.036 give 20.47 to 20.52 Hz alike); URDF arm j1 18.42
-  -> 20.58 Hz (20.21 at 0.3, 20.43 at 0.35), arm on a track j2 17.91 -> 20.04 Hz: the base's position loop already
-  overshoots 24 % at Kv 50 and its band rises with the velocity loop's.
+  43.36 -> 42.96 um, arm on a track 24.49 -> 24.41 um, URDF arm 1.968 -> 1.974 mrad, rotary knife 71.7 -> 60.8 urad).
+  The retunes first tripped sim-cli's tuning check (the position loop's band under 20 Hz): the T-gantry's x closed
+  loop stayed above 1/sqrt(2) up to its 19 Hz mode (0.708 at 11.7 Hz, a band of 20.5 Hz), the arms' base turns
+  overshot a 1 mm step by 22 to 24 % at Kv 50 (20.0 and 20.6 Hz on the arm's mode). Retuned too: the T-gantry's Kv 50
+  -> 45 (x 8.75 Hz, 5.5 %; the velocity loops at least 35.7 degrees and 7.7 dB over the poses friction off), the URDF
+  arm's and the arm on a track's base turn Kv 30 (3.8 and 2.6 %, 7.5 and 7.8 Hz; 42.1 and 47.4 degrees friction off).
   Still open: the palletiser's motor 2 at [1.6, 0.5, 1.3, pi/2] 32.7 / 26.4 (73.0 / 68.1), at z 0.8 29.5 friction off,
-  and motor 3 32.1 friction off (49.9), waiting for its rod and crank. The T-gantry's figures quoted from cycle runs in
-  the guides (analyze, verdicts, optimise) are from the gain 0.04 and not re-run. The shipped margins test is one per
+  and motor 3 32.1 friction off (49.9), waiting for its rod and crank. The T-gantry's analyze, verdicts, tuning, margins, step and
+  Bode blocks of the guides are re-run with the new gains; its optimise, sensitivity, stop, accuracy and path blocks
+  are from Kp 0.04 and Kv 50 and not re-run. The shipped margins test is one per
   config now (`across_the_bounds::<config>::as_configured`). Time of `sim-cli margins` over the poses on 4 cores, as
   shipped / friction off: mover track 769 / 359 s, rotary hexapod 456 / 678 s, spatial cable robot 361 / 1059 s,
   hexapod 182 / 200 s, tripod 203 / 167 s, the rest under 160 s. No machine's extra poses were left out as adding

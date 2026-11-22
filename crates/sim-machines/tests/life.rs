@@ -154,7 +154,8 @@ fn the_life_loads_are_the_signals_added_up() {
 /// (M a = F + gravity: the torque that holds Z up no longer gives a phantom X acceleration through the belt runs'
 /// coupling) 119.86 N, and the Z guide's 5.97 N became 6.28 N; the SciPy reference's guide friction takes the
 /// acceleration so too. The audit: 120.1 N distance-weighted where the time weighting gave 109.9 N. Since 21 November
-/// the weight the belt holds up in Z has the belt's vertical runs, 0.16 kg, in it too: 119.88 N, Z 6.26 N.)
+/// the weight the belt holds up in Z has the belt's vertical runs, 0.16 kg, in it too: 119.88 N, Z 6.26 N; since 22
+/// November, at Kp 0.037 and Kv 45, 119.89 N, Z 6.32 N.)
 /// On the move to the middle of both strokes the two run at very different speeds (X four times Z's).
 #[test]
 fn each_guide_wears_by_its_own_load_and_speed() {
@@ -186,7 +187,7 @@ fn each_guide_wears_by_its_own_load_and_speed() {
         x.equivalent
     };
     let cycle = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
-    assert!((check(&cycle, 1.2) - 119.88).abs() < 0.005);
+    assert!((check(&cycle, 1.2) - 119.89).abs() < 0.005);
     let mut sim = Sim::new(entry, &cfg).unwrap();
     let middle: Vec<f64> = sim.machine.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect();
     let path = sim.plan_path(&[Piece::Line(middle)], false).unwrap();
