@@ -116,7 +116,15 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | An obstacle's push is a spring on the motors' angles where the machine does not take it at its tool: the overhead crane (its tool is bridge, trolley and hoist, not the swinging load: the push would need the contact point's own Jacobian) and the winder. Where it is taken at the tool it acts there, at the tool's coordinates and not at the touching part (a payload under a leaning Z axis is held through the tool point); with `effects.base_compliance` not on the base's coordinates | obstacle contact | A load on a soft belt swings on by the belt's stretch (D3: 6.7 mm deep at the impact against 0.11 mm F / k at rest). The crates' budgets of a move into a slab close to 3.5e-4 (T-gantry) and 2.8e-4 (hexapod) of the supply, against about 2e-5 with the push at the motors (measured, `collision.rs`). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
 | The stepper's detent while disabled | stepper | Up to T_d/(4N) appears or disappears from the budget at an enable. |
 | `mode_shape` of the five-bar | five-bar | Display only. |
-| Run files recorded before the signal `setpoint_age` | `charts.rs` | The tool error falls back to the held setpoint: up to one cycle's travel (0.79 against 0.18 mm on the T-gantry). |
+
+Fixed since (22 November), each was a row of the table above:
+- Run files recorded before the signal `setpoint_age` (`sim-components/src/charts.rs`): the age is worked out from
+  the run's own timing (`charts::setpoint_age_of`: the profile cycle from the setpoints' changes, the ticks at its
+  multiples of the simulation's time), within 1e-13 s of the recorded column on the T-gantry sampled every 1 and every
+  0.25 ms; the tool error without the column is the one with it (peak 0.082 mm over the cycle's first second, 0.446 mm
+  as held). Left: a file sampled at a multiple of its profile cycle above one does not hold the cycle, and reads it as
+  its sample period. No code in the repository reads such files back; the function serves `charts::tool_error` on
+  any columns.
 
 ## 5. The 26 `shortcut:` comments still in the code
 
