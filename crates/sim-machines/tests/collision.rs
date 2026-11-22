@@ -194,13 +194,22 @@ fn a_push_at_the_tool_stops_a_load_on_a_belt_at_the_obstacles_face() {
 /// on the base through the tool's shift (`base::Based`) and is not in the machine's outside force (`FrameMomentum::
 /// external`, where it pushed the base a second time: 2 F / k_base back at rest, with each push's work booked once, so
 /// that the budget closed regardless). The carriage stands in the wall by F / k, the base by F / k_base, and the budget
-/// closes to `PUSH_BUDGET_TOLERANCE`.
+/// closes to `PUSH_BUDGET_TOLERANCE`. So also one-way (without effects.base_reaction), where the base is outside the
+/// budget (`Based::contact_state`): it was 8.9e-4 of the supply off on the crate's move into a slab, the crash row
+/// having booked the push's work on the base too.
 #[test]
 fn on_a_compliant_base_a_machine_files_axis_stops_at_the_face() {
+    for two_way in ["effects.base_reaction = true", "effects.base_reaction = false"] {
+        on_a_compliant_base(two_way);
+    }
+}
+
+fn on_a_compliant_base(two_way: &str) {
     let entry = load_file(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../machines/single-axis.toml"))
         .unwrap_or_else(|e| panic!("{e}"));
     let wall = r#"obstacles = [{ name = "wall", centre_m = [1.1, 0.0, 0.0], size_m = [1.0, 10.0, 10.0] }]"#;
-    let settings = [wall, "effects.crash = true", "effects.base_compliance = true", "effects.base_reaction = true"];
+    let settings = [wall, "effects.crash = true", "effects.base_compliance = true", two_way];
+    println!("{two_way}");
     let mut sim = Sim::new(entry, &with(entry, &settings)).unwrap();
     sim.command(Command::MoveTo(vec![0.9])).unwrap();
     sim.run(2.5, |_| {});
@@ -949,12 +958,14 @@ fn the_cranes_payload_on_the_hook_block_stops_at_the_face() {
 /// On a compliant base (effects.base_compliance, 2.5e6 N/m along x under the single axis, two-way with
 /// effects.base_reaction) the base's move shifts the carriage too, so the push acts on the base as well (`base::Based`):
 /// the carriage still stands in the slab by F / k and the budget closes (it was 9e-4 off with the push on the base
-/// through the machine's outside force, booked twice). One-way, the machine not feeling the base, it stays 8.9e-4 off
-/// either way: the impact's reaction on the swaying base is work nothing supplies there.
+/// through the machine's outside force, booked twice). One-way, the machine not feeling the base, the base is outside
+/// the budget (neither its energy nor its damping is booked): the crash row books the push's work on the machine alone
+/// (`Based::contact_state`), and the budget closes too (8.9e-4 off while it booked the work on the base as well).
 #[test]
 fn on_a_compliant_base_the_single_axis_stops_at_the_face() {
-    let base = ["effects.base_compliance = true", "effects.base_reaction = true"];
-    assert_stops_at_the_face_with("single-axis", &[0.9], 2.5, &base);
+    for two_way in ["effects.base_reaction = true", "effects.base_reaction = false"] {
+        assert_stops_at_the_face_with("single-axis", &[0.9], 2.5, &["effects.base_compliance = true", two_way]);
+    }
 }
 
 /// The winder's moving parts are its dancer and the weight on it (`collision_bodies`), which the web holds and no motor
