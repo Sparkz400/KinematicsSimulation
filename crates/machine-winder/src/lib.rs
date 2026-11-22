@@ -273,6 +273,8 @@ pub struct Winder {
     trim_integral: f64,
     pub trim_speed: f64,
     drives_off: bool,
+    /// An obstacle's push on the dancer, down along its travel y (`Machine::set_tool_force`), N, held until changed.
+    obstacle: f64,
     /// Limits of the own verdicts: web's highest and lowest tension, dancer travel, inertia ratio, the motor's peak
     /// torque, its rated torque and its highest speed.
     limits: [f64; 7],
@@ -382,6 +384,7 @@ impl Winder {
             trim_integral: 0.0,
             trim_speed: 0.0,
             drives_off: false,
+            obstacle: 0.0,
             limits: [
                 rating("ratings.web_max_tension_n"),
                 rating("ratings.web_min_tension_n"),
@@ -513,8 +516,8 @@ impl Winder {
         e.cylinder = self.cylinder_force(e.r[1]);
         e.load = e.cylinder - self.air_spring * e.y;
         let m = self.dancer_total_mass();
-        // What pushes the dancer down but the web.
-        let push = e.load + m * self.g - e.slide + e.stop[0];
+        // What pushes the dancer down but the web: an obstacle's push on it among the rest.
+        let push = e.load + m * self.g - e.slide + e.stop[0] + self.obstacle;
         if self.elastic {
             let vd = rd * e.wd;
             for k in 0..2 {
@@ -967,6 +970,36 @@ impl Machine for Winder {
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.drives_off = engaged;
+    }
+    /// What can touch is the dancer (`collision_bodies`), which the web holds and no motor moves: the push acts on its
+    /// travel y, in the dancer's balance; its power is the crash row.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.obstacle = force[0];
+        true
+    }
+    fn contact_axes(&self) -> usize {
+        1
+    }
+    /// The dancer's travel y (down) and its rate, as `eval` takes them.
+    fn contact_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+        if self.elastic {
+            (pos[0], vel[0]) = (s[2], s[5]);
+        } else {
+            let r = [self.unwind_radius(s[0]), self.rewind_radius(s[1])];
+            pos[0] = 0.5 * (self.paid_out(s[0]) - self.wound_up(s[1]));
+            vel[0] = 0.5 * (r[0] * s[2] - r[1] * s[3]);
+        }
+    }
+    /// The dancer at travel `at`: in the rigid model the unwind turned on by the web that takes (2 dy at its radius).
+    fn contact_placed(&self, s: &[f64], at: &[f64], out: &mut Vec<f64>) {
+        out.clear();
+        out.extend_from_slice(s);
+        if self.elastic {
+            out[2] = at[0];
+        } else {
+            let y = 0.5 * (self.paid_out(s[0]) - self.wound_up(s[1]));
+            out[0] += 2.0 * (at[0] - y) / self.unwind_radius(s[0]);
+        }
     }
 
     /// The dancer's position loop, every base step while the drives are on: the trim v = -(Kp e + integral), e the
