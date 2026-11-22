@@ -111,7 +111,6 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | Link bending together with parallelogram bars of their own (refused); the palletiser's rod and crank (shipped bar arrays empty) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured in the test case). |
 | The screw's stiffness along the stroke keeps the far end's for the wafer handler's and the parallel SCARA's pose tolerance (their own `rest_sag`, `machine-wafer-handler` and `machine-parallel-scara`: the column's m g / K with the far end's K, the stroke's `static_twist`), on the safe side; `chain.rs`'s takes the nut, and since 21 November the fit's twist (`Machine::twist_at`) and the mesh bristle (σ_m r, its store still not booked: at most (μ |held|)² / (2σ_m) per gear) follow the nut too | wafer handler, parallel SCARA | The tolerance up to the far end's sag over the pose's. |
 | The belt's angular momentum about y of the T-gantry file against its crate: the file takes each run where it is drawn (carriage idlers 0.032 m above and below the carriage and 0.042 m to its sides, bottom idler 0.08 m under the Z axis's point, the clamp at that point), the crate its belt path (horizontal runs at the carriage's height, the clamp s + z above it, vertical runs at its x, the tilting runs meeting the carriage at its x). The file's bodies are drawn at their axes' points (an `offset_m` moves only their momentum), so its clamp cannot stand where the crate's is; the crate has no idler spacing | T-gantry | Over 1 s of the default cycle up to 1.29e-3 N m s about y at up to 0.25 m/s, against 0.42 kg of belt (measured; held under 0.42 kg x 0.05 m times the speed, a bound). About x and z none since 22 November (the file's wheels in the bodies' plane). On the beam mode alone the difference is the idlers' spacing d, (2/3) mu d (sx - 2 x) w' (2.8e-3 N m s per m/s at an end), to rounding (`the_t_gantry_files_tilting_runs_turn_with_the_beam_as_the_crates`). |
-| The XYZ portal's X and Y belts are loops by their lengths but draw no far idler in their routes (the screw portal's family has them since 22 November); its Z pulley stands at its `at_m`, not on the Y carriage | XYZ portal file | Without the far idler in a route its runs' angular momentum is left out of the frame momentum (`run_midpoints`) and the wheels' check skips the second section; only with effects.base_compliance (off). |
 | Belt-to-pulley heat conduction | linear delta | Not sized. |
 | The tube's single-mode shape for inertia with the static stiffness 3EI/L | D3, D4, H4 arm bending | Not sized. |
 | Every machine takes an obstacle's push on its contact coordinates (the tool's, the crane's load, the winder's dancer) since 22 November, not at the touching part's own point (a payload under a leaning Z axis is held through the tool point). The files' linkage, spatial delta and scissor (`sim_netlist::linkage`, `spatial`, `scissor`) still have the push in their `FrameMomentum::external`, which with `effects.base_compliance` counts it twice (on the base through it and through `base::Based`), as `ConfigMachine` did until 22 November. One-way base compliance (without `effects.base_reaction`) does not book the impact's reaction on the swaying base | obstacle contact | One-way base: 8.9e-4 of the supply on the single axis's move into a slab (measured). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
@@ -536,6 +535,14 @@ Fixed:
   261.0 -> 248.5 N. The softer return sections raise the following error (validation.md's friction feedforward table,
   re-run: screw portal on 99.5 -> 152.3 um, C portal off 177.4 -> 253.1 um), within every verdict. The screw portal
   and the five-axis files have no spans (their belt mass stays lumped).
+- The XYZ portal draws its loops so too (section 4: its X and Y belts loops by length without a far idler, its Z pulley
+  at its `at_m`, not on the Y carriage): far_x on the frame, far_y on the bridge, far_z on the Y carriage 0.5 m above
+  the Z pulley, which rides on the Y carriage (`body`). The wheels' check covers x2/x, y2/y, z1/z and z2/z (18 sections,
+  none of the second sections before; `the_xyz_portals_far_idlers_turn_as_their_belts_run`). Frame angular momentum at
+  x 0.5, y 0.25, z 0.1, vz 0.2 m/s: [0.17606, -0.34946, 0] -> [0.175, -0.347264, 0] N m s, the hand value to 1e-12
+  (`the_xyz_portals_frame_momentum_with_its_z_belt_by_hand`: the slide's y m vz and -x m vz, the Z pulley's and
+  rotor's (J_p + i J_r) vz / r about +y, the runs' mu vz (L1 e1 + L2 e2 + L3 e3)). The section lengths, modes and cycle
+  verdicts do not change (verdicts identical, base compliance off).
 
 - An obstacle's push at the tool for the linkage, spatial delta and scissor machines (section 4's row: pushed at the
   motors), and with them the D2, D3 and D4 crates, whose arms they are (22 November): `set_tool_force` puts J^T F on
@@ -547,8 +554,12 @@ Fixed:
   F / k 0.123 mm): depth F / k to 1e-5 (planar delta 0.1219 mm at 1219 N, D3 0.1500 mm at 1500 N, scissor 2.827 mm at
   28.27 kN), the push's power F . v to 1e-7 as shipped, rigid without the gearbox loss and with the D3's arms bending;
   budgets 2.2e-6 (planar delta), 1.1e-6 (D3) and 2.3e-4 (scissor) of the supply, the same moves without contact
-  9.1e-6, 3.5e-5, 2.8e-7: on the deltas the brief's 1e-6 is the integration's floor, not the push's; the scissor's
-  2.3e-4 is not explained. Crates (`collision.rs`, no longer ignored): D2 98.07 um at 980.7 N, budget 6.9e-9, D3
+  9.1e-6, 3.5e-5, 2.8e-7: on the deltas the brief's 1e-6 is the integration's floor, not the push's. The scissor's
+  2.3e-4 is the integration's too: holding 28 kN against the ceiling its gearbox's efficiency changes between driving
+  and driven back within 0.5 W (`Gearbox::loss_factor`'s fade), a few mm/s of the platform at that force, which 4
+  substeps of 15.6 us do not follow: 1.2e-4 with 8 substeps, 6.9e-6 with 16, 4.2e-8 with 32 and 64, 4.6e-8 with 4 and
+  the gearbox efficiency off. The test runs it with 32 and holds every file's budget to its no-contact move's (or
+  1e-6); the shipped file keeps 4 (32 makes its verdicts 5.6 times slower: 3.9 s against 21.5 s). Crates (`collision.rs`, no longer ignored): D2 98.07 um at 980.7 N, budget 6.9e-9, D3
   111.5 um at 1115 N, 9.1e-6, D4 111.8 um at 1118 N, 8.1e-6 of the supply and potential energy.
 
 - The T-gantry file's tilting runs on the beam mode (section 4: their angular momentum at the run's middle): a point at

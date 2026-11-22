@@ -144,6 +144,54 @@ fn the_screw_portals_far_idlers_turn_as_their_belts_run() {
     }
 }
 
+/// The XYZ portal draws its three loops as the screw portal's family: far_x on the frame, far_y on the bridge, the Z
+/// motor on the Y carriage with far_z 0.5 m above its pulley. Every second section is checked against the belt's
+/// kinematics along its own axis (it was none of them: drawn straight back to the clamp, and the Z pulley standing
+/// still at its `at_m` while the carriage it rides on moved).
+#[test]
+fn the_xyz_portals_far_idlers_turn_as_their_belts_run() {
+    let (wrong, checked) = mismatches("xyz-portal.toml", &["effects.idlers = true"]);
+    assert!(wrong.is_empty(), "{wrong:?}");
+    for c in ["x2/x", "y2/y", "z1/z", "z2/z"] {
+        assert!(checked.iter().any(|k| k.ends_with(c)), "{c} not in {checked:?}");
+    }
+}
+
+/// The XYZ portal's frame angular momentum by hand (machines/xyz-portal.toml as shipped), at x = 0.5, y = 0.25,
+/// z = 0.1 m, moving along z alone at vz = 0.2 m/s, about the origin of the bodies' places. What moves:
+/// - the Z slide and its payload, 2.5 + 1 kg at (x, y, z): (y m vz, -x m vz, 0);
+/// - the Z pulley (1e-4 kg m^2 without its belt lump) and its motor's rotor (0.15e-4 kg m^2 through i = 10): the Z belt
+///   stands in the x-z plane, its wheels about y; rising, the slide draws z1 out of the pulley, so the belt runs round
+///   the loop clockwise seen from the front (against the routes, which run anticlockwise), +y at vz / r:
+///   (1e-4 + 10 x 0.15e-4) vz / r with r = 0.02 m;
+/// - the far idler without inertia (the file has no effects.idlers);
+/// - the Z belt's runs, mu = 0.1 kg/m over 0.1 + z (clamp to pulley, +vz), 0.5 (pulley to far idler, -vz) and 0.4 - z
+///   (far idler to clamp, +vz), each at the middle of its straight piece. Along the routes (anticlockwise) the clamp's
+///   strand runs down left of the wheels' line, the other up right of it: the middles sideways by e1 = r sqrt(D1^2 -
+///   r^2) / (2 D1) left (D1 = 0.1 + z), e2 = (r + r_f) / 2 sqrt(1 - ((r - r_f) / 0.5)^2) right, e3 = r_f sqrt(D3^2 -
+///   r_f^2) / (2 D3) left (D3 = 0.4 - z, r_f = 0.012 m); about y, -x_mid p_z, they give mu vz (L1 e1 + L2 e2 + L3 e3),
+///   the carriage's x cancelling (0.1 + z - 0.5 + 0.4 - z = 0); about x, y p_z, nothing (all at the carriage's y).
+#[test]
+fn the_xyz_portals_frame_momentum_with_its_z_belt_by_hand() {
+    let cfg = shipped("xyz-portal.toml");
+    let net = Netlist::parse(&cfg).unwrap();
+    let machine = ConfigMachine::new(&cfg, &net).unwrap();
+    let (x, y, z, vz) = (0.5, 0.25, 0.1, 0.2);
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
+    machine.equilibrium(&[x, y, z], &mut state, &mut torque);
+    machine.set_tool_velocity(&mut state, &[0.0, 0.0, vz]);
+    let f = machine.frame_momentum(&state).unwrap();
+    let (r, rf, mu, m) = (0.02, 0.012, 0.1, 3.5);
+    let tangent = |d: f64, r: f64| r * (d * d - r * r).sqrt() / (2.0 * d);
+    let e2 = 0.5 * (r + rf) * (1.0 - ((r - rf) / 0.5f64).powi(2)).sqrt();
+    let runs = mu * vz * ((0.1 + z) * tangent(0.1 + z, r) + 0.5 * e2 + (0.4 - z) * tangent(0.4 - z, rf));
+    let hand = [y * m * vz, -x * m * vz + (1e-4 + 10.0 * 0.15e-4) * vz / r + runs, 0.0];
+    eprintln!("angular {:?}, by hand {hand:?} (runs {runs})", f.angular);
+    for k in 0..3 {
+        assert!((f.angular[k] - hand[k]).abs() < 1e-12, "{:?} against {hand:?}", f.angular);
+    }
+}
+
 /// The dual and rack gantries' Y belts by hand (machines/dual-gantry.toml, rack-gantry.toml): a loop from the clamp on
 /// the Y carriage to the motor's pulley (section y1, 0.1 + y), round it and back along the other strand to the far idler
 /// on the bridge, 0.1 + stroke + 0.1 from the pulley, and round that to the clamp (y2). A positive turn of the pulley

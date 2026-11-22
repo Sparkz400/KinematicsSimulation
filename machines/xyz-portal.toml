@@ -878,7 +878,9 @@ id = "pulley_z"
 gearbox = "gearbox_z"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
-at_m = [0.5, 0.25, -0.05]
+# The Z motor rides on the Y carriage at the bottom of Z's loop, its pulley 0.1 m below the slide's z = 0.
+body = "y_carriage"
+at_m = [0.0, 0.0, -0.1]
 pos = [300, 600]
 
 # X, a loop as Z's: the motor and the far idler 0.1 m + stroke + 0.1 m = 1.2 m apart, the clamp to the motor 0.1 m + x,
@@ -896,7 +898,7 @@ id = "x2"
 length_m = 2.3
 axes = { x = -1 }
 pulleys = { pulley_x = -1 }
-route = ["pulley_x", "bridge"]
+route = ["pulley_x", "far_x", "bridge"]
 pos = [450, 60]
 
 # Y, on the bridge, a loop too, lying flat (plane x-y: its wheels turn about z): the motor and the far idler 0.7 m
@@ -915,7 +917,7 @@ id = "y2"
 length_m = 1.3
 axes = { y = -1 }
 pulleys = { pulley_y = -1 }
-route = ["pulley_y", "y_carriage"]
+route = ["pulley_y", "far_y", "y_carriage"]
 plane = "x-y"
 pos = [450, 360]
 
@@ -935,8 +937,39 @@ id = "z2"
 length_m = 0.9
 axes = { z = -1 }
 pulleys = { pulley_z = -1 }
-route = ["pulley_z", "z_slide"]
+route = ["pulley_z", "far_z", "z_slide"]
 pos = [450, 660]
+
+# The belts' far idlers, 0.1 m + stroke + 0.1 m from their motors' pulleys: X's on the frame at x = 1.1 m, Y's on the
+# bridge 0.63 m after the Y carriage's y = 0, Z's on the Y carriage 0.4 m above the slide's z = 0. Each belt passes its
+# far idler at its axis's speed, the way a positive turn of its pulley (which takes belt out of the second section)
+# moves it: the run from the motor to the far idler moves against the carriage, the one from the far idler to the clamp
+# with it. Round each anticlockwise (`clockwise` false) as round its pulley, along the routes.
+[[machine.idler]]
+id = "far_x"
+speed = { x = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+at_m = [1.1, -0.05, 0.06]
+
+[[machine.idler]]
+id = "far_y"
+speed = { y = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "bridge"
+at_m = [0.0, 0.63, 0.0]
+
+[[machine.idler]]
+id = "far_z"
+speed = { z = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "y_carriage"
+at_m = [0.0, 0.0, 0.4]
 
 # The free spans, with the belt's speed over ground per axis speed along x, y and z of the 3D view, so that the belts'
 # mass is summed run by run. Each belt is a loop clamped to its carriage: the run from the clamp to the motor and the
