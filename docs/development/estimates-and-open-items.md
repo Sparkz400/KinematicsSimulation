@@ -124,7 +124,9 @@ Fixed since (22 November), each was a row of the table above:
   `TGantry::runs`), and neither counts the belt lumped on each motor pulley as spin (energy at pulley speed, no
   momentum of its own). Crate and file now agree to 1.1e-16 N m s over the run, the test at 1e-12
   (`the_t_gantry_file_has_its_crates_angular_momentum`, `the_belt_angular_momentum_is_the_sum_over_its_runs`).
-  The dynamics are unchanged (momentum only).
+  On the beam's mode the tilting runs now meet the carriage at its idlers too (xc -/+ d): the (2/3) mu d (sx - 2 x) w'
+  (2.8e-3 N m s per m/s at x = 0) that test held is gone, equal to 1e-12
+  (`the_t_gantry_files_tilting_runs_turn_with_the_beam_as_the_crates`). The dynamics are unchanged (momentum only).
 - Run files recorded before the signal `setpoint_age` (`sim-components/src/charts.rs`): the age is worked out from
   the run's own timing (`charts::setpoint_age_of`: the profile cycle from the setpoints' changes, the ticks at its
   multiples of the simulation's time), within 1e-13 s of the recorded column on the T-gantry sampled every 1 and every
@@ -614,8 +616,8 @@ Fixed:
   the share xi of the way from the post's pulley f to the carriage end c goes down by xi w, so the run's angular
   momentum from w' is its weight times w' / 2 at f + 2/3 (c - f), the crate's weighted point; the file now takes it
   there (`run_ends`, the end that rides on the beam's axis is c). Beam mode alone, w' = 1 m/s, x = 0: about y 2.8949 ->
-  2.8739 N m s against the crate's 2.8711; what is left is the idlers' spacing d = 0.042 m, which the crate does not
-  have, (2/3) mu d (sx - 2 x) w' to rounding at x = 0, 0.5 and 1
+  2.8739 N m s against the crate's 2.8711; what was left was the idlers' spacing d = 0.042 m, which the crate did not
+  have, (2/3) mu d (sx - 2 x) w' to rounding at x = 0, 0.5 and 1 (since 22 November the crate has it: equal to 1e-12)
   (`the_t_gantry_files_tilting_runs_turn_with_the_beam_as_the_crates`, fails without: 2.3e-2 off). The belt's angular
   momentum about x and z: the file drew its pulleys and idlers 0.02 m in front of the bodies (clamp at y = 0, wheels at
   -0.02: the belt bent out of its plane), now in the bodies' plane: 1.1e-3 -> 7e-19 N m s about x over the cycle,

@@ -919,11 +919,9 @@ fn the_t_gantry_file_tells_its_crates_modes() {
 /// going down by xi w. A tilting run's angular momentum about y is then mu w' times the integral of x xi along it, its
 /// weight times w' / 2 at the weighted point f + 2/3 (c - f), not at its middle (f its end at the pulley, c at the
 /// carriage): the file took the middle, a sixth of the run off (up to 0.025 N m s per m/s of w' with the carriage at an
-/// end). What is left about y is where the runs meet the carriage: the crate at the carriage's x, the file at its idlers,
-/// d = 0.042 m to the left (the two runs from motor A, s + x long each, s = 0.15 m) and right (the two from motor B,
-/// s + sx - x, sx = 1 m). A run's weighted point moves by 2/3 of that: the file's angular momentum about y is the crate's
-/// plus mu w' (d / 3) (2 (s + sx - x) - 2 (s + x)) = (2 / 3) mu d (sx - 2 x) w' (mu = 0.1 kg/m), 2.8e-3 N m s at x = 0,
-/// to rounding; about x and z both have none (the file's wheels in the bodies' plane).
+/// end). Both meet the carriage at its idlers, d = 0.042 m to the left (the two runs from motor A) and right (motor B);
+/// until 22 November the crate met it at the carriage's x, (2 / 3) mu d (sx - 2 x) w' less about y (2.8e-3 N m s at
+/// x = 0). They agree to rounding; about x and z both have none (the file's wheels in the bodies' plane).
 #[test]
 fn the_t_gantry_files_tilting_runs_turn_with_the_beam_as_the_crates() {
     let changes = ["effects.beam_vertical_mode = true"];
@@ -939,9 +937,7 @@ fn the_t_gantry_files_tilting_runs_turn_with_the_beam_as_the_crates() {
             (krate.frame_momentum(&crate_state("t-gantry", &cb, &s)).unwrap(), file.frame_momentum(&s).unwrap());
         println!("x = {x}: crate {:?}, file {:?}", fa.angular, fb.angular);
         assert_close("linear momentum", &fa.linear, &fb.linear, 1e-12);
-        let idlers = 2.0 / 3.0 * 0.1 * 0.042 * (1.0 - 2.0 * x);
-        let crate_and_idlers = [fa.angular[0], fa.angular[1] + idlers, fa.angular[2]];
-        assert_close("angular momentum", &crate_and_idlers, &fb.angular, 1e-12);
+        assert_close("angular momentum", &fa.angular, &fb.angular, 1e-12);
     }
 }
 
@@ -952,7 +948,7 @@ fn the_t_gantry_files_tilting_runs_turn_with_the_beam_as_the_crates() {
 /// carriage's `offset_m`, naming geometry.z_com_drop_m (checked with it moved to 0.45 m too; before it the file had the carriage at 0: its angular momentum about y was 0.3 m * 4 kg * vx
 /// less, its first moment 1.2 kg m less). With the belt's mass off the two agree to rounding, the linear momentum and the
 /// first moment with it on too (the runs' first moment, mu sum (L0 + c q / 2) V q, has no place in it). The belt's
-/// angular momentum too, since 23 November: both take each run's mass at the middle of its straight piece between the
+/// angular momentum too, since 22 November: both take each run's mass at the middle of its straight piece between the
 /// wheels where the 3D view draws them (the carriage idlers 0.042 m beside and 0.032 m above and below the carriage's
 /// point, the bottom idler 0.08 m under the Z axis's point, the clamp at it, the motor pulleys at the posts; the crate's
 /// `runs`), and neither has the belt lumped on the pulleys spinning. Before, the crate took its runs on another path (the

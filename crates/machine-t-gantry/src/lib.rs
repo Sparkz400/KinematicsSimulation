@@ -1065,6 +1065,12 @@ impl TGantry {
             .sum()
     }
 
+    /// How far the carriage's idlers stand to its sides, centre from the carriage's x: 0.03 m and their radius, as the 3D
+    /// view draws them.
+    fn idler_side(&self) -> f64 {
+        0.03 + self.idler_radius
+    }
+
     /// The belt's eight straight runs, each from where it leaves one wheel to where it meets the next, (x, height) over
     /// ground along the beam, for the carriage at `xc` with the frame swayed by `sway` and the Z axis's point at height
     /// `z` (`belt_angular`), in the order of the belt's path: the clamp to the upper left idler to motor pulley A to the
@@ -1074,7 +1080,7 @@ impl TGantry {
     /// left by 90 degrees, at c - rho l, rho the radius signed by that sense.
     fn runs(&self, xc: f64, sway: f64, z: f64) -> [[[f64; 2]; 2]; 8] {
         let (r, ri, s, sx) = (self.r, self.idler_radius, self.span_min, self.axes[0].max);
-        let (side, up) = (0.03 + ri, r + ri);
+        let (side, up) = (self.idler_side(), r + ri);
         let wheel = |x: f64, h: f64, rho: f64| ([x, h], rho);
         let clamp = wheel(xc, z, 0.0);
         let path = [
@@ -1754,16 +1760,17 @@ impl Machine for TGantry {
         let (belt_cross, belt) = self.belt_sway();
         // With the beam's mode the belt rides on w (`belt_on_beam`): the vertical runs at the carriage's x, down by w,
         // their momentum -cross w'; the horizontal ones tilt, a point at the share xi of the way from its post's pulley
-        // (motor A at q - s, motor B at q + s + sx) to the carriage going down by xi w: momentum -flat w' / 2, about y
-        // mu w' (len_A (x_A / 6 + xc / 3) + len_B (x_B / 6 + xc / 3)). Lowered, the runs' momenta along X (the vertical
+        // (motor A at q - s, motor B at q + s + sx) to the carriage's idler (at xc -/+ d, `idler_side`) going down by xi w:
+        // momentum -flat w' / 2, about y mu w' (len_A (x_A / 6 + (xc - d) / 3) + len_B (x_B / 6 + (xc + d) / 3)). Lowered, the runs' momenta along X (the vertical
         // runs' cross (vx + vq), the horizontal ones' sway flat vq) are w lower (the horizontal ones w / 2 on average).
         let (_, riding) = self.belt_on_beam();
         let belt_beam_angular = if self.vertical().is_some() {
-            let (mu, s, sx, xc) = (self.belt.mass_per_m, self.span_min, self.axes[0].max, x + q);
+            let (mu, s, sx, xc, d) = (self.belt.mass_per_m, self.span_min, self.axes[0].max, x + q, self.idler_side());
             let flat = mu * (4.0 * s + 2.0 * sx);
             let tilting = mu
                 * vw
-                * (2.0 * (s + x) * ((q - s) / 6.0 + xc / 3.0) + 2.0 * (s + sx - x) * ((q + s + sx) / 6.0 + xc / 3.0));
+                * (2.0 * (s + x) * ((q - s) / 6.0 + (xc - d) / 3.0)
+                    + 2.0 * (s + sx - x) * ((q + s + sx) / 6.0 + (xc + d) / 3.0));
             belt_cross * xc * vw + tilting - w * belt_cross * (vx + vq) - 0.5 * w * flat * vq
         } else {
             0.0
