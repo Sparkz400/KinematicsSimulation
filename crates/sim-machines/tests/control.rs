@@ -1708,3 +1708,26 @@ fn a_cam_changed_under_way_leaves_the_shaper_the_plan_as_it_ran() {
     }
     assert!(worst <= tolerance, "the shaped setpoint {worst} rad off the copies of the plan as it ran");
 }
+
+/// The crane's cycle picks at segment 2 with the hook at 2.85 m. With its hook block and the floor, the payload stands on
+/// the floor under the hook block: with the floor 2.7 m high the hook block would hang 0.15 m over it, inside the payload
+/// (the two boxes' half heights are 0.28 m), and the cycle is refused with the segment and that reason; 2.5 m high, 0.35
+/// m over it, it is taken, and without the hook block (the hook alone) at 2.7 m too.
+#[test]
+fn a_pick_whose_hook_block_would_hang_inside_the_payload_is_refused() {
+    let entry = sim_machines::find("overhead-crane").unwrap();
+    let with = |floor: f64, hook_block: bool| {
+        let mut cfg = entry.config();
+        for set in [
+            "effects.floor_contact = true".to_string(),
+            format!("effects.hook_block = {hook_block}"),
+            format!("crane.floor_height_m = {floor}"),
+        ] {
+            cfg.set_text(&set).unwrap();
+        }
+        Sim::new(entry, &cfg).err().map(|e| (e.key(), e.detail().to_string()))
+    };
+    assert_eq!(with(2.7, true), Some(("error-pick-hook-in-payload", "cycle.segment[2]".to_string())));
+    assert_eq!(with(2.5, true), None);
+    assert_eq!(with(2.7, false), None);
+}

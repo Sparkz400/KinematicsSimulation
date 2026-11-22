@@ -463,6 +463,13 @@ pub trait Machine: Send {
         None
     }
 
+    /// Why the payload cannot be picked up with the tool at rest at `tool_pose` (a cycle segment that attaches it), as a
+    /// translation key: the machine's own physical reason (a hook block that would hang inside the payload). `None`
+    /// where it can, by default.
+    fn refuses_pick(&self, _tool_pose: &[f64]) -> Option<&'static str> {
+        None
+    }
+
     /// The 2-norm condition number of the kinematics' Jacobian at a tool pose, for the workspace map: 1 where the
     /// motors move the tool equally well in every direction, larger towards a singularity, `f64::INFINITY` out of reach
     /// of the kinematics (whatever the envelope and the joints' stops say, which `unreachable` tells). `None` for a

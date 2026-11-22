@@ -970,6 +970,9 @@ impl Machine for Pneumatic {
     fn unreachable(&self, tool_pose: &[f64], slack: f64) -> Option<&'static str> {
         self.inner.unreachable(tool_pose, slack)
     }
+    fn refuses_pick(&self, tool_pose: &[f64]) -> Option<&'static str> {
+        self.inner.refuses_pick(tool_pose)
+    }
     fn condition(&self, tool_pose: &[f64]) -> Option<f64> {
         self.inner.condition(tool_pose)
     }
