@@ -103,15 +103,25 @@ pub struct ToolError {
 /// Per axis whose unit is `unit`, the tool's error (docs/model-reference.md, "Tool position error"): the plan at the
 /// sample's time less where the tool is, `axis.<id>.position_setpoint` run on by `setpoint_age` with the speed and
 /// acceleration setpoints (`Controller::plan_now`, which the analysis measures against), less `axis.<id>.position`. A run
-/// without `setpoint_age` (a file from before it) takes the setpoint as it was held. Each with its axis's speed
-/// setpoint, where the run has it.
+/// without `setpoint_age` (a file from before it) has the age worked out from its own timing (`setpoint_age_of`). Each
+/// with its axis's speed setpoint, where the run has it.
 pub fn axis_errors<'a>(
     signals: &[SignalInfo],
     columns: &'a [Vec<f64>],
     unit: &str,
 ) -> Vec<(Vec<f64>, Option<&'a [f64]>)> {
     let find = |id: &str| signals.iter().position(|s| s.id == id).map(|i| columns[i].as_slice());
-    let age = find("setpoint_age");
+    let rebuilt = match find("setpoint_age") {
+        Some(_) => None,
+        None => {
+            let held: Vec<&[f64]> = (signals.iter().zip(columns))
+                .filter(|(s, _)| s.id.starts_with("axis.") && s.id.ends_with("_setpoint"))
+                .map(|(_, c)| c.as_slice())
+                .collect();
+            columns.first().map(|time| setpoint_age_of(time, &held))
+        }
+    };
+    let age = find("setpoint_age").or(rebuilt.as_deref());
     signals
         .iter()
         .zip(columns)
@@ -132,6 +142,25 @@ pub fn axis_errors<'a>(
             Some((error, vel))
         })
         .collect()
+}
+
+/// The signal `setpoint_age` of a run recorded without it, from the run's own timing: its times `time` (the simulation's,
+/// from 0) and its held setpoints `held`. The profile cycle T is the shortest time between two samples whose setpoints
+/// differ (the sample period where they differ at every sample or only once), and the controller sets them at every
+/// multiple of T in the step from there (`Controller::update`), after the sample of that moment (the CLI's `run` samples
+/// before each step): at t > 0 the age is t less the last multiple of T before it, (0, T], and 0 at t = 0. A run
+/// sampled at a multiple of its profile cycle above one (the CLI's `--every` past it) reads T as its sample period: the
+/// file does not hold the cycle then.
+pub fn setpoint_age_of(time: &[f64], held: &[&[f64]]) -> Vec<f64> {
+    let moved: Vec<f64> = (1..time.len()).filter(|&i| held.iter().any(|c| c[i] != c[i - 1])).map(|i| time[i]).collect();
+    let period = time.windows(2).map(|w| w[1] - w[0]).filter(|h| *h > 0.0).fold(f64::INFINITY, f64::min);
+    let between = moved.windows(2).map(|w| w[1] - w[0]).fold(f64::INFINITY, f64::min);
+    let cycle = if between.is_finite() { between.max(period) } else { period };
+    if !cycle.is_finite() {
+        return vec![0.0; time.len()];
+    }
+    // Ticks at whole multiples of the cycle, read with a tolerance for the times' rounding.
+    time.iter().map(|&t| if t <= 0.0 { 0.0 } else { t - cycle * ((t / cycle - 1e-6).ceil() - 1.0) }).collect()
 }
 
 /// The `ToolError` of a run's columns (`axis_errors`); `None` where the run has no axis positions with setpoints (a
@@ -462,9 +491,11 @@ mod tests {
         let (normal, along) = split(&[-1e-3, 0.0], &[0.5, 0.0]);
         assert!(normal == 0.0 && along == -1e-3);
         assert_eq!(split(&[3e-3, 4e-3], &[0.0, 0.0]), (5e-3, 0.0));
-        // The same from a run's columns: two axes in m, the motion along x, the error 1 mm along and 2 mm across.
+        // The same from a run's columns: two axes in m, the motion along x, the error 1 mm along and 2 mm across, each
+        // sample taken as its setpoints were set.
         let signals = [
             "time",
+            "setpoint_age",
             "axis.x.position",
             "axis.x.position_setpoint",
             "axis.x.velocity_setpoint",
@@ -474,6 +505,7 @@ mod tests {
         .map(|id| SignalInfo::new(id, "k", "q", if id == "time" { "s" } else { "m" }));
         let columns = vec![
             vec![0.0, 1e-3],
+            vec![0.0, 0.0],
             vec![0.1, 0.2],
             vec![0.101, 0.201],
             vec![0.2, 0.2],
@@ -513,6 +545,21 @@ mod tests {
         })
         .unwrap();
         assert!((held.tangential[0] + 8e-4).abs() < 1e-12, "{held:?}");
+    }
+
+    /// Samples every 0.25 ms, the setpoint set at every whole ms after the sample of that moment: it changes at the
+    /// samples at 1.25 and 2.25 ms, so the cycle is 1 ms and the ages 0 (the start), 0.25, 0.5, 0.75, 1 ms, 0.25 ms, ...
+    /// Sampled every ms, the setpoints change at every sample and each is a whole cycle old.
+    #[test]
+    fn the_setpoint_age_of_a_run_without_it_follows_from_its_timing() {
+        let time: Vec<f64> = (0..13).map(|i| i as f64 * 2.5e-4).collect();
+        let set = [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0];
+        let age = setpoint_age_of(&time, &[&set]);
+        let by_hand = [0.0, 0.25, 0.5, 0.75, 1.0, 0.25, 0.5, 0.75, 1.0, 0.25, 0.5, 0.75, 1.0].map(|a| a * 1e-3);
+        assert!(age.iter().zip(by_hand).all(|(a, b)| (a - b).abs() < 1e-15), "{age:?}");
+        let coarse = setpoint_age_of(&[0.0, 1e-3, 2e-3], &[&[0.0, 1.0, 2.0]]);
+        assert!(coarse.iter().zip([0.0, 1e-3, 1e-3]).all(|(a, b)| (a - b).abs() < 1e-15), "{coarse:?}");
+        assert_eq!(setpoint_age_of(&[0.0], &[&[0.0]]), [0.0]);
     }
 
     /// The drawn line read at a speed, straight between its points.

@@ -1347,14 +1347,19 @@ impl Drive {
         }
     }
 
-    /// The energy stored in the drive's field: `winding_energy`, and for an enabled stepper the detent torque's potential
-    /// (`Stepper::detent_potential`), so that the budget closes inside a step.
+    /// The energy stored in the drive's field, `winding_energy`. A stepper's detent potential is not stored: its changes
+    /// are booked as they happen (`detent_moved`), so that it neither appears nor vanishes at an enable or a disable.
     pub fn magnetic_energy(&self, p: &DriveParams) -> f64 {
-        match &p.motor {
-            Motor::Stepper(s) if self.current > 0.0 => {
-                self.winding_energy(p) + s.detent_potential(self.phases.angle, self.phases.origin)
-            }
-            _ => self.winding_energy(p),
+        self.winding_energy(p)
+    }
+
+    /// A stepper's base step done with the rotor from `before` to `phases.angle`: the detent's work is in the shaft's,
+    /// and what the magnets gave for it, the change of `Stepper::detent_potential`, is the step's `emf_loss` (exact, the
+    /// torque being conservative). Nothing for the other motors.
+    pub fn detent_moved(&mut self, p: &DriveParams, before: f64) {
+        if let Motor::Stepper(s) = &p.motor {
+            let (after, origin) = (self.phases.angle, self.phases.origin);
+            self.emf_loss = (s.detent_potential(after, origin) - s.detent_potential(before, origin)) / p.current_cycle;
         }
     }
 

@@ -800,26 +800,26 @@ fn the_bending_adds_its_states_and_its_loss_signal_and_nothing_with_the_switch_o
 
 /// The tube's own share (effects.arm_tube_inertia) by hand, at the centre 850 mm down with rigid gearboxes (the roots
 /// held), the forearms lumped (m_elbow + 2/3 m_fb = 0.816690 kg at each elbow). Out of the planes the forearms lie in
-/// the arms' planes, so each elbow's move is a mode of its own on k_l = 448781.4 N/m: the elbow, a quarter of the tube
-/// (0.35 kg) and the elbow's twist, J = 2.9e-4 + 2/3 0.7 (0.1 / 2)^2 = 1.456723e-3 kg m^2 times (1.37651 / 0.5)^2 =
-/// 7.579165: m = 0.816690 + 0.35 + 0.011041 = 1.177731 kg, 98.25 Hz (without the share 0.816690 kg, 117.98 Hz). In the
-/// planes the four elbows together (as `the_bend_mode_of_the_four_elbows_together_is_the_hand_calculated_one`) carry a
-/// quarter of the tube's inertia about the shoulder more, 1.4 0.25 / 4 = 0.0875 kg m^2: k_b / (0.76009 + 0.0875) =
-/// 132369 1/s^2, 57.91 Hz.
+/// the arms' planes, so each elbow's move is a mode of its own on k_l = 448781.4 N/m: the elbow, 33/140 of the tube
+/// (0.33 kg, the static shape's int psi^2) and the elbow's twist, J = 2.9e-4 + 2/3 0.7 (0.1 / 2)^2 = 1.456723e-3 kg m^2
+/// times (1.5 / 0.5)^2 = 9: m = 0.816690 + 0.33 + 0.013111 = 1.159801 kg, 99.00 Hz (without the share 0.816690 kg,
+/// 117.98 Hz). In the planes the four elbows together (as `the_bend_mode_of_the_four_elbows_together_is_the_hand_calculated_one`)
+/// carry 33/140 of the tube's inertia about the shoulder more, 33/140 1.4 0.25 = 0.0825 kg m^2: k_b / (0.76009 + 0.0825),
+/// 58.08 Hz.
 #[test]
 fn the_tubes_share_moves_the_bend_modes_by_hand() {
-    let lateral = |tube: bool| 448781.4 / (0.816690 + if tube { 0.35 + 1.456723e-3 * 7.579165 } else { 0.0 });
+    let lateral = |tube: bool| 448781.4 / (0.816690 + if tube { 0.33 + 1.456723e-3 * 9.0 } else { 0.0 });
     let z = -0.85;
     let t = angle_by_hand(0.0, 0.0, z);
     let (e, la) = (0.18, 0.5);
     let jz = la * (e * t.sin() - z * t.cos()) / (z + la * t.sin()) / 4.0;
     let m = 2.0 * (0.7 + 2.0 * (1.0 - 0.6667) * 0.7) + 1.0 + 6.0;
     let i_tip = la * la * (0.35 + 0.6667 * 0.7);
-    let together = |tube: bool| K_BEND / (i_tip + if tube { 0.0875 } else { 0.0 } + 4.0 * m * jz * jz);
+    let together = |tube: bool| K_BEND / (i_tip + if tube { 0.0825 } else { 0.0 } + 4.0 * m * jz * jz);
     let hz = |w2: f64| w2.sqrt() / std::f64::consts::TAU;
-    close(hz(lateral(true)), 98.25, 2e-4, "out of the planes, by hand");
+    close(hz(lateral(true)), 99.00, 2e-4, "out of the planes, by hand");
     close(hz(lateral(false)), 117.98, 2e-4, "without the share");
-    close(hz(together(true)), 57.91, 2e-4, "in the planes, by hand");
+    close(hz(together(true)), 58.08, 2e-4, "in the planes, by hand");
     for tube in [false, true] {
         let d = h4(&[
             "effects.arm_bending = true",
@@ -836,9 +836,34 @@ fn the_tubes_share_moves_the_bend_modes_by_hand() {
     }
 }
 
+/// The tube's single mode against the exact Euler-Bernoulli cantilever (`beam::cantilever_first_frequency`), the root
+/// clamped: tube 1.4 kg over 0.5 m, at its tip the elbow block and the rods' sixth (0.35 + 0.7 / 6 = 0.466667 kg), out
+/// of the plane also the twist inertia J = 2.9e-4 + 0.7 / 6 (0.1 / 2)^2 = 5.816667e-4 kg m^2 on the tip's slope. The
+/// static shape with 3 E I / L^3 (Rayleigh) reads both modes from above, by +0.25 % in the plane and +0.23 % out of it;
+/// the arm's sag under its own weight and the elbow's, g (3/8 m + M) L^3 / (3 E I), is the exact g L^3 (m / 8 + M / 3)
+/// / (E I). Before 22 November the first exact mode's shape with the static stiffness read the modes 0.98 % and 0.95 %
+/// low and the sag 2.3 % high (0.3915 m in place of 3/8 m).
+#[test]
+fn the_tubes_mode_and_sag_are_the_exact_cantilevers() {
+    use sim_components::beam::cantilever_first_frequency;
+    let d = h4(&["effects.arm_bending = true", "effects.arm_tube_inertia = true", "effects.forearm_inertia = true"]);
+    let (b, la, m, tip) = (d.bending.unwrap(), 0.5, d.tube_mass, d.m_elbow);
+    close(tip, 0.35 + 0.7 / 6.0, 1e-12, "the elbow");
+    close(d.twist_inertia, 2.9e-4 + 0.7 / 6.0 * 0.0025, 1e-9, "the twist inertia");
+    let (ei_plane, ei_across) = (b.k * la / 3.0, b.k_lateral * la.powi(3) / 3.0);
+    // In the plane in the elbow's turn: the inertia about the shoulder of what moves with it.
+    let in_plane = (b.k / d.tip_inertia).sqrt() / cantilever_first_frequency(ei_plane, m, tip, 0.0, la) - 1.0;
+    let lateral =
+        (b.k_lateral / d.m_lateral).sqrt() / cantilever_first_frequency(ei_across, m, tip, d.twist_inertia, la) - 1.0;
+    println!("the mode against the exact: in the plane {in_plane:+.5}, out of it {lateral:+.5}");
+    assert!(in_plane > 0.0 && in_plane < 0.003 && lateral > 0.0 && lateral < 0.003, "{in_plane} {lateral}");
+    let sag = G * d.tip_moment / b.k;
+    close(sag, G * la * la * (m / 8.0 + tip / 3.0) / ei_plane, 1e-12, "the sag under the weight");
+}
+
 /// With bending arms, the tube's share and the rods, the frame momentum's first moment moves at its linear momentum
 /// (`testkit::frame_momentum_moves_its_first_moment`): the elbow at its moved place with its whole speed, the tube's
-/// sections out of the plane (0.3915 of its mass) and the rods' middles at their true places.
+/// sections out of the plane (3/8 of its mass) and the rods' middles at their true places.
 #[test]
 fn the_frame_momentum_follows_the_bending_arms() {
     for tube in [false, true] {
@@ -847,11 +872,11 @@ fn the_frame_momentum_follows_the_bending_arms() {
     }
 }
 
-/// The tube's kinetic energy with effects.arm_tube_inertia by hand. Its sections move at s theta' + phi(s) L delta':
-/// T = m L^2 (theta'^2 / 3 + 2 0.284413 theta' delta' + delta'^2 / 4) / 2 per arm, m L^2 = 1.4 * 0.25 = 0.35 kg m^2 and
-/// I_arm = 0.117 (the config's, a little above the uniform tube's 0.116667). The roots turning at 1 rad/s with the
-/// elbows still (delta' = -1): the tube 0.117 - 2 * 0.284413 * 0.35 + 0.35 / 4 = 5.4109e-3 kg m^2 per arm, so
-/// 4 * 5.4109e-3 / 2 = 0.0108218 J and nothing else moves. Turning whole (delta' = 0) the arms are the rigid model's: the
+/// The tube's kinetic energy with effects.arm_tube_inertia by hand. Its sections move at s theta' + psi(s) L delta'
+/// (psi the static shape): T = m L^2 (theta'^2 / 3 + 2 11/40 theta' delta' + 33/140 delta'^2) / 2 per arm,
+/// m L^2 = 1.4 * 0.25 = 0.35 kg m^2 and I_arm = 0.117 (the config's, a little above the uniform tube's 0.116667). The
+/// roots turning at 1 rad/s with the elbows still (delta' = -1): the tube 0.117 - 2 * 0.275 * 0.35 + 33/140 * 0.35 =
+/// 7.0e-3 kg m^2 per arm, so 4 * 7.0e-3 / 2 = 0.014 J and nothing else moves. Turning whole (delta' = 0) the arms are the rigid model's: the
 /// same kinetic energy as without bending, to the bend's 1e-5 rad in the pose (9.4e-7 of it measured).
 #[test]
 fn the_tubes_kinetic_energy_is_the_cantilever_modes() {
@@ -863,7 +888,7 @@ fn the_tubes_kinetic_energy_is_the_cantilever_modes() {
         s[4 + k] = 1.0;
         s[at + 4 + k] = -1.0;
     }
-    close(bent.energy_parts(&s)[0], 0.0108218, 1e-5, "the roots turning, the elbows still");
+    close(bent.energy_parts(&s)[0], 0.014, 1e-5, "the roots turning, the elbows still");
     let rigid = h4(&[]);
     let (mut r, mut rt) = (Vec::new(), [0.0; 4]);
     rigid.equilibrium(&[0.1, -0.05, -0.9, 0.0], &mut r, &mut rt);
@@ -877,9 +902,9 @@ fn the_tubes_kinetic_energy_is_the_cantilever_modes() {
     let (whole, split) = (rigid.energy_parts(&r)[0], bent.energy_parts(&s)[0]);
     assert!((whole - split).abs() < 1e-5 * whole, "{whole} J rigid, {split} J bending");
     // An arm lighter in inertia than a uniform tube of its mass: the tube is 3 I / L^2 = 0.96 kg of it, the rest a hub
-    // on the axis, and the root keeps 0.08 - 0.25 * 0.96 * 0.25 - 2 * 0.034413 * 0.96 * 0.25 = 3.4818e-3 kg m^2.
+    // on the axis, and the root keeps 0.08 - 33/140 * 0.96 * 0.25 - 2 * (11/40 - 33/140) * 0.96 * 0.25 = 4.5714e-3 kg m^2.
     let light =
         h4(&["effects.arm_bending = true", "effects.arm_tube_inertia = true", "mass.upper_arm_inertia_kgm2 = 0.08"]);
-    close(light.root_inertia, 3.4818e-3, 1e-4, "a hub on the axis");
+    close(light.root_inertia, 4.5714e-3, 1e-4, "a hub on the axis");
     close(light.tube_mass, 0.96, 1e-12, "the tube mass");
 }

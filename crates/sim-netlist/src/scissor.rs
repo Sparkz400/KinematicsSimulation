@@ -154,6 +154,7 @@ pub(crate) fn read(
             inertia: 0.0,
             pulley: String::new(),
             at: None,
+            body: None,
             clockwise: false,
             transmission: Transmission::Belt,
             axis: None,
@@ -237,6 +238,8 @@ pub struct ScissorMachine {
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the platform along z (`Machine::set_tool_force`), N; held until changed.
+    tool_push: f64,
     /// The screw's efficiency (1 with effects.gearbox_efficiency off), which the gearbox's carries.
     screw_efficiency: f64,
     joint: RotaryJoint,
@@ -248,6 +251,8 @@ pub struct ScissorMachine {
     gearbox_id: &'static str,
     id: &'static str,
     rest_slack: f64,
+    /// The integrator's sub-step (`Machine::set_substep`).
+    substep: Option<f64>,
 }
 
 impl ScissorMachine {
@@ -276,6 +281,7 @@ impl ScissorMachine {
             m_payload: if cfg.bool("effects.payload")? { v("payload_kg") } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
+            tool_push: 0.0,
             screw_efficiency,
             joint,
             thermal: ThermalFeedback::from_config(cfg)?,
@@ -296,6 +302,7 @@ impl ScissorMachine {
             gearbox_id: intern(&format!("gearbox_{}", net.motors[0].id)),
             id: intern(&node.id),
             rest_slack: 0.0,
+            substep: None,
         };
         machine.rest_slack = machine.rest_sag();
         Ok(machine)
@@ -326,6 +333,12 @@ impl ScissorMachine {
         )
     }
 
+    /// An obstacle's push F on the platform (`set_tool_force`) on the arms' angle, h' F: in the equations of motion
+    /// only, not in the feedforward or the state at rest.
+    fn push(&self, theta: f64) -> f64 {
+        self.tool_push * self.height(theta)[1]
+    }
+
     fn rotor(&self, s: &[f64]) -> (f64, f64) {
         if self.elastic { (s[2], s[3]) } else { (self.joint.ratio() * s[0], self.joint.ratio() * s[1]) }
     }
@@ -340,7 +353,7 @@ impl ScissorMachine {
         let (mass, velocity, gravity) = self.load(theta, w);
         let j = &self.joint;
         let drive = j.rigid_drive(torque, rotor, rotor_speed, self.brake(s), self.brake_engaged).0;
-        let rest = gravity - velocity + j.output_torque(theta, w);
+        let rest = gravity + self.push(theta) - velocity + j.output_torque(theta, w);
         let first = (drive + rest) / (mass + j.reflected_inertia());
         let loss = j.gearbox.loss_factor(drive - j.reflected_inertia() * first, w);
         let acc = (loss * drive + rest) / (mass + loss * j.reflected_inertia());
@@ -457,7 +470,7 @@ impl Machine for ScissorMachine {
         let (theta, w) = (s[0], s[1]);
         let (mass, velocity, gravity) = self.load(theta, w);
         let (gear, rotor_acc, brake_rate) = j.rotor(torque[0], s[2], s[3], theta, w, s[4], self.brake_engaged);
-        let acc = (gear.output + gravity - velocity + j.output_torque(theta, w)) / mass;
+        let acc = (gear.output + gravity + self.push(theta) - velocity + j.output_torque(theta, w)) / mass;
         out[..5].copy_from_slice(&[w, acc, s[3], rotor_acc, brake_rate]);
     }
 
@@ -503,11 +516,61 @@ impl Machine for ScissorMachine {
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }
+    /// What moves on the frame, as the dynamics have it (the module): the platform with the payload at its height h,
+    /// rising at h'; per stage k its two arms' centres (2 m_a, m_a = arms / 2n), crossing at the horizontal x_f + u / 2
+    /// from the fixed foot x_f (where the drawing has it at the lowest height, -u_0 / 2) and at (k - 1/2) s, moving at
+    /// u' / 2 = -c theta' / 2 and (k - 1/2) s'; the two arms of a stage turn opposite ways, so their spins cancel; the
+    /// screw (along x, at theta') and the rotor spin about x. An obstacle's push is not in its outside force: a
+    /// compliant base takes it through the tool's shift (`base::Based`).
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        use sim_components::base::{add_point, add_spin};
+        let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        let Stages { stages, lever, span_low, .. } = self.geometry;
+        let (theta, w) = (s[0], s[1]);
+        let [h, d1, _] = self.height(theta);
+        let (u, du) = (span_low - lever * theta, -lever * w);
+        let (stage, rise) = (h / stages, d1 * w / stages);
+        let platform = self.m_weight - 0.5 * self.arms + if self.payload_attached { self.m_payload } else { 0.0 };
+        add_point(&mut f, platform, [0.0, 0.0, h], [0.0, 0.0, d1 * w]);
+        let pair = self.arms / stages;
+        for k in 0..stages as usize {
+            let up = k as f64 + 0.5;
+            add_point(&mut f, pair, [-0.5 * span_low + 0.5 * u, 0.0, up * stage], [0.5 * du, 0.0, up * rise]);
+        }
+        add_spin(&mut f, [1.0, 0.0, 0.0], self.screw_inertia, w);
+        add_spin(&mut f, [1.0, 0.0, 0.0], self.joint.rotor_inertia, self.rotor(s).1);
+        Some(f)
+    }
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
     }
+    /// The push acts on the platform, the tool (`push`): h' F on the arms' angle, whose power is F times the platform's
+    /// speed.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.tool_push = force[0];
+        true
+    }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+    fn set_substep(&mut self, h: f64) {
+        self.substep = Some(h);
+    }
+    /// The gear's efficiency switch near zero power at the step's start (`mech::Gearbox::fade_damping`) on the screw's
+    /// inertia M(theta) there.
+    fn substeps_wanted(&self, s: &[f64], torque: &[f64]) -> u32 {
+        let Some(h) = self.substep else { return 1 };
+        let gear = &self.joint.gearbox;
+        let output = if self.elastic {
+            gear.torque(s[2], s[3], s[0], s[1]).rotor * gear.ratio
+        } else {
+            self.rigid_solve(s, torque[0]).2
+        };
+        let damping = gear.fade_damping(output, s[1]);
+        if damping == 0.0 {
+            return 1;
+        }
+        sim_components::mech::fade_substeps(damping, h, self.load(s[0], s[1]).0)
     }
     /// The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
     fn after_step(&mut self, s: &mut [f64], _dt: f64) {

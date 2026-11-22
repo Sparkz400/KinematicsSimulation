@@ -841,17 +841,21 @@ id = "pulley_y"
 gearbox = "gearbox_y"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
-at_m = [1.5, -0.1, 0.06]
+# The Y motor rides on the bridge, its pulley 0.1 m before the Y carriage's y = 0 (the bridge drawn 0.03 m before it).
+body = "bridge"
+at_m = [0.0, -0.07, 0.0]
 pos = [300, 300]
 
-# Y, on the bridge, a loop: the motor and the far idler 0.1 m + stroke + 0.1 m = 1.0 m apart, the clamp to the motor
-# 0.1 m + y, back from the motor round the far idler to the clamp 1.0 m + 0.9 m - y.
+# Y, on the bridge, a loop lying flat (plane x-y: its wheels turn about z): the motor and the far idler 0.1 m + stroke +
+# 0.1 m = 1.0 m apart, the clamp to the motor 0.1 m + y, back from the motor round the far idler to the clamp
+# 1.0 m + 0.9 m - y.
 [[machine.section]]
 id = "y1"
 length_m = 0.1
 axes = { y = 1 }
 pulleys = { pulley_y = 1 }
 route = ["y_carriage", "pulley_y"]
+plane = "x-y"
 pos = [450, 240]
 
 [[machine.section]]
@@ -860,6 +864,7 @@ length_m = 1.9
 axes = { y = -1 }
 pulleys = { pulley_y = -1 }
 route = ["pulley_y", "far_y", "y_carriage"]
+plane = "x-y"
 pos = [450, 360]
 
 # The free spans, with the belt's speed over ground per axis speed along x, y and z of the 3D view, so that the belts'

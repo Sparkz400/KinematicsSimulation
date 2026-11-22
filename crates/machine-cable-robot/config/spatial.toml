@@ -82,6 +82,9 @@ mass_per_m_kg = 0.010
 drum_radius_m = 0.03
 drum_inertia_kgm2 = 4.0e-4
 capacity_m = 5.0
+# How far the drum sits below its pulley: the cable paid out is lifted that far, its weight rho g times it at the
+# cable. Not in the frame's data at hand: 0.
+drop_m = 0.0
 friction_coulomb_n = 3.0
 friction_viscous_n_s_m = 2.0
 friction_smoothing_m_s = 0.002

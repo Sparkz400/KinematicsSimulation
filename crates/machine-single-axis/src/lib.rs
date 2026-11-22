@@ -551,7 +551,8 @@ impl Machine for SingleAxis {
             mass: self.m() + chain,
             first_moment: [self.m() * x + chain_moment, 0.0, 0.0],
             gravity: [-self.g_along, 0.0, -self.g_normal],
-            external: [if self.dwelling { self.process } else { 0.0 } + self.push, 0.0, 0.0],
+            // An obstacle's push is not in it: a compliant base takes it through the tool's shift (`base::Based`).
+            external: [if self.dwelling { self.process } else { 0.0 }, 0.0, 0.0],
             external_at: [x, 0.0, 0.0],
         })
     }

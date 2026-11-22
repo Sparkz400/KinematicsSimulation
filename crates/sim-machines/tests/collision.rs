@@ -190,6 +190,52 @@ fn a_push_at_the_tool_stops_a_load_on_a_belt_at_the_obstacles_face() {
     );
 }
 
+/// The same file axis on a compliant base (effects.base_compliance, two-way with effects.base_reaction): the push acts
+/// on the base through the tool's shift (`base::Based`) and is not in the machine's outside force (`FrameMomentum::
+/// external`, where it pushed the base a second time: 2 F / k_base back at rest, with each push's work booked once, so
+/// that the budget closed regardless). The carriage stands in the wall by F / k, the base by F / k_base, and the budget
+/// closes to `PUSH_BUDGET_TOLERANCE`. So also one-way (without effects.base_reaction), where the base is outside the
+/// budget (`Based::contact_state`): it was 8.9e-4 of the supply off on the crate's move into a slab, the crash row
+/// having booked the push's work on the base too.
+#[test]
+fn on_a_compliant_base_a_machine_files_axis_stops_at_the_face() {
+    for two_way in ["effects.base_reaction = true", "effects.base_reaction = false"] {
+        on_a_compliant_base(two_way);
+    }
+}
+
+fn on_a_compliant_base(two_way: &str) {
+    let entry = load_file(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../machines/single-axis.toml"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let wall = r#"obstacles = [{ name = "wall", centre_m = [1.1, 0.0, 0.0], size_m = [1.0, 10.0, 10.0] }]"#;
+    let settings = [wall, "effects.crash = true", "effects.base_compliance = true", two_way];
+    println!("{two_way}");
+    let mut sim = Sim::new(entry, &with(entry, &settings)).unwrap();
+    sim.command(Command::MoveTo(vec![0.9])).unwrap();
+    sim.run(2.5, |_| {});
+    let (force, depth) = (sim.contact_force, -sim.clearance);
+    // The base (its one direction, x: deflection and rate end the state) holds the push at rest, F / k_base back.
+    let base = sim.state[sim.state.len() - 2];
+    println!("contact force {force} N, depth {depth} m, base {base} m against F / k_base {} m", force / 2.5e6);
+    assert!(sim.contact.is_some() && force > 100.0, "{force} N");
+    assert!((depth - force / 1e7).abs() < 0.05 * depth, "depth {depth} m against F / k = {} m", force / 1e7);
+    assert!((base.abs() - force / 2.5e6).abs() < 0.05 * force / 2.5e6, "base {base} m, F / k_base {}", force / 2.5e6);
+
+    let mut sim = Sim::new(entry, &with(entry, &settings)).unwrap();
+    let points = sim.plan_path(&[Piece::Line(vec![0.9])], false).unwrap();
+    let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
+    let budget = load.budget.unwrap();
+    let crash = budget.rows.iter().find(|r| r.id == "crash").unwrap().energy;
+    println!("crash {crash} J, {} J of {} J not accounted for", budget.unaccounted(), budget.supply);
+    assert!(load.contact.is_some() && crash > 0.0, "crash {crash} J");
+    assert!(
+        budget.unaccounted().abs() < PUSH_BUDGET_TOLERANCE * budget.supply,
+        "{} J of {} J not accounted for",
+        budget.unaccounted(),
+        budget.supply
+    );
+}
+
 /// On the five-axis file the tool's coordinates are its tip's, which the tilted head moves with every joint: the push
 /// at the tip goes to the joints as its virtual work on each (`ConfigMachine::on_coordinates`), and the budget closes
 /// with it, within `BUDGET_TOLERANCE`, while the head tilts its tip down onto a slab.
@@ -616,23 +662,23 @@ fn obstacles_stop_the_machine_with_its_drives_off() {
     );
 }
 
-/// The machines that keep an obstacle's push at their motors (`Machine::set_tool_force` false): the D2's and the D3's
-/// arms are the machine files' linkage and spatial delta (`sim_netlist`), the D4's are the D3's; the crane's tool is its
-/// bridge, trolley and hoist, not the load that swings under them; the winder's is the web.
-const PUSHED_AT_THE_MOTORS: [&str; 5] = ["delta-d2", "delta-d3", "delta-d4", "overhead-crane", "winder"];
+/// The machines that keep an obstacle's push at their motors (`Machine::set_tool_force` false): none since the crane
+/// and the winder take it on their contact coordinates and the D2, D3 and D4 through the files' linkage and spatial
+/// delta.
+const PUSHED_AT_THE_MOTORS: [&str; 0] = [];
 
 /// Every machine but those of `PUSHED_AT_THE_MOTORS` takes the push at its tool, and its power goes into the motion: on
 /// its lossless suite config at the start pose, the tool moving at 5 % of each axis's range per second
-/// (`set_tool_velocity`), a push F on the tool changes the rate of the machine's energy, grad E . (s' with F - s'
-/// without), by F . v_tool, what the simulation books as the obstacles' work (the crash row). By central differences of
-/// `energy`, to 1e-5.
+/// (`set_tool_velocity`), a push F on its contact coordinates (`Machine::contact_state`: the tool's, the crane's load,
+/// the winder's dancer) changes the rate of the machine's energy, grad E . (s' with F - s' without), by F . v, what the
+/// simulation books as the obstacles' work (the crash row). By central differences of `energy`, to 1e-5.
 #[test]
 fn a_push_at_the_tool_works_on_the_machine_at_the_tools_speed() {
     let mut wrong = Vec::new();
     for entry in MACHINES {
         let cfg = (entry.suite_configs)().into_iter().next().unwrap_or_else(|| entry.config());
         let Sim { mut machine, state, .. } = Sim::new(entry, &cfg).unwrap();
-        let (n, len) = (machine.axes().len(), machine.state_len());
+        let (n, len) = (machine.contact_axes(), machine.state_len());
         let force: Vec<f64> = (0..n).map(|i| 50.0 * (1.0 + i as f64)).collect();
         let takes = machine.set_tool_force(&force);
         if takes == PUSHED_AT_THE_MOTORS.contains(&entry.id) {
@@ -644,6 +690,11 @@ fn a_push_at_the_tool_works_on_the_machine_at_the_tools_speed() {
         let mut s = state[..len].to_vec();
         let speed: Vec<f64> = machine.axes().iter().map(|a| 0.05 * (a.max - a.min)).collect();
         machine.set_tool_velocity(&mut s, &speed);
+        if entry.id == "winder" {
+            // Its contact is the dancer, which the line's speed leaves standing: let it move, down at 0.01 m/s on the
+            // stretching web (its own state), in the rigid model by the unwind running 10 % ahead.
+            if len == 12 { s[5] = 0.01 } else { s[2] *= 1.1 }
+        }
         let torque = vec![0.0; machine.motors().len()];
         let (mut pushed, mut free) = (vec![0.0; len], vec![0.0; len]);
         machine.derivatives(&s, &torque, &mut pushed);
@@ -658,7 +709,7 @@ fn a_push_at_the_tool_works_on_the_machine_at_the_tools_speed() {
             })
             .sum();
         let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
-        machine.tool_state(&s, &mut pos, &mut vel);
+        machine.contact_state(&s, &mut pos, &mut vel);
         let power: f64 = force.iter().zip(&vel).map(|(f, v)| f * v).sum();
         println!("{}: {rate} W against F . v = {power} W", entry.id);
         if !(power.abs() > 1e-3 && (rate - power).abs() < 1e-5 * power.abs()) {
@@ -691,11 +742,49 @@ struct PushRun {
 /// stiffness k = 1e7 N/m holds: its face (normal to the scene axis the tool moves most along) is where the furthest of
 /// the moving parts are at 70 % of the move, so that the drives push on into it at their limit. Run for `seconds` with
 /// the move commanded, then once more as a planned trajectory with the energy budget.
-fn push_into_a_slab(id: &str, target: &[f64], seconds: f64) -> PushRun {
+fn push_into_a_slab(id: &str, target: &[f64], seconds: f64, settings: &[&str]) -> PushRun {
     let entry = find(id).unwrap();
-    let mut probe = Sim::new(entry, &entry.config()).unwrap();
-    let n = probe.machine.axes().len();
+    let mut probe = Sim::new(entry, &with(entry, settings)).unwrap();
+    let n = probe.machine.contact_axes();
     let takes = probe.machine.set_tool_force(&vec![0.0; n]);
+    let slab = slab_across(id, target, settings);
+    let all: Vec<&str> = [slab.as_str(), "effects.crash = true"].into_iter().chain(settings.iter().copied()).collect();
+    let cfg = with(entry, &all);
+
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    sim.command(Command::MoveTo(target.to_vec())).unwrap();
+    let (mut peak_depth, mut peak_force) = (0.0f64, 0.0f64);
+    while sim.time() < seconds {
+        sim.step();
+        (peak_depth, peak_force) = (peak_depth.max(-sim.clearance), peak_force.max(sim.contact_force));
+    }
+    let (depth, force) = (-sim.clearance, sim.contact_force);
+    assert!(sim.contact.is_some(), "{id}: no contact with {slab}");
+    let (crash, unaccounted, scale) = slab_budget(id, target, settings);
+    let run = PushRun { takes, depth, force, peak_depth, peak_force, crash, unaccounted, scale };
+    println!("{id}: {run:?}, F / k = {} m", force / 1e7);
+    run
+}
+
+/// The budget of the planned move of `push_into_a_slab` with `settings` beside it: the crash row, what is not accounted
+/// for, and the supply plus the potential energy's change (J).
+fn slab_budget(id: &str, target: &[f64], settings: &[&str]) -> (f64, f64, f64) {
+    let entry = find(id).unwrap();
+    let slab = slab_across(id, target, settings);
+    let all: Vec<&str> = [slab.as_str(), "effects.crash = true"].into_iter().chain(settings.iter().copied()).collect();
+    let mut sim = Sim::new(entry, &with(entry, &all)).unwrap();
+    let points = sim.plan_path(&[Piece::Line(target.to_vec())], false).unwrap();
+    let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
+    let budget = load.budget.unwrap();
+    let row = |id: &str| budget.rows.iter().find(|r| r.id == id).map_or(0.0, |r| r.energy);
+    (row("crash"), budget.unaccounted(), budget.supply + row("energy.potential").abs())
+}
+
+/// The slab of `push_into_a_slab` as an `obstacles` line.
+fn slab_across(id: &str, target: &[f64], settings: &[&str]) -> String {
+    let entry = find(id).unwrap();
+    let probe = Sim::new(entry, &with(entry, settings)).unwrap();
+    let n = probe.machine.contact_axes();
     let machine = probe.machine.as_ref();
     let (mut start, mut vel) = (vec![0.0; n], vec![0.0; n]);
     machine.tool_state(&probe.state, &mut start, &mut vel);
@@ -732,51 +821,32 @@ fn push_into_a_slab(id: &str, target: &[f64], seconds: f64) -> PushRun {
     let mut centre: [f64; 3] = std::array::from_fn(|i| 0.5 * (low(i) + high(i)));
     let mut size: [f64; 3] = std::array::from_fn(|i| high(i) - low(i) + 0.2);
     (centre[axis], size[axis]) = (face + sign * 5.0, 10.0);
-    let slab = format!("obstacles = [{{ name = \"slab\", centre_m = {centre:?}, size_m = {size:?} }}]");
-    let cfg = with(entry, &[&slab, "effects.crash = true"]);
-
-    let mut sim = Sim::new(entry, &cfg).unwrap();
-    sim.command(Command::MoveTo(target.to_vec())).unwrap();
-    let (mut peak_depth, mut peak_force) = (0.0f64, 0.0f64);
-    while sim.time() < seconds {
-        sim.step();
-        (peak_depth, peak_force) = (peak_depth.max(-sim.clearance), peak_force.max(sim.contact_force));
-    }
-    let (depth, force) = (-sim.clearance, sim.contact_force);
-    assert!(sim.contact.is_some(), "{id}: no contact with {slab}");
-
-    let mut sim = Sim::new(entry, &cfg).unwrap();
-    let points = sim.plan_path(&[Piece::Line(target.to_vec())], false).unwrap();
-    let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
-    let budget = load.budget.unwrap();
-    let row = |id: &str| budget.rows.iter().find(|r| r.id == id).map_or(0.0, |r| r.energy);
-    let run = PushRun {
-        takes,
-        depth,
-        force,
-        peak_depth,
-        peak_force,
-        crash: row("crash"),
-        unaccounted: budget.unaccounted(),
-        scale: budget.supply + row("energy.potential").abs(),
-    };
-    println!("{id}: {run:?}, F / k = {} m", force / 1e7);
-    run
+    format!("obstacles = [{{ name = \"slab\", centre_m = {centre:?}, size_m = {size:?} }}]")
 }
+
+/// How far the budget of a move into a slab may be off with the push at the tool, a share of the supply and the
+/// potential energy's change: the level the push at the motors had (2e-5 on the T-gantry and the hexapod, the
+/// shipped lossy configs), which the finer sub-steps under the push (`Sim`'s `PUSH_SUBSTEPS`) keep.
+const PUSH_BUDGET_TOLERANCE: f64 = 3e-5;
 
 /// The push at the tool: the parts stand in the slab by its contact spring's give alone, F / k (within 5 %, as on the
 /// machine file's belt axis), not by that and the transmission's give as when the push holds the motors; and the
-/// budget of the planned move into it closes with the crash row, within `BUDGET_TOLERANCE` of the supply and the
+/// budget of the planned move into it closes with the crash row, within `PUSH_BUDGET_TOLERANCE` of the supply and the
 /// potential energy's change.
 fn assert_stops_at_the_face(id: &str, target: &[f64], seconds: f64) {
-    let run = push_into_a_slab(id, target, seconds);
+    assert_stops_at_the_face_with(id, target, seconds, &[]);
+}
+
+/// `assert_stops_at_the_face` on the config with `settings`.
+fn assert_stops_at_the_face_with(id: &str, target: &[f64], seconds: f64, settings: &[&str]) {
+    let run = push_into_a_slab(id, target, seconds, settings);
     assert!(run.takes, "{id} does not take the push at its tool");
     assert!(run.force > 10.0, "{id}: {} N", run.force);
     let hand = run.force / 1e7;
     assert!((run.depth - hand).abs() < 0.05 * hand, "{id}: depth {} m against F / k = {hand} m", run.depth);
     assert!(run.crash > 0.0, "{id}: crash {} J", run.crash);
     assert!(
-        run.unaccounted.abs() < sim_components::analysis::BUDGET_TOLERANCE * run.scale,
+        run.unaccounted.abs() < PUSH_BUDGET_TOLERANCE * run.scale,
         "{id}: {} J of {} J not accounted for",
         run.unaccounted,
         run.scale
@@ -835,20 +905,17 @@ fn the_planar_cable_robot_stops_at_the_face() {
 fn the_spatial_cable_robot_stops_at_the_face() {
     assert_stops_at_the_face("cable-spatial", &[0.0, 0.0, 0.85, 0.0, 0.0, 0.0], 2.5);
 }
-// The D2, D3 and D4 are pushed at their motors until the files' linkage and spatial delta (`sim_netlist::linkage`,
-// `sim_netlist::spatial::Delta`, the D4's arms) take the push (`PUSHED_AT_THE_MOTORS`).
+// The D2's and D3's arms are the machine files' linkage and spatial delta (`sim_netlist::linkage`,
+// `sim_netlist::spatial::Delta`), the D4's the D3's with the push about c on its turn.
 #[test]
-#[ignore = "pushed at the motors until sim_netlist's linkage takes the push at the tool"]
 fn the_delta_d2_stops_at_the_face() {
     assert_stops_at_the_face("delta-d2", &[0.15, -0.8], 2.5);
 }
 #[test]
-#[ignore = "pushed at the motors until sim_netlist's spatial delta takes the push at the tool"]
 fn the_delta_d3_stops_at_the_face() {
     assert_stops_at_the_face("delta-d3", &[0.15, 0.0, -1.0], 2.5);
 }
 #[test]
-#[ignore = "pushed at the motors until sim_netlist's spatial delta (its arms) takes the push at the tool"]
 fn the_delta_d4_stops_at_the_face() {
     assert_stops_at_the_face("delta-d4", &[0.15, 0.0, -1.0, 0.0], 2.5);
 }
@@ -875,4 +942,72 @@ fn the_parallel_scara_stops_at_the_face() {
 #[test]
 fn the_wafer_handler_stops_at_the_face() {
     assert_stops_at_the_face("wafer-handler", &[0.7, 0.0, 0.06], 2.5);
+}
+/// The crane's tool is where its drives put the hook; what touches is the load that swings under it, which the push
+/// acts on (`Machine::contact_state`): the hook's point with the payload under it, and with the hook block (a double
+/// pendulum) the hook block's and the payload's points. The bridge travels on; the payload swings into the slab and
+/// stands at its face.
+#[test]
+fn the_cranes_load_stops_at_the_face() {
+    assert_stops_at_the_face("overhead-crane", &[2.5, 1.0, 3.0], 8.0);
+}
+#[test]
+fn the_cranes_payload_on_the_hook_block_stops_at_the_face() {
+    assert_stops_at_the_face_with("overhead-crane", &[2.5, 1.0, 3.0], 8.0, &["effects.hook_block = true"]);
+}
+/// On a compliant base (effects.base_compliance, 2.5e6 N/m along x under the single axis, two-way with
+/// effects.base_reaction) the base's move shifts the carriage too, so the push acts on the base as well (`base::Based`):
+/// the carriage still stands in the slab by F / k and the budget closes (it was 9e-4 off with the push on the base
+/// through the machine's outside force, booked twice). One-way, the machine not feeling the base, the base is outside
+/// the budget (neither its energy nor its damping is booked): the crash row books the push's work on the machine alone
+/// (`Based::contact_state`), and the budget closes too (8.9e-4 off while it booked the work on the base as well).
+#[test]
+fn on_a_compliant_base_the_single_axis_stops_at_the_face() {
+    for two_way in ["effects.base_reaction = true", "effects.base_reaction = false"] {
+        assert_stops_at_the_face_with("single-axis", &[0.9], 2.5, &["effects.base_compliance = true", two_way]);
+    }
+}
+
+/// The winder's moving parts are its dancer and the weight on it (`collision_bodies`), which the web holds and no motor
+/// moves: the push acts on the dancer's travel (`Machine::contact_state`). A slab under it, its top 0.05 mm above the
+/// dancer's lowest point at the start: it lifts the dancer, which then stands on it by F / k (at 141 N), and the
+/// budget of a line move of 0.05 m closes with the crash row (negative: the slab gives back the start's overlap).
+#[test]
+fn the_winders_dancer_stands_on_a_slab_by_its_spring() {
+    let entry = find("winder").unwrap();
+    let probe = Sim::new(entry, &entry.config()).unwrap();
+    let bodies = sim_components::collision::Bodies::of(probe.machine.as_ref(), &probe.state);
+    let low = |i: usize| bodies.boxes.iter().map(|b| b.centre[i] - 0.5 * b.size[i]).fold(f64::INFINITY, f64::min);
+    let high = |i: usize| bodies.boxes.iter().map(|b| b.centre[i] + 0.5 * b.size[i]).fold(f64::NEG_INFINITY, f64::max);
+    let top = low(2) + 5e-5;
+    let centre = [0.5 * (low(0) + high(0)), 0.5 * (low(1) + high(1)), top - 5.0];
+    let size = [high(0) - low(0) + 0.2, high(1) - low(1) + 0.2, 10.0];
+    let slab = format!("obstacles = [{{ name = \"slab\", centre_m = {centre:?}, size_m = {size:?} }}]");
+    let cfg = with(entry, &[&slab, "effects.crash = true"]);
+    let (mut line, mut speed) = ([0.0], [0.0]);
+    probe.machine.tool_state(&probe.state, &mut line, &mut speed);
+    let target = vec![line[0] + 0.05];
+
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    assert!(sim.machine.set_tool_force(&[0.0]), "the winder takes the push on its dancer");
+    sim.command(Command::MoveTo(target.clone())).unwrap();
+    sim.run(3.0, |_| {});
+    let (depth, force) = (-sim.clearance, sim.contact_force);
+    println!("depth {depth} m, force {force} N, F / k = {} m", force / 1e7);
+    assert!(force > 10.0, "{force} N");
+    assert!((depth - force / 1e7).abs() < 0.05 * force / 1e7, "depth {depth} m against F / k = {} m", force / 1e7);
+
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    let points = sim.plan_path(&[Piece::Line(target)], false).unwrap();
+    let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
+    let budget = load.budget.unwrap();
+    let crash = budget.rows.iter().find(|r| r.id == "crash").map_or(0.0, |r| r.energy);
+    println!("crash {crash} J, {} J of {} J not accounted for", budget.unaccounted(), budget.supply);
+    assert!(crash.abs() > 1e-4, "crash {crash} J");
+    assert!(
+        budget.unaccounted().abs() < PUSH_BUDGET_TOLERANCE * budget.supply,
+        "{} J of {} J not accounted for",
+        budget.unaccounted(),
+        budget.supply
+    );
 }

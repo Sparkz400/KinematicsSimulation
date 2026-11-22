@@ -110,6 +110,9 @@ struct Section {
     /// Unstretched belt at q = 0 with the pulleys at angle 0.
     mat0: f64,
     route: Vec<Waypoint>,
+    /// The plane its belt runs in, [along, up, depth] of the scene (`machine.section.plane`); `None` for the default
+    /// (`belt_plane`).
+    plane: Option<[usize; 3]>,
 }
 
 struct Body {
@@ -435,6 +438,8 @@ pub struct ConfigMachine {
     r_mat: Vec<f64>,
     j_pulley: Vec<f64>,
     pulley_at: Vec<Option<[f64; 3]>>,
+    /// Per motor: the body its pulley rides on, which `pulley_at` is from.
+    pulley_body: Vec<Option<usize>>,
     /// Per motor: rotor and gearbox input inertia, the gearbox ratio, its gearbox, shaft friction, ripple and brake.
     j_rotor: Vec<f64>,
     ratio: Vec<f64>,
@@ -922,6 +927,7 @@ impl ConfigMachine {
                     f: s.pulleys.clone(),
                     mat0: belt.rest_length(length),
                     route: s.route.clone(),
+                    plane: s.plane,
                 }
             })
             .collect();
@@ -1264,6 +1270,7 @@ impl ConfigMachine {
                 .map(|(d, x)| if x.is_some() { 0.0 } else { d.inertia + belt_mass * d.radius * d.radius })
                 .collect(),
             pulley_at: net.motors.iter().map(|d| d.at).collect(),
+            pulley_body: net.motors.iter().map(|d| d.body).collect(),
             r,
             k,
             k_inv,
@@ -1469,7 +1476,8 @@ impl ConfigMachine {
             let (Some(&a), Some(&b)) = (route.get(at), route.get(at + 1)) else { continue };
             let body = Waypoint::Body(lean.body);
             let other = if a == body { b } else { a };
-            let side = dot(&self.wheel(other, q).1, &along) - dot(&self.wheel(body, q).1, &along);
+            let plane = self.plane(span.section);
+            let side = dot(&self.wheel(other, q, plane).1, &along) - dot(&self.wheel(body, q, plane).1, &along);
             out[span.section] += side.signum() * per_u;
         }
         out
@@ -3168,15 +3176,22 @@ impl ConfigMachine {
         }
         p
     }
-    /// Where the scene draws the pulley of motor `kk`: its `at_m`, else at the ends of the first axis, two by two
-    /// further down.
-    fn pulley_scene_at(&self, kk: usize) -> [f64; 3] {
+    /// Where the scene draws the pulley of motor `kk` at the pose `q`: its `at_m` (from its body where it rides on one),
+    /// else at the ends of the first axis, two by two further down.
+    fn pulley_scene_at(&self, kk: usize, q: &[f64]) -> [f64; 3] {
         let end = self.stroke[0];
-        self.pulley_at[kk].unwrap_or([
+        let at = self.pulley_at[kk].unwrap_or([
             if kk.is_multiple_of(2) { -0.1 } else { end + 0.1 },
             -0.05,
             -0.15 * (kk / 2) as f64,
-        ])
+        ]);
+        match self.pulley_body[kk] {
+            Some(b) => {
+                let body = self.scene_at(q, &self.bodies[b].axes);
+                [body[0] + at[0], body[1] + at[1], body[2] + at[2]]
+            }
+            None => at,
+        }
     }
     /// A screw, rack or magnet track along its axis from 0 to its stroke, carried by what carries the axis (the first
     /// body it moves, without its own travel), with the motor at the 0 end; a rotary as a disc where the motor's pulley
@@ -3190,7 +3205,7 @@ impl ConfigMachine {
             DirectKind::Rotary(_) => {
                 // At the bodies that ride on it, where there are some.
                 let at = self.bodies.iter().find(|b| b.rotaries.contains(&d.axis)).map_or_else(
-                    || self.pulley_scene_at(kk),
+                    || self.pulley_scene_at(kk, q),
                     |b| {
                         let carried: Vec<bool> = (0..self.n()).map(|i| b.axes[i] && i != d.axis).collect();
                         self.scene_at(q, &carried)
@@ -3248,48 +3263,59 @@ impl ConfigMachine {
             None => at,
         }
     }
-    /// The belt's plane in the 3D view, as (its second coordinate, the depth): x-z seen from the front, or x-y seen from
-    /// above where the belt lies flat, a section's length changing with axes along x and along y and none along z (an
-    /// H-bot's, a CoreXY's).
-    fn belt_plane(&self) -> (usize, usize) {
+    /// The default plane of the belts in the 3D view (a section without `plane`), as the scene's coordinates [along, up,
+    /// depth]: x-z seen from the front, or x-y seen from above where the belt lies flat, a section's length changing with
+    /// axes along x and along y and none along z (an H-bot's, a CoreXY's).
+    fn belt_plane(&self) -> [usize; 3] {
         let flat = self.sections.iter().any(|s| {
             let along = |k: usize| (0..self.n()).any(|i| s.c[i] != 0.0 && self.dirs[i][k].abs() > 1e-9);
             along(0) && along(1) && !along(2)
         });
-        if flat { (1, 2) } else { (2, 1) }
+        if flat { [0, 1, 2] } else { [0, 2, 1] }
     }
-    /// A point of the belt's plane (`belt_plane`) at the depth `depth`, in the 3D view.
-    fn in_view(&self, p: [f64; 2], depth: f64) -> [f64; 3] {
-        let (second, deep) = self.belt_plane();
-        let mut out = [p[0]; 3];
-        (out[second], out[deep]) = (p[1], depth);
+    /// The plane section `s`'s belt runs in: its `plane`, else the default (`belt_plane`).
+    fn plane(&self, s: usize) -> [usize; 3] {
+        self.sections[s].plane.unwrap_or_else(|| self.belt_plane())
+    }
+    /// The plane a wheel turns in: that of the first section its pulley feeds or whose route runs past it (the
+    /// sections that share a wheel share their plane); the default for a wheel on no section.
+    fn wheel_plane(&self, w: Waypoint) -> [usize; 3] {
+        let on = |s: usize| match w {
+            Waypoint::Pulley(kk) => self.sections[s].f[kk] != 0.0 || self.sections[s].route.contains(&w),
+            _ => self.route_waypoints(s).contains(&w),
+        };
+        (0..self.sections.len()).find(|&s| on(s)).map_or_else(|| self.belt_plane(), |s| self.plane(s))
+    }
+    /// A point of the plane `plane` at the depth `depth`, in the 3D view.
+    fn in_view(p: [f64; 2], depth: f64, plane: [usize; 3]) -> [f64; 3] {
+        let mut out = [0.0; 3];
+        (out[plane[0]], out[plane[1]], out[plane[2]]) = (p[0], p[1], depth);
         out
     }
-    /// A waypoint of a belt as a wheel in the belt's plane (`belt_plane`), its radius signed by the sense the belt runs
-    /// round it, and where the 3D view puts it at the pose `q`.
-    fn wheel(&self, w: Waypoint, q: &[f64]) -> (Wheel, [f64; 3]) {
+    /// A waypoint of a belt as a wheel in the plane `plane`, its radius signed by the sense the belt runs round it, and
+    /// where the 3D view puts it at the pose `q`.
+    fn wheel(&self, w: Waypoint, q: &[f64], plane: [usize; 3]) -> (Wheel, [f64; 3]) {
         let sense = |clockwise: bool| if clockwise { -1.0 } else { 1.0 };
         let (at, radius) = match w {
-            Waypoint::Pulley(kk) => (self.pulley_scene_at(kk), self.r[kk] * sense(self.clockwise.0[kk])),
+            Waypoint::Pulley(kk) => (self.pulley_scene_at(kk, q), self.r[kk] * sense(self.clockwise.0[kk])),
             Waypoint::Idler(d) => {
                 let idler = &self.idlers[d];
                 (self.idler_scene_at(idler, q), idler.radius * sense(self.clockwise.1[d]))
             }
             Waypoint::Body(b) => (self.scene_at(q, &self.bodies[b].axes), 0.0),
         };
-        (Wheel { centre: [at[0], at[self.belt_plane().0]], radius }, at)
+        (Wheel { centre: [at[plane[0]], at[plane[1]]], radius }, at)
     }
 
-    /// Where each span (a straight run of the belt) lies at the pose `q`: the middle of the straight piece between the
-    /// tangent points on the two wheels of its section's route (`contacts`), in the frame of the bodies' places (the 3D
+    /// Where each span (a straight run of the belt) lies at the pose `q`: the tangent points on the two wheels of its
+    /// section's route (`contacts`) it runs between, each with its waypoint, in the frame of the bodies' places (the 3D
     /// view's, less where `scene_at` starts). The section's spans are taken in order as the route's consecutive pairs of
     /// waypoints; `None` for a section whose span count is not the route's pairs, and for a pair with no straight piece.
-    fn run_midpoints(&self, q: &[f64]) -> Vec<Option<[f64; 3]>> {
+    fn run_ends(&self, q: &[f64]) -> Vec<Option<[(Waypoint, [f64; 3]); 2]>> {
         let mut next = vec![0usize; self.sections.len()];
         let routes: Vec<Vec<Waypoint>> = (0..self.sections.len()).map(|s| self.route_waypoints(s)).collect();
         let mut count = vec![0usize; self.sections.len()];
         self.spans.iter().for_each(|span| count[span.section] += 1);
-        let deep = self.belt_plane().1;
         self.spans
             .iter()
             .map(|span| {
@@ -3298,13 +3324,16 @@ impl ConfigMachine {
                 if count[span.section] + 1 != route.len() {
                     return None;
                 }
-                let ((a, pa), (b, pb)) = (self.wheel(route[at], q), self.wheel(route[at + 1], q));
+                let plane = self.plane(span.section);
+                let ((a, pa), (b, pb)) = (self.wheel(route[at], q, plane), self.wheel(route[at + 1], q, plane));
                 let [from, to] = contacts(a, b);
-                let middle =
-                    self.in_view([0.5 * (from[0] + to[0]), 0.5 * (from[1] + to[1])], 0.5 * (pa[deep] + pb[deep]));
-                let origin = scene_origin();
-                let place: [f64; 3] = std::array::from_fn(|k| middle[k] - origin[k]);
-                place.iter().all(|x| x.is_finite()).then_some(place)
+                let (deep, origin) = (plane[2], scene_origin());
+                let place = |p: [f64; 2], depth: f64| -> [f64; 3] {
+                    let at = Self::in_view(p, depth, plane);
+                    std::array::from_fn(|k| at[k] - origin[k])
+                };
+                let ends = [(route[at], place(from, pa[deep])), (route[at + 1], place(to, pb[deep]))];
+                ends.iter().all(|(_, p)| p.iter().all(|x| x.is_finite())).then_some(ends)
             })
             .collect()
     }
@@ -3314,8 +3343,9 @@ impl ConfigMachine {
     /// wheel's sense (`geometry::arc`). Each point keeps the depth of its wheel off the belt's plane.
     fn belt_line(&self, s: usize, q: &[f64]) -> Vec<[f64; 3]> {
         let route = self.route_waypoints(s);
-        let wheels: Vec<(Wheel, [f64; 3])> = route.iter().map(|&w| self.wheel(w, q)).collect();
-        let deep = self.belt_plane().1;
+        let plane = self.plane(s);
+        let wheels: Vec<(Wheel, [f64; 3])> = route.iter().map(|&w| self.wheel(w, q, plane)).collect();
+        let (deep, view) = (plane[2], |p, depth| Self::in_view(p, depth, plane));
         let mut line = Vec::new();
         for (i, pair) in wheels.windows(2).enumerate() {
             let [(a, pa), (b, pb)] = [pair[0], pair[1]];
@@ -3323,11 +3353,11 @@ impl ConfigMachine {
             if i > 0 {
                 // Round wheel a from where the run before met it.
                 let came = contacts(wheels[i - 1].0, a)[1];
-                line.extend(arc(a, came, leave, ARC_PIECES).into_iter().skip(1).map(|p| self.in_view(p, pa[deep])));
+                line.extend(arc(a, came, leave, ARC_PIECES).into_iter().skip(1).map(|p| view(p, pa[deep])));
             } else {
-                line.push(self.in_view(leave, pa[deep]));
+                line.push(view(leave, pa[deep]));
             }
-            line.push(self.in_view(meet, pb[deep]));
+            line.push(view(meet, pb[deep]));
         }
         line
     }
@@ -3345,19 +3375,22 @@ impl ConfigMachine {
                 let starts: Vec<usize> = (0..routes.len()).filter(|&i| routes[i].first() == Some(&me)).collect();
                 let (&[section], &[next]) = (&ends[..], &starts[..]) else { return None };
                 let (before, after) = (*routes[section].iter().rev().nth(1)?, *routes[next].get(1)?);
-                let ((wheel, at), from, to) = (self.wheel(me, q), self.wheel(before, q).0, self.wheel(after, q).0);
+                let plane = self.plane(section);
+                let ((wheel, at), from, to) =
+                    (self.wheel(me, q, plane), self.wheel(before, q, plane).0, self.wheel(after, q, plane).0);
                 let points = arc(wheel, contacts(from, wheel)[1], contacts(wheel, to)[0], ARC_PIECES);
-                let deep = self.belt_plane().1;
-                Some((section, points.into_iter().map(|p| self.in_view(p, at[deep])).collect()))
+                Some((section, points.into_iter().map(|p| Self::in_view(p, at[plane[2]], plane)).collect()))
             })
             .collect()
     }
 
-    /// The axis a wheel spins about per rad/s of the belt running along its section's route: the normal of the belt's
-    /// plane (`belt_plane`), pointing as a clockwise turn seen from the front (the viewer at -y) or, for a flat belt, from
-    /// above does, reversed for a wheel the belt runs round counter-clockwise.
-    fn wheel_axis(&self, clockwise: bool) -> [f64; 3] {
-        let cw = if self.belt_plane().1 == 2 { [0.0, 0.0, -1.0] } else { [0.0, 1.0, 0.0] };
+    /// The axis a wheel spins about per rad/s of the belt running along its section's route: the normal of its plane
+    /// (`wheel_plane`, [along, up, depth]), pointing as a clockwise turn seen in the plane (along to the right, up up)
+    /// does, -(along x up): +y in x-z (seen from the front, the viewer at -y), -z in x-y (from above), -x in y-z (from +x);
+    /// reversed for a wheel the belt runs round counter-clockwise.
+    fn wheel_axis(plane: [usize; 3], clockwise: bool) -> [f64; 3] {
+        let unit = |k: usize| std::array::from_fn::<f64, 3, _>(|i| if i == k { 1.0 } else { 0.0 });
+        let cw = cross(unit(plane[0]), unit(plane[1])).map(|c| -c);
         cw.map(|c| if clockwise { c } else { -c })
     }
     /// +1 where a positive turn of pulley kk, or a positive speed past an idler of section `sec` (fed by that pulley),
@@ -3428,9 +3461,10 @@ impl ConfigMachine {
 
     /// `belt_wraps` at the coordinates q.
     fn wraps_at(&self, q: &[f64]) -> Vec<f64> {
-        let wheel = |w: Waypoint| self.wheel(w, q).0;
         let mut out = vec![f64::NAN; self.m()];
         for &(kk, before, after) in &self.wraps {
+            let plane = self.wheel_plane(Waypoint::Pulley(kk));
+            let wheel = |w: Waypoint| self.wheel(w, q, plane).0;
             out[kk] = wrap(wheel(before), wheel(Waypoint::Pulley(kk)), wheel(after));
         }
         out
@@ -3447,7 +3481,7 @@ impl Machine for ConfigMachine {
     /// belt as the first pulley of the section feeds it (`route_sense`). A rack's pinion turns about up x e (e the rack's
     /// direction, the pinion riding with the axis above the rack fixed to the frame; a vertical rack's y x e), a rotary's motor about the rotary's own axis, positive
     /// as the axis grows. The belt's runs carry angular momentum m x (mu L y) too, each about the middle of its straight
-    /// piece (`run_midpoints`); the arcs round the wheels are in the wheels' spin. What does not move is left out (see
+    /// piece (`run_ends`); the arcs round the wheels are in the wheels' spin. What does not move is left out (see
     /// `FrameMomentum`).
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         // The axes, not the coordinates: a yawing gantry's yaw is one more, which no tool axis has.
@@ -3555,7 +3589,7 @@ impl Machine for ConfigMachine {
                     let w_pulley = if self.elastic { s[vv + nn + kk] } else { self.pulley_angle(kk, v) };
                     let sense = self.route_sense(sec, kk);
                     let (cw, r) = (self.clockwise.0[kk], self.r[kk]);
-                    let spin = self.wheel_axis(cw);
+                    let spin = Self::wheel_axis(self.plane(sec), cw);
                     ax(spin, sense * w_pulley, (self.j_pulley[kk] - self.lump * r * r).max(0.0));
                     ax(spin, sense * rotor_speed[kk], self.j_rotor[kk]);
                 }
@@ -3586,23 +3620,34 @@ impl Machine for ConfigMachine {
             };
             let Some(first) = (0..self.m()).find(|&kk| self.sections[sec].f[kk] != 0.0) else { continue };
             let w = self.route_sense(sec, first) * dot(&idler.speed, v) / idler.radius;
-            let spin = self.wheel_axis(self.clockwise.1[d]);
+            let spin = Self::wheel_axis(self.plane(sec), self.clockwise.1[d]);
             (0..3).for_each(|k| f.angular[k] += idler.mass * idler.radius * idler.radius * w * spin[k]);
         }
         // The belt's runs (`runs_mass`), each at V_s v over ground and the sway on top: momentum mu sum L_s y_s, and the
         // first moment mu sum (L0_s + c_s . q / 2) V_s q, whose rate that is (the belt's runs being one piece), with
         // mu L e u of the sway.
         // The runs' angular momentum, m_s x (mu L_s y_s) about the origin of the bodies' places, from where each run lies
-        // (`run_midpoints`, the middle of its straight piece, the sway on top).
+        // (`run_ends`, the middle of its straight piece, the sway on top).
         if self.run_mass > 0.0 {
             let (e, (u, du)) = (self.sway_direction(), self.sway(s));
-            let middles = self.run_midpoints(q);
+            let ends = self.run_ends(q);
             // With the beam's mode the runs riding on it (`riding_share`) go down by their share of w: the vertical ones
-            // whole, the tilting ones by w / 2 on average (their middle, where the crate takes them at the share's
-            // weighted point, 2/3 of the way to the carriage, for the angular momentum).
+            // whole, the tilting ones by w / 2 on average. A tilting run's point at the share xi of the way from its
+            // fixed end f to the end c on the carriage goes down by xi w: its first moment is w / 2 at the middle, its
+            // angular momentum from w' the weighted point's, f + 2/3 (c - f), as the crate has it.
             let (up, (dev, rate)) =
                 (self.beam.as_ref().map_or([0.0; 3], |b| self.dirs[b.vertical]), self.deflection(s));
-            for (span, middle) in self.spans.iter().zip(middles) {
+            let rides = |w: Waypoint| {
+                let Some(b) = &self.beam else { return false };
+                let body = match w {
+                    Waypoint::Body(body) => Some(body),
+                    Waypoint::Idler(d) => self.idlers[d].body,
+                    Waypoint::Pulley(kk) => self.pulley_body[kk],
+                };
+                body.is_some_and(|body| self.bodies[body].axes[b.axis])
+            };
+            for (span, ends) in self.spans.iter().zip(ends) {
+                let middle = ends.map(|[(_, a), (_, b)]| std::array::from_fn::<f64, 3, _>(|k| 0.5 * (a[k] + b[k])));
                 let Some(rows) = &span.velocity else { continue };
                 let weight = self.run_mass * (span.length + dot(&span.c, q));
                 let moment = self.run_mass * (span.length + 0.5 * dot(&span.c, q));
@@ -3613,15 +3658,23 @@ impl Machine for ConfigMachine {
                     f.first_moment[k] += moment * dot(&rows[k], q) + weight * (e[k] * u - share * dev * up[k]);
                 }
                 f.mass += weight;
-                if let Some(m) = middle {
+                if let (Some(m), Some([(wa, a), (wb, b)])) = (middle, ends) {
                     let at = std::array::from_fn(|k| m[k] + e[k] * u - share * dev * up[k]);
-                    let turning = cross(at, y);
+                    let mut turning = cross(at, y);
+                    // A tilting run: its w' at the weighted point, a sixth of the run from the middle towards the carriage.
+                    if share == 0.5 && rides(wa) != rides(wb) {
+                        let (fixed, carried) = if rides(wb) { (a, b) } else { (b, a) };
+                        let off: [f64; 3] = std::array::from_fn(|k| (carried[k] - fixed[k]) / 6.0);
+                        let more = cross(off, up.map(|c| -share * rate * c));
+                        (0..3).for_each(|k| turning[k] += more[k]);
+                    }
                     (0..3).for_each(|k| f.angular[k] += weight * turning[k]);
                 }
             }
         }
-        // The process force acts on the tool along the axes' directions, at the tool's place over ground.
-        for (i, force) in self.process_force().iter().enumerate().take(n) {
+        // The process force acts on the tool along the axes' directions, at the tool's place over ground. An obstacle's
+        // push is not in it: a compliant base takes it through the tool's shift (`base::Based`).
+        for (i, force) in self.dwelling_force().iter().enumerate().take(n) {
             (0..3).for_each(|k| f.external[k] += *force * self.dirs[i][k]);
         }
         for i in (0..n).filter(|&i| self.axes[i].unit != "rad") {
@@ -4391,10 +4444,11 @@ impl Machine for ConfigMachine {
             ));
         }
         // A wheel of a belt that lies flat is drawn upright at its place in the belt's plane and laid flat
-        // (`Part::lay_flat`): it faces up, the motor below it.
-        let flat = self.belt_plane().1 == 2;
-        let upright = |at: [f64; 3]| if flat { ([at[0], at[1]], -at[2]) } else { ([at[0], at[2]], at[1]) };
-        let lay = |parts: &mut [Part]| {
+        // (`Part::lay_flat`): it faces up, the motor below it. A wheel of a belt in the y-z plane is drawn facing the front
+        // as one in x-z (the view has no part turned about z).
+        let flat = |w: Waypoint| self.wheel_plane(w)[2] == 2;
+        let upright = |at: [f64; 3], flat: bool| if flat { ([at[0], at[1]], -at[2]) } else { ([at[0], at[2]], at[1]) };
+        let lay = |parts: &mut [Part], flat: bool| {
             if flat {
                 parts.iter_mut().for_each(Part::lay_flat)
             }
@@ -4403,11 +4457,11 @@ impl Machine for ConfigMachine {
             let at = match &self.direct[kk] {
                 Some(d) => self.direct_scene(kk, d, q, out),
                 None => {
-                    let at = self.pulley_scene_at(kk);
+                    let (at, flat) = (self.pulley_scene_at(kk, q), flat(Waypoint::Pulley(kk)));
                     let pulley = if self.elastic { s[n + kk] } else { rotor[kk] / self.ratio[kk] };
-                    let (from, (centre, depth)) = (out.parts.len(), upright(at));
+                    let (from, (centre, depth)) = (out.parts.len(), upright(at, flat));
                     drive_unit(&mut out.parts, centre, depth, self.r[kk], -pulley, -rotor[kk], [0.9, 0.45, 0.1]);
-                    lay(&mut out.parts[from..]);
+                    lay(&mut out.parts[from..], flat);
                     at
                 }
             };
@@ -4419,10 +4473,11 @@ impl Machine for ConfigMachine {
                 decimals: 0,
             });
         }
-        for d in &self.idlers {
-            let (from, (centre, depth)) = (out.parts.len(), upright(self.idler_scene_at(d, q)));
+        for (i, d) in self.idlers.iter().enumerate() {
+            let flat = flat(Waypoint::Idler(i));
+            let (from, (centre, depth)) = (out.parts.len(), upright(self.idler_scene_at(d, q), flat));
             idler(&mut out.parts, centre, depth, d.radius, -dot(&d.speed, q) / d.radius);
-            lay(&mut out.parts[from..]);
+            lay(&mut out.parts[from..], flat);
         }
         // A machine without idler nodes and one belt motor gets the idler at the far end the one-axis machine has.
         if m == 1 && self.idlers.is_empty() && self.direct[0].is_none() {

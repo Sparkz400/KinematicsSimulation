@@ -880,13 +880,15 @@ pos = [150, 300]
 
 # The motor pulleys span_min_m beyond the ends of X, at the height of the carriage (whose idlers sit r + r_idler above
 # and below it): the belt leaves both level, half a turn, as in the crate (effects.belt_wrap). The belt runs round them
-# anticlockwise, round the carriage idlers next to them clockwise, following the routes.
+# anticlockwise, round the carriage idlers next to them clockwise, following the routes. Pulleys and idlers lie in the
+# bodies' plane (y = -0.03 m of the 3D view, as the crate's planar frame), so the belt's runs carry no angular momentum
+# about x or z.
 [[machine.pulley]]
 id = "pulley_a"
 gearbox = "gearbox_a"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
-at_m = [-0.15, -0.05, 0.06]
+at_m = [-0.15, -0.03, 0.06]
 pos = [300, 0]
 
 [[machine.pulley]]
@@ -894,7 +896,7 @@ id = "pulley_b"
 gearbox = "gearbox_b"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
-at_m = [1.15, -0.05, 0.06]
+at_m = [1.15, -0.03, 0.06]
 pos = [300, 300]
 
 # Clamp to motor A: 2 span_min_m + x + z.
@@ -924,13 +926,14 @@ pulleys = { pulley_b = -1 }
 route = ["pulley_b", "upper_right", "z_axis"]
 pos = [450, 380]
 
-# The carriage's centre of mass sits geometry.z_com_drop_m (0.3 m) above the Z axis's at z = 0, as in the crate's frame
-# momentum: its place for the angular momentum and first moment (an offset on straight axes changes nothing else).
+# The carriage's centre of mass sits geometry.z_com_drop_m above the Z axis's at z = 0, as in the crate's frame
+# momentum (the crate reads the same key): its place for the angular momentum and first moment (an offset on straight
+# axes changes nothing else).
 [[machine.body]]
 id = "carriage"
 mass_kg = "mass.carriage_kg"
 axes = ["x"]
-offset_m = [0.0, 0.0, 0.3]
+offset_m = [0.0, 0.0, "geometry.z_com_drop_m"]
 pos = [750, 0]
 
 # The Z axis rides on the carriage and carries the payload.
@@ -977,7 +980,7 @@ radius_m = "idler.radius_m"
 inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "carriage"
-at_m = [-0.042, -0.02, 0.032]
+at_m = [-0.042, 0.0, 0.032]
 clockwise = true
 pos = [1050, -80]
 
@@ -991,7 +994,7 @@ radius_m = "idler.radius_m"
 inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "carriage"
-at_m = [0.042, -0.02, 0.032]
+at_m = [0.042, 0.0, 0.032]
 clockwise = true
 pos = [1050, 0]
 
@@ -1002,7 +1005,7 @@ radius_m = "idler.radius_m"
 inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "carriage"
-at_m = [-0.042, -0.02, -0.032]
+at_m = [-0.042, 0.0, -0.032]
 clockwise = true
 pos = [1050, 80]
 
@@ -1013,7 +1016,7 @@ radius_m = "idler.radius_m"
 inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "carriage"
-at_m = [0.042, -0.02, -0.032]
+at_m = [0.042, 0.0, -0.032]
 clockwise = true
 pos = [1050, 160]
 
@@ -1024,7 +1027,7 @@ radius_m = "idler.radius_m"
 inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "z_axis"
-at_m = [0.0, -0.02, -0.08]
+at_m = [0.0, 0.0, -0.08]
 pos = [1050, 300]
 
 # The frame sways along X (effects.frame_compliance).

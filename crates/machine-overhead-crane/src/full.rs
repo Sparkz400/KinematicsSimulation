@@ -255,10 +255,13 @@ impl Crane {
         mm[0] += self.bridge;
         add_body(&mut mm, &mut rhs, self.trolley, &js, cs, [0.0; 3]);
         mm[2 * n + 2] += self.masses[2];
-        add_body(&mut mm, &mut rhs, m1, &jp, [0.0; 3], [0.0, 0.0, -m1 * g]);
+        // An obstacle's push (`Crane::set_tool_force`) beside the weights: on the hook block (or the hook and load), on
+        // the payload.
+        let (on_hook, on_payload) = self.push_on();
+        add_body(&mut mm, &mut rhs, m1, &jp, [0.0; 3], [on_hook[0], on_hook[1], on_hook[2] - m1 * g]);
         if let Some(sl) = self.sling_state(s) {
             if m2 > 0.0 {
-                add_body(&mut mm, &mut rhs, m2, &j2, [0.0; 3], [0.0, 0.0, -m2 * g]);
+                add_body(&mut mm, &mut rhs, m2, &j2, [0.0; 3], [on_payload[0], on_payload[1], on_payload[2] - m2 * g]);
                 // The sling pulls P2 with -t u and P1 with t u: on d alone.
                 for k in 0..3 {
                     rhs[6 + k] -= sl.tension * sl.u[k];

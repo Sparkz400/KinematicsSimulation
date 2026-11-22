@@ -1771,6 +1771,11 @@ impl Controller {
         if !self.enabled {
             for (k, (drive, torque)) in self.drives.iter_mut().zip(torque).enumerate() {
                 drive.disabled_step(&self.motor_params[k], self.motor_vel[k]);
+                // A stepper's magnets hold their detent without current too. Held over the step as the iron's drag is,
+                // its work is booked as the shaft's and what the magnets gave (`Sim::step`'s disabled branch).
+                if let Motor::Stepper(s) = &self.motor_params[k].motor {
+                    drive.torque += s.detent_torque(self.motor_pos[k], drive.phases.origin);
+                }
                 *torque = drive.torque;
             }
             if self.params.shared_dc_link {
@@ -1909,6 +1914,8 @@ impl Controller {
                 (drive.phases.x, drive.phases.angle, drive.phases.speed) =
                     ([w[0], w[4], w[5], w[6]], angle[k], speed[k]);
                 drive.winding_stepped(&self.motor_params[k], w[0], [w[1], w[2], w[3]]);
+                // From the rotor's angle at the step's start (`update`), which an enable's `Drive::at_rest` may not have.
+                drive.detent_moved(&self.motor_params[k], self.motor_pos[k]);
             }
         }
         if self.params.shared_dc_link {

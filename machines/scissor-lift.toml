@@ -545,8 +545,10 @@ damping_ratio_z = 0.02
 inertia_x_kgm2 = 40.0
 inertia_y_kgm2 = 40.0
 inertia_z_kgm2 = 40.0
-# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi.
-mass_kg = 150.0
+# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi. [estimate]
+# The lift's frame and the floor it stands on with the lift: platform, payload and arms are 300 kg of it (150 kg,
+# lighter than they, was refused with effects.base_reaction).
+mass_kg = 600.0
 # Where it tilts about, in the tool pose's frame (x, y, z), m.
 pivot_m = [0.0, 0.0, 0.0]
 # 0: rigid in that direction (no state).

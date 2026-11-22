@@ -1042,6 +1042,21 @@ pub struct GearTorque {
 /// Below this power the efficiency fades out, so a gearbox at rest has no torque step.
 const EFFICIENCY_FADE_W: f64 = 0.5;
 
+/// What a sub-step h may be of the efficiency switch's time J / c on the inertia J it acts on (`fade_substeps`), kappa:
+/// c h' / J = kappa within the refined sub-step h'.
+const FADE_KAPPA: f64 = 0.5;
+
+/// How far off zero power (in widths of the switch, 0.5 W) a gear's power counts as near it at a step's start, where the
+/// step is refined for the switch (`Gearbox::fade_damping`): a step can carry a gear that far into it.
+const FADE_NEAR: f64 = 40.0;
+
+/// The sub-steps a sub-step `h` (s) is to be cut into, at least 1, for a switch's damper `damping` (`Gearbox::
+/// fade_damping`) on the inertia `j` its gear drives (kg m^2, or kg on a travel): c h' / J within `FADE_KAPPA`.
+pub fn fade_substeps(damping: f64, h: f64, j: f64) -> u32 {
+    let n = (damping * h / (FADE_KAPPA * j)).ceil();
+    if n.is_finite() && n > 1.0 { n.min(u32::MAX as f64) as u32 } else { 1 }
+}
+
 /// A rigid solve's loss factors (`Gearbox::loss_factor`) at their fixed point: each is taken of the torque going into its
 /// gearbox, which depends on the acceleration the factors give, so `next` gives the factors at the acceleration solved
 /// with `loss`, from `start` (all 1, loss-free) until they settle to rounding. The efficiency's fade over the power is
@@ -1313,6 +1328,18 @@ impl Gearbox {
     pub fn loss_factor(&self, output_torque: f64, output_speed: f64) -> f64 {
         let t = (output_torque * output_speed / EFFICIENCY_FADE_W).tanh();
         if t >= 0.0 { self.efficiency.powf(t) } else { (self.efficiency * self.back_ratio).min(1.0).powf(t) }
+    }
+
+    /// The damper the efficiency's switch puts on the output's speed while the gear passes `output_torque` near zero
+    /// power: the two flanks meet over tanh(T w / 0.5 W), so the factor changes with w by up to T^2 |ln eta| / 0.5 W
+    /// (N m s/rad, or N s/m on a travel). 0 while the power `output_torque` times `output_speed` stands more than
+    /// `FADE_NEAR` times the 0.5 W off zero, where the factor stands still (`fade_substeps` refines the step by it).
+    pub fn fade_damping(&self, output_torque: f64, output_speed: f64) -> f64 {
+        if (output_torque * output_speed).abs() > FADE_NEAR * EFFICIENCY_FADE_W {
+            return 0.0;
+        }
+        let back = (self.efficiency * self.back_ratio).min(1.0);
+        output_torque * output_torque * self.efficiency.ln().abs().max(back.ln().abs()) / EFFICIENCY_FADE_W
     }
 
     /// The contact twist x: the twist beyond the dead zone with its sign, 0 inside it.
