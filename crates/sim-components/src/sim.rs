@@ -98,12 +98,13 @@ fn push_torques(pushes: &[Push], from: &[f64], angle: &[f64], speed: &[f64], out
     total
 }
 
-/// The pushes' force on the tool at `state`, per axis (the generalised force: each push's force times its clearance's
-/// slope along the axis), the tool pose they were worked out at, and the sum of the forces, N.
+/// The pushes' force on the contact coordinates (`Machine::contact_state`, the tool's by default) at `state`, one per
+/// coordinate (the generalised force: each push's force times its clearance's slope along it), the coordinates they
+/// were worked out at, and the sum of the forces, N.
 fn tool_push_forces(machine: &dyn Machine, pushes: &[Push], from: &[f64], state: &[f64]) -> (Vec<f64>, Vec<f64>, f64) {
-    let n = machine.axes().len();
+    let n = machine.contact_axes();
     let (mut pos, mut vel, mut force, mut total) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], 0.0);
-    machine.tool_state(state, &mut pos, &mut vel);
+    machine.contact_state(state, &mut pos, &mut vel);
     for push in pushes {
         let f = push.force(from, &pos, &vel);
         total += f;
@@ -114,7 +115,7 @@ fn tool_push_forces(machine: &dyn Machine, pushes: &[Push], from: &[f64], state:
 
 /// At one stage of the integration: the pushes' force on the tool at the mechanical state `mech`, given to the machine
 /// (`Machine::set_tool_force`), as the motors' pushes are worked out at every stage; returns the power they take out of
-/// the machine, -F . v, W. `pos`, `vel` and `force` are buffers as long as the axes.
+/// the machine, -F . v, W. `pos`, `vel` and `force` are buffers as long as the contact coordinates.
 fn tool_push_stage(
     machine: &mut dyn Machine,
     pushes: &[Push],
@@ -122,7 +123,7 @@ fn tool_push_stage(
     mech: &[f64],
     [pos, vel, force]: [&mut Vec<f64>; 3],
 ) -> f64 {
-    machine.tool_state(mech, pos, vel);
+    machine.contact_state(mech, pos, vel);
     force.fill(0.0);
     for push in pushes {
         let f = push.force(from, pos, vel);
@@ -753,9 +754,9 @@ impl Sim {
     /// transmission's give. Either way the work the pushes take is the budget's crash row.
     fn pushes(&mut self) {
         self.pushes.clear();
-        let axes = self.machine.axes().len();
+        let (axes, contact) = (self.machine.axes().len(), self.machine.contact_axes());
         // The probe also clears the force of the last step.
-        let tool_route = self.crash && self.machine.set_tool_force(&vec![0.0; axes]);
+        let tool_route = self.crash && self.machine.set_tool_force(&vec![0.0; contact]);
         self.tool_push = false;
         let near: Vec<usize> =
             (0..self.obstacles.len()).filter(|&k| self.gaps.get(k).is_some_and(|g| *g < PUSH_RANGE)).collect();
@@ -764,10 +765,10 @@ impl Sim {
         }
         let machine = self.machine.as_ref();
         let motors = machine.motors().len();
-        let dim = if tool_route { axes } else { motors };
+        let dim = if tool_route { contact } else { motors };
         let (mut angle, mut speed) = (vec![0.0; dim.max(motors)], vec![0.0; dim.max(motors)]);
         if tool_route {
-            machine.tool_state(&self.state, &mut angle[..axes], &mut speed[..axes]);
+            machine.contact_state(&self.state, &mut angle[..contact], &mut speed[..contact]);
         } else {
             machine.motor_state(&self.state, &mut angle, &mut speed);
         }
@@ -775,11 +776,11 @@ impl Sim {
         let (mut tool, mut state, mut torque) = (vec![0.0; axes], Vec::new(), vec![0.0; motors]);
         let mut gaps_at = |at: &[f64]| -> Vec<f64> {
             if tool_route {
-                tool.copy_from_slice(at);
+                machine.contact_placed(&self.state, at, &mut state);
             } else {
                 machine.forward(at, &mut tool);
+                machine.equilibrium(&tool, &mut state, &mut torque);
             }
-            machine.equilibrium(&tool, &mut state, &mut torque);
             let bodies = crate::collision::Bodies::of(machine, &state);
             near.iter().map(|&k| bodies.gap(&self.obstacles[k].aabb).map_or(f64::INFINITY, |g| g.2)).collect()
         };
@@ -811,7 +812,7 @@ impl Sim {
         self.push_from = angle;
         self.tool_push = tool_route && !self.pushes.is_empty();
         if self.tool_push {
-            self.tool_buffers = std::array::from_fn(|_| vec![0.0; axes]);
+            self.tool_buffers = std::array::from_fn(|_| vec![0.0; contact]);
         }
     }
 

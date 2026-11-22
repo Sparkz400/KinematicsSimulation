@@ -343,17 +343,34 @@ pub trait Machine: Send {
     fn set_link_change(&mut self, _link: usize, _factor: f64, _moment: [f64; 3]) {}
     /// Told every step whether the cycle dwells at a target, for machines with a process force there.
     fn set_dwelling(&mut self, _dwelling: bool) {}
-    /// An external force on the tool, one component per axis in the tool's coordinates (N, or N m on a rotary axis;
-    /// the generalised force of each axis), held until changed: an obstacle's push on the tool or its carriage
-    /// (effects.crash). Returns whether the machine takes it; by default `false` (not supported), and the push then acts
-    /// on the motors through the rigid kinematics. The force's power is not in the machine's loss rows: the simulation
-    /// integrates it as the obstacles' work (the budget's crash row). Machines that take it put its generalised forces
-    /// into their equations beyond their transmissions, at every stage of the integration (`tool_force_on_rates`): the
-    /// machine files' `ConfigMachine`, the joint machines (`chain::JointMachine`) and most machine crates. The default
-    /// stays where the tool's coordinates are not where the parts that can touch move with (a load swinging under
-    /// them) or the machine's equations are another's that does not take it.
+    /// An external force on the contact coordinates (`contact_state`, by default the tool's: one component per axis, N,
+    /// or N m on a rotary axis; the generalised force of each), held until changed: an obstacle's push on the parts
+    /// that can touch it (effects.crash). Returns whether the machine takes it; by default `false` (not supported), and
+    /// the push then acts on the motors through the rigid kinematics. The force's power is not in the machine's loss
+    /// rows: the simulation integrates it as the obstacles' work (the budget's crash row), F . the contact coordinates'
+    /// rates. Machines that take it put its generalised forces into their equations beyond their transmissions, at every
+    /// stage of the integration (`tool_force_on_rates`): the machine files' `ConfigMachine`, the joint machines
+    /// (`chain::JointMachine`) and most machine crates. The default stays where the machine's equations are another's
+    /// that does not take it.
     fn set_tool_force(&mut self, _force: &[f64]) -> bool {
         false
+    }
+    /// How many contact coordinates an obstacle's push acts on (`set_tool_force`): by default the tool's axes. A machine
+    /// whose parts that can touch do not move with its tool alone (a load swinging under it, a dancer the web holds)
+    /// gives coordinates of their own.
+    fn contact_axes(&self) -> usize {
+        self.axes().len()
+    }
+    /// The contact coordinates and their rates at state `s`: by default the tool's (`tool_state`). The rates are linear
+    /// in the state's rates.
+    fn contact_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+        self.tool_state(s, pos, vel)
+    }
+    /// A state from `s` with the contact coordinates at `at`, the parts placed there for the slopes of an obstacle's
+    /// clearance along them: by default the rest at the tool pose `at` (`equilibrium`).
+    fn contact_placed(&self, _s: &[f64], at: &[f64], out: &mut Vec<f64>) {
+        let mut torque = vec![0.0; self.motors().len()];
+        self.equilibrium(at, out, &mut torque);
     }
     /// Told every step whether the drives are disabled, for machines with holding brakes.
     fn set_brake_engaged(&mut self, _engaged: bool) {}
@@ -571,10 +588,10 @@ pub trait Machine: Send {
     }
 }
 
-/// The generalised force of a force on the tool (`Machine::set_tool_force`, one component per axis) on each of the
-/// state's rates `rates`: its virtual power per unit of each rate, F . d v_tool / d s_j, with the tool's speed v_tool
-/// as `tool_state` gives it, which is linear in the rates (a unit step on each is exact). Its power on the rates is then
-/// F . v_tool, what the simulation books as the obstacles' work. `None` where the force is zero.
+/// The generalised force of a force on the contact coordinates (`Machine::set_tool_force`, by default the tool's) on each of the
+/// state's rates `rates`: its virtual power per unit of each rate, F . d v / d s_j, with their rates v as
+/// `contact_state` gives them, linear in the state's rates (a unit step on each is exact). Its power on the rates is
+/// then F . v, what the simulation books as the obstacles' work. `None` where the force is zero.
 pub fn tool_force_on_rates<M: Machine + ?Sized>(
     machine: &M,
     s: &[f64],
@@ -586,10 +603,10 @@ pub fn tool_force_on_rates<M: Machine + ?Sized>(
     }
     let n = force.len();
     let (mut pos, mut base, mut vel, mut at) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], s.to_vec());
-    machine.tool_state(s, &mut pos, &mut base);
+    machine.contact_state(s, &mut pos, &mut base);
     let mut on = |j: usize| -> f64 {
         at[j] = s[j] + 1.0;
-        machine.tool_state(&at, &mut pos, &mut vel);
+        machine.contact_state(&at, &mut pos, &mut vel);
         at[j] = s[j];
         force.iter().zip(vel.iter().zip(&base)).map(|(f, (v, b))| f * (v - b)).sum()
     };
