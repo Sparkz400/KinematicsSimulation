@@ -110,12 +110,18 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The hook block against the payload's sides (it lands on its top only, since 21 November); a hook block already lower than the payload's top (a pick with it under 0.28 m over the payload's point) stays inside it; one resting on the payload drops through once the payload is let go; the landing on the rigid rope is untested | crane | None in the shipped cycle: the sling holds the hook block over the payload, and its picks hang the hook block 1 m over it. |
 | A parallelogram loop's own stiffness beyond holding a body's turn (rod and crank rigid), and loops other than the parallelogram's (the rule: a bar pinned before a bent link turning with a body beyond holds that body's turn; one turning with the bent link while pinned beyond turns with its chord) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured: the test case, and 1.22 % for the palletiser's held upper arm). |
 | The screw's stiffness along the stroke keeps the far end's for the wafer handler's and the parallel SCARA's pose tolerance (their own `rest_sag`, `machine-wafer-handler` and `machine-parallel-scara`: the column's m g / K with the far end's K, the stroke's `static_twist`), on the safe side; `chain.rs`'s takes the nut, and since 21 November the fit's twist (`Machine::twist_at`) and the mesh bristle (σ_m r, its store still not booked: at most (μ |held|)² / (2σ_m) per gear) follow the nut too | wafer handler, parallel SCARA | The tolerance up to the far end's sag over the pose's. |
-| The belt's angular momentum about y of the T-gantry file against its crate: the file takes each run where it is drawn (carriage idlers 0.032 m above and below the carriage and 0.042 m to its sides, bottom idler 0.08 m under the Z axis's point, the clamp at that point), the crate its belt path (horizontal runs at the carriage's height, the clamp s + z above it, vertical runs at its x, the tilting runs meeting the carriage at its x). The file's bodies are drawn at their axes' points (an `offset_m` moves only their momentum), so its clamp cannot stand where the crate's is; the crate has no idler spacing | T-gantry | Over 1 s of the default cycle up to 1.29e-3 N m s about y at up to 0.25 m/s, against 0.42 kg of belt (measured; held under 0.42 kg x 0.05 m times the speed, a bound). About x and z none since 22 November (the file's wheels in the bodies' plane). On the beam mode alone the difference is the idlers' spacing d, (2/3) mu d (sx - 2 x) w' (2.8e-3 N m s per m/s at an end), to rounding (`the_t_gantry_files_tilting_runs_turn_with_the_beam_as_the_crates`). |
 | Every machine takes an obstacle's push on its contact coordinates (the tool's, the crane's load, the winder's dancer) since 22 November, not at the touching part's own point (a payload under a leaning Z axis is held through the tool point). One-way base compliance (without `effects.base_reaction`) keeps its base outside the budget: the push's work on the base is in no row (the contact's damping does not see the base's speed there) | obstacle contact | One-way: the push deflects the base by F / k_base all the same, the budget closes to 7e-7 (measured). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
 | The stepper's detent after a trip took its pulses off (`Sim::advance_with_windings` gives such a drive the iron's drag only) | stepper | The detent's torque, T_d, is missing while it coasts; the books stay closed (its potential is never stored since 22 November). |
 | `mode_shape` of the five-bar | five-bar | Display only. |
 
 Fixed since (22 November), each was a row of the table above:
+- The T-gantry belt's angular momentum about y, crate against file (1.29e-3 N m s over the default cycle, held by
+  a bound): the crate now takes each run between the wheels' tangent points as the file draws them (carriage idlers
+  0.032 m above and below and 0.042 m to the sides, the bottom idler 0.08 m under Z's point, the clamp at that point;
+  `TGantry::runs`), and neither counts the belt lumped on each motor pulley as spin (energy at pulley speed, no
+  momentum of its own). Crate and file now agree to 1.1e-16 N m s over the run, the test at 1e-12
+  (`the_t_gantry_file_has_its_crates_angular_momentum`, `the_belt_angular_momentum_is_the_sum_over_its_runs`).
+  The dynamics are unchanged (momentum only).
 - Run files recorded before the signal `setpoint_age` (`sim-components/src/charts.rs`): the age is worked out from
   the run's own timing (`charts::setpoint_age_of`: the profile cycle from the setpoints' changes, the ticks at its
   multiples of the simulation's time), within 1e-13 s of the recorded column on the T-gantry sampled every 1 and every
@@ -610,9 +616,9 @@ Fixed:
   (`the_t_gantry_files_tilting_runs_turn_with_the_beam_as_the_crates`, fails without: 2.3e-2 off). The belt's angular
   momentum about x and z: the file drew its pulleys and idlers 0.02 m in front of the bodies (clamp at y = 0, wheels at
   -0.02: the belt bent out of its plane), now in the bodies' plane: 1.1e-3 -> 7e-19 N m s about x over the cycle,
-  tested to 1e-12. About y 1.29e-3 stays (section 4's row): the drawing's heights against the crate's path; a patch to
-  the crate would add the idlers' spacing (the tilting runs' carriage end at xc -+ d) and their heights (the horizontal
-  runs at h -+ (r + r_idler)), a patch to the file would need bodies drawn at their offsets. Neither is done.
+  tested to 1e-12. About y 1.29e-3 stayed (the drawing's heights against the crate's path); since 22 November the
+  crate takes the idlers' spacing (the tilting runs' carriage end at xc -+ d) and their heights (the horizontal
+  runs at h -+ (r + r_idler)): 1.1e-16 N m s (section 4's fixed list).
 
 - The angular momentum of the T-gantry crate against its file (section 4: not compared, different origins and belt-run
   geometry). Compared now over 1 s of the default cycle, every 50 steps, both about the place of the Z axis's centre of

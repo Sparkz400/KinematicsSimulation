@@ -122,6 +122,9 @@ pub struct TGantry {
     j_rotor: f64,
     /// Pulley inertia including its share of the belt mass.
     j_pulley: f64,
+    /// The belt lumped on each motor pulley, J = mu L / 2 r^2 (in `j_pulley`): its energy at the pulley's speed, not a spin
+    /// about the pulley (the runs carry the belt's angular momentum, `belt_angular`).
+    j_lump: f64,
     g: f64,
     belt: Belt,
     /// Unstretched belt per section at x = z = 0 with the pulleys at angle 0.
@@ -144,6 +147,8 @@ pub struct TGantry {
     span_mass: Option<f64>,
     /// With effects.belt_wrap: the carriage idlers' radius, for the belt's wrap at the motor pulleys (`belt_wraps`).
     wrap_idler: Option<f64>,
+    /// The idlers' radius (`idler.radius_m`), where the belt's runs lie (`belt_angular`).
+    idler_radius: f64,
     frame: Option<Frame>,
     flex: Option<ToolFlex>,
     /// With effects.beam_sag: the X beam sagging under the carriage.
@@ -444,6 +449,7 @@ impl TGantry {
             m_payload: if cfg.bool("effects.payload")? { cfg.non_negative("mass.payload_kg")? } else { 0.0 },
             j_rotor,
             j_pulley: cfg.positive("pulley.inertia_kgm2")?,
+            j_lump: 0.0,
             g: if cfg.bool("effects.gravity")? { G } else { 0.0 },
             mat0: [0.0; 3],
             friction_x: Lugre::from_config(cfg, "friction_x")?,
@@ -482,6 +488,7 @@ impl TGantry {
                 None
             },
             wrap_idler: if cfg.bool("effects.belt_wrap")? { Some(idler_radius) } else { None },
+            idler_radius,
             frame,
             flex,
             beam,
@@ -505,7 +512,8 @@ impl TGantry {
         }
         // Belt mass: the belt's horizontal runs move at pulley surface speed, so half of the free belt is lumped on each
         // pulley; what the vertical runs have more is `belt_mass`.
-        m.j_pulley += 0.5 * m.belt.mass_per_m * (geo.iter().sum::<f64>() - 4.0 * m.belt.tooth_length) * r * r;
+        m.j_lump = 0.5 * m.belt.mass_per_m * (geo.iter().sum::<f64>() - 4.0 * m.belt.tooth_length) * r * r;
+        m.j_pulley += m.j_lump;
         Ok(m)
     }
 
@@ -1019,20 +1027,78 @@ impl TGantry {
         -2.0 * self.idler_spin * vx
     }
 
-    /// The belt's runs' angular momentum about y beyond the lumps on the pulleys (their spin is in `frame_momentum`'s
-    /// `spin`), for the carriage at `xc` over ground along the beam, the carriage idlers at height `h`, the Z axis at z,
-    /// with the carriage's speed along the beam vx, the Z axis's vz and the frame's sway speed vq. Per run the
-    /// table of `belt_mass` (horizontal ones at h, the vertical ones at the carriage's x; the sway adds (vq, 0) to every
-    /// speed) gives m (Z Vx - X Vz): the horizontal upper and lower runs cancel in pairs but for the sway; the vertical ones
-    /// are the upper pair, 2 (s + z) long, middle height h + (s + z) / 2, speed (vx, vz), and the lower pair, 2 l long
-    /// with l = s + sz - z, middle height h - l / 2, speeds (vx, 2 vx + vz) and (vx, -(2 vx - vz)). With mu and the
-    /// belt_cross = mu (4 s + 2 sz) of `belt_sway`: L = vx (h cross + mu (2 z - sz)(2 s + sz))
-    /// + vq (h mu L_belt + mu (2 z - sz)(2 s + sz)) - cross xc vz, using (s + z)^2 - l^2 = (2 z - sz)(2 s + sz).
-    fn belt_angular(&self, xc: f64, h: f64, z: f64, v: [f64; 3]) -> f64 {
-        let (mu, s, sz) = (self.belt.mass_per_m, self.span_min, self.axes[1].max);
-        let (cross, whole) = self.belt_sway();
-        let height = mu * (2.0 * z - sz) * (2.0 * s + sz);
-        v[0] * (h * cross + height) + v[2] * (h * whole + height) - cross * xc * v[1]
+    /// The belt's runs' angular momentum about y, all of the belt's (the lumps on the pulleys, `j_lump`, are not in their
+    /// `spin` in `frame_momentum`), for the carriage at `xc` over ground along the beam (the frame swayed by `sway`), the Z axis's point at
+    /// (xc, z) where the belt's ends
+    /// are clamped, with the carriage's speed along the beam vx, the Z axis's vz and the frame's sway speed vq. Each run's
+    /// mass, mu times its length of `belt_mass` (the clamp to an upper idler s + z, an upper idler to its motor pulley
+    /// s + x and s + sx - x, a motor pulley to a lower idler alike, a lower idler to the bottom idler s + sz - z), at the
+    /// middle of its straight piece between the wheels (`runs`), moves at its speed of `belt_mass` with the sway's vq
+    /// along the beam: m (Z Vx - X Vz) each. The wheels stand as `belt_wraps` has them (and the 3D view and the machine
+    /// file draw them): the motor pulleys at the posts, level with the carriage's idlers' middle, the four carriage idlers
+    /// 0.03 m + r_i beside the carriage and r + r_i above and below that level, so the runs from them to the pulleys leave
+    /// level at +-r; the bottom idler 0.08 m under the Z axis's point. That level is the Z axis's at z = 0, the place the
+    /// frame's momentum takes moments about (the machine file's carriage, its centre of mass `z_com_drop` above it).
+    fn belt_angular(&self, xc: f64, sway: f64, z: f64, v: [f64; 3]) -> f64 {
+        let (mu, s, sx, sz) = (self.belt.mass_per_m, self.span_min, self.axes[0].max, self.axes[1].max);
+        let ([vx, vz, vq], x) = (v, xc - sway);
+        let (lengths, velocity): ([f64; 8], [[f64; 2]; 8]) = (
+            [s + z, s + x, s + x, s + sz - z, s + sz - z, s + sx - x, s + sx - x, s + z],
+            [
+                [vx, vz],
+                [vx + vz, 0.0],
+                [-(vx + vz), 0.0],
+                [vx, 2.0 * vx + vz],
+                [vx, -(2.0 * vx - vz)],
+                [-(vx - vz), 0.0],
+                [vx - vz, 0.0],
+                [vx, vz],
+            ],
+        );
+        self.runs(xc, sway, z)
+            .iter()
+            .zip(lengths.iter().zip(velocity))
+            .map(|([a, b], (length, [ux, uz]))| {
+                let middle = [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])];
+                mu * length * (middle[1] * (ux + vq) - middle[0] * uz)
+            })
+            .sum()
+    }
+
+    /// The belt's eight straight runs, each from where it leaves one wheel to where it meets the next, (x, height) over
+    /// ground along the beam, for the carriage at `xc` with the frame swayed by `sway` and the Z axis's point at height
+    /// `z` (`belt_angular`), in the order of the belt's path: the clamp to the upper left idler to motor pulley A to the
+    /// lower left idler to the bottom idler to the lower right idler to motor pulley B to the upper right idler to the
+    /// clamp. A run touches a wheel where the wheel's centre lies to its left (the belt round it anticlockwise, the
+    /// pulleys and the bottom idler) or right (clockwise, the carriage idlers): with the run's direction t and l it turned
+    /// left by 90 degrees, at c - rho l, rho the radius signed by that sense.
+    fn runs(&self, xc: f64, sway: f64, z: f64) -> [[[f64; 2]; 2]; 8] {
+        let (r, ri, s, sx) = (self.r, self.idler_radius, self.span_min, self.axes[0].max);
+        let (side, up) = (0.03 + ri, r + ri);
+        let wheel = |x: f64, h: f64, rho: f64| ([x, h], rho);
+        let clamp = wheel(xc, z, 0.0);
+        let path = [
+            clamp,
+            wheel(xc - side, up, -ri),
+            wheel(sway - s, 0.0, r),
+            wheel(xc - side, -up, -ri),
+            wheel(xc, z - 0.08, ri),
+            wheel(xc + side, -up, -ri),
+            wheel(sway + s + sx, 0.0, r),
+            wheel(xc + side, up, -ri),
+            clamp,
+        ];
+        std::array::from_fn(|k| {
+            let ((ca, ra), (cb, rb)) = (path[k], path[k + 1]);
+            let d = [cb[0] - ca[0], cb[1] - ca[1]];
+            let length = d[0].hypot(d[1]);
+            let e = [d[0] / length, d[1] / length];
+            let sin = (-(rb - ra) / length).clamp(-1.0, 1.0);
+            let cos = (1.0 - sin * sin).sqrt();
+            let t = [cos * e[0] - sin * e[1], cos * e[1] + sin * e[0]];
+            let left = [-t[1], t[0]];
+            [[ca[0] - ra * left[0], ca[1] - ra * left[1]], [cb[0] - rb * left[0], cb[1] - rb * left[1]]]
+        })
     }
 
     /// Chain drag opposing vx; it fades out at rest like the guide friction's Stribeck speed.
@@ -1648,11 +1714,12 @@ impl Machine for TGantry {
         };
         let (r, ratio) = (self.r, self.gearbox.ratio);
         let (x, z, vx, vz, q, vq, u, vu, spin) = if self.elastic {
-            let spin = self.j_pulley * (s[V + A] + s[V + A + 1]) + self.j_rotor * (s[V + PA] + s[V + PA + 1]);
+            let spin =
+                (self.j_pulley - self.j_lump) * (s[V + A] + s[V + A + 1]) + self.j_rotor * (s[V + PA] + s[V + PA + 1]);
             (s[X], s[Z], s[V + X], s[V + Z], s[Q], s[V + Q], s[U], s[V + U], spin)
         } else {
             let pulleys = 2.0 * s[2] / r;
-            (s[0], s[1], s[2], s[3], 0.0, 0.0, 0.0, 0.0, (self.j_pulley + ratio * self.j_rotor) * pulleys)
+            (s[0], s[1], s[2], s[3], 0.0, 0.0, 0.0, 0.0, (self.j_pulley - self.j_lump + ratio * self.j_rotor) * pulleys)
         };
         // With effects.beam_vertical_mode the carriage hangs w lower and the Z axis with it (z is relative to the
         // carriage).
@@ -1714,7 +1781,7 @@ impl Machine for TGantry {
                     + lz[1]
                     + spin
                     + self.idler_angular(vx)
-                    + self.belt_angular(x + q, self.z_com_drop, z, [vx, vz, vq])
+                    + self.belt_angular(x + q, q, z, [vx, vz, vq])
                     + beam_angular
                     + belt_beam_angular,
                 0.0,

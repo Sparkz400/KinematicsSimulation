@@ -952,16 +952,13 @@ fn the_t_gantry_files_tilting_runs_turn_with_the_beam_as_the_crates() {
 /// carriage's `offset_m`, naming geometry.z_com_drop_m (checked with it moved to 0.45 m too; before it the file had the carriage at 0: its angular momentum about y was 0.3 m * 4 kg * vx
 /// less, its first moment 1.2 kg m less). With the belt's mass off the two agree to rounding, the linear momentum and the
 /// first moment with it on too (the runs' first moment, mu sum (L0 + c q / 2) V q, has no place in it). The belt's
-/// angular momentum the two count differently: the crate by its path (the horizontal runs at the carriage's height
-/// cancelling, the vertical ones at its x, from the carriage up s + z to the clamp and down s + sz - z round the bottom
-/// idler, the lumps on the pulleys spinning), the file each run's mass at the middle of its straight piece as the 3D view
-/// draws it from its wheels' places (the carriage idlers 0.032 m above and below the carriage, the bottom idler 0.08 m
-/// under the Z axis's point, the clamp at it). About x and z the two agree to rounding since the file's wheels lie in
-/// the bodies' plane (they were drawn 0.02 m in front of it: 1.1e-3 N m s about x at 0.25 m/s). About y the heights
-/// differ (the crate's clamp s + z over the carriage's idlers, both horizontal runs at their height; the file's clamp at
-/// the Z axis's drawn point, its idlers 0.032 m above and below the carriage, which the drawing of the bodies, at their
-/// axes' points, cannot move): measured 1.29e-3 N m s over the run, held under a twentieth of a metre times the belt's
-/// 0.42 kg times its speed (`belt_y` below), a bound, not a hand value.
+/// angular momentum too, since 23 November: both take each run's mass at the middle of its straight piece between the
+/// wheels where the 3D view draws them (the carriage idlers 0.042 m beside and 0.032 m above and below the carriage's
+/// point, the bottom idler 0.08 m under the Z axis's point, the clamp at it, the motor pulleys at the posts; the crate's
+/// `runs`), and neither has the belt lumped on the pulleys spinning. Before, the crate took its runs on another path (the
+/// horizontal ones at the carriage's centre of mass, the
+/// vertical ones at its x up to a clamp s + z above it) and its lumps spinning, and the two stood 1.29e-3 N m s apart about
+/// y over the run; now 1.1e-16.
 #[test]
 fn the_t_gantry_file_has_its_crates_angular_momentum() {
     // The carriage's offset names geometry.z_com_drop_m, which the crate reads too: moved, the two still agree.
@@ -989,13 +986,7 @@ fn the_t_gantry_file_has_its_crates_angular_momentum() {
             }
         }
         eprintln!("belt mass {belt_mass}: angular momentum apart by {worst:?} N m s, speed up to {speed} m/s");
-        if !belt_mass {
-            assert!(worst.iter().all(|w| *w < 1e-9), "{worst:?}");
-        } else {
-            let belt_y = 0.42 * 0.05 * speed;
-            assert!(worst[1] > 1e-6 && worst[1] < belt_y, "{worst:?} against {belt_y}");
-            assert!(worst[0].max(worst[2]) < 1e-12, "{worst:?}");
-        }
+        assert!(worst.iter().all(|w| *w < 1e-12), "{worst:?}");
     }
 }
 
