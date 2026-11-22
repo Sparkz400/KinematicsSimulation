@@ -57,7 +57,6 @@ const PUSH_RANGE: f64 = 0.01;
 /// gantry's move into a slab (2.8e-4 on a six-leg platform; falling with the third and second power of the sub-step),
 /// 5e-6 and 1.9e-5 four times finer (`sim-machines`' collision tests).
 const PUSH_SUBSTEPS: u32 = 4;
-
 /// The step in a motor's angle (or a linear motor's position) by which the slope of a clearance is worked out, by
 /// central differences.
 const SLOPE_STEP: f64 = 1e-6;
@@ -381,8 +380,9 @@ impl Sim {
     pub fn new(entry: &MachineEntry, cfg: &Config) -> Result<Self, ConfigError> {
         // Parts the config names bring their catalogue values; the caller's config keeps the names.
         let cfg = &crate::catalog::resolve(entry, cfg)?;
-        let machine = (entry.build)(cfg)?;
+        let mut machine = (entry.build)(cfg)?;
         let (dt, substeps) = timing(cfg)?;
+        machine.set_substep(dt / substeps as f64);
         let start = start_pose(cfg, machine.as_ref())?;
         let mut state = Vec::new();
         let mut torque = vec![0.0; machine.motors().len()];
@@ -436,6 +436,7 @@ impl Sim {
         let cfg = &crate::catalog::resolve(entry, cfg)?;
         let mut machine = (entry.build)(cfg)?;
         let (dt, substeps) = timing(cfg)?;
+        machine.set_substep(dt / substeps as f64);
         if dt != self.dt {
             // The step counter is the clock; a new base step would make time jump.
             return Err(ConfigError::Invalid("sim.dt_s".into()));

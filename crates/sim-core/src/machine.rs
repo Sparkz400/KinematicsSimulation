@@ -374,6 +374,9 @@ pub trait Machine: Send {
     }
     /// Told every step whether the drives are disabled, for machines with holding brakes.
     fn set_brake_engaged(&mut self, _engaged: bool) {}
+    /// Told the integrator's sub-step `h` (s) when the simulation is set up: for what a machine resolves within it (a
+    /// gearbox's efficiency switch, `mech::Gearbox::fade_step`). Nothing by default.
+    fn set_substep(&mut self, _h: f64) {}
     /// Actuators that a valve moves and no drive (pneumatic cylinders): each one's id and the valve command it starts
     /// with (+1 extend, -1 retract, 0 the closed centre of a 5/3 valve), for a cycle segment's `valves` and `wait`. None
     /// by default.

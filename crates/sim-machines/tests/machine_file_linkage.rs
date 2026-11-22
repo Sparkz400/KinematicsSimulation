@@ -691,19 +691,18 @@ fn on_its_compliant_base_the_planar_delta_file_holds_the_push_once() {
 
 /// The scissor lift's file on its compliant base, two-way (its frame momentum: platform, arms, screw and rotor, the
 /// first moment and gravity): the platform raised into a ceiling 0.02 m over it, the base stands F / k_z back along z
-/// (k_z = 1.5e7 N/m), within 5 %; and the budget of the move closes (`PUSH_BUDGET_TOLERANCE`, 3e-5) at 16 substeps, 64
-/// under the push: 5.3e-8 of the supply. At the shipped 4 (16 under the push) it is 1.9e-4: on the swaying base the
-/// platform's speed crosses zero at the 27 kN hold again and again, and with it the gearbox's switch between driving
-/// and driven back, which the integration does not resolve (as without the base at 4 substeps, `the_linkage_delta_and_
-/// scissor_files_are_pushed_at_their_tool`).
+/// (k_z = 1.5e7 N/m), within 5 %; and the budget of the move closes as shipped, to 1e-6 of the supply. On the swaying
+/// base the platform's speed crosses zero at the 27 kN hold again and again, and with it the gearbox's switch between
+/// driving and driven back, which within 0.5 W the integration did not resolve (1.9e-4 off); widened to what the
+/// sub-step resolves at that torque (`Gearbox::fade_step`), it is 5.3e-8.
 #[test]
 fn on_its_compliant_base_the_scissor_file_holds_the_push_once() {
     on_its_compliant_base_the_push_is_held_once(scissor_file(), 1.0, 1.5e7);
-    let changes = ["effects.base_compliance = true", "effects.base_reaction = true", "sim.substeps = 16"];
+    let changes = ["effects.base_compliance = true", "effects.base_reaction = true"];
     let (force, depth, crash, rest, supply) = push_into_slab(scissor_file(), &changes, 1.0, 0.02, 0.04);
     println!("{force} N, {depth} m in, crash {crash} J, {rest} J of {supply} J");
     assert!((depth - force / 1e7).abs() < 0.05 * depth, "depth {depth} m against F / k");
-    assert!(crash > 0.0 && rest.abs() < 3e-5 * supply, "{rest} J of {supply} J");
+    assert!(crash > 0.0 && rest.abs() < 1e-6 * supply, "{rest} J of {supply} J");
 }
 
 /// The scissor lift's frame momentum is that of its dynamics: its first moment moves at its linear momentum
@@ -762,16 +761,16 @@ fn on_its_compliant_base_the_push_is_held_once(entry: &'static MachineEntry, sid
 /// 1e-6 of the supply where that is less): planar delta 1.9e-7 of the supply, 9.1e-6 without a contact; D3 1.2e-6,
 /// 3.5e-5 without. The scissor lift's screw holds 28 kN against the ceiling, where its gearbox's efficiency changes
 /// between driving and driven back within 0.5 W (`Gearbox::loss_factor`), a few mm/s of the platform's speed at that
-/// force: 4 substeps of 15.6 us do not follow it, and the move's rest was 2.3e-4 of the supply (1.2e-4 with 8,
-/// 6.9e-6 with 16, 4.2e-8 with 32 and 64; 4.6e-8 with 4 and effects.gearbox_efficiency off): the integration's.
-/// Under a push at the tool the simulation takes four times finer substeps (`Sim`'s `PUSH_SUBSTEPS`), so the shipped
-/// file runs at 16 there and closes to 6.9e-6, which the crates' moves into a slab are held to (3e-5, the level the
-/// push at the motors had; collision.rs). Planar delta and D3: the plate lowered 0.04 m onto a slab 0.02 m under its
-/// lowest part; the scissor lift's platform raised 0.04 m into a ceiling 0.02 m over it.
+/// force: 4 substeps of 15.6 us did not follow it, and the move's rest was 2.3e-4 of the supply (1.2e-4 with 8,
+/// 6.9e-6 with 16, 4.2e-8 with 32 and 64; 4.6e-8 with 4 and effects.gearbox_efficiency off): the integration's. The
+/// switch is now widened where the torque makes it stiffer than the sub-step resolves (`Gearbox::fade_step`), and the
+/// shipped file closes to 4.4e-8 (4e-8 with one sub-step under the push too). Planar delta and D3: the plate lowered
+/// 0.04 m onto a slab 0.02 m under its lowest part; the scissor lift's platform raised 0.04 m into a ceiling 0.02 m
+/// over it.
 #[test]
 fn the_linkage_delta_and_scissor_files_are_pushed_at_their_tool() {
     // Per file the least share of the supply its budget is held to, beside the move's own rest without a contact.
-    for (entry, side, floor) in [(file(), -1.0, 1e-6), (spatial_file(), -1.0, 1e-6), (scissor_file(), 1.0, 3e-5)] {
+    for (entry, side, floor) in [(file(), -1.0, 1e-6), (spatial_file(), -1.0, 1e-6), (scissor_file(), 1.0, 1e-6)] {
         let id = entry.id;
         let (force, depth, crash, rest, supply) = push_into_slab(entry, &[], side, 0.02, 0.04);
         let (_, _, _, free_rest, free_supply) = push_into_slab(entry, &[], side, 0.5, 0.04);

@@ -1032,6 +1032,9 @@ impl Machine for MoverTrack {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.inner.set_brake_engaged(engaged)
     }
+    fn set_substep(&mut self, h: f64) {
+        self.inner.set_substep(h)
+    }
     fn valves(&self) -> Vec<(String, f64)> {
         self.inner.valves()
     }

@@ -681,6 +681,9 @@ impl Machine for Based {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.inner.set_brake_engaged(engaged)
     }
+    fn set_substep(&mut self, h: f64) {
+        self.inner.set_substep(h)
+    }
     fn after_step(&mut self, state: &mut [f64], dt: f64) {
         let n = self.n();
         self.inner.after_step(&mut state[..n], dt)

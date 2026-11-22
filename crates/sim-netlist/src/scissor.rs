@@ -550,6 +550,17 @@ impl Machine for ScissorMachine {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
+    /// The gear drives the screw at least with M(theta) over the stroke, payload off (`Gearbox::fade_step`).
+    fn set_substep(&mut self, h: f64) {
+        let attached = self.payload_attached;
+        self.payload_attached = false;
+        let least = (0..=20)
+            .map(|k| self.min_height + (self.max_height - self.min_height) * k as f64 / 20.0)
+            .map(|z| self.load(self.angle(z), 0.0).0)
+            .fold(f64::INFINITY, f64::min);
+        self.payload_attached = attached;
+        self.joint.gearbox.fade_step = sim_components::mech::fade_step(h, least);
+    }
     /// The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
     fn after_step(&mut self, s: &mut [f64], _dt: f64) {
         if self.elastic {

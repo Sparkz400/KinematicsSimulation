@@ -1673,6 +1673,44 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
+    /// Each gear's least inertia at its joint, 1 / (M^-1)_kk of the load's mass matrix (the other joints free, the
+    /// passive ones at rest), over the tool's middle and each axis at either end of its range, payload off: the
+    /// efficiency's switch is widened to what the sub-step resolves on it (`mech::Gearbox::fade_step`). A pose the
+    /// mechanism cannot reach is left out; the numerical inverse's memory is kept as it was.
+    fn set_substep(&mut self, h: f64) {
+        let (n, p, attached, memory) = (self.n(), self.passive.len(), self.payload_attached, self.mechanism.memory());
+        self.mechanism.set_payload_attached(false);
+        let mid: Vec<f64> = self.axes.iter().map(|a| 0.5 * (a.min + a.max)).collect();
+        let mut poses = vec![mid.clone()];
+        for (i, a) in self.axes.iter().enumerate() {
+            for end in [a.min, a.max] {
+                let mut pose = mid.clone();
+                pose[i] = end;
+                poses.push(pose);
+            }
+        }
+        let (mut least, mut q) = (vec![f64::INFINITY; n], vec![0.0; n]);
+        for pose in &poses {
+            if !self.mechanism.inverse(pose, &mut q) {
+                continue;
+            }
+            let all: Vec<f64> = q.iter().copied().chain(std::iter::repeat_n(0.0, p)).collect();
+            let (mass, _) = self.load_all(&all, &vec![0.0; n + p]);
+            for (k, least) in least.iter_mut().enumerate() {
+                let unit: Vec<f64> = (0..n + p).map(|i| if i == k { 1.0 } else { 0.0 }).collect();
+                if let Some(x) = solve(&mass, &unit).filter(|x| x[k] > 0.0) {
+                    *least = least.min(1.0 / x[k]);
+                }
+            }
+        }
+        self.mechanism.set_payload_attached(attached);
+        self.mechanism.set_memory(&memory);
+        for (joint, least) in self.joints.iter_mut().zip(least) {
+            if least.is_finite() {
+                joint.drive.gearbox.fade_step = crate::mech::fade_step(h, least);
+            }
+        }
+    }
     /// The push acts on the joints beyond the gearboxes and on the links' bending modes, as the tool moves with each
     /// (`push_on_joints`, `push_on_modes`), in either model; its power is the budget's crash row.
     fn set_tool_force(&mut self, force: &[f64]) -> bool {
