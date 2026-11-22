@@ -1313,10 +1313,14 @@ fn the_rocking_forearm_rings_as_the_two_masses_by_hand() {
     near(nearest(low), low, 1e-6, "the arm on the gearbox");
     near(nearest(high), high, 1e-6, "the crank between the springs");
     assert!(m.signal_infos().iter().any(|s| s.id == "bar.rocking"));
-    // Without the crank the rocking is refused.
+    // An arm without a rod has nothing to rock on (as bar_elasticity has nothing to put in series); without the crank
+    // (no mass) the rocking is refused.
     let mut cfg = URDF_ARM.config();
     cfg.set_text("effects.bar_rocking = true").unwrap();
-    assert!((URDF_ARM.build)(&cfg).is_err(), "the six-axis arm has no rod to rock on");
+    let plain = (URDF_ARM.build)(&cfg).unwrap();
+    assert!(!plain.signal_infos().iter().any(|s| s.id == "bar.rocking"));
+    let refused = std::panic::catch_unwind(|| rocker(&["arm.bars_mass_kg = [0.0, 8.0]"]));
+    assert!(refused.is_err(), "a rocking without its crank");
 }
 
 /// The palletiser's forearm at rest on its rod (effects.bar_rocking), the upper arm upright and the forearm level

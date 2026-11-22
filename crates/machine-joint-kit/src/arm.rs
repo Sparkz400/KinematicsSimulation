@@ -675,6 +675,10 @@ fn rocking(
         cfg.f64s("arm.bars_pin_m")?,
     );
     let sprung: Vec<usize> = (0..stiffness.len()).filter(|&i| stiffness[i] != 0.0).collect();
+    // Without a rod there is nothing to rock on, as `bar_springs` has nothing to put in series.
+    if sprung.is_empty() {
+        return Ok(None);
+    }
     let (&[i], true) = (&sprung[..], carries.len() == stiffness.len() && damping.len() == stiffness.len()) else {
         return Err(bad("bars_axial_stiffness_n_m: one rod, and as many bars_carries and bars_axial_damping_n_s_m"));
     };
@@ -1771,7 +1775,9 @@ impl Mechanism for Arm {
             out.push(self.guide_load(q, qd, qdd));
         }
         if let (Some(_), Tool::Pose(p)) = (self.angular_limits, &self.tool) {
-            let (w, a) = p.angular_motion(&|q: &[f64]| self.tip(q), q, qd, qdd);
+            // The motors' joints: the passive ones' rates do not move the planned flange.
+            let n = self.ratios.len();
+            let (w, a) = p.angular_motion(&|q: &[f64]| self.tip(q), &q[..n], &qd[..n], &qdd[..n]);
             out.extend([w, a]);
         }
     }
