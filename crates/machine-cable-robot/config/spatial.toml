@@ -57,6 +57,11 @@ winch_directions = [
 # horizontal and square to the cable's direction at the winch (here, with vertical winch directions, the pulley's
 # axle at rest).
 winch_spin_axes = []
+# [estimate] With effects.cable_inertia: how far each drum sits from its pulley's swivel point along the winch's
+# direction (one per cable), the run the cable comes along from it: its mass runs at the drum's speed, the cable paid
+# out is lifted from the drum's height to the pulley's (here the top drums above their pulleys, the bottom ones below),
+# and the frame carries the cable's mass and momentum. A drum close behind its pulley; the frame's data give none.
+run_lengths_m = [0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15]
 
 [pulley]
 # [estimate] a swivelling deflection pulley for a 4 mm rope.
@@ -82,9 +87,6 @@ mass_per_m_kg = 0.010
 drum_radius_m = 0.03
 drum_inertia_kgm2 = 4.0e-4
 capacity_m = 5.0
-# How far the drum sits below its pulley: the cable paid out is lifted that far, its weight rho g times it at the
-# cable. Not in the frame's data at hand: 0.
-drop_m = 0.0
 friction_coulomb_n = 3.0
 friction_viscous_n_s_m = 2.0
 friction_smoothing_m_s = 0.002

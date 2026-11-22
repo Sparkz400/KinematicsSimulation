@@ -1426,6 +1426,7 @@ estimates, values planar / spatial; bounded where they are a part's property):
 | `platform.anchors_m` | m | Spatial: each cable's anchor on the platform, in its frame (the planar one's meet at its centre) | – / the corners of 200 x 200 x 100 mm |
 | `frame.exits_m` | m | Each cable's pulley, where the cable runs onto it (the swivel point); 4 or 8 entries, one per winch and motor | the corners of 2 x 1.6 m / of 2 x 1.6 x 1.8 m |
 | `frame.winch_directions` | – | The direction from each pulley to its winch (its swivel axis); the pulley faces the frame's centre at rest | up for the top pulleys, down for the bottom ones |
+| `frame.run_lengths_m` | m | With `effects.cable_inertia`: how far each drum sits from its pulley's swivel point along the winch's direction (one per cable). The run's cable runs at the drum's speed, the cable paid out is lifted from the drum's height to the pulley's (ρ g h l, h = −r a_z), and the frame carries the cables' mass and momentum. Replaces `winch.drop_m` (until 22 November) | 0.15 each, estimate |
 | `frame.winch_spin_axes` | – | The axis each winch's drum and rotor turn about (one row per cable): their spin (J w) is in the frame's load. Empty: horizontal and square to the cable's direction at the winch | [] |
 | `pulley.radius_m` | m | The pulleys' radius | 0.025 / 0.03 |
 | `cable.ea_n` | N | The cable's EA: a cable of free length l is a spring of EA / l | 1e5 / 3e5 |
@@ -1438,7 +1439,6 @@ estimates, values planar / spatial; bounded where they are a part's property):
 | `winch.drum_radius_m` | m | The drum's radius: the lever behind the gearbox | 0.025 / 0.03 |
 | `winch.drum_inertia_kgm2` | kg m² | The drum's inertia | 2e-4 / 4e-4 |
 | `winch.capacity_m` | m | The cable a drum holds: its stops at 0 and here | 5 |
-| `winch.drop_m` | m | How far a drum sits below its pulley: the cable paid out is lifted that far, its potential ρ g h l, the drum pulled back by ρ g h; 0 or left out: none | 0 (not in the data at hand) |
 | `winch.friction_coulomb_n`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | N, N s/m, m/s | Bearings and pulley at the cable (`effects.winch_friction`) | 2, 1 / 3, 2; 0.002 |
 | `winch.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | The stops (`effects.hard_stops`) | 1e6, 1000 |
 | `workspace.tool_min`, `tool_max` | m, rad | The tool's box, the axes' ranges; poses in it outside the wrench-feasible workspace are refused (`error-cable-wrench-infeasible`) | −0.6, 0.3 to 0.6, 1.3 / −0.4, −0.3, 0.8, −0.05 (each turn) to 0.4, 0.3, 1.4, 0.05 |

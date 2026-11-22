@@ -618,62 +618,86 @@ fn the_cables_swing_with_their_anchors() {
     assert!(rate.abs() > 1e-4 && (rate - power).abs() < 1e-6 * rate.abs(), "{rate} {power}");
 }
 
-/// effects.cable_inertia: the cable runs along itself at the drum's speed, all of the drum's 5 m. Spatial: the drum's
-/// 4e-4 / 0.03^2 = 0.444444 kg at the cable and 0.01 x 5 = 0.05 kg of cable, 0.494444 kg. Planar, rigid, at (0.3, 0.9)
-/// moving at (0.5, -0.2) m/s: of its 0.003 x 5 = 0.015 kg the cable still on each drum, 0.003 (5 - L), turns with it
-/// (its spin about h, (J / r^2 + rho (5 - L)) r L'); the cable paid out, whose mass is not in the frame's, adds no
-/// momentum, so the first moment still moves at the linear momentum. The energy closes with it, rigid and elastic
-/// (`testkit::loss_budget`), as with the lift of the cable from a drum 0.5 m below its pulley (`winch.drop_m`), which
-/// pulls each drum back by 0.01 x 9.80665 x 0.5 = 0.0490333 N.
+/// effects.cable_inertia: the cable runs along itself at the drum's speed, all of the drum's 5 m and its run of 0.15 m
+/// from the drum to the pulley (`frame.run_lengths_m`). Spatial: the drum's 4e-4 / 0.03^2 = 0.444444 kg at the cable and
+/// 0.01 x 5.15 = 0.0515 kg of cable, 0.495944 kg. Planar, rigid, at (0.3, 0.9) moving at (0.5, -0.2) m/s: the cable
+/// still on each drum, 0.003 (5 - L), turns with it (its spin about h, (J / r^2 + rho (5 - L)) r L'), and the cables
+/// are in the frame's mass, 4 x 0.003 x 5.15 = 0.0618 kg more, and momentum: against the material's own, summed over 4000
+/// points of each span (velocity l' u at the pulley to the anchor's at the anchor, the span straight from the pulley's
+/// swivel point) and the run's (rho run l' along it, at its middle), to 1e-9. The first moment moves at the momentum and
+/// the weight sits at it (testkit), rigid and elastic. The energy closes with it (`testkit::loss_budget`), as with the
+/// lift of the cable from the drums 0.5 m under the bottom pulleys and over the top ones (runs of 0.5 m along the
+/// winches' directions, -z and +z), which pulls each bottom drum back by 0.01 x 9.80665 x 0.5 = 0.0490333 N and each top
+/// one on by as much.
 #[test]
 fn the_cables_run_along_with_the_drums() {
     let mut cfg = SPATIAL.config();
     cfg.set_text("effects.cable_inertia = true").unwrap();
     let spatial = CableRobot::new(&cfg).unwrap();
-    assert!((spatial.drum_mass - 0.494_444).abs() < 1e-6, "{}", spatial.drum_mass);
-    assert!((CableRobot::new(&SPATIAL.config()).unwrap().drum_mass - 0.444_444).abs() < 1e-6);
-    let mut cfg = PLANAR.config();
-    cfg.set_text("effects.cable_stretch = false").unwrap();
-    let plain = CableRobot::new(&cfg).unwrap();
-    cfg.set_text("effects.cable_inertia = true").unwrap();
-    let robot = CableRobot::new(&cfg).unwrap();
-    let (pose, vel) = ([0.3, 0.9], [0.5, -0.2]);
-    let momentum = |robot: &CableRobot| {
-        let (mut state, mut torque) = (Vec::new(), vec![0.0; 4]);
-        robot.equilibrium(&pose, &mut state, &mut torque);
-        robot.set_tool_velocity(&mut state, &vel);
-        robot.frame_momentum(&state).unwrap()
-    };
-    let (with, without) = (momentum(&robot), momentum(&plain));
-    let spans = robot.spans(&pose).unwrap();
-    let rates = robot.length_rates(&spans, &vel);
-    let mut angular = [0.0; 3];
-    for (k, s) in spans.iter().enumerate() {
-        let spin = 0.003 * (5.0 - s.length) * 0.025 * rates[k];
-        (0..3).for_each(|i| angular[i] += robot.spin[k][i] * spin);
+    assert!(spatial.drum_mass.iter().all(|m| (m - 0.495_944).abs() < 1e-6), "{:?}", spatial.drum_mass);
+    assert!(CableRobot::new(&SPATIAL.config()).unwrap().drum_mass.iter().all(|m| (m - 0.444_444).abs() < 1e-6));
+    for stretch in [false, true] {
+        let mut cfg = PLANAR.config();
+        cfg.set_text(&format!("effects.cable_stretch = {stretch}")).unwrap();
+        let plain = CableRobot::new(&cfg).unwrap();
+        cfg.set_text("effects.cable_inertia = true").unwrap();
+        let robot = CableRobot::new(&cfg).unwrap();
+        let (pose, vel) = ([0.3, 0.9], [0.5, -0.2]);
+        let state = |robot: &CableRobot| {
+            let (mut state, mut torque) = (Vec::new(), vec![0.0; 4]);
+            robot.equilibrium(&pose, &mut state, &mut torque);
+            robot.set_tool_velocity(&mut state, &vel);
+            state
+        };
+        let s = state(&robot);
+        let (with, without) = (robot.frame_momentum(&s).unwrap(), plain.frame_momentum(&state(&plain)).unwrap());
+        assert!((with.mass - without.mass - 0.0618).abs() < 1e-12, "{} kg", with.mass - without.mass);
+        let spans = robot.spans(&pose).unwrap();
+        let (free, rates, ..) = robot.winch_state(&s, &spans);
+        let (p, v) = ([pose[0], 0.0, pose[1]], [vel[0], 0.0, vel[1]]);
+        let (mut linear, mut angular) = ([0.0; 3], [0.0; 3]);
+        for k in 0..4 {
+            let (e, axis, rho) = (robot.cables[k].exit, robot.cables[k].axis, 0.003);
+            angular[1] += robot.spin[k][1] * rho * (5.0 - free[k]) * 0.025 * rates[k];
+            // The run: rho 0.15 moving at l' from the drum towards the pulley, at its middle.
+            let (mid, along) = (add(e, scale(axis, 0.075)), scale(axis, -rates[k]));
+            let run = cross(mid, scale(along, rho * 0.15));
+            (0..3).for_each(|i| (linear[i], angular[i]) = (linear[i] + rho * 0.15 * along[i], angular[i] + run[i]));
+            // The span: 4000 points from the pulley's swivel point to the anchor, each rho l / 4000.
+            let d = sub(p, e);
+            let enter = scale(d, rates[k] / free[k]);
+            for j in 0..4000 {
+                let f = (j as f64 + 0.5) / 4000.0;
+                let (at, speed) = (add(e, scale(d, f)), add(scale(enter, 1.0 - f), scale(v, f)));
+                let piece = rho * free[k] / 4000.0;
+                let turn = cross(at, scale(speed, piece));
+                (0..3).for_each(|i| (linear[i], angular[i]) = (linear[i] + piece * speed[i], angular[i] + turn[i]));
+            }
+        }
+        for i in 0..3 {
+            assert!((with.linear[i] - without.linear[i] - linear[i]).abs() < 1e-9, "{stretch} {i}: {with:?}");
+            assert!((with.angular[i] - without.angular[i] - angular[i]).abs() < 1e-9, "{stretch} {i}: {with:?}");
+        }
+        assert!(linear[0].abs() > 1e-4 && angular[1].abs() > 1e-4, "{linear:?} {angular:?}");
+        sim_core::testkit::frame_momentum_moves_its_first_moment(&robot);
+        sim_core::testkit::weight_is_at_the_first_moment(&robot);
     }
-    for i in 0..3 {
-        assert_eq!(with.linear[i], without.linear[i], "{i}: {with:?}");
-        assert!((with.angular[i] - without.angular[i] - angular[i]).abs() < 1e-12, "{i}: {with:?}");
-    }
-    assert!(angular[1].abs() > 1e-6, "{angular:?}");
-    sim_core::testkit::frame_momentum_moves_its_first_moment(&robot);
     let mut cfg = PLANAR.config();
     cfg.set_text("cable.mass_per_m_kg = 0.01").unwrap();
     let flat = CableRobot::new(&cfg).unwrap();
-    cfg.set_text("winch.drop_m = 0.5").unwrap();
+    cfg.set_text("effects.cable_inertia = true").unwrap();
+    cfg.set_text("frame.run_lengths_m = [0.5, 0.5, 0.5, 0.5]").unwrap();
     let dropped = CableRobot::new(&cfg).unwrap();
-    let spans = flat.spans(&pose).unwrap();
+    let spans = flat.spans(&[0.3, 0.9]).unwrap();
     let free: Vec<f64> = spans.iter().map(|s| s.length / (1.0 + 100.0 / flat.ea)).collect();
     let drum = |robot: &CableRobot| robot.tensions(&spans, &[0.0; 4], &free, &[0.0; 4]).drum;
-    for (a, b) in drum(&dropped).iter().zip(drum(&flat)) {
-        assert!((a - b + 0.049_033_25).abs() < 1e-12, "{a} N against {b} N");
+    for (k, (a, b)) in drum(&dropped).iter().zip(drum(&flat)).enumerate() {
+        let up = dropped.cables[k].axis[2];
+        assert!((a - b - 0.049_033_25 * up).abs() < 1e-12, "{k}: {a} N against {b} N");
     }
     for stretch in [false, true] {
         let mut cfg = SPATIAL.config();
-        for edit in
-            ["effects.cable_inertia = true", "winch.drop_m = 0.5", &format!("effects.cable_stretch = {stretch}")]
-        {
+        for edit in ["effects.cable_inertia = true", &format!("effects.cable_stretch = {stretch}")] {
             cfg.set_text(edit).unwrap();
         }
         sim_core::testkit::loss_budget(&CableRobot::new(&cfg).unwrap());
@@ -703,7 +727,7 @@ fn the_winches_spin_is_in_the_frames_momentum() {
     robot.set_tool_velocity(&mut state, &vel);
     let f = robot.frame_momentum(&state).unwrap();
     let w = &robot.winches[0];
-    let spin = (robot.drum_mass * 0.025 + w.rotor_inertia * w.ratio()) * -0.0150160;
+    let spin = (robot.drum_mass[0] * 0.025 + w.rotor_inertia * w.ratio()) * -0.0150160;
     let platform = 5.0 * (pose[1] * vel[0] - pose[0] * vel[1]);
     // The four rates' six digits: 2e-6 m/s.
     assert!((f.angular[1] - platform - spin).abs() < 2e-6 * spin.abs() / 0.015016, "{f:?} {platform} {spin}");

@@ -1779,9 +1779,20 @@ RMS torques and errors unchanged to their digits; motor 1's peak torque 2.454134
 it (2.454135 with the differences, whose force differs by about 1e-11 N: the peak sits on a moment that small forces
 shift), the other motors' within 4e-6 N m.
 
-**The lift from drum to pulley** (`winch.drop_m` h, the drum's drop below its pulley; 0 as shipped, the frame's data
-not at hand): the cable paid out is lifted by h, its potential ρ g h l, the drum pulled back by ρ g h (0.049 N at
-10 g/m and 0.5 m) and, rigid, the platform by ρ g h u. In the energy (`the_cables_run_along_with_the_drums`).
+**The run from drum to pulley** (with `effects.cable_inertia`; `frame.run_lengths_m` r, one per cable, [estimate]
+0.15 m): each drum sits at D = E + r a, a the winch's direction from the pulley's swivel point E. The run's cable, ρ r,
+runs at the drum's speed (a mass at the cable beside the drum's), and the cable paid out is lifted from the drum's
+height to the pulley's, h = z_E − z_D = −r a_z: its potential ρ g h l, the drum pulled back by ρ g h (0.049 N at 10 g/m
+and 0.5 m; the top drums, over their pulleys, pulled on) and, rigid, the platform by ρ g h u. Until 22 November that
+lift was `winch.drop_m` (0 as shipped), apart from the run. In the energy (`the_cables_run_along_with_the_drums`).
+With the switch the cable is in the frame's mass, first moment and momentum too (`cable_momentum`): all ρ (capacity +
+r) of it, the wound cable at D, the run from D to E moving along it at l', the free length l from E to the anchor P
+(the pulley's wrap taken straight) with its points at the share f moving at (1 − f) a + f P', a = l' (P − E) / l, as
+the kinetic energy has them: first moment ρ ((capacity − l) D + r (D + E) / 2 + l (E + P) / 2), momentum
+ρ (l' (E − D) + l (a + P') / 2), its rate exactly, angular momentum ρ (l' D × E + l (E × (a + P') / 2 + (P − E) ×
+(a / 6 + P' / 3))); against 4000 points of each span summed by hand to 1e-9, the first moment moving at the momentum
+and the weight at the first moment (testkit), rigid and elastic. Left: the weight's V counts the span's mass as ρ L
+(stretched) where the first moment has ρ l, a strain's share (1e-3) of the cable's weight.
 
 **The cables' own inertia** (`effects.cable_inertia`, off as shipped, with ρ). The cable runs along itself at the
 drum's speed l': the turns on the drum with it (at the drum's radius, so at l'), the paid-out cable along its run and
