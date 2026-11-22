@@ -1138,11 +1138,12 @@ fn the_parallelogram_holds_the_forearm_against_the_upper_arms_bend() {
     assert!(found > exact && found / exact - 1.0 < 0.026, "{found} against the exact {exact}");
     assert!((unheld - by_hand).abs() > 0.05 * by_hand, "without the bars {unheld} Hz");
     // Acting back on the joints (effects.link_bending_reaction), the bars' fields in the coupling with their rates: its
-    // energy holds over the suite's run (`testkit::energy_conservation`) without gravity (1e-14 J of the 2.8 mJ put in).
-    // With gravity it drifts by 0.47 % (open: each bar alone holds it to 1e-12 J; both together not, the rod pinned
-    // on the held forearm).
+    // energy holds over the suite's run with gravity (`testkit::energy_conservation`): 1.8e-8 J of the 2.8 mJ put in over
+    // 10 s, the arm without its bars 6.9e-9 J of 3.2 mJ (the integrator's level). The joints' stops off: with the
+    // bars the swinging upper arm reaches its stop at 0.9 rad, and the stiff stop's integration error (1.3e-5 J at
+    // 62.5 us, 1.3e-6 J at 31.25 us, in steps at each contact) is no term of the model.
     let mut cfg = bent_config(true, true);
-    cfg.set_text("effects.gravity = false").unwrap();
+    cfg.set_text("effects.hard_stops = false").unwrap();
     sim_core::testkit::energy_conservation((PALLETISER.build)(&cfg).unwrap().as_ref());
 }
 

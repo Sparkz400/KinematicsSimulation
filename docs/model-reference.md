@@ -2014,7 +2014,7 @@ Out of the joints' plane and in twist the pins do not hold, and the bodies take 
 palletiser's upper arm (steel tube 150 × 10 mm, 25 kg) in its plane: by hand 25/4 + 53 + 8/3 = 61.92 kg on
 (βL)⁴/4 E I / L³, 53.626 Hz, which the machine's mode gives; the exact Euler-Bernoulli cantilever with that tip mass
 and no tip inertia rings at 52.980 Hz (the bend-mode method's known +1.2 %); without the bars, the forearm turning with
-the tip's slope, 35.17 Hz. Two-way the energy holds without gravity (1e-14 J of the 2.8 mJ a pulse puts in, `the_parallelogram_holds_the_forearm_against_the_upper_arms_bend`), and with gravity for each bar alone (1e-12 J); with both bars and gravity it drifts by 0.47 % over 10 s (0.14 % with the rod not turning): open.
+the tip's slope, 35.17 Hz. Two-way the energy holds with gravity to the integrator's level, 1.8e-8 J of the 2.8 mJ a pulse puts in over 10 s (6.9e-9 J without the bars; `the_parallelogram_holds_the_forearm_against_the_upper_arms_bend`, the joints' stops off). With the stops on the swinging upper arm reaches its stop at 0.9 rad, whose stiff contact the fixed step integrates to 1.3e-5 J at 62.5 µs and 1.3e-6 J at 31.25 µs, in a step at each contact: the integrator's, not a term of the model.
 Left out: the loop's own stiffness beyond holding the turn (the rod and crank rigid), and a loop's general geometry: the
 rule is the parallelogram's (the rod parallel to the link's chord). With `effects.payload_swing` the payload hangs on a pivot about two axes, two passive
 joints on `arm.payload_swing_stiffness_nm_rad` and `_damping_nm_s_rad`.
