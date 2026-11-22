@@ -2036,6 +2036,18 @@ K = 1 / (1 / k_g + 1 / (k c²)). The palletiser's rod, a 1 m steel tube of its 8
 1.926e7 N m/rad beside motor 3's 2e5, K = 197944.6 N m/rad, its train 0.9948 times as high
 (`the_parallelogram_rod_stretches_in_series_with_motor_threes_gearbox`). The gearbox's damper stays in parallel with K.
 
+**A four-bar of unequal links** (`arm.four_bar_*`, since 22 November). A loop the URDF leaves out whose bars do not
+stay parallel to a link: a crank point C on one link drives a coupler of length l_c to the point T, which a follower of
+length l_f holds from its pivot F on another, in the plane square to n. T from the loop's closure: d the in-plane part
+of C − F, e = d / |d|, cos a = (l_f² + |d|² − l_c²) / (2 l_f |d|), T = F + l_f (cos a e ± sin a n × e). The rates from
+the loop's Jacobian in the pivot's link's frame (turning at ω_g): C moves at c' there, the follower turns at λ n with
+λ = (T − C) · c' / ((T − C) · (n × (T − F))), the coupler at μ n with μ = (T'_rel − c') · (n × (T − C)) / l_c². Each bar a
+uniform rod; their mass matrix and bias by Kane's equations as the parallel bars' (`bar_dynamics`), their weight in the
+potential. On the SCARA (follower 0.12 m and 0.3 kg on link 1, coupler 0.2 m and 0.5 kg from 0.08 m out on link 2) the
+mass matrix over joints 1 and 2 matches the closed form's to 1e-7 at two poses, and the energy holds
+(`a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand`). Not with bending links (refused: their
+fields take parallel bars).
+
 **Bending links with bars** (since 22 November; refused before). A bar pinned on a body before a bent link that turns
 with a body beyond it (the crank: pinned on the turret, turning with the forearm, across the upper arm) drives that
 body's turn from before the link: the link's bend in its joints' plane (the plane the pins turn in) moves that body and

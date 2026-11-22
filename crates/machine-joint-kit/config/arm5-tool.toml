@@ -254,6 +254,23 @@ bars_pin_m = []
 bars_mass_kg = []
 bars_com_m = []
 bars_inertia_kgm2 = []
+# With effects.bar_elasticity: each bar's axial stiffness (0: rigid) and the motor joint (1-based, 0: none) whose turn
+# it carries on the lever of its pin's distance from its link's joint. Empty: none.
+bars_axial_stiffness_n_m = []
+bars_carries = []
+# A planar four-bar the URDF leaves out (`four_bar_*`): the follower's pivot on the link of URDF joint four_bar_ground_on
+# (1-based; 0: none) at four_bar_ground_pin_m of its frame, the crank point on the link of four_bar_crank_on at
+# four_bar_crank_pin_m, in the plane square to four_bar_normal (the ground's frame); the coupler (crank point to the
+# loop's point) and the follower (pivot to it) four_bar_lengths_m long, four_bar_masses_kg heavy (uniform rods), the
+# loop's point on the side four_bar_branch (+1: normal x (crank - pivot)) of the line from the pivot to the crank.
+four_bar_ground_on = 0
+four_bar_ground_pin_m = [0.0, 0.0, 0.0]
+four_bar_crank_on = 0
+four_bar_crank_pin_m = [0.0, 0.0, 0.0]
+four_bar_normal = [0.0, 0.0, 1.0]
+four_bar_lengths_m = [0.0, 0.0]
+four_bar_masses_kg = [0.0, 0.0]
+four_bar_branch = 1.0
 # With effects.payload_swing: the payload hangs on a pivot at the flange, its centre payload_offset_m from it, about two
 # axes across that line, with this spring and damper per axis. [estimate] a carton in a soft gripper.
 payload_swing_stiffness_nm_rad = 20.0
