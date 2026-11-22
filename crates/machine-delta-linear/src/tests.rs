@@ -724,3 +724,17 @@ fn a_cycle_target_beyond_the_rods_angle_is_refused_with_the_segment_and_the_reas
     let refused = Sim::new(&ENTRY, &cfg).err().expect("refused");
     assert_eq!((refused.key(), refused.detail()), ("error-delta-linear-rod-angle", "cycle.segment[2]"));
 }
+
+/// The suite's pulse takes the carriages into their stops (with the file's damper on, 5000 N s/m, it takes 15 to 17.6
+/// mJ of the 21 to 25 mJ put in). Loss-free, on the stops' springs alone, the energy holds to 1e-8 of it: 2e-11 to 9e-11
+/// J, the steps that meet a stop cut 16 times finer (`mech::STOP_SUBSTEPS`). Before 22 November 4e-9 to 3.1e-8 J, in
+/// steps at each contact.
+#[test]
+fn the_carriages_meet_their_stops_with_the_energy_at_the_integrators_level() {
+    for cfg in super::suite_configs() {
+        let m = (super::ENTRY.build)(&cfg).unwrap();
+        let (drift, injected) = sim_core::testkit::energy_drift(m.as_ref());
+        println!("{drift} J of {injected} J");
+        assert!(injected > 0.0 && drift < 1e-8 * injected, "{drift} J of {injected} J");
+    }
+}

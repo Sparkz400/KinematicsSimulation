@@ -574,8 +574,6 @@ pub struct JointMachine<M: Mechanism> {
     push: Vec<f64>,
     /// The joints and the Jacobian the push was last taken through (`push_on_joints`).
     push_jacobian: std::sync::Mutex<(Vec<f64>, Vec<f64>)>,
-    /// The integrator's sub-step (`Machine::set_substep`), 0 unset.
-    substep: f64,
 }
 
 /// How far (m or rad) the joints may move before the push's Jacobian is worked out again (`push_on_joints`).
@@ -623,7 +621,6 @@ impl<M: Mechanism> JointMachine<M> {
             two_way,
             push: Vec::new(),
             push_jacobian: std::sync::Mutex::new((Vec::new(), Vec::new())),
-            substep: 0.0,
         }
     }
 
@@ -1676,18 +1673,19 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
-    fn set_substep(&mut self, h: f64) {
-        self.substep = h;
-    }
-    /// Each gear's efficiency switch near zero power at the step's start (`mech::Gearbox::fade_damping`) on the inertia
-    /// it drives there, 1 / (M^-1)_kk of the load's mass matrix (the other joints free): the cuts `mech::fade_substeps`
-    /// asks for, the most over the gears. The mass matrix only where a gear is near zero power.
-    fn substeps_wanted(&self, s: &[f64], torque: &[f64]) -> u32 {
-        if self.substep == 0.0 {
-            return 1;
-        }
-        let n = self.n();
-        let (_, qd) = self.arms(s);
+    /// A joint meeting its stop within the step (`mech::HardStop::met_within`): `mech::STOP_SUBSTEPS`. Each gear's
+    /// efficiency switch near zero power at the step's start (`mech::Gearbox::fade_damping`) on the inertia it drives
+    /// there, 1 / (M^-1)_kk of the load's mass matrix (the other joints free): the cuts `mech::fade_substeps` asks for.
+    /// The most of them. The mass matrix only where a gear is near zero power.
+    fn substeps_wanted(&self, s: &[f64], torque: &[f64], dt: f64, substeps: u32) -> u32 {
+        let (n, h) = (self.n(), dt / f64::from(substeps));
+        let (q, qd) = self.arms(s);
+        let stopped = (0..n).any(|k| {
+            let joint = &self.joints[k].drive;
+            let (min, max) = joint.range;
+            joint.stops.met_within(q[k] - min, qd[k], max - min, dt)
+        });
+        let stop_cuts = if stopped { crate::mech::STOP_SUBSTEPS } else { 1 };
         let rigid = (!self.elastic).then(|| self.rigid_solve(s, torque).2);
         let damping: Vec<f64> = (0..n)
             .map(|k| {
@@ -1702,7 +1700,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             })
             .collect();
         if damping.iter().all(|c| *c == 0.0) {
-            return 1;
+            return stop_cuts;
         }
         let (q, rates) = self.all_joints(s);
         let (mass, _) = self.load_all(&q, &rates);
@@ -1712,10 +1710,9 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             .map(|k| {
                 let unit: Vec<f64> = (0..all).map(|i| if i == k { 1.0 } else { 0.0 }).collect();
                 let inertia = solve(&mass, &unit).map_or(f64::NAN, |x| 1.0 / x[k]);
-                crate::mech::fade_substeps(damping[k], self.substep, inertia)
+                crate::mech::fade_substeps(damping[k], h, inertia)
             })
-            .max()
-            .unwrap_or(1)
+            .fold(stop_cuts, u32::max)
     }
     /// The push acts on the joints beyond the gearboxes and on the links' bending modes, as the tool moves with each
     /// (`push_on_joints`, `push_on_modes`), in either model; its power is the budget's crash row.

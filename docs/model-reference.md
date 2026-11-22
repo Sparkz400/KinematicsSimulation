@@ -372,6 +372,8 @@ F      = −k_s · beyond − c_s · v        only while F pushes back towards t
 
 A stop never holds on. With `effects.hard_stops` off there is none.
 
+The damper takes hold at once as the axis touches, a step in the force that a sub-step across it integrates with an error at each contact (about the third power of the sub-step). A base step that meets a stop (the axis in one, or nearer to the one it moves towards than two steps at its speed, `HardStop::met_within`) has its sub-steps cut 16 times finer (`mech::STOP_SUBSTEPS`, `Machine::substeps_wanted`; the joint machines and the linear delta tell it): the palletiser's upper arm swinging into its stop keeps its energy to 5.3e-9 J of 2.8 mJ over 10 s (1.3e-5 J before), the linear delta's carriages pulsed into theirs to 9e-11 J (3.1e-8 J). No default cycle meets a stop, so none is cut and their results are as before.
+
 ## Drive and motor
 
 Source: [`drive.rs`](../crates/sim-components/src/drive.rs). One drive per motor; all have the same settings. The loops close on the motor's own encoder.
@@ -2014,7 +2016,7 @@ Out of the joints' plane and in twist the pins do not hold, and the bodies take 
 palletiser's upper arm (steel tube 150 × 10 mm, 25 kg) in its plane: by hand 25/4 + 53 + 8/3 = 61.92 kg on
 (βL)⁴/4 E I / L³, 53.626 Hz, which the machine's mode gives; the exact Euler-Bernoulli cantilever with that tip mass
 and no tip inertia rings at 52.980 Hz (the bend-mode method's known +1.2 %); without the bars, the forearm turning with
-the tip's slope, 35.17 Hz. Two-way the energy holds with gravity to the integrator's level, 1.8e-8 J of the 2.8 mJ a pulse puts in over 10 s (6.9e-9 J without the bars; `the_parallelogram_holds_the_forearm_against_the_upper_arms_bend`, the joints' stops off). With the stops on the swinging upper arm reaches its stop at 0.9 rad, whose stiff contact the fixed step integrates to 1.3e-5 J at 62.5 µs and 1.3e-6 J at 31.25 µs, in a step at each contact: the integrator's, not a term of the model.
+the tip's slope, 35.17 Hz. Two-way the energy holds with gravity to the integrator's level, 1.8e-8 J of the 2.8 mJ a pulse puts in over 10 s (6.9e-9 J without the bars), the joints' stops off. With the stops on the swinging upper arm reaches its stop at 0.9 rad, whose damper takes hold within a step: the steps that meet a stop are cut 16 times finer (`mech::STOP_SUBSTEPS`, `HardStop::met_within`: in a stop, or nearer than two steps at the speed), 5.3e-9 J (`the_parallelogram_holds_the_forearm_against_the_upper_arms_bend`; 1.3e-5 J before 22 November, in a step at each contact). No default cycle meets a stop, so none is cut.
 Left out: the loop's own stiffness beyond holding the turn (the rod and crank rigid), and a loop's general geometry: the
 rule is the parallelogram's (the rod parallel to the link's chord). With `effects.payload_swing` the payload hangs on a pivot about two axes, two passive
 joints on `arm.payload_swing_stiffness_nm_rad` and `_damping_nm_s_rad`.

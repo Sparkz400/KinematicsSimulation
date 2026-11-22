@@ -384,6 +384,19 @@ impl Belt {
 // ---------------------------------------------------------------------------------------------
 // Hard stops
 
+/// How many base steps ahead, at the speed of a step's start, a stop counts as met within the step
+/// (`HardStop::met_within`): the step may speed the axis up on its way.
+const STOP_REACH: f64 = 2.0;
+
+/// The parts a sub-step is cut into where a stop is met within the base step (`HardStop::met_within`). The stop's
+/// damper takes hold at once as the axis touches, a step in the force that a sub-step across it integrates with an
+/// error in steps at each contact, falling with about the third power of the sub-step: an arm's upper link, swinging
+/// into its joint's stop with a bending link and parallelogram bars, kept its energy to 1.3e-5 J of 2.8 mJ over 10 s
+/// at the 15.6 us sub-steps, 3.2e-7 J cut by 4 and 5.3e-9 J by 16 (1.8e-8 J with the stops off); three carriages
+/// pulsed into their stops, on springs alone, 7.7e-9 J, 2.6e-11 J cut by 16. An axis resting in a stop is cut all the
+/// while.
+pub const STOP_SUBSTEPS: u32 = 16;
+
 /// End stops of an axis whose stroke runs from 0 to `stroke`: a spring and a damper at both ends that act
 /// only beyond it.
 #[derive(Debug, Clone)]
@@ -417,6 +430,13 @@ impl HardStop {
 
     pub fn energy(&self, pos: f64, stroke: f64) -> f64 {
         0.5 * self.stiffness * Self::beyond(pos, stroke).powi(2)
+    }
+
+    /// Whether an axis at `pos` moving at `vel` meets a stop within a base step `dt` (s): in one already, or nearer to
+    /// the one it moves towards than `STOP_REACH` steps at its speed (`STOP_SUBSTEPS`). Never without stops.
+    pub fn met_within(&self, pos: f64, vel: f64, stroke: f64, dt: f64) -> bool {
+        let gap = if vel > 0.0 { stroke - pos } else { pos };
+        self.stiffness > 0.0 && (Self::beyond(pos, stroke) != 0.0 || gap < STOP_REACH * vel.abs() * dt)
     }
 
     /// Power the stops take, W: what the axis loses to them less what their springs store.
