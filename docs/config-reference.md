@@ -1188,10 +1188,12 @@ have theirs).
 
 `effects.link_bending` (in all joint kit configs, acting on the arms only, the slides and the table refuse it on, as do the
 crank-cam machines and the mover track, which have the key too; off as shipped) and `[link_bending]` (in the
-arms' configs): each link from its joint to the next joint (the flange after the last) bends as a cantilever in its
-first Euler-Bernoulli mode, in the plane its joint turns it in; its own URDF mass spread along it, everything beyond at
-its tip. Signals `link.<n>.bend` (m, its tip's deflection), `link.<n>.bend_across` (m) and `link.<n>.twist` (rad)
-for the other directions. Estimates: cast aluminium. `effects.link_bending_reaction` (in the same configs, off as shipped;
+arms' configs): each link from its joint to the next joint (the flange after the last) bends as a cantilever, in the
+plane its joint turns it in; its own URDF mass spread along it, everything beyond at its tip. One-way each bend has two
+modes, a Ritz pair over the static shapes under a tip force and a tip moment (its first within 0.48 % of the exact
+beam's frequency, the static sag exact); two-way the exact first mode alone. Signals `link.<n>.bend` (m, the first
+mode's tip deflection), `link.<n>.bend_2` (one-way, the second mode's coordinate), `link.<n>.bend_across`,
+`link.<n>.bend_across_2` (m) and `link.<n>.twist` (rad) for the other directions. Estimates: cast aluminium. `effects.link_bending_reaction` (in the same configs, off as shipped;
 acts only with `effects.link_bending`): the bending acts back on the joints, joints, gearboxes and links one coupled
 system, the bending's energy and its damping (`power.link_bending`) in the machine's; off, the bending is one-way.
 

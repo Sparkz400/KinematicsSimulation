@@ -488,12 +488,14 @@ pub struct FlexMode {
 }
 
 /// How a link deflects in a `FlexMode`: in the plane its joint turns it in, across that plane, or twisted about its
-/// length.
+/// length; a bend's second shape where a link bends in two (`BendSecond`, `BendAcrossSecond`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlexKind {
     Bend,
     BendAcross,
     Twist,
+    BendSecond,
+    BendAcrossSecond,
 }
 
 impl FlexKind {
@@ -503,6 +505,8 @@ impl FlexKind {
             FlexKind::Bend => ("bend", "quantity-link-bend", "m"),
             FlexKind::BendAcross => ("bend_across", "quantity-link-bend-across", "m"),
             FlexKind::Twist => ("twist", "quantity-link-twist", "rad"),
+            FlexKind::BendSecond => ("bend_2", "quantity-link-bend-2", "m"),
+            FlexKind::BendAcrossSecond => ("bend_across_2", "quantity-link-bend-across-2", "m"),
         }
     }
 }

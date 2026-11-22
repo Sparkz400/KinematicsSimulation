@@ -725,8 +725,29 @@ fn one_bending_link() -> Box<dyn Machine> {
     (URDF_ARM.build)(&cfg).unwrap()
 }
 
-/// The tube's bending mode is the Euler-Bernoulli cantilever's: E I = 2.1e11 x pi / 64 (0.06^4 - 0.052^4) =
-/// 58225.5 N m^2, f = 1.875104^2 / (2 pi) sqrt(E I / (m L^3)) = 0.559597 sqrt(58225.5 / (4.5 x 0.512)) = 88.958 Hz.
+/// The one-way bend's Ritz pair over w = a xi^2 + b xi^3 (`arm::BentLink`) by hand: a cantilever of E I `ei`, its own
+/// mass `m` over `length`, `tip` and a tip inertia `j` at its end. M = m [[1/5, 1/6], [1/6, 1/7]] + tip [[1, 1], [1, 1]]
+/// + j / L^2 [[4, 6], [6, 9]] (the tip's deflection a + b, its slope (2 a + 3 b) / L), K = E I / L^3 [[4, 6], [6, 12]]
+/// (int w''^2), det(K - w^2 M) = 0: both frequencies (Hz), lowest first.
+fn ritz_hz(ei: f64, m: f64, length: f64, tip: f64, j: f64) -> [f64; 2] {
+    let r = j / (length * length);
+    let mass = [m / 5.0 + tip + 4.0 * r, m / 6.0 + tip + 6.0 * r, m / 7.0 + tip + 9.0 * r];
+    let k = ei / length.powi(3);
+    let stiffness = [4.0 * k, 6.0 * k, 12.0 * k];
+    let a = mass[0] * mass[2] - mass[1] * mass[1];
+    let b = stiffness[0] * mass[2] + stiffness[2] * mass[0] - 2.0 * stiffness[1] * mass[1];
+    let c = stiffness[0] * stiffness[2] - stiffness[1] * stiffness[1];
+    let root = (b * b - 4.0 * a * c).sqrt();
+    [2.0 * c / (b + root), (b + root) / (2.0 * a)].map(|l| l.sqrt() / std::f64::consts::TAU)
+}
+
+/// The tube's bending modes, one-way: E I = 2.1e11 x pi / 64 (0.06^4 - 0.052^4) = 58225.5 N m^2, 4.5 kg over 0.8 m.
+/// Its Ritz pair (`ritz_hz`, nothing at the tip): w^2 = mu E I / (m L^3), mu^2 - 1224 mu + 15120 = 0, mu = 612 -+
+/// sqrt(359424) = 12.48019 and 1211.520: 89.381 Hz and 880.64 Hz. The first is the exact Euler-Bernoulli cantilever's
+/// 1.875104^2 / (2 pi) sqrt(E I / (m L^3)) = 88.958 Hz from above by 0.475 %, the bare link being the pair's worst case
+/// (`the_bend_modes_lowest_is_the_exact_beams_over_tip_masses_and_inertias`); the second is an upper bound, the beam's
+/// own second mode is at 557.5 Hz (4.694^2 / 1.875^2 of the first). The exact first mode alone (before 22 November, and
+/// two-way still) gave 88.958 Hz here but stood up to 15.7 % high with a tip inertia.
 #[test]
 fn a_link_bends_at_the_euler_bernoulli_frequency_of_a_cantilever() {
     let m = one_bending_link();
@@ -734,12 +755,25 @@ fn a_link_bends_at_the_euler_bernoulli_frequency_of_a_cantilever() {
     let euler_bernoulli =
         1.875_104_068_711_961f64.powi(2) / std::f64::consts::TAU * (58_225.524f64 / (4.5 * 0.512)).sqrt();
     assert!((euler_bernoulli - 88.958).abs() < 1e-3);
-    assert!(modes.iter().any(|mode| (mode.hz / euler_bernoulli - 1.0).abs() < 1e-6), "{modes:?}");
+    let [first, second] = ritz_hz(58_225.524, 4.5, 0.8, 0.0, 0.0);
+    println!("{modes:?}: by hand {first} Hz and {second} Hz, the exact beam's {euler_bernoulli} Hz");
+    assert!((first - 89.381).abs() < 1e-3 && (second - 880.64).abs() < 0.01, "{first} {second}");
+    // Beside the joint's own mode on its gearbox (46.3 Hz).
+    let nearest =
+        |f: f64| modes.iter().map(|m| m.hz).fold(0.0, |b, x| if (x - f).abs() < (b - f).abs() { x } else { b });
+    near(nearest(first), first, 1e-6, "the pair's first");
+    near(nearest(second), second, 1e-6, "the pair's second");
+    assert!(nearest(first) / euler_bernoulli - 1.0 < 0.005, "{modes:?}");
 }
 
-/// Under its own weight, lying level, the tube sags in its mode by 0.3915 m g / (3.0906 E I / L^3) =
-/// 0.391496 x 44.130 / (3.0906 x 58225.5 / 0.512) = 49.16 um: within 1.5 % of the exact q L^4 / (8 E I) =
-/// 44.130 x 0.512 / (8 x 58225.5) = 48.51 um of a beam loaded along its length. Downwards: the signal is positive.
+/// Under its own weight, lying level, the tube sags as the exact beam does at its tip, q L^4 / (8 E I) = 44.130 x 0.512 /
+/// (8 x 58225.5) = 48.506 um: the pair spans the static shapes, and the evenly spread load's (a, b) = q L^4 / E I
+/// (5/24, -1/12) solves K (a, b) = q L (1/3, 1/4) with the tip's a + b = 1/8 exactly. On the modes (`ritz_hz`, mu =
+/// 12.48019 and 1211.520; (K - mu M) x = 0 from its first row, x = (6 - mu / 6, mu / 5 - 4)): the first scaled to a tip
+/// of 1, (1.622499, -0.622499), the second to int w^2 = 33/140, (-6.31647, 7.68293) up to its sign, tip 1.366462; the
+/// coordinates d_i = x_i^T M c / x_i^T M x_i are 48.850 um and -0.25106 um (`link.1.bend`, `link.1.bend_2`), the
+/// tip 48.850 - 0.343 = 48.506 um. The exact first mode alone (before 22 November) gave 49.16 um, 1.3 % high.
+/// Downwards: the signal is positive.
 #[test]
 fn a_level_link_sags_under_its_weight_as_a_cantilever_does() {
     let m = one_bending_link();
@@ -747,9 +781,25 @@ fn a_level_link_sags_under_its_weight_as_a_cantilever_does() {
     m.equilibrium(&[0.0], &mut state, &mut torque);
     let mut values = Vec::new();
     m.signals(&state, &torque, &mut values);
-    let bend = values[m.signal_infos().iter().position(|s| s.id == "link.1.bend").unwrap()];
-    assert!((bend - 49.156e-6).abs() < 0.01e-6, "{bend}");
-    assert!((bend / 48.506e-6 - 1.0).abs() < 0.015);
+    let signal = |id: &str| values[m.signal_infos().iter().position(|s| s.id == id).unwrap()];
+    let (bend, second) = (signal("link.1.bend"), signal("link.1.bend_2"));
+    let ei = 2.1e11 * sim_components::beam::tube_second_moment(0.06, 0.004);
+    let exact = 4.5 * 9.80665 / 0.8 * 0.8f64.powi(4) / (8.0 * ei);
+    let scale = 4.5 * 9.80665 / 0.8 * 0.8f64.powi(4) / ei;
+    let c = [5.0 / 24.0 * scale, -scale / 12.0];
+    let gram = |x: [f64; 2], y: [f64; 2]| x[0] * y[0] / 5.0 + (x[0] * y[1] + x[1] * y[0]) / 6.0 + x[1] * y[1] / 7.0;
+    let shape = |mu: f64| [6.0 - mu / 6.0, mu / 5.0 - 4.0];
+    let s1 = shape(612.0 - 359_424f64.sqrt()).map(|v| v / (shape(612.0 - 359_424f64.sqrt()).iter().sum::<f64>()));
+    let raw = shape(612.0 + 359_424f64.sqrt());
+    let s2 = raw.map(|v| v * (33.0 / 140.0 / gram(raw, raw)).sqrt());
+    let (d1, d2) = (gram(s1, c) / gram(s1, s1), gram(s2, c) / gram(s2, s2));
+    let swing = d2 * (s2[0] + s2[1]);
+    println!("bend {bend}, bend_2 {second}; by hand {d1} and {d2} (tip {swing}), exact tip {exact}");
+    near(bend, d1, 1e-9, "link.1.bend");
+    near(second.abs(), d2.abs(), 1e-6, "link.1.bend_2");
+    near(d1 + swing, exact, 1e-12, "the tip by hand");
+    near(bend + swing, exact, 1e-9, "the tip");
+    assert!((exact - 48.506e-6).abs() < 1e-9 && bend > 0.0);
 }
 
 /// A steel tube 60 x 4 mm, 0.8 m long along x, on joint 1 about y (its URDF mass and inertia `tube`: kg, then ixx, iyy,
@@ -812,8 +862,9 @@ const ALL_DIRECTIONS: &str = r#"link_bending.directions = ["in_plane", "out_of_p
 /// 56146.0 N m/rad, I_p = pi / 32 (0.06^4 - 0.052^4); the tube's own share J_own / 3, J_own = m (D^2 + d^2) / 8 =
 /// 4.5 x (0.0036 + 0.002704) / 8 = 3.546e-3 kg m^2 (its URDF ixx), 1.182e-3: f = sqrt(56146.0 / 0.501182) / 2 pi =
 /// 53.2699 Hz, sqrt(G I_p / (L J)) / 2 pi = 53.3328 Hz without the tube's share (the exact root of beta tan beta =
-/// J_own / J gives 53.26988 Hz). It bends in both planes alike, a round tube with 10 kg at its tip: k = 1.875104^4 / 4 x
-/// E I / L^3 = 351467 N/m, m / 4 + M = 11.125 kg, 28.2887 Hz.
+/// J_own / J gives 53.26988 Hz). It bends in both planes alike, a round tube with 10 kg at its tip (no tip inertia
+/// across it): the Ritz pair (`ritz_hz`) 27.9493 Hz and 535.42 Hz, the exact beam 27.9481 Hz (the exact first mode
+/// alone gave 28.2887 Hz, +1.2 %).
 #[test]
 fn a_tube_twists_at_the_frequency_of_its_tip_inertia_and_bends_alike_in_both_planes() {
     let m = tube_with_tip(
@@ -824,13 +875,20 @@ fn a_tube_twists_at_the_frequency_of_its_tip_inertia_and_bends_alike_in_both_pla
         &["effects.joint_elasticity = false", ALL_DIRECTIONS],
     );
     let modes = m.modes(&[0.0, 0.0]);
-    assert_eq!(modes.len(), 3, "{modes:?}");
-    near(modes[0].hz, 28.2887, 1e-5, "bend in the joint's plane");
-    near(modes[1].hz, 28.2887, 1e-5, "bend across it");
+    assert_eq!(modes.len(), 5, "{modes:?}");
+    let ei = 2.1e11 * sim_components::beam::tube_second_moment(0.06, 0.004);
+    let [first, second] = ritz_hz(ei, 4.5, 0.8, 10.0, 0.0);
+    let exact = sim_components::beam::cantilever_first_frequency(ei, 4.5, 10.0, 0.0, 0.8) / std::f64::consts::TAU;
+    println!("{modes:?}: by hand {first} and {second} Hz, exact {exact} Hz");
+    assert!((first - 27.9493).abs() < 1e-4 && (second - 535.42).abs() < 0.01 && first / exact - 1.0 < 1e-4);
+    near(modes[0].hz, first, 1e-6, "bend in the joint's plane");
+    near(modes[1].hz, first, 1e-6, "bend across it");
     near(modes[2].hz, 53.2699, 1e-5, "twist");
     near(modes[2].hz, 53.26988, 1e-5, "twist, exact");
+    near(modes[3].hz, second, 1e-6, "second bend in the joint's plane");
+    near(modes[4].hz, second, 1e-6, "second bend across it");
     let ids: Vec<String> = m.signal_infos().into_iter().map(|s| s.id).filter(|id| id.starts_with("link.")).collect();
-    assert_eq!(ids, ["link.1.bend", "link.1.bend_across", "link.1.twist"]);
+    assert_eq!(ids, ["link.1.bend", "link.1.bend_2", "link.1.bend_across", "link.1.bend_across_2", "link.1.twist"]);
 }
 
 /// Two-way (effects.link_bending_reaction): the tube, here 0.45 kg (iyy 0.024 kg m^2 about its centre), carries 20 kg
@@ -1114,18 +1172,17 @@ fn the_palletisers_rod_and_crank_hold_by_hand() {
 /// `bar_field`): a steel tube 150 x 10 mm, E I = 2.1e11 x pi / 64 (0.15^4 - 0.13^4) = 2.6122e6 N m^2, its own 25 kg
 /// over 1 m. The crank, pinned on the turret, turns with the forearm and so holds its turn against the arm's bend: the
 /// forearm, wrist, flange and carton (20 + 5 + 8 + 20 = 53 kg) move with the arm's tip and do not turn; the rod (8 kg),
-/// pinned on the forearm's lever and parallel to the arm's chord, swings about its lower end, m / 3 at the tip; the crank
-/// stays. The mode's mass by hand 25 / 4 + 53 + 8 / 3 = 61.91667 kg on 1.875104^4 / 4 E I / L^3: 53.626 Hz. The exact
-/// Euler-Bernoulli cantilever of 25 kg with 55.6667 kg at its tip and no tip inertia (the forearm held level,
-/// `beam::cantilever_first_frequency`) rings at 52.980 Hz, 1.22 % lower: the bend-mode method's known overestimate (1.2 to 2.6 %
-/// in the test case). Refused before 22 November. Without the bars the forearm and all beyond turn with
-/// the tip's slope 1.3765 d / L, and their turning inertia about the tip lowers the mode to 35.17 Hz.
+/// pinned on the forearm's lever and parallel to the arm's chord, swings about its lower end, m / 3 at the tip (its turn
+/// is the tip's deflection over L, whatever the shape); the crank stays. By hand the one-way Ritz pair (`ritz_hz`) of 25
+/// kg with 53 + 8 / 3 = 55.6667 kg at its tip and no tip inertia: 52.9823 Hz and 1015.83 Hz; the exact Euler-Bernoulli
+/// cantilever with that tip mass (`beam::cantilever_first_frequency`) 52.9796 Hz, 0.005 % lower. The exact first mode
+/// alone (before 22 November, and two-way still) gave 53.626 Hz, 1.22 % high. Without the bars the forearm and all
+/// beyond turn with the tip's slope, and their turning inertia about the tip lowers the mode by far more than 5 %.
 #[test]
 fn the_parallelogram_holds_the_forearm_against_the_upper_arms_bend() {
     let bent = |bars: bool| (PALLETISER.build)(&bent_config(bars, false)).unwrap();
     let ei = 2.1e11 * std::f64::consts::PI / 64.0 * (0.15f64.powi(4) - 0.13f64.powi(4));
-    let k = 1.875_104_068_711_961f64.powi(4) / 4.0 * ei;
-    let by_hand = (k / (25.0 / 4.0 + 53.0 + 8.0 / 3.0)).sqrt() / std::f64::consts::TAU;
+    let [by_hand, second] = ritz_hz(ei, 25.0, 1.0, 53.0 + 8.0 / 3.0, 0.0);
     let exact =
         sim_components::beam::cantilever_first_frequency(ei, 25.0, 53.0 + 8.0 / 3.0, 0.0, 1.0) / std::f64::consts::TAU;
     let (held, free) = (bent(true).modes(&[0.0; 4]), bent(false).modes(&[0.0; 4]));
@@ -1133,9 +1190,12 @@ fn the_parallelogram_holds_the_forearm_against_the_upper_arms_bend() {
         modes.iter().map(|m| m.hz).fold(0.0, |b, x| if (x - f).abs() < (b - f).abs() { x } else { b })
     };
     let (found, unheld) = (nearest(&held, by_hand), nearest(&free, by_hand));
-    println!("held {found} Hz, by hand {by_hand} Hz, exact beam {exact} Hz; without the bars {unheld} Hz");
+    println!(
+        "held {found} Hz, by hand {by_hand} Hz (and {second} Hz), exact beam {exact} Hz; without the bars {unheld} Hz"
+    );
     near(found, by_hand, 1e-6, "the held mode");
-    assert!(found > exact && found / exact - 1.0 < 0.026, "{found} against the exact {exact}");
+    near(nearest(&held, second), second, 1e-6, "the held pair's second");
+    assert!(found >= exact && found / exact - 1.0 < 1e-4, "{found} against the exact {exact}");
     assert!((unheld - by_hand).abs() > 0.05 * by_hand, "without the bars {unheld} Hz");
     // Acting back on the joints (effects.link_bending_reaction), the bars' fields in the coupling with their rates: its
     // energy holds over the suite's run with gravity (`testkit::energy_conservation`): 1.8e-8 J of the 2.8 mJ put in over
@@ -2298,9 +2358,10 @@ fn the_condition_number_is_that_of_the_geometric_jacobian() {
 }
 
 /// The one-way bend in its joint's plane takes the body beyond the link whole, its turning inertia too: the tube of
-/// 4.5 kg with 10 kg and 0.5 kg m^2 (about y) at its tip, k = 351467.3 N/m, modal mass m / 4 + M + (1.3765 / L)^2 J =
-/// 1.125 + 10 + (1.3765 / 0.8)^2 x 0.5 = 12.60528 kg (the tip turns by 1.3765 d / L): f = sqrt(k / M_d) / 2 pi =
-/// 26.5758 Hz, against 28.2887 Hz of the mass alone.
+/// 4.5 kg with 10 kg and 0.5 kg m^2 (about y) at its tip, the Ritz pair by hand (`ritz_hz`, the tip turning by
+/// (2 a + 3 b) d / L): 25.9029 Hz and 124.575 Hz, against 27.9493 Hz of the mass alone; the exact beam with that tip
+/// mass and inertia (`beam::cantilever_first_frequency`) within 0.01 %. The exact first mode alone (before 22 November)
+/// gave 26.5758 Hz, 2.6 % high.
 #[test]
 fn the_one_way_bend_carries_the_turning_inertia_of_the_tip() {
     let m = tube_with_tip(
@@ -2311,8 +2372,48 @@ fn the_one_way_bend_carries_the_turning_inertia_of_the_tip() {
         &["effects.joint_elasticity = false", r#"link_bending.directions = ["in_plane"]"#],
     );
     let modes = m.modes(&[0.0, 0.0]);
-    assert_eq!(modes.len(), 1, "{modes:?}");
-    near(modes[0].hz, 26.5758, 1e-4, "bend with the tip's inertia");
+    assert_eq!(modes.len(), 2, "{modes:?}");
+    let ei = 2.1e11 * sim_components::beam::tube_second_moment(0.06, 0.004);
+    let [first, second] = ritz_hz(ei, 4.5, 0.8, 10.0, 0.5);
+    let exact = sim_components::beam::cantilever_first_frequency(ei, 4.5, 10.0, 0.5, 0.8) / std::f64::consts::TAU;
+    println!("{modes:?}: by hand {first} and {second} Hz, exact {exact} Hz");
+    assert!((first - 25.9029).abs() < 1e-4 && (second - 124.575).abs() < 1e-3, "{first} {second}");
+    near(modes[0].hz, first, 1e-6, "bend with the tip's inertia");
+    near(modes[1].hz, second, 1e-6, "the pair's second");
+    assert!(first / exact - 1.0 < 1e-4, "{first} against the exact {exact}");
+}
+
+/// The bent link's lowest mode against the exact Euler-Bernoulli cantilever with a tip mass M and a tip inertia J
+/// (`beam::cantilever_first_frequency`): the 4.5 kg tube with M / m from 0 to 3 and J / (m L^2) 0, 0.1 and 0.3 at its
+/// tip, one-way on rigid joints, within 0.5 % everywhere: +0.475 % bare, at most +0.11 % with anything at the tip. The
+/// exact first mode alone (before 22 November, two-way still) stood up to 15.7 % high (J / (m L^2) = 0.3, no tip mass),
+/// 6.6 % at 0.1 and 1.3 % at M / m = 3 without inertia; the exact mode with the static shape (the pair the brief named)
+/// would stand 1.4 % high at J / (m L^2) = 0.1 and 3.9 % at 1 (worked out by hand off this test).
+#[test]
+fn the_bend_modes_lowest_is_the_exact_beams_over_tip_masses_and_inertias() {
+    let (m, length) = (4.5, 0.8);
+    let ei = 2.1e11 * sim_components::beam::tube_second_moment(0.06, 0.004);
+    let mut worst: f64 = 0.0;
+    for ratio in [0.0, 0.25, 0.5, 1.0, 2.0, 3.0] {
+        for turning in [0.0, 0.1, 0.3] {
+            let (tip, j) = (ratio * m, turning * m * length * length);
+            let machine = tube_with_tip(
+                "sweep",
+                (m, [3.546e-3, 0.24, 0.24]),
+                (tip, [j, j, j]),
+                -0.57,
+                &["effects.joint_elasticity = false", r#"link_bending.directions = ["in_plane"]"#],
+            );
+            let found = machine.modes(&[0.0, 0.0])[0].hz;
+            let exact = sim_components::beam::cantilever_first_frequency(ei, m, tip, j, length) / std::f64::consts::TAU;
+            println!(
+                "M / m {ratio}, J / (m L^2) {turning}: {found} Hz, exact {exact} Hz, {:+.4} %",
+                100.0 * (found / exact - 1.0)
+            );
+            worst = worst.max((found / exact - 1.0).abs());
+        }
+    }
+    assert!(worst < 0.005, "{:.3} % off the exact beam", 100.0 * worst);
 }
 
 /// A bar of its own (`arm.bars_*`): 5 kg on joint 2's link at (0, 0, 0.3) of its frame, 0.3 m from the joint's axis with
