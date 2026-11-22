@@ -77,6 +77,9 @@ pub struct Based {
     inner_base_signals: usize,
     /// effects.base_reaction.
     reaction: Option<Reaction>,
+    /// An obstacle's push on the contact coordinates (`Machine::set_tool_force`), which the base's move shifts too: it
+    /// acts on the base as well (`pushed`). Empty for none.
+    push: Vec<f64>,
 }
 
 /// The two-way coupling (effects.base_reaction, see the module).
@@ -192,6 +195,7 @@ pub fn mount(cfg: &Config, machine: Box<dyn Machine>) -> Result<Box<dyn Machine>
         dofs,
         pivot,
         reaction,
+        push: Vec::new(),
     };
     // What sways must be heavier than what the machine moves on it along each direction: M_B - A M^-1 A^T > 0.
     if let Some(r) = &based.reaction {
@@ -493,11 +497,14 @@ impl Machine for Based {
         self.inner.derivatives(&state[..n], torque, &mut out[..n]);
         let load = self.load(&state[..n], &out[..n]);
         let m = self.dofs.len();
+        // An obstacle's push on what the base's move shifts: its virtual power per unit of each of the base's rates.
+        let pushed =
+            sim_core::tool_force_on_rates(self, state, &self.push, n + m..n + 2 * m).unwrap_or_else(|| vec![0.0; m]);
         let Some(r) = &self.reaction else {
             for (k, d) in self.dofs.iter().enumerate() {
                 let (x, v) = (state[n + k], state[n + m + k]);
                 out[n + k] = v;
-                out[n + m + k] = (load[d.index] - d.stiffness * x - d.damping * v) / d.mass;
+                out[n + m + k] = (load[d.index] - d.stiffness * x - d.damping * v + pushed[k]) / d.mass;
             }
             return;
         };
@@ -509,7 +516,8 @@ impl Machine for Based {
         let (mut matrix, mut rhs) = (vec![0.0; m * m], vec![0.0; m]);
         for (k, dk) in self.dofs.iter().enumerate() {
             let (i, x, v) = (dk.index, state[n + k], state[n + m + k]);
-            rhs[k] = load[i] - dk.stiffness * x - dk.damping * v - (0..6).map(|j| g[i][j] * w[j]).sum::<f64>();
+            rhs[k] =
+                load[i] - dk.stiffness * x - dk.damping * v - (0..6).map(|j| g[i][j] * w[j]).sum::<f64>() + pushed[k];
             for (l, dl) in self.dofs.iter().enumerate() {
                 matrix[k * m + l] = if k == l { dk.mass } else { 0.0 } - g[i][dl.index];
             }
@@ -623,7 +631,30 @@ impl Machine for Based {
         self.inner.set_dwelling(dwelling)
     }
     fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push.clear();
+        self.push.extend_from_slice(force);
         self.inner.set_tool_force(force)
+    }
+    fn contact_axes(&self) -> usize {
+        self.inner.contact_axes()
+    }
+    /// The machine's, moved with the base as the tool is (`tool_shift`).
+    fn contact_state(&self, state: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+        self.inner.contact_state(&state[..self.n()], pos, vel);
+        let shift = self.tool_shift(pos, &self.full(state, false));
+        let rate = self.tool_shift(pos, &self.full(state, true));
+        pos.iter_mut().zip(shift).for_each(|(p, d)| *p += d);
+        vel.iter_mut().zip(rate).for_each(|(v, d)| *v += d);
+    }
+    /// The machine's parts placed at `at` less the base's move, the base where it is.
+    fn contact_placed(&self, state: &[f64], at: &[f64], out: &mut Vec<f64>) {
+        let n = self.n();
+        let mut own = at.to_vec();
+        let shift = self.tool_shift(at, &self.full(state, false));
+        own.iter_mut().zip(shift).for_each(|(p, d)| *p -= d);
+        self.inner.contact_placed(&state[..n], &own, out);
+        out.truncate(n);
+        out.extend_from_slice(&state[n..]);
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.inner.set_brake_engaged(engaged)
@@ -1164,6 +1195,7 @@ mod tests {
             external_reference: external_wrench(&at_rest),
             inner_base_signals: 0,
             reaction: Some(reaction),
+            push: Vec::new(),
         };
         state.extend([0.0; 6]);
         let mut rk = Rk4::new(state.len());
