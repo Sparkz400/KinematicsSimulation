@@ -1110,6 +1110,68 @@ fn the_palletisers_rod_and_crank_hold_by_hand() {
     assert!(with[2].abs() < without[2].abs(), "the bars balance the forearm: {with:?} {without:?}");
 }
 
+/// The palletiser's upper arm bending in its joints' plane while its parallelogram holds the forearm (`held_from`,
+/// `bar_field`): a steel tube 150 x 10 mm, E I = 2.1e11 x pi / 64 (0.15^4 - 0.13^4) = 2.6122e6 N m^2, its own 25 kg
+/// over 1 m. The crank, pinned on the turret, turns with the forearm and so holds its turn against the arm's bend: the
+/// forearm, wrist, flange and carton (20 + 5 + 8 + 20 = 53 kg) move with the arm's tip and do not turn; the rod (8 kg),
+/// pinned on the forearm's lever and parallel to the arm's chord, swings about its lower end, m / 3 at the tip; the crank
+/// stays. The mode's mass by hand 25 / 4 + 53 + 8 / 3 = 61.91667 kg on 1.875104^4 / 4 E I / L^3: 53.626 Hz. The exact
+/// Euler-Bernoulli cantilever of 25 kg with 55.6667 kg at its tip and no tip inertia (the forearm held level,
+/// `beam::cantilever_first_frequency`) rings at 52.980 Hz, 1.22 % lower: the bend-mode method's known overestimate (1.2 to 2.6 %
+/// in the test case). Refused before 22 November. Without the bars the forearm and all beyond turn with
+/// the tip's slope 1.3765 d / L, and their turning inertia about the tip lowers the mode to 35.17 Hz.
+#[test]
+fn the_parallelogram_holds_the_forearm_against_the_upper_arms_bend() {
+    let bent = |bars: bool| (PALLETISER.build)(&bent_config(bars, false)).unwrap();
+    let ei = 2.1e11 * std::f64::consts::PI / 64.0 * (0.15f64.powi(4) - 0.13f64.powi(4));
+    let k = 1.875_104_068_711_961f64.powi(4) / 4.0 * ei;
+    let by_hand = (k / (25.0 / 4.0 + 53.0 + 8.0 / 3.0)).sqrt() / std::f64::consts::TAU;
+    let exact =
+        sim_components::beam::cantilever_first_frequency(ei, 25.0, 53.0 + 8.0 / 3.0, 0.0, 1.0) / std::f64::consts::TAU;
+    let (held, free) = (bent(true).modes(&[0.0; 4]), bent(false).modes(&[0.0; 4]));
+    let nearest = |modes: &[sim_core::Mode], f: f64| {
+        modes.iter().map(|m| m.hz).fold(0.0, |b, x| if (x - f).abs() < (b - f).abs() { x } else { b })
+    };
+    let (found, unheld) = (nearest(&held, by_hand), nearest(&free, by_hand));
+    println!("held {found} Hz, by hand {by_hand} Hz, exact beam {exact} Hz; without the bars {unheld} Hz");
+    near(found, by_hand, 1e-6, "the held mode");
+    assert!(found > exact && found / exact - 1.0 < 0.026, "{found} against the exact {exact}");
+    assert!((unheld - by_hand).abs() > 0.05 * by_hand, "without the bars {unheld} Hz");
+    // Acting back on the joints (effects.link_bending_reaction), the bars' fields in the coupling with their rates: its
+    // energy holds over the suite's run (`testkit::energy_conservation`) without gravity (1e-14 J of the 2.8 mJ put in).
+    // With gravity it drifts by 0.47 % (open: each bar alone holds it to 1e-12 J; both together not, the rod pinned
+    // on the held forearm).
+    let mut cfg = bent_config(true, true);
+    cfg.set_text("effects.gravity = false").unwrap();
+    sim_core::testkit::energy_conservation((PALLETISER.build)(&cfg).unwrap().as_ref());
+}
+
+/// The palletiser rigid and loss-free in joint space, its upper arm bending in its plane (a steel tube 150 x 10 mm,
+/// undamped), with or without its parallelogram's bars, with or without the bend acting back on the joints.
+fn bent_config(bars: bool, reaction: bool) -> Config {
+    {
+        let mut cfg = rigid(&PALLETISER);
+        cfg.set_text(&format!("effects.link_bending_reaction = {reaction}")).unwrap();
+        for edit in [
+            "kinematics.tool_space = false",
+            "effects.link_bending = true",
+            r#"link_bending.directions = ["in_plane"]"#,
+            "link_bending.outer_diameter_m = [0.0, 0.15, 0.0, 0.0, 0.0]",
+            "link_bending.wall_m = [0.0, 0.01, 0.0, 0.0, 0.0]",
+            "link_bending.youngs_modulus_pa = 2.1e11",
+            "link_bending.damping_ratio = 0.0",
+        ] {
+            cfg.set_text(edit).unwrap();
+        }
+        if !bars {
+            for key in ["on", "turns_with", "pin_m", "mass_kg", "com_m", "inertia_kgm2"] {
+                cfg.set_text(&format!("arm.bars_{key} = []")).unwrap();
+            }
+        }
+        cfg
+    }
+}
+
 /// The palletiser's carton swinging on the flange (effects.payload_swing), at rest with the arm still, the flange level
 /// and the carton hanging 0.2 m below it. By hand: turned by 0.1 rad about the swing's first axis (across the carton's
 /// 0.6 m side, the flange's y) its weight rises by m g l (1 - cos 0.1) = 20 * 9.80665 * 0.2 * 0.0049958 = 0.19597 J and
@@ -2253,8 +2315,9 @@ fn a_parallelogram_bar_of_its_own_moves_with_its_pin_and_turns_with_its_link() {
     let along = |s: f64| -> Vec<f64> { state.iter().zip(&rates).map(|(x, r)| x + s * r).collect() };
     let change = (with.energy(&along(h)) - with.energy(&along(-h))) / (2.0 * h);
     assert!(change.abs() < 1e-6, "the energy changes by {change} W");
+    // Bending links with the bar build since 22 November (refused before; `the_parallelogram_holds_the_forearm_against_the_upper_arms_bend`).
     cfg.set_text("effects.link_bending = true").unwrap();
-    assert!((URDF_ARM.build)(&cfg).is_err());
+    assert!((URDF_ARM.build)(&cfg).is_ok());
     // The palletiser, its joints coupled: a 4 kg rod pinned on the forearm (URDF joint 3) 0.1 m behind the elbow,
     // parallel to the upper arm (joint 2), and its energy holds alike.
     let mut cfg = rigid(&PALLETISER);

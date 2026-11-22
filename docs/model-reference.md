@@ -1293,7 +1293,7 @@ k_mod = 1.875104⁴ / 4 · E I / L³ = 3.0906 E I / L³,   c = 2 ζ sqrt(k_mod m
 m_mod d̈ + c ḋ + k_mod d = Q_g − ṗ                   (one-way; m_mod, Q_g and p below)
 ```
 
-turn = along × across. The bodies beyond the link ride on its tip whole, with their turning inertia (`field`; below), and m_mod is the diagonal of M_d at zero joints (m / 4 and everything beyond, a swinging payload as if fixed where it hangs). So a link alone rings at the Euler-Bernoulli frequency 1.875104² / 2π · sqrt(E I / (m L³)) (a 60 × 4 mm steel tube of 0.8 m and 4.5 kg: 88.96 Hz), and a tip load F bends it F L³ / (3.09 E I), the static cantilever's within 3 %. The bodies' accelerations come from the joints' (central differences over ±1 µs along q̇ and q̈ of `Chain::body_states`). One-way, as the [compliant base](#compliant-base): the joints do not feel the links' bending (two-way with `effects.link_bending_reaction`, below). In tool space the flange moves with each link's tip and turns with its slope, d · across + 1.3765 d / L · turn × (flange − tip), its turn added to the rotation vector through exp and log; in joint space the tool pose is the joints, which the bending does not move (its signals `link.<n>.bend` show it). A link along its joint's axis (the base column) has no bend (shortcut in `arm.rs`). Link bending and parallelogram bars that are bodies of their own (`arm.bars_turns_with`) are refused together: a bar closes a loop the links' cantilever modes do not have. Against the exact beam the one-mode method stands 1.2 to 2.6 % high (measured in the test case, `docs/development/estimates-and-open-items.md`).
+turn = along × across. The bodies beyond the link ride on its tip whole, with their turning inertia (`field`; below; those a parallelogram's bar holds move with the tip without turning, see "Bending links with bars"), and m_mod is the diagonal of M_d at zero joints (m / 4 and everything beyond, a swinging payload as if fixed where it hangs). So a link alone rings at the Euler-Bernoulli frequency 1.875104² / 2π · sqrt(E I / (m L³)) (a 60 × 4 mm steel tube of 0.8 m and 4.5 kg: 88.96 Hz), and a tip load F bends it F L³ / (3.09 E I), the static cantilever's within 3 %. The bodies' accelerations come from the joints' (central differences over ±1 µs along q̇ and q̈ of `Chain::body_states`). One-way, as the [compliant base](#compliant-base): the joints do not feel the links' bending (two-way with `effects.link_bending_reaction`, below). In tool space the flange moves with each link's tip and turns with its slope, d · across + 1.3765 d / L · turn × (flange − tip), its turn added to the rotation vector through exp and log; in joint space the tool pose is the joints, which the bending does not move (its signals `link.<n>.bend` show it). A link along its joint's axis (the base column) has no bend (shortcut in `arm.rs`). Link bending and parallelogram bars that are bodies of their own (`arm.bars_turns_with`) are refused together: a bar closes a loop the links' cantilever modes do not have. Against the exact beam the one-mode method stands 1.2 to 2.6 % high (measured in the test case, `docs/development/estimates-and-open-items.md`).
 
 **Directions** (`link_bending.directions`, shipped `["in_plane"]`, the model above). `out_of_plane` adds the bend across that plane (across' = along × across, turning about along × across' = −across), `torsion` the twist about the link's length: one more first mode each per link, states after the others in the order of the list. The twist is a shaft from the joint, its tip turning by d (rad) about the link's line, stiffness k = G I_p / L, I_p = 2 I = π (D⁴ − d⁴) / 32 (`link_bending.shear_modulus_pa`), its shape growing evenly along the link. Signals `link.<n>.bend_across` (m) and `link.<n>.twist` (rad).
 
@@ -1993,8 +1993,30 @@ Source: [`arm.rs`](../crates/machine-joint-kit/src/arm.rs), [`config/palletiser.
 so that a parallelogram keeps the flange level; Newton-Euler on the chain as the [arms](#arms-in-tool-space-scara-six-axis-arm).
 The parallelogram's bars the URDF leaves out can be bodies of their own (`arm.bars_on`, `bars_turns_with`, `bars_pin_m`,
 `bars_mass_kg`, `bars_com_m`, `bars_inertia_kgm2`): bar i pinned at a point of one link, staying parallel to another and
-turning with it, its points moving at v_pin + ω_turns × (r − pin). The shipped arrays are empty. Bars together with
-`effects.link_bending` are refused. With `effects.payload_swing` the payload hangs on a pivot about two axes, two passive
+turning with it, its points moving at v_pin + ω_turns × (r − pin). The palletiser ships its forearm's drive
+parallelogram so since 22 November (estimates): the crank, 6 kg, on motor 3's shaft at the upper arm's pivot, turning
+with the forearm, its centre 0.15 m behind the pivot; the rod, 8 kg, from the crank's end to the forearm's rear lever
+(0.3 m behind the elbow), parallel to the upper arm. With the arm upright and the forearm level their weights take
+(8 × 0.3 + 6 × 0.15) g = 32.36 N m off the forearm's joint, 0.2023 N m at motor 3, nothing at motor 2
+(`the_palletisers_rod_and_crank_hold_by_hand`); the turret's held mode at the start pose is 8.21 Hz (8.30 without
+them). The MuJoCo reference compares the URDF's chain alone.
+
+**Bending links with bars** (since 22 November; refused before). A bar pinned on a body before a bent link that turns
+with a body beyond it (the crank: pinned on the turret, turning with the forearm, across the upper arm) drives that
+body's turn from before the link: the link's bend in its joints' plane (the plane the pins turn in) moves that body and
+all beyond it with the tip but does not turn them (`BentLink::held_from`; `field` gives them the tip's move only, as
+`field_rate` and the flange's shift do), so they count with their mass and not their turning inertia, as on a
+cantilever with a tip mass and no tip inertia. The bars have fields of their own (`bar_field`): the pin moves as the
+points of its body (on the bent link itself at the mode's shape where it sits, `beam::cantilever_shape`, nothing behind
+the joint), the bar turns as the body it turns with; a bar turning with the bent link while pinned beyond it (the rod)
+is the parallelogram's side across from the link and turns with its chord, d / L, so it swings about its other end.
+Out of the joints' plane and in twist the pins do not hold, and the bodies take the tip's slope as before. The
+palletiser's upper arm (steel tube 150 × 10 mm, 25 kg) in its plane: by hand 25/4 + 53 + 8/3 = 61.92 kg on
+(βL)⁴/4 E I / L³, 53.626 Hz, which the machine's mode gives; the exact Euler-Bernoulli cantilever with that tip mass
+and no tip inertia rings at 52.980 Hz (the bend-mode method's known +1.2 %); without the bars, the forearm turning with
+the tip's slope, 35.17 Hz. Two-way the energy holds without gravity (1e-14 J of the 2.8 mJ a pulse puts in, `the_parallelogram_holds_the_forearm_against_the_upper_arms_bend`), and with gravity for each bar alone (1e-12 J); with both bars and gravity it drifts by 0.47 % over 10 s (0.14 % with the rod not turning): open.
+Left out: the loop's own stiffness beyond holding the turn (the rod and crank rigid), and a loop's general geometry: the
+rule is the parallelogram's (the rod parallel to the link's chord). With `effects.payload_swing` the payload hangs on a pivot about two axes, two passive
 joints on `arm.payload_swing_stiffness_nm_rad` and `_damping_nm_s_rad`.
 
 ## Mover track
