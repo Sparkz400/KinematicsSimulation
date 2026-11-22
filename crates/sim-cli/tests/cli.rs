@@ -372,7 +372,8 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
             // Kv = 50 1/s puts the position loop's bandwidth near 8 Hz.
             assert!(band > lowest && band < 20.0, "{}: {row}", entry.id);
         }
-        // The margins of the config as it is: one row per motor, each loop stable with at least 35 degrees and 6 dB (the
+        // The margins of the config as it is: one row per motor and pose the cycle stops at (`margin_poses`), each loop
+        // stable with at least 35 degrees and 6 dB at each (the
         // judgement of the shipped loops with friction; sim-machines' control tests judge them without, and over the bounds).
         let margins = table(&["margins", entry.id]);
         assert_eq!(
@@ -387,7 +388,8 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
             let phase_ok = if row[2].is_empty() { row[3].is_empty() } else { row[3].parse::<f64>().unwrap() > 35.0 };
             assert!(phase_ok && gain > 6.0 && row[8] == "ok", "{}: {row:?}", entry.id);
         }
-        assert_eq!(rows.len(), (entry.build)(&entry.config()).unwrap().motors().len());
+        let poses = sim_components::analysis::margin_poses(&entry.config()).unwrap().len();
+        assert_eq!(rows.len(), (entry.build)(&entry.config()).unwrap().motors().len() * poses);
         // They are the figures of `velocity_loop_margins`, which the command line prints alike for every machine: checked on
         // the one with a belt axis.
         if entry.id == one_belt_axis().id {
@@ -436,6 +438,11 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         // its gain (7.8 dB).
         if cfg.get("effects.screw_stiffness_with_position").is_ok() {
             sets.push("effects.screw_stiffness_with_position=false".into());
+        }
+        // The unstable gains at the start pose alone (no cycle, `margin_poses`): every pose would take four times as
+        // long (the slowest machine past the test's limit).
+        if cfg.get("cycle.segment").is_ok() {
+            sets.push("cycle.segment=[]".into());
         }
         let margins = |sets: &[String]| {
             let out = cli(&[

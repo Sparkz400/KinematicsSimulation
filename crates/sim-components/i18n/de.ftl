@@ -801,3 +801,4 @@ param-max_velocity_rad_s = Größte Geschwindigkeit [rad/s]
 param-max_acceleration_rad_s2 = Größte Beschleunigung [rad/s²]
 param-max_jerk_rad_s3 = Größter Ruck [rad/s³]
 loop-hammers = hämmert über das Getriebespiel bei { $arg } (Frequenz, Spitze des Moments, das der Drehzahlregler fordert)
+loop-least-over-poses = kleinste über die Posen, an denen der Zyklus hält: { $arg } (Phasenreserve, Amplitudenreserve, dann die Reserve über das Getriebespiel, jede an ihrer Pose)

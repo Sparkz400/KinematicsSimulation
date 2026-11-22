@@ -379,8 +379,9 @@ fn path_error_on_a_circle_matches_the_hand_calculation() {
     }
     let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
-    let gain = 1.0 / (1.0 + (w / 50.0f64).powi(2)).sqrt();
-    let (off_path, behind) = (radius * (1.0 - gain), radius * (w / 50.0) * gain);
+    let kv = cfg.f64("drive.kv_1_s").unwrap();
+    let gain = 1.0 / (1.0 + (w / kv).powi(2)).sqrt();
+    let (off_path, behind) = (radius * (1.0 - gain), radius * (w / kv) * gain);
     assert!(
         (load.path_error_peak - off_path).abs() < 0.1 * off_path,
         "{} m off the path, by hand {off_path} m",
@@ -885,8 +886,9 @@ fn a_circle_timed_by_the_planner_gives_the_hand_calculated_path_error() {
     assert!((fastest - 0.25).abs() < 1e-4, "{fastest} m/s");
 
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
-    let gain = 1.0 / (1.0 + (w / 50.0f64).powi(2)).sqrt();
-    let (off_path, behind) = (radius * (1.0 - gain), radius * (w / 50.0) * gain);
+    let kv = cfg.f64("drive.kv_1_s").unwrap();
+    let gain = 1.0 / (1.0 + (w / kv).powi(2)).sqrt();
+    let (off_path, behind) = (radius * (1.0 - gain), radius * (w / kv) * gain);
     assert!(
         (load.path_error_peak - off_path).abs() < 0.1 * off_path,
         "{} m off the path, by hand {off_path} m",

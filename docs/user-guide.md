@@ -76,8 +76,8 @@ The cycle is the list of `[[cycle.segment]]` in the config: target pose, dwell t
 $ sim-cli analyze t-gantry
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload,torque_unit,speed_unit
-a,6.080000,0.561042,0.168812,200.4456,0.1482,0.1329,203.91,334.14,0.3753,1.28,86.222,11.102,28.90,6.244,1.089e-4,3.559e-5,1.820e-4,4.336e-5,0.000e0,0.000e0,0.000e0,0.000e0,0.201397,0.041,0.007,224.65,0.0000e0,6.4504e2,1.7705e2,3.6275e6,0.000,3.8238e6,4.7207e5,6.1354e9,1.9344e-1,,,0.00,0.0000,N m,rad/s
-b,6.080000,0.467022,0.156754,200.4289,0.1230,0.1234,203.91,334.14,0.3485,1.10,76.236,16.702,35.75,8.232,1.089e-4,3.559e-5,1.820e-4,4.336e-5,0.000e0,0.000e0,0.000e0,0.000e0,0.179593,6.498,1.069,224.65,0.0000e0,6.4504e2,1.7705e2,3.6275e6,0.000,3.8238e6,4.7073e5,9.2044e9,1.5493e-1,,,0.00,0.0000,N m,rad/s
+a,6.080000,0.559815,0.168995,200.4655,0.1478,0.1331,203.94,334.05,0.3757,1.28,86.325,11.097,28.85,6.261,1.065e-4,3.560e-5,1.812e-4,4.296e-5,0.000e0,0.000e0,0.000e0,0.000e0,0.201808,0.060,0.010,224.65,0.0000e0,6.4501e2,1.7711e2,3.6271e6,0.000,3.8234e6,4.7197e5,6.0841e9,1.9371e-1,,,0.00,0.0000,N m,rad/s
+b,6.080000,0.466646,0.156888,200.4541,0.1229,0.1235,203.94,334.05,0.3488,1.10,76.318,16.854,35.76,8.361,1.065e-4,3.560e-5,1.812e-4,4.296e-5,0.000e0,0.000e0,0.000e0,0.000e0,0.179829,6.607,1.087,224.65,0.0000e0,6.4501e2,1.7711e2,3.6271e6,0.000,3.8234e6,4.7070e5,9.1482e9,1.5539e-1,,,0.00,0.0000,N m,rad/s
 ```
 
 The simulator starts the cycle, lets the first pass go by, and measures the second. One row per motor. Columns that describe the machine, not one motor, repeat in every row.
@@ -130,30 +130,30 @@ Then judge the cycle:
 $ sim-cli verdicts t-gantry
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 check,motor,value,limit,result
-motor-peak,a,0.1482,1.000,ok
-motor-thermal,a,1.279,100.0,ok
-motor-s1,a,0.1688,1.270,ok
-motor-speed,a,200.4,420.0,ok
-drive-current,a,0.3753,3.000,ok
-drive-peak-current,a,1.253,10.90,ok
-gearbox-radial-load,a,637.1,1500,ok
-gearbox-continuous,a,0.8186,40.00,ok
+motor-peak,a,0.1478,1.000,ok
+motor-thermal,a,1.282,100.0,ok
+motor-s1,a,0.1690,1.270,ok
+motor-speed,a,200.5,420.0,ok
+drive-current,a,0.3757,3.000,ok
+drive-peak-current,a,1.250,10.90,ok
+gearbox-radial-load,a,637.2,1500,ok
+gearbox-continuous,a,0.8206,40.00,ok
 gearbox-input-speed,a,1914,13000,ok
-gearbox-peak,a,2.204,64.00,ok
-pulley-bearing-life,a,472068,20000,ok
-gearbox-life,a,6135383249,20000,ok
-belt-tooth-load,a,0.1934,1.000,ok
+gearbox-peak,a,2.207,64.00,ok
+pulley-bearing-life,a,471971,20000,ok
+gearbox-life,a,6084053913,20000,ok
+belt-tooth-load,a,0.1937,1.000,ok
 dc-link-energy,a,6.205,6.205,ok
-braking-resistor-continuous,a,0.006818,20.00,ok
-braking-resistor-peak,a,3.764,500.0,ok
+braking-resistor-continuous,a,0.009861,20.00,ok
+braking-resistor-peak,a,4.671,500.0,ok
 dc-link-overvoltage,a,224.7,257.6,ok
 ...
-settling,,0.00004336,0.0001000,ok
-belt-tension,,334.1,1500,ok
+settling,,0.00004296,0.0001000,ok
+belt-tension,,334.0,1500,ok
 belt-least-tension,,203.9,0,ok
-guide-load,,177.0,2000,ok
-guide-life,,3823805,20000,ok
-thermal-warm-start,,0.000004422,0.1000,ok
+guide-load,,177.1,2000,ok
+guide-life,,3823437,20000,ok
+thermal-warm-start,,0.00001066,0.1000,ok
 ```
 
 | Check | Value | Limit | Unit |
@@ -213,20 +213,20 @@ Limits for this task:
 $ sim-cli verdicts t-gantry --set effects.shared_dc_link=true
 ...
 dc-link-energy,a,6.205,6.205,ok
-braking-resistor-continuous,a,0.06308,20.00,ok
-braking-resistor-peak,a,21.94,500.0,ok
+braking-resistor-continuous,a,0.06270,20.00,ok
+braking-resistor-peak,a,21.80,500.0,ok
 dc-link-overvoltage,a,224.7,257.6,ok
 ...
 dc-link-energy,b,6.205,6.205,ok
-braking-resistor-continuous,b,0.06308,20.00,ok
-braking-resistor-peak,b,21.94,500.0,ok
+braking-resistor-continuous,b,0.06270,20.00,ok
+braking-resistor-peak,b,21.80,500.0,ok
 dc-link-overvoltage,b,224.7,257.6,ok
 ...
 ```
 
-On the default cycle the DC link reaches the chopper's threshold, 224.65 V, with separate links (both motors) and with the shared one; the shared resistor burns 0.38 J per cycle, the two separate ones 6.54 J (0.04 J on motor A, 6.50 J on B).
+On the default cycle the DC link reaches the chopper's threshold, 224.65 V, with separate links (both motors) and with the shared one; the shared resistor burns 0.38 J per cycle, the two separate ones 6.67 J (0.06 J on motor A, 6.61 J on B). (On 17 November the shared link peaked at 224.45 V, below the threshold: since cb5f0a40 the belt's vertical runs, 0.16 kg, weigh on Z, which then gives back more as it lowers.)
 
-**Feeding back into the mains.** `effects.regenerative_supply` (off by default, needs `effects.dc_link`) puts a regenerative line module in place of the plain rectifier, as an Active Line Module on a SINAMICS S120: it holds the DC link at the bus level from above too and feeds what the motors give back into the mains, up to `ratings.line_module_max_power_w`, of which `ratings.line_module_efficiency` arrives there. The braking resistor then takes only what is beyond the line module's power. `analyze` reports the energy fed back per motor (column `mains_energy_j`), the energy budget gets the rows `mains` and `line_module` (its loss), the app shows both, and two checks judge the line module: `line-module-continuous` (its mean power, drawn and fed back, against `line_module_rated_power_w`) and `line-module-peak` (its highest power against `line_module_max_power_w`). The shipped values are the smallest S120 Active Line Module, 16 kW rated and 35 kW at most, far above what these machines need. On the default T-gantry 27.2 J of the 27.8 J the motors regenerate per cycle go back into the mains; the resistor burns nothing and the DC link stays at 155.13 V.
+**Feeding back into the mains.** `effects.regenerative_supply` (off by default, needs `effects.dc_link`) puts a regenerative line module in place of the plain rectifier, as an Active Line Module on a SINAMICS S120: it holds the DC link at the bus level from above too and feeds what the motors give back into the mains, up to `ratings.line_module_max_power_w`, of which `ratings.line_module_efficiency` arrives there. The braking resistor then takes only what is beyond the line module's power. `analyze` reports the energy fed back per motor (column `mains_energy_j`), the energy budget gets the rows `mains` and `line_module` (its loss), the app shows both, and two checks judge the line module: `line-module-continuous` (its mean power, drawn and fed back, against `line_module_rated_power_w`) and `line-module-peak` (its highest power against `line_module_max_power_w`). The shipped values are the smallest S120 Active Line Module, 16 kW rated and 35 kW at most, far above what these machines need. On the default T-gantry 27.4 J of the 28.0 J the motors regenerate per cycle go back into the mains; the resistor burns nothing and the DC link stays at 155.13 V.
 
 ## Check a real catalogue machine
 
@@ -284,7 +284,7 @@ settling,,0.00002974,0.0001000,ok
 belt-least-tension,,251.6,0,ok
 ```
 
-The rotor of the 1FK2204-6AF has a third of the inertia of the config's 1FK2205-4AF; the gain goes from 0.45 to 0.14 N m s/rad. (0.45 happens to be calm for this motor too.) The 1FK2104-5AF has a ninth of the inertia: with the gain left at 0.45 it oscillates and its winding never settles. Retuned to 0.049 with Kv left at 50 it sits at the edge of the position loop's stability: it does not come to rest in the dwells (22.8 mm off its target) and its winding's rise does not settle. With Kv lowered to 24 it runs the cycle calmly with 1.22 N m RMS, and misses `settling` (0.15 mm against 0.1 mm): its gain, held to the rotor's crossover, is too low to settle within the dwell.
+The rotor of the 1FK2204-6AF has a third of the inertia of the config's 1FK2205-4AF; the gain goes from 0.45 to 0.14 N m s/rad. (0.45 happens to be calm for this motor too.) The 1FK2104-5AF has a ninth of the inertia: with the gain left at 0.45 it oscillates and its winding never settles. Retuned to 0.049 with Kv left at 50 it sits at the edge of the position loop's stability: it does not come to rest in the dwells (22.8 mm off its target) and its winding's rise does not settle. (3.5 mm and a settling winding on 17 November: the T-gantry's belt runs weighing on Z since 21 November, cb5f0a40, tipped it from the one side of the edge to the other; on either build Kv 49.9 stays calm, 1.2 and 3.8 mm, and 50.1 swings, 22 mm.) With Kv lowered to 24 it runs the cycle calmly with 1.22 N m RMS, and misses `settling` (0.15 mm against 0.1 mm): its gain, held to the rotor's crossover, is too low to settle within the dwell.
 
 An unknown article is refused: `The catalogue has no such part: motor 1FK9`. A motor that the catalogue does not offer at the chosen supply is refused the same way, and so are unknown drives, belts and axes.
 
@@ -1627,13 +1627,13 @@ The gains are in `[drive]`: `kv_1_s` (position), `velocity_kp_nm_s_rad` and `vel
 ```text
 $ sim-cli tuning t-gantry
 axis,rise_time_s,overshoot,settling_time_s,bandwidth_hz
-x,0.02875,0.0657,0.45025,11.296
-z,0.04325,0.0000,0.08550,9.203
+x,0.03025,0.0550,0.40375,8.754
+z,0.04875,0.0000,0.09400,8.163
 
 $ sim-cli tuning t-gantry --set drive.kv_1_s=150
 axis,rise_time_s,overshoot,settling_time_s,bandwidth_hz
-x,0.01175,0.3092,0.50000,22.165
-z,0.00575,0.1605,0.04175,59.549
+x,0.01200,0.3109,0.50000,22.184
+z,0.00575,0.1751,0.04350,57.798
 ```
 
 | Column | Unit | Meaning |
@@ -1643,19 +1643,28 @@ z,0.00575,0.1605,0.04175,59.549
 | `settling_time_s` | s | After this time the tool stays within 2 % of the step |
 | `bandwidth_hz` | Hz | Where the closed-loop gain first falls below 1/√2. Empty if it never does up to 200 Hz |
 
-With Kv = 50 1/s the position loop behaves like a first-order lag with time constant 1/Kv: bandwidth about Kv / 2π = 8 Hz. Z shows that plainly. In X the tool position counts the frame's sway: the step sets the lightly damped frame mode (about 21 Hz) ringing, which is the 7 % of overshoot and the 0.45 s until the tool stays within 2 %. Tripling Kv makes X overshoot by 31 %.
+With Kv = 45 1/s (50 until 22 November 2026, when X's closed loop rode its frame mode above 1/√2 and its band read 20.5 Hz) the position loop behaves like a first-order lag with time constant 1/Kv: bandwidth about Kv / 2π = 7 Hz. Z shows that plainly. In X the tool position counts the frame's sway: the step sets the lightly damped frame mode (about 21 Hz) ringing, which is the 5.5 % of overshoot and the 0.40 s until the tool stays within 2 %. Kv = 150 makes X overshoot by 31 %.
 
 **Stability margins of the velocity loops.** `margins` measures each motor's velocity loop open: a sine torque is added to what the loop asks for, with the machine holding its start pose, and the loop's answer gives the open-loop response L at 60 frequencies from 10 Hz to 2 kHz (a drive's own measurement function works this way). Where |L| is still below 1 at 10 Hz (the integrators put the crossover lower), the measurement steps on down at the same spacing until |L| > 1, to 1 Hz at the lowest. A sharp resonance can hide between two of those points, 9.4 % apart: the machine's resonances at the start pose (`sim-cli modes`) are measured too, and wherever L or the plant (motor torque to speed) turns by more than 30° or changes by more than 3 dB from one point to the next, their middle is measured as well, in up to eight rounds, down to points 0.1 % apart. On the default configs this adds a few points and leaves the margins nearly as they were:
 
 ```text
 $ sim-cli margins t-gantry
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
-,a,185.6,54.9,9.19,1.882,277.3,,ok
-,b,179.8,52.1,9.09,1.878,277.3,,ok
+,a,178.1,57.7,9.93,1.773,277.3,,ok
+,b,170.5,56.1,9.84,1.768,277.3,,ok
+start.pose=[0.1 0.05],a,210.3,51.1,9.18,1.927,277.3,,ok
+start.pose=[0.1 0.05],b,170.1,57.1,10.21,1.733,253.5,,ok
+start.pose=[0.9 0.35],a,166.3,58.5,10.19,1.721,253.5,,ok
+start.pose=[0.9 0.35],b,181.7,55.9,9.57,1.828,277.3,,ok
+start.pose=[0.9 0.05],a,174.3,54.8,9.78,1.777,253.5,,ok
+start.pose=[0.9 0.05],b,206.3,54.4,9.60,1.870,277.3,,ok
+Motor A: least over the poses the cycle stops at: 51.09 deg start.pose=[0.1 0.05], 9.18 dB start.pose=[0.1 0.05] (phase margin, gain margin, then the margin across the backlash, each at its pose)
+Motor B: least over the poses the cycle stops at: 54.42 deg start.pose=[0.9 0.05], 9.57 dB start.pose=[0.9 0.35] (phase margin, gain margin, then the margin across the backlash, each at its pose)
 
 $ sim-cli margins single-axis --bands
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
 ,m,181.5,59.9,11.56,1.607,253.5,,ok
+start.pose=[0.9],m,143.4,62.0,11.35,1.496,211.8,,ok
 belt.damping_n_s_m=50.0,m,186.8,54.3,11.59,1.652,231.7,,ok
 belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 ...
@@ -1663,7 +1672,7 @@ belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 
 | Column | Unit | Meaning |
 | --- | --- | --- |
-| `run` | | Empty for the config as it is; with `--bands` one row per motor for each value of `[bounds]` at its low and at its high bound |
+| `run` | | Empty for the config as it is at its start pose; `start.pose=[...]` for each other pose the cycle stops at (the targets of `cycle.segment`, once each, in the start's payload state); with `--bands` one row per motor for each value of `[bounds]` at its low and at its high bound, at the start pose. With several poses stderr names per motor the least phase margin, gain margin and margin across the play over them, each with its pose |
 | `crossover_hz` | Hz | Where \|L\| = 1, the crossover with the smallest phase margin. Below 10 Hz where the measurement stepped down (the single axis with its motor's Coulomb friction at the high bound: 4.4 Hz, 92.0°). Empty, as is `phase_margin_deg`, where the loop has no gain crossover down to 1 Hz; the result is then the gain margin's alone |
 | `phase_margin_deg` | ° | 180° plus the phase of L there (the phase followed without jumps, taken between −360° and 0° at the first crossover); negative: the loop is unstable |
 | `gain_margin_db` | dB | By how much the gain may rise before L reaches −1, at the worst place where the phase falls through −180° that a later rise through −180° with \|L\| > 1 does not undo (a Nyquist count; a fall and rise beyond −1 below the crossover is conditionally stable and not counted); negative where \|L\| > 1 there (unstable); `inf` if no such place up to 2 kHz |
@@ -1672,7 +1681,7 @@ belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 | `play_margin_db` | dB | With `effects.gearbox_backlash` on: by how much the gain may rise before the loop hammers across the play, the describing function's margin with the rotor's friction faded (each run is measured a second time with the play closed for it; `margins` takes some 15 % longer). Empty where the play does not change the loop (it stays closed under the test torque, or there is none on that motor). Told, not judged: the time run below decides `result`. The five-bar's tool turn: 3.56 dB at the shipped 0.033 N m s/rad, −4.18 dB at 0.08 (it hammers from 0.0497 by it, from 0.048 in a time run with the friction off, from 0.078 with it on) |
 | `result` | | `ok`, or `FAIL` where a margin is negative or the measurement is not valid: the loop ran into its torque limit or moved on its own (oscillated) during it. Then the loop is unstable and its margins are `NaN`. Also `FAIL` where the loop hammers across its gearbox's play: inside the play the measurement sees the rotor alone and the margins can look fine, so with `effects.gearbox_backlash` on each loop is also kicked at rest by a sweep of its motor's rated torque and watched for 0.3 s; one that keeps swinging from flank to flank (and does not with the play off) is named on stderr, e.g. `Motor tool turn: hammers across the backlash at 650 Hz, 0.77 N m` (the frequency, and the peak of the torque the loop asks for), the five-bar's tool turn at 0.08 N m s/rad |
 
-The default configs' velocity gains were chosen with it: at least 35° of phase margin and 6 dB of gain margin in every run of `--bands`, also with `--set effects.motor_friction=false --set effects.guide_friction=false` (friction damps the loop near standstill, as the measurement holds the machine, but not in a cruise). Found: T-gantry 0.04 N m s/rad, at least 46.2° and 8.38 dB, 35.7° and 7.42 dB with friction off; single axis 0.025, at least 50.3° and 10.83 dB, 39.0° and 10.05 dB with friction off (measured 17 November 2026 on the configs as shipped). The gain of 0.08 the configs had before left the T-gantry 12° and 2 dB (motor B hunted in its gearbox backlash in a cruise) and the single axis 1° and 0.3 dB (it went unstable with the belt at its stiffest bound). The EXCT-30 was tuned the same way, from 0.6 (34.9° and 6.6 dB, 29.6° and 5.8 dB with friction off) to 0.45: at least 48.8° and 9.36 dB, 40.6° and 8.61 dB with friction off (17 November). The figures for the earlier gains are from before 13 November, measured without the phase unwrapped.
+The default configs' velocity gains were chosen with it: at least 35° of phase margin and 6 dB of gain margin in every run of `--bands`, also with `--set effects.motor_friction=false --set effects.guide_friction=false` (friction damps the loop near standstill, as the measurement holds the machine, but not in a cruise). Found: T-gantry 0.04 N m s/rad, at least 46.2° and 8.38 dB, 35.7° and 7.42 dB with friction off, then 0.037 (22 November 2026), when the margins took the cycle's poses: 0.04 left 33.0° with friction off at the left with Z down, 0.037 at least 35.5° and 7.7 dB there; single axis 0.025, at least 50.3° and 10.83 dB, 39.0° and 10.05 dB with friction off (measured 17 November 2026 on the configs as shipped). The gain of 0.08 the configs had before left the T-gantry 12° and 2 dB (motor B hunted in its gearbox backlash in a cruise) and the single axis 1° and 0.3 dB (it went unstable with the belt at its stiffest bound). The EXCT-30 was tuned the same way, from 0.6 (34.9° and 6.6 dB, 29.6° and 5.8 dB with friction off) to 0.45: at least 48.8° and 9.36 dB, 40.6° and 8.61 dB with friction off (17 November). The figures for the earlier gains are from before 13 November, measured without the phase unwrapped.
 
 **The step response as a trace:**
 
@@ -1680,8 +1689,8 @@ The default configs' velocity gains were chosen with it: at least 35° of phase 
 $ sim-cli step t-gantry --axis-index 0
 time_s,setpoint,response
 0.000000,1.000000000e-3,0.000000000e0
-0.000250,1.000000000e-3,-3.147539313e-10
-0.000500,1.000000000e-3,2.983529507e-9
+0.000250,1.000000000e-3,2.442885061e-10
+0.000500,1.000000000e-3,3.121861117e-9
 ...
 ```
 
@@ -1692,11 +1701,11 @@ time_s,setpoint,response
 ```text
 $ sim-cli bode t-gantry --axis-index 0 --count 8
 frequency_hz,gain,gain_db,phase_deg
-1.0000,9.821098e-1,-0.157,-10.624
-2.1317,9.731335e-1,-0.237,-19.223
-4.5440,8.975914e-1,-0.938,-36.177
-9.6863,7.306060e-1,-2.726,-62.982
-20.6478,7.519268e-1,-2.476,156.818
+1.0000,9.830301e-1,-0.149,-11.512
+2.1317,9.699874e-1,-0.265,-21.141
+4.5440,8.748395e-1,-1.161,-39.797
+9.6863,6.761918e-1,-3.399,-68.123
+20.6478,6.353218e-1,-3.940,159.079
 ...
 ```
 

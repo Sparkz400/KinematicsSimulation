@@ -1750,7 +1750,9 @@ fn tuning(args: &Args) -> Result<(), Failure> {
 }
 
 /// `margins <machine> [--bands]`: per motor the stability margins of its velocity loop (`velocity_loop_margins`), for
-/// the config as it is and with `--bands` with each value of `[bounds]` at its low and at its high bound. A row whose
+/// the config as it is at each pose its cycle stops at (`margin_poses`; the start pose's run is named "") and with
+/// `--bands` with each value of `[bounds]` at its low and at its high bound at the start pose. With several poses each
+/// motor's least phase margin, gain margin and margin across the play over them is named on stderr with its pose. A row whose
 /// loop is unstable, whose measurement is not valid or that hammers across its gearbox's play (`LoopMargins::stable`)
 /// says FAIL; one that hammers is named on stderr with the frequency and the torque's peak. The column before it is the
 /// describing function's gain margin across the play (`LoopMargins::play_margin_db`, dB; empty where no play acts on the
@@ -1787,6 +1789,27 @@ fn margins(args: &Args, tr: &Translations) -> Result<(), Failure> {
             )
             .map_err(io)?;
         }
+    }
+    // The poses' runs come first (`velocity_loop_margins`): where over them each margin is least.
+    let poses = runs.iter().take_while(|(run, _)| run.is_empty() || run.starts_with("start.pose=")).count();
+    for (k, motor) in motors.iter().enumerate().filter(|_| poses > 1) {
+        let least = |of: fn(&sim_components::analysis::LoopMargins) -> f64, unit: &str| {
+            let (value, run) = runs[..poses]
+                .iter()
+                .map(|(run, m)| (of(&m[k]), run))
+                .filter(|(x, _)| !x.is_nan())
+                .min_by(|a, b| a.0.total_cmp(&b.0))?;
+            Some(format!("{value:.2} {unit} {}", if run.is_empty() { "start.pose" } else { run }))
+        };
+        let found: Vec<String> = [
+            least(|m| m.phase_margin_deg, "deg"),
+            least(|m| m.gain_margin_db, "dB"),
+            least(|m| m.play_margin_db, "dB"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        eprintln!("{}: {}", tr.tr(motor.key), tr.tr_arg("loop-least-over-poses", &found.join(", ")));
     }
     out.flush().map_err(io)
 }

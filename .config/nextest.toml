@@ -15,11 +15,11 @@ retries = 0
 # them too (some 25 minutes on 16 threads), and so does CI on a push to main (profile `ci-full`). After a full run,
 # `python tools/slow_tests.py` rewrites the list from target/nextest/full/junit.xml.
 # Left out of every profile but CI's last step: the sweeps of the velocity loops' margins across the bounds, a test per
-# shipped config (sim-machines control, `across_the_bounds::*`, 8600 s of processor time), and the EXCT-30's worst
+# shipped config (sim-machines control, `across_the_bounds::*::with(out)_friction`, 8600 s of processor time), and the EXCT-30's worst
 # corner of its bounds (2400 cycles, 1230 s): see the profile `full`.
 # The default filter, written by tools/slow_tests.py:
 default-filter = """
-not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))
+not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::.*_friction$/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))
 & not (
 (binary_id(=machine-cable-robot) & test(=tests::the_default_cycles_pass_their_verdicts))
 | (binary_id(=machine-cable-robot) & test(=tests::the_planar_cable_robot_passes_the_standard_suite))
@@ -355,7 +355,7 @@ not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | 
 | (binary_id(=sim-machines::control) & test(=switching_the_model_at_speed_carries_the_motion_over))
 | (binary_id(=sim-machines::control) & test(=the_cycle_visits_every_segment_and_switches_the_payload))
 | (binary_id(=sim-machines::control) & test(=the_same_run_twice_is_bit_identical))
-| (binary_id(=sim-machines::control) & test(=the_shipped_velocity_loops_keep_their_margins))
+| (binary_id(=sim-machines::control) & test(/^across_the_bounds::.*::as_configured$/))
 | (binary_id(=sim-machines::control) & test(=velocity_feedforward_removes_the_following_error))
 | (binary_id(=sim-machines::control) & test(=with_input_shaping_a_dwell_starts_when_the_setpoint_has_arrived))
 | (binary_id(=sim-machines::conveyor) & test(=every_conveyor_example_picks_a_part_each_pitch))
@@ -408,6 +408,7 @@ not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | 
 | (binary_id(=sim-opcua::plc) & test(=plcopen_power_home_and_moves_reach_their_targets))
 | (binary_id(=sim-opcua::plc) & test(=the_plc_disables_and_enables_the_drives))
 | (binary_id(=sim-machines::effects) & test(=the_margin_across_the_play_says_where_the_tool_turn_hammers))
+| (binary_id(=machine-parallel-scara) & test(=tests::the_tool_turn_hammering_across_its_play_is_found_by_the_margins))
 | (binary_id(=sim-opcua::soak) & test(=the_link_runs_move_cycles_for_a_long_time_without_errors_or_drift))
 )
 """
@@ -468,7 +469,7 @@ test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds)
 | test(=the_regenerative_supply_shows_in_the_apps_tables)
 | test(=verdicts_judge_the_default_cycle_of_every_machine)
 | test(=changing_the_profile_cycle_on_the_way_does_not_move_the_setpoint)
-| test(=the_shipped_velocity_loops_keep_their_margins)
+| test(/^across_the_bounds::.*::as_configured$/)
 | test(=the_app_searches_motors_and_names_one_in_the_config)
 """
 priority = 50
@@ -489,7 +490,7 @@ slow-timeout = { period = "60s", terminate-after = 90 }
 # (`cargo nextest run --workspace --release --exclude sim-py --ignore-default-filter -E "not default()" --test-threads 1`
 # with the profile `full` lists what the default leaves out). Its JUnit report is what tools/slow_tests.py reads.
 [profile.full]
-default-filter = "not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))"
+default-filter = "not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::.*_friction$/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))"
 
 [profile.full.junit]
 path = "junit.xml"
@@ -498,13 +499,13 @@ path = "junit.xml"
 # friction takes 768 s alone on 16 threads (17 November 2026), too close to the 15 minutes above for a machine under any
 # other load; 30 minutes is twice what it needs. Not in the default profile, whose overrides would also cut CI's 90.
 [[profile.full.overrides]]
-filter = "package(sim-machines) & binary(control) & test(/^across_the_bounds::/)"
+filter = "package(sim-machines) & binary(control) & test(/^across_the_bounds::.*_friction$/)"
 slow-timeout = { period = "60s", terminate-after = 30 }
 
 # CI on a push to main: everything `full` runs, with the CI time limit.
 [profile.ci-full]
 slow-timeout = { period = "60s", terminate-after = 30 }
-default-filter = "not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))"
+default-filter = "not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::.*_friction$/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))"
 
 # Each partition's times, which CI keeps as the artifacts junit-*: tools/slow_tests.py reads them all.
 [profile.ci-full.junit]

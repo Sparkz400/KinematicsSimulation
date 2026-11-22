@@ -4553,8 +4553,8 @@ pub struct Progress {
 pub const CANCELLED: &str = "cancelled";
 
 /// Per config of `configs` (of the same machine) per motor the open-loop response of its velocity loop
-/// (`velocity_loop_response`), in frequency order: at `loop_frequencies` and the machine's resonances at the start pose
-/// (`Machine::modes`) of the first config, below the band down to the gain crossover where it lies there (to
+/// (`velocity_loop_response`), in frequency order: at `loop_frequencies` and the machine's resonances (`Machine::modes`
+/// of the first config) at the config's own start pose, below the band down to the gain crossover where it lies there (to
 /// `LOOP_FLOOR_HZ`), and where the loop gain or the plant changes fast between two points at
 /// their middle (`refinement`), in up to `REFINE_ROUNDS` rounds. Every point is measured on a simulation of its own:
 /// they share the processors. `progress` counts them and can stop the measurement.
@@ -4565,13 +4565,18 @@ pub fn velocity_loop_responses(
 ) -> Result<Vec<Vec<Vec<LoopPoint>>>, ConfigError> {
     use std::sync::atomic::Ordering::Relaxed;
     let first = &crate::catalog::resolve(entry, configs.first().ok_or_else(|| ConfigError::Invalid("config".into()))?)?;
-    let mut frequencies = loop_frequencies(first)?;
+    let frequencies = loop_frequencies(first)?;
     let spacing = frequencies[1] / frequencies[0];
     let machine = (entry.build)(first)?;
     let amplitudes =
         machine.motors().iter().map(|m| loop_amplitude(entry, first, m.id)).collect::<Result<Vec<_>, _>>()?;
     let range = frequencies[0]..=frequencies[frequencies.len() - 1];
-    frequencies.extend(machine.modes(&first.f64s("start.pose")?).iter().map(|m| m.hz).filter(|f| range.contains(f)));
+    // Each config at its own start pose (`velocity_loop_margins` measures several poses): its modes there.
+    let mut own: Vec<Vec<f64>> = Vec::with_capacity(configs.len());
+    for cfg in configs {
+        let modes = machine.modes(&cfg.f64s("start.pose")?);
+        own.push(frequencies.iter().copied().chain(modes.iter().map(|m| m.hz).filter(|f| range.contains(f))).collect());
+    }
     let motors = machine.motors().len();
     // Each run settled once, each point started from a copy of it (`Sim::snapshot`): the same start, bit for bit, as
     // settling it anew, without the settling's share of the sweep's time.
@@ -4600,7 +4605,7 @@ pub fn velocity_loop_responses(
     let mut jobs = Vec::new();
     for run in 0..configs.len() {
         for motor in 0..motors {
-            jobs.extend(frequencies.iter().map(|&f| (run, motor, f)));
+            jobs.extend(own[run].iter().map(|&f| (run, motor, f)));
         }
     }
     for round in 0..=REFINE_ROUNDS {
@@ -4652,9 +4657,33 @@ pub fn velocity_loop_responses(
     Ok(curves)
 }
 
-/// The margins of every motor's velocity loop for the config as it is and with each value of `bounds` at its low
-/// and at its high bound, one at a time (as `verdict_bands`): per run its name ("" for the config as it is,
-/// "path=value" otherwise) and the margins per motor, from the refined responses of `velocity_loop_responses`.
+/// The poses the loops are judged at (`velocity_loop_margins`, `backlash_hammering`): the start pose first, then each
+/// other pose the cycle stops at (the targets of `cycle.segment`), once each. The start pose alone without a cycle.
+pub fn margin_poses(cfg: &Config) -> Result<Vec<Vec<f64>>, ConfigError> {
+    let mut poses = vec![cfg.f64s("start.pose")?];
+    let number = |v: &toml::Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
+    for segment in cfg.array("cycle.segment").into_iter().flatten() {
+        let target: Vec<f64> =
+            segment.get("target").and_then(|t| t.as_array()).into_iter().flatten().filter_map(number).collect();
+        if target.len() == poses[0].len() && !poses.contains(&target) {
+            poses.push(target);
+        }
+    }
+    Ok(poses)
+}
+
+/// `cfg` with the machine starting at `pose`.
+fn at_pose(cfg: &Config, pose: &[f64]) -> Result<Config, ConfigError> {
+    let mut at = cfg.clone();
+    at.set_text(&format!("start.pose = {pose:?}"))?;
+    Ok(at)
+}
+
+/// The margins of every motor's velocity loop for the config as it is, at each pose of `margin_poses` (the start pose
+/// first), and with each value of `bounds` at its low and at its high bound, one at a time (as `verdict_bands`), at the
+/// start pose: per run its name ("" for the config as it is, "start.pose=[x y ...]" at another pose, "path=value"
+/// otherwise) and the margins per motor, from the refined responses of `velocity_loop_responses`. A hammering's `pose`
+/// is the run's.
 pub fn velocity_loop_margins(
     entry: &MachineEntry,
     cfg: &Config,
@@ -4663,6 +4692,11 @@ pub fn velocity_loop_margins(
     let resolved = &crate::catalog::resolve(entry, cfg)?;
     let (bounds, cfg) = (&followed(cfg, resolved, bounds), resolved);
     let mut runs = vec![(String::new(), cfg.clone())];
+    let poses = margin_poses(cfg)?;
+    for pose in &poses[1..] {
+        let text: Vec<String> = pose.iter().map(|x| format!("{x}")).collect();
+        runs.push((format!("start.pose=[{}]", text.join(" ")), at_pose(cfg, pose)?));
+    }
     for (path, low, high) in bounds {
         for value in [low, high] {
             let mut changed = cfg.clone();
@@ -4683,9 +4717,13 @@ pub fn velocity_loop_margins(
     }
     let responses = velocity_loop_responses(entry, &configs, &Progress::default())?;
     let motors = responses.first().map_or(0, Vec::len);
-    let hammering = on_all_cores(count * motors, |j| backlash_hammering(entry, &configs[j / motors], j % motors))
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
+    let pose_of = |run: usize| if run < poses.len() { run } else { 0 };
+    let hammering = on_all_cores(count * motors, |j| {
+        let found = hammering_at(entry, &configs[j / motors], j % motors)?;
+        Ok(found.map(|h| Hammering { pose: pose_of(j / motors), ..h }))
+    })
+    .into_iter()
+    .collect::<Result<Vec<_>, ConfigError>>()?;
     Ok(runs
         .into_iter()
         .zip(&responses)
@@ -4796,11 +4834,13 @@ pub fn play_margin(play: &[LoopPoint], closed: &[LoopPoint]) -> f64 {
 }
 
 /// A velocity loop that keeps oscillating on its own across a gearbox's play after a kick at rest
-/// (`backlash_hammering`): the frequency, and the peak of the torque the loop asks for about its mean (N m).
+/// (`backlash_hammering`): the frequency, the peak of the torque the loop asks for about its mean (N m), and the pose
+/// it hammers at, an index into `margin_poses` (0 the start pose).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hammering {
     pub frequency_hz: f64,
     pub torque_nm: f64,
+    pub pose: usize,
 }
 
 /// How long `backlash_hammering` sweeps, and the windows it watches the loop in afterwards.
@@ -4850,8 +4890,24 @@ fn after_a_sweep(sim: &mut Sim, motor: usize, amplitude: f64) -> [(f64, usize, f
 /// after the sweep, the torque it asks for still swings by more in RMS than the margin measurement's test torque
 /// (`loop_amplitude`, beyond which `loop_point` says a loop moves on its own) and has not fallen to half from the
 /// one window to the next, and where the same run with `effects.gearbox_backlash` off is quiet (otherwise the play is
-/// not the cause). On the measurement's config (`lossless`). `None` without the play.
+/// not the cause). On the measurement's config (`lossless`), at each pose of `margin_poses`: where it hammers at
+/// several, the one with the largest peak of the torque. `None` without the play.
 pub fn backlash_hammering(entry: &MachineEntry, cfg: &Config, motor: usize) -> Result<Option<Hammering>, ConfigError> {
+    let poses = margin_poses(cfg)?;
+    let found = on_all_cores(poses.len(), |k| hammering_at(entry, &at_pose(cfg, &poses[k])?, motor));
+    let mut worst: Option<Hammering> = None;
+    for (pose, h) in found.into_iter().enumerate() {
+        if let Some(h) = h?
+            && worst.is_none_or(|w| h.torque_nm > w.torque_nm)
+        {
+            worst = Some(Hammering { pose, ..h });
+        }
+    }
+    Ok(worst)
+}
+
+/// `backlash_hammering` at the config's start pose alone.
+fn hammering_at(entry: &MachineEntry, cfg: &Config, motor: usize) -> Result<Option<Hammering>, ConfigError> {
     if !cfg.bool("effects.gearbox_backlash").unwrap_or(false) {
         return Ok(None);
     }
@@ -4869,7 +4925,7 @@ pub fn backlash_hammering(entry: &MachineEntry, cfg: &Config, motor: usize) -> R
     if run(&without)?.is_some() {
         return Ok(None);
     }
-    Ok(Some(Hammering { frequency_hz: crossings as f64 / (2.0 * HAMMER_WINDOW_S), torque_nm: peak }))
+    Ok(Some(Hammering { frequency_hz: crossings as f64 / (2.0 * HAMMER_WINDOW_S), torque_nm: peak, pose: 0 }))
 }
 
 /// The same cycle run twice, once with an effect on and once with it off (`compare_effect`), for overlaying the two.
@@ -5469,7 +5525,7 @@ line_module_efficiency = 0.9
             play_margin_db: f64::NAN,
         };
         assert!(m(f64::NAN, 20.0, true).stable());
-        let hammering = Some(Hammering { frequency_hz: 645.0, torque_nm: 0.7 });
+        let hammering = Some(Hammering { frequency_hz: 645.0, torque_nm: 0.7, pose: 0 });
         assert!(!LoopMargins { hammering, ..m(40.0, 6.0, true) }.stable());
         assert!(!m(f64::NAN, -1.0, true).stable());
         assert!(!m(f64::NAN, f64::NAN, true).stable());

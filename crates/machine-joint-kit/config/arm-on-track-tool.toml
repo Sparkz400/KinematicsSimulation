@@ -650,6 +650,11 @@ brake_torque_nm = 3.2
 [motor.7]
 brake_torque_nm = 3.2
 
+# The arm's base turn's own gains, as `arm-on-track.toml` has them (22 November 2026, the reasons there).
+[drive.2]
+velocity_kp_nm_s_rad = 0.4
+kv_1_s = 30.0
+
 [drive.5]
 velocity_kp_nm_s_rad = 0.05
 

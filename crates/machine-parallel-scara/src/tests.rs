@@ -277,8 +277,10 @@ fn the_default_cycle_passes_its_verdicts() {
 /// The tool turn's velocity loop at 0.08 N m s/rad hammers from flank to flank of its gearbox's 1 arcmin play, which
 /// the small-signal measurement inside the play does not see: there it reads 78.2 degrees and 10.54 dB, but after the
 /// swept kick at rest (`backlash_hammering`) the loop keeps swinging at 650 Hz with 0.77 N m peak of the 1.95 N m the
-/// motor has (`sim-cli margins`, run 21 November 2026), so `velocity_loop_margins` calls it not stable. At 0.1 it
-/// hammers at 705 Hz, the 710 Hz the config's note found in a traverse; at the shipped 0.033, and at 0.06, it does not.
+/// motor has (`sim-cli margins`, run 21 November 2026), so `velocity_loop_margins` calls it not stable at the start
+/// pose. At 0.1 it hammers at 705 to 710 Hz, the 710 Hz the config's note found in a traverse, hardest (2.63 N m) over
+/// the pick, the cycle's third pose (`margin_poses`: [-0.1525, -0.5, 0.095, pi / 2], the tool turned by 90 degrees);
+/// at the shipped 0.033, and at 0.06, it does not at any of the cycle's four poses.
 #[test]
 fn the_tool_turn_hammering_across_its_play_is_found_by_the_margins() {
     use sim_components::analysis::{backlash_hammering, velocity_loop_margins};
@@ -290,9 +292,10 @@ fn the_tool_turn_hammering_across_its_play_is_found_by_the_margins() {
     let m = velocity_loop_margins(&ENTRY, &at(0.08), &[]).unwrap()[0].1[3];
     let h = m.hammering.expect("0.08 hammers");
     assert!(m.valid && m.gain_margin_db > 0.0 && !m.stable(), "{m:?}");
-    assert!((h.frequency_hz - 650.0).abs() < 15.0 && h.torque_nm > 0.3, "{h:?}");
+    // The start pose's run (the first).
+    assert!((h.frequency_hz - 650.0).abs() < 15.0 && h.torque_nm > 0.3 && h.pose == 0, "{h:?}");
     let h = backlash_hammering(&ENTRY, &at(0.1), 3).unwrap().expect("0.1 hammers");
-    assert!((h.frequency_hz - 710.0).abs() < 15.0, "{h:?}");
+    assert!((h.frequency_hz - 710.0).abs() < 15.0 && h.pose == 2, "{h:?}");
     for kv in [0.033, 0.06] {
         assert_eq!(backlash_hammering(&ENTRY, &at(kv), 3).unwrap(), None, "{kv}");
     }
@@ -394,6 +397,30 @@ fn stroke_stiffness_by_hand() -> f64 {
     let screw = 1.0 / (1.0 / shaft + 1.0 / 2e8 + 1.0 / 4e8);
     let lever = 0.02 / std::f64::consts::TAU;
     1.0 / (1.0 / screw + lever * lever / 3000.0)
+}
+
+/// The rest sag's allowance (`rest_sag`) holds the whole stroke with the screw's stiffness following the nut: the
+/// stroke's half play and the 6 kg's weight over the screw where it is softest on the stroke 0..0.2 m, plus a tenth
+/// (the stroke's term the largest here). With the shaft fixed at one end (the shipped fixed bearing at 0.25 m) that is
+/// the stroke's bottom, the nut a = 0.25 m from it, not the shaft's far end a = 0.3 m beyond the stroke
+/// (`stroke_stiffness_by_hand`); held at both ends the shaft's middle a = 0.15 m (z = 0.1), a (L - a) / (E A L). The
+/// coupling's play of 1 rad [test value] is 0.5 x 0.02 / 2 pi = 1.591549e-3 m at the carriage. The flanks' band off, so
+/// the spring is linear; the shipped allowance is the arms' play's (unchanged).
+#[test]
+fn the_rest_sag_takes_the_screw_where_it_is_softest_on_the_stroke() {
+    let ea = 2.06e11 * std::f64::consts::FRAC_PI_4 * 0.0135f64.powi(2);
+    let lever = 0.02 / std::f64::consts::TAU;
+    let series = |shaft: f64| 1.0 / (shaft + 1.0 / 2e8 + 1.0 / 4e8 + lever * lever / 3000.0);
+    let (weight, half) = (6.0 * 9.80665, 0.5 * lever);
+    for (mounting, k) in [("fixed-free", series(0.25 / ea)), ("fixed-fixed", series(0.15 * 0.15 / (0.3 * ea)))] {
+        let d = scara(&[
+            "effects.screw_stiffness_with_position = true",
+            "effects.gearbox_lost_motion = false",
+            "gearbox.3.backlash_rad = 1.0",
+            &format!("screw.mounting = \"{mounting}\""),
+        ]);
+        close(d.rest_sag(), 1.1 * (half + weight / k), 1e-6, mounting);
+    }
 }
 
 /// The carriage on its screw rings with the rotor held at sqrt(K / m) / 2 pi, K = 4.75026e7 N/m (`stroke_stiffness_by_hand`),

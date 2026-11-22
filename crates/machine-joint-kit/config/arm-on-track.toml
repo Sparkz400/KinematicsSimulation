@@ -434,6 +434,16 @@ brake_torque_nm = 3.2
 [motor.7]
 brake_torque_nm = 3.2
 
+# The arm's base turn, as the URDF arm's (`arm.toml`, 22 November 2026): with the shared 0.15 the cycle's stop with
+# the arm reaching out ([3.5, -1.3, 0.45, -0.55, 0.3, 0.5, 1]) left 24.2 degrees (16.7 friction off; 59.4 and 63.0 at
+# the start). At 0.4 over the cycle's poses at least 53.7 degrees and 8.5 dB, friction off 46.8 degrees and 8.0 dB;
+# 0.45 kept 38.4 degrees and 6.03 dB over the bounds friction off (rotor-side inertia at its lower bound).
+# Its position gain 30 1/s, as the URDF arm's: at 50 the step overshot 22 % with a band of 20.0 Hz; at 30 2.6 % and
+# 7.8 Hz (35: 5.0 % and 18.0 Hz on the arm's mode), over the poses 54.4 degrees and 8.5 dB, friction off 47.4 and 8.0.
+[drive.2]
+velocity_kp_nm_s_rad = 0.4
+kv_1_s = 30.0
+
 [drive.5]
 velocity_kp_nm_s_rad = 0.05
 

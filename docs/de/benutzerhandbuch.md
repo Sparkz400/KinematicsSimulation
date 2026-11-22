@@ -77,8 +77,8 @@ Der Zyklus ist die Liste der `[[cycle.segment]]` in der Konfiguration: Zielpose,
 $ sim-cli analyze t-gantry
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload,torque_unit,speed_unit
-a,6.080000,0.561042,0.168812,200.4456,0.1482,0.1329,203.91,334.14,0.3753,1.28,86.222,11.102,28.90,6.244,1.089e-4,3.559e-5,1.820e-4,4.336e-5,0.000e0,0.000e0,0.000e0,0.000e0,0.201397,0.041,0.007,224.65,0.0000e0,6.4504e2,1.7705e2,3.6275e6,0.000,3.8238e6,4.7207e5,6.1354e9,1.9344e-1,,,0.00,0.0000,N m,rad/s
-b,6.080000,0.467022,0.156754,200.4289,0.1230,0.1234,203.91,334.14,0.3485,1.10,76.236,16.702,35.75,8.232,1.089e-4,3.559e-5,1.820e-4,4.336e-5,0.000e0,0.000e0,0.000e0,0.000e0,0.179593,6.498,1.069,224.65,0.0000e0,6.4504e2,1.7705e2,3.6275e6,0.000,3.8238e6,4.7073e5,9.2044e9,1.5493e-1,,,0.00,0.0000,N m,rad/s
+a,6.080000,0.559815,0.168995,200.4655,0.1478,0.1331,203.94,334.05,0.3757,1.28,86.325,11.097,28.85,6.261,1.065e-4,3.560e-5,1.812e-4,4.296e-5,0.000e0,0.000e0,0.000e0,0.000e0,0.201808,0.060,0.010,224.65,0.0000e0,6.4501e2,1.7711e2,3.6271e6,0.000,3.8234e6,4.7197e5,6.0841e9,1.9371e-1,,,0.00,0.0000,N m,rad/s
+b,6.080000,0.466646,0.156888,200.4541,0.1229,0.1235,203.94,334.05,0.3488,1.10,76.318,16.854,35.76,8.361,1.065e-4,3.560e-5,1.812e-4,4.296e-5,0.000e0,0.000e0,0.000e0,0.000e0,0.179829,6.607,1.087,224.65,0.0000e0,6.4501e2,1.7711e2,3.6271e6,0.000,3.8234e6,4.7070e5,9.1482e9,1.5539e-1,,,0.00,0.0000,N m,rad/s
 ```
 
 Der Simulator startet den Zyklus, lässt den ersten Durchlauf verstreichen und misst den zweiten. Je Motor entsteht eine Zeile. Spalten, die die ganze Maschine beschreiben und nicht einen Motor, wiederholen sich in jeder Zeile.
@@ -131,30 +131,30 @@ Danach beurteilen Sie den Zyklus:
 $ sim-cli verdicts t-gantry
 Thermal start: warm, at the rises the cycle settles at; largest change of a rise over the measured pass 0.000 K
 check,motor,value,limit,result
-motor-peak,a,0.1482,1.000,ok
-motor-thermal,a,1.279,100.0,ok
-motor-s1,a,0.1688,1.270,ok
-motor-speed,a,200.4,420.0,ok
-drive-current,a,0.3753,3.000,ok
-drive-peak-current,a,1.253,10.90,ok
-gearbox-radial-load,a,637.1,1500,ok
-gearbox-continuous,a,0.8186,40.00,ok
+motor-peak,a,0.1478,1.000,ok
+motor-thermal,a,1.282,100.0,ok
+motor-s1,a,0.1690,1.270,ok
+motor-speed,a,200.5,420.0,ok
+drive-current,a,0.3757,3.000,ok
+drive-peak-current,a,1.250,10.90,ok
+gearbox-radial-load,a,637.2,1500,ok
+gearbox-continuous,a,0.8206,40.00,ok
 gearbox-input-speed,a,1914,13000,ok
-gearbox-peak,a,2.204,64.00,ok
-pulley-bearing-life,a,472068,20000,ok
-gearbox-life,a,6135383249,20000,ok
-belt-tooth-load,a,0.1934,1.000,ok
+gearbox-peak,a,2.207,64.00,ok
+pulley-bearing-life,a,471971,20000,ok
+gearbox-life,a,6084053913,20000,ok
+belt-tooth-load,a,0.1937,1.000,ok
 dc-link-energy,a,6.205,6.205,ok
-braking-resistor-continuous,a,0.006818,20.00,ok
-braking-resistor-peak,a,3.764,500.0,ok
+braking-resistor-continuous,a,0.009861,20.00,ok
+braking-resistor-peak,a,4.671,500.0,ok
 dc-link-overvoltage,a,224.7,257.6,ok
 ...
-settling,,0.00004336,0.0001000,ok
-belt-tension,,334.1,1500,ok
+settling,,0.00004296,0.0001000,ok
+belt-tension,,334.0,1500,ok
 belt-least-tension,,203.9,0,ok
-guide-load,,177.0,2000,ok
-guide-life,,3823805,20000,ok
-thermal-warm-start,,0.000004422,0.1000,ok
+guide-load,,177.1,2000,ok
+guide-life,,3823437,20000,ok
+thermal-warm-start,,0.00001066,0.1000,ok
 ```
 
 Die Namen der Prüfungen sind Bezeichner. In der App heißt jede Prüfung so, wie in der zweiten Spalte angegeben.
@@ -216,20 +216,20 @@ Grenzen bei dieser Aufgabe:
 $ sim-cli verdicts t-gantry --set effects.shared_dc_link=true
 ...
 dc-link-energy,a,6.205,6.205,ok
-braking-resistor-continuous,a,0.06308,20.00,ok
-braking-resistor-peak,a,21.94,500.0,ok
+braking-resistor-continuous,a,0.06270,20.00,ok
+braking-resistor-peak,a,21.80,500.0,ok
 dc-link-overvoltage,a,224.7,257.6,ok
 ...
 dc-link-energy,b,6.205,6.205,ok
-braking-resistor-continuous,b,0.06308,20.00,ok
-braking-resistor-peak,b,21.94,500.0,ok
+braking-resistor-continuous,b,0.06270,20.00,ok
+braking-resistor-peak,b,21.80,500.0,ok
 dc-link-overvoltage,b,224.7,257.6,ok
 ...
 ```
 
-Im Standardzyklus erreicht der Zwischenkreis die Einschaltspannung des Bremschoppers, 224,65 V, mit getrennten Zwischenkreisen (beide Motoren) und mit dem gemeinsamen; der gemeinsame Bremswiderstand setzt je Zyklus 0,38 J um, die beiden getrennten 6,54 J (0,04 J an Motor A, 6,50 J an B).
+Im Standardzyklus erreicht der Zwischenkreis die Einschaltspannung des Bremschoppers, 224,65 V, mit getrennten Zwischenkreisen (beide Motoren) und mit dem gemeinsamen; der gemeinsame Bremswiderstand setzt je Zyklus 0,38 J um, die beiden getrennten 6,67 J (0,06 J an Motor A, 6,61 J an B). (Am 17. November erreichte der gemeinsame Zwischenkreis 224,45 V, unter der Schwelle: Seit cb5f0a40 wiegen die senkrechten Trumme des Riemens, 0,16 kg, auf Z, das beim Senken so mehr zurückgibt.)
 
-**Ins Netz zurückspeisen.** `effects.regenerative_supply` (standardmäßig aus, braucht `effects.dc_link`) setzt an die Stelle des einfachen Gleichrichters ein rückspeisefähiges Line Module, wie ein Active Line Module an einer SINAMICS S120: Es hält den Zwischenkreis auch von oben auf dem Netzniveau und speist, was die Motoren zurückgeben, ins Netz zurück, bis `ratings.line_module_max_power_w`, wovon `ratings.line_module_efficiency` dort ankommt. Der Bremswiderstand nimmt dann nur, was über die Leistung des Line Modules hinausgeht. `analyze` gibt die zurückgespeiste Energie je Motor aus (Spalte `mains_energy_j`), die Energiebilanz bekommt die Zeilen `mains` und `line_module` (dessen Verlust), die App zeigt beides, und zwei Prüfungen beurteilen das Line Module: `line-module-continuous` (seine mittlere Leistung, bezogen und zurückgespeist, gegen `line_module_rated_power_w`) und `line-module-peak` (seine höchste Leistung gegen `line_module_max_power_w`). Die mitgelieferten Werte sind das kleinste Active Line Module der S120, 16 kW Bemessungs- und 35 kW Maximalleistung, weit über dem, was diese Maschinen brauchen. Beim Standard-T-Portal gehen von den 27,8 J, die die Motoren je Zyklus zurückgeben, 27,2 J ins Netz; der Bremswiderstand verbrennt nichts, und der Zwischenkreis bleibt bei 155,13 V.
+**Ins Netz zurückspeisen.** `effects.regenerative_supply` (standardmäßig aus, braucht `effects.dc_link`) setzt an die Stelle des einfachen Gleichrichters ein rückspeisefähiges Line Module, wie ein Active Line Module an einer SINAMICS S120: Es hält den Zwischenkreis auch von oben auf dem Netzniveau und speist, was die Motoren zurückgeben, ins Netz zurück, bis `ratings.line_module_max_power_w`, wovon `ratings.line_module_efficiency` dort ankommt. Der Bremswiderstand nimmt dann nur, was über die Leistung des Line Modules hinausgeht. `analyze` gibt die zurückgespeiste Energie je Motor aus (Spalte `mains_energy_j`), die Energiebilanz bekommt die Zeilen `mains` und `line_module` (dessen Verlust), die App zeigt beides, und zwei Prüfungen beurteilen das Line Module: `line-module-continuous` (seine mittlere Leistung, bezogen und zurückgespeist, gegen `line_module_rated_power_w`) und `line-module-peak` (seine höchste Leistung gegen `line_module_max_power_w`). Die mitgelieferten Werte sind das kleinste Active Line Module der S120, 16 kW Bemessungs- und 35 kW Maximalleistung, weit über dem, was diese Maschinen brauchen. Beim Standard-T-Portal gehen von den 28,0 J, die die Motoren je Zyklus zurückgeben, 27,4 J ins Netz; der Bremswiderstand verbrennt nichts, und der Zwischenkreis bleibt bei 155,13 V.
 
 ## Eine reale Katalogmaschine prüfen
 
@@ -287,7 +287,7 @@ settling,,0.00002974,0.0001000,ok
 belt-least-tension,,251.6,0,ok
 ```
 
-Der Rotor des 1FK2204-6AF hat ein Drittel der Trägheit des 1FK2205-4AF aus der Konfiguration; die Verstärkung geht von 0,45 auf 0,14 N m s/rad. (Für diesen Motor ist zufällig auch 0,45 ruhig.) Der 1FK2104-5AF hat ein Neuntel der Trägheit: Bleibt die Verstärkung bei 0,45, schwingt er, und seine Wicklung kommt nie zur Ruhe. Auf 0,049 angepasst und mit Kv 50 liegt er an der Stabilitätsgrenze des Lageregelkreises: Er kommt in den Verweilzeiten nicht zur Ruhe (22,8 mm neben dem Ziel), und die Übertemperatur seiner Wicklung schwingt nicht ein. Mit Kv auf 24 gesenkt fährt er den Zyklus ruhig mit 1,22 N m Effektivmoment und verfehlt `settling` (0,15 mm gegen 0,1 mm): Seine Verstärkung, am Rotor begrenzt, ist zu klein, um in der Verweilzeit zur Ruhe zu kommen.
+Der Rotor des 1FK2204-6AF hat ein Drittel der Trägheit des 1FK2205-4AF aus der Konfiguration; die Verstärkung geht von 0,45 auf 0,14 N m s/rad. (Für diesen Motor ist zufällig auch 0,45 ruhig.) Der 1FK2104-5AF hat ein Neuntel der Trägheit: Bleibt die Verstärkung bei 0,45, schwingt er, und seine Wicklung kommt nie zur Ruhe. Auf 0,049 angepasst und mit Kv 50 liegt er an der Stabilitätsgrenze des Lageregelkreises: Er kommt in den Verweilzeiten nicht zur Ruhe (22,8 mm neben dem Ziel), und die Übertemperatur seiner Wicklung schwingt nicht ein. (3,5 mm und eine einschwingende Wicklung am 17. November: Seit dem 21. November, cb5f0a40, wiegen die Trumme des T-Portals auf Z, und das hat ihn von der einen Seite der Grenze auf die andere gekippt; auf beiden Ständen bleibt er mit Kv 49,9 ruhig, 1,2 und 3,8 mm, und schwingt mit 50,1, 22 mm.) Mit Kv auf 24 gesenkt fährt er den Zyklus ruhig mit 1,22 N m Effektivmoment und verfehlt `settling` (0,15 mm gegen 0,1 mm): Seine Verstärkung, am Rotor begrenzt, ist zu klein, um in der Verweilzeit zur Ruhe zu kommen.
 
 Eine unbekannte Artikelnummer wird abgelehnt: `Der Katalog kennt dieses Bauteil nicht: Motor 1FK9`. Ebenso ein Motor, den der Katalog für die gewählte Netzspannung nicht anbietet, und unbekannte Antriebe, Riemen und Achsen.
 
@@ -1594,13 +1594,13 @@ Die Verstärkungen stehen in `[drive]`: `kv_1_s` (Lageverstärkung Kv), `velocit
 ```text
 $ sim-cli tuning t-gantry
 axis,rise_time_s,overshoot,settling_time_s,bandwidth_hz
-x,0.02875,0.0657,0.45025,11.296
-z,0.04325,0.0000,0.08550,9.203
+x,0.03025,0.0550,0.40375,8.754
+z,0.04875,0.0000,0.09400,8.163
 
 $ sim-cli tuning t-gantry --set drive.kv_1_s=150
 axis,rise_time_s,overshoot,settling_time_s,bandwidth_hz
-x,0.01175,0.3092,0.50000,22.165
-z,0.00575,0.1605,0.04175,59.549
+x,0.01200,0.3109,0.50000,22.184
+z,0.00575,0.1751,0.04350,57.798
 ```
 
 | Spalte | Einheit | Bedeutung |
@@ -1610,19 +1610,26 @@ z,0.00575,0.1605,0.04175,59.549
 | `settling_time_s` | s | Einschwingzeit: Danach bleibt das Werkzeug innerhalb von 2 % des Sprungs |
 | `bandwidth_hz` | Hz | Bandbreite: Frequenz, bei der der Betrag des Führungsfrequenzgangs erstmals unter 1/√2 fällt. Leer, wenn das bis 200 Hz nie geschieht |
 
-Mit Kv = 50 1/s verhält sich der Lageregelkreis wie ein Verzögerungsglied erster Ordnung mit der Zeitkonstante 1/Kv: Bandbreite etwa Kv / 2π = 8 Hz. Z zeigt das deutlich. In X enthält die Werkzeugposition das Schwanken des Gestells: Der Sprung regt die schwach gedämpfte Eigenschwingung des Gestells (etwa 21 Hz) an. Daher kommen die 7 % Überschwingen und die 0,45 s, bis das Werkzeug innerhalb von 2 % bleibt. Mit dem dreifachen Kv schwingt X um 31 % über.
+Mit Kv = 45 1/s (50 bis zum 22. November 2026, als der geschlossene Kreis von X über seiner Gestelleigenschwingung oberhalb von 1/√2 blieb und seine Bandbreite 20,5 Hz las) verhält sich der Lageregelkreis wie ein Verzögerungsglied erster Ordnung mit der Zeitkonstante 1/Kv: Bandbreite etwa Kv / 2π = 7 Hz. Z zeigt das deutlich. In X enthält die Werkzeugposition das Schwanken des Gestells: Der Sprung regt die schwach gedämpfte Eigenschwingung des Gestells (etwa 21 Hz) an. Daher kommen die 5,5 % Überschwingen und die 0,40 s, bis das Werkzeug innerhalb von 2 % bleibt. Mit Kv = 150 schwingt X um 31 % über.
 
 **Stabilitätsreserven der Drehzahlregelkreise.** `margins` misst den Drehzahlregelkreis jedes Motors aufgeschnitten: Zu dem Moment, das der Regler fordert, kommt ein sinusförmiges Moment hinzu, während die Maschine ihre Startpose hält, und die Antwort des Reglers ergibt den Frequenzgang des offenen Kreises L bei 60 Frequenzen von 10 Hz bis 2 kHz (so arbeitet auch die Messfunktion eines Antriebs). Wo \|L\| bei 10 Hz noch unter 1 liegt (die Integratoren legen den Durchtritt tiefer), misst sie im selben Abstand weiter nach unten, bis \|L\| > 1 ist, höchstens bis 1 Hz. Zwischen zwei dieser Punkte, 9,4 % auseinander, kann sich eine scharfe Resonanz verstecken: Die Resonanzen der Maschine in der Startpose (`sim-cli modes`) werden mitgemessen, und wo sich L oder die Strecke (Motormoment zu Drehzahl) von einem Punkt zum nächsten um mehr als 30° dreht oder um mehr als 3 dB ändert, wird auch ihre Mitte gemessen, in bis zu acht Runden, bis die Punkte 0,1 % auseinander liegen. Auf den Standardkonfigurationen kommen so einige Punkte hinzu, und die Reserven bleiben nahezu, wie sie waren:
 
 ```text
 $ sim-cli margins t-gantry
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
-,a,185.6,54.9,9.19,1.882,277.3,,ok
-,b,179.8,52.1,9.09,1.878,277.3,,ok
+,a,178.1,57.7,9.93,1.773,277.3,,ok
+,b,170.5,56.1,9.84,1.768,277.3,,ok
+start.pose=[0.1 0.05],a,210.3,51.1,9.18,1.927,277.3,,ok
+start.pose=[0.1 0.05],b,170.1,57.1,10.21,1.733,253.5,,ok
+start.pose=[0.9 0.35],a,166.3,58.5,10.19,1.721,253.5,,ok
+start.pose=[0.9 0.35],b,181.7,55.9,9.57,1.828,277.3,,ok
+start.pose=[0.9 0.05],a,174.3,54.8,9.78,1.777,253.5,,ok
+start.pose=[0.9 0.05],b,206.3,54.4,9.60,1.870,277.3,,ok
 
 $ sim-cli margins single-axis --bands
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
 ,m,181.5,59.9,11.56,1.607,253.5,,ok
+start.pose=[0.9],m,143.4,62.0,11.35,1.496,211.8,,ok
 belt.damping_n_s_m=50.0,m,186.8,54.3,11.59,1.652,231.7,,ok
 belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 ...
@@ -1630,7 +1637,7 @@ belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 
 | Spalte | Einheit | Bedeutung |
 | --- | --- | --- |
-| `run` | | Leer für die Konfiguration, wie sie ist; mit `--bands` eine Zeile je Motor für jeden Wert aus `[bounds]` an seiner unteren und an seiner oberen Grenze |
+| `run` | | Leer für die Konfiguration, wie sie ist, in ihrer Startpose; `start.pose=[...]` für jede andere Pose, an der der Zyklus hält (die Ziele aus `cycle.segment`, jedes einmal, im Nutzlastzustand des Starts); mit `--bands` eine Zeile je Motor für jeden Wert aus `[bounds]` an seiner unteren und an seiner oberen Grenze, in der Startpose. Bei mehreren Posen nennt stderr je Motor die kleinste Phasenreserve, Amplitudenreserve und Reserve über das Spiel über sie, jede mit ihrer Pose |
 | `crossover_hz` | Hz | Durchtrittsfrequenz, bei der \|L\| = 1 ist, die mit der kleinsten Phasenreserve. Unter 10 Hz, wo die Messung nach unten weitergegangen ist (die Einzelachse mit der Coulomb-Reibung ihres Motors an der oberen Grenze: 4,4 Hz, 92,0°). Leer, wie auch `phase_margin_deg`, wo der Kreis bis hinab zu 1 Hz keinen Durchtritt hat; das Ergebnis ist dann das der Amplitudenreserve allein |
 | `phase_margin_deg` | ° | Phasenreserve: 180° plus die Phase von L dort (die Phase ohne Sprünge verfolgt, am ersten Durchtritt zwischen −360° und 0° genommen); negativ: der Kreis ist instabil |
 | `gain_margin_db` | dB | Amplitudenreserve: um wie viel die Verstärkung steigen darf, bis L −1 erreicht, an der ungünstigsten Stelle, an der die Phase durch −180° fällt und die kein späteres Steigen durch −180° mit \|L\| > 1 aufhebt (eine Nyquist-Zählung; Fallen und Steigen jenseits von −1 unterhalb des Durchtritts ist bedingt stabil und zählt nicht); negativ, wo dort \|L\| > 1 ist (instabil); `inf`, wenn es bis 2 kHz keine solche Stelle gibt |
@@ -1639,7 +1646,7 @@ belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 | `play_margin_db` | dB | Mit `effects.gearbox_backlash`: um wie viel die Verstärkung steigen darf, bis der Kreis über das Spiel hämmert, die Reserve der Beschreibungsfunktion mit abgeklungener Reibung am Rotor (jeder Lauf wird dafür ein zweites Mal mit geschlossenem Spiel gemessen; `margins` braucht etwa 15 % länger). Leer, wo das Spiel den Kreis nicht ändert (es bleibt unter dem Testmoment geschlossen, oder der Motor hat keines). Wird angegeben, nicht bewertet: über `result` entscheidet der Zeitlauf. Die Werkzeugdrehung des Fünfgelenks: 3,56 dB bei den ausgelieferten 0,033 N m s/rad, −4,18 dB bei 0,08 (danach hämmert sie ab 0,0497, im Zeitlauf ohne Reibung ab 0,048, mit Reibung ab 0,078) |
 | `result` | | `ok`, oder `FAIL`, wo eine Reserve negativ ist oder die Messung nicht gültig: Der Kreis lief dabei in seine Momentengrenze oder bewegte sich von selbst (schwang). Dann ist der Kreis instabil, und seine Reserven sind `NaN`. Ebenso `FAIL`, wo der Kreis über das Getriebespiel hämmert: Innerhalb des Spiels sieht die Messung nur den Rotor, und die Reserven können gut aussehen. Mit `effects.gearbox_backlash` wird darum jeder Kreis in Ruhe zusätzlich mit einem Gleitsinus vom Nennmoment seines Motors angestoßen und 0,3 s beobachtet; einer, der weiter von Flanke zu Flanke schwingt (und ohne Spiel nicht), wird auf stderr genannt, z. B. `Motor Werkzeugdrehung: hämmert über das Getriebespiel bei 650 Hz, 0.77 N m` (die Frequenz und die Spitze des Moments, das der Regler fordert), die Werkzeugdrehung des Fünfgelenks bei 0,08 N m s/rad |
 
-Die Drehzahlverstärkungen der Standardkonfigurationen wurden damit gewählt: mindestens 35° Phasenreserve und 6 dB Amplitudenreserve in jedem Lauf von `--bands`, auch mit `--set effects.motor_friction=false --set effects.guide_friction=false` (die Reibung dämpft den Kreis nahe dem Stillstand, wie bei der Messung, die die Maschine hält, aber nicht bei Konstantfahrt). Ergebnis: T-Portal 0,04 N m s/rad, mindestens 46,2° und 8,38 dB, ohne Reibung 35,7° und 7,42 dB; Einzelachse 0,025, mindestens 50,3° und 10,83 dB, ohne Reibung 39,0° und 10,05 dB (gemessen am 17. November 2026 an den Konfigurationen, wie sie ausgeliefert werden). Die Verstärkung von 0,08, die die Konfigurationen vorher hatten, ließ dem T-Portal 12° und 2 dB (Motor B pendelte bei Konstantfahrt im Getriebespiel) und der Einzelachse 1° und 0,3 dB (sie wurde mit dem Riemen an seiner steifsten Grenze instabil). Die EXCT-30 wurde ebenso eingestellt, von 0,6 (34,9° und 6,6 dB, ohne Reibung 29,6° und 5,8 dB) auf 0,45: mindestens 48,8° und 9,36 dB, ohne Reibung 40,6° und 8,61 dB (17. November). Die Zahlen für die früheren Verstärkungen stammen von vor dem 13. November, gemessen ohne stetig verfolgte Phase.
+Die Drehzahlverstärkungen der Standardkonfigurationen wurden damit gewählt: mindestens 35° Phasenreserve und 6 dB Amplitudenreserve in jedem Lauf von `--bands`, auch mit `--set effects.motor_friction=false --set effects.guide_friction=false` (die Reibung dämpft den Kreis nahe dem Stillstand, wie bei der Messung, die die Maschine hält, aber nicht bei Konstantfahrt). Ergebnis: T-Portal 0,04 N m s/rad, mindestens 46,2° und 8,38 dB, ohne Reibung 35,7° und 7,42 dB, dann 0,037 (22. November 2026), als die Reserven die Posen des Zyklus bekamen: 0,04 ließ ohne Reibung links mit Z unten 33,0°, 0,037 dort mindestens 35,5° und 7,7 dB; Einzelachse 0,025, mindestens 50,3° und 10,83 dB, ohne Reibung 39,0° und 10,05 dB (gemessen am 17. November 2026 an den Konfigurationen, wie sie ausgeliefert werden). Die Verstärkung von 0,08, die die Konfigurationen vorher hatten, ließ dem T-Portal 12° und 2 dB (Motor B pendelte bei Konstantfahrt im Getriebespiel) und der Einzelachse 1° und 0,3 dB (sie wurde mit dem Riemen an seiner steifsten Grenze instabil). Die EXCT-30 wurde ebenso eingestellt, von 0,6 (34,9° und 6,6 dB, ohne Reibung 29,6° und 5,8 dB) auf 0,45: mindestens 48,8° und 9,36 dB, ohne Reibung 40,6° und 8,61 dB (17. November). Die Zahlen für die früheren Verstärkungen stammen von vor dem 13. November, gemessen ohne stetig verfolgte Phase.
 
 **Die Sprungantwort als Kurve:**
 
@@ -1647,8 +1654,8 @@ Die Drehzahlverstärkungen der Standardkonfigurationen wurden damit gewählt: mi
 $ sim-cli step t-gantry --axis-index 0
 time_s,setpoint,response
 0.000000,1.000000000e-3,0.000000000e0
-0.000250,1.000000000e-3,-3.147539313e-10
-0.000500,1.000000000e-3,2.983529507e-9
+0.000250,1.000000000e-3,2.442885061e-10
+0.000500,1.000000000e-3,3.121861117e-9
 ...
 ```
 
@@ -1659,11 +1666,11 @@ time_s,setpoint,response
 ```text
 $ sim-cli bode t-gantry --axis-index 0 --count 8
 frequency_hz,gain,gain_db,phase_deg
-1.0000,9.821098e-1,-0.157,-10.624
-2.1317,9.731335e-1,-0.237,-19.223
-4.5440,8.975914e-1,-0.938,-36.177
-9.6863,7.306060e-1,-2.726,-62.982
-20.6478,7.519268e-1,-2.476,156.818
+1.0000,9.830301e-1,-0.149,-11.512
+2.1317,9.699874e-1,-0.265,-21.141
+4.5440,8.748395e-1,-1.161,-39.797
+9.6863,6.761918e-1,-3.399,-68.123
+20.6478,6.353218e-1,-3.940,159.079
 ...
 ```
 

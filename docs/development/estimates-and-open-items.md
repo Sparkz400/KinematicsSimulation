@@ -108,7 +108,6 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The sag model is a shallow parabola | cable robots | 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
 | A hook block already lower than the payload's top at a pick (under 0.28 m over its point) is left inside it: pushing it out would make energy; refusing such a pick needs `sim.rs`, the coordinator's call | crane | None in the shipped cycle (its picks hang the hook block 1 m over the payload). |
 | A parallelogram's forearm rocking on its rod's spring as a motion of its own (the rod's stiffness is in series with the carried joint's gearbox only) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured: the test case, and 1.22 % for the palletiser's held upper arm). |
-| The screw's stiffness along the stroke keeps the far end's for the wafer handler's and the parallel SCARA's pose tolerance (their own `rest_sag`, `machine-wafer-handler` and `machine-parallel-scara`: the column's m g / K with the far end's K, the stroke's `static_twist`), on the safe side; `chain.rs`'s takes the nut, and since 21 November the fit's twist (`Machine::twist_at`) and the mesh bristle (σ_m r, its store still not booked: at most (μ |held|)² / (2σ_m) per gear) follow the nut too | wafer handler, parallel SCARA | The tolerance up to the far end's sag over the pose's. |
 | Every machine takes an obstacle's push on its contact coordinates (the tool's, the crane's load, the winder's dancer) since 22 November, not at the touching part's own point (a payload under a leaning Z axis is held through the tool point). One-way base compliance (without `effects.base_reaction`) keeps its base outside the budget: the push's work on the base is in no row (the contact's damping does not see the base's speed there) | obstacle contact | One-way: the push deflects the base by F / k_base all the same, the budget closes to 7e-7 (measured). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
 | The stepper's detent after a trip took its pulses off (`Sim::advance_with_windings` gives such a drive the iron's drag only) | stepper | The detent's torque, T_d, is missing while it coasts; the books stay closed (its potential is never stored since 22 November). |
 
@@ -365,6 +364,31 @@ Not re-run on 21 November 2026 (the figures stand as dated in the text):
 
 ## 10. Reported by the document agents
 
+Figure shifts between the documents of 17 November and main 59a2aff7 (21 November), attributed by building sim-cli at
+the merges between (d0e28a32, 1a2f8873, b3f0da0d, 3fca3070, 9590fa82, c4aa156d, e8d75ee9, 59a2aff7, and 60e59797
+alone) and running each figure's command; none is a defect:
+- Hexapod margins (`sim-cli margins hexapod`, all six legs alike) 147.3 Hz, 87.2°, 10.53 dB on d0e28a32 (the docs' 145
+  Hz, 89°, 10.6 dB date from the hexapod's introduction, f567532b, 14 November, not re-run on 17 November): 60e59797 alone 252.5 Hz, 63.8°, 7.62 dB, the coupling's
+  damper bridging its own spring instead of coupling and screw together (it had overdamped the screw's mode); with
+  e78913f3's screw damping, b3f0da0d, 246.1 Hz, 66.8°, 7.71 dB; the screw's stiffness at the nut (ddd3bbc9, 3fca3070)
+  127.6 Hz, 100.1°, 7.76 dB (the crossover moves to the lower lobe); the screw damper's ratio along the stroke
+  (783849a5, c4aa156d) 127.7 Hz, 100.0°, 7.78 dB. The new figure is the better physics: the damper's place is the
+  correction of a model error, and the nut's place is the start pose's.
+- Wafer handler settling 33.4 um -> 47.2 um on b3f0da0d (60e59797 alone: 93.1 um, the column's mode no longer
+  overdamped; its Z velocity gain lowered 0.0443 -> 0.02 for it, 2400ebc6), 47.5 um with the nut (3fca3070). The
+  column's mode 320.9 -> 432.3 Hz is the nut's place at the start pose (ddd3bbc9): the far end's stiffness was the
+  safe-side stand-in. Both the better physics.
+- The EXCT-30 with the 1FK2104-5AF at Kv 50 (`verdicts ... --motor 1FK2104-5AF --set drive.kv_1_s=50`): 3.547 mm and
+  winding 28.45 K up to 3fca3070, 22.81 mm and `inf` from 9590fa82 on: the T-gantry's belt runs weighing on Z
+  (cb5f0a40, 0.16 kg). The loop is at the edge: on both builds Kv 49.9 stays calm (1.22 and 3.85 mm) and 50.1 swings
+  (22.0 and 21.9 mm, `inf`), so neither figure is robust; the guide's point (the edge of stability) holds and now says
+  so. The `inf` is no artefact: swinging, each motor draws 5.15 A RMS (over the drive's 5.0 A, `motor-s1` 5.3 of 2.4
+  N m, the belt slack at times), and at that current the winding's copper loss grows with its temperature faster than
+  it sheds it, so it has no steady rise (`Drive::settled_rise`); the run is then measured from cold.
+- The default T-gantry's shared DC link 224.45 V (no resistor) -> 224.65 V at the threshold, 0.38 J in the resistor:
+  9590fa82, the same belt runs' weight on Z (cb5f0a40): Z holds and lowers 0.16 kg more, so it gives back more. The
+  better physics (the runs had momentum and no weight; V + g · c drifted 0.47 J per cycle).
+
 Fixed (second audit, 21 November):
 - The lumped forearms (planar delta, D3/D4 with `forearm_inertia` off, parallel SCARA) had their momentum and
   first moment at the inertia's split, their weight at the middle: V + g · c drifted (D2 0.060 N s, 2.6 N of
@@ -388,8 +412,47 @@ Fixed (after the second audit, 21 November):
   faded. Five-bar's tool turn: -4.18 dB at 0.08, +3.56 dB at the shipped 0.033 (onset 0.0497); a time run with the
   friction off hammers from 0.048 (within 4 %), with it on from 0.078: the friction still damps the swing, which the
   figure leaves out on the safe side. Told, not judged (the time run stays the verdict); each run is measured once more
-  with the play closed (margins of the five-bar 20.5 to 23.8 s). Still open: the kicks and the margins are at the start
-  pose only; the margins across the bounds vary config values, not poses, so there was no pose list to reuse.
+  with the play closed (margins of the five-bar 20.5 to 23.8 s). Since 21 November (review fix) the
+  margins, the margin across the play and the kicks run at every pose the cycle stops at (`margin_poses`; model
+  reference, hammering across a backlash), the bounds at the start pose only. The five-bar's tool turn at 0.1 hammers
+  hardest over the pick (2.63 N m); its margin across the play is least at the start pose (3.56 dB). The T-gantry's
+  motor A has its least margins at [0.1, 0.05]: 46.4° and 8.44 dB (54.9° and 9.19 dB at the start). `sim-cli margins`
+  on 4 cores: five-bar 26.8 to 99.4 s, T-gantry 8.6 to 31.8 s. Each pose is measured in the start's payload state (the
+  segments' `payload` is not followed). Every loop stays stable (`ok`) at every
+  cycle pose; these fell below the tuning's 35 degrees at a pose other than the start (as shipped / motor and guide
+  friction off; start pose in brackets) and are retuned for at least 35 degrees over the poses (22 November):
+  URDF arm motor 1 at [0.8, 0.45, -0.55, 0.3, 0.5, 1] 21.7 / 16.6 degrees (52.7 / 41.5), crossover 8 Hz against the
+  integrator's corner: its own gain 0.15 -> 0.4, 49.0 / 36.0 degrees, 8.8 / 8.3 dB, crossover 190 Hz (0.45 hammered
+  across the play at its upper bound); arm on a track motor 2 the same, 24.2 / 16.7 (59.4 / 63.0) -> 53.7 / 46.8
+  degrees at 0.4; T-gantry friction off motor A at [0.1, 0.05] 33.0 (43.6), motor B at [0.9, 0.05] 34.0 (42.3): 0.04
+  -> 0.037, at least 35.5 / 36.6 degrees, 50.9 degrees with friction; rotary knife friction off at pi 34.0 (52.5):
+  0.18 -> 0.20, 36.6 degrees, over the bounds 35.5. Their cycles' verdicts all pass before and after (settling: T-gantry
+  43.36 -> 42.96 um, arm on a track 24.49 -> 24.41 um, URDF arm 1.968 -> 1.974 mrad, rotary knife 71.7 -> 60.8 urad).
+  The retunes first tripped sim-cli's tuning check (the position loop's band under 20 Hz): the T-gantry's x closed
+  loop stayed above 1/sqrt(2) up to its 19 Hz mode (0.708 at 11.7 Hz, a band of 20.5 Hz), the arms' base turns
+  overshot a 1 mm step by 22 to 24 % at Kv 50 (20.0 and 20.6 Hz on the arm's mode). Retuned too: the T-gantry's Kv 50
+  -> 45 (x 8.75 Hz, 5.5 %; the velocity loops at least 35.7 degrees and 7.7 dB over the poses friction off), the URDF
+  arm's and the arm on a track's base turn Kv 30 (3.8 and 2.6 %, 7.5 and 7.8 Hz; 42.1 and 47.4 degrees friction off).
+  The palletiser, after its rod and crank (af529961): motor 2 at [1.6, 0.5, 1.3, pi/2] 30.2 / 23.8 degrees (73.0 /
+  68.7 at the start), motor 3 29.7 friction off (45.2), crossover 8 Hz with 19 dB of gain margin unused: the arm's two
+  0.35 -> 1.2, at least 54.0 / 51.0 and 53.1 / 50.2 degrees, 8.9 / 8.7 dB over the poses; and its position gains, whose
+  1 mm steps overshot 42 % in x and y at Kv 50; the base turn's loop over its bounds read 20.9 degrees friction off at
+  the gear's stiffest (230000 N m/rad, 8 Hz crossover): base turn 0.4 -> 1.2 (49.8 degrees, 8.6 dB there), Kv 20, the
+  arm's two Kv 26: x 7.7 % (4.2 Hz), y 5.3 % (9.8 Hz). Settling 2.232 -> 2.185 mm of 4 mm, every verdict passing. The
+  turret ring test's loop model now runs against a ring with the rotor linear (motor and joint friction and the gear's
+  efficiency off): 5.636 against 5.628 Hz at the shipped Kp 1.2, Kv 20 and 5.351 against 5.345 at Kp 0.4, Kv 50; with
+  the friction on the rotor sticks part of each swing and rings stiffer (5.774 and 5.340 Hz). Not run since: the
+  palletiser's bounds sweeps (`across_the_bounds::palletiser::with(out)_friction`). The T-gantry machine file has the
+  crate's 0.037 and 45 since 22 November (its two netlist comparisons pass). The T-gantry's analyze, verdicts, tuning, margins, step and
+  Bode blocks of the guides are re-run with the new gains; its optimise, sensitivity, stop, accuracy and path blocks
+  are from Kp 0.04 and Kv 50 and not re-run. The shipped margins test is one per
+  config now (`across_the_bounds::<config>::as_configured`). Time of `sim-cli margins` over the poses on 4 cores, as
+  shipped / friction off: mover track 769 / 359 s, rotary hexapod 456 / 678 s, spatial cable robot 361 / 1059 s,
+  hexapod 182 / 200 s, tripod 203 / 167 s, the rest under 160 s. No machine's extra poses were left out as adding
+  nothing: where the rigid machine's torques per acceleration, holding torques and modes are the start's at every pose
+  (mover track, rack, linear motor, rotary table, rotary knife, flying saw, disc cam, Geneva drive, cam indexer), the
+  loops still differ on the mover track (motor 2 21.39 against 30.04 dB; cause not looked into), the linear
+  motor (24.03 against 30.78 dB) and the rotary knife (65.3 against 46.2 degrees), so that test cannot tell.
 - The hexapod's lowest held mode (183.2 Hz) lies below its planner trains (289.6 Hz, each leg's M_kk with the others
   held), and the trains are right for the allowance's jerk term: with one motor driven and the others held the twist
   rate is [K^-1 M]_kk j = M_kk j / K_k, the modal sum of its column over the held modes (model reference, the planner's

@@ -452,6 +452,28 @@ fn the_column_rings_stiffer_with_the_nut_near_its_bearing() {
     assert!(rates.iter().all(|r| r.abs() < 1e-7), "{rates:?}");
 }
 
+/// The rest sag's allowance (`rest_sag`) holds the whole stroke with the screw's stiffness following the nut: the lift's
+/// half play and its weight m g = 11.2276 x 9.80665 N over the screw where it is softest on the stroke 0..0.3 m, plus a
+/// tenth. With the shaft fixed at one end (the shipped fixed bearing at -0.05 m) that is the stroke's top, the nut
+/// a = 0.35 m from it: K = 1 / (0.35 / 2.948660e7 + 5e-9 + 2.5e-9 + 8.443430e-10) = 4.946592e7 N/m, not the shaft's
+/// far end a = 0.4 m beyond the stroke (4.564162e7, `the_column_rings_on_its_screw_and_coupling`); held at both ends
+/// the shaft's middle a = 0.2 m (z = 0.15), a (L - a) / (E A L) = 0.1 / 2.948660e7. The coupling's play of 0.2 rad
+/// [test value] is 0.1 x 0.01 / 2 pi = 1.591549e-4 m at the column, which lifts the allowance over the 0.1 mm floor;
+/// the shipped gears have none (0.1 mm before and after).
+#[test]
+fn the_rest_sag_takes_the_screw_where_it_is_softest_on_the_stroke() {
+    let (ea, weight, half) = (2.948660e7, 11.2276 * 9.80665, 0.1 * 0.01 / std::f64::consts::TAU);
+    let series = |shaft: f64| 1.0 / (shaft + 5e-9 + 2.5e-9 + 8.443430e-10);
+    for (mounting, k) in [("fixed-free", series(0.35 / ea)), ("fixed-fixed", series(0.1 / ea))] {
+        let d = handler(&[
+            "effects.screw_stiffness_with_position = true",
+            "gearbox.3.backlash_rad = 0.2",
+            &format!("screw.mounting = \"{mounting}\""),
+        ]);
+        close(d.rest_sag(), 1.1 * (half + weight / k), 1e-6, mounting);
+    }
+}
+
 /// The planner's trains (`Machine::trains`) are the machine's own held modes, one motor at a time: the lift's is the
 /// column's ring on its screw at the stroke's height (438.4518 and 349.0392 Hz at z = 0.1 and 0.3 by hand above, the
 /// fixed bearing at z = 0); the turn's and the reach's are the arm's mode on that joint's gearbox with the other one

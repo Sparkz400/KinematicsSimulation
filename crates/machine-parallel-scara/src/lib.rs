@@ -668,13 +668,17 @@ impl ParallelScara {
     /// side of its backlash (all four combinations; nothing loads them at rest, gravity being out of the plane),
     /// through the forward kinematics. Over a grid of the range, 41 columns of 9 depths and the far edge; plus a tenth for what
     /// the grid steps over and the joints' friction. The stroke's screw twisted by the carriage's and the payload's weight
-    /// (`Gearbox::static_twist`, m) and the turn at either side of its play (rad: nothing loads it), each on its own
-    /// axis, where more. At least the default 0.1 mm; that alone in the rigid model.
+    /// (`Gearbox::static_twist`, m, with the screw where it is softest on the stroke, `Gearbox::softest`) and the turn at
+    /// either side of its play (rad: nothing loads it), each on its own axis, where more. At least the default 0.1 mm;
+    /// that alone in the rigid model.
     fn rest_sag(&self) -> f64 {
         if !self.elastic {
             return 1e-4;
         }
-        let twist = |x: &Extra| x.joint.gearbox.static_twist(-x.weight(true)).abs().max(x.joint.gearbox.half_backlash);
+        let twist = |x: &Extra| {
+            let gear = x.joint.gearbox.softest(x.joint.range);
+            gear.static_twist(-x.weight(true)).abs().max(gear.half_backlash)
+        };
         let mut most = self.extras.iter().map(twist).fold(0f64, f64::max);
         for column in 0..=40 {
             let x = self.half_width * (column as f64 / 20.0 - 1.0);

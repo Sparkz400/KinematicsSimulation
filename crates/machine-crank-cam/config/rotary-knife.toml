@@ -140,8 +140,11 @@ kv_1_s = 50.0
 # the softest gearbox damping of the bounds (2 N m s/rad) left 29.7 degrees at 0.25 (26.4 at 0.3, 0.03 s: it never passed
 # the sweep); at 0.18 at least 37.8 degrees and 9.9 dB, 45.7 and 11.0 with friction. The cycle's following error grows
 # from 8.86 to 12.1 mrad (the cut, outside the feedforward), the cam's from 4.72 to 5.70 mrad, settling 0.042 to
-# 0.072 mrad of 0.3.
-velocity_kp_nm_s_rad = 0.18
+# 0.072 mrad of 0.3. Then 0.20 (22 November 2026): over the cycle's poses (`sim-cli margins`) the roll at pi, the
+# cycle's other stop, read 34.0 degrees friction off at 0.18 (crossover 24 Hz, low against the integrator's corner:
+# a lower gain gives less, 29.2 at 0.15); at 0.20 at least 36.6 degrees and 9.7 dB there, and over the bounds at the
+# start at least 35.5 degrees and 9.0 dB friction off (0.21 left 34.3 there), 42.6 and 10.0 with friction.
+velocity_kp_nm_s_rad = 0.2
 velocity_tn_s = 0.01
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
