@@ -974,9 +974,15 @@ impl Sim {
                     for (k, d) in drives.iter().enumerate() {
                         // A drive whose pulses are off after a trip: no current, no torque (`Controller::react`).
                         if d.pulses_off {
-                            // Only the iron's drag acts (`DriveParams::iron_drag`); its work is integrated in the
-                            // winding's work slot, which `Controller::winding_stepped` books.
-                            stage_torque[k] = -control.drive_params_of(k).iron_drag(speed[k]);
+                            // Only the iron's drag acts (`DriveParams::iron_drag`), and a stepper's magnets hold their
+                            // detent without current, at the stage's angle; their work is integrated in the winding's
+                            // work slot, which `Controller::winding_stepped` books as the shaft's and what the magnets
+                            // and the iron gave, as with the drives disabled.
+                            let p = control.drive_params_of(k);
+                            stage_torque[k] = -p.iron_drag(speed[k]);
+                            if let crate::drive::Motor::Stepper(s) = &p.motor {
+                                stage_torque[k] += s.detent_torque(angle[k], d.phases.origin);
+                            }
                             dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].fill(0.0);
                             dwindings[WINDING_STATES * k + 3] = stage_torque[k] * speed[k];
                             continue;

@@ -1434,6 +1434,10 @@ impl Controller {
                 }
             }
             drive.disabled_step(p, self.motor_vel[k]);
+            // A stepper's magnets hold their detent without current (`Sim::advance_with_windings` integrates it).
+            if let Motor::Stepper(s) = &p.motor {
+                drive.torque += s.detent_torque(self.motor_pos[k], drive.phases.origin);
+            }
             torque[k] = drive.torque;
         }
         if self.params.shared_dc_link {
