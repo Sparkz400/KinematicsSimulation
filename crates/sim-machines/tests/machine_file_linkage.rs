@@ -641,7 +641,13 @@ fn the_scissor_lifts_moving_feedforward_reaches_its_acceleration() {
 /// `side` the tool (-1 below, +1 above along z) with its face `gap` m from the nearest part at the start, and a move
 /// `travel` m along z, past the face. Returns the contact force and depth at the end of a 1.5 s run, and the crash
 /// row with the energy not accounted for and the supply of the same move planned and analysed.
-fn push_into_slab(entry: &'static MachineEntry, side: f64, gap: f64, travel: f64) -> (f64, f64, f64, f64, f64) {
+fn push_into_slab(
+    entry: &'static MachineEntry,
+    changes: &[&str],
+    side: f64,
+    gap: f64,
+    travel: f64,
+) -> (f64, f64, f64, f64, f64) {
     use sim_components::path::Piece;
     let slab = |centre: f64| {
         let mut cfg = entry.config();
@@ -650,6 +656,7 @@ fn push_into_slab(entry: &'static MachineEntry, side: f64, gap: f64, travel: f64
         ))
         .unwrap();
         cfg.set_text("effects.crash = true").unwrap();
+        changes.iter().for_each(|c| cfg.set_text(c).unwrap());
         cfg
     };
     // Where the parts are at the start, from a slab far off, then the slab moved to `gap` from them.
@@ -680,16 +687,23 @@ fn push_into_slab(entry: &'static MachineEntry, side: f64, gap: f64, travel: f64
 /// at the motors the arms and gearboxes gave way on top of it. The push's power goes into the motion exactly: at the
 /// start pose moving at 0.05 m/s along each axis, a push changes the rate of the machine's energy (`energy`'s gradient
 /// times the change of the state's rates) by F . v_tool, to 1e-6 (central differences of the energy). The budget of the
-/// move into the obstacle closes with the crash row within `BUDGET_TOLERANCE` (measured: planar delta 2.2e-6 of the
-/// supply, 9.1e-6 for the same move without a contact; D3 1.1e-6, 3.5e-5 without; the scissor lift 2.3e-4, 2.8e-7
-/// without, at 28 kN in the ceiling). Planar delta and D3: the plate lowered 0.04 m
-/// onto a slab 0.02 m under its lowest part; the scissor lift's platform raised 0.04 m into a ceiling 0.02 m over it.
+/// move into the obstacle closes with the crash row as the same move without a contact does (to that move's rest, or
+/// 1e-6 of the supply where that is less): planar delta 2.2e-6 of the supply, 9.1e-6 without a contact; D3 1.1e-6,
+/// 3.5e-5 without. The scissor lift's screw holds 28 kN against the ceiling, where its gearbox's efficiency changes
+/// between driving and driven back within 0.5 W (`Gearbox::loss_factor`), a few mm/s of the platform's speed at that
+/// force: the shipped 4 substeps of 15.6 us do not follow it, and the move's rest is 2.3e-4 of the supply (1.2e-4 with
+/// 8, 6.9e-6 with 16, 4.2e-8 with 32 and 64; 4.6e-8 with 4 and effects.gearbox_efficiency off). It is the
+/// integration's: with 32 substeps it closes to 4.2e-8 (2.8e-7 without the contact at 4). Planar delta and D3: the
+/// plate lowered 0.04 m onto a slab 0.02 m under its lowest part; the scissor lift's platform raised 0.04 m into a
+/// ceiling 0.02 m over it.
 #[test]
 fn the_linkage_delta_and_scissor_files_are_pushed_at_their_tool() {
-    for (entry, side) in [(file(), -1.0), (spatial_file(), -1.0), (scissor_file(), 1.0)] {
+    for (entry, side, steps) in
+        [(file(), -1.0, &[][..]), (spatial_file(), -1.0, &[][..]), (scissor_file(), 1.0, &["sim.substeps = 32"][..])]
+    {
         let id = entry.id;
-        let (force, depth, crash, rest, supply) = push_into_slab(entry, side, 0.02, 0.04);
-        let (_, _, _, free_rest, free_supply) = push_into_slab(entry, side, 0.5, 0.04);
+        let (force, depth, crash, rest, supply) = push_into_slab(entry, steps, side, 0.02, 0.04);
+        let (_, _, _, free_rest, free_supply) = push_into_slab(entry, &[], side, 0.5, 0.04);
         println!(
             "{id}: {force} N, {depth} m in, F / k {} m; crash {crash} J, {rest} J of {supply} J ({free_rest} J of \
              {free_supply} J without the contact)",
@@ -697,7 +711,7 @@ fn the_linkage_delta_and_scissor_files_are_pushed_at_their_tool() {
         );
         assert!(force > 10.0, "{id}: {force} N");
         assert!((depth - force / 1e7).abs() < 0.05 * depth, "{id}: depth {depth} m against F / k");
-        let tolerance = sim_components::analysis::BUDGET_TOLERANCE;
+        let tolerance = (free_rest / free_supply).abs().max(1e-6);
         assert!(crash > 0.0 && rest.abs() < tolerance * supply, "{id}: {rest} J of {supply} J");
 
         // The power identity as shipped, rigid without the gearbox loss (whose factor follows the load the push puts on

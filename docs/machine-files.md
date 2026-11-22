@@ -909,8 +909,7 @@ machine; nothing about them is particular to machine files.
 ## What machine files cannot do yet
 
 - The wrap's places are the 3D view's: the section lengths are not checked against them by a file's reading (the
-  wheels' check of the shipped files in `sim-netlist` compares them). The XYZ portal's Z pulley stands where its `at_m`
-  puts it, not on the Y carriage it rides on.
+  wheels' check of the shipped files in `sim-netlist` compares them).
 - `tool_flex`: one leaning body, along a horizontal axis; it leans in the elastic model only (as in the crate).
 - A self-locking worm's rigid model takes the overhauling flank's friction from the torque the wheel holds at rest, so
   it brakes a heavy wheel smoothly where the elastic model jams; both agree at a steady speed.
