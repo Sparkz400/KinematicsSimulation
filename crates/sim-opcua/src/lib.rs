@@ -750,9 +750,9 @@ impl SimLoop {
         let setpoint = self.sim.control.external_setpoint().to_vec();
         let moving: Vec<bool> = self.plc.iter().map(Axis::moving).collect();
         plcopen::advance_all(&mut self.plc, self.interval, &setpoint);
-        // Drives that went off in this tick (a trip, a crash) are the axes' error, ErrorID 7 or 8 after the steps, not
-        // the refused setpoint.
-        if !moving.contains(&true) || !self.sim.control.enabled() {
+        // Drives that went off in this tick (a trip, a crash), or that stop on their fault reaction until they are off,
+        // are the axes' error, ErrorID 7 or 8 once off, not the setpoint the stopping controller refuses.
+        if !moving.contains(&true) || !self.sim.control.enabled() || self.sim.control.reacting() {
             return None;
         }
         let err = self.sim.command(Command::Setpoint(self.plc.iter().map(|a| a.pos).collect())).err()?;
