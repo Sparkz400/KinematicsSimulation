@@ -985,8 +985,9 @@ impl Machine for LinkageMachine {
             add_point(&mut f, 2.0 / 3.0 * m_fb, middle, speed);
             add_spin(&mut f, [0.0, side, 0.0], self.joints[i].rotor_inertia, rotor_speed[i]);
         }
-        // An obstacle's push on the plate comes from outside.
-        (f.external, f.external_at) = ([self.tool_push[0], 0.0, self.tool_push[1]], [p[0], 0.0, p[1]]);
+        // An obstacle's push on the plate is not in the outside force: a compliant base takes it through the tool's
+        // shift (`base::Based`), and here it pushed the base a second time.
+        f.external_at = [p[0], 0.0, p[1]];
         Some(f)
     }
     fn axes(&self) -> &[AxisInfo] {
