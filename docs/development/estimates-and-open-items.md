@@ -114,7 +114,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | Belt-to-pulley heat conduction | linear delta | Not sized. |
 | The tube's single-mode shape for inertia with the static stiffness 3EI/L | D3, D4, H4 arm bending | Not sized. |
 | An obstacle's push is a spring on the motors' angles where the machine does not take it at its tool: the overhead crane (its tool is bridge, trolley and hoist, not the swinging load: the push would need the contact point's own Jacobian) and the winder. Where it is taken at the tool it acts there, at the tool's coordinates and not at the touching part (a payload under a leaning Z axis is held through the tool point); with `effects.base_compliance` not on the base's coordinates | obstacle contact | A load on a soft belt swings on by the belt's stretch (D3: 6.7 mm deep at the impact against 0.11 mm F / k at rest). The crates' budgets of a move into a slab close to 3.5e-4 (T-gantry) and 2.8e-4 (hexapod) of the supply, against about 2e-5 with the push at the motors (measured, `collision.rs`). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
-| The stepper's detent while disabled | stepper | Up to T_d/(4N) appears or disappears from the budget at an enable. |
+| The stepper's detent after a trip took its pulses off (`Sim::advance_with_windings` gives such a drive the iron's drag only) | stepper | The detent's torque, T_d, is missing while it coasts; the books stay closed (its potential is never stored since 22 November). |
 | `mode_shape` of the five-bar | five-bar | Display only. |
 
 Fixed since (22 November), each was a row of the table above:
@@ -125,6 +125,12 @@ Fixed since (22 November), each was a row of the table above:
   as held). Left: a file sampled at a multiple of its profile cycle above one does not hold the cycle, and reads it as
   its sample period. No code in the repository reads such files back; the function serves `charts::tool_error` on
   any columns.
+- The stepper's detent while disabled (`stepper.rs`, `drive.rs`, `control.rs`): the magnets' detent acts with the
+  drive disabled too, and its potential is never stored: its work is the shaft's and the magnets' share is booked as
+  the step's change of U (`Drive::detent_moved`, the row "emf"). On the stepper axis without its losses, moved,
+  disabled 50 ms and enabled again, the books are open by 2.3e-6 J (2.1e-6 J with the detent off), against 9.8e-5 J
+  before (`the_steppers_detent_neither_appears_nor_vanishes_at_a_disable_or_an_enable`). Left: after a trip's pulse
+  stop, row above.
 
 ## 5. The 26 `shortcut:` comments still in the code
 
