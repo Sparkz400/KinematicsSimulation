@@ -39,6 +39,8 @@ not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | 
 | (binary_id(=machine-hexapod-rotary) & test(=tests::the_default_cycle_passes_its_verdicts))
 | (binary_id(=machine-hexapod-rotary) & test(=tests::the_platform_passes_the_standard_suite))
 | (binary_id(=machine-joint-kit) & test(=tests::arm_on_track_passes_the_standard_suite))
+| (binary_id(=machine-joint-kit) & test(=tests::a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand))
+| (binary_id(=machine-joint-kit) & test(=tests::a_four_bar_on_a_bending_link_has_the_parallelograms_modes_in_its_limit))
 | (binary_id(=machine-joint-kit) & test(=tests::every_default_cycle_passes_its_verdicts))
 | (binary_id(=machine-joint-kit) & test(=tests::linear_motor_axis_passes_the_standard_suite))
 | (binary_id(=machine-joint-kit) & test(=tests::palletiser_passes_the_standard_suite))

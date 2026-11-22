@@ -249,13 +249,12 @@ fn field(link: &BentLink, states: &[BodyState], k: usize) -> (V3, V3) {
 /// before it: it turns with the link's chord, d / L about the mode's turn axis, in the joints' plane; pinned before the
 /// link it does not turn.
 fn bar_field(link: &BentLink, states: &[BodyState], bar: &Bar, state: &BodyState) -> (V3, V3) {
-    let pin = state.origin;
     let b = &states[link.body];
     let shape = |at: V3| -> f64 {
         let along = dot(sub(at, b.origin), mul(&b.rot, link.dir)) / link.length;
         if along <= 0.0 { 0.0 } else { cantilever_shape(along.min(1.0)) }
     };
-    let moved = |on: usize| -> V3 {
+    let moved = |on: usize, pin: V3| -> V3 {
         match on.cmp(&link.body) {
             std::cmp::Ordering::Less => [0.0; 3],
             std::cmp::Ordering::Equal => match link.kind {
@@ -272,7 +271,20 @@ fn bar_field(link: &BentLink, states: &[BodyState], bar: &Bar, state: &BodyState
             }
         }
     };
-    let at_pin = moved(bar.on);
+    // A four-bar's bar: its two pins move with the mode as the points of their bodies (on the bent link at the mode's
+    // shape), the loop's point and the bars' turns follow from the loop's Jacobian at them (`Closure::rates`, the
+    // ground's turn taken as none: the absolute turns do not depend on it).
+    if let Some(c) = &bar.closure {
+        let Some(geometry) = c.geometry(states, bar.on, bar.pin) else { return ([f64::NAN; 3], [f64::NAN; 3]) };
+        let [_, crank, pivot, n] = geometry;
+        let (cv, fv) = (moved(c.crank, crank), moved(bar.on, pivot));
+        let (lambda, mu) = c.rates(geometry, cv, fv, [0.0; 3]);
+        let (start, speed, rate) = if c.is_coupler { (crank, cv, mu) } else { (pivot, fv, lambda) };
+        let turn = n.map(|v| v * rate);
+        return (add(speed, cross(turn, sub(state.com, start))), turn);
+    }
+    let pin = state.origin;
+    let at_pin = moved(bar.on, pin);
     let turn = match bar.turns.cmp(&link.body) {
         std::cmp::Ordering::Less => [0.0; 3],
         std::cmp::Ordering::Equal if link.in_plane && bar.on > link.body => {
@@ -368,11 +380,20 @@ impl Closure {
     /// with C, F and n; `None` where it does not close.
     fn solve(&self, states: &[BodyState], ground: usize, pin: V3) -> Option<[V3; 7]> {
         let (g, c) = (&states[ground], &states[self.crank]);
+        let [tip, crank, pivot, n] = self.geometry(states, ground, pin)?;
+        let speed = |b: &BodyState, at: V3| add(b.velocity, cross(b.spin, sub(at, b.com)));
+        let (cv, fv) = (speed(c, crank), speed(g, pivot));
+        let (lambda, mu) = self.rates([tip, crank, pivot, n], cv, fv, g.spin);
+        Some([tip, crank, pivot, n, [lambda, mu, 0.0], cv, fv])
+    }
+
+    /// The loop's point T, the crank point C, the pivot F and the plane's normal n (`Closure`); `None` where it does not
+    /// close.
+    fn geometry(&self, states: &[BodyState], ground: usize, pin: V3) -> Option<[V3; 4]> {
+        let (g, c) = (&states[ground], &states[self.crank]);
         let n = mul(&g.rot, self.normal);
         let crank = add(c.origin, mul(&c.rot, self.crank_pin));
         let pivot = add(g.origin, mul(&g.rot, pin));
-        let speed = |b: &BodyState, at: V3| add(b.velocity, cross(b.spin, sub(at, b.com)));
-        let (cv, fv) = (speed(c, crank), speed(g, pivot));
         let raw = sub(crank, pivot);
         let d = sub(raw, n.map(|v| v * dot(n, raw)));
         let length = dot(d, d).sqrt();
@@ -383,12 +404,19 @@ impl Closure {
         }
         let sin = self.branch * (1.0 - cos * cos).sqrt();
         let tip = add(pivot, add(e.map(|v| v * self.follower * cos), cross(n, e).map(|v| v * self.follower * sin)));
-        let rel = sub(sub(cv, fv), cross(g.spin, sub(crank, pivot)));
+        Some([tip, crank, pivot, n])
+    }
+
+    /// The loop's Jacobian: with C moving at `cv`, F at `fv` and the ground turning at `wg` (speeds, or a mode's
+    /// displacements per unit of its coordinate), the follower's and the coupler's turns about n relative to the ground,
+    /// lambda and mu (`Closure`). The bars' absolute turns, wg + (lambda, mu) n, do not depend on the wg taken.
+    fn rates(&self, [tip, crank, pivot, n]: [V3; 4], cv: V3, fv: V3, wg: V3) -> (f64, f64) {
+        let rel = sub(sub(cv, fv), cross(wg, sub(crank, pivot)));
         let (from_crank, from_pivot) = (sub(tip, crank), sub(tip, pivot));
         let lambda = dot(from_crank, rel) / dot(from_crank, cross(n, from_pivot));
         let tip_rel = cross(n, from_pivot).map(|v| v * lambda);
         let mu = dot(sub(tip_rel, rel), cross(n, from_crank)) / self.coupler.powi(2);
-        Some([tip, crank, pivot, n, [lambda, mu, 0.0], cv, fv])
+        (lambda, mu)
     }
 }
 
@@ -767,11 +795,6 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
 
     let max_condition = cfg.positive("workspace.max_condition_number")?;
     let (mut bending, reaction) = bent_links(cfg, &chain)?;
-    // shortcut: a four-bar's bars have no field of the links' modes (`bar_field` takes parallel bars), so the two are
-    // refused together; upgrade when a bent link carries a four-bar.
-    if !bending.is_empty() && bars.iter().any(|b| b.closure.is_some()) {
-        return Err(ConfigError::Invalid("arm.four_bar_* with effects.link_bending".into()));
-    }
     // The parallelograms: a bar pinned on a body before a bent link that turns with a body beyond it drives that body's
     // turn from before the link, so the link's bend in the joints' plane moves the body and all beyond it with the
     // link's tip without turning them (`BentLink::held_from`, `field`); the bars' own fields `bar_field`.
@@ -818,6 +841,13 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         angular_limits: None,
     };
     arm.built = arm.chain.bodies.iter().map(|b| b.inertial).collect();
+    // The bending modes' masses are taken at zero joints (`flex_modes`), where a four-bar on them must be regular: a
+    // loop at a dead point there (open, or its Jacobian singular) has no field.
+    if !arm.bending.is_empty() && arm.flex_modes().iter().any(|m| !m.mass.is_finite()) {
+        return Err(ConfigError::Invalid(
+            "arm.four_bar_* (at a dead point at zero joints, with effects.link_bending)".into(),
+        ));
+    }
     if cfg.bool("kinematics.tool_space")? {
         let refuse = || ConfigError::Invalid("kinematics.tool_space".into());
         let names = cfg.get("kinematics.tool_axes")?.as_array().ok_or_else(refuse)?.clone();
