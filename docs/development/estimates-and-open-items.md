@@ -105,7 +105,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 
 | Left out | Machine | Size |
 | --- | --- | --- |
-| The run from the drum to the pulley (its length not in the config); the drums' drop below their pulleys (`winch.drop_m`, 0 as shipped: not in the frame's data); the cables' momentum in the frame's (their mass, like their weight, not in its first moment), so a base under the robot does not feel it | cable robots | The drop: 0.049 N a cable at 0.5 m, the spatial cycle's peak torque -0.01 % (a run). The cables' momentum: rho l l' along and rho l_f v_perp / 2 across a cable, with `cable_inertia` on only. The sag model is a shallow parabola, 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
+| The sag model is a shallow parabola; the weight counts the span's stretched mass rho L where the first moment has rho l | cable robots | The sag 8.7e-5 to 1.7e-4 N from the exact catenary (measured); the mass a strain's share, 1e-3 of the cable's weight. |
 | A hook block already lower than the payload's top at a pick (under 0.28 m over its point) is left inside it: pushing it out would make energy; refusing such a pick needs `sim.rs`, the coordinator's call | crane | None in the shipped cycle (its picks hang the hook block 1 m over the payload). |
 | A parallelogram loop's own stiffness beyond holding a body's turn (rod and crank rigid), and loops other than the parallelogram's (the rule: a bar pinned before a bent link turning with a body beyond holds that body's turn; one turning with the bent link while pinned beyond turns with its chord) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured: the test case, and 1.22 % for the palletiser's held upper arm). |
 | The screw's stiffness along the stroke keeps the far end's for the wafer handler's and the parallel SCARA's pose tolerance (their own `rest_sag`, `machine-wafer-handler` and `machine-parallel-scara`: the column's m g / K with the far end's K, the stroke's `static_twist`), on the safe side; `chain.rs`'s takes the nut, and since 21 November the fit's twist (`Machine::twist_at`) and the mesh bristle (σ_m r, its store still not booked: at most (μ |held|)² / (2σ_m) per gear) follow the nut too | wafer handler, parallel SCARA | The tolerance up to the far end's sag over the pose's. |
@@ -113,6 +113,12 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The stepper's detent after a trip took its pulses off (`Sim::advance_with_windings` gives such a drive the iron's drag only) | stepper | The detent's torque, T_d, is missing while it coasts; the books stay closed (its potential is never stored since 22 November). |
 
 Fixed since (22 November), each was a row of the table above:
+- Cable robots, the run from the drum to the pulley and the cables in the frame's momentum (with
+  `effects.cable_inertia`, off as shipped): the drums' places as config keys (`frame.run_lengths_m`, [estimate]
+  0.15 m along each winch's direction, replacing `winch.drop_m`); the run's mass runs at the drum's speed (spatial
+  0.4944 -> 0.4959 kg at the cable), the lift from drum to pulley follows from the place, and the frame carries the
+  cables' mass (planar +0.0618 kg), first moment and momentum, against a hand sum to 1e-9 and testkit's momentum
+  and weight checks, rigid and elastic (`the_cables_run_along_with_the_drums`). Left: the row above.
 - The crane's hook block against the payload: its sides (the top's contact on d_x, d_y: resting row, plastic landing
   at the common momentum's speed, booked), a payload set down on the floor and let go staying as a box the hook
   block rests on until the next pick (it dropped through), the rigid rope's landing tested; found on the way: a
@@ -181,7 +187,7 @@ Fixed since (22 November), each was a row of the table above:
   on, the spatial cycle's peak torque 2.4541 -> 2.4578 N m, the tracking error unchanged. The sag's weight changing
   with the pose: modelled (`sag_pull`, always with the sag): 1.9e-5 N on the planar test pose, up to 3.6e-3 N on a
   cable hanging nearly slack, far above the at-rest tensions' 1e-11 N (`the_sagging_cables_pull_is_the_gradient_of_their_energy`,
-  1.2e-9 N against 1.9e-5 N before). The lift from drum to pulley: modelled with the new `winch.drop_m` (0 as shipped,
+  1.2e-9 N against 1.9e-5 N before). The lift from drum to pulley: modelled with the new `winch.drop_m` (since replaced by `frame.run_lengths_m`; 0 as shipped,
   the frame's data do not give it), sized by a run above. Left: the row above. Since then: the sag's pull from its
   gradient in closed form (the spatial run 6.5 s, 9.4 s by differences), and the spans' swing across themselves under
   `cable_inertia` (rho l_f / 3 at the anchor with its velocity terms; the spatial tracking error 0.2045 -> 0.2055 mm
