@@ -131,6 +131,9 @@ winding_heating = true
 # ([thermal]); with thermal_feedback their viscous friction and efficiency follow.
 part_heating = false
 thermal_feedback = false
+# With part_heating: each belt also gives heat to its two pulleys through the half wrap it lies on each ([belt]
+# thickness_m, thermal_conductivity_w_m_k), the pulleys at the air's temperature.
+belt_pulley_conduction = true
 # The cycle analysis measures its pass with the windings (winding_heating) and, with thermal_feedback, the parts at the
 # rises they settle at on the cycle, iterated from cold to a fixed point, not from cold. Nothing to do where nothing
 # warms back on the run.
@@ -223,6 +226,10 @@ damping_time_s = 2.5e-4
 # to the air is 1 / (h A).
 specific_heat_j_kg_k = 1500.0
 convection_w_m2_k = 15.0
+# With effects.belt_pulley_conduction: from the belt's middle through half its thickness into the pulleys. [estimate]
+# 3 mm thick, polyurethane with steel cords across the heat's path, 0.2 W/(m K) (PU 0.17 to 0.25).
+thickness_m = 3.0e-3
+thermal_conductivity_w_m_k = 0.2
 
 # Each carriage's guide. [estimate] as the one-axis machine's ball guide.
 [friction]
@@ -641,6 +648,8 @@ belt.pretension_n = [200.0, 400.0]
 belt.damping_n_s_m = [50.0, 200.0]
 belt.specific_heat_j_kg_k = [1200.0, 1800.0]
 belt.convection_w_m2_k = [8.0, 25.0]
+belt.thickness_m = [2.5e-3, 3.5e-3]
+belt.thermal_conductivity_w_m_k = [0.15, 0.3]
 friction.coulomb_n = [10.0, 20.0]
 friction.stiction_n = [15.0, 30.0]
 friction.viscous_n_s_m = [10.0, 40.0]

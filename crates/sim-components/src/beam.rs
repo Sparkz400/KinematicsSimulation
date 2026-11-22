@@ -20,6 +20,48 @@ pub const CANTILEVER_PARTICIPATION: f64 = 0.391_496;
 /// The first mode's slope at the tip times L, taken to its tip: what a moment at the tip drives it with, times 1 / L.
 pub const CANTILEVER_TIP_SLOPE: f64 = 1.376_51;
 
+/// A cantilever's static deflection shape under a tip load, taken to its tip: psi(xi) = (3 xi^2 - xi^3) / 2, xi = x / L.
+/// With the static stiffness 3 E I / L^3 it is the consistent single mode (Rayleigh): the tip deflects as the exact
+/// beam's under a tip load and under its own weight (int psi = 3/8: q L^4 / (8 E I)), and the first frequency is the
+/// exact one's from above, +1.5 % for the bare beam and under +0.26 % with the delta arms' elbows (the exact mode's
+/// shape with 3 E I / L^3 reads it 0.8 to 1 % low there and the sag under the tube's weight 4.4 % high,
+/// `cantilever_first_frequency`). Its mass share: int psi^2.
+pub const STATIC_SHAPE_MASS: f64 = 33.0 / 140.0;
+/// The static shape's int psi: what an evenly spread load drives it with.
+pub const STATIC_SHAPE_PARTICIPATION: f64 = 3.0 / 8.0;
+/// The static shape's int(xi psi): the first moment about the root of what moves with it, over m L.
+pub const STATIC_SHAPE_MOMENT: f64 = 11.0 / 40.0;
+/// The static shape's slope at the tip times L: the tip turns by 3/2 of its deflection over L.
+pub const STATIC_SHAPE_TIP_SLOPE: f64 = 1.5;
+
+/// The first bending frequency (rad/s) of a uniform Euler-Bernoulli cantilever, exactly: bending stiffness `ei`, its own
+/// mass `beam` over `length`, a mass `tip` and a rotary inertia `tip_inertia` (about the axis the tip turns about) at its
+/// free end. The lowest root z = b L of the clamped-free characteristic equation with the tip's shear -M w^2 w(L) and
+/// moment J w^2 w'(L), r = M / m, j = J / (m L^2):
+///
+/// ```text
+/// [(ch + c) - j z^3 (sh + s)] [(ch + c) + r z (sh - s)] - [(sh + s) - j z^3 (ch - c)] [(sh - s) + r z (ch - c)] = 0
+/// w = z^2 sqrt(E I / (m L^3))           (ch, sh, c, s of z)
+/// ```
+///
+/// by bisection below 1.875104 (the bare beam's); `beam` > 0.
+pub fn cantilever_first_frequency(ei: f64, beam: f64, tip: f64, tip_inertia: f64, length: f64) -> f64 {
+    let (r, j) = (tip / beam, tip_inertia / (beam * length * length));
+    let det = |z: f64| {
+        let (ch, sh, (s, c)) = (z.cosh(), z.sinh(), z.sin_cos());
+        let (j3, rz) = (j * z.powi(3), r * z);
+        ((ch + c) - j3 * (sh + s)) * ((ch + c) + rz * (sh - s))
+            - ((sh + s) - j3 * (ch - c)) * ((sh - s) + rz * (ch - c))
+    };
+    let (mut low, mut high) = (1e-6, CANTILEVER_BETA_L);
+    let below = det(low) > 0.0;
+    for _ in 0..200 {
+        let mid = 0.5 * (low + high);
+        if (det(mid) > 0.0) == below { low = mid } else { high = mid }
+    }
+    low * low * (ei / (beam * length.powi(3))).sqrt()
+}
+
 /// The second moment of area of a round tube, outer diameter `outer` and wall `wall` (m): pi / 64 (D^4 - d^4). A wall of
 /// half the diameter or more is a solid bar.
 pub fn tube_second_moment(outer: f64, wall: f64) -> f64 {
@@ -91,5 +133,30 @@ mod tests {
         assert!((square - 0.25).abs() < 1e-5, "{square}");
         let slope = (phi(1.0) - phi(1.0 - 1e-6)) / 1e-6 / tip;
         assert!((slope - CANTILEVER_TIP_SLOPE).abs() < 1e-4, "{slope}");
+    }
+
+    /// The exact first frequency against the textbook's b L: 1.875104 bare, 1.247917 with a tip mass equal to the
+    /// beam's (Blevins, "Formulas for natural frequency and mode shape", table 8-8: lambda = 1.24792). And the static
+    /// shape's integrals by the midpoint rule: 3/8, 11/40, 33/140, its tip slope 3/2.
+    #[test]
+    fn the_exact_cantilever_with_a_tip_mass_has_the_textbook_frequency() {
+        let w = |tip: f64, j: f64| cantilever_first_frequency(1.0, 1.0, tip, j, 1.0);
+        assert!((w(0.0, 0.0) - CANTILEVER_BETA_L.powi(2)).abs() < 1e-9, "{}", w(0.0, 0.0));
+        assert!((w(1.0, 0.0).sqrt() - 1.247_917).abs() < 2e-6, "{}", w(1.0, 0.0).sqrt());
+        // A rotary inertia at the tip lowers it further; scaling: z^2 sqrt(EI / (m L^3)).
+        assert!(w(1.0, 0.05) < w(1.0, 0.0));
+        let scaled = cantilever_first_frequency(4.0, 2.0, 2.0, 0.0, 0.5);
+        assert!((scaled - w(1.0, 0.0) * (4.0f64 / (2.0 * 0.125)).sqrt()).abs() < 1e-9, "{scaled}");
+        let psi = |x: f64| (3.0 * x * x - x * x * x) / 2.0;
+        let n = 100_000;
+        let (mut area, mut moment, mut square) = (0.0, 0.0, 0.0);
+        for i in 0..n {
+            let x = (i as f64 + 0.5) / n as f64;
+            (area, moment, square) =
+                (area + psi(x) / n as f64, moment + x * psi(x) / n as f64, square + psi(x).powi(2) / n as f64);
+        }
+        assert!((area - STATIC_SHAPE_PARTICIPATION).abs() < 1e-9 && (moment - STATIC_SHAPE_MOMENT).abs() < 1e-9);
+        assert!((square - STATIC_SHAPE_MASS).abs() < 1e-9 && psi(1.0) == 1.0);
+        assert!(((psi(1.0) - psi(1.0 - 1e-7)) / 1e-7 - STATIC_SHAPE_TIP_SLOPE).abs() < 1e-6);
     }
 }

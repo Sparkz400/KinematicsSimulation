@@ -159,7 +159,8 @@ fn a_cable_the_exact_solve_takes_out_of_the_band_goes_to_its_bound() {
 /// cable 2 26 mm and its cable 4 250 mm slack. The forward kinematics fitted the lengths by Gauss-Newton, which slowed
 /// to a ratio of 0.72 and then 0.97 a step there and ran out of steps, or (on the platform's equilibrium) stepped where
 /// every cable was slack: the following error was shown as NaN. Elastic, the platform hangs where its weight and the
-/// cables' tensions EA (L - l) / l (with their sag) balance, A t = w (to 1e-6 N and N m, every cable pulling or slack); rigid, it is
+/// cables' tensions EA (L - l) / l (with their sag, and its pull beyond the chords, `sag_pull`) balance, A t + pull = w (to
+/// 1e-6 N and N m, every cable pulling or slack); rigid, it is
 /// where the lengths fit best: their misfit grows when the pose moves 1 um or 1 urad either way along any axis.
 #[test]
 fn motor_angles_no_pose_fits_give_the_pose_the_platform_takes() {
@@ -206,8 +207,9 @@ fn motor_angles_no_pose_fits_give_the_pose_the_platform_takes() {
                     let rot = robot.place(&pose).1;
                     let (a, w) =
                         (robot.structure(&spans), robot.platform_bias_at(&rot, &spans, Some(&free), &vec![0.0; n]));
+                    let pull = robot.sag_pull(&spans, &free, &t);
                     for r in 0..n {
-                        let off = (0..m).map(|k| a[r * m + k] * t[k]).sum::<f64>() - w[r];
+                        let off = (0..m).map(|k| a[r * m + k] * t[k]).sum::<f64>() + pull[r] - w[r];
                         assert!(off.abs() < 1e-6, "{} {pose:?}: {off} N or N m left on axis {r}, {t:?}", entry.id);
                     }
                     continue;
@@ -233,7 +235,8 @@ fn motor_angles_no_pose_fits_give_the_pose_the_platform_takes() {
 /// The motors' angles of a pose ask the cables for the distribution's tensions, so the platform hangs there on them:
 /// at (0.3, -0.2, 1.3) m turned (0.05, -0.03, 0.08) the closed form t_ref + A^+ (w - A t_ref) asked -8.7 N of cable 5,
 /// a slack cable, and the platform hung 1.5 mrad off. The free lengths of `inverse` stretch each cable to a tension
-/// EA (L - l) / l (with its sag) within the band (20 N to 1000 N) that holds the platform's weight, A t = w (to 1e-6 N and N m).
+/// EA (L - l) / l (with its sag) within the band (20 N to 1000 N) that holds the platform's weight, A t + pull = w (to 1e-6
+/// N and N m; `sag_pull`).
 /// And the machine set up at rest at the end of x turned 0.05 rad about z has its setpoint (where the motors' angles
 /// put the tool) within its setpoint slack of the pose: 0.42 mrad off about z, the gearboxes' twist, within 0.50 mrad;
 /// it had been 0.49 mrad against the default 0.1.
@@ -249,8 +252,9 @@ fn the_platform_hangs_where_the_motors_put_it() {
     assert!(t.iter().all(|v| (20.0 - 1e-6..=1000.0).contains(v)), "{t:?}");
     let rot = robot.place(&pose).1;
     let (a, w) = (robot.structure(&spans), robot.platform_bias_at(&rot, &spans, Some(&free), &[0.0; 6]));
+    let pull = robot.sag_pull(&spans, &free, &t);
     for r in 0..6 {
-        let off = (0..8).map(|k| a[r * 8 + k] * t[k]).sum::<f64>() - w[r];
+        let off = (0..8).map(|k| a[r * 8 + k] * t[k]).sum::<f64>() + pull[r] - w[r];
         assert!(off.abs() < 1e-6, "{off} N or N m left on axis {r}, tensions {t:?}");
     }
     let end = [0.4, 0.0, 1.1, 0.0, 0.0, 0.05];
@@ -485,6 +489,112 @@ fn the_sagging_cable_pulls_as_the_elastic_catenary() {
         // Towards the pulley (-x) and up.
         let pull = [-t * spans[0].u[0], t * spans[0].u[2] - weight[1]];
         assert!((pull[0] - want[0]).abs() < tol && (pull[1] - want[1]).abs() < tol, "{l}: {pull:?} against {want:?}");
+    }
+}
+
+/// The sagging cables' pull on the platform is the gradient of their energy over its place, the sag's weight moving
+/// with the pose included (`sag_pull`): the planar robot elastic at 0.01 kg/m, at rest at (0.3, 0.9) m on free lengths
+/// of about 100 N, the platform's weight added back to the dynamics' acceleration times the mass so that it is the
+/// cables' force alone; against the fourth-order central difference (10 um) of the springs' energy and the cables'
+/// weight at those free lengths (the second-order one is off by 4e-8 N at 1 um, the springs' third derivative, and by
+/// 1.3e-7 N at 0.1 um, the energy's rounding). Without the pull it is off by the sag's change with the pose, 1.9e-5 N.
+#[test]
+fn the_sagging_cables_pull_is_the_gradient_of_their_energy() {
+    let mut cfg = PLANAR.config();
+    cfg.set_text("cable.mass_per_m_kg = 0.01").unwrap();
+    let robot = CableRobot::new(&cfg).unwrap();
+    let pose = [0.3, 0.9];
+    let spans = robot.spans(&pose).unwrap();
+    let free: Vec<f64> = spans.iter().map(|s| s.length / (1.0 + 100.0 / robot.ea)).collect();
+    let energy = |pose: &[f64]| {
+        let spans = robot.spans(pose).unwrap();
+        let springs: f64 = spans.iter().zip(&free).map(|(s, l)| robot.spring_energy(s, *l)).sum();
+        springs + robot.cable_weight(&spans, Some(&free)).1
+    };
+    // The state at rest at the pose on those free lengths, the rotors where the drums are; gravity's share taken off.
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; 4]);
+    robot.equilibrium(&pose, &mut state, &mut torque);
+    state[4..8].copy_from_slice(&free);
+    let mut rates = vec![0.0; state.len()];
+    robot.derivatives(&state, &torque, &mut rates);
+    let mass = robot.moving();
+    let force = [mass * rates[2], mass * (rates[3] + G)];
+    let mut off = 0f64;
+    for i in 0..2 {
+        let at = |by: f64| {
+            let mut moved = pose;
+            moved[i] += by * 1e-5;
+            energy(&moved)
+        };
+        let gradient = (8.0 * (at(1.0) - at(-1.0)) - (at(2.0) - at(-2.0))) / 12e-5;
+        off = off.max((force[i] + gradient).abs());
+    }
+    let t: Vec<f64> = robot.tensions(&spans, &[0.0; 4], &free, &[0.0; 4]).platform;
+    let pull = robot.sag_pull(&spans, &free, &t);
+    println!("the force off the energy's gradient by {off:e} N; the sag's pull {pull:?} N");
+    assert!(pull.iter().any(|f| f.abs() > 5e-6), "{pull:?}");
+    assert!(off < 1e-8, "{off} N");
+}
+
+/// effects.cable_inertia: the cable runs along itself at the drum's speed, all of the drum's 5 m. Spatial: the drum's
+/// 4e-4 / 0.03^2 = 0.444444 kg at the cable and 0.01 x 5 = 0.05 kg of cable, 0.494444 kg. Planar, rigid, at (0.3, 0.9)
+/// moving at (0.5, -0.2) m/s: of its 0.003 x 5 = 0.015 kg the cable still on each drum, 0.003 (5 - L), turns with it
+/// (its spin about h, (J / r^2 + rho (5 - L)) r L'); the cable paid out, whose mass is not in the frame's, adds no
+/// momentum, so the first moment still moves at the linear momentum. The energy closes with it, rigid and elastic
+/// (`testkit::loss_budget`), as with the lift of the cable from a drum 0.5 m below its pulley (`winch.drop_m`), which
+/// pulls each drum back by 0.01 x 9.80665 x 0.5 = 0.0490333 N.
+#[test]
+fn the_cables_run_along_with_the_drums() {
+    let mut cfg = SPATIAL.config();
+    cfg.set_text("effects.cable_inertia = true").unwrap();
+    let spatial = CableRobot::new(&cfg).unwrap();
+    assert!((spatial.drum_mass - 0.494_444).abs() < 1e-6, "{}", spatial.drum_mass);
+    assert!((CableRobot::new(&SPATIAL.config()).unwrap().drum_mass - 0.444_444).abs() < 1e-6);
+    let mut cfg = PLANAR.config();
+    cfg.set_text("effects.cable_stretch = false").unwrap();
+    let plain = CableRobot::new(&cfg).unwrap();
+    cfg.set_text("effects.cable_inertia = true").unwrap();
+    let robot = CableRobot::new(&cfg).unwrap();
+    let (pose, vel) = ([0.3, 0.9], [0.5, -0.2]);
+    let momentum = |robot: &CableRobot| {
+        let (mut state, mut torque) = (Vec::new(), vec![0.0; 4]);
+        robot.equilibrium(&pose, &mut state, &mut torque);
+        robot.set_tool_velocity(&mut state, &vel);
+        robot.frame_momentum(&state).unwrap()
+    };
+    let (with, without) = (momentum(&robot), momentum(&plain));
+    let spans = robot.spans(&pose).unwrap();
+    let rates = robot.length_rates(&spans, &vel);
+    let mut angular = [0.0; 3];
+    for (k, s) in spans.iter().enumerate() {
+        let spin = 0.003 * (5.0 - s.length) * 0.025 * rates[k];
+        (0..3).for_each(|i| angular[i] += robot.spin[k][i] * spin);
+    }
+    for i in 0..3 {
+        assert_eq!(with.linear[i], without.linear[i], "{i}: {with:?}");
+        assert!((with.angular[i] - without.angular[i] - angular[i]).abs() < 1e-12, "{i}: {with:?}");
+    }
+    assert!(angular[1].abs() > 1e-6, "{angular:?}");
+    sim_core::testkit::frame_momentum_moves_its_first_moment(&robot);
+    let mut cfg = PLANAR.config();
+    cfg.set_text("cable.mass_per_m_kg = 0.01").unwrap();
+    let flat = CableRobot::new(&cfg).unwrap();
+    cfg.set_text("winch.drop_m = 0.5").unwrap();
+    let dropped = CableRobot::new(&cfg).unwrap();
+    let spans = flat.spans(&pose).unwrap();
+    let free: Vec<f64> = spans.iter().map(|s| s.length / (1.0 + 100.0 / flat.ea)).collect();
+    let drum = |robot: &CableRobot| robot.tensions(&spans, &[0.0; 4], &free, &[0.0; 4]).drum;
+    for (a, b) in drum(&dropped).iter().zip(drum(&flat)) {
+        assert!((a - b + 0.049_033_25).abs() < 1e-12, "{a} N against {b} N");
+    }
+    for stretch in [false, true] {
+        let mut cfg = SPATIAL.config();
+        for edit in
+            ["effects.cable_inertia = true", "winch.drop_m = 0.5", &format!("effects.cable_stretch = {stretch}")]
+        {
+            cfg.set_text(edit).unwrap();
+        }
+        sim_core::testkit::loss_budget(&CableRobot::new(&cfg).unwrap());
     }
 }
 

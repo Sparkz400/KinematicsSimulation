@@ -28,6 +28,9 @@ payload = true
 cable_stretch = true
 # With cable_stretch: the cables' material damping (cable.specific_damping_n_s).
 cable_damping = true
+# With the cables' mass (cable.mass_per_m_kg): the cable runs along itself at the drum's speed, all of it
+# (winch.capacity_m), a mass at each winch beside its drum's. Off as shipped.
+cable_inertia = false
 # Friction in the winches' bearings and the pulleys, at the cable.
 winch_friction = true
 motor_friction = true

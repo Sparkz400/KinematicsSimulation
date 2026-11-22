@@ -749,7 +749,7 @@ fn every_effect_switch_changes_the_traces() {
             "drive.friction_feedforward_torque_nm = {:?}",
             vec![0.05; base.f64s("drive.friction_feedforward_speed_rad_s").map_or(0, |v| v.len())]
         )];
-        let through: [(&str, &[String]); 9] = [
+        let through: [(&str, &[String]); 10] = [
             ("effects.belt_wrap", &["effects.belt_tooth_jump = true".into()]),
             ("effects.drive_current_limit", &limit),
             ("effects.drive_overload", &overload),
@@ -759,6 +759,7 @@ fn every_effect_switch_changes_the_traces() {
             ("effects.iron_loss", &stall),
             ("effects.friction_feedforward", &characteristic),
             ("effects.link_bending_reaction", &["effects.link_bending = true".into()]),
+            ("effects.belt_pulley_conduction", &["effects.part_heating = true".into()]),
         ];
         for effect in effects {
             let (from, own);

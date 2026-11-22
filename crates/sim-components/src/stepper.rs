@@ -93,10 +93,17 @@ impl Stepper {
     }
 
     /// The detent torque's potential at the rotor angle `angle`, J: the torque is -T_d sin 4e (e = N (angle - origin)), so
-    /// U = -T_d cos(4e) / (4 N), whose angle derivative is T_d sin 4e. It is the magnets' energy (the torque is conservative):
-    /// part of the stored energy of the budget (`Drive::magnetic_energy`), so that the budget closes inside a step.
+    /// U = -T_d cos(4e) / (4 N), whose angle derivative is T_d sin 4e. It is the magnets' energy (the torque is
+    /// conservative), enabled or not: the detent's work is part of the shaft's, and what the magnets give for it, the
+    /// change of U, is booked as it happens (`Drive::detent_moved`, `Drive::emf_loss`), never stored, so that nothing of
+    /// it appears or vanishes at an enable or a disable.
     pub fn detent_potential(&self, angle: f64, origin: f64) -> f64 {
         -self.detent * (4.0 * self.teeth * (angle - origin)).cos() / (4.0 * self.teeth)
+    }
+
+    /// The detent torque at the rotor angle `angle`, N m: -T_d sin 4e, the magnets' alone, with the drive enabled or not.
+    pub fn detent_torque(&self, angle: f64, origin: f64) -> f64 {
+        -self.detent * (4.0 * self.teeth * (angle - origin)).sin()
     }
 
     /// The rates of the windings (`DriveParams::motor_rates`): i_a in slot 0, i_b in slot 4.
@@ -110,11 +117,12 @@ impl Stepper {
         out[4] = (ub - r * ib - emf * c) / p.inductance;
         out[1] = ua * ia + ub * ib;
         out[2] = r * (ia * ia + ib * ib);
-        // The detent torque's work is the magnets': it is not the shaft power here but the change of `detent_potential`.
-        out[3] = electromagnetic * speed;
+        // The shaft's work is the whole torque's; the detent's share of it the magnets give (`Drive::detent_moved`).
+        let torque = electromagnetic + self.detent_torque(angle, d.phases.origin);
+        out[3] = torque * speed;
         out[5] = 0.0;
         out[6] = 0.0;
-        electromagnetic - self.detent * (4.0 * e).sin()
+        torque
     }
 
     /// One base step of the drive: the step generator's angle, the current vector on its microstep, and the chopper's
@@ -470,11 +478,13 @@ mod tests {
     }
 
     /// The detent's work inside one base step. The torque -T_d sin 4e is conservative with the potential
-    /// U = -T_d cos(4 N (angle - origin)) / (4 N) (dU/d angle = T_d sin 4e, so -dU/d angle is the torque): over a step
-    /// electrical power - copper loss - the change of the winding's energy and the potential - the change of the rotor's
-    /// kinetic energy is 0 (no friction, no load), up to the integrator. T_d = 0.05 N m, N = 50: the potential swings by
-    /// 0.05 / 200 = 2.5 mJ over a quarter of the detent period; without it in the stored energy the step would be
-    /// out by the detent's work, torque times the angle (here about T_d sin 4e w dt).
+    /// U = -T_d cos(4 N (angle - origin)) / (4 N) (dU/d angle = T_d sin 4e, so -dU/d angle is the torque). The shaft's
+    /// work is the whole torque's, the detent's included, and the magnets give the detent's: `emf_loss` over the step is
+    /// the change of U (`Drive::detent_moved`). Over a step electrical power - copper loss - the change of the winding's
+    /// energy - the shaft's work is 0 (the electrical side), the shaft's work is the rotor's kinetic energy (no friction,
+    /// no load), and so electrical - copper - winding - the magnets' - kinetic is 0, up to the integrator. T_d = 0.05 N m,
+    /// N = 50: the potential swings by 0.05 / 200 = 2.5 mJ over a quarter of the detent period; the step's change of it
+    /// is by hand U(angle end) - U(0.004), which the integrated shaft work beyond the electrical's matches.
     #[test]
     fn the_budget_closes_inside_one_step_with_the_detents_potential() {
         let mut p = params();
@@ -502,9 +512,15 @@ mod tests {
         let w = &y[2..];
         (d.phases.x, d.phases.angle, d.phases.speed) = ([w[0], w[4], w[5], w[6]], y[0], y[1]);
         d.winding_stepped(&p, w[0], [w[1], w[2], w[3]]);
+        d.detent_moved(&p, angle0);
         let after = d.magnetic_energy(&p);
         let kinetic = 0.5 * j * (y[1] * y[1] - speed0 * speed0);
-        let open = w[1] - w[2] - (after - before) - kinetic;
+        let magnets = d.emf_loss * dt;
+        let by_hand = 0.05 / 200.0 * ((200.0 * angle0).cos() - (200.0 * y[0]).cos());
+        assert!((magnets - by_hand).abs() < 1e-15 && magnets.abs() > 1e-6, "{magnets} J against {by_hand} J");
+        let electrical = w[1] - w[2] - (after - before) - w[3] - magnets;
+        assert!(electrical.abs() < 1e-9, "{electrical} J of the electrical side open of {} J", w[1]);
+        let open = w[1] - w[2] - (after - before) - magnets - kinetic;
         assert!(open.abs() < 1e-9, "{open} J unaccounted of {} J electrical", w[1]);
         // The potential itself: -T_d / 200 at a detent minimum (4e = 0), +T_d / 200 half a period on.
         assert!((s.detent_potential(0.0, 0.0) + 0.05 / 200.0).abs() < 1e-15);

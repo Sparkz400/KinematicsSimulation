@@ -646,10 +646,11 @@ fn the_frictions_load_factor_is_the_fixed_point_with_the_acceleration() {
 /// 15 W/(m^2 K) R = 1 / 1.0422 = 0.959509 K/W; 0.07 kg/m * 1.8 m = 0.126 kg of 1500 J/(kg K) is C = 189 J/K, so tau = C R
 /// = 181.347 s. The belt warms with its damping loss, power.belt_k, as the guides do (rise += (1 - exp(-dt / tau)) (R P -
 /// rise)), so under a steady loss P it settles at R P; here with the specific heat at 1.5 J/(kg K) (tau 0.1813 s) so that
-/// a move of the carriages follows it.
+/// a move of the carriages follows it. Without its pulleys (effects.belt_pulley_conduction off).
 #[test]
 fn a_belt_warms_with_its_damping_loss_through_its_surface() {
-    let (r, tau) = delta(&[]).thermal_values("belt_2").unwrap();
+    let air = "effects.belt_pulley_conduction = false";
+    let (r, tau) = delta(&[air]).thermal_values("belt_2").unwrap();
     close(r, 1.0 / (15.0 * 2.0 * 0.0193 * 1.8), 1e-12, "resistance");
     close(r, 0.959509, 1e-6, "resistance by hand");
     close(tau, 0.07 * 1.8 * 1500.0 * r, 1e-12, "time constant");
@@ -665,7 +666,9 @@ fn a_belt_warms_with_its_damping_loss_through_its_surface() {
         assert_eq!(scene.parts.iter().filter(|p| p.id == "belt").count(), 21, "at z = {z}");
     }
     let mut cfg = ENTRY.config();
-    for edit in ["effects.part_heating = true", "belt.specific_heat_j_kg_k = 1.5", "start.pose = [-0.3, 0.0, -1.15]"] {
+    for edit in
+        ["effects.part_heating = true", "belt.specific_heat_j_kg_k = 1.5", "start.pose = [-0.3, 0.0, -1.15]", air]
+    {
         cfg.set_text(edit).unwrap();
     }
     let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
@@ -684,6 +687,23 @@ fn a_belt_warms_with_its_damping_loss_through_its_surface() {
     }
     assert!(by_hand > 0.0, "{by_hand} K");
     close(sim.heated[4].rise, by_hand, 1e-9, "the belt's rise");
+}
+
+/// With effects.belt_pulley_conduction (as shipped) the belt also gives heat to its two pulleys (radius 14.324 mm) through
+/// the half wrap it lies on each, 2 pi r w = 2 pi 0.014324 0.0193 = 1.737046e-3 m^2, from its middle through half of its
+/// 3 mm at 0.2 W/(m K): 133.33 W/(m^2 K), G = 0.231601 W/K beside the air's 1.0422 W/K, 22.2 % of it. R = 1 / 1.273801 =
+/// 0.785052 K/W, tau = 189 J/K R = 148.375 s: the belt settles 18.2 % cooler under the same loss.
+#[test]
+fn a_belt_gives_heat_to_its_pulleys_through_the_wrap() {
+    let (r, tau) = delta(&[]).thermal_values("belt_2").unwrap();
+    let pulleys = std::f64::consts::TAU * 0.014324 * 0.0193 * 0.2 / 1.5e-3;
+    close(pulleys, 0.231601, 1e-5, "the pulleys' conductance by hand");
+    close(r, 1.0 / (15.0 * 2.0 * 0.0193 * 1.8 + pulleys), 1e-12, "resistance");
+    close(r, 0.785052, 1e-5, "resistance by hand");
+    close(tau, 189.0 * r, 1e-12, "time constant");
+    close(tau, 148.375, 1e-5, "time constant by hand");
+    let thicker = delta(&["belt.thickness_m = 6.0e-3"]).thermal_values("belt_2").unwrap().0;
+    close(thicker, 1.0 / (1.0422 + pulleys / 2.0), 1e-5, "half the conductance through twice the thickness");
 }
 
 /// By hand: at a 20 degree incline the cycle's segment[2] target (-0.1525, 0, -1.13) lies q = (-0.6025, 0, -1.13) from
