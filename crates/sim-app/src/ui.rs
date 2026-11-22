@@ -361,8 +361,8 @@ fn usage(v: &Verdict) -> Option<f64> {
         return Some(if v.ok { 0.0 } else { f64::INFINITY });
     }
     let share = utilisation(v);
-    // "belt-slack" passes only above its limit, the others at it too.
-    let judged_by_share = v.ok == if v.check == "belt-slack" { share < 1.0 } else { share <= 1.0 };
+    // "belt-least-tension" passes only above its limit, the others at it too.
+    let judged_by_share = v.ok == if v.check == "belt-least-tension" { share < 1.0 } else { share <= 1.0 };
     // Infinitely far over (`utilisation`: an at-least check at or below zero) is a full gauge, as a limit of 0 failed.
     (share >= 0.0 && judged_by_share && (share.is_finite() || !v.ok)).then_some(share)
 }
@@ -385,8 +385,13 @@ fn margins(model: &Model) -> Vec<(&'static str, Option<f64>, bool)> {
 }
 
 /// A share as the gauges write it: a percentage, or "over" for a check over a limit of 0.
-fn share_text(model: &Model, used: f64) -> String {
-    if used.is_finite() { format!("{:.0} {}", used * 100.0, "%") } else { model.tr.tr("ui-verdict-over").to_string() }
+fn share_text(model: &Model, used: f64, passes: bool) -> String {
+    match used {
+        u if !u.is_finite() => model.tr.tr("ui-verdict-over").to_string(),
+        // A failing check that rounds to 100 is over it, not at it.
+        u if !passes && (u * 100.0).round() == 100.0 => "> 100 %".into(),
+        u => format!("{:.0} {}", u * 100.0, "%"),
+    }
 }
 
 /// A check's colour: red over its limit, amber within a tenth of it, green with room.
@@ -538,7 +543,7 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
         for (check, used, passes) in
             checks.iter().filter_map(|&(check, used, passes)| Some((check, used?, passes))).take(room)
         {
-            let name = tr(&format!("check-{check}"));
+            let name = tr(&model.check_key(check, None));
             let picked = panels.check == Some(check);
             let frame = Frame::new()
                 .inner_margin(Margin::symmetric(6, 3))
@@ -557,7 +562,11 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
                         });
                         ui.horizontal(|ui| {
                             gauge_bar(ui, 112.0, used, passes);
-                            ui.label(RichText::new(share_text(model, used)).small().color(margin_color(used, passes)));
+                            ui.label(
+                                RichText::new(share_text(model, used, passes))
+                                    .small()
+                                    .color(margin_color(used, passes)),
+                            );
                         });
                     });
                 })
@@ -878,7 +887,7 @@ fn picked_check(ui: &mut Ui, model: &Model, check: &'static str, panels: PanelSt
     Frame::new().fill(inset()).corner_radius(4).inner_margin(Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            ui.heading(tr(&format!("check-{check}")));
+            ui.heading(tr(&model.check_key(check, None)));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.small_button(tr("ui-close")).clicked() {
                     actions.push(Action::Panels(PanelState { check: None, ..panels }));
@@ -898,7 +907,7 @@ fn picked_check(ui: &mut Ui, model: &Model, check: &'static str, panels: PanelSt
         let judged_otherwise = verdicts.iter().any(|v| v.check == check && v.limit != 0.0 && usage(v).is_none());
         let direction = if judged_otherwise {
             "ui-verdict-judged-otherwise"
-        } else if check == "belt-slack" {
+        } else if check == "belt-least-tension" {
             "ui-verdict-above"
         } else if AT_LEAST.contains(&check) {
             "ui-verdict-at-least"
@@ -912,12 +921,13 @@ fn picked_check(ui: &mut Ui, model: &Model, check: &'static str, panels: PanelSt
 
 /// A verdict's value, limit and share of the limit as cells of a grid row, and the row's end.
 fn verdict_cells(ui: &mut Ui, model: &Model, v: &Verdict) {
-    ui.label(sim_app::model::short(v.value));
-    ui.label(sim_app::model::short(v.limit));
+    let (value, limit) = sim_app::model::short_pair(v.value, v.limit, v.ok);
+    ui.label(value);
+    ui.label(limit);
     match usage(v) {
         Some(used) => drop(ui.horizontal(|ui| {
             gauge_bar(ui, 90.0, used, v.ok);
-            ui.label(RichText::new(share_text(model, used)).color(margin_color(used, v.ok)));
+            ui.label(RichText::new(share_text(model, used, v.ok)).color(margin_color(used, v.ok)));
         })),
         None => drop(ui.label(
             RichText::new(model.tr.tr(if v.ok { "ui-verdict-passes" } else { "ui-verdict-fails" })).color(if v.ok {
@@ -986,7 +996,7 @@ fn inspector(
             }
             ui.end_row();
             for v in mine {
-                ui.label(tr(&format!("check-{}", v.check)));
+                ui.label(tr(&model.check_key(v.check, v.motor)));
                 verdict_cells(ui, model, v);
             }
         });
@@ -1716,8 +1726,8 @@ fn effects(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Ac
         plot(("friction", &view.title))
             .height(180.0)
             .x_grid_spacer(log_grid_spacer(5))
-            .x_axis_label(tr("ui-effects-speed"))
-            .y_axis_label(tr("ui-effects-force"))
+            .x_axis_label(tr(if view.rotary { "ui-effects-speed-rotary" } else { "ui-effects-speed" }))
+            .y_axis_label(tr(if view.rotary { "ui-effects-torque" } else { "ui-effects-force" }))
             .show(ui, |plot| {
                 for (i, (label, points)) in view.curves.into_iter().enumerate() {
                     // The friction force solid, its parts dashed.
@@ -2290,20 +2300,11 @@ pub fn hertz(mark: GridMark, _: &std::ops::RangeInclusive<f64>) -> String {
     format!("{:.3}", 10f64.powf(mark.value)).trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-/// A phase over log10(f), unwrapped, so that a lag beyond half a turn does not jump to the top of the plot.
+/// A phase over log10(f), unwrapped in both directions, so that a lag beyond half a turn does not jump to the top of the
+/// plot, and with the first value in (-270, 90] as the loop view has it (`frequency::phases`).
 fn phase_line(points: &[sim_components::analysis::SweepPoint]) -> Vec<[f64; 2]> {
-    let mut last = 0.0;
-    points
-        .iter()
-        .map(|p| {
-            let mut phase = p.phase_deg;
-            while phase > last + 180.0 {
-                phase -= 360.0;
-            }
-            last = phase;
-            [p.frequency.log10(), phase]
-        })
-        .collect()
+    let unit = points.iter().map(|p| [p.phase_deg.to_radians().cos(), p.phase_deg.to_radians().sin()]);
+    points.iter().zip(sim_app::frequency::phases(unit)).map(|(p, phase)| [p.frequency.log10(), phase]).collect()
 }
 
 /// The open-loop frequency response of the mechanics per motor, its resonance, and the belt stiffness fitted
@@ -2472,4 +2473,22 @@ fn modes_plot(ui: &mut Ui, model: &Model, result: &sim_app::model::Tuning) {
             );
         }
     });
+}
+
+#[cfg(test)]
+mod phase_line_tests {
+    use super::phase_line;
+    use sim_components::analysis::SweepPoint;
+
+    /// A first phase of -200 degrees (reported as +160 by the wrapped angle) stays at -200, in (-270, 90]; the next
+    /// points follow it by the shortest step: 150 after 160 is -210, 170 after 150 is -190.
+    #[test]
+    fn the_first_phase_is_brought_into_minus_270_to_90() {
+        let at = |frequency: f64, phase_deg: f64| SweepPoint { frequency, gain: 1.0, phase_deg };
+        let line = phase_line(&[at(10.0, 160.0), at(20.0, 150.0), at(40.0, 170.0)]);
+        let phases: Vec<f64> = line.iter().map(|p| p[1]).collect();
+        for (got, want) in phases.iter().zip([-200.0, -210.0, -190.0]) {
+            assert!((got - want).abs() < 1e-6, "{phases:?}");
+        }
+    }
 }

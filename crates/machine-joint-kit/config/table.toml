@@ -66,6 +66,9 @@ rated_life_h = 10000.0
 lead_angle_deg = 8.0
 friction_coefficient = 0.04
 pressure_angle_deg = 20.0
+# The worm motor's axis (x, y, z, fixed to the base, across the table's axis): its rotor's spin in the frame's momentum.
+# [estimate] along x, as the picture draws the motor.
+motor_axis = [1.0, 0.0, 0.0]
 
 [motor]
 # [catalogue] 1FK2105-4AF, D 32: rotor 1.7 kg cm2 (as on the delta picker, as is everything in [motor] and [drive])
@@ -95,11 +98,11 @@ d_inductance_h = 0.01
 # rest is the stator and housing's), and its time constant against the housing.
 winding_resistance_share = 0.3
 winding_time_constant_s = 60.0
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# [catalogue] 1FK2105-4AF: static torque 5 N m at the stall current 4.65 A (motors_s210.csv), as a motor named in
+# [parts] brings it. With effects.iron_loss the copper loss at it brings the winding to its rated
 # rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
 # starts at kt times it.
-stall_current_a = 4.35
+stall_current_a = 4.65
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
@@ -146,12 +149,17 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 current_kp_v_a = 40.0
 current_tn_s = 5.0e-3
 # [catalogue] a 400 V line: 540 V DC link
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
 peak_torque_nm = 15.0
 rated_torque_nm = 4.6

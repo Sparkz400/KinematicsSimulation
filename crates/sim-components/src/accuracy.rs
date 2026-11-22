@@ -239,9 +239,11 @@ fn iso_9283(up: &[Vec<f64>], down: &[Vec<f64>], into: &mut ToolResult) {
     into.direction_variation = into.direction_variation.max(distance(&bu, &bd));
 }
 
-/// What `study` found, and the verdicts: `positioning-accuracy`, the largest A of the axes in metres (all axes on a
-/// machine without one) against `ratings.max_positioning_error_m`, and `positioning-repeatability`, their largest R
-/// against `ratings.max_repeatability_m`, each where the config has the rating.
+/// What `study` found, and the verdicts: `positioning-accuracy`, the largest A of the axes in metres against
+/// `ratings.max_positioning_error_m`, and `positioning-repeatability`, their largest R against `ratings.max_repeatability_m`,
+/// each where the config has the rating. On a machine without an axis in m the axes are in rad and the ratings are the
+/// `_rad` ones (`ratings.max_positioning_error_rad`, `ratings.max_repeatability_rad`); a rad value is never held against a
+/// metre limit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Study {
     pub axes: Vec<AxisResult>,
@@ -344,19 +346,21 @@ pub fn study(entry: &MachineEntry, cfg: &Config, settings: Settings) -> Result<S
     }
     let judged: Vec<&AxisResult> = results.iter().filter(|r| metres[r.axis]).collect();
     let mut verdicts = Vec::new();
+    let rad = !axes.iter().any(|a| a.unit == "m");
     for (check, key, value) in [
         (
             "positioning-accuracy",
-            "ratings.max_positioning_error_m",
+            if rad { "ratings.max_positioning_error_rad" } else { "ratings.max_positioning_error_m" },
             judged.iter().map(|r| r.accuracy).fold(0.0, f64::max),
         ),
         (
             "positioning-repeatability",
-            "ratings.max_repeatability_m",
+            if rad { "ratings.max_repeatability_rad" } else { "ratings.max_repeatability_m" },
             judged.iter().map(|r| r.repeatability).fold(0.0, f64::max),
         ),
     ] {
-        if cfg.get(key).is_ok() {
+        // 0 or absent: not judged.
+        if cfg.get(key).is_ok() && cfg.f64(key)? > 0.0 {
             let limit = cfg.f64(key)?;
             verdicts.push(Verdict { check, motor: None, value, limit, ok: value <= limit });
         }

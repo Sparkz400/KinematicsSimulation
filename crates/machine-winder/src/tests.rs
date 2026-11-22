@@ -118,6 +118,55 @@ fn the_torque_to_accelerate_the_line_matches_the_hand_calculation() {
     assert!((e.t[0] - 80.96686).abs() < 1e-5 && (e.t[1] - 83.46686).abs() < 1e-5, "{:?}", e.t);
 }
 
+/// The cylinder's loss power is dF/dt y (docs/model-reference.md): the setpoint F = T0 (1 - taper (1 - core / r)) falls
+/// with r as dF/dr = -T0 taper core / r^2 ... times 2 in the model's tension law, and r grows at h w / 2 pi, so
+/// P = (-2 T0 taper core / r^2) (h w / 2 pi) y, with no further factor of r.
+#[test]
+fn the_cylinders_taper_power_is_the_setpoint_rate_times_the_dancers_position() {
+    let w = winder(&[]);
+    let (mut state, mut hold) = (Vec::new(), [0.0; 2]);
+    w.equilibrium(&[640.0], &mut state, &mut hold);
+    let mut e = w.eval(&state, &hold);
+    e.r[1] = 0.1;
+    e.w[1] = 10.0;
+    e.y = 0.01;
+    let slope = -2.0 * w.tension * w.taper * w.roll.core / (e.r[1] * e.r[1]);
+    let want = slope * (w.roll.thickness * e.w[1] / TAU) * e.y;
+    assert!(e.r[1] > w.roll.core && (w.losses(&e)[8] - want).abs() < 1e-12 * want.abs().max(1.0), "{want}");
+}
+
+/// The power balance at an instant of the shipped move forward, with the taper on and off: the motors' power
+/// sum T w = dE/dt + the loss powers (`loss_powers`, the cylinder's row among them), dE/dt by a central difference
+/// along the derivatives. With the cylinder's row a factor r too small (the audit) the taper left 6.5e-3 W unbalanced at
+/// 3 m; the rest balances to about 1e-8 W.
+#[test]
+fn the_power_balances_with_the_taper() {
+    for taper in [true, false] {
+        let cfg = config(&[&format!("effects.tension_taper = {taper}")]);
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        let w = Winder::new(&cfg).unwrap();
+        sim.command(Command::MoveTo(vec![5.0])).unwrap();
+        for _ in 0..(2.0 / sim.dt) as usize {
+            sim.step();
+        }
+        let (s, torque) = (sim.state.clone(), sim.torque.clone());
+        let (mut pos, mut speed) = (vec![0.0; 2], vec![0.0; 2]);
+        w.motor_state(&s, &mut pos, &mut speed);
+        let power: f64 = torque.iter().zip(&speed).map(|(t, v)| t * v).sum();
+        let mut rate = vec![0.0; s.len()];
+        w.derivatives(&s, &torque, &mut rate);
+        let h = 1e-6;
+        let at = |sign: f64| w.energy(&s.iter().zip(&rate).map(|(x, r)| x + sign * h * r).collect::<Vec<_>>());
+        let stored = (at(1.0) - at(-1.0)) / (2.0 * h);
+        let mut losses = Vec::new();
+        w.loss_powers(&s, &torque, &mut losses);
+        let lost: f64 = losses.iter().sum();
+        let off = power - stored - lost;
+        println!("taper {taper}: motors {power} W, stored {stored} W, lost {lost} W, off {off:e} W");
+        assert!(power.abs() > 1.0 && off.abs() < 1e-5, "taper {taper}: off by {off} W of {power} W");
+    }
+}
+
 /// A span's steady tension for a speed difference: the unwind gives off unstretched web (wound at no tension) at
 /// v1 = 1 m/s, roller and rewind take it at v2 = 1.0005 m/s. Steady, what enters a span leaves it: v1 / (1 + 0) =
 /// v2 / (1 + eps), eps = v2 / v1 - 1 = 5e-4, T = EA eps = 80 kN * 5e-4 = 40.000 N in both spans (the second takes it at
@@ -378,7 +427,10 @@ fn an_emergency_stop_along_the_line_keeps_the_web_within_its_limits() {
 /// m/s^2, the rewind's on its core (45 mm) by 0.404 m/s^2. They part at 0.942 m/s^2, the dancer rises at half that and
 /// meets its stop at 50 mm after sqrt(2 * 0.05 / 0.471) = 0.46 s, and the smaller roll, which would stand only after
 /// 2 m/s / (8.976 rad/s^2 r) = 4.8 s, stretches the web far beyond its 250 N. Category 0 in the middle: the torque goes off and the holding brakes take the
-/// rolls (10 N m at the motor, 70 N m at the roll) within some 50 ms, the dancer's roller runs on and the web goes slack.
+/// rolls (10 N m at the motor, 70 N m at the roll) within some 50 ms, the dancer's roller runs on and the web loses its
+/// tension: down to 0.068 N of its 30 N at least. With the motors' iron drag left out it went slack (0 N for a while);
+/// the drag of the coasting rotors (effects.iron_loss, 0.0057 N m each at the rated speed, from the shipped motor's
+/// printed rated point) holds those last few hundredths of a newton, so slack or not is no robust outcome here.
 #[test]
 fn a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ() {
     for start in [5.0, 1270.0] {
@@ -386,5 +438,5 @@ fn a_stop_on_each_drives_own_ramp_overloads_the_web_where_the_radii_differ() {
         assert!(high > 250.0 && travel > 0.05 && (met - 0.46).abs() < 0.05, "{start}: {high} {travel} {met}");
     }
     let (low, _, _, stood, slack) = stop_from_full_speed(640.0, StopCategory::Zero);
-    assert!(low < 1.0 && slack > 0.0 && stood < 0.1, "{low} {slack} {stood}");
+    assert!(low < 0.1 && stood < 0.1, "{low} {slack} {stood}");
 }

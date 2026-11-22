@@ -5,7 +5,8 @@
 pub enum Shape {
     /// Box centred on `pos`.
     Box { size: [f64; 3] },
-    /// Cylinder centred on `pos`, axis along y (pulleys and motors seen from the front).
+    /// Cylinder centred on `pos`, axis along y (pulleys and motors seen from the front), or along z where the part is
+    /// laid flat (`Part::flat`).
     Cylinder { radius: f64, length: f64 },
     /// Straight strip from `pos` to `to` (a belt span).
     Segment { to: [f64; 3], width: f64 },
@@ -18,6 +19,9 @@ pub struct Part {
     pub pos: [f64; 3],
     /// Rotation about the depth axis in radians, from +x towards +z: what turns a pulley's spoke.
     pub angle: f64,
+    /// Laid flat (`lay_flat`): the box or cylinder, after `angle`, turned a quarter turn about x, its y axis to -z and its
+    /// z axis to +y. A segment is never flat: its ends give its direction.
+    pub flat: bool,
     pub color: [f32; 3],
     /// -1..1, drawn as a colour shift: belt tension below or above pretension.
     pub highlight: f32,
@@ -28,7 +32,7 @@ pub struct Part {
 
 impl Part {
     pub fn new(id: &'static str, shape: Shape, pos: [f64; 3], color: [f32; 3]) -> Self {
-        Self { id, shape, pos, angle: 0.0, color, highlight: 0.0, heat: None }
+        Self { id, shape, pos, angle: 0.0, flat: false, color, highlight: 0.0, heat: None }
     }
     pub fn turned(mut self, angle: f64) -> Self {
         self.angle = angle;
@@ -37,6 +41,22 @@ impl Part {
     pub fn highlighted(mut self, highlight: f32) -> Self {
         self.highlight = highlight;
         self
+    }
+    /// Turns the part, drawn upright, a quarter turn about the x axis through the origin: (x, y, z) to (x, z, -y). Seen
+    /// from above it then looks as it looked from the front, a wheel facing up, its `angle` turning from +x towards +y.
+    /// For a wheel of a belt in the x-y plane (an H-bot's): draw it upright at (x, y) in the x-z plane at depth -z, then
+    /// lay it flat.
+    pub fn lay_flat(&mut self) {
+        let turn = |p: [f64; 3]| [p[0], p[2], -p[1]];
+        self.pos = turn(self.pos);
+        match &mut self.shape {
+            Shape::Segment { to, .. } => *to = turn(*to),
+            _ => self.flat = true,
+        }
+    }
+    /// The direction a vector of the upright part points in the scene: as it is, or turned as `lay_flat` turns it.
+    pub fn oriented(&self, v: [f64; 3]) -> [f64; 3] {
+        if self.flat { [v[0], v[2], -v[1]] } else { v }
     }
 }
 

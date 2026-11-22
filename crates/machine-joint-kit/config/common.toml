@@ -33,6 +33,13 @@ link_bending = false
 # The links' bending acts back on the joints (with link_bending): joints, gearboxes and links one coupled system, the
 # bending's energy in the machine's. Off in the shipped configs.
 link_bending_reaction = false
+# A parallelogram's rod stretches under the torque it passes: its axial stiffness in series with the gearbox of the
+# joint it carries (arm.bars_axial_stiffness_n_m, bars_carries). Off as shipped: it moves the figures.
+bar_elasticity = false
+# The forearm a parallelogram's rod turns rocks on the rod's spring as a joint of its own (passive, its damper
+# arm.bars_axial_damping_n_s_m), where bar_elasticity puts the spring in series with the gearbox: with it on, that is
+# off. Off as shipped: it moves the figures.
+bar_rocking = false
 gravity = true
 payload = true
 # The arms' payload swings on a pivot at the flange (arm.payload_swing_*): two joints no motor drives. Off here; read
@@ -50,6 +57,10 @@ gearbox_efficiency = true
 # formula) in place of screw.efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart.
 # Off in the shipped configs: their sizing was done with screw.efficiency.
 screw_lead_efficiency = false
+# The screw's axial stiffness follows its nut: the shaft between the fixed bearing and the nut, E A / a (held at both
+# ends a (L - a) / (E A L)), with the nut a from the bearing at its travel (screw.fixed_bearing_at_m), in place of the
+# far end's for the whole stroke.
+screw_stiffness_with_position = true
 # The efficiency's loss as a friction in the gearbox's mesh: in proportion to the torque it passes, against the
 # motion at any speed, and sticking at rest inside its band (a gear holding a load stands for anything between the
 # torque that lowers it and the one that lifts it). Off: the loss fades in below 0.5 W, a gear at rest has none.

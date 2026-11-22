@@ -199,13 +199,19 @@ fn machine(id: &str, lang: &str) -> Result<&'static MachineEntry, String> {
     }
 }
 
-/// A machine file read and checked as `sim_machines::load_file` checks a TOML file, kept under `id`. An error names
-/// the file and the line.
+/// A machine file read and checked as `sim_machines::load_file` checks a file (TOML, or JSON by the extension of
+/// `name`), kept under `id`. An error names the file and the line (a JSON file: the key alone).
 fn read_file(id: &str, name: &str, lang: &str, text: &str) -> Result<&'static MachineEntry, String> {
     let known: Vec<Config> = MACHINES.iter().map(|m| m.config()).collect();
-    let stem = name.strip_suffix(".toml").unwrap_or(name);
-    let entry = sim_netlist::from_text(text, true, stem, &known).map_err(|(e, line)| {
-        let tr = translations(lang, MACHINES[0]);
+    let json = name.to_ascii_lowercase().ends_with(".json");
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let tr = translations(lang, MACHINES[0]);
+    let converted = if json {
+        sim_machines::json_to_toml(text).map_err(|e| tr.tr_arg(e.key(), e.detail()))?
+    } else {
+        text.to_string()
+    };
+    let entry = sim_netlist::from_text(&converted, !json, stem, &known).map_err(|(e, line)| {
         let at = line.map_or(String::new(), |line| format!(":{line}"));
         tr.tr_arg(e.key(), &format!("{name}{at}: {}", e.detail()))
     })?;
@@ -217,8 +223,8 @@ fn read_file(id: &str, name: &str, lang: &str, text: &str) -> Result<&'static Ma
     Ok(entry)
 }
 
-/// A machine file the page hands in (kind 4), by its file name; one of the same name before is replaced.
-// shortcut: TOML only; JSON machine files (sim_machines::load_file converts them) when the page is asked to read them.
+/// A machine file the page hands in (kind 4), TOML or JSON by its file name's extension; one of the same name before is
+/// replaced.
 fn upload(name: &str, lang: &str, text: &str) -> Result<String, String> {
     let name = if name.is_empty() { "machine.toml" } else { name };
     let id = format!("upload:{name}");
@@ -414,7 +420,7 @@ pub fn record_obstacle(obstacle: &Obstacle, out: &mut Vec<f32>) {
 }
 
 /// One part as the page draws it, `RECORD` floats: the mesh (0 a cube of side 1, 1 a cylinder of diameter and length
-/// 1 along y, both centred on the origin), the matrix that takes the mesh to the part in scene coordinates (4 × 4,
+/// 1 along y, both centred on the origin; turned as `Part::flat` says), the matrix that takes the mesh to the part in scene coordinates (4 × 4,
 /// column by column, as WebGL takes it), and the colour (`part_color`, red, green, blue in 0..1).
 /// A segment is a cube stretched from `pos` to `to`, `width` wide in the depth (y) and 4 mm thick, as in sim-app.
 pub fn record(part: &Part, out: &mut Vec<f32>) {
@@ -450,6 +456,8 @@ pub fn record(part: &Part, out: &mut Vec<f32>) {
             (0.0, [u.map(|v| v * length), w.map(|v| v * size(*width)), n.map(|v| v * 0.004)], mid)
         }
     };
+    // A segment is never flat (`Part::flat`), so this turns only boxes and cylinders.
+    let columns = columns.map(|c| part.oriented(c));
     out.push(mesh);
     for c in columns {
         out.extend([c[0] as f32, c[1] as f32, c[2] as f32, 0.0]);
@@ -534,12 +542,18 @@ fn texts<'a>(lang: &str, keys: impl Iterator<Item = &'a str>) -> String {
 
 /// The cycle of the config, one pass measured by `analyse_cycle`, or the path of the request run through by
 /// `analyse_trajectory`, and judged as `sim-cli verdicts` judges it; per motor every column of `sim-cli analyze`, with
-/// the operating points and the torque-speed curve.
+/// the operating points and the torque-speed curve. The column names are fixed: a motor's `torque_unit` and
+/// `speed_unit` say what its `*_torque_nm` and `peak_speed_rad_s` hold (N m and rad/s, on a linear motor N and m/s).
 fn size(r: &Request) -> Result<String, String> {
     let (entry, tr, cfg) = configured(r)?;
     let refused = |e: sim_core::ConfigError| tr.tr_arg(e.key(), e.detail());
     let mut sim = Sim::new(entry, &cfg).map_err(refused)?;
     let motors = sim.machine.motors().to_vec();
+    let infos = sim.signal_infos();
+    let unit_of = |motor: &str, signal: &str, rotary: &str| {
+        let id = format!("motor.{motor}.{signal}");
+        infos.iter().find(|s| s.id == id).map_or(rotary, |s| s.unit.as_str()).to_string()
+    };
     let mut warnings: Vec<String> = sim
         .limit_violations
         .iter()
@@ -615,10 +629,12 @@ fn size(r: &Request) -> Result<String, String> {
         ];
         let _ = write!(
             json,
-            "{}{{\"id\":{},\"name\":{}",
+            "{}{{\"id\":{},\"name\":{},\"torque_unit\":{},\"speed_unit\":{}",
             if k == 0 { "" } else { "," },
             quote(motor.id),
-            quote(tr.tr(motor.key))
+            quote(tr.tr(motor.key)),
+            quote(&unit_of(motor.id, "torque", "N m")),
+            quote(&unit_of(motor.id, "speed", "rad/s"))
         );
         for (key, value) in columns {
             let _ = write!(json, ",{}:{}", quote(key), or_null(value));
@@ -638,20 +654,24 @@ fn size(r: &Request) -> Result<String, String> {
     }
     json.push_str("],\"verdicts\":[");
     for (i, v) in judged.iter().enumerate() {
-        let _ = write!(
-            json,
-            "{}{{\"check\":{},\"label\":{},\"motor\":{},\"value\":{},\"limit\":{},\"margin\":{},\"ok\":{}}}",
-            if i == 0 { "" } else { "," },
-            quote(v.check),
-            quote(tr.tr(&format!("check-{}", v.check))),
-            v.motor.map_or("null".into(), |k| quote(motors[k].id)),
-            number(v.value),
-            number(v.limit),
-            // As the sizing report has it: the share of the limit left, 1 - value / limit (limit / value for a check
-            // that must stay above its limit); null where there is none (0 of an at-least check).
-            number(1.0 - sim_components::analysis::utilisation(v)),
-            v.ok
-        );
+        let _ =
+            write!(
+                json,
+                "{}{{\"check\":{},\"label\":{},\"motor\":{},\"value\":{},\"limit\":{},\"margin\":{},\"ok\":{}}}",
+                if i == 0 { "" } else { "," },
+                quote(v.check),
+                quote(tr.tr(&sim_components::report::check_key(
+                    v.check,
+                    v.motor.is_some_and(|k| sim.machine.motor_linear(k))
+                ))),
+                v.motor.map_or("null".into(), |k| quote(motors[k].id)),
+                number(v.value),
+                number(v.limit),
+                // As the sizing report has it: the share of the limit left, 1 - value / limit (limit / value for a check
+                // that must stay above its limit); null where there is none (0 of an at-least check).
+                number(1.0 - sim_components::analysis::utilisation(v)),
+                v.ok
+            );
     }
     json.push_str("]}");
     Ok(json)
@@ -659,10 +679,9 @@ fn size(r: &Request) -> Result<String, String> {
 
 /// The torque-speed curve of a motor's drive (`DriveParams::torque_curve`) as an outline of (speed rad/s, torque N m):
 /// the highest torque from the no-load speed backwards to the no-load speed forwards, then the lowest torque back,
-/// at the curve's corners and 40 speeds between (a field-weakened curve bends). And the continuous (S1) rating as
-/// a box: the rated torque both ways up to the rated speed both ways.
-// shortcut: the S1 box ends at the rated speed, where the motor data says nothing more (as the app's curves do);
-// upgrade when the catalogue gives the S1 curve above it.
+/// at the curve's corners and 40 speeds between (a field-weakened curve bends). And the continuous (S1) rating as the
+/// app and the motor-s1 verdict have it (`charts::torque_speed`): its line for positive torque, then the one for
+/// negative torque back, closed.
 pub fn torque_speed_curve(drive: &sim_components::drive::DriveParams) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
     let (top, rated) = (drive.no_load_speed, drive.rated_speed);
     let mut speeds: Vec<f64> = (0..=40).map(|i| top * (i as f64 / 20.0 - 1.0)).chain([-rated, 0.0, rated]).collect();
@@ -670,11 +689,13 @@ pub fn torque_speed_curve(drive: &sim_components::drive::DriveParams) -> (Vec<(f
     speeds.dedup();
     let high = speeds.iter().map(|&s| (s, drive.torque_curve(s).1));
     let curve = high.chain(speeds.iter().rev().map(|&s| (s, drive.torque_curve(s).0))).collect();
-    let t = drive.rated_torque;
-    (curve, vec![(-rated, t), (rated, t), (rated, -t), (-rated, -t), (-rated, t)])
+    let [high, low] = sim_components::charts::torque_speed(drive, drive.bus_voltage).s1;
+    let s1: Vec<(f64, f64)> = high.iter().chain(low.iter().rev()).chain(high.first()).map(|p| (p[0], p[1])).collect();
+    (curve, s1)
 }
 
-/// The frequency response from one motor's torque to its speed (kind 5), as `sim-cli sweep` gives it.
+/// The frequency response from one motor's torque to its speed (kind 5), as `sim-cli sweep` gives it. On a linear
+/// motor `amplitude_nm` is a force in N and the gain is in (m/s)/N.
 fn sweep(r: &Request) -> Result<String, String> {
     let (entry, tr, cfg) = configured(r)?;
     let refused = |e: sim_core::ConfigError| tr.tr_arg(e.key(), e.detail());
@@ -693,43 +714,116 @@ fn sweep(r: &Request) -> Result<String, String> {
     Ok(format!("{{\"motor\":{motor},\"amplitude_nm\":{},\"points\":[{}]}}", number(amplitude), rows.join(",")))
 }
 
-/// Masses and friction fitted to a measured trace in the simulator's own columns (kind 6), as `sim-cli fit --trace`
-/// fits them without a mapping file: per axis on a machine whose axes are its motors' (`fit_rigid`), else per joint
-/// (`fit_joints`). Rows of quantity, of, config, fitted and standard error, and the advice translated.
-// shortcut: no mapping file for vendor exports, no stiffness or sweep fit; upgrade when the page reads those files.
+/// What the fit (kind 6) is given after the request's `---`: the trace, then a mapping file for a vendor export, then a
+/// measured sweep, split by lines of `%%%`; an empty part is none.
+const FIT_PARTS: &str = "\n%%%\n";
+
+/// Masses and friction fitted to a measured trace (kind 6), as `sim-cli fit` fits them: the trace in the simulator's own
+/// columns, or a vendor export through its mapping file (`import`); per axis on a machine whose axes are its motors'
+/// (`fit_rigid`), else per joint (`fit_joints`). With the option `stiffness` also the factor on the stiffness at the key
+/// `stiffness-key=` (the belts' by default) from the trace's own moves (`fit_move_stiffness`); with a sweep (options
+/// `motor=`, `amplitude=` as kind 5) the load's resonance (`fit_sweep`). Rows of quantity, of, config, fitted and
+/// standard error, and the advice translated.
 fn fit(r: &Request) -> Result<String, String> {
-    use sim_components::identify::{fit_joints, fit_rigid};
+    use sim_components::identify::{
+        BELT_STIFFNESS_KEY, fit_joints, fit_move_stiffness, fit_rigid, fit_sweep, parse_sweep,
+    };
     let (entry, tr, cfg) = configured(r)?;
     let refused = |e: sim_components::trace::TraceError| tr.tr_arg(e.key, &e.detail);
     let machine = (entry.build)(&cfg).map_err(|e| tr.tr_arg(e.key(), e.detail()))?;
-    let trace = sim_components::trace::Trace::parse(r.extra, machine.motors()).map_err(refused)?;
-    let (mut rows, mut advice) = (Vec::new(), Vec::new());
+    let parts: Vec<&str> = r.extra.split(FIT_PARTS).map(str::trim).collect();
+    let part = |i: usize| parts.get(i).copied().filter(|p| !p.is_empty());
+    if part(0).is_none() && part(2).is_none() {
+        return Err(tr.tr("web-fit-nothing").to_string());
+    }
+    let (mut rows, mut advice, mut units) = (Vec::new(), Vec::new(), Vec::new());
     let row = |q: &str, of: &str, config: f64, fitted: f64, error: f64| {
         format!("[{},{},{},{},{}]", quote(q), quote(of), number(config), number(fitted), number(error))
     };
-    if sim_components::trace::per_axis_fit(machine.as_ref()) {
-        for (axis, fit) in machine.axes().iter().zip(fit_rigid(entry, &cfg, &trace).map_err(refused)?) {
-            let Some(fit) = fit else {
-                advice.push(tr.tr_arg("fit-axis-skipped", axis.id));
-                continue;
-            };
-            let names = ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"];
-            for (q, name) in names.iter().enumerate() {
-                rows.push(row(name, axis.id, fit.config[q], fit.fitted[q], fit.error[q]));
+    let trace = match part(0) {
+        None => None,
+        Some(text) => Some(match part(1) {
+            Some(map) => {
+                use sim_components::import::{Mapping, import};
+                let imported = import(text, &Mapping::parse(map).map_err(refused)?).map_err(refused)?;
+                let motors = machine.motors().len();
+                if motors != 0 && imported.trace.motors.len() != motors {
+                    let detail = format!("{} [[motor]] for {motors} motors", imported.trace.motors.len());
+                    return Err(tr.tr_arg("error-import-map", &detail));
+                }
+                advice.extend(imported.notes.iter().map(|(key, detail)| tr.tr_arg(key, detail)));
+                imported.trace
             }
-            advice.extend(fit.advice(axis.id).iter().map(|(key, detail)| tr.tr_arg(key, detail)));
+            None => sim_components::trace::Trace::parse(text, machine.motors()).map_err(refused)?,
+        }),
+    };
+    if let Some(trace) = &trace {
+        if sim_components::trace::per_axis_fit(machine.as_ref()) {
+            for (axis, fit) in machine.axes().iter().zip(fit_rigid(entry, &cfg, trace).map_err(refused)?) {
+                let Some(fit) = fit else {
+                    advice.push(tr.tr_arg("fit-axis-skipped", axis.id));
+                    continue;
+                };
+                let names = ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"];
+                for (q, name) in names.iter().enumerate() {
+                    rows.push(row(name, axis.id, fit.config[q], fit.fitted[q], fit.error[q]));
+                    units.push(quote(fit.units[q]));
+                }
+                // As `sim-cli fit` writes them: the friction beyond its sliding level, a payload picked or dropped.
+                for d in &fit.details {
+                    rows.push(row(d.quantity, axis.id, d.config, d.fitted, d.error));
+                    units.push(quote(""));
+                }
+                for (time, time_error, change, error) in &fit.payload_steps {
+                    rows.push(row("payload_step_s", axis.id, f64::NAN, *time, *time_error));
+                    units.push(quote("s"));
+                    rows.push(row("payload_factor_change", axis.id, 0.0, *change, *error));
+                    units.push(quote(""));
+                }
+                advice.extend(fit.advice(axis.id).iter().map(|(key, detail)| tr.tr_arg(key, detail)));
+            }
+        } else {
+            match fit_joints(entry, &cfg, trace).map_err(refused)? {
+                Some(fit) => {
+                    rows.extend(fit.values.iter().map(|v| row(v.quantity, &v.of, v.config, v.fitted, v.error)));
+                    units.extend(fit.values.iter().map(|_| quote("")));
+                    advice.extend(fit.advice().iter().map(|(key, detail)| tr.tr_arg(key, detail)));
+                }
+                None => advice.push(tr.tr("fit-joints-skipped").to_string()),
+            }
         }
-    } else {
-        match fit_joints(entry, &cfg, &trace).map_err(refused)? {
-            Some(fit) => {
-                rows.extend(fit.values.iter().map(|v| row(v.quantity, &v.of, v.config, v.fitted, v.error)));
-                advice.extend(fit.advice().iter().map(|(key, detail)| tr.tr_arg(key, detail)));
-            }
-            None => advice.push(tr.tr("fit-joints-skipped").to_string()),
+        if r.flag("stiffness") {
+            let key = r.options.iter().find_map(|o| o.strip_prefix("stiffness-key=")).unwrap_or(BELT_STIFFNESS_KEY);
+            let fit = fit_move_stiffness(entry, &cfg, trace, key).map_err(refused)?;
+            rows.push(row("stiffness_factor", key, 1.0, fit.factor, fit.error));
+            rows.push(row("ringing_rms_nm", key, f64::NAN, fit.ringing, f64::NAN));
+            rows.push(row("ringing_left_rms_nm", key, f64::NAN, fit.residual, f64::NAN));
+            units.extend(["", "", ""].map(quote));
+            let (key, detail) = fit.advice();
+            advice.push(tr.tr_arg(key, &detail));
         }
     }
+    if let Some(text) = part(2) {
+        let measured = parse_sweep(text).map_err(refused)?;
+        let motor = r.number("motor", 0.0)?;
+        if motor < 0.0 || motor.fract() != 0.0 || motor as usize >= machine.motors().len() {
+            return Err(format!("motor={motor}"));
+        }
+        let from_config = |e: sim_core::ConfigError| tr.tr_arg(e.key(), e.detail());
+        let amplitude = r.number("amplitude", default_sweep_amplitude(entry, &cfg).map_err(from_config)?)?;
+        let fit = fit_sweep(entry, &cfg, motor as usize, &measured, amplitude)
+            .map_err(from_config)?
+            .ok_or_else(|| tr.tr("fit-no-resonance").to_string())?;
+        let id = machine.motors()[motor as usize].id;
+        rows.push(row("resonance_hz", id, fit.config.frequency, fit.fitted.frequency, fit.fitted.frequency_error));
+        rows.push(row("resonance_damping", id, fit.config.damping, fit.fitted.damping, f64::NAN));
+        units.extend(["Hz", ""].map(quote));
+        let (key, detail) = fit.advice();
+        advice.push(tr.tr_arg(key, &detail));
+    }
     let advice: Vec<String> = advice.iter().map(|a| quote(a)).collect();
-    Ok(format!("{{\"rows\":[{}],\"advice\":[{}]}}", rows.join(","), advice.join(",")))
+    // `units`: the unit of each row's values, in the order of `rows` (empty for a joint value, which has none of its own).
+    Ok(format!("{{\"rows\":[{}],\"advice\":[{}],\"units\":[{}]}}", rows.join(","), advice.join(","), units.join(",")))
 }
 
 /// The values of the page's form (kind 8): every number of the config but the effect switches and the bounds, with
@@ -853,16 +947,40 @@ pub const SCOPE_SIGNALS: [&str; 6] = ["angle", "speed", "torque", "current", "fo
 /// The most rows a scope answer has: one a millisecond up to a pass of 30 s.
 pub const SCOPE_ROWS: usize = 30_000;
 
+/// A path's run (`Command::Trajectory`, from rest) with 0.3 s of rest after its end as the sizing check gives it, every
+/// signal once a millisecond, the time counted from the start: the rows `record_cycle` gives for the cycle.
+fn record_path(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>) -> Result<Vec<Vec<f64>>, sim_components::CommandError> {
+    let end = points.last().map_or(0.0, |p| p.0) + 0.3;
+    sim.command(Command::Trajectory(points))?;
+    let every = ((1e-3 / sim.dt).round() as u64).max(1);
+    let (first, start) = (sim.step, sim.time());
+    let (mut rows, mut sample) = (Vec::new(), Vec::new());
+    // A tripped drive never finishes the path.
+    while sim.time() - start < end && sim.control.enabled() {
+        sim.step();
+        if (sim.step - first).is_multiple_of(every) {
+            sim.sample(&mut sample);
+            sample[0] = (sim.step - first) as f64 * sim.dt;
+            rows.push(sample.clone());
+        }
+    }
+    Ok(rows)
+}
+
 /// One pass of the configured cycle, once a millisecond, as `sim-cli compare` records it (`record_cycle`: the second
-/// pass, the time from its start): per motor its angle, speed, torque, current, following error and winding
-/// temperature rise. A longer pass keeps every n-th row, `SCOPE_ROWS` at most. Numbers to 6 significant digits.
-// shortcut: of the cycle only, not of a path (record_cycle runs the cycle); upgrade with a recorder of a path's run.
+/// pass, the time from its start), or with the option `path` the run of the request's path (`record_path`): per motor
+/// its angle, speed, torque, current, following error and winding temperature rise. A longer pass keeps every n-th row,
+/// `SCOPE_ROWS` at most. Numbers to 6 significant digits.
 fn scopes(r: &Request) -> Result<String, String> {
     let (entry, tr, cfg) = configured(r)?;
     let refused = |e: sim_core::ConfigError| tr.tr_arg(e.key(), e.detail());
-    let signals = Sim::new(entry, &cfg).map_err(refused)?.signal_infos();
-    let motors = (entry.build)(&cfg).map_err(refused)?.motors().to_vec();
-    let rows = sim_components::analysis::record_cycle(entry, &cfg).map_err(refused)?;
+    let mut sim = Sim::new(entry, &cfg).map_err(refused)?;
+    let signals = sim.signal_infos();
+    let motors = sim.machine.motors().to_vec();
+    let rows = match planned_path(r, &sim, &tr)? {
+        Some((points, _)) => record_path(&mut sim, points).map_err(|e| tr.tr(e.key).to_string())?,
+        None => sim_components::analysis::record_cycle(entry, &cfg).map_err(refused)?,
+    };
     let every = rows.len().div_ceil(SCOPE_ROWS).max(1);
     let rows: Vec<&Vec<f64>> = rows.iter().step_by(every).collect();
     let column = |id: String| signals.iter().position(|s| s.id == id);
@@ -870,10 +988,21 @@ fn scopes(r: &Request) -> Result<String, String> {
         let values: Vec<String> = rows.iter().map(|row| c.map_or("null".into(), |c| short(row[c]))).collect();
         format!("[{}]", values.join(","))
     };
+    // The label is the first motor's; each unit is listed per motor (a rotary and a linear motor may share a machine).
     let head = SCOPE_SIGNALS.map(|name| {
         let info = motors.first().and_then(|m| column(format!("motor.{}.{name}", m.id))).map(|c| &signals[c]);
         let (key, unit) = info.map_or((name.to_string(), ""), |s| (s.quantity_key.clone(), s.unit.as_str()));
-        format!("{{\"id\":{},\"label\":{},\"unit\":{}}}", quote(name), quote(tr.tr(&key)), quote(unit))
+        let units: Vec<String> = motors
+            .iter()
+            .map(|m| quote(column(format!("motor.{}.{name}", m.id)).map_or("", |c| signals[c].unit.as_str())))
+            .collect();
+        format!(
+            "{{\"id\":{},\"label\":{},\"unit\":{},\"units\":[{}]}}",
+            quote(name),
+            quote(tr.tr(&key)),
+            quote(unit),
+            units.join(",")
+        )
     });
     let mut json = format!(
         "{{\"step_s\":{},\"time\":{},\"signals\":[{}],\"motors\":[",

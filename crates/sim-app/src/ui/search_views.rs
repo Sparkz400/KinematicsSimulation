@@ -210,7 +210,7 @@ fn check_map(ui: &mut Ui, model: &Model, candidates: &[sim_components::catalog::
     let painter = ui.painter_at(rect);
     let font = FontId::proportional(10.0);
     for (j, check) in map.checks.iter().enumerate() {
-        let galley = painter.layout_no_wrap(tr(&format!("check-{check}")), font.clone(), dim());
+        let galley = painter.layout_no_wrap(tr(&model.check_key(check, None)), font.clone(), dim());
         let pos = egui::pos2(rect.left() + label_w + col_w * (j as f32 + 0.5) - 6.0, rect.top() + head_h - 2.0);
         painter.add(egui::epaint::TextShape::new(pos, galley, dim()).with_angle(-std::f32::consts::FRAC_PI_2));
     }
@@ -246,7 +246,7 @@ fn check_map(ui: &mut Ui, model: &Model, candidates: &[sim_components::catalog::
             response.on_hover_text(format!(
                 "{} · {}: {}",
                 candidates[i].article,
-                tr(&format!("check-{}", map.checks[j])),
+                tr(&model.check_key(map.checks[j], None)),
                 if u.is_nan() { String::new() } else { short(u) }
             ));
         }
@@ -308,15 +308,17 @@ fn operating_points(ui: &mut Ui, model: &Model, candidates: &[sim_components::ca
     }
     heading(ui, model, "ui-search-curves", Analysis::Search);
     key_row(ui, &[(tr("ui-points-curve"), Color32::GRAY, true), (tr("ui-points-s1"), chalk(), true)]);
-    let rpm = model.units.scale(sim_app::runs::Quantity::Speed.unit()).0;
-    let scaled = |line: &Vec<[f64; 2]>| line.iter().map(|[s, t]| [s * rpm, *t]).collect::<Vec<_>>();
     for (i, c, curves) in shown {
         ui.label(format!("{} {} · {} · {}", i + 1, c.article, c.drive, c.supply));
         let Some((load, _)) = &c.result else { continue };
+        // The units of the motor the candidate sizes (one article on every motor is of the first one's kind).
+        let k = model.session.motors.iter().position(|m| m.id == c.motor).unwrap_or(0);
+        let rpm = model.motor_speed_scale(k);
+        let scaled = |line: &Vec<[f64; 2]>| line.iter().map(|[s, t]| [s * rpm, *t]).collect::<Vec<_>>();
         plot(("search-points", i))
             .height(140.0)
-            .x_axis_label(model.speed_label())
-            .y_axis_label(tr("ui-points-torque"))
+            .x_axis_label(model.motor_speed_label(k))
+            .y_axis_label(model.motor_torque_label(k))
             .show(ui, |plot| {
                 let motors = load.motors.iter().filter(|m| c.motor.is_empty() || m.id == c.motor);
                 for (m, color) in motors.zip(PALETTE.iter().cycle()) {
@@ -348,7 +350,7 @@ fn failed(ui: &mut Ui, model: &Model, candidates: &[sim_components::catalog::Can
             ui,
             |ui| {
                 for v in failures(c) {
-                    ui.colored_label(LIMIT, failure_line(&model.tr, v, &keys));
+                    ui.colored_label(LIMIT, failure_line(&model.tr, v, &keys, &model.session.motor_linear));
                 }
             },
         );

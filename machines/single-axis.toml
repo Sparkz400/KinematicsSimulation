@@ -209,6 +209,8 @@ bristle_damping_n_s_m = 1500.0
 preload_n = 200.0
 
 [motor]
+# A made-up motor, no catalogue motor: no row of catalog/ has these values (0.45 N m/A, 1.27 N m at 2.822 A, 9.5 A,
+# 0.3 kg cm2), so its stall current is its rated one. A motor named in [parts] replaces them.
 rotor_inertia_kgm2 = 0.3e-4
 friction_coulomb_nm = 0.02
 friction_viscous_nm_s_rad = 1.0e-4
@@ -383,6 +385,9 @@ friction_feedforward_model = "characteristic"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 # Current controller: Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
@@ -391,6 +396,8 @@ current_tn_s = 2.5e-3
 # The DC link voltage. The winding gets sqrt(3/2) times it at most, here 190 V: the model's one winding
 # carries the RMS phase current, and its voltage times that current is the power of all three phases.
 bus_voltage_v = 155.13
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 3.8
 # What the motor can give continuously; the RMS torque of a cycle is judged against it.
 rated_torque_nm = 1.27

@@ -166,12 +166,13 @@ fn arm_on_track_matches_mujoco() {
     );
 }
 
+/// The URDF's chain alone: MuJoCo's model is the URDF, which leaves the parallelogram's rod and crank out; the shipped
+/// config has them since 22 November (`arm.bars_*`; checked by hand in `the_palletisers_rod_and_crank_hold_by_hand`).
 #[test]
 fn palletiser_matches_mujoco() {
-    compare(
-        "palletiser",
-        mechanism_only(PALLETISER.config()),
-        include_str!("../urdf/palletiser.urdf"),
-        include_str!("../reference/palletiser.csv"),
-    );
+    let mut cfg = mechanism_only(PALLETISER.config());
+    for key in ["on", "turns_with", "pin_m", "mass_kg", "com_m", "inertia_kgm2"] {
+        cfg.set_text(&format!("arm.bars_{key} = []")).unwrap();
+    }
+    compare("palletiser", cfg, include_str!("../urdf/palletiser.urdf"), include_str!("../reference/palletiser.csv"));
 }

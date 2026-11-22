@@ -15,6 +15,8 @@ pub use sim_components::report::peak_keeping;
 
 /// At most this many stretches a drawn line is cut into (`peak_keeping`): two points each, some six thousand a line.
 pub const PLOT_BUCKETS: usize = 3000;
+/// How many poses along a run its modes are asked at (`Run::rated`): the start, the end and evenly between.
+pub const MODE_POSES: usize = 5;
 
 /// The points of a line for a plot: every point where there are few, else the lowest and highest of each of
 /// `PLOT_BUCKETS` stretches, so that a peak one sample wide still shows.
@@ -149,8 +151,11 @@ pub struct Run {
     pub ratings: Vec<(f64, f64)>,
     /// Per motor its drive, for the torque-speed chart and the utilisation (`charts`); empty where not known (a trace).
     pub drives: Vec<DriveParams>,
-    /// The machine's resonances at its start pose in Hz (`Machine::modes`), marked in the spectrum.
+    /// The machine's resonances in Hz (`Machine::modes`) at the poses of `modes_along`, all of them, marked in the
+    /// spectrum: a mode that moves with the pose is a band of lines.
     pub modes: Vec<f64>,
+    /// The resonances at a few poses along the run: (time in s from its start, Hz), the start first.
+    pub modes_along: Vec<(f64, Vec<f64>)>,
     /// For an analysed cycle or path: the tool's distance to the path every millisecond as the analysis measured it
     /// (`CycleLoad::path_error_series`, [time, place m, turn rad]); empty otherwise.
     pub off_path: Vec<[f64; 3]>,
@@ -187,6 +192,7 @@ impl Run {
             ratings: Vec::new(),
             drives: Vec::new(),
             modes: Vec::new(),
+            modes_along: Vec::new(),
             off_path: Vec::new(),
             columns,
             verdicts: None,
@@ -225,6 +231,7 @@ impl Run {
             ratings: Vec::new(),
             drives: Vec::new(),
             modes: Vec::new(),
+            modes_along: Vec::new(),
             off_path: Vec::new(),
             columns,
             verdicts: None,
@@ -232,18 +239,53 @@ impl Run {
     }
 
     /// With what `sim`, of the machine and config the run is of, says about them: per motor its rated and peak torque
-    /// and its drive, and the machine's resonances at the start pose.
-    // shortcut: the modes at the start pose only; take them along the run's poses once a view needs them moving.
-    pub fn rated(self, sim: &Sim) -> Self {
+    /// and its drive, and the machine's resonances along the run. The modes are asked at `MODE_POSES` poses along the
+    /// run (its start, its end and between), read from the tool's position signals, each with the payload as the run's
+    /// signal `payload` has it there (the machine is left with the run's last); a run without them (a trace) has the
+    /// modes at the pose `sim` stands at.
+    pub fn rated(self, sim: &mut Sim) -> Self {
         let drives: Vec<DriveParams> =
             (0..sim.machine.motors().len()).map(|k| sim.control.drive_params_of(k).clone()).collect();
-        let axes = sim.machine.axes().len();
-        let (mut pose, mut rate) = (vec![0.0; axes], vec![0.0; axes]);
-        sim.machine.tool_state(&sim.state, &mut pose, &mut rate);
+        let axes = sim.machine.axes().to_vec();
+        let columns: Option<Vec<&[f64]>> =
+            axes.iter().map(|a| self.column(&format!("axis.{}.position", a.id)).filter(|c| !c.is_empty())).collect();
+        let payload = self.column("payload").filter(|c| !c.is_empty());
+        let at = |i: usize| -> Option<(f64, Vec<f64>, Option<bool>)> {
+            let columns = columns.as_ref()?;
+            let held = payload.map(|c| c[i.min(c.len() - 1)] != 0.0);
+            Some((
+                self.time().get(i).copied().unwrap_or(0.0),
+                columns.iter().map(|c| c[i.min(c.len() - 1)]).collect(),
+                held,
+            ))
+        };
+        let last = columns.as_ref().and_then(|c| c.first()).map_or(0, |c| c.len() - 1);
+        let mut poses: Vec<_> = (0..MODE_POSES).filter_map(|n| at(last * n / (MODE_POSES - 1))).collect();
+        if poses.is_empty() {
+            let (mut pose, mut rate) = (vec![0.0; axes.len()], vec![0.0; axes.len()]);
+            sim.machine.tool_state(&sim.state, &mut pose, &mut rate);
+            poses.push((0.0, pose, None));
+        }
+        let modes_along: Vec<(f64, Vec<f64>)> = poses
+            .iter()
+            .map(|(t, pose, held)| {
+                if let Some(held) = held {
+                    sim.machine.set_payload_attached(*held);
+                }
+                (*t, sim.machine.modes(pose).iter().map(|m| m.hz).collect())
+            })
+            .collect();
+        if let Some(held) = poses.last().and_then(|p| p.2) {
+            sim.machine.set_payload_attached(held);
+        }
+        let mut modes: Vec<f64> = modes_along.iter().flat_map(|(_, hz)| hz.iter().copied()).collect();
+        modes.sort_by(f64::total_cmp);
+        modes.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
         Self {
             ratings: drives.iter().map(|d| (d.rated_torque, d.peak_torque)).collect(),
             drives,
-            modes: sim.machine.modes(&pose).iter().map(|m| m.hz).collect(),
+            modes,
+            modes_along,
             ..self
         }
     }
@@ -275,13 +317,7 @@ impl Run {
         match channel.quantity.signal() {
             Some(name) => self.column(&format!("motor.{}.{name}", self.motors.get(channel.motor)?)).map(Cow::Borrowed),
             None => {
-                let errors: Vec<&[f64]> = self
-                    .signals
-                    .iter()
-                    .zip(&self.columns)
-                    .filter(|(s, _)| s.id.starts_with("axis.") && s.id.ends_with(".following_error") && s.unit == "m")
-                    .map(|(_, c)| c.as_slice())
-                    .collect();
+                let errors = self.tool_errors();
                 (!errors.is_empty()).then(|| {
                     Cow::Owned(
                         (0..self.time().len())
@@ -291,6 +327,32 @@ impl Run {
                 })
             }
         }
+    }
+
+    /// Per axis in metres the tool's position error, the plan now less the actual position (`charts::axis_errors`, as
+    /// the Views tab and the analysis have it); a run without setpoints gets the drives' following errors instead
+    /// (`tool_error_is_motor_side`).
+    fn tool_errors(&self) -> Vec<Cow<'_, [f64]>> {
+        // The encoder-side following error misses belt stretch and compliance; the plan less the position does not.
+        let real: Vec<Cow<[f64]>> =
+            charts::axis_errors(&self.signals, &self.columns, "m").into_iter().map(|(e, _)| Cow::Owned(e)).collect();
+        if !real.is_empty() {
+            return real;
+        }
+        let signals = self.signals.iter().zip(&self.columns);
+        signals
+            .filter(|(s, _)| s.id.starts_with("axis.") && s.id.ends_with(".following_error") && s.unit == "m")
+            .map(|(_, c)| Cow::Borrowed(c.as_slice()))
+            .collect()
+    }
+
+    /// Whether the tool's error of this run is only the drives' following error (no setpoint signals to compare).
+    pub fn tool_error_is_motor_side(&self) -> bool {
+        let real = self
+            .signals
+            .iter()
+            .any(|s| s.id.starts_with("axis.") && s.id.ends_with(".position_setpoint") && s.unit == "m");
+        !real && !self.tool_errors().is_empty()
     }
 
     /// The channels this run has, motor after motor in the order of `Quantity::ALL`, then the tool's error.
@@ -617,4 +679,28 @@ pub fn scaled_speeds(chart: &TorqueSpeed, factor: f64) -> TorqueSpeed {
     let scale =
         |lines: &[Vec<[f64; 2]>; 2]| lines.clone().map(|line| line.into_iter().map(|[w, t]| [w * factor, t]).collect());
     TorqueSpeed { peak: scale(&chart.peak), s1: scale(&chart.s1), voltage: scale(&chart.voltage), ..chart.clone() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A belt axis stands 0.9 mm behind its setpoint at the tool while its encoder-side following error is 0.1 mm:
+    /// the tool error is setpoint minus position, 1.0000 - 0.9991 = 0.9 mm, not the 0.1 mm; without setpoint signals
+    /// it is the following error, and says so.
+    #[test]
+    fn the_tool_error_is_setpoint_minus_position_not_the_motor_side_error() {
+        let run = |ids: &[&str], row: &[f64]| {
+            let signals = ids.iter().map(|id| SignalInfo::new(*id, "owner", "quantity", "m")).collect();
+            Run::from_rows("run".into(), RunKind::Live, "m", signals, &[], [row])
+        };
+        let tool = Channel { quantity: Quantity::ToolError, motor: 0 };
+        let full = run(
+            &["time", "axis.x.position", "axis.x.position_setpoint", "axis.x.following_error"],
+            &[0.0, 0.9991, 1.0, 0.0001],
+        );
+        assert!((full.channel(tool).unwrap()[0] - 0.0009).abs() < 1e-12 && !full.tool_error_is_motor_side());
+        let bare = run(&["time", "axis.x.following_error"], &[0.0, 0.0001]);
+        assert!((bare.channel(tool).unwrap()[0] - 0.0001).abs() < 1e-12 && bare.tool_error_is_motor_side());
+    }
 }

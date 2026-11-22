@@ -123,10 +123,18 @@ fn records_and_bounds_by_hand() {
     sim_wasm::record(&part.turned(std::f64::consts::FRAC_PI_2), &mut out);
     let strip = Part::new("belt", Shape::Segment { to: [3.0, 0.0, 4.0], width: 0.02 }, [0.0; 3], [0.1, 0.1, 0.1]);
     sim_wasm::record(&strip, &mut out);
-    let expected: [[f32; 20]; 2] = [
+    // A wheel of radius 0.1 m and length 0.03 m drawn upright at (1, -3, 2), laid flat: at (1, 2, 3), its axis (the
+    // mesh's y column) along -z, its x column along x and its z column along +y.
+    let mut wheel =
+        Part::new("idler", Shape::Cylinder { radius: 0.1, length: 0.03 }, [1.0, -3.0, 2.0], [0.5, 0.5, 0.5]);
+    wheel.lay_flat();
+    sim_wasm::record(&wheel, &mut out);
+    let expected: [[f32; 20]; 3] = [
         [0.0, 0.0, 0.0, 0.2, 0.0, 0.0, 0.4, 0.0, 0.0, -0.6, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 1.0, 0.5, 0.5, 0.5],
         [0.0, 3.0, 0.0, 4.0, 0.0, 0.0, 0.02, 0.0, 0.0, -0.0032, 0.0, 0.0024, 0.0, 1.5, 0.0, 2.0, 1.0, 0.1, 0.1, 0.1],
+        [1.0, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, -0.03, 0.0, 0.0, 0.2, 0.0, 0.0, 1.0, 2.0, 3.0, 1.0, 0.5, 0.5, 0.5],
     ];
+    assert_eq!(out.len(), 3 * sim_wasm::RECORD);
     for (got, want) in out.as_chunks::<{ sim_wasm::RECORD }>().0.iter().zip(expected) {
         assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "{got:?}");
     }
@@ -205,6 +213,136 @@ fn machine_files_are_listed_handed_in_and_run() {
     let line = broken.lines().position(|l| l.starts_with("no_such_key")).unwrap() + 1;
     let error = handle(4, &format!("broken.toml\nen\n{broken}")).unwrap_err();
     assert!(error.contains(&format!("broken.toml:{line}")) && error.contains("no_such_key"), "{error}");
+}
+
+/// A JSON machine file is read as the same machine as its TOML text (`sim_machines::json_to_toml` converts it): the same
+/// sizing check; a broken one is refused with its file name.
+#[test]
+fn a_json_machine_file_is_the_same_machine() {
+    let text = include_str!("../../../machines/single-axis.toml");
+    let value: toml::Value = toml::from_str(text).unwrap();
+    let as_json = serde_json::to_string(&value).unwrap();
+    let loaded = handle(4, &format!("mine.json\nen\n{as_json}")).unwrap();
+    assert!(loaded.starts_with("{\"id\":\"upload:mine.json\""), "{loaded}");
+    assert_eq!(handle(2, "upload:mine.json\nen\n").unwrap(), handle(2, "file:single-axis.toml\nen\n").unwrap());
+    assert!(handle(4, "broken.json\nen\n{\"machine\": ").unwrap_err().contains("line"));
+}
+
+/// The scopes of a path's run: one row a millisecond from the start of the path to 0.3 s after its end, time from 0.
+#[test]
+fn scopes_of_a_path_run_to_its_end() {
+    let entry = sim_machines::MACHINES[1];
+    let path = "line,0.5\nline,0.2\n";
+    let answer = json(&handle(10, &format!("{}\nen path\n\n---\n{path}", entry.id)).unwrap());
+    let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+    let end = sim.plan_path(&sim_components::path::parse(path).unwrap(), false).unwrap().last().unwrap().0;
+    let time = answer["time"].as_array().unwrap();
+    // The last row is the last whole millisecond within the path and the rest, and the first is the first one.
+    let (first, last) = (time[0].as_f64().unwrap(), time.last().unwrap().as_f64().unwrap());
+    assert!((first - 1e-3).abs() < 1e-9 && (last - (end + 0.3)).abs() < 2e-3, "{first} {last} {end}");
+    assert!(answer["motors"][0]["data"][1].as_array().unwrap().iter().any(|v| v.as_f64().is_some_and(|v| v != 0.0)));
+}
+
+/// A fit without a trace or a sweep says so.
+#[test]
+fn fit_wants_a_trace_or_a_sweep() {
+    assert!(handle(6, &format!("{}\nen\n\n---\n\n%%%\n\n%%%\n", first())).is_err());
+}
+
+/// The fit's rows (quantity, of, fitted) of the page's answer.
+fn fitted_rows(answer: &str) -> Vec<(String, String, Option<f64>)> {
+    let rows = json(answer)["rows"].as_array().unwrap().clone();
+    rows.iter()
+        .map(|r| (r[0].as_str().unwrap().to_string(), r[1].as_str().unwrap().to_string(), r[3].as_f64()))
+        .collect()
+}
+
+/// A vendor export through its mapping file, the dataset `example-synthetic-belt-axis` as `sim-cli fit --map` reads it:
+/// the page fits what `import` and `fit_rigid` fit, number for number, and with the option `stiffness` adds the
+/// stiffness rows of `fit_move_stiffness` on the same trace (or refuses with its message where its moves do not ring).
+#[test]
+fn a_vendor_export_is_fitted_through_its_mapping_file() {
+    use sim_components::identify::{BELT_STIFFNESS_KEY, fit_move_stiffness, fit_rigid};
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../datasets/example-synthetic-belt-axis/");
+    let (trace, map) = (
+        std::fs::read_to_string(format!("{dir}trace.csv")).unwrap(),
+        std::fs::read_to_string(format!("{dir}map.toml")).unwrap(),
+    );
+    // The machine the dataset was recorded on, by its own dataset.toml (the tests name no machine).
+    let dataset: toml::Value = toml::from_str(&std::fs::read_to_string(format!("{dir}dataset.toml")).unwrap()).unwrap();
+    let entry = sim_machines::find(dataset["machine"]["simulator"].as_str().unwrap()).unwrap();
+    let mut cfg = entry.config();
+    cfg.set_text("effects.payload = false").unwrap();
+    let request = |options: &str| {
+        format!("{}\nen{options}\n{}\n---\n{trace}\n%%%\n{map}\n%%%\n", entry.id, cfg.to_text().unwrap())
+    };
+    let rows = fitted_rows(&handle(6, &request("")).unwrap());
+    let resolved = sim_components::catalog::resolve(entry, &cfg).unwrap();
+    let imported =
+        sim_components::import::import(&trace, &sim_components::import::Mapping::parse(&map).unwrap()).unwrap().trace;
+    let own = fit_rigid(entry, &resolved, &imported).unwrap()[0].clone().unwrap();
+    // The rigid values, then the friction beyond its sliding level the trace shows, as `sim-cli fit` writes them.
+    let rigid = ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"];
+    let expected: Vec<(&str, Option<f64>)> = (rigid.iter().zip(own.fitted).map(|(q, v)| (*q, Some(v))))
+        .chain(own.details.iter().map(|d| (d.quantity, Some(d.fitted))))
+        .collect();
+    assert!(own.payload_steps.is_empty() && !own.details.is_empty(), "{own:?}");
+    assert_eq!(rows.iter().map(|r| (r.0.as_str(), r.2)).collect::<Vec<_>>(), expected);
+    // The run had no payload: the fitted mass is the config's moved mass within the fit's error.
+    assert!((own.fitted[0] - own.config[0]).abs() < 3.0 * own.error[0].max(1e-3 * own.config[0]), "{own:?}");
+    match fit_move_stiffness(entry, &resolved, &imported, BELT_STIFFNESS_KEY) {
+        Ok(fit) => {
+            let rows = fitted_rows(&handle(6, &request(" stiffness")).unwrap());
+            assert_eq!(
+                rows[expected.len()..expected.len() + 3].iter().map(|r| r.2).collect::<Vec<_>>(),
+                [Some(fit.factor), Some(fit.ringing), Some(fit.residual)]
+            );
+            assert_eq!(rows[expected.len()].1, BELT_STIFFNESS_KEY);
+        }
+        Err(e) => assert!(handle(6, &request(" stiffness")).unwrap_err().contains(&e.detail), "{}", e.detail),
+    }
+}
+
+/// A measured sweep in the page's fit is `fit_sweep` of it: the config's own sweep of the first machine whose first motor
+/// has a resonance dip between 50 and 130 Hz (as `sim-cli fit --sweep` is tested) gives the config's resonance back to
+/// 1e-3, and the page's numbers are the library's.
+#[test]
+fn a_measured_sweep_is_fitted_in_the_page() {
+    use sim_components::analysis::{frequency_sweep, log_spaced};
+    let frequencies = log_spaced(50.0, 130.0, 30);
+    let (entry, cfg, points) = sim_machines::MACHINES
+        .iter()
+        .find_map(|entry| {
+            let mut cfg = entry.config();
+            if cfg.bool("effects.gearbox_lost_motion").is_ok() {
+                cfg.set_text("effects.gearbox_lost_motion = false").unwrap();
+            }
+            let points = frequency_sweep(entry, &cfg, 0, &frequencies, 1.5).ok()?;
+            sim_components::identify::resonance(&points).map(|_| (*entry, cfg, points))
+        })
+        .expect("a machine with a dip");
+    let csv: String = std::iter::once("frequency_hz,gain_rad_s_per_nm".to_string())
+        .chain(points.iter().map(|p| format!("{:?},{:?}", p.frequency, p.gain)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let answer = handle(
+        6,
+        &format!("{}\nen motor=0 amplitude=1.5\n{}\n---\n\n%%%\n\n%%%\n{csv}", entry.id, cfg.to_text().unwrap()),
+    )
+    .unwrap();
+    let rows = fitted_rows(&answer);
+    let measured = sim_components::identify::parse_sweep(&csv).unwrap();
+    let resolved = sim_components::catalog::resolve(entry, &cfg).unwrap();
+    let shared = sim_components::identify::fit_sweep(entry, &resolved, 0, &measured, 1.5).unwrap().unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        ["resonance_hz", "resonance_damping"],
+        "{}",
+        entry.id
+    );
+    assert_eq!((rows[0].2, rows[1].2), (Some(shared.fitted.frequency), Some(shared.fitted.damping)));
+    assert!((shared.fitted.frequency / shared.config.frequency - 1.0).abs() < 1e-3, "{}: {answer}", entry.id);
+    assert!(handle(6, &format!("{}\nen motor=7\n\n---\n\n%%%\n\n%%%\n{csv}", entry.id)).is_err());
 }
 
 /// The second machine's path from 0.1 m (its start pose) to 0.5 m and back to 0.2 m: the sizing check of the path is
@@ -325,8 +463,8 @@ fn sizing_has_the_columns_of_analyze() {
 }
 
 /// By hand from the first machine's motor 0 drive: the curve starts and ends at the no-load speed backwards, passes 0 rad/s
-/// at the peak torque both ways, has the rated speed both ways as corners, and the S1 box has the rated torque at
-/// ± the rated speed.
+/// at the peak torque both ways, has the rated speed both ways as corners, and the S1 outline is the app's S1 line
+/// (`charts::torque_speed`), closed: the verdict's S1 torque at standstill and at the rated speed, both ways.
 #[test]
 fn torque_speed_curve_by_hand() {
     let entry = sim_machines::MACHINES[0];
@@ -340,8 +478,10 @@ fn torque_speed_curve_by_hand() {
     for s in [drive.rated_speed, -drive.rated_speed] {
         assert!(curve.iter().any(|p| p.0 == s), "{s}");
     }
-    let (r, t) = (drive.rated_speed, drive.rated_torque);
-    assert_eq!(s1, [(-r, t), (r, t), (r, -t), (-r, -t), (-r, t)]);
+    assert_eq!(s1.first(), s1.last());
+    let line = sim_components::charts::torque_speed(drive, drive.bus_voltage).s1;
+    assert_eq!(s1.len(), 2 * line[0].len() + 1);
+    assert!(s1.contains(&(0.0, drive.s1_torque(0.0))) && s1.contains(&(0.0, -drive.s1_torque(0.0))), "{s1:?}");
 }
 
 /// The page's sweep is `frequency_sweep` at the same frequencies: 3 from 10 Hz to 1000 Hz are 10, 100 and 1000 Hz.
@@ -434,6 +574,21 @@ fn scopes_are_the_recorded_pass() {
         }
     }
     assert!(handle(10, "no-such-machine\nen\n").is_err());
+}
+
+/// A linear motor's numbers are in N and m/s wherever the page reads them: the sizing's per-motor units, the motor-speed
+/// verdict's label, and the scopes' units.
+#[test]
+fn a_linear_motor_is_in_newtons_and_metres_per_second() {
+    let sizing = json(&handle(2, "linear-motor-axis\nen\n").unwrap());
+    let motor = &sizing["motors"][0];
+    assert!(motor["torque_unit"] == "N" && motor["speed_unit"] == "m/s", "{motor}");
+    let speed =
+        sizing["verdicts"].as_array().unwrap().iter().find(|v| v["check"] == "motor-speed").expect("motor-speed");
+    assert!(speed["label"].as_str().unwrap().contains("[m/s]"), "{speed}");
+    let scopes = json(&handle(10, "linear-motor-axis\nen\n").unwrap());
+    let units = |i: usize| scopes["signals"][i]["units"][0].as_str().unwrap().to_string();
+    assert_eq!((units(0), units(1), units(2)), ("m".into(), "m/s".into(), "N".into()));
 }
 
 /// The form offers every number of the config with its label, and the catalogue's names for the parts: the motors of

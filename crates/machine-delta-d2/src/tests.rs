@@ -79,8 +79,10 @@ fn centre_by_hand(d: &Delta2, z: f64) -> (f64, f64) {
 
 /// Static hold at the centre, 100 mm below the top: the plate's weight shares out evenly. By hand (default config):
 /// e = 0.1 m, t = 1.4290 degrees, dz/dt per arm = -0.20503 m/rad, m_nt = 1.0 + 5 + 2 (1/3) 0.6 = 6.4 kg, m_LG =
-/// 1.2 * 0.2 + 0.4 (0.4 + 2/3 0.6) = 0.560 kg m. Each gearbox holds -(g m_LG cos t) + m_nt g dz/dt = -5.490 - 12.868
-/// = -18.358 N m (negative: the arm is held up), the motor that over 20: -0.9179 N m.
+/// 1.2 * 0.2 + 0.4 (0.4 + 2/3 0.6) = 0.560 kg m for the inertia. The weight splits a forearm half and half (a rod's
+/// mass is at its middle): m_LG,w = 1.2 * 0.2 + 0.4 (0.4 + 0.3) = 0.520 kg m, m_w = 1.0 + 5 + 0.6 = 6.6 kg. Each gearbox
+/// holds -(g m_LG,w cos t) + m_w g dz/dt = -5.098 - 13.270 = -18.368 N m (negative: the arm is held up), the motor
+/// that over 20: -0.9184 N m.
 #[test]
 fn the_holding_torque_at_the_centre_is_the_plates_weight_shared_out_and_the_arms_own() {
     let d = delta(&["effects.torque_ripple = false"]);
@@ -89,7 +91,8 @@ fn the_holding_torque_at_the_centre_is_the_plates_weight_shared_out_and_the_arms
     let (m_nt, m_lg) = (1.0 + 5.0 + 0.6 / 3.0 * 2.0, 1.2 * 0.2 + 0.4 * (0.4 + 0.6667 * 0.6));
     close(m_nt, d.m_nt(), 1e-3, "m_nt");
     close(m_lg, d.arm_moment(), 1e-12, "m_LG");
-    let by_hand = -G * m_lg * t.cos() + m_nt * G * dz;
+    let (m_lg_w, m_w) = (1.2 * 0.2 + 0.4 * (0.4 + 0.3), 1.0 + 5.0 + 0.6);
+    let by_hand = -G * m_lg_w * t.cos() + m_w * G * dz;
     println!(
         "centre: t = {:.4} deg, dz/dt per arm {dz:.5} m/rad, holding {by_hand:.4} N m at each gearbox",
         t.to_degrees()
@@ -100,19 +103,45 @@ fn the_holding_torque_at_the_centre_is_the_plates_weight_shared_out_and_the_arms
         close(state[k], t, 1e-9, "arm angle");
         close(torque[k], by_hand / 20.0, 1e-4, "motor torque");
     }
-    assert!((t.to_degrees() - 1.4290).abs() < 1e-3 && (by_hand + 18.358).abs() < 0.002, "{by_hand} N m");
+    assert!((t.to_degrees() - 1.4290).abs() < 1e-3 && (by_hand + 18.368).abs() < 0.002, "{by_hand} N m");
+}
+
+/// The forearms are rods: their momentum and first moment are their mass at their middles, as their weight is, whatever
+/// share of their inertia the lumped model puts at the elbow. Along a motion the potential energy changes as -g . dc/dt
+/// (`testkit::weight_is_at_the_first_moment`), and at the centre 100 mm below the top 0.1 kg more on each forearm pair
+/// moves the first moment by 0.1 kg times the sum of the rods' middles (elbow at +-(R + L_a cos t), -L_a sin t, plate
+/// joint at +-r, z): x cancels, z = 0.1 (z - L_a sin t) = 0.1 (-0.5 - 0.4 sin 1.4290 deg) = -0.050998 kg m. With the
+/// inertia's share 2/3 at the elbow it took 0.2 (2/3 (-0.009976) + 1/3 (-0.5)) = -0.034664 kg m.
+#[test]
+fn the_forearms_momentum_and_first_moment_are_at_their_middles() {
+    for share in ["mass.forearm_elbow_share = 0.6667", "mass.forearm_elbow_share = 0.5"] {
+        sim_core::testkit::weight_is_at_the_first_moment(&delta(&[share]));
+        let z = -0.5;
+        let moment = |m: &str| {
+            let d = delta(&[share, m]);
+            let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
+            d.equilibrium(&[0.0, z], &mut state, &mut torque);
+            d.frame_momentum(&state).unwrap().first_moment
+        };
+        let (a, b) = (moment("mass.forearm_pair_kg = 0.6"), moment("mass.forearm_pair_kg = 0.7"));
+        let d = delta(&[]);
+        let (t, _) = centre_by_hand(&d, z);
+        let by_hand = 0.1 * (z - d.legs().la * t.sin());
+        close(b[2] - a[2], by_hand, 1e-9, "the first moment's height per 0.1 kg of forearm");
+        assert!((b[0] - a[0]).abs() < 1e-12 && (by_hand + 0.050998).abs() < 1e-6, "{by_hand}");
+    }
 }
 
 /// Static hold at the edge, x = 0.4 m, 100 mm below the top: by the Jacobian's transpose with the Jacobian from central
-/// differences of the forward kinematics (not the machine's own), tau_k = -g m_LG cos t_k + m_nt g dz/dt_k, at each
-/// gearbox. The arm on the far side (arm 2, at 62.5 degrees) carries little: -25.43 N m on arm 1 (at -29.7 degrees),
-/// -4.19 N m on arm 2 (by hand with the script of the hand calculation, the same sum).
+/// differences of the forward kinematics (not the machine's own), tau_k = -g m_LG,w cos t_k + m_w g dz/dt_k (weights
+/// as above), at each gearbox. The arm on the far side (arm 2, at 62.5 degrees) carries little: -25.73 N m on arm 1
+/// (at -29.7 degrees), -4.06 N m on arm 2 (by hand with the script of the hand calculation, the same sum).
 #[test]
 fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose() {
     let d = delta(&["effects.torque_ripple = false"]);
     let p = [0.4, -0.5];
     let t = d.legs().inverse(p).unwrap();
-    let m_lg = 1.2 * 0.2 + 0.4 * (0.4 + 0.6667 * 0.6);
+    let (m_lg, m_w) = (1.2 * 0.2 + 0.4 * (0.4 + 0.3), 1.0 + 5.0 + 0.6);
     let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
     d.equilibrium(&p, &mut state, &mut torque);
     let mut by_hand = [0.0; 2];
@@ -121,11 +150,11 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
         up[k] += 1e-6;
         down[k] -= 1e-6;
         let dz = (d.legs().forward(up).unwrap()[1] - d.legs().forward(down).unwrap()[1]) / 2e-6;
-        by_hand[k] = -G * m_lg * t[k].cos() + d.m_nt() * G * dz;
+        by_hand[k] = -G * m_lg * t[k].cos() + m_w * G * dz;
         close(torque[k] * 20.0, by_hand[k], 1e-6, "gearbox torque");
     }
     println!("edge: {by_hand:?} N m at {:?} degrees", t.map(f64::to_degrees));
-    assert!((by_hand[0] + 25.43).abs() < 0.01 && (by_hand[1] + 4.19).abs() < 0.01, "{by_hand:?}");
+    assert!((by_hand[0] + 25.73).abs() < 0.01 && (by_hand[1] + 4.06).abs() < 0.01, "{by_hand:?}");
     // The rigid model held there stays put; so does the elastic one.
     for elastic in [false, true] {
         let d = delta(&[&format!("effects.joint_elasticity = {elastic}")]);
@@ -270,9 +299,10 @@ fn the_condition_number_is_the_ratio_of_the_singular_values() {
 
 /// Held by constant torques (the holding torques of the pose), the stiffness of the potential gravity less torque
 /// times angle, by second differences, in the symmetric mode (both arms together, the plate up and down) a + b and the
-/// sideways mode a - b of [[a, b], [b, a]]. At the middle of the default range, 638.5 mm down: a + b = -3.49 N m/rad,
-/// unstable; at 788.5 mm, the standard suite's middle, +7.52; a - b = 13.47 and 18.86, stable (by hand with the
-/// script of the hand calculation: the same potential, V = m_nt g z - g m_LG (sin t_1 + sin t_2)).
+/// sideways mode a - b of [[a, b], [b, a]]. At the middle of the default range, 638.5 mm down: a + b = -3.778 N m/rad,
+/// unstable; at 788.5 mm, the standard suite's middle, +7.428; a - b = 13.714 and 19.125, stable (by hand with a
+/// script of the same potential, V = m_nt g z - g m_LG (sin t_1 + sin t_2), the forearms' weight a half at each end:
+/// m_nt = 1 + 5 + 0.6 = 6.6 kg, m_LG = 1.2 * 0.2 + 0.4 (0.4 + 0.3) = 0.52 kg m; the plate from the two circles).
 #[test]
 fn the_vertical_mode_under_constant_torques_is_unstable_high_up() {
     let mut cfg = lossless_config();
@@ -301,8 +331,8 @@ fn the_vertical_mode_under_constant_torques_is_unstable_high_up() {
     };
     let ((up, side_up), (down, side_down)) = (stiffness(-0.6385), stiffness(-0.7885));
     println!("638.5 mm: {up:.3}, {side_up:.3}; 788.5 mm: {down:.3}, {side_down:.3} N m/rad");
-    assert!((up + 3.49).abs() < 0.05 && (down - 7.52).abs() < 0.05, "{up} {down}");
-    assert!((side_up - 13.47).abs() < 0.05 && (side_down - 18.86).abs() < 0.05, "{side_up} {side_down}");
+    assert!((up + 3.778).abs() < 0.005 && (down - 7.428).abs() < 0.005, "{up} {down}");
+    assert!((side_up - 13.714).abs() < 0.005 && (side_down - 19.125).abs() < 0.005, "{side_up} {side_down}");
 }
 
 /// The feedforward with the speed is the rigid, loss-free model's torque: given it at a pose where the plate moves at

@@ -32,10 +32,10 @@ fn the_reversal_error_takes_the_gearbox_backlash() {
 
 /// The screw axis standing up (slide.incline_deg 90) with no friction, no efficiency loss and no ripple: the encoder
 /// holds the motor at the target and the carriage sags by its weight over the drive's stiffness, from either side.
-/// Weight 25 kg * 9.81 = 245.25 N. Screw (root 21.2 mm, A = 3.530e-4 m^2, E A = 7.272e7 N, over its whole 1 m: the
-/// model takes the softest place for the stroke) in series with nut 4e8 and bearings 7.5e8 N/m: 1.7585e-8 m/N;
-/// coupling 9000 N m/rad seen at the nut over (lead / 2 pi)^2 = (3.1831e-3 m)^2: 1.1258e-9 m/N; together 1.8711e-8
-/// m/N, a sag of 4.589 um.
+/// Weight 25 kg * 9.81 = 245.25 N. Screw (root 21.2 mm, A = 3.530e-4 m^2, E A = 7.272e7 N, over its whole 1 m: with
+/// effects.screw_stiffness_with_position off, the softest place for the stroke) in series with nut 4e8 and bearings
+/// 7.5e8 N/m: 1.7585e-8 m/N; coupling 9000 N m/rad seen at the nut over (lead / 2 pi)^2 = (3.1831e-3 m)^2: 1.1258e-9
+/// m/N; together 1.8711e-8 m/N, a sag of 4.589 um.
 #[test]
 fn a_vertical_screw_sags_by_its_load_over_its_stiffness() {
     let mut cfg = config("screw-axis", "", "");
@@ -45,6 +45,7 @@ fn a_vertical_screw_sags_by_its_load_over_its_stiffness() {
         ("effects.motor_friction", false),
         ("effects.gearbox_mesh_friction", false),
         ("effects.torque_ripple", false),
+        ("effects.screw_stiffness_with_position", false),
     ] {
         cfg = cfg.with(key, on);
     }
@@ -128,6 +129,41 @@ fn the_test_runs_on_the_axes_the_gantry_and_the_delta() {
             });
         }
     });
+}
+
+/// A machine without an axis in m (the rotary table, in rad) is judged against the `_rad` ratings and never against a
+/// metre limit: its accuracy of some 5e-6 rad (4.58e-6 in the audit's run) passes 1e-4 rad, while metre limits of a
+/// nanometre, which the rad figures would fail, give no verdict.
+#[test]
+fn a_rotary_axis_is_judged_in_rad() {
+    let ratings = "
+[ratings]
+max_positioning_error_rad = 1.0e-4
+max_repeatability_rad = 1.0e-4
+                   max_positioning_error_m = 1.0e-9
+max_repeatability_m = 1.0e-9
+";
+    let entry = sim_machines::find("rotary-table").unwrap();
+    let cfg = load_config(
+        entry,
+        &entry.default_config.replacen(
+            "
+[ratings]",
+            ratings,
+            1,
+        ),
+    )
+    .unwrap();
+    let s = run("rotary-table", &cfg, 2, 1);
+    let accuracy = s.axes.iter().map(|a| a.accuracy).fold(0.0, f64::max);
+    println!("rotary table: accuracy {accuracy:e} rad, {:?}", s.verdicts);
+    assert!(accuracy > 0.0 && accuracy < 1e-4, "{accuracy} rad");
+    assert_eq!(s.verdicts.len(), 2, "{:?}", s.verdicts);
+    for v in &s.verdicts {
+        assert!(v.limit == 1e-4 && v.ok, "{v:?}");
+    }
+    let found = s.verdicts.iter().find(|v| v.check == "positioning-accuracy").unwrap();
+    assert_eq!(found.value, accuracy);
 }
 
 trait With {

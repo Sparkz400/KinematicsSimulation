@@ -125,6 +125,14 @@ process_force = true
 # The press frame stretches under the press force, a spring in series with the work (frame.stretch_stiffness_n_m): read
 # by the toggle press alone, which has the key.
 frame_stretch = true
+# The indexing table's twist on its shaft as a joint of its own (table.stiffness_nm_rad, table.damping_ratio), so that the ring
+# acts back on the driver: read by the two indexers alone. Off: the ring is worked out beside the dynamics.
+table_twist = false
+# The disc cam's follower may leave the disc where the contact force would go below zero: its gap to the cam is a joint of its
+# own with a one-sided contact spring and damper (follower.roller_width_m, follower.contact_damping_ratio) and the
+# guide's friction (follower.guide_friction_n), flying under its spring and weight until it meets the disc again. Read by
+# the disc cam alone. Off: the roller stays on the disc.
+follower_lift_off = false
 velocity_feedforward = true
 torque_feedforward = true
 # The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),

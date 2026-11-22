@@ -1304,3 +1304,21 @@ fn at_1280_by_720_the_panels_keep_their_widths_and_the_view_stays_free() {
         assert!((view_free(&d) - folded).abs() < 1e-3, "{lang}: folded again, {} free", view_free(&d));
     }
 }
+
+/// A wheel drawn upright has the cylinder mesh's axis (Bevy's y) along the scene's depth (Bevy's z); laid flat
+/// (`Part::lay_flat`), along the scene's z, Bevy's y; a turned spoke laid flat turns about that axis, from +x towards
+/// the scene's +y (Bevy's -z): a quarter turn takes its long side to Bevy's -z.
+#[test]
+fn a_wheel_laid_flat_faces_up() {
+    let wheel = Part::new("idler", Shape::Cylinder { radius: 0.1, length: 0.03 }, [0.0; 3], [0.5; 3]);
+    let axis = |part: &Part| part_transform(part).rotation * Vec3::Y;
+    assert!(axis(&wheel).abs().abs_diff_eq(Vec3::Z, 1e-6), "{}", axis(&wheel));
+    let mut flat = wheel.clone();
+    flat.lay_flat();
+    assert!(axis(&flat).abs().abs_diff_eq(Vec3::Y, 1e-6), "{}", axis(&flat));
+    let mut spoke = Part::new("idler-bar", Shape::Box { size: [0.2, 0.004, 0.02] }, [0.0; 3], [0.9; 3])
+        .turned(std::f64::consts::FRAC_PI_2);
+    spoke.lay_flat();
+    let long = part_transform(&spoke).rotation * Vec3::X;
+    assert!(long.abs_diff_eq(Vec3::NEG_Z, 1e-6), "{long}");
+}

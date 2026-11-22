@@ -2,7 +2,7 @@
 //! per motor. It works on any machine through the machine interface.
 
 use crate::conveyor::{Conveyor, Pass};
-use crate::drive::{Drive, DriveMode, DriveParams, WINDING_STATES, quantise, shared_dc_link};
+use crate::drive::{Drive, DriveMode, DriveParams, Motor, WINDING_STATES, quantise, shared_dc_link};
 use crate::fault::{self, Fault, Monitor, Watch};
 use crate::path::{self, Piece};
 use crate::profile::{MotionLaw, Move, Shape};
@@ -25,6 +25,10 @@ pub enum Command {
     /// A path given as poses at times (seconds from its start, the first at 0 and at the present
     /// setpoint, the last at rest). The controller runs a smooth curve through them.
     Trajectory(Vec<(f64, Vec<f64>)>),
+    /// `Trajectory` with the speed and acceleration at every point given (`trace::replay` of a trace that carries the
+    /// tool's setpoints): a quintic through them (Hermite interpolation of position, speed and acceleration), so that at
+    /// the points the setpoints are exactly those given.
+    RatedTrajectory(Vec<(f64, Vec<f64>)>, Vec<Vec<f64>>, Vec<Vec<f64>>),
     /// Switch the drives off: no torque, and a move or cycle under way is dropped. Machines with holding
     /// brakes engage them. Until `Enable`, every other command is refused.
     Disable,
@@ -107,6 +111,39 @@ struct ShaperMode {
     axes: Vec<bool>,
 }
 
+/// The fastest the delays of a shaper change while its period goes over to the one of a changed machine (a payload
+/// gripped or let go): a tenth of the time passing. Each copy of the plan then runs at 0.9 to 1.1 times the plan's pace.
+const SHAPER_RAMP_RATE: f64 = 0.1;
+
+/// The motion that made the planned setpoints from the profile tick `first` on, its start ticks as it took them (on a
+/// conveyor with its pass and the simulated time at `first`, on a cam with the machine's cam curve then): the input
+/// shaper reads the plan off it between two cycles. `key` tells it from the one before without comparing their curves
+/// (`plan_key`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct Plan {
+    first: u64,
+    key: [u64; 4],
+    motion: Motion,
+    pass: Option<(Pass, f64)>,
+    #[serde(skip)]
+    cam: KeptCurve,
+    /// Noted after a changed config: the profile tick, between two cycles, from which it holds, the moment of the
+    /// change. Before it the plan noted before holds, also in the cycle that ends with `first`.
+    #[serde(default)]
+    from: Option<f64>,
+}
+
+/// A cam's curve kept with a `Plan` (`Machine::cam_curve`), shared with every copy of the controller. A closure is not
+/// saved with the controller's state: a plan read back from it reads the machine's cam as it is then.
+#[derive(Clone, Default)]
+struct KeptCurve(Option<sim_core::CamCurve>);
+
+impl std::fmt::Debug for KeptCurve {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "KeptCurve(Some)" } else { "KeptCurve(None)" })
+    }
+}
+
 /// The path of a cycle segment through its via points (`via` in `[[cycle.segment]]`): a line to the first, a smooth
 /// curve (`Piece::Spline`) through the others, and a line from the last to the target. So the path leaves its start and
 /// arrives at its target on straight lines, and rounds the corners in between: with via points straight above the start
@@ -168,6 +205,8 @@ enum Motion {
     Trajectory {
         points: Vec<(f64, Vec<f64>)>,
         speeds: Vec<Vec<f64>>,
+        /// Given (`Command::RatedTrajectory`): the accelerations at the points, and a quintic in place of the cubic.
+        accelerations: Option<Vec<Vec<f64>>>,
         start_tick: u64,
     },
     /// A category 2 stop (`StopCategory::Two`): from `from` at the speeds `vel`, every axis decelerating evenly to rest in
@@ -194,10 +233,17 @@ pub struct Controller {
     /// How long before the end of a segment the next one may start; 0 with blending off.
     blend_time: f64,
     /// For a path timed as fast as the motors allow: the share of the torque limits it may use
-    /// (`profile.torque_reserve`), the belt tensions it may need (`ratings.belt_min_tension_n`, `belt_max_tension_n` less
-    /// `profile.tension_margin_n` on both; unbounded where the config has none) and the share of the room to them
+    /// (`profile.torque_reserve`), the belt tensions it may need (`ratings.belt_min_tension_n`, `belt_max_tension_n`, or the machine's
+    /// own `tension_band`, less `profile.tension_margin_n` on both; unbounded where the config has none) and the share of the room to them
     /// (`profile.tension_reserve`), each gearbox's output torque rating and the guides' load rating (`path::PlanLimits`).
     plan_limits: path::PlanLimits,
+    /// Each motor's DC link room above the bus, J (`dc_link_room`).
+    #[serde(default)]
+    dc_link_rooms: Vec<Option<f64>>,
+    /// Per motor where the machine's signals hold the friction its own model takes of that motor's torque at the
+    /// machine's state (`motor.<id>.torque_friction`, `TORQUE_PARTS`): what the torque-band monitor expects of friction.
+    #[serde(default)]
+    friction_signals: Vec<Option<usize>>,
     /// How far a planned path may leave its lines and arcs for transition curves (`path`) and to round a corner between
     /// two lines (`corner`).
     path_tolerance: path::Tolerance,
@@ -248,8 +294,25 @@ pub struct Controller {
     pending_shaper: Option<Option<Vec<ShaperMode>>>,
     /// How many cycles of `history` the shaper has needed so far.
     shaper_reach: usize,
-    /// The half periods, one per mode, the shaper used in the last cycle, kept while the plan stands still.
-    shaper_held: Option<Vec<f64>>,
+    /// Where the machine itself changed its modes (a payload gripped or let go), the shaper's half periods go over to
+    /// the new ones on a ramp: per change the half periods' step (old less new, cycles, one per mode), the tick it was
+    /// made at and the ramp's length in cycles (`shape`).
+    #[serde(default)]
+    shaper_ramps: Vec<(Vec<f64>, f64, f64)>,
+    /// The half periods the machine reported for the newest stored setpoint, to tell a change of the machine from
+    /// one of the pose.
+    #[serde(default)]
+    shaper_targets: Option<Vec<f64>>,
+    /// The motions that made the stored setpoints (`history`), oldest first.
+    #[serde(default)]
+    plans: std::collections::VecDeque<Plan>,
+    /// A config changed between two profile cycles: the moment, in profile ticks, from which the plan's next motion is
+    /// noted anew (`Plan::from`).
+    #[serde(default)]
+    plan_changed_at: Option<f64>,
+    /// The base step `update` ran last.
+    #[serde(default)]
+    base_step: u64,
     /// The motion law of moves (`profile.shape`, `deceleration_ratio`, `vertical_axis`, `up_acceleration_ratio`).
     law: MotionLaw,
     /// A trajectory's curve: the C2 cubic spline (`profile.trajectory_spline = "c2"`), or the Hermite cubic with the
@@ -260,6 +323,10 @@ pub struct Controller {
     /// acceleration, torque feedforward and friction feedforward from the machine's model (`Drive::friction_ff`).
     fieldbus_delay: usize,
     fieldbus: std::collections::VecDeque<(usize, Vec<[f64; 5]>)>,
+    /// Frames pushed so far, and the number of the one the drives hold: a late frame leaves them the old one, whose
+    /// setpoint the drive carries on from (`since_setpoint` runs on).
+    fieldbus_pushed: u64,
+    fieldbus_held: u64,
     /// Fieldbus jitter: a frame takes up to this many cycles more than the delay, drawn evenly from 0 to it per frame
     /// from its own pseudo-random stream; 0 with the jitter off.
     fieldbus_jitter: usize,
@@ -368,6 +435,31 @@ pub fn rigid_inertias(machine: &dyn Machine, pose: &[f64]) -> Vec<f64> {
         .collect()
 }
 
+/// Per motor the most jerk (motor units per s^3) the axes' jerk limits give it at a tool pose: sum over the axes of
+/// |d motor / d axis| times the axis's limit, the motor's travel per axis by central differences of the inverse
+/// kinematics (over 1e-6 of the axis's range). Linear at the pose: the speed and acceleration terms of a curved
+/// kinematics are left out, as the inertia of `rigid_inertias` is the pose's.
+pub(crate) fn motor_jerks(machine: &dyn Machine, pose: &[f64]) -> Vec<f64> {
+    let (axes, motors) = (machine.axes(), machine.motors().len());
+    let mut jerks = vec![0.0; motors];
+    let (mut ahead, mut behind) = (vec![0.0; motors], vec![0.0; motors]);
+    for (i, axis) in axes.iter().enumerate().take(pose.len()) {
+        let h = 1e-6 * (axis.max - axis.min).abs().max(1e-3);
+        let mut at = pose.to_vec();
+        at[i] = pose[i] + h;
+        machine.inverse(&at, &mut ahead);
+        at[i] = pose[i] - h;
+        machine.inverse(&at, &mut behind);
+        for k in 0..motors {
+            let per = (ahead[k] - behind[k]) / (2.0 * h);
+            if per.is_finite() {
+                jerks[k] += per.abs() * axis.max_jerk;
+            }
+        }
+    }
+    jerks
+}
+
 fn steps(cfg: &Config, path: &str, dt: f64) -> Result<u64> {
     let n = (cfg.positive(path)? / dt).round();
     // A loop cycle must be a whole number of base steps.
@@ -392,6 +484,8 @@ impl Controller {
             setpoint_ticks: 1,
             blend_time: 0.0,
             plan_limits: path::PlanLimits::new(1.0, [f64::NEG_INFINITY, f64::INFINITY, 1.0]),
+            dc_link_rooms: Vec::new(),
+            friction_signals: Vec::new(),
             path_tolerance: path::Tolerance::default(),
             cycle_time_optimal: false,
             segments: Vec::new(),
@@ -418,11 +512,17 @@ impl Controller {
             shaper: None,
             pending_shaper: None,
             shaper_reach: 0,
-            shaper_held: None,
+            shaper_ramps: Vec::new(),
+            shaper_targets: None,
+            plans: Default::default(),
+            plan_changed_at: None,
+            base_step: 0,
             law: MotionLaw::default(),
             spline_c2: true,
             fieldbus_delay: 0,
             fieldbus: Default::default(),
+            fieldbus_pushed: 0,
+            fieldbus_held: u64::MAX,
             fieldbus_jitter: 0,
             jitter: Default::default(),
             tick: 0,
@@ -468,6 +568,7 @@ impl Controller {
             rate.fill(0.0);
         }
         self.history.clear();
+        self.plans.clear();
         self.fieldbus.clear();
         self.watch = vec![Watch::default(); motors];
         // Start holding the load: the torque that keeps the pose, and the feedforward's share of it. At the tool's pose,
@@ -490,10 +591,19 @@ impl Controller {
                 (heat, d.resistor_rise, d.dc_voltage)
             })
             .collect();
+        // A stepper's electrical grid stays where it was across an enable (`Stepper::re_enabled`).
+        let origins: Vec<f64> = self.drives.iter().map(|d| d.phases.origin).collect();
         self.drives =
             (0..motors).map(|k| Drive::at_rest(&self.motor_params[k], self.motor_pos[k], hold[k], ff[k])).collect();
+        for (k, origin) in origins.into_iter().enumerate().take(motors) {
+            if let Motor::Stepper(s) = &self.motor_params[k].motor {
+                s.re_enabled(&mut self.drives[k], &self.motor_params[k], self.motor_pos[k], origin);
+            }
+        }
+        let held = self.holding_torque(machine, at.unwrap_or(&self.set_pos));
         for (k, (drive, (heat, resistor_rise, voltage))) in self.drives.iter_mut().zip(kept).enumerate() {
             let p = &self.motor_params[k];
+            drive.torque_hold = held[k];
             (drive.temperature_rise, drive.housing_rise, drive.overload_image, drive.overload_chip, drive.overloaded) =
                 heat;
             drive.resistor_rise = resistor_rise;
@@ -642,7 +752,7 @@ impl Controller {
             let target: Vec<f64> =
                 segment.get("target").and_then(|t| t.as_array()).ok_or_else(bad)?.iter().filter_map(number).collect();
             if !in_range(machine, &target) {
-                return Err(bad());
+                return Err(range_error(machine, &target, format!("cycle.segment[{i}]")));
             }
             let corner = match segment.get("corners_m") {
                 None => None,
@@ -663,8 +773,11 @@ impl Controller {
                         .map(|p| Some(p.as_array()?.iter().filter_map(number).collect()))
                         .collect::<Option<_>>()
                         .ok_or_else(bad)?;
-                    if points.is_empty() || !points.iter().all(|p| in_range(machine, p)) {
+                    if points.is_empty() {
                         return Err(bad());
+                    }
+                    if let Some(p) = points.iter().find(|p| !in_range(machine, p)) {
+                        return Err(range_error(machine, p, format!("cycle.segment[{i}].via")));
                     }
                     Some(if corner.is_some() { lines_through(&points, &target) } else { via_pieces(&points, &target) })
                 }
@@ -724,11 +837,26 @@ impl Controller {
                 law: MotionLaw { shape, ..law.clone() },
             });
         }
+        // A pick (a segment that attaches the payload after one that left it off, the cycle running round) the machine
+        // refuses for its own reason, with the segment.
+        for (i, segment) in segments.iter().enumerate() {
+            let before = &segments[(i + segments.len() - 1) % segments.len()];
+            if let Some(why) =
+                (segment.payload && !before.payload).then(|| machine.refuses_pick(&segment.target)).flatten()
+            {
+                return Err(ConfigError::Part(why, format!("cycle.segment[{i}]")));
+            }
+        }
         // The margin comes off both ratings before the share is taken: it is for what the rigid model leaves out
         // whatever the room (friction, the belt's vibration), which is roughly absolute, not a share of the room.
+        // A machine with a band of its own (cables between winches and a platform) gives it; the ratings otherwise.
+        let band = machine.tension_band().map_or_else(
+            || [cfg.f64("ratings.belt_min_tension_n").ok(), cfg.f64("ratings.belt_max_tension_n").ok()],
+            |[low, high]| [Some(low), Some(high)],
+        );
         let tension = [
-            cfg.f64("ratings.belt_min_tension_n").map_or(f64::NEG_INFINITY, |t| t + tension_margin),
-            cfg.f64("ratings.belt_max_tension_n").map_or(f64::INFINITY, |t| t - tension_margin),
+            band[0].map_or(f64::NEG_INFINITY, |t| t + tension_margin),
+            band[1].map_or(f64::INFINITY, |t| t - tension_margin),
             tension_reserve,
         ];
         // Each motor's shaft friction and gearbox drag as its own config has them (`mech::ShaftFriction`); none where the
@@ -770,8 +898,51 @@ impl Controller {
                 ])
             })
             .collect::<Result<Vec<_>>>()?;
-        let plan_limits =
-            path::PlanLimits { reserve: torque_reserve, tension, gearbox, guide, friction, ratings, margin };
+        // Each motor's DC link room above the bus, J, as the verdicts take it ("dc-link-energy"), for the tally's running
+        // account (`analysis::LinkAccount`); None without the capacitance or the threshold.
+        let dc_link_rooms = machine
+            .motors()
+            .iter()
+            .map(|m| -> Result<Option<f64>> {
+                let own = crate::catalog::motor_config(cfg, m.id)?;
+                let rating = |key: &str| own.f64(&format!("ratings.{key}")).ok();
+                let bus = own.f64("drive.bus_voltage_v")?;
+                Ok(rating("dc_link_capacitance_uf")
+                    .zip(rating("braking_threshold_v"))
+                    .map(|(capacitance, threshold)| 0.5 * capacitance * 1e-6 * (threshold * threshold - bus * bus)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // The share of each speed rating the plan keeps back for the velocity loops (`path::speed_kept_of`): the most over
+        // the motors, each at the inertia its precontrol is tuned for (the rigid model's at the start pose), the most
+        // acceleration its torque reserve gives it and the top speed it is held to. Not less than the fixed share. On
+        // top, where the motor's drive train is elastic (`Machine::trains`), the speed its twist adds at the most jerk
+        // the axes' limits give the motor there, or at a step of that acceleration where the jerk limit is quicker than the
+        // train's swing (`path::train_speed`, `motor_jerks`).
+        let start_pose = cfg.f64s("start.pose")?;
+        let trains = machine.trains(&start_pose);
+        let jerks = motor_jerks(machine, &start_pose);
+        let speed_kept = rigid_inertias(machine, &start_pose)
+            .iter()
+            .zip(&motor_params)
+            .enumerate()
+            .filter(|(_, (inertia, _))| **inertia > 0.0)
+            .map(|(k, (&inertia, p))| {
+                let acc = torque_reserve * p.peak_torque / inertia;
+                let train = trains.get(k).copied().flatten().map_or(0.0, |t| path::train_speed(t, jerks[k], acc));
+                path::speed_kept_of(p.ki, inertia, p.torque_ff, acc, p.max_speed, train)
+            })
+            .fold(path::PlanLimits::new(1.0, [0.0; 3]).speed_kept, f64::max);
+        let plan_limits = path::PlanLimits {
+            reserve: torque_reserve,
+            tension,
+            gearbox,
+            guide,
+            friction,
+            ratings,
+            margin,
+            hermite: !spline_c2,
+            speed_kept,
+        };
         // A path through via points has to be one the planner times, from where the segment before ends; timed as fast as
         // the motors allow, so has the straight way of every other segment.
         for (i, segment) in segments.iter().enumerate() {
@@ -838,6 +1009,15 @@ impl Controller {
             (*speed, *ramp) = (new.speed, new.ramp_s);
         }
         self.cam = machine.cam();
+        // The plan of the next cycle is noted anew with the new machine, as from the next base step: a cam's curve may
+        // have changed under the same motion. (The profile cycle under way began at the base step of `clock`; in new
+        // profile ticks with a changed cycle.) A controller being built has no plan yet.
+        if !self.plans.is_empty() {
+            let (old_steps, cycle_ratio) = (self.n_profile as f64, self.profile_cycle / profile_cycle);
+            let tick_step = (self.clock * old_steps / self.profile_cycle).round();
+            let into = ((self.base_step + 1) as f64 - tick_step).max(0.0);
+            self.plan_changed_at = Some(self.tick as f64 + into / old_steps * cycle_ratio);
+        }
         // The valves keep their commands; a machine with other valves starts them as it says.
         let valves = machine.valves();
         if valves.len() != self.valves.len() {
@@ -855,6 +1035,12 @@ impl Controller {
         self.blend_time = blend_time;
         (self.path_tolerance, self.cycle_time_optimal, self.plan_limits) =
             (path_tolerance, cycle_time_optimal, plan_limits);
+        self.dc_link_rooms = dc_link_rooms;
+        self.friction_signals = machine
+            .motors()
+            .iter()
+            .map(|m| reported.iter().position(|s| s.id == format!("motor.{}.torque_friction", m.id)))
+            .collect();
         (self.law, self.spline_c2) = (law, spline_c2);
         (self.pending_shaper, self.fieldbus_delay, self.fieldbus_jitter) =
             (Some(shaper), fieldbus_delay, fieldbus_jitter);
@@ -873,18 +1059,22 @@ impl Controller {
                 *per_hz *= ratio;
             }
         }
-        for half in self.shaper_held.iter_mut().flatten() {
+        for half in self.shaper_targets.iter_mut().flatten() {
             *half *= ratio;
         }
         self.tick = (now as f64 * ratio).round() as u64;
         let new_now = self.tick as f64;
+        for (step, at, length) in &mut self.shaper_ramps {
+            step.iter_mut().for_each(|half| *half *= ratio);
+            (*at, *length) = (new_now + (*at - now as f64) * ratio, *length * ratio);
+        }
         // A tick of u64::MAX is a motion not yet picked up.
         let scale = |tick: &mut u64| {
             if *tick != u64::MAX {
                 *tick = (new_now + (*tick as f64 - now as f64) * ratio).round().max(0.0) as u64;
             }
         };
-        match &mut self.motion {
+        let scale_motion = |motion: &mut Motion| match motion {
             // A conveyor pass runs on the simulated time, which a new profile cycle does not change.
             Motion::Idle | Motion::Conveyor => {}
             Motion::Moving { start_tick, tail, .. } => {
@@ -898,6 +1088,15 @@ impl Controller {
             | Motion::Trajectory { start_tick, .. }
             | Motion::Cam { start_tick, .. }
             | Motion::Halting { start_tick, .. } => scale(start_tick),
+        };
+        scale_motion(&mut self.motion);
+        let scale_at = |at: &mut f64| *at = new_now + (*at - now as f64) * ratio;
+        self.plan_changed_at.iter_mut().for_each(scale_at);
+        for plan in &mut self.plans {
+            plan.from.iter_mut().for_each(scale_at);
+            scale(&mut plan.first);
+            scale_motion(&mut plan.motion);
+            plan.key = plan_key(&plan.motion, plan.pass.as_ref().map(|(pass, _)| pass), plan.first);
         }
         if let Some((at, _)) = &mut self.gripping {
             scale(at);
@@ -915,8 +1114,38 @@ impl Controller {
             }
             self.shaper_reach = 0;
         }
-        // shortcut: setpoints on the fieldbus keep their count of cycles, so its delay changes with the cycle
-        // at once instead of after the queue has run through; resample the queue if that step ever matters.
+        // The fieldbus queue is resampled the same way, its delays (in cycles) scaled with it: the frames under way
+        // arrive when they would have; the configured delay in the new cycles holds for the frames sent from now on.
+        if !self.fieldbus.is_empty() {
+            self.fieldbus = resample_fieldbus(&self.fieldbus, ratio);
+            self.fieldbus_held = u64::MAX;
+        }
+    }
+
+    /// The setpoints `t` into a ramp down (`ramp_down`) from `from` at speeds `vel` to rest after `time`.
+    fn halt_at(&mut self, from: &[f64], vel: &[f64], time: f64, t: f64) {
+        halt(from, vel, time, t, [&mut self.set_pos, &mut self.set_vel, &mut self.set_acc]);
+    }
+
+    /// The ramp down to rest from the setpoint's speed now (a category 2 stop, or a cam taken away under way).
+    fn ramp_down(&self, machine: &dyn Machine) -> Motion {
+        let axes = machine.axes();
+        // The axis that needs longest to stop at its limit sets the time; the others decelerate in proportion.
+        let mut time = self.raw_vel.iter().zip(axes).map(|(v, a)| v.abs() / a.max_acc).fold(0.0, f64::max);
+        // A stop that would end beyond the range (a plan decelerating at its limit into an end) ends shorter; one that
+        // starts beyond it (a cam's slave turning on past its range, as a rotary knife's does) at the limit.
+        for _ in 0..if in_range(machine, &self.raw_pos) { 8 } else { 0 } {
+            let end: Vec<f64> = self.raw_pos.iter().zip(&self.raw_vel).map(|(x, v)| x + 0.5 * v * time).collect();
+            if in_range(machine, &end) {
+                break;
+            }
+            time *= 0.5;
+        }
+        if time > 0.0 {
+            Motion::Halting { from: self.raw_pos.clone(), vel: self.raw_vel.clone(), time, start_tick: u64::MAX }
+        } else {
+            Motion::Idle
+        }
     }
 
     pub fn command(&mut self, command: Command, machine: &dyn Machine) -> std::result::Result<(), CommandError> {
@@ -945,28 +1174,7 @@ impl Controller {
             }
             Command::Halt(StopCategory::Two) => {
                 (self.cycle, self.stopping) = (None, false);
-                let axes = machine.axes();
-                // The axis that needs longest to stop at its limit sets the time; the others decelerate in proportion.
-                let mut time = self.raw_vel.iter().zip(axes).map(|(v, a)| v.abs() / a.max_acc).fold(0.0, f64::max);
-                // A stop that would end beyond the range (a plan decelerating at its limit into an end) ends shorter.
-                for _ in 0..8 {
-                    let end: Vec<f64> =
-                        self.raw_pos.iter().zip(&self.raw_vel).map(|(x, v)| x + 0.5 * v * time).collect();
-                    if in_range(machine, &end) {
-                        break;
-                    }
-                    time *= 0.5;
-                }
-                self.motion = if time > 0.0 {
-                    Motion::Halting {
-                        from: self.raw_pos.clone(),
-                        vel: self.raw_vel.clone(),
-                        time,
-                        start_tick: u64::MAX,
-                    }
-                } else {
-                    Motion::Idle
-                };
+                self.motion = self.ramp_down(machine);
             }
             Command::Enable => {
                 // Enabling acknowledges a trip; drives still stopping are taken off and on again, holding where
@@ -1019,31 +1227,54 @@ impl Controller {
                 }
                 self.motion = Motion::Following { from: self.raw_pos.clone(), to: target, start_tick: u64::MAX };
             }
-            Command::Trajectory(points) => {
-                if !matches!(self.motion, Motion::Idle) || self.cycle.is_some() {
-                    return Err(CommandError { key: "error-busy" });
-                }
-                let rising = points.windows(2).all(|w| w[1].0 > w[0].0);
-                // The setpoint of a machine at rest is where its motors stand, which under belt stretch and gear
-                // twist is some hundredths of a millimetre from the tool: at an end of a stroke, beyond it. A
-                // path from there starts that far outside the range (`near_start`). Judged from the path's own start,
-                // which may be up to that slack off this setpoint (below): a path planned by another simulation from
-                // where this machine's tool stands starts where that one's motors stand, on an arm some mrad beyond a
-                // stop where this setpoint is on it, and was refused.
-                if points.len() < 2
-                    || points[0].0 != 0.0
-                    || !rising
-                    || !points.iter().all(|(t, pose)| t.is_finite() && near_start(machine, &points[0].1, pose))
-                {
+            Command::Trajectory(points) => self.command_trajectory(points, None, machine)?,
+            Command::RatedTrajectory(points, speeds, accelerations) => {
+                let fits = |rates: &[Vec<f64>]| {
+                    rates.len() == points.len() && rates.iter().all(|r| r.len() == self.set_pos.len())
+                };
+                if !fits(&speeds) || !fits(&accelerations) {
                     return Err(CommandError { key: "error-trajectory" });
                 }
-                // A path that starts elsewhere would make the setpoint jump.
-                if points[0].1.iter().zip(&self.raw_pos).any(|(p, s)| (p - s).abs() > machine.setpoint_slack()) {
-                    return Err(CommandError { key: "error-trajectory-start" });
-                }
-                self.motion = trajectory(points, self.spline_c2);
+                self.command_trajectory(points, Some((speeds, accelerations)), machine)?
             }
         }
+        Ok(())
+    }
+
+    /// `Command::Trajectory` and, with the speeds and accelerations at its points, `Command::RatedTrajectory`.
+    fn command_trajectory(
+        &mut self,
+        points: Vec<(f64, Vec<f64>)>,
+        rates: Option<(Vec<Vec<f64>>, Vec<Vec<f64>>)>,
+        machine: &dyn Machine,
+    ) -> std::result::Result<(), CommandError> {
+        if !matches!(self.motion, Motion::Idle) || self.cycle.is_some() {
+            return Err(CommandError { key: "error-busy" });
+        }
+        let rising = points.windows(2).all(|w| w[1].0 > w[0].0);
+        // The setpoint of a machine at rest is where its motors stand, which under belt stretch and gear
+        // twist is some hundredths of a millimetre from the tool: at an end of a stroke, beyond it. A
+        // path from there starts that far outside the range (`near_start`). Judged from the path's own start,
+        // which may be up to that slack off this setpoint (below): a path planned by another simulation from
+        // where this machine's tool stands starts where that one's motors stand, on an arm some mrad beyond a
+        // stop where this setpoint is on it, and was refused.
+        if points.len() < 2
+            || points[0].0 != 0.0
+            || !rising
+            || !points.iter().all(|(t, pose)| t.is_finite() && near_start(machine, &points[0].1, pose))
+        {
+            return Err(CommandError { key: "error-trajectory" });
+        }
+        // A path that starts elsewhere would make the setpoint jump.
+        if points[0].1.iter().zip(&self.raw_pos).any(|(p, s)| (p - s).abs() > machine.setpoint_slack()) {
+            return Err(CommandError { key: "error-trajectory-start" });
+        }
+        self.motion = match rates {
+            Some((speeds, accelerations)) => {
+                Motion::Trajectory { points, speeds, accelerations: Some(accelerations), start_tick: u64::MAX }
+            }
+            None => trajectory(points, self.spline_c2),
+        };
         Ok(())
     }
 
@@ -1084,6 +1315,7 @@ impl Controller {
             }
             (self.motion, self.cycle, self.stopping) = (Motion::Idle, None, false);
             self.history.clear();
+            self.plans.clear();
             self.fieldbus.clear();
             for (drive, pos) in self.drives.iter_mut().zip(&self.motor_pos) {
                 if drive.mode() == DriveMode::Position {
@@ -1211,8 +1443,12 @@ impl Controller {
                     continue;
                 }
             }
-            drive.disabled_step(p);
-            torque[k] = 0.0;
+            drive.disabled_step(p, self.motor_vel[k]);
+            // A stepper's magnets hold their detent without current (`Sim::advance_with_windings` integrates it).
+            if let Motor::Stepper(s) = &p.motor {
+                drive.torque += s.detent_torque(self.motor_pos[k], drive.phases.origin);
+            }
+            torque[k] = drive.torque;
         }
         if self.params.shared_dc_link {
             shared_dc_link(&self.params, &mut self.drives);
@@ -1253,7 +1489,7 @@ impl Controller {
 
     /// The timing for a program (`program::read`) from where the setpoint stands, as the poses `Command::Trajectory`
     /// runs: each run planned from where the one before ends, at rest between them. A run with a feed is planned within
-    /// the axis limits with its speed along the path capped at the feed (`path::plan_at`); one without as `plan_path`
+    /// the axis limits with the speed along the path of each piece capped at its own feed (`path::plan_feeds`); one without as `plan_path`
     /// plans it, as fast as the motors allow with `time_optimal`. A program without a move is refused (`error-path`).
     pub fn plan_program(
         &self,
@@ -1264,7 +1500,13 @@ impl Controller {
         let mut points = vec![(0.0, self.raw_pos.clone())];
         for run in runs.iter().filter(|run| !run.pieces.is_empty()) {
             let (t0, start) = points[points.len() - 1].clone();
-            let planned = self.plan_from(machine, &start, &run.pieces, time_optimal && run.feed.is_none(), run.feed)?;
+            let planned = self.plan_from(
+                machine,
+                &start,
+                &run.pieces,
+                time_optimal && run.feed.is_none(),
+                run.caps().as_deref(),
+            )?;
             // Each plan starts at its start at 0 s, which the one before has as its end.
             points.extend(planned.into_iter().skip(1).map(|(t, pose)| (t0 + t, pose)));
         }
@@ -1274,17 +1516,17 @@ impl Controller {
         Ok(points)
     }
 
-    /// `plan_path` from `start`, with the speed along the path capped at `feed` where there is one (then within the axis
-    /// limits, also with `time_optimal`).
+    /// `plan_path` from `start`, with the speed along the path of piece i capped at `feeds[i]` where there are any (then
+    /// within the axis limits, also with `time_optimal`).
     fn plan_from(
         &self,
         machine: &dyn Machine,
         start: &[f64],
         pieces: &[Piece],
         time_optimal: bool,
-        feed: Option<f64>,
+        feeds: Option<&[f64]>,
     ) -> std::result::Result<Vec<(f64, Vec<f64>)>, CommandError> {
-        let time_optimal = time_optimal && feed.is_none();
+        let time_optimal = time_optimal && feeds.is_none();
         // An arc or a spline can swing out of the range although every point given is inside. Said here,
         // because `Command::Trajectory` refuses such poses with a message about poses at times.
         let reachable = |points: &[(f64, Vec<f64>)]| {
@@ -1295,8 +1537,9 @@ impl Controller {
             }
         };
         let within_axis_limits = || {
-            let (cycle, slack, feed) = (self.profile_cycle, machine.setpoint_slack(), feed.unwrap_or(f64::INFINITY));
-            path::plan_at(machine.axes(), start, pieces, cycle, self.path_tolerance, slack, feed)
+            let (cycle, slack) = (self.profile_cycle, machine.setpoint_slack());
+            let (feeds, spin) = (feeds.unwrap_or(&[]), self.law.spin);
+            path::plan_within(machine.axes(), spin, start, pieces, feeds, cycle, self.path_tolerance, slack)
         };
         if time_optimal {
             // A pose on the way that the machine cannot go to (an arm's singularity, where the motors would have to
@@ -1360,6 +1603,40 @@ impl Controller {
         } else {
             path::deviation(machine.axes(), &self.raw_pos, pieces, self.path_tolerance, machine.setpoint_slack())
         }
+    }
+
+    /// `path_deviation` per run of a program (`plan_program`: each run from where the one before ends, a run with a
+    /// feed within the axis limits). A run with a feed reads as without its feeds (`path::deviation`): never lower
+    /// than its own path's.
+    pub fn program_deviations(
+        &self,
+        machine: &dyn Machine,
+        runs: &[crate::program::Run],
+        time_optimal: bool,
+    ) -> std::result::Result<Vec<f64>, CommandError> {
+        let mut start = self.raw_pos.clone();
+        let mut out = Vec::new();
+        for run in runs.iter().filter(|run| !run.pieces.is_empty()) {
+            let optimal = time_optimal && run.feed.is_none();
+            let planned = self.plan_from(machine, &start, &run.pieces, optimal, run.caps().as_deref())?;
+            out.push(if optimal {
+                path::deviation_time_optimal(
+                    machine,
+                    &self.motor_drives(machine),
+                    &self.plan_limits,
+                    &start,
+                    &run.pieces,
+                    self.path_tolerance,
+                    machine.setpoint_slack(),
+                )?
+            } else {
+                path::deviation(machine.axes(), &start, &run.pieces, self.path_tolerance, machine.setpoint_slack())?
+            });
+            if let Some((_, end)) = planned.last() {
+                start.clone_from(end);
+            }
+        }
+        Ok(out)
     }
 
     /// True while a move, a dwell or the cycle is under way.
@@ -1463,6 +1740,16 @@ impl Controller {
         &self.params
     }
 
+    /// The limits the time-optimal plan keeps beside the motors' (`path::PlanLimits`), as the config gives them.
+    pub fn plan_limits(&self) -> &path::PlanLimits {
+        &self.plan_limits
+    }
+
+    /// Motor k's DC link room above the bus, J: 1/2 C (U_threshold^2 - U_bus^2) of its own ratings; None without them.
+    pub fn dc_link_room(&self, k: usize) -> Option<f64> {
+        self.dc_link_rooms.get(k).copied().flatten()
+    }
+
     /// Motor and drive data of motor `k`: `drive_params` with that motor's own values (`catalog::motor_config`).
     pub fn drive_params_of(&self, k: usize) -> &DriveParams {
         self.motor_params.get(k).unwrap_or(&self.params)
@@ -1493,11 +1780,17 @@ impl Controller {
     /// (`winding_stepped`). Disabled, the drives give no torque, their windings cool and their DC links discharge,
     /// and `torque` is zero.
     pub fn update(&mut self, step: u64, machine: &dyn Machine, state: &[f64], torque: &mut [f64]) {
+        self.base_step = step;
         machine.motor_state(state, &mut self.motor_pos, &mut self.motor_vel);
         if !self.enabled {
             for (k, (drive, torque)) in self.drives.iter_mut().zip(torque).enumerate() {
-                drive.disabled_step(&self.motor_params[k]);
-                *torque = 0.0;
+                drive.disabled_step(&self.motor_params[k], self.motor_vel[k]);
+                // A stepper's magnets hold their detent without current too. Held over the step as the iron's drag is,
+                // its work is booked as the shaft's and what the magnets gave (`Sim::step`'s disabled branch).
+                if let Motor::Stepper(s) = &self.motor_params[k].motor {
+                    drive.torque += s.detent_torque(self.motor_pos[k], drive.phases.origin);
+                }
+                *torque = drive.torque;
             }
             if self.params.shared_dc_link {
                 shared_dc_link(&self.params, &mut self.drives);
@@ -1523,12 +1816,11 @@ impl Controller {
         if position_due {
             // With a load-side encoder (effects.load_encoder) the position loop measures the tool axes, in whole
             // steps of the scale, as motor angles through the rigid kinematics; the speed loop keeps the motor's.
-            // shortcut: the scale reads the tool as `tool_state` reports it, in the room (a compliant frame and a leaning
-            // tool inside the loop); add a `Machine` reading of the carriage against the frame when a machine needs it.
+            // The scale is mounted on the frame: it reads `Machine::scale_state`, the carriage against the frame.
             let load = self.load_encoder.map(|scale| {
                 let axes = self.set_pos.len();
                 let (mut tool, mut rate, mut motors) = (vec![0.0; axes], vec![0.0; axes], vec![0.0; self.drives.len()]);
-                machine.tool_state(state, &mut tool, &mut rate);
+                machine.scale_state(state, &mut tool, &mut rate);
                 tool.iter_mut().for_each(|x| *x = quantise(*x, scale));
                 machine.inverse(&tool, &mut motors);
                 motors
@@ -1582,9 +1874,24 @@ impl Controller {
             drive.since_setpoint += dt;
         }
         if self.monitoring {
+            // The friction the torque-band monitor expects: what the machine's own friction model takes of each motor's
+            // torque at the machine's state (`friction_signals`), so with the guides' bristles and breakaway, the motor's
+            // Stribeck curve and the gearbox's mesh friction as they act through a start or a reversal.
+            let mut friction = vec![0.0; self.drives.len()];
+            let banded = |k: usize| {
+                self.fault_settings[k].torque_band > 0.0 && self.friction_signals.get(k).copied().flatten().is_some()
+            };
+            if (0..self.drives.len()).any(banded) {
+                let torques: Vec<f64> = self.drives.iter().map(|d| d.torque).collect();
+                let mut signals = Vec::new();
+                machine.signals(state, &torques, &mut signals);
+                for (k, f) in friction.iter_mut().enumerate().filter(|(k, _)| banded(*k)) {
+                    *f = self.friction_signals[k].and_then(|i| signals.get(i).copied()).unwrap_or(0.0);
+                }
+            }
             let tripped = (0..self.drives.len()).find_map(|k| {
                 let (s, peak) = (&self.fault_settings[k], self.motor_params[k].peak_torque);
-                self.watch[k].check(s, &self.drives[k], peak, dt).map(|m| (m, k))
+                self.watch[k].check(s, &self.drives[k], friction[k], peak, dt).map(|m| (m, k))
             });
             if let Some((monitor, k)) = tripped {
                 self.trip(monitor, k, step as f64 * dt, machine, state);
@@ -1595,10 +1902,16 @@ impl Controller {
     /// The tool setpoint at `time`: the last profile cycle's run on by its speed and acceleration, as the drives' fine
     /// interpolation runs the motors' on (at most one profile cycle). What the analysis measures the tool against.
     pub fn plan_now(&self, time: f64, out: &mut [f64]) {
-        let t = (time - self.clock).clamp(0.0, self.profile_cycle);
+        let t = self.setpoint_age(time);
         for (i, x) in out.iter_mut().enumerate() {
             *x = self.set_pos[i] + (self.set_vel[i] + 0.5 * self.set_acc[i] * t) * t;
         }
+    }
+
+    /// How long ago, at `time`, the profile cycle set `set_pos`, `set_vel` and `set_acc` (the signal `setpoint_age`):
+    /// `plan_now` is those run on by it.
+    pub fn setpoint_age(&self, time: f64) -> f64 {
+        (time - self.clock).clamp(0.0, self.profile_cycle)
     }
 
     /// The base step done (see `update`): per drive the current at its end and the electrical energy, copper loss and
@@ -1606,11 +1919,17 @@ impl Controller {
     /// its end. Then the shared DC link, and the trip.
     pub fn winding_stepped(&mut self, windings: &[f64], angle: &[f64], speed: &[f64]) {
         for (k, (drive, w)) in self.drives.iter_mut().zip(windings.as_chunks::<WINDING_STATES>().0).enumerate() {
-            // A drive whose pulses are off after a trip has had its disabled step (`react`).
-            if !drive.pulses_off {
+            // A drive whose pulses are off after a trip has had its disabled step (`react`); the iron's drag work over
+            // the step is the integrated one (`Sim::advance_with_windings`), not the step start's speed times the step.
+            if drive.pulses_off {
+                let dt = self.motor_params[k].current_cycle;
+                (drive.shaft_power, drive.emf_loss) = (w[3] / dt, -w[3] / dt);
+            } else {
                 (drive.phases.x, drive.phases.angle, drive.phases.speed) =
                     ([w[0], w[4], w[5], w[6]], angle[k], speed[k]);
                 drive.winding_stepped(&self.motor_params[k], w[0], [w[1], w[2], w[3]]);
+                // From the rotor's angle at the step's start (`update`), which an enable's `Drive::at_rest` may not have.
+                drive.detent_moved(&self.motor_params[k], self.motor_pos[k]);
             }
         }
         if self.params.shared_dc_link {
@@ -1641,7 +1960,9 @@ impl Controller {
         if matches!(self.motion, Motion::Idle) {
             self.next_cycle_segment(machine);
         }
-        match std::mem::replace(&mut self.motion, Motion::Idle) {
+        let motion = std::mem::replace(&mut self.motion, Motion::Idle);
+        self.record_plan(tick, &motion, machine);
+        match motion {
             Motion::Idle => {
                 self.set_vel.fill(0.0);
                 self.set_acc.fill(0.0);
@@ -1649,22 +1970,10 @@ impl Controller {
             Motion::Moving { mv, start_tick, mut tail } => {
                 let start_tick = if start_tick == u64::MAX { tick } else { start_tick };
                 let t = (tick - start_tick) as f64 * dt;
-                mv.at(t, &mut self.set_pos, &mut self.set_vel, &mut self.set_acc);
-                if let Some((old, old_start)) = &tail {
-                    // The previous move's remaining way to the corner, on top of the new move.
-                    let n = self.set_pos.len();
-                    let (mut pos, mut vel, mut acc, mut end) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n]);
-                    let t_old = (tick - old_start) as f64 * dt;
-                    old.at(t_old, &mut pos, &mut vel, &mut acc);
-                    old.at(f64::INFINITY, &mut end, &mut vec![0.0; n], &mut vec![0.0; n]);
-                    for i in 0..n {
-                        self.set_pos[i] += pos[i] - end[i];
-                        self.set_vel[i] += vel[i];
-                        self.set_acc[i] += acc[i];
-                    }
-                    if t_old >= old.duration() {
-                        tail = None;
-                    }
+                let old = tail.as_ref().map(|(old, old_start)| (old, (tick - old_start) as f64 * dt));
+                move_at(&mv, t, old, [&mut self.set_pos, &mut self.set_vel, &mut self.set_acc]);
+                if old.is_some_and(|(old, t_old)| t_old >= old.duration()) {
+                    tail = None;
                 }
                 // With input shaping the setpoint arrives after the plan. Where the gripper acts or the cycle
                 // dwells, both wait for the setpoint: the tool is not there before.
@@ -1724,12 +2033,8 @@ impl Controller {
                         next_pass += master.period;
                         self.passes += 1;
                     }
-                    let mut cam = vec![[0.0; 4]; self.set_pos.len()];
-                    machine.cam_at(self.cam_master, &mut cam);
-                    for (i, c) in cam.iter().enumerate() {
-                        let [p, v, a] = crate::cam::slave_motion(*c, run);
-                        (self.set_pos[i], self.set_vel[i], self.set_acc[i]) = (p + offset[i], v, a);
-                    }
+                    let out = [&mut self.set_pos, &mut self.set_vel, &mut self.set_acc];
+                    cam_slaves(&|m, cam| machine.cam_at(m, cam), self.cam_master, run, &offset, out);
                     if stop.is_some_and(|s| t >= s.max(ramp) + ramp) {
                         // Run down: at rest where the cam has brought the slaves.
                         self.set_vel.fill(0.0);
@@ -1740,12 +2045,22 @@ impl Controller {
                             Motion::Cam { start_tick, stop, from, offset, next_pass, from_speed, speed, ramp };
                     }
                 } else {
-                    // A config without the cam now: the slaves stop where they are.
-                    // shortcut: a step in the slaves' speed; ramp the master down first if a config ever takes a
-                    // running cam away on purpose.
-                    self.set_vel.fill(0.0);
-                    self.set_acc.fill(0.0);
+                    // A config without the cam now: the slaves ramp down from the speeds they have, every axis within
+                    // its acceleration limit, as in a category 2 stop, instead of a step in their speed. (The cam's
+                    // curve went with the config, so they decelerate along their last direction.) Its first cycle is
+                    // this one, so the setpoint does not stand still for a cycle.
                     (self.cycle, self.stopping) = (None, false);
+                    self.set_acc.fill(0.0);
+                    if let Motion::Halting { from, vel, time, .. } = self.ramp_down(machine) {
+                        self.halt_at(&from, &vel, time, dt.min(time));
+                        // This cycle is the stop's, not the cam's.
+                        let halting =
+                            Motion::Halting { from: from.clone(), vel: vel.clone(), time, start_tick: tick - 1 };
+                        self.record_plan(tick, &halting, machine);
+                        if dt < time {
+                            self.motion = Motion::Halting { from, vel, time, start_tick: tick - 1 };
+                        }
+                    }
                 }
             }
             Motion::Dwell { mut until_tick } => {
@@ -1762,14 +2077,13 @@ impl Controller {
                     self.motion = Motion::Dwell { until_tick };
                 }
             }
-            Motion::Trajectory { points, speeds, start_tick } => {
+            Motion::Trajectory { points, speeds, accelerations, start_tick } => {
                 let start_tick = if start_tick == u64::MAX { tick } else { start_tick };
                 let t = (tick - start_tick) as f64 * dt;
                 let last = points.len() - 1;
+                let out = [&mut self.set_pos, &mut self.set_vel, &mut self.set_acc];
+                path_at(&points, &speeds, accelerations.as_deref(), t, dt, out);
                 if t >= points[last].0 {
-                    self.set_pos.copy_from_slice(&points[last].1);
-                    self.set_vel.fill(0.0);
-                    self.set_acc.fill(0.0);
                     // A cycle segment's path arrives as a move does (see above): the gripper acts and the dwell starts
                     // once the shaped setpoint is there, where the segment waits for it.
                     if let Some(i) = self.cycle {
@@ -1779,17 +2093,11 @@ impl Controller {
                         self.motion = if t >= points[last].0 + lag * dt {
                             self.arrive(i, tick)
                         } else {
-                            Motion::Trajectory { points, speeds, start_tick }
+                            Motion::Trajectory { points, speeds, accelerations, start_tick }
                         };
                     }
                 } else {
-                    // A point a rounding error after `t` counts as at `t`: at a point the cubic that starts there is
-                    // taken, not by the rounding of the two times the end of the one before, whose acceleration differs.
-                    let i = (points.partition_point(|(time, _)| *time <= t + 1e-6 * dt) - 1).min(last - 1);
-                    for a in 0..self.set_pos.len() {
-                        [self.set_pos[a], self.set_vel[a], self.set_acc[a]] = hermite(&points, &speeds, i, a, t);
-                    }
-                    self.motion = Motion::Trajectory { points, speeds, start_tick };
+                    self.motion = Motion::Trajectory { points, speeds, accelerations, start_tick };
                 }
             }
             Motion::Following { from, to, start_tick } => {
@@ -1799,14 +2107,7 @@ impl Controller {
                 let start_tick = if start_tick == u64::MAX { tick - 1 } else { start_tick };
                 let n = self.setpoint_ticks as f64;
                 let done = ((tick - start_tick) as f64 / n).min(1.0);
-                for i in 0..to.len() {
-                    // At the end the target itself, not from + (to - from), which can be a rounding off it.
-                    self.set_pos[i] = if done < 1.0 { from[i] + (to[i] - from[i]) * done } else { to[i] };
-                    // The speed of the cycle that ends here, also on arrival: in a stream the next setpoint is
-                    // on its way, and a speed of zero for this one cycle would be a dip in every interval.
-                    self.set_vel[i] = (to[i] - from[i]) / (n * dt);
-                }
-                self.set_acc.fill(0.0);
+                line_at(&from, &to, done, n * dt, [&mut self.set_pos, &mut self.set_vel, &mut self.set_acc]);
                 if done < 1.0 {
                     self.motion = Motion::Following { from, to, start_tick };
                 }
@@ -1815,11 +2116,7 @@ impl Controller {
                 // From the cycle the stop came in, as a setpoint from outside is (`Following`).
                 let start_tick = if start_tick == u64::MAX { tick - 1 } else { start_tick };
                 let t = ((tick - start_tick) as f64 * dt).min(time);
-                for i in 0..from.len() {
-                    self.set_pos[i] = from[i] + vel[i] * (t - 0.5 * t * t / time);
-                    self.set_vel[i] = vel[i] * (1.0 - t / time);
-                    self.set_acc[i] = if t < time { -vel[i] / time } else { 0.0 };
-                }
+                self.halt_at(&from, &vel, time, t);
                 if t < time {
                     self.motion = Motion::Halting { from, vel, time, start_tick };
                 }
@@ -1833,7 +2130,7 @@ impl Controller {
             && let Some(next) = self.pending_shaper.take()
         {
             self.shaper = next;
-            self.shaper_held = None;
+            (self.shaper_ramps, self.shaper_targets) = (Vec::new(), None);
         }
         self.raw_pos.clone_from(&self.set_pos);
         self.raw_vel.clone_from(&self.set_vel);
@@ -1859,12 +2156,32 @@ impl Controller {
         machine.inverse(&self.set_pos, &mut here);
         let motor_acc: Vec<f64> = (0..motors).map(|k| (ahead[k] - 2.0 * here[k] + behind[k]) / (h * h)).collect();
         self.torque_feedforward(machine, &self.set_pos, &self.set_vel, &self.set_acc, &motor_acc, &mut ff);
-        // The friction of the machine's own model at the planned speed, for the drives that take it.
+        let hold = self.holding_torque(machine, &self.set_pos);
+        // The friction of the machine's own model at the planned speed, for the drives that take it and for the
+        // torque-band monitor of a machine that does not report its friction torque (`friction_signals`; one that does
+        // has the monitor take it at its state every step, `update`), which expects it as it expects the held load.
         let mut friction = vec![0.0; motors];
-        if self.motor_params.iter().any(|p| p.precontrol.machine_friction) {
+        let banded: Vec<bool> = (0..motors)
+            .map(|k| {
+                self.monitoring
+                    && self.fault_settings.get(k).is_some_and(|s| s.torque_band > 0.0)
+                    && self.friction_signals.get(k).is_none_or(|s| s.is_none())
+            })
+            .collect();
+        if self.motor_params.iter().any(|p| p.precontrol.machine_friction) || banded.contains(&true) {
             machine.steady_friction(&self.set_pos, &self.set_vel, &mut friction);
-            for (f, p) in friction.iter_mut().zip(&self.motor_params) {
-                *f = if p.precontrol.machine_friction { *f } else { 0.0 };
+        }
+        for k in 0..motors {
+            let p = &self.motor_params[k];
+            // The friction the config's feedforward model gives (its characteristic where it has one), else the machine's.
+            let expected = if p.precontrol.friction.is_empty() {
+                friction[k]
+            } else {
+                p.precontrol.friction_at((ahead[k] - behind[k]) / (2.0 * h))
+            };
+            self.drives[k].torque_hold = hold[k] + if banded[k] { expected } else { 0.0 };
+            if !p.precontrol.machine_friction {
+                friction[k] = 0.0;
             }
         }
         let setpoints = (0..motors)
@@ -1879,16 +2196,47 @@ impl Controller {
             0
         };
         self.fieldbus.push_back((self.fieldbus_delay + late, setpoints));
-        while self.fieldbus.len() > self.fieldbus_delay + self.fieldbus_jitter + 1 {
+        self.fieldbus_pushed += 1;
+        // (The longest stamp in the queue, not the configured delay: after a cycle change the queue drains by itself.)
+        let longest =
+            self.fieldbus.iter().map(|f| f.0).max().unwrap_or(0).max(self.fieldbus_delay + self.fieldbus_jitter);
+        while self.fieldbus.len() > longest + 1 {
             self.fieldbus.pop_front();
         }
         let newest = self.fieldbus.len() - 1;
         let arrived = (0..=newest).find(|&age| self.fieldbus[newest - age].0 <= age).map_or(0, |age| newest - age);
+        let number = self.fieldbus_pushed - (self.fieldbus.len() - arrived) as u64;
+        let fresh = number != self.fieldbus_held;
+        self.fieldbus_held = number;
         for (drive, &[pos, vel, acc, ff, friction]) in self.drives.iter_mut().zip(&self.fieldbus[arrived].1) {
             (drive.pos_set, drive.vel_set, drive.acc_set, drive.torque_ff) = (pos, vel, acc, ff);
             drive.friction_ff = friction;
-            drive.since_setpoint = 0.0;
+            if fresh {
+                drive.since_setpoint = 0.0;
+            }
         }
+    }
+
+    /// What the torque-band monitor expects besides the feedforward at `pose`: for a motor with the constant-inertia
+    /// feedforward (no gravity in it) the rigid model's torque at rest there, the weight; 0 for the others and without
+    /// the monitor.
+    fn holding_torque(&self, machine: &dyn Machine, pose: &[f64]) -> Vec<f64> {
+        let wanted = |k: usize| {
+            self.monitoring
+                && self.motor_params[k].precontrol.constant_inertia
+                && self.fault_settings.get(k).is_some_and(|s| s.torque_band > 0.0)
+        };
+        let mut out = vec![0.0; self.drives.len()];
+        if (0..out.len()).any(wanted) {
+            let still = vec![0.0; pose.len()];
+            machine.feedforward_torque_moving(pose, &still, &still, &mut out);
+            for (k, torque) in out.iter_mut().enumerate() {
+                if !wanted(k) {
+                    *torque = 0.0;
+                }
+            }
+        }
+        out
     }
 
     /// The torque feedforward per motor (before its weight): the rigid model's inverse dynamics, or, for a motor whose
@@ -1913,7 +2261,7 @@ impl Controller {
 
     /// Half the period in profile cycles of the first shaper and of the second (0 without one) with the plan at `pose`:
     /// as configured, or, when the shaper follows the pose, that of the resonance the machine reports there for the
-    /// first and that of its second mode (`Machine::modes`) for the second; one the machine does not report stays as
+    /// first and that of its second mode (`Machine::sway_modes`) for the second; one the machine does not report stays as
     /// configured. `None` with the shaper off.
     pub fn shaper_halves(&self, machine: &dyn Machine, pose: &[f64]) -> Option<(f64, f64)> {
         let halves = self.mode_halves(machine, pose)?;
@@ -1925,7 +2273,7 @@ impl Controller {
     fn mode_halves(&self, machine: &dyn Machine, pose: &[f64]) -> Option<Vec<f64>> {
         let modes = self.shaper.as_ref()?;
         let following = modes.iter().any(|m| m.follows.is_some());
-        let reported = if following { machine.modes(pose) } else { Vec::new() };
+        let reported = if following { machine.sway_modes(pose) } else { Vec::new() };
         Some(
             modes
                 .iter()
@@ -1956,10 +2304,13 @@ impl Controller {
     }
 
     /// How many profile cycles the shaped setpoint arrives after the plan with the plan at `pose`: the longest of the
-    /// axes' shapers. 0 with the shaper off.
+    /// axes' shapers; on the ramp to a changed machine's period (`shape`) with the longer of the two. 0 with the shaper
+    /// off.
     pub fn shaper_span(&self, machine: &dyn Machine, pose: &[f64]) -> f64 {
-        self.mode_halves(machine, pose)
-            .map_or(0.0, |halves| self.trains(&halves).iter().flatten().fold(0.0, |m: f64, (t, _)| m.max(*t)))
+        self.mode_halves(machine, pose).map_or(0.0, |halves| {
+            let ramp = self.ramp_offset(self.tick as f64);
+            span(&self.trains(&halves.iter().zip(ramp).map(|(h, e)| h.max(h + e)).collect::<Vec<_>>()))
+        })
     }
 
     /// With the plan at `pose`: per axis how far the shaped setpoint lags a plan at a constant speed (the mean of the
@@ -1969,7 +2320,107 @@ impl Controller {
         let dt = self.profile_cycle;
         let trains = self.trains(&halves);
         let mean = trains.iter().map(|train| train.iter().map(|(t, a)| t * a).sum::<f64>() * dt).collect();
-        (mean, trains.iter().flatten().fold(0.0, |m: f64, (t, _)| m.max(*t)) * dt)
+        (mean, self.shaper_span(machine, pose) * dt)
+    }
+
+    /// Per mode what the ramps to a changed machine's period (`shaper_ramps`) still add to the half period at the
+    /// profile tick `x`: each step from where the period was to where it is now, going over by `smoothstep`.
+    fn ramp_offset(&self, x: f64) -> Vec<f64> {
+        let mut offset = vec![0.0; self.shaper.as_ref().map_or(0, Vec::len)];
+        for (step, at, length) in &self.shaper_ramps {
+            let left = 1.0 - smoothstep((x - at) / length);
+            offset.iter_mut().zip(step).for_each(|(o, s)| *o += s * left);
+        }
+        offset
+    }
+
+    /// Notes the motion that makes the setpoints of the profile tick `tick` (`plans`), unless it is the one before.
+    fn record_plan(&mut self, tick: u64, motion: &Motion, machine: &dyn Machine) {
+        if self.shaper.is_none() {
+            self.plan_changed_at = None;
+            return;
+        }
+        let pass = self.pass.as_ref().filter(|_| matches!(motion, Motion::Conveyor));
+        let key = plan_key(motion, pass, tick);
+        let from = self.plan_changed_at.take();
+        if from.is_none() && self.plans.back().is_some_and(|plan| plan.key == key) {
+            return;
+        }
+        let mut motion = motion.clone();
+        // Its start as it takes it (`profile_tick`).
+        match &mut motion {
+            Motion::Moving { start_tick, .. }
+            | Motion::Cam { start_tick, .. }
+            | Motion::Trajectory { start_tick, .. }
+                if *start_tick == u64::MAX =>
+            {
+                *start_tick = tick
+            }
+            Motion::Following { start_tick, .. } | Motion::Halting { start_tick, .. } if *start_tick == u64::MAX => {
+                *start_tick = tick - 1
+            }
+            _ => {}
+        }
+        let pass = pass.map(|pass| (pass.clone(), self.clock));
+        let cam = KeptCurve(if matches!(motion, Motion::Cam { .. }) { machine.cam_curve() } else { None });
+        self.plans.push_back(Plan { first: tick, key, motion, pass, cam, from });
+    }
+
+    /// The plan as `plan` makes it at the profile tick `x`, also between two cycles: position, speed and acceleration,
+    /// worked out as the profile does at a cycle (`profile_tick`). `None` where the plan stands where the cycle before
+    /// left it (idle, a dwell, waiting for a part).
+    fn plan_at(&self, machine: &dyn Machine, plan: &Plan, x: f64) -> Option<[Vec<f64>; 3]> {
+        let dt = self.profile_cycle;
+        let n = self.set_pos.len();
+        let (mut pos, mut vel, mut acc) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+        let since = |start: u64| (x - start as f64) * dt;
+        match &plan.motion {
+            Motion::Idle | Motion::Dwell { .. } => return None,
+            Motion::Moving { mv, start_tick, tail } => {
+                let old = tail.as_ref().map(|(old, start)| (old, since(*start)));
+                move_at(mv, since(*start_tick), old, [&mut pos, &mut vel, &mut acc]);
+            }
+            Motion::Conveyor => {
+                // The simulated time runs with the profile cycles.
+                let (pass, clock) = plan.pass.as_ref()?;
+                let t = clock + since(plan.first) - pass.start;
+                if t < 0.0 {
+                    return None;
+                }
+                pass.at(t, &mut pos, &mut vel, &mut acc);
+                if t >= pass.duration() {
+                    vel.fill(0.0);
+                    acc.fill(0.0);
+                }
+            }
+            Motion::Cam { start_tick, stop, from, offset, from_speed, speed, ramp, .. } => {
+                let t = since(*start_tick);
+                let run = crate::cam::master_change(*from_speed, *speed, *ramp, t, *stop);
+                // The cam as it was when the plan was noted, also after a config has changed it.
+                let curve = |m: f64, cam: &mut [[f64; 4]]| match &plan.cam.0 {
+                    Some(curve) => curve(m, cam),
+                    None => machine.cam_at(m, cam),
+                };
+                cam_slaves(&curve, from + run[0], run, offset, [&mut pos, &mut vel, &mut acc]);
+                if stop.is_some_and(|s| t >= s.max(*ramp) + ramp) {
+                    vel.fill(0.0);
+                    acc.fill(0.0);
+                }
+            }
+            Motion::Trajectory { points, speeds, accelerations, start_tick } => {
+                let t = since(*start_tick);
+                path_at(points, speeds, accelerations.as_deref(), t, dt, [&mut pos, &mut vel, &mut acc]);
+            }
+            Motion::Following { from, to, start_tick } => {
+                let ticks = self.setpoint_ticks as f64;
+                let done = ((x - *start_tick as f64) / ticks).clamp(0.0, 1.0);
+                line_at(from, to, done, ticks * dt, [&mut pos, &mut vel, &mut acc]);
+            }
+            Motion::Halting { from, vel: speed, time, start_tick } => {
+                halt(from, speed, *time, since(*start_tick).clamp(0.0, *time), [&mut pos, &mut vel, &mut acc]);
+            }
+        }
+        Some([pos, vel, acc])
     }
 
     /// Input shaping: on each axis the setpoints become a weighted sum of copies of the plan at the delays of its
@@ -1978,43 +2429,136 @@ impl Controller {
     /// is cancelled by the others, also when the resonance is some percent off the frequency the shaper was set to.
     /// Every further mode's shaper is convolved with it (the second shaper, `profile.shaper_modes`): copies at the sums
     /// of the delays with the products of the weights, so that each mode's vibration is cancelled. An axis takes the
-    /// modes that act on it (`profile.shaper_axes`, a mode's `axes`).
+    /// modes that act on it (`profile.shaper_axes`, a mode's `axes`). A copy between two cycles is the plan itself
+    /// there (`plan_at`), not an interpolation of the cycles around it.
     ///
     /// Following the pose, the half period is that of the resonance the machine reports where the plan
     /// stands, and the second shaper's that of the machine's second mode there. The weights always add up to one, so
     /// once the plan has stood still for a whole period the setpoint is the plan exactly, whatever the period did on the
-    /// way. While the plan stands still the period stays as it was: a resonance that changes at rest (the gripper takes
-    /// its payload) would reach back into the move that has just arrived and take the setpoint off its target.
+    /// way. Where the machine itself changes its modes (the gripper takes its payload), the period does not step with
+    /// it: a step in the delays would move the copies to other points of the plan at once, a step in the setpoint
+    /// wherever the plan has not stood still for the whole period. The step goes over on a quintic smoothstep instead,
+    /// long enough that no delay changes faster than `SHAPER_RAMP_RATE` of the time passing.
     fn shape(&mut self, machine: &dyn Machine) {
-        // shortcut: while the period changes, the speed and acceleration setpoints are the delayed plan's,
-        // not the exact rates of the shaped position (off by the rate of the delay, a few percent in a Z
-        // move); they are feedforward only. Shape the position alone and difference it if that matters.
-        let Some(halves) = self.mode_halves(machine, &self.raw_pos) else {
+        // The shaped position is x_s(t) = sum w_i x(t - D_i(t)) / sum w_i (D_i the impulses' delays in seconds, which
+        // change with the period). Its exact rates are x_s' = sum w_i v (1 - D_i') / W and x_s'' = sum w_i (a (1 - D_i')^2
+        // - v D_i'') / W, v and a the plan's D_i ago. With steady delays this is the plain weighted sum of the plan's rates.
+        let Some(target) = self.mode_halves(machine, &self.raw_pos) else {
             self.history.clear();
+            self.plans.clear();
             self.shaper_reach = 0;
+            (self.shaper_ramps, self.shaper_targets) = (Vec::new(), None);
             return;
         };
-        let standing = self.history.back().is_some_and(|past| past[0] == self.raw_pos);
-        let halves = self.shaper_held.take().filter(|held| standing && held.len() == halves.len()).unwrap_or(halves);
-        let trains = self.trains(&halves);
-        self.shaper_held = Some(halves);
+        let following = self.shaper.iter().flatten().any(|m| m.follows.is_some());
+        let now = self.tick as f64;
+        // The machine itself changed since the last cycle where its modes at the last cycle's pose did: from that cycle
+        // on, the half periods go over from where they were. (At a pose that stands, the modes now are `target`.)
+        if following
+            && let (Some(before), Some(past)) = (self.shaper_targets.take(), self.history.back())
+            && let Some(after) =
+                if past[0] == self.raw_pos { Some(target.clone()) } else { self.mode_halves(machine, &past[0]) }
+            && after.len() == before.len()
+            && before != after
+        {
+            let step: Vec<f64> = before.iter().zip(&after).map(|(b, a)| b - a).collect();
+            // The longest delay's change bounds every delay's; the smoothstep's steepest slope is 1.875.
+            let reach = span(&self.trains(&step.iter().map(|s| s.abs()).collect::<Vec<_>>()));
+            self.shaper_ramps.push((step, now - 1.0, 1.875 * reach / SHAPER_RAMP_RATE));
+        }
+        self.shaper_ramps.retain(|(_, at, length)| now - 1.0 - at < *length);
+        let ramped = |halves: Vec<f64>, x: f64| -> Vec<f64> {
+            halves.iter().zip(self.ramp_offset(x)).map(|(h, e)| h + e).collect()
+        };
+        let trains = self.trains(&ramped(target.clone(), now));
+        // D_i' and D_i'' where the period follows the pose: the delays (cycles) with the plan one cycle ahead and one
+        // behind on its own Taylor expansion and the ramps there, central differences: D' = (d+ - d-) / 2,
+        // D'' = (d+ - 2 d + d-) / T (1/s).
+        let cycle = self.profile_cycle;
+        let zeros = || trains.iter().map(|train| [vec![0.0; train.len()], vec![0.0; train.len()]]).collect();
+        let changes: Vec<[Vec<f64>; 2]> = if !following {
+            zeros()
+        } else {
+            // A plan at rest is there a cycle ahead and behind too.
+            let resting = self.raw_vel.iter().chain(&self.raw_acc).all(|r| *r == 0.0);
+            let off = |sign: f64| -> Option<Vec<Vec<(f64, f64)>>> {
+                if resting {
+                    return Some(self.trains(&ramped(target.clone(), now + sign)));
+                }
+                let pose: Vec<f64> = (self.raw_pos.iter().zip(&self.raw_vel).zip(&self.raw_acc))
+                    .map(|((x, v), a)| x + sign * v * cycle + 0.5 * a * cycle * cycle)
+                    .collect();
+                Some(self.trains(&ramped(self.mode_halves(machine, &pose)?, now + sign)))
+            };
+            match (off(1.0), off(-1.0)) {
+                (Some(ahead), Some(behind)) => (trains.iter().zip(ahead.iter().zip(&behind)))
+                    .map(|(now, (ahead, behind))| {
+                        if ahead.len() != now.len() || behind.len() != now.len() {
+                            return [vec![0.0; now.len()], vec![0.0; now.len()]];
+                        }
+                        let d = |k: usize| (ahead[k].0, now[k].0, behind[k].0);
+                        let rate = (0..now.len()).map(|k| (d(k).0 - d(k).2) / 2.0).collect();
+                        [rate, (0..now.len()).map(|k| (d(k).0 - 2.0 * d(k).1 + d(k).2) / cycle).collect()]
+                    })
+                    .collect(),
+                _ => zeros(),
+            }
+        };
+        if following {
+            self.shaper_targets = Some(target);
+        }
         self.history.push_back([self.raw_pos.clone(), self.raw_vel.clone(), self.raw_acc.clone()]);
         // The store keeps the longest span met so far: a period that grows again finds its past.
-        let span = trains.iter().flatten().fold(0.0, |m: f64, (t, _)| m.max(*t));
-        self.shaper_reach = self.shaper_reach.max(span.ceil() as usize + 2);
+        self.shaper_reach = self.shaper_reach.max(span(&trains).ceil() as usize + 2);
         while self.history.len() > self.shaper_reach {
             self.history.pop_front();
         }
         let newest = self.history.len() - 1;
-        // The plan `delay` cycles ago, between two stored cycles; before the store reaches back that far, its oldest.
-        let ago = |which: usize, axis: usize, delay: f64| -> f64 {
-            let (whole, part) = (delay.floor() as usize, delay.fract());
-            let at = |n: usize| self.history[newest - n.min(newest)][which][axis];
-            at(whole) * (1.0 - part) + at(whole + 1) * part
+        // The motions of the stored cycles but the oldest, which is read only as stored.
+        let oldest = self.tick - newest as u64;
+        while self.plans.len() > 1
+            && self.plans[1].first <= oldest + 1
+            && self.plans[1].from.is_none_or(|from| from <= oldest as f64)
+        {
+            self.plans.pop_front();
+        }
+        // The plan `delay` cycles ago: at a whole cycle as stored, between two the plan itself there; before the store
+        // reaches back that far, its oldest.
+        let ago = |delay: f64| -> [Vec<f64>; 3] {
+            let whole = delay.floor() as usize;
+            if whole >= newest {
+                return self.history[0].clone();
+            }
+            let owner = newest - whole;
+            if delay == delay.floor() {
+                return self.history[owner].clone();
+            }
+            let (tick, x) = (self.tick - whole as u64, now - delay);
+            let plan =
+                self.plans.iter().rev().find(|plan| plan.first <= tick && plan.from.is_none_or(|from| from <= x));
+            plan.and_then(|plan| self.plan_at(machine, plan, x)).unwrap_or_else(|| {
+                let n = self.set_pos.len();
+                [self.history[owner - 1][0].clone(), vec![0.0; n], vec![0.0; n]]
+            })
         };
+        // Each delay read once: the axes that share their modes share their delays.
+        let mut read: Vec<(f64, [Vec<f64>; 3])> = Vec::new();
+        for (delay, _) in trains.iter().flatten() {
+            if !read.iter().any(|(d, _)| d == delay) {
+                read.push((*delay, ago(*delay)));
+            }
+        }
+        let at = |delay: f64| &read.iter().find(|(d, _)| *d == delay).expect("every delay is read").1;
         let shaped = |which: usize, axis: usize| {
             let train = &trains[axis];
-            train.iter().map(|(delay, weight)| weight * ago(which, axis, *delay)).sum::<f64>()
+            let [rate, second] = &changes[axis];
+            // The plan's position, speed and acceleration `delay` ago, and what the delay's own change does to each.
+            let term = |k: usize, delay: f64| match which {
+                0 => at(delay)[0][axis],
+                1 => at(delay)[1][axis] * (1.0 - rate[k]),
+                _ => at(delay)[2][axis] * (1.0 - rate[k]).powi(2) - at(delay)[1][axis] * second[k],
+            };
+            train.iter().enumerate().map(|(k, (delay, weight))| weight * term(k, *delay)).sum::<f64>()
                 / train.iter().map(|(_, weight)| weight).sum::<f64>()
         };
         let axes = self.set_pos.len();
@@ -2145,7 +2689,8 @@ impl Controller {
         let planned = time_optimal.or_else(|| {
             self.segments[next].path.as_ref().and_then(|pieces| {
                 let (cycle, slack) = (self.profile_cycle, machine.setpoint_slack());
-                path::plan(machine.axes(), &self.set_pos, pieces, cycle, tolerance, slack).ok()
+                let spin = self.segments[next].law.spin;
+                path::plan_within(machine.axes(), spin, &self.set_pos, pieces, &[], cycle, tolerance, slack).ok()
             })
         });
         self.motion = match planned {
@@ -2172,7 +2717,7 @@ impl Controller {
 /// each point.
 fn trajectory(points: Vec<(f64, Vec<f64>)>, c2: bool) -> Motion {
     let speeds = if c2 { c2_speeds(&points) } else { neighbour_speeds(&points) };
-    Motion::Trajectory { points, speeds, start_tick: u64::MAX }
+    Motion::Trajectory { points, speeds, accelerations: None, start_tick: u64::MAX }
 }
 
 /// The speeds at the points of the Hermite cubics through them that make one C2 spline, clamped at rest at both ends:
@@ -2256,6 +2801,192 @@ pub(crate) fn hermite(points: &[(f64, Vec<f64>)], speeds: &[Vec<f64>], i: usize,
         b[0] * points[i].1[a] + b[1] * h * speeds[i][a] + b[2] * points[i + 1].1[a] + b[3] * h * speeds[i + 1][a]
     };
     [at(basis[0]), at(basis[1]) / h, at(basis[2]) / (h * h)]
+}
+
+/// The fieldbus queue (frames of setpoints newest last, each with the cycles it takes to arrive) for a profile cycle
+/// `ratio` of the old ones to a new one: at age `b` new cycles stands what the old queue had at age `b / ratio` old
+/// cycles, between two frames in proportion (as the shaper's history), and the delay is scaled with it, so every frame
+/// arrives at the same time in seconds. Interpolated, not repeated: the drives take every frame as a fresh setpoint.
+fn resample_fieldbus(
+    old: &std::collections::VecDeque<(usize, Vec<[f64; 5]>)>,
+    ratio: f64,
+) -> std::collections::VecDeque<(usize, Vec<[f64; 5]>)> {
+    let Some(newest) = old.len().checked_sub(1) else { return Default::default() };
+    (0..=(newest as f64 * ratio).floor() as usize)
+        .rev()
+        .map(|back| {
+            let (whole, part) = ((back as f64 / ratio).floor() as usize, (back as f64 / ratio).fract());
+            let (a, b) = (&old[newest - whole.min(newest)], &old[newest - (whole + 1).min(newest)]);
+            let stamp = ((a.0 as f64 * (1.0 - part) + b.0 as f64 * part) * ratio).round() as usize;
+            let frames = a.1.iter().zip(&b.1).map(|(a, b)| std::array::from_fn(|k| a[k] * (1.0 - part) + b[k] * part));
+            (stamp, frames.collect())
+        })
+        .collect()
+}
+
+/// A move `t` s after its start; with corner blending the previous move's remaining way to the corner on top, `old` with
+/// its own time.
+fn move_at(mv: &Move, t: f64, old: Option<(&Move, f64)>, [pos, vel, acc]: [&mut Vec<f64>; 3]) {
+    mv.at(t, pos, vel, acc);
+    if let Some((old, t_old)) = old {
+        let n = pos.len();
+        let (mut p, mut v, mut a, mut end) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+        old.at(t_old, &mut p, &mut v, &mut a);
+        old.at(f64::INFINITY, &mut end, &mut vec![0.0; n], &mut vec![0.0; n]);
+        for i in 0..n {
+            pos[i] += p[i] - end[i];
+            vel[i] += v[i];
+            acc[i] += a[i];
+        }
+    }
+}
+
+/// The ramp to rest from `from` at the speeds `vel` over `time` s, `t` s into it.
+fn halt(from: &[f64], vel: &[f64], time: f64, t: f64, [pos, speed, acc]: [&mut Vec<f64>; 3]) {
+    for i in 0..from.len() {
+        pos[i] = from[i] + vel[i] * (t - 0.5 * t * t / time);
+        speed[i] = vel[i] * (1.0 - t / time);
+        acc[i] = if t < time { -vel[i] / time } else { 0.0 };
+    }
+}
+
+/// The cam's slaves (`curve`, as `Machine::cam_at`) with the master at `master` and its speed and acceleration in `run`,
+/// each from its `offset`.
+fn cam_slaves(
+    curve: &dyn Fn(f64, &mut [[f64; 4]]),
+    master: f64,
+    run: [f64; 3],
+    offset: &[f64],
+    [pos, vel, acc]: [&mut Vec<f64>; 3],
+) {
+    let mut cam = vec![[0.0; 4]; pos.len()];
+    curve(master, &mut cam);
+    for (i, c) in cam.iter().enumerate() {
+        let [p, v, a] = crate::cam::slave_motion(*c, run);
+        (pos[i], vel[i], acc[i]) = (p + offset[i], v, a);
+    }
+}
+
+/// A trajectory through `points` `t` s after its start (profile cycle `dt`), at its end its last point at rest.
+fn path_at(
+    points: &[(f64, Vec<f64>)],
+    speeds: &[Vec<f64>],
+    accelerations: Option<&[Vec<f64>]>,
+    t: f64,
+    dt: f64,
+    [pos, vel, acc]: [&mut Vec<f64>; 3],
+) {
+    let last = points.len() - 1;
+    if t >= points[last].0 {
+        pos.copy_from_slice(&points[last].1);
+        vel.fill(0.0);
+        acc.fill(0.0);
+        return;
+    }
+    // A point a rounding error after `t` counts as at `t`: at a point the cubic that starts there is taken, not by the
+    // rounding of the two times the end of the one before, whose acceleration differs. Before the start, the start.
+    let i = points.partition_point(|(time, _)| *time <= t + 1e-6 * dt).saturating_sub(1).min(last - 1);
+    let t = t.max(points[0].0);
+    for a in 0..pos.len() {
+        [pos[a], vel[a], acc[a]] = match accelerations {
+            Some(accelerations) => quintic(points, speeds, accelerations, i, a, t),
+            None => hermite(points, speeds, i, a, t),
+        };
+    }
+}
+
+/// A setpoint from outside approached on a straight line, `done` of the way from `from` to `to` in `time` s.
+fn line_at(from: &[f64], to: &[f64], done: f64, time: f64, [pos, vel, acc]: [&mut Vec<f64>; 3]) {
+    for i in 0..to.len() {
+        // At the end the target itself, not from + (to - from), which can be a rounding off it.
+        pos[i] = if done < 1.0 { from[i] + (to[i] - from[i]) * done } else { to[i] };
+        // The speed of the cycle that ends here, also on arrival: in a stream the next setpoint is on its way, and a
+        // speed of zero for this one cycle would be a dip in every interval.
+        vel[i] = (to[i] - from[i]) / time;
+    }
+    acc.fill(0.0);
+}
+
+/// What tells a motion that makes the setpoints from one taken over by another (`Plan`): its kind and its start ticks
+/// (`u64::MAX`, not yet taken, counts as `tick`), a cam's stop, a conveyor's pass by its start. Idle and a dwell are
+/// the same: the plan stands.
+fn plan_key(motion: &Motion, pass: Option<&Pass>, tick: u64) -> [u64; 4] {
+    let at = |start: u64, before: u64| if start == u64::MAX { tick - before } else { start };
+    match motion {
+        Motion::Idle | Motion::Dwell { .. } => [0, 0, 0, 0],
+        Motion::Moving { start_tick, tail, .. } => {
+            [1, at(*start_tick, 0), tail.as_ref().map_or(u64::MAX, |(_, start)| *start), 0]
+        }
+        Motion::Following { start_tick, .. } => [2, at(*start_tick, 1), 0, 0],
+        Motion::Conveyor => [3, pass.map_or(u64::MAX, |pass| pass.start.to_bits()), 0, 0],
+        Motion::Cam { start_tick, stop, .. } => [4, at(*start_tick, 0), stop.map_or(u64::MAX, f64::to_bits), 0],
+        Motion::Trajectory { start_tick, .. } => [5, at(*start_tick, 0), 0, 0],
+        Motion::Halting { start_tick, .. } => [6, at(*start_tick, 1), 0, 0],
+    }
+}
+
+/// The longest delay of per-axis impulse trains (`Controller::trains`), cycles.
+fn span(trains: &[Vec<(f64, f64)>]) -> f64 {
+    trains.iter().flatten().fold(0.0, |m: f64, (t, _)| m.max(*t))
+}
+
+/// The quintic smoothstep 10 u^3 - 15 u^4 + 6 u^5 from 0 to 1, held at its ends: no step in its slope or its
+/// curvature, the steepest slope 1.875 at u = 1/2.
+fn smoothstep(u: f64) -> f64 {
+    let u = u.clamp(0.0, 1.0);
+    u * u * u * (10.0 - 15.0 * u + 6.0 * u * u)
+}
+
+/// Position, speed and acceleration of axis `a` at time `t` on the quintic from point i to point i + 1 with the speeds
+/// and accelerations there (Hermite interpolation of the fifth degree): at the points exactly those given.
+fn quintic(
+    points: &[(f64, Vec<f64>)],
+    speeds: &[Vec<f64>],
+    accelerations: &[Vec<f64>],
+    i: usize,
+    a: usize,
+    t: f64,
+) -> [f64; 3] {
+    let h = points[i + 1].0 - points[i].0;
+    let s = (t - points[i].0) / h;
+    let (s2, s3, s4, s5) = (s * s, s * s * s, s.powi(4), s.powi(5));
+    // The basis functions of p0, h v0, h² a0, h² a1, h v1, p1 and their first and second derivatives in s.
+    let basis = [
+        [
+            1.0 - 10.0 * s3 + 15.0 * s4 - 6.0 * s5,
+            s - 6.0 * s3 + 8.0 * s4 - 3.0 * s5,
+            0.5 * s2 - 1.5 * s3 + 1.5 * s4 - 0.5 * s5,
+            0.5 * s3 - s4 + 0.5 * s5,
+            -4.0 * s3 + 7.0 * s4 - 3.0 * s5,
+            10.0 * s3 - 15.0 * s4 + 6.0 * s5,
+        ],
+        [
+            -30.0 * s2 + 60.0 * s3 - 30.0 * s4,
+            1.0 - 18.0 * s2 + 32.0 * s3 - 15.0 * s4,
+            s - 4.5 * s2 + 6.0 * s3 - 2.5 * s4,
+            1.5 * s2 - 4.0 * s3 + 2.5 * s4,
+            -12.0 * s2 + 28.0 * s3 - 15.0 * s4,
+            30.0 * s2 - 60.0 * s3 + 30.0 * s4,
+        ],
+        [
+            -60.0 * s + 180.0 * s2 - 120.0 * s3,
+            -36.0 * s + 96.0 * s2 - 60.0 * s3,
+            1.0 - 9.0 * s + 18.0 * s2 - 10.0 * s3,
+            3.0 * s - 12.0 * s2 + 10.0 * s3,
+            -24.0 * s + 84.0 * s2 - 60.0 * s3,
+            60.0 * s - 180.0 * s2 + 120.0 * s3,
+        ],
+    ];
+    let given = [
+        points[i].1[a],
+        h * speeds[i][a],
+        h * h * accelerations[i][a],
+        h * h * accelerations[i + 1][a],
+        h * speeds[i + 1][a],
+        points[i + 1].1[a],
+    ];
+    let at = |b: &[f64; 6]| b.iter().zip(&given).map(|(b, g)| b * g).sum::<f64>();
+    [at(&basis[0]), at(&basis[1]) / h, at(&basis[2]) / (h * h)]
 }
 
 /// A string of the config.
@@ -2350,7 +3081,11 @@ fn motion_law(cfg: &Config, machine: &dyn Machine) -> Result<MotionLaw> {
             Some((axis.ok_or_else(|| ConfigError::Invalid("profile.vertical_axis".into()))?, up, up_ratio))
         }
     };
-    Ok(MotionLaw { shape, deceleration_ratio, vertical })
+    // The flange's own limits, where the machine has them as limits of the plan (an arm in tool space).
+    let checks = machine.rating_checks();
+    let limit = |name: &str| checks.iter().find(|c| c.check == name && c.signal.starts_with("plan.")).map(|c| c.limit);
+    let spin = limit("tool-angular-speed").zip(limit("tool-angular-acceleration")).map(|(w, a)| [w, a]);
+    Ok(MotionLaw { shape, deceleration_ratio, vertical, spin })
 }
 
 /// A segment that starts on its target (within 1 nm on every axis) has no way to time: it is a move of no length.
@@ -2360,6 +3095,19 @@ fn at_target(from: &[f64], target: &[f64]) -> bool {
 
 pub(crate) fn in_range(machine: &dyn Machine, target: &[f64]) -> bool {
     near_range(machine, target, 0.0)
+}
+
+/// A config's pose at `path` that `in_range` refuses: with the machine's own reason where it gives one (out of reach,
+/// beyond a joint's stop), so that every front end shows the place and the reason; outside an axis range, as a value
+/// out of range.
+fn range_error(machine: &dyn Machine, target: &[f64], path: String) -> ConfigError {
+    let axes = machine.axes();
+    let within =
+        target.len() == axes.len() && target.iter().zip(axes).all(|(t, a)| t.is_finite() && *t >= a.min && *t <= a.max);
+    match within.then(|| machine.unreachable(target, 0.0)).flatten() {
+        Some(why) => ConfigError::Part(why, path),
+        None => ConfigError::Invalid(path),
+    }
 }
 
 /// A pose a path from `start` may go to. The setpoint at rest is where the motors stand, up to
@@ -2508,6 +3256,42 @@ mod tests {
     /// Acceleration of axis 0 just before and just after point i of a curve through `points` with `speeds`.
     fn around(points: &[(f64, Vec<f64>)], speeds: &[Vec<f64>], i: usize) -> (f64, f64) {
         (hermite(points, speeds, i - 1, 0, points[i].0)[2], hermite(points, speeds, i, 0, points[i].0)[2])
+    }
+
+    /// The fieldbus queue of four frames, oldest first setpoints 0, 1, 2, 3 and delays 3, 2, 1, 0 cycles, after the
+    /// profile cycle halves (ratio 2): seven frames (3 * 2 + 1); newest first the new ages 0..6 read the old ages 0,
+    /// 0.5, .., 3, so the setpoints are 3, 2.5, .., 0 and the delays (old 0, 0.5, .., 3 doubled) 0, 1, .., 6: every
+    /// frame arrives at the same time in seconds, and none repeats its neighbour (the drives take each as fresh).
+    #[test]
+    fn the_fieldbus_queue_keeps_its_delay_in_seconds_across_a_cycle_change() {
+        let queue: std::collections::VecDeque<(usize, Vec<[f64; 5]>)> =
+            (0..4).map(|k| (3 - k, vec![[k as f64; 5]])).collect();
+        let new = resample_fieldbus(&queue, 2.0);
+        assert_eq!(new.iter().rev().map(|f| f.0).collect::<Vec<_>>(), [0, 1, 2, 3, 4, 5, 6]);
+        let set: Vec<f64> = new.iter().rev().map(|f| f.1[0][0]).collect();
+        assert_eq!(set, [3.0, 2.5, 2.0, 1.5, 1.0, 0.5, 0.0]);
+        // The same ratio back: the original stamps and frames (new ages 0, 2, 4, 6).
+        let back = resample_fieldbus(&new, 0.5);
+        assert_eq!(back, queue);
+    }
+
+    /// The quintic of `Command::RatedTrajectory` is a polynomial of the fifth degree where the points' positions, speeds
+    /// and accelerations are its own: p(t) = 1 - 2 t + 3 t^2 + t^3 - 4 t^4 + 0.5 t^5, points at 0.2 s and 0.7 s, by hand
+    /// at 0.45 s (position, speed and acceleration of the polynomial), and the given values at both points.
+    #[test]
+    fn the_quintic_reproduces_a_fifth_degree_polynomial() {
+        let c = [1.0, -2.0, 3.0, 1.0, -4.0, 0.5];
+        let p = |t: f64, d: usize| -> f64 {
+            (d..6).map(|k| c[k] * (k - d + 1..=k).map(|f| f as f64).product::<f64>() * t.powi((k - d) as i32)).sum()
+        };
+        let points = vec![(0.2, vec![p(0.2, 0)]), (0.7, vec![p(0.7, 0)])];
+        let (speeds, accelerations) = (vec![vec![p(0.2, 1)], vec![p(0.7, 1)]], vec![vec![p(0.2, 2)], vec![p(0.7, 2)]]);
+        for t in [0.2, 0.45, 0.7] {
+            let got = quintic(&points, &speeds, &accelerations, 0, 0, t);
+            for d in 0..3 {
+                assert!((got[d] - p(t, d)).abs() < 1e-12, "at {t} s, derivative {d}: {} against {}", got[d], p(t, d));
+            }
+        }
     }
 
     /// The C2 spline through (0 s, 0 m), (1 s, 1 m) and (3 s, 1 m), at rest at both ends. Its one inner speed m solves

@@ -18,7 +18,7 @@
 //!   small drops, where the elliptic law is dp ~ mdot^2 (1 - b) / C^2 (`Flow::series`).
 //! - A 5/2 valve (or a 5/3 with a closed centre) that switches `valve_switch_time_s` after its command; inflow through
 //!   valve and tube (the throttles' and the cushions' check valves open), outflow also through the meter-out throttle
-//!   of that chamber, or within the cushion length of its end through the cushion's bleed screw alone.
+//!   of that chamber, or within the cushion length of its end through the cushion's bleed screw behind that throttle.
 //! - The piston: (m + payload) dv/dt = p1 A1 - p2 A2 - p_atm (A1 - A2) - F_load - m g sin(incline) - F_seal + F_stop,
 //!   the seal's friction a Stribeck curve whose Coulomb level rises with the chambers' mean gauge pressure, the end
 //!   stops `mech::HardStop` (elastic bumpers).
@@ -26,8 +26,11 @@
 //! shortcut: the flow law's last 0.5 % before the pressures meet is a straight line through zero (`LINEAR`), not
 //! the root: the root's slope is infinite there, which no fixed step integrates. ISO 6358-3 has a laminar region of
 //! its own there; take it in if a test against measured data ever needs the last 0.5 % of a pressure.
-//! shortcut: the cylinder rides on the machine without acting back on it (its weight and reaction are in the masses
-//! of the machine's body that carries it); exact for a cylinder at right angles to the axes that carry it.
+//! The cylinder rides on the machine without acting back on it: its weight and its reaction are in the masses of the
+//! machine's body that carries it. That is exact only for a cylinder at right angles to the linear axes that carry it
+//! and on no rotary one, so `attach` checks it (`along_carrying_axis`): a cylinder extends in the x-z plane at
+//! `incline_deg` above x, direction (cos, 0, sin), and a file whose cylinder has a component along the direction of a
+//! linear axis that carries it, or rides on a rotary axis, is refused.
 
 use crate::mech::HardStop;
 use sim_core::{AxisInfo, BeltSection, FrictionContact, MotorInfo, ThermalPart};
@@ -412,7 +415,8 @@ impl Cylinder {
             switch_time: nonneg("valve_switch_time_s")?,
             inflow: Flow::series(&[valve, tube]),
             outflow: throttles.map(|t| Flow::series(&[valve, tube, t])),
-            bleed: [Flow::series(&[valve, tube, bleed]); 2],
+            // The cushion's bleed screw sits behind the port's meter-out throttle, so that is in series too.
+            bleed: throttles.map(|t| Flow::series(&[valve, tube, bleed, t])),
             cushion,
             stops: HardStop { stiffness: pos("stop_stiffness_n_m")?, damping: nonneg("stop_damping_n_s_m")? },
             seal,
@@ -648,6 +652,8 @@ impl Cylinder {
         let moved = self.mass + if self.payload_on { self.payload } else { 0.0 };
         if t.cushioned == 0.0 && self.cushion > 0.0 && to_end <= self.cushion {
             t.cushioned = 1.0;
+            // The kinetic energy alone, the vendor's rule for the cylinder's own cushioning (Festo DSBC data sheet: v = sqrt(2 E /
+            // (m1 + m2))); the weight's work over the cushion length belongs to the rule for external shock absorbers.
             (t.impact_speed, t.impact_energy) = (v.abs(), 0.5 * moved * v * v);
         }
         if t.arrived == 0.0 && to_end <= self.sensor_band {
@@ -719,10 +725,12 @@ pub struct CylinderNode {
     pub values: String,
 }
 
-/// The machine with the cylinders `nodes` attached, as it is without any.
+/// The machine with the cylinders `nodes` attached, as it is without any. `carrying`: the axes that carry the tool,
+/// where the cylinders sit, each with its direction (a unit vector) or None for a rotary axis.
 pub fn attach(
     cfg: &Config,
     nodes: &[CylinderNode],
+    carrying: &[(String, Option<[f64; 3]>)],
     machine: Box<dyn Machine>,
 ) -> Result<Box<dyn Machine>, ConfigError> {
     if nodes.is_empty() {
@@ -731,11 +739,29 @@ pub fn attach(
     let h = cfg.positive("sim.dt_s")? / cfg.positive("sim.substeps")?;
     let cylinders =
         nodes.iter().map(|n| Cylinder::from_config(cfg, &n.id, &n.key, &n.values, h)).collect::<Result<Vec<_>, _>>()?;
+    for (c, n) in cylinders.iter().zip(nodes) {
+        if let Some(axis) = along_carrying_axis(c.incline, carrying) {
+            return Err(ConfigError::Invalid(format!(
+                "{}.incline_deg (the cylinder {} pushes on the machine's axis {axis}, which carries it; the model \
+                 lets the cylinder ride without acting back and holds only at right angles to the linear axes that \
+                 carry it and on none that turns it)",
+                n.values, n.id
+            )));
+        }
+    }
     let pose = crate::sim::start_pose(cfg, machine.as_ref())?;
     let (mut state, mut torque, mut signals) = (Vec::new(), vec![0.0; machine.motors().len()], Vec::new());
     machine.equilibrium(&pose, &mut state, &mut torque);
     machine.base_signals(&state, &torque, &mut signals);
     Ok(Box::new(Pneumatic { inner_base_signals: signals.len(), inner: machine, cylinders }))
+}
+
+/// The id of a carrying axis that a cylinder extending at `incline` (rad, above x in the x-z plane) pushes on: a
+/// linear one whose direction has more than rounding (1e-9) of the cylinder's, or a rotary one (it would turn the
+/// cylinder, whose incline is fixed, and the push has a moment about it). None where it pushes on none.
+fn along_carrying_axis(incline: f64, carrying: &[(String, Option<[f64; 3]>)]) -> Option<&str> {
+    let (sin, cos) = incline.sin_cos();
+    carrying.iter().find(|(_, d)| d.is_none_or(|d| (cos * d[0] + sin * d[2]).abs() > 1e-9)).map(|(id, _)| id.as_str())
 }
 
 impl Pneumatic {
@@ -758,6 +784,9 @@ impl Machine for Pneumatic {
     fn twist(&self, torque: &[f64], acc: &[f64], out: &mut [f64]) {
         self.inner.twist(torque, acc, out)
     }
+    fn twist_at(&self, angle: &[f64], torque: &[f64], acc: &[f64], out: &mut [f64]) {
+        self.inner.twist_at(angle, torque, acc, out)
+    }
     fn rigid_split_torque(&self, angle: &[f64], speed: &[f64], acc: &[f64], rotor_acc: &[f64], out: &mut [f64]) {
         self.inner.rigid_split_torque(angle, speed, acc, rotor_acc, out)
     }
@@ -772,6 +801,9 @@ impl Machine for Pneumatic {
     }
     fn cam_at(&self, master: f64, out: &mut [[f64; 4]]) {
         self.inner.cam_at(master, out)
+    }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        self.inner.cam_curve()
     }
     fn gantry_motors(&self) -> Option<[usize; 2]> {
         self.inner.gantry_motors()
@@ -845,11 +877,20 @@ impl Machine for Pneumatic {
     fn rigid_tensions(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
         self.inner.rigid_tensions(tool_pos, tool_acc, out)
     }
+    fn rigid_tensions_moving(&self, tool_pos: &[f64], tool_vel: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
+        self.inner.rigid_tensions_moving(tool_pos, tool_vel, tool_acc, out)
+    }
+    fn tension_band(&self) -> Option<[f64; 2]> {
+        self.inner.tension_band()
+    }
     fn rigid_guide_loads(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_guide_loads(tool_pos, tool_acc, out)
     }
     fn rigid_friction(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_friction(tool_pos, tool_dir, out)
+    }
+    fn rigid_friction_rise(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<Vec<[f64; 2]>>) {
+        self.inner.rigid_friction_rise(tool_pos, tool_dir, out)
     }
     /// The machine's alone: a cylinder is an open system, fed by the supply, and keeps its own balance (the signals
     /// `cylinder.<id>.*` and `Cylinder::mechanical_energy`, `gas_energy`).
@@ -865,6 +906,9 @@ impl Machine for Pneumatic {
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.inner.set_brake_engaged(engaged)
+    }
+    fn substeps_wanted(&self, state: &[f64], torque: &[f64], dt: f64, substeps: u32) -> u32 {
+        self.inner.substeps_wanted(&state[..self.n()], torque, dt, substeps)
     }
     fn valves(&self) -> Vec<(String, f64)> {
         self.cylinders.iter().map(|c| (c.id.clone(), c.track.command)).collect()
@@ -914,11 +958,20 @@ impl Machine for Pneumatic {
     fn modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
         self.inner.modes(tool_pose)
     }
+    fn sway_modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
+        self.inner.sway_modes(tool_pose)
+    }
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        self.inner.trains(tool_pose)
+    }
     fn belt_wraps(&self, tool_pose: &[f64]) -> Vec<f64> {
         self.inner.belt_wraps(tool_pose)
     }
     fn unreachable(&self, tool_pose: &[f64], slack: f64) -> Option<&'static str> {
         self.inner.unreachable(tool_pose, slack)
+    }
+    fn refuses_pick(&self, tool_pose: &[f64]) -> Option<&'static str> {
+        self.inner.refuses_pick(tool_pose)
     }
     fn condition(&self, tool_pose: &[f64]) -> Option<f64> {
         self.inner.condition(tool_pose)
@@ -996,6 +1049,12 @@ impl Machine for Pneumatic {
     fn friction_curve(&self, i: usize, speed: f64, load_scale: f64) -> [f64; 3] {
         self.inner.friction_curve(i, speed, load_scale)
     }
+    fn friction_rotary(&self, i: usize) -> bool {
+        self.inner.friction_rotary(i)
+    }
+    fn friction_speed_limit(&self, i: usize, motor_speed: &[f64]) -> Option<f64> {
+        self.inner.friction_speed_limit(i, motor_speed)
+    }
     fn belt_sections(&self) -> Vec<BeltSection> {
         self.inner.belt_sections()
     }
@@ -1008,6 +1067,24 @@ impl Machine for Pneumatic {
 mod tests {
     use super::*;
     use sim_core::Rk4;
+
+    /// A cylinder hanging down (-90 degrees) from a carriage on a horizontal x pushes at right angles to it (cos =
+    /// 6e-17), and to a horizontal y: carried. At 0 degrees it pushes along x, at 45 degrees partly along it; -90 pushes
+    /// along a vertical z, and along an x inclined by 30 degrees (sin 30 of it); any rotary axis is refused.
+    #[test]
+    fn a_cylinder_along_a_carrying_axis_is_found() {
+        let axis = |id: &str, d: Option<[f64; 3]>| (id.to_string(), d);
+        let (x, y, z) =
+            (axis("x", Some([1.0, 0.0, 0.0])), axis("y", Some([0.0, 1.0, 0.0])), axis("z", Some([0.0, 0.0, 1.0])));
+        let down = -std::f64::consts::FRAC_PI_2;
+        assert_eq!(along_carrying_axis(down, &[x.clone(), y.clone()]), None);
+        assert_eq!(along_carrying_axis(0.0, &[y.clone(), x.clone()]), Some("x"));
+        assert_eq!(along_carrying_axis(0.25 * std::f64::consts::PI, std::slice::from_ref(&x)), Some("x"));
+        assert_eq!(along_carrying_axis(down, &[x, y.clone(), z]), Some("z"));
+        let tilted = axis("x", Some([30f64.to_radians().cos(), 0.0, 30f64.to_radians().sin()]));
+        assert_eq!(along_carrying_axis(down, &[tilted]), Some("x"));
+        assert_eq!(along_carrying_axis(down, &[y, axis("c", None)]), Some("c"));
+    }
 
     /// A DSBC-32-like cylinder from `TABLE` (32 mm bore, 12 mm rod: A1 = 8.0425e-4 m2, A2 = 6.9115e-4 m2, 100 mm
     /// stroke, 0.5 kg, dead volumes 5 cm3, 6 bar gauge), horizontal, without friction and cushions unless `changes` say.
@@ -1279,5 +1356,28 @@ mod tests {
         let error = Cylinder::from_config(&cfg, "z", "cylinder", "c", 62.5e-6 / 4.0).unwrap_err();
         assert_eq!(error.key(), "error-cylinder-unstable");
         assert!(error.detail().contains("flow"), "{}", error.detail());
+    }
+
+    /// The energy judged against the cushion's rating at 0.2 m/s into the 17 mm cushion with m = moved mass is the
+    /// kinetic m v^2 / 2 alone (the vendor's rule), whichever way the weight acts: hanging 1 kg gives 0.02 J (m g L =
+    /// 0.1667 J of weight work is not added), extending upwards and retracting down likewise.
+    #[test]
+    fn the_cushion_energy_is_the_kinetic_energy_whichever_way_the_weight_acts() {
+        let entering = |incline: &str, spool: f64, x: f64| {
+            let mut c = cylinder(&[incline], 1e-5);
+            c.cushion = 0.017;
+            c.track.spool = spool;
+            c.track.cushioned = 0.0;
+            let mut s = rest(&c, spool);
+            (s[X], s[V]) = (x, 0.2 * spool);
+            c.stepped(&s, 1e-5);
+            (c.track.impact_energy, c.mass + c.payload)
+        };
+        let (down, m) = entering("c.incline_deg = -90.0", 1.0, 0.1 - 0.0169);
+        near(down, 0.5 * m * 0.04, 1e-9, "extending down");
+        let (up, m) = entering("c.incline_deg = 90.0", 1.0, 0.1 - 0.0169);
+        near(up, 0.5 * m * 0.04, 1e-9, "extending up");
+        let (retract, m) = entering("c.incline_deg = 90.0", -1.0, 0.0169);
+        near(retract, 0.5 * m * 0.04, 1e-9, "retracting down");
     }
 }

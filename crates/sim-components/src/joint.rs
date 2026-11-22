@@ -14,7 +14,7 @@
 //!   (effects.hard_stops).
 
 use crate::mech::{GearTorque, Gearbox, HardStop, HoldingBrake, Ripple, ShaftFriction};
-use sim_core::{Config, ConfigError};
+use sim_core::{Config, ConfigError, FRICTION_SIGNALS, SignalInfo};
 
 #[derive(Debug, Clone)]
 pub struct RotaryJoint {
@@ -127,6 +127,24 @@ impl RotaryJoint {
         self.gearbox.ratio
     }
 
+    /// Its train for the time-optimal plan (`Machine::trains`): the gearbox's spring (K1, which holds a converter's own
+    /// compliance behind it in series) between the rotor and the rest of `whole`, the motor's rigid inertia at a pose, all
+    /// referred to the motor over the ratio squared.
+    /// Behind a screw whose stiffness follows its nut, the far end's (`train_at` takes the pose's).
+    pub fn train(&self, whole: f64) -> Option<sim_core::Train> {
+        Self::train_of(&self.gearbox, self.ratio(), self.rotor_inertia, whole)
+    }
+
+    /// `train` with the joint at `travel`, where a screw's stiffness follows its nut (`Gearbox::at`).
+    pub fn train_at(&self, travel: f64, whole: f64) -> Option<sim_core::Train> {
+        Self::train_of(&self.gearbox.at(travel), self.ratio(), self.rotor_inertia, whole)
+    }
+
+    fn train_of(g: &Gearbox, ratio: f64, rotor: f64, whole: f64) -> Option<sim_core::Train> {
+        // K1 holds a converter's compliance already (`Converter::apply_back`); `band_compliance` is that same spring.
+        sim_core::Train::of(g.stiffness / (ratio * ratio), rotor, whole)
+    }
+
     /// The rotor's inertia as the joint feels it in the rigid model.
     pub fn reflected_inertia(&self) -> f64 {
         self.gearbox.ratio * self.gearbox.ratio * self.rotor_inertia
@@ -152,10 +170,25 @@ impl RotaryJoint {
         engaged: bool,
     ) -> (GearTorque, f64, f64) {
         let gear = self.gearbox.torque(rotor, rotor_speed, angle, speed);
+        let (acc, rate) = self.rotor_under(command, rotor, rotor_speed, gear, brake, engaged);
+        (gear, acc, rate)
+    }
+
+    /// `rotor` with the gearbox's torques `gear` given (a gear with its Maxwell arm, `Gearbox::torque_with`): the
+    /// rotor's acceleration and the brake's deflection rate.
+    pub fn rotor_under(
+        &self,
+        command: f64,
+        rotor: f64,
+        rotor_speed: f64,
+        gear: GearTorque,
+        brake: f64,
+        engaged: bool,
+    ) -> (f64, f64) {
         let (held, rate) = self.brake.torque(engaged, rotor_speed, brake);
         let acc = (self.ripple.apply(command, rotor) - gear.rotor - self.shaft.torque(rotor_speed) - held)
             / self.rotor_inertia;
-        (gear, acc, rate)
+        (acc, rate)
     }
 
     /// Rigid model: the torque the motor puts on the arm through a loss-free gearbox with a massless rotor at the
@@ -163,6 +196,38 @@ impl RotaryJoint {
     pub fn rigid_drive(&self, command: f64, rotor: f64, rotor_speed: f64, brake: f64, engaged: bool) -> (f64, f64) {
         let (held, rate) = self.brake.torque(engaged, rotor_speed, brake);
         (self.gearbox.ratio * (self.ripple.apply(command, rotor) - self.shaft.torque(rotor_speed) - held), rate)
+    }
+
+    /// The joint's own friction torque at a steady speed at the output, split into [Coulomb, viscous, stiction] (N m;
+    /// they add up to `friction.torque(speed)` of a joint without gearbox drag): the level `level` is Coulomb plus the
+    /// Stribeck rise to the breakaway, both under the same tanh, the viscous part is linear. For the friction view.
+    pub fn friction_split(&self, speed: f64) -> [f64; 3] {
+        let f = &self.friction;
+        let (s, seals) = ((speed / f.smoothing).tanh(), f.oil.powf(f.seal_exponent));
+        [seals * f.coulomb * s, f.viscous * speed, (f.level(speed) - seals * f.coulomb) * s]
+    }
+
+    /// The values of the friction view's signals `<id>.friction_<part>` (`sim_core::FRICTION_SIGNALS`) of this joint at
+    /// an output speed: the speed, the three parts, and a load factor of 1 (a bearing's levels do not follow a load).
+    pub fn friction_signals(&self, speed: f64) -> [f64; 5] {
+        let [coulomb, viscous, stiction] = self.friction_split(speed);
+        [speed, coulomb, viscous, stiction, 1.0]
+    }
+
+    /// The infos of `friction_signals` for a joint `id` of the owner `owner_key`: rad/s and N m.
+    pub fn friction_infos(id: &str, owner_key: &str) -> Vec<SignalInfo> {
+        FRICTION_SIGNALS
+            .iter()
+            .map(|part| {
+                let unit = match *part {
+                    "speed" => "rad/s",
+                    "load_scale" => "",
+                    _ => "N m",
+                };
+                let quantity = format!("quantity-friction-{}", part.replace('_', "-"));
+                SignalInfo::new(format!("{id}.friction_{part}"), owner_key, &quantity, unit)
+            })
+            .collect()
     }
 
     /// Energy in the stops' springs at an angle.
@@ -227,7 +292,14 @@ mod tests {
     #[test]
     fn a_converter_behind_the_gearbox_gives_the_hand_calculated_joint() {
         use crate::transmission::Converter;
-        let pinion = Converter { lever: 0.05, stiffness: 1e7, backlash: 1e-4, efficiency: 0.95, inertia: 0.04 };
+        let pinion = Converter {
+            lever: 0.05,
+            stiffness: 1e7,
+            backlash: 1e-4,
+            efficiency: 0.95,
+            inertia: 0.04,
+            damping_ratio: 0.0,
+        };
         let mut cfg = Config::parse(&joint_text()).unwrap();
         let mut j = RotaryJoint::from_config(&cfg).unwrap();
         pinion.apply(&cfg, &mut j).unwrap();
@@ -241,6 +313,36 @@ mod tests {
         let mut j = RotaryJoint::from_config(&cfg).unwrap();
         pinion.apply(&cfg, &mut j).unwrap();
         assert!(close(j.gearbox.half_backlash, 1e-4));
+    }
+
+    /// The mesh friction's bristle behind a converter is in N/m: a pinion of 50 mm (1e7 N/m) behind the 1e4 N m/rad
+    /// gearbox gives the series 2.857143e6 N/m, MESH_STIFFNESS times it. A stiff gearbox (1e12 N m/rad) behind a rigid
+    /// 50 mm lever would give 1e12 / 0.05^2 = 4e14 N/m; the cap is the rotor (2e-4 kg m^2) at 20 / 0.05 = 400 rad/m,
+    /// 2e-4 * 400^2 = 32 kg, times (BRISTLE_RATE_MAX / 4)^2 = (2.5e4)^2: 32 * 6.25e8 = 2e10 N/m.
+    #[test]
+    fn a_converters_mesh_bristle_is_in_newtons_per_metre_and_capped() {
+        use crate::transmission::Converter;
+        let text = joint_text()
+            .replace("gearbox_lost_motion = false", "gearbox_lost_motion = false\ngearbox_mesh_friction = true");
+        let mut cfg = Config::parse(&text).unwrap();
+        let mut j = RotaryJoint::from_config(&cfg).unwrap();
+        Converter { lever: 0.05, stiffness: 1e7, backlash: 0.0, efficiency: 0.95, inertia: 0.04, damping_ratio: 0.0 }
+            .apply(&cfg, &mut j)
+            .unwrap();
+        assert!((j.gearbox.mesh_stiffness / 2.857142857e6 - 1.0).abs() < 1e-9);
+        cfg.set_text("gearbox.stiffness_nm_rad = 1e12").unwrap();
+        let mut j = RotaryJoint::from_config(&cfg).unwrap();
+        Converter {
+            lever: 0.05,
+            stiffness: f64::INFINITY,
+            backlash: 0.0,
+            efficiency: 1.0,
+            inertia: 0.0,
+            damping_ratio: 0.0,
+        }
+        .apply(&cfg, &mut j)
+        .unwrap();
+        assert!((j.gearbox.mesh_stiffness / 2e10 - 1.0).abs() < 1e-9);
     }
 
     /// The slide's own table: its stroke, its guides' friction in N, its stops in N/m.
@@ -260,5 +362,25 @@ stop_damping_n_s_m = 0.0
         // 30 N + 40 N s/m * 0.5 m/s against the motion; 1 mm beyond the far stop, 2000 N back.
         assert!((j.output_torque(0.4, 0.5) + 50.0).abs() < 1e-9);
         assert!((j.output_torque(0.801, 0.0) + 2000.0).abs() < 1e-6);
+    }
+
+    /// Hand value: at 2 rad/s (far above the 1e-3 smoothing) the joint of the text has Coulomb 2 N m, viscous
+    /// 0.5 * 2 = 1 N m and no stiction rise; the parts add up to `friction.torque` and the signals carry them.
+    #[test]
+    fn friction_view_parts_add_up() {
+        let j = joint();
+        let [c, v, s] = j.friction_split(2.0);
+        assert!((c - 2.0).abs() < 1e-9 && (v - 1.0).abs() < 1e-12 && s.abs() < 1e-12);
+        assert!((c + v + s - j.friction.torque(2.0)).abs() < 1e-12);
+        assert!((c + v + s + j.friction.torque(-2.0)).abs() < 1e-12, "odd in the speed");
+        assert_eq!(j.friction_signals(2.0), [2.0, c, v, s, 1.0]);
+        assert_eq!(RotaryJoint::friction_infos("joint.1", "arm-1").len(), sim_core::FRICTION_SIGNALS.len());
+        // A breakaway level of 5 N m falling over 1 rad/s: at 1 rad/s the rise is (5 - 2) e^-1 = 1.10364 N m, the
+        // Coulomb part stays 2 N m; together the torque less the viscous part.
+        let mut j = j;
+        (j.friction.stiction, j.friction.stribeck) = (5.0, 1.0);
+        let [c, v, s] = j.friction_split(1.0);
+        assert!((c - 2.0).abs() < 1e-9 && (s - 3.0 * (-1.0f64).exp()).abs() < 1e-9 && (v - 0.5).abs() < 1e-12);
+        assert!((c + v + s - j.friction.torque(1.0)).abs() < 1e-12);
     }
 }

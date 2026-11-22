@@ -221,6 +221,8 @@ bristle_damping_n_s_m = 1500.0
 preload_n = 200.0
 
 [motor]
+# A made-up motor, no catalogue motor: no row of catalog/ has these values (0.45 N m/A, 1.27 N m at 2.822 A, 9.5 A,
+# 0.3 kg cm2), so its stall current is its rated one. A motor named in [parts] replaces them.
 rotor_inertia_kgm2 = 0.3e-4
 friction_coulomb_nm = 0.02
 friction_viscous_nm_s_rad = 1.0e-4
@@ -407,6 +409,9 @@ friction_feedforward_model = "characteristic"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 # Current controller: Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
@@ -415,6 +420,8 @@ current_tn_s = 2.5e-3
 # The DC link voltage. The winding gets sqrt(3/2) times it at most, here 190 V: the model's one winding
 # carries the RMS phase current, and its voltage times that current is the power of all three phases.
 bus_voltage_v = 155.13
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 3.8
 # What the motor can give continuously; the RMS torque of a cycle is judged against it.
 rated_torque_nm = 1.27
@@ -800,7 +807,7 @@ id = "a1"
 length_m = 0.3
 axes = { x = 1, y = 1 }
 pulleys = { pulley_a = 1 }
-route = ["head", "gantry_left", "pulley_a"]
+route = ["head", "gantry_left_a", "pulley_a"]
 pos = [450, -80]
 
 [[machine.section]]
@@ -808,7 +815,7 @@ id = "a2"
 length_m = 1.6
 axes = { x = -1, y = -1 }
 pulleys = { pulley_a = -1 }
-route = ["pulley_a", "back_left", "back_right", "gantry_right", "head"]
+route = ["pulley_a", "back_left_a", "back_right_a", "gantry_right_a", "head"]
 pos = [450, 60]
 
 # Belt B, crossing A: 1.0 m + x - y from the head to motor B, 1.0 m - x + y back.
@@ -817,7 +824,7 @@ id = "b1"
 length_m = 1.0
 axes = { x = 1, y = -1 }
 pulleys = { pulley_b = 1 }
-route = ["head", "gantry_left", "back_left", "back_right", "pulley_b"]
+route = ["head", "gantry_left_b", "back_left_b", "back_right_b", "pulley_b"]
 pos = [450, 240]
 
 [[machine.section]]
@@ -825,7 +832,7 @@ id = "b2"
 length_m = 1.0
 axes = { x = -1, y = 1 }
 pulleys = { pulley_b = -1 }
-route = ["pulley_b", "gantry_right", "head"]
+route = ["pulley_b", "gantry_right_b", "head"]
 pos = [450, 380]
 
 [[machine.body]]
@@ -856,12 +863,11 @@ friction = "friction_z"
 carries = ["head"]
 pos = [900, 300]
 
-# The idlers the belts run over (effects.idlers): two at the back corners, where belt A passes at x + y and belt B at
-# x - y (both run past them), and one at each end of the gantry, which moves with Y.
-# shortcut: one idler per corner for both belts, with the speed of the faster; a real CoreXY has one per belt. The idler
-# table is the T-gantry's.
+# The idlers the belts run over (effects.idlers): one per belt at each corner both belts pass, two at the back corners,
+# where belt A runs at x + y and belt B at x - y over ground, and two at each end of the gantry, which moves with Y; there
+# a belt's speed relative to the gantry is the head's along X for both.
 [[machine.idler]]
-id = "back_left"
+id = "back_left_a"
 speed = { x = 1, y = 1 }
 radius_m = 0.012
 inertia_kgm2 = 2.0e-6
@@ -870,8 +876,17 @@ at_m = [-0.08, 0.63, 0.06]
 pos = [1050, 0]
 
 [[machine.idler]]
-id = "back_right"
+id = "back_left_b"
 speed = { x = 1, y = -1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+at_m = [-0.08, 0.63, 0.06]
+pos = [1200, 0]
+
+[[machine.idler]]
+id = "back_right_a"
+speed = { x = 1, y = 1 }
 radius_m = 0.012
 inertia_kgm2 = 2.0e-6
 friction_nm = 0.002
@@ -879,7 +894,16 @@ at_m = [0.58, 0.63, 0.06]
 pos = [1050, 100]
 
 [[machine.idler]]
-id = "gantry_left"
+id = "back_right_b"
+speed = { x = 1, y = -1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+at_m = [0.58, 0.63, 0.06]
+pos = [1200, 100]
+
+[[machine.idler]]
+id = "gantry_left_a"
 speed = { x = 1 }
 radius_m = 0.012
 inertia_kgm2 = 2.0e-6
@@ -889,7 +913,17 @@ at_m = [-0.08, 0.0, 0.0]
 pos = [1050, 200]
 
 [[machine.idler]]
-id = "gantry_right"
+id = "gantry_left_b"
+speed = { x = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "gantry"
+at_m = [-0.08, 0.0, 0.0]
+pos = [1200, 200]
+
+[[machine.idler]]
+id = "gantry_right_a"
 speed = { x = 1 }
 radius_m = 0.012
 inertia_kgm2 = 2.0e-6
@@ -897,6 +931,122 @@ friction_nm = 0.002
 body = "gantry"
 at_m = [0.58, 0.0, 0.0]
 pos = [1050, 300]
+
+[[machine.idler]]
+id = "gantry_right_b"
+speed = { x = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "gantry"
+at_m = [0.58, 0.0, 0.0]
+pos = [1200, 300]
+
+# The free spans along the routes, with the belt's speed over ground per speed of X and Y along x and y of the 3D view,
+# so that the belts' mass is summed run by run. Pulley A turns with r da = dx + dy, B with r db = dx - dy; the runs at
+# the clamps move with the head, the others at the pulley's surface speed along the run. The file's section lengths
+# shared out on the runs:
+#   span  run                               length      speed over ground
+#   a_1   head to gantry_left               0.15 + x    (vx, vy)
+#   a_2   gantry_left to motor A            0.15 + y    (0, vx + vy)         fed into a1 by A
+#   a_3   motor A to back_left              0.25        (0, -(vx + vy))      taken out of a2 by A
+#   a_4   back_left to back_right           0.25        (-(vx + vy), 0)
+#   a_5   back_right to gantry_right        0.55 - y    (0, vx + vy)
+#   a_6   gantry_right to head              0.55 - x    (vx, vy)
+#   b_1   head to gantry_left               0.15 + x    (vx, vy)
+#   b_2   gantry_left to back_left          0.55 - y    (0, -(vx - vy))      fed into b1 by B
+#   b_3   back_left to back_right           0.15        (-(vx - vy), 0)
+#   b_4   back_right to motor B             0.15        (0, vx - vy)
+#   b_5   motor B to gantry_right           0.45 + y    (0, -(vx - vy))      taken out of b2 by B
+#   b_6   gantry_right to head              0.55 - x    (vx, vy)
+# Each belt's runs at the clamps are 0.7 m together, the rest of belt A 1.2 m and of belt B 1.3 m, whatever the pose:
+# 2T / mu = 1.4 (vx^2 + vy^2) + 1.2 (vx + vy)^2 + 1.3 (vx - vy)^2 = 3.9 (vx^2 + vy^2) - 0.2 vx vy. The lumps on the
+# pulleys hold mu 3.9 / 2 ((vx + vy)^2 + (vx - vy)^2) / 2 = mu 3.9 (vx^2 + vy^2) / 2: along X or Y each belt moves as a
+# whole at the head's speed, which the lumps had right; the runs add mu (1.2 - 1.3) = -0.01 kg between X and Y, and
+# no speed terms (no run's length changes the sum).
+[[machine.span]]
+id = "a_1"
+section = "a1"
+length_m = 0.15
+axes = { x = 1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+
+[[machine.span]]
+id = "a_2"
+section = "a1"
+length_m = 0.15
+axes = { y = 1 }
+velocity_y = { x = 1, y = 1 }
+
+[[machine.span]]
+id = "a_3"
+section = "a2"
+length_m = 0.25
+velocity_y = { x = -1, y = -1 }
+
+[[machine.span]]
+id = "a_4"
+section = "a2"
+length_m = 0.25
+velocity_x = { x = -1, y = -1 }
+
+[[machine.span]]
+id = "a_5"
+section = "a2"
+length_m = 0.55
+axes = { y = -1 }
+velocity_y = { x = 1, y = 1 }
+
+[[machine.span]]
+id = "a_6"
+section = "a2"
+length_m = 0.55
+axes = { x = -1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+
+[[machine.span]]
+id = "b_1"
+section = "b1"
+length_m = 0.15
+axes = { x = 1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+
+[[machine.span]]
+id = "b_2"
+section = "b1"
+length_m = 0.55
+axes = { y = -1 }
+velocity_y = { x = -1, y = 1 }
+
+[[machine.span]]
+id = "b_3"
+section = "b1"
+length_m = 0.15
+velocity_x = { x = -1, y = 1 }
+
+[[machine.span]]
+id = "b_4"
+section = "b1"
+length_m = 0.15
+velocity_y = { x = 1, y = -1 }
+
+[[machine.span]]
+id = "b_5"
+section = "b2"
+length_m = 0.45
+axes = { y = 1 }
+velocity_y = { x = -1, y = 1 }
+
+[[machine.span]]
+id = "b_6"
+section = "b2"
+length_m = 0.55
+axes = { x = -1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
 
 # The gantry's racking (effects.gantry_yaw): its ends, 0.3 m either side of its centre, move along y by 0.3 m times the
 # yaw. Belt A pulls the first end (x below 0) along y in a1 and the other end in a2, belt B the first end in b1 and the

@@ -112,23 +112,216 @@ fn the_cam_indexer_s_peaks_are_the_modified_sine_s_over_its_index_angle() {
     assert!(ix.motion(-ix.half + 1e-9)[2].abs() < 1e-6);
 }
 
-/// The table's ring after an index at 60 turns a minute: w_n = sqrt(2e5 / 0.55) = 603.02 rad/s, zeta 0.03. The Geneva's
-/// step of -tan(pi / 6) theta'^2 = -22.794 rad/s^2 at the exit leaves the table's twist ringing by 22.794 / 603.02^2 =
-/// 6.268e-5 rad (the entry's step has died by exp(-0.03 * 603 / 3) = 0.0024 by then): 12.5 um at 0.2 m, beyond the
-/// 10 um tolerance (5e-5 rad) for ln(6.268 / 5) / (0.03 * 603.02) = 12.5 ms. The modified sine ends without a step in
-/// acceleration, with its jerk s''' = 16 pi^3 / (4 + pi) = 69.466: phi''' theta'^3 = 69.466 * 1.047198 / 2.094395^3 *
-/// 248.050 = 1964.1 rad/s^3 leaves j / w_n^3 = 1964.1 / 2.1928e8 = 8.96e-6 rad, 1.8 um: within the tolerance when the
-/// index ends.
+/// The table's ring after an index at 60 turns a minute: the table side (0.4 + 3 * 0.2^2 = 0.52 kg m^2) twists against
+/// the wheel the cam holds, w_n = sqrt(2e5 / 0.52) = 620.17 rad/s, zeta 0.03. The Geneva's step of -tan(pi / 6)
+/// theta'^2 = -22.794 rad/s^2 at the exit leaves the table's twist ringing by 22.794 / 620.17^2 = 5.927e-5 rad (the
+/// entry's step has died by exp(-0.03 * 620 / 3) = 0.002 by then): 11.9 um at 0.2 m, beyond the 10 um tolerance (5e-5
+/// rad) for ln(5.927 / 5) / (0.03 * 620.17) = 9.1 ms. The modified sine ends without a step in acceleration, with its
+/// jerk s''' = 16 pi^3 / (4 + pi) = 69.466: phi''' theta'^3 = 69.466 * 1.047198 / 2.094395^3 * 248.050 = 1964.1 rad/s^3
+/// leaves j / w_n^3 = 1964.1 / 2.3853e8 = 8.23e-6 rad, 1.6 um: within the tolerance when the index ends.
 #[test]
 fn the_geneva_leaves_the_table_ringing_by_its_acceleration_step_and_the_cam_indexer_does_not() {
     let wheel = Indexer::from_config(&GENEVA_DRIVE.config(), false).unwrap();
     let a = wheel.residual(TAU);
-    assert!((a / 6.268e-5 - 1.0).abs() < 0.03, "{a}");
+    assert!((a / 5.927e-5 - 1.0).abs() < 0.03, "{a}");
     let t = wheel.settling_time(TAU);
-    assert!((t - 0.0125).abs() < 0.002, "{t}");
-    // Twice as fast: four times the step, ln(4 * 6.268 / 5) / 18.09 = 89 ms.
-    assert!((wheel.settling_time(2.0 * TAU) - 0.089).abs() < 0.003, "{}", wheel.settling_time(2.0 * TAU));
+    assert!((t - 0.0091).abs() < 0.002, "{t}");
+    // Twice as fast: four times the step, ln(4 * 5.927 / 5) / 18.605 = 83.7 ms.
+    assert!((wheel.settling_time(2.0 * TAU) - 0.0837).abs() < 0.003, "{}", wheel.settling_time(2.0 * TAU));
     let cam = Indexer::from_config(&CAM_INDEXER.config(), true).unwrap();
-    assert!((cam.residual(TAU) / 8.96e-6 - 1.0).abs() < 0.05, "{}", cam.residual(TAU));
+    assert!((cam.residual(TAU) / 8.23e-6 - 1.0).abs() < 0.05, "{}", cam.residual(TAU));
     assert_eq!(cam.settling_time(TAU), 0.0);
+}
+
+/// The cam's pressure angle by hand, shipped cam indexer (r_p 0.08 m, R_c 0.10 m, J_t = 0.02 + 0.4 + 3 * 0.2^2 = 0.54 kg m2):
+/// in the middle of the index phi' = (2 pi / 6) * (4 pi / (4 + pi)) / (2 pi / 3) = 2 pi / (4 + pi) = 0.87980, so tan(alpha)
+/// = 0.08 * 0.87980 / 0.10 = 0.70384, cos(alpha) = 0.81775 (alpha = 35.1 degrees). At theta'' = 100 rad/s2 (phi'' = 0 there)
+/// the wheel's torque is 0.54 * 0.87980 * 100 = 47.509 N m, along the tangent 47.509 / 0.08 = 593.9 N, along the normal
+/// 593.9 / 0.81775 = 726.2 N. Without the key the force stays 593.9 N.
+#[test]
+fn the_cam_s_pressure_angle_raises_the_contact_force_by_one_over_its_cosine() {
+    let ix = Indexer::from_config(&CAM_INDEXER.config(), true).unwrap();
+    assert!((ix.pressure_angle(0.0).to_degrees() - 35.1).abs() < 0.05, "{}", ix.pressure_angle(0.0).to_degrees());
+    let [torque, force] = ix.loads(0.0, 0.0, 100.0);
+    assert!((torque - 47.509).abs() < 0.01 && (force - 726.2).abs() < 0.5, "{torque} {force}");
+    let mut cfg = CAM_INDEXER.config();
+    cfg.set_text("indexer.cam_radius_m = 1e9").unwrap();
+    let flat = Indexer::from_config(&cfg, true).unwrap().loads(0.0, 0.0, 100.0)[1];
+    assert!((flat - 593.9).abs() < 0.1, "{flat}");
+    // The Geneva has no cam: no angle, and no change.
+    assert_eq!(geneva(6).pressure_angle(0.0), 0.0);
+    // At 60 turns a minute (theta'' = 0) the peak moves to where phi'' and the angle together are largest, u = 0.84696
+    // in the deceleration: |phi''| / cos(alpha) = 1.34716 against phi'' 1.31970 at u = 7/8 (both on a grid of 1e5 by
+    // hand), 0.54 * 39.478 / 0.08 times them: 358.99 N against 351.67 N, 2.08 % more (the shipped cam cycle's verdict
+    // moves from 352.5 to 359.8 N, the segment cycle's from 888.8 to 906.3 N, of 2000).
+    let peak = |ix: &Indexer| {
+        (0..=100_000)
+            .map(|i| ix.loads(-ix.half + 2.0 * ix.half * i as f64 / 1e5, TAU, 0.0)[1].abs())
+            .fold(0.0, f64::max)
+    };
+    let flat = Indexer::from_config(&cfg, true).unwrap();
+    assert!((peak(&ix) - 358.99).abs() < 0.01 && (peak(&flat) - 351.67).abs() < 0.01, "{} {}", peak(&ix), peak(&flat));
+}
+
+/// effects.table_twist: the mass matrix of the doc comment by hand at the middle of the index (J_d 0.012, J_w 0.02, J_s =
+/// 0.4 + 0.12 = 0.52, J_t = 0.54, phi' = 0.87980): M00 = 0.012 + 0.54 * 0.77405 = 0.42999, M01 = 0.52 * 0.87980 = 0.45750,
+/// M11 = 0.52; phi'' = 0 there, so no speed terms. The joint's spring is 2e5 N m/rad and its damper 2 * 0.03 * sqrt(2e5 *
+/// 0.52) = 19.35 N m s/rad, and the state has the joint's angle and speed beyond the rigid machine's.
+#[test]
+fn the_table_twist_is_a_joint_of_its_own_with_the_matrix_of_the_two_inertias() {
+    let mut cfg = CAM_INDEXER.config();
+    cfg.set_text("effects.table_twist = true").unwrap();
+    let ix = Indexer::from_config(&cfg, true).unwrap();
+    let (mut mass, mut bias) = ([0.0; 4], [0.0; 2]);
+    ix.dynamics(&[0.0, 0.0], &[3.0, 0.0], &mut mass, &mut bias);
+    for (got, want) in mass.iter().zip([0.42999, 0.45750, 0.45750, 0.52]) {
+        assert!((got - want).abs() < 2e-5, "{mass:?}");
+    }
+    assert!(bias.iter().all(|b| b.abs() < 1e-9), "{bias:?}");
+    let (k, c) = ix.passive_joints()[0];
+    assert!((k - 2e5).abs() < 1e-6 && (c - 19.35).abs() < 0.01, "{k} {c}");
+    // Off, the machine has no such joint; on, two more states.
+    let on = (CAM_INDEXER.build)(&cfg).ok().unwrap();
+    let off = (CAM_INDEXER.build)(&CAM_INDEXER.config()).ok().unwrap();
+    assert_eq!(on.state_len(), off.state_len() + 2);
+    assert!(Indexer::from_config(&CAM_INDEXER.config(), true).unwrap().passive_joints().is_empty());
+    // The cam turns the wheel alone, the shaft's k x + c x' on it: at theta'' = 100 rad/s2 with x = 1e-4, x' = 0, J_w a_w
+    // - k x = 0.02 * 87.980 - 20 = -18.240 N m (J_t a_w = 47.509 N m with the twist held, as the rigid plan sees it).
+    let mut out = Vec::new();
+    ix.signals(&[0.0, 1e-4], &[0.0, 0.0], &[100.0, 0.0], &[0.0], &mut out);
+    assert!((out[3] + 18.240).abs() < 1e-3, "{out:?}");
+    out.clear();
+    ix.signals(&[0.0], &[0.0], &[100.0], &[0.0], &mut out);
+    assert!((out[3] - 47.509).abs() < 1e-3, "{out:?}");
+}
+
+/// The twist joint in the machine, rigid and elastic chains, lossless and with the payload: it rests at zero (the
+/// standard static hold), the standard energy and loss budgets close (its damper's power the row `power.table_twist`,
+/// its spring's energy elastic), its signal is `table.twist`. The mode by hand: in the dwell (phi' = 0) the joint is
+/// free of the driver, J_s x'' = -k x - c x', w_n = sqrt(2e5 / 0.52) = 620.17 rad/s, zeta 0.03: a twist of 1e-4 rad
+/// rings at w_d = 619.89 rad/s (period 10.136 ms) and its peaks fall by exp(-2 pi 0.03 / sqrt(1 - 0.03^2)) = 0.82814
+/// a period.
+#[test]
+fn the_table_twist_rings_at_its_mode_by_hand_and_its_budgets_close_rigid_and_elastic() {
+    for (entry, cam) in [(&GENEVA_DRIVE, false), (&CAM_INDEXER, true)] {
+        for elastic in [false, true] {
+            let mut cfg = lossless_config(entry);
+            cfg.set_text(&format!("effects.joint_elasticity = {elastic}")).unwrap();
+            cfg.set_text("effects.table_twist = true").unwrap();
+            let m = (entry.build)(&cfg).ok().unwrap();
+            let ids: Vec<String> = m.signal_infos().iter().map(|s| s.id.to_string()).collect();
+            for id in ["table.twist", "power.table_twist"] {
+                assert!(ids.iter().filter(|i| *i == id).count() == 1, "{id} in {ids:?}");
+            }
+            assert!(!ids.iter().any(|i| i.starts_with("swing.") || i == "power.payload_swing"), "{ids:?}");
+            sim_core::testkit::static_hold(m.as_ref());
+            sim_core::testkit::energy_conservation(m.as_ref());
+            sim_core::testkit::loss_budget(m.as_ref());
+            // From the middle of a dwell (theta = pi), the twist let go at 1e-4 rad.
+            let (mut s, mut hold) = (Vec::new(), vec![0.0; 1]);
+            m.equilibrium(&[PI], &mut s, &mut hold);
+            let at = if elastic { 5 } else { 3 };
+            s[at] = 1e-4;
+            let mut rk = sim_core::Rk4::new(s.len());
+            let h = 62.5e-6 / 4.0;
+            let (mut t, mut last, mut ups, mut peaks) = (0.0, 1e-4, Vec::new(), Vec::new());
+            let mut slope = 0.0;
+            while t < 0.06 {
+                rk.step(|y, out| m.derivatives(y, &hold, out), &mut s, h);
+                t += h;
+                let x = s[at];
+                if last < 0.0 && x >= 0.0 {
+                    ups.push(t - h * x / (x - last));
+                }
+                if slope > 0.0 && x < last {
+                    peaks.push(last);
+                }
+                (slope, last) = (x - last, x);
+            }
+            let period = (ups[ups.len() - 1] - ups[0]) / (ups.len() - 1) as f64;
+            let fall = (peaks[peaks.len() - 1] / peaks[0]).powf(1.0 / (peaks.len() - 1) as f64);
+            assert!((period / 10.136e-3 - 1.0).abs() < 1e-4, "{} {cam} {elastic}: period {period}", entry.id);
+            assert!((fall / 0.82814 - 1.0).abs() < 1e-4, "{} {cam} {elastic}: fall {fall}", entry.id);
+        }
+    }
+}
+
+/// The ring beside the dynamics against the joint: the Geneva at 60 turns a minute under its cam with the twist as a
+/// joint (the shipped, elastic chain) leaves the table ringing after an index by what `residual` works out beside at
+/// that speed, 5.93e-5 rad (by hand in the test above): its amplitude sqrt(x^2 + ((x' + zeta w_n x) / w_d)^2) at the
+/// first sample of the dwell, where the table's speed is the twist's x'. The run: 5.930e-5 against 5.940e-5 beside.
+#[test]
+fn the_geneva_s_ring_as_a_joint_is_the_ring_worked_out_beside() {
+    let mut cfg = GENEVA_DRIVE.config();
+    cfg.set_text("cam.run = true").unwrap();
+    cfg.set_text("effects.table_twist = true").unwrap();
+    let mut sim = sim_components::Sim::new(&GENEVA_DRIVE, &cfg).unwrap();
+    sim.command(sim_components::Command::StartCycle).unwrap();
+    sim.run(1.6, |_| {});
+    let at = |id: &str| sim.signal_index(id).unwrap();
+    let (twist, speed, theta) = (at("table.twist"), at("table.speed"), at("joint.1.position"));
+    let ix = Indexer::from_config(&cfg, false).unwrap();
+    let (w, zeta) = ix.mode;
+    let wd = w * (1.0 - zeta * zeta).sqrt();
+    let dwell = |x: f64| (x + ix.half).rem_euclid(TAU) >= 2.0 * ix.half;
+    let mut out = Vec::new();
+    let (mut moving, mut ring) = (false, None);
+    while ring.is_none() {
+        sim.step();
+        out.clear();
+        sim.sample(&mut out);
+        if moving && dwell(out[theta]) {
+            ring = Some((out[twist].hypot((out[speed] + zeta * w * out[twist]) / wd), out[theta]));
+        }
+        moving = !dwell(out[theta]);
+        assert!(sim.time() < 4.0);
+    }
+    let (ring, x) = ring.unwrap();
+    let beside = ix.residual(TAU);
+    assert!((ring / beside - 1.0).abs() < 0.01, "joint {ring} rad, beside {beside} rad (at {x} rad)");
+}
+
+/// effects.table_twist among the machine's modes (`Machine::modes`: the app's marks, `identify`, a shaper following its
+/// mode k; it listed the gearbox's alone). In the dwell (theta = pi, phi' = 0) the twist is free of the driver: w_n =
+/// sqrt(2e5 / 0.52) = 620.17 rad/s, 98.704 Hz, zeta 0.03 (c = 2 zeta sqrt(k J_s) over 2 sqrt(k J_s)), the lowest, so
+/// `resonance_hz` too; beside it the gearbox's two-mass mode as without the twist, with the gearbox's damper c = 5 N m
+/// s/rad: zeta = c / (2 sqrt(k mu)) = c w / (2 k), mu = k / w^2 (reported 0 before).
+#[test]
+fn the_table_twist_is_among_the_modes_with_its_damping() {
+    let mut cfg = CAM_INDEXER.config();
+    let off = (CAM_INDEXER.build)(&cfg).ok().unwrap().modes(&[PI]);
+    cfg.set_text("effects.table_twist = true").unwrap();
+    let m = (CAM_INDEXER.build)(&cfg).ok().unwrap();
+    let on = m.modes(&[PI]);
+    assert!(off.len() == 1 && on.len() == 2, "{off:?} {on:?}");
+    let gear = 5.0 * TAU * off[0].hz / (2.0 * 35752.6);
+    assert!((off[0].damping / gear - 1.0).abs() < 1e-9, "{off:?} against zeta {gear}");
+    let twist = (2e5f64 / 0.52).sqrt() / TAU;
+    assert!((on[0].hz / twist - 1.0).abs() < 1e-6 && (on[0].damping - 0.03).abs() < 1e-6, "{on:?} against {twist} Hz");
+    assert!((on[1].hz / off[0].hz - 1.0).abs() < 1e-9 && (on[1].damping / gear - 1.0).abs() < 1e-9, "{on:?} {off:?}");
+    assert_eq!(m.resonance_hz(&[PI]), Some(on[0].hz));
+}
+
+/// The frame momentum (effects.base_compliance) by hand, in the middle of the index (theta = 0) at theta' = 2 rad/s with
+/// the rotor's spin 0.01 N m s. Geneva of six slots: phi' = lambda / (1 - lambda) = 1, the table side (wheel 0.03, table
+/// 0.4, six parts of 0.5 kg at 0.2 m: 0.55 kg m^2) 1.1 N m s about +y, the crank (0.01 kg m^2) and the rotor against it,
+/// 1.1 - 0.02 - 0.01 = 1.07. With the table's twist turning at 0.5 rad/s on top the table and parts (0.52) turn at 2.5:
+/// 0.03 * 2 + 0.52 * 2.5 - 0.03 = 1.33. The cam indexer's modified sine over 120 degrees: phi' = (pi / 3) 1.759603 /
+/// (2 pi / 3) = 0.879802, 0.54 * 0.879802 * 2 = 0.950186 about +y, its shaft (0.012 kg m^2) square to it, 0.024 + 0.01
+/// = 0.034 about z. The parts sit evenly round the table: no momentum, their first moment at its centre, 3 kg.
+#[test]
+fn the_frame_momentum_is_the_hand_calculated_one() {
+    let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-9);
+    let mut cfg = GENEVA_DRIVE.config();
+    let f = Indexer::from_config(&cfg, false).unwrap().frame_momentum(&[0.0], &[2.0], &[0.01]).unwrap();
+    assert!(near(f.angular, [0.0, 1.07, 0.0]) && near(f.linear, [0.0; 3]), "{f:?}");
+    assert!(near(f.first_moment, [0.0; 3]) && (f.mass - 3.0).abs() < 1e-12, "{f:?}");
+    cfg.set_text("effects.table_twist = true").unwrap();
+    let f = Indexer::from_config(&cfg, false).unwrap().frame_momentum(&[0.0, 0.0], &[2.0, 0.5], &[0.01]).unwrap();
+    assert!(near(f.angular, [0.0, 1.33, 0.0]), "{f:?}");
+    let f = Indexer::from_config(&CAM_INDEXER.config(), true).unwrap().frame_momentum(&[0.0], &[2.0], &[0.01]).unwrap();
+    assert!((f.angular[1] - 0.950186).abs() < 1e-6 && (f.angular[2] - 0.034).abs() < 1e-12, "{f:?}");
+    // Its first moment moves at its momentum with the twist too (`frame_momentum_moves_its_first_moment`; the standard
+    // suite's runs without it).
+    sim_core::testkit::frame_momentum_moves_its_first_moment((GENEVA_DRIVE.build)(&cfg).ok().unwrap().as_ref());
 }

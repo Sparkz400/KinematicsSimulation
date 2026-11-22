@@ -135,9 +135,13 @@ fn an_amplifier_without_a_printed_peak_takes_the_paired_motors() {
 
 /// The search across makers ranks the candidates of every supply together and says whose each is: four motors of four
 /// makers on the EXCT-30's cycle, each passing there with the drive its maker pairs (`sim-cli search --vendor all`).
+/// The retuned speed gain keeps the config's crossover over the rotor-side inertia (`catalog::retuned`), which leaves no
+/// reliable gain where the load outweighs the rotor more than some 25 times: run on 17 November 2026 over the AKM2/3/4,
+/// HK-KT, SGM7A and 8LSA motors, the 230 that pass have inertia ratios of 0.30 to 25.6, and the AKM24C, HK-KT634W,
+/// SGM7A-06A and 8LSAA3.ee030 this test named before that rule (ratios 73, 33, 63 and 33) fail. So four motors within it.
 #[test]
 fn the_search_across_makers_ranks_their_motors_together() {
-    let wanted = |a: &str| ["HK-KT634W", "SGM7A-06A", "AKM24C", "8LSAA3.ee030"].contains(&a);
+    let wanted = |a: &str| ["HK-KT1034W", "SGM7A-08A", "AKM41C", "8LSAA4.ee030"].contains(&a);
     let found = sim_components::catalog::search_supplies(
         &machine_t_gantry::ENTRY,
         &exct_30(),

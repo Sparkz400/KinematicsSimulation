@@ -120,9 +120,18 @@
                 ]
               },
               "offset_m": {
-                "description": "On rotary axes: its centre of mass from the point their axes meet, [x, y, z] at angle 0, m. Default [0, 0, 0].",
+                "description": "Its centre of mass from where its axes put it, [x, y, z], m: on rotary axes from the point their axes meet at angle 0 (it turns with them); on straight axes alone a constant offset, which only its place in the frame momentum has (its angular momentum and first moment). Default [0, 0, 0].",
                 "items": {
-                  "type": "number"
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
                 },
                 "maxItems": 3,
                 "minItems": 3,
@@ -549,9 +558,18 @@
             "additionalProperties": false,
             "properties": {
               "at_m": {
-                "description": "Where the 3D view draws it, [x, y, z], m (from its body where it has one); with effects.belt_wrap its place in the belt's plane (x, z).",
+                "description": "Where the 3D view draws it, [x, y, z], m (from its body where it has one); its place in its belt's plane (the plane of the section whose route has it), as for a pulley.",
                 "items": {
-                  "type": "number"
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
                 },
                 "maxItems": 3,
                 "minItems": 3,
@@ -562,7 +580,7 @@
                 "type": "string"
               },
               "clockwise": {
-                "description": "With effects.belt_wrap: the belt runs round it clockwise, seen from the front (x to the right, z up) and followed along the routes in their order. Default false (anticlockwise).",
+                "description": "The belt runs round it clockwise, followed along the routes in their order, seen in its belt's plane (its section's `plane`): from the front (x to the right, z up) in x-z, from above (x to the right, y away) in x-y, from +x (y to the right, z up) in y-z. Its spin in the frame momentum takes this sense, and effects.belt_wrap the wrap. Default false (anticlockwise).",
                 "type": "boolean"
               },
               "friction_nm": {
@@ -631,7 +649,7 @@
                     }
                   ]
                 },
-                "description": "Belt speed past it per speed of each axis (m/s per m/s). Keys: ids of machine.axis nodes.",
+                "description": "Belt speed past it per speed of each axis (m/s per m/s), positive the way a positive turn of the first pulley that feeds its section moves the belt (the sense its spin in the frame momentum takes). Keys: ids of machine.axis nodes.",
                 "type": "object"
               }
             },
@@ -654,6 +672,19 @@
               "axis": {
                 "description": "The horizontal axis it leans along. Id of a machine.axis node.",
                 "type": "string"
+              },
+              "belt_offset_m": {
+                "description": "With effects.belt_run_offset: how far the belt's runs that reach the body from above meet it to either side of its line (the side their other wheel is on), m; as the guide tilts the body they get longer and shorter by it times the tilt. Default 0.",
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "Dotted path of a number in the file.",
+                    "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                    "type": "string"
+                  }
+                ]
               },
               "body": {
                 "description": "The body that leans; it moves with axis. Id of a machine.body node.",
@@ -1210,16 +1241,29 @@
             "additionalProperties": false,
             "properties": {
               "at_m": {
-                "description": "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis. With effects.belt_wrap its place in the belt's plane (x, z), which the wrap is worked out from.",
+                "description": "Where the 3D view draws it, [x, y, z], m (from its body where it has one); default at an end of the first axis. Its place in its belt's plane (its section's `plane`) is what the wrap (effects.belt_wrap) and the places of the belt's runs in the frame momentum are worked out from.",
                 "items": {
-                  "type": "number"
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
                 },
                 "maxItems": 3,
                 "minItems": 3,
                 "type": "array"
               },
+              "body": {
+                "description": "A body it rides on (a motor on a moving axis): at_m is then from that body. Id of a machine.body node.",
+                "type": "string"
+              },
               "clockwise": {
-                "description": "With effects.belt_wrap: the belt runs round it clockwise, seen from the front (x to the right, z up) and followed along the routes in their order. Default false (anticlockwise).",
+                "description": "The belt runs round it clockwise, followed along the routes in their order, seen in its belt's plane (its section's `plane`): from the front (x to the right, z up) in x-z, from above (x to the right, y away) in x-y, from +x (y to the right, z up) in y-z. Its spin in the frame momentum takes this sense, and effects.belt_wrap the wrap. Default false (anticlockwise).",
                 "type": "boolean"
               },
               "gearbox": {
@@ -1672,6 +1716,14 @@
                   }
                 ]
               },
+              "plane": {
+                "description": "The plane its belt runs in, whose normal its wheels turn about: x-z standing along x (about y), x-y flat (about z), y-z standing along y (about x). The places of its route's wheels in it give the belt's runs their places in the frame momentum, and the wrap. Sections that share a pulley or an idler lie in one plane. Default x-z, or x-y for every section where one section's length changes with axes along x and along y and none along z (an H-bot's, a CoreXY's).",
+                "enum": [
+                  "x-z",
+                  "x-y",
+                  "y-z"
+                ]
+              },
               "pos": {
                 "description": "Where a node editor draws the node, [x, y]. Not read by the simulation.",
                 "items": {
@@ -1716,7 +1768,7 @@
           "type": "array"
         },
         "span": {
-          "description": "A free belt span between two points that hold it (pulley, idler, clamp), for its sideways mode (effects.belt_span_vibration).",
+          "description": "A free belt span between two points that hold it (pulley, idler, clamp), for its sideways mode (effects.belt_span_vibration), and with its speed over ground for the belt's mass run by run.",
           "items": {
             "additionalProperties": false,
             "properties": {
@@ -1766,6 +1818,54 @@
               "section": {
                 "description": "The section it is part of: its tension. Id of a machine.section node.",
                 "type": "string"
+              },
+              "velocity_x": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "Its belt's speed over ground along x of the 3D view per unit speed of each axis. Given on every span (with velocity_y and velocity_z, 0 where left out), the spans together the whole belt, the belt's kinetic energy is summed run by run (effects.belt_mass) beyond the half of it on each pulley. Keys: ids of machine.axis nodes.",
+                "type": "object"
+              },
+              "velocity_y": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "As velocity_x, along y. Keys: ids of machine.axis nodes.",
+                "type": "object"
+              },
+              "velocity_z": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "As velocity_x, along z. Keys: ids of machine.axis nodes.",
+                "type": "object"
               }
             },
             "required": [
@@ -1820,7 +1920,16 @@
               "table_pivot_m": {
                 "description": "With table: where the table's rotary axes meet, in the straight axes' coordinates (where they stand at 0), m; [0, 0, 0] if left out.",
                 "items": {
-                  "type": "number"
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
                 },
                 "maxItems": 3,
                 "minItems": 3,
@@ -1829,7 +1938,16 @@
               "tool_m": {
                 "description": "The tool's tip from the point the rotaries' axes meet, [x, y, z] at angle 0, m.",
                 "items": {
-                  "type": "number"
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "Dotted path of a number in the file.",
+                      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                      "type": "string"
+                    }
+                  ]
                 },
                 "maxItems": 3,
                 "minItems": 3,

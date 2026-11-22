@@ -311,6 +311,7 @@ pub(crate) fn read(
             inertia: 0.0,
             pulley: String::new(),
             at: None,
+            body: None,
             clockwise: false,
             transmission: Transmission::Belt,
             axis: None,
@@ -387,6 +388,13 @@ pub fn inverse(m: &M2) -> Option<M2> {
         return None;
     }
     Some([[m[1][1] / det, -m[0][1] / det], [-m[1][0] / det, m[0][0] / det]])
+}
+
+/// The gearbox's loss factor at a steady speed `w` where it passes `output` to the arm: `rigid_solve` takes it of the
+/// torque that goes in, output / loss, so it is found by fixed point (the efficiency's fade over the power makes the
+/// two differ by 1e-3 of the torque at 0.01 m/s on the linkage).
+pub fn steady_loss(gearbox: &sim_components::mech::Gearbox, output: f64, w: f64) -> f64 {
+    sim_components::mech::settled_loss([1.0], |&[loss]| [gearbox.loss_factor(output / loss, w)])[0]
 }
 
 /// The 2-norm condition number of a 2 x 2 matrix: the square root of the larger over the smaller eigenvalue of
@@ -501,9 +509,19 @@ pub struct LinkageMachine {
     arm_inertia: f64,
     arm_moment: f64,
     m_platform: f64,
+    /// The same two for the weight: the potential energy of a rod is its mass at its middle, so the forearms' weight splits
+    /// half to the elbow and half to the plate whatever share their inertia is split by.
+    weight_moment: f64,
+    weight_platform: f64,
+    /// Each forearm pair's mass and the share of it the inertia puts at the elbow, for the frame momentum (the rods'
+    /// own, `frame_momentum`).
+    m_forearms: f64,
+    forearm_share: f64,
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the plate (`Machine::set_tool_force`), along x and z, N; held until changed.
+    tool_push: V2,
     joints: [RotaryJoint; 2],
     thermal: Option<ThermalFeedback>,
     /// The working range: half width, top, bottom circle's centre height and radius; the condition number refused above.
@@ -605,9 +623,14 @@ impl LinkageMachine {
             arm_inertia: i_arm + la * la * elbow,
             arm_moment: m_arm * cg + la * elbow,
             m_platform: n.positive("mass.platform_kg")? + 2.0 * (1.0 - share) * m_fb,
+            weight_moment: m_arm * cg + la * (m_elbow + 0.5 * m_fb),
+            weight_platform: n.positive("mass.platform_kg")? + m_fb,
+            m_forearms: m_fb,
+            forearm_share: share,
             m_payload: if cfg.bool("effects.payload")? { n.non_negative("mass.payload_kg")? } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
+            tool_push: [0.0; 2],
             thermal: ThermalFeedback::from_config(cfg)?,
             half_width,
             top,
@@ -643,9 +666,9 @@ impl LinkageMachine {
                 }
                 let Some(t) = self.legs.inverse(p) else { continue };
                 let Some(j) = self.legs.jacobian(t, p) else { continue };
-                for m in [self.m_platform, self.m_platform + self.m_payload] {
+                for m in [self.weight_platform, self.weight_platform + self.m_payload] {
                     let twist: V2 = std::array::from_fn(|k| {
-                        let held = -(self.g * self.arm_moment * t[k].cos() - m * self.g * j[1][k])
+                        let held = -(self.g * self.weight_moment * t[k].cos() - m * self.g * j[1][k])
                             - self.joints[k].output_torque(t[k], 0.0);
                         self.joints[k].gearbox.spring_twist_signed(held)
                     });
@@ -721,8 +744,15 @@ impl LinkageMachine {
         });
         let pv = mul(&j, w);
         let velocity = self.legs.velocity_term(t, p, w, pv).map_or([f64::NAN; 2], |a| mul(&jt, a.map(|v| m * v)));
-        let gravity: V2 = std::array::from_fn(|k| self.g * self.arm_moment * t[k].cos() - m * self.g * j[1][k]);
+        let mw = self.weight_platform + if self.payload_attached { self.m_payload } else { 0.0 };
+        let gravity: V2 = std::array::from_fn(|k| self.g * self.weight_moment * t[k].cos() - mw * self.g * j[1][k]);
         (mass, velocity, gravity)
+    }
+
+    /// An obstacle's push on the plate F (`set_tool_force`) on the arms, J^T F: in the equations of motion only, not
+    /// in the feedforward or the state at rest (as the machine files' process force and push).
+    fn push(&self, t: V2) -> V2 {
+        mul(&transpose(&self.pose(t).1), self.tool_push)
     }
 
     /// Rigid model: the arms' acceleration, and per joint the torque into its gearbox (after the rotor's own
@@ -735,7 +765,9 @@ impl LinkageMachine {
         let drive: V2 = std::array::from_fn(|k| {
             self.joints[k].rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0
         });
-        let rest: V2 = std::array::from_fn(|k| gravity[k] - velocity[k] + self.joints[k].output_torque(t[k], w[k]));
+        let push = self.push(t);
+        let rest: V2 =
+            std::array::from_fn(|k| gravity[k] + push[k] - velocity[k] + self.joints[k].output_torque(t[k], w[k]));
         let solve = |loss: V2| -> V2 {
             let m: M2 = std::array::from_fn(|r| {
                 std::array::from_fn(|c| {
@@ -745,9 +777,12 @@ impl LinkageMachine {
             let rhs: V2 = std::array::from_fn(|k| loss[k] * drive[k] + rest[k]);
             inverse(&m).map_or([f64::NAN; 2], |inv| mul(&inv, rhs))
         };
-        let first = solve([1.0; 2]);
-        let loss: V2 = std::array::from_fn(|k| {
-            self.joints[k].gearbox.loss_factor(drive[k] - self.joints[k].reflected_inertia() * first[k], w[k])
+        // The loss factors of the torques going in, at their fixed point (`mech::settled_loss`).
+        let loss = sim_components::mech::settled_loss([1.0; 2], |loss| {
+            let acc = solve(*loss);
+            std::array::from_fn(|k| {
+                self.joints[k].gearbox.loss_factor(drive[k] - self.joints[k].reflected_inertia() * acc[k], w[k])
+            })
         });
         let acc = solve(loss);
         let into: V2 = std::array::from_fn(|k| drive[k] - self.joints[k].reflected_inertia() * acc[k]);
@@ -779,7 +814,8 @@ impl LinkageMachine {
         let (mass, ..) = self.load(t, w);
         let mut kinetic = 0.5 * dot(w, mul(&mass, w));
         let (p, _) = self.pose(t);
-        let potential = self.g * (self.m_nt() * p[1] - self.arm_moment * (t[0].sin() + t[1].sin()));
+        let mw = self.weight_platform + if self.payload_attached { self.m_payload } else { 0.0 };
+        let potential = self.g * (mw * p[1] - self.weight_moment * (t[0].sin() + t[1].sin()));
         let mut elastic: f64 = (0..2).map(|k| self.joints[k].stop_energy(t[k])).sum();
         if self.elastic {
             for k in 0..2 {
@@ -861,6 +897,9 @@ impl LinkageMachine {
         }
         out.extend(losses.powers);
         out.extend(self.energy_parts(s));
+        for k in 0..2 {
+            out.extend(self.joints[k].friction_signals(w[k]));
+        }
     }
 
     fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
@@ -895,6 +934,9 @@ impl LinkageMachine {
         out.extend(ENERGY_PARTS.map(|part| {
             SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")
         }));
+        for k in 0..2 {
+            out.extend(RotaryJoint::friction_infos(JOINT_CONTACTS[k], ["arm-1", "arm-2"][k]));
+        }
     }
 
     /// The arms whose gearbox is one (not a coupling), in the order of `thermal_parts`.
@@ -903,31 +945,49 @@ impl LinkageMachine {
     }
 }
 
+/// The ids of the arms' friction contacts (`<id>.friction_<part>`), in the motors' order.
+const JOINT_CONTACTS: [&str; 2] = ["joint.1", "joint.2"];
+
 impl Machine for LinkageMachine {
     /// As the registered planar delta's: the plate at the tool, the arms turning about their joints at the base radius,
-    /// the rotors about the joints' axes (+-y). What does not move is left out (see `FrameMomentum`).
+    /// the rotors about the joints' axes (+-y). The forearms are the rods they are, whatever share of their inertia the
+    /// dynamics lump at the elbow: a rod's momentum, first moment and angular momentum (its turn in the plane included)
+    /// are those of a sixth of it at each end and two thirds at its middle, so its weight sits where the potential has
+    /// it. What does not move is left out (see `FrameMomentum`).
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         use sim_components::base::{add_point, add_spin, add_turning};
         let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
         let (t, w) = self.arms(s);
         let (p, j) = self.pose(t);
         let pv = mul(&j, w);
-        add_point(&mut f, self.m_nt(), [p[0], 0.0, p[1]], [pv[0], 0.0, pv[1]]);
+        let (la, m_fb) = (self.legs.la, self.m_forearms);
+        // What the lumped split puts at the elbow and at the plate beyond a rod's sixth at each end.
+        let (at_elbow, at_plate) = ((self.forearm_share - 1.0 / 6.0) * m_fb, (5.0 / 6.0 - self.forearm_share) * m_fb);
+        add_point(&mut f, self.m_nt() - 2.0 * at_plate, [p[0], 0.0, p[1]], [pv[0], 0.0, pv[1]]);
         let rotor_speed = self.rotors(s).1;
         for i in 0..2 {
             let (side, (sin, cos)) = (SIDE[i], t[i].sin_cos());
             let (dir, ddir) = ([side * cos, 0.0, -sin], [-side * sin, 0.0, -cos]);
+            let joint = [side * self.base_radius, 0.0, 0.0];
             add_turning(
                 &mut f,
-                [side * self.base_radius, 0.0, 0.0],
+                joint,
                 dir,
                 ddir,
                 w[i],
-                self.arm_inertia,
-                self.arm_moment,
+                self.arm_inertia - la * la * at_elbow,
+                self.arm_moment - la * at_elbow,
             );
+            let middle: [f64; 3] = std::array::from_fn(|k| {
+                0.5 * (joint[k] + la * dir[k] + [p[0] + side * self.platform_radius, 0.0, p[1]][k])
+            });
+            let speed: [f64; 3] = std::array::from_fn(|k| 0.5 * (la * w[i] * ddir[k] + [pv[0], 0.0, pv[1]][k]));
+            add_point(&mut f, 2.0 / 3.0 * m_fb, middle, speed);
             add_spin(&mut f, [0.0, side, 0.0], self.joints[i].rotor_inertia, rotor_speed[i]);
         }
+        // An obstacle's push on the plate is not in the outside force: a compliant base takes it through the tool's
+        // shift (`base::Based`), and here it pushed the base a second time.
+        f.external_at = [p[0], 0.0, p[1]];
         Some(f)
     }
     fn axes(&self) -> &[AxisInfo] {
@@ -987,13 +1047,13 @@ impl Machine for LinkageMachine {
             return;
         }
         let (t, w) = self.arms(s);
-        let (mass, velocity, gravity) = self.load(t, w);
+        let ((mass, velocity, gravity), push) = (self.load(t, w), self.push(t));
         let mut rhs = [0.0; 2];
         for k in 0..2 {
             let joint = &self.joints[k];
             let (gear, rotor_acc, brake_rate) =
                 joint.rotor(torque[k], s[4 + k], s[6 + k], t[k], w[k], s[8 + k], self.brake_engaged);
-            rhs[k] = gear.output + gravity[k] - velocity[k] + joint.output_torque(t[k], w[k]);
+            rhs[k] = gear.output + gravity[k] + push[k] - velocity[k] + joint.output_torque(t[k], w[k]);
             out[4 + k] = s[6 + k];
             out[6 + k] = rotor_acc;
             out[8 + k] = brake_rate;
@@ -1061,19 +1121,41 @@ impl Machine for LinkageMachine {
 
     /// The rigid model at a steady speed, theta' = J^-1 p': per arm the joint's friction f(theta') through the gearbox
     /// as `rigid_solve` takes it, f / (i loss), plus the motor shaft's friction (with the gearbox's drag) at i theta'.
-    /// The loss factor is the one of what the gearbox passes at rest, f - Q_g, as in `rigid_solve`; the weight itself is
-    /// the rigid feedforward's. The brake is released and the stops are not touched in a move.
+    /// The loss factor is the one of what the gearbox passes at rest, f - Q_g, as in `rigid_solve`; the weight's lossless torque
+    /// is the rigid feedforward's, so the loss on the weight is part of what this returns; so is the loss on the speed's
+    /// own torque at the arm, I_b theta'' at p'' = 0 with theta'' = -J^-1 J_x^-1 w (the feedforward's, loss-free). The
+    /// brake is released and the stops are not touched in a move.
     fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
-        let t = self.legs.inverse([pos[0], pos[1]]).unwrap_or([f64::NAN; 2]);
+        let p = [pos[0], pos[1]];
+        let t = self.legs.inverse(p).unwrap_or([f64::NAN; 2]);
         let (_, j) = self.pose(t);
-        let w = inverse(&j).map_or([f64::NAN; 2], |inv| mul(&inv, [vel[0], vel[1]]));
+        let inv = inverse(&j).unwrap_or([[f64::NAN; 2]; 2]);
+        let pv = [vel[0], vel[1]];
+        let w = mul(&inv, pv);
+        let bend = self.legs.velocity_term(t, p, w, pv).unwrap_or([f64::NAN; 2]);
+        let arm_acc = mul(&inv, bend.map(|b| -b));
         let gravity = self.load(t, [0.0; 2]).2;
         for k in 0..2 {
             let joint = &self.joints[k];
-            let at_arm = joint.friction.torque(w[k]);
-            let loss = joint.gearbox.loss_factor(at_arm - gravity[k], w[k]);
-            out[k] = joint.shaft.torque(joint.ratio() * w[k]) + at_arm / (joint.ratio() * loss);
+            let moving = self.arm_inertia * arm_acc[k];
+            let passed = moving + joint.friction.torque(w[k]) - gravity[k];
+            let loss = steady_loss(&joint.gearbox, passed, w[k]);
+            // The loss acts on the weight and the speed's torque too: what it adds over their lossless torques (the
+            // rigid feedforward's) is friction.
+            out[k] = joint.shaft.torque(joint.ratio() * w[k]) + (passed / loss - moving + gravity[k]) / joint.ratio();
         }
+    }
+
+    /// With effects.joint_elasticity: per arm its gearbox's spring between the rotor and the rest of the motor's rigid
+    /// inertia at the pose (`RotaryJoint::train`).
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let whole = sim_components::control::rigid_inertias(self, tool_pose);
+        let mut out: Vec<_> = self.joints.iter().zip(whole).map(|(j, whole)| j.train(whole)).collect();
+        out.resize(self.motors().len(), None);
+        out
     }
 
     fn energy(&self, s: &[f64]) -> f64 {
@@ -1082,6 +1164,12 @@ impl Machine for LinkageMachine {
 
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
+    }
+    /// The push acts on the plate, the tool (`push`): its generalised forces J^T F on the arms, whose power F . v is
+    /// the plate's speed times it.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.tool_push = [force[0], force[1]];
+        true
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
@@ -1168,8 +1256,20 @@ impl Machine for LinkageMachine {
         out.extend(self.losses(s, torque).powers);
     }
 
-    // shortcut: the joints' friction is not offered to the friction view, which draws a guide's force over its speed;
-    // offer them once the view can draw a torque over an angular speed.
+    /// The two arms' bearing friction, rotary contacts (N m over rad/s at the arm).
+    fn friction_contacts(&self) -> Vec<sim_core::FrictionContact> {
+        (0..2).map(|k| sim_core::FrictionContact { id: JOINT_CONTACTS[k], owner_key: ["arm-1", "arm-2"][k] }).collect()
+    }
+    fn friction_rotary(&self, _i: usize) -> bool {
+        true
+    }
+    fn friction_curve(&self, i: usize, speed: f64, _load_scale: f64) -> [f64; 3] {
+        self.joints.get(i).map_or([0.0; 3], |j| j.friction_split(speed))
+    }
+    /// The arm turns at its motor's highest speed over the gearbox's ratio.
+    fn friction_speed_limit(&self, i: usize, motor_speed: &[f64]) -> Option<f64> {
+        Some(motor_speed.get(i)? / self.joints.get(i)?.ratio())
+    }
 
     /// The gearboxes that are not couplings, by their nodes' ids.
     fn thermal_parts(&self) -> Vec<ThermalPart> {

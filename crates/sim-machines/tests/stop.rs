@@ -28,3 +28,33 @@ fn the_stop_study_reports_the_worst_stop_on_every_machine() {
         }
     });
 }
+
+/// The worst stop is judged against `ratings.max_stopping_distance_m` on a machine with an axis in m and against
+/// `ratings.max_stopping_angle_rad` on one without (the rotary table, in rad): never a rad distance against a metre limit.
+#[test]
+fn the_stopping_distance_is_judged_in_the_machine_s_unit() {
+    let limits = "
+[ratings]
+max_stopping_distance_m = 1.0e-9
+max_stopping_angle_rad = 10.0
+";
+    for (id, limit, ok) in [("rotary-table", 10.0, true), ("single-axis", 1e-9, false)] {
+        let entry = sim_machines::find(id).unwrap();
+        let cfg = sim_components::load_config(
+            entry,
+            &entry.default_config.replacen(
+                "
+[ratings]",
+                limits,
+                1,
+            ),
+        )
+        .unwrap();
+        let found = study(entry, &cfg, StopCategory::One, 0).unwrap();
+        let judged: Vec<_> = found.verdicts.iter().filter(|v| v.check == "stopping-distance").collect();
+        assert_eq!(judged.len(), 1, "{id}: {:?}", found.verdicts);
+        let worst = found.stops[found.worst].tool_distance;
+        assert!(judged[0].limit == limit && judged[0].value == worst && judged[0].ok == ok, "{id}: {:?}", judged[0]);
+        assert!(worst > 1e-9 && worst < 10.0, "{id}: {worst}");
+    }
+}

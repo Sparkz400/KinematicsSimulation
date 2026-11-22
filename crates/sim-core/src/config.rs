@@ -14,7 +14,8 @@ pub enum ConfigError {
     Invalid(String),
     /// A key that the machine's default config does not have.
     Unknown(String),
-    /// A part name that the catalogue does not have: the translation key for its kind, and the name.
+    /// A value refused for a reason with a message of its own: the translation key, and the value's name (a part name
+    /// that the catalogue does not have, under the key for its kind; a pose the machine cannot reach, at its path).
     Part(&'static str, String),
 }
 
@@ -147,6 +148,10 @@ impl Config {
         let bad = || ConfigError::Parse(assignment.into());
         let (path, value) = assignment.split_once('=').ok_or_else(bad)?;
         let parsed: Table = format!("v = {value}").parse().map_err(|_| bad())?;
+        // One assignment: a second line ("a = 1\nb = 2") parsed beside `v` and was dropped without a word.
+        if parsed.len() != 1 {
+            return Err(bad());
+        }
         self.set(path.trim(), parsed["v"].clone())
     }
 

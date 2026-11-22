@@ -63,7 +63,9 @@ pub fn saw_cam(speed: f64, acc: f64, window: f64, length: f64, law: Law) -> Opti
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let mut joint = RotaryJoint::linear_from_config(cfg)?;
     let rack = RackPinion::from_config(cfg)?;
-    rack.converter().apply(cfg, &mut joint)?;
+    // The mesh friction's bristle capped by the lighter of the rotor and the carriage (`Converter::apply_to`).
+    let carriage = cfg.positive("mass.carriage_kg")?;
+    rack.converter().apply_to(cfg, &mut joint, carriage)?;
     let lever = rack.radius();
     let (speed, acc) = (cfg.positive("material.speed_m_s")?, cfg.positive("saw.sync_acceleration_m_s2")?);
     let window = cfg.positive("saw.cut_window_m")?;
@@ -81,7 +83,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         return Err(ConfigError::Invalid("saw.home_m".into()));
     }
     let saw = FlyingSaw {
-        mass: cfg.positive("mass.carriage_kg")?,
+        mass: carriage,
         payload: payload(cfg)?,
         attached: true,
         home,
@@ -152,6 +154,13 @@ impl Mechanism for FlyingSaw {
     fn cam_at(&self, master: f64, out: &mut [[f64; 4]]) {
         out[0] = self.cam.at(master);
         out[0][0] += self.home;
+    }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        let (cam, home) = (self.cam.clone(), self.home);
+        Some(std::sync::Arc::new(move |master, out: &mut [[f64; 4]]| {
+            out[0] = cam.at(master);
+            out[0][0] += home;
+        }))
     }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {

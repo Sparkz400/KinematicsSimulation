@@ -2,7 +2,7 @@
 //! transformation round trip, static hold, energy conservation, step-size convergence, determinism, and the
 //! energy balance with the losses the machine reports.
 
-use crate::{ENERGY_PARTS, LOSS_PREFIX, Machine, MachineEntry, Rk4, advance};
+use crate::{ENERGY_PARTS, LOSS_PREFIX, Machine, MachineEntry, Rk4, advance, advance_refined};
 
 pub const DT: f64 = 62.5e-6;
 pub const SUBSTEPS: u32 = 4;
@@ -167,7 +167,7 @@ impl<'a> PulseRun<'a> {
             let t = self.step as f64 * self.dt;
             let pulse = if t < self.pulse_s { (std::f64::consts::PI * t / self.pulse_s).sin().powi(2) } else { 0.0 };
             self.torque = self.hold.iter().zip(&self.delta).map(|(h, d)| h + d * pulse).collect();
-            advance(self.m, &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
+            advance_refined(self.m, &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
             self.step += 1;
             each(self);
         }
@@ -185,15 +185,21 @@ impl<'a> PulseRun<'a> {
 /// The drift is measured against the energy the pulse put in, which is far stricter than
 /// measuring against the gravitational potential.
 pub fn energy_conservation(m: &dyn Machine) {
+    let (worst, injected) = energy_drift(m);
+    assert!(injected > 0.0, "the pulse put in no energy ({injected})");
+    assert!(worst < 1e-3 * injected, "energy drifted by {:.4} % of the {injected} J put in", 100.0 * worst / injected);
+}
+
+/// The run of `energy_conservation`: how far the energy drifted at most over the 10 s after the pulse, and what the
+/// pulse put in (J).
+pub fn energy_drift(m: &dyn Machine) -> (f64, f64) {
     let mut run = PulseRun::new(m, DT, PULSE_ACC, PULSE_S);
     let before = run.invariant();
     run.run(PULSE_S, |_| {});
     let after = run.invariant();
-    let injected = after - before;
-    assert!(injected > 0.0, "the pulse put in no energy ({injected})");
     let mut worst = 0f64;
     run.run(10.0, |r| worst = worst.max((r.invariant() - after).abs()));
-    assert!(worst < 1e-3 * injected, "energy drifted by {:.4} % of the {injected} J put in", 100.0 * worst / injected);
+    (worst, after - before)
 }
 
 /// Tolerance of `loss_budget`, as a share of the work the motor torques did either way.
@@ -288,6 +294,44 @@ pub fn frame_momentum_moves_its_first_moment(m: &dyn Machine) {
             now.linear[k]
         );
     }
+}
+
+/// Where a machine tells its `frame_momentum`, its weight sits at the first moment: at the middle of the axes, every
+/// axis moving at a tenth of its top speed, the potential energy (`energy.potential`) changes along the state's rate as
+/// -g . d/dt sum m r, by central differences over +-1 us, within 1e-6 of it (plus 1e-9 W). V + g . c is then the same
+/// along any motion, as it is for any body whose weight is m g at its centre of mass.
+pub fn weight_is_at_the_first_moment(m: &dyn Machine) {
+    weight_is_at_the_first_moment_at(m, &mid_pose(m));
+}
+
+/// `weight_is_at_the_first_moment` at `pose`: off the middle a part whose shape changes with the pose (a beam's mode
+/// under a carriage) moves its first moment with the pose too.
+pub fn weight_is_at_the_first_moment_at(m: &dyn Machine, pose: &[f64]) {
+    let pose = pose.to_vec();
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
+    m.equilibrium(&pose, &mut state, &mut torque);
+    let Some(f) = m.frame_momentum(&state) else { return };
+    let potential = m.signal_infos().iter().position(|s| s.id == "energy.potential").expect("energy.potential");
+    let vel: Vec<f64> = m.axes().iter().map(|a| 0.1 * a.max_vel).collect();
+    m.set_tool_velocity(&mut state, &vel);
+    let mut rate = vec![0.0; state.len()];
+    m.derivatives(&state, &torque, &mut rate);
+    let h = 1e-6;
+    let at = |s: f64| {
+        let moved: Vec<f64> = state.iter().zip(&rate).map(|(x, r)| x + s * r).collect();
+        let mut out = Vec::new();
+        m.signals(&moved, &torque, &mut out);
+        let c = m.frame_momentum(&moved).unwrap().first_moment;
+        (out[potential], (0..3).map(|k| f.gravity[k] * c[k]).sum::<f64>())
+    };
+    let ((v0, c0), (v1, c1)) = (at(-h), at(h));
+    let (dv, dgc) = ((v1 - v0) / (2.0 * h), (c1 - c0) / (2.0 * h));
+    assert!(dgc.abs() > 1e-6, "the first moment did not move vertically, the check would be empty");
+    assert!(
+        (dv + dgc).abs() <= 1e-6 * dgc.abs() + 1e-9,
+        "the potential changes at {dv} W, the weight's -g.c at {}",
+        -dgc
+    );
 }
 
 /// The same config and the same commands give bit-identical traces.

@@ -29,10 +29,13 @@ fn kinematics_follow_the_plan() {
     assert!(tool[0].abs() < 1e-15 && (tool[1] - m.r).abs() < 1e-15);
 }
 
-/// Static hold on Z: each motor holds m_z g r / 2 at the pulley, with opposite signs.
+/// Static hold on Z: each motor holds (m_z + m_runs) g r / 2 at the pulley, with opposite signs. m_runs is the belt's
+/// vertical runs, mu (4 s + 2 sz) = 0.1 (0.6 + 1.0) = 0.16 kg, whose potential mu g ((s + z)^2 - (s + sz - z)^2) rises
+/// by that weight per metre of z (`TGantry::z_weight`): 2 T2 - T1 - T3 = 7.16 g = 70.216 N.
 #[test]
 fn static_hold_on_z_needs_opposite_torques() {
-    let expected = (5.0 + 2.0) * G * 0.02 / 2.0 / 5.0;
+    let weight = (5.0 + 2.0 + 0.1 * (4.0 * 0.15 + 2.0 * 0.5)) * G;
+    let expected = weight * 0.02 / 2.0 / 5.0;
     let (mut state, mut hold) = (Vec::new(), [0.0; 2]);
     let m = rigid(&[]);
     m.equilibrium(&[0.5, 0.25], &mut state, &mut hold);
@@ -48,9 +51,48 @@ fn static_hold_on_z_needs_opposite_torques() {
     let mut d = [0.0; N_ELASTIC];
     m.derivatives(&state, &hold, &mut d);
     assert!(d.iter().all(|v| v.abs() < 1e-6), "{d:?}");
-    // Belt tensions at rest: sections 1 and 3 equal, section 2 higher by m_z g / 2.
+    // Belt tensions at rest: sections 1 and 3 equal, section 2 higher by (m_z + m_runs) g / 2.
     let t = m.sections(&state).map(|f| f.tension);
-    assert!((t[0] - t[2]).abs() < 1e-6 && (t[1] - t[0] - 7.0 * G / 2.0).abs() < 1e-6, "{t:?}");
+    assert!((t[0] - t[2]).abs() < 1e-6 && (t[1] - t[0] - weight / 2.0).abs() < 1e-6, "{t:?}");
+    assert!((weight - 70.216).abs() < 1e-3);
+}
+
+/// The belt's weight is where its first moment is: along a motion the potential energy changes as -g . dc/dt
+/// (`testkit::weight_is_at_the_first_moment`), rigid and elastic, with and without the beam's vertical mode. Without
+/// the vertical runs' weight in the potential V + g . c drifted by 0.16 kg g per metre of z.
+#[test]
+fn the_belts_weight_is_at_its_first_moment() {
+    sim_core::testkit::weight_is_at_the_first_moment(&rigid(&[]));
+    sim_core::testkit::weight_is_at_the_first_moment(&machine(lossless_config(), &[]));
+    sim_core::testkit::weight_is_at_the_first_moment(&machine(ENTRY.config(), &["effects.beam_vertical_mode = true"]));
+}
+
+/// With the beam's vertical mode the beam's own mass moves with it, -p0(x) w in the first moment (p0 = mu integral of the
+/// shape, `Beam::shape_moments`), so its weight is in the potential, -g p0 w; the beam's spring holds the stress of its
+/// own sag, whose cross term with the mode is +g p0 w by virtual work (EI u'''' = mu g), so the total and the dynamics
+/// keep what they had. Off the middle p0 changes with x: at x = 0.255 the potential fell at 1.572830 W against
+/// -g dc/dt 1.572586 W, and V + g . c drifted 2.5e-4 J over a free second from there (1.3e-8 J with the mode off).
+#[test]
+fn the_beams_own_weight_is_at_its_first_moment_off_the_middle() {
+    let edits = ["effects.beam_vertical_mode = true"];
+    for pose in [[0.255, 0.187], [0.15, 0.1], [0.8, 0.3]] {
+        sim_core::testkit::weight_is_at_the_first_moment_at(&machine(ENTRY.config(), &edits), &pose);
+    }
+    for edits in [&[][..], &edits[..]] {
+        let m = machine(ENTRY.config(), edits);
+        let potential = m.signal_infos().iter().position(|s| s.id == "energy.potential").unwrap();
+        let invariant = |s: &[f64], torque: &[f64]| {
+            let mut out = Vec::new();
+            m.signals(s, torque, &mut out);
+            let f = m.frame_momentum(s).unwrap();
+            out[potential] + (0..3).map(|k| f.gravity[k] * f.first_moment[k]).sum::<f64>()
+        };
+        let mut run = sim_core::testkit::PulseRun::new(&m, 62.5e-6, 0.5, 0.1);
+        let start = invariant(&run.state, &run.torque);
+        let mut drift = 0.0f64;
+        run.run(1.0, |r| drift = drift.max((invariant(&r.state, &r.torque) - start).abs()));
+        assert!(drift < 1e-7, "{edits:?}: V + g . c drifted by {drift} J");
+    }
 }
 
 /// Constant torque: acceleration equals force divided by effective mass.
@@ -210,6 +252,7 @@ fn exct_30_config_agrees_with_the_catalogue() {
         motor("static_torque_nm") / motor("stall_current_a"),
         1e-3
     ));
+    assert_eq!(cfg.f64("motor.stall_current_a").unwrap(), motor("stall_current_a"));
     assert!(cfg.f64("drive.peak_torque_nm").unwrap() <= motor("max_torque_nm"));
     assert!(close(cfg.f64("drive.rated_speed_rad_s").unwrap(), motor("rated_speed_400v_rad_s"), 1e-3));
 
@@ -237,12 +280,18 @@ fn exct_30_config_agrees_with_the_catalogue() {
 /// The leaning Z axis against a hand calculation at two heights: carriage and Z axis are two masses on a
 /// spring k = 1 / (1 / lateral + h^2 / tilt), so a deflection u swings back with u k (1 / m_z + 1 / m_c),
 /// and the tool tip is off by k u (1 / lateral + h h_tool / tilt).
+///
+/// The carriage carries the belt's runs beyond the lumps on the pulleys (`belt_mass`): moving it along the beam with Z
+/// held moves the vertical runs sideways and section 2's down the Z axis at 2 vx, 8 mu (s + sz - z) more mass on X, and at
+/// x = 0.5 m the X-Z cross term 2 mu (2 x - sx) is nil. So m_c = 4 + 0.8 (0.65 - z) kg: 4.48 kg at z = 0.05 m, 4.32 kg at
+/// 0.25 m (u k (1 / 7 + 1 / 4) = 7.47 m/s^2 at z = 0.05 without it, 6.96 with it).
 #[test]
 fn leaning_z_axis_matches_the_two_mass_hand_calculation() {
     let m = machine(lossless_config(), &["effects.frame_compliance = false"]);
-    let (lateral, tilt, m_z, m_c, u) = (2.0e7, 1.2e4, 7.0, 4.0, 1e-4);
+    let (lateral, tilt, m_z, u) = (2.0e7, 1.2e4, 7.0, 1e-4);
     let mut softer = 0.0;
     for z in [0.05, 0.25] {
+        let m_c = 4.0 + 8.0 * 0.1 * (0.15 + 0.5 - z);
         let (mut state, mut hold) = (Vec::new(), [0.0; 2]);
         m.equilibrium(&[0.5, z], &mut state, &mut hold);
         state[U] = u;
@@ -250,7 +299,16 @@ fn leaning_z_axis_matches_the_two_mass_hand_calculation() {
         m.derivatives(&state, &hold, &mut d);
         let (h, h_tool) = (0.3 - z, 0.7 - z);
         let k = 1.0 / (1.0 / lateral + h * h / tilt);
-        assert!((d[V + U] + u * k * (1.0 / m_z + 1.0 / m_c)).abs() < 1e-6 * u * k, "z = {z}: {} m/s2", d[V + U]);
+        // The lean's own spring k, the pendulum stiffness of the Z axis's weight and the belt runs' geometric stiffness
+        // (T / l per run: `lean_runs`) hold it back together.
+        let tensions = m.sections(&state).map(|f| f.tension);
+        let runs = m.lean_runs(z);
+        let k_lean = k + m.lean_weight_stiffness(z) + (0..3).map(|i| tensions[i] * runs[i]).sum::<f64>();
+        assert!(
+            (d[V + U] + u * k_lean * (1.0 / m_z + 1.0 / m_c)).abs() < 1e-6 * u * k_lean,
+            "z = {z}: {} m/s2",
+            d[V + U]
+        );
         let (mut pos, mut vel) = ([0.0; 2], [0.0; 2]);
         m.tool_state(&state, &mut pos, &mut vel);
         assert!(
@@ -321,8 +379,9 @@ fn path_error_on_a_circle_matches_the_hand_calculation() {
     }
     let mut sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
-    let gain = 1.0 / (1.0 + (w / 50.0f64).powi(2)).sqrt();
-    let (off_path, behind) = (radius * (1.0 - gain), radius * (w / 50.0) * gain);
+    let kv = cfg.f64("drive.kv_1_s").unwrap();
+    let gain = 1.0 / (1.0 + (w / kv).powi(2)).sqrt();
+    let (off_path, behind) = (radius * (1.0 - gain), radius * (w / kv) * gain);
     assert!(
         (load.path_error_peak - off_path).abs() < 0.1 * off_path,
         "{} m off the path, by hand {off_path} m",
@@ -432,27 +491,37 @@ fn input_shaping_leaves_under_a_tenth_of_the_tool_swing() {
     assert!(shaped < 0.1 * plain, "{shaped} m left of {plain} m");
 }
 
-/// The shaper that follows the pose. The machine reports the lower mode of two masses in a row: the carriage
-/// (4 kg) on the belt, kb = EA / L1 + EA / L3, and the Z axis with payload (7 kg) on its guide, kz. At the end
-/// of the traverse, x = 0.9 m:
-/// z = 0.05 m: kb = 5e5 / 1.25 + 5e5 / 0.45 = 1.511e6 N/m, kz = 1.902e5 N/m. With s = (kb + kz) / 4 + kz / 7 =
-///   4.525e5 and p = kb kz / 28 = 1.026e10, w^2 = (s - sqrt(s^2 - 4 p)) / 2 = 2.394e4: 24.6 Hz.
-/// z = 0.15 m: kb = 5e5 / 1.35 + 5e5 / 0.55 = 1.280e6 N/m, kz = 1 / (1 / 2e7 + 0.15^2 / 1.2e4) = 5.195e5 N/m,
-///   s = 5.240e5, p = 2.374e10, w^2 = 5.010e4: 35.6 Hz.
-/// A shaper fixed at 35.6 Hz suits the higher pose, but at 24.6 Hz its three copies are only 24.6 / 35.6 =
-/// 0.69 half periods apart and leave cos^2(pi / 2 * 0.69) = 0.22 of the swing. The shaper that takes the
-/// frequency from the machine leaves about a tenth at both heights: what is left (about 1e-5 m at z = 0.15 m) hardly
-/// changes with the velocity gain, the plain swing does (1.15e-4 m at 0.08 N m s/rad, 9.6e-5 m at the config's 0.04),
-/// so 0.077 of it is left at 0.08 and 0.102 at 0.04; 0.11 is allowed.
+/// The shaper that follows the pose. The machine reports its lowest mode that moves the tool; with the frame off, as in
+/// the runs below, that of the carriage on the belt with the Z axis leaning on it. By hand, two masses in a row: the
+/// carriage, 4 kg and the belt's runs on it (`belt_mass`, 0.8 (0.65 - z) kg), on the belt, kb = EA / l1 + EA / l3, and
+/// the Z axis with payload (7 kg) on its guide, kz; w^4 m1 m2 - w^2 (m2 (kb + kz) + m1 kz) + kb kz = 0. At the end of the
+/// traverse, x = 0.9 m:
+/// z = 0.05 m: kb = 5e5 (1 / 1.25 + 1 / 0.45) (1 + 279.6 / 5e5) = 1.512e6 N/m (the sections' unstretched belt at their
+///   tension), kz = 1 / (1 / 2e7 + 0.25^2 / 1.2e4) = 1.902e5 N/m, m1 = 4.48 kg: 24.62 Hz.
+/// z = 0.15 m: kb = 5e5 (1 / 1.35 + 1 / 0.55) (1 + 281.2 / 5e5) = 1.280e6 N/m, kz = 1 / (1 / 2e7 + 0.15^2 / 1.2e4) =
+///   5.195e5 N/m, m1 = 4.40 kg: 35.52 Hz.
+/// At x = 0.9 m the two sections differ (k1 - k3 = -7.1e5 N/m) and so does the belt's X-Z mass, 2 mu (2 x - sx): the X
+/// mode pulls the Z axis on its belt along, which lowers it to 24.344 Hz and 34.590 Hz (`modes`, which
+/// `the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held` checks against the model's own equations).
+/// A shaper fixed at 34.59 Hz suits the higher pose, but at 24.34 Hz its three copies are only 24.34 / 34.59 =
+/// 0.70 half periods apart and leave cos^2(pi / 2 * 0.70) = 0.21 of the swing. The shaper that takes the frequency from
+/// the machine leaves about a tenth at both heights: 0.048 at z = 0.05 m, 0.120 at 0.15 m, where the swing in the run,
+/// with the pulleys held by the servo and not fixed as `modes` takes them, is a little faster: fixed shapers at 34.59 /
+/// 36 / 38 Hz leave 0.121 / 0.111 / 0.128 of it, none less than 0.11 (it was 0.102 before the belt's runs had their
+/// mass); 0.13 is allowed.
 #[test]
 fn a_shaper_that_follows_the_height_leaves_about_a_tenth_at_both_heights() {
-    let m = machine(ENTRY.config(), &[]);
-    for (z, by_hand) in [(0.05, 24.63), (0.15, 35.62)] {
+    let m = machine(ENTRY.config(), &["effects.frame_compliance = false"]);
+    for (z, model, by_hand) in [(0.05, 24.344, 24.62), (0.15, 34.590, 35.52)] {
         let told = m.resonance_hz(&[0.9, z]).unwrap();
-        assert!((told - by_hand).abs() < 0.05, "{told} Hz at z = {z}, by hand {by_hand} Hz");
+        assert!(
+            (told - model).abs() < 0.005 && (told - by_hand).abs() < 1.0,
+            "{told} Hz at z = {z}, by hand {by_hand} Hz without the X-Z coupling"
+        );
     }
-    // The rigid model has no leaning Z axis, and neither has the full one with the effect off.
-    assert!(machine(ENTRY.config(), &["effects.tool_flex = false"]).resonance_hz(&[0.9, 0.05]).is_none());
+    // The rigid model has no mode; without the leaning Z axis the carriage on the belt is the lowest.
+    let upright = machine(ENTRY.config(), &["effects.tool_flex = false", "effects.frame_compliance = false"]);
+    assert!(upright.resonance_hz(&[0.9, 0.05]).unwrap() > 40.0);
     assert!(rigid(&[]).resonance_hz(&[0.9, 0.05]).is_none());
 
     let fixed = m.resonance_hz(&[0.9, 0.15]).unwrap();
@@ -469,12 +538,12 @@ fn a_shaper_that_follows_the_height_leaves_about_a_tenth_at_both_heights() {
     for (z, fixed_is_enough) in [(0.15, true), (0.05, false)] {
         let (plain, fixed, following) = (swing(z, false, false), swing(z, true, false), swing(z, true, true));
         println!(
-            "z = {z} m: swing {plain:.3e} m plain, {fixed:.3e} m with the shaper fixed at 35.6 Hz, {following:.3e} m with the shaper following"
+            "z = {z} m: swing {plain:.3e} m plain, {fixed:.3e} m with the shaper fixed at 34.59 Hz, {following:.3e} m with the shaper following"
         );
         assert!(plain > 2e-6, "z = {z}: the plain move hardly swings: {plain} m");
-        assert!(following < 0.11 * plain, "z = {z}: following, {following} m left of {plain} m");
+        assert!(following < 0.13 * plain, "z = {z}: following, {following} m left of {plain} m");
         assert!(
-            if fixed_is_enough { fixed < 0.11 * plain } else { fixed > 0.15 * plain },
+            if fixed_is_enough { fixed < 0.13 * plain } else { fixed > 0.2 * plain },
             "z = {z}: fixed, {fixed} m left of {plain} m"
         );
     }
@@ -721,6 +790,14 @@ fn holding_brakes_hold_the_z_axis_when_they_are_strong_enough() {
 /// Fitting: both motors move both axes, yet the fit tells the axes apart. The measured machine has a
 /// carriage and a payload 1 kg heavier each (2 kg more for X, 1 kg more for Z and 9.81 N more to hold)
 /// and 1.3 times the Coulomb friction; its trace, with noise, is fitted against the unchanged config.
+///
+/// Each within three standard errors, which hold the noise alone (`identify::difference_share`), and what the rigid
+/// model mixes up between the values of a changed machine: the mass by 20 % of its change, the Coulomb factor by 0.03 and
+/// the constant force by 3 % of the axis's Coulomb friction. Measured without noise (16 November 2026): X + 2.332 kg
+/// (the heavier carriage and payload alone gave + 2.062 kg and 5.6 % more Coulomb friction; the friction 1.3 times as
+/// well adds the other 0.27 kg),
+/// Coulomb × 1.327, constant − 1.02 N; Z + 1.006 kg, × 1.278, + 9.955 N; the config's own trace fits itself to within
+/// one standard error.
 #[test]
 fn the_fit_tells_the_two_axes_apart() {
     let mut truth = ENTRY.config();
@@ -759,9 +836,10 @@ fn the_fit_tells_the_two_axes_apart() {
         let fit = fit.as_ref().unwrap();
         let found = [fit.fitted[0] - fit.config[0], fit.fitted[2] / fit.config[2], fit.fitted[3] - fit.config[3]];
         let errors = [fit.error[0], fit.error[2] / fit.config[2], fit.error[3]];
+        let model = [0.2 * expected[0], 0.03, 0.03 * fit.config[2]];
         for q in 0..3 {
             assert!(
-                (found[q] - expected[q]).abs() < 3.0 * errors[q],
+                (found[q] - expected[q]).abs() < 3.0 * errors[q] + model[q],
                 "value {q}: {} ± {}, expected {}",
                 found[q],
                 errors[q],
@@ -808,8 +886,9 @@ fn a_circle_timed_by_the_planner_gives_the_hand_calculated_path_error() {
     assert!((fastest - 0.25).abs() < 1e-4, "{fastest} m/s");
 
     let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
-    let gain = 1.0 / (1.0 + (w / 50.0f64).powi(2)).sqrt();
-    let (off_path, behind) = (radius * (1.0 - gain), radius * (w / 50.0) * gain);
+    let kv = cfg.f64("drive.kv_1_s").unwrap();
+    let gain = 1.0 / (1.0 + (w / kv).powi(2)).sqrt();
+    let (off_path, behind) = (radius * (1.0 - gain), radius * (w / kv) * gain);
     assert!(
         (load.path_error_peak - off_path).abs() < 0.1 * off_path,
         "{} m off the path, by hand {off_path} m",
@@ -853,7 +932,16 @@ line,0.6,0.05",
         }
         let sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
         let points = sim.plan_path(&pieces, true).unwrap();
-        let used = plan_use(&sim, &cfg, &points);
+        // The speed as a share of what the plan may use, 0.99 of the maximum as before the belts' share (`kept`).
+        let jerk = ["x", "z"].map(|a| cfg.f64(&format!("axis.{a}.max_jerk_m_s3")).unwrap());
+        let scale = 0.99 / (1.0 - kept(&sim, jerk, 314.0));
+        let used: Vec<_> = plan_use(&sim, &cfg, &points)
+            .into_iter()
+            .map(|mut u| {
+                u[1] *= scale;
+                u
+            })
+            .collect();
         let active = |limit: usize| used.iter().filter(|u| u[limit] >= 0.97).count() as f64 / used.len() as f64;
         let share = used.iter().filter(|u| u.iter().any(|u| *u >= 0.97)).count() as f64 / used.len() as f64;
         let most = most_used(&used);
@@ -871,7 +959,7 @@ line,0.6,0.05",
         (sim, points, most)
     };
     let (mut sim, points, most) = plan(&[]);
-    // The speed to the 0.99 of the motors' maximum the plan keeps (`path::SPEED_KEPT`).
+    // The speed to the 0.99 of what the plan may use (`path::SPEED_KEPT`, the belts' `kept` scaled out above).
     assert!(most[1] > 0.989 && most[2] > 0.999, "speed and jerk used to {most:?}");
     let (duration, within_axis_limits) = (points[points.len() - 1].0, sim.plan_path(&pieces, false).unwrap());
     let slow = within_axis_limits[within_axis_limits.len() - 1].0;
@@ -958,17 +1046,27 @@ fn plan_use(sim: &sim_components::Sim, cfg: &Config, points: &[(f64, Vec<f64>)])
     let (c, reserve, fastest) =
         (1e-3, cfg.f64("profile.torque_reserve").unwrap(), cfg.f64("drive.max_speed_rad_s").unwrap());
     let pose = |i: isize| &points[i.clamp(0, points.len() as isize - 1) as usize].1;
+    // The motor gives the load's torque (the rigid one less what turns rotor and gearbox input) over the gearbox's
+    // efficiency where it drives the load, times it where the load drives it (braking).
+    let eta =
+        if cfg.bool("effects.gearbox_efficiency").unwrap() { cfg.f64("gearbox.efficiency").unwrap() } else { 1.0 };
+    let inertia =
+        cfg.f64("motor.rotor_inertia_kgm2").unwrap() + cfg.f64("gearbox.inertia_at_input_kgm2").unwrap_or(0.0);
     let mut all = Vec::new();
     for i in 0..points.len() as isize {
         let mut used = [0f64; 3];
         let (a, p, b, b2) = (pose(i - 1), pose(i), pose(i + 1), pose(i + 2));
         let acc = [(b[0] - 2.0 * p[0] + a[0]) / (c * c), (b[1] - 2.0 * p[1] + a[1]) / (c * c)];
-        let (mut torque, mut ahead, mut here) = ([0.0; 2], [0.0; 2], [0.0; 2]);
+        let (mut torque, mut ahead, mut here, mut behind) = ([0.0; 2], [0.0; 2], [0.0; 2], [0.0; 2]);
         sim.machine.feedforward_torque(p, &acc, &mut torque);
         sim.machine.inverse(b, &mut ahead);
         sim.machine.inverse(p, &mut here);
+        sim.machine.inverse(a, &mut behind);
         for k in 0..2 {
             let speed = (ahead[k] - here[k]) / c;
+            let rotor = inertia * (ahead[k] - 2.0 * here[k] + behind[k]) / (c * c);
+            let load = torque[k] - rotor;
+            torque[k] = rotor + if load * speed >= 0.0 { load / eta } else { load * eta };
             let (low, high) = sim.control.torque_curve(speed);
             let jerk = (b2[k] - 3.0 * b[k] + 3.0 * p[k] - a[k]) / (c * c * c);
             used = [
@@ -982,19 +1080,19 @@ fn plan_use(sim: &sim_components::Sim, cfg: &Config, points: &[(f64, Vec<f64>)])
     all
 }
 
-/// The belt's tension is a limit of the time-optimal plan. Default config, jerk 300 m/s^3, a line along X from
-/// (0.7, 0.35) to (0.95, 0.35), and `ratings.belt_max_tension_n` = 400 N. The rigid model: the belt pulls the
-/// carriage, Z axis and payload, m = 4 + 5 + 2 = 11 kg, F_x = m a, and holds the Z axis, F_z = 7 kg * g = 68.65 N; the
-/// sections are L1 = 0.3 + x + z, L2 = 2.6 - 2 z, L3 = 1.3 - x + z long (4.2 m together at z = 0.35), and with
-/// sum (T_i - P) L_i = 0 section 3 carries T = 300 - 68.65 * 0.95 / 4.2 + m a (L1 + 0.95) / 4.2 accelerating. At rest
-/// that is 284.47 N; at x = 0.95 (L1 = 1.6, the pose of the line where it rises most) by 6.679 N per m/s^2, and with
-/// `profile.tension_margin_n` = 31 N and `profile.tension_reserve` = 0.5 the plan may use 0.5 * (400 - 31 - 284.47)
-/// = 42.26 N of it: a = 6.328 m/s^2. The plan without the belt as a limit goes to 19.3 m/s^2 and fails `belt-tension`
-/// on the full model (425 N). The plan with it takes the limit at each pose (`belt_bound`): where it accelerates,
-/// x = 0.7 to 0.8, 42.26 N / (11 kg * 2.3 / 4.2) = 7.02 m/s^2 at x = 0.7, more than the 6.328 m/s^2 of the far end
-/// (the plan with one limit per piece took that all along); no pose accelerates harder than its bound by 0.2 % and
-/// one reaches it within 0.5 %; its rigid tension reaches the 326.7 N the plan allows within 1 %, and the full model,
-/// friction and belt vibration on top, passes `belt-tension`.
+/// The belt's tension is a limit of the time-optimal plan. Default config, jerk 300 m/s^3, a line along X from (0.7,
+/// 0.35) to (0.95, 0.35), and `ratings.belt_max_tension_n` = 400 N. The rigid model: the belt pulls the carriage, Z
+/// axis and payload, m = 4 + 5 + 2 = 11 kg, F_x = m a, and holds the Z axis and the belt's vertical runs, F_z = (7 +
+/// 0.16) kg * g = 70.22 N; the sections are L1 = 0.3 + x + z, L2 = 2.6 - 2 z, L3 = 1.3 - x + z long (4.2 m together at
+/// z = 0.35), and with sum (T_i - P) L_i = 0 section 3 carries T = 300 - 70.22 * 0.95 / 4.2 + m a (L1 + 0.95) / 4.2
+/// accelerating. At rest that is 284.12 N; at x = 0.95 (L1 = 1.6, the pose of the line where it rises most) by 6.679 N
+/// per m/s^2, and with `profile.tension_margin_n` = 31 N and `profile.tension_reserve` = 0.5 the plan may use 0.5 *
+/// (400 - 31 - 284.12) = 42.44 N of it: a = 6.355 m/s^2. The plan without the belt as a limit goes to 19.3 m/s^2 and
+/// fails `belt-tension` on the full model (425 N). The plan with it takes the limit at each pose (`belt_bound`): where
+/// it accelerates, x = 0.7 to 0.8, 42.44 N / (11 kg * 2.3 / 4.2) = 7.05 m/s^2 at x = 0.7, more than the 6.355 m/s^2 of
+/// the far end (the plan with one limit per piece took that all along); no pose accelerates harder than its bound by
+/// 0.2 % and one reaches it within 0.5 %; its rigid tension reaches the 326.6 N the plan allows within 1 %, and the
+/// full model, friction and belt vibration on top, passes `belt-tension`.
 #[test]
 fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
     let pieces = sim_components::path::parse("line,0.95,0.35").unwrap();
@@ -1036,14 +1134,14 @@ fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
     let mut at = Vec::new();
     machine.rigid_tensions(&[0.9, 0.35], &[10.0, 0.0], &mut at);
     // At x = 0.9: L1 = 1.55, L3 = 0.75.
-    let weight = 7.0 * 9.80665;
+    let weight = 7.16 * 9.80665;
     assert!((at[2] - (300.0 - weight * 0.95 / 4.2 + 110.0 * 1.55 / 4.2 + 110.0 * 0.95 / 4.2)).abs() < 1e-9, "{at:?}");
     assert!((at[0] - (300.0 - weight * 0.95 / 4.2 - 110.0 * (0.95 + 0.75) / 4.2)).abs() < 1e-9, "{at:?}");
     let (still, room) = (300.0 - weight * 0.95 / 4.2, 0.5 * (400.0 - 31.0 - (300.0 - weight * 0.95 / 4.2)));
     let allowed = room / (11.0 * (1.6 + 0.95) / 4.2);
-    assert!((allowed - 6.328).abs() < 5e-3 && (still + room - 326.74).abs() < 0.01, "{allowed}");
+    assert!((allowed - 6.3548).abs() < 5e-4 && (still + room - 326.559).abs() < 0.01, "{allowed}");
     assert!(
-        (belt_bound(0.95) - allowed).abs() < 1e-9 && (belt_bound(0.7) - 7.016).abs() < 5e-3,
+        (belt_bound(0.95) - allowed).abs() < 1e-9 && (belt_bound(0.7) - 7.0456).abs() < 5e-4,
         "{} {}",
         belt_bound(0.95),
         belt_bound(0.7)
@@ -1059,20 +1157,36 @@ fn the_time_optimal_plan_keeps_the_belt_within_its_tension_limit() {
     assert!(new.ok, "{new:?}");
 }
 
+/// The share of a motor's top speed `top` that the time-optimal plan keeps back on the T-gantry with the axes' jerk
+/// limits `jerk` (X, Z): the velocity loops' 1 % (`path::SPEED_KEPT`, the precontrol full) and the belt trains' twist
+/// (`Machine::trains`, `path::train_speed`) at the motors' jerk (jx + jz) ratio / r, each motor turning (x +- z) ratio
+/// / r, the more of the two motors. The jerks these tests use are far slower than the trains' swing, so the jerk binds,
+/// not a step of the motors' acceleration.
+fn kept(sim: &sim_components::Sim, jerk: [f64; 2], top: f64) -> f64 {
+    let j = (jerk[0] + jerk[1]) * 5.0 / 0.02;
+    let trains = sim.machine.trains(sim.control.planned_pos());
+    let most =
+        trains.iter().flatten().map(|t| sim_components::path::train_speed(*t, j, f64::INFINITY)).fold(0.0, f64::max);
+    0.01 + most / top
+}
+
 /// The most acceleration along X that the belt allows the time-optimal plan at x on the default T-gantry (z = 0.35) rated
-/// 400 N, by hand: each section may change by 0.5 * (400 - 31 - 284.47) = 42.26 N either way (see the test above), and
+/// 400 N, by hand: each section may change by 0.5 * (400 - 31 - 284.12) = 42.44 N either way (see the test above), and
 /// accelerating 11 kg along X changes section 3 by 11 (L1 + 0.95) / 4.2 = 11 (1.6 + x) / 4.2 and section 1 by
 /// 11 (L3 + 0.95) / 4.2 = 11 (2.6 - x) / 4.2 per m/s^2.
 fn belt_bound(x: f64) -> f64 {
-    let room = 0.5 * (400.0 - 31.0 - (300.0 - 7.0 * 9.80665 * 0.95 / 4.2));
+    let room = 0.5 * (400.0 - 31.0 - (300.0 - 7.16 * 9.80665 * 0.95 / 4.2));
     room / (11.0 * (1.6 + x).max(2.6 - x) / 4.2)
 }
 
 /// Limits that change within a piece: a line along X from (0.1, 0.35) to (0.9, 0.35) at 300 m/s^3, the belt rated
-/// 400 N. The belt allows 42.26 N / (11 kg * 2.5 / 4.2) = 6.455 m/s^2 at both ends and up to 7.7 m/s^2 in the middle
+/// 400 N. The belt allows 42.44 N / (11 kg * 2.5 / 4.2) = 6.482 m/s^2 at both ends and up to 7.7 m/s^2 in the middle
+/// (with the belt's vertical runs' 0.16 kg in the weight since 21 November; 6.455 m/s^2 before, which the times below
+/// were worked out with: now 0.8583 s for the one-limit plan)
 /// (`belt_bound`). The plan with one limit per piece took 6.455 m/s^2 all along: distance / v + v / a + a / j =
 /// 0.8 / 1.2559 + 1.2559 / 6.455 + 6.455 / 300 = 0.8531 s (v the rated speed; it planned that; since 15 November the
-/// rated speed less 1 %, 1.2433 m/s, 0.8576 s, and the point-by-point plan is quicker by less than the 1 ms it is read to). The plan point by
+/// rated speed less 1 %, 1.2433 m/s, 0.8576 s; since 20 November less 1.31 % with the belts' twist (`kept`), 1.2394 m/s,
+/// 0.8590 s; and the point-by-point plan is quicker by less than the 1 ms it is read to). The plan point by
 /// point accelerates as the bound rises along its ramp, 6.455 m/s^2 at x = 0.1 to 6.73 m/s^2 at x = 0.23 where the ramp
 /// ends: the ramp takes the integral of dv / a(x), with x = 0.1 + v^2 / (2 * 6.6), 1.2559 * 2.5 / 16.137 - 1.2559^3 /
 /// (6 * 6.6) / 16.137 = 0.1915 s instead of 0.1946 s, but covers less of the line at the top speed, so the line takes
@@ -1096,11 +1210,12 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
     let sim = sim_components::Sim::new(&ENTRY, &cfg).unwrap();
     let points = sim.plan_path(&sim_components::path::parse("line,0.9,0.35").unwrap(), true).unwrap();
     let duration = points[points.len() - 1].0;
-    // The top speed: the rated 1.2559 m/s less the 1 % the plan keeps back of a speed rating (15 November).
-    let v = 0.99 * 1.2559;
+    // The top speed: the rated 1.2559 m/s less what the plan keeps back of a speed rating (15 November: 1 %; 20 November
+    // the belts' twist on top, `kept`).
+    let v = (1.0 - kept(&sim, [300.0, 300.0], 314.0)) * 1.2559;
     let by_hand = 0.8 / v + v / belt_bound(0.9) + belt_bound(0.9) / 300.0;
     assert!(
-        (belt_bound(0.9) - 6.455).abs() < 1e-3 && (by_hand - 0.8576).abs() < 1e-4,
+        (belt_bound(0.9) - 6.4819).abs() < 1e-3 && (by_hand - 0.8583).abs() < 1e-4,
         "{} m/s^2, {by_hand} s",
         belt_bound(0.9)
     );
@@ -1115,7 +1230,7 @@ fn the_time_optimal_plan_takes_the_belt_limit_where_it_is_along_a_line() {
         of_bound = of_bound.max(acc[0].abs() / belt_bound(w[1].1[0]));
         hardest = hardest.max(acc[0].abs());
     }
-    let room = 0.5 * (400.0 - 31.0 - (300.0 - 7.0 * 9.80665 * 0.95 / 4.2));
+    let room = 0.5 * (400.0 - 31.0 - (300.0 - 7.16 * 9.80665 * 0.95 / 4.2));
     assert!(
         of_bound <= 1.002 && of_bound > 0.995 && hardest > 1.03 * belt_bound(0.9),
         "{of_bound} of the bound, {hardest} m/s^2"
@@ -1310,7 +1425,7 @@ fn time_optimal_plans_of_random_paths_stay_within_torque_speed_and_jerk() {
                 fits &= (1..16).all(|i| inside(&on(heading + turn * sweep * i as f64 / 16.0)));
                 heading += turn * sweep;
                 here = on(heading);
-                pieces.push(Piece::Arc { to: here.clone(), centre, clockwise: turn < 0.0 });
+                pieces.push(Piece::Arc { to: here.clone(), centre, clockwise: turn < 0.0, plane: None });
             }
             fits &= inside(&here);
         }
@@ -1690,15 +1805,16 @@ fn a_pure_inertia_move_is_all_inertia() {
     }
 }
 
-/// Holding Z, by hand: each motor holds m_z g r / (2 i) = 7 * 9.80665 * 0.02 / 10 = 0.137293 N m, A up and B down,
-/// which is the gravity part of the full elastic model at rest. Over 50 ms of standing (the controller dithers on
+/// Holding Z, by hand: each motor holds W_z r / (2 i), W_z = (m_z + mu (4 s + 2 sz)) g the Z axis's weight and that of
+/// the belt's vertical runs (`TGantry::z_weight`): 7.16 * 9.80665 * 0.02 / 10 = 0.140431 N m, A up and B down, which
+/// is the gravity part of the full elastic model at rest. Over 50 ms of standing (the controller dithers on
 /// the encoder counts, so one step alone is off by up to 0.5 %) the motor torque is the gravity part to within
 /// 0.2 %, and inertia, friction and the rest are below 0.2 % of it. Ripple, cogging and tooth meshing are off: they
-/// are part of the rest. The copper loss of that hold is R i^2 = 4 * (0.137293 / 0.45)^2 = 0.37235 W per motor.
+/// are part of the rest. The copper loss of that hold is R i^2 = 4 * (0.140431 / 0.45)^2 = 0.38955 W per motor.
 #[test]
 fn holding_z_is_all_gravity() {
-    let by_hand = 7.0 * G * 0.02 / 10.0;
-    assert!((by_hand - 0.137293).abs() < 1e-6);
+    let by_hand = 7.16 * G * 0.02 / 10.0;
+    assert!((by_hand - 0.140431).abs() < 1e-6);
     let sim_config = machine_config(&["effects.torque_ripple = false", "effects.tooth_meshing = false"]);
     let mut sim = sim_components::Sim::new(&ENTRY, &sim_config).unwrap();
     sim.run(0.2, |_| {});
@@ -1723,7 +1839,7 @@ fn holding_z_is_all_gravity() {
             [inertia, friction, rest].iter().all(|p| p.abs() < 2e-3 * by_hand),
             "{motor}: {inertia}, {friction}, {rest}"
         );
-        assert!((copper[k] - 0.37235).abs() < 2e-3 * 0.37235, "{motor}: {} W", copper[k]);
+        assert!((copper[k] - 0.38955).abs() < 2e-3 * 0.38955, "{motor}: {} W", copper[k]);
     }
 }
 
@@ -1820,40 +1936,48 @@ fn the_report_names_the_source_of_each_exct_30_value() {
     assert_eq!(source(ENTRY.default_config, &named, &cfg, "parts.motor"), "set for this run");
 }
 
-/// Both modes of the carriage on the belt and the leaning Z axis (`modes`), by hand from the default config: mc = 4 kg,
-/// mz = 7 kg, cb = 2 * 100 N s/m, cz = 80 N s/m.
-/// x = 0.9 m, z = 0.05 m: kb = 5e5 / 1.25 + 5e5 / 0.45 = 1.511111e6 N/m, kz = 1 / (1 / 2e7 + 0.25^2 / 1.2e4) = 1.901743e5 N/m;
-///   s = (kb + kz) / mc + kz / mz = 4.524891e5, p = kb kz / 28 = 1.026338e10, w^2 = (s -+ sqrt(s^2 - 4 p)) / 2 =
-///   2.394966e4 and 4.285395e5: 24.6303 Hz and 104.1875 Hz. Shapes v = (kz - w^2 mz, w^2 mz) = (2.2527e4, 1.6765e5) and
-///   (-2.8096e6, 2.9998e6); damping ratio (cb vx^2 + cz vu^2) / (2 w (mc vx^2 + mz (vx + vu)^2)) = 0.029751 and 0.055161.
-/// x = 0.9 m, z = 0.15 m: kb = 5e5 / 1.35 + 5e5 / 0.55 = 1.279461e6 N/m, kz = 5.194805e5 N/m: 35.6220 Hz and 109.5573 Hz,
-///   damping 0.017328 and 0.053512.
-/// The lower one is `resonance_hz`; the rigid model and the one without the leaning Z axis tell none.
+/// The modes of the carriage on the belt and the frame (`modes`), by hand from the default config without the leaning Z
+/// axis, at x = 0.5 m, z = 0.25 m. The carriage with the Z axis, 4 + 5 + 2 = 11 kg, rides on the two sections that end
+/// at the clamp, both 1.05 m long and at the same tension, so the X-Z coupling k1 - k3 is nil there; they carry the
+/// base tension, 300 N less the weight on Z (the Z axis's and the belt's vertical runs', 7.16 kg) on section 2 shared
+/// out over the belt, 300 - 35.1078 x 2.1 / 4.2 = 282.446 N, on l = 1.05 / (1 + 282.446 / 5e5) of unstretched belt
+/// each: kb = 2 x 5e5 / l = 952 919 N/m. The belt's runs on the carriage (`belt_mass`) add 8 x 0.1 x (0.15 + 0.5 -
+/// 0.25) = 0.32 kg on x (the X-Z cross term 2 mu (2 x - sx) is nil), and with the frame (30 kg on 7.4e5 N/m) the whole
+/// belt, 0.42 kg, sways, its vertical runs, 1.6 m, coupling q' and x' (`belt_sway`). In the coordinates (x on the
+/// frame, frame q): M = [[11.32, 11.16], [11.16, 41.42]], K = diag(kb, 7.4e5), det(K - w^2 M) = 0: 20.60 and 55.64 Hz.
+/// The Z axis on its belt is a third mode above them. With the leaning Z axis the model has one more coordinate, so
+/// four modes. Without the frame and the lean: the carriage on the belt, sqrt(kb / 11.32) / 2 pi = 46.18 Hz.
 #[test]
-fn both_modes_are_the_roots_of_the_two_mass_hand_calculation() {
-    let m = machine(ENTRY.config(), &[]);
-    for (z, by_hand) in
-        [(0.05, [(24.6303, 0.029751), (104.1875, 0.055161)]), (0.15, [(35.6220, 0.017328), (109.5573, 0.053512)])]
-    {
-        let modes = m.modes(&[0.9, z]);
-        assert_eq!(modes.len(), 2);
-        for (mode, (hz, damping)) in modes.iter().zip(by_hand) {
-            assert!(
-                (mode.hz - hz).abs() < 1e-3 && (mode.damping - damping).abs() < 1e-5,
-                "z = {z}: {mode:?}, by hand {hz} Hz, {damping}"
-            );
-        }
-        assert_eq!(m.resonance_hz(&[0.9, z]), Some(modes[0].hz));
+fn the_modes_are_the_generalised_eigenvalues_of_the_carriage_the_frame_and_the_z_axis() {
+    let kb = 2.0 * 5e5 / (1.05 / (1.0 + (300.0 - 7.16 * G / 2.0 * 2.1 / 4.2) / 5e5));
+    let (mx, mxq, mq, kq) = (11.32, 11.16, 41.42, 7.4e5);
+    // a w^4 - b w^2 + c = 0.
+    let (a, b, c) = (mx * mq - mxq * mxq, kb * mq + kq * mx, kb * kq);
+    let root = (b * b - 4.0 * a * c).sqrt();
+    let by_hand = [(b - root) / (2.0 * a), (b + root) / (2.0 * a)].map(|w2: f64| w2.sqrt() / std::f64::consts::TAU);
+    let m = machine(ENTRY.config(), &["effects.tool_flex = false"]);
+    let modes = m.modes(&[0.5, 0.25]);
+    assert_eq!(modes.len(), 3, "{modes:?}");
+    for (mode, hz) in modes.iter().zip(by_hand) {
+        assert!((mode.hz - hz).abs() < 1e-3, "{mode:?}, by hand {hz} Hz");
     }
-    assert!(machine(ENTRY.config(), &["effects.tool_flex = false"]).modes(&[0.9, 0.05]).is_empty());
-    assert!(rigid(&[]).modes(&[0.9, 0.05]).is_empty());
+    assert!((by_hand[0] - 20.60).abs() < 0.005 && (by_hand[1] - 55.64).abs() < 0.005, "{by_hand:?}");
+    assert!(modes[2].hz > modes[1].hz);
+    assert_eq!(m.resonance_hz(&[0.5, 0.25]), Some(modes[0].hz));
+    let flexible = machine(ENTRY.config(), &[]).modes(&[0.5, 0.25]);
+    assert_eq!(flexible.len(), 4);
+    assert!(flexible.windows(2).all(|w| w[0].hz <= w[1].hz));
+    let plain = machine(ENTRY.config(), &["effects.tool_flex = false", "effects.frame_compliance = false"]);
+    let hz = (kb / 11.32).sqrt() / std::f64::consts::TAU;
+    assert!((hz - 46.18).abs() < 0.005 && (plain.modes(&[0.5, 0.25])[0].hz - hz).abs() < 1e-3, "{hz}");
+    assert!(rigid(&[]).modes(&[0.5, 0.25]).is_empty());
 }
 
-/// With the shaper following the pose, the second shaper takes the machine's second mode where the plan stands (see
-/// `both_modes_are_the_roots_of_the_two_mass_hand_calculation`): 104.1875 Hz at z = 0.05 m, 109.5573 Hz at 0.15 m, in
-/// place of the configured 100 Hz. Half its damped period in profile cycles of 1 ms, 0.5 / (f sqrt(1 - 0.03^2) * 1 ms),
-/// is 4.8012 and 4.5659; the first shaper's at the same time that of the lower mode, 20.3093 and 14.0426.
-/// Not following, both stay as configured: 25 Hz and 100 Hz.
+/// With the shaper following the pose, the first shaper takes the machine's lowest mode that moves the tool where the plan
+/// stands, the second the next one (`modes`, which `the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held`
+/// checks): with the default frame at x = 0.9 m the frame swaying with the carriage on it, 18.7481 Hz at z = 0.05 m and
+/// 20.1208 Hz at 0.15 m, and the carriage swaying against the frame with the Z axis leaning, 30.6839 Hz and 41.5342 Hz, in
+/// place of the configured 25 Hz and 100 Hz. Not following, both stay as configured.
 #[test]
 fn the_second_shaper_follows_the_second_mode_at_each_pose() {
     let shaper = |follows: bool| {
@@ -1869,7 +1993,7 @@ fn the_second_shaper_follows_the_second_mode_at_each_pose() {
     };
     let hz = |half: f64| 0.5 / (half * (1.0f64 - 0.03 * 0.03).sqrt() * 1e-3);
     let sim = shaper(true);
-    for (z, first, second) in [(0.05, 24.6303, 104.1875), (0.15, 35.6220, 109.5573)] {
+    for (z, first, second) in [(0.05, 18.7481, 30.6839), (0.15, 20.1208, 41.5342)] {
         let (half, half2) = sim.control.shaper_halves(sim.machine.as_ref(), &[0.9, z]).unwrap();
         assert!(
             (hz(half) - first).abs() < 1e-3 && (hz(half2) - second).abs() < 1e-3,
@@ -1924,24 +2048,26 @@ fn the_belt_wraps_both_motor_pulleys_by_half_a_turn_and_the_teeth_climb_out_at_k
 }
 
 /// The X beam as a simple span (effects.beam_sag): with the carriage in its middle (x = 0.5 m, 0.15 + 0.5 = 0.65 m from
-/// the left post of the 1.3 m span) carriage, Z axis and payload, (4 + 5 + 2) 9.80665 = 107.873 N, sag it by
-/// F L^3 / (48 E I) = 107.873 x 1.3^3 / (48 x 8.4e4) = 58.78 um. At rest with the tool at a pose the Z axis stands that
-/// much higher on its belt, and the tool is where it was asked to be.
+/// the left post of the 1.3 m span) carriage, Z axis and payload and the belt's runs riding on it (`belt_on_beam`: the
+/// vertical runs' 0.16 kg and half of the horizontal ones' 0.26 kg), (4 + 5 + 2 + 0.29) 9.80665 = 110.717 N, sag it by
+/// F L^3 / (48 E I) = 110.717 x 1.3^3 / (48 x 8.4e4) = 60.33 um (58.78 um before 21 November, without the belt). At rest
+/// with the tool at a pose the Z axis stands that much higher on its belt, and the tool is where it was asked to be.
 #[test]
 fn the_beam_sags_under_a_central_carriage_by_f_l3_over_48_ei() {
     let m = machine(ENTRY.config(), &["effects.beam_sag = true"]);
     let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
     m.equilibrium(&[0.5, 0.25], &mut state, &mut torque);
-    let sag = 107.873_15 * 1.3f64.powi(3) / (48.0 * 8.4e4);
-    assert!((sag - 58.779e-6).abs() < 1e-9);
+    let weight = (11.0 + 0.16 + 0.13) * 9.80665;
+    let sag = weight * 1.3f64.powi(3) / (48.0 * 8.4e4);
+    assert!((weight - 110.717_08).abs() < 1e-5 && (sag - 60.329e-6).abs() < 1e-9, "{weight} N, {sag} m");
     assert!((state[Z] - 0.25 - sag).abs() < 1e-12, "the Z axis stands {} higher", state[Z] - 0.25);
     let (mut pos, mut vel) = ([0.0; 2], [0.0; 2]);
     m.tool_state(&state, &mut pos, &mut vel);
     assert!((pos[1] - 0.25).abs() < 1e-12 && (pos[0] - 0.5).abs() < 1e-12, "{pos:?}");
     // At the end of the stroke, 0.15 m from the post: a^2 b^2 / (3 E I L) = 0.0225 x 1.3225 / (3 x 8.4e4 x 1.3) per
-    // newton, 107.873 times that: 9.79 um.
+    // newton, 110.717 times that: 10.06 um.
     m.equilibrium(&[0.0, 0.25], &mut state, &mut torque);
-    assert!((state[Z] - 0.25 - 107.873_15 * 0.0225 * 1.3225 / (3.0 * 8.4e4 * 1.3)).abs() < 1e-12);
+    assert!((state[Z] - 0.25 - weight * 0.0225 * 1.3225 / (3.0 * 8.4e4 * 1.3)).abs() < 1e-12);
 }
 
 /// The Z axis bends as a cantilever from the carriage (effects.z_axis_bending, E I = 1.4e4 N m^2). Alone (no guide
@@ -1962,10 +2088,25 @@ fn the_z_axis_bends_as_a_cantilever_from_the_carriage() {
     assert!((dk - numeric).abs() < 1e-6 * numeric.abs(), "{dk} against {numeric}");
 }
 
+/// With the beam sag the state's Z stands higher than the tool's, and the belt is solved for that Z: at rest the Z axis does
+/// not accelerate. (Solved for the tool's z instead it started at -16 m/s^2: the 59 um of sag is 59e-6 x about 1.6e6 N/m of
+/// the Z axis's belt = 94 N on 7 kg, 13 m/s^2 and the rest from the guides' extra load.)
+#[test]
+fn the_sagging_beam_equilibrium_is_at_rest_in_z() {
+    let m = machine(ENTRY.config(), &["effects.beam_sag = true"]);
+    let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
+    m.equilibrium(&[0.5, 0.25], &mut state, &mut torque);
+    let mut rates = vec![0.0; state.len()];
+    m.derivatives(&state, &torque, &mut rates);
+    assert!(rates[V + Z].abs() < 1e-3, "the Z axis accelerates at {} m/s^2", rates[V + Z]);
+}
+
 /// effects.frame_compliance is a two-way base along X: the beam (frame.mass_kg, 30 kg) on its spring (7.4e5 N/m,
 /// 190 N s/m) with the carriage and the Z axis riding on it. The frame mode off and a coupled base along X instead
-/// (effects.base_reaction), of everything that sways along X, M = 30 + 4 + 5 + 2 = 41 kg (beam, carriage, Z axis,
-/// payload), with the frame's stiffness and damping ratio 190 / (2 sqrt(7.4e5 x 41)) = 0.01725, are the same equations:
+/// (effects.base_reaction), of everything that sways along X, M = 30 + 4 + 5 + 2 + 0.42 = 41.42 kg (beam, carriage, Z
+/// axis, payload, belt), with the frame's stiffness and damping ratio 190 / (2 sqrt(7.4e5 x 41.42)) = 0.01716, are the
+/// same equations (the belt's vertical runs move with the carriage and the Z axis, and its momentum in X is theirs:
+/// `frame_momentum` has it as the frame mode's mass matrix does):
 /// the base's momentum balance is the beam's, its acceleration on carriage and Z axis the beam's. A move from the start
 /// (0.1, 0.35) to (0.9, 0.05) under the controller gives the same tool position and sway over 1.5 s: measured 6.3e-15 m
 /// apart against the sway's 0.154 mm (the order of the floating-point sums), asked within 1e-9 of it. One-way the base
@@ -1977,6 +2118,8 @@ fn a_coupled_base_along_x_moves_as_the_frame_mode() {
     let parts = ["frame.mass_kg", "mass.carriage_kg", "mass.z_axis_kg", "mass.payload_kg"];
     let mass: f64 = parts.iter().map(|key| cfg.f64(key).unwrap()).sum();
     assert_eq!(mass, 41.0);
+    // The belt sways with the frame too (`belt_sway`): 0.1 kg/m on 8 x 0.15 + 2 x 1.0 + 2 x 0.5 = 4.2 m.
+    let mass = mass + 0.42;
     let mut based = cfg.clone();
     for e in [
         "effects.frame_compliance = false".to_string(),
@@ -2009,17 +2152,17 @@ fn a_coupled_base_along_x_moves_as_the_frame_mode() {
 }
 
 /// Friction feedforward from the machine's own model (`steady_friction`), by hand, in an X traverse at 0.8 m/s with the
-/// Z axis at 0.35 m. The X guide carries m_x g = 11 kg x 9.80665 = 107.873 N against its rated 9 kg: load scale
-/// (200 + 107.873) / (200 + 88.260) = 1.068040; it slides at 15 N x 1.068040 + 20 N s/m x 0.8 m/s = 32.0206 N (the
-/// Stribeck part exp(-(0.8 / 0.01)^2) is nothing), the Z guide stands. Each belt force carries half, 16.0103 N, through
-/// r / i = 0.02 / 5; motor a lifts the Z axis (m_z g / 2 = 34.32 N with it) and drives its gearbox (/ 0.95), motor b
-/// holds it back and is driven back (x 0.95). The shafts at 0.8 / 0.02 x 5 = 200 rad/s: 0.02 tanh(400) + 1e-4 x 200 =
-/// 0.04 N m. So a: 0.04 + 16.0103 x 0.02 / (5 x 0.95) = 0.107412 N m, b: 0.04 + 16.0103 x 0.02 x 0.95 / 5 = 0.100839
-/// N m. In the cruise the feedforward takes exactly that off the velocity loop's integrator (to 2 %, shipped elastic
-/// machine and rigid one). In the rigid one what stays is the gearboxes' loss on the weight, which the rigid torque
-/// feedforward leaves out by design: a 34.32 x 0.004 (1 / 0.95 - 1) = 0.007226 N m, b 34.32 x 0.004 x 0.05 = 0.006865
-/// N m, and a little more X guide friction from the tilt the guide loads take from the torques' acceleration (under
-/// 3 % of the friction).
+/// Z axis at 0.35 m. The X guide carries m_x g = 11 kg x 9.80665 = 107.873 N against its rated 9 kg: load scale (200 +
+/// 107.873) / (200 + 88.260) = 1.068040; it slides at 15 N x 1.068040 + 20 N s/m x 0.8 m/s = 32.0206 N (the Stribeck
+/// part exp(-(0.8 / 0.01)^2) is nothing), the Z guide stands. Each belt force carries half, 16.0103 N, through r / i =
+/// 0.02 / 5. The gearbox's loss factor is that of the whole belt force it passes, the friction and the Z axis's weight
+/// W = ±W_z / 2 = ±35.1078 N (the Z axis's and the belt's vertical runs'; motor a lifts it, b holds it back), and the
+/// loss is on all of it, r / i ((F + W) / loss - W) with the weight's own r W / i in the rigid feedforward: a drives
+/// (F + W = 51.1181 N, / 0.95), b is driven back (F + W = -19.0975 N, x 0.95). The shafts at 0.8 / 0.02 x 5 = 200 rad/s:
+/// 0.02 tanh(400) + 1e-4 x 200 = 0.04 N m. So a: 0.04 + 0.004 (51.1181 / 0.95 - 35.1078) = 0.114803 N m, b: 0.04 +
+/// 0.004 (-19.0975 x 0.95 + 35.1078) = 0.107861 N m. In the cruise the feedforward takes exactly that off the velocity
+/// loop's integrator (to 2 %, shipped elastic machine and rigid one); in the rigid one what stays is a little more X
+/// guide friction from the tilt the guide loads take from the torques' acceleration (under 3 % of the friction).
 #[test]
 fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing() {
     let cruise = |model: bool, elastic: bool| {
@@ -2047,8 +2190,11 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
         assert!(n > 1000, "{n} samples in the cruise");
         (ff, integrator.map(|i| i / n as f64))
     };
-    let expected = [0.04 + 16.0103 * 0.02 / (5.0 * 0.95), 0.04 + 16.0103 * 0.02 * 0.95 / 5.0];
-    let weight = [34.3233 * 0.004 * (1.0 / 0.95 - 1.0), 34.3233 * 0.004 * 0.05];
+    // The loss factor is the one of the whole torque the gearbox passes (belt force 16.0103 N with the weight W =
+    // +-35.1078 N = +-W_z / 2, the Z axis's 7 kg and the belt's vertical runs' 0.16 kg): r / i ((F + W) / loss - W), a:
+    // 0.004 (51.1181 / 0.95 - 35.1078) = 0.074803, b (F + W = -19.0975 N is generating): 0.004 (-19.0975 x 0.95 +
+    // 35.1078) = 0.067861 N m on top of the shaft's 0.04.
+    let expected = [0.04 + 0.074803, 0.04 + 0.067861];
     for elastic in [true, false] {
         let ((ff, with), (_, without)) = (cruise(true, elastic), cruise(false, elastic));
         for k in 0..2 {
@@ -2056,8 +2202,382 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
             assert!((ff[k] - e).abs() < 1e-4 * e, "motor {k}: feedforward {ff:?}, by hand {expected:?}");
             assert!((without[k] - with[k] - e).abs() < 0.02 * e, "motor {k}: with {with:?}, without {without:?}");
             if !elastic {
-                assert!((0.0..0.03 * e).contains(&(with[k] - weight[k])), "motor {k}: the integrator carries {with:?}");
+                assert!(with[k].abs() < 0.03 * e, "motor {k}: the integrator carries {with:?}");
             }
         }
     }
+}
+
+/// The gearbox's loss on the Z axis's weight is in the friction feedforward (`steady_friction`). Rigid model at (0.5,
+/// 0.25) m, no guide friction, eta = 0.95, r / i = 0.004 m, the weight on each belt ±W_z / 2 = ±35.1078 N (the Z axis's
+/// 7 kg and the belt's vertical runs' 0.16 kg). Z up at 0.5 m/s: motor a lifts (drives, / eta), motor b is driven
+/// forwards on its negative speed with a negative torque (also drives): ±0.004 x 35.1078 / 0.95 = ±0.147822 N m with
+/// the weight's own 0.140431 in the rigid feedforward (it gave ±0.140431). Down, the gearboxes are driven back: ±0.004
+/// x 35.1078 x 0.95 = ±0.133410 N m. The model's own answer agrees: the torques under which the rigid model's
+/// `derivatives` give X and Z no acceleration at that speed (Newton, the Jacobian by differences) are the totals to
+/// 1e-9 N m.
+#[test]
+fn the_steady_friction_has_the_gearbox_loss_on_the_weight() {
+    let m = rigid(&["effects.gearbox_efficiency = true", "gearbox.efficiency = 0.95"]);
+    for (vz, by_hand) in [(0.5, 0.147822), (-0.5, 0.133410)] {
+        let (mut weight, mut friction) = ([0.0; 2], [0.0; 2]);
+        m.feedforward_torque(&[0.5, 0.25], &[0.0, 0.0], &mut weight);
+        m.steady_friction(&[0.5, 0.25], &[0.0, vz], &mut friction);
+        let total = [weight[0] + friction[0], weight[1] + friction[1]];
+        assert!(
+            (total[0] - by_hand).abs() < 1e-5 && (total[1] + by_hand).abs() < 1e-5,
+            "{vz} m/s: {total:?}, by hand ±{by_hand}"
+        );
+        let acc = |t: [f64; 2]| {
+            let mut d = [0.0; N_RIGID];
+            m.derivatives(&[0.5, 0.25, 0.0, vz, 0.0, 0.0, 0.0, 0.0], &t, &mut d);
+            [d[2], d[3]]
+        };
+        let mut t = total;
+        for _ in 0..20 {
+            let a = acc(t);
+            let j: [[f64; 2]; 2] = std::array::from_fn(|c| {
+                let mut s = t;
+                s[c] += 1e-6;
+                let b = acc(s);
+                [(b[0] - a[0]) / 1e-6, (b[1] - a[1]) / 1e-6]
+            });
+            // a + J dt = 0, J[c] the column of motor c.
+            let det = j[0][0] * j[1][1] - j[1][0] * j[0][1];
+            t[0] -= (a[0] * j[1][1] - a[1] * j[1][0]) / det;
+            t[1] -= (j[0][0] * a[1] - j[0][1] * a[0]) / det;
+        }
+        let a = acc(t);
+        assert!(a[0].abs() < 1e-9 && a[1].abs() < 1e-9, "{vz} m/s: {a:?}");
+        assert!(
+            (t[0] - total[0]).abs() < 1e-9 && (t[1] - total[1]).abs() < 1e-9,
+            "{vz} m/s: Newton {t:?}, feedforward and steady friction {total:?}"
+        );
+    }
+}
+
+/// The belt's kinetic energy run by run (`belt_mass`): with the belt's mass per metre doubled the rigid model's kinetic
+/// energy grows by that of the belt, 1/2 mu sum of (length x speed^2 over ground) per run. Section 1 and 3's vertical
+/// runs move with the clamp, (vx, vz), 2 (s + z) long together; the horizontal runs next to pulley A, 2 (s + x), at
+/// vx + vz, and next to B, 2 (s + sx - x), at vx - vz; section 2's vertical runs, s + sz - z each, at (vx, 2 vx + vz) and
+/// (vx, -(2 vx - vz)). Evaluated at x = 0.3, z = 0.1, vx = 0.6, vz = 0.2 m/s from the config's lengths. (Its X
+/// coefficient at z = 0 is mu (L + 8 (s + sz)) with L the free belt length, against the lumps' mu L.)
+#[test]
+fn the_belts_kinetic_energy_is_the_sum_over_its_runs() {
+    let kinetic = |mu: f64| {
+        let m = rigid(&[&format!("belt.mass_kg_m = {mu}")]);
+        m.energy_parts(&[0.3, 0.1, 0.6, 0.2, 0.0, 0.0, 0.0, 0.0])[0]
+    };
+    let m = rigid(&[]);
+    let (s, sx, sz, x, z, vx, vz) = (m.span_min, m.axes[0].max, m.axes[1].max, 0.3f64, 0.1f64, 0.6f64, 0.2f64);
+    let runs = 2.0 * (s + x) * (vx + vz).powi(2)
+        + 2.0 * (s + sx - x) * (vx - vz).powi(2)
+        + 2.0 * (s + z) * (vx * vx + vz * vz)
+        + (s + sz - z) * ((vx * vx + (2.0 * vx + vz).powi(2)) + (vx * vx + (2.0 * vx - vz).powi(2)));
+    let by_hand = 0.5 * 0.1 * runs;
+    let belt = kinetic(0.2) - kinetic(0.1);
+    assert!((belt - by_hand).abs() < 1e-9 * by_hand, "the belt carries {belt} J, by hand {by_hand} J");
+}
+
+/// The loss-free T-gantry keeps its energy: the motors' power, sum of torque x rotor speed, is the rate of the energy it
+/// holds (kinetic, potential, elastic: `Machine::energy`) along its own derivatives, to 1e-7 of that power. Rigid, rigid
+/// with the idlers and the cable chain, elastic (with the frame and the leaning Z axis), and elastic with the idlers, the
+/// chain, the belt's tooth stiffness, the Z axis's bending and the beam's sag; each at two moving states off rest (every
+/// state moved a little: belts stretched, the lean and the frame out). The rate by Richardson's central difference over
+/// +-0.1 and 0.2 us along the derivatives, whose error is far below that.
+#[test]
+fn the_motors_power_is_the_rate_of_the_energy_in_every_loss_free_configuration() {
+    let configs: [(&str, &[&str]); 6] = [
+        ("rigid", &["effects.belt_stretch = false"]),
+        (
+            "rigid, idlers, chain",
+            &["effects.belt_stretch = false", "effects.idlers = true", "effects.cable_chain = true"],
+        ),
+        ("elastic", &[]),
+        (
+            "elastic, all",
+            &[
+                "effects.idlers = true",
+                "effects.cable_chain = true",
+                "effects.belt_tooth_stiffness = true",
+                "effects.z_axis_bending = true",
+                "effects.beam_sag = true",
+            ],
+        ),
+        // The beam's vertical mode, loss-free (`lossless_config` has its damping off): w carries the carriage, the Z axis
+        // and the beam's modal mass, the weight of the carriage riding along the beam works on x through k(x).
+        ("elastic, beam mode", &["effects.beam_vertical_mode = true"]),
+        (
+            "elastic, beam mode, all",
+            &[
+                "effects.idlers = true",
+                "effects.cable_chain = true",
+                "effects.belt_tooth_stiffness = true",
+                "effects.z_axis_bending = true",
+                "effects.beam_vertical_mode = true",
+            ],
+        ),
+    ];
+    for (name, edit) in configs {
+        let m = machine(lossless_config(), edit);
+        for (pose, vel) in [([0.3, 0.1], [0.6, 0.2]), ([0.8, 0.4], [-0.5, 0.3])] {
+            let (mut s, mut hold) = (Vec::new(), [0.0; 2]);
+            m.equilibrium(&pose, &mut s, &mut hold);
+            m.set_tool_velocity(&mut s, &vel);
+            for (i, x) in s.iter_mut().enumerate() {
+                *x += 1e-5 * (1.0 + (i % 5) as f64);
+            }
+            let torque = [hold[0] + 0.7, hold[1] - 0.3];
+            let mut rate = vec![0.0; s.len()];
+            m.derivatives(&s, &torque, &mut rate);
+            let energy = |h: f64| m.energy(&s.iter().zip(&rate).map(|(x, r)| x + h * r).collect::<Vec<_>>());
+            let h = 1e-7;
+            let rate_of_energy = (8.0 * (energy(h) - energy(-h)) - (energy(2.0 * h) - energy(-2.0 * h))) / (12.0 * h);
+            let (mut angle, mut speed) = ([0.0; 2], [0.0; 2]);
+            m.motor_state(&s, &mut angle, &mut speed);
+            let power = torque[0] * speed[0] + torque[1] * speed[1];
+            let off = (rate_of_energy - power) / power;
+            println!("{name} at {pose:?}: power {power:.6} W, dE/dt {rate_of_energy:.6} W, off {off:.2e}");
+            assert!(off.abs() < 1e-7, "{name} at {pose:?}: power {power} W, dE/dt {rate_of_energy} W");
+        }
+    }
+}
+
+/// The rigid model's feedforward at speed (`feedforward_torque_moving`, with the belt's speed terms and the chain's
+/// growth) gives the commanded acceleration (3, -2) m/s^2 back through `rigid_solve`, loss-free, with and without the
+/// idlers and the chain, at rest and moving at (0.6, -0.4) m/s.
+#[test]
+fn the_feedforward_at_speed_gives_the_commanded_acceleration() {
+    for edit in [&[][..], &["effects.idlers = true", "effects.cable_chain = true"]] {
+        let m = rigid(edit);
+        for vel in [[0.0, 0.0], [0.6, -0.4]] {
+            let (pos, acc) = ([0.3, 0.1], [3.0, -2.0]);
+            let mut torque = [0.0; 2];
+            m.feedforward_torque_moving(&pos, &vel, &acc, &mut torque);
+            let mut d = [0.0; N_RIGID];
+            m.derivatives(&[pos[0], pos[1], vel[0], vel[1], 0.0, 0.0, 0.0, 0.0], &torque, &mut d);
+            assert!(
+                (d[2] - acc[0]).abs() < 1e-9 && (d[3] - acc[1]).abs() < 1e-9,
+                "{edit:?} at {vel:?}: ({}, {})",
+                d[2],
+                d[3]
+            );
+        }
+    }
+}
+
+/// The modes (`modal`) are those of the elastic model's own linearised equations with the pulleys held: at rest at the
+/// pose, the derivatives' accelerations of x, z, q and u per unit of each of them (central differences over 1e-7)
+/// are -M^-1 K, and each mode's shape v satisfies K v = w^2 M v. Loss-free default with the backlash off, at the four
+/// poses of the audit, against an independent reference (`reference/modes_reference.py`: K and M built from the physics,
+/// the belt's eight runs summed one by one, the sections' unstretched belt at rest found by bisection, the Z axis's
+/// pendulum stiffness k^2 m_z g h^3 / tilt^2 and the belt runs' geometric stiffness of the guide's give), with the belt's
+/// mass and without. The audit's own figures (18.81 / 30.77 / 78.51 / 119.46 Hz at (0.9, 0.05) without the belt's mass)
+/// are 0.002 to 0.04 Hz below these: it had no pendulum stiffness. The reference is printed to six places, so 1e-5 Hz.
+#[test]
+fn the_modes_are_those_of_the_linearised_derivatives_with_the_pulleys_held() {
+    let poses = [[0.9, 0.05], [0.5, 0.25], [0.5, 0.05], [0.1, 0.45]];
+    let reference = [
+        [
+            [18.748084, 30.683934, 76.045975, 116.302811],
+            [20.531127, 53.225401, 83.046572, 201.018051],
+            [18.689210, 30.622670, 84.594794, 92.682836],
+            [19.888172, 39.812840, 82.116597, 103.463182],
+        ],
+        [
+            [18.809186, 30.786054, 78.517072, 119.467942],
+            [20.642238, 53.908083, 83.046572, 206.559075],
+            [18.749948, 30.723047, 84.594807, 98.349870],
+            [19.983371, 39.921081, 83.240821, 103.705298],
+        ],
+    ];
+    for (mass_per_m, audit) in [0.1, 0.0].into_iter().zip(reference) {
+        let m = machine(
+            lossless_config(),
+            &["effects.gearbox_backlash = false", &format!("belt.mass_kg_m = {mass_per_m:?}")],
+        );
+        for (pose, audit) in poses.iter().zip(audit) {
+            let (mut rest, mut torque) = (Vec::new(), [0.0; 2]);
+            m.equilibrium(pose, &mut rest, &mut torque);
+            let at = m.coordinates();
+            let n = at.len();
+            // J[i][j]: acceleration of coordinate i per unit of coordinate j.
+            let mut jacobian = vec![0.0; n * n];
+            for (j, &c) in at.iter().enumerate() {
+                let acc = |h: f64| {
+                    let mut s = rest.clone();
+                    s[c] += h;
+                    let mut d = vec![0.0; s.len()];
+                    m.derivatives(&s, &torque, &mut d);
+                    at.iter().map(|&i| d[V + i]).collect::<Vec<_>>()
+                };
+                let (ahead, behind) = (acc(1e-7), acc(-1e-7));
+                for i in 0..n {
+                    jacobian[i * n + j] = (ahead[i] - behind[i]) / 2e-7;
+                }
+            }
+            let mass = m.elastic_mass(pose[0], pose[1]);
+            // K = -M J.
+            let k: Vec<f64> = (0..n * n)
+                .map(|rc| -(0..n).map(|p| mass[rc / n * n + p] * jacobian[p * n + rc % n]).sum::<f64>())
+                .collect();
+            let modes = m.modal(pose);
+            assert_eq!(modes.len(), 4, "{pose:?}");
+            let mut line = format!("belt {mass_per_m} kg/m at {pose:?}:");
+            for ((mode, shape), hand) in modes.iter().zip(audit) {
+                let v: Vec<f64> = at.iter().map(|&c| shape[c]).collect();
+                let w2 = (std::f64::consts::TAU * mode.hz).powi(2);
+                let times = |a: &[f64], i: usize| (0..n).map(|j| a[i * n + j] * v[j]).sum::<f64>();
+                let (kv, mv): (Vec<f64>, Vec<f64>) = (0..n).map(|i| (times(&k, i), w2 * times(&mass, i))).unzip();
+                let size = mv.iter().fold(0.0, |a: f64, b| a.max(b.abs()));
+                assert!(
+                    kv.iter().zip(&mv).all(|(a, b)| (a - b).abs() < 1e-6 * size),
+                    "{pose:?} {} Hz: K v {kv:?}, w^2 M v {mv:?}",
+                    mode.hz
+                );
+                assert!((mode.hz - hand).abs() < 1e-5, "{pose:?}: {} Hz against the reference's {hand}", mode.hz);
+                line += &format!(" {:.2}", mode.hz);
+            }
+            println!("{line}");
+        }
+    }
+}
+
+/// The idlers' inertia rides on the carriage's speed along the beam alone, not on its speed over ground: with the frame's
+/// sway on, the mass matrix with the idlers differs from the one without by m_idlers[0] at (x, x), their Z share
+/// m_idlers[1] at (z, z) (the upper idlers turn with vz, the lower ones with 2 vx +- vz) and nowhere else.
+#[test]
+fn the_idlers_ride_on_the_speed_along_the_beam_alone() {
+    let sway = ["effects.frame_compliance = true", "effects.tool_flex = true"];
+    let with = machine(lossless_config(), &[&sway[..], &["effects.idlers = true"][..]].concat());
+    let without = machine(lossless_config(), &[&sway[..], &["effects.idlers = false"][..]].concat());
+    let (a, b) = (with.elastic_mass(0.4, 0.2), without.elastic_mass(0.4, 0.2));
+    let n = with.coordinates().len();
+    assert!(n >= 4 && with.m_idlers[0] > 0.0);
+    for rc in 0..n * n {
+        // x on x (12 idler masses), z on z (4): nothing on the sway, the lean, or between them.
+        let want = match rc {
+            0 => with.m_idlers[0],
+            _ if rc == n + 1 => with.m_idlers[1],
+            _ => 0.0,
+        };
+        assert!((a[rc] - b[rc] - want).abs() < 1e-12, "entry {rc}: {} against {want}", a[rc] - b[rc]);
+    }
+}
+
+/// The belt's runs where the wheels stand (`runs`): r = 0.02 m, r_i = 0.012 m, the carriage at 0.9 m (the frame swayed by
+/// 0.01 m), the Z axis's point at 0.35 m. The four runs to the motor pulleys are level at +-r = +-0.02 m, from the posts
+/// (-0.14 and 1.16 m with the sway) to the carriage idlers' sides 0.9 -+ 0.042 m; every run's end lies on its wheel and
+/// square to its radius there (tangent). Their angular momentum about y is each run's mass, mu times its length of
+/// `belt_mass`, at the middle of the run with its speed: by hand from those ends.
+#[test]
+fn the_belt_angular_momentum_is_the_sum_over_its_runs() {
+    let m = machine(lossless_config(), &["effects.frame_compliance = true"]);
+    let (mu, s, sx, sz) = (m.belt.mass_per_m, m.span_min, m.axes[0].max, m.axes[1].max);
+    let (xc, sway, z, vx, vz, vq) = (0.9, 0.01, 0.35, 0.8, -0.3, 0.05);
+    assert!(m.r == 0.02 && m.idler_radius == 0.012);
+    let runs = m.runs(xc, sway, z);
+    let level = [(1, [0.858, 0.02], [-0.14, 0.02]), (2, [-0.14, -0.02], [0.858, -0.02])];
+    let level = level.into_iter().chain([(5, [0.942, -0.02], [1.16, -0.02]), (6, [1.16, 0.02], [0.942, 0.02])]);
+    for (k, a, b) in level {
+        for (got, want) in runs[k].iter().zip([a, b]) {
+            assert!((got[0] - want[0]).abs() < 1e-12 && (got[1] - want[1]).abs() < 1e-12, "run {k}: {runs:?}");
+        }
+    }
+    // The wheels' centres and radii along the path, each run between two of them.
+    let wheels = [
+        ([xc, z], 0.0),
+        ([xc - 0.042, 0.032], 0.012),
+        ([sway - s, 0.0], 0.02),
+        ([xc - 0.042, -0.032], 0.012),
+        ([xc, z - 0.08], 0.012),
+        ([xc + 0.042, -0.032], 0.012),
+        ([sway + s + sx, 0.0], 0.02),
+        ([xc + 0.042, 0.032], 0.012),
+        ([xc, z], 0.0),
+    ];
+    for (k, [a, b]) in runs.iter().enumerate() {
+        let t = [b[0] - a[0], b[1] - a[1]];
+        for (p, (c, radius)) in [(a, wheels[k]), (b, wheels[k + 1])] {
+            let off = [p[0] - c[0], p[1] - c[1]];
+            assert!((off[0].hypot(off[1]) - radius).abs() < 1e-12, "run {k} off its wheel");
+            assert!((off[0] * t[0] + off[1] * t[1]).abs() < 1e-12, "run {k} not tangent");
+        }
+    }
+    let lengths =
+        [s + z, s + xc - sway, s + xc - sway, s + sz - z, s + sz - z, s + sx - xc + sway, s + sx - xc + sway, s + z];
+    let speeds = [
+        [vx, vz],
+        [vx + vz, 0.0],
+        [-(vx + vz), 0.0],
+        [vx, 2.0 * vx + vz],
+        [vx, -(2.0 * vx - vz)],
+        [-(vx - vz), 0.0],
+        [vx - vz, 0.0],
+        [vx, vz],
+    ];
+    let by_hand: f64 = (0..8)
+        .map(|k| {
+            let [a, b] = runs[k];
+            let (mx, mz) = (0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]));
+            mu * lengths[k] * (mz * (speeds[k][0] + vq) - mx * speeds[k][1])
+        })
+        .sum();
+    let got = m.belt_angular(xc, sway, z, [vx, vz, vq]);
+    assert!((got - by_hand).abs() < 1e-15 * by_hand.abs().max(1.0), "{got} against {by_hand}");
+}
+
+/// The idlers' spin in the frame's angular momentum: -2 (J / r) vx, the five idlers' turning with the belt past them
+/// (+2 vx at the Z-bottom one, -(2 vx + vz), -(2 vx - vz) at the lower ones, -+vz at the upper ones).
+#[test]
+fn the_idlers_spin_is_in_the_frame_momentum() {
+    let cfg = ENTRY.config();
+    let (j, r) = (cfg.f64("idler.inertia_kgm2").unwrap(), cfg.f64("idler.radius_m").unwrap());
+    let angular = |idlers: bool| {
+        let m = machine(lossless_config(), &[&format!("effects.idlers = {idlers}")]);
+        let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
+        m.equilibrium(&[0.5, 0.3], &mut state, &mut torque);
+        state[V + X] = 0.7;
+        state[V + Z] = 0.2;
+        m.frame_momentum(&state).unwrap().angular[1]
+    };
+    let hand = -2.0 * j / r * 0.7;
+    assert!((angular(true) - angular(false) - hand).abs() < 1e-12, "{} against {hand}", angular(true) - angular(false));
+}
+
+/// How far the leaning Z axis raises its weight (`lean_rise`), by hand. Guide tilt only (no bending): the bar turns by
+/// F h / tilt along its whole length, so the point at h rises by 1/2 (h / tilt)^2 h per F^2. Bending only: theta =
+/// F (h s - s^2 / 2) / EI, 1/2 integral of theta^2 = h^5 / (15 EI^2) F^2 at the load, and beyond it, at a constant angle
+/// F h^2 / (2 EI), 1/2 (d - h) h^4 / (4 EI^2) more. The pendulum stiffness of the weight is then c = 2 k^2 m_z g rise.
+#[test]
+fn the_lean_raises_the_weight_by_the_hand_formula() {
+    let tilt_only = machine(lossless_config(), &["effects.tool_flex = true", "effects.z_axis_bending = false"]);
+    let h = tilt_only.z_com_drop;
+    let tilt = tilt_only.flex.as_ref().unwrap().tilt;
+    let by_hand = 0.5 * (h / tilt).powi(2) * h;
+    assert!((tilt_only.lean_rise(h, h) - by_hand).abs() < 1e-12 * by_hand, "{}", tilt_only.lean_rise(h, h));
+    let k = tilt_only.flex_at(0.0).0;
+    let c = 2.0 * k * k * tilt_only.m_z() * tilt_only.g * by_hand;
+    assert!((tilt_only.lean_weight_stiffness(0.0) - c).abs() < 1e-9 * c);
+    let bend_only = machine(lossless_config(), &["effects.tool_flex = false", "effects.z_axis_bending = true"]);
+    let ei = bend_only.flex.as_ref().unwrap().ei;
+    let at_load = h.powi(5) / (15.0 * ei * ei);
+    assert!((bend_only.lean_rise(h, h) - at_load).abs() < 1e-12 * at_load);
+    let d = bend_only.z_tool_drop;
+    let beyond = at_load + 0.5 * (d - h) * h.powi(4) / (4.0 * ei * ei);
+    assert!((bend_only.lean_rise(d, h) - beyond).abs() < 1e-12 * beyond, "{}", bend_only.lean_rise(d, h));
+}
+
+/// A pose's sideways process force changes the modes through the lean it holds (the k' u0 cross term).
+#[test]
+fn a_sideways_process_force_moves_the_modes() {
+    let edit = ["effects.tool_flex = true", "effects.z_axis_bending = true", "effects.process_force = true"];
+    let mut m = machine(lossless_config(), &edit);
+    let hz = |m: &TGantry| m.modal(&[0.5, 0.3]).iter().map(|(mode, _)| mode.hz).collect::<Vec<f64>>();
+    let free = hz(&m);
+    m.dwelling = true;
+    m.process = [500.0, 0.0];
+    let loaded = hz(&m);
+    assert_eq!(free.len(), loaded.len());
+    assert!(free.iter().zip(&loaded).any(|(a, b)| (a - b).abs() > 1e-9 * a), "{free:?} {loaded:?}");
 }

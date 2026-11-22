@@ -47,6 +47,11 @@ z_axis_bending = false
 # The X beam sags under the carriage and the Z axis, as a simple span between the posts ([beam]), and lowers the tool
 # by m g a^2 b^2 / (3 EI L); quasi-static. Off as shipped: the beam's stiffness is an [estimate].
 beam_sag = false
+# The beam's first vertical mode with the carriage on it as one more coordinate w (the beam's deflection under the
+# carriage, [beam]): its modal mass from the beam's mass per metre, its stiffness the quasi-static span's, so that it
+# rests at the beam_sag value; a Z move's acceleration and the carriage's weight riding along the beam excite it.
+# Supersedes the quasi-static beam_sag. Off as shipped: the beam's mass and damping are [estimate]s.
+beam_vertical_mode = false
 gravity = true
 payload = true
 belt_stretch = true
@@ -73,10 +78,18 @@ gearbox_lost_motion = false
 # A strain wave gear's three-segment stiffness, K1 to T1, K2 to T2, K3 beyond (gearbox.stiffness_*). Off in the shipped
 # configs.
 gearbox_stiffness_curve = false
+# The efficiency's loss as a friction in the gearbox's mesh: in proportion to the torque it passes, against the
+# motion at any speed, and sticking at rest inside its band. Off, as on the other belt machines (the loss fades in below
+# 0.5 W, a gear at rest has none); the energy budget closes with it on as without it.
+gearbox_mesh_friction = false
 torque_ripple = true
 tooth_meshing = true
 frame_compliance = true
 tool_flex = true
+# With tool_flex: the belt's upper vertical runs reach the clamp tool_flex.belt_offset_m to either side of the Z axis's
+# line, so the guide's tilt lengthens one and shortens the other: their tension difference turns the lean and their
+# stretch holds it (the lean's lowest mode 18.75 to 17.55 Hz at x = 0.9, z = 0.05 m). Off: on the line, as before.
+belt_run_offset = false
 idlers = false
 cable_chain = false
 process_force = false
@@ -243,6 +256,8 @@ bristle_damping_n_s_m = 1500.0
 preload_n = 200.0
 
 [motor]
+# A made-up motor, no catalogue motor: no row of catalog/ has these values (0.45 N m/A, 1.27 N m at 2.822 A, 9.5 A,
+# 0.3 kg cm2), so its stall current is its rated one. A motor named in [parts] replaces them.
 rotor_inertia_kgm2 = 0.3e-4
 friction_coulomb_nm = 0.02
 friction_viscous_nm_s_rad = 1.0e-4
@@ -333,6 +348,10 @@ damping_n_s_m = 80.0
 # With effects.z_axis_bending [estimate]: the Z axis's bending stiffness E I, an aluminium profile of about 60 x 40 mm
 # (I = 2e-7 m^4, E = 70 GPa); its centre of mass h below the carriage gives way h^3 / (3 E I) more.
 z_axis_bending_stiffness_nm2 = 1.4e4
+# [estimate] How far the belt's two upper vertical runs reach the clamp to either side of the Z axis's line (the pulleys'
+# diameter, 2 x 0.02 m): as the guide tilts the Z axis by theta the clamp lifts one run's end and lowers the other's by
+# this times theta, which puts the moment (T1 - T3) times it on the lean.
+belt_offset_m = 0.04
 
 # With effects.beam_sag: the X beam as a simple span between the posts, which sags under the carriage and the Z
 # axis by m g a^2 b^2 / (3 E I L) (L^3 / (48 E I) per newton in the middle).
@@ -342,6 +361,11 @@ span_m = 1.3
 carriage_at_zero_m = 0.15
 # [estimate] an aluminium profile of about 80 x 80 mm, I = 1.2e-6 m^4, E = 70 GPa.
 bending_stiffness_nm2 = 8.4e4
+# With effects.beam_vertical_mode. [estimate] the same profile's mass per metre, about 3.5 kg/m (a light 80 x 80 mm
+# aluminium profile): the first mode's modal mass is 17/35 of the beam's mass in the middle.
+mass_kg_m = 3.5
+# [estimate] the damping ratio of the first mode, 1 %: a bolted aluminium structure (0.5 to 3 %).
+damping_ratio = 0.01
 
 # With effects.idlers: the four carriage idlers and the one at the bottom of the Z axis, all alike, turn
 # with the belt that passes them. Their inertia adds to what the belt accelerates, their bearings drag.
@@ -426,14 +450,21 @@ position_cycle_s = 1.0e-3
 # the current loop for the voltage, of the velocity loop for the torque setpoint.
 current_delay_cycles = 1
 velocity_delay_cycles = 1
-kv_1_s = 50.0
+# 45 since 22 November 2026: with the velocity gain at 0.037 (below) the x axis's closed position loop stayed above
+# 1/sqrt(2) up to the 19 Hz mode at 50 (0.708 at 11.7 Hz, a band of 20.5 Hz); at 45 it falls to 0.64 there (band 8.75
+# Hz, overshoot 5.5 %), the velocity loops keep at least 35.7 degrees and 7.7 dB over the poses friction off, settling
+# 42.96 um (43.31 at 50). A longer integral time did as much with less room (0.015 s: 0.68 at 11.6 Hz).
+kv_1_s = 45.0
 # Velocity loop gain, tuned with `sim-cli margins t-gantry --bands` (the open-loop response of each motor's velocity
 # loop, with every [bounds] value at its low and at its high bound) for a phase margin of at least 35 degrees and a
 # gain margin of at least 6 dB in every run, also with effects.motor_friction and guide_friction off (in a cruise
 # friction adds no damping to the loop). Found: at least 47.4 degrees and 8.2 dB (config as it is: 54 degrees,
 # 9.0 dB); friction off at least 39.1 degrees and 7.3 dB. 0.08 left 12 degrees and 2 dB: motor B hunted in the
-# gearbox backlash at a cruise.
-velocity_kp_nm_s_rad = 0.04
+# gearbox backlash at a cruise. Then 0.037 (22 November 2026): the margins over the cycle's poses (`sim-cli margins`
+# measures each pose the cycle stops at) found 33.0 degrees friction off at 0.04 with Z down at the left
+# ([0.1, 0.05], motor A, 225 Hz) and 34.0 degrees at the right (motor B); at 0.037 at least 35.5 degrees and 7.7 dB
+# over the poses friction off, 50.9 degrees and 9.2 dB with friction (motor B 35.7 degrees at 0.038).
+velocity_kp_nm_s_rad = 0.037
 velocity_tn_s = 0.01
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
@@ -451,6 +482,9 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 # Current controller: Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
@@ -459,6 +493,8 @@ current_tn_s = 2.5e-3
 # The DC link voltage. The winding gets sqrt(3/2) times it at most, here 190 V: the model's one winding
 # carries the RMS phase current, and its voltage times that current is the power of all three phases.
 bus_voltage_v = 155.13
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 3.8
 # What the motor can give continuously; the RMS torque of a cycle is judged against it.
 rated_torque_nm = 1.27
@@ -773,6 +809,8 @@ tool_flex.tilt_stiffness_nm_rad = [0.6e4, 2.4e4]
 tool_flex.damping_n_s_m = [40.0, 160.0]
 tool_flex.z_axis_bending_stiffness_nm2 = [0.7e4, 2.8e4]
 beam.bending_stiffness_nm2 = [4.2e4, 1.7e5]
+beam.mass_kg_m = [2.0, 6.0]
+beam.damping_ratio = [0.003, 0.03]
 thermal.gearbox_resistance_k_w = [0.8, 3.0]
 thermal.gearbox_time_constant_s = [600.0, 2400.0]
 thermal.guide_resistance_k_w = [0.25, 1.0]

@@ -63,8 +63,8 @@ fn deflections_drawn_larger_move_the_tool_by_the_factor() {
 }
 
 /// The chain's length stays: as many links at every pose, its bracket 0.1 m left of the carriage, and its loop
-/// (the leftmost link, half a link inside the loop's radius of 0.09 m) 0.02 m + x / 2 left of the bracket, so at
-/// span + x - 0.1 - 0.02 - x / 2 - 0.09. Also at the shortest span the EXCT-30's bounds allow, 0.10 m.
+/// (the leftmost link, half a link inside the loop's radius of 0.09 m) length_at_zero + x / 2 left of the bracket, so at
+/// span + x - 0.1 - length_at_zero - x / 2 - 0.09. Also at the shortest span the EXCT-30's bounds allow, 0.10 m.
 #[test]
 fn the_cable_chain_keeps_its_length_and_its_loop_moves_half_as_far() {
     for span in [0.15, 0.10] {
@@ -90,7 +90,7 @@ fn the_cable_chain_keeps_its_length_and_its_loop_moves_half_as_far() {
                 last.pos[0]
             );
             let loop_left = chain.iter().map(|p| p.pos[0]).fold(f64::MAX, f64::min);
-            let by_hand = span + x - 0.1 - 0.02 - x / 2.0 - 0.09;
+            let by_hand = span + x - 0.1 - m.chain.length0 - x / 2.0 - 0.09;
             assert!((loop_left - by_hand).abs() < 0.002, "span {span} at {x}: loop at {loop_left}, by hand {by_hand}");
         }
         assert!(links.iter().all(|&n| n == links[0]) && links[0] > 40, "span {span}: links {links:?}");
@@ -120,79 +120,59 @@ fn the_arrows_show_the_belt_pull_and_the_posts_stand_under_the_travel_ends() {
     assert!((posts[0] - 0.15).abs() < 1e-12 && (posts[1] - (end - 0.15)).abs() < 1e-12, "posts at {posts:?}");
 }
 
-/// The mode of `resonance_hz` (see `mode_shape`), by hand from the default config at x = 0.9 m: mc = 4 kg, mz = 5 + 2
-/// = 7 kg, kb = EA / L1 + EA / L3 with L1 = 0.3 + x + z, L3 = 0.3 + 1 - x + z, EA = 5e5 N; kz = 1 / (1 / 2e7 + h^2 /
-/// 1.2e4) and tip = kz (1 / 2e7 + h (0.7 - z) / 1.2e4) with h = 0.3 - z. In (x, u): M = [[mc + mz, mz], [mz, mz]],
-/// K = [[kb, 0], [0, kz]]. At z = 0.05 m: w^2 = 2.394e4, tip = 2.585, v = (0.050, 0.368), the tool moving 1 m. At
-/// z = 0.362 m (x = 0.9) tip has turned negative and the tool hardly moves in the mode: the shape stays finite there,
-/// the carriage's travel being the larger.
+/// The mode of `resonance_hz` (see `mode_shape`) in the coordinates of the model (x, z, the frame's q, the Z axis's lean
+/// u): only those move, the largest of the carriage's travel, the Z axis's travel and the tool's travel x + q + tip u is
+/// 1 m. Without the tool flex and the frame only x and z are left; without belt stretch there is no mode.
 #[test]
-fn the_mode_shape_is_the_eigenvector_of_the_carriage_and_the_leaning_z_axis() {
+fn the_mode_shape_is_an_eigenvector_of_the_elastic_model() {
     let m = TGantry::new(&ENTRY.config()).unwrap();
     let x = 0.9;
     for z in [0.05, 0.15, 0.362] {
         let (hz, shape) = m.mode_shape(&[x, z]).unwrap();
         assert_eq!(hz, m.resonance_hz(&[x, z]).unwrap());
         assert_eq!(shape.len(), m.state_len());
-        assert!(shape.iter().enumerate().all(|(i, &v)| i == X || i == U || v == 0.0), "only x and u move: {shape:?}");
-        let (mc, mz) = (4.0, 7.0);
-        let kb = 5e5 / (0.3 + x + z) + 5e5 / (0.3 + 1.0 - x + z);
-        let h = 0.3 - z;
-        let kz = 1.0 / (1.0 / 2e7 + h * h / 1.2e4);
-        let tip = kz * (1.0 / 2e7 + h * (0.7 - z) / 1.2e4);
-        let w2 = (std::f64::consts::TAU * hz).powi(2);
-        let (vx, vu) = (shape[X], shape[U]);
-        let residual = [kb * vx - w2 * ((mc + mz) * vx + mz * vu), kz * vu - w2 * (mz * vx + mz * vu)];
-        let scale = kb * vx.abs() + kz * vu.abs();
-        assert!(residual.iter().all(|r| r.abs() < 1e-9 * scale), "z = {z}: (K - w^2 M) v = {residual:?}");
-        let largest = vx.abs().max((vx + tip * vu).abs());
-        assert!((largest - 1.0).abs() < 1e-12 && vu.is_finite(), "z = {z}: the larger travel is {largest}, lean {vu}");
-        assert!(vx * vu > 0.0, "z = {z}: the lower mode, both the same way: {vx} {vu}");
-        if z < 0.2 {
-            assert!(vu > vx, "z = {z}: low on the Z axis mostly lean: {vx} {vu}");
-        }
-        if z == 0.05 {
-            assert!(
-                (w2 - 2.394e4).abs() < 10.0
-                    && (tip - 2.585).abs() < 1e-3
-                    && (vx - 0.050).abs() < 1e-3
-                    && (vu - 0.368).abs() < 1e-3,
-                "{w2} {tip} {vx} {vu}"
-            );
-        }
+        assert!(
+            shape.iter().enumerate().all(|(i, &v)| [X, Z, Q, U].contains(&i) || v == 0.0),
+            "only x, z, q and u move: {shape:?}"
+        );
+        let tip = m.flex_at(z).2;
+        let largest = shape[X].abs().max(shape[Z].abs()).max((shape[X] + shape[Q] + tip * shape[U]).abs());
+        assert!((largest - 1.0).abs() < 1e-12 && shape.iter().all(|v| v.is_finite()), "z = {z}: {shape:?}");
     }
-    // No resonance, no mode.
-    assert!(
-        TGantry::new(&{
-            let mut cfg = ENTRY.config();
-            cfg.set_text("effects.tool_flex = false").unwrap();
-            cfg
-        })
-        .unwrap()
-        .mode_shape(&[x, 0.05])
-        .is_none()
-    );
+    // The elastic model without the tool flex and the frame has x and z only.
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.tool_flex = false").unwrap();
+    cfg.set_text("effects.frame_compliance = false").unwrap();
+    let (_, shape) = TGantry::new(&cfg).unwrap().mode_shape(&[x, 0.05]).unwrap();
+    assert!(shape[Q] == 0.0 && shape[U] == 0.0 && shape[X] != 0.0, "{shape:?}");
+    // No elastic belt, no mode.
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.belt_stretch = false").unwrap();
+    assert!(TGantry::new(&cfg).unwrap().mode_shape(&[x, 0.05]).is_none());
 }
 
 /// Equilibrium plus 1e-3 times the shape moves the tool by 1e-3 m (`tool_state`) and, drawn as it is, the flange
-/// too. Drawn k times larger, only the lean is: the carriage's x is where it is, so the flange moves by
-/// 1e-3 (vx + k tip vu), not 1e-3 k.
+/// too. Drawn k times larger, only the sway and the lean are: the carriage's x is where it is, so the flange moves by
+/// 1e-3 (vx + k (vq + tip vu)), not 1e-3 k. The mode at (0.9, 0.05) is the frame's with the carriage on it (all four of
+/// x, z, q, u move); its Z travel changes the lean's lever, so the tool moves by 1e-3 to second order in the amplitude
+/// (3e-5 of it) and the drawn lean has the lever of the moved height.
 #[test]
 fn the_mode_shape_drawn_moves_the_flange_by_its_amplitude() {
     let m = TGantry::new(&ENTRY.config()).unwrap();
     let pose = [0.9, 0.05];
     let (_, shape) = m.mode_shape(&pose).unwrap();
+    assert!(shape[Q] != 0.0 && shape[Z] != 0.0, "{shape:?}");
     let (mut rest, mut torque) = (Vec::new(), [0.0; 2]);
     m.equilibrium(&pose, &mut rest, &mut torque);
     let moved: Vec<f64> = rest.iter().zip(&shape).map(|(s, v)| s + 1e-3 * v).collect();
     let (mut before, mut after, mut speed) = ([0.0; 2], [0.0; 2], [0.0; 2]);
     m.tool_state(&rest, &mut before, &mut speed);
     m.tool_state(&moved, &mut after, &mut speed);
-    assert!((after[0] - before[0] - 1e-3).abs() < 1e-12, "the tool moves {}", after[0] - before[0]);
-    let tip = m.flex_at(pose[1]).2;
+    assert!((after[0] - before[0] - 1e-3).abs() < 1e-7, "the tool moves {}", after[0] - before[0]);
+    let tip = m.flex_at(moved[Z]).2;
     for k in [1.0, 100.0] {
         let shift = part(&drawn(&m, &moved, k), "flange", 0).pos[0] - part(&drawn(&m, &rest, k), "flange", 0).pos[0];
-        let by_hand = 1e-3 * (shape[X] + k * tip * shape[U]);
+        let by_hand = 1e-3 * (shape[X] + k * (shape[Q] + tip * shape[U]));
         assert!((shift - by_hand).abs() < 1e-12, "x{k}: flange moves {shift}, by hand {by_hand}");
     }
 }

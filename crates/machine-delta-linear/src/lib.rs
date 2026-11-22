@@ -308,12 +308,16 @@ pub struct LinearDelta {
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the tool (`Machine::set_tool_force`), held until changed.
+    push: V3,
     /// The belt axis on each column, all alike.
     r: f64,
     /// Unstretched belt fed per radian of pulley (the radius holds at pretension, as on the one-axis machine).
     r_mat: f64,
     span_min: f64,
     belt: Belt,
+    /// Each column's belt as a thermal part: its resistance to the air, K/W, and its time constant, s (`thermal_values`).
+    belt_thermal: (f64, f64),
     /// Unstretched belt per section at x = 0 with the pulley at angle 0.
     mat0: [f64; 2],
     /// Each carriage's guide; alike but for their temperatures (effects.thermal_feedback).
@@ -329,6 +333,12 @@ pub struct LinearDelta {
     /// ratings.guide_max_load_n, guide_dynamic_load_rating_n and required_life_h, where the config has them.
     guide_max_load: Option<f64>,
     guide_rating: Option<f64>,
+    /// geometry.rod_joint_*_m: where the rod pairs' joints stand from the guide's centre, along the column, outward
+    /// (away from the axis, in the vertical plane through it) and tangentially. All zero: the force passes the centre.
+    joint_offset: V3,
+    /// ratings.guide_moment_x_nm, _y_, _z_: the guide's moment ratings about the column, the tangential and the outward
+    /// axis (Festo's Mx, My, Mz); an absent one leaves that moment out of the equivalent load.
+    guide_moment_max: [Option<f64>; 3],
     required_life: Option<f64>,
     /// Each axis's gearbox hysteresis state (`Gearbox::anchor`); `gearbox` holds the values all three share.
     anchors: [[f64; 2]; 3],
@@ -433,10 +443,12 @@ impl LinearDelta {
             m_payload: if cfg.bool("effects.payload")? { cfg.non_negative("mass.payload_kg")? } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
+            push: [0.0; 3],
             r,
             r_mat: belt.rest_length(r),
             span_min: cfg.positive("geometry.span_min_m")?,
             mat0: [0.0; 2],
+            belt_thermal: (0.0, 0.0),
             friction: [
                 Lugre::from_config(cfg, "friction")?,
                 Lugre::from_config(cfg, "friction")?,
@@ -452,6 +464,12 @@ impl LinearDelta {
             },
             guide_max_load: rating("guide_max_load_n"),
             guide_rating: rating("guide_dynamic_load_rating_n"),
+            joint_offset: [
+                cfg.f64("geometry.rod_joint_along_m")?,
+                cfg.f64("geometry.rod_joint_outward_m")?,
+                cfg.f64("geometry.rod_joint_tangent_m")?,
+            ],
+            guide_moment_max: ["x", "y", "z"].map(|k| rating(&format!("guide_moment_{k}_nm"))),
             required_life: rating("required_life_h"),
             anchors: [[f64::NAN, 0.0]; 3],
             stops: HardStop::from_config(cfg)?,
@@ -479,6 +497,24 @@ impl LinearDelta {
         m.mat0 = geo.map(|g| m.belt.rest_length(g));
         // The whole belt runs at carriage speed, so all of its mass sits on the pulley.
         m.j_pulley += m.belt.mass_per_m * (geo[0] + geo[1] - 2.0 * m.belt.tooth_length) * r * r;
+        // Each belt as a thermal part: a loop of length L (the sections' geometric length, as the mass above), width w,
+        // heated by its damping loss. Resistance to the air R = 1 / (h A) over both sides, A = 2 w L, h = belt.convection_w_m2_k;
+        // capacity C = (mass per metre) L cp, cp = belt.specific_heat_j_kg_k; time constant C R. A thin belt (3 mm,
+        // polyurethane 0.2 W/(m K)) is at one temperature through its thickness: Biot h t / 2 k = 0.1.
+        let length = geo[0] + geo[1] - 2.0 * m.belt.tooth_length;
+        let width = cfg.positive("ratings.belt_width_mm")? * 1e-3;
+        let mut conductance = cfg.positive("belt.convection_w_m2_k")? * 2.0 * width * length;
+        // effects.belt_pulley_conduction: the belt also gives heat to its two pulleys through the half wrap (pi r) it lies
+        // on each, from its middle through half its thickness, G = 2 pi r w k / (t / 2), in parallel with the air. The
+        // pulleys sit in the axis's end housings and stay at the air's temperature; the contact's own resistance is left
+        // out (a PU belt pressed on aluminium, some kW/(m^2 K) against k / (t / 2) = 133 W/(m^2 K)).
+        if cfg.get("effects.belt_pulley_conduction").is_ok() && cfg.bool("effects.belt_pulley_conduction")? {
+            let (thickness, k) = (cfg.positive("belt.thickness_m")?, cfg.positive("belt.thermal_conductivity_w_m_k")?);
+            conductance += std::f64::consts::TAU * r * width * k / (0.5 * thickness);
+        }
+        let resistance = 1.0 / conductance;
+        let capacity = cfg.positive("belt.mass_kg_m")? * length * cfg.positive("belt.specific_heat_j_kg_k")?;
+        m.belt_thermal = (resistance, capacity * resistance);
         Ok(m)
     }
 
@@ -598,37 +634,136 @@ impl LinearDelta {
         (mass, velocity, gravity)
     }
 
-    /// Each guide's load across its rail while the plate accelerates at `acc`: what the rods' pull (`Legs::rod_pull`) and
-    /// the carriage's weight have at right angles to the column. The carriage moves along its column only, so its own
-    /// acceleration loads the belt, not the guide; the plate's reaches the guide through the rods.
-    // shortcut: a force through the guide's centre; the moments of the rods' joints standing off the slide (Festo's
-    // Mx, My, Mz) are left out until the joints' offsets are configured.
+    /// Each guide's equivalent load while the plate accelerates at `acc`: what the rods' pull (`Legs::rod_pull`) and the
+    /// carriage's weight have at right angles to the column, F, plus the moments of the pull about the guide's centre.
+    /// The carriage moves along its column only, so its own acceleration loads the belt, not the guide; the plate's
+    /// reaches the guide through the rods.
+    /// The joints stand at `joint_offset` = (a, b, c) along the column d, outward e_r and tangentially e_t from the
+    /// centre, so the pull f = pull u gives M = o x f, with Mx = M.d, My = M.e_t, Mz = M.e_r (Festo's axes). The
+    /// catalogue's rows state the combination F / F_max + Mx / Mx_max + My / My_max + Mz / Mz_max <= 1 (F_max
+    /// `ratings.guide_max_load_n`), so the equivalent load is P = F + F_max sum |M_i| / M_i,max over the moments with a
+    /// rating, which is also the friction's load. The weight acts at the centre and gives no moment.
     fn guide_loads(&self, h: V3, acc: V3) -> V3 {
-        let (p, _) = self.pose(h);
+        self.guide_loads_at(h, self.pose(h).0, acc).map(|(load, _)| load)
+    }
+
+    /// Each guide's equivalent load (`guide_loads`) and its moments Mx, My, Mz in N m, with the plate at p (the pose of
+    /// h).
+    fn guide_loads_at(&self, h: V3, p: V3, acc: V3) -> [(f64, V3); 3] {
         let pull = self.legs.rod_pull(h, p, self.m_nt(), self.g, acc).unwrap_or([f64::NAN; 3]);
         std::array::from_fn(|k| {
             let (u, d) = (sub(p, self.legs.joint(k, h[k])), self.legs.dir[k]);
             let f = [pull[k] * u[0], pull[k] * u[1], pull[k] * u[2] - self.m_c * self.g];
             let along = dot(f, d);
-            norm([f[0] - along * d[0], f[1] - along * d[1], f[2] - along * d[2]])
+            let across = norm([f[0] - along * d[0], f[1] - along * d[1], f[2] - along * d[2]]);
+            let (extra, moments) = self.joint_moments(k, u, pull[k]);
+            (across + extra, moments)
         })
     }
 
-    /// The guide loads in a state under the torques: the plate's acceleration p'' = J h'' + J_x^-1 w from the carriages'.
-    fn moving_guide_loads(&self, s: &[f64], torque: &[f64]) -> V3 {
+    /// The moments Mx, My, Mz of the pull `pull` of column k's rod pair (the pair's joint at `u` from the plate) about
+    /// the guide's centre, and the load they add to the equivalent load (`guide_loads`).
+    fn joint_moments(&self, k: usize, u: V3, pull: f64) -> (f64, V3) {
+        if self.joint_offset == [0.0; 3] {
+            return (0.0, [0.0; 3]);
+        }
+        let d = self.legs.dir[k];
+        let (c, s) = self.legs.azimuth[k];
+        let e_t = [-s, c, 0.0];
+        let e_r = cross(e_t, d);
+        let [a, b, t] = self.joint_offset;
+        let o = std::array::from_fn(|i| a * d[i] + b * e_r[i] + t * e_t[i]);
+        let m = cross(o, u.map(|x| pull * x));
+        let moments = [dot(m, d), dot(m, e_t), dot(m, e_r)];
+        let reference = self.guide_max_load.unwrap_or(0.0);
+        let extra: f64 = (0..3).filter_map(|i| self.guide_moment_max[i].map(|r| moments[i].abs() / r)).sum();
+        (reference * extra, moments)
+    }
+
+    /// The plate's acceleration p'' = J h'' + J_x^-1 w for the carriages' acceleration.
+    fn plate_acceleration(&self, s: &[f64], carriage_acc: V3) -> V3 {
         let (h, v) = self.heights(s);
         let (p, j) = self.pose(h);
         let bend = self.legs.velocity_term(h, p, v, mul(&j, v)).unwrap_or([f64::NAN; 3]);
-        let along = mul(&j, self.carriage_acceleration(s, torque));
-        self.guide_loads(h, std::array::from_fn(|i| along[i] + bend[i]))
+        let along = mul(&j, carriage_acc);
+        std::array::from_fn(|i| along[i] + bend[i])
     }
 
-    /// The friction levels' factor per guide: they are given for a guide under its preload alone.
-    // shortcut: the load holding the plate at rest, not `moving_guide_loads`: the friction would then depend on the
-    // acceleration it changes; take the moving load once the friction is solved with the acceleration.
+    /// The friction levels' factor per guide at rest: they are given for a guide under its preload alone.
     fn load_scales(&self, h: V3) -> V3 {
         let loads = self.guide_loads(h, [0.0; 3]);
         std::array::from_fn(|k| self.friction[k].load_scale(loads[k], 0.0))
+    }
+
+    /// The friction's load factors under the load the guides carry while moving. That load holds the plate's
+    /// acceleration, which the friction itself changes, so the factors x are taken at their fixed point x = G(x)
+    /// (`mech::settled_loss`): G takes the factors to the friction (`guide_friction`), the acceleration, the guides' load
+    /// of that acceleration and the factors of that load, from the factors at rest. The friction is linear in the factor
+    /// with its bristles' force, so G' is that force over the preload and the load's share of it: 0.012 to 0.015 at
+    /// 0.2 m/s (`the_frictions_load_factor_is_the_fixed_point_with_the_acceleration`), and the rounds settle in about
+    /// eight. Elastic, only the friction in the carriages' balance changes from round to round (`elastic_balance`);
+    /// rigid, the gearboxes' losses with it, so each round solves the rigid model anew. Without load-dependent friction
+    /// (or friction) the factors at rest.
+    fn scales_at(&self, s: &[f64], torque: &[f64]) -> V3 {
+        let (h, v) = self.heights(s);
+        let rest = self.load_scales(h);
+        if self.friction.iter().all(|f| !(f.on && f.load_dependent)) {
+            return rest;
+        }
+        let (p, j) = self.pose(h);
+        let bend = self.legs.velocity_term(h, p, v, mul(&j, v)).unwrap_or([f64::NAN; 3]);
+        let (balance, frictions) = (self.elastic.then(|| self.elastic_balance(s)), self.frictions(s));
+        sim_components::mech::settled_loss(rest, |scales| {
+            let acc = match &balance {
+                Some((inv, base, _)) => {
+                    mul(inv, std::array::from_fn(|k| base[k] - self.guide_friction(k, v[k], frictions[k], scales[k]).0))
+                }
+                None => self.rigid_solve_with(s, torque, *scales).acc,
+            };
+            let along = mul(&j, acc);
+            let loads = self.guide_loads_at(h, p, std::array::from_fn(|i| along[i] + bend[i]));
+            std::array::from_fn(|k| self.friction[k].load_scale(loads[k].0, 0.0))
+        })
+    }
+
+    /// Guide k's friction force (opposing a positive speed) and its bristles' rate at speed v, bristle deflection s and
+    /// load factor `scale`: LuGre with the load scaling the bristles' stiffness and damping together with the levels,
+    /// F = scale (sigma_0 s + sigma_1 s') + b v, s' = v - sigma_0 |v| s / g(v) of the levels without load (`Lugre::eval`
+    /// at factor 1). Steady it slides at scale g(v) + b v, as with the load in the levels alone; but the deflection no
+    /// longer grows with the load, so a load that changes faster than the bristles settle does not reach the force
+    /// through sigma_1 s'. With the load in the levels alone a change of the factor gave sigma_1 |v| s' at once,
+    /// 1500 N s/m x 0.65 m/s = 975 N per unit of factor against the 15.7 N level, and the factor's fixed point with the
+    /// acceleration (`scales_at`) had a loop gain of +0.95 on the default cycle (pulley torque 8.4 N m of 5).
+    fn guide_friction(&self, k: usize, v: f64, s: f64, scale: f64) -> (f64, f64) {
+        let f = &self.friction[k];
+        if !f.on {
+            return (0.0, 0.0);
+        }
+        let (force, rate) = f.eval(v, s, 1.0);
+        (scale * (force - f.viscous * v) + f.viscous * v, rate)
+    }
+
+    /// The elastic model's carriage balance but for the guides' friction: the inverse of the mass matrix and per carriage
+    /// what acts on it besides the friction (the belt's two sections, gravity, the speed term, the stops), M h'' = base
+    /// - friction; and the sections.
+    fn elastic_balance(&self, s: &[f64]) -> (M3, V3, [[SectionForce; 2]; 3]) {
+        let (h, v) = self.heights(s);
+        let (mass, velocity, gravity) = self.load(h, v);
+        let sections: [[SectionForce; 2]; 3] = std::array::from_fn(|k| self.sections(s, k));
+        let push = self.pushed(s);
+        let base = std::array::from_fn(|k| {
+            sections[k][0].tension - sections[k][1].tension + gravity[k] - velocity[k]
+                + self.stop_force(h[k], v[k])
+                + push[k]
+        });
+        (inverse(&mass).unwrap_or([[f64::NAN; 3]; 3]), base, sections)
+    }
+
+    /// The push at the tool on each carriage: its virtual power per unit of each carriage's speed, through the
+    /// platform's Jacobian (`sim_core::tool_force_on_rates`); zero without a push.
+    fn pushed(&self, s: &[f64]) -> V3 {
+        let rates = if self.elastic { 9..12 } else { 3..6 };
+        sim_core::tool_force_on_rates(self, s, &self.push, rates).map_or([0.0; 3], |q| [q[0], q[1], q[2]])
     }
 
     /// Force of the stops on carriage k.
@@ -639,10 +774,15 @@ impl LinearDelta {
     /// The rigid model's moment. The gearbox loses torque only on what it transmits (the motor's less what accelerates
     /// the rotor itself); the second pass takes the acceleration of the first for that, as on the one-axis machine.
     fn rigid_solve(&self, s: &[f64], torque: &[f64]) -> Rigid {
+        self.rigid_solve_with(s, torque, self.scales_at(s, torque))
+    }
+
+    /// `rigid_solve` with the friction's load factors given (`scales_at` solves them with it).
+    fn rigid_solve_with(&self, s: &[f64], torque: &[f64], scales: V3) -> Rigid {
         let (r, ratio) = (self.r, self.gearbox.ratio);
         let (h, v) = self.heights(s);
         let (rotor, speed) = self.rotors(s);
-        let (brakes, frictions, scales) = (self.brakes(s), self.frictions(s), self.load_scales(h));
+        let (brakes, frictions) = (self.brakes(s), self.frictions(s));
         let (mass, velocity, gravity) = self.load(h, v);
         // Belt force the motor would give with a loss-free gearbox and a massless rotor; a brake holds the rotor.
         let drive: V3 = std::array::from_fn(|k| {
@@ -652,9 +792,11 @@ impl LinearDelta {
                     - self.brake.torque(self.brake_engaged, speed[k], brakes[k]).0)
                 / r
         });
+        let push = self.pushed(s);
         let rest: V3 = std::array::from_fn(|k| {
-            gravity[k] - velocity[k] - self.friction[k].eval(v[k], frictions[k], scales[k]).0
+            gravity[k] - velocity[k] - self.guide_friction(k, v[k], frictions[k], scales[k]).0
                 + self.stop_force(h[k], v[k])
+                + push[k]
         });
         let rotor_mass = ratio * ratio * self.j_rotor / (r * r);
         let solve = |loss: V3| -> V3 {
@@ -665,9 +807,11 @@ impl LinearDelta {
             });
             inverse(&m).map_or([f64::NAN; 3], |inv| mul(&inv, std::array::from_fn(|k| loss[k] * drive[k] + rest[k])))
         };
-        let first = solve([1.0; 3]);
-        let loss: V3 =
-            std::array::from_fn(|k| self.gears[k].loss_factor((drive[k] - rotor_mass * first[k]) * r, v[k] / r));
+        // The loss factors of the torques going in, at their fixed point (`mech::settled_loss`).
+        let loss = sim_components::mech::settled_loss([1.0; 3], |loss| {
+            let acc = solve(*loss);
+            std::array::from_fn(|k| self.gears[k].loss_factor((drive[k] - rotor_mass * acc[k]) * r, v[k] / r))
+        });
         let acc = solve(loss);
         let into: V3 = std::array::from_fn(|k| (drive[k] - rotor_mass * acc[k]) * r);
         Rigid { acc, into, out: std::array::from_fn(|k| loss[k] * into[k]) }
@@ -675,12 +819,55 @@ impl LinearDelta {
 
     /// The carriages' acceleration in either model.
     fn carriage_acceleration(&self, s: &[f64], torque: &[f64]) -> V3 {
+        self.carriage_acceleration_with(s, torque, self.scales_at(s, torque))
+    }
+
+    /// `derivatives` with the friction's load factors given (`scales_at`).
+    fn derivatives_with(&self, s: &[f64], torque: &[f64], scales: V3, out: &mut [f64]) {
+        let v = self.heights(s).1;
+        let (_, speed) = self.rotors(s);
+        let (brakes, frictions) = (self.brakes(s), self.frictions(s));
+        if !self.elastic {
+            let acc = self.rigid_solve_with(s, torque, scales).acc;
+            out[..3].copy_from_slice(&v);
+            out[3..6].copy_from_slice(&acc);
+            for k in 0..3 {
+                out[6 + k] = self.guide_friction(k, v[k], frictions[k], scales[k]).1;
+                out[9 + k] = self.brake.torque(self.brake_engaged, speed[k], brakes[k]).1;
+            }
+            return;
+        }
+        let (inv, base, sections) = self.elastic_balance(s);
+        let mut rhs = [0.0; 3];
+        out[24] = 0.0;
+        for (k, sec) in sections.iter().enumerate() {
+            if sec.iter().any(|f| f.tension <= 0.0) {
+                out[24] = 1.0;
+            }
+            let (ff, ds) = self.guide_friction(k, v[k], frictions[k], scales[k]);
+            rhs[k] = base[k] - ff;
+            let gear = self.gear(k).torque(s[6 + k], s[15 + k], s[3 + k], s[12 + k]);
+            let (brake, brake_rate) = self.brake.torque(self.brake_engaged, s[15 + k], brakes[k]);
+            out[3 + k] = s[12 + k];
+            out[6 + k] = s[15 + k];
+            out[12 + k] = (gear.output + self.r_mat * (sec[1].material - sec[0].material)) / self.j_pulley;
+            out[15 + k] = (self.ripple.apply(torque[k], s[6 + k]) - gear.rotor - self.shaft.torque(s[15 + k]) - brake)
+                / self.j_rotor;
+            out[18 + k] = ds;
+            out[21 + k] = brake_rate;
+        }
+        out[..3].copy_from_slice(&v);
+        out[9..12].copy_from_slice(&mul(&inv, rhs));
+    }
+
+    /// The carriages' acceleration at the given friction load factors.
+    fn carriage_acceleration_with(&self, s: &[f64], torque: &[f64], scales: V3) -> V3 {
         if self.elastic {
             let mut d = [0.0; N_ELASTIC];
-            self.derivatives(s, torque, &mut d);
+            self.derivatives_with(s, torque, scales, &mut d);
             [d[9], d[10], d[11]]
         } else {
-            self.rigid_solve(s, torque).acc
+            self.rigid_solve_with(s, torque, scales).acc
         }
     }
 
@@ -733,13 +920,13 @@ impl LinearDelta {
     fn losses(&self, s: &[f64], torque: &[f64]) -> ([f64; N_LOSSES], V3, V3) {
         let (h, v) = self.heights(s);
         let (rotor, speed) = self.rotors(s);
-        let (brakes, frictions, scales) = (self.brakes(s), self.frictions(s), self.load_scales(h));
+        let (brakes, frictions, scales) = (self.brakes(s), self.frictions(s), self.scales_at(s, torque));
         let rigid = (!self.elastic).then(|| self.rigid_solve(s, torque));
         let (mut powers, mut gear_at_rotor, mut held) = ([0.0; N_LOSSES], [0.0; 3], [0.0; 3]);
         let ratio = self.gearbox.ratio;
         for k in 0..3 {
             held[k] = self.brake.torque(self.brake_engaged, speed[k], brakes[k]).0;
-            let guide = self.friction[k].eval(v[k], frictions[k], scales[k]).0 * v[k];
+            let guide = self.guide_friction(k, v[k], frictions[k], scales[k]).0 * v[k];
             let (gear, belt) = match &rigid {
                 Some(m) => {
                     gear_at_rotor[k] = (m.into[k] - m.out[k]) / ratio;
@@ -782,7 +969,7 @@ impl LinearDelta {
         let acc = self.carriage_acceleration(s, torque);
         let moving = mul(&mass, acc);
         let (powers, gear_at_rotor, held) = self.losses(s, torque);
-        let (frictions, scales) = (self.frictions(s), self.load_scales(h));
+        let (frictions, scales) = (self.frictions(s), self.scales_at(s, torque));
         // The transpose r / i takes a force at the carriage to the motor; pulley and rotor counted as a rigid machine
         // would turn them.
         let inertia = (self.j_pulley + ratio * ratio * self.j_rotor) / (r * r);
@@ -793,7 +980,7 @@ impl LinearDelta {
                 self.shaft.torque(speed[k])
                     + held[k]
                     + gear_at_rotor[k]
-                    + r / ratio * self.friction[k].eval(v[k], frictions[k], scales[k]).0,
+                    + r / ratio * self.guide_friction(k, v[k], frictions[k], scales[k]).0,
             ];
             out.extend(parts);
             out.push(torque[k] - parts.iter().sum::<f64>());
@@ -802,7 +989,9 @@ impl LinearDelta {
         out.extend(self.energy_parts(s));
         for k in 0..3 {
             out.push(v[k]);
-            out.extend(self.friction[k].split(v[k], frictions[k], scales[k]));
+            // `guide_friction`'s parts: the bristles' at no load times the factor, the viscous as it is.
+            let [coulomb, viscous, stiction] = self.friction[k].split(v[k], frictions[k], 1.0);
+            out.extend([scales[k] * coulomb, viscous, scales[k] * stiction]);
             out.push(scales[k]);
         }
         // Stretch per section: its length less its unstretched belt; in the rigid model that of pretension.
@@ -897,8 +1086,8 @@ impl LinearDelta {
 }
 
 impl Machine for LinearDelta {
-    /// The plate (with the payload and the rods' share) at the tool, the carriages (with theirs) on their columns at
-    /// the column radius, and each column's pulley and rotor at its top spinning about the horizontal across the column,
+    /// The plate (with the payload and the rods' share) at the tool, the carriages (with theirs) on their columns, moving
+    /// along them, and each column's pulley and rotor at its top spinning about the horizontal across the column,
     /// positive as the carriage rises. What does not move is left out (see `FrameMomentum`).
     fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
         use sim_components::base::{add_point, add_spin};
@@ -909,7 +1098,7 @@ impl Machine for LinearDelta {
         let rotor_speed = self.rotors(s).1;
         for i in 0..3 {
             let (c, sin) = self.legs.azimuth[i];
-            add_point(&mut f, self.m_c, [self.column_radius * c, self.column_radius * sin, h[i]], [0.0, 0.0, v[i]]);
+            add_point(&mut f, self.m_c, self.legs.joint(i, h[i]), self.legs.dir[i].map(|x| x * v[i]));
             let pulley = if self.elastic { s[12 + i] } else { v[i] / self.r };
             let across = [-sin, c, 0.0];
             add_spin(&mut f, across, self.j_pulley, pulley);
@@ -974,41 +1163,7 @@ impl Machine for LinearDelta {
     }
 
     fn derivatives(&self, s: &[f64], torque: &[f64], out: &mut [f64]) {
-        let (h, v) = self.heights(s);
-        let (_, speed) = self.rotors(s);
-        let (brakes, frictions, scales) = (self.brakes(s), self.frictions(s), self.load_scales(h));
-        if !self.elastic {
-            let acc = self.rigid_solve(s, torque).acc;
-            out[..3].copy_from_slice(&v);
-            out[3..6].copy_from_slice(&acc);
-            for k in 0..3 {
-                out[6 + k] = self.friction[k].eval(v[k], frictions[k], scales[k]).1;
-                out[9 + k] = self.brake.torque(self.brake_engaged, speed[k], brakes[k]).1;
-            }
-            return;
-        }
-        let (mass, velocity, gravity) = self.load(h, v);
-        let mut rhs = [0.0; 3];
-        out[24] = 0.0;
-        for k in 0..3 {
-            let sec = self.sections(s, k);
-            if sec.iter().any(|f| f.tension <= 0.0) {
-                out[24] = 1.0;
-            }
-            let (ff, ds) = self.friction[k].eval(v[k], frictions[k], scales[k]);
-            rhs[k] = sec[0].tension - sec[1].tension + gravity[k] - velocity[k] - ff + self.stop_force(h[k], v[k]);
-            let gear = self.gear(k).torque(s[6 + k], s[15 + k], s[3 + k], s[12 + k]);
-            let (brake, brake_rate) = self.brake.torque(self.brake_engaged, s[15 + k], brakes[k]);
-            out[3 + k] = s[12 + k];
-            out[6 + k] = s[15 + k];
-            out[12 + k] = (gear.output + self.r_mat * (sec[1].material - sec[0].material)) / self.j_pulley;
-            out[15 + k] = (self.ripple.apply(torque[k], s[6 + k]) - gear.rotor - self.shaft.torque(s[15 + k]) - brake)
-                / self.j_rotor;
-            out[18 + k] = ds;
-            out[21 + k] = brake_rate;
-        }
-        out[..3].copy_from_slice(&v);
-        out[9..12].copy_from_slice(&inverse(&mass).map_or([f64::NAN; 3], |inv| mul(&inv, rhs)));
+        self.derivatives_with(s, torque, self.scales_at(s, torque), out);
     }
 
     fn tool_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
@@ -1062,7 +1217,7 @@ impl Machine for LinearDelta {
     }
 
     /// The rigid model at a steady speed, h' = J^-1 p': per column its guide at the steady level under the load at rest
-    /// (`load_scales`, as the model takes it) through its gearbox, r / (i loss), plus the motor shaft's friction (with
+    /// (`load_scales`: at a steady speed the plate does not accelerate) through its gearbox, r / (i loss), plus the motor shaft's friction (with
     /// the gearbox's drag) at i h' / r. The loss factor is the one of what the gearbox passes at rest, F - Q_g, as in
     /// `rigid_solve`; the weight itself is the rigid feedforward's. The brake is released and the stops are not touched
     /// in a move.
@@ -1081,12 +1236,19 @@ impl Machine for LinearDelta {
     /// Per column, F = m_c h'' + m_nt (J^T p'')_k - Q_g,k on the carriage (without pulley and rotor), T1 - T2 = F, and the
     /// belt keeps its length: (T1 - P) L1 + (T2 - P) L2 = 0. So T1 = P + F L2 / (L1 + L2), T2 = P - F L1 / (L1 + L2).
     fn rigid_tensions(&self, pos: &[f64], acc: &[f64], out: &mut Vec<f64>) {
+        self.rigid_tensions_moving(pos, &[0.0; 3], acc, out);
+    }
+
+    /// With the speed: the carriage's acceleration is h'' = J^-1 (p'' - J_x^-1 w), as in `feedforward_torque_moving`.
+    fn rigid_tensions_moving(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut Vec<f64>) {
         let p = [pos[0], pos[1], pos[2]];
         let h = self.legs.inverse(p).unwrap_or([f64::NAN; 3]);
         let (_, _, gravity) = self.load(h, [0.0; 3]);
         let (_, j) = self.pose(h);
-        let pa = [acc[0], acc[1], acc[2]];
-        let carriage_acc = inverse(&j).map_or([f64::NAN; 3], |inv| mul(&inv, pa));
+        let inv = inverse(&j).unwrap_or([[f64::NAN; 3]; 3]);
+        let (pv, pa) = ([vel[0], vel[1], vel[2]], [acc[0], acc[1], acc[2]]);
+        let bend = self.legs.velocity_term(h, p, mul(&inv, pv), pv).unwrap_or([f64::NAN; 3]);
+        let carriage_acc = mul(&inv, std::array::from_fn(|i| pa[i] - bend[i]));
         let force = transpose(&j).map(|column| self.m_nt() * dot(column, pa));
         let pre = self.belt.pretension;
         for k in 0..3 {
@@ -1096,8 +1258,8 @@ impl Machine for LinearDelta {
         }
     }
 
-    /// Each carriage guide's load across its rail (`guide_loads`) at a tool pose and acceleration: the rods' pull times
-    /// the reach, at rest under the plate's weight and moving with what accelerating the plate (and payload) takes on
+    /// Each carriage guide's load across its rail (`guide_loads`) at a tool pose and acceleration: the rods' pull and the
+    /// carriage's weight at right angles to the column, at rest under the plate's weight and moving with what accelerating the plate (and payload) takes on
     /// top, m a, through the same rods; the size of the sum is at most the rest's plus the moving part's.
     fn rigid_guide_loads(&self, pos: &[f64], acc: &[f64], out: &mut Vec<[f64; 2]>) {
         let p = [pos[0], pos[1], pos[2]];
@@ -1109,8 +1271,19 @@ impl Machine for LinearDelta {
         };
         let (rest, moving) = (pull([0.0; 3]), pull([acc[0], acc[1], acc[2]]));
         for k in 0..3 {
-            let reach = self.legs.reach(k, p);
-            out.push([(rest[k] * reach).abs(), (moving[k] - rest[k]) * reach]);
+            // As `guide_loads`: the part of the rod pull and the carriage's weight at right angles to the column.
+            let (u, d) = (sub(p, self.legs.joint(k, h[k])), self.legs.dir[k]);
+            let across = |f: V3| {
+                let along = dot(f, d);
+                std::array::from_fn::<f64, 3, _>(|i| f[i] - along * d[i])
+            };
+            let at_rest = across([rest[k] * u[0], rest[k] * u[1], rest[k] * u[2] - self.m_c * self.g]);
+            let extra = across(u.map(|x| (moving[k] - rest[k]) * x));
+            // The moments of the pull are linear in it, as are the force's parts: they add to both in the same way.
+            let (moment_rest, moment_extra) =
+                (self.joint_moments(k, u, rest[k]).0, self.joint_moments(k, u, moving[k] - rest[k]).0);
+            let size = norm(extra) + moment_extra;
+            out.push([norm(at_rest) + moment_rest, if dot(extra, at_rest) < 0.0 { -size } else { size }]);
         }
     }
 
@@ -1177,6 +1350,17 @@ impl Machine for LinearDelta {
 
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+    /// A carriage meeting its stop within the step (`HardStop::met_within`): `mech::STOP_SUBSTEPS`.
+    fn substeps_wanted(&self, s: &[f64], _torque: &[f64], dt: f64, _substeps: u32) -> u32 {
+        let (h, v) = self.heights(s);
+        let met = (0..3).any(|k| self.stops.met_within(h[k] - self.h_min(), v[k], self.stroke, dt));
+        if met { sim_components::mech::STOP_SUBSTEPS } else { 1 }
+    }
+    /// The push acts on the platform, beyond the belts, in either model (`pushed`); its power is the budget's crash row.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push = [force[0], force[1], force[2]];
+        true
     }
 
     /// What the belts stretch and the couplings twist at rest anywhere in the working range (`rest_sag`).
@@ -1267,6 +1451,18 @@ impl Machine for LinearDelta {
                 ));
             }
         }
+        if self.joint_offset != [0.0; 3] {
+            for (k, motor) in self.motors.iter().enumerate() {
+                for axis in ["x", "y", "z"] {
+                    out.push(SignalInfo::new(
+                        format!("carriage.{}.guide_moment_{axis}", motor.id),
+                        CARRIAGES[k],
+                        "quantity-guide-moment",
+                        "N m",
+                    ));
+                }
+            }
+        }
         self.effect_infos(&mut out);
         out
     }
@@ -1294,8 +1490,9 @@ impl Machine for LinearDelta {
     /// the sum of their tensions.
     fn base_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         let (h, v) = self.heights(s);
-        let (tensions, gear, guides) =
-            (self.tensions(s), self.gear_output(s, torque), self.moving_guide_loads(s, torque));
+        let plate = self.plate_acceleration(s, self.carriage_acceleration(s, torque));
+        let parts = self.guide_loads_at(h, self.pose(h).0, plate);
+        let (tensions, gear, guides) = (self.tensions(s), self.gear_output(s, torque), parts.map(|(load, _)| load));
         for k in 0..3 {
             out.extend([
                 h[k],
@@ -1312,6 +1509,9 @@ impl Machine for LinearDelta {
         if let Some(c) = self.guide_rating {
             out.extend((0..3).map(|k| 3600.0 * v[k].abs() * (guides[k] / c).powi(3) / 50e3));
         }
+        if self.joint_offset != [0.0; 3] {
+            out.extend(parts.iter().flat_map(|(_, moments)| *moments));
+        }
     }
     fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         self.view_signals(s, torque, out);
@@ -1326,6 +1526,10 @@ impl Machine for LinearDelta {
     fn friction_curve(&self, i: usize, speed: f64, load_scale: f64) -> [f64; 3] {
         if i < 3 { self.friction[i].steady(speed, load_scale) } else { [0.0; 3] }
     }
+    /// A carriage runs at most at its motor's highest speed through the gearbox and the pulley (on no axis of its own).
+    fn friction_speed_limit(&self, i: usize, motor_speed: &[f64]) -> Option<f64> {
+        (i < 3).then(|| Some(motor_speed.get(i)? * self.r / self.gearbox.ratio)).flatten()
+    }
 
     /// Two sections per column, in the order of the signals `belt.<i>.tension`: column 1's to the carriage from above and
     /// round the idler, then column 2's and 3's.
@@ -1337,9 +1541,10 @@ impl Machine for LinearDelta {
             .collect()
     }
 
-    /// The gearboxes (not the shipped couplings, which lose nothing) and the three guides, each warming with its loss
-    /// (power.gearbox_<k>, power.guide_<k>); shown on the gearbox and the carriage of its column.
-    // shortcut: belts and pulleys do not warm (no such kind of part); the belt's damping loss is small beside the guides'.
+    /// The gearboxes (not the shipped couplings, which lose nothing), the three guides and the three belts, each warming
+    /// with its loss (power.gearbox_<k>, power.guide_<k>, power.belt_<k>, the belt's damping); shown on the gearbox and the
+    /// carriage of its column, the belt on the first segment drawn of its loop (seven to a column, never of zero length).
+    /// A belt's resistance and time constant follow from its size (`thermal_values`), its rated rise is `thermal.belt_max_rise_k`.
     fn thermal_parts(&self) -> Vec<ThermalPart> {
         let part =
             |id, kind, owner_key, scene_part, scene_index| ThermalPart { id, kind, owner_key, scene_part, scene_index };
@@ -1355,8 +1560,15 @@ impl Machine for LinearDelta {
             part("guide_1", "guide", CARRIAGES[0], "carriage", 0),
             part("guide_2", "guide", CARRIAGES[1], "carriage", 1),
             part("guide_3", "guide", CARRIAGES[2], "carriage", 2),
+            part("belt_1", "belt", CARRIAGES[0], "belt", 0),
+            part("belt_2", "belt", CARRIAGES[1], "belt", 7),
+            part("belt_3", "belt", CARRIAGES[2], "belt", 14),
         ]);
         out
+    }
+
+    fn thermal_values(&self, id: &str) -> Option<(f64, f64)> {
+        id.starts_with("belt_").then_some(self.belt_thermal)
     }
 
     /// With effects.thermal_feedback, in the order of `thermal_parts`: each gearbox's efficiency and each guide's viscous

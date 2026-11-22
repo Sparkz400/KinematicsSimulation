@@ -53,6 +53,11 @@ z_axis_bending = false
 # The X beam sags under the carriage and the Z axis, as a simple span between the posts ([beam]), and lowers the tool
 # by m g a^2 b^2 / (3 EI L); quasi-static. Off as shipped: the beam's stiffness is an [estimate].
 beam_sag = false
+# The beam's first vertical mode with the carriage on it as one more coordinate w (the beam's deflection under the
+# carriage, [beam]): its modal mass from the beam's mass per metre, its stiffness the quasi-static span's, so that it
+# rests at the beam_sag value; a Z move's acceleration and the carriage's weight riding along the beam excite it.
+# Supersedes the quasi-static beam_sag. Off as shipped: the beam's mass and damping are [estimate]s.
+beam_vertical_mode = false
 gravity = true
 payload = true
 belt_stretch = true
@@ -84,6 +89,10 @@ torque_ripple = true
 tooth_meshing = true
 frame_compliance = true
 tool_flex = true
+# With tool_flex: the belt's upper vertical runs reach the clamp tool_flex.belt_offset_m to either side of the Z axis's
+# line, so the guide's tilt lengthens one and shortens the other: their tension difference turns the lean and their
+# stretch holds it. Off: on the line, as before.
+belt_run_offset = false
 idlers = false
 cable_chain = false
 process_force = false
@@ -222,7 +231,7 @@ stiffness_ea_n = 6.667e5
 # 450 N in 200 sampled runs,
 #   sim-cli verdicts t-gantry --config crates/machine-t-gantry/exct-30.toml --bands --samples 200
 #     --set "bounds.belt.pretension_n=[450.0,450.0]"
-# the row belt-slack says that the slackest section keeps about 210 to 250 N (about 240 N off at worst;
+# the row belt-least-tension says that the slackest section keeps about 210 to 250 N (about 240 N off at worst;
 # about 210 N off and 240 N kept with every value as written here). With the belt set 100 N low, the same
 # command with --set belt.pretension_n=350.0 and both bounds at 350.0, about 110 N are left. Other seeds
 # move these figures by a few newtons. With the pretension sampled along with the rest (the command without
@@ -304,11 +313,11 @@ d_inductance_h = 0.01
 # rest is the stator and housing's), and its time constant against the housing.
 winding_resistance_share = 0.3
 winding_time_constant_s = 60.0
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# [catalogue] 1FK2205-4AF: static torque 6 N m at the stall current 4.7 A (motors_s210.csv), as a motor named in
+# [parts] brings it. With effects.iron_loss the copper loss at it brings the winding to its rated
 # rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
 # starts at kt times it.
-stall_current_a = 3.75
+stall_current_a = 4.7
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
@@ -371,6 +380,10 @@ damping_n_s_m = 80.0
 # With effects.z_axis_bending [estimate]: the Z axis's bending stiffness E I, an aluminium profile of about 60 x 40 mm
 # (I = 2e-7 m^4, E = 70 GPa); its centre of mass h below the carriage gives way h^3 / (3 E I) more.
 z_axis_bending_stiffness_nm2 = 1.4e4
+# [estimate] How far the belt's two upper vertical runs reach the clamp to either side of the Z axis's line (the pulleys'
+# diameter, 2 x 0.01591 m): as the guide tilts the Z axis by theta the clamp lifts one run's end and lowers the other's
+# by this times theta, which puts the moment (T1 - T3) times it on the lean.
+belt_offset_m = 0.0318
 
 # With effects.beam_sag: the X beam as a simple span between the posts, which sags under the carriage and the Z
 # axis by m g a^2 b^2 / (3 E I L) (L^3 / (48 E I) per newton in the middle).
@@ -380,6 +393,11 @@ span_m = 1.354
 carriage_at_zero_m = 0.177
 # [estimate] an aluminium profile of about 80 x 80 mm, I = 1.2e-6 m^4, E = 70 GPa.
 bending_stiffness_nm2 = 8.4e4
+# With effects.beam_vertical_mode. [estimate] the same profile's mass per metre, about 3.5 kg/m (a light 80 x 80 mm
+# aluminium profile): the first mode's modal mass is 17/35 of the beam's mass in the middle.
+mass_kg_m = 3.5
+# [estimate] the damping ratio of the first mode, 1 %: a bolted aluminium structure (0.5 to 3 %).
+damping_ratio = 0.01
 
 # With effects.idlers: the four carriage idlers and the one at the bottom of the Z axis, all alike, turn
 # with the belt that passes them. Their inertia adds to what the belt accelerates, their bearings drag.
@@ -499,6 +517,9 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 # Kp = L / T and Tn = L / R for a current loop time constant of 0.25 ms.
@@ -508,6 +529,8 @@ current_tn_s = 5.0e-3
 # model's one winding carries the RMS phase current, and its voltage times that current is the power of
 # all three phases.
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] the EXCT-30 allows 12.5 N m at the pulley; the motor could give 18 N m.
 peak_torque_nm = 12.5
 # [catalogue] rated torque of the 1FK2205-4AF at 400 V; the RMS torque of a cycle is judged against it.
@@ -874,6 +897,8 @@ tool_flex.tilt_stiffness_nm_rad = [0.6e4, 2.4e4]
 tool_flex.damping_n_s_m = [40.0, 160.0]
 tool_flex.z_axis_bending_stiffness_nm2 = [0.7e4, 2.8e4]
 beam.bending_stiffness_nm2 = [4.2e4, 1.7e5]
+beam.mass_kg_m = [2.0, 6.0]
+beam.damping_ratio = [0.003, 0.03]
 idler.inertia_kgm2 = [1.0e-6, 4.0e-6]
 idler.radius_m = [0.010, 0.015]
 idler.friction_nm = [0.001, 0.004]

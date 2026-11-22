@@ -307,7 +307,11 @@ fn the_z_motor_holds_what_it_lifts_and_the_arm_motors_nothing() {
     let by_hand = |m: f64| m * 9.80665 * 0.01 / std::f64::consts::TAU;
     close(by_hand(11.2276), 0.1752378, 1e-6, "by hand");
     close(by_hand(11.1), 0.1732462, 1e-6, "without the wafer");
-    for edits in [vec!["effects.torque_ripple = false"], RIGID.to_vec()] {
+    // The far end's screw stiffness for the whole stroke: with it following the nut the rotor holds W^2 / (2 E A)
+    // less (`Gearbox::held_at`), 1.9e-6 of it.
+    for edits in
+        [vec!["effects.torque_ripple = false", "effects.screw_stiffness_with_position = false"], RIGID.to_vec()]
+    {
         let mut d = handler(&edits);
         for pose in [[0.12, 0.0, 0.1], [0.75, 3.0, 0.2], [0.4, -2.0, 0.05]] {
             let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
@@ -338,14 +342,204 @@ fn the_modes_are_those_of_the_gearboxes_and_bands() {
         (0.12, [18.1952, 51.3514, 70.6454, 186.4465], [21.0252, 62.4203]),
         (0.75, [16.7646, 42.3221, 83.6696, 175.3323], [18.5831, 83.1553]),
     ] {
-        let modes: Vec<f64> = both.modes(&[r, 0.0, 0.1]).iter().map(|m| m.hz).collect();
-        assert_eq!(modes.len(), 4);
+        // The column on its screw is a fifth mode, far above these (`the_column_rings_on_its_screw_and_coupling`).
+        let mut modes: Vec<f64> = both.modes(&[r, 0.0, 0.1]).iter().map(|m| m.hz).collect();
+        assert_eq!(modes.len(), 5);
+        modes.pop();
         (0..4).for_each(|k| close(modes[k], all[k], 1e-5, "mode"));
         let modes: Vec<f64> = bands.modes(&[r, 0.0, 0.1]).iter().map(|m| m.hz).collect();
         (0..2).for_each(|k| close(modes[k], alone[k], 1e-5, "band mode"));
         close(both.resonance_hz(&[r, 0.0, 0.1]).unwrap(), all[0], 1e-5, "lowest");
     }
     assert!(handler(&RIGID).modes(&[0.5, 0.0, 0.1]).is_empty());
+}
+
+/// The modes' damping ratios. With damping proportional to stiffness, C = alpha K (each band span 94 N s/m against its
+/// 9.4e5 N/m, the arm's gearboxes 2.5 N m s/rad against 2.5e4 N m/rad: alpha = 1e-4 s), every mode of M and K has the
+/// ratio alpha w / 2 = 1e-4 pi f, whatever its shape. The column, by hand: the coupling's 0.2 N m s/rad over the
+/// screw's lever (1.591549e-3 m/rad) squared is c_g = 78956.8 N s/m across the coupling's spring alone, K_g =
+/// 1.184353e9 N/m; the screw's K_c = 4.747102e7 N/m in series has its own c_c = 2 x 0.04 sqrt(K_c x 11.1 kg) = 1836.394
+/// N s/m (`screw.axial_damping_ratio`, the column without the wafer). Together (`Gearbox::arm`): b = c_g c_c / C =
+/// 1794.653 N s/m, K_m = (K_g c_c - K_c c_g)^2 / (S C^2) = 307810.0 N/m and tau = C / S = 6.558831e-5 s (S, C the sums),
+/// and at the ring w = sqrt(4.564162e7 / 11.2276) = 2016.216 rad/s they damp b + K_m tau / (1 + (w tau)^2) =
+/// 1814.495 N s/m, against 2 sqrt(4.564162e7 N/m x 11.2276 kg) = 45274.5 N s/m critical: 0.0400776. The coupling's
+/// damper alone gave 0.0025474; across the whole series spring, as the converter had it, 1.743957.
+#[test]
+fn the_modes_are_damped_by_the_gearboxes_and_bands() {
+    // At the far end, as the column's figures (`the_column_rings_stiffer_with_the_nut_near_its_bearing` has it
+    // follow the nut).
+    let d = handler(&[
+        "effects.screw_stiffness_with_position = false",
+        "elbow_band.span_damping_n_s_m = 94.0",
+        "wrist_band.span_damping_n_s_m = 94.0",
+        "gearbox.damping_nm_s_rad = 2.5",
+    ]);
+    for r in [0.12, 0.75] {
+        let modes = d.modes(&[r, 0.0, 0.1]);
+        assert_eq!(modes.len(), 5);
+        for m in &modes[..4] {
+            close(m.damping, 1e-4 * std::f64::consts::PI * m.hz, 1e-6, "proportional damping");
+        }
+        close(modes[4].damping, 0.0400776, 1e-5, "column damping");
+    }
+    assert!(handler(&[]).modes(&[0.4, 0.0, 0.1]).iter().all(|m| m.damping > 0.0));
+}
+
+/// The column on its screw and coupling (effects.joint_elasticity), by hand: the coupling's 3000 N m/rad at the screw's
+/// lever lead / (2 pi) = 1.591549e-3 m/rad is K_c = 3000 / (1.591549e-3)^2 = 1.184353e9 N/m. The screw, fixed-free, is
+/// softest with the nut at its far end, 0.4 m from the fixed bearing: the shaft of 13.5 mm root diameter, A = pi
+/// 0.0135^2 / 4 = 1.431388e-4 m^2, is E A / L = 2.06e11 x 1.431388e-4 / 0.4 = 7.371649e7 N/m, in series with the nut's
+/// 2e8 and the bearings' 4e8 N/m: K_s = 4.747102e7 N/m, and with the coupling K = 4.564162e7 N/m. The column carries
+/// 8 + 1.5 + 1.2 + 0.4 kg and the 0.1276 kg wafer, 11.2276 kg, so with the rotor held it rings at
+/// sqrt(4.564162e7 / 11.2276) / 2 pi = 320.8907 Hz, the fifth mode, above the arm's four (at most 186 Hz). At rest the
+/// spring is compressed by m g / K = 2.412 um (the rotor that far ahead of the column, in rotor radians (2 pi / lead)
+/// m g / K), and the state derivative there is zero.
+#[test]
+fn the_column_rings_on_its_screw_and_coupling() {
+    // One stiffness for the stroke, the far end's (`the_column_rings_stiffer_with_the_nut_near_its_bearing` has it
+    // follow the nut).
+    let d = handler(&["effects.screw_stiffness_with_position = false"]);
+    let lever = 0.01 / std::f64::consts::TAU;
+    let k = 4.564162e7;
+    close(d.lift.joint.gearbox.stiffness, k, 1e-6, "stiffness in series");
+    let modes: Vec<f64> = d.modes(&[0.4, 0.0, 0.1]).iter().map(|m| m.hz).collect();
+    assert_eq!(modes.len(), 5);
+    close(*modes.last().unwrap(), 320.8907, 1e-6, "column mode");
+    assert!(handler(&RIGID).modes(&[0.4, 0.0, 0.1]).is_empty());
+    let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
+    d.equilibrium(&[0.4, 0.0, 0.1], &mut state, &mut torque);
+    let x = d.planar_len();
+    let twist = state[x + 3] - state[x] / lever;
+    close(twist, 11.2276 * 9.80665 / k / lever, 1e-6, "compression");
+    let mut rates = vec![0.0; d.state_len()];
+    d.derivatives(&state, &torque, &mut rates);
+    assert!(rates.iter().all(|r| r.abs() < 1e-6), "{rates:?}");
+}
+
+/// The column's ring with the screw's stiffness following the nut (effects.screw_stiffness_with_position), by hand as
+/// above with the fixed bearing at z = 0: the shaft E A / a = 2.948660e7 / a N/m with the nut a = z from it, in
+/// series with nut, bearings and coupling. z = 0.1: K = 1 / (0.1 / 2.948660e7 + 5e-9 + 2.5e-9 + 8.443430e-10) =
+/// 8.520998e7 N/m, sqrt(K / 11.2276) / 2 pi = 438.4518 Hz; z = 0.2: 6.610658e7, 386.1882 Hz; z = 0.3: 5.400018e7,
+/// 349.0392 Hz (at the far end 0.4 the 320.8907 Hz above). At rest at z = 0.2 the spring carries the weight W = m g,
+/// the nut where the rotor has turned it, 0.2 m plus the compression x: x = W / K (1 + W / E A) (6 pm more than
+/// W / K), and the rotor holds W less the place's own W^2 / (2 E A) (`Gearbox::travel_force`): the state derivative is
+/// zero.
+///
+/// The damping follows too (`the_modes_are_damped_by_the_gearboxes_and_bands` at the far end): the screw's own damper
+/// keeps its ratio 0.04 on the 11.1 kg, c_c = 2 x 0.04 sqrt(K_c x 11.1) with K_c = 1 / (z / 2.948660e7 + 7.5e-9) =
+/// 9.181580e7, 7.001456e7, 5.657992e7 N/m at z = 0.1, 0.2, 0.3; with the coupling's c_g = 78956.8 N s/m across
+/// K_g = 1.184353e9 N/m in series, b + K_m tau / (1 + (w tau)^2) over the critical 2 sqrt(K m) is 0.0420995,
+/// 0.0409748, 0.0404020 (0.0400776 at the far end): the coupling's damper takes a larger share where the screw is
+/// stiffer. The far end's dampers held gave 0.0293, 0.0333, 0.0368.
+#[test]
+fn the_column_rings_stiffer_with_the_nut_near_its_bearing() {
+    let d = handler(&["effects.screw_stiffness_with_position = true", "screw.fixed_bearing_at_m = 0.0"]);
+    for (z, hz, zeta) in
+        [(0.1, 438.4518, 0.0420995), (0.2, 386.1882, 0.0409748), (0.3, 349.0392, 0.0404020), (0.4, 320.8907, 0.0400776)]
+    {
+        let column = *d.modes(&[0.4, 0.0, z]).last().unwrap();
+        close(column.hz, hz, 1e-6, "column mode along the stroke");
+        close(column.damping, zeta, 1e-5, "column damping along the stroke");
+    }
+    let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
+    d.equilibrium(&[0.4, 0.0, 0.2], &mut state, &mut torque);
+    let (x, lever) = (d.planar_len(), 0.01 / std::f64::consts::TAU);
+    let w: f64 = 11.2276 * 9.80665;
+    let compression = w / 6.610658e7 * (1.0 + w / 2.948660e7);
+    close(state[x + 3] - state[x] / lever, compression / lever, 1e-6, "compression at 0.2");
+    let mut rates = vec![0.0; d.state_len()];
+    d.derivatives(&state, &torque, &mut rates);
+    assert!(rates.iter().all(|r| r.abs() < 1e-7), "{rates:?}");
+}
+
+/// The rest sag's allowance (`rest_sag`) holds the whole stroke with the screw's stiffness following the nut: the lift's
+/// half play and its weight m g = 11.2276 x 9.80665 N over the screw where it is softest on the stroke 0..0.3 m, plus a
+/// tenth. With the shaft fixed at one end (the shipped fixed bearing at -0.05 m) that is the stroke's top, the nut
+/// a = 0.35 m from it: K = 1 / (0.35 / 2.948660e7 + 5e-9 + 2.5e-9 + 8.443430e-10) = 4.946592e7 N/m, not the shaft's
+/// far end a = 0.4 m beyond the stroke (4.564162e7, `the_column_rings_on_its_screw_and_coupling`); held at both ends
+/// the shaft's middle a = 0.2 m (z = 0.15), a (L - a) / (E A L) = 0.1 / 2.948660e7. The coupling's play of 0.2 rad
+/// [test value] is 0.1 x 0.01 / 2 pi = 1.591549e-4 m at the column, which lifts the allowance over the 0.1 mm floor;
+/// the shipped gears have none (0.1 mm before and after).
+#[test]
+fn the_rest_sag_takes_the_screw_where_it_is_softest_on_the_stroke() {
+    let (ea, weight, half) = (2.948660e7, 11.2276 * 9.80665, 0.1 * 0.01 / std::f64::consts::TAU);
+    let series = |shaft: f64| 1.0 / (shaft + 5e-9 + 2.5e-9 + 8.443430e-10);
+    for (mounting, k) in [("fixed-free", series(0.35 / ea)), ("fixed-fixed", series(0.1 / ea))] {
+        let d = handler(&[
+            "effects.screw_stiffness_with_position = true",
+            "gearbox.3.backlash_rad = 0.2",
+            &format!("screw.mounting = \"{mounting}\""),
+        ]);
+        close(d.rest_sag(), 1.1 * (half + weight / k), 1e-6, mounting);
+    }
+}
+
+/// The planner's trains (`Machine::trains`) are the machine's own held modes, one motor at a time: the lift's is the
+/// column's ring on its screw at the stroke's height (438.4518 and 349.0392 Hz at z = 0.1 and 0.3 by hand above, the
+/// fixed bearing at z = 0); the turn's and the reach's are the arm's mode on that joint's gearbox with the other one
+/// rigid (its stiffness raised to 1e12 N m/rad) and the bands rigid, retracted and extended. The rigid model has none.
+#[test]
+fn the_trains_are_the_held_modes_one_motor_at_a_time() {
+    let edits = ["effects.band_elasticity = false", "screw.fixed_bearing_at_m = 0.0"];
+    let d = handler(&edits);
+    for (r, z, column) in [(0.12, 0.1, 438.4518), (0.75, 0.3, 349.0392)] {
+        let pose = [r, 0.0, z];
+        let trains = d.trains(&pose);
+        assert_eq!(trains.len(), 3);
+        close(trains[2].unwrap().hz, column, 1e-6, "lift's train");
+        for k in 0..2 {
+            let mut held = handler(&edits);
+            held.joints[1 - k].gearbox.stiffness = 1e12;
+            let own = held.modes(&pose)[0].hz;
+            close(trains[k].unwrap().hz, own, 1e-6, "joint's train");
+        }
+    }
+    assert!(handler(&RIGID).trains(&[0.4, 0.0, 0.1]).is_empty());
+}
+
+/// With the screw's stiffness following the nut, the loss-free configs keep their energy and the default config's
+/// budget closes (`testkit`): the spring's energy at the nut's travel and the force that travel takes from it agree.
+#[test]
+fn the_energy_closes_with_the_screw_stiffness_following_the_nut() {
+    for mut cfg in suite_configs().into_iter().chain([ENTRY.config()]) {
+        cfg.set_text("effects.screw_stiffness_with_position = true").unwrap();
+        let m = WaferHandler::new(&cfg).unwrap();
+        if !cfg.bool("effects.joint_friction").unwrap() {
+            sim_core::testkit::energy_conservation(&m);
+        }
+        sim_core::testkit::loss_budget(&m);
+    }
+}
+
+/// With a hysteresis in the gears and the lift's coupling (`gearbox.hysteresis_rad` 1e-3, which the coupling takes from
+/// [gearbox]; the standard suite cannot tell, it never commits the gears' states) the default cycle's budget closes as
+/// without it: the hysteresis's state behind the screw lives on the gear's own twist (`Gearbox::at`), and the work the
+/// nut's place does on it is booked as stored. Measured: 6.4e-6 J of 48.13 J unaccounted (4.7e-6 J without the hysteresis,
+/// 5.1e-6 J on the twist through gear and screw before 21 November), the gearbox rows 1.7e-3 J more.
+#[test]
+fn the_budget_closes_with_a_hysteresis_behind_the_screw() {
+    let budget = |hysteresis: bool| {
+        let mut cfg = ENTRY.config();
+        if hysteresis {
+            cfg.set_text("gearbox.hysteresis_rad = 1e-3").unwrap();
+            assert!(WaferHandler::new(&cfg).unwrap().lift.joint.gearbox.hysteresis > 0.0);
+        }
+        let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+        sim_components::analysis::analyse_cycle(&mut sim).unwrap().budget.unwrap()
+    };
+    let (plain, looped) = (budget(false), budget(true));
+    let gears = |b: &sim_components::analysis::EnergyBudget| -> f64 {
+        b.rows.iter().filter(|r| r.id.contains("gearbox")).map(|r| r.energy).sum()
+    };
+    println!(
+        "{} J of {} J unaccounted, gearboxes {} J against {} J",
+        looped.unaccounted(),
+        looped.supply,
+        gears(&looped),
+        gears(&plain)
+    );
+    assert!(looped.unaccounted().abs() < 1e-6 * looped.supply, "{} J of {} J", looped.unaccounted(), looped.supply);
+    assert!(gears(&looped) > gears(&plain));
 }
 
 /// The hold at rest and on the move, by hand: pads mu g = 0.3 * 9.80665 = 2.941995 m/s^2, and while the lift
@@ -373,7 +567,7 @@ fn the_hold_asks_the_hand_calculated_share_on_pads_vacuum_and_edge() {
 }
 
 /// The default cycle passes every verdict (`sim-cli verdicts wafer-handler`: the wafer at 1.83 m/s^2 of the 2.45 its
-/// pads hold over 1.2, settling 0.032 mm of 0.15 and 0.108 mrad of 0.2 (the column ringing after the first turn), the
+/// pads hold over 1.2, settling 0.033 mm of 0.15 and 0.113 mrad of 0.2 (the column ringing after the first turn), the
 /// effector's direction 12.7 urad of 0.5 mrad, the bands' swings 6.5 % and 1.2 % of their pretension); the reach speeding up at 3 m/s^2 instead of
 /// 1.5 (its jerk 30 m/s^3) slips the wafer: 3 m/s^2 along the radial line, more than the 2.45 allowed.
 #[test]

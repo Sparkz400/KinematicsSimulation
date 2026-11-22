@@ -74,7 +74,7 @@ pub struct BeltSection {
 /// The kinds of part that can warm with their loss power (`ThermalPart`); each has the config keys
 /// `thermal.<kind>_resistance_k_w`, `thermal.<kind>_time_constant_s` and `thermal.<kind>_max_rise_k`, and the quantity
 /// key `quantity-<kind>-temperature`.
-pub const THERMAL_KINDS: [&str; 2] = ["gearbox", "guide"];
+pub const THERMAL_KINDS: [&str; 3] = ["gearbox", "guide", "belt"];
 /// What the simulation calls the temperature rise of a `ThermalPart` (`temperature.<id>`, K).
 pub const TEMPERATURE_PREFIX: &str = "temperature.";
 
@@ -104,6 +104,26 @@ pub struct RatingCheck {
     /// rate, the share of the part's life used per hour, and the life in hours, 1 / its mean over the pass (Palmgren
     /// and Miner), has to reach `limit`; such a check's id ends in "-life" and is one of `analysis::AT_LEAST`.
     pub life: bool,
+}
+
+/// A motor's elastic drive train as the time-optimal plan allows for it (`Machine::trains`), reduced to two masses on a
+/// spring: the rotor's side and the load's, referred to the motor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Train {
+    /// The load's frequency against the motor held, sqrt(k / J_load), Hz.
+    pub hz: f64,
+    /// The load's share of the motor's rigid inertia, J_load / (J_load + J_rotor side).
+    pub load_share: f64,
+}
+
+impl Train {
+    /// From the train's stiffness at the motor with the load held (N m/rad), the inertia on the motor's side of it and
+    /// the motor's whole rigid inertia (kg m^2). `None` for a train with no stiffness to tell or no load beyond it.
+    pub fn of(stiffness: f64, rotor_side: f64, whole: f64) -> Option<Self> {
+        let load = whole - rotor_side;
+        (stiffness > 0.0 && stiffness.is_finite() && load > 0.0 && whole.is_finite())
+            .then(|| Self { hz: (stiffness / load).sqrt() / std::f64::consts::TAU, load_share: load / whole })
+    }
 }
 
 /// A structural mode of a machine at a pose, from `Machine::modes`.
@@ -139,6 +159,10 @@ pub struct FrameMomentum {
 /// The tool axes a base's motion moves (`Machine::base_shift`): those with these ids, by translation [x, y, z] and by
 /// tilt about [x, y, z].
 pub const BASE_AXES: [[&str; 3]; 2] = [["x", "y", "z"], ["rx", "ry", "rz"]];
+
+/// An electronic cam's curve as `Machine::cam_at` reads it, on its own (`Machine::cam_curve`): each slave at a master
+/// position, as [s, s', s'', s'''].
+pub type CamCurve = std::sync::Arc<dyn Fn(f64, &mut [[f64; 4]]) + Send + Sync>;
 
 /// The master of an electronic cam that a machine runs as its cycle instead of `[[cycle.segment]]` (`Machine::cam`): its
 /// steady speed (its unit per second), its travel per pass of the cycle, and how long it takes from rest to that speed
@@ -187,6 +211,11 @@ pub trait Machine: Send {
 
     fn axes(&self) -> &[AxisInfo];
     fn motors(&self) -> &[MotorInfo];
+    /// Whether motor `motor` is a linear motor: its angle, speed and torque signals are then m, m/s and N, and the
+    /// "motor-speed" verdict's value is m/s. False by default, a rotary motor.
+    fn motor_linear(&self, _motor: usize) -> bool {
+        false
+    }
     /// Tool pose to motor shaft angles, and back. Both are pure kinematics.
     fn inverse(&self, tool: &[f64], motors: &mut [f64]);
     fn forward(&self, motors: &[f64], tool: &mut [f64]);
@@ -196,6 +225,11 @@ pub trait Machine: Send {
     fn equilibrium(&self, tool: &[f64], state: &mut Vec<f64>, torque: &mut [f64]);
     fn derivatives(&self, state: &[f64], torque: &[f64], out: &mut [f64]);
     fn tool_state(&self, state: &[f64], pos: &mut [f64], vel: &mut [f64]);
+    /// What a load-side scale reads: the carriage (the tool) against the frame it is mounted on, so a frame's sway
+    /// and a tool's lean are not in it. By default the tool state, in the room, as `tool_state` reports it.
+    fn scale_state(&self, state: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+        self.tool_state(state, pos, vel);
+    }
     /// Gives a state at rest (see `equilibrium`) the tool speeds `vel`: everything that moves with the
     /// tool, motors included, moves along as the kinematics say.
     fn set_tool_velocity(&self, state: &mut [f64], vel: &[f64]);
@@ -235,6 +269,12 @@ pub trait Machine: Send {
     fn twist(&self, _torque: &[f64], _acc: &[f64], out: &mut [f64]) {
         out.fill(0.0);
     }
+    /// `twist` with the motors at `angle` (motor radians, the trace's): behind a screw whose stiffness follows its nut,
+    /// the train's spring where the nut is, on the shaft's point the rotor has turned to it. By default `twist`, for a
+    /// machine whose trains have one stiffness along the stroke.
+    fn twist_at(&self, _angle: &[f64], torque: &[f64], acc: &[f64], out: &mut [f64]) {
+        self.twist(torque, acc, out)
+    }
     /// `rigid_motor_torque` with the load at `angle`, `speed`, `acc` (where the rigid model puts the motors for it) and
     /// the rotors at their own acceleration `rotor_acc`: what an elastic train (`twist`) needs. By default the rigid
     /// torques at the load's motion, the rotors turning with it.
@@ -246,6 +286,17 @@ pub trait Machine: Send {
     /// on the pulleys and rotors, which the motors turn), shared out so that the belt keeps its length. Linear in the
     /// acceleration. Appends nothing where the machine has no belt sections to tell.
     fn rigid_tensions(&self, _tool_pos: &[f64], _tool_acc: &[f64], _out: &mut Vec<f64>) {}
+    /// `rigid_tensions` with the tool's velocity too, for machines whose carriages accelerate with the speed (a delta's
+    /// rods turn: h'' = J^-1 (p'' - J_x^-1 w)). By default the speed does not matter.
+    fn rigid_tensions_moving(&self, tool_pos: &[f64], tool_vel: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
+        let _ = tool_vel;
+        self.rigid_tensions(tool_pos, tool_acc, out)
+    }
+    /// The band [least, most] (N) the time-optimal plan keeps `rigid_tensions` within, where the machine has it from
+    /// its own parts (cables between winches and a platform); `None`: `ratings.belt_min_tension_n` and `belt_max_tension_n`.
+    fn tension_band(&self) -> Option<[f64; 2]> {
+        None
+    }
     /// The load of each guide that reports `axis.<id>.guide_load` (N, in that order) in the loss-free rigid model at a
     /// tool pose and acceleration, as [rest, moving] for the load rest + |moving|: `moving` linear in the acceleration
     /// and zero without. The time-optimal plan keeps it within `ratings.guide_max_load_n`. Appends nothing where the
@@ -256,6 +307,12 @@ pub trait Machine: Send {
     /// (its rate per unit of path): [c, b] for c + b v at the speed v along the path, positive where the motor has to
     /// give positive torque against it. For the time-optimal plan. Appends nothing where the machine does not tell.
     fn rigid_friction(&self, _tool_pos: &[f64], _tool_dir: &[f64], _out: &mut Vec<[f64; 2]>) {}
+    /// What `rigid_friction`'s c + b v leaves out near a standstill, the Stribeck rise: per motor a [level, speed] for each
+    /// contact it drives, the torque level exp(-(v / speed)^2) more at the speed v along the path (the friction is then
+    /// c + sum level exp(..) + b v; level signed as c, speed in the path's units, above 0). For the time-optimal plan,
+    /// which holds the room for it at the most it takes over the speeds up to v. Appends nothing where the machine has no
+    /// rise (the default).
+    fn rigid_friction_rise(&self, _tool_pos: &[f64], _tool_dir: &[f64], _out: &mut Vec<Vec<[f64; 2]>>) {}
     /// The friction torque at each motor (N m, in the order of `motors`, into `out`) while the tool at `tool_pos` moves
     /// steadily at `tool_vel`: every friction of the machine's own model at that speed (guides at their steady sliding
     /// level, the motor shaft, the gearbox's drag, the joints, idlers, screws, the cable chain), carried to the motor as
@@ -286,8 +343,45 @@ pub trait Machine: Send {
     fn set_link_change(&mut self, _link: usize, _factor: f64, _moment: [f64; 3]) {}
     /// Told every step whether the cycle dwells at a target, for machines with a process force there.
     fn set_dwelling(&mut self, _dwelling: bool) {}
+    /// An external force on the contact coordinates (`contact_state`, by default the tool's: one component per axis, N,
+    /// or N m on a rotary axis; the generalised force of each), held until changed: an obstacle's push on the parts
+    /// that can touch it (effects.crash). Returns whether the machine takes it; by default `false` (not supported), and
+    /// the push then acts on the motors through the rigid kinematics. The force's power is not in the machine's loss
+    /// rows: the simulation integrates it as the obstacles' work (the budget's crash row), F . the contact coordinates'
+    /// rates. Machines that take it put its generalised forces into their equations beyond their transmissions, at every
+    /// stage of the integration (`tool_force_on_rates`): the machine files' `ConfigMachine`, the joint machines
+    /// (`chain::JointMachine`) and most machine crates. The default stays where the machine's equations are another's
+    /// that does not take it.
+    fn set_tool_force(&mut self, _force: &[f64]) -> bool {
+        false
+    }
+    /// How many contact coordinates an obstacle's push acts on (`set_tool_force`): by default the tool's axes. A machine
+    /// whose parts that can touch do not move with its tool alone (a load swinging under it, a dancer the web holds)
+    /// gives coordinates of their own.
+    fn contact_axes(&self) -> usize {
+        self.axes().len()
+    }
+    /// The contact coordinates and their rates at state `s`: by default the tool's (`tool_state`). The rates are linear
+    /// in the state's rates.
+    fn contact_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+        self.tool_state(s, pos, vel)
+    }
+    /// A state from `s` with the contact coordinates at `at`, the parts placed there for the slopes of an obstacle's
+    /// clearance along them: by default the rest at the tool pose `at` (`equilibrium`).
+    fn contact_placed(&self, _s: &[f64], at: &[f64], out: &mut Vec<f64>) {
+        let mut torque = vec![0.0; self.motors().len()];
+        self.equilibrium(at, out, &mut torque);
+    }
     /// Told every step whether the drives are disabled, for machines with holding brakes.
     fn set_brake_engaged(&mut self, _engaged: bool) {}
+    /// How many parts the coming base step `dt` (s), taken in `substeps` sub-steps, is to have each sub-step cut into,
+    /// at least 1, from its start state `s` and the motors' torques: for what changes faster than a sub-step resolves
+    /// (a gearbox's efficiency switch held near zero power at a large torque, `mech::fade_substeps`; a joint's stop met
+    /// within the step, `mech::STOP_SUBSTEPS`). The model is the same; only its integration is finer
+    /// (`integrate::advance_refined`). 1 by default.
+    fn substeps_wanted(&self, _s: &[f64], _torque: &[f64], _dt: f64, _substeps: u32) -> u32 {
+        1
+    }
     /// Actuators that a valve moves and no drive (pneumatic cylinders): each one's id and the valve command it starts
     /// with (+1 extend, -1 retract, 0 the closed centre of a 5/3 valve), for a cycle segment's `valves` and `wait`. None
     /// by default.
@@ -316,6 +410,12 @@ pub trait Machine: Send {
     /// the friction and losses that change with it.
     fn set_part_temperatures(&mut self, _rises: &[f64]) {}
 
+    /// Per motor at a tool pose its elastic drive train (`Train`), for the time-optimal plan to keep back the speed the
+    /// train's twist adds to the motor's: `None`, or no entry, where the train is rigid (no allowance).
+    fn trains(&self, _tool_pose: &[f64]) -> Vec<Option<Train>> {
+        Vec::new()
+    }
+
     /// The lowest structural resonance at a tool pose, for a controller that sets its input shaper by it.
     /// `None` where the machine has none to tell.
     fn resonance_hz(&self, _tool_pose: &[f64]) -> Option<f64> {
@@ -334,6 +434,20 @@ pub trait Machine: Send {
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
         self.resonance_hz(tool_pose).map(|hz| Mode { hz, damping: 0.0 }).into_iter().collect()
     }
+    /// The same modes as `modes` for small vibrations: where a joint's gearbox has hysteresis (`gearbox_lost_motion`),
+    /// the stiffness it shows at a reversal is K1 + sigma, not the large-amplitude K1 `modes` uses. A shaper for the
+    /// move's own swing takes `modes` (the twists of the move are far above the hysteresis loop); one for the residual
+    /// ringing below about 1e-4 rad at the joint takes these. By default the same as `modes`.
+    fn modes_small_amplitude(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        self.modes(tool_pose)
+    }
+    /// The modes an input shaper that follows the pose takes beyond the first (`profile.shaper_modes`, the shaping
+    /// optimiser's second shaper), lowest first: by default `modes`. A machine whose `modes` hold modes the shaper does
+    /// not act on (a crane's bounce of the load on its rope) gives the ones it does (the swing, and the hook block's
+    /// upper swing).
+    fn sway_modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
+        self.modes(tool_pose)
+    }
     /// With effects.belt_wrap: the angle (rad) by which the belt wraps each driven pulley at a tool pose, from the places
     /// of the pulleys and idlers, in the order of `motors`; NaN for a motor that drives no belt. Empty where the machine
     /// gives no belt geometry or the effect is off: then `ratings.belt_teeth_in_mesh` stands for the teeth in mesh.
@@ -346,6 +460,13 @@ pub trait Machine: Send {
     /// edges, as it widens the axis ranges for a setpoint at rest. `None` where it can; machines whose workspace is
     /// the box of their axis ranges keep this default.
     fn unreachable(&self, _tool_pose: &[f64], _slack: f64) -> Option<&'static str> {
+        None
+    }
+
+    /// Why the payload cannot be picked up with the tool at rest at `tool_pose` (a cycle segment that attaches it), as a
+    /// translation key: the machine's own physical reason (a hook block that would hang inside the payload). `None`
+    /// where it can, by default.
+    fn refuses_pick(&self, _tool_pose: &[f64]) -> Option<&'static str> {
         None
     }
 
@@ -373,6 +494,11 @@ pub trait Machine: Send {
     /// With `cam`: each tool axis (the slaves) at the master position `master`, as [s, s', s'', s'''], the rates over
     /// the master.
     fn cam_at(&self, _master: f64, _out: &mut [[f64; 4]]) {}
+    /// With `cam`: the curve `cam_at` reads, apart from the machine, so that it still reads the same once the config
+    /// has changed (the input shaper reads the plan of past cycles off it). `None` without a cam.
+    fn cam_curve(&self) -> Option<crate::CamCurve> {
+        None
+    }
     /// A dual-drive gantry: the two motors that drive its axis side by side, the master first, for the drives'
     /// synchronisation (`gantry.sync`). `None` without one.
     fn gantry_motors(&self) -> Option<[usize; 2]> {
@@ -426,6 +552,17 @@ pub trait Machine: Send {
     fn friction_curve(&self, _i: usize, _speed: f64, _load_scale: f64) -> [f64; 3] {
         [0.0; 3]
     }
+    /// Whether contact `i` is a rotary one (a joint's bearings): its speed signal is an angular speed (rad/s) and its
+    /// parts torques (N m), where a sliding one has m/s and N. The friction view draws the labels of its kind.
+    fn friction_rotary(&self, _i: usize) -> bool {
+        false
+    }
+    /// The speed (m/s, or rad/s for a rotary contact) up to which the friction view draws contact `i`'s curve, where
+    /// the machine knows it from the highest speed of each motor's rotor, `motor_speed` (rad/s, from its drive);
+    /// `None`: the owner axis's speed limit, or the fastest axis's.
+    fn friction_speed_limit(&self, _i: usize, _motor_speed: &[f64]) -> Option<f64> {
+        None
+    }
 
     /// The belt sections for the belt view. Empty where the machine tells none.
     fn belt_sections(&self) -> Vec<BeltSection> {
@@ -435,6 +572,13 @@ pub trait Machine: Send {
     /// The parts that warm with a loss power, for the thermal model and view. Empty where the machine tells none.
     fn thermal_parts(&self) -> Vec<ThermalPart> {
         Vec::new()
+    }
+
+    /// The resistance to ambient (K/W) and the time constant (s) of the thermal part `id`, where the machine works them
+    /// out from the part's own size (a belt: its surface and mass) in place of the config's `thermal.<kind>_resistance_k_w`
+    /// and `thermal.<kind>_time_constant_s`; `None`: the config's.
+    fn thermal_values(&self, _id: &str) -> Option<(f64, f64)> {
+        None
     }
 
     /// Carries a running state over to a machine rebuilt from a changed config.
@@ -457,6 +601,31 @@ pub trait Machine: Send {
         self.set_tool_velocity(&mut state, &vel);
         state
     }
+}
+
+/// The generalised force of a force on the contact coordinates (`Machine::set_tool_force`, by default the tool's) on each of the
+/// state's rates `rates`: its virtual power per unit of each rate, F . d v / d s_j, with their rates v as
+/// `contact_state` gives them, linear in the state's rates (a unit step on each is exact). Its power on the rates is
+/// then F . v, what the simulation books as the obstacles' work. `None` where the force is zero.
+pub fn tool_force_on_rates<M: Machine + ?Sized>(
+    machine: &M,
+    s: &[f64],
+    force: &[f64],
+    rates: std::ops::Range<usize>,
+) -> Option<Vec<f64>> {
+    if force.iter().all(|f| *f == 0.0) {
+        return None;
+    }
+    let n = force.len();
+    let (mut pos, mut base, mut vel, mut at) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], s.to_vec());
+    machine.contact_state(s, &mut pos, &mut base);
+    let on = |j: usize| -> f64 {
+        at[j] = s[j] + 1.0;
+        machine.contact_state(&at, &mut pos, &mut vel);
+        at[j] = s[j];
+        force.iter().zip(vel.iter().zip(&base)).map(|(f, (v, b))| f * (v - b)).sum()
+    };
+    Some(rates.map(on).collect())
 }
 
 /// One line of the registration list.

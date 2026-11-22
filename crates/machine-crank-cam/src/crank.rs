@@ -53,9 +53,8 @@ pub struct SliderCrank {
 pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
     let joint = RotaryJoint::from_config(cfg)?;
     let crank = SliderCrank::from_config(cfg)?;
-    let endless = crank.cam.as_ref().is_some_and(|(c, _)| c.advance != 0.0);
     let theta = axis(cfg, "crank", "axis-crank", "rad", joint.range)?;
-    machine(cfg, crank, (joint, None, "rad"), theta, endless)
+    machine(cfg, crank, (joint, None, "rad"), theta, true)
 }
 
 impl SliderCrank {
@@ -220,6 +219,10 @@ impl Mechanism for SliderCrank {
         if let Some((cam, _)) = &self.cam {
             out[0] = cam.at(master);
         }
+    }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        let cam = self.cam.as_ref()?.0.clone();
+        Some(std::sync::Arc::new(move |master, out: &mut [[f64; 4]]| out[0] = cam.at(master)))
     }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {

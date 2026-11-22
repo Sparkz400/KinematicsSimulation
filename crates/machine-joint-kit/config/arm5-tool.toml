@@ -44,6 +44,10 @@ gearbox_efficiency = true
 # formula) in place of screw.efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart.
 # Off in the shipped configs: their sizing was done with screw.efficiency.
 screw_lead_efficiency = false
+# The screw's axial stiffness follows its nut: the shaft between the fixed bearing and the nut, E A / a (held at both
+# ends a (L - a) / (E A L)), with the nut a from the bearing at its travel (screw.fixed_bearing_at_m), in place of the
+# far end's for the whole stroke.
+screw_stiffness_with_position = true
 # The efficiency's loss as a friction in the gearbox's mesh: in proportion to the torque it passes, against the
 # motion at any speed, and sticking at rest inside its band (a gear holding a load stands for anything between the
 # torque that lowers it and the one that lifts it). Off: the loss fades in below 0.5 W, a gear at rest has none.
@@ -134,6 +138,10 @@ link_bending = false
 # The links' bending acts back on the joints (with link_bending): joints, gearboxes and links one coupled system, the
 # bending's energy in the machine's. Off in the shipped configs.
 link_bending_reaction = false
+# A parallelogram rod's axial stiffness in series with the gearbox of the joint it carries. Off as shipped.
+bar_elasticity = false
+# The forearm a parallelogram's rod turns rocks on the rod's spring as a joint of its own. Off as shipped.
+bar_rocking = false
 # The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
 # the motor encoder, which stays for the speed loop.
 load_encoder = false
@@ -236,6 +244,37 @@ payload_inertia_kgm2 = [0.03125, 0.01625, 0.025, 0.0, 0.0, 0.0]
 # The URDF's joints as sums of the motors' joints, one row per URDF joint (a parallelogram: see config/palletiser.toml);
 # [] for one motor per joint.
 joint_coupling = []
+# The parallelogram's bars (or any rigid piece the URDF leaves out) as bodies of their own: bar i pinned on the link of
+# the URDF joint bars_on[i] (1-based) at bars_pin_m[3i..3i+3] of its frame (empty: its origin), staying parallel to the
+# link of bars_turns_with[i] and so turning with it (empty: with the link it is pinned on, a rigid piece of that link),
+# mass bars_mass_kg[i], its centre bars_com_m[3i..3i+3] from the pin and its inertia about its centre
+# bars_inertia_kgm2[6i..6i+6] (xx, yy, zz, xy, xz, yz; the array may stay empty: 0), both in the frame of the link it
+# turns with. Empty: no bars (the URDF's links as they are).
+bars_on = []
+bars_turns_with = []
+bars_pin_m = []
+bars_mass_kg = []
+bars_com_m = []
+bars_inertia_kgm2 = []
+# With effects.bar_elasticity: each bar's axial stiffness (0: rigid) and the motor joint (1-based, 0: none) whose turn
+# it carries on the lever of its pin's distance from its link's joint. Empty: none.
+bars_axial_stiffness_n_m = []
+bars_carries = []
+# With effects.bar_rocking: each bar's axial damper (N s/m), on the rocking with the lever's square. Empty: none.
+bars_axial_damping_n_s_m = []
+# A planar four-bar the URDF leaves out (`four_bar_*`): the follower's pivot on the link of URDF joint four_bar_ground_on
+# (1-based; 0: none) at four_bar_ground_pin_m of its frame, the crank point on the link of four_bar_crank_on at
+# four_bar_crank_pin_m, in the plane square to four_bar_normal (the ground's frame); the coupler (crank point to the
+# loop's point) and the follower (pivot to it) four_bar_lengths_m long, four_bar_masses_kg heavy (uniform rods), the
+# loop's point on the side four_bar_branch (+1: normal x (crank - pivot)) of the line from the pivot to the crank.
+four_bar_ground_on = 0
+four_bar_ground_pin_m = [0.0, 0.0, 0.0]
+four_bar_crank_on = 0
+four_bar_crank_pin_m = [0.0, 0.0, 0.0]
+four_bar_normal = [0.0, 0.0, 1.0]
+four_bar_lengths_m = [0.0, 0.0]
+four_bar_masses_kg = [0.0, 0.0]
+four_bar_branch = 1.0
 # With effects.payload_swing: the payload hangs on a pivot at the flange, its centre payload_offset_m from it, about two
 # axes across that line, with this spring and damper per axis. [estimate] a carton in a soft gripper.
 payload_swing_stiffness_nm_rad = 20.0
@@ -408,11 +447,11 @@ friction_stribeck_rad_s = 2.0
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# [catalogue] 1FK2105-4AF: static torque 5 N m at the stall current 4.65 A (motors_s210.csv), as a motor named in
+# [parts] brings it. With effects.iron_loss the copper loss at it brings the winding to its rated
 # rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
 # starts at kt times it.
-stall_current_a = 4.35
+stall_current_a = 4.65
 [drive]
 current_cycle_s = 62.5e-6
 velocity_cycle_s = 125.0e-6
@@ -429,6 +468,8 @@ current_kp_v_a = 40.0
 current_tn_s = 5.0e-3
 # [catalogue] a 400 V line: 540 V DC link
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
 peak_torque_nm = 15.0
 rated_torque_nm = 4.6
@@ -468,6 +509,9 @@ max_speed_rad_s = 615.07
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one
 # moment of inertia per motor (the rigid model's at the start pose) times its acceleration setpoint, as a drive's
 # speed/torque precontrol with the load inertia set (S120 p1498): no gravity, no coupling.
@@ -514,10 +558,12 @@ velocity_kp_nm_s_rad = 0.05
 velocity_kp_nm_s_rad = 0.05
 
 [gearbox.4]
+ratio = 80.0
 stiffness_nm_rad = 25000.0
 inertia_at_input_kgm2 = 4.1e-5
 
 [gearbox.5]
+ratio = 80.0
 stiffness_nm_rad = 25000.0
 inertia_at_input_kgm2 = 4.1e-5
 

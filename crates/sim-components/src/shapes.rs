@@ -43,6 +43,33 @@ pub fn linearised(machine: &dyn Machine, pose: &[f64]) -> (Vec<f64>, Vec<f64>) {
     (rest, a)
 }
 
+/// The machine at rest at `pose` with its rotors held, as `Machine::modes` has its modes (motors held by their loops):
+/// `linearised`'s matrix over the states that move neither a motor's angle nor its speed (`Machine::motor_state`), and
+/// those states' indices. A state that moves a motor's angle (a rotor's, or on a rigid drive the joint's own) is held
+/// with the state that moves its speed. The rest, the stand at `pose`.
+pub fn linearised_held(machine: &dyn Machine, pose: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<usize>) {
+    let (rest, a) = linearised(machine, pose);
+    let (n, k) = (rest.len(), machine.motors().len());
+    let motors = |s: &[f64]| {
+        let (mut p, mut v) = (vec![0.0; k], vec![0.0; k]);
+        machine.motor_state(s, &mut p, &mut v);
+        (p, v)
+    };
+    let (p0, v0) = motors(&rest);
+    let moved = |a: &[f64], b: &[f64]| a.iter().zip(b).any(|(a, b)| (a - b).abs() > 1e-9);
+    let keep: Vec<usize> = (0..n)
+        .filter(|&i| {
+            let mut s = rest.clone();
+            s[i] += 1e-3;
+            let (p, v) = motors(&s);
+            !moved(&p, &p0) && !moved(&v, &v0)
+        })
+        .collect();
+    let m = keep.len();
+    let held = (0..m * m).map(|rc| a[keep[rc / m] * n + keep[rc % m]]).collect();
+    (rest, held, keep)
+}
+
 /// The eigenvalue of the n x n matrix `a` nearest `shift` and its eigenvector, by inverse iteration: (A - shift I) is
 /// factorised (LU with partial pivoting) and solved fifty times, each solve multiplying the part of the nearest
 /// eigenvector by 1 / |lambda - shift| more than any other; then once more from the eigenvalue found, as Rayleigh's
@@ -163,8 +190,8 @@ pub struct ModeView {
     /// As the machine reports it (`Machine::modes`): Hz and damping ratio.
     pub hz: f64,
     pub damping: f64,
-    /// The mode of the linearised model nearest it, whose shape is shown where the machine gives none; `None` where
-    /// the linearisation found none.
+    /// The oscillation of the linearised model nearest it, with the motors free or the rotors held (`mode_views`),
+    /// whose shape is shown where the machine gives none; `None` where the linearisation found none.
     pub linear: Option<sim_core::Mode>,
     /// The shape is the machine's own (`Machine::mode_shape`), not the linearised model's.
     pub from_machine: bool,
@@ -182,7 +209,9 @@ pub fn build(entry: &MachineEntry, config: &Config) -> Result<Box<dyn Machine>, 
 }
 
 /// The modes the machine reports at `pose`, lowest first, each with a shape: the machine's own for the mode it gives one
-/// of, else that of the mode of its linearised model nearest the reported one (`linearised`, `eigen_near`), scaled so
+/// of, else that of the oscillation nearest the reported one of its linearised model with the motors free (`linearised`)
+/// or with the rotors held (`linearised_held`, as `Machine::modes` has them), a real eigenvalue never (`eigen_near`;
+/// a held 694.28 Hz mode was paired with a roller friction pole, 101.8 Hz, until 21 November), scaled so
 /// that the tool moves by at most 1 m per unit (or, where it does not move, the largest entry is 1).
 pub fn mode_views(entry: &MachineEntry, config: &Config, pose: &[f64]) -> Result<Vec<ModeView>, ConfigError> {
     let machine = build(entry, config)?;
@@ -192,10 +221,23 @@ pub fn mode_views(entry: &MachineEntry, config: &Config, pose: &[f64]) -> Result
     }
     let n = machine.state_len();
     let (rest, a) = linearised(machine.as_ref(), pose);
+    let (_, held, keep) = linearised_held(machine.as_ref(), pose);
     let own = machine.mode_shape(pose);
     let mut shares = shares(entry, config, pose, &stiffness_leaves(config), &modes).into_iter();
+    // An oscillation only: a real eigenvalue (a friction's slope at rest, a free axis's drift) is no mode's partner.
+    let oscillates = |(lambda, _): &(C, Vec<C>)| lambda[1].abs() > 1e-6 * abs(*lambda);
     let views = modes.iter().map(|mode| {
-        let found = eigen_near(&a, n, shift_of(mode.hz, mode.damping));
+        // The partner: the nearest oscillation of the model with the motors free (a single joint's two-mass mode) or
+        // held (the modes of `Machine::modes`' convention), its held states at rest in the shape.
+        let shift = shift_of(mode.hz, mode.damping);
+        let free = eigen_near(&a, n, shift).filter(oscillates);
+        let held = eigen_near(&held, keep.len(), shift).filter(oscillates).map(|(lambda, x)| {
+            let mut full = vec![[0.0; 2]; n];
+            keep.iter().zip(x).for_each(|(&i, v)| full[i] = v);
+            (lambda, full)
+        });
+        let off = |found: &Option<(C, Vec<C>)>| found.as_ref().map_or(f64::INFINITY, |(l, _)| abs(sub(*l, shift)));
+        let found = if off(&held) < off(&free) { held } else { free };
         let own = own.as_ref().filter(|(hz, _)| (hz - mode.hz).abs() <= 1e-9 * mode.hz);
         let shape = match (own, &found) {
             (Some((_, shape)), _) => {

@@ -190,39 +190,45 @@ sim-cli verdicts --machine-file machines/h-bot.toml
 
 ```
 check,motor,value,limit,result
-motor-peak,a,0.09917,1.000,ok
-motor-thermal,a,0.4428,100.0,ok
-drive-current,a,0.2212,3.000,ok
-drive-peak-current,a,0.8356,10.90,ok
-gearbox-continuous,a,0.3766,40.00,ok
+motor-peak,a,0.09924,1.000,ok
+motor-thermal,a,0.4460,100.0,ok
+motor-s1,a,0.09988,1.270,ok
+motor-speed,a,200.4,420.0,ok
+drive-current,a,0.2220,3.000,ok
+drive-peak-current,a,0.8388,10.90,ok
+gearbox-radial-load,a,632.2,1500,ok
+gearbox-continuous,a,0.3802,40.00,ok
 gearbox-input-speed,a,1914,13000,ok
-gearbox-peak,a,1.326,64.00,ok
-pulley-bearing-life,a,213589,20000,ok
-gearbox-life,a,74415368568,20000,ok
-belt-tooth-load,a,0.1164,1.000,ok
-dc-link-energy,a,1.106,6.205,ok
-dc-link-overvoltage,a,169.6,257.6,ok
-motor-peak,b,0.09105,1.000,ok
-motor-thermal,b,0.4562,100.0,ok
-drive-current,b,0.2245,3.000,ok
-drive-peak-current,b,0.7675,10.90,ok
-gearbox-continuous,b,0.3850,40.00,ok
+gearbox-peak,a,1.334,64.00,ok
+pulley-bearing-life,a,475735,20000,ok
+gearbox-life,a,71921110348,20000,ok
+belt-tooth-load,a,0.1171,1.000,ok
+dc-link-energy,a,1.147,6.205,ok
+dc-link-overvoltage,a,170.1,257.6,ok
+motor-peak,b,0.09276,1.000,ok
+motor-thermal,b,0.4597,100.0,ok
+motor-s1,b,0.1014,1.270,ok
+motor-speed,b,200.5,420.0,ok
+drive-current,b,0.2254,3.000,ok
+drive-peak-current,b,0.7839,10.90,ok
+gearbox-radial-load,b,637.6,1500,ok
+gearbox-continuous,b,0.3887,40.00,ok
 gearbox-input-speed,b,1914,13000,ok
-gearbox-peak,b,1.182,64.00,ok
-pulley-bearing-life,b,213351,20000,ok
-gearbox-life,b,70668656880,20000,ok
-belt-tooth-load,b,0.1038,1.000,ok
-dc-link-energy,b,1.128,6.205,ok
-dc-link-overvoltage,b,169.9,257.6,ok
-settling,,0.00001314,0.0001000,ok
-belt-tension,,345.7,1500,ok
-belt-slack,,229.2,0,ok
-gearbox-radial-load,,637.1,1500,ok
+gearbox-peak,b,1.213,64.00,ok
+pulley-bearing-life,b,474906,20000,ok
+gearbox-life,b,68166077481,20000,ok
+belt-tooth-load,b,0.1065,1.000,ok
+dc-link-energy,b,1.146,6.205,ok
+dc-link-overvoltage,b,170.1,257.6,ok
+settling,,0.00001324,0.0001000,ok
+belt-tension,,346.8,1500,ok
+belt-least-tension,,228.3,0,ok
 guide-load,,107.9,2000,ok
-guide-life,,6789511,20000,ok
+guide-life,,6789383,20000,ok
+thermal-warm-start,,0.000009028,0.1000,ok
 ```
 
-Every check passes. The motors run cooler than on the T-gantry (`motor-thermal` 0.44 against its 1.23): nothing has to
+Every check passes. The motors run cooler than on the T-gantry (`motor-thermal` 0.45 against its 1.28): nothing has to
 be held up against gravity. Signals follow the ids: `axis.y.position`, `motor.a.torque`, `belt.2.tension`, `power.guide_y`, ...
 
 ## The nodes
@@ -252,7 +258,7 @@ the file. The order of the motors in the file is the order of the motor signals 
 | `body` | `mass_kg` | required | mass, kg |
 | | `payload_kg` | | payload it carries while `effects.payload` is on and the gripper holds it, kg |
 | | `axes` | required | the axes it moves with; rotary axes among them carry it round, the first outermost |
-| | `offset_m` | | on rotary axes: its centre of mass from where their axes meet, `[x, y, z]` at angle 0, m ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)) |
+| | `offset_m` | | its centre of mass from where its axes put it, `[x, y, z]`, m: on rotary axes from where their axes meet at angle 0, turning with them ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)); on straight axes alone a constant offset that only its place in the frame momentum takes (the T-gantry's carriage `geometry.z_com_drop_m` above its Z axis: each entry of a point, here and in every `at_m`, `tool_m` and `table_pivot_m`, is a number or the path of one, as a number field) |
 | `guide` | `axis` | required | the axis it guides; one guide per axis at most; its loss is `power.<id>` |
 | | `friction` | required | the table of its friction values, laid out as `[friction_x]` |
 | | `carries` | | bodies whose weight across the axis it carries |
@@ -261,10 +267,12 @@ the file. The order of the motors in the file is the order of the motor signals 
 | | `lever_axis` | | an axis whose travel shortens the lever |
 | | `side_load` | | the guide also carries the overhang's inertia force m a; default false |
 | `axis` | `cable_chain` | | the axis drags a cable chain fixed at its 0 end (`effects.cable_chain`, values in `[cable_chain]`); default false |
-| `pulley` | `at_m` | | where the 3D view draws it, `[x, y, z]`, m; default at an end of the first axis; with `effects.belt_wrap` its place in the belt's plane (x, z) |
-| `pulley`, `idler` | `clockwise` | | with `effects.belt_wrap`: the belt runs round it clockwise, seen from the front (x right, z up) and followed along the routes in their order; default false |
+| `pulley` | `at_m` | | where the 3D view draws it, `[x, y, z]`, m (from its body where it has one); default at an end of the first axis; its place in its belt's plane (the section's `plane`), which the wrap (`effects.belt_wrap`) and the places of the belt's runs in the frame momentum are worked out from |
+| | `body` | | a body it rides on (a motor on a moving axis, as the portals' Y motor on the bridge): `at_m` is then from that body |
+| `pulley`, `idler` | `clockwise` | | the belt runs round it clockwise, followed along the routes in their order, seen in its belt's plane: from the front (x right, z up) in x-z, from above (x right, y away) in x-y, from +x (y right, z up) in y-z; its spin in the frame momentum and the wrap take this sense; default false |
 | `section` | `route` | | the pulleys, idlers and bodies (a clamp on it) the section runs past, in order, for the 3D view; default its pulleys and the body it is clamped to |
-| `idler` | `speed` | required | belt speed past it per speed of each axis, m/s per m/s (`effects.idlers`) |
+| | `plane` | | the plane its belt runs in, whose normal its wheels turn about: `"x-z"` standing along x (about y), `"x-y"` flat (about z), `"y-z"` standing along y (about x); the places of its route's wheels in it give the belt's runs their places in the frame momentum, the wrap and the wheels' check; sections that share a pulley or an idler lie in one plane (else refused); default `"x-z"`, or `"x-y"` for every section where one section's length changes with axes along x and along y and none along z (an H-bot's, a CoreXY's). The shipped portals' and gantries' Y belts lie flat (`"x-y"`, the pulley on the bridge); the 3D view draws a `"y-z"` belt's wheels facing the front |
+| `idler` | `speed` | required | belt speed past it per speed of each axis, m/s per m/s (`effects.idlers`), positive the way a positive turn of the first pulley feeding its section moves the belt (the sense of its spin in the frame momentum) |
 | | `radius_m`, `inertia_kgm2`, `friction_nm` | required | its radius, inertia and bearing friction torque |
 | | `body`, `at_m` | | a body it rides on and where the 3D view draws it (from that body) |
 | `frame` | `axis` | required | the horizontal axis the frame sways along (`effects.frame_compliance`, elastic model); at most one |
@@ -285,11 +293,12 @@ the file. The order of the motors in the file is the order of the motor signals 
 | | `strain_wave` | | the table of its strain wave gear's life values, laid out as `[strain_wave]` |
 | `worm` | `gearbox` | required | that gearbox is a worm stage ([below](#worm-gears)); one worm per gearbox |
 | | `ratio` | required | its ratio, in place of the gearbox's |
-| | `efficiency`, `back_efficiency` | required | driven by the worm (above 0, at most 1) and back by the wheel (at most 1; 0 or less locks itself) |
+| | `efficiency`, `back_efficiency` | required | driven by the worm (above 0, at most 1) and back by the wheel (at most 1; 0 or less locks itself, which needs a driven efficiency below 0.5) |
 | `lean` | `body`, `axis` | required | a body leaning on its carriage along a horizontal axis it moves with (`effects.tool_flex`, elastic model); at most one ([below](#the-belts-wrap-and-a-leaning-axis)) |
 | | `com_drop_m`, `tool_drop_m` | required | its centre of mass and the tool tip below the guide with `lever_axis` at 0, m |
 | | `lever_axis` | | an axis whose travel raises both towards the guide |
 | | `lateral_stiffness_n_m`, `tilt_stiffness_nm_rad`, `damping_n_s_m` | required | the guide's stiffness sideways and in tilt, the lean's damping |
+| | `belt_offset_m` | | with `effects.belt_run_offset`: how far the belt's runs that reach the body from above meet it to either side of its line (the side their other wheel is on), m; the guide's tilt lengthens one and shortens the other by it times the tilt; default 0 |
 | `gantry` | `axis` | required | a bridge travelling along this horizontal straight axis yaws (`effects.gantry_yaw`); at most one ([below](#a-gantry-that-yaws-and-tools-on-rotary-axes)) |
 | | `across` | | the straight axis along the bridge; its bodies' lever about the bridge's centre changes with it |
 | | `width_m`, `inertia_kgm2` | required | the distance between the bridge's two sides, m; its own inertia about a vertical axis through its centre, kg m² |
@@ -358,7 +367,8 @@ refused there. What stays shared: the drives' cycle times, the noise seed, a sha
 `sim-cli search --machine-file FILE --motor-id ID` searches one motor alone: each candidate (with its paired drive, and
 with `--gearboxes` the fitting gearboxes for that motor's own ratio) becomes `[parts.<ID>]`, the other motors stay as
 the file has them, that motor's velocity gain `drive.<ID>.velocity_kp_nm_s_rad` is retuned for it as the shared one is
-for a shared part (by the inertia that motor turns and its rotor's), and the cost is that one motor's weight. On the
+for a shared part (by the inertia that motor turns and its rotor's; its kv_1_s lowered with it where its position
+loop needs it), and the cost is that one motor's weight. On the
 XYZ portal, `--motor-id mz` sizes the Z motor behind its gearbox of ratio 10 while X and Y keep theirs.
 The time-optimal path planner takes the shared `[drive]`'s torque curve for every motor.
 
@@ -409,13 +419,16 @@ and shaft), and a rack's motor turns i x / r.
   pinion and rack apart, F tan(alpha_n) / cos(beta) (alpha_n = 20 degrees, beta the helix angle), at right angles to it,
   |F| sqrt(1 + (tan(alpha_n) / cos(beta))²) together: `rack.<motor>.radial_load`, judged as `gearbox-radial-load`
   against the motor's `ratings.shaft_max_radial_load_n` where that is set. The helical pinion's axial force and the
-  tilt it puts on the shaft are left out. The rack gantry's X: 192.9 N of 1500.
+  tilt it puts on the shaft are left out. The rack gantry's X: 208.0 N of 1500.
 - `effects.belt_stretch` switches the elastic model of the whole machine: with it the screws', racks' and rotaries'
   gearboxes twist too (the converter's stiffness in series), and the belt's mode at a pose includes them, with the
   rotors held.
 
 `machines/screw-portal.toml` is the XYZ portal with its Z belt replaced by a ball screw 16 x 10 behind a bellows coupling,
-the Z motor's brake holding the slide (0.055 N m of its 0.5); `machines/rack-gantry.toml` is a two-axis gantry with a
+the Z motor's brake holding the slide (0.055 N m of its 0.5); its X and Y belts (and those of the C portal and both
+five-axis files built on it) are loops round a far idler each, `far_x` on the frame and `far_y` on the bridge, 0.1 m +
+stroke + 0.1 m from the pulley (X's mode at its far end 39.69 Hz, 74.48 when they shared their lengths out;
+`the_screw_portals_belts_ring_on_their_loops_by_hand`); `machines/rack-gantry.toml` is a two-axis gantry with a
 3 m X on a rack and pinion (module 2, 200 mm per turn) behind a gearbox of ratio 10 and Y on a belt. Both pass every
 verdict on their cycles (`screw-speed` 2402 of 9833 r/min allowed, `rack-feed-force` 180 of 2400 N). The joint kit's
 screw, rack, linear motor and rotary table axes written as files give the kit's verdicts digit for digit.
@@ -552,7 +565,7 @@ id = "worm_c"
 gearbox = "gear_c"         # the gearbox in front of a rotary table, say
 ratio = 40.0
 efficiency = 0.76          # driven by the worm: tan(gamma) / tan(gamma + rho')
-back_efficiency = 0.5      # driven back by the wheel: tan(gamma - rho') / tan(gamma); 0 or less locks itself
+back_efficiency = 0.69     # driven back by the wheel: tan(gamma - rho') / tan(gamma); 0 or less locks itself (then eta < 0.5)
 ```
 
 While the motor drives it passes its spring's torque t on as t eta to the output and t / i to the rotor, as a gearbox
@@ -571,7 +584,7 @@ beyond, it breaks loose. With the same efficiency both ways it is the joint kit'
 
 **The belt's wrap** (`effects.belt_wrap`). With it the teeth in mesh at each driven pulley are wrap r / p (p the tooth
 pitch) in place of `ratings.belt_teeth_in_mesh`, in the tooth-jump law and the belt's tooth load. The wrap is worked out
-at the pose from the places of the wheels in the belt's plane (x and z of the 3D view): the pulley's `at_m`, and the
+at the pose from the places of the wheels in the belt's plane (the section's `plane`: x and z of the 3D view by default; x and y where the belt lies flat, as an H-bot's or a CoreXY's): the pulley's `at_m` (from its body where it rides on one), and the
 wheels before and after it along the belt, the last point but one of the route of the section that ends at the pulley
 and the second of the route of the section that starts there (an idler with its `at_m`, from its body where it rides on
 one; a body, a clamp on it, where the 3D view draws it; another pulley). Each wheel's `clockwise` says which way the
@@ -580,7 +593,8 @@ far the belt turns round the pulley between them. For the shipped crates' layout
 turn less the lean of both runs. A motor with a screw, rack, linear motor or rotary has no wrap (NaN in
 `Machine::belt_wraps`; the tooth load passes it over). A file is refused where a belt pulley does not end one route
 and start another, or it or a wheel next to it has no `at_m`. The screw portal with the wrap on: X's belt runs from the
-bridge's clamp round its pulley and back to the same clamp, pi + 2 asin(r / D) round it.
+bridge's clamp round its pulley to the far idler on the frame (a loop), pi + asin(r / D) + asin((r - r_f) / d) round
+it, D from the clamp and d from the far idler.
 
 The 3D view draws each belt section round its wheels, as the wrap sees them: from tangent to tangent between the wheels
 of its route and round each wheel inside the route in the wheel's sense, and round each motor pulley between the
@@ -606,11 +620,26 @@ lever_axis = "z"
 lateral_stiffness_n_m = "tool_flex.lateral_stiffness_n_m"
 tilt_stiffness_nm_rad = "tool_flex.tilt_stiffness_nm_rad"
 damping_n_s_m = "tool_flex.damping_n_s_m"
+belt_offset_m = "tool_flex.belt_offset_m"   # with effects.belt_run_offset
 ```
 
 The T-gantry's file has both, off as shipped (the crate has its tool flex on): its pulleys at the ends of X at the
 carriage's height and its carriage idlers r + r_idler above and below, so the belt leaves both pulleys level, half a
 turn at every pose, as in the crate; with either effect on it is its crate to 1e-9.
+
+With `effects.belt_run_offset` (off as shipped) the runs that reach the leaning body from above (the clamp's, whose
+length changes with the lever axis alone) meet it `belt_offset_m` to the side their other wheel is on: the guide's tilt
+theta = k w h / tilt lifts the end on the + side by e theta and lowers the other, so those sections are longer and
+shorter by e k h / tilt per metre of lean, first order. Their tension difference turns the lean, their stretch holds it,
+and damping, energy and modes follow from the lengths (the crate's `lean_offset`). With `effects.beam_vertical_mode`
+the belt's runs ride on the beam's mode w as in the crate (`belt_on_beam`): a run that moves along the vertical axis
+goes down with the carriage whole, one whose length changes with the beam's axis alone tilts from its post's pulley,
+a third of its mass in the kinetic energy and half in the weight, the first moment and the momentum; their weight sags
+the beam and their inertia is in its damping. The T-gantry file: its beam mode in the middle 58.776 Hz (59.32 Hz before
+21 November), its rest sag 60.33 um (58.78), the hand values of `machine_file_lean_beam.rs`; the riding runs must keep
+their length together (a file whose do not is refused). Both are their crate to 1e-9, alone and together
+(`the_effects_of_a_machine_file_are_its_crates`, `the_file_and_the_crate_agree_with_the_beam_mode_at_a_leaning_state`,
+with the offset on and off, and the modes, `the_t_gantry_file_tells_its_crates_modes`).
 
 ## A gantry that yaws, and tools on rotary axes
 
@@ -648,9 +677,13 @@ tolerance_m = "gantry.sync_tolerance_m"
   (setpoint coupling), so the two position loops keep the bridge square, and their torques share the load by the lever
   rule: F2 - F1 = 2 m e a / B for a carriage m at e accelerated at a. With the effect off the guides hold the bridge square and the two share equally.
   `machines/dual-gantry.toml` has a 3 m X on two racks with catalogue motors (1FK2103-4AH on S210) and a 0.8 m Y belt
-  on a 1.2 m bridge. It passes every verdict on its cycle: `gantry-sync` 16 um of 100, and the end the carriage starts
-  near carries more (`rack-feed-force` 109 against 95 N). Its yaw rings at sqrt((k + 2 k_end (B / 2)²) / J) / 2 pi,
-  155.0 Hz with J raised to 20 kg m² and the carriage in the middle, 149.5 Hz with it at an end (`sim-cli modes`).
+  on a 1.2 m bridge. It passes every verdict on its cycle: `gantry-sync` 14 um of 100, and the end the carriage starts
+  near carries more (`rack-feed-force` 111 against 96 N). Its yaw rings at sqrt((k + 2 k_end (B / 2)²) / J) / 2 pi with
+  the carriage in the middle: 425.4 Hz as shipped (J = 2.657 kg m²), above the Y belt (82.2 Hz) and X on its racks
+  (262.3 Hz); the carriage at an end couples X and the yaw (255.6 and 394.8 Hz). `sim-cli modes --machine-file
+  machines/dual-gantry.toml --axis-index 1` lists all three with their damping ratios (the yaw 0.144, X 0.088, the belt
+  0.039 in the middle); with J raised to 20 kg m² the yaw is 155.0 Hz in the middle, 151.7 Hz with the carriage at an end
+  (`the_dual_gantry_reports_its_yaw_among_its_modes_by_hand`).
 - **Synchronising the two drives** (`gantry.sync`, `gantry.sync_gain_1_s`, read where a gantry has two drives; the
   first is the master). `"master_slave"`: the slave's position loop follows the master's actual position, its
   setpoint less the master's following error, so the slave's lag comes on top of the master's: at a steady speed v with
@@ -664,15 +697,20 @@ tolerance_m = "gantry.sync_tolerance_m"
   `the_cross_coupled_gain_halves_the_yaw_of_unequal_loops` (sim-machines `machine_file_gantries.rs`).
 - **One drive.** The rack gantry's one rack drives its bridge at one end (`drives = { mx = -0.5 }`): the joints' spring
   alone holds the far end, which lags while the bridge accelerates; with the effect on the path error of its cycle
-  grows from 0.07 to 0.20 mm.
+  grows from 0.07 to 0.23 mm.
 - **H-bot and CoreXY.** Belts pull the bridge's ends. In the H-bot (`sections = { "1" = -0.3, "2" = 0.6, "3" = -0.3 }`)
   the belt's moment on the bridge is -0.3 m times its pull on the head along the bridge: it racks whenever the head is
   pushed along the bridge, wherever the head is (-4.2 N m for the 7 kg head at 2 m/s²), and a head off the centre racks
   it as the bridge accelerates (-m e a). A rigid belt lets the H-bot rack (the head can move along the bridge with the
-  motors held), so it racks in both models; with the effect on the path error of its cycle grows from 0.09 to 0.80 mm.
+  motors held), so it racks in both models; with the effect on the path error of its cycle grows from 0.06 to 1.12 mm.
   In the CoreXY each belt pulls both ends: its moment is the one belt's tension sum against the other's, -0.19 N m for
-  the 8 N pull that would rack an H-bot with -2.4, and its path error stays 0.06 mm. A rigid belt holds a CoreXY's yaw:
-  its rigid model has none.
+  the 8 N pull that would rack an H-bot with -2.4, and its path error stays 0.02 mm. A rigid belt holds a CoreXY's yaw:
+  its rigid model has none. (These figures were 0.80, 0.20 and 0.06 mm in the text of 14 November; its own build gives
+  1.07, 0.25 and 0.06 mm. The H-bot's 1.07 became 1.12 mm, the rack gantry's 0.224 became 0.225 mm, on 16 November
+  (024b876a): the files' belt runs carry their own mass, the H-bot's mu (L + 8 (0.65 - y)) on X where the lumps had
+  mu L (0.86 against 0.42 kg at y = 0.1 m) and 2 mu (2 x - 1) between X and Y; with effects.belt_mass off the figure is
+  1.07 mm before and after. Which of the two terms racks the bridge more was not separated. The CoreXY's 0.06 became 0.02 mm on 14 November, with the merge
+  d360b7ed.)
 
 **Bodies on rotary axes, and the tool centre point.** A body may move with rotary axes: `offset_m` is its centre of
 mass from where their axes meet at angle 0, and it rides round on them, the first in its `axes` outermost. A rotary
@@ -753,7 +791,7 @@ A machine file is checked in full when it is loaded, before anything runs:
 - the machine: masses, radii and lengths positive, one gearbox per motor (none for a linear motor) and one pulley,
   screw, rack or rotary per gearbox, at most one of these per axis (but two at a gantry's sides), a screw at least as
   long as its stroke, as many motors as axes and one more per gantry drive beyond the first, a gantry's drives on its
-  axis, a tool centre point's axes along x, y and z, a body's `offset_m` on rotary axes only, a routing that keeps the
+  axis, a tool centre point's axes along x, y and z, a routing that keeps the
   belt's length and sets every axis;
 - every other key against the keys the registered machines' configs have (so `pretensoin_n` is refused by name), plus
   `[axis.<id>]` for each axis, a friction table for each guide, the value tables of screws, racks, linear motors and
@@ -808,9 +846,31 @@ derivations):
   (`mech::ToothJump`); a pulley with a section on one side only (a drum) refuses the effect.
 - Span vibration (`machine.span`): each span's first sideways mode at its section's tension, against what the drives
   excite (`mech::span_frequency`).
+- The belt's mass run by run: where every span gives its belt's speed over ground per axis speed (`velocity_x`,
+  `velocity_y`, `velocity_z`, along the 3D view's axes) and the spans together are the whole belt (refused otherwise),
+  each run, L_s = L0_s + c_s . q long, moves at V_s v over ground, and with the frame's sway e du on top: the belt's
+  kinetic energy ½ mu Σ_s L_s |V_s v + e du|² replaces the half of it on each pulley in the axes' (and the frame's)
+  mass matrix, with Lagrange's speed terms, and its momentum and first moment are in the frame's momentum. Its weight
+  sits at that first moment: the potential has g mu Σ_s (L0_s + c_s . q / 2) V_s,z . q and gravity its gradient
+  (`runs_height`), so the T-gantry's vertical runs weigh 0.16 kg on Z as in its crate, and the XYZ portal's Z belt
+  nothing (a loop: the run from its motor to the far idler, 0.5 m, falls as the two with the slide rise; its X and Y
+  belts are loops the same way, 1.2 and 0.7 m from the motor to the far idler). The
+  T-gantry's file gives its spans so; its crate derives the same from its belt path (`belt_mass`). So do the other
+  files whose belt runs move over ground, each with its table of runs in its comment: the H-bot (the T-gantry's path
+  with Y for Z: its belt weighs mu (L + 8 (0.65 - y)) on X, 0.86 kg at y = 0.1 m where the lumps had 0.42, and
+  2 mu (2x - 1) between X and Y), the CoreXY (each belt moves as a whole along X and along Y, as the lumps had it, and
+  adds mu (1.2 - 1.3) m = -0.01 kg between them), and the portals and gantries whose Y (and Z) belt rides on the axes
+  that carry it (on X 0.32 kg more on the XYZ portal, 0.19 kg on the C portal, 0.2 and 0.14 kg on the dual and rack
+  gantries). Checked by hand and for energy and feedforward
+  (`the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand`).
 - The belt's mode (elastic model): the axes, and the frame where it sways, on the belt's stiffness with the pulleys
-  held, K = Σ_s EA / L_s c_s c_s^T, against their mass matrix; the lowest is `resonance_hz` at a pose, so
+  held, K = Σ_s EA / l_s c_s c_s^T (l_s the section's unstretched belt at rest, as the crates take it), against their mass matrix; the lowest is `resonance_hz` at a pose, so
   `effects.shaper_follows_pose` sets the shaper to it, and the app shows its shape (scaled to 1 m of tool travel).
+  `Machine::modes` (`sim-cli modes`, the app's plot) gives every mode of K and M, the yaw's, the screws', racks' and
+  rotaries' gearboxes with them, lowest first, each with its damping ratio x^T C x / (2 w) (x its shape, x^T M x = 1):
+  C the belt sections' c + c_t EA / l, the gearboxes' dampers at the mode's frequency, the yaw's, the frame's, the
+  lean's and the beam's. The T-gantry's file gives its crate's two modes and their damping to 1e-9
+  (`the_t_gantry_file_tells_its_crates_modes`). Until 21 November 2026 a file told its lowest mode alone, damping 0.
 - A screw, rack, linear motor or rotary (`machine.screw`, ...): its motor's gearbox becomes one in the axis's unit, of
   ratio i / lever (the joint kit's `RotaryJoint` with the `transmission::Converter` behind it), and its "pulley" is the
   axis itself: K has the row e_i for it, the axis takes the gearbox's output as its force, the belt's equations leave
@@ -824,12 +884,19 @@ derivations):
 - A tool centre point (`machine.tcp`): the tool's pose maps to the axes and back through the rotaries' turn of
   `tool_m`; speeds and accelerations by differentiating that map.
 - A worm stage (`machine.worm`): its gearbox's output gets t eta^x and its rotor t / i, x = tanh(t w / 0.5 W), with the
-  back efficiency where the load drives (x below 0); a self-locking one gives the rotor x t / i driving and
-  -x eta_back t / i driven back, against the motion. In the rigid model, with a self-locking worm, the gearboxes'
-  outputs are solved for beside the accelerations; driven back its drag at the wheel is (1 - rotor factor) times the
-  torque the output holds at rest against the axes' forces (a drag in proportion to the dynamic torque has no
-  consistent rigid solution there), and at rest the output sticks within the worm's bounds
-  (`ConfigMachine::rigid_locking`).
+  back efficiency where the load drives (x below 0). A self-locking one follows Coulomb's law at its mesh without the
+  fade, its friction (1 / eta - 1) times the torque on the driving flank and (1 - eta_back) times it on the overhauling
+  one, so the mesh only ever takes power. In the elastic model the torque is the gear spring's: the output gets it as
+  it is and the rotor the flank's friction besides; the friction never exceeds what stops the rotor within 1 ms
+  (`worm::STICK_TIME_S`), so it sticks at rest within the two flanks' levels and holds its load with no motor torque
+  (`ConfigMachine::worm_drag`). Lowering a heavy wheel with too little push it jams: the overhauling flank's friction
+  rises with the spring's torque as the rotor slows, the rotor stops within milliseconds and the wheel rings on the
+  spring. In the rigid model, with a self-locking worm, the gearboxes'
+  outputs are solved for beside the accelerations, and a moving self-locking worm's drag at the wheel is the larger of the driving flank's, (1 / eta - 1) times the torque the
+  wheel takes, and the overhauling flank's, (1 - eta_back) times the torque the output holds at rest against the axes'
+  forces (a drag in proportion to the dynamic torque there has no rigid solution with a heavy wheel, Painleve's
+  paradox). That drag rises with the wheel's torque, so the solve has one answer. At rest, and below 1e-3 rad/s
+  (`worm::STICK_SPEED`), the output sticks within the worm's bounds (`ConfigMachine::rigid_locking`).
 - A leaning body (`machine.lean`, elastic model): one more coordinate w beside the axes, the body's mass coupling it to
   its axis, [[M, m e_a], [m e_a^T, m]] [a; w''] = [F; tip p_a - k w - c w'], k and tip from `geometry::flex_at`.
 - The belt's wrap (`effects.belt_wrap`): `geometry::wrap` at each pulley from its neighbours' tangents, at the pose.
@@ -841,18 +908,18 @@ machine; nothing about them is particular to machine files.
 
 ## What machine files cannot do yet
 
-- A pulley stands where its `at_m` puts it (it rides on no body), and the wrap's places are the 3D view's: the section
-  lengths are not checked against them.
+- The wrap's places are the 3D view's: the section lengths are not checked against them by a file's reading (the
+  wheels' check of the shipped files in `sim-netlist` compares them).
 - `tool_flex`: one leaning body, along a horizontal axis; it leans in the elastic model only (as in the crate).
-- A self-locking worm's lock fades in over the gearbox's 0.5 W once it moves: from rest it sticks (rigid model), but a
-  motor torque short of lifting the load, or a push short of lowering it, creeps it at the speed whose power is about
-  0.5 W atanh(the share of the torque it would take). In the elastic model the stick is the fade alone.
-- A rotary's bearing friction acts at the rotor, before the gearbox's spring and efficiency, as a screw's preload does.
+- A self-locking worm's rigid model takes the overhauling flank's friction from the torque the wheel holds at rest, so
+  it brakes a heavy wheel smoothly where the elastic model jams; both agree at a steady speed.
+- A rotary's bearing friction acts at the axis behind the gearbox's spring and efficiency in the elastic model, at the rotor
+  (c / i + v w / i^2) in the rigid one; a screw's preload acts at the rotor in both.
 - A rack's pressure angle is 20 degrees for every rack, and its pinion's axial force is left out of the shaft's load.
-- The scissor lift's arms count with their vertical motion only (their turning and the feet's sideways motion are left
-  out of its mass), it has one screw on the lowest stage's foot (no cylinder between the arms), and it does not mix with
+- The scissor lift's arms count as uniform rods (their vertical and sideways motion and their turning are in its mass; the
+  sliding feet's rollers have none of their own), it has one screw on the lowest stage's foot (no cylinder between the arms), and it does not mix with
   belts, screws or bodies. A linkage's or scissor lift's file cannot carry other mechanisms beside it. The spatial
-  delta's modes take its first arm's gearbox for all three.
+  delta's modes take each arm's own gearbox.
 - A gantry's yaw: one per file, small angles (the sides move by the width times the angle); the drives each follow the
   common setpoint, so there is no master/slave or cross-coupled synchronisation in the drives (the controller's to add)
   and the sync error is what two equal position loops leave. A section's yaw coefficients are numbers from its routing,
@@ -860,11 +927,10 @@ machine; nothing about them is particular to machine files.
   do not follow the yaw.
 - A body on rotary axes is a point mass at its centre of mass: its own inertia about that is in the rotary's
   `inertia_kgm2`. A tool centre point needs three straight axes square to each other (the 3D view's x, y, z) and the
-  rotaries on the tool's side (a head): a rotary table carrying the workpiece is not one yet. The analysis's settling
+  rotaries on the tool's side (a head), or a rotary table carrying the workpiece (`tcp.table`). The analysis's settling
   and path errors add a rotary axis's error in rad to the straight axes' in m.
-- `effects.belt_tooth_jump` together with a screw, rack, linear motor or rotary: its states are laid out per motor, and
-  a motor without a pulley has none; the file is refused.
-- A screw's stiffness is the one at its softest nut position for the whole stroke, as in the joint kit; its preload's
+- A screw's stiffness follows the nut with `effects.screw_stiffness_with_position` (on in the shipped screw files), as in
+  the joint kit; off, the one at its softest nut position for the whole stroke. Its preload's
   drag sits at the motor with a smoothing in rad/s.
 - Modes other than the belt's: the frame enters the belt's mode where it sways, but the guides' and the motors' own
   stiffness do not, and a body's bending is not modelled.
@@ -923,7 +989,7 @@ feedforwards, every signal, the parts' warmth, what the working range refuses); 
 every effect that is off by default switched on, gives the crate's signals at every 16th step of the first half second
 and the crate's motor loads and verdicts, to 1e-9 (the two sum in the same order, so they agree to the bit, encoder
 counts and all); the file passes the standard suite with the crate's loss-free configs; by hand, the arm angles at
-(0.1, -0.5) m (-asin 0.2 = -11.537 degrees and 16.474 degrees) and the holding torque at the centre (-18.358 N m at
+(0.1, -0.5) m (-asin 0.2 = -11.537 degrees and 16.474 degrees) and the holding torque at the centre (-18.368 N m at
 each gearbox); and a broken linkage is refused by key and line (a belt effect switched on and a spatial value on the
 planar linkage among them). `machines/delta-d3.toml` is the spatial delta's crate the same way, with each of its
 effects switched from its default, and its cycle gives the crate's signals and verdicts to 1e-9. The scissor lift's
@@ -934,7 +1000,11 @@ its force ratio n cot(alpha) at two heights is (`scissor.rs`), and its file pass
 hand at two poses (an offset idler and a clamp that is not level), the worm gear against the joint kit's table with its
 worm (rigid and elastic, driving and driven back), a self-locking worm's hold and a turning worm's back-driven
 acceleration by hand, the self-locking worm braking a lowering load with no torque, needing 0.05 N m of push to lower it
-and sticking from rest short of what moves it, the belts' wraps of the screw portal beside its Z screw, and the
+and sticking from rest short of what moves it, the moving self-locking worm's one answer over a sweep of speeds and
+torques against both flanks by hand and its lowering at speed (the motor's 5 W and the load's 10 W lost in the worm;
+with no torque it brakes to rest and holds), the elastic self-locking worm standing at rest under load, costing the
+rigid model's torques and losses at a steady speed both ways, and never giving power through breaking loose, a reversal
+and its jam with the loss budget closed, the belts' wraps of the screw portal beside its Z screw, and the
 catalogue search for the XYZ portal's Z motor alone.
 
 `crates/sim-machines/tests/machine_file_review.rs` holds what an independent review found by experiment and what was

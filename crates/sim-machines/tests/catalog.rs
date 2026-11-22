@@ -71,6 +71,7 @@ fn a_motor_by_name_gives_the_values_of_the_hand_written_config() {
         "motor.rated_current_a",
         "motor.torque_constant_at_max_current_nm_a",
         "motor.thermal_time_constant_s",
+        "motor.stall_current_a",
         "drive.peak_torque_nm",
         "drive.rated_torque_nm",
         "drive.rated_speed_rad_s",
@@ -102,6 +103,138 @@ fn a_motor_by_name_gives_the_values_of_the_hand_written_config() {
     // Not offered at 230 V single-phase data, and an unknown article, are refused.
     assert!(sim_components::catalog::apply_motor(&mut cfg, "1FK2205-4AF", "110v").is_err());
     assert!(sim_components::catalog::apply_motor(&mut cfg, "1FK9999-0AA", "400v").is_err());
+}
+
+/// Every shipped config whose motor is written out by hand for a catalogue motor (the one its comment names) has that
+/// motor's printed values: naming it at 400 V puts back the same stall current, torque constant, currents, thermal time
+/// constant, rotor (with the holding brake where the config says so) and the drive's torques and speeds. Winding
+/// resistance and inductance are estimates (Siemens prints neither for the 1FK2 and 1FT2) and are not compared; the
+/// peak torque is the motor's, not capped at a pulley's rating (`pulley-torque` judges that). The EXCT-30, which names
+/// its motor, is `a_motor_by_name_gives_the_values_of_the_hand_written_config`'s.
+#[test]
+fn shipped_motor_blocks_have_their_catalogue_motors_values() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let k = "1FK2105-4AF";
+    let mut blocks: Vec<(String, &str, &str, bool)> = Vec::new();
+    for name in [
+        "cam-indexer",
+        "cam-indexer-cam",
+        "disc-cam",
+        "disc-cam-cam",
+        "flying-saw",
+        "flying-saw-cam",
+        "geneva-drive",
+        "geneva-drive-cam",
+        "rotary-knife",
+        "rotary-knife-cam",
+        "slider-crank",
+        "slider-crank-cam",
+        "toggle-press",
+        "toggle-press-cam",
+    ] {
+        blocks.push((format!("crates/machine-crank-cam/config/{name}.toml"), "", k, false));
+    }
+    for name in [
+        "arm",
+        "arm-tool",
+        "arm-on-track",
+        "arm-on-track-tool",
+        "arm5-tool",
+        "arm7-tool",
+        "palletiser",
+        "rack",
+        "scara",
+        "scara-tool",
+        "screw",
+        "table",
+    ] {
+        blocks.push((format!("crates/machine-joint-kit/config/{name}.toml"), "", k, false));
+    }
+    for file in [
+        "crates/machine-cable-robot/config/planar.toml",
+        "crates/machine-cable-robot/config/spatial.toml",
+        "crates/machine-delta-d2/default.toml",
+        "crates/machine-delta-d2/conveyor.toml",
+        "crates/machine-delta-d3/default.toml",
+        "crates/machine-delta-d3/conveyor.toml",
+        "crates/machine-delta-d4/default.toml",
+        "crates/machine-delta-d4/conveyor.toml",
+        "crates/machine-hexapod/default.toml",
+        "crates/machine-parallel-scara/default.toml",
+        "machines/delta-d3.toml",
+        "machines/planar-delta.toml",
+        "machines/scissor-lift.toml",
+    ] {
+        blocks.push((file.to_string(), "", k, false));
+    }
+    for (file, own, article, brake) in [
+        ("crates/machine-delta-d4/default.toml", "4", "1FK2104-4AF", false),
+        ("crates/machine-delta-d4/conveyor.toml", "4", "1FK2104-4AF", false),
+        ("crates/machine-parallel-scara/default.toml", "3", "1FK2103-2AH", false),
+        ("crates/machine-parallel-scara/default.toml", "4", "1FK2103-2AH", false),
+        ("crates/machine-delta-h4/default.toml", "", "1FK2105-6AF", false),
+        ("crates/machine-delta-linear/default.toml", "", "1FK2205-2AF", true),
+        ("crates/machine-delta-linear/conveyor.toml", "", "1FK2205-2AF", true),
+        ("crates/machine-hexapod-rotary/default.toml", "", "1FT2104-5AF", false),
+        ("crates/machine-overhead-crane/config/crane.toml", "", "1FK2104-6AF", true),
+        ("crates/machine-overhead-crane/config/crane.toml", "hoist", "1FK2105-6AF", true),
+        ("crates/machine-tripod/default.toml", "", "1FK2104-4AF", false),
+        ("crates/machine-wafer-handler/default.toml", "", "1FK2103-2AH", false),
+        ("crates/machine-winder/default.toml", "", "1FK2206-2AF", false),
+    ] {
+        blocks.push((file.to_string(), own, article, brake));
+    }
+    let mut wrong = Vec::new();
+    for (file, own, article, brake) in &blocks {
+        let text = fs::read_to_string(root.join(file)).unwrap();
+        let table: toml::Table = text.parse().unwrap();
+        // The shared table's numbers with the motor's own table over them, for the motor and its drive.
+        let merged = |name: &str| {
+            let shared = table[name].as_table().unwrap();
+            let mut out: toml::Table =
+                shared.iter().filter(|(_, v)| !v.is_table()).map(|(k, v)| (k.clone(), v.clone())).collect();
+            if let Some(mine) = shared.get(*own).and_then(|v| v.as_table()) {
+                out.extend(mine.clone());
+            }
+            toml::Value::Table(out)
+        };
+        let mut cfg = toml::Table::new();
+        cfg.insert("format_version".into(), toml::Value::Integer(1));
+        cfg.insert("motor".into(), merged("motor"));
+        cfg.insert("drive".into(), merged("drive"));
+        let parts = toml::Table::from_iter([("motor_brake".to_string(), toml::Value::Boolean(*brake))]);
+        cfg.insert("parts".into(), toml::Value::Table(parts));
+        let by_hand = sim_core::Config::parse(&toml::to_string(&cfg).unwrap()).unwrap();
+        let mut named = by_hand.clone();
+        sim_components::catalog::apply_motor(&mut named, article, "400v").unwrap();
+        for path in [
+            "motor.stall_current_a",
+            "motor.torque_constant_nm_a",
+            "motor.rated_current_a",
+            "motor.max_current_a",
+            "motor.torque_constant_at_max_current_nm_a",
+            "motor.thermal_time_constant_s",
+            "motor.rotor_inertia_kgm2",
+            "drive.peak_torque_nm",
+            "drive.rated_torque_nm",
+            "drive.rated_speed_rad_s",
+            "drive.no_load_speed_rad_s",
+        ] {
+            let (hand, catalogue) = (by_hand.f64(path).unwrap(), named.f64(path).unwrap());
+            if !close(hand, catalogue, 1e-3) {
+                wrong.push(format!("{file} [{own}] {article}: {path} {hand} against {catalogue}"));
+            }
+        }
+        // The highest speed: the catalogue's, or the no-load speed where that is lower (the curve ends there).
+        let top = named.f64("drive.max_speed_rad_s").unwrap().min(named.f64("drive.no_load_speed_rad_s").unwrap());
+        if !close(by_hand.f64("drive.max_speed_rad_s").unwrap(), top, 1e-3) {
+            wrong.push(format!(
+                "{file} [{own}] {article}: max speed {} against {top}",
+                by_hand.f64("drive.max_speed_rad_s").unwrap()
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// A gearbox named by size, motor frame and ratio sets the gearbox of the config from the catalogue row.
@@ -166,22 +299,29 @@ fn parts_named_in_a_config_behave_like_their_numbers() {
         named.set_text("parts.gearbox = \"NRK070-04-5\"").unwrap();
         let mut numbers = entry.config();
         apply_gearbox(&mut numbers, "NRK070-04-5").unwrap();
-        apply_motor(&mut numbers, "1FK2104-4AK", "400v").unwrap();
+        // At the supply the config names (the winder's S120: no S210 S1 curve), 400 V where it names none.
+        let supply = sim_components::catalog::Parts::of(&named).unwrap().supply;
+        apply_motor(&mut numbers, "1FK2104-4AK", supply).unwrap();
         let resolved = resolve(entry, &named).unwrap();
         let (gain, own) =
             (resolved.f64("drive.velocity_kp_nm_s_rad").unwrap(), numbers.f64("drive.velocity_kp_nm_s_rad").unwrap());
         // Where the named gearbox has the config's ratio (5); another ratio changes the load the motor sees, and the
         // gain with it (a screw on a coupling: far less). The gain follows the rotor and gearbox inertia: a little
         // heavier than the gantry's and the single axis's own, more gain; far lighter than the 1.7e-4 kg m2 rotor of
-        // the flying saw and the cable robots, less.
+        // the flying saw and the cable robots, less. Where the machine reports a resonance at most in proportion to
+        // the rotor's and gearbox's inertia (`retuned`).
         if entry.config().f64("gearbox.ratio").unwrap() == 5.0 {
             let turned = |c: &sim_core::Config| {
                 c.f64("motor.rotor_inertia_kgm2").unwrap() + c.f64("gearbox.inertia_at_input_kgm2").unwrap()
             };
             let heavier = turned(&numbers) > turned(&entry.config());
-            assert!(if heavier { gain > own && gain < 2.0 * own } else { gain < own }, "{}: gain {gain}", entry.id);
+            assert!(if heavier { gain >= own && gain < 2.0 * own } else { gain < own }, "{}: gain {gain}", entry.id);
         }
         numbers.set_text(&format!("drive.velocity_kp_nm_s_rad = {gain:?}")).unwrap();
+        // The position gain where the retune lowered it for the cascade's margin (`catalog::CASCADE_MARGIN`).
+        let kv = resolved.f64("drive.kv_1_s").unwrap();
+        assert!(kv <= numbers.f64("drive.kv_1_s").unwrap(), "{}: kv {kv}", entry.id);
+        numbers.set_text(&format!("drive.kv_1_s = {kv:?}")).unwrap();
         assert_eq!(resolved, numbers, "{}", entry.id);
         // Resolved once, a config names no part any more: doing it again changes nothing.
         assert_eq!(resolve(entry, &resolved).unwrap(), resolved, "{}", entry.id);
@@ -226,10 +366,13 @@ fn the_bounds_of_every_config_bracket_their_values() {
 }
 
 /// Retuning: the 1FK2204-6AF has a third of the rotor inertia of the EXCT-30 config's motor. With the gain scaled
-/// by the geometric mean of the ratio of the inertia the motors turn and the ratio of the rotor inertias it runs
+/// by the geometric mean of the ratio of the inertia the motors turn and the ratio of the rotor inertias, held to the
+/// config's crossover over the rotor's inertia (`retuned`: here the rotor's ratio, which is the smaller), it runs
 /// the cycle with about the torque of the config's own motor. The 1FK2104-5AF has a ninth of the rotor inertia:
 /// with the config's own gain (0.45 N m s/rad) its loop oscillates and the winding overheats, scaled with the
-/// inertia the motors turn alone (the rule before) it still oscillates, with the mean it runs calmly. (The config
+/// inertia the motors turn alone (the rule before) it still oscillates, with the mean (0.049) and the position gain
+/// lowered from 50 to 24.1 1/s for the cascade (`catalog::CASCADE_MARGIN`; at 50 it oscillated, 5.1 N m RMS) it runs
+/// calmly, 1.21 N m. (The config
 /// had 0.6 until its velocity loop was tuned for margin; with that the 1FK2204-6AF oscillated as well, with 0.45 it
 /// runs as calmly as retuned.)
 #[test]
@@ -260,7 +403,7 @@ fn the_search_retunes_the_velocity_loop_for_a_lighter_rotor() {
     let own_gain = cfg.f64("drive.velocity_kp_nm_s_rad").unwrap();
     let (gain, by_hand) = (
         retuned.f64("drive.velocity_kp_nm_s_rad").unwrap(),
-        own_gain * (seen(1.6e-4) / seen(5.1e-4) * 1.6 / 5.1).sqrt(),
+        own_gain * (seen(1.6e-4) / seen(5.1e-4) * 1.6 / 5.1).sqrt().min(1.6 / 5.1),
     );
     assert!(close(gain, by_hand, 0.02), "gain {gain}, by hand {by_hand}");
     let (oscillating, calm) = (cycle(&same_gain), cycle(&retuned));
@@ -301,6 +444,33 @@ fn the_search_retunes_the_velocity_loop_for_a_lighter_rotor() {
     let found = search_motors(entry, &cfg, "400v", &|article| article == "1FK2204-6AF", Some("NRK"));
     let direct = found.iter().find(|c| c.gearbox.is_empty()).unwrap();
     assert!(direct.passes() && found.len() > 1, "{:?}", direct.tightest());
+}
+
+/// The retune's position gain. A P position loop (Kv) on a PI velocity loop (Kp, Tn) on an inertia J is stable while
+/// (Kp / J) (Tn + 1/Kv) > 1 (Routh on s³ + ω s² + ω (1/Tn + Kv) s + ω Kv / Tn, ω = Kp / J). The EXCT-30 naming its own
+/// motor keeps every gain of the file. With the 1FK2104-5AF the gain held to the rotor's crossover leaves that figure
+/// at 0.73 with the file's Kv 50 (J the X axis's at the motor, the larger): Kv goes to 1 / (1.25 / ω - Tn), Tn stays.
+#[test]
+fn the_retune_keeps_the_position_cascade_off_its_edge_and_leaves_the_own_motor_alone() {
+    use sim_components::catalog::{CASCADE_MARGIN, inertia_ratios, resolve, with_parts};
+    let entry = &machine_t_gantry::ENTRY;
+    let cfg = sim_core::Config::parse(machine_t_gantry::EXCT_30_CONFIG).unwrap();
+    let keys = ["drive.velocity_kp_nm_s_rad", "drive.velocity_tn_s", "drive.kv_1_s"];
+    let own = resolve(entry, &cfg).unwrap();
+    for key in keys {
+        assert_eq!(own.f64(key).unwrap(), cfg.f64(key).unwrap(), "{key}");
+    }
+    let light = with_parts(entry, &cfg, "1FK2104-5AF", "400v", "").unwrap();
+    let omega = |c: &sim_core::Config| {
+        let ratio = inertia_ratios(entry, c).unwrap().into_iter().fold(0.0, f64::max);
+        c.f64(keys[0]).unwrap() / (c.f64("motor.rotor_inertia_kgm2").unwrap() * (1.0 + ratio))
+    };
+    let (w, tn) = (omega(&light), cfg.f64(keys[1]).unwrap());
+    let before = w * (tn + 1.0 / cfg.f64(keys[2]).unwrap());
+    assert!(close(before, 0.73, 0.02), "{before}");
+    assert_eq!(light.f64(keys[1]).unwrap(), tn);
+    let kv = light.f64(keys[2]).unwrap();
+    assert!(close(kv, 1.0 / (CASCADE_MARGIN / w - tn), 1e-9) && close(kv, 24.1, 0.01), "{kv}");
 }
 
 /// The gearbox search on the single axis (ratio 5, 1 m/s over a 20 mm pulley radius: 50 rad/s at the pulley).
@@ -433,7 +603,7 @@ fn the_search_on_a_default_config_fails_motors_for_physical_reasons() {
 #[test]
 fn every_catalogue_motor_reaches_its_rated_point_inside_the_voltage_limit() {
     use sim_components::drive::DriveParams;
-    let (mut rows, mut beyond_the_dc_link) = (0, 0);
+    let (mut rows, mut beyond_the_dc_link, mut dragged, mut short) = (0, 0, 0, 0.0f64);
     for m in csv("siemens/motors_s210.csv") {
         for (supply, bus) in [("230v", 325.0), ("400v", 540.0)] {
             if m[&format!("rated_speed_{supply}_rad_s")].is_empty() {
@@ -450,20 +620,56 @@ fn every_catalogue_motor_reaches_its_rated_point_inside_the_voltage_limit() {
                 m["part_number"],
                 p.max_voltage
             );
+            // Without field weakening (i_d = 0) the rated current, or the current for the rated torque plus the iron's
+            // drag and the friction where that is more, meets the back-EMF, R i and the winding's reactance p w L i (L from
+            // Siemens' short-circuit braking table, `apply_motor`; the config's 10 mH where it has no row) and R i (the
+            // config's estimate of 4 Ohm) inside the circle. The 1FK2106-6AF at 230 V: 12.504 A for 13.8 + 0.0357 N m with
+            // saturation, |(4 * 12.504 + 1.11888 * 157.08, 4 * 157.08 * 9.4841 mH * 12.504)| = 237.7 V of the 398.0 V; the
+            // tightest row, the 1FK2210-4AC at 400 V, 629.7 V of 661.4 V (0.952).
+            let plain = DriveParams { field_weakening: None, ..p.clone() };
+            // effects.iron_loss: at the rated current and speed the shaft gives the printed rated torque once the iron's
+            // drag and the motor's own friction are off the air-gap torque (`DriveParams::iron_drag_rated`); where the
+            // printed point leaves no drag (k_t I_N with saturation at or below M_N plus friction) it gives less, by the
+            // friction and the saturation curve's misfit at I_N (`short`, the air gap's alone: 2.91 % at most, the
+            // 1FT2108-5SB at 230 V; 97 rows have a drag; the friction is the single axis's estimate, not the catalogue
+            // motor's: 0.051 N m, a third of the 1FK2102-0AG's 0.16 N m).
+            let friction = cfg.f64("motor.friction_coulomb_nm").unwrap()
+                * (p.rated_speed / cfg.f64("motor.friction_smoothing_rad_s").unwrap()).tanh()
+                + cfg.f64("motor.friction_viscous_nm_s_rad").unwrap() * p.rated_speed;
+            let shaft = p.torque_of(p.rated_current) - p.iron_drag(p.rated_speed) - friction;
+            if p.iron_drag_rated > 0.0 {
+                assert!((shaft - p.rated_torque).abs() < 1e-9 * p.rated_torque, "{} at {supply}", m["part_number"]);
+                dragged += 1;
+            } else {
+                short = short.max(1.0 - p.torque_of(p.rated_current) / p.rated_torque);
+            }
+            let current = p.current_for(p.rated_torque + p.iron_drag(p.rated_speed) + friction).max(p.rated_current);
+            assert!(
+                plain.voltage_limited_current(p.rated_speed, p.max_voltage, true) >= current,
+                "{} at {supply}: {current} A beyond the voltage circle at the rated speed",
+                m["part_number"]
+            );
             // The torque-speed curve agrees: at least the rated torque at the rated speed, and none where the voltage is
             // used up. (With the config's field weakening the d-q curve falls below the peak torque before the rated
-            // speed for most rows, the linear fade does not.)
+            // speed for most rows, the linear fade does not.) The motor's own curve: the single axis's 10.9 A drive
+            // (`ratings.drive_max_current_a`, effects.drive_current_limit) is not the motor's, and holds the 1FK2106-6AF
+            // to k_t 10.9 A (1 - s (10.9 / 49)^2) = 1.1189 * 10.9 * 0.99159 = 12.09 N m of its 13.8.
+            let own = DriveParams { drive_max_current: f64::INFINITY, ..p.clone() };
             assert!(
-                p.torque_curve(p.rated_speed).1 >= p.rated_torque && p.no_load_speed >= 1.1 * p.rated_speed,
+                own.torque_curve(p.rated_speed).1 >= p.rated_torque && p.no_load_speed >= 1.1 * p.rated_speed,
                 "{} at {supply}: {} N m at the rated speed",
                 m["part_number"],
-                p.torque_curve(p.rated_speed).1
+                own.torque_curve(p.rated_speed).1
             );
             rows += 1;
             beyond_the_dc_link += (back_emf > bus) as usize;
         }
     }
     assert!(rows > 120 && beyond_the_dc_link == 5, "{rows} rows, {beyond_the_dc_link} beyond the DC link voltage");
+    assert!(
+        dragged == 97 && short < 0.0292,
+        "{dragged} rows with an iron drag, the others' air gap {short} short of M_N"
+    );
 }
 
 /// A gearbox named for the whole search and the same gearbox found by the search give the same candidate.
@@ -528,6 +734,7 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
         condition_peak: None,
         guide_load: None,
         guide_speed: None,
+        guides: Vec::new(),
         path_error_peak: 0.0,
         path_error_rms: 0.0,
         tracking_error_peak: 0.0,
@@ -620,12 +827,12 @@ fn the_tightest_check_leaves_out_a_dc_link_that_a_resistor_backs() {
     // The belt's slack counts once it fails (a section at -12 N against 0.5 N: infinitely far over), so a candidate
     // that fails it ranks behind every near miss; while it passes it says nothing of a limit and is left out. Before, it
     // was left out either way, and the failing candidate ranked by its motor-peak of 0.7.
-    let pushed = Verdict { motor: None, ..verdict("belt-slack", -12.0, 0.5, false) };
+    let pushed = Verdict { motor: None, ..verdict("belt-least-tension", -12.0, 0.5, false) };
     assert_eq!(
         candidate(vec![verdict("motor-peak", 0.7, 1.0, true), pushed]).tightest(),
-        Some(("belt-slack", f64::INFINITY))
+        Some(("belt-least-tension", f64::INFINITY))
     );
-    let taut = Verdict { motor: None, ..verdict("belt-slack", 200.0, 0.5, true) };
+    let taut = Verdict { motor: None, ..verdict("belt-least-tension", 200.0, 0.5, true) };
     assert_eq!(candidate(vec![verdict("motor-peak", 0.7, 1.0, true), taut]).tightest(), Some(("motor-peak", 0.7)));
 }
 
@@ -647,6 +854,7 @@ fn the_tightest_check_of_a_one_motor_search_is_that_motors() {
         condition_peak: None,
         guide_load: None,
         guide_speed: None,
+        guides: Vec::new(),
         path_error_peak: 0.0,
         path_error_rms: 0.0,
         tracking_error_peak: 0.0,
@@ -759,7 +967,7 @@ fn exct_30_passes_with_margin(mode: &str, bands: &[sim_components::analysis::Ban
     assert!(failed.is_empty(), "{mode}: {failed:?}");
     let bearing = band("pulley-bearing-life");
     assert!(bearing.ok && bearing.low > 40000.0, "{mode}: {bearing:?}");
-    let (slack, settling, radial) = (band("belt-slack"), band("settling"), band("gearbox-radial-load"));
+    let (slack, settling, radial) = (band("belt-least-tension"), band("settling"), band("gearbox-radial-load"));
     assert!(
         slack.low > 100.0 && settling.high < 0.7e-4 && radial.high < 1500.0,
         "{mode}: slackest {} N, settling {} m, radial {} N",
@@ -810,4 +1018,219 @@ fn the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds() {
             "{id:?}: worst {w:?}, bands {band:?}"
         );
     }
+}
+
+/// `drive.back_emf_constant_v_s_rad` sets the servo winding's back-EMF per speed apart from the torque constant
+/// (0.45 N m/A in the single axis): 0.5 V s/rad where the key is given, the torque constant without it or with 0, and 0
+/// with effects.back_emf off.
+#[test]
+fn the_back_emf_constant_key_sets_the_servo_winding_apart_from_the_torque_constant() {
+    use sim_components::drive::DriveParams;
+    let ke = |edit: &[&str]| {
+        let mut cfg = machine_single_axis::ENTRY.config();
+        for e in edit {
+            cfg.set_text(e).unwrap();
+        }
+        DriveParams::from_config(&cfg, 62.5e-6, 125e-6).unwrap().ke
+    };
+    assert_eq!(ke(&[]), 0.45);
+    assert_eq!(ke(&["drive.back_emf_constant_v_s_rad = 0.5"]), 0.5);
+    assert_eq!(ke(&["drive.back_emf_constant_v_s_rad = 0.0"]), 0.45);
+    assert_eq!(ke(&["drive.back_emf_constant_v_s_rad = 0.5", "effects.back_emf = false"]), 0.0);
+}
+
+/// A linear motor's coil moves with the mover, joined by nothing elastic: the retuned gain keeps the config's crossover
+/// over the whole moving mass. On the track the AL8021-0E's 0.6 kg coil makes the mover 1.651 kg against 1.251 kg (coil
+/// 0.2 kg times one plus the inertia ratio 5.255, against 0.6 kg times 2.752), so 800 becomes 800 x 1.651 / 1.251 = 1056.
+/// The geometric mean with the coil's ratio gave 1592, at which the loop rang at 2.6 times the motor's peak force.
+#[test]
+fn a_linear_motor_is_retuned_for_the_whole_moving_mass() {
+    use sim_components::catalog::{inertia_ratios, with_parts};
+    let entry = &machine_mover_track::ENTRY;
+    let cfg = entry.config();
+    let named = with_parts(entry, &cfg, "AL8021-0E", "beckhoff-400v", "").unwrap();
+    let mass = |c: &sim_core::Config| {
+        c.f64("motor.rotor_inertia_kgm2").unwrap() * (1.0 + inertia_ratios(entry, c).unwrap()[0])
+    };
+    assert!(close(mass(&cfg), 1.251, 1e-3) && close(mass(&named), 1.651, 1e-3), "{} {}", mass(&cfg), mass(&named));
+    let gain = named.f64("drive.velocity_kp_nm_s_rad").unwrap();
+    assert!(close(gain, 800.0 * 1.651 / 1.251, 1e-3), "{gain}");
+    let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &named).unwrap()).unwrap();
+    let failed: Vec<_> = sim_components::analysis::verdicts(&named, &load)
+        .unwrap()
+        .into_iter()
+        .filter(|v| !v.ok && v.check == "motor-peak")
+        .map(|v| v.value)
+        .collect();
+    assert!(failed.is_empty(), "{failed:?}");
+}
+
+/// The retuned velocity gain on the single axis (gain 0.025, rotor and gearbox 3.0e-5 kg m2, first resonance 65.8 Hz).
+/// The inertia the motor turns comes from the machine: pulley radius x2 takes it from 1.3416e-4 to 4.3464e-4 kg m2,
+/// a scaled gain of sqrt(3.24) = 1.800 times the config's, which the bound holds at the config's: the rotor is the same,
+/// so is the crossover over it (`retuned`; 0.045 rings, phase margin 32 degrees). Gear ratio x2 shrinks it, unbounded:
+/// 0.6463. The Bahr ELZ-125 (pulley radius 48 mm, resonance 160 Hz) scaled to 0.0573 ran at 2.05 times the motor's
+/// peak; bounded it keeps 0.025 and passes. The 1FK2204-5AF (rotor 1.2e-4 kg m2, 4 times the config's) takes the scaled
+/// gain, below 4 times the config's; the 1FK2103-4AH (1.4e-5 kg m2) the config's times its rotor's ratio, 0.467, below
+/// the scaled one.
+#[test]
+fn the_retuned_gain_follows_the_inertia_the_machine_turns_and_stays_below_the_resonance() {
+    use sim_components::catalog::{Parts, inertia_ratios, with_named, with_value};
+    let entry = &machine_single_axis::ENTRY;
+    let cfg = entry.config();
+    let kp = |c: &sim_core::Config| c.f64("drive.velocity_kp_nm_s_rad").unwrap();
+    let turned = |c: &sim_core::Config| {
+        let rotor = c.f64("motor.rotor_inertia_kgm2").unwrap() + c.f64("gearbox.inertia_at_input_kgm2").unwrap();
+        rotor * (1.0 + inertia_ratios(entry, c).unwrap()[0])
+    };
+    let wide = with_value(entry, &cfg, "geometry.pulley_radius_m", 0.04).unwrap();
+    assert!(close(turned(&cfg), 1.3416e-4, 1e-4) && close(turned(&wide), 4.3464e-4, 1e-4), "{}", turned(&wide));
+    assert!(close((turned(&wide) / turned(&cfg)).sqrt(), 1.800, 1e-3));
+    assert_eq!(kp(&wide), kp(&cfg));
+    let geared = with_value(entry, &cfg, "gearbox.ratio", 10.0).unwrap();
+    assert!(close(kp(&geared) / kp(&cfg), 0.6463, 1e-4), "{}", kp(&geared) / kp(&cfg));
+    let elz = with_named(entry, &cfg, &Parts { axis: "ELZ-125", ..Parts::of(&cfg).unwrap() }).unwrap();
+    assert_eq!(kp(&elz), kp(&cfg));
+    let load = sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &elz).unwrap()).unwrap();
+    let verdicts = sim_components::analysis::verdicts(&elz, &load).unwrap();
+    let failed: Vec<_> = verdicts.iter().filter(|v| !v.ok).map(|v| (v.check, v.value, v.limit)).collect();
+    assert!(failed.is_empty(), "{failed:?}");
+    eprintln!("ELZ-125: tracking error {:e} m, settling {:e} m", load.tracking_error_peak, load.dwell_error_peak);
+    let motor = |article: &str| with_named(entry, &cfg, &Parts { motor: article, ..Parts::of(&cfg).unwrap() }).unwrap();
+    let rotor = |c: &sim_core::Config| c.f64("motor.rotor_inertia_kgm2").unwrap();
+    let heavy = motor("1FK2204-5AF");
+    let scaled = kp(&cfg) * (turned(&heavy) / turned(&cfg) * rotor(&heavy) / rotor(&cfg)).sqrt();
+    assert!(close(kp(&heavy), scaled, 1e-6) && scaled < 4.0 * kp(&cfg) && scaled > 2.0 * kp(&cfg), "{}", kp(&heavy));
+    let light = motor("1FK2103-4AH");
+    assert!(close(kp(&light), kp(&cfg) * rotor(&light) / rotor(&cfg), 1e-6), "{}", kp(&light));
+}
+
+/// A named S210 motor brings its S1 curve (`s1_curves_s210.csv`) on the supply the curve is read for, its 400 V one where
+/// it has a rated point at 400 V; on the other supply, and for a motor without a curve, the config has none, also where
+/// it had one of the motor before.
+#[test]
+fn a_named_motor_brings_its_s1_curve_on_its_supply_and_no_other_motors() {
+    use sim_components::catalog::{Parts, with_named};
+    let entry = &machine_single_axis::ENTRY;
+    let rows: Vec<(f64, f64)> = csv("siemens/s1_curves_s210.csv")
+        .into_iter()
+        .filter(|r| r["article"] == "1FK2104-5AF")
+        .map(|r| (r["speed_rad_s"].parse().unwrap(), r["torque_nm"].parse().unwrap()))
+        .collect();
+    assert!(rows.len() >= 5);
+    let named = |cfg: &sim_core::Config, motor: &'static str, supply: &'static str| {
+        with_named(entry, cfg, &Parts { motor, supply, ..Parts::of(cfg).unwrap() }).unwrap()
+    };
+    let curve = |c: &sim_core::Config| {
+        let (w, t) = (c.f64s("motor.s1_curve_speed_rad_s"), c.f64s("motor.s1_curve_torque_nm"));
+        w.ok().zip(t.ok()).map(|(w, t)| w.into_iter().zip(t).collect::<Vec<_>>())
+    };
+    let with = named(&entry.config(), "1FK2104-5AF", "400v");
+    assert_eq!(curve(&with), Some(rows));
+    assert_eq!(curve(&named(&entry.config(), "1FK2104-5AF", "230v")), None);
+    // The curve of the motor before goes with it: the 1FK2106-6AF has none in the file.
+    assert_eq!(curve(&named(&with, "1FK2106-6AF", "400v")), None);
+    assert!(csv("siemens/s1_curves_s210.csv").iter().all(|r| r["article"] != "1FK2106-6AF"));
+}
+
+/// A motor named in `[parts.<id>]` has its velocity gain retuned as the shared one is for a motor named in `[parts]`
+/// (`with_named`): on a machine file with one motor the two give the same gain, the per-motor one in
+/// `drive.<id>.velocity_kp_nm_s_rad`, the shared gain staying the config's. A gain the config gives that motor stays.
+#[test]
+fn a_motor_named_per_motor_is_retuned_as_the_shared_one() {
+    let entry = sim_machines::load_file(&catalog().join("../machines/single-axis.toml")).unwrap();
+    let cfg = entry.config();
+    let kp = |c: &sim_core::Config, key: &str| c.f64(key).unwrap();
+    let mut shared = cfg.clone();
+    shared.set_text("parts.motor = \"1FK2204-5AF\"").unwrap();
+    let shared = sim_components::catalog::resolve(entry, &shared).unwrap();
+    let own = |extra: &str| {
+        let text = format!("{}\n[parts.m]\nmotor = \"1FK2204-5AF\"\n{extra}", cfg.to_text().unwrap());
+        sim_components::catalog::resolve(entry, &sim_core::Config::parse(&text).unwrap()).unwrap()
+    };
+    let per_motor = own("");
+    let gain = kp(&per_motor, "drive.m.velocity_kp_nm_s_rad");
+    assert!(close(gain, kp(&shared, "drive.velocity_kp_nm_s_rad"), 1e-12), "{gain}");
+    assert!(gain > 1.5 * kp(&cfg, "drive.velocity_kp_nm_s_rad"), "{gain}");
+    assert_eq!(kp(&per_motor, "drive.velocity_kp_nm_s_rad"), kp(&cfg, "drive.velocity_kp_nm_s_rad"));
+    assert_eq!(kp(&own("[drive.m]\nvelocity_kp_nm_s_rad = 0.0123\n"), "drive.m.velocity_kp_nm_s_rad"), 0.0123);
+}
+
+/// A guide set's carriage count that is not a whole number of at least 1 is refused where the config is resolved,
+/// not taken as the four of a config without it.
+#[test]
+fn a_carriage_count_that_is_no_whole_number_is_refused() {
+    let entry = &machine_single_axis::ENTRY;
+    for (count, ok) in [("2.0", true), ("2.5", false), ("0.0", false)] {
+        let text = format!("{}\n", entry.config().to_text().unwrap()).replacen(
+            "[ratings]\n",
+            &format!("[ratings]\nguide_carriages = {count}\n"),
+            1,
+        );
+        let cfg = sim_core::Config::parse(&text).unwrap();
+        let resolved = sim_components::catalog::resolve(entry, &cfg);
+        assert_eq!(resolved.is_ok(), ok, "{count}: {:?}", resolved.err());
+        if !ok {
+            assert_eq!(resolved.err(), Some(sim_core::ConfigError::Invalid("ratings.guide_carriages".into())));
+        }
+    }
+}
+
+/// Every registered config and every machine file in `machines/` loads and resolves, and each of its motors judges its
+/// S1 line by the curve of `s1_curves_s210.csv` where it names an S210 motor that has one at its supply's voltage (the
+/// shared `[parts]` or its own `[parts.<id>]`), by the straight line otherwise: the per-motor configs of the arms, whose
+/// default tables have no key of the curve, included.
+#[test]
+fn every_shipped_config_loads_and_judges_a_named_motor_by_its_s1_curve() {
+    let motors: std::collections::HashMap<String, bool> = csv("siemens/motors_s210.csv")
+        .into_iter()
+        .map(|r| (r["part_number"].clone(), !r["rated_speed_400v_rad_s"].is_empty()))
+        .collect();
+    let curves = csv("siemens/s1_curves_s210.csv");
+    let mut entries: Vec<&'static sim_core::MachineEntry> = sim_machines::MACHINES.to_vec();
+    let mut files: Vec<_> = fs::read_dir(catalog().join("../machines")).unwrap().map(|e| e.unwrap().path()).collect();
+    files.sort();
+    for path in files.iter().filter(|p| p.extension().is_some_and(|e| e == "toml")) {
+        entries.push(sim_machines::load_file(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())));
+    }
+    let (mut with_curve, mut refused) = (0, Vec::new());
+    for entry in entries {
+        let cfg = entry.config();
+        let loaded = sim_components::load_config(entry, &cfg.to_text().unwrap())
+            .and_then(|_| sim_components::catalog::resolve(entry, &cfg));
+        let resolved = match loaded {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                refused.push(format!("{}: {e:?}", entry.id));
+                continue;
+            }
+        };
+        let machine = (entry.build)(&resolved).unwrap();
+        for m in machine.motors() {
+            let name = |key: &str| {
+                let at = |path: String| cfg.get(&path).ok().and_then(|v| v.as_str().map(String::from));
+                at(format!("parts.{}.{key}", m.id)).or_else(|| at(format!("parts.{key}"))).unwrap_or_default()
+            };
+            let (article, mut supply) = (name("motor"), name("motor_supply"));
+            if supply.is_empty() {
+                supply = "400v".into(); // as `Parts::of` takes it
+            }
+            let voltage = supply.trim_start_matches("s210new-");
+            let expected: Vec<[f64; 2]> = match motors.get(&article) {
+                Some(&at_400) if voltage == if at_400 { "400v" } else { "230v" } => curves
+                    .iter()
+                    .filter(|r| r["article"] == article)
+                    .map(|r| [r["speed_rad_s"].parse().unwrap(), r["torque_nm"].parse().unwrap()])
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let own = sim_components::catalog::motor_config(&resolved, m.id).unwrap();
+            let read = sim_components::drive::s1_curve_of(&own).unwrap();
+            assert_eq!(read, expected, "{} motor {} ({article} at {supply})", entry.id, m.id);
+            with_curve += usize::from(!read.is_empty());
+        }
+    }
+    assert!(refused.is_empty(), "{refused:?}");
+    // The arms' wrists, the SCARA, the palletiser and the arm on a track name the 1FK2104-5AF and others.
+    assert!(with_curve >= 15, "{with_curve} motors with a curve");
 }

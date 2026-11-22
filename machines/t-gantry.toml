@@ -66,12 +66,25 @@ gearbox_lost_motion = false
 # A strain wave gear's three-segment stiffness, K1 to T1, K2 to T2, K3 beyond (gearbox.stiffness_*). Off in the shipped
 # configs.
 gearbox_stiffness_curve = false
+# The efficiency's loss as a friction in the gearbox's mesh: in proportion to the torque it passes, against the
+# motion at any speed, and sticking at rest inside its band. Off, as on the other belt machines (the loss fades in below
+# 0.5 W, a gear at rest has none); the energy budget closes with it on as without it.
+gearbox_mesh_friction = false
 torque_ripple = true
 tooth_meshing = true
 # The frame sways along X on its spring ([frame], machine.frame); elastic model only.
 frame_compliance = false
 # The Z axis leaning on its carriage ([tool_flex], machine.lean); elastic model only.
 tool_flex = false
+# With tool_flex: the belt's upper vertical runs reach the clamp tool_flex.belt_offset_m to either side of the Z axis's
+# line (machine.lean's belt_offset_m), so the guide's tilt lengthens one and shortens the other: their tension difference
+# turns the lean and their stretch holds it. Off: on the line, as before (as the crate's).
+belt_run_offset = false
+# The X beam's first vertical mode with the carriage on it as one more coordinate w, the beam's deflection under the
+# carriage ([beam]; machine.lean names the axes: the beam runs along its axis, w hangs the bodies on that axis lower and
+# the lean's lever axis is the vertical one); elastic model only. Off in the shipped files: the beam's mass and damping
+# are [estimate]s.
+beam_vertical_mode = false
 # The idlers' inertia and bearing friction ([idler], machine.idler).
 idlers = false
 cable_chain = false
@@ -235,6 +248,8 @@ bristle_damping_n_s_m = 1500.0
 preload_n = 200.0
 
 [motor]
+# A made-up motor, no catalogue motor: no row of catalog/ has these values (0.45 N m/A, 1.27 N m at 2.822 A, 9.5 A,
+# 0.3 kg cm2), so its stall current is its rated one. A motor named in [parts] replaces them.
 rotor_inertia_kgm2 = 0.3e-4
 friction_coulomb_nm = 0.02
 friction_viscous_nm_s_rad = 1.0e-4
@@ -323,6 +338,22 @@ damping_n_s_m = 190.0
 lateral_stiffness_n_m = 2.0e7
 tilt_stiffness_nm_rad = 1.2e4
 damping_n_s_m = 80.0
+# [estimate] How far the belt's two upper vertical runs reach the clamp to either side of the Z axis's line (the pulleys'
+# diameter, 2 x 0.02 m), with effects.belt_run_offset (the crate's key).
+belt_offset_m = 0.04
+
+# With effects.beam_vertical_mode: the X beam as a simple span between the posts (the crate's values).
+[beam]
+# The posts at the motors, geometry.span_min_m beyond each end of the stroke: 1.0 + 2 x 0.15 m.
+span_m = 1.3
+carriage_at_zero_m = 0.15
+# [estimate] an aluminium profile of about 80 x 80 mm, I = 1.2e-6 m^4, E = 70 GPa.
+bending_stiffness_nm2 = 8.4e4
+# [estimate] the same profile's mass per metre, about 3.5 kg/m: the first mode's modal mass is 17/35 of the beam's mass
+# in the middle.
+mass_kg_m = 3.5
+# [estimate] the damping ratio of the first mode, 1 %: a bolted aluminium structure (0.5 to 3 %).
+damping_ratio = 0.01
 
 # With effects.idlers: the four carriage idlers and the one at the bottom of the Z axis, all alike, turn
 # with the belt that passes them. Their inertia adds to what the belt accelerates, their bearings drag.
@@ -407,14 +438,15 @@ position_cycle_s = 1.0e-3
 # the current loop for the voltage, of the velocity loop for the torque setpoint.
 current_delay_cycles = 1
 velocity_delay_cycles = 1
-kv_1_s = 50.0
+# 45 and 0.037 below since 22 November 2026, as the crate's (`crates/machine-t-gantry/default.toml`, the reasons there).
+kv_1_s = 45.0
 # Velocity loop gain, tuned with `sim-cli margins t-gantry --bands` (the open-loop response of each motor's velocity
 # loop, with every [bounds] value at its low and at its high bound) for a phase margin of at least 35 degrees and a
 # gain margin of at least 6 dB in every run, also with effects.motor_friction and guide_friction off (in a cruise
 # friction adds no damping to the loop). Found: at least 47.4 degrees and 8.2 dB (config as it is: 54 degrees,
 # 9.0 dB); friction off at least 39.1 degrees and 7.3 dB. 0.08 left 12 degrees and 2 dB: motor B hunted in the
 # gearbox backlash at a cruise.
-velocity_kp_nm_s_rad = 0.04
+velocity_kp_nm_s_rad = 0.037
 velocity_tn_s = 0.01
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
@@ -432,6 +464,9 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 # Current controller: Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
@@ -440,6 +475,8 @@ current_tn_s = 2.5e-3
 # The DC link voltage. The winding gets sqrt(3/2) times it at most, here 190 V: the model's one winding
 # carries the RMS phase current, and its voltage times that current is the power of all three phases.
 bus_voltage_v = 155.13
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 3.8
 # What the motor can give continuously; the RMS torque of a cycle is judged against it.
 rated_torque_nm = 1.27
@@ -844,13 +881,15 @@ pos = [150, 300]
 
 # The motor pulleys span_min_m beyond the ends of X, at the height of the carriage (whose idlers sit r + r_idler above
 # and below it): the belt leaves both level, half a turn, as in the crate (effects.belt_wrap). The belt runs round them
-# anticlockwise, round the carriage idlers next to them clockwise, following the routes.
+# anticlockwise, round the carriage idlers next to them clockwise, following the routes. Pulleys and idlers lie in the
+# bodies' plane (y = -0.03 m of the 3D view, as the crate's planar frame), so the belt's runs carry no angular momentum
+# about x or z.
 [[machine.pulley]]
 id = "pulley_a"
 gearbox = "gearbox_a"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
-at_m = [-0.15, -0.05, 0.06]
+at_m = [-0.15, -0.03, 0.06]
 pos = [300, 0]
 
 [[machine.pulley]]
@@ -858,7 +897,7 @@ id = "pulley_b"
 gearbox = "gearbox_b"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
-at_m = [1.15, -0.05, 0.06]
+at_m = [1.15, -0.03, 0.06]
 pos = [300, 300]
 
 # Clamp to motor A: 2 span_min_m + x + z.
@@ -888,10 +927,14 @@ pulleys = { pulley_b = -1 }
 route = ["pulley_b", "upper_right", "z_axis"]
 pos = [450, 380]
 
+# The carriage's centre of mass sits geometry.z_com_drop_m above the Z axis's at z = 0, as in the crate's frame
+# momentum (the crate reads the same key): its place for the angular momentum and first moment (an offset on straight
+# axes changes nothing else).
 [[machine.body]]
 id = "carriage"
 mass_kg = "mass.carriage_kg"
 axes = ["x"]
+offset_m = [0.0, 0.0, "geometry.z_com_drop_m"]
 pos = [750, 0]
 
 # The Z axis rides on the carriage and carries the payload.
@@ -938,18 +981,21 @@ radius_m = "idler.radius_m"
 inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "carriage"
-at_m = [-0.042, -0.02, 0.032]
+at_m = [-0.042, 0.0, 0.032]
 clockwise = true
 pos = [1050, -80]
 
+# Its section 3 runs from motor B, whose positive turn takes belt out of it, to the clamp, which a rising Z axis pulls
+# the belt towards: the belt moves past this idler against the direction of the section's first pulley's feed, so
+# the speed is -vz (the crate turns the two upper idlers against each other: -vz / r at the left, +vz / r here).
 [[machine.idler]]
 id = "upper_right"
-speed = { z = 1 }
+speed = { z = -1 }
 radius_m = "idler.radius_m"
 inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "carriage"
-at_m = [0.042, -0.02, 0.032]
+at_m = [0.042, 0.0, 0.032]
 clockwise = true
 pos = [1050, 0]
 
@@ -960,7 +1006,7 @@ radius_m = "idler.radius_m"
 inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "carriage"
-at_m = [-0.042, -0.02, -0.032]
+at_m = [-0.042, 0.0, -0.032]
 clockwise = true
 pos = [1050, 80]
 
@@ -971,7 +1017,7 @@ radius_m = "idler.radius_m"
 inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "carriage"
-at_m = [0.042, -0.02, -0.032]
+at_m = [0.042, 0.0, -0.032]
 clockwise = true
 pos = [1050, 160]
 
@@ -982,7 +1028,7 @@ radius_m = "idler.radius_m"
 inertia_kgm2 = "idler.inertia_kgm2"
 friction_nm = "idler.friction_nm"
 body = "z_axis"
-at_m = [0.0, -0.02, -0.08]
+at_m = [0.0, 0.0, -0.08]
 pos = [1050, 300]
 
 # The frame sways along X (effects.frame_compliance).
@@ -1006,56 +1052,73 @@ lever_axis = "z"
 lateral_stiffness_n_m = "tool_flex.lateral_stiffness_n_m"
 tilt_stiffness_nm_rad = "tool_flex.tilt_stiffness_nm_rad"
 damping_n_s_m = "tool_flex.damping_n_s_m"
+belt_offset_m = "tool_flex.belt_offset_m"
 pos = [900, 550]
 
 # The free spans (effects.belt_span_vibration), from the left clamp: section 1 runs clamp to upper idler (span_min_m
 # + z) and idler to motor A (span_min_m + x); section 2 motor A to lower idler, down the Z axis and up again
 # (span_min_m + stroke_z_m - z each), lower idler to motor B (span_min_m + stroke_x_m - x); section 3 motor B to idler
-# and idler to clamp.
+# and idler to clamp. Each with its belt's speed over ground per speed of X and Z (along x and z of the 3D view), so
+# that the belt's mass is summed run by run (see `belt_mass` in crates/machine-t-gantry/src/lib.rs): the runs at the
+# clamp move with it, (vx, vz); the upper runs at pulley A's surface speed vx + vz and B's vx - vz, the lower ones
+# back at -(vx + vz) and -(vx - vz); down the Z axis the belt passes the lower carriage idlers at 2 vx + vz and
+# 2 vx - vz, so it moves at (vx, 2 vx + vz) and (vx, vz - 2 vx).
 [[machine.span]]
 id = "span_1"
 section = "1"
 length_m = "geometry.span_min_m"
 axes = { z = 1 }
+velocity_x = { x = 1 }
+velocity_z = { z = 1 }
 
 [[machine.span]]
 id = "span_2"
 section = "1"
 length_m = "geometry.span_min_m"
 axes = { x = 1 }
+velocity_x = { x = 1, z = 1 }
 
 [[machine.span]]
 id = "span_3"
 section = "2"
 length_m = "geometry.span_min_m"
 axes = { x = 1 }
+velocity_x = { x = -1, z = -1 }
 
 [[machine.span]]
 id = "span_4"
 section = "2"
 length_m = 0.65
 axes = { z = -1 }
+velocity_x = { x = 1 }
+velocity_z = { x = 2, z = 1 }
 
 [[machine.span]]
 id = "span_5"
 section = "2"
 length_m = 0.65
 axes = { z = -1 }
+velocity_x = { x = 1 }
+velocity_z = { x = -2, z = 1 }
 
 [[machine.span]]
 id = "span_6"
 section = "2"
 length_m = 1.15
 axes = { x = -1 }
+velocity_x = { x = -1, z = 1 }
 
 [[machine.span]]
 id = "span_7"
 section = "3"
 length_m = 1.15
 axes = { x = -1 }
+velocity_x = { x = 1, z = -1 }
 
 [[machine.span]]
 id = "span_8"
 section = "3"
 length_m = "geometry.span_min_m"
 axes = { z = 1 }
+velocity_x = { x = 1 }
+velocity_z = { z = 1 }

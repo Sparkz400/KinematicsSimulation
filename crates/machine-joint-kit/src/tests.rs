@@ -168,6 +168,22 @@ fn a_presliding_slide_holds_its_load_without_creeping() {
     assert!((crept + 0.2435e-3).abs() < 0.03e-3, "{crept}");
 }
 
+/// The screw axis's drive train for the planner (`Machine::trains`) is the elastic model's own mode: the coupling and
+/// the screw in series, K1 (`Converter::apply_back` puts the screw's compliance into it), between the rotor and the
+/// carriage, referred to the motor. The train's frequency with the motor held, over sqrt(1 - the load's share), is the
+/// two-mass mode with the rotor free (`resonance_hz`), with the nut 0.1, 0.4 and 0.7 m along. The train put the screw's
+/// compliance in series a second time (`band_compliance`): 0.73 of the mode here.
+#[test]
+fn the_screw_axis_train_is_its_two_mass_mode() {
+    let sim = Sim::new(&SCREW, &SCREW.config()).unwrap();
+    for x in [0.1, 0.4, 0.7] {
+        let train = sim.machine.trains(&[x])[0].unwrap();
+        let free = train.hz / (1.0 - train.load_share).sqrt();
+        let mode = sim.machine.resonance_hz(&[x]).unwrap();
+        assert!((free / mode - 1.0).abs() < 1e-9, "{x}: {free} against {mode} Hz");
+    }
+}
+
 /// By hand: on the rack m a of 60 kg (80 with the payload), at the gearbox output that force times the pinion's
 /// 31.831 mm; 0.95 m/s is 0.95 / 0.031831 = 29.85 rad/s of the pinion, 2850 r/min at the motor behind ratio 10.
 #[test]
@@ -382,24 +398,24 @@ fn the_gearbox_and_the_rack_carry_the_rack_losses() {
     near(teeth, force / 0.97, 1e-3, "feed force");
 }
 
-/// A screw joint of an arm is coupled to its motor: another ratio is refused, and so is a gearbox life the analysis
-/// would take through the one `gearbox.ratio` for joints of other ratios.
+/// A screw joint of an arm is coupled to its motor: another ratio is refused. The gearbox lives take each motor's own
+/// `gearbox.ratio`: a config that rates them (`ratings.gearbox_reference_speed_rpm`) is taken where every joint's gearbox
+/// table says the arm's ratio (the shipped arm: 120 and 80), and refused where the arm turns joints 4 to 6 through 120
+/// (`arm.gear_ratios`) while their tables say 80; without the rating the arm is taken either way.
 #[test]
 fn an_arm_refuses_what_it_cannot_size() {
     let mut cfg = SCARA.config();
     cfg.set_text("arm.gear_ratios = [100.0, 80.0, 2.0, 50.0]").unwrap();
     assert!((SCARA.build)(&cfg).is_err());
-    let mut cfg = Config::parse(&URDF_ARM.default_config.replace(
-        "[ratings]
-",
-        "[ratings]
-gearbox_reference_speed_rpm = 400.0
-",
-    ))
-    .unwrap();
+    let all_120 = "arm.gear_ratios = [120.0, 120.0, 120.0, 120.0, 120.0, 120.0]";
+    let mut unrated = URDF_ARM.config();
+    unrated.set_text(all_120).unwrap();
+    assert!((URDF_ARM.build)(&unrated).is_ok());
+    let rated = URDF_ARM.default_config.replace("[ratings]\n", "[ratings]\ngearbox_reference_speed_rpm = 400.0\n");
+    let mut cfg = Config::parse(&rated).unwrap();
+    assert!(cfg.get("ratings.gearbox_reference_speed_rpm").is_ok() && (URDF_ARM.build)(&cfg).is_ok());
+    cfg.set_text(all_120).unwrap();
     assert!((URDF_ARM.build)(&cfg).is_err());
-    cfg.set_text("arm.gear_ratios = [120.0, 120.0, 120.0, 120.0, 120.0, 120.0]").unwrap();
-    assert!((URDF_ARM.build)(&cfg).is_ok());
 }
 
 /// The mass matrix from the bodies' Jacobians is Newton-Euler's, one unit acceleration at a time, to rounding: on
@@ -709,8 +725,29 @@ fn one_bending_link() -> Box<dyn Machine> {
     (URDF_ARM.build)(&cfg).unwrap()
 }
 
-/// The tube's bending mode is the Euler-Bernoulli cantilever's: E I = 2.1e11 x pi / 64 (0.06^4 - 0.052^4) =
-/// 58225.5 N m^2, f = 1.875104^2 / (2 pi) sqrt(E I / (m L^3)) = 0.559597 sqrt(58225.5 / (4.5 x 0.512)) = 88.958 Hz.
+/// The one-way bend's Ritz pair over w = a xi^2 + b xi^3 (`arm::BentLink`) by hand: a cantilever of E I `ei`, its own
+/// mass `m` over `length`, `tip` and a tip inertia `j` at its end. M = m [[1/5, 1/6], [1/6, 1/7]] + tip [[1, 1], [1, 1]] +
+/// j / L^2 [[4, 6], [6, 9]] (the tip's deflection a + b, its slope (2 a + 3 b) / L), K = E I / L^3 [[4, 6], [6, 12]]
+/// (int w''^2), det(K - w^2 M) = 0: both frequencies (Hz), lowest first.
+fn ritz_hz(ei: f64, m: f64, length: f64, tip: f64, j: f64) -> [f64; 2] {
+    let r = j / (length * length);
+    let mass = [m / 5.0 + tip + 4.0 * r, m / 6.0 + tip + 6.0 * r, m / 7.0 + tip + 9.0 * r];
+    let k = ei / length.powi(3);
+    let stiffness = [4.0 * k, 6.0 * k, 12.0 * k];
+    let a = mass[0] * mass[2] - mass[1] * mass[1];
+    let b = stiffness[0] * mass[2] + stiffness[2] * mass[0] - 2.0 * stiffness[1] * mass[1];
+    let c = stiffness[0] * stiffness[2] - stiffness[1] * stiffness[1];
+    let root = (b * b - 4.0 * a * c).sqrt();
+    [2.0 * c / (b + root), (b + root) / (2.0 * a)].map(|l| l.sqrt() / std::f64::consts::TAU)
+}
+
+/// The tube's bending modes, one-way: E I = 2.1e11 x pi / 64 (0.06^4 - 0.052^4) = 58225.5 N m^2, 4.5 kg over 0.8 m.
+/// Its Ritz pair (`ritz_hz`, nothing at the tip): w^2 = mu E I / (m L^3), mu^2 - 1224 mu + 15120 = 0, mu = 612 -+
+/// sqrt(359424) = 12.48019 and 1211.520: 89.381 Hz and 880.64 Hz. The first is the exact Euler-Bernoulli cantilever's
+/// 1.875104^2 / (2 pi) sqrt(E I / (m L^3)) = 88.958 Hz from above by 0.475 %, the bare link being the pair's worst case
+/// (`the_bend_modes_lowest_is_the_exact_beams_over_tip_masses_and_inertias`); the second is an upper bound, the beam's
+/// own second mode is at 557.5 Hz (4.694^2 / 1.875^2 of the first). The exact first mode alone (before 22 November, and
+/// two-way still) gave 88.958 Hz here but stood up to 15.7 % high with a tip inertia.
 #[test]
 fn a_link_bends_at_the_euler_bernoulli_frequency_of_a_cantilever() {
     let m = one_bending_link();
@@ -718,12 +755,25 @@ fn a_link_bends_at_the_euler_bernoulli_frequency_of_a_cantilever() {
     let euler_bernoulli =
         1.875_104_068_711_961f64.powi(2) / std::f64::consts::TAU * (58_225.524f64 / (4.5 * 0.512)).sqrt();
     assert!((euler_bernoulli - 88.958).abs() < 1e-3);
-    assert!(modes.iter().any(|mode| (mode.hz / euler_bernoulli - 1.0).abs() < 1e-6), "{modes:?}");
+    let [first, second] = ritz_hz(58_225.524, 4.5, 0.8, 0.0, 0.0);
+    println!("{modes:?}: by hand {first} Hz and {second} Hz, the exact beam's {euler_bernoulli} Hz");
+    assert!((first - 89.381).abs() < 1e-3 && (second - 880.64).abs() < 0.01, "{first} {second}");
+    // Beside the joint's own mode on its gearbox (46.3 Hz).
+    let nearest =
+        |f: f64| modes.iter().map(|m| m.hz).fold(0.0, |b, x| if (x - f).abs() < (b - f).abs() { x } else { b });
+    near(nearest(first), first, 1e-6, "the pair's first");
+    near(nearest(second), second, 1e-6, "the pair's second");
+    assert!(nearest(first) / euler_bernoulli - 1.0 < 0.005, "{modes:?}");
 }
 
-/// Under its own weight, lying level, the tube sags in its mode by 0.3915 m g / (3.0906 E I / L^3) =
-/// 0.391496 x 44.130 / (3.0906 x 58225.5 / 0.512) = 49.16 um: within 1.5 % of the exact q L^4 / (8 E I) =
-/// 44.130 x 0.512 / (8 x 58225.5) = 48.51 um of a beam loaded along its length. Downwards: the signal is positive.
+/// Under its own weight, lying level, the tube sags as the exact beam does at its tip, q L^4 / (8 E I) = 44.130 x 0.512 /
+/// (8 x 58225.5) = 48.506 um: the pair spans the static shapes, and the evenly spread load's (a, b) = q L^4 / E I
+/// (5/24, -1/12) solves K (a, b) = q L (1/3, 1/4) with the tip's a + b = 1/8 exactly. On the modes (`ritz_hz`, mu =
+/// 12.48019 and 1211.520; (K - mu M) x = 0 from its first row, x = (6 - mu / 6, mu / 5 - 4)): the first scaled to a tip
+/// of 1, (1.622499, -0.622499), the second to int w^2 = 33/140, (-6.31647, 7.68293) up to its sign, tip 1.366462; the
+/// coordinates d_i = x_i^T M c / x_i^T M x_i are 48.850 um and -0.25106 um (`link.1.bend`, `link.1.bend_2`), the
+/// tip 48.850 - 0.343 = 48.506 um. The exact first mode alone (before 22 November) gave 49.16 um, 1.3 % high.
+/// Downwards: the signal is positive.
 #[test]
 fn a_level_link_sags_under_its_weight_as_a_cantilever_does() {
     let m = one_bending_link();
@@ -731,9 +781,25 @@ fn a_level_link_sags_under_its_weight_as_a_cantilever_does() {
     m.equilibrium(&[0.0], &mut state, &mut torque);
     let mut values = Vec::new();
     m.signals(&state, &torque, &mut values);
-    let bend = values[m.signal_infos().iter().position(|s| s.id == "link.1.bend").unwrap()];
-    assert!((bend - 49.156e-6).abs() < 0.01e-6, "{bend}");
-    assert!((bend / 48.506e-6 - 1.0).abs() < 0.015);
+    let signal = |id: &str| values[m.signal_infos().iter().position(|s| s.id == id).unwrap()];
+    let (bend, second) = (signal("link.1.bend"), signal("link.1.bend_2"));
+    let ei = 2.1e11 * sim_components::beam::tube_second_moment(0.06, 0.004);
+    let exact = 4.5 * 9.80665 / 0.8 * 0.8f64.powi(4) / (8.0 * ei);
+    let scale = 4.5 * 9.80665 / 0.8 * 0.8f64.powi(4) / ei;
+    let c = [5.0 / 24.0 * scale, -scale / 12.0];
+    let gram = |x: [f64; 2], y: [f64; 2]| x[0] * y[0] / 5.0 + (x[0] * y[1] + x[1] * y[0]) / 6.0 + x[1] * y[1] / 7.0;
+    let shape = |mu: f64| [6.0 - mu / 6.0, mu / 5.0 - 4.0];
+    let s1 = shape(612.0 - 359_424f64.sqrt()).map(|v| v / (shape(612.0 - 359_424f64.sqrt()).iter().sum::<f64>()));
+    let raw = shape(612.0 + 359_424f64.sqrt());
+    let s2 = raw.map(|v| v * (33.0 / 140.0 / gram(raw, raw)).sqrt());
+    let (d1, d2) = (gram(s1, c) / gram(s1, s1), gram(s2, c) / gram(s2, s2));
+    let swing = d2 * (s2[0] + s2[1]);
+    println!("bend {bend}, bend_2 {second}; by hand {d1} and {d2} (tip {swing}), exact tip {exact}");
+    near(bend, d1, 1e-9, "link.1.bend");
+    near(second.abs(), d2.abs(), 1e-6, "link.1.bend_2");
+    near(d1 + swing, exact, 1e-12, "the tip by hand");
+    near(bend + swing, exact, 1e-9, "the tip");
+    assert!((exact - 48.506e-6).abs() < 1e-9 && bend > 0.0);
 }
 
 /// A steel tube 60 x 4 mm, 0.8 m long along x, on joint 1 about y (its URDF mass and inertia `tube`: kg, then ixx, iyy,
@@ -796,8 +862,9 @@ const ALL_DIRECTIONS: &str = r#"link_bending.directions = ["in_plane", "out_of_p
 /// 56146.0 N m/rad, I_p = pi / 32 (0.06^4 - 0.052^4); the tube's own share J_own / 3, J_own = m (D^2 + d^2) / 8 =
 /// 4.5 x (0.0036 + 0.002704) / 8 = 3.546e-3 kg m^2 (its URDF ixx), 1.182e-3: f = sqrt(56146.0 / 0.501182) / 2 pi =
 /// 53.2699 Hz, sqrt(G I_p / (L J)) / 2 pi = 53.3328 Hz without the tube's share (the exact root of beta tan beta =
-/// J_own / J gives 53.26988 Hz). It bends in both planes alike, a round tube with 10 kg at its tip: k = 1.875104^4 / 4 x
-/// E I / L^3 = 351467 N/m, m / 4 + M = 11.125 kg, 28.2887 Hz.
+/// J_own / J gives 53.26988 Hz). It bends in both planes alike, a round tube with 10 kg at its tip (no tip inertia
+/// across it): the Ritz pair (`ritz_hz`) 27.9493 Hz and 535.42 Hz, the exact beam 27.9481 Hz (the exact first mode
+/// alone gave 28.2887 Hz, +1.2 %).
 #[test]
 fn a_tube_twists_at_the_frequency_of_its_tip_inertia_and_bends_alike_in_both_planes() {
     let m = tube_with_tip(
@@ -808,13 +875,20 @@ fn a_tube_twists_at_the_frequency_of_its_tip_inertia_and_bends_alike_in_both_pla
         &["effects.joint_elasticity = false", ALL_DIRECTIONS],
     );
     let modes = m.modes(&[0.0, 0.0]);
-    assert_eq!(modes.len(), 3, "{modes:?}");
-    near(modes[0].hz, 28.2887, 1e-5, "bend in the joint's plane");
-    near(modes[1].hz, 28.2887, 1e-5, "bend across it");
+    assert_eq!(modes.len(), 5, "{modes:?}");
+    let ei = 2.1e11 * sim_components::beam::tube_second_moment(0.06, 0.004);
+    let [first, second] = ritz_hz(ei, 4.5, 0.8, 10.0, 0.0);
+    let exact = sim_components::beam::cantilever_first_frequency(ei, 4.5, 10.0, 0.0, 0.8) / std::f64::consts::TAU;
+    println!("{modes:?}: by hand {first} and {second} Hz, exact {exact} Hz");
+    assert!((first - 27.9493).abs() < 1e-4 && (second - 535.42).abs() < 0.01 && first / exact - 1.0 < 1e-4);
+    near(modes[0].hz, first, 1e-6, "bend in the joint's plane");
+    near(modes[1].hz, first, 1e-6, "bend across it");
     near(modes[2].hz, 53.2699, 1e-5, "twist");
     near(modes[2].hz, 53.26988, 1e-5, "twist, exact");
+    near(modes[3].hz, second, 1e-6, "second bend in the joint's plane");
+    near(modes[4].hz, second, 1e-6, "second bend across it");
     let ids: Vec<String> = m.signal_infos().into_iter().map(|s| s.id).filter(|id| id.starts_with("link.")).collect();
-    assert_eq!(ids, ["link.1.bend", "link.1.bend_across", "link.1.twist"]);
+    assert_eq!(ids, ["link.1.bend", "link.1.bend_2", "link.1.bend_across", "link.1.bend_across_2", "link.1.twist"]);
 }
 
 /// Two-way (effects.link_bending_reaction): the tube, here 0.45 kg (iyy 0.024 kg m^2 about its centre), carries 20 kg
@@ -1062,6 +1136,268 @@ fn the_palletiser_keeps_its_flange_level_over_its_range() {
     let (turret, flange) = (motors[0] / 160.0, motors[3] / 50.0);
     near(turret + flange, 0.5, 1e-9, "rz");
     near(turret, 0.3f64.atan2(1.4), 1e-9, "turret towards the flange");
+}
+
+/// The palletiser's forearm drive parallelogram as shipped ([estimate] `arm.bars_*`): the crank (6 kg) turns with the
+/// forearm about the upper arm's pivot, its centre 0.15 m behind it; the rod (8 kg) stays parallel to the upper arm,
+/// pinned on the forearm's rear lever 0.3 m behind the elbow. With the upper arm upright and the forearm level (the
+/// motors' joints 2 and 3 at 0) both centres lie behind the pivots: by virtual work the rod's weight acts on the
+/// forearm's angle (motor 3) at its pin, 8 g x 0.3 = 23.536 N m, the crank's at its centre, 6 g x 0.15 = 8.826 N m,
+/// 32.362 N m against the forearm's weight, and nothing on the upper arm's angle (its turn moves the rod's centre
+/// across, not up). The motors hold that through their 160:1 gears: 0.20226 N m less on motor 3, none on motor 2.
+#[test]
+fn the_palletisers_rod_and_crank_hold_by_hand() {
+    let mut cfg = rigid(&PALLETISER);
+    cfg.set_text("kinematics.tool_space = false").unwrap();
+    cfg.set_text("effects.gravity = true").unwrap();
+    let hold = |cfg: &Config| {
+        let (mut state, mut hold) = (Vec::new(), vec![0.0; 4]);
+        (PALLETISER.build)(cfg).unwrap().equilibrium(&[0.0; 4], &mut state, &mut hold);
+        hold
+    };
+    let with = hold(&cfg);
+    for key in ["on", "turns_with", "pin_m", "mass_kg", "com_m", "inertia_kgm2"] {
+        cfg.set_text(&format!("arm.bars_{key} = []")).unwrap();
+    }
+    let without = hold(&cfg);
+    let g = 9.80665;
+    let by_hand = (8.0 * 0.3 + 6.0 * 0.15) * g / 160.0;
+    println!("with {with:?}, without {without:?}, by hand {by_hand} N m");
+    assert!((with[1] - without[1]).abs() < 1e-9, "{with:?} {without:?}");
+    near((without[2] - with[2]).abs(), by_hand, 1e-9, "motor 3");
+    assert!(with[2].abs() < without[2].abs(), "the bars balance the forearm: {with:?} {without:?}");
+}
+
+/// The palletiser's upper arm bending in its joints' plane while its parallelogram holds the forearm (`held_from`,
+/// `bar_field`): a steel tube 150 x 10 mm, E I = 2.1e11 x pi / 64 (0.15^4 - 0.13^4) = 2.6122e6 N m^2, its own 25 kg
+/// over 1 m. The crank, pinned on the turret, turns with the forearm and so holds its turn against the arm's bend: the
+/// forearm, wrist, flange and carton (20 + 5 + 8 + 20 = 53 kg) move with the arm's tip and do not turn; the rod (8 kg),
+/// pinned on the forearm's lever and parallel to the arm's chord, swings about its lower end, m / 3 at the tip (its turn
+/// is the tip's deflection over L, whatever the shape); the crank stays. By hand the one-way Ritz pair (`ritz_hz`) of 25
+/// kg with 53 + 8 / 3 = 55.6667 kg at its tip and no tip inertia: 52.9823 Hz and 1015.83 Hz; the exact Euler-Bernoulli
+/// cantilever with that tip mass (`beam::cantilever_first_frequency`) 52.9796 Hz, 0.005 % lower. The exact first mode
+/// alone (before 22 November, and two-way still) gave 53.626 Hz, 1.22 % high. Without the bars the forearm and all
+/// beyond turn with the tip's slope, and their turning inertia about the tip lowers the mode by far more than 5 %.
+#[test]
+fn the_parallelogram_holds_the_forearm_against_the_upper_arms_bend() {
+    let bent = |bars: bool| (PALLETISER.build)(&bent_config(bars, false)).unwrap();
+    let ei = 2.1e11 * std::f64::consts::PI / 64.0 * (0.15f64.powi(4) - 0.13f64.powi(4));
+    let [by_hand, second] = ritz_hz(ei, 25.0, 1.0, 53.0 + 8.0 / 3.0, 0.0);
+    let exact =
+        sim_components::beam::cantilever_first_frequency(ei, 25.0, 53.0 + 8.0 / 3.0, 0.0, 1.0) / std::f64::consts::TAU;
+    let (held, free) = (bent(true).modes(&[0.0; 4]), bent(false).modes(&[0.0; 4]));
+    let nearest = |modes: &[sim_core::Mode], f: f64| {
+        modes.iter().map(|m| m.hz).fold(0.0, |b, x| if (x - f).abs() < (b - f).abs() { x } else { b })
+    };
+    let (found, unheld) = (nearest(&held, by_hand), nearest(&free, by_hand));
+    println!(
+        "held {found} Hz, by hand {by_hand} Hz (and {second} Hz), exact beam {exact} Hz; without the bars {unheld} Hz"
+    );
+    near(found, by_hand, 1e-6, "the held mode");
+    near(nearest(&held, second), second, 1e-6, "the held pair's second");
+    assert!(found >= exact && found / exact - 1.0 < 1e-4, "{found} against the exact {exact}");
+    assert!((unheld - by_hand).abs() > 0.05 * by_hand, "without the bars {unheld} Hz");
+    // Acting back on the joints (effects.link_bending_reaction), the bars' fields in the coupling with their rates: its
+    // energy holds over the suite's run with gravity (`testkit::energy_conservation`): 1.8e-8 J of the 2.8 mJ put in over
+    // 10 s with the joints' stops off, the arm without its bars 6.9e-9 J of 3.2 mJ (the integrator's level). With the
+    // bars the swinging upper arm reaches its stop at 0.9 rad: the steps that meet it cut 16 times finer
+    // (`mech::STOP_SUBSTEPS`), 5.3e-9 J. Before 22 November 1.3e-5 J, in steps at each contact (1.3e-6 J at half the
+    // step): the stop's damper taking hold within a step, integrated across.
+    let cfg = bent_config(true, true);
+    let (drift, injected) = sim_core::testkit::energy_drift((PALLETISER.build)(&cfg).unwrap().as_ref());
+    println!("with the stops: {drift} J of {injected} J");
+    assert!(injected > 0.0 && drift < 1e-5 * injected, "{drift} J of {injected} J");
+}
+
+/// The palletiser rigid and loss-free in joint space, its upper arm bending in its plane (a steel tube 150 x 10 mm,
+/// undamped), with or without its parallelogram's bars, with or without the bend acting back on the joints.
+/// The palletiser's rod stretching under the torque it passes (effects.bar_elasticity, [estimate] E A / L = 2.14e8 N/m
+/// on the forearm's 0.3 m lever, carrying motor 3): k c^2 = 2.14e8 x 0.09 = 1.926e7 N m/rad in series with the
+/// gearbox's 2e5, K = 1 / (1 / 2e5 + 1 / 1.926e7) = 197944.6 N m/rad. Motor 3's train (the planner's) then rings
+/// sqrt(K / 2e5) = 0.994834 times as high, the other motors' as before; the held modes see it too (one lower, none
+/// higher).
+#[test]
+fn the_parallelogram_rod_stretches_in_series_with_motor_threes_gearbox() {
+    let machine = |on: bool| {
+        let mut cfg = PALLETISER.config();
+        cfg.set_text(&format!("effects.bar_elasticity = {on}")).unwrap();
+        (PALLETISER.build)(&cfg).unwrap()
+    };
+    let (off, on) = (machine(false), machine(true));
+    let pose = [1.2, -0.5, 1.3, 0.0];
+    let (a, b) = (off.trains(&pose), on.trains(&pose));
+    let k: f64 = 1.0 / (1.0 / 2e5 + 1.0 / (2.14e8 * 0.09));
+    assert!((k - 197_944.6).abs() < 0.1, "{k}");
+    for m in 0..4 {
+        let (a, b) = (a[m].unwrap().hz, b[m].unwrap().hz);
+        let want = if m == 2 { (k / 2e5).sqrt() } else { 1.0 };
+        assert!((b / a - want).abs() < 1e-9, "motor {}: {} against {want}", m + 1, b / a);
+    }
+    let (a, b) = (off.modes(&pose), on.modes(&pose));
+    assert!(a.len() == b.len() && a.iter().zip(&b).all(|(a, b)| b.hz <= a.hz * (1.0 + 1e-12)), "{a:?} {b:?}");
+    assert!(a.iter().zip(&b).any(|(a, b)| b.hz < a.hz * (1.0 - 1e-4)), "{a:?} {b:?}");
+}
+
+/// A forearm on a rocking rod (effects.bar_rocking) with one motor: a post (URDF joint 1, held by a zero row of
+/// `arm.joint_coupling`) and on it, 0.5 m up, the forearm about y (joint 2, the motor's): 20 kg, its centre 0.5 m out,
+/// 1 kg m^2 about it. The crank (6 kg, its centre 0.15 m behind the pivot, 0.045 kg m^2 about it) pinned on the post at
+/// the pivot turns with the forearm; the rod (8 kg) pinned on the forearm 0.3 m behind the pivot stays parallel to the
+/// post, its axial stiffness 2.14e8 N/m carrying the motor's joint. Loss-free, without gravity, plus `edits`.
+fn rocker(edits: &[&str]) -> Box<dyn Machine> {
+    let path = std::env::temp_dir().join("joint-kit-test-rocker.urdf");
+    std::fs::write(
+        &path,
+        r#"<?xml version="1.0"?>
+<robot name="rocker">
+  <link name="base_link"/>
+  <link name="post"><inertial><origin xyz="0 0 0.25"/><mass value="10"/><inertia ixx="0.2" ixy="0" ixz="0" iyy="0.2" iyz="0" izz="0.05"/></inertial></link>
+  <joint name="joint1" type="revolute"><parent link="base_link"/><child link="post"/><axis xyz="0 0 1"/><limit lower="-3" upper="3"/></joint>
+  <link name="forearm"><inertial><origin xyz="0.5 0 0"/><mass value="20"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="1.0" iyz="0" izz="1.0"/></inertial></link>
+  <joint name="joint2" type="revolute"><parent link="post"/><child link="forearm"/><origin xyz="0 0 0.5"/><axis xyz="0 1 0"/><limit lower="-1.5" upper="1.5"/></joint>
+</robot>"#,
+    )
+    .unwrap();
+    let mut cfg = lossless_config(&URDF_ARM);
+    for edit in [
+        format!("arm.urdf_file = {:?}", path.to_str().unwrap()),
+        "arm.gear_ratios = [160.0]".into(),
+        "arm.joint_coupling = [[0.0], [1.0]]".into(),
+        "arm.bars_on = [1.0, 2.0]".into(),
+        "arm.bars_turns_with = [2.0, 1.0]".into(),
+        "arm.bars_pin_m = [0.0, 0.0, 0.5, -0.3, 0.0, 0.0]".into(),
+        "arm.bars_mass_kg = [6.0, 8.0]".into(),
+        "arm.bars_com_m = [-0.15, 0.0, 0.0, 0.0, 0.0, -0.5]".into(),
+        "arm.bars_inertia_kgm2 = [0.004, 0.045, 0.045, 0.0, 0.0, 0.0, 0.66667, 0.66667, 0.006, 0.0, 0.0, 0.0]".into(),
+        "arm.bars_axial_stiffness_n_m = [0.0, 2.14e8]".into(),
+        "arm.bars_axial_damping_n_s_m = [0.0, 0.0]".into(),
+        "arm.bars_carries = [0.0, 1.0]".into(),
+        "effects.bar_rocking = true".into(),
+        "effects.payload = false".into(),
+        "effects.gravity = false".into(),
+    ]
+    .into_iter()
+    .chain(edits.iter().map(|e| e.to_string()))
+    {
+        cfg.set_text(&edit).unwrap();
+    }
+    (URDF_ARM.build)(&cfg).unwrap()
+}
+
+/// The rocking forearm's two-mass mode (effects.bar_rocking), the motor held (a rotor of 1e4 kg m^2 behind 160:1): the
+/// crank on the gearbox's spring k_g = 2e5 N m/rad, the forearm on the rod's k c^2 = 2.14e8 x 0.3^2 = 1.926e7 N m/rad
+/// against the crank. The motor's joint q turns the crank, q + r the forearm: I_c = 0.045 + 6 x 0.15^2 = 0.18 kg m^2,
+/// I_f = 1 + 20 x 0.5^2 + 8 x 0.3^2 = 6.72 kg m^2 (the rod moves with its pin without turning), so M = [[I_c + I_f, I_f],
+/// [I_f, I_f]] and det(diag(k_g, k c^2) - w^2 M) = 0: I_c I_f w^4 - (k_g I_f + k c^2 (I_c + I_f)) w^2 + k_g k c^2 = 0,
+/// 26.96 Hz (the arm on the gearbox, a little below sqrt(k_g / (I_c + I_f)) / 2 pi = 27.10 Hz) and 1676 Hz (the crank
+/// between the two springs). Without the crank the two columns of M would be equal and it singular.
+#[test]
+fn the_rocking_forearm_rings_as_the_two_masses_by_hand() {
+    let m = rocker(&[
+        "effects.joint_elasticity = true",
+        "effects.gearbox_stiffness_curve = false",
+        "effects.gearbox_backlash = false",
+        "gearbox.stiffness_nm_rad = 2.0e5",
+        "motor.rotor_inertia_kgm2 = 1.0e4",
+    ]);
+    let (ic, i_f, kg, kr): (f64, f64, f64, f64) =
+        (0.045 + 6.0 * 0.15 * 0.15, 1.0 + 20.0 * 0.25 + 8.0 * 0.09, 2e5, 2.14e8 * 0.09);
+    let (a, b, c) = (ic * i_f, kg * i_f + kr * (ic + i_f), kg * kr);
+    let root = (b * b - 4.0 * a * c).sqrt();
+    let hz = |l: f64| l.sqrt() / std::f64::consts::TAU;
+    let (low, high) = (hz(2.0 * c / (b + root)), hz((b + root) / (2.0 * a)));
+    let modes = m.modes(&[0.0]);
+    println!("by hand {low} Hz and {high} Hz; the machine's {modes:?}");
+    assert!((low - 26.96).abs() < 0.01 && (high - 1676.0).abs() < 1.0, "{low} {high}");
+    let nearest =
+        |f: f64| modes.iter().map(|m| m.hz).fold(0.0, |b, x| if (x - f).abs() < (b - f).abs() { x } else { b });
+    near(nearest(low), low, 1e-6, "the arm on the gearbox");
+    near(nearest(high), high, 1e-6, "the crank between the springs");
+    assert!(m.signal_infos().iter().any(|s| s.id == "bar.rocking"));
+    // An arm without a rod has nothing to rock on (as bar_elasticity has nothing to put in series); without the crank
+    // (no mass) the rocking is refused.
+    let mut cfg = URDF_ARM.config();
+    cfg.set_text("effects.bar_rocking = true").unwrap();
+    let plain = (URDF_ARM.build)(&cfg).unwrap();
+    assert!(!plain.signal_infos().iter().any(|s| s.id == "bar.rocking"));
+    let refused = std::panic::catch_unwind(|| rocker(&["arm.bars_mass_kg = [0.0, 8.0]"]));
+    assert!(refused.is_err(), "a rocking without its crank");
+}
+
+/// The palletiser's forearm at rest on its rod (effects.bar_rocking), the upper arm upright and the forearm level
+/// (motors' joints 0), its carton on: by virtual work the rocking r turns the forearm about the elbow (20 kg, its centre
+/// 0.55 m out) and moves the wrist, flange and carton (5 + 8 + 20 = 33 kg) with the forearm's tip 1.2 m out, without
+/// turning them (the flange stays level), and the rod (8 kg) with its pin 0.3 m behind the elbow; the crank stays. Their
+/// weights turn it by g (20 x 0.55 + 33 x 1.2 - 8 x 0.3) = 48.2 g = 472.68 N m against k c^2 = 1.926e7 N m/rad: it rests
+/// at 2.4542e-5 rad, the forearm's tip down (positive about y), and stays there.
+#[test]
+fn the_palletisers_forearm_sags_on_its_rod_by_hand() {
+    let mut cfg = PALLETISER.config();
+    cfg.set_text("effects.bar_rocking = true").unwrap();
+    cfg.set_text("kinematics.tool_space = false").unwrap();
+    let m = (PALLETISER.build)(&cfg).unwrap();
+    let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
+    m.equilibrium(&[0.0; 4], &mut state, &mut torque);
+    let at = state.len() - 2;
+    let by_hand = 48.2 * 9.80665 / (2.14e8 * 0.09);
+    println!("rests at {} rad, by hand {by_hand} rad", state[at]);
+    near(state[at], by_hand, 1e-6, "the rod's sag");
+    let mut d = vec![0.0; state.len()];
+    m.derivatives(&state, &torque, &mut d);
+    assert!(d[at + 1].abs() < 1e-6, "the rocking accelerates at {} rad/s^2 at rest", d[at + 1]);
+    // The rod's spring is the rocking's: not in series with motor 3's gearbox as well, though bar_elasticity is on.
+    cfg.set_text("effects.bar_elasticity = true").unwrap();
+    let both = (PALLETISER.build)(&cfg).unwrap();
+    let pose = [1.2, -0.5, 1.3, 0.0];
+    assert_eq!(both.trains(&pose)[2].unwrap().hz, m.trains(&pose)[2].unwrap().hz);
+}
+
+/// With the rocking on and no losses the palletiser keeps its energy within the suite's 0.1 % of what its pulse puts in,
+/// rigid and elastic, with gravity; with the rod's damper on its loss row closes the budget.
+#[test]
+fn the_rocking_forearm_keeps_the_energy() {
+    for elastic in [false, true] {
+        let mut cfg = rigid(&PALLETISER);
+        for edit in [
+            "kinematics.tool_space = false",
+            "effects.bar_rocking = true",
+            "arm.bars_axial_damping_n_s_m = [0.0, 0.0]",
+            &format!("effects.joint_elasticity = {elastic}"),
+        ] {
+            cfg.set_text(edit).unwrap();
+        }
+        let m = (PALLETISER.build)(&cfg).unwrap();
+        let (drift, injected) = sim_core::testkit::energy_drift(m.as_ref());
+        println!("elastic {elastic}: {drift} J of {injected} J");
+        assert!(injected > 0.0 && drift < 1e-3 * injected, "{drift} J of {injected} J");
+        cfg.set_text("arm.bars_axial_damping_n_s_m = [0.0, 7.35e3]").unwrap();
+        let m = (PALLETISER.build)(&cfg).unwrap();
+        assert!(m.signal_infos().iter().any(|s| s.id == "power.bar_rocking"));
+        sim_core::testkit::loss_budget(m.as_ref());
+    }
+}
+
+fn bent_config(bars: bool, reaction: bool) -> Config {
+    {
+        let mut cfg = rigid(&PALLETISER);
+        cfg.set_text(&format!("effects.link_bending_reaction = {reaction}")).unwrap();
+        for edit in [
+            "kinematics.tool_space = false",
+            "effects.link_bending = true",
+            r#"link_bending.directions = ["in_plane"]"#,
+            "link_bending.outer_diameter_m = [0.0, 0.15, 0.0, 0.0, 0.0]",
+            "link_bending.wall_m = [0.0, 0.01, 0.0, 0.0, 0.0]",
+            "link_bending.youngs_modulus_pa = 2.1e11",
+            "link_bending.damping_ratio = 0.0",
+        ] {
+            cfg.set_text(edit).unwrap();
+        }
+        if !bars {
+            for key in ["on", "turns_with", "pin_m", "mass_kg", "com_m", "inertia_kgm2"] {
+                cfg.set_text(&format!("arm.bars_{key} = []")).unwrap();
+            }
+        }
+        cfg
+    }
 }
 
 /// The palletiser's carton swinging on the flange (effects.payload_swing), at rest with the arm still, the flange level
@@ -1390,72 +1726,93 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
 }
 
 /// The palletiser's turret on its gear, as it rings after a long move in x (its arm out to 1.79 m): the machine reports
-/// its joints' modes with the motors held, K x = w^2 M x (`JointMachine::held_modes`), 8.30 Hz at the move's start and
+/// its joints' modes with the motors held, K x = w^2 M x (`JointMachine::held_modes`), 8.21 Hz at the move's start (8.30
+/// before the parallelogram's rod and crank were added, 22 November: their 14 kg turn with the turret too) and
 /// 5.95 Hz at its end, the turret's (4 mm of its sway in x 0.3 s after the move, `a_move_arrives_and_comes_to_rest`).
-/// The ring measured from the tool's speed rings lower, at 5.30 Hz: the velocity loop does not hold the motor rigidly.
-/// Its cascade (Kv, then PI with Kp and Tn) holds the rotor with Z = Kp (1 + 1 / (j w Tn)) (Kv + j w) - w^2 J at the
-/// motor, i^2 Z at the joint, in series with the gear's k: the mode then rings at the held one times sqrt(Re(k_s) / k),
-/// k_s = k i^2 Z / (k + i^2 Z), worked out at its own frequency: at 5.3 Hz Z = 0.4 (1 - 1.0 j)(50 + 33.3 j) = 33.3 -
-/// 6.7 j N m/rad, i^2 Z about 8.5e5 N m/rad against k = 2e5: 5.95 sqrt(0.81) = 5.36 Hz, within 2 % of the ring (1.0 %).
+/// The ring measured from the tool's speed rings lower: the velocity loop does not hold the motor rigidly. Its cascade
+/// (Kv, then PI with Kp and Tn) holds the rotor with Z = Kp (1 + 1 / (j w Tn)) (Kv + j w) - w^2 J at the motor, i^2 Z at
+/// the joint, in series with the gear's k: the mode then rings at the held one times sqrt(Re(k_s) / k),
+/// k_s = k i^2 Z / (k + i^2 Z), worked out at its own frequency. A linear model of the loop: it is checked on the run
+/// whose rotor is linear too (its motor's and joint's Coulomb friction and the gear's efficiency off; the efficiency
+/// fades in below 0.5 W, a damper on a small ring), at two gain sets: the shipped Kp 1.2, Kv 20 (22 November 2026)
+/// 5.636 Hz against a ring of 5.628, and Kp 0.4, Kv 50 (before) 5.351 against 5.345. With the friction on the rotor
+/// sticks part of each swing and holds the turret stiffer: 5.774 and 5.340 Hz, which the linear model cannot follow
+/// (at Kp 0.4 and Kv 20 it read 5.08 Hz against such a ring of 5.73, and 5.22 with the friction off).
 #[test]
 fn the_palletisers_turret_rings_at_its_held_mode_softened_by_the_velocity_loop() {
     use sim_components::{Command, Sim};
-    // Without the gears' mesh friction, which sticks the turret to its housing more and more as the ring dies away and
-    // so raises its frequency (5.60 Hz over the 3 s with it).
-    let mut cfg = PALLETISER.config();
-    cfg.set_text("effects.gearbox_mesh_friction = false").unwrap();
-    let mut sim = Sim::new(&PALLETISER, &cfg).unwrap();
-    let axis = sim.machine.axes()[0].clone();
-    let (start, mut end) = (sim.control.set_pos.clone(), sim.control.set_pos.clone());
-    end[0] = axis.min + 0.9 * (axis.max - axis.min);
-    let held = sim.machine.resonance_hz(&end).unwrap();
-    let at_start = sim.machine.resonance_hz(&start).unwrap();
+    // The ring after the move, from 0.5 s after it (when the move's own transient has passed) over 3 s, and the held
+    // mode at the move's end and start. Without the gears' mesh friction, which sticks the turret to its housing more
+    // and more as the ring dies away and so raises its frequency (5.60 Hz over the 3 s with it at Kp 0.4, Kv 50).
+    let ring = |edits: &[&str]| {
+        let mut cfg = PALLETISER.config();
+        cfg.set_text("effects.gearbox_mesh_friction = false").unwrap();
+        for e in edits {
+            cfg.set_text(e).unwrap();
+        }
+        let mut sim = Sim::new(&PALLETISER, &cfg).unwrap();
+        let axis = sim.machine.axes()[0].clone();
+        let (start, mut end) = (sim.control.set_pos.clone(), sim.control.set_pos.clone());
+        end[0] = axis.min + 0.9 * (axis.max - axis.min);
+        let held = sim.machine.resonance_hz(&end).unwrap();
+        let at_start = sim.machine.resonance_hz(&start).unwrap();
+        sim.command(Command::MoveTo(end)).unwrap();
+        while sim.control.busy() || sim.step == 0 {
+            sim.step();
+        }
+        sim.run(0.5, |_| {});
+        let n = sim.machine.axes().len();
+        let (mut last, mut crossings) = (0.0, Vec::new());
+        sim.run(3.0, |s| {
+            let (mut p, mut v) = (vec![0.0; n], vec![0.0; n]);
+            s.machine.tool_state(&s.state, &mut p, &mut v);
+            if last * v[1] < 0.0 {
+                crossings.push(s.time());
+            }
+            last = v[1];
+        });
+        let ring = (crossings.len() - 1) as f64 / (2.0 * (crossings[crossings.len() - 1] - crossings[0]));
+        (ring, held, at_start, cfg)
+    };
+    let (shipped, held, at_start, _) = ring(&[]);
     assert!(
-        (held - 5.95).abs() < 0.02 && (at_start - 8.30).abs() < 0.02,
+        (held - 5.95).abs() < 0.02 && (at_start - 8.21).abs() < 0.02,
         "{at_start} Hz at the start, {held} at the end"
     );
-    sim.command(Command::MoveTo(end)).unwrap();
-    while sim.control.busy() || sim.step == 0 {
-        sim.step();
-    }
-    // The free ring, from 0.5 s after the move (when the move's own transient has passed) over 3 s.
-    sim.run(0.5, |_| {});
-    let n = sim.machine.axes().len();
-    let (mut last, mut crossings) = (0.0, Vec::new());
-    sim.run(3.0, |s| {
-        let (mut p, mut v) = (vec![0.0; n], vec![0.0; n]);
-        s.machine.tool_state(&s.state, &mut p, &mut v);
-        if last * v[1] < 0.0 {
-            crossings.push(s.time());
+    assert!(shipped < held, "the ring {shipped} Hz above the held mode {held} Hz");
+    let linear =
+        ["effects.motor_friction = false", "effects.joint_friction = false", "effects.gearbox_efficiency = false"];
+    for gains in [&[][..], &["drive.1.velocity_kp_nm_s_rad = 0.4", "drive.1.kv_1_s = 50.0"]] {
+        let (ring, held, _, cfg) = ring(&[&linear[..], gains].concat());
+        // The turret's motor, drive and gear as resolved (its named motor's rotor, the gear's inertia at its input).
+        let resolved = sim_components::catalog::resolve(&PALLETISER, &cfg).unwrap();
+        let own = sim_components::catalog::motor_config(&resolved, "1").unwrap();
+        let (kp, tn, kv) = (
+            own.f64("drive.velocity_kp_nm_s_rad").unwrap(),
+            own.f64("drive.velocity_tn_s").unwrap(),
+            own.f64("drive.kv_1_s").unwrap(),
+        );
+        let rotor = own.f64("motor.rotor_inertia_kgm2").unwrap() + own.f64("gearbox.inertia_at_input_kgm2").unwrap();
+        let (ratio, k) = (own.f64("gearbox.ratio").unwrap(), own.f64("gearbox.stiffness_nm_rad").unwrap());
+        let mut f = held;
+        for _ in 0..20 {
+            let w = std::f64::consts::TAU * f;
+            // (1 - j / (w Tn)) (Kv + j w), times Kp, less w^2 J: (re, im).
+            let (a, b) = (1.0, -1.0 / (w * tn));
+            let (re, im) = (kp * (a * kv - b * w) - w * w * rotor, kp * (a * w + b * kv));
+            let (zr, zi) = (ratio * ratio * re, ratio * ratio * im);
+            // k z / (k + z) for complex z.
+            let (dr, di) = (k + zr, zi);
+            let d2 = dr * dr + di * di;
+            let series_re = k * (zr * dr + zi * di) / d2;
+            f = held * (series_re / k).sqrt();
         }
-        last = v[1];
-    });
-    let ring = (crossings.len() - 1) as f64 / (2.0 * (crossings[crossings.len() - 1] - crossings[0]));
-    // The turret's motor, drive and gear as resolved (its named motor's rotor, the gear's inertia at its input).
-    let resolved = sim_components::catalog::resolve(&PALLETISER, &cfg).unwrap();
-    let own = sim_components::catalog::motor_config(&resolved, "1").unwrap();
-    let (kp, tn, kv) = (
-        own.f64("drive.velocity_kp_nm_s_rad").unwrap(),
-        own.f64("drive.velocity_tn_s").unwrap(),
-        own.f64("drive.kv_1_s").unwrap(),
-    );
-    let rotor = own.f64("motor.rotor_inertia_kgm2").unwrap() + own.f64("gearbox.inertia_at_input_kgm2").unwrap();
-    let (ratio, k) = (own.f64("gearbox.ratio").unwrap(), own.f64("gearbox.stiffness_nm_rad").unwrap());
-    let mut f = held;
-    for _ in 0..20 {
-        let w = std::f64::consts::TAU * f;
-        // (1 - j / (w Tn)) (Kv + j w), times Kp, less w^2 J: (re, im).
-        let (a, b) = (1.0, -1.0 / (w * tn));
-        let (re, im) = (kp * (a * kv - b * w) - w * w * rotor, kp * (a * w + b * kv));
-        let (zr, zi) = (ratio * ratio * re, ratio * ratio * im);
-        // k z / (k + z) for complex z.
-        let (dr, di) = (k + zr, zi);
-        let d2 = dr * dr + di * di;
-        let series_re = k * (zr * dr + zi * di) / d2;
-        f = held * (series_re / k).sqrt();
+        assert!(ring < held, "{gains:?}: the ring {ring} Hz above the held mode {held} Hz");
+        assert!(
+            (f / ring - 1.0).abs() < 0.02,
+            "{gains:?}: the loop's estimate {f} Hz against the ring {ring} Hz (held {held} Hz)"
+        );
     }
-    assert!(ring < held, "the ring {ring} Hz above the held mode {held} Hz");
-    assert!((f / ring - 1.0).abs() < 0.02, "the loop's estimate {f} Hz against the ring {ring} Hz (held {held} Hz)");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1523,7 +1880,7 @@ fn track_signal(m: &dyn Machine, pose: &[f64], acc: &[f64], id: &str) -> f64 {
 /// loaded block 319.942 + 142.2455 = 462.188 N, reported times four, 1848.75 N. The track accelerating at 2 m/s^2 adds
 /// the inertia's moments about the carriage: pitch M_y = 2 * 66.305 = 132.61 N m on the blocks front and back, +-M_y /
 /// (2 * 0.4), and yaw M_z = -2 * 14.505 = -29.01 N m across the rails, +-M_z / (2 * 0.4); the push along the rails is
-/// the rack's: 462.188 + 165.7625 + 36.2625 = 664.213 N, times four 2656.85 N. The rack's teeth then carry the 261 N,
+/// the rack's: 462.188 + 165.7625 + 36.2625 = 664.213 N, times four 2656.85 N, and the pinion's separating force on top (below). The rack's teeth then carry the 261 N,
 /// and the pinion loads the gearbox's shaft with 261 sqrt(1 + (tan 20 deg / cos 19.5283 deg)^2) = 261 * 1.071978 =
 /// 279.786 N.
 #[test]
@@ -1537,8 +1894,17 @@ fn the_guide_blocks_carry_the_weight_and_the_tilting_moments_by_hand() {
     let mut acc = [0.0; 7];
     acc[0] = 2.0;
     let pushed = track_signal(m.as_ref(), &sideways(), &acc, "axis.j1.guide_load");
-    let by_hand = block(2.0 * SUM_MZ / (2.0 * 0.4) + 2.0 * SUM_MY / (2.0 * 0.4));
-    assert!((by_hand - 2656.85).abs() < 0.01);
+    // The helical pinion's separating force across the rails, 261 N * tan 20 deg / cos 19.5283 deg = 261 * 0.386 = 100.8 N,
+    // on the four blocks: the total grows by it (F_y / 4 on each, all four on the loaded side).
+    let apart = TRACK_MASS * 2.0 * (1.071978f64.powi(2) - 1.0).sqrt();
+    assert!((apart - 100.8).abs() < 0.1, "{apart}");
+    // The carriage's rotors spin about +z (the rack on +y: the pinion's teeth there stand still, w = v / r): the motor's
+    // and the gearbox's input at r a = 2 x 314.159 rad/s^2, the pinion at a tenth of it, 1.7e-4 + 3.59e-5 + 1e-4 / 10 =
+    // 2.159e-4 kg m^2 of momentum per motor rad/s. Its rate, 0.135654 N m about +z, is part of the yaw moment the base
+    // passes, M_z = -2 SUM_MY + 0.135654: the most loaded block's yaw term falls by 0.135654 / 0.8 (4 x that = 0.678 N).
+    let gyro = (1.7e-4 + 3.59e-5 + 1.0e-4 / 10.0) * track_ratio() * 2.0;
+    let by_hand = block(2.0 * SUM_MZ / (2.0 * 0.4) + (2.0 * SUM_MY - gyro) / (2.0 * 0.4) + apart / 4.0);
+    assert!((by_hand - 2756.965).abs() < 0.01, "{by_hand}");
     near(pushed, by_hand, 1e-6, "guide load accelerating");
     let teeth = track_signal(m.as_ref(), &sideways(), &acc, "rack.1.feed_force");
     near(teeth, TRACK_MASS * 2.0, 1e-6, "feed force");
@@ -1546,6 +1912,380 @@ fn the_guide_blocks_carry_the_weight_and_the_tilting_moments_by_hand() {
     let apart = 20f64.to_radians().tan() / 19.5283f64.to_radians().cos();
     assert!(((1.0 + apart * apart).sqrt() - 1.071978).abs() < 1e-6);
     near(radial, teeth * 1.071978, 1e-6, "radial load");
+}
+
+/// The rack's side and lever (`track.rack_side`, `track.rack_lever_m`) at the track's 2 m/s^2 above, F_x = 261 N, the
+/// separating force F_sep = 261 * 0.386 = 100.8 N: the blocks' F_y is the chain's plus side * F_sep, and the yaw moment
+/// M_z = -2 * 14.505 + side * lever * 261 N m. The yaw term of the most loaded block, which the pitch moment keeps at
+/// s_x = -1, is |F_y / 4 - M_z / (2 * 0.4)|: 25.2 + 36.2625 = 61.4625 N at side +1 and no lever (as shipped), 25.2 + 3.6375
+/// at lever 0.1 m (M_z = -2.91 N m), |-25.2 + 36.2625| = 11.0625 N at side -1, 25.2 + 68.8875 at side -1 and lever 0.1 m;
+/// and in M_z the rotors' momentum rate, side * 0.135654 N m (`the_guide_blocks_carry_the_weight_...`).
+#[test]
+fn the_racks_side_and_lever_move_the_guide_blocks_load_as_by_hand() {
+    let g = 9.80665;
+    let push = TRACK_MASS * 2.0;
+    let apart = push * (1.071978f64.powi(2) - 1.0).sqrt();
+    let by_hand = |side: f64, lever: f64| {
+        // The rotors' momentum rate (above), about +z with the rack on +y and about -z with it on -y.
+        let gyro = (1.7e-4 + 3.59e-5 + 1.0e-4 / 10.0) * track_ratio() * 2.0;
+        let yaw = -2.0 * SUM_MY + side * lever * push + side * gyro;
+        4.0 * (TRACK_MASS * g / 4.0 + g * SUM_MY + 2.0 * SUM_MZ / 0.8 + (side * apart / 4.0 - yaw / 0.8).abs())
+    };
+    let mut acc = [0.0; 7];
+    acc[0] = 2.0;
+    for (side, lever) in [(1.0, 0.0), (1.0, 0.1), (-1.0, 0.0), (-1.0, 0.1)] {
+        let mut cfg = rigid(&ARM_ON_TRACK);
+        cfg.set_text(&format!("track.rack_side = {side}")).unwrap();
+        cfg.set_text(&format!("track.rack_lever_m = {lever}")).unwrap();
+        let m = (ARM_ON_TRACK.build)(&cfg).unwrap();
+        let load = track_signal(m.as_ref(), &sideways(), &acc, "axis.j1.guide_load");
+        near(load, by_hand(side, lever), 1e-6, &format!("guide load, side {side}, lever {lever}"));
+    }
+}
+
+/// The flange's angular speed and acceleration, not the rotation vector's rates. The six-axis arm with joint 1 about z
+/// and joints 2 and 3 about y (all frames unrotated), at q1 = 0: w = q1' z + s y with s = q2' + q3', and dw/dt =
+/// q1'' z + s' y + s q1' (z x y) = (-s q1', s', q1''). With q' = (0.5, 0.3, 0.4) and q'' = (2, 1, 2): s = 0.7, s' = 3,
+/// w = (0, 0.7, 0.5), |w| = 0.86023, dw/dt = (-0.35, 3, 2), |dw/dt| = 3.62244.
+#[test]
+fn the_flanges_angular_speed_and_acceleration_follow_from_the_joint_axes() {
+    let cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    let chain = arm::chain(&cfg).unwrap();
+    let fk = |q: &[f64]| chain.tip(q);
+    let home = cfg.f64s("kinematics.home_joints").unwrap();
+    let pose = tool::Pose::new(&fk, home, vec![0, 1, 2, 3, 4, 5], 0.86, 30.0).unwrap();
+    let q = [0.0, 0.2, -0.3, 0.0, 0.0, 0.0];
+    let (w, a) = pose.angular_motion(&fk, &q, &[0.5, 0.3, 0.4, 0.0, 0.0, 0.0], &[2.0, 1.0, 2.0, 0.0, 0.0, 0.0]);
+    near(w, 0.74f64.sqrt(), 1e-6, "angular speed");
+    near(a, 13.1225f64.sqrt(), 1e-4, "angular acceleration");
+}
+
+/// A time-optimal line that turns the six-axis arm's flange 0.5 rad about the vertical and tilts it 0.2 rad (0.538 rad
+/// in all, the rotation vector staying in the tool range of +-0.6 rad) while it moves 0.05 m: along the plan, the flange's spin from its planned orientations, log(R(t + dt) R(t - dt)^T) / 2 dt, and
+/// its rate are what `Pose::angular_motion` gives from the joints (their rates differenced over the plan's 1 ms), and
+/// the plan keeps both within the smallest rx, ry, rz limits (1.5 rad/s, 8 rad/s^2), which bind: 1.4997 rad/s and
+/// 7.7354 rad/s^2 (a limit of the plan itself, judged on the planned motion, so no torque reserve: 6.3987, 0.8 of 8,
+/// before 17 November; less what the controller's cubics may add between the plan's points, `path::piece_limits`), the
+/// spin to 3e-7 rad/s, its rate to 0.01 rad/s^2.
+#[test]
+fn a_reorienting_time_optimal_line_keeps_the_flanges_angular_limits() {
+    use sim_components::rigid::{exp, log, matmul, transpose};
+    let mut cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    cfg.set_text("effects.joint_elasticity = false").unwrap();
+    let sim = Sim::new(&URDF_ARM, &cfg).unwrap();
+    let from = sim.control.planned_pos().to_vec();
+    let b = log(&matmul(&exp([0.0, 0.0, 0.5]), &matmul(&exp([0.2, 0.0, 0.0]), &exp([from[3], from[4], from[5]]))));
+    let text = format!("line, {}, {}, {}, {}, {}, {}", from[0], from[1] + 0.05, from[2], b[0], b[1], b[2]);
+    let points = sim.plan_path(&sim_components::path::parse(&text).unwrap(), true).unwrap();
+    let chain = arm::chain(&cfg).unwrap();
+    let fk = |q: &[f64]| chain.tip(q);
+    let pose =
+        tool::Pose::new(&fk, cfg.f64s("kinematics.home_joints").unwrap(), vec![0, 1, 2, 3, 4, 5], 0.86, 30.0).unwrap();
+    let ratios = cfg.f64s("arm.gear_ratios").unwrap();
+    let joints: Vec<Vec<f64>> = points
+        .iter()
+        .map(|(_, p)| {
+            let mut m = vec![0.0; 6];
+            sim.machine.inverse(p, &mut m);
+            m.iter().zip(&ratios).map(|(m, r)| m / r).collect()
+        })
+        .collect();
+    let spin = |i: usize, j: usize| {
+        let (ri, rj) = (
+            exp([points[i].1[3], points[i].1[4], points[i].1[5]]),
+            exp([points[j].1[3], points[j].1[4], points[j].1[5]]),
+        );
+        log(&matmul(&rj, &transpose(&ri))).map(|w| w / (points[j].0 - points[i].0))
+    };
+    let (mut fastest, mut hardest, mut worst) = (0.0f64, 0.0f64, [0.0f64; 2]);
+    for k in 2..points.len() - 2 {
+        let dt = points[k + 1].0 - points[k].0;
+        let w = spin(k - 1, k + 1);
+        let (w_ahead, w_behind) = (spin(k, k + 2), spin(k - 2, k));
+        let dw: Vec<f64> = (0..3).map(|i| (w_ahead[i] - w_behind[i]) / (2.0 * dt)).collect();
+        let qd: Vec<f64> = (0..6).map(|c| (joints[k + 1][c] - joints[k - 1][c]) / (2.0 * dt)).collect();
+        let qdd: Vec<f64> =
+            (0..6).map(|c| (joints[k + 1][c] - 2.0 * joints[k][c] + joints[k - 1][c]) / (dt * dt)).collect();
+        let (speed, acc) = pose.angular_motion(&fk, &joints[k], &qd, &qdd);
+        let (w_size, dw_size) =
+            (w.iter().map(|v| v * v).sum::<f64>().sqrt(), dw.iter().map(|v| v * v).sum::<f64>().sqrt());
+        worst = [worst[0].max((speed - w_size).abs()), worst[1].max((acc - dw_size).abs())];
+        (fastest, hardest) = (fastest.max(w_size), hardest.max(dw_size));
+    }
+    println!(
+        "{} points: |w| {fastest:.4} of 1.5 rad/s, |dw/dt| {hardest:.4} of 8 rad/s^2, differences {worst:?}",
+        points.len()
+    );
+    assert!(worst[0] < 1e-5 * fastest && worst[1] < 5e-3 * hardest, "{worst:?}");
+    assert!(fastest <= 1.5 * 1.001 && hardest <= 8.0 * 1.001, "{fastest} rad/s, {hardest} rad/s^2");
+    assert!(fastest > 0.9 * 1.5 || hardest > 0.9 * 8.0, "the limits bind: {fastest} rad/s, {hardest} rad/s^2");
+    // The palletiser's quarter turn across to the pallet (its cycle's third segment), time-optimal: its flange turns
+    // about the vertical alone, so the spin is rz' and its rate rz'', within 2.5 rad/s and 10 rad/s^2.
+    let mut cfg = PALLETISER.config();
+    cfg.set_text("effects.joint_elasticity = false").unwrap();
+    let sim = Sim::new(&PALLETISER, &cfg).unwrap();
+    let text = "line, 1.6, 0.5, 1.3, 1.5707963267948966";
+    let points = sim.plan_path(&sim_components::path::parse(text).unwrap(), true).unwrap();
+    let rate = |i: usize, j: usize| (points[j].1[3] - points[i].1[3]) / (points[j].0 - points[i].0);
+    let (mut fastest, mut hardest) = (0.0f64, 0.0f64);
+    for k in 2..points.len() - 2 {
+        let dt = 0.5 * (points[k + 1].0 - points[k - 1].0);
+        fastest = fastest.max(rate(k - 1, k + 1).abs());
+        hardest = hardest.max(((rate(k, k + 2) - rate(k - 2, k)) / (2.0 * dt)).abs());
+    }
+    println!("palletiser: |w| {fastest:.4} of 2.5 rad/s, |dw/dt| {hardest:.4} of 10 rad/s^2");
+    assert!(fastest <= 2.5 * 1.001 && hardest <= 10.0 * 1.001, "{fastest} rad/s, {hardest} rad/s^2");
+}
+
+/// A path planned within the axis limits on the arm on a track in tool space (track, x, y, z, rx, ry, rz): a line that
+/// moves the track 0.1 m and the flange 0.05 m along y and its rotation vector from (0, pi/2, 0) to (0.5, pi/2, 0.5).
+/// Its orientation turns by slerp, about one axis (the turn from the start stays along the whole turn's axis, to 6e-16),
+/// and the flange's spin from the planned orientations, log(R(t + dt) R(t - dt)^T) / 2 dt, and its rate keep the
+/// flange's limits (1.5 rad/s, 8 rad/s^2) and reach them (1.5000, 8.0000: about a fixed axis the spin is the angle's
+/// rate). Before 17 November only an arm with exactly x, y, z, rx, ry, rz slerped and kept them; the track arm's rotation
+/// vector ran straight within its axes' limits alone. The same line timed by the axis limits without the flange's
+/// (`path::plan`) spins it at 1.91 rad/s, in 0.575 s against 0.654 s.
+#[test]
+fn a_reorienting_line_on_the_track_arm_keeps_the_flanges_angular_limits() {
+    use sim_components::rigid::{cross, exp, log, matmul, transpose};
+    let mut cfg = tool_config(&ARM_ON_TRACK, ARM_ON_TRACK_TOOL_CONFIG);
+    cfg.set_text("effects.joint_elasticity = false").unwrap();
+    let sim = Sim::new(&ARM_ON_TRACK, &cfg).unwrap();
+    let from = sim.control.planned_pos().to_vec();
+    let to = vec![from[0] + 0.1, from[1], from[2] + 0.05, from[3], from[4] + 0.5, from[5], from[6] + 0.5];
+    let pieces = [sim_components::path::Piece::Line(to.clone())];
+    let rotation = |p: &[f64]| exp([p[4], p[5], p[6]]);
+    let whole = log(&matmul(&rotation(&to), &transpose(&rotation(&from))));
+    let size = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let measured = |points: &[(f64, Vec<f64>)]| {
+        let spin = |i: usize, j: usize| {
+            log(&matmul(&rotation(&points[j].1), &transpose(&rotation(&points[i].1))))
+                .map(|w| w / (points[j].0 - points[i].0))
+        };
+        let (mut fastest, mut hardest, mut off_axis) = (0.0f64, 0.0f64, 0.0f64);
+        for k in 2..points.len() - 2 {
+            let dt = points[k + 1].0 - points[k].0;
+            let (w_ahead, w_behind) = (spin(k, k + 2), spin(k - 2, k));
+            fastest = fastest.max(size(spin(k - 1, k + 1)));
+            hardest = hardest.max(size(std::array::from_fn(|i| (w_ahead[i] - w_behind[i]) / (2.0 * dt))));
+            let turned = log(&matmul(&rotation(&points[k].1), &transpose(&rotation(&from))));
+            off_axis = off_axis.max(size(cross(turned, whole)) / size(whole));
+        }
+        (fastest, hardest, off_axis)
+    };
+    let planned = sim.plan_path(&pieces, false).unwrap();
+    let (fastest, hardest, off_axis) = measured(&planned);
+    let (cycle, tolerance) = (cfg.f64("profile.cycle_s").unwrap(), cfg.f64("profile.path_tolerance_m").unwrap());
+    let axes = sim.machine.axes();
+    let free =
+        sim_components::path::plan(axes, &from, &pieces, cycle, tolerance, sim.machine.setpoint_slack()).unwrap();
+    let (free_fastest, ..) = measured(&free);
+    println!(
+        "track arm: {} s, |w| {fastest:.4} of 1.5 rad/s, |dw/dt| {hardest:.4} of 8 rad/s^2, off the axis {off_axis:.2e} rad; \
+         without the flange's limits {} s, |w| {free_fastest:.4} rad/s",
+        planned.last().unwrap().0,
+        free.last().unwrap().0
+    );
+    assert!(off_axis < 1e-9, "the turn leaves its axis by {off_axis} rad");
+    assert!(fastest <= 1.5 * 1.001 && hardest <= 8.0 * 1.001, "{fastest} rad/s, {hardest} rad/s^2");
+    assert!(fastest > 0.99 * 1.5 || hardest > 0.99 * 8.0, "the limits bind: {fastest} rad/s, {hardest} rad/s^2");
+    assert!(free_fastest > 1.5 * 1.01, "without the flange's limits: {free_fastest} rad/s");
+}
+
+/// A pure reorientation timed by the axis limits (`cycle_timing = "axis_limits"`): at the six-axis arm's home, flange
+/// down (r = (0, pi/2, 0)), 0.5 rad more on rz. The move keeps the flange's own limits too (`MotionLaw::spin`), so its
+/// spin from the setpoint, |log(exp(r + h r') exp(r - h r')^T)| / 2h, stays within 1.5 rad/s and its rate within 8
+/// rad/s^2. Here rz's own limit of 1.5 rad/s binds: across the rotation vector the flange turns at 2 sqrt(2) / pi = 0.9003
+/// of its rate, 1.3505 rad/s (0.9012 at the move's end, 1.3518; `profile::spin_rates`); turns the flange's limits bind
+/// use them in full (`profile::tests::the_flanges_spin_on_a_move_uses_its_limits`). A move of the place alone takes as
+/// long as before.
+#[test]
+fn a_reorientation_timed_by_the_axis_limits_keeps_the_flanges_angular_limits() {
+    use sim_components::rigid::{exp, log, matmul, transpose};
+    let cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    let spin = |r: [f64; 3], rate: [f64; 3]| -> [f64; 3] {
+        let h = 1e-6;
+        let at = |s: f64| exp(std::array::from_fn(|i| r[i] + s * rate[i]));
+        log(&matmul(&at(h), &transpose(&at(-h)))).map(|w| w / (2.0 * h))
+    };
+    let size = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let run = |target: Vec<f64>| {
+        let mut sim = Sim::new(&URDF_ARM, &cfg).unwrap();
+        sim.command(sim_components::Command::MoveTo(target)).unwrap();
+        // The setpoint at each profile cycle (it holds between them): time and the flange's angular velocity.
+        let mut samples: Vec<(f64, [f64; 3])> = Vec::new();
+        let (mut last, mut end) = (Vec::new(), 0.0);
+        sim.run(2.0, |s| {
+            let c = &s.control;
+            if c.set_pos != last {
+                let w = spin([c.set_pos[3], c.set_pos[4], c.set_pos[5]], [c.set_vel[3], c.set_vel[4], c.set_vel[5]]);
+                samples.push((s.time(), w));
+                (last, end) = (c.set_pos.clone(), s.time());
+            }
+        });
+        let fastest = samples.iter().map(|(_, w)| size(*w)).fold(0.0, f64::max);
+        let hardest = samples
+            .windows(3)
+            .map(|p| size(std::array::from_fn(|i| (p[2].1[i] - p[0].1[i]) / (p[2].0 - p[0].0))))
+            .fold(0.0, f64::max);
+        (fastest, hardest, end)
+    };
+    let start = cfg.f64s("start.pose").unwrap();
+    let mut turned = start.clone();
+    turned[5] += 0.5;
+    let (fastest, hardest, _) = run(turned);
+    println!("pure reorientation: |w| {fastest:.4} of 1.5 rad/s, |dw/dt| {hardest:.4} of 8 rad/s^2");
+    assert!(fastest > 1.3505 * (1.0 - 1e-3) && fastest < 1.3518 * (1.0 + 1e-3), "{fastest} rad/s");
+    assert!(hardest <= 8.0 * 1.01, "{hardest} rad/s^2");
+    // The place alone: the same timing with and without the flange's limits (no turn, nothing to keep).
+    let mut moved = start.clone();
+    moved[1] += 0.2;
+    let axes = (URDF_ARM.build)(&cfg).unwrap().axes().to_vec();
+    let law = |spin| sim_components::profile::MotionLaw { spin, ..Default::default() };
+    let duration = |spin| sim_components::profile::Move::with_law(&start, &moved, &axes, &law(spin)).duration();
+    assert_eq!(duration(Some([1.5, 8.0])), duration(None));
+}
+
+/// The verdicts "tool-angular-speed" and "tool-angular-acceleration" judge the flange's spin on the setpoint's rigid
+/// motion (`Machine::rigid_checks` along the plan, once per millisecond), not on the simulated flange, whose gears ring
+/// beyond any plan. The palletiser's shipped cycle turns the flange a quarter turn about the vertical within its rz
+/// limits (2.5 rad/s, 10 rad/s^2), and passes; on the six-axis arm a trajectory that turns it 0.5 rad about the
+/// vertical in 0.25 s (2 rad/s on average) is planned faster than its 1.5 rad/s, and fails.
+#[test]
+fn the_flanges_angular_limits_are_judged_on_the_planned_motion() {
+    use sim_components::analysis::{analyse_cycle_with, analyse_trajectory, verdicts};
+    let angular = |cfg: &Config, load| -> Vec<sim_components::analysis::Verdict> {
+        verdicts(cfg, load).unwrap().into_iter().filter(|v| v.check.starts_with("tool-angular")).collect()
+    };
+    let cfg = PALLETISER.config();
+    let load = analyse_cycle_with(&mut Sim::new(&PALLETISER, &cfg).unwrap(), false).unwrap();
+    let judged = angular(&cfg, &load);
+    println!("palletiser: {judged:?}");
+    assert!(judged.len() == 2 && judged.iter().all(|v| v.ok && v.value > 0.5 * v.limit), "{judged:?}");
+    let cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    let start = cfg.f64s("start.pose").unwrap();
+    let mut turned = start.clone();
+    turned[5] += 0.5;
+    let load = analyse_trajectory(&mut Sim::new(&URDF_ARM, &cfg).unwrap(), vec![(0.0, start), (0.25, turned)]).unwrap();
+    let judged = angular(&cfg, &load);
+    println!("six-axis arm, too fast: {judged:?}");
+    let speed = judged.iter().find(|v| v.check == "tool-angular-speed").unwrap();
+    assert!(!speed.ok && speed.value > 2.0 && speed.limit == 1.5, "{speed:?}");
+    // The five-axis arm: what is judged is the turn of where the tool points, which its rx, ry stand for; the turn about
+    // it is the joints'. Its cycle's tilt of 0.3 rad about x runs at the rx limits (1.5 rad/s, 8 rad/s^2): the plan
+    // reaches 8.000 rad/s^2 and 1.350 rad/s (the S-curve's top speed on 0.3 rad). Judged whole, the flange's spin about
+    // where it points as the arm swings across (17 November 2026: 2.86 rad/s, 23.4 rad/s^2) failed both.
+    let cfg = tool_config(&URDF_ARM, ARM5_TOOL_CONFIG);
+    let load = analyse_cycle_with(&mut Sim::new(&URDF_ARM, &cfg).unwrap(), false).unwrap();
+    let judged = angular(&cfg, &load);
+    println!("five-axis arm: {judged:?}");
+    let value = |check: &str| judged.iter().find(|v| v.check == check).unwrap();
+    let (speed, acceleration) = (value("tool-angular-speed"), value("tool-angular-acceleration"));
+    assert!(speed.ok && (speed.value - 1.350).abs() < 1e-3, "{speed:?}");
+    assert!(acceleration.ok && (acceleration.value - 8.0).abs() < 1e-3, "{acceleration:?}");
+}
+
+/// The five-axis arm's rx, ry are where the tool points: the direction d = R R_0^T e_z, which is e_z at zero joints, is
+/// exp(rx, ry, 0) e_z at every pose, whatever the arm's turn about d (by hand: the shortest turn from e_z to d has its
+/// axis e_z x d in the x-y plane). Over the grid of `a_flange_pointing_down_at_zero_is_at_no_turn`, to 1e-9.
+#[test]
+fn the_five_axis_arms_turns_are_where_the_tool_points() {
+    use sim_components::rigid::{exp, matmul, transpose};
+    let cfg = tool_config(&URDF_ARM, ARM5_TOOL_CONFIG);
+    let m = (URDF_ARM.build)(&cfg).unwrap();
+    let chain = arm::chain(&cfg).unwrap();
+    let ratios = cfg.f64s("arm.gear_ratios").unwrap();
+    let zero = chain.tip(&[0.0; 5]).0;
+    let mut motors = [0.0; 5];
+    for k in 0..27 {
+        let f = |i: usize| ((k / 3usize.pow(i as u32)) % 3) as f64 - 1.0;
+        let pose = [0.9 + 0.1 * f(0), 0.2 * f(1), 0.7 + 0.1 * f(2), 0.2 * f(0) * f(1), 0.2 * f(2)];
+        m.inverse(&pose, &mut motors);
+        let joints: Vec<f64> = motors.iter().zip(&ratios).map(|(m, r)| m / r).collect();
+        let turned = matmul(&chain.tip(&joints).0, &transpose(&zero));
+        let want = exp([pose[3], pose[4], 0.0]);
+        assert!((0..3).all(|i| (turned[i][2] - want[i][2]).abs() < 1e-9), "{pose:?}");
+    }
+}
+
+/// The seven-joint arm resolves its spare joint by a walk from the last solution, settled to 1e-13, so the feedforward
+/// at a pose (its joint rates by differences of the inverse over 1e-3 of the tool's units) is the same whatever the
+/// inverse solved before: with `kinematics.redundancy = "joint_limits"` the motors' torques after four different
+/// earlier calls agree to 1e-3 (they spread by 3.7 % on motor 1 before the tight settle). The step's truncation: a
+/// quarter of it changes them by less than 1e-3 too. And the inverse converges (round trip to 1e-9) over a box of
+/// +-0.15 m and +-0.3 rad about the start.
+#[test]
+fn the_seven_joint_arms_second_difference_does_not_depend_on_the_call_before() {
+    let mut cfg = tool_config(&URDF_ARM, ARM7_TOOL_CONFIG);
+    cfg.set_text("kinematics.redundancy = \"joint_limits\"").unwrap();
+    let m = (URDF_ARM.build)(&cfg).unwrap();
+    let start = cfg.f64s("start.pose").unwrap();
+    let at = |d: [f64; 6]| -> Vec<f64> { start.iter().zip(d).map(|(s, d)| s + d).collect() };
+    let pose = at([0.05, 0.1, -0.08, 0.1, -0.2, 0.15]);
+    let (vel, acc) = ([0.4, -0.3, 0.2, 0.3, 0.2, -0.4], [3.0, 2.0, -2.5, 2.0, -1.5, 3.0]);
+    let ff = |m: &dyn Machine| {
+        let mut t = vec![0.0; 7];
+        m.feedforward_torque_moving(&pose, &vel, &acc, &mut t);
+        t
+    };
+    let mut torques = Vec::new();
+    for before in
+        [start.clone(), at([0.15, -0.15, 0.1, -0.3, 0.3, 0.0]), at([-0.15, 0.15, -0.15, 0.3, 0.0, -0.3]), pose.clone()]
+    {
+        let mut motors = [0.0; 7];
+        m.inverse(&before, &mut motors);
+        torques.push(ff(m.as_ref()));
+    }
+    let size = torques[0].iter().map(|t| t.abs()).fold(0.0, f64::max);
+    for t in &torques[1..] {
+        for k in 0..7 {
+            assert!((t[k] - torques[0][k]).abs() < 1e-3 * size, "motor {k}: {} against {} N m", t[k], torques[0][k]);
+        }
+    }
+    println!("motor 1 after four calls: {:?} N m", torques.iter().map(|t| t[0]).collect::<Vec<_>>());
+    // The reference with a quarter of the step: the motors' angles differenced by hand.
+    let ratios = cfg.f64s("arm.gear_ratios").unwrap();
+    let motors_at = |x: &[f64]| {
+        let mut q = vec![0.0; 7];
+        m.inverse(x, &mut q);
+        q
+    };
+    let along = |d: &[f64], s: f64| -> Vec<f64> { pose.iter().zip(d).map(|(p, d)| p + s * d).collect() };
+    let (hv, ha) = (
+        0.25e-3 / vel.iter().map(|v| v * v).sum::<f64>().sqrt(),
+        0.25e-3 / acc.iter().map(|v| v * v).sum::<f64>().sqrt(),
+    );
+    let (q, ahead, behind) = (motors_at(&pose), motors_at(&along(&vel, hv)), motors_at(&along(&vel, -hv)));
+    let (a_ahead, a_behind) = (motors_at(&along(&acc, ha)), motors_at(&along(&acc, -ha)));
+    let speed: Vec<f64> = (0..7).map(|k| (ahead[k] - behind[k]) / (2.0 * hv)).collect();
+    let accel: Vec<f64> = (0..7)
+        .map(|k| (ahead[k] - 2.0 * q[k] + behind[k]) / (hv * hv) + (a_ahead[k] - a_behind[k]) / (2.0 * ha))
+        .collect();
+    let mut fine = vec![0.0; 7];
+    m.rigid_motor_torque(&q, &speed, &accel, &mut fine);
+    let coarse = ff(m.as_ref());
+    for k in 0..7 {
+        assert!(
+            (coarse[k] - fine[k]).abs() < 1e-3 * size,
+            "motor {k}: {} against {} N m with a quarter step",
+            coarse[k],
+            fine[k]
+        );
+    }
+    println!("step 1e-3 against a quarter: {:?}", (0..7).map(|k| (coarse[k] - fine[k]) / size).collect::<Vec<_>>());
+    assert_eq!(ratios.len(), 7);
+    // Convergence over the box: every corner and the middles of its faces round trip.
+    for i in 0..6 {
+        for s in [-1.0, 1.0] {
+            let mut d = [0.0; 6];
+            d[i] = s * if i < 3 { 0.15 } else { 0.3 };
+            let x = at(d);
+            let (q, mut back) = (motors_at(&x), [0.0; 6]);
+            assert!(q.iter().all(|v| v.is_finite()), "{x:?} not solved");
+            m.forward(&q, &mut back);
+            assert!(back.iter().zip(&x).all(|(a, b)| (a - b).abs() < 1e-9), "{x:?} came back as {back:?}");
+        }
+    }
 }
 
 /// The guide verdicts judge that load: a set rated just below the cycle's highest guide load fails "guide-load", just
@@ -1592,4 +2332,462 @@ fn the_track_is_a_given_axis_beside_the_tool_pose() {
     m.inverse(&[1.7, 2.4, 0.3, 0.8, 0.0, down, 0.0], &mut there);
     assert!((there[0] - here[0] - 0.2 * track_ratio()).abs() < 1e-9 && (there[1] - here[1]).abs() > 1.0);
     sim_core::testkit::static_hold(m.as_ref());
+}
+
+/// The linear motor axis's frame momentum counts the forcer in the moving mass as it does in the first moment: every
+/// moving part sits on the x axis at the carriage's travel x, so by hand at 0.2 m the first moment is 0.2 times the
+/// mass, whatever the payload's share, and the mass holds at least the carriage's 5 kg and the forcer's 3 kg.
+#[test]
+fn the_linear_motor_frame_momentum_has_the_forcers_mass() {
+    let m = (LINEAR_MOTOR.build)(&rigid(&LINEAR_MOTOR)).unwrap();
+    let (mut state, mut torque) = (Vec::new(), [0.0; 1]);
+    m.equilibrium(&[0.2], &mut state, &mut torque);
+    let f = m.frame_momentum(&state).unwrap();
+    assert!(f.mass >= 5.0 + 3.0, "{} kg is less than carriage and forcer", f.mass);
+    near(f.first_moment[0], f.mass * 0.2, 1e-9, "first moment");
+}
+
+/// The mesh friction takes energy out as the other gearbox losses do, so the lossless config has it off.
+#[test]
+fn the_lossless_config_lists_the_mesh_friction() {
+    assert!(LOSSY_EFFECTS.contains(&"gearbox_mesh_friction"));
+}
+
+/// The condition number is that of the geometric Jacobian, its turn rows the angular velocity (times the length 0.86 m):
+/// by hand from the flange's rotation at the joints one microradian either side, the angular velocity the vector of the
+/// antisymmetric part of R+ R-^T, whose vee is 2 sin(turn) w, the turn 2e-6 rad; the position rows as they are.
+#[test]
+fn the_condition_number_is_that_of_the_geometric_jacobian() {
+    let cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    let chain = arm::chain(&cfg).unwrap();
+    let fk = |q: &[f64]| chain.tip(q);
+    let home = cfg.f64s("kinematics.home_joints").unwrap();
+    let pose = tool::Pose::new(&fk, home.clone(), vec![0, 1, 2, 3, 4, 5], 0.86, 30.0).unwrap();
+    let mut jac = vec![0.0; 36];
+    let mut p = home.clone();
+    for c in 0..6 {
+        p[c] = home[c] + 1e-6;
+        let (ra, pa) = fk(&p);
+        p[c] = home[c] - 1e-6;
+        let (rb, pb) = fk(&p);
+        p[c] = home[c];
+        let rel = sim_components::rigid::matmul(&ra, &sim_components::rigid::transpose(&rb));
+        let w = [rel[2][1] - rel[1][2], rel[0][2] - rel[2][0], rel[1][0] - rel[0][1]];
+        for r in 0..3 {
+            jac[r * 6 + c] = (pa[r] - pb[r]) / 2e-6;
+            jac[(3 + r) * 6 + c] = 0.86 * w[r] / (2.0 * (2e-6f64).sin());
+        }
+    }
+    near(pose.condition(&fk, &home), tool::condition_number(&jac, 6, 6), 1e-3, "condition");
+}
+
+/// The one-way bend in its joint's plane takes the body beyond the link whole, its turning inertia too: the tube of
+/// 4.5 kg with 10 kg and 0.5 kg m^2 (about y) at its tip, the Ritz pair by hand (`ritz_hz`, the tip turning by
+/// (2 a + 3 b) d / L): 25.9029 Hz and 124.575 Hz, against 27.9493 Hz of the mass alone; the exact beam with that tip
+/// mass and inertia (`beam::cantilever_first_frequency`) within 0.01 %. The exact first mode alone (before 22 November)
+/// gave 26.5758 Hz, 2.6 % high.
+#[test]
+fn the_one_way_bend_carries_the_turning_inertia_of_the_tip() {
+    let m = tube_with_tip(
+        "tip-inertia",
+        (4.5, [3.546e-3, 0.24, 0.24]),
+        (10.0, [0.5, 0.5, 0.5]),
+        -0.57,
+        &["effects.joint_elasticity = false", r#"link_bending.directions = ["in_plane"]"#],
+    );
+    let modes = m.modes(&[0.0, 0.0]);
+    assert_eq!(modes.len(), 2, "{modes:?}");
+    let ei = 2.1e11 * sim_components::beam::tube_second_moment(0.06, 0.004);
+    let [first, second] = ritz_hz(ei, 4.5, 0.8, 10.0, 0.5);
+    let exact = sim_components::beam::cantilever_first_frequency(ei, 4.5, 10.0, 0.5, 0.8) / std::f64::consts::TAU;
+    println!("{modes:?}: by hand {first} and {second} Hz, exact {exact} Hz");
+    assert!((first - 25.9029).abs() < 1e-4 && (second - 124.575).abs() < 1e-3, "{first} {second}");
+    near(modes[0].hz, first, 1e-6, "bend with the tip's inertia");
+    near(modes[1].hz, second, 1e-6, "the pair's second");
+    assert!(first / exact - 1.0 < 1e-4, "{first} against the exact {exact}");
+}
+
+/// The bent link's lowest mode against the exact Euler-Bernoulli cantilever with a tip mass M and a tip inertia J
+/// (`beam::cantilever_first_frequency`): the 4.5 kg tube with M / m from 0 to 3 and J / (m L^2) 0, 0.1 and 0.3 at its
+/// tip, one-way on rigid joints, within 0.5 % everywhere: +0.475 % bare, at most +0.11 % with anything at the tip. The
+/// exact first mode alone (before 22 November, two-way still) stood up to 15.7 % high (J / (m L^2) = 0.3, no tip mass),
+/// 6.6 % at 0.1 and 1.3 % at M / m = 3 without inertia; the exact mode with the static shape (the pair the brief named)
+/// would stand 1.4 % high at J / (m L^2) = 0.1 and 3.9 % at 1 (worked out by hand off this test).
+#[test]
+fn the_bend_modes_lowest_is_the_exact_beams_over_tip_masses_and_inertias() {
+    let (m, length) = (4.5, 0.8);
+    let ei = 2.1e11 * sim_components::beam::tube_second_moment(0.06, 0.004);
+    let mut worst: f64 = 0.0;
+    for ratio in [0.0, 0.25, 0.5, 1.0, 2.0, 3.0] {
+        for turning in [0.0, 0.1, 0.3] {
+            let (tip, j) = (ratio * m, turning * m * length * length);
+            let machine = tube_with_tip(
+                "sweep",
+                (m, [3.546e-3, 0.24, 0.24]),
+                (tip, [j, j, j]),
+                -0.57,
+                &["effects.joint_elasticity = false", r#"link_bending.directions = ["in_plane"]"#],
+            );
+            let found = machine.modes(&[0.0, 0.0])[0].hz;
+            let exact = sim_components::beam::cantilever_first_frequency(ei, m, tip, j, length) / std::f64::consts::TAU;
+            println!(
+                "M / m {ratio}, J / (m L^2) {turning}: {found} Hz, exact {exact} Hz, {:+.4} %",
+                100.0 * (found / exact - 1.0)
+            );
+            worst = worst.max((found / exact - 1.0).abs());
+        }
+    }
+    assert!(worst < 0.005, "{:.3} % off the exact beam", 100.0 * worst);
+}
+
+/// A bar of its own (`arm.bars_*`): 5 kg on joint 2's link at (0, 0, 0.3) of its frame, 0.3 m from the joint's axis with
+/// the arm stretched along x (q2 = pi / 2): the gravity torque about joint 2 grows by 5 x 9.80665 x 0.3 = 14.70998 N m,
+/// held by 14.70998 / 120 = 0.122583 N m more at motor 2 (-1.47753 - 0.122583 = -1.600113); joint 3 and beyond do not
+/// carry it. A bar on a joint that is not there is refused.
+#[test]
+fn a_parallelogram_bar_is_a_body_of_its_own() {
+    let mut cfg = rigid(&URDF_ARM);
+    for edit in ["arm.bars_on = [2.0]", "arm.bars_mass_kg = [5.0]", "arm.bars_com_m = [0.0, 0.0, 0.3]"] {
+        cfg.set_text(edit).unwrap();
+    }
+    let m = (URDF_ARM.build)(&cfg).unwrap();
+    let mut torque = [0.0; 6];
+    m.feedforward_torque(&[0.0, std::f64::consts::FRAC_PI_2, 0.0, 0.0, 0.0, 0.0], &[0.0; 6], &mut torque);
+    near(torque[1], -1.600113, 1e-5, "motor 2 with the bar");
+    near(torque[2], -0.178154, 1e-5, "motor 3 without it");
+    cfg.set_text("arm.bars_on = [7.0]").unwrap();
+    assert!((URDF_ARM.build)(&cfg).is_err());
+}
+
+/// A four-bar of unequal links on the SCARA (`arm.four_bar_*`): the follower's pivot F at (0.15, 0.06, 0) of link 1, the
+/// crank point C 0.08 m out along link 2 from joint 2 (at (0.325, 0) of link 1), a 0.2 m coupler (0.5 kg) from C to T
+/// and a 0.12 m follower (0.3 kg) from F to T, in link 1's plane. The exact loop by hand in link 1's frame:
+/// C = (0.325 + 0.08 cos q2, 0.08 sin q2), d = C - F, cos a = (l_f^2 + |d|^2 - l_c^2) / (2 l_f |d|),
+/// T = F + l_f (cos a e + sin a e_perp); each bar a slender rod, its centre at its middle, m l^2 / 12 about it. Its share
+/// of the mass matrix over (q1, q2) is sum m dc/dq_i . dc/dq_j + I db/dq_i db/dq_j (c the centre, b the bar's angle in
+/// the base frame, by central differences of the closed form), which the machine's (the feedforward's torques at unit
+/// accelerations, at rest, less the SCARA's own, times the ratios 100 and 80) matches to 1e-7 at q2 = 0.3 and 1.2
+/// (q1 = 0.4). Its energy holds over the suite's pulse and ring (loss-free).
+#[test]
+fn a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand() {
+    let keys = [
+        "arm.four_bar_ground_on = 1",
+        "arm.four_bar_ground_pin_m = [0.15, 0.06, 0.0]",
+        "arm.four_bar_crank_on = 2",
+        "arm.four_bar_crank_pin_m = [0.08, 0.0, 0.0]",
+        "arm.four_bar_normal = [0.0, 0.0, 1.0]",
+        "arm.four_bar_lengths_m = [0.2, 0.12]",
+        "arm.four_bar_masses_kg = [0.5, 0.3]",
+        "arm.four_bar_branch = 1",
+    ];
+    let mut with = rigid(&SCARA);
+    keys.iter().for_each(|k| with.set_text(k).unwrap());
+    let (plain, looped) = ((SCARA.build)(&rigid(&SCARA)).unwrap(), (SCARA.build)(&with).unwrap());
+    // The bars' centres and angles in the base frame at (q1, q2), by the closed form.
+    let bars = |q1: f64, q2: f64| -> [(f64, [f64; 2], f64); 2] {
+        let (lc, lf, f) = (0.2f64, 0.12f64, [0.15f64, 0.06]);
+        let c = [0.325 + 0.08 * q2.cos(), 0.08 * q2.sin()];
+        let d = [c[0] - f[0], c[1] - f[1]];
+        let dd = d[0].hypot(d[1]);
+        let e = [d[0] / dd, d[1] / dd];
+        let cos = (lf * lf + dd * dd - lc * lc) / (2.0 * lf * dd);
+        let sin = (1.0 - cos * cos).sqrt();
+        let t = [f[0] + lf * (cos * e[0] - sin * e[1]), f[1] + lf * (cos * e[1] + sin * e[0])];
+        let world = |p: [f64; 2]| [p[0] * q1.cos() - p[1] * q1.sin(), p[0] * q1.sin() + p[1] * q1.cos()];
+        let mid = |a: [f64; 2], b: [f64; 2]| world([0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])]);
+        let angle = |a: [f64; 2], b: [f64; 2]| (b[1] - a[1]).atan2(b[0] - a[0]) + q1;
+        [(0.5, mid(c, t), angle(c, t)), (0.3, mid(f, t), angle(f, t))]
+    };
+    for q2 in [0.3, 1.2] {
+        let q = [0.4, q2];
+        let h = 1e-6;
+        let rate = |j: usize| {
+            let (mut a, mut b) = (q, q);
+            a[j] -= h;
+            b[j] += h;
+            let (lo, hi) = (bars(a[0], a[1]), bars(b[0], b[1]));
+            std::array::from_fn::<_, 2, _>(|k| {
+                (
+                    [(hi[k].1[0] - lo[k].1[0]) / (2.0 * h), (hi[k].1[1] - lo[k].1[1]) / (2.0 * h)],
+                    (hi[k].2 - lo[k].2) / (2.0 * h),
+                )
+            })
+        };
+        let (r0, r1) = (rate(0), rate(1));
+        let by_hand = |i: usize, j: usize| -> f64 {
+            let (ri, rj) = (if i == 0 { r0 } else { r1 }, if j == 0 { r0 } else { r1 });
+            (0..2)
+                .map(|k| {
+                    let (m, l) = ([0.5, 0.3][k], [0.2, 0.12][k]);
+                    m * (ri[k].0[0] * rj[k].0[0] + ri[k].0[1] * rj[k].0[1]) + m * l * l / 12.0 * ri[k].1 * rj[k].1
+                })
+                .sum()
+        };
+        let pose = [q[0], q[1], 0.1, 0.0];
+        for j in 0..2 {
+            let mut acc = [0.0; 4];
+            acc[j] = 1.0;
+            let (mut a, mut b) = ([0.0; 4], [0.0; 4]);
+            looped.feedforward_torque(&pose, &acc, &mut a);
+            plain.feedforward_torque(&pose, &acc, &mut b);
+            for i in 0..2 {
+                let got = [100.0, 80.0][i] * (a[i] - b[i]);
+                let want = by_hand(i, j);
+                assert!((got - want).abs() < 1e-7 * want.abs().max(1e-3), "q2 {q2}: M[{i}][{j}] {got} against {want}");
+            }
+        }
+    }
+    let mut lossless = (SCARA.suite_configs)()[0].clone();
+    keys.iter().for_each(|k| lossless.set_text(k).unwrap());
+    sim_core::testkit::energy_conservation((SCARA.build)(&lossless).unwrap().as_ref());
+}
+
+/// A four-bar on a bending link (`bar_field` with a `Closure`): its pins move with the mode as their bodies' points, its
+/// bars turn as the loop's Jacobian has them at the deflected pins. Its limit, the parallelogram: on the SCARA the
+/// follower's pivot at joint 1's axis (link 1's origin), the crank point 0.08 m out on link 2, the follower 0.08 m and the
+/// coupler 0.325 m, link 1's length, the crank square to link 2 (0.08 m along its y, so that the loop is no flat
+/// parallelogram at zero joints, where the modes' masses are taken; at a dead point a four-bar with bending is refused):
+/// the follower stays parallel to link 2's crank and the coupler to link 1's chord,
+/// as two parallel bars do (`bars_turns_with` [2, 1]: the follower turning with link 2, the coupler with link 1, the bent
+/// link, by its chord). Link 1 bending in its plane (a 120 x 8 mm aluminium tube), both give the same modes to 1e-9 at
+/// two poses. And the energy holds with the bend acting back on the joints, the unequal four-bar of
+/// `a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand` on links 1 and 2 bending (refused before).
+#[test]
+fn a_four_bar_on_a_bending_link_has_the_parallelograms_modes_in_its_limit() {
+    let bent = |extra: &[&str]| {
+        let mut cfg = rigid(&SCARA);
+        for edit in [
+            "effects.link_bending = true",
+            r#"link_bending.directions = ["in_plane"]"#,
+            "link_bending.outer_diameter_m = [0.12, 0.0, 0.0, 0.0]",
+            "link_bending.wall_m = [0.008, 0.0, 0.0, 0.0]",
+            "link_bending.damping_ratio = 0.0",
+        ]
+        .iter()
+        .chain(extra)
+        {
+            cfg.set_text(edit).unwrap();
+        }
+        cfg
+    };
+    let (lc, lf) = (0.5 * 0.325f64.powi(2) / 12.0, 0.3 * 0.08f64.powi(2) / 12.0);
+    let parallel = bent(&[
+        "arm.bars_on = [1, 2]",
+        "arm.bars_turns_with = [2, 1]",
+        "arm.bars_pin_m = [0.0, 0.0, 0.0, 0.0, 0.08, 0.0]",
+        "arm.bars_mass_kg = [0.3, 0.5]",
+        "arm.bars_com_m = [0.0, 0.04, 0.0, -0.1625, 0.0, 0.0]",
+        &format!("arm.bars_inertia_kgm2 = [{lf}, 0.0, {lf}, 0.0, 0.0, 0.0, 0.0, {lc}, {lc}, 0.0, 0.0, 0.0]"),
+    ]);
+    let looped = bent(&[
+        "arm.four_bar_ground_on = 1",
+        "arm.four_bar_ground_pin_m = [0.0, 0.0, 0.0]",
+        "arm.four_bar_crank_on = 2",
+        "arm.four_bar_crank_pin_m = [0.0, 0.08, 0.0]",
+        "arm.four_bar_normal = [0.0, 0.0, 1.0]",
+        "arm.four_bar_lengths_m = [0.325, 0.08]",
+        "arm.four_bar_masses_kg = [0.5, 0.3]",
+        "arm.four_bar_branch = 1",
+    ]);
+    let (a, b) = ((SCARA.build)(&parallel).unwrap(), (SCARA.build)(&looped).unwrap());
+    for pose in [[0.4, 1.0, 0.1, 0.0], [-0.3, 1.3, 0.1, 0.0]] {
+        let (ma, mb) = (a.modes(&pose), b.modes(&pose));
+        assert!(!ma.is_empty() && ma.len() == mb.len(), "{ma:?} {mb:?}");
+        for (x, y) in ma.iter().zip(&mb) {
+            assert!((x.hz / y.hz - 1.0).abs() < 1e-9, "{pose:?}: parallel {} Hz, four-bar {} Hz", x.hz, y.hz);
+        }
+    }
+    let mut lossless = (SCARA.suite_configs)()[0].clone();
+    for edit in [
+        "effects.link_bending = true",
+        "effects.link_bending_reaction = true",
+        r#"link_bending.directions = ["in_plane"]"#,
+        "link_bending.damping_ratio = 0.0",
+        "arm.four_bar_ground_on = 1",
+        "arm.four_bar_ground_pin_m = [0.15, 0.06, 0.0]",
+        "arm.four_bar_crank_on = 2",
+        "arm.four_bar_crank_pin_m = [0.08, 0.0, 0.0]",
+        "arm.four_bar_normal = [0.0, 0.0, 1.0]",
+        "arm.four_bar_lengths_m = [0.2, 0.12]",
+        "arm.four_bar_masses_kg = [0.5, 0.3]",
+        "arm.four_bar_branch = 1",
+    ] {
+        lossless.set_text(edit).unwrap();
+    }
+    sim_core::testkit::energy_conservation((SCARA.build)(&lossless).unwrap().as_ref());
+}
+
+/// The carriage's motor rotor is part of what its guides carry: it spins about the vertical at the ratio times the
+/// carriage's speed, and the carriage accelerating at 2 m/s^2 turns its momentum J r a about z, a yaw moment the four
+/// blocks carry as +-M_z / (2 x 0.4) each. 1.7e-4 kg m^2 more at the motor (on the gearbox's input: the track's motor is
+/// named, its rotor the catalogue's) changes nothing else of the guide load at rest, so it moves by four times the most
+/// loaded block's share, 4 x 1.7e-4 x 314.159 x 2 / 0.8 = 0.534070 N: down, as the rotor's yaw (+z, the rack on +y)
+/// works against the chain's (-2 SUM_MY), up with the rack on -y.
+#[test]
+fn the_rotor_of_the_track_adds_its_gyroscopic_moment_to_the_guide_load() {
+    let load = |side: f64, input: f64| {
+        let mut cfg = rigid(&ARM_ON_TRACK);
+        cfg.set_text(&format!("track.rack_side = {side}")).unwrap();
+        cfg.set_text(&format!("gearbox.1.inertia_at_input_kgm2 = {input}")).unwrap();
+        let m = (ARM_ON_TRACK.build)(&cfg).unwrap();
+        let mut acc = [0.0; 7];
+        acc[0] = 2.0;
+        track_signal(m.as_ref(), &sideways(), &acc, "axis.j1.guide_load")
+    };
+    let by_hand = 4.0 * 1.7e-4 * track_ratio() * 2.0 / 0.8;
+    for side in [1.0, -1.0] {
+        let moved = load(side, 3.59e-5 + 1.7e-4) - load(side, 3.59e-5);
+        assert!((moved + side * by_hand).abs() < 1e-6 * by_hand, "side {side}: {moved} against {by_hand}");
+    }
+}
+
+/// A walk of one step that crosses the wrist's singularity is refused although both its ends are clear of it: the
+/// six-axis arm at its home with joint 5 at +0.03 rad, walked to the tool pose of joint 5 at -0.03 (0.06 rad of turn
+/// about joint 5's axis and the flange's offset times that: one step of the walk), the condition number 128.8 and
+/// 130.0 at its ends, below a limit of 200; the determinant of the geometric Jacobian changes its sign between them. Unguarded the
+/// walk gets there (through the singular pose), and a step of the same size that stays on one side (0.33 to 0.27 rad)
+/// passes. (With the shipped limit of 30 the condition number is 3.86 / q5 here: the ends of a crossing would be 0.26
+/// rad apart, beyond a step's 0.05 rad, so the ends alone would tell there; the sign tells at any limit.)
+#[test]
+fn a_walk_of_one_step_through_a_singular_pose_is_refused() {
+    let cfg = tool_config(&URDF_ARM, ARM_TOOL_CONFIG);
+    let chain = arm::chain(&cfg).unwrap();
+    let fk = |q: &[f64]| chain.tip(q);
+    let home = cfg.f64s("kinematics.home_joints").unwrap();
+    let pose = tool::Pose::new(&fk, home.clone(), vec![0, 1, 2, 3, 4, 5], 0.86, 200.0).unwrap();
+    let at = |q5: f64| {
+        let mut q = home.clone();
+        q[4] = q5;
+        q
+    };
+    let walk = |from: f64, to: f64, guard: bool| {
+        let mut tool = vec![0.0; 6];
+        pose.forward(&fk, &at(to), &mut tool);
+        let mut q = vec![0.0; 6];
+        let reached = pose.walk(&fk, &at(from), &tool, &mut q, guard);
+        (reached, q)
+    };
+    for q5 in [0.03, -0.03] {
+        let c = pose.condition(&fk, &at(q5));
+        assert!(c > 128.0 && c < 131.0, "condition {c} at joint 5 = {q5}");
+    }
+    assert!(!walk(0.03, -0.03, true).0, "the guarded walk crossed the singular pose");
+    let (reached, q) = walk(0.03, -0.03, false);
+    assert!(reached && (q[4] + 0.03).abs() < 1e-6, "{q:?}");
+    assert!(walk(0.33, 0.27, true).0);
+}
+
+/// Every shipped arm states each motor's ratio twice, as `arm.gear_ratios` (the simulation's) and as its gearbox's
+/// `gearbox.ratio` with its own `[gearbox.<id>]` over it (the gearbox life, its drag, the drives' tuning): the same.
+#[test]
+fn the_shipped_arms_give_each_motor_one_gear_ratio() {
+    let configs = [
+        URDF_ARM.config(),
+        SCARA.config(),
+        PALLETISER.config(),
+        ARM_ON_TRACK.config(),
+        tool_config(&SCARA, SCARA_TOOL_CONFIG),
+        tool_config(&URDF_ARM, ARM_TOOL_CONFIG),
+        tool_config(&URDF_ARM, ARM5_TOOL_CONFIG),
+        tool_config(&URDF_ARM, ARM7_TOOL_CONFIG),
+        tool_config(&ARM_ON_TRACK, ARM_ON_TRACK_TOOL_CONFIG),
+    ];
+    for cfg in &configs {
+        for (k, ratio) in cfg.f64s("arm.gear_ratios").unwrap().iter().enumerate() {
+            let own = sim_components::catalog::motor_config(cfg, sim_components::chain::MOTOR_IDS[k]).unwrap();
+            assert_eq!(
+                own.f64("gearbox.ratio").unwrap(),
+                *ratio,
+                "{}: motor {}",
+                cfg.f64s("arm.gear_ratios").unwrap().len(),
+                k + 1
+            );
+        }
+    }
+}
+
+/// A bar of its own (`arm.bars_turns_with`): 5 kg pinned at joint 3's origin (the elbow) and turning with link 1 (the
+/// turret), its centre 0.3 m along the turret's x from the pin, its inertia 0.1, 0.2, 0.3 kg m^2 about its centre. The
+/// arm stretched along x (q2 = pi / 2): the bar hangs on the elbow and does not turn with link 2 or 3, so it loads joint
+/// 2 by its weight at the elbow's lever, 5 g (x_elbow - x_2) (not at its centre's, 0.3 m further), and joint 3 not at
+/// all; turning the turret it adds I_zz + 5 r^2 (r its centre's distance from the vertical axis), swinging joint 2 it
+/// moves with the elbow alone, 5 d^2 (d the elbow's distance from joint 2's axis), and joint 3 not at all. All over the
+/// ratio 120 at the motors. Moving at speed with no torque the energy holds (the bar's speed terms are its mass
+/// matrix's): its rate along the state's from `derivatives` is 0 to 1e-6 W (runs give 0; the differences' rounding is
+/// about 5e-8 W; leaving out the bar's J' q' gives -0.11 W). A bar with the links bending is refused.
+#[test]
+fn a_parallelogram_bar_of_its_own_moves_with_its_pin_and_turns_with_its_link() {
+    let edits = [
+        "arm.bars_on = [3.0]",
+        "arm.bars_turns_with = [1.0]",
+        "arm.bars_mass_kg = [5.0]",
+        "arm.bars_com_m = [0.3, 0.0, 0.0]",
+        "arm.bars_inertia_kgm2 = [0.1, 0.2, 0.3, 0.0, 0.0, 0.0]",
+    ];
+    let plain = rigid(&URDF_ARM);
+    let mut cfg = plain.clone();
+    edits.iter().for_each(|e| cfg.set_text(e).unwrap());
+    let (with, without) = ((URDF_ARM.build)(&cfg).unwrap(), (URDF_ARM.build)(&plain).unwrap());
+    let pose = [0.0, std::f64::consts::FRAC_PI_2, 0.0, 0.0, 0.0, 0.0];
+    let added = |acc: [f64; 6]| -> Vec<f64> {
+        let (mut a, mut b) = ([0.0; 6], [0.0; 6]);
+        with.feedforward_torque(&pose, &acc, &mut a);
+        without.feedforward_torque(&pose, &acc, &mut b);
+        a.iter().zip(&b).map(|(a, b)| (a - b) * 120.0).collect()
+    };
+    let frames = arm::chain(&cfg).unwrap().frames(&pose);
+    let (turret, shoulder, elbow) = (frames[0], frames[1].1, frames[2].1);
+    let centre: Vec<f64> = (0..3).map(|i| elbow[i] + turret.0[i][0] * 0.3).collect();
+    let g = 9.80665;
+    let held = added([0.0; 6]);
+    near(held[1].abs(), 5.0 * g * (elbow[0] - shoulder[0]).abs(), 1e-9, "joint 2 holds the bar at the elbow");
+    assert!(held[2].abs() < 1e-9 && held[0].abs() < 1e-9, "{held:?}");
+    let r2 = (centre[0] - turret.1[0]).powi(2) + (centre[1] - turret.1[1]).powi(2);
+    let zz = (0..3).map(|k| turret.0[2][k] * turret.0[2][k] * [0.1, 0.2, 0.3][k]).sum::<f64>();
+    near(added([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])[0], zz + 5.0 * r2, 1e-9, "turret");
+    let axis2 = (0..3).map(|i| frames[1].0[i][1]).collect::<Vec<f64>>();
+    let arm: Vec<f64> = (0..3).map(|i| elbow[i] - shoulder[i]).collect();
+    let along = (0..3).map(|i| axis2[i] * arm[i]).sum::<f64>();
+    let d2 = (0..3).map(|i| arm[i] * arm[i]).sum::<f64>() - along * along;
+    let swung = added([0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+    near(swung[1] - held[1], 5.0 * d2, 1e-9, "joint 2");
+    assert!((added([0.0, 0.0, 1.0, 0.0, 0.0, 0.0])[2] - held[2]).abs() < 1e-9);
+    // Free, at speed.
+    let (mut state, mut hold) = (Vec::new(), vec![0.0; 6]);
+    with.equilibrium(&[0.3, 1.2, -0.6, 0.4, 0.8, -0.2], &mut state, &mut hold);
+    state[6..12].copy_from_slice(&[0.5, -0.4, 0.6, 0.3, -0.5, 0.4]);
+    let mut rates = vec![0.0; state.len()];
+    with.derivatives(&state, &[0.0; 6], &mut rates);
+    let h = 1e-7;
+    let along = |s: f64| -> Vec<f64> { state.iter().zip(&rates).map(|(x, r)| x + s * r).collect() };
+    let change = (with.energy(&along(h)) - with.energy(&along(-h))) / (2.0 * h);
+    assert!(change.abs() < 1e-6, "the energy changes by {change} W");
+    // Bending links with the bar build since 22 November (refused before; `the_parallelogram_holds_the_forearm_against_the_upper_arms_bend`).
+    cfg.set_text("effects.link_bending = true").unwrap();
+    assert!((URDF_ARM.build)(&cfg).is_ok());
+    // The palletiser, its joints coupled: a 4 kg rod pinned on the forearm (URDF joint 3) 0.1 m behind the elbow,
+    // parallel to the upper arm (joint 2), and its energy holds alike.
+    let mut cfg = rigid(&PALLETISER);
+    for edit in [
+        "arm.bars_on = [3.0]",
+        "arm.bars_turns_with = [2.0]",
+        "arm.bars_pin_m = [-0.1, 0.0, 0.0]",
+        "arm.bars_mass_kg = [4.0]",
+        "arm.bars_com_m = [0.0, 0.0, 0.3]",
+        "arm.bars_inertia_kgm2 = [0.12, 0.12, 0.001, 0.0, 0.0, 0.0]",
+    ] {
+        cfg.set_text(edit).unwrap();
+    }
+    let m = (PALLETISER.build)(&cfg).unwrap();
+    let (mut state, mut hold) = (Vec::new(), vec![0.0; 4]);
+    m.equilibrium(&[1.4, 0.0, 1.0, 0.0], &mut state, &mut hold);
+    state[4..8].copy_from_slice(&[0.3, -0.4, 0.5, 0.6]);
+    let mut rates = vec![0.0; state.len()];
+    m.derivatives(&state, &[0.0; 4], &mut rates);
+    let along = |s: f64| -> Vec<f64> { state.iter().zip(&rates).map(|(x, r)| x + s * r).collect() };
+    // The palletiser's energy is larger: its last bit, 2.3e-13 J, is 2.3e-6 W of the rate over 1e-7 s (as a run shows),
+    // 2.3e-8 W over 1e-5 s.
+    let h = 1e-5;
+    let change = (m.energy(&along(h)) - m.energy(&along(-h))) / (2.0 * h);
+    assert!(change.abs() < 1e-6, "palletiser: the energy changes by {change} W");
 }

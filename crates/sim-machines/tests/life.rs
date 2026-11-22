@@ -2,8 +2,9 @@
 //! judge the lives against the required life.
 
 use sim_components::analysis::{
-    SPEED_BAND, analyse_trajectory, belt_tooth_utilisation, gearbox_gearing_life_h, gearbox_life_h, guide_life_h,
-    motor_bearing_life_h, pulley_bearing_life_h, sensitivity, torque_band_floor, verdicts,
+    SPEED_BAND, analyse_cycle, analyse_trajectory, belt_tooth_utilisation, gearbox_gearing_life_h, gearbox_life_h,
+    guide_life_h, guide_life_km, motor_bearing_life_h, pulley_bearing_life_h, reliability_factor, sensitivity,
+    torque_band_floor, verdicts,
 };
 use sim_components::path::Piece;
 use sim_components::{Command, Sim};
@@ -13,7 +14,8 @@ use sim_machines::MACHINES;
 /// here: per motor the mean speed (every step), the cubic mean of the pulley shaft's radial load weighted with the speed
 /// (once per millisecond), the mean of the gearbox output torque with the exponent 10/3 weighted with the speed and its
 /// peak per speed band (every step), and its load spectrum: the speed summed per torque band of 1 % from 0.1 N m (every
-/// step); per guide the mean speed of its axis (once per millisecond). They agree to 1e-9.
+/// step); per guide the cubic mean of its load weighted with its axis's |speed| (rolling damage goes with distance) and
+/// the mean speed of its axis (once per millisecond). They agree to 1e-9.
 #[test]
 fn the_life_loads_are_the_signals_added_up() {
     for entry in MACHINES.iter().copied() {
@@ -51,6 +53,7 @@ fn the_life_loads_are_the_signals_added_up() {
             (vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![0.0; n], vec![vec![0.0f64; 4001]; n]);
         let mut spectra = vec![vec![0.0f64; 4001]; n];
         let (mut guide_cubed, mut guide_speed, mut samples) = (vec![0.0; guides.len()], vec![0.0; guides.len()], 0.0);
+        let mut guide_peak = vec![0.0f64; guides.len()];
         let (mut pos, mut speed, mut values) = (vec![0.0; n], vec![0.0; n], Vec::new());
         let (mut tool, mut rate) = (vec![0.0; axes.len()], vec![0.0; axes.len()]);
         let (start, mut steps) = (sim.time(), 0u64);
@@ -74,8 +77,9 @@ fn the_life_loads_are_the_signals_added_up() {
             if steps % every == 0 {
                 sim.machine.tool_state(&sim.state, &mut tool, &mut rate);
                 for (g, &(signal, axis)) in guides.iter().enumerate() {
-                    guide_cubed[g] += values[signal].powi(3);
+                    guide_cubed[g] += values[signal].powi(3) * rate[axis].abs();
                     guide_speed[g] += rate[axis].abs();
+                    guide_peak[g] = guide_peak[g].max(values[signal]);
                 }
                 samples += 1.0;
             }
@@ -114,17 +118,80 @@ fn the_life_loads_are_the_signals_added_up() {
                 assert!(torque_band_floor(top) <= m.gearbox_torque.unwrap().0 * (1.0 + 1e-12), "{}", entry.id);
             }
         }
+        // Each guide on its own: P = cbrt(sum F^3 |v| / sum |v|) (0 for a guide whose axis stands), its mean speed and
+        // peak; `guide_load` and `guide_speed` are those of the guide with the most wear P^3 v, its peak the highest of all.
+        assert_eq!(load.guides.len(), guides.len(), "{}", entry.id);
+        let equivalent = |g: usize| if guide_speed[g] > 0.0 { (guide_cubed[g] / guide_speed[g]).cbrt() } else { 0.0 };
+        for (g, figures) in load.guides.iter().enumerate() {
+            close(figures.equivalent, equivalent(g), "guide load");
+            close(figures.speed.unwrap(), guide_speed[g] / samples, "guide speed");
+            close(figures.peak, guide_peak[g], "guide peak");
+        }
         if let Some(g) = (0..guides.len()).max_by(|&a, &b| guide_cubed[a].total_cmp(&guide_cubed[b])) {
-            close(load.guide_load.unwrap().1, (guide_cubed[g] / samples).cbrt(), "guide load");
+            let peak = guide_peak.iter().copied().fold(f64::MIN, f64::max);
+            close(load.guide_load.unwrap().0, peak, "highest guide peak");
+            close(load.guide_load.unwrap().1, equivalent(g), "guide load of the most worn guide");
             close(load.guide_speed.unwrap(), guide_speed[g] / samples, "guide speed");
         } else {
             assert!(load.guide_load.is_none() && load.guide_speed.is_none(), "{}", entry.id);
         }
         println!(
-            "{}: motor speed {:.2} rad/s, radial {:?} N, guide {:?} m/s",
-            entry.id, load.motors[0].mean_speed, load.motors[0].radial_load_equivalent, load.guide_speed
+            "{}: motor speed {:.2} rad/s, radial {:?} N, guide {:?} m/s, guides (peak, P, v) {:?}",
+            entry.id,
+            load.motors[0].mean_speed,
+            load.motors[0].radial_load_equivalent,
+            load.guide_speed,
+            load.guides.iter().map(|g| (g.peak, g.equivalent, g.speed)).collect::<Vec<_>>()
         );
     }
+}
+
+/// The T-gantry's two guides: each has its own distance-weighted load and speed, the life in km is the lowest
+/// (C / P)^3 50 km, the life in hours the lowest (C / P)^3 50 km / v times a1, and "guide-load" judges the highest peak of
+/// the two. On the shipped cycle (run 17 November 2026) the X guide carries P = 119.86 N at 0.2635 m/s, 3.826e6 h, the Z
+/// guide 6.28 N at 0.1974 m/s. (120.20 N on 16 November, when the tilt's commanded acceleration took X's mass alone; over
+/// the rigid model's whole mass matrix, belt runs, idlers and chain, 119.91 N; with the Z axis's weight in it too
+/// (M a = F + gravity: the torque that holds Z up no longer gives a phantom X acceleration through the belt runs'
+/// coupling) 119.86 N, and the Z guide's 5.97 N became 6.28 N; the SciPy reference's guide friction takes the
+/// acceleration so too. The audit: 120.1 N distance-weighted where the time weighting gave 109.9 N. Since 21 November
+/// the weight the belt holds up in Z has the belt's vertical runs, 0.16 kg, in it too: 119.88 N, Z 6.26 N; since 22
+/// November, at Kp 0.037 and Kv 45, 119.89 N, Z 6.32 N.)
+/// On the move to the middle of both strokes the two run at very different speeds (X four times Z's).
+#[test]
+fn each_guide_wears_by_its_own_load_and_speed() {
+    let entry = sim_machines::find("t-gantry").unwrap();
+    let mut cfg = entry.config();
+    cfg.set_text("effects.thermal_warm_start = false").unwrap();
+    let (rating, a1) = (cfg.f64("ratings.guide_dynamic_load_rating_n").unwrap(), reliability_factor(&cfg).unwrap());
+    let check = |load: &sim_components::analysis::CycleLoad, ratio: f64| {
+        assert_eq!(load.guides.len(), 2);
+        let km: Vec<f64> = load.guides.iter().map(|g| (rating / g.equivalent).powi(3) * 50.0).collect();
+        let hours: Vec<f64> =
+            load.guides.iter().zip(&km).map(|(g, km)| km * 1e3 / (g.speed.unwrap() * 3600.0) * a1).collect();
+        for (g, h) in load.guides.iter().zip(&hours) {
+            println!(
+                "guide: peak {:.1} N, P {:.2} N, v {:.4} m/s, life {h:.4e} h",
+                g.peak,
+                g.equivalent,
+                g.speed.unwrap()
+            );
+        }
+        let (x, z) = (&load.guides[0], &load.guides[1]);
+        assert!(x.speed.unwrap() > ratio * z.speed.unwrap(), "{x:?} {z:?}");
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-12 * b.abs();
+        assert!(close(guide_life_km(&cfg, load).unwrap(), km[0].min(km[1])));
+        assert!(close(guide_life_h(&cfg, load).unwrap(), hours[0].min(hours[1])));
+        let judged = verdicts(&cfg, load).unwrap();
+        let peak = judged.iter().find(|v| v.check == "guide-load").map(|v| v.value);
+        assert_eq!(peak, Some(x.peak.max(z.peak)));
+        x.equivalent
+    };
+    let cycle = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
+    assert!((check(&cycle, 1.2) - 119.89).abs() < 0.005);
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    let middle: Vec<f64> = sim.machine.axes().iter().map(|a| 0.5 * (a.min + a.max)).collect();
+    let path = sim.plan_path(&[Piece::Line(middle)], false).unwrap();
+    check(&analyse_trajectory(&mut sim, path).unwrap(), 3.0);
 }
 
 /// On every shipped config the verdicts carry the lives and the tooth load as the functions give them, and a life

@@ -128,6 +128,14 @@ process_force = true
 # The press frame stretches under the press force, a spring in series with the work (frame.stretch_stiffness_n_m): read
 # by the toggle press alone, which has the key.
 frame_stretch = true
+# The indexing table's twist on its shaft as a joint of its own (table.stiffness_nm_rad, table.damping_ratio), so that the ring
+# acts back on the driver: read by the two indexers alone. Off: the ring is worked out beside the dynamics.
+table_twist = false
+# The disc cam's follower may leave the disc where the contact force would go below zero: its gap to the cam is a joint of its
+# own with a one-sided contact spring and damper (follower.roller_width_m, follower.contact_damping_ratio) and the
+# guide's friction (follower.guide_friction_n), flying under its spring and weight until it meets the disc again. Read by
+# the disc cam alone. Off: the roller stays on the disc.
+follower_lift_off = false
 velocity_feedforward = true
 torque_feedforward = true
 # The drive runs the position setpoint on between profile cycles from the last setpoints (pos + v t + a t^2 / 2),
@@ -241,6 +249,9 @@ substeps = 4
 stations = 6
 index_angle_deg = 120.0
 roller_pitch_radius_m = 0.08
+# [estimate] the cam's radius where the rollers touch (a globoid of 200 mm at the pitch line): the cam's pressure angle
+# tan(alpha) = r_p phi' / R_c reaches 35 degrees at the index's fastest (phi' 0.88); no maker prints it.
+cam_radius_m = 0.10
 driver_inertia_kgm2 = 0.012
 wheel_inertia_kgm2 = 0.02
 locking_play_rad = 5.0e-5
@@ -264,7 +275,8 @@ payload_kg = 3.0
 friction_coulomb_nm = 0.5
 friction_viscous_nm_s_rad = 0.05
 friction_smoothing_rad_s = 0.01
-# The stops leave the shipped cycle (180 to 540 degrees, one index) room; with cam.run the driver turns on and has none.
+# The axis range leaves the shipped cycle (180 to 540 degrees, one index) room; the driver turns on and has no stops of
+# its own (joint.stop_min_deg / stop_max_deg would put end stops with the stop_* below).
 # The middle of the range, 360 degrees, is the middle of an index, where the table moves.
 min_angle_deg = -180.0
 max_angle_deg = 900.0
@@ -330,9 +342,10 @@ rated_current_a = 4.35
 thermal_time_constant_s = 2220.0
 rated_temperature_rise_k = 100.0
 start_temperature_rise_k = 0.0
-# [estimate] the rated current, as the motor is an estimate here; with effects.iron_loss the copper loss at it brings
-# the winding to its rated rise, and the S1 check ("motor-s1") starts at kt times it.
-stall_current_a = 4.35
+# [catalogue] 1FK2105-4AF: static torque 5 N m at the stall current 4.65 A (motors_s210.csv), as a motor named in
+# [parts] brings it; with effects.iron_loss the copper loss at it brings the winding to its rated rise, and the S1
+# check ("motor-s1") starts at kt times it.
+stall_current_a = 4.65
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 magnet_temperature_coefficient_1_k = -0.0012
 max_current_a = 18.0
@@ -373,12 +386,17 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 current_kp_v_a = 40.0
 current_tn_s = 5.0e-3
 # [catalogue] a 400 V line: 540 V DC link
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
 peak_torque_nm = 15.0
 rated_torque_nm = 4.6
@@ -545,6 +563,7 @@ ratings.gearbox_gearing_wohler_exponent = [6.6, 10.0]
 indexer.driver_inertia_kgm2 = [0.01, 0.014]
 indexer.wheel_inertia_kgm2 = [0.015, 0.025]
 indexer.locking_play_rad = [2.0e-5, 1.0e-4]
+indexer.cam_radius_m = [0.08, 0.125]
 table.inertia_kgm2 = [0.3, 0.5]
 table.stiffness_nm_rad = [100000.0, 400000.0]
 table.damping_ratio = [0.01, 0.06]

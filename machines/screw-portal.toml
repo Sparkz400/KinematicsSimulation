@@ -58,6 +58,13 @@ load_dependent_friction = true
 motor_friction = true
 gearbox_backlash = true
 gearbox_efficiency = true
+# The screws' efficiency from their lead and the balls' friction (screw_*.friction_coefficient, THK's formula) in
+# place of their efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart. Off here: the
+# sizing was done with the efficiency.
+screw_lead_efficiency = false
+# The screws' axial stiffness follows their nut: the shaft between the fixed bearing and the nut, E A / a, with the
+# nut a from the bearing at its travel (screw_*.fixed_bearing_at_m), in place of the far end's for the whole stroke.
+screw_stiffness_with_position = true
 # The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
 # gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: on in the delta
 # pickers D2 and D3, whose sizing was redone with them.
@@ -235,6 +242,8 @@ bristle_damping_n_s_m = 1500.0
 preload_n = 200.0
 
 [motor]
+# A made-up motor, no catalogue motor: no row of catalog/ has these values (0.45 N m/A, 1.27 N m at 2.822 A, 9.5 A,
+# 0.3 kg cm2), so its stall current is its rated one. A motor named in [parts] replaces them.
 rotor_inertia_kgm2 = 0.3e-4
 friction_coulomb_nm = 0.02
 friction_viscous_nm_s_rad = 1.0e-4
@@ -341,9 +350,20 @@ root_diameter_m = 0.0132
 # Between the bearings: the stroke, the nut and the run-outs.
 length_m = 0.45
 mounting = "fixed-supported"
+# [estimate] The fixed bearing at the motor above the stroke, 0.075 m over the nut at its top (z = 0.3): half the
+# run-out of the 0.45 m shaft beyond the 0.3 m stroke. With effects.screw_stiffness_with_position.
+fixed_bearing_at_m = 0.375
 efficiency = 0.9
+# With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
+# ball screws, not this screw's.
+friction_coefficient = 0.003
 nut_stiffness_n_m = 2.0e8
 bearing_stiffness_n_m = 3.0e8
+# [estimate] The damping ratio of the mass behind the nut on the screw's axial spring (nut, bearings, guides; the
+# damper across the screw's spring alone, c = 2 zeta sqrt(k m)): 0.04, the axial mode of a ball screw drive
+# identified by Hosseinkhani (Control Methods for Improving Tracking Accuracy and Disturbance Rejection in Ball
+# Screw Feed Drives, PhD thesis, University of Waterloo, 2013, Table 3.5: 865 rad/s, zeta 0.04).
+axial_damping_ratio = 0.04
 preload_n = 150.0
 dynamic_load_rating_n = 9000.0
 static_load_rating_n = 14000.0
@@ -463,6 +483,9 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 # Current controller: Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
@@ -471,6 +494,8 @@ current_tn_s = 2.5e-3
 # The DC link voltage. The winding gets sqrt(3/2) times it at most, here 190 V: the model's one winding
 # carries the RMS phase current, and its voltage times that current is the power of all three phases.
 bus_voltage_v = 155.13
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 3.8
 # What the motor can give continuously; the RMS torque of a cycle is judged against it.
 rated_torque_nm = 1.27
@@ -790,6 +815,7 @@ thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
 thermal_feedback.belt_stiffness_coefficient_1_k = [0.0, 1.0e-3]
 screw_z.efficiency = [0.85, 0.95]
 screw_z.nut_stiffness_n_m = [1.2e8, 3.0e8]
+screw_z.axial_damping_ratio = [0.02, 0.06]
 screw_z.bearing_stiffness_n_m = [2.0e8, 4.5e8]
 screw_z.preload_n = [75.0, 225.0]
 screw_z.dynamic_load_rating_n = [7500.0, 10500.0]
@@ -898,10 +924,13 @@ id = "pulley_y"
 gearbox = "gearbox_y"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
-at_m = [0.5, -0.1, 0.06]
+# The Y motor rides on the bridge, its pulley 0.1 m before the Y carriage's y = 0 (the bridge drawn 0.03 m before it).
+body = "bridge"
+at_m = [0.0, -0.07, 0.0]
 pos = [300, 300]
 
-# X: clamp to motor (0.1 m + x) and motor round the far idler back to the clamp (0.1 m + stroke + 0.1 m - x).
+# X, a loop: the motor and the far idler 0.1 m + stroke + 0.1 m = 1.2 m apart, the clamp to the motor 0.1 m + x, back
+# from the motor round the far idler (far_x) to the clamp 1.2 m + 1.1 m - x.
 [[machine.section]]
 id = "x1"
 length_m = 0.1
@@ -912,28 +941,54 @@ pos = [450, -60]
 
 [[machine.section]]
 id = "x2"
-length_m = 1.2
+length_m = 2.3
 axes = { x = -1 }
 pulleys = { pulley_x = -1 }
-route = ["pulley_x", "bridge"]
+route = ["pulley_x", "far_x", "bridge"]
 pos = [450, 60]
 
-# Y, on the bridge.
+# Y, on the bridge, a loop lying flat (plane x-y: its wheels turn about z): the motor and the far idler 0.7 m apart, the
+# clamp to the motor 0.1 m + y, back from the motor round the far idler (far_y) to the clamp 0.7 m + 0.6 m - y.
 [[machine.section]]
 id = "y1"
 length_m = 0.1
 axes = { y = 1 }
 pulleys = { pulley_y = 1 }
 route = ["y_carriage", "pulley_y"]
+plane = "x-y"
 pos = [450, 240]
 
 [[machine.section]]
 id = "y2"
-length_m = 0.7
+length_m = 1.3
 axes = { y = -1 }
 pulleys = { pulley_y = -1 }
-route = ["pulley_y", "y_carriage"]
+route = ["pulley_y", "far_y", "y_carriage"]
+plane = "x-y"
 pos = [450, 360]
+
+# The belts' far idlers, 0.1 m + stroke + 0.1 m from their motors' pulleys. X's on the frame at x = 1.1 m; Y's on the
+# bridge, 0.63 m after the Y carriage's y = 0. Each belt passes its far idler at its axis's speed, the way a positive
+# turn of its pulley (which takes belt out of the second section) moves it: the run from the motor to the far idler
+# moves against the carriage, the one from the far idler to the clamp with it. Round both anticlockwise (`clockwise`
+# false), as round the pulley: down (X: to the left) the clamp's strand to the motor, round the pulley, back along the
+# other strand and round the far idler.
+[[machine.idler]]
+id = "far_x"
+speed = { x = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+at_m = [1.1, -0.05, 0.06]
+
+[[machine.idler]]
+id = "far_y"
+speed = { y = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "bridge"
+at_m = [0.0, 0.63, 0.0]
 
 # Z on its screw, on the Y carriage: the nut drives the slide.
 [[machine.screw]]

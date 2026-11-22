@@ -296,6 +296,10 @@ def harmonicdrive_strain_wave_gears_are_plausible(tables):
                         errors.append(f"{where}: twist at T2 {twist:.2e} rad")
                     if not inside(need(r, "hysteresis_rad"), 2.9e-4, 8.7e-4):
                         errors.append(f"{where}: hysteresis_rad")
+                    # Read from the vendor's efficiency graphs at rated torque (0.699 to 0.800); a strain wave gear
+                    # outside 0.65 to 0.85 is a misread graph.
+                    if not inside(need(r, "efficiency_full_load"), 0.65, 0.85):
+                        errors.append(f"{where}: efficiency_full_load")
                 now = (need(g, "rated_output_torque_nm"), need(g, "mass_kg"), need(g, "inertia_at_input_kgm2"),
                        need(g, "stiffness_t2_nm"))
                 if last and not all(n > l for n, l in zip(now, last)):
@@ -473,7 +477,7 @@ def siemens_1fn3_linear_motors_are_plausible(tables):
     if not have(tables, SIEMENS_1FN3):
         return []
     # kE phase to neutral: kF = 3 kE; kM,20 = kF / sqrt(3 RSTR,20); PV,N = 3 R(120 degC) IN^2, R(120) = 1.39 R20
-    return _linear_motor_rows_are_plausible(tables[SIEMENS_1FN3], SIEMENS_1FN3, 3.0, 0.03, True, (1.3, 1.5))
+    return _linear_motor_rows_are_plausible(tables[SIEMENS_1FN3], SIEMENS_1FN3, math.sqrt(3), 0.03, True, (1.3, 1.5))
 
 
 def beckhoff_al8000_linear_motors_are_plausible(tables):

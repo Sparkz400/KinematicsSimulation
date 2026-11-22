@@ -131,6 +131,9 @@ winding_heating = true
 # ([thermal]); with thermal_feedback their viscous friction and efficiency follow.
 part_heating = false
 thermal_feedback = false
+# With part_heating: each belt also gives heat to its two pulleys through the half wrap it lies on each ([belt]
+# thickness_m, thermal_conductivity_w_m_k), the pulleys at the air's temperature.
+belt_pulley_conduction = true
 # The cycle analysis measures its pass with the windings (winding_heating) and, with thermal_feedback, the parts at the
 # rises they settle at on the cycle, iterated from cold to a fixed point, not from cold. Nothing to do where nothing
 # warms back on the run.
@@ -173,6 +176,13 @@ stroke_m = 0.7
 pulley_radius_m = 0.014324
 # Shortest free belt span between a carriage and either pulley.
 span_min_m = 0.1
+# Where each rod pair's joints stand from its guide's centre, m: along the column, outward from the machine's axis and
+# tangentially. Their pull then has moments about the guide (Festo's Mx, My, Mz: signals carriage.<k>.guide_moment_*),
+# which add to the guide's load where ratings.guide_moment_*_nm rate them. [estimate] zero, the pull through the centre:
+# the EGC-80's slide with the ball studs on its face, their standoff not in the sources at hand.
+rod_joint_along_m = 0.0
+rod_joint_outward_m = 0.0
+rod_joint_tangent_m = 0.0
 
 # The working range: a cylinder, as Festo draws it.
 # [catalogue] EXPT-95: nominal diameter 950 mm, nominal height 100 mm.
@@ -210,6 +220,16 @@ damping_n_s_m = 100.0
 mass_kg_m = 0.07
 tooth_mesh_stiffness_n_m = 5.0e6
 damping_time_s = 2.5e-4
+# With effects.part_heating each belt warms with its damping loss (power.belt_*). [estimate] polyurethane with steel cords:
+# 1500 J/(kg K) (PU about 1800, steel 500, by mass) for the heat capacity, mass_kg_m times the loop's length. [estimate]
+# 15 W/(m2 K) from the belt's two sides (width times loop length each) into still air, the belt moving: the resistance
+# to the air is 1 / (h A).
+specific_heat_j_kg_k = 1500.0
+convection_w_m2_k = 15.0
+# With effects.belt_pulley_conduction: from the belt's middle through half its thickness into the pulleys. [estimate]
+# 3 mm thick, polyurethane with steel cords across the heat's path, 0.2 W/(m K) (PU 0.17 to 0.25).
+thickness_m = 3.0e-3
+thermal_conductivity_w_m_k = 0.2
 
 # Each carriage's guide. [estimate] as the one-axis machine's ball guide.
 [friction]
@@ -251,18 +271,18 @@ d_inductance_h = 0.02
 # rest is the stator and housing's), and its time constant against the housing.
 winding_resistance_share = 0.3
 winding_time_constant_s = 60.0
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# [catalogue] 1FK2205-2AF: static torque 3.6 N m at the stall current 2.9 A (motors_s210.csv), as a motor named in
+# [parts] brings it. With effects.iron_loss the copper loss at it brings the winding to its rated
 # rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
 # starts at kt times it.
-stall_current_a = 2.5
+stall_current_a = 2.9
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
-# [catalogue] rated current 2.5 A at 400 V; 10.8 N m at the maximum current of 9.5 A. [estimate] the thermal time
-# constant, as the 1FK2105's 37 min scaled down.
+# [catalogue] rated current 2.5 A at 400 V; 10.8 N m at the maximum current of 9.5 A; thermal time constant 29 min
+# (motors_s210_oi.csv, the S120 1FK2 manual alike).
 rated_current_a = 2.5
-thermal_time_constant_s = 1800.0
+thermal_time_constant_s = 1740.0
 rated_temperature_rise_k = 100.0
 start_temperature_rise_k = 0.0
 max_current_a = 9.5
@@ -319,6 +339,9 @@ guide_max_rise_k = 40.0
 gearbox_resistance_k_w = 1.5
 gearbox_time_constant_s = 1200.0
 gearbox_max_rise_k = 50.0
+# [estimate] a polyurethane belt is rated to 80 C at 20 C around (resistance and time constant of a belt follow from
+# [belt] specific_heat_j_kg_k and convection_w_m2_k, its mass and size).
+belt_max_rise_k = 60.0
 
 # With effects.thermal_feedback (see mech::ThermalFeedback). [estimate] as for the other machines.
 [thermal_feedback]
@@ -384,6 +407,9 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 # Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
@@ -391,6 +417,8 @@ current_kp_v_a = 80.0
 current_tn_s = 4.0e-3
 # [catalogue] a 400 V line: 540 V DC link
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2205-2AF at 400 V: 10.8 N m maximum, 3.0 N m rated at 3000 r/min
 peak_torque_nm = 10.8
 rated_torque_nm = 3.0
@@ -448,8 +476,9 @@ pulley_max_torque_nm = 5.0
 shaft_max_radial_load_n = 1500.0
 # [catalogue] the EGC-80-TB-KF's recirculating ball guide, Fy max = Fz max for a service life of 5000 km: 3050 N (same
 # document, page 16; "must not be exceeded during dynamic operation"). The guide load is the force across the column
-# (`carriage.<k>.guide_load`); Festo's torques Mx, My, Mz are not judged (the rods' joints' offset from the slide is
-# not modelled).
+# (`carriage.<k>.guide_load`) plus, where ratings.guide_moment_x_nm, _y_nm, _z_nm are given (a config may add them;
+# Festo's moment values are not in the sources at hand), the moments of the rods' pull about the slide
+# (geometry.rod_joint_*_m) as F_max sum |M_i| / M_i,max: Festo's combined load F / F_max + sum M_i / M_i,max <= 1.
 guide_max_load_n = 3050.0
 # The dynamic load rating C of the guide life L10 = (C / P)^3 * 50 km, from the same figure: 3050 N for 5000 km gives
 # C = 3050 * (5000 / 50)^(1/3) = 14157 N; Festo's 100 km figure (page 17, 11236 N) gives 14156 N.
@@ -617,6 +646,10 @@ mass.plate_kg = [0.6, 1.0]
 belt.stiffness_ea_n = [4.5e5, 7.5e5]
 belt.pretension_n = [200.0, 400.0]
 belt.damping_n_s_m = [50.0, 200.0]
+belt.specific_heat_j_kg_k = [1200.0, 1800.0]
+belt.convection_w_m2_k = [8.0, 25.0]
+belt.thickness_m = [2.5e-3, 3.5e-3]
+belt.thermal_conductivity_w_m_k = [0.15, 0.3]
 friction.coulomb_n = [10.0, 20.0]
 friction.stiction_n = [15.0, 30.0]
 friction.viscous_n_s_m = [10.0, 40.0]

@@ -135,10 +135,10 @@ fn the_scene_colours_warm_parts_by_their_rise_over_the_rating() {
     }
 }
 
-/// At rest without gravity every section has the pretension, and is stretched by L P / (EA + P) over its length L.
-/// Held against gravity, the sections balance the held weight: on the single axis inclined by 30 degrees
-/// T2 - T1 = m g sin 30; on the T-gantry, whose Z axis hangs in a loop of section 2, 2 T2 - T1 - T3 = m_z g and
-/// T1 = T3. The 3D view colours each section by (T - P) / P, from the same tensions.
+/// At rest without gravity every section has the pretension, and is stretched by L P / (EA + P) over its length L. Held
+/// against gravity, the sections balance the held weight: on the single axis inclined by 30 degrees T2 - T1 = m g sin
+/// 30; on the T-gantry, whose Z axis hangs in a loop of section 2, 2 T2 - T1 - T3 = m_z g plus the weight of the belt's
+/// vertical runs, and T1 = T3. The 3D view colours each section by (T - P) / P, from the same tensions.
 #[test]
 fn belt_sections_have_the_pretension_at_rest_and_carry_the_weight_in_a_static_hold() {
     for entry in MACHINES.iter().copied() {
@@ -177,8 +177,9 @@ fn belt_sections_have_the_pretension_at_rest_and_carry_the_weight_in_a_static_ho
             let weight = 6.0 * g * 0.5;
             assert!((t[1] - t[0] - weight).abs() < 1e-6, "{}: {t:?} against {weight} N", entry.id);
         } else {
-            // Z axis and payload, 5 + 2 kg: 68.6466 N.
-            let weight = 7.0 * g;
+            // Z axis and payload, 5 + 2 kg, and the belt's vertical runs, 0.1 kg/m (4 * 0.15 + 2 * 0.5) m = 0.16 kg:
+            // 70.2156 N.
+            let weight = 7.16 * g;
             assert!(
                 (2.0 * t[1] - t[0] - t[2] - weight).abs() < 1e-6 && (t[0] - t[2]).abs() < 1e-6,
                 "{}: {t:?} against {weight} N",
@@ -281,5 +282,52 @@ fn comparing_friction_on_and_off_gives_the_friction_torque() {
         }
         assert!(checked > 0, "{}: no motor kept its direction of power", entry.id);
         assert!(compare_effect(entry, &cfg, "no_such_effect").is_err());
+    }
+}
+
+/// A run file from before the signal `setpoint_age` (the CLI's `run`: a sample before every 16th or 4th step of
+/// 62.5 us) has its tool error against the plan at the sample's time all the same: the age worked out from the run's
+/// timing (`charts::setpoint_age_of`, the 1 ms profile cycle from the setpoints' changes) is the recorded one to
+/// rounding, and the error with the column left out is the one with it. Taken as held, the setpoint read the
+/// T-gantry's error up to a cycle's travel off: over the cycle's first second a peak of 0.446 mm against 0.082 mm.
+#[test]
+fn a_run_file_without_the_setpoint_age_has_it_from_its_timing() {
+    use sim_components::Command;
+    use sim_components::charts::{ToolError, setpoint_age_of, tool_error};
+    let entry = MACHINES.iter().copied().find(|e| e.config().get("idler.radius_m").is_ok()).unwrap();
+    let peak = |e: &ToolError| e.normal.iter().zip(&e.tangential).map(|(n, t)| n.hypot(*t)).fold(0.0, f64::max);
+    for every in [16, 4] {
+        let mut sim = Sim::new(entry, &entry.config()).unwrap();
+        sim.command(Command::StartCycle).unwrap();
+        let signals = sim.signal_infos();
+        let (mut columns, mut sample) = (vec![Vec::new(); signals.len()], Vec::new());
+        for step in 0..16_000 {
+            if step % every == 0 {
+                sim.sample(&mut sample);
+                columns.iter_mut().zip(&sample).for_each(|(c, v)| c.push(*v));
+            }
+            sim.step();
+        }
+        let at = signals.iter().position(|s| s.id == "setpoint_age").unwrap();
+        let held: Vec<&[f64]> = (signals.iter().zip(&columns))
+            .filter(|(s, _)| s.id.starts_with("axis.") && s.id.ends_with("_setpoint"))
+            .map(|(_, c)| c.as_slice())
+            .collect();
+        let rebuilt = setpoint_age_of(&columns[0], &held);
+        let off = rebuilt.iter().zip(&columns[at]).fold(0f64, |m, (a, b)| m.max((a - b).abs()));
+        assert!(off < 1e-12, "every {every}: the age off by {off} s");
+        let with = tool_error(&signals, &columns).unwrap();
+        let (mut old_signals, mut old_columns) = (signals.clone(), columns.clone());
+        old_signals.remove(at);
+        old_columns.remove(at);
+        let without = tool_error(&old_signals, &old_columns).unwrap();
+        let gap = (with.normal.iter().zip(&without.normal)).chain(with.tangential.iter().zip(&without.tangential));
+        let gap = gap.fold(0f64, |m, (a, b)| m.max((a - b).abs()));
+        println!(
+            "every {every}: peak {:.4} mm with the age, {:.4} mm without it",
+            peak(&with) * 1e3,
+            peak(&without) * 1e3
+        );
+        assert!(gap < 1e-12, "every {every}: the error without the column off by {gap} m");
     }
 }

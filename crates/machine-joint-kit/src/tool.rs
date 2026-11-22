@@ -68,6 +68,29 @@ pub struct Scara {
     elbow: f64,
 }
 
+/// The determinant of the n x n matrix `a` (row by row), by elimination with partial pivoting.
+fn determinant(a: &[f64], n: usize) -> f64 {
+    let mut a = a.to_vec();
+    let mut det = 1.0;
+    for c in 0..n {
+        let p = (c..n).max_by(|&x, &y| a[x * n + c].abs().total_cmp(&a[y * n + c].abs())).unwrap_or(c);
+        if p != c {
+            (0..n).for_each(|k| a.swap(p * n + k, c * n + k));
+            det = -det;
+        }
+        let pivot = a[c * n + c];
+        if pivot == 0.0 {
+            return 0.0;
+        }
+        det *= pivot;
+        for r in c + 1..n {
+            let f = a[r * n + c] / pivot;
+            (c..n).for_each(|k| a[r * n + k] -= f * a[c * n + k]);
+        }
+    }
+    det
+}
+
 /// Rows x cols matrix (row by row) J: the 2-norm condition number, sqrt of the largest over the smallest eigenvalue of
 /// J^T J by Jacobi rotations; infinite where it is singular.
 pub fn condition_number(j: &[f64], rows: usize, cols: usize) -> f64 {
@@ -243,9 +266,29 @@ impl Pose {
     }
 
     /// The tool's axes at joints `q`, the angles times `scale` (1 for the axes, `length` for the solver).
+    ///
+    /// With all three turns the rotation vector of the turn from the orientation at zero. With two (the five-axis arm's
+    /// rx, ry), where the tool points: the flange direction e_m along the missing axis m at zero joints is turned to
+    /// d = R R_0^T e_m, and the turns are the rotation vector of the shortest turn from e_m to d (axis e_m x d, angle
+    /// between them; its m-th part 0), whatever the joints turn the tool about d. The rotation vector's own parts would
+    /// change with that turn, so that the same rx, ry pointed the tool elsewhere at another twist.
     fn coordinates(&self, fk: Forward, q: &[f64], scale: f64) -> Vec<f64> {
         let (rot, pos) = fk(q);
-        let turn = log(&matmul(&rot, &transpose(&self.zero_rot)));
+        let relative = matmul(&rot, &transpose(&self.zero_rot));
+        let held: Vec<usize> = (0..3).filter(|k| self.axes.contains(&(3 + k))).collect();
+        let turn = match held[..] {
+            [a, b] => {
+                let m = 3 - a - b;
+                let d: V3 = std::array::from_fn(|i| relative[i][m]);
+                let mut e = [0.0; 3];
+                e[m] = 1.0;
+                let axis = [e[1] * d[2] - e[2] * d[1], e[2] * d[0] - e[0] * d[2], e[0] * d[1] - e[1] * d[0]];
+                let sine = dot(axis, axis).sqrt();
+                let angle = sine.atan2(dot(e, d));
+                if sine > 0.0 { axis.map(|v| v * angle / sine) } else { [0.0; 3] }
+            }
+            _ => log(&relative),
+        };
         self.axes
             .iter()
             .map(|&a| match a {
@@ -260,22 +303,82 @@ impl Pose {
         tool.copy_from_slice(&self.coordinates(fk, q, 1.0));
     }
 
-    /// d (weighted coordinates) / d q (axes x joints, row by row), by central differences of 1e-6 rad (m).
-    fn jacobian(&self, fk: Forward, q: &[f64]) -> Vec<f64> {
+    /// d (weighted coordinates) / d q (axes x joints, row by row), by central differences of 1e-6 rad (m). With
+    /// `geometric` the turn rows are the angular velocity (the turn log(R+ R-^T) between the two steps, times the
+    /// length) instead of the rotation vector's rate, which is off it by (theta / 2) / sin(theta / 2) and more.
+    fn jacobian(&self, fk: Forward, q: &[f64], geometric: bool) -> Vec<f64> {
         let (m, n) = (self.axes.len(), q.len());
         let mut j = vec![0.0; m * n];
         let mut p = q.to_vec();
         for c in 0..n {
             p[c] = q[c] + 1e-6;
             let a = self.coordinates(fk, &p, self.length);
+            let ra = fk(&p).0;
             p[c] = q[c] - 1e-6;
             let b = self.coordinates(fk, &p, self.length);
+            let spin = log(&matmul(&ra, &transpose(&fk(&p).0)));
             p[c] = q[c];
             for r in 0..m {
-                j[r * n + c] = (a[r] - b[r]) / 2e-6;
+                j[r * n + c] = match self.axes[r] {
+                    ax if geometric && is_turn(ax) => self.length * spin[ax - 3] / 2e-6,
+                    _ => (a[r] - b[r]) / 2e-6,
+                };
             }
         }
         j
+    }
+
+    /// The flange's angular speed |w| (rad/s) and angular acceleration |dw/dt| (rad/s^2) at joints q moving at qd and qdd:
+    /// w = J_w(q) qd from the spin between the flange's orientations a microradian either side of each joint (the
+    /// geometric Jacobian's turn rows, without the weighting length), and dw/dt = J_w qdd + (d J_w / dt) qd, the second
+    /// term by a central difference of J_w along qd. What the tool axes' limits on rx, ry and rz have to bound: those
+    /// act on the rotation vector's rates, not on this.
+    ///
+    /// A tool with fewer than three turn axes (the five-axis arm's rx, ry) leaves the turn about the others to the
+    /// joints: about where the tool points, which no limit of its own bounds. Only w's part about the flange's directions
+    /// that the tool's turns stand for counts then, each that which lies along base x, y or z at zero joints, d_k =
+    /// R(q) R_0^T e_k; the turn about the others is the joints' (their speeds are judged on their own).
+    pub fn angular_motion(&self, fk: Forward, q: &[f64], qd: &[f64], qdd: &[f64]) -> (f64, f64) {
+        let held: Vec<usize> = (0..3).filter(|k| self.axes.contains(&(3 + k))).collect();
+        let spin = |at: &[f64], v: &[f64]| -> V3 {
+            let (mut w, mut p) = ([0.0; 3], at.to_vec());
+            for c in (0..v.len()).filter(|&c| v[c] != 0.0) {
+                p[c] = at[c] + 1e-6;
+                let ra = fk(&p).0;
+                p[c] = at[c] - 1e-6;
+                let rel = log(&matmul(&ra, &transpose(&fk(&p).0)));
+                p[c] = at[c];
+                for k in 0..3 {
+                    w[k] += rel[k] / 2e-6 * v[c];
+                }
+            }
+            if held.len() == 3 {
+                return w;
+            }
+            // Row k of R_0 is R_0^T e_k.
+            let r = fk(at).0;
+            let mut along = [0.0; 3];
+            for &k in &held {
+                let d: V3 = std::array::from_fn(|i| (0..3).map(|j| r[i][j] * self.zero_rot[k][j]).sum());
+                let part = dot(w, d);
+                (0..3).for_each(|i| along[i] += part * d[i]);
+            }
+            along
+        };
+        let w = spin(q, qd);
+        let mut a = spin(q, qdd);
+        let speed = qd.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if speed > 0.0 {
+            let step = |sign: f64| -> V3 {
+                let at: Vec<f64> = q.iter().zip(qd).map(|(q, v)| q + sign * 1e-3 * v / speed).collect();
+                spin(&at, qd)
+            };
+            let (plus, minus) = (step(1.0), step(-1.0));
+            for k in 0..3 {
+                a[k] += speed * (plus[k] - minus[k]) / 2e-3;
+            }
+        }
+        (dot(w, w).sqrt(), dot(a, a).sqrt())
     }
 
     /// J^T (J J^T + damping I)^-1 rhs, J of m rows and n columns.
@@ -293,14 +396,18 @@ impl Pose {
     /// Damped least squares from `q` towards the weighted coordinates `target` until what is left is below `tol` (m),
     /// at most `steps` iterations: dq = J^T (J J^T + lambda^2 I)^-1 e, lambda 1 mm. A redundant arm also moves within
     /// the null space of J towards the goal (the home, or the middles of the joints' ranges: `away_from_limits`),
-    /// dq += (I - J^T (J J^T)^-1 J) W (goal - q), until that move is below 1e-11 rad: there the joints are the nearest
-    /// to the goal (in the weights W) of all nearby that reach the pose (the null space part of W (goal - q) is zero).
-    /// `false` where it does not get there.
-    fn settle(&self, fk: Forward, q: &mut [f64], target: &[f64], tol: f64, steps: usize) -> bool {
+    /// dq += (I - W^-1 J^T (J W^-1 J^T)^-1 J) (goal - q), the Newton step of the weighted distance within the null space
+    /// (at most 0.05 rad), until that move is below `drift_tol` rad: there the joints are the nearest to the goal (in
+    /// the weights W) of all nearby that reach the pose (the null space part of W (goal - q) is zero). With `tight`
+    /// (the last step of a walk) to 1e-13, not 1e-11: the joint motion differences the solution over 1e-4 of the tool's
+    /// units (a second difference divides by 1e-8), so a drift left in it shows in the accelerations, and the solution
+    /// must not depend on where the walk started. `false` where it does not get there.
+    fn settle(&self, fk: Forward, q: &mut [f64], target: &[f64], tol: f64, steps: usize, tight: bool) -> bool {
+        let drift_tol = if tight { 1e-13 } else { 1e-11 };
         let (m, n) = (self.axes.len(), q.len());
         // The Jacobian is kept while the error falls to a tenth each iteration (a step of a few micrometres changes it
         // by a few millionths); a redundant arm's null space wants it where the joints are.
-        let (mut j, mut before) = (Vec::new(), f64::INFINITY);
+        let (mut j, mut before, mut free_before) = (Vec::new(), f64::INFINITY, f64::INFINITY);
         for _ in 0..steps {
             let now = self.coordinates(fk, q, self.length);
             let e: Vec<f64> = target.iter().zip(&now).map(|(t, c)| t - c).collect();
@@ -312,7 +419,7 @@ impl Pose {
                 return true;
             }
             if j.is_empty() || self.redundant() || size > 0.1 * before {
-                j = self.jacobian(fk, q);
+                j = self.jacobian(fk, q, false);
             }
             before = size;
             let mut dq = if size >= tol {
@@ -321,17 +428,21 @@ impl Pose {
             } else {
                 vec![0.0; n]
             };
-            let mut drift = 0.0;
             if self.redundant() {
-                let z: Vec<f64> = (0..n).map(|k| self.weight[k] * (self.goal[k] - q[k])).collect();
-                let jz: Vec<f64> = (0..m).map(|r| (0..n).map(|k| j[r * n + k] * z[k]).sum()).collect();
-                let Some(back) = Self::through(&j, m, n, &jz, 0.0) else { return false };
+                let a: Vec<f64> = (0..n).map(|k| self.goal[k] - q[k]).collect();
+                let ja: Vec<f64> = (0..m).map(|r| (0..n).map(|k| j[r * n + k] * a[k]).sum()).collect();
+                let jw: Vec<f64> = (0..m * n).map(|rc| j[rc] / self.weight[rc % n].sqrt()).collect();
+                let Some(back) = Self::through(&jw, m, n, &ja, 0.0) else { return false };
+                let free: Vec<f64> = (0..n).map(|k| a[k] - back[k] / self.weight[k].sqrt()).collect();
+                let norm = free.iter().map(|v| v * v).sum::<f64>().sqrt();
+                let cap = (0.05 / norm).min(1.0);
                 for k in 0..n {
-                    let free = z[k] - back[k];
-                    dq[k] += free;
-                    drift += free * free;
+                    dq[k] += cap * free[k];
                 }
-                if size < tol && drift.sqrt() < 1e-11 {
+                // Or no longer falling: the central differences' rounding (1e-10 in J) is all that is left of the step.
+                let stalled = tight && norm < 1e-9 && norm > 0.5 * free_before;
+                free_before = norm;
+                if size < tol && (norm < drift_tol || stalled) {
                     return true;
                 }
             }
@@ -345,8 +456,14 @@ impl Pose {
 
     /// From the joints `from` along the line in coordinates to the tool pose `tool`, in steps of at most 20 mm and 0.05
     /// rad, each settled to 1 um, the last to 1e-13 m (weighted). With `guard`, `false` where a step ends beyond
-    /// `max_condition`.
-    fn walk(&self, fk: Forward, from: &[f64], tool: &[f64], q: &mut [f64], guard: bool) -> bool {
+    /// `max_condition`, or where it passed a singularity between its ends, however short (a walk of one step too): with
+    /// as many tool axes as joints the geometric Jacobian's determinant changes its sign where the joints cross a
+    /// singular pose (the wrist turning through straight, the elbow through stretched), which is the branch changing.
+    /// A redundant arm's singular poses (rank m - 1 of m x n) lie n - m + 1 >= 2 dimensions below its joint space, so a
+    /// walk's joint path does not cross them but where the ends show it.
+    pub(crate) fn walk(&self, fk: Forward, from: &[f64], tool: &[f64], q: &mut [f64], guard: bool) -> bool {
+        let square = guard && self.axes.len() == from.len();
+        let sign = if square { determinant(&self.jacobian(fk, from, true), from.len()).signum() } else { 0.0 };
         let start = self.coordinates(fk, from, 1.0);
         let steps = self
             .axes
@@ -365,12 +482,15 @@ impl Pose {
                 .map(|(i, &a)| (start[i] + s * (tool[i] - start[i])) * if is_turn(a) { self.length } else { 1.0 })
                 .collect();
             let (tol, iterations) = if k == steps { (1e-13, 200) } else { (1e-6, 30) };
-            // shortcut: a walk of one step (at most 20 mm and 0.05 rad, as along a cycle) is not checked for passing a
-            // singularity; check it too where an arm's singular poses lie that close to its working poses.
-            if !self.settle(fk, q, &at, tol, iterations)
-                || guard && steps > 1 && !(self.condition(fk, q) <= self.max_condition)
-            {
+            if !self.settle(fk, q, &at, tol, iterations, k == steps) {
                 return false;
+            }
+            if guard {
+                let j = self.jacobian(fk, q, true);
+                let now = if square { determinant(&j, q.len()).signum() } else { 0.0 };
+                if now != sign || !(self.condition_of(&j) <= self.max_condition) {
+                    return false;
+                }
             }
         }
         true
@@ -405,10 +525,10 @@ impl Pose {
     }
 
     pub fn condition(&self, fk: Forward, q: &[f64]) -> f64 {
-        self.condition_of(&self.jacobian(fk, q))
+        self.condition_of(&self.jacobian(fk, q, true))
     }
 
-    /// Of the weighted Jacobian; of its transpose where it has fewer rows than columns (a redundant arm), as J^T J is
+    /// Of the weighted geometric Jacobian (turn rows the angular velocity); of its transpose where it has fewer rows than columns (a redundant arm), as J^T J is
     /// singular then and J J^T tells.
     fn condition_of(&self, j: &[f64]) -> f64 {
         let (m, n) = (self.axes.len(), self.home.len());

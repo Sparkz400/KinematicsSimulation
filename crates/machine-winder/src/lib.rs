@@ -273,6 +273,8 @@ pub struct Winder {
     trim_integral: f64,
     pub trim_speed: f64,
     drives_off: bool,
+    /// An obstacle's push on the dancer, down along its travel y (`Machine::set_tool_force`), N, held until changed.
+    obstacle: f64,
     /// Limits of the own verdicts: web's highest and lowest tension, dancer travel, inertia ratio, the motor's peak
     /// torque, its rated torque and its highest speed.
     limits: [f64; 7],
@@ -382,6 +384,7 @@ impl Winder {
             trim_integral: 0.0,
             trim_speed: 0.0,
             drives_off: false,
+            obstacle: 0.0,
             limits: [
                 rating("ratings.web_max_tension_n"),
                 rating("ratings.web_min_tension_n"),
@@ -513,8 +516,8 @@ impl Winder {
         e.cylinder = self.cylinder_force(e.r[1]);
         e.load = e.cylinder - self.air_spring * e.y;
         let m = self.dancer_total_mass();
-        // What pushes the dancer down but the web.
-        let push = e.load + m * self.g - e.slide + e.stop[0];
+        // What pushes the dancer down but the web: an obstacle's push on it among the rest.
+        let push = e.load + m * self.g - e.slide + e.stop[0] + self.obstacle;
         if self.elastic {
             let vd = rd * e.wd;
             for k in 0..2 {
@@ -537,18 +540,21 @@ impl Winder {
                 }
             }
             let web = [e.t[0] * e.r[0], -e.t[1] * e.r[1]];
-            // The gearbox's loss factor from the torque a loss-free gearbox would pass, then the roll with it.
-            let first: [f64; 2] = std::array::from_fn(|k| (drive[k] + web[k]) / e.j[k]);
+            // The gearbox's loss factor of the torque going in, which depends on the roll's acceleration it gives, at its
+            // fixed point (`mech::settled_loss`), then the roll with it.
             for k in 0..2 {
-                e.factor[k] = self.loss_factor(k, torque[k] - e.shaft[k] - self.j_rotor * i * first[k], w[k]);
-                e.acc[k] = (e.factor[k] * drive[k] + web[k]) / self.geared_inertia(e.r[k], e.factor[k]);
+                let acc = |factor: f64| (factor * drive[k] + web[k]) / self.geared_inertia(e.r[k], factor);
+                [e.factor[k]] = sim_components::mech::settled_loss([1.0], |&[factor]| {
+                    [self.loss_factor(k, torque[k] - e.shaft[k] - self.j_rotor * i * acc(factor), w[k])]
+                });
+                e.acc[k] = acc(e.factor[k]);
             }
             e.ydd = (push - e.t[0] - e.t[1]) / m;
             e.wdd = (rd * (e.t[1] - e.t[0]) - e.roller) / self.roller_inertia;
         } else {
             // a_u = b_u + k_u T1, a_r = b_r - k_r T2 (the surfaces' accelerations), y'' = (a_u - a_r) / 2 and
             // R w_d' = (a_u + a_r) / 2 into the dancer's and the roller's balance: two equations in T1 and T2. Solved
-            // loss-free, then again with the gearboxes' loss factors at the torques the first solution passes.
+            // with the gearboxes' loss factors at the torques the solution passes (to the fixed point, from loss-free).
             let rate = [-h * w[0] * w[0] / TAU, h * w[1] * w[1] / TAU];
             let (md, jd) = (0.5 * m, self.roller_inertia / (2.0 * rd * rd));
             let solve = |factor: [f64; 2]| {
@@ -565,9 +571,10 @@ impl Winder {
                 let surface = [b[0] + kk[0] * t[0], b[1] - kk[1] * t[1]];
                 (t, acc, surface)
             };
-            let (_, first, _) = solve([1.0; 2]);
-            e.factor = std::array::from_fn(|k| {
-                self.loss_factor(k, torque[k] - e.shaft[k] - self.j_rotor * i * first[k], w[k])
+            // The loss factors at their fixed point, as above.
+            e.factor = sim_components::mech::settled_loss([1.0; 2], |factor| {
+                let (_, acc, _) = solve(*factor);
+                std::array::from_fn(|k| self.loss_factor(k, torque[k] - e.shaft[k] - self.j_rotor * i * acc[k], w[k]))
             });
             let (t, acc, surface) = solve(e.factor);
             (e.t, e.spring, e.acc) = (t, t, acc);
@@ -641,7 +648,7 @@ impl Winder {
         }
         let r = e.r[1].max(self.roll.core);
         let slope = -2.0 * self.tension * self.taper * self.roll.core / (r * r);
-        let cylinder = if e.r[1] > self.roll.core { slope * growth[1] * r * e.y } else { 0.0 };
+        let cylinder = if e.r[1] > self.roll.core { slope * growth[1] * e.y } else { 0.0 };
         [
             shaft[0],
             shaft[1],
@@ -963,6 +970,36 @@ impl Machine for Winder {
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.drives_off = engaged;
+    }
+    /// What can touch is the dancer (`collision_bodies`), which the web holds and no motor moves: the push acts on its
+    /// travel y, in the dancer's balance; its power is the crash row.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.obstacle = force[0];
+        true
+    }
+    fn contact_axes(&self) -> usize {
+        1
+    }
+    /// The dancer's travel y (down) and its rate, as `eval` takes them.
+    fn contact_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+        if self.elastic {
+            (pos[0], vel[0]) = (s[2], s[5]);
+        } else {
+            let r = [self.unwind_radius(s[0]), self.rewind_radius(s[1])];
+            pos[0] = 0.5 * (self.paid_out(s[0]) - self.wound_up(s[1]));
+            vel[0] = 0.5 * (r[0] * s[2] - r[1] * s[3]);
+        }
+    }
+    /// The dancer at travel `at`: in the rigid model the unwind turned on by the web that takes (2 dy at its radius).
+    fn contact_placed(&self, s: &[f64], at: &[f64], out: &mut Vec<f64>) {
+        out.clear();
+        out.extend_from_slice(s);
+        if self.elastic {
+            out[2] = at[0];
+        } else {
+            let y = 0.5 * (self.paid_out(s[0]) - self.wound_up(s[1]));
+            out[0] += 2.0 * (at[0] - y) / self.unwind_radius(s[0]);
+        }
     }
 
     /// The dancer's position loop, every base step while the drives are on: the trim v = -(Kp e + integral), e the

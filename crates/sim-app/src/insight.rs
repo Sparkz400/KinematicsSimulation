@@ -58,7 +58,7 @@ impl PathQuantity {
         use crate::runs::{Channel, Quantity};
         let time = run.time();
         let length = |columns: &[&[f64]]| -> Vec<f64> {
-            (0..time.len()).map(|i| columns.iter().map(|c| c[i] * c[i]).sum::<f64>().sqrt()).collect()
+            (0..time.len()).map(|i| linear_speed(columns.iter().map(|c| (true, c[i])))).collect()
         };
         match self {
             Self::PathError => {
@@ -97,6 +97,12 @@ impl PathQuantity {
             }
         }
     }
+}
+
+/// The length of a vector of speeds that counts only those marked linear (m/s): a turning axis's rad/s does not add to
+/// a tool speed (`PathQuantity::Speed`, `Runner::trail_point`).
+pub fn linear_speed(speeds: impl IntoIterator<Item = (bool, f64)>) -> f64 {
+    speeds.into_iter().filter(|(linear, _)| *linear).map(|(_, v)| v * v).sum::<f64>().sqrt()
 }
 
 /// The place in `series` (sorted by its first entry, the time) whose time is nearest `t`.
@@ -215,6 +221,8 @@ pub fn band_runs(entry: &MachineEntry, config: &Config) -> Result<BandRuns, Conf
 #[derive(Default)]
 pub struct Insight {
     pub modes: Option<(Config, Vec<ModeView>)>,
+    /// The small-amplitude frequencies of those modes (`Machine::modes_small_amplitude`), where they differ.
+    pub small_modes: Option<Vec<f64>>,
     pub picked: Option<usize>,
     pub band_runs: Option<(Config, BandRuns)>,
     #[allow(clippy::type_complexity)] // the model's `Job` of what `band_runs` answers, with its config
@@ -223,13 +231,14 @@ pub struct Insight {
 }
 
 /// The labels these views take from the model.
-pub const KEYS: [&str; 22] = [
+pub const KEYS: [&str; 23] = [
     "ui-colour-utilisation",
     "ui-modes",
     "ui-modes-hint",
     "ui-modes-find",
     "ui-modes-mode",
     "ui-modes-hz",
+    "ui-modes-small-hz",
     "ui-modes-damping",
     "ui-modes-linear",
     "ui-modes-shape",

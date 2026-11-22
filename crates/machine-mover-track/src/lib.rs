@@ -20,8 +20,11 @@
 //! The rollers carry the attraction F_a less the centrifugal force m v^2 k across the track (the mover sits outside the
 //! curve, so the centrifugal force pulls it off the coils) and the weight m g along the rollers' other axis: guide load
 //! sqrt((F_a - m v^2 k)^2 + (m g)^2). Above m v^2 k = F_a the mover lifts off its rollers (`mover.<k>.liftoff_ratio`).
+//! The mass centre sits `mass.centre_offset_m` = e outside the centre line (0 ships, the drawn mover is 35 mm out):
+//! it runs on R + e at v (1 + e k), the lateral acceleration is v^2 k (1 + e k) and the mass m (1 + e k)^2.
 //!
-//! The coils (`MoverTrack`): a mover's current is its force over the force constant, I = F / k_t, and it flows in the
+//! The coils (`MoverTrack`): a mover's current is that of its force, I = F / k_t less what saturation takes towards the
+//! maximum current (`DriveParams::current_for`), and it flows in the
 //! coils under its magnet plate, shared among the segments by the plate's length on each. A segment's current is the sum
 //! of |I| of the movers on it in those shares; its copper loss R I^2 per mover in those shares (R the coil set under one
 //! mover, `motor.resistance_ohm`). Each segment warms with its loss through one thermal resistance and time constant
@@ -37,6 +40,7 @@
 
 use sim_components::cam::{Cam, Law, Segment};
 use sim_components::chain::{JointMachine, JointSpec, MOTOR_IDS, Mechanism};
+use sim_components::drive::DriveParams;
 use sim_components::joint::RotaryJoint;
 use sim_components::mech::ThermalFeedback;
 use sim_components::transmission::LinearMotor;
@@ -66,6 +70,8 @@ const G: f64 = 9.80665;
 const CURVE_POINTS: usize = 2000;
 /// Strips a curve segment is drawn with.
 const CURVE_STRIPS: usize = 12;
+/// Bins of the moving average of the segment's loss over one pass.
+const BINS: usize = 256;
 
 pub const MAX_MOVERS: usize = 7;
 /// How far a mover's axis range reaches behind and ahead of its cycle's targets, m: as far as one mover alone at an end
@@ -99,7 +105,9 @@ pub const LOSSY_EFFECTS: [&str; 7] = [
     "holding_brake",
 ];
 
+/// The movers have no links to bend: `effects.link_bending` (and its reaction) on is refused.
 fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
+    sim_components::refuse_unmodelled(cfg, &["link_bending", "link_bending_reaction"])?;
     sim_components::base::mount(cfg, Box::new(MoverTrack::new(cfg)?))
 }
 
@@ -248,6 +256,51 @@ impl Track {
         ((self.heading(b) - self.heading(a)) / w, (self.curvature(b) - self.curvature(a)) / w)
     }
 
+    /// The heading of a body on rollers `w` apart at `s`, its mean over [s - w/2, s + w/2]: its rate along s is
+    /// `mean_curvature`'s, the curvature the body follows.
+    pub fn mean_heading(&self, s: f64, w: f64) -> f64 {
+        if w <= 0.0 {
+            return self.heading(s);
+        }
+        // The integral of the heading from 0 to s, unwrapped (each loop adds 2 pi to the heading).
+        let integral = |s: f64| {
+            let (r, turns) = self.wrap(s);
+            let loop_ = self.heading_integral(self.length);
+            turns * loop_ + TAU * self.length * turns * (turns - 1.0) / 2.0 + TAU * turns * r + self.heading_integral(r)
+        };
+        (integral(s + 0.5 * w) - integral(s - 0.5 * w)) / w
+    }
+
+    /// The integral of the heading over the loop from 0 to `r` (0 to L), closed form piece by piece.
+    fn heading_integral(&self, r: f64) -> f64 {
+        let (a, c, rad, lc) = (self.straight, self.curve, self.radius, self.clothoid);
+        // Within a curve, from its start to u.
+        let curve = |u: f64| {
+            let u = u.clamp(0.0, c);
+            if lc == 0.0 {
+                return u * u / (2.0 * rad);
+            }
+            let entry = |u: f64| u.powi(3) / (6.0 * rad * lc);
+            let arc = |u: f64| entry(lc) + lc / (2.0 * rad) * (u - lc) + (u - lc).powi(2) / (2.0 * rad);
+            if u < lc {
+                entry(u)
+            } else if u <= c - lc {
+                arc(u)
+            } else {
+                arc(c - lc) + PI * (u - c + lc) - (lc.powi(3) - (c - u).powi(3)) / (6.0 * rad * lc)
+            }
+        };
+        if r < a {
+            0.0
+        } else if r < a + c {
+            curve(r - a)
+        } else if r < 2.0 * a + c {
+            curve(c) + PI * (r - a - c)
+        } else {
+            curve(c) + PI * a + PI * (r - 2.0 * a - c) + curve(r - 2.0 * a - c)
+        }
+    }
+
     /// The centre line's point at `s` (m, in the track's plane).
     pub fn point(&self, s: f64) -> [f64; 2] {
         let (r, _) = self.wrap(s);
@@ -268,6 +321,29 @@ impl Track {
         } else {
             let p = local(r - 2.0 * a - c);
             [-p[0], d - p[1]]
+        }
+    }
+
+    /// The centre line's direction at `s`, d `point` / ds: a unit vector, along the curve's chord between two of its
+    /// table's points, where `point` runs.
+    pub fn tangent(&self, s: f64) -> [f64; 2] {
+        let (r, _) = self.wrap(s);
+        let (a, c) = (self.straight, self.curve);
+        let local = |u: f64| {
+            let x = (u / c * CURVE_POINTS as f64).clamp(0.0, CURVE_POINTS as f64);
+            let i = (x.floor() as usize).min(CURVE_POINTS - 1);
+            let (p, q, h) = (self.points[i], self.points[i + 1], c / CURVE_POINTS as f64);
+            [(q[0] - p[0]) / h, (q[1] - p[1]) / h]
+        };
+        if r < a {
+            [1.0, 0.0]
+        } else if r < a + c {
+            local(r - a)
+        } else if r < 2.0 * a + c {
+            [-1.0, 0.0]
+        } else {
+            let t = local(r - 2.0 * a - c);
+            [-t[0], -t[1]]
         }
     }
 
@@ -387,6 +463,8 @@ pub struct Movers {
     /// A mover's body without its magnet plate (whose mass is the joint's rotor inertia), its payload, the plate.
     pub body: f64,
     pub payload: f64,
+    /// The mass centre's distance outside the centre line, m.
+    pub centre_offset: f64,
     pub plate_mass: f64,
     attached: bool,
     pub attraction: f64,
@@ -418,9 +496,12 @@ impl Movers {
     /// Mover `k`'s figures at s, v, a: [lateral acceleration, lateral jerk, guide load, lift-off ratio].
     pub fn curve_loads(&self, s: f64, v: f64, a: f64) -> [f64; 4] {
         let (k, dk) = self.track.mean_curvature(s, self.wheelbase);
-        let (lateral, m) = (v * v * k, self.total());
+        // The mass centre runs on R + e at the speed v (1 + e k): v^2 k (1 + e k) across the track.
+        let (e, m) = (self.centre_offset, self.total());
+        let lateral = v * v * k * (1.0 + e * k);
         let radial = self.attraction - m * lateral;
-        [lateral, 2.0 * v * a * k + v * v * v * dk, radial.hypot(m * self.g), m * lateral / self.attraction]
+        let jerk = 2.0 * v * a * (k + e * k * k) + v * v * v * dk * (1.0 + 2.0 * e * k);
+        [lateral, jerk, radial.hypot(m * self.g), m * lateral / self.attraction]
     }
 
     /// The gap from mover `k` to the one ahead of it, m: along the centre line, less a body's length.
@@ -470,16 +551,51 @@ impl Movers {
 }
 
 impl Mechanism for Movers {
-    fn dynamics(&self, _q: &[f64], _qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
+    fn linear_motor(&self) -> bool {
+        true
+    }
+    /// The mass centre runs at v (1 + e k(s)) with the centre line's speed v: T = m (1 + e k)^2 v^2 / 2, so the mass is
+    /// m (1 + e k)^2 and the bias (the energy kept, the clothoid's tangential force) m (1 + e k) e k' v^2. The plate's
+    /// inertia stays on the centre line: the plate faces the coils, which lie on it (the drawn mover sits outside it, its
+    /// body and payload with it), so only they move out with e.
+    fn dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         let n = self.n();
         mass.fill(0.0);
         bias.fill(0.0);
         for k in 0..n {
-            mass[k * n + k] = self.moving();
+            let (c, dc) = self.track.mean_curvature(q[k], self.wheelbase);
+            let f = 1.0 + self.centre_offset * c;
+            mass[k * n + k] = self.moving() * f * f;
+            bias[k] = self.moving() * f * self.centre_offset * dc * qd[k] * qd[k];
         }
     }
     fn potential(&self, _q: &[f64]) -> f64 {
         0.0
+    }
+    /// For effects.base_compliance, in the track's frame (x, y in its plane, z up): each mover's body and payload at
+    /// its mass centre, e outside the centre line square to the body's heading, the mean over its rollers
+    /// (`Track::mean_heading`), which turns at the curvature the dynamics have (`mean_curvature`): it runs at
+    /// v t + e k v along that heading, v (1 + e k) where the two headings agree (a constant radius, a straight). The
+    /// magnet plate on the centre line at the rotor's speed (`rotor_spin`, its mass times that speed), as a linear
+    /// motor's forcer. The track lies level: the weight does no work and the first moment stays at its height.
+    fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<FrameMomentum> {
+        let mut f = FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        let (track, e, w) = (&self.track, self.centre_offset, self.wheelbase);
+        for k in 0..self.n() {
+            let (v, [px, py], [tx, ty]) = (qd[k], track.point(q[k]), track.tangent(q[k]));
+            let ((sin, cos), turn) = (track.mean_heading(q[k], w).sin_cos(), track.mean_curvature(q[k], w).0);
+            let at = [px + e * sin, py - e * cos, 0.0];
+            let speed = [v * (tx + e * turn * cos), v * (ty + e * turn * sin), 0.0];
+            sim_components::base::add_point(&mut f, self.moving(), at, speed);
+            let plate = [rotor_spin[k] * tx, rotor_spin[k] * ty];
+            f.linear[0] += plate[0];
+            f.linear[1] += plate[1];
+            f.angular[2] += px * plate[1] - py * plate[0];
+            f.first_moment[0] += self.plate_mass * px;
+            f.first_moment[1] += self.plate_mass * py;
+            f.mass += self.plate_mass;
+        }
+        Some(f)
     }
     fn set_payload_attached(&mut self, attached: bool) {
         self.attached = attached;
@@ -494,6 +610,14 @@ impl Mechanism for Movers {
         for (k, o) in out.iter_mut().enumerate().take(self.n()) {
             *o = cycle.at(k, self.start[k], master);
         }
+    }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        let (cycle, start) = (self.cycle.clone()?, self.start.clone());
+        Some(std::sync::Arc::new(move |master, out: &mut [[f64; 4]]| {
+            for (k, o) in out.iter_mut().enumerate().take(start.len()) {
+                *o = cycle.at(k, start[k], master);
+            }
+        }))
     }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {
@@ -592,7 +716,9 @@ pub struct MoverTrack {
     pub inner: JointMachine<Movers>,
     inner_base: usize,
     inner_memory: usize,
-    kt: f64,
+    /// The drive as the controller reads it: `current_for` gives the current of a force with the torque constant
+    /// falling towards the maximum current (`effects.torque_saturation`).
+    drive: DriveParams,
     resistance: f64,
     thermal_resistance: f64,
     time_constant: f64,
@@ -603,6 +729,10 @@ pub struct MoverTrack {
     /// Per segment: its temperature rise, and the rise its loss of about the last pass settles at, K.
     pub rises: Vec<f64>,
     pub settled: Vec<f64>,
+    /// Per segment the loss energy of the last window in `BINS` bins (ring, `cursor` the newest, `fill` s of it written).
+    energy: Vec<f64>,
+    cursor: usize,
+    fill: f64,
     /// The motor forces of the last `derivatives`: those of the step (`after_step` warms the segments with them).
     last_force: Mutex<Vec<f64>>,
 }
@@ -642,6 +772,7 @@ impl MoverTrack {
         let movers = Movers {
             body: cfg.positive("mass.mover_kg")?,
             payload: if cfg.bool("effects.payload")? { cfg.non_negative("mass.payload_kg")? } else { 0.0 },
+            centre_offset: cfg.f64("mass.centre_offset_m")?,
             plate_mass: joint.rotor_inertia,
             attached: true,
             attraction: motor.attraction.max(1e-9),
@@ -722,7 +853,8 @@ impl MoverTrack {
             inner_base: 0,
             inner_memory: inner.memory().len(),
             inner,
-            kt: cfg.positive("motor.torque_constant_nm_a")?,
+            // The base step and velocity cycle only set the filters, which `current_for` does not use.
+            drive: DriveParams::from_config(cfg, 1.0, 1.0)?,
             resistance: cfg.non_negative("motor.resistance_ohm")?,
             thermal_resistance: cfg.positive("segment.thermal_resistance_k_w")?,
             time_constant: cfg.positive("segment.thermal_time_constant_s")?,
@@ -731,6 +863,9 @@ impl MoverTrack {
             rise_limit: rating("ratings.segment_max_rise_k"),
             rises: vec![0.0; segments],
             settled: vec![0.0; segments],
+            energy: vec![0.0; segments * BINS],
+            cursor: 0,
+            fill: 0.0,
             last_force: Mutex::new(vec![0.0; n]),
         };
         let (mut state, mut torque) = (Vec::new(), vec![0.0; n]);
@@ -745,13 +880,13 @@ impl MoverTrack {
         &self.inner.mechanism
     }
 
-    /// Per segment its current (A, the movers' |F| / k_t in their plates' shares on it) and its copper loss (W), at the
+    /// Per segment its current (A, the movers' currents for their forces, `DriveParams::current_for`, in their plates' shares on it) and its copper loss (W), at the
     /// movers' positions `q` and motor forces `force`.
     pub fn segment_load(&self, q: &[f64], force: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let t = &self.movers().track;
         let (mut current, mut loss) = (vec![0.0; t.segments.len()], vec![0.0; t.segments.len()]);
         for (k, f) in force.iter().enumerate() {
-            let i = f / self.kt;
+            let i = self.drive.current_for(*f);
             for j in 0..t.segments.len() {
                 let share = t.share(q[k], self.movers().plate, j);
                 current[j] += share * i.abs();
@@ -801,6 +936,9 @@ impl Machine for MoverTrack {
     fn motors(&self) -> &[MotorInfo] {
         self.inner.motors()
     }
+    fn motor_linear(&self, motor: usize) -> bool {
+        self.inner.motor_linear(motor)
+    }
     fn inverse(&self, tool: &[f64], motors: &mut [f64]) {
         self.inner.inverse(tool, motors)
     }
@@ -846,6 +984,9 @@ impl Machine for MoverTrack {
     fn rigid_tensions(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
         self.inner.rigid_tensions(tool_pos, tool_acc, out)
     }
+    fn rigid_tensions_moving(&self, tool_pos: &[f64], tool_vel: &[f64], tool_acc: &[f64], out: &mut Vec<f64>) {
+        self.inner.rigid_tensions_moving(tool_pos, tool_vel, tool_acc, out)
+    }
     fn rigid_guide_loads(&self, tool_pos: &[f64], tool_acc: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_guide_loads(tool_pos, tool_acc, out)
     }
@@ -854,6 +995,9 @@ impl Machine for MoverTrack {
     }
     fn rigid_friction(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<[f64; 2]>) {
         self.inner.rigid_friction(tool_pos, tool_dir, out)
+    }
+    fn rigid_friction_rise(&self, tool_pos: &[f64], tool_dir: &[f64], out: &mut Vec<Vec<[f64; 2]>>) {
+        self.inner.rigid_friction_rise(tool_pos, tool_dir, out)
     }
     /// The inner machine's, but NaN for the station error (a mover's error while its cam stands, which no planned pose
     /// has), then NaN for each own check (the rigid model tells no segment's warmth).
@@ -882,8 +1026,14 @@ impl Machine for MoverTrack {
     fn set_dwelling(&mut self, dwelling: bool) {
         self.inner.set_dwelling(dwelling)
     }
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.inner.set_tool_force(force)
+    }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.inner.set_brake_engaged(engaged)
+    }
+    fn substeps_wanted(&self, state: &[f64], torque: &[f64], dt: f64, substeps: u32) -> u32 {
+        self.inner.substeps_wanted(state, torque, dt, substeps)
     }
     fn valves(&self) -> Vec<(String, f64)> {
         self.inner.valves()
@@ -894,9 +1044,9 @@ impl Machine for MoverTrack {
     fn end_sensors(&self, valve: usize) -> [bool; 2] {
         self.inner.end_sensors(valve)
     }
-    /// The inner machine's, then each segment's first-order warmth: the rise moves towards R_th P over the thermal time
-    /// constant, the settled rise over one pass, with the loss of the step's forces held over it (exact for a held
-    /// input, as `sim` warms the parts).
+    /// The inner machine's, then each segment's warmth: the rise moves towards R_th P over the thermal time constant
+    /// (first order, the loss of the step's forces held over it, exact for a held input, as `sim` warms the parts); the
+    /// settled rise is R_th times the loss averaged over the last pass (a moving average of the energy in `BINS` bins).
     fn after_step(&mut self, state: &mut [f64], dt: f64) {
         self.inner.after_step(state, dt);
         let force = self.last_force.lock().map(|f| f.clone()).unwrap_or_default();
@@ -904,42 +1054,103 @@ impl Machine for MoverTrack {
             return;
         }
         let (_, loss) = self.segment_load(&self.positions(state), &force);
-        let (slow, fast) = (1.0 - (-dt / self.time_constant).exp(), 1.0 - (-dt / self.window).exp());
+        let slow = 1.0 - (-dt / self.time_constant).exp();
+        // BINS - 1 whole bins make the window; the newest is being filled, so the oldest counts by what is left of it.
+        let bin = self.window / (BINS - 1) as f64;
         for (j, p) in loss.iter().enumerate() {
-            let settled = self.thermal_resistance * p;
-            self.rises[j] += slow * (settled - self.rises[j]);
-            self.settled[j] += fast * (settled - self.settled[j]);
+            self.rises[j] += slow * (self.thermal_resistance * p - self.rises[j]);
+            let ring = &mut self.energy[j * BINS..(j + 1) * BINS];
+            if dt >= self.window {
+                // A step longer than the window replaces the whole history.
+                ring.fill(p * bin);
+                ring[self.cursor] = 0.0;
+            }
+        }
+        // The window as BINS bins of energy; the newest is partly filled, the average runs over what the ring covers.
+        let mut left = if dt >= self.window { 0.0 } else { dt };
+        if dt >= self.window {
+            self.fill = 0.0;
+        }
+        while left > 1e-15 {
+            let take = left.min(bin - self.fill);
+            for (j, p) in loss.iter().enumerate() {
+                self.energy[j * BINS + self.cursor] += p * take;
+            }
+            (self.fill, left) = (self.fill + take, left - take);
+            if self.fill >= bin * (1.0 - 1e-12) {
+                self.cursor = (self.cursor + 1) % BINS;
+                self.fill = 0.0;
+                for j in 0..self.rises.len() {
+                    self.energy[j * BINS + self.cursor] = 0.0;
+                }
+            }
+        }
+        let (oldest, gone) = ((self.cursor + 1) % BINS, self.fill / bin);
+        for j in 0..self.rises.len() {
+            let ring = &self.energy[j * BINS..(j + 1) * BINS];
+            let sum: f64 = ring.iter().sum::<f64>() - gone * ring[oldest];
+            self.settled[j] = self.thermal_resistance * sum / self.window;
         }
     }
     fn memory(&self) -> Vec<f64> {
-        [self.inner.memory(), self.rises.clone(), self.settled.clone()].concat()
+        [
+            self.inner.memory(),
+            self.rises.clone(),
+            self.settled.clone(),
+            self.energy.clone(),
+            vec![self.cursor as f64, self.fill],
+        ]
+        .concat()
     }
     fn set_memory(&mut self, memory: &[f64]) {
         let (inner, own) = memory.split_at(self.inner_memory.min(memory.len()));
         self.inner.set_memory(inner);
         let n = self.rises.len();
-        if own.len() == 2 * n {
+        if own.len() == 2 * n + n * BINS + 2 {
             self.rises.copy_from_slice(&own[..n]);
-            self.settled.copy_from_slice(&own[n..]);
+            self.settled.copy_from_slice(&own[n..2 * n]);
+            self.energy.copy_from_slice(&own[2 * n..2 * n + n * BINS]);
+            (self.cursor, self.fill) = (own[2 * n + n * BINS] as usize % BINS, own[2 * n + n * BINS + 1]);
         }
     }
     fn set_part_temperatures(&mut self, rises: &[f64]) {
         self.inner.set_part_temperatures(rises)
     }
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
-        self.inner.resonance_hz(tool_pose)
+        self.modes(tool_pose).first().map(|m| m.hz)
     }
     fn mode_shape(&self, tool_pose: &[f64]) -> Option<(f64, Vec<f64>)> {
         self.inner.mode_shape(tool_pose)
     }
+    /// With the motors held, as `Machine::modes` has them and the planner's `trains`: each mover's body and payload on
+    /// its coupling to the held plate, sqrt(k / m (1 + e k)^2) (694.28 Hz on the shipped mover, its damping c w / 2k).
+    /// `JointMachine` lists two movers and more so (`held_modes`), one alone as a single joint's two-mass mode with the
+    /// plate free (1736.39 Hz), which the shaper then followed while the plan's train was the held one.
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
-        self.inner.modes(tool_pose)
+        if self.movers().n() > 1 {
+            return self.inner.modes(tool_pose);
+        }
+        // Rigid couplings: none, as for six.
+        if !self.inner.elastic {
+            return Vec::new();
+        }
+        let (mut mass, mut bias) = ([0.0], [0.0]);
+        self.movers().dynamics(tool_pose, &[0.0], &mut mass, &mut bias);
+        let gear = self.inner.joints[0].drive.gearbox.at(tool_pose[0]);
+        let w = (gear.stiffness / mass[0]).sqrt();
+        vec![Mode { hz: w / TAU, damping: gear.damping_at(w) * w / (2.0 * gear.stiffness) }]
+    }
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        self.inner.trains(tool_pose)
     }
     fn belt_wraps(&self, tool_pose: &[f64]) -> Vec<f64> {
         self.inner.belt_wraps(tool_pose)
     }
     fn unreachable(&self, tool_pose: &[f64], slack: f64) -> Option<&'static str> {
         self.inner.unreachable(tool_pose, slack)
+    }
+    fn refuses_pick(&self, tool_pose: &[f64]) -> Option<&'static str> {
+        self.inner.refuses_pick(tool_pose)
     }
     fn condition(&self, tool_pose: &[f64]) -> Option<f64> {
         self.inner.condition(tool_pose)
@@ -952,6 +1163,9 @@ impl Machine for MoverTrack {
     }
     fn cam_at(&self, master: f64, out: &mut [[f64; 4]]) {
         self.inner.cam_at(master, out)
+    }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        self.inner.cam_curve()
     }
     fn gantry_motors(&self) -> Option<[usize; 2]> {
         self.inner.gantry_motors()
@@ -1033,6 +1247,12 @@ impl Machine for MoverTrack {
     }
     fn friction_curve(&self, i: usize, speed: f64, load_scale: f64) -> [f64; 3] {
         self.inner.friction_curve(i, speed, load_scale)
+    }
+    fn friction_rotary(&self, i: usize) -> bool {
+        self.inner.friction_rotary(i)
+    }
+    fn friction_speed_limit(&self, i: usize, motor_speed: &[f64]) -> Option<f64> {
+        self.inner.friction_speed_limit(i, motor_speed)
     }
     fn belt_sections(&self) -> Vec<BeltSection> {
         self.inner.belt_sections()

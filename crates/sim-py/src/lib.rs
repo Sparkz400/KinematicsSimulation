@@ -388,7 +388,8 @@ fn run(
 
 /// The load per motor over one pass of the cycle, or over a path or trajectory, as `sim-cli analyze` gives it: a dict
 /// of columns, one row per motor. `points=True` adds "points", per motor an (n, 2) array of speed (rad/s) and torque
-/// (N m) at its operating points.
+/// (N m) at its operating points. The column names are fixed: on a linear motor "*_torque_nm" holds a force in N and
+/// "peak_speed_rad_s" a speed in m/s; the columns "torque_unit" and "speed_unit" give each motor's units.
 #[pyfunction]
 #[pyo3(signature = (config, *, path=None, trajectory=None, time_optimal=false, points=false))]
 fn analyze(
@@ -401,10 +402,10 @@ fn analyze(
 ) -> PyResult<Py<PyDict>> {
     let (entry, cfg) = (config.entry, config.cfg.clone());
     let (motors, load) = py
-        .detach(|| -> Result<(Vec<&'static str>, CycleLoad), String> {
+        .detach(|| -> Result<(Vec<(&'static str, bool)>, CycleLoad), String> {
             let tr = texts(entry);
             let mut sim = Sim::new(entry, &cfg).map_err(|e| tr.tr_arg(e.key(), e.detail()))?;
-            let motors = sim.machine.motors().iter().map(|m| m.id).collect();
+            let motors = motor_kinds(&sim);
             let load = match poses(entry, &sim, path.as_deref(), trajectory.as_deref(), time_optimal)? {
                 Some(points) => analyse_trajectory_with(&mut sim, points, false),
                 None => analyse_cycle_with(&mut sim, false),
@@ -416,10 +417,15 @@ fn analyze(
     Ok(load_columns(py, motors, &load, points)?.unbind())
 }
 
+/// Each motor's id and whether it is linear (`Machine::motor_linear`: m/s and N instead of rad/s and N m).
+fn motor_kinds(sim: &Sim) -> Vec<(&'static str, bool)> {
+    sim.machine.motors().iter().enumerate().map(|(k, m)| (m.id, sim.machine.motor_linear(k))).collect()
+}
+
 /// The columns of `analyze`, one row per motor.
 fn load_columns<'py>(
     py: Python<'py>,
-    motors: Vec<&'static str>,
+    motors: Vec<(&'static str, bool)>,
     load: &CycleLoad,
     points: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
@@ -427,7 +433,12 @@ fn load_columns<'py>(
     let column = |f: fn(&sim_components::analysis::MotorLoad) -> f64| {
         PyArray1::from_vec(py, load.motors.iter().map(f).collect())
     };
-    out.set_item("motor", motors)?;
+    let unit = |rotary: &'static str, linear: &'static str| {
+        motors.iter().map(|m| if m.1 { linear } else { rotary }).collect::<Vec<_>>()
+    };
+    out.set_item("torque_unit", unit("N m", "N"))?;
+    out.set_item("speed_unit", unit("rad/s", "m/s"))?;
+    out.set_item("motor", motors.iter().map(|m| m.0).collect::<Vec<_>>())?;
     out.set_item("cycle_s", PyArray1::from_vec(py, vec![load.duration; load.motors.len()]))?;
     out.set_item("peak_torque_nm", column(|m| m.peak_torque))?;
     out.set_item("rms_torque_nm", column(|m| m.rms_torque))?;
@@ -671,6 +682,9 @@ fn sizing(
         })
     };
     out.set_item("peak_torque_nm", numbers(&|c| most(c, |m| m.peak_torque)))?;
+    // N on a machine of linear motors (the first motor's kind), else N m.
+    let unit = if (entry.build)(&cfg).is_ok_and(|m| m.motor_linear(0)) { "N" } else { "N m" };
+    out.set_item("torque_unit", vec![unit; found.len()])?;
     out.set_item("winding_rise_k", numbers(&|c| most(c, |m| m.winding_rise)))?;
     out.set_item("rank", PyArray1::from_vec(py, (1..=found.len()).collect()))?;
     out.set_item("front", PyArray1::from_vec(py, front(&found)))?;
@@ -702,7 +716,8 @@ fn sizing(
 
 /// The mechanical frequency response from motor `motor`'s torque to its speed, as `sim-cli sweep` gives it: columns
 /// "frequency_hz", "gain_rad_s_per_nm", "phase_deg" at `count` frequencies spaced logarithmically from `from_hz` to
-/// `to_hz`, with a torque amplitude of `amplitude` N m (the default as the command line's).
+/// `to_hz`, with a torque amplitude of `amplitude` N m (the default as the command line's). On a linear motor the
+/// amplitude is a force in N and "gain_rad_s_per_nm" is in (m/s)/N.
 #[pyfunction]
 #[pyo3(signature = (config, *, motor=0, from_hz=5.0, to_hz=500.0, count=SWEEP_POINTS, amplitude=None))]
 fn sweep(
@@ -855,16 +870,22 @@ struct Rows<const N: usize> {
     quantity: Vec<String>,
     of: Vec<String>,
     numbers: Vec<[f64; N]>,
+    /// The unit of each row's numbers, "" where none is given (`push_unit`); `fit` hands it out as "units".
+    units: Vec<String>,
 }
 
 impl<const N: usize> Rows<N> {
     fn new() -> Self {
-        Self { quantity: Vec::new(), of: Vec::new(), numbers: Vec::new() }
+        Self { quantity: Vec::new(), of: Vec::new(), numbers: Vec::new(), units: Vec::new() }
     }
     fn push(&mut self, quantity: &str, of: &str, numbers: [f64; N]) {
+        self.push_unit(quantity, of, numbers, "");
+    }
+    fn push_unit(&mut self, quantity: &str, of: &str, numbers: [f64; N], unit: &str) {
         self.quantity.push(quantity.into());
         self.of.push(of.into());
         self.numbers.push(numbers);
+        self.units.push(unit.into());
     }
     /// The table as a dict of columns: "quantity", "of", then the numbers under `names` (NaN where a row has none).
     fn into_dict<'py>(self, py: Python<'py>, names: [&str; N]) -> PyResult<Bound<'py, PyDict>> {
@@ -879,7 +900,8 @@ impl<const N: usize> Rows<N> {
 }
 
 /// What a measurement says the config should be, as `sim-cli fit` says it: columns "quantity", "of", "config",
-/// "fitted", "standard_error" (NaN where the command line leaves a cell empty), "advice", what to change in the
+/// "fitted", "standard_error" (NaN where the command line leaves a cell empty), "units", the unit of each row ("" where
+/// it has none; the rigid values of a rotary axis are kg m², N m s/rad, N m, N m), "advice", what to change in the
 /// config, and "errors": the fits that found nothing (no resonance in the sweep, a stiffness the moves do not tell),
 /// after which the command line goes on with the others and fails at the end. Their rows are missing; an empty list:
 /// every fit asked for is there. What keeps any fit from starting (a config refused, a trace unreadable) raises
@@ -947,7 +969,7 @@ fn fit(
                         let names =
                             ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"];
                         for (q, name) in names.iter().enumerate() {
-                            rows.push(name, axis.id, [fit.config[q], fit.fitted[q], fit.error[q]]);
+                            rows.push_unit(name, axis.id, [fit.config[q], fit.fitted[q], fit.error[q]], fit.units[q]);
                         }
                         // The friction beyond its sliding level, where the trace tells it, as the command line.
                         for d in &fit.details {
@@ -994,7 +1016,11 @@ fn fit(
             Ok((rows, advice, errors))
         })
         .map_err(PyValueError::new_err)?;
+    let units = rows.units.clone();
     let out = rows.into_dict(py, ["config", "fitted", "standard_error"])?;
+    // The unit of each row in the order of the columns ("" where it has none): kg m², N m s/rad, N m, N m on a rotary
+    // axis, else kg, N s/m, N, N.
+    out.set_item("units", units)?;
     out.set_item("advice", advice)?;
     out.set_item("errors", errors)?;
     Ok(out.unbind())
@@ -1275,7 +1301,8 @@ fn tuning(py: Python<'_>, config: &PyConfig, size: f64, amplitude: f64) -> PyRes
 /// Per motor the stability margins of its velocity loop, as `sim-cli margins` gives them: columns "run" ("nominal",
 /// and with `bands=True` each value of `[bounds]` at its low and its high bound), "motor", "crossover_hz",
 /// "phase_margin_deg", "gain_margin_db", "peak_sensitivity", "peak_frequency_hz" and "ok" (false: the loop is unstable
-/// or its measurement not valid).
+/// or its measurement not valid). Crossover and phase margin are NaN where the loop has no gain crossover in the band
+/// (not measurable; "ok" is then the gain margin's alone), the CLI's empty cell.
 #[pyfunction]
 #[pyo3(signature = (config, *, bands=false))]
 fn margins(py: Python<'_>, config: &PyConfig, bands: bool) -> PyResult<Py<PyDict>> {
@@ -1351,7 +1378,8 @@ fn accuracy(py: Python<'_>, config: &PyConfig, points: usize, repeats: usize, dw
 
 /// The modes the machine reports over the stroke of axis `axis_index` at `points` places, the other axes at the start
 /// pose, as `sim-cli modes` gives them: "position", then per mode, lowest first, "mode<i>_hz" and "mode<i>_damping"
-/// (NaN where a place does not have it).
+/// (NaN where a place does not have it), and where the small-amplitude modes differ (a gearbox's hysteresis) also
+/// "mode<i>_small_hz".
 #[pyfunction]
 #[pyo3(signature = (config, *, axis_index=0, points=21))]
 fn modes(py: Python<'_>, config: &PyConfig, axis_index: usize, points: usize) -> PyResult<Py<PyDict>> {
@@ -1361,10 +1389,13 @@ fn modes(py: Python<'_>, config: &PyConfig, axis_index: usize, points: usize) ->
     let (entry, cfg, i) = (config.entry, config.cfg.clone(), axis(config, axis_index)?);
     let rows = py
         .detach(|| -> Result<_, ConfigError> {
-            let sim = Sim::new(entry, &cfg)?;
-            Ok(sim_components::analysis::modes_along(sim.machine.as_ref(), &cfg.f64s("start.pose")?, i, points))
+            let (sim, pose) = (Sim::new(entry, &cfg)?, cfg.f64s("start.pose")?);
+            let rows = sim_components::analysis::modes_along(sim.machine.as_ref(), &pose, i, points);
+            let small = sim_components::analysis::small_amplitude_along(sim.machine.as_ref(), &pose, i, &rows);
+            Ok((rows, small))
         })
         .map_err(|e| config_error(entry, e))?;
+    let (rows, small) = rows;
     let count = rows.iter().map(|(_, modes)| modes.len()).max().unwrap_or(0);
     let out = PyDict::new(py);
     out.set_item("position", column(py, rows.iter().map(|r| r.0)))?;
@@ -1372,6 +1403,10 @@ fn modes(py: Python<'_>, config: &PyConfig, axis_index: usize, points: usize) ->
         let at = |f: fn(&sim_core::Mode) -> f64| column(py, rows.iter().map(move |r| r.1.get(k).map_or(f64::NAN, f)));
         out.set_item(format!("mode{}_hz", k + 1), at(|m| m.hz))?;
         out.set_item(format!("mode{}_damping", k + 1), at(|m| m.damping))?;
+        if let Some(small) = &small {
+            let hz = column(py, small.iter().map(|s| s.get(k).map_or(f64::NAN, |m| m.hz)));
+            out.set_item(format!("mode{}_small_hz", k + 1), hz)?;
+        }
     }
     Ok(out.unbind())
 }
@@ -1492,7 +1527,8 @@ fn sensitivity(py: Python<'_>, config: &PyConfig, delta: f64, groups: Option<Vec
 
 /// The position setpoints of a drive trace run through the simulator, as `sim-cli replay` runs them: per motor how far
 /// simulated torque and following error are from the measured ones (columns "motor", "torque_rms_nm",
-/// "torque_peak_nm", "following_error_rms_rad", "following_error_peak_rad"), and "overlay": measured and simulated
+/// "torque_peak_nm", "following_error_rms_rad", "following_error_peak_rad"; N and m on a linear motor), and
+/// "overlay": measured and simulated
 /// torque, speed and following error side by side ({"time": ..., "motor.<id>.<quantity>_measured": ..., ...}).
 /// `map_file` maps a vendor export, as for `fit`.
 #[pyfunction]
@@ -1689,9 +1725,9 @@ impl PySim {
     }
 
     /// Runs one controller cycle, or `time` seconds (whole base steps), and returns every signal at its end as
-    /// `{signal id: float}`. At most one of: `torque` (N m per motor: torque mode), `velocity` (rad/s per motor:
-    /// velocity mode), `setpoint` (per tool axis: position mode, interpolated over `profile.setpoint_interval_s` as
-    /// from a PLC). With none, the drives keep their modes and setpoints.
+    /// `{signal id: float}`. At most one of: `torque` (N m per motor, N on a linear motor: torque mode), `velocity`
+    /// (rad/s per motor, m/s on a linear motor: velocity mode), `setpoint` (per tool axis: position mode,
+    /// interpolated over `profile.setpoint_interval_s` as from a PLC). With none, the drives keep their modes and setpoints.
     #[pyo3(signature = (*, torque=None, velocity=None, setpoint=None, time=None))]
     fn step<'py>(
         &mut self,
@@ -1797,7 +1833,7 @@ impl PySim {
     /// ("cycle_s" is the time run).
     #[pyo3(signature = (*, points=false))]
     fn analyze<'py>(&self, py: Python<'py>, points: bool) -> PyResult<Bound<'py, PyDict>> {
-        load_columns(py, self.sim.machine.motors().iter().map(|m| m.id).collect(), &self.load(), points)
+        load_columns(py, motor_kinds(&self.sim), &self.load(), points)
     }
 
     /// The verdicts on the run since the start or the last `reset`, in the columns of `verdicts`: "check", "motor",

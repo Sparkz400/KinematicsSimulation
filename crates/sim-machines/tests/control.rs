@@ -6,14 +6,15 @@ use sim_core::{Config, MachineEntry};
 use sim_machines::MACHINES;
 
 /// The switch between a machine's elastic model and its rigid reference model: belt stretch on a belt machine, the
-/// gearboxes' elasticity on one of arms, the web's stretch on a machine that winds a web.
+/// gearboxes' elasticity on one of arms, the web's stretch on a machine that winds a web, the rope's on the crane (whose
+/// drives' elasticity is a switch of its own, off as shipped).
 fn model_switch(cfg: &Config) -> &'static str {
     [
         "effects.belt_stretch",
+        "effects.rope_stretch",
         "effects.joint_elasticity",
         "effects.cable_stretch",
         "effects.web_stretch",
-        "effects.rope_stretch",
     ]
     .into_iter()
     .find(|key| cfg.bool(key).is_ok())
@@ -147,8 +148,9 @@ fn cruise_following_error(entry: &MachineEntry, edit: &[&str]) -> (f64, f64) {
     let mut lagging: Vec<f64> = sim.control.drives.iter().map(|d| d.pos_set - d.following_error).collect();
     while sim.control.busy() || sim.step == 0 {
         sim.step();
-        for (m, d) in lagging.iter_mut().zip(&sim.control.drives) {
-            *m += sim.dt * kv * (d.pos_set - *m);
+        // Each drive at its own Kv (`[drive.<id>]`: the arms' base turns have theirs).
+        for (k, (m, d)) in lagging.iter_mut().zip(&sim.control.drives).enumerate() {
+            *m += sim.dt * sim.control.drive_params_of(k).kv * (d.pos_set - *m);
         }
         if sim.control.set_vel[0] < v_max * (1.0 - 1e-9) {
             cruise_since = None;
@@ -234,16 +236,41 @@ fn torque_feedforward_cuts_the_following_error_while_accelerating() {
 /// encoder's quantisation off: under 0.011 mrad throughout). No torque feedforward removes that, so the peaks come out 0.91 and 0.88.
 const LEAD_AT_CONSTANT_ACCELERATION: &[&str] = &["geneva-drive", "cam-indexer"];
 
+/// Machines whose load hangs free and swings after an unshaped move, pulling the axis that carries it: the overhead
+/// crane's load on its rope. Their drives are judged with the input shaper on (`effects.input_shaping`), the machine's
+/// own means against the swing, as the process machines' without their process force: the swing is a load outside the
+/// feedforward, and its pull on the axis is the drive's give, not its settling or its tracking. The crane's bridge after
+/// its long move unshaped, its load swinging by 0.23 m on 2 m of rope at 0.35 Hz: 300 N of pull over the bridge drive's
+/// stiffness of 1.0 MN/m at that frequency, ratio^2 Kp |1 + 1 / (j w Tn)| |Kv + j w| = 375^2 x 0.15 x 4.63 x 10.24, is
+/// 0.30 mm either way (0.65 mm measured, span); with the stiff drives it had (Kp 2.0, Tn 0.03 s, Kv 30) 5 um. In the
+/// cycle the 0.32 m swing at a dwell put 0.55 mm on the bridge's following error. Nothing but the drive damps the swing,
+/// and its speed loop's integral part pumps it a little: 5.5 % more in 40 s at rest (0.06 % with the stiff drives).
+const SWINGING_LOAD: &[&str] = &["overhead-crane"];
+
+/// The config the drive tests judge a machine in: its own, with the input shaper on where its load swings free.
+fn unswung(entry: &MachineEntry) -> Config {
+    let mut cfg = entry.config();
+    if SWINGING_LOAD.contains(&entry.id) {
+        cfg.set_text("effects.input_shaping = true").unwrap();
+    }
+    cfg
+}
+
 #[test]
 fn a_move_arrives_and_comes_to_rest() {
     for entry in MACHINES {
-        let mut sim = Sim::new(entry, &entry.config()).unwrap();
+        let mut sim = Sim::new(entry, &unswung(entry)).unwrap();
         let target = long_move(&sim);
         sim.command(Command::MoveTo(target.clone())).unwrap_or_else(|e| panic!("{}: {}", entry.id, e.key));
-        while sim.control.busy() || sim.step == 0 {
+        // Shaped, the setpoint arrives one period of the shaper after the plan (the crane's 2.8 s).
+        let shaped = |s: &Sim| s.control.set_pos.iter().zip(s.control.planned_pos()).any(|(a, b)| (a - b).abs() > 1e-9);
+        while sim.control.busy() || sim.step == 0 || shaped(&sim) {
             sim.step();
         }
-        sim.run(0.3, |_| {});
+        // Nine time constants 1 / Kv of the position loop, 0.3 s at least: the crane's soft loop (Kv 10 1/s) crept 21 um
+        // in the window after 0.3 s, three of them, once across its mean and gone 1 s later.
+        let kv = unswung(entry).f64("drive.kv_1_s").unwrap();
+        sim.run((9.0 / kv).max(0.3), |_| {});
         let axis = sim.machine.axes()[0].clone();
         let position = sim.signal_index(&format!("axis.{}.position", axis.id)).unwrap();
         // The axis's position over `seconds`, one sample a base step.
@@ -313,7 +340,7 @@ const NO_GRIPPER: &[&str] =
 #[test]
 fn the_cycle_visits_every_segment_and_switches_the_payload() {
     on_every_machine(|entry| {
-        let mut cfg = entry.config();
+        let mut cfg = unswung(entry);
         // The process machines' cut and press forces are loads their loops take, outside the feedforward: their
         // tracking error under them is the process's, not the cycle's (the knife's 7.8 mrad, 0.31 without).
         if NO_GRIPPER.contains(&entry.id) {
@@ -327,7 +354,9 @@ fn the_cycle_visits_every_segment_and_switches_the_payload() {
         let (mut visited, mut payload_seen, mut worst_error) =
             (vec![0u32; segments], [false; 2], vec![0f64; axes.len()]);
         let (mut last, mut sample) = (None, Vec::new());
-        sim.run(8.0, |s| {
+        // The crane's pass takes 13 s shaped (7 s unshaped).
+        let seconds = if SWINGING_LOAD.contains(&entry.id) { 14.0 } else { 8.0 };
+        sim.run(seconds, |s| {
             let now = s.control.cycle_segment();
             if now != last {
                 if let Some(i) = now {
@@ -342,7 +371,7 @@ fn the_cycle_visits_every_segment_and_switches_the_payload() {
         // Every segment ran, and the cycle started over.
         assert!(
             visited.iter().all(|n| *n >= 1) && visited[0] >= 2,
-            "{}: segments run {visited:?} times in 8 s",
+            "{}: segments run {visited:?} times in {seconds} s",
             entry.id
         );
         let carried = if NO_GRIPPER.contains(&entry.id) { [false, true] } else { [true, true] };
@@ -654,6 +683,10 @@ fn every_effect_switch_changes_the_traces() {
             "effects.screw_lead_efficiency" => {
                 base.get("screw.friction_coefficient").is_err() || !base.bool("effects.gearbox_efficiency").unwrap()
             }
+            // A machine without a screw whose stiffness can follow its nut, or whose joints are rigid.
+            "effects.screw_stiffness_with_position" => {
+                base.get("screw.fixed_bearing_at_m").is_err() || !base.bool("effects.joint_elasticity").unwrap_or(false)
+            }
             "effects.gearbox_stiffness_curve" => ["gearbox.stiffness_k2_nm_rad", "gearbox.stiffness_k3_nm_rad"]
                 .iter()
                 .all(|k| base.f64(k).unwrap() == base.f64("gearbox.stiffness_nm_rad").unwrap()),
@@ -705,9 +738,11 @@ fn every_effect_switch_changes_the_traces() {
         // The braking resistor warms only where it burns, so its chopper switches in just above the (low) bus. Fine
         // interpolation acts between profile cycles, which here are as long as the position loop's (1 ms), so it is
         // flipped at a profile cycle of 2 ms. The arm tube's inertia goes into the bending of the arms (with
-        // effects.link_elasticity), the links' bending acts back only where they bend. The iron loss is what the stall current's copper loss has more than the rated
-        // current's (the shipped motors have the two equal, so none), so the stall current is a fifth above the rated
-        // one. The shipped friction feedforward has no torque in its characteristic (it is off), so it gets 0.05 N m.
+        // effects.link_elasticity), the links' bending acts back only where they bend. The iron loss is what the stall
+        // current's copper loss has more than the rated current's: none where a motor's two are equal (the single axis's
+        // 2.822 A), and where the catalogue prints them apart the stall current can lie on either side (the
+        // 1FK2105-4AF's 4.65 A against 4.35 A rated; 2.822 A against 4.35 on the hexapod), so both runs set it a fifth
+        // above the rated one. The shipped friction feedforward has no torque in its characteristic (it is off), so it gets 0.05 N m.
         let resistor =
             [format!("ratings.braking_threshold_v = {:?}", 1.05 * base.f64("drive.bus_voltage_v").unwrap_or(0.0))];
         let stall = [format!("motor.stall_current_a = {:?}", 1.2 * base.f64("motor.rated_current_a").unwrap())];
@@ -715,7 +750,7 @@ fn every_effect_switch_changes_the_traces() {
             "drive.friction_feedforward_torque_nm = {:?}",
             vec![0.05; base.f64s("drive.friction_feedforward_speed_rad_s").map_or(0, |v| v.len())]
         )];
-        let through: [(&str, &[String]); 9] = [
+        let through: [(&str, &[String]); 10] = [
             ("effects.belt_wrap", &["effects.belt_tooth_jump = true".into()]),
             ("effects.drive_current_limit", &limit),
             ("effects.drive_overload", &overload),
@@ -725,6 +760,7 @@ fn every_effect_switch_changes_the_traces() {
             ("effects.iron_loss", &stall),
             ("effects.friction_feedforward", &characteristic),
             ("effects.link_bending_reaction", &["effects.link_bending = true".into()]),
+            ("effects.belt_pulley_conduction", &["effects.part_heating = true".into()]),
         ];
         for effect in effects {
             let (from, own);
@@ -764,6 +800,19 @@ const UNREAD: &[(&str, &str)] = &[
     ("cam-indexer", "effects.gravity"),
     ("cam-indexer", "effects.process_force"),
     ("cam-indexer", "effects.frame_stretch"),
+    // The crank-cam crate's common switches: only the disc cam has a follower to lift off, only the two indexers a
+    // table to twist.
+    ("slider-crank", "effects.follower_lift_off"),
+    ("rotary-knife", "effects.follower_lift_off"),
+    ("flying-saw", "effects.follower_lift_off"),
+    ("toggle-press", "effects.follower_lift_off"),
+    ("geneva-drive", "effects.follower_lift_off"),
+    ("cam-indexer", "effects.follower_lift_off"),
+    ("disc-cam", "effects.table_twist"),
+    ("slider-crank", "effects.table_twist"),
+    ("rotary-knife", "effects.table_twist"),
+    ("flying-saw", "effects.table_twist"),
+    ("toggle-press", "effects.table_twist"),
     // Read by machine files' gantries only, as its config says.
     ("t-gantry", "effects.gantry_yaw"),
 ];
@@ -1074,7 +1123,18 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
             // At this speed the tool is behind its setpoint by up to what it travels in a profile cycle.
             let mut behind = 0f64;
             sim.run(0.05, |s| behind = behind.max((tool(s).0[0] - s.control.set_pos[0]).abs()));
-            let (before, peak) = (tool(&sim), cfg.f64("drive.peak_torque_nm").unwrap());
+            // Each drive's own peak torque: the crane's hoist (24 N m) holds its 265 kg with 5.2 N m, half the travels'
+            // 10 N m of the shared table.
+            let peak: Vec<f64> = sim
+                .machine
+                .motors()
+                .iter()
+                .map(|m| {
+                    let own = sim_components::catalog::motor_config(&cfg, m.id).unwrap();
+                    own.f64("drive.peak_torque_nm").unwrap()
+                })
+                .collect();
+            let before = tool(&sim);
             let quiet = sim.control.drives.iter().map(|d| d.torque_command.abs()).fold(0.0, f64::max);
             let mut other = cfg.clone();
             other.set_text(&format!("{switch} = {}", !elastic)).unwrap();
@@ -1116,8 +1176,9 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
             assert!(before.1[0] > 0.95 * axes[0].max_vel);
             let (mut torque, mut off) = (0f64, 0f64);
             sim.run(0.2, |s| {
-                let over = s.control.drives.iter().zip(&kick).map(|(d, kick)| d.torque_command.abs() - kick);
-                torque = over.fold(torque, f64::max);
+                // Beyond the kick, as a share of the drive's own peak.
+                let over = s.control.drives.iter().zip(&kick).zip(&peak);
+                torque = over.map(|((d, kick), peak)| (d.torque_command.abs() - kick) / peak).fold(torque, f64::max);
                 off = off.max((tool(s).0[0] - s.control.set_pos[0]).abs());
             });
             // The lag the new model has of its own, where it grows in those 200 ms: the slider-crank's elastic crank,
@@ -1128,8 +1189,8 @@ fn switching_the_model_at_speed_carries_the_motion_over() {
                 own.run(0.2, |s| behind = behind.max(lag(s)));
             }
             assert!(
-                torque < 0.5 * peak && off < behind + 2e-4,
-                "{}, from elastic {elastic}: {torque} N m beyond the kick {kick:?} N m (before {quiet} N m, limit {peak} N m), {off} m off the setpoint (before {behind} m)",
+                torque < 0.5 && off < behind + 2e-4,
+                "{}, from elastic {elastic}: {torque} of a drive's peak beyond the kick {kick:?} N m (before {quiet} N m, peaks {peak:?} N m), {off} m off the setpoint (before {behind} m)",
                 entry.id
             );
         }
@@ -1198,8 +1259,9 @@ fn shipped_configs() -> Vec<(String, Config, &'static MachineEntry)> {
 /// and guide friction off (in a cruise friction adds no damping to the loop): as configured, and with `across` also over
 /// the whole range of their `[bounds]` (each value at its low and at its high bound). All were tuned for at least 35
 /// degrees and 6 dB (measured at least 37.8 degrees and 7.3 dB on the default configs, 38.6 degrees and 8.3 dB on the
-/// EXCT-30 at 0.45 N m s/rad). Every measurement has to be valid and the loop stable (`LoopMargins::stable`).
-fn loops_keep_their_margins(names: &[&str], across: bool) {
+/// EXCT-30 at 0.45 N m s/rad). Every measurement has to be valid and the loop stable (`LoopMargins::stable`). `across`
+/// sweeps the bounds in the pass with friction as configured (`Some(true)`) or the one without (`Some(false)`).
+fn loops_keep_their_margins(names: &[&str], across: Option<bool>) {
     use sim_components::analysis::{bounds, velocity_loop_margins};
     let configs: Vec<_> = shipped_configs().into_iter().filter(|(name, ..)| names.contains(&name.as_str())).collect();
     assert_eq!(configs.len(), names.len(), "{names:?}");
@@ -1207,8 +1269,12 @@ fn loops_keep_their_margins(names: &[&str], across: bool) {
     let passes = configs.iter().flat_map(|(name, cfg, entry)| {
         // As configured, friction on, a registered machine's loops are judged to the same 35 degrees and 6 dB by sim-cli's
         // `step_bode_and_tuning_write_csv_for_every_machine` (its `margins`): not again here, but across the bounds.
-        let frictions: &[bool] = if across || name.as_str() != entry.id { &[true, false] } else { &[false] };
-        frictions.iter().map(move |&friction| {
+        let frictions = match across {
+            Some(friction) => vec![friction],
+            None if name.as_str() != entry.id => vec![true, false],
+            None => vec![false],
+        };
+        frictions.into_iter().map(move |friction| {
             // Motor friction, and the guides', the joints', the winches' or the dancer's (whichever the machine has).
             let other = [
                 "effects.guide_friction",
@@ -1225,7 +1291,7 @@ fn loops_keep_their_margins(names: &[&str], across: bool) {
             // to the bit (13 November 2026, on all four configs), so they are left out there. Not with the cable chain on:
             // its drag takes the guide's Stribeck speed (`friction_x.stribeck_m_s`) whether guide friction is on or not.
             let skip = !friction && !cfg.bool("effects.cable_chain").unwrap_or(false);
-            let mut bounded = if across { bounds(&cfg).unwrap() } else { Vec::new() };
+            let mut bounded = if across.is_some() { bounds(&cfg).unwrap() } else { Vec::new() };
             bounded.retain(|(path, ..)| {
                 !skip
                     || !["friction_", "motor.friction_", "joint.friction_", "winch.friction_"]
@@ -1256,26 +1322,75 @@ fn loops_keep_their_margins(names: &[&str], across: bool) {
     });
 }
 
-/// Every shipped config keeps its velocity loops' margins as configured, without friction and, the EXCT-30, with it
-/// (`loops_keep_their_margins`); over the bounds in `across_the_bounds`.
+/// Each motor's loop is measured with a tenth of its own rated torque (`loop_amplitude`): the palletiser's motor 1 (a
+/// 1FK2106-4AF, 8.6 N m) with 0.86 N m and the arm on a track's motor 5 (a 1FK2104-5AF, 2.4 N m) with 0.24 N m, not a
+/// tenth of the shared drive's 4.6 N m. And the crane's hoist is measured with the gearbox efficiency's fade taken out
+/// (at standstill it damped the small signal so that no gain crossover showed: "NaN, inf, 34.84 dB"). With the old
+/// amplitude, a tenth of the shared drive.rated_torque_nm 3.2 N m, it gives what the audit measured with the efficiency
+/// off: 48.5 Hz, 83.1 degrees, 21.31 dB (run: 48.504 Hz, 83.07 degrees, 21.305 dB). With its own, a tenth of the hoist's
+/// 6.6 N m, the larger test torque breaks the motor's friction more and so damps the loop less: 50.43 Hz, 73.73 degrees,
+/// 20.98 dB (run, 16 November 2026), what `velocity_loop_margins` reports. Since 17 November the crane's Kv is 10 1/s for
+/// 30 (its position loop inside the travels' velocity loops of some 5 Hz, tuned for the elastic drives), which lags the
+/// hoist's loop less at its crossover: 48.44 Hz, 87.48 degrees, 21.273 dB, and with its own amplitude 50.5 Hz, 77.6
+/// degrees, 20.95 dB.
 #[test]
-fn the_shipped_velocity_loops_keep_their_margins() {
-    let configs = shipped_configs();
-    loops_keep_their_margins(&configs.iter().map(|(name, ..)| name.as_str()).collect::<Vec<_>>(), false);
+fn each_loop_is_measured_at_its_own_amplitude_and_the_hoist_without_the_efficiency_fade() {
+    use sim_components::analysis::{
+        loop_amplitude, loop_frequencies, loop_margins, velocity_loop_margins, velocity_loop_response,
+    };
+    for (id, motor, amplitude) in
+        [("palletiser", "1", 0.86), ("arm-on-track", "5", 0.24), ("overhead-crane", "hoist", 0.66)]
+    {
+        let entry = sim_machines::find(id).unwrap();
+        let found = loop_amplitude(entry, &entry.config(), motor).unwrap();
+        assert!((found - amplitude).abs() < 1e-9, "{id} motor {motor}: {found} N m");
+    }
+    let entry = sim_machines::find("overhead-crane").unwrap();
+    let cfg = entry.config();
+    let near = |m: &sim_components::analysis::LoopMargins, hz: f64, deg: f64, db: f64| {
+        assert!(
+            m.stable()
+                && (m.crossover_hz - hz).abs() < 0.05
+                && (m.phase_margin_deg - deg).abs() < 0.1
+                && (m.gain_margin_db - db).abs() < 0.02,
+            "{m:?}"
+        );
+    };
+    let old = loop_margins(&velocity_loop_response(entry, &cfg, 2, &loop_frequencies(&cfg).unwrap(), 0.32).unwrap());
+    near(&old, 48.44, 87.48, 21.273);
+    let margins = &velocity_loop_margins(entry, &cfg, &[]).unwrap()[0].1;
+    near(margins.last().unwrap(), 50.5, 77.6, 20.95);
 }
 
-/// The shipped velocity loops keep their margins across the bounds (`loops_keep_their_margins`), a test per config: in all
-/// 8600 s of processor time in a full run, 10 minutes alone on the 16 threads of the 8-core development machine. The
-/// default filter of `.config/nextest.toml` leaves them out; CI runs them one at a time after the other tests.
+/// The shipped velocity loops keep their margins across the bounds (`loops_keep_their_margins`), a module per config
+/// with a test per pass, friction as configured and friction off: in all 8600 s of processor time in a full run, 10
+/// minutes alone on the 16 threads of the 8-core development machine. Split by pass since 17 November 2026: the platform
+/// on cables in space took 391 s with friction and 756 s without (its loops' sharp resonances refined to some 1000
+/// points a run against 590), more than the 15-minute limit together. The default filter of `.config/nextest.toml`
+/// leaves them out; CI runs them one at a time after the other tests.
 mod across_the_bounds {
     macro_rules! swept {
         ($($test:ident: $name:literal),* $(,)?) => {
             /// The configs swept here, in the order of `shipped_configs`.
             pub const SWEPT: &[&str] = &[$($name),*];
             $(
-                #[test]
-                fn $test() {
-                    super::loops_keep_their_margins(&[$name], true);
+                mod $test {
+                    /// The config as it is at each pose its cycle stops at, without friction and, the EXCT-30, with it
+                    /// (`loops_keep_their_margins`): a test per config since 22 November 2026, when the margins took
+                    /// the cycle's poses (all of them in one test ran past the 15-minute limit). Not over the bounds, so
+                    /// the default filter keeps it.
+                    #[test]
+                    fn as_configured() {
+                        super::super::loops_keep_their_margins(&[$name], None);
+                    }
+                    #[test]
+                    fn with_friction() {
+                        super::super::loops_keep_their_margins(&[$name], Some(true));
+                    }
+                    #[test]
+                    fn without_friction() {
+                        super::super::loops_keep_their_margins(&[$name], Some(false));
+                    }
                 }
             )*
         };
@@ -1484,4 +1599,136 @@ fn the_motor_acceleration_setpoint_has_the_speed_term_of_the_kinematics() {
         checked += usize::from(by_difference.abs() > 0.1);
     }
     assert!(checked > 50, "{checked} cycles of the cruise with the motors accelerating");
+}
+
+/// With the shaper following the pose, its period changes along a move, and the shaped position runs at the plan's
+/// speed times (1 - the delays' rate) for each copy: the speed and acceleration setpoints are the shaped position's own
+/// rates. Checked by differencing the shaped position over two passes (central differences over the profile cycles):
+/// the speed within 5e-4 of the top speed (measured at most 1.3e-4; the delayed plan's rates were up to 7e-2 off on
+/// the cam indexer, 1.2e-2 on the slider crank), the acceleration within twice what the differencing shows with the
+/// period fixed (the plan's own steps in acceleration; measured at most 1.8 times, on the spatial cable robot).
+#[test]
+fn a_shaper_following_the_pose_gives_the_shaped_positions_own_rates() {
+    on_every_machine(|entry| {
+        // The largest difference of speed and acceleration from the differenced position, and the top speed.
+        let run = |follows: bool| {
+            let cfg =
+                config(entry, &["effects.input_shaping = true", &format!("effects.shaper_follows_pose = {follows}")]);
+            let mut sim = Sim::new(entry, &cfg).unwrap();
+            let (dt, cycle) = (cfg.f64("sim.dt_s").unwrap(), cfg.f64("profile.cycle_s").unwrap());
+            let n = (cycle / dt).round() as usize;
+            sim.command(Command::StartCycle).unwrap();
+            let (mut rows, mut step): (Vec<[Vec<f64>; 3]>, usize) = (Vec::new(), 0);
+            while sim.control.cycle_passes() < 2 && sim.time() < 30.0 {
+                sim.step();
+                step += 1;
+                if step % n == 0 {
+                    rows.push([sim.control.set_pos.clone(), sim.control.set_vel.clone(), sim.control.set_acc.clone()]);
+                }
+            }
+            let mut out = [0.0f64; 3];
+            for w in rows.windows(3) {
+                for a in 0..w[1][0].len() {
+                    let v = (w[2][0][a] - w[0][0][a]) / (2.0 * cycle);
+                    let acc = (w[2][0][a] - 2.0 * w[1][0][a] + w[0][0][a]) / (cycle * cycle);
+                    out = [
+                        out[0].max((v - w[1][1][a]).abs()),
+                        out[1].max((acc - w[1][2][a]).abs()),
+                        out[2].max(w[1][1][a].abs()),
+                    ];
+                }
+            }
+            out
+        };
+        let ([speed, acc, top], [_, fixed, _]) = (run(true), run(false));
+        assert!(speed < 5e-4 * top, "{}: speed {speed} off, top speed {top}", entry.id);
+        assert!(acc <= 2.0 * fixed + 1e-9, "{}: acceleration {acc} off, {fixed} with the period fixed", entry.id);
+    });
+}
+
+/// A cam changed by a reconfigure while it runs: the shaper's copies of the cycles before the change are the plan as it
+/// ran then, on the old cam, and those after on the new one. The rotary knife's transition law turned from 3-4-5 into a
+/// cycloid 0.3 s into the master's run-up, between two cuts, with a ZVD shaper of half a period 1.5 profile cycles, so
+/// that two of its three copies fall between two cycles. The plan as it ran is that of a second simulation at half the
+/// profile cycle without the shaper, changed at the same moment: the shaped setpoint at each cycle is 1/4, 1/2 and 1/4
+/// of it 0, 1.5 and 3 cycles ago, to rounding, across the change too. A third, on the cycloid from the start, shows that
+/// the copies just before the change would be off by more than that on the new cam (which they used to read).
+#[test]
+fn a_cam_changed_under_way_leaves_the_shaper_the_plan_as_it_ran() {
+    let entry = MACHINES.iter().copied().find(|e| e.id == "rotary-knife").unwrap();
+    let base = [
+        "cam.run = true",
+        "drive.position_cycle_s = 0.5e-3",
+        "profile.shaper_type = \"zvd\"",
+        "profile.shaper_damping = 0.0",
+        "profile.shaper_frequency_hz = 333.3333333333333",
+        "effects.shaper_follows_pose = false",
+    ];
+    let cycloid = "knife.transition_law = \"cycloid\"";
+    // 0.3 s and 0.35 s in base steps of 62.5 us.
+    let (change, end) = (4800, 5600);
+    // Per profile cycle the shaped and the planned setpoint of the knife, the law changed after `change` base steps.
+    let run = |edit: &[&str], change: Option<u64>| {
+        let cfg = config(entry, &[&base[..], edit].concat());
+        let mut sim = Sim::new(entry, &cfg).unwrap();
+        let n = (cfg.f64("profile.cycle_s").unwrap() / cfg.f64("sim.dt_s").unwrap()).round() as u64;
+        sim.command(Command::StartCycle).unwrap();
+        let mut rows = Vec::new();
+        while sim.step < end {
+            if Some(sim.step) == change {
+                let mut changed = cfg.clone();
+                changed.set_text(cycloid).unwrap();
+                sim.reconfigure(entry, &changed).unwrap();
+            }
+            let due = sim.step.is_multiple_of(n);
+            sim.step();
+            if due {
+                rows.push((sim.control.set_pos[0], sim.control.planned_pos()[0]));
+            }
+        }
+        rows
+    };
+    let plan_of = |rows: Vec<(f64, f64)>| -> Vec<f64> { rows.iter().map(|row| row.1).collect() };
+    let fine = ["profile.cycle_s = 0.5e-3", "effects.input_shaping = false"];
+    let shaped = run(&["profile.cycle_s = 1.0e-3", "effects.input_shaping = true"], Some(change));
+    let plan = plan_of(run(&fine, Some(change)));
+    let new_cam = plan_of(run(&[&fine[..], &[cycloid]].concat(), None));
+    let axis = (entry.build)(&entry.config()).unwrap().axes()[0].clone();
+    let tolerance = 1e-12 * (axis.max - axis.min);
+    // The first cycle on the new cam is the 300th: from there on the plan is the cycloid's, and the copy 1.5 cycles
+    // before it differs between the two cams.
+    let at = 300;
+    assert!((plan[2 * at] - new_cam[2 * at]).abs() <= tolerance);
+    let apart = (plan[2 * at - 3] - new_cam[2 * at - 3]).abs();
+    assert!(apart > 1e3 * tolerance, "the two cams {apart} rad apart 1.5 cycles before the change");
+    let mut worst = 0f64;
+    for (k, (set, planned)) in shaped.iter().enumerate().skip(10) {
+        assert!((planned - plan[2 * k]).abs() <= tolerance, "cycle {k}: plan {planned} against {}", plan[2 * k]);
+        let copies = 0.25 * plan[2 * k] + 0.5 * plan[2 * k - 3] + 0.25 * plan[2 * k - 6];
+        worst = worst.max((set - copies).abs());
+    }
+    assert!(worst <= tolerance, "the shaped setpoint {worst} rad off the copies of the plan as it ran");
+}
+
+/// The crane's cycle picks at segment 2 with the hook at 2.85 m. With its hook block and the floor, the payload stands on
+/// the floor under the hook block: with the floor 2.7 m high the hook block would hang 0.15 m over it, inside the payload
+/// (the two boxes' half heights are 0.28 m), and the cycle is refused with the segment and that reason; 2.5 m high, 0.35
+/// m over it, it is taken, and without the hook block (the hook alone) at 2.7 m too.
+#[test]
+fn a_pick_whose_hook_block_would_hang_inside_the_payload_is_refused() {
+    let entry = sim_machines::find("overhead-crane").unwrap();
+    let with = |floor: f64, hook_block: bool| {
+        let mut cfg = entry.config();
+        for set in [
+            "effects.floor_contact = true".to_string(),
+            format!("effects.hook_block = {hook_block}"),
+            format!("crane.floor_height_m = {floor}"),
+        ] {
+            cfg.set_text(&set).unwrap();
+        }
+        Sim::new(entry, &cfg).err().map(|e| (e.key(), e.detail().to_string()))
+    };
+    assert_eq!(with(2.7, true), Some(("error-pick-hook-in-payload", "cycle.segment[2]".to_string())));
+    assert_eq!(with(2.5, true), None);
+    assert_eq!(with(2.7, false), None);
 }

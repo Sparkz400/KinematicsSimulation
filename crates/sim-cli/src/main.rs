@@ -128,6 +128,11 @@ impl Args {
 
 fn main() {
     let args = Args(std::env::args().skip(1).collect());
+    if args.flag("--help") || args.flag("-h") {
+        let tr = texts(args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en"), MACHINES[0]);
+        println!("{}", tr.tr("cli-usage"));
+        return;
+    }
     let lang = args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en");
     let entry = machine(&args).unwrap_or(MACHINES[0]);
     let tr = texts(lang, entry);
@@ -214,8 +219,12 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
     match args.positional(0) {
         Some("list") => {
             let lang = args.option("--lang").unwrap_or("en");
+            let mut out = std::io::stdout().lock();
             for entry in MACHINES {
-                println!("{}\t{}", entry.id, translations(lang, entry).tr(entry.key));
+                // A closed pipe (`list | head`) ends the listing quietly.
+                if writeln!(out, "{}\t{}", entry.id, translations(lang, entry).tr(entry.key)).is_err() {
+                    break;
+                }
             }
             Ok(())
         }
@@ -231,7 +240,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("step") => step(args),
         Some("bode") => bode(args),
         Some("tuning") => tuning(args),
-        Some("margins") => margins(args),
+        Some("margins") => margins(args, tr),
         Some("modes") => modes(args),
         Some("workspace") => workspace(args),
         Some("replay") => replay(args, tr),
@@ -311,7 +320,7 @@ fn start(args: &Args, tr: &Translations) -> Result<Sim, Failure> {
         let bad = || Failure("cli-error-bad-argument", format!("--move {target}"));
         Some(Command::MoveTo(target.split(',').map(|v| v.trim().parse().map_err(|_| bad())).collect::<Result<_, _>>()?))
     } else {
-        poses(args, &sim, tr)?.map(Command::Trajectory)
+        poses(args, &sim, &cfg, tr)?.map(Command::Trajectory)
     };
     // Where the config has obstacles: what the motion keeps from them as planned, before it runs.
     let planned = match &command {
@@ -336,7 +345,8 @@ fn path_instead(args: &Args, entry: &MachineEntry, cfg: Config) -> Result<Config
     let Some(file) = args.option("--path") else { return Ok(cfg) };
     let text = read(file)?;
     let sim = Sim::new(entry, &cfg)?;
-    sim_components::program::read(file, &text, sim.machine.axes(), sim.control.planned_pos())
+    let speed = sim_components::program::orientation_speed_of(&cfg)?;
+    sim_components::program::read_with(file, &text, sim.machine.axes(), sim.control.planned_pos(), speed)
         .map_err(|e| Failure(e.key, format!("{file}:{}: {}", e.line, e.detail)))?;
     let cfg = sim_components::sim::with_path(&cfg, file, &text, args.flag("--time-optimal"))?;
     Sim::new(entry, &cfg)?.plan_configured_path().transpose().map_err(|e| Failure(e.key, file.to_string()))?;
@@ -348,14 +358,16 @@ fn path_instead(args: &Args, entry: &MachineEntry, cfg: Config) -> Result<Config
 /// timing planned here, within the axis limits or with `--time-optimal` as fast as the motors allow. Where transition
 /// curves or an arc beside its stated end take the planned path off the lines and arcs of the file
 /// (`profile.path_tolerance_m`), the error stream says by how much (for a program of moves at one feed).
-fn poses(args: &Args, sim: &Sim, tr: &Translations) -> Result<Option<Vec<(f64, Vec<f64>)>>, Failure> {
+fn poses(args: &Args, sim: &Sim, cfg: &Config, tr: &Translations) -> Result<Option<Vec<(f64, Vec<f64>)>>, Failure> {
     let unreadable = |file: &str, line: String| Failure("cli-error-bad-argument", format!("{file}: {line}"));
     if let Some(file) = args.option("--trajectory") {
         return sim_components::path::parse_trajectory(&read(file)?).map(Some).map_err(|line| unreadable(file, line));
     }
     let Some(file) = args.option("--path") else { return Ok(None) };
-    let runs = sim_components::program::read(file, &read(file)?, sim.machine.axes(), sim.control.planned_pos())
-        .map_err(|e| Failure(e.key, format!("{file}:{}: {}", e.line, e.detail)))?;
+    let speed = sim_components::program::orientation_speed_of(cfg)?;
+    let runs =
+        sim_components::program::read_with(file, &read(file)?, sim.machine.axes(), sim.control.planned_pos(), speed)
+            .map_err(|e| Failure(e.key, format!("{file}:{}: {}", e.line, e.detail)))?;
     let refused = |e: sim_components::CommandError| Failure(e.key, String::new());
     // A program with feeds is planned run by run (`Sim::plan_program`); one run at the axes' limits as a path file is.
     let pieces = match runs.as_slice() {
@@ -376,14 +388,15 @@ fn pose_text(pose: &[f64]) -> String {
 }
 
 /// On the error stream: how the cycle's measured pass was started (effects.thermal_warm_start), by the largest change of
-/// a rise over it (`analysis::WarmStart::change`); `None`: from cold.
-fn tell_start(tr: &Translations, change: Option<f64>) {
-    let (key, arg) = match change {
-        None => ("cli-thermal-start-cold", String::new()),
-        Some(c) if c <= sim_components::analysis::WARM_START_TOLERANCE_K => {
-            ("cli-thermal-start-warm", format!("{c:.3}"))
-        }
-        Some(c) => ("cli-thermal-start-unsettled", format!("{c:.3}")),
+/// a rise over it (`analysis::WarmStart::change`); `None`: from cold. Not converged, with `repeat`
+/// (`analysis::WarmStart::repeat`) beyond the tolerance, the cause: the cycle's motion does not repeat itself.
+fn tell_start(tr: &Translations, change: Option<f64>, repeat: Option<f64>) {
+    let tolerance = sim_components::analysis::WARM_START_TOLERANCE_K;
+    let (key, arg) = match (change, repeat) {
+        (None, _) => ("cli-thermal-start-cold", String::new()),
+        (Some(c), _) if c <= tolerance => ("cli-thermal-start-warm", format!("{c:.3}")),
+        (Some(_), Some(r)) if r > tolerance => ("cli-thermal-start-aperiodic", format!("{r:.3}")),
+        (Some(c), _) => ("cli-thermal-start-unsettled", format!("{c:.3}")),
     };
     eprintln!("{}", tr.tr_arg(key, &arg));
 }
@@ -488,20 +501,21 @@ fn fit_rows(
         return Err(Failure("cli-usage", String::new()));
     }
     let (mut advice, mut result) = (Vec::new(), Ok(()));
-    writeln!(out, "quantity,of,config,fitted,standard_error").map_err(io)?;
+    // "units" is the last column: the unit of the row's numbers, empty where there is none to name.
+    writeln!(out, "quantity,of,config,fitted,standard_error,units").map_err(io)?;
     if args.option("--trace").is_some() && !sim_components::trace::per_axis_fit(machine.as_ref()) {
         let measured = load_trace(args, machine.motors(), tr)?.trace;
         match fit_joints(entry, &cfg, &measured)? {
             Some(fit) => {
                 for v in &fit.values {
-                    writeln!(out, "{},{},{:.6e},{:.6e},{:.3e}", v.quantity, v.of, v.config, v.fitted, v.error)
+                    writeln!(out, "{},{},{:.6e},{:.6e},{:.3e},", v.quantity, v.of, v.config, v.fitted, v.error)
                         .map_err(io)?;
                 }
                 // One step's row is of `payload`, several are numbered as their factors after them are.
                 for (j, (time, error)) in fit.payload_steps.iter().enumerate() {
                     let of =
                         if fit.payload_steps.len() == 1 { "payload".to_string() } else { format!("payload {}", j + 1) };
-                    writeln!(out, "payload_step_s,{of},,{time:.6e},{error:.3e}").map_err(io)?;
+                    writeln!(out, "payload_step_s,{of},,{time:.6e},{error:.3e},s").map_err(io)?;
                 }
                 advice.extend(fit.advice().iter().map(|(key, detail)| tr.tr_arg(key, detail)));
             }
@@ -517,18 +531,22 @@ fn fit_rows(
             for (q, name) in
                 ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"].iter().enumerate()
             {
-                writeln!(out, "{name},{},{:.6e},{:.6e},{:.3e}", axis.id, fit.config[q], fit.fitted[q], fit.error[q])
-                    .map_err(io)?;
+                writeln!(
+                    out,
+                    "{name},{},{:.6e},{:.6e},{:.3e},{}",
+                    axis.id, fit.config[q], fit.fitted[q], fit.error[q], fit.units[q]
+                )
+                .map_err(io)?;
             }
             // The friction beyond its sliding level, where the trace shows it (`identify::friction_details`).
             for d in &fit.details {
-                writeln!(out, "{},{},{:.6e},{:.6e},{:.3e}", d.quantity, axis.id, d.config, d.fitted, d.error)
+                writeln!(out, "{},{},{:.6e},{:.6e},{:.3e},", d.quantity, axis.id, d.config, d.fitted, d.error)
                     .map_err(io)?;
             }
             // A payload picked or dropped: its time, then the change of the payload's factor there.
             for (time, time_error, change, error) in &fit.payload_steps {
-                writeln!(out, "payload_step_s,{},,{time:.6e},{time_error:.3e}", axis.id).map_err(io)?;
-                writeln!(out, "payload_factor_change,{},0,{change:.6e},{error:.3e}", axis.id).map_err(io)?;
+                writeln!(out, "payload_step_s,{},,{time:.6e},{time_error:.3e},s", axis.id).map_err(io)?;
+                writeln!(out, "payload_factor_change,{},0,{change:.6e},{error:.3e},", axis.id).map_err(io)?;
             }
             advice.extend(fit.advice(axis.id).iter().map(|(key, detail)| tr.tr_arg(key, detail)));
         }
@@ -538,9 +556,10 @@ fn fit_rows(
         let key = args.option("--stiffness-key").unwrap_or(BELT_STIFFNESS_KEY);
         match fit_move_stiffness(entry, &cfg, &measured, key) {
             Ok(fit) => {
-                writeln!(out, "stiffness_factor,{key},{:.6e},{:.6e},{:.3e}", 1.0, fit.factor, fit.error).map_err(io)?;
-                writeln!(out, "ringing_rms_nm,{key},,{:.6e},", fit.ringing).map_err(io)?;
-                writeln!(out, "ringing_left_rms_nm,{key},,{:.6e},", fit.residual).map_err(io)?;
+                writeln!(out, "stiffness_factor,{key},{:.6e},{:.6e},{:.3e},", 1.0, fit.factor, fit.error)
+                    .map_err(io)?;
+                writeln!(out, "ringing_rms_nm,{key},,{:.6e},,", fit.ringing).map_err(io)?;
+                writeln!(out, "ringing_left_rms_nm,{key},,{:.6e},,", fit.residual).map_err(io)?;
                 let (key, detail) = fit.advice();
                 advice.push(tr.tr_arg(key, &detail));
             }
@@ -562,11 +581,11 @@ fn fit_rows(
                 let (id, (config, fitted)) = (machine.motors()[motor].id, (fit.config, fit.fitted));
                 writeln!(
                     out,
-                    "resonance_hz,{id},{:.6e},{:.6e},{:.3e}",
+                    "resonance_hz,{id},{:.6e},{:.6e},{:.3e},Hz",
                     config.frequency, fitted.frequency, fitted.frequency_error
                 )
                 .map_err(io)?;
-                writeln!(out, "resonance_damping,{id},{:.6e},{:.6e},", config.damping, fitted.damping).map_err(io)?;
+                writeln!(out, "resonance_damping,{id},{:.6e},{:.6e},,", config.damping, fitted.damping).map_err(io)?;
                 let (key, detail) = fit.advice();
                 advice.push(tr.tr_arg(key, &detail));
             }
@@ -783,7 +802,7 @@ fn output(args: &Args, option: &str) -> Result<Box<dyn Write>, Failure> {
 /// The result passes every verdict in the error bands of the config's `[bounds]` too: where the fastest setting found
 /// fails there, the search's steps are gone back to the fastest that passes (rows `bands_*`, and on the error stream
 /// what the bands cost). `--worst` judges at the worst corner of all bounds at once instead (`verdict_worst`, rows
-/// `worst_*`), bisecting over the search's steps. `--nominal` judges the config as written alone. `--pareto FILE`
+/// `worst_*`), judging the search's steps from the fastest down. `--nominal` judges the config as written alone. `--pareto FILE`
 /// writes the settings that no other beats in cycle time, energy per cycle from the supply and peak motor utilisation at once, as CSV.
 fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
@@ -982,7 +1001,7 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let mut found = sim_components::catalog::search(entry, &cfg, &supplies, &wanted, &options)?;
     rank_by(&mut found, &by);
     let on_front = front(&found);
-    let robust = robust.map(|top| robust_ranking(entry, &cfg, &found, top));
+    let robust = robust.map(|top| robust_ranking(entry, &cfg, &duties, &found, top));
     if let Some((_, changed)) = &robust {
         eprintln!("{}", tr.tr(if *changed { "cli-search-robust-changed" } else { "cli-search-robust-same" }));
     }
@@ -1013,7 +1032,9 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let columns: String = checks.iter().map(|c| format!(",u_{c}")).collect();
     let robust_columns =
         if robust.is_some() { ",robust_rank,robust_result,robust_check,robust_utilisation" } else { "" };
-    writeln!(out, "axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,following_error_m,settling_error_m,inertia_ratio,failing,estimated{robust_columns}{columns}").map_err(io)?;
+    writeln!(out, "axis,motor,gearbox,drive,vendor,supply,mass_kg,cost_kg,result,tightest_check,tightest_utilisation,peak_torque_nm,winding_rise_k,rank,front,cycle_s,energy_j,thermal_utilisation,drive_current_utilisation,following_error_m,settling_error_m,inertia_ratio,failing,estimated{robust_columns}{columns},torque_unit").map_err(io)?;
+    // The unit of peak_torque_nm: N on a machine of linear motors (the first motor's kind), else N m.
+    let torque_unit = if (entry.build)(&cfg).is_ok_and(|m| m.motor_linear(0)) { "N" } else { "N m" };
     for (rank, c) in found.iter().enumerate() {
         let (check, utilisation) = c.tightest().unwrap_or((c.refused, f64::NAN));
         // Of the searched motor alone with --motor-id (the others are the config's, alike for every candidate).
@@ -1087,7 +1108,7 @@ fn search(args: &Args, tr: &Translations) -> Result<(), Failure> {
                 None => write!(out, ",").map_err(io)?,
             }
         }
-        writeln!(out).map_err(io)?;
+        writeln!(out, ",{torque_unit}").map_err(io)?;
     }
     out.flush().map_err(io)
 }
@@ -1125,16 +1146,18 @@ fn transmission(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let mut out = output(args, "--out")?;
     writeln!(
         out,
-        "kind,value,gearbox,torque_per_acceleration,inertia_ratio,cycle_s,result,tightest_check,tightest_utilisation"
+        "kind,value,gearbox,torque_per_acceleration,inertia_ratio,cycle_s,result,tightest_check,tightest_utilisation,torque_unit"
     )
     .map_err(io)?;
+    // The unit of the torque in torque_per_acceleration, as `search` names it: N on a machine of linear motors.
+    let torque_unit = if (entry.build)(&cfg).is_ok_and(|m| m.motor_linear(0)) { "N" } else { "N m" };
     let rows = sweep.rows.iter().map(|r| (if r.value == sweep.classic { "classic" } else { "sweep" }, r));
     for (kind, r) in rows.chain(sweep.snapped.iter().map(|r| ("catalogue", r))) {
         let (check, u) = r.tightest.unwrap_or((r.refused, f64::NAN));
         let result = if r.passes { "ok" } else { "FAIL" };
         writeln!(
             out,
-            "{kind},{:.6},{},{:.6},{:.4},{:.4},{result},{check},{u:.4}",
+            "{kind},{:.6},{},{:.6},{:.4},{:.4},{result},{check},{u:.4},{torque_unit}",
             r.value, r.gearbox, r.torque_per_acceleration, r.inertia_ratio, r.cycle_s
         )
         .map_err(io)?;
@@ -1315,7 +1338,8 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
         }
         None => verdict_bands(entry, &cfg, &if args.flag("--bands") { bounds(&cfg)? } else { Vec::new() })?,
     };
-    tell_start(tr, bands.iter().find(|b| b.verdict.check == "thermal-warm-start").map(|b| b.verdict.value));
+    let row = |check: &str| bands.iter().find(|b| b.verdict.check == check).map(|b| b.verdict.value);
+    tell_start(tr, row("thermal-warm-start"), row("thermal-cycle-repeat"));
     let result = |ok: bool| if ok { "ok" } else { "FAIL" };
     let mut out = output(args, "--out")?;
     let share = if samples.is_some() { ",pass_share" } else { "" };
@@ -1379,6 +1403,11 @@ fn sensitivity(args: &Args, tr: &Translations) -> Result<(), Failure> {
         })
         .collect();
     let (nominal, mut rows) = sim_components::analysis::sensitivity(entry, &cfg, &paths, delta)?;
+    // A value of 0 without a range in [bounds] has nothing to scale and is not ranked: named on the error stream.
+    let bounded = sim_components::analysis::bounds(&cfg)?;
+    for path in paths.iter().filter(|p| cfg.f64(p).ok() == Some(0.0) && !bounded.iter().any(|b| &b.0 == *p)) {
+        eprintln!("{}", tr.tr_arg("cli-sensitivity-zero", path));
+    }
     let slack = |load: &sim_components::analysis::CycleLoad| load.belt_tension.map_or(0.0, |t| t.0);
     rows.sort_by(|a, b| b.strength(&nominal).total_cmp(&a.strength(&nominal)));
     let mut out = output(args, "--out")?;
@@ -1492,12 +1521,15 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let mut sim = Sim::new(entry, &cfg)?;
     // The effect views cost a machine evaluation per step: only when they are written.
     let views = args.option("--breakdown").is_some() || args.option("--budget").is_some();
-    let load = match poses(args, &sim, tr)? {
+    let load = match poses(args, &sim, &cfg, tr)? {
         Some(points) => analyse_trajectory_with(&mut sim, points, views),
         None => analyse_cycle_with(&mut sim, views),
     }
     .map_err(|e| Failure(e.key, String::new()))?;
-    tell_start(tr, load.warm_start.map(|w| w.change));
+    tell_start(tr, load.warm_start.map(|w| w.change), load.warm_start.and_then(|w| w.repeat));
+    if let Some(w) = load.warm_start.filter(|w| w.period > 1) {
+        eprintln!("{}", tr.tr_arg("cli-thermal-start-period", &w.period.to_string()));
+    }
     if let Some(c) = load.conveyor {
         let detail = format!(
             "{:.2} / min, {:.3} mm, {:.2} / min",
@@ -1508,7 +1540,9 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
         eprintln!("{}", tr.tr_arg("cli-conveyor", &detail));
     }
     let mut out = output(args, "--out")?;
-    writeln!(out, "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload").map_err(io)?;
+    writeln!(out, "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload,torque_unit,speed_unit").map_err(io)?;
+    // The units of the motor's torque and speed columns (also of the points and the breakdown): N m and rad/s, N and m/s on a linear motor.
+    let units = |k: usize| if sim.machine.motor_linear(k) { ("N", "m/s") } else { ("N m", "rad/s") };
     // Empty where the machine does not report the signal or the config has no load rating for the guide.
     let or_empty = |value: Option<f64>| value.map_or(String::new(), |v| format!("{v:.4e}"));
     let machine_wide = format!(
@@ -1518,7 +1552,7 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
         or_empty(load.guide_load.map(|g| g.0)),
         or_empty(sim_components::analysis::guide_life_km(&cfg, &load))
     );
-    for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+    for (k, (motor, m)) in sim.machine.motors().iter().zip(&load.motors).enumerate() {
         let belt = load.belt_tension.map_or(String::from(","), |(low, high)| format!("{low:.2},{high:.2}"));
         let electrical = format!(
             "{:.4},{:.2},{:.3},{:.3},{:.2},{:.3}",
@@ -1563,30 +1597,39 @@ fn analyze(args: &Args, tr: &Translations) -> Result<(), Failure> {
         let electrical = format!("{electrical},{:.2},{:.4}", m.housing_rise, m.drive_overload);
         writeln!(
             out,
-            "{},{:.6},{:.6},{:.6},{:.4},{:.4},{:.4},{belt},{electrical}",
-            motor.id, load.duration, m.peak_torque, m.rms_torque, m.peak_speed, m.utilisation, m.thermal_utilisation
+            "{},{:.6},{:.6},{:.6},{:.4},{:.4},{:.4},{belt},{electrical},{},{}",
+            motor.id,
+            load.duration,
+            m.peak_torque,
+            m.rms_torque,
+            m.peak_speed,
+            m.utilisation,
+            m.thermal_utilisation,
+            units(k).0,
+            units(k).1
         )
         .map_err(io)?;
     }
     out.flush().map_err(io)?;
     if args.option("--points").is_some() {
         let mut out = output(args, "--points")?;
-        writeln!(out, "motor,speed_rad_s,torque_nm").map_err(io)?;
-        for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+        writeln!(out, "motor,speed_rad_s,torque_nm,speed_unit,torque_unit").map_err(io)?;
+        for (k, (motor, m)) in sim.machine.motors().iter().zip(&load.motors).enumerate() {
             for (speed, torque) in &m.points {
-                writeln!(out, "{},{speed:.6e},{torque:.6e}", motor.id).map_err(io)?;
+                writeln!(out, "{},{speed:.6e},{torque:.6e},{},{}", motor.id, units(k).1, units(k).0).map_err(io)?;
             }
         }
         out.flush().map_err(io)?;
     }
     if args.option("--breakdown").is_some() {
         let mut out = output(args, "--breakdown")?;
-        writeln!(out, "motor,part,peak_torque_nm,rms_torque_nm").map_err(io)?;
-        for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+        writeln!(out, "motor,part,peak_torque_nm,rms_torque_nm,torque_unit").map_err(io)?;
+        for (k, (motor, m)) in sim.machine.motors().iter().zip(&load.motors).enumerate() {
             for (part, (peak, rms)) in sim_core::TORQUE_PARTS.iter().zip(m.torque_parts.iter().flatten()) {
-                writeln!(out, "{},{part},{peak:.6e},{rms:.6e}", motor.id).map_err(io)?;
+                writeln!(out, "{},{part},{peak:.6e},{rms:.6e},{}", motor.id, units(k).0).map_err(io)?;
             }
-            writeln!(out, "{},torque,{:.6e},{:.6e}", motor.id, m.peak_torque, m.rms_torque).map_err(io)?;
+            writeln!(out, "{},torque,{:.6e},{:.6e},{}", motor.id, m.peak_torque, m.rms_torque, units(k).0)
+                .map_err(io)?;
         }
         out.flush().map_err(io)?;
     }
@@ -1707,33 +1750,75 @@ fn tuning(args: &Args) -> Result<(), Failure> {
 }
 
 /// `margins <machine> [--bands]`: per motor the stability margins of its velocity loop (`velocity_loop_margins`), for
-/// the config as it is and with `--bands` with each value of `[bounds]` at its low and at its high bound. A row whose
-/// loop is unstable or whose measurement is not valid (`LoopMargins::stable`) says FAIL.
-fn margins(args: &Args) -> Result<(), Failure> {
+/// the config as it is at each pose its cycle stops at (`margin_poses`; the start pose's run is named "") and with
+/// `--bands` with each value of `[bounds]` at its low and at its high bound at the start pose. With several poses each
+/// motor's least phase margin, gain margin and margin across the play over them is named on stderr with its pose. A row whose
+/// loop is unstable, whose measurement is not valid or that hammers across its gearbox's play (`LoopMargins::stable`)
+/// says FAIL; one that hammers is named on stderr with the frequency and the torque's peak. The column before it is the
+/// describing function's gain margin across the play (`LoopMargins::play_margin_db`, dB; empty where no play acts on the
+/// loop), told and not judged.
+fn margins(args: &Args, tr: &Translations) -> Result<(), Failure> {
     use sim_components::analysis::{bounds, velocity_loop_margins};
     let (entry, cfg) = machine_and_config(args)?;
     let motors = (entry.build)(&cfg)?.motors().to_vec();
     let runs = velocity_loop_margins(entry, &cfg, &if args.flag("--bands") { bounds(&cfg)? } else { Vec::new() })?;
     let mut out = output(args, "--out")?;
-    writeln!(out, "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result")
+    writeln!(out, "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result")
         .map_err(io)?;
     for (run, margins) in &runs {
         for (motor, m) in motors.iter().zip(margins) {
             let result = if m.stable() { "ok" } else { "FAIL" };
+            if let Some(h) = m.hammering {
+                let at = format!("{:.0} Hz, {:.2} N m", h.frequency_hz, h.torque_nm);
+                let run = if run.is_empty() { String::new() } else { format!("{run}, ") };
+                eprintln!("{run}{}: {}", tr.tr(motor.key), tr.tr_arg("loop-hammers", &at));
+            }
+            // No gain crossover in the band (or no valid measurement): crossover and phase margin left empty, as a
+            // missing band in `tuning`; the result is then the gain margin's alone.
+            let cell = |x: f64| if x.is_nan() { String::new() } else { format!("{x:.1}") };
+            let play = if m.play_margin_db.is_nan() { String::new() } else { format!("{:.2}", m.play_margin_db) };
             writeln!(
                 out,
-                "{run},{},{:.1},{:.1},{:.2},{:.3},{:.1},{result}",
-                motor.id, m.crossover_hz, m.phase_margin_deg, m.gain_margin_db, m.peak_sensitivity, m.peak_frequency_hz
+                "{run},{},{},{},{:.2},{:.3},{:.1},{play},{result}",
+                motor.id,
+                cell(m.crossover_hz),
+                cell(m.phase_margin_deg),
+                m.gain_margin_db,
+                m.peak_sensitivity,
+                m.peak_frequency_hz
             )
             .map_err(io)?;
         }
+    }
+    // The poses' runs come first (`velocity_loop_margins`): where over them each margin is least.
+    let poses = runs.iter().take_while(|(run, _)| run.is_empty() || run.starts_with("start.pose=")).count();
+    for (k, motor) in motors.iter().enumerate().filter(|_| poses > 1) {
+        let least = |of: fn(&sim_components::analysis::LoopMargins) -> f64, unit: &str| {
+            let (value, run) = runs[..poses]
+                .iter()
+                .map(|(run, m)| (of(&m[k]), run))
+                .filter(|(x, _)| !x.is_nan())
+                .min_by(|a, b| a.0.total_cmp(&b.0))?;
+            Some(format!("{value:.2} {unit} {}", if run.is_empty() { "start.pose" } else { run }))
+        };
+        let found: Vec<String> = [
+            least(|m| m.phase_margin_deg, "deg"),
+            least(|m| m.gain_margin_db, "dB"),
+            least(|m| m.play_margin_db, "dB"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        eprintln!("{}: {}", tr.tr(motor.key), tr.tr_arg("loop-least-over-poses", &found.join(", ")));
     }
     out.flush().map_err(io)
 }
 
 /// `modes <machine>`: the modes the machine reports over the stroke of one axis (`--axis-index`, the first by default) at
 /// `--points` places (21 by default), the other axes at the start pose: position, then frequency and damping ratio of
-/// each mode, lowest first; a mode a place does not have is left empty.
+/// each mode, lowest first; a mode a place does not have is left empty. Where the machine's small-amplitude modes
+/// (`Machine::modes_small_amplitude`, a gearbox's hysteresis stiffness) differ, each mode has a third column with that
+/// frequency, `mode<i>_small_hz`.
 fn modes(args: &Args) -> Result<(), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     if args.flag("--shapes") {
@@ -1746,15 +1831,23 @@ fn modes(args: &Args) -> Result<(), Failure> {
     let sim = Sim::new(entry, &cfg)?;
     // At the configured start pose, where the tool stands, not the plan at rest (the motors' pose by the rigid
     // kinematics, off it by the belt's stretch).
-    let rows =
-        sim_components::analysis::modes_along(sim.machine.as_ref(), &cfg.f64s("start.pose")?, axis, points as usize);
+    let pose = cfg.f64s("start.pose")?;
+    let rows = sim_components::analysis::modes_along(sim.machine.as_ref(), &pose, axis, points as usize);
+    let small = sim_components::analysis::small_amplitude_along(sim.machine.as_ref(), &pose, axis, &rows);
     let count = rows.iter().map(|(_, modes)| modes.len()).max().unwrap_or(0);
     let mut out = output(args, "--out")?;
-    let header: String = (1..=count).map(|i| format!(",mode{i}_hz,mode{i}_damping")).collect();
+    let extra = |i: usize| if small.is_some() { format!(",mode{i}_small_hz") } else { String::new() };
+    let header: String = (1..=count).map(|i| format!(",mode{i}_hz,mode{i}_damping{}", extra(i))).collect();
     writeln!(out, "position{header}").map_err(io)?;
-    for (position, modes) in rows {
+    for (k, (position, modes)) in rows.iter().enumerate() {
         let cells: String = (0..count)
-            .map(|i| modes.get(i).map_or(",,".into(), |m| format!(",{:.4},{:.5}", m.hz, m.damping)))
+            .map(|i| {
+                let large = modes.get(i).map_or(",,".into(), |m| format!(",{:.4},{:.5}", m.hz, m.damping));
+                let small = small
+                    .as_ref()
+                    .map_or(String::new(), |s| s[k].get(i).map_or(",".into(), |m| format!(",{:.4}", m.hz)));
+                large + &small
+            })
             .collect();
         writeln!(out, "{position:.6}{cells}").map_err(io)?;
     }
@@ -1876,9 +1969,11 @@ fn stop(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let axes = (entry.build)(&cfg)?.axes().to_vec();
     let mut out = output(args, "--out")?;
     let distances: Vec<String> = axes.iter().map(|a| format!("{}_distance[{}]", a.id, a.unit)).collect();
+    // As `stop::study` measures: over the axes in m, or over all of them where none is (then rad).
+    let unit = if axes.iter().any(|a| a.unit == "m") { "m" } else { "rad" };
     writeln!(
         out,
-        "moment,trigger[s],tool_distance[m],stop_time[s],peak_deceleration[m/s2],hard_stop,peak_dc_link[V],\
+        "moment,trigger[s],tool_distance[{unit}],stop_time[s],peak_deceleration[{unit}/s2],hard_stop,peak_dc_link[V],\
          braking_resistor_energy[J],tripped,{}",
         distances.join(",")
     )

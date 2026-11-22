@@ -20,6 +20,7 @@ param-run = Kurvenscheibe als Zyklus fahren
 param-ramp_s = Hoch- und Auslauf der Leitachse [s]
 param-mover_kg = Moverkörper ohne Magnetplatte [kg]
 param-payload_kg = Nutzlast je Mover [kg]
+param-centre_offset_m = Massenschwerpunkt außerhalb der Mittellinie [m]
 param-length_m = Moverlänge entlang der Strecke [m]
 param-wheelbase_m = Rollenabstand entlang der Strecke [m]
 param-magnet_length_m = Länge der Magnetplatte [m]

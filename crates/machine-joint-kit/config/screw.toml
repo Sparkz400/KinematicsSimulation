@@ -39,12 +39,20 @@ root_diameter_m = 0.0212
 # Between the bearings: the stroke, the nut's length and the run-outs.
 length_m = 1.0
 mounting = "fixed-supported"
+# [estimate] The fixed bearing at the motor, 0.1 m before the nut at the stroke's start: half the run-out of the 1 m
+# shaft beyond the 0.8 m stroke. With effects.screw_stiffness_with_position.
+fixed_bearing_at_m = -0.1
 efficiency = 0.9
 # With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
 # ball screws, not this screw's.
 friction_coefficient = 0.003
 nut_stiffness_n_m = 4.0e8
 bearing_stiffness_n_m = 7.5e8
+# [estimate] The damping ratio of the mass behind the nut on the screw's axial spring (nut, bearings, guides; the
+# damper across the screw's spring alone, c = 2 zeta sqrt(k m)): 0.04, the axial mode of a ball screw drive
+# identified by Hosseinkhani (Control Methods for Improving Tracking Accuracy and Disturbance Rejection in Ball
+# Screw Feed Drives, PhD thesis, University of Waterloo, 2013, Table 3.5: 865 rad/s, zeta 0.04).
+axial_damping_ratio = 0.04
 preload_n = 600.0
 dynamic_load_rating_n = 13000.0
 static_load_rating_n = 26000.0
@@ -104,11 +112,11 @@ d_inductance_h = 0.01
 # rest is the stator and housing's), and its time constant against the housing.
 winding_resistance_share = 0.3
 winding_time_constant_s = 60.0
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# [catalogue] 1FK2105-4AF: static torque 5 N m at the stall current 4.65 A (motors_s210.csv), as a motor named in
+# [parts] brings it. With effects.iron_loss the copper loss at it brings the winding to its rated
 # rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
 # starts at kt times it.
-stall_current_a = 4.35
+stall_current_a = 4.65
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
@@ -155,12 +163,17 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 current_kp_v_a = 40.0
 current_tn_s = 5.0e-3
 # [catalogue] a 400 V line: 540 V DC link
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
 peak_torque_nm = 15.0
 rated_torque_nm = 4.6
@@ -314,6 +327,7 @@ slide.presliding_stiffness_n_m = [2.0e6, 5.0e7]
 slide.friction_viscous_n_s_m = [20.0, 80.0]
 screw.efficiency = [0.85, 0.95]
 screw.nut_stiffness_n_m = [2.5e8, 6.0e8]
+screw.axial_damping_ratio = [0.02, 0.06]
 screw.bearing_stiffness_n_m = [5.0e8, 1.0e9]
 screw.preload_n = [300.0, 900.0]
 screw.dynamic_load_rating_n = [11000.0, 15000.0]

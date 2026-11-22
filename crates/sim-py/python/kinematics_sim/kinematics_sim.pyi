@@ -111,7 +111,8 @@ def analyze(
     time_optimal: bool = False,
     points: bool = False,
 ) -> dict[str, Any]:
-    """The load per motor over one pass of the cycle (or a path), one row per motor."""
+    """The load per motor over one pass of the cycle (or a path), one row per motor; torque_unit and speed_unit give
+    each motor's units ("N" and "m/s" on a linear motor)."""
 
 def verdicts(
     config: Config,
@@ -143,7 +144,8 @@ def sizing(
     path_file: str | None = None,
     time_optimal: bool = False,
 ) -> dict[str, Any]:
-    """Every catalogue motor on the config's cycle, passing first, ranked by `rank_by`; the columns of `sim-cli search`."""
+    """Every catalogue motor on the config's cycle, passing first, ranked by `rank_by`; the columns of `sim-cli search`,
+    with torque_unit the unit of peak_torque_nm ("N" on a machine of linear motors)."""
 
 def sweep(
     config: Config,
@@ -180,8 +182,8 @@ def fit(
     sweep_motor: int = 0,
     amplitude: float | None = None,
 ) -> dict[str, Any]:
-    """What a measurement says the config should be: quantity, of, config, fitted, standard_error, advice, and errors
-    (the fits that found nothing; their rows are missing)."""
+    """What a measurement says the config should be: quantity, of, config, fitted, standard_error, units (per row, ""
+    where none), advice, and errors (the fits that found nothing; their rows are missing)."""
 
 def identify(
     *,
@@ -218,7 +220,8 @@ def tuning(config: Config, *, size: float = 0.001, amplitude: float = 0.0005) ->
 
 def margins(config: Config, *, bands: bool = False) -> dict[str, Any]:
     """Per run and motor the velocity loop's margins: run, motor, crossover_hz, phase_margin_deg, gain_margin_db,
-    peak_sensitivity, peak_frequency_hz, ok."""
+    peak_sensitivity, peak_frequency_hz, ok. crossover_hz and phase_margin_deg are NaN without a gain crossover in the
+    band (not measurable; ok then judges the gain margin alone)."""
 
 def accuracy(config: Config, *, points: int = 5, repeats: int = 5, dwell: float = 0.3) -> dict[str, Any]:
     """Static positioning accuracy along ISO 230-2 and ISO 9283: per axis and target axis, target, mean_up, mean_down,
@@ -226,7 +229,8 @@ def accuracy(config: Config, *, points: int = 5, repeats: int = 5, dwell: float 
     tool_repeatability, tool_direction_variation; "verdicts" (check, value, limit, ok)."""
 
 def modes(config: Config, *, axis_index: int = 0, points: int = 21) -> dict[str, FloatArray]:
-    """The modes over one axis's stroke: position, mode<i>_hz, mode<i>_damping (NaN where a place lacks one)."""
+    """The modes over one axis's stroke: position, mode<i>_hz, mode<i>_damping (NaN where a place lacks one), and
+    mode<i>_small_hz where the small-amplitude modes differ (a gearbox's hysteresis)."""
 
 def sensitivity(config: Config, *, delta: float = 0.2, groups: Sequence[str] | None = None) -> dict[str, Any]:
     """Each parameter at its low and high value, strongest first: parameter, value, low, high, relative changes."""

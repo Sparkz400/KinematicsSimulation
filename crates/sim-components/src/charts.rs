@@ -15,7 +15,8 @@ pub const CURVE_POINTS: usize = 241;
 pub struct TorqueSpeed {
     /// What motor and drive give at most (`DriveParams::torque_curve`): the peak torque, faded or field-weakened.
     pub peak: [Vec<[f64; 2]>; 2],
-    /// The continuous (S1) rating, the rated torque up to the rated speed.
+    /// The continuous (S1) rating as the motor-s1 verdict has it (`analysis::s1_torque`): from k_t I_0 at standstill to the
+    /// rated torque at the rated speed, and on along that line.
     pub s1: [Vec<[f64; 2]>; 2],
     /// What the winding's voltage leaves at the DC link `dc_voltage` (`DriveParams::voltage_limited_torque`).
     pub voltage: [Vec<[f64; 2]>; 2],
@@ -35,9 +36,19 @@ pub fn torque_speed(drive: &DriveParams, dc_voltage: f64) -> TorqueSpeed {
         let pairs: Vec<_> = speeds.iter().map(|&w| (w, f(w))).collect();
         [pairs.iter().map(|&(w, (_, high))| [w, high]).collect(), pairs.iter().map(|&(w, (low, _))| [w, low]).collect()]
     };
-    let s1 = |sign: f64| {
-        vec![[-drive.rated_speed, sign * drive.rated_torque], [drive.rated_speed, sign * drive.rated_torque]]
-    };
+    // The verdict's line, from the same source (`DriveParams::s1_torque`, `analysis::s1_torque`).
+    // Straight but for its kink at standstill and, where it falls to nothing before `top` (a static torque well above the
+    // rated one), at that speed; a printed curve kinks at each of its points.
+    let (still, rated) = (drive.s1_torque(0.0), drive.s1_torque(drive.rated_speed));
+    let zero = drive.rated_speed * still / (still - rated);
+    let mut speeds = vec![0.0, top];
+    if !drive.s1_curve.is_empty() {
+        speeds.splice(1..1, drive.s1_curve.iter().map(|p| p[0]).filter(|w| *w > 0.0 && *w < top));
+    } else if still > rated && zero < top {
+        speeds.insert(1, zero);
+    }
+    let speeds: Vec<f64> = speeds.iter().rev().map(|w| -w).chain(speeds[1..].iter().copied()).collect();
+    let s1 = |sign: f64| speeds.iter().map(|&w| [w, sign * drive.s1_torque(w)]).collect::<Vec<_>>();
     TorqueSpeed {
         peak: line(&|w| drive.torque_curve(w)),
         s1: [s1(1.0), s1(-1.0)],
@@ -74,43 +85,94 @@ pub fn split(error: &[f64], direction: &[f64]) -> (f64, f64) {
     ((total - along * along).max(0.0).sqrt(), along)
 }
 
-/// The tool's real error over a run (`split`): the axes' position setpoints less where the tool really is (`axis.<id>.
-/// position`, belt stretch and sag included, not the drives' encoder-side `following_error`), against the direction of
+/// The tool's real error over a run (`split`): the plan at each sample's time less where the tool really is (`axis_errors`;
+/// belt stretch and sag included, not the drives' encoder-side `following_error`), against the direction of
 /// their speed setpoints: of the axes in m (its place) in m, and of the axes in rad (its turn, an arm's
 /// orientation) the length in rad, apart, so that metres and radians are never added.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ToolError {
     pub time: Vec<f64>,
+    /// Whether the machine has axes in m; without them `normal` and `tangential` are all zero.
+    pub place: bool,
     pub normal: Vec<f64>,
     pub tangential: Vec<f64>,
     /// Empty on a machine without axes in rad.
     pub angle: Vec<f64>,
 }
 
-/// The `ToolError` of a run's columns; `None` where the run has no axis positions with setpoints (a trace).
-// shortcut: the setpoint is the one sampled with the position, held over the profile cycle, so the tangential part may
-// carry up to a cycle's way of setpoint lag at speed; take the plan at the sample's time (`Control::plan_now`) into the
-// run if that matters.
-pub fn tool_error(signals: &[SignalInfo], columns: &[Vec<f64>]) -> Option<ToolError> {
+/// Per axis whose unit is `unit`, the tool's error (docs/model-reference.md, "Tool position error"): the plan at the
+/// sample's time less where the tool is, `axis.<id>.position_setpoint` run on by `setpoint_age` with the speed and
+/// acceleration setpoints (`Controller::plan_now`, which the analysis measures against), less `axis.<id>.position`. A run
+/// without `setpoint_age` (a file from before it) has the age worked out from its own timing (`setpoint_age_of`). Each
+/// with its axis's speed setpoint, where the run has it.
+pub fn axis_errors<'a>(
+    signals: &[SignalInfo],
+    columns: &'a [Vec<f64>],
+    unit: &str,
+) -> Vec<(Vec<f64>, Option<&'a [f64]>)> {
     let find = |id: &str| signals.iter().position(|s| s.id == id).map(|i| columns[i].as_slice());
-    let axes = |unit: &str| -> Vec<(Vec<f64>, Option<&[f64]>)> {
-        signals
-            .iter()
-            .zip(columns)
-            .filter(|(s, _)| s.unit == unit && s.id.starts_with("axis.") && s.id.ends_with(".position"))
-            .filter_map(|(s, actual)| {
-                let set = find(&format!("{}_setpoint", s.id))?;
-                let error = set.iter().zip(actual).map(|(s, a)| s - a).collect();
-                Some((error, find(&s.id.replace(".position", ".velocity_setpoint"))))
-            })
-            .collect()
+    let rebuilt = match find("setpoint_age") {
+        Some(_) => None,
+        None => {
+            let held: Vec<&[f64]> = (signals.iter().zip(columns))
+                .filter(|(s, _)| s.id.starts_with("axis.") && s.id.ends_with("_setpoint"))
+                .map(|(_, c)| c.as_slice())
+                .collect();
+            columns.first().map(|time| setpoint_age_of(time, &held))
+        }
     };
+    let age = find("setpoint_age").or(rebuilt.as_deref());
+    signals
+        .iter()
+        .zip(columns)
+        .filter(|(s, _)| s.unit == unit && s.id.starts_with("axis.") && s.id.ends_with(".position"))
+        .filter_map(|(s, actual)| {
+            let set = find(&format!("{}_setpoint", s.id))?;
+            let (vel, acc) = (
+                find(&s.id.replace(".position", ".velocity_setpoint")),
+                find(&s.id.replace(".position", ".acceleration_setpoint")),
+            );
+            let error = (0..actual.len())
+                .map(|i| {
+                    let t = age.map_or(0.0, |a| a[i]);
+                    let at = |c: Option<&[f64]>| c.map_or(0.0, |c| c[i]);
+                    set[i] + (at(vel) + 0.5 * at(acc) * t) * t - actual[i]
+                })
+                .collect();
+            Some((error, vel))
+        })
+        .collect()
+}
+
+/// The signal `setpoint_age` of a run recorded without it, from the run's own timing: its times `time` (the simulation's,
+/// from 0) and its held setpoints `held`. The profile cycle T is the shortest time between two samples whose setpoints
+/// differ (the sample period where they differ at every sample or only once), and the controller sets them at every
+/// multiple of T in the step from there (`Controller::update`), after the sample of that moment (the CLI's `run` samples
+/// before each step): at t > 0 the age is t less the last multiple of T before it, (0, T], and 0 at t = 0. A run
+/// sampled at a multiple of its profile cycle above one (the CLI's `--every` past it) reads T as its sample period: the
+/// file does not hold the cycle then.
+pub fn setpoint_age_of(time: &[f64], held: &[&[f64]]) -> Vec<f64> {
+    let moved: Vec<f64> = (1..time.len()).filter(|&i| held.iter().any(|c| c[i] != c[i - 1])).map(|i| time[i]).collect();
+    let period = time.windows(2).map(|w| w[1] - w[0]).filter(|h| *h > 0.0).fold(f64::INFINITY, f64::min);
+    let between = moved.windows(2).map(|w| w[1] - w[0]).fold(f64::INFINITY, f64::min);
+    let cycle = if between.is_finite() { between.max(period) } else { period };
+    if !cycle.is_finite() {
+        return vec![0.0; time.len()];
+    }
+    // Ticks at whole multiples of the cycle, read with a tolerance for the times' rounding.
+    time.iter().map(|&t| if t <= 0.0 { 0.0 } else { t - cycle * ((t / cycle - 1e-6).ceil() - 1.0) }).collect()
+}
+
+/// The `ToolError` of a run's columns (`axis_errors`); `None` where the run has no axis positions with setpoints (a
+/// trace).
+pub fn tool_error(signals: &[SignalInfo], columns: &[Vec<f64>]) -> Option<ToolError> {
+    let axes = |unit: &str| axis_errors(signals, columns, unit);
     let (place, turn) = (axes("m"), axes("rad"));
     if place.is_empty() && turn.is_empty() {
         return None;
     }
     let time = columns.first()?.clone();
-    let mut out = ToolError { time, ..ToolError::default() };
+    let mut out = ToolError { time, place: !place.is_empty(), ..ToolError::default() };
     for i in 0..out.time.len() {
         let error: Vec<f64> = place.iter().map(|(e, _)| e[i]).collect();
         let direction: Vec<f64> = place.iter().map(|(_, v)| v.map_or(0.0, |v| v[i])).collect();
@@ -197,12 +259,11 @@ pub type Share = (&'static str, Vec<f64>);
 
 /// A motor's utilisation over a run, each as a share of its limit, 1 at the limit: torque against what is available at
 /// its speed; the phase current (q and d) against `current_limit`; the drive's two overload image nodes against the
-/// image's trip level (with effects.drive_overload); winding and housing rise against the rated rise (with
+/// image's trip level (with effects.drive_overload); winding and housing rise against the rated rise (the housing's
+/// against `ratings.housing_max_rise_k` where the config has it, else the same; with
 /// effects.winding_heating; the housing's with effects.motor_thermal_nodes); and the DC link voltage against the
 /// overvoltage trip, with the braking threshold below it. Only the lines whose signals the run has and whose effect
 /// was on.
-// shortcut: the housing is held against the winding's rated rise, as the config has no housing limit; give it its own
-// once a maker states one.
 pub fn utilisation(drive: &DriveParams, signals: &[SignalInfo], columns: &[Vec<f64>], motor: &str) -> Vec<Share> {
     let get = |name: &str| {
         let id = format!("motor.{motor}.{name}");
@@ -224,13 +285,15 @@ pub fn utilisation(drive: &DriveParams, signals: &[SignalInfo], columns: &[Vec<f
     {
         out.push(("charts-overload-slow", image.iter().zip(chip).map(|(i, c)| (i - c) / o.trip).collect()));
         out.push(("charts-overload-chip", chip.iter().map(|c| c / o.trip).collect()));
+        // The trip is on their sum.
+        out.push(("charts-overload-total", image.iter().map(|i| i / o.trip).collect()));
     }
     if drive.heating {
         if let Some(rise) = get("winding_temperature") {
             out.push(("charts-winding", rise.iter().map(|r| r / drive.rated_rise).collect()));
         }
         if let (Some(_), Some(rise)) = (drive.thermal_nodes, get("housing_temperature")) {
-            out.push(("charts-housing", rise.iter().map(|r| r / drive.rated_rise).collect()));
+            out.push(("charts-housing", rise.iter().map(|r| r / drive.housing_max_rise).collect()));
         }
     }
     if let (true, Some(u)) =
@@ -249,14 +312,14 @@ pub fn braking_share(drive: &DriveParams) -> Option<f64> {
 }
 
 /// The amplitude spectrum of samples `dt` apart: (frequency Hz, amplitude) from 0 to the Nyquist frequency. Of the
-/// newest power of two of them, mean removed, through a Hann window; a sine of amplitude A on a bin gives A there.
+/// samples, zero-padded to a power of two, mean removed, through a Hann window; a sine of amplitude A on a bin gives A there.
 /// Empty for fewer than 8 samples.
 pub fn spectrum(values: &[f64], dt: f64) -> Vec<[f64; 2]> {
     if values.len() < 8 {
         return Vec::new();
     }
-    let n = 1usize << values.len().ilog2();
-    let amplitudes = hann_amplitudes(&values[values.len() - n..]);
+    let n = values.len().next_power_of_two();
+    let amplitudes = hann_amplitudes(values, n);
     amplitudes.iter().enumerate().map(|(k, a)| [k as f64 / (n as f64 * dt), *a]).collect()
 }
 
@@ -277,22 +340,23 @@ pub fn spectrogram(values: &[f64], dt: f64, start: f64, frame: usize) -> Spectro
     let mut at = 0;
     while at + frame <= values.len() {
         out.times.push(start + (at + frame / 2) as f64 * dt);
-        out.frames.push(hann_amplitudes(&values[at..at + frame]));
+        out.frames.push(hann_amplitudes(&values[at..at + frame], frame));
         at += hop;
     }
     out
 }
 
-/// The amplitudes of bins 0 to n / 2 of n samples (a power of two), mean removed, Hann-windowed and scaled by 2 / the
-/// window's sum, so that a sine on a bin shows its amplitude.
-fn hann_amplitudes(values: &[f64]) -> Vec<f64> {
-    let n = values.len();
-    let mean = values.iter().sum::<f64>() / n as f64;
-    let window = |i: usize| 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n as f64).cos();
+/// The amplitudes of bins 0 to n / 2 of the samples zero-padded to `n` (a power of two), mean removed, Hann-windowed over
+/// the real samples and scaled by 2 / the window's sum, so that a sine on a bin shows its amplitude.
+fn hann_amplitudes(values: &[f64], n: usize) -> Vec<f64> {
+    let m = values.len();
+    let mean = values.iter().sum::<f64>() / m as f64;
+    let window = |i: usize| 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / m as f64).cos();
     let mut re: Vec<f64> = values.iter().enumerate().map(|(i, v)| (v - mean) * window(i)).collect();
+    re.resize(n, 0.0);
     let mut im = vec![0.0; n];
     fft(&mut re, &mut im);
-    let scale = 2.0 / (0..n).map(window).sum::<f64>();
+    let scale = 2.0 / (0..m).map(window).sum::<f64>();
     (0..=n / 2).map(|k| re[k].hypot(im[k]) * scale).collect()
 }
 
@@ -427,9 +491,11 @@ mod tests {
         let (normal, along) = split(&[-1e-3, 0.0], &[0.5, 0.0]);
         assert!(normal == 0.0 && along == -1e-3);
         assert_eq!(split(&[3e-3, 4e-3], &[0.0, 0.0]), (5e-3, 0.0));
-        // The same from a run's columns: two axes in m, the motion along x, the error 1 mm along and 2 mm across.
+        // The same from a run's columns: two axes in m, the motion along x, the error 1 mm along and 2 mm across, each
+        // sample taken as its setpoints were set.
         let signals = [
             "time",
+            "setpoint_age",
             "axis.x.position",
             "axis.x.position_setpoint",
             "axis.x.velocity_setpoint",
@@ -439,6 +505,7 @@ mod tests {
         .map(|id| SignalInfo::new(id, "k", "q", if id == "time" { "s" } else { "m" }));
         let columns = vec![
             vec![0.0, 1e-3],
+            vec![0.0, 0.0],
             vec![0.1, 0.2],
             vec![0.101, 0.201],
             vec![0.2, 0.2],
@@ -447,7 +514,138 @@ mod tests {
         ];
         let e = tool_error(&signals, &columns).unwrap();
         let near = |v: &[f64], x: f64| v.iter().all(|v| (v - x).abs() < 1e-15);
-        assert!(near(&e.normal, 2e-3) && near(&e.tangential, 1e-3) && e.angle.is_empty(), "{e:?}");
+        assert!(near(&e.normal, 2e-3) && near(&e.tangential, 1e-3) && e.angle.is_empty() && e.place, "{e:?}");
+    }
+
+    /// A machine with one axis in rad only: no place, the error is the angle 0.01 rad (setpoint 0.2 less actual 0.19).
+    #[test]
+    fn a_machine_without_an_axis_in_metres_has_its_error_in_the_angle() {
+        let signals = ["time", "axis.a.position", "axis.a.position_setpoint"]
+            .map(|id| SignalInfo::new(id, "k", "q", if id == "time" { "s" } else { "rad" }));
+        let columns = vec![vec![0.0, 1e-3], vec![0.19, 0.19], vec![0.2, 0.2]];
+        let e = tool_error(&signals, &columns).unwrap();
+        assert!(!e.place && e.normal.iter().all(|v| *v == 0.0), "{e:?}");
+        assert!(e.angle.iter().all(|v| (v - 0.01).abs() < 1e-12), "{e:?}");
+    }
+
+    /// The setpoint held 0.8 ms at 1 m/s and 10 m/s²: the plan now is 0.1 + (1 + 5 * 0.0008) * 0.0008 = 0.1008032 m, so a
+    /// tool at 0.1008 m is 3.2 um behind it, not the 0.8 mm ahead of the held setpoint it reads as without the age.
+    #[test]
+    fn the_tool_error_is_against_the_plan_at_the_samples_time() {
+        let ids = ["time", "setpoint_age", "axis.x.position", "axis.x.position_setpoint", "axis.x.velocity_setpoint"];
+        let mut signals: Vec<SignalInfo> = ids.map(|id| SignalInfo::new(id, "k", "q", "m")).to_vec();
+        signals.push(SignalInfo::new("axis.x.acceleration_setpoint", "k", "q", "m/s²"));
+        let columns = vec![vec![0.0], vec![8e-4], vec![0.1008], vec![0.1], vec![1.0], vec![10.0]];
+        let e = tool_error(&signals, &columns).unwrap();
+        assert!((e.tangential[0] - 3.2e-6).abs() < 1e-12 && e.normal[0] < 1e-12, "{e:?}");
+        let held = tool_error(&signals[..1].iter().chain(&signals[2..]).cloned().collect::<Vec<_>>(), &{
+            let mut c = columns.clone();
+            c.remove(1);
+            c
+        })
+        .unwrap();
+        assert!((held.tangential[0] + 8e-4).abs() < 1e-12, "{held:?}");
+    }
+
+    /// Samples every 0.25 ms, the setpoint set at every whole ms after the sample of that moment: it changes at the
+    /// samples at 1.25 and 2.25 ms, so the cycle is 1 ms and the ages 0 (the start), 0.25, 0.5, 0.75, 1 ms, 0.25 ms, ...
+    /// Sampled every ms, the setpoints change at every sample and each is a whole cycle old.
+    #[test]
+    fn the_setpoint_age_of_a_run_without_it_follows_from_its_timing() {
+        let time: Vec<f64> = (0..13).map(|i| i as f64 * 2.5e-4).collect();
+        let set = [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0];
+        let age = setpoint_age_of(&time, &[&set]);
+        let by_hand = [0.0, 0.25, 0.5, 0.75, 1.0, 0.25, 0.5, 0.75, 1.0, 0.25, 0.5, 0.75, 1.0].map(|a| a * 1e-3);
+        assert!(age.iter().zip(by_hand).all(|(a, b)| (a - b).abs() < 1e-15), "{age:?}");
+        let coarse = setpoint_age_of(&[0.0, 1e-3, 2e-3], &[&[0.0, 1.0, 2.0]]);
+        assert!(coarse.iter().zip([0.0, 1e-3, 1e-3]).all(|(a, b)| (a - b).abs() < 1e-15), "{coarse:?}");
+        assert_eq!(setpoint_age_of(&[0.0], &[&[0.0]]), [0.0]);
+    }
+
+    /// The drawn line read at a speed, straight between its points.
+    fn drawn(line: &[[f64; 2]], speed: f64) -> f64 {
+        let i = line.windows(2).position(|w| w[0][0] <= speed && speed <= w[1][0]).unwrap();
+        let ([a, ta], [b, tb]) = (line[i], line[i + 1]);
+        ta + (tb - ta) * (speed - a) / (b - a)
+    }
+
+    /// S1 from k_t I_0 = 0.45 * 4 = 1.8 N m at standstill to 1.2 N m at the rated 100 rad/s: at 150 rad/s the line has
+    /// 1.8 - 0.6 * 1.5 = 0.9 N m (the verdict's `s1_torque`), standstill 1.8, both directions; at 300 rad/s it reaches
+    /// nothing and stays there (a corner of the drawn line, not a line through it below 0).
+    #[test]
+    fn the_s1_line_runs_from_the_static_torque_to_the_rated_one_and_on() {
+        let p = DriveParams { kt: 0.45, static_torque: 1.8, rated_torque: 1.2, rated_speed: 100.0, ..drive() };
+        let c = torque_speed(&p, 300.0);
+        let top = c.s1[0].last().unwrap()[0];
+        assert!((drawn(&c.s1[0], 0.0) - 1.8).abs() < 1e-12 && (drawn(&c.s1[1], 0.0) + 1.8).abs() < 1e-12);
+        assert!((drawn(&c.s1[0], 150.0) - 0.9).abs() < 1e-9 && (drawn(&c.s1[0], -150.0) - 0.9).abs() < 1e-9);
+        for w in [250.0, 300.0, 0.5 * (300.0 + top), top].into_iter().filter(|w| *w <= top) {
+            assert!((drawn(&c.s1[0], w) - p.s1_torque(w)).abs() < 1e-9, "{w}: {:?}", c.s1[0]);
+        }
+    }
+
+    /// The housing's rise of 30 K against `ratings.housing_max_rise_k` = 60 K is 0.5 of it, the winding's 80 K against its
+    /// rated 100 K 0.8; without the key the housing is held against the winding's 100 K, 0.3, as before.
+    #[test]
+    fn the_housing_is_held_against_its_own_highest_rise() {
+        let signals = ["winding_temperature", "housing_temperature"]
+            .map(|q| SignalInfo::new(format!("motor.x.{q}"), "", "", "K"))
+            .to_vec();
+        let columns = vec![vec![80.0], vec![30.0]];
+        let nodes = Some(crate::drive::ThermalNodes { winding_share: 0.25, winding_time_constant: 60.0 });
+        let p =
+            DriveParams { heating: true, thermal_nodes: nodes, rated_rise: 100.0, housing_max_rise: 60.0, ..drive() };
+        let shares = |p: &DriveParams| utilisation(p, &signals, &columns, "x");
+        assert_eq!(shares(&p), [("charts-winding", vec![0.8]), ("charts-housing", vec![0.5])]);
+        assert_eq!(shares(&DriveParams { housing_max_rise: 100.0, ..p })[1], ("charts-housing", vec![0.3]));
+    }
+
+    /// A printed S1 curve, (0, 2.0), (50, 1.5), (150, 0.5) N m: the drawn line passes through each of its points both
+    /// ways (between them straight, as `s1_interpolated` reads it: at 100 rad/s 1.0 N m) and holds the last torque beyond,
+    /// up to the chart's top (220 rad/s for this drive).
+    #[test]
+    fn the_chart_draws_a_printed_s1_curve_through_its_points() {
+        let p = DriveParams { s1_curve: vec![[0.0, 2.0], [50.0, 1.5], [150.0, 0.5]], ..drive() };
+        let c = torque_speed(&p, 300.0);
+        let top = c.s1[0].last().unwrap()[0];
+        assert!(top > 150.0, "{top}");
+        for (w, t) in [(0.0, 2.0), (50.0, 1.5), (100.0, 1.0), (150.0, 0.5), (top, 0.5)] {
+            assert!((drawn(&c.s1[0], w) - t).abs() < 1e-12 && (drawn(&c.s1[0], -w) - t).abs() < 1e-12, "{w}: {c:?}");
+            assert!((drawn(&c.s1[1], w) + t).abs() < 1e-12, "{w}");
+        }
+    }
+
+    /// With effects.iron_loss off the drive's stall current is the rated one (2 A, `stall_current`), but the config's
+    /// `motor.stall_current_a` (4 A) still sets the verdict's static torque 0.45 * 4 = 1.8 N m: the chart draws that, 1.8 N m
+    /// at standstill and 1.2 N m at the rated speed, not a flat 1.2 N m. Without a stall current it is flat at the rated
+    /// torque.
+    #[test]
+    fn the_s1_line_takes_the_static_torque_from_the_stall_current_key_without_iron_loss() {
+        let p = DriveParams {
+            kt: 0.45,
+            stall_current: 2.0,
+            static_torque: 1.8,
+            rated_torque: 1.2,
+            rated_speed: 100.0,
+            ..drive()
+        };
+        assert!((p.s1_torque(0.0) - 1.8).abs() < 1e-12 && (p.s1_torque(-100.0) - 1.2).abs() < 1e-12);
+        let c = torque_speed(&p, 300.0);
+        assert!((drawn(&c.s1[0], 0.0) - 1.8).abs() < 1e-12);
+        let flat = DriveParams { static_torque: 0.0, ..p };
+        assert!((flat.s1_torque(0.0) - 1.2).abs() < 1e-12 && (flat.s1_torque(150.0) - 1.2).abs() < 1e-12);
+    }
+
+    /// 300 samples (not a power of two) of a sine of 0.3 on a bin of the padded 512: the whole run is used, so the
+    /// spectrum has 257 bins and the amplitude near the bin is 0.3 within the leakage of the zero padding.
+    #[test]
+    fn the_spectrum_pads_to_the_next_power_of_two_and_keeps_the_amplitude() {
+        let (dt, hz) = (1e-3, 100.0);
+        let values: Vec<f64> = (0..300).map(|i| 0.3 * (std::f64::consts::TAU * hz * i as f64 * dt).sin()).collect();
+        let s = spectrum(&values, dt);
+        assert_eq!(s.len(), 257);
+        let top = s.iter().max_by(|a, b| a[1].total_cmp(&b[1])).unwrap();
+        assert!((top[0] - hz).abs() < 4.0 && (top[1] - 0.3).abs() < 0.03, "{top:?}");
     }
 
     /// A sine of 0.3 on bin 50 of 1024 samples 1 ms apart, 48.828 Hz, plus an offset: the spectrum's highest bin is

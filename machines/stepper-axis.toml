@@ -250,8 +250,8 @@ stall_current_a = 3.96
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
 # The amplitude of the current vector the drive sets, sqrt 2 times the 2.8 A per phase: both phases at their rated
-# current in a full step. With effects.winding_heating the winding settles at the rated rise at it [estimate]: 80 K
-# (class B), 20 minutes.
+# current in a full step; phase peak, a datasheet's RMS value must be multiplied by sqrt 2. With
+# effects.winding_heating the winding settles at the rated rise at it [estimate]: 80 K (class B), 20 minutes.
 rated_current_a = 3.96
 thermal_time_constant_s = 1200.0
 rated_temperature_rise_k = 80.0
@@ -360,8 +360,9 @@ max_jerk_m_s3 = 100.0
 [drive]
 # The stepper's drive counts the setpoint in microsteps of a full step (2 pi / 200 rad) each.
 microsteps = 16.0
-# The current vector's amplitude the drive sets [estimate]: 3.5 A, 88 % of the motor's rated 3.96 A, as stepper drives are
-# set below the rating to keep the motor cooler; holding torque 0.318 * 3.5 = 1.11 N m.
+# The current vector's amplitude the drive sets, phase peak (a datasheet RMS value must be multiplied by sqrt 2)
+# [estimate]: 3.5 A, 88 % of the motor's rated 3.96 A, as stepper drives are set below the rating to keep the motor
+# cooler; holding torque 0.318 * 3.5 = 1.11 N m.
 stepper_current_a = 3.5
 current_cycle_s = 62.5e-6
 velocity_cycle_s = 125.0e-6
@@ -397,6 +398,9 @@ friction_feedforward_model = "characteristic"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 # Current controller: Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
@@ -406,6 +410,8 @@ current_tn_s = 2.5e-3
 # carries the RMS phase current, and its voltage times that current is the power of all three phases.
 # The stepper's supply. Its pull-out torque is the holding torque up to (R I + kE w)^2 + (50 w L I)^2 = 48^2, 85 rad/s.
 bus_voltage_v = 48.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 1.11
 rated_torque_nm = 1.11
 # A servo's torque-speed curve; the stepper's own is its pull-out curve from R, L, kE and the supply.

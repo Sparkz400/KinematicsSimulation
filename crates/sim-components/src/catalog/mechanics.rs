@@ -200,10 +200,28 @@ fn screw_tables(cfg: &Config) -> Vec<String> {
     tables_with(cfg, &["lead_m", "root_diameter_m", "dynamic_load_rating_n"])
 }
 
-/// The carriages a guide set has: two rails with two carriages each, the layout every shipped screw, rack and linear
-/// motor config states. shortcut: the count is fixed; upgrade with a config key for the carriages when a machine has
-/// another layout.
+/// The carriages a guide set has when the config does not say (`guide_carriages`): two rails with two carriages each, the
+/// layout every shipped screw, rack and linear motor config states.
 pub const GUIDE_CARRIAGES: f64 = 4.0;
+
+/// The tables a machine's guide friction is in, with its sliding and breakaway levels, of which `apply_guides` takes the
+/// first the config has: a gantry's or one-axis machine's X guide (LuGre), each carriage's guide of a linear delta, a slide.
+const GUIDE_FRICTION: [(&str, [&str; 2]); 3] = [
+    ("friction_x", ["coulomb_n", "stiction_n"]),
+    ("friction", ["coulomb_n", "stiction_n"]),
+    ("slide", ["friction_coulomb_n", "friction_breakaway_n"]),
+];
+
+/// The carriages of a config's guide set: `ratings.guide_carriages`, else `GUIDE_CARRIAGES`. A value that is not a whole
+/// number of at least 1 is refused.
+pub fn guide_carriages(cfg: &Config) -> Result<f64, ConfigError> {
+    const KEY: &str = "ratings.guide_carriages";
+    if cfg.get(KEY).is_err() {
+        return Ok(GUIDE_CARRIAGES);
+    }
+    let n = cfg.f64(KEY)?;
+    if n >= 1.0 && n.fract() == 0.0 { Ok(n) } else { Err(ConfigError::Invalid(KEY.into())) }
+}
 
 /// The static safety factor a guide set's highest load is held to, C0 / P: HIWIN's catalogue asks 1.0 to 3.5 for
 /// normal loading and 2.0 to 5.0 with vibration or impact [estimate: the middle of normal loading].
@@ -273,14 +291,36 @@ fn apply_screw(cfg: &mut Config, r: &Row) -> Result<(), ConfigError> {
 /// Puts a guide set into a config's ratings: `guide_dynamic_load_rating_n` the carriages' C (for 50 km) together, and
 /// `guide_max_load_n` their C0 together over `GUIDE_STATIC_SAFETY`, each where the config rates it. A config that rates
 /// neither is refused: the guide would change nothing it judges.
-/// shortcut: the load is taken to share equally between the carriages, and the config's carriage mass and guide
-/// friction stay (they hold the guides it was written for); upgrade with the carriages' mass and seal drag per guide.
+/// The load is taken to share equally between the carriages. The carriages' mass (per carriage times `count`) takes the
+/// place of the config's guide carriages in the moved mass `mass.carriage_kg`, and their seals' drag that of the config's
+/// in the guide's friction levels (`GUIDE_FRICTION`: Coulomb and breakaway, as the seals drag at any speed): the share of
+/// the config's own carriages is `mass.guide_carriages_kg` and `<friction table>.seal_drag_n`, absent = 0 (the config's
+/// numbers hold no guide carriages, and the named ones are added). Each only where the config has the key it changes and
+/// the row the column; the share keys, where the config has them, then hold the named carriages'.
 fn apply_guides(cfg: &mut Config, r: &Row, count: f64) -> Result<(), ConfigError> {
     let name = r["part_number"];
     let dynamic = guide_rating_50km(r).ok_or_else(|| unknown("axis", name))?;
     let stat = number(r, "static_load_rating_n").ok_or_else(|| unknown("axis", name))?;
     if !rates_guides(cfg) {
         return Err(ConfigError::Invalid("parts.axis (the config rates no guides)".into()));
+    }
+    fn swap(cfg: &mut Config, share: &str, targets: &[String], new: f64) -> Result<(), ConfigError> {
+        let old = cfg.f64(share).unwrap_or(0.0);
+        for key in targets {
+            if let Ok(value) = cfg.f64(key) {
+                set(cfg, key, value - old + new)?;
+            }
+        }
+        set_if_present(cfg, share, new)
+    }
+    if let Some(each) = number(r, "carriage_mass_kg") {
+        swap(cfg, "mass.guide_carriages_kg", &["mass.carriage_kg".into()], count * each)?;
+    }
+    if let (Some(each), Some((table, levels))) =
+        (number(r, "seal_drag_n"), GUIDE_FRICTION.iter().find(|(t, l)| cfg.get(&format!("{t}.{}", l[0])).is_ok()))
+    {
+        let targets: Vec<String> = levels.iter().map(|l| format!("{table}.{l}")).collect();
+        swap(cfg, &format!("{table}.seal_drag_n"), &targets, count * each)?;
     }
     set_if_present(cfg, "ratings.guide_dynamic_load_rating_n", count * dynamic)?;
     set_if_present(cfg, "ratings.guide_max_load_n", count * stat / GUIDE_STATIC_SAFETY)
@@ -394,10 +434,12 @@ fn screw_weight(cfg: &Config, r: &Row) -> f64 {
     per_m * length + number(r, "nut_mass_kg").unwrap_or(0.0)
 }
 
-/// The installed weight of a guide set, kg: the carriages and two rails as long as the stroke and two carriages.
-/// shortcut: the rails' length is the stroke plus two carriage lengths; upgrade with the machine's rail length.
-fn guide_weight(cfg: &Config, r: &Row, count: f64) -> f64 {
-    let rail = stroke(cfg) + 2.0 * number(r, "carriage_length_m").unwrap_or(0.0);
+/// The installed weight of a guide set, kg: the carriages and two rails as long as `ratings.guide_rail_length_m`, else as
+/// the stroke and two carriages.
+pub(super) fn guide_weight(cfg: &Config, r: &Row, count: f64) -> f64 {
+    let rail = cfg
+        .f64("ratings.guide_rail_length_m")
+        .unwrap_or_else(|_| stroke(cfg) + 2.0 * number(r, "carriage_length_m").unwrap_or(0.0));
     count * number(r, "carriage_mass_kg").unwrap_or(0.0) + 2.0 * rail * number(r, "rail_mass_kg_m").unwrap_or(0.0)
 }
 
@@ -416,17 +458,18 @@ const GUIDE_SIZES_TRIED: usize = 2;
 /// The mechanical axes of the catalogue a config's machine can be built from, as (name for `parts.axis`, why it is
 /// refused, "" where it is not; installed weight in kg): for a machine with ball screws every catalogue screw
 /// (`screw_refusal`), and where the config rates guides (a screw, rack or linear motor machine with
-/// `ratings.guide_*`) with each guide set (`GUIDE_CARRIAGES` carriages; per series and carriage type the
+/// `ratings.guide_*`) with each guide set (`guide_carriages` carriages; per series and carriage type the
 /// `GUIDE_SIZES_TRIED` smallest that pass `guide_refusal`). A screw refused is listed once on its own. Empty for a
 /// machine of another kind. A linear motor machine's motors are the linear motors (`linear_motor_articles_for`).
 pub fn mech_axes(cfg: &Config) -> Vec<(String, &'static str, f64)> {
     let screws: Vec<Row> = if screw_tables(cfg).is_empty() { Vec::new() } else { rows_of("ball_screws.csv") };
     let mech = !screws.is_empty() || is_linear_motor(cfg) || !tables_with(cfg, &["module_m", "teeth"]).is_empty();
     let mut guides: Vec<(String, f64)> = Vec::new();
-    if mech && rates_guides(cfg) {
+    // (A config with an invalid carriage count is refused by `resolve`, so every candidate on it is: no guide is offered.)
+    if let (true, Ok(carriages)) = (mech && rates_guides(cfg), guide_carriages(cfg)) {
         let mut all: Vec<Row> = rows_of("linear_guides.csv")
             .into_iter()
-            .filter(|r| guide_rating_50km(r).is_some() && guide_refusal(cfg, r, GUIDE_CARRIAGES).is_empty())
+            .filter(|r| guide_rating_50km(r).is_some() && guide_refusal(cfg, r, carriages).is_empty())
             .collect();
         all.sort_by(|a, b| number(a, "static_load_rating_n").partial_cmp(&number(b, "static_load_rating_n")).unwrap());
         let mut tried: HashMap<(&str, &str), usize> = HashMap::new();
@@ -436,8 +479,7 @@ pub fn mech_axes(cfg: &Config) -> Vec<(String, &'static str, f64)> {
                 .or_default();
             if *n < GUIDE_SIZES_TRIED {
                 *n += 1;
-                guides
-                    .push((format!("{}x{}", r["part_number"], GUIDE_CARRIAGES), guide_weight(cfg, r, GUIDE_CARRIAGES)));
+                guides.push((format!("{}x{}", r["part_number"], carriages), guide_weight(cfg, r, carriages)));
             }
         }
     }

@@ -43,10 +43,11 @@ fn the_inertia_ratio_of_a_belt_axis_is_the_load_at_the_shaft_over_the_rotor() {
 }
 
 /// The classic optimum of a pure inertia: J_m i / r + J_L / (i r) is least at i = sqrt(J_L / J_m) = sqrt(0.002604 /
-/// 0.3e-4) = 9.3167, where it is 2 sqrt(J_L J_m) / r = 0.027951 N m per m/s^2. And the pulley radius at the ratio 5:
-/// (m + (J_p + i^2 J_m) / r^2) r / i is least at r^2 = (J_p + i^2 J_m) / m = (1e-4 + 25 * 0.3e-4) / 6.26 = 1.3578e-4,
-/// r = 11.65 mm (the belt's mass on the pulley goes with r^2, as a moved mass). Each sweep runs its values and the
-/// optimum on the cycle.
+/// 0.3e-4) = 9.3167, where it is 2 sqrt(J_L J_m) / r = 0.027951 N m per m/s^2. And the pulley radius at the ratio 5,
+/// the pulley a disc whose inertia goes with r^4 from J_p = 1e-4 kg m^2 at r0 = 20 mm (k = J_p / r0^4 = 625 kg/m^2):
+/// (m r^2 + k r^4 + i^2 J_m) / (r i) is least where 3 k r^4 + m r^2 - i^2 J_m = 0, r^2 = (sqrt(m^2 + 12 k i^2 J_m) - m) /
+/// (6 k) = 1.15792e-4, r = 10.761 mm (the belt's mass on the pulley goes with r^2, as a moved mass; with the pulley's
+/// inertia held it was 11.65 mm). Each sweep runs its values and the optimum on the cycle.
 #[test]
 fn the_ratio_sweep_finds_the_classic_optimum_of_a_pure_inertia() {
     let (entry, cfg) = (find("single-axis").unwrap(), single_axis());
@@ -59,7 +60,10 @@ fn the_ratio_sweep_finds_the_classic_optimum_of_a_pure_inertia() {
     assert!((at(ratio.classic) - 2.0 * (load * 0.3e-4).sqrt() / 0.02).abs() < 1e-9, "{}", at(ratio.classic));
     assert!(at(2.0) > at(ratio.classic) && at(40.0) > at(ratio.classic));
     let radius = transmission_sweep(entry, &cfg, "geometry.pulley_radius_m", (0.005, 0.05, 2), None).unwrap();
-    assert!((radius.classic / (8.5e-4 / m).sqrt() - 1.0).abs() < 1e-5, "{}", radius.classic);
+    let k = 1e-4 / 0.02f64.powi(4);
+    let r2 = ((m * m + 12.0 * k * 7.5e-4).sqrt() - m) / (6.0 * k);
+    assert!((r2.sqrt() - 0.010761).abs() < 1e-6, "{r2}");
+    assert!((radius.classic / r2.sqrt() - 1.0).abs() < 1e-5, "{}", radius.classic);
 }
 
 /// The S210 at 400 V pairs the 1FK2104-6AF with the 6SL3210-5HE11-0UF0 (3 A rated, `motors_s210.csv`). Among the 3 AC
@@ -99,8 +103,10 @@ fn a_search_tries_the_neighbouring_drives_and_names_what_is_estimated() {
 }
 
 /// A duty mix of two cycles, the config as it is (weight 3) and without its payload (weight 1): the candidate runs both,
-/// and its thermal utilisation is the mix's, sqrt(sum w u^2 t / sum w t) of the two cycles' (`mix_rms`), its cycle time
-/// the weighted mean (3 t1 + t2) / 4.
+/// and its thermal utilisation is the mix's: u^2 of each duty taken into the motor's node (time constant tau), whose
+/// periodic peak lies above the time-weighted mean sum w u^2 t / sum w t (`mix_rms`) by less than the duties' difference
+/// in u^2 times the longer stretch over tau (the most a stretch moves the node); its cycle time the weighted mean
+/// (3 t1 + t2) / 4.
 #[test]
 fn a_duty_mix_judges_the_heat_of_the_mix() {
     let (entry, cfg) = (find("single-axis").unwrap(), single_axis());
@@ -114,7 +120,12 @@ fn a_duty_mix_judges_the_heat_of_the_mix() {
     let parts: Vec<(f64, f64, f64)> =
         c.duties.iter().map(|(w, load)| (*w, load.motors[0].thermal_utilisation, load.duration)).collect();
     let f = c.figures.as_ref().unwrap();
-    assert!((f.thermal - mix_rms(&parts)).abs() < 1e-12, "{} against {}", f.thermal, mix_rms(&parts));
+    let own = catalog::candidate_config(entry, &cfg, c).unwrap();
+    let tau = own.f64("motor.thermal_time_constant_s").unwrap();
+    let ripple =
+        (parts[0].1.powi(2) - parts[1].1.powi(2)).abs() * parts.iter().map(|(w, _, t)| w * t).fold(0.0, f64::max) / tau;
+    let (peak, mean) = (f.thermal.powi(2), mix_rms(&parts).powi(2));
+    assert!(peak >= mean - 1e-12 && peak <= mean + ripple, "{peak} against {mean} + {ripple}");
     assert!(parts[1].1 < parts[0].1, "the cycle without payload heats less");
     let mean = (3.0 * c.duties[0].1.duration + c.duties[1].1.duration) / 4.0;
     assert!((f.cycle_s - mean).abs() < 1e-12);

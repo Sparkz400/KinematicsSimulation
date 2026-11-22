@@ -53,6 +53,14 @@ pub struct MotorLoad {
     /// braking resistor have to take.
     pub peak_regenerated_power: f64,
     pub largest_regeneration: f64,
+    /// The cycle's electrical energy in stretches of one sign, J, in their order: positive for a braking event (one run of
+    /// negative power) fed back, negative for the energy drawn between two, which empties the DC link's capacitors first.
+    /// What the resistor takes above the link's room (`resistor_excess`), where the link is not simulated. For a load
+    /// built by hand: a run keeps its account online instead (`dc_link_account`) and leaves this empty.
+    pub regeneration_events: Vec<f64>,
+    /// A run's running account of these stretches for the motor's DC link room (`LinkAccount`), where its config gives
+    /// the capacitance and the braking threshold; judged instead of `regeneration_events` where the room is the same.
+    pub dc_link_account: Option<LinkAccount>,
     /// With the DC link simulated: the energy the braking resistor burned (over the cycle's duration its
     /// mean power), the most power it took and the highest DC link voltage. For a drive that tripped on
     /// overvoltage, the voltage it tripped at.
@@ -65,6 +73,9 @@ pub struct MotorLoad {
     pub mains_energy: f64,
     pub line_module_energy: f64,
     pub peak_line_module_power: f64,
+    /// With the DC link simulated: what the drive's bleeder took out of the DC link while disabled (`Drive::disabled_step`;
+    /// each drive its own share of a shared link), J.
+    pub discharge_energy: f64,
     /// The torque at the gearbox output, where the machine reports it (signal `gearbox.<motor>.output_torque`): its
     /// peak, and its cubic mean weighted with the speed. Not the motor torque times the ratio: the rotor's
     /// own acceleration does not pass through the gearbox, and its losses come off or on top.
@@ -101,7 +112,7 @@ pub struct MotorLoad {
 /// One line of an energy budget.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BudgetRow {
-    /// `copper.<motor>`, `resistor`, `mains`, `line_module`, a machine's loss signal (`power.<place>`), `windings`,
+    /// `copper.<motor>`, `emf.<motor>` (only with a back-EMF constant other than the torque constant), `resistor`, `mains`, `line_module`, a machine's loss signal (`power.<place>`), `windings`,
     /// `capacitors`, a machine's energy signal (`energy.<part>`) or `payload`.
     pub id: String,
     /// The label, as two translation keys like a signal's.
@@ -137,6 +148,7 @@ impl EnergyBudget {
     pub fn electrical_unaccounted(&self) -> f64 {
         let electrical = |id: &str| {
             id.starts_with("copper.")
+                || id.starts_with("emf.")
                 || matches!(id, "resistor" | "discharge" | "mains" | "line_module" | "windings" | "capacitors")
         };
         self.supply - self.shaft_work - self.rows.iter().filter(|r| electrical(&r.id)).map(|r| r.energy).sum::<f64>()
@@ -151,6 +163,17 @@ pub const BUDGET_TOLERANCE: f64 = 1e-3;
 /// How far the electrical side of an energy budget may be off (`EnergyBudget::electrical_unaccounted`), as a share
 /// of the supply: the error of the fourth-order integration of the winding's energy over a base step.
 pub const ELECTRICAL_TOLERANCE: f64 = 1e-6;
+
+/// One guide's load over the cycle (`CycleLoad::guides`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GuideLoad {
+    /// Its highest load, N.
+    pub peak: f64,
+    /// Its equivalent load: the cubic mean over the distance, N.
+    pub equivalent: f64,
+    /// The mean |speed| of its axis, m/s; `None` where the axis is not known.
+    pub speed: Option<f64>,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct CycleLoad {
@@ -176,6 +199,9 @@ pub struct CycleLoad {
     pub guide_load: Option<(f64, f64)>,
     /// The mean |speed| of the axis of that guide over the cycle, m/s: the distance it runs per hour.
     pub guide_speed: Option<f64>,
+    /// Every guide the machine reports, each with its own figures: `guide_life_km` and `guide_life_h` take the lowest
+    /// life over them. `guide_load` and `guide_speed` above are those of the one that wears out first.
+    pub guides: Vec<GuideLoad>,
     /// How far the tool was from the path its setpoint drew: the most and the RMS. And the most it was
     /// from where the setpoint was at the same moment, which also counts lagging behind along the path. Of the
     /// axes in m alone (its place); the axes in rad (its turn, an arm's orientation, a turning table) have their own
@@ -269,17 +295,29 @@ pub struct ConveyorLoad {
 /// K: a tenth of a kelvin moves a winding's resistance by 0.04 % and a guide's viscosity by 0.5 %.
 pub const WARM_START_TOLERANCE_K: f64 = 0.1;
 
-/// The most warm passes of a warm start (`analyse_cycle_with`) before the last is measured, converged or not.
+/// The most warm passes of a warm start (`analyse_cycle_with`) before the last is measured, converged or not; as many
+/// again of periods, where the passes it took repeat every few (`period_of`).
 pub const WARM_START_PASSES: usize = 4;
+
+/// The most passes a cycle's period may span for the warm start to find it (`period_of`).
+pub const WARM_START_PERIOD_MOST: usize = 3;
 
 /// A cycle analysis started warm (effects.thermal_warm_start): the measured pass ran with the windings (with
 /// effects.winding_heating) and the heated parts (with effects.thermal_feedback) at the rises the pass before settled
 /// at, by `passes` passes of cold → settled → warm → settled; `change` is the most a rise the measured pass started at
-/// lies from the one it settles at, K (infinite where a rise does not settle, or the run stopped).
+/// lies from the one it settles at, K (infinite where a rise does not settle, or the run stopped). `period`: the passes
+/// the measured span covers, more than one where the cycle repeats only every so many passes (a pick that alternates
+/// between two places loads the motors differently pass by pass): the rises then settle over the period, not per pass.
+/// `repeat`: where the passes converged neither per pass nor over a period, how far apart (K) the rises settle of two
+/// passes started at the same rises, the measured one and one more run after it (`None` where not measured). Beyond the
+/// tolerance the cycle's motion does not repeat itself: what one pass leaves moving (a load still swinging) carries into
+/// the next and loads the motors differently, which no start temperature can settle.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WarmStart {
     pub passes: usize,
     pub change: f64,
+    pub period: usize,
+    pub repeat: Option<f64>,
 }
 
 impl WarmStart {
@@ -324,32 +362,67 @@ fn set_rises(sim: &mut Sim, rises: &[f64]) {
     sim.feed_temperatures_back();
 }
 
-/// The warm start's next move after a measured pass that began at `started_at` and settles where `load` says: `None`
-/// to measure another pass from the next rises (already set), or the result. `before` is the pass before's start and
-/// settled rises, which this one replaces.
+/// The warm start's next move after a measured span (one period of `period` passes) that began at `started_at` and
+/// settles where `load` says: `None` to measure another span from the next rises (already set), or the result.
+/// `before` is the span before's start and settled rises, which this one replaces; `settled` the settled rises of every
+/// span so far of one pass, from which, where the passes do not converge, `period_of` finds a period of a few passes:
+/// the spans then cover it, from the mean of its passes' settled rises, again up to `WARM_START_PASSES` of them.
 ///
 /// The next start is a secant step per rise: s(r), the rise a pass settles at for the rise it starts at, falls with r
 /// where the warmth thins a lubricant (a warmer guide loses less), so plain substitution r = s oscillates and converges
 /// slowly (about -0.4 on the EXCT-30's guide: still 0.3 K off after four passes). With the slope m of the last two passes the
 /// fixed point lies at r + (s - r) / (1 - m); m is clamped to [-20, 0.5], and taken as 0 (substitution) on the first
 /// warm pass and where the start did not move. A winding's settled rise depends on its current alone: m = 0.
+///
+/// Where the spans converge neither per pass nor over a period, and `repeat` is given (a cycle that runs on from pass to
+/// pass), one more span is measured from the rises the last one started at (`repeat` holds the last one's settled rises
+/// and result meanwhile): the result is the last one's, with `WarmStart::repeat` how far apart the two settle, the
+/// temperatures alike, what differs being the motion. The caller keeps the last span's load as the measured one.
+#[allow(clippy::too_many_arguments)]
 fn warm_pass(
     sim: &mut Sim,
     started_at: &[f64],
     load: &CycleLoad,
     passes: usize,
     before: &mut Option<(Vec<f64>, Vec<f64>)>,
+    period: &mut usize,
+    history: &mut Vec<Vec<f64>>,
+    mut repeat: Option<&mut Option<(Vec<f64>, WarmStart)>>,
 ) -> Option<WarmStart> {
     let settled = settled_rises(sim, load);
+    if let Some((first, done)) = repeat.as_mut().and_then(|r| r.take()) {
+        // This span started where the one before did: how far apart the two settle.
+        let apart = settled.iter().zip(&first).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+        return Some(WarmStart { repeat: Some(apart), ..done });
+    }
     let change = settled
         .iter()
         .zip(started_at)
         .map(|(s, r)| if s.is_finite() { (s - r).abs() } else { f64::INFINITY })
         .fold(0.0, f64::max);
-    let done = WarmStart { passes, change };
+    let done = WarmStart { passes, change, period: *period, repeat: None };
     // A rise that does not settle (a winding loaded beyond what its copper can shed) cannot be started at.
-    if done.converged() || passes == WARM_START_PASSES || change.is_infinite() {
+    if done.converged() || change.is_infinite() {
         return Some(done);
+    }
+    if *period == 1 {
+        history.push(settled.clone());
+    }
+    if passes == WARM_START_PASSES {
+        let found = (*period == 1).then(|| period_of(history)).flatten();
+        let Some(p) = found else {
+            let Some(r) = repeat else { return Some(done) };
+            // No period: one more span from the same rises tells whether the passes repeat at all.
+            *r = Some((settled, done));
+            set_rises(sim, started_at);
+            return None;
+        };
+        // The next span covers the period, from the mean of its passes' settled rises.
+        let last = &history[history.len() - p..];
+        let mean: Vec<f64> = (0..settled.len()).map(|i| last.iter().map(|s| s[i]).sum::<f64>() / p as f64).collect();
+        (*period, *before) = (p, None);
+        set_rises(sim, &mean);
+        return None;
     }
     let next: Vec<f64> = (0..settled.len())
         .map(|i| {
@@ -364,6 +437,17 @@ fn warm_pass(
     *before = Some((started_at.to_vec(), settled));
     set_rises(sim, &next);
     None
+}
+
+/// The period, in passes, of a warm start whose passes do not converge: from the settled rises of its passes in order
+/// (the first from cold), the fewest passes p (2 to `WARM_START_PERIOD_MOST`) such that the last pass settles within a
+/// quarter as far from the one p before as from the one before it, the rises it starts at being about the same. `None`
+/// where none does: the passes drift or alternate as a convergence would, with no period.
+fn period_of(settled: &[Vec<f64>]) -> Option<usize> {
+    let apart = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
+    let (k, warm) = (settled.len().checked_sub(1)?, 1);
+    let next = apart(&settled[k], &settled[k.checked_sub(1)?]);
+    (2..=WARM_START_PERIOD_MOST).find(|&p| k >= warm + p && apart(&settled[k], &settled[k - p]) < 0.25 * next)
 }
 
 /// The highest a drive's thermal image (`drive::Overload`) reaches when a pass repeats for long. The pass ran from the
@@ -420,13 +504,19 @@ pub struct Tally {
     /// The machine's rating checks, the places of their signals, and per check the highest |signal| and the sum of the
     /// signal, one per sample.
     checks: Vec<(RatingCheck, usize, f64, f64)>,
+    /// The checks on `plan.<signal>` (a limit the plan keeps: an arm's flange spin), their places among
+    /// `Machine::rating_checks` (and so in `Machine::rigid_checks`), and the highest |value| on the setpoint's rigid
+    /// motion, once per sample.
+    plan_checks: Vec<(RatingCheck, usize, f64)>,
     sample: Vec<f64>,
     /// Every signal looked at in `sample` is one of `Sim::sample_base`: the effect views need not be sampled.
     base_only: bool,
     belt_tension: Option<(f64, f64)>,
     radial_peak: f64,
-    /// Per guide: highest load and the sum of the load cubed, one per sample.
+    /// Per guide: highest load and the sum of the load cubed times its axis's |speed| (rolling damage goes with distance;
+    /// time where the axis is unknown), one per sample; and the sum of that weight.
     guide_loads: Vec<(f64, f64)>,
+    guide_weights: Vec<f64>,
     /// Per guide the place of its axis among the machine's axes, and the sum of that axis's |speed|, one per sample.
     guide_axes: Vec<Option<usize>>,
     guide_speeds: Vec<f64>,
@@ -468,6 +558,9 @@ pub struct Tally {
     crash: (f64, f64),
     supply: f64,
     copper: Vec<f64>,
+    /// What each servo winding took beyond copper, shaft and stored energy where its back-EMF constant is not its torque
+    /// constant (`Drive::emf_loss`).
+    emf: Vec<f64>,
     resistor: f64,
     /// What the DC links of drives switched off lost through their bleeders (`Drive::discharge_power`).
     discharge: f64,
@@ -482,7 +575,7 @@ pub struct Tally {
     /// Whether the effect views (torque breakdown, energy budget) are added up: they need the machine's
     /// `effect_signals` every step.
     views: bool,
-    /// Energy fed back since each motor last drew power.
+    /// Energy fed back (positive) since each motor last drew power, or drawn (negative) since it last fed back.
     braking: Vec<f64>,
     /// `CycleLoad::braking_power_peak`.
     braking_peak: f64,
@@ -552,9 +645,9 @@ impl Tally {
         let (losses, energies) = (own_named(LOSS_PREFIX), own_named("energy."));
         let mut machine_signals = Vec::new();
         if views {
-            sim.machine.signals(&sim.state, &sim.torque, &mut machine_signals);
+            sim.machine.signals(&sim.state, &sim.machine_torque(), &mut machine_signals);
         } else {
-            sim.machine.base_signals(&sim.state, &sim.torque, &mut machine_signals);
+            sim.machine.base_signals(&sim.state, &sim.machine_torque(), &mut machine_signals);
         }
         let (windings, capacitors) = stored_electrically(sim);
         let (tensions, radial, slack, jumps, detuning) = (
@@ -575,6 +668,14 @@ impl Tally {
             .map(|(i, c)| (c, i, 0.0, 0.0))
             .collect();
         let check_places: Vec<usize> = checks.iter().map(|c| c.1).collect();
+        let plan_checks = sim
+            .machine
+            .rating_checks()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, c)| c.signal.starts_with("plan.") && !c.life)
+            .map(|(i, c)| (c, i, 0.0))
+            .collect();
         let base_only = tensions
             .iter()
             .chain(&radial)
@@ -597,6 +698,7 @@ impl Tally {
             energies,
             supply: 0.0,
             copper: vec![0.0; motors],
+            emf: vec![0.0; motors],
             resistor: 0.0,
             discharge: 0.0,
             drawn: 0.0,
@@ -616,8 +718,10 @@ impl Tally {
             condition,
             condition_peak: 0.0,
             checks,
+            plan_checks,
             radial_peak: 0.0,
             guide_loads: vec![(0.0, 0.0); guides.len()],
+            guide_weights: vec![0.0; guides.len()],
             guide_axes: guides
                 .iter()
                 .map(|&i| sim.machine.axes().iter().position(|a| infos[i].id == format!("axis.{}.guide_load", a.id)))
@@ -641,7 +745,12 @@ impl Tally {
                 .machine
                 .motors()
                 .iter()
-                .map(|m| MotorLoad { id: m.id.to_string(), ..MotorLoad::default() })
+                .enumerate()
+                .map(|(k, m)| MotorLoad {
+                    id: m.id.to_string(),
+                    dc_link_account: sim.control.dc_link_room(k).map(LinkAccount::new),
+                    ..MotorLoad::default()
+                })
                 .collect(),
             pos: {
                 let (mut pos, mut speed) = (vec![0.0; motors], vec![0.0; motors]);
@@ -725,8 +834,22 @@ impl Tally {
             for (_, i, peak, sum) in &mut self.checks {
                 (*peak, *sum) = (peak.max(self.sample[*i].abs()), *sum + self.sample[*i]);
             }
-            for (&i, (peak, cubed)) in self.guides.iter().zip(&mut self.guide_loads) {
-                (*peak, *cubed) = (peak.max(self.sample[i]), *cubed + self.sample[i].powi(3));
+            // A limit of the plan on the setpoint as the rigid model moves along it: the simulated machine's own
+            // signal counts what the plan cannot hold (the gears' ringing, the servo's steps).
+            if !self.plan_checks.is_empty() {
+                let mut rigid = Vec::new();
+                let c = &sim.control;
+                sim.machine.rigid_checks(&c.set_pos, &c.set_vel, &c.set_acc, &mut rigid);
+                for (_, i, peak) in &mut self.plan_checks {
+                    if let Some(v) = rigid.get(*i).filter(|v| v.is_finite()) {
+                        *peak = peak.max(v.abs());
+                    }
+                }
+            }
+            for (k, (&i, (peak, cubed))) in self.guides.iter().zip(&mut self.guide_loads).enumerate() {
+                let weight = self.guide_axes[k].map_or(1.0, |a| rate[a].abs());
+                (*peak, *cubed) = (peak.max(self.sample[i]), *cubed + self.sample[i].powi(3) * weight);
+                self.guide_weights[k] += weight;
             }
             if let (0, Some(i)) = (self.steps, self.slack) {
                 self.slack_start = self.sample[i];
@@ -802,10 +925,10 @@ impl Tally {
         }
         if self.views && (self.parts.iter().any(Option::is_some) || !self.losses.is_empty()) {
             self.machine_signals.clear();
-            sim.machine.signals(&sim.state, &sim.torque, &mut self.machine_signals);
+            sim.machine.signals(&sim.state, &sim.machine_torque(), &mut self.machine_signals);
         } else if self.gear.iter().any(Option::is_some) {
             self.machine_signals.clear();
-            sim.machine.base_signals(&sim.state, &sim.torque, &mut self.machine_signals);
+            sim.machine.base_signals(&sim.state, &sim.machine_torque(), &mut self.machine_signals);
         }
         for (places, sums) in self.parts.iter().zip(&mut self.part_sums).filter_map(|(p, s)| Some((p.as_ref()?, s))) {
             for (&i, (peak, squares)) in places.iter().zip(sums) {
@@ -824,8 +947,9 @@ impl Tally {
             let drives = &sim.control.drives;
             self.supply += drives.iter().map(|d| d.power).sum::<f64>() * sim.dt;
             self.work += drives.iter().map(|d| d.shaft_power).sum::<f64>() * sim.dt;
-            for (copper, d) in self.copper.iter_mut().zip(drives) {
+            for ((copper, emf), d) in self.copper.iter_mut().zip(&mut self.emf).zip(drives) {
                 *copper += d.copper_loss * sim.dt;
+                *emf += d.emf_loss * sim.dt;
             }
             // A shared DC link has one resistor, rectifier and line module, which every drive reports as its own.
             let shared = sim.control.drive_params().shared_dc_link;
@@ -886,13 +1010,20 @@ impl Tally {
             if own.drive_max_current.is_finite() {
                 load.peak_current = load.peak_current.max(own.current_for(sim.control.drives[k].torque_demand).abs());
             }
+            // The running stretch: energy fed back (positive) or drawn (negative), pushed as one event when the sign turns.
+            let fed = -power * sim.dt;
+            if self.braking[k] * fed < 0.0 {
+                if let Some(account) = &mut load.dc_link_account {
+                    account.push(self.braking[k]);
+                }
+                self.braking[k] = 0.0;
+            }
+            self.braking[k] += fed;
             if power >= 0.0 {
                 load.energy_in += power * sim.dt;
-                self.braking[k] = 0.0;
             } else {
                 load.energy_regenerated -= power * sim.dt;
                 load.peak_regenerated_power = load.peak_regenerated_power.max(-power);
-                self.braking[k] -= power * sim.dt;
                 load.largest_regeneration = load.largest_regeneration.max(self.braking[k]);
             }
             load.rms_torque += torque * torque;
@@ -901,6 +1032,7 @@ impl Tally {
                 (self.cubic[k].0 + torque.abs().powi(3) * self.speed[k].abs(), self.cubic[k].1 + self.speed[k].abs());
             let drive = &sim.control.drives[k];
             load.resistor_energy += drive.resistor_power * sim.dt;
+            load.discharge_energy += drive.discharge_power * sim.dt;
             load.peak_resistor_power = load.peak_resistor_power.max(drive.resistor_power);
             load.peak_dc_link_voltage = load.peak_dc_link_voltage.max(drive.dc_voltage);
             // The line module's load either way, on the DC link's side: drawn into it (the line gives 1 / efficiency of
@@ -939,6 +1071,9 @@ impl Tally {
         for (k, load) in self.loads.iter_mut().enumerate() {
             load.rms_torque = (load.rms_torque / steps).sqrt();
             load.rms_current = (load.rms_current / steps).sqrt();
+            if let (Some(account), true) = (&mut load.dc_link_account, self.braking[k] != 0.0) {
+                account.push(self.braking[k]);
+            }
             load.thermal_current = (load.thermal_current / steps).sqrt();
             load.iron_loss /= steps;
             load.cubic_mean_torque =
@@ -983,11 +1118,18 @@ impl Tally {
             .map(|(h, heat)| (h.part.clone(), h.resistance * heat / duration))
             .collect();
         let samples = self.path_error[0].2.max(1) as f64;
-        // The guide that the life estimate is about: the one with the highest equivalent load.
-        let guide =
-            (0..self.guide_loads.len()).max_by(|&a, &b| self.guide_loads[a].1.total_cmp(&self.guide_loads[b].1));
-        let guide_load = guide.map(|g| (self.guide_loads[g].0, (self.guide_loads[g].1 / samples).cbrt()));
-        let guide_speed = guide.and_then(|g| self.guide_axes[g].map(|_| self.guide_speeds[g] / samples));
+        // Per guide: its equivalent load (cubic mean over distance) and mean speed. The life estimate is about the guide
+        // that wears out first: life in hours goes with 1/(P^3 v); the peak is the highest of all guides.
+        let equivalent = |g: usize| equivalent_load(self.guide_loads[g].1, self.guide_weights[g]);
+        let speed = |g: usize| self.guide_axes[g].map(|_| self.guide_speeds[g] / samples);
+        let wear = |g: usize| equivalent(g).powi(3) * speed(g).unwrap_or(1.0);
+        let guide = (0..self.guide_loads.len()).max_by(|&a, &b| wear(a).total_cmp(&wear(b)));
+        let peak = self.guide_loads.iter().map(|g| g.0).reduce(f64::max);
+        let guide_load = guide.zip(peak).map(|(g, peak)| (peak, equivalent(g)));
+        let guide_speed = guide.and_then(speed);
+        let guides = (0..self.guide_loads.len())
+            .map(|g| GuideLoad { peak: self.guide_loads[g].0, equivalent: equivalent(g), speed: speed(g) })
+            .collect();
         CycleLoad {
             duration,
             belt_tension: self.belt_tension,
@@ -999,6 +1141,7 @@ impl Tally {
             condition_peak: self.condition.map(|_| self.condition_peak),
             guide_load,
             guide_speed,
+            guides,
             path_error_peak: self.path_error[0].0,
             path_error_rms: (self.path_error[0].1 / self.path_error[0].2.max(1) as f64).sqrt(),
             tracking_error_peak: self.tracking_error[0],
@@ -1021,6 +1164,7 @@ impl Tally {
                     let value = if c.life { samples / sum } else { peak };
                     (c, value)
                 })
+                .chain(std::mem::take(&mut self.plan_checks).into_iter().map(|(c, _, peak)| (c, peak)))
                 .chain(cam_checks(sim.machine.as_ref()))
                 .collect(),
             clearance: (!sim.obstacles.is_empty()).then_some(sim.least_clearance),
@@ -1064,6 +1208,15 @@ impl Tally {
             .zip(&self.copper)
             .map(|(m, copper)| row(&format!("copper.{}", m.id), m.key, "budget-copper", *copper))
             .collect();
+        // The magnets' and iron's share of a back-EMF constant that is not the torque constant: only where there is one.
+        rows.extend(
+            sim.machine
+                .motors()
+                .iter()
+                .zip(&self.emf)
+                .filter(|(_, emf)| **emf != 0.0)
+                .map(|(m, emf)| row(&format!("emf.{}", m.id), m.key, "budget-emf", *emf)),
+        );
         let p = sim.control.drive_params();
         if p.dc_link {
             rows.push(row("resistor", "group-drive", "budget-resistor", self.resistor));
@@ -1146,21 +1299,43 @@ pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, Comma
     let mut tally = Tally::new(sim, views);
     let (mut passes, mut last, mut start) = (0usize, sim.control.cycle_passes(), 0.0);
     let (mut started_at, mut before) = (Vec::new(), None);
+    // The warm spans measured so far, of `period` passes each, from the pass `span_from`; the settled rises per pass.
+    let (mut spans, mut period, mut span_from, mut history) = (0usize, 1usize, 2usize, Vec::new());
+    let (mut repeat, mut measured) = (None, None);
     loop {
         sim.step();
         // The controller counts the passes: a cycle of one segment never changes its segment index.
         let now = sim.control.cycle_passes();
         if now != last {
             passes += 1;
-            if warm && passes >= 3 {
-                // A measured pass ended: it is the result, or the next starts at the rises it settles at.
+            let span_ends = passes == span_from + period;
+            if warm && passes >= 3 && span_ends {
+                // A measured span ended: it is the result, or the next starts at the rises it settles at.
                 let load = std::mem::replace(&mut tally, Tally::new(sim, views)).finish(sim, sim.time() - start);
-                if let Some(warm_start) = warm_pass(sim, &started_at, &load, passes - 3, &mut before) {
+                let was = period;
+                let next = warm_pass(
+                    sim,
+                    &started_at,
+                    &load,
+                    spans,
+                    &mut before,
+                    &mut period,
+                    &mut history,
+                    Some(&mut repeat),
+                );
+                if let Some(warm_start) = next {
                     let _ = sim.command(Command::Stop);
+                    // After the repeat span (`warm_pass`) the span before it is the measured one.
+                    let load = if warm_start.repeat.is_some() { measured.take().unwrap_or(load) } else { load };
                     return Ok(CycleLoad { warm_start: Some(warm_start), ..load });
                 }
+                if repeat.is_some() {
+                    measured = Some(load);
+                }
+                spans = if period == was { spans + 1 } else { 0 };
+                span_from = passes;
             }
-            if passes == 2 || warm && passes > 2 {
+            if passes == 2 || warm && passes > 2 && span_from == passes {
                 started_at = fed_back_rises(sim);
                 // The measured pass begins: what was added up on the way here goes. The energy budget starts from
                 // the state after this step, so it leaves the step out.
@@ -1185,17 +1360,22 @@ pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, Comma
         }
     }
     let _ = sim.command(Command::Stop);
+    // Stopped in the repeat span: the span before it stays the measured one, the repeat not told.
+    if let (Some((_, done)), Some(load)) = (repeat, measured) {
+        return Ok(CycleLoad { warm_start: Some(done), ..load });
+    }
     let duration = sim.time() - start;
     // Stopped before a measured pass ended (a trip, or a crash): not converged, where a warm pass had begun; before
     // that the run was measured from cold.
-    let warm_start = (warm && passes > 2).then(|| WarmStart { passes: passes - 2, change: f64::INFINITY });
+    let warm_start =
+        (warm && passes > 2).then(|| WarmStart { passes: passes - 2, change: f64::INFINITY, period: 1, repeat: None });
     Ok(CycleLoad { warm_start, ..tally.finish(sim, duration) })
 }
 
 /// Runs a path given as poses at times (see `Command::Trajectory`) and measures it, with 0.3 s of rest
 /// after its end so that the settling of the tool counts. With effects.thermal_warm_start as `analyse_cycle`: the
-/// path counts as a cycle that repeats, and between passes the machine goes back to the path's start
-/// (`Command::MoveTo`) and rests there, which the rises are then set over.
+/// path counts as a cycle that repeats, and every pass starts from a copy of the machine's start state
+/// (`Sim::snapshot`) with the rises the previous pass settled, so nothing that still rings carries over.
 pub fn analyse_trajectory(sim: &mut Sim, points: Vec<(f64, Vec<f64>)>) -> Result<CycleLoad, CommandError> {
     analyse_trajectory_with(sim, points, true)
 }
@@ -1208,12 +1388,8 @@ pub fn analyse_trajectory_with(
 ) -> Result<CycleLoad, CommandError> {
     let end = points.last().map_or(0.0, |p| p.0) + 0.3;
     let warm = sim.warm_start && !fed_back_rises(sim).is_empty();
-    let first = points.first().map(|p| p.1.clone());
-    // Where the tool stands at the path's start: within the range, where the path's first pose (the setpoint at rest,
-    // where the motors stand) lies beyond an end of a stroke by what belts and gears give, and a move there is refused.
-    let axes = sim.machine.axes().len();
-    let (mut tool, mut speed) = (vec![0.0; axes], vec![0.0; axes]);
-    sim.machine.tool_state(&sim.state, &mut tool, &mut speed);
+    // Every pass starts from the machine's start state (a copy taken here), with the rises the previous one settled.
+    let start_state = sim.snapshot();
     let mut before = None;
     for passes in 0.. {
         let started_at = fed_back_rises(sim);
@@ -1229,24 +1405,24 @@ pub fn analyse_trajectory_with(
         }
         if !sim.control.enabled() {
             return Ok(CycleLoad {
-                warm_start: (passes > 0).then_some(WarmStart { passes, change: f64::INFINITY }),
+                warm_start: (passes > 0).then_some(WarmStart {
+                    passes,
+                    change: f64::INFINITY,
+                    period: 1,
+                    repeat: None,
+                }),
                 ..load
             });
         }
-        if let Some(warm_start) = warm_pass(sim, &started_at, &load, passes, &mut before) {
+        // Every pass starts from the same state: the passes cannot differ but by their rises, so there is no period.
+        let (mut period, mut history) = (1, Vec::new());
+        if let Some(warm_start) =
+            warm_pass(sim, &started_at, &load, passes, &mut before, &mut period, &mut history, None)
+        {
             return Ok(CycleLoad { warm_start: Some(warm_start), ..load });
         }
-        // shortcut: the way back and the rest are left to the controller and the machine's damping, so a lightly damped
-        // machine starts the next pass with what still rings; a pass from the machine's start state would need a Sim
-        // that can be copied.
         let rises = fed_back_rises(sim);
-        if sim.command(Command::MoveTo(first.clone().unwrap_or_default())).is_err() {
-            sim.command(Command::MoveTo(tool.clone()))?;
-        }
-        while sim.control.busy() && sim.time() < 600.0 {
-            sim.step();
-        }
-        sim.run(0.3, |_| {});
+        sim.restore(&start_state).expect("a snapshot of this very simulation");
         set_rises(sim, &rises);
     }
     unreachable!()
@@ -1254,16 +1430,20 @@ pub fn analyse_trajectory_with(
 
 /// The motor's S1 torque at a speed, as Siemens sizes a cycle (RMS torque at the mean speed against it): from the static
 /// torque kt I_0 at standstill (`motor.stall_current_a`) straight to the rated torque at the rated speed, and on along
-/// that line above it. `None` where the config has no stall current.
-/// shortcut: Siemens prints the S1 curve as a graph only; the straight line is exact at its two printed points, and
-/// above the rated speed it ignores the bend the voltage limit gives. Take the printed curve if it is ever extracted.
+/// that line above it. `None` where the config has no stall current. Where it has the maker's printed curve
+/// (`motor.s1_curve_speed_rad_s` and `motor.s1_curve_torque_nm`, digitised from the graph) the torque is read from it,
+/// linearly between its points (`drive::s1_interpolated`), with the bend the voltage limit gives above the rated speed.
 pub fn s1_torque(cfg: &Config, speed: f64) -> Result<Option<f64>, ConfigError> {
+    let curve = crate::drive::s1_curve_of(cfg)?;
+    if !curve.is_empty() {
+        return Ok(Some(crate::drive::s1_interpolated(&curve, speed)));
+    }
     if cfg.get("motor.stall_current_a").is_err() {
         return Ok(None);
     }
     let still = cfg.positive("motor.torque_constant_nm_a")? * cfg.positive("motor.stall_current_a")?;
     let (rated, rated_speed) = (cfg.positive("drive.rated_torque_nm")?, cfg.positive("drive.rated_speed_rad_s")?);
-    Ok(Some((still + (rated - still) * speed.abs() / rated_speed).max(0.0)))
+    Ok(Some(crate::drive::s1_line(still, rated, rated_speed, speed)))
 }
 
 /// One judgement of a cycle: a value the cycle reached against what a part allows.
@@ -1281,9 +1461,34 @@ pub struct Verdict {
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
 /// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
 /// own keys (`drive::Motor`: a stepper's and an induction motor's).
-pub const RATINGS_BEYOND_DEFAULT: [&str; 62] = [
+pub const RATINGS_BEYOND_DEFAULT: [&str; 84] = [
+    // A guide's moment ratings (Mx, My, Mz), which its equivalent load takes where a machine gives the moments.
+    "ratings.guide_moment_x_nm",
+    "ratings.guide_moment_y_nm",
+    "ratings.guide_moment_z_nm",
+    // Optional end stops of a joint that turns on without stops of its own.
+    "joint.stop_min_deg",
+    "joint.stop_max_deg",
+    // A guide set's carriages and rail length for the catalogue's guides, and the share of the moved mass and of the guide
+    // friction that the config's own guide carriages are (`catalog::mechanics`).
+    "ratings.guide_carriages",
+    "ratings.guide_rail_length_m",
+    "mass.guide_carriages_kg",
+    "friction_x.seal_drag_n",
+    "friction.seal_drag_n",
+    "slide.seal_drag_n",
+    // The gear's presliding stiffnesses over K1 and the rack's pressure angle (`mech::Gearbox`, `transmission::RackPinion`).
+    "gearbox.hysteresis_stiffness_factor",
+    "gearbox.mesh_stiffness_factor",
+    "rack.pressure_angle_deg",
+    // The housing's highest rise (`charts::utilisation`).
+    "ratings.housing_max_rise_k",
+    // The maker's printed S1 curve (`s1_torque`).
+    "motor.s1_curve_speed_rad_s",
+    "motor.s1_curve_torque_nm",
     // What `stop::study` judges the worst stop against.
     "ratings.max_stopping_distance_m",
+    "ratings.max_stopping_angle_rad",
     // The gripper's time and hold (`gripper::Gripper`), and the hold's safety factor.
     "effects.gripper_time",
     "gripper",
@@ -1304,6 +1509,9 @@ pub const RATINGS_BEYOND_DEFAULT: [&str; 62] = [
     "path.file",
     "path.program",
     "path.time_optimal",
+    // How fast a robot program turns the tool (`program::read_with`).
+    "program",
+    "program.orientation_speed_rad_s",
     "ratings.settling_tolerance_rad",
     "ratings.pulley_max_torque_nm",
     "ratings.motor_bearing_load_rating_n",
@@ -1348,6 +1556,8 @@ pub const RATINGS_BEYOND_DEFAULT: [&str; 62] = [
     "accuracy.belt_expansion_per_k",
     "ratings.max_positioning_error_m",
     "ratings.max_repeatability_m",
+    "ratings.max_positioning_error_rad",
+    "ratings.max_repeatability_rad",
 ];
 
 fn at_most(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -> Verdict {
@@ -1358,10 +1568,10 @@ fn at_least(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -
     Verdict { check, motor, value, limit, ok: value >= limit }
 }
 
-/// The checks whose value has to stay at or above its limit ("belt-slack": above); every other check's value has to
+/// The checks whose value has to stay at or above its limit ("belt-least-tension": above); every other check's value has to
 /// stay at or below it.
 pub const AT_LEAST: [&str; 10] = [
-    "belt-slack",
+    "belt-least-tension",
     "pulley-bearing-life",
     "gearbox-life",
     "gearbox-gearing-life",
@@ -1373,8 +1583,8 @@ pub const AT_LEAST: [&str; 10] = [
     "collision",
 ];
 
-/// Above 1 it fails (but "belt-slack" at exactly 1). A check of `AT_LEAST` at or below zero (a contact, "collision" at no
-/// clearance; a belt section pushed, "belt-slack" with a negative tension) is infinitely far over: limit over value would
+/// Above 1 it fails (but "belt-least-tension" at exactly 1). A check of `AT_LEAST` at or below zero (a contact, "collision" at no
+/// clearance; a belt section pushed, "belt-least-tension" with a negative tension) is infinitely far over: limit over value would
 /// be negative there, and read as a margin above 100 %.
 pub fn utilisation(v: &Verdict) -> f64 {
     if AT_LEAST.contains(&v.check) && v.value <= 0.0 {
@@ -1398,7 +1608,7 @@ pub fn utilisation(v: &Verdict) -> f64 {
 ///
 /// "gearbox-continuous" judges the cubic mean of that torque against the gearbox's rated torque, as gearbox
 /// makers do; it used to judge the RMS torque, which is for motors and their heat.
-/// "belt-slack" also fails when any belt section spent time without tension.
+/// "belt-least-tension" also fails when any belt section spent time without tension.
 /// With `effects.dc_link` the braking checks judge the simulated DC link: what the capacitors held at the
 /// highest voltage, the mean and peak power the resistor burned, and the highest voltage against the trip
 /// level. Without it they are estimated from the energy the motor fed back, as before.
@@ -1440,6 +1650,7 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     // is judged together, after the axes. An S210 has a resistor of its own and is judged per axis.
     let line_up = cfg.get("drive.braking_module").is_ok() && cfg.bool("drive.braking_module")?;
     let mut line_up_brakes = false;
+    let mut regenerated_excess = 0.0;
     let shared = cfg;
     for (k, m) in load.motors.iter().enumerate() {
         // Each motor against its own motor, drive and ratings.
@@ -1529,12 +1740,14 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
                 let stored = 0.5 * capacitance * 1e-6 * (m.peak_dc_link_voltage.powi(2) - bus * bus);
                 (stored, m.resistor_energy > 0.0, m.resistor_energy / load.duration, m.peak_resistor_power)
             } else {
-                (
-                    m.largest_regeneration,
-                    m.largest_regeneration > room,
-                    m.energy_regenerated / load.duration,
-                    m.peak_regenerated_power,
-                )
+                // The capacitors take the braking up to their room; only what is above it goes to the resistor.
+                // The run's own account where it kept one for this room, else the stretches of a load built by hand.
+                let (excess, fill) = match &m.dc_link_account {
+                    Some(account) if account.room == room => account.finish(),
+                    _ => resistor_excess(&m.regeneration_events, room),
+                };
+                regenerated_excess += excess;
+                (fill, fill > room, excess / load.duration, m.peak_regenerated_power)
             };
             // With a resistor to fall back on, a full DC link is no failure in itself.
             out.push(Verdict {
@@ -1575,7 +1788,7 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
         let energy: f64 = match (simulated, shared) {
             (true, true) => load.motors.first().map_or(0.0, |m| m.resistor_energy),
             (true, false) => load.motors.iter().map(|m| m.resistor_energy).sum(),
-            (false, _) => load.motors.iter().map(|m| m.energy_regenerated).sum(),
+            (false, _) => regenerated_excess,
         };
         if let Some(limit) = rating("braking_resistor_continuous_w") {
             out.push(at_most("braking-resistor-continuous", None, energy / load.duration, limit));
@@ -1613,7 +1826,7 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
             // millisecond; the slack time also counts what falls between.
             let never_slack = load.belt_slack_time.is_none_or(|time| time <= 0.0);
             out.push(Verdict {
-                check: "belt-slack",
+                check: "belt-least-tension",
                 motor: None,
                 value: slackest,
                 limit,
@@ -1680,6 +1893,10 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     // a winding that does not settle), whose cause fails a verdict of its own (the trip's, the crash's, motor-thermal).
     if let Some(warm) = load.warm_start.filter(|w| w.change.is_finite()) {
         out.push(at_most("thermal-warm-start", None, warm.change, WARM_START_TOLERANCE_K));
+        // Where it did not converge: whether two passes started at the same rises settle alike (`WarmStart::repeat`).
+        if let Some(apart) = warm.repeat {
+            out.push(at_most("thermal-cycle-repeat", None, apart, WARM_START_TOLERANCE_K));
+        }
     }
     // A pick from the conveyor: the tool on the part along the belt while the gripper closes, and no part left unpicked.
     if let Some(c) = load.conveyor {
@@ -1689,22 +1906,159 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
     Ok(out)
 }
 
-/// Nominal life of the most loaded guide in km, where the machine reports guide loads and the config has
+/// The equivalent load of a guide: the cubic mean cbrt(sum F^3 w / sum w) with the weight w (|speed|: over distance);
+/// 0 where nothing moved.
+fn equivalent_load(cubed_sum: f64, weight_sum: f64) -> f64 {
+    if weight_sum > 0.0 { (cubed_sum / weight_sum).cbrt() } else { 0.0 }
+}
+
+/// The energy a braking resistor takes per cycle, J, and the most the DC link's capacitors would have to hold, J, from the
+/// cycle's stretches `events` (`MotorLoad::regeneration_events`: fed back positive, drawn negative) when the capacitors
+/// hold `room` J above the bus: the link fills with what is fed back, spills what is above its room into the resistor and
+/// empties by what is drawn (to the bus, no lower; its own losses left out, so the estimate errs high). Braking events
+/// with too little drawn between them add up. The cycle repeats: the link enters it as the cycle before left it, so the
+/// figures are those of a second pass.
+fn resistor_excess(events: &[f64], room: f64) -> (f64, f64) {
+    let mut account = LinkAccount::new(room);
+    events.iter().for_each(|&e| account.push(e));
+    account.finish()
+}
+
+/// The DC link's running account of `resistor_excess`, kept as the stretches come (`Tally`, where the motor's room is
+/// known at the run: `Controller::dc_link_room`). Only the stretches until the link's fill no longer depends on how full
+/// it entered the cycle are kept: until the pass entered empty and the one entered full meet, which they do the first
+/// time the link empties or fills whatever it held (a hanging axis at rest draws, so empties it at once). After that one
+/// fill stands for every entry, and what it spills and the most it holds are summed as they come. At most the stretches
+/// up to that point, so on a run at rest with noisy power the list stays at the few stretches before the link first
+/// emptied, where before it grew by one per sign change of the power (about 90 per cycle). Same figures as the two passes
+/// over the whole list, to rounding (the spills are summed in another order).
+///
+/// A link that neither empties nor fills (what is fed back and drawn stays within less than its room for the whole run)
+/// never lets the passes meet. Past `LINK_PREFIX_CAP` stretches the account keeps, instead of them, `LINK_GRID` passes
+/// entered at fills spread evenly over the voltage window, 0 to the room, and reads the cycle's figures between the two
+/// next to its entry: fill, spill and most are each at most 1:1 in the entry fill (what one enters with more is spilled,
+/// drawn less or held), so the figures are off by at most half the grid's step, room / (2 (LINK_GRID − 1)).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LinkAccount {
+    /// The room it was kept for, J.
+    pub room: f64,
+    /// The stretches before the passes entered empty and full met.
+    prefix: Vec<f64>,
+    /// Past `LINK_PREFIX_CAP` stretches in `prefix`: per entry fill j room / (LINK_GRID − 1) its fill, spill and most
+    /// over the stretches until the passes met, in place of them.
+    grid: Vec<[f64; 3]>,
+    /// The fill of the pass entered empty, and of the one entered full, J; one fill once they have met.
+    low: f64,
+    high: f64,
+    met: bool,
+    /// After they met: what the link spilled into the resistor, J, and the most it would have held.
+    spilled: f64,
+    most: f64,
+}
+
+impl LinkAccount {
+    pub fn new(room: f64) -> Self {
+        Self { room, high: room, ..Default::default() }
+    }
+
+    /// One stretch: fed back positive, drawn negative, J.
+    pub fn push(&mut self, e: f64) {
+        let room = self.room;
+        if self.met {
+            let fill = (self.low + e).max(0.0);
+            (self.spilled, self.most, self.low) =
+                (self.spilled + (fill - room).max(0.0), self.most.max(fill), fill.min(room));
+            return;
+        }
+        if self.grid.is_empty() {
+            self.prefix.push(e);
+            if self.prefix.len() > LINK_PREFIX_CAP {
+                self.grid = (0..LINK_GRID)
+                    .map(|j| {
+                        let mut pass = [j as f64 * room / (LINK_GRID - 1) as f64, 0.0, 0.0];
+                        self.prefix.iter().for_each(|&e| link_step(&mut pass, e, room));
+                        pass
+                    })
+                    .collect();
+                self.prefix = Vec::new();
+            }
+        } else {
+            self.grid.iter_mut().for_each(|pass| link_step(pass, e, room));
+        }
+        let step = |fill: f64| (fill + e).max(0.0).min(room);
+        (self.low, self.high) = (step(self.low), step(self.high));
+        // Both at 0 or both at the room, exactly.
+        self.met = self.low == self.high;
+    }
+
+    /// What the resistor takes per cycle, J, and the most the link would have to hold, J (`resistor_excess`): the cycle
+    /// entered as it left, which is as the pass entered empty left it.
+    pub fn finish(&self) -> (f64, f64) {
+        let mut pass = [self.low, self.spilled, self.most];
+        self.prefix.iter().for_each(|&e| link_step(&mut pass, e, self.room));
+        if self.grid.len() >= 2 {
+            // Between the two passes of the grid next to the entry fill.
+            let at = self.low / self.room * (self.grid.len() - 1) as f64;
+            let j = (at.floor() as usize).min(self.grid.len() - 2);
+            let (u, [a, b]) = (at - j as f64, [self.grid[j], self.grid[j + 1]]);
+            let between = |q: usize| a[q] + u * (b[q] - a[q]);
+            (pass[1], pass[2]) = (pass[1] + between(1), pass[2].max(between(2)));
+        }
+        (pass[1], pass[2])
+    }
+}
+
+/// Stretches a link account keeps before it keeps passes over the voltage window in their place (`LinkAccount`): some
+/// 1500 cycles of a machine at rest whose power changes sign about 90 times per cycle.
+pub const LINK_PREFIX_CAP: usize = 1 << 17;
+
+/// Entry fills over the voltage window a link account keeps passes for past `LINK_PREFIX_CAP` (`LinkAccount`).
+pub const LINK_GRID: usize = 257;
+
+/// One stretch `e` on a pass of a link of `room` J: its fill, what it spilled and the most it held, J.
+fn link_step(pass: &mut [f64; 3], e: f64, room: f64) {
+    let fill = (pass[0] + e).max(0.0);
+    pass[2] = pass[2].max(fill);
+    pass[1] += (fill - room).max(0.0);
+    pass[0] = fill.min(room);
+}
+
+/// Nominal life of the guide that has the least, in km, where the machine reports guide loads and the config has
 /// `ratings.guide_dynamic_load_rating_n`: L10 = (C / P)^3 * 50 km, the catalogue formula for ball guides,
-/// with the dynamic load rating C and for P the cubic mean of the guide load over the cycle's time.
+/// with the dynamic load rating C and for P the cubic mean of the guide load over the cycle's distance (weighted by
+/// the axis's |speed|, as the pulley's radial load is; over time where the guide's axis is unknown). The lowest over
+/// all guides (`CycleLoad::guides`).
 ///
 /// This is the catalogue formula and nothing more, and it is not validated: no load factors for shock,
-/// temperature or hardness, no moments on single blocks, the mean taken over time and not over distance,
+/// temperature or hardness, no moments on single blocks,
 /// and a guide load that is itself an estimate from the rigid model.
 pub fn guide_life_km(cfg: &Config, load: &CycleLoad) -> Option<f64> {
     let rating = cfg.f64("ratings.guide_dynamic_load_rating_n").ok()?;
-    Some((rating / load.guide_load?.1).powi(3) * 50.0)
+    guides_of(load).iter().map(|g| (rating / g.equivalent).powi(3) * 50.0).reduce(f64::min)
 }
 
-/// `guide_life_km` in hours: the distance over the mean speed of the guide's axis over the cycle
-/// (`CycleLoad::guide_speed`).
+/// `guide_life_km` in hours: the distance over the mean speed of the guide's axis over the cycle (`GuideLoad::speed`),
+/// times the reliability factor a1 as every other life (`reliability_factor`); the lowest over the guides whose axis is
+/// known.
 pub fn guide_life_h(cfg: &Config, load: &CycleLoad) -> Option<f64> {
-    Some(guide_life_km(cfg, load)? * 1e3 / (load.guide_speed? * 3600.0))
+    let rating = cfg.f64("ratings.guide_dynamic_load_rating_n").ok()?;
+    let a1 = reliability_factor(cfg)?;
+    let hours = |g: &GuideLoad| -> Option<f64> {
+        Some((rating / g.equivalent).powi(3) * 50.0 * 1e3 / (g.speed? * 3600.0) * a1)
+    };
+    guides_of(load).iter().filter_map(hours).reduce(f64::min)
+}
+
+/// The guides of a load: `CycleLoad::guides`, or the one pair of `guide_load` and `guide_speed` where a load was built
+/// without them.
+fn guides_of(load: &CycleLoad) -> Vec<GuideLoad> {
+    if !load.guides.is_empty() {
+        return load.guides.clone();
+    }
+    load.guide_load
+        .map(|(peak, equivalent)| GuideLoad { peak, equivalent, speed: load.guide_speed })
+        .into_iter()
+        .collect()
 }
 
 /// The width of the speed bands of `MotorLoad::gearbox_torque_by_speed`, rad/s of the motor.
@@ -1725,9 +2079,17 @@ pub fn reliability_factor(cfg: &Config) -> Option<f64> {
     (90.0..=99.95).contains(&r).then(|| 0.95 * ((100.0 / r).ln() / (100.0_f64 / 90.0).ln()).powf(2.0 / 3.0) + 0.05)
 }
 
-/// The mean speed of the gearbox output (the pulley) in r/min: the motor's over `gearbox.ratio`.
+/// This motor's own `gearbox.ratio` (`catalog::motor_config`: a `[gearbox.<id>]` table over the shared one), so a machine
+/// whose motors have different ratios gets each gearbox's own speed. Applying it to a config that is already the
+/// motor's own changes nothing.
+fn own_ratio(cfg: &Config, m: &MotorLoad) -> f64 {
+    let own = crate::catalog::motor_config(cfg, &m.id);
+    own.as_ref().ok().unwrap_or(cfg).f64("gearbox.ratio").unwrap_or(1.0)
+}
+
+/// The mean speed of the gearbox output (the pulley) in r/min: the motor's over its own `gearbox.ratio`.
 fn output_rpm(cfg: &Config, m: &MotorLoad) -> f64 {
-    m.mean_speed * 30.0 / std::f64::consts::PI / cfg.f64("gearbox.ratio").unwrap_or(1.0)
+    m.mean_speed * 30.0 / std::f64::consts::PI / own_ratio(cfg, m)
 }
 
 /// The rating life of the bearing that takes the belt's pull on this motor's pulley shaft, in hours, where the machine
@@ -1883,7 +2245,7 @@ pub fn gearbox_gearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
         rating("gearbox_gearing_wohler_exponent")?,
     );
     m.gearbox_torque?;
-    let per_hour = 3600.0 / (2.0 * std::f64::consts::PI) / cfg.f64("gearbox.ratio").unwrap_or(1.0);
+    let per_hour = 3600.0 / (2.0 * std::f64::consts::PI) / own_ratio(cfg, m);
     let life = gearing_life_h(
         m.gearbox_torque_spectrum.iter().enumerate().map(|(i, speed)| (torque_band_floor(i + 1), speed * per_hour)),
         rated,
@@ -1902,7 +2264,7 @@ pub fn gearbox_gearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
 /// No a_ISO: Siemens' 25000 h are for its own grease and seals.
 pub fn motor_bearing_life_h(cfg: &Config, m: &MotorLoad) -> Option<f64> {
     let c = cfg.f64("ratings.motor_bearing_load_rating_n").ok()?;
-    if cfg.f64("gearbox.ratio").unwrap_or(1.0) != 1.0 {
+    if own_ratio(cfg, m) != 1.0 {
         return None;
     }
     Some(reliability_factor(cfg)? * rating_life_h(c, m.radial_load_equivalent?, output_rpm(cfg, m)))
@@ -1948,7 +2310,7 @@ pub fn belt_tooth_utilisation(cfg: &Config, m: &MotorLoad) -> Result<Option<f64>
             load[i - 1] + (load[i] - load[i - 1]) * (n - rpm[i - 1]) / (rpm[i] - rpm[i - 1])
         }
     };
-    let ratio = cfg.f64("gearbox.ratio").unwrap_or(1.0);
+    let ratio = own_ratio(cfg, m);
     let teeth = match m.belt_wrap {
         Some(wrap) => wrap * radius / cfg.positive("belt.tooth_pitch_m")?,
         None => teeth,
@@ -2038,7 +2400,10 @@ pub fn set_bounded(cfg: &mut Config, path: &str, value: f64) -> Result<(), Confi
 /// Values (by the start of their path) that only some effects use, and those effects: they change nothing while all
 /// of them are off. None: a value no cycle uses, the discharge of a disabled drive's DC link. The parts warm with
 /// effects.thermal_feedback too (`sim::heats`).
-const PATH_EFFECTS: [(&str, &[&str]); 34] = [
+const PATH_EFFECTS: [(&str, &[&str]); 38] = [
+    ("follower.roller_width_m", &["follower_lift_off"]),
+    ("follower.contact_", &["follower_lift_off"]),
+    ("follower.guide_friction_n", &["follower_lift_off"]),
     ("thermal.", &["part_heating", "thermal_feedback"]),
     ("motor.pole_pairs", &["field_weakening"]),
     ("motor.d_inductance_h", &["field_weakening"]),
@@ -2064,6 +2429,7 @@ const PATH_EFFECTS: [(&str, &[&str]); 34] = [
     ("slide.friction_stribeck_m_s", &["slide_presliding"]),
     ("slide.presliding_stiffness_n_m", &["slide_presliding"]),
     ("screw.friction_coefficient", &["screw_lead_efficiency"]),
+    ("screw.fixed_bearing_at_m", &["screw_stiffness_with_position"]),
     ("gearbox.no_load_", &["gearbox_drag"]),
     ("gearbox.lost_motion_band_rad", &["gearbox_lost_motion"]),
     ("gearbox.hysteresis_rad", &["gearbox_lost_motion"]),
@@ -2564,17 +2930,35 @@ pub struct FrontPoint {
 
 /// The energy a cycle takes from the supply, J: what the drives drew less what they fed back, plus what the braking
 /// resistor burned of what they fed back (with the DC link simulated; a shared one counted once). What the capacitors
-/// hold more at the end than at the start counts as fed back.
-// shortcut: the line module's own loss (effects.regenerative_supply) and the bleeder are left out, add them once a front
-// is drawn for a regenerative supply.
+/// hold more at the end than at the start counts as fed back. With the DC link simulated also what the bleeders took
+/// out of it and the line module's (or an S210's rectifier's) own loss, `effects.dc_link`'s
+/// `ratings.line_module_efficiency` eta both ways: it draws `drawn / eta` from the line for the `drawn` it puts into the
+/// DC link and gives the mains `eta * fed` of the `fed` it takes out (`effects.regenerative_supply`), so it loses
+/// `(1/eta - 1) drawn + (1 - eta) fed`; with the load's `line_module_energy = drawn + fed` and `mains_energy = eta * fed`,
+/// `fed = mains_energy / eta`. The DC link's balance, drawn - fed = net + burned + bleeders (+ what the capacitors gain),
+/// makes this the energy drawn from the line less what the mains got back. A shared link is counted once, with the
+/// shared config's efficiency; a link of its own with its motor's (`catalog::motor_config`).
 pub fn supply_energy(cfg: &Config, load: &CycleLoad) -> f64 {
     let net: f64 = load.motors.iter().map(|m| m.energy_in - m.energy_regenerated).sum();
-    let burned: f64 = if cfg.bool("effects.shared_dc_link").unwrap_or(false) {
-        load.motors.first().map_or(0.0, |m| m.resistor_energy)
-    } else {
-        load.motors.iter().map(|m| m.resistor_energy).sum()
-    };
-    net + burned
+    let shared = cfg.bool("effects.shared_dc_link").unwrap_or(false);
+    // Every drive of a shared link reports the link's resistor and line module as its own.
+    let links: Vec<&MotorLoad> =
+        if shared { load.motors.iter().take(1).collect() } else { load.motors.iter().collect() };
+    let burned: f64 = links.iter().map(|m| m.resistor_energy).sum();
+    if !cfg.bool("effects.dc_link").unwrap_or(false) {
+        return net + burned;
+    }
+    let bled: f64 = load.motors.iter().map(|m| m.discharge_energy).sum();
+    let line: f64 = links
+        .iter()
+        .map(|m| {
+            let own = if shared { None } else { crate::catalog::motor_config(cfg, &m.id).ok() };
+            let eta = own.as_ref().unwrap_or(cfg).positive("ratings.line_module_efficiency").unwrap_or(1.0);
+            let fed = m.mains_energy / eta;
+            (1.0 / eta - 1.0) * (m.line_module_energy - fed) + (1.0 - eta) * fed
+        })
+        .sum();
+    net + burned + bled + line
 }
 
 /// The points that no other one beats: none other is as good in all three figures and better in one. Fastest first;
@@ -3012,6 +3396,37 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
     optimise_cycle_with(entry, cfg, &OptimiseOptions { max_runs, robust: false, pareto: false, worst: false })
 }
 
+/// The fastest of the steps 1 to `top` that passes, judged by `pass` from the fastest down and the first that passes
+/// taken; `None` where none does (step 0, the cycle as configured, passes by definition and is not judged). Pass and fail
+/// need not follow the steps (a faster step may pass where a slower one fails), so no step above the result is left out:
+/// the cost is one judgement per step above the result and the result's own, never more than a bisection followed by
+/// judging the steps above its result would take.
+fn fastest_passing<T, E>(
+    top: usize,
+    mut pass: impl FnMut(usize) -> Result<Option<T>, E>,
+) -> Result<Option<(usize, T)>, E> {
+    for k in (1..=top).rev() {
+        if let Some(passed) = pass(k)? {
+            return Ok(Some((k, passed)));
+        }
+    }
+    Ok(None)
+}
+
+/// The second input shaper's frequency the cycle optimiser tries (Hz) with the plan at `pose`: `profile.shaper2_frequency_hz`
+/// where set (above 0); otherwise the second of the modes the shaper acts on (`Machine::sway_modes`: a crane's upper swing
+/// with the hook block, not the load's bounce on its rope), or, where the machine tells only one, its resonance where
+/// that is more than 10 % off `profile.shaper_frequency_hz`. `None`: no second shaper to try.
+pub fn second_shaper_frequency(machine: &dyn Machine, pose: &[f64], cfg: &Config) -> Result<Option<f64>, ConfigError> {
+    let (first, configured) =
+        (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper2_frequency_hz")?);
+    if configured > 0.0 {
+        return Ok(Some(configured));
+    }
+    let second = machine.sway_modes(pose).get(1).map(|mode| mode.hz);
+    Ok(second.or(machine.resonance_hz(pose).filter(|f| (f / first - 1.0).abs() > 0.1)))
+}
+
 /// `optimise_cycle`, and with `options.robust` a result that passes in the error bands: the fastest setting found is
 /// judged with `verdict_bands` over the config's `[bounds]`; where it fails, the accepted steps of the search are gone
 /// back one at a time, each judged in the bands, until one passes (2 n + 1 cycles each, n the bounds). With
@@ -3024,6 +3439,8 @@ pub fn optimise_cycle(entry: &MachineEntry, cfg: &Config, max_runs: usize) -> Re
 /// lowest collision body reaches below the tool. A lift that an obstacle raises is tried rounded through a via point
 /// over that obstacle as well, its ends at the clearance above pick and place; every via point's path is checked
 /// against the obstacles before it runs.
+///
+/// With `options.worst` the accepted steps are judged at the worst corner from the fastest down (`fastest_passing`).
 pub fn optimise_cycle_with(
     entry: &MachineEntry,
     cfg: &Config,
@@ -3054,14 +3471,8 @@ pub fn optimise_cycle_with(
         }
     }
     let resonance = probe.machine.resonance_hz(probe.control.planned_pos());
-    let (first, configured) =
-        (cfg.positive("profile.shaper_frequency_hz")?, cfg.non_negative("profile.shaper2_frequency_hz")?);
-    let second_mode = probe.machine.modes(probe.control.planned_pos()).get(1).map(|mode| mode.hz);
-    let second_frequency = if configured > 0.0 {
-        Some(configured)
-    } else {
-        second_mode.or(resonance.filter(|f| (f / first - 1.0).abs() > 0.1))
-    };
+    let configured = cfg.non_negative("profile.shaper2_frequency_hz")?;
+    let second_frequency = second_shaper_frequency(probe.machine.as_ref(), probe.control.planned_pos(), cfg)?;
     // In the axis's own unit: `axis.x.max_velocity_m_s`, `axis.c.max_velocity_rad_s` (with metres alone, a machine with an
     // axis in rad could not be built and its cycle was said to fail a verdict).
     let limits = ["max_velocity_{unit}_s", "max_acceleration_{unit}_s2", "max_jerk_{unit}_s3"];
@@ -3413,29 +3824,21 @@ pub fn optimise_cycle_with(
             }
             Ok((None, worst))
         };
-        // Bisection over the accepted steps: step 0 (the cycle as configured) passes what it is judged on by definition,
-        // the fastest is judged first. Each search starts from the worst corners of the one before.
-        // shortcut: bisection takes pass or fail to follow the steps (a faster step fails where a slower one does); where
-        // it does not, the result still passes but may be slower than a step that passes, judge them all if that matters.
-        let (mut lo, mut hi, mut result) = (0, last, accepted[0].clone());
-        if nominal_fails.is_empty() {
-            (lo, result) = (last, (best.clone(), best_load.clone()));
-        } else if last > 0 && matches!(judged_on(&nominal_fails)[..], [] | ["collision"]) {
-            let (passed, worst) = pass(last, &from)?;
-            from = worst;
-            if let Some(passed) = passed {
-                (lo, result) = (last, passed);
-            }
-        }
-        while hi - lo > 1 {
-            let mid = (lo + hi) / 2;
-            let (passed, worst) = pass(mid, &from)?;
-            from = worst;
-            match passed {
-                Some(passed) => (lo, result) = (mid, passed),
-                None => hi = mid,
-            }
-        }
+        // The accepted steps from the fastest down, the first that passes what it is judged on taken (`fastest_passing`);
+        // step 0 (the cycle as configured) passes by definition. Each search starts from the worst corners of the one
+        // before. The fastest is not judged again where the nominal search already failed it on a check not excused.
+        let (lo, result) = if nominal_fails.is_empty() {
+            (last, (best.clone(), best_load.clone()))
+        } else {
+            let top =
+                if matches!(judged_on(&nominal_fails)[..], [] | ["collision"]) { last } else { last.saturating_sub(1) };
+            let found = fastest_passing(top, |k| {
+                let (passed, worst) = pass(k, &from)?;
+                from = worst;
+                Ok(passed)
+            })?;
+            found.unwrap_or_else(|| (0, accepted[0].clone()))
+        };
         let (nominal_duration, steps_back) = (best_load.duration, last - lo);
         (best, best_load) = result;
         robust = Some(Robust { nominal_duration, nominal_fails, excused, steps_back, runs: corner_runs, worst: true });
@@ -3580,7 +3983,7 @@ impl Sensitivity {
 /// The cycle with the config as it is, and with each of `paths` at a low and at a high value, one at a
 /// time: the bounds the config gives the parameter (see `bounds`), or the value scaled by 1 - delta and
 /// by 1 + delta where it gives none. Shows which of the uncertain parameters the results depend on, and
-/// so which are worth measuring. A parameter that is not a number, whose changed value the machine
+/// so which are worth measuring. A parameter of value 0 without bounds (nothing to scale), one that is not a number, whose changed value the machine
 /// refuses, or that only an effect that is off uses (see `bounds`), is left out, and so are the analysis' own choices
 /// in `NOT_MACHINE_DATA`.
 pub fn sensitivity(
@@ -3598,14 +4001,12 @@ pub fn sensitivity(
         .filter(|path| !effect_off(cfg, path) && !NOT_MACHINE_DATA.contains(&path.as_str()))
         .filter_map(|path| {
             let value = cfg.f64(path).ok()?;
-            Some((
-                path,
-                value,
-                configured
-                    .iter()
-                    .find(|b| b.0 == *path)
-                    .map_or((value * (1.0 - delta), value * (1.0 + delta)), |b| (b.1, b.2)),
-            ))
+            let bound = configured.iter().find(|b| b.0 == *path).map(|b| (b.1, b.2));
+            // A value of 0 scaled by 1 -+ delta stays 0: without a range of its own it is not varied (left out).
+            if bound.is_none() && value == 0.0 {
+                return None;
+            }
+            Some((path, value, bound.unwrap_or((value * (1.0 - delta), value * (1.0 + delta)))))
         })
         .collect();
     // Run 0 is the config as it is, then each parameter at its low and at its high value.
@@ -3711,7 +4112,7 @@ pub fn frequency_sweep(
 }
 
 /// A response is measured over whole periods: at 0 Hz that never ends, and below it means nothing.
-fn check_frequencies(frequencies: &[f64]) -> Result<(), ConfigError> {
+pub(crate) fn check_frequencies(frequencies: &[f64]) -> Result<(), ConfigError> {
     if frequencies.iter().all(|f| f.is_finite() && *f > 0.0) {
         Ok(())
     } else {
@@ -3731,6 +4132,26 @@ pub fn modes_along(machine: &dyn Machine, pose: &[f64], axis: usize, points: usi
             (at[axis], machine.modes(&at))
         })
         .collect()
+}
+
+/// The small-amplitude modes (`Machine::modes_small_amplitude`) at the places of `modes_along`'s `rows`, or `None` where
+/// they are the large-amplitude ones everywhere (no gearbox hysteresis): the front ends' second column.
+pub fn small_amplitude_along(
+    machine: &dyn Machine,
+    pose: &[f64],
+    axis: usize,
+    rows: &[(f64, Vec<Mode>)],
+) -> Option<Vec<Vec<Mode>>> {
+    let small: Vec<Vec<Mode>> = rows
+        .iter()
+        .map(|(position, _)| {
+            let mut at = pose.to_vec();
+            at[axis] = *position;
+            machine.modes_small_amplitude(&at)
+        })
+        .collect();
+    let same = |a: &[Mode], b: &[Mode]| a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.hz == b.hz);
+    (!rows.iter().zip(&small).all(|((_, large), small)| same(large, small))).then_some(small)
 }
 
 /// Frequencies spaced evenly on a logarithmic axis, both ends included.
@@ -3863,6 +4284,10 @@ pub struct LoopPoint {
 /// L = -U / E and S = E / D at the frequency. Everything between the two is in L: velocity filter, PI, torque
 /// filter, delays, current loop, the elastic mechanics, and the position loop around it. Sampled at the velocity
 /// cycle, over whole periods: at least 0.1 s to settle and 0.1 s to measure.
+///
+/// Measured with `effects.gearbox_efficiency` off: at standstill the efficiency's fade with the transmitted power
+/// (`Gearbox::loss_factor`) would act as a large damper on the small-signal torque and hide the loop (a crane hoist read
+/// no gain crossover); the small-signal loop is that of the lossless gearbox.
 pub fn velocity_loop_response(
     entry: &MachineEntry,
     cfg: &Config,
@@ -3871,67 +4296,76 @@ pub fn velocity_loop_response(
     amplitude: f64,
 ) -> Result<Vec<LoopPoint>, ConfigError> {
     check_frequencies(frequencies)?;
-    let mut out = Vec::new();
-    for &frequency in frequencies {
-        let (mut sim, _) = settled(entry, cfg, 0)?;
-        if motor >= sim.control.drives.len() {
-            return Err(ConfigError::Invalid("motor".into()));
-        }
-        let every = (sim.control.drive_params().velocity_cycle / sim.dt).round() as u64;
-        let (omega, t0, period) = (std::f64::consts::TAU * frequency, sim.time(), 1.0 / frequency);
-        let whole = |seconds: f64| ((seconds / period).ceil().max(5.0) * period / sim.dt).round() as u64;
-        let (settle_steps, total) = (whole(0.1), whole(0.1) + whole(0.1));
-        let (mut u_ab, mut e_ab, mut samples) = ([0.0; 2], [0.0; 2], 0.0);
-        let (mut torque_ab, mut speed_ab) = ([0.0; 2], [0.0; 2]);
-        let (mut seen, mut limited, mut pos, mut speed) =
-            (Vec::new(), false, vec![0.0; sim.control.drives.len()], vec![0.0; sim.control.drives.len()]);
-        for step in 0..total {
-            let due = sim.step % every == 0;
-            let (s, c) = (omega * (sim.time() - t0)).sin_cos();
-            if due {
-                sim.control.drives[motor].torque_injection = amplitude * s;
-            }
-            sim.step();
-            if due {
-                // What reaches the motor clipped by the torque limit is no longer the linear loop being measured.
-                sim.machine.motor_state(&sim.state, &mut pos, &mut speed);
-                let (p, drive) = (sim.control.drive_params_of(motor), &sim.control.drives[motor]);
-                let (low, high) = p.torque_range_at(speed[motor], drive.max_voltage(p));
-                let e = drive.torque_demand + drive.torque_injection;
-                limited |= !(low < e && e < high);
-                if step >= settle_steps {
-                    let u = drive.torque_demand;
-                    (u_ab[0], u_ab[1], e_ab[0], e_ab[1]) =
-                        (u_ab[0] + u * s, u_ab[1] + u * c, e_ab[0] + e * s, e_ab[1] + e * c);
-                    samples += 1.0;
-                    seen.push((s, c, e));
-                    let (t, v) = (drive.torque, speed[motor]);
-                    (torque_ab[0], torque_ab[1], speed_ab[0], speed_ab[1]) =
-                        (torque_ab[0] + t * s, torque_ab[1] + t * c, speed_ab[0] + v * s, speed_ab[1] + v * c);
-                }
-            }
-        }
-        // Phasors (sine part, cosine part) of u and e; L = -U / E.
-        let (u, e) =
-            ([2.0 * u_ab[0] / samples, 2.0 * u_ab[1] / samples], [2.0 * e_ab[0] / samples, 2.0 * e_ab[1] / samples]);
-        // What of e is not the sine of the injection and not a constant: a loop that moves on its own (unstable, or in a
-        // limit cycle) shows here. More of it than the injection itself, and the point is not a measurement of L.
-        let mean = seen.iter().map(|(_, _, x)| x).sum::<f64>() / samples;
-        let rest =
-            (seen.iter().map(|(s, c, x)| (x - mean - e[0] * s - e[1] * c).powi(2)).sum::<f64>() / samples).sqrt();
-        let e2 = e[0] * e[0] + e[1] * e[1];
-        let (re, im) = if limited || !(rest < amplitude) {
-            (f64::NAN, f64::NAN)
-        } else {
-            (-(u[0] * e[0] + u[1] * e[1]) / e2, -(u[1] * e[0] - u[0] * e[1]) / e2)
-        };
-        // Plant = speed / torque, phasors as (sine, cosine) parts; NaN with L.
-        let (t, v) = (torque_ab, speed_ab);
-        let t2 = (t[0] * t[0] + t[1] * t[1]) * if re.is_nan() { f64::NAN } else { 1.0 };
-        let plant = [(v[0] * t[0] + v[1] * t[1]) / t2, (v[1] * t[0] - v[0] * t[1]) / t2];
-        out.push(LoopPoint { frequency, re, im, sensitivity: e2.sqrt() / amplitude, plant });
+    let cfg = &lossless(cfg)?;
+    frequencies.iter().map(|&frequency| loop_point(settled(entry, cfg, 0)?.0, motor, frequency, amplitude)).collect()
+}
+
+/// The config a velocity loop is measured with (`velocity_loop_response`): effects.gearbox_efficiency off.
+fn lossless(cfg: &Config) -> Result<Config, ConfigError> {
+    let mut lossless = cfg.clone();
+    if lossless.get("effects.gearbox_efficiency").is_ok() {
+        lossless.set_text("effects.gearbox_efficiency = false")?;
     }
-    Ok(out)
+    Ok(lossless)
+}
+
+/// One point of `velocity_loop_response`, measured on `sim` settled at its start pose.
+fn loop_point(mut sim: Sim, motor: usize, frequency: f64, amplitude: f64) -> Result<LoopPoint, ConfigError> {
+    if motor >= sim.control.drives.len() {
+        return Err(ConfigError::Invalid("motor".into()));
+    }
+    let every = (sim.control.drive_params().velocity_cycle / sim.dt).round() as u64;
+    let (omega, t0, period) = (std::f64::consts::TAU * frequency, sim.time(), 1.0 / frequency);
+    let whole = |seconds: f64| ((seconds / period).ceil().max(5.0) * period / sim.dt).round() as u64;
+    let (settle_steps, total) = (whole(0.1), whole(0.1) + whole(0.1));
+    let (mut u_ab, mut e_ab, mut samples) = ([0.0; 2], [0.0; 2], 0.0);
+    let (mut torque_ab, mut speed_ab) = ([0.0; 2], [0.0; 2]);
+    let (mut seen, mut limited, mut pos, mut speed) =
+        (Vec::new(), false, vec![0.0; sim.control.drives.len()], vec![0.0; sim.control.drives.len()]);
+    for step in 0..total {
+        let due = sim.step.is_multiple_of(every);
+        let (s, c) = (omega * (sim.time() - t0)).sin_cos();
+        if due {
+            sim.control.drives[motor].torque_injection = amplitude * s;
+        }
+        sim.step();
+        if due {
+            // What reaches the motor clipped by the torque limit is no longer the linear loop being measured.
+            sim.machine.motor_state(&sim.state, &mut pos, &mut speed);
+            let (p, drive) = (sim.control.drive_params_of(motor), &sim.control.drives[motor]);
+            let (low, high) = p.torque_range_at(speed[motor], drive.max_voltage(p));
+            let e = drive.torque_demand + drive.torque_injection;
+            limited |= !(low < e && e < high);
+            if step >= settle_steps {
+                let u = drive.torque_demand;
+                (u_ab[0], u_ab[1], e_ab[0], e_ab[1]) =
+                    (u_ab[0] + u * s, u_ab[1] + u * c, e_ab[0] + e * s, e_ab[1] + e * c);
+                samples += 1.0;
+                seen.push((s, c, e));
+                let (t, v) = (drive.torque, speed[motor]);
+                (torque_ab[0], torque_ab[1], speed_ab[0], speed_ab[1]) =
+                    (torque_ab[0] + t * s, torque_ab[1] + t * c, speed_ab[0] + v * s, speed_ab[1] + v * c);
+            }
+        }
+    }
+    // Phasors (sine part, cosine part) of u and e; L = -U / E.
+    let (u, e) =
+        ([2.0 * u_ab[0] / samples, 2.0 * u_ab[1] / samples], [2.0 * e_ab[0] / samples, 2.0 * e_ab[1] / samples]);
+    // What of e is not the sine of the injection and not a constant: a loop that moves on its own (unstable, or in a
+    // limit cycle) shows here. More of it than the injection itself, and the point is not a measurement of L.
+    let mean = seen.iter().map(|(_, _, x)| x).sum::<f64>() / samples;
+    let rest = (seen.iter().map(|(s, c, x)| (x - mean - e[0] * s - e[1] * c).powi(2)).sum::<f64>() / samples).sqrt();
+    let e2 = e[0] * e[0] + e[1] * e[1];
+    let (re, im) = if limited || !(rest < amplitude) {
+        (f64::NAN, f64::NAN)
+    } else {
+        (-(u[0] * e[0] + u[1] * e[1]) / e2, -(u[1] * e[0] - u[0] * e[1]) / e2)
+    };
+    // Plant = speed / torque, phasors as (sine, cosine) parts; NaN with L.
+    let (t, v) = (torque_ab, speed_ab);
+    let t2 = (t[0] * t[0] + t[1] * t[1]) * if re.is_nan() { f64::NAN } else { 1.0 };
+    let plant = [(v[0] * t[0] + v[1] * t[1]) / t2, (v[1] * t[0] - v[0] * t[1]) / t2];
+    Ok(LoopPoint { frequency, re, im, sensitivity: e2.sqrt() / amplitude, plant })
 }
 
 /// What an open-loop response says about the stability of the loop.
@@ -3940,7 +4374,8 @@ pub struct LoopMargins {
     /// The gain crossover (|L| = 1) with the smallest phase margin; NaN without one.
     pub crossover_hz: f64,
     /// 180 degrees plus the phase of L at that crossover, the phase unwrapped along the frequency axis and taken
-    /// between -270 and 90 degrees at the first point; infinite without a crossover. Negative: the loop is unstable.
+    /// between -270 and 90 degrees at the first point; NaN without a crossover in the measured band (not measurable,
+    /// not infinite: nothing is known beyond the band). Negative: the loop is unstable.
     pub phase_margin_deg: f64,
     /// By how much the gain may rise before L reaches -1, in dB, at the worst crossing of the negative real axis
     /// where the phase falls through -180 degrees and that a later rising crossing beyond -1 does not undo;
@@ -3955,12 +4390,21 @@ pub struct LoopMargins {
     /// guarantees a gain margin of at least 6 dB and a phase margin of at least 29 degrees.
     pub peak_sensitivity: f64,
     pub peak_frequency_hz: f64,
+    /// The loop hammers across its gearbox's play (`backlash_hammering`), which the response does not show; `None`
+    /// from `loop_margins` alone, `velocity_loop_margins` runs the check.
+    pub hammering: Option<Hammering>,
+    /// With a gearbox's play in the loop: by how much the gain may rise before the loop hammers across it, in dB, the
+    /// describing function's margin (`play_margin`). NaN without play acting on the loop and from `loop_margins` alone;
+    /// negative: the loop crosses -1 at some amplitude of the swing across the play.
+    pub play_margin_db: f64,
 }
 
 impl LoopMargins {
-    /// A valid measurement, both margins positive: the loop is stable.
+    /// A valid measurement, both margins positive (a phase margin that is NaN has no crossover to judge), and no
+    /// hammering across a play: stable. The margin across the play (`play_margin_db`) is told, not judged: the time run
+    /// is the verdict.
     pub fn stable(&self) -> bool {
-        self.valid && self.phase_margin_deg > 0.0 && self.gain_margin_db > 0.0
+        self.valid && !(self.phase_margin_deg <= 0.0) && self.gain_margin_db > 0.0 && self.hammering.is_none()
     }
 }
 
@@ -3971,11 +4415,13 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
     let measured = |p: &&LoopPoint| p.re.is_finite() && p.im.is_finite();
     let mut m = LoopMargins {
         crossover_hz: f64::NAN,
-        phase_margin_deg: f64::INFINITY,
+        phase_margin_deg: f64::NAN,
         gain_margin_db: f64::INFINITY,
         valid: points.iter().all(|p| measured(&p)),
         peak_sensitivity: 0.0,
         peak_frequency_hz: f64::NAN,
+        hammering: None,
+        play_margin_db: f64::NAN,
     };
     let points: Vec<&LoopPoint> = points.iter().filter(measured).collect();
     for p in &points {
@@ -4006,7 +4452,7 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
     phase.iter_mut().for_each(|p| *p += shift);
     for &(i, share) in &crossovers {
         let margin = 180.0 + phase[i - 1] + (phase[i] - phase[i - 1]) * share;
-        if margin < m.phase_margin_deg {
+        if !(margin >= m.phase_margin_deg) {
             (m.phase_margin_deg, m.crossover_hz) =
                 (margin, points[i - 1].frequency * (points[i].frequency / points[i - 1].frequency).powf(share));
         }
@@ -4049,15 +4495,21 @@ pub fn loop_margins(points: &[LoopPoint]) -> LoopMargins {
     m
 }
 
+/// The lowest frequency `velocity_loop_responses` follows a loop down to when its gain crossover lies below
+/// `loop_frequencies` (a loop with less band than this is no servo loop to judge).
+pub const LOOP_FLOOR_HZ: f64 = 1.0;
+
 /// Frequencies of the velocity-loop measurement of `velocity_loop_margins`: 10 Hz to
 /// a quarter of the velocity loop's sampling rate (2 kHz at 125 us; above it a period has fewer than four samples), 60 points.
 pub fn loop_frequencies(cfg: &Config) -> Result<Vec<f64>, ConfigError> {
     Ok(log_spaced(10.0, 0.25 / cfg.positive("drive.velocity_cycle_s")?, 60))
 }
 
-/// The amplitude of the test torque: a tenth of the motor's rated torque.
-pub fn loop_amplitude(entry: &MachineEntry, cfg: &Config) -> Result<f64, ConfigError> {
-    Ok(0.1 * crate::catalog::resolve(entry, cfg)?.positive("drive.rated_torque_nm")?)
+/// The amplitude of the test torque: a tenth of the rated torque of the motor `id` (its own `[drive.<id>]`, not the
+/// shared one).
+pub fn loop_amplitude(entry: &MachineEntry, cfg: &Config, id: &str) -> Result<f64, ConfigError> {
+    let own = crate::catalog::motor_config(&crate::catalog::resolve(entry, cfg)?, id)?;
+    Ok(0.1 * own.positive("drive.rated_torque_nm")?)
 }
 
 /// Where neighbouring points of a response differ by more than this turn (degrees) or this change of magnitude (dB),
@@ -4101,8 +4553,9 @@ pub struct Progress {
 pub const CANCELLED: &str = "cancelled";
 
 /// Per config of `configs` (of the same machine) per motor the open-loop response of its velocity loop
-/// (`velocity_loop_response`), in frequency order: at `loop_frequencies` and the machine's resonances at the start pose
-/// (`Machine::modes`) of the first config, and where the loop gain or the plant changes fast between two points at
+/// (`velocity_loop_response`), in frequency order: at `loop_frequencies` and the machine's resonances (`Machine::modes`
+/// of the first config) at the config's own start pose, below the band down to the gain crossover where it lies there (to
+/// `LOOP_FLOOR_HZ`), and where the loop gain or the plant changes fast between two points at
 /// their middle (`refinement`), in up to `REFINE_ROUNDS` rounds. Every point is measured on a simulation of its own:
 /// they share the processors. `progress` counts them and can stop the measurement.
 pub fn velocity_loop_responses(
@@ -4112,11 +4565,25 @@ pub fn velocity_loop_responses(
 ) -> Result<Vec<Vec<Vec<LoopPoint>>>, ConfigError> {
     use std::sync::atomic::Ordering::Relaxed;
     let first = &crate::catalog::resolve(entry, configs.first().ok_or_else(|| ConfigError::Invalid("config".into()))?)?;
-    let (mut frequencies, amplitude) = (loop_frequencies(first)?, loop_amplitude(entry, first)?);
+    let frequencies = loop_frequencies(first)?;
+    let spacing = frequencies[1] / frequencies[0];
     let machine = (entry.build)(first)?;
+    let amplitudes =
+        machine.motors().iter().map(|m| loop_amplitude(entry, first, m.id)).collect::<Result<Vec<_>, _>>()?;
     let range = frequencies[0]..=frequencies[frequencies.len() - 1];
-    frequencies.extend(machine.modes(&first.f64s("start.pose")?).iter().map(|m| m.hz).filter(|f| range.contains(f)));
+    // Each config at its own start pose (`velocity_loop_margins` measures several poses): its modes there.
+    let mut own: Vec<Vec<f64>> = Vec::with_capacity(configs.len());
+    for cfg in configs {
+        let modes = machine.modes(&cfg.f64s("start.pose")?);
+        own.push(frequencies.iter().copied().chain(modes.iter().map(|m| m.hz).filter(|f| range.contains(f))).collect());
+    }
     let motors = machine.motors().len();
+    // Each run settled once, each point started from a copy of it (`Sim::snapshot`): the same start, bit for bit, as
+    // settling it anew, without the settling's share of the sweep's time.
+    let lossless = configs.iter().map(lossless).collect::<Result<Vec<_>, _>>()?;
+    let starts = on_all_cores(configs.len(), |run| settled(entry, &lossless[run], 0).map(|(sim, _)| sim.snapshot()))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
     let measure = |jobs: &[(usize, usize, f64)]| -> Result<Vec<LoopPoint>, ConfigError> {
         progress.total.fetch_add(jobs.len(), Relaxed);
         on_all_cores(jobs.len(), |j| {
@@ -4124,7 +4591,10 @@ pub fn velocity_loop_responses(
                 return Err(ConfigError::Invalid(CANCELLED.into()));
             }
             let (run, motor, frequency) = jobs[j];
-            let point = velocity_loop_response(entry, &configs[run], motor, &[frequency], amplitude).map(|p| p[0]);
+            check_frequencies(&[frequency])?;
+            let mut sim = Sim::new(entry, &lossless[run])?;
+            sim.restore(&starts[run])?;
+            let point = loop_point(sim, motor, frequency, amplitudes[motor]);
             progress.done.fetch_add(1, Relaxed);
             point
         })
@@ -4135,12 +4605,34 @@ pub fn velocity_loop_responses(
     let mut jobs = Vec::new();
     for run in 0..configs.len() {
         for motor in 0..motors {
-            jobs.extend(frequencies.iter().map(|&f| (run, motor, f)));
+            jobs.extend(own[run].iter().map(|&f| (run, motor, f)));
         }
     }
     for round in 0..=REFINE_ROUNDS {
         for (&(run, motor, _), point) in jobs.iter().zip(measure(&jobs)?) {
             curves[run][motor].push(point);
+        }
+        // Below the band, once: where |L| < 1 at the lowest point the integrators put the gain crossover lower, and
+        // the loop is followed down by the band's own spacing (its points stay where they were) until |L| > 1 or
+        // `LOOP_FLOOR_HZ`. A loop with its crossover in the band is measured as before.
+        if round == 0 {
+            loop {
+                jobs.clear();
+                for (run, per_motor) in curves.iter().enumerate() {
+                    for (motor, curve) in per_motor.iter().enumerate() {
+                        let low = curve.iter().min_by(|a, b| a.frequency.total_cmp(&b.frequency)).unwrap();
+                        if low.re.hypot(low.im) < 1.0 && low.frequency / spacing >= LOOP_FLOOR_HZ {
+                            jobs.push((run, motor, low.frequency / spacing));
+                        }
+                    }
+                }
+                if jobs.is_empty() {
+                    break;
+                }
+                for (&(run, motor, _), point) in jobs.iter().zip(measure(&jobs)?) {
+                    curves[run][motor].push(point);
+                }
+            }
         }
         jobs.clear();
         for (run, per_motor) in curves.iter_mut().enumerate() {
@@ -4165,9 +4657,33 @@ pub fn velocity_loop_responses(
     Ok(curves)
 }
 
-/// The margins of every motor's velocity loop for the config as it is and with each value of `bounds` at its low
-/// and at its high bound, one at a time (as `verdict_bands`): per run its name ("" for the config as it is,
-/// "path=value" otherwise) and the margins per motor, from the refined responses of `velocity_loop_responses`.
+/// The poses the loops are judged at (`velocity_loop_margins`, `backlash_hammering`): the start pose first, then each
+/// other pose the cycle stops at (the targets of `cycle.segment`), once each. The start pose alone without a cycle.
+pub fn margin_poses(cfg: &Config) -> Result<Vec<Vec<f64>>, ConfigError> {
+    let mut poses = vec![cfg.f64s("start.pose")?];
+    let number = |v: &toml::Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
+    for segment in cfg.array("cycle.segment").into_iter().flatten() {
+        let target: Vec<f64> =
+            segment.get("target").and_then(|t| t.as_array()).into_iter().flatten().filter_map(number).collect();
+        if target.len() == poses[0].len() && !poses.contains(&target) {
+            poses.push(target);
+        }
+    }
+    Ok(poses)
+}
+
+/// `cfg` with the machine starting at `pose`.
+fn at_pose(cfg: &Config, pose: &[f64]) -> Result<Config, ConfigError> {
+    let mut at = cfg.clone();
+    at.set_text(&format!("start.pose = {pose:?}"))?;
+    Ok(at)
+}
+
+/// The margins of every motor's velocity loop for the config as it is, at each pose of `margin_poses` (the start pose
+/// first), and with each value of `bounds` at its low and at its high bound, one at a time (as `verdict_bands`), at the
+/// start pose: per run its name ("" for the config as it is, "start.pose=[x y ...]" at another pose, "path=value"
+/// otherwise) and the margins per motor, from the refined responses of `velocity_loop_responses`. A hammering's `pose`
+/// is the run's.
 pub fn velocity_loop_margins(
     entry: &MachineEntry,
     cfg: &Config,
@@ -4176,6 +4692,11 @@ pub fn velocity_loop_margins(
     let resolved = &crate::catalog::resolve(entry, cfg)?;
     let (bounds, cfg) = (&followed(cfg, resolved, bounds), resolved);
     let mut runs = vec![(String::new(), cfg.clone())];
+    let poses = margin_poses(cfg)?;
+    for pose in &poses[1..] {
+        let text: Vec<String> = pose.iter().map(|x| format!("{x}")).collect();
+        runs.push((format!("start.pose=[{}]", text.join(" ")), at_pose(cfg, pose)?));
+    }
     for (path, low, high) in bounds {
         for value in [low, high] {
             let mut changed = cfg.clone();
@@ -4183,13 +4704,228 @@ pub fn velocity_loop_margins(
             runs.push((format!("{path}={value:?}"), changed));
         }
     }
-    let configs: Vec<Config> = runs.iter().map(|(_, c)| c.clone()).collect();
+    let mut configs: Vec<Config> = runs.iter().map(|(_, c)| c.clone()).collect();
+    // With the play: each run once more with the flanks held together, for the margin across the play.
+    let count = configs.len();
+    let play = cfg.bool("effects.gearbox_backlash").unwrap_or(false);
+    if play {
+        for run in 0..count {
+            let mut closed = configs[run].clone();
+            closed.set_text("effects.gearbox_backlash = false")?;
+            configs.push(closed);
+        }
+    }
     let responses = velocity_loop_responses(entry, &configs, &Progress::default())?;
+    let motors = responses.first().map_or(0, Vec::len);
+    let pose_of = |run: usize| if run < poses.len() { run } else { 0 };
+    let hammering = on_all_cores(count * motors, |j| {
+        let found = hammering_at(entry, &configs[j / motors], j % motors)?;
+        Ok(found.map(|h| Hammering { pose: pose_of(j / motors), ..h }))
+    })
+    .into_iter()
+    .collect::<Result<Vec<_>, ConfigError>>()?;
     Ok(runs
         .into_iter()
-        .zip(responses)
-        .map(|((name, _), motors)| (name, motors.iter().map(|points| loop_margins(points)).collect()))
+        .zip(&responses)
+        .enumerate()
+        .map(|(run, ((name, _), curves))| {
+            let margins = curves.iter().enumerate().map(|(motor, points)| LoopMargins {
+                hammering: hammering[run * motors + motor],
+                play_margin_db: if play { play_margin(points, &responses[count + run][motor]) } else { f64::NAN },
+                ..loop_margins(points)
+            });
+            (name, margins.collect())
+        })
         .collect())
+}
+
+/// The describing function's gain margin of a velocity loop across its gearbox's play, dB, from the loop measured with
+/// the play (`play`: small signals, the rotor swinging inside it) and with the flanks held together (`closed`, the
+/// config with `effects.gearbox_backlash` off). Two things in the loop depend on the swing's amplitude A. Across the
+/// play the flanks pass their spring's and their damper's force only while in contact (`Gearbox::torque`): over a swing
+/// about it the first harmonic of both is kappa(A) = 1 - (2 / pi) (asin(b / A) + (b / A) sqrt(1 - (b / A)^2)) of the
+/// gear's impedance y (b the half play), 0 inside the play, 1 far beyond it. And the friction on the rotor (its seals,
+/// the gearbox's drag, the mesh), which damps the small-signal measurement (Re(1/P) some 0.2 N m s/rad on the five-bar's
+/// tool turn, three times its J w at 650 Hz), is a Coulomb force whose first harmonic, 4 F / (pi A w), fades as the
+/// swing grows. The margin is taken with it faded: the rotor alone, J_m s (J_m the median of Im(1/P) / w over the upper
+/// half of the play's band), on kappa y to the load J_L (J_m + J_L from the closed plant at its lowest frequency),
+/// 1 / P(kappa) = J_m s + kappa y J_L s / (kappa y + J_L s), y at each frequency from the closed plant (which so holds
+/// the friction's small-signal share, scaled with kappa), and the rest of the loop, C = L / P, from the closed
+/// measurement. The least gain margin (`loop_margins`) of L(kappa) = C P(kappa) over kappa from 1e-3 to 1 (301 values,
+/// log spaced), each on 3000 frequencies over the band (C's log gain and unwrapped phase and y interpolated in log f).
+/// A swing that the friction still damps is quieter: the five-bar's tool turn reads -3.07 dB at 0.08 N m s/rad, so it
+/// would hammer from 0.0562, where the time run (`backlash_hammering`, bisected) hammers from 0.0782 with its friction
+/// and from 0.0478 with it off (the impacts' harmonics and the damper that cannot pull, which the first harmonic leaves
+/// out). NaN where the play does not change the loop (none on that motor: the two measurements within 1e-3 at every
+/// common frequency), where a measurement is not valid, or the inertias do not come out positive.
+pub fn play_margin(play: &[LoopPoint], closed: &[LoopPoint]) -> f64 {
+    type Cx = [f64; 2];
+    let mul = |a: Cx, b: Cx| [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
+    let div = |a: Cx, b: Cx| {
+        let n = b[0] * b[0] + b[1] * b[1];
+        [(a[0] * b[0] + a[1] * b[1]) / n, (a[1] * b[0] - a[0] * b[1]) / n]
+    };
+    let add = |a: Cx, b: Cx| [a[0] + b[0], a[1] + b[1]];
+    let sub = |a: Cx, b: Cx| [a[0] - b[0], a[1] - b[1]];
+    let valid = |p: &LoopPoint| [p.re, p.im, p.plant[0], p.plant[1]].iter().all(|x| x.is_finite());
+    if play.len() < 2 || closed.len() < 2 || !play.iter().chain(closed).all(valid) {
+        return f64::NAN;
+    }
+    let same = closed.iter().all(|c| {
+        play.iter()
+            .find(|p| p.frequency == c.frequency)
+            .is_none_or(|p| (p.re - c.re).hypot(p.im - c.im) <= 1e-3 * c.re.hypot(c.im))
+    });
+    if same {
+        return f64::NAN;
+    }
+    let tau = std::f64::consts::TAU;
+    let s = |f: f64| [0.0, tau * f];
+    // The impedance 1 / P = J s of an inertia: J = Im(1 / P) / w.
+    let inertia = |p: &LoopPoint| div([1.0, 0.0], p.plant)[1] / (tau * p.frequency);
+    let mut upper: Vec<f64> = play[play.len() / 2..].iter().map(inertia).collect();
+    upper.sort_by(f64::total_cmp);
+    let rotor = upper[upper.len() / 2];
+    let load = inertia(closed.iter().min_by(|a, b| a.frequency.total_cmp(&b.frequency)).unwrap()) - rotor;
+    if !(rotor > 0.0 && load > 0.0) {
+        return f64::NAN;
+    }
+    // Per measured frequency: ln f, C's ln gain and unwrapped phase, and y.
+    let mut rows: Vec<(f64, f64, f64, Cx)> = Vec::with_capacity(closed.len());
+    for p in closed {
+        let (sv, plant) = (s(p.frequency), p.plant);
+        let c = div([p.re, p.im], plant);
+        let ls = mul([load, 0.0], sv);
+        let load_side = sub(div([1.0, 0.0], plant), mul([rotor, 0.0], sv));
+        let y = div(mul(load_side, ls), sub(ls, load_side));
+        let raw = c[1].atan2(c[0]);
+        let phase = rows.last().map_or(raw, |r| raw + tau * ((r.2 - raw) / tau).round());
+        rows.push((p.frequency.ln(), c[0].hypot(c[1]).ln(), phase, y));
+    }
+    let (low, high) = (rows[0].0, rows[rows.len() - 1].0);
+    const FINE: usize = 3000;
+    let fine: Vec<(f64, Cx, Cx)> = (0..FINE)
+        .map(|i| {
+            let x = low + (high - low) * i as f64 / (FINE - 1) as f64;
+            let k = rows.partition_point(|r| r.0 <= x).clamp(1, rows.len() - 1);
+            let (a, b) = (&rows[k - 1], &rows[k]);
+            let t = if b.0 > a.0 { ((x - a.0) / (b.0 - a.0)).clamp(0.0, 1.0) } else { 0.0 };
+            let (gain, phase) = ((a.1 + (b.1 - a.1) * t).exp(), a.2 + (b.2 - a.2) * t);
+            (x.exp(), [gain * phase.cos(), gain * phase.sin()], add(a.3, mul([t, 0.0], sub(b.3, a.3))))
+        })
+        .collect();
+    (0..=300)
+        .map(|j| {
+            let kappa = 10f64.powf(-3.0 + 3.0 * j as f64 / 300.0);
+            let points: Vec<LoopPoint> = fine
+                .iter()
+                .map(|&(f, c, y)| {
+                    let (sv, ky) = (s(f), mul([kappa, 0.0], y));
+                    let ls = mul([load, 0.0], sv);
+                    let impedance = add(mul([rotor, 0.0], sv), div(mul(ky, ls), add(ky, ls)));
+                    let plant = div([1.0, 0.0], impedance);
+                    let l = mul(c, plant);
+                    LoopPoint { frequency: f, re: l[0], im: l[1], sensitivity: 1.0 / (1.0 + l[0]).hypot(l[1]), plant }
+                })
+                .collect();
+            loop_margins(&points).gain_margin_db
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// A velocity loop that keeps oscillating on its own across a gearbox's play after a kick at rest
+/// (`backlash_hammering`): the frequency, the peak of the torque the loop asks for about its mean (N m), and the pose
+/// it hammers at, an index into `margin_poses` (0 the start pose).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hammering {
+    pub frequency_hz: f64,
+    pub torque_nm: f64,
+    pub pose: usize,
+}
+
+/// How long `backlash_hammering` sweeps, and the windows it watches the loop in afterwards.
+pub const HAMMER_SWEEP_S: f64 = 0.2;
+pub const HAMMER_WINDOW_S: f64 = 0.1;
+
+/// The torque one motor's loop asks for after a sweep at rest: a sine of `amplitude` (N m) added to it as the margin
+/// measurement adds its own, its frequency rising logarithmically over `loop_frequencies`' band (10 Hz to a quarter of
+/// the velocity loop's rate) in `HAMMER_SWEEP_S`, then taken off. Per window of `HAMMER_WINDOW_S` after it (three):
+/// the RMS about the window's mean, the number of times the torque crosses that mean, and its peak about it.
+fn after_a_sweep(sim: &mut Sim, motor: usize, amplitude: f64) -> [(f64, usize, f64); 3] {
+    let every = (sim.control.drive_params().velocity_cycle / sim.dt).round() as u64;
+    let (f0, f1) = (10.0, 0.25 / sim.control.drive_params().velocity_cycle);
+    let (t0, k) = (sim.time(), (f1 / f0).ln());
+    let mut windows: [Vec<f64>; 3] = Default::default();
+    loop {
+        let t = sim.time() - t0;
+        let window = ((t - HAMMER_SWEEP_S) / HAMMER_WINDOW_S).floor();
+        if window >= 3.0 {
+            break;
+        }
+        let due = sim.step.is_multiple_of(every);
+        if due {
+            // A logarithmic sweep: the phase is the integral of f0 e^(k t / T).
+            let phase = std::f64::consts::TAU * f0 * HAMMER_SWEEP_S / k * ((k * t / HAMMER_SWEEP_S).exp() - 1.0);
+            sim.control.drives[motor].torque_injection = if t < HAMMER_SWEEP_S { amplitude * phase.sin() } else { 0.0 };
+        }
+        sim.step();
+        if due && window >= 0.0 {
+            windows[window as usize].push(sim.control.drives[motor].torque_demand);
+        }
+    }
+    windows.map(|seen| {
+        let mean = seen.iter().sum::<f64>() / seen.len() as f64;
+        let rms = (seen.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / seen.len() as f64).sqrt();
+        let crossings = seen.windows(2).filter(|w| (w[0] > mean) != (w[1] > mean)).count();
+        (rms, crossings, seen.iter().map(|x| (x - mean).abs()).fold(0.0, f64::max))
+    })
+}
+
+/// Whether the velocity loop of `motor` hammers across its gearbox's play: a time run, as the small-signal measurement
+/// (`velocity_loop_response`) cannot tell. Inside the play the measurement sees the rotor alone; a loop that is stable
+/// there can still be unstable with the flanks in contact, and then the rotor swings from flank to flank in a limit
+/// cycle (the describing function of the play rises from 0 with the rotor inside it to the flanks' stiffness with it far
+/// beyond, so the loop crosses -1 at some amplitude). The motor's rated torque, swept over the band at rest
+/// (`after_a_sweep`), takes the rotor across the play at each frequency in turn. The loop hammers where, 0.1 to 0.3 s
+/// after the sweep, the torque it asks for still swings by more in RMS than the margin measurement's test torque
+/// (`loop_amplitude`, beyond which `loop_point` says a loop moves on its own) and has not fallen to half from the
+/// one window to the next, and where the same run with `effects.gearbox_backlash` off is quiet (otherwise the play is
+/// not the cause). On the measurement's config (`lossless`), at each pose of `margin_poses`: where it hammers at
+/// several, the one with the largest peak of the torque. `None` without the play.
+pub fn backlash_hammering(entry: &MachineEntry, cfg: &Config, motor: usize) -> Result<Option<Hammering>, ConfigError> {
+    let poses = margin_poses(cfg)?;
+    let found = on_all_cores(poses.len(), |k| hammering_at(entry, &at_pose(cfg, &poses[k])?, motor));
+    let mut worst: Option<Hammering> = None;
+    for (pose, h) in found.into_iter().enumerate() {
+        if let Some(h) = h?
+            && worst.is_none_or(|w| h.torque_nm > w.torque_nm)
+        {
+            worst = Some(Hammering { pose, ..h });
+        }
+    }
+    Ok(worst)
+}
+
+/// `backlash_hammering` at the config's start pose alone.
+fn hammering_at(entry: &MachineEntry, cfg: &Config, motor: usize) -> Result<Option<Hammering>, ConfigError> {
+    if !cfg.bool("effects.gearbox_backlash").unwrap_or(false) {
+        return Ok(None);
+    }
+    let cfg = lossless(&crate::catalog::resolve(entry, cfg)?)?;
+    let run = |cfg: &Config| -> Result<_, ConfigError> {
+        let (mut sim, _) = settled(entry, cfg, 0)?;
+        let id = sim.machine.motors().get(motor).ok_or_else(|| ConfigError::Invalid("motor".into()))?.id;
+        let rated = 10.0 * loop_amplitude(entry, cfg, id)?;
+        let [_, early, late] = after_a_sweep(&mut sim, motor, rated);
+        Ok((early.0 > 0.1 * rated && late.0 > 0.1 * rated && late.0 > 0.5 * early.0).then_some(late))
+    };
+    let Some((_, crossings, peak)) = run(&cfg)? else { return Ok(None) };
+    let mut without = cfg;
+    without.set_text("effects.gearbox_backlash = false")?;
+    if run(&without)?.is_some() {
+        return Ok(None);
+    }
+    Ok(Some(Hammering { frequency_hz: crossings as f64 / (2.0 * HAMMER_WINDOW_S), torque_nm: peak, pose: 0 }))
 }
 
 /// The same cycle run twice, once with an effect on and once with it off (`compare_effect`), for overlaying the two.
@@ -4281,6 +5017,67 @@ pub fn compare_effect(entry: &MachineEntry, cfg: &Config, effect: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// By hand: a winding that settles at 102 K on every odd pass and 92 K on every even one (a pick alternating between
+    /// two places) repeats every 2 passes; one at 100, 90, 80, 100, 90, 80 every 3; one that closes in on 95 K by halves
+    /// (100, 97.5, 96.25, ...) and one that swings about it by halves (100, 92.5, 96.25, 94.375) have no period.
+    #[test]
+    fn the_warm_start_finds_the_period_of_a_cycle() {
+        let rises = |r: &[f64]| r.iter().map(|&x| vec![x, 50.0]).collect::<Vec<_>>();
+        assert_eq!(period_of(&rises(&[90.0, 102.3, 92.2, 101.9, 92.4])), Some(2));
+        assert_eq!(period_of(&rises(&[60.0, 100.0, 90.0, 80.0, 100.0])), Some(3));
+        assert_eq!(period_of(&rises(&[60.0, 105.0, 100.0, 97.5, 96.25])), None);
+        assert_eq!(period_of(&rises(&[60.0, 110.0, 100.0, 92.5, 96.25])), None);
+        // Too few warm passes to tell a period of 3 from the cold one's.
+        assert_eq!(period_of(&rises(&[100.0, 90.0, 80.0, 100.0])), None);
+    }
+
+    /// Steps 1 to 5 where 5, 4 and 2 fail and 3 and 1 pass: the fastest that passes is 3, after judging 5, 4 and 3 (a
+    /// bisection from 0 and 5 would judge 2, fail, and end at step 1). None pass: `None`, all five judged.
+    #[test]
+    fn the_fastest_passing_step_is_found_where_pass_and_fail_do_not_follow_the_steps() {
+        let mut judged = Vec::new();
+        let passes = [true, true, false, true, false, false];
+        let found = fastest_passing(5, |k| -> Result<_, ()> {
+            judged.push(k);
+            Ok(passes[k].then_some(k * 10))
+        });
+        assert_eq!((found, judged), (Ok(Some((3, 30))), vec![5, 4, 3]));
+        let mut count = 0;
+        assert_eq!(fastest_passing(5, |_| -> Result<Option<()>, ()> { Ok((count += 1, None).1) }), Ok(None));
+        assert_eq!(count, 5);
+    }
+
+    /// The line module's loss in the supply energy: efficiency eta = 0.9, the drive drew 100 J out of the DC link and fed
+    /// 40 J into it, the bleeder took 2 J, so the module put 102 J in and took the 40 J out (mains 36 J arrive, through the
+    /// module 142 J). The line gives 102 / 0.9 = 113.33 J and gets 36 J back, 77.33 J from the supply: the DC side's net
+    /// 60 J, the bleeder's 2 J and the loss (1 / 0.9 - 1) 102 + (1 - 0.9) 40 = 15.33 J. Without the DC link simulated the
+    /// net 60 J alone.
+    #[test]
+    fn the_supply_energy_has_the_line_modules_loss() {
+        let cfg = Config::parse(
+            "format_version = 1
+[effects]
+dc_link = true
+regenerative_supply = true
+[ratings]
+line_module_efficiency = 0.9
+",
+        )
+        .unwrap();
+        let motor = MotorLoad {
+            energy_in: 100.0,
+            energy_regenerated: 40.0,
+            mains_energy: 36.0,
+            line_module_energy: 142.0,
+            discharge_energy: 2.0,
+            ..MotorLoad::default()
+        };
+        let load = CycleLoad { motors: vec![motor], ..CycleLoad::default() };
+        assert!((supply_energy(&cfg, &load) - (102.0 / 0.9 - 36.0)).abs() < 1e-9, "{}", supply_energy(&cfg, &load));
+        let off = Config::parse("format_version = 1\n[effects]\ndc_link = false\n").unwrap();
+        assert!((supply_energy(&off, &load) - 60.0).abs() < 1e-12);
+    }
 
     /// The refinement finds a sharp resonance that the 60 points of the loop measurement miss. Two masses on a spring,
     /// the motor's J1 = 1e-4 kg m², the load's J2 = 3e-4 kg m², k = 300 N m/rad, a damper c = 0.003 N m s/rad between
@@ -4415,6 +5212,7 @@ mod tests {
             condition_peak: None,
             guide_load: Some((1500.0, 1000.0)),
             guide_speed: Some(0.25),
+            guides: Vec::new(),
             path_error_peak: 0.0,
             path_error_rms: 0.0,
             tracking_error_peak: 0.0,
@@ -4438,6 +5236,12 @@ mod tests {
         };
         close(guide_life_km(&cfg, &load).unwrap(), 6250.0, "guide km");
         close(guide_life_h(&cfg, &load).unwrap(), 6944.444, "guide h");
+        // Two guides, C = 5000 N: 2000 N at 0.1 m/s lives (5000/2000)^3 * 50 = 781.25 km = 2170.14 h; 1000 N at 3 m/s
+        // lives 6250 km = 578.70 h. The km life is the first's, the hours the second's: each the lowest over the guides.
+        let guide = |equivalent: f64, speed: f64| GuideLoad { peak: equivalent, equivalent, speed: Some(speed) };
+        let two = CycleLoad { guides: vec![guide(2000.0, 0.1), guide(1000.0, 3.0)], ..load.clone() };
+        close(guide_life_km(&cfg, &two).unwrap(), 781.25, "lowest guide km");
+        close(guide_life_h(&cfg, &two).unwrap(), 578.704, "lowest guide h");
         // What a config or a machine lacks gives no figure: no output torque, no radial load, no rating.
         assert_eq!(belt_tooth_utilisation(&cfg, &MotorLoad { gearbox_torque: None, ..m.clone() }).unwrap(), None);
         assert_eq!(pulley_bearing_life_h(&cfg, &MotorLoad { radial_load_equivalent: None, ..m.clone() }), None);
@@ -4456,6 +5260,7 @@ mod tests {
             close(reliability_factor(&reliable).unwrap(), a1, "a1");
             close(pulley_bearing_life_h(&reliable, &m).unwrap(), a1 * 468696.16, "pulley bearing with a1");
             close(gearbox_life_h(&reliable, &m).unwrap(), a1 * 352777.89, "gearbox with a1");
+            close(guide_life_h(&reliable, &load).unwrap(), a1 * 6944.444, "guide with a1");
         }
         assert_eq!(reliability_factor(&cfg), Some(1.0));
         assert_eq!(reliability_factor(&Config::parse("format_version = 1\n").unwrap()), Some(1.0));
@@ -4471,12 +5276,12 @@ mod tests {
         assert!(!v.ok && (utilisation(&v) - 2.88).abs() < 0.001 && (badness(&v) - 13055.556).abs() < 0.001);
     }
 
-    /// A check judged from below at or below zero is infinitely far over: a belt section pushed (belt-slack with a
+    /// A check judged from below at or below zero is infinitely far over: a belt section pushed (belt-least-tension with a
     /// tension of -12 N against 0.5 N) would otherwise have limit over value -0.0417, and the report a margin of
     /// +104.2 % beside "not ok". Above zero it stays limit over value: 0.5 / 2 = 0.25.
     #[test]
     fn an_at_least_check_at_or_below_zero_is_infinitely_far_over() {
-        let pushed = Verdict { check: "belt-slack", motor: None, value: -12.0, limit: 0.5, ok: false };
+        let pushed = Verdict { check: "belt-least-tension", motor: None, value: -12.0, limit: 0.5, ok: false };
         assert_eq!(utilisation(&pushed), f64::INFINITY);
         assert_eq!(utilisation(&Verdict { value: 0.0, ..pushed.clone() }), f64::INFINITY);
         assert_eq!(utilisation(&Verdict { value: 2.0, ok: true, ..pushed }), 0.25);
@@ -4601,6 +5406,132 @@ mod tests {
         assert_eq!(motor_bearing_life_h(&cfg, &MotorLoad { radial_load_equivalent: None, ..m }), None);
     }
 
+    /// Two motors of one machine with gearbox ratios 5 and 10 at 500 r/min: the pulleys turn at 100 and 50 r/min, so the
+    /// pulley bearing (C 8469 N, P 600 N, L10 = (C/P)^3 * 1e6 / (60 n) h) lives 468696.16 h and twice that.
+    #[test]
+    fn each_motor_gets_its_own_gearbox_ratio() {
+        let cfg = Config::parse(
+            "format_version = 1\n[gearbox]\nratio = 5.0\n[gearbox.b]\nratio = 10.0\n[ratings]\npulley_bearing_load_rating_n = 8469.0\nbearing_reliability_percent = 90.0\n",
+        )
+        .unwrap();
+        let motor = |id: &str| MotorLoad {
+            id: id.into(),
+            mean_speed: 500.0 * std::f64::consts::PI / 30.0,
+            radial_load_equivalent: Some(600.0),
+            ..MotorLoad::default()
+        };
+        assert!((output_rpm(&cfg, &motor("a")) - 100.0).abs() < 1e-9);
+        assert!((output_rpm(&cfg, &motor("b")) - 50.0).abs() < 1e-9);
+        let (a, b) =
+            (pulley_bearing_life_h(&cfg, &motor("a")).unwrap(), pulley_bearing_life_h(&cfg, &motor("b")).unwrap());
+        assert!((a / 468696.16 - 1.0).abs() < 1e-5 && (b / a - 2.0).abs() < 1e-9, "{a} and {b}");
+    }
+
+    /// A guide at 100 N for 1 s at 1 m/s and at 200 N for 1 s at 3 m/s: the speed-weighted cubic mean is
+    /// cbrt((100^3 * 1 + 200^3 * 3) / (1 + 3)) = cbrt(6.25e6) = 184.20 N (time-weighted: 165.1 N). A braking resistor, with the
+    /// capacitors holding 2 J: of 5, 1.5 and 3 J fed back with 10 J drawn between each it takes (5 - 2) + 0 + (3 - 2) = 4 J.
+    /// With 1 J drawn between, the link enters the 1.5 J and the 3 J 1 J full: the resistor takes 3 + 0.5 + 2 = 5.5 J and
+    /// the link would have to hold 5 J. A cycle that ends on 1 J fed back and begins on 1.5 J
+    /// enters its first braking 1 J full: 0.5 J spills (the link would hold 2.5 J).
+    #[test]
+    fn a_guide_load_is_weighted_with_distance_and_the_resistor_takes_what_the_link_cannot() {
+        assert!((equivalent_load(100f64.powi(3) + 200f64.powi(3) * 3.0, 4.0) - 184.2).abs() < 0.01);
+        assert_eq!(equivalent_load(0.0, 0.0), 0.0);
+        let close = |(a, b): (f64, f64), (c, d): (f64, f64)| assert!((a - c).abs() < 1e-12 && (b - d).abs() < 1e-12);
+        close(resistor_excess(&[5.0, -10.0, 1.5, -10.0, 3.0, -10.0], 2.0), (4.0, 5.0));
+        close(resistor_excess(&[5.0, -1.0, 1.5, -1.0, 3.0, -10.0], 2.0), (5.5, 5.0));
+        close(resistor_excess(&[1.5, -3.0, 1.0], 2.0), (0.5, 2.5));
+        assert_eq!(resistor_excess(&[], 2.0), (0.0, 0.0));
+    }
+
+    /// The running account (`LinkAccount`) gives the two passes over the whole list, and keeps only the stretches until
+    /// the link first emptied or filled: here a braking, then 100000 sign changes of noise at rest that draw a little more
+    /// than they feed back (as a held axis does), then two more brakings. A 0.5 J and a 2 J link fill on the 2.5 J braking
+    /// (the third stretch), and keep those three.
+    #[test]
+    fn the_dc_link_account_matches_two_passes_over_the_list_and_stays_bounded() {
+        let two_passes = |events: &[f64], room: f64| {
+            let (mut fill, mut excess, mut most) = (0.0f64, 0.0, 0.0f64);
+            for (i, &e) in events.iter().chain(events).enumerate() {
+                fill = (fill + e).max(0.0);
+                if i >= events.len() {
+                    most = most.max(fill);
+                    excess += (fill - room).max(0.0);
+                }
+                fill = fill.min(room);
+            }
+            (excess, most)
+        };
+        let mut events = vec![0.3, -0.05, 2.5, -0.2];
+        events.extend((0..100_000).map(|i| if i % 2 == 0 { 1e-4 } else { -1.2e-4 }));
+        events.extend([1.7, -0.4, 3.1, -5.0]);
+        for room in [0.5, 2.0, 10.0] {
+            let mut account = LinkAccount::new(room);
+            events.iter().for_each(|&e| account.push(e));
+            let ((a, b), (c, d)) = (account.finish(), two_passes(&events, room));
+            assert!((a - c).abs() < 1e-9 && (b - d).abs() < 1e-12, "room {room}: {a} {b} against {c} {d}");
+            // A link of 10 J never fills nor empties here: it keeps them all, as the two passes did.
+            assert!(room > 2.0 || account.prefix.len() == 3, "room {room}: {} stretches kept", account.prefix.len());
+        }
+    }
+
+    /// A link of 10 J that neither empties nor fills over 400 000 stretches of noise (±1e-4 J, no net) keeps the passes
+    /// over its voltage window, not the stretches, and gives the two passes' figures within half the grid's step
+    /// (10 / 512 J). At both ends of the window: after a 0.3 J braking it sits near empty (by hand: nothing spilled, at
+    /// most 0.6001 J held, the cycle entered 0.3 J full), after a 9.99 J one near full (entered 9.99 J full, the braking
+    /// spills 9.98 J and the noise's first 1e-4 J: 9.9801 J, at most 19.98 J held). And once the passes meet after the grid
+    /// was taken (a 12 J braking and 20 J drawn), the figures are the two passes' to rounding again (2.3 J, 12.3 J).
+    #[test]
+    fn a_dc_link_that_never_empties_nor_fills_keeps_a_bounded_account_at_both_ends() {
+        let two_passes = |events: &[f64], room: f64| {
+            let mut pass = [0.0, 0.0, 0.0];
+            events.iter().for_each(|&e| link_step(&mut pass, e, room));
+            pass[1..].fill(0.0);
+            events.iter().for_each(|&e| link_step(&mut pass, e, room));
+            (pass[1], pass[2])
+        };
+        let room = 10.0;
+        let noise = (0..400_000).map(|i| if i % 2 == 0 { 1e-4 } else { -1e-4 });
+        let cases = [
+            (0.3, vec![], false, (0.0, 0.6001)),
+            (9.99, vec![], false, (9.9801, 19.98)),
+            (0.3, vec![12.0, -20.0], true, (2.3, 12.3)),
+        ];
+        for (start, end, meets, by_hand) in cases {
+            let events: Vec<f64> = std::iter::once(start).chain(noise.clone()).chain(end).collect();
+            let mut account = LinkAccount::new(room);
+            events.iter().for_each(|&e| account.push(e));
+            assert!(account.prefix.is_empty() && account.grid.len() == LINK_GRID && account.met == meets);
+            let ((a, b), (c, d)) = (account.finish(), two_passes(&events, room));
+            assert!((c - by_hand.0).abs() < 1e-9 && (d - by_hand.1).abs() < 1e-9, "{start}: {c} {d}");
+            let tolerance = if meets { 1e-9 } else { room / (2.0 * (LINK_GRID - 1) as f64) };
+            assert!((a - c).abs() <= tolerance && (b - d).abs() <= tolerance, "{start}: {a} {b} against {c} {d}");
+        }
+    }
+
+    /// Without a gain crossover in the band the phase margin is NaN (not measurable) and `stable` judges the gain margin
+    /// alone; a valid measurement with a negative margin, or one not valid, is not stable, nor one that hammers across a
+    /// gearbox's play whatever its margins.
+    #[test]
+    fn a_loop_without_a_gain_crossover_is_judged_on_its_gain_margin() {
+        let m = |phase: f64, gain: f64, valid: bool| LoopMargins {
+            crossover_hz: f64::NAN,
+            phase_margin_deg: phase,
+            gain_margin_db: gain,
+            valid,
+            peak_sensitivity: 1.0,
+            peak_frequency_hz: 10.0,
+            hammering: None,
+            play_margin_db: f64::NAN,
+        };
+        assert!(m(f64::NAN, 20.0, true).stable());
+        let hammering = Some(Hammering { frequency_hz: 645.0, torque_nm: 0.7, pose: 0 });
+        assert!(!LoopMargins { hammering, ..m(40.0, 6.0, true) }.stable());
+        assert!(!m(f64::NAN, -1.0, true).stable());
+        assert!(!m(f64::NAN, f64::NAN, true).stable());
+        assert!(!m(-5.0, 20.0, true).stable() && m(40.0, 6.0, true).stable() && !m(40.0, 6.0, false).stable());
+    }
+
     /// L(jw) = (wc / jw) e^(-jw tau), an integrator with a dead time, by hand: |L| = 1 at wc, where the phase is
     /// -90 degrees - wc tau, so the phase margin is 90 - 360 fc tau degrees (100 Hz, 1 ms: 54); the phase reaches
     /// -180 degrees at w = pi / (2 tau) (250 Hz), where |L| = fc / 250 Hz, a gain margin of 20 log 2.5 = 7.959 dB.
@@ -4620,10 +5551,11 @@ mod tests {
         assert!((m.crossover_hz - fc).abs() < 0.1, "crossover {} Hz", m.crossover_hz);
         assert!((m.phase_margin_deg - 54.0).abs() < 0.1, "phase margin {}", m.phase_margin_deg);
         assert!((m.gain_margin_db - 20.0 * 2.5f64.log10()).abs() < 0.01, "gain margin {}", m.gain_margin_db);
-        // Without a crossover and without a crossing of the negative real axis, both margins are infinite.
+        // Without a crossover and without a crossing of the negative real axis, the gain margin is infinite and the
+        // phase margin is not measurable (NaN), though the loop counts as stable.
         let m =
             loop_margins(&points[..10].iter().map(|p| LoopPoint { re: 2.0 + p.re.abs(), ..*p }).collect::<Vec<_>>());
-        assert!(m.phase_margin_deg.is_infinite() && m.gain_margin_db.is_infinite() && m.crossover_hz.is_nan());
+        assert!(m.phase_margin_deg.is_nan() && m.gain_margin_db.is_infinite() && m.crossover_hz.is_nan() && m.stable());
     }
 
     /// The same loop, stable and unstable: phase margin 90 - 360 fc tau degrees, gain margin 20 log(1 / (4 fc tau)) dB,

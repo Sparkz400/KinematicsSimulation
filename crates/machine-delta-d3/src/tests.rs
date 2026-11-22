@@ -21,6 +21,24 @@ fn close(a: f64, b: f64, tolerance: f64, what: &str) {
     assert!((a - b).abs() <= tolerance * b.abs().max(1e-12), "{what}: {a} against {b} by hand");
 }
 
+/// At (-0.15, -0.0866, -0.9) arm 2's half-angle equation has c = a, where the root (-b - sqrt d) / (c - a) divided by
+/// zero and gave 0 rad (a time-optimal line through it crawled 23 s for 0.2 m): the inverse there round trips, and a
+/// hair either side the angles are within 1e-6 rad of it.
+#[test]
+fn the_inverse_is_continuous_where_the_half_angle_form_divided_by_zero() {
+    let d = delta(&[]);
+    let p = [-0.15, -0.0866, -0.9];
+    let t = d.legs().inverse(p).unwrap();
+    let back = d.legs().forward(t).unwrap();
+    assert!((0..3).all(|a| (back[a] - p[a]).abs() < 1e-12), "{t:?}: {back:?}");
+    for step in
+        [[1e-9, 0.0, 0.0], [-1e-9, 0.0, 0.0], [0.0, 1e-9, 0.0], [0.0, -1e-9, 0.0], [0.0, 0.0, 1e-9], [0.0, 0.0, -1e-9]]
+    {
+        let near = d.legs().inverse([p[0] + step[0], p[1] + step[1], p[2] + step[2]]).unwrap();
+        assert!((0..3).all(|k| (near[k] - t[k]).abs() < 1e-6), "{step:?}: {near:?} against {t:?}");
+    }
+}
+
 /// Forward of inverse is the pose to 1e-12 m over a grid of the working range, and the Jacobian is the derivative of
 /// the forward kinematics, by central differences of 1e-6 rad, to 1e-7 m/rad.
 #[test]
@@ -76,15 +94,18 @@ fn centre_by_hand(d: &Delta, z: f64) -> (f64, f64) {
 
 /// Static hold at the centre, 100 mm below the top, the forearms lumped (effects.forearm_inertia off): the platform's
 /// weight shares out evenly. By hand (default config): t = 0.0577 degrees, dz/dt per arm = -0.13343 m/rad,
-/// m_nt = 1.2 + 3 + 3 (1/3) 0.5 = 4.7 kg, m_LG = 0.9 * 0.2 + 0.4 (0.3 + 2/3 0.5) = 0.4333 kg m. Each gearbox holds -(g m_LG cos t) + m_nt g dz/dt
-/// = -4.249 - 6.150 = -10.40 N m (negative: the arm is held up), the motor that over 20: -0.520 N m.
+/// m_nt = 1.2 + 3 + 3 (1/3) 0.5 = 4.7 kg in the inertia; the weight of the forearms is half at the elbow, half at the plate
+/// whatever the share: m_nt,g = 4.2 + 3 (1/2) 0.5 = 4.95 kg, m_LG,g = 0.9 * 0.2 + 0.4 (0.3 + 0.5 0.5) = 0.40 kg m. Each
+/// gearbox holds -(g m_LG,g cos t) + m_nt,g g dz/dt = -3.923 - 6.477 = -10.40 N m (negative: the arm is held up), the
+/// motor that over 20: -0.520 N m.
 #[test]
 fn the_holding_torque_at_the_centre_is_the_platforms_weight_shared_out_and_the_arms_own() {
     let d = delta(&["effects.torque_ripple = false", "effects.forearm_inertia = false"]);
     let z = -0.775;
     let (t, dz) = centre_by_hand(&d, z);
-    let (m_nt, m_lg) = (1.2 + 3.0 + 0.5 / 3.0 * 3.0, 0.9 * 0.2 + 0.4 * (0.3 + 0.6667 * 0.5));
-    close(m_nt, d.m_nt(), 1e-3, "m_nt");
+    let (m_nt, m_lg) = (1.2 + 3.0 + 0.5 / 3.0 * 3.0, 0.9 * 0.2 + 0.4 * (0.3 + 0.5 * 0.5));
+    close(1.2 + 3.0 + 0.5 / 3.0 * 3.0, d.m_nt(), 1e-3, "m_nt");
+    let m_nt = m_nt + 0.25;
     let by_hand = -G * m_lg * t.cos() + m_nt * G * dz;
     println!(
         "centre: t = {:.4} deg, dz/dt per arm {dz:.5} m/rad, holding {by_hand:.4} N m at each gearbox",
@@ -99,16 +120,66 @@ fn the_holding_torque_at_the_centre_is_the_platforms_weight_shared_out_and_the_a
     assert!((by_hand + 10.40).abs() < 0.01, "{by_hand} N m");
 }
 
+/// The lumped forearms weigh half at the elbow and half at the plate whatever share the inertia is split by: the holding
+/// torque at a pose off the centre with the share 2/3 equals the one with the share 1/2 (where inertia and weight split
+/// alike), as the weight is the same 0.5 kg pair.
+#[test]
+fn the_lumped_forearm_weight_does_not_depend_on_the_inertia_share() {
+    let hold = |share: &str| {
+        let d = delta(&["effects.torque_ripple = false", "effects.forearm_inertia = false", share]);
+        let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
+        d.equilibrium(&[0.3, 0.1, -0.775], &mut state, &mut torque);
+        torque
+    };
+    let (a, b) = (hold("mass.forearm_elbow_share = 0.6667"), hold("mass.forearm_elbow_share = 0.5"));
+    for k in 0..3 {
+        close(a[k], b[k], 1e-9, "motor torque");
+    }
+}
+
+/// With hysteresis a small vibration sees K1 + sigma = 2 K1 (sigma is K1): on the gearboxes' springs alone every
+/// frequency is sqrt(2) times the large-amplitude one (docs/model-reference.md: 49.07 Hz becomes 69.39 Hz); without
+/// `gearbox_lost_motion` the two lists are the same.
+#[test]
+fn the_small_amplitude_modes_stand_sqrt_two_above_the_large_ones_with_hysteresis() {
+    let pose = [0.0, 0.0, -0.775];
+    let with = |lost: bool| {
+        let lost = format!("effects.gearbox_lost_motion = {lost}");
+        delta(&["effects.link_elasticity = false", &lost, "gearbox.hysteresis_rad = 0.0003"])
+    };
+    let d = with(true);
+    let (large, small) = (d.modes(&pose), d.modes_small_amplitude(&pose));
+    assert!(!large.is_empty() && large.len() == small.len());
+    for (l, s) in large.iter().zip(&small) {
+        close(s.hz, l.hz * 2f64.sqrt(), 1e-9, "small-amplitude mode");
+    }
+    let d = with(false);
+    for (l, s) in d.modes(&pose).iter().zip(&d.modes_small_amplitude(&pose)) {
+        close(s.hz, l.hz, 1e-12, "mode without hysteresis");
+    }
+    // As shipped (hysteresis 1.454e-4 rad, lost motion on), the gearboxes alone, at the start pose: the lists of
+    // docs/model-reference.md.
+    let d = delta(&["effects.link_elasticity = false"]);
+    let hz = |modes: Vec<sim_core::Mode>| modes.iter().map(|m| m.hz).collect::<Vec<_>>();
+    let start = [0.1525, 0.0, -0.75];
+    let (large, small) = (hz(d.modes(&start)), hz(d.modes_small_amplitude(&start)));
+    for (got, want) in large.iter().chain(&small).zip([49.065, 51.478, 84.021, 69.389, 72.801, 118.824]) {
+        assert!((got - want).abs() < 1e-3, "{large:?} Hz, small amplitude {small:?} Hz");
+    }
+}
+
 /// Static hold at the edge, x = 0.6 m: by the Jacobian's transpose with the Jacobian from central differences of the
 /// forward kinematics (not the machine's own), tau_k = -g m_LG cos t_k + m_nt g dz/dt_k, at each gearbox. The arm
-/// pointing at the edge carries most: -22.2 N m against -1.35 N m on the other two (by hand with the script of the
-/// research note).
+/// pointing at the edge carries most: -22.887 N m against -1.129 N m on the other two (the forearms' weight split a half
+/// to each end; the earlier -22.2 / -1.35 had it by the inertia share).
 #[test]
 fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose() {
     let d = delta(&["effects.torque_ripple = false", "effects.forearm_inertia = false"]);
     let p = [0.6, 0.0, -0.775];
     let t = d.legs().inverse(p).unwrap();
-    let m_lg = 0.9 * 0.2 + 0.4 * (0.3 + 0.6667 * 0.5);
+    // The weight's split: half the forearms at the elbow, half at the plate, whatever the inertia share (0.6667):
+    // m_nt = 1.2 + 3 + 3 (1/2) 0.5 = 4.95 kg, m_LG = 0.9 * 0.2 + 0.4 (0.3 + 0.5 * 0.5) = 0.4 kg m.
+    let (m_nt, m_lg) = (1.2 + 3.0 + 3.0 * 0.5 * 0.5, 0.9 * 0.2 + 0.4 * (0.3 + 0.5 * 0.5));
     let (mut state, mut torque) = (Vec::new(), [0.0; 3]);
     d.equilibrium(&p, &mut state, &mut torque);
     let mut by_hand = [0.0; 3];
@@ -117,12 +188,14 @@ fn the_holding_torque_at_the_edge_is_the_weight_through_the_jacobians_transpose(
         up[k] += 1e-6;
         down[k] -= 1e-6;
         let dz = (d.legs().forward(up).unwrap()[2] - d.legs().forward(down).unwrap()[2]) / 2e-6;
-        by_hand[k] = -G * m_lg * t[k].cos() + d.m_nt() * G * dz;
+        by_hand[k] = -G * m_lg * t[k].cos() + m_nt * G * dz;
         close(torque[k] * 20.0, by_hand[k], 1e-6, "gearbox torque");
     }
     println!("edge: {by_hand:?} N m");
     assert!(
-        (by_hand[0] + 22.2).abs() < 0.1 && (by_hand[1] + 1.35).abs() < 0.05 && (by_hand[1] - by_hand[2]).abs() < 1e-6
+        (by_hand[0] + 22.887).abs() < 1e-3
+            && (by_hand[1] + 1.129).abs() < 1e-3
+            && (by_hand[1] - by_hand[2]).abs() < 1e-6
     );
     // The rigid model held there stays put; so does the elastic one (the standard suite checks the middle).
     for elastic in [false, true] {
@@ -493,17 +566,20 @@ fn the_rods_kinetic_energy_is_the_hand_calculated_one() {
 /// started at (1, -0.5, 0.3) m/s, the energy less the motors' work, E - sum tau_k rotor_k, stays what it was: over 0.1 s
 /// of RK4 at 10 us to 1e-7 of the kinetic energy at the start, with the rods, with bending arms (in and out of their
 /// planes), with both, on elastic and rigid joints, and with the rods' spin inertia made 0.05 kg m^2 (some 4000 times
-/// the config's, so that its share of the energy shows). A velocity term or a gravity that does not belong to the mass
-/// matrix shows as a drift.
+/// the config's, so that its share of the energy shows), and with the arms' tubes in their bending mode
+/// (effects.arm_tube_inertia, the root joined to the elbow). A velocity term or a gravity that does not belong to the
+/// mass matrix shows as a drift.
 #[test]
 fn a_free_loss_free_motion_keeps_its_energy() {
-    for (rods, bending, elastic, spin) in [
-        (true, false, true, 1.3e-5),
-        (false, true, true, 1.3e-5),
-        (true, true, true, 1.3e-5),
-        (true, true, false, 1.3e-5),
-        (true, false, false, 0.05),
-        (true, true, true, 0.05),
+    for (rods, bending, elastic, spin, tube) in [
+        (true, false, true, 1.3e-5, false),
+        (false, true, true, 1.3e-5, false),
+        (true, true, true, 1.3e-5, false),
+        (true, true, false, 1.3e-5, false),
+        (true, false, false, 0.05, false),
+        (true, true, true, 0.05, false),
+        (true, true, true, 1.3e-5, true),
+        (false, true, false, 1.3e-5, true),
     ] {
         let mut cfg = lossless_config();
         for e in [
@@ -512,6 +588,7 @@ fn a_free_loss_free_motion_keeps_its_energy() {
             format!("effects.joint_elasticity = {elastic}"),
             format!("mass.forearm_rod_spin_inertia_kgm2 = {spin:?}"),
             "effects.gearbox_backlash = false".into(),
+            format!("effects.arm_tube_inertia = {tube}"),
         ] {
             cfg.set_text(&e).unwrap();
         }
@@ -546,7 +623,7 @@ fn a_free_loss_free_motion_keeps_its_energy() {
         d.tool_state(&s, &mut at, &mut vel);
         let travel = norm(sub(at, [0.1, -0.05, -0.85]));
         println!(
-            "rods {rods} (spin {spin}), bending {bending}, elastic {elastic}: drift {drift:.3e} J of {kinetic:.4} J, \
+            "rods {rods} (spin {spin}), bending {bending}, elastic {elastic}, tube {tube}: drift {drift:.3e} J of {kinetic:.4} J, \
              {travel:.3} m travelled"
         );
         assert!(travel > 0.05, "{travel} m");
@@ -998,11 +1075,13 @@ line,-0.5,0.0,-0.85",
 }
 
 /// With bending arms and effects.arm_tube_inertia the tube's own share goes into the bends. The default arm: tube
-/// 0.9 kg, 0.4 m, I 0.048 kg m^2 about the shoulder, first moment 0.9 x 0.2 = 0.18 kg m. To the elbow go
-/// m L^2 / 4 = 0.9 x 0.16 / 4 = 0.036 kg m^2 and 0.391496 m L = 0.140939 kg m (root keeps 0.012 and 0.039061); the
-/// arm turned whole keeps its inertia and its weight's moment. Out of the plane: the elbow block and a sixth of the
-/// forearm pair (rigid rods), 0.3 + 0.5 / 6 = 0.383333 kg, plus a quarter of the tube, 0.225 kg, plus the twist,
-/// (2.5e-4 + 0.5 / 6 x 0.1^2 / 4) (1.37651 / 0.4)^2 = 4.58333e-4 x 11.8423 = 5.4277e-3 kg: 0.614 kg.
+/// 0.9 kg, 0.4 m, I 0.048 kg m^2 about the shoulder (= m L^2 / 3: all of it a uniform tube), first moment
+/// 0.9 x 0.2 = 0.18 kg m. The tube bends in the static shape psi = (3 xi^2 - xi^3) / 2: to the elbow go
+/// 33/140 m L^2 = 33/140 x 0.144 = 0.0339429 kg m^2 and 3/8 m L = 0.135 kg m; the coupling B = (11/40 - 33/140) m L^2
+/// = 5.657143e-3 kg m^2, and the root keeps 0.048 - 0.0339429 - 2 B = 2.742857e-3 kg m^2 (0.0190 m L^2) and 0.045 kg m;
+/// the arm turned whole (root + tip + 2 B) keeps its inertia and its weight's moment. Out of the plane: the elbow block
+/// and a sixth of the forearm pair (rigid rods), 0.3 + 0.5 / 6 = 0.383333 kg, plus 33/140 of the tube, 0.212143 kg,
+/// plus the twist, (2.5e-4 + 0.5 / 6 x 0.1^2 / 4) (1.5 / 0.4)^2 = 4.58333e-4 x 14.0625 = 6.4453e-3 kg: 0.601922 kg.
 #[test]
 fn the_arm_tube_and_the_elbow_twist_take_part_in_the_bending() {
     let mut cfg = ENTRY.config();
@@ -1010,15 +1089,46 @@ fn the_arm_tube_and_the_elbow_twist_take_part_in_the_bending() {
     let plain = Delta::new(&cfg).unwrap();
     cfg.set_text("effects.arm_tube_inertia = true").unwrap();
     let shared = Delta::new(&cfg).unwrap();
-    let ([_, _, plain_tip, plain_tip_moment, plain_lateral], [root, root_moment, tip, tip_moment, lateral]) =
-        (plain.bend_split(), shared.bend_split());
-    assert!((root - 0.012).abs() < 1e-12 && (tip - plain_tip - 0.036).abs() < 1e-12);
-    assert!((root_moment - 0.039_061).abs() < 1e-6, "{}", root_moment);
-    assert!((tip_moment - plain_tip_moment - 0.140_939).abs() < 1e-6);
+    let (
+        ([_, _, plain_tip, plain_tip_moment, plain_lateral], none),
+        ([root, root_moment, tip, tip_moment, lateral], b),
+    ) = (plain.bend_split(), shared.bend_split());
+    assert!(none == 0.0 && (b - 5.657_143e-3).abs() < 1e-9, "{b}");
+    assert!((root - 2.742_857e-3).abs() < 1e-9 && (tip - plain_tip - 0.144 * 33.0 / 140.0).abs() < 1e-12, "{root}");
+    assert!((root_moment - 0.045).abs() < 1e-12, "{}", root_moment);
+    assert!((tip_moment - plain_tip_moment - 0.135).abs() < 1e-12);
     assert!((shared.arm_inertia() - plain.arm_inertia()).abs() < 1e-12);
     assert!((shared.arm_moment() - plain.arm_moment()).abs() < 1e-12);
     assert!((plain_lateral - 0.383_333).abs() < 1e-6, "{}", plain_lateral);
-    assert!((lateral - (0.383_333 + 0.225 + 5.4277e-3)).abs() < 1e-6, "{}", lateral);
+    assert!((lateral - (0.383_333 + 0.212_143 + 6.4453e-3)).abs() < 1e-6, "{}", lateral);
+}
+
+/// The tube's single mode against the exact Euler-Bernoulli cantilever (`beam::cantilever_first_frequency`), the root
+/// clamped: tube 0.9 kg over 0.4 m, at its tip the elbow block and the rods' sixth (0.383333 kg), out of the plane also
+/// the twist inertia 4.58333e-4 kg m^2 on the tip's slope; E I from the springs, k_b L / 3 in the plane and
+/// k_l L^3 / 3 out of it. The static shape with them (Rayleigh) reads both modes from above, +0.19 % and +0.15 %; the
+/// arm's sag under its own weight and the elbow's is the exact g L^3 (m / 8 + M / 3) / (E I). Before 22 November the
+/// first exact mode's shape with the static stiffness read them 0.88 % and 0.82 % low and the sag 2.1 % high.
+#[test]
+fn the_tubes_mode_and_sag_are_the_exact_cantilevers() {
+    use sim_components::beam::cantilever_first_frequency;
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.link_elasticity = true").unwrap();
+    let plain = Delta::new(&cfg).unwrap();
+    cfg.set_text("effects.arm_tube_inertia = true").unwrap();
+    let shared = Delta::new(&cfg).unwrap();
+    let ([_, _, plain_tip, ..], _) = plain.bend_split();
+    let ([_, _, tip, tip_moment, lateral], _) = shared.bend_split();
+    let (m, la, k_b, k_l) = (0.9, 0.4, 65000.0, 400000.0);
+    let (elbow, twist) = (plain_tip / (la * la), 2.5e-4 + 0.5 / 6.0 * 0.0025);
+    assert!((elbow - 0.383_333).abs() < 1e-6, "{elbow}");
+    let (ei_plane, ei_across) = (k_b * la / 3.0, k_l * la * la * la / 3.0);
+    let in_plane = (k_b / tip).sqrt() / cantilever_first_frequency(ei_plane, m, elbow, 0.0, la) - 1.0;
+    let out = (k_l / lateral).sqrt() / cantilever_first_frequency(ei_across, m, elbow, twist, la) - 1.0;
+    println!("the mode against the exact: in the plane {in_plane:+.5}, out of it {out:+.5}");
+    assert!(in_plane > 0.0 && in_plane < 0.003 && out > 0.0 && out < 0.003, "{in_plane} {out}");
+    let (sag, exact) = (tip_moment / k_b, la * la * (m / 8.0 + elbow / 3.0) / ei_plane);
+    assert!((sag - exact).abs() < 1e-12 * exact, "{sag} rad against {exact} rad per m/s^2");
 }
 
 /// Friction feedforward from the machine's own model (`steady_friction`), by hand, with the platform on the axis at
@@ -1064,4 +1174,125 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
     let ((ff, with), (_, without)) = (cruise(true), cruise(false));
     assert!(with.abs() < 0.03 * ff, "the integrators carry {with} N m of {ff}");
     assert!((without - with - ff).abs() < 0.03 * ff, "without: {without} N m, with {with}, of {ff}");
+}
+
+/// On a compliant base (`effects.base_compliance`) the machine keeps its collision capsules (9 of them, carried
+/// along with the base) and its resonance is the lower of its own and the base's: the lowest of its modes.
+#[test]
+fn on_a_compliant_base_the_capsules_stay_and_the_resonance_is_the_lower() {
+    let pose = [0.1525, 0.0, -0.75];
+    let build = |on: bool| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text(&format!("effects.base_compliance = {on}")).unwrap();
+        (ENTRY.build)(&cfg).unwrap()
+    };
+    let (plain, based) = (build(false), build(true));
+    let capsules = |m: &dyn sim_core::Machine| {
+        let (mut state, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
+        m.equilibrium(&pose, &mut state, &mut torque);
+        m.collision_capsules(&state).len()
+    };
+    assert_eq!((capsules(plain.as_ref()), capsules(based.as_ref())), (9, 9));
+    let (own, on_base) = (plain.resonance_hz(&pose).unwrap(), based.resonance_hz(&pose).unwrap());
+    let lowest = based.modes(&pose)[0].hz;
+    assert!(
+        on_base <= own && (on_base - lowest).abs() < 1e-9 * lowest,
+        "{own} Hz alone, {on_base} on the base, lowest mode {lowest}"
+    );
+}
+
+/// The forearms' weight is at the frame momentum's first moment, lumped or rods: the potential changes along a motion
+/// as -g . dc/dt (`testkit::weight_is_at_the_first_moment`). Lumped, the frame momentum had their mass at the inertia's
+/// share 2/3 at the elbow where the weight has half.
+#[test]
+fn the_forearms_weight_is_at_the_frame_momentums_first_moment() {
+    for rods in [false, true] {
+        for bending in [false, true] {
+            sim_core::testkit::weight_is_at_the_first_moment(&delta(&[
+                &format!("effects.forearm_inertia = {rods}"),
+                &format!("effects.link_elasticity = {bending}"),
+            ]));
+        }
+    }
+}
+
+/// The forearm pairs' spin in the frame momentum, by hand: the pose and motion of `the_rods_spin_is_the_hand_calculated_one`,
+/// where each leg's pair turns about its own axis e_i = u_i / L at s_i rad/s. A pair's spin inertia 2 I (I = 0.01 kg m^2
+/// a rod, the two rods alike) puts 2 I s_i e_i into the angular momentum, so the momentum with that inertia less that
+/// without is 0.02 sum_i s_i e_i.
+#[test]
+fn the_rods_spin_is_in_the_frame_momentum() {
+    let spin = |inertia: f64| {
+        loss_free(true, &["effects.gravity = false", &format!("mass.forearm_rod_spin_inertia_kgm2 = {inertia:?}")])
+    };
+    let (d, still) = (spin(0.01), spin(0.0));
+    let p = [0.0, 0.1, -0.8];
+    let t = d.legs().inverse(p).unwrap();
+    let u = sub(p, d.legs().elbow(0, t[0])[0]);
+    let pv = [u[2], 0.0, -u[0]].map(|v| v / u[0].hypot(u[2]));
+    let w = mul(&inverse(&d.legs().jacobian(t, p).unwrap()).unwrap(), pv);
+    let mut by_hand = [0.0; 3];
+    for i in 0..3 {
+        let e = sub(d.legs().forward(t).unwrap(), d.legs().elbow(i, t[i])[0]).map(|v| v / 0.95);
+        let s = d.rod_spin(i, t, [0.0; 3], w, [0.0; 3]);
+        (0..3).for_each(|k| by_hand[k] += 0.02 * s * e[k]);
+    }
+    let angular = |d: &Delta| {
+        let (mut s, mut hold) = (Vec::new(), [0.0; 3]);
+        d.equilibrium(&p, &mut s, &mut hold);
+        d.set_tool_velocity(&mut s, &pv);
+        d.frame_momentum(&s).unwrap().angular
+    };
+    let (with, without) = (angular(&d), angular(&still));
+    let found: V3 = std::array::from_fn(|k| with[k] - without[k]);
+    assert!(norm(by_hand) > 1e-5, "{by_hand:?}");
+    assert!(norm(sub(found, by_hand)) < 1e-6 * norm(by_hand), "{found:?} against {by_hand:?}");
+}
+
+/// The tube's kinetic energy by hand (effects.arm_tube_inertia): its sections at s theta' + psi(s) L delta' (psi the
+/// static shape) carry m L^2 (theta'^2 / 3 + 2 int(xi psi) theta' delta' + int(psi^2) delta'^2) / 2, against
+/// m L^2 theta'^2 / 6 of the tube turning whole with its root: more by m L^2 (11/40 theta' delta' + 33/280 delta'^2),
+/// m L^2 = 0.144 kg m^2. Rigid
+/// joints at the arms' level with no move out of the plane, theta' = (0.3, -0.2, 0.5), delta' = (0.4, 0.1, -0.6) rad/s.
+#[test]
+fn the_tube_carries_the_kinetic_energy_of_its_bending_mode() {
+    let kinetic = |tube: bool| {
+        let d = delta(&[
+            "effects.joint_elasticity = false",
+            "effects.link_elasticity = true",
+            "effects.gravity = false",
+            &format!("effects.arm_tube_inertia = {tube}"),
+        ]);
+        let (mut s, mut hold) = (Vec::new(), [0.0; 3]);
+        d.equilibrium(&[0.0, 0.0, LEVEL], &mut s, &mut hold);
+        // Rigid: the arms' angles and speeds, the brakes, then the bends, their rates, the moves and theirs.
+        assert_eq!(s.len(), 9 + 12);
+        s[3..6].copy_from_slice(&[0.3, -0.2, 0.5]);
+        s[9 + 3..9 + 6].copy_from_slice(&[0.4, 0.1, -0.6]);
+        d.energy_parts(&s)[0]
+    };
+    let by_hand: f64 = [(0.3, 0.4), (-0.2, 0.1), (0.5, -0.6)]
+        .iter()
+        .map(|(w, b)| 0.144 * (0.275 * w * b + b * b * 33.0 / 280.0))
+        .sum();
+    close(kinetic(true) - kinetic(false), by_hand, 1e-6, "the tube's bending energy");
+}
+
+/// The bend out of the planes with the tube (effects.arm_tube_inertia), lumped forearms, rigid joints, the arms level at
+/// the centre: the elbow's 0.3 + 0.6667 x 0.5 = 0.63335 kg, 33/140 of the 0.9 kg tube, 0.212143 kg, and the twist,
+/// (2.5e-4 + 0.6667 x 0.5 x 0.1^2 / 4) (1.5 / 0.4)^2 = 1.083375e-3 x 14.0625 = 0.0152350 kg, on k_l = 400000 N/m:
+/// sqrt(400000 / 0.860728) / 2 pi = 108.50 Hz, the mode with all three elbows moving the same way round.
+#[test]
+fn the_tube_rings_out_of_the_plane_at_the_hand_calculated_frequency() {
+    let d = delta(&[
+        "effects.joint_elasticity = false",
+        "effects.link_elasticity = true",
+        "effects.forearm_inertia = false",
+        "effects.arm_tube_inertia = true",
+    ]);
+    let modes = d.modes(&[0.0, 0.0, LEVEL]);
+    let by_hand = (4e5_f64 / (0.63335 + 0.9 * 33.0 / 140.0 + 1.083_375e-3 * 14.0625)).sqrt() / std::f64::consts::TAU;
+    println!("{modes:?}");
+    assert_eq!(modes.len(), 6);
+    close(modes[3].hz, by_hand, 1e-5, "out of the plane with the tube");
 }

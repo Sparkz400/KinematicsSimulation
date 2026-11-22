@@ -42,6 +42,10 @@ gearbox_efficiency = true
 # formula) in place of screw.efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart.
 # Off in the shipped configs: their sizing was done with screw.efficiency.
 screw_lead_efficiency = false
+# The screw's axial stiffness follows its nut: the shaft between the fixed bearing and the nut, E A / a (held at both
+# ends a (L - a) / (E A L)), with the nut a from the bearing at its travel (screw.fixed_bearing_at_m), in place of the
+# far end's for the whole stroke.
+screw_stiffness_with_position = true
 # The gearbox's no-load running torque at its input, over speed and its lubricant's temperature (gearbox.no_load_*):
 # gearbox.efficiency then holds at gearbox.efficiency_torque_nm and falls at part load. Off here: a coupling has none.
 gearbox_drag = false
@@ -192,8 +196,11 @@ platform_radius_m = 0.2
 
 # [estimate] Each electric cylinder: joint to joint 450 mm retracted, 200 mm stroke; its rod's guide and seal; rubber
 # buffers at the stroke's ends; the feed force its maker allows (an electric cylinder of this screw size). Its moving
-# parts (rod, nut) and its body with the motor weigh mass_kg together, of which platform_share moves with the platform
-# joint; the rest sits at the base joint.
+# parts (rod, nut) and its body with the motor weigh mass_kg together, of which platform_share is the rod part on the
+# platform joint; the rest is the body part on the base joint. Each part is a body of its own, swinging with the leg: its
+# centre's distance from its joint along the leg (*_part_centre_m) and its inertia about its centre across the leg
+# (*_part_inertia_kgm2, a bar: m l^2 / 12). [estimate] The rod part a bar of 0.35 m (centre 0.175 m), the body part
+# with the motor 0.5 m long from 0.15 m behind the base joint (centre 0.1 m).
 [leg]
 closed_length_m = 0.45
 stroke_m = 0.2
@@ -204,6 +211,10 @@ stop_stiffness_n_m = 2.0e6
 stop_damping_n_s_m = 2000.0
 mass_kg = 3.0
 platform_share = 0.3
+base_part_centre_m = 0.1
+base_part_inertia_kgm2 = 0.044
+platform_part_centre_m = 0.175
+platform_part_inertia_kgm2 = 0.0092
 max_force_n = 1500.0
 
 # [estimate] A welded aluminium table of 500 mm across, its inertia about its centre (x, y, z, platform frame); the
@@ -235,12 +246,20 @@ root_diameter_m = 0.017324
 # [estimate] Between the bearings: the stroke, the nut's length and the run-outs.
 length_m = 0.35
 mounting = "fixed-supported"
+# [estimate] The fixed bearing at the motor, 0.075 m behind the nut with the leg retracted: half the run-out of the
+# 0.35 m shaft beyond the 0.2 m stroke. With effects.screw_stiffness_with_position.
+fixed_bearing_at_m = -0.075
 efficiency = 0.9
 # With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
 # ball screws, not this screw's.
 friction_coefficient = 0.003
 nut_stiffness_n_m = 4.118793e8
 bearing_stiffness_n_m = 5.0e8
+# [estimate] The damping ratio of the mass behind the nut on the screw's axial spring (nut, bearings, guides; the
+# damper across the screw's spring alone, c = 2 zeta sqrt(k m)): 0.04, the axial mode of a ball screw drive
+# identified by Hosseinkhani (Control Methods for Improving Tracking Accuracy and Disturbance Rejection in Ball
+# Screw Feed Drives, PhD thesis, University of Waterloo, 2013, Table 3.5: 865 rad/s, zeta 0.04).
+axial_damping_ratio = 0.04
 preload_n = 400.0
 dynamic_load_rating_n = 11081.5145
 static_load_rating_n = 26085.689
@@ -342,9 +361,12 @@ position_cycle_s = 1.0e-3
 current_delay_cycles = 1
 velocity_delay_cycles = 1
 kv_1_s = 50.0
-# [estimate] tuned with `sim-cli margins tripod`: at least 128.9 degrees of phase and 11.35 dB of gain margin, and
-# across the bounds (--bands) at least 110.1 degrees and 9.35 dB.
-velocity_kp_nm_s_rad = 0.15
+# [estimate] tuned with `sim-cli margins tripod` against the legs' axial modes (some 2 % damped through the nut,
+# `screw.axial_damping_ratio` 0.04; the loop's peak at 380 to 475 Hz): 60.5 degrees and 18.90 dB, with friction off
+# 57.7 degrees and 14.81 dB; across the bounds (--bands) at least 50.7 degrees and 17.87 dB, with friction off 38.6
+# degrees (axial_damping_ratio 0.02, the mode through 0 dB at 374 Hz) and 13.20 dB. With friction off 0.04 left 29.8
+# degrees there and 0.1 15.6 degrees and 4.80 dB as configured: the friction's small-signal damping hides the mode.
+velocity_kp_nm_s_rad = 0.03
 velocity_tn_s = 0.03
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
@@ -361,6 +383,9 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it (S120
 # p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 # Current controller: Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
@@ -368,6 +393,8 @@ current_kp_v_a = 421.84
 current_tn_s = 8.788e-3
 # [catalogue] a 400 V line: 540 V DC link
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2104-4AF at 400 V: 3.75 N m maximum, 1.27 N m rated at 3000 r/min
 peak_torque_nm = 3.75
 rated_torque_nm = 1.27
@@ -491,11 +518,16 @@ ratings.drive_max_current_time_s = [0.1, 1.0]
 mass.platform_kg = [16.0, 24.0]
 leg.mass_kg = [2.5, 4.0]
 leg.platform_share = [0.2, 0.4]
+leg.base_part_centre_m = [0.05, 0.15]
+leg.base_part_inertia_kgm2 = [0.03, 0.065]
+leg.platform_part_centre_m = [0.12, 0.22]
+leg.platform_part_inertia_kgm2 = [0.006, 0.014]
 leg.friction_coulomb_n = [8.0, 30.0]
 leg.friction_viscous_n_s_m = [20.0, 80.0]
 leg.max_force_n = [1200.0, 2000.0]
 screw.efficiency = [0.85, 0.95]
 screw.bearing_stiffness_n_m = [3.0e8, 8.0e8]
+screw.axial_damping_ratio = [0.02, 0.06]
 screw.preload_n = [200.0, 600.0]
 gearbox.stiffness_nm_rad = [4000.0, 9000.0]
 gearbox.damping_nm_s_rad = [0.1, 0.6]

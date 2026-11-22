@@ -249,6 +249,9 @@ ramp_s = 0.5
 mover_kg = 0.451
 # [catalogue] the 600 g the AT9014's life test carries (30,000 km at 1.5 m/s).
 payload_kg = 0.6
+# How far outside the centre line the mover's mass centre moves (the drawn mover sits 35 mm outside it): in a curve it
+# runs on the radius R + e, so its speed is v (1 + e k). 0 keeps the mass centre on the centre line.
+centre_offset_m = 0.0
 
 [mover]
 # [catalogue] AT9014-x070: 70 mm along the track; the gap judged is the free space between two bodies.
@@ -342,8 +345,8 @@ thermal_resistance_k_w = 2.0
 thermal_time_constant_s = 600.0
 
 # [catalogue] 4 m/s (AT20xx system), the motors' highest; [estimate] the axes at 3 m/s. Beckhoff gives 10 g, for a
-# mover without load: with the 0.6 kg payload the 100 N peak moves 1.651 kg (the 0.2 kg plate with it) at 60.6 m/s^2
-# (at 60 the jog asked 109 N). [estimate] The axes at half that, 30 m/s^2 and 2000 m/s^3 as the linear motor axis's, leave
+# mover without load: with the 0.6 kg payload the 100 N peak moves 1.251 kg (0.451 + 0.6 + the 0.2 kg plate) at 79.9 m/s^2.
+# [estimate] The axes at about a third of that, 30 m/s^2 and 2000 m/s^3 as the linear motor axis's, leave
 # the loops and the optimiser their reserve; the cams (23.6 m/s^2 at most) are not held to them. One table per mover (s1
 # to s6), as every machine's axes.
 [axis.s1]
@@ -396,12 +399,17 @@ friction_feedforward_speed_rad_s = [10.0]
 friction_feedforward_torque_nm = [0.0]
 friction_feedforward_model = "machine"
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 load_encoder_step = 1.0e-6
 # [estimate] 6 V/A on 2 mH: 3000 rad/s; across the inductance's bounds (1.5 to 4 mH) the speed loop keeps at least
 # 42 degrees and 10 dB without friction (sim-cli margins); below 1.5 mH the 62.5 us current cycle leaves it unstable.
 current_kp_v_a = 6.0
 current_tn_s = 2.0e-3
 bus_voltage_v = 48.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 100.0
 rated_torque_nm = 30.0
 rated_speed_rad_s = 4.0

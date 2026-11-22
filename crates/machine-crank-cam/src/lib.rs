@@ -42,8 +42,13 @@ pub use toggle::TogglePress;
 
 const I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("de", include_str!("../i18n/de.ftl"))];
 
+/// The effects of `common.toml` that the machine does not model, refused switched on (`refuse_unmodelled`): the table's
+/// twist is the indexers', the follower's lift-off the disc cam's, and none has links to bend.
+const NO_TWIST_LIFT_OFF_OR_LINKS: &[&str] =
+    &["table_twist", "follower_lift_off", "link_bending", "link_bending_reaction"];
+
 macro_rules! entry {
-    ($name:ident, $id:literal, $file:literal, $build:expr) => {
+    ($name:ident, $id:literal, $file:literal, $build:expr, $unmodelled:expr) => {
         pub static $name: MachineEntry = MachineEntry {
             id: $id,
             key: concat!("machine-", $id),
@@ -53,19 +58,23 @@ macro_rules! entry {
                 include_str!(concat!("../config/", $file))
             ),
             i18n: I18N,
-            build: $build,
+            build: |cfg| {
+                sim_components::refuse_unmodelled(cfg, $unmodelled)?;
+                $build(cfg)
+            },
             suite_configs: || suite_configs(&$name),
         };
     };
 }
 
-entry!(SLIDER_CRANK, "slider-crank", "slider-crank.toml", crank::build);
-entry!(ROTARY_KNIFE, "rotary-knife", "rotary-knife.toml", knife::build);
-entry!(FLYING_SAW, "flying-saw", "flying-saw.toml", saw::build);
-entry!(DISC_CAM, "disc-cam", "disc-cam.toml", disc::build);
-entry!(TOGGLE_PRESS, "toggle-press", "toggle-press.toml", toggle::build);
-entry!(GENEVA_DRIVE, "geneva-drive", "geneva-drive.toml", indexer::build_geneva);
-entry!(CAM_INDEXER, "cam-indexer", "cam-indexer.toml", indexer::build_cam);
+entry!(SLIDER_CRANK, "slider-crank", "slider-crank.toml", crank::build, NO_TWIST_LIFT_OFF_OR_LINKS);
+entry!(ROTARY_KNIFE, "rotary-knife", "rotary-knife.toml", knife::build, NO_TWIST_LIFT_OFF_OR_LINKS);
+entry!(FLYING_SAW, "flying-saw", "flying-saw.toml", saw::build, NO_TWIST_LIFT_OFF_OR_LINKS);
+entry!(DISC_CAM, "disc-cam", "disc-cam.toml", disc::build, &["table_twist", "link_bending", "link_bending_reaction"]);
+entry!(TOGGLE_PRESS, "toggle-press", "toggle-press.toml", toggle::build, NO_TWIST_LIFT_OFF_OR_LINKS);
+const INDEXER: &[&str] = &["follower_lift_off", "link_bending", "link_bending_reaction"];
+entry!(GENEVA_DRIVE, "geneva-drive", "geneva-drive.toml", indexer::build_geneva, INDEXER);
+entry!(CAM_INDEXER, "cam-indexer", "cam-indexer.toml", indexer::build_cam, INDEXER);
 
 const G: f64 = 9.80665;
 
@@ -147,18 +156,26 @@ fn axis(
 }
 
 /// A joint machine of one joint (with its gear lever, `None` where it has no converter, and its unit) and its axis.
-/// Where a cam runs its slave on and on (`endless`), the joint's stops go out of its way: the axis range stays what
-/// moves and paths may use.
+/// A joint that turns on (`turns_on`: a crank, a knife roll, a disc, an indexer's driver) has no stops of its own: the
+/// axis range (`joint.min_angle_deg`, `max_angle_deg`) is what the cycle and paths may use, and a cam may run it on
+/// past that range, or ramp it down there when it is taken away. End stops are optional: `joint.stop_min_deg` /
+/// `joint.stop_max_deg` put the joint's stops (`effects.hard_stops`, `joint.stop_*`) at those angles, either alone or
+/// both.
 fn machine<M: Mechanism + 'static>(
     cfg: &Config,
     mechanism: M,
     (mut drive, gear_lever, unit): (RotaryJoint, Option<f64>, &'static str),
     axis: AxisInfo,
-    endless: bool,
+    turns_on: bool,
 ) -> Result<Box<dyn Machine>, ConfigError> {
-    if endless {
-        // shortcut: a crank or knife that turns on under the cam has no stops at all; model a limit switch if one matters.
-        drive.range = (-1e12, 1e12);
+    if turns_on {
+        let stop = |key: &str, none: f64| -> Result<f64, ConfigError> {
+            if cfg.get(key).is_ok() { cfg.f64(key).map(f64::to_radians) } else { Ok(none) }
+        };
+        drive.range = (stop("joint.stop_min_deg", -1e12)?, stop("joint.stop_max_deg", 1e12)?);
+        if drive.range.0 >= drive.range.1 {
+            return Err(ConfigError::Invalid("joint.stop_min_deg".into()));
+        }
     }
     let spec = JointSpec { drive, id: MOTOR_IDS[0], key: JOINT_KEYS[0], gear_lever, unit };
     sim_components::base::mount(
@@ -220,6 +237,8 @@ fn forwards(v: f64, smoothing: f64) -> f64 {
     (v / smoothing - 1.0).clamp(0.0, 1.0)
 }
 
+#[cfg(test)]
+mod disc_tests;
 #[cfg(test)]
 mod indexer_tests;
 #[cfg(test)]

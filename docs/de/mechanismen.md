@@ -72,7 +72,15 @@ und m mit
 
 - Übersetzung i / Hebel, der Hebel ist der Weg je Radiant (Steigung / 2 pi oder der Teilkreisradius des Ritzels);
 - Steifigkeit 1 / (Hebel^2 / k_Getriebe + 1 / k_Wandler): die Torsionssteifigkeit des Getriebes am Gelenk gesehen, in
-  Reihe mit der von Spindel oder Zahnstange; die Dämpfung ebenso durch Hebel^2;
+  Reihe mit der von Spindel oder Zahnstange. Die der Spindel ist ihre Welle zwischen Festlager und Mutter, E A / a, in
+  Reihe mit Mutter und Lagern: mit `effects.screw_stiffness_with_position` an der Stelle der Mutter
+  (`screw.fixed_bearing_at_m` der Weg am Festlager), sonst an der weichsten Stelle für den ganzen Hub;
+- Dämpfung: die des Getriebes durch Hebel^2 nur über der Feder des Getriebes, die von Spindel oder Zahnstange nur über
+  deren Feder, c = 2 zeta sqrt(K_c m) aus `screw.axial_damping_ratio` oder `rack.damping_ratio` und der bewegten Masse m
+  (Mutter, Lager, Führungen), K_c an der Stelle der Mutter, wo die Steifigkeit ihr folgt (zeta bleibt über den Hub);
+  zwei gedämpfte Federn in Reihe, die Maschine führt dafür einen Zustand mehr
+  (`Gearbox::arm`). Mit der Dämpfung des Getriebes allein (K_g = k_Getriebe / Hebel^2) schwingt eine Masse daran bei
+  tiefen Frequenzen mit c (K_c / (K_c + K_g))^2 gedämpft, nicht mit c;
 - Spiel: das des Getriebes am Gelenk gesehen plus das des Wandlers (mit `effects.gearbox_backlash`);
 - Wirkungsgrad: das Produkt (mit `effects.gearbox_efficiency`);
 - die Trägheit von Spindelwelle oder Ritzel am Rotor, durch i^2.
@@ -93,7 +101,7 @@ aus `[slide]` (`RotaryJoint::linear_from_config`).
 | Knicken | F_k = Faktor pi^2 E I / L^2, Faktor 1/4, 1, 2,046, 4; zulässig F_k / `buckling_safety_factor`. |
 | Statische Last | C0a / `static_safety_factor`. |
 | d n | Nenndurchmesser (mm) mal Drehzahl (1/min), gegen `max_dn` (0 prüft nicht). |
-| Axialsteifigkeit | Welle A E / x (fest-fest: A E L / (x (L - x))), Mutter und Festlager in Reihe; an der weichsten Stellung der Mutter genommen. |
+| Axialsteifigkeit | Welle A E / x (fest-fest: A E L / (x (L - x))), Mutter und Festlager in Reihe; mit `effects.screw_stiffness_with_position` (in den mitgelieferten Konfigurationen an, außer in der des gemessenen Kugelgewindetriebs) an der Stelle der Mutter, sonst an der weichsten Stellung der Mutter genommen. |
 | Reibmoment der Vorspannung | T = K F_pr l / (2 pi), K = 0,05 / sqrt(tan beta) (THK); als T 2 pi / l zur Reibung der Führungen addiert. |
 | Lebensdauer | L10 = (Ca / (fw F_m))^3 10^6 Umdrehungen. Eine vorgespannte Mutter trägt F_pr (1 + F / (2,83 F_pr))^(3/2), bis die Kraft die Vorspannung abhebt (Hiwin). |
 
@@ -112,7 +120,9 @@ Teilkreisradius m z / (2 cos beta). Die Prüfung `rack-feed-force` hält die hö
 `rack.1.feed_force`: die Kraft an der Last durch den Wirkungsgrad der Zahnstange, solange das Ritzel treibt, mal ihm,
 solange die Last zurücktreibt) gegen `rated_feed_force_n` durch den Anwendungsfaktor K_A (`service_factor`). Die Hersteller von Zahnstangen veröffentlichen die
 zulässige Vorschubkraft eines Paares, keine Lebensdauerformel; daher hat die Zahnstange keine Lebensdauerprüfung, das
-Planetengetriebe davor hat seine eigene (`gearbox-life`).
+Planetengetriebe davor hat seine eigene (`gearbox-life`). `pressure_angle_deg` (Normalschnitt, optional, 20 nach DIN 867,
+wo er fehlt, unter 45) ergibt die Kraft, die Ritzel und Zahnstange auseinanderdrückt, F tan(alpha) / cos(beta), die die
+Radiallast des Ritzels auf der Getriebewelle mitzählt.
 
 ## Linearmotor
 
@@ -211,8 +221,9 @@ weichen Vakuumgreifer oder ein Sack in einer Schlinge. Die beiden Pendelgelenke 
 (`chain::Mechanism::passive_joints`): Ihre Winkel und Geschwindigkeiten folgen den anderen Zuständen der Gelenkmaschine,
 ihre Dynamik ist die der Kette mit den Körpern des Pendels, die Leistung des Dämpfers der Verlust
 `power.payload_swing` und die Winkel die Signale `swing.1.angle`, `swing.2.angle`. Vorsteuerung und Ruhelagen sehen die
-Last fest am Flansch. Der Karton des Palettierers pendelt mit 2,2 Hz (sqrt(k / (m l^2) + g / l) / 2 pi mit 120 N m/rad,
-20 kg, 0,2 m).
+Last fest am Flansch. Der Karton des Palettierers pendelt mit 1,61 Hz
+um die Achse quer zu seiner 0,6-m-Seite und mit 1,82 Hz um die andere (sqrt((k + m g l) / (m l^2 + I)) / 2 pi mit 120 N m/rad,
+20 kg, 0,2 m und dem Eigenträgheitsmoment I = 0,75 und 0,4167 kg m^2 des Kartons: 159,2 / (0,8 + 0,75), 159,2 / (0,8 + 0,4167)).
 shortcut: Ohne Last tragen die Pendelgelenke eine eigene Einheitsträgheit, getrennt vom Arm.
 
 ### Ein Roboter auf einer Schiene
@@ -234,7 +245,7 @@ Kette gibt, F = dP/dt + Σ m g z und M_O = dH_O/dt + Σ c × m g z (die Änderun
 um den Ursprung der Basis als zentrale Differenzen), in das System des Schlittens zwischen den Wagen gebracht. Sein
 Schub längs der Schienen ist der der Zahnstange; den Rest teilen die Wagen als starre Lager, jeder F_z / 4 ± M_x / (2 w)
 ∓ M_y / (2 l) auf seiner Schiene und F_y / 4 ± M_z / (2 l) quer dazu, seine Last die Summe beider Beträge (die
-äquivalente Last des Katalogs). Das Signal `axis.j1.guide_load` ist die Last des höchstbelasteten Wagens mal vier, damit
+äquivalente Last des Katalogs). Die Seite der Zahnstange (`track.rack_side`, ±1 längs der y-Achse des Schlittens) bestimmt, auf welcher Seite die Abstoßkraft des Schrägritzels zu F_y kommt, ihr Hebelarm (`track.rack_lever_m`) macht aus dem Schub des Antriebs ein Giermoment auf die Wagen, M_z + Seite · Hebel · F_x; die Vorgaben +1 und 0 sind die Lasten, wie sie bisher gezählt wurden. Das Signal `axis.j1.guide_load` ist die Last des höchstbelasteten Wagens mal vier, damit
 die Führungsurteile, die eine Last gleich auf einen Satz von vier verteilen und den Satz als einen bewerten
 (`parts.axis = "<wagen>x4"`), diesen Wagen beurteilen: `guide-load` gegen `ratings.guide_max_load_n`, `guide-life` aus
 `ratings.guide_dynamic_load_rating_n` und der Geschwindigkeit der Schiene. Die Momente entscheiden die Größe: Auf dem
@@ -279,8 +290,11 @@ Speicher.
   Stellung des ersten Gelenks zu einer Achse (die einer Schiene: siehe
   [Ein Roboter auf einer Schiene](#ein-roboter-auf-einer-schiene)). Die Orientierung ist der
   Drehvektor (Achse mal Winkel, im Basissystem) der Drehung gegen die Orientierung des Flanschs bei Gelenken null: Eine
-  URDF, deren Flansch bei null nach unten zeigt, steht dort bei 0, nicht eine halbe Drehung gegen das Basissystem. Eine
-  Lage bis auf 0,01 rad an einer halben Drehung dagegen wird abgelehnt (`error-arm-orientation-half-turn`): Dort springt
+  URDF, deren Flansch bei null nach unten zeigt, steht dort bei 0, nicht eine halbe Drehung gegen das Basissystem. Mit
+  zwei der drei Drehungen (rx, ry des Fünfachsarms) sagen sie, wohin das Werkzeug zeigt: die kürzeste Drehung von der
+  Richtung des Flanschs entlang der fehlenden Achse bei Gelenken null zu der, in die es jetzt zeigt, ihr fehlender Teil
+  0, wie auch immer die Gelenke das Werkzeug um diese Richtung drehen; die Winkelprüfungen des Flanschs beurteilen nur
+  diese Drehung, und eine Bewegung hält sie mit der fehlenden Drehung bei 0 ein. Eine Lage bis auf 0,01 rad an einer halben Drehung dagegen wird abgelehnt (`error-arm-orientation-half-turn`): Dort springt
   der Drehvektor. Die Gelenke mit gedämpften kleinsten Quadraten auf der Jacobi-Matrix der Werkzeugachsen (zentrale
   Differenzen; dq = J^T (J J^T + lambda^2 I)^-1 e, lambda 1 mm, die Drehungen mal dem Abstand des Flanschs von Gelenk 2
   in `kinematics.home_joints`), entlang der Geraden von der letzten Lösung zum Ziel in Schritten von höchstens 20 mm
@@ -303,7 +317,7 @@ Orientierungsachsen (c des SCARA, rz des Palettierers, rx, ry des Fünfachsrobot
 
 `config/scara-tool.toml` und `config/arm-tool.toml` sind die Standardkonfigurationen mit eingeschaltetem Werkzeugraum,
 einer Startlage und einem Zyklus aus Geraden (die Einschwingtoleranzen des Arms 5 mm und 5 mrad: Unter der Nutzlast ruht
-sein Flansch 2,4 mm neben der Lage der Geber und um 3,2 mrad gedreht). `config/arm5-tool.toml` und `config/arm7-tool.toml` sind das
+sein Flansch 2,3 mm neben der Lage der Geber und um 3,1 mrad gedreht). `config/arm5-tool.toml` und `config/arm7-tool.toml` sind das
 Fünfachsbeispiel (`urdf/five-axis.urdf`: der Sechsachsroboter ohne die Drehung des Flanschs, bei null nach unten zeigend;
 Achsen x, y, z, rx, ry, wohin das Werkzeug zeigt) und das Siebenachsbeispiel (`urdf/seven-axis.urdf`: ein Drehgelenk im
 Oberarm; Achsen x, y, z, rx, ry, rz), jedes mit einem Zyklus aus Geraden, für `--config` mit der Maschine `urdf-arm`.
@@ -404,8 +418,15 @@ Geschwindigkeitsterm m s' s'' θ'² und das Moment von Feder und Gewicht (F0 + k
 F0 s + k s² / 2 + m g s): das Moment schwingt mit dem Hubgesetz und treibt die Scheibe beim Rückhub zurück. Signale: Hub,
 Geschwindigkeit und Beschleunigung des Stößels, die Kontaktkraft, der Druckwinkel, die Führungslast und J(θ); geprüft
 gegen `ratings.disc_max_contact_force_n` und `disc_max_pressure_angle_deg`. Mit `cam.run` dreht die Scheibe mit
-`disc.turns_per_min` weiter, ihr Leitwert virtuell. Die Rolle bleibt auf der Scheibe: wo N unter null fiele, höbe der
-Stößel ab, was das Signal zeigt und das Modell nicht trennt (eine so knapp ausgelegte Feder). Die Mitte des Bereichs der
+`disc.turns_per_min` weiter, ihr Leitwert virtuell. Mit `effects.follower_lift_off` hebt der Stößel ab, wo N unter null fiele: sein Spalt
+g zur Scheibe ist ein passives Gelenk (Hub s + g), der Kontakt der Linienkontakt der Stahlrolle (nach Palmgren d =
+3,84e-5 Q^0,9 / l^0,8 in mm und N über ihre Breite l, `follower.roller_width_m`: 4e8 N/m bei 160 N) mit einem Dämpfer bei
+`contact_damping_ratio` der kritischen Dämpfung mit dieser Steifigkeit, nur auf Druck, die Kraft auf die Scheibe also nie
+negativ und ohne Sprung bei der Berührung, dazu wirkt die Reibung der Führung (`follower.guide_friction_n`); in Ruhe ist
+die Rolle um ihre Last eingedrückt (0,45 µm). Die Leistung des Dämpfers wird als Verlust gebucht
+(`power.follower_contact`), die Bilanz schließt über einen Aufprall. Signale `follower.gap` (negativ: eingedrückt) und
+`follower.off_disc` (der Kontakt trägt nichts). Aus, bleibt die Rolle auf der Scheibe, und nur das Signal zeigt, wo N
+unter null fiele. Die Mitte des Bereichs der
 Scheibe liegt auf der ersten Hälfte des Hubs, wo s'' > 0 ist und Feder und Gewicht die Scheibe dort halten, wo sie gegen
 sie gehalten wird; hinter der Mitte des Hubs drehen sie sie weg.
 
@@ -496,8 +517,9 @@ Steigung), und eine Drehung des Werkzeugs um z (`[tool_turn]`, Motor 4) hinter e
 Tabellen für Motor, Getriebe, Antrieb und Grenzwerte (`[motor.3]`, `[gearbox.4]`, ...). Alles an der Platte (die
 Einheiten mit ihren Motoren, der Schlitten, die Nutzlast) zählt zur Masse der Platte in der Ebene; Hub und Drehung
 stehen senkrecht zur Ebene und koppeln sonst nicht mit ihr. Die Werkzeugpose ist (x, y), (x, y, z), (x, y, c) oder
-(x, y, z, c), wie die beiden Schalter es sagen. Hub und Drehung sind starre Gelenke: Verdrehung und Spiel von Spindel
-und Drehgetriebe sind nicht modelliert. Siehe die [Modellreferenz](../model-reference.md).
+(x, y, z, c), wie die beiden Schalter es sagen. Mit `effects.joint_elasticity` (mitgeliefert an) sind Hub und Drehung
+elastisch wie die Gelenke der Arme: der Läufer ein eigener Körper, dazwischen die Feder von Kupplung und Spindel (in
+Reihe) oder des Drehgetriebes. Siehe die [Modellreferenz](../model-reference.md).
 
 ## Zweiteilige Plattform mit Zahnstangen-Übersetzung (delta-h4)
 
@@ -557,7 +579,10 @@ begrenzt, die Drehung auf 4 rad/s und 36 rad/s² mit dem Wafer auf r = 0,05 m na
 k = 9,4e5 N/m, 150 N): Ihre Dehnung lässt Unterarm und Effektor hinter Säule und Oberarm zurückbleiben, der Wafer bleibt
 in r zurück, und der Effektor dreht sich aus seiner radialen Linie (`effector.direction_error`; beim Verweilen an einer
 Station geprüft, `effector-direction`); ein Trum, das seine ganze Vorspannung verliert, wird schlaff (`elbow-band-slack`,
-`wrist-band-slack` prüfen den Ausschlag gegen die Hälfte davon). Siehe die
+`wrist-band-slack` prüfen den Ausschlag gegen die Hälfte davon). Mit elastischen Getrieben (`effects.joint_elasticity`) sind
+Kupplung und Spindel des Hubs ebenfalls eine Feder (in Reihe 4,56e7 N/m am fernen Ende der Mutter; mit `effects.screw_stiffness_with_position`, mitgeliefert an, an der
+Stelle der Mutter): Die Säule schwingt darauf bei gehaltenem Läufer mit 432 Hz in der Höhe der Startpose (321 Hz am
+fernen Ende), und die größte Kraft der Spindel im Standardzyklus steigt von 171,9 N (starr) auf 184,5 N. Siehe die
 [Modellreferenz](../model-reference.md#wafer-handler) und die
 [Konfigurationsreferenz](../config-reference.md#wafer-handler).
 
@@ -600,8 +625,11 @@ Hubenden und der Motor sind die der Kugelgewindeachse oben. Die Mechanik gibt Ki
 - Die Zeilen von J sind (u_i, b_i × u_i), u_i die Richtung des Beins und b_i = R a_i. Dynamik über die Bewegung der
   Plattform: M_xi xi' + c + g = J^T f, also im Beinraum M_q = J^-T M_xi J^-1 und h = J^-T (c + g − M_xi J^-1 a0), a0
   die Längenbeschleunigung der Beine bei der Bewegung (gegen die Lagrange-Gleichungen von M_q mit Differenzen geprüft:
-  gleich auf 1e-9). Die Masse jedes Beins wird auf seine Enden aufgeteilt: `leg.platform_share` bewegt sich mit dem
-  Plattformgelenk (eine Punktmasse in Masse und Trägheit der Plattform), der Rest ruht an der Basis.
+  gleich auf 1e-9). Jedes Bein sind zwei Körper, die mit seiner Richtung schwenken: das Stangenteil (`leg.platform_share` von
+  `leg.mass_kg`, Schwerpunkt `leg.platform_part_centre_m` vom Plattformgelenk) und das Gehäuseteil (der Rest,
+  Schwerpunkt `leg.base_part_centre_m` vom Basisgelenk), jedes mit seiner Trägheit um den Schwerpunkt quer zum Bein; ihre
+  kinetische Energie geht in M_xi und c ein, ihr Gewicht in g. Die Nutzlast kann eine eigene Trägheit haben
+  (`mass.payload_inertia_kgm2`, 0: eine Punktmasse).
 - Abgelehnt: ein Bein über seinen Hub hinaus (`error-joint-beyond-stop`), ein Bein steiler gegen die Normale der Basis
   oder der Plattform als `workspace.max_joint_angle_deg` (`error-hexapod-joint-angle`), eine Lage, deren Jacobi-Matrix
   eine Konditionszahl über `workspace.max_condition_number` hat, die Drehungen mit dem Plattformradius gewichtet
@@ -697,7 +725,7 @@ positiv hebt die Spitze). Jede Kurbel ist ein Gelenk von `chain::JointMachine` m
   Stange in der Ebene von Kurbel und Achse, der Hebelarm null) als `workspace.min_dead_centre_margin_deg`
   (`error-rss-dead-centre`), ein Kugelgelenk über `workspace.crank_joint_max_angle_deg` (die Stange aus der Kurbelebene)
   oder `platform_joint_max_angle_deg` (gegen die Normale der Plattform; `error-rss-ball-joint`), zwei Stangen näher als
-  `workspace.min_rod_clearance_m` Achse zu Achse (`error-rss-rods-cross`), eine Konditionszahl über
+  `workspace.min_rod_clearance_m` Achse zu Achse (`error-rss-rods-cross`), eine Stange näher als `workspace.min_body_clearance_m` an einer Kante der Plattform oder der Basis (`error-rss-rods-cross-body`), eine Konditionszahl über
   `workspace.max_condition_number` (`error-rss-singularity`), eine Kurbel über ihre Anschläge hinaus.
 - Dynamik über virtuelle Arbeit in den Kurbelwinkeln: Plattform und Nutzlast als ein starrer Körper mit Schwerpunkt
   außerhalb der Plattformmitte, jede Stange als schlanker Stab (ein Sechstel ihrer Masse an jedem Ende und zwei Drittel
@@ -742,6 +770,18 @@ u der Einheitsvektor vom Anlenkpunkt zum Ablaufpunkt.
   ihren Seilen, elastischer und geometrischer Anteil bei gehaltenen Trommeln, gibt ihre Eigenfrequenzen
   (`sim-cli modes`, die Resonanz des Input-Shapers): 24,6 Hz in der Mitte des ebenen Roboters. `effects.cable_damping`
   fügt `cable.specific_damping_n_s` / l hinzu. Starr (aus) behalten die Seile ihre Länge.
+- Die eigene Masse der Seile (`cable.mass_per_m_kg`, ausgeliefert 3 g/m und 10 g/m, [Schätzung]; 0 lässt sie weg): Die
+  Hälfte des Gewichts jedes Seilstücks hängt an der Plattform, und das Seil hängt durch (flache Parabel): Bei der
+  Sehnenkraft T ist es um (w l_h)² l_f / (24 T²) länger als seine Sehne, also mit t0 = EA (L − l) / l, der Kraft des
+  geraden Seils, t0 = T − c / (2 T²), c = (w l_h)² EA l_f / (12 L); seine Steifigkeit dT/dt0 ist Ernsts
+  Ersatzmodul E / (1 + (w l_h)² EA / (12 T³)), und ein schlaffes Seil hängt noch mit einer kleinen Kraft. Gegen die
+  genaue elastische Kettenlinie stimmt der Zug am Anlenkpunkt auf 9e-5 N bei 20 N und 2e-4 N bei 5 N (das gerade Seil
+  verfehlt ihn dort um 0,17 N und 1,6 N).
+- Trommeln und Läufer der Winden drehen sich um `frame.winch_spin_axes` (sonst waagerecht und quer zur Richtung des
+  Seils an der Winde; bei senkrechter die Achse der Rolle in Ruhe), und ihr Drall ist in der Last des Gestells.
+- Die zeitoptimale Planung hält die Kraft jedes Seils im Starrkörpermodell im Band (`cable.min_tension_n` bis zur
+  Nennkraft, `profile.tension_reserve` des Raums): Der Standardzyklus des ebenen Roboters braucht 1,684 s statt 1,653 s
+  ohne das Band, bei dem ein Seil bis auf 0,63 N fiel; cable-spatial 1,207 s statt 1,143 s.
 - Jede Winde ist ein `joint::RotaryJoint` in Metern Seil: Motor, Getriebe mit dem Trommelradius als Hebel, die Trägheit
   der Trommel, Reibung von Lagern und Rolle (`effects.winch_friction`), Anschläge bei leerer und voller Trommel.
   Elastisch sind Trommel und Läufer eigene Körper hinter der Feder des Getriebes; starr behalten die Seile ihre Länge,
@@ -787,10 +827,14 @@ ein Segment angekommen ist (`valves = { z = "extend" }`), und wartet auf seine E
 `machines/pneumatic-axis.toml`: die riemengetriebene Servo-X von `single-axis.toml` trägt einen Festo
 DSBC-32-100-PPVA-N3 (32 mm Kolben, 12 mm Stange, 100 mm Hub, PPV-Dämpfung 17 mm, 0,4 J), der nach unten ausfährt, an
 einem 5/2-Ventil mit Abluftdrosseln; 0,5 kg bewegt, 0,5 kg gegriffen. Der Zyklus: X zum Aufnehmen, Z ab, warten,
-greifen, Z auf, warten, X zum Ablegen, Z ab, loslassen, Z auf. Mit den ausgelieferten Einstellungen fährt Z in 0,55 s
+greifen, Z auf, warten, X zum Ablegen, Z ab, loslassen, Z auf. Mit den ausgelieferten Einstellungen fährt Z in 0,55 bis 0,56 s
 aus und in 0,65 s ein (Ventil 7 ms, die Stangenseite entlüftet aus dem Versorgungsdruck, gedrosselt 0,216 m/s, am Ende
-die Dämpfungsschraube), tritt mit 0,22 bis 0,24 m/s und 0,012 bis 0,029 J gegen die zulässigen 0,4 J in die Dämpfung ein
-(`cushion-energy`), trifft mit 0,06 bis 0,07 m/s auf den Puffer, ohne aus dem Sensorbereich zurückzuprallen, und hat
+die Dämpfungsschraube), tritt mit 0,22 bis 0,24 m/s und einer Bewegungsenergie von 0,012 bis 0,029 J gegen die zulässigen 0,4 J in die
+Dämpfung ein (`cushion-energy`). Die Prüfung ist die Regel des Herstellers für die eigene Dämpfung des Zylinders: die
+Bewegungsenergie beim Eintritt in die Dämpfung gegen die höchste Aufprallenergie der Tabelle (Festo-Datenblatt DSBC,
+„Kräfte und Aufprallenergie“, v = sqrt(2 E / (m1 + m2)), S. 13); die Arbeit des Gewichts über die Dämpfungslänge, m g L,
+gehört zu Festos Regel für externe Stoßdämpfer und wird nicht addiert (1 kg hängend über die 17 mm: 0,167 J mehr, die
+diese Prüfung nicht zählt). Er trifft mit 0,06 bis 0,09 m/s auf den Puffer, ohne aus dem Sensorbereich zurückzuprallen, und hat
 ein Lastverhältnis von 0,024 (`load-factor`, 1 kg Gewicht gegen 415 N beim Einfahren). Ein Doppelhub verbraucht 1,10
 Normliter, 474 J am Kompressor (0,12 kWh/m³); von Hand beim Versorgungsdruck und der Wandtemperatur 1,15 l, 4 % weniger,
 weil die Verweilzeiten zu kurz sind, als dass die heiße Luft abkühlt.
@@ -888,7 +932,11 @@ Klothoide, wo es eine gibt; ihre Änderung, der Querruck 2 v a k + v³ dk/ds, is
 1228 m/s³ in einen Kreis, 614 m/s³ in die Klothoide). Die Mover laufen außen an der Schleife, die Magnetplatte den
 Spulen zugewandt, daher zieht die Fliehkraft m v² k einen Mover gegen die Anzugskraft von den Spulen weg: die Rollen
 tragen sqrt((F_a − m v² k)² + (m g)²) (`mover-guide-load`), und der Anteil m v² k / F_a (`curve-holding`) muss unter 1
-bleiben, wo der Mover abhebt.
+bleiben, wo der Mover abhebt. `mass.centre_offset_m` = e legt den Massenschwerpunkt der Mover außerhalb der Mittellinie
+(beim gezeichneten Mover 35 mm; ausgeliefert 0): in einer Kurve läuft er auf R + e mit v (1 + e k), seine
+Querbeschleunigung ist v² k (1 + e k) (38,9 m/s² mitten im Bogen bei 2 m/s und e = 35 mm, 30,7 bei e = 0), seine
+kinetische Energie ½ m v² (1 + e k)²; die Tangentialkraft der sich über die Klothoide ändernden Masse ist in der Dynamik
+(die Energie bleibt erhalten). Der Versatz gilt für Moverkörper und Nutzlast, nicht für die Magnetplatte.
 
 **Spulen und Segmente.** Der Strom eines Movers ist seine Kraft durch die Kraftkonstante; er fließt in den Spulen unter
 seiner Magnetplatte, auf die Segmente nach der Länge der Platte auf jedem verteilt. Der Strom eines Segments ist die
@@ -936,15 +984,18 @@ Hebel: 30:1 auf Rädern von 80 mm, 25:1 auf 50 mm, 40:1 auf einer Trommel von 80
   0,124 m, einer für die am Anfang 0,105 m (ZVD, eine ganze Periode dahinter: 0,012, 0,047 und 0,041 m).
 - **Der Zyklus** (fahren und absenken, zurück, aufnehmen, heben) ist ein kurzer Positionierzyklus, 7,0 s je Durchgang
   (geformt 12,8 s), damit jede Prüfung über die Zyklen aller Maschinen ihn ganz sieht: aus der Fahrhöhe (z = 3 m, 2 m
-  Seil) 0,2 m und 0,1 m zur Ablage, dabei 0,15 m absenken. Geformt besteht er alle Prüfungen (Restpendeln 4,3 mm,
-  Seilkraft höchstens 2727 N und nie schlaff, Hubwerksbremse 5,5 von 7,5 N m belastet); ungeformt pendelt die Last
-  0,32 m, und `residual-sway` fällt durch, ebenso `thermal-warm-start` (das Pendeln eines Durchgangs ändert den
-  nächsten). Ein echter Werkstattkranzyklus über die Kranbahn dauert eine Minute: ein Ziel von [8.0, 4.0, 1.0].
+  Seil) 0,2 m und 0,1 m zur Ablage, dabei 0,15 m absenken. Geformt besteht er alle Prüfungen (Restpendeln 4,4 mm,
+  Seilkraft höchstens 2721 N und nie schlaff, Hubwerksbremse 5,4 von 7,5 N m belastet); ungeformt pendelt die Last
+  0,30 m, und `residual-sway` fällt durch (sein Warmstart konvergiert im Standardzyklus, 0,019 K; mit
+  `effects.hook_block` trägt sich das Pendeln eines Durchgangs in den nächsten, und die Prüfung `thermal-cycle-repeat`
+  nennt es). Ein echter Werkstattkranzyklus über die Kranbahn dauert eine Minute: ein Ziel von [8.0, 4.0, 1.0].
 - **Die Drehzahlregler** sind so steif eingestellt wie an den anderen Maschinen (Brücke und Katze etwa 60 Hz). Der des
-  Hubwerks hat, in Ruhe unter den 265 kg gemessen (`sim-cli margins`), keine Durchtrittsfrequenz (NaN): Der Wirkungsgrad
-  seines Getriebes (92 %), unter 0,5 W eingeblendet, wirkt als Dämpfer von 1,1e6 N s/m am Seil, 4,5 N m s/rad am Motor,
-  von dem das Testmoment nicht losbricht; das Getriebe hält den Regelkreis in Ruhe fest. Ohne die Getriebeverluste liegt
-  sie bei 48 Hz.
+  Hubwerks wird in Ruhe unter den 265 kg (`sim-cli margins`) mit ausgeschaltetem Wirkungsgradeffekt gemessen: Der
+  Wirkungsgrad seines Getriebes (92 %), unter 0,5 W eingeblendet, wirkt sonst als Dämpfer von 1,1e6 N s/m am Seil,
+  4,5 N m s/rad am Motor, von dem das Testmoment nicht losbricht, und der Kreis zeigt keine Durchtrittsfrequenz. Ohne die
+  Getriebeverluste, mit einem Zehntel des eigenen Nennmoments des Hubmotors (0,66 N m) als Testmoment, liegt sie bei
+  50,4 Hz mit 73,7° und 21,0 dB (bei 0,32 N m, einem Zehntel des gemeinsamen Antriebswerts: 48,5 Hz, 83,1°, 21,3 dB; die
+  Reibung des Motors dämpft das kleinere Signal stärker).
 - **Eigene Prüfungen:** `rope-max-tension`, `rope-min-tension` (kein Schlaffseil), `residual-sway` (Amplitude des
   Pendelns bei jedem Verweilen gegen `crane.residual_sway_max_m`), `hoist-brake` (Seilmoment am Hubmotor gegen das
   Bremsmoment durch `hoist.brake_safety_factor`).
@@ -1059,7 +1110,7 @@ und Bändern; bei φ = 60°, θ = 30° liegt das Handgelenk bei (0,277128, 0,16)
 (−0,5, 1,0) m/s²; ein Moment von 1 N m am Effektor dehnt die Bänder um β = 2,955083e-4 und γ = 5,819704e-4 rad
 (K₁ = 1692, K₂ = 2303 N m/rad) und dreht ihn um 3,300103e-4 rad aus seiner radialen Linie; die starren Bänder tragen
 dT₁ = −4,271710 N und dT₂ = 4,379926 N bei θ̈ = 10 rad/s² mit dem Handgelenk über der Säule; der Z-Motor hält 11,2276 kg
-mit 0,1752378 N m; die Eigenformen gegen die von numpy (18,20 bis 186,45 Hz); der Halt auf Pads, Vakuum und Kante; ein
+mit 0,1752378 N m; die Eigenformen gegen die von numpy (18,20 bis 186,45 Hz) und die Säule auf Spindel und Kupplung, von Hand 320,8907 Hz; der Halt auf Pads, Vakuum und Kante; ein
 Trum wird über seine Vorspannung hinaus schlaff; der Standardzyklus besteht alle Prüfungen, und eine Reichweite, die mit
 3 m/s² anläuft, lässt den Wafer rutschen.
 
@@ -1098,7 +1149,9 @@ Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels
 - Ein Glied biegt sich in einer Eigenform je Richtung (in der Ebene seines Gelenks; quer dazu und in Torsion mit
   `link_bending.directions`); mit `effects.link_bending_reaction` wirkt die Biegung auf die Gelenke zurück, ohne
   Lagranges Glieder zweiter Ordnung in der kleinen Biegung.
-- Die Steifigkeit einer Spindel wird für den ganzen Hub an der weichsten Stellung der Mutter genommen.
+- Die Steifigkeit einer Spindel folgt der Mutter nur mit `effects.screw_stiffness_with_position` (in den mitgelieferten
+  Konfigurationen an, außer in der des gemessenen Kugelgewindetriebs); aus, wird sie für den ganzen Hub an der
+  weichsten Stellung der Mutter genommen.
 - Der Roboter auf seiner Schiene: Der Schub der Zahnstange wird durch den Ursprung des Schlittens genommen (kein eigenes
   Moment auf die Wagen), die Kreiselmomente der Motorläufer des Arms fehlen in der Führungslast, und die Wagen sind
   starre Lager (keine Steifigkeit der Führung: der Schlitten kippt nicht auf ihnen); die Führungslast wird dem
@@ -1113,8 +1166,7 @@ Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels
 - Das Förderband aus `[conveyor]` kann noch nicht Leitwert einer Kurvenscheibe sein (der Leitwert ist ein eigener, mit
   dem Geschwindigkeits- und Rampenmodell des Bands); eine neue Leitgeschwindigkeit beginnt ihre Rampe bei der
   Geschwindigkeit des Leitwerts ohne seine Beschleunigung (ein Sprung der Beschleunigung, wo sie während einer Rampe
-  kommt); das Gelenk von Kurbel, Messer und Kurvenscheibe hat keine Anschläge, solange die Kurvenscheibe es weiterdreht;
-  der Stößel der Kurvenscheibe ist ein geradegeführter (kein Schwinghebel) und hebt nie von der Scheibe ab; die Presskraft der
+  kommt); der Stößel der Kurvenscheibe ist ein geradegeführter (kein Schwinghebel); die Presskraft der
   Schubkurbel wirkt nur beim Ausfahren (keine Rückfederung), die der Kniehebelpresse auch im Stillstand und klingt ab,
   wenn der Stößel steigt (die Auffederung des Gestells ist eine masselose Feder, die Hebel sind starr), die Schnittkraft von Messer und Säge nur vorwärts.
 - Der Linear-Delta (`delta-linear`, drei Riemenachsen an Säulen, die sich neigen können,
@@ -1122,9 +1174,9 @@ Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels
   [Modellreferenz](../model-reference.md#linear-delta).
 
 - Hexapod: Das Drehen der Beine um ihre Basisgelenke und die Trägheit der Nutzlast fehlen; eine Steifigkeit je Bein
-  (an der weichsten Stellung der Mutter). Seine Eigenfrequenzen werden bei gehaltenen Motoren angegeben wie die der Roboter (`sim-cli modes hexapod`).
+  (die der Spindel an der Mutter, `effects.screw_stiffness_with_position`, mitgeliefert an). Seine Eigenfrequenzen werden bei gehaltenen Motoren angegeben wie die der Roboter (`sim-cli modes hexapod`).
 - Tripod: Das Schwenken der Beine um ihre Basisgelenke fehlt wie am Hexapod; keine Reibung und kein Spiel in Dreh- und
-  Kugelgelenken; eine Steifigkeit je Bein (an der weichsten Stellung der Mutter); die Konvergenz der Vorwärtskinematik
+  Kugelgelenken; eine Steifigkeit je Bein (die der Spindel an der Mutter, wie am Hexapod); die Konvergenz der Vorwärtskinematik
   ist für den ausgelieferten Quader gezeigt (eine Konfiguration mit anderer Geometrie oder anderem Quader sollte die
   Prüfung jenes Tests wiederholen).
 
@@ -1138,7 +1190,9 @@ Bahn zwischen 30 und 250 N; ein Halt der Kategorie 1 nahe einem Ende des Wickels
   überschleifen; der Antrieb passt seinen Drehzahlregler nicht an die Trägheit des Wickels an (45-fach vom Kern bis
   voll), darum sind die ausgelieferten Verstärkungen die des ausgelieferten Abschnitts (`[drive.unwind]` eine eigene),
   und ein Lauf nahe dem Ende des Wickels braucht sie vertauscht.
-- Seilroboter: Masse und Durchhang der Seile fehlen; der kraftfähige Arbeitsraum ist der statische (die Beschleunigungen
-  des Zyklus beurteilen die Seilkraftprüfungen, die Planung weicht ihnen nicht aus); nahe am Rand des Arbeitsraums rechnet
+- Seilroboter: Die Trägheit der Seile fehlt (ein Drittel der Masse jedes Seils bewegt sich mit seinem Anlenkpunkt,
+  0,5 % der Masse der räumlichen Plattform), ebenso das mit der Lage wandernde Gewicht des Durchhangs (5e-5 N); der
+  kraftfähige Arbeitsraum der Lagen ist der statische (die Beschleunigungen eines Zyklus hält die zeitoptimale Planung
+  im Band, in den Achsgrenzen beurteilen sie die Seilkraftprüfungen); nahe am Rand des Arbeitsraums rechnet
   der Dehnungsausgleich der Motoren mit den Kräften der geschlossenen Form, wo die Verteilung ein Seil an einer Grenze
   hält.

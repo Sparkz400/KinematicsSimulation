@@ -28,11 +28,20 @@ Left out: backlash_rad. The document prints a "Backlash" table per size and rati
   of the wave generator's Oldham coupling referred to the output (the
   document's definition of terms: the gear itself has none; what is measured comes from the Oldham coupling's clearance); not a gear backlash, so
   not put into backlash_rad (task instruction). lost_motion_rad: no table for component sets. no_load_torque: only
-  graphs (ratio 100, plus a compensation table per ratio); efficiency: only graphs; both left out. Starting torque,
+  graphs (ratio 100, plus a compensation table per ratio), left out of the table. Starting torque,
   backdriving torque, ratcheting and buckling torque, positional accuracy: tables, no schema column.
 Kept as printed: CSF17 ratio 120 has a lower momentary peak torque (86 N m) than ratio 100 (108 N m).
 Note 1 of the rating table: oil lubrication is required for size 50 and larger at ratio 50; grease within half the
   rated torque. The grease speed limits are kept for those rows as for the others.
+efficiency_full_load: efficiency at the rated torque, 2000 r/min input speed, 25 degC ambient, grease lubrication, read off the
+  vendor's "Efficiency at rated torque" graphs (Graphs 047-1 to 047-8 (printed page 47)); fractions (0.74 = 74 %). Method: the graphs
+  are vector art; tools/extract_harmonicdrive_efficiency.py reads the PDF's paths, takes the axes from the frame and grid lines
+  (checked against the printed tick labels), chains the path pieces into the four curves (500, 1000, 2000, 3500 r/min; they
+  do not cross and the legend order agrees) and reads the 2000 r/min curve at 25 degC; every reading is in
+  tools/harmonicdrive_efficiency_readings.csv. Graph per row: sizes 8 to 14: 047-1 (ratio 30), 047-2 (50 and 80), 047-3 (100); sizes 17 to 100: 047-4 (30), 047-5 (50), 047-6 (80 and 100), 047-7 (120), 047-8 (160); every size of a group shares its graph, as the
+  vendor draws it; a row whose size group has no graph for its ratio stays empty. Check against the printed example (CSF-20-80 78 % printed, 79.1 % read (1.1 points));
+  estimated reading error 1 point (the larger anchor residual, rounded). Not in the model: the efficiency compensation
+  coefficient Ke for a load below the rated torque (Graph 046-1 / 090-1), other speeds and temperatures, oil lubrication.
 Source: Harmonic Drive LLC, Component Sets CSG/CSF, Engineering Data (TI-26108 REV 1, 08/2026), rating tables 038-2
   and 039-1. Extracted by catalog/tools/extract_harmonicdrive.py; the numbers are Harmonic Drive's, the layout is ours.
   CSF sizes 8 to 100, all ratios printed (73 rows).
@@ -46,3 +55,17 @@ locator = "pages 38 to 43: rating tables 038-1 (CSG), 038-2 and 039-1 (CSF), dim
 method = "script:tools/extract_harmonicdrive.py"
 url = "https://www.harmonicdrive.net/_hd/content/documents1/CSG-CSF_Component.pdf"
 retrieved = "2026-11-14"
+
+[[sources]]
+id = "csg-csf-efficiency-graphs"
+document = "Harmonic Drive LLC, Reducer Catalog, Component Sets CSG/CSF, Engineering Data, TI-26108 REV 1"
+date = "2026-08"
+locator = "Graphs 047-1 to 047-8 (printed page 47): efficiency at rated torque against ambient temperature, one curve per input speed"
+method = "script:tools/extract_harmonicdrive_efficiency.py"
+url = "https://www.harmonicdrive.net/_hd/content/documents1/CSG-CSF_Component.pdf"
+retrieved = "2026-11-16"
+
+[[provenance]]
+rows = ["*"]
+fields = ["efficiency_full_load"]
+source = "csg-csf-efficiency-graphs"

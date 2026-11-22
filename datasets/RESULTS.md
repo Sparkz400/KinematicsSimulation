@@ -10,5 +10,5 @@ Torque: the measured motor torque against the simulated one when the recording's
 
 | Dataset | Machine | Data | Licence | Fit recording: RMS / worst | Checks: RMS / worst | First mode, measured → model |
 | --- | --- | --- | --- | --- | --- | --- |
-| [example-synthetic-belt-axis](example-synthetic-belt-axis/) | `single-axis` | synthetic | CC0-1.0 | trace: 0.00348 N m (0.8 %) / 0.0121 N m (2.9 %) | - | - |
-| [isw-ball-screw-axis](isw-ball-screw-axis/) | `screw-axis` | measured | CC-BY-4.0 | s-profile-v300: 0.370 N m (4.6 %) / 2.19 N m (27 %) | sine-a100-v100: 0.789 N m (2.3 %) / 30.0 N m (88 %)<br>constant-speed-v100: 0.896 N m (6.1 %) / 3.65 N m (25 %) | 134 ± 13 → 137 Hz<br>123 ± 10 → 137 Hz<br>126 ± 12 → 137 Hz |
+| [example-synthetic-belt-axis](example-synthetic-belt-axis/) | `single-axis` | synthetic | CC0-1.0 | trace: 0.00307 N m (0.7 %) / 0.0110 N m (2.7 %) | - | - |
+| [isw-ball-screw-axis](isw-ball-screw-axis/) | `screw-axis` | measured | CC-BY-4.0 | s-profile-v300: 0.368 N m (4.6 %) / 2.20 N m (27 %) | sine-a100-v100: 0.709 N m (2.1 %) / 24.5 N m (72 %)<br>constant-speed-v100: 0.896 N m (6.1 %) / 3.65 N m (25 %) | 134 ± 13 → 137 Hz<br>123 ± 10 → 137 Hz<br>126 ± 12 → 137 Hz |

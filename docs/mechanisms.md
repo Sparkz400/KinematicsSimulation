@@ -67,7 +67,15 @@ A joint's coordinate is an angle (rad) or a travel (m). A screw or rack turns th
 
 - ratio i / lever, the lever the travel per radian (lead / 2 pi, or the pinion's pitch radius);
 - stiffness 1 / (lever^2 / k_gearbox + 1 / k_converter): the gearbox's torsional stiffness seen at the joint, in series
-  with the screw's or rack's own; damping likewise over lever^2;
+  with the screw's or rack's own. A screw's own is its shaft between the fixed bearing and the nut, E A / a, in series
+  with nut and bearings: with `effects.screw_stiffness_with_position` at the nut's place (`screw.fixed_bearing_at_m`
+  the travel at the bearing), otherwise at the softest place for the whole stroke;
+- damping: the gearbox's over lever^2 across the gearbox's spring alone, and the screw's or rack's own across its
+  spring alone, c = 2 zeta sqrt(K_c m) from `screw.axial_damping_ratio` or `rack.damping_ratio` and the mass m it moves
+  (nut, bearings, guides), K_c at the nut's place where the stiffness follows it (zeta kept along the stroke); two
+  damped springs in series, the machine carries one more state for them
+  (`Gearbox::arm`). With the gearbox's damper alone (K_g = k_gearbox / lever^2) a mass on the pair rings with
+  c (K_c / (K_c + K_g))^2 at low frequency, not c;
 - backlash: the gearbox's seen at the joint plus the converter's (with `effects.gearbox_backlash`);
 - efficiency: the product (with `effects.gearbox_efficiency`);
 - the screw shaft's or pinion's inertia added at the rotor over i^2.
@@ -100,7 +108,7 @@ slide config of the kit (screw, rack, linear motor, the SCARA's quill):
 | Buckling | F_k = factor pi^2 E I / L^2, factor 1/4, 1, 2.046, 4; allowed F_k / `buckling_safety_factor`. |
 | Static load | C0a / `static_safety_factor`. |
 | d n | nominal diameter (mm) times speed (r/min), against `max_dn` (0 judges none). |
-| Axial stiffness | shaft A E / x (fixed-fixed: A E L / (x (L - x))), nut and fixed bearing in series; taken at the softest nut position. |
+| Axial stiffness | shaft A E / x (fixed-fixed: A E L / (x (L - x))), nut and fixed bearing in series; at the nut's place with `effects.screw_stiffness_with_position` (on in the shipped configs but the measured ball screw's), else at the softest nut position. |
 | Preload drag | T = K F_pr l / (2 pi), K = 0.05 / sqrt(tan beta) (THK); added to the guides' friction as T 2 pi / l. |
 | Life | L10 = (Ca / (fw F_m))^3 10^6 turns. A preloaded nut carries F_pr (1 + F / (2.83 F_pr))^(3/2) until the force lifts the preload (Hiwin). |
 
@@ -118,7 +126,9 @@ A vertical axis: `slide.incline_deg = 90` (gravity pulls along the travel by the
 beta). The check `rack-feed-force` holds the highest force on the teeth (signal `rack.1.feed_force`: the force the load
 gets over the rack's efficiency while the pinion drives, times it while the load drives back) against
 `rated_feed_force_n` over the application factor K_A (`service_factor`). Rack makers publish the permissible feed force of a pair, not a life formula, so the rack
-has no life check; the planetary gearbox before it has its own (`gearbox-life`).
+has no life check; the planetary gearbox before it has its own (`gearbox-life`). `pressure_angle_deg` (normal section, optional, 20 as DIN 867 where
+absent, below 45) gives the force pushing pinion and rack apart, F tan(alpha) / cos(beta), that the pinion's radial load on the
+gearbox shaft counts.
 
 ## Linear motor
 
@@ -192,7 +202,7 @@ URDF has no closed chains. A parallelogram that couples joints, as a palletiser'
 has one motor per column; the dynamics are the chain's taken to the motors' joints, M = C^T M_urdf C and h = C^T h_urdf
 (C is constant, so it adds no term; the coupling's forces do no work). A motor joint alone in a row of factor c takes
 that URDF joint's limits over c. `[]` is one motor per URDF joint.
-shortcut: the parallelogram's bars are in the links they move with, not bodies of their own.
+The bars the URDF leaves out can be bodies of their own (`arm.bars_*`): the palletiser's rod and crank are (model reference).
 
 The palletiser (`palletiser`, `urdf/palletiser.urdf`, about 20 kg payload, 1.6 m reach) has five URDF joints and four
 motors: the turret, the upper arm, the forearm's angle against the base (a parallelogram from the base drives it: joint 3
@@ -209,8 +219,9 @@ across the line from the flange to its centre (`arm.payload_offset_m`, the pendu
 vacuum gripper or a sack in a sling. The two swing joints are joints no motor drives (`chain::Mechanism::passive_joints`):
 their angles and speeds follow the joint machine's other states, their dynamics are the chain's with the swing's bodies,
 the damper's power is the loss `power.payload_swing` and the angles the signals `swing.1.angle`, `swing.2.angle`. The
-feedforward and the poses at rest see the payload fixed to the flange. The palletiser's carton swings at 2.2 Hz
-(sqrt(k / (m l^2) + g / l) / 2 pi with 120 N m/rad, 20 kg, 0.2 m).
+feedforward and the poses at rest see the payload fixed to the flange. The palletiser's carton swings at 1.61 Hz
+about the axis across its 0.6 m side and 1.82 Hz about the other (sqrt((k + m g l) / (m l^2 + I)) / 2 pi with 120 N m/rad,
+20 kg, 0.2 m and the carton's own inertia I = 0.75 and 0.4167 kg m^2: 159.2 / (0.8 + 0.75), 159.2 / (0.8 + 0.4167)).
 shortcut: without the payload the swing's joints carry a unit inertia of their own, apart from the arm.
 
 ### An arm on a track
@@ -230,7 +241,7 @@ turn; 130.5 kg move on it at up to 1 m/s and 3 m/s².
 F = dP/dt + Σ m g z and M_O = dH_O/dt + Σ c × m g z (the rates of the chain's momentum P and its angular momentum H
 about the base's origin by central differences), taken to the carriage's frame between the blocks. Its push along the
 rails is the rack's; the rest the blocks share as rigid supports, each F_z / 4 ± M_x / (2 w) ∓ M_y / (2 l) on its rail and
-F_y / 4 ± M_z / (2 l) across it, its load the sum of both magnitudes (the catalogue's equivalent load). The signal
+F_y / 4 ± M_z / (2 l) across it, its load the sum of both magnitudes (the catalogue's equivalent load). The rack's side (`track.rack_side`, ±1 along the carriage's y) decides on which side the helical pinion's separating force adds to F_y, and its lever (`track.rack_lever_m`) turns the drive's push into a yaw moment on the blocks, M_z + side · lever · F_x; the defaults, +1 and 0, are the loads as they were counted. The signal
 `axis.j1.guide_load` is the most loaded block's load times four, so that the guide verdicts, which share a load equally
 among a set of four and rate the set as one (`parts.axis = "<block>x4"`), judge that block: `guide-load` against
 `ratings.guide_max_load_n`, `guide-life` from `ratings.guide_dynamic_load_rating_n` and the track's speed. The moments
@@ -271,7 +282,10 @@ points (`error-path-torque`): where the motors allow only a crawl it would fill 
   names, as many as the motors or one fewer (a redundant arm); `"j1"` ahead of them makes the first joint's own position
   an axis (a track's: see [An arm on a track](#an-arm-on-a-track)). The orientation is the rotation vector (axis times angle,
   base frame) of the turn from the flange's orientation at zero joints: a URDF whose flange points down at zero is at
-  0 there, not half a turn from the base frame. A pose within 0.01 rad of half a turn from that is refused
+  0 there, not half a turn from the base frame. With two of the three turns (the five-axis arm's rx, ry) they are where
+  the tool points: the shortest turn from the flange's direction along the missing axis at zero joints to where it
+  points now, whose missing part is 0, whatever the joints turn the tool about that direction; the flange's angular
+  checks judge that turn alone, and a move keeps them with the missing turn at 0. A pose within 0.01 rad of half a turn from that is refused
   (`error-arm-orientation-half-turn`): there the rotation vector jumps. The joints by damped least squares on the
   Jacobian of the tool's axes (central differences; dq = J^T (J J^T + lambda^2 I)^-1 e, lambda 1 mm, the turns times
   the flange's distance from joint 2 at `kinematics.home_joints`), along the straight line from the last solution to
@@ -295,8 +309,8 @@ y: 70.5 degrees about their bisector halfway, the straight line's 63.6 degrees).
 SCARA's c, the palletiser's rz, the five-axis arm's rx, ry) run each axis straight.
 
 `config/scara-tool.toml` and `config/arm-tool.toml` are the default configs with tool space on, a start pose and a cycle
-of straight lines (the arm's settling tolerances 5 mm and 5 mrad: under the payload its flange rests 2.4 mm off the
-encoders' pose and turned 3.2 mrad). `config/arm5-tool.toml` and `config/arm7-tool.toml` are the five-axis example (`urdf/five-axis.urdf`:
+of straight lines (the arm's settling tolerances 5 mm and 5 mrad: under the payload its flange rests 2.3 mm off the
+encoders' pose and turned 3.1 mrad). `config/arm5-tool.toml` and `config/arm7-tool.toml` are the five-axis example (`urdf/five-axis.urdf`:
 the six-axis arm without the flange's roll, pointing down at zero; axes x, y, z, rx, ry, where the tool points) and the
 seven-axis one (`urdf/seven-axis.urdf`: a roll joint in the upper arm; axes x, y, z, rx, ry, rz), each with a cycle of
 straight lines, for `--config` with the `urdf-arm` machine. Their proportions are generic, every value an estimate.
@@ -389,8 +403,16 @@ J(θ) = J_disc + m s'², the speed term m s' s'' θ'², and the spring's and the
 potential F0 s + k s² / 2 + m g s): the torque swings with the lift law, driving the disc back on the return. Signals:
 the follower's lift, speed and acceleration, the contact force, the pressure angle, the guide's load and J(θ); judged
 against `ratings.disc_max_contact_force_n` and `disc_max_pressure_angle_deg`. With `cam.run` the disc turns on at
-`disc.turns_per_min`, its master virtual. The roller stays on the disc: where N would fall below zero the follower would
-lift off, which the signal shows and the model does not part (a spring sized that short). The middle of the disc's
+`disc.turns_per_min`, its master virtual. With `effects.follower_lift_off` the follower leaves the disc where N would fall below
+zero: its gap g to the cam is a passive joint (lift s + g), the contact the roller's steel line contact (Palmgren's d =
+3.84e-5 Q^0.9 / l^0.8 in mm and N over its width l, `follower.roller_width_m`: 4e8 N/m at 160 N) and a damper at
+`contact_damping_ratio` of critical with that stiffness, in compression only, so the force on the disc is never negative
+and does not jump at the touch, and the guide's friction (`follower.guide_friction_n`) acts. At rest the roller sits
+pressed in by its load (0.45 µm). Lagrange's equations: (J + m s'²) θ'' + m s' g'' + m s' s'' θ'² + (F0 + k (s + g) + m g + F_f) s' = torque
+and m s' θ'' + m g'' + m s'' θ'² + F0 + k (s + g) + m g + F_f = F_c; the damper's power is booked as a loss, so the budget closes through an
+impact (`power.follower_contact`). Signals `follower.gap` (negative: pressed in) and `follower.off_disc` (the contact
+carries nothing). Off, the roller stays on the disc and the signal alone shows where N would
+fall below zero. The middle of the disc's
 range lies on the first half of the rise, where s'' > 0 and spring and weight hold the disc where it is held against
 them; past the rise's middle they turn it away.
 
@@ -483,22 +505,29 @@ follows it over |theta - 2 pi k| < h and stands outside, a station on per turn (
   modified sine (VDI 2143: a quarter sine of acceleration over the first and last eighth, a half sine of a third the
   frequency between; peak acceleration 4 pi² / (4 + pi) = 5.528, peak speed 1.760) over `indexer.index_angle_deg` of its
   turn, and holds it on its dwell ridge over the rest. No step in acceleration at either end: its jerk is finite. The
-  rollers on the turret's pitch radius take the turret's torque over that radius (the cam's pressure angle left out).
+  rollers on the turret's pitch radius take the turret's torque over that radius, along the normal with `indexer.cam_radius_m`
+(R_c): tan α = r_p φ' / R_c, N = F / cos α (shipped: α = 35° at the fastest; the peak force, in the deceleration,
+2.1 % more: 359.8 N against 352.5 N at 60 indexes a minute).
 
 The wheel, the table and its parts (`mass.payload_kg` at `table.station_radius_m`) give J(theta) = J_driver + J_t phi'²
 and the speed term J_t phi' phi'' theta'²; the table is horizontal, so gravity does nothing (as process force and frame
 stretch, a switch these machines do not read). **Index accuracy** in the dwell is the lock's: half
 `indexer.locking_play_rad` at the station radius (`index-accuracy` against `ratings.index_max_error_m`), whatever the
 motor's following error, as the locking disc or the dwell ridge holds the table, not the servo. **Settling**: the table
-twists on its shaft against the held wheel (`table.stiffness_nm_rad`, `table.damping_ratio`); through the index its twist
-follows x'' + 2 zeta w_n x' + w_n² x = -phi'' theta'², and the ring left at the index's end dies as exp(-zeta w_n t). The
+twists on its shaft against the held wheel (`table.stiffness_nm_rad` k, `table.damping_ratio`); through the index its
+twist follows x'' + 2 zeta w_n x' + w_n² x = -phi'' theta'², w_n² = k / J_s with J_s the table and its parts (the
+wheel, held by the cam or the pin, is not in the mode), and the ring left at the index's end dies as exp(-zeta w_n t). The
 signal `table.settling_time` is the time the table rings beyond `ratings.index_settling_tolerance_m` (at the station
 radius) after an index run at the driver's present speed, solved over 2000 steps by the oscillator's exact solution for a
-held force; `index-settling` judges it against `ratings.index_max_settling_s`. On the shipped table (w_n = 603 rad/s,
-zeta 0.03) the Geneva's step leaves 63 µrad, 12.5 µm, settling to 10 µm in 12.5 ms at 60 indexes a minute and 66 ms on
-the servo cycle that runs the index at up to 10 rad/s; the cam indexer's modified sine leaves 9 µrad (its jerk over
-w_n³) and is settled when the index ends. The ring is worked out beside the dynamics, not in them: the drive does not see
-it.
+held force; `index-settling` judges it against `ratings.index_max_settling_s`. On the shipped table (w_n = 620 rad/s,
+zeta 0.03) the Geneva's step leaves 59 µrad, 11.9 µm, settling to 10 µm in 9.1 ms at 60 indexes a minute (9.6 ms in the
+run) and 60 ms on the servo cycle that runs the index at up to 10 rad/s; the cam indexer's modified sine leaves 8 µrad
+(its jerk over w_n³) and is settled when the index ends. The ring is worked out beside the dynamics, not in them: the drive does not see
+it. With `effects.table_twist` the twist is a passive joint x of its own: (J_d + J_t φ'²) θ'' + J_s φ' x'' + J_t φ' φ'' θ'²
+= torque and J_s (φ' θ'' + x'' + φ'' θ'²) = −k x − c x', J_s the table with its parts, J_t with the wheel, c = 2 ζ √(k J_s); the
+ring then acts back on the driver (signal `table.twist`, the damper's loss `power.table_twist`), and the cam's torque on
+the wheel is J_w a_w less the shaft's k x + c x'. The ring as a joint is the one worked out beside: 5.930e-5 rad against
+5.940e-5 after the Geneva's index at 60 a minute.
 
 The shipped cycle turns the driver one turn (one index) from the middle of a dwell and back; `config/geneva-drive-cam.toml`
 and `config/cam-indexer-cam.toml` turn it on at 60 turns a minute:
@@ -521,8 +550,9 @@ for 6 kg on a 20 mm lead), and a turn of the tool about z (`[tool_turn]`, motor 
 its own motor, gearbox, drive and ratings tables (`[motor.3]`, `[gearbox.4]`, ...). Everything at the plate (the units
 with their motors, the carriage, the payload) adds to the plate's mass in the plane; the stroke and the turn are
 perpendicular to the plane, so they do not couple with it otherwise. The tool pose is (x, y), (x, y, z), (x, y, c) or
-(x, y, z, c), as the two switches say. The stroke and the turn are rigid joints: the screw's and the turn gearbox's
-twist and backlash are not modelled. See the [model reference](model-reference.md).
+(x, y, z, c), as the two switches say. With `effects.joint_elasticity` (on as shipped) the stroke and the turn are
+elastic like the arms' joints: the rotor a body of its own and the coupling's and screw's spring (in series) or the
+turn gearbox's between it and what it moves. See the [model reference](model-reference.md).
 
 ## Two-part plate with a rack-and-pinion amplifier (delta-h4)
 
@@ -576,7 +606,10 @@ column's axis (0.8 m/s² outwards and 1.8 m/s² along); the wafer reaches 1.83 m
 k = 9.4e5 N/m, 150 N): their stretch lets the forearm and the effector lag behind the column and the upper arm, the
 wafer lags in r and the effector turns out of its radial line (`effector.direction_error`; judged while it dwells at a
 station, `effector-direction`); a span that loses all its pretension runs slack (`elbow-band-slack`, `wrist-band-slack`
-judge the swing against half of it). See the [model reference](model-reference.md#wafer-handler) and the
+judge the swing against half of it). With the gearboxes elastic (`effects.joint_elasticity`) the lift's coupling and screw
+are a spring too (in series 4.56e7 N/m at the nut's far end; with `effects.screw_stiffness_with_position`, on as
+shipped, at the nut's place): the column rings on it with the rotor held at 432 Hz at the start pose's lift (321 Hz at the
+far end), and the screw's peak force on the default cycle rises from 171.9 N (rigid) to 184.5 N. See the [model reference](model-reference.md#wafer-handler) and the
 [config reference](config-reference.md#wafer-handler).
 
 ## Parallel kinematics: hexapod and cable robots
@@ -595,7 +628,7 @@ and sized like every other machine (`sim-cli analyze hexapod`, `sim-cli verdicts
 
 Their proportions are generic, every value an `[estimate]` but the motor's and drive's (catalogue, as above). Each
 default cycle passes all its verdicts; the cable robots' settling tolerances are requirements of their size (0.3 mm
-planar, 1 mm spatial), not the ball screw axis's 0.05 mm.
+planar, 1 mm and 2 mrad spatial), not the ball screw axis's 0.05 mm.
 
 ### Hexapod
 
@@ -616,9 +649,11 @@ and the motor are those of the ball screw axis above. The mechanism gives the pl
   the pose moves them anyway.
 - J's rows are (u_i, b_i × u_i), u_i the leg's direction and b_i = R a_i. Dynamics by the platform's twist: M_xi xi' +
   c + g = J^T f, so in leg space M_q = J^-T M_xi J^-1 and h = J^-T (c + g − M_xi J^-1 a0), a0 the legs' length
-  acceleration at the twist (checked against the Lagrange equations of M_q by differences: equal to 1e-9). Each leg's
-  mass is split between its ends: `leg.platform_share` moves with the platform joint (a point mass in the platform's
-  mass and inertia), the rest sits still at the base.
+  acceleration at the twist (checked against the Lagrange equations of M_q by differences: equal to 1e-9). Each leg is
+  two bodies swinging with its direction: the rod part (`leg.platform_share` of `leg.mass_kg`, centre
+  `leg.platform_part_centre_m` from the platform joint) and the body part (the rest, centre `leg.base_part_centre_m`
+  from the base joint), each with its inertia about its centre across the leg; their kinetic energy enters M_xi and c,
+  their weight g. The payload may have an inertia of its own (`mass.payload_inertia_kgm2`, 0: a point mass).
 - Refused: a leg beyond its stroke (`error-joint-beyond-stop`), a leg steeper against the base's or the platform's
   normal than `workspace.max_joint_angle_deg` (`error-hexapod-joint-angle`), a pose whose Jacobian has a condition
   number above `workspace.max_condition_number`, the turns weighed by the platform radius
@@ -706,7 +741,7 @@ pickers. See the [model reference](model-reference.md#hexapod-with-rotary-actuat
   of the crank and its axis, the torque arm zero) than `workspace.min_dead_centre_margin_deg` (`error-rss-dead-centre`),
   a ball joint beyond `workspace.crank_joint_max_angle_deg` (the rod out of the crank's plane) or
   `platform_joint_max_angle_deg` (against the platform's normal; `error-rss-ball-joint`), two rods nearer than
-  `workspace.min_rod_clearance_m` axis to axis (`error-rss-rods-cross`), a condition number above
+  `workspace.min_rod_clearance_m` axis to axis (`error-rss-rods-cross`), a rod nearer than `workspace.min_body_clearance_m` to an edge of the platform's or the base's hexagon (`error-rss-rods-cross-body`), a condition number above
   `workspace.max_condition_number` (`error-rss-singularity`), a crank beyond its stops.
 - Dynamics by virtual work in the crank angles: the platform and payload as one rigid body with its centre of mass off
   the platform centre, each rod as a slender rod (a sixth of its mass at each end and two thirds at its middle: exact
@@ -749,12 +784,42 @@ arc r beta plus the tangent l_f = sqrt(m² − r²), and dL/dP = −u, u the uni
   with the drums held, gives its natural frequencies (`sim-cli modes`, the input shaper's resonance): 24.6 Hz at the
   planar robot's centre. `effects.cable_damping` adds `cable.specific_damping_n_s` / l. Rigid (off), the cables keep
   their length.
+- The cables' own mass (`cable.mass_per_m_kg`, 3 g/m and 10 g/m shipped, [estimate]; 0 leaves it out): half of each
+  span's weight hangs on the platform, and a cable sags (shallow parabola): at the chord tension T it is longer than its
+  chord by (w l_h)² l_f / (24 T²), so with t0 = EA (L − l) / l the straight cable's tension, t0 = T − c / (2 T²),
+  c = (w l_h)² EA l_f / (12 L); its stiffness dT/dt0 is Ernst's equivalent modulus E / (1 + (w l_h)² EA / (12 T³)), and
+  a slack cable still hangs with a small tension. Against the exact elastic catenary the pull on the anchor agrees to
+  9e-5 N at 20 N and 2e-4 N at 5 N (the straight cable misses it by 0.17 N and 1.6 N there).
+- The winches' drums and rotors spin about `frame.winch_spin_axes` (default horizontal and square to the cable's
+  direction at the winch; with a vertical one the pulley's axle at rest), and their spin is in the frame's load.
+- The time-optimal plan keeps every cable's tension of the rigid model within the band (`cable.min_tension_n` to the
+  rating, `profile.tension_reserve` of the room): the planar default cycle takes 1.684 s instead of 1.653 s without the
+  band, where a cable went down to 0.63 N; cable-spatial 1.207 s instead of 1.143 s.
 - Each winch is a `joint::RotaryJoint` in metres of cable: motor, gearbox with the drum's radius as its lever, the drum's
   inertia, friction of bearings and pulley (`effects.winch_friction`), stops at an empty and a full drum. Elastic, drum
   and rotor are bodies of their own behind the gearbox's spring; rigid, the cables keep their length and the winches'
   inertia joins the platform's.
+- The gears' mesh friction (`effects.gearbox_mesh_friction`) holds (1 - eta) of the torque each gear passes, and a
+  winch's gear always passes the cable's pretension: at cable-spatial's 250 N, 30 mm drum, ratio 5 and eta 0.95 a band
+  of +-12.5 N at the cable (+-0.075 N m at the motor) inside which the drum stands still. A turn of the platform moves
+  each cable by little (at the home pose 35, 28 and 14 mm per rad for rx, ry, rz), so the sum of the eight bands along
+  a turn, 3.5, 2.8 and 1.4 N m, against the position loop's proportional stiffness through the cables (830, 530 and
+  130 N m/rad) is a dead band of 4, 5 and 11 mrad without the integrator: by hand, a 0.5 mrad sine of rx at 1 Hz
+  asks the loop for 1.0 to 1.1 times the band's torque, rz for 0.4, so with the speed loop's Tn at 30 ms rx and ry
+  followed to 1.41 and 1.25 Hz and rz had no band (simulated alike; 4.44, 4.37 and 4.06 Hz with the friction off). The
+  friction is physical, so the tuning changed: Tn 5 ms, by the symmetric optimum from the speed loop's 80 Hz crossover
+  (phase margin 60 degrees), lets the integrator break the meshes away within the turn: 5.6, 5.2 and 4.4 Hz. A lower
+  pretension would narrow the band too, but below 200 N the cycle takes cable 7 under its 20 N. The machine friction
+  feedforward (`drive.friction_feedforward_model = "machine"`) now has the meshes' friction on the tension at rest,
+  (1 - eta) of each gear's held torque along the planned motion, so that the integrator no longer carries it through a
+  move and takes it past the target when the move stops; it acts on the planned speed and does not reach a step or a
+  sine on the setpoint. In the PLCopen test's 5 mrad move of rz the platform then stands 0.31 mrad past the target
+  0.3 s after Done and 0.17 mrad 1 s later (0.55 and 0.20 before), inside the 2 mrad turn tolerance the spatial config
+  now states (`ratings.settling_tolerance_rad`). The planar robot moves its cables by its translations alone and keeps
+  30 ms (9.3 and 9.8 Hz).
 - The motors' angles of a pose are those of the free lengths that hold the platform there at rest, l = L / (1 + t /
-  EA), t the closed form's tensions (the distribution's wherever no cable sits at a bound), so position setpoints and the
+  EA), t the tension distribution's wherever one exists (the closed form's only beyond the wrench-feasible workspace),
+  so position setpoints and the
   torque feedforward (the distribution's tensions for the platform's wrench, plus the winches' inertia) ask the same
   pretension of the cables. The forward kinematics is Gauss-Newton on these lengths; the controller uses it twice a
   position cycle (the following error in tool space), so it takes cheap steps first and the numerical Jacobian only near
@@ -795,9 +860,13 @@ end-position sensors (`wait = ["z.extended"]`) before the dwell counts and the n
 `machines/pneumatic-axis.toml`: the belt-driven servo X of `single-axis.toml` carrying a Festo DSBC-32-100-PPVA-N3
 (32 mm bore, 12 mm rod, 100 mm stroke, PPV cushions 17 mm, 0.4 J) hanging downwards on a 5/2 valve with meter-out
 throttles; 0.5 kg moved, 0.5 kg picked. The cycle: X to the pick, Z down, wait, grip, Z up, wait, X to the place, Z
-down, release, Z up. With the shipped settings Z extends in 0.55 s and retracts in 0.65 s (valve 7 ms, the rod side
+down, release, Z up. With the shipped settings Z extends in 0.55 to 0.56 s and retracts in 0.65 s (valve 7 ms, the rod side
 exhausting from supply, 0.216 m/s throttled, the cushion's bleed at the end), enters the cushion at 0.22 to 0.24 m/s
-with 0.012 to 0.029 J against the 0.4 J rated (`cushion-energy`), stops at 0.06 to 0.07 m/s on the bumper without
+with a kinetic energy of 0.012 to 0.029 J against the 0.4 J rated (`cushion-energy`). The check is the vendor's rule for
+the cylinder's own cushioning, the kinetic energy at the cushion's entry against the maximum impact energy of the
+table (Festo DSBC data sheet, "Forces and impact energy", v = sqrt(2 E / (m1 + m2)), p. 13); the weight's work over
+the cushion length, m g L, belongs to Festo's rule for external shock absorbers and is not added (hanging 1 kg over
+the 17 mm: 0.167 J more, which this check does not count). It stops at 0.06 to 0.09 m/s on the bumper without
 bouncing out of the sensor band, and has a load factor of 0.024 (`load-factor`, the 1 kg weight against 415 N
 retracting). A double stroke draws 1.10 normal litres, 474 J at the compressor (0.12 kWh/m³); by hand at the supply
 pressure and the wall's temperature 1.15 l, the 4 % less because the dwells are too short for the hot air to cool.
@@ -864,7 +933,7 @@ position loop of its own. The shipped config: six movers of 651 g (AT9014) with 
 straights of four 250 mm modules (AT2000) and two 180° curves 267 mm across, a 100 mm clothoid at each end of an arc of
 130.3 mm (the split is an estimate; Beckhoff publishes the width and that it is a clothoid); 3.019 m round. A mover gives
 100 N peak and 30 N continuous, 4 m/s, 10 g unloaded (the 5-pin magnet plate on 48 V; with the payload the plate moves
-1.65 kg at 60 m/s², the axes are limited to half that, 30 m/s²); force constant, coil resistance, the
+1.25 kg at 79.9 m/s², the axes are limited to 30 m/s²); force constant, coil resistance, the
 attraction (300 N) and the pole pitch are estimates.
 
 | Id | Mechanism | Transmission | Tool pose | Own checks |
@@ -887,6 +956,10 @@ there is one; its rate, the lateral jerk 2 v a k + v³ dk/ds, is what the clotho
 circle, 614 m/s³ into the clothoid). The movers run outside the loop with the plate facing the coils, so the centrifugal
 force m v² k pulls a mover off the coils against the attraction: the rollers carry sqrt((F_a − m v² k)² + (m g)²)
 (`mover-guide-load`), and the share m v² k / F_a (`curve-holding`) must stay below 1, where the mover lifts off.
+`mass.centre_offset_m` = e puts the movers' mass centre outside the centre line (the drawn mover's is 35 mm out; 0
+ships): in a curve it runs on R + e at v (1 + e k), its lateral acceleration v² k (1 + e k) (38.9 m/s² mid-arc at 2 m/s
+with e = 35 mm, 30.7 at e = 0) and its kinetic energy ½ m v² (1 + e k)², with the tangential force of that mass changing
+over the clothoid in the dynamics (the energy is kept). The offset moves the mover body and payload, not the plate.
 
 **Coils and segments.** A mover's current is its force over the force constant; it flows in the coils under its magnet
 plate, shared among the segments by the plate's length on each. A segment's current is the sum of its movers' shares
@@ -954,15 +1027,12 @@ hoist, S210 drives), its wheel or drum the lever: 30:1 on 80 mm wheels, 25:1 on 
   pick place the load travels 0.2 m and 0.1 m to the place while it is lowered by 0.15 m, and is let go; the empty hook
   goes up and back in one move, down to the next load, 0.3 s to sling it, and hoists it. Every move but the pick's
   lowering and hoisting travels and changes the rope's length at once, so every drive moves from the start. Shaped,
-  every verdict passes (residual sway 4.3 mm, the rope 2727 N at most and never below its least tension, the hoist brake
-  loaded to 5.5 of 7.5 N m); unshaped, the load is left swinging by 0.32 m and `residual-sway` fails, and so does
-  `thermal-warm-start` (the sway left from one pass changes the next, so the passes never repeat: a winding's rise
-  1.1 K apart). A workshop crane's real cycle over the runway takes a minute: a segment's target of [8.0, 4.0, 1.0].
+  every verdict passes (residual sway 4.4 mm, the rope 2721 N at most and never below its least tension, the hoist brake
+  loaded to 5.4 of 7.5 N m); unshaped, the load is left swinging by 0.30 m and `residual-sway` fails (its warm start
+  converges on the default cycle, 0.019 K; with `effects.hook_block` the sway one pass leaves carries into the next and
+  the verdict `thermal-cycle-repeat` names it). A workshop crane's real cycle over the runway takes a minute: a segment's target of [8.0, 4.0, 1.0].
 - **The drives' velocity loops** are tuned as stiff as the other machines' (bridge and trolley some 60 Hz, 2.0 and 0.24
-  N m s/rad). The hoist's, measured at rest under the 265 kg (`sim-cli margins`), has no gain crossover (NaN): its 92 %
-  gearbox's efficiency, faded in below 0.5 W, is a damper of 2601² ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope,
-  4.5 N m s/rad at the motor, which the test torque does not break away from; the gear holds the loop at rest. Without
-  the gear's losses (`--set effects.gearbox_efficiency=false`) its crossover is 48 Hz.
+  N m s/rad). The hoist's is measured at rest under the 265 kg (`sim-cli margins`) with the gearbox's efficiency effect off: with it on, the 92 % gearbox's efficiency, faded in below 0.5 W, is a damper of 2601² ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope, 4.5 N m s/rad at the motor, which the test torque does not break away from, and the loop shows no gain crossover. Without the gear's losses, with a tenth of the hoist's own rated torque (0.66 N m) as the test torque, it crosses over at 50.4 Hz with 73.7° and 21.0 dB (at 0.32 N m, a tenth of the shared drive's rating: 48.5 Hz, 83.1°, 21.3 dB, where the motor's friction damps the smaller signal more).
 - **Verdicts of its own:** `rope-max-tension` (the highest tension against `rope.breaking_load_n` / `safety_factor`,
   4444 N), `rope-min-tension` (any fall below `rope.min_tension_n`, 50 N, fails: no slack rope), `residual-sway` (the
   load's sway amplitude √(d² + (d' / ω)²) at every dwell, d its horizontal offset from under the sheave, against
@@ -1085,7 +1155,8 @@ dr/dφ = −0.554256 m/rad; the R motor's inertia by hand M_φφ = m₁ c₁² +
 turn at 1 rad/s at r = 0.5 m the wafer's acceleration is (−0.5, 1.0) m/s²; a torque of 1 N m on the effector stretches
 the bands by β = 2.955083e-4 and γ = 5.819704e-4 rad (K₁ = 1692, K₂ = 2303 N m/rad) and turns it out of its radial line by
 3.300103e-4 rad; the rigid bands carry dT₁ = −4.271710 N and dT₂ = 4.379926 N at θ̈ = 10 rad/s² with the wrist over the
-column; the Z motor holds 11.2276 kg with 0.1752378 N m; the modes against numpy's (18.20 to 186.45 Hz); the hold on
+column; the Z motor holds 11.2276 kg with 0.1752378 N m; the modes against numpy's (18.20 to 186.45 Hz) and the column on its
+screw and coupling, 320.8907 Hz by hand; the hold on
 pads, vacuum and edge; a span runs slack beyond its pretension; the default cycle passes all verdicts and the reach
 speeding up at 3 m/s² slips the wafer.
 
@@ -1117,7 +1188,8 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
 
 ## Limits
 
-- A screw's stiffness is taken at its softest nut position for the whole stroke.
+- A screw's stiffness follows the nut only with `effects.screw_stiffness_with_position` (on in the shipped configs but
+  the measured ball screw's); off, it is taken at its softest nut position for the whole stroke.
 - The arm on its track: the rack's push is taken through the carriage's origin (no moment of its own on the blocks),
   the arm's motor rotors' gyroscopic moments are left out of the guide load, and the blocks are rigid supports (no
   guide stiffness: the carriage does not tilt on them); the guide load is not told to the time-optimal plan
@@ -1132,16 +1204,15 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
 - No unbalance on the rotary table, no rack life formula (none published), no cross roller bearing check.
 - A cam's master cannot yet be the conveyor of `[conveyor]` (the cam's master is its own, with the conveyor's
   speed-and-ramp model); a new master speed starts its ramp from the master's speed without its acceleration (a step in
-  acceleration where it comes during a ramp); the crank's, the knife's and the disc's joint has no stops while the cam
-  turns it on; the disc cam's follower is a translating one (no swinging lever) and never lifts off the disc; the slider-crank's press force acts only on the way out (no springback), the toggle press's also at rest and fades as the ram rises (its frame's stretch is a massless spring, the links are rigid) and the knife's and saw's cut force
+  acceleration where it comes during a ramp); the disc cam's follower is a translating one (no swinging lever); the slider-crank's press force acts only on the way out (no springback), the toggle press's also at rest and fades as the ram rises (its frame's stretch is a massless spring, the links are rigid) and the knife's and saw's cut force
   only forwards.
 - The linear delta (`delta-linear`, three belt axes on columns that may lean, `geometry.column_incline_deg`) is a
   parallel machine, not one of these; see the [model reference](model-reference.md#linear-delta).
 
 - Hexapod: the legs' own turning about their base joints and the payload's inertia are left out; one stiffness per leg
-  (the screw's softest nut position). Its modes are reported with the motors held, as the arms' (`sim-cli modes hexapod`).
+  (the screw's at the nut, `effects.screw_stiffness_with_position`, on as shipped). Its modes are reported with the motors held, as the arms' (`sim-cli modes hexapod`).
 - Tripod: the legs' swing about their base joints is left out, as on the hexapod; no friction or play in the revolute
-  and spherical joints; one stiffness per leg (the screw's softest nut position); the forward kinematics' convergence is
+  and spherical joints; one stiffness per leg (the screw's at the nut, as on the hexapod); the forward kinematics' convergence is
   shown for the shipped box (a config with another geometry or box should run that test's check again).
 
 - Winder: both rolls have the same core, full radius, motor and gearbox; the web's mass in the spans, the change of the
@@ -1155,6 +1226,8 @@ just below its value. A category 2 stop and, in the middle of the roll, a catego
 
 - Hexapod with rotary actuators: the rods' spin about their own axes and the ball joints' friction are left out; of the
   parts that could cross only the rods are checked against each other; one crank branch for all legs.
-- Cable robots: the cables' mass and sag are left out; the wrench-feasible workspace is the static one (the cycle's
-  accelerations are judged by the tension verdicts, not planned around); near the workspace's edge the motors'
+- Cable robots: the cables' own inertia is left out (a third of each cable's mass moving with its anchor, 0.5 % of the
+  spatial platform's mass), and the sag's weight moving with the pose (5e-5 N); the wrench-feasible workspace of the
+  poses is the static one (a cycle's accelerations are held to the band by the time-optimal plan; within the axis limits
+  they are judged by the tension verdicts); near the workspace's edge the motors'
   stretch compensation counts on the closed form's tensions where the distribution holds a cable at a bound.

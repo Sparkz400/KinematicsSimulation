@@ -164,6 +164,108 @@ fn the_frame_stretches_under_the_press_force_and_the_ram_stops_short() {
     assert_eq!((check.signal.as_str(), check.limit), ("frame.deflection", 0.0004));
 }
 
+/// The ram's speed signal is the derivative of the height signal (positive up): the height is a + b - x with
+/// x' = 0.0364766 m/rad at q = -90 degrees (above), so at q' = 2 rad/s the height changes at -x' q' = -0.0729532 m/s.
+#[test]
+fn the_ram_speed_is_the_derivative_of_the_height() {
+    let p = press(&["effects.gravity = false"]);
+    let mut out = Vec::new();
+    p.signals(&[-PI / 2.0], &[2.0], &[0.0], &[0.0], &mut out);
+    let ids: Vec<String> = p.signal_infos().into_iter().map(|s| s.id.to_string()).collect();
+    let speed = out[ids.iter().position(|s| s == "ram.speed").unwrap()];
+    assert!((speed + 0.0729532).abs() < 1e-6, "{speed}");
+    // At any angle, the frame's stretch under the press force (at 0.3 rad) included: the height's central difference
+    // times q' (at q = -0.8 rad, q' = 2 rad/s: -0.051332 m/s).
+    let signal = |q: f64, qd: f64, id: &str| {
+        let mut out = Vec::new();
+        p.signals(&[q], &[qd], &[0.0], &[0.0], &mut out);
+        out[ids.iter().position(|s| s == id).unwrap()]
+    };
+    for q in [-0.8, -PI / 2.0, 0.3] {
+        let h = 1e-6;
+        let rate = (signal(q + h, 2.0, "ram.height") - signal(q - h, 2.0, "ram.height")) / (2.0 * h) * 2.0;
+        assert!(
+            (signal(q, 2.0, "ram.speed") - rate).abs() < 1e-7,
+            "{q}: {} against {rate}",
+            signal(q, 2.0, "ram.speed")
+        );
+    }
+    assert!((signal(-0.8, 2.0, "ram.speed") + 0.051332).abs() < 1e-6);
+}
+
+/// The ram's acceleration is the derivative of its speed, the frame's stretch under the press force included: along a
+/// crank motion of constant jerk through the press zone, down and (where the force fades) up, the central difference
+/// of `ram.speed` over 1 us gives `ram.acceleration`. Where the force fades the stretch follows the crank's speed, so
+/// the jerk counts: there the signal without it (`signals`, no jerk) misses s_w j.
+#[test]
+fn the_ram_acceleration_is_the_derivative_of_the_speed_in_the_press_zone() {
+    let p = press(&["effects.gravity = false"]);
+    assert!(p.reads_jerk());
+    let ids: Vec<String> = p.signal_infos().into_iter().map(|s| s.id.to_string()).collect();
+    let signal = |q: f64, qd: f64, qdd: f64, jerk: f64, id: &str| {
+        let mut out = Vec::new();
+        p.signals_with_jerk(&[q], &[qd], &[qdd], &[jerk], &[0.0], &mut out);
+        out[ids.iter().position(|s| s == id).unwrap()]
+    };
+    let (mut pressed, mut faded) = (false, false);
+    for (q, qd, qdd, jerk) in [
+        (0.3, 2.0, 30.0, 0.0),
+        (0.3, 2.0, -30.0, 400.0),
+        (-0.05, 1.0, 5.0, -300.0),
+        (0.05, -0.5, 8.0, 0.0),
+        (0.2, -3.0, 0.0, 200.0),
+        (0.02, 0.02, 2.0, 500.0),
+        (-0.02, -0.02, -2.0, -500.0),
+    ] {
+        let (force, held) = (p.press_force(q, qd).0, p.press_force(q, 0.0).0);
+        pressed |= force > 1.0;
+        let at = |t: f64| {
+            let (q, qd, qdd) = (
+                q + qd * t + qdd * t * t / 2.0 + jerk * t * t * t / 6.0,
+                qd + qdd * t + jerk * t * t / 2.0,
+                qdd + jerk * t,
+            );
+            signal(q, qd, qdd, jerk, "ram.speed")
+        };
+        let dt = 1e-6;
+        let (rate, acc) = ((at(dt) - at(-dt)) / (2.0 * dt), signal(q, qd, qdd, jerk, "ram.acceleration"));
+        assert!((acc - rate).abs() < 1e-4 * (1.0 + rate.abs()), "{q} {qd} {qdd} {jerk}: {acc} against {rate}");
+        if force > 1.0 && force < held - 1.0 && jerk != 0.0 {
+            faded = true;
+            let without = signal(q, qd, qdd, 0.0, "ram.acceleration");
+            assert!((without - rate).abs() > 1e-2 * (1.0 + rate.abs()), "{q} {qd}: {without} against {rate}");
+        }
+    }
+    assert!(pressed && faded, "no point stretched the frame, or none where the force fades");
+}
+
+/// The same on the shipped cycle: where the press force fades (0 < F < its value at rest, at a sample and both its
+/// neighbours) and the ram moves (over 1 mm/s), `ram.acceleration` is the central difference of `ram.speed` over the
+/// base steps (62.5 us). On 17 November 2026 the worst gap there was 0.019 m/s2, at the 1 ms ticks of the controller
+/// where the crank's jerk steps; without the crank's jerk (s_w j left out) it was 0.766 m/s2, of a peak of 10.6 m/s2.
+#[test]
+fn the_ram_acceleration_follows_the_crank_s_jerk_where_the_force_fades_on_the_shipped_cycle() {
+    let mut sim = Sim::new(&TOGGLE_PRESS, &TOGGLE_PRESS.config()).unwrap();
+    let (v, a) = (sim.signal_index("ram.speed").unwrap(), sim.signal_index("ram.acceleration").unwrap());
+    let p = press(&[]);
+    sim.command(Command::StartCycle).unwrap();
+    let (mut rows, mut sample) = (Vec::new(), Vec::new());
+    sim.run(0.8, |s| {
+        s.sample(&mut sample);
+        let (q, w) = (s.state[0], s.state[1]);
+        let (now, held) = (p.press_force(q, w).0, p.press_force(q, 0.0).0);
+        rows.push((sample[v], sample[a], now > 0.0 && now < held));
+    });
+    let (mut worst, mut count) = (0f64, 0);
+    for r in rows.windows(3) {
+        if r.iter().all(|r| r.2) && r[1].0.abs() > 1e-3 {
+            count += 1;
+            worst = worst.max((r[1].1 - (r[2].0 - r[0].0) / (2.0 * sim.dt)).abs());
+        }
+    }
+    assert!(count > 100 && worst < 0.025, "{count} samples, worst {worst} m/s2");
+}
+
 /// J(q) = J_crank + m_pin r^2 + (m_up / 3 + m_knee) a^2 phi'^2 + m_x x'^2: m_pin = 1.25 kg (half the rod), m_up = 2 kg,
 /// m_knee = 1.25 + 1 kg (the rod's and the lower link's halves), m_x = 20 + 1 + 8 = 29 kg (ram, half the link, die).
 /// At the dead centre (phi' = -0.2886751, x' = 0): 0.01 + 0.003125 + 2.9166667 * 0.0225 / 12 = 0.01859375 kg m^2;

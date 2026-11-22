@@ -36,11 +36,11 @@ fn heated_parts(cfg: &Config, machine: &dyn Machine) -> Result<Vec<HeatedPart>, 
             .iter()
             .position(|s| s.id == format!("{LOSS_PREFIX}{}", part.id))
             .ok_or_else(|| ConfigError::Invalid(format!("{LOSS_PREFIX}{}", part.id)))?;
-        let (resistance, time_constant, max_rise) = (
-            cfg.non_negative(&key("resistance_k_w"))?,
-            cfg.positive(&key("time_constant_s"))?,
-            cfg.positive(&key("max_rise_k"))?,
-        );
+        let (resistance, time_constant) = match machine.thermal_values(part.id) {
+            Some(own) => own,
+            None => (cfg.non_negative(&key("resistance_k_w"))?, cfg.positive(&key("time_constant_s"))?),
+        };
+        let max_rise = cfg.positive(&key("max_rise_k"))?;
         parts.push(HeatedPart { part, loss, loss_power: 0.0, resistance, time_constant, max_rise, rise: 0.0 });
     }
     Ok(parts)
@@ -51,6 +51,12 @@ fn heated_parts(cfg: &Config, machine: &dyn Machine) -> Result<Vec<HeatedPart>, 
 /// (a carriage swinging on its belt).
 const PUSH_RANGE: f64 = 0.01;
 
+/// How many times finer the integration's sub-steps are over a base step with a push at the tool: the contact's
+/// spring then acts on the load's own coordinates (not through the transmission's give), the highest frequency of the
+/// machine, and with `sim.substeps` = 4 the fourth-order steps took 3.5e-4 of the supply out of the budget of a belt
+/// gantry's move into a slab (2.8e-4 on a six-leg platform; falling with the third and second power of the sub-step),
+/// 5e-6 and 1.9e-5 four times finer (`sim-machines`' collision tests).
+const PUSH_SUBSTEPS: u32 = 4;
 /// The step in a motor's angle (or a linear motor's position) by which the slope of a clearance is worked out, by
 /// central differences.
 const SLOPE_STEP: f64 = 1e-6;
@@ -91,6 +97,41 @@ fn push_torques(pushes: &[Push], from: &[f64], angle: &[f64], speed: &[f64], out
     total
 }
 
+/// The pushes' force on the contact coordinates (`Machine::contact_state`, the tool's by default) at `state`, one per
+/// coordinate (the generalised force: each push's force times its clearance's slope along it), the coordinates they
+/// were worked out at, and the sum of the forces, N.
+fn tool_push_forces(machine: &dyn Machine, pushes: &[Push], from: &[f64], state: &[f64]) -> (Vec<f64>, Vec<f64>, f64) {
+    let n = machine.contact_axes();
+    let (mut pos, mut vel, mut force, mut total) = (vec![0.0; n], vec![0.0; n], vec![0.0; n], 0.0);
+    machine.contact_state(state, &mut pos, &mut vel);
+    for push in pushes {
+        let f = push.force(from, &pos, &vel);
+        total += f;
+        force.iter_mut().zip(&push.slope).for_each(|(t, g)| *t += f * g);
+    }
+    (force, pos, total)
+}
+
+/// At one stage of the integration: the pushes' force on the tool at the mechanical state `mech`, given to the machine
+/// (`Machine::set_tool_force`), as the motors' pushes are worked out at every stage; returns the power they take out of
+/// the machine, -F . v, W. `pos`, `vel` and `force` are buffers as long as the contact coordinates.
+fn tool_push_stage(
+    machine: &mut dyn Machine,
+    pushes: &[Push],
+    from: &[f64],
+    mech: &[f64],
+    [pos, vel, force]: [&mut Vec<f64>; 3],
+) -> f64 {
+    machine.contact_state(mech, pos, vel);
+    force.fill(0.0);
+    for push in pushes {
+        let f = push.force(from, pos, vel);
+        force.iter_mut().zip(&push.slope).for_each(|(t, g)| *t += f * g);
+    }
+    machine.set_tool_force(force);
+    -force.iter().zip(vel.iter()).map(|(f, v)| f * v).sum::<f64>()
+}
+
 // Per drive in the integrated state: winding current, and since the start of the step the electrical energy, the
 // copper loss and the work on the shaft; then a stepper's or an induction motor's further states.
 use crate::drive::WINDING_STATES;
@@ -110,6 +151,8 @@ pub struct Sim {
     rk_joint: Rk4,
     joint: Vec<f64>,
     motor_buffers: [Vec<f64>; 4],
+    /// The tool's pose, speed and push force at a stage of the integration (`tool_push_stage`), as long as the axes.
+    tool_buffers: [Vec<f64>; 3],
     payload_attached: bool,
     /// What switching the payload has added to the machine's energy since the start: a payload picked up brings
     /// its energy along, one put down takes it away. For the energy budget.
@@ -158,12 +201,20 @@ pub struct Sim {
     /// The obstacles' pushes over the step under way, and the motor angles they are linear about.
     pushes: Vec<Push>,
     push_from: Vec<f64>,
+    /// Whether the pushes of the step under way act on the tool's coordinates (`Machine::set_tool_force`; `push_from` and
+    /// the slopes are then about the tool pose) and not on the motors.
+    tool_push: bool,
     /// The work the pushes have taken since the first contact, J.
     absorbed: f64,
+    /// How many parts each sub-step of the step under way is cut into (`Machine::substeps_wanted`, at most `MOST_CUTS`).
+    cuts: u32,
+    /// How many base steps were cut finer for the machine (`cuts` above 1) since the start.
+    pub refined_steps: u64,
 }
 
 /// The first contact of a run with an obstacle: when (the end of the base step that found it, s), at which tool pose,
-/// how fast the tool went then (the length of its speed vector, axis units per second) and which obstacle. With
+/// how fast the tool went into it (the length of its speed vector at the start of that step, before a push braked it,
+/// axis units per second) and which obstacle. With
 /// effects.crash, from then on: the largest force of the obstacles on the machine (N) and the impact energy, the most
 /// work their pushes had taken out of the machine at any time (J; at the deepest point of a blocked impact, the
 /// kinetic energy the impact took).
@@ -211,6 +262,9 @@ pub struct PathRun {
     pub file: String,
     pub program: String,
     pub time_optimal: bool,
+    /// `program.orientation_speed_rad_s`: how fast a robot program turns the tool (rad/s), 500 degrees per second where
+    /// the config has no key (`program::ORIENTATION_SPEED`).
+    pub orientation_speed: f64,
 }
 
 /// The config with `[path]` set: the analysis of the cycle runs this path (file name and text, as `--path FILE` reads
@@ -243,7 +297,8 @@ fn path_run(cfg: &Config) -> Result<Option<PathRun>, ConfigError> {
         return Ok(None);
     }
     let time_optimal = cfg.get("path.time_optimal").is_ok() && cfg.bool("path.time_optimal")?;
-    Ok(Some(PathRun { file: text("file")?, program, time_optimal }))
+    let orientation_speed = crate::program::orientation_speed_of(cfg)?;
+    Ok(Some(PathRun { file: text("file")?, program, time_optimal, orientation_speed }))
 }
 
 /// Whether the parts warm with their losses: effects.part_heating, or effects.thermal_feedback, which needs their
@@ -278,11 +333,16 @@ pub fn load_config(entry: &MachineEntry, text: &str) -> Result<Config, ConfigErr
 /// The keys a config for `entry` may have: its default config's, and a motor's own table (`[motor.<id>]` and the rest
 /// of `catalog::PER_MOTOR_TABLES`) for any motor `cfg` gives one, with the shared table's keys, though the default has
 /// none for that motor (a seven-joint URDF on the arm whose default has six).
-/// shortcut: any id passes here, a motor's that the machine does not have too (it is then not read); check the ids
-/// against the built machine's motors where a misspelt one has to be refused.
+/// An id of a table that the machine built from `cfg` has no motor of is refused (`ConfigError::Invalid` with
+/// `<table>.<id>`), so a misspelt one is not silently unread. Where `cfg` does not build, the ids are not checked here:
+/// building it reports that error itself.
 pub fn schema(entry: &MachineEntry, cfg: &Config) -> Result<Config, ConfigError> {
     let mut text = entry.default_config.to_string();
     let default = entry.config();
+    let motors: Option<Vec<String>> = crate::catalog::resolve(entry, cfg)
+        .and_then(|resolved| (entry.build)(&resolved))
+        .ok()
+        .map(|machine| machine.motors().iter().map(|m| m.id.to_string()).collect());
     for table in crate::catalog::PER_MOTOR_TABLES {
         let (Some(shared), Some(own)) =
             (default.get(table).ok().and_then(|v| v.as_table()), cfg.get(table).ok().and_then(|v| v.as_table()))
@@ -292,6 +352,9 @@ pub fn schema(entry: &MachineEntry, cfg: &Config) -> Result<Config, ConfigError>
         for (id, value) in own {
             if !value.is_table() || shared.contains_key(id) {
                 continue;
+            }
+            if motors.as_ref().is_some_and(|m| !m.contains(id)) {
+                return Err(ConfigError::Invalid(format!("{table}.{id}")));
             }
             text.push_str(&format!(
                 "
@@ -336,6 +399,7 @@ impl Sim {
             rk_joint: Rk4::new(state.len() + WINDING_STATES * motors + 1),
             joint: Vec::new(),
             motor_buffers: std::array::from_fn(|_| vec![0.0; motors]),
+            tool_buffers: Default::default(),
             machine,
             control,
             state,
@@ -364,7 +428,10 @@ impl Sim {
             gaps: Vec::new(),
             pushes: Vec::new(),
             push_from: Vec::new(),
+            tool_push: false,
             absorbed: 0.0,
+            cuts: 1,
+            refined_steps: 0,
         })
     }
 
@@ -476,6 +543,8 @@ impl Sim {
         self.contact.clone_from(&s.contact);
         self.gaps.clone_from(&s.gaps);
         (self.contact_force, self.absorbed) = (s.contact_force, s.absorbed);
+        // The pushes are those of the next step, which works them out afresh; until then the restored state has none.
+        self.pushes.clear();
         // What the machine keeps between steps, as `step` sets it.
         self.payload_attached = s.payload_attached;
         self.machine.set_memory(&s.memory);
@@ -499,11 +568,13 @@ impl Sim {
     /// one run at the axes' limits as a path, a program with feeds run by run (`plan_program`). `None` without one.
     pub fn plan_configured_path(&self) -> Option<Result<Vec<(f64, Vec<f64>)>, CommandError>> {
         let run = self.path.as_ref()?;
-        let runs = match crate::program::read(&run.file, &run.program, self.machine.axes(), self.control.planned_pos())
-        {
-            Ok(runs) => runs,
-            Err(e) => return Some(Err(CommandError { key: e.key })),
-        };
+        let start = self.control.planned_pos();
+        let runs =
+            match crate::program::read_with(&run.file, &run.program, self.machine.axes(), start, run.orientation_speed)
+            {
+                Ok(runs) => runs,
+                Err(e) => return Some(Err(CommandError { key: e.key })),
+            };
         Some(match runs.as_slice() {
             [one] if one.feed.is_none() => self.plan_path(&one.pieces, run.time_optimal),
             _ => self.plan_program(&runs, run.time_optimal),
@@ -561,6 +632,15 @@ impl Sim {
         self.control.path_deviation(self.machine.as_ref(), pieces, time_optimal)
     }
 
+    /// `path_deviation` per run of a program (`Controller::program_deviations`).
+    pub fn program_deviations(
+        &self,
+        runs: &[crate::program::Run],
+        time_optimal: bool,
+    ) -> Result<Vec<f64>, CommandError> {
+        self.control.program_deviations(self.machine.as_ref(), runs, time_optimal)
+    }
+
     /// One base step: the controller sets the windings' voltages, then windings and mechanics go through the step
     /// together (with the drives disabled, the mechanics alone without torque).
     pub fn step(&mut self) {
@@ -580,18 +660,49 @@ impl Sim {
         // The temperatures the last step ended with; fed back here and not after the parts warm, so that the losses
         // the parts warmed with are those the machine reports after the step.
         self.feed_temperatures_back();
+        // The tool's speed before the step, the impact's if it finds the first contact (its push may brake the tool in
+        // the step already, where it acts at the tool).
+        let approach = (self.contact.is_none() && !self.obstacles.is_empty()).then(|| {
+            let n = self.machine.axes().len();
+            let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+            self.machine.tool_state(&self.state, &mut pos, &mut vel);
+            vel.iter().map(|v| v * v).sum::<f64>().sqrt()
+        });
         self.pushes();
+        self.cuts = (self.machine.substeps_wanted(&self.state, &self.torque, self.dt, self.substeps))
+            .clamp(1, sim_core::MOST_CUTS);
+        self.refined_steps += u64::from(self.cuts > 1);
         if self.control.enabled() {
             self.advance_with_windings();
-        } else if self.pushes.is_empty() {
-            advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
         } else {
-            self.advance_pushed();
+            // A disabled drive's torque (the iron's drag, `Drive::disabled_step`) is held over the step: its work is that
+            // torque times the angle turned, which the drive's books take in place of the step start's speed.
+            let dragged = self.control.drives.iter().any(|d| d.torque != 0.0).then(|| {
+                let [angle, speed, ..] = &mut self.motor_buffers;
+                self.machine.motor_state(&self.state, angle, speed);
+                angle.clone()
+            });
+            if self.pushes.is_empty() {
+                let substeps = self.substeps * self.cuts;
+                advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, substeps);
+            } else {
+                self.advance_pushed();
+            }
+            if let Some(before) = dragged {
+                let [angle, speed, ..] = &mut self.motor_buffers;
+                self.machine.motor_state(&self.state, angle, speed);
+                for ((d, a), b) in self.control.drives.iter_mut().zip(angle.iter()).zip(&before) {
+                    if d.torque != 0.0 {
+                        let work = d.torque * (a - b) / self.dt;
+                        (d.shaft_power, d.emf_loss) = (work, -work);
+                    }
+                }
+            }
         }
         self.machine.after_step(&mut self.state, self.dt);
         let taken = self.pushed();
         if !self.obstacles.is_empty() {
-            self.check_obstacles();
+            self.check_obstacles(approach.unwrap_or(0.0));
         }
         if let Some(contact) = &mut self.contact {
             self.absorbed += taken;
@@ -602,7 +713,8 @@ impl Sim {
         if self.part_heating && !self.heated.is_empty() {
             // The loss at the end of the step, held over it: the exact answer of the first-order lag to a held input.
             self.losses.clear();
-            self.machine.loss_powers(&self.state, &self.torque, &mut self.losses);
+            let torque = self.machine_torque();
+            self.machine.loss_powers(&self.state, &torque, &mut self.losses);
             for part in &mut self.heated {
                 part.loss_power = self.losses[part.loss];
                 let settled = part.resistance * part.loss_power;
@@ -612,8 +724,9 @@ impl Sim {
         self.step += 1;
     }
 
-    /// The clearance to the obstacles after a base step, which obstacles a part touches, and the first contact.
-    fn check_obstacles(&mut self) {
+    /// The clearance to the obstacles after a base step, which obstacles a part touches, and the first contact, the tool
+    /// at `speed` before the step.
+    fn check_obstacles(&mut self, speed: f64) {
         let bodies = crate::collision::Bodies::of(self.machine.as_ref(), &self.state);
         let mut nearest = (f64::INFINITY, 0);
         self.gaps.clear();
@@ -631,7 +744,6 @@ impl Sim {
             let n = self.machine.axes().len();
             let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
             self.machine.tool_state(&self.state, &mut pos, &mut vel);
-            let speed = vel.iter().map(|v| v * v).sum::<f64>().sqrt();
             // The step counter moves on after this check.
             let time = (self.step + 1) as f64 * self.dt;
             let (peak_force, impact_energy) = (self.contact_force, 0.0);
@@ -642,30 +754,55 @@ impl Sim {
     /// effects.crash: the obstacles' pushes over the coming step (`Push`), for each obstacle a part comes within
     /// `PUSH_RANGE` of. The depth and its slopes are those of the rigid kinematics at the motors' angles (`forward`,
     /// then `equilibrium`), so that the push is a spring on the motors' angles, which the step integrates with the rest.
-    // shortcut: the push acts on the motors, not on the part that touches; a load on a soft belt or gearbox swings on
-    // into the obstacle by its transmission's give (millimetres on a belt at 1 m/s) instead of stopping at its face.
-    // Push on the part itself once `Machine` can take an external force at a body.
+    /// A machine that takes a force at its tool (`Machine::set_tool_force`) is pushed there: the push's slopes are then
+    /// the clearance's along the tool's coordinates, its depth the clearance of the parts where they are, its force the
+    /// generalised force of the contact on them (its virtual work per unit of each, wherever on the moving parts it
+    /// touches), worked out at every stage of the integration, and a load on a soft belt stops at the obstacle's face.
+    /// A machine without it is pushed at its
+    /// motors through the rigid kinematics, so that a load on a soft transmission swings on into the obstacle by the
+    /// transmission's give. Either way the work the pushes take is the budget's crash row.
     fn pushes(&mut self) {
         self.pushes.clear();
+        let (axes, contact) = (self.machine.axes().len(), self.machine.contact_axes());
+        // The probe also clears the force of the last step.
+        let tool_route = self.crash && self.machine.set_tool_force(&vec![0.0; contact]);
+        self.tool_push = false;
         let near: Vec<usize> =
             (0..self.obstacles.len()).filter(|&k| self.gaps.get(k).is_some_and(|g| *g < PUSH_RANGE)).collect();
         if !self.crash || near.is_empty() {
             return;
         }
         let machine = self.machine.as_ref();
-        let (motors, axes) = (machine.motors().len(), machine.axes().len());
-        let (mut angle, mut speed) = (vec![0.0; motors], vec![0.0; motors]);
-        machine.motor_state(&self.state, &mut angle, &mut speed);
+        let motors = machine.motors().len();
+        let dim = if tool_route { contact } else { motors };
+        let (mut angle, mut speed) = (vec![0.0; dim.max(motors)], vec![0.0; dim.max(motors)]);
+        if tool_route {
+            machine.contact_state(&self.state, &mut angle[..contact], &mut speed[..contact]);
+        } else {
+            machine.motor_state(&self.state, &mut angle, &mut speed);
+        }
+        angle.truncate(dim);
         let (mut tool, mut state, mut torque) = (vec![0.0; axes], Vec::new(), vec![0.0; motors]);
         let mut gaps_at = |at: &[f64]| -> Vec<f64> {
-            machine.forward(at, &mut tool);
-            machine.equilibrium(&tool, &mut state, &mut torque);
+            if tool_route {
+                machine.contact_placed(&self.state, at, &mut state);
+            } else {
+                machine.forward(at, &mut tool);
+                machine.equilibrium(&tool, &mut state, &mut torque);
+            }
             let bodies = crate::collision::Bodies::of(machine, &state);
             near.iter().map(|&k| bodies.gap(&self.obstacles[k].aabb).map_or(f64::INFINITY, |g| g.2)).collect()
         };
-        let depths: Vec<f64> = gaps_at(&angle).into_iter().map(|g| -g).collect();
-        let mut slopes = vec![vec![0.0; motors]; near.len()];
-        for m in 0..motors {
+        // At the tool the depth is that of the parts where they are (the clearance after the last step), not where the
+        // rigid kinematics put them about the tool: a payload on a leaning axis stands back from its tool point by the
+        // lean, and is held at its face where it touches.
+        let depths: Vec<f64> = if tool_route {
+            near.iter().map(|&k| -self.gaps[k]).collect()
+        } else {
+            gaps_at(&angle).into_iter().map(|g| -g).collect()
+        };
+        let mut slopes = vec![vec![0.0; dim]; near.len()];
+        for m in 0..dim {
             let mut at = angle.clone();
             at[m] += SLOPE_STEP;
             let up = gaps_at(&at);
@@ -682,6 +819,10 @@ impl Sim {
             }
         }
         self.push_from = angle;
+        self.tool_push = tool_route && !self.pushes.is_empty();
+        if self.tool_push {
+            self.tool_buffers = std::array::from_fn(|_| vec![0.0; contact]);
+        }
     }
 
     /// The step done: the obstacles' force at its end (`contact_force`), and the work their pushes took out of the
@@ -691,13 +832,37 @@ impl Sim {
             self.contact_force = 0.0;
             return 0.0;
         }
-        let motors = self.push_from.len();
-        let (mut angle, mut speed, mut torque) = (vec![0.0; motors], vec![0.0; motors], vec![0.0; motors]);
-        self.machine.motor_state(&self.state, &mut angle, &mut speed);
-        self.contact_force = push_torques(&self.pushes, &self.push_from, &angle, &speed, &mut torque);
+        self.contact_force = if self.tool_push {
+            let (force, _, total) = tool_push_forces(self.machine.as_ref(), &self.pushes, &self.push_from, &self.state);
+            // What is sampled after the step (the losses of a gearbox or a guide the push loads) sees the push at its
+            // end, not at the integration's last stage.
+            self.machine.set_tool_force(&force);
+            total
+        } else {
+            let motors = self.push_from.len();
+            let (mut angle, mut speed, mut torque) = (vec![0.0; motors], vec![0.0; motors], vec![0.0; motors]);
+            self.machine.motor_state(&self.state, &mut angle, &mut speed);
+            push_torques(&self.pushes, &self.push_from, &angle, &speed, &mut torque)
+        };
         let taken = self.joint.last().copied().unwrap_or(0.0);
         self.crash_energy += taken;
         taken
+    }
+
+    /// The torques the machine's mechanics take at the end of the last step: the drives' plus the obstacles' pushes
+    /// (`push_torques`), as the step integrated them. What a machine works out of its torques (a guide's load from the
+    /// acceleration they command, its friction and so its loss) is to be sampled with these, or the losses booked and
+    /// those the motion had part ways while a part touches an obstacle.
+    pub fn machine_torque(&self) -> Vec<f64> {
+        let mut out = self.torque.clone();
+        // (Pushes at the tool are the machine's own force, not torques at its motors.)
+        if !self.pushes.is_empty() && !self.tool_push {
+            let motors = out.len();
+            let (mut angle, mut speed) = (vec![0.0; motors], vec![0.0; motors]);
+            self.machine.motor_state(&self.state, &mut angle, &mut speed);
+            push_torques(&self.pushes, &self.push_from, &angle, &speed, &mut out);
+        }
+        out
     }
 
     /// A step with the drives disabled and the obstacles pushing: the mechanics alone, the pushes' torques worked out at
@@ -712,28 +877,40 @@ impl Sim {
             torque,
             pushes,
             push_from,
+            tool_push,
+            cuts,
+            tool_buffers,
             motor_buffers: [angle, speed, stage, push],
             dt,
             substeps,
             ..
         } = self;
+        let (on_tool, motor_pushes): (bool, &[Push]) = if *tool_push { (true, &[]) } else { (false, pushes) };
         let n = state.len();
         joint.clear();
         joint.extend_from_slice(state);
         joint.resize(n + WINDING_STATES * torque.len() + 1, 0.0);
-        let h = *dt / *substeps as f64;
-        for _ in 0..*substeps {
+        let finer = if *tool_push { PUSH_SUBSTEPS } else { 1 };
+        let substeps = *substeps * finer.max(*cuts);
+        let h = *dt / substeps as f64;
+        let [pos, vel, force] = tool_buffers;
+        for _ in 0..substeps {
             rk_joint.step(
                 |y, dy| {
                     let (mech, (dmech, rest)) = (&y[..n], dy.split_at_mut(n));
                     machine.motor_state(mech, angle, speed);
                     push.fill(0.0);
-                    push_torques(pushes, push_from, angle, speed, push);
+                    push_torques(motor_pushes, push_from, angle, speed, push);
                     for k in 0..stage.len() {
                         stage[k] = torque[k] + push[k];
                     }
                     rest.fill(0.0);
                     rest[rest.len() - 1] = -push.iter().zip(speed.iter()).map(|(t, w)| t * w).sum::<f64>();
+                    if on_tool {
+                        let buffers = [&mut *pos, &mut *vel, &mut *force];
+                        let last = rest.len() - 1;
+                        rest[last] += tool_push_stage(machine.as_mut(), pushes, push_from, mech, buffers);
+                    }
                     machine.derivatives(mech, stage, dmech);
                 },
                 joint,
@@ -767,8 +944,12 @@ impl Sim {
             substeps,
             pushes,
             push_from,
+            tool_push,
+            cuts,
+            tool_buffers: [pos, vel, force],
             ..
         } = self;
+        let (on_tool, motor_pushes): (bool, &[Push]) = if *tool_push { (true, &[]) } else { (false, pushes) };
         let (n, drives) = (state.len(), &control.drives);
         joint.clear();
         joint.extend_from_slice(state);
@@ -777,8 +958,10 @@ impl Sim {
         }
         // The work the obstacles' pushes take out of the machine over the step (`pushed`).
         joint.push(0.0);
-        let h = *dt / *substeps as f64;
-        for _ in 0..*substeps {
+        let finer = if *tool_push { PUSH_SUBSTEPS } else { 1 };
+        let substeps = *substeps * finer.max(*cuts);
+        let h = *dt / substeps as f64;
+        for _ in 0..substeps {
             rk_joint.step(
                 |y, dy| {
                     let ((mech, windings), (dmech, dwindings)) = (y.split_at(n), dy.split_at_mut(n));
@@ -786,8 +969,17 @@ impl Sim {
                     for (k, d) in drives.iter().enumerate() {
                         // A drive whose pulses are off after a trip: no current, no torque (`Controller::react`).
                         if d.pulses_off {
-                            stage_torque[k] = 0.0;
+                            // Only the iron's drag acts (`DriveParams::iron_drag`), and a stepper's magnets hold their
+                            // detent without current, at the stage's angle; their work is integrated in the winding's
+                            // work slot, which `Controller::winding_stepped` books as the shaft's and what the magnets
+                            // and the iron gave, as with the drives disabled.
+                            let p = control.drive_params_of(k);
+                            stage_torque[k] = -p.iron_drag(speed[k]);
+                            if let crate::drive::Motor::Stepper(s) = &p.motor {
+                                stage_torque[k] += s.detent_torque(angle[k], d.phases.origin);
+                            }
                             dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].fill(0.0);
+                            dwindings[WINDING_STATES * k + 3] = stage_torque[k] * speed[k];
                             continue;
                         }
                         let range = WINDING_STATES * k..WINDING_STATES * (k + 1);
@@ -800,12 +992,16 @@ impl Sim {
                         );
                     }
                     push.fill(0.0);
-                    push_torques(pushes, push_from, angle, speed, push);
+                    push_torques(motor_pushes, push_from, angle, speed, push);
                     for (stage, push) in stage_torque.iter_mut().zip(push.iter()) {
                         *stage += push;
                     }
                     let work = dwindings.len() - 1;
                     dwindings[work] = -push.iter().zip(speed.iter()).map(|(t, w)| t * w).sum::<f64>();
+                    if on_tool {
+                        let buffers = [&mut *pos, &mut *vel, &mut *force];
+                        dwindings[work] += tool_push_stage(machine.as_mut(), pushes, push_from, mech, buffers);
+                    }
                     machine.derivatives(mech, stage_torque, dmech);
                 },
                 joint,
@@ -834,6 +1030,8 @@ impl Sim {
         let mut out = vec![
             SignalInfo::new("time", "group-sim", "quantity-time", "s"),
             SignalInfo::new("payload", "effect-payload", "quantity-attached", ""),
+            // How long the axes' setpoints have been held: the plan now is `position_setpoint` run on by it.
+            SignalInfo::new("setpoint_age", "group-sim", "quantity-setpoint-age", "s"),
         ];
         for axis in self.machine.axes() {
             let (unit, rate, rate2) = (axis.unit, format!("{}/s", axis.unit), format!("{}/s²", axis.unit));
@@ -853,24 +1051,27 @@ impl Sim {
                 ));
             }
         }
-        for motor in self.machine.motors() {
+        for (k, motor) in self.machine.motors().iter().enumerate() {
+            // A linear motor's angle is a position (m), its speed m/s, its torque a force (N).
+            let (pos, rate, load) =
+                if self.machine.motor_linear(k) { ("m", "m/s", "N") } else { ("rad", "rad/s", "N m") };
             for (name, unit) in [
-                ("angle", "rad"),
-                ("speed", "rad/s"),
-                ("torque", "N m"),
-                ("torque-command", "N m"),
+                ("angle", pos),
+                ("speed", rate),
+                ("torque", load),
+                ("torque-command", load),
                 ("current", "A"),
                 ("voltage", "V"),
                 ("electrical-power", "W"),
                 ("winding-temperature", "K"),
                 ("dc-link-voltage", "V"),
                 ("braking-resistor-power", "W"),
-                ("speed-command", "rad/s"),
-                ("following-error", "rad"),
-                ("angle-setpoint", "rad"),
-                ("torque-feedforward", "N m"),
-                ("torque-feedback", "N m"),
-                ("speed-from-position", "rad/s"),
+                ("speed-command", rate),
+                ("following-error", pos),
+                ("angle-setpoint", pos),
+                ("torque-feedforward", load),
+                ("torque-feedback", load),
+                ("speed-from-position", rate),
                 // The electrical and thermal states, 0 where their effect is off.
                 ("d-current", "A"),
                 ("housing-temperature", "K"),
@@ -902,7 +1103,7 @@ impl Sim {
     /// The current value of every signal, in the order of `signal_infos`.
     pub fn sample(&self, out: &mut Vec<f64>) {
         self.sample_base(out);
-        self.machine.effect_signals(&self.state, &self.torque, out);
+        self.machine.effect_signals(&self.state, &self.machine_torque(), out);
         out.extend(self.heated.iter().map(|h| h.rise));
     }
 
@@ -916,7 +1117,7 @@ impl Sim {
         self.machine.motor_state(&self.state, &mut angle, &mut speed);
         let c = &self.control;
         out.clear();
-        out.extend([self.time(), if self.payload_attached { 1.0 } else { 0.0 }]);
+        out.extend([self.time(), if self.payload_attached { 1.0 } else { 0.0 }, c.setpoint_age(self.time())]);
         for i in 0..axes {
             out.extend([pos[i], vel[i], c.set_pos[i], c.set_vel[i], c.set_acc[i], c.tool_error[i]]);
         }
@@ -927,7 +1128,7 @@ impl Sim {
                 d.torque,
                 d.torque_command,
                 d.current,
-                d.voltage,
+                d.phase_voltage(c.drive_params_of(k)),
                 d.power,
                 d.temperature_rise,
                 d.dc_voltage,
@@ -946,7 +1147,7 @@ impl Sim {
                 d.resistor_rise,
             ]);
         }
-        self.machine.base_signals(&self.state, &self.torque, out);
+        self.machine.base_signals(&self.state, &self.machine_torque(), out);
     }
 
     /// Position of a signal in a sample.

@@ -51,7 +51,7 @@
   <div class="row">
     <label for="machine" data-t="web-machine">Machine</label> <select id="machine"></select>
     <label for="lang" data-t="web-language">Language</label> <select id="lang"><option value="en">English</option><option value="de">Deutsch</option></select>
-    <label class="button"><span data-t="web-open-file">Open machine file…</span><input type="file" id="file" accept=".toml,text/plain"></label>
+    <label class="button"><span data-t="web-open-file">Open machine file…</span><input type="file" id="file" accept=".toml,.json,text/plain"></label>
     <span id="status">Loading…</span>
   </div>
   <div class="row">
@@ -110,14 +110,19 @@ line,0.5,-0.4</textarea>
     <div class="keys" id="scopekeys"></div>
     <div id="scopes"></div>
   </div>
-  <p id="scopenote" class="muted"></p>
   <div id="result" class="scroll"></div>
   <h2 data-t="web-sweep">Frequency response</h2>
   <div class="row"><select id="sweepmotor"></select> <button id="sweep" disabled data-t="web-sweep-run">Run sweep</button> <span id="sweepstatus" class="muted"></span></div>
   <canvas class="plot" id="plot-gain" hidden></canvas><canvas class="plot" id="plot-phase" hidden></canvas>
   <h2 data-t="web-fit">Fit to a trace</h2>
   <p class="muted" data-t="web-fit-help"></p>
-  <div class="row"><label class="button"><span data-t="web-fit-open">Open trace…</span><input type="file" id="trace" accept=".csv,text/plain"></label> <span id="fitstatus" class="muted"></span></div>
+  <div class="row">
+    <label class="button"><span data-t="web-fit-open">Open trace…</span><input type="file" id="trace" accept=".csv,.txt,.trace,text/plain"></label>
+    <label class="button"><span data-t="web-fit-map">Mapping file for a vendor export…</span><input type="file" id="tracemap" accept=".toml,text/plain"></label>
+    <label class="button"><span data-t="web-fit-sweep">Open measured sweep…</span><input type="file" id="tracesweep" accept=".csv,text/plain"></label>
+    <label><input type="checkbox" id="fitstiffness"> <span data-t="web-fit-stiffness">Stiffness from the trace's moves</span></label>
+    <span id="fitstatus" class="muted"></span>
+  </div>
   <div id="fitresult" class="scroll"></div>
 </main>
 
@@ -614,8 +619,8 @@ async function run() {
     lastSizing = await analyst.call(2, body());
     showSizing();
     scope.data = null; showScopes();
-    // The scopes record the cycle (lib.rs `scopes`); a path's run has none.
-    if (!pathMode()) { scope.data = await analyst.call(10, body()); scope.t0 = 0; scope.t1 = scope.data.time.at(-1) || 1; showScopes(); }
+    // The scopes record the cycle, or the path's run (lib.rs `scopes`).
+    scope.data = await analyst.call(10, body()); scope.t0 = 0; scope.t1 = scope.data.time.at(-1) || 1; showScopes();
     $("runstatus").textContent = tr("web-done", ((performance.now() - started) / 1000).toFixed(1));
   } catch (e) {
     $("error").textContent = e.message;
@@ -669,15 +674,26 @@ async function sweep() {
   $("sweep").disabled = false;
 }
 
-async function fitTrace(file) {
+// The files of the fit (lib.rs `fit`): the trace, the mapping file of a vendor export, a measured sweep; each one opened
+// runs the fit with those opened so far (a mapping file alone waits for its trace).
+const fitFiles = { trace: "", map: "", sweep: "", names: {} };
+// A file's text as sim-cli reads it (import.rs `decode`): UTF-16 by its byte order mark (a CODESYS .trace), else UTF-8.
+async function fileText(file) {
+  const b = new Uint8Array(await file.arrayBuffer());
+  return new TextDecoder(b[0] === 0xff && b[1] === 0xfe ? "utf-16le" : b[0] === 0xfe && b[1] === 0xff ? "utf-16be" : "utf-8").decode(b);
+}
+async function fitTrace(kind, file) {
+  fitFiles[kind] = await fileText(file); fitFiles.names[kind] = file.name;
   $("error").textContent = "";
+  if (!fitFiles.trace && !fitFiles.sweep) { $("fitstatus").textContent = Object.values(fitFiles.names).join(", "); return; }
   $("fitstatus").textContent = tr("web-simulating");
   try {
-    const r = await analyst.call(6, `${$("machine").value}\n${lang()}\n${$("config").value}\n---\n${await file.text()}`);
+    const options = ($("fitstiffness").checked && fitFiles.trace ? " stiffness" : "") + ($("sweepmotor").value ? ` motor=${$("sweepmotor").value}` : "");
+    const r = await analyst.call(6, `${$("machine").value}\n${lang()}${options}\n${$("config").value}\n---\n${fitFiles.trace}\n%%%\n${fitFiles.map}\n%%%\n${fitFiles.sweep}`);
     let html = `<table><thead><tr>${["web-quantity", "web-of", "web-config-value", "web-fitted", "web-standard-error"].map((k) => `<th>${esc(tr(k))}</th>`).join("")}</tr></thead><tbody>`;
     for (const [q, of, config, fitted, error] of r.rows) html += `<tr><td>${esc(q)}</td><td>${esc(of)}</td><td class=n>${fmt(config)}</td><td class=n>${fmt(fitted)}</td><td class=n>${fmt(error)}</td></tr>`;
     $("fitresult").innerHTML = html + `</tbody></table><ul>${r.advice.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>`;
-    $("fitstatus").textContent = file.name;
+    $("fitstatus").textContent = Object.values(fitFiles.names).join(", ");
   } catch (e) { $("error").textContent = e.message; $("fitstatus").textContent = ""; }
 }
 
@@ -708,7 +724,6 @@ function scopeTime(canvas, clientX) {
 function showScopes() {
   const r = scope.data;
   $("scopes-box").hidden = !r;
-  $("scopenote").textContent = !r && pathMode() && lastSizing ? tr("web-scopes-path") : "";
   if (!r) { $("scopes").innerHTML = ""; return; }
   if ($("scopes").childElementCount !== r.signals.length) {
     $("scopes").innerHTML = r.signals.map((_, i) => `<canvas class="plot scope" id="scope-${i}"></canvas>`).join("");
@@ -884,7 +899,7 @@ async function readHash() {
     $("sweep").addEventListener("click", sweep);
     $("file").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await useFile(f.name, await f.text()); e.target.value = ""; });
     $("useeditor").addEventListener("click", () => useFile("pasted.toml", $("config").value));
-    $("trace").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await fitTrace(f); e.target.value = ""; });
+    for (const kind of ["trace", "map", "sweep"]) $(kind === "trace" ? "trace" : "trace" + kind).addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await fitTrace(kind, f); e.target.value = ""; });
     for (const radio of document.querySelectorAll("input[name=mode]")) radio.addEventListener("change", () => { $("path-box").hidden = $("optimal-box").hidden = !pathMode(); updateHash(); });
     $("trailscale").addEventListener("input", () => { trail.dirty = true; });
     $("cleartrail").addEventListener("click", () => { trail.points = []; trail.dirty = true; });

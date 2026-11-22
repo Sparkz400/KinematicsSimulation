@@ -211,7 +211,7 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
         let table = text(&out.stdout);
         assert_eq!(
             table.lines().next().unwrap(),
-            "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload"
+            "motor,cycle_s,peak_torque_nm,rms_torque_nm,peak_speed_rad_s,utilisation,thermal_utilisation,belt_tension_min_n,belt_tension_max_n,rms_current_a,winding_rise_k,energy_in_j,energy_regenerated_j,peak_regenerated_power_w,largest_regeneration_j,path_error_peak_m,path_error_rms_m,tracking_error_peak_m,dwell_error_peak_m,path_angle_error_peak_rad,path_angle_error_rms_rad,tracking_angle_error_peak_rad,dwell_angle_error_peak_rad,cubic_mean_torque_nm,braking_resistor_energy_j,braking_resistor_mean_power_w,dc_link_peak_voltage_v,belt_slack_time_s,radial_load_peak_n,guide_load_peak_n,guide_life_km,mains_energy_j,guide_life_h,pulley_bearing_life_h,gearbox_life_h,belt_tooth_utilisation,gearbox_gearing_life_h,motor_bearing_life_h,housing_rise_k,drive_overload,torque_unit,speed_unit"
         );
         let rows: Vec<Vec<&str>> = table.lines().skip(1).map(|l| l.split(',').collect()).collect();
         assert_eq!(rows.len(), motors);
@@ -226,13 +226,14 @@ fn analyze_and_sweep_write_csv_for_every_machine() {
         let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
         let load = sim_components::analysis::analyse_cycle(&mut sim).unwrap();
         let mut expected = String::from(
-            "motor,speed_rad_s,torque_nm
+            "motor,speed_rad_s,torque_nm,speed_unit,torque_unit
 ",
         );
-        for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+        for (k, (motor, m)) in sim.machine.motors().iter().zip(&load.motors).enumerate() {
+            let (speed_unit, torque_unit) = if sim.machine.motor_linear(k) { ("m/s", "N") } else { ("rad/s", "N m") };
             m.points.iter().for_each(|(speed, torque)| {
                 expected += &format!(
-                    "{},{speed:.6e},{torque:.6e}
+                    "{},{speed:.6e},{torque:.6e},{speed_unit},{torque_unit}
 ",
                     motor.id
                 )
@@ -340,7 +341,13 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         // An arm's joints carry their links on elastic gears, six joints of different inertia with one set of drive gains:
         // the band is not Kv's alone (the six-axis arm's j2 has 3.97 Hz, its j1 17 Hz with 27 % overshoot, at velocity
         // loops of some 80 Hz). There half the lower bound is asked.
-        let lowest = if entry.config().get("arm.urdf_file").is_ok() { 2.0 } else { 4.0 };
+        // A config tuned to a lower Kv is asked for the band that Kv gives, Kv / 2π (the position loop closed on a fast
+        // velocity loop), less a fifth for a velocity loop not far above it: a drive whose motor turns a load many times
+        // its own through a soft gear has a velocity loop of a few hertz and a Kv of 10 1/s to stay inside it (1.6 to
+        // 1.9 Hz measured on such travels).
+        let kv = entry.config().f64("drive.kv_1_s").unwrap_or(f64::INFINITY);
+        let lowest = (if entry.config().get("arm.urdf_file").is_ok() { 2.0f64 } else { 4.0 })
+            .min(0.8 * kv / std::f64::consts::TAU);
         // An axis that holds a weight through a lossy gearbox stops short of a small step at the tool, whatever its loops:
         // the palletiser's z holds 3.04 N m on motor 3, 486 N m at the gear (ratio 160); to lift it the gear must pass
         // 486 / 0.8 = 608 N m, and the motor first winds it by (608 - 486) / 2e5 N m/rad = 0.61 mrad, 0.71 mm of the 1 mm
@@ -365,19 +372,24 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
             // Kv = 50 1/s puts the position loop's bandwidth near 8 Hz.
             assert!(band > lowest && band < 20.0, "{}: {row}", entry.id);
         }
-        // The margins of the config as it is: one row per motor, each loop stable with at least 35 degrees and 6 dB (the
+        // The margins of the config as it is: one row per motor and pose the cycle stops at (`margin_poses`), each loop
+        // stable with at least 35 degrees and 6 dB at each (the
         // judgement of the shipped loops with friction; sim-machines' control tests judge them without, and over the bounds).
         let margins = table(&["margins", entry.id]);
         assert_eq!(
             margins.lines().next().unwrap(),
-            "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,result"
+            "run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result"
         );
         let rows: Vec<Vec<&str>> = margins.lines().skip(1).map(|l| l.split(',').collect()).collect();
+        // A loop without a gain crossover in the band (below) has no phase margin to measure: crossover and phase
+        // margin empty, judged on the gain margin alone.
         for row in &rows {
-            let (phase, gain): (f64, f64) = (row[3].parse().unwrap(), row[4].parse().unwrap());
-            assert!(phase > 35.0 && gain > 6.0 && row[7] == "ok", "{}: {row:?}", entry.id);
+            let gain: f64 = row[4].parse().unwrap();
+            let phase_ok = if row[2].is_empty() { row[3].is_empty() } else { row[3].parse::<f64>().unwrap() > 35.0 };
+            assert!(phase_ok && gain > 6.0 && row[8] == "ok", "{}: {row:?}", entry.id);
         }
-        assert_eq!(rows.len(), (entry.build)(&entry.config()).unwrap().motors().len());
+        let poses = sim_components::analysis::margin_poses(&entry.config()).unwrap().len();
+        assert_eq!(rows.len(), (entry.build)(&entry.config()).unwrap().motors().len() * poses);
         // They are the figures of `velocity_loop_margins`, which the command line prints alike for every machine: checked on
         // the one with a belt axis.
         if entry.id == one_belt_axis().id {
@@ -397,7 +409,7 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
         // above: a crane's hoist, its 92 % gearbox under the 265 kg, whose efficiency faded in below 0.5 W
         // is a damper of 2601^2 ln(1 / 0.92) / 0.5 W = 1.1e6 N s/m at the rope, 4.5 N m s/rad at the motor, which the
         // test torque (0.32 N m) does not break away from: |L| some 0.045, the loop not seen.
-        rows.iter().map(|row| row[2] == "NaN").collect::<Vec<bool>>()
+        rows.iter().map(|row| row[2].is_empty()).collect::<Vec<bool>>()
     };
     // An unstable loop says so: every machine with a velocity gain of 0.3 N m s/rad (7.5 to 12 times the shipped one).
     // (12 times the shipped one where 0.3 would be less than 7.5 times it: the delta's 0.25 and the screw's, rack's, arms' and table's;
@@ -406,7 +418,7 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
     // gain of 0.04 takes 12 times too: at 0.3, 7.5 times it, the SCARA's joint 3 is stable with 42 degrees.
     {
         let cfg = entry.config();
-        let sets: Vec<String> = cfg
+        let mut sets: Vec<String> = cfg
             .leaves()
             .iter()
             .filter(|(p, _)| p.starts_with("drive.") && p.ends_with("velocity_kp_nm_s_rad"))
@@ -415,6 +427,23 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
                 format!("{p}={}", if 7.5 * shipped < 0.3 { 0.3 } else { 12.0 * shipped })
             })
             .collect();
+        // With the gearboxes elastic, as every machine with the switch ships it but one: that one's gains are set for its
+        // gears' mode, which they cross on the rotor alone (some 40 times its own inertia on the travel), and its rigid
+        // drives stay stable far beyond 12 times them (at 1.8 N m s/rad: 53.7 Hz, 76.8 degrees on the travel).
+        if cfg.get("effects.joint_elasticity").is_ok() {
+            sets.push("effects.joint_elasticity=true".into());
+        }
+        // The screws at the far end's stiffness, as the gains were set for: following the nut, a five-bar's screw
+        // stroke measured at its start (the nut 0.175 m from the bearing, 501 against 448 Hz) stays stable at 12 times
+        // its gain (7.8 dB).
+        if cfg.get("effects.screw_stiffness_with_position").is_ok() {
+            sets.push("effects.screw_stiffness_with_position=false".into());
+        }
+        // The unstable gains at the start pose alone (no cycle, `margin_poses`): every pose would take four times as
+        // long (the slowest machine past the test's limit).
+        if cfg.get("cycle.segment").is_ok() {
+            sets.push("cycle.segment=[]".into());
+        }
         let margins = |sets: &[String]| {
             let out = cli(&[
                 &["margins", entry.id][..],
@@ -811,7 +840,11 @@ fn verdicts_search_the_worst_corner_of_the_bounds() {
 fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
     on_every_machine(|entry| {
         let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
-        let per_axis = sim_components::trace::per_axis_fit(sim.machine.as_ref());
+        // Of the config the trace is fitted with, without the payload: the disc cam's inertia varies by 6.2 % over its
+        // range with it, by 4.1 % without (`trace::PER_AXIS_SPREAD`).
+        let mut empty = entry.config();
+        empty.set_text("effects.payload = false").unwrap();
+        let per_axis = sim_components::trace::per_axis_fit((entry.build)(&empty).unwrap().as_ref());
         let file = |name: &str| {
             std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
                 .join(format!("{}-{name}.csv", entry.id))
@@ -892,13 +925,12 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
         assert_eq!(core, 4 * count, "{}: {fit:?}", entry.id);
         for row in fit.iter().filter(|r| checked.contains(&r[0].as_str())) {
             let [config, fitted, error] = [2, 3, 4].map(|c| row[c].parse::<f64>().unwrap());
-            // Or within a fifth of its standard error: the D4 picker's cycle knows motor 1's Coulomb friction to ± 21 %
-            // and the tool motor's to ± 84 %, and run and replay differ by 2.4 % and 5.3 % of it (0.12 and 0.06 σ).
-            assert!(
-                config > 0.0 && (fitted - config).abs() < (0.02 * config).max(0.2 * error),
-                "{}: {row:?}",
-                entry.id
-            );
+            // Within three standard errors, which hold the noise and what else the trace has that the replay has not
+            // (`identify::difference_share`, `row_errors`) and are never 0. Measured (17 November 2026) over all 430
+            // values of every machine: (fitted − config) / error 0.16 RMS, at most 0.89 (the planar cable-driven platform); before
+            // the errors took the difference row by row 0.22 RMS without the cable-driven platforms, the SCARA at 2.07, the cable-driven
+            // platforms at 4.0 and 5.8, which a 1 % allowance hid.
+            assert!(config > 0.0 && error > 0.0 && (fitted - config).abs() < 3.0 * error, "{}: {row:?}", entry.id);
         }
 
         // A file that is no trace is refused, in the chosen language.
@@ -956,12 +988,18 @@ fn a_trace_from_run_replays_onto_itself_and_fits_its_own_config() {
             [
                 format!("{:.6e}", shared.config.frequency),
                 format!("{:.6e}", shared.fitted.frequency),
-                format!("{:.3e}", shared.fitted.frequency_error)
+                format!("{:.3e}", shared.fitted.frequency_error),
+                "Hz".to_string()
             ]
         );
         assert_eq!(
             fit[1][2..],
-            [format!("{:.6e}", shared.config.damping), format!("{:.6e}", shared.fitted.damping), String::new()]
+            [
+                format!("{:.6e}", shared.config.damping),
+                format!("{:.6e}", shared.fitted.damping),
+                String::new(),
+                String::new()
+            ]
         );
         // The same file with its rows from high to low frequency gives the same fit. It gave a negative damping.
         let written = std::fs::read_to_string(&sweep).unwrap();
@@ -1001,10 +1039,13 @@ fn parts_are_named_on_the_command_line() {
             };
             if geared { value("gearbox-peak") / value("motor-peak") } else { value("motor-peak") }
         };
-        // A linear motor machine (`[linear_motor]`, a track's movers) takes a linear motor, here Beckhoff's at its supply.
+        // A linear motor machine (`[linear_motor]`, a track's movers) takes a linear motor, here Beckhoff's at its supply:
+        // the AL8042-0E, 460 N peak, on a mover twice as heavy with its 1.5 kg coil (2.55 against 1.25 kg), uses 0.199 of
+        // its peak where the own coil set uses 0.445 of 104.5 N (by hand 46.5 N x 2.04 / 460 N = 0.206). The AL8021-0E's
+        // 120 N are used 0.480, too close to the own 0.445 to tell the part from the noise.
         let linear = sim_components::catalog::is_linear_motor(&entry.config());
         let parts: &[&str] = if linear {
-            &["--motor", "AL8021-0E", "--supply", "beckhoff-400v"]
+            &["--motor", "AL8042-0E", "--supply", "beckhoff-400v"]
         } else if geared {
             &["--motor", "1FK2104-5AK", "--gearbox", "NRK070-04-7"]
         } else {
@@ -1025,7 +1066,7 @@ fn parts_are_named_on_the_command_line() {
     }
 }
 
-/// `run --disable-at` switches the drives off on the way: from then on no motor gives torque and the axes do
+/// `run --disable-at` switches the drives off on the way: from then on no motor has current (a coasting rotor keeps its iron drag) and the axes do
 /// not go where the same run with the drives on takes them. A machine with holding brakes stands still when
 /// disabled at rest, and disabled on the way it stops elsewhere than without them (where an axis coasts or falls).
 #[test]
@@ -1045,9 +1086,16 @@ fn a_run_can_disable_the_drives_on_the_way() {
         // One row per millisecond: the same up to 0.3 s, then no torque.
         assert_eq!(on[..=300], off[..=300], "{}", entry.id);
         assert!(off[..=300].iter().any(|row| torques.iter().any(|&i| row[i] != 0.0)), "{}", entry.id);
+        // No current: what torque is left is the coasting rotor's iron drag (effects.iron_loss, `Drive::disabled_step`).
+        let currents: Vec<usize> = sim
+            .machine
+            .motors()
+            .iter()
+            .map(|m| sim.signal_index(&format!("motor.{}.current", m.id)).unwrap())
+            .collect();
         assert!(
-            off[301..].iter().all(|row| torques.iter().all(|&i| row[i] == 0.0)),
-            "{}: torque after disabling",
+            off[301..].iter().all(|row| currents.iter().all(|&i| row[i] == 0.0)),
+            "{}: current after disabling",
             entry.id
         );
         assert!(
@@ -1202,7 +1250,7 @@ fn fit_without_a_resonance_dip_fails() {
         text(&en.stderr),
         text(&de.stderr)
     );
-    assert_eq!(text(&en.stdout).trim(), "quantity,of,config,fitted,standard_error");
+    assert_eq!(text(&en.stdout).trim(), "quantity,of,config,fitted,standard_error,units");
 }
 
 /// `fit --stiffness`: the belt's stiffness from a move's own trace, as `identify::fit_move_stiffness` gives it, a row with
@@ -1278,9 +1326,9 @@ fn the_belt_stiffness_is_fitted_to_a_moves_trace_on_the_command_line() {
     assert_eq!(
         rows,
         [
-            format!("stiffness_factor,belt.stiffness_ea_n,1.000000e0,{:.6e},{:.3e}", shared.factor, shared.error),
-            format!("ringing_rms_nm,belt.stiffness_ea_n,,{:.6e},", shared.ringing),
-            format!("ringing_left_rms_nm,belt.stiffness_ea_n,,{:.6e},", shared.residual),
+            format!("stiffness_factor,belt.stiffness_ea_n,1.000000e0,{:.6e},{:.3e},", shared.factor, shared.error),
+            format!("ringing_rms_nm,belt.stiffness_ea_n,,{:.6e},,", shared.ringing),
+            format!("ringing_left_rms_nm,belt.stiffness_ea_n,,{:.6e},,", shared.residual),
         ]
     );
     assert!(
@@ -1461,12 +1509,13 @@ fn analyze_writes_the_torque_breakdown_and_the_energy_budget() {
         assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
         let mut sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
         let load = analyse_cycle(&mut sim).unwrap();
-        let mut expected = String::from("motor,part,peak_torque_nm,rms_torque_nm\n");
-        for (motor, m) in sim.machine.motors().iter().zip(&load.motors) {
+        let mut expected = String::from("motor,part,peak_torque_nm,rms_torque_nm,torque_unit\n");
+        for (k, (motor, m)) in sim.machine.motors().iter().zip(&load.motors).enumerate() {
+            let unit = if sim.machine.motor_linear(k) { "N" } else { "N m" };
             for (part, (peak, rms)) in sim_core::TORQUE_PARTS.iter().zip(m.torque_parts.unwrap()) {
-                expected += &format!("{},{part},{peak:.6e},{rms:.6e}\n", motor.id);
+                expected += &format!("{},{part},{peak:.6e},{rms:.6e},{unit}\n", motor.id);
             }
-            expected += &format!("{},torque,{:.6e},{:.6e}\n", motor.id, m.peak_torque, m.rms_torque);
+            expected += &format!("{},torque,{:.6e},{:.6e},{unit}\n", motor.id, m.peak_torque, m.rms_torque);
         }
         assert_eq!(std::fs::read_to_string(&breakdown).unwrap(), expected, "{}", entry.id);
         let b = load.budget.unwrap();
@@ -1540,7 +1589,9 @@ fn compare(entry: &'static sim_core::MachineEntry) {
         let torque = format!("motor.{motor}.torque");
         // The first axis's position: not every machine has an axis x (the rotary table's c, the arms' j1), nor metres.
         let position = format!("axis.{}.position", sim.machine.axes()[0].id);
-        let unit = sim.signal_infos().iter().find(|s| s.id == position).unwrap().unit.clone();
+        let unit_of = |id: &str| sim.signal_infos().iter().find(|s| s.id == id).unwrap().unit.clone();
+        // N m on a rotary motor, N on a linear one (the linear-motor axis, a track's movers).
+        let (unit, torque_unit) = (unit_of(&position), unit_of(&torque));
         // The friction the machine has: of its guides, of its arms' joints, of the winches that pull a platform, or of the
         // dancer a web runs over.
         let effect = ["guide_friction", "joint_friction", "winch_friction", "dancer_friction"]
@@ -1568,7 +1619,9 @@ fn compare(entry: &'static sim_core::MachineEntry) {
         let lines: Vec<&str> = written.lines().collect();
         assert_eq!(
             lines[0],
-            format!("time[s],{torque}.on[N m],{torque}.off[N m],{position}.on[{unit}],{position}.off[{unit}]")
+            format!(
+                "time[s],{torque}.on[{torque_unit}],{torque}.off[{torque_unit}],{position}.on[{unit}],{position}.off[{unit}]"
+            )
         );
         assert_eq!(lines.len(), 1 + found.on.len().min(found.off.len()));
         let (on, off) = (&found.on[100], &found.off[100]);
@@ -1576,7 +1629,7 @@ fn compare(entry: &'static sim_core::MachineEntry) {
         assert_eq!(lines[101], format!("{:.4},{:.9e},{:.9e},{:.9e},{:.9e}", on[0], on[t], off[t], on[p], off[p]));
         let (peak, rms) = found.difference(t);
         let written = std::fs::read_to_string(&differences).unwrap();
-        assert_eq!(written.lines().nth(1).unwrap(), format!("{torque},N m,{peak:.6e},{rms:.6e}"));
+        assert_eq!(written.lines().nth(1).unwrap(), format!("{torque},{torque_unit},{peak:.6e},{rms:.6e}"));
         // An effect the config does not have is refused by name.
         let out = cli(&["compare", entry.id, "--effect", "no_such_effect"]);
         assert!(!out.status.success() && text(&out.stderr).contains("effects.no_such_effect"), "{}", text(&out.stderr));
@@ -1903,10 +1956,12 @@ fn report_lists_every_verdict_and_the_source_of_each_input() {
 }
 
 /// `modes` writes the reported modes over an axis's stroke for every machine (a header alone after "position" where the
-/// machine reports none). The belt axis's carriage, m = 6 kg on k = EA / L1 + EA / L2 with EA = 5e5 N:
-/// at x = 0, L = 0.15 m and 2.45 m, k = 3.537415e6 N/m, sqrt(k / m) / (2 pi) = 122.2046 Hz; at x = 0.5 m, 65.8025 Hz;
-/// at x = 1 m, L = 1.15 m and 1.45 m, k = 7.796102e5 N/m, 57.3698 Hz. Damping ratio 200 N s/m / (2 m w): 0.021706,
-/// 0.040311, 0.046237.
+/// machine reports none). The single belt axis's carriage, m = 6 kg on k = EA / l1 + EA / l2 with EA = 5e5 N, l the
+/// unstretched belt of each section under the 300 N pretension, l = L / (1 + 300 / 5e5) (as the machine's own
+/// `the_carriage_mode_is_the_hand_calculated_one_at_two_places`): at x = 0, L = 0.15 m and 2.45 m, k = 3.539537e6 N/m,
+/// sqrt(k / m) / (2 pi) = 122.2412 Hz; at x = 0.5 m, k = 1.026256e6 N/m, 65.8222 Hz; at x = 1 m, L = 1.15 m and 1.45 m,
+/// k = 7.800780e5 N/m, 57.3870 Hz. Damping ratio 200 N s/m / (2 m w): 0.021700, 0.040299, 0.046223. (EA / L of the
+/// stretched length gave 122.2046, 65.8025 and 57.3698 Hz.)
 #[test]
 fn modes_write_the_resonances_over_the_stroke() {
     for entry in MACHINES {
@@ -1919,10 +1974,11 @@ fn modes_write_the_resonances_over_the_stroke() {
     let rows: Vec<Vec<f64>> =
         text(&out.stdout).lines().skip(1).map(|l| l.split(',').map(|v| v.parse().unwrap()).collect()).collect();
     for (row, by_hand) in
-        rows.iter().zip([[0.0, 122.2046, 0.021706], [0.5, 65.8025, 0.040311], [1.0, 57.3698, 0.046237]])
+        rows.iter().zip([[0.0, 122.2412, 0.021700], [0.5, 65.8222, 0.040299], [1.0, 57.3870, 0.046223]])
     {
+        // To the table's rounding: 4 decimals in Hz, 5 in the damping ratio.
         assert!(
-            row.iter().zip(by_hand).all(|(a, b)| (a - b).abs() < 1e-3 * b.max(0.01)),
+            row.iter().zip(by_hand).zip([1e-6, 1e-4, 1e-5]).all(|((a, b), tol)| (a - b).abs() <= tol),
             "{row:?} against {by_hand:?} by hand"
         );
     }
@@ -1986,4 +2042,14 @@ fn the_mode_shapes_and_the_workspace_map_are_written_as_csv() {
     assert_eq!(centre[4], format!("{:.4}", slice.acceleration[12]));
     let flat = MACHINES.iter().copied().find(|e| built(e).machine.condition(&start(e)).is_none()).unwrap();
     assert_eq!(cli(&["workspace", flat.id]).status.code(), Some(2));
+}
+
+/// `--help` and `-h` print the usage on the output stream and succeed; they were refused as unknown options.
+#[test]
+fn help_prints_the_usage() {
+    for flag in ["--help", "-h"] {
+        let out = cli(&[flag]);
+        assert!(out.status.success(), "{flag}");
+        assert!(text(&out.stdout).starts_with("Usage: sim-cli list"), "{flag}");
+    }
 }

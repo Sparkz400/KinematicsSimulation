@@ -10,8 +10,18 @@ fn mechanism(cfg: &Config) -> Tripod {
     Tripod::from_config(cfg).unwrap().1
 }
 
+/// The config with each leg's two parts as point masses at their joints (centre 0, no inertia of their own): the model
+/// the hand calculations below were made for.
+fn point_legs(cfg: &mut Config) {
+    for key in ["base_part_centre_m", "base_part_inertia_kgm2", "platform_part_centre_m", "platform_part_inertia_kgm2"]
+    {
+        cfg.set_text(&format!("leg.{key} = 0.0")).unwrap();
+    }
+}
+
 fn centred() -> Config {
     let mut cfg = ENTRY.config();
+    point_legs(&mut cfg);
     cfg.set_text("mass.payload_offset_m = [0.0, 0.0, 0.0]").unwrap();
     cfg.set_text("effects.torque_ripple = false").unwrap();
     cfg
@@ -163,6 +173,20 @@ fn the_legs_hold_a_centred_load_with_the_hand_calculated_forces() {
     }
 }
 
+/// The same hold with the shipped legs' parts, by virtual work: the platform rising dz turns each leg's u_z = h / L by
+/// s dz / L (s = 0.0331565, L = 0.5491812 m), so the rod part (0.9 kg, centre 0.175 m below its joint) rises by
+/// (1 - 0.0105655) dz and the body part (2.1 kg, centre 0.1 m above the base joint) by 0.0060374 dz:
+/// f u_z = g (60 kg / 3 + 0.9 x 0.9894345 + 2.1 x 0.0060374) = g 20.903170 kg, f = 208.4754 N.
+#[test]
+fn the_legs_parts_add_their_hand_calculated_weight_to_the_hold() {
+    let mut cfg = ENTRY.config();
+    cfg.set_text("mass.payload_offset_m = [0.0, 0.0, 0.0]").unwrap();
+    let f = mechanism(&cfg).static_leg_forces(&LEVEL).unwrap();
+    for v in f {
+        assert!((v - 208.4754).abs() < 1e-3, "{f:?}");
+    }
+}
+
 /// The default payload sits 0.05 m off centre in x (and 0.1 m up, which a level platform does not feel): the centre of
 /// mass of all 62.7 kg is c = 40 x 0.05 / 62.7 = 0.031898 m out. The legs' vertical shares V_i balance the weight and
 /// its moment, V_i = m g (1/3 + 2 c cos t_i / (3 rp)) (sum V_i = m g, sum V_i rp cos t_i = m g c, sum V_i rp sin t_i =
@@ -171,6 +195,7 @@ fn the_legs_hold_a_centred_load_with_the_hand_calculated_forces() {
 #[test]
 fn the_legs_hold_an_offset_load_with_the_hand_calculated_forces() {
     let mut cfg = ENTRY.config();
+    point_legs(&mut cfg);
     cfg.set_text("effects.torque_ripple = false").unwrap();
     let f = mechanism(&cfg).static_leg_forces(&LEVEL).unwrap();
     for (v, want) in f.iter().zip([274.9330, 175.1991, 175.1991]) {
@@ -200,7 +225,9 @@ fn a_leg_pushes_the_hand_calculated_force_for_an_acceleration_along_z() {
 /// 0) N m s from the offset, p x m v = 0.
 #[test]
 fn the_platform_has_the_hand_calculated_momentum() {
-    let mech = mechanism(&ENTRY.config());
+    let mut cfg = ENTRY.config();
+    point_legs(&mut cfg);
+    let mech = mechanism(&cfg);
     let mut q = [0.0; 3];
     assert!(mech.geo.inverse(&LEVEL, &mut q));
     let qd = [0.1 * 0.983282; 3];
@@ -220,6 +247,7 @@ fn the_platform_has_the_hand_calculated_momentum() {
 #[test]
 fn the_new_verdicts_have_the_hand_calculated_values_and_limits() {
     let mut cfg = ENTRY.config();
+    point_legs(&mut cfg);
     cfg.set_text("effects.torque_ripple = false").unwrap();
     let machine = (ENTRY.build)(&cfg).unwrap();
     let mut values = Vec::new();
@@ -264,5 +292,140 @@ fn the_default_cycle_passes_its_verdicts() {
     for v in sim_components::analysis::verdicts(&cfg, &load).unwrap() {
         println!("{} {:?} {} / {}", v.check, v.motor, v.value, v.limit);
         assert!(v.ok, "{} of motor {:?} is {} against {}", v.check, v.motor, v.value, v.limit);
+    }
+}
+
+/// The planner's trains (`Machine::trains`) are each leg's own mode with the other legs held: its coupling (6000 N m/rad
+/// over the screw's lever 0.01 / 2 pi m/rad squared, 2.368705e9 N/m) in series with the screw at the nut's place (the
+/// cylinder's extension q plus the 0.075 m from the fixed bearing to its start, `BallScrew::stiffness`) against the
+/// leg's own entry M_kk of the mechanism's mass matrix with the others standing: sqrt(K / M_kk) / 2 pi. Level and
+/// tilted, where the legs stand out unequally. Each lies between the lowest and the highest of the machine's modes with
+/// all legs on their springs (Rayleigh's quotient of the leg's unit shape).
+#[test]
+fn the_trains_are_each_legs_mode_with_the_others_held() {
+    let cfg = ENTRY.config();
+    let (machine, mech) = Tripod::from_config(&cfg).unwrap();
+    let screw = BallScrew::from_config(&cfg).unwrap();
+    let coupling = 6000.0 / (0.01 / TAU).powi(2);
+    for pose in [LEVEL, [0.52, 0.15, -0.1]] {
+        let trains = machine.trains(&pose);
+        let modes: Vec<f64> = machine.modes(&pose).iter().map(|m| m.hz).collect();
+        let mut q = [0.0; 3];
+        assert!(mech.inverse(&pose, &mut q));
+        let (mut mass, mut bias) = (vec![0.0; 9], vec![0.0; 3]);
+        mech.dynamics(&q, &[0.0; 3], &mut mass, &mut bias);
+        for k in 0..3 {
+            let k_leg = 1.0 / (1.0 / coupling + 1.0 / screw.stiffness(q[k] + 0.075));
+            let hz = (k_leg / mass[k * 3 + k]).sqrt() / TAU;
+            let train = trains[k].unwrap().hz;
+            assert!((train / hz - 1.0).abs() < 1e-9, "{pose:?} leg {k}: {train} against {hz} Hz by hand");
+            assert!(train >= modes[0] && train <= modes[2], "{pose:?} leg {k}: {train} outside {modes:?}");
+        }
+    }
+}
+
+/// The legs' two parts as bodies of their own, lifting the platform level (all legs alike, qd_i = u_z v_z, the twist
+/// (0, 0, v_z, 0, 0, 0): the constraints e_i . v = 0 hold): with s = 1 - u_z^2 = 0.0331565, L = 0.5491812 m,
+/// u' = (v - (u . v) u) / L so |u'|^2 = v_z^2 s / L^2. The base part (2.1 kg, centre 0.1 m, inertia 0.044) turns about
+/// the base joint: T = 1/2 (m c^2 + I) |u'|^2. The rod part (0.9 kg, 0.175 m, 0.0092) moves at v - c u':
+/// |.|^2 = v_z^2 (1 - 2 c s / L + c^2 s / L^2). The sum of all entries of M_q is 2 T / (u_z v_z)^2, so against the point
+/// legs of the old model it is larger by 3 (m_b c_b^2 + I_b) s / (L^2 u_z^2) = 0.0221726 and by
+/// 3 [m_p (c_p^2 s / L^2 - 2 c_p s / L) + I_p s / L^2] / u_z^2 = -0.0464701 kg: -0.0242976 kg together.
+#[test]
+fn the_legs_parts_add_the_hand_calculated_kinetic_energy() {
+    // `centred` has the parts as points; the shipped parts are the default config's.
+    let points = centred();
+    let mut shipped = ENTRY.config();
+    shipped.set_text("mass.payload_offset_m = [0.0, 0.0, 0.0]").unwrap();
+    let sum = |cfg: &Config| {
+        let mech = mechanism(cfg);
+        let mut q = [0.0; 3];
+        assert!(mech.geo.inverse(&LEVEL, &mut q));
+        let (mut m, mut b) = ([0.0; 9], [0.0; 3]);
+        Mechanism::dynamics(&mech, &q, &[0.0; 3], &mut m, &mut b);
+        m.iter().sum::<f64>()
+    };
+    let delta = sum(&shipped) - sum(&points);
+    assert!((delta + 0.0242976).abs() < 1e-6, "{delta}");
+}
+
+/// The dynamics with the legs' parts against Lagrange's equations by differences: at a pose off level and a speed,
+/// h_i = sum_jk dM_ij/dq_k qd_k qd_j - 1/2 sum_jk dM_jk/dq_i qd_j qd_k + dV/dq_i, and at rest h is the legs' holding
+/// force (`static_leg_forces`, with the parts' weights).
+#[test]
+fn the_dynamics_with_the_legs_parts_agree_with_the_lagrange_equations() {
+    let mech = mechanism(&ENTRY.config());
+    let tool = [0.56, 0.05, -0.04];
+    let mut q = [0.0; 3];
+    assert!(mech.geo.inverse(&tool, &mut q));
+    let qd = [0.08, -0.05, 0.06];
+    let eval = |q: &[f64; 3], qd: &[f64; 3]| {
+        let (mut m, mut b) = ([0.0; 9], [0.0; 3]);
+        Mechanism::dynamics(&mech, q, qd, &mut m, &mut b);
+        (m, b)
+    };
+    let (_, bias) = eval(&q, &qd);
+    let eps = 1e-5;
+    let shifted = |k: usize, sign: f64| {
+        let mut p = q;
+        p[k] += sign * eps;
+        p
+    };
+    let dm: Vec<[f64; 9]> = (0..3)
+        .map(|k| {
+            std::array::from_fn(|e| {
+                (eval(&shifted(k, 1.0), &qd).0[e] - eval(&shifted(k, -1.0), &qd).0[e]) / (2.0 * eps)
+            })
+        })
+        .collect();
+    for i in 0..3 {
+        let dv = (mech.potential(&shifted(i, 1.0)) - mech.potential(&shifted(i, -1.0))) / (2.0 * eps);
+        let rate: f64 = (0..3).map(|j| (0..3).map(|k| dm[k][i * 3 + j] * qd[k]).sum::<f64>() * qd[j]).sum();
+        let kinetic: f64 = (0..3).map(|j| (0..3).map(|k| dm[i][j * 3 + k] * qd[j] * qd[k]).sum::<f64>()).sum();
+        let h = rate - 0.5 * kinetic + dv;
+        assert!((bias[i] - h).abs() < 1e-4 * (1.0 + h.abs()), "leg {i}: {} against {h}", bias[i]);
+    }
+    let (_, rest) = eval(&q, &[0.0; 3]);
+    let hold = mech.static_leg_forces(&tool).unwrap();
+    for i in 0..3 {
+        assert!((rest[i] - hold[i]).abs() < 1e-9 * (1.0 + hold[i].abs()), "{rest:?} against {hold:?}");
+    }
+}
+
+/// The rotors' gyroscopic moment has nothing to do on the platform: a leg swings in its plane about its trunnion's axis
+/// e_i, so u and u' both lie square to e_i and the moment the rotor needs, h u', lies square to e_i too, which the
+/// trunnion's bearing carries; were it passed to the platform as a six-legged platform's couple, its force there, h (u x u') / L,
+/// would lie along e_i, the constraint's direction, and A^T of its wrench (the generalised force on q) is 0. So no
+/// term in the equations; the rotors' spin stays in the frame's momentum, whose rate the base feels.
+#[test]
+fn the_rotors_turning_with_their_legs_do_not_push_the_platform() {
+    let mech = mechanism(&ENTRY.config());
+    let tool = [0.52, 0.12, -0.08];
+    let mut q = [0.0; 3];
+    assert!(mech.geo.inverse(&tool, &mut q));
+    let legs = mech.geo.legs(&tool);
+    let a = Lu::new(&mech.geo.constraint_matrix(&legs)).unwrap().columns();
+    let qd = [0.07, -0.05, 0.04];
+    let xi: [f64; 6] = std::array::from_fn(|r| (0..3).map(|c| a[c][r] * qd[c]).sum());
+    let (v, w) = ([xi[0], xi[1], xi[2]], [xi[3], xi[4], xi[5]]);
+    let mut wrench = [0.0; 6];
+    let mut size = 0.0f64;
+    for i in 0..3 {
+        let d = add(v, cross(w, legs.b[i]));
+        let along = dot(legs.u[i], d);
+        let turn: V3 = std::array::from_fn(|k| (d[k] - legs.u[i][k] * along) / legs.length[i]);
+        let force = cross(legs.u[i], turn).map(|f| f / legs.length[i]);
+        let e = mech.geo.tangents[i];
+        assert!(dot(turn, e).abs() < 1e-15 && dot(legs.u[i], e).abs() < 1e-15, "leg {i} leaves its plane");
+        let off = cross(force, e);
+        assert!(dot(off, off).sqrt() < 1e-12 * dot(force, force).sqrt(), "leg {i}: {force:?} not along {e:?}");
+        size = size.max(dot(force, force).sqrt());
+        let moment = cross(legs.b[i], force);
+        (0..3).for_each(|k| (wrench[k], wrench[3 + k]) = (wrench[k] + force[k], wrench[3 + k] + moment[k]));
+    }
+    assert!(size > 1e-3, "{size}");
+    for c in 0..3 {
+        let generalised: f64 = (0..6).map(|r| a[c][r] * wrench[r]).sum();
+        assert!(generalised.abs() < 1e-12 * size, "{c}: {generalised}");
     }
 }

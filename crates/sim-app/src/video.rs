@@ -161,7 +161,8 @@ impl Recording {
             let save = move |folder: &Path| {
                 save_numbered(folder, numbers, |file| picture.save(file).map_err(|e| e.to_string()))
             };
-            // Never waits: a full queue would hold up the window until the disk caught up.
+            // Never waits: a full queue would hold up the window until the disk caught up. The numbers left out are
+            // held by the frame before when the script encodes (`frames_to_mp4.py`), so the video keeps real time.
             if frames.try_send(Box::new(save)).is_err() {
                 dropped.fetch_add(count, Ordering::Relaxed);
             }

@@ -16,9 +16,17 @@
 //! Dynamics in theta, as the linkage's: M(theta) theta'' + m h' h'' theta'^2 = tau_gear + Q_g, M = J_screw + m h'^2,
 //! Q_g = -g m_g h'. m counts the platform, the payload and the arms' vertical motion, arms (4 n^2 - 1) / (12 n^2) (the
 //! centres of stage k's arms at (k - 1/2) h / n); m_g the platform, the payload and half the arms.
-//! shortcut: the arms' turning and the sideways motion of their centres and of the sliding feet are left out of the
-//! kinetic energy (a few per cent of the arms' share at mid height); add them to M if light platforms on heavy arms
-//! matter.
+//! The arms are uniform rods of mass m_a = arms / 2n, all 2n centres at the horizontal u / 2 (the stages stack on the
+//! same two feet columns) and at the heights (k - 1/2) s, the feet's rollers without mass of their own. Beside their
+//! vertical motion (m above) the centres move sideways at u' / 2 = -c theta' / 2, and each arm turns at
+//! alpha' = s' / u (tan alpha = s / u) about its centre, I = m_a L^2 / 12, with s' = c u theta' / s. Their kinetic
+//! energy 2n (m_a/2)(u'/2)^2 + 2n (I/2) alpha'^2 adds
+//!
+//! ```text
+//! M_a = arms c^2 (1/4 + L^2 / (12 s^2)),   1/2 dM_a/dtheta theta'^2 = -arms c^3 L^2 u theta'^2 / (12 s^4)
+//! ```
+//!
+//! to M and to the speed term (about 16 % of the vertical motion's share at mid height).
 //!
 //! The joint is a `RotaryJoint` on the motor's own config (motor, gearbox, brake), without joint friction or stops: the
 //! screw's efficiency counts with the gearbox's (effects.gearbox_efficiency); elastic or rigid with
@@ -146,6 +154,7 @@ pub(crate) fn read(
             inertia: 0.0,
             pulley: String::new(),
             at: None,
+            body: None,
             clockwise: false,
             transmission: Transmission::Belt,
             axis: None,
@@ -193,6 +202,15 @@ impl Stages {
         [n * s, n * c * u / s, -n * c * c * l * l / s.powi(3)]
     }
 
+    /// What the arms' turning and sideways motion add at the screw angle theta, for arms of total mass `arms`: to the
+    /// mass M (arms c^2 (1/4 + L^2 / (12 s^2))) and to the speed term (1/2 dM/dtheta, per theta'^2).
+    pub fn arm_motion(&self, theta: f64, arms: f64) -> (f64, f64) {
+        let (c, l) = (self.lever, self.arm);
+        let u = self.span_low - c * theta;
+        let s = (self.height(theta)[0] / self.stages).max(1e-9);
+        (arms * c * c * (0.25 + l * l / (12.0 * s * s)), -arms * c.powi(3) * l * l * u / (12.0 * s.powi(4)))
+    }
+
     /// The screw's angle for a height; NaN out of reach.
     pub fn angle(&self, h: f64) -> f64 {
         let s = h / self.stages;
@@ -214,10 +232,14 @@ pub struct ScissorMachine {
     /// The screw's inertia at the gearbox output; the moving mass m (without the payload) and the weight's mass m_g.
     screw_inertia: f64,
     m_moving: f64,
+    /// The arms' total mass, for their turning and sideways motion.
+    arms: f64,
     m_weight: f64,
     m_payload: f64,
     payload_attached: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the platform along z (`Machine::set_tool_force`), N; held until changed.
+    tool_push: f64,
     /// The screw's efficiency (1 with effects.gearbox_efficiency off), which the gearbox's carries.
     screw_efficiency: f64,
     joint: RotaryJoint,
@@ -252,10 +274,12 @@ impl ScissorMachine {
             max_height,
             screw_inertia: v("screw_inertia_kgm2"),
             m_moving: v("platform_kg") + arms * (4.0 * stages * stages - 1.0) / (12.0 * stages * stages),
+            arms,
             m_weight: v("platform_kg") + 0.5 * arms,
             m_payload: if cfg.bool("effects.payload")? { v("payload_kg") } else { 0.0 },
             payload_attached: true,
             brake_engaged: false,
+            tool_push: 0.0,
             screw_efficiency,
             joint,
             thermal: ThermalFeedback::from_config(cfg)?,
@@ -298,7 +322,18 @@ impl ScissorMachine {
     /// M, the velocity term m h' h'' w^2 and Q_g at theta and its speed w.
     fn load(&self, theta: f64, w: f64) -> (f64, f64, f64) {
         let [_, d1, d2] = self.height(theta);
-        (self.screw_inertia + self.m_nt() * d1 * d1, self.m_nt() * d1 * d2 * w * w, -self.g * self.m_g() * d1)
+        let (turn, turn_rate) = self.geometry.arm_motion(theta, self.arms);
+        (
+            self.screw_inertia + self.m_nt() * d1 * d1 + turn,
+            (self.m_nt() * d1 * d2 + turn_rate) * w * w,
+            -self.g * self.m_g() * d1,
+        )
+    }
+
+    /// An obstacle's push F on the platform (`set_tool_force`) on the arms' angle, h' F: in the equations of motion
+    /// only, not in the feedforward or the state at rest.
+    fn push(&self, theta: f64) -> f64 {
+        self.tool_push * self.height(theta)[1]
     }
 
     fn rotor(&self, s: &[f64]) -> (f64, f64) {
@@ -315,7 +350,7 @@ impl ScissorMachine {
         let (mass, velocity, gravity) = self.load(theta, w);
         let j = &self.joint;
         let drive = j.rigid_drive(torque, rotor, rotor_speed, self.brake(s), self.brake_engaged).0;
-        let rest = gravity - velocity + j.output_torque(theta, w);
+        let rest = gravity + self.push(theta) - velocity + j.output_torque(theta, w);
         let first = (drive + rest) / (mass + j.reflected_inertia());
         let loss = j.gearbox.loss_factor(drive - j.reflected_inertia() * first, w);
         let acc = (loss * drive + rest) / (mass + loss * j.reflected_inertia());
@@ -432,7 +467,7 @@ impl Machine for ScissorMachine {
         let (theta, w) = (s[0], s[1]);
         let (mass, velocity, gravity) = self.load(theta, w);
         let (gear, rotor_acc, brake_rate) = j.rotor(torque[0], s[2], s[3], theta, w, s[4], self.brake_engaged);
-        let acc = (gear.output + gravity - velocity + j.output_torque(theta, w)) / mass;
+        let acc = (gear.output + gravity + self.push(theta) - velocity + j.output_torque(theta, w)) / mass;
         out[..5].copy_from_slice(&[w, acc, s[3], rotor_acc, brake_rate]);
     }
 
@@ -460,26 +495,76 @@ impl Machine for ScissorMachine {
     }
 
     /// With the speed: theta' = z' / h', theta'' = (z'' - h'' theta'^2) / h', and J_screw theta'' + m h' z'' - Q_g at
-    /// the screw.
+    /// the screw, plus the arms' turning and sideways motion, M_a theta'' + 1/2 dM_a/dtheta theta'^2.
     fn feedforward_torque_moving(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut [f64]) {
         let theta = self.angle(pos[0]);
         let [_, d1, d2] = self.height(theta);
         let (_, _, gravity) = self.load(theta, 0.0);
         let w = vel[0] / d1;
         let theta_acc = (acc[0] - d2 * w * w) / d1;
+        let (turn, turn_rate) = self.geometry.arm_motion(theta, self.arms);
         let j = &self.joint;
-        out[0] = (self.screw_inertia * theta_acc + self.m_nt() * d1 * acc[0] - gravity) / j.ratio()
+        out[0] = (self.screw_inertia * theta_acc + self.m_nt() * d1 * acc[0] + turn * theta_acc + turn_rate * w * w
+            - gravity)
+            / j.ratio()
             + j.rotor_inertia * j.ratio() * theta_acc;
     }
 
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }
+    /// What moves on the frame, as the dynamics have it (the module): the platform with the payload at its height h,
+    /// rising at h'; per stage k its two arms' centres (2 m_a, m_a = arms / 2n), crossing at the horizontal x_f + u / 2
+    /// from the fixed foot x_f (where the drawing has it at the lowest height, -u_0 / 2) and at (k - 1/2) s, moving at
+    /// u' / 2 = -c theta' / 2 and (k - 1/2) s'; the two arms of a stage turn opposite ways, so their spins cancel; the
+    /// screw (along x, at theta') and the rotor spin about x. An obstacle's push is not in its outside force: a
+    /// compliant base takes it through the tool's shift (`base::Based`).
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        use sim_components::base::{add_point, add_spin};
+        let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        let Stages { stages, lever, span_low, .. } = self.geometry;
+        let (theta, w) = (s[0], s[1]);
+        let [h, d1, _] = self.height(theta);
+        let (u, du) = (span_low - lever * theta, -lever * w);
+        let (stage, rise) = (h / stages, d1 * w / stages);
+        let platform = self.m_weight - 0.5 * self.arms + if self.payload_attached { self.m_payload } else { 0.0 };
+        add_point(&mut f, platform, [0.0, 0.0, h], [0.0, 0.0, d1 * w]);
+        let pair = self.arms / stages;
+        for k in 0..stages as usize {
+            let up = k as f64 + 0.5;
+            add_point(&mut f, pair, [-0.5 * span_low + 0.5 * u, 0.0, up * stage], [0.5 * du, 0.0, up * rise]);
+        }
+        add_spin(&mut f, [1.0, 0.0, 0.0], self.screw_inertia, w);
+        add_spin(&mut f, [1.0, 0.0, 0.0], self.joint.rotor_inertia, self.rotor(s).1);
+        Some(f)
+    }
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
     }
+    /// The push acts on the platform, the tool (`push`): h' F on the arms' angle, whose power is F times the platform's
+    /// speed.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.tool_push = force[0];
+        true
+    }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+    /// The gear's efficiency switch near zero power at the step's start (`mech::Gearbox::fade_damping`) on the screw's
+    /// inertia M(theta) there.
+    fn substeps_wanted(&self, s: &[f64], torque: &[f64], dt: f64, substeps: u32) -> u32 {
+        let h = dt / f64::from(substeps);
+        let gear = &self.joint.gearbox;
+        let output = if self.elastic {
+            gear.torque(s[2], s[3], s[0], s[1]).rotor * gear.ratio
+        } else {
+            self.rigid_solve(s, torque[0]).2
+        };
+        let damping = gear.fade_damping(output, s[1]);
+        if damping == 0.0 {
+            return 1;
+        }
+        sim_components::mech::fade_substeps(damping, h, self.load(s[0], s[1]).0)
     }
     /// The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
     fn after_step(&mut self, s: &mut [f64], _dt: f64) {
@@ -542,10 +627,14 @@ impl Machine for ScissorMachine {
         out
     }
 
-    /// The gearbox's output torque, and the force on the sliding foot, the screw's torque over its lever c.
+    /// The gearbox's output torque, and the force on the sliding foot, the screw's torque over its lever c. The joint's
+    /// gearbox carries the screw's loss too, so `gear` is the torque after the screw: the gearbox's own shaft carries
+    /// more of it while it drives (gear / eta_s) and less while the load drives it back (gear eta_s), as the registered
+    /// screw axes report.
     fn base_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         let gear = self.gear(s, torque[0]);
-        out.extend([gear, gear / self.geometry.lever]);
+        let shaft = shaft_torque(gear, s[1], self.screw_efficiency);
+        out.extend([shaft, gear / self.geometry.lever]);
     }
     fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
         let (theta, w) = (s[0], s[1]);
@@ -669,6 +758,11 @@ impl Machine for ScissorMachine {
     }
 }
 
+/// The gearbox's own output torque from the torque after the screw: more while it drives, less while driven back.
+fn shaft_torque(after_screw: f64, speed: f64, screw_efficiency: f64) -> f64 {
+    after_screw * if after_screw * speed >= 0.0 { 1.0 / screw_efficiency } else { screw_efficiency }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,5 +791,28 @@ mod tests {
         let step = 1e-3;
         let numeric = (lift.height(theta + step)[1] - lift.height(theta - step)[1]) / (2.0 * step);
         assert!((lift.height(theta)[2] - numeric).abs() < 1e-9 * numeric.abs().max(1e-9), "{numeric}");
+    }
+    /// The arms' turning and sideways motion, by hand: two stages of 1 m arms, 40 kg of arms, lever c = 0.01 m/rad, at
+    /// h = 1 m (s = 0.5, u = 0.866025). Sideways: 2n (m_a / 2) (c / 2)^2 per theta'^2 = arms c^2 / 8 = 5e-4, so M = 1e-3;
+    /// turning: 2n (m_a L^2 / 24) (s' / u)^2 with s' = c u / s gives arms L^2 c^2 / (24 s^2) = 40 * 1e-4 / 6 =
+    /// 6.6667e-4, M = 1.33333e-3: M_a = 2.33333e-3 kg m^2. The speed term is half the slope of M_a, which a central
+    /// difference of the mass confirms.
+    #[test]
+    fn the_arms_turning_and_sideways_motion_add_their_inertia() {
+        let lift = Stages { stages: 2.0, arm: 1.0, lever: 0.01, span_low: 0.99f64.sqrt() };
+        let theta = lift.angle(1.0);
+        let (m, rate) = lift.arm_motion(theta, 40.0);
+        assert!((m - 2.333_333e-3).abs() < 1e-8, "{m}");
+        let step = 1e-4;
+        let slope = (lift.arm_motion(theta + step, 40.0).0 - lift.arm_motion(theta - step, 40.0).0) / (2.0 * step);
+        assert!((rate - 0.5 * slope).abs() < 1e-6 * rate.abs(), "{rate} against {}", 0.5 * slope);
+    }
+    /// Screw 0.9, gearbox 0.96, ratio 20, the weight needing F c = 27.780 N m after both (motor 1.60763 N m lifting:
+    /// 1.60763 * 20 * 0.96 * 0.9). Lifting the gearbox's own shaft carries 27.780 / 0.9 = 30.867 N m; lowering
+    /// (same holding torque, speed reversed) 27.780 * 0.9 = 25.002 N m.
+    #[test]
+    fn the_gearbox_shaft_carries_the_screws_loss() {
+        assert!((shaft_torque(27.780, 0.05, 0.9) - 30.867).abs() < 1e-3);
+        assert!((shaft_torque(27.780, -0.05, 0.9) - 25.002).abs() < 1e-3);
     }
 }

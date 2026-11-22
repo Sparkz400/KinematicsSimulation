@@ -203,9 +203,9 @@ fn the_telescopes_friction_is_the_hand_calculated() {
     assert!(d4(&["effects.telescope_friction = false"]).drag.is_none());
 }
 
-/// The tool's torsion with the motor held: the gearbox's 8594.4 N m/rad in series with the shaft's 500 N m/rad,
-/// 1 / (1/8594.4 + 1/500) = 472.51 N m/rad, against J_c = 7.08e-3 kg m^2: sqrt(472.51 / 7.08e-3) / 2 pi = 41.12 Hz,
-/// without the payload (2.08e-3) 75.86 Hz; damping 0.075 / (2 sqrt(472.51 * 7.08e-3)) = 2.05 % of critical. It is among
+/// The tool's torsion with the motor held: the gearbox's 8250.592 N m/rad in series with the shaft's 500 N m/rad,
+/// 1 / (1/8250.592 + 1/500) = 471.43 N m/rad, against J_c = 7.08e-3 kg m^2: sqrt(471.43 / 7.08e-3) / 2 pi = 41.0688 Hz,
+/// without the payload (2.08e-3) 75.77 Hz; damping 0.075 / (2 sqrt(471.43 * 7.08e-3)) = 2.05 % of critical. It is among
 /// the modes, the arms' first; the rigid model has none of it.
 #[test]
 fn the_tools_torsional_mode_is_the_hand_calculated() {
@@ -219,6 +219,55 @@ fn the_tools_torsional_mode_is_the_hand_calculated() {
     assert!(m.modes(&[0.0, 0.0, -0.8, 0.0]).iter().any(|x| x.hz == mode.hz));
     assert!(d4(&["effects.joint_elasticity = false"]).tool_mode().is_none());
     close(d4(&["effects.shaft_torsion = false"]).tool_joint().gearbox.stiffness, 8250.592, 1e-12, "the gearbox alone");
+}
+
+/// With lost motion the shaft (500 N m/rad) stays in series with the gearbox over the band too: the twist for a torque
+/// is the gearbox's own plus T / k_s. Band b = 1.454e-4 rad, K1 = 8250.592: at 0.3 N m (in the band, below
+/// K1 b / 2 = 0.5998) sqrt(2 b T / K1) + T / k_s = 1.028289e-4 + 6e-4 = 7.028289e-4 rad; at 2 N m T / K1 + b / 2 + T / k_s
+/// = 4.315107e-3 rad. The hysteresis friction in parallel with the flanks: sliding, T = K1' x +- T_h K1' / K1 with K1'
+/// = 471.4305 the series stiffness, so T_h' = 0.5 K1 w K1' / K1 = 0.034273 N m (w = 1.454e-4, the loop as wide in angle
+/// as the gearbox's), and at a reversal K1 + sigma = 2 K1 in series: 1 / (1 / 16501.184 + 1 / 500) - K1' = 13.8646.
+#[test]
+fn with_lost_motion_the_shaft_stays_in_series_over_the_band() {
+    let lost = d4(&["effects.gearbox_lost_motion = true"]);
+    let g = &lost.tool_joint().gearbox;
+    close(g.spring_twist(0.3), 7.028289e-4, 1e-6, "twist in the band");
+    close(g.spring_twist(2.0), 4.315107e-3, 1e-6, "twist beyond it");
+    for t in [0.05, 0.3, 0.8, 2.0] {
+        close(g.spring(g.spring_twist(t)).0, t, 1e-12, "spring of its twist");
+    }
+    close(g.stiffness, 471.4305, 1e-6, "series K1");
+    close(g.hysteresis, 0.034273, 1e-4, "hysteresis torque");
+    close(g.dahl_stiffness, 13.86464, 1e-5, "reversal stiffness");
+    // Without the shaft's twist, the gearbox alone.
+    let alone = d4(&["effects.gearbox_lost_motion = true", "effects.shaft_torsion = false"]);
+    close(alone.tool_joint().gearbox.spring_twist(0.3), 1.028289e-4, 1e-5, "gearbox alone");
+}
+
+/// With the gearbox's output a body, the catalogue's inertia at the input (8.8e-6 kg m^2, which holds the output's
+/// J_o / i^2 = 1e-4 / 64 = 1.5625e-6) gives that share up: the rotor turns J_m + 8.8e-6 - 1.5625e-6, and the turn's
+/// feedforward, J_c / i + J_o / i + J_rotor i, stays what it is without the body. A J_o above 64 x 8.8e-6 is refused.
+#[test]
+fn the_gearbox_body_takes_its_share_of_the_input_inertia() {
+    let (plain, body) = (d4(&[]), d4(&["effects.tool_gearbox_body = true"]));
+    close(plain.tool_joint().rotor_inertia - body.tool_joint().rotor_inertia, 1e-4 / 64.0, 1e-9, "share");
+    let (mut a, mut b) = ([0.0; 4], [0.0; 4]);
+    plain.feedforward_torque(&[0.0, 0.0, -0.8, 0.0], &[0.0, 0.0, 0.0, 100.0], &mut a);
+    body.feedforward_torque(&[0.0, 0.0, -0.8, 0.0], &[0.0, 0.0, 0.0, 100.0], &mut b);
+    close(b[3], a[3], 1e-12, "feedforward");
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.tool_gearbox_body = true").unwrap();
+    cfg.set_text("tool.gearbox_output_inertia_kgm2 = 6e-4").unwrap();
+    assert!(Delta4::new(&cfg).is_err());
+}
+
+/// The forearms' weight is at the frame momentum's first moment, lumped or rods (the D3's arms): the potential changes
+/// along a motion as -g . dc/dt (`testkit::weight_is_at_the_first_moment`).
+#[test]
+fn the_forearms_weight_is_at_the_frame_momentums_first_moment() {
+    for rods in [false, true] {
+        sim_core::testkit::weight_is_at_the_first_moment(&d4(&[&format!("effects.forearm_inertia = {rods}")]));
+    }
 }
 
 #[test]
@@ -362,19 +411,39 @@ fn the_tool_motors_values_are_the_catalogues() {
     assert!(mine.f64(gain).unwrap() < catalogue.f64(gain).unwrap());
 }
 
-/// The three arms share [motor] and [gearbox], which the D3's arms read: a table of an arm's own there is refused
-/// rather than sizing its drive with a motor the arm does not have. One for the tool's motor is taken.
+/// An arm's own `[gearbox.2]` is read by that arm alone: its ratio 10 against the shared 20 halves its motor's angle
+/// for the same arm angle (motor angle = ratio x arm angle, the pose being the same), the other two arms unchanged.
 #[test]
-fn an_arms_own_motor_table_is_refused() {
-    for table in ["motor", "gearbox"] {
+fn an_arms_own_gearbox_table_is_read_by_that_arm_alone() {
+    let pose = [0.1, 0.05, -0.8, 0.0];
+    let motors = |own: bool| {
         let mut all: toml::Table = ENTRY.config().to_text().unwrap().parse().unwrap();
-        let mut own = toml::Table::new();
-        own.insert("ratio".into(), toml::Value::Float(10.0));
-        all.get_mut(table).unwrap().as_table_mut().unwrap().insert("2".into(), toml::Value::Table(own));
+        if own {
+            let mut t = toml::Table::new();
+            t.insert("ratio".into(), toml::Value::Float(10.0));
+            all.get_mut("gearbox").unwrap().as_table_mut().unwrap().insert("2".into(), toml::Value::Table(t));
+        }
         let cfg = Config::parse(&toml::to_string(&all).unwrap()).unwrap();
-        assert!(Delta4::new(&cfg).is_err(), "{table}.2");
+        let (m, mut out) = (Delta4::new(&cfg).unwrap(), [0.0; 4]);
+        m.inverse(&pose, &mut out);
+        out
+    };
+    let (shared, own) = (motors(false), motors(true));
+    assert_eq!((own[0], own[2]), (shared[0], shared[2]));
+    assert!((own[1] - 0.5 * shared[1]).abs() < 1e-12 * shared[1].abs(), "{own:?} against {shared:?}");
+}
+
+/// The tool motor and its gearbox above the base's centre are collision boxes where `scene` draws them: the pair at
+/// (0, 0, 0.16) and (0, 0, 0.065), whatever the pose.
+#[test]
+fn the_motor_and_gearbox_above_the_base_are_collision_bodies() {
+    let m = Delta4::new(&ENTRY.config()).unwrap();
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; 4]);
+    m.equilibrium(&[0.0, 0.0, -0.75, 0.0], &mut state, &mut torque);
+    let boxes = m.collision_bodies(&state);
+    for at in [[0.0, 0.0, 0.16], [0.0, 0.0, 0.065]] {
+        assert!(boxes.iter().any(|b| b.centre == at), "no body at {at:?}");
     }
-    assert!(Delta4::new(&ENTRY.config()).is_ok());
 }
 
 /// Friction feedforward from the machine's own model (`steady_friction`), by hand, with the platform on the axis at
@@ -382,18 +451,25 @@ fn an_arms_own_motor_table_is_refused() {
 /// geometry, see its test of the same name): the joint 0.3 tanh(t' / 0.01) + 0.05 t' = 0.356413 N m. The telescope
 /// lengthens at 0.5 m/s and slides at 5 tanh(100) + 2 x 0.5 = 6 N, upward on the platform; each arm moves the platform
 /// by dz/dt_k = z' / (3 t') = -0.147721 m/rad (the three alike), so it feels 6 x -0.147721 = -0.886328 N m against its
-/// turn: 1.242740 N m through the gearbox. The arms hold the platform's weight, so their gearboxes are driven back:
-/// x 0.96 / 20, 0.059652 N m, plus the shaft at 20 t' = 22.565 rad/s, 0.05 tanh(45) + 2e-4 x 22.565 = 0.054513 N m:
-/// 0.114165 N m. The tool: the bearing 0.02 tanh(500) + 1e-4 x 5 = 0.0205 N m through ratio 8 at the efficiency
+/// turn: 1.242740 N m through the gearbox. Each arm holds G = 12.045 N m of weight (platform, payload, shaft and arms,
+/// pulling the arm down, the way it turns), so its gearbox passes 1.242740 - 12.045 N m, is driven back, and the loss
+/// is on all of it, as on the linkage (the weight's lossless G / 20 is the rigid feedforward's): ((1.242740 - 12.045)
+/// x 0.96 + 12.045) / 20 = 0.083742 N m (without the loss on the weight it was 1.242740 x 0.96 / 20 = 0.059652, and
+/// 0.114165 in all), plus the shaft at 20 t' = 22.565 rad/s, 0.05 tanh(45) + 2e-4 x 22.565 = 0.054513 N m: 0.138255
+/// N m. The loss is on the speed's own torque at the arm too (the loss-free feedforward's): the arms slow down,
+/// t'' = -0.557725 rad/s^2 (the constraint differentiated), and what turns with them, the arm 0.048 + 0.3 x 0.4^2 +
+/// 0.5 / 6 x 0.4^2 = 0.109333 kg m^2 and the rod pair's middle 2/3 x 0.5 kg at half the elbow's plus half the
+/// platform's velocity, gives back d(kinetic energy)/dt / t' = -0.079857 N m per arm, which the gearbox passes driven
+/// back too: -0.079857 x (0.96 - 1) / 20 = +0.000160, 0.138415 N m in all. The tool: the bearing 0.02 tanh(500) + 1e-4 x 5 = 0.0205 N m through ratio 8 at the efficiency
 /// 0.97^tanh(0.0205 x 5 / 0.5 W) = 0.993861 (the fade over 0.5 W), 0.002578 N m, plus the shaft at 40 rad/s,
 /// 0.02 tanh(80) + 8e-5 x 40 = 0.0232 N m: 0.025778 N m. In a vertical cruise of the shipped delta at 0.5 m/s the
-/// feedforward takes its own size off the arms' integrators (which keep the gearboxes' loss on the weight, by design).
+/// feedforward takes its own size off the arms' integrators.
 #[test]
 fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_carries_nothing() {
     let m = (ENTRY.build)(&ENTRY.config()).unwrap();
     let mut out = [0.0; 4];
     m.steady_friction(&[0.0, 0.0, -0.85, 0.0], &[0.0, 0.0, -0.5, 5.0], &mut out);
-    let expected = [0.114165, 0.114165, 0.114165, 0.025778];
+    let expected = [0.138415, 0.138415, 0.138415, 0.025778];
     for k in 0..4 {
         assert!((out[k] - expected[k]).abs() < 1e-5, "{out:?}, by hand {expected:?}");
     }
@@ -423,4 +499,210 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
     let ((ff, with), (_, without)) = (cruise(true), cruise(false));
     assert!(ff > 0.1, "feedforward {ff} N m");
     assert!((without - with - ff).abs() < 0.03 * ff, "without: {without} N m, with {with}, of {ff}");
+}
+
+/// The friction feedforward (`steady_friction`) carries the arms' gearbox loss on the weight too, as the planar
+/// linkage's (the trait's rule: the load goes through the efficiencies where the motor drives): on the rigid D4 with
+/// its losses, at z = -0.85 m going down and up at 0.5 m/s with the tool turning, and sideways, the torques that leave
+/// platform and tool without acceleration (a Newton solve of the rigid model: the tool's acceleration from its velocity a
+/// microsecond along the model's rates, the Jacobian by differences) are the loss-free feedforward plus
+/// `steady_friction`, to 5e-5 of the torque (seen: 2e-12 vertically, 1.3e-5 sideways, 7e-8 on the tool; 3.5e-4 before
+/// `steady_friction` took the loss on the velocity terms too; what is left sideways is the efficiency's fade over the
+/// power, which the rigid model takes at its loss-free acceleration).
+#[test]
+fn the_friction_feedforward_takes_the_loss_on_the_weight() {
+    let machine = (ENTRY.build)(&{
+        let mut cfg = ENTRY.config();
+        for line in ["effects.joint_elasticity = false", "effects.torque_ripple = false"] {
+            cfg.set_text(line).unwrap();
+        }
+        cfg
+    })
+    .unwrap();
+    let pos = [0.0, 0.0, -0.85, 0.0];
+    for vel in [[0.0, 0.0, -0.5, 5.0], [0.0, 0.0, 0.5, -5.0], [0.2, -0.1, 0.0, 2.0]] {
+        let (mut state, mut held) = (Vec::new(), [0.0; 4]);
+        machine.equilibrium(&pos, &mut state, &mut held);
+        machine.set_tool_velocity(&mut state, &vel);
+        let acc = |t: [f64; 4]| -> [f64; 4] {
+            let mut rates = vec![0.0; machine.state_len()];
+            machine.derivatives(&state, &t, &mut rates);
+            let velocity = |h: f64| {
+                let s: Vec<f64> = state.iter().zip(&rates).map(|(s, r)| s + h * r).collect();
+                let (mut p, mut v) = ([0.0; 4], [0.0; 4]);
+                machine.tool_state(&s, &mut p, &mut v);
+                v
+            };
+            let (ahead, behind) = (velocity(1e-6), velocity(-1e-6));
+            std::array::from_fn(|i| (ahead[i] - behind[i]) / 2e-6)
+        };
+        let mut t = held;
+        for _ in 0..20 {
+            let a = acc(t);
+            // a + J dt = 0 by Gauss elimination, J[r][c] = d a_r / d t_c.
+            let mut j: [[f64; 5]; 4] = [[0.0; 5]; 4];
+            for c in 0..4 {
+                let mut s = t;
+                s[c] += 1e-6;
+                let b = acc(s);
+                (0..4).for_each(|r| j[r][c] = (b[r] - a[r]) / 1e-6);
+            }
+            (0..4).for_each(|r| j[r][4] = -a[r]);
+            for p in 0..4 {
+                let pivot = (p..4).max_by(|&x, &y| j[x][p].abs().total_cmp(&j[y][p].abs())).unwrap();
+                j.swap(p, pivot);
+                for r in p + 1..4 {
+                    let f = j[r][p] / j[p][p];
+                    (p..5).for_each(|c| j[r][c] -= f * j[p][c]);
+                }
+            }
+            let mut step = [0.0; 4];
+            for p in (0..4).rev() {
+                step[p] = (j[p][4] - (p + 1..4).map(|c| j[p][c] * step[c]).sum::<f64>()) / j[p][p];
+            }
+            (0..4).for_each(|r| t[r] += step[r]);
+        }
+        let a = acc(t);
+        assert!(a.iter().all(|a| a.abs() < 1e-7), "{vel:?}: {a:?}");
+        let (mut ff, mut friction) = ([0.0; 4], [0.0; 4]);
+        machine.feedforward_torque_moving(&pos, &vel, &[0.0; 4], &mut ff);
+        machine.steady_friction(&pos, &vel, &mut friction);
+        for k in 0..4 {
+            let off = t[k] - ff[k] - friction[k];
+            println!(
+                "{vel:?}: motor {k}: Newton {:.6} N m, feedforward {:.6} + friction {:.6}, off {off:.2e}",
+                t[k], ff[k], friction[k]
+            );
+            assert!(off.abs() < 5e-5 * t[k].abs(), "{vel:?}: motor {k}: {t:?} against {ff:?} + {friction:?}");
+        }
+    }
+}
+
+/// On a compliant base (`effects.base_compliance`) the machine keeps its collision capsules (11 of them, carried
+/// along with the base) and its resonance is the lower of its own and the base's: the lowest of its modes.
+#[test]
+fn on_a_compliant_base_the_capsules_stay_and_the_resonance_is_the_lower() {
+    let pose = [0.1525, 0.0, -0.75, 0.0];
+    let build = |on: bool| {
+        let mut cfg = ENTRY.config();
+        cfg.set_text(&format!("effects.base_compliance = {on}")).unwrap();
+        (ENTRY.build)(&cfg).unwrap()
+    };
+    let (plain, based) = (build(false), build(true));
+    let capsules = |m: &dyn sim_core::Machine| {
+        let (mut state, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
+        m.equilibrium(&pose, &mut state, &mut torque);
+        m.collision_capsules(&state).len()
+    };
+    assert_eq!((capsules(plain.as_ref()), capsules(based.as_ref())), (11, 11));
+    let (own, on_base) = (plain.resonance_hz(&pose).unwrap(), based.resonance_hz(&pose).unwrap());
+    let lowest = based.modes(&pose)[0].hz;
+    assert!(
+        on_base <= own && (on_base - lowest).abs() < 1e-9 * lowest,
+        "{own} Hz alone, {on_base} on the base, lowest mode {lowest}"
+    );
+}
+
+/// The gearbox's output as a body (effects.tool_gearbox_body): k_g = 8250.592, k_s = 500 N m/rad, J_o = 1e-4, J_c =
+/// 7.08e-3 kg m^2 (with the payload), the rotor held. J_o J_c lambda^2 - b lambda + k_g k_s = 0 with
+/// b = J_c (k_g + k_s) + J_o k_s = 61.954191 + 0.05 = 62.004191, J_o J_c = 7.08e-7, k_g k_s = 4125296: the roots 66583
+/// and 8.7511e7 1/s^2, so 41.068 Hz (the series spring's 41.0688 to 0.1 %) and 1488.9 Hz (about sqrt((k_g + k_s) / J_o) / 2 pi).
+/// With J_o -> 0 the lower root tends to the series spring's k_g k_s / (J_c (k_g + k_s)).
+#[test]
+fn the_gearbox_body_gives_the_two_hand_calculated_modes() {
+    let m = d4(&["effects.tool_gearbox_body = true"]);
+    let modes = m.body_modes();
+    let (kg, ks, jo, jc): (f64, f64, f64, f64) = (8250.592, 500.0, 1e-4, 7.08e-3);
+    let b = jc * (kg + ks) + jo * ks;
+    let (p, q) = (jo * jc, kg * ks);
+    let disc = (b * b - 4.0 * p * q).sqrt();
+    let hz = |l: f64| l.sqrt() / std::f64::consts::TAU;
+    close(modes[0].hz, hz((b - disc) / (2.0 * p)), 1e-9, "lower root");
+    close(modes[1].hz, hz((b + disc) / (2.0 * p)), 1e-9, "upper root");
+    close(modes[0].hz, 41.068, 2e-4, "lower, by hand");
+    close(modes[1].hz, 1488.9, 2e-4, "upper, by hand");
+    assert_eq!(m.tool_mode().unwrap().hz, modes[0].hz);
+    assert!(m.state_len() == d4(&[]).state_len() + 2 && m.modes(&[0.0, 0.0, -0.8, 0.0]).len() == 5);
+    // Without J_o the lower mode is the series spring's.
+    let tiny = d4(&["effects.tool_gearbox_body = true", "tool.gearbox_output_inertia_kgm2 = 1e-12"]);
+    close(tiny.body_modes()[0].hz, d4(&[]).tool_mode().unwrap().hz, 1e-6, "series spring");
+    // Switched off, or in the rigid model, nothing changes.
+    assert!(d4(&[]).body_modes().is_empty());
+    assert!(d4(&["effects.tool_gearbox_body = true", "effects.joint_elasticity = false"]).body_modes().is_empty());
+}
+
+/// The body's rates by hand, no backlash, loss-free: the gearbox output turned 0.01 rad ahead of rotor and tool passes
+/// -k_g 0.01 = -82.50592 N m; the shaft passes k_s 0.01 = 5 N m to the tool: J_c c'' = 5 gives 706.2147 rad/s^2, J_o th'' =
+/// -82.50592 - 5 gives -875059.2 rad/s^2. With the drives off the energy stays, 1/2 k_g th^2 + 1/2 k_s (th - c)^2 +
+/// kinetic: 0.5 * 8250.592 * 1e-4 + 0.5 * 500 * 1e-4 = 0.4375296 J at the start.
+#[test]
+fn the_gearbox_body_has_the_hand_calculated_rates_and_conserves_energy() {
+    let mut cfg = lossless_config();
+    for e in ["effects.tool_gearbox_body = true", "effects.gearbox_backlash = false"] {
+        cfg.set_text(e).unwrap();
+    }
+    let m = Delta4::new(&cfg).unwrap();
+    let (mut s, mut torque) = (Vec::new(), [0.0; 4]);
+    m.equilibrium(&[0.0, 0.0, -0.8, 0.0], &mut s, &mut torque);
+    let n = m.n3;
+    s[n + 5] = 0.01;
+    let mut rates = vec![0.0; s.len() - n];
+    m.tool_rates(&s, 0.0, &mut rates);
+    close(rates[1], 5.0 / 7.08e-3, 1e-9, "tool acceleration");
+    close(rates[6], -(82.50592 + 5.0) / 1e-4, 1e-9, "body acceleration");
+    let e0 = m.tool_energy(&s).iter().sum::<f64>();
+    close(e0, 0.5 * 8250.592 * 1e-4 + 0.5 * 500.0 * 1e-4, 1e-9, "start energy");
+    let f = |y: &[f64], d: &mut [f64]| {
+        let mut full = s.clone();
+        full[n..].copy_from_slice(y);
+        m.tool_rates(&full, 0.0, d);
+    };
+    // 12.5 ms of RK4 at the step h: the energy lost, relative.
+    let lost = |h: f64| {
+        let mut y = s[n..].to_vec();
+        let mut k = vec![vec![0.0; y.len()]; 4];
+        for _ in 0..(0.0125 / h).round() as usize {
+            let mut tmp = y.clone();
+            f(&y, &mut k[0]);
+            for i in 0..y.len() {
+                tmp[i] = y[i] + 0.5 * h * k[0][i];
+            }
+            f(&tmp, &mut k[1]);
+            for i in 0..y.len() {
+                tmp[i] = y[i] + 0.5 * h * k[1][i];
+            }
+            f(&tmp, &mut k[2]);
+            for i in 0..y.len() {
+                tmp[i] = y[i] + h * k[2][i];
+            }
+            f(&tmp, &mut k[3]);
+            for i in 0..y.len() {
+                y[i] += h / 6.0 * (k[0][i] + 2.0 * k[1][i] + 2.0 * k[2][i] + k[3][i]);
+            }
+        }
+        let mut end = s.clone();
+        end[n..].copy_from_slice(&y);
+        assert!((end[n + 5] - 0.01).abs() > 1e-4, "it moved");
+        1.0 - m.tool_energy(&end).iter().sum::<f64>() / e0
+    };
+    // What is lost is RK4's own damping of the 1.49 kHz mode, |R(i w h)|^2 = 1 - (w h)^6 / 72 per step, so h^5 over a
+    // time: at the machine's sub-step (w h = 0.146) 1.2e-4 of the energy in 12.5 ms, 32 times less at half the step, and
+    // under 1e-6 at a quarter of it. The model itself stores what it is given.
+    let h = 62.5e-6 / 4.0;
+    let (full, half, quarter) = (lost(h), lost(h / 2.0), lost(h / 4.0));
+    assert!(full > 0.0 && full < 2e-4, "{full} lost at the sub-step");
+    assert!((full / half - 32.0).abs() < 3.0, "{full} at h, {half} at h / 2");
+    assert!(quarter.abs() < 1e-6, "{quarter} at h / 4");
+}
+
+/// The energy budget closes with the gearbox's output a body (the shaft's damper booked with the gearbox's loss) and
+/// with lost motion on the shaft in series (`testkit::loss_budget`: the parts add up to the energy at every step, and
+/// work = stored + lost over a pulse run).
+#[test]
+fn the_budget_closes_with_the_gearbox_body_and_with_lost_motion() {
+    for edit in ["effects.tool_gearbox_body = true", "effects.gearbox_lost_motion = true"] {
+        let mut cfg = ENTRY.config();
+        cfg.set_text(edit).unwrap();
+        sim_core::testkit::loss_budget((ENTRY.build)(&cfg).unwrap().as_ref());
+    }
 }

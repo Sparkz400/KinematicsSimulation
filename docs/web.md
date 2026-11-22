@@ -2,7 +2,7 @@
 
 The core, the machines, machine files, the catalogue and the analysis build for `wasm32-unknown-unknown`.
 `crates/sim-wasm` wraps them in a few C-ABI functions, and `crates/sim-wasm/web/index.html` is a static page that loads
-the module: pick a machine (registered, one of the machine files of `machines/`, or a TOML machine file opened or pasted
+the module: pick a machine (registered, one of the machine files of `machines/`, or a TOML or JSON machine file opened or pasted
 into the editor), edit its config, run its cycle or a path, and the page shows the machine in 3D with its obstacles and
 the tool's trail, time plots of torque, speed and following error per motor, and a sizing check with every verdict,
 every column of `sim-cli analyze` and the operating points over the motor's torque-speed curve. A frequency sweep and a
@@ -14,7 +14,7 @@ selector; a form over the config (the motor, supply, gearbox, drive, belt and ax
 payload, the axes' profile limits, the velocity loop's gains, and every other number behind a filter), which writes a
 change into the config's own TOML with its comments kept; the config saved as and opened from a TOML file; the verdict
 table of `sim-cli verdicts` with each check's margin; scopes of position, speed, torque, current, following error and
-winding temperature rise per motor over one pass of the cycle, with zoom and the values under the pointer; and a share
+winding temperature rise per motor over one pass of the cycle or the run of a path, with zoom and the values under the pointer; and a share
 link that carries the changed values in the URL's fragment.
 
 **Live page:** https://sparkz400.github.io/KinematicsSimulation/, built from `main` by the workflow
@@ -70,13 +70,13 @@ handed in (`upload:<file name>`).
 | 1 | machine | `{"config"}`: the default config (of a machine file: the file) |
 | 2 | machine, language and options, config | the sizing check: `machine`, `cycle_s`, `tripped`, `warnings`, the machine-wide columns of `sim-cli analyze`, `motors` (every per-motor column of `sim-cli analyze` under its name, `points` the operating points, `curve` the peak torque-speed outline, `s1` the continuous rating), `verdicts` (check, label, motor, value, limit, margin, ok) |
 | 3 | machine, language and options, config | starts the 3D view: `{"dt_s", "centre", "radius", "motors", "sample"}` |
-| 4 | file name, language, machine file (TOML) | `{"id", "name", "config"}`: the file checked as `sim-cli --machine-file` checks it (an error names the file and the line) |
+| 4 | file name, language, machine file (TOML, or JSON by the name's extension `.json`) | `{"id", "name", "config"}`: the file checked as `sim-cli --machine-file` checks it (an error names the file and the line; a JSON file is converted to TOML first, as `sim_machines::load_file` does) |
 | 5 | machine, language and options, config | `{"motor", "amplitude_nm", "points": [[frequency Hz, gain rad/s per N m, phase °]]}` as `sim-cli sweep` |
-| 6 | machine, language, config, `---`, trace (CSV) | `{"rows": [[quantity, of, config, fitted, standard error]], "advice"}` as `sim-cli fit --trace` without `--map` |
+| 6 | machine, language and options, config, `---`, trace, a line `%%%`, mapping file, a line `%%%`, measured sweep (each may be empty, not both trace and sweep) | `{"rows": [[quantity, of, config, fitted, standard error]], "advice", "units"}` as `sim-cli fit`: the trace in the simulator's own columns, or through the mapping file (`--map`); option `stiffness` (`stiffness-key=` for another key than the belts') as `--stiffness`; the sweep with `motor=K`, `amplitude=NM` as `--sweep` |
 | 7 | language, then translation keys, one a line | `{key: text}`: the page's texts (`crates/sim-wasm/i18n/*.ftl`) and those keys from the simulator's translations |
 | 8 | machine, language, config | the form: `params` (`path`, `group`, `label`, `value` as TOML text: every number but `[effects]` and `[bounds]`, labelled as the app's parameter panel) and `parts` (`key`, `value`, `options`: the supplies, the motors of the config's supply, the gearboxes that fit the named motor, the drives of the supply, the belt axes) |
 | 9 | machine, language, config, `---`, lines `path = value` | `{"config", "changed", "compact"}`: the values set over their own text in the config (comments and layout kept; an unknown key or another type refused, as `Config::set_text` refuses it), every value that differs from the machine's default as a line `path = value`, and whether those lines on the default give the config back |
-| 10 | machine, language, config | the scopes: `step_s`, `time`, `signals` (`id`, `label`, `unit`) and per motor `data`, one array per signal: `angle`, `speed`, `torque`, `current`, `following_error`, `winding_temperature` of one pass of the cycle as `record_cycle` (`sim-cli compare`) keeps it, once a millisecond, 6 significant digits |
+| 10 | machine, language, config | the scopes: `step_s`, `time`, `signals` (`id`, `label`, `unit`) and per motor `data`, one array per signal: `angle`, `speed`, `torque`, `current`, `following_error`, `winding_temperature` of one pass of the cycle as `record_cycle` (`sim-cli compare`) keeps it, or with the option `path` of the path's run from rest to 0.3 s after its end, once a millisecond, 6 significant digits |
 
 Options: `path` runs the path after `---` (format: `sim_components::path`, the file `sim-cli --path` reads) from the
 start pose instead of the cycle, timed within the axis limits or with `time-optimal` as fast as the motors allow
@@ -115,7 +115,7 @@ a check passes exactly where it is not below 0, and the page marks one below 10 
 One plot a signal, every motor in its colour. Drag across a scope to zoom into that span, the wheel zooms about the
 pointer, a double-click or "Reset zoom" shows the whole pass; the pointer's time and every motor's value at it stand in
 the corner of each scope. Each pixel column draws the lowest and highest value of its rows, as the time plots do.
-With a path instead of the cycle the scopes are not drawn: they record the cycle (`record_cycle`).
+With a path instead of the cycle they record the path's run from the start pose, from its start to 0.3 s after its end (as the sizing check runs it).
 
 The form is request 8 over the config in the editor. A field changed goes to request 9, which writes the value over its
 own text in the config (the app's way of saving a config over its file), and the 3D view restarts with it; the sizing
@@ -168,9 +168,11 @@ WebAssembly starts no threads. The analyses that share the processors natively (
 catalogue search, the stability margins, the comparison of an effect on and off, the optimiser's candidates) run one
 after another there; the code
 falls back to one thread whenever `std::thread::available_parallelism` says one or knows none. The page offers the
-sizing check, the sweep and the fit, each one run or a set of short runs. Machine files are TOML; a JSON machine file
-is read by `sim-cli` and the app but not yet by the page. The fit takes a trace in the simulator's own columns, not a
-vendor export with its mapping file, and fits masses and friction only (no stiffness or sweep fit).
+sizing check, the sweep and the fit, each one run or a set of short runs. Machine files are TOML or JSON. The fit takes
+a trace in the simulator's own columns or a vendor export through its mapping file (opened first; a UTF-16 file such as
+a CODESYS `.trace` is read by its byte order mark), and fits masses and friction, with the box ticked the stiffness from
+the trace's own moves, and from a measured sweep (`frequency_hz`, `gain_rad_s_per_nm`) the load's resonance on the motor
+chosen for the sweep.
 
 ## Tests
 
@@ -186,7 +188,10 @@ the frame of every machine against its scene from a native simulation, at the st
 an obstacle's record worked out by hand, an obstacle of the config in the frame, the view's cycle time against the
 sizing check's, and the samples of 0.5 s (500 at 1 ms, with the highest torque and lowest following error of a native
 run step by step). The sizing check's analyze columns against the native analysis, the torque-speed curve's corners by
-hand, the sweep against `frequency_sweep`, a trace without the simulator's columns refused, and the page's texts in both
+hand, the sweep against `frequency_sweep`, a trace without the simulator's columns refused, a JSON machine file giving
+the sizing check of its TOML text, the scopes of a path running to 0.3 s after its end, the fit of the dataset
+`example-synthetic-belt-axis` through its mapping file number for number as `import` and `fit_rigid` (with the stiffness
+option as `fit_move_stiffness`), a measured sweep fitted as `fit_sweep` fits it, and the page's texts in both
 languages with every English key in German. The workbench: every verdict's margin (one by hand, and a check passing
 exactly where its margin is not below 0), the scopes against `record_cycle`'s rows, the form's values, labels and
 catalogue names, a change written with every comment of the default kept and refused for an unknown key or another
@@ -199,4 +204,15 @@ the module before its tests).
 The page itself was run in headless Chrome (puppeteer-core driving the installed Chrome, 14 November 2026): the
 T-gantry's cycle at real time with its plots, the sizing check passing every check with a cycle of 6.080 s; in German,
 the CoreXY machine file running a path of a line, an arc and a line with its trail, its sizing check (1.661 s) and a
-40-point sweep (22 s).
+40-point sweep (22 s). That session did not keep the path, and none of twenty lines and arcs tried on the build of that
+day gives 1.661 s. Named: the page's default path moved into the CoreXY's range,
+
+```text
+line,0.3,0.2
+arc,0.5,0.2,0.4,0.2,cw
+line,0.5,0.4
+```
+
+passes every check in 1.748 s within the axis limits and 1.641 s time-optimal (21 November 2026, `sim-cli analyze
+--machine-file machines/corexy.toml --path FILE [--time-optimal]`, whose numbers the page's sizing check gives, as the
+tests above check; on the build of 14 November 1.748 and 1.640 s).

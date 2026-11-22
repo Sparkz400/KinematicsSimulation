@@ -49,6 +49,13 @@ roller_radius_m = 0.015
 offset_m = 0.01
 spring_n_m = 2000.0
 spring_preload_n = 100.0
+# With effects.follower_lift_off [estimate]: the contact of roller and disc, a steel line contact over the roller's
+# width (Palmgren's, 4e8 N/m at 160 N) and a damper in compression only. The width: a stud-type track roller of 30 mm is
+# 14 mm wide (Schaeffler KR 30); the damping ratio, taken with the contact's stiffness, takes most of the normal speed
+# out at an impact; the guide's Coulomb friction is that of a linear bushing with its seals.
+roller_width_m = 0.014
+contact_damping_ratio = 0.5
+guide_friction_n = 5.0
 
 # The tool on the follower (effects.payload). [estimate]
 [mass]
@@ -58,7 +65,8 @@ payload_kg = 1.0
 friction_coulomb_nm = 0.5
 friction_viscous_nm_s_rad = 0.05
 friction_smoothing_rad_s = 0.01
-# The stops leave the shipped cycle (0 to 180) room; with cam.run the disc turns on and has none. The middle of the
+# The axis range leaves the shipped cycle (0 to 180) room; the disc turns on and has no stops of its own
+# (joint.stop_min_deg / stop_max_deg would put end stops with the stop_* below). The middle of the
 # range, 50 degrees, lies on the first half of the rise, where the follower's acceleration s'' > 0 makes the spring and
 # the weight hold the disc where it is held against them (past the rise's middle they would turn it away).
 min_angle_deg = -90.0
@@ -125,9 +133,10 @@ rated_current_a = 4.35
 thermal_time_constant_s = 2220.0
 rated_temperature_rise_k = 100.0
 start_temperature_rise_k = 0.0
-# [estimate] the rated current, as the motor is an estimate here; with effects.iron_loss the copper loss at it brings
-# the winding to its rated rise, and the S1 check ("motor-s1") starts at kt times it.
-stall_current_a = 4.35
+# [catalogue] 1FK2105-4AF: static torque 5 N m at the stall current 4.65 A (motors_s210.csv), as a motor named in
+# [parts] brings it; with effects.iron_loss the copper loss at it brings the winding to its rated rise, and the S1
+# check ("motor-s1") starts at kt times it.
+stall_current_a = 4.65
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 magnet_temperature_coefficient_1_k = -0.0012
 max_current_a = 18.0
@@ -168,12 +177,17 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 current_kp_v_a = 40.0
 current_tn_s = 5.0e-3
 # [catalogue] a 400 V line: 540 V DC link
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
 peak_torque_nm = 15.0
 rated_torque_nm = 4.6
@@ -337,4 +351,7 @@ disc.inertia_kgm2 = [0.009, 0.0115]
 follower.mass_kg = [1.5, 2.5]
 follower.spring_n_m = [1500.0, 2500.0]
 follower.spring_preload_n = [80.0, 120.0]
+follower.roller_width_m = [0.012, 0.016]
+follower.contact_damping_ratio = [0.3, 0.7]
+follower.guide_friction_n = [2.0, 10.0]
 mass.payload_kg = [0.5, 1.5]

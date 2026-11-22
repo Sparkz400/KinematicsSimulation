@@ -116,8 +116,8 @@ crash = false
 # [estimate] Williams' IRB 360-1/1600 figures (R 164, r 44, upper arm 524, forearm 1244 mm, for a working radius of
 # 720 mm), scaled towards this working radius of 600 mm and rounded; with these the whole working range is reachable,
 # the arm angles stay between -44 and +80 degrees and the condition number of the Jacobian below 3.6.
-# With link_elasticity: the arm tube's own share of the bending modes (a quarter of its mass in each, as a
-# cantilever's first mode) and the elbow block's twist as an arm bends out of its plane. Off as shipped, with
+# With link_elasticity: the arm tube's own share of the bending modes (33/140 of its mass in each, in a
+# cantilever's static deflection shape) and the elbow block's twist as an arm bends out of its plane. Off as shipped, with
 # link_elasticity.
 arm_tube_inertia = false
 # The frame or stand under the machine gives way on springs ([base]): it sways under the motors' reactions and the
@@ -287,11 +287,11 @@ friction_stribeck_rad_s = 2.0
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# [catalogue] 1FK2105-4AF: static torque 5 N m at the stall current 4.65 A (motors_s210.csv), as a motor named in
+# [parts] brings it. With effects.iron_loss the copper loss at it brings the winding to its rated
 # rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
 # starts at kt times it.
-stall_current_a = 4.35
+stall_current_a = 4.65
 [gearbox]
 ratio = 20.0
 efficiency = 0.94
@@ -382,6 +382,8 @@ current_kp_v_a = 40.0
 current_tn_s = 5.0e-3
 # [catalogue] a 400 V line: 540 V DC link (as catalog.rs puts it for a 400 V motor)
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
 peak_torque_nm = 15.0
 rated_torque_nm = 4.6
@@ -419,6 +421,9 @@ max_speed_rad_s = 615.07
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one
 # moment of inertia per motor (the rigid model's at the start pose) times its acceleration setpoint, as a drive's
 # speed/torque precontrol with the load inertia set (S120 p1498): no gravity, no coupling.

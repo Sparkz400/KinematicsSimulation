@@ -104,19 +104,24 @@ fn the_belt_wraps_a_pulley_as_far_as_the_places_of_its_neighbours_say() {
 }
 
 /// The screw portal's belts wrap their pulleys beside its Z screw (effects.belt_wrap), whose motor drives no belt and
-/// has no wrap (NaN). Each belt runs from its carriage's clamp round its pulley (r = 0.02 m, anticlockwise) and back to
-/// the same clamp, both at z = 0.06 m in the belt's plane: the two runs are the tangents from one point at the distance
-/// D, each leaning asin(r / D) off the line of centres, so the belt wraps half a turn plus twice that,
-/// pi + 2 asin(r / D). With the tool at x = 0.3 m: X's pulley at x = -0.1 m, D = 0.4 m, pi + 2 asin(0.05) =
-/// 3.2416344 rad; Y's at x = 0.5 m, D = 0.2 m, pi + 2 asin(0.1) = 3.3419275 rad.
+/// has no wrap (NaN). Each belt is a loop in its plane: from its carriage's clamp round its pulley (r = 0.02 m,
+/// anticlockwise) and on to its far idler (r_f = 0.012 m, anticlockwise, d = 0.1 + stroke + 0.1 from the pulley on the
+/// same line). The run from the clamp, a point at the distance D, is the tangent leaning asin(r / D) off the line of
+/// centres; the run to the far idler the outer tangent of two wheels, leaning asin((r - r_f) / d): the belt wraps half a
+/// turn plus both, pi + asin(r / D) + asin((r - r_f) / d). With the tool at x = 0.3 m, y = 0.1 m: X's belt standing
+/// (x-z), its pulley at x = -0.1 m, D = 0.4 m, d = 1.2 m: 3.1982802 rad; Y's lying flat (x-y) on the bridge, its pulley
+/// 0.07 m before the Y carriage's y = 0, D = 0.17 m, d = 0.7 m: 3.2709416 rad. (Drawn without the far idlers, run from
+/// the clamp round the pulley and back to it, they wrapped pi + 2 asin(r / D), 3.2416344 and 3.3774330 rad.)
 #[test]
 fn the_belts_wrap_their_pulleys_beside_a_screw() {
     let cfg = with(&file("screw-portal.toml").config(), &["effects.belt_wrap = true"]);
     let machine = sim_netlist::build(&cfg).unwrap();
     let wraps = machine.belt_wraps(&[0.3, 0.1, 0.05]);
     assert_eq!(wraps.len(), 3, "{wraps:?}");
-    assert!(close(wraps[0], PI + 2.0 * 0.05f64.asin(), 1e-12) && (wraps[0] - 3.241_634_4).abs() < 1e-7, "{wraps:?}");
-    assert!(close(wraps[1], PI + 2.0 * 0.1f64.asin(), 1e-12) && (wraps[1] - 3.341_927_5).abs() < 1e-7, "{wraps:?}");
+    let wrap = |d_clamp: f64, d_far: f64| PI + (0.02 / d_clamp).asin() + (0.008 / d_far).asin();
+    let (x, y) = (wrap(0.4, 1.2), wrap(0.17, 0.7));
+    assert!(close(wraps[0], x, 1e-12) && (wraps[0] - 3.198_280_2).abs() < 1e-7, "{wraps:?} against {x}");
+    assert!(close(wraps[1], y, 1e-12) && (wraps[1] - 3.270_941_6).abs() < 1e-7, "{wraps:?} against {y}");
     assert!(wraps[2].is_nan(), "the screw's motor: {wraps:?}");
 }
 
@@ -160,7 +165,7 @@ rotary = [{{ id = "table", gearbox = "gear", axis = "c", inertia_kgm2 = "table.i
 }
 
 /// The joint kit's rotary table with its worm gear (table.gear = "worm": the gearbox with the efficiency of [worm],
-/// tan 8 deg / tan(8 deg + atan(0.04 / cos 20 deg)) = 0.762938, the same back) and the same table as a file with a worm
+/// tan 8 deg / tan(8 deg + atan(0.04 / cos 20 deg)) = 0.762938, back tan(8 deg - 2.4374 deg) / tan 8 deg = 0.692974) and the same table as a file with a worm
 /// node of the kit's ratio and that efficiency both ways: the same machine, rigid and elastic, driving forward and driven back. The kit's
 /// joint friction and the file's motor friction are off; the states are laid out as for the screw axis
 /// (machine_file_mechanisms.rs).
@@ -183,7 +188,7 @@ fn a_worm_gear_in_a_file_drives_as_the_joint_kits_table() {
         ] {
             kit.set_text(change).unwrap();
         }
-        let mut from_file = kit_as_file("rotary-table", &worm_table("\"gearbox.ratio\"", eta, eta));
+        let mut from_file = kit_as_file("rotary-table", &worm_table("\"gearbox.ratio\"", eta, worm.back_efficiency()));
         for change in [&format!("effects.belt_stretch = {elastic}"), "effects.motor_friction = false"] {
             from_file.set_text(change).unwrap();
         }
@@ -226,23 +231,24 @@ fn a_worm_gear_in_a_file_drives_as_the_joint_kits_table() {
 ///   the loss, the table's own acceleration a from J a = P + o with the rotor's R a = eta_back o:
 ///   a = P / (J + R / eta_back) = -10 / (4.5 + 0.992) = -1.820830 rad/s2. At rest it starts as a gear of 1 would:
 ///   -10 / (4.5 + 0.496) = -2.001601 rad/s2.
-/// - A self-locking one (eta_back = -0.2, forward 0.8) holds the 10 N m at rest with no motor torque. Lowering at
-///   -10 rad/s with no motor torque it brakes itself: the worm drags by (1 - eta_back) 10 = 12 N m, so the table slows
-///   at (12 - 10) / 4.996 = 0.400320 rad/s2, the gear passing 12 - 0.496 * 0.400320 = 11.801441 N m. The motor has to
-///   push to lower it: -eta_back 10 / 40 = 0.05 N m against the motion holds the speed; 0.1 N m speeds it up at
-///   (12 - 10 - 4) / 4.996 = -0.400320 rad/s2.
-/// - From rest it sticks while the worm can take what the motor and load ask of it, from -(1 / 0.8 - 1) 10 = -2.5 N m
-///   (lifting: the motor needs 10 / (0.8 * 40) = 0.3125 N m) to 12 N m (lowering: 0.05 N m): -0.04 N m (11.6) and
-///   +0.3 N m (-2) hold it; -0.06 N m breaks it loose downwards at (12 - 10 - 2.4) / 4.996 = -0.080064 rad/s2, +0.35 N m
-///   upwards at (14 - 10 - 2.5) / 4.996 = 0.300240 rad/s2.
+/// - A self-locking one: lead angle 4 deg, friction angle 6 deg, so forward tan 4 / tan 10 = 0.397 and back
+///   tan(-2) / tan 4 = -0.499, written rounded as 0.4 and -0.5. It holds the 10 N m at rest with no motor torque.
+///   Lowering at -10 rad/s with no motor torque it brakes itself: the worm drags by (1 - eta_back) 10 = 15 N m, so the
+///   table slows at (15 - 10) / 4.996 = 1.000801 rad/s2, the gear passing 10 + 4.5 * 1.000801 = 14.503603 N m. The motor
+///   has to push to lower it: -eta_back 10 / 40 = 0.125 N m against the motion holds the speed; 0.25 N m speeds it up at
+///   (15 - 10 - 10) / 4.996 = -1.000801 rad/s2, the gear passing 10 - 4.5 * 1.000801 = 5.496397 N m.
+/// - From rest it sticks while the worm can take what the motor and load ask of it, from -(1 / 0.4 - 1) 10 = -15 N m
+///   (lifting: the motor needs 10 / (0.4 * 40) = 0.625 N m) to 15 N m (lowering: 0.125 N m): -0.1 N m (14) and
+///   +0.6 N m (-14) hold it; -0.15 N m breaks it loose downwards at (15 - 10 - 6) / 4.996 = -0.200160 rad/s2, +0.7 N m
+///   upwards at (28 - 10 - 15) / 4.996 = 0.600480 rad/s2.
 ///
 /// Elastic (backlash off), at rest with the gear twisted by 10 N m / 67000 N m/rad so that it holds the load: the table
 /// stands for both; the rotor of the worm that turns back takes 10 / 40 N m and turns back at 0.25 / 3.1e-4 =
 /// 806.4516 rad/s2, the self-locking one's stands.
 #[test]
 fn a_self_locking_worm_holds_its_load_and_one_that_turns_back_loses_by_its_back_efficiency() {
-    let machine = |back: f64, elastic: bool| {
-        let cfg = kit_as_file("rotary-table", &worm_table("40", 0.8, back));
+    let machine = |eta: f64, back: f64, elastic: bool| {
+        let cfg = kit_as_file("rotary-table", &worm_table("40", eta, back));
         let cfg = with(
             &cfg,
             &[
@@ -265,28 +271,28 @@ fn a_self_locking_worm_holds_its_load_and_one_that_turns_back_loses_by_its_back_
         (out[1], signal(m, &state, &[torque], "gearbox.1.output_torque"))
     };
     let acc = |m: &dyn Machine, speed: f64| torque_acc(m, speed, 0.0);
-    let turning = machine(0.5, false);
+    let turning = machine(0.8, 0.5, false);
     assert!(close(acc(turning.as_ref(), -10.0).0, -10.0 / (4.5 + 0.496 / 0.5), 1e-12));
     assert!(close(acc(turning.as_ref(), -10.0).0, -1.820_830, 1e-6));
     assert!(close(acc(turning.as_ref(), 0.0).0, -2.001_601, 1e-6));
-    let locking = machine(-0.2, false);
+    let locking = machine(0.4, -0.5, false);
     let near = |(a, o): (f64, f64), (by_hand_a, by_hand_o): (f64, f64), what: &str| {
         assert!((a - by_hand_a).abs() < 1e-6 && (o - by_hand_o).abs() < 1e-6, "{what}: {a} rad/s2, {o} N m");
     };
     near(acc(locking.as_ref(), 0.0), (0.0, 10.0), "held at rest");
-    near(acc(locking.as_ref(), -10.0), (0.400_320, 11.801_441), "lowering, no torque");
-    near(torque_acc(locking.as_ref(), -10.0, -0.05), (0.0, 10.0), "lowering, pushed");
-    near(torque_acc(locking.as_ref(), -10.0, -0.1), (-0.400_320, 8.198_559), "lowering, pushed harder");
-    for torque in [-0.04, 0.3] {
+    near(acc(locking.as_ref(), -10.0), (1.000_801, 14.503_603), "lowering, no torque");
+    near(torque_acc(locking.as_ref(), -10.0, -0.125), (0.0, 10.0), "lowering, pushed");
+    near(torque_acc(locking.as_ref(), -10.0, -0.25), (-1.000_801, 5.496_397), "lowering, pushed harder");
+    for torque in [-0.1, 0.6] {
         assert!(torque_acc(locking.as_ref(), 0.0, torque).0.abs() < 1e-12, "stuck at {torque} N m");
     }
-    assert!((torque_acc(locking.as_ref(), 0.0, -0.06).0 + 0.080_064).abs() < 1e-6);
-    assert!((torque_acc(locking.as_ref(), 0.0, 0.35).0 - 0.300_240).abs() < 1e-6);
+    assert!((torque_acc(locking.as_ref(), 0.0, -0.15).0 + 0.200_160).abs() < 1e-6);
+    assert!((torque_acc(locking.as_ref(), 0.0, 0.7).0 - 0.600_480).abs() < 1e-6);
     // Elastic: [table, its gear output, rotor], their rates, the friction state, slack time, brake.
     let rotor = 40.0 * (1.0 + 10.0 / 67000.0);
     let state = [1.0, 1.0, rotor, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    for (back, rotor_acc) in [(0.5, -806.451_612_9), (-0.2, 0.0)] {
-        let m = machine(back, true);
+    for (eta, back, rotor_acc) in [(0.8, 0.5, -806.451_612_9), (0.4, -0.5, 0.0)] {
+        let m = machine(eta, back, true);
         let mut out = [0.0; 9];
         m.derivatives(&state, &[0.0], &mut out);
         assert!(out[3].abs() < 1e-9, "back {back}: table {}", out[3]);
@@ -306,6 +312,212 @@ fn a_self_locking_worm_holds_its_load_and_one_that_turns_back_loses_by_its_back_
         refused(worm_table("40", 1.2, 0.5)),
         Some(ConfigError::Invalid("machine.worm[worm].efficiency (above 0, at most 1)".into()))
     );
+    // Forward 0.8 with a back efficiency below 0 is no worm: one that locks has a lead angle below its friction angle.
+    assert_eq!(
+        refused(worm_table("40", 0.8, -0.2)),
+        Some(ConfigError::Invalid(
+            "machine.worm[worm].efficiency (a self-locking worm has an efficiency below 0.5)".into()
+        ))
+    );
+}
+
+/// The self-locking worm table of the test above (rigid, eta 0.4, eta_back -0.5, ratio 40, process torque -10 N m, so
+/// the table holds o_rest = 10 N m; J_L = 4.5 kg m2, the rotor at the table R = 0.496 kg m2) moving at a speed of sign s
+/// with the motor torque t, by hand (`worm`): the wheel J_L a = o - 10, the rotor's into = 40 t - R a, and the mesh's
+/// drag into - o = s max(1.5 s o, C) with C = (1 + 0.5) max(-10 s, 0) (15 N m lowering, 0 lifting). Either
+///
+/// - the driving flank, o = 0.4 into: a = (16 t - 10) / (4.5 + 0.4 R) = (16 t - 10) / 4.6984, holding where 1.5 s o >= C,
+/// - or the drag, o = into - s C: a = (40 t - s C - 10) / 4.996, holding where 1.5 s o <= C.
+///
+/// Over the sweep that left 57 % of the solves unsettled (-2..2 rad/s, -1.2..1.2 N m), exactly one of the two holds at
+/// each point (or both, at the seam, with one answer), and the solve gives it: one answer with no starting guess.
+///
+/// Lowering at speed, -1 rad/s: the motor has to push it down with -eta_back 10 / 40 = 0.125 N m to hold the speed
+/// (a = (-5 + 15 - 10) / 4.996 = 0); it puts in 0.125 * 40 = 5 W, the load 10 W, and the worm loses both,
+/// (into - o) w = (-5 - 10) (-1) = 15 W. With no motor torque it brakes at (15 - 10) / 4.996 = 1.000801 rad/s2 and
+/// stops after 0.999200 s, 0.5 / 1.000801 = 0.499600 rad further down, and stays there: a self-locking worm holds.
+#[test]
+fn a_moving_self_locking_worm_has_one_answer_and_lowers_its_load_as_pushed() {
+    let cfg = with(
+        &kit_as_file("rotary-table", &worm_table("40", 0.4, -0.5)),
+        &[
+            "effects.belt_stretch = false",
+            "effects.gearbox_backlash = false",
+            "effects.motor_friction = false",
+            "effects.torque_ripple = false",
+            "effects.process_force = true",
+            "process.force_c_n = -10.0",
+        ],
+    );
+    let mut m = sim_netlist::build(&cfg).unwrap();
+    m.set_dwelling(true);
+    let m = m.as_ref();
+    let solve = |speed: f64, torque: f64| {
+        let state = [1.0, speed, 0.0, 0.0];
+        let mut out = [0.0; 4];
+        m.derivatives(&state, &[torque], &mut out);
+        (
+            out[1],
+            signal(m, &state, &[torque], "gearbox.1.output_torque"),
+            signal(m, &state, &[torque], "power.gearbox_1"),
+        )
+    };
+    let (mut both, mut points) = (0, 0);
+    for i in -20..=20 {
+        let speed = 0.1 * i as f64;
+        if speed == 0.0 {
+            continue;
+        }
+        let s = speed.signum();
+        let c = 1.5 * (-10.0 * s).max(0.0);
+        for j in -24..=24 {
+            let torque = 0.05 * j as f64;
+            let a_f = (16.0 * torque - 10.0) / 4.6984;
+            let a_b = (40.0 * torque - s * c - 10.0) / 4.996;
+            let (o_f, o_b) = (10.0 + 4.5 * a_f, 10.0 + 4.5 * a_b);
+            let (f_holds, b_holds) = (1.5 * s * o_f >= c - 1e-9, 1.5 * s * o_b <= c + 1e-9);
+            let (a, o) = match (f_holds, b_holds) {
+                (true, false) => (a_f, o_f),
+                (false, true) => (a_b, o_b),
+                (true, true) => {
+                    assert!((a_f - a_b).abs() < 1e-8, "two answers at {speed} rad/s, {torque} N m: {a_f}, {a_b}");
+                    both += 1;
+                    (a_f, o_f)
+                }
+                (false, false) => panic!("no answer at {speed} rad/s, {torque} N m"),
+            };
+            let (acc, output, _) = solve(speed, torque);
+            assert!((acc - a).abs() < 1e-9 && (output - o).abs() < 1e-9, "{speed} rad/s, {torque} N m: {acc} {output}");
+            points += 1;
+        }
+    }
+    assert!(points == 40 * 49 && both <= 2, "{points} points, {both} at the seam");
+    // Lowering at speed.
+    let (acc, output, loss) = solve(-1.0, -0.125);
+    assert!(acc.abs() < 1e-12 && (output - 10.0).abs() < 1e-9 && (loss - 15.0).abs() < 1e-9, "{acc} {output} {loss}");
+    assert!((solve(-1.0, 0.0).0 - 1.000_801).abs() < 1e-6);
+    let mut state = vec![1.0, -1.0, 0.0, 0.0];
+    let mut rk = sim_core::integrate::Rk4::new(4);
+    let h = sim_core::testkit::DT / f64::from(sim_core::testkit::SUBSTEPS);
+    let (mut band, mut at) = (None, 0.0);
+    for k in 1..=(1.5 / h).round() as usize {
+        rk.step(|s, out| m.derivatives(s, &[0.0], out), &mut state, h);
+        if band.is_none() && state[1] > -sim_netlist::worm::STICK_SPEED {
+            band = Some(k as f64 * h);
+        }
+        if k == (1.2 / h).round() as usize {
+            at = state[0];
+        }
+    }
+    // It brakes into the stick band (1e-3 rad/s) after (1 - 1e-3) / 1.000801 = 0.998200 s, 0.999999 / 2.001602 =
+    // 0.4995994 rad down, and takes out the rest over STICK_TIME_S = 1 ms, 1e-3 * 1e-3 = 1e-6 rad further: 0.4996004 rad.
+    let band = band.unwrap_or_else(|| panic!("the worm stops: {state:?}"));
+    assert!((band - 0.998_200).abs() < 2.0 * h, "{band} s");
+    assert!((at - (1.0 - 0.499_600_4)).abs() < 1e-6, "{at} rad");
+    assert!((state[0] - at).abs() < 1e-12 && state[1].abs() < 1e-12, "held at {} rad, {} rad/s", state[0], state[1]);
+    sim_core::testkit::loss_budget(m);
+}
+
+/// The self-locking worm table of the tests above (eta 0.4, eta_back -0.5, ratio 40, -10 N m on the table) in the
+/// elastic model, its gear spring (67000 N m/rad) twisted by 10 / 67000 so that it holds the 10 N m: 0.25 N m at the
+/// rotor (rotor 3.1e-4 kg m2). Its mesh slides at the levels of `worm::levels`, (1 / 0.4 - 1) 0.25 = 0.375 N m lifting
+/// and (1 + 0.5) 0.25 = 0.375 N m lowering, and sticks between them.
+///
+/// - At rest with no motor torque it stands: the rotor not by a bit over 2 s, the table within 1e-9 rad.
+/// - At a steady speed it costs what the rigid model's hand calculation says: lowering at -1 rad/s takes
+///   0.375 - 0.25 = 0.125 N m of push, lifting at +1 rad/s 0.25 + 0.375 = 0.625 N m, neither accelerating, and the worm
+///   loses 0.375 * 40 = 15 W both ways, as rigid; the output carries 10 N m.
+/// - Broken loose upwards (0.7 N m), pushed down through the reversal (-0.4 N m) and left to stop (0): the mesh never
+///   gives power (its loss, the drag times the rotor's speed, is never below 0), and the work of the motor equals what
+///   is stored plus what is lost within the loss budget's 1e-3. Left to stop it jams, as the rigid model cannot: the
+///   overhauling flank's drag rises with the spring's torque, which rises as the rotor slows under the heavy table
+///   (Painleve's instability, `worm`), so the rotor stops within milliseconds and the table rings on the spring.
+#[test]
+fn an_elastic_self_locking_worm_sticks_and_slides_as_the_rigid_one() {
+    let table = |elastic: bool| {
+        let cfg = with(
+            &kit_as_file("rotary-table", &worm_table("40", 0.4, -0.5)),
+            &[
+                &format!("effects.belt_stretch = {elastic}"),
+                "effects.gearbox_backlash = false",
+                "effects.motor_friction = false",
+                "effects.torque_ripple = false",
+                "effects.process_force = true",
+                "process.force_c_n = -10.0",
+            ],
+        );
+        let mut m = sim_netlist::build(&cfg).unwrap();
+        m.set_dwelling(true);
+        m
+    };
+    let (elastic, rigid) = (table(true), table(false));
+    let m = elastic.as_ref();
+    // [table, its gear output, rotor], their rates, the friction state, slack time, brake.
+    let at = |w: f64| [1.0, 1.0, 40.0 * (1.0 + 10.0 / 67000.0), w, w, 40.0 * w, 0.0, 0.0, 0.0];
+    for (w, torque) in [(-1.0, -0.125), (1.0, 0.625)] {
+        let mut out = [0.0; 9];
+        m.derivatives(&at(w), &[torque], &mut out);
+        assert!(out[3].abs() < 1e-9 && out[5].abs() < 1e-9, "{w} rad/s: table {}, rotor {}", out[3], out[5]);
+        let (loss, output) =
+            (signal(m, &at(w), &[torque], "power.gearbox_1"), signal(m, &at(w), &[torque], "gearbox.1.output_torque"));
+        let rigid_state = [1.0, w, 0.0, 0.0];
+        let rigid_loss = signal(rigid.as_ref(), &rigid_state, &[torque], "power.gearbox_1");
+        let mut rigid_out = [0.0; 4];
+        rigid.derivatives(&rigid_state, &[torque], &mut rigid_out);
+        assert!(
+            (loss - 15.0).abs() < 1e-6 && (rigid_loss - 15.0).abs() < 1e-9,
+            "{w} rad/s: {loss} W, rigid {rigid_loss} W"
+        );
+        assert!(
+            (output - 10.0).abs() < 1e-6 && rigid_out[1].abs() < 1e-9,
+            "{w} rad/s: {output} N m, rigid {}",
+            rigid_out[1]
+        );
+    }
+    let h = sim_core::testkit::DT / f64::from(sim_core::testkit::SUBSTEPS);
+    let mut rk = sim_core::integrate::Rk4::new(9);
+    // At rest.
+    let mut state = at(0.0).to_vec();
+    for _ in 0..(2.0 / h).round() as usize {
+        rk.step(|s, out| m.derivatives(s, &[0.0], out), &mut state, h);
+    }
+    assert!(state[2] == at(0.0)[2] && state[5] == 0.0, "the rotor moved: {state:?}");
+    assert!((state[0] - 1.0).abs() < 1e-9, "the table moved: {state:?}");
+    // Broken loose, through the reversal, and stopped.
+    let infos = m.signal_infos();
+    let losses: Vec<usize> =
+        infos.iter().enumerate().filter(|(_, s)| s.id.starts_with(sim_core::LOSS_PREFIX)).map(|(i, _)| i).collect();
+    let mesh = infos.iter().position(|s| s.id == "power.gearbox_1").unwrap();
+    let mut state = at(0.0).to_vec();
+    let (start, mut work, mut gross, mut lost, mut signals) = (m.energy(&state), 0.0, 0.0, 0.0, Vec::new());
+    let (mut up, mut down, mut least) = (0.0f64, 0.0f64, f64::INFINITY);
+    for k in 1..=(1.2 / h).round() as usize {
+        let t = k as f64 * h;
+        let torque = [if t <= 0.3 {
+            0.7
+        } else if t <= 0.6 {
+            -0.4
+        } else {
+            0.0
+        }];
+        let before = state[2];
+        rk.step(|s, out| m.derivatives(s, &torque, out), &mut state, h);
+        let step = torque[0] * (state[2] - before);
+        (work, gross) = (work + step, gross + step.abs());
+        signals.clear();
+        m.signals(&state, &torque, &mut signals);
+        lost += losses.iter().map(|&i| signals[i]).sum::<f64>() * h;
+        least = least.min(signals[mesh]);
+        (up, down) = (up.max(state[3]), down.min(state[3]));
+    }
+    assert!(up > 0.05 && down < -0.05, "broke loose up to {up} rad/s and reversed down to {down} rad/s");
+    assert!(least >= -1e-12, "the gearbox and its mesh gave {least} W");
+    // Lowering with no torque the worm jams (its rotor stops within milliseconds) and the table rings on the gear spring
+    // (up to some 450 N m): the rotor stays stuck through it.
+    assert!(state[5].abs() < 1e-9, "stopped: {state:?}");
+    let off = work - (m.energy(&state) - start) - lost;
+    assert!(off.abs() < sim_core::testkit::LOSS_BUDGET_TOLERANCE * gross, "work {work} J, lost {lost} J, off {off} J");
+    sim_core::testkit::loss_budget(m);
 }
 
 /// The catalogue search for the XYZ portal's Z motor alone: a 1FK2103-2AH (rotor 9.3e-6 kg m2, 1.18 kg without brake,

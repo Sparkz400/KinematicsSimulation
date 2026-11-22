@@ -7,8 +7,50 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-22
+
+### Physics audit (21 and 22 November)
+
+Details, measurements and the tests behind each item are in
+[estimates-and-open-items.md](docs/development/estimates-and-open-items.md) sections 4 and 10 and in
+[model-reference.md](docs/model-reference.md).
+
+- Obstacle contact: every machine takes an obstacle's push on its contact coordinates (the tool, the crane's hook
+  block or payload, the winder's dancer), through each machine's own equations, so a load behind a soft belt or gear
+  stops at the face (F / k) instead of swinging on by the transmission's give; finer sub-steps while pushed, the push
+  on a compliant base's coordinates once, the crash budget closing to 3e-5 of the supply or better.
+- Numerics: a gearbox's switch between driving and driven back and a stiff joint stop are resolved by cutting the
+  base step where they are stiffer than it (the model unchanged; default cycles bit-identical).
+- Modes: each mode's damping from the damped eigenproblem; machine files report every mode with its damping; the
+  app's mode list pairs a mode with the held-motor linearised model, never a friction pole; the five-bar's mode shape.
+- Loop margins and backlash kicks over the cycle's poses (`sim-cli margins`, a row per pose), a describing-function
+  margin across a gearbox's play (`play_margin_db`); the velocity and position loops of the T-gantry, URDF arm, arm on
+  a track, palletiser and rotary knife retuned to keep 35 degrees and 6 dB at every pose.
+- Screws: the stiffness at the nut in the fit's twist, the mesh bristle and the rest sag; the hysteresis behind a
+  screw on the gear's own twist; the crane's second input shaper takes the upper sway, not the rope's bounce.
+- Machine files: real belt loops with far idlers (XYZ, screw and C portals, five-axis, dual and rack gantries), a
+  plane per belt, the T-gantry file equal to its crate in momentum and in the belt riding on the beam's mode.
+- New effects (off as shipped where they move shipped figures): the T-gantry belt runs on the beam mode and beside the
+  leaning Z axis (`effects.belt_run_offset`), the hexapod rotors' gyroscopic push (`effects.rotor_gyroscopic`), cable
+  inertia, sway and drum geometry (`effects.cable_inertia`, `frame.run_lengths_m`), belt-to-pulley heat in the linear
+  delta (`effects.belt_pulley_conduction`), the joint kit's parallelogram rod and crank, a general four-bar, bars on
+  bending links, the rod's stiffness (`effects.bar_elasticity`) and the forearm rocking on it (`effects.bar_rocking`),
+  one-way bends as a two-shape Ritz basis (within 0.5 % of the exact beam), the crane hook block's contact with the
+  payload's top and sides, the stepper's detent while disabled or coasting, frame momentum for the mover track, the
+  indexers and the scissor file.
+- Fixed: the crane app path test depended on timing (judged now by the middle of one swing); a machine file's push
+  counted twice on a compliant base; the PLC link reports a crash with ErrorID 8; run files without `setpoint_age`
+  rebuild it from their timing.
+
 ### Added
 
+- `effects.screw_stiffness_with_position` and `screw.fixed_bearing_at_m`: a ball screw's axial stiffness follows the
+  nut (the shaft E A / a between the fixed bearing and the nut, in series with nut and bearings) in the dynamics, the
+  modes and the equilibrium at a pose, with the nut's travel force T² c′ / 2 from the spring's energy. The wafer
+  handler's column rings at 438 Hz with the nut 0.1 m from the bearing against 321 Hz at the far end. The screw's
+  damper keeps its ratio `screw.axial_damping_ratio` along the stroke (c ∝ √k, the series dampers and the Maxwell
+  arm laid out at the nut's place, the arm's store booked like the spring's): the column's damping 0.042 at 0.1 m
+  where the far end's damper held gave 0.029.
 - MCP server for LLM clients (`kinematics_sim.mcp`, the extra `kinematics-sim[mcp]` with `mcp>=2.3,<3`, the console
   script `kinematics-sim-mcp`; `uvx --from "kinematics-sim[mcp]" kinematics-sim-mcp`): 17 tools (machines, configs as
   named sessions with dotted-path get and set and a diff, sizing verdicts with margins, meanings and bands, cycle
@@ -62,6 +104,8 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
   Jansen estimators) with bootstrap 95 % intervals; per result (the verdicts' margins, peak and RMS torque, winding rise,
   path and dwell error) a ranked CSV and "measure these first" on the error stream; runs on all cores, deterministic for
   a seed. Checked on the Ishigami function and a linear model with known indices.
+- The verdict `belt-slack` is now `belt-least-tension`: its value is the lowest belt tension, which has to stay above
+  `ratings.belt_min_tension_n`, and a row "belt-slack,,169.8,0,ok" read as 169.8 of slack against none allowed.
 
 ### Release polish (session 12)
 
@@ -1042,5 +1086,6 @@ Phases 0 to 6 of the project plan.
 - **Phase 6:** PLC link as an OPC UA server (`sim-opcua`).
 - After phase 6: winding model, corner blending, tuning help, a reworked 3D view and scopes.
 
-[Unreleased]: https://github.com/Sparkz400/KinematicsSimulation/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Sparkz400/KinematicsSimulation/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Sparkz400/KinematicsSimulation/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Sparkz400/KinematicsSimulation/releases/tag/v1.0.0

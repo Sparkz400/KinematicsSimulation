@@ -85,7 +85,13 @@ pub struct Settings {
     pub standstill_time: f64,
     pub blocked_speed: f64,
     pub blocked_time: f64,
-    /// The band around the expected torque, as a share of the peak torque; 0: that monitor is off.
+    /// The band around the expected torque, as a share of the peak torque; 0: that monitor is off. The expected torque is
+    /// the feedforward (`Drive::torque_ff`) and, with `drive.torque_feedforward_model = "inertia"` (no gravity in it), the
+    /// torque that holds the planned pose (`Drive::torque_hold`), and the friction the machine's own model takes of the
+    /// motor's torque at its state (`motor.<id>.torque_friction`, given to `Watch::check`); where the machine does not
+    /// report that, the friction at the planned speed (the characteristic of the friction feedforward where the drive has
+    /// one, else `Machine::steady_friction`) in `Drive::torque_hold`. A held load and the friction are expected, a lasting
+    /// extra load is not.
     pub torque_band: f64,
 }
 
@@ -145,9 +151,10 @@ pub struct Watch {
 }
 
 impl Watch {
-    /// One base step of `dt` of the drive's monitoring, after its loops, its motor's peak torque `peak`: the monitor
-    /// that trips it, the first in the order of `Monitor`.
-    pub fn check(&mut self, s: &Settings, d: &Drive, peak: f64, dt: f64) -> Option<Monitor> {
+    /// One base step of `dt` of the drive's monitoring, after its loops, its motor's peak torque `peak` and the friction
+    /// torque the machine's model takes of it now (`friction`, beside `Drive::torque_hold`): the monitor that trips it,
+    /// the first in the order of `Monitor`.
+    pub fn check(&mut self, s: &Settings, d: &Drive, friction: f64, peak: f64, dt: f64) -> Option<Monitor> {
         let error = d.following_error.abs();
         self.still = if d.vel_set == 0.0 && d.acc_set == 0.0 { self.still + dt } else { 0.0 };
         self.blocked = if d.at_limit && d.measured_speed().abs() < s.blocked_speed { self.blocked + dt } else { 0.0 };
@@ -157,7 +164,9 @@ impl Watch {
             Some(Monitor::Standstill)
         } else if self.blocked >= s.blocked_time {
             Some(Monitor::Blocked)
-        } else if s.torque_band > 0.0 && (d.torque - d.torque_ff).abs() > s.torque_band * peak {
+        } else if s.torque_band > 0.0
+            && (d.torque - d.torque_ff - d.torque_hold - friction).abs() > s.torque_band * peak
+        {
             Some(Monitor::TorqueBand)
         } else {
             None
@@ -216,7 +225,7 @@ mod tests {
     /// what; `None` within 10 s.
     fn steps_to_trip(s: &Settings, drive: &Drive) -> Option<(usize, Monitor)> {
         let mut watch = Watch::default();
-        (1..=10_240).find_map(|k| watch.check(s, drive, 3.8, 1.0 / 1024.0).map(|m| (k, m)))
+        (1..=10_240).find_map(|k| watch.check(s, drive, 0.0, 3.8, 1.0 / 1024.0).map(|m| (k, m)))
     }
 
     /// By hand, in steps of 1/1024 s: a following error of 1.01 rad is beyond the 1 rad window at once. 0.2 rad, within it,
@@ -240,5 +249,12 @@ mod tests {
         let off = drive(&|d| (d.torque, d.torque_ff) = (2.0, 0.5));
         assert_eq!(steps_to_trip(&Settings { torque_band: 0.3, ..settings() }, &off), Some((1, Monitor::TorqueBand)));
         assert_eq!(steps_to_trip(&Settings { torque_band: 0.4, ..settings() }, &off), None);
+        // A held load with the constant-inertia feedforward (torque_ff 0): 2.0 N m is the weight the pose needs, so the
+        // band sees 2.0 - 0 - 2.0 = 0; with 3.5 N m it sees 1.5 N m as above: 1.14 trips, 1.52 does not.
+        let held = |torque: f64| drive(&|d| (d.torque, d.torque_ff, d.torque_hold) = (torque, 0.0, 2.0));
+        let band = Settings { torque_band: 0.3, ..settings() };
+        assert_eq!(steps_to_trip(&band, &held(2.0)), None);
+        assert_eq!(steps_to_trip(&band, &held(3.5)), Some((1, Monitor::TorqueBand)));
+        assert_eq!(steps_to_trip(&Settings { torque_band: 0.4, ..settings() }, &held(3.5)), None);
     }
 }

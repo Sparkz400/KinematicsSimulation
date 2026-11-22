@@ -25,6 +25,37 @@ payload_inertia_kgm2 = [0.03125, 0.01625, 0.025, 0.0, 0.0, 0.0]
 # The URDF's joints as sums of the motors' joints, one row per URDF joint (a parallelogram: see config/palletiser.toml);
 # [] for one motor per joint.
 joint_coupling = []
+# The parallelogram's bars (or any rigid piece the URDF leaves out) as bodies of their own: bar i pinned on the link of
+# the URDF joint bars_on[i] (1-based) at bars_pin_m[3i..3i+3] of its frame (empty: its origin), staying parallel to the
+# link of bars_turns_with[i] and so turning with it (empty: with the link it is pinned on, a rigid piece of that link),
+# mass bars_mass_kg[i], its centre bars_com_m[3i..3i+3] from the pin and its inertia about its centre
+# bars_inertia_kgm2[6i..6i+6] (xx, yy, zz, xy, xz, yz; the array may stay empty: 0), both in the frame of the link it
+# turns with. Empty: no bars (the URDF's links as they are).
+bars_on = []
+bars_turns_with = []
+bars_pin_m = []
+bars_mass_kg = []
+bars_com_m = []
+bars_inertia_kgm2 = []
+# With effects.bar_elasticity: each bar's axial stiffness (0: rigid) and the motor joint (1-based, 0: none) whose turn
+# it carries on the lever of its pin's distance from its link's joint. Empty: none.
+bars_axial_stiffness_n_m = []
+bars_carries = []
+# With effects.bar_rocking: each bar's axial damper (N s/m), on the rocking with the lever's square. Empty: none.
+bars_axial_damping_n_s_m = []
+# A planar four-bar the URDF leaves out (`four_bar_*`): the follower's pivot on the link of URDF joint four_bar_ground_on
+# (1-based; 0: none) at four_bar_ground_pin_m of its frame, the crank point on the link of four_bar_crank_on at
+# four_bar_crank_pin_m, in the plane square to four_bar_normal (the ground's frame); the coupler (crank point to the
+# loop's point) and the follower (pivot to it) four_bar_lengths_m long, four_bar_masses_kg heavy (uniform rods), the
+# loop's point on the side four_bar_branch (+1: normal x (crank - pivot)) of the line from the pivot to the crank.
+four_bar_ground_on = 0
+four_bar_ground_pin_m = [0.0, 0.0, 0.0]
+four_bar_crank_on = 0
+four_bar_crank_pin_m = [0.0, 0.0, 0.0]
+four_bar_normal = [0.0, 0.0, 1.0]
+four_bar_lengths_m = [0.0, 0.0]
+four_bar_masses_kg = [0.0, 0.0]
+four_bar_branch = 1.0
 # With effects.payload_swing: the payload hangs on a pivot at the flange, its centre payload_offset_m from it, about two
 # axes across that line, with this spring and damper per axis. [estimate] a carton in a soft gripper.
 payload_swing_stiffness_nm_rad = 20.0
@@ -198,11 +229,11 @@ d_inductance_h = 0.01
 # rest is the stator and housing's), and its time constant against the housing.
 winding_resistance_share = 0.3
 winding_time_constant_s = 60.0
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# [catalogue] 1FK2105-4AF: static torque 5 N m at the stall current 4.65 A (motors_s210.csv), as a motor named in
+# [parts] brings it. With effects.iron_loss the copper loss at it brings the winding to its rated
 # rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
 # starts at kt times it.
-stall_current_a = 4.35
+stall_current_a = 4.65
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
@@ -243,12 +274,17 @@ friction_feedforward_model = "characteristic"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 current_kp_v_a = 40.0
 current_tn_s = 5.0e-3
 # [catalogue] a 400 V line: 540 V DC link
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
 peak_torque_nm = 15.0
 rated_torque_nm = 4.6
@@ -318,6 +354,20 @@ brake_torque_nm = 3.2
 [motor.6]
 brake_torque_nm = 3.2
 
+# The base's turn (22 November 2026): its load changes most with the pose, and the cycle's stop with the arm
+# reaching out ([0.8, 0.45, -0.55, 0.3, 0.5, 1]) left the shared 0.15 a crossover of 8 Hz, against the integrator's
+# corner, with 21.7 degrees (16.6 with motor and joint friction off; 52.7 and 41.5 at the start). At 0.4 its crossover
+# is 190 Hz: over the cycle's poses at least 49.0 degrees and 8.8 dB, friction off 36.0 degrees and 8.3 dB, and with
+# the gearbox's backlash at its upper bound 47.6 degrees and 8.2 dB friction off. 0.45 hammered across that play
+# (`sim-cli margins urdf-arm --bands`, friction off: margin across the play 0.08 dB, the loop not stable).
+# Its position gain 30 1/s: at the shared 50 its position loop overshot a 1 mm step by 24 % (`sim-cli tuning`, 25.6 %
+# with the shared 0.15 too) and its band read 20.6 Hz on the arm's mode; at 30 3.8 % and 7.5 Hz (40: 12.7 % and 19.5
+# Hz, 35: 6.6 % and 18.8 Hz still on the mode), the velocity loop over the poses 55.8 degrees and 8.8 dB, friction off
+# 42.1 degrees and 8.3 dB; the cycle's settling 1.974 mrad.
+[drive.1]
+velocity_kp_nm_s_rad = 0.4
+kv_1_s = 30.0
+
 [drive.4]
 velocity_kp_nm_s_rad = 0.05
 
@@ -328,14 +378,17 @@ velocity_kp_nm_s_rad = 0.05
 velocity_kp_nm_s_rad = 0.05
 
 [gearbox.4]
+ratio = 80.0
 stiffness_nm_rad = 25000.0
 inertia_at_input_kgm2 = 4.1e-5
 
 [gearbox.5]
+ratio = 80.0
 stiffness_nm_rad = 25000.0
 inertia_at_input_kgm2 = 4.1e-5
 
 [gearbox.6]
+ratio = 80.0
 stiffness_nm_rad = 25000.0
 inertia_at_input_kgm2 = 4.1e-5
 

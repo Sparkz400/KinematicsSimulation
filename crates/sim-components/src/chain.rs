@@ -111,10 +111,26 @@ pub fn condition_number(j: &[f64], rows: usize, cols: usize) -> f64 {
     if !(least > 1e-24 * most) { f64::INFINITY } else { (most / least).sqrt() }
 }
 
-/// The modes of M x'' + C x' + K x = 0 (`n` coordinates, M row by row, K and C diagonal): w^2 of K x = w^2 M x, the
-/// eigenvalues of L^-1 K L^-T (M = L L^T) by Jacobi rotations, and each mode's damping ratio x^T C x / (2 w) with x
-/// normalised to x^T M x = 1. Empty where M is not positive definite.
-fn generalized_modes(m: &[f64], k: &[f64], c: &[f64], n: usize) -> Vec<sim_core::Mode> {
+/// `matrix_modes_at` with K and C diagonal: K's diagonal given, C's entry of coordinate r at the mode's w (a gear's
+/// damper bridged by a Maxwell arm damps by frequency, `damping_at`).
+fn generalized_modes(m: &[f64], k: &[f64], c: impl Fn(usize, f64) -> f64, n: usize) -> Vec<sim_core::Mode> {
+    let diagonal = (0..n * n).map(|rc| if rc / n == rc % n { k[rc / n] } else { 0.0 }).collect::<Vec<_>>();
+    matrix_modes_at(m, &diagonal, |r, col, w| if r == col { c(r, w) } else { 0.0 }, n)
+}
+
+/// `matrix_modes_at` with a constant C (symmetric, row by row).
+pub fn matrix_modes(m: &[f64], k: &[f64], c: &[f64], n: usize) -> Vec<sim_core::Mode> {
+    matrix_modes_at(m, k, |r, col, _| c[r * n + col], n)
+}
+
+/// The modes of M x'' + C x' + K x = 0 (`n` coordinates, M, K and C symmetric, row by row): w^2 of K x = w^2 M x, the
+/// eigenvalues of L^-1 K L^-T (M = L L^T) by Jacobi rotations, C's entry (r, col) at a frequency given by `c`. `hz` is
+/// that undamped w (what a shaper following the mode takes). The damping ratio is the damped problem's (`damped_ratio`):
+/// -Re lambda / |lambda| of the eigenvalue of M lambda^2 + C lambda + K that belongs to the mode, C at |lambda|; where
+/// that is not found (an overdamped mode, or two modes' eigenvalues not told apart) the estimate on the undamped shape,
+/// x^T C(w) x / (2 w) with x^T M x = 1, which differs where C couples modes that lie close (C not proportional to M
+/// and K). Empty where M is not positive definite.
+fn matrix_modes_at(m: &[f64], k: &[f64], c: impl Fn(usize, usize, f64) -> f64, n: usize) -> Vec<sim_core::Mode> {
     let mut l = vec![0.0; n * n];
     for i in 0..n {
         for j in 0..=i {
@@ -133,8 +149,9 @@ fn generalized_modes(m: &[f64], k: &[f64], c: &[f64], n: usize) -> Vec<sim_core:
             w[i * n + j] = s / l[i * n + i];
         }
     }
-    let mut a: Vec<f64> =
-        (0..n * n).map(|rc| (0..n).map(|p| w[rc / n * n + p] * k[p] * w[rc % n * n + p]).sum()).collect();
+    // W K, then (W K) W^T.
+    let wk: Vec<f64> = (0..n * n).map(|rc| (0..n).map(|p| w[rc / n * n + p] * k[p * n + rc % n]).sum()).collect();
+    let mut a: Vec<f64> = (0..n * n).map(|rc| (0..n).map(|p| wk[rc / n * n + p] * w[rc % n * n + p]).sum()).collect();
     let mut v: Vec<f64> = (0..n * n).map(|rc| f64::from(u8::from(rc / n == rc % n))).collect();
     for _ in 0..100 {
         let off: f64 = (0..n * n).filter(|rc| rc / n != rc % n).map(|rc| a[rc] * a[rc]).sum();
@@ -165,15 +182,78 @@ fn generalized_modes(m: &[f64], k: &[f64], c: &[f64], n: usize) -> Vec<sim_core:
             }
         }
     }
-    (0..n)
+    let undamped: Vec<(f64, f64)> = (0..n)
         .filter_map(|i| {
             let omega = a[i * n + i].sqrt();
             // x = L^-T y, y the eigenvector.
-            let x = (0..n).map(|r| (0..n).map(|p| w[p * n + r] * v[p * n + i]).sum::<f64>());
-            let damping = x.zip(c).map(|(x, c)| c * x * x).sum::<f64>() / (2.0 * omega);
-            (omega > 0.0 && omega.is_finite()).then_some(sim_core::Mode { hz: omega / std::f64::consts::TAU, damping })
+            let x: Vec<f64> = (0..n).map(|r| (0..n).map(|p| w[p * n + r] * v[p * n + i]).sum::<f64>()).collect();
+            let damping =
+                (0..n * n).map(|rc| x[rc / n] * c(rc / n, rc % n, omega) * x[rc % n]).sum::<f64>() / (2.0 * omega);
+            (omega > 0.0 && omega.is_finite()).then_some((omega, damping))
+        })
+        .collect();
+    let seeds: Vec<[f64; 2]> = undamped.iter().map(|&(w, z)| seed(w, z)).collect();
+    // M^-1 = W^T W.
+    let m_inv: Vec<f64> = (0..n * n).map(|rc| (0..n).map(|p| w[p * n + rc / n] * w[p * n + rc % n]).sum()).collect();
+    undamped
+        .iter()
+        .map(|&(omega, estimate)| {
+            let damping = damped_ratio(&m_inv, k, &c, n, omega, estimate, &seeds).unwrap_or(estimate);
+            sim_core::Mode { hz: omega / std::f64::consts::TAU, damping }
         })
         .collect()
+}
+
+/// Where a mode of undamped frequency `w` and damping ratio `z` has its eigenvalue: -z w + i w sqrt(1 - z^2).
+fn seed(w: f64, z: f64) -> [f64; 2] {
+    [-z * w, w * (1.0 - z * z).max(0.0).sqrt()]
+}
+
+/// The damping ratio -Re lambda / |lambda| of the eigenvalue lambda of M lambda^2 + C(|lambda|) lambda + K (M^-1 given as
+/// `m_inv`) that belongs to the mode of undamped frequency `w0` and estimated ratio `z0`: the eigenvalue of the companion
+/// matrix [[0, I], [-M^-1 K, -M^-1 C]] nearest the mode's `seed` (`shapes::eigen_near`), C taken anew at |lambda| until
+/// it holds. `None` for an estimate of 0 (nothing to find: lambda = i w0) or of 1 and more (overdamped), where the one
+/// found is nearer another mode's seed of `seeds` than its own (two modes' eigenvalues not told apart), or where the
+/// iteration does not settle.
+fn damped_ratio(
+    m_inv: &[f64],
+    k: &[f64],
+    c: &impl Fn(usize, usize, f64) -> f64,
+    n: usize,
+    w0: f64,
+    z0: f64,
+    seeds: &[[f64; 2]],
+) -> Option<f64> {
+    if !(z0 > 0.0 && z0 < 1.0) {
+        return None;
+    }
+    let product = |b: &[f64]| -> Vec<f64> {
+        (0..n * n).map(|rc| (0..n).map(|p| m_inv[rc / n * n + p] * b[p * n + rc % n]).sum()).collect()
+    };
+    let stiffness = product(k);
+    let size = 2 * n;
+    let own = seed(w0, z0);
+    let (mut lambda, mut w) = (own, w0);
+    for _ in 0..50 {
+        let damper = product(&(0..n * n).map(|rc| c(rc / n, rc % n, w)).collect::<Vec<_>>());
+        let mut a = vec![0.0; size * size];
+        for r in 0..n {
+            a[r * size + n + r] = 1.0;
+            for col in 0..n {
+                a[(n + r) * size + col] = -stiffness[r * n + col];
+                a[(n + r) * size + n + col] = -damper[r * n + col];
+            }
+        }
+        (lambda, _) = crate::shapes::eigen_near(&a, size, lambda)?;
+        let next = lambda[0].hypot(lambda[1]);
+        if (next - w).abs() <= 1e-12 * w {
+            let distance = |s: &[f64; 2]| (lambda[0] - s[0]).hypot(lambda[1] - s[1]);
+            let nearest = seeds.iter().map(distance).fold(f64::INFINITY, f64::min);
+            return (lambda[1] > 0.0 && distance(&own) <= nearest).then(|| -lambda[0] / next);
+        }
+        w = next;
+    }
+    None
 }
 
 /// `solve`'s elimination of a fixed-size matrix, kept for several right-hand sides: each solve does the very operations
@@ -251,7 +331,37 @@ pub trait Mechanism: Send {
     fn passive_joints(&self) -> Vec<(f64, f64)> {
         Vec::new()
     }
+    /// The passive joints' position signals, one per joint in their order (their values are the joints' positions):
+    /// by default those of a payload swinging on the flange, `swing.<k>.angle`.
+    fn passive_signals(&self) -> Vec<SignalInfo> {
+        (1..=self.passive_joints().len())
+            .map(|k| SignalInfo::new(format!("swing.{k}.angle"), "group-payload-swing", "quantity-swing-angle", "rad"))
+            .collect()
+    }
+    /// The id (`power.<id>`) and the owner's key of the loss row of the passive joints' dampers: by default the swinging
+    /// payload's. `None` (no row) only where every passive joint's damper is zero.
+    fn passive_loss_row(&self) -> Option<(&'static str, &'static str)> {
+        Some(("payload_swing", "group-payload-swing"))
+    }
+    /// The passive joints' positions at rest with the driven ones at `q` (a contact pressed in by its load): all zero by
+    /// default.
+    fn passive_rest(&self, _q: &[f64]) -> Vec<f64> {
+        vec![0.0; self.passive_joints().len()]
+    }
+    /// A loss row of the mechanism's own (a contact's damper, a guide's friction), booked beside the joints' and the
+    /// two-way modes': its id (`power.<id>`) and the owner's key; `None` (no row) by default.
+    fn loss_row(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+    /// The power the row of `loss_row` takes out, W, at all joints' q and qd (passive ones included): 0 by default.
+    fn loss_power(&self, _q: &[f64], _qd: &[f64]) -> f64 {
+        0.0
+    }
     fn set_payload_attached(&mut self, attached: bool);
+    /// Whether the motors are linear motors (their signals in m, m/s, N): `Machine::motor_linear`. False by default.
+    fn linear_motor(&self) -> bool {
+        false
+    }
     /// As `Machine::links` and `Machine::set_link_change`: the bodies whose inertial parameters a trace can be fitted for.
     fn links(&self) -> Vec<String> {
         Vec::new()
@@ -303,6 +413,9 @@ pub trait Mechanism: Send {
         None
     }
     fn cam_at(&self, _master: f64, _out: &mut [[f64; 4]]) {}
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        None
+    }
 
     /// The mechanism's own signals, after the machine's: their infos, and their values from joint positions, speeds,
     /// accelerations and the force (torque) each transmission passes to its joint.
@@ -310,6 +423,15 @@ pub trait Mechanism: Send {
         Vec::new()
     }
     fn signals(&self, _q: &[f64], _qd: &[f64], _qdd: &[f64], _force: &[f64], _out: &mut Vec<f64>) {}
+    /// Whether a signal needs the joints' jerk q''' (`signals_with_jerk`): the chain works it out only then, as it costs
+    /// three more evaluations of the machine's derivatives.
+    fn reads_jerk(&self) -> bool {
+        false
+    }
+    /// `signals` with the joints' jerk as well, for a mechanism that `reads_jerk`; zeros where it does not.
+    fn signals_with_jerk(&self, q: &[f64], qd: &[f64], qdd: &[f64], _qddd: &[f64], force: &[f64], out: &mut Vec<f64>) {
+        self.signals(q, qd, qdd, force, out);
+    }
     fn rating_checks(&self) -> Vec<RatingCheck> {
         Vec::new()
     }
@@ -366,12 +488,14 @@ pub struct FlexMode {
 }
 
 /// How a link deflects in a `FlexMode`: in the plane its joint turns it in, across that plane, or twisted about its
-/// length.
+/// length; a bend's second shape where a link bends in two (`BendSecond`, `BendAcrossSecond`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlexKind {
     Bend,
     BendAcross,
     Twist,
+    BendSecond,
+    BendAcrossSecond,
 }
 
 impl FlexKind {
@@ -381,6 +505,8 @@ impl FlexKind {
             FlexKind::Bend => ("bend", "quantity-link-bend", "m"),
             FlexKind::BendAcross => ("bend_across", "quantity-link-bend-across", "m"),
             FlexKind::Twist => ("twist", "quantity-link-twist", "rad"),
+            FlexKind::BendSecond => ("bend_2", "quantity-link-bend-2", "m"),
+            FlexKind::BendAcrossSecond => ("bend_across_2", "quantity-link-bend-across-2", "m"),
         }
     }
 }
@@ -441,12 +567,21 @@ pub struct JointMachine<M: Mechanism> {
     payload_attached: bool,
     /// `Mechanism::passive_joints`: their angles and speeds follow the joint machine's own states.
     passive: Vec<(f64, f64)>,
+    /// `Mechanism::passive_loss_row`, where there are passive joints.
+    passive_row: Option<(&'static str, &'static str)>,
     /// How many bending modes the mechanism has (`Mechanism::flex_modes`); their deflections and rates end the state,
     /// after the passive joints'.
     flex: usize,
     /// Whether the modes are two-way (`Mechanism::flex_coupling`).
     two_way: bool,
+    /// An obstacle's push on the tool, per axis (`Machine::set_tool_force`), held until changed; empty for none.
+    push: Vec<f64>,
+    /// The joints and the Jacobian the push was last taken through (`push_on_joints`).
+    push_jacobian: std::sync::Mutex<(Vec<f64>, Vec<f64>)>,
 }
+
+/// How far (m or rad) the joints may move before the push's Jacobian is worked out again (`push_on_joints`).
+const PUSH_JACOBIAN_REUSE: f64 = 1e-5;
 
 /// The losses of one moment: per joint its friction, its motor's friction with the brake, its gearbox; then the stops
 /// and what the ripple gives off. And per joint the gearbox loss as a torque at the rotor.
@@ -468,6 +603,9 @@ impl<M: Mechanism> JointMachine<M> {
     ) -> Self {
         assert!(axes.len() <= joints.len() && joints.len() == motors.len());
         let (passive, flex) = (mechanism.passive_joints(), mechanism.flex_modes().len());
+        // Without a row the dampers' heat would be lost from the budget.
+        let passive_row = if passive.is_empty() { None } else { mechanism.passive_loss_row() };
+        assert!(passive_row.is_some() || passive.iter().all(|(_, c)| *c == 0.0));
         let rest = vec![0.0; joints.len() + passive.len()];
         let two_way = flex > 0 && mechanism.flex_coupling(&rest, &rest, &vec![0.0; flex], &vec![0.0; flex]).is_some();
         Self {
@@ -482,9 +620,42 @@ impl<M: Mechanism> JointMachine<M> {
             rest_slack: std::sync::OnceLock::new(),
             payload_attached: true,
             passive,
+            passive_row,
             flex,
             two_way,
+            push: Vec::new(),
+            push_jacobian: std::sync::Mutex::new((Vec::new(), Vec::new())),
         }
+    }
+
+    /// The push at the tool (`push`) on the driven joints at q: its virtual work per unit of each, through the Jacobian
+    /// `tool_state` takes the tool's speed with, sum_i F_i d tool_i / d q_k. `None` without a push. The Jacobian is
+    /// worked out again only where the joints have moved `PUSH_JACOBIAN_REUSE` from where it last was (a numerical one
+    /// is 2 n forward solutions, each a Newton's iteration on a parallel platform): what the push's power then misses of
+    /// the tool's speed is the Jacobian's change over that (a six-leg platform's move into a slab: 63 s against 39 s, its
+    /// budget 1.94e-5 of the supply against 1.91e-5; `sim-machines`' collision tests).
+    fn push_on_joints(&self, q: &[f64]) -> Option<Vec<f64>> {
+        if self.push.iter().all(|f| *f == 0.0) {
+            return None;
+        }
+        let n = self.n();
+        let mut memo = self.push_jacobian.lock().unwrap_or_else(|e| e.into_inner());
+        if memo.0.len() != n || memo.0.iter().zip(q).any(|(a, b)| (a - b).abs() > PUSH_JACOBIAN_REUSE) {
+            *memo = (q.to_vec(), self.jacobian(q));
+        }
+        let jac = &memo.1;
+        Some((0..n).map(|k| self.push.iter().enumerate().map(|(i, f)| f * jac[i * n + k]).sum()).collect())
+    }
+
+    /// The push at the tool on the bending modes at joints q: per mode the tool's move by a unit deflection
+    /// (`flex_shift`, linear in it) times the push. `None` without a push or modes.
+    fn push_on_modes(&self, q: &[f64]) -> Option<Vec<f64>> {
+        if self.flex == 0 || self.push.iter().all(|f| *f == 0.0) {
+            return None;
+        }
+        let unit = |m: usize| (0..self.flex).map(|i| if i == m { 1.0 } else { 0.0 }).collect::<Vec<f64>>();
+        let on = |m: usize| self.flex_shift(q, &unit(m)).iter().zip(&self.push).map(|(x, f)| x * f).sum();
+        Some((0..self.flex).map(on).collect())
     }
 
     /// `rest_sag` as it is at the build: worked out on first use, before anything it reads changes (the payload, a
@@ -509,11 +680,20 @@ impl<M: Mechanism> JointMachine<M> {
         if !self.elastic {
             return 1e-4;
         }
-        let mut poses: Vec<Vec<f64>> = (0..1usize << n)
-            .map(|c| self.axes.iter().enumerate().map(|(i, a)| if c >> i & 1 == 1 { a.max } else { a.min }).collect())
-            .collect();
-        poses.push(self.axes.iter().map(|a| 0.5 * (a.min + a.max)).collect());
+        // Five places along each axis, every combination: the sag is largest where a joint's weight arm is (where the
+        // links lie level), which a corner of the box need not be (the arm's second joint at its lower end with the
+        // first one between its ends sags 3.71 mrad, the corners and centre gave 2.77).
+        const LEVELS: usize = 5;
         let m = self.axes.len();
+        let poses: Vec<Vec<f64>> = (0..LEVELS.pow(m as u32))
+            .map(|c| {
+                (self.axes.iter().enumerate())
+                    .map(|(i, a)| {
+                        a.min + (a.max - a.min) * (c / LEVELS.pow(i as u32) % LEVELS) as f64 / (LEVELS - 1) as f64
+                    })
+                    .collect()
+            })
+            .collect();
         let (mut q, mut tool, mut sagged) = (vec![0.0; n], vec![0.0; m], vec![0.0; m]);
         let mut most = 0f64;
         for pose in poses {
@@ -524,8 +704,9 @@ impl<M: Mechanism> JointMachine<M> {
             // A process force that holds at rest (a press's force through a dwell) twists the gearbox too; the
             // mechanisms whose process acts only in motion put none here.
             let process = self.process(&q, &vec![0.0; n]);
-            let twisted: Vec<f64> =
-                (0..n).map(|k| q[k] + self.joints[k].drive.gearbox.static_twist(gravity[k] - process[k])).collect();
+            let twisted: Vec<f64> = (0..n)
+                .map(|k| q[k] + self.joints[k].drive.gearbox.static_twist_at(q[k], gravity[k] - process[k]))
+                .collect();
             self.mechanism.forward(&q, &mut tool);
             self.mechanism.forward(&twisted, &mut sagged);
             most = most.max(tool.iter().zip(&sagged).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max));
@@ -565,6 +746,9 @@ impl<M: Mechanism> JointMachine<M> {
         let (q, qd) = self.arms(s);
         let mut load = vec![0.0; self.flex];
         self.mechanism.flex_loads(q, qd, &acc[..q.len()], &mut load);
+        if let Some(push) = self.push_on_modes(q) {
+            load.iter_mut().zip(push).for_each(|(l, p)| *l += p);
+        }
         let ((d, rate), at, m) = (self.flex_state(s), self.flex_at(), self.flex);
         for (k, mode) in self.mechanism.flex_modes().iter().enumerate() {
             out[at + k] = rate[k];
@@ -591,6 +775,7 @@ impl<M: Mechanism> JointMachine<M> {
         let (all, f) = (rhs.len(), self.flex);
         let size = all + f;
         let ((d, rate), modes) = (self.flex_state(s), self.mechanism.flex_modes());
+        let push = self.push_on_modes(&s[..self.n()]).unwrap_or_else(|| vec![0.0; f]);
         let (mut m, mut b) = (vec![0.0; size * size], vec![0.0; size]);
         for r in 0..all {
             m[r * size..r * size + all].copy_from_slice(&mass[r * all..(r + 1) * all]);
@@ -602,14 +787,15 @@ impl<M: Mechanism> JointMachine<M> {
                 m[j * size + all + i] = c.coupling[i * all + j];
             }
             m[(all + i) * size + all..(all + i + 1) * size].copy_from_slice(&c.mass[i * f..(i + 1) * f]);
-            b[all + i] = c.force[i] - modes[i].stiffness * d[i] - modes[i].damping * rate[i];
+            b[all + i] = c.force[i] - modes[i].stiffness * d[i] - modes[i].damping * rate[i] + push[i];
         }
         solve(&m, &b).unwrap_or_else(|| vec![f64::NAN; size])
     }
 
     /// The two-way modes with the motors held (`Machine::modes`): the joints on their gearboxes' springs where they are
     /// elastic (held where rigid; passive joints held), the modes on theirs, coupled through the mass, K x = w^2 M x.
-    fn coupled_modes(&self, q: &[f64]) -> Vec<sim_core::Mode> {
+    /// Without `damped` the frequencies alone (damping 0), as `resonance_hz` wants them.
+    fn coupled_modes(&self, q: &[f64], damped: bool) -> Vec<sim_core::Mode> {
         let (n, f) = (self.n(), self.flex);
         let all = n + self.passive.len();
         let rest = |len: usize| vec![0.0; len];
@@ -623,7 +809,7 @@ impl<M: Mechanism> JointMachine<M> {
         let (mut m, mut k, mut damping) = (rest(size * size), rest(size), rest(size));
         for r in 0..free {
             m[r * size..r * size + free].copy_from_slice(&load[r * n..r * n + free]);
-            (k[r], damping[r]) = (self.joints[r].drive.gearbox.stiffness, self.joints[r].drive.gearbox.damping);
+            k[r] = self.joints[r].drive.gearbox.at(q[r]).stiffness;
         }
         for i in 0..f {
             for j in 0..free {
@@ -633,22 +819,29 @@ impl<M: Mechanism> JointMachine<M> {
             m[(free + i) * size + free..(free + i + 1) * size].copy_from_slice(&c.mass[i * f..(i + 1) * f]);
             (k[free + i], damping[free + i]) = (modes[i].stiffness, modes[i].damping);
         }
-        generalized_modes(&m, &k, &damping, size)
+        let c = |r: usize, w: f64| match r {
+            _ if !damped => 0.0,
+            r if r < free => self.joints[r].drive.gearbox.at(q[r]).damping_at(w),
+            r => damping[r],
+        };
+        generalized_modes(&m, &k, c, size)
     }
 
     /// An arm's joints on their gearboxes' springs with the motors held, at joints q (`Machine::modes`): K x = w^2 M x
     /// with M the load's mass matrix there (passive joints held, the rotors left out: a velocity loop far stiffer than
     /// the mode holds them) and K, C the gearboxes' stiffnesses and dampings. Empty for one joint (`two_mass_frequency`
-    /// tells its mode) and in the rigid model. With the links' bending two-way these are among `coupled_modes`.
-    fn held_modes(&self, q: &[f64]) -> Vec<sim_core::Mode> {
+    /// tells its mode) and in the rigid model. With the links' bending two-way these are among `coupled_modes`. Without
+    /// `damped` the frequencies alone (damping 0).
+    fn held_modes(&self, q: &[f64], damped: bool) -> Vec<sim_core::Mode> {
         let n = self.n();
         if n < 2 || !self.elastic {
             return Vec::new();
         }
         let (load, _) = self.load(q, &vec![0.0; n]);
         let gear = |k: usize| &self.joints[k].drive.gearbox;
-        let (k, c): (Vec<f64>, Vec<f64>) = (0..n).map(|j| (gear(j).stiffness, gear(j).damping)).unzip();
-        generalized_modes(&load[..n * n], &k, &c, n)
+        let k: Vec<f64> = (0..n).map(|j| gear(j).at(q[j]).stiffness).collect();
+        let c = |j: usize, w: f64| if damped { gear(j).at(q[j]).damping_at(w) } else { 0.0 };
+        generalized_modes(&load[..n * n], &k, c, n)
     }
 
     /// The tool's move by the bending modes at joints q, deflections d: `Mechanism::flex_shift`.
@@ -658,6 +851,23 @@ impl<M: Mechanism> JointMachine<M> {
             self.mechanism.flex_shift(q, d, &mut out);
         }
         out
+    }
+
+    /// Where the gears' Maxwell arms' states start (`Gearbox::arm`), after the bending modes' rates: one each for the
+    /// elastic joints whose gear has an arm (a screw or rack with a damped gear before it).
+    fn arm_at(&self) -> usize {
+        self.flex_at() + 2 * self.flex
+    }
+
+    /// Joint k's arm's place in the state, if its gear has one.
+    fn arm_slot(&self, k: usize) -> Option<usize> {
+        let has = |i: usize| self.elastic && self.joints[i].drive.gearbox.relax_stiffness > 0.0;
+        has(k).then(|| self.arm_at() + (0..k).filter(|&i| has(i)).count())
+    }
+
+    /// Joint k's arm's state, 0 where its gear has none (`Gearbox::torque_with` then leaves it out).
+    fn arm(&self, s: &[f64], k: usize) -> f64 {
+        self.arm_slot(k).map_or(0.0, |i| s[i])
     }
 
     /// Joint positions and speeds of a state.
@@ -751,7 +961,10 @@ impl<M: Mechanism> JointMachine<M> {
                 self.joints[k].drive.rigid_drive(torque[k], rotor[k], rotor_speed[k], brakes[k], self.brake_engaged).0
             })
             .collect();
-        let process = self.process(q, qd);
+        let mut process = self.process(q, qd);
+        if let Some(push) = self.push_on_joints(q) {
+            process.iter_mut().zip(push).for_each(|(p, f)| *p += f);
+        }
         let rest: Vec<f64> = (0..n)
             .map(|k| self.joints[k].drive.output_torque(q[k], qd[k]) - bias[k] + process[k])
             .chain((0..p).map(|i| springs[i] - bias[n + i]))
@@ -774,15 +987,18 @@ impl<M: Mechanism> JointMachine<M> {
                 Some(c) => self.flex_solve(Some(c), s, &m, &x),
             }
         };
-        let first = solve_with(&vec![1.0; n]);
-        let loss: Vec<f64> = (0..n)
-            .map(|k| {
-                self.joints[k]
-                    .drive
-                    .gearbox
-                    .loss_factor(drive[k] - self.joints[k].drive.reflected_inertia() * first[k], qd[k])
-            })
-            .collect();
+        // The loss factors of the torques going in, at their fixed point (`mech::settled_loss`).
+        let loss = crate::mech::settled_loss(vec![1.0; n], |loss| {
+            let acc = solve_with(loss);
+            (0..n)
+                .map(|k| {
+                    self.joints[k]
+                        .drive
+                        .gearbox
+                        .loss_factor(drive[k] - self.joints[k].drive.reflected_inertia() * acc[k], qd[k])
+                })
+                .collect()
+        });
         let acc = solve_with(&loss);
         let into: Vec<f64> = (0..n).map(|k| drive[k] - self.joints[k].drive.reflected_inertia() * acc[k]).collect();
         let out = (0..n).map(|k| loss[k] * into[k]).collect();
@@ -797,7 +1013,13 @@ impl<M: Mechanism> JointMachine<M> {
             let mut d = vec![0.0; self.state_len()];
             self.derivatives(s, torque, &mut d);
             let gear = (0..n)
-                .map(|k| self.joints[k].drive.gearbox.torque(s[2 * n + k], s[3 * n + k], s[k], s[n + k]).output)
+                .map(|k| {
+                    self.joints[k]
+                        .drive
+                        .gearbox
+                        .torque_with(s[2 * n + k], s[3 * n + k], s[k], s[n + k], self.arm(s, k))
+                        .output
+                })
                 .collect();
             let at = self.passive_at() + self.passive.len();
             (d[n..2 * n].iter().chain(&d[at..at + self.passive.len()]).copied().collect(), gear)
@@ -805,6 +1027,20 @@ impl<M: Mechanism> JointMachine<M> {
             let (acc, _, out) = self.rigid_solve(s, torque);
             (acc, out)
         }
+    }
+
+    /// The joints' jerk (passive ones after the driven ones) at the motor torque held: the rate of `motion`'s
+    /// accelerations along the state's rate, a central difference over 1 us. Exact with elastic joints, whose
+    /// accelerations follow from the state alone; with rigid ones it leaves out the drive's torque rate, which the
+    /// machine does not know.
+    fn joint_jerk(&self, s: &[f64], torque: &[f64]) -> Vec<f64> {
+        let (mut rate, h) = (vec![0.0; s.len()], 1e-6);
+        self.derivatives(s, torque, &mut rate);
+        let at = |sign: f64| {
+            let moved: Vec<f64> = s.iter().zip(&rate).map(|(x, r)| x + sign * h * r).collect();
+            self.motion(&moved, torque).0
+        };
+        at(1.0).iter().zip(at(-1.0)).map(|(up, down)| (up - down) / (2.0 * h)).collect()
     }
 
     fn energy_parts(&self, s: &[f64]) -> [f64; 3] {
@@ -836,7 +1072,7 @@ impl<M: Mechanism> JointMachine<M> {
             let j = &self.joints[k].drive;
             if self.elastic {
                 kinetic += 0.5 * j.rotor_inertia * s[3 * n + k] * s[3 * n + k];
-                elastic += j.gearbox.energy(s[2 * n + k], s[k]);
+                elastic += j.gearbox.energy_with(s[2 * n + k], s[k], self.arm(s, k));
             } else {
                 kinetic += 0.5 * j.reflected_inertia() * qd[k] * qd[k];
             }
@@ -849,10 +1085,10 @@ impl<M: Mechanism> JointMachine<M> {
         let (q, qd) = self.arms(s);
         let (rotor, rotor_speed) = self.rotors(s);
         let brakes = self.brakes(s);
-        let p = self.passive.len();
-        let (mut powers, mut gear_at_rotor) = (vec![0.0; 3 * n + 2 + p.min(1)], vec![0.0; n]);
-        if p > 0 {
-            // The swing's dampers.
+        let row = usize::from(self.passive_row.is_some());
+        let (mut powers, mut gear_at_rotor) = (vec![0.0; 3 * n + 2 + row], vec![0.0; n]);
+        if row > 0 {
+            // The passive joints' dampers.
             let (_, qd) = self.all_joints(s);
             powers[3 * n + 2] = self.passive.iter().zip(&qd[n..]).map(|((_, c), w)| c * w * w).sum();
         }
@@ -866,9 +1102,10 @@ impl<M: Mechanism> JointMachine<M> {
                     (into[k] - out[k]) * qd[k]
                 }
                 None => {
-                    let g = j.gearbox.torque(s[2 * n + k], s[3 * n + k], s[k], s[n + k]);
+                    let u = self.arm(s, k);
+                    let g = j.gearbox.torque_with(s[2 * n + k], s[3 * n + k], s[k], s[n + k], u);
                     gear_at_rotor[k] = g.rotor - g.output / j.ratio();
-                    j.gearbox.loss_power(s[2 * n + k], s[3 * n + k], s[k], s[n + k])
+                    j.gearbox.loss_power_with(s[2 * n + k], s[3 * n + k], s[k], s[n + k], u)
                 }
             };
             powers[3 * k..3 * k + 3].copy_from_slice(&[friction, shaft, gear + drag]);
@@ -881,6 +1118,10 @@ impl<M: Mechanism> JointMachine<M> {
         if self.two_way {
             let rate = self.flex_state(s).1;
             powers.push(self.mechanism.flex_modes().iter().zip(rate).map(|(m, v)| m.damping * v * v).sum());
+        }
+        if self.mechanism.loss_row().is_some() {
+            let (q, qd) = self.all_joints(s);
+            powers.push(self.mechanism.loss_power(&q, &qd));
         }
         Losses { powers, gear_at_rotor }
     }
@@ -913,8 +1154,7 @@ impl<M: Mechanism> JointMachine<M> {
         out.extend(&losses.powers);
         out.extend(self.energy_parts_with(s, &at_rest));
         for k in 0..n {
-            let f = &self.joints[k].drive.friction;
-            out.extend([qd[k], f.coulomb * (qd[k] / f.smoothing).tanh(), f.viscous * qd[k], 0.0, 1.0]);
+            out.extend(self.joints[k].drive.friction_signals(qd[k]));
         }
     }
 
@@ -924,13 +1164,14 @@ impl<M: Mechanism> JointMachine<M> {
     }
 
     fn effect_infos(&self, out: &mut Vec<SignalInfo>) {
-        for motor in &self.motors {
+        for (k, motor) in self.motors.iter().enumerate() {
+            let unit = if self.motor_linear(k) { "N" } else { "N m" };
             out.extend(TORQUE_PARTS.map(|part| {
                 SignalInfo::new(
                     format!("motor.{}.torque_{part}", motor.id),
                     motor.key,
                     &format!("quantity-torque-{part}"),
-                    "N m",
+                    unit,
                 )
             }));
         }
@@ -956,14 +1197,9 @@ impl<M: Mechanism> JointMachine<M> {
         }
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}hard_stops"), "group-joint", "quantity-damping-power", "W"));
         out.push(SignalInfo::new(format!("{LOSS_PREFIX}other"), "loss-other", "quantity-power-given-off", "W"));
-        // In the order of `losses`: the swing's dampers, then the process.
-        if !self.passive.is_empty() {
-            out.push(SignalInfo::new(
-                format!("{LOSS_PREFIX}payload_swing"),
-                "group-payload-swing",
-                "quantity-damping-power",
-                "W",
-            ));
+        // In the order of `losses`: the passive joints' dampers, then the process.
+        if let Some((id, owner)) = self.passive_row {
+            out.push(SignalInfo::new(format!("{LOSS_PREFIX}{id}"), owner, "quantity-damping-power", "W"));
         }
         if self.mechanism.has_process() {
             out.push(SignalInfo::new(
@@ -980,6 +1216,9 @@ impl<M: Mechanism> JointMachine<M> {
                 "quantity-damping-power",
                 "W",
             ));
+        }
+        if let Some((id, owner)) = self.mechanism.loss_row() {
+            out.push(SignalInfo::new(format!("{LOSS_PREFIX}{id}"), owner, "quantity-damping-power", "W"));
         }
         out.extend(ENERGY_PARTS.map(|part| {
             SignalInfo::new(format!("energy.{part}"), "group-energy", &format!("quantity-energy-{part}"), "J")
@@ -1011,8 +1250,59 @@ impl<M: Mechanism> JointMachine<M> {
         let (mass, _) = self.load(q, &[0.0]);
         let j = &self.joints[0].drive;
         Some(
-            (j.gearbox.stiffness * (1.0 / mass[0] + 1.0 / j.reflected_inertia())).sqrt() / (2.0 * std::f64::consts::PI),
+            (j.gearbox.at(q[0]).stiffness * (1.0 / mass[0] + 1.0 / j.reflected_inertia())).sqrt()
+                / (2.0 * std::f64::consts::PI),
         )
+    }
+
+    /// One joint's modes at q: the gearbox's twist x = q - r between the rotor (r, J i^2 at the joint) and the joint,
+    /// and each passive joint on its own spring, coupled through the mass, with the joint's rigid motion (no spring)
+    /// taken out: M over (x, q, p) has q's row, and q'' = -(M_qx x'' + M_qp p'') / M_qq leaves the Schur complement
+    /// M_ss - M_sq M_qs / M_qq over s = (x, p); K, C the gearbox's and the passive joints' (`generalized_modes`).
+    /// Without passive joints this is `two_mass_frequency`, damping c / (2 sqrt(k mu)), mu = M J i^2 / (M + J i^2).
+    /// A passive joint with no spring of its own (a contact the mechanism's forces hold) is held, as `load` holds it.
+    /// Without `damped` the frequencies alone (damping 0).
+    fn single_joint_modes(&self, q: &[f64], damped: bool) -> Vec<sim_core::Mode> {
+        let qa: Vec<f64> = q.iter().copied().chain(self.mechanism.passive_rest(q)).collect();
+        let all = qa.len();
+        let (mass, _) = self.load_all(&qa, &vec![0.0; all]);
+        let drive = &self.joints[0].drive;
+        let jr = drive.reflected_inertia();
+        // The gear's spring at the joint's travel (a screw's stiffness follows its nut, `Gearbox::at`).
+        let gear = drive.gearbox.at(q[0]);
+        let sprung: Vec<usize> = (0..self.passive.len()).filter(|&p| self.passive[p].0 > 0.0).map(|p| p + 1).collect();
+        if sprung.is_empty() {
+            // The closed form, so that the frequency is the one `resonance_hz` always gave, to the bit; zeta = c w / 2k.
+            let damping = |hz: f64| {
+                let w = std::f64::consts::TAU * hz;
+                gear.damping_at(w) * w / (2.0 * gear.stiffness)
+            };
+            return self
+                .two_mass_frequency(q)
+                .map(|hz| sim_core::Mode { hz, damping: damping(hz) })
+                .into_iter()
+                .collect();
+        }
+        let size = 1 + sprung.len();
+        // The coordinates' rows of M over (x, q, p): x couples to q by -J i^2, a passive joint by M's own entries.
+        let to_q: Vec<f64> = std::iter::once(-jr).chain(sprung.iter().map(|&p| mass[p * all])).collect();
+        let m_qq = jr + mass[0];
+        let mut m = vec![0.0; size * size];
+        m[0] = jr;
+        for (a, &pa) in sprung.iter().enumerate() {
+            for (b, &pb) in sprung.iter().enumerate() {
+                m[(a + 1) * size + b + 1] = mass[pa * all + pb];
+            }
+        }
+        (0..size * size).for_each(|rc| m[rc] -= to_q[rc / size] * to_q[rc % size] / m_qq);
+        let (k, c): (Vec<f64>, Vec<f64>) =
+            std::iter::once((gear.stiffness, gear.damping)).chain(sprung.iter().map(|&p| self.passive[p - 1])).unzip();
+        let c = |r: usize, w: f64| match r {
+            _ if !damped => 0.0,
+            0 => gear.damping_at(w),
+            r => c[r],
+        };
+        generalized_modes(&m, &k, c, size)
     }
 }
 
@@ -1030,6 +1320,9 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     fn motors(&self) -> &[MotorInfo] {
         &self.motors
     }
+    fn motor_linear(&self, _motor: usize) -> bool {
+        self.mechanism.linear_motor()
+    }
 
     fn rating_checks(&self) -> Vec<RatingCheck> {
         self.mechanism.rating_checks()
@@ -1039,6 +1332,9 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
     fn cam_at(&self, master: f64, out: &mut [[f64; 4]]) {
         self.mechanism.cam_at(master, out);
+    }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        self.mechanism.cam_curve()
     }
 
     /// NaN where the pose cannot be reached: the controller never asks for one (see `unreachable`).
@@ -1055,7 +1351,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
 
     fn state_len(&self) -> usize {
-        self.flex_at() + 2 * self.flex
+        self.arm_at() + (0..self.n()).filter(|&k| self.arm_slot(k).is_some()).count()
     }
 
     /// With bending links, the tool (not the joints' pose) at `tool`: the links bent by their load at rest.
@@ -1075,7 +1371,14 @@ impl<M: Mechanism> Machine for JointMachine<M> {
                 pose = tool.iter().zip(&shift).map(|(t, s)| t - s).collect();
             }
         }
-        let (_, gravity) = self.load(&q, &vec![0.0; n]);
+        // The passive joints where they rest (a contact pressed in by its load), the driven ones' weights with them.
+        let rest = self.mechanism.passive_rest(&q);
+        let gravity = if rest.iter().all(|x| *x == 0.0) {
+            self.load(&q, &vec![0.0; n]).1
+        } else {
+            let all: Vec<f64> = q.iter().chain(&rest).copied().collect();
+            self.load_all(&all, &vec![0.0; all.len()]).1[..n].to_vec()
+        };
         // Two-way, the bent links shift the weights: G of `FlexCoupling` at rest.
         let mut shift = vec![0.0; n];
         if self.two_way {
@@ -1093,15 +1396,24 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             let j = &self.joints[k].drive;
             // At rest the transmission holds the load against gravity and the stops.
             let out = gravity[k] - shift[k] - j.output_torque(q[k], 0.0);
-            let rotor = j.ratio() * (q[k] + if self.elastic { j.gearbox.static_twist(out) } else { 0.0 });
+            let rotor = j.ratio() * (q[k] + if self.elastic { j.gearbox.static_twist_at(q[k], out) } else { 0.0 });
             if self.elastic {
                 state.push(rotor);
             }
-            torque[k] = j.ripple.invert(out / j.ratio(), rotor);
+            let held = if self.elastic { j.gearbox.held_at(q[k], out) } else { out };
+            torque[k] = j.ripple.invert(held / j.ratio(), rotor);
         }
+        state.resize(self.passive_at(), 0.0);
+        state.extend(rest);
         state.resize(self.flex_at(), 0.0);
         state.extend(bent);
         state.resize(self.state_len(), 0.0);
+        // The arms at rest carry nothing.
+        for k in 0..n {
+            if let Some(i) = self.arm_slot(k) {
+                state[i] = self.joints[k].drive.gearbox.arm_rest(state[2 * n + k], q[k]);
+            }
+        }
     }
 
     fn derivatives(&self, s: &[f64], torque: &[f64], out: &mut [f64]) {
@@ -1143,13 +1455,22 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         self.mechanism.dynamics(qa, qda, mass, bias);
         let springs = self.passive_torque(&qa[n..], &qda[n..]);
         self.mechanism.process_torque(q, qd, process);
+        // An obstacle's push at the tool acts on the joints beyond the gearboxes, as the process does.
+        if let Some(push) = self.push_on_joints(q) {
+            process.iter_mut().zip(push).for_each(|(p, f)| *p += f);
+        }
         for i in 0..p {
             rhs[n + i] = springs[i] - bias[n + i];
         }
         for k in 0..n {
             let j = &self.joints[k].drive;
-            let (gear, rotor_acc, brake_rate) =
-                j.rotor(torque[k], s[2 * n + k], s[3 * n + k], q[k], qd[k], s[4 * n + k], self.brake_engaged);
+            let u = self.arm(s, k);
+            let gear = j.gearbox.torque_with(s[2 * n + k], s[3 * n + k], q[k], qd[k], u);
+            let (rotor_acc, brake_rate) =
+                j.rotor_under(torque[k], s[2 * n + k], s[3 * n + k], gear, s[4 * n + k], self.brake_engaged);
+            if let Some(i) = self.arm_slot(k) {
+                out[i] = j.gearbox.arm(s[2 * n + k], q[k], u).1;
+            }
             rhs[k] = gear.output - bias[k] + j.output_torque(q[k], qd[k]) + process[k];
             out[2 * n + k] = s[3 * n + k];
             out[3 * n + k] = rotor_acc;
@@ -1260,6 +1581,8 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     /// The mechanism's signals (`Mechanism::signals`) and each joint's force (`joint.<id>.force`) at the joints' motion,
     /// with the force M q'' + h that the rigid model passes to each joint (the process force left out, as the
     /// feedforward leaves it out), read for each check of `rating_checks`; NaN for a life or a signal not among them.
+    /// A check on `plan.<signal>` reads <signal>: a limit of the plan alone, which the verdicts judge on the setpoint's
+    /// rigid motion through this (`analysis::Tally`), not on the simulated signal.
     fn rigid_checks(&self, pos: &[f64], vel: &[f64], acc: &[f64], out: &mut Vec<f64>) {
         let n = self.n();
         let (q, qd, qdd) = self.joint_motion(pos, vel, acc);
@@ -1269,11 +1592,12 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         self.mechanism.signals(&q, &qd, &qdd, &force, &mut values);
         let infos = self.mechanism.signal_infos();
         for check in self.mechanism.rating_checks() {
-            let joint = (0..n).find(|&k| check.signal == format!("joint.{}.force", self.joints[k].id));
+            let signal = check.signal.strip_prefix("plan.").unwrap_or(&check.signal);
+            let joint = (0..n).find(|&k| signal == format!("joint.{}.force", self.joints[k].id));
             let value = match (check.life, joint) {
                 (true, _) => f64::NAN,
                 (false, Some(k)) => force[k],
-                (false, None) => infos.iter().position(|s| s.id == check.signal).map_or(f64::NAN, |i| values[i]),
+                (false, None) => infos.iter().position(|s| s.id == signal).map_or(f64::NAN, |i| values[i]),
             };
             out.push(value);
         }
@@ -1295,11 +1619,25 @@ impl<M: Mechanism> Machine for JointMachine<M> {
 
     /// Elastic: the gearbox's static twist under what reaches it, (torque − J_rotor acc) i at the joint (ripple, motor
     /// friction and the gearbox's losses and damping left out), times the ratio. Zeros where the joints are rigid.
+    /// Behind a screw whose stiffness follows the nut, the far end's: `twist_at` has the nut's place.
     fn twist(&self, torque: &[f64], acc: &[f64], out: &mut [f64]) {
         for (k, joint) in self.joints.iter().enumerate() {
             let j = &joint.drive;
             out[k] = if self.elastic {
                 j.ratio() * j.gearbox.static_twist((torque[k] - j.rotor_inertia * acc[k]) * j.ratio())
+            } else {
+                0.0
+            };
+        }
+    }
+
+    /// `twist` with the gear's spring where the nut is, the rotor's angle over the ratio (`Gearbox::at`).
+    fn twist_at(&self, angle: &[f64], torque: &[f64], acc: &[f64], out: &mut [f64]) {
+        for (k, joint) in self.joints.iter().enumerate() {
+            let j = &joint.drive;
+            let gear = j.gearbox.at(angle[k] / j.ratio());
+            out[k] = if self.elastic {
+                j.ratio() * gear.static_twist((torque[k] - j.rotor_inertia * acc[k]) * j.ratio())
             } else {
                 0.0
             };
@@ -1338,6 +1676,54 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+    /// A joint meeting its stop within the step (`mech::HardStop::met_within`): `mech::STOP_SUBSTEPS`. Each gear's
+    /// efficiency switch near zero power at the step's start (`mech::Gearbox::fade_damping`) on the inertia it drives
+    /// there, 1 / (M^-1)_kk of the load's mass matrix (the other joints free): the cuts `mech::fade_substeps` asks for.
+    /// The most of them. The mass matrix only where a gear is near zero power.
+    fn substeps_wanted(&self, s: &[f64], torque: &[f64], dt: f64, substeps: u32) -> u32 {
+        let (n, h) = (self.n(), dt / f64::from(substeps));
+        let (q, qd) = self.arms(s);
+        let stopped = (0..n).any(|k| {
+            let joint = &self.joints[k].drive;
+            let (min, max) = joint.range;
+            joint.stops.met_within(q[k] - min, qd[k], max - min, dt)
+        });
+        let stop_cuts = if stopped { crate::mech::STOP_SUBSTEPS } else { 1 };
+        let rigid = (!self.elastic).then(|| self.rigid_solve(s, torque).2);
+        let damping: Vec<f64> = (0..n)
+            .map(|k| {
+                let gear = &self.joints[k].drive.gearbox;
+                let output = match &rigid {
+                    Some(out) => out[k],
+                    None => {
+                        gear.torque_with(s[2 * n + k], s[3 * n + k], s[k], s[n + k], self.arm(s, k)).rotor * gear.ratio
+                    }
+                };
+                gear.fade_damping(output, qd[k])
+            })
+            .collect();
+        if damping.iter().all(|c| *c == 0.0) {
+            return stop_cuts;
+        }
+        let (q, rates) = self.all_joints(s);
+        let (mass, _) = self.load_all(&q, &rates);
+        let all = q.len();
+        (0..n)
+            .filter(|&k| damping[k] > 0.0)
+            .map(|k| {
+                let unit: Vec<f64> = (0..all).map(|i| if i == k { 1.0 } else { 0.0 }).collect();
+                let inertia = solve(&mass, &unit).map_or(f64::NAN, |x| 1.0 / x[k]);
+                crate::mech::fade_substeps(damping[k], h, inertia)
+            })
+            .fold(stop_cuts, u32::max)
+    }
+    /// The push acts on the joints beyond the gearboxes and on the links' bending modes, as the tool moves with each
+    /// (`push_on_joints`, `push_on_modes`), in either model; its power is the budget's crash row.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push.clear();
+        self.push.extend_from_slice(force);
+        true
     }
 
     /// The gearboxes, in the order of `thermal_parts`.
@@ -1391,36 +1777,56 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         }
     }
 
-    /// One joint: its two-mass mode. An arm: the lowest of its joints' modes with the motors held (`held_modes`, or with
-    /// the links' bending two-way `coupled_modes`): each turns the joints and so moves the tool.
+    /// Elastic: per joint its gearbox's spring (K1, in series with a converter's own compliance behind it) between the
+    /// rotor and the joint's rigid inertia M_kk with the other joints held, referred to the motor over the ratio.
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        let mut q = vec![0.0; self.n()];
+        if !self.elastic || !self.mechanism.inverse(tool_pose, &mut q) {
+            return Vec::new();
+        }
+        let (mass, _) = self.load(&q, &vec![0.0; self.n()]);
+        (0..self.n())
+            .map(|k| {
+                let j = &self.joints[k].drive;
+                j.train_at(q[k], mass[k * self.n() + k] / (j.ratio() * j.ratio()) + j.rotor_inertia)
+            })
+            .collect()
+    }
+
+    /// One joint: the lowest of its two-mass mode and its passive joints' (`single_joint_modes`). An arm: the lowest of
+    /// its joints' modes with the motors held (`held_modes`, or with the links' bending two-way `coupled_modes`): each
+    /// turns the joints and so moves the tool.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
         let mut q = vec![0.0; self.n()];
         if !self.mechanism.inverse(tool_pose, &mut q) {
             return None;
         }
-        if self.n() == 1 {
-            return self.two_mass_frequency(&q);
-        }
-        let held = if self.two_way { self.coupled_modes(&q) } else { self.held_modes(&q) };
-        held.iter().map(|m| m.hz).reduce(f64::min)
+        let modes = if self.n() == 1 {
+            self.single_joint_modes(&q, false)
+        } else if self.two_way {
+            self.coupled_modes(&q, false)
+        } else {
+            self.held_modes(&q, false)
+        };
+        modes.iter().map(|m| m.hz).reduce(f64::min)
     }
 
-    /// The two-mass mode of `resonance_hz` (one joint), or an arm's joints with the motors held (`held_modes`), and the
-    /// links' bending modes (`Mechanism::flex_modes`), lowest first; two-way, the modes of joints and links together with
-    /// the motors held (`coupled_modes`).
+    /// One joint's two-mass mode and its passive joints' (`single_joint_modes`), or an arm's joints with the motors held
+    /// (`held_modes`), and the links' bending modes (`Mechanism::flex_modes`), lowest first; two-way, the modes of joints
+    /// and links together with the motors held (`coupled_modes`).
     fn modes(&self, tool_pose: &[f64]) -> Vec<sim_core::Mode> {
         let mut q = vec![0.0; self.n()];
         let mut out: Vec<sim_core::Mode> = if self.n() == 1 {
-            self.resonance_hz(tool_pose).map(|hz| sim_core::Mode { hz, damping: 0.0 }).into_iter().collect()
+            if self.mechanism.inverse(tool_pose, &mut q) { self.single_joint_modes(&q, true) } else { Vec::new() }
         } else if !self.two_way && self.mechanism.inverse(tool_pose, &mut q) {
-            self.held_modes(&q)
+            self.held_modes(&q, true)
         } else {
             Vec::new()
         };
         if self.two_way {
             let mut q = vec![0.0; self.n()];
             if self.mechanism.inverse(tool_pose, &mut q) {
-                out.extend(self.coupled_modes(&q));
+                out.extend(self.coupled_modes(&q, true));
             }
         } else {
             out.extend(self.mechanism.flex_modes().iter().map(|m| {
@@ -1483,14 +1889,7 @@ impl<M: Mechanism> Machine for JointMachine<M> {
                 ));
             }
         }
-        for k in 0..self.passive.len() {
-            out.push(SignalInfo::new(
-                format!("swing.{}.angle", k + 1),
-                "group-payload-swing",
-                "quantity-swing-angle",
-                "rad",
-            ));
-        }
+        out.extend(self.mechanism.passive_signals());
         out.extend(self.mechanism.signal_infos());
         out.extend(self.mechanism.flex_modes().iter().map(|m| {
             let (id, quantity, unit) = m.kind.signal();
@@ -1518,7 +1917,8 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         }
         let at = self.passive_at();
         out.extend(&s[at..at + self.passive.len()]);
-        self.mechanism.signals(q, qd, &acc, &force, out);
+        let jerk = if self.mechanism.reads_jerk() { self.joint_jerk(s, torque) } else { vec![0.0; acc.len()] };
+        self.mechanism.signals_with_jerk(q, qd, &acc, &jerk, &force, out);
         out.extend_from_slice(self.flex_state(s).0);
     }
     fn effect_signals(&self, s: &[f64], torque: &[f64], out: &mut Vec<f64>) {
@@ -1528,7 +1928,8 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         out.extend(self.losses(s, torque).powers);
     }
 
-    /// Each joint's friction (Coulomb and viscous, no stiction), owned by the joint's axis: the friction view spans that
+    /// Each joint's friction (`RotaryJoint::friction_split`: with a slide's presliding also the rise to its breakaway
+    /// level), owned by the joint's axis: the friction view spans that
     /// axis's speed limit (with the joint's own key it found no axis and spanned 1 m/s or rad/s).
     fn friction_contacts(&self) -> Vec<FrictionContact> {
         self.joints
@@ -1537,10 +1938,11 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             .map(|(j, axis)| FrictionContact { id: j.id_signal(), owner_key: axis.key })
             .collect()
     }
+    fn friction_rotary(&self, i: usize) -> bool {
+        i < self.joints.len() && self.units(i).0 == "rad/s"
+    }
     fn friction_curve(&self, i: usize, speed: f64, _load_scale: f64) -> [f64; 3] {
-        let Some(joint) = self.joints.get(i) else { return [0.0; 3] };
-        let f = &joint.drive.friction;
-        [f.coulomb * (speed / f.smoothing).tanh(), f.viscous * speed, 0.0]
+        self.joints.get(i).map_or([0.0; 3], |joint| joint.drive.friction_split(speed))
     }
 
     /// The gearboxes, where there are gearboxes (not on a direct drive).
@@ -1585,7 +1987,8 @@ impl<M: Mechanism> JointMachine<M> {
     /// second difference of the forward kinematics along q'. With fewer (a redundant arm): by central differences of
     /// the mechanism's `inverse`, which resolves the redundancy, along v and along a, so that speeds and accelerations
     /// are those of the very joints it gives: q' = (q(x + h v) - q(x - h v)) / 2h, q'' = (q(x + h v) - 2 q(x) +
-    /// q(x - h v)) / h^2 + (q(x + k a) - q(x - k a)) / 2k, steps of 1e-4 of the tool's units.
+    /// q(x - h v)) / h^2 + (q(x + k a) - q(x - k a)) / 2k, steps of 1e-3 of the tool's units (the inverse's solution is good
+    /// to about 1e-11, which a second difference over 1e-4 would multiply by 1e8).
     pub fn joint_motion(&self, pos: &[f64], vel: &[f64], acc: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
         let (n, m) = (self.n(), self.axes.len());
         if self.mechanism.tool_is_joints() {
@@ -1603,7 +2006,7 @@ impl<M: Mechanism> JointMachine<M> {
             let along = |d: &[f64]| -> Option<(f64, Vec<f64>, Vec<f64>)> {
                 let size = d.iter().map(|v| v * v).sum::<f64>().sqrt();
                 (size > 0.0).then(|| {
-                    let h = 1e-4 / size;
+                    let h = 1e-3 / size;
                     let at = |s: f64| solved(&(0..m).map(|i| pos[i] + s * d[i]).collect::<Vec<_>>());
                     (h, at(h), at(-h))
                 })
@@ -1703,17 +2106,60 @@ mod tests {
     #[test]
     fn held_joint_modes_are_the_hand_solved_eigenvalues() {
         let tau = std::f64::consts::TAU;
-        let coupled = generalized_modes(&[2.0, 0.5, 0.5, 1.0], &[100.0, 50.0], &[0.0, 0.0], 2);
+        let coupled = generalized_modes(&[2.0, 0.5, 0.5, 1.0], &[100.0, 50.0], |_, _| 0.0, 2);
         let mut hz: Vec<f64> = coupled.iter().map(|m| m.hz).collect();
         hz.sort_by(f64::total_cmp);
         let by_hand = [(200.0 - 5000f64.sqrt()) / 3.5, (200.0 + 5000f64.sqrt()) / 3.5].map(|l: f64| l.sqrt() / tau);
         assert!((hz[0] - 0.967314).abs() < 1e-6 && (hz[1] - 1.399712).abs() < 1e-6, "{hz:?}");
         assert!((hz[0] - by_hand[0]).abs() < 1e-12 && (hz[1] - by_hand[1]).abs() < 1e-12);
-        let alone = generalized_modes(&[2.0, 0.0, 0.0, 1.0], &[100.0, 50.0], &[2.0, 0.0], 2);
+        let alone = generalized_modes(&[2.0, 0.0, 0.0, 1.0], &[100.0, 50.0], |r, _| [2.0, 0.0][r], 2);
         for m in &alone {
             assert!((m.hz - 1.125395).abs() < 1e-6, "{alone:?}");
         }
         assert!(alone.iter().any(|m| (m.damping - 0.070711).abs() < 1e-6), "{alone:?}");
+    }
+
+    /// The two joints above with a damper of 6 N m s/rad on the first and 0.5 on the second, C not proportional to M and
+    /// K: each mode's damping ratio is that of its root of det(M l^2 + C l + K) = (2 l^2 + 6 l + 100)(l^2 + 0.5 l + 50) -
+    /// (0.5 l^2)^2, found here by Newton's method from the undamped frequency (not through the companion matrix the code
+    /// takes), -Re l / |l|; the frequencies stay the undamped ones to the bit. The two roots' -Re l add up to half the
+    /// trace of M^-1 C, (1 x 6 + 2 x 0.5) / 1.75 / 2 = 2.0 (M^-1 = [[1, -0.5], [-0.5, 2]] / 1.75).
+    #[test]
+    fn coupled_modes_are_damped_as_the_damped_problems_roots() {
+        type Cx = (f64, f64);
+        let mul = |a: Cx, b: Cx| (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0);
+        let add = |a: Cx, b: Cx| (a.0 + b.0, a.1 + b.1);
+        let poly = |l: Cx, d: [f64; 3]| add(add(mul((d[0], 0.0), mul(l, l)), mul((d[1], 0.0), l)), (d[2], 0.0));
+        let det = |l: Cx| {
+            let off = mul((0.5, 0.0), mul(l, l));
+            let a = mul(poly(l, [2.0, 6.0, 100.0]), poly(l, [1.0, 0.5, 50.0]));
+            add(a, mul((-1.0, 0.0), mul(off, off)))
+        };
+        let root = |mut l: Cx| {
+            for _ in 0..100 {
+                let h = 1e-7 * l.0.hypot(l.1);
+                let (f, g) = (det(l), add(det((l.0 + h, l.1)), mul((-1.0, 0.0), det(l))));
+                let slope = (g.0 / h, g.1 / h);
+                let n = slope.0 * slope.0 + slope.1 * slope.1;
+                let step = ((f.0 * slope.0 + f.1 * slope.1) / n, (f.1 * slope.0 - f.0 * slope.1) / n);
+                l = (l.0 - step.0, l.1 - step.1);
+            }
+            l
+        };
+        let (m, k, c) = ([2.0, 0.5, 0.5, 1.0], [100.0, 50.0], [6.0, 0.5]);
+        let modes = generalized_modes(&m, &k, |r, _| c[r], 2);
+        let undamped = generalized_modes(&m, &k, |_, _| 0.0, 2);
+        let mut real_sum = 0.0;
+        for (mode, plain) in modes.iter().zip(&undamped) {
+            assert_eq!(mode.hz, plain.hz);
+            let w = std::f64::consts::TAU * mode.hz;
+            let l = root((-0.1 * w, w));
+            assert!(det(l).0.hypot(det(l).1) < 1e-9, "{l:?}");
+            let by_hand = -l.0 / l.0.hypot(l.1);
+            assert!((mode.damping - by_hand).abs() < 1e-9, "{mode:?} against {by_hand}");
+            real_sum -= l.0;
+        }
+        assert!((real_sum - 2.0).abs() < 1e-9, "{real_sum}");
     }
 
     #[test]

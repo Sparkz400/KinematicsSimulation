@@ -77,11 +77,25 @@ pub fn loop_response(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
         ];
         for (key, value, unit) in values {
             ui.weak(tr(key));
-            ui.label(RichText::new(format!("{value:.1} {unit}")).monospace().color(colour));
+            if value.is_nan() && m.valid {
+                // No gain crossover in the band: nothing to measure, the verdict is the gain margin's alone.
+                ui.label(RichText::new("–").monospace().color(colour)).on_hover_text(tr("ui-loop-no-crossover"));
+            } else {
+                ui.label(RichText::new(format!("{value:.1} {unit}")).monospace().color(colour));
+            }
         }
         ui.weak(format!("{} {}", points.len(), tr("ui-loop-points")));
     });
-    if !m.stable() {
+    if let Some(h) = m.hammering {
+        let mut at = format!("{:.0} {}, {:.2} N m", h.frequency_hz, tr("unit-hz"), h.torque_nm);
+        // Away from the start pose the curves are not: the cycle's pose it hammers at (`margin_poses`).
+        if let Some(pose) = sim_components::analysis::margin_poses(config).ok().and_then(|p| p.get(h.pose).cloned())
+            && h.pose > 0
+        {
+            at += &format!(", start.pose = {pose:?}");
+        }
+        ui.label(RichText::new(model.tr.tr_arg("loop-hammers", &at)).color(LIMIT));
+    } else if !m.stable() {
         ui.label(RichText::new(tr("ui-loop-unstable")).color(LIMIT));
     }
     let mut keys = vec![

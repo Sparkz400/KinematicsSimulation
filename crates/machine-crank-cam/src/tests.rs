@@ -5,6 +5,7 @@ use crate::saw::saw_cam;
 use sim_components::analysis::{CycleLoad, Verdict};
 use sim_components::cam::Law;
 use sim_components::{Command, Sim};
+use std::f64::consts::{PI, TAU};
 
 const ENTRIES: [&MachineEntry; 7] =
     [&SLIDER_CRANK, &ROTARY_KNIFE, &FLYING_SAW, &DISC_CAM, &TOGGLE_PRESS, &GENEVA_DRIVE, &CAM_INDEXER];
@@ -258,6 +259,45 @@ fn a_new_master_speed_under_a_running_cam_ramps_to_it() {
     assert!((sim.control.cam_master() - cycle * 0.8 - from - 0.45).abs() < 1e-9);
 }
 
+/// The cam taken away while it runs (a config with cam.run = false): the flying saw's carriage, caught at its top speed
+/// along with the material, ramps down from its speed then, v0, at its acceleration limit a, at rest after v0 / a, its
+/// speed falling by a T every profile cycle T from the first on, with no step and no cycle standing still. (A rotary
+/// knife's roll, which the cam turns on past its range, meets the stops the new config gives its joint.)
+#[test]
+fn a_cam_taken_away_under_way_ramps_the_slave_down_within_its_limit() {
+    let mut sim = Sim::new(&FLYING_SAW, &with_cam(&FLYING_SAW)).unwrap();
+    sim.command(Command::StartCycle).unwrap();
+    sim.run(1.0, |_| {});
+    let cycle = with_cam(&FLYING_SAW).f64("profile.cycle_s").unwrap();
+    let steps = (cycle / sim.dt).round() as usize;
+    let a = sim.machine.axes()[0].max_acc;
+    let top = sim.machine.axes()[0].max_vel;
+    while sim.control.set_vel[0].abs() < 0.5 * top || sim.control.set_acc[0] != 0.0 {
+        sim.step();
+        assert!(sim.time() < 10.0, "the carriage runs with the material");
+    }
+    let mut off = with_cam(&FLYING_SAW);
+    off.set_text("cam.run = false").unwrap();
+    let v0 = sim.control.set_vel[0];
+    sim.reconfigure(&FLYING_SAW, &off).unwrap();
+    let (mut last, mut cycles) = (v0, 0);
+    while sim.control.set_vel[0] != 0.0 || cycles == 0 {
+        (0..steps).for_each(|_| sim.step());
+        let v = sim.control.set_vel[0];
+        // The first cycle may fall short of a whole a T: the profile tick lies somewhere in the cycle.
+        assert!((last - v).abs() <= a * cycle * (1.0 + 1e-9), "cycle {cycles}: {last} to {v} rad/s");
+        assert!(
+            cycles == 0 || v == 0.0 || (last - v).abs() >= a * cycle * (1.0 - 1e-9),
+            "cycle {cycles}: {last} to {v}"
+        );
+        (last, cycles) = (v, cycles + 1);
+        assert!(cycles < 10_000);
+    }
+    assert!((cycles as f64 * cycle - v0.abs() / a).abs() <= 2.0 * cycle, "{cycles} cycles for {} s", v0.abs() / a);
+    (0..10 * steps).for_each(|_| sim.step());
+    assert_eq!(sim.control.set_vel[0], 0.0);
+}
+
 /// The cam's limits are verdicts too: the knife's 3-4-5 at 1 m/s of web asks 15.17 rad/s of the roll (by hand in
 /// `the_rotary_knife_speeds_up_between_cuts_for_a_short_format_and_slows_for_a_long_one`); with the axis's speed limit at
 /// 10 rad/s "cam-speed" fails with 15.17 against 10, the acceleration and jerk pass. As shipped (20 rad/s) it passes.
@@ -374,4 +414,47 @@ fn the_flying_saw_s_machine_friction_feedforward_is_its_characteristic_and_the_i
     assert!(integrator.abs() < 0.02 * expected, "the integrator carries {integrator} N m");
     let (ff, integrator) = cruise(false);
     assert!(ff == 0.0 && (integrator - expected).abs() < 0.02 * expected, "without: {integrator} N m");
+}
+
+/// A joint that turns on (here the knife's roll) has no stops of its own: the cam turns it on past the axis range
+/// (-30 to 400 degrees), and when the cam is taken away under way the roll ramps down from its speed to rest where it
+/// is, beyond that range. Its speed never rises above the speed it had (with the config's stops it met its upper stop
+/// 3.4 turns out at 1e6 N m/rad and was flung back at 38000 rad/s).
+#[test]
+fn a_knife_roll_whose_cam_is_taken_away_ramps_down_beyond_its_axis_range_without_stops() {
+    let mut sim = Sim::new(&ROTARY_KNIFE, &with_cam(&ROTARY_KNIFE)).unwrap();
+    sim.command(Command::StartCycle).unwrap();
+    sim.run(2.0, |_| {});
+    let (from, v0) = (sim.state[0], sim.state[1]);
+    assert!(from > 400f64.to_radians() + TAU && v0 > 10.0, "{from} rad at {v0} rad/s");
+    let mut off = with_cam(&ROTARY_KNIFE);
+    off.set_text("cam.run = false").unwrap();
+    sim.reconfigure(&ROTARY_KNIFE, &off).unwrap();
+    let mut fastest = 0.0f64;
+    sim.run(3.0, |s| fastest = fastest.max(s.state[1].abs()));
+    assert!(fastest < v0 * 1.01, "{fastest} rad/s against {v0}");
+    assert!(sim.state[1].abs() < 1e-3 && sim.state[0] > from, "at rest at {} rad", sim.state[0]);
+}
+
+/// End stops where a config file puts them (`joint.stop_min_deg`, `joint.stop_max_deg`, either alone; the schema a file
+/// loads against has them), none where it does not (the knife above); a lower stop not below the upper is refused. With
+/// the upper stop at 720 degrees the running cam brings the disc up against it: it stays there but for the stop's give
+/// (the drive's peak torque, 150 N m at the disc, over 1e6 N m/rad is 0.15 mrad; the run, with the speed it comes in
+/// at, 0.42 mrad).
+#[test]
+fn a_joint_that_turns_on_has_end_stops_only_where_the_config_puts_them() {
+    let config = |extra: &str| {
+        let text = with_cam(&DISC_CAM).to_text().unwrap().replacen("[joint]", &format!("[joint]\n{extra}"), 1);
+        sim_components::load_config(&DISC_CAM, &text)
+    };
+    let builds = |extra: &str| config(extra).and_then(|cfg| (DISC_CAM.build)(&cfg).map(|_| ())).is_ok();
+    assert!(builds("stop_max_deg = 720.0"));
+    assert!(builds("stop_min_deg = -90.0"));
+    assert!(builds("stop_min_deg = -90.0\nstop_max_deg = 720.0"));
+    assert!(!builds("stop_min_deg = 90.0\nstop_max_deg = 45.0"));
+    let mut sim = Sim::new(&DISC_CAM, &config("stop_max_deg = 720.0").unwrap()).unwrap();
+    sim.command(Command::StartCycle).unwrap();
+    let mut furthest = 0.0f64;
+    sim.run(4.0, |s| furthest = furthest.max(s.state[0]));
+    assert!(furthest > 4.0 * PI && furthest < 4.0 * PI + 1e-3, "the disc went to {furthest} rad");
 }

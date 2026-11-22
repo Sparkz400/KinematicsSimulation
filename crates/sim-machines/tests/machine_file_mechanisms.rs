@@ -92,17 +92,48 @@ fn a_screw_axis_takes_the_hand_calculated_torque_and_has_its_critical_speed() {
     assert_eq!(names, ["screw-speed", "screw-buckling", "screw-static", "screw-dn", "screw-life"]);
 }
 
+/// The same Z axis with effects.screw_lead_efficiency, which reads [screw_z].friction_coefficient: by hand (THK) with
+/// tan beta = 0.01 / (pi 0.016) = 0.198944 and mu = 0.003, eta = (1 - mu tan beta) / (1 + mu / tan beta) =
+/// 0.999403 / 1.015080 = 0.984556 in place of the table's 0.9; the motor's torque for 2 m/s2 up gives 2 m/s2.
+#[test]
+fn a_machine_file_s_screw_takes_its_efficiency_from_its_lead_and_friction() {
+    let entry = file("screw-portal.toml");
+    let mut cfg = entry.config();
+    for off in ["belt_stretch", "guide_friction", "motor_friction", "torque_ripple", "tooth_meshing"] {
+        cfg.set_text(&format!("effects.{off} = false")).unwrap();
+    }
+    cfg.set_text("effects.screw_lead_efficiency = true").unwrap();
+    let machine = (entry.build)(&cfg).unwrap();
+    let tan_beta = 0.01 / (PI * 0.016);
+    let eta = (1.0 - 0.003 * tan_beta) / (1.0 + 0.003 / tan_beta);
+    assert!(close(tan_beta, 0.198944, 1e-6) && close(eta, 0.984556, 1e-6), "{tan_beta} {eta}");
+    let (lever, mass, acc) = (0.01 / (2.0 * PI), 3.5, 2.0);
+    let inertia = 1.5e-5 + 5.0e-6 + PI * 7850.0 * 0.45 * 0.016f64.powi(4) / 32.0;
+    let torque = inertia * acc / lever + mass * (acc + 9.80665) * lever / eta;
+    let (mut state, mut held) = (Vec::new(), [0.0; 3]);
+    machine.equilibrium(&[0.5, 0.25, 0.15], &mut state, &mut held);
+    machine.set_tool_velocity(&mut state, &[0.0, 0.0, 0.3]);
+    let mut rates = vec![0.0; state.len()];
+    machine.derivatives(&state, &[held[0], held[1], torque], &mut rates);
+    assert!(close(rates[3 + 2], acc, 1e-9), "Z acceleration {} against {acc} by hand", rates[5]);
+    // A coefficient of none is refused, naming the file's table.
+    cfg.set_text("screw_z.friction_coefficient = 0.0").unwrap();
+    let refused = (entry.build)(&cfg).err().map(|e| e.detail().to_string());
+    assert!(refused.as_ref().is_some_and(|d| d.starts_with("screw_z.friction_coefficient")), "{refused:?}");
+}
+
 /// The rack gantry's X by hand, rigid: the pinion (module 2, 30 teeth, 19.5283 degrees helix) has the pitch radius
 /// r = 0.002 * 30 / (2 cos 19.5283 deg) = 31.8310 mm, 200 mm per turn; behind ratio 10 the motor turns 10 x / r: at
-/// x = 1 m, 314.159 rad (five turns of the pinion, fifty of the motor). The bridge, Y carriage and payload,
-/// m = 12 + 4 + 1 = 17 kg, at a = 2 m/s2 take F = 34 N from the rack; the pinion's teeth then carry F / 0.97 =
-/// 35.0515 N while driving. The motor's torque for it, i / r = 314.159 rad/m, the gearbox 95 % and the rack 97 %, the
-/// rotor 3e-5 and the pinion 1e-4 / 10^2 kg m2 on the rotor side: T = 3.1e-5 * 2 * 314.159 + 34 / (314.159 * 0.95 *
-/// 0.97) = 0.0194778 + 0.1174449 = 0.1369228 N m.
+/// x = 1 m, 314.159 rad (five turns of the pinion, fifty of the motor). The bridge, Y carriage and payload and the Y
+/// belt that rides on the bridge (its loop's 1.4 m at 0.1 kg/m, the file's spans), m = 12 + 4 + 1 + 0.14 = 17.14 kg, at
+/// a = 2 m/s2 take F = 34.28 N from the rack; the pinion's teeth then carry F / 0.97 = 35.3402 N while driving. The
+/// motor's torque for it, i / r = 314.159 rad/m, the gearbox 95 % and the rack 97 %, the rotor 3e-5 and the pinion
+/// 1e-4 / 10^2 kg m2 on the rotor side: T = 3.1e-5 * 2 * 314.159 + 34.28 / (314.159 * 0.95 * 0.97) = 0.0194778 +
+/// 0.1184121 = 0.1378900 N m.
 ///
 /// The pinion loads the gearbox's output shaft sideways with the tooth force and the force that pushes pinion and
-/// rack apart, F tan 20 deg / cos 19.5283 deg = 0.3861849 F at right angles to it: 35.0515 sqrt(1 + 0.3861849^2) =
-/// 35.0515 * 1.0719789 = 37.5745 N, judged against the gearbox's shaft_max_radial_load_n, 1500 N.
+/// rack apart, F tan 20 deg / cos 19.5283 deg = 0.3861849 F at right angles to it: 35.3402 sqrt(1 + 0.3861849^2) =
+/// 35.3402 * 1.0719789 = 37.88396 N, judged against the gearbox's shaft_max_radial_load_n, 1500 N.
 #[test]
 fn a_rack_axis_turns_its_motor_by_x_over_r_and_feeds_its_force() {
     let machine = rigid("rack-gantry.toml");
@@ -112,9 +143,9 @@ fn a_rack_axis_turns_its_motor_by_x_over_r_and_feeds_its_force() {
     machine.inverse(&[1.0, 0.0], &mut motors);
     assert!(close(motors[0], 10.0 * 1.0 / r, 1e-12) && close(motors[0], 314.159, 1e-6), "{motors:?}");
 
-    let (ratio, mass, acc) = (10.0 / r, 17.0, 2.0);
+    let (ratio, mass, acc) = (10.0 / r, 17.14, 2.0);
     let torque = 3.1e-5 * acc * ratio + mass * acc / (ratio * 0.95 * 0.97);
-    assert!(close(torque, 0.1369228, 1e-6), "{torque}");
+    assert!(close(torque, 0.1378900, 1e-6), "{torque}");
     let (mut state, mut held) = (Vec::new(), [0.0; 2]);
     machine.equilibrium(&[1.0, 0.25], &mut state, &mut held);
     machine.set_tool_velocity(&mut state, &[0.3, 0.0]);
@@ -122,12 +153,12 @@ fn a_rack_axis_turns_its_motor_by_x_over_r_and_feeds_its_force() {
     let mut rates = vec![0.0; state.len()];
     machine.derivatives(&state, &torques, &mut rates);
     assert!(close(rates[2], acc, 1e-9), "X acceleration {} against {acc} by hand", rates[2]);
-    assert!(close(signal(machine.as_ref(), &state, &torques, "joint.mx.force"), 34.0, 1e-9));
-    assert!(close(signal(machine.as_ref(), &state, &torques, "rack.mx.feed_force"), 34.0 / 0.97, 1e-9));
+    assert!(close(signal(machine.as_ref(), &state, &torques, "joint.mx.force"), 34.28, 1e-9));
+    assert!(close(signal(machine.as_ref(), &state, &torques, "rack.mx.feed_force"), 34.28 / 0.97, 1e-9));
     let radial = signal(machine.as_ref(), &state, &torques, "rack.mx.radial_load");
     let apart = 20f64.to_radians().tan() / 19.5283f64.to_radians().cos();
     assert!(
-        close(radial, 34.0 / 0.97 * (1.0 + apart * apart).sqrt(), 1e-9) && close(radial, 37.5745, 1e-6),
+        close(radial, 34.28 / 0.97 * (1.0 + apart * apart).sqrt(), 1e-9) && close(radial, 37.883956, 1e-6),
         "{radial}"
     );
     let check = machine.rating_checks();
@@ -210,8 +241,9 @@ fn kit_screw(elastic: bool) -> [Box<dyn Machine>; 2] {
 /// machine file is the same machine, elastic and rigid, with the payload on, set down and with the brake holding: axes,
 /// kinematics, the rest state and holding torque, the derivatives of a moving state under torques, energy, feedforward,
 /// the screw's signals and the torque breakdown, and the screw's checks, to 1e-9. The states are laid out apart: the
-/// kit's elastic [q, q', rotor, rotor', brake] are the file's [q, a, rotor, q', a', rotor', friction, slack, brake] with
-/// its pulley a = q; rigid [q, q', brake] are [q, q', friction, brake]. Before writing this, `sim-cli verdicts` of the
+/// kit's elastic [q, q', rotor, rotor', brake, arm] are the file's [q, a, rotor, q', a', rotor', friction, slack, brake,
+/// arm] with its pulley a = q (the arm the coupling's Maxwell arm behind the screw, `Gearbox::arm`); rigid [q, q', brake]
+/// are [q, q', friction, brake]. Before writing this, `sim-cli verdicts` of the
 /// kit and the file gave the same digits for the screw, rack, linear motor and rotary table axes (encoder counts off).
 #[test]
 fn the_joint_kits_screw_axis_as_a_machine_file_is_its_crate() {
@@ -222,11 +254,15 @@ fn the_joint_kits_screw_axis_as_a_machine_file_is_its_crate() {
             |m: &dyn Machine| m.axes().iter().map(|a| (a.id, a.unit, a.min, a.max, a.max_vel)).collect::<Vec<_>>();
         assert_eq!(axes(kit.as_ref()), axes(from_file.as_ref()), "{what}");
         let file_state = |s: &[f64]| {
-            if elastic { vec![s[0], s[0], s[2], s[1], s[1], s[3], 0.0, 0.0, s[4]] } else { vec![s[0], s[1], 0.0, s[2]] }
+            if elastic {
+                vec![s[0], s[0], s[2], s[1], s[1], s[3], 0.0, 0.0, s[4], s[5]]
+            } else {
+                vec![s[0], s[1], 0.0, s[2]]
+            }
         };
-        // (kit, file) indices of the same rate: q', q'' (and rotor', rotor''), brake.
+        // (kit, file) indices of the same rate: q', q'' (and rotor', rotor''), brake (and the arm's).
         let rates: &[(usize, usize)] =
-            if elastic { &[(0, 0), (1, 3), (2, 2), (3, 5), (4, 8)] } else { &[(0, 0), (1, 1), (2, 3)] };
+            if elastic { &[(0, 0), (1, 3), (2, 2), (3, 5), (4, 8), (5, 9)] } else { &[(0, 0), (1, 1), (2, 3)] };
         assert_eq!(from_file.state_len(), file_state(&vec![0.0; kit.state_len()]).len(), "{what}");
         for (k, pose) in [0.1, 0.62, 0.4].into_iter().enumerate() {
             for m in [&mut kit, &mut from_file] {
@@ -334,6 +370,29 @@ fn a_linear_motor_axis_draws_the_hand_calculated_current_for_its_force() {
     machine.equilibrium(&[0.5], &mut state, &mut held);
     assert!(close(signal(machine.as_ref(), &state, &held, "axis.x.guide_load"), 2627.48645, 1e-9));
     assert!(machine.rating_checks().is_empty());
+    // Its motor is a linear one (`Machine::motor_linear`), so the simulation's motor signals read m, m/s and N
+    // (`Sim::signal_infos`, see `the_motor_signals_carry_the_motors_units`).
+    assert!(machine.motor_linear(0));
+}
+
+/// Every registered machine's motor signals are in its motors' units: m, m/s and N for the linear motors (the joint kit's
+/// linear motor axis, the mover track), rad, rad/s and N m for every other.
+#[test]
+fn the_motor_signals_carry_the_motors_units() {
+    for entry in MACHINES {
+        let sim = sim_components::Sim::new(entry, &entry.config()).unwrap();
+        let linear = ["linear-motor-axis", "mover-track"].contains(&entry.id);
+        let infos = sim.signal_infos();
+        for (k, motor) in sim.machine.motors().iter().enumerate() {
+            assert_eq!(sim.machine.motor_linear(k), linear, "{} motor {}", entry.id, motor.id);
+            let unit = |name: &str| {
+                let id = format!("motor.{}.{name}", motor.id);
+                infos.iter().find(|s| s.id == id).unwrap_or_else(|| panic!("{}: {id}", entry.id)).unit.clone()
+            };
+            let expected = if linear { ["m", "m/s", "N"] } else { ["rad", "rad/s", "N m"] };
+            assert_eq!([unit("angle"), unit("speed"), unit("torque")], expected, "{} motor {}", entry.id, motor.id);
+        }
+    }
 }
 
 /// A rotary table as a netlist: the joint kit's table and strain wave gear, its axis in rad.
@@ -362,6 +421,7 @@ fn a_rotary_axis_turns_in_rad_with_its_strain_wave_gear() {
     let mut torque = [0.0];
     machine.feedforward_torque(&[1.0], &[10.0], &mut torque);
     assert!(close(torque[0], 0.76, 1e-12), "{torque:?}");
+    assert!(!machine.motor_linear(0));
     let checks = machine.rating_checks();
     assert!(
         checks.len() == 1

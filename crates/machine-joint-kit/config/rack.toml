@@ -39,6 +39,11 @@ helix_angle_deg = 19.5283
 efficiency = 0.97
 # Mesh and the rack's mounting, along the travel.
 stiffness_n_m = 1.0e8
+# [estimate] The damping ratio of the mass behind the pinion on the mesh's spring (c = 2 zeta sqrt(k m)): 0.026, the
+# mode a rack and double-pinion feed drive's servo sees on a heavy machine tool (Franco, Beudaert, Erkorkmaz, Effect
+# of Rack and Pinion Feed Drive Control Parameters on Machine Tool Dynamics, J. Manuf. Mater. Process. 4 (2020) 33,
+# Fig. 4b: 35 Hz, 2.6 %), the carriage's rocking with the ram's bend, not the mesh's own: none is published.
+damping_ratio = 0.026
 backlash_m = 0.0
 pinion_inertia_kgm2 = 1.0e-4
 # The pair's permissible feed force, and the application factor K_A for smooth running.
@@ -102,11 +107,11 @@ d_inductance_h = 0.01
 # rest is the stator and housing's), and its time constant against the housing.
 winding_resistance_share = 0.3
 winding_time_constant_s = 60.0
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# [catalogue] 1FK2105-4AF: static torque 5 N m at the stall current 4.65 A (motors_s210.csv), as a motor named in
+# [parts] brings it. With effects.iron_loss the copper loss at it brings the winding to its rated
 # rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
 # starts at kt times it.
-stall_current_a = 4.35
+stall_current_a = 4.65
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
@@ -153,12 +158,17 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 current_kp_v_a = 40.0
 current_tn_s = 5.0e-3
 # [catalogue] a 400 V line: 540 V DC link
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
 peak_torque_nm = 15.0
 rated_torque_nm = 4.6
@@ -324,6 +334,7 @@ slide.presliding_stiffness_n_m = [2.0e6, 5.0e7]
 slide.friction_viscous_n_s_m = [50.0, 200.0]
 rack.efficiency = [0.95, 0.98]
 rack.stiffness_n_m = [6.0e7, 1.5e8]
+rack.damping_ratio = [0.01, 0.05]
 gearbox.stiffness_nm_rad = [25000.0, 40000.0]
 gearbox.damping_nm_s_rad = [2.0, 10.0]
 gearbox.inertia_at_input_kgm2 = [3.0e-5, 5.0e-5]

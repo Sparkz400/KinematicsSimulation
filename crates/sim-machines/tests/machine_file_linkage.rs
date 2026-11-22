@@ -353,9 +353,10 @@ fn the_linkage_inverse_kinematics_at_a_pose_is_the_hand_calculation() {
 
 /// Static hold at the centre, 100 mm below the top, as the crate's test works it out: the arm angle from
 /// (e + L_a cos t)^2 + (z + L_a sin t)^2 = L_b^2 by halving, dz/dt per arm = (-L_a cos t + (e + L_a cos t) L_a sin t /
-/// (z + L_a sin t)) / 2; m_nt = 1.0 + 5 + 2 (1/3) 0.6 = 6.4 kg, m_LG = 1.2 * 0.2 + 0.4 (0.4 + 0.6667 * 0.6) =
-/// 0.560 kg m. Each gearbox holds -(g m_LG cos t) + m_nt g dz/dt = -5.490 - 12.868 = -18.358 N m at t = 1.4290 deg
-/// (negative: the arm is held up), the motor that over 20: -0.9179 N m.
+/// (z + L_a sin t)) / 2. The weight splits each forearm pair (0.6 kg) a half to the elbow and a half to the plate,
+/// whatever the inertia share (0.6667): m_nt = 1.0 + 5 + 2 (1/2) 0.6 = 6.6 kg, m_LG = 1.2 * 0.2 + 0.4 (0.4 + 0.5 * 0.6) =
+/// 0.520 kg m. Each gearbox holds -(g m_LG cos t) + m_nt g dz/dt = -5.098 - 13.270 = -18.368 N m at t = 1.4290 deg
+/// (negative: the arm is held up), the motor that over 20: -0.91840 N m.
 #[test]
 fn the_linkage_holds_the_plate_at_the_centre_with_the_hand_calculated_torque() {
     let mut cfg = file().config();
@@ -370,14 +371,95 @@ fn the_linkage_holds_the_plate_at_the_centre_with_the_hand_calculated_torque() {
     }
     let t = 0.5 * (lo + hi);
     let dz = (-la * t.cos() + (e + la * t.cos()) * la * t.sin() / (z + la * t.sin())) / 2.0;
-    let (m_nt, m_lg) = (1.0 + 5.0 + 2.0 * (1.0 - 0.6667) * 0.6, 1.2 * 0.2 + 0.4 * (0.4 + 0.6667 * 0.6));
+    let (m_nt, m_lg) = (1.0 + 5.0 + 2.0 * 0.5 * 0.6, 1.2 * 0.2 + 0.4 * (0.4 + 0.5 * 0.6));
     let by_hand = -G * m_lg * t.cos() + m_nt * G * dz;
-    assert!((t.to_degrees() - 1.4290).abs() < 1e-3 && (by_hand + 18.358).abs() < 0.002, "{by_hand} N m");
+    assert!((t.to_degrees() - 1.4290).abs() < 1e-3 && (by_hand + 18.368).abs() < 0.002, "{by_hand} N m");
     let (mut state, mut torque) = (Vec::new(), [0.0; 2]);
     machine.equilibrium(&[0.0, z], &mut state, &mut torque);
     for k in 0..2 {
         assert!((state[k] - t).abs() < 1e-9, "arm angle {}", state[k]);
         assert!((torque[k] - by_hand / 20.0).abs() < 1e-6, "motor torque {} against {}", torque[k], by_hand / 20.0);
+    }
+}
+
+/// The friction feedforward (`Machine::steady_friction`) carries the gearbox's loss on the weight too: on the rigid
+/// linkage with its losses, moving the plate at a steady 0.05 m/s up and down and sideways, the torques that leave the
+/// plate without acceleration (a Newton solve of the rigid model: the plate's acceleration from the tool's velocity a
+/// microsecond along the model's rates, the Jacobian by differences) are the loss-free feedforward plus
+/// `steady_friction`: as shipped (the gearbox's drag on, its efficiency at part load near 1) and with a plain efficiency
+/// of 0.94, where lifting takes more than lowering gives back (the loss on the weight), to 1e-11 of the torque (1.1e-12
+/// at most, the Newton solve's rounding). Until 17 November the rigid model took the efficiency's fade over the power at
+/// the loss-free acceleration and `linkage::steady_loss` stopped after four rounds: 5.5e-5 at 0.05 m/s aslant and
+/// 1.3e-4 at 0.01 m/s, 2.4e-8 with the model at its fixed point; both now at theirs (`mech::settled_loss`).
+#[test]
+fn the_linkage_friction_feedforward_takes_the_loss_on_the_weight() {
+    for drag in [true, false] {
+        let mut cfg = file().config();
+        for line in [
+            "effects.joint_elasticity = false",
+            "effects.torque_ripple = false",
+            &format!("effects.gearbox_drag = {drag}"),
+        ] {
+            cfg.set_text(line).unwrap();
+        }
+        let machine = (file().build)(&cfg).unwrap();
+        let pos = [0.05, -0.55];
+        let mut vertical = Vec::new();
+        for vel in [[0.0, 0.05], [0.0, -0.05], [0.05, 0.0], [-0.05, 0.02], [0.0, 0.01], [0.0, -0.01], [-0.01, 0.004]] {
+            let (mut state, mut held) = (Vec::new(), [0.0; 2]);
+            machine.equilibrium(&pos, &mut state, &mut held);
+            machine.set_tool_velocity(&mut state, &vel);
+            let acc = |t: [f64; 2]| {
+                let mut rates = vec![0.0; machine.state_len()];
+                machine.derivatives(&state, &t, &mut rates);
+                let velocity = |h: f64| {
+                    let s: Vec<f64> = state.iter().zip(&rates).map(|(s, r)| s + h * r).collect();
+                    let (mut p, mut v) = ([0.0; 2], [0.0; 2]);
+                    machine.tool_state(&s, &mut p, &mut v);
+                    v
+                };
+                let (ahead, behind) = (velocity(1e-6), velocity(-1e-6));
+                [(ahead[0] - behind[0]) / 2e-6, (ahead[1] - behind[1]) / 2e-6]
+            };
+            let mut t = held;
+            for _ in 0..20 {
+                let a = acc(t);
+                let j: [[f64; 2]; 2] = std::array::from_fn(|c| {
+                    let mut s = t;
+                    s[c] += 1e-6;
+                    let b = acc(s);
+                    [(b[0] - a[0]) / 1e-6, (b[1] - a[1]) / 1e-6]
+                });
+                // a + J dt = 0, J[c] the column of motor c.
+                let det = j[0][0] * j[1][1] - j[1][0] * j[0][1];
+                t[0] -= (a[0] * j[1][1] - a[1] * j[1][0]) / det;
+                t[1] -= (j[0][0] * a[1] - j[0][1] * a[0]) / det;
+            }
+            let a = acc(t);
+            assert!(a[0].abs() < 1e-7 && a[1].abs() < 1e-7, "{a:?}");
+            let (mut ff, mut friction) = ([0.0; 2], [0.0; 2]);
+            machine.feedforward_torque_moving(&pos, &vel, &[0.0; 2], &mut ff);
+            machine.steady_friction(&pos, &vel, &mut friction);
+            for k in 0..2 {
+                println!(
+                    "drag {drag}, {vel:?}: motor {k}: off {:.2e} of the torque",
+                    (t[k] - ff[k] - friction[k]) / t[k]
+                );
+                assert!(
+                    (t[k] - ff[k] - friction[k]).abs() < 1e-11 * t[k].abs(),
+                    "drag {drag}, {vel:?}: motor {k}: {t:?} against {ff:?} + {friction:?}"
+                );
+            }
+            if vel[0] == 0.0 {
+                vertical.push(friction[0]);
+            }
+        }
+        // Up and down: the loss on the weight is what the two frictions do not cancel.
+        let net = vertical[0] + vertical[1];
+        println!("drag {drag}: friction up {} and down {} N m", vertical[0], vertical[1]);
+        // Without the loss on the weight they would cancel: lifting -g (1 / eta - 1) more, lowering -g (1 - eta) less, net
+        // -g (1 / eta + eta - 2) = 1.037 * 0.00383 = 0.0040 N m (and the friction's own loss).
+        assert!(drag || net < -0.003, "{net}");
     }
 }
 
@@ -471,6 +553,31 @@ fn the_scissor_lift_holds_its_platform_with_the_hand_calculated_force_at_two_hei
     assert!((3.179_797 / 1.020_204f64 - 3.116_825).abs() < 1e-5);
 }
 
+/// The gearbox's output torque on the scissor lift carries the screw's loss: rigid, at h = 0.6 m moving at +-0.05 m/s,
+/// the motor's 1.60763 N m lifting and 1.20009 N m lowering pass the gearbox (ratio 20, 0.96) and the screw (0.9) as
+/// 27.780 N m after both (1.60763 * 20 * 0.96 * 0.9 and 1.20009 * 20 / (0.96 * 0.9)); the gearbox's own shaft
+/// carries 27.780 / 0.9 = 30.867 N m lifting and 27.780 * 0.9 = 25.002 N m lowering.
+#[test]
+fn the_scissor_lifts_gearbox_carries_the_screws_loss_both_ways() {
+    let mut cfg = scissor_file().config();
+    for off in ["joint_elasticity", "torque_ripple", "motor_friction"] {
+        cfg.set_text(&format!("effects.{off} = false")).unwrap();
+    }
+    let machine = (scissor_file().build)(&cfg).unwrap();
+    let at =
+        machine.signal_infos().iter().position(|s| s.id.starts_with("gearbox.") && s.id.ends_with(".output_torque"));
+    for (speed, motor, by_hand) in [(0.05, 1.60763, 30.867), (-0.05, 1.20009, 25.002)] {
+        let (mut state, mut held) = (Vec::new(), [0.0]);
+        machine.equilibrium(&[0.6], &mut state, &mut held);
+        machine.set_tool_velocity(&mut state, &[speed]);
+        let mut values = Vec::new();
+        machine.signals(&state, &[motor], &mut values);
+        let output = values[at.unwrap()];
+        println!("{speed} m/s, {motor} N m: output {output} N m, held {held:?}");
+        assert!((output - by_hand).abs() < 2e-3, "{speed} m/s: {output} N m against {by_hand}");
+    }
+}
+
 /// The scissor lift passes the standard suite (round trip, static hold, determinism, energy without losses, the loss
 /// budget with them), rigid and elastic, with and without the payload. The loss-free configs leave gravity out: held
 /// by a constant torque the lift is unstable at every height, as it needs less torque the higher it stands (the
@@ -500,4 +607,220 @@ fn the_scissor_lift_file_passes_the_standard_suite() {
     }
     *LOSSLESS.lock().unwrap() = configs;
     sim_core::testkit::run_standard_suite(&MachineEntry { suite_configs: lossless, ..*shipped });
+}
+
+/// The scissor lift's moving feedforward is the inverse of its dynamics, the arms' turning and sideways motion included:
+/// rigid and loss-free at h = 1 m rising at 0.2 m/s, the torque it gives for 1.5 m/s^2 makes the derivatives accelerate
+/// the platform at 1.5 m/s^2.
+#[test]
+fn the_scissor_lifts_moving_feedforward_reaches_its_acceleration() {
+    let mut cfg = scissor_file().config();
+    for effect in sim_netlist::scissor::LOSSY_EFFECTS {
+        cfg.set_text(&format!("effects.{effect} = false")).unwrap();
+    }
+    cfg.set_text("effects.joint_elasticity = false").unwrap();
+    let machine = (scissor_file().build)(&cfg).unwrap();
+    let (pos, vel, acc) = ([1.0], [0.2], [1.5]);
+    let (mut state, mut held) = (Vec::new(), [0.0]);
+    machine.equilibrium(&pos, &mut state, &mut held);
+    machine.set_tool_velocity(&mut state, &vel);
+    let mut torque = [0.0];
+    machine.feedforward_torque_moving(&pos, &vel, &acc, &mut torque);
+    let mut rate = vec![0.0; state.len()];
+    machine.derivatives(&state, &torque, &mut rate);
+    let speed = |h: f64| {
+        let (mut p, mut v) = ([0.0], [0.0]);
+        machine.tool_state(&state.iter().zip(&rate).map(|(x, r)| x + h * r).collect::<Vec<_>>(), &mut p, &mut v);
+        v[0]
+    };
+    let reached = (speed(1e-6) - speed(-1e-6)) / 2e-6;
+    assert!((reached - acc[0]).abs() < 1e-6 * acc[0], "{reached} m/s^2 against {}", acc[0]);
+}
+
+/// An obstacle pushed into by the tool of a linkage, delta or scissor file (`Machine::set_tool_force`): a slab
+/// `side` the tool (-1 below, +1 above along z) with its face `gap` m from the nearest part at the start, and a move
+/// `travel` m along z, past the face. Returns the contact force and depth at the end of a 1.5 s run, and the crash
+/// row with the energy not accounted for and the supply of the same move planned and analysed.
+fn push_into_slab(
+    entry: &'static MachineEntry,
+    changes: &[&str],
+    side: f64,
+    gap: f64,
+    travel: f64,
+) -> (f64, f64, f64, f64, f64) {
+    use sim_components::path::Piece;
+    let slab = |centre: f64| {
+        let mut cfg = entry.config();
+        cfg.set_text(&format!(
+            "obstacles = [{{ name = \"slab\", centre_m = [0.0, 0.0, {centre}], size_m = [4.0, 4.0, 1.0] }}]"
+        ))
+        .unwrap();
+        cfg.set_text("effects.crash = true").unwrap();
+        changes.iter().for_each(|c| cfg.set_text(c).unwrap());
+        cfg
+    };
+    // Where the parts are at the start, from a slab far off, then the slab moved to `gap` from them.
+    let far = side * 2.0;
+    let mut probe = Sim::new(entry, &slab(far)).unwrap();
+    probe.step();
+    let cfg = slab(far - side * (probe.clearance - gap));
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    let (mut pos, mut vel) = (vec![0.0; sim.machine.axes().len()], vec![0.0; sim.machine.axes().len()]);
+    sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
+    let z = pos.len() - 1;
+    pos[z] += side * travel;
+    sim.command(Command::MoveTo(pos.clone())).unwrap();
+    sim.run(1.5, |_| {});
+    let (force, depth) = (sim.contact_force, -sim.clearance);
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    let points = sim.plan_path(&[Piece::Line(pos)], false).unwrap();
+    let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
+    let budget = load.budget.unwrap();
+    let crash = budget.rows.iter().find(|r| r.id == "crash").unwrap().energy;
+    (force, depth, crash, budget.unaccounted(), budget.supply)
+}
+
+/// The planar delta file on its compliant base (effects.base_compliance, two-way): the push on the plate reaches the base
+/// once, through the tool's shift (`base::Based`), not also through the machine's outside force
+/// (`FrameMomentum::external`), where it pushed the base a second time. The plate lowered onto a slab 0.02 m under it as
+/// in `push_into_slab`: at rest the base stands F / k_z back along z (k_z = 1.9e7 N/m), within 5 %.
+#[test]
+fn on_its_compliant_base_the_planar_delta_file_holds_the_push_once() {
+    on_its_compliant_base_the_push_is_held_once(file(), -1.0, 1.9e7);
+}
+
+/// The scissor lift's file on its compliant base, two-way (its frame momentum: platform, arms, screw and rotor, the
+/// first moment and gravity): the platform raised into a ceiling 0.02 m over it, the base stands F / k_z back along z
+/// (k_z = 1.5e7 N/m), within 5 %; and the budget of the move closes as shipped, to 1e-6 of the supply. On the swaying
+/// base the platform's speed crosses zero at the 27 kN hold again and again, and with it the gearbox's switch between
+/// driving and driven back, which within 0.5 W the integration did not resolve (1.9e-4 off); with the base steps cut
+/// finer where it is near zero power at that torque (`Machine::substeps_wanted`), it is 5.3e-8.
+#[test]
+fn on_its_compliant_base_the_scissor_file_holds_the_push_once() {
+    on_its_compliant_base_the_push_is_held_once(scissor_file(), 1.0, 1.5e7);
+    let changes = ["effects.base_compliance = true", "effects.base_reaction = true"];
+    let (force, depth, crash, rest, supply) = push_into_slab(scissor_file(), &changes, 1.0, 0.02, 0.04);
+    println!("{force} N, {depth} m in, crash {crash} J, {rest} J of {supply} J");
+    assert!((depth - force / 1e7).abs() < 0.05 * depth, "depth {depth} m against F / k");
+    assert!(crash > 0.0 && rest.abs() < 1e-6 * supply, "{rest} J of {supply} J");
+}
+
+/// The scissor lift's frame momentum is that of its dynamics: its first moment moves at its linear momentum
+/// (`testkit::frame_momentum_moves_its_first_moment`) and its weight sits at the first moment
+/// (`testkit::weight_is_at_the_first_moment`), rigid and elastic, with the payload.
+#[test]
+fn the_scissor_files_frame_momentum_is_its_dynamics() {
+    for elastic in ["effects.joint_elasticity = true", "effects.joint_elasticity = false"] {
+        let mut cfg = scissor_file().config();
+        cfg.set_text(elastic).unwrap();
+        let machine = (scissor_file().build)(&cfg).unwrap();
+        sim_core::testkit::frame_momentum_moves_its_first_moment(machine.as_ref());
+        sim_core::testkit::weight_is_at_the_first_moment(machine.as_ref());
+    }
+}
+
+/// An obstacle's push on the tool of `entry` on its compliant base (two-way): the tool moved 0.04 m to `side` along z
+/// into a slab 0.02 m from its parts; at rest the base (its directions x, y, z) stands F / k_z back along z.
+fn on_its_compliant_base_the_push_is_held_once(entry: &'static MachineEntry, side: f64, k_z: f64) {
+    let changes = ["effects.base_compliance = true", "effects.base_reaction = true"];
+    let slab = |centre: f64| {
+        let mut cfg = entry.config();
+        cfg.set_text(&format!(
+            "obstacles = [{{ name = \"slab\", centre_m = [0.0, 0.0, {centre}], size_m = [4.0, 4.0, 1.0] }}]"
+        ))
+        .unwrap();
+        cfg.set_text("effects.crash = true").unwrap();
+        changes.iter().for_each(|c| cfg.set_text(c).unwrap());
+        cfg
+    };
+    let far = side * 2.0;
+    let mut probe = Sim::new(entry, &slab(far)).unwrap();
+    probe.step();
+    let mut sim = Sim::new(entry, &slab(far - side * (probe.clearance - 0.02))).unwrap();
+    let (mut pos, mut vel) = (vec![0.0; sim.machine.axes().len()], vec![0.0; sim.machine.axes().len()]);
+    sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
+    let z = pos.len() - 1;
+    pos[z] += side * 0.04;
+    sim.command(Command::MoveTo(pos)).unwrap();
+    sim.run(1.5, |_| {});
+    // The base's directions x, y, z: deflections, then rates, end the state.
+    let (force, base) = (sim.contact_force, sim.state[sim.state.len() - 4]);
+    println!("{}: {force} N, base along z {base} m against F / k_z {} m", entry.id, force / k_z);
+    assert!(force > 100.0, "{force} N");
+    assert!((base.abs() - force / k_z).abs() < 0.05 * force / k_z, "base {base} m, F / k_z {}", force / k_z);
+}
+
+/// The linkage, delta and scissor files take an obstacle's push at their tool (`set_tool_force`): its generalised
+/// forces through their kinematics' Jacobian, J^T F on the arms (P^T F on the elbows beyond the tubes where the D3's
+/// arms bend; h' F on the scissor's arm angle), and their power is F times the tool's speed, which the crash row takes.
+/// So the tool stands in the obstacle by the contact spring's give alone, F / k (k = 1e7 N/m, within 5 %), where pushed
+/// at the motors the arms and gearboxes gave way on top of it. The push's power goes into the motion exactly: at the
+/// start pose moving at 0.05 m/s along each axis, a push changes the rate of the machine's energy (`energy`'s gradient
+/// times the change of the state's rates) by F . v_tool, to 1e-6 (central differences of the energy). The budget of the
+/// move into the obstacle closes with the crash row as the same move without a contact does (to that move's rest, or
+/// 1e-6 of the supply where that is less): planar delta 1.9e-7 of the supply, 9.1e-6 without a contact; D3 1.2e-6,
+/// 3.5e-5 without. The scissor lift's screw holds 28 kN against the ceiling, where its gearbox's efficiency changes
+/// between driving and driven back within 0.5 W (`Gearbox::loss_factor`), a few mm/s of the platform's speed at that
+/// force: 4 substeps of 15.6 us did not follow it, and the move's rest was 2.3e-4 of the supply (1.2e-4 with 8,
+/// 6.9e-6 with 16, 4.2e-8 with 32 and 64; 4.6e-8 with 4 and effects.gearbox_efficiency off): the integration's. The
+/// steps are now cut finer where a gear is near zero power at a torque that makes its switch stiffer than the sub-step
+/// resolves (`Machine::substeps_wanted`), and the shipped file closes to 4.2e-8, its hold force the 64-substep run's to
+/// 1e-6. Planar delta and D3: the plate lowered 0.04 m onto a slab 0.02 m under its lowest part; the scissor lift's
+/// platform raised 0.04 m into a ceiling 0.02 m over it.
+#[test]
+fn the_linkage_delta_and_scissor_files_are_pushed_at_their_tool() {
+    // Per file the least share of the supply its budget is held to, beside the move's own rest without a contact.
+    for (entry, side, floor) in [(file(), -1.0, 1e-6), (spatial_file(), -1.0, 1e-6), (scissor_file(), 1.0, 1e-6)] {
+        let id = entry.id;
+        let (force, depth, crash, rest, supply) = push_into_slab(entry, &[], side, 0.02, 0.04);
+        let (_, _, _, free_rest, free_supply) = push_into_slab(entry, &[], side, 0.5, 0.04);
+        println!(
+            "{id}: {force} N, {depth} m in, F / k {} m; crash {crash} J, {rest} J of {supply} J ({free_rest} J of \
+             {free_supply} J without the contact)",
+            force / 1e7
+        );
+        assert!(force > 10.0, "{id}: {force} N");
+        assert!((depth - force / 1e7).abs() < 0.05 * depth, "{id}: depth {depth} m against F / k");
+        let tolerance = (free_rest / free_supply).abs().max(floor);
+        assert!(crash > 0.0 && rest.abs() < tolerance * supply, "{id}: {rest} J of {supply} J");
+
+        // The power identity as shipped, rigid without the gearbox loss (whose factor follows the load the push puts on
+        // it), and on the D3 with its arms bending (the push on the elbows' angles and
+        // moves beyond the tubes).
+        let mut models = vec![vec![], vec!["effects.joint_elasticity = false", "effects.gearbox_efficiency = false"]];
+        if entry.id == spatial_file().id {
+            models.push(vec!["effects.link_elasticity = true"]);
+        }
+        for changes in models {
+            let mut cfg = entry.config();
+            changes.iter().for_each(|c| cfg.set_text(c).unwrap());
+            let Sim { mut machine, state, .. } = Sim::new(entry, &cfg).unwrap();
+            let (n, len) = (machine.axes().len(), machine.state_len());
+            let push: Vec<f64> = (0..n).map(|i| 50.0 * (1.0 + i as f64)).collect();
+            let mut s = state[..len].to_vec();
+            machine.set_tool_velocity(&mut s, &vec![0.05; n]);
+            let torque = vec![0.0; machine.motors().len()];
+            let (mut pushed, mut free) = (vec![0.0; len], vec![0.0; len]);
+            assert!(machine.set_tool_force(&push), "{id}");
+            machine.derivatives(&s, &torque, &mut pushed);
+            machine.set_tool_force(&vec![0.0; n]);
+            machine.derivatives(&s, &torque, &mut free);
+            let rate: f64 = (0..len)
+                .map(|i| {
+                    let h = 1e-6 * s[i].abs().max(1.0);
+                    let (mut up, mut down) = (s.clone(), s.clone());
+                    (up[i], down[i]) = (s[i] + h, s[i] - h);
+                    (machine.energy(&up) - machine.energy(&down)) / (2.0 * h) * (pushed[i] - free[i])
+                })
+                .sum();
+            let (mut pos, mut vel) = (vec![0.0; n], vec![0.0; n]);
+            machine.tool_state(&s, &mut pos, &mut vel);
+            let power: f64 = push.iter().zip(&vel).map(|(f, v)| f * v).sum();
+            println!("{id} {changes:?}: {rate} W against F . v = {power} W");
+            assert!(
+                power.abs() > 1e-3 && (rate - power).abs() < 1e-6 * power.abs().max(1.0),
+                "{id} {changes:?}: {rate} W, not {power} W"
+            );
+        }
+    }
 }

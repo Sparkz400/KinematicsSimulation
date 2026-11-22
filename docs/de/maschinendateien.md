@@ -194,39 +194,45 @@ sim-cli verdicts --machine-file machines/h-bot.toml
 
 ```
 check,motor,value,limit,result
-motor-peak,a,0.09917,1.000,ok
-motor-thermal,a,0.4428,100.0,ok
-drive-current,a,0.2212,3.000,ok
-drive-peak-current,a,0.8356,10.90,ok
-gearbox-continuous,a,0.3766,40.00,ok
+motor-peak,a,0.09924,1.000,ok
+motor-thermal,a,0.4460,100.0,ok
+motor-s1,a,0.09988,1.270,ok
+motor-speed,a,200.4,420.0,ok
+drive-current,a,0.2220,3.000,ok
+drive-peak-current,a,0.8388,10.90,ok
+gearbox-radial-load,a,632.2,1500,ok
+gearbox-continuous,a,0.3802,40.00,ok
 gearbox-input-speed,a,1914,13000,ok
-gearbox-peak,a,1.326,64.00,ok
-pulley-bearing-life,a,213589,20000,ok
-gearbox-life,a,74415368568,20000,ok
-belt-tooth-load,a,0.1164,1.000,ok
-dc-link-energy,a,1.106,6.205,ok
-dc-link-overvoltage,a,169.6,257.6,ok
-motor-peak,b,0.09105,1.000,ok
-motor-thermal,b,0.4562,100.0,ok
-drive-current,b,0.2245,3.000,ok
-drive-peak-current,b,0.7675,10.90,ok
-gearbox-continuous,b,0.3850,40.00,ok
+gearbox-peak,a,1.334,64.00,ok
+pulley-bearing-life,a,475735,20000,ok
+gearbox-life,a,71921110348,20000,ok
+belt-tooth-load,a,0.1171,1.000,ok
+dc-link-energy,a,1.147,6.205,ok
+dc-link-overvoltage,a,170.1,257.6,ok
+motor-peak,b,0.09276,1.000,ok
+motor-thermal,b,0.4597,100.0,ok
+motor-s1,b,0.1014,1.270,ok
+motor-speed,b,200.5,420.0,ok
+drive-current,b,0.2254,3.000,ok
+drive-peak-current,b,0.7839,10.90,ok
+gearbox-radial-load,b,637.6,1500,ok
+gearbox-continuous,b,0.3887,40.00,ok
 gearbox-input-speed,b,1914,13000,ok
-gearbox-peak,b,1.182,64.00,ok
-pulley-bearing-life,b,213351,20000,ok
-gearbox-life,b,70668656880,20000,ok
-belt-tooth-load,b,0.1038,1.000,ok
-dc-link-energy,b,1.128,6.205,ok
-dc-link-overvoltage,b,169.9,257.6,ok
-settling,,0.00001314,0.0001000,ok
-belt-tension,,345.7,1500,ok
-belt-slack,,229.2,0,ok
-gearbox-radial-load,,637.1,1500,ok
+gearbox-peak,b,1.213,64.00,ok
+pulley-bearing-life,b,474906,20000,ok
+gearbox-life,b,68166077481,20000,ok
+belt-tooth-load,b,0.1065,1.000,ok
+dc-link-energy,b,1.146,6.205,ok
+dc-link-overvoltage,b,170.1,257.6,ok
+settling,,0.00001324,0.0001000,ok
+belt-tension,,346.8,1500,ok
+belt-least-tension,,228.3,0,ok
 guide-load,,107.9,2000,ok
-guide-life,,6789511,20000,ok
+guide-life,,6789383,20000,ok
+thermal-warm-start,,0.000009028,0.1000,ok
 ```
 
-Jede Prüfung besteht. Die Motoren bleiben kühler als beim T-Portal (`motor-thermal` 0,44 gegen dessen 1,23): nichts muss
+Jede Prüfung besteht. Die Motoren bleiben kühler als beim T-Portal (`motor-thermal` 0,45 gegen dessen 1,28): nichts muss
 gegen die Schwerkraft gehalten werden. Die Signale folgen den ids: `axis.y.position`, `motor.a.torque`, `belt.2.tension`, `power.guide_y`, ...
 
 ## Die Knoten
@@ -257,7 +263,7 @@ Motorsignale und von `--motor N`.
 | `body` | `mass_kg` | Pflicht | Masse, kg |
 | | `payload_kg` | | Nutzlast, die er trägt, solange `effects.payload` an ist und der Greifer sie hält, kg |
 | | `axes` | Pflicht | die Achsen, mit denen er sich bewegt |; Drehachsen darunter nehmen ihn mit herum, die erste ganz außen
-| | `offset_m` | | auf Drehachsen: sein Schwerpunkt von dort, wo sich ihre Achsen treffen, `[x, y, z]` bei Winkel 0, m ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)) |
+| | `offset_m` | | sein Schwerpunkt von dort, wo seine Achsen ihn hinstellen, `[x, y, z]`, m: auf Drehachsen von dort, wo sich ihre Achsen treffen, bei Winkel 0, mit ihnen gedreht ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)); auf geraden Achsen allein ein fester Versatz, den nur sein Ort im Impuls des Rahmens nimmt (der Wagen des T-Portals `geometry.z_com_drop_m` über seiner Z-Achse: jeder Eintrag eines Punkts, hier und in jedem `at_m`, `tool_m` und `table_pivot_m`, ist eine Zahl oder der Pfad einer, wie in einem Zahlenfeld) |
 | `guide` | `axis` | Pflicht | die Achse, die sie führt; höchstens eine Führung je Achse; ihr Verlust ist `power.<id>` |
 | | `friction` | Pflicht | die Tabelle ihrer Reibwerte, aufgebaut wie `[friction_x]` |
 | | `carries` | | Körper, deren Gewicht quer zur Achse sie trägt |
@@ -267,9 +273,11 @@ Motorsignale und von `--motor N`.
 | | `side_load` | | die Führung trägt auch die Trägheitskraft m a des Überhangs; Vorgabe false |
 
 | `axis` | `cable_chain` | | die Achse schleppt eine am Ende 0 befestigte Energiekette (`effects.cable_chain`, Werte in `[cable_chain]`); Vorgabe false |
-| `pulley` | `at_m` | | wo die 3D-Ansicht sie zeichnet, `[x, y, z]`, m; Vorgabe an einem Ende der ersten Achse |
+| `pulley` | `at_m` | | wo die 3D-Ansicht sie zeichnet, `[x, y, z]`, m (von ihrem Körper aus, wo sie einen hat); Vorgabe an einem Ende der ersten Achse; ihre Lage in der Ebene ihres Riemens (`plane` des Abschnitts), aus der die Umschlingung (`effects.belt_wrap`) und die Orte der Trume des Riemens im Rahmenimpuls gerechnet werden |
+| | `body` | | ein Körper, auf dem sie mitfährt (ein Motor auf einer bewegten Achse, wie der Y-Motor der Portale auf der Brücke): `at_m` ist dann von diesem Körper aus |
 | `section` | `route` | | die Scheiben, Umlenkrollen und Körper (eine Klemme daran), an denen der Abschnitt vorbeiläuft, der Reihe nach, für die 3D-Ansicht; Vorgabe seine Scheiben und der Körper, an dem er geklemmt ist |
-| `idler` | `speed` | Pflicht | Riemengeschwindigkeit an ihr je Geschwindigkeit jeder Achse, m/s je m/s (`effects.idlers`) |
+| | `plane` | | die Ebene, in der sein Riemen läuft und um deren Normale seine Räder drehen: `"x-z"` stehend entlang x (um y), `"x-y"` flach (um z), `"y-z"` stehend entlang y (um x); die Orte der Räder seiner Route in ihr geben den Trumen des Riemens ihre Orte im Rahmenimpuls, der Umschlingung und der Prüfung der Räder; Abschnitte, die sich eine Scheibe oder Umlenkrolle teilen, liegen in einer Ebene (sonst abgelehnt); Vorgabe `"x-z"`, oder `"x-y"` für alle Abschnitte, wo sich die Länge eines Abschnitts mit Achsen entlang x und entlang y und keiner entlang z ändert (beim H-Bot, beim CoreXY). Die Y-Riemen der mitgelieferten Portale und Gantrys liegen flach (`"x-y"`, die Scheibe auf der Brücke); die 3D-Ansicht zeichnet die Räder eines `"y-z"`-Riemens nach vorn gewandt |
+| `idler` | `speed` | Pflicht | Riemengeschwindigkeit an ihr je Geschwindigkeit jeder Achse, m/s je m/s (`effects.idlers`), positiv in der Richtung, in die eine positive Drehung der ersten Scheibe, die ihren Abschnitt speist, den Riemen bewegt (der Drehsinn ihres Dralls im Rahmenimpuls) |
 | | `radius_m`, `inertia_kgm2`, `friction_nm` | Pflicht | ihr Radius, ihre Trägheit und ihr Lagerreibmoment |
 | | `body`, `at_m` | | ein Körper, auf dem sie mitfährt, und wo die 3D-Ansicht sie zeichnet (von diesem Körper aus) |
 | `frame` | `axis` | Pflicht | die waagrechte Achse, entlang der der Rahmen schwingt (`effects.frame_compliance`, elastisches Modell); höchstens einer |
@@ -288,14 +296,15 @@ Motorsignale und von `--motor N`.
 | | `payload_inertia_kgm2` | | die seiner Last, solange `effects.payload` an ist und der Greifer sie hält, kg m² |
 | | `friction_coulomb_nm`, `friction_viscous_nm_s_rad` | | Coulomb- und viskose Reibung seines Lagers an der Achse, mit `effects.guide_friction`; Vorgabe 0 |
 | | `strain_wave` | | die Tabelle der Lebensdauerwerte seines Wellgetriebes, aufgebaut wie `[strain_wave]` |
-| `pulley`, `idler` | `clockwise` | | mit `effects.belt_wrap`: der Riemen läuft im Uhrzeigersinn um sie, von vorn gesehen (x nach rechts, z nach oben) und den Routen in ihrer Reihenfolge nach; Vorgabe false; `at_m` ist dann ihre Lage in der Ebene des Riemens (x, z) |
+| `pulley`, `idler` | `clockwise` | | der Riemen läuft im Uhrzeigersinn um sie, den Routen in ihrer Reihenfolge nach, in der Ebene ihres Riemens gesehen: von vorn (x nach rechts, z nach oben) in x-z, von oben (x nach rechts, y nach hinten) in x-y, von +x (y nach rechts, z nach oben) in y-z; ihr Drall im Rahmenimpuls und die Umschlingung nehmen diesen Sinn; Vorgabe false; `at_m` ist ihre Lage in dieser Ebene |
 | `worm` | `gearbox` | Pflicht | dieses Getriebe ist eine Schneckenstufe ([unten](#schneckengetriebe)); eine Schnecke je Getriebe |
 | | `ratio` | Pflicht | ihre Übersetzung, anstelle der des Getriebes |
-| | `efficiency`, `back_efficiency` | Pflicht | angetrieben von der Schnecke (über 0, höchstens 1) und rückwärts vom Rad (höchstens 1; 0 oder weniger sperrt selbst) |
+| | `efficiency`, `back_efficiency` | Pflicht | angetrieben von der Schnecke (über 0, höchstens 1) und rückwärts vom Rad (höchstens 1; 0 oder weniger sperrt selbst, was ein angetriebenes eta unter 0,5 verlangt) |
 | `lean` | `body`, `axis` | Pflicht | ein Körper, der sich an seinem Wagen entlang einer waagrechten Achse neigt, mit der er fährt (`effects.tool_flex`, elastisches Modell); höchstens einer ([unten](#die-umschlingung-des-riemens-und-eine-sich-neigende-achse)) |
 | | `com_drop_m`, `tool_drop_m` | Pflicht | sein Schwerpunkt und die Werkzeugspitze unter der Führung bei `lever_axis` auf 0, m |
 | | `lever_axis` | | eine Achse, deren Weg beide zur Führung hebt |
 | | `lateral_stiffness_n_m`, `tilt_stiffness_nm_rad`, `damping_n_s_m` | Pflicht | Steifigkeit der Führung seitlich und gegen Kippen, die Dämpfung der Neigung |
+| | `belt_offset_m` | | mit `effects.belt_run_offset`: wie weit die Trume, die den Körper von oben erreichen, ihn neben seiner Linie treffen (auf der Seite ihres anderen Rads), m; das Kippen der Führung macht das eine um es mal den Kippwinkel länger, das andere kürzer; Vorgabe 0 |
 | `gantry` | `axis` | Pflicht | eine Brücke, die entlang dieser waagrechten Linearachse fährt, giert (`effects.gantry_yaw`); höchstens eine ([unten](#ein-portal-das-giert-und-werkzeuge-auf-drehachsen)) |
 | | `across` | | die Linearachse entlang der Brücke; mit ihr ändert sich der Hebel ihrer Körper um die Mitte der Brücke |
 | | `width_m`, `inertia_kgm2` | Pflicht | Abstand der beiden Seiten der Brücke, m; ihre eigene Trägheit um eine senkrechte Achse durch ihre Mitte, kg m² |
@@ -368,7 +377,7 @@ gemeinsamen Motor; ein Motor mit eigenem `[parts.<id>]` behält sein Teil bei de
 Antrieb, und mit `--gearboxes` den passenden Getrieben für die eigene Übersetzung dieses Motors) wird `[parts.<ID>]`,
 die anderen Motoren bleiben, wie die Datei sie hat, die Drehzahlverstärkung `drive.<ID>.velocity_kp_nm_s_rad` dieses
 Motors wird dafür nachgestellt, wie die gemeinsame für ein gemeinsames Teil (nach der Trägheit, die dieser Motor dreht,
-und der seines Läufers), und die Kosten sind das Gewicht dieses einen Motors. Beim XYZ-Portal legt `--motor-id mz` den
+und der seines Läufers; sein kv_1_s mit ihr gesenkt, wo sein Lageregelkreis es braucht), und die Kosten sind das Gewicht dieses einen Motors. Beim XYZ-Portal legt `--motor-id mz` den
 Z-Motor hinter seinem Getriebe mit Übersetzung 10 aus, X und Y behalten ihre. Der zeitoptimale Bahnplaner
 nimmt für jeden Motor die Kennlinie des gemeinsamen `[drive]`.
 
@@ -425,13 +434,16 @@ Beschleunigung a zu heben (J Läufer, Kupplung und Spindel), und der Motor einer
   Schrägungswinkel), rechtwinklig dazu, zusammen |F| sqrt(1 + (tan(alpha_n) / cos(beta))²): `rack.<Motor>.radial_load`,
   geprüft als `gearbox-radial-load` gegen `ratings.shaft_max_radial_load_n` des Motors, wo das gesetzt ist. Die
   Axialkraft des schrägverzahnten Ritzels und das Kippen, das sie der Welle gibt, bleiben außen vor. Das X des
-  Zahnstangenportals: 192,9 N von 1500.
+  Zahnstangenportals: 208,0 N von 1500.
 - `effects.belt_stretch` schaltet das elastische Modell der ganzen Maschine: damit verdrehen sich auch die Getriebe der
   Spindeln, Zahnstangen und Rundtische (die Steifigkeit des Wandlers in Reihe), und die Eigenform des Riemens in einer
   Lage enthält sie, bei festgehaltenen Läufern.
 
 `machines/screw-portal.toml` ist das XYZ-Portal, dessen Z-Riemen durch einen Kugelgewindetrieb 16 x 10 hinter einer
-Balgkupplung ersetzt ist; die Bremse des Z-Motors hält den Schlitten (0,055 N m von ihren 0,5).
+Balgkupplung ersetzt ist; die Bremse des Z-Motors hält den Schlitten (0,055 N m von ihren 0,5). Seine X- und
+Y-Riemen (und die des C-Portals und beider Fünfachsdateien, die auf ihm aufbauen) sind Schleifen um je eine ferne
+Umlenkrolle, `far_x` am Gestell und `far_y` auf der Brücke, 0,1 m + Hub + 0,1 m von der Scheibe (die Eigenform von X an
+seinem fernen Ende 39,69 Hz, 74,48, als sie ihre Längen aufteilten; `the_screw_portals_belts_ring_on_their_loops_by_hand`).
 `machines/rack-gantry.toml` ist ein Zweiachsportal mit einem 3 m langen X an Zahnstange und Ritzel (Modul 2, 200 mm je
 Umdrehung) hinter einem Getriebe der Übersetzung 10 und Y an einem Riemen. Beide bestehen jede Prüfung auf ihren
 Zyklen (`screw-speed` 2402 von zulässigen 9833 U/min, `rack-feed-force` 180 von 2400 N). Die Kugelgewinde-,
@@ -576,7 +588,7 @@ id = "worm_c"
 gearbox = "gear_c"         # das Getriebe vor einem Rundtisch etwa
 ratio = 40.0
 efficiency = 0.76          # von der Schnecke angetrieben: tan(gamma) / tan(gamma + rho')
-back_efficiency = 0.5      # vom Rad zurück angetrieben: tan(gamma - rho') / tan(gamma); 0 oder weniger sperrt selbst
+back_efficiency = 0.69     # vom Rad zurück angetrieben: tan(gamma - rho') / tan(gamma); 0 oder weniger sperrt selbst (dann eta < 0,5)
 ```
 
 Solange der Motor treibt, gibt sie das Moment t ihrer Feder als t eta an den Abtrieb und t / i an den Läufer weiter, wie
@@ -597,7 +609,7 @@ Getriebes: 1 - eta wird in beide Richtungen zu (1 - eta) (1 - s + s nu / nu_ref)
 **Die Umschlingung des Riemens** (`effects.belt_wrap`). Mit ihr sind die eingreifenden Zähne an jeder getriebenen
 Scheibe Umschlingung r / p (p die Zahnteilung) anstelle von `ratings.belt_teeth_in_mesh`, im Gesetz des
 Zahnüberspringens und in der Zahnlast des Riemens. Die Umschlingung wird in der Lage aus den Orten der Räder in der
-Ebene des Riemens gerechnet (x und z der 3D-Ansicht): `at_m` der Scheibe und die Räder vor und nach ihr entlang des
+Ebene des Riemens gerechnet (`plane` des Abschnitts: x und z der 3D-Ansicht als Vorgabe; x und y beim flach liegenden Riemen eines H-Bots oder CoreXY): `at_m` der Scheibe (von ihrem Körper aus, wo sie auf einem mitfährt) und die Räder vor und nach ihr entlang des
 Riemens, der vorletzte Punkt der Route des Abschnitts, der an der Scheibe endet, und der zweite der Route des
 Abschnitts, der dort beginnt (eine Umlenkrolle mit ihrem `at_m`, von ihrem Körper aus, wo sie auf einem mitfährt; ein
 Körper, eine Klemme an ihm, wo die 3D-Ansicht ihn zeichnet; eine andere Scheibe). `clockwise` jedes Rads sagt, in
@@ -607,7 +619,8 @@ mitgelieferten Crates ist das `mech::wrap_angle`, eine halbe Umdrehung weniger d
 Spindel, Zahnstange, Linearmotor oder Rundtisch hat keine Umschlingung (NaN in `Machine::belt_wraps`; die Zahnlast
 übergeht ihn). Abgelehnt wird eine Datei, wo eine Riemenscheibe nicht eine Route beendet und eine andere beginnt, oder
 sie oder ein Rad neben ihr kein `at_m` hat. Das Spindelportal mit eingeschalteter Umschlingung: der Riemen von X läuft
-von der Klemme der Brücke um seine Scheibe und zur selben Klemme zurück, pi + 2 asin(r / D) um sie.
+von der Klemme der Brücke um seine Scheibe zur fernen Umlenkrolle am Gestell (eine Schleife), pi + asin(r / D) +
+asin((r - r_f) / d) um sie, D von der Klemme und d von der fernen Umlenkrolle.
 
 Die 3D-Ansicht zeichnet jeden Riemenabschnitt um seine Räder, wie die Umschlingung sie sieht: von Tangente zu Tangente
 zwischen den Rädern seiner Route und um jedes Rad innerhalb der Route in dessen Sinn, und um jede Motorscheibe zwischen
@@ -634,11 +647,27 @@ lever_axis = "z"
 lateral_stiffness_n_m = "tool_flex.lateral_stiffness_n_m"
 tilt_stiffness_nm_rad = "tool_flex.tilt_stiffness_nm_rad"
 damping_n_s_m = "tool_flex.damping_n_s_m"
+belt_offset_m = "tool_flex.belt_offset_m"   # mit effects.belt_run_offset
 ```
 
 Die Datei des T-Portals hat beides, ausgeliefert aus (das Crate hat seine Neigung an): ihre Scheiben an den Enden von X
 auf Höhe des Wagens und ihre Wagenrollen r + r_Rolle darüber und darunter, sodass der Riemen beide Scheiben waagrecht
 verlässt, eine halbe Umdrehung in jeder Lage, wie im Crate; mit einem der beiden Effekte an ist sie ihr Crate auf 1e-9.
+
+Mit `effects.belt_run_offset` (wie ausgeliefert aus) treffen die Trume, die den sich neigenden Körper von oben erreichen
+(die der Klemme, deren Länge sich nur mit der Hebelachse ändert), ihn `belt_offset_m` neben seiner Linie, auf der Seite
+ihres anderen Rads: das Kippen der Führung theta = k w h / tilt hebt das Ende auf der +-Seite um e theta und senkt das
+andere, die Abschnitte werden je Meter Neigung um e k h / tilt länger und kürzer, in erster Ordnung. Ihr
+Spannungsunterschied dreht die Neigung, ihre Dehnung hält sie, Dämpfung, Energie und Eigenformen folgen aus den Längen
+(`lean_offset` des Crates). Mit `effects.beam_vertical_mode` fahren die Trume des Riemens wie im Crate auf der
+Eigenform w des Balkens (`belt_on_beam`): ein Trum, das sich entlang der senkrechten Achse bewegt, geht ganz mit dem
+Wagen nach unten, eines, dessen Länge sich nur mit der Achse des Balkens ändert, kippt von der Scheibe seines Pfostens,
+ein Drittel seiner Masse in der kinetischen Energie und die Hälfte im Gewicht, im ersten Moment und im Impuls; ihr
+Gewicht biegt den Balken durch, ihre Trägheit steht in seiner Dämpfung. Die Datei des T-Portals: ihre Eigenform des
+Balkens in der Mitte 58,776 Hz (59,32 Hz vor dem 21. November), ihre Durchbiegung in Ruhe 60,33 µm (58,78), die
+Handwerte von `machine_file_lean_beam.rs`; die mitfahrenden Trume müssen zusammen ihre Länge halten (eine Datei, deren
+Trume das nicht tun, wird abgelehnt). Beides ist ihr Crate auf 1e-9, einzeln und zusammen, mit dem Versatz an und
+aus.
 
 ## Ein Portal, das giert, und Werkzeuge auf Drehachsen
 
@@ -679,9 +708,13 @@ tolerance_m = "gantry.sync_tolerance_m"
   Last nach dem Hebelgesetz: F2 - F1 = 2 m e a / B für einen Wagen m bei e, mit a beschleunigt. Mit dem Effekt aus
   halten die Führungen die Brücke rechtwinklig, und beide teilen gleich. `machines/dual-gantry.toml` hat ein X von 3 m
   auf zwei Zahnstangen mit Katalogmotoren (1FK2103-4AH an S210) und ein Y von 0,8 m auf einem Riemen auf einer Brücke
-  von 1,2 m. Es besteht jedes Urteil seines Zyklus: `gantry-sync` 16 µm von 100, und das Ende, nahe dem der Wagen
-  anfängt, trägt mehr (`rack-feed-force` 109 gegen 95 N). Sein Gieren schwingt mit sqrt((k + 2 k_Ende (B / 2)²) / J) / 2 pi,
-  155,0 Hz mit J auf 20 kg m² angehoben und dem Wagen in der Mitte, 149,5 Hz mit ihm an einem Ende (`sim-cli modes`).
+  von 1,2 m. Es besteht jedes Urteil seines Zyklus: `gantry-sync` 14 µm von 100, und das Ende, nahe dem der Wagen
+  anfängt, trägt mehr (`rack-feed-force` 111 gegen 96 N). Sein Gieren schwingt mit sqrt((k + 2 k_Ende (B / 2)²) / J) / 2 pi
+  mit dem Wagen in der Mitte: 425,4 Hz wie ausgeliefert (J = 2,657 kg m²), über dem Y-Riemen (82,2 Hz) und X auf seinen
+  Zahnstangen (262,3 Hz); der Wagen an einem Ende koppelt X und das Gieren (255,6 und 394,8 Hz). `sim-cli modes
+  --machine-file machines/dual-gantry.toml --axis-index 1` nennt alle drei mit ihren Dämpfungsgraden (das Gieren 0,144,
+  X 0,088, der Riemen 0,039 in der Mitte); mit J auf 20 kg m² angehoben schwingt das Gieren in der Mitte mit 155,0 Hz,
+  mit dem Wagen an einem Ende mit 151,7 Hz (`the_dual_gantry_reports_its_yaw_among_its_modes_by_hand`).
 - **Gleichlauf der beiden Antriebe** (`gantry.sync`, `gantry.sync_gain_1_s`, gelesen, wo ein Portal zwei Antriebe hat;
   der erste ist der Master). `"master_slave"`: der Lageregler des Slaves folgt der Istlage des Masters, seinem Sollwert
   weniger seinem Schleppfehler, so kommt der Nachlauf des Slaves auf den des Masters: bei stetiger Geschwindigkeit v,
@@ -696,16 +729,22 @@ tolerance_m = "gantry.sync_tolerance_m"
   (sim-machines `machine_file_gantries.rs`).
 - **Ein Antrieb.** Die eine Zahnstange des Zahnstangenportals treibt seine Brücke an einem Ende
   (`drives = { mx = -0.5 }`): das ferne Ende hält nur die Feder der Anbindung, und es bleibt zurück, solange die Brücke
-  beschleunigt; mit dem Effekt an wächst der Bahnfehler seines Zyklus von 0,07 auf 0,20 mm.
+  beschleunigt; mit dem Effekt an wächst der Bahnfehler seines Zyklus von 0,07 auf 0,23 mm.
 - **H-Bot und CoreXY.** Riemen ziehen an den Enden der Brücke. Beim H-Bot (`sections = { "1" = -0.3, "2" = 0.6, "3" = -0.3 }`)
   ist das Moment des Riemens auf die Brücke -0,3 m mal sein Zug am Kopf entlang der Brücke: sie giert, sobald der Kopf
   entlang der Brücke geschoben wird, wo er auch steht (-4,2 N m für den Kopf von 7 kg bei 2 m/s²), und ein Kopf
   außerhalb der Mitte lässt sie gieren, wenn die Brücke beschleunigt (-m e a). Ein starrer Riemen lässt den H-Bot gieren
   (der Kopf kann bei festgehaltenen Motoren entlang der Brücke fahren), er giert also in beiden Modellen; mit dem Effekt
-  an wächst der Bahnfehler seines Zyklus von 0,09 auf 0,80 mm. Beim CoreXY zieht jeder Riemen an beiden Enden: sein
+  an wächst der Bahnfehler seines Zyklus von 0,06 auf 1,12 mm. Beim CoreXY zieht jeder Riemen an beiden Enden: sein
   Moment ist die Summe der Zugkräfte des einen Riemens gegen die des anderen, -0,19 N m für den Zug von 8 N, der einen
-  H-Bot mit -2,4 gieren ließe, und sein Bahnfehler bleibt 0,06 mm. Ein starrer Riemen hält das Gieren eines CoreXY: sein
-  starres Modell hat keins.
+  H-Bot mit -2,4 gieren ließe, und sein Bahnfehler bleibt 0,02 mm. Ein starrer Riemen hält das Gieren eines CoreXY: sein
+  starres Modell hat keins. (Im Text vom 14. November standen 0,80, 0,20 und 0,06 mm; sein eigener Stand gibt 1,07, 0,25
+  und 0,06 mm. Die 1,07 mm des H-Bots wurden am 16. November (024b876a) 1,12 mm, die 0,224 mm des Zahnstangenportals
+  0,225 mm: die Trume der Riemen der Dateien tragen ihre eigene Masse, beim H-Bot mu (L + 8 (0,65 - y)) auf X, wo die
+  Klumpen mu L hatten (0,86 gegen 0,42 kg bei y = 0,1 m), und 2 mu (2 x - 1) zwischen X und Y; mit effects.belt_mass aus
+  sind es vorher und nachher 1,07 mm. Welcher der beiden Terme die Brücke mehr gieren lässt, ist nicht getrennt. Die
+  0,06 mm des CoreXY wurden
+  am 14. November mit dem Merge d360b7ed 0,02 mm.)
 
 **Körper auf Drehachsen und der Werkzeugmittelpunkt.** Ein Körper darf mit Drehachsen fahren: `offset_m` ist sein
 Schwerpunkt von dort, wo sich ihre Achsen bei Winkel 0 treffen, und er fährt auf ihnen herum, die erste in seinen
@@ -791,8 +830,8 @@ Eine Maschinendatei wird beim Laden vollständig geprüft, bevor etwas läuft:
 - die Maschine: Massen, Radien und Längen positiv, ein Getriebe je Motor (keins bei einem Linearmotor) und eine
   Scheibe, Spindel, Zahnstange oder ein Rundtisch je Getriebe, höchstens eins davon je Achse, eine Spindel mindestens so
   lang wie ihr Hub, so viele Motoren wie Achsen und einen mehr je Antrieb eines Portals über den ersten hinaus, die
-  Antriebe eines Portals auf seiner Achse, die Achsen eines Werkzeugmittelpunkts entlang x, y und z, das `offset_m`
-  eines Körpers nur auf Drehachsen, eine Riemenführung, die die Riemenlänge hält und jede Achse festlegt;
+  Antriebe eines Portals auf seiner Achse, die Achsen eines Werkzeugmittelpunkts entlang x, y und z, eine
+  Riemenführung, die die Riemenlänge hält und jede Achse festlegt;
 - jeder andere Schlüssel gegen die Schlüssel der Konfigurationen der eingetragenen Maschinen (so wird `pretensoin_n`
   beim Namen abgelehnt), dazu `[axis.<id>]` je Achse, eine Reibtabelle je Führung, die Wertetabellen von Spindeln,
   Zahnstangen, Linearmotoren und Wellgetrieben im Aufbau des Gelenkbaukastens und jeder Schlüssel, den die Netzliste
@@ -854,10 +893,30 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
   nimmt (`mech::ToothJump`); eine Scheibe mit einem Abschnitt nur auf einer Seite (eine Trommel) lehnt den Effekt ab.
 - Trumschwingung (`machine.span`): die erste Querschwingung jedes Trums bei der Spannung seines Abschnitts, gegen das,
   was die Antriebe anregen (`mech::span_frequency`).
+- Die Riemenmasse Trum für Trum: wo jedes Trum die Geschwindigkeit seines Riemens über Grund je Achsgeschwindigkeit
+  angibt (`velocity_x`, `velocity_y`, `velocity_z`, entlang der Achsen der 3D-Ansicht) und die Trume zusammen der ganze
+  Riemen sind (sonst abgelehnt), bewegt sich jedes Trum, L_s = L0_s + c_s · q lang, mit V_s v über Grund, mit dem
+  Schwingen des Rahmens e du obendrauf: die kinetische Energie des Riemens ½ mu Σ_s L_s |V_s v + e du|² ersetzt die
+  Hälfte auf jeder Scheibe in der Massenmatrix der Achsen (und des Rahmens), mit den Geschwindigkeitstermen nach
+  Lagrange, und sein Impuls und erstes Moment gehen in den Impuls des Rahmens ein. Sein Gewicht sitzt an diesem
+  ersten Moment: die potentielle Energie hat g mu Σ_s (L0_s + c_s · q / 2) V_s,z · q, die Schwerkraft deren Gradient
+  (`runs_height`); so wiegen die senkrechten Trume des T-Portals 0,16 kg auf Z wie in seinem Crate, der Z-Riemen des
+  XYZ-Portals nichts (eine Schleife: das Trum vom Motor zur fernen Umlenkrolle, 0,5 m, sinkt, wie die beiden mit dem
+  Schlitten steigen; seine X- und Y-Riemen sind ebenso Schleifen, 1,2 und 0,7 m vom Motor zur fernen Umlenkrolle). Die
+  Datei des T-Portals gibt ihre
+  Trume so an; ihr Crate leitet dasselbe aus dem Riemenweg ab (`belt_mass`). Ebenso die anderen Dateien, deren Trume sich
+  über Grund bewegen, jede mit der Tabelle ihrer Trume im Kommentar: der H-Bot (der Riemenweg des T-Portals mit Y statt
+  Z), der CoreXY (jeder Riemen bewegt sich entlang X und entlang Y als Ganzes, wie die Klumpen es hatten, und gibt
+  -0,01 kg zwischen X und Y) und die Portale, deren Y- (und Z-) Riemen auf den Achsen fährt, die ihn tragen.
 - Die Eigenform des Riemens (elastisches Modell): die Achsen, und der Rahmen, wo er schwingt, auf der Steifigkeit des
-  Riemens bei festgehaltenen Scheiben, K = Σ_s EA / L_s c_s c_s^T, gegen ihre Massenmatrix; die niedrigste ist
+  Riemens bei festgehaltenen Scheiben, K = Σ_s EA / l_s c_s c_s^T (l_s der ungedehnte Riemen des Abschnitts in Ruhe, wie in den Crates), gegen ihre Massenmatrix; die niedrigste ist
   `resonance_hz` in einer Lage, also stellt `effects.shaper_follows_pose` den Shaper darauf, und die App zeigt ihre
-  Form (auf 1 m Werkzeugweg skaliert).
+  Form (auf 1 m Werkzeugweg skaliert). `Machine::modes` (`sim-cli modes`, die Darstellung der App) gibt jede Eigenform
+  von K und M, die des Gierens und der Getriebe von Spindeln, Zahnstangen und Rundachsen mit, die niedrigste zuerst, jede
+  mit ihrem Dämpfungsgrad x^T C x / (2 w) (x ihre Form, x^T M x = 1): C die Dämpfer der Riemenabschnitte c + c_t EA / l,
+  die der Getriebe bei der Frequenz der Eigenform, des Gierens, des Rahmens, der Neigung und des Balkens. Die Datei des
+  T-Portals gibt die beiden Eigenformen ihres Crates samt Dämpfung auf 1e-9 (`the_t_gantry_file_tells_its_crates_modes`).
+  Bis zum 21. November 2026 gab eine Datei nur ihre niedrigste, mit Dämpfung 0.
 - Spindel, Zahnstange, Linearmotor oder Rundtisch (`machine.screw`, ...): das Getriebe seines Motors wird eines in der
   Einheit der Achse, der Übersetzung i / Hebel (der `RotaryJoint` des Gelenkbaukastens mit dem
   `transmission::Converter` dahinter), und seine "Scheibe" ist die Achse selbst: K hat für ihn die Zeile e_i, die Achse
@@ -873,11 +932,20 @@ vielen Motoren. Es ist das Modell der Crates Einzelachse und T-Portal, für jede
 - Ein Werkzeugmittelpunkt (`machine.tcp`): die Stellung des Werkzeugs geht über die Drehung von `tool_m` durch die
   Drehachsen in die Achsen über und zurück; Geschwindigkeiten und Beschleunigungen durch Ableiten dieser Abbildung.
 - Eine Schneckenstufe (`machine.worm`): der Abtrieb ihres Getriebes bekommt t eta^x und ihr Läufer t / i,
-  x = tanh(t w / 0,5 W), mit dem Rückwirkungsgrad, wo die Last treibt (x unter 0); eine selbsthemmende gibt dem Läufer
-  treibend x t / i und zurück angetrieben -x eta_back t / i, gegen die Bewegung. Im starren Modell werden mit einer
-  selbsthemmenden Schnecke die Abtriebe der Getriebe neben den Beschleunigungen gelöst; zurück angetrieben ist ihr
-  Bremsmoment am Rad (1 - Läuferfaktor) mal das Moment, das der Abtrieb in Ruhe gegen die Kräfte der Achsen hält (ein
-  Bremsmoment im Verhältnis zum dynamischen Moment hat dort keine widerspruchsfreie starre Lösung), und in Ruhe haftet
+  x = tanh(t w / 0,5 W), mit dem Rückwirkungsgrad, wo die Last treibt (x unter 0). Eine selbsthemmende folgt ohne
+  Einblendung dem Coulombschen Gesetz an ihrem Eingriff, ihre Reibung (1 / eta - 1) mal das Moment an der treibenden
+  Flanke und (1 - eta_back) mal es an der zurücktreibenden, so dass der Eingriff nur Leistung aufnimmt. Im elastischen
+  Modell ist das Moment das der Getriebefeder: der Abtrieb bekommt es unverändert und der Läufer zusätzlich die Reibung
+  der Flanke; die Reibung ist nie größer als das, was den Läufer in 1 ms anhält (`worm::STICK_TIME_S`), also haftet er
+  in Ruhe innerhalb der Grenzen beider Flanken und hält seine Last ohne Motormoment (`ConfigMachine::worm_drag`). Senkt
+  sie ein schweres Rad mit zu wenig Schub, klemmt sie: die Reibung der zurücktreibenden Flanke steigt mit dem Moment der
+  Feder, während der Läufer langsamer wird, der Läufer steht in Millisekunden und das Rad schwingt auf der Feder. Im
+  starren Modell werden mit einer selbsthemmenden Schnecke die Abtriebe der Getriebe neben den Beschleunigungen gelöst,
+  und das Bremsmoment einer bewegten selbsthemmenden Schnecke am Rad ist das größere aus
+  dem der treibenden Flanke, (1 / eta - 1) mal das Moment, das das Rad aufnimmt, und dem der zurücktreibenden,
+  (1 - eta_back) mal das Moment, das der Abtrieb in Ruhe gegen die Kräfte der Achsen hält (ein Bremsmoment im
+  Verhältnis zum dynamischen Moment hat dort mit einem schweren Rad keine starre Lösung, Painlevés Paradox). Es steigt
+  mit dem Moment des Rads, also hat die Lösung eine Antwort. In Ruhe und unter 1e-3 rad/s (`worm::STICK_SPEED`) haftet
   der Abtrieb innerhalb der Grenzen der Schnecke (`ConfigMachine::rigid_locking`).
 - Ein sich neigender Körper (`machine.lean`, elastisches Modell): eine Koordinate w mehr neben den Achsen, die Masse des
   Körpers koppelt sie an seine Achse, [[M, m e_a], [m e_a^T, m]] [a; w''] = [F; tip p_a - k w - c w'], k und tip aus
@@ -892,14 +960,13 @@ Maschine; an ihnen ist nichts besonders für Maschinendateien.
 
 ## Was Maschinendateien noch nicht können
 
-- Eine Scheibe steht, wo ihr `at_m` sie hinstellt (sie fährt auf keinem Körper mit), und die Lagen der Umschlingung
-  sind die der 3D-Ansicht: die Abschnittslängen werden nicht gegen sie geprüft.
+- Die Lagen der Umschlingung sind die der 3D-Ansicht: beim Lesen einer Datei werden die Abschnittslängen nicht gegen
+  sie geprüft (die Prüfung der Räder der mitgelieferten Dateien in `sim-netlist` vergleicht sie).
 - `tool_flex`: ein sich neigender Körper, entlang einer waagrechten Achse; er neigt sich nur im elastischen Modell (wie
   im Crate).
-- Die Sperre einer selbsthemmenden Schnecke blendet, sobald sie sich bewegt, über die 0,5 W des Getriebes ein: aus der
-  Ruhe haftet sie (starres Modell), aber ein Motormoment, das die Last nicht ganz hebt, oder ein Schub, der sie nicht
-  ganz senkt, lässt sie mit der Geschwindigkeit kriechen, deren Leistung etwa 0,5 W atanh(Anteil des nötigen Moments)
-  ist. Im elastischen Modell ist das Haften allein die Einblendung.
+- Das starre Modell einer selbsthemmenden Schnecke nimmt die Reibung der zurücktreibenden Flanke aus dem Moment, das das
+  Rad in Ruhe hält, also bremst es ein schweres Rad gleichmäßig, wo das elastische Modell klemmt; bei gleichbleibender
+  Geschwindigkeit stimmen beide überein.
 - Die Lagerreibung eines Rundtischs wirkt am Läufer, vor Feder und Wirkungsgrad des Getriebes, wie die Vorspannung
   einer Spindel.
 - Der Eingriffswinkel einer Zahnstange ist für jede 20 Grad, und die Axialkraft ihres Ritzels bleibt aus der Last der
@@ -920,8 +987,9 @@ Maschine; an ihnen ist nichts besonders für Maschinendateien.
   Linearachsen in m.
 - `effects.belt_tooth_jump` zusammen mit Spindel, Zahnstange, Linearmotor oder Rundtisch: seine Zustände liegen je
   Motor, und ein Motor ohne Scheibe hat keine; die Datei wird abgelehnt.
-- Die Steifigkeit einer Spindel ist die bei der weichsten Mutterstellung für den ganzen Hub, wie im Gelenkbaukasten;
-  das Bremsmoment ihrer Vorspannung sitzt am Motor, mit einer Glättung in rad/s.
+- Die Steifigkeit einer Spindel folgt mit `effects.screw_stiffness_with_position` (in den mitgelieferten Dateien mit
+  Spindel an) der Mutter, wie im Gelenkbaukasten; aus, ist es die bei der weichsten Mutterstellung für den ganzen Hub.
+  Das Bremsmoment ihrer Vorspannung sitzt am Motor, mit einer Glättung in rad/s.
 - Andere Eigenformen als die des Riemens: der Rahmen geht in die des Riemens ein, wo er schwingt, die eigene
   Steifigkeit der Führungen und Motoren nicht, und die Biegung eines Körpers ist nicht modelliert.
 - Abschnitts- und Trumlängen sind Zahlen (oder Pfade), keine Formeln: eine, die von einem Hub abhängt, folgt einer
@@ -998,7 +1066,12 @@ Scheibe von Hand in zwei Lagen (eine versetzte Umlenkrolle und eine Klemme, die 
 Schneckengetriebe gegen den Rundtisch des Gelenkbaukastens mit seiner Schnecke (starr und elastisch, treibend und
 zurück angetrieben), das Halten einer selbsthemmenden Schnecke und die Beschleunigung einer zurück angetriebenen von
 Hand, die selbsthemmende Schnecke, die eine sinkende Last ohne Moment abbremst, 0,05 N m Schub zum Senken braucht und
-aus der Ruhe haftet, solange nicht genug sie bewegt, die Umschlingungen des Spindelportals neben seiner Z-Spindel, und
+aus der Ruhe haftet, solange nicht genug sie bewegt, die eine Antwort der bewegten selbsthemmenden Schnecke über
+Geschwindigkeiten und Momente gegen beide Flanken von Hand und ihr Senken in Fahrt (die 5 W des Motors und die 10 W der
+Last gehen in der Schnecke verloren; ohne Moment bremst sie bis zum Stillstand und hält), die elastische selbsthemmende Schnecke, die unter Last in Ruhe
+steht, bei gleichbleibender Geschwindigkeit in beide Richtungen die Momente und Verluste des starren Modells kostet und
+beim Losbrechen, durch eine Umkehr und beim Klemmen nie Leistung abgibt, mit geschlossener Verlustbilanz, die
+Umschlingungen des Spindelportals neben seiner Z-Spindel, und
 die Katalogsuche für den Z-Motor des XYZ-Portals allein.
 
 `crates/sim-machines/tests/machine_file_review.rs` hält fest, was eine unabhängige Durchsicht durch Versuch gefunden

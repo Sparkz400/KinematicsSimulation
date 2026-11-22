@@ -68,9 +68,8 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         cam,
         master,
     };
-    let endless = knife.master.is_some();
     let phi = axis(cfg, "knife", "axis-knife", "rad", joint.range)?;
-    machine(cfg, knife, (joint, None, "rad"), phi, endless)
+    machine(cfg, knife, (joint, None, "rad"), phi, true)
 }
 
 impl RotaryKnife {
@@ -117,6 +116,10 @@ impl Mechanism for RotaryKnife {
     }
     fn cam_at(&self, master: f64, out: &mut [[f64; 4]]) {
         out[0] = self.cam.at(master);
+    }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        let cam = self.cam.clone();
+        Some(std::sync::Arc::new(move |master, out: &mut [[f64; 4]]| out[0] = cam.at(master)))
     }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {

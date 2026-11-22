@@ -226,6 +226,8 @@ bristle_damping_n_s_m = 1500.0
 preload_n = 200.0
 
 [motor]
+# A made-up motor, no catalogue motor: no row of catalog/ has these values (0.45 N m/A, 1.27 N m at 2.822 A, 9.5 A,
+# 0.3 kg cm2), so its stall current is its rated one. A motor named in [parts] replaces them.
 rotor_inertia_kgm2 = 0.3e-4
 friction_coulomb_nm = 0.02
 friction_viscous_nm_s_rad = 1.0e-4
@@ -412,6 +414,9 @@ friction_feedforward_model = "characteristic"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 # Current controller: Kp = L / T and Tn = L / R give the current loop the time constant T = 0.25 ms.
@@ -420,6 +425,8 @@ current_tn_s = 2.5e-3
 # The DC link voltage. The winding gets sqrt(3/2) times it at most, here 190 V: the model's one winding
 # carries the RMS phase current, and its voltage times that current is the power of all three phases.
 bus_voltage_v = 155.13
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 3.8
 # What the motor can give continuously; the RMS torque of a cycle is judged against it.
 rated_torque_nm = 1.27
@@ -825,6 +832,7 @@ id = "pulley_a"
 gearbox = "gearbox_a"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
+at_m = [-0.15, -0.05, 0.06]
 pos = [300, 0]
 
 [[machine.pulley]]
@@ -832,27 +840,35 @@ id = "pulley_b"
 gearbox = "gearbox_b"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
+at_m = [1.15, -0.05, 0.06]
 pos = [300, 300]
 
+# The belt's path is the T-gantry's (machines/t-gantry.toml) with Y in place of Z: the head is a slide that runs
+# through the carriage along y, clamped at its one end, an idler at its other. Clamp to motor A: 2 span_min_m + x + y.
 [[machine.section]]
 id = "1"
 length_m = 0.3
 axes = { x = 1, y = 1 }
 pulleys = { pulley_a = 1 }
+route = ["head", "upper_left", "pulley_a"]
 pos = [450, -80]
 
+# Motor A round the head's far idler to motor B: 4 span_min_m + stroke_x + 2 stroke_y - 2 y.
 [[machine.section]]
 id = "2"
 length_m = 2.6
 axes = { y = -2 }
 pulleys = { pulley_a = -1, pulley_b = 1 }
+route = ["pulley_a", "lower_left", "far_end", "lower_right", "pulley_b"]
 pos = [450, 150]
 
+# Motor B to the clamp: 2 span_min_m + stroke_x - x + y.
 [[machine.section]]
 id = "3"
 length_m = 1.3
 axes = { x = -1, y = 1 }
 pulleys = { pulley_b = -1 }
+route = ["pulley_b", "upper_right", "head"]
 pos = [450, 380]
 
 [[machine.body]]
@@ -882,6 +898,140 @@ axis = "y"
 friction = "friction_z"
 carries = ["head"]
 pos = [900, 300]
+
+# The idlers the belt runs round (effects.idlers, values as the T-gantry's [idler]), with the belt speed past each per
+# speed of X and Y: the two carriage idlers on the clamp's side pass the belt that follows the clamp, at vy; the two on
+# the other side the runs coming back from the motors, at 2 vx + vy and 2 vx - vy; the one at the head's far end at
+# 2 vx. The belt lies flat (its sections change with x and with y): the 3D view draws it in its x-y plane, seen from
+# above, the carriage idlers 0.032 m either side of the carriage along y, as the T-gantry's are along z, and the far
+# idler at the head's other end, 0.6 m back from the clamp (beyond Y's stroke).
+[[machine.idler]]
+id = "upper_left"
+speed = { y = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "carriage"
+at_m = [-0.042, 0.032, 0.0]
+clockwise = true
+pos = [1050, -80]
+
+[[machine.idler]]
+id = "upper_right"
+speed = { y = -1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "carriage"
+at_m = [0.042, 0.032, 0.0]
+clockwise = true
+pos = [1050, 0]
+
+[[machine.idler]]
+id = "lower_left"
+speed = { x = 2, y = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "carriage"
+at_m = [-0.042, -0.032, 0.0]
+clockwise = true
+pos = [1050, 80]
+
+[[machine.idler]]
+id = "lower_right"
+speed = { x = 2, y = -1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "carriage"
+at_m = [0.042, -0.032, 0.0]
+clockwise = true
+pos = [1050, 160]
+
+[[machine.idler]]
+id = "far_end"
+speed = { x = 2 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "head"
+at_m = [0.0, -0.6, 0.0]
+pos = [1050, 300]
+
+# The free spans, from the clamp, with the belt's speed over ground per speed of X and Y along x and y of the 3D view,
+# so that the belt's mass is summed run by run. Following the path (r da = dx + dy at A, r db = dx - dy at B):
+#   span  run                              length              speed over ground
+#   1     clamp to carriage idler          span_min_m + y      (vx, vy)            moves with the clamp
+#   2     carriage idler to motor A        span_min_m + x      (vx + vy, 0)        A's surface speed, fed into 1
+#   3     motor A to carriage idler        span_min_m + x      (-(vx + vy), 0)     taken out of 2 by A
+#   4     carriage idler to the far idler  0.65 - y            (vx, 2 vx + vy)     the carriage's vx, and along y the
+#   5     far idler to carriage idler      0.65 - y            (vx, vy - 2 vx)       run 3's 2 vx + vy round the idler
+#   6     carriage idler to motor B        span_min_m + 1 - x  (-(vx - vy), 0)     fed into 2 by B
+#   7     motor B to carriage idler        span_min_m + 1 - x  (vx - vy, 0)        taken out of 3 by B
+#   8     carriage idler to clamp          span_min_m + y      (vx, vy)            moves with the clamp
+# (round the far idler, which moves at (vx, vy), the belt turns at 2 vx). Summed, 2T / mu = L (vx^2 + vy^2) +
+# 8 (span_min_m + stroke_y - y) vx^2 + 4 (2 x - stroke_x) vx vy with L = 4.2 m the whole belt; the lumps on the pulleys
+# hold mu L (vx^2 + vy^2), so the runs add 8 mu (0.65 - y) on X and 2 mu (2 x - 1) between X and Y.
+[[machine.span]]
+id = "span_1"
+section = "1"
+length_m = "geometry.span_min_m"
+axes = { y = 1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+
+[[machine.span]]
+id = "span_2"
+section = "1"
+length_m = "geometry.span_min_m"
+axes = { x = 1 }
+velocity_x = { x = 1, y = 1 }
+
+[[machine.span]]
+id = "span_3"
+section = "2"
+length_m = "geometry.span_min_m"
+axes = { x = 1 }
+velocity_x = { x = -1, y = -1 }
+
+[[machine.span]]
+id = "span_4"
+section = "2"
+length_m = 0.65
+axes = { y = -1 }
+velocity_x = { x = 1 }
+velocity_y = { x = 2, y = 1 }
+
+[[machine.span]]
+id = "span_5"
+section = "2"
+length_m = 0.65
+axes = { y = -1 }
+velocity_x = { x = 1 }
+velocity_y = { x = -2, y = 1 }
+
+[[machine.span]]
+id = "span_6"
+section = "2"
+length_m = 1.15
+axes = { x = -1 }
+velocity_x = { x = -1, y = 1 }
+
+[[machine.span]]
+id = "span_7"
+section = "3"
+length_m = 1.15
+axes = { x = -1 }
+velocity_x = { x = 1, y = -1 }
+
+[[machine.span]]
+id = "span_8"
+section = "3"
+length_m = "geometry.span_min_m"
+axes = { y = 1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
 
 # The bridge's racking (effects.gantry_yaw): its ends, 0.3 m either side of its centre, move along x by 0.3 m times the
 # yaw. Section 1 leaves the bridge's first end (y below 0) along x towards motor A, section 3 its other end; section 2

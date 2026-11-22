@@ -175,15 +175,13 @@ fn the_energy_budget_closes_on_every_machine_and_config() {
 /// With the gearboxes' mesh friction (effects.gearbox_mesh_friction) on every machine that has a gearbox, also where
 /// its shipped config leaves it off: the friction's work and its bristle's store go into the gearbox's loss row and the
 /// energy, and the budget of a pass closes as without it. (The standard suite cannot tell: it drives the machine without
-/// `after_step`, so the friction's anchor never commits and the gearbox keeps its faded efficiency there.) But the
-/// T-gantry, whose light pulleys, stuck to the housing by the friction, chatter between sticking and sliding faster than
-/// the base step resolves: 0.163 % of its pass unaccounted, beyond the 0.1 % (the effect is off in its config for that).
+/// `after_step`, so the friction's anchor never commits and the gearbox keeps its faded efficiency there.) The belt
+/// axes among them: since the friction is booked as its whole power the single axis leaves under 1e-6 of its pass
+/// unaccounted and the T-gantry 4e-6, as without the friction (it had missed 0.163 % under the earlier bookkeeping).
 #[test]
 fn the_energy_budget_closes_with_the_mesh_friction_on_every_gearbox() {
     std::thread::scope(|scope| {
-        for entry in
-            MACHINES.iter().copied().filter(|e| e.config().get("gearbox.efficiency").is_ok() && e.id != "t-gantry")
-        {
+        for entry in MACHINES.iter().copied().filter(|e| e.config().get("gearbox.efficiency").is_ok()) {
             std::thread::Builder::new()
                 .name(entry.id.into())
                 .spawn_scoped(scope, move || {
@@ -448,7 +446,11 @@ fn the_part_thermal_verdicts_judge_where_the_parts_settle() {
         assert_eq!(load.part_rises.len(), (entry.build)(&cfg).unwrap().thermal_parts().len());
         for (part, rise) in &load.part_rises {
             let lost = budget.rows.iter().find(|r| r.id == format!("{LOSS_PREFIX}{}", part.id)).unwrap().energy;
-            let by_hand = cfg.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap() * lost / load.duration;
+            let resistance = (entry.build)(&cfg)
+                .unwrap()
+                .thermal_values(part.id)
+                .map_or_else(|| cfg.f64(&format!("thermal.{}_resistance_k_w", part.kind)).unwrap(), |own| own.0);
+            let by_hand = resistance * lost / load.duration;
             assert!(
                 (rise - by_hand).abs() <= 1e-12 * by_hand.abs(),
                 "{} {name} {}: {rise} K against {by_hand} K",
@@ -566,11 +568,13 @@ fn the_bounds_of_an_effect_that_is_off_get_no_runs() {
         let thermal =
             |cfg: &Config| bounds(cfg).unwrap().into_iter().filter(|(path, ..)| path.starts_with("thermal.")).count();
         assert_eq!(thermal(&cfg), 0, "{}", entry.id);
-        // A resistance and a time constant for each kind of part the machine has that warms (gearbox, guide).
-        let kinds = (entry.build)(&cfg)
-            .unwrap()
+        // A resistance and a time constant for each kind of part the machine has that warms (gearbox, guide), but those whose
+        // values the machine works out from the part's size (`Machine::thermal_values`: the linear delta's belts).
+        let machine = (entry.build)(&cfg).unwrap();
+        let kinds = machine
             .thermal_parts()
             .iter()
+            .filter(|p| machine.thermal_values(p.id).is_none())
             .map(|p| p.kind)
             .collect::<std::collections::BTreeSet<_>>()
             .len();
@@ -614,6 +618,279 @@ fn the_bounds_of_an_effect_that_is_off_get_no_runs() {
                     && named(&with(&cfg, &["effects.belt_tooth_jump = true"]), "belt.tooth_jump_factor"),
                 "{}",
                 entry.id
+            );
+        }
+    }
+}
+
+/// effects.iron_loss's drag (`DriveParams::iron_drag_rated`) on the single axis: a printed rated torque of 1.1 N m at
+/// the rated 2.822 A leaves k_t I_N (1 - s (I_N / I_max)^2) - M_N - friction = 1.25745 - 1.1 - 0.05140 = 0.10605 N m at
+/// 314 rad/s. The pass's budget closes with it as without (its power in the `emf` row, which is then positive), and
+/// on the loss-free level config with the holding brake off a rotor coasting with its drive disabled loses to the drag
+/// exactly the work the drive books, 0.15745 N m there without the motor friction.
+#[test]
+fn the_iron_drag_closes_the_budget_enabled_and_coasting_disabled() {
+    let entry = &machine_single_axis::ENTRY;
+    let drag = ["motor.stall_current_a = 3.2", "drive.rated_torque_nm = 1.1"];
+    let cfg = with(&entry.config(), &drag);
+    let p = sim_components::drive::DriveParams::from_config(&cfg, 62.5e-6, 125e-6).unwrap();
+    assert!((p.iron_drag_rated - 0.10605).abs() < 1e-5, "{} N m", p.iron_drag_rated);
+    let budget = analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap().budget.unwrap();
+    let emf: f64 = budget.rows.iter().filter(|r| r.id.starts_with("emf.")).map(|r| r.energy).sum();
+    let (supply, unaccounted, electrical) = (budget.supply, budget.unaccounted(), budget.electrical_unaccounted());
+    println!("supply {supply} J, emf {emf} J, unaccounted {unaccounted:e} J, electrical {electrical:e} J");
+    assert!(
+        emf > 0.0 && unaccounted.abs() < BUDGET_TOLERANCE * supply && electrical.abs() < ELECTRICAL_TOLERANCE * supply
+    );
+    // Coasting with the drive disabled: the machine's energy falls by what the drive books as the drag's work.
+    let free = (entry.suite_configs)().remove(0);
+    let free = with(&free, &[&["effects.iron_loss = true", "effects.holding_brake = false"][..], &drag[..]].concat());
+    let mut sim = Sim::new(entry, &free).unwrap();
+    sim.command(Command::MoveTo(vec![sim.control.planned_pos()[0] + 0.5])).unwrap();
+    sim.run(0.2, |_| {});
+    sim.command(Command::Disable).unwrap();
+    sim.step();
+    let before = sim.machine.energy(&sim.state);
+    let (mut booked, mut start_speed) = (0.0, 0.0);
+    for _ in 0..8000 {
+        let (mut angle, mut speed) = ([0.0], [0.0]);
+        sim.machine.motor_state(&sim.state, &mut angle, &mut speed);
+        let speed = speed[0];
+        sim.step();
+        let d = &sim.control.drives[0];
+        booked += d.shaft_power * sim.dt;
+        // What the step start's speed alone would have booked.
+        start_speed -= sim.control.drive_params_of(0).iron_drag(speed) * speed * sim.dt;
+    }
+    let lost = sim.machine.energy(&sim.state) - before;
+    println!("lost {lost} J, booked {booked} J, by the step start's speed {start_speed} J");
+    assert!(booked < 0.0 && (lost - booked).abs() < 1e-6 * booked.abs(), "{lost} J against {booked} J");
+}
+
+/// drive.overmodulation: the six-step wave's fundamental over the sinusoidal limit, by the bridge. The single axis's
+/// servo on a three-phase bridge: 2 sqrt 3 / pi = 1.10266 (six-step's 2 U / pi over space vector's U / sqrt 3); the
+/// stepper axis's two H-bridges: 4 / pi = 1.27324 (a square wave of height U over a sine of amplitude U). Off: 1.
+#[test]
+fn overmodulation_takes_the_six_step_fundamental_of_the_bridge() {
+    use sim_components::drive::{DriveParams, WINDING_PER_DC_LINK};
+    let gain = |cfg: &Config| {
+        let p = DriveParams::from_config(cfg, 62.5e-6, 125e-6).unwrap();
+        assert!((p.max_voltage - WINDING_PER_DC_LINK * p.fundamental_gain * p.bus_voltage).abs() < 1e-9);
+        p.fundamental_gain
+    };
+    let servo = machine_single_axis::ENTRY.config();
+    let stepper = sim_machines::load_file(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../machines/stepper-axis.toml"),
+    )
+    .unwrap_or_else(|e| panic!("{e}"))
+    .config();
+    let on = ["drive.overmodulation = true"];
+    assert_eq!((gain(&servo), gain(&stepper)), (1.0, 1.0));
+    assert!((gain(&with(&servo, &on)) - 1.102_657_790_8).abs() < 1e-9);
+    assert!((gain(&with(&stepper, &on)) - 4.0 / std::f64::consts::PI).abs() < 1e-15);
+}
+
+/// A switch that a machine's config has with the others of its crate but that the machine does not model is refused
+/// switched on (`error-effect-not-modelled`), not silently without effect; where the machine models it, not for that
+/// reason. The table's twist is the indexers', the follower's lift-off the disc cam's, the links' bending (and its
+/// reaction) the joint kit's arms'. Refused: on the four other crank-cam machines all four, on the disc cam and the two
+/// indexers the three others, on the mover track and the joint kit's three slides and table the two of the links.
+#[test]
+fn a_switch_the_machine_does_not_model_is_refused_switched_on() {
+    let arms: &[&str] = &["urdf-arm", "scara", "palletiser", "arm-on-track"];
+    let modelled: [(&str, &[&str]); 4] = [
+        ("table_twist", &["geneva-drive", "cam-indexer"]),
+        ("follower_lift_off", &["disc-cam"]),
+        ("link_bending", arms),
+        ("link_bending_reaction", arms),
+    ];
+    let mut refused = 0;
+    for entry in MACHINES.iter().copied() {
+        for (effect, models) in modelled {
+            let key = format!("effects.{effect}");
+            let Ok(on) = entry.config().bool(&key) else { continue };
+            assert!(!on, "{} ships {key} on", entry.id);
+            let error = (entry.build)(&with(&entry.config(), &[&format!("{key} = true")])).err();
+            let ours = error.as_ref().is_some_and(|e| e.key() == "error-effect-not-modelled" && e.detail() == key);
+            assert_eq!(
+                ours,
+                !models.contains(&entry.id),
+                "{} {key}: {:?}",
+                entry.id,
+                error.map(|e| e.detail().to_string())
+            );
+            refused += usize::from(ours);
+        }
+    }
+    assert_eq!(refused, 4 * 4 + 3 * 3 + 2 + 4 * 2);
+}
+
+/// The cycle optimiser's second input shaper on the crane (`second_shaper_frequency`) is a swing the shaper acts on
+/// (`Machine::sway_modes`), not the load's bounce on its rope, which the mode list has as its second mode without the
+/// hook block (8.30 Hz at the start pose, z = 3 m). With the hook block it is the double pendulum's upper swing (2.55
+/// Hz there); without it there is one swing alone, at the first shaper's frequency, and no second shaper to try. A
+/// shaper that follows the pose takes the same list for its second mode (`Controller::shaper_halves`).
+#[test]
+fn the_cranes_second_shaper_is_its_upper_swing_not_the_bounce() {
+    let entry = sim_machines::find("overhead-crane").unwrap();
+    let pose = entry.config().f64s("start.pose").unwrap();
+    for hook in [false, true] {
+        let cfg = with(&entry.config(), &[&format!("effects.hook_block = {hook}")]);
+        let m = (entry.build)(&cfg).unwrap();
+        let second = sim_components::analysis::second_shaper_frequency(m.as_ref(), &pose, &cfg).unwrap();
+        let (modes, sways) = (m.modes(&pose), m.sway_modes(&pose));
+        if hook {
+            assert!(sways.len() == 2 && (sways[1].hz - 2.55).abs() < 0.01, "{sways:?}");
+            assert_eq!(second, Some(sways[1].hz));
+        } else {
+            assert!((modes[1].hz - 8.30).abs() < 0.01 && sways.len() == 1, "{modes:?} {sways:?}");
+            assert_eq!(second, None, "{modes:?}");
+        }
+    }
+}
+
+/// The margin across a gearbox's play (`play_margin`, the describing function's) on the five-bar's tool turn, whose
+/// loop hammers across its 1 arcmin play at 0.08 N m s/rad (650 Hz): there it reads -4.18 dB, at the shipped 0.033
+/// +3.56 dB, both saying the loop hammers from 0.0494 to 0.0497 (the loop gain is kv times the rest). That is the
+/// swing with the rotor's friction faded; the time run with the friction off (`backlash_hammering`, bisected: quiet at
+/// 0.04758, hammering at 0.04797) hammers within 5 % of it, quiet at 0.95 times it and hammering at 1.05 times. With
+/// the friction on it hammers only from 0.078 (the friction still damps a swing of some rad/s at the rotor). The arms'
+/// loops, whose play hardly opens, read 7.46 and 7.68 dB.
+#[test]
+fn the_margin_across_the_play_says_where_the_tool_turn_hammers() {
+    use sim_components::analysis::{backlash_hammering, velocity_loop_margins};
+    let entry = sim_machines::find("parallel-scara").unwrap();
+    let at = |kv: f64, friction: bool| {
+        let mut cfg = entry.config();
+        cfg.set_text(&format!("drive.4.velocity_kp_nm_s_rad = {kv}")).unwrap();
+        if !friction {
+            for key in ["joint_friction", "motor_friction", "gearbox_drag", "motor_stiction", "iron_loss"] {
+                cfg.set_text(&format!("effects.{key} = false")).unwrap();
+            }
+        }
+        cfg
+    };
+    // The least over the poses the cycle stops at (`margin_poses`), as the time run hammers at any of them.
+    let margin = |kv: f64| {
+        let runs = velocity_loop_margins(entry, &at(kv, true), &[]).unwrap();
+        runs.iter().map(|(_, m)| m[3].play_margin_db).fold(f64::INFINITY, f64::min)
+    };
+    let (hammers, shipped) = (margin(0.08), margin(0.033));
+    assert!(hammers < 0.0 && shipped > 0.0, "{hammers} dB at 0.08, {shipped} dB at 0.033");
+    let onset = 0.033 * 10f64.powf(shipped / 20.0);
+    assert!((onset / (0.08 * 10f64.powf(hammers / 20.0)) - 1.0).abs() < 0.01, "{onset}");
+    assert_eq!(backlash_hammering(entry, &at(0.95 * onset, false), 3).unwrap(), None, "{onset}");
+    assert!(backlash_hammering(entry, &at(1.05 * onset, false), 3).unwrap().is_some(), "{onset}");
+}
+
+/// The fit's twist of a train (`Machine::twist_at`) behind a screw whose stiffness follows the nut is the spring's where
+/// the nut is, the rotor's angle over the ratio: the screw axis (fixed-supported, fixed bearing at -0.1 m, root 21.2
+/// mm, E A = 2.06e11 pi 0.0212^2 / 4 = 7.2716e7 N) with 1 N m at the motor and the nut 0.1 and 0.3 m along twists more at
+/// 0.3 by i^2 T 0.2 / (E A) = 314.159^2 0.2 / 7.2716e7 = 2.7146e-4 rad, i = 2 pi / 0.02 m the motor's rad per metre.
+/// The far end's spring (`twist`) has none of it.
+#[test]
+fn the_fits_twist_behind_a_screw_is_the_springs_at_the_nut() {
+    let entry = sim_machines::find("screw-axis").unwrap();
+    let cfg = entry.config();
+    assert!(
+        cfg.bool("effects.screw_stiffness_with_position").unwrap() && cfg.bool("effects.joint_elasticity").unwrap()
+    );
+    let m = (entry.build)(&cfg).unwrap();
+    let twist = |s: f64| {
+        let (mut angle, mut out) = ([0.0], [0.0]);
+        m.inverse(&[s], &mut angle);
+        m.twist_at(&angle, &[1.0], &[0.0], &mut out);
+        (angle[0] / s, out[0])
+    };
+    let ((ratio, near), (_, far)) = (twist(0.1), twist(0.3));
+    assert!((ratio - std::f64::consts::TAU / 0.02).abs() < 1e-9 * ratio, "{ratio}");
+    let ea = 2.06e11 * std::f64::consts::PI * 0.0212f64.powi(2) / 4.0;
+    let by_hand = ratio * ratio * 0.2 / ea;
+    assert!((by_hand - 2.7146e-4).abs() < 1e-8, "{by_hand}");
+    assert!(((far - near) / by_hand - 1.0).abs() < 1e-6, "{} against {by_hand} by hand", far - near);
+    let mut held = [0.0];
+    m.twist(&[1.0], &[0.0], &mut held);
+    assert!(held[0] > far, "the far end's {} against {far} at 0.3 m", held[0]);
+}
+
+/// Behind a screw whose stiffness follows the nut (effects.screw_stiffness_with_position) the gear's dampers are laid out
+/// where the nut is (`Gearbox::at`), as its spring is: the modes' damping ratios are the linearised machine's, its
+/// rotors held, from the eigenvalue nearest each mode's pole (`shapes::eigen_near`) of d(derivatives)/d(state) by
+/// central differences over the states the rotors' angles and speeds do not hang on. The losses that do not linearise
+/// (friction, backlash, lost motion, efficiency, ripple) off; the rotors 1e-3 rad ahead so that each gear is in contact.
+/// With the far end's dampers the tripod's three came out 0.01574, 0.01726, 0.01977 against 0.01946, 0.02134, 0.02444,
+/// the hexapod's 19 % low, the parallel SCARA's quill at z = 0.18 m 0.0216 against 0.0400. The SCARA with its links
+/// bending two-way (`JointMachine`'s coupled modes) too: its stroke's mode at 599 Hz (0.02710, 0.02282 with the far
+/// end's dampers) and the links' pair above it, 680 and 737 Hz, whose ratios come from the damped problem's eigenvalues
+/// (`matrix_modes_at`); taken on each mode's undamped shape they were off by 2 % either way (0.0756 and 0.0844 against
+/// 0.0741 and 0.0860 linearised, the sum kept).
+#[test]
+fn the_modes_are_damped_as_the_linearised_machine_at_the_nut() {
+    let two_way = ["effects.link_bending = true", "effects.link_bending_reaction = true"];
+    for (name, pose, edits) in [
+        ("tripod", None, &[][..]),
+        ("hexapod", None, &[]),
+        ("parallel-scara", Some(vec![0.0, -0.6, 0.18, 0.0]), &[]),
+        ("scara", Some(vec![0.3, 0.2, 0.1, 0.0]), &[]),
+        ("scara", Some(vec![0.3, 0.2, 0.1, 0.0]), &two_way),
+    ] {
+        let entry = sim_machines::find(name).unwrap();
+        let mut cfg = entry.config();
+        let quiet =
+            ["friction", "backlash", "lost_motion", "efficiency", "ripple", "meshing", "cogging", "drag", "thermal"];
+        for (key, _) in entry.config().leaves() {
+            if key.starts_with("effects.") && quiet.iter().any(|q| key.contains(q)) && cfg.bool(&key).is_ok() {
+                cfg.set_text(&format!("{key} = false")).unwrap();
+            }
+        }
+        let cfg = with(&cfg, edits);
+        assert!(cfg.bool("effects.screw_stiffness_with_position").unwrap(), "{name}");
+        let m = (entry.build)(&cfg).unwrap();
+        let pose = pose.unwrap_or_else(|| sim_core::testkit::mid_pose(m.as_ref()));
+        let (mut s, mut torque) = (Vec::new(), vec![0.0; m.motors().len()]);
+        m.equilibrium(&pose, &mut s, &mut torque);
+        let (n, k) = (s.len(), m.motors().len());
+        let motors = |s: &[f64]| {
+            let (mut p, mut v) = (vec![0.0; k], vec![0.0; k]);
+            m.motor_state(s, &mut p, &mut v);
+            (p, v)
+        };
+        let (p0, v0) = motors(&s);
+        let (mut keep, mut rotors) = (Vec::new(), Vec::new());
+        for i in 0..n {
+            let mut t = s.clone();
+            t[i] += 1e-3;
+            let (p, v) = motors(&t);
+            let moved = |a: &[f64], b: &[f64]| a.iter().zip(b).any(|(a, b)| (a - b).abs() > 1e-9);
+            if moved(&p, &p0) {
+                rotors.push(i);
+            } else if !moved(&v, &v0) {
+                keep.push(i);
+            }
+        }
+        rotors.iter().for_each(|&i| s[i] += 1e-3);
+        let size = keep.len();
+        let mut a = vec![0.0; size * size];
+        for (c, &i) in keep.iter().enumerate() {
+            let h = 1e-7 * s[i].abs().max(1e-3);
+            let (mut up, mut down) = (s.clone(), s.clone());
+            (up[i], down[i]) = (s[i] + h, s[i] - h);
+            let (mut fu, mut fd) = (vec![0.0; n], vec![0.0; n]);
+            m.derivatives(&up, &torque, &mut fu);
+            m.derivatives(&down, &torque, &mut fd);
+            keep.iter().enumerate().for_each(|(r, &row)| a[r * size + c] = (fu[row] - fd[row]) / (2.0 * h));
+        }
+        let modes = m.modes(&pose);
+        assert!(!modes.is_empty(), "{name}");
+        for mode in modes {
+            let (w, z) = (std::f64::consts::TAU * mode.hz, mode.damping);
+            let ([re, im], _) =
+                sim_components::shapes::eigen_near(&a, size, [-z * w, w * (1.0 - z * z).sqrt()]).unwrap();
+            let linear = -re / re.hypot(im);
+            assert!(
+                (z / linear - 1.0).abs() < 5e-3,
+                "{name} at {} Hz: damping ratio {z} against {linear} linearised",
+                mode.hz
             );
         }
     }

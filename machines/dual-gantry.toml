@@ -227,6 +227,8 @@ bristle_damping_n_s_m = 1500.0
 preload_n = 200.0
 
 [motor]
+# A made-up motor, no catalogue motor: no row of catalog/ has these values (0.45 N m/A, 1.27 N m at 2.822 A, 9.5 A,
+# 0.3 kg cm2). [parts] names the 1FK2103-4AH here, whose catalogue values replace them when the file is loaded.
 rotor_inertia_kgm2 = 0.3e-4
 friction_coulomb_nm = 0.02
 friction_viscous_nm_s_rad = 1.0e-4
@@ -322,6 +324,11 @@ helix_angle_deg = 19.5283
 efficiency = 0.97
 # Mesh and the rack's mounting, along the travel.
 stiffness_n_m = 1.0e8
+# [estimate] The damping ratio of the mass behind the pinion on the mesh's spring (c = 2 zeta sqrt(k m)): 0.026, the
+# mode a rack and double-pinion feed drive's servo sees on a heavy machine tool (Franco, Beudaert, Erkorkmaz, Effect
+# of Rack and Pinion Feed Drive Control Parameters on Machine Tool Dynamics, J. Manuf. Mater. Process. 4 (2020) 33,
+# Fig. 4b: 35 Hz, 2.6 %), the carriage's rocking with the ram's bend, not the mesh's own: none is published.
+damping_ratio = 0.026
 backlash_m = 0.0
 pinion_inertia_kgm2 = 1.0e-4
 # The pair's permissible feed force, and the application factor K_A for smooth running.
@@ -330,13 +337,15 @@ service_factor = 1.25
 
 # The bridge's yaw (effects.gantry_yaw) [estimate]: the distance between its two X guides, where the racks are; its own
 # inertia about a vertical axis through its centre (a 1.2 m beam of 10 kg, m L^2 / 12 = 1.2 kg m2, and the two drive
-# units of 2 kg at its ends, 2 * 2 * 0.6^2 = 1.44 kg m2); the stiffness of its joints on the X carriages against
-# yawing (the carriages' guide blocks in their moment direction and the bolted joints); its damping. The two drives
+# units of 2 kg at its ends, 2 * 2 * 0.6^2 = 1.44 kg m2, and the Y belt's loop, two strands of 1.0 m with the motor and
+# the far idler 0.5 m either side of the centre, 2 mu L^3 / 12 = 2 * 0.1 * 1.0^3 / 12 = 0.0167 kg m2); the stiffness of
+# its joints on the X carriages against yawing (the carriages' guide blocks in their moment direction and the bolted
+# joints); its damping. The two drives
 # hold the yaw far stiffer: each rack's 2.6e7 N/m at 0.6 m from the centre, 2 * 2.6e7 * 0.36 = 1.9e7 N m/rad.
 # The synchronisation tolerance the check gantry-sync holds the ends to.
 [gantry]
 width_m = 1.2
-inertia_kgm2 = 2.64
+inertia_kgm2 = 2.657
 stiffness_nm_rad = 2.0e5
 damping_nm_s_rad = 50.0
 sync_tolerance_m = 1.0e-4
@@ -443,6 +452,8 @@ current_tn_s = 2.5e-3
 # The DC link voltage. The winding gets sqrt(3/2) times it at most, here 190 V: the model's one winding
 # carries the RMS phase current, and its voltage times that current is the power of all three phases.
 bus_voltage_v = 155.13
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 3.8
 # What the motor can give continuously; the RMS torque of a cycle is judged against it.
 rated_torque_nm = 1.27
@@ -482,6 +493,9 @@ max_speed_rad_s = 420.0
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one
 # moment of inertia per motor (the rigid model's at the start pose) times its acceleration setpoint, as a drive's
 # speed/torque precontrol with the load inertia set (S120 p1498): no gravity, no coupling.
@@ -721,6 +735,7 @@ thermal_feedback.gearbox_viscous_loss_share = [0.25, 0.75]
 thermal_feedback.belt_stiffness_coefficient_1_k = [0.0, 1.0e-3]
 rack_x.efficiency = [0.95, 0.98]
 rack_x.stiffness_n_m = [6.0e7, 1.5e8]
+rack_x.damping_ratio = [0.01, 0.05]
 gearbox.mx1.stiffness_nm_rad = [25000.0, 40000.0]
 gearbox.mx1.damping_nm_s_rad = [2.0, 10.0]
 gearbox.mx2.stiffness_nm_rad = [25000.0, 40000.0]
@@ -826,25 +841,82 @@ id = "pulley_y"
 gearbox = "gearbox_y"
 radius_m = "geometry.pulley_radius_m"
 inertia_kgm2 = "pulley.inertia_kgm2"
-at_m = [1.5, -0.1, 0.06]
+# The Y motor rides on the bridge, its pulley 0.1 m before the Y carriage's y = 0 (the bridge drawn 0.03 m before it).
+body = "bridge"
+at_m = [0.0, -0.07, 0.0]
 pos = [300, 300]
 
-# Y, on the bridge: clamp to motor (0.1 m + y) and motor round the far idler back to the clamp (1.0 m - y).
+# Y, on the bridge, a loop lying flat (plane x-y: its wheels turn about z): the motor and the far idler 0.1 m + stroke +
+# 0.1 m = 1.0 m apart, the clamp to the motor 0.1 m + y, back from the motor round the far idler to the clamp
+# 1.0 m + 0.9 m - y.
 [[machine.section]]
 id = "y1"
 length_m = 0.1
 axes = { y = 1 }
 pulleys = { pulley_y = 1 }
 route = ["y_carriage", "pulley_y"]
+plane = "x-y"
 pos = [450, 240]
 
 [[machine.section]]
 id = "y2"
-length_m = 1.0
+length_m = 1.9
 axes = { y = -1 }
 pulleys = { pulley_y = -1 }
-route = ["pulley_y", "y_carriage"]
+route = ["pulley_y", "far_y", "y_carriage"]
+plane = "x-y"
 pos = [450, 360]
+
+# The free spans, with the belt's speed over ground per axis speed along x, y and z of the 3D view, so that the belts'
+# mass is summed run by run. Each belt is a loop clamped to its carriage: the run from the clamp to the motor and the
+# one from the far idler back to the clamp move with the carriage, the run from the motor to the far idler against it,
+# and a belt on a moving axis moves with that axis too (the Y belt rides on the bridge). The run from the motor to the
+# far idler is as long as the two with the carriage together:
+#   run                     length      speed over ground
+#   clamp to motor          0.1 + y     (vx, vy, 0)
+#   motor to far idler      1.0         (vx, -vy, 0)
+#   far idler to clamp      0.9 - y     (vx, vy, 0)
+# 2T / mu = 2.0 (vx^2 + vy^2) whatever the pose, where the lump on the pulley held 2.0 vy^2: the belt adds its 0.2 kg on
+# X, and no speed terms. The bridge's yaw psi moves the belt at lever e from its centre along x by e psi' + u psi (u its
+# speed along the bridge): the loop lies symmetric about the centre (motor at -0.5, far idler at +0.5 m), so over its
+# strands the integrals of e and of u vanish and with them the terms in vx psi' and vx vy psi, at every y. What is left,
+# mu psi'^2 / 2 times the integral of e^2, is a constant yaw inertia, which [gantry] inertia_kgm2 holds.
+[[machine.span]]
+id = "y_1"
+section = "y1"
+length_m = 0.1
+axes = { y = 1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+
+[[machine.span]]
+id = "y_2"
+section = "y2"
+length_m = 1.0
+velocity_x = { x = 1 }
+velocity_y = { y = -1 }
+
+[[machine.span]]
+id = "y_3"
+section = "y2"
+length_m = 0.9
+axes = { y = -1 }
+velocity_x = { x = 1 }
+velocity_y = { y = 1 }
+
+# The far idler of the Y belt's loop, on the bridge: 0.1 m + stroke + 0.1 m from the motor's pulley (y = 0.9 m of the
+# 3D view, the bridge drawn 0.03 m before y = 0). The belt passes it at vy, the way a positive turn of pulley_y (which takes
+# belt out of y2) moves it: the run from it to the clamp moves at +vy towards it, the run from the motor at -vy away (its
+# spans below). Round it anticlockwise seen from above, as round the pulley (`clockwise` false): the loop runs down the
+# clamp's strand to the motor, round the pulley to the other strand, up it and round this idler back.
+[[machine.idler]]
+id = "far_y"
+speed = { y = 1 }
+radius_m = 0.012
+inertia_kgm2 = 2.0e-6
+friction_nm = 0.002
+body = "bridge"
+at_m = [0.0, 0.93, 0.0]
 
 [[machine.body]]
 id = "bridge"

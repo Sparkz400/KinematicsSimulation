@@ -44,6 +44,8 @@ The variables are the same in both versions; only the type names differ. The val
 
 An FMU of a machine file (`sim-cli fmu --machine-file FILE`) carries the file as `resources/machine.toml` and builds its machine from it when it is instantiated, in both versions; its `machine` parameter is the file's machine id.
 
+Every Real / Float64 variable declares its unit, and the model description lists them as unit definitions. An output carries its signal's unit; `command.setpoint.<axis id>` and `command.target.<axis id>` the axis's (m or rad); `command.torque.<motor id>` and `command.velocity.<motor id>` those of the motor's own `motor.<id>.torque` and `motor.<id>.speed` signals: N m and rad/s on a rotary motor, N and m/s on a linear motor (the linear-motor axis, the mover track), where the motor's torque and speed signals are in N and m/s as well.
+
 The outputs are every signal of the simulation (`Sim::signal_infos`), generated, never listed per machine: a signal the simulator gains (the drives' overload image or a motor's housing temperature, once they are signals) is an output of every FMU exported after that, with no change here.
 
 ### Cycle, moves and paths
@@ -62,7 +64,7 @@ In FMI 3.0 the start value of a String is a `<Start value="..."/>` element, as t
 
 ### Your own controller: torque and velocity mode
 
-An importer's own controller closes the loop through a drive's operating modes, as a real servo drive offers them. Per motor, `command.mode.<motor id>` is `"position"` (the start value: the controller's plan through the drive's position and velocity loops, as above), `"velocity"` (the drive's velocity loop follows `command.velocity.<motor id>`, rad/s at the motor; its position loop is bypassed) or `"torque"` (`command.torque.<motor id>`, N m at the motor, replaces the velocity loop's output; both loops are bypassed). The setpoint is held over the communication step. Either way it still passes the torque filter, notch, torque limit and delay, the current loop, the winding and the DC link, so current, voltage and thermal limits stay true. The motor's angle, speed, current and torque are outputs (`motor.<id>.angle`, `.speed`, `.current`, `.torque`, `.torque_command`). Another mode string gives a warning and keeps the mode.
+An importer's own controller closes the loop through a drive's operating modes, as a real servo drive offers them. Per motor, `command.mode.<motor id>` is `"position"` (the start value: the controller's plan through the drive's position and velocity loops, as above), `"velocity"` (the drive's velocity loop follows `command.velocity.<motor id>`, rad/s at the motor, m/s on a linear motor; its position loop is bypassed) or `"torque"` (`command.torque.<motor id>`, N m at the motor, N on a linear motor, replaces the velocity loop's output; both loops are bypassed). The setpoint is held over the communication step. Either way it still passes the torque filter, notch, torque limit and delay, the current loop, the winding and the DC link, so current, voltage and thermal limits stay true. The motor's angle, speed, current and torque are outputs (`motor.<id>.angle`, `.speed`, `.current`, `.torque`, `.torque_command`). Another mode string gives a warning and keeps the mode.
 
 - A mode changes at the communication point where the input differs from the drive's. A change does not make the torque jump where the drive's own loops take over: the velocity loop's PI integrator is set so that it asks for the torque last asked for (bumpless transfer); in torque mode it is held. Into torque mode the importer's torque acts at once.
 - Outside position mode the drive's position setpoint tracks the measured position (following error 0, as a drive's tracking mode). While any drive is out of position mode, the cycle, move, path and setpoint commands are refused (`error-outside-mode`); out of position mode is refused while a move, cycle or path runs (`error-busy`). A drive coming back to position mode takes the plan with it: the plan stands, at rest, where the motors stand, and at speed the position loop brings the motor back there.
@@ -104,7 +106,7 @@ Limits:
 - A serialized state does not grow with the steps since initialisation; its size is that of the snapshot (the machine's state, the controller with its plan and drives), a few kilobytes, more while a path or cycle with many points is under way.
 - With `config_file` set, setting a state reads that file again. A file changed on disk since the state was taken gives another simulation, or a refusal if its signals differ.
 - A serialized state is checked against the FMU's GUID or instantiation token and its number of variables; a state of another FMU, a cut-off state or one with bytes left over is refused with `fmi2Error` / `fmi3Error`. The snapshot's numbers are written with all their bits, so the next steps are bit for bit those of the saved simulation on the same binary; on a binary built by another compiler or for another platform they follow that binary's floating-point results from the state on.
-- The serialized format: the text `sim-fmi state 3` and a zero byte, the FMU's version (`1.0.0`), the GUID, the mode, the start time, the three triggers and the set values, little-endian, then the outputs at the state and the snapshot as `postcard` 1 writes it (serde's data model, field by field in declaration order). The snapshot's layout follows the simulator's types, so a state is set only by the version of the FMU that saved it: one of another version, and the replayed states of format 2 (14 November 2026) and 1 (before), are refused with `fmi2Error` / `fmi3Error` and a message naming the version or format.
+- The serialized format: the text `sim-fmi state 3` and a zero byte, the FMU's version (`1.1.0`), the GUID, the mode, the start time, the three triggers and the set values, little-endian, then the outputs at the state and the snapshot as `postcard` 1 writes it (serde's data model, field by field in declaration order). The snapshot's layout follows the simulator's types, so a state is set only by the version of the FMU that saved it: one of another version, and the replayed states of format 2 (14 November 2026) and 1 (before), are refused with `fmi2Error` / `fmi3Error` and a message naming the version or format.
 
 ## Log categories
 
@@ -188,7 +190,7 @@ move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEve
 machines/h-bot.toml  (FMI 3.0): 0 validator problems, 90 outputs, 101 rows, worst 4.9e-10 (motor.b.torque_rest): ok
 ```
 
-Later on 14 November 2026 it gained a fifth part: the same target as a path file through `command.path_file` and `command.run_path` with the parameter `time_optimal`, against `sim-cli run --path FILE --time-optimal`; and the serialized state now carries the snapshot (format 3). Same setup:
+Later on 14 November 2026 it gained a fifth part (the logs below are from that date; for the counts of 17 November see the run after them): the same target as a path file through `command.path_file` and `command.run_path` with the parameter `time_optimal`, against `sim-cli run --path FILE --time-optimal`; and the serialized state now carries the snapshot (format 3). Same setup:
 
 ```
 FMU state: restored bit for bit, serialized 3840 bytes and restored bit for bit; directional derivative and finite difference zero
@@ -204,6 +206,30 @@ move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEve
 time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
 machines/h-bot.toml  (FMI 3.0): 0 validator problems, 96 outputs, 101 rows, worst 4.9e-10 (motor.b.torque): ok
 ```
+
+On 17 November 2026, with the FMUs of the final build of that day exported by `sim-cli fmu` (fmpy 0.3.32, numpy 2.5.4, Python 3.14.3; the FMI 2.0 FMUs of `t-gantry`, `single-axis` and `t-gantry` with `exct-30.toml`, the FMI 3.0 FMUs of `machines/h-bot.toml` and `t-gantry`), all five parts pass. The outputs are now 115 for t-gantry, 61 for single-axis, 113 for the EXCT-30 and 110 for h-bot; the inputs 18, 13, 18 and 18 (per axis a setpoint and a target, per motor a mode, a torque and a velocity, and eight more):
+
+```
+FMU state: restored bit for bit, serialized 5246 bytes and restored bit for bit; directional derivative and finite difference zero
+move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEvents message, none with logging off
+time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
+t-gantry  (FMI 2.0): 0 validator problems, 115 outputs, 101 rows, worst 5.0e-10 (axis.x.position): ok
+FMU state: restored bit for bit, serialized 3043 bytes and restored bit for bit; directional derivative and finite difference zero
+move input: worst 4.7e-10 against sim-cli run --move; log categories: one logEvents message, none with logging off
+time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
+single-axis  (FMI 2.0): 0 validator problems, 61 outputs, 101 rows, worst 5.0e-10 (axis.x.position): ok
+FMU state: restored bit for bit, serialized 8569 bytes and restored bit for bit; directional derivative and finite difference zero
+move input: worst 4.6e-10 against sim-cli run --move; log categories: one logEvents message, none with logging off
+time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
+t-gantry crates/machine-t-gantry/exct-30.toml (FMI 2.0): 0 validator problems, 113 outputs, 101 rows, worst 5.0e-10 (axis.z.friction_load_scale): ok
+FMU state: restored bit for bit, serialized 5145 bytes and restored bit for bit; directional derivative and finite difference zero
+move input: worst 4.5e-10 against sim-cli run --move; log categories: one logEvents message, none with logging off
+time-optimal path input: worst 4.5e-10 against sim-cli run --path --time-optimal
+machines/h-bot.toml  (FMI 3.0): 0 validator problems, 110 outputs, 101 rows, worst 4.9e-10 (motor.b.torque_command): ok
+t-gantry  (FMI 3.0): 0 validator problems, 115 outputs, 101 rows, worst 5.0e-10 (axis.x.position): ok
+```
+
+The logs above that date are kept as they were: their output counts are those of the FMUs then.
 
 Not run: the Modelica Association's `fmusim` (Reference-FMUs) and the FMU Compliance Checker. Neither is published on a package registry: `pip index versions` finds no distribution named `fmusim`, `reference-fmus`, `fmi-compliance-checker` or `fmucheck`, and conda is not installed here. Both are distributed as binaries on GitHub releases, which were not downloaded.
 

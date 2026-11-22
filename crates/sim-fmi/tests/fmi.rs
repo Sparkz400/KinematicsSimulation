@@ -609,8 +609,12 @@ fn the_move_and_path_inputs_move_the_machine() {
         start(c);
         let mut expected = Vec::new();
         let mut k = 0;
-        // Until the move is done, and some more.
-        while sim.control.busy() || k < 20 {
+        let position = sim.signal_index(&format!("axis.{}.position", axis.id)).unwrap();
+        let tolerance = 1e-3 * (axis.max - axis.min);
+        // Until the move is done and the axis has settled to the target (a slow position loop, the palletiser's base
+        // turn at Kv 20, settles after its setpoint ends), and some more.
+        let off = |e: &[f64]| e.get(position).is_none_or(|p| (p - target[0]).abs() >= tolerance);
+        while sim.control.busy() || k < 20 || off(&expected) {
             assert!(k < 5000, "{}: the move does not end", entry.id);
             unsafe { assert_eq!(fmi2DoStep(c, k as f64 * interval, interval, 1), fmi2OK, "{} {k}", entry.id) };
             (0..steps).for_each(|_| sim.step());
@@ -618,8 +622,6 @@ fn the_move_and_path_inputs_move_the_machine() {
             assert_eq!(get_reals(c, &signals), expected, "{} at step {k}", entry.id);
             k += 1;
         }
-        let position = sim.signal_index(&format!("axis.{}.position", axis.id)).unwrap();
-        let tolerance = 1e-3 * (axis.max - axis.min);
         assert!(
             (expected[position] - target[0]).abs() < tolerance,
             "{}: {} / {}",

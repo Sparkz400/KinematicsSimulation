@@ -179,11 +179,11 @@ friction_stribeck_rad_s = 2.0
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# [catalogue] 1FK2105-4AF: static torque 5 N m at the stall current 4.65 A (motors_s210.csv), as a motor named in
+# [parts] brings it. With effects.iron_loss the copper loss at it brings the winding to its rated
 # rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
 # starts at kt times it.
-stall_current_a = 2.822
+stall_current_a = 4.65
 [gearbox]
 ratio = 20.0
 efficiency = 0.96
@@ -269,6 +269,8 @@ current_kp_v_a = 40.0
 current_tn_s = 5.0e-3
 # [catalogue] a 400 V line: 540 V DC link (as catalog.rs puts it for a 400 V motor)
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
 peak_torque_nm = 15.0
 rated_torque_nm = 4.6
@@ -301,10 +303,13 @@ load_encoder_step = 1.0e-6
 # [estimate] The highest speed the motor may turn at (its datasheet's maximum speed); here the no-load speed, where the
 # torque-speed curve ends. The time-optimal plan turns the motor up to it along that curve; the verdict motor-speed
 # judges the cycle's peak speed against it. A motor by name sets the catalogue's.
-max_speed_rad_s = 420.0
+max_speed_rad_s = 615.07
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # Torque feedforward: "rigid", the rigid model's inverse dynamics (inertia, gravity, speed terms), or "inertia", one
 # moment of inertia per motor (the rigid model's at the start pose) times its acceleration setpoint, as a drive's
 # speed/torque precontrol with the load inertia set (S120 p1498): no gravity, no coupling.
@@ -540,8 +545,10 @@ damping_ratio_z = 0.02
 inertia_x_kgm2 = 40.0
 inertia_y_kgm2 = 40.0
 inertia_z_kgm2 = 40.0
-# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi.
-mass_kg = 150.0
+# Everything that sways with it, the machine on it included: its natural frequency is sqrt(k / M) / 2 pi. [estimate]
+# The lift's frame and the floor it stands on with the lift: platform, payload and arms are 300 kg of it (150 kg,
+# lighter than they, was refused with effects.base_reaction).
+mass_kg = 600.0
 # Where it tilts about, in the tool pose's frame (x, y, z), m.
 pivot_m = [0.0, 0.0, 0.0]
 # 0: rigid in that direction (no state).

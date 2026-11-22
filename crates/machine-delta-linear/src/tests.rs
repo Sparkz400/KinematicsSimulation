@@ -218,6 +218,23 @@ fn the_feedforward_gives_the_asked_acceleration() {
     assert!((inertia * r - 0.63355).abs() < 1e-5, "{}", inertia * r);
 }
 
+/// At 3 m/s along y and no tool acceleration the carriages still accelerate (h'' = -J^-1 J_x^-1 w): the carriage part of
+/// T1 - T2 = m_c h'' + m_nt J^T p'' - Q_g changes against rest by m_c h'' = (-12.182, -17.920, -17.920) N at (0.3, 0,
+/// -1.17) (by hand: h'' a second difference over 0.1 ms of the heights h(p + v t) from the rods' constraint
+/// |p - c_i - h_i e_z| = L, times m_c = 1.475 kg); `rigid_tensions` without the speed misses it.
+#[test]
+fn the_rigid_tensions_have_the_speed_term_of_the_carriage_acceleration() {
+    let d = delta(&[]);
+    let (p, v) = ([0.3, 0.0, -1.17], [0.0, 3.0, 0.0]);
+    let (mut moving, mut rest) = (Vec::new(), Vec::new());
+    d.rigid_tensions_moving(&p, &v, &[0.0; 3], &mut moving);
+    d.rigid_tensions(&p, &[0.0; 3], &mut rest);
+    for (k, want) in [-12.182, -17.920, -17.920].into_iter().enumerate() {
+        let diff = (moving[2 * k] - moving[2 * k + 1]) - (rest[2 * k] - rest[2 * k + 1]);
+        close(diff, want, 1e-4, "m_c h'' in T1 - T2");
+    }
+}
+
 /// The default cycle passes every verdict, and takes the D3's hand-calculated 720 profile cycles: the same Adept cycle
 /// 25/305/25 mm at the same 3 m/s, 50 m/s^2 and 2500 m/s^3 (see the D3's test).
 #[test]
@@ -423,8 +440,14 @@ fn the_guide_load_over_the_motion_adds_the_rods_inertial_pull() {
 fn the_guides_warm_with_their_loss() {
     let parts = delta(&[]).thermal_parts();
     let named: Vec<_> = parts.iter().map(|p| (p.id, p.kind, p.scene_part, p.scene_index)).collect();
-    let guides =
-        [("guide_1", "guide", "carriage", 0), ("guide_2", "guide", "carriage", 1), ("guide_3", "guide", "carriage", 2)];
+    let guides = [
+        ("guide_1", "guide", "carriage", 0),
+        ("guide_2", "guide", "carriage", 1),
+        ("guide_3", "guide", "carriage", 2),
+        ("belt_1", "belt", "belt", 0),
+        ("belt_2", "belt", "belt", 7),
+        ("belt_3", "belt", "belt", 14),
+    ];
     assert_eq!(named, guides);
     let mut cfg = ENTRY.config();
     for edit in [
@@ -436,7 +459,7 @@ fn the_guides_warm_with_their_loss() {
         cfg.set_text(edit).unwrap();
     }
     let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
-    assert_eq!(sim.heated.len(), 3);
+    assert_eq!(sim.heated.len(), 6);
     sim.command(sim_components::control::Command::MoveTo(vec![0.3, 0.0, -1.15])).unwrap();
     let ids: Vec<[usize; 4]> = (1..=3)
         .map(|k| {
@@ -509,5 +532,209 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
         assert!((ff[k] - expected).abs() < 1e-4 * expected.abs(), "motor {k}: feedforward {ff:?}, by hand {expected}");
         assert!(with[k].abs() < 0.02 * expected.abs(), "motor {k}: the integrator carries {with:?}");
         assert!((without[k] - expected).abs() < 0.02 * expected.abs(), "motor {k}: without {without:?}");
+    }
+}
+
+/// On an inclined column the carriage's weight m_c g sin(alpha) also loads the rail: the plan's guide load at rest is
+/// that of `guide_loads`, the part of (lambda u - m_c g e_z) at right angles to the column, not |lambda| times the reach.
+/// At (0, 0, -1.17) with the default masses that is 11.414 N at +20 degrees and 2.762 N at -15 (the reach alone: 6.467
+/// and 0.982 N). By hand: lambda from the plate's balance sum(-lambda_i u_i) = m_nt g e_z, the rods u_i from the
+/// constraint along the inclined columns, then |f - (f . d_i) d_i| with f = lambda_i u_i - m_c g e_z: 11.41388, 2.76205 N.
+#[test]
+fn the_plans_guide_load_at_rest_holds_the_carriages_weight_on_an_inclined_column() {
+    for (deg, expected) in [(20.0, 11.41388), (-15.0, 2.76205)] {
+        let m = delta(&["effects.belt_stretch = false", &format!("geometry.column_incline_deg = {deg}")]);
+        let pose = [0.0, 0.0, -1.17];
+        let h = m.legs.inverse(pose).unwrap();
+        let (rest, mut loads) = (m.guide_loads(h, [0.0; 3]), Vec::new());
+        m.rigid_guide_loads(&pose, &[0.0; 3], &mut loads);
+        for k in 0..3 {
+            close(loads[k][0], rest[k], 1e-9, "load at rest as guide_loads");
+            close(loads[k][0], expected, 1e-5, "load at rest by hand");
+            close(loads[k][1], 0.0, 1e-9, "no moving part at rest");
+        }
+    }
+}
+
+/// The carriages move along their (inclined) columns: with p = (0.1, -0.05, -1.17), p' = (1, 0.5, 0.8) and 20 degrees
+/// the linear momentum is m_nt p' + m_c sum h'_i d_i = (1.875, 0.856, 5.693) N s (the carriages at the column radius
+/// moving straight up gave (2.325, 1.163, 5.939)); by hand h' by central differences of the heights from the rods'
+/// constraint along the inclined columns: (1.87530, 0.85615, 5.69276).
+#[test]
+fn the_carriages_carry_momentum_along_their_columns() {
+    let m = delta(&["effects.belt_stretch = false", "geometry.column_incline_deg = 20.0"]);
+    let (p, v) = ([0.1, -0.05, -1.17], [1.0, 0.5, 0.8]);
+    let (mut state, mut hold) = (Vec::new(), [0.0; 3]);
+    m.equilibrium(&p, &mut state, &mut hold);
+    m.set_tool_velocity(&mut state, &v);
+    let f = m.frame_momentum(&state).unwrap();
+    for (k, by_hand) in [1.87530, 0.85615, 5.69276].into_iter().enumerate() {
+        close(f.linear[k], by_hand, 1e-5, "linear momentum");
+    }
+}
+
+/// The guide's moments from joints standing off the slide: a joint a = 0.05 m along the column from the centre gives
+/// M = a d cross f with f the pull on the carriage, so Mx = M.d = 0 and |M| = a F (F the pull's part across the
+/// column; the weight acts at the centre). With the ratings My = Mz = 20 N m the equivalent load is
+/// P = F + F_max (|My| + |Mz|) / 20, F_max = 3050 N. Without the ratings the load is F as before.
+#[test]
+fn the_guides_moments_from_the_joints_offset_add_to_its_equivalent_load() {
+    let plain = delta(&[]);
+    // The moment ratings are keys a config file may add (`analysis::RATINGS_BEYOND_DEFAULT`).
+    let rated = "\n[ratings]\nguide_moment_y_nm = 20.0\nguide_moment_z_nm = 20.0\n";
+    let mut cfg =
+        sim_components::load_config(&ENTRY, &ENTRY.default_config.replacen("\n[ratings]\n", rated, 1)).unwrap();
+    cfg.set_text("geometry.rod_joint_along_m = 0.05").unwrap();
+    let m = LinearDelta::new(&cfg).unwrap();
+    let h = plain.legs.inverse([0.1, 0.05, -1.0]).unwrap();
+    let across = plain.guide_loads(h, [0.0; 3]);
+    let p = m.pose(h).0;
+    let pull = m.legs.rod_pull(h, p, m.m_nt(), m.g, [0.0; 3]).unwrap();
+    let parts = m.guide_loads_at(h, p, [0.0; 3]);
+    for k in 0..3 {
+        let (load, moments) = parts[k];
+        let (u, d) = (sub(p, m.legs.joint(k, h[k])), m.legs.dir[k]);
+        let rod = u.map(|x| pull[k] * x);
+        let along = dot(rod, d);
+        let rod_across = norm(std::array::from_fn::<f64, 3, _>(|i| rod[i] - along * d[i]));
+        assert!(moments[0].abs() < 1e-9, "Mx {moments:?}");
+        close(norm(moments), 0.05 * rod_across, 1e-9, "|M| = a F");
+        close(load, across[k] + 3050.0 * (moments[1].abs() + moments[2].abs()) / 20.0, 1e-12, "equivalent load");
+        assert!(load > across[k], "moments add");
+    }
+    assert_eq!(delta(&["geometry.rod_joint_along_m = 0.05"]).guide_loads(h, [0.0; 3]), across);
+}
+
+/// The friction's load factor under motion is the fixed point of scale -> acceleration -> load -> scale: put back
+/// into the model's acceleration (`carriage_acceleration_with`), it gives the load that gives it back; and it is not the factor at rest, the plate accelerating at
+/// (8, 3, 10) m/s^2 (the load along one column falls, along another it rises). Rigid and elastic, with the guides
+/// sliding at 0.2 m/s (the bristles at their steady deflection) so that the friction acts. Without load-dependent
+/// friction every factor is 1.
+#[test]
+fn the_frictions_load_factor_is_the_fixed_point_with_the_acceleration() {
+    for stretch in [false, true] {
+        let d = delta(&[
+            "effects.motor_friction = false",
+            "effects.torque_ripple = false",
+            &format!("effects.belt_stretch = {stretch}"),
+        ]);
+        let p = [0.0, 0.0, -1.17];
+        let (mut state, mut hold, mut torque) = (Vec::new(), [0.0; 3], [0.0; 3]);
+        d.equilibrium(&p, &mut state, &mut hold);
+        d.set_tool_velocity(&mut state, &[0.0, 0.0, 0.2]);
+        let (h, v) = d.heights(&state);
+        let at = if stretch { 18 } else { 6 };
+        for k in 0..3 {
+            state[at + k] = d.friction[k].level(v[k], d.load_scales(h)[k]) / d.friction[k].sigma0 * v[k].signum();
+        }
+        d.feedforward_torque(&p, &[8.0, 3.0, 10.0], &mut torque);
+        let scales = d.scales_at(&state, &torque);
+        let plate = d.plate_acceleration(&state, d.carriage_acceleration_with(&state, &torque, scales));
+        let loads = d.guide_loads(h, plate);
+        let rest = d.load_scales(h);
+        for k in 0..3 {
+            close(scales[k], d.friction[k].load_scale(loads[k], 0.0), 1e-12, "fixed point");
+            assert!((scales[k] - rest[k]).abs() > 1e-4, "stretch {stretch}: {scales:?} at rest {rest:?}");
+        }
+        let plain = delta(&["effects.load_dependent_friction = false", &format!("effects.belt_stretch = {stretch}")]);
+        assert_eq!(plain.scales_at(&state, &torque), [1.0; 3]);
+    }
+}
+
+/// A belt is a thermal part of the loop's own size: the loop is 4 span + 2 stroke = 0.4 + 1.4 = 1.8 m long (the sections'
+/// geometric length less the teeth's), 19.3 mm wide, both sides in the air: A = 2 * 0.0193 * 1.8 = 0.06948 m^2, at
+/// 15 W/(m^2 K) R = 1 / 1.0422 = 0.959509 K/W; 0.07 kg/m * 1.8 m = 0.126 kg of 1500 J/(kg K) is C = 189 J/K, so tau = C R
+/// = 181.347 s. The belt warms with its damping loss, power.belt_k, as the guides do (rise += (1 - exp(-dt / tau)) (R P -
+/// rise)), so under a steady loss P it settles at R P; here with the specific heat at 1.5 J/(kg K) (tau 0.1813 s) so that
+/// a move of the carriages follows it. Without its pulleys (effects.belt_pulley_conduction off).
+#[test]
+fn a_belt_warms_with_its_damping_loss_through_its_surface() {
+    let air = "effects.belt_pulley_conduction = false";
+    let (r, tau) = delta(&[air]).thermal_values("belt_2").unwrap();
+    close(r, 1.0 / (15.0 * 2.0 * 0.0193 * 1.8), 1e-12, "resistance");
+    close(r, 0.959509, 1e-6, "resistance by hand");
+    close(tau, 0.07 * 1.8 * 1500.0 * r, 1e-12, "time constant");
+    close(tau, 181.347, 1e-5, "time constant by hand");
+    assert!(delta(&[]).thermal_values("guide_1").is_none());
+    // Each loop is drawn as seven strips (the belt parts 0, 7 and 14 are the loops' first), none of zero length: the
+    // pulleys stand `span_min_m` beyond the stops. At the working range's top and bottom.
+    let d = delta(&[]);
+    for z in [-1.12, -1.22] {
+        let (mut state, mut torque, mut scene) = (Vec::new(), [0.0; 3], sim_core::Scene::default());
+        d.equilibrium(&[0.0, 0.0, z], &mut state, &mut torque);
+        d.scene(&state, &mut scene);
+        assert_eq!(scene.parts.iter().filter(|p| p.id == "belt").count(), 21, "at z = {z}");
+    }
+    let mut cfg = ENTRY.config();
+    for edit in
+        ["effects.part_heating = true", "belt.specific_heat_j_kg_k = 1.5", "start.pose = [-0.3, 0.0, -1.15]", air]
+    {
+        cfg.set_text(edit).unwrap();
+    }
+    let mut sim = Sim::new(&ENTRY, &cfg).unwrap();
+    let fast = 0.07 * 1.8 * 1.5 * r;
+    close(sim.heated[4].resistance, r, 1e-12, "resistance in the model");
+    close(sim.heated[4].time_constant, fast, 1e-12, "time constant in the model");
+    sim.command(sim_components::control::Command::MoveTo(vec![0.3, 0.0, -1.15])).unwrap();
+    let power = sim.signal_index("power.belt_2").unwrap();
+    let (mut row, mut by_hand) = (Vec::new(), 0.0);
+    let lag = 1.0 - (-sim.dt / fast).exp();
+    while sim.control.busy() {
+        sim.step();
+        row.clear();
+        sim.sample(&mut row);
+        by_hand += lag * (r * row[power] - by_hand);
+    }
+    assert!(by_hand > 0.0, "{by_hand} K");
+    close(sim.heated[4].rise, by_hand, 1e-9, "the belt's rise");
+}
+
+/// With effects.belt_pulley_conduction (as shipped) the belt also gives heat to its two pulleys (radius 14.324 mm) through
+/// the half wrap it lies on each, 2 pi r w = 2 pi 0.014324 0.0193 = 1.737046e-3 m^2, from its middle through half of its
+/// 3 mm at 0.2 W/(m K): 133.33 W/(m^2 K), G = 0.231601 W/K beside the air's 1.0422 W/K, 22.2 % of it. R = 1 / 1.273801 =
+/// 0.785052 K/W, tau = 189 J/K R = 148.375 s: the belt settles 18.2 % cooler under the same loss.
+#[test]
+fn a_belt_gives_heat_to_its_pulleys_through_the_wrap() {
+    let (r, tau) = delta(&[]).thermal_values("belt_2").unwrap();
+    let pulleys = std::f64::consts::TAU * 0.014324 * 0.0193 * 0.2 / 1.5e-3;
+    close(pulleys, 0.231601, 1e-5, "the pulleys' conductance by hand");
+    close(r, 1.0 / (15.0 * 2.0 * 0.0193 * 1.8 + pulleys), 1e-12, "resistance");
+    close(r, 0.785052, 1e-5, "resistance by hand");
+    close(tau, 189.0 * r, 1e-12, "time constant");
+    close(tau, 148.375, 1e-5, "time constant by hand");
+    let thicker = delta(&["belt.thickness_m = 6.0e-3"]).thermal_values("belt_2").unwrap().0;
+    close(thicker, 1.0 / (1.0422 + pulleys / 2.0), 1e-5, "half the conductance through twice the thickness");
+}
+
+/// By hand: at a 20 degree incline the cycle's segment[2] target (-0.1525, 0, -1.13) lies q = (-0.6025, 0, -1.13) from
+/// column 0's joint line (through (0.45, 0, 0) along d = (-sin 20, 0, cos 20)): q . d = 0.206067 - 1.061853 =
+/// -0.855786, so the rod reaches sqrt(1.639906 - 0.732370) = 0.952648 m across the column, beyond l sin 60 = 0.952628:
+/// it would stand at 60.002 degrees, over the 60 its joints allow. The config is refused with the segment and that
+/// reason, not as a value out of range.
+#[test]
+fn a_cycle_target_beyond_the_rods_angle_is_refused_with_the_segment_and_the_reason() {
+    let (s, c) = 20f64.to_radians().sin_cos();
+    let q = [-0.1525 - 0.45, -1.13];
+    let along = q[0] * -s + q[1] * c;
+    let reach = (q[0] * q[0] + q[1] * q[1] - along * along).sqrt();
+    assert!((along + 0.855786).abs() < 1e-6 && (reach - 0.952648).abs() < 1e-6, "{along} {reach}");
+    assert!(reach > 1.1 * 60f64.to_radians().sin());
+    let mut cfg = ENTRY.config();
+    cfg.set_text("geometry.column_incline_deg = 20.0").unwrap();
+    let refused = Sim::new(&ENTRY, &cfg).err().expect("refused");
+    assert_eq!((refused.key(), refused.detail()), ("error-delta-linear-rod-angle", "cycle.segment[2]"));
+}
+
+/// The suite's pulse takes the carriages into their stops (with the file's damper on, 5000 N s/m, it takes 15 to 17.6
+/// mJ of the 21 to 25 mJ put in). Loss-free, on the stops' springs alone, the energy holds to 1e-8 of it: 2e-11 to 9e-11
+/// J, the steps that meet a stop cut 16 times finer (`mech::STOP_SUBSTEPS`). Before 22 November 4e-9 to 3.1e-8 J, in
+/// steps at each contact.
+#[test]
+fn the_carriages_meet_their_stops_with_the_energy_at_the_integrators_level() {
+    for cfg in super::suite_configs() {
+        let m = (super::ENTRY.build)(&cfg).unwrap();
+        let (drift, injected) = sim_core::testkit::energy_drift(m.as_ref());
+        println!("{drift} J of {injected} J");
+        assert!(injected > 0.0 && drift < 1e-8 * injected, "{drift} J of {injected} J");
     }
 }

@@ -4505,7 +4505,7 @@ dependencies = [
 
 [[package]]
 name = "machine-cable-robot"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4513,7 +4513,7 @@ dependencies = [
 
 [[package]]
 name = "machine-crank-cam"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4521,7 +4521,7 @@ dependencies = [
 
 [[package]]
 name = "machine-delta-d2"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4530,7 +4530,7 @@ dependencies = [
 
 [[package]]
 name = "machine-delta-d3"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4539,7 +4539,7 @@ dependencies = [
 
 [[package]]
 name = "machine-delta-d4"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "machine-delta-d3",
  "sim-components",
@@ -4549,7 +4549,7 @@ dependencies = [
 
 [[package]]
 name = "machine-delta-h4"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4557,7 +4557,7 @@ dependencies = [
 
 [[package]]
 name = "machine-delta-linear"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4565,7 +4565,7 @@ dependencies = [
 
 [[package]]
 name = "machine-hexapod"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4573,7 +4573,7 @@ dependencies = [
 
 [[package]]
 name = "machine-hexapod-rotary"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4581,7 +4581,7 @@ dependencies = [
 
 [[package]]
 name = "machine-joint-kit"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "proptest",
  "sim-components",
@@ -4590,7 +4590,7 @@ dependencies = [
 
 [[package]]
 name = "machine-mover-track"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4598,7 +4598,7 @@ dependencies = [
 
 [[package]]
 name = "machine-overhead-crane"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4606,7 +4606,7 @@ dependencies = [
 
 [[package]]
 name = "machine-parallel-scara"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4614,7 +4614,7 @@ dependencies = [
 
 [[package]]
 name = "machine-single-axis"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4622,7 +4622,7 @@ dependencies = [
 
 [[package]]
 name = "machine-t-gantry"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4630,7 +4630,7 @@ dependencies = [
 
 [[package]]
 name = "machine-tripod"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4638,7 +4638,7 @@ dependencies = [
 
 [[package]]
 name = "machine-wafer-handler"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -4646,7 +4646,7 @@ dependencies = [
 
 [[package]]
 name = "machine-winder"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -6356,7 +6356,7 @@ dependencies = [
 
 [[package]]
 name = "sim-app"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
@@ -6371,7 +6371,7 @@ dependencies = [
 
 [[package]]
 name = "sim-cli"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -6381,7 +6381,7 @@ dependencies = [
 
 [[package]]
 name = "sim-components"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "proptest",
  "serde",
@@ -6391,7 +6391,7 @@ dependencies = [
 
 [[package]]
 name = "sim-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "proptest",
  "serde",
@@ -6400,7 +6400,7 @@ dependencies = [
 
 [[package]]
 name = "sim-fmi"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "postcard",
  "proptest",
@@ -6411,7 +6411,7 @@ dependencies = [
 
 [[package]]
 name = "sim-machines"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "criterion",
  "machine-cable-robot",
@@ -6442,7 +6442,7 @@ dependencies = [
 
 [[package]]
 name = "sim-netlist"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "sim-components",
  "sim-core",
@@ -6451,7 +6451,7 @@ dependencies = [
 
 [[package]]
 name = "sim-opcua"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-opcua",
  "async-trait",
@@ -6463,7 +6463,7 @@ dependencies = [
 
 [[package]]
 name = "sim-py"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "numpy",
  "pyo3",
@@ -6476,7 +6476,7 @@ dependencies = [
 
 [[package]]
 name = "sim-wasm"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "serde_json",
  "sim-components",

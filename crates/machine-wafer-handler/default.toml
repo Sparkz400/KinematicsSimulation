@@ -38,7 +38,8 @@ motor_encoder = ""
 [effects]
 gravity = true
 payload = true
-# The gearboxes twist under load (stiffness, damping, backlash): motor and link are two bodies per joint. Off, the
+# The gearboxes twist under load (stiffness, damping, backlash), the Z stroke's coupling and screw too: motor and link
+# are two bodies per joint. Off, the
 # machine is the rigid reference model, in which the motor turns with the link times the ratio.
 joint_elasticity = true
 # The bands in the links stretch under load ([elbow_band], [wrist_band]): the forearm and the effector are bodies of
@@ -54,6 +55,10 @@ gearbox_efficiency = true
 # formula) in place of screw.efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart.
 # Off in the shipped configs: their sizing was done with screw.efficiency.
 screw_lead_efficiency = false
+# The screw's axial stiffness follows its nut: the shaft between the fixed bearing and the nut, E A / a (held at both
+# ends a (L - a) / (E A L)), with the nut a from the bearing at its travel (screw.fixed_bearing_at_m), in place of the
+# far end's for the whole stroke.
+screw_stiffness_with_position = true
 torque_ripple = true
 # Stops at both ends of the column's turn, the upper arm's angle ([joint], [joint.2]) and the Z stroke.
 hard_stops = true
@@ -346,12 +351,20 @@ nominal_diameter_m = 0.016
 root_diameter_m = 0.0135
 length_m = 0.4
 mounting = "fixed-free"
+# [estimate] The fixed bearing at the motor below the stroke, 0.05 m under the nut at the stroke's bottom (z = 0):
+# the run-out of the 0.4 m shaft beyond the 0.3 m stroke, at the motor's end. With effects.screw_stiffness_with_position.
+fixed_bearing_at_m = -0.05
 efficiency = 0.9
 # With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
 # ball screws, not this screw's.
 friction_coefficient = 0.003
 nut_stiffness_n_m = 2.0e8
 bearing_stiffness_n_m = 4.0e8
+# [estimate] The damping ratio of the mass behind the nut on the screw's axial spring (nut, bearings, guides; the
+# damper across the screw's spring alone, c = 2 zeta sqrt(k m)): 0.04, the axial mode of a ball screw drive
+# identified by Hosseinkhani (Control Methods for Improving Tracking Accuracy and Disturbance Rejection in Ball
+# Screw Feed Drives, PhD thesis, University of Waterloo, 2013, Table 3.5: 865 rad/s, zeta 0.04).
+axial_damping_ratio = 0.04
 preload_n = 200.0
 dynamic_load_rating_n = 7000.0
 static_load_rating_n = 12000.0
@@ -380,12 +393,17 @@ friction_feedforward_speed_rad_s = [10.0]
 friction_feedforward_torque_nm = [0.0]
 friction_feedforward_model = "characteristic"
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 load_encoder_step = 1.0e-6
 # [catalogue] the 1FK2103-2AH at 400 V (D 32): 1.95 N m maximum, 0.59 N m rated at 4500 r/min; no-load speed
 # sqrt(3/2) * 540 V / 0.6037736 N m/A. The current loop's gain for the winding's 45 mH.
 current_kp_v_a = 180.0
 current_tn_s = 5.0e-3
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 peak_torque_nm = 1.95
 rated_torque_nm = 0.59
 rated_speed_rad_s = 471.239
@@ -400,8 +418,9 @@ encoder_noise_counts = 4.0
 current_noise_a = 0.01
 noise_seed = 1
 braking_module = false
-# [estimate] The highest speed the motor may turn at: its no-load speed.
-max_speed_rad_s = 1095.38
+# [catalogue] The highest speed the motor may turn at: the 1FK2103-2AH's 8000 r/min (motors_s210.csv), below its
+# no-load speed.
+max_speed_rad_s = 837.758
 blocked_speed_rad_s = 12.57
 blocked_time_s = 3.0
 # effects.drive_monitoring: how a drive stops when the drives trip, and what trips it. [estimate] as commissioned.
@@ -415,9 +434,13 @@ standstill_time_s = 1.0
 standstill_window_rad = 0.1
 torque_band = 0.0
 
-# The Z motor's velocity loop. [estimate]
+# The Z motor's velocity loop. [estimate] tuned with `sim-cli margins wafer-handler` against the column's axial mode on
+# the screw (`screw.axial_damping_ratio`, the loop's peak at 475 Hz): 69.1 degrees and 14.90 dB, with friction off 67.5
+# degrees and 10.85 dB; across the bounds (--bands) at least 58.3 degrees and 14.21 dB, with friction off 65.7 degrees
+# and 9.28 dB. Without friction 0.0443 left 21.4 degrees and 3.87 dB (the mode through 0 dB at 474 Hz), 0.025 at
+# axial_damping_ratio 0.02 30.4 degrees, and a speed filter of 1 ms 1.54 dB there.
 [drive.3]
-velocity_kp_nm_s_rad = 0.0443
+velocity_kp_nm_s_rad = 0.02
 
 # What the parts allow. `sim-cli verdicts` judges a cycle against these; a rating that is left out is not judged.
 [ratings]

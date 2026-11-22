@@ -46,6 +46,25 @@ pub fn advance(machine: &dyn Machine, rk: &mut Rk4, state: &mut [f64], torque: &
     }
 }
 
+/// The most parts a base step's sub-steps are cut into for the machine (`Machine::substeps_wanted`): a bound on what a
+/// step can cost.
+pub const MOST_CUTS: u32 = 256;
+
+/// `advance` with each sub-step cut as the machine asks from the step's start (`Machine::substeps_wanted`, at most
+/// `MOST_CUTS`); the cuts it took.
+pub fn advance_refined(
+    machine: &dyn Machine,
+    rk: &mut Rk4,
+    state: &mut [f64],
+    torque: &[f64],
+    dt: f64,
+    substeps: u32,
+) -> u32 {
+    let cuts = machine.substeps_wanted(state, torque, dt, substeps).clamp(1, MOST_CUTS);
+    advance(machine, rk, state, torque, dt, substeps * cuts);
+    cuts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

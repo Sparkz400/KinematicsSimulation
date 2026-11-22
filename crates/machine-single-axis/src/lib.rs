@@ -110,6 +110,8 @@ pub struct SingleAxis {
     /// Force on the carriage towards +x while the cycle dwells.
     process: f64,
     dwelling: bool,
+    /// An obstacle's push on the carriage towards +x (`Machine::set_tool_force`), held until changed.
+    push: f64,
     brake: HoldingBrake,
     brake_engaged: bool,
     payload_attached: bool,
@@ -184,6 +186,7 @@ impl SingleAxis {
             chain: CableChain::from_config(cfg)?,
             process: if cfg.bool("effects.process_force")? { process } else { 0.0 },
             dwelling: false,
+            push: 0.0,
             brake: HoldingBrake::from_config(cfg, j_rotor)?,
             brake_engaged: false,
             payload_attached: true,
@@ -239,6 +242,12 @@ impl SingleAxis {
         let (stroke, s, teeth) = (self.axes[0].max, self.span_min, self.belt.tooth_length);
         [s + x + teeth, 3.0 * s + 2.0 * stroke - x + teeth]
     }
+    /// Unstretched belt per section at rest at x: the carriage's balance T2 - T1 = its weight along the axis less what
+    /// pushes it at rest (the process force while dwelling); the belt total fixes the level.
+    fn rest_material(&self, x: f64) -> Vec<f64> {
+        let weight = (self.m() + self.chain.mass(x).0) * self.g_along - self.extra_force(x, 0.0);
+        self.belt.static_material(&self.geo(x), &[0.0, weight], self.mat0.iter().sum())
+    }
     /// Unstretched belt per section of the elastic state `s`: the pulley at angle s[1] has fed in r_mat a, and with
     /// effects.belt_tooth_jump the belt has slipped over it by u, which is r_mat / r u of material.
     fn mat(&self, s: &[f64]) -> [f64; 2] {
@@ -281,7 +290,10 @@ impl SingleAxis {
         out[..3].copy_from_slice(&s[3..6]);
         // The chain's moving run has inertia and, on an incline, weight like the carriage; it does not load the guide.
         let m = self.m() + self.chain.mass(s[0]).0;
-        out[3] = (sec[1].tension - sec[0].tension - ff + self.stop_force(s[0], s[3]) + self.extra_force(s[0], s[3]))
+        out[3] = (sec[1].tension - sec[0].tension - ff
+            + self.stop_force(s[0], s[3])
+            + self.extra_force(s[0], s[3])
+            + self.push)
             / m
             - self.g_along;
         let belt_torque = self.r_mat * (sec[0].material - sec[1].material);
@@ -312,12 +324,16 @@ impl SingleAxis {
         let drive = ratio * (self.ripple.apply(torque[0], angle) - self.shaft.torque(speed) - brake) / r;
         let (ff, ds) = self.friction.eval(s[1], s[2], self.load_scale());
         let m = self.m() + self.chain.mass(s[0]).0;
-        let load =
-            self.mesh.force(s[0]) - ff - m * self.g_along + self.stop_force(s[0], s[1]) + self.extra_force(s[0], s[1]);
+        let load = self.mesh.force(s[0]) - ff - m * self.g_along
+            + self.stop_force(s[0], s[1])
+            + self.extra_force(s[0], s[1])
+            + self.push;
         let rotor = ratio * ratio * self.j_rotor / (r * r);
         let solve = |loss: f64| (loss * drive + load) / (m + self.j_pulley / (r * r) + loss * rotor);
-        let through_gear = drive - rotor * solve(1.0);
-        let loss = self.gearbox.loss_factor(through_gear * r, s[1] / r);
+        // The loss factor of the force through the gearbox, at its fixed point (`mech::settled_loss`).
+        let [loss] = sim_components::mech::settled_loss([1.0], |&[loss]| {
+            [self.gearbox.loss_factor((drive - rotor * solve(loss)) * r, s[1] / r)]
+        });
         let a = solve(loss);
         // The gearbox output carries what the rotor's own acceleration and the losses leave of the motor's torque.
         (a, ff, ds, loss * (drive - rotor * a) * r, (drive - rotor * a) * r)
@@ -535,6 +551,7 @@ impl Machine for SingleAxis {
             mass: self.m() + chain,
             first_moment: [self.m() * x + chain_moment, 0.0, 0.0],
             gravity: [-self.g_along, 0.0, -self.g_normal],
+            // An obstacle's push is not in it: a compliant base takes it through the tool's shift (`base::Based`).
             external: [if self.dwelling { self.process } else { 0.0 }, 0.0, 0.0],
             external_at: [x, 0.0, 0.0],
         })
@@ -573,9 +590,7 @@ impl Machine for SingleAxis {
             torque[0] = self.ripple.invert(shaft, ratio * x / r);
             return;
         }
-        // Carriage balance: T2 - T1 = m g sin(incline). The belt total fixes the level.
-        let geo = self.geo(x);
-        let mat = self.belt.static_material(&geo, &[0.0, weight], self.mat0.iter().sum());
+        let (geo, mat) = (self.geo(x), self.rest_material(x));
         let a = (mat[0] - self.mat0[0]) / self.r_mat;
         let m: [f64; 2] = std::array::from_fn(|i| self.belt.section(geo[i], mat[i], 0.0, 0.0).material);
         let gear = -self.r_mat * (m[0] - m[1]) - r * self.mesh.force(r * a);
@@ -637,12 +652,15 @@ impl Machine for SingleAxis {
 
     /// The rigid model at a = 0: shaft friction (with the gearbox's drag) at the rotor's speed i v / r, and the guide's
     /// steady sliding force and the cable chain's drag at v, through the pulley and the gearbox as `rigid_solve` takes
-    /// them: r / (i loss) (F_guide + F_chain).
-    fn steady_friction(&self, _pos: &[f64], vel: &[f64], out: &mut [f64]) {
+    /// them: r / (i loss) (F + W) - r W / i, F the guide and chain force and W the weight along the guide (the rigid
+    /// feedforward carries r W / i itself). The loss factor is the one of the whole torque the gearbox passes, as in
+    /// `rigid_solve`, so the weight's own loss is in it too.
+    fn steady_friction(&self, pos: &[f64], vel: &[f64], out: &mut [f64]) {
         let (r, ratio, v) = (self.r, self.gearbox.ratio, vel[0]);
         let force = self.friction.feedforward(v, self.load_scale()) + self.chain.drag(v, self.friction.stribeck_v);
-        let loss = self.gearbox.loss_factor(force * r, v / r);
-        out[0] = self.shaft.torque(ratio * v / r) + r / (ratio * loss) * force;
+        let weight = (self.m() + self.chain.mass(pos[0]).0) * self.g_along;
+        let loss = self.gearbox.loss_factor((force + weight) * r, v / r);
+        out[0] = self.shaft.torque(ratio * v / r) + r / ratio * ((force + weight) / loss - weight);
     }
 
     fn energy(&self, s: &[f64]) -> f64 {
@@ -655,24 +673,43 @@ impl Machine for SingleAxis {
     fn set_dwelling(&mut self, dwelling: bool) {
         self.dwelling = dwelling;
     }
+    /// The push acts on the carriage, the tool, in either model; its power is the budget's crash row, not the
+    /// process's.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push = force[0];
+        true
+    }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
 
     /// The carriage on the belt with the pulley held, as the gantry's `modes` takes it: the carriage, its payload and
-    /// the cable chain's share (m) on the two sections, k = EA / L1 + EA / L2, f = sqrt(k / m) / (2 pi). Its damping
+    /// the cable chain's share (m) on the two sections, k = EA / l1 + EA / l2 (dT/dL of `Belt::section`, l the
+    /// section's unstretched belt at rest there, `rest_material`), f = sqrt(k / m) / (2 pi). Its damping
     /// ratio c / (2 m w), c the two sections' damping (`belt.damping_n_s_m` each, or `belt.damping_time_s` k). The
     /// gearbox's twist and the motor's inertia behind it are left out: the drive's velocity loop holds the pulley far
     /// below this frequency, and stiffer than the belt above it. `None` in the rigid model.
     fn resonance_hz(&self, tool_pose: &[f64]) -> Option<f64> {
         self.modes(tool_pose).first().map(|mode| mode.hz)
     }
+    /// Elastic: the gearbox's spring in series with the two sections, r r_mat (EA / l1 + EA / l2) at the pulley as in
+    /// `modes`; the rotor (and gearbox input) on the motor's side, the pulley with the load. Over the ratio squared.
+    fn trains(&self, tool_pose: &[f64]) -> Vec<Option<sim_core::Train>> {
+        if !self.elastic {
+            return Vec::new();
+        }
+        let mat = self.rest_material(tool_pose[0]);
+        let belt = self.r * self.r_mat * (self.belt.ea / mat[0] + self.belt.ea / mat[1]);
+        let spring = 1.0 / (1.0 / self.gearbox.stiffness + self.gearbox.band_compliance + 1.0 / belt);
+        let whole = sim_components::control::rigid_inertias(self, tool_pose);
+        vec![sim_core::Train::of(spring / (self.gearbox.ratio * self.gearbox.ratio), self.j_rotor, whole[0])]
+    }
     fn modes(&self, tool_pose: &[f64]) -> Vec<Mode> {
         if !self.elastic {
             return Vec::new();
         }
-        let geo = self.geo(tool_pose[0]);
-        let (k, m) = (self.belt.ea / geo[0] + self.belt.ea / geo[1], self.m() + self.chain.mass(tool_pose[0]).0);
+        let mat = self.rest_material(tool_pose[0]);
+        let (k, m) = (self.belt.ea / mat[0] + self.belt.ea / mat[1], self.m() + self.chain.mass(tool_pose[0]).0);
         let (w, c) = ((k / m).sqrt(), 2.0 * self.belt.damping + self.belt.damping_time * k);
         vec![Mode { hz: w / std::f64::consts::TAU, damping: c / (2.0 * m * w) }]
     }

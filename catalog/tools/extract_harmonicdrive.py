@@ -26,12 +26,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cataloglib.units import to_si  # noqa: E402
+from extract_harmonicdrive_efficiency import efficiency_for  # noqa: E402
 
 COLUMNS = ["series", "size", "motor_frame", "clamping_hub_diameter_m", "stages", "ratio", "rated_output_torque_nm",
            "max_output_torque_nm", "emergency_stop_output_torque_nm", "rated_input_speed_rad_s",
            "max_input_speed_rad_s", "inertia_at_input_kgm2", "mass_kg", "torsional_stiffness_nm_rad",
            "stiffness_t1_nm", "stiffness_t2_nm", "stiffness_k1_nm_rad", "stiffness_k2_nm_rad", "stiffness_k3_nm_rad",
-           "hysteresis_rad"]
+           "hysteresis_rad", "efficiency_full_load"]
 NUMBER = re.compile(r"^\d+(\.\d+)?$")
 DASH = "—"
 
@@ -200,6 +201,8 @@ def extract(series, folder):
             "stiffness_t2_nm": need(t2, size, where), "stiffness_k1_nm_rad": scaled(k1, 4),
             "stiffness_k2_nm_rad": scaled(k2, 4), "stiffness_k3_nm_rad": scaled(k3, 4),
             "hysteresis_rad": scaled(need(hyst_by[cls], h_size, where), -4),
+            # read off the efficiency graphs by tools/extract_harmonicdrive_efficiency.py (empty where no graph covers the row)
+            "efficiency_full_load": efficiency_for(series, f"{series}{size}", ratio),
         })
     keys = [(o["size"], o["ratio"]) for o in out]
     if len(set(keys)) != len(keys):

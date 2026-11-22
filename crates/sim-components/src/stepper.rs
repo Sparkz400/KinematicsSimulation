@@ -66,13 +66,44 @@ impl Stepper {
 
     /// The drive enabled at `pos`: the windings count from there, a full step, and the current vector stands on it.
     pub(crate) fn at_rest(&self, d: &mut Drive, p: &DriveParams, pos: f64) {
-        // shortcut: each enable puts the electrical zero (and the detent's) where the rotor stands; a real rotor jumps to
-        // the nearest full step of its own. Keep the origin across enables if a cycle disables the drive in between.
+        // The first enable puts the electrical zero (and the detent's) where the rotor stands; later ones keep it
+        // (`re_enabled`).
         let x = [self.current, 0.0, 0.0, 0.0];
         d.phases = crate::drive::Phases { x, angle: pos, command: pos, origin: pos, ..Default::default() };
         (d.current, d.torque, d.torque_demand, d.torque_command, d.controller_torque) =
             (self.current, 0.0, 0.0, 0.0, 0.0);
         d.phases.u = [p.resistance * self.current, 0.0];
+    }
+
+    /// A drive enabled again with the grid `origin` it had (the electrical zero, the detent's too): the rotor stands at `pos`,
+    /// off the grid where it was turned meanwhile; the drive's count starts on the full step nearest to it, origin + n 2 pi /
+    /// (4 N), and its current vector stands there (`offset` is the count's distance from the controller's setpoint, which
+    /// starts at `pos`). The rotor is not moved: the magnetic spring pulls it there by the model's dynamics, from its load
+    /// angle (at most a half full step) on.
+    pub(crate) fn re_enabled(&self, d: &mut Drive, p: &DriveParams, pos: f64, origin: f64) {
+        let full = TAU / (4.0 * self.teeth);
+        let snapped = origin + ((pos - origin) / full).round() * full;
+        let e = (self.teeth * (snapped - origin)).rem_euclid(TAU);
+        let (s, c) = e.sin_cos();
+        let ph = &mut d.phases;
+        (ph.origin, ph.command, ph.offset, ph.electrical) = (origin, snapped, snapped - pos, e);
+        ph.x = [self.current * c, self.current * s, 0.0, 0.0];
+        ph.load_angle = e - self.teeth * (pos - origin);
+        ph.u = [p.resistance * self.current * c, p.resistance * self.current * s];
+    }
+
+    /// The detent torque's potential at the rotor angle `angle`, J: the torque is -T_d sin 4e (e = N (angle - origin)), so
+    /// U = -T_d cos(4e) / (4 N), whose angle derivative is T_d sin 4e. It is the magnets' energy (the torque is
+    /// conservative), enabled or not: the detent's work is part of the shaft's, and what the magnets give for it, the
+    /// change of U, is booked as it happens (`Drive::detent_moved`, `Drive::emf_loss`), never stored, so that nothing of
+    /// it appears or vanishes at an enable or a disable.
+    pub fn detent_potential(&self, angle: f64, origin: f64) -> f64 {
+        -self.detent * (4.0 * self.teeth * (angle - origin)).cos() / (4.0 * self.teeth)
+    }
+
+    /// The detent torque at the rotor angle `angle`, N m: -T_d sin 4e, the magnets' alone, with the drive enabled or not.
+    pub fn detent_torque(&self, angle: f64, origin: f64) -> f64 {
+        -self.detent * (4.0 * self.teeth * (angle - origin)).sin()
     }
 
     /// The rates of the windings (`DriveParams::motor_rates`): i_a in slot 0, i_b in slot 4.
@@ -86,12 +117,12 @@ impl Stepper {
         out[4] = (ub - r * ib - emf * c) / p.inductance;
         out[1] = ua * ia + ub * ib;
         out[2] = r * (ia * ia + ib * ib);
-        // shortcut: the detent torque's work is the magnets' and is left out of the shaft's; over a full step it is
-        // nothing, within one at most T_d / 2N.
-        out[3] = electromagnetic * speed;
+        // The shaft's work is the whole torque's; the detent's share of it the magnets give (`Drive::detent_moved`).
+        let torque = electromagnetic + self.detent_torque(angle, d.phases.origin);
+        out[3] = torque * speed;
         out[5] = 0.0;
         out[6] = 0.0;
-        electromagnetic - self.detent * (4.0 * e).sin()
+        torque
     }
 
     /// One base step of the drive: the step generator's angle, the current vector on its microstep, and the chopper's
@@ -103,7 +134,7 @@ impl Stepper {
         d.phases.command = match (d.fault_speed, d.mode()) {
             (None, DriveMode::Position) => {
                 let t = d.since_setpoint;
-                d.pos_set + (d.vel_set + 0.5 * d.acc_set * t) * t
+                d.pos_set + d.phases.offset + (d.vel_set + 0.5 * d.acc_set * t) * t
             }
             _ => d.phases.command + d.speed_command * dt,
         };
@@ -120,8 +151,8 @@ impl Stepper {
         for k in 0..2 {
             u[k] = emf[k] + r * (set[k] - a * ph.x[k]) / (1.0 - a);
         }
-        // shortcut: the vector held within the supply (sinusoidal phase voltages, no overmodulation); a bridge driven
-        // into square waves gives up to 4 / pi more at the top of the pull-out curve.
+        // The vector is held within the supply: `drive.overmodulation` (`DriveParams::fundamental_gain`) lets a bridge driven
+        // into square waves give 4 / pi more, the fundamental only.
         let norm = u[0].hypot(u[1]);
         if norm > supply {
             u = u.map(|v| v * supply / norm);
@@ -402,5 +433,97 @@ mod tests {
         assert!(stays_in_step(0.8 * above, 55.0).0);
         let (kept, reached) = stays_in_step(1.1 * above, 55.0);
         assert!(!kept && reached < 55.0, "fell out at {reached} rad/s");
+    }
+
+    /// Disabled at a half step, enabled again: the grid (origin 0.3 rad here) is kept and the rotor, standing 1.4 full steps
+    /// off the origin, is pulled by the magnetic spring to the nearest full step of that grid, origin + 1 full step
+    /// (2 pi / 200 = 0.0314159 rad): after the ringing has died down (damping b / 2J = 10 / s, 1 s) the angle is
+    /// 0.3 + 0.0314159 within 1e-4 rad, a whole number of full steps from the origin. The drive's count is 0.4 full steps
+    /// behind the controller's setpoint, which holds where the rotor stood.
+    #[test]
+    fn an_enable_keeps_the_grid_and_pulls_the_rotor_to_the_nearest_full_step() {
+        let p = params();
+        let s = stepper(&p);
+        let (origin, full) = (0.3, TAU / 200.0);
+        let pos = origin + 1.4 * full;
+        let mut d = Drive::at_rest(&p, pos, 0.0, 0.0);
+        s.re_enabled(&mut d, &p, pos, origin);
+        assert!((d.phases.command - (origin + full)).abs() < 1e-12 && (d.phases.offset + 0.4 * full).abs() < 1e-12);
+        let (j, b, dt) = (1e-4, 2e-3, p.current_cycle);
+        let mut rk = Rk4::new(2 + WINDING_STATES);
+        let (mut angle, mut speed) = (pos, 0.0);
+        for n in 0..16_000 {
+            if n % 16 == 0 {
+                (d.pos_set, d.vel_set, d.acc_set, d.since_setpoint) = (pos, 0.0, 0.0, 0.0);
+            }
+            s.control(&mut d, &p);
+            d.since_setpoint += dt;
+            let mut y = vec![angle, speed];
+            y.extend(d.winding_states(&p));
+            rk.step(
+                |y, dy| {
+                    let torque = p.motor_rates(&d, &y[2..], y[0], y[1], &mut dy[2..]);
+                    (dy[0], dy[1]) = (y[1], (torque - b * y[1]) / j);
+                },
+                &mut y,
+                dt,
+            );
+            (angle, speed) = (y[0], y[1]);
+            let w = &y[2..];
+            (d.phases.x, d.phases.angle, d.phases.speed) = ([w[0], w[4], w[5], w[6]], angle, speed);
+            d.winding_stepped(&p, w[0], [w[1], w[2], w[3]]);
+        }
+        assert!((angle - (origin + full)).abs() < 1e-4, "{angle} rad against {}", origin + full);
+        assert!(((angle - origin) / full - 1.0).abs() < 4e-3, "{} full steps", (angle - origin) / full);
+    }
+
+    /// The detent's work inside one base step. The torque -T_d sin 4e is conservative with the potential
+    /// U = -T_d cos(4 N (angle - origin)) / (4 N) (dU/d angle = T_d sin 4e, so -dU/d angle is the torque). The shaft's
+    /// work is the whole torque's, the detent's included, and the magnets give the detent's: `emf_loss` over the step is
+    /// the change of U (`Drive::detent_moved`). Over a step electrical power - copper loss - the change of the winding's
+    /// energy - the shaft's work is 0 (the electrical side), the shaft's work is the rotor's kinetic energy (no friction,
+    /// no load), and so electrical - copper - winding - the magnets' - kinetic is 0, up to the integrator. T_d = 0.05 N m,
+    /// N = 50: the potential swings by 0.05 / 200 = 2.5 mJ over a quarter of the detent period; the step's change of it
+    /// is by hand U(angle end) - U(0.004), which the integrated shaft work beyond the electrical's matches.
+    #[test]
+    fn the_budget_closes_inside_one_step_with_the_detents_potential() {
+        let mut p = params();
+        if let Motor::Stepper(s) = &mut p.motor {
+            s.detent = 0.05;
+        }
+        let s = stepper(&p);
+        let (j, dt) = (1e-4, p.current_cycle);
+        let mut d = Drive::at_rest(&p, 0.0, 0.0, 0.0);
+        let (angle0, speed0) = (0.004, 8.0);
+        (d.phases.angle, d.phases.speed) = (angle0, speed0);
+        s.control(&mut d, &p);
+        let before = d.magnetic_energy(&p);
+        let mut rk = Rk4::new(2 + WINDING_STATES);
+        let mut y = vec![angle0, speed0];
+        y.extend(d.winding_states(&p));
+        rk.step(
+            |y, dy| {
+                let torque = p.motor_rates(&d, &y[2..], y[0], y[1], &mut dy[2..]);
+                (dy[0], dy[1]) = (y[1], torque / j);
+            },
+            &mut y,
+            dt,
+        );
+        let w = &y[2..];
+        (d.phases.x, d.phases.angle, d.phases.speed) = ([w[0], w[4], w[5], w[6]], y[0], y[1]);
+        d.winding_stepped(&p, w[0], [w[1], w[2], w[3]]);
+        d.detent_moved(&p, angle0);
+        let after = d.magnetic_energy(&p);
+        let kinetic = 0.5 * j * (y[1] * y[1] - speed0 * speed0);
+        let magnets = d.emf_loss * dt;
+        let by_hand = 0.05 / 200.0 * ((200.0 * angle0).cos() - (200.0 * y[0]).cos());
+        assert!((magnets - by_hand).abs() < 1e-15 && magnets.abs() > 1e-6, "{magnets} J against {by_hand} J");
+        let electrical = w[1] - w[2] - (after - before) - w[3] - magnets;
+        assert!(electrical.abs() < 1e-9, "{electrical} J of the electrical side open of {} J", w[1]);
+        let open = w[1] - w[2] - (after - before) - magnets - kinetic;
+        assert!(open.abs() < 1e-9, "{open} J unaccounted of {} J electrical", w[1]);
+        // The potential itself: -T_d / 200 at a detent minimum (4e = 0), +T_d / 200 half a period on.
+        assert!((s.detent_potential(0.0, 0.0) + 0.05 / 200.0).abs() < 1e-15);
+        assert!((s.detent_potential(TAU / 400.0, 0.0) - 0.05 / 200.0).abs() < 1e-15);
     }
 }

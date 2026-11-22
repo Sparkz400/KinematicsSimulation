@@ -43,18 +43,23 @@ pub struct Slide {
 }
 
 pub fn build(cfg: &Config, kind: Kind) -> Result<Box<dyn Machine>, ConfigError> {
+    // A slide has no links to bend.
+    sim_components::refuse_unmodelled(cfg, &["link_bending", "link_bending_reaction"])?;
     let mut joint = RotaryJoint::linear_from_config(cfg)?;
     let incline = cfg.f64("slide.incline_deg")?;
     if !(-90.0..=90.0).contains(&incline) {
         return Err(ConfigError::Invalid("slide.incline_deg".into()));
     }
+    // The mesh friction's bristle is capped by the lighter of the rotor and the carriage (without the payload, which
+    // may be off), as a winch's by its drum (`Converter::apply_to`).
+    let carriage = cfg.positive("mass.carriage_kg")?;
     let (drive, lever) = match kind {
         Kind::Screw => {
             let screw = BallScrew::from_config(cfg)?;
             if screw.length < joint.range.1 {
                 return Err(ConfigError::Invalid("screw.length_m".into()));
             }
-            screw.converter(screw.softest_position()).apply(cfg, &mut joint)?;
+            screw.converter(screw.softest_position()).apply_to(cfg, &mut joint, carriage)?;
             // The nut's preload drags like friction in the guides, as a force at the nut.
             if cfg.bool("effects.joint_friction")? {
                 joint.friction.coulomb += screw.preload_torque() * screw.ratio();
@@ -68,7 +73,7 @@ pub fn build(cfg: &Config, kind: Kind) -> Result<Box<dyn Machine>, ConfigError> 
         }
         Kind::Rack => {
             let rack = RackPinion::from_config(cfg)?;
-            rack.converter().apply(cfg, &mut joint)?;
+            rack.converter().apply_to(cfg, &mut joint, carriage)?;
             let lever = rack.radius();
             let efficiency = joint.extra_efficiency;
             (Drive::Rack(rack, efficiency), Some(lever))
@@ -90,7 +95,7 @@ pub fn build(cfg: &Config, kind: Kind) -> Result<Box<dyn Machine>, ConfigError> 
     };
     let slide = Slide {
         drive,
-        mass: cfg.positive("mass.carriage_kg")?,
+        mass: carriage,
         payload: payload(cfg, "mass.payload_kg")?,
         attached: true,
         g: gravity(cfg)?,
@@ -110,6 +115,9 @@ impl Slide {
 }
 
 impl Mechanism for Slide {
+    fn linear_motor(&self) -> bool {
+        matches!(self.drive, Drive::Linear(..))
+    }
     /// Along the axis, x, with z across it: the carriage and payload, and the drive's rotor, a screw's about x, a
     /// pinion's about y; a linear motor's forcer moves with the carriage.
     fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
@@ -120,6 +128,7 @@ impl Mechanism for Slide {
             Drive::Screw(_) => f.angular[0] += rotor_spin[0],
             Drive::Rack(..) => f.angular[1] += rotor_spin[0],
             Drive::Linear(_, forcer) => {
+                f.mass += forcer;
                 f.linear[0] += rotor_spin[0];
                 f.first_moment[0] += forcer * q[0];
             }

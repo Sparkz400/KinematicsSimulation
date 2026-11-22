@@ -393,6 +393,10 @@ impl Mechanism for TogglePress {
             out[0] = cam.at(master);
         }
     }
+    fn cam_curve(&self) -> Option<sim_core::CamCurve> {
+        let cam = self.cam.as_ref()?.0.clone();
+        Some(std::sync::Arc::new(move |master, out: &mut [[f64; 4]]| out[0] = cam.at(master)))
+    }
 
     fn signal_infos(&self) -> Vec<SignalInfo> {
         [
@@ -413,15 +417,38 @@ impl Mechanism for TogglePress {
         .map(|(id, owner, quantity, unit)| SignalInfo::new(id, owner, quantity, unit))
         .collect()
     }
-    fn signals(&self, q: &[f64], qd: &[f64], qdd: &[f64], _force: &[f64], out: &mut Vec<f64>) {
+    /// The signals along a crank motion without jerk.
+    fn signals(&self, q: &[f64], qd: &[f64], qdd: &[f64], force: &[f64], out: &mut Vec<f64>) {
+        self.signals_with_jerk(q, qd, qdd, &[0.0], force, out);
+    }
+    /// Where the press force fades as the ram rises, the frame's stretch follows the crank's speed, so the ram's
+    /// acceleration follows the crank's jerk.
+    fn reads_jerk(&self) -> bool {
+        self.process.is_some() && self.frame.is_some()
+    }
+    fn signals_with_jerk(&self, q: &[f64], qd: &[f64], qdd: &[f64], qddd: &[f64], _force: &[f64], out: &mut Vec<f64>) {
         let p = self.pose(q[0]);
         let (force, stretch) = self.press_force(q[0], qd[0]);
         let capacity = self.capacity(q[0]);
         let [upper, lower, rod] = self.link_forces(q[0], qd[0], qdd[0]);
+        // The frame's stretch changes with the angle and (where the force fades as the ram rises) with the speed.
+        let (h, at) = (1e-7, |q: f64, w: f64| self.press_force(q, w).1);
+        let (q, w, a) = (q[0], qd[0], qdd[0]);
+        let stretch_rate =
+            (at(q + h, w) - at(q - h, w)) / (2.0 * h) * w + (at(q, w + h) - at(q, w - h)) / (2.0 * h) * a;
+        // Its second derivative s_qq w^2 + 2 s_qw w a + s_ww a^2 + s_q a + s_w j (a wider step for the second
+        // derivatives: these divide by its square); s_w is not zero where the force fades as the ram rises.
+        let (k, s) = (1e-5, at(q, w));
+        let stretch_acc = (at(q + k, w) - 2.0 * s + at(q - k, w)) / (k * k) * w * w
+            + (at(q + k, w + k) - at(q + k, w - k) - at(q - k, w + k) + at(q - k, w - k)) / (2.0 * k * k) * w * a
+            + (at(q, w + k) - 2.0 * s + at(q, w - k)) / (k * k) * a * a
+            + (at(q + h, w) - at(q - h, w)) / (2.0 * h) * a
+            + (at(q, w + h) - at(q, w - h)) / (2.0 * h) * qddd[0];
         out.extend([
             self.a + self.b - p.x[0] + stretch,
-            p.x[1] * qd[0],
-            p.x[2] * qd[0] * qd[0] + p.x[1] * qdd[0],
+            // The height is a + b - x + stretch, so its derivatives carry the minus sign of x (x is positive down).
+            -p.x[1] * w + stretch_rate,
+            -(p.x[2] * w * w + p.x[1] * a) + stretch_acc,
             p.x[1],
             force,
             capacity,
@@ -430,7 +457,7 @@ impl Mechanism for TogglePress {
             upper,
             lower,
             rod,
-            self.inertia(q[0]),
+            self.inertia(q),
         ]);
     }
     fn rating_checks(&self) -> Vec<RatingCheck> {

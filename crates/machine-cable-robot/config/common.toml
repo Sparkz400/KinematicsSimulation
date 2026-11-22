@@ -28,6 +28,9 @@ payload = true
 cable_stretch = true
 # With cable_stretch: the cables' material damping (cable.specific_damping_n_s).
 cable_damping = true
+# With the cables' mass (cable.mass_per_m_kg): the cable runs along itself at the drum's speed, all of it
+# (winch.capacity_m), a mass at each winch beside its drum's. Off as shipped.
+cable_inertia = false
 # Friction in the winches' bearings and the pulleys, at the cable.
 winch_friction = true
 motor_friction = true
@@ -172,7 +175,8 @@ shaper_ei_tolerance = 0.05
 shaper_axes = []
 shaper_modes = []
 torque_reserve = 0.8
-# Read but not used: no belt (the cables' band is cable.min_tension_n to the rating).
+# The share of the room to the cables' band (cable.min_tension_n to the breaking load over the safety factor) that the
+# time-optimal plan may use.
 tension_reserve = 0.8
 tension_margin_n = 0.0
 # The share of every limit the time-optimal plan may use, on top of the reserves above (1: all; 0.9 plans at 90 %).

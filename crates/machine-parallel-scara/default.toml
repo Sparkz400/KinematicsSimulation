@@ -27,7 +27,7 @@ substeps = 4
 
 # Parts by name from the catalogue in catalog/, as for every machine (see docs/config-reference.md). Named here, they
 # would replace the numbers below when the config is loaded; the numbers below are those parts' own, written out
-# (motor 1FK2105-4AF at 400 V, gearbox NRB080-05-20, converter 6SL3210-5HE11-5UF0), so that the config reads as it
+# (motor 1FK2105-4AF at 400 V, gearbox SP100-05-20, converter 6SL3210-5HE11-5UF0), so that the config reads as it
 # runs. "" names none.
 [parts]
 motor = ""
@@ -45,7 +45,7 @@ motor_encoder = ""
 [effects]
 gravity = true
 payload = true
-# The gearboxes twist under load (stiffness, damping, backlash): motor and arm are two bodies per joint. Off, the
+# The gearboxes twist under load (stiffness, damping, backlash), the Z stroke's coupling and screw and the tool turn's gearbox too: motor and joint are two bodies each. Off, the
 # machine is the rigid reference model, in which the motor turns with the arm times the ratio.
 joint_elasticity = true
 # Friction in the arms' bearings at the base (Coulomb and viscous, [joint]).
@@ -57,6 +57,10 @@ gearbox_efficiency = true
 # formula) in place of screw.efficiency, a catalogue's figure that holds the nut's preload drag, which drags apart.
 # Off in the shipped configs: their sizing was done with screw.efficiency.
 screw_lead_efficiency = false
+# The screw's axial stiffness follows its nut: the shaft between the fixed bearing and the nut, E A / a (held at both
+# ends a (L - a) / (E A L)), with the nut a from the bearing at its travel (screw.fixed_bearing_at_m), in place of the
+# far end's for the whole stroke.
+screw_stiffness_with_position = true
 torque_ripple = true
 # Stops at both ends of each arm's angle range ([joint]).
 hard_stops = true
@@ -175,8 +179,12 @@ max_condition_number = 10.0
 # heavier than the D3's for the 5 kg payload.
 [mass]
 # The arm's tube's inertia about the shoulder axis (uniform tube of 1.2 kg: m L^2 / 3 = 0.064 kg m^2), without the
-# elbow block. Its weight, out of the plane, needs no figure.
+# elbow block.
 upper_arm_inertia_kgm2 = 0.064
+# The tube's mass and its centre's distance from the shoulder axis, the uniform tube's 1.2 kg at L / 2. Its weight is out
+# of the plane: only the frame's momentum (a base's tilt under it) takes them.
+upper_arm_kg = 1.2
+upper_arm_cg_m = 0.2
 elbow_kg = 0.4
 forearm_pair_kg = 0.6
 # The share of a forearm pair's mass counted at the elbow (the rest at the plate): 2/3 matches the rod's inertia
@@ -239,10 +247,10 @@ torque_constant_at_max_current_nm_a = 0.83333
 # [estimate] the D 32 gives no brake torque.
 brake_torque_nm = 8.0
 
-# The gearbox of each arm. [catalogue] Siemens NRB080-05-20 (catalog/siemens/gearbox_nrb.csv): ratio 20, 96 % at full
-# load, 10.4 N m/arcmin, 0.406 kg cm2 at the input, and its torque ratings below; but not its 9 arcmin backlash.
-# [estimate] 1 arcmin, the reduced-backlash class of servo planetary gearboxes, as on the D2. Laid flat nothing holds
-# the arms to one side of it at rest.
+# The gearbox of each arm. [catalogue] Siemens SP100, two stages, ratio 20, for motor frame 05, with the
+# reduced-backlash option (catalog/siemens/gearbox_sp.csv, the SP+ 100 of WITTENSTEIN alpha), as on the D2: 94 % at full
+# load, 31 N m/arcmin, 0.70 kg cm2 at the input, and its torque ratings in [ratings]. [estimate] backlash_rad: a typical
+# 2.25 arcmin, not the catalogue's 3 (the most a gearbox has). Laid flat nothing holds the arms to one side of it at rest.
 # With effects.motor_stiction [estimate]: the shaft's breakaway torque, 1.5 times its Coulomb level (lip seals and
 # bearings break away at about 1.3 to 2 times their running torque), and the speed over which it falls to that level.
 friction_breakaway_nm = 0.075
@@ -250,11 +258,11 @@ friction_stribeck_rad_s = 2.0
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 # [bounds] -0.0013 ... -0.0009
 magnet_temperature_coefficient_1_k = -0.0012
-# [catalogue] a motor named in [parts] brings its stall current (static torque over torque constant); here the rated
-# current where the motor is an estimate. With effects.iron_loss the copper loss at it brings the winding to its rated
+# [catalogue] 1FK2105-4AF: static torque 5 N m at the stall current 4.65 A (motors_s210.csv), as a motor named in
+# [parts] brings it. With effects.iron_loss the copper loss at it brings the winding to its rated
 # rise, and the iron loss at the rated speed is the rest of that loss at the rated current; the S1 check ("motor-s1")
 # starts at kt times it.
-stall_current_a = 4.35
+stall_current_a = 4.65
 [gearbox]
 ratio = 20.0
 efficiency = 0.94
@@ -295,6 +303,9 @@ stiffness_t2_nm = 347.0
 rotor_inertia_kgm2 = 9.3e-6
 torque_constant_nm_a = 0.6037736
 rated_current_a = 1.05
+# [catalogue] its own stall current, not the arms': 1FK2103-2AH static torque 0.64 N m at 1.06 A (motors_s210.csv),
+# kt 0.6038 N m/A; the S1 line starts at 0.64 N m, above the rated 0.59.
+stall_current_a = 1.06
 thermal_time_constant_s = 1020.0
 max_current_a = 3.95
 torque_constant_at_max_current_nm_a = 0.4936709
@@ -302,6 +313,8 @@ torque_constant_at_max_current_nm_a = 0.4936709
 # electrical time constant L / R = 5 ms; the current loop's gain drive.3.current_kp_v_a goes with L.
 resistance_ohm = 9.0
 inductance_h = 0.045
+# With effects.field_weakening: its own d-axis inductance, that of its q axis, not the arms'.
+d_inductance_h = 0.045
 # [estimate] the D 32 gives no brake torque; above the 1.95 N m the motor has, as the arms' 8 N m above their 15 N m
 # is not.
 brake_torque_nm = 1.0
@@ -313,6 +326,9 @@ brake_torque_nm = 1.0
 rotor_inertia_kgm2 = 9.3e-6
 torque_constant_nm_a = 0.6037736
 rated_current_a = 1.05
+# [catalogue] its own stall current, not the arms': 1FK2103-2AH static torque 0.64 N m at 1.06 A (motors_s210.csv),
+# kt 0.6038 N m/A; the S1 line starts at 0.64 N m, above the rated 0.59.
+stall_current_a = 1.06
 thermal_time_constant_s = 1020.0
 max_current_a = 3.95
 torque_constant_at_max_current_nm_a = 0.4936709
@@ -320,6 +336,8 @@ torque_constant_at_max_current_nm_a = 0.4936709
 # electrical time constant L / R = 5 ms; the current loop's gain drive.4.current_kp_v_a goes with L.
 resistance_ohm = 9.0
 inductance_h = 0.045
+# With effects.field_weakening: its own d-axis inductance, that of its q axis, not the arms'.
+d_inductance_h = 0.045
 # [estimate] the D 32 gives no brake torque; above the 1.95 N m the motor has, as the arms' 8 N m above their 15 N m
 # is not.
 brake_torque_nm = 1.0
@@ -335,7 +353,7 @@ inertia_at_input_kgm2 = 5.0e-6
 
 # The tool turn's gearbox, on motor 4, the D4's. [catalogue] Siemens NRB060-03-8 for the 1FK2103
 # (catalog/siemens/gearbox_nrb.csv): ratio 8, 97 %, 8251 N m/rad, 0.067 kg cm2 at the input; 18 N m rated, 29 N m
-# maximum ([ratings.4]). Its backlash [estimate] 1 arcmin (catalogue: 10 arcmin), unused: the turn is rigid.
+# maximum ([ratings.4]). Its backlash [estimate] 1 arcmin (catalogue: 10 arcmin); with effects.joint_elasticity the turn takes it up as the arms do.
 [gearbox.4]
 ratio = 8.0
 efficiency = 0.97
@@ -361,9 +379,10 @@ gearbox_viscous_loss_share = 0.5
 belt_stiffness_coefficient_1_k = 3.0e-4
 
 # The tool's limits along x and y. [estimate] the D2's 3 m/s and 2500 m/s3, but 30 m/s2 of its 50: the plate carries
-# 12.8 kg here against the D2's 6.4 kg, and at 50 m/s2 the arms' gearboxes see 235 N m of their 192 N m maximum and
-# the motors 19.2 N m of the drives' 15 N m (`sim-cli verdicts parallel-scara --set axis.x.max_acceleration_m_s2=50
-# --set axis.y.max_acceleration_m_s2=50`).
+# 12.8 kg here against the D2's 6.4 kg. At 50 m/s2 every verdict passes with the SP100 gearboxes (the arms' gearboxes
+# see 225 N m of their 278 N m maximum, motor 1 0.83 of its peak; `sim-cli verdicts parallel-scara --set
+# axis.x.max_acceleration_m_s2=50 --set axis.y.max_acceleration_m_s2=50`); with the NRB080-05-20 before them it was
+# 235 N m of 192 N m, which set the 30.
 # With effects.thermal_feedback [estimate]: the motor shaft's seal friction (motor.friction_coulomb_nm and
 # friction_breakaway_nm) follows the gearbox's lubricant, (nu / nu_ref) to this power: a lip seal on its oil film.
 seal_viscosity_exponent = 0.33
@@ -436,12 +455,20 @@ nominal_diameter_m = 0.016
 root_diameter_m = 0.0135
 length_m = 0.3
 mounting = "fixed-free"
+# [estimate] The fixed bearing at the motor on the plate, 0.05 m above the nut with the stroke at its top (z = 0.2):
+# half the run-out of the 0.3 m shaft beyond the 0.2 m stroke. With effects.screw_stiffness_with_position.
+fixed_bearing_at_m = 0.25
 efficiency = 0.9
 # With effects.screw_lead_efficiency: the balls' rolling friction coefficient. [estimate] THK's general value for
 # ball screws, not this screw's.
 friction_coefficient = 0.003
 nut_stiffness_n_m = 2.0e8
 bearing_stiffness_n_m = 4.0e8
+# [estimate] The damping ratio of the mass behind the nut on the screw's axial spring (nut, bearings, guides; the
+# damper across the screw's spring alone, c = 2 zeta sqrt(k m)): 0.04, the axial mode of a ball screw drive
+# identified by Hosseinkhani (Control Methods for Improving Tracking Accuracy and Disturbance Rejection in Ball
+# Screw Feed Drives, PhD thesis, University of Waterloo, 2013, Table 3.5: 865 rad/s, zeta 0.04).
+axial_damping_ratio = 0.04
 preload_n = 200.0
 dynamic_load_rating_n = 7000.0
 static_load_rating_n = 12000.0
@@ -481,12 +508,17 @@ friction_feedforward_model = "characteristic"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 current_kp_v_a = 40.0
 current_tn_s = 5.0e-3
 # [catalogue] a 400 V line: 540 V DC link (as catalog.rs puts it for a 400 V motor)
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
 peak_torque_nm = 15.0
 rated_torque_nm = 4.6
@@ -510,9 +542,16 @@ braking_module = false
 # DC link the shared ones. [catalogue] the 1FK2103-2AH at 400 V (D 32): 1.95 N m maximum, 0.59 N m rated at
 # 4500 r/min; no-load speed sqrt(3/2) * 540 V / 0.6037736 N m/A. The current loop's gain for the winding's 45 mH, as
 # the D4's tool motor. The velocity loops, checked with `sim-cli margins parallel-scara`: the Z motor's the D4's tool
-# motor's 0.0443 (106 degrees, 19.6 dB); the turn's 0.1 with 10 ms (67 degrees, 15.9 dB), as with the D4's 0.0443 and
-# the shared 30 ms the motor's friction (0.1 N m in a traverse, held by the integrator) leaves the turn 1.4 mrad off
-# for 0.15 s after it stops, and settling, which counts the turn's rad as m, fails at 0.75 mm.
+# motor's 0.0443 behind a speed filter of its own, 1 ms: the screw's axial mode (about 2.7 % damped through the nut,
+# `screw.axial_damping_ratio`) rang at the peak torque behind the shared 0.1 ms (motor 3 at 1.80 of its peak in
+# `sim-cli verdicts`); 1 ms takes 10.6 dB of gain margin at it without friction (0.5 ms 4.9 dB); the turn's 0.033
+# with 10 ms: with friction 18.8 dB, without it (a cruise, where friction adds no damping) 6.95 dB and 66.6 degrees at 23 Hz on the rotor in the gearbox's play, where 0.0443 left 4.0 dB.
+# 25.1 dB rigid at 0.0443. The shared 30 ms leaves the turn 1.4 mrad off for 0.15 s after it stops (the motor's friction,
+# 0.1 N m in a traverse, held by the integrator), and settling, which counts the turn's rad as m, fails at 0.75 mm. A
+# gain of 0.08 or more (0.1: 8.1 dB) lets the elastic turn hammer from flank to flank of its play at 710 Hz at the
+# torque limit, set off when the ripple's 24 per turn of the rotor crosses the 473 Hz mode of rotor and tool in a
+# traverse, and kept up at a standstill (`sim-cli verdicts parallel-scara --set drive.4.velocity_kp_nm_s_rad=0.1`:
+# motor 4 at 1.58 of its peak torque); 0.06 does not, 0.0443 neither with the catalogue's 10 arcmin play.
 # [estimate] The highest speed the motor may turn at (its datasheet's maximum speed); here the no-load speed, where the
 # torque-speed curve ends. The time-optimal plan turns the motor up to it along that curve; the verdict motor-speed
 # judges the cycle's peak speed against it. A motor by name sets the catalogue's.
@@ -543,7 +582,10 @@ peak_torque_nm = 1.95
 rated_torque_nm = 0.59
 rated_speed_rad_s = 471.239
 no_load_speed_rad_s = 1095.38
+# [catalogue] its own highest speed, not the arms': 8000 r/min (motors_s210.csv), below its no-load speed.
+max_speed_rad_s = 837.758
 velocity_kp_nm_s_rad = 0.0443
+velocity_filter_s = 1.0e-3
 current_kp_v_a = 180.0
 
 [drive.4]
@@ -551,7 +593,9 @@ peak_torque_nm = 1.95
 rated_torque_nm = 0.59
 rated_speed_rad_s = 471.239
 no_load_speed_rad_s = 1095.38
-velocity_kp_nm_s_rad = 0.1
+# [catalogue] its own highest speed, not the arms': 8000 r/min (motors_s210.csv), below its no-load speed.
+max_speed_rad_s = 837.758
+velocity_kp_nm_s_rad = 0.033
 velocity_tn_s = 0.01
 current_kp_v_a = 180.0
 
@@ -562,7 +606,9 @@ current_kp_v_a = 180.0
 # [estimate] the positioning accuracy of a delta of this class, +-0.5 mm (Festo EXPT, catalogue 2024/12); Codian's
 # 0.1 mm is the repeatability, which a constant sag does not spoil.
 settling_tolerance_m = 0.0005
-# [catalogue] NRB080-05-20: 120 N m rated, 192 N m maximum
+# [catalogue] SP100-05-20 (catalog/siemens/gearbox_sp.csv): 347 N m rated (Table 6-61), 278 N m maximum (chapter
+# 6.5.2). As printed the rated torque is above the maximum: the maximum is the geared motor's, 15 N m at ratio 20 and
+# 94 %; WITTENSTEIN's own sheet has T2N 259 N m and T2B 347 N m.
 gearbox_rated_torque_nm = 347.0
 gearbox_max_torque_nm = 278.0
 # [estimate] a gearbox of this size; not in the catalogue's files.
@@ -700,6 +746,7 @@ geometry.platform_radius_m = [0.04, 0.06]
 geometry.upper_arm_m = [0.38, 0.42]
 geometry.forearm_m = [0.68, 0.72]
 mass.upper_arm_inertia_kgm2 = [0.043, 0.085]
+mass.upper_arm_kg = [0.8, 1.6]
 mass.elbow_kg = [0.25, 0.6]
 mass.forearm_pair_kg = [0.4, 0.8]
 mass.forearm_elbow_share = [0.5, 0.667]

@@ -282,8 +282,7 @@ impl Runner {
     /// stood up to its speed times the cycle from the last (0.8 mm at 0.8 m/s), which read as error where there was
     /// none. Measured to the path and not to where the plan is now, the error is the one the path error peak of the
     /// path's analysis is the largest of: a tool on the path but behind the plan is not off it.
-    /// shortcut: the speed is the length of the tool's speed vector, which mixes units on a machine with a turning
-    /// axis; upgrade to the speed in the scene when one has such an axis.
+    /// The speed is the length of the speeds of the axes in m; a turning axis adds nothing.
     fn trail_point(&self, at: [f64; 3]) -> TrailPoint {
         let axes = self.sim.machine.axes().len();
         let (mut pos, mut vel) = (vec![0.0; axes], vec![0.0; axes]);
@@ -303,7 +302,14 @@ impl Runner {
         let (a, b, along) = nearest;
         let nearest: Vec<f64> = a.iter().zip(b).map(|(a, b)| a + along * (b - a)).collect();
         let planned = self.sim.machine.scene_point(&nearest).unwrap_or(at);
-        TrailPoint { at, planned, speed: vel.iter().map(|v| v * v).sum::<f64>().sqrt(), time: self.sim.time() }
+        TrailPoint {
+            at,
+            planned,
+            speed: crate::insight::linear_speed(
+                self.sim.machine.axes().iter().zip(&vel).map(|(a, v)| (a.unit == "m", *v)),
+            ),
+            time: self.sim.time(),
+        }
     }
 
     /// Runs whole base steps for `seconds` of simulated time and reports the samples.
@@ -385,6 +391,8 @@ pub struct Session {
     pub signals: Vec<SignalInfo>,
     pub axes: Vec<AxisInfo>,
     pub motors: Vec<MotorInfo>,
+    /// Per motor: linear (m, m/s, N), `Machine::motor_linear`.
+    pub motor_linear: Vec<bool>,
 }
 
 impl Session {
@@ -392,6 +400,7 @@ impl Session {
         let mut runner = Runner::new(entry, cfg)?;
         let signals = runner.sim.signal_infos();
         let (axes, motors) = (runner.sim.machine.axes().to_vec(), runner.sim.machine.motors().to_vec());
+        let motor_linear = (0..motors.len()).map(|k| runner.sim.machine.motor_linear(k)).collect();
         let (requests, inbox) = channel();
         let events = Arc::new(Mutex::new(Outbox::default()));
         let outbox = events.clone();
@@ -464,7 +473,7 @@ impl Session {
                 std::thread::sleep(Duration::from_millis(1));
             }
         });
-        Ok(Self { requests, events, thread, news: window_news, signals, axes, motors })
+        Ok(Self { requests, events, thread, news: window_news, signals, axes, motors, motor_linear })
     }
 
     /// The travelled path's points with their speed and plan since the last call, whether the path started anew

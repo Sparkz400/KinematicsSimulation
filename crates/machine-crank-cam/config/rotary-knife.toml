@@ -42,7 +42,8 @@ force_n = [0.0, 300.0, 300.0, 0.0]
 friction_coulomb_nm = 0.5
 friction_viscous_nm_s_rad = 0.05
 friction_smoothing_rad_s = 0.01
-# The stops leave the shipped cycle (0 to 180) room; with cam.run the roll turns on and has none.
+# The axis range leaves the shipped cycle (0 to 180) room. The roll turns on (under cam.run past the range) and has no
+# stops of its own; joint.stop_min_deg / stop_max_deg would put end stops with the stop_* below.
 min_angle_deg = -30.0
 max_angle_deg = 400.0
 stop_stiffness_nm_rad = 1000000.0
@@ -107,9 +108,10 @@ rated_current_a = 4.35
 thermal_time_constant_s = 2220.0
 rated_temperature_rise_k = 100.0
 start_temperature_rise_k = 0.0
-# [estimate] the rated current, as the motor is an estimate here; with effects.iron_loss the copper loss at it brings
-# the winding to its rated rise, and the S1 check ("motor-s1") starts at kt times it.
-stall_current_a = 4.35
+# [catalogue] 1FK2105-4AF: static torque 5 N m at the stall current 4.65 A (motors_s210.csv), as a motor named in
+# [parts] brings it; with effects.iron_loss the copper loss at it brings the winding to its rated rise, and the S1
+# check ("motor-s1") starts at kt times it.
+stall_current_a = 4.65
 # With effects.magnet_temperature [estimate]: NdFeB loses about 0.12 % of its remanence per kelvin.
 magnet_temperature_coefficient_1_k = -0.0012
 max_current_a = 18.0
@@ -138,8 +140,11 @@ kv_1_s = 50.0
 # the softest gearbox damping of the bounds (2 N m s/rad) left 29.7 degrees at 0.25 (26.4 at 0.3, 0.03 s: it never passed
 # the sweep); at 0.18 at least 37.8 degrees and 9.9 dB, 45.7 and 11.0 with friction. The cycle's following error grows
 # from 8.86 to 12.1 mrad (the cut, outside the feedforward), the cam's from 4.72 to 5.70 mrad, settling 0.042 to
-# 0.072 mrad of 0.3.
-velocity_kp_nm_s_rad = 0.18
+# 0.072 mrad of 0.3. Then 0.20 (22 November 2026): over the cycle's poses (`sim-cli margins`) the roll at pi, the
+# cycle's other stop, read 34.0 degrees friction off at 0.18 (crossover 24 Hz, low against the integrator's corner:
+# a lower gain gives less, 29.2 at 0.15); at 0.20 at least 36.6 degrees and 9.7 dB there, and over the bounds at the
+# start at least 35.5 degrees and 9.0 dB friction off (0.21 left 34.3 there), 42.6 and 10.0 with friction.
+velocity_kp_nm_s_rad = 0.2
 velocity_tn_s = 0.01
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0
@@ -157,12 +162,17 @@ friction_feedforward_model = "machine"
 # The position setpoint passes a first-order lag of this time constant before the position loop compares it, so that
 # it arrives with the motor the speed feedforward moves (S120 p1429 balancing). 0: off, as commissioned by default.
 precontrol_balance_s = 0.0
+# The winding's voltage limit the six-step wave's fundamental, 2 sqrt 3 / pi (4 / pi for a stepper) of the
+# sinusoidal one (harmonics and their loss not modelled). Off, as a drive comes.
+overmodulation = false
 # With effects.load_encoder: the step of the load-side scales, in the tool axes' units (m, rad). 1 um: a glass scale.
 load_encoder_step = 1.0e-6
 current_kp_v_a = 40.0
 current_tn_s = 5.0e-3
 # [catalogue] a 400 V line: 540 V DC link
 bus_voltage_v = 540.0
+# The back-EMF per speed of the one winding; 0: the torque constant. A catalogue motor by name sets its printed one.
+back_emf_constant_v_s_rad = 0.0
 # [catalogue] 1FK2105-4AF at 400 V: 15 N m maximum, 4.6 N m rated at 3000 r/min
 peak_torque_nm = 15.0
 rated_torque_nm = 4.6
