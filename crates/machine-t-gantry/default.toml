@@ -456,8 +456,11 @@ kv_1_s = 50.0
 # gain margin of at least 6 dB in every run, also with effects.motor_friction and guide_friction off (in a cruise
 # friction adds no damping to the loop). Found: at least 47.4 degrees and 8.2 dB (config as it is: 54 degrees,
 # 9.0 dB); friction off at least 39.1 degrees and 7.3 dB. 0.08 left 12 degrees and 2 dB: motor B hunted in the
-# gearbox backlash at a cruise.
-velocity_kp_nm_s_rad = 0.04
+# gearbox backlash at a cruise. Then 0.037 (22 November 2026): the margins over the cycle's poses (`sim-cli margins`
+# measures each pose the cycle stops at) found 33.0 degrees friction off at 0.04 with Z down at the left
+# ([0.1, 0.05], motor A, 225 Hz) and 34.0 degrees at the right (motor B); at 0.037 at least 35.5 degrees and 7.7 dB
+# over the poses friction off, 50.9 degrees and 9.2 dB with friction (motor B 35.7 degrees at 0.038).
+velocity_kp_nm_s_rad = 0.037
 velocity_tn_s = 0.01
 velocity_feedforward_factor = 1.0
 torque_feedforward_factor = 1.0

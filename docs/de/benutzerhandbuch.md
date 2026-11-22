@@ -1617,14 +1617,14 @@ Mit Kv = 50 1/s verhält sich der Lageregelkreis wie ein Verzögerungsglied erst
 ```text
 $ sim-cli margins t-gantry
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
-,a,185.6,54.9,9.19,1.882,277.3,,ok
-,b,179.8,52.1,9.09,1.878,277.3,,ok
-start.pose=[0.1 0.05],a,218.4,46.4,8.44,2.061,277.3,,ok
-start.pose=[0.1 0.05],b,179.0,53.0,9.46,1.827,277.3,,ok
-start.pose=[0.9 0.35],a,175.3,54.4,9.46,1.817,277.3,,ok
-start.pose=[0.9 0.35],b,189.3,53.2,8.82,1.946,277.3,,ok
-start.pose=[0.9 0.05],a,183.5,50.9,9.04,1.885,277.3,,ok
-start.pose=[0.9 0.05],b,214.5,48.8,8.85,1.994,277.3,,ok
+,a,178.0,57.4,9.93,1.775,277.3,,ok
+,b,170.4,55.8,9.83,1.771,253.5,,ok
+start.pose=[0.1 0.05],a,210.2,50.9,9.18,1.930,277.3,,ok
+start.pose=[0.1 0.05],b,170.1,56.8,10.20,1.736,253.5,,ok
+start.pose=[0.9 0.35],a,166.2,58.2,10.19,1.724,253.5,,ok
+start.pose=[0.9 0.35],b,181.6,55.7,9.57,1.830,277.3,,ok
+start.pose=[0.9 0.05],a,174.3,54.6,9.78,1.781,253.5,,ok
+start.pose=[0.9 0.05],b,206.3,54.2,9.59,1.872,277.3,,ok
 
 $ sim-cli margins single-axis --bands
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
@@ -1646,7 +1646,7 @@ belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 | `play_margin_db` | dB | Mit `effects.gearbox_backlash`: um wie viel die Verstärkung steigen darf, bis der Kreis über das Spiel hämmert, die Reserve der Beschreibungsfunktion mit abgeklungener Reibung am Rotor (jeder Lauf wird dafür ein zweites Mal mit geschlossenem Spiel gemessen; `margins` braucht etwa 15 % länger). Leer, wo das Spiel den Kreis nicht ändert (es bleibt unter dem Testmoment geschlossen, oder der Motor hat keines). Wird angegeben, nicht bewertet: über `result` entscheidet der Zeitlauf. Die Werkzeugdrehung des Fünfgelenks: 3,56 dB bei den ausgelieferten 0,033 N m s/rad, −4,18 dB bei 0,08 (danach hämmert sie ab 0,0497, im Zeitlauf ohne Reibung ab 0,048, mit Reibung ab 0,078) |
 | `result` | | `ok`, oder `FAIL`, wo eine Reserve negativ ist oder die Messung nicht gültig: Der Kreis lief dabei in seine Momentengrenze oder bewegte sich von selbst (schwang). Dann ist der Kreis instabil, und seine Reserven sind `NaN`. Ebenso `FAIL`, wo der Kreis über das Getriebespiel hämmert: Innerhalb des Spiels sieht die Messung nur den Rotor, und die Reserven können gut aussehen. Mit `effects.gearbox_backlash` wird darum jeder Kreis in Ruhe zusätzlich mit einem Gleitsinus vom Nennmoment seines Motors angestoßen und 0,3 s beobachtet; einer, der weiter von Flanke zu Flanke schwingt (und ohne Spiel nicht), wird auf stderr genannt, z. B. `Motor Werkzeugdrehung: hämmert über das Getriebespiel bei 650 Hz, 0.77 N m` (die Frequenz und die Spitze des Moments, das der Regler fordert), die Werkzeugdrehung des Fünfgelenks bei 0,08 N m s/rad |
 
-Die Drehzahlverstärkungen der Standardkonfigurationen wurden damit gewählt: mindestens 35° Phasenreserve und 6 dB Amplitudenreserve in jedem Lauf von `--bands`, auch mit `--set effects.motor_friction=false --set effects.guide_friction=false` (die Reibung dämpft den Kreis nahe dem Stillstand, wie bei der Messung, die die Maschine hält, aber nicht bei Konstantfahrt). Ergebnis: T-Portal 0,04 N m s/rad, mindestens 46,2° und 8,38 dB, ohne Reibung 35,7° und 7,42 dB; Einzelachse 0,025, mindestens 50,3° und 10,83 dB, ohne Reibung 39,0° und 10,05 dB (gemessen am 17. November 2026 an den Konfigurationen, wie sie ausgeliefert werden). Die Verstärkung von 0,08, die die Konfigurationen vorher hatten, ließ dem T-Portal 12° und 2 dB (Motor B pendelte bei Konstantfahrt im Getriebespiel) und der Einzelachse 1° und 0,3 dB (sie wurde mit dem Riemen an seiner steifsten Grenze instabil). Die EXCT-30 wurde ebenso eingestellt, von 0,6 (34,9° und 6,6 dB, ohne Reibung 29,6° und 5,8 dB) auf 0,45: mindestens 48,8° und 9,36 dB, ohne Reibung 40,6° und 8,61 dB (17. November). Die Zahlen für die früheren Verstärkungen stammen von vor dem 13. November, gemessen ohne stetig verfolgte Phase.
+Die Drehzahlverstärkungen der Standardkonfigurationen wurden damit gewählt: mindestens 35° Phasenreserve und 6 dB Amplitudenreserve in jedem Lauf von `--bands`, auch mit `--set effects.motor_friction=false --set effects.guide_friction=false` (die Reibung dämpft den Kreis nahe dem Stillstand, wie bei der Messung, die die Maschine hält, aber nicht bei Konstantfahrt). Ergebnis: T-Portal 0,04 N m s/rad, mindestens 46,2° und 8,38 dB, ohne Reibung 35,7° und 7,42 dB, dann 0,037 (22. November 2026), als die Reserven die Posen des Zyklus bekamen: 0,04 ließ ohne Reibung links mit Z unten 33,0°, 0,037 dort mindestens 35,5° und 7,7 dB; Einzelachse 0,025, mindestens 50,3° und 10,83 dB, ohne Reibung 39,0° und 10,05 dB (gemessen am 17. November 2026 an den Konfigurationen, wie sie ausgeliefert werden). Die Verstärkung von 0,08, die die Konfigurationen vorher hatten, ließ dem T-Portal 12° und 2 dB (Motor B pendelte bei Konstantfahrt im Getriebespiel) und der Einzelachse 1° und 0,3 dB (sie wurde mit dem Riemen an seiner steifsten Grenze instabil). Die EXCT-30 wurde ebenso eingestellt, von 0,6 (34,9° und 6,6 dB, ohne Reibung 29,6° und 5,8 dB) auf 0,45: mindestens 48,8° und 9,36 dB, ohne Reibung 40,6° und 8,61 dB (17. November). Die Zahlen für die früheren Verstärkungen stammen von vor dem 13. November, gemessen ohne stetig verfolgte Phase.
 
 **Die Sprungantwort als Kurve:**
 

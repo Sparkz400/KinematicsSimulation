@@ -335,6 +335,15 @@ brake_torque_nm = 3.2
 [motor.6]
 brake_torque_nm = 3.2
 
+# The base's turn (22 November 2026): its load changes most with the pose, and the cycle's stop with the arm
+# reaching out ([0.8, 0.45, -0.55, 0.3, 0.5, 1]) left the shared 0.15 a crossover of 8 Hz, against the integrator's
+# corner, with 21.7 degrees (16.6 with motor and joint friction off; 52.7 and 41.5 at the start). At 0.4 its crossover
+# is 190 Hz: over the cycle's poses at least 49.0 degrees and 8.8 dB, friction off 36.0 degrees and 8.3 dB, and with
+# the gearbox's backlash at its upper bound 47.6 degrees and 8.2 dB friction off. 0.45 hammered across that play
+# (`sim-cli margins urdf-arm --bands`, friction off: margin across the play 0.08 dB, the loop not stable).
+[drive.1]
+velocity_kp_nm_s_rad = 0.4
+
 [drive.4]
 velocity_kp_nm_s_rad = 0.05
 

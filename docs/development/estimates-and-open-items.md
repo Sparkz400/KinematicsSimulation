@@ -324,19 +324,32 @@ Fixed (after the second audit, 21 November):
   hardest over the pick (2.63 N m); its margin across the play is least at the start pose (3.56 dB). The T-gantry's
   motor A has its least margins at [0.1, 0.05]: 46.4° and 8.44 dB (54.9° and 9.19 dB at the start). `sim-cli margins`
   on 4 cores: five-bar 26.8 to 99.4 s, T-gantry 8.6 to 31.8 s. Each pose is measured in the start's payload state (the
-  segments' `payload` is not followed). Open, a decision, not retuned here: every loop stays stable
-  (`ok`) at every cycle pose, but these fall below the tuning's 35 degrees at a pose other than the start (`sim-cli
-  margins`, as shipped / motor and guide friction off; start pose in brackets): URDF arm motor 1 at [0.8, 0.45, -0.55,
-  0.3, 0.5, 1] 21.7 / 16.6 degrees (52.7 / 41.5); arm on a track motor 2 at [3.5, -1.3, 0.45, -0.55, 0.3, 0.5, 1]
-  24.2 / 16.7 (59.4 / 63.0); palletiser motor 2 at [1.6, 0.5, 1.3, pi/2] 32.7 / 26.4 (73.0 / 68.1), friction off also
-  motor 2 at z 0.8 29.5 and motor 3 32.1 (49.9); friction off only: T-gantry motor A at [0.1, 0.05] 33.0 (43.6), motor
-  B at [0.9, 0.05] 34.0 (42.3), rotary knife at pi 34.0 (52.5). All gain margins stay above 7 dB. So sim-cli's
-  `step_bode_and_tuning_write_csv_for_every_machine` (machines 12, 17, 25) and sim-machines' control
-  `the_shipped_velocity_loops_keep_their_margins` (T-gantry first, and past its 15 minutes: 126 s before) fail: either
-  the criterion holds at every pose (retunes; the shipped test split per machine) or it stays the start pose's (the
-  pose runs judged on stability alone). Time of `sim-cli margins` over the poses on 4 cores, as shipped / friction off:
-  mover track 769 / 359 s, rotary hexapod 456 / 678 s, spatial cable robot 361 / 1059 s, hexapod 182 / 200 s, tripod
-  203 / 167 s, the rest under 160 s.
+  segments' `payload` is not followed). Every loop stays stable (`ok`) at every
+  cycle pose; these fell below the tuning's 35 degrees at a pose other than the start (as shipped / motor and guide
+  friction off; start pose in brackets) and are retuned for at least 35 degrees over the poses (22 November):
+  URDF arm motor 1 at [0.8, 0.45, -0.55, 0.3, 0.5, 1] 21.7 / 16.6 degrees (52.7 / 41.5), crossover 8 Hz against the
+  integrator's corner: its own gain 0.15 -> 0.4, 49.0 / 36.0 degrees, 8.8 / 8.3 dB, crossover 190 Hz (0.45 hammered
+  across the play at its upper bound); arm on a track motor 2 the same, 24.2 / 16.7 (59.4 / 63.0) -> 53.7 / 46.8
+  degrees at 0.4; T-gantry friction off motor A at [0.1, 0.05] 33.0 (43.6), motor B at [0.9, 0.05] 34.0 (42.3): 0.04
+  -> 0.037, at least 35.5 / 36.6 degrees, 50.9 degrees with friction; rotary knife friction off at pi 34.0 (52.5):
+  0.18 -> 0.20, 36.6 degrees, over the bounds 35.5. Their cycles' verdicts all pass before and after (settling: T-gantry
+  43.36 -> 43.31 um, arm on a track 24.49 -> 24.45 um, URDF arm 1.968 -> 1.980 mrad, rotary knife 71.7 -> 60.8 urad).
+  These retunes trip sim-cli's tuning check (`step_bode_and_tuning_write_csv_for_every_machine`, the position loop's
+  band under 20 Hz) on three machines, a decision open: T-gantry x 11.30 -> 20.54 Hz, the closed loop's gain at 11.7
+  Hz 0.699 -> 0.708, just above 1/sqrt(2), below the 19 Hz mode's peak, so the first fall under it is past the mode
+  (the step itself the same: rise 28.75 -> 28.50 ms; 0.034 to 0.036 give 20.47 to 20.52 Hz alike); URDF arm j1 18.42
+  -> 20.58 Hz (20.21 at 0.3, 20.43 at 0.35), arm on a track j2 17.91 -> 20.04 Hz: the base's position loop already
+  overshoots 24 % at Kv 50 and its band rises with the velocity loop's.
+  Still open: the palletiser's motor 2 at [1.6, 0.5, 1.3, pi/2] 32.7 / 26.4 (73.0 / 68.1), at z 0.8 29.5 friction off,
+  and motor 3 32.1 friction off (49.9), waiting for its rod and crank. The T-gantry's figures quoted from cycle runs in
+  the guides (analyze, verdicts, optimise) are from the gain 0.04 and not re-run. The shipped margins test is one per
+  config now (`across_the_bounds::<config>::as_configured`). Time of `sim-cli margins` over the poses on 4 cores, as
+  shipped / friction off: mover track 769 / 359 s, rotary hexapod 456 / 678 s, spatial cable robot 361 / 1059 s,
+  hexapod 182 / 200 s, tripod 203 / 167 s, the rest under 160 s. No machine's extra poses were left out as adding
+  nothing: where the rigid machine's torques per acceleration, holding torques and modes are the start's at every pose
+  (mover track, rack, linear motor, rotary table, rotary knife, flying saw, disc cam, Geneva drive, cam indexer), the
+  loops still differ on the mover track (motor 2 21.39 against 30.04 dB; cause not looked into), the linear
+  motor (24.03 against 30.78 dB) and the rotary knife (65.3 against 46.2 degrees), so that test cannot tell.
 - The hexapod's lowest held mode (183.2 Hz) lies below its planner trains (289.6 Hz, each leg's M_kk with the others
   held), and the trains are right for the allowance's jerk term: with one motor driven and the others held the twist
   rate is [K^-1 M]_kk j = M_kk j / K_k, the modal sum of its column over the held modes (model reference, the planner's

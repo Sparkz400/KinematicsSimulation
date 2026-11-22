@@ -1650,16 +1650,16 @@ With Kv = 50 1/s the position loop behaves like a first-order lag with time cons
 ```text
 $ sim-cli margins t-gantry
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
-,a,185.6,54.9,9.19,1.882,277.3,,ok
-,b,179.8,52.1,9.09,1.878,277.3,,ok
-start.pose=[0.1 0.05],a,218.4,46.4,8.44,2.061,277.3,,ok
-start.pose=[0.1 0.05],b,179.0,53.0,9.46,1.827,277.3,,ok
-start.pose=[0.9 0.35],a,175.3,54.4,9.46,1.817,277.3,,ok
-start.pose=[0.9 0.35],b,189.3,53.2,8.82,1.946,277.3,,ok
-start.pose=[0.9 0.05],a,183.5,50.9,9.04,1.885,277.3,,ok
-start.pose=[0.9 0.05],b,214.5,48.8,8.85,1.994,277.3,,ok
-Motor A: least over the poses the cycle stops at: 46.43 deg start.pose=[0.1 0.05], 8.44 dB start.pose=[0.1 0.05] (phase margin, gain margin, then the margin across the backlash, each at its pose)
-Motor B: least over the poses the cycle stops at: 48.81 deg start.pose=[0.9 0.05], 8.82 dB start.pose=[0.9 0.35] (phase margin, gain margin, then the margin across the backlash, each at its pose)
+,a,178.0,57.4,9.93,1.775,277.3,,ok
+,b,170.4,55.8,9.83,1.771,253.5,,ok
+start.pose=[0.1 0.05],a,210.2,50.9,9.18,1.930,277.3,,ok
+start.pose=[0.1 0.05],b,170.1,56.8,10.20,1.736,253.5,,ok
+start.pose=[0.9 0.35],a,166.2,58.2,10.19,1.724,253.5,,ok
+start.pose=[0.9 0.35],b,181.6,55.7,9.57,1.830,277.3,,ok
+start.pose=[0.9 0.05],a,174.3,54.6,9.78,1.781,253.5,,ok
+start.pose=[0.9 0.05],b,206.3,54.2,9.59,1.872,277.3,,ok
+Motor A: least over the poses the cycle stops at: 50.90 deg start.pose=[0.1 0.05], 9.18 dB start.pose=[0.1 0.05] (phase margin, gain margin, then the margin across the backlash, each at its pose)
+Motor B: least over the poses the cycle stops at: 54.22 deg start.pose=[0.9 0.05], 9.57 dB start.pose=[0.9 0.35] (phase margin, gain margin, then the margin across the backlash, each at its pose)
 
 $ sim-cli margins single-axis --bands
 run,motor,crossover_hz,phase_margin_deg,gain_margin_db,peak_sensitivity,peak_frequency_hz,play_margin_db,result
@@ -1681,7 +1681,7 @@ belt.damping_n_s_m=200.0,m,175.1,66.0,11.45,1.602,253.5,,ok
 | `play_margin_db` | dB | With `effects.gearbox_backlash` on: by how much the gain may rise before the loop hammers across the play, the describing function's margin with the rotor's friction faded (each run is measured a second time with the play closed for it; `margins` takes some 15 % longer). Empty where the play does not change the loop (it stays closed under the test torque, or there is none on that motor). Told, not judged: the time run below decides `result`. The five-bar's tool turn: 3.56 dB at the shipped 0.033 N m s/rad, −4.18 dB at 0.08 (it hammers from 0.0497 by it, from 0.048 in a time run with the friction off, from 0.078 with it on) |
 | `result` | | `ok`, or `FAIL` where a margin is negative or the measurement is not valid: the loop ran into its torque limit or moved on its own (oscillated) during it. Then the loop is unstable and its margins are `NaN`. Also `FAIL` where the loop hammers across its gearbox's play: inside the play the measurement sees the rotor alone and the margins can look fine, so with `effects.gearbox_backlash` on each loop is also kicked at rest by a sweep of its motor's rated torque and watched for 0.3 s; one that keeps swinging from flank to flank (and does not with the play off) is named on stderr, e.g. `Motor tool turn: hammers across the backlash at 650 Hz, 0.77 N m` (the frequency, and the peak of the torque the loop asks for), the five-bar's tool turn at 0.08 N m s/rad |
 
-The default configs' velocity gains were chosen with it: at least 35° of phase margin and 6 dB of gain margin in every run of `--bands`, also with `--set effects.motor_friction=false --set effects.guide_friction=false` (friction damps the loop near standstill, as the measurement holds the machine, but not in a cruise). Found: T-gantry 0.04 N m s/rad, at least 46.2° and 8.38 dB, 35.7° and 7.42 dB with friction off; single axis 0.025, at least 50.3° and 10.83 dB, 39.0° and 10.05 dB with friction off (measured 17 November 2026 on the configs as shipped). The gain of 0.08 the configs had before left the T-gantry 12° and 2 dB (motor B hunted in its gearbox backlash in a cruise) and the single axis 1° and 0.3 dB (it went unstable with the belt at its stiffest bound). The EXCT-30 was tuned the same way, from 0.6 (34.9° and 6.6 dB, 29.6° and 5.8 dB with friction off) to 0.45: at least 48.8° and 9.36 dB, 40.6° and 8.61 dB with friction off (17 November). The figures for the earlier gains are from before 13 November, measured without the phase unwrapped.
+The default configs' velocity gains were chosen with it: at least 35° of phase margin and 6 dB of gain margin in every run of `--bands`, also with `--set effects.motor_friction=false --set effects.guide_friction=false` (friction damps the loop near standstill, as the measurement holds the machine, but not in a cruise). Found: T-gantry 0.04 N m s/rad, at least 46.2° and 8.38 dB, 35.7° and 7.42 dB with friction off, then 0.037 (22 November 2026), when the margins took the cycle's poses: 0.04 left 33.0° with friction off at the left with Z down, 0.037 at least 35.5° and 7.7 dB there; single axis 0.025, at least 50.3° and 10.83 dB, 39.0° and 10.05 dB with friction off (measured 17 November 2026 on the configs as shipped). The gain of 0.08 the configs had before left the T-gantry 12° and 2 dB (motor B hunted in its gearbox backlash in a cruise) and the single axis 1° and 0.3 dB (it went unstable with the belt at its stiffest bound). The EXCT-30 was tuned the same way, from 0.6 (34.9° and 6.6 dB, 29.6° and 5.8 dB with friction off) to 0.45: at least 48.8° and 9.36 dB, 40.6° and 8.61 dB with friction off (17 November). The figures for the earlier gains are from before 13 November, measured without the phase unwrapped.
 
 **The step response as a trace:**
 
