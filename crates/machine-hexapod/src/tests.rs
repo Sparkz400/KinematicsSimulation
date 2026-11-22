@@ -219,7 +219,10 @@ fn the_legs_parts_add_the_hand_calculated_kinetic_energy() {
 /// and at rest h is the legs' holding force (`static_leg_forces`, with the parts' weights).
 #[test]
 fn the_dynamics_with_the_legs_parts_agree_with_the_lagrange_equations() {
-    let mech = mechanism(&ENTRY.config());
+    // The rotors' gyroscopic push is no term of M_q (their spin is not among q): its own test below.
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.rotor_gyroscopic = false").unwrap();
+    let mech = mechanism(&cfg);
     let tool = [0.03, -0.02, 0.5, 0.04, -0.03, 0.06];
     let mut q = [0.0; 6];
     assert!(mech.geo.inverse(&tool, &mut q));
@@ -360,4 +363,108 @@ fn assert_figures(id: &str, got: &[f64], want: &[f64], tol: f64) {
     for (k, (g, w)) in got.iter().zip(want).enumerate() {
         assert!((g - w).abs() <= tol * w.abs().max(1e-12), "{id}: figure {k} is {g:e}, was {w:e}; all: {got:?}");
     }
+}
+
+/// The legs' rotors turning with their legs (`effects.rotor_gyroscopic`), against the frame's momentum: each rotor's
+/// angular momentum h_i u_i is what `frame_momentum` adds for its spin; its rate as the platform moves along its twist
+/// (h held, central differences of the pose) is the moment M_i the leg must give it, which reaches the platform as the
+/// couple's force F_i = -(M_i x u_i) / L_i at the joint, moment b_i x F_i. `rotor_gyroscopic` gives that wrench to 1e-7,
+/// each leg's force square to its joint's velocity (no power), and the dynamics' bias moves by -J^-T of it.
+/// h is the chain's: on a rigid state the frame momentum of the machine (`JointMachine`: the drive's rotor inertia times
+/// its speed, ratio times q') is the mechanism's with J i q' along each leg. J i = 0.185583 N m s per m/s: the rotor's
+/// 2.9537e-4 kg m^2 (the motor's 1.7e-4 with the screw's and the coupling's) times 2 pi / 0.01 m.
+/// By hand at home (leg 1: u = (-0.471222, -0.090806, 0.877328), L = 0.5471158 m), the platform moving at 0.1 m/s
+/// along x: q' = u . v = -0.0471222 m/s, u' = (v - u q') / L = (0.142191, -0.0078209, 0.0755628) 1/s, h = J i q' =
+/// -8.7451e-3 N m s, so the leg gives its rotor h |u'| = 1.410e-3 N m and the platform F = h (u x u') / L =
+/// (0, -2.56312e-3, -2.65289e-4) N at its joint.
+#[test]
+fn the_rotors_turning_with_their_legs_push_the_platform_as_their_momentum_turns() {
+    let mut cfg = ENTRY.config();
+    cfg.set_text("effects.rotor_gyroscopic = true").unwrap();
+    let mech = mechanism(&cfg);
+    assert!((mech.rotor_spin - 0.185583).abs() < 1e-6, "{}", mech.rotor_spin);
+    let home = [0.0, 0.0, 0.48, 0.0, 0.0, 0.0];
+    let at_home = mech.geo.legs(&home);
+    let v = [0.1, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let rates: [f64; 6] = std::array::from_fn(|i| dot(at_home.u[i], [0.1, 0.0, 0.0]));
+    let first = mech.rotor_gyroscopic(&at_home, &v, &[rates[0], 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let hand = [0.0, -2.56312e-3, -2.65289e-4];
+    for k in 0..3 {
+        assert!((first[k] - hand[k]).abs() < 1e-8, "leg 1 at home: {first:?} against {hand:?} by hand");
+    }
+    // The chain's h: the machine's frame momentum on a rigid state against the mechanism's with J i q'.
+    let mut rigid = cfg.clone();
+    rigid.set_text("effects.joint_elasticity = false").unwrap();
+    let (machine, inner) = Hexapod::from_config(&rigid).unwrap();
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; 6]);
+    machine.equilibrium(&home, &mut state, &mut torque);
+    let (q0, qd0) = (state[..6].to_vec(), [0.05, -0.03, 0.02, 0.04, -0.01, 0.03]);
+    state[6..12].copy_from_slice(&qd0);
+    let spins: Vec<f64> = qd0.iter().map(|v| inner.rotor_spin * v).collect();
+    let (whole, own) =
+        (machine.frame_momentum(&state).unwrap(), Mechanism::frame_momentum(&inner, &q0, &qd0, &spins).unwrap());
+    let none = Mechanism::frame_momentum(&inner, &q0, &qd0, &[0.0; 6]).unwrap();
+    for k in 0..3 {
+        assert!((whole.angular[k] - own.angular[k]).abs() < 1e-12, "{:?} against {:?}", whole.angular, own.angular);
+        assert!((whole.angular[k] - none.angular[k]).abs() > 1e-4 || k == 2, "{:?}", whole.angular);
+    }
+    let tool = [0.03, -0.02, 0.5, 0.04, -0.03, 0.06];
+    let xi = [0.12, -0.08, 0.1, 0.3, -0.2, 0.4];
+    let legs = mech.geo.legs(&tool);
+    let j = Geometry::jacobian(&legs);
+    let qd: [f64; 6] = std::array::from_fn(|r| (0..6).map(|c| j[r * 6 + c] * xi[c]).sum());
+    let r = Geometry::rotation(&tool);
+    let eps = 1e-5;
+    // The legs at the pose moved by the twist for a time t: p + v t, R turned by w t.
+    let q_at = |t: f64| {
+        let p = [tool[0] + xi[0] * t, tool[1] + xi[1] * t, tool[2] + xi[2] * t];
+        let turned = log(&matmul(&exp([xi[3] * t, xi[4] * t, xi[5] * t]), &r));
+        let mut q = [0.0; 6];
+        assert!(mech.geo.inverse(&[p[0], p[1], p[2], turned[0], turned[1], turned[2]], &mut q));
+        q
+    };
+    let spin_of = |q: &[f64; 6], i: usize| {
+        let mut spin = [0.0; 6];
+        spin[i] = mech.rotor_spin * qd[i];
+        let with = Mechanism::frame_momentum(&mech, q, &qd, &spin).unwrap().angular;
+        let without = Mechanism::frame_momentum(&mech, q, &qd, &[0.0; 6]).unwrap().angular;
+        sub(with, without)
+    };
+    let mut want = [0.0; 6];
+    for i in 0..6 {
+        let rate = sub(spin_of(&q_at(eps), i), spin_of(&q_at(-eps), i)).map(|m| m / (2.0 * eps));
+        let force = cross(rate, legs.u[i]).map(|f| -f / legs.length[i]);
+        let moment = cross(legs.b[i], force);
+        (0..3).for_each(|k| (want[k], want[3 + k]) = (want[k] + force[k], want[3 + k] + moment[k]));
+        let mut alone = [0.0; 6];
+        alone[i] = qd[i];
+        let one = mech.rotor_gyroscopic(&legs, &xi, &alone);
+        let joint = add([xi[0], xi[1], xi[2]], cross([xi[3], xi[4], xi[5]], legs.b[i]));
+        assert!(dot([one[0], one[1], one[2]], joint).abs() < 1e-15, "leg {i}: {one:?} works at {joint:?}");
+    }
+    let got = mech.rotor_gyroscopic(&legs, &xi, &qd);
+    println!("rotors' wrench {got:?}, by the momentum's rate {want:?}, J i {}", mech.rotor_spin);
+    let size = want.iter().map(|v| v.abs()).fold(0.0, f64::max);
+    assert!(size > 1e-3, "{want:?}");
+    for k in 0..6 {
+        assert!((got[k] - want[k]).abs() < 1e-7 * size, "{got:?} against {want:?}");
+    }
+    // The bias, on less off, is -J^-T of the wrench: J^T (on - off) = -W.
+    let mut off = cfg.clone();
+    off.set_text("effects.rotor_gyroscopic = false").unwrap();
+    let q = q_at(0.0);
+    let bias = |m: &Hexapod| {
+        let (mut mass, mut b) = ([0.0; 36], [0.0; 6]);
+        m.dynamics(&q, &qd, &mut mass, &mut b);
+        b
+    };
+    let (on, off) = (bias(&mech), bias(&mechanism(&off)));
+    for k in 0..6 {
+        let back: f64 = (0..6).map(|i| j[i * 6 + k] * (on[i] - off[i])).sum();
+        assert!((back + got[k]).abs() < 1e-9 * size.max(1.0), "{k}: {back} against {}", -got[k]);
+    }
+    // It does no work: the energy holds through a pulse and 10 s of ringing on the loss-free config with it on.
+    let mut lossless = (ENTRY.suite_configs)()[0].clone();
+    lossless.set_text("effects.rotor_gyroscopic = true").unwrap();
+    sim_core::testkit::energy_conservation((ENTRY.build)(&lossless).unwrap().as_ref());
 }

@@ -81,6 +81,120 @@ fn the_induction_axis_runs_its_cycle_on_v_f() {
     assert!(settling.value > 2e-3 && settling.value < 0.02, "{settling:?}");
 }
 
+/// The XYZ portal with the stepper axis's motor on X (T_d = 0.04 N m, N = 50, its potential swinging by T_d / (2N) =
+/// 0.4 mJ), X's drive on STO and the servos on OFF1 (a 10 s ramp from their rated speed): Z trips on its following error
+/// (0.0125 rad) as the move brakes, X's pulses go off at once and it coasts from 18 rad/s while Y and Z still ramp down
+/// (`Sim::advance_with_windings`, one drive's pulses off while another's are on). Coasting, its magnets' detent acts as
+/// with the drives disabled: the drive's torque is -T_d sin(4 N (theta - theta_0)) at the rotor's angle (the iron's
+/// drag is nil on this motor), and the work on the shaft each step is the detent potential's fall over it, to 1e-6 of
+/// the 10.6 mJ it gave and took over the coast. Before 22 November the stepper coasted on the iron's drag alone, no work
+/// done. The books are as with the detent off, to a thousandth of the detent's work (5.1e-6 J apart): the 5.3 mJ they
+/// leave open either way (of 20.5 J lost) are the servos' OFF1 ramps', with X a servo too (and 2.8e-5 J without a trip).
+#[test]
+fn a_tripped_stepper_coasts_on_its_detent_while_the_others_ramp() {
+    let (off_torque, off_work, moved, open) = tripped_stepper_on_the_portal(true);
+    assert!(off_torque < 1e-12, "the torque off the detent by {off_torque} N m");
+    assert!(moved > 10.0 * 0.04 / 200.0 && off_work < 1e-6 * moved, "{off_work} J off the detent's {moved} J");
+    let (_, _, _, without) = tripped_stepper_on_the_portal(false);
+    assert!((open - without).abs() < 1e-3 * moved, "{open} J open, {without} J without the detent");
+}
+
+/// The run above, the detent on or off: how far the drive's torque was off the detent, the shaft's work off the
+/// potential's fall, that fall's sum, and the books left open.
+fn tripped_stepper_on_the_portal(detent: bool) -> (f64, f64, f64, f64) {
+    use sim_components::{Command, Sim};
+    let entry = file("xyz-portal.toml");
+    let mut cfg = entry.config();
+    for off in ["dc_link", "holding_brake", "winding_heating"] {
+        cfg.set_text(&format!("effects.{off} = false")).unwrap();
+    }
+    for set in [
+        "effects.drive_monitoring = true",
+        "drive.fault_reaction = \"off1\"",
+        "drive.off1_ramp_s = 10.0",
+        "drive.following_error_window_rad = 0.0125",
+    ] {
+        cfg.set_text(set).unwrap();
+    }
+    // The stepper axis's motor as X's own table, and its drive on STO with a window its load angle stays in. A motor's
+    // table only overrides keys the shared one has, so the stepper's own go there too, for the servos that ignore them.
+    let stepper = file("stepper-axis.toml").config();
+    let (mut shared, mut own) = (String::from("kind = \"servo\"\n"), String::from("[motor.mx]\n"));
+    for (key, value) in stepper.get("motor").unwrap().as_table().unwrap() {
+        own += &format!("{key} = {value}\n");
+        if key != "kind" && cfg.get(&format!("motor.{key}")).is_err() {
+            shared += &format!("{key} = {value}\n");
+        }
+    }
+    let text = (cfg.to_text().unwrap())
+        .replacen("\n[effects]\n", &format!("\n[effects]\ndetent_torque = {detent}\n"), 1)
+        .replacen("\n[motor]\n", &format!("\n[motor]\n{shared}"), 1)
+        .replacen("\n[drive]\n", "\n[drive]\nmicrosteps = 16.0\nstepper_current_a = 3.5\n", 1)
+        + &own
+        + "[drive.mx]\nfault_reaction = \"sto\"\nfollowing_error_window_rad = 1.0\n";
+    let mut sim = Sim::new(entry, &Config::parse(&text).unwrap()).unwrap();
+    assert_eq!(sim.machine.motors()[0].id, "mx");
+    let p = sim.control.drive_params_of(0).clone();
+    let sim_components::drive::Motor::Stepper(s) = &p.motor else { panic!("X is no stepper") };
+    assert_eq!(p.iron_drag(10.0), 0.0);
+    let drives = sim.control.drives.len();
+    let stored = |sim: &Sim| {
+        (0..drives).map(|k| sim.control.drives[k].magnetic_energy(sim.control.drive_params_of(k))).sum::<f64>()
+            + sim.machine.energy(&sim.state)
+    };
+    let start = stored(&sim);
+    let lossy: Vec<usize> = (sim.machine.signal_infos().iter().enumerate())
+        .filter(|(_, s)| s.id.starts_with(sim_core::LOSS_PREFIX))
+        .map(|(i, _)| i)
+        .collect();
+    let loss = |sim: &Sim| {
+        let mut signals = Vec::new();
+        sim.machine.signals(&sim.state, &sim.machine_torque(), &mut signals);
+        lossy.iter().map(|&i| signals[i]).sum::<f64>()
+    };
+    sim.command(Command::MoveTo(vec![0.3, 0.3, 0.0])).unwrap();
+    let (mut angle, mut speed) = (vec![0.0; drives], vec![0.0; drives]);
+    // The drives' electrical energy less copper, what their magnets gave, and the machine's own losses (the trapezoid
+    // over each step).
+    let mut books = [0.0f64; 3];
+    let (mut coasted, mut worst_torque, mut off_work, mut moved, mut tripped_at) = (0, 0f64, 0f64, 0f64, 0f64);
+    for _ in 0..40000 {
+        sim.machine.motor_state(&sim.state, &mut angle, &mut speed);
+        let (before, was_off, lost) = (angle[0], sim.control.drives[0].pulses_off, loss(&sim));
+        sim.step();
+        for d in &sim.control.drives {
+            books[0] += (d.power - d.copper_loss) * sim.dt;
+            books[1] += d.emf_loss * sim.dt;
+        }
+        books[2] += 0.5 * (lost + loss(&sim)) * sim.dt;
+        let d = &sim.control.drives[0];
+        if !(d.pulses_off && sim.control.reacting()) {
+            continue;
+        }
+        if !was_off {
+            // The trip's step: X's current still flowed over it.
+            tripped_at = speed[0];
+            continue;
+        }
+        coasted += 1;
+        let origin = d.phases.origin;
+        worst_torque = worst_torque.max((d.torque - s.detent_torque(before, origin)).abs());
+        sim.machine.motor_state(&sim.state, &mut angle, &mut speed);
+        let gave = s.detent_potential(before, origin) - s.detent_potential(angle[0], origin);
+        off_work += (d.shaft_power * sim.dt - gave).abs();
+        moved += gave.abs();
+    }
+    let open = books[0] - books[1] - books[2] - (stored(&sim) - start);
+    println!(
+        "detent {detent}: {:?}; X at {tripped_at} rad/s, coasted {coasted} steps: the torque off the detent by up to \
+         {worst_torque} N m, the work off it {off_work} J of {moved} J; open {open:e} J of {} J lost",
+        sim.control.fault, books[2]
+    );
+    let fault = sim.control.fault.as_ref().unwrap();
+    assert!(fault.drive == 2 && tripped_at > 10.0 && coasted > 10000, "{fault:?}, {tripped_at} rad/s, {coasted} steps");
+    (worst_torque, off_work, moved, open)
+}
+
 /// The stepper's detent (T_d = 0.04 N m, N = 50: its potential swings by T_d / (2N) = 0.4 mJ) across a disable and an
 /// enable. The stepper axis without its losses moves, is disabled mid-move and coasts 50 ms on the detent alone (which
 /// its magnets hold without current), is enabled again off its grid's full step and pulled there: over all of it the

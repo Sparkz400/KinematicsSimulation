@@ -1139,16 +1139,45 @@ fn the_parallelogram_holds_the_forearm_against_the_upper_arms_bend() {
     assert!((unheld - by_hand).abs() > 0.05 * by_hand, "without the bars {unheld} Hz");
     // Acting back on the joints (effects.link_bending_reaction), the bars' fields in the coupling with their rates: its
     // energy holds over the suite's run with gravity (`testkit::energy_conservation`): 1.8e-8 J of the 2.8 mJ put in over
-    // 10 s, the arm without its bars 6.9e-9 J of 3.2 mJ (the integrator's level). The joints' stops off: with the
-    // bars the swinging upper arm reaches its stop at 0.9 rad, and the stiff stop's integration error (1.3e-5 J at
-    // 62.5 us, 1.3e-6 J at 31.25 us, in steps at each contact) is no term of the model.
-    let mut cfg = bent_config(true, true);
-    cfg.set_text("effects.hard_stops = false").unwrap();
-    sim_core::testkit::energy_conservation((PALLETISER.build)(&cfg).unwrap().as_ref());
+    // 10 s with the joints' stops off, the arm without its bars 6.9e-9 J of 3.2 mJ (the integrator's level). With the
+    // bars the swinging upper arm reaches its stop at 0.9 rad: the steps that meet it cut 16 times finer
+    // (`mech::STOP_SUBSTEPS`), 5.3e-9 J. Before 22 November 1.3e-5 J, in steps at each contact (1.3e-6 J at half the
+    // step): the stop's damper taking hold within a step, integrated across.
+    let cfg = bent_config(true, true);
+    let (drift, injected) = sim_core::testkit::energy_drift((PALLETISER.build)(&cfg).unwrap().as_ref());
+    println!("with the stops: {drift} J of {injected} J");
+    assert!(injected > 0.0 && drift < 1e-5 * injected, "{drift} J of {injected} J");
 }
 
 /// The palletiser rigid and loss-free in joint space, its upper arm bending in its plane (a steel tube 150 x 10 mm,
 /// undamped), with or without its parallelogram's bars, with or without the bend acting back on the joints.
+/// The palletiser's rod stretching under the torque it passes (effects.bar_elasticity, [estimate] E A / L = 2.14e8 N/m
+/// on the forearm's 0.3 m lever, carrying motor 3): k c^2 = 2.14e8 x 0.09 = 1.926e7 N m/rad in series with the
+/// gearbox's 2e5, K = 1 / (1 / 2e5 + 1 / 1.926e7) = 197944.6 N m/rad. Motor 3's train (the planner's) then rings
+/// sqrt(K / 2e5) = 0.994834 times as high, the other motors' as before; the held modes see it too (one lower, none
+/// higher).
+#[test]
+fn the_parallelogram_rod_stretches_in_series_with_motor_threes_gearbox() {
+    let machine = |on: bool| {
+        let mut cfg = PALLETISER.config();
+        cfg.set_text(&format!("effects.bar_elasticity = {on}")).unwrap();
+        (PALLETISER.build)(&cfg).unwrap()
+    };
+    let (off, on) = (machine(false), machine(true));
+    let pose = [1.2, -0.5, 1.3, 0.0];
+    let (a, b) = (off.trains(&pose), on.trains(&pose));
+    let k: f64 = 1.0 / (1.0 / 2e5 + 1.0 / (2.14e8 * 0.09));
+    assert!((k - 197_944.6).abs() < 0.1, "{k}");
+    for m in 0..4 {
+        let (a, b) = (a[m].unwrap().hz, b[m].unwrap().hz);
+        let want = if m == 2 { (k / 2e5).sqrt() } else { 1.0 };
+        assert!((b / a - want).abs() < 1e-9, "motor {}: {} against {want}", m + 1, b / a);
+    }
+    let (a, b) = (off.modes(&pose), on.modes(&pose));
+    assert!(a.len() == b.len() && a.iter().zip(&b).all(|(a, b)| b.hz <= a.hz * (1.0 + 1e-12)), "{a:?} {b:?}");
+    assert!(a.iter().zip(&b).any(|(a, b)| b.hz < a.hz * (1.0 - 1e-4)), "{a:?} {b:?}");
+}
+
 fn bent_config(bars: bool, reaction: bool) -> Config {
     {
         let mut cfg = rigid(&PALLETISER);
@@ -1500,7 +1529,7 @@ fn the_machine_friction_feedforward_is_the_steady_friction_and_the_integrator_ca
 
 /// The palletiser's turret on its gear, as it rings after a long move in x (its arm out to 1.79 m): the machine reports
 /// its joints' modes with the motors held, K x = w^2 M x (`JointMachine::held_modes`), 8.21 Hz at the move's start (8.30
-/// before the parallelogram's rod and crank came in, 22 November: their 14 kg turn with the turret too) and
+/// before the parallelogram's rod and crank were added, 22 November: their 14 kg turn with the turret too) and
 /// 5.95 Hz at its end, the turret's (4 mm of its sway in x 0.3 s after the move, `a_move_arrives_and_comes_to_rest`).
 /// The ring measured from the tool's speed rings lower, at 5.30 Hz: the velocity loop does not hold the motor rigidly.
 /// Its cascade (Kv, then PI with Kp and Tn) holds the rotor with Z = Kp (1 + 1 / (j w Tn)) (Kv + j w) - w^2 J at the
@@ -2169,6 +2198,164 @@ fn a_parallelogram_bar_is_a_body_of_its_own() {
     near(torque[2], -0.178154, 1e-5, "motor 3 without it");
     cfg.set_text("arm.bars_on = [7.0]").unwrap();
     assert!((URDF_ARM.build)(&cfg).is_err());
+}
+
+/// A four-bar of unequal links on the SCARA (`arm.four_bar_*`): the follower's pivot F at (0.15, 0.06, 0) of link 1, the
+/// crank point C 0.08 m out along link 2 from joint 2 (at (0.325, 0) of link 1), a 0.2 m coupler (0.5 kg) from C to T
+/// and a 0.12 m follower (0.3 kg) from F to T, in link 1's plane. The exact loop by hand in link 1's frame:
+/// C = (0.325 + 0.08 cos q2, 0.08 sin q2), d = C - F, cos a = (l_f^2 + |d|^2 - l_c^2) / (2 l_f |d|),
+/// T = F + l_f (cos a e + sin a e_perp); each bar a slender rod, its centre at its middle, m l^2 / 12 about it. Its share
+/// of the mass matrix over (q1, q2) is sum m dc/dq_i . dc/dq_j + I db/dq_i db/dq_j (c the centre, b the bar's angle in
+/// the base frame, by central differences of the closed form), which the machine's (the feedforward's torques at unit
+/// accelerations, at rest, less the SCARA's own, times the ratios 100 and 80) matches to 1e-7 at q2 = 0.3 and 1.2
+/// (q1 = 0.4). Its energy holds over the suite's pulse and ring (loss-free).
+#[test]
+fn a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand() {
+    let keys = [
+        "arm.four_bar_ground_on = 1",
+        "arm.four_bar_ground_pin_m = [0.15, 0.06, 0.0]",
+        "arm.four_bar_crank_on = 2",
+        "arm.four_bar_crank_pin_m = [0.08, 0.0, 0.0]",
+        "arm.four_bar_normal = [0.0, 0.0, 1.0]",
+        "arm.four_bar_lengths_m = [0.2, 0.12]",
+        "arm.four_bar_masses_kg = [0.5, 0.3]",
+        "arm.four_bar_branch = 1",
+    ];
+    let mut with = rigid(&SCARA);
+    keys.iter().for_each(|k| with.set_text(k).unwrap());
+    let (plain, looped) = ((SCARA.build)(&rigid(&SCARA)).unwrap(), (SCARA.build)(&with).unwrap());
+    // The bars' centres and angles in the base frame at (q1, q2), by the closed form.
+    let bars = |q1: f64, q2: f64| -> [(f64, [f64; 2], f64); 2] {
+        let (lc, lf, f) = (0.2f64, 0.12f64, [0.15f64, 0.06]);
+        let c = [0.325 + 0.08 * q2.cos(), 0.08 * q2.sin()];
+        let d = [c[0] - f[0], c[1] - f[1]];
+        let dd = d[0].hypot(d[1]);
+        let e = [d[0] / dd, d[1] / dd];
+        let cos = (lf * lf + dd * dd - lc * lc) / (2.0 * lf * dd);
+        let sin = (1.0 - cos * cos).sqrt();
+        let t = [f[0] + lf * (cos * e[0] - sin * e[1]), f[1] + lf * (cos * e[1] + sin * e[0])];
+        let world = |p: [f64; 2]| [p[0] * q1.cos() - p[1] * q1.sin(), p[0] * q1.sin() + p[1] * q1.cos()];
+        let mid = |a: [f64; 2], b: [f64; 2]| world([0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])]);
+        let angle = |a: [f64; 2], b: [f64; 2]| (b[1] - a[1]).atan2(b[0] - a[0]) + q1;
+        [(0.5, mid(c, t), angle(c, t)), (0.3, mid(f, t), angle(f, t))]
+    };
+    for q2 in [0.3, 1.2] {
+        let q = [0.4, q2];
+        let h = 1e-6;
+        let rate = |j: usize| {
+            let (mut a, mut b) = (q, q);
+            a[j] -= h;
+            b[j] += h;
+            let (lo, hi) = (bars(a[0], a[1]), bars(b[0], b[1]));
+            std::array::from_fn::<_, 2, _>(|k| {
+                (
+                    [(hi[k].1[0] - lo[k].1[0]) / (2.0 * h), (hi[k].1[1] - lo[k].1[1]) / (2.0 * h)],
+                    (hi[k].2 - lo[k].2) / (2.0 * h),
+                )
+            })
+        };
+        let (r0, r1) = (rate(0), rate(1));
+        let by_hand = |i: usize, j: usize| -> f64 {
+            let (ri, rj) = (if i == 0 { r0 } else { r1 }, if j == 0 { r0 } else { r1 });
+            (0..2)
+                .map(|k| {
+                    let (m, l) = ([0.5, 0.3][k], [0.2, 0.12][k]);
+                    m * (ri[k].0[0] * rj[k].0[0] + ri[k].0[1] * rj[k].0[1]) + m * l * l / 12.0 * ri[k].1 * rj[k].1
+                })
+                .sum()
+        };
+        let pose = [q[0], q[1], 0.1, 0.0];
+        for j in 0..2 {
+            let mut acc = [0.0; 4];
+            acc[j] = 1.0;
+            let (mut a, mut b) = ([0.0; 4], [0.0; 4]);
+            looped.feedforward_torque(&pose, &acc, &mut a);
+            plain.feedforward_torque(&pose, &acc, &mut b);
+            for i in 0..2 {
+                let got = [100.0, 80.0][i] * (a[i] - b[i]);
+                let want = by_hand(i, j);
+                assert!((got - want).abs() < 1e-7 * want.abs().max(1e-3), "q2 {q2}: M[{i}][{j}] {got} against {want}");
+            }
+        }
+    }
+    let mut lossless = (SCARA.suite_configs)()[0].clone();
+    keys.iter().for_each(|k| lossless.set_text(k).unwrap());
+    sim_core::testkit::energy_conservation((SCARA.build)(&lossless).unwrap().as_ref());
+}
+
+/// A four-bar on a bending link (`bar_field` with a `Closure`): its pins move with the mode as their bodies' points, its
+/// bars turn as the loop's Jacobian has them at the deflected pins. Its limit, the parallelogram: on the SCARA the
+/// follower's pivot at joint 1's axis (link 1's origin), the crank point 0.08 m out on link 2, the follower 0.08 m and the
+/// coupler 0.325 m, link 1's length, the crank square to link 2 (0.08 m along its y, so that the loop is no flat
+/// parallelogram at zero joints, where the modes' masses are taken; at a dead point a four-bar with bending is refused):
+/// the follower stays parallel to link 2's crank and the coupler to link 1's chord,
+/// as two parallel bars do (`bars_turns_with` [2, 1]: the follower turning with link 2, the coupler with link 1, the bent
+/// link, by its chord). Link 1 bending in its plane (a 120 x 8 mm aluminium tube), both give the same modes to 1e-9 at
+/// two poses. And the energy holds with the bend acting back on the joints, the unequal four-bar of
+/// `a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand` on links 1 and 2 bending (refused before).
+#[test]
+fn a_four_bar_on_a_bending_link_has_the_parallelograms_modes_in_its_limit() {
+    let bent = |extra: &[&str]| {
+        let mut cfg = rigid(&SCARA);
+        for edit in [
+            "effects.link_bending = true",
+            r#"link_bending.directions = ["in_plane"]"#,
+            "link_bending.outer_diameter_m = [0.12, 0.0, 0.0, 0.0]",
+            "link_bending.wall_m = [0.008, 0.0, 0.0, 0.0]",
+            "link_bending.damping_ratio = 0.0",
+        ]
+        .iter()
+        .chain(extra)
+        {
+            cfg.set_text(edit).unwrap();
+        }
+        cfg
+    };
+    let (lc, lf) = (0.5 * 0.325f64.powi(2) / 12.0, 0.3 * 0.08f64.powi(2) / 12.0);
+    let parallel = bent(&[
+        "arm.bars_on = [1, 2]",
+        "arm.bars_turns_with = [2, 1]",
+        "arm.bars_pin_m = [0.0, 0.0, 0.0, 0.0, 0.08, 0.0]",
+        "arm.bars_mass_kg = [0.3, 0.5]",
+        "arm.bars_com_m = [0.0, 0.04, 0.0, -0.1625, 0.0, 0.0]",
+        &format!("arm.bars_inertia_kgm2 = [{lf}, 0.0, {lf}, 0.0, 0.0, 0.0, 0.0, {lc}, {lc}, 0.0, 0.0, 0.0]"),
+    ]);
+    let looped = bent(&[
+        "arm.four_bar_ground_on = 1",
+        "arm.four_bar_ground_pin_m = [0.0, 0.0, 0.0]",
+        "arm.four_bar_crank_on = 2",
+        "arm.four_bar_crank_pin_m = [0.0, 0.08, 0.0]",
+        "arm.four_bar_normal = [0.0, 0.0, 1.0]",
+        "arm.four_bar_lengths_m = [0.325, 0.08]",
+        "arm.four_bar_masses_kg = [0.5, 0.3]",
+        "arm.four_bar_branch = 1",
+    ]);
+    let (a, b) = ((SCARA.build)(&parallel).unwrap(), (SCARA.build)(&looped).unwrap());
+    for pose in [[0.4, 1.0, 0.1, 0.0], [-0.3, 1.3, 0.1, 0.0]] {
+        let (ma, mb) = (a.modes(&pose), b.modes(&pose));
+        assert!(!ma.is_empty() && ma.len() == mb.len(), "{ma:?} {mb:?}");
+        for (x, y) in ma.iter().zip(&mb) {
+            assert!((x.hz / y.hz - 1.0).abs() < 1e-9, "{pose:?}: parallel {} Hz, four-bar {} Hz", x.hz, y.hz);
+        }
+    }
+    let mut lossless = (SCARA.suite_configs)()[0].clone();
+    for edit in [
+        "effects.link_bending = true",
+        "effects.link_bending_reaction = true",
+        r#"link_bending.directions = ["in_plane"]"#,
+        "link_bending.damping_ratio = 0.0",
+        "arm.four_bar_ground_on = 1",
+        "arm.four_bar_ground_pin_m = [0.15, 0.06, 0.0]",
+        "arm.four_bar_crank_on = 2",
+        "arm.four_bar_crank_pin_m = [0.08, 0.0, 0.0]",
+        "arm.four_bar_normal = [0.0, 0.0, 1.0]",
+        "arm.four_bar_lengths_m = [0.2, 0.12]",
+        "arm.four_bar_masses_kg = [0.5, 0.3]",
+        "arm.four_bar_branch = 1",
+    ] {
+        lossless.set_text(edit).unwrap();
+    }
+    sim_core::testkit::energy_conservation((SCARA.build)(&lossless).unwrap().as_ref());
 }
 
 /// The carriage's motor rotor is part of what its guides carry: it spins about the vertical at the ratio times the

@@ -69,6 +69,7 @@ param-youngs_modulus_pa = Young's modulus [Pa]
 param-damping_ratio = Damping ratio
 quantity-link-bend = Link bending at its tip
 effect-link_bending_reaction = The links' bending acts back on the joints (two-way)
+effect-bar_elasticity = The parallelogram rod stretches (in series with the gearbox)
 param-shear_modulus_pa = Shear modulus [Pa]
 param-directions = Directions: in_plane, out_of_plane, torsion
 quantity-link-bend-across = Link bending at its tip, across its joint's plane

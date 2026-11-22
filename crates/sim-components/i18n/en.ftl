@@ -128,6 +128,7 @@ quantity-torque = Torque
 quantity-torque-command = Torque command
 quantity-speed-command = Speed command
 error-target-out-of-range = The target lies outside the travel range.
+error-pick-hook-in-payload = At this pick the hook block would hang inside the payload.
 error-busy = A move or the cycle is still running.
 error-no-cycle = The configuration defines no cycle.
 error-trajectory = The trajectory needs at least two points inside the travel range, at rising times from 0.

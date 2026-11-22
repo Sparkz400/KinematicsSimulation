@@ -290,7 +290,7 @@ T_0,ref `no_load_torque_nm` at ω_ref `no_load_speed_rpm` and 20 °C (`thermal_f
 
 - **Stiffness and backlash.** Inside the dead zone nothing is transmitted. With `effects.gearbox_backlash` off, β = 0.
 - **Flanks cannot pull.** With backlash on, if the damping term would reverse the torque while the flanks separate (τ · engaged < 0), the torque is zero. With backlash off the connection is a plain spring-damper and can pull, as a coupling does.
-- **Efficiency.** The loss is on the output torque. When the gearbox drives the load (power positive) the output gets τ · η; when the load drives back it gets τ / (η · r_b), τ / η for a gear that loses alike both ways. The exponent fades with tanh below 0.5 W of transmitted power, so a gearbox at rest has no torque step. Near zero power that fade is a damper of up to τ² |ln η| / 0.5 W on the output's speed; held at a large torque it is stiffer than a sub-step h resolves on the inertia J the gear drives there, so the simulation cuts that base step's sub-steps into ⌈c h / (κ J)⌉, κ = 0.5, at most 256 (`Machine::substeps_wanted`, from the step's start, for a gear within 40 widths of zero power; the joint machines and the scissor file tell it): the model is the same and the results converge to it. A lift held at 27 kN against a ceiling: 28 225.43 N (28 242.9 N at the plain 4 sub-steps, 28 225.43 N at 64), budget 4.2e-8 of the supply (2.3e-4 before); on a compliant base 5.3e-8 (1.9e-4); a six-leg platform at 52.95 kN against a slab, the 64-sub-step run's force to 2e-7 (53.4 kN at the plain 4), budget 2.7e-7, its 1.5 s hold 480 s instead of 40 s. No default cycle reaches it. With `effects.gearbox_efficiency` off, η = 1.
+- **Efficiency.** The loss is on the output torque. When the gearbox drives the load (power positive) the output gets τ · η; when the load drives back it gets τ / (η · r_b), τ / η for a gear that loses alike both ways. The exponent fades with tanh below 0.5 W of transmitted power, so a gearbox at rest has no torque step. Near zero power that fade is a damper of up to τ² |ln η| / 0.5 W on the output's speed; held at a large torque it is stiffer than a sub-step h resolves on the inertia J the gear drives there, so the simulation cuts that base step's sub-steps into ⌈c h / (κ J)⌉, κ = 1 (0.5 gives the same holds to 1e-11 at twice the cuts, 2 holds a lift on a compliant base 3 N off), at most 256 (`Machine::substeps_wanted`, from the step's start, for a gear within 40 widths of zero power; the joint machines and the scissor file tell it): the model is the same and the results converge to it. A lift held at 27 kN against a ceiling: 28 225.43 N (28 242.9 N at the plain 4 sub-steps, 28 225.43 N at 64), budget 4.2e-8 of the supply (2.3e-4 before); on a compliant base 5.3e-8 (1.9e-4); a six-leg platform at 52.95 kN against a slab, the 64-sub-step run's force to 2e-7 (53.4 kN at the plain 4), budget 2.7e-7, its 1.5 s hold 187 s instead of 40 s. No default cycle reaches it. With `effects.gearbox_efficiency` off, η = 1.
 - **Mesh friction** (`effects.gearbox_mesh_friction`, in place of the faded factor). The efficiency's loss is a friction in the mesh, at the output against the housing, in proportion to the torque the gear passes and against the output's motion at any speed, and it sticks at rest:
 
   ```text
@@ -371,6 +371,8 @@ F      = −k_s · beyond − c_s · v        only while F pushes back towards t
 ```
 
 A stop never holds on. With `effects.hard_stops` off there is none.
+
+The damper takes hold at once as the axis touches, a step in the force that a sub-step across it integrates with an error at each contact (about the third power of the sub-step). A base step that meets a stop (the axis in one, or nearer to the one it moves towards than two steps at its speed, `HardStop::met_within`) has its sub-steps cut 16 times finer (`mech::STOP_SUBSTEPS`, `Machine::substeps_wanted`; the joint machines and the linear delta tell it): the palletiser's upper arm swinging into its stop keeps its energy to 5.3e-9 J of 2.8 mJ over 10 s (1.3e-5 J before), the linear delta's carriages pulsed into theirs to 9e-11 J (3.1e-8 J). No default cycle meets a stop, so none is cut and their results are as before.
 
 ## Drive and motor
 
@@ -908,7 +910,7 @@ m_v = μ (4 s + 2 s_z) the belt's vertical runs,  m_b = m_v + μ (4 s + 2 s_x) /
 z_tool = z − w (+ the lean's rise)
 ```
 
-So the Z axis's acceleration drives the beam through −m_z, and the carriage's weight riding along the beam drives it through k(x) (a force on x of −½ k' w², and ½ M' w'² from the modal mass). At rest w is the quasi-static sag. By hand in the middle (k = 1.835e6 N/m, M = 2.21 kg, m_car + m_z = 11 kg, the belt's 0.247 kg below): 58.78 Hz with the Z axis held on a stiff belt (59.32 Hz without the belt riding on w, before 21 November); on the default belt the Z axis's own mode there (83 Hz) rides on w through −m_z and the vertical runs and the two couple to 51.0 and 142.2 Hz by the same two masses (M = [[13.457, −7.16], [−7.16, 7]] kg, K = diag(1.835·10⁶, 1.92·10⁶) N/m; 51.5 and 140.0 Hz without the belt on w) (the former estimate of about 100 Hz left out the carriage and the Z axis). The Lagrangian drops what the shape's change with x adds to the kinetic energy: a coupling ½ M′ w ẋ ẇ and ½ ∫ μ φₓ² w² ẋ², of the relative size w / L ≈ 5·10⁻⁵ and 10⁻⁹ of the kept terms at the 59 µm sag. The belt rides on w (since 21 November 2026, `belt_on_beam`): its vertical runs (μ (4 s + 2 s_z) = 0.16 kg) go down with the carriage whole, at z' − w' in Z as the Z axis (−0.16 kg more between z and w), and its horizontal runs, from the posts' pulleys to the carriage's idlers, tilt with it, a point at the share ξ of the way going down by ξ w: a third of μ (4 s + 2 s_x) = 0.087 kg in the kinetic energy, half (0.13 kg) in the weight on w, the first moment and the vertical momentum; about y the vertical runs at the carriage's x, the tilting runs μ ẇ Σ len (x_post / 6 + x_c / 3), and their momenta along X w lower. The weight on the beam, carriage, Z axis and those 0.29 kg, also sags it quasi-statically (`effects.beam_sag`: 60.33 µm in the middle, 58.78 µm before). The mode falls by 0.93 % (59.32 to 58.78 Hz); the runs' lengths change with w only to second order, left out (`the_belt_riding_on_the_beam_is_in_its_momentum`, `the_beams_vertical_mode_is_where_the_hand_value_has_it`). The beam's own mass moves with the mode in the frame momentum (vertical momentum −(p₀ ẇ + p₀′ ẋ w), p₀ = μ ∫ φ, 5 μ L / 8 = 2.84 kg in the middle, beside the 11 kg it carries); its weight on those points, −g p₀ w, is in the potential energy, and the beam's spring holds the stress of the beam's own sag, whose cross term with the mode is +g p₀ w (virtual work, EI u'''' = μ g): the two cancel, so V above and the dynamics stand, and the potential changes as −g · dc/dt at any x. ζ is the mode's damping ratio with the carriage and the Z axis on the beam. The damping is the loss row `power.beam`; the signal `beam.deflection` is w.
+So the Z axis's acceleration drives the beam through −m_z, and the carriage's weight riding along the beam drives it through k(x) (a force on x of −½ k' w², and ½ M' w'² from the modal mass). At rest w is the quasi-static sag. By hand in the middle (k = 1.835e6 N/m, M = 2.21 kg, m_car + m_z = 11 kg, the belt's 0.247 kg below): 58.78 Hz with the Z axis held on a stiff belt (59.32 Hz without the belt riding on w, before 21 November); on the default belt the Z axis's own mode there (83 Hz) rides on w through −m_z and the vertical runs and the two couple to 51.0 and 142.2 Hz by the same two masses (M = [[13.457, −7.16], [−7.16, 7]] kg, K = diag(1.835·10⁶, 1.92·10⁶) N/m; 51.5 and 140.0 Hz without the belt on w) (the former estimate of about 100 Hz left out the carriage and the Z axis). The Lagrangian drops what the shape's change with x adds to the kinetic energy: a coupling ½ M′ w ẋ ẇ and ½ ∫ μ φₓ² w² ẋ², of the relative size w / L ≈ 5·10⁻⁵ and 10⁻⁹ of the kept terms at the 59 µm sag. The belt rides on w (since 21 November 2026, `belt_on_beam`): its vertical runs (μ (4 s + 2 s_z) = 0.16 kg) go down with the carriage whole, at z' − w' in Z as the Z axis (−0.16 kg more between z and w), and its horizontal runs, from the posts' pulleys to the carriage's idlers, tilt with it, a point at the share ξ of the way going down by ξ w: a third of μ (4 s + 2 s_x) = 0.087 kg in the kinetic energy, half (0.13 kg) in the weight on w, the first moment and the vertical momentum; about y the vertical runs at the carriage's x (their idlers' pairs either side of it), the tilting runs μ ẇ Σ len (x_post / 6 + x_idler / 3), their carriage end at the carriage's idler x_c ∓ d (d = 0.03 m and the idler's radius, as drawn; at x_c until 22 November), and their momenta along X w lower. The weight on the beam, carriage, Z axis and those 0.29 kg, also sags it quasi-statically (`effects.beam_sag`: 60.33 µm in the middle, 58.78 µm before). The mode falls by 0.93 % (59.32 to 58.78 Hz); the runs' lengths change with w only to second order, left out (`the_belt_riding_on_the_beam_is_in_its_momentum`, `the_beams_vertical_mode_is_where_the_hand_value_has_it`). The beam's own mass moves with the mode in the frame momentum (vertical momentum −(p₀ ẇ + p₀′ ẋ w), p₀ = μ ∫ φ, 5 μ L / 8 = 2.84 kg in the middle, beside the 11 kg it carries); its weight on those points, −g p₀ w, is in the potential energy, and the beam's spring holds the stress of the beam's own sag, whose cross term with the mode is +g p₀ w (virtual work, EI u'''' = μ g): the two cancel, so V above and the dynamics stand, and the potential changes as −g · dc/dt at any x. ζ is the mode's damping ratio with the carriage and the Z axis on the beam. The damping is the loss row `power.beam`; the signal `beam.deflection` is w.
 
 The belt's vertical runs hold the leaning Z axis back with their geometric stiffness. A run goes from a carriage idler, at the carriage where the guide tilts, to a point of the Z axis d below the carriage: the clamp (d = −(s + z)) or the Z-bottom idler (d = s + sz − z). Under the spring's force F = k u that point is out sideways by δ = F g(d) (g the guide's give, tilt and bending at that distance) and has risen along the Z axis by F² ρ(d) (ρ = ½ ∫ θ² of the leaning bar), so the run is longer by δ²/(2|d|) − sign(d) F² ρ(d), and K_uu gains Σ T_i c_i over the runs. A guide that only tilts turns the end about the idler and leaves the run as long as it was; what is left is the guide's sideways give and its product with the tilt, c = k² (1/(lateral² |d|) + 2 sign(d) h / (lateral · tilt)) per run without bending: about 5 N/m on the default gantry at z = 0.05 m, 3·10⁻⁵ of the lean's spring. With `effects.belt_run_offset` (off as shipped; since 21 November 2026) the upper runs of sections 1 and 3 reach the clamp e = `tool_flex.belt_offset_m` (0.04 m, the pulleys' diameter) to either side of the Z axis's line. The clamp, above the carriage, turns with the guide's tilt θ = k u h / tilt, so it lifts the right run's end by e θ and lowers the left one's: section 3 is longer and section 1 shorter by e k h u / tilt, first order in u (`lean_offset`; at z = 0.1 m 0.19704 u). In the lengths, the rest follows: the tensions put (T₁ − T₃) e k h / tilt on the lean (and its change with z on Z), the sections' own stiffness EA / l holds the lean with (k₁ + k₃)(e k h / tilt)² and couples it to X through K_xu = −(k₁ + k₃) e k h / tilt, and damping and energy go with them (`the_belt_runs_offset_puts_their_tension_difference_on_the_lean`). It is not small: the lean's lowest mode on the loss-free gantry at x = 0.9, z = 0.05 m falls from 18.75 to 17.55 Hz, which is why it has its own switch. Without it the runs are on the line. The process force's vertical part works on the tip's rise a(z) u² (the leaning bar is shortened by θ² d / 2): it is in the lean's and the Z axis's equations, in the modes and in the process row of the budget, and `tool_state` has the rise in the tool's height.
 
@@ -1387,8 +1389,11 @@ p_y, 0), c = 2 rp |sin(g/2)|. **Verdicts**: `tripod-leg-force`, `tripod-leg-stro
 `error-tripod-revolute-angle`, `error-tripod-cone-angle`, `error-tripod-singularity`, and the joint machine's
 `error-joint-beyond-stop`. **Base**: `frame_momentum` as above with the rotors' spin along u_i, for `base::mount`.
 
-Not modelled: the rotors' gyroscopic coupling with the legs' swing (it is in the frame's momentum only), the rods' faces
-against platform and base, friction and play in the revolute and spherical joints, the joints' and the platform's
+The rotors' gyroscopic moment h u' needs no term: a leg swings in its plane, so u' and the moment lie square to the
+trunnion's axis e_i, which its bearing carries (passed to the platform it would be a force along e_i, a constraint
+force, A^T of it 0: `the_rotors_turning_with_their_legs_do_not_push_the_platform`); it is in the frame's momentum.
+Not modelled: the rods' faces against platform and base (no plates or housings in the config; the revolute and cone
+angle verdicts bound the legs' slant), friction and play in the revolute and spherical joints, the joints' and the platform's
 elasticity (the legs' screws are the only springs).
 
 ## Wafer handler
@@ -1726,10 +1731,10 @@ Each leg is two bodies, as on the [tripod](#tripod): the rod part (`leg.platform
 `leg.platform_part_centre_m` from the platform joint) and the body part (the rest, centre `leg.base_part_centre_m` from
 the base joint), each with its inertia across the leg, turning with u = d / L; each adds m Aᵀ A + I_t A_uᵀ A_u to M_ξ and
 m Aᵀ (a0 + g e_z) + I_t A_uᵀ ü to c + g. The payload is a point mass at the platform centre with its own inertia
-(`mass.payload_inertia_kgm2`, turning with the platform). The rotors spin along their legs (in the frame's momentum).
+(`mass.payload_inertia_kgm2`, turning with the platform). The rotors spin along their legs (in the frame's momentum) and turn with them (`effects.rotor_gyroscopic`, off as shipped): a rotor's angular momentum h = J i q' along u turns as u does, so its leg must give it the moment h u'; the base's universal joint carries no moment square to the leg, so the leg passes it to the platform as a couple across its joints, F = h (u × u') / L at the platform joint with its moment b × F (`rotor_gyroscopic`). F is square to the joint's velocity: it does no work. h takes the rotor's speed as i q' (the elastic model's rotor differs by the screw's stretch rate). Checked against the rate of the rotors' momentum in `frame_momentum` to 1e-7 (`the_rotors_turning_with_their_legs_push_the_platform_as_their_momentum_turns`: J i = 0.185583 N m s per m/s, the rotor's 2.9537e-4 kg m² being the motor's with the screw's and the coupling's, the chain's own h; at home moving along x at 0.1 m/s leg 1 gives its rotor 1.410e-3 N m and the platform (0, −2.563e-3, −2.653e-4) N; 0.030 N and 1.3e-3 N m at the test's twist; the energy holds with it on); on, the default cycle's peak torques move by up to 0.078 % (motor 2), so it is off as shipped.
 **Refusals**: `error-hexapod-joint-angle`, a leg steeper than `workspace.max_joint_angle_deg` against the base's or
 the platform's normal (the rods checked against both), and `error-hexapod-singularity`. Verdicts: the screws'.
-Not modelled: the rotors' gyroscopic coupling with the legs' swing, friction and play in the joints.
+Not modelled: friction and play in the joints. The rods' bodies against the platform's and the base's faces: the config has no plate or joint housing, so no contact; the joint-angle refusal (`workspace.max_joint_angle_deg`, 40°) keeps every accepted pose's legs at least 50° from either face (over the shipped box, 5⁶ poses, the steepest leg stands 41.4° from the base's normal and 47.0° from the platform's, the corners beyond 40° refused).
 
 ## Cable robots
 
@@ -1776,9 +1781,21 @@ RMS torques and errors unchanged to their digits; motor 1's peak torque 2.454134
 it (2.454135 with the differences, whose force differs by about 1e-11 N: the peak sits on a moment that small forces
 shift), the other motors' within 4e-6 N m.
 
-**The lift from drum to pulley** (`winch.drop_m` h, the drum's drop below its pulley; 0 as shipped, the frame's data
-not at hand): the cable paid out is lifted by h, its potential ρ g h l, the drum pulled back by ρ g h (0.049 N at
-10 g/m and 0.5 m) and, rigid, the platform by ρ g h u. In the energy (`the_cables_run_along_with_the_drums`).
+**The run from drum to pulley** (with `effects.cable_inertia`; `frame.run_lengths_m` r, one per cable, [estimate]
+0.15 m): each drum sits at D = E + r a, a the winch's direction from the pulley's swivel point E. The run's cable, ρ r,
+runs at the drum's speed (a mass at the cable beside the drum's), and the cable paid out is lifted from the drum's
+height to the pulley's, h = z_E − z_D = −r a_z: its potential ρ g h l, the drum pulled back by ρ g h (0.049 N at 10 g/m
+and 0.5 m; the top drums, over their pulleys, pulled on) and, rigid, the platform by ρ g h u. Until 22 November that
+lift was `winch.drop_m` (0 as shipped), apart from the run. In the energy (`the_cables_run_along_with_the_drums`).
+With the switch the cable is in the frame's mass, first moment and momentum too (`cable_momentum`): all ρ (capacity +
+r) of it, the wound cable at D, the run from D to E moving along it at l', the free length l from E to the anchor P
+(the pulley's wrap taken straight) with its points at the share f moving at (1 − f) a + f P', a = l' (P − E) / l, as
+the kinetic energy has them: first moment ρ ((capacity − l) D + r (D + E) / 2 + l (E + P) / 2), momentum
+ρ (l' (E − D) + l (a + P') / 2), its rate exactly, angular momentum ρ (l' D × E + l (E × (a + P') / 2 + (P − E) ×
+(a / 6 + P' / 3))); against 4000 points of each span summed by hand to 1e-9, the first moment moving at the momentum
+and the weight at the first moment (testkit), rigid and elastic. The weight's V and the first moment take the same mass
+for the span, ρ l (elastic, l the free length, a state; rigid, l = L): V + g · c is the same at any two states to
+rounding (1e-12, `the_cables_run_along_with_the_drums`).
 
 **The cables' own inertia** (`effects.cable_inertia`, off as shipped, with ρ). The cable runs along itself at the
 drum's speed l': the turns on the drum with it (at the drum's radius, so at l'), the paid-out cable along its run and
@@ -1853,7 +1870,19 @@ J̇ q̇) to f:
   floor's landing. Since 21 November 2026 (it passed through before): lowered 1.2 m past the payload's touchdown, the
   hook block rests 0.28 m over it, the rope slack and the floor carrying both, (15 + 250) g = 2598.762 N; the fall's
   114.37 J booked at the landing, no step made energy, and a taut rope lifts it off again
-  (`a_hook_block_lowered_beyond_the_sling_lands_on_the_payload`).
+  (`a_hook_block_lowered_beyond_the_sling_lands_on_the_payload`; on the rigid rope the same, and the rope taken in
+  lifts the hook block alone, the payload standing where it was: `a_hook_block_on_the_rigid_rope_lands_on_the_payload_and_lifts_off_alone`,
+  2 mm of the payload's lift before 22 November). Since 22 November its sides too (`Crane::faces`): with the boxes
+  overlapping in height and along a side, h = 0.36 m along x and 0.34 m along y, the same one-sided contact on the
+  span's d_x or d_y, resting and landing (plastic, at the common momentum's speed; the top first where both qualify);
+  0.5 m/s into a standing payload's side leaves both at 15 x 0.5 / 265 m/s and books 1.769 J
+  (`the_hook_block_meets_the_payloads_sides`). No friction along the faces, and no bottom face. A payload set down
+  standing on the floor and let go stays there as a box the hook block meets the same way (`left`, drawn as
+  `payload-set-down`), until the next pick: a hook block resting on it stays (it dropped through before,
+  `a_hook_block_on_the_payload_stays_on_it_when_the_payload_is_let_go`); one let go in the air is gone. A set-down
+  on a slack rope no longer puts the hook block at the rope's end (28 J made before). A hook block already deeper
+  than the payload's top at a pick (hanging under 0.28 m over the payload's point) is neither pushed out, which would
+  make energy, nor held in (`a_hook_block_inside_the_payload_at_a_pick_is_neither_pushed_out_nor_held`).
 - `effects.joint_elasticity`: each drive the elastic joint of the other machines, the gearbox's stiffness, damping and
   backlash between the rotor (a state) and the wheel or drum. With it on the shipped loops are stable (`sim-cli margins
   overhead-crane --set effects.joint_elasticity=true`): bridge 177.4 Hz, 51.7°, 9.68 dB; trolley 182.8 Hz, 51.0°,
@@ -1883,7 +1912,7 @@ with drum and rotor free). The held bridge mode is what the config calls the dri
 velocity loop (some 4.5 Hz on the rigid drive) does not hold the rotor there.
 
 Left out: the rope's bending at the sheave and the load's own turning (a point mass; the hook block meets the payload
-only on its top, not on its sides).
+on its top and sides, not its bottom, and without friction along them).
 
 ## Crank and cam machines
 
@@ -2001,6 +2030,30 @@ with the forearm, its centre 0.15 m behind the pivot; the rod, 8 kg, from the cr
 (`the_palletisers_rod_and_crank_hold_by_hand`); the turret's held mode at the start pose is 8.21 Hz (8.30 without
 them). The MuJoCo reference compares the URDF's chain alone.
 
+**The rod's stretch** (`effects.bar_elasticity`, off as shipped; `arm.bars_axial_stiffness_n_m`, `bars_carries`). The
+forearm is pinned at the upper arm's tip and turned by the rod alone, so the rod's axial stiffness k does not lie in
+series with the arm's bend (the bend moves the rod's end across it, a change of its length of second order) but with
+the gearbox of the joint whose turn it carries, on the lever c of its pin's distance from its link's joint:
+K = 1 / (1 / k_g + 1 / (k c²)). The palletiser's rod, a 1 m steel tube of its 8 kg, E A / L = 2.14e8 N/m on 0.3 m:
+1.926e7 N m/rad beside motor 3's 2e5, K = 197944.6 N m/rad, its train 0.9948 times as high
+(`the_parallelogram_rod_stretches_in_series_with_motor_threes_gearbox`). The gearbox's damper stays in parallel with K.
+
+**A four-bar of unequal links** (`arm.four_bar_*`, since 22 November). A loop the URDF leaves out whose bars do not
+stay parallel to a link: a crank point C on one link drives a coupler of length l_c to the point T, which a follower of
+length l_f holds from its pivot F on another, in the plane square to n. T from the loop's closure: d the in-plane part
+of C − F, e = d / |d|, cos a = (l_f² + |d|² − l_c²) / (2 l_f |d|), T = F + l_f (cos a e ± sin a n × e). The rates from
+the loop's Jacobian in the pivot's link's frame (turning at ω_g): C moves at c' there, the follower turns at λ n with
+λ = (T − C) · c' / ((T − C) · (n × (T − F))), the coupler at μ n with μ = (T'_rel − c') · (n × (T − C)) / l_c². Each bar a
+uniform rod; their mass matrix and bias by Kane's equations as the parallel bars' (`bar_dynamics`), their weight in the
+potential. On the SCARA (follower 0.12 m and 0.3 kg on link 1, coupler 0.2 m and 0.5 kg from 0.08 m out on link 2) the
+mass matrix over joints 1 and 2 matches the closed form's to 1e-7 at two poses, and the energy holds
+(`a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand`). On bending links (since 22 November, refused
+before): the two pins move with a mode as their bodies' points do (on the bent link at its shape), and the bars turn as
+the loop's Jacobian has them at those deflected pins (`bar_field`; the ground's turn drops out). Its limit, a
+parallelogram with the pivot on joint 1's axis, gives the two parallel bars' modes to 1e-9; the energy holds with the
+bend acting back (`a_four_bar_on_a_bending_link_has_the_parallelograms_modes_in_its_limit`). The modes' masses are taken
+at zero joints, so a four-bar at a dead point there (flat, or open) is refused with bending.
+
 **Bending links with bars** (since 22 November; refused before). A bar pinned on a body before a bent link that turns
 with a body beyond it (the crank: pinned on the turret, turning with the forearm, across the upper arm) drives that
 body's turn from before the link: the link's bend in its joints' plane (the plane the pins turn in) moves that body and
@@ -2014,7 +2067,7 @@ Out of the joints' plane and in twist the pins do not hold, and the bodies take 
 palletiser's upper arm (steel tube 150 × 10 mm, 25 kg) in its plane: by hand 25/4 + 53 + 8/3 = 61.92 kg on
 (βL)⁴/4 E I / L³, 53.626 Hz, which the machine's mode gives; the exact Euler-Bernoulli cantilever with that tip mass
 and no tip inertia rings at 52.980 Hz (the bend-mode method's known +1.2 %); without the bars, the forearm turning with
-the tip's slope, 35.17 Hz. Two-way the energy holds with gravity to the integrator's level, 1.8e-8 J of the 2.8 mJ a pulse puts in over 10 s (6.9e-9 J without the bars; `the_parallelogram_holds_the_forearm_against_the_upper_arms_bend`, the joints' stops off). With the stops on the swinging upper arm reaches its stop at 0.9 rad, whose stiff contact the fixed step integrates to 1.3e-5 J at 62.5 µs and 1.3e-6 J at 31.25 µs, in a step at each contact: the integrator's, not a term of the model.
+the tip's slope, 35.17 Hz. Two-way the energy holds with gravity to the integrator's level, 1.8e-8 J of the 2.8 mJ a pulse puts in over 10 s (6.9e-9 J without the bars), the joints' stops off. With the stops on the swinging upper arm reaches its stop at 0.9 rad, whose damper takes hold within a step: the steps that meet a stop are cut 16 times finer (`mech::STOP_SUBSTEPS`, `HardStop::met_within`: in a stop, or nearer than two steps at the speed), 5.3e-9 J (`the_parallelogram_holds_the_forearm_against_the_upper_arms_bend`; 1.3e-5 J before 22 November, in a step at each contact). No default cycle meets a stop, so none is cut.
 Left out: the loop's own stiffness beyond holding the turn (the rod and crank rigid), and a loop's general geometry: the
 rule is the parallelogram's (the rod parallel to the link's chord). With `effects.payload_swing` the payload hangs on a pivot about two axes, two passive
 joints on `arm.payload_swing_stiffness_nm_rad` and `_damping_nm_s_rad`.

@@ -681,11 +681,8 @@ impl Machine for Based {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.inner.set_brake_engaged(engaged)
     }
-    fn set_substep(&mut self, h: f64) {
-        self.inner.set_substep(h)
-    }
-    fn substeps_wanted(&self, state: &[f64], torque: &[f64]) -> u32 {
-        self.inner.substeps_wanted(&state[..self.n()], torque)
+    fn substeps_wanted(&self, state: &[f64], torque: &[f64], dt: f64, substeps: u32) -> u32 {
+        self.inner.substeps_wanted(&state[..self.n()], torque, dt, substeps)
     }
     fn after_step(&mut self, state: &mut [f64], dt: f64) {
         let n = self.n();
@@ -753,6 +750,9 @@ impl Machine for Based {
     }
     fn unreachable(&self, tool_pose: &[f64], slack: f64) -> Option<&'static str> {
         self.inner.unreachable(tool_pose, slack)
+    }
+    fn refuses_pick(&self, tool_pose: &[f64]) -> Option<&'static str> {
+        self.inner.refuses_pick(tool_pose)
     }
     fn condition(&self, tool_pose: &[f64]) -> Option<f64> {
         self.inner.condition(tool_pose)

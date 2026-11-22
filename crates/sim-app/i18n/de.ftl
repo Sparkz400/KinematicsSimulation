@@ -57,6 +57,7 @@ part-z-axis = Z-Achse
 part-clamp = Riemenklemme
 part-flange = Werkzeugflansch
 part-payload = Nutzlast
+part-payload-set-down = Abgesetzte Nutzlast
 part-idler = Umlenkrolle
 part-idler-bar = Umlenkrolle (Drehmarke)
 part-motor = Motor

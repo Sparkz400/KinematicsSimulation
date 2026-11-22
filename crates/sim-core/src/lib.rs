@@ -9,7 +9,7 @@ pub mod testkit;
 
 pub use config::{Config, ConfigError};
 pub use i18n::Translations;
-pub use integrate::{Rk4, advance};
+pub use integrate::{MOST_CUTS, Rk4, advance, advance_refined};
 pub use machine::{
     AxisInfo, BASE_AXES, BeltSection, CamCurve, CamMaster, ENERGY_PARTS, FRICTION_SIGNALS, FrameMomentum,
     FrictionContact, LOSS_PREFIX, Machine, MachineEntry, Mode, MotorInfo, RatingCheck, SignalInfo, TEMPERATURE_PREFIX,

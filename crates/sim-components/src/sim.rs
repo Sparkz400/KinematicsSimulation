@@ -57,10 +57,6 @@ const PUSH_RANGE: f64 = 0.01;
 /// gantry's move into a slab (2.8e-4 on a six-leg platform; falling with the third and second power of the sub-step),
 /// 5e-6 and 1.9e-5 four times finer (`sim-machines`' collision tests).
 const PUSH_SUBSTEPS: u32 = 4;
-
-/// The most parts a base step's sub-steps are cut into for the machine (`Machine::substeps_wanted`): a bound on what a
-/// step can cost.
-const MOST_CUTS: u32 = 256;
 /// The step in a motor's angle (or a linear motor's position) by which the slope of a clearance is worked out, by
 /// central differences.
 const SLOPE_STEP: f64 = 1e-6;
@@ -388,9 +384,8 @@ impl Sim {
     pub fn new(entry: &MachineEntry, cfg: &Config) -> Result<Self, ConfigError> {
         // Parts the config names bring their catalogue values; the caller's config keeps the names.
         let cfg = &crate::catalog::resolve(entry, cfg)?;
-        let mut machine = (entry.build)(cfg)?;
+        let machine = (entry.build)(cfg)?;
         let (dt, substeps) = timing(cfg)?;
-        machine.set_substep(dt / substeps as f64);
         let start = start_pose(cfg, machine.as_ref())?;
         let mut state = Vec::new();
         let mut torque = vec![0.0; machine.motors().len()];
@@ -446,7 +441,6 @@ impl Sim {
         let cfg = &crate::catalog::resolve(entry, cfg)?;
         let mut machine = (entry.build)(cfg)?;
         let (dt, substeps) = timing(cfg)?;
-        machine.set_substep(dt / substeps as f64);
         if dt != self.dt {
             // The step counter is the clock; a new base step would make time jump.
             return Err(ConfigError::Invalid("sim.dt_s".into()));
@@ -675,7 +669,8 @@ impl Sim {
             vel.iter().map(|v| v * v).sum::<f64>().sqrt()
         });
         self.pushes();
-        self.cuts = self.machine.substeps_wanted(&self.state, &self.torque).clamp(1, MOST_CUTS);
+        self.cuts = (self.machine.substeps_wanted(&self.state, &self.torque, self.dt, self.substeps))
+            .clamp(1, sim_core::MOST_CUTS);
         self.refined_steps += u64::from(self.cuts > 1);
         if self.control.enabled() {
             self.advance_with_windings();
@@ -974,9 +969,15 @@ impl Sim {
                     for (k, d) in drives.iter().enumerate() {
                         // A drive whose pulses are off after a trip: no current, no torque (`Controller::react`).
                         if d.pulses_off {
-                            // Only the iron's drag acts (`DriveParams::iron_drag`); its work is integrated in the
-                            // winding's work slot, which `Controller::winding_stepped` books.
-                            stage_torque[k] = -control.drive_params_of(k).iron_drag(speed[k]);
+                            // Only the iron's drag acts (`DriveParams::iron_drag`), and a stepper's magnets hold their
+                            // detent without current, at the stage's angle; their work is integrated in the winding's
+                            // work slot, which `Controller::winding_stepped` books as the shaft's and what the magnets
+                            // and the iron gave, as with the drives disabled.
+                            let p = control.drive_params_of(k);
+                            stage_torque[k] = -p.iron_drag(speed[k]);
+                            if let crate::drive::Motor::Stepper(s) = &p.motor {
+                                stage_torque[k] += s.detent_torque(angle[k], d.phases.origin);
+                            }
                             dwindings[WINDING_STATES * k..WINDING_STATES * (k + 1)].fill(0.0);
                             dwindings[WINDING_STATES * k + 3] = stage_torque[k] * speed[k];
                             continue;
