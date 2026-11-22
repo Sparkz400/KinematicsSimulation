@@ -440,7 +440,7 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
             sets.push("effects.screw_stiffness_with_position=false".into());
         }
         // The unstable gains at the start pose alone (no cycle, `margin_poses`): every pose would take four times as
-        // long (the spatial cable robot past the test's limit).
+        // long (the slowest machine past the test's limit).
         if cfg.get("cycle.segment").is_ok() {
             sets.push("cycle.segment=[]".into());
         }

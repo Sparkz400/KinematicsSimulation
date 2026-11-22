@@ -1320,14 +1320,6 @@ fn loops_keep_their_margins(names: &[&str], across: Option<bool>) {
     });
 }
 
-/// Every shipped config keeps its velocity loops' margins as configured, without friction and, the EXCT-30, with it
-/// (`loops_keep_their_margins`); over the bounds in `across_the_bounds`.
-#[test]
-fn the_shipped_velocity_loops_keep_their_margins() {
-    let configs = shipped_configs();
-    loops_keep_their_margins(&configs.iter().map(|(name, ..)| name.as_str()).collect::<Vec<_>>(), None);
-}
-
 /// Each motor's loop is measured with a tenth of its own rated torque (`loop_amplitude`): the palletiser's motor 1 (a
 /// 1FK2106-4AF, 8.6 N m) with 0.86 N m and the arm on a track's motor 5 (a 1FK2104-5AF, 2.4 N m) with 0.24 N m, not a
 /// tenth of the shared drive's 4.6 N m. And the crane's hoist is measured with the gearbox efficiency's fade taken out
@@ -1381,6 +1373,14 @@ mod across_the_bounds {
             pub const SWEPT: &[&str] = &[$($name),*];
             $(
                 mod $test {
+                    /// The config as it is at each pose its cycle stops at, without friction and, the EXCT-30, with it
+                    /// (`loops_keep_their_margins`): a test per config since 22 November 2026, when the margins took
+                    /// the cycle's poses (all of them in one test ran past the 15-minute limit). Not over the bounds, so
+                    /// the default filter keeps it.
+                    #[test]
+                    fn as_configured() {
+                        super::super::loops_keep_their_margins(&[$name], None);
+                    }
                     #[test]
                     fn with_friction() {
                         super::super::loops_keep_their_margins(&[$name], Some(true));
