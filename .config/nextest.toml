@@ -333,6 +333,7 @@ not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | 
 | (binary_id(=sim-machines::collision) & test(=the_lift_passes_two_boxes_each_at_its_own_height))
 | (binary_id(=sim-machines::collision) & test(=the_optimiser_lifts_each_traverse_over_a_box_across_it_by_hand))
 | (binary_id(=sim-machines::collision) & test(=the_arm_on_track_stops_at_the_face))
+| (binary_id(=sim-machines::collision) & test(=the_cranes_payload_on_the_hook_block_stops_at_the_face))
 | (binary_id(=sim-machines::collision) & test(=the_delta_h4_stops_at_the_face))
 | (binary_id(=sim-machines::collision) & test(=the_delta_linear_stops_at_the_face))
 | (binary_id(=sim-machines::collision) & test(=the_hexapod_stops_at_the_face))

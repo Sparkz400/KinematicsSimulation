@@ -1734,7 +1734,8 @@ impl Machine for TGantry {
                     - riding * w,
             ],
             gravity: [0.0, 0.0, -self.g],
-            external: [process[0] + self.push[0], 0.0, process[1] + self.push[1]],
+            // An obstacle's push is not in it: a compliant base takes it through the tool's shift (`base::Based`).
+            external: [process[0], 0.0, process[1]],
             // The tool tip, z_tool_drop below the carriage where the Z axis's centre of mass (at z here) is z_com_drop below it.
             external_at: [tool[0], 0.0, tool[1] - (self.z_tool_drop - self.z_com_drop)],
         })

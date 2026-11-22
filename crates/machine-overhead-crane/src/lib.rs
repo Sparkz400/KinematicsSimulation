@@ -307,6 +307,9 @@ pub struct Crane {
     strokes: [f64; 2],
     dwelling: bool,
     brake_engaged: bool,
+    /// An obstacle's push on the contact coordinates (`contact_state`: the load's point, and with the hook block the
+    /// payload's), held until changed; empty for none.
+    push: Vec<f64>,
     thermal: Option<ThermalFeedback>,
     axes: Vec<AxisInfo>,
     motors: Vec<MotorInfo>,
@@ -452,6 +455,7 @@ impl Crane {
             strokes,
             dwelling: false,
             brake_engaged: false,
+            push: Vec::new(),
             thermal: ThermalFeedback::from_config(cfg)?,
             axes,
             motors: (0..3).map(|k| MotorInfo { id: MOTOR_IDS[k], key: MOTOR_KEYS[k] }).collect(),
@@ -459,6 +463,12 @@ impl Crane {
     }
 
     /// Hook and, while attached, payload.
+    /// An obstacle's push (`set_tool_force`) on the hook's point and, with the hook block, on the payload's (N).
+    fn push_on(&self) -> (V3, V3) {
+        let at = |k: usize| self.push.get(k).copied().unwrap_or(0.0);
+        ([at(0), at(1), at(2)], [at(3), at(4), at(5)])
+    }
+
     pub fn load_mass(&self) -> f64 {
         self.hook + if self.attached { self.payload } else { 0.0 }
     }
@@ -662,6 +672,8 @@ impl Crane {
             return self.full_motion(s, torque);
         }
         let mut rope = self.rope(s);
+        // An obstacle's push on the load (`set_tool_force`), beside its weight; in the rigid rope's tension too.
+        let push = self.push_on().0;
         let m = self.load_mass();
         let u = rope.u;
         let (mut drive, mut brake_rates) = ([0.0; 3], [0.0; 3]);
@@ -699,9 +711,9 @@ impl Crane {
             let tension = if self.elastic {
                 rope.tension
             } else {
-                let free = (kappa - self.g * u[2] - u[0] * alpha[0] - u[1] * alpha[1] - alpha[2])
+                let free = (kappa - self.g * u[2] + dot(u, push) / m - u[0] * alpha[0] - u[1] * alpha[1] - alpha[2])
                     / (1.0 / m + u[0] * beta[0] + u[1] * beta[1] + beta[2]);
-                if stand.is_some() && (slack || -free * u[2] / m - self.g < 0.0) {
+                if stand.is_some() && (slack || (push[2] - free * u[2]) / m - self.g < 0.0) {
                     // Standing: the floor holds the load's height (a_z = 0), so L'' = l'' gives t from the horizontal
                     // part alone, t (u_x^2 + u_y^2 + ...) = kappa + u . F / m - u_x alpha_x - u_y alpha_y - alpha_l, F the
                     // floor's friction, which takes the floor's push N = m g + t u_z. A slack rope pulls nothing.
@@ -709,8 +721,12 @@ impl Crane {
                     let base = kappa - u[0] * alpha[0] - u[1] * alpha[1] - alpha[2];
                     let (mut t, mut n, mut f) = (0.0, m * self.g, [0.0; 2]);
                     for _ in 0..6 {
-                        t = if slack { 0.0 } else { ((base + (u[0] * f[0] + u[1] * f[1]) / m) / denominator).max(0.0) };
-                        n = (m * self.g + t * u[2]).max(0.0);
+                        t = if slack {
+                            0.0
+                        } else {
+                            ((base + (u[0] * (f[0] + push[0]) + u[1] * (f[1] + push[1])) / m) / denominator).max(0.0)
+                        };
+                        n = (m * self.g + t * u[2] - push[2]).max(0.0);
                         f = self.floor_friction_force(n, speed_h);
                     }
                     floor = Some((n, f));
@@ -759,7 +775,8 @@ impl Crane {
         }
         let into: [f64; 3] = std::array::from_fn(|k| drive[k] - self.drives[k].reflected_inertia() * acc[k]);
         let out = std::array::from_fn(|k| loss[k] * into[k]);
-        let mut load_acc = [-tension * u[0] / m, -tension * u[1] / m, -tension * u[2] / m - self.g];
+        let mut load_acc =
+            [(push[0] - tension * u[0]) / m, (push[1] - tension * u[1]) / m, (push[2] - tension * u[2]) / m - self.g];
         // The floor under the load (one-sided: it pushes, never pulls): standing on it and sinking, the floor takes
         // what keeps the load at its height, and its friction (Coulomb, smoothed) acts along it.
         let standing = if self.elastic {
@@ -780,8 +797,8 @@ impl Crane {
                 load_acc[0] += f[0] / m;
                 load_acc[1] += f[1] / m;
             } else {
-                load_acc[0] = (-tension * u[0] + f[0]) / m;
-                load_acc[1] = (-tension * u[1] + f[1]) / m;
+                load_acc[0] = (push[0] - tension * u[0] + f[0]) / m;
+                load_acc[1] = (push[1] - tension * u[1] + f[1]) / m;
             }
             floor_power = -(f[0] * speed_h[0] + f[1] * speed_h[1]);
         }
@@ -1206,6 +1223,36 @@ impl Machine for Crane {
     }
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
+    }
+    /// The push acts where the parts that touch are: on the hook's point (with it the payload under it), and with the
+    /// hook block on the hook block's and the payload's at the sling's end (`push_on`); its power is the crash row.
+    fn set_tool_force(&mut self, force: &[f64]) -> bool {
+        self.push.clear();
+        self.push.extend_from_slice(force);
+        true
+    }
+    fn contact_axes(&self) -> usize {
+        if self.sling.is_some() { 6 } else { 3 }
+    }
+    /// The hook's point P (the payload hangs on it, 0.3 m below), and with the hook block the payload's P2 = P1 + d.
+    fn contact_state(&self, s: &[f64], pos: &mut [f64], vel: &mut [f64]) {
+        pos[..3].copy_from_slice(&s[LOAD..LOAD + 3]);
+        vel[..3].copy_from_slice(&s[LOAD_SPEED..LOAD_SPEED + 3]);
+        if let Some(a) = self.layout.sling {
+            for k in 0..3 {
+                (pos[3 + k], vel[3 + k]) = (s[LOAD + k] + s[a + k], s[LOAD_SPEED + k] + s[a + 3 + k]);
+            }
+        }
+    }
+    fn contact_placed(&self, s: &[f64], at: &[f64], out: &mut Vec<f64>) {
+        out.clear();
+        out.extend_from_slice(s);
+        out[LOAD..LOAD + 3].copy_from_slice(&at[..3]);
+        if let Some(a) = self.layout.sling {
+            for k in 0..3 {
+                out[a + k] = at[3 + k] - at[k];
+            }
+        }
     }
 
     /// The gearboxes, in the order of `thermal_parts`.
