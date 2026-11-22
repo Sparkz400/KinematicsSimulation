@@ -574,6 +574,8 @@ pub struct JointMachine<M: Mechanism> {
     push: Vec<f64>,
     /// The joints and the Jacobian the push was last taken through (`push_on_joints`).
     push_jacobian: std::sync::Mutex<(Vec<f64>, Vec<f64>)>,
+    /// The integrator's sub-step (`Machine::set_substep`), 0 unset.
+    substep: f64,
 }
 
 /// How far (m or rad) the joints may move before the push's Jacobian is worked out again (`push_on_joints`).
@@ -621,6 +623,7 @@ impl<M: Mechanism> JointMachine<M> {
             two_way,
             push: Vec::new(),
             push_jacobian: std::sync::Mutex::new((Vec::new(), Vec::new())),
+            substep: 0.0,
         }
     }
 
@@ -1673,43 +1676,46 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
-    /// Each gear's least inertia at its joint, 1 / (M^-1)_kk of the load's mass matrix (the other joints free, the
-    /// passive ones at rest), over the tool's middle and each axis at either end of its range, payload off: the
-    /// efficiency's switch is widened to what the sub-step resolves on it (`mech::Gearbox::fade_step`). A pose the
-    /// mechanism cannot reach is left out; the numerical inverse's memory is kept as it was.
     fn set_substep(&mut self, h: f64) {
-        let (n, p, attached, memory) = (self.n(), self.passive.len(), self.payload_attached, self.mechanism.memory());
-        self.mechanism.set_payload_attached(false);
-        let mid: Vec<f64> = self.axes.iter().map(|a| 0.5 * (a.min + a.max)).collect();
-        let mut poses = vec![mid.clone()];
-        for (i, a) in self.axes.iter().enumerate() {
-            for end in [a.min, a.max] {
-                let mut pose = mid.clone();
-                pose[i] = end;
-                poses.push(pose);
-            }
+        self.substep = h;
+    }
+    /// Each gear's efficiency switch near zero power at the step's start (`mech::Gearbox::fade_damping`) on the inertia
+    /// it drives there, 1 / (M^-1)_kk of the load's mass matrix (the other joints free): the cuts `mech::fade_substeps`
+    /// asks for, the most over the gears. The mass matrix only where a gear is near zero power.
+    fn substeps_wanted(&self, s: &[f64], torque: &[f64]) -> u32 {
+        if self.substep == 0.0 {
+            return 1;
         }
-        let (mut least, mut q) = (vec![f64::INFINITY; n], vec![0.0; n]);
-        for pose in &poses {
-            if !self.mechanism.inverse(pose, &mut q) {
-                continue;
-            }
-            let all: Vec<f64> = q.iter().copied().chain(std::iter::repeat_n(0.0, p)).collect();
-            let (mass, _) = self.load_all(&all, &vec![0.0; n + p]);
-            for (k, least) in least.iter_mut().enumerate() {
-                let unit: Vec<f64> = (0..n + p).map(|i| if i == k { 1.0 } else { 0.0 }).collect();
-                if let Some(x) = solve(&mass, &unit).filter(|x| x[k] > 0.0) {
-                    *least = least.min(1.0 / x[k]);
-                }
-            }
+        let n = self.n();
+        let (_, qd) = self.arms(s);
+        let rigid = (!self.elastic).then(|| self.rigid_solve(s, torque).2);
+        let damping: Vec<f64> = (0..n)
+            .map(|k| {
+                let gear = &self.joints[k].drive.gearbox;
+                let output = match &rigid {
+                    Some(out) => out[k],
+                    None => {
+                        gear.torque_with(s[2 * n + k], s[3 * n + k], s[k], s[n + k], self.arm(s, k)).rotor * gear.ratio
+                    }
+                };
+                gear.fade_damping(output, qd[k])
+            })
+            .collect();
+        if damping.iter().all(|c| *c == 0.0) {
+            return 1;
         }
-        self.mechanism.set_payload_attached(attached);
-        self.mechanism.set_memory(&memory);
-        for (joint, least) in self.joints.iter_mut().zip(least) {
-            if least.is_finite() {
-                joint.drive.gearbox.fade_step = crate::mech::fade_step(h, least);
-            }
-        }
+        let (q, rates) = self.all_joints(s);
+        let (mass, _) = self.load_all(&q, &rates);
+        let all = q.len();
+        (0..n)
+            .filter(|&k| damping[k] > 0.0)
+            .map(|k| {
+                let unit: Vec<f64> = (0..all).map(|i| if i == k { 1.0 } else { 0.0 }).collect();
+                let inertia = solve(&mass, &unit).map_or(f64::NAN, |x| 1.0 / x[k]);
+                crate::mech::fade_substeps(damping[k], self.substep, inertia)
+            })
+            .max()
+            .unwrap_or(1)
     }
     /// The push acts on the joints beyond the gearboxes and on the links' bending modes, as the tool moves with each
     /// (`push_on_joints`, `push_on_modes`), in either model; its power is the budget's crash row.

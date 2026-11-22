@@ -57,6 +57,10 @@ const PUSH_RANGE: f64 = 0.01;
 /// gantry's move into a slab (2.8e-4 on a six-leg platform; falling with the third and second power of the sub-step),
 /// 5e-6 and 1.9e-5 four times finer (`sim-machines`' collision tests).
 const PUSH_SUBSTEPS: u32 = 4;
+
+/// The most parts a base step's sub-steps are cut into for the machine (`Machine::substeps_wanted`): a bound on what a
+/// step can cost.
+const MOST_CUTS: u32 = 256;
 /// The step in a motor's angle (or a linear motor's position) by which the slope of a clearance is worked out, by
 /// central differences.
 const SLOPE_STEP: f64 = 1e-6;
@@ -206,6 +210,10 @@ pub struct Sim {
     tool_push: bool,
     /// The work the pushes have taken since the first contact, J.
     absorbed: f64,
+    /// How many parts each sub-step of the step under way is cut into (`Machine::substeps_wanted`, at most `MOST_CUTS`).
+    cuts: u32,
+    /// How many base steps were cut finer for the machine (`cuts` above 1) since the start.
+    pub refined_steps: u64,
 }
 
 /// The first contact of a run with an obstacle: when (the end of the base step that found it, s), at which tool pose,
@@ -427,6 +435,8 @@ impl Sim {
             push_from: Vec::new(),
             tool_push: false,
             absorbed: 0.0,
+            cuts: 1,
+            refined_steps: 0,
         })
     }
 
@@ -665,6 +675,8 @@ impl Sim {
             vel.iter().map(|v| v * v).sum::<f64>().sqrt()
         });
         self.pushes();
+        self.cuts = self.machine.substeps_wanted(&self.state, &self.torque).clamp(1, MOST_CUTS);
+        self.refined_steps += u64::from(self.cuts > 1);
         if self.control.enabled() {
             self.advance_with_windings();
         } else {
@@ -676,7 +688,8 @@ impl Sim {
                 angle.clone()
             });
             if self.pushes.is_empty() {
-                advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
+                let substeps = self.substeps * self.cuts;
+                advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, substeps);
             } else {
                 self.advance_pushed();
             }
@@ -870,6 +883,7 @@ impl Sim {
             pushes,
             push_from,
             tool_push,
+            cuts,
             tool_buffers,
             motor_buffers: [angle, speed, stage, push],
             dt,
@@ -881,7 +895,8 @@ impl Sim {
         joint.clear();
         joint.extend_from_slice(state);
         joint.resize(n + WINDING_STATES * torque.len() + 1, 0.0);
-        let substeps = if *tool_push { *substeps * PUSH_SUBSTEPS } else { *substeps };
+        let finer = if *tool_push { PUSH_SUBSTEPS } else { 1 };
+        let substeps = *substeps * finer.max(*cuts);
         let h = *dt / substeps as f64;
         let [pos, vel, force] = tool_buffers;
         for _ in 0..substeps {
@@ -935,6 +950,7 @@ impl Sim {
             pushes,
             push_from,
             tool_push,
+            cuts,
             tool_buffers: [pos, vel, force],
             ..
         } = self;
@@ -947,7 +963,8 @@ impl Sim {
         }
         // The work the obstacles' pushes take out of the machine over the step (`pushed`).
         joint.push(0.0);
-        let substeps = if *tool_push { *substeps * PUSH_SUBSTEPS } else { *substeps };
+        let finer = if *tool_push { PUSH_SUBSTEPS } else { 1 };
+        let substeps = *substeps * finer.max(*cuts);
         let h = *dt / substeps as f64;
         for _ in 0..substeps {
             rk_joint.step(

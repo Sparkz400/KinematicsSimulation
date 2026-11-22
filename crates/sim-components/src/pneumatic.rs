@@ -910,6 +910,9 @@ impl Machine for Pneumatic {
     fn set_substep(&mut self, h: f64) {
         self.inner.set_substep(h)
     }
+    fn substeps_wanted(&self, state: &[f64], torque: &[f64]) -> u32 {
+        self.inner.substeps_wanted(&state[..self.n()], torque)
+    }
     fn valves(&self) -> Vec<(String, f64)> {
         self.cylinders.iter().map(|c| (c.id.clone(), c.track.command)).collect()
     }

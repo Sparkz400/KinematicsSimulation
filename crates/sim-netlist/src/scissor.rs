@@ -251,6 +251,8 @@ pub struct ScissorMachine {
     gearbox_id: &'static str,
     id: &'static str,
     rest_slack: f64,
+    /// The integrator's sub-step (`Machine::set_substep`).
+    substep: Option<f64>,
 }
 
 impl ScissorMachine {
@@ -300,6 +302,7 @@ impl ScissorMachine {
             gearbox_id: intern(&format!("gearbox_{}", net.motors[0].id)),
             id: intern(&node.id),
             rest_slack: 0.0,
+            substep: None,
         };
         machine.rest_slack = machine.rest_sag();
         Ok(machine)
@@ -550,16 +553,24 @@ impl Machine for ScissorMachine {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
-    /// The gear drives the screw at least with M(theta) over the stroke, payload off (`Gearbox::fade_step`).
     fn set_substep(&mut self, h: f64) {
-        let attached = self.payload_attached;
-        self.payload_attached = false;
-        let least = (0..=20)
-            .map(|k| self.min_height + (self.max_height - self.min_height) * k as f64 / 20.0)
-            .map(|z| self.load(self.angle(z), 0.0).0)
-            .fold(f64::INFINITY, f64::min);
-        self.payload_attached = attached;
-        self.joint.gearbox.fade_step = sim_components::mech::fade_step(h, least);
+        self.substep = Some(h);
+    }
+    /// The gear's efficiency switch near zero power at the step's start (`mech::Gearbox::fade_damping`) on the screw's
+    /// inertia M(theta) there.
+    fn substeps_wanted(&self, s: &[f64], torque: &[f64]) -> u32 {
+        let Some(h) = self.substep else { return 1 };
+        let gear = &self.joint.gearbox;
+        let output = if self.elastic {
+            gear.torque(s[2], s[3], s[0], s[1]).rotor * gear.ratio
+        } else {
+            self.rigid_solve(s, torque[0]).2
+        };
+        let damping = gear.fade_damping(output, s[1]);
+        if damping == 0.0 {
+            return 1;
+        }
+        sim_components::mech::fade_substeps(damping, h, self.load(s[0], s[1]).0)
     }
     /// The gearboxes' hysteresis states move on to where the step ended (`Gearbox::commit`).
     fn after_step(&mut self, s: &mut [f64], _dt: f64) {

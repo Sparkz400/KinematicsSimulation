@@ -936,10 +936,6 @@ pub struct Gearbox {
     /// Behind a ball screw with effects.screw_stiffness_with_position: the shaft's compliance follows the nut
     /// (`TravelCompliance`); the fields above hold it at the reference position. None: one stiffness for the stroke.
     pub travel: Option<TravelCompliance>,
-    /// h / (kappa J), s/(kg m^2): the integrator's sub-step over the least inertia at the output (`kappa` the share of
-    /// a sub-step's resolution the efficiency's switch may take), which widens that switch where a large torque makes it
-    /// stiff (`loss_factor`). 0 for the fixed width alone (a machine that does not set it).
-    pub fade_step: f64,
 }
 
 /// A ball screw shaft's axial compliance as the nut travels (effects.screw_stiffness_with_position): the shaft between
@@ -1046,15 +1042,19 @@ pub struct GearTorque {
 /// Below this power the efficiency fades out, so a gearbox at rest has no torque step.
 const EFFICIENCY_FADE_W: f64 = 0.5;
 
-/// What the efficiency's switch may make of a sub-step's resolution, kappa (`Gearbox::fade_step`): a damper c on an
-/// inertia J with c h / J = kappa. With one sub-step under a push at the tool, a six-leg platform held at 51 kN against a
-/// slab closed its budget to 3e-7 of the supply at kappa 1 and 0.5, and was 4.7e-5 off at 2; 0.5 keeps a factor of two.
+/// What a sub-step h may be of the efficiency switch's time J / c on the inertia J it acts on (`fade_substeps`), kappa:
+/// c h' / J = kappa within the refined sub-step h'.
 const FADE_KAPPA: f64 = 0.5;
 
-/// `Gearbox::fade_step` for a machine integrated at the sub-step `h` (s) whose gear drives at least the inertia `j`
-/// (kg m^2, or kg on a travel) at its output.
-pub fn fade_step(h: f64, j: f64) -> f64 {
-    h / (FADE_KAPPA * j)
+/// How far off zero power (in widths of the switch, 0.5 W) a gear's power counts as near it at a step's start, where the
+/// step is refined for the switch (`Gearbox::fade_damping`): a step can carry a gear that far into it.
+const FADE_NEAR: f64 = 40.0;
+
+/// The sub-steps a sub-step `h` (s) is to be cut into, at least 1, for a switch's damper `damping` (`Gearbox::
+/// fade_damping`) on the inertia `j` its gear drives (kg m^2, or kg on a travel): c h' / J within `FADE_KAPPA`.
+pub fn fade_substeps(damping: f64, h: f64, j: f64) -> u32 {
+    let n = (damping * h / (FADE_KAPPA * j)).ceil();
+    if n.is_finite() && n > 1.0 { n.min(u32::MAX as f64) as u32 } else { 1 }
 }
 
 /// A rigid solve's loss factors (`Gearbox::loss_factor`) at their fixed point: each is taken of the torque going into its
@@ -1119,7 +1119,6 @@ impl Gearbox {
             relax_stiffness: 0.0,
             relax_time: 0.0,
             travel: None,
-            fade_step: 0.0,
         })
     }
 
@@ -1316,18 +1315,21 @@ impl Gearbox {
 
     /// Factor on a torque at the output: efficiency when driving, 1 / (back efficiency) when driven back, the back
     /// efficiency being the efficiency times `back_ratio` (the same, 1 / efficiency, for a gear that loses alike).
-    ///
-    /// The two meet over a power P_f, tanh(T w / P_f): within it the factor changes with the output's speed w, a damper
-    /// of up to T^2 |ln eta| / P_f on it. Held at a large torque T near standstill (a lift against a stop) that damper
-    /// outgrows what the integrator's sub-step h resolves on the output's inertia J, and the step's energy is off (a
-    /// lift at 27 kN: 2.3e-4 of the supply at 4 substeps, 4e-8 at 32). So P_f is the larger of `EFFICIENCY_FADE_W` and
-    /// T^2 |ln eta| h / (kappa J) (`fade_step`): the damper stays kappa J / h, which the step follows. A torque below
-    /// that keeps the fixed width, and so does a gear whose machine does not set `fade_step`.
     pub fn loss_factor(&self, output_torque: f64, output_speed: f64) -> f64 {
+        let t = (output_torque * output_speed / EFFICIENCY_FADE_W).tanh();
+        if t >= 0.0 { self.efficiency.powf(t) } else { (self.efficiency * self.back_ratio).min(1.0).powf(t) }
+    }
+
+    /// The damper the efficiency's switch puts on the output's speed while the gear passes `output_torque` near zero
+    /// power: the two flanks meet over tanh(T w / 0.5 W), so the factor changes with w by up to T^2 |ln eta| / 0.5 W
+    /// (N m s/rad, or N s/m on a travel). 0 while the power `output_torque` times `output_speed` stands more than
+    /// `FADE_NEAR` times the 0.5 W off zero, where the factor stands still (`fade_substeps` refines the step by it).
+    pub fn fade_damping(&self, output_torque: f64, output_speed: f64) -> f64 {
+        if (output_torque * output_speed).abs() > FADE_NEAR * EFFICIENCY_FADE_W {
+            return 0.0;
+        }
         let back = (self.efficiency * self.back_ratio).min(1.0);
-        let stiff = output_torque * output_torque * self.efficiency.ln().abs().max(back.ln().abs()) * self.fade_step;
-        let t = (output_torque * output_speed / EFFICIENCY_FADE_W.max(stiff)).tanh();
-        if t >= 0.0 { self.efficiency.powf(t) } else { back.powf(t) }
+        output_torque * output_torque * self.efficiency.ln().abs().max(back.ln().abs()) / EFFICIENCY_FADE_W
     }
 
     /// The contact twist x: the twist beyond the dead zone with its sign, 0 inside it.
@@ -1929,7 +1931,6 @@ preload_n = 200.0
             relax_stiffness: 0.0,
             relax_time: 0.0,
             travel: None,
-            fade_step: 0.0,
         }
     }
 

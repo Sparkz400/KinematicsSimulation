@@ -684,6 +684,9 @@ impl Machine for Based {
     fn set_substep(&mut self, h: f64) {
         self.inner.set_substep(h)
     }
+    fn substeps_wanted(&self, state: &[f64], torque: &[f64]) -> u32 {
+        self.inner.substeps_wanted(&state[..self.n()], torque)
+    }
     fn after_step(&mut self, state: &mut [f64], dt: f64) {
         let n = self.n();
         self.inner.after_step(&mut state[..n], dt)

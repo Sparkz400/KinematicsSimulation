@@ -693,8 +693,8 @@ fn on_its_compliant_base_the_planar_delta_file_holds_the_push_once() {
 /// first moment and gravity): the platform raised into a ceiling 0.02 m over it, the base stands F / k_z back along z
 /// (k_z = 1.5e7 N/m), within 5 %; and the budget of the move closes as shipped, to 1e-6 of the supply. On the swaying
 /// base the platform's speed crosses zero at the 27 kN hold again and again, and with it the gearbox's switch between
-/// driving and driven back, which within 0.5 W the integration did not resolve (1.9e-4 off); widened to what the
-/// sub-step resolves at that torque (`Gearbox::fade_step`), it is 5.3e-8.
+/// driving and driven back, which within 0.5 W the integration did not resolve (1.9e-4 off); with the base steps cut
+/// finer where it is near zero power at that torque (`Machine::substeps_wanted`), it is 5.3e-8.
 #[test]
 fn on_its_compliant_base_the_scissor_file_holds_the_push_once() {
     on_its_compliant_base_the_push_is_held_once(scissor_file(), 1.0, 1.5e7);
@@ -763,10 +763,10 @@ fn on_its_compliant_base_the_push_is_held_once(entry: &'static MachineEntry, sid
 /// between driving and driven back within 0.5 W (`Gearbox::loss_factor`), a few mm/s of the platform's speed at that
 /// force: 4 substeps of 15.6 us did not follow it, and the move's rest was 2.3e-4 of the supply (1.2e-4 with 8,
 /// 6.9e-6 with 16, 4.2e-8 with 32 and 64; 4.6e-8 with 4 and effects.gearbox_efficiency off): the integration's. The
-/// switch is now widened where the torque makes it stiffer than the sub-step resolves (`Gearbox::fade_step`), and the
-/// shipped file closes to 4.4e-8 (4e-8 with one sub-step under the push too). Planar delta and D3: the plate lowered
-/// 0.04 m onto a slab 0.02 m under its lowest part; the scissor lift's platform raised 0.04 m into a ceiling 0.02 m
-/// over it.
+/// steps are now cut finer where a gear is near zero power at a torque that makes its switch stiffer than the sub-step
+/// resolves (`Machine::substeps_wanted`), and the shipped file closes to 4.2e-8, its hold force the 64-substep run's to
+/// 1e-6. Planar delta and D3: the plate lowered 0.04 m onto a slab 0.02 m under its lowest part; the scissor lift's
+/// platform raised 0.04 m into a ceiling 0.02 m over it.
 #[test]
 fn the_linkage_delta_and_scissor_files_are_pushed_at_their_tool() {
     // Per file the least share of the supply its budget is held to, beside the move's own rest without a contact.
