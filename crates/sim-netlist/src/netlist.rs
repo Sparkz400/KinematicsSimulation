@@ -31,10 +31,12 @@ pub enum Kind {
     Coefficients(&'static str),
     /// Where an editor draws the node, [x, y]; the simulation does not read it.
     Position,
-    /// Where the 3D view draws the node, [x, y, z] in metres.
+    /// A point [x, y, z] in metres, each a number or the dotted path of one (as `Number`).
     Point,
     /// Ids of nodes of any of the named lists, in an order that means something (a belt's way past them).
     Route(&'static [&'static str]),
+    /// One of the named words.
+    Choice(&'static [&'static str]),
 }
 
 pub struct Field {
@@ -55,7 +57,7 @@ const CLOCKWISE: Field = field(
     "clockwise",
     Kind::Bool,
     false,
-    "With effects.belt_wrap: the belt runs round it clockwise, seen from the front (x to the right, z up), or from above (x to the right, y away) where the belt lies flat, and followed along the routes in their order. Default false (anticlockwise).",
+    "The belt runs round it clockwise, followed along the routes in their order, seen in its belt's plane (its section's `plane`): from the front (x to the right, z up) in x-z, from above (x to the right, y away) in x-y, from +x (y to the right, z up) in y-z. Its spin in the frame momentum takes this sense, and effects.belt_wrap the wrap. Default false (anticlockwise).",
 );
 
 /// The node lists of `[machine]`, in the order they are read, each with its fields.
@@ -110,7 +112,13 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 "at_m",
                 Kind::Point,
                 false,
-                "Where the 3D view draws it, [x, y, z], m; default at an end of the first axis. With effects.belt_wrap its place in the belt's plane (x, z; x, y where the belt lies flat, its sections changing with axes along x and along y and none along z), which the wrap is worked out from.",
+                "Where the 3D view draws it, [x, y, z], m (from its body where it has one); default at an end of the first axis. Its place in its belt's plane (its section's `plane`) is what the wrap (effects.belt_wrap) and the places of the belt's runs in the frame momentum are worked out from.",
+            ),
+            field(
+                "body",
+                Kind::Ref("body"),
+                false,
+                "A body it rides on (a motor on a moving axis): at_m is then from that body.",
             ),
             CLOCKWISE,
             POS,
@@ -135,6 +143,12 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 Kind::Route(&["pulley", "idler", "body"]),
                 false,
                 "The pulleys, idlers and bodies (a clamp on it) the section runs past, in order, for the 3D view; default its pulleys and the body it is clamped to.",
+            ),
+            field(
+                "plane",
+                Kind::Choice(&["x-z", "x-y", "y-z"]),
+                false,
+                "The plane its belt runs in, whose normal its wheels turn about: x-z standing along x (about y), x-y flat (about z), y-z standing along y (about x). The places of its route's wheels in it give the belt's runs their places in the frame momentum, and the wrap. Sections that share a pulley or an idler lie in one plane. Default x-z, or x-y for every section where one section's length changes with axes along x and along y and none along z (an H-bot's, a CoreXY's).",
             ),
             POS,
         ],
@@ -242,7 +256,7 @@ pub const NODES: &[(&str, &str, &[Field])] = &[
                 "at_m",
                 Kind::Point,
                 false,
-                "Where the 3D view draws it, [x, y, z], m (from its body where it has one); with effects.belt_wrap its place in the belt's plane (x, z; x, y where the belt lies flat).",
+                "Where the 3D view draws it, [x, y, z], m (from its body where it has one); its place in its belt's plane (the plane of the section whose route has it), as for a pulley.",
             ),
             CLOCKWISE,
             POS,
@@ -720,6 +734,8 @@ pub struct MotorNode {
     pub inertia: f64,
     pub pulley: String,
     pub at: Option<[f64; 3]>,
+    /// The body its pulley rides on (`machine.pulley.body`), which `at` is from.
+    pub body: Option<usize>,
     /// The belt runs round its pulley clockwise (`machine.pulley.clockwise`).
     pub clockwise: bool,
     pub transmission: Transmission,
@@ -762,6 +778,9 @@ pub struct SectionNode {
     pub pulleys: Vec<f64>,
     /// The 3D view's way of the section, empty for the default.
     pub route: Vec<Waypoint>,
+    /// The plane its belt runs in (`plane`), as the scene's coordinates [along, up, depth]: x-z [0, 2, 1], x-y
+    /// [0, 1, 2], y-z [1, 2, 0]; `None` for the default.
+    pub plane: Option<[usize; 3]>,
 }
 
 /// A point a section's belt runs past in the 3D view.
@@ -906,19 +925,14 @@ impl Node<'_> {
     fn bool(&self, name: &str) -> Result<bool> {
         self.get(name).map_or(Ok(false), |v| v.as_bool().ok_or_else(|| ConfigError::Type(self.at(name))))
     }
-    /// An optional [x, y, z] of numbers.
-    fn point(&self, name: &str) -> Result<Option<[f64; 3]>> {
+    /// An optional [x, y, z], each a number or the path of one (as a number field).
+    fn point(&self, cfg: &Config, name: &str, refs: &mut Vec<String>) -> Result<Option<[f64; 3]>> {
         let Some(value) = self.get(name) else { return Ok(None) };
-        let numbers: Option<Vec<f64>> = value.as_array().and_then(|p| {
-            p.iter()
-                .map(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
-                .map(|f| f.filter(|f| sim_core::config::number(*f, name).is_ok()))
-                .collect()
-        });
-        match numbers.as_deref() {
-            Some(&[x, y, z]) => Ok(Some([x, y, z])),
-            _ => Err(ConfigError::Type(self.at(name))),
-        }
+        let Some([x, y, z]) = value.as_array().map(Vec::as_slice) else {
+            return Err(ConfigError::Type(self.at(name)));
+        };
+        let mut at = |v: &Value| number(cfg, v, &self.at(name), refs);
+        Ok(Some([at(x)?, at(y)?, at(z)?]))
     }
     pub(crate) fn id_list(&self, name: &str) -> Result<Vec<&str>> {
         let Some(value) = self.get(name) else { return Ok(Vec::new()) };
@@ -1010,6 +1024,7 @@ impl Netlist {
                     let Some(value) = node.get(f.name) else { continue };
                     let ok = match f.kind {
                         Kind::Id | Kind::Key | Kind::Table | Kind::Ref(_) => value.is_str(),
+                        Kind::Choice(words) => value.as_str().is_some_and(|w| words.contains(&w)),
                         Kind::Bool => value.is_bool(),
                         Kind::Refs(_) | Kind::Route(_) => value.is_array(),
                         _ => true,
@@ -1184,7 +1199,11 @@ impl Netlist {
                                     radius,
                                     inertia,
                                     pulley: id_of(pulley),
-                                    at: pulley.point("at_m")?,
+                                    at: pulley.point(cfg, "at_m", &mut refs)?,
+                                    body: pulley
+                                        .text("body")?
+                                        .map(|id| find(&bodies, pulley, "body", id))
+                                        .transpose()?,
                                     clockwise: pulley.bool("clockwise")?,
                                     transmission: Transmission::Belt,
                                     axis: None,
@@ -1249,6 +1268,7 @@ impl Netlist {
                 inertia: 0.0,
                 pulley: String::new(),
                 at: None,
+                body: None,
                 clockwise: false,
                 transmission,
                 axis: Some(axis),
@@ -1308,7 +1328,29 @@ impl Netlist {
                     .or_else(|| bodies.iter().position(|n| n.table["id"].as_str() == Some(target)).map(Waypoint::Body));
                 route.push(found.ok_or_else(|| ConfigError::Invalid(format!("{} = \"{target}\"", node.at("route"))))?);
             }
-            section_nodes.push(SectionNode { id, key, length, axes: along, pulleys: fed, route });
+            let plane = match node.text("plane")? {
+                None => None,
+                Some("x-z") => Some([0, 2, 1]),
+                Some("x-y") => Some([0, 1, 2]),
+                Some("y-z") => Some([1, 2, 0]),
+                Some(_) => return Err(ConfigError::Invalid(node.at("plane"))),
+            };
+            // A wheel turns in one plane: the sections that share it lie in it.
+            let wheels = |pulleys: &[f64], route: &[Waypoint]| -> Vec<Waypoint> {
+                let fed = (0..pulleys.len()).filter(|&kk| pulleys[kk] != 0.0).map(Waypoint::Pulley);
+                fed.chain(route.iter().copied().filter(|w| !matches!(w, Waypoint::Body(_)))).collect()
+            };
+            let mine = wheels(&fed, &route);
+            if let Some(other) = section_nodes.iter().find(|o: &&SectionNode| {
+                o.plane != plane && wheels(&o.pulleys, &o.route).iter().any(|w| mine.contains(w))
+            }) {
+                return Err(ConfigError::Invalid(format!(
+                    "{} (a wheel it shares with section {} turns in one plane)",
+                    node.at("plane"),
+                    other.id
+                )));
+            }
+            section_nodes.push(SectionNode { id, key, length, axes: along, pulleys: fed, route, plane });
         }
         // Per axis, the coefficients of a node's table field (`speed = { x = 2 }`).
         let coefficients = |node: &Node, name: &str, refs: &mut Vec<String>| -> Result<Vec<f64>> {
@@ -1347,7 +1389,7 @@ impl Netlist {
             if !moves.contains(&true) {
                 return Err(ConfigError::Missing(node.at("axes")));
             }
-            let offset = node.point("offset_m")?.unwrap_or_default();
+            let offset = node.point(cfg, "offset_m", &mut refs)?.unwrap_or_default();
             body_nodes.push(BodyNode { id: id_of(node), mass, payload, axes: moves, rotaries, offset });
         }
 
@@ -1428,7 +1470,7 @@ impl Netlist {
                 inertia,
                 friction,
                 body,
-                at: node.point("at_m")?,
+                at: node.point(cfg, "at_m", &mut refs)?,
                 clockwise: node.bool("clockwise")?,
             });
         }
@@ -1493,7 +1535,7 @@ impl Netlist {
             return Err(ConfigError::Invalid(format!("machine.axis[{}] (no body moves with it)", axis_nodes[i].id)));
         }
         let gantry = gantry_node(cfg, &gantries, &axes, &axis_nodes, &motor_nodes, &section_nodes, &mut refs)?;
-        let tcp = tcp_node(&tcps, &axes, &axis_nodes)?;
+        let tcp = tcp_node(cfg, &tcps, &axes, &axis_nodes, &mut refs)?;
         // A gantry's drives beyond the first are motors beyond the axes.
         let extra = gantry.as_ref().map_or(0, |g| g.drives.iter().flatten().count().saturating_sub(1));
         if motor_nodes.len() != axis_nodes.len() + extra {
@@ -1726,7 +1768,13 @@ fn gantry_node(
 
 /// The tool centre point (`machine.tcp`), at most one: three straight axes along x (the file's first), y (horizontal)
 /// and z (vertical), so that they stand square to each other in the 3D view, and the rotary axes that carry the tool.
-fn tcp_node(tcps: &[Node], axes: &[Node], axis_nodes: &[AxisNode]) -> Result<Option<TcpNode>> {
+fn tcp_node(
+    cfg: &Config,
+    tcps: &[Node],
+    axes: &[Node],
+    axis_nodes: &[AxisNode],
+    refs: &mut Vec<String>,
+) -> Result<Option<TcpNode>> {
     let node = match tcps {
         [] => return Ok(None),
         [node] => node,
@@ -1772,8 +1820,8 @@ fn tcp_node(tcps: &[Node], axes: &[Node], axis_nodes: &[AxisNode]) -> Result<Opt
     if rotaries.is_empty() && table.is_empty() {
         return Err(ConfigError::Missing(format!("{} (or table)", node.at("rotaries"))));
     }
-    let tool = node.point("tool_m")?.ok_or_else(|| ConfigError::Missing(node.at("tool_m")))?;
-    let pivot = node.point("table_pivot_m")?.unwrap_or_default();
+    let tool = node.point(cfg, "tool_m", refs)?.ok_or_else(|| ConfigError::Missing(node.at("tool_m")))?;
+    let pivot = node.point(cfg, "table_pivot_m", refs)?.unwrap_or_default();
     Ok(Some(TcpNode { axes, rotaries, tool, table, pivot }))
 }
 
@@ -1827,12 +1875,13 @@ pub fn json_schema() -> Value {
                 Kind::Point => (
                     obj([
                         ("type", text("array")),
-                        ("items", obj([("type", text("number"))])),
+                        ("items", number.clone()),
                         ("minItems", Value::Integer(3)),
                         ("maxItems", Value::Integer(3)),
                     ]),
                     None,
                 ),
+                Kind::Choice(words) => (obj([("enum", Value::Array(words.iter().map(|w| text(w)).collect()))]), None),
                 Kind::Route(targets) => (
                     obj([("type", text("array")), ("items", obj([("type", text("string"))]))]),
                     Some(format!(

@@ -474,7 +474,7 @@ fn a_broken_machine_file_is_refused_with_its_key_and_line() {
     let (e, _) = refused(without_lean);
     assert_eq!(e, ConfigError::Missing("machine.lean (effects.tool_flex)".into()));
     let (e, _) = refused(|t: &str| {
-        t.replacen("belt_wrap = false", "belt_wrap = true", 1).replacen("at_m = [1.15, -0.05, 0.06]\n", "", 1)
+        t.replacen("belt_wrap = false", "belt_wrap = true", 1).replacen("at_m = [1.15, -0.03, 0.06]\n", "", 1)
     });
     assert_eq!(e, ConfigError::Invalid("effects.belt_wrap (pulley_b has no at_m)".into()));
     let (e, line) = refused(one("lever_axis = \"z\"\nlateral", "lever_axis = \"y\"\nlateral"));
@@ -600,7 +600,7 @@ fn the_corexy_moves_as_worked_out_by_hand() {
 /// L = 4.2 m, so at x = 0.3, y = 0.1 the belt weighs mu (4.2 + 8 * 0.55) = 0.86 kg on X where the lumps had 0.42,
 /// 0.42 kg on Y, and -0.08 kg between them. The CoreXY's belts move as a whole along X and along Y (0.39 kg, as the
 /// lumps had it) and add -0.01 kg between them (belt A's 1.2 m off the clamps against B's 1.3 m). The portals' belts
-/// ride on the axes that carry them: X carries every belt (4.8 m on the XYZ portal, 2.1 m on the C portal, the Y belt's
+/// ride on the axes that carry them: X carries every belt (4.8 m on the XYZ portal, 3.8 m on the C portal, the Y belt's
 /// 2.0 and 1.4 m on the dual and rack gantries), Y the belts on it.
 #[test]
 fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
@@ -615,7 +615,7 @@ fn the_belts_runs_keep_the_energy_and_give_the_moved_mass_by_hand() {
         ("xyz-portal.toml", &[0.3, 0.2, 0.1], &[0.6, 0.4, 0.2], |_, v| {
             4.8 * v[0] * v[0] + 2.4 * v[1] * v[1] + 1.0 * v[2] * v[2]
         }),
-        ("portal-c.toml", &[0.3, 0.2, 0.1, 0.0], &[0.6, 0.4, 0.2, 0.0], |_, v| 2.1 * v[0] * v[0] + 0.8 * v[1] * v[1]),
+        ("portal-c.toml", &[0.3, 0.2, 0.1, 0.0], &[0.6, 0.4, 0.2, 0.0], |_, v| 3.8 * v[0] * v[0] + 1.4 * v[1] * v[1]),
         ("dual-gantry.toml", &[1.0, 0.3], &[0.6, 0.4], |_, v| 2.0 * (v[0] * v[0] + v[1] * v[1])),
         ("rack-gantry.toml", &[1.0, 0.2], &[0.6, 0.4], |_, v| 1.4 * (v[0] * v[0] + v[1] * v[1])),
     ];
@@ -913,24 +913,60 @@ fn the_t_gantry_file_tells_its_crates_modes() {
     }
 }
 
+/// The T-gantry's beam mode moving alone (effects.beam_vertical_mode, the state at rest at a pose with the beam's
+/// deflection rate w' = 1 m/s and every other rate 0), crate against file. The belt's runs ride on the beam: the vertical
+/// ones whole, the four horizontal ones tilting, a point at the share xi of the way from its post's pulley to the carriage
+/// going down by xi w. A tilting run's angular momentum about y is then mu w' times the integral of x xi along it, its
+/// weight times w' / 2 at the weighted point f + 2/3 (c - f), not at its middle (f its end at the pulley, c at the
+/// carriage): the file took the middle, a sixth of the run off (up to 0.025 N m s per m/s of w' with the carriage at an
+/// end). What is left about y is where the runs meet the carriage: the crate at the carriage's x, the file at its idlers,
+/// d = 0.042 m to the left (the two runs from motor A, s + x long each, s = 0.15 m) and right (the two from motor B,
+/// s + sx - x, sx = 1 m). A run's weighted point moves by 2/3 of that: the file's angular momentum about y is the crate's
+/// plus mu w' (d / 3) (2 (s + sx - x) - 2 (s + x)) = (2 / 3) mu d (sx - 2 x) w' (mu = 0.1 kg/m), 2.8e-3 N m s at x = 0,
+/// to rounding; about x and z both have none (the file's wheels in the bodies' plane).
+#[test]
+fn the_t_gantry_files_tilting_runs_turn_with_the_beam_as_the_crates() {
+    let changes = ["effects.beam_vertical_mode = true"];
+    let [(ea, ca), (eb, cb)] = pair("t-gantry", "t-gantry.toml", &changes);
+    let (krate, file) = ((ea.build)(&ca).unwrap(), (eb.build)(&cb).unwrap());
+    // The file's positions: x, z, the two pulleys, the two rotors, the beam's w; then their rates.
+    let w_rate = 7 + 6;
+    for x in [0.0, 0.5, 1.0] {
+        let (mut s, mut torque) = (Vec::new(), vec![0.0; 2]);
+        file.equilibrium(&[x, 0.15], &mut s, &mut torque);
+        s[w_rate] = 1.0;
+        let (fa, fb) =
+            (krate.frame_momentum(&crate_state("t-gantry", &cb, &s)).unwrap(), file.frame_momentum(&s).unwrap());
+        println!("x = {x}: crate {:?}, file {:?}", fa.angular, fb.angular);
+        assert_close("linear momentum", &fa.linear, &fb.linear, 1e-12);
+        let idlers = 2.0 / 3.0 * 0.1 * 0.042 * (1.0 - 2.0 * x);
+        let crate_and_idlers = [fa.angular[0], fa.angular[1] + idlers, fa.angular[2]];
+        assert_close("angular momentum", &crate_and_idlers, &fb.angular, 1e-12);
+    }
+}
+
 /// The T-gantry's angular momentum and first moment, crate against file, over 1 s of the default cycle (the file's run,
 /// each state the crate's too; frame and leaning Z off in both, as `pair` has them). Both take moments about the same
 /// point: the place of the Z axis's centre of mass at z = 0 under the carriage at x = 0. The bodies are the same there:
 /// the Z axis at (x, 0, z), the carriage (and its chain) at (x, 0, 0.3), z_com_drop above it, which the file gives as its
-/// carriage's `offset_m` (before it the file had the carriage at 0: its angular momentum about y was 0.3 m * 4 kg * vx
+/// carriage's `offset_m`, naming geometry.z_com_drop_m (checked with it moved to 0.45 m too; before it the file had the carriage at 0: its angular momentum about y was 0.3 m * 4 kg * vx
 /// less, its first moment 1.2 kg m less). With the belt's mass off the two agree to rounding, the linear momentum and the
 /// first moment with it on too (the runs' first moment, mu sum (L0 + c q / 2) V q, has no place in it). The belt's
 /// angular momentum the two count differently: the crate by its path (the horizontal runs at the carriage's height
 /// cancelling, the vertical ones at its x, from the carriage up s + z to the clamp and down s + sz - z round the bottom
 /// idler, the lumps on the pulleys spinning), the file each run's mass at the middle of its straight piece as the 3D view
 /// draws it from its wheels' places (the carriage idlers 0.032 m above and below the carriage, the bottom idler 0.08 m
-/// under the Z axis's point, the clamp at it, the pulleys and idlers 0.02 m in front of the bodies). Measured over the run
-/// (1.3e-3 N m s about y, 1.1e-3 about x at 0.25 m/s) and held under bounds, not hand values: about y a twentieth of a
-/// metre times the belt's 0.42 kg times its speed (`belt_y` below), about x and z 0.02 m times that.
+/// under the Z axis's point, the clamp at it). About x and z the two agree to rounding since the file's wheels lie in
+/// the bodies' plane (they were drawn 0.02 m in front of it: 1.1e-3 N m s about x at 0.25 m/s). About y the heights
+/// differ (the crate's clamp s + z over the carriage's idlers, both horizontal runs at their height; the file's clamp at
+/// the Z axis's drawn point, its idlers 0.032 m above and below the carriage, which the drawing of the bodies, at their
+/// axes' points, cannot move): measured 1.29e-3 N m s over the run, held under a twentieth of a metre times the belt's
+/// 0.42 kg times its speed (`belt_y` below), a bound, not a hand value.
 #[test]
 fn the_t_gantry_file_has_its_crates_angular_momentum() {
-    for belt_mass in [false, true] {
-        let changes: &[&str] = if belt_mass { &[] } else { &["effects.belt_mass = false"] };
+    // The carriage's offset names geometry.z_com_drop_m, which the crate reads too: moved, the two still agree.
+    let moved = ["effects.belt_mass = false", "geometry.z_com_drop_m = 0.45"];
+    for (belt_mass, changes) in [(false, &moved[..1]), (false, &moved[..]), (true, &[][..])] {
         let [(ea, ca), (eb, cb)] = pair("t-gantry", "t-gantry.toml", changes);
         let krate = (ea.build)(&ca).unwrap();
         let mut sim = Sim::new(eb, &cb).unwrap();
@@ -958,7 +994,7 @@ fn the_t_gantry_file_has_its_crates_angular_momentum() {
         } else {
             let belt_y = 0.42 * 0.05 * speed;
             assert!(worst[1] > 1e-6 && worst[1] < belt_y, "{worst:?} against {belt_y}");
-            assert!(worst[0].max(worst[2]) < 0.42 * 0.02 * speed * 1.0001, "{worst:?}");
+            assert!(worst[0].max(worst[2]) < 1e-12, "{worst:?}");
         }
     }
 }
@@ -984,6 +1020,43 @@ fn the_portals_x_and_y_belts_ring_on_their_loops_by_hand() {
     let y = hz(0.6, 0.8, 7.5 + 0.1 * (2.4 - 1.6));
     let at_y = machine.resonance_hz(&[0.1, 0.5, 0.15]).unwrap();
     assert!(close(at_y, y, 1e-9) && (y - 69.8303).abs() < 1e-4, "Y: {at_y} against {y} by hand");
+}
+
+/// The screw portal's family (machines/screw-portal.toml, portal-c.toml, five-axis.toml, five-axis-table.toml) has the
+/// XYZ portal's X and Y loops, now with their far idlers in the routes (far_x on the frame at x = 1.1 m, far_y on the
+/// bridge 0.7 m from the Y pulley): sections x2 2.3 m and y2 1.3 m, the clamp to the motor 0.1 + q. With the pulleys held
+/// each axis rings on its two sections, k = EA (1 + 300 / 5e5) (1 / l1 + 1 / l2), carrying what rides on it: X at its
+/// far end (1.1 and 1.3 m) the bridge, the Y carriage, the Z slide and the payload, 13.5 kg, with the C portal's gripper
+/// 1.5 kg and its belts' runs beyond the half of the 3.8 m of belt lumped on each pulley, 0.1 (3.8 - 1.9) kg (the other
+/// files have no spans), the five-axis head's 3 + 4 kg (the five-axis table's file has the screw portal's belts, its
+/// tool's coordinates are the workpiece's on the table, so it is not compared at a pose here). Y in the
+/// middle of its stroke with X at its start (0.35 and 1.05 m) on the screw portal: the Y carriage, Z slide and payload,
+/// 7.5 kg. Each the lowest mode there. Before the loops (the run from the motor to the far idler 0.1 m) the screw
+/// portal's X far end rang at 74.48 Hz on a return section of 0.2 m, its Y in the middle at 92.64 Hz.
+#[test]
+fn the_screw_portals_belts_ring_on_their_loops_by_hand() {
+    let hz = |l1: f64, l2: f64, m: f64| {
+        (5e5 * (1.0 + 300.0 / 5e5) * (1.0 / l1 + 1.0 / l2) / m).sqrt() / std::f64::consts::TAU
+    };
+    for (name, x_mass, y_mass, pose_x, pose_y) in [
+        ("screw-portal.toml", 13.5, Some(7.5), vec![1.0, 0.25, 0.1], vec![0.0, 0.25, 0.1]),
+        // The C portal's tip is 0.1 m along x off its C axis at C = 0; its lowest mode with X at its start is the
+        // gripper turning C with Y (58.9 Hz), and the five-axis head's couples Y with its rotaries (55.7 Hz against the
+        // belt's 57.7 alone), so Y is not compared there.
+        ("portal-c.toml", 15.0 + 0.19, None, vec![1.1, 0.25, 0.1, 0.0], vec![0.1, 0.25, 0.1, 0.0]),
+        ("five-axis.toml", 20.5, None, vec![1.0, 0.25, 0.1, 0.0, 0.0], vec![0.0, 0.25, 0.1, 0.0, 0.0]),
+    ] {
+        let entry = file(name);
+        let machine = (entry.build)(&entry.config()).unwrap();
+        let x = hz(1.1, 1.3, x_mass);
+        let at_x = machine.resonance_hz(&pose_x).unwrap();
+        eprintln!("{name}: X {at_x} against {x} by hand, Y {:?}", machine.resonance_hz(&pose_y));
+        assert!(close(at_x, x, 1e-9), "{name} X: {at_x} against {x} by hand");
+        if let Some(m) = y_mass {
+            let (y, at_y) = (hz(0.35, 1.05, m), machine.resonance_hz(&pose_y).unwrap());
+            assert!(close(at_y, y, 1e-9), "{name} Y: {at_y} against {y} by hand");
+        }
+    }
 }
 
 /// The 3D view draws the belt round its wheels: a strip per straight run from tangent to tangent, and 8 round each

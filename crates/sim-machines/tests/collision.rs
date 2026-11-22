@@ -190,6 +190,43 @@ fn a_push_at_the_tool_stops_a_load_on_a_belt_at_the_obstacles_face() {
     );
 }
 
+/// The same file axis on a compliant base (effects.base_compliance, two-way with effects.base_reaction): the push acts
+/// on the base through the tool's shift (`base::Based`) and is not in the machine's outside force (`FrameMomentum::
+/// external`, where it pushed the base a second time: 2 F / k_base back at rest, with each push's work booked once, so
+/// that the budget closed regardless). The carriage stands in the wall by F / k, the base by F / k_base, and the budget
+/// closes to `PUSH_BUDGET_TOLERANCE`.
+#[test]
+fn on_a_compliant_base_a_machine_files_axis_stops_at_the_face() {
+    let entry = load_file(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../machines/single-axis.toml"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let wall = r#"obstacles = [{ name = "wall", centre_m = [1.1, 0.0, 0.0], size_m = [1.0, 10.0, 10.0] }]"#;
+    let settings = [wall, "effects.crash = true", "effects.base_compliance = true", "effects.base_reaction = true"];
+    let mut sim = Sim::new(entry, &with(entry, &settings)).unwrap();
+    sim.command(Command::MoveTo(vec![0.9])).unwrap();
+    sim.run(2.5, |_| {});
+    let (force, depth) = (sim.contact_force, -sim.clearance);
+    // The base (its one direction, x: deflection and rate end the state) holds the push at rest, F / k_base back.
+    let base = sim.state[sim.state.len() - 2];
+    println!("contact force {force} N, depth {depth} m, base {base} m against F / k_base {} m", force / 2.5e6);
+    assert!(sim.contact.is_some() && force > 100.0, "{force} N");
+    assert!((depth - force / 1e7).abs() < 0.05 * depth, "depth {depth} m against F / k = {} m", force / 1e7);
+    assert!((base.abs() - force / 2.5e6).abs() < 0.05 * force / 2.5e6, "base {base} m, F / k_base {}", force / 2.5e6);
+
+    let mut sim = Sim::new(entry, &with(entry, &settings)).unwrap();
+    let points = sim.plan_path(&[Piece::Line(vec![0.9])], false).unwrap();
+    let load = sim_components::analysis::analyse_trajectory(&mut sim, points).unwrap();
+    let budget = load.budget.unwrap();
+    let crash = budget.rows.iter().find(|r| r.id == "crash").unwrap().energy;
+    println!("crash {crash} J, {} J of {} J not accounted for", budget.unaccounted(), budget.supply);
+    assert!(load.contact.is_some() && crash > 0.0, "crash {crash} J");
+    assert!(
+        budget.unaccounted().abs() < PUSH_BUDGET_TOLERANCE * budget.supply,
+        "{} J of {} J not accounted for",
+        budget.unaccounted(),
+        budget.supply
+    );
+}
+
 /// On the five-axis file the tool's coordinates are its tip's, which the tilted head moves with every joint: the push
 /// at the tip goes to the joints as its virtual work on each (`ConfigMachine::on_coordinates`), and the budget closes
 /// with it, within `BUDGET_TOLERANCE`, while the head tilts its tip down onto a slab.
@@ -616,9 +653,10 @@ fn obstacles_stop_the_machine_with_its_drives_off() {
     );
 }
 
-/// The machines that keep an obstacle's push at their motors (`Machine::set_tool_force` false): the D2's and the D3's
-/// arms are the machine files' linkage and spatial delta (`sim_netlist`), the D4's are the D3's.
-const PUSHED_AT_THE_MOTORS: [&str; 3] = ["delta-d2", "delta-d3", "delta-d4"];
+/// The machines that keep an obstacle's push at their motors (`Machine::set_tool_force` false): none since the crane
+/// and the winder take it on their contact coordinates and the D2, D3 and D4 through the files' linkage and spatial
+/// delta.
+const PUSHED_AT_THE_MOTORS: [&str; 0] = [];
 
 /// Every machine but those of `PUSHED_AT_THE_MOTORS` takes the push at its tool, and its power goes into the motion: on
 /// its lossless suite config at the start pose, the tool moving at 5 % of each axis's range per second
@@ -858,20 +896,17 @@ fn the_planar_cable_robot_stops_at_the_face() {
 fn the_spatial_cable_robot_stops_at_the_face() {
     assert_stops_at_the_face("cable-spatial", &[0.0, 0.0, 0.85, 0.0, 0.0, 0.0], 2.5);
 }
-// The D2, D3 and D4 are pushed at their motors until the files' linkage and spatial delta (`sim_netlist::linkage`,
-// `sim_netlist::spatial::Delta`, the D4's arms) take the push (`PUSHED_AT_THE_MOTORS`).
+// The D2's and D3's arms are the machine files' linkage and spatial delta (`sim_netlist::linkage`,
+// `sim_netlist::spatial::Delta`), the D4's the D3's with the push about c on its turn.
 #[test]
-#[ignore = "pushed at the motors until sim_netlist's linkage takes the push at the tool"]
 fn the_delta_d2_stops_at_the_face() {
     assert_stops_at_the_face("delta-d2", &[0.15, -0.8], 2.5);
 }
 #[test]
-#[ignore = "pushed at the motors until sim_netlist's spatial delta takes the push at the tool"]
 fn the_delta_d3_stops_at_the_face() {
     assert_stops_at_the_face("delta-d3", &[0.15, 0.0, -1.0], 2.5);
 }
 #[test]
-#[ignore = "pushed at the motors until sim_netlist's spatial delta (its arms) takes the push at the tool"]
 fn the_delta_d4_stops_at_the_face() {
     assert_stops_at_the_face("delta-d4", &[0.15, 0.0, -1.0, 0.0], 2.5);
 }
