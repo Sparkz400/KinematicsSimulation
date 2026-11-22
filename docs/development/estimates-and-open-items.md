@@ -381,7 +381,13 @@ Fixed (after the second audit, 21 November):
   0.35 -> 1.2, at least 54.0 / 51.0 and 53.1 / 50.2 degrees, 8.9 / 8.7 dB over the poses; and its position gains, whose
   1 mm step in x overshot 42 % at Kv 50: the arm's two at 24 1/s, 9.4 % (4.3 Hz). The base turn keeps 50 and y its
   42 % overshoot (open): at 20 y overshot 7 %, but the turret's ring left its loop's hand model (5.08 Hz against 5.72,
-  `the_palletisers_turret_rings_at_its_held_mode_softened_by_the_velocity_loop`). Settling see the report table. The T-gantry's analyze, verdicts, tuning, margins, step and
+  `the_palletisers_turret_rings_at_its_held_mode_softened_by_the_velocity_loop`). Settling 2.232 -> 2.185 mm of 4 mm,
+  every verdict passing. Open too: over its bounds at the start pose the base turn (motor 1, 0.4 N m s/rad, not
+  retuned) reads 20.9 degrees friction off and 27.1 with friction at `gearbox.stiffness_nm_rad` 230000 (crossover 8 Hz,
+  18.4 dB of gain margin), so `across_the_bounds::palletiser::with(out)_friction` fail; a higher gain moves the turret
+  ring test's hand model. The T-gantry machine file (`machines/t-gantry.toml`) still has Kp 0.04 and Kv 50, so
+  `the_netlist_machines_run_their_crates_cycle` and `..._give_their_crates_verdicts` compare it with a crate at 0.037
+  and 45 and fail (motor A peak torque 0.5443 against 0.5458 N m). The T-gantry's analyze, verdicts, tuning, margins, step and
   Bode blocks of the guides are re-run with the new gains; its optimise, sensitivity, stop, accuracy and path blocks
   are from Kp 0.04 and Kv 50 and not re-run. The shipped margins test is one per
   config now (`across_the_bounds::<config>::as_configured`). Time of `sim-cli margins` over the poses on 4 cores, as
