@@ -557,3 +557,41 @@ fn budget_of_the_screw_and_the_turn(backlash: bool) {
     let bound = if backlash { 1e-3 } else { 1e-6 } * 4.2e-3;
     assert!(drift.abs() < bound, "backlash {backlash}: the budget is off by {drift} J of 4.2e-3");
 }
+
+/// The plane's lowest mode's shape (`mode_shape`) is the linearised machine's eigenvector: at rest at a pose, the arms
+/// moved by 1e-7 times the shape with the rotors where they hold, the arms accelerate (`derivatives`, less their rate
+/// at rest) by -w^2 times that move, w = 2 pi `resonance_hz`, both arms to 1e-5 of it; the plate moves 1 m along x per
+/// unit of the shape (J v). The gearboxes linear (no backlash, no lost motion, no efficiency), the joints without
+/// friction, both poses inside the stops (a stop adds its 2e4 N m/rad to the gearbox's spring).
+#[test]
+fn the_mode_shape_is_the_linearised_machines_eigenvector() {
+    let d = scara(&[
+        "effects.gearbox_backlash = false",
+        "effects.gearbox_lost_motion = false",
+        "effects.gearbox_efficiency = false",
+        "effects.joint_friction = false",
+    ]);
+    for pose in [[0.05, -0.55, 0.0, 0.0], [-0.2, -0.62, 0.0, 0.0]] {
+        let tool = &pose[..d.axes().len()];
+        let (hz, shape) = d.mode_shape(tool).unwrap();
+        assert_eq!(shape.len(), d.state_len());
+        assert!(shape[2..].iter().all(|v| *v == 0.0), "{shape:?}");
+        let (mut state, mut torque) = (Vec::new(), vec![0.0; d.motors().len()]);
+        d.equilibrium(tool, &mut state, &mut torque);
+        let rates = |s: &[f64]| {
+            let mut out = vec![0.0; s.len()];
+            d.derivatives(s, &torque, &mut out);
+            [out[2], out[3]]
+        };
+        let rest = rates(&state);
+        let moved: Vec<f64> = state.iter().zip(&shape).map(|(s, v)| s + 1e-7 * v).collect();
+        let now = rates(&moved);
+        let w2 = (std::f64::consts::TAU * hz).powi(2);
+        for i in 0..2 {
+            close(now[i] - rest[i], -w2 * 1e-7 * shape[i], 1e-5, "the arm's acceleration in the mode");
+        }
+        let t = d.legs().inverse([tool[0], tool[1]]).unwrap();
+        let (_, j) = d.pose(t);
+        close(mul(&j, [shape[0], shape[1]])[0], 1.0, 1e-12, "the plate along x per unit of the shape");
+    }
+}

@@ -284,6 +284,9 @@ pub struct Crane {
     capacity: f64,
     /// effects.hook_block: the sling's length.
     sling: Option<f64>,
+    /// effects.hook_block with the floor: where the payload's point stands since it was set down there and let go, until
+    /// the next pick (`after_step`); the hook block meets its box as it met it on the sling (`faces`).
+    left: Option<V3>,
     /// effects.joint_elasticity.
     elastic_drives: bool,
     /// effects.bridge_skew: the yaw and the second end carriage's drive (the first is `drives[0]`).
@@ -425,6 +428,7 @@ impl Crane {
             hook: cfg.positive("crane.hook_mass_kg")?,
             payload: if cfg.bool("effects.payload")? { cfg.non_negative("crane.payload_kg")? } else { 0.0 },
             attached: true,
+            left: None,
             picked: false,
             pick_loss: 0.0,
             floor: if cfg.bool("effects.floor_contact")? {
@@ -1137,7 +1141,19 @@ impl Machine for Crane {
             }
         }
         let picked = std::mem::take(&mut self.picked);
-        if !picked && self.floor.is_none() && self.on_payload(s).is_none() {
+        if picked {
+            // A payload set down standing on the floor stays there, a box the hook block meets (`faces`), until the next
+            // pick; one let go in the air is gone.
+            self.left = None;
+            if let (false, Some(a0), Some(floor)) = (self.attached, self.layout.sling, self.floor) {
+                let p2: V3 = std::array::from_fn(|k| s[LOAD + k] + s[a0 + k]);
+                if self.payload > 0.0 && p2[2] <= floor + FLOOR_ROUNDING {
+                    // On the floor, where the step's end would have stood it.
+                    self.left = Some([p2[0], p2[1], floor]);
+                }
+            }
+        }
+        if !picked && self.floor.is_none() && self.faces(s).is_empty() {
             return;
         }
         let (before, empty) = (self.energy(s), self.payload_mass() == 0.0);
@@ -1167,26 +1183,45 @@ impl Machine for Crane {
                 }
             }
         }
-        if let Some(dz) = self.on_payload(s) {
-            // The hook block down on the payload: plastic, put back on its top (the payload where it is) and the two at
-            // one vertical speed, the payload's where it stands on the floor, else their common momentum's. Booked with
-            // the pick's loss. Only what came down onto the top within this step: a hook block already deeper (a payload
-            // picked under a hook block hanging lower than 0.28 m over it) is left as it was, which lifting it would make
-            // energy.
-            let into = s[dz] + full::landing();
-            if (into > 0.0 || s[dz + 3] > 0.0) && into <= s[dz + 3].max(0.0) * dt + FLOOR_ROUNDING {
-                let (v1, v2) = (s[LOAD_SPEED + 2], s[LOAD_SPEED + 2] + s[dz + 3]);
-                let (m1, m2) = (self.hook, self.payload_mass());
-                let v = if standing { v2 } else { (m1 * v1 + m2 * v2) / (m1 + m2) };
-                s[LOAD + 2] += s[dz] + full::landing();
-                s[dz] = -full::landing();
-                (s[LOAD_SPEED + 2], s[dz + 3]) = (v, 0.0);
+        // The hook block's box into the payload's within this step, through its top or a side (`faces`; the top first
+        // where both qualify, else the shallowest): plastic, put back on that face (the payload where it is) and the two
+        // at one speed across it: on the top the payload's where it stands on the floor, against the payload set down
+        // the hook block stopped, else their common momentum's. Booked with the pick's loss. Only what came in within
+        // this step: a hook block already deeper (a payload picked under a hook block hanging lower than 0.28 m over it)
+        // is left as it was, which pushing it out would make energy.
+        let landed = self
+            .faces(s)
+            .into_iter()
+            .filter(|f| (f.depth > 0.0 || f.rate > 0.0) && f.depth <= f.rate.max(0.0) * dt + FLOOR_ROUNDING)
+            .min_by(|a, b| (a.k != 2).cmp(&(b.k != 2)).then(a.depth.total_cmp(&b.depth)));
+        if let Some(f) = landed {
+            let k = f.k;
+            s[LOAD + k] += f.sigma * f.depth;
+            match self.layout.sling.filter(|_| self.payload_mass() > 0.0) {
+                Some(a0) => {
+                    s[a0 + k] -= f.sigma * f.depth;
+                    let (v1, v2) = (s[LOAD_SPEED + k], s[LOAD_SPEED + k] + s[a0 + 3 + k]);
+                    let (m1, m2) = (self.hook, self.payload_mass());
+                    let v = if standing && k == 2 { v2 } else { (m1 * v1 + m2 * v2) / (m1 + m2) };
+                    (s[LOAD_SPEED + k], s[a0 + 3 + k]) = (v, 0.0);
+                }
+                None => s[LOAD_SPEED + k] = 0.0,
             }
         }
         if self.floor.is_some() && !self.elastic && self.rope(s).stretch > 1e-9 {
+            // The taut rope lifts the hook block alone: the payload stays where it is, its span (an elastic sling) taking
+            // the move; carried along it was lifted with it, through its own landing or off the floor.
+            let before: Vec<f64> = (0..3).flat_map(|k| [s[LOAD + k], s[LOAD_SPEED + k]]).collect();
             self.place_on_rope(s, s[2], 1.0);
+            if let Some(a0) = self.layout.sling {
+                for k in 0..3 {
+                    s[a0 + k] -= s[LOAD + k] - before[2 * k];
+                    s[a0 + 3 + k] -= s[LOAD_SPEED + k] - before[2 * k + 1];
+                }
+            }
         }
-        if picked && !standing {
+        // Not on a slack rope: the hook block rests on something (the payload set down), nothing hangs on the rope.
+        if picked && !standing && self.rope(s).stretch >= 0.0 {
             if self.layout.rotor.is_some() {
                 // The hoist's gearbox takes the new weight as quasi-statically as the rope: the servo holds the rotor,
                 // the drum gives by the change of the static twist (0.78 mm for the 250 kg at the shipped stiffness).
@@ -1546,6 +1581,9 @@ impl Machine for Crane {
                 add(load, [0.0, 0.0, -0.3])
             };
             out.parts.push(Part::new("payload", Shape::Box { size: PAYLOAD_BOX }, place, [0.2, 0.5, 0.75]));
+        }
+        if let Some(place) = self.left {
+            out.parts.push(Part::new("payload-set-down", Shape::Box { size: PAYLOAD_BOX }, place, [0.2, 0.5, 0.75]));
         }
         out.labels.push(Label {
             pos: add(self.sheave(s), [0.0, 0.0, -0.5 * rope.length]),

@@ -57,6 +57,7 @@ part-z-axis = Z axis
 part-clamp = Belt clamp
 part-flange = Tool flange
 part-payload = Payload
+part-payload-set-down = Payload set down
 part-idler = Idler
 part-idler-bar = Idler (turn marker)
 part-motor = Motor
