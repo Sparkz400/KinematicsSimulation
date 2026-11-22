@@ -341,6 +341,7 @@ not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | 
 | (binary_id(=sim-machines::collision) & test(=the_rotary_hexapod_stops_at_the_face))
 | (binary_id(=sim-machines::collision) & test(=the_spatial_cable_robot_stops_at_the_face))
 | (binary_id(=sim-machines::collision) & test(=the_tripod_stops_at_the_face))
+| (binary_id(=sim-machines::stops) & test(=a_machine_driven_into_a_stop_keeps_its_energy))
 | (binary_id(=sim-machines::control) & test(=a_cycle_of_one_segment_is_analysed))
 | (binary_id(=sim-machines::control) & test(=a_move_arrives_and_comes_to_rest))
 | (binary_id(=sim-machines::control) & test(=a_shared_dc_link_is_one_voltage_for_all_drives_of_a_machine))

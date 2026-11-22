@@ -2085,6 +2085,11 @@ impl Machine for TGantry {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
+    /// A stop met within the step (`HardStop::substeps`, `RotaryJoint::stop_substeps`).
+    fn substeps_wanted(&self, s: &[f64], _torque: &[f64], dt: f64, _substeps: u32) -> u32 {
+        let v = if self.elastic { [s[V + X], s[V + Z]] } else { [s[2], s[3]] };
+        (0..2).map(|k| self.stops.substeps(s[k], v[k], self.axes[k].max, dt)).max().unwrap_or(1)
+    }
 
     fn memory(&self) -> Vec<f64> {
         Gearbox::anchors(&self.gears)

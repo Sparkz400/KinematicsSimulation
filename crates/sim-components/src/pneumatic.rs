@@ -907,8 +907,14 @@ impl Machine for Pneumatic {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.inner.set_brake_engaged(engaged)
     }
+    /// The machine's own, and a cylinder meeting its stop within the step (`HardStop::substeps`).
     fn substeps_wanted(&self, state: &[f64], torque: &[f64], dt: f64, substeps: u32) -> u32 {
-        self.inner.substeps_wanted(&state[..self.n()], torque, dt, substeps)
+        let n = self.n();
+        let cylinders = self.cylinders.iter().enumerate().map(|(k, c)| {
+            let at = n + STATES * k;
+            c.stops.substeps(state[at + X], state[at + V], c.stroke, dt)
+        });
+        cylinders.fold(self.inner.substeps_wanted(&state[..n], torque, dt, substeps), u32::max)
     }
     fn valves(&self) -> Vec<(String, f64)> {
         self.cylinders.iter().map(|c| (c.id.clone(), c.track.command)).collect()

@@ -150,6 +150,13 @@ impl RotaryJoint {
         self.gearbox.ratio * self.gearbox.ratio * self.rotor_inertia
     }
 
+    /// The parts a sub-step is cut into where the joint at `angle` and `speed` meets its stops within a base step `dt`
+    /// (`HardStop::substeps`).
+    pub fn stop_substeps(&self, angle: f64, speed: f64, dt: f64) -> u32 {
+        let (min, max) = self.range;
+        self.stops.substeps(angle - min, speed, max - min, dt)
+    }
+
     /// What acts on the arm at the joint besides the gearbox, at its angle and speed: the joint's friction and the
     /// stops (positive turns the angle up).
     pub fn output_torque(&self, angle: f64, speed: f64) -> f64 {

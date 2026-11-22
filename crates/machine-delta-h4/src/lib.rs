@@ -2098,6 +2098,11 @@ impl Machine for H4 {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
+    /// A stop met within the step (`HardStop::substeps`, `RotaryJoint::stop_substeps`).
+    fn substeps_wanted(&self, s: &[f64], _torque: &[f64], dt: f64, _substeps: u32) -> u32 {
+        let (t, w) = self.arms(s);
+        (0..t.len()).map(|k| self.joints[k].stop_substeps(t[k], w[k], dt)).max().unwrap_or(1)
+    }
     /// The push acts on the plate and the tool, beyond the gearboxes, in either model: on the arms, or with bending
     /// arms on the elbows and their moves out of the arms' planes, and with the amplifier's compliance its turn on the
     /// tool's (`pushed`); its power is the budget's crash row.

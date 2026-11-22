@@ -94,12 +94,12 @@ pub fn lossless_config(entry: &MachineEntry) -> Config {
     for id in own {
         cfg.set_text(&format!("gearbox.{id}.damping_nm_s_rad = 0.0")).unwrap();
     }
-    let stops = if cfg.get("slide.stop_damping_n_s_m").is_ok() {
-        "slide.stop_damping_n_s_m"
-    } else {
-        "joint.stop_damping_nm_s_rad"
-    };
-    cfg.set_text(&format!("{stops} = 0.0")).unwrap();
+    // Both where a machine has both (the SCARA's joints and its slide).
+    for stops in ["slide.stop_damping_n_s_m", "joint.stop_damping_nm_s_rad"] {
+        if cfg.get(stops).is_ok() {
+            cfg.set_text(&format!("{stops} = 0.0")).unwrap();
+        }
+    }
     cfg
 }
 

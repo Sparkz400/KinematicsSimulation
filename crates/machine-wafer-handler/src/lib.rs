@@ -1389,6 +1389,13 @@ impl Machine for WaferHandler {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
+    /// A stop met within the step (`HardStop::substeps`, `RotaryJoint::stop_substeps`).
+    fn substeps_wanted(&self, s: &[f64], _torque: &[f64], dt: f64, _substeps: u32) -> u32 {
+        let ((q, qd), lift) = (self.coordinates(s), self.lift_state(s));
+        (0..2)
+            .map(|k| self.joints[k].stop_substeps(q[k], qd[k], dt))
+            .fold(self.lift.joint.stop_substeps(lift[0], lift[1], dt), u32::max)
+    }
     /// The push acts on the arm's coordinates beyond the gearboxes (`pushed`, on the bands' too where they are elastic)
     /// and on the lift's load, in either model; its power is the budget's crash row.
     fn set_tool_force(&mut self, force: &[f64]) -> bool {

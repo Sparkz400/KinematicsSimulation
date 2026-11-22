@@ -682,6 +682,11 @@ impl Machine for SingleAxis {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
+    /// A stop met within the step (`HardStop::substeps`, `RotaryJoint::stop_substeps`).
+    fn substeps_wanted(&self, s: &[f64], _torque: &[f64], dt: f64, _substeps: u32) -> u32 {
+        let v = if self.elastic { s[3] } else { s[1] };
+        self.stops.substeps(s[0], v, self.axes[0].max, dt)
+    }
 
     /// The carriage on the belt with the pulley held, as the gantry's `modes` takes it: the carriage, its payload and
     /// the cable chain's share (m) on the two sections, k = EA / l1 + EA / l2 (dT/dL of `Belt::section`, l the

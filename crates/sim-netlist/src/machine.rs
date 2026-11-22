@@ -4072,6 +4072,11 @@ impl Machine for ConfigMachine {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
+    /// A stop met within the step (`HardStop::substeps`, `RotaryJoint::stop_substeps`).
+    fn substeps_wanted(&self, s: &[f64], _torque: &[f64], dt: f64, _substeps: u32) -> u32 {
+        let at = if self.elastic { self.vel() } else { self.n() };
+        (0..self.nt()).map(|i| self.stops.substeps(s[i], s[at + i], self.stroke[i], dt)).max().unwrap_or(1)
+    }
 
     fn memory(&self) -> Vec<f64> {
         Gearbox::anchors(&self.gears)

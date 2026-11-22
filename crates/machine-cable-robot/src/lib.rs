@@ -2126,6 +2126,12 @@ impl Machine for CableRobot {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
+    /// A stop met within the step (`HardStop::substeps`, `RotaryJoint::stop_substeps`).
+    fn substeps_wanted(&self, s: &[f64], _torque: &[f64], dt: f64, _substeps: u32) -> u32 {
+        let Some(spans) = self.spans(self.platform(s).0) else { return 1 };
+        let (lengths, rates, ..) = self.winch_state(s, &spans);
+        (0..self.m()).map(|k| self.winches[k].stop_substeps(lengths[k], rates[k], dt)).max().unwrap_or(1)
+    }
     /// The push acts on the platform, beyond the cables, in either model (`pushed`); its power is the budget's crash
     /// row.
     fn set_tool_force(&mut self, force: &[f64]) -> bool {

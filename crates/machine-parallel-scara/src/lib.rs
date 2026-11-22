@@ -1320,6 +1320,15 @@ impl Machine for ParallelScara {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
+    /// A stop met within the step (`HardStop::substeps`, `RotaryJoint::stop_substeps`).
+    fn substeps_wanted(&self, s: &[f64], _torque: &[f64], dt: f64, _substeps: u32) -> u32 {
+        let (t, w) = self.arms(s);
+        let extras = self.extras.iter().enumerate().map(|(e, x)| {
+            let state = self.extra_state(s, e);
+            x.joint.stop_substeps(state[0], state[1], dt)
+        });
+        (0..2).map(|k| self.joints[k].stop_substeps(t[k], w[k], dt)).chain(extras).max().unwrap_or(1)
+    }
     /// The push acts on the arms beyond their gearboxes (`pushed`) and on each extra axis's load, in either model; its
     /// power is the budget's crash row.
     fn set_tool_force(&mut self, force: &[f64]) -> bool {

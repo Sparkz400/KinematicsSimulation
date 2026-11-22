@@ -724,6 +724,10 @@ impl Machine for Delta4 {
         self.brake_engaged = engaged;
         self.arms.set_brake_engaged(engaged);
     }
+    /// The arms' stops (the tool's turn has none).
+    fn substeps_wanted(&self, s: &[f64], torque: &[f64], dt: f64, substeps: u32) -> u32 {
+        self.arms.substeps_wanted(&s[..self.n3], &torque[..3], dt, substeps)
+    }
     /// The push on x, y and z goes to the arms (the D3's, at the platform); the torque about c turns the tool.
     fn set_tool_force(&mut self, force: &[f64]) -> bool {
         self.turn_push = force[3];

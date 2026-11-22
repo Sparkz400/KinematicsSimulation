@@ -1268,6 +1268,18 @@ impl Machine for Crane {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
+    /// A stop met within the step (`HardStop::substeps`, `RotaryJoint::stop_substeps`).
+    fn substeps_wanted(&self, s: &[f64], _torque: &[f64], dt: f64, _substeps: u32) -> u32 {
+        if self.full {
+            let at = |d: usize| (self.travel(s, d), self.drive(d));
+            return (0..self.layout.drives)
+                .map(|d| at(d))
+                .map(|((pos, speed), j)| j.stop_substeps(pos, speed, dt))
+                .max()
+                .unwrap_or(1);
+        }
+        (0..3).map(|k| self.drives[k].stop_substeps(s[k], s[RATES + k], dt)).max().unwrap_or(1)
+    }
     /// The push acts where the parts that touch are: on the hook's point (with it the payload under it), and with the
     /// hook block on the hook block's and the payload's at the sling's end (`push_on`); its power is the crash row.
     fn set_tool_force(&mut self, force: &[f64]) -> bool {

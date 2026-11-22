@@ -202,6 +202,65 @@ pub fn energy_drift(m: &dyn Machine) -> (f64, f64) {
     (worst, after - before)
 }
 
+/// A run into a stop: at rest under the holding torques in the middle of the axes but axis `axis`, which stands 5 % of
+/// its range short of the end it is pushed towards, a constant push on top that asks for `acc` (signed) of its
+/// acceleration limit, for `seconds` in base steps `dt`, each cut as the machine
+/// asks (`advance_refined`), and no longer than `settle` after the first step cut (the contact and its bounce; a push
+/// held on can take a parallel machine through a singular pose). The energy less the work of the constant torques changes only by what the losses take.
+pub struct StopRun {
+    /// How far the energy less the torques' work drifted from its start at most (J).
+    pub drift: f64,
+    /// The most work the push did on the way (J).
+    pub push_work: f64,
+    /// Base steps cut finer, and all.
+    pub cut: u64,
+    pub steps: u64,
+    /// The run went to a state that is not finite (out of the kinematics), and stopped there.
+    pub broke: bool,
+}
+
+pub fn stop_run(m: &dyn Machine, axis: usize, acc: f64, dt: f64, seconds: f64, settle: f64) -> StopRun {
+    let mut pose = mid_pose(m);
+    let a = &m.axes()[axis];
+    pose[axis] = a.min + (0.5 + 0.45 * acc.signum()) * (a.max - a.min);
+    let motors = m.motors().len();
+    let (mut state, mut hold) = (Vec::new(), vec![0.0; motors]);
+    m.equilibrium(&pose, &mut state, &mut hold);
+    let mut wanted: Vec<f64> = vec![0.0; pose.len()];
+    wanted[axis] = acc * m.axes()[axis].max_acc;
+    let (mut with, mut without) = (vec![0.0; motors], vec![0.0; motors]);
+    m.feedforward_torque(&pose, &wanted, &mut with);
+    m.feedforward_torque(&pose, &vec![0.0; pose.len()], &mut without);
+    let push: Vec<f64> = with.iter().zip(&without).map(|(a, b)| a - b).collect();
+    let torque: Vec<f64> = hold.iter().zip(&push).map(|(h, p)| h + p).collect();
+    let angles = |state: &[f64]| {
+        let (mut pos, mut vel) = (vec![0.0; motors], vec![0.0; motors]);
+        m.motor_state(state, &mut pos, &mut vel);
+        pos
+    };
+    let (start, energy) = (angles(&state), m.energy(&state));
+    let work = |state: &[f64], torques: &[f64]| -> f64 {
+        angles(state).iter().zip(&start).zip(torques).map(|((a, s), t)| t * (a - s)).sum()
+    };
+    let mut rk = Rk4::new(state.len());
+    let mut out = StopRun { drift: 0.0, push_work: 0.0, cut: 0, steps: 0, broke: false };
+    let mut left = seconds;
+    while left > 0.5 * dt {
+        let cut = advance_refined(m, &mut rk, &mut state, &torque, dt, SUBSTEPS) > 1;
+        if cut && out.cut == 0 {
+            left = left.min(settle);
+        }
+        (out.cut, out.steps, left) = (out.cut + u64::from(cut), out.steps + 1, left - dt);
+        if !state.iter().all(|x| x.is_finite()) {
+            out.broke = true;
+            break;
+        }
+        out.push_work = out.push_work.max(work(&state, &push).abs());
+        out.drift = out.drift.max((m.energy(&state) - energy - work(&state, &torque)).abs());
+    }
+    out
+}
+
 /// Tolerance of `loss_budget`, as a share of the work the motor torques did either way.
 pub const LOSS_BUDGET_TOLERANCE: f64 = 1e-3;
 

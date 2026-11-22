@@ -1673,19 +1673,14 @@ impl<M: Mechanism> Machine for JointMachine<M> {
     fn set_brake_engaged(&mut self, engaged: bool) {
         self.brake_engaged = engaged;
     }
-    /// A joint meeting its stop within the step (`mech::HardStop::met_within`): `mech::STOP_SUBSTEPS`. Each gear's
+    /// A joint meeting its stop within the step (`RotaryJoint::stop_substeps`). Each gear's
     /// efficiency switch near zero power at the step's start (`mech::Gearbox::fade_damping`) on the inertia it drives
     /// there, 1 / (M^-1)_kk of the load's mass matrix (the other joints free): the cuts `mech::fade_substeps` asks for.
     /// The most of them. The mass matrix only where a gear is near zero power.
     fn substeps_wanted(&self, s: &[f64], torque: &[f64], dt: f64, substeps: u32) -> u32 {
         let (n, h) = (self.n(), dt / f64::from(substeps));
         let (q, qd) = self.arms(s);
-        let stopped = (0..n).any(|k| {
-            let joint = &self.joints[k].drive;
-            let (min, max) = joint.range;
-            joint.stops.met_within(q[k] - min, qd[k], max - min, dt)
-        });
-        let stop_cuts = if stopped { crate::mech::STOP_SUBSTEPS } else { 1 };
+        let stop_cuts = (0..n).map(|k| self.joints[k].drive.stop_substeps(q[k], qd[k], dt)).max().unwrap_or(1);
         let rigid = (!self.elastic).then(|| self.rigid_solve(s, torque).2);
         let damping: Vec<f64> = (0..n)
             .map(|k| {
