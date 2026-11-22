@@ -1760,8 +1760,33 @@ dT/dt0 = 1 / (1 + c / T³)                                       Ernst's equival
 W = T² / 2 − c / T,   energy (l / EA) W                          the platform takes T, the drum T L / l − W / EA
 ```
 
-so a cable is taut at any t0 (slack, it hangs at T = √(c / (2|t0|))). Rigid cables have no sag. Left out: W's change with
-the pose through c, and the cables' own inertia. The winches' spin is in the frame's momentum about
+so a cable is taut at any t0 (slack, it hangs at T = √(c / (2|t0|))). Rigid cables have no sag. W changes with the pose
+through c too (since 22 November): at a fixed t0, dW/dc = −1/(2T) (from dT/dc = T / (2 (T³ + c))), so the anchor takes
+F = l / (2 EA T) ∇_P c beside T u, with its moment (`sag_pull`, ∇_P c by forward differences of 1 µm): 1.9e-5 N on the
+planar robot at 0.01 kg/m and 100 N, 3.6e-3 N on a spatial cable hanging nearly slack at 0.4 N, against the at-rest
+tensions' 1e-11 N. The dynamics, the state at rest and the elastic `forward` take it, so the cables' force is the
+gradient of their energy (`the_sagging_cables_pull_is_the_gradient_of_their_energy`: 1.2e-9 N, 1.9e-5 N without it).
+The spatial cycle's figures move by its peak torque's last digit (2.454134 -> 2.454135 N m); its run takes 9.4 s instead
+of 4.9 s (the three span evaluations a cable per evaluation of the dynamics).
+
+**The lift from drum to pulley** (`winch.drop_m` h, the drum's drop below its pulley; 0 as shipped, the frame's data
+not at hand): the cable paid out is lifted by h, its potential ρ g h l, the drum pulled back by ρ g h (0.049 N at
+10 g/m and 0.5 m) and, rigid, the platform by ρ g h u. In the energy (`the_cables_run_along_with_the_drums`).
+
+**The cables' own inertia** (`effects.cable_inertia`, off as shipped, with ρ). The cable runs along itself at the
+drum's speed l': the turns on the drum with it (at the drum's radius, so at l'), the paid-out cable along its run and
+span. All of it, the drum's `winch.capacity_m` from its end on the drum to the anchor, is a constant mass ρ · capacity
+at the cable beside the drum's J / r² (0.05 kg beside 0.444 kg on the spatial robot, 0.015 kg beside 0.32 kg on the
+planar), in the equations of either model, the feedforward and the kinetic energy. In the frame's momentum the cable
+on the drum, ρ (capacity − l), turns with it about h; the paid-out cable's momentum along its span, ρ l l' a cable, is left
+out with its mass (not in the frame's mass and first moment, as the cables' weight is the potential's). Left out: the fixed run
+from the drum to the pulley (its length not in the config) and the span's swing across itself, the sections moving
+with the anchor at their share s / L of its speed across the cable, ρ L / 3 of each cable with the anchor (42 g on the
+spatial platform's 8 kg with the payload); added whole to the platform's mass (an upper bound, a run) it moves the
+spatial cycle's tracking error from 0.2045 to 0.2060 mm and its peak torque by 0.07 % (the planar's 5.2 g: 0.6499 to
+0.6505 mm). Switched on, the cables' along-motion raises the spatial cycle's peak torque from 2.4541 to 2.4578 N m
+(+0.15 %, RMS +0.005 %, the tracking error unchanged at 0.2045 mm), a drum 0.5 m below its pulley moves it by -0.01 %.
+The winches' spin is in the frame's momentum about
 `frame.winch_spin_axes`.
 
 The motor angles of a pose (`inverse`) are those of the free lengths that hold the platform at rest there with the

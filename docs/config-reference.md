@@ -1411,6 +1411,7 @@ requirement of their size (estimate). Effects:
 | --- | --- | --- |
 | `cable_stretch` | on | The cables stretch (EA / l) and go slack, each winch's gearbox twists: platform, drums and rotors are bodies of their own. **Off selects the rigid reference model**: the cables keep their length, the motors turn with them |
 | `cable_damping` | on | With `cable_stretch`: the cables' material damping, `cable.specific_damping_n_s` / l |
+| `cable_inertia` | off | With `cable.mass_per_m_kg`: the cable runs along itself at the drum's speed, all of `winch.capacity_m` a mass at the cable beside the drum's J / r², and in the frame's momentum the cable on the drum turns with it (the paid-out cable's momentum left out, as its mass is) |
 | `winch_friction` | on | Friction of the winches' bearings and the pulleys, at the cable |
 
 The gearbox, motor and drive effects as on every machine (`hard_stops`: an empty and a full drum). Own keys (all
@@ -1437,6 +1438,7 @@ estimates, values planar / spatial; bounded where they are a part's property):
 | `winch.drum_radius_m` | m | The drum's radius: the lever behind the gearbox | 0.025 / 0.03 |
 | `winch.drum_inertia_kgm2` | kg m² | The drum's inertia | 2e-4 / 4e-4 |
 | `winch.capacity_m` | m | The cable a drum holds: its stops at 0 and here | 5 |
+| `winch.drop_m` | m | How far a drum sits below its pulley: the cable paid out is lifted that far, its potential ρ g h l, the drum pulled back by ρ g h; 0 or left out: none | 0 (not in the data at hand) |
 | `winch.friction_coulomb_n`, `friction_viscous_n_s_m`, `friction_smoothing_m_s` | N, N s/m, m/s | Bearings and pulley at the cable (`effects.winch_friction`) | 2, 1 / 3, 2; 0.002 |
 | `winch.stop_stiffness_n_m`, `stop_damping_n_s_m` | N/m, N s/m | The stops (`effects.hard_stops`) | 1e6, 1000 |
 | `workspace.tool_min`, `tool_max` | m, rad | The tool's box, the axes' ranges; poses in it outside the wrench-feasible workspace are refused (`error-cable-wrench-infeasible`) | −0.6, 0.3 to 0.6, 1.3 / −0.4, −0.3, 0.8, −0.05 (each turn) to 0.4, 0.3, 1.4, 0.05 |

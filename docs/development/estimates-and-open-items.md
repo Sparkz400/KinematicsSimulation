@@ -105,7 +105,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 
 | Left out | Machine | Size |
 | --- | --- | --- |
-| The cables' own inertia; the lift of cable from the drum to the pulley; the sag's weight changing with the pose | cable robots | 0.5 % of the spatial platform's mass; 0.05 N; 5e-5 N. The sag model is a shallow parabola, 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
+| The span's swing across itself (its sections moving with the anchor at s / L of its speed across the cable); the run from the drum to the pulley (its length not in the config); the drums' drop below their pulleys (`winch.drop_m`, 0 as shipped: not in the frame's data) | cable robots | Across: ρ L / 3 a cable, 42 g on the spatial platform's 8 kg; added whole to the platform's mass (an upper bound, a run) the spatial cycle's tracking error 0.2045 -> 0.2060 mm, peak torque +0.07 % (planar, 5.2 g: 0.6499 -> 0.6505 mm). The drop: 0.049 N a cable at 0.5 m, the spatial cycle's peak torque -0.01 % (a run). The sag model is a shallow parabola, 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
 | The rotors' gyroscopic coupling with the legs' swing (it is in the frame's reaction only); the rods' faces against platform and base | hexapod, tripod, rotary hexapod | About 0.015 N m (hand estimate). |
 | The hook block against the payload's sides (it lands on its top only, since 21 November); a hook block already lower than the payload's top (a pick with it under 0.28 m over the payload's point) stays inside it; one resting on the payload drops through once the payload is let go; the landing on the rigid rope is untested | crane | None in the shipped cycle: the sling holds the hook block over the payload, and its picks hang the hook block 1 m over it. |
 | Link bending together with parallelogram bars of their own (refused); the palletiser's rod and crank (shipped bar arrays empty) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured in the test case). |
@@ -140,6 +140,14 @@ Fixed since (22 November), each was a row of the table above:
   the two pulleys, 0.2316 W/K beside the air's 1.0422 W/K (22 %), R 0.960 -> 0.785 K/W
   (`a_belt_gives_heat_to_its_pulleys_through_the_wrap`). Left: the pulleys held at the air's temperature, the
   contact resistance; `belt.thickness_m` and `thermal_conductivity_w_m_k` are estimates.
+- Cable robots: the cables' own inertia along them (`effects.cable_inertia`, off as shipped: it moves the figures):
+  the whole of the drum's capacity, rho x 5 m, runs at the drum's speed, a mass at the cable beside J / r^2 (0.05 beside
+  0.444 kg spatial), in the equations, feedforward, energy and the frame's momentum (`the_cables_run_along_with_the_drums`);
+  on, the spatial cycle's peak torque 2.4541 -> 2.4578 N m, the tracking error unchanged. The sag's weight changing
+  with the pose: modelled (`sag_pull`, always with the sag): 1.9e-5 N on the planar test pose, up to 3.6e-3 N on a
+  cable hanging nearly slack, far above the at-rest tensions' 1e-11 N (`the_sagging_cables_pull_is_the_gradient_of_their_energy`,
+  1.2e-9 N against 1.9e-5 N before). The lift from drum to pulley: modelled with the new `winch.drop_m` (0 as shipped,
+  the frame's data do not give it), sized by a run above. Left: the row above.
 
 ## 5. The 26 `shortcut:` comments still in the code
 
@@ -167,13 +175,14 @@ verified the model by hand values and runs and found it ready to switch on.
 | Switch | Machine | State |
 | --- | --- | --- |
 | `effects.tool_gearbox_body` | D4 | Fit (tool mode 41.07 Hz, a second overdamped motion). |
-| `effects.arm_bending`, `effects.arm_tube_inertia` | H4 (and the corrected tube model on the D3) | Fit; gearbox modes about 945 Hz with the tube on. |
+| `effects.arm_bending`, `effects.arm_tube_inertia` | H4 (and the corrected tube model on the D3) | Fit; gearbox modes 834 to 853 Hz at the centre with the tube on (since 22 November in the static shape, whose root keeps 0.0190 m L² against the exact mode's 0.0145: about 945 Hz before). |
 | `effects.table_twist` | cam and Geneva indexers | Fit. |
 | `effects.follower_lift_off` | disc cam | Fit; adds 5 N of guide friction that the model without it does not have. |
 | `effects.beam_vertical_mode` | T-gantry, its machine file | Fit; the beam's mass and stiffness are estimates. Since 21 November the belt rides on it in the crate and the file (58.776 Hz in the middle). |
 | `effects.belt_run_offset` | T-gantry and its machine file (`machine.lean`'s `belt_offset_m`) | Verified by its hand test, energy and budget (21 November); off: it lowers the lean's mode by some 6 % (18.75 to 17.55 Hz at x = 0.9, z = 0.05 m), so the shipped shaper tunings and the tests with recorded lean modes would move. The offset `tool_flex.belt_offset_m` is an estimate. |
 | `effects.rope_mass`, `effects.hook_block`, `effects.joint_elasticity`, `effects.bridge_skew`, `effects.floor_contact` | crane | Verified by their own tests; see section 4 for what was not run. `effects.joint_elasticity` is fit to switch on since the gains of section 2 (bridge 177 Hz, 51.7°, 9.7 dB; trolley 183 Hz, 51.0°, 9.9 dB; hoist 49.5 Hz, 78.2°, 20.7 dB), and its cycle verdicts match the rigid ones. |
 | `drive.overmodulation` | every drive | Off; verified. |
+| `effects.cable_inertia` | cable robots | Verified by its hand test, energy and frame momentum (22 November); off: it moves the cycles' peak torques (+0.15 % spatial). |
 
 Always on since November 2026 (they changed shipped figures): the legs' bodies on the hexapod and
 tripod; cable weight and sag; the elastic Z screw and tool turn of the five-bar and the wafer handler's
