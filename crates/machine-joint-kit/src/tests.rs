@@ -2283,6 +2283,81 @@ fn a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand() {
     sim_core::testkit::energy_conservation((SCARA.build)(&lossless).unwrap().as_ref());
 }
 
+/// A four-bar on a bending link (`bar_field` with a `Closure`): its pins move with the mode as their bodies' points, its
+/// bars turn as the loop's Jacobian has them at the deflected pins. Its limit, the parallelogram: on the SCARA the
+/// follower's pivot at joint 1's axis (link 1's origin), the crank point 0.08 m out on link 2, the follower 0.08 m and the
+/// coupler 0.325 m, link 1's length, the crank square to link 2 (0.08 m along its y, so that the loop is no flat
+/// parallelogram at zero joints, where the modes' masses are taken; at a dead point a four-bar with bending is refused):
+/// the follower stays parallel to link 2's crank and the coupler to link 1's chord,
+/// as two parallel bars do (`bars_turns_with` [2, 1]: the follower turning with link 2, the coupler with link 1, the bent
+/// link, by its chord). Link 1 bending in its plane (a 120 x 8 mm aluminium tube), both give the same modes to 1e-9 at
+/// two poses. And the energy holds with the bend acting back on the joints, the unequal four-bar of
+/// `a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand` on links 1 and 2 bending (refused before).
+#[test]
+fn a_four_bar_on_a_bending_link_has_the_parallelograms_modes_in_its_limit() {
+    let bent = |extra: &[&str]| {
+        let mut cfg = rigid(&SCARA);
+        for edit in [
+            "effects.link_bending = true",
+            r#"link_bending.directions = ["in_plane"]"#,
+            "link_bending.outer_diameter_m = [0.12, 0.0, 0.0, 0.0]",
+            "link_bending.wall_m = [0.008, 0.0, 0.0, 0.0]",
+            "link_bending.damping_ratio = 0.0",
+        ]
+        .iter()
+        .chain(extra)
+        {
+            cfg.set_text(edit).unwrap();
+        }
+        cfg
+    };
+    let (lc, lf) = (0.5 * 0.325f64.powi(2) / 12.0, 0.3 * 0.08f64.powi(2) / 12.0);
+    let parallel = bent(&[
+        "arm.bars_on = [1, 2]",
+        "arm.bars_turns_with = [2, 1]",
+        "arm.bars_pin_m = [0.0, 0.0, 0.0, 0.0, 0.08, 0.0]",
+        "arm.bars_mass_kg = [0.3, 0.5]",
+        "arm.bars_com_m = [0.0, 0.04, 0.0, -0.1625, 0.0, 0.0]",
+        &format!("arm.bars_inertia_kgm2 = [{lf}, 0.0, {lf}, 0.0, 0.0, 0.0, 0.0, {lc}, {lc}, 0.0, 0.0, 0.0]"),
+    ]);
+    let looped = bent(&[
+        "arm.four_bar_ground_on = 1",
+        "arm.four_bar_ground_pin_m = [0.0, 0.0, 0.0]",
+        "arm.four_bar_crank_on = 2",
+        "arm.four_bar_crank_pin_m = [0.0, 0.08, 0.0]",
+        "arm.four_bar_normal = [0.0, 0.0, 1.0]",
+        "arm.four_bar_lengths_m = [0.325, 0.08]",
+        "arm.four_bar_masses_kg = [0.5, 0.3]",
+        "arm.four_bar_branch = 1",
+    ]);
+    let (a, b) = ((SCARA.build)(&parallel).unwrap(), (SCARA.build)(&looped).unwrap());
+    for pose in [[0.4, 1.0, 0.1, 0.0], [-0.3, 1.3, 0.1, 0.0]] {
+        let (ma, mb) = (a.modes(&pose), b.modes(&pose));
+        assert!(!ma.is_empty() && ma.len() == mb.len(), "{ma:?} {mb:?}");
+        for (x, y) in ma.iter().zip(&mb) {
+            assert!((x.hz / y.hz - 1.0).abs() < 1e-9, "{pose:?}: parallel {} Hz, four-bar {} Hz", x.hz, y.hz);
+        }
+    }
+    let mut lossless = (SCARA.suite_configs)()[0].clone();
+    for edit in [
+        "effects.link_bending = true",
+        "effects.link_bending_reaction = true",
+        r#"link_bending.directions = ["in_plane"]"#,
+        "link_bending.damping_ratio = 0.0",
+        "arm.four_bar_ground_on = 1",
+        "arm.four_bar_ground_pin_m = [0.15, 0.06, 0.0]",
+        "arm.four_bar_crank_on = 2",
+        "arm.four_bar_crank_pin_m = [0.08, 0.0, 0.0]",
+        "arm.four_bar_normal = [0.0, 0.0, 1.0]",
+        "arm.four_bar_lengths_m = [0.2, 0.12]",
+        "arm.four_bar_masses_kg = [0.5, 0.3]",
+        "arm.four_bar_branch = 1",
+    ] {
+        lossless.set_text(edit).unwrap();
+    }
+    sim_core::testkit::energy_conservation((SCARA.build)(&lossless).unwrap().as_ref());
+}
+
 /// The carriage's motor rotor is part of what its guides carry: it spins about the vertical at the ratio times the
 /// carriage's speed, and the carriage accelerating at 2 m/s^2 turns its momentum J r a about z, a yaw moment the four
 /// blocks carry as +-M_z / (2 x 0.4) each. 1.7e-4 kg m^2 more at the motor (on the gearbox's input: the track's motor is

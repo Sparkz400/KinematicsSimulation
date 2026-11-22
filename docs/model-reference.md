@@ -2047,8 +2047,12 @@ the loop's Jacobian in the pivot's link's frame (turning at ω_g): C moves at c'
 uniform rod; their mass matrix and bias by Kane's equations as the parallel bars' (`bar_dynamics`), their weight in the
 potential. On the SCARA (follower 0.12 m and 0.3 kg on link 1, coupler 0.2 m and 0.5 kg from 0.08 m out on link 2) the
 mass matrix over joints 1 and 2 matches the closed form's to 1e-7 at two poses, and the energy holds
-(`a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand`). Not with bending links (refused: their
-fields take parallel bars).
+(`a_four_bar_of_unequal_links_closes_and_carries_its_bars_mass_by_hand`). On bending links (since 22 November, refused
+before): the two pins move with a mode as their bodies' points do (on the bent link at its shape), and the bars turn as
+the loop's Jacobian has them at those deflected pins (`bar_field`; the ground's turn drops out). Its limit, a
+parallelogram with the pivot on joint 1's axis, gives the two parallel bars' modes to 1e-9; the energy holds with the
+bend acting back (`a_four_bar_on_a_bending_link_has_the_parallelograms_modes_in_its_limit`). The modes' masses are taken
+at zero joints, so a four-bar at a dead point there (flat, or open) is refused with bending.
 
 **Bending links with bars** (since 22 November; refused before). A bar pinned on a body before a bent link that turns
 with a body beyond it (the crank: pinned on the turret, turning with the forearm, across the upper arm) drives that
