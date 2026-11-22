@@ -513,6 +513,31 @@ impl Machine for ScissorMachine {
     fn energy(&self, s: &[f64]) -> f64 {
         self.energy_parts(s).iter().sum()
     }
+    /// What moves on the frame, as the dynamics have it (the module): the platform with the payload at its height h,
+    /// rising at h'; per stage k its two arms' centres (2 m_a, m_a = arms / 2n), crossing at the horizontal x_f + u / 2
+    /// from the fixed foot x_f (where the drawing has it at the lowest height, -u_0 / 2) and at (k - 1/2) s, moving at
+    /// u' / 2 = -c theta' / 2 and (k - 1/2) s'; the two arms of a stage turn opposite ways, so their spins cancel; the
+    /// screw (along x, at theta') and the rotor spin about x. An obstacle's push is not in its outside force: a
+    /// compliant base takes it through the tool's shift (`base::Based`).
+    fn frame_momentum(&self, s: &[f64]) -> Option<sim_core::FrameMomentum> {
+        use sim_components::base::{add_point, add_spin};
+        let mut f = sim_core::FrameMomentum { gravity: [0.0, 0.0, -self.g], ..Default::default() };
+        let Stages { stages, lever, span_low, .. } = self.geometry;
+        let (theta, w) = (s[0], s[1]);
+        let [h, d1, _] = self.height(theta);
+        let (u, du) = (span_low - lever * theta, -lever * w);
+        let (stage, rise) = (h / stages, d1 * w / stages);
+        let platform = self.m_weight - 0.5 * self.arms + if self.payload_attached { self.m_payload } else { 0.0 };
+        add_point(&mut f, platform, [0.0, 0.0, h], [0.0, 0.0, d1 * w]);
+        let pair = self.arms / stages;
+        for k in 0..stages as usize {
+            let up = k as f64 + 0.5;
+            add_point(&mut f, pair, [-0.5 * span_low + 0.5 * u, 0.0, up * stage], [0.5 * du, 0.0, up * rise]);
+        }
+        add_spin(&mut f, [1.0, 0.0, 0.0], self.screw_inertia, w);
+        add_spin(&mut f, [1.0, 0.0, 0.0], self.joint.rotor_inertia, self.rotor(s).1);
+        Some(f)
+    }
     fn set_payload_attached(&mut self, attached: bool) {
         self.payload_attached = attached;
     }

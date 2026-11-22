@@ -3672,8 +3672,9 @@ impl Machine for ConfigMachine {
                 }
             }
         }
-        // The process force acts on the tool along the axes' directions, at the tool's place over ground.
-        for (i, force) in self.process_force().iter().enumerate().take(n) {
+        // The process force acts on the tool along the axes' directions, at the tool's place over ground. An obstacle's
+        // push is not in it: a compliant base takes it through the tool's shift (`base::Based`).
+        for (i, force) in self.dwelling_force().iter().enumerate().take(n) {
             (0..3).for_each(|k| f.external[k] += *force * self.dirs[i][k]);
         }
         for i in (0..n).filter(|&i| self.axes[i].unit != "rad") {

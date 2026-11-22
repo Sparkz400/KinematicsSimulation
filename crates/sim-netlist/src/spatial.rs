@@ -1388,8 +1388,9 @@ impl Machine for Delta {
                 add_spin(&mut f, rod, self.rod_spin, self.rod_spin(i, e, y, ew, yv));
             }
         }
-        // An obstacle's push on the platform comes from outside.
-        (f.external, f.external_at) = (self.tool_push, p);
+        // An obstacle's push on the platform is not in the outside force: a compliant base takes it through the tool's
+        // shift (`base::Based`), and here it pushed the base a second time.
+        f.external_at = p;
         Some(f)
     }
     fn axes(&self) -> &[AxisInfo] {
