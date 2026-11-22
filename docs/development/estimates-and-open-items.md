@@ -107,11 +107,24 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | --- | --- | --- |
 | The sag model is a shallow parabola | cable robots | 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
 | A hook block already lower than the payload's top at a pick (under 0.28 m over its point) is left inside it: pushing it out would make energy; refusing such a pick needs `sim.rs`, the coordinator's call | crane | None in the shipped cycle (its picks hang the hook block 1 m over the payload). |
-| A parallelogram's forearm rocking on its rod's spring as a motion of its own (the rod's stiffness is in series with the carried joint's gearbox only) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured: the test case, and 1.22 % for the palletiser's held upper arm). |
+| Two-way bending (`effects.link_bending_reaction`) keeps the exact first mode alone: a Ritz pair beside a joint lets the joint turn on the small inertia of the link's own body, where the gearbox efficiency's smoothed switch under load is a damper too stiff for RK4 (six-axis arm, gravity, elastic gears, in-plane: largest rate eigenvalue 3.4e5 1/s against 5.0e4 with one mode, RK4 holding to some 1.8e5 at 15.6 µs; it drifted 5.9e-6 rad in 1 s at rest). A second coordinate without inertia (the pair's static part) needs a state-free coordinate in `chain.rs` | joint kit | Two-way the bend stands 1.2 % high with a tip mass, up to 15.7 % with a tip inertia (0.3 m L²), its own-weight sag 1.3 % high (measured, the test tube). |
+| The forearm rocking on its rod (`effects.bar_rocking`) does not move the tool pose (it reads the motors' joints), and the planner's trains and an arm's held modes hold it | joint kit | The palletiser's flange some 30 µm lower at rest (2.45e-5 rad on 1.2 m) than it reads. |
 | Every machine takes an obstacle's push on its contact coordinates (the tool's, the crane's load, the winder's dancer) since 22 November, not at the touching part's own point (a payload under a leaning Z axis is held through the tool point). One-way base compliance (without `effects.base_reaction`) keeps its base outside the budget: the push's work on the base is in no row (the contact's damping does not see the base's speed there) | obstacle contact | One-way: the push deflects the base by F / k_base all the same, the budget closes to 7e-7 (measured). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
 | The stepper's detent after a trip took its pulses off (`Sim::advance_with_windings` gives such a drive the iron's drag only) | stepper | The detent's torque, T_d, is missing while it coasts; the books stay closed (its potential is never stored since 22 November). |
 
 Fixed since (22 November), each was a row of the table above:
+- Joint kit, the bend-mode overestimate (1.2 to 2.6 % with tip masses, measured now up to 15.7 % with a tip inertia):
+  one-way each bend is a Ritz pair over the static shapes under a tip force and a tip moment (w = a ξ² + b ξ³, turned
+  into the pair's modes at zero joints), its lowest frequency within 0.48 % of the exact beam over tip masses 0 to 3 m
+  and tip inertias 0 to 0.3 m L² (+0.475 % bare, at most +0.11 % loaded), the sag under a tip load or the link's weight
+  exact (`the_bend_modes_lowest_is_the_exact_beams_over_tip_masses_and_inertias`,
+  `a_level_link_sags_under_its_weight_as_a_cantilever_does`). The brief's pair (the exact mode with the static shape)
+  would stand 1.4 to 3.9 % high with a tip inertia. Left: two-way, the row above.
+- Joint kit, the forearm rocking on its parallelogram rod's spring as a motion of its own (`effects.bar_rocking`, off
+  as shipped; `arm.bars_axial_damping_n_s_m`): a passive joint whose column is the carried motor joint's, the crank
+  turning with the motor joint alone; the two-mass modes by hand to 1e-6, the rest sag by hand to 1e-6, energy and loss
+  budget (`the_rocking_forearm_rings_as_the_two_masses_by_hand`, `the_palletisers_forearm_sags_on_its_rod_by_hand`,
+  `the_rocking_forearm_keeps_the_energy`). Left: the row above on the tool pose.
 - Joint kit, a four-bar on bending links (refused before): its pins move with the mode, its bars turn by the loop's
   Jacobian at the deflected pins; the parallelogram limit gives the parallel bars' modes to 1e-9, energy with the bend
   acting back (`a_four_bar_on_a_bending_link_has_the_parallelograms_modes_in_its_limit`). A loop at a dead point at

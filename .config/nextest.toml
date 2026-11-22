@@ -50,6 +50,7 @@ not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::.*_fri
 | (binary_id(=machine-joint-kit) & test(=tests::screw_axis_passes_the_standard_suite))
 | (binary_id(=machine-joint-kit) & test(=tests::the_gearbox_and_the_rack_carry_the_rack_losses))
 | (binary_id(=machine-joint-kit) & test(=tests::the_guide_verdicts_judge_the_track_at_their_limits))
+| (binary_id(=machine-joint-kit) & test(=tests::the_rocking_forearm_keeps_the_energy))
 | (binary_id(=machine-joint-kit) & test(=tests::the_swinging_payload_conserves_energy))
 | (binary_id(=machine-joint-kit) & test(=tests::the_tool_space_cycles_pass_their_verdicts))
 | (binary_id(=machine-joint-kit) & test(=tests::two_way_bending_holds_still_and_balances_the_losses))

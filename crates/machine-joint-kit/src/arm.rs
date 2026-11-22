@@ -31,7 +31,8 @@
 use crate::tool::{FIRST_JOINT, POSE_AXES, Pose, Scara, Tool, turn_length};
 use crate::{axis, gravity, machine, payload, required_life};
 use sim_components::beam::{
-    CANTILEVER_PARTICIPATION, CANTILEVER_TIP_SLOPE, cantilever_mode, cantilever_shape, tube_second_moment,
+    CANTILEVER_BETA_L, CANTILEVER_PARTICIPATION, CANTILEVER_TIP_SLOPE, cantilever_mode, cantilever_shape,
+    tube_second_moment,
 };
 use sim_components::catalog::{GUIDE_CARRIAGES, motor_config};
 use sim_components::chain::{FlexCoupling, FlexKind, FlexMode, JOINT_KEYS, MOTOR_IDS, MOTOR_KEYS, Mechanism};
@@ -101,21 +102,29 @@ pub struct Arm {
     reaction: bool,
     /// The bars that are bodies of their own (`bars`), after the chain's bodies in `with_bars`.
     bars: Vec<Bar>,
+    /// effects.bar_rocking: the forearm rocking on its rod's spring, a passive joint after the motors' (`Rocking`).
+    rocking: Option<Rocking>,
     /// With rx, ry or rz among the tool axes: the smallest of their velocity and of their acceleration limits, which the
     /// planned flange's angular speed and acceleration are held to (`tool.angular_speed`, `tool.angular_acceleration`:
     /// shown as measured; kept by both planners and judged on the plan's rigid motion, see `rating_checks`).
     angular_limits: Option<[f64; 2]>,
 }
 
-/// A link's mode (effects.link_bending), its first as a cantilever from its joint: from the joint's origin to the next
-/// joint (the flange after the last) along `dir`. A bend (Euler-Bernoulli) moves its tip along `across` by the mode's
-/// coordinate d and turns it about `turn = dir x across` by 1.3765 d / L (`slope / span`): in the plane its joint turns
-/// it in (`across = axis x dir`), or across that plane (`across = dir x (axis x dir)`). A twist turns its tip about
-/// `turn = dir` by d (`across` none). All in its body's frame. Its own mass is the URDF link's, taken as spread evenly
-/// along it; what the chain carries beyond it sits on its tip.
-// One mode per link and direction; a link along its joint's axis (the base column) has no bend. Every mode, the one-way
-// bend in its joint's plane too, takes the bodies beyond whole (`field`): their mass and their turning inertia, but for
-// those a parallelogram holds (`held_from`).
+/// A link's mode (effects.link_bending) as a cantilever from its joint: from the joint's origin to the next joint (the
+/// flange after the last) along `dir`. A bend (Euler-Bernoulli) deflects across the link by d w(xi), xi = x / L, its tip
+/// moving along `across` by w(1) d and turning about `turn = dir x across` by w'(1) d / L: in the plane its joint turns
+/// it in (`across = axis x dir`), or across that plane (`across = dir x (axis x dir)`). One-way each bend has two modes
+/// (`second`), w = a xi^2 + b xi^3 (`shape`): a Ritz pair over the cantilever's static shapes under a tip force and under
+/// a tip moment (`Arm::ritz`), so its lowest frequency is the exact beam's with what it carries within 0.48 % (the bare
+/// link's) and a static tip load or its own weight bend it as the exact beam. Two-way (effects.link_bending_reaction) a
+/// bend is the exact first mode alone (`shape` `None`, `beam::cantilever_shape`, stiffness 1.875104^4 / 4 E I / L^3):
+/// beside a joint two shapes let the joint turn without moving what the link carries, on which the gearbox's efficiency
+/// acts as a damper far too stiff for the integrator's step. A twist turns its tip about `turn = dir` by d (`across`
+/// none), one mode. All in its body's frame. Its own mass is the URDF link's, taken as spread evenly along it; what the
+/// chain carries beyond it sits on its tip.
+// A link along its joint's axis (the base column) has no bend. Every mode, the one-way bend in its joint's plane too,
+// takes the bodies beyond whole (`field`): their mass and their turning inertia, but for those a parallelogram holds
+// (`held_from`).
 #[derive(Debug, Clone, Copy)]
 struct BentLink {
     body: usize,
@@ -130,12 +139,58 @@ struct BentLink {
     dir: V3,
     across: V3,
     turn: V3,
-    slope: f64,
-    span: f64,
-    /// 1.875104^4 / 4 E I / L^3 (N/m) for a bend, G I_p / L (N m/rad) for a twist.
+    /// A bend's shape: a, b of w = a xi^2 + b xi^3; `None` the exact first mode.
+    shape: Option<[f64; 2]>,
+    /// A bend's E I / L^3 (N/m).
+    bend: f64,
+    /// The pair's second mode of a bend (`FlexKind::BendSecond`, `BendAcrossSecond`).
+    second: bool,
+    /// E I / L^3 int w''^2 (N/m) for a bend, G I_p / L (N m/rad) for a twist.
     stiffness: f64,
     damping_ratio: f64,
     kind: FlexKind,
+}
+
+impl BentLink {
+    /// A bend's tip deflection per unit of its coordinate, w(1) (a + b; the exact mode's 1); a twist's none.
+    fn tip(&self) -> f64 {
+        match (self.kind, self.shape) {
+            (FlexKind::Twist, _) => 0.0,
+            (_, Some([a, b])) => a + b,
+            (_, None) => 1.0,
+        }
+    }
+    /// Its tip's turn per unit of its coordinate (rad): a bend's slope w'(1) / L ((2 a + 3 b) / L, the exact mode's
+    /// 1.37651 / L), a twist's 1.
+    fn tip_turn(&self) -> f64 {
+        match (self.kind, self.shape) {
+            (FlexKind::Twist, _) => 1.0,
+            (_, Some([a, b])) => (2.0 * a + 3.0 * b) / self.length,
+            (_, None) => CANTILEVER_TIP_SLOPE / self.length,
+        }
+    }
+    /// A bend's w at xi along the link.
+    fn shape_at(&self, xi: f64) -> f64 {
+        self.shape.map_or_else(|| cantilever_shape(xi), |[a, b]| xi * xi * (a + b * xi))
+    }
+    /// int w: what an evenly spread load drives a bend with.
+    fn share(&self) -> f64 {
+        self.shape.map_or(CANTILEVER_PARTICIPATION, |[a, b]| a / 3.0 + b / 4.0)
+    }
+    /// int w v of two bends' shapes (v the other's, both of a pair or both the exact mode: 1/4).
+    fn overlap(&self, other: &BentLink) -> f64 {
+        match (self.shape, other.shape) {
+            (Some([a, b]), Some([c, d])) => a * c / 5.0 + (a * d + b * c) / 6.0 + b * d / 7.0,
+            _ => 0.25,
+        }
+    }
+    /// E I / L^3 int w'' v'' of two bends' shapes on the same link (the exact mode's 1.875104^4 / 4).
+    fn stiffness_with(&self, other: &BentLink) -> f64 {
+        match (self.shape, other.shape) {
+            (Some([a, b]), Some([c, d])) => self.bend * (4.0 * a * c + 6.0 * (a * d + b * c) + 12.0 * b * d),
+            _ => self.bend * CANTILEVER_BETA_L.powi(4) / 4.0,
+        }
+    }
 }
 
 /// The modes of effects.link_bending: per joint from `link_bending.outer_diameter_m` and `wall_m` (a tube; a diameter
@@ -184,34 +239,43 @@ fn bent_links(cfg: &Config, chain: &Chain) -> Result<(Vec<BentLink>, bool), Conf
         let side = cross(b.axis, dir);
         let size = dot(side, side).sqrt();
         let second_moment = tube_second_moment(outer[body], wall[body]);
-        let bend = cantilever_mode(e * second_moment, 0.0, 0.0, length).1;
         for kind in &kinds {
             let across = match kind {
                 FlexKind::Twist => [0.0; 3],
                 _ if size < 0.1 => continue,
                 FlexKind::Bend => side.map(|v| v / size),
-                FlexKind::BendAcross => cross(dir, side.map(|v| v / size)),
+                _ => cross(dir, side.map(|v| v / size)),
             };
-            let (turn, slope, span, stiffness) = match kind {
-                // G I_p / L, I_p = 2 I of the tube.
-                FlexKind::Twist => (dir, 1.0, 1.0, shear * 2.0 * second_moment / length),
-                _ => (cross(dir, across), CANTILEVER_TIP_SLOPE, length, bend),
-            };
-            let in_plane = matches!(kind, FlexKind::Bend);
-            links.push(BentLink {
+            let link = BentLink {
                 body,
                 held_from: usize::MAX,
-                in_plane,
+                in_plane: matches!(kind, FlexKind::Bend),
                 length,
                 dir,
                 across,
-                turn,
-                slope,
-                span,
-                stiffness,
+                turn: if *kind == FlexKind::Twist { dir } else { cross(dir, across) },
+                shape: None,
+                bend: e * second_moment / length.powi(3),
+                second: false,
+                // G I_p / L, I_p = 2 I of the tube.
+                stiffness: shear * 2.0 * second_moment / length,
                 damping_ratio,
                 kind: *kind,
-            });
+            };
+            if *kind == FlexKind::Twist {
+                links.push(link);
+                continue;
+            }
+            if reaction {
+                links.push(BentLink { stiffness: cantilever_mode(e * second_moment, 0.0, 0.0, length).1, ..link });
+                continue;
+            }
+            // The static shapes under a tip force, (3 xi^2 - xi^3) / 2, and under a tip moment, xi^2, both with a tip
+            // deflection of 1: turned into the pair's modes once the bodies are known (`Arm::ritz`).
+            for (shape, second) in [([1.5, -0.5], false), ([1.0, 0.0], true)] {
+                let link = BentLink { shape: Some(shape), second, ..link };
+                links.push(BentLink { stiffness: link.stiffness_with(&link), ..link });
+            }
         }
     }
     Ok((links, reaction))
@@ -223,16 +287,17 @@ fn sub(a: V3, b: V3) -> V3 {
 
 /// Mode `link`'s field on body `k` (its own or one beyond it) of `states`: how far the body's centre moves and how far
 /// it turns per unit of the mode's coordinate (base frame). Beyond the link the body rides on its tip: u + r x (c -
-/// tip), turning by r. Its own body takes a share of the mode: a bend's evenly spread load drives it with 0.3915 of
-/// its sum (`CANTILEVER_PARTICIPATION`, its turning left out), a twist (growing evenly along the link) with half of the
-/// body's moment about the link's line.
+/// tip), turning by r. Its own body takes a share of the mode: a bend's evenly spread load drives it with int w of its
+/// sum (`BentLink::share`, its turning left out), a twist (growing evenly along the link) with half of the body's
+/// moment about the link's line.
 fn field(link: &BentLink, states: &[BodyState], k: usize) -> (V3, V3) {
     let b = &states[link.body];
-    let (u, r) = (mul(&b.rot, link.across), mul(&b.rot, link.turn).map(|v| v * link.slope / link.span));
+    let across = mul(&b.rot, link.across);
+    let (u, r) = (across.map(|v| v * link.tip()), mul(&b.rot, link.turn).map(|v| v * link.tip_turn()));
     if k == link.body {
         return match link.kind {
             FlexKind::Twist => (cross(r, sub(b.com, b.origin)).map(|v| 0.5 * v), r.map(|v| 0.5 * v)),
-            _ => (u.map(|v| CANTILEVER_PARTICIPATION * v), [0.0; 3]),
+            _ => (across.map(|v| link.share() * v), [0.0; 3]),
         };
     }
     if k >= link.held_from {
@@ -244,15 +309,15 @@ fn field(link: &BentLink, states: &[BodyState], k: usize) -> (V3, V3) {
 
 /// Mode `link`'s field on bar `bar` (its state `state` among `states`, the chain's bodies first): its pin, on its body,
 /// moves as that body's points do (`field` there; on the bent link itself at the mode's shape where it sits along it,
-/// `beam::cantilever_shape`, none behind the joint), and it turns as the body it turns with (`field`'s turn). A bar that
+/// `BentLink::shape_at`, none behind the joint), and it turns as the body it turns with (`field`'s turn). A bar that
 /// turns with the bent link itself while pinned beyond it is a parallelogram's side across from the link, its other end
-/// before it: it turns with the link's chord, d / L about the mode's turn axis, in the joints' plane; pinned before the
-/// link it does not turn.
+/// before it: it turns with the link's chord, (a + b) d / L about the mode's turn axis, in the joints' plane; pinned
+/// before the link it does not turn.
 fn bar_field(link: &BentLink, states: &[BodyState], bar: &Bar, state: &BodyState) -> (V3, V3) {
     let b = &states[link.body];
     let shape = |at: V3| -> f64 {
         let along = dot(sub(at, b.origin), mul(&b.rot, link.dir)) / link.length;
-        if along <= 0.0 { 0.0 } else { cantilever_shape(along.min(1.0)) }
+        if along <= 0.0 { 0.0 } else { link.shape_at(along.min(1.0)) }
     };
     let moved = |on: usize, pin: V3| -> V3 {
         match on.cmp(&link.body) {
@@ -288,7 +353,7 @@ fn bar_field(link: &BentLink, states: &[BodyState], bar: &Bar, state: &BodyState
     let turn = match bar.turns.cmp(&link.body) {
         std::cmp::Ordering::Less => [0.0; 3],
         std::cmp::Ordering::Equal if link.in_plane && bar.on > link.body => {
-            mul(&b.rot, link.turn).map(|v| v / link.length)
+            mul(&b.rot, link.turn).map(|v| v * link.tip() / link.length)
         }
         std::cmp::Ordering::Equal => [0.0; 3],
         std::cmp::Ordering::Greater => field(link, states, bar.turns).1,
@@ -305,16 +370,18 @@ fn field_rate(link: &BentLink, states: &[BodyState], k: usize) -> V3 {
     if k == link.body || k >= link.held_from {
         return cross(w, t);
     }
-    let (u, r) = (mul(&b.rot, link.across), mul(&b.rot, link.turn).map(|v| v * link.slope / link.span));
+    let (u, r) =
+        (mul(&b.rot, link.across).map(|v| v * link.tip()), mul(&b.rot, link.turn).map(|v| v * link.tip_turn()));
     let tip = add(b.origin, mul(&b.rot, link.dir.map(|v| v * link.length)));
     let tip_speed = add(b.velocity, cross(w, sub(tip, b.com)));
     add(add(cross(w, u), cross(cross(w, r), sub(states[k].com, tip))), cross(r, sub(states[k].velocity, tip_speed)))
 }
 
-/// What the link's own body adds to its mode's modal mass beyond the square of its share in `field`: of a bend's
-/// m / 4 (the integral of the mode shape squared) the share gives 0.3915^2 m, of a twist's J / 3 (J about the link's
-/// line) J / 4. Adding the rest keeps the modal masses positive definite with the joints'.
-fn own_extra(link: &BentLink, states: &[BodyState]) -> f64 {
+/// What the link's own body adds to the modal mass of two of its modes of one kind (`link` and `other`, the same for
+/// the diagonal) beyond the product of their shares in `field`: of a bend pair's m int w v the shares give
+/// m int w int v, of a twist's J / 3 (J about the link's line) J / 4. Adding the rest keeps the modal masses positive
+/// definite with the joints'.
+fn own_extra(link: &BentLink, other: &BentLink, states: &[BodyState]) -> f64 {
     let b = &states[link.body];
     match link.kind {
         FlexKind::Twist => {
@@ -323,7 +390,7 @@ fn own_extra(link: &BentLink, states: &[BodyState]) -> f64 {
             let off = cross(axis, sub(b.com, b.origin));
             (dot(axis, mul(&turned, axis)) + b.inertial.mass * dot(off, off)) / 12.0
         }
-        _ => b.inertial.mass * (0.25 - CANTILEVER_PARTICIPATION * CANTILEVER_PARTICIPATION),
+        _ => b.inertial.mass * (link.overlap(other) - link.share() * other.share()),
     }
 }
 
@@ -535,7 +602,8 @@ fn four_bar(cfg: &Config, links: usize) -> Result<Vec<Bar>, ConfigError> {
 /// with K, not in series with the rod), and so do a stiffness curve's upper segments. A config without the switch has
 /// it off.
 fn bar_springs(cfg: &Config, joints: &mut [(RotaryJoint, Option<f64>, &str)]) -> Result<(), ConfigError> {
-    if !(cfg.get("effects.bar_elasticity").is_ok() && cfg.bool("effects.bar_elasticity")?) {
+    // With the rocking the rod's spring is the rocking's (`Rocking`), not in series with the gearbox.
+    if !switch(cfg, "effects.bar_elasticity")? || switch(cfg, "effects.bar_rocking")? {
         return Ok(());
     }
     let bad = |key: &str| ConfigError::Invalid(format!("arm.{key}"));
@@ -563,6 +631,72 @@ fn bar_springs(cfg: &Config, joints: &mut [(RotaryJoint, Option<f64>, &str)]) ->
         gearbox.stiffness = 1.0 / (1.0 / gearbox.stiffness + 1.0 / (k * lever));
     }
     Ok(())
+}
+
+/// A switch a config may leave out (off then).
+fn switch(cfg: &Config, key: &str) -> Result<bool, ConfigError> {
+    Ok(cfg.get(key).is_ok() && cfg.bool(key)?)
+}
+
+/// effects.bar_rocking: the forearm a parallelogram's rod turns rocks on the rod's axial spring as a joint of its own, r,
+/// passive, after the motors' joints (before a swinging payload's). The rod is the one bar of `bar_springs` with an
+/// axial stiffness k, carrying motor joint `arm.bars_carries` on the lever c = |`bars_pin_m`|: it holds r with k c^2 and
+/// damps it with c_a c^2 (`arm.bars_axial_damping_n_s_m`, c_a), where with `effects.bar_elasticity` alone its k c^2 lies
+/// in series with the gearbox. r turns the URDF joints as the carried motor joint does (its column of
+/// `arm.joint_coupling`: the forearm, and the wrist back, the flange's own levelling being rigid) but not the crank: a
+/// bar pinned before the first body r moves turns with the motor joint alone (`Arm::bodies`). The crank's inertia is
+/// what tells the motor joint from r (without it their columns of the mass matrix would be equal), so it is required.
+#[derive(Debug, Clone)]
+struct Rocking {
+    /// The URDF joints' turn per radian of r.
+    column: Vec<f64>,
+    /// The first URDF body r moves.
+    first: usize,
+    /// k c^2 (N m/rad) and c_a c^2 (N m s/rad).
+    stiffness: f64,
+    damping: f64,
+}
+
+fn rocking(
+    cfg: &Config,
+    coupling: &Option<Vec<Vec<f64>>>,
+    urdf_joints: usize,
+    motors: usize,
+    bars: &[Bar],
+) -> Result<Option<Rocking>, ConfigError> {
+    if !switch(cfg, "effects.bar_rocking")? {
+        return Ok(None);
+    }
+    let bad = |key: &str| ConfigError::Invalid(format!("arm.{key} (effects.bar_rocking)"));
+    let (stiffness, damping, carries, pins) = (
+        cfg.f64s("arm.bars_axial_stiffness_n_m")?,
+        cfg.f64s("arm.bars_axial_damping_n_s_m")?,
+        cfg.f64s("arm.bars_carries")?,
+        cfg.f64s("arm.bars_pin_m")?,
+    );
+    let sprung: Vec<usize> = (0..stiffness.len()).filter(|&i| stiffness[i] != 0.0).collect();
+    // Without a rod there is nothing to rock on, as `bar_springs` has nothing to put in series.
+    if sprung.is_empty() {
+        return Ok(None);
+    }
+    let (&[i], true) = (&sprung[..], carries.len() == stiffness.len() && damping.len() == stiffness.len()) else {
+        return Err(bad("bars_axial_stiffness_n_m: one rod, and as many bars_carries and bars_axial_damping_n_s_m"));
+    };
+    let (k, c, motor) = (stiffness[i], damping[i], carries[i]);
+    let lever: f64 = pins.get(3 * i..3 * i + 3).map_or(0.0, |p| p.iter().map(|v| v * v).sum());
+    if !(k > 0.0 && c >= 0.0 && lever > 0.0) || motor.fract() != 0.0 || motor < 1.0 || motor > motors as f64 {
+        return Err(bad("bars_axial_stiffness_n_m, bars_axial_damping_n_s_m, bars_carries or bars_pin_m"));
+    }
+    let m = motor as usize - 1;
+    let column: Vec<f64> = match coupling {
+        None => (0..urdf_joints).map(|r| f64::from(u8::from(r == m))).collect(),
+        Some(rows) => rows.iter().map(|r| r[m]).collect(),
+    };
+    let first = column.iter().position(|v| *v != 0.0).ok_or_else(|| bad("bars_carries"))?;
+    if !bars.iter().any(|b| b.on < first && b.turns >= first && b.closure.is_none() && b.inertial.mass > 0.0) {
+        return Err(bad("bars_on (a crank pinned before the forearm, turning with it)"));
+    }
+    Ok(Some(Rocking { column, first, stiffness: k * lever, damping: c * lever }))
 }
 
 /// The momentum of `bodies` about the base's origin: sum m v and sum c x m v + I w.
@@ -806,6 +940,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
             .min()
             .unwrap_or(usize::MAX);
     }
+    let rocking = rocking(cfg, &coupling, u, n, &bars)?;
     let mut arm = Arm {
         chain,
         moving,
@@ -838,6 +973,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         bending,
         reaction,
         bars,
+        rocking,
         angular_limits: None,
     };
     arm.built = arm.chain.bodies.iter().map(|b| b.inertial).collect();
@@ -848,6 +984,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
             "arm.four_bar_* (at a dead point at zero joints, with effects.link_bending)".into(),
         ));
     }
+    arm.ritz();
     if cfg.bool("kinematics.tool_space")? {
         let refuse = || ConfigError::Invalid("kinematics.tool_space".into());
         let names = cfg.get("kinematics.tool_axes")?.as_array().ok_or_else(refuse)?.clone();
@@ -934,12 +1071,23 @@ fn payload_about(in_tip: &Inertial, tip_rot: &M3) -> Inertial {
 }
 
 impl Arm {
-    /// The URDF's joints at the motors' joints `q` (passive ones after them are left out).
+    /// The URDF's joints at the motors' joints `q`, with the rocking where `q` has it (`Rocking`; a swinging payload's
+    /// joints after it are left out).
     fn full(&self, q: &[f64]) -> Vec<f64> {
-        match &self.coupling {
+        let n = self.ratios.len();
+        let mut out: Vec<f64> = match &self.coupling {
             None => q[..self.chain.len()].to_vec(),
-            Some(rows) => rows.iter().map(|r| r.iter().zip(q).map(|(c, v)| c * v).sum()).collect(),
+            Some(rows) => rows.iter().map(|r| r.iter().zip(&q[..n]).map(|(c, v)| c * v).sum()).collect(),
+        };
+        if let (Some(r), Some(rocked)) = (&self.rocking, q.get(n)) {
+            out.iter_mut().zip(&r.column).for_each(|(o, c)| *o += c * rocked);
         }
+        out
+    }
+
+    /// How many passive joints come before a swinging payload's: the rocking's.
+    fn rocks(&self) -> usize {
+        usize::from(self.rocking.is_some())
     }
 
     /// The flange's orientation and position at the motors' joints.
@@ -952,11 +1100,10 @@ impl Arm {
         (self.attached && self.payload.mass > 0.0 && self.swing.is_none()).then_some(self.payload)
     }
 
-    /// The moving chain's joints at all of the mechanism's joints (the motors', then the swing's).
+    /// The moving chain's joints at all of the mechanism's joints (the motors', the rocking's, then the swing's).
     fn moving_joints(&self, q: &[f64]) -> Vec<f64> {
-        let n = self.ratios.len();
         let mut out = self.full(q);
-        out.extend(&q[n..]);
+        out.extend(&q[(self.ratios.len() + self.rocks()).min(q.len())..]);
         out
     }
 
@@ -976,54 +1123,70 @@ impl Arm {
         chain.body_states(&q, &qd, self.extra())
     }
 
+    /// The bodies at the mechanism's joints `q` and speeds `qd` (`states`) and after them each bar of its own
+    /// (`with_bars`). With the rocking a bar pinned before the first body it moves (the crank) takes the bodies as they
+    /// are without it: it turns with the motor joint alone (`Rocking`).
+    fn bodies(&self, q: &[f64], qd: &[f64]) -> Vec<BodyState> {
+        let n = self.ratios.len();
+        let still = match &self.rocking {
+            Some(_) if q.len() > n && (q[n] != 0.0 || qd[n] != 0.0) => {
+                let held = |v: &[f64]| -> Vec<f64> {
+                    v.iter().enumerate().map(|(i, x)| if i == n { 0.0 } else { *x }).collect()
+                };
+                Some(self.states(&held(q), &held(qd)))
+            }
+            _ => None,
+        };
+        self.with_bars(self.states(q, qd), still.as_deref())
+    }
+
     /// `states` (the chain's bodies) and after them each bar of its own (`Bar`): its pin on its body moving at
     /// v_pin = v_c + w x (pin - c) of that body, the bar turning with w' of the body it stays parallel to, its centre at
-    /// pin + R' c_bar moving at v_pin + w' x (centre - pin).
-    fn with_bars(&self, mut states: Vec<BodyState>) -> Vec<BodyState> {
+    /// pin + R' c_bar moving at v_pin + w' x (centre - pin). A bar pinned before the rocking's first body from `still`
+    /// where given (`bodies`).
+    fn with_bars(&self, mut states: Vec<BodyState>, still: Option<&[BodyState]>) -> Vec<BodyState> {
         for bar in &self.bars {
-            if let Some(c) = &bar.closure {
-                let state = match c.solve(&states, bar.on, bar.pin) {
-                    Some([tip, crank, pivot, n, [lambda, mu, _], cv, fv]) => {
-                        let (start, speed, rate, length) =
-                            if c.is_coupler { (crank, cv, mu, c.coupler) } else { (pivot, fv, lambda, c.follower) };
-                        let x = sub(tip, start).map(|v| v / length);
-                        let y = cross(n, x);
-                        let rot = [[x[0], y[0], n[0]], [x[1], y[1], n[1]], [x[2], y[2], n[2]]];
-                        let spin = add(states[bar.on].spin, n.map(|v| v * rate));
-                        let com = add(start, x.map(|v| v * 0.5 * length));
-                        let velocity = add(speed, cross(spin, sub(com, start)));
-                        BodyState { inertial: bar.inertial, rot, origin: start, axis: [0.0; 3], com, velocity, spin }
-                    }
-                    None => BodyState {
-                        inertial: bar.inertial,
-                        rot: [[f64::NAN; 3]; 3],
-                        origin: [f64::NAN; 3],
-                        axis: [0.0; 3],
-                        com: [f64::NAN; 3],
-                        velocity: [f64::NAN; 3],
-                        spin: [f64::NAN; 3],
-                    },
-                };
-                states.push(state);
-                continue;
-            }
-            let (a, b) = (&states[bar.on], &states[bar.turns]);
-            let pin = add(a.origin, mul(&a.rot, bar.pin));
-            let at_pin = add(a.velocity, cross(a.spin, sub(pin, a.com)));
-            let com = add(pin, mul(&b.rot, bar.inertial.com));
-            let velocity = add(at_pin, cross(b.spin, sub(com, pin)));
-            let state = BodyState {
-                inertial: bar.inertial,
-                rot: b.rot,
-                origin: pin,
-                axis: [0.0; 3],
-                com,
-                velocity,
-                spin: b.spin,
+            let state = match (still, &self.rocking) {
+                (Some(still), Some(r)) if bar.on < r.first => Self::bar_state(bar, still),
+                _ => Self::bar_state(bar, &states),
             };
             states.push(state);
         }
         states
+    }
+
+    /// One bar's state (`with_bars`) from the chain's bodies `states`.
+    fn bar_state(bar: &Bar, states: &[BodyState]) -> BodyState {
+        if let Some(c) = &bar.closure {
+            return match c.solve(states, bar.on, bar.pin) {
+                Some([tip, crank, pivot, n, [lambda, mu, _], cv, fv]) => {
+                    let (start, speed, rate, length) =
+                        if c.is_coupler { (crank, cv, mu, c.coupler) } else { (pivot, fv, lambda, c.follower) };
+                    let x = sub(tip, start).map(|v| v / length);
+                    let y = cross(n, x);
+                    let rot = [[x[0], y[0], n[0]], [x[1], y[1], n[1]], [x[2], y[2], n[2]]];
+                    let spin = add(states[bar.on].spin, n.map(|v| v * rate));
+                    let com = add(start, x.map(|v| v * 0.5 * length));
+                    let velocity = add(speed, cross(spin, sub(com, start)));
+                    BodyState { inertial: bar.inertial, rot, origin: start, axis: [0.0; 3], com, velocity, spin }
+                }
+                None => BodyState {
+                    inertial: bar.inertial,
+                    rot: [[f64::NAN; 3]; 3],
+                    origin: [f64::NAN; 3],
+                    axis: [0.0; 3],
+                    com: [f64::NAN; 3],
+                    velocity: [f64::NAN; 3],
+                    spin: [f64::NAN; 3],
+                },
+            };
+        }
+        let (a, b) = (&states[bar.on], &states[bar.turns]);
+        let pin = add(a.origin, mul(&a.rot, bar.pin));
+        let at_pin = add(a.velocity, cross(a.spin, sub(pin, a.com)));
+        let com = add(pin, mul(&b.rot, bar.inertial.com));
+        let velocity = add(at_pin, cross(b.spin, sub(com, pin)));
+        BodyState { inertial: bar.inertial, rot: b.rot, origin: pin, axis: [0.0; 3], com, velocity, spin: b.spin }
     }
 
     /// The bars' share of the mass matrix and the bias (`dynamics`), by Kane's equations: a bar's v and w are linear in
@@ -1033,7 +1196,7 @@ impl Arm {
     fn bar_dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         let (all, h, n) = (q.len(), 1e-6, self.bars.len());
         let bars = |q: &[f64], qd: &[f64]| {
-            let states = self.with_bars(self.states(q, qd));
+            let states = self.bodies(q, qd);
             states[states.len() - n..].to_vec()
         };
         let shifted = |s: f64| -> Vec<f64> { q.iter().zip(qd).map(|(q, v)| q + s * v).collect() };
@@ -1101,9 +1264,42 @@ impl Arm {
             }
         }
         for (i, link) in self.bending.iter().enumerate() {
-            mass[i * f + i] += own_extra(link, states);
+            for (j, other) in self.bending.iter().enumerate() {
+                if (link.body, link.kind) == (other.body, other.kind) {
+                    mass[i * f + j] += own_extra(link, other, states);
+                }
+            }
         }
         (p, gravity, mass)
+    }
+
+    /// Each bend's two shapes (`bent_links`) turned into the pair's Ritz modes at zero joints, where `flex_modes` takes
+    /// the masses: with M and K the pair's 2 x 2 of `modal` and `BentLink::stiffness_with`, det(K - l M) = 0 and
+    /// (K - l M) x = 0, the new shapes x_1 w_1 + x_2 w_2 uncoupled there in mass and stiffness (so that the one-way
+    /// modes, each on its own, are the pair's). The lower scaled to a tip deflection of 1, the higher to int w^2 =
+    /// 33/140, the static shape's.
+    fn ritz(&mut self) {
+        let zero = vec![0.0; self.ratios.len()];
+        let mass = self.modal(&self.bodies(&zero, &zero)).2;
+        let f = self.bending.len();
+        for i in 0..f.saturating_sub(1) {
+            let (a, b, j) = (self.bending[i], self.bending[i + 1], i + 1);
+            let (Some(sa), Some(sb), true, false) = (a.shape, b.shape, b.second, a.second) else { continue };
+            let m = [mass[i * f + i], mass[i * f + j], mass[j * f + j]];
+            let k = [a.stiffness_with(&a), a.stiffness_with(&b), b.stiffness_with(&b)];
+            let (qa, qb, qc) =
+                (m[0] * m[2] - m[1] * m[1], k[0] * m[2] + k[2] * m[0] - 2.0 * k[1] * m[1], k[0] * k[2] - k[1] * k[1]);
+            let root = (qb * qb - 4.0 * qa * qc).max(0.0).sqrt();
+            for (slot, l) in [(i, 2.0 * qc / (qb + root)), (j, (qb + root) / (2.0 * qa))] {
+                let rows = [[k[0] - l * m[0], k[1] - l * m[1]], [k[1] - l * m[1], k[2] - l * m[2]]];
+                let row = if rows[0][0].hypot(rows[0][1]) >= rows[1][0].hypot(rows[1][1]) { rows[0] } else { rows[1] };
+                let shape: [f64; 2] = std::array::from_fn(|c| row[1] * sa[c] - row[0] * sb[c]);
+                let link = BentLink { shape: Some(shape), second: slot == j, ..a };
+                let scale = if slot == i { 1.0 / link.tip() } else { (33.0 / 140.0 / link.overlap(&link)).sqrt() };
+                let link = BentLink { shape: Some(shape.map(|v| v * scale)), ..link };
+                self.bending[slot] = BentLink { stiffness: link.stiffness_with(&link), ..link };
+            }
+        }
     }
 
     /// The unit axis motor joint `k`'s rotor spins about in the base frame, for the bodies `bodies`, positive where the
@@ -1149,8 +1345,7 @@ impl Arm {
         let momentum = |s: f64| {
             let q: Vec<f64> = q.iter().zip(qd).map(|(q, v)| q + s * v).collect();
             let qd: Vec<f64> = qd.iter().zip(qdd).map(|(v, a)| v + s * a).collect();
-            let ((chain, q), (_, qm)) = (self.loaded(&q), self.loaded(&qd));
-            let bodies = self.with_bars(chain.body_states(&q, &qm, self.extra()));
+            let bodies = self.bodies(&q, &qd);
             let (p, mut h) = momentum_of(&bodies);
             for k in 0..self.ratios.len() {
                 h = add(h, self.rotor_axis(&bodies, k).map(|a| a * self.spinning[k] * self.ratios[k] * qd[k]));
@@ -1160,7 +1355,7 @@ impl Arm {
         let ((p0, h0), (p1, h1)) = (momentum(-h), momentum(h));
         let rate = |a: V3, b: V3| -> V3 { std::array::from_fn(|i| (b[i] - a[i]) / (2.0 * h)) };
         let (mut force, mut moment) = (rate(p0, p1), rate(h0, h1));
-        let states = self.with_bars(self.states(q, qd));
+        let states = self.bodies(q, qd);
         for b in &states {
             let lift = [0.0, 0.0, b.inertial.mass * self.g];
             force = add(force, lift);
@@ -1202,8 +1397,7 @@ impl Mechanism for Arm {
     /// each motor's rotor spinning about the axis of the joint it turns (`motor_body`, `rotor_axis`), its momentum the
     /// rotors' `spinning` at the motor's speed.
     fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
-        let ((chain, q), (_, qd)) = (self.loaded(q), self.loaded(qd));
-        let bodies = self.with_bars(chain.body_states(&q, &qd, self.extra()));
+        let bodies = self.bodies(q, qd);
         let (linear, mut angular) = momentum_of(&bodies);
         let (mut mass, mut first_moment) = (0.0, [0.0; 3]);
         for b in &bodies {
@@ -1224,12 +1418,12 @@ impl Mechanism for Arm {
         })
     }
 
-    /// Per mode the diagonal of `modal`'s M_d at zero joints: the link's own mass spread along it (a cantilever's m / 4)
-    /// and everything the chain carries beyond it at its tip, with its turning inertia (a swinging payload too). The
-    /// damping 2 zeta sqrt(m k).
+    /// Per mode the diagonal of `modal`'s M_d at zero joints: the link's own mass spread along it (m int w^2) and
+    /// everything the chain carries beyond it at its tip, with its turning inertia (a swinging payload too); a bend's
+    /// pair is uncoupled there (`ritz`). The damping 2 zeta sqrt(m k).
     fn flex_modes(&self) -> Vec<FlexMode> {
-        let (chain, zero) = self.loaded(&vec![0.0; self.ratios.len()]);
-        let states = self.with_bars(chain.body_states(&zero, &zero, self.extra()));
+        let zero = vec![0.0; self.ratios.len()];
+        let states = self.bodies(&zero, &zero);
         let whole = self.modal(&states).2;
         let f = self.bending.len();
         self.bending
@@ -1239,7 +1433,12 @@ impl Mechanism for Arm {
                 let mass = whole[i * f + i];
                 let stiffness = l.stiffness;
                 let damping = 2.0 * l.damping_ratio * (mass * stiffness).sqrt();
-                FlexMode { link: l.body, mass, stiffness, damping, kind: l.kind }
+                let kind = match (l.kind, l.second) {
+                    (FlexKind::Bend, true) => FlexKind::BendSecond,
+                    (FlexKind::BendAcross, true) => FlexKind::BendAcrossSecond,
+                    (kind, _) => kind,
+                };
+                FlexMode { link: l.body, mass, stiffness, damping, kind }
             })
             .collect()
     }
@@ -1252,7 +1451,7 @@ impl Mechanism for Arm {
         let at = |s: f64| {
             let q: Vec<f64> = q.iter().zip(qd).map(|(q, v)| q + s * v).collect();
             let qd: Vec<f64> = qd.iter().zip(qdd).map(|(v, a)| v + s * a).collect();
-            self.modal(&self.with_bars(self.states(&q, &qd)))
+            self.modal(&self.bodies(&q, &qd))
         };
         let ((_, gravity, _), (behind, ..), (ahead, ..)) = (at(0.0), at(-h), at(h));
         for (i, load) in out.iter_mut().enumerate() {
@@ -1269,13 +1468,11 @@ impl Mechanism for Arm {
         }
         let (h, f, all) = (1e-6, self.bending.len(), q.len());
         let shifted = |s: f64| -> Vec<f64> { q.iter().zip(qd).map(|(q, v)| q + s * v).collect() };
-        let now = self.with_bars(self.states(q, qd));
+        let now = self.bodies(q, qd);
         let fields = self.fields(&now);
         let (momentum, gravity, mass) = self.modal_in(&now, &fields);
-        let ((behind, _, mass_behind), (ahead, _, mass_ahead)) = (
-            self.modal(&self.with_bars(self.states(&shifted(-h), qd))),
-            self.modal(&self.with_bars(self.states(&shifted(h), qd))),
-        );
+        let ((behind, _, mass_behind), (ahead, _, mass_ahead)) =
+            (self.modal(&self.bodies(&shifted(-h), qd)), self.modal(&self.bodies(&shifted(h), qd)));
         let force = (0..f)
             .map(|i| {
                 let changing: f64 = (0..f).map(|k| (mass_ahead[i * f + k] - mass_behind[i * f + k]) * dd[k]).sum();
@@ -1286,14 +1483,12 @@ impl Mechanism for Arm {
         let bodies = now.len() - self.bars.len();
         for j in 0..all {
             let unit: Vec<f64> = (0..all).map(|c| f64::from(u8::from(c == j))).collect();
-            let states = self.with_bars(self.states(q, &unit));
+            let states = self.bodies(q, &unit);
             let (column, ..) = self.modal_in(&states, &fields);
             // The bars' fields' rates along joint j by central differences over +-1 us at its unit speed.
             let bar_rates = (!self.bars.is_empty() && self.g != 0.0).then(|| {
                 let at = |s: f64| {
-                    self.fields(&self.with_bars(
-                        self.states(&q.iter().zip(&unit).map(|(q, u)| q + s * u).collect::<Vec<_>>(), &unit),
-                    ))
+                    self.fields(&self.bodies(&q.iter().zip(&unit).map(|(q, u)| q + s * u).collect::<Vec<_>>(), &unit))
                 };
                 (at(-h), at(h))
             });
@@ -1335,9 +1530,9 @@ impl Mechanism for Arm {
             let tip = add(origin, mul(&rot, link.dir.map(|v| v * link.length)));
             // A flange a parallelogram holds against the mode moves with the tip and does not turn (`held_from`).
             let held = frames.len() - 1 >= link.held_from;
-            let turn = mul(&rot, link.turn).map(|v| if held { 0.0 } else { v * link.slope * d / link.span });
+            let turn = mul(&rot, link.turn).map(|v| if held { 0.0 } else { v * link.tip_turn() * d });
             let swing = cross(turn, std::array::from_fn(|i| flange[i] - tip[i]));
-            moved = add(moved, add(mul(&rot, link.across).map(|v| v * d), swing));
+            moved = add(moved, add(mul(&rot, link.across).map(|v| v * link.tip() * d), swing));
             turned = add(turned, turn);
         }
         match &self.tool {
@@ -1375,15 +1570,17 @@ impl Mechanism for Arm {
         let l = moving.len();
         let (mut ml, mut hl) = (vec![0.0; l * l], vec![0.0; l]);
         moving.dynamics(&qm[..l], &qdm[..l], self.g, self.extra(), &mut ml, &mut hl);
-        let n = self.ratios.len();
-        // T: the moving chain's joints per mechanism joint (l x all).
+        let (n, rocks) = (self.ratios.len(), self.rocks());
+        // T: the moving chain's joints per mechanism joint (l x all): the motors' through the coupling, the rocking's
+        // through its column, the swing's one to one.
         let tm: Vec<f64> = (0..l * all)
             .map(|rc| {
-                let (r, c) = (rc / all, rc % all);
-                match (&self.coupling, r < self.chain.len(), c < n) {
-                    (Some(rows), true, true) => rows[r][c],
-                    (None, true, true) => (r == c) as u8 as f64,
-                    (_, false, false) => (r - self.chain.len() == c - n) as u8 as f64,
+                let (r, c, u) = (rc / all, rc % all, self.chain.len());
+                match (&self.coupling, &self.rocking) {
+                    (Some(rows), _) if r < u && c < n => rows[r][c],
+                    (None, _) if r < u && c < n => f64::from(u8::from(r == c)),
+                    (_, Some(rock)) if r < u && c == n => rock.column[r],
+                    _ if r >= u && c >= n + rocks => f64::from(u8::from(r - u == c - n - rocks)),
                     _ => 0.0,
                 }
             })
@@ -1404,9 +1601,13 @@ impl Mechanism for Arm {
         if detached_swing {
             // shortcut: without the payload the swing's joints carry nothing: a unit inertia of their own, apart from the
             // arm, so that they stay solvable; drop them when the payload goes and back when it comes.
-            for i in n..all {
+            for i in n + rocks..all {
                 mass[i * all + i] = 1.0;
             }
+        }
+        // The rod's damper on the rocking (its row of the losses, `loss_power`).
+        if let (Some(rock), Some(rate)) = (&self.rocking, qd.get(n)) {
+            bias[n] += rock.damping * rate;
         }
     }
     fn potential(&self, q: &[f64]) -> f64 {
@@ -1414,7 +1615,7 @@ impl Mechanism for Arm {
         let bars = if self.bars.is_empty() {
             0.0
         } else {
-            let states = self.with_bars(self.states(q, &vec![0.0; q.len()]));
+            let states = self.bodies(q, &vec![0.0; q.len()]);
             states[states.len() - self.bars.len()..].iter().map(|b| b.inertial.mass * self.g * b.com[2]).sum()
         };
         bars + match self.swing.is_some() && self.attached {
@@ -1422,8 +1623,48 @@ impl Mechanism for Arm {
             false => self.chain.potential(&qm[..self.chain.len()], self.g, self.extra()),
         }
     }
+    /// The rocking on the rod's spring (`Rocking`; its damper in `dynamics`, its loss in its own row, `loss_row`),
+    /// then the swing's two.
     fn passive_joints(&self) -> Vec<(f64, f64)> {
-        self.swing.map_or_else(Vec::new, |s| vec![s; 2])
+        let rocking = self.rocking.iter().map(|r| (r.stiffness, 0.0));
+        rocking.chain(self.swing.map_or_else(Vec::new, |s| vec![s; 2])).collect()
+    }
+    fn passive_signals(&self) -> Vec<SignalInfo> {
+        let rocking = self
+            .rocking
+            .iter()
+            .map(|_| SignalInfo::new("bar.rocking", "group-bar-rocking", "quantity-rocking-angle", "rad"));
+        let swing = (1..=if self.swing.is_some() { 2 } else { 0 })
+            .map(|k| SignalInfo::new(format!("swing.{k}.angle"), "group-payload-swing", "quantity-swing-angle", "rad"));
+        rocking.chain(swing).collect()
+    }
+    /// The swing's dampers; the rocking's is `loss_row`'s.
+    fn passive_loss_row(&self) -> Option<(&'static str, &'static str)> {
+        self.swing.map(|_| ("payload_swing", "group-payload-swing"))
+    }
+    fn loss_row(&self) -> Option<(&'static str, &'static str)> {
+        self.rocking.as_ref().map(|_| ("bar_rocking", "group-bar-rocking"))
+    }
+    fn loss_power(&self, _q: &[f64], qd: &[f64]) -> f64 {
+        let n = self.ratios.len();
+        self.rocking.as_ref().map_or(0.0, |r| r.damping * qd[n] * qd[n])
+    }
+    /// The forearm's sag on the rod's spring under the weights it carries: k r = -h_r at rest (`dynamics`' h at no
+    /// speed, its turn of the weights at r), by fixed point (k r is some 1e-5 rad, the third step exact to rounding);
+    /// the swing hangs straight.
+    fn passive_rest(&self, q: &[f64]) -> Vec<f64> {
+        let mut rest = vec![0.0; self.passive_joints().len()];
+        let Some(rock) = &self.rocking else { return rest };
+        let n = self.ratios.len();
+        let mut all: Vec<f64> = q[..n].iter().chain(&rest).copied().collect();
+        let size = all.len();
+        let (mut mass, mut bias) = (vec![0.0; size * size], vec![0.0; size]);
+        for _ in 0..3 {
+            self.dynamics(&all, &vec![0.0; size], &mut mass, &mut bias);
+            all[n] = -bias[n] / rock.stiffness;
+        }
+        rest[0] = all[n];
+        rest
     }
     fn set_payload_attached(&mut self, attached: bool) {
         self.attached = attached;
@@ -1534,7 +1775,9 @@ impl Mechanism for Arm {
             out.push(self.guide_load(q, qd, qdd));
         }
         if let (Some(_), Tool::Pose(p)) = (self.angular_limits, &self.tool) {
-            let (w, a) = p.angular_motion(&|q: &[f64]| self.tip(q), q, qd, qdd);
+            // The motors' joints: the passive ones' rates do not move the planned flange.
+            let n = self.ratios.len();
+            let (w, a) = p.angular_motion(&|q: &[f64]| self.tip(q), &q[..n], &qd[..n], &qdd[..n]);
             out.extend([w, a]);
         }
     }
@@ -1649,7 +1892,7 @@ impl Mechanism for Arm {
         out.parts.push(Part::new("link", Shape::Segment { to: tip, width: 0.03 }, from, [0.2, 0.22, 0.26]));
         out.parts.push(Part::new("flange", Shape::Box { size: [0.06, 0.06, 0.06] }, tip, [0.3, 0.3, 0.32]));
         if self.attached && self.payload.mass > 0.0 {
-            let centre = if self.swing.is_some() && q.len() > n {
+            let centre = if self.swing.is_some() && q.len() > n + self.rocks() {
                 let swung = self.moving.frames(&self.moving_joints(q));
                 let (rot, at) = swung[swung.len() - 1];
                 let centre = add(at, mul(&rot, self.moving.bodies[self.moving.len() - 1].inertial.com));

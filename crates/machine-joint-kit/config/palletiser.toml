@@ -66,6 +66,11 @@ four_bar_branch = 1.0
 # lever, is stiff along itself.
 bars_axial_stiffness_n_m = [0.0, 2.14e8]
 bars_carries = [0, 3]
+# With effects.bar_rocking (the forearm rocking on the rod's spring k c^2 as a joint of its own): each bar's axial
+# damper, c c^2 on the rocking. [estimate] 1 % of critical for the forearm on the rod with the crank held: the forearm
+# about the elbow 2.5 + 20 x 0.55^2, the wrist, flange and carton (33 kg) at 1.2 m, the rod's 8 kg at 0.3 m: J =
+# 56.79 kg m^2, 2 x 0.01 x sqrt(1.926e7 x 56.79) = 661.5 N m s/rad over 0.3^2.
+bars_axial_damping_n_s_m = [0.0, 7.35e3]
 # With effects.payload_swing: the carton on a pivot at the flange, its centre 0.2 m below, with this spring and damper
 # per axis. [estimate] a vacuum gripper's bellows: 20 kg at 0.2 m swings at sqrt((k + m g l) / (m l^2 + I)) / 2 pi = 1.61 Hz
 # about the axis across its 0.6 m side (I = 0.75 kg m^2) and 1.82 Hz about the other (I = 0.4167).
