@@ -1791,8 +1791,9 @@ r) of it, the wound cable at D, the run from D to E moving along it at l', the f
 the kinetic energy has them: first moment ρ ((capacity − l) D + r (D + E) / 2 + l (E + P) / 2), momentum
 ρ (l' (E − D) + l (a + P') / 2), its rate exactly, angular momentum ρ (l' D × E + l (E × (a + P') / 2 + (P − E) ×
 (a / 6 + P' / 3))); against 4000 points of each span summed by hand to 1e-9, the first moment moving at the momentum
-and the weight at the first moment (testkit), rigid and elastic. Left: the weight's V counts the span's mass as ρ L
-(stretched) where the first moment has ρ l, a strain's share (1e-3) of the cable's weight.
+and the weight at the first moment (testkit), rigid and elastic. The weight's V and the first moment take the same mass
+for the span, ρ l (elastic, l the free length, a state; rigid, l = L): V + g · c is the same at any two states to
+rounding (1e-12, `the_cables_run_along_with_the_drums`).
 
 **The cables' own inertia** (`effects.cable_inertia`, off as shipped, with ρ). The cable runs along itself at the
 drum's speed l': the turns on the drum with it (at the drum's radius, so at l'), the paid-out cable along its run and

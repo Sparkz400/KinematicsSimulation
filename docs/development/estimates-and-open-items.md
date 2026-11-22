@@ -105,7 +105,7 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 
 | Left out | Machine | Size |
 | --- | --- | --- |
-| The sag model is a shallow parabola; the weight counts the span's stretched mass rho L where the first moment has rho l | cable robots | The sag 8.7e-5 to 1.7e-4 N from the exact catenary (measured); the mass a strain's share, 1e-3 of the cable's weight. |
+| The sag model is a shallow parabola | cable robots | 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
 | A hook block already lower than the payload's top at a pick (under 0.28 m over its point) is left inside it: pushing it out would make energy; refusing such a pick needs `sim.rs`, the coordinator's call | crane | None in the shipped cycle (its picks hang the hook block 1 m over the payload). |
 | A parallelogram loop's own stiffness beyond holding a body's turn (rod and crank rigid), and loops other than the parallelogram's (the rule: a bar pinned before a bent link turning with a body beyond holds that body's turn; one turning with the bent link while pinned beyond turns with its chord) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured: the test case, and 1.22 % for the palletiser's held upper arm). |
 | The screw's stiffness along the stroke keeps the far end's for the wafer handler's and the parallel SCARA's pose tolerance (their own `rest_sag`, `machine-wafer-handler` and `machine-parallel-scara`: the column's m g / K with the far end's K, the stroke's `static_twist`), on the safe side; `chain.rs`'s takes the nut, and since 21 November the fit's twist (`Machine::twist_at`) and the mesh bristle (σ_m r, its store still not booked: at most (μ |held|)² / (2σ_m) per gear) follow the nut too | wafer handler, parallel SCARA | The tolerance up to the far end's sag over the pose's. |
@@ -113,6 +113,9 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | The stepper's detent after a trip took its pulses off (`Sim::advance_with_windings` gives such a drive the iron's drag only) | stepper | The detent's torque, T_d, is missing while it coasts; the books stay closed (its potential is never stored since 22 November). |
 
 Fixed since (22 November), each was a row of the table above:
+- Cable robots, the weight's mass against the first moment's (the row said rho L against rho l): a wrong reading, both
+  take rho l (the elastic weight on the free length, a state; rigid l = L); now held to rounding, V + g . c the same at
+  two states with other free lengths to 1e-12 (`the_cables_run_along_with_the_drums`).
 - Joint kit, a parallelogram rod's own stiffness: not in series with the link's bend (the forearm, pinned at the tip,
   is turned by the rod alone, which the bend does not stretch to first order) but with the gearbox of the joint the
   rod carries, k c^2 (`effects.bar_elasticity`, off as shipped; `arm.bars_axial_stiffness_n_m`, `bars_carries`):
