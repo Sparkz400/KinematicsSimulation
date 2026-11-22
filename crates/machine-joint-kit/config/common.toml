@@ -36,6 +36,10 @@ link_bending_reaction = false
 # A parallelogram's rod stretches under the torque it passes: its axial stiffness in series with the gearbox of the
 # joint it carries (arm.bars_axial_stiffness_n_m, bars_carries). Off as shipped: it moves the figures.
 bar_elasticity = false
+# The forearm a parallelogram's rod turns rocks on the rod's spring as a joint of its own (passive, its damper
+# arm.bars_axial_damping_n_s_m), where bar_elasticity puts the spring in series with the gearbox: with it on, that is
+# off. Off as shipped: it moves the figures.
+bar_rocking = false
 gravity = true
 payload = true
 # The arms' payload swings on a pivot at the flange (arm.payload_swing_*): two joints no motor drives. Off here; read

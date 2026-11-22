@@ -101,6 +101,8 @@ pub struct Arm {
     reaction: bool,
     /// The bars that are bodies of their own (`bars`), after the chain's bodies in `with_bars`.
     bars: Vec<Bar>,
+    /// effects.bar_rocking: the forearm rocking on its rod's spring, a passive joint after the motors' (`Rocking`).
+    rocking: Option<Rocking>,
     /// With rx, ry or rz among the tool axes: the smallest of their velocity and of their acceleration limits, which the
     /// planned flange's angular speed and acceleration are held to (`tool.angular_speed`, `tool.angular_acceleration`:
     /// shown as measured; kept by both planners and judged on the plan's rigid motion, see `rating_checks`).
@@ -535,7 +537,8 @@ fn four_bar(cfg: &Config, links: usize) -> Result<Vec<Bar>, ConfigError> {
 /// with K, not in series with the rod), and so do a stiffness curve's upper segments. A config without the switch has
 /// it off.
 fn bar_springs(cfg: &Config, joints: &mut [(RotaryJoint, Option<f64>, &str)]) -> Result<(), ConfigError> {
-    if !(cfg.get("effects.bar_elasticity").is_ok() && cfg.bool("effects.bar_elasticity")?) {
+    // With the rocking the rod's spring is the rocking's (`Rocking`), not in series with the gearbox.
+    if !switch(cfg, "effects.bar_elasticity")? || switch(cfg, "effects.bar_rocking")? {
         return Ok(());
     }
     let bad = |key: &str| ConfigError::Invalid(format!("arm.{key}"));
@@ -563,6 +566,68 @@ fn bar_springs(cfg: &Config, joints: &mut [(RotaryJoint, Option<f64>, &str)]) ->
         gearbox.stiffness = 1.0 / (1.0 / gearbox.stiffness + 1.0 / (k * lever));
     }
     Ok(())
+}
+
+/// A switch a config may leave out (off then).
+fn switch(cfg: &Config, key: &str) -> Result<bool, ConfigError> {
+    Ok(cfg.get(key).is_ok() && cfg.bool(key)?)
+}
+
+/// effects.bar_rocking: the forearm a parallelogram's rod turns rocks on the rod's axial spring as a joint of its own, r,
+/// passive, after the motors' joints (before a swinging payload's). The rod is the one bar of `bar_springs` with an
+/// axial stiffness k, carrying motor joint `arm.bars_carries` on the lever c = |`bars_pin_m`|: it holds r with k c^2 and
+/// damps it with c_a c^2 (`arm.bars_axial_damping_n_s_m`, c_a), where with `effects.bar_elasticity` alone its k c^2 lies
+/// in series with the gearbox. r turns the URDF joints as the carried motor joint does (its column of
+/// `arm.joint_coupling`: the forearm, and the wrist back, the flange's own levelling being rigid) but not the crank: a
+/// bar pinned before the first body r moves turns with the motor joint alone (`Arm::bodies`). The crank's inertia is
+/// what tells the motor joint from r (without it their columns of the mass matrix would be equal), so it is required.
+#[derive(Debug, Clone)]
+struct Rocking {
+    /// The URDF joints' turn per radian of r.
+    column: Vec<f64>,
+    /// The first URDF body r moves.
+    first: usize,
+    /// k c^2 (N m/rad) and c_a c^2 (N m s/rad).
+    stiffness: f64,
+    damping: f64,
+}
+
+fn rocking(
+    cfg: &Config,
+    coupling: &Option<Vec<Vec<f64>>>,
+    urdf_joints: usize,
+    motors: usize,
+    bars: &[Bar],
+) -> Result<Option<Rocking>, ConfigError> {
+    if !switch(cfg, "effects.bar_rocking")? {
+        return Ok(None);
+    }
+    let bad = |key: &str| ConfigError::Invalid(format!("arm.{key} (effects.bar_rocking)"));
+    let (stiffness, damping, carries, pins) = (
+        cfg.f64s("arm.bars_axial_stiffness_n_m")?,
+        cfg.f64s("arm.bars_axial_damping_n_s_m")?,
+        cfg.f64s("arm.bars_carries")?,
+        cfg.f64s("arm.bars_pin_m")?,
+    );
+    let sprung: Vec<usize> = (0..stiffness.len()).filter(|&i| stiffness[i] != 0.0).collect();
+    let (&[i], true) = (&sprung[..], carries.len() == stiffness.len() && damping.len() == stiffness.len()) else {
+        return Err(bad("bars_axial_stiffness_n_m: one rod, and as many bars_carries and bars_axial_damping_n_s_m"));
+    };
+    let (k, c, motor) = (stiffness[i], damping[i], carries[i]);
+    let lever: f64 = pins.get(3 * i..3 * i + 3).map_or(0.0, |p| p.iter().map(|v| v * v).sum());
+    if !(k > 0.0 && c >= 0.0 && lever > 0.0) || motor.fract() != 0.0 || motor < 1.0 || motor > motors as f64 {
+        return Err(bad("bars_axial_stiffness_n_m, bars_axial_damping_n_s_m, bars_carries or bars_pin_m"));
+    }
+    let m = motor as usize - 1;
+    let column: Vec<f64> = match coupling {
+        None => (0..urdf_joints).map(|r| f64::from(u8::from(r == m))).collect(),
+        Some(rows) => rows.iter().map(|r| r[m]).collect(),
+    };
+    let first = column.iter().position(|v| *v != 0.0).ok_or_else(|| bad("bars_carries"))?;
+    if !bars.iter().any(|b| b.on < first && b.turns >= first && b.closure.is_none() && b.inertial.mass > 0.0) {
+        return Err(bad("bars_on (a crank pinned before the forearm, turning with it)"));
+    }
+    Ok(Some(Rocking { column, first, stiffness: k * lever, damping: c * lever }))
 }
 
 /// The momentum of `bodies` about the base's origin: sum m v and sum c x m v + I w.
@@ -806,6 +871,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
             .min()
             .unwrap_or(usize::MAX);
     }
+    let rocking = rocking(cfg, &coupling, u, n, &bars)?;
     let mut arm = Arm {
         chain,
         moving,
@@ -838,6 +904,7 @@ pub fn build(cfg: &Config) -> Result<Box<dyn Machine>, ConfigError> {
         bending,
         reaction,
         bars,
+        rocking,
         angular_limits: None,
     };
     arm.built = arm.chain.bodies.iter().map(|b| b.inertial).collect();
@@ -934,12 +1001,23 @@ fn payload_about(in_tip: &Inertial, tip_rot: &M3) -> Inertial {
 }
 
 impl Arm {
-    /// The URDF's joints at the motors' joints `q` (passive ones after them are left out).
+    /// The URDF's joints at the motors' joints `q`, with the rocking where `q` has it (`Rocking`; a swinging payload's
+    /// joints after it are left out).
     fn full(&self, q: &[f64]) -> Vec<f64> {
-        match &self.coupling {
+        let n = self.ratios.len();
+        let mut out: Vec<f64> = match &self.coupling {
             None => q[..self.chain.len()].to_vec(),
-            Some(rows) => rows.iter().map(|r| r.iter().zip(q).map(|(c, v)| c * v).sum()).collect(),
+            Some(rows) => rows.iter().map(|r| r.iter().zip(&q[..n]).map(|(c, v)| c * v).sum()).collect(),
+        };
+        if let (Some(r), Some(rocked)) = (&self.rocking, q.get(n)) {
+            out.iter_mut().zip(&r.column).for_each(|(o, c)| *o += c * rocked);
         }
+        out
+    }
+
+    /// How many passive joints come before a swinging payload's: the rocking's.
+    fn rocks(&self) -> usize {
+        usize::from(self.rocking.is_some())
     }
 
     /// The flange's orientation and position at the motors' joints.
@@ -952,11 +1030,10 @@ impl Arm {
         (self.attached && self.payload.mass > 0.0 && self.swing.is_none()).then_some(self.payload)
     }
 
-    /// The moving chain's joints at all of the mechanism's joints (the motors', then the swing's).
+    /// The moving chain's joints at all of the mechanism's joints (the motors', the rocking's, then the swing's).
     fn moving_joints(&self, q: &[f64]) -> Vec<f64> {
-        let n = self.ratios.len();
         let mut out = self.full(q);
-        out.extend(&q[n..]);
+        out.extend(&q[(self.ratios.len() + self.rocks()).min(q.len())..]);
         out
     }
 
@@ -976,54 +1053,70 @@ impl Arm {
         chain.body_states(&q, &qd, self.extra())
     }
 
+    /// The bodies at the mechanism's joints `q` and speeds `qd` (`states`) and after them each bar of its own
+    /// (`with_bars`). With the rocking a bar pinned before the first body it moves (the crank) takes the bodies as they
+    /// are without it: it turns with the motor joint alone (`Rocking`).
+    fn bodies(&self, q: &[f64], qd: &[f64]) -> Vec<BodyState> {
+        let n = self.ratios.len();
+        let still = match &self.rocking {
+            Some(_) if q.len() > n && (q[n] != 0.0 || qd[n] != 0.0) => {
+                let held = |v: &[f64]| -> Vec<f64> {
+                    v.iter().enumerate().map(|(i, x)| if i == n { 0.0 } else { *x }).collect()
+                };
+                Some(self.states(&held(q), &held(qd)))
+            }
+            _ => None,
+        };
+        self.with_bars(self.states(q, qd), still.as_deref())
+    }
+
     /// `states` (the chain's bodies) and after them each bar of its own (`Bar`): its pin on its body moving at
     /// v_pin = v_c + w x (pin - c) of that body, the bar turning with w' of the body it stays parallel to, its centre at
-    /// pin + R' c_bar moving at v_pin + w' x (centre - pin).
-    fn with_bars(&self, mut states: Vec<BodyState>) -> Vec<BodyState> {
+    /// pin + R' c_bar moving at v_pin + w' x (centre - pin). A bar pinned before the rocking's first body from `still`
+    /// where given (`bodies`).
+    fn with_bars(&self, mut states: Vec<BodyState>, still: Option<&[BodyState]>) -> Vec<BodyState> {
         for bar in &self.bars {
-            if let Some(c) = &bar.closure {
-                let state = match c.solve(&states, bar.on, bar.pin) {
-                    Some([tip, crank, pivot, n, [lambda, mu, _], cv, fv]) => {
-                        let (start, speed, rate, length) =
-                            if c.is_coupler { (crank, cv, mu, c.coupler) } else { (pivot, fv, lambda, c.follower) };
-                        let x = sub(tip, start).map(|v| v / length);
-                        let y = cross(n, x);
-                        let rot = [[x[0], y[0], n[0]], [x[1], y[1], n[1]], [x[2], y[2], n[2]]];
-                        let spin = add(states[bar.on].spin, n.map(|v| v * rate));
-                        let com = add(start, x.map(|v| v * 0.5 * length));
-                        let velocity = add(speed, cross(spin, sub(com, start)));
-                        BodyState { inertial: bar.inertial, rot, origin: start, axis: [0.0; 3], com, velocity, spin }
-                    }
-                    None => BodyState {
-                        inertial: bar.inertial,
-                        rot: [[f64::NAN; 3]; 3],
-                        origin: [f64::NAN; 3],
-                        axis: [0.0; 3],
-                        com: [f64::NAN; 3],
-                        velocity: [f64::NAN; 3],
-                        spin: [f64::NAN; 3],
-                    },
-                };
-                states.push(state);
-                continue;
-            }
-            let (a, b) = (&states[bar.on], &states[bar.turns]);
-            let pin = add(a.origin, mul(&a.rot, bar.pin));
-            let at_pin = add(a.velocity, cross(a.spin, sub(pin, a.com)));
-            let com = add(pin, mul(&b.rot, bar.inertial.com));
-            let velocity = add(at_pin, cross(b.spin, sub(com, pin)));
-            let state = BodyState {
-                inertial: bar.inertial,
-                rot: b.rot,
-                origin: pin,
-                axis: [0.0; 3],
-                com,
-                velocity,
-                spin: b.spin,
+            let state = match (still, &self.rocking) {
+                (Some(still), Some(r)) if bar.on < r.first => Self::bar_state(bar, still),
+                _ => Self::bar_state(bar, &states),
             };
             states.push(state);
         }
         states
+    }
+
+    /// One bar's state (`with_bars`) from the chain's bodies `states`.
+    fn bar_state(bar: &Bar, states: &[BodyState]) -> BodyState {
+        if let Some(c) = &bar.closure {
+            return match c.solve(states, bar.on, bar.pin) {
+                Some([tip, crank, pivot, n, [lambda, mu, _], cv, fv]) => {
+                    let (start, speed, rate, length) =
+                        if c.is_coupler { (crank, cv, mu, c.coupler) } else { (pivot, fv, lambda, c.follower) };
+                    let x = sub(tip, start).map(|v| v / length);
+                    let y = cross(n, x);
+                    let rot = [[x[0], y[0], n[0]], [x[1], y[1], n[1]], [x[2], y[2], n[2]]];
+                    let spin = add(states[bar.on].spin, n.map(|v| v * rate));
+                    let com = add(start, x.map(|v| v * 0.5 * length));
+                    let velocity = add(speed, cross(spin, sub(com, start)));
+                    BodyState { inertial: bar.inertial, rot, origin: start, axis: [0.0; 3], com, velocity, spin }
+                }
+                None => BodyState {
+                    inertial: bar.inertial,
+                    rot: [[f64::NAN; 3]; 3],
+                    origin: [f64::NAN; 3],
+                    axis: [0.0; 3],
+                    com: [f64::NAN; 3],
+                    velocity: [f64::NAN; 3],
+                    spin: [f64::NAN; 3],
+                },
+            };
+        }
+        let (a, b) = (&states[bar.on], &states[bar.turns]);
+        let pin = add(a.origin, mul(&a.rot, bar.pin));
+        let at_pin = add(a.velocity, cross(a.spin, sub(pin, a.com)));
+        let com = add(pin, mul(&b.rot, bar.inertial.com));
+        let velocity = add(at_pin, cross(b.spin, sub(com, pin)));
+        BodyState { inertial: bar.inertial, rot: b.rot, origin: pin, axis: [0.0; 3], com, velocity, spin: b.spin }
     }
 
     /// The bars' share of the mass matrix and the bias (`dynamics`), by Kane's equations: a bar's v and w are linear in
@@ -1033,7 +1126,7 @@ impl Arm {
     fn bar_dynamics(&self, q: &[f64], qd: &[f64], mass: &mut [f64], bias: &mut [f64]) {
         let (all, h, n) = (q.len(), 1e-6, self.bars.len());
         let bars = |q: &[f64], qd: &[f64]| {
-            let states = self.with_bars(self.states(q, qd));
+            let states = self.bodies(q, qd);
             states[states.len() - n..].to_vec()
         };
         let shifted = |s: f64| -> Vec<f64> { q.iter().zip(qd).map(|(q, v)| q + s * v).collect() };
@@ -1149,8 +1242,7 @@ impl Arm {
         let momentum = |s: f64| {
             let q: Vec<f64> = q.iter().zip(qd).map(|(q, v)| q + s * v).collect();
             let qd: Vec<f64> = qd.iter().zip(qdd).map(|(v, a)| v + s * a).collect();
-            let ((chain, q), (_, qm)) = (self.loaded(&q), self.loaded(&qd));
-            let bodies = self.with_bars(chain.body_states(&q, &qm, self.extra()));
+            let bodies = self.bodies(&q, &qd);
             let (p, mut h) = momentum_of(&bodies);
             for k in 0..self.ratios.len() {
                 h = add(h, self.rotor_axis(&bodies, k).map(|a| a * self.spinning[k] * self.ratios[k] * qd[k]));
@@ -1160,7 +1252,7 @@ impl Arm {
         let ((p0, h0), (p1, h1)) = (momentum(-h), momentum(h));
         let rate = |a: V3, b: V3| -> V3 { std::array::from_fn(|i| (b[i] - a[i]) / (2.0 * h)) };
         let (mut force, mut moment) = (rate(p0, p1), rate(h0, h1));
-        let states = self.with_bars(self.states(q, qd));
+        let states = self.bodies(q, qd);
         for b in &states {
             let lift = [0.0, 0.0, b.inertial.mass * self.g];
             force = add(force, lift);
@@ -1202,8 +1294,7 @@ impl Mechanism for Arm {
     /// each motor's rotor spinning about the axis of the joint it turns (`motor_body`, `rotor_axis`), its momentum the
     /// rotors' `spinning` at the motor's speed.
     fn frame_momentum(&self, q: &[f64], qd: &[f64], rotor_spin: &[f64]) -> Option<sim_core::FrameMomentum> {
-        let ((chain, q), (_, qd)) = (self.loaded(q), self.loaded(qd));
-        let bodies = self.with_bars(chain.body_states(&q, &qd, self.extra()));
+        let bodies = self.bodies(q, qd);
         let (linear, mut angular) = momentum_of(&bodies);
         let (mut mass, mut first_moment) = (0.0, [0.0; 3]);
         for b in &bodies {
@@ -1228,8 +1319,8 @@ impl Mechanism for Arm {
     /// and everything the chain carries beyond it at its tip, with its turning inertia (a swinging payload too). The
     /// damping 2 zeta sqrt(m k).
     fn flex_modes(&self) -> Vec<FlexMode> {
-        let (chain, zero) = self.loaded(&vec![0.0; self.ratios.len()]);
-        let states = self.with_bars(chain.body_states(&zero, &zero, self.extra()));
+        let zero = vec![0.0; self.ratios.len()];
+        let states = self.bodies(&zero, &zero);
         let whole = self.modal(&states).2;
         let f = self.bending.len();
         self.bending
@@ -1252,7 +1343,7 @@ impl Mechanism for Arm {
         let at = |s: f64| {
             let q: Vec<f64> = q.iter().zip(qd).map(|(q, v)| q + s * v).collect();
             let qd: Vec<f64> = qd.iter().zip(qdd).map(|(v, a)| v + s * a).collect();
-            self.modal(&self.with_bars(self.states(&q, &qd)))
+            self.modal(&self.bodies(&q, &qd))
         };
         let ((_, gravity, _), (behind, ..), (ahead, ..)) = (at(0.0), at(-h), at(h));
         for (i, load) in out.iter_mut().enumerate() {
@@ -1269,13 +1360,11 @@ impl Mechanism for Arm {
         }
         let (h, f, all) = (1e-6, self.bending.len(), q.len());
         let shifted = |s: f64| -> Vec<f64> { q.iter().zip(qd).map(|(q, v)| q + s * v).collect() };
-        let now = self.with_bars(self.states(q, qd));
+        let now = self.bodies(q, qd);
         let fields = self.fields(&now);
         let (momentum, gravity, mass) = self.modal_in(&now, &fields);
-        let ((behind, _, mass_behind), (ahead, _, mass_ahead)) = (
-            self.modal(&self.with_bars(self.states(&shifted(-h), qd))),
-            self.modal(&self.with_bars(self.states(&shifted(h), qd))),
-        );
+        let ((behind, _, mass_behind), (ahead, _, mass_ahead)) =
+            (self.modal(&self.bodies(&shifted(-h), qd)), self.modal(&self.bodies(&shifted(h), qd)));
         let force = (0..f)
             .map(|i| {
                 let changing: f64 = (0..f).map(|k| (mass_ahead[i * f + k] - mass_behind[i * f + k]) * dd[k]).sum();
@@ -1286,14 +1375,12 @@ impl Mechanism for Arm {
         let bodies = now.len() - self.bars.len();
         for j in 0..all {
             let unit: Vec<f64> = (0..all).map(|c| f64::from(u8::from(c == j))).collect();
-            let states = self.with_bars(self.states(q, &unit));
+            let states = self.bodies(q, &unit);
             let (column, ..) = self.modal_in(&states, &fields);
             // The bars' fields' rates along joint j by central differences over +-1 us at its unit speed.
             let bar_rates = (!self.bars.is_empty() && self.g != 0.0).then(|| {
                 let at = |s: f64| {
-                    self.fields(&self.with_bars(
-                        self.states(&q.iter().zip(&unit).map(|(q, u)| q + s * u).collect::<Vec<_>>(), &unit),
-                    ))
+                    self.fields(&self.bodies(&q.iter().zip(&unit).map(|(q, u)| q + s * u).collect::<Vec<_>>(), &unit))
                 };
                 (at(-h), at(h))
             });
@@ -1375,15 +1462,17 @@ impl Mechanism for Arm {
         let l = moving.len();
         let (mut ml, mut hl) = (vec![0.0; l * l], vec![0.0; l]);
         moving.dynamics(&qm[..l], &qdm[..l], self.g, self.extra(), &mut ml, &mut hl);
-        let n = self.ratios.len();
-        // T: the moving chain's joints per mechanism joint (l x all).
+        let (n, rocks) = (self.ratios.len(), self.rocks());
+        // T: the moving chain's joints per mechanism joint (l x all): the motors' through the coupling, the rocking's
+        // through its column, the swing's one to one.
         let tm: Vec<f64> = (0..l * all)
             .map(|rc| {
-                let (r, c) = (rc / all, rc % all);
-                match (&self.coupling, r < self.chain.len(), c < n) {
-                    (Some(rows), true, true) => rows[r][c],
-                    (None, true, true) => (r == c) as u8 as f64,
-                    (_, false, false) => (r - self.chain.len() == c - n) as u8 as f64,
+                let (r, c, u) = (rc / all, rc % all, self.chain.len());
+                match (&self.coupling, &self.rocking) {
+                    (Some(rows), _) if r < u && c < n => rows[r][c],
+                    (None, _) if r < u && c < n => f64::from(u8::from(r == c)),
+                    (_, Some(rock)) if r < u && c == n => rock.column[r],
+                    _ if r >= u && c >= n + rocks => f64::from(u8::from(r - u == c - n - rocks)),
                     _ => 0.0,
                 }
             })
@@ -1404,9 +1493,13 @@ impl Mechanism for Arm {
         if detached_swing {
             // shortcut: without the payload the swing's joints carry nothing: a unit inertia of their own, apart from the
             // arm, so that they stay solvable; drop them when the payload goes and back when it comes.
-            for i in n..all {
+            for i in n + rocks..all {
                 mass[i * all + i] = 1.0;
             }
+        }
+        // The rod's damper on the rocking (its row of the losses, `loss_power`).
+        if let (Some(rock), Some(rate)) = (&self.rocking, qd.get(n)) {
+            bias[n] += rock.damping * rate;
         }
     }
     fn potential(&self, q: &[f64]) -> f64 {
@@ -1414,7 +1507,7 @@ impl Mechanism for Arm {
         let bars = if self.bars.is_empty() {
             0.0
         } else {
-            let states = self.with_bars(self.states(q, &vec![0.0; q.len()]));
+            let states = self.bodies(q, &vec![0.0; q.len()]);
             states[states.len() - self.bars.len()..].iter().map(|b| b.inertial.mass * self.g * b.com[2]).sum()
         };
         bars + match self.swing.is_some() && self.attached {
@@ -1422,8 +1515,48 @@ impl Mechanism for Arm {
             false => self.chain.potential(&qm[..self.chain.len()], self.g, self.extra()),
         }
     }
+    /// The rocking on the rod's spring (`Rocking`; its damper in `dynamics`, its loss in its own row, `loss_row`),
+    /// then the swing's two.
     fn passive_joints(&self) -> Vec<(f64, f64)> {
-        self.swing.map_or_else(Vec::new, |s| vec![s; 2])
+        let rocking = self.rocking.iter().map(|r| (r.stiffness, 0.0));
+        rocking.chain(self.swing.map_or_else(Vec::new, |s| vec![s; 2])).collect()
+    }
+    fn passive_signals(&self) -> Vec<SignalInfo> {
+        let rocking = self
+            .rocking
+            .iter()
+            .map(|_| SignalInfo::new("bar.rocking", "group-bar-rocking", "quantity-rocking-angle", "rad"));
+        let swing = (1..=if self.swing.is_some() { 2 } else { 0 })
+            .map(|k| SignalInfo::new(format!("swing.{k}.angle"), "group-payload-swing", "quantity-swing-angle", "rad"));
+        rocking.chain(swing).collect()
+    }
+    /// The swing's dampers; the rocking's is `loss_row`'s.
+    fn passive_loss_row(&self) -> Option<(&'static str, &'static str)> {
+        self.swing.map(|_| ("payload_swing", "group-payload-swing"))
+    }
+    fn loss_row(&self) -> Option<(&'static str, &'static str)> {
+        self.rocking.as_ref().map(|_| ("bar_rocking", "group-bar-rocking"))
+    }
+    fn loss_power(&self, _q: &[f64], qd: &[f64]) -> f64 {
+        let n = self.ratios.len();
+        self.rocking.as_ref().map_or(0.0, |r| r.damping * qd[n] * qd[n])
+    }
+    /// The forearm's sag on the rod's spring under the weights it carries: k r = -h_r at rest (`dynamics`' h at no
+    /// speed, its turn of the weights at r), by fixed point (k r is some 1e-5 rad, the third step exact to rounding);
+    /// the swing hangs straight.
+    fn passive_rest(&self, q: &[f64]) -> Vec<f64> {
+        let mut rest = vec![0.0; self.passive_joints().len()];
+        let Some(rock) = &self.rocking else { return rest };
+        let n = self.ratios.len();
+        let mut all: Vec<f64> = q[..n].iter().chain(&rest).copied().collect();
+        let size = all.len();
+        let (mut mass, mut bias) = (vec![0.0; size * size], vec![0.0; size]);
+        for _ in 0..3 {
+            self.dynamics(&all, &vec![0.0; size], &mut mass, &mut bias);
+            all[n] = -bias[n] / rock.stiffness;
+        }
+        rest[0] = all[n];
+        rest
     }
     fn set_payload_attached(&mut self, attached: bool) {
         self.attached = attached;
@@ -1649,7 +1782,7 @@ impl Mechanism for Arm {
         out.parts.push(Part::new("link", Shape::Segment { to: tip, width: 0.03 }, from, [0.2, 0.22, 0.26]));
         out.parts.push(Part::new("flange", Shape::Box { size: [0.06, 0.06, 0.06] }, tip, [0.3, 0.3, 0.32]));
         if self.attached && self.payload.mass > 0.0 {
-            let centre = if self.swing.is_some() && q.len() > n {
+            let centre = if self.swing.is_some() && q.len() > n + self.rocks() {
                 let swung = self.moving.frames(&self.moving_joints(q));
                 let (rot, at) = swung[swung.len() - 1];
                 let centre = add(at, mul(&rot, self.moving.bodies[self.moving.len() - 1].inertial.com));

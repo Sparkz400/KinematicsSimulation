@@ -140,6 +140,8 @@ link_bending = false
 link_bending_reaction = false
 # A parallelogram rod's axial stiffness in series with the gearbox of the joint it carries. Off as shipped.
 bar_elasticity = false
+# The forearm a parallelogram's rod turns rocks on the rod's spring as a joint of its own. Off as shipped.
+bar_rocking = false
 # The position loop closes on a load-side scale (S120 direct measuring system, drive.load_encoder_step) instead of
 # the motor encoder, which stays for the speed loop.
 load_encoder = false
@@ -258,6 +260,8 @@ bars_inertia_kgm2 = []
 # it carries on the lever of its pin's distance from its link's joint. Empty: none.
 bars_axial_stiffness_n_m = []
 bars_carries = []
+# With effects.bar_rocking: each bar's axial damper (N s/m), on the rocking with the lever's square. Empty: none.
+bars_axial_damping_n_s_m = []
 # A planar four-bar the URDF leaves out (`four_bar_*`): the follower's pivot on the link of URDF joint four_bar_ground_on
 # (1-based; 0: none) at four_bar_ground_pin_m of its frame, the crank point on the link of four_bar_crank_on at
 # four_bar_crank_pin_m, in the plane square to four_bar_normal (the ground's frame); the coupler (crank point to the

@@ -107,12 +107,18 @@ Sizes are measured by a run where it says so, otherwise worked out by hand.
 | --- | --- | --- |
 | The sag model is a shallow parabola | cable robots | 8.7e-5 to 1.7e-4 N from the exact catenary (measured). |
 | A hook block already lower than the payload's top at a pick (under 0.28 m over its point) is left inside it: pushing it out would make energy; refusing such a pick needs `sim.rs`, the coordinator's call | crane | None in the shipped cycle (its picks hang the hook block 1 m over the payload). |
-| A parallelogram's forearm rocking on its rod's spring as a motion of its own (the rod's stiffness is in series with the carried joint's gearbox only) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured: the test case, and 1.22 % for the palletiser's held upper arm). |
+| The bent links' one mode (the exact first mode with its own stiffness) | joint kit | The bend-mode method overestimates by 1.2 to 2.6 % against the exact beam (measured: the test case, and 1.22 % for the palletiser's held upper arm). |
+| The forearm rocking on its rod (`effects.bar_rocking`) does not move the tool pose (it reads the motors' joints), and the planner's trains and an arm's held modes hold it | joint kit | The palletiser's flange some 30 µm lower at rest (2.45e-5 rad on 1.2 m) than it reads. |
 | The screw's stiffness along the stroke keeps the far end's for the wafer handler's and the parallel SCARA's pose tolerance (their own `rest_sag`, `machine-wafer-handler` and `machine-parallel-scara`: the column's m g / K with the far end's K, the stroke's `static_twist`), on the safe side; `chain.rs`'s takes the nut, and since 21 November the fit's twist (`Machine::twist_at`) and the mesh bristle (σ_m r, its store still not booked: at most (μ |held|)² / (2σ_m) per gear) follow the nut too | wafer handler, parallel SCARA | The tolerance up to the far end's sag over the pose's. |
 | Every machine takes an obstacle's push on its contact coordinates (the tool's, the crane's load, the winder's dancer) since 22 November, not at the touching part's own point (a payload under a leaning Z axis is held through the tool point). One-way base compliance (without `effects.base_reaction`) keeps its base outside the budget: the push's work on the base is in no row (the contact's damping does not see the base's speed there) | obstacle contact | One-way: the push deflects the base by F / k_base all the same, the budget closes to 7e-7 (measured). Contact needs a load above c·h/2.79 (about 56 g) to stay stable. |
 | The stepper's detent after a trip took its pulses off (`Sim::advance_with_windings` gives such a drive the iron's drag only) | stepper | The detent's torque, T_d, is missing while it coasts; the books stay closed (its potential is never stored since 22 November). |
 
 Fixed since (22 November), each was a row of the table above:
+- Joint kit, the forearm rocking on its parallelogram rod's spring as a motion of its own (`effects.bar_rocking`, off
+  as shipped; `arm.bars_axial_damping_n_s_m`): a passive joint whose column is the carried motor joint's, the crank
+  turning with the motor joint alone; the two-mass modes by hand to 1e-6, the rest sag by hand to 1e-6, energy and loss
+  budget (`the_rocking_forearm_rings_as_the_two_masses_by_hand`, `the_palletisers_forearm_sags_on_its_rod_by_hand`,
+  `the_rocking_forearm_keeps_the_energy`). Left: the row above on the tool pose.
 - Joint kit, a four-bar on bending links (refused before): its pins move with the mode, its bars turn by the loop's
   Jacobian at the deflected pins; the parallelogram limit gives the parallel bars' modes to 1e-9, energy with the bend
   acting back (`a_four_bar_on_a_bending_link_has_the_parallelograms_modes_in_its_limit`). A loop at a dead point at

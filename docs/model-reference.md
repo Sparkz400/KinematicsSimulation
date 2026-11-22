@@ -2038,6 +2038,23 @@ K = 1 / (1 / k_g + 1 / (k c²)). The palletiser's rod, a 1 m steel tube of its 8
 1.926e7 N m/rad beside motor 3's 2e5, K = 197944.6 N m/rad, its train 0.9948 times as high
 (`the_parallelogram_rod_stretches_in_series_with_motor_threes_gearbox`). The gearbox's damper stays in parallel with K.
 
+**The forearm rocking on the rod** (`effects.bar_rocking`, off as shipped, since 22 November; with it on the series
+spring above is off). The forearm rocks on the rod's spring as a joint of its own, r, passive, after the motors' joints
+(before a swinging payload's): k c² holds it, `arm.bars_axial_damping_n_s_m` c_a damps it with c_a c² (its loss
+`power.bar_rocking`, its angle `bar.rocking`). If r only added to the elbow, the crank would turn with the forearm and
+the columns of the motor joint and of r in the mass matrix would be equal: singular. So r turns the URDF joints as the
+carried motor joint does (its column of `arm.joint_coupling`: the forearm, and the wrist back, the flange's own levelling
+being rigid), and the crank, pinned before the first body r moves, turns with the motor joint alone (`Arm::bodies` takes
+it from the bodies at r = 0); its inertia is all that tells the two apart, and a config without such a crank is refused.
+On a one-motor rocker (crank 0.18 kg m², forearm and rod 6.72 kg m² about the pivot) with the motor held the modes are
+the two masses' by hand, det(diag(k_g, k c²) − ω² [[I_c + I_f, I_f], [I_f, I_f]]) = 0: 26.96 Hz and 1676 Hz (the crank
+between the springs), to 1e-6 (`the_rocking_forearm_rings_as_the_two_masses_by_hand`). At rest the forearm sags on the
+rod by −h_r / (k c²) (`passive_rest`, by fixed point): on the palletiser upright, forearm level, carton on, g (20 × 0.55 +
+33 × 1.2 − 8 × 0.3) / 1.926e7 = 2.4542e-5 rad, to 1e-6 (`the_palletisers_forearm_sags_on_its_rod_by_hand`); the energy
+holds rigid and elastic (1.0e-8 J of 2.8 mJ, 6.1e-9 J of 10.2 mJ) and the loss budget closes
+(`the_rocking_forearm_keeps_the_energy`). Not in: the tool pose, which reads the motors' joints (r moves the flange by
+some 30 µm at rest), the planner's trains and the held modes of an arm of several motors (they hold the passive joints).
+
 **A four-bar of unequal links** (`arm.four_bar_*`, since 22 November). A loop the URDF leaves out whose bars do not
 stay parallel to a link: a crank point C on one link drives a coupler of length l_c to the point T, which a follower of
 length l_f holds from its pivot F on another, in the plane square to n. T from the loop's closure: d the in-plane part

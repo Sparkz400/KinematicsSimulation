@@ -1178,6 +1178,140 @@ fn the_parallelogram_rod_stretches_in_series_with_motor_threes_gearbox() {
     assert!(a.iter().zip(&b).any(|(a, b)| b.hz < a.hz * (1.0 - 1e-4)), "{a:?} {b:?}");
 }
 
+/// A forearm on a rocking rod (effects.bar_rocking) with one motor: a post (URDF joint 1, held by a zero row of
+/// `arm.joint_coupling`) and on it, 0.5 m up, the forearm about y (joint 2, the motor's): 20 kg, its centre 0.5 m out,
+/// 1 kg m^2 about it. The crank (6 kg, its centre 0.15 m behind the pivot, 0.045 kg m^2 about it) pinned on the post at
+/// the pivot turns with the forearm; the rod (8 kg) pinned on the forearm 0.3 m behind the pivot stays parallel to the
+/// post, its axial stiffness 2.14e8 N/m carrying the motor's joint. Loss-free, without gravity, plus `edits`.
+fn rocker(edits: &[&str]) -> Box<dyn Machine> {
+    let path = std::env::temp_dir().join("joint-kit-test-rocker.urdf");
+    std::fs::write(
+        &path,
+        r#"<?xml version="1.0"?>
+<robot name="rocker">
+  <link name="base_link"/>
+  <link name="post"><inertial><origin xyz="0 0 0.25"/><mass value="10"/><inertia ixx="0.2" ixy="0" ixz="0" iyy="0.2" iyz="0" izz="0.05"/></inertial></link>
+  <joint name="joint1" type="revolute"><parent link="base_link"/><child link="post"/><axis xyz="0 0 1"/><limit lower="-3" upper="3"/></joint>
+  <link name="forearm"><inertial><origin xyz="0.5 0 0"/><mass value="20"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="1.0" iyz="0" izz="1.0"/></inertial></link>
+  <joint name="joint2" type="revolute"><parent link="post"/><child link="forearm"/><origin xyz="0 0 0.5"/><axis xyz="0 1 0"/><limit lower="-1.5" upper="1.5"/></joint>
+</robot>"#,
+    )
+    .unwrap();
+    let mut cfg = lossless_config(&URDF_ARM);
+    for edit in [
+        format!("arm.urdf_file = {:?}", path.to_str().unwrap()),
+        "arm.gear_ratios = [160.0]".into(),
+        "arm.joint_coupling = [[0.0], [1.0]]".into(),
+        "arm.bars_on = [1.0, 2.0]".into(),
+        "arm.bars_turns_with = [2.0, 1.0]".into(),
+        "arm.bars_pin_m = [0.0, 0.0, 0.5, -0.3, 0.0, 0.0]".into(),
+        "arm.bars_mass_kg = [6.0, 8.0]".into(),
+        "arm.bars_com_m = [-0.15, 0.0, 0.0, 0.0, 0.0, -0.5]".into(),
+        "arm.bars_inertia_kgm2 = [0.004, 0.045, 0.045, 0.0, 0.0, 0.0, 0.66667, 0.66667, 0.006, 0.0, 0.0, 0.0]".into(),
+        "arm.bars_axial_stiffness_n_m = [0.0, 2.14e8]".into(),
+        "arm.bars_axial_damping_n_s_m = [0.0, 0.0]".into(),
+        "arm.bars_carries = [0.0, 1.0]".into(),
+        "effects.bar_rocking = true".into(),
+        "effects.payload = false".into(),
+        "effects.gravity = false".into(),
+    ]
+    .into_iter()
+    .chain(edits.iter().map(|e| e.to_string()))
+    {
+        cfg.set_text(&edit).unwrap();
+    }
+    (URDF_ARM.build)(&cfg).unwrap()
+}
+
+/// The rocking forearm's two-mass mode (effects.bar_rocking), the motor held (a rotor of 1e4 kg m^2 behind 160:1): the
+/// crank on the gearbox's spring k_g = 2e5 N m/rad, the forearm on the rod's k c^2 = 2.14e8 x 0.3^2 = 1.926e7 N m/rad
+/// against the crank. The motor's joint q turns the crank, q + r the forearm: I_c = 0.045 + 6 x 0.15^2 = 0.18 kg m^2,
+/// I_f = 1 + 20 x 0.5^2 + 8 x 0.3^2 = 6.72 kg m^2 (the rod moves with its pin without turning), so M = [[I_c + I_f, I_f],
+/// [I_f, I_f]] and det(diag(k_g, k c^2) - w^2 M) = 0: I_c I_f w^4 - (k_g I_f + k c^2 (I_c + I_f)) w^2 + k_g k c^2 = 0,
+/// 26.96 Hz (the arm on the gearbox, a little below sqrt(k_g / (I_c + I_f)) / 2 pi = 27.10 Hz) and 1676 Hz (the crank
+/// between the two springs). Without the crank the two columns of M would be equal and it singular.
+#[test]
+fn the_rocking_forearm_rings_as_the_two_masses_by_hand() {
+    let m = rocker(&[
+        "effects.joint_elasticity = true",
+        "effects.gearbox_stiffness_curve = false",
+        "effects.gearbox_backlash = false",
+        "gearbox.stiffness_nm_rad = 2.0e5",
+        "motor.rotor_inertia_kgm2 = 1.0e4",
+    ]);
+    let (ic, i_f, kg, kr): (f64, f64, f64, f64) =
+        (0.045 + 6.0 * 0.15 * 0.15, 1.0 + 20.0 * 0.25 + 8.0 * 0.09, 2e5, 2.14e8 * 0.09);
+    let (a, b, c) = (ic * i_f, kg * i_f + kr * (ic + i_f), kg * kr);
+    let root = (b * b - 4.0 * a * c).sqrt();
+    let hz = |l: f64| l.sqrt() / std::f64::consts::TAU;
+    let (low, high) = (hz(2.0 * c / (b + root)), hz((b + root) / (2.0 * a)));
+    let modes = m.modes(&[0.0]);
+    println!("by hand {low} Hz and {high} Hz; the machine's {modes:?}");
+    assert!((low - 26.96).abs() < 0.01 && (high - 1676.0).abs() < 1.0, "{low} {high}");
+    let nearest =
+        |f: f64| modes.iter().map(|m| m.hz).fold(0.0, |b, x| if (x - f).abs() < (b - f).abs() { x } else { b });
+    near(nearest(low), low, 1e-6, "the arm on the gearbox");
+    near(nearest(high), high, 1e-6, "the crank between the springs");
+    assert!(m.signal_infos().iter().any(|s| s.id == "bar.rocking"));
+    // Without the crank the rocking is refused.
+    let mut cfg = URDF_ARM.config();
+    cfg.set_text("effects.bar_rocking = true").unwrap();
+    assert!((URDF_ARM.build)(&cfg).is_err(), "the six-axis arm has no rod to rock on");
+}
+
+/// The palletiser's forearm at rest on its rod (effects.bar_rocking), the upper arm upright and the forearm level
+/// (motors' joints 0), its carton on: by virtual work the rocking r turns the forearm about the elbow (20 kg, its centre
+/// 0.55 m out) and moves the wrist, flange and carton (5 + 8 + 20 = 33 kg) with the forearm's tip 1.2 m out, without
+/// turning them (the flange stays level), and the rod (8 kg) with its pin 0.3 m behind the elbow; the crank stays. Their
+/// weights turn it by g (20 x 0.55 + 33 x 1.2 - 8 x 0.3) = 48.2 g = 472.68 N m against k c^2 = 1.926e7 N m/rad: it rests
+/// at 2.4542e-5 rad, the forearm's tip down (positive about y), and stays there.
+#[test]
+fn the_palletisers_forearm_sags_on_its_rod_by_hand() {
+    let mut cfg = PALLETISER.config();
+    cfg.set_text("effects.bar_rocking = true").unwrap();
+    cfg.set_text("kinematics.tool_space = false").unwrap();
+    let m = (PALLETISER.build)(&cfg).unwrap();
+    let (mut state, mut torque) = (Vec::new(), [0.0; 4]);
+    m.equilibrium(&[0.0; 4], &mut state, &mut torque);
+    let at = state.len() - 2;
+    let by_hand = 48.2 * 9.80665 / (2.14e8 * 0.09);
+    println!("rests at {} rad, by hand {by_hand} rad", state[at]);
+    near(state[at], by_hand, 1e-6, "the rod's sag");
+    let mut d = vec![0.0; state.len()];
+    m.derivatives(&state, &torque, &mut d);
+    assert!(d[at + 1].abs() < 1e-6, "the rocking accelerates at {} rad/s^2 at rest", d[at + 1]);
+    // The rod's spring is the rocking's: not in series with motor 3's gearbox as well, though bar_elasticity is on.
+    cfg.set_text("effects.bar_elasticity = true").unwrap();
+    let both = (PALLETISER.build)(&cfg).unwrap();
+    let pose = [1.2, -0.5, 1.3, 0.0];
+    assert_eq!(both.trains(&pose)[2].unwrap().hz, m.trains(&pose)[2].unwrap().hz);
+}
+
+/// With the rocking on and no losses the palletiser keeps its energy within the suite's 0.1 % of what its pulse puts in,
+/// rigid and elastic, with gravity; with the rod's damper on its loss row closes the budget.
+#[test]
+fn the_rocking_forearm_keeps_the_energy() {
+    for elastic in [false, true] {
+        let mut cfg = rigid(&PALLETISER);
+        for edit in [
+            "kinematics.tool_space = false",
+            "effects.bar_rocking = true",
+            "arm.bars_axial_damping_n_s_m = [0.0, 0.0]",
+            &format!("effects.joint_elasticity = {elastic}"),
+        ] {
+            cfg.set_text(edit).unwrap();
+        }
+        let m = (PALLETISER.build)(&cfg).unwrap();
+        let (drift, injected) = sim_core::testkit::energy_drift(m.as_ref());
+        println!("elastic {elastic}: {drift} J of {injected} J");
+        assert!(injected > 0.0 && drift < 1e-3 * injected, "{drift} J of {injected} J");
+        cfg.set_text("arm.bars_axial_damping_n_s_m = [0.0, 7.35e3]").unwrap();
+        let m = (PALLETISER.build)(&cfg).unwrap();
+        assert!(m.signal_infos().iter().any(|s| s.id == "power.bar_rocking"));
+        sim_core::testkit::loss_budget(m.as_ref());
+    }
+}
+
 fn bent_config(bars: bool, reaction: bool) -> Config {
     {
         let mut cfg = rigid(&PALLETISER);
