@@ -1762,12 +1762,19 @@ W = T² / 2 − c / T,   energy (l / EA) W                          the platform
 
 so a cable is taut at any t0 (slack, it hangs at T = √(c / (2|t0|))). Rigid cables have no sag. W changes with the pose
 through c too (since 22 November): at a fixed t0, dW/dc = −1/(2T) (from dT/dc = T / (2 (T³ + c))), so the anchor takes
-F = l / (2 EA T) ∇_P c beside T u, with its moment (`sag_pull`, ∇_P c by forward differences of 1 µm): 1.9e-5 N on the
+F = l / (2 EA T) ∇_P c beside T u, with its moment (`sag_pull`). ∇_P c in closed form (`sag_gradient`):
+c (2 ∇l_h / l_h + ∇l_f / l_f + u / L), ∇l_f = q / l_f (q from the pulley's centre to the anchor; the swivelling pulley's
+centre moves across its plane only), and the cable's direction turning by ∇u = −n nᵀ / l_f + (e_z × u) e_vᵀ / P_u (n its
+normal in the pulley's plane, e_v the plane's normal, P_u the anchor's distance from the swivel's axis), l_h = l_f |u_h|;
+within 1.2e-14 N of central differences over 202 spatial poses (`the_sags_gradient_is_its_differences`) and within
+1e-9 N along the whole spatial cycle (checked once by a run). 1.9e-5 N on the
 planar robot at 0.01 kg/m and 100 N, 3.6e-3 N on a spatial cable hanging nearly slack at 0.4 N, against the at-rest
 tensions' 1e-11 N. The dynamics, the state at rest and the elastic `forward` take it, so the cables' force is the
 gradient of their energy (`the_sagging_cables_pull_is_the_gradient_of_their_energy`: 1.2e-9 N, 1.9e-5 N without it).
-The spatial cycle's figures move by its peak torque's last digit (2.454134 -> 2.454135 N m); its run takes 9.4 s instead
-of 4.9 s (the three span evaluations a cable per evaluation of the dynamics).
+The spatial cycle's run takes 6.5 s against 5.0 s without the pull (9.4 s with forward differences). Its figures: the
+RMS torques and errors unchanged to their digits; motor 1's peak torque 2.454134 N m without the pull, 2.454051 with
+it (2.454135 with the differences, whose force differs by about 1e-11 N: the peak sits on a moment that small forces
+shift), the other motors' within 4e-6 N m.
 
 **The lift from drum to pulley** (`winch.drop_m` h, the drum's drop below its pulley; 0 as shipped, the frame's data
 not at hand): the cable paid out is lifted by h, its potential ρ g h l, the drum pulled back by ρ g h (0.049 N at

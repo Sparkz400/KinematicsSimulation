@@ -936,32 +936,52 @@ impl CableRobot {
     /// takes (elastic, `rope` > 0; zero otherwise): the cable's energy (l / EA) W(t0, c) changes with the sag constant c
     /// over the anchor's place too (the span's horizontal part and its length), and dW/dc = -1 / (2 T) at a fixed t0
     /// (T^3 - t0 T^2 - c / 2 = 0 gives dT/dc = T / (2 (T^3 + c))), so the anchor takes F = l / (2 EA T) grad_P c, with
-    /// its moment b x F; grad_P c by forward differences of 1 um. About (w l_h)^2 l / (12 T l_h): 5e-5 N at 10 g/m and
-    /// 20 N, where the at-rest tensions settle to 1e-11 N.
+    /// its moment b x F (`sag_gradient`). About (w l_h)^2 l / (12 T l_h): 5e-5 N at 10 g/m and 20 N, where the at-rest
+    /// tensions settle to 1e-11 N.
     fn sag_pull(&self, spans: &[Span], free: &[f64], tension: &[f64]) -> Vec<f64> {
         let mut full = [0.0; 6];
         if !(self.elastic && self.rope > 0.0) {
             return vec![0.0; self.n()];
         }
-        const STEP: f64 = 1e-6;
         for (k, s) in spans.iter().enumerate() {
-            let c = self.sag(s);
-            if !(c > 0.0 && tension[k] > 0.0) {
+            if !(tension[k] > 0.0) {
                 continue;
             }
-            let anchor = sub(s.exit, scale(s.u, s.straight));
-            let mut f = [0.0; 3];
-            for (i, fi) in f.iter_mut().enumerate() {
-                let mut moved = anchor;
-                moved[i] += STEP;
-                let Some((length, straight, u, exit)) = span(&self.cables[k], self.pulley, moved) else { continue };
-                let c_moved = self.sag(&Span { length, straight, u, exit, b: s.b, dz: 0.0 });
-                *fi = free[k] / (2.0 * self.ea * tension[k]) * (c_moved - c) / STEP;
-            }
+            let Some(gradient) = self.sag_gradient(k, s) else { continue };
+            let f = scale(gradient, free[k] / (2.0 * self.ea * tension[k]));
             let moment = cross(s.b, f);
             (0..3).for_each(|i| (full[i], full[3 + i]) = (full[i] + f[i], full[3 + i] + moment[i]));
         }
         self.dofs.iter().map(|d| full[*d]).collect()
+    }
+
+    /// The gradient over the anchor's place of cable `k`'s sag constant c = (w l_h)^2 EA l_f / (12 L) at its span `s`,
+    /// c (2 grad l_h / l_h + grad l_f / l_f - grad L / L); `None` where c is 0. grad L = -u. The straight part
+    /// l_f = sqrt(m^2 - r^2), m the anchor's distance q from the pulley's centre M; the pulley swivels so that its plane
+    /// holds the anchor and M moves across that plane only, so grad m = q / m and grad l_f = q / l_f. The cable's
+    /// direction u turns by -n (dP . n) / l_f for a step dP along the plane's normal n to it (the tangent point slides
+    /// along u), and with the swivel, d gamma = dP . e_v / P_u (e_v = e_z x e_u, P_u the anchor's distance from the
+    /// swivel's axis), about the axis: grad u = -n n^T / l_f + (e_z x u) e_v^T / P_u. l_h = l_f |u_h| (u_h u's
+    /// horizontal part) has grad l_h = |u_h| grad l_f + l_f (u_x grad u_x + u_y grad u_y) / |u_h|.
+    fn sag_gradient(&self, k: usize, s: &Span) -> Option<V3> {
+        let (c, horizontal) = (self.sag(s), s.u[0].hypot(s.u[1]));
+        if !(c > 0.0 && horizontal > 0.0) {
+            return None;
+        }
+        let cable = &self.cables[k];
+        let anchor = sub(s.exit, scale(s.u, s.straight));
+        let (eu, pu, ..) = pulley_plane(cable, self.pulley, anchor)?;
+        let straight = scale(sub(anchor, add(cable.exit, scale(eu, self.pulley))), 1.0 / s.straight);
+        let ev = cross(cable.axis, eu);
+        let (n, turn) = (cross(ev, s.u), cross(cable.axis, s.u));
+        // Row i of grad u: d u_i / dP.
+        let du = |i: usize| -> V3 { std::array::from_fn(|j| -n[i] * n[j] / s.straight + turn[i] * ev[j] / pu) };
+        let (dx, dy) = (du(0), du(1));
+        let level: V3 = std::array::from_fn(|j| {
+            horizontal * straight[j] + s.straight * (s.u[0] * dx[j] + s.u[1] * dy[j]) / horizontal
+        });
+        let level_h = s.straight * horizontal;
+        Some(std::array::from_fn(|j| c * (2.0 * level[j] / level_h + straight[j] / s.straight + s.u[j] / s.length)))
     }
 
     /// The free length of a cable that holds the tension `t` at the length L of `s`: l = L / (1 + t0 / EA), t0 the straight

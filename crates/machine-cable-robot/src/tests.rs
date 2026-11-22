@@ -536,6 +536,50 @@ fn the_sagging_cables_pull_is_the_gradient_of_their_energy() {
     assert!(off < 1e-8, "{off} N");
 }
 
+/// The sag constant's gradient over the anchor's place (`sag_gradient`, in closed form) against its central differences
+/// (1 um) for every cable of the spatial robot at 202 poses over its box, turned and not, and the planar one at two: as
+/// the pull it gives a cable of 100 N at its free length, l / (2 EA T) grad c, within 1e-9 N (measured 1.2e-14 N).
+#[test]
+fn the_sags_gradient_is_its_differences() {
+    let mut worst = 0f64;
+    for (entry, poses) in [
+        (&SPATIAL, {
+            let mut v = vec![vec![0.3, -0.2, 1.3, 0.05, -0.03, 0.08], vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0]];
+            for i in 0..200 {
+                let f = |k: f64| ((i as f64 * k).sin());
+                v.push(vec![0.4 * f(1.3), 0.4 * f(2.1), 1.0 + 0.3 * f(0.7), 0.1 * f(3.3), 0.1 * f(1.9), 0.1 * f(2.9)]);
+            }
+            v
+        }),
+        (&PLANAR, vec![vec![0.3, 0.9], vec![-0.4, 0.5]]),
+    ] {
+        let mut cfg = entry.config();
+        cfg.set_text("cable.mass_per_m_kg = 0.01").unwrap();
+        let robot = CableRobot::new(&cfg).unwrap();
+        for pose in poses {
+            let Some(spans) = robot.spans(&pose) else { continue };
+            for (k, s) in spans.iter().enumerate() {
+                let anchor = sub(s.exit, scale(s.u, s.straight));
+                let at = |p: V3| {
+                    let (length, straight, u, exit) = span(&robot.cables[k], robot.pulley, p).unwrap();
+                    robot.sag(&Span { length, straight, u, exit, b: s.b, dz: 0.0 })
+                };
+                let exact = robot.sag_gradient(k, s).unwrap();
+                let pull = s.length / (2.0 * robot.ea * 100.0);
+                for i in 0..3 {
+                    let (mut up, mut down) = (anchor, anchor);
+                    (up[i], down[i]) = (anchor[i] + 1e-6, anchor[i] - 1e-6);
+                    let differences = (at(up) - at(down)) / 2e-6;
+                    let off = pull * (exact[i] - differences).abs();
+                    worst = worst.max(off);
+                }
+            }
+        }
+    }
+    println!("the closed form off the differences by {worst:e} N");
+    assert!(worst < 1e-9, "{worst} N");
+}
+
 /// effects.cable_inertia: the cable runs along itself at the drum's speed, all of the drum's 5 m. Spatial: the drum's
 /// 4e-4 / 0.03^2 = 0.444444 kg at the cable and 0.01 x 5 = 0.05 kg of cable, 0.494444 kg. Planar, rigid, at (0.3, 0.9)
 /// moving at (0.5, -0.2) m/s: of its 0.003 x 5 = 0.015 kg the cable still on each drum, 0.003 (5 - L), turns with it
