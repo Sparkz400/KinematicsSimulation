@@ -369,6 +369,24 @@ impl Based {
         damping - (0..6).map(|j| rate[j] * w[j]).sum::<f64>()
     }
 
+    /// An obstacle's push (`push`) on each of the base's directions: its virtual work per unit of each, through how far
+    /// the base's move shifts the contact coordinates (`tool_shift`, linear in the move). Zero without a push.
+    fn pushed(&self, state: &[f64]) -> Vec<f64> {
+        let m = self.dofs.len();
+        if self.push.iter().all(|f| *f == 0.0) {
+            return vec![0.0; m];
+        }
+        let k = self.push.len();
+        let (mut pose, mut vel) = (vec![0.0; k], vec![0.0; k]);
+        self.inner.contact_state(&state[..self.n()], &mut pose, &mut vel);
+        let on = |d: &Dof| {
+            let mut unit = [0.0; 6];
+            unit[d.index] = 1.0;
+            self.tool_shift(&pose, &unit).iter().zip(&self.push).map(|(s, f)| s * f).sum()
+        };
+        self.dofs.iter().map(on).collect()
+    }
+
     /// The base's deflection at rest under the machine at state `s` (its own).
     fn rest(&self, s: &[f64]) -> Vec<f64> {
         let load = self.load(s, &vec![0.0; s.len()]);
@@ -497,9 +515,7 @@ impl Machine for Based {
         self.inner.derivatives(&state[..n], torque, &mut out[..n]);
         let load = self.load(&state[..n], &out[..n]);
         let m = self.dofs.len();
-        // An obstacle's push on what the base's move shifts: its virtual power per unit of each of the base's rates.
-        let pushed =
-            sim_core::tool_force_on_rates(self, state, &self.push, n + m..n + 2 * m).unwrap_or_else(|| vec![0.0; m]);
+        let pushed = self.pushed(state);
         let Some(r) = &self.reaction else {
             for (k, d) in self.dofs.iter().enumerate() {
                 let (x, v) = (state[n + k], state[n + m + k]);
@@ -639,12 +655,18 @@ impl Machine for Based {
         self.inner.contact_axes()
     }
     /// The machine's, moved with the base as the tool is (`tool_shift`).
+    /// One-way (without effects.base_reaction) the base is outside the energy budget: neither its energy nor its
+    /// damping is booked (`effect_signals`, `loss_powers`), since the machine does not feel it and nothing in the budget
+    /// drives it. So there the rates leave the base's out, and the crash row books the push's work on the machine alone;
+    /// its work on the base goes where the base's other loads' does (`pushed`). Two-way they are the tool's, base and all.
     fn contact_state(&self, state: &[f64], pos: &mut [f64], vel: &mut [f64]) {
         self.inner.contact_state(&state[..self.n()], pos, vel);
+        if self.reaction.is_some() {
+            let rate = self.tool_shift(pos, &self.full(state, true));
+            vel.iter_mut().zip(rate).for_each(|(v, d)| *v += d);
+        }
         let shift = self.tool_shift(pos, &self.full(state, false));
-        let rate = self.tool_shift(pos, &self.full(state, true));
         pos.iter_mut().zip(shift).for_each(|(p, d)| *p += d);
-        vel.iter_mut().zip(rate).for_each(|(v, d)| *v += d);
     }
     /// The machine's parts placed at `at` less the base's move, the base where it is.
     fn contact_placed(&self, state: &[f64], at: &[f64], out: &mut Vec<f64>) {

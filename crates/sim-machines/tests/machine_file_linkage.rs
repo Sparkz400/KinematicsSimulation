@@ -680,6 +680,39 @@ fn push_into_slab(
     (force, depth, crash, budget.unaccounted(), budget.supply)
 }
 
+/// The planar delta file on its compliant base (effects.base_compliance, two-way): the push on the plate reaches the base
+/// once, through the tool's shift (`base::Based`), not also through the machine's outside force
+/// (`FrameMomentum::external`), where it pushed the base a second time. The plate lowered onto a slab 0.02 m under it as
+/// in `push_into_slab`: at rest the base stands F / k_z back along z (k_z = 1.9e7 N/m), within 5 %.
+#[test]
+fn on_its_compliant_base_the_planar_delta_file_holds_the_push_once() {
+    let changes = ["effects.base_compliance = true", "effects.base_reaction = true"];
+    let slab = |centre: f64| {
+        let mut cfg = file().config();
+        cfg.set_text(&format!(
+            "obstacles = [{{ name = \"slab\", centre_m = [0.0, 0.0, {centre}], size_m = [4.0, 4.0, 1.0] }}]"
+        ))
+        .unwrap();
+        cfg.set_text("effects.crash = true").unwrap();
+        changes.iter().for_each(|c| cfg.set_text(c).unwrap());
+        cfg
+    };
+    let mut probe = Sim::new(file(), &slab(-2.0)).unwrap();
+    probe.step();
+    let mut sim = Sim::new(file(), &slab(-2.0 + (probe.clearance - 0.02))).unwrap();
+    let (mut pos, mut vel) = (vec![0.0; sim.machine.axes().len()], vec![0.0; sim.machine.axes().len()]);
+    sim.machine.tool_state(&sim.state, &mut pos, &mut vel);
+    let z = pos.len() - 1;
+    pos[z] -= 0.04;
+    sim.command(Command::MoveTo(pos)).unwrap();
+    sim.run(1.5, |_| {});
+    // The base's directions x, y, z: deflections, then rates, end the state.
+    let (force, base) = (sim.contact_force, sim.state[sim.state.len() - 4]);
+    println!("{force} N, base along z {base} m against F / k_z {} m", force / 1.9e7);
+    assert!(force > 100.0, "{force} N");
+    assert!((base.abs() - force / 1.9e7).abs() < 0.05 * force / 1.9e7, "base {base} m, F / k_z {}", force / 1.9e7);
+}
+
 /// The linkage, delta and scissor files take an obstacle's push at their tool (`set_tool_force`): its generalised
 /// forces through their kinematics' Jacobian, J^T F on the arms (P^T F on the elbows beyond the tubes where the D3's
 /// arms bend; h' F on the scissor's arm angle), and their power is F times the tool's speed, which the crash row takes.
