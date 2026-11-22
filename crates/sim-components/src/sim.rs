@@ -58,6 +58,9 @@ const PUSH_RANGE: f64 = 0.01;
 /// 5e-6 and 1.9e-5 four times finer (`sim-machines`' collision tests).
 const PUSH_SUBSTEPS: u32 = 4;
 
+/// The most parts a base step's sub-steps are cut into for the machine (`Machine::substeps_wanted`): a bound on what a
+/// step can cost.
+const MOST_CUTS: u32 = 256;
 /// The step in a motor's angle (or a linear motor's position) by which the slope of a clearance is worked out, by
 /// central differences.
 const SLOPE_STEP: f64 = 1e-6;
@@ -207,6 +210,10 @@ pub struct Sim {
     tool_push: bool,
     /// The work the pushes have taken since the first contact, J.
     absorbed: f64,
+    /// How many parts each sub-step of the step under way is cut into (`Machine::substeps_wanted`, at most `MOST_CUTS`).
+    cuts: u32,
+    /// How many base steps were cut finer for the machine (`cuts` above 1) since the start.
+    pub refined_steps: u64,
 }
 
 /// The first contact of a run with an obstacle: when (the end of the base step that found it, s), at which tool pose,
@@ -381,8 +388,9 @@ impl Sim {
     pub fn new(entry: &MachineEntry, cfg: &Config) -> Result<Self, ConfigError> {
         // Parts the config names bring their catalogue values; the caller's config keeps the names.
         let cfg = &crate::catalog::resolve(entry, cfg)?;
-        let machine = (entry.build)(cfg)?;
+        let mut machine = (entry.build)(cfg)?;
         let (dt, substeps) = timing(cfg)?;
+        machine.set_substep(dt / substeps as f64);
         let start = start_pose(cfg, machine.as_ref())?;
         let mut state = Vec::new();
         let mut torque = vec![0.0; machine.motors().len()];
@@ -427,6 +435,8 @@ impl Sim {
             push_from: Vec::new(),
             tool_push: false,
             absorbed: 0.0,
+            cuts: 1,
+            refined_steps: 0,
         })
     }
 
@@ -436,6 +446,7 @@ impl Sim {
         let cfg = &crate::catalog::resolve(entry, cfg)?;
         let mut machine = (entry.build)(cfg)?;
         let (dt, substeps) = timing(cfg)?;
+        machine.set_substep(dt / substeps as f64);
         if dt != self.dt {
             // The step counter is the clock; a new base step would make time jump.
             return Err(ConfigError::Invalid("sim.dt_s".into()));
@@ -664,6 +675,8 @@ impl Sim {
             vel.iter().map(|v| v * v).sum::<f64>().sqrt()
         });
         self.pushes();
+        self.cuts = self.machine.substeps_wanted(&self.state, &self.torque).clamp(1, MOST_CUTS);
+        self.refined_steps += u64::from(self.cuts > 1);
         if self.control.enabled() {
             self.advance_with_windings();
         } else {
@@ -675,7 +688,8 @@ impl Sim {
                 angle.clone()
             });
             if self.pushes.is_empty() {
-                advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, self.substeps);
+                let substeps = self.substeps * self.cuts;
+                advance(self.machine.as_ref(), &mut self.rk, &mut self.state, &self.torque, self.dt, substeps);
             } else {
                 self.advance_pushed();
             }
@@ -869,6 +883,7 @@ impl Sim {
             pushes,
             push_from,
             tool_push,
+            cuts,
             tool_buffers,
             motor_buffers: [angle, speed, stage, push],
             dt,
@@ -880,7 +895,8 @@ impl Sim {
         joint.clear();
         joint.extend_from_slice(state);
         joint.resize(n + WINDING_STATES * torque.len() + 1, 0.0);
-        let substeps = if *tool_push { *substeps * PUSH_SUBSTEPS } else { *substeps };
+        let finer = if *tool_push { PUSH_SUBSTEPS } else { 1 };
+        let substeps = *substeps * finer.max(*cuts);
         let h = *dt / substeps as f64;
         let [pos, vel, force] = tool_buffers;
         for _ in 0..substeps {
@@ -934,6 +950,7 @@ impl Sim {
             pushes,
             push_from,
             tool_push,
+            cuts,
             tool_buffers: [pos, vel, force],
             ..
         } = self;
@@ -946,7 +963,8 @@ impl Sim {
         }
         // The work the obstacles' pushes take out of the machine over the step (`pushed`).
         joint.push(0.0);
-        let substeps = if *tool_push { *substeps * PUSH_SUBSTEPS } else { *substeps };
+        let finer = if *tool_push { PUSH_SUBSTEPS } else { 1 };
+        let substeps = *substeps * finer.max(*cuts);
         let h = *dt / substeps as f64;
         for _ in 0..substeps {
             rk_joint.step(
