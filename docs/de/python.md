@@ -14,7 +14,12 @@ einen MCP-Server für LLM-Clients ([MCP-Server](../mcp.md), englisch).
 
 ## Installieren
 
-Das Modul liegt nicht auf PyPI. Das Wheel wird aus dem Repository gebaut und installiert:
+```bash
+pip install kinematics-sim
+```
+
+Auf PyPI liegen die Wheels jeder Release für Windows, Linux (x86-64) und macOS (Apple Silicon). Für den Stand des
+Repositorys wird das Wheel dort gebaut und installiert:
 
 ```bash
 pip install maturin==1.16.0

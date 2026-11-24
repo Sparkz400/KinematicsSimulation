@@ -104,8 +104,9 @@ No dates. What to verify before the release is in [TODO.md](docs/development/TOD
 
 ## Release
 
-- The Python package `kinematics-sim` is prepared for PyPI (metadata, trusted-publishing workflow) but not published.
+- The Python package `kinematics-sim` is on PyPI as 1.0.0 (16 November 2026). 1.1.0, which brings the MCP server
+  (`kinematics-sim[mcp]`), is not tagged and not published.
 - The Linux .deb and the MSI were built and inspected but never installed; signing them; packages for Linux
   distributions other than Debian and Ubuntu.
-- The GitHub workflows restructured since the 1.0.0 cut (CI as partitions, fuzzing, docs site, Python publishing)
-  have not run on GitHub yet.
+- The GitHub workflows restructured since the 1.0.0 cut have run on GitHub (CI as partitions, fuzzing, docs site);
+  the release and the Python publishing workflows ran for v1.0.0 only.

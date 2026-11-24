@@ -14,7 +14,12 @@ an MCP server for LLM clients: [MCP server and coding agents](mcp.md).
 
 ## Install
 
-The module is not on PyPI. Build the wheel from the repository and install it:
+```bash
+pip install kinematics-sim
+```
+
+PyPI has the wheels of each release for Windows, Linux (x86-64) and macOS (Apple silicon). For the state of the
+repository, build the wheel there and install it:
 
 ```bash
 pip install maturin==1.16.0
