@@ -11,6 +11,12 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+/// Whether a command that judges ran through: exit code 0 (all rows pass) or 1 (a row says FAIL), where 2 is a usage or
+/// config error. For runs whose rows are read afterwards, so that a failing check is not what stops the test.
+fn completed(out: &Output) -> bool {
+    matches!(out.status.code(), Some(0 | 1))
+}
+
 /// `check` on every machine, each on a thread of its own named after the machine (a failure says "thread 'scara'
 /// panicked"): the tests that ran the command line on one machine after the other took half a minute alone.
 fn on_every_machine(check: impl Fn(&'static sim_core::MachineEntry) + Sync) {
@@ -85,6 +91,26 @@ fn fewest_bounds() -> &'static sim_core::MachineEntry {
         .filter(|e| (e.build)(&e.config()).unwrap().motors().len() == 1)
         .min_by_key(|e| sim_components::analysis::bounds(&e.config()).unwrap().len())
         .unwrap()
+}
+
+/// A command that judges exits 0 when every row passes, 1 when a row says FAIL (the table is printed in full either way)
+/// and 2 for a usage or config error. With a position gain of 20000 1/s the loop diverges: the rows are not finite, and
+/// the error stream says what that means and where to measure the loops; with the default config it says nothing.
+#[test]
+fn a_failing_verdict_exits_with_1_and_a_diverged_result_is_named() {
+    let entry = MACHINES[1];
+    let key = "drive.kv_1_s";
+    assert!(entry.config().get(key).is_ok(), "the list's second machine has a position gain");
+    let fine = cli(&["verdicts", entry.id]);
+    assert_eq!(fine.status.code(), Some(0), "{}", text(&fine.stderr));
+    assert!(!text(&fine.stderr).contains("not finite"), "{}", text(&fine.stderr));
+    let diverged = cli(&["verdicts", entry.id, "--set", &format!("{key}=20000")]);
+    assert_eq!(diverged.status.code(), Some(1), "{}", text(&diverged.stderr));
+    assert!(text(&diverged.stdout).contains(",FAIL"), "the table is printed in full");
+    assert!(text(&diverged.stderr).contains("not finite") && text(&diverged.stderr).contains("margins"));
+    let german = cli(&["verdicts", entry.id, "--set", &format!("{key}=20000"), "--lang", "de"]);
+    assert!(text(&german.stderr).contains("nicht endlich"), "{}", text(&german.stderr));
+    assert_eq!(cli(&["verdicts", entry.id, "--no-such-option"]).status.code(), Some(2));
 }
 
 /// The machine of one axis on a belt, found by its config: the tests name no machine.
@@ -450,7 +476,8 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
                 &sets.iter().flat_map(|s| ["--set", s.as_str()]).collect::<Vec<_>>(),
             ]
             .concat());
-            assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
+            // Unstable gains on purpose: the rows say FAIL and the exit code is 1.
+            assert!(completed(&out), "{}: {}", entry.id, text(&out.stderr));
             let unstable = text(&out.stdout);
             assert!(unstable.lines().count() > 1, "{}: {unstable}", entry.id);
             unstable
@@ -653,7 +680,7 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
     let fewest = fewest_bounds();
     on_every_machine(|entry| {
         let run = cli(&["verdicts", entry.id]);
-        assert!(run.status.success(), "{}", text(&run.stderr));
+        assert!(completed(&run), "{}", text(&run.stderr));
         let out = text(&run.stdout);
         let mut lines = out.lines();
         assert_eq!(lines.next().unwrap(), "check,motor,value,limit,result");
@@ -717,11 +744,11 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         // printed, nothing thermal. So their checks and values are those of the cycle from cold.
         let cold = ["--set", "effects.thermal_warm_start=false"];
         let run = cli(&[&["verdicts", entry.id][..], &cold].concat());
-        assert!(run.status.success(), "{}", text(&run.stderr));
+        assert!(completed(&run), "{}", text(&run.stderr));
         let out = text(&run.stdout);
         let rows: Vec<Vec<&str>> = out.lines().skip(1).map(|l| l.split(',').collect()).collect();
         let run = cli(&[&["verdicts", entry.id, "--bands"][..], &cold].concat());
-        assert!(run.status.success(), "{}", text(&run.stderr));
+        assert!(completed(&run), "{}", text(&run.stderr));
         let out = text(&run.stdout);
         assert_eq!(out.lines().next().unwrap(), "check,motor,value,limit,result,low,high,worst_case");
         let banded: Vec<Vec<&str>> = out.lines().skip(1).map(|l| l.split(',').collect()).collect();
@@ -743,7 +770,7 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         // With samples: all bounded values between their bounds at once, and the share of the runs that pass.
         let sampled = |seed: &str| {
             let run = cli(&[&["verdicts", entry.id, "--bands", "--samples", "6", "--seed", seed][..], &cold].concat());
-            assert!(run.status.success(), "{}", text(&run.stderr));
+            assert!(completed(&run), "{}", text(&run.stderr));
             text(&run.stdout)
         };
         let out = sampled("1");
@@ -789,7 +816,7 @@ fn verdicts_search_the_worst_corner_of_the_bounds() {
     // cycles once more.
     let cold = ["--set", "effects.thermal_warm_start=false"];
     let run = cli(&[&["verdicts", entry.id, "--bands", "--worst"][..], &cold].concat());
-    assert!(run.status.success(), "{}", text(&run.stderr));
+    assert!(completed(&run), "{}", text(&run.stderr));
     let (out, mut cfg) = (text(&run.stdout), entry.config());
     cfg.set_text("effects.thermal_warm_start = false").unwrap();
     let bounded = bounds(&cfg).unwrap();
@@ -1021,7 +1048,7 @@ fn parts_are_named_on_the_command_line() {
         let geared = has_gearbox_ratings(&entry.config());
         let ratio = |extra: &[&str]| -> f64 {
             let out = cli(&[&["verdicts", entry.id], extra].concat());
-            assert!(out.status.success(), "{}", text(&out.stderr));
+            assert!(completed(&out), "{}", text(&out.stderr));
             let table = text(&out.stdout);
             // The torque at the gearbox output over the use of the motor's curve: another motor or ratio changes it.
             // Of the first motor the named parts reach: one with parts of its own (`[parts.<id>]`, the arm on a
@@ -1149,7 +1176,8 @@ fn a_run_can_stop_the_machine_and_stop_finds_the_worst_moment() {
     std::fs::write(&file, rated).unwrap();
     let out = cli(&["stop", entry.id, "--category", "1", "--points", "4", "--config", file.to_str().unwrap()]);
     std::fs::remove_file(&file).unwrap();
-    assert!(out.status.success(), "{}", text(&out.stderr));
+    // The stopping distance fails its rating (said below): the table is whole and the exit code is 1.
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
     let lines: Vec<Vec<String>> =
         text(&out.stdout).lines().skip(1).map(|l| l.split(',').map(String::from).collect()).collect();
     let (worst, all) = lines.split_last().unwrap();
@@ -1919,7 +1947,7 @@ fn report_lists_every_verdict_and_the_source_of_each_input() {
     on_every_machine(|entry| {
         let html = dir.join(format!("{}-report.html", entry.id));
         let out = cli(&["report", entry.id, "--out", html.to_str().unwrap()]);
-        assert!(out.status.success(), "{}", text(&out.stderr));
+        assert!(completed(&out), "{}", text(&out.stderr));
         let html = std::fs::read_to_string(html).unwrap();
         let verdicts = cli(&["verdicts", entry.id]);
         let rows: Vec<Vec<String>> =
@@ -1946,7 +1974,7 @@ fn report_lists_every_verdict_and_the_source_of_each_input() {
     // A PDF, in German, with a value set on top.
     let (id, pdf) = (MACHINES[0].id, dir.join("report.pdf"));
     let out = cli(&["report", id, "--set", "mass.payload_kg=2.5", "--lang", "de", "--out", pdf.to_str().unwrap()]);
-    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(completed(&out), "{}", text(&out.stderr));
     let pdf = std::fs::read(pdf).unwrap();
     assert!(pdf.starts_with(b"%PDF-1.4") && pdf.ends_with(b"%%EOF\n"));
     assert!(pdf.windows(b"(Freigabe)".len()).any(|w| w == b"(Freigabe)"), "German headings in the PDF");

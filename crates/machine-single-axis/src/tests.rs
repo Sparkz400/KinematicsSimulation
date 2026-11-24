@@ -1172,7 +1172,7 @@ fn the_optimiser_shortens_the_cycle_within_the_verdicts() {
     let mut strict = cfg.clone();
     strict.set_text("ratings.settling_tolerance_m = 1.0e-9").unwrap();
     let refused = optimise_cycle(&ENTRY, &strict, 14).unwrap_err();
-    assert_eq!(refused.detail(), "the cycle as configured fails settling", "{refused:?}");
+    assert_eq!((refused.key(), refused.detail()), ("error-cycle-fails-already", "settling"), "{refused:?}");
 }
 
 /// The robust optimiser steps back to the fastest setting that passes in the error bands. With one bound, the payload

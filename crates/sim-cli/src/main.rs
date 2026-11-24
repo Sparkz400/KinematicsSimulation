@@ -15,6 +15,7 @@ use sim_components::{Command, Sim};
 use sim_core::{Config, ConfigError, MachineEntry, Translations};
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 mod report;
 
@@ -139,6 +140,28 @@ fn main() {
     if let Err(Failure(key, arg)) = dispatch(&args, &tr) {
         eprintln!("{}", tr.tr_arg(key, &arg));
         std::process::exit(2);
+    }
+    // The table is printed in full first; the exit code then says that a check failed (2 stays for usage and config).
+    if CHECK_FAILED.load(Ordering::Relaxed) {
+        std::process::exit(1);
+    }
+}
+
+/// Set by `judged` when a command that judges printed a failing row.
+static CHECK_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// The result word of a judged row; a failing one makes the exit code 1.
+fn judged(ok: bool) -> &'static str {
+    if !ok {
+        CHECK_FAILED.store(true, Ordering::Relaxed);
+    }
+    if ok { "ok" } else { "FAIL" }
+}
+
+/// On the error stream, after a table of verdicts: that a result of it is not finite, and what to run to see the loop.
+fn tell_not_finite<'a>(tr: &Translations, verdicts: impl IntoIterator<Item = &'a sim_components::analysis::Verdict>) {
+    if sim_components::analysis::any_not_finite(verdicts) {
+        eprintln!("{}", tr.tr("verdict-not-finite"));
     }
 }
 
@@ -1303,7 +1326,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
                     .collect::<Vec<_>>()
                     .join(";")
             };
-            let result = if v.ok { "ok" } else { "FAIL" };
+            let result = judged(v.ok);
             writeln!(
                 out,
                 "{},{},{},{},{result},{},{}",
@@ -1316,6 +1339,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
             )
             .map_err(io)?;
         }
+        tell_not_finite(tr, worst.iter().map(|w| &w.verdict));
         return out.flush().map_err(io);
     }
     // Whole numbers: at least one sample, and any seed from 0 on.
@@ -1340,7 +1364,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
     };
     let row = |check: &str| bands.iter().find(|b| b.verdict.check == check).map(|b| b.verdict.value);
     tell_start(tr, row("thermal-warm-start"), row("thermal-cycle-repeat"));
-    let result = |ok: bool| if ok { "ok" } else { "FAIL" };
+    let result = judged;
     let mut out = output(args, "--out")?;
     let share = if samples.is_some() { ",pass_share" } else { "" };
     writeln!(
@@ -1368,6 +1392,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
         )
         .map_err(io)?;
     }
+    tell_not_finite(tr, bands.iter().map(|b| &b.verdict));
     out.flush().map_err(io)
 }
 
@@ -1767,7 +1792,7 @@ fn margins(args: &Args, tr: &Translations) -> Result<(), Failure> {
         .map_err(io)?;
     for (run, margins) in &runs {
         for (motor, m) in motors.iter().zip(margins) {
-            let result = if m.stable() { "ok" } else { "FAIL" };
+            let result = judged(m.stable());
             if let Some(h) = m.hammering {
                 let at = format!("{:.0} Hz, {:.2} N m", h.frequency_hz, h.torque_nm);
                 let run = if run.is_empty() { String::new() } else { format!("{run}, ") };
@@ -2006,10 +2031,11 @@ fn stop(args: &Args, tr: &Translations) -> Result<(), Failure> {
         eprintln!("{}", tr.tr_arg("cli-stop-worst", &format!("{:.4} s ({})", worst.at, moment(worst.moment))));
     }
     for v in &study.verdicts {
-        let result = if v.ok { "ok" } else { "FAIL" };
+        let result = judged(v.ok);
         let detail = format!("{}: {} / {} {result}", v.check, significant(v.value), significant(v.limit));
         eprintln!("{}", tr.tr_arg("cli-stop-verdict", &detail));
     }
+    tell_not_finite(tr, &study.verdicts);
     out.flush().map_err(io)
 }
 
@@ -2069,10 +2095,11 @@ fn accuracy(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let detail = format!("AP {:.3e}, RP {:.3e}, vAP {:.3e}", t.accuracy, t.repeatability, t.direction_variation);
     eprintln!("{}", tr.tr_arg("cli-accuracy-tool", &detail));
     for v in &study.verdicts {
-        let result = if v.ok { "ok" } else { "FAIL" };
+        let result = judged(v.ok);
         let detail = format!("{}: {} / {} {result}", v.check, significant(v.value), significant(v.limit));
         eprintln!("{}", tr.tr_arg("cli-accuracy-verdict", &detail));
     }
+    tell_not_finite(tr, &study.verdicts);
     out.flush().map_err(io)
 }
 
@@ -2136,7 +2163,7 @@ fn report(args: &Args, tr: &Translations) -> Result<(), Failure> {
         report.html(args.option("--lang").unwrap_or("en")).into_bytes()
     };
     std::fs::write(path, bytes).map_err(|e| Failure("cli-error-io", format!("{path}: {e}")))?;
-    eprintln!("{}", tr.tr_arg(if report.passed { "cli-report-pass" } else { "cli-report-fail" }, path));
+    eprintln!("{}", tr.tr_arg(if judged(report.passed) == "ok" { "cli-report-pass" } else { "cli-report-fail" }, path));
     Ok(())
 }
 
