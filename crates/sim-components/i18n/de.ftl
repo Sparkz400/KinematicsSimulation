@@ -802,5 +802,5 @@ param-max_acceleration_rad_s2 = Größte Beschleunigung [rad/s²]
 param-max_jerk_rad_s3 = Größter Ruck [rad/s³]
 loop-hammers = hämmert über das Getriebespiel bei { $arg } (Frequenz, Spitze des Moments, das der Drehzahlregler fordert)
 loop-least-over-poses = kleinste über die Posen, an denen der Zyklus hält: { $arg } (Phasenreserve, Amplitudenreserve, dann die Reserve über das Getriebespiel, jede an ihrer Pose)
-verdict-not-finite = Ein Ergebnis ist nicht endlich (NaN oder unendlich). Das ergibt eine instabile oder auseinanderlaufende Regelung; `sim-cli margins MASCHINE` misst die Regelkreise und zeigt, welcher es ist.
+verdict-not-finite = Ein Ergebnis ist nicht endlich (NaN oder unendlich). Das ergibt eine instabile oder auseinanderlaufende Regelung, ebenso eine Wicklung, die ohne Ende heißer wird (ein viel zu schwacher Motor, thermisches Durchgehen); `sim-cli margins MASCHINE` misst die Regelkreise und zeigt, welcher instabil ist.
 error-cycle-fails-already = Der Zyklus schlägt in der gegebenen Konfiguration schon fehl: { $arg }
