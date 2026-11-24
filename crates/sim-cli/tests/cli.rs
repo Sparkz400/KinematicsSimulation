@@ -2104,12 +2104,36 @@ fn the_mode_shapes_and_the_workspace_map_are_written_as_csv() {
     assert_eq!(cli(&["workspace", flat.id]).status.code(), Some(2));
 }
 
-/// `--help` and `-h` print the usage on the output stream and succeed; they were refused as unknown options.
+/// `--help`, `-h` and `help` print the overview on the output stream and succeed: one command to a line, none of the
+/// lines wider than 100 columns (the usage was one line of 4.3 kB). `help COMMAND` and `COMMAND --help` print the part
+/// of that command alone; a usage error names that help in a line or two instead of printing everything.
 #[test]
-fn help_prints_the_usage() {
+fn help_prints_the_commands_one_to_a_line_and_the_options_of_one() {
+    let overview = text(&cli(&["help"]).stdout);
+    assert!(overview.lines().count() > 25 && overview.lines().all(|l| l.chars().count() <= 100), "{overview}");
+    assert!(overview.lines().any(|l| l.trim_start().starts_with("verdicts ")), "{overview}");
     for flag in ["--help", "-h"] {
         let out = cli(&[flag]);
-        assert!(out.status.success(), "{flag}");
-        assert!(text(&out.stdout).starts_with("Usage: sim-cli list"), "{flag}");
+        assert_eq!(out.status.code(), Some(0), "{flag}");
+        assert_eq!(text(&out.stdout), overview, "{flag}");
     }
+    let run = cli(&["help", "run"]);
+    assert_eq!(run.status.code(), Some(0));
+    let run = text(&run.stdout);
+    assert!(run.starts_with("sim-cli run MACHINE") && run.contains("--stop-category") && !run.contains("--bands"));
+    assert_eq!(text(&cli(&["run", "--help"]).stdout), run);
+    assert!(text(&cli(&["help", "verdicts", "--lang", "de"]).stdout).contains("Beurteilt"));
+    for topic in ["options", "paths", "units"] {
+        assert_eq!(cli(&["help", topic]).status.code(), Some(0), "{topic}");
+    }
+    // The errors: one line naming the command's help, or for an unknown word the way to the commands.
+    let wrong = cli(&["run"]);
+    assert_eq!(wrong.status.code(), Some(2));
+    let said = text(&wrong.stderr);
+    assert!(said.lines().count() == 1 && said.contains("sim-cli help run"), "{said}");
+    let unknown = cli(&["nonsense"]);
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(text(&unknown.stderr).contains("nonsense") && text(&unknown.stderr).lines().count() == 1);
+    assert_eq!(cli(&["help", "nonsense"]).status.code(), Some(2));
+    assert_eq!(cli(&[]).status.code(), Some(2));
 }

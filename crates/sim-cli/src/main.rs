@@ -1,5 +1,5 @@
 //! Batch front end: runs the core as fast as the CPU allows and writes CSV.
-//! Every message comes from the translation files; see `cli-usage` there for the commands.
+//! Every message comes from the translation files; see `cli-help-*` there for the commands.
 
 use sim_components::analysis::{
     SWEEP_POINTS, analyse_cycle_with, analyse_trajectory_with, bandwidth, closed_loop_response,
@@ -17,6 +17,7 @@ use sim_machines::{LANGUAGES, MACHINES, find, translations};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod help;
 mod report;
 
 static I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("de", include_str!("../i18n/de.ftl"))];
@@ -61,8 +62,8 @@ const COMMON: [&str; 12] = [
     "--lang",
 ];
 /// Options without a value.
-const FLAGS: [&str; 8] =
-    ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal", "--stiffness", "--shapes"];
+const FLAGS: [&str; 9] =
+    ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal", "--stiffness", "--shapes", "--help"];
 /// The ways to say what the machine should do: one at most.
 const MOTIONS: [&str; 4] = ["--cycle", "--move", "--trajectory", "--path"];
 
@@ -133,16 +134,34 @@ fn main() {
         println!("sim-cli {}", env!("CARGO_PKG_VERSION"));
         return;
     }
-    if args.flag("--help") || args.flag("-h") {
-        let tr = texts(args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en"), MACHINES[0]);
-        println!("{}", tr.tr("cli-usage"));
+    let lang = args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en");
+    // `help [TOPIC]`, `COMMAND --help` and `--help`: the help of the command, or the overview, on standard output.
+    let command = args.positional(0).filter(|word| !word.starts_with('-'));
+    if command == Some("help") || args.flag("--help") || args.flag("-h") {
+        let tr = texts(lang, MACHINES[0]);
+        let topic = if command == Some("help") { args.positional(1) } else { command };
+        match help::text(&tr, topic) {
+            Some(text) => println!("{text}"),
+            None => {
+                eprintln!("{}", tr.tr_arg("cli-usage-unknown", topic.unwrap_or_default()));
+                std::process::exit(2);
+            }
+        }
         return;
     }
-    let lang = args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en");
     let entry = machine(&args).unwrap_or(MACHINES[0]);
     let tr = texts(lang, entry);
     if let Err(Failure(key, arg)) = dispatch(&args, &tr) {
-        eprintln!("{}{}", tr.tr_arg(key, &arg), config_help(&args, &tr, key, &arg));
+        if key == "cli-usage" {
+            // Not everything: the help of the command that was meant, or with no command the overview.
+            match command {
+                Some(name) if help::COMMANDS.contains(&name) => eprintln!("{}", tr.tr_arg("cli-usage-hint", name)),
+                Some(name) => eprintln!("{}", tr.tr_arg("cli-usage-unknown", name)),
+                None => eprintln!("{}", help::text(&tr, None).unwrap_or_default()),
+            }
+        } else {
+            eprintln!("{}{}", tr.tr_arg(key, &arg), config_help(&args, &tr, key, &arg));
+        }
         std::process::exit(2);
     }
     // The table is printed in full first; the exit code then says that a check failed (2 stays for usage and config).
@@ -195,8 +214,9 @@ fn tell_not_finite<'a>(tr: &Translations, verdicts: impl IntoIterator<Item = &'a
     }
 }
 
-fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
-    let known: &[&str] = match args.positional(0) {
+/// The options of a command beside the common ones.
+fn command_options(command: Option<&str>) -> &'static [&'static str] {
+    match command {
         Some("run") => &[
             "--move",
             "--cycle",
@@ -264,8 +284,11 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("fmu") => &["--binary", "--fmi"],
         Some("report") => &["--bands"],
         _ => &[],
-    };
-    args.check(known)?;
+    }
+}
+
+fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    args.check(command_options(args.positional(0)))?;
     if let Some(dir) = args.option("--catalog") {
         sim_components::catalog::use_directory(std::path::Path::new(dir))?;
     }

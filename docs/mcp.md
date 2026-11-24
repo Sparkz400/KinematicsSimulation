@@ -179,8 +179,11 @@ An agent with a shell (Claude Code, Cursor, Codex) can run `sim-cli` from a [rel
   `inf` or `nan` comes with a note on the error stream: the loop is unstable, `sim-cli margins MACHINE` measures it.
 - **Values:** `--set path=value` (repeatable, dotted path as in the [config reference](config-reference.md), a misspelt
   key is refused), `--config FILE` for a whole config, `--motor ARTICLE`, `--gearbox`, `--drive` for catalogue parts.
-- **Help:** `sim-cli help` (or `sim-cli` alone) prints the usage of every command in one paragraph and exits 2; there is
-  no `--help` and no help per command: the [user guide](user-guide.md) has the details.
+- **Help:** `sim-cli help` (or `--help`) lists the commands, one to a line; `sim-cli help COMMAND` (or
+  `sim-cli COMMAND --help`) prints the options of that command alone, `sim-cli help options` those every command takes,
+  `help paths` the path file formats and `help units` the units of the columns; all exit 0. A wrong call names the help
+  of its command in one line and exits 2. `sim-cli --version` prints the version. The [user guide](user-guide.md) has
+  the details.
 - **Keep the output small:** write long tables with `--out FILE` and read the head; pick columns with `cut -d, -f...`.
   `run` writes every signal (115 columns on the T-gantry) at every 16th base step: use `--every 160` or more, or
   `analyze` for the summary. Piping into `head` can end `sim-cli` with a "failed printing to stdout" panic once
