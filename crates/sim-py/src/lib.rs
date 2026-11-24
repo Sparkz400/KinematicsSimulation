@@ -1903,8 +1903,14 @@ impl PyJob {
     fn run(&self, py: Python<'_>, callable: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // PyO3 turns an unwind that reaches a `#[pyfunction]` into a `PanicException` and drops its payload, so the
         // `Cancelled` unwind of the core arrives here as one: with the cancel flag set, that is what it is. (A real
-        // panic at the same moment is reported as cancelled, too: the job was being stopped anyway.)
-        match sim_components::analysis::with_progress(&self.progress, || callable.call0()) {
+        // panic at the same moment is reported as cancelled, too: the job was being stopped anyway.) PyO3 resumes
+        // that panic as an unwind where it fetches the exception, inside `call0`: caught there.
+        let call = || match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callable.call0())) {
+            Ok(result) => result,
+            Err(_) if self.cancelled() => Err(Cancelled::new_err("cancelled")),
+            Err(payload) => std::panic::resume_unwind(payload),
+        };
+        match sim_components::analysis::with_progress(&self.progress, call) {
             Err(sim_components::analysis::Cancelled) => Err(Cancelled::new_err("cancelled")),
             Ok(Err(e)) if self.cancelled() && e.is_instance_of::<pyo3::panic::PanicException>(py) => {
                 Err(Cancelled::new_err("cancelled"))
