@@ -2,8 +2,10 @@
 //! in the 3D view are coloured by, the path's values, and the cycle run with its bounded values at their bounds, kept
 //! as traces. Nothing here draws.
 
+use sim_components::analysis::Progress;
 pub use sim_components::shapes::*;
 use sim_core::{Config, ConfigError, MachineEntry};
+use std::sync::atomic::Ordering::Relaxed;
 
 /// What the workspace map colours each place by.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -159,8 +161,8 @@ pub fn bound_configs(entry: &MachineEntry, config: &Config) -> Result<Vec<Config
 }
 
 /// The bounds runs of `config`'s cycle (`BandRuns`), each recorded as `analysis::record_cycle` records the cycle, on all
-/// processors.
-pub fn band_runs(entry: &MachineEntry, config: &Config) -> Result<BandRuns, ConfigError> {
+/// processors. `progress` counts the runs; a cancel ends the job (`check_cancelled`) between two rounds of them.
+pub fn band_runs(entry: &MachineEntry, config: &Config, progress: &Progress) -> Result<BandRuns, ConfigError> {
     use sim_components::analysis::record_cycle;
     let configs = bound_configs(entry, config)?;
     let machine = build(entry, config)?;
@@ -192,13 +194,16 @@ pub fn band_runs(entry: &MachineEntry, config: &Config) -> Result<BandRuns, Conf
         .collect();
     let mut points = vec![Vec::new(); motor_columns.len()];
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).max(1);
+    progress.total.store(configs.len(), Relaxed);
     for chunk in configs.chunks(threads) {
+        sim_components::analysis::check_cancelled();
         let recorded: Vec<Result<Vec<Vec<f64>>, ConfigError>> = std::thread::scope(|scope| {
             let runs: Vec<_> = chunk.iter().map(|cfg| scope.spawn(move || record_cycle(entry, cfg))).collect();
             runs.into_iter()
                 .map(|run| run.join().unwrap_or_else(|_| Err(ConfigError::Invalid("bounds".into()))))
                 .collect()
         });
+        progress.done.fetch_add(chunk.len(), Relaxed);
         for rows in recorded {
             let rows = rows?;
             for (trace, &i) in traces.iter_mut().zip(&traced) {
@@ -225,9 +230,8 @@ pub struct Insight {
     pub small_modes: Option<Vec<f64>>,
     pub picked: Option<usize>,
     pub band_runs: Option<(Config, BandRuns)>,
-    #[allow(clippy::type_complexity)] // the model's `Job` of what `band_runs` answers, with its config
-    pub(crate) band_job:
-        Option<std::sync::Mutex<std::sync::mpsc::Receiver<Result<(Config, BandRuns), (&'static str, String)>>>>,
+    /// The job that runs them, answering with the config they are of.
+    pub(crate) band_job: Option<crate::model::Job<(Config, BandRuns)>>,
 }
 
 /// The labels these views take from the model.

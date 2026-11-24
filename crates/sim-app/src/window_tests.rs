@@ -1096,6 +1096,30 @@ fn repeated_clicks_on_an_analysis_start_it_once() {
     assert!(!d.has(Role::Button, &label));
 }
 
+/// While an analysis runs the tools panel has a Cancel button where the spinner is (and a bar of its runs once it has
+/// counted some); a click on it ends the job with the message that it was cancelled, and the button to start is back.
+#[test]
+fn a_running_analysis_has_a_cancel_button_that_cancels_it() {
+    let mut d = Driver::new();
+    // A thousand sampled bands: far longer than the clicks take.
+    (d.state_mut().model.inputs.bands, d.state_mut().model.inputs.samples) = (true, 1000);
+    let (run, cancel) = (d.tr("ui-analysis-run-cycle"), d.tr("ui-job-cancel"));
+    d.click(Role::Button, &run);
+    d.wait("the analysis", |d| d.state().model.running(Analysis::Cycle));
+    let tools = d.regions()[TOOLS];
+    let button = d.find_where("the cancel button", |w| {
+        w.role == Role::Button && w.label == cancel && tools.contains_rect(w.rect)
+    });
+    d.click_at(Vec2::new(button.rect.center().x, button.rect.center().y));
+    d.wait("the analysis ended", |d| !d.state().model.running(Analysis::Cycle));
+    assert!(d.messages().contains(&"ui-job-cancelled"), "{:?}", d.messages());
+    assert!(d.state().model.cycle_report.is_none());
+    let tools = d.regions()[TOOLS];
+    d.find_where("the cycle's button again", |w| {
+        w.role == Role::Button && w.label == run && tools.contains_rect(w.rect)
+    });
+}
+
 #[test]
 fn switching_the_machine_during_an_analysis_leaves_no_stale_result() {
     let mut d = Driver::new();

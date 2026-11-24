@@ -5,11 +5,13 @@
 //! the drive's utilisation over time; the spectra of following error and torque with the machine's resonances; and the
 //! trace's residual (measured less simulated). No text for the user is written here.
 
-use crate::ui::{ACTUAL, Action, LIMIT, PALETTE, PLAN, chalk, dim, key_row, plot, save_menu, scale_bar, trail_color};
+use crate::ui::{
+    ACTUAL, Action, LIMIT, PALETTE, PLAN, chalk, dim, job_bar, key_row, plot, save_menu, scale_bar, trail_color,
+};
 use bevy_egui::egui::{self, Color32, ComboBox, RichText, Ui};
 use egui_plot::{Bar, BarChart, HLine, Heatmap, Line, LineStyle, MarkerShape, PlotPoint, Points, Polygon, VLine};
 use sim_app::insight::PathQuantity;
-use sim_app::model::{Inputs, Model, display_scale};
+use sim_app::model::{Inputs, JobRef, Model, display_scale};
 use sim_app::runs::{Run, plot_line, scaled_speeds};
 use sim_components::charts::{self, TorqueSpeed};
 
@@ -790,7 +792,7 @@ pub fn band_plots(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
             ui.colored_label(PLAN, tr("ui-analysis-outdated"));
         }
         if model.bands_tracing() {
-            ui.spinner();
+            job_bar(ui, model, JobRef::Bands, 110.0, actions);
         } else if ui.button(tr("ui-bands-run")).on_hover_text(tr("ui-bands-run-hint")).clicked() {
             actions.push(Action::TraceBands);
         }

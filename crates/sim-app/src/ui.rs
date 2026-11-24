@@ -10,7 +10,7 @@ use bevy_egui::egui::{
     TextWrapMode, Ui, vec2,
 };
 use egui_plot::{AxisHints, GridInput, GridMark, HLine, Line, LineStyle, Plot, Points, VLine, log_grid_spacer};
-use sim_app::model::{Analysis, Inputs, Model, SUPPLIES, Table, display_scale, heat_color, part_color, short};
+use sim_app::model::{Analysis, Inputs, JobRef, Model, SUPPLIES, Table, display_scale, heat_color, part_color, short};
 use sim_app::runs::{owner_slot, plot_line};
 use sim_components::Command;
 use sim_components::analysis::{AT_LEAST, Verdict, utilisation};
@@ -324,6 +324,8 @@ pub enum Action {
     /// What the search, path and trace fields hold after an edit.
     Inputs(Inputs),
     RunAnalysis(Analysis),
+    /// A background job is stopped.
+    Cancel(JobRef),
     ApplyOptimised,
     /// A row of the motor search goes into the config.
     UseCandidate(usize),
@@ -519,9 +521,7 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
         ui.separator();
 
         let checks = margins(model);
-        if model.running(Analysis::Cycle) {
-            ui.spinner();
-        }
+        job_bar(ui, model, JobRef::Analysis(Analysis::Cycle), 50.0, actions);
         if checks.is_empty() {
             if !model.running(Analysis::Cycle) && ui.button(tr("ui-analysis-run-cycle")).clicked() {
                 actions.push(Action::RunAnalysis(Analysis::Cycle));
@@ -1659,10 +1659,26 @@ fn heading(ui: &mut Ui, model: &Model, key: &str, kind: Analysis) {
     });
 }
 
-/// The button that starts a computation, or a spinner while it runs.
+/// What shows a background job under way: the spinner alone while it has not counted anything, then a bar of its runs
+/// done of planned `width` points wide (the figures on hover where it is narrow), and a button that cancels it.
+/// Nothing where the job is not running.
+pub(crate) fn job_bar(ui: &mut Ui, model: &Model, job: JobRef, width: f32, actions: &mut Vec<Action>) {
+    let Some((done, total)) = model.job_counts(job) else { return };
+    ui.spinner();
+    if total > 0 {
+        let text = format!("{done} / {total}");
+        let bar = egui::ProgressBar::new((done as f32 / total as f32).min(1.0)).desired_width(width);
+        ui.add(if width >= 100.0 { bar.text(text.clone()) } else { bar }).on_hover_text(text);
+    }
+    if ui.small_button(model.tr.tr("ui-job-cancel")).clicked() {
+        actions.push(Action::Cancel(job));
+    }
+}
+
+/// The button that starts a computation, or the job's progress while it runs.
 fn run_button(ui: &mut Ui, model: &Model, key: &str, kind: Analysis, actions: &mut Vec<Action>) {
     if model.running(kind) {
-        ui.spinner();
+        job_bar(ui, model, JobRef::Analysis(kind), 110.0, actions);
     } else if ui.button(model.tr.tr(key)).clicked() {
         actions.push(Action::RunAnalysis(kind));
     }
@@ -2162,6 +2178,7 @@ fn config(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Act
         if report.clicked() {
             actions.push(Action::ExportReport);
         }
+        job_bar(ui, model, JobRef::Report, 110.0, actions);
     });
     // Each name over its field: flowed in a row, a label wrapped to the end of the line before its field and read as
     // the name of the field before it.
@@ -2546,7 +2563,7 @@ fn tuning(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
                 }
             }
             if model.tuning_running() {
-                ui.spinner();
+                job_bar(ui, model, JobRef::Tuning, 110.0, actions);
             } else if ui.button(tr("ui-tuning-run")).clicked() {
                 actions.push(Action::RunTuning);
             }

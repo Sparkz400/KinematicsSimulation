@@ -5,7 +5,8 @@
 use crate::runs::{Channel, History, Quantity, Run, RunKind, RunStore, Units, plot_line};
 use crate::session::{Event, Request, Session, extend_trail};
 use sim_components::analysis::{
-    Band, Comparison, CycleLoad, MotorLoad, OptimiseOptions, Optimised, Sensitivity, Verdict, compare_effect,
+    Band, Cancelled, Comparison, CycleLoad, MotorLoad, OptimiseOptions, Optimised, Progress, Sensitivity, Verdict,
+    any_not_finite, compare_effect, with_progress,
 };
 use sim_components::analysis::{
     SWEEP_POINTS, StepResponse, SweepPoint, bandwidth, closed_loop_response, default_sweep_amplitude, frequency_sweep,
@@ -30,6 +31,7 @@ use sim_core::{
 };
 use sim_machines::{MACHINES, translations};
 use std::collections::VecDeque;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::sync::{Arc, Mutex};
 use toml::Value;
@@ -83,6 +85,16 @@ pub struct Tuning {
 
 /// How many places over the stroke the tuning help asks the machine for its modes.
 pub const MODE_POINTS: usize = 41;
+
+/// A background job the window shows progress for and can cancel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum JobRef {
+    Analysis(Analysis),
+    View(crate::search_views::ViewJob),
+    Tuning,
+    Report,
+    Bands,
+}
 
 /// What the analysis panel can compute. Each takes seconds, so each runs in a thread of its own.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -234,12 +246,60 @@ enum Report {
     Compare(String, Comparison),
 }
 
-type Job<T> = Mutex<Receiver<Result<T, Message>>>;
+/// A background computation: its thread runs as a job (`with_progress`), so the analyses count its runs in `progress`
+/// and stop at its `cancel`. Dropping a `Job` cancels it: its result has nowhere to go any more (the machine switched,
+/// a file opened, the window closed).
+pub(crate) struct Job<T> {
+    answer: Mutex<Receiver<Result<T, Message>>>,
+    pub(crate) progress: Arc<Progress>,
+}
+
+/// What a cancelled job says: not an error, the earlier results stay as they were.
+fn cancelled_message() -> Message {
+    ("ui-job-cancelled", String::new())
+}
+
+impl<T: Send + 'static> Job<T> {
+    /// Runs `work` in a thread of its own, given the job's progress for work that counts by itself.
+    pub(crate) fn spawn(work: impl FnOnce(&Progress) -> Result<T, Message> + Send + 'static) -> Self {
+        let (send, receive) = channel();
+        let progress = Arc::new(Progress::default());
+        let watch = progress.clone();
+        std::thread::spawn(move || {
+            let _ =
+                send.send(with_progress(&watch, || work(&watch)).unwrap_or_else(|Cancelled| Err(cancelled_message())));
+        });
+        Job { answer: Mutex::new(receive), progress }
+    }
+}
+
+impl<T> Job<T> {
+    /// Stops the job: its runs not yet started are not started, and what it answers is not taken in.
+    pub(crate) fn cancel(&self) {
+        self.progress.cancel.store(true, Relaxed);
+    }
+
+    /// A job over a channel somebody else answers on (a test's).
+    #[cfg(test)]
+    fn of(receiver: Receiver<Result<T, Message>>) -> Self {
+        Job { answer: Mutex::new(receiver), progress: Arc::default() }
+    }
+}
+
+impl<T> Drop for Job<T> {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
 
 /// What a background job has answered, if it has. A job whose thread is gone without an answer (it
-/// panicked) answers with a message, so that it does not leave a spinner turning for ever.
-fn answer<T>(job: &Job<T>) -> Option<Result<T, Message>> {
-    match job.lock().map(|job| job.try_recv()) {
+/// panicked) answers with a message, so that it does not leave a spinner turning for ever. A cancelled job answers
+/// at once, also where its thread cannot stop (a motor search) and goes on to its end: what it finds is dropped.
+pub(crate) fn answer<T>(job: &Job<T>) -> Option<Result<T, Message>> {
+    if job.progress.cancel.load(Relaxed) {
+        return Some(Err(cancelled_message()));
+    }
+    match job.answer.lock().map(|job| job.try_recv()) {
         Ok(Err(TryRecvError::Empty)) => None,
         Ok(Ok(answer)) => Some(answer),
         _ => Some(Err(("ui-job-ended", String::new()))),
@@ -1510,6 +1570,12 @@ impl Model {
             let note = match report {
                 Report::Cycle(load, verdicts, bands, samples, curve, worst, run) => {
                     self.runs.add(run);
+                    let banded = bands.iter().flatten().map(|b| &b.verdict);
+                    let unstable = any_not_finite(verdicts.iter().chain(banded));
+                    // Once per analysis: here, where the result comes in, not where it is drawn.
+                    if unstable {
+                        self.say(("verdict-not-finite", String::new()));
+                    }
                     let note = tripped(&load);
                     (self.cycle_report, self.bands, self.band_samples, self.worst) =
                         (Some((load, verdicts, curve)), bands, samples, worst);
@@ -1665,11 +1731,7 @@ impl Model {
 
     /// Runs `write` in a thread of its own; what it says comes with `poll`.
     fn write_in_background(&mut self, write: impl FnOnce() -> Result<Message, Message> + Send + 'static) {
-        let (result, job) = channel();
-        std::thread::spawn(move || {
-            let _ = result.send(write());
-        });
-        self.export_jobs.push(Mutex::new(job));
+        self.export_jobs.push(Job::spawn(move |_| write()));
     }
 
     /// CSV files still being written.
@@ -1725,11 +1787,7 @@ impl Model {
             Err(message) => return self.say(message),
         };
         let tr = self.tr.clone();
-        let (result, job) = channel();
-        std::thread::spawn(move || {
-            let _ = result.send(cycle_run(entry, &config, &tr));
-        });
-        self.run_jobs.push(Mutex::new(job));
+        self.run_jobs.push(Job::spawn(move |_| cycle_run(entry, &config, &tr)));
     }
 
     /// Runs still being recorded.
@@ -1915,8 +1973,7 @@ impl Model {
             self.inputs.config_file.clone()
         };
         let (bands, path) = (self.inputs.bands, path.to_string());
-        let (result, job) = channel();
-        std::thread::spawn(move || {
+        self.report_job = Some(Job::spawn(move |_| {
             let write = || -> Result<Message, Message> {
                 let report = sim_components::report::make(entry, &text, &source, &config, &config, bands, &tr)
                     .map_err(|e| (e.key(), e.detail().to_string()))?;
@@ -1925,9 +1982,8 @@ impl Model {
                 std::fs::write(&path, bytes).map_err(|e| ("ui-report-failed", format!("{path}: {e}")))?;
                 Ok(("ui-report-written", path.clone()))
             };
-            let _ = result.send(write());
-        });
-        self.report_job = Some(Mutex::new(job));
+            write()
+        }));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -1941,8 +1997,8 @@ impl Model {
     /// background on a simulation of its own. The running machine is not disturbed.
     pub fn run_tuning(&mut self, axis: usize) {
         let (entry, config) = (self.entry, self.config.clone());
-        let (result, job) = channel();
-        std::thread::spawn(move || {
+        self.tuning_axis = axis;
+        self.tuning_job = Some(Job::spawn(move |_| {
             let measure = || -> Result<Tuning, sim_core::ConfigError> {
                 let step = step_response(entry, &config, axis, 0.001, 0.5)?;
                 let response = closed_loop_response(entry, &config, axis, &log_spaced(1.0, 200.0, 40), 0.0005)?;
@@ -1952,10 +2008,8 @@ impl Model {
                 let modes = modes_along(sim.machine.as_ref(), &config.f64s("start.pose")?, axis, MODE_POINTS);
                 Ok(Tuning { axis, step, bandwidth: bandwidth(&response), response, modes })
             };
-            let _ = result.send(measure().map_err(|e| (e.key(), e.detail().to_string())));
-        });
-        self.tuning_axis = axis;
-        self.tuning_job = Some(Mutex::new(job));
+            measure().map_err(|e| (e.key(), e.detail().to_string()))
+        }));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -1967,6 +2021,31 @@ impl Model {
 
     pub fn running(&self, kind: Analysis) -> bool {
         self.analysis_jobs.iter().any(|job| job.0 == kind)
+    }
+
+    /// The progress (runs done and planned so far, the plan grows as the job goes) and the cancel switch of a
+    /// background job under way; `None` where there is none.
+    pub fn job_progress(&self, job: JobRef) -> Option<Arc<Progress>> {
+        match job {
+            JobRef::Analysis(kind) => self.analysis_jobs.iter().find(|j| j.0 == kind).map(|j| j.2.progress.clone()),
+            JobRef::View(kind) => self.views.progress(kind),
+            JobRef::Tuning => self.tuning_job.as_ref().map(|j| j.progress.clone()),
+            JobRef::Report => self.report_job.as_ref().map(|j| j.progress.clone()),
+            JobRef::Bands => self.insight.band_job.as_ref().map(|j| j.progress.clone()),
+        }
+    }
+
+    /// Runs done and planned of a job under way. Planned 0: it has not counted anything yet.
+    pub fn job_counts(&self, job: JobRef) -> Option<(usize, usize)> {
+        self.job_progress(job).map(|p| (p.done.load(Relaxed), p.total.load(Relaxed)))
+    }
+
+    /// Stops a background job: it stops starting runs and `poll` takes it as ended, with a message that it was
+    /// cancelled; what was computed before stays as it was. A run already started is not interrupted.
+    pub fn cancel_job(&self, job: JobRef) {
+        if let Some(progress) = self.job_progress(job) {
+            progress.cancel.store(true, Relaxed);
+        }
     }
 
     pub fn has_result(&self, kind: Analysis) -> bool {
@@ -1993,8 +2072,8 @@ impl Model {
             return self.say(("ui-search-bad-supply", inputs.supply));
         }
         let (standing, motors, tr) = (self.standing(), self.session.motors.clone(), self.tr.clone());
-        let (result, job) = channel();
-        std::thread::spawn(move || {
+        let started = self.config.clone();
+        let job = Job::spawn(move |_| {
             let refused = |e: ConfigError| (e.key(), e.detail().to_string());
             let command = |e: CommandError| (e.key, String::new());
             // As the command line reads them (`import::decode`): a file saved by Excel starts with a byte order mark,
@@ -2196,9 +2275,9 @@ impl Model {
                     ),
                 })
             };
-            let _ = result.send(run());
+            run()
         });
-        self.analysis_jobs.push((kind, self.config.clone(), Mutex::new(job)));
+        self.analysis_jobs.push((kind, started, job));
     }
 
     /// Forgets the result of one kind of analysis.
@@ -3455,12 +3534,11 @@ impl Model {
     /// (`insight::band_runs`); the answer comes with `poll`.
     pub fn trace_bands(&mut self) {
         let (entry, config) = (self.entry, self.config.clone());
-        let (result, job) = channel();
-        std::thread::spawn(move || {
-            let runs = crate::insight::band_runs(entry, &config).map_err(|e| (e.key(), e.detail().to_string()));
-            let _ = result.send(runs.map(|runs| (config, runs)));
-        });
-        self.insight.band_job = Some(Mutex::new(job));
+        self.insight.band_job = Some(Job::spawn(move |progress| {
+            let runs =
+                crate::insight::band_runs(entry, &config, progress).map_err(|e| (e.key(), e.detail().to_string()));
+            runs.map(|runs| (config, runs))
+        }));
     }
 
     /// The bounds runs are being run.
@@ -3640,8 +3718,8 @@ mod tests {
     fn a_job_that_ends_without_an_answer_is_reported() {
         let mut model = Model::new(MACHINES[0], "en");
         // What is left of a thread that panicked: the receiving end of its channel.
-        model.analysis_jobs.push((Analysis::Cycle, model.config.clone(), Mutex::new(channel().1)));
-        model.tuning_job = Some(Mutex::new(channel().1));
+        model.analysis_jobs.push((Analysis::Cycle, model.config.clone(), Job::of(channel().1)));
+        model.tuning_job = Some(Job::of(channel().1));
         assert!(model.analysis_running() && model.tuning_running());
         model.poll();
         assert!(!model.analysis_running() && !model.tuning_running());
@@ -3649,7 +3727,7 @@ mod tests {
         // A job that answers is taken as before.
         let (result, job) = channel();
         result.send(Err(("error-busy", String::new()))).unwrap();
-        model.analysis_jobs.push((Analysis::Cycle, model.config.clone(), Mutex::new(job)));
+        model.analysis_jobs.push((Analysis::Cycle, model.config.clone(), Job::of(job)));
         model.poll();
         assert_eq!((model.analysis_running(), model.messages.last().unwrap().0), (false, "error-busy"));
     }

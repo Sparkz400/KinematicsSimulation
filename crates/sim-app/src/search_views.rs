@@ -5,15 +5,15 @@
 //! kinematics on one task (`sim-cli compare-kinematics`); and for the path tab maps of peak torque and following error
 //! over a plane of the workspace, from a grid of short moves (`move_map`). The window draws them in `ui/search_views.rs`.
 
-use crate::model::{Curves, Inputs, Message, Table, short};
-use sim_components::analysis::{Verdict, utilisation};
+use crate::model::{Curves, Inputs, Job, Message, Table, short};
+use sim_components::analysis::{Progress, Verdict, utilisation};
 use sim_components::catalog::{self, Candidate, Drives, Options, SUPPLIES, vendor_of};
 use sim_components::search::{self, KinematicsRow, Task, TransmissionSweep};
 use sim_components::{Command, Sim};
 use sim_core::{Config, ConfigError, MachineEntry, Translations};
 use sim_machines::MACHINES;
-use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::Arc;
+use std::sync::atomic::Ordering::Relaxed;
 
 /// The search's options beyond those of `Inputs` (supply, series, gearbox series, axes), as `sim-cli search` takes them,
 /// and the inputs of the ratio sweep and of the kinematics comparison.
@@ -480,7 +480,7 @@ pub fn default_distance(axis: &sim_core::AxisInfo) -> f64 {
 
 /// The move map of `MapInputs`: from each node of the grid a short move (`short_move`) along `axis` by `distance` (a
 /// tenth of its travel where 0), backwards where forwards would leave the travel. The moves share the processors.
-pub fn move_map(entry: &MachineEntry, config: &Config, m: &MapInputs) -> Result<MoveMap, Message> {
+pub fn move_map(entry: &MachineEntry, config: &Config, m: &MapInputs, progress: &Progress) -> Result<MoveMap, Message> {
     let resolved = catalog::resolve(entry, config).map_err(refused)?;
     let machine = (entry.build)(&resolved).map_err(refused)?;
     let axes = machine.axes();
@@ -499,13 +499,16 @@ pub fn move_map(entry: &MachineEntry, config: &Config, m: &MapInputs) -> Result<
             (from, to)
         })
         .collect();
-    let results = on_cores(poses.len(), |k| short_move(entry, config, &poses[k].0, &poses[k].1, m.axis).ok());
+    let results = on_cores(poses.len(), progress, |k| short_move(entry, config, &poses[k].0, &poses[k].1, m.axis).ok())
+        .ok_or(("ui-job-cancelled", String::new()))?;
     let (torque, error) = results.into_iter().map(|r| r.unwrap_or((f64::NAN, f64::NAN))).unzip();
     Ok(MoveMap { axes: m.plane, x, y, n, torque, error, axis: m.axis, distance })
 }
 
-/// `work` for 0..count on every processor, the results in order.
-fn on_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T> {
+/// `work` for 0..count on every processor, the results in order, counted in `progress`; `None` where it was cancelled
+/// (no new run starts then).
+fn on_cores<T: Send>(count: usize, progress: &Progress, work: impl Fn(usize) -> T + Sync) -> Option<Vec<T>> {
+    progress.total.fetch_add(count, Relaxed);
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(count.max(1));
     let next = std::sync::atomic::AtomicUsize::new(0);
     let mut out: Vec<(usize, T)> = std::thread::scope(|scope| {
@@ -514,11 +517,12 @@ fn on_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T> {
                 scope.spawn(|| {
                     let mut done = Vec::new();
                     loop {
-                        let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if k >= count {
+                        let k = next.fetch_add(1, Relaxed);
+                        if k >= count || progress.cancel.load(Relaxed) {
                             return done;
                         }
                         done.push((k, work(k)));
+                        progress.done.fetch_add(1, Relaxed);
                     }
                 })
             })
@@ -526,7 +530,7 @@ fn on_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T> {
         handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
     });
     out.sort_by_key(|(k, _)| *k);
-    out.into_iter().map(|(_, t)| t).collect()
+    (out.len() == count).then(|| out.into_iter().map(|(_, t)| t).collect())
 }
 
 /// The computations of these views beside the analysis panel's, each in a thread of its own.
@@ -551,22 +555,25 @@ pub struct Views {
     pub sweep: Option<(Config, TransmissionSweep)>,
     pub kinematics: Option<(Config, Vec<KinematicsRow>)>,
     pub map: Option<(Config, MoveMap)>,
-    jobs: Vec<(ViewJob, Config, Mutex<Receiver<Result<Done, Message>>>)>,
+    jobs: Vec<(ViewJob, Config, Job<Done>)>,
 }
 
 impl Views {
     /// Starts one computation with the config and the inputs as they are now.
     pub fn start(&mut self, kind: ViewJob, entry: &'static MachineEntry, config: &Config, inputs: &Inputs) {
-        let (config, inputs, (send, receive)) = (config.clone(), inputs.clone(), channel());
-        self.jobs.push((kind, config.clone(), Mutex::new(receive)));
-        std::thread::spawn(move || {
-            let done = match kind {
-                ViewJob::Sweep => ratio_sweep(entry, &config, &inputs.search).map(Done::Sweep),
-                ViewJob::Kinematics => compare(entry, &config, &inputs).map(Done::Kinematics),
-                ViewJob::Map => move_map(entry, &config, &inputs.map).map(Done::Map),
-            };
-            let _ = send.send(done);
+        let (config, inputs) = (config.clone(), inputs.clone());
+        let started = config.clone();
+        let job = Job::spawn(move |progress| match kind {
+            ViewJob::Sweep => ratio_sweep(entry, &config, &inputs.search).map(Done::Sweep),
+            ViewJob::Kinematics => compare(entry, &config, &inputs).map(Done::Kinematics),
+            ViewJob::Map => move_map(entry, &config, &inputs.map, progress).map(Done::Map),
         });
+        self.jobs.push((kind, started, job));
+    }
+
+    /// The progress and cancel switch of the job of this kind under way.
+    pub fn progress(&self, kind: ViewJob) -> Option<Arc<Progress>> {
+        self.jobs.iter().find(|job| job.0 == kind).map(|job| job.2.progress.clone())
     }
 
     pub fn running(&self, kind: ViewJob) -> bool {
@@ -583,11 +590,7 @@ impl Views {
         let mut said = Vec::new();
         let mut done = Vec::new();
         self.jobs.retain(|(_, config, job)| {
-            let answer = match job.lock().map(|job| job.try_recv()) {
-                Ok(Err(TryRecvError::Empty)) => return true,
-                Ok(Ok(answer)) => answer,
-                _ => Err(("ui-job-ended", String::new())),
-            };
+            let Some(answer) = crate::model::answer(job) else { return true };
             done.push((config.clone(), answer));
             false
         });

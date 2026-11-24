@@ -1659,6 +1659,7 @@ fn panels(
             Action::Loop(action) => loop_view::apply(model, action),
             Action::Inputs(inputs) => model.inputs = inputs,
             Action::RunAnalysis(kind) => model.run_analysis(kind),
+            Action::Cancel(job) => model.cancel_job(job),
             Action::ApplyOptimised => model.apply_optimised(),
             Action::UseCandidate(row) => model.use_candidate(row),
             Action::RunView(kind) => model.views.start(kind, model.entry, &model.config, &model.inputs),

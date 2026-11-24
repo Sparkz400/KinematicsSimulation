@@ -1,11 +1,12 @@
 //! The app without its window. Phase 4 is done when switching machine or language needs no code
 //! change, and switching one effect off changes the traces within one cycle.
 
-use sim_app::model::{Analysis, Model};
+use sim_app::model::{Analysis, JobRef, Model};
 use sim_app::session::{Event, Request, Runner, Session};
 use sim_components::Command;
 use sim_core::{Config, MachineEntry};
 use sim_machines::{LANGUAGES, MACHINES};
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 
 /// The config's payload value: `mass.payload_kg` where the machine has a [mass] table, else the arms' payload, that of
@@ -1179,7 +1180,9 @@ fn the_app_optimises_the_cycle_and_applies_the_settings(entry: &'static MachineE
     let judged = sim_components::analysis::verdicts(&cfg, &load).unwrap();
     if !judged.iter().all(|v| v.ok) {
         wait_for_jobs(&mut model);
-        assert!(model.messages.iter().any(|m| m.0 == "error-config-invalid"), "{}: {:?}", entry.id, model.messages);
+        // The refusal has a key of its own (`error-cycle-fails-already`), with the failing checks as its detail.
+        let refusal = model.messages.iter().find(|m| m.0 == "error-cycle-fails-already");
+        assert!(refusal.is_some_and(|m| !m.1.is_empty()), "{}: {:?}", entry.id, model.messages);
         return;
     }
     // At least 5 % shorter; 2 % where the cycle as configured leaves less than a tenth of the settling tolerance, which
@@ -1254,6 +1257,124 @@ fn the_app_optimises_the_cycle_and_applies_the_settings(entry: &'static MachineE
     }
 }
 per_machine!(the_app_optimises_the_cycle_and_applies_the_settings);
+
+/// Waits until `done` of the job's progress moved: it is running its batch of runs.
+#[track_caller]
+fn wait_for_first_run(model: &mut Model, progress: &sim_components::analysis::Progress) {
+    let start = Instant::now();
+    while progress.done.load(Relaxed) == 0 && start.elapsed() < PATIENCE {
+        model.poll();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(progress.done.load(Relaxed) > 0, "the job did not run a batch");
+}
+
+/// Waits until the job's thread has ended: it held a clone of the progress, which it lets go of last.
+#[track_caller]
+fn wait_for_thread_end(progress: &std::sync::Arc<sim_components::analysis::Progress>) {
+    let start = Instant::now();
+    while std::sync::Arc::strong_count(progress) > 1 && start.elapsed() < PATIENCE {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(std::sync::Arc::strong_count(progress), 1, "the job's thread is still running");
+}
+
+/// A cycle analysis with a thousand sampled bands (thousands of cycles) is cancelled once its first runs are done: it is
+/// not running long before it would have finished (its runs done are far fewer than planned), the model says that it
+/// was cancelled, the results from before stay as they were, and the thread ends.
+#[test]
+fn a_cancelled_analysis_ends_early_and_keeps_the_earlier_results() {
+    let entry = fewest_bounds();
+    let job = JobRef::Analysis(Analysis::Cycle);
+    let mut model = Model::new(entry, "en");
+    model.set_paused(true);
+    model.run_analysis(Analysis::Cycle);
+    wait_for_analysis(&mut model);
+    let before = (model.cycle_tables(), model.bands.is_some());
+    assert!(!before.0.is_empty());
+    (model.inputs.bands, model.inputs.samples) = (true, 1000);
+    model.run_analysis(Analysis::Cycle);
+    let progress = model.job_progress(job).expect("the job is running");
+    wait_for_first_run(&mut model, &progress);
+    let cancelled_at = Instant::now();
+    model.cancel_job(job);
+    wait_for_jobs(&mut model);
+    let (done, total) = (progress.done.load(Relaxed), progress.total.load(Relaxed));
+    assert!(done < total && total >= 1000, "{done} of {total} runs were done");
+    assert!(cancelled_at.elapsed() < Duration::from_secs(600), "took {:?} to end", cancelled_at.elapsed());
+    assert_eq!(model.messages.last(), Some(&("ui-job-cancelled", String::new())), "{:?}", model.messages);
+    assert_eq!((model.cycle_tables(), model.bands.is_some()), before);
+    assert!(model.job_progress(job).is_none());
+    wait_for_thread_end(&progress);
+}
+
+/// Without a cancel the job gives its result, as before, and has done all the runs it planned.
+#[test]
+fn an_analysis_that_is_not_cancelled_gives_its_result_and_counts_all_its_runs() {
+    let mut model = Model::new(fewest_bounds(), "en");
+    model.set_paused(true);
+    model.inputs.bands = true;
+    model.run_analysis(Analysis::Cycle);
+    let progress = model.job_progress(JobRef::Analysis(Analysis::Cycle)).expect("the job is running");
+    wait_for_analysis(&mut model);
+    let (done, total) = (progress.done.load(Relaxed), progress.total.load(Relaxed));
+    assert!(total > 0 && done == total, "{done} of {total}");
+    assert!(model.bands.is_some() && !progress.cancel.load(Relaxed));
+    assert!(!model.messages.iter().any(|m| m.0 == "ui-job-cancelled"), "{:?}", model.messages);
+}
+
+/// Switching the machine, or opening another config file, cancels the jobs under way: their flags are set, the model
+/// has no job left, and the threads end (the jobs' results have nowhere to go).
+#[test]
+fn switching_the_machine_cancels_the_jobs_under_way() {
+    let entry = fewest_bounds();
+    let other = MACHINES.iter().copied().find(|m| m.id != entry.id).unwrap();
+    let mut model = Model::new(entry, "en");
+    model.set_paused(true);
+    (model.inputs.bands, model.inputs.samples) = (true, 1000);
+    model.run_analysis(Analysis::Cycle);
+    model.trace_bands();
+    let analysis = model.job_progress(JobRef::Analysis(Analysis::Cycle)).unwrap();
+    let traces = model.job_progress(JobRef::Bands).unwrap();
+    model.set_machine(other);
+    assert!(analysis.cancel.load(Relaxed) && traces.cancel.load(Relaxed));
+    assert!(!model.analysis_running());
+    wait_for_thread_end(&analysis);
+    wait_for_thread_end(&traces);
+    // The same where another config file replaces the machine's.
+    model.set_machine(entry);
+    model.run_analysis(Analysis::Cycle);
+    let again = model.job_progress(JobRef::Analysis(Analysis::Cycle)).unwrap();
+    let path = std::env::temp_dir().join("cancel_on_open_config.toml");
+    std::fs::write(&path, other.default_config).unwrap();
+    assert_eq!(model.entry.id, entry.id);
+    model.open_config(path.to_str().unwrap());
+    std::fs::remove_file(&path).ok();
+    assert!(again.cancel.load(Relaxed));
+    wait_for_thread_end(&again);
+}
+
+/// An unstable loop (an absurd position gain) leaves verdict values that are not finite: the app says so, once for the
+/// analysis, with the key the components' translations have; the default config does not say it.
+#[test]
+fn an_analysis_with_values_that_are_not_finite_says_so_once() {
+    let entry = MACHINES.iter().copied().find(|m| m.config().f64("drive.kv_1_s").is_ok()).unwrap();
+    let said = |model: &Model| model.messages.iter().filter(|m| m.0 == "verdict-not-finite").count();
+    let mut model = Model::new(entry, "en");
+    model.set_paused(true);
+    model.run_analysis(Analysis::Cycle);
+    wait_for_jobs(&mut model);
+    assert_eq!(said(&model), 0, "{:?}", model.messages);
+    model.config.set_text("drive.kv_1_s = 20000.0").unwrap();
+    model.run_analysis(Analysis::Cycle);
+    wait_for_jobs(&mut model);
+    assert_eq!(said(&model), 1, "{:?}", model.messages);
+    for _ in 0..5 {
+        model.poll();
+    }
+    assert_eq!(said(&model), 1, "{:?}", model.messages);
+    assert!(model.tr.has("verdict-not-finite"));
+}
 
 /// The optimiser's lower lifts in the app: with `profile.min_clearance_m` = 0.1 m the two lifts of the machine with two axes go from
 /// 0.35 m to 0.15 m (see `the_optimiser_lowers_the_lifts_to_the_clearance_and_saves_the_hand_calculated_time`); the table
