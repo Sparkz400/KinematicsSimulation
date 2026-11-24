@@ -47,7 +47,8 @@ impl Driver {
                 // bevy_egui warns every frame that the window has no winit window behind it.
                 .disable::<bevy::log::LogPlugin>()
                 .set(RenderPlugin { render_creation: WgpuSettings { backends: None, ..default() }.into(), ..default() })
-                .set(WindowPlugin { primary_window: Some(window), ..default() }),
+                // As in `main`: the close request is `on_close_request`'s to answer.
+                .set(WindowPlugin { primary_window: Some(window), close_when_requested: false, ..default() }),
         );
         add_app(&mut app, model);
         // A frame is 16 ms of the clock egui goes by, however long it took: a click, a drag, a tooltip's delay and an
@@ -639,12 +640,12 @@ fn pause_speed_units_and_theme_from_the_top_bar() {
     d.wait("paused", |d| d.state().model.paused);
     d.button_of("ui-resume");
     d.wait("running", |d| !d.state().model.paused);
-    // The speed slider is logarithmic from 0.01 to 2: a click at a fifth of it is 0.01 * 200^0.2 = 0.029.
+    // The speed slider is logarithmic from 0.01 to 10: a click at a fifth of it is 0.01 * 1000^0.2 = 0.040.
     let slider = d.first_in(TOP, Role::Slider).rect;
     d.click_at(Vec2::new(slider.left() + slider.width() * 0.2, slider.center().y));
     d.wait("the speed set", |d| d.state().model.speed != 1.0);
     let speed = d.state().model.speed;
-    assert!((speed - 0.029).abs() < 0.01, "{speed}");
+    assert!((speed - 0.040).abs() < 0.01, "{speed}");
     for key in ["ui-units-rpm", "ui-units-mm", "ui-theme-light"] {
         let label = d.tr(key);
         d.click(Role::CheckBox, &label);
@@ -786,6 +787,8 @@ fn a_config_file_that_does_not_exist_is_said_and_changes_nothing() {
     });
     let supply = d.state().model.inputs.parts[1].clone();
     d.type_into(fields[1].rect, "M1");
+    // The motor's catalogue list is next, then the supply's field.
+    d.key(KeyCode::Tab, Key::Tab);
     d.key(KeyCode::Tab, Key::Tab);
     d.type_text("x");
     let expected = ("M1".to_string(), format!("{supply}x"));
@@ -857,7 +860,8 @@ fn every_label_changes_with_the_language() {
         .collect();
     let alike =
         ["400v", "cost", "N m", "m", "mm", "mrad/s", "µm", "µrad", "Position [m]", "Simulation", "Live", "Motor"];
-    let alike = [&alike[..], &["Motor A", "Motor A [N m]", "Motor B", "Motor B [N m]", "Pause", "Plan"]].concat();
+    let alike =
+        [&alike[..], &["Motor A", "Motor A [N m]", "Motor B", "Motor B [N m]", "Pause", "Plan", "Filter"]].concat();
     let untranslated: Vec<_> = same.iter().filter(|l| !alike.contains(l)).collect();
     assert!(untranslated.is_empty(), "{untranslated:?}");
     assert!(same.len() > 10 && de.len() > 50, "{} labels in German", de.len());
@@ -1321,4 +1325,156 @@ fn a_wheel_laid_flat_faces_up() {
     spoke.lay_flat();
     let long = part_transform(&spoke).rotation * Vec3::X;
     assert!(long.abs_diff_eq(Vec3::NEG_Z, 1e-6), "{long}");
+}
+
+/// A message raised by anything (a file that could not be opened, a failed job) is on screen whichever setup tab or
+/// tool tab is open, once and not once per tab; Clear takes it away. It was drawn in the Motion tab only.
+#[test]
+fn a_message_is_on_screen_on_every_tab() {
+    let mut d = Driver::new();
+    d.state_mut().model.messages.push(("ui-config-saved", "somewhere.toml".into()));
+    let shown = d.state().model.tr.tr_arg("ui-config-saved", "somewhere.toml").to_string();
+    for tab in ["ui-motion", "ui-effects", "ui-parameters", "ui-config", "ui-path"] {
+        d.tab(tab);
+        d.find_where(&format!("the message on {tab}"), |w| w.role == Role::Label && w.value == shown);
+        let count = d.widgets().iter().filter(|w| w.role == Role::Label && w.value == shown).count();
+        assert_eq!(count, 1, "{tab}");
+    }
+    d.button_of("ui-clear");
+    d.wait("the messages cleared", |d| d.state().model.messages.is_empty());
+}
+
+/// A change to a value of the config is some `set_param` away, as a drag makes it.
+fn edit_a_parameter(d: &mut Driver) -> (String, f64, f64) {
+    let (path, old) = some_parameter(d);
+    let new = old * 1.1;
+    d.state_mut().model.set_param(&path, toml::Value::Float(new));
+    d.wait("the edit marked", |d| d.state().model.dirty());
+    (path, old, new)
+}
+
+/// The undo and redo buttons and Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z take an edit back and do it again, and the mark
+/// "modified" shows while the config differs from what it came from.
+#[test]
+fn undo_and_redo_by_the_buttons_and_the_keys() {
+    let mut d = Driver::new();
+    let modified = d.tr("ui-modified");
+    assert!(!d.state().model.dirty() && !d.widgets().iter().any(|w| w.value == modified));
+    let (path, old, new) = edit_a_parameter(&mut d);
+    d.find_where("the mark of edits", |w| w.role == Role::Label && w.value == modified);
+    let at = |d: &Driver| d.state().model.config.f64(&path).ok();
+    d.button_of("ui-undo");
+    d.wait("undone by the button", |d| at(d) == Some(old));
+    assert!(!d.state().model.dirty(), "back at what it came from");
+    d.eventually("the mark gone", |d| {
+        if d.widgets().iter().all(|w| w.value != modified) { Ok(()) } else { Err("still there".into()) }
+    });
+    d.button_of("ui-redo");
+    d.wait("redone by the button", |d| at(d) == Some(new));
+    let control = |d: &mut Driver, down| d.hold(KeyCode::ControlLeft, Key::Control, down);
+    control(&mut d, true);
+    d.key(KeyCode::KeyZ, Key::Character("z".into()));
+    control(&mut d, false);
+    d.wait("undone by Ctrl+Z", |d| at(d) == Some(old));
+    control(&mut d, true);
+    d.key(KeyCode::KeyY, Key::Character("y".into()));
+    control(&mut d, false);
+    d.wait("redone by Ctrl+Y", |d| at(d) == Some(new));
+    control(&mut d, true);
+    d.key(KeyCode::KeyZ, Key::Character("z".into()));
+    d.wait("undone again", |d| at(d) == Some(old));
+    d.hold(KeyCode::ShiftLeft, Key::Shift, true);
+    d.key(KeyCode::KeyZ, Key::Character("Z".into()));
+    d.hold(KeyCode::ShiftLeft, Key::Shift, false);
+    control(&mut d, false);
+    d.wait("redone by Ctrl+Shift+Z", |d| at(d) == Some(new));
+}
+
+/// Switching the machine over edits asks first: Cancel keeps the machine and the edits, Discard switches, Save writes
+/// the config to the file the field names and then switches.
+#[test]
+fn switching_the_machine_over_edits_asks_first() {
+    let mut d = Driver::new();
+    let (path, _, new) = edit_a_parameter(&mut d);
+    let (machine, other) = (d.tr(MACHINES[0].key), d.tr(MACHINES[1].key));
+    pick(&mut d, &machine, &other);
+    d.wait("the question", |d| d.state().ask.is_some());
+    let save = d.tr("ui-unsaved-save");
+    d.find(Role::Button, &save);
+    d.frames(5);
+    assert_eq!(d.state().model.entry.id, MACHINES[0].id, "not switched before the answer");
+    d.button_of("ui-unsaved-cancel");
+    d.wait("the question gone", |d| d.state().ask.is_none());
+    d.frames(5);
+    assert_eq!((d.state().model.entry.id, d.state().model.config.f64(&path).ok()), (MACHINES[0].id, Some(new)));
+    // Save: to a file of the field's.
+    let file = std::env::temp_dir().join(format!("window-unsaved-{}.toml", std::process::id()));
+    d.state_mut().model.inputs.config_file = file.display().to_string();
+    pick(&mut d, &machine, &other);
+    d.button_of("ui-unsaved-save");
+    d.wait("the other machine", |d| d.state().model.entry.id == MACHINES[1].id);
+    let saved = sim_core::Config::parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(saved.f64(&path).unwrap(), new);
+    // Discard: back on the first machine with edits, then away from them.
+    pick(&mut d, &other, &machine);
+    d.wait("the first machine", |d| d.state().model.entry.id == MACHINES[0].id);
+    edit_a_parameter(&mut d);
+    pick(&mut d, &machine, &other);
+    d.button_of("ui-unsaved-discard");
+    d.wait("the other machine again", |d| d.state().model.entry.id == MACHINES[1].id);
+    assert!(!d.state().model.dirty());
+}
+
+/// Closing the window over edits asks first (and does not close it); Cancel goes on, Discard ends the app. Without edits
+/// it ends at once, as `closing_the_window_during_an_analysis_does_not_hang` has it.
+#[test]
+fn closing_the_window_over_edits_asks_first() {
+    let mut d = Driver::new();
+    edit_a_parameter(&mut d);
+    let window = d.window;
+    d.send(bevy::window::WindowCloseRequested { window });
+    d.wait("the question", |d| d.state().ask.is_some());
+    d.frames(5);
+    assert!(d.app.should_exit().is_none());
+    d.button_of("ui-unsaved-cancel");
+    d.wait("the question gone", |d| d.state().ask.is_none());
+    d.frames(5);
+    assert!(d.app.should_exit().is_none());
+    d.send(bevy::window::WindowCloseRequested { window });
+    d.button_of("ui-unsaved-discard");
+    d.wait("the app exits", |d| d.app.should_exit().is_some());
+}
+
+/// The filter narrows the parameters to those whose label or dotted path hold it: with a path typed, its group is
+/// there and another is not.
+#[test]
+fn the_parameter_filter_narrows_the_list() {
+    let mut d = Driver::new();
+    d.tab("ui-parameters");
+    let (path, _) = some_parameter(&d);
+    let groups = d.state().model.param_groups();
+    let own = groups.iter().find(|g| g.params.iter().any(|(p, ..)| *p == path)).unwrap();
+    let other = groups.iter().find(|g| g.key != own.key).expect("a second group");
+    let (own, other) = (d.tr(&own.key), d.tr(&other.key));
+    d.find(Role::Button, &other);
+    let fields = d.in_region(SETUP, Role::TextInput);
+    d.type_into(fields[1].rect, &path.to_uppercase());
+    d.wait("the filter typed", |d| d.state().model.inputs.param_filter == path.to_uppercase());
+    d.eventually("only the group with the match", |d| {
+        let (has_own, has_other) = (d.has(Role::Button, &own), d.has(Role::Button, &other));
+        if has_own && !has_other { Ok(()) } else { Err(format!("own {has_own}, other {has_other}")) }
+    });
+}
+
+/// The catalogue list of a part names the articles; picking one puts it in the field, which stays typeable.
+#[test]
+fn a_motor_is_picked_from_the_catalogue_list() {
+    let mut d = Driver::new();
+    d.tab("ui-config");
+    let supply = d.state().model.inputs.parts[1].clone();
+    let first = sim_components::catalog::motor_articles_for(&supply)[0];
+    let list = d.in_region(SETUP, Role::ComboBox).into_iter().next().expect("the motor's list");
+    d.click_at(Vec2::new(list.rect.center().x, list.rect.center().y));
+    d.click(Role::Button, first);
+    d.wait("the article in the field", |d| d.state().model.inputs.parts[0] == first);
 }

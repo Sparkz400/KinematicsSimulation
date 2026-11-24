@@ -4802,3 +4802,81 @@ fn the_tool_error_is_one_number_in_the_run_the_chart_and_the_analysis() {
         assert!((figure - analysed).abs() < 0.01 * analysed, "{id}: run {figure} m, analysis {analysed} m");
     }
 }
+
+/// The config's edits are steps to undo and redo: a drag (many edits of one value close together) is one step, a
+/// step each for the others, at most 50 of them; the config is changed from what it came from until the edits are taken
+/// back or it is saved; a new edit ends what could be redone; another machine starts with none.
+#[test]
+fn edits_are_undone_redone_and_counted_as_changes() {
+    let mut model = Model::new(MACHINES[0], "en");
+    assert!(!model.dirty() && !model.can_undo() && !model.can_redo());
+    let old = model.config.f64("mass.payload_kg").unwrap();
+    let (switch, _, was) = model.effects().remove(0);
+    for k in 1..=5 {
+        model.set_param("mass.payload_kg", toml::Value::Float(old + f64::from(k)));
+    }
+    model.set_param(&switch, toml::Value::Boolean(!was));
+    assert!(model.dirty());
+    model.undo();
+    assert_eq!(model.config.bool(&switch).unwrap(), was);
+    assert_eq!(model.config.f64("mass.payload_kg").unwrap(), old + 5.0, "the drag is one step");
+    assert!(model.dirty());
+    model.undo();
+    assert_eq!(model.config.f64("mass.payload_kg").unwrap(), old);
+    assert!(!model.dirty() && !model.can_undo(), "back at what it came from is no change");
+    model.redo();
+    model.redo();
+    assert_eq!(model.config.f64("mass.payload_kg").unwrap(), old + 5.0);
+    assert_eq!(model.config.bool(&switch).unwrap(), !was);
+    assert!(model.dirty() && !model.can_redo());
+    // A new edit after an undo ends the steps that were undone.
+    model.undo();
+    assert!(model.can_redo());
+    model.set_param("mass.payload_kg", toml::Value::Float(old + 9.0));
+    assert!(!model.can_redo());
+    // Saved, the config is what the file has: not changed, until an edit is taken back.
+    let file = temp_file(MACHINES[0], "undo-saved.toml");
+    model.save_config(&file);
+    assert!(!model.dirty(), "{:?}", model.messages);
+    model.undo();
+    assert!(model.dirty());
+    // At most 50 steps, from edits of two values taking turns (those of one value close in time are one step).
+    let mut model = Model::new(MACHINES[0], "en");
+    for k in 0..60 {
+        if k % 2 == 0 {
+            let on = model.config.bool(&switch).unwrap();
+            model.set_param(&switch, toml::Value::Boolean(!on));
+        } else {
+            model.set_param("mass.payload_kg", toml::Value::Float(old + f64::from(k)));
+        }
+    }
+    let mut steps = 0;
+    while model.can_undo() {
+        model.undo();
+        steps += 1;
+    }
+    assert_eq!(steps, 50);
+    model.set_machine(MACHINES[1]);
+    assert!(!model.dirty() && !model.can_undo());
+}
+
+/// The parameter filter matches the label or the dotted path in any case, and the list of changed values holds what
+/// differs from the machine's default and nothing else.
+#[test]
+fn parameters_are_filtered_and_the_changed_ones_listed() {
+    let mut model = Model::new(MACHINES[0], "en");
+    assert!(model.changed_params().is_empty());
+    assert!(model.param_matches("mass.payload_kg", ""));
+    assert!(model.param_matches("mass.payload_kg", "PAYLOAD"), "any case");
+    assert!(model.param_matches("mass.payload_kg", " mass.pay "), "the path, trimmed");
+    assert!(!model.param_matches("mass.payload_kg", "no-such-word"));
+    let old = model.config.f64("mass.payload_kg").unwrap();
+    model.set_param("mass.payload_kg", toml::Value::Float(old + 1.0));
+    let changed = model.changed_params();
+    assert_eq!(changed.len(), 1, "{changed:?}");
+    let (path, _, default, now) = &changed[0];
+    assert_eq!(path, "mass.payload_kg");
+    assert_eq!((default.as_ref().and_then(toml::Value::as_float), now.as_float()), (Some(old), Some(old + 1.0)));
+    model.undo();
+    assert!(model.changed_params().is_empty());
+}

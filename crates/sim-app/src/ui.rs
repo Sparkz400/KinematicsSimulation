@@ -339,6 +339,11 @@ pub enum Action {
     CloseAnalysis,
     Clear(Analysis),
     ClearMessages,
+    /// The config's last edit is taken back, or done again.
+    Undo,
+    Redo,
+    /// The unsaved-edits question was answered.
+    Answer(Answer),
     /// The mode list is found at the pose the machine stands at (`Model::find_modes`), and one of its modes shown
     /// swinging in the 3D view, or the machine's own again.
     FindModes,
@@ -447,6 +452,12 @@ pub fn load_color(model: &Model, id: &str, nth: usize) -> Option<Color32> {
     shares.reduce(|a, b| (a.0.max(b.0), a.1 && b.1)).map(|(used, passes)| margin_color(used, passes))
 }
 
+/// The speeds the slider offers, as multiples of real time. The session takes up to 100, but does at most 50 ms of
+/// simulated time per pass of its loop and drops what a slow machine owes, so that it falls behind and does not
+/// pile up work, so a speed is a request that a slow computer or a heavy machine model meets only in part. Ten is a
+/// limit chosen, not one measured.
+pub const SPEEDS: std::ops::RangeInclusive<f64> = 0.01..=10.0;
+
 /// The bar on top: machine and language, run and speed, the open config file, and how close the analysed cycle
 /// runs each part to its limit, the tightest checks as gauges. A gauge opens its check in the tools panel. While the
 /// view is `recording`, a sign of it and its Stop button, out of the frames (the view's own controls are hidden then).
@@ -479,7 +490,7 @@ pub fn top_bar(ui: &mut Ui, model: &Model, panels: PanelState, recording: bool, 
         }
         let mut speed = model.speed;
         ui.spacing_mut().slider_width = 90.0;
-        if ui.add(Slider::new(&mut speed, 0.01..=2.0).logarithmic(true).text(tr("ui-speed"))).changed() {
+        if ui.add(Slider::new(&mut speed, SPEEDS).logarithmic(true).text(tr("ui-speed"))).changed() {
             actions.push(Action::Speed(speed));
         }
         ui.separator();
@@ -759,6 +770,112 @@ fn tabs<T: Copy + PartialEq>(ui: &mut Ui, model: &Model, shown: T, all: &[(T, &s
     picked
 }
 
+/// What the user answers where edits would be lost: keep them in a file, drop them, or not do it after all.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Answer {
+    Save,
+    Discard,
+    Cancel,
+}
+
+/// The question over everything else, while a switch of machine or the closing of the window waits for the answer.
+/// `closing` words it for the window.
+pub fn unsaved(ctx: &egui::Context, model: &Model, closing: bool, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    let shown = egui::Modal::new("unsaved".into()).show(ctx, |ui| {
+        ui.set_width(340.0);
+        ui.heading(tr("ui-unsaved-title"));
+        ui.label(tr(if closing { "ui-unsaved-close" } else { "ui-unsaved-machine" }));
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            for (key, answer) in [
+                ("ui-unsaved-save", Answer::Save),
+                ("ui-unsaved-discard", Answer::Discard),
+                ("ui-unsaved-cancel", Answer::Cancel),
+            ] {
+                if ui.button(tr(key)).clicked() {
+                    actions.push(Action::Answer(answer));
+                }
+            }
+        });
+    });
+    // Escape, or a click beside the question, is Cancel.
+    if shown.should_close() {
+        actions.push(Action::Answer(Answer::Cancel));
+    }
+}
+
+/// Undo and redo of the config's edits, and a mark while the config differs from the file or default it came from.
+fn history_row(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    ui.horizontal(|ui| {
+        let undo = ui.add_enabled(model.can_undo(), egui::Button::new(tr("ui-undo")).small());
+        if undo.on_hover_text(tr("ui-undo-hint")).clicked() {
+            actions.push(Action::Undo);
+        }
+        let redo = ui.add_enabled(model.can_redo(), egui::Button::new(tr("ui-redo")).small());
+        if redo.on_hover_text(tr("ui-redo-hint")).clicked() {
+            actions.push(Action::Redo);
+        }
+        if model.dirty() {
+            ui.label(RichText::new(tr("ui-modified")).small().color(NOTE)).on_hover_text(tr("ui-modified-hint"));
+        }
+    });
+}
+
+/// What the app has to say (a file that could not be read, a refused value, a job that ended), newest first, on every
+/// tab: it is of what was done on whichever one. Many of them scroll, and the count says how many there are.
+fn messages(ui: &mut Ui, model: &Model, actions: &mut Vec<Action>) {
+    if model.messages.is_empty() {
+        return;
+    }
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    ui.separator();
+    ui.horizontal(|ui| {
+        let title = match model.messages.len() {
+            1 => tr("ui-messages"),
+            n => model.tr.tr_arg("ui-messages-count", &n.to_string()),
+        };
+        ui.label(title);
+        if ui.small_button(tr("ui-clear")).clicked() {
+            actions.push(Action::ClearMessages);
+        }
+    });
+    ScrollArea::vertical().id_salt("messages").max_height(96.0).show(ui, |ui| {
+        for (key, detail) in model.messages.iter().rev() {
+            ui.colored_label(NOTE, model.tr.tr_arg(key, detail));
+        }
+    });
+    ui.separator();
+}
+
+/// A config value as the list of changed values writes it.
+fn value_text(value: &Value) -> String {
+    match value {
+        Value::Float(x) => short(*x),
+        Value::String(text) => format!("{text:?}"),
+        other => other.to_string(),
+    }
+}
+
+/// The values the config has that its machine's default does not, each as it was and is, as the web page lists them:
+/// what the machine was set up differently by, at a glance.
+fn changed_params(ui: &mut Ui, model: &Model) {
+    let changed = model.changed_params();
+    if changed.is_empty() {
+        return;
+    }
+    let title = model.tr.tr_arg("ui-param-changed", &changed.len().to_string());
+    egui::CollapsingHeader::new(title).id_salt("changed-params").show(ui, |ui| {
+        for (path, label, default, now) in changed {
+            let was = default.as_ref().map_or_else(|| model.tr.tr("ui-param-no-default").to_string(), value_text);
+            let row = format!("{label}: {was} → {}", value_text(&now));
+            ui.add(Label::new(row).sense(Sense::hover())).on_hover_text(path);
+        }
+    });
+    ui.separator();
+}
+
 /// The setup on the left: where the machine goes and how to drive it, which effects are modelled, the parameters,
 /// and the config file with the parts it names.
 pub fn setup(ui: &mut Ui, model: &Model, panels: PanelState, actions: &mut Vec<Action>) {
@@ -769,6 +886,8 @@ pub fn setup(ui: &mut Ui, model: &Model, panels: PanelState, actions: &mut Vec<A
         (SetupTab::Parameters, "ui-parameters"),
         (SetupTab::Config, "ui-config"),
     ];
+    history_row(ui, model, actions);
+    messages(ui, model, actions);
     if let Some(tab) = tabs(ui, model, panels.setup, &all) {
         actions.push(Action::Panels(PanelState { setup: tab, ..panels }));
     }
@@ -803,22 +922,10 @@ pub fn setup(ui: &mut Ui, model: &Model, panels: PanelState, actions: &mut Vec<A
                     actions.push(Action::Command(Command::Enable));
                 }
             });
-            if !model.messages.is_empty() {
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label(tr("ui-messages"));
-                    if ui.small_button(tr("ui-clear")).clicked() {
-                        actions.push(Action::ClearMessages);
-                    }
-                });
-                for (key, detail) in &model.messages {
-                    ui.colored_label(NOTE, model.tr.tr_arg(key, detail));
-                }
-            }
         }
         SetupTab::Effects => {
             for (path, key, mut on) in model.effects() {
-                if ui.checkbox(&mut on, tr(&key)).changed() {
+                if ui.checkbox(&mut on, tr(&key)).on_hover_text(&path).changed() {
                     actions.push(Action::Param(path, Value::Boolean(on)));
                 }
             }
@@ -834,37 +941,49 @@ pub fn setup(ui: &mut Ui, model: &Model, panels: PanelState, actions: &mut Vec<A
                     actions.push(Action::SetValue);
                 }
             });
+            // Only the parameters whose label or dotted path hold what is typed here are listed.
+            ui.horizontal(|ui| {
+                ui.label(tr("ui-param-filter"));
+                let hint = tr("ui-param-filter-hint");
+                ui.add(TextEdit::singleline(&mut inputs.param_filter).hint_text(hint).desired_width(f32::INFINITY));
+            });
             if inputs != model.inputs {
                 actions.push(Action::Inputs(inputs));
             }
-            // What the last edit was answered with, here where it was typed.
-            if let Some((key, detail)) = model.messages.last() {
-                ui.colored_label(NOTE, model.tr.tr_arg(key, detail));
-            }
             ui.separator();
+            changed_params(ui, model);
+            let filter = model.inputs.param_filter.as_str();
             for group in model.param_groups() {
-                ui.collapsing(tr(&group.key), |ui| {
-                    for (path, key, value) in group.params {
+                let shown: Vec<_> =
+                    group.params.into_iter().filter(|(path, ..)| model.param_matches(path, filter)).collect();
+                if shown.is_empty() {
+                    continue;
+                }
+                // A group with a match is open for as long as the filter is there.
+                let header =
+                    egui::CollapsingHeader::new(tr(&group.key)).open((!filter.trim().is_empty()).then_some(true));
+                header.show(ui, |ui| {
+                    for (path, key, value) in shown {
                         ui.horizontal(|ui| {
+                            // The config path on hover, as `--set` and the filter take it.
+                            let hover = path.clone();
                             match value {
                                 Value::Integer(mut n) => {
-                                    if ui.add(DragValue::new(&mut n)).changed() {
+                                    if ui.add(DragValue::new(&mut n)).on_hover_text(&hover).changed() {
                                         actions.push(Action::Param(path, Value::Integer(n)));
                                     }
                                 }
                                 Value::Float(mut x) => {
                                     // One percent of the value per pixel dragged.
                                     let speed = if x == 0.0 { 1e-3 } else { x.abs() * 0.01 };
-                                    if ui
-                                        .add(DragValue::new(&mut x).speed(speed).min_decimals(2).max_decimals(8))
-                                        .changed()
-                                    {
+                                    let drag = DragValue::new(&mut x).speed(speed).min_decimals(2).max_decimals(8);
+                                    if ui.add(drag).on_hover_text(&hover).changed() {
                                         actions.push(Action::Param(path, Value::Float(x)));
                                     }
                                 }
                                 _ => {}
                             }
-                            ui.label(tr(&key));
+                            ui.add(Label::new(tr(&key)).sense(Sense::hover())).on_hover_text(hover);
                         });
                     }
                 });
@@ -2046,21 +2165,70 @@ fn config(ui: &mut Ui, model: &Model, inputs: &mut Inputs, actions: &mut Vec<Act
     });
     // Each name over its field: flowed in a row, a label wrapped to the end of the line before its field and read as
     // the name of the field before it.
-    let [motor, supply, gearbox, drive, belt, axis] = &mut inputs.parts;
-    for (key, field) in [
-        ("ui-parts-motor", motor),
-        ("ui-search-supply", supply),
-        ("ui-search-gearbox", gearbox),
-        ("ui-parts-drive", drive),
-        ("ui-parts-belt", belt),
-        ("ui-search-axis", axis),
-    ] {
+    // Each also from the catalogue's articles that fit what is named before it: the supply's motors and drives, the
+    // motor's gearboxes. Typing stays. (The belt has no list to offer.)
+    let (motor_name, supply_name) = (inputs.parts[0].clone(), inputs.parts[1].clone());
+    let keys = [
+        "ui-parts-motor",
+        "ui-search-supply",
+        "ui-search-gearbox",
+        "ui-parts-drive",
+        "ui-parts-belt",
+        "ui-search-axis",
+    ];
+    for (i, (key, field)) in keys.into_iter().zip(inputs.parts.iter_mut()).enumerate() {
         ui.label(tr(key));
-        ui.add(TextEdit::singleline(field).desired_width(f32::INFINITY));
+        let articles = || -> Vec<String> {
+            use sim_components::catalog;
+            match i {
+                0 => catalog::motor_articles_for(&supply_name).into_iter().map(String::from).collect(),
+                1 => SUPPLIES.iter().map(|s| s.to_string()).collect(),
+                2 => catalog::gearboxes_for_motor(&motor_name, ""),
+                3 => catalog::drives_for(&supply_name).into_iter().map(|(name, ..)| name.to_string()).collect(),
+                5 => catalog::axis_names(),
+                _ => Vec::new(),
+            }
+        };
+        ui.horizontal(|ui| {
+            let listed = i != 4;
+            let room = if listed { (ui.available_width() - 110.0).max(60.0) } else { f32::INFINITY };
+            ui.add(TextEdit::singleline(&mut *field).desired_width(room));
+            if listed {
+                catalogue_list(ui, model, key, field, articles);
+            }
+        });
     }
     if ui.button(tr("ui-parts-apply")).clicked() {
         actions.push(Action::ApplyParts);
     }
+}
+
+/// A drop-down of the catalogue's `articles` (worked out only while it is open: the lists are long) with a field to
+/// narrow them by what is typed; picking one puts it in `field`. `id` tells the lists apart.
+fn catalogue_list(ui: &mut Ui, model: &Model, id: &str, field: &mut String, articles: impl FnOnce() -> Vec<String>) {
+    let tr = |key: &str| model.tr.tr(key).to_string();
+    ComboBox::from_id_salt(("catalogue", id))
+        .selected_text(tr("ui-parts-catalogue"))
+        .width(100.0)
+        // Clicking the filter field must not close the list; a pick closes it.
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show_ui(ui, |ui| {
+            let kept = ui.id().with("filter");
+            let mut filter: String = ui.data_mut(|d| d.get_temp(kept)).unwrap_or_default();
+            ui.add(TextEdit::singleline(&mut filter).hint_text(tr("ui-parts-catalogue-hint")).desired_width(220.0));
+            let wanted = filter.trim().to_lowercase();
+            ui.data_mut(|d| d.insert_temp(kept, filter));
+            ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                let found = articles().into_iter().filter(|name| name.to_lowercase().contains(&wanted));
+                // The first hundred: a list of thousands only slows the window, and typing narrows it.
+                for name in found.take(100) {
+                    if ui.selectable_label(*field == name, &name).clicked() {
+                        *field = name;
+                        ui.close();
+                    }
+                }
+            });
+        });
 }
 
 /// A path from a file: planned, run by the machine and analysed, with the planned path drawn.

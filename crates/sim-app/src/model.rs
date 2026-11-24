@@ -163,6 +163,8 @@ pub struct Inputs {
     pub path_probe: Option<usize>,
     /// The parameter panel's "path = value" field, applied by `set_value`.
     pub assignment: String,
+    /// The parameter panel's filter: the parameters whose label or dotted path hold it (`param_matches`) are listed.
+    pub param_filter: String,
     /// For a run of another config (`record_run`): assignments as `--set` takes them, separated by `;`, and a config
     /// or machine file to start from ("" for the config shown).
     pub run_set: String,
@@ -777,6 +779,12 @@ pub const BAND_BUCKETS: usize = 600;
 /// Rows of the sensitivity ranking that are shown: the parameters that matter most.
 const TOP_ROWS: usize = 8;
 
+/// How many edits of the config `Model::undo` goes back.
+const UNDO_STEPS: usize = 50;
+
+/// Edits of one value this close together are one step: a drag changes it every frame.
+const SAME_EDIT: std::time::Duration = std::time::Duration::from_millis(600);
+
 /// A number at a readable length, whatever its size: four digits and at most three decimals, so 12.5 reads
 /// as 12.50 and 1912.141 as 1912, and 0.0000312 as 3.12e-5; at least three digits, as the exponent has, so 0.0146
 /// reads as 0.0146 and not 0.015. Narrow, so that the tables fit the panel.
@@ -819,6 +827,15 @@ pub struct Model {
     /// that it has not answered yet, oldest first.
     accepted: Config,
     sent: VecDeque<Config>,
+    /// The config as last opened, saved or taken from the machine's default: `dirty` is a difference from it.
+    clean: Config,
+    /// The machine's default config, which `changed_params` compares with.
+    default: Config,
+    /// The configs before each edit (`UNDO_STEPS` at most, oldest first) and those undone, for `undo` and `redo`.
+    undone: Vec<Config>,
+    redone: Vec<Config>,
+    /// The path and time of the last edit of one value, so that a drag is one step (`record_edit`).
+    last_edit: Option<(String, std::time::Instant)>,
     pub session: Session,
     /// The end of the simulation thread has been reported.
     ended: bool,
@@ -1015,6 +1032,11 @@ impl Model {
             scopes: scopes_for(&session.signals),
             accepted: config.clone(),
             sent: VecDeque::new(),
+            clean: config.clone(),
+            default: entry.config(),
+            undone: Vec::new(),
+            redone: Vec::new(),
+            last_edit: None,
             config,
             config_text: text,
             session,
@@ -1070,6 +1092,7 @@ impl Model {
                 path_colour: None,
                 path_probe: None,
                 assignment: String::new(),
+                param_filter: String::new(),
                 run_set: String::new(),
                 run_file: String::new(),
             },
@@ -1227,6 +1250,7 @@ impl Model {
         match written {
             Ok(text) => {
                 self.config_text = text;
+                self.clean = self.config.clone();
                 self.inputs.config_file = path.into();
                 self.say(("ui-config-saved", path.into()));
             }
@@ -1290,9 +1314,70 @@ impl Model {
 
     /// Edits one config value and applies the config to the running simulation.
     pub fn set_param(&mut self, path: &str, value: Value) {
+        let before = self.config.clone();
         match self.config.set(path, value) {
-            Ok(()) => self.reconfigure(),
+            Ok(()) => {
+                self.record_edit(before, Some(path));
+                self.reconfigure();
+            }
             Err(e) => self.say((e.key(), e.detail().into())),
+        }
+    }
+
+    /// Notes `before` as the state an edit leaves, for `undo`; `same` names the value the edit changed, where
+    /// repeated edits of it are one step. An edit that changed nothing is none.
+    fn record_edit(&mut self, before: Config, same: Option<&str>) {
+        let now = std::time::Instant::now();
+        let repeated = same.is_some_and(|path| {
+            self.last_edit.as_ref().is_some_and(|(last, at)| last == path && now.duration_since(*at) < SAME_EDIT)
+        });
+        self.last_edit = same.map(|path| (path.to_string(), now));
+        if before == self.config || repeated {
+            return;
+        }
+        self.redone.clear();
+        self.undone.push(before);
+        if self.undone.len() > UNDO_STEPS {
+            self.undone.remove(0);
+        }
+    }
+
+    /// The config differs from what was last opened, saved or taken from the machine's default.
+    pub fn dirty(&self) -> bool {
+        self.config != self.clean
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undone.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redone.is_empty()
+    }
+
+    /// Takes the last edit of the config back, and applies the config to the running simulation.
+    pub fn undo(&mut self) {
+        self.step_history(true);
+    }
+
+    /// Does the edit again that `undo` took back.
+    pub fn redo(&mut self) {
+        self.step_history(false);
+    }
+
+    fn step_history(&mut self, back: bool) {
+        // A state equal to the present one (an edit the simulation refused and rolled back) is no step.
+        while let Some(state) = if back { self.undone.pop() } else { self.redone.pop() } {
+            if state == self.config {
+                continue;
+            }
+            let from = std::mem::replace(&mut self.config, state);
+            let to = if back { &mut self.redone } else { &mut self.undone };
+            to.push(from);
+            self.last_edit = None;
+            self.reconfigure();
+            self.show_parts();
+            return;
         }
     }
 
@@ -1300,8 +1385,12 @@ impl Model {
     /// a key the config does not have, a value of another type or text that is no assignment is refused with the
     /// CLI's message; a value the simulation refuses (outside a bound) comes back with `poll`, as with any edit.
     pub fn set_value(&mut self, assignment: &str) {
+        let before = self.config.clone();
         match self.config.set_text(assignment) {
-            Ok(()) => self.reconfigure(),
+            Ok(()) => {
+                self.record_edit(before, None);
+                self.reconfigure();
+            }
             Err(e) => self.say((e.key(), e.detail().into())),
         }
     }
@@ -2172,7 +2261,8 @@ impl Model {
             PARTS.iter().zip(names).try_for_each(|(key, name)| config.set_text(&format!("parts.{key} = {name:?}")));
         match named.and_then(|()| sim_components::catalog::resolve(self.entry, &config)) {
             Ok(_) => {
-                self.config = config;
+                let before = std::mem::replace(&mut self.config, config);
+                self.record_edit(before, None);
                 self.reconfigure();
                 self.show_parts();
             }
@@ -2189,11 +2279,13 @@ impl Model {
             return self.say(("ui-analysis-stale", String::new()));
         }
         let Some(found) = self.optimised.take() else { return };
+        let before = self.config.clone();
         for (path, _, after) in &found.changes {
             if let Err(e) = self.config.set_text(&format!("{path} = {after}")) {
                 self.say((e.key(), e.detail().into()));
             }
         }
+        self.record_edit(before, None);
         self.reconfigure();
     }
 
@@ -3179,6 +3271,29 @@ impl Model {
             }
         }
         groups
+    }
+
+    /// Whether the parameter `path` is listed under `filter`: its label (in the language shown) or its dotted path
+    /// holds the filter, in any case. An empty filter lists all.
+    pub fn param_matches(&self, path: &str, filter: &str) -> bool {
+        let wanted = filter.trim().to_lowercase();
+        wanted.is_empty()
+            || path.to_lowercase().contains(&wanted)
+            || self.param_label(path).to_lowercase().contains(&wanted)
+    }
+
+    /// The values of the config that differ from the machine's default: the dotted path, its label, the default
+    /// and the value now, in the config's order. Values the default does not have (a machine file's extra keys) are
+    /// listed with the default as `None`.
+    pub fn changed_params(&self) -> Vec<(String, String, Option<Value>, Value)> {
+        self.config
+            .leaves()
+            .into_iter()
+            .filter_map(|(path, value)| {
+                let default = self.default.get(&path).ok().cloned();
+                (default.as_ref() != Some(&value)).then(|| (path.clone(), self.param_label(&path), default, value))
+            })
+            .collect()
     }
 
     // ---------------------------------------------------------------------------------------
