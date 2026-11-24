@@ -244,13 +244,15 @@ def _toml_file_settings(text: str) -> dict[str, Any]:
     try:
         import tomllib
     except ImportError:  # Python 3.10: no parser at hand, so any text that could spell a file key is refused
-        if "_file" in text.lower() or "\\u" in text.lower():
+        lower = text.lower()
+        if "_file" in lower or "\\u" in lower or "\\x" in lower:
             raise ToolError(FILE_REFUSED) from None
         return {}
     try:
         tree = tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
-        return {}  # the core refuses it before it opens anything
+    except tomllib.TOMLDecodeError as e:
+        # Refused here: the core's parser may read what this one does not, and would then open what it names.
+        raise ToolError(f"the TOML text could not be read: {e}") from None
 
     def walk(node: Any, path: str) -> dict[str, Any]:
         found: dict[str, Any] = {}

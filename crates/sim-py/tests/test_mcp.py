@@ -311,6 +311,13 @@ def test_file_settings_are_refused_outside_the_input_folder(tmp_path, monkeypatc
         assert "KINEMATICS_SIM_MCP_IN_DIR" in text and not any(p in text for p in paths)
         assert server._sessions["s"][key] == before and "t" not in server._sessions  # nothing was changed or made
 
+    # Text the server's own TOML parser cannot read is refused before the core sees it (the core's parser might read
+    # it and open what it names): no session is made, and the path is not in the answer.
+    if sys.version_info >= (3, 11):
+        unread = _toml_with(arm, "arm.urdf_file", paths[0]) + "\nbroken = [1, 2\n"
+        text = _refusals(("create_session", {"name": "u", "machine": arm, "toml": unread}))
+        assert "the TOML text could not be read" in text and paths[0] not in text and "u" not in server._sessions
+
     # Allowed: the built-in name and the empty value (the defaults), and a file inside the folder, on both paths.
     for machine, key, name in ((arm, "arm.urdf_file", "arm.urdf"), (cam, "cam.table_file", "cam.csv")):
         call("create_session", name="d", machine=machine, toml=ks.Config(machine).to_toml())
