@@ -7,6 +7,7 @@ pub mod model;
 pub mod runs;
 pub mod search_views;
 pub mod session;
+pub mod settings;
 pub mod video;
 
 /// (language code, translation file contents) for the app's own labels.
