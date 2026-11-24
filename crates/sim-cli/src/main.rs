@@ -129,6 +129,10 @@ impl Args {
 
 fn main() {
     let args = Args(std::env::args().skip(1).collect());
+    if args.flag("--version") || args.flag("-V") {
+        println!("sim-cli {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if args.flag("--help") || args.flag("-h") {
         let tr = texts(args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en"), MACHINES[0]);
         println!("{}", tr.tr("cli-usage"));

@@ -113,6 +113,16 @@ fn a_failing_verdict_exits_with_1_and_a_diverged_result_is_named() {
     assert_eq!(cli(&["verdicts", entry.id, "--no-such-option"]).status.code(), Some(2));
 }
 
+/// `--version` and `-V` print the program's name and version and succeed (they were refused as unknown options).
+#[test]
+fn version_prints_the_name_and_the_version() {
+    for flag in ["--version", "-V"] {
+        let out = cli(&[flag]);
+        assert_eq!(out.status.code(), Some(0), "{flag}");
+        assert_eq!(text(&out.stdout).trim(), format!("sim-cli {}", env!("CARGO_PKG_VERSION")), "{flag}");
+    }
+}
+
 /// The machine of one axis on a belt, found by its config: the tests name no machine.
 fn one_belt_axis() -> &'static sim_core::MachineEntry {
     MACHINES
