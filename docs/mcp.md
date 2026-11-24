@@ -26,9 +26,16 @@ or into an environment of your own: `pip install "kinematics-sim[mcp]"`, then `k
 `python -m kinematics_sim.mcp`). From the repository: `pip install maturin==1.16.0 "mcp>=2.3,<3"`, then
 `maturin develop --release` in `crates/sim-py` ([Python module](python.md#install)).
 
-A call that runs longer than 900 s is given up with a message (set `KINEMATICS_SIM_MCP_TIMEOUT_S` to change it); the
-simulator cannot be stopped half-way, so its thread runs to its end in the background. Long calls report progress every
-5 s to a client that asks for it.
+A call that runs longer than 900 s is given up with a message (set `KINEMATICS_SIM_MCP_TIMEOUT_S` to change it), and
+so is one the client cancels: its job (`kinematics_sim.Job`, [Python module](python.md#cancel-a-long-call)) is cancelled,
+so no new run starts and its thread ends once the runs under way have. Long calls report progress every 5 s to a client
+that asks for it: runs finished of runs planned so far. A panic of the simulator's core is answered as a tool error
+("the model failed internally") and the server and its sessions stay.
+
+Limits, so that one call or a client's retries cannot use the machine for hours or the memory without end: at most 32
+sessions (a new one beyond that drops the least recently used; there is no tool to delete one), `optimise_cycle` at most
+200 `runs`, `positioning_accuracy` at most 20 `points` and 20 `repeats`. A call above a limit is refused with a message
+that names it. (The constants are at the top of `kinematics_sim/mcp.py`.)
 
 ### Client configuration
 

@@ -364,3 +364,59 @@ def test_loop_margins_keeps_the_worst_rows_when_it_caps(monkeypatch):
     assert [r["motor"] for r in out["rows"]] == ["e", "d"]
     assert out["row_count"] == 6 and out["rows_left_out"] == 4
     assert [r["motor"] for r in call("loop_margins", session=GANTRY, top=6)["rows"]] == ["e", "d", "b", "f", "a", "c"]
+
+
+def test_a_call_given_up_at_the_timeout_is_cancelled_and_its_thread_ends(monkeypatch):
+    # Uncancelled this 3000-run band calculation takes minutes on all processors (it used to be left running to its
+    # end after the timeout); with the call's job cancelled it ends with the runs under way, within seconds.
+    import threading
+
+    finished = threading.Event()
+
+    def long_call():
+        try:
+            return ks.verdicts(ks.Config(GANTRY), bands=True, samples=3000)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(server, "TIMEOUT_S", 1.0)
+    with pytest.raises(server.ToolError, match="did not finish within"):
+        anyio.run(server._call, None, "verdicts", long_call)
+    assert finished.wait(15), "the thread of the given-up call still computes"
+
+
+def test_a_panic_of_the_core_is_an_error_of_the_tool_not_the_end_of_the_server():
+    class PanicException(BaseException):  # pyo3_runtime.PanicException, which cannot be imported by name
+        pass
+
+    def broken():
+        raise PanicException("the model panicked")
+
+    with pytest.raises(server.ToolError, match="failed internally"):
+        anyio.run(server._call, None, "margins", broken)
+
+
+def test_the_sessions_are_bounded_and_the_least_recently_used_is_dropped():
+    names = [f"s{i}" for i in range(server.MAX_SESSIONS)]
+    steps = [("create_session", {"name": n, "machine": AXIS}) for n in names]
+    steps += [("get_config", {"session": names[0], "prefix": "mass."})]
+    steps += [("create_session", {"name": "one-more", "machine": AXIS})]
+    results = calls(*steps)
+    assert not any(error for error, _ in results)
+    last = results[-1][1]
+    assert last["dropped_session"] == names[1] and len(last["sessions"]) == server.MAX_SESSIONS
+    assert names[0] in server._sessions and names[1] not in server._sessions
+    # A session that is replaced is not a new one.
+    ((_, replaced),) = calls(("create_session", {"name": "one-more", "machine": AXIS}))
+    assert "dropped_session" not in replaced
+
+
+def test_the_counts_that_multiply_the_work_are_bounded():
+    runs, points, repeats = calls(
+        ("optimise_cycle", {"session": AXIS, "runs": server.MAX_RUNS + 1}),
+        ("positioning_accuracy", {"session": AXIS, "points": server.MAX_POINTS + 1}),
+        ("positioning_accuracy", {"session": AXIS, "repeats": server.MAX_REPEATS + 1}),
+    )
+    assert runs[0] and f"limit of {server.MAX_RUNS}" in runs[1]
+    assert points[0] and f"limit of {server.MAX_POINTS}" in points[1]
+    assert repeats[0] and f"limit of {server.MAX_REPEATS}" in repeats[1]

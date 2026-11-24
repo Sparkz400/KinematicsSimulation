@@ -150,6 +150,16 @@ rechnet (Beispiel in der englischen Fassung, [python.md](../python.md#parameter-
 bis 8 kg, Spitzen- und Effektivmoment, thermische Auslastung und die Prüfurteile je Masse, und die Signale eines Laufs
 als DataFrame. Die Testsuite führt es von oben bis unten aus.
 
+## Einen langen Aufruf abbrechen
+
+Ein `Job` zählt die Läufe der Analysen, die in ihm aufgerufen werden, und stoppt sie von einem anderen Thread aus (der
+MCP-Server tut das, wenn ein Aufruf die Zeit überschreitet). `job.cancel()` startet keinen neuen Lauf; `job.run` löst
+`kinematics_sim.Cancelled` (eine `Exception`) aus, sobald die laufenden Läufe zu Ende sind (Beispiel in der englischen
+Fassung, [python.md](../python.md#cancel-a-long-call)). `job.done` und `job.total` geben die fertigen und die bisher
+geplanten Läufe an (spätere Stapel kommen dazu). Jede Funktion, die der Aufruf in diesem Thread aufruft, gehört zum Job;
+löst sie etwas anderes aus, bleibt ihr Fehler. Ein Job, der vor `run` abgebrochen wird, beendet den ersten Stapel
+sofort. Aufrufe ohne Job laufen wie bisher zu Ende.
+
 ## Tests
 
 ```bash

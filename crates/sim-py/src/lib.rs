@@ -1853,8 +1853,71 @@ impl PySim {
     }
 }
 
+pyo3::create_exception!(
+    kinematics_sim,
+    Cancelled,
+    pyo3::exceptions::PyException,
+    "A `Job` was cancelled (`Job.cancel()`) while its callable ran."
+);
+
+/// A long analysis to watch and to stop from another thread: `run(callable)` calls `callable` on this thread, and every
+/// analysis it calls is counted in `done` / `total` and ends soon after `cancel()` with `Cancelled`. The analyses
+/// release the GIL but run their batches on worker threads that belong to the job; none hands its work to a thread
+/// the job does not follow.
+#[pyclass(name = "Job", module = "kinematics_sim")]
+struct PyJob {
+    progress: std::sync::Arc<sim_components::analysis::Progress>,
+}
+
+#[pymethods]
+impl PyJob {
+    #[new]
+    fn new() -> Self {
+        PyJob { progress: Default::default() }
+    }
+
+    /// Stops the job: no further run starts, and `run` raises `Cancelled` once the runs under way have ended. From
+    /// any thread; cancelling a job that has ended or never ran does nothing until it is run (then it stops at once).
+    fn cancel(&self) {
+        self.progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Runs finished so far.
+    #[getter]
+    fn done(&self) -> usize {
+        self.progress.done.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Runs planned so far; later batches (refinement rounds, the next call of the callable) add to it.
+    #[getter]
+    fn total(&self) -> usize {
+        self.progress.total.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[getter]
+    fn cancelled(&self) -> bool {
+        self.progress.cancel.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The result of `callable()`, which belongs to this job while it runs; `Cancelled` where the job was cancelled.
+    fn run(&self, py: Python<'_>, callable: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        // PyO3 turns an unwind that reaches a `#[pyfunction]` into a `PanicException` and drops its payload, so the
+        // `Cancelled` unwind of the core arrives here as one: with the cancel flag set, that is what it is. (A real
+        // panic at the same moment is reported as cancelled, too: the job was being stopped anyway.)
+        match sim_components::analysis::with_progress(&self.progress, || callable.call0()) {
+            Err(sim_components::analysis::Cancelled) => Err(Cancelled::new_err("cancelled")),
+            Ok(Err(e)) if self.cancelled() && e.is_instance_of::<pyo3::panic::PanicException>(py) => {
+                Err(Cancelled::new_err("cancelled"))
+            }
+            Ok(result) => result.map(Bound::unbind),
+        }
+    }
+}
+
 #[pymodule]
 fn kinematics_sim(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyJob>()?;
+    m.add("Cancelled", m.py().get_type::<Cancelled>())?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PySim>()?;
     m.add_function(wrap_pyfunction!(machines, m)?)?;

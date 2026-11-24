@@ -1291,6 +1291,8 @@ pub fn analyse_cycle(sim: &mut Sim) -> Result<CycleLoad, CommandError> {
 /// `analyse_cycle`, with the effect views (`MotorLoad::torque_parts`, `CycleLoad::budget`) only where `views` asks
 /// for them: they cost one more evaluation of the machine per step, and no verdict needs them.
 pub fn analyse_cycle_with(sim: &mut Sim, views: bool) -> Result<CycleLoad, CommandError> {
+    // Every sequential batch of cycles (searches, the sweeps below) goes through here: where a job is cancelled.
+    check_cancelled();
     if let Some(points) = sim.plan_configured_path() {
         return analyse_trajectory_with(sim, points?, views);
     }
@@ -2515,17 +2517,91 @@ fn threads() -> usize {
     }
 }
 
-/// `work(0..count)` on all processors, in the order of the index: for runs that do not depend on each other.
+thread_local! {
+    /// The job this thread works for (`with_progress`); `on_all_cores` hands it on to its worker threads.
+    static JOB: std::cell::RefCell<Option<std::sync::Arc<Progress>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The payload of the unwind that ends a cancelled job: it is raised with `resume_unwind`, so no panic message is
+/// printed, and `with_progress` turns it back into `Err(Cancelled)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cancelled;
+
+/// Puts a job in as this thread's current one and puts the previous one back when dropped, also when unwinding.
+struct JobGuard(Option<std::sync::Arc<Progress>>);
+
+impl JobGuard {
+    fn install(job: Option<std::sync::Arc<Progress>>) -> Self {
+        JobGuard(JOB.with(|slot| slot.replace(job)))
+    }
+}
+
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        JOB.with(|slot| *slot.borrow_mut() = self.0.take());
+    }
+}
+
+fn current_job() -> Option<std::sync::Arc<Progress>> {
+    JOB.with(|slot| slot.borrow().clone())
+}
+
+/// Runs `job` as the job `progress` describes: every batch of runs it starts (`on_all_cores`) is counted in `progress`
+/// and stops once `progress.cancel` is set, which ends `job` with `Err(Cancelled)`. A panic of `job` stays a panic.
+pub fn with_progress<T>(progress: &std::sync::Arc<Progress>, job: impl FnOnce() -> T) -> Result<T, Cancelled> {
+    let _guard = JobGuard::install(Some(progress.clone()));
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)) {
+        Ok(value) => Ok(value),
+        Err(payload) if payload.is::<Cancelled>() => Err(Cancelled),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+/// Ends the current job at once (an unwind to `with_progress`) where it was cancelled; does nothing outside a job. For
+/// the long loops that do not go through `on_all_cores`.
+pub fn check_cancelled() {
+    if current_job().is_some_and(|job| job.cancel.load(std::sync::atomic::Ordering::Relaxed)) {
+        std::panic::resume_unwind(Box::new(Cancelled));
+    }
+}
+
+/// Adds `count` planned steps to the current job's total (none outside a job), for sequential work.
+pub(crate) fn plan_steps(count: usize) {
+    if let Some(job) = current_job() {
+        job.total.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Counts one step of sequential work as done in the current job (none outside a job).
+pub(crate) fn step_done() {
+    if let Some(job) = current_job() {
+        job.done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// `work(0..count)` on all processors, in the order of the index: for runs that do not depend on each other. Inside a
+/// job (`with_progress`) the runs are counted, no new run starts once the job is cancelled, and the call then ends the
+/// job with the `Cancelled` unwind.
 pub(crate) fn on_all_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let job = current_job();
+    plan_steps(count);
+    let cancelled = || job.as_ref().is_some_and(|job| job.cancel.load(Relaxed));
     let next = std::sync::atomic::AtomicUsize::new(0);
     let worker = || -> Vec<(usize, T)> {
+        // A nested `on_all_cores` in a run sees the job from this worker thread, too.
+        let _guard = JobGuard::install(job.clone());
         let mut done = Vec::new();
         loop {
-            let run = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if cancelled() {
+                return done;
+            }
+            let run = next.fetch_add(1, Relaxed);
             if run >= count {
                 return done;
             }
             done.push((run, work(run)));
+            step_done();
         }
     };
     let threads = threads().min(count.max(1));
@@ -2535,9 +2611,22 @@ pub(crate) fn on_all_cores<T: Send>(count: usize, work: impl Fn(usize) -> T + Sy
     } else {
         std::thread::scope(|scope| {
             let workers: Vec<_> = (0..threads).map(|_| scope.spawn(worker)).collect();
-            workers.into_iter().flat_map(|worker| worker.join().expect("a run of the cycle panicked")).collect()
+            // All joined before one is passed on: a worker left to the scope would replace the payload.
+            let joined: Vec<_> = workers.into_iter().map(|worker| worker.join()).collect();
+            let mut runs = Vec::new();
+            for result in joined {
+                match result {
+                    Ok(done) => runs.extend(done),
+                    Err(payload) if payload.is::<Cancelled>() => std::panic::resume_unwind(payload),
+                    Err(_) => panic!("a run of the cycle panicked"),
+                }
+            }
+            runs
         })
     };
+    if cancelled() {
+        std::panic::resume_unwind(Box::new(Cancelled));
+    }
     runs.sort_by_key(|(run, _)| *run);
     runs.into_iter().map(|(_, run)| run).collect()
 }
@@ -4184,6 +4273,7 @@ pub struct StepResponse {
 
 /// Tool position of one axis, after letting the machine come to rest at its start pose.
 fn settled(entry: &MachineEntry, cfg: &Config, axis: usize) -> Result<(Sim, f64), ConfigError> {
+    check_cancelled();
     let mut sim = Sim::new(entry, cfg)?;
     if axis >= sim.machine.axes().len() {
         return Err(ConfigError::Invalid("axis".into()));
@@ -4590,8 +4680,13 @@ pub fn velocity_loop_responses(
     let starts = on_all_cores(configs.len(), |run| settled(entry, &lossless[run], 0).map(|(sim, _)| sim.snapshot()))
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
+    // Run inside a job whose progress this is, `on_all_cores` counts the points already: not twice. (Its cancel
+    // unwind then ends the call as `Cancelled` instead of the `CANCELLED` error.)
+    let counted = current_job().is_some_and(|job| std::ptr::eq(&*job, progress));
     let measure = |jobs: &[(usize, usize, f64)]| -> Result<Vec<LoopPoint>, ConfigError> {
-        progress.total.fetch_add(jobs.len(), Relaxed);
+        if !counted {
+            progress.total.fetch_add(jobs.len(), Relaxed);
+        }
         on_all_cores(jobs.len(), |j| {
             if progress.cancel.load(Relaxed) {
                 return Err(ConfigError::Invalid(CANCELLED.into()));
@@ -4601,7 +4696,9 @@ pub fn velocity_loop_responses(
             let mut sim = Sim::new(entry, &lossless[run])?;
             sim.restore(&starts[run])?;
             let point = loop_point(sim, motor, frequency, amplitudes[motor]);
-            progress.done.fetch_add(1, Relaxed);
+            if !counted {
+                progress.done.fetch_add(1, Relaxed);
+            }
             point
         })
         .into_iter()
@@ -5023,6 +5120,130 @@ pub fn compare_effect(entry: &MachineEntry, cfg: &Config, effect: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+    fn job() -> std::sync::Arc<Progress> {
+        std::sync::Arc::new(Progress::default())
+    }
+
+    /// A job's batch is counted: N planned, N done, the results as without a job.
+    #[test]
+    fn a_job_counts_its_runs() {
+        let progress = job();
+        let out = with_progress(&progress, || on_all_cores(40, |i| i * 2));
+        assert_eq!(out, Ok((0..40).map(|i| i * 2).collect::<Vec<_>>()));
+        assert_eq!((progress.total.load(Relaxed), progress.done.load(Relaxed)), (40, 40));
+    }
+
+    /// Without a job nothing is counted or cancelled, and the job context is gone after `with_progress`.
+    #[test]
+    fn without_a_job_runs_are_as_before() {
+        assert_eq!(on_all_cores(10, |i| i + 1), (1..=10).collect::<Vec<_>>());
+        check_cancelled();
+        let progress = job();
+        with_progress(&progress, || ()).unwrap();
+        assert!(current_job().is_none());
+        assert_eq!(on_all_cores(3, |i| i), vec![0, 1, 2]);
+        assert_eq!(progress.total.load(Relaxed), 0);
+    }
+
+    /// The run number 5 cancels: the job ends with `Cancelled`, and far fewer than all 1000 runs were started (each
+    /// worker takes at most one more run after the flag is set, so not more than 6 plus the thread count).
+    #[test]
+    fn a_cancelled_job_stops_taking_runs() {
+        let progress = job();
+        let started = AtomicUsize::new(0);
+        let out = with_progress(&progress, || {
+            on_all_cores(1000, |i| {
+                started.fetch_add(1, Relaxed);
+                if i == 5 {
+                    progress.cancel.store(true, Relaxed);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            })
+        });
+        assert_eq!(out, Err(Cancelled));
+        let started = started.load(Relaxed);
+        assert!(started < 6 + threads() + 2, "{started} runs started");
+        assert!(progress.done.load(Relaxed) <= started && progress.done.load(Relaxed) < 1000);
+    }
+
+    /// A nested batch inside a run belongs to the job: its cancel ends the outer batch with `Cancelled`, too.
+    #[test]
+    fn a_nested_batch_is_cancelled_too() {
+        let progress = job();
+        let started = AtomicUsize::new(0);
+        let out = with_progress(&progress, || {
+            on_all_cores(4, |_| {
+                on_all_cores(500, |i| {
+                    started.fetch_add(1, Relaxed);
+                    if i == 3 {
+                        progress.cancel.store(true, Relaxed);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                })
+            })
+        });
+        assert_eq!(out, Err(Cancelled));
+        assert!(started.load(Relaxed) < 4 * 500);
+    }
+
+    /// A job cancelled before it starts runs nothing.
+    #[test]
+    fn a_job_cancelled_before_its_start_runs_nothing() {
+        let progress = job();
+        progress.cancel.store(true, Relaxed);
+        let started = AtomicUsize::new(0);
+        let out = with_progress(&progress, || {
+            on_all_cores(50, |_| {
+                started.fetch_add(1, Relaxed);
+            })
+        });
+        assert_eq!((out, started.load(Relaxed)), (Err(Cancelled), 0));
+    }
+
+    /// A real panic in the job stays a panic (not `Cancelled`), whether it is in a run or in the job itself, and the
+    /// job context is restored.
+    #[test]
+    fn a_real_panic_stays_a_panic() {
+        let progress = job();
+        let in_job = std::panic::catch_unwind(|| with_progress(&progress, || -> u8 { panic!("model failed") }));
+        assert!(in_job.is_err_and(|p| !p.is::<Cancelled>()));
+        let in_run = std::panic::catch_unwind(|| {
+            with_progress(&progress, || {
+                on_all_cores(8, |i| {
+                    if i == 2 {
+                        panic!("run failed")
+                    }
+                })
+            })
+        });
+        assert!(in_run.is_err_and(|p| !p.is::<Cancelled>()));
+        assert!(current_job().is_none());
+    }
+
+    /// `check_cancelled` raises inside a cancelled job and is silent in a job that is not, and outside any.
+    #[test]
+    fn check_cancelled_raises_only_in_a_cancelled_job() {
+        check_cancelled();
+        let progress = job();
+        assert_eq!(with_progress(&progress, check_cancelled), Ok(()));
+        progress.cancel.store(true, Relaxed);
+        assert_eq!(with_progress(&progress, check_cancelled), Err(Cancelled));
+        check_cancelled();
+    }
+
+    /// Sequential work plans and counts its steps in the job.
+    #[test]
+    fn sequential_steps_are_counted_in_the_job() {
+        let progress = job();
+        with_progress(&progress, || {
+            plan_steps(3);
+            (0..3).for_each(|_| step_done());
+        })
+        .unwrap();
+        assert_eq!((progress.total.load(Relaxed), progress.done.load(Relaxed)), (3, 3));
+    }
 
     /// A value or limit of NaN or infinity is named, whether the row passes or not; finite ones are not.
     #[test]
