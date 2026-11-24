@@ -12,7 +12,7 @@ use sim_components::motor_fit::{
 };
 use sim_components::trace::{Trace, TraceError, differences, overlay_csv};
 use sim_components::{Command, Sim};
-use sim_core::{Config, ConfigError, MachineEntry, Translations};
+use sim_core::{Config, ConfigError, ConfigHint, MachineEntry, Translations};
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -142,12 +142,38 @@ fn main() {
     let entry = machine(&args).unwrap_or(MACHINES[0]);
     let tr = texts(lang, entry);
     if let Err(Failure(key, arg)) = dispatch(&args, &tr) {
-        eprintln!("{}", tr.tr_arg(key, &arg));
+        eprintln!("{}{}", tr.tr_arg(key, &arg), config_help(&args, &tr, key, &arg));
         std::process::exit(2);
     }
     // The table is printed in full first; the exit code then says that a check failed (2 stays for usage and config).
     if CHECK_FAILED.load(Ordering::Relaxed) {
         std::process::exit(1);
+    }
+}
+
+/// What `Config::hint` has to add to a config error, as a suffix of its message: the nearest path (a misspelt `--set`
+/// path) or the value of the refused one. The config is built again for it, with the assignments that apply; an empty
+/// suffix where there is nothing to add or the config cannot be built.
+fn config_help(args: &Args, tr: &Translations, key: &str, arg: &str) -> String {
+    let error = match key {
+        "error-config-missing" => ConfigError::Missing(arg.into()),
+        "error-config-unknown" => ConfigError::Unknown(arg.into()),
+        "error-config-invalid" => ConfigError::Invalid(arg.into()),
+        "error-config-type" => ConfigError::Type(arg.into()),
+        _ => return String::new(),
+    };
+    let Ok((entry, named)) = named_config(args) else { return String::new() };
+    let Ok(mut cfg) = sim_components::catalog::resolve(entry, &named) else {
+        return String::new();
+    };
+    for assignment in args.options("--set") {
+        // The refused one is what the error is about.
+        let _ = cfg.set_text(assignment);
+    }
+    match cfg.hint(&error) {
+        Some(ConfigHint::Nearest(path)) => format!(" {}", tr.tr_arg("cli-hint-nearest", &path)),
+        Some(ConfigHint::Value(value)) => format!(" {}", tr.tr_arg("cli-hint-value", &value)),
+        None => String::new(),
     }
 }
 

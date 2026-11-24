@@ -44,3 +44,5 @@ fit-report-written = Report written: { $arg }
 cli-sensitivity-zero = Not ranked: { $arg } is 0 and has no range in [bounds] (--delta of 0 is 0); give it one there to vary it.
 cli-sensitivity-runs = Cycles simulated for the global sensitivity: { $arg }
 cli-measure-first = Measure these first: { $arg }
+cli-hint-nearest = (did you mean { $arg }?)
+cli-hint-value = = { $arg }

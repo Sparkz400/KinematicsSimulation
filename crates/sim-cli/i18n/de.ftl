@@ -44,3 +44,5 @@ fit-report-written = Bericht geschrieben: { $arg }
 cli-sensitivity-zero = Nicht eingeordnet: { $arg } ist 0 und hat keinen Bereich in [bounds] (--delta von 0 ist 0); dort einen angeben, um ihn zu variieren.
 cli-sensitivity-runs = Für die globale Empfindlichkeit simulierte Zyklen: { $arg }
 cli-measure-first = Diese zuerst messen: { $arg }
+cli-hint-nearest = (meinten Sie { $arg }?)
+cli-hint-value = = { $arg }

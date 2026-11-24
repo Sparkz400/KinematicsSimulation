@@ -113,6 +113,28 @@ fn a_failing_verdict_exits_with_1_and_a_diverged_result_is_named() {
     assert_eq!(cli(&["verdicts", entry.id, "--no-such-option"]).status.code(), Some(2));
 }
 
+/// A misspelt `--set` path names the nearest path of the config, and a value out of range is shown with its path: the
+/// message of the error stays as it was, with the help after it (the helper itself is tested in sim-core).
+#[test]
+fn config_errors_say_what_was_meant() {
+    let entry = MACHINES[1];
+    let key = payload_key(&entry.config());
+    let typo = key.replacen('a', "", 1);
+    let out = cli(&["verdicts", entry.id, "--set", &format!("{typo}=3")]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        text(&out.stderr).trim(),
+        format!("Configuration value is missing: {typo} (did you mean {key}?)"),
+        "{}",
+        text(&out.stderr)
+    );
+    let low = cli(&["verdicts", entry.id, "--set", &format!("{key}=-5")]);
+    assert_eq!(low.status.code(), Some(2));
+    assert_eq!(text(&low.stderr).trim(), format!("Configuration value is out of range: {key} = -5"));
+    let german = cli(&["verdicts", entry.id, "--set", &format!("{typo}=3"), "--lang", "de"]);
+    assert!(text(&german.stderr).contains(&format!("(meinten Sie {key}?)")), "{}", text(&german.stderr));
+}
+
 /// `--version` and `-V` print the program's name and version and succeed (they were refused as unknown options).
 #[test]
 fn version_prints_the_name_and_the_version() {

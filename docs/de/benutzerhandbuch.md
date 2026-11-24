@@ -52,7 +52,7 @@ sim-cli COMMAND MACHINE [options]
 
 Regeln, über die man leicht stolpert:
 
-- `--set` ändert nur Werte, die es gibt. Ein falsch geschriebener Schlüssel wird abgelehnt (`Konfigurationswert fehlt: mass.cariage_kg`), ein Wert vom falschen Typ ebenso.
+- `--set` ändert nur Werte, die es gibt. Ein falsch geschriebener Schlüssel wird abgelehnt und der nächste Schlüssel genannt, wo einer nahe liegt (`Konfigurationswert fehlt: mass.cariage_kg (meinten Sie mass.carriage_kg?)`), ein Wert vom falschen Typ ebenso. Ein Wert außerhalb des Bereichs wird mit Pfad und Wert gezeigt (`Konfigurationswert liegt außerhalb des gültigen Bereichs: mass.payload_kg = -5`).
 - `--motor`, `--supply` und `--gearbox` brauchen eine Tabelle `[parts]` in der Konfiguration. Alle drei mitgelieferten Konfigurationen haben eine.
 - Jede Option außer `--cycle`, `--time-optimal`, `--bands` und `--worst` erwartet einen Wert. Eine Option ohne ihren Wert wird abgelehnt (`Dieser Option fehlt ihr Wert: --time`), ebenso eine Option, die der Befehl nicht kennt, etwa eine falsch geschriebene (`Diese Option kennt der Befehl nicht: --cylce`). Eine Zahl muss endlich sein: `--time inf` wird abgelehnt.
 - `--cycle`, `--move`, `--trajectory` und `--path` schließen einander aus (`Von diesen Optionen kann nur eine zugleich angegeben werden: --cycle --move`).
