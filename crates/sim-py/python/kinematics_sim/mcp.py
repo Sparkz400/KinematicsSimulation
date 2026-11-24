@@ -30,6 +30,7 @@ import kinematics_sim as ks
 
 # A call that runs longer is given up and its job cancelled: no new run starts, the thread ends once the runs under way do.
 TIMEOUT_S = float(os.environ.get("KINEMATICS_SIM_MCP_TIMEOUT_S", "900"))
+HEARTBEAT_S = 5.0  # between progress notices
 MAX_ROWS = 25
 # Bounds that keep one call (or a client's retries) from using the machine for hours, and the sessions, which live in
 # this process, from growing without end. The counts multiply the runs of a tool; all are far above the defaults.
@@ -166,16 +167,15 @@ async def _call(ctx: Context | None, what: str, fn: Any, *args: Any, **kwargs: A
     job = ks.Job()
 
     async def heartbeat() -> None:
-        elapsed = 0
+        # MCP progress must increase with every notice, and the job's runs may stand still or grow a new batch: the
+        # progress is the time used of the timeout, the runs (done of planned so far) are in the message.
+        elapsed = 0.0
         while True:
-            await anyio.sleep(5)
-            elapsed += 5
+            await anyio.sleep(HEARTBEAT_S)
+            elapsed += HEARTBEAT_S
             if ctx is not None:
-                done, total = job.done, job.total
-                if total:  # runs finished of runs planned so far (later batches add to it)
-                    await ctx.report_progress(done, total, f"{what}: {done} of {total} runs, {elapsed} s")
-                else:
-                    await ctx.report_progress(elapsed, TIMEOUT_S, f"{what}: running for {elapsed} s")
+                runs = f", {job.done} of {job.total} runs" if job.total else ""
+                await ctx.report_progress(elapsed, TIMEOUT_S, f"{what}: running for {elapsed:.0f} s{runs}")
 
     try:
         with anyio.fail_after(TIMEOUT_S):

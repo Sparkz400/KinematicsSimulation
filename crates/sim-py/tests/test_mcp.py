@@ -386,6 +386,22 @@ def test_a_call_given_up_at_the_timeout_is_cancelled_and_its_thread_ends(monkeyp
     assert finished.wait(15), "the thread of the given-up call still computes"
 
 
+def test_the_progress_of_a_call_increases_with_every_notice(monkeypatch):
+    # MCP wants each progress notice above the last. A job's runs stand still while a run lasts longer than the
+    # interval: notices every 20 ms over a bands run of a few seconds meet such pauses, and every notice must still rise.
+    notices = []
+
+    class Ctx:
+        async def report_progress(self, progress, total, message):
+            notices.append((progress, total, message))
+
+    monkeypatch.setattr(server, "HEARTBEAT_S", 0.02)
+    anyio.run(server._call, Ctx(), "verdicts", lambda: ks.verdicts(ks.Config(AXIS), bands=True, samples=40))
+    progress = [p for p, _, _ in notices]
+    assert len(progress) > 10 and all(b > a for a, b in zip(progress, progress[1:])), progress
+    assert any(" runs" in m for _, _, m in notices)  # the runs are named in the message
+
+
 def test_a_panic_of_the_core_is_an_error_of_the_tool_not_the_end_of_the_server():
     class PanicException(BaseException):  # pyo3_runtime.PanicException, which cannot be imported by name
         pass
