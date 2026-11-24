@@ -693,13 +693,16 @@ fn a_value_typed_in_the_parameter_panel_reaches_the_simulation_and_a_bad_one_is_
     let mut d = Driver::new();
     d.tab("ui-parameters");
     let (path, old) = some_parameter(&d);
-    let field = d.first_in(SETUP, Role::TextInput).rect;
+    // Found again before each value: the messages strip on top of the panel moves it down with the first message.
+    let field = |d: &mut Driver| d.first_in(SETUP, Role::TextInput).rect;
     let new = old * 1.1;
-    d.type_into(field, &format!("{path} = {new}"));
+    let at = field(&mut d);
+    d.type_into(at, &format!("{path} = {new}"));
     d.enter();
     d.wait("the value set", |d| d.state().model.config.f64(&path).ok() == Some(new));
     // A word for a number, by the button: refused with its message, shown under the field, and the value kept.
-    d.type_into(field, &format!("{path} = \"fast\""));
+    let at = field(&mut d);
+    d.type_into(at, &format!("{path} = \"fast\""));
     d.button_of("ui-set-value-apply");
     d.wait("the word refused", |d| d.messages().len() == 1);
     assert_eq!(d.state().model.config.f64(&path).unwrap(), new);
@@ -707,12 +710,14 @@ fn a_value_typed_in_the_parameter_panel_reaches_the_simulation_and_a_bad_one_is_
     let shown = d.state().model.tr.tr_arg(key, &detail);
     d.find_where(&format!("{shown} shown"), |w| w.role == Role::Label && w.value == shown);
     // A key the config does not have.
-    d.type_into(field, "no.such.key = 1");
+    let at = field(&mut d);
+    d.type_into(at, "no.such.key = 1");
     d.enter();
     d.wait("the key refused", |d| d.messages().len() == 2);
     // A value outside what the simulation takes comes back from it, refused, and the value before stays. Its answer is
     // also the sign that the simulation has answered the value before it, which it took: that one brought no message.
-    d.type_into(field, &format!("{path} = -1.0"));
+    let at = field(&mut d);
+    d.type_into(at, &format!("{path} = -1.0"));
     d.enter();
     d.wait("the simulation's refusal", |d| d.messages().len() == 3);
     d.wait("the value before back", |d| d.state().model.config.f64(&path).ok() == Some(new));
