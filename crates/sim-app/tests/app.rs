@@ -1272,11 +1272,11 @@ fn wait_for_first_run(model: &mut Model, progress: &sim_components::analysis::Pr
     assert!(progress.done.load(Relaxed) > 0, "the job did not run a batch");
 }
 
-/// Waits until the job's thread has ended: it held a clone of the progress, which it lets go of last.
+/// Waits up to `patience` until the job's thread has ended: it held a clone of the progress, which it lets go of last.
 #[track_caller]
-fn wait_for_thread_end(progress: &std::sync::Arc<sim_components::analysis::Progress>) {
+fn wait_for_thread_end(progress: &std::sync::Arc<sim_components::analysis::Progress>, patience: Duration) {
     let start = Instant::now();
-    while std::sync::Arc::strong_count(progress) > 1 && start.elapsed() < PATIENCE {
+    while std::sync::Arc::strong_count(progress) > 1 && start.elapsed() < patience {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(std::sync::Arc::strong_count(progress), 1, "the job's thread is still running");
@@ -1296,9 +1296,12 @@ fn a_cancelled_analysis_ends_early_and_keeps_the_earlier_results() {
     let before = (model.cycle_tables(), model.bands.is_some());
     assert!(!before.0.is_empty());
     (model.inputs.bands, model.inputs.samples) = (true, 1000);
+    let started = Instant::now();
     model.run_analysis(Analysis::Cycle);
     let progress = model.job_progress(job).expect("the job is running");
     wait_for_first_run(&mut model, &progress);
+    // At least one cycle's time: the thread may finish the runs under way after the cancel, one per worker.
+    let first_run = started.elapsed();
     let cancelled_at = Instant::now();
     model.cancel_job(job);
     wait_for_jobs(&mut model);
@@ -1308,7 +1311,8 @@ fn a_cancelled_analysis_ends_early_and_keeps_the_earlier_results() {
     assert_eq!(model.messages.last(), Some(&("ui-job-cancelled", String::new())), "{:?}", model.messages);
     assert_eq!((model.cycle_tables(), model.bands.is_some()), before);
     assert!(model.job_progress(job).is_none());
-    wait_for_thread_end(&progress);
+    // The thread stops, not runs its thousand cycles to the end (which the model's answer alone would not show).
+    wait_for_thread_end(&progress, first_run * 10 + Duration::from_secs(2));
 }
 
 /// Without a cancel the job gives its result, as before, and has done all the runs it planned.
@@ -1343,8 +1347,8 @@ fn switching_the_machine_cancels_the_jobs_under_way() {
     model.set_machine(other);
     assert!(analysis.cancel.load(Relaxed) && traces.cancel.load(Relaxed));
     assert!(!model.analysis_running());
-    wait_for_thread_end(&analysis);
-    wait_for_thread_end(&traces);
+    wait_for_thread_end(&analysis, PATIENCE);
+    wait_for_thread_end(&traces, PATIENCE);
     // The same where another config file replaces the machine's.
     model.set_machine(entry);
     model.run_analysis(Analysis::Cycle);
@@ -1355,7 +1359,7 @@ fn switching_the_machine_cancels_the_jobs_under_way() {
     model.open_config(path.to_str().unwrap());
     std::fs::remove_file(&path).ok();
     assert!(again.cancel.load(Relaxed));
-    wait_for_thread_end(&again);
+    wait_for_thread_end(&again, PATIENCE);
 }
 
 /// An unstable loop (an absurd position gain) leaves verdict values that are not finite: the app says so, once for the
