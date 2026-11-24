@@ -128,9 +128,9 @@ fn config_errors_say_what_was_meant() {
         "{}",
         text(&out.stderr)
     );
-    let low = cli(&["verdicts", entry.id, "--set", &format!("{key}=-5")]);
+    let low = cli(&["verdicts", entry.id, "--set", &format!("{key}=-5.5")]);
     assert_eq!(low.status.code(), Some(2));
-    assert_eq!(text(&low.stderr).trim(), format!("Configuration value is out of range: {key} = -5"));
+    assert_eq!(text(&low.stderr).trim(), format!("Configuration value is out of range: {key} = -5.5"));
     let german = cli(&["verdicts", entry.id, "--set", &format!("{typo}=3"), "--lang", "de"]);
     assert!(text(&german.stderr).contains(&format!("(meinten Sie {key}?)")), "{}", text(&german.stderr));
 }
