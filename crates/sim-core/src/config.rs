@@ -44,6 +44,30 @@ impl ConfigError {
     }
 }
 
+/// What `Config::hint` finds to say beside an error.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConfigHint {
+    /// The path of the config nearest to the misspelt one.
+    Nearest(String),
+    /// The value (in TOML syntax) at the path that was refused.
+    Value(String),
+}
+
+/// The Levenshtein distance of two strings, in characters.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut diagonal = std::mem::replace(&mut row[0], i + 1);
+        for (j, cb) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (diagonal + usize::from(ca != *cb)).min(above + 1).min(row[j] + 1);
+            diagonal = above;
+        }
+    }
+    row[b.len()]
+}
+
 type Result<T> = std::result::Result<T, ConfigError>;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -160,6 +184,25 @@ impl Config {
         toml::to_string(&self.0).map_err(|e| ConfigError::Parse(e.to_string()))
     }
 
+    /// Extra help for an error of this config, for a front end to append to its message (the error itself, its key and
+    /// its detail stay as they are): for a path that is missing or unknown the nearest path the config has, where one
+    /// is close (at most 2 edits, or a third of the path's length); for a value out of range or of the wrong type the
+    /// value the path has.
+    pub fn hint(&self, error: &ConfigError) -> Option<ConfigHint> {
+        match error {
+            ConfigError::Missing(path) | ConfigError::Unknown(path) => {
+                let near = path.chars().count().div_ceil(3).max(2);
+                let paths = self.leaves().into_iter().map(|(p, _)| p);
+                let (distance, nearest) = paths.map(|p| (edit_distance(path, &p), p)).min_by_key(|(d, _)| *d)?;
+                (distance > 0 && distance <= near).then_some(ConfigHint::Nearest(nearest))
+            }
+            ConfigError::Invalid(path) | ConfigError::Type(path) => {
+                self.get(path).ok().map(|value| ConfigHint::Value(value.to_string()))
+            }
+            _ => None,
+        }
+    }
+
     /// Every scalar value with its dotted path, for the parameter panel and the translation check.
     pub fn leaves(&self) -> Vec<(String, Value)> {
         fn walk(prefix: &str, table: &Table, out: &mut Vec<(String, Value)>) {
@@ -210,6 +253,22 @@ mod tests {
     use super::*;
 
     const TEXT: &str = "format_version = 1\n[a]\nmass_kg = 2.0\non = true\n[a.b]\nlist = [1, 2.5]\n";
+
+    /// A typo of one letter finds the path it was meant for (also one missing from the config altogether, `Unknown`), a
+    /// name far off finds none, a path of the config itself is no typo of itself, and a refused value is shown.
+    #[test]
+    fn hints_name_the_nearest_path_and_the_value() {
+        let c = Config::parse(TEXT).unwrap();
+        let near = |p: &str| c.hint(&ConfigError::Missing(p.into()));
+        assert_eq!(near("a.mas_kg"), Some(ConfigHint::Nearest("a.mass_kg".into())));
+        assert_eq!(c.hint(&ConfigError::Unknown("a.onn".into())), Some(ConfigHint::Nearest("a.on".into())));
+        assert_eq!(near("something.entirely_else"), None);
+        assert_eq!(near("a.mass_kg"), None);
+        assert_eq!(c.hint(&ConfigError::Invalid("a.mass_kg".into())), Some(ConfigHint::Value("2.0".into())));
+        assert_eq!(c.hint(&ConfigError::Invalid("a.nowhere".into())), None);
+        assert_eq!(c.hint(&ConfigError::Parse("x".into())), None);
+        assert_eq!(edit_distance("kitten", "sitting"), 3);
+    }
 
     #[test]
     fn reads_values_by_path() {

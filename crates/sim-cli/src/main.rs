@@ -1,5 +1,5 @@
 //! Batch front end: runs the core as fast as the CPU allows and writes CSV.
-//! Every message comes from the translation files; see `cli-usage` there for the commands.
+//! Every message comes from the translation files; see `cli-help-*` there for the commands.
 
 use sim_components::analysis::{
     SWEEP_POINTS, analyse_cycle_with, analyse_trajectory_with, bandwidth, closed_loop_response,
@@ -12,10 +12,12 @@ use sim_components::motor_fit::{
 };
 use sim_components::trace::{Trace, TraceError, differences, overlay_csv};
 use sim_components::{Command, Sim};
-use sim_core::{Config, ConfigError, MachineEntry, Translations};
+use sim_core::{Config, ConfigError, ConfigHint, MachineEntry, Translations};
 use sim_machines::{LANGUAGES, MACHINES, find, translations};
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+mod help;
 mod report;
 
 static I18N: &[(&str, &str)] = &[("en", include_str!("../i18n/en.ftl")), ("de", include_str!("../i18n/de.ftl"))];
@@ -60,8 +62,8 @@ const COMMON: [&str; 12] = [
     "--lang",
 ];
 /// Options without a value.
-const FLAGS: [&str; 8] =
-    ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal", "--stiffness", "--shapes"];
+const FLAGS: [&str; 9] =
+    ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal", "--stiffness", "--shapes", "--help"];
 /// The ways to say what the machine should do: one at most.
 const MOTIONS: [&str; 4] = ["--cycle", "--move", "--trajectory", "--path"];
 
@@ -128,22 +130,93 @@ impl Args {
 
 fn main() {
     let args = Args(std::env::args().skip(1).collect());
-    if args.flag("--help") || args.flag("-h") {
-        let tr = texts(args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en"), MACHINES[0]);
-        println!("{}", tr.tr("cli-usage"));
+    if args.flag("--version") || args.flag("-V") {
+        println!("sim-cli {}", env!("CARGO_PKG_VERSION"));
         return;
     }
     let lang = args.option("--lang").filter(|l| LANGUAGES.contains(l)).unwrap_or("en");
+    // `help [TOPIC]`, `COMMAND --help` and `--help`: the help of the command, or the overview, on standard output.
+    let command = args.positional(0).filter(|word| !word.starts_with('-'));
+    if command == Some("help") || args.flag("--help") || args.flag("-h") {
+        let tr = texts(lang, MACHINES[0]);
+        let topic = if command == Some("help") { args.positional(1) } else { command };
+        match help::text(&tr, topic) {
+            Some(text) => println!("{text}"),
+            None => {
+                eprintln!("{}", tr.tr_arg("cli-usage-unknown", topic.unwrap_or_default()));
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
     let entry = machine(&args).unwrap_or(MACHINES[0]);
     let tr = texts(lang, entry);
     if let Err(Failure(key, arg)) = dispatch(&args, &tr) {
-        eprintln!("{}", tr.tr_arg(key, &arg));
+        if key == "cli-usage" {
+            // Not everything: the help of the command that was meant, or with no command the overview.
+            match command {
+                Some(name) if help::COMMANDS.contains(&name) => eprintln!("{}", tr.tr_arg("cli-usage-hint", name)),
+                Some(name) => eprintln!("{}", tr.tr_arg("cli-usage-unknown", name)),
+                None => eprintln!("{}", help::text(&tr, None).unwrap_or_default()),
+            }
+        } else {
+            eprintln!("{}{}", tr.tr_arg(key, &arg), config_help(&args, &tr, key, &arg));
+        }
         std::process::exit(2);
+    }
+    // The table is printed in full first; the exit code then says that a check failed (2 stays for usage and config).
+    if CHECK_FAILED.load(Ordering::Relaxed) {
+        std::process::exit(1);
     }
 }
 
-fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
-    let known: &[&str] = match args.positional(0) {
+/// What `Config::hint` has to add to a config error, as a suffix of its message: the nearest path (a misspelt `--set`
+/// path) or the value of the refused one. The config is built again for it, with the assignments that apply; an empty
+/// suffix where there is nothing to add or the config cannot be built.
+fn config_help(args: &Args, tr: &Translations, key: &str, arg: &str) -> String {
+    let error = match key {
+        "error-config-missing" => ConfigError::Missing(arg.into()),
+        "error-config-unknown" => ConfigError::Unknown(arg.into()),
+        "error-config-invalid" => ConfigError::Invalid(arg.into()),
+        "error-config-type" => ConfigError::Type(arg.into()),
+        _ => return String::new(),
+    };
+    let Ok((entry, named)) = named_config(args) else { return String::new() };
+    let Ok(mut cfg) = sim_components::catalog::resolve(entry, &named) else {
+        return String::new();
+    };
+    for assignment in args.options("--set") {
+        // The refused one is what the error is about.
+        let _ = cfg.set_text(assignment);
+    }
+    match cfg.hint(&error) {
+        Some(ConfigHint::Nearest(path)) => format!(" {}", tr.tr_arg("cli-hint-nearest", &path)),
+        Some(ConfigHint::Value(value)) => format!(" {}", tr.tr_arg("cli-hint-value", &value)),
+        None => String::new(),
+    }
+}
+
+/// Set by `judged` when a command that judges printed a failing row.
+static CHECK_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// The result word of a judged row; a failing one makes the exit code 1.
+fn judged(ok: bool) -> &'static str {
+    if !ok {
+        CHECK_FAILED.store(true, Ordering::Relaxed);
+    }
+    if ok { "ok" } else { "FAIL" }
+}
+
+/// On the error stream, after a table of verdicts: that a result of it is not finite, and what to run to see the loop.
+fn tell_not_finite<'a>(tr: &Translations, verdicts: impl IntoIterator<Item = &'a sim_components::analysis::Verdict>) {
+    if sim_components::analysis::any_not_finite(verdicts) {
+        eprintln!("{}", tr.tr("verdict-not-finite"));
+    }
+}
+
+/// The options of a command beside the common ones.
+fn command_options(command: Option<&str>) -> &'static [&'static str] {
+    match command {
         Some("run") => &[
             "--move",
             "--cycle",
@@ -211,8 +284,11 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("fmu") => &["--binary", "--fmi"],
         Some("report") => &["--bands"],
         _ => &[],
-    };
-    args.check(known)?;
+    }
+}
+
+fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    args.check(command_options(args.positional(0)))?;
     if let Some(dir) = args.option("--catalog") {
         sim_components::catalog::use_directory(std::path::Path::new(dir))?;
     }
@@ -1303,7 +1379,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
                     .collect::<Vec<_>>()
                     .join(";")
             };
-            let result = if v.ok { "ok" } else { "FAIL" };
+            let result = judged(v.ok);
             writeln!(
                 out,
                 "{},{},{},{},{result},{},{}",
@@ -1316,6 +1392,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
             )
             .map_err(io)?;
         }
+        tell_not_finite(tr, worst.iter().map(|w| &w.verdict));
         return out.flush().map_err(io);
     }
     // Whole numbers: at least one sample, and any seed from 0 on.
@@ -1340,7 +1417,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
     };
     let row = |check: &str| bands.iter().find(|b| b.verdict.check == check).map(|b| b.verdict.value);
     tell_start(tr, row("thermal-warm-start"), row("thermal-cycle-repeat"));
-    let result = |ok: bool| if ok { "ok" } else { "FAIL" };
+    let result = judged;
     let mut out = output(args, "--out")?;
     let share = if samples.is_some() { ",pass_share" } else { "" };
     writeln!(
@@ -1368,6 +1445,7 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
         )
         .map_err(io)?;
     }
+    tell_not_finite(tr, bands.iter().map(|b| &b.verdict));
     out.flush().map_err(io)
 }
 
@@ -1767,7 +1845,7 @@ fn margins(args: &Args, tr: &Translations) -> Result<(), Failure> {
         .map_err(io)?;
     for (run, margins) in &runs {
         for (motor, m) in motors.iter().zip(margins) {
-            let result = if m.stable() { "ok" } else { "FAIL" };
+            let result = judged(m.stable());
             if let Some(h) = m.hammering {
                 let at = format!("{:.0} Hz, {:.2} N m", h.frequency_hz, h.torque_nm);
                 let run = if run.is_empty() { String::new() } else { format!("{run}, ") };
@@ -2006,10 +2084,11 @@ fn stop(args: &Args, tr: &Translations) -> Result<(), Failure> {
         eprintln!("{}", tr.tr_arg("cli-stop-worst", &format!("{:.4} s ({})", worst.at, moment(worst.moment))));
     }
     for v in &study.verdicts {
-        let result = if v.ok { "ok" } else { "FAIL" };
+        let result = judged(v.ok);
         let detail = format!("{}: {} / {} {result}", v.check, significant(v.value), significant(v.limit));
         eprintln!("{}", tr.tr_arg("cli-stop-verdict", &detail));
     }
+    tell_not_finite(tr, &study.verdicts);
     out.flush().map_err(io)
 }
 
@@ -2069,10 +2148,11 @@ fn accuracy(args: &Args, tr: &Translations) -> Result<(), Failure> {
     let detail = format!("AP {:.3e}, RP {:.3e}, vAP {:.3e}", t.accuracy, t.repeatability, t.direction_variation);
     eprintln!("{}", tr.tr_arg("cli-accuracy-tool", &detail));
     for v in &study.verdicts {
-        let result = if v.ok { "ok" } else { "FAIL" };
+        let result = judged(v.ok);
         let detail = format!("{}: {} / {} {result}", v.check, significant(v.value), significant(v.limit));
         eprintln!("{}", tr.tr_arg("cli-accuracy-verdict", &detail));
     }
+    tell_not_finite(tr, &study.verdicts);
     out.flush().map_err(io)
 }
 
@@ -2136,7 +2216,7 @@ fn report(args: &Args, tr: &Translations) -> Result<(), Failure> {
         report.html(args.option("--lang").unwrap_or("en")).into_bytes()
     };
     std::fs::write(path, bytes).map_err(|e| Failure("cli-error-io", format!("{path}: {e}")))?;
-    eprintln!("{}", tr.tr_arg(if report.passed { "cli-report-pass" } else { "cli-report-fail" }, path));
+    eprintln!("{}", tr.tr_arg(if judged(report.passed) == "ok" { "cli-report-pass" } else { "cli-report-fail" }, path));
     Ok(())
 }
 

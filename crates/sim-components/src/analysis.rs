@@ -1458,6 +1458,12 @@ pub struct Verdict {
     pub ok: bool,
 }
 
+/// Whether a value or a limit of these verdicts is NaN or infinite: what an unstable, diverging loop leaves behind
+/// (a result that is not a number is not a pass either). Front ends say so (`verdict-not-finite`).
+pub fn any_not_finite<'a>(verdicts: impl IntoIterator<Item = &'a Verdict>) -> bool {
+    verdicts.into_iter().any(|v| !v.value.is_finite() || !v.limit.is_finite())
+}
+
 /// Keys that no default config has and a config file may add (see `load_config`): ratings that `verdicts` judges, the
 /// `[conveyor]` table (`conveyor::Conveyor`), whose cycle picks from a belt, the `[gripper]` table and the motor kinds'
 /// own keys (`drive::Motor`: a stepper's and an induction motor's).
@@ -3564,7 +3570,7 @@ pub fn optimise_cycle_with(
     let before = match judged(&start) {
         Some((load, failed)) if failed.is_empty() => load,
         Some((_, failed)) => {
-            return Err(ConfigError::Invalid(format!("the cycle as configured fails {}", failed.join(", "))));
+            return Err(ConfigError::Part("error-cycle-fails-already", failed.join(", ")));
         }
         // Said by what stops it: the config (its own error), or the cycle that does not run (its key).
         None => {
@@ -5017,6 +5023,16 @@ pub fn compare_effect(entry: &MachineEntry, cfg: &Config, effect: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A value or limit of NaN or infinity is named, whether the row passes or not; finite ones are not.
+    #[test]
+    fn a_verdict_that_is_not_finite_is_found() {
+        let row = |value: f64, limit: f64| Verdict { check: "motor-thermal", motor: None, value, limit, ok: false };
+        assert!(!any_not_finite(&[row(435.1, 1.0), row(0.0, 2.0)]));
+        assert!(any_not_finite(&[row(1.0, 2.0), row(f64::INFINITY, 2.0)]));
+        assert!(any_not_finite(&[row(f64::NAN, 2.0)]));
+        assert!(any_not_finite(&[row(1.0, f64::NAN)]));
+    }
 
     /// By hand: a winding that settles at 102 K on every odd pass and 92 K on every even one (a pick alternating between
     /// two places) repeats every 2 passes; one at 100, 90, 80, 100, 90, 80 every 3; one that closes in on 95 K by halves

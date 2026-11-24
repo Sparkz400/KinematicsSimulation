@@ -11,6 +11,12 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+/// Whether a command that judges ran through: exit code 0 (all rows pass) or 1 (a row says FAIL), where 2 is a usage or
+/// config error. For runs whose rows are read afterwards, so that a failing check is not what stops the test.
+fn completed(out: &Output) -> bool {
+    matches!(out.status.code(), Some(0 | 1))
+}
+
 /// `check` on every machine, each on a thread of its own named after the machine (a failure says "thread 'scara'
 /// panicked"): the tests that ran the command line on one machine after the other took half a minute alone.
 fn on_every_machine(check: impl Fn(&'static sim_core::MachineEntry) + Sync) {
@@ -85,6 +91,58 @@ fn fewest_bounds() -> &'static sim_core::MachineEntry {
         .filter(|e| (e.build)(&e.config()).unwrap().motors().len() == 1)
         .min_by_key(|e| sim_components::analysis::bounds(&e.config()).unwrap().len())
         .unwrap()
+}
+
+/// A command that judges exits 0 when every row passes, 1 when a row says FAIL (the table is printed in full either way)
+/// and 2 for a usage or config error. With a position gain of 20000 1/s the loop diverges: the rows are not finite, and
+/// the error stream says what that means and where to measure the loops; with the default config it says nothing.
+#[test]
+fn a_failing_verdict_exits_with_1_and_a_diverged_result_is_named() {
+    let entry = MACHINES[1];
+    let key = "drive.kv_1_s";
+    assert!(entry.config().get(key).is_ok(), "the list's second machine has a position gain");
+    let fine = cli(&["verdicts", entry.id]);
+    assert_eq!(fine.status.code(), Some(0), "{}", text(&fine.stderr));
+    assert!(!text(&fine.stderr).contains("not finite"), "{}", text(&fine.stderr));
+    let diverged = cli(&["verdicts", entry.id, "--set", &format!("{key}=20000")]);
+    assert_eq!(diverged.status.code(), Some(1), "{}", text(&diverged.stderr));
+    assert!(text(&diverged.stdout).contains(",FAIL"), "the table is printed in full");
+    assert!(text(&diverged.stderr).contains("not finite") && text(&diverged.stderr).contains("margins"));
+    let german = cli(&["verdicts", entry.id, "--set", &format!("{key}=20000"), "--lang", "de"]);
+    assert!(text(&german.stderr).contains("nicht endlich"), "{}", text(&german.stderr));
+    assert_eq!(cli(&["verdicts", entry.id, "--no-such-option"]).status.code(), Some(2));
+}
+
+/// A misspelt `--set` path names the nearest path of the config, and a value out of range is shown with its path: the
+/// message of the error stays as it was, with the help after it (the helper itself is tested in sim-core).
+#[test]
+fn config_errors_say_what_was_meant() {
+    let entry = MACHINES[1];
+    let key = payload_key(&entry.config());
+    let typo = key.replacen('a', "", 1);
+    let out = cli(&["verdicts", entry.id, "--set", &format!("{typo}=3")]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        text(&out.stderr).trim(),
+        format!("Configuration value is missing: {typo} (did you mean {key}?)"),
+        "{}",
+        text(&out.stderr)
+    );
+    let low = cli(&["verdicts", entry.id, "--set", &format!("{key}=-5")]);
+    assert_eq!(low.status.code(), Some(2));
+    assert_eq!(text(&low.stderr).trim(), format!("Configuration value is out of range: {key} = -5"));
+    let german = cli(&["verdicts", entry.id, "--set", &format!("{typo}=3"), "--lang", "de"]);
+    assert!(text(&german.stderr).contains(&format!("(meinten Sie {key}?)")), "{}", text(&german.stderr));
+}
+
+/// `--version` and `-V` print the program's name and version and succeed (they were refused as unknown options).
+#[test]
+fn version_prints_the_name_and_the_version() {
+    for flag in ["--version", "-V"] {
+        let out = cli(&[flag]);
+        assert_eq!(out.status.code(), Some(0), "{flag}");
+        assert_eq!(text(&out.stdout).trim(), format!("sim-cli {}", env!("CARGO_PKG_VERSION")), "{flag}");
+    }
 }
 
 /// The machine of one axis on a belt, found by its config: the tests name no machine.
@@ -450,7 +508,8 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
                 &sets.iter().flat_map(|s| ["--set", s.as_str()]).collect::<Vec<_>>(),
             ]
             .concat());
-            assert!(out.status.success(), "{}: {}", entry.id, text(&out.stderr));
+            // Unstable gains on purpose: the rows say FAIL and the exit code is 1.
+            assert!(completed(&out), "{}: {}", entry.id, text(&out.stderr));
             let unstable = text(&out.stdout);
             assert!(unstable.lines().count() > 1, "{}: {unstable}", entry.id);
             unstable
@@ -653,7 +712,7 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
     let fewest = fewest_bounds();
     on_every_machine(|entry| {
         let run = cli(&["verdicts", entry.id]);
-        assert!(run.status.success(), "{}", text(&run.stderr));
+        assert!(completed(&run), "{}", text(&run.stderr));
         let out = text(&run.stdout);
         let mut lines = out.lines();
         assert_eq!(lines.next().unwrap(), "check,motor,value,limit,result");
@@ -717,11 +776,11 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         // printed, nothing thermal. So their checks and values are those of the cycle from cold.
         let cold = ["--set", "effects.thermal_warm_start=false"];
         let run = cli(&[&["verdicts", entry.id][..], &cold].concat());
-        assert!(run.status.success(), "{}", text(&run.stderr));
+        assert!(completed(&run), "{}", text(&run.stderr));
         let out = text(&run.stdout);
         let rows: Vec<Vec<&str>> = out.lines().skip(1).map(|l| l.split(',').collect()).collect();
         let run = cli(&[&["verdicts", entry.id, "--bands"][..], &cold].concat());
-        assert!(run.status.success(), "{}", text(&run.stderr));
+        assert!(completed(&run), "{}", text(&run.stderr));
         let out = text(&run.stdout);
         assert_eq!(out.lines().next().unwrap(), "check,motor,value,limit,result,low,high,worst_case");
         let banded: Vec<Vec<&str>> = out.lines().skip(1).map(|l| l.split(',').collect()).collect();
@@ -743,7 +802,7 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         // With samples: all bounded values between their bounds at once, and the share of the runs that pass.
         let sampled = |seed: &str| {
             let run = cli(&[&["verdicts", entry.id, "--bands", "--samples", "6", "--seed", seed][..], &cold].concat());
-            assert!(run.status.success(), "{}", text(&run.stderr));
+            assert!(completed(&run), "{}", text(&run.stderr));
             text(&run.stdout)
         };
         let out = sampled("1");
@@ -789,7 +848,7 @@ fn verdicts_search_the_worst_corner_of_the_bounds() {
     // cycles once more.
     let cold = ["--set", "effects.thermal_warm_start=false"];
     let run = cli(&[&["verdicts", entry.id, "--bands", "--worst"][..], &cold].concat());
-    assert!(run.status.success(), "{}", text(&run.stderr));
+    assert!(completed(&run), "{}", text(&run.stderr));
     let (out, mut cfg) = (text(&run.stdout), entry.config());
     cfg.set_text("effects.thermal_warm_start = false").unwrap();
     let bounded = bounds(&cfg).unwrap();
@@ -1021,7 +1080,7 @@ fn parts_are_named_on_the_command_line() {
         let geared = has_gearbox_ratings(&entry.config());
         let ratio = |extra: &[&str]| -> f64 {
             let out = cli(&[&["verdicts", entry.id], extra].concat());
-            assert!(out.status.success(), "{}", text(&out.stderr));
+            assert!(completed(&out), "{}", text(&out.stderr));
             let table = text(&out.stdout);
             // The torque at the gearbox output over the use of the motor's curve: another motor or ratio changes it.
             // Of the first motor the named parts reach: one with parts of its own (`[parts.<id>]`, the arm on a
@@ -1149,7 +1208,8 @@ fn a_run_can_stop_the_machine_and_stop_finds_the_worst_moment() {
     std::fs::write(&file, rated).unwrap();
     let out = cli(&["stop", entry.id, "--category", "1", "--points", "4", "--config", file.to_str().unwrap()]);
     std::fs::remove_file(&file).unwrap();
-    assert!(out.status.success(), "{}", text(&out.stderr));
+    // The stopping distance fails its rating (said below): the table is whole and the exit code is 1.
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
     let lines: Vec<Vec<String>> =
         text(&out.stdout).lines().skip(1).map(|l| l.split(',').map(String::from).collect()).collect();
     let (worst, all) = lines.split_last().unwrap();
@@ -1919,7 +1979,7 @@ fn report_lists_every_verdict_and_the_source_of_each_input() {
     on_every_machine(|entry| {
         let html = dir.join(format!("{}-report.html", entry.id));
         let out = cli(&["report", entry.id, "--out", html.to_str().unwrap()]);
-        assert!(out.status.success(), "{}", text(&out.stderr));
+        assert!(completed(&out), "{}", text(&out.stderr));
         let html = std::fs::read_to_string(html).unwrap();
         let verdicts = cli(&["verdicts", entry.id]);
         let rows: Vec<Vec<String>> =
@@ -1946,7 +2006,7 @@ fn report_lists_every_verdict_and_the_source_of_each_input() {
     // A PDF, in German, with a value set on top.
     let (id, pdf) = (MACHINES[0].id, dir.join("report.pdf"));
     let out = cli(&["report", id, "--set", "mass.payload_kg=2.5", "--lang", "de", "--out", pdf.to_str().unwrap()]);
-    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(completed(&out), "{}", text(&out.stderr));
     let pdf = std::fs::read(pdf).unwrap();
     assert!(pdf.starts_with(b"%PDF-1.4") && pdf.ends_with(b"%%EOF\n"));
     assert!(pdf.windows(b"(Freigabe)".len()).any(|w| w == b"(Freigabe)"), "German headings in the PDF");
@@ -2044,12 +2104,36 @@ fn the_mode_shapes_and_the_workspace_map_are_written_as_csv() {
     assert_eq!(cli(&["workspace", flat.id]).status.code(), Some(2));
 }
 
-/// `--help` and `-h` print the usage on the output stream and succeed; they were refused as unknown options.
+/// `--help`, `-h` and `help` print the overview on the output stream and succeed: one command to a line, none of the
+/// lines wider than 100 columns (the usage was one line of 4.3 kB). `help COMMAND` and `COMMAND --help` print the part
+/// of that command alone; a usage error names that help in a line or two instead of printing everything.
 #[test]
-fn help_prints_the_usage() {
+fn help_prints_the_commands_one_to_a_line_and_the_options_of_one() {
+    let overview = text(&cli(&["help"]).stdout);
+    assert!(overview.lines().count() > 25 && overview.lines().all(|l| l.chars().count() <= 100), "{overview}");
+    assert!(overview.lines().any(|l| l.trim_start().starts_with("verdicts ")), "{overview}");
     for flag in ["--help", "-h"] {
         let out = cli(&[flag]);
-        assert!(out.status.success(), "{flag}");
-        assert!(text(&out.stdout).starts_with("Usage: sim-cli list"), "{flag}");
+        assert_eq!(out.status.code(), Some(0), "{flag}");
+        assert_eq!(text(&out.stdout), overview, "{flag}");
     }
+    let run = cli(&["help", "run"]);
+    assert_eq!(run.status.code(), Some(0));
+    let run = text(&run.stdout);
+    assert!(run.starts_with("sim-cli run MACHINE") && run.contains("--stop-category") && !run.contains("--bands"));
+    assert_eq!(text(&cli(&["run", "--help"]).stdout), run);
+    assert!(text(&cli(&["help", "verdicts", "--lang", "de"]).stdout).contains("Beurteilt"));
+    for topic in ["options", "paths", "units"] {
+        assert_eq!(cli(&["help", topic]).status.code(), Some(0), "{topic}");
+    }
+    // The errors: one line naming the command's help, or for an unknown word the way to the commands.
+    let wrong = cli(&["run"]);
+    assert_eq!(wrong.status.code(), Some(2));
+    let said = text(&wrong.stderr);
+    assert!(said.lines().count() == 1 && said.contains("sim-cli help run"), "{said}");
+    let unknown = cli(&["nonsense"]);
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(text(&unknown.stderr).contains("nonsense") && text(&unknown.stderr).lines().count() == 1);
+    assert_eq!(cli(&["help", "nonsense"]).status.code(), Some(2));
+    assert_eq!(cli(&[]).status.code(), Some(2));
 }

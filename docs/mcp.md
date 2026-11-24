@@ -183,13 +183,18 @@ An agent with a shell (Claude Code, Cursor, Codex) can run `sim-cli` from a [rel
 - **Output:** results are CSV on standard output, one header line, units in the column names (`peak_torque_nm`,
   `winding_rise_k`); messages, warnings and summaries (thermal start, accuracy figures, search time) go to the error
   stream. `--out FILE` writes the CSV to a file instead.
-- **Exit codes:** 0 when the command ran, 2 for a refused option, config, key or value, with one line on the error
-  stream saying what (`Configuration value is missing: mass.paylod_kg`, `This command has no such option: --band`).
-  A failing check is a result, not an error: `verdicts` exits 0 and says `FAIL` in its `result` column.
+- **Exit codes:** 0 when the command ran and everything it judged passes; 1 when it ran and printed a failing row
+  (`verdicts`, `margins`, `stop`, `accuracy`, `report`): the table is whole, read it for which check says `FAIL`, and
+  do not treat the 1 as a crash; 2 for a refused option, config, key or value, with one line on the error stream saying
+  what (`Configuration value is missing: mass.paylod_kg`, `This command has no such option: --band`). A result that is
+  `inf` or `nan` comes with a note on the error stream: the loop is unstable, `sim-cli margins MACHINE` measures it.
 - **Values:** `--set path=value` (repeatable, dotted path as in the [config reference](config-reference.md), a misspelt
   key is refused), `--config FILE` for a whole config, `--motor ARTICLE`, `--gearbox`, `--drive` for catalogue parts.
-- **Help:** `sim-cli help` (or `sim-cli` alone) prints the usage of every command in one paragraph and exits 2; there is
-  no `--help` and no help per command: the [user guide](user-guide.md) has the details.
+- **Help:** `sim-cli help` (or `--help`) lists the commands, one to a line; `sim-cli help COMMAND` (or
+  `sim-cli COMMAND --help`) prints the options of that command alone, `sim-cli help options` those every command takes,
+  `help paths` the path file formats and `help units` the units of the columns; all exit 0. A wrong call names the help
+  of its command in one line and exits 2. `sim-cli --version` prints the version. The [user guide](user-guide.md) has
+  the details.
 - **Keep the output small:** write long tables with `--out FILE` and read the head; pick columns with `cut -d, -f...`.
   `run` writes every signal (115 columns on the T-gantry) at every 16th base step: use `--every 160` or more, or
   `analyze` for the summary. Piping into `head` can end `sim-cli` with a "failed printing to stdout" panic once

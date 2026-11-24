@@ -51,13 +51,16 @@ sim-cli COMMAND MACHINE [options]
 
 Rules that are easy to trip over:
 
-- `--set` only changes values that exist. A misspelt key is refused (`Configuration value is missing: mass.cariage_kg`), and so is a value of the wrong type.
+- `--set` only changes values that exist. A misspelt key is refused and the nearest key is named where one is close (`Configuration value is missing: mass.cariage_kg (did you mean mass.carriage_kg?)`), and so is a value of the wrong type. A value out of range is shown with its path and value (`Configuration value is out of range: mass.payload_kg = -5`).
 - `--motor`, `--supply` and `--gearbox` need a `[parts]` table in the config. All three shipped configs have one.
 - Every option except `--cycle`, `--time-optimal`, `--bands` and `--worst` takes a value. An option without its value is refused (`This option needs a value: --time`), and so is an option the command does not know, such as a misspelt one (`This command has no such option: --cylce`). A number has to be finite: `--time inf` is refused.
 - `--cycle`, `--move`, `--trajectory` and `--path` exclude each other (`Only one of these options can be given at a time: --cycle --move`).
 - A config file may only have keys that the machine's default config has: a misspelt key is refused (`Configuration has a value this machine does not know: mass.cariage_kg`). The exceptions are `[bounds]`, which has its own check, and `ratings.pulley_max_torque_nm`.
 - Numbers are checked when a config is read. NaN and infinity are refused for every value, a negative number where the quantity cannot be negative (a payload, a damping, a backlash, the belt pretension), and a start pose outside the axis ranges. The message names the key: `Configuration value is out of range: gearbox.backlash_rad`.
 - A failure prints one line on the error stream and exits with code 2.
+- `sim-cli help` lists the commands, one to a line, in the language of `--lang`; `sim-cli help COMMAND` (or `sim-cli COMMAND --help`) prints the options of one command, `sim-cli help options` those every command takes, `sim-cli help paths` the path file formats and `sim-cli help units` the units of the columns. A call with wrong or missing arguments names the help of its command. `sim-cli --version` (or `-V`) prints the version.
+- Exit codes: 0 when the command ran and everything it judged passes, 1 when it ran and printed a failing row (`FAIL` in the result column of `verdicts`, `margins` and `report`'s checks, or among the verdicts `stop` and `accuracy` print on the error stream), 2 for a usage or config error. The table is printed in full before the code is 1, so a script can read the rows and test the code. The overhead crane's default config fails `residual-sway` on purpose, so `verdicts` exits 1 on it.
+- A result that is not finite (an unstable loop gives `inf` or `nan`) is named on the error stream after the table: run `sim-cli margins MACHINE` to measure the loops.
 - If the axis limits ask more of a motor than the drive data allows, commands that start a simulation directly (`run`) print a warning on the error stream and carry on:
 
   ```text

@@ -802,3 +802,5 @@ param-max_acceleration_rad_s2 = Highest acceleration [rad/s²]
 param-max_jerk_rad_s3 = Highest jerk [rad/s³]
 loop-hammers = hammers across the backlash at { $arg } (frequency, peak of the torque the velocity loop asks for)
 loop-least-over-poses = least over the poses the cycle stops at: { $arg } (phase margin, gain margin, then the margin across the backlash, each at its pose)
+verdict-not-finite = A result is not finite (NaN or infinity). That is what an unstable or diverging loop gives; `sim-cli margins MACHINE` measures the loops and shows which one it is.
+error-cycle-fails-already = The cycle as configured already fails: { $arg }
