@@ -2381,25 +2381,9 @@ fn run_jobs(
     jobs: Vec<Job>,
     mut out: Vec<Candidate>,
 ) -> Vec<Candidate> {
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let work = || {
-        let mut done = Vec::new();
-        while let Some(job) = jobs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
-            done.push(try_job(entry, cfg, duties, supply, job));
-        }
-        done
-    };
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(jobs.len().max(1));
-    // One processor, or none known (WebAssembly, which cannot start threads): on this thread.
-    let found: Vec<Candidate> = if threads <= 1 {
-        work().into_iter().flatten().collect()
-    } else {
-        std::thread::scope(|scope| {
-            let workers: Vec<_> = (0..threads).map(|_| scope.spawn(work)).collect();
-            workers.into_iter().flat_map(|w| w.join().expect("a run of the search panicked")).flatten().collect()
-        })
-    };
-    out.extend(found);
+    // As the analyses' batches: counted in the current job and stopped by its cancel.
+    let found = crate::analysis::on_all_cores(jobs.len(), |i| try_job(entry, cfg, duties, supply, &jobs[i]));
+    out.extend(found.into_iter().flatten());
     rank(&mut out);
     out
 }

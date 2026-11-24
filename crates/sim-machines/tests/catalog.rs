@@ -1234,3 +1234,23 @@ fn every_shipped_config_loads_and_judges_a_named_motor_by_its_s1_curve() {
     // The arms' wrists, the SCARA, the palletiser and the arm on a track name the 1FK2104-5AF and others.
     assert!(with_curve >= 15, "{with_curve} motors with a curve");
 }
+
+/// A motor search inside a job (`with_progress`) is counted in it and stopped by its cancel, as the analyses' batches
+/// are: the app's Cancel and a Python `Job` stop it. Two motors on the single axis: two candidates, both counted; the
+/// same search in a job cancelled before its start simulates none and ends `Cancelled`.
+#[test]
+fn a_motor_search_counts_into_its_job_and_stops_when_cancelled() {
+    use sim_components::analysis::{Cancelled, Progress, with_progress};
+    use std::sync::{Arc, atomic::Ordering::Relaxed};
+    let entry = &machine_single_axis::ENTRY;
+    let cfg = entry.config();
+    let wanted = |article: &str| ["1FK2104-4AF", "1FK2104-5AK"].contains(&article);
+    let search = || sim_components::catalog::search_motors(entry, &cfg, "400v", &wanted, None);
+    let job = Arc::new(Progress::default());
+    let found = with_progress(&job, search).unwrap();
+    assert_eq!((found.len(), job.total.load(Relaxed), job.done.load(Relaxed)), (2, 2, 2));
+    let cancelled = Arc::new(Progress::default());
+    cancelled.cancel.store(true, Relaxed);
+    assert_eq!(with_progress(&cancelled, search).err(), Some(Cancelled));
+    assert_eq!(cancelled.done.load(Relaxed), 0);
+}
