@@ -1322,7 +1322,8 @@ fn an_analysis_that_is_not_cancelled_gives_its_result_and_counts_all_its_runs() 
     wait_for_analysis(&mut model);
     let (done, total) = (progress.done.load(Relaxed), progress.total.load(Relaxed));
     assert!(total > 0 && done == total, "{done} of {total}");
-    assert!(model.bands.is_some() && !progress.cancel.load(Relaxed));
+    // (The cancel flag itself is set by then: a `Job` cancels itself when dropped, also after its answer was taken.)
+    assert!(model.bands.is_some(), "{:?}", model.messages);
     assert!(!model.messages.iter().any(|m| m.0 == "ui-job-cancelled"), "{:?}", model.messages);
 }
 

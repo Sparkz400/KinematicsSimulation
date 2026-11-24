@@ -294,7 +294,7 @@ impl<T> Drop for Job<T> {
 
 /// What a background job has answered, if it has. A job whose thread is gone without an answer (it
 /// panicked) answers with a message, so that it does not leave a spinner turning for ever. A cancelled job answers
-/// at once, also where its thread cannot stop (a motor search) and goes on to its end: what it finds is dropped.
+/// at once; its thread ends with the runs under way, and what it finds is dropped.
 pub(crate) fn answer<T>(job: &Job<T>) -> Option<Result<T, Message>> {
     if job.progress.cancel.load(Relaxed) {
         return Some(Err(cancelled_message()));
