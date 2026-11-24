@@ -257,6 +257,7 @@ const LONGEST_MOVE_S: f64 = 20.0;
 /// Moves the tool to `pose`, lets it rest `dwell_s` and returns its real pose, averaged over the last tenth of the
 /// rest, with the encoder-to-real map of `errors` applied.
 fn attain(sim: &mut Sim, pose: &[f64], dwell_s: f64, errors: &[AxisErrors]) -> Result<Vec<f64>, ConfigError> {
+    crate::analysis::check_cancelled();
     sim.command(Command::MoveTo(pose.to_vec())).map_err(|e| ConfigError::Invalid(e.key.into()))?;
     let start = sim.time();
     while sim.control.busy() && sim.time() - start < LONGEST_MOVE_S {

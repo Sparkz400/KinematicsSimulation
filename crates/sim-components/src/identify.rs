@@ -1545,11 +1545,15 @@ pub fn fit_move_stiffness(
 ) -> Result<MoveStiffness, TraceError> {
     let base = cfg.f64(key).map_err(|_| TraceError { key: "fit-move-no-key", detail: key.to_string() })?;
     let measured = ringing(trace);
+    // The replays: 9 on the grid, 7 per parabola (two), and the one at the result.
+    crate::analysis::plan_steps(9 + 2 * 7 + 1);
     let cost = |u: f64| -> Result<(f64, Vec<f64>), TraceError> {
+        crate::analysis::check_cancelled();
         let mut scaled = cfg.clone();
         scaled.set_text(&format!("{key} = {:?}", base * u.exp()))?;
         let residuals: Vec<f64> =
             ringing(&replay(entry, &scaled, trace)?).iter().zip(&measured).map(|(s, m)| m - s).collect();
+        crate::analysis::step_done();
         Ok((residuals.iter().map(|r| r * r).sum(), residuals))
     };
     let not_excited = |detail: String| TraceError { key: "fit-move-not-excited", detail };
