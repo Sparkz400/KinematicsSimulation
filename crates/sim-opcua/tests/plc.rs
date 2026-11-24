@@ -783,7 +783,7 @@ async fn a_path_from_the_plc_is_planned_and_run() {
         // with but the cables' damping (it rests 2.3e-4 to 2.5e-4 rad off, its gears' play; 3.08e-4 was read at 0.3 s).
         plc.simulated(1.0).await;
         let end = &planned.last().unwrap().1;
-        let reached = plc.numbers(&position).await;
+        let reached = plc.standing(entry, &position, end).await;
         // The setpoint stands on the path's end; the tool is off it by what gears and belts give way under the load
         // there (`at_rest_within`; on the delta up to its setpoint slack, which can be more than the settling
         // tolerance at the range's rim).
@@ -920,14 +920,20 @@ impl Plc {
     /// velocity check of the PLCopen test: then within the machine's settling tolerance more, and within `rest` 1 s
     /// later. An arm on its track stood 5.8 mrad off 0.3 s after a move of 0.05 rad at full speed, with 4.2 mrad of
     /// sag allowed, and 3.2 mrad off 1 s later (16 November 2026): a ring of 2.8 mrad, its tolerance 3 mrad.
-    async fn rests_at(&self, entry: &'static MachineEntry, axis: &sim_core::AxisInfo, at: f64, wanted: f64, rest: f64) {
+    async fn rests_at(
+        &self,
+        entry: &'static MachineEntry,
+        axis: &sim_core::AxisInfo,
+        (at, wanted, rest): (f64, f64, f64),
+        pose: &[f64],
+    ) {
         if (at - wanted).abs() < rest {
             return;
         }
         let key = if axis.unit == "rad" { "ratings.settling_tolerance_rad" } else { "ratings.settling_tolerance_m" };
         let tolerance = entry.config().f64(key).unwrap_or(0.0);
         self.simulated(1.0).await;
-        let later = self.axis_number(axis.id, "ActualPosition").await;
+        let later = self.standing(entry, &[format!("axis.{}.ActualPosition", axis.id)], pose).await[0];
         assert!(
             (at - wanted).abs() < rest + tolerance && (later - wanted).abs() < rest,
             "{}.{}: at {at} {unit}, wanted {wanted} {unit}, within {rest} {unit} and a ring inside the settling tolerance of {tolerance} {unit}; at {later} {unit} 1 s later",
@@ -979,6 +985,33 @@ impl Plc {
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    /// Where variables stand: per name the middle of the span it covers while the simulation runs on for one period of
+    /// the machine's lowest mode at `pose` (`Machine::resonance_hz`, at most 5 s; one reading where it reports none), as
+    /// the app's tests read a pose (`standing` in sim-app's tests/app.rs). A load that swings free pulls the axis that
+    /// carries it to and fro by its drive's give: the crane's bridge, its load swinging at 0.35 Hz without input shaping,
+    /// stood 0.29 mm off a MoveAbsolute's target 0.3 s after Done and 0.26 mm 1 s later, and 0.27 mm off a path's end
+    /// (0.2 mm allowed, 24 November 2026); the middle of its swing is within the 0.2 mm.
+    async fn standing(&self, entry: &'static MachineEntry, names: &[String], pose: &[f64]) -> Vec<f64> {
+        let machine = (entry.build)(&entry.config()).unwrap();
+        let period =
+            machine.resonance_hz(pose).filter(|hz| hz.is_finite() && *hz > 0.0).map_or(0.0, |hz| (1.0 / hz).min(5.0));
+        let (until, start) = (self.now().await + period, std::time::Instant::now());
+        let mut low = self.numbers(names).await;
+        let mut high = low.clone();
+        while self.now().await < until {
+            assert!(
+                start.elapsed() < Duration::from_secs(120),
+                "{}: the simulation did not run {period} s within 120 s",
+                self.id
+            );
+            for (i, v) in self.numbers(names).await.into_iter().enumerate() {
+                (low[i], high[i]) = (low[i].min(v), high[i].max(v));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        low.iter().zip(&high).map(|(l, h)| 0.5 * (l + h)).collect()
     }
 
     /// A rising edge on `<fb>.Execute`: false, then true, in one write, with the inputs before them.
@@ -1134,7 +1167,7 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
                 set[index(id)]
             );
             let rest = at_rest_within(entry, &set);
-            plc.rests_at(entry, axis, at, target, rest).await;
+            plc.rests_at(entry, axis, (at, target, rest), &set).await;
             // At rest: below 0.01 m/s or rad/s, or a mode that rings out, as in the move test of sim-machines: inside the
             // machine's settling tolerance at the frequency it reports (`resonance_hz`), so below 2 pi f times the
             // tolerance, and gone 1 s later. The arms' shoulder and elbow ring so after their move here: at 7 to 10 Hz
@@ -1172,7 +1205,7 @@ async fn plcopen_power_home_and_moves_reach_their_targets() {
                 set[index(id)]
             );
             let rest = at_rest_within(entry, &set);
-            plc.rests_at(entry, axis, moved, wanted, rest).await;
+            plc.rests_at(entry, axis, (moved, wanted, rest), &set).await;
             assert_eq!(plc.axis_read(id, "State").await, Variant::from("Standstill"), "{}.{id}", entry.id);
             assert_eq!(plc.read(&["status.refused".to_string()]).await[0], Variant::from(""), "{}.{id}", entry.id);
         }
