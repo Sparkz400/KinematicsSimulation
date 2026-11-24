@@ -132,7 +132,13 @@ def test_describe_check_analyze_margins_accuracy(machine):
         assert {"winding_rise_k", "energy_in_j", "peak_speed_rad_s", "thermal_utilisation"} <= set(m)
 
     loop = call("loop_margins", session=machine)
-    assert loop["row_count"] == len(about["motors"]) and all("phase_margin_deg" in r for r in loop["rows"])
+    # One row per motor at each run: the config as it is ("") and each other pose the cycle stops at.
+    runs: dict[str, list[str]] = {}
+    for r in loop["rows"]:
+        runs.setdefault(r["run"], []).append(r["motor"])
+    motors = sorted(m["id"] for m in about["motors"])
+    assert "" in runs and all(sorted(m) == motors for m in runs.values())
+    assert loop["row_count"] == len(runs) * len(motors) and all("phase_margin_deg" in r for r in loop["rows"])
 
     acc = call("positioning_accuracy", session=machine, points=3, repeats=2)
     assert [s["axis"] for s in acc["summary"]] == [x["id"] for x in about["axes"]]
