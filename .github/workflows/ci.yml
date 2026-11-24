@@ -108,7 +108,7 @@ jobs:
           compression-level: 0
 
   # The tests in partitions (settings in .config/nextest.toml), each on a runner of its own: nextest deals the tests of
-  # each binary out in turn (`--partition count`). A stuck test is stopped after 30 minutes (profile ci) or 60 (ci-full).
+  # each binary out in turn (`--partition count`). A stuck test is stopped after 30 minutes (profile ci) or 90 (ci-full).
   # The PLC tests run against the wall clock: on a runner busy with the simulation tests they miss their times, so they
   # run in the job "plc".
   test:
