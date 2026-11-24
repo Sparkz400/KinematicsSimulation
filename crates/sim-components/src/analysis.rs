@@ -5227,9 +5227,9 @@ mod tests {
     fn check_cancelled_raises_only_in_a_cancelled_job() {
         check_cancelled();
         let progress = job();
-        assert_eq!(with_progress(&progress, || check_cancelled()), Ok(()));
+        assert_eq!(with_progress(&progress, check_cancelled), Ok(()));
         progress.cancel.store(true, Relaxed);
-        assert_eq!(with_progress(&progress, || check_cancelled()), Err(Cancelled));
+        assert_eq!(with_progress(&progress, check_cancelled), Err(Cancelled));
         check_cancelled();
     }
 

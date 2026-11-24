@@ -28,9 +28,15 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 import kinematics_sim as ks
 
-# A call that runs longer is given up (its thread runs to its end in the background; the simulator cannot be stopped).
+# A call that runs longer is given up and its job cancelled: no new run starts, the thread ends once the runs under way do.
 TIMEOUT_S = float(os.environ.get("KINEMATICS_SIM_MCP_TIMEOUT_S", "900"))
 MAX_ROWS = 25
+# Bounds that keep one call (or a client's retries) from using the machine for hours, and the sessions, which live in
+# this process, from growing without end. The counts multiply the runs of a tool; all are far above the defaults.
+MAX_SESSIONS = 32  # a 33rd drops the least recently used (there is no tool to delete one)
+MAX_RUNS = 200  # optimise_cycle `runs` (default 40)
+MAX_POINTS = 20  # positioning_accuracy `points` (default 5)
+MAX_REPEATS = 20  # positioning_accuracy `repeats` (default 5)
 
 ESTIMATES = (
     "Only one machine (a ball screw bench) was measured; friction, damping, stiffness and similar values of the other "
@@ -97,9 +103,25 @@ def _machine_ids() -> list[str]:
     return [m["id"] for m in ks.machines()]
 
 
+def _at_most(name: str, value: int, limit: int) -> None:
+    if value > limit:
+        raise ToolError(f"{name} is {value}, more than the limit of {limit} this server allows; give {limit} or fewer")
+
+
+def _store(name: str, cfg: ks.Config) -> str | None:
+    """Keeps `cfg` as session `name`, the most recently used; the session dropped to stay within MAX_SESSIONS, or None."""
+    _sessions.pop(name, None)
+    dropped = next(iter(_sessions)) if len(_sessions) >= MAX_SESSIONS else None
+    if dropped is not None:
+        del _sessions[dropped]
+    _sessions[name] = cfg
+    return dropped
+
+
 def _config(session: str) -> ks.Config:
     """A session's config, or a machine id's default config (not stored)."""
     if session in _sessions:
+        _sessions[session] = _sessions.pop(session)  # now the most recently used
         return _sessions[session]
     if session in _machine_ids():
         return ks.Config(session)
@@ -137,9 +159,11 @@ def _param_label(cfg: ks.Config, key: str) -> str | None:
 
 
 async def _call(ctx: Context | None, what: str, fn: Any, *args: Any, **kwargs: Any) -> Any:
-    """`fn` in a worker thread (the simulator releases the GIL), with progress every 5 s and the timeout."""
+    """`fn` in a worker thread (the simulator releases the GIL) as a `ks.Job`, with progress every 5 s and the timeout;
+    where the call is given up or cancelled by the client, the job is cancelled and the thread ends soon."""
     result: Any = None
     error: BaseException | None = None
+    job = ks.Job()
 
     async def heartbeat() -> None:
         elapsed = 0
@@ -147,23 +171,41 @@ async def _call(ctx: Context | None, what: str, fn: Any, *args: Any, **kwargs: A
             await anyio.sleep(5)
             elapsed += 5
             if ctx is not None:
-                await ctx.report_progress(elapsed, TIMEOUT_S, f"{what}: running for {elapsed} s")
+                done, total = job.done, job.total
+                if total:  # runs finished of runs planned so far (later batches add to it)
+                    await ctx.report_progress(done, total, f"{what}: {done} of {total} runs, {elapsed} s")
+                else:
+                    await ctx.report_progress(elapsed, TIMEOUT_S, f"{what}: running for {elapsed} s")
 
     try:
         with anyio.fail_after(TIMEOUT_S):
             async with anyio.create_task_group() as tg:
                 tg.start_soon(heartbeat)
                 try:
-                    result = await anyio.to_thread.run_sync(partial(fn, *args, **kwargs), abandon_on_cancel=True)
+                    result = await anyio.to_thread.run_sync(
+                        partial(job.run, partial(fn, *args, **kwargs)), abandon_on_cancel=True
+                    )
                 except Exception as e:  # kept out of the task group, which would wrap it
                     error = e
+                except BaseException as e:
+                    # A panic of the core arrives as pyo3_runtime.PanicException, a BaseException that is not
+                    # importable by name. The server and its sessions stay.
+                    if type(e).__name__ != "PanicException":
+                        raise
+                    error = ToolError(
+                        f"{what}: the model failed internally (a bug in the simulator, not in the input); the "
+                        "sessions are kept. Report it with the config (get_config as_toml)."
+                    )
                 finally:
+                    job.cancel()  # a no-op once the call has returned
                     tg.cancel_scope.cancel()
     except TimeoutError:
         raise ToolError(
             f"{what} did not finish within {TIMEOUT_S:.0f} s and was given up (set KINEMATICS_SIM_MCP_TIMEOUT_S to "
             "allow longer). Narrow it: fewer runs or samples, a motor series, no bands."
         ) from None
+    if isinstance(error, ToolError):
+        raise error
     if error is not None:
         raise ToolError(f"{what}: {str(error).strip(chr(39))}") from None
     return result
@@ -353,7 +395,8 @@ def create_session(
     name: str, machine: str | None = None, toml: str | None = None, copy_of: str | None = None
 ) -> dict[str, Any]:
     """A named config kept in memory for this conversation: a machine's default (`machine`), TOML text of a config
-    for `machine`, or a copy of another session (`copy_of`). An existing session of that name is replaced."""
+    for `machine`, or a copy of another session (`copy_of`). An existing session of that name is replaced. At most
+    32 sessions are kept: one more drops the least recently used."""
     if copy_of is not None:
         cfg = _config(copy_of).copy()
     elif machine is not None:
@@ -367,8 +410,12 @@ def create_session(
             raise ToolError(f"the TOML was refused: {e}") from None
     else:
         raise ToolError("give `machine` (with optional `toml`) or `copy_of`")
-    _sessions[name] = cfg
-    return {"session": name, "machine": cfg.machine, "sessions": list(_sessions)}
+    dropped = _store(name, cfg)
+    out: dict[str, Any] = {"session": name, "machine": cfg.machine, "sessions": list(_sessions)}
+    if dropped:
+        out["dropped_session"] = dropped
+        out["notes"] = f"At most {MAX_SESSIONS} sessions are kept: {dropped!r}, the least recently used, is gone."
+    return out
 
 
 @mcp.tool()
@@ -426,7 +473,7 @@ def set_config_values(session: str, values: dict[str, Any]) -> dict[str, Any]:
         raise ToolError("nothing was changed. " + "; ".join(errors))
     # After the values are in: a value may be a table with a file setting inside, which only the leaves show.
     _check_files(_file_settings(trial.leaves()), trial.machine)
-    _sessions[session] = trial
+    _store(session, trial)
     return {"session": session, "set": {k: _plain(trial[k]) for k in values}}
 
 
@@ -576,7 +623,8 @@ async def optimise_cycle(
     session: str, runs: int = 40, robust: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
     """A shorter cycle that still passes every check (higher limits, blending, shaping, lower lifts): the cycle time
-    before and after and the settings changed. `robust` keeps it passing within the error bands (slower)."""
+    before and after and the settings changed. `robust` keeps it passing within the error bands (slower). At most 200 `runs`."""
+    _at_most("runs", runs, MAX_RUNS)
     cfg = _config(session)
     r = await _call(ctx, "optimise", ks.optimise, cfg, runs=runs, worst=robust)
     out = {k: _plain(v) for k, v in r.items() if k not in ("changes", "pareto", "robust")}
@@ -613,7 +661,10 @@ async def positioning_accuracy(
     session: str, points: int = 5, repeats: int = 5, ctx: Context | None = None
 ) -> dict[str, Any]:
     """Static positioning accuracy and repeatability per axis (ISO 230-2: reversal, repeatability, systematic error,
-    accuracy) and at the tool (ISO 9283), with their verdicts where the config rates them."""
+    accuracy) and at the tool (ISO 9283), with their verdicts where the config rates them. At most 20 `points` and
+    20 `repeats` (the runs multiply)."""
+    _at_most("points", points, MAX_POINTS)
+    _at_most("repeats", repeats, MAX_REPEATS)
     cfg = _config(session)
     r = await _call(ctx, "accuracy", ks.accuracy, cfg, points=points, repeats=repeats)
     out = {k: _plain(v) for k, v in r.items() if not isinstance(v, (dict, np.ndarray, list))}
