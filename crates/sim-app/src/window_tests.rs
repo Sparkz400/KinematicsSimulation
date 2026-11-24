@@ -640,12 +640,18 @@ fn pause_speed_units_and_theme_from_the_top_bar() {
     d.wait("paused", |d| d.state().model.paused);
     d.button_of("ui-resume");
     d.wait("running", |d| !d.state().model.paused);
-    // The speed slider is logarithmic from 0.01 to 10: a click at a fifth of it is 0.01 * 1000^0.2 = 0.040.
+    // The speed slider is logarithmic from 0.01 to 10. egui keeps the handle's radius (the height / 2.5) clear at both
+    // ends of the rail, so a click at a fifth of the widget is at (0.2 w - r) / (w - 2 r) of the range: 0.142 of it
+    // here, 0.01 * 1000^0.142 = 0.027 (the old range to 2 gave 0.029 by chance near the naive 0.01 * 200^0.2).
     let slider = d.first_in(TOP, Role::Slider).rect;
     d.click_at(Vec2::new(slider.left() + slider.width() * 0.2, slider.center().y));
     d.wait("the speed set", |d| d.state().model.speed != 1.0);
     let speed = d.state().model.speed;
-    assert!((speed - 0.040).abs() < 0.01, "{speed}");
+    let r = slider.height() / 2.5;
+    let at = f64::from((0.2 * slider.width() - r) / (slider.width() - 2.0 * r));
+    // The slider rounds to the two decimals it shows (0.0267 is 0.03).
+    let expected = (0.01 * 1000f64.powf(at) * 100.0).round() / 100.0;
+    assert_eq!(speed, expected, "at {at} of the range");
     for key in ["ui-units-rpm", "ui-units-mm", "ui-theme-light"] {
         let label = d.tr(key);
         d.click(Role::CheckBox, &label);
