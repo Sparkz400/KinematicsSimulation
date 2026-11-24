@@ -197,6 +197,76 @@ def _output_file(name: str, extensions: tuple[str, ...]) -> Path:
     return target
 
 
+# Files are read only where the operator says, too. The Rust core opens a file named by a config value when a machine is
+# built: `arm.urdf_file` (machine-joint-kit/src/arm.rs `chain`: a built-in name, else the path) and `<prefix>.table_file`
+# (sim-components/src/cam.rs `Cam::from_config`: a CSV path). Both end in `_file`, and no other config key is opened
+# (the CLI, app, FMI and OPC UA front ends read files of their own, not through a config key), so a key whose last
+# segment ends in `_file` is a file setting. A model's value for one is refused unless it is empty, the machine's own
+# default (the built-in names), or a file inside KINEMATICS_SIM_MCP_IN_DIR: else the error text would tell whether any
+# path exists, and a huge file or a device would be read without bound.
+MAX_INPUT_BYTES = 5_000_000
+FILE_REFUSED = (
+    "a file setting (a key ending in _file) may be empty, keep the machine's built-in value, or name a file of at most "
+    f"{MAX_INPUT_BYTES // 1_000_000} MB inside the folder the operator set in KINEMATICS_SIM_MCP_IN_DIR; this value was "
+    "refused"
+)
+
+
+def _file_allowed(value: str) -> bool:
+    folder = os.environ.get("KINEMATICS_SIM_MCP_IN_DIR")
+    if not folder:
+        return False
+    try:  # a relative path is the server's working directory's, as the core opens it
+        target = Path(value).resolve()  # follows links, so one pointing out of the folder is caught
+        inside = target.is_relative_to(Path(folder).resolve())
+        return inside and target.is_file() and target.stat().st_size <= MAX_INPUT_BYTES
+    except (OSError, ValueError):
+        return False
+
+
+def _check_files(files: dict[str, Any], machine: str) -> None:
+    """Refuses (one fixed message) any file setting of `files` (key: value) that is not allowed."""
+    try:
+        default = ks.Config(machine).leaves()
+    except (KeyError, ValueError):  # a machine file's machine has no registered default
+        default = {}
+    for key, value in files.items():
+        if isinstance(value, str) and value and value != default.get(key) and not _file_allowed(value):
+            raise ToolError(FILE_REFUSED)
+
+
+def _file_settings(leaves: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in leaves.items() if k.rsplit(".", 1)[-1].endswith("_file")}
+
+
+def _toml_file_settings(text: str) -> dict[str, Any]:
+    """The file settings of TOML text, found before the core would open them while it reads the text."""
+    try:
+        import tomllib
+    except ImportError:  # Python 3.10: no parser at hand, so any text that could spell a file key is refused
+        if "_file" in text.lower() or "\\u" in text.lower():
+            raise ToolError(FILE_REFUSED) from None
+        return {}
+    try:
+        tree = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return {}  # the core refuses it before it opens anything
+
+    def walk(node: Any, path: str) -> dict[str, Any]:
+        found: dict[str, Any] = {}
+        for k, v in (node.items() if isinstance(node, dict) else []):
+            here = f"{path}.{k}" if path else k
+            if isinstance(v, list):
+                found.update({a: b for item in v for a, b in walk(item, here).items()})
+            elif isinstance(v, dict):
+                found.update(walk(v, here))
+            elif k.endswith("_file"):
+                found[here] = v
+        return found
+
+    return walk(tree, "")
+
+
 def _fmi_binaries() -> list[str]:
     """The sim-fmi libraries an FMU carries: those the operator names in KINEMATICS_SIM_FMI_BINARIES (separated by
     the path separator), or else, as sim-cli does, this platform's library beside a sim-cli on PATH."""
@@ -287,6 +357,8 @@ def create_session(
     elif machine is not None:
         if machine not in _machine_ids():
             raise ToolError(f"unknown machine {machine!r}; call list_machines")
+        if toml:  # before the core reads the text, which opens the files it names
+            _check_files(_toml_file_settings(toml), machine)
         try:
             cfg = ks.Config(machine, text=toml) if toml else ks.Config(machine)
         except (ValueError, KeyError) as e:
@@ -350,6 +422,8 @@ def set_config_values(session: str, values: dict[str, Any]) -> dict[str, Any]:
             errors.append(_key_error(trial, k, e))
     if errors:
         raise ToolError("nothing was changed. " + "; ".join(errors))
+    # After the values are in: a value may be a table with a file setting inside, which only the leaves show.
+    _check_files(_file_settings(trial.leaves()), trial.machine)
     _sessions[session] = trial
     return {"session": session, "set": {k: _plain(trial[k]) for k in values}}
 
@@ -515,13 +589,19 @@ async def optimise_cycle(
 
 
 @mcp.tool()
-async def loop_margins(session: str, bands: bool = False, ctx: Context | None = None) -> dict[str, Any]:
-    """Per motor the velocity loop's crossover, phase margin, gain margin and peak sensitivity, and whether they pass;
-    `bands` adds runs at the estimates' bounds."""
+async def loop_margins(
+    session: str, bands: bool = False, top: int = MAX_ROWS, ctx: Context | None = None
+) -> dict[str, Any]:
+    """Per motor the velocity loop's crossover, phase margin, gain margin and peak sensitivity, and whether they pass,
+    at the config as it is and at each other pose the cycle stops at; `bands` adds runs at the estimates' bounds. Rows
+    that fail (`ok` false) come first, then by the smallest phase margin; a row whose phase margin is not measurable
+    (null: no gain crossover) follows the measured ones of its group. `top` rows are given, the rest counted."""
     cfg = _config(session)
     r = await _call(ctx, "margins", ks.margins, cfg, bands=bands)
+    rows = _rows(r)
+    rows.sort(key=lambda x: (x["ok"], x["phase_margin_deg"] is None, x["phase_margin_deg"] or 0.0))
     return {
-        **_capped(_rows(r), MAX_ROWS),
+        **_capped(rows, top),
         "notes": "Linearised about the operating point; the drive's filters and delays as configured. " + ESTIMATES,
     }
 

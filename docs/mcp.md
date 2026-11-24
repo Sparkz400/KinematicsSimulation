@@ -74,7 +74,7 @@ environment) and no `args` does the same.
 | `run_path` | A path given inline (lines, arcs, splines; the format of a [path file](user-guide.md#run-a-path-and-read-path-error)): duration, path error, tracking error, load per motor |
 | `find_motor` | The catalogue search: the top N motors with drive and gearbox, passing and cheapest first, with what each fails and which of its values are estimates |
 | `optimise_cycle` | A shorter cycle that passes every check: cycle time before and after and the settings changed, as values `set_config_values` takes |
-| `loop_margins` | Per motor the velocity loop's crossover, phase and gain margin, peak sensitivity |
+| `loop_margins` | Per motor the velocity loop's crossover, phase and gain margin, peak sensitivity at each pose the cycle stops at; failing rows first, then the smallest phase margin; `top` caps the rows |
 | `positioning_accuracy` | ISO 230-2 per axis and ISO 9283 at the tool (simulated) |
 | `sensitivity` | Which uncertain values move the results most (one at a time, or Morris / Sobol' over all bounds): what to measure first |
 | `write_report` | The sizing report as HTML or PDF, into the output folder under a file name ending in `.html` or `.pdf` |
@@ -90,6 +90,7 @@ injection). So the two tools that write files write only where the operator, who
 | Variable | Effect |
 | --- | --- |
 | `KINEMATICS_SIM_MCP_OUT_DIR` | The output folder (created if missing). Default: `kinematics-sim-output` in the server's working directory, which is wherever the client starts it: set it |
+| `KINEMATICS_SIM_MCP_IN_DIR` | The input folder: the only place a file named by a config value may be read from (see below). Unset, no file is readable |
 | `KINEMATICS_SIM_MCP_OVERWRITE` | `1` lets a tool replace an existing file; otherwise an existing name is refused |
 | `KINEMATICS_SIM_FMI_BINARIES` | The sim-fmi libraries an FMU carries (`sim_fmi.dll`, `libsim_fmi.so`, `libsim_fmi.dylib`), separated by `;` on Windows and `:` elsewhere. Without it, as `sim-cli fmu` does, this platform's library beside a `sim-cli` on `PATH` (a release ships them together; `cargo build -p sim-fmi --release` builds it) |
 | `KINEMATICS_SIM_MCP_TIMEOUT_S` | Seconds before a call is given up (default 900) |
@@ -98,6 +99,16 @@ The model gives a file name, or a relative path inside the folder (`variants/gan
 of the folder is refused: `..`, an absolute path, a drive (`C:x.html`), a network path, a link or junction inside the
 folder that points out of it. So is a name with another extension, and an existing file unless overwriting is allowed.
 The result gives the full path written, to show the user. The FMU's binaries never come from the call.
+
+### Files: the input folder
+
+The same holds for reading. A few config values name a file the simulator opens when the machine is built: any key
+ending in `_file` (`arm.urdf_file`, a cam's `table_file`). Through `create_session` and `set_config_values` a model
+may leave such a value empty or at the machine's own default (the built-in URDF names), or name a file of at most 5 MB
+inside the folder in `KINEMATICS_SIM_MCP_IN_DIR`, checked after resolving the path (`..` and links out of the folder
+are refused; a relative path is the server's working directory's). Anything else gets one fixed refusal that does not
+say whether the file exists. Python 3.10 has no TOML parser in its library, so there `create_session(toml=...)` refuses
+any text with `_file` in it. The CLI and the app read any path.
 
 The resource `kinematics-sim://limits` is a summary of [what it can and cannot tell you](overview.md#what-it-can-and-cannot-tell-you);
 the prompt `size_a_motor` (argument: a description of the machine) walks a model through describe, configure,

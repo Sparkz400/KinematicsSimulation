@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -259,3 +260,100 @@ def test_over_stdio_as_a_client_starts_it():
     assert len(tools.tools) == 17
     assert [m["id"] for m in r.structured_content["machines"]] == [m["id"] for m in ks.machines()]
     json.dumps(r.structured_content)
+
+
+# --- file settings: read only inside the operator's input folder ------------------------------------------------------
+
+
+def _machine_with(key):
+    """A machine whose default config has `key` (no machine is named in the tests)."""
+    return next(m["id"] for m in ks.machines() if key in ks.Config(m["id"]).leaves())
+
+
+def _toml_with(machine, key, value):
+    """The default config of `machine` as TOML with the file setting `key` set to `value`."""
+    leaf = key.split(".")[1]
+    line = f"{leaf} = {json.dumps(value)}"  # a function as the replacement: a string's backslashes would be escapes
+    return re.sub(rf"^{leaf} = .*$", lambda _: line, ks.Config(machine).to_toml(), flags=re.M)
+
+
+def _refusals(*steps):
+    """The error text of steps that must all be refused with one and the same text."""
+    out = calls(*steps)
+    assert all(error for error, _ in out), out
+    texts = {text.split(": ", 1)[1] for _, text in out}  # without the "Error executing tool <name>" lead
+    assert len(texts) == 1, out
+    return texts.pop()
+
+
+def test_file_settings_are_refused_outside_the_input_folder(tmp_path, monkeypatch):
+    # Shows: a model cannot make the core open a path of its choosing (urdf_file, table_file), nor tell whether it
+    # exists: the same fixed text for a file that exists, one that does not and one reached by `..`, on both entry
+    # points (also as a table); built-in and empty values and a file inside the folder work.
+    arm, cam = _machine_with("arm.urdf_file"), _machine_with("cam.table_file")
+    inside = tmp_path / "in"
+    inside.mkdir()
+    (inside / "arm.urdf").write_text((ROOT / "crates/machine-joint-kit/urdf/six-axis.urdf").read_text())
+    (inside / "cam.csv").write_text((ROOT / "examples/press-cam.csv").read_text())
+    (tmp_path / "secret.csv").write_text("a,b\n")
+    monkeypatch.setenv("KINEMATICS_SIM_MCP_IN_DIR", str(inside))
+    paths = [str(tmp_path / "secret.csv"), str(tmp_path / "missing.csv"), str(inside / ".." / "secret.csv"),
+             str(inside / ".." / "missing.csv"), "no/such/file"]
+
+    for machine, key in ((arm, "arm.urdf_file"), (cam, "cam.table_file")):
+        section, leaf = key.split(".")
+        call("create_session", name="s", machine=machine)
+        before = server._sessions["s"][key]
+        steps = [("create_session", {"name": "t", "machine": machine, "toml": _toml_with(machine, key, p)}) for p in paths]
+        steps += [("set_config_values", {"session": "s", "values": {key: p}}) for p in paths]
+        steps += [("set_config_values", {"session": "s", "values": {section: {leaf: paths[0]}}})]
+        text = _refusals(*steps)
+        assert "KINEMATICS_SIM_MCP_IN_DIR" in text and not any(p in text for p in paths)
+        assert server._sessions["s"][key] == before and "t" not in server._sessions  # nothing was changed or made
+
+    # Allowed: the built-in name and the empty value (the defaults), and a file inside the folder, on both paths.
+    for machine, key, name in ((arm, "arm.urdf_file", "arm.urdf"), (cam, "cam.table_file", "cam.csv")):
+        call("create_session", name="d", machine=machine, toml=ks.Config(machine).to_toml())
+        call("set_config_values", session="d", values={key: str(inside / name)})
+        call("create_session", name="e", machine=machine, toml=_toml_with(machine, key, str(inside / name)))
+        assert server._sessions["e"][key] == str(inside / name)
+
+    # Without the variable nothing but the defaults is allowed.
+    monkeypatch.delenv("KINEMATICS_SIM_MCP_IN_DIR")
+    _refusals(("set_config_values", {"session": "d", "values": {"cam.table_file": str(inside / "cam.csv")}}))
+
+
+def test_a_link_out_of_the_input_folder_is_refused(tmp_path, monkeypatch):
+    # Shows: the path is compared after resolving it, so a symlink inside the folder to a file outside is refused.
+    inside = tmp_path / "in"
+    inside.mkdir()
+    (tmp_path / "out.csv").write_text("a,b\n")
+    try:
+        (inside / "link.csv").symlink_to(tmp_path / "out.csv")
+    except OSError:
+        pytest.skip("no symlinks here")
+    monkeypatch.setenv("KINEMATICS_SIM_MCP_IN_DIR", str(inside))
+    call("create_session", name="c", machine=_machine_with("cam.table_file"))
+    _refusals(("set_config_values", {"session": "c", "values": {"cam.table_file": str(inside / "link.csv")}}))
+
+
+def test_a_file_over_the_size_limit_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setenv("KINEMATICS_SIM_MCP_IN_DIR", str(tmp_path))
+    monkeypatch.setattr(server, "MAX_INPUT_BYTES", 3)
+    (tmp_path / "big.csv").write_text("a,b\n1,2\n")
+    call("create_session", name="c", machine=_machine_with("cam.table_file"))
+    _refusals(("set_config_values", {"session": "c", "values": {"cam.table_file": str(tmp_path / "big.csv")}}))
+
+
+def test_loop_margins_keeps_the_worst_rows_when_it_caps(monkeypatch):
+    # Shows: the rows are sorted (failing first, then the smallest phase margin, an unmeasurable one after the
+    # measured ones) before the cap, so the worst row survives `top`, and rows_left_out counts the rest.
+    fake = {
+        "run": [""] * 6, "motor": list("abcdef"), "ok": np.array([True, True, True, True, False, True]),
+        "phase_margin_deg": np.array([60.0, 45.0, float("nan"), 30.0, 10.0, 50.0]),
+    }
+    monkeypatch.setattr(ks, "margins", lambda cfg, bands=False: fake)
+    out = call("loop_margins", session=GANTRY, top=2)
+    assert [r["motor"] for r in out["rows"]] == ["e", "d"]
+    assert out["row_count"] == 6 and out["rows_left_out"] == 4
+    assert [r["motor"] for r in call("loop_margins", session=GANTRY, top=6)["rows"]] == ["e", "d", "b", "f", "a", "c"]
