@@ -1903,12 +1903,22 @@ impl PyJob {
     fn run(&self, py: Python<'_>, callable: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // PyO3 turns an unwind that reaches a `#[pyfunction]` into a `PanicException` and drops its payload, so the
         // `Cancelled` unwind of the core arrives here as one: with the cancel flag set, that is what it is. (A real
-        // panic at the same moment is reported as cancelled, too: the job was being stopped anyway.) PyO3 resumes
-        // that panic as an unwind where it fetches the exception, inside `call0`: caught there.
-        let call = || match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callable.call0())) {
-            Ok(result) => result,
-            Err(_) if self.cancelled() => Err(Cancelled::new_err("cancelled")),
-            Err(payload) => std::panic::resume_unwind(payload),
+        // panic at the same moment is reported as cancelled, too: the job was being stopped anyway.) Called through the
+        // C API: PyO3's own fetch of a `PanicException` prints it with a traceback and resumes the unwind, which for
+        // a cancel is noise; here it is cleared unprinted. Any other error is fetched as PyO3 does.
+        let call = || {
+            // SAFETY: the GIL is held (`py`) and `callable` is a live object; a non-null result is a new reference.
+            let result = unsafe { pyo3::ffi::PyObject_CallNoArgs(callable.as_ptr()) };
+            if !result.is_null() {
+                return Ok(unsafe { Bound::from_owned_ptr(py, result) });
+            }
+            let panic = py.get_type::<pyo3::panic::PanicException>();
+            // SAFETY: as above; an exception is set, as the call returned null.
+            if self.cancelled() && unsafe { pyo3::ffi::PyErr_ExceptionMatches(panic.as_ptr()) } != 0 {
+                unsafe { pyo3::ffi::PyErr_Clear() };
+                return Err(Cancelled::new_err("cancelled"));
+            }
+            Err(PyErr::fetch(py))
         };
         match sim_components::analysis::with_progress(&self.progress, call) {
             Err(sim_components::analysis::Cancelled) => Err(Cancelled::new_err("cancelled")),

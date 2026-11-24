@@ -563,7 +563,7 @@ def test_a_job_cancelled_before_its_start_raises_at_the_first_batch():
     assert issubclass(ks.Cancelled, Exception)
 
 
-def test_a_running_job_is_cancelled_from_another_thread_long_before_its_end():
+def test_a_running_job_is_cancelled_from_another_thread_long_before_its_end(capfd):
     cfg = ks.Config(FIRST)
     start = time.perf_counter()
     ks.verdicts(cfg, bands=True, samples=8)
@@ -589,3 +589,5 @@ def test_a_running_job_is_cancelled_from_another_thread_long_before_its_end():
     assert not worker.is_alive() and isinstance(outcome[0], ks.Cancelled)
     assert ended_after < 5 * small + 2.0  # the runs under way finish, no new one starts
     assert 0 < job.done < job.total
+    # Quietly: no panic message nor traceback on the error stream (PyO3 prints one where it fetches a PanicException).
+    assert "PanicException" not in capfd.readouterr().err
