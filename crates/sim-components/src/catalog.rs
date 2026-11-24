@@ -154,7 +154,8 @@ fn check_table(name: &str, text: &str, compiled: &str) -> Result<(), ConfigError
     if let Some(missing) = wanted.split(',').find(|c| !header.contains(c)) {
         return Err(fail(format!("missing column \"{missing}\"")));
     }
-    match lines.find(|(_, l)| l.split(',').count() != header.len()) {
+    // A blank line (an editor's at the end) is a row that matches no part: the readers pass over it, so it is no error.
+    match lines.find(|(_, l)| !l.trim().is_empty() && l.split(',').count() != header.len()) {
         Some((i, l)) => {
             Err(fail(format!("line {}: {} fields, the header has {}", i + 1, l.split(',').count(), header.len())))
         }
@@ -2721,6 +2722,9 @@ mod tests {
         let (name, text) = TABLES[0];
         let short = format!("{text}\nx,y\n");
         assert!(check_table(name, &short, text).is_err());
+        // Blank lines, at the end as an editor leaves them or between rows, and Windows line ends are no error.
+        let blank = format!("{}\n\n", text.replace("\r\n", "\n").replace('\n', "\r\n\r\n"));
+        assert!(check_table(name, &blank, text).is_ok());
         let renamed = text.replacen("part_number", "part_no", 1);
         assert!(check_table(name, &renamed, text).is_err());
     }
