@@ -11,10 +11,13 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// Whether a command that judges ran through: exit code 0 (all rows pass) or 1 (a row says FAIL), where 2 is a usage or
-/// config error. For runs whose rows are read afterwards, so that a failing check is not what stops the test.
-fn completed(out: &Output) -> bool {
-    matches!(out.status.code(), Some(0 | 1))
+/// A command that judges exits 1 exactly where its table on standard output has a failing row (a field `FAIL`), else 0;
+/// 2 is a usage or config error. Some shipped configs fail a check on purpose (a crane without its shaper leaves the
+/// load swinging), so the code is checked against the rows, not taken as 0.
+#[track_caller]
+fn assert_judged(out: &Output) {
+    let failed = text(&out.stdout).lines().any(|l| l.split(',').any(|f| f == "FAIL"));
+    assert_eq!(out.status.code(), Some(i32::from(failed)), "{}", text(&out.stderr));
 }
 
 /// `check` on every machine, each on a thread of its own named after the machine (a failure says "thread 'scara'
@@ -509,7 +512,7 @@ fn step_bode_and_tuning(entry: &'static sim_core::MachineEntry) {
             ]
             .concat());
             // Unstable gains on purpose: the rows say FAIL and the exit code is 1.
-            assert!(completed(&out), "{}: {}", entry.id, text(&out.stderr));
+            assert_judged(&out);
             let unstable = text(&out.stdout);
             assert!(unstable.lines().count() > 1, "{}: {unstable}", entry.id);
             unstable
@@ -712,7 +715,7 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
     let fewest = fewest_bounds();
     on_every_machine(|entry| {
         let run = cli(&["verdicts", entry.id]);
-        assert!(completed(&run), "{}", text(&run.stderr));
+        assert_judged(&run);
         let out = text(&run.stdout);
         let mut lines = out.lines();
         assert_eq!(lines.next().unwrap(), "check,motor,value,limit,result");
@@ -776,11 +779,11 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         // printed, nothing thermal. So their checks and values are those of the cycle from cold.
         let cold = ["--set", "effects.thermal_warm_start=false"];
         let run = cli(&[&["verdicts", entry.id][..], &cold].concat());
-        assert!(completed(&run), "{}", text(&run.stderr));
+        assert_judged(&run);
         let out = text(&run.stdout);
         let rows: Vec<Vec<&str>> = out.lines().skip(1).map(|l| l.split(',').collect()).collect();
         let run = cli(&[&["verdicts", entry.id, "--bands"][..], &cold].concat());
-        assert!(completed(&run), "{}", text(&run.stderr));
+        assert_judged(&run);
         let out = text(&run.stdout);
         assert_eq!(out.lines().next().unwrap(), "check,motor,value,limit,result,low,high,worst_case");
         let banded: Vec<Vec<&str>> = out.lines().skip(1).map(|l| l.split(',').collect()).collect();
@@ -802,7 +805,7 @@ fn verdicts_judge_the_default_cycle_of_every_machine() {
         // With samples: all bounded values between their bounds at once, and the share of the runs that pass.
         let sampled = |seed: &str| {
             let run = cli(&[&["verdicts", entry.id, "--bands", "--samples", "6", "--seed", seed][..], &cold].concat());
-            assert!(completed(&run), "{}", text(&run.stderr));
+            assert_judged(&run);
             text(&run.stdout)
         };
         let out = sampled("1");
@@ -848,7 +851,7 @@ fn verdicts_search_the_worst_corner_of_the_bounds() {
     // cycles once more.
     let cold = ["--set", "effects.thermal_warm_start=false"];
     let run = cli(&[&["verdicts", entry.id, "--bands", "--worst"][..], &cold].concat());
-    assert!(completed(&run), "{}", text(&run.stderr));
+    assert_judged(&run);
     let (out, mut cfg) = (text(&run.stdout), entry.config());
     cfg.set_text("effects.thermal_warm_start = false").unwrap();
     let bounded = bounds(&cfg).unwrap();
@@ -1080,7 +1083,7 @@ fn parts_are_named_on_the_command_line() {
         let geared = has_gearbox_ratings(&entry.config());
         let ratio = |extra: &[&str]| -> f64 {
             let out = cli(&[&["verdicts", entry.id], extra].concat());
-            assert!(completed(&out), "{}", text(&out.stderr));
+            assert_judged(&out);
             let table = text(&out.stdout);
             // The torque at the gearbox output over the use of the motor's curve: another motor or ratio changes it.
             // Of the first motor the named parts reach: one with parts of its own (`[parts.<id>]`, the arm on a
@@ -1979,9 +1982,11 @@ fn report_lists_every_verdict_and_the_source_of_each_input() {
     on_every_machine(|entry| {
         let html = dir.join(format!("{}-report.html", entry.id));
         let out = cli(&["report", entry.id, "--out", html.to_str().unwrap()]);
-        assert!(completed(&out), "{}", text(&out.stderr));
         let html = std::fs::read_to_string(html).unwrap();
         let verdicts = cli(&["verdicts", entry.id]);
+        // The report passes or fails as the verdicts do: the same exit code.
+        assert_eq!(out.status.code(), verdicts.status.code(), "{}: {}", entry.id, text(&out.stderr));
+        assert_judged(&verdicts);
         let rows: Vec<Vec<String>> =
             text(&verdicts.stdout).lines().skip(1).map(|l| l.split(',').map(String::from).collect()).collect();
         assert!(!rows.is_empty());
@@ -2006,7 +2011,7 @@ fn report_lists_every_verdict_and_the_source_of_each_input() {
     // A PDF, in German, with a value set on top.
     let (id, pdf) = (MACHINES[0].id, dir.join("report.pdf"));
     let out = cli(&["report", id, "--set", "mass.payload_kg=2.5", "--lang", "de", "--out", pdf.to_str().unwrap()]);
-    assert!(completed(&out), "{}", text(&out.stderr));
+    assert_eq!(out.status.code(), cli(&["verdicts", id, "--set", "mass.payload_kg=2.5"]).status.code());
     let pdf = std::fs::read(pdf).unwrap();
     assert!(pdf.starts_with(b"%PDF-1.4") && pdf.ends_with(b"%%EOF\n"));
     assert!(pdf.windows(b"(Freigabe)".len()).any(|w| w == b"(Freigabe)"), "German headings in the PDF");
