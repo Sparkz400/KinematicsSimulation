@@ -293,7 +293,8 @@ def test_file_settings_are_refused_outside_the_input_folder(tmp_path, monkeypatc
     arm, cam = _machine_with("arm.urdf_file"), _machine_with("cam.table_file")
     inside = tmp_path / "in"
     inside.mkdir()
-    (inside / "arm.urdf").write_text((ROOT / "crates/machine-joint-kit/urdf/six-axis.urdf").read_text())
+    # A machine crate's own URDF, found without naming the machine (architecture.rs forbids that outside its crate).
+    (inside / "arm.urdf").write_text(next(ROOT.glob("crates/machine-*/urdf/six-axis.urdf")).read_text())
     (inside / "cam.csv").write_text((ROOT / "examples/press-cam.csv").read_text())
     (tmp_path / "secret.csv").write_text("a,b\n")
     monkeypatch.setenv("KINEMATICS_SIM_MCP_IN_DIR", str(inside))

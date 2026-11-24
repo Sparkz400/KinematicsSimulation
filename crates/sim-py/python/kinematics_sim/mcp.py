@@ -240,7 +240,7 @@ def _output_file(name: str, extensions: tuple[str, ...]) -> Path:
 
 
 # Files are read only where the operator says, too. The Rust core opens a file named by a config value when a machine is
-# built: `arm.urdf_file` (machine-joint-kit/src/arm.rs `chain`: a built-in name, else the path) and `<prefix>.table_file`
+# built: `arm.urdf_file` (the arm machine's `arm.rs` `chain`: a built-in name, else the path) and `<prefix>.table_file`
 # (sim-components/src/cam.rs `Cam::from_config`: a CSV path). Both end in `_file`, and no other config key is opened
 # (the CLI, app, FMI and OPC UA front ends read files of their own, not through a config key), so a key whose last
 # segment ends in `_file` is a file setting. A model's value for one is refused unless it is empty, the machine's own
