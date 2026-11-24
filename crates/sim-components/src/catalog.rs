@@ -124,12 +124,42 @@ pub fn use_directory(dir: &std::path::Path) -> Result<(), ConfigError> {
         Some(SCHEMA_VERSION) => {}
         other => return Err(ConfigError::Part("error-catalog-version", format!("{other:?}, {}", dir.display()))),
     }
+    // Checked all before anything is kept, so a refused directory leaks nothing.
+    let mut texts = Vec::new();
+    for &(name, compiled) in TABLES {
+        let text = read(name)?;
+        check_table(name, &text, compiled)?;
+        texts.push((name, text));
+    }
     let mut loaded = HashMap::new();
-    for &(name, _) in TABLES {
-        // Read once and kept for the life of the process, as the compiled-in tables are.
-        loaded.insert(name, &*Box::leak(read(name)?.into_boxed_str()));
+    for (name, text) in texts {
+        // Kept for the life of the process, as the compiled-in tables are.
+        loaded.insert(name, &*Box::leak(text.into_boxed_str()));
     }
     LOADED.set(loaded).map_err(|_| ConfigError::Part("error-catalog-read", "the catalogue was already chosen".into()))
+}
+
+/// Refuses a CSV table (not `catalog.toml`) whose header lacks a column of the compiled-in table of the same name, or
+/// that has a row with another number of fields than its header. The readers index rows by column name and panic on
+/// a missing one, so this is the one place that guards them. The required columns are the compiled-in header's, so
+/// they cannot drift from the tables the code was written against; a column the code never reads is required too.
+fn check_table(name: &str, text: &str, compiled: &str) -> Result<(), ConfigError> {
+    if !name.ends_with(".csv") {
+        return Ok(());
+    }
+    let fail = |what: String| ConfigError::Part("error-catalog-read", format!("{name}: {what}"));
+    let mut lines = text.lines().enumerate().filter(|(_, l)| !l.starts_with('#'));
+    let header: Vec<&str> = lines.next().map_or(Vec::new(), |(_, l)| l.split(',').collect());
+    let wanted = compiled.lines().find(|l| !l.starts_with('#')).unwrap_or("");
+    if let Some(missing) = wanted.split(',').find(|c| !header.contains(c)) {
+        return Err(fail(format!("missing column \"{missing}\"")));
+    }
+    match lines.find(|(_, l)| l.split(',').count() != header.len()) {
+        Some((i, l)) => {
+            Err(fail(format!("line {}: {} fields, the header has {}", i + 1, l.split(',').count(), header.len())))
+        }
+        None => Ok(()),
+    }
 }
 
 /// The supplies a motor can be named for: the S210 data at 230 V or 400 V, or the motor on a SINAMICS S120
@@ -2697,6 +2727,19 @@ pub fn with_motor_part(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_compiled_in_tables_pass_the_check_of_a_catalogue_directory() {
+        // Shows the check accepts what the code was written against, and finds a short row and a missing column.
+        for &(name, text) in TABLES {
+            check_table(name, text, text).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        }
+        let (name, text) = TABLES[0];
+        let short = format!("{text}\nx,y\n");
+        assert!(check_table(name, &short, text).is_err());
+        let renamed = text.replacen("part_number", "part_no", 1);
+        assert!(check_table(name, &renamed, text).is_err());
+    }
 
     #[test]
     fn the_s120_drives_include_the_double_motor_modules_with_their_per_axis_currents() {

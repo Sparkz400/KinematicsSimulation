@@ -18,8 +18,10 @@ pub use netlist::{Netlist, VERSION, json_schema};
 
 use machine::intern;
 use sim_core::{Config, ConfigError, Machine, MachineEntry};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use toml::{Table, Value};
 
 /// `MachineEntry::build` of every machine file: the netlist is in the config itself.
@@ -92,6 +94,13 @@ pub fn from_text(
     fallback_id: &str,
     known: &[Config],
 ) -> Result<&'static MachineEntry, (ConfigError, Option<usize>)> {
+    // What decides the result: the text, whether its lines are the file's (the error's line), and the id taken where
+    // the text has none. `known` is the registered machines' configs, fixed for the program; the catalogue is chosen
+    // before any part is looked up (`catalog::use_directory`), so it cannot change an entry already checked.
+    let key = (toml_text.to_string(), lines, fallback_id.to_string());
+    if let Some(&entry) = cache().get(&key) {
+        return Ok(entry);
+    }
     let located = |e: ConfigError| {
         let line = if lines { line_of(toml_text, e.detail()) } else { None };
         (e, line)
@@ -102,17 +111,36 @@ pub fn from_text(
     let text_of = |key: &str| cfg.get(key).ok().and_then(Value::as_str).map(str::to_string);
     let id = text_of("machine.id").unwrap_or_else(|| fallback_id.to_string());
     let name = text_of("machine.name").unwrap_or_else(|| id.clone());
-    let entry: &'static MachineEntry = Box::leak(Box::new(MachineEntry {
-        id: intern(&id),
-        key: intern(&name),
-        default_config: Box::leak(toml_text.to_string().into_boxed_str()),
-        i18n: &[],
-        build,
-        suite_configs: no_suite_configs,
-    }));
-    // Everything the simulation reads at its start, with the parts the file names from the catalogue.
-    sim_components::Sim::new(entry, &cfg).map_err(located)?;
+    // Everything the simulation reads at its start, with the parts the file names from the catalogue. Checked on an
+    // entry that is not kept (the simulation reads only its `build`), so a refused file leaks nothing.
+    let probe = MachineEntry { id: "", key: "", default_config: "", i18n: &[], build, suite_configs: no_suite_configs };
+    sim_components::Sim::new(&probe, &cfg).map_err(located)?;
+    let mut cache = cache();
+    // Another thread may have kept the same text meanwhile: its entry stays the one.
+    let entry = *cache.entry(key).or_insert_with(|| {
+        Box::leak(Box::new(MachineEntry {
+            id: intern(&id),
+            key: intern(&name),
+            default_config: Box::leak(toml_text.to_string().into_boxed_str()),
+            ..probe
+        }))
+    });
     Ok(entry)
+}
+
+type Cache = HashMap<(String, bool, String), &'static MachineEntry>;
+
+/// The entries `from_text` has kept, by what decides them: a file loaded again (a sweep, an FMU made in a loop) is the
+/// same entry, not a new leaked one.
+fn cache() -> MutexGuard<'static, Cache> {
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    CACHE.get_or_init(Default::default).lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// How many entries `from_text` keeps: what a test reads to see that a refused file adds none.
+#[doc(hidden)]
+pub fn kept_entries() -> usize {
+    cache().len()
 }
 
 /// The keys a machine file may have: every key of a registered machine's default config, `[machine]`, every value
