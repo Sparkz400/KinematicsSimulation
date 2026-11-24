@@ -112,8 +112,8 @@ a check passes exactly where it is not below 0, and the page marks one below 10 
 
 "Run sizing check" runs the scopes after the verdicts: the config's cycle once more, recorded over its second pass as
 `sim-cli compare` records it, one row a millisecond (a pass of more than 30 s keeps every n-th row, 30,000 at most).
-One plot a signal, every motor in its colour. Drag across a scope to zoom into that span, the wheel zooms about the
-pointer, a double-click or "Reset zoom" shows the whole pass; the pointer's time and every motor's value at it stand in
+One plot a signal, every motor in its colour. Drag across a scope to zoom into that span, Ctrl + wheel (or a trackpad pinch)
+zooms about the pointer, the plain wheel scrolls the page, a double-click or "Reset zoom" shows the whole pass; the pointer's time and every motor's value at it stand in
 the corner of each scope. Each pixel column draws the lowest and highest value of its rows, as the time plots do.
 With a path instead of the cycle they record the path's run from the start pose, from its start to 0.3 s after its end (as the sizing check runs it).
 
@@ -150,7 +150,11 @@ The matrix carries the part's shape with its pose: a belt span changes its lengt
 belt strips can change from one frame to the next, so the page draws whatever the frame holds. Colours are the desktop
 app's (`scene::part_color`).
 
-The page draws with plain WebGL2 written in the page, no library. Drag to turn, wheel to zoom; Pause/Play and Restart
+The page draws with plain WebGL2 written in the page, no library. The plain wheel scrolls the page (a hint over the view says how to zoom). Mouse: drag turns, Shift + drag or a drag
+with the right or middle button pans, Ctrl + wheel (Cmd on a Mac; a trackpad pinch does the same) zooms about the
+pointer, the "+" and "−" buttons zoom about the centre, a double-click or "Fit" fits the view again. Touch: a vertical
+swipe scrolls the page, a sideways swipe turns the machine about the vertical axis, two fingers pinch to zoom and drag
+to pan (tilting needs a mouse; on a touch screen two fingers dragged vertically may scroll the page instead). Pause/Play and Restart
 (which takes the config, the motion and the path in the editor). The legend shows the simulated time, the cycle time and
 the tool position; an orange cube marks the tool. The trail is the tool's path, one point a millisecond, coloured by its
 distance from the plan (the app's "following error" trail) on a fixed scale set on the page: blue at none, yellow at

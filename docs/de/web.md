@@ -110,7 +110,12 @@ Sekunden weiter (ganze Grundschritte) und gibt einen Zeiger auf `frame_len()` 32
 Fehler als Antwort bei `out_ptr`. (Eine unendliche Zeit trieb die Schrittzahl bis zur größten Ganzzahl und hängte die
 Seite auf.)
 
-Die Seite zeichnet mit WebGL2 ohne Bibliothek. Ziehen dreht, das Mausrad zoomt; Anhalten/Weiter und Neustart (mit
+Die Seite zeichnet mit WebGL2 ohne Bibliothek. Das einfache Mausrad scrollt die Seite (ein Hinweis über der Ansicht sagt, wie man zoomt). Maus: Ziehen dreht,
+Umschalt + Ziehen oder Ziehen mit rechter oder mittlerer Taste verschiebt, Strg + Mausrad (auf dem Mac Cmd; eine
+Pinch-Geste auf dem Trackpad wirkt ebenso) zoomt um den Zeiger, die Tasten „+“ und „−“ zoomen um die Mitte, ein
+Doppelklick oder „Einpassen“ passt die Ansicht neu ein. Touch: Senkrechtes Wischen scrollt die Seite, seitliches Wischen
+dreht die Maschine um die Hochachse, zwei Finger zoomen (Pinch) und verschieben; Kippen geht nur mit der Maus, und zwei
+senkrecht gezogene Finger können stattdessen die Seite scrollen. Anhalten/Weiter und Neustart (mit
 Konfiguration, Bewegung und Pfad aus dem Editor). Die Spur ist der Weg des Werkzeugs, ein Punkt je Millisekunde, gefärbt
 nach seinem Abstand von der Planposition auf einer festen, auf der Seite eingestellten Skala: blau bei keinem, gelb bei
 der Hälfte, rot beim eingestellten Wert (2 mm, solange nicht geändert), magenta darüber. Die letzten 40.000 Punkte

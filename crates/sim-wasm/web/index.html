@@ -28,7 +28,11 @@
   #status { color: var(--muted); } #error { color: var(--fail); white-space: pre-wrap; }
   .scroll { overflow-x: auto; }
   .view { position: relative; margin: 8px 0 16px; }
-  canvas#view { display: block; width: 100%; height: min(60vh, 520px); border: 1px solid var(--line); border-radius: 6px; touch-action: none; cursor: grab; }
+  canvas#view { display: block; width: 100%; height: min(60vh, 520px); border: 1px solid var(--line); border-radius: 6px; touch-action: pan-y; cursor: grab; }
+  #viewtools { position: absolute; right: 8px; top: 8px; display: flex; gap: 4px; }
+  #viewtools button { padding: 2px 9px; font-size: 16px; line-height: 1.3; }
+  #viewhint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; opacity: 0; transition: opacity .3s; background: rgba(0,0,0,.35); color: #fff; font-size: 18px; text-align: center; border-radius: 6px; }
+  #viewhint.on { opacity: 1; }
   canvas.plot[hidden] { display: none; }
   canvas.plot { display: block; width: 100%; height: 190px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 8px; }
   #legend { position: absolute; left: 8px; top: 8px; padding: 4px 8px; border-radius: 6px; background: var(--bg); opacity: .85; font: 13px/1.4 ui-monospace, monospace; pointer-events: none; white-space: pre; }
@@ -74,9 +78,11 @@ line,0.5,-0.4</textarea>
   </div>
   <div class="row">
     <button id="play" disabled data-t="web-pause">Pause</button> <button id="restart" disabled data-t="web-restart">Restart</button>
-    <span id="viewnote" class="muted" data-t="web-view-help">Drag to turn, wheel to zoom.</span>
+    <span id="viewnote" class="muted" data-t="web-view-help">Drag to turn, Ctrl + wheel to zoom.</span>
   </div>
-  <div class="view"><canvas id="view" aria-label="The machine in 3D"></canvas><div id="legend"></div><div id="scale" title=""></div></div>
+  <div class="view"><canvas id="view" aria-label="The machine in 3D"></canvas><div id="legend"></div><div id="scale" title=""></div>
+    <div id="viewtools"><button id="zin" data-ta="web-zoom-in">+</button><button id="zout" data-ta="web-zoom-out">−</button><button id="vfit" data-t="web-view-fit">Fit</button></div>
+    <div id="viewhint" aria-hidden="true"></div></div>
   <div class="row">
     <label for="trailscale" data-t="web-trail-scale">Trail red at following error [mm]</label> <input type="number" id="trailscale" value="2" min="0.0001" step="any">
     <button id="cleartrail" data-t="web-clear-trail">Clear trail</button>
@@ -200,6 +206,7 @@ async function loadTexts() {
   document.title = tr("web-title");
   for (const el of document.querySelectorAll("[data-t]")) el.textContent = tr(el.dataset.t);
   for (const el of document.querySelectorAll("[data-tp]")) el.placeholder = tr(el.dataset.tp);
+  for (const el of document.querySelectorAll("[data-ta]")) el.setAttribute("aria-label", el.title = tr(el.dataset.ta));
   $("play").textContent = tr(view.playing ? "web-pause" : "web-play");
 }
 
@@ -385,7 +392,7 @@ const trail = {
 
 // ---- The 3D view: the viewer worker steps the machine; each frame holds a head, one record per part and per
 // obstacle (mesh, 4 × 4 matrix column by column, colour), then the samples since the last frame. Scene axes: z up.
-const view = { gl: null, meshes: [], fit: null, frame: null, yaw: -0.9, pitch: 0.45, zoom: 1, playing: true, last: 0, owed: 0, pending: false, run: 0, plotted: 0 };
+const view = { gl: null, meshes: [], fit: null, frame: null, yaw: -0.9, pitch: 0.45, zoom: 1, pan: [0, 0, 0], pans: false, playing: true, last: 0, owed: 0, pending: false, run: 0, plotted: 0 };
 
 const VS = `#version 300 es
 in vec3 p; in vec3 n; uniform mat4 vp, model; out vec3 wn;
@@ -467,20 +474,89 @@ function setupView() {
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   view.gl = gl;
   const c = $("view");
-  c.addEventListener("pointerdown", (e) => { c.setPointerCapture(e.pointerId); view.drag = [e.clientX, e.clientY]; });
-  c.addEventListener("pointerup", () => { view.drag = null; });
-  c.addEventListener("pointermove", (e) => {
-    if (!view.drag) return;
-    view.yaw -= (e.clientX - view.drag[0]) * 0.01;
-    view.pitch = Math.max(-1.5, Math.min(1.5, view.pitch + (e.clientY - view.drag[1]) * 0.01));
-    view.drag = [e.clientX, e.clientY];
+  // Pointers by id: one turns (a mouse with Shift or another button pans), two pinch (zoom about their middle) and
+  // drag (pan). Touch and pen only turn about the vertical axis: a vertical swipe belongs to the page (touch-action:
+  // pan-y), and the browser then sends pointercancel.
+  const ptrs = new Map();
+  const grip = () => {
+    const [a, b] = [...ptrs.values()];
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  };
+  const spread = () => { const [a, b] = [...ptrs.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
+  c.addEventListener("pointerdown", (e) => {
+    c.setPointerCapture(e.pointerId);
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, touch: e.pointerType !== "mouse" });
+    view.pans = e.pointerType === "mouse" && (e.shiftKey || e.button > 0);
   });
-  c.addEventListener("wheel", (e) => { e.preventDefault(); view.zoom = Math.max(0.05, Math.min(20, view.zoom * Math.exp(e.deltaY * 0.001))); }, { passive: false });
+  const lift = (e) => { ptrs.delete(e.pointerId); view.pans = false; };
+  c.addEventListener("pointerup", lift);
+  c.addEventListener("pointercancel", lift);
+  c.addEventListener("pointermove", (e) => {
+    const p = ptrs.get(e.pointerId);
+    if (!p) return;
+    if (ptrs.size >= 2) {
+      const [was, wasSpread] = [grip(), spread()];
+      Object.assign(p, { x: e.clientX, y: e.clientY });
+      const now = grip();
+      zoomAt(view.zoom * wasSpread / spread(), now.x, now.y);
+      panBy(now.x - was.x, now.y - was.y);
+    } else if (view.pans) panBy(e.clientX - p.x, e.clientY - p.y);
+    else {
+      view.yaw -= (e.clientX - p.x) * 0.01;
+      if (!p.touch) view.pitch = Math.max(-1.5, Math.min(1.5, view.pitch + (e.clientY - p.y) * 0.01));
+    }
+    Object.assign(p, { x: e.clientX, y: e.clientY });
+  });
+  c.addEventListener("contextmenu", (e) => e.preventDefault());
+  c.addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); }); // no middle-button autoscroll
+  c.addEventListener("dblclick", fitView);
+  let hintTimer;
+  c.addEventListener("wheel", (e) => {
+    if (!(e.ctrlKey || e.metaKey)) { // the plain wheel scrolls the page; say how to zoom
+      $("viewhint").textContent = tr(/Mac/.test(navigator.platform) ? "web-view-hint-mac" : "web-view-hint");
+      $("viewhint").classList.add("on");
+      clearTimeout(hintTimer);
+      hintTimer = setTimeout(() => $("viewhint").classList.remove("on"), 1200);
+      return;
+    }
+    e.preventDefault(); // a trackpad pinch arrives as a wheel with ctrlKey
+    zoomAt(view.zoom * Math.exp(e.deltaY * (e.deltaMode === 1 ? 33 : 1) * 0.003), e.clientX, e.clientY);
+  }, { passive: false });
+  $("zin").addEventListener("click", () => zoomAt(view.zoom / 1.25));
+  $("zout").addEventListener("click", () => zoomAt(view.zoom * 1.25));
+  $("vfit").addEventListener("click", fitView);
   $("play").addEventListener("click", () => { view.playing = !view.playing; $("play").textContent = tr(view.playing ? "web-pause" : "web-play"); });
   $("restart").addEventListener("click", startView);
   $("play").disabled = $("restart").disabled = false;
   requestAnimationFrame(drawView);
 }
+
+// The camera looks at the fit's centre plus view.pan from view.zoom times the fitted distance.
+const FOV = 0.8;
+const viewDist = () => Math.max(view.fit.radius, 1e-3) / Math.sin(FOV / 2) * view.zoom;
+// The screen's right and up in the world.
+function viewAxes() {
+  const [cy, sy, cp, sp] = [Math.cos(view.yaw), Math.sin(view.yaw), Math.cos(view.pitch), Math.sin(view.pitch)];
+  return [[-sy, cy, 0], [-sp * cy, -sp * sy, cp]];
+}
+// Move the target so the scene follows a drag of (dx, dy) screen pixels.
+function panBy(dx, dy) {
+  if (!view.fit) return;
+  const [r, u] = viewAxes(), k = 2 * viewDist() * Math.tan(FOV / 2) / $("view").clientHeight;
+  view.pan = view.pan.map((v, i) => v - r[i] * dx * k + u[i] * dy * k);
+}
+// Zoom to `zoom`; the world point under the client position (the view's centre if none) stays under it.
+function zoomAt(zoom, cx, cy) {
+  if (!view.fit) return;
+  const was = view.zoom, d = viewDist();
+  view.zoom = Math.max(0.05, Math.min(20, zoom));
+  if (cx === undefined) return;
+  const box = $("view").getBoundingClientRect(), [r, u] = viewAxes();
+  const nx = (cx - box.left) / box.width * 2 - 1, ny = 1 - (cy - box.top) / box.height * 2;
+  const t = Math.tan(FOV / 2) * d * (1 - view.zoom / was);
+  view.pan = view.pan.map((v, i) => v + (r[i] * nx * box.width / box.height + u[i] * ny) * t);
+}
+function fitView() { view.zoom = 1; view.pan = [0, 0, 0]; view.yaw = -0.9; view.pitch = 0.45; }
 
 // The machine of the selection, with the config in the editor and the cycle or the path, at its start pose; the
 // camera fitted to it, plots and trail cleared.
@@ -491,7 +567,7 @@ async function startView() {
   try {
     const fit = await viewer.call(3, body());
     if (run !== view.run) return;
-    view.fit = fit; view.zoom = 1; view.owed = 0;
+    view.fit = fit; view.zoom = 1; view.pan = [0, 0, 0]; view.owed = 0;
     resetStore(fit.sample);
     showKeys();
     $("sweep").disabled = false;
@@ -548,8 +624,8 @@ function drawView(now) {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   const f = view.frame;
   if (!view.fit || !f) return;
-  const { centre, radius } = view.fit, fov = 0.8;
-  const dist = Math.max(radius, 1e-3) / Math.sin(fov / 2) * view.zoom;
+  const { radius } = view.fit, fov = FOV, dist = viewDist();
+  const centre = view.fit.centre.map((v, i) => v + view.pan[i]);
   const eye = [Math.cos(view.pitch) * Math.cos(view.yaw), Math.cos(view.pitch) * Math.sin(view.yaw), Math.sin(view.pitch)].map((v, i) => centre[i] + dist * v);
   const vp = mul(perspective(fov, w / h, dist / 100, dist * 10), lookAt(eye, centre, [0, 0, 1]));
   gl.useProgram(view.prog);
@@ -738,6 +814,7 @@ function showScopes() {
       c.addEventListener("pointerleave", () => { if (!scope.drag) { scope.hover = undefined; drawScopes(); } });
       c.addEventListener("dblclick", resetZoom);
       c.addEventListener("wheel", (e) => {
+        if (!(e.ctrlKey || e.metaKey)) return; // the plain wheel scrolls the page
         e.preventDefault();
         const t = scopeTime(c, e.clientX), f = Math.exp(e.deltaY * 0.002), end = scope.data.time.at(-1);
         scope.t0 = Math.max(0, t - (t - scope.t0) * f); scope.t1 = Math.min(end, t + (scope.t1 - t) * f);
