@@ -121,7 +121,9 @@ fn parts_are_joined_at_the_start_pose_not_at_a_paths_first() {
     let cfg = entry.config();
     let mut machine = (entry.build)(&cfg).unwrap();
     let start = cfg.f64s("start.pose").unwrap();
-    let mut check = PlanCheck::at_start(0.0, machine.as_mut(), &start);
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
+    machine.equilibrium(&start, &mut state, &mut torque);
+    let mut check = PlanCheck::at_start(0.0, machine.as_ref(), &state, &start, || (entry.build)(&cfg)).unwrap();
     machine.set_payload_attached(false);
     let mut together = start.clone();
     together[1] = start[0];

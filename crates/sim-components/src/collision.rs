@@ -139,20 +139,36 @@ impl PlanCheck {
         Self { join_below: clearance, ..Self::default() }
     }
 
-    /// `keeping`, with the parts joined as they are at the machine's start pose `start` (`Machine::connected_bodies`,
-    /// or else closer than `clearance` there), with the payload off and on, whatever pose a path starts from. Leaves
-    /// the payload on, as the controller starts; switching it may leave more in a machine (a crane books a pick), so a
-    /// simulation looks with a machine of its own (`Sim::new`).
-    pub fn at_start(clearance: f64, machine: &mut dyn Machine, start: &[f64]) -> Self {
+    /// `keeping`, with the parts joined as they are at the machine's start pose, whatever pose a path starts from:
+    /// `state` is `machine`'s there with the payload on (as the controller starts). Where the machine names its joined
+    /// pairs (`Machine::connected_bodies`) that is all; where the rule joins them by their distance, and some pair is
+    /// left to check, also with the payload off, on a machine of its own that `detached` builds (switching the payload
+    /// may leave more in a machine: a crane books a pick), at the start pose `start`.
+    pub fn at_start(
+        clearance: f64,
+        machine: &dyn Machine,
+        state: &[f64],
+        start: &[f64],
+        detached: impl FnOnce() -> Result<Box<dyn Machine>, ConfigError>,
+    ) -> Result<Self, ConfigError> {
         let mut check = Self::keeping(clearance);
-        let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
-        for attached in [false, true] {
-            machine.set_payload_attached(attached);
-            machine.equilibrium(start, &mut state, &mut torque);
-            let (boxes, capsules) = (machine.collision_bodies(&state), machine.self_collision_capsules(&state));
-            check.joins_for(&boxes, &capsules, || machine.connected_bodies(&state, boxes.len(), capsules.len()));
+        if !check.join_at(machine, state) && check.has_pairs() {
+            let mut other = detached()?;
+            other.set_payload_attached(false);
+            let (mut state, mut torque) = (Vec::new(), vec![0.0; other.motors().len()]);
+            other.equilibrium(start, &mut state, &mut torque);
+            check.join_at(other.as_ref(), &state);
         }
-        check
+        Ok(check)
+    }
+
+    /// The joined pairs of `machine`'s parts at `state`; whether the machine named them.
+    fn join_at(&mut self, machine: &dyn Machine, state: &[f64]) -> bool {
+        let (boxes, capsules) = (machine.collision_bodies(state), machine.self_collision_capsules(state));
+        let named = machine.connected_bodies(state, boxes.len(), capsules.len());
+        let is_named = named.is_some();
+        self.joins_for(&boxes, &capsules, || named);
+        is_named
     }
 
     /// A check with the same joined pairs and nothing seen yet.
@@ -402,7 +418,11 @@ pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanChec
 fn cycle_check(entry: &MachineEntry, cfg: &Config, obstacles: &[Obstacle]) -> Result<PlanCheck, ConfigError> {
     let mut machine = (entry.build)(cfg)?;
     let start = crate::sim::start_pose(cfg, machine.as_ref())?;
-    let mut check = PlanCheck::at_start(cfg.non_negative("profile.min_clearance_m")?, machine.as_mut(), &start);
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
+    machine.set_payload_attached(true);
+    machine.equilibrium(&start, &mut state, &mut torque);
+    let clearance = cfg.non_negative("profile.min_clearance_m")?;
+    let mut check = PlanCheck::at_start(clearance, machine.as_ref(), &state, &start, || (entry.build)(cfg))?;
     if obstacles.is_empty() && !check.has_pairs() {
         return Ok(PlanCheck::default());
     }

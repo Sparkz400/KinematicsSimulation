@@ -403,10 +403,11 @@ impl Sim {
         let (dt, substeps) = timing(cfg)?;
         let start = start_pose(cfg, machine.as_ref())?;
         let min_clearance = cfg.non_negative("profile.min_clearance_m")?;
-        let own_parts = crate::collision::PlanCheck::at_start(min_clearance, (entry.build)(cfg)?.as_mut(), &start);
         let mut state = Vec::new();
         let mut torque = vec![0.0; machine.motors().len()];
         machine.equilibrium(&start, &mut state, &mut torque);
+        let build = || (entry.build)(cfg);
+        let own_parts = crate::collision::PlanCheck::at_start(min_clearance, machine.as_ref(), &state, &start, build)?;
         let control = Controller::new(cfg, machine.as_ref(), &state)?;
         let limit_violations = check_limits(machine.as_ref(), &control.motor_drives(machine.as_ref()));
         let (heated, part_heating) = (heated_parts(cfg, machine.as_ref())?, heats(cfg)?);
@@ -478,7 +479,12 @@ impl Sim {
             cfg.bool("effects.crash")?,
             cfg.non_negative("profile.min_clearance_m")?,
         );
-        let mut own_parts = crate::collision::PlanCheck::at_start(min_clearance, (entry.build)(cfg)?.as_mut(), &start);
+        // On a machine of their own: this one's state is adopted below, not taken at the start pose.
+        let spare = (entry.build)(cfg)?;
+        let (mut at, mut torque) = (Vec::new(), vec![0.0; spare.motors().len()]);
+        spare.equilibrium(&start, &mut at, &mut torque);
+        let build = || (entry.build)(cfg);
+        let mut own_parts = crate::collision::PlanCheck::at_start(min_clearance, spare.as_ref(), &at, &start, build)?;
         // The last fallible step; it changes the controller only once it has checked all it reads.
         self.control.apply_config(cfg, machine.as_ref())?;
         own_parts.own = self.own_parts.own.take();
