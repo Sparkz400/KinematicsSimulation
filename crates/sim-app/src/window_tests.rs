@@ -1074,12 +1074,24 @@ fn every_tool_tab_starts_its_computation() {
     ] {
         // The job just started replaced its button with a wider progress bar and Cancel, which moves the buttons after it
         // (a wrapped row): laid out again before the next is looked for, or the click lands where it was.
+        // On Windows CI (25 November 2026) one such click still started nothing: clicked again while the button is
+        // there. A job started replaces its button, so a second click cannot start a second job.
         d.frames(2);
         let label = d.tr(key);
         let tools = d.regions()[TOOLS];
-        let button = d.find_where(key, |w| w.role == Role::Button && w.label == label && tools.contains_rect(w.rect));
-        d.click_at(Vec2::new(button.rect.center().x, button.rect.center().y));
-        d.wait(key, |d| d.state().model.running(kind));
+        d.eventually(key, |d| {
+            if d.state().model.running(kind) || d.state().model.has_result(kind) {
+                return Ok(());
+            }
+            let button = d
+                .widgets()
+                .into_iter()
+                .find(|w| w.role == Role::Button && w.label == label && tools.contains_rect(w.rect));
+            if let Some(button) = button {
+                d.click_at(Vec2::new(button.rect.center().x, button.rect.center().y));
+            }
+            Err(format!("messages: {:?}", d.messages()))
+        });
     }
     // The frequency response and the tuning measure; the motor search searches.
     d.tab("ui-sweep-tab");
