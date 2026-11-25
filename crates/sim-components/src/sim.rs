@@ -575,9 +575,9 @@ impl Sim {
                 Ok(runs) => runs,
                 Err(e) => return Some(Err(CommandError { key: e.key })),
             };
-        Some(match runs.as_slice() {
-            [one] if one.feed.is_none() => self.plan_path(&one.pieces, run.time_optimal),
-            _ => self.plan_program(&runs, run.time_optimal),
+        Some(match crate::program::as_path(&runs) {
+            Some(pieces) => self.plan_path(pieces, run.time_optimal),
+            None => self.plan_program(&runs, run.time_optimal),
         })
     }
 

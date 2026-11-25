@@ -481,9 +481,8 @@ fn poses(args: &Args, sim: &Sim, cfg: &Config, tr: &Translations) -> Result<Opti
             .map_err(|e| Failure(e.key, format!("{file}:{}: {}", e.line, e.detail)))?;
     let refused = |e: sim_components::CommandError| Failure(e.key, String::new());
     // A program with feeds is planned run by run (`Sim::plan_program`); one run at the axes' limits as a path file is.
-    let pieces = match runs.as_slice() {
-        [run] if run.feed.is_none() => &run.pieces,
-        _ => return sim.plan_program(&runs, args.flag("--time-optimal")).map(Some).map_err(refused),
+    let Some(pieces) = sim_components::program::as_path(&runs) else {
+        return sim.plan_program(&runs, args.flag("--time-optimal")).map(Some).map_err(refused);
     };
     let deviation = sim.path_deviation(pieces, args.flag("--time-optimal")).map_err(refused)?;
     // Not below what the figure can show: an arc with decimally rounded end coordinates is some 10 nm off.

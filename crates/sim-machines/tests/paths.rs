@@ -175,6 +175,29 @@ fn the_mode_of_the_block_after_a_corner_governs_it() {
     assert!(dist < 1e-7 && speed < 1e-3, "G61 to G64: {dist} m, {speed} m/s");
 }
 
+/// A program of rapids alone is one run at the axes' limits, which plans as a path file does; with a G61 it still stops
+/// at its corner. `G91 G61 G0 X100`, `G0 Y100` with the config's tolerance at 2 mm: the configured path's plan
+/// (`Sim::plan_configured_path`, as `run --path`, the app and the FMU take it) reaches the corner s + (0.1, 0, 0) at
+/// rest, as `g61_stops_and_g64_p_rounds_a_corner` has it for G1; without the G61 it passes 1.41 mm from it. Fails if a
+/// lone feedless run goes to `plan_path`, which takes the config's tolerance.
+#[test]
+fn g61_on_a_program_of_rapids_stops_at_the_corner() {
+    let entry = file("xyz-portal.toml");
+    let mut cfg = entry.config();
+    cfg.set_text("profile.corner_tolerance_m = 0.002").unwrap();
+    let plan = |mode: &str| {
+        let text = format!("G91 {mode}\nG0 X100\nG0 Y100");
+        let sim = Sim::new(entry, &with_path(&cfg, "p.nc", &text, false).unwrap()).unwrap();
+        let s = sim.control.planned_pos().to_vec();
+        (sim.plan_configured_path().unwrap().unwrap(), [s[0] + 0.1, s[1], s[2]])
+    };
+    let (stopped, corner) = plan("G61");
+    let (dist, speed) = pass(&stopped, &corner);
+    assert!(dist < 1e-7 && speed < 1e-3, "G61: {dist} m from the corner at {speed} m/s");
+    let (rounded, corner) = plan("");
+    assert!(pass(&rounded, &corner).0 > 1e-3);
+}
+
 /// G4 P0.5 holds the portal where the move before ended for 0.5 s: 500 profile cycles of 1 ms, the poses equal, and
 /// the plan is 0.5 s longer than the same program with `G4 P0` (which splits the run in the same way, so the two plans
 /// differ in the dwell only). A longer dwell moves no pose.

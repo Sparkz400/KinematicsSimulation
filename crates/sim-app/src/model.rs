@@ -2194,14 +2194,14 @@ impl Model {
                                 speed,
                             )
                             .map_err(|e| ("ui-file-line", format!("{}:{}: {}", inputs.path_file, e.line, e.detail)))?;
-                            match runs.as_slice() {
-                                [run] if run.feed.is_none() => (
-                                    sim.plan_path(&run.pieces, inputs.time_optimal).map_err(command)?,
-                                    vec![sim.path_deviation(&run.pieces, inputs.time_optimal).map_err(command)?],
+                            match sim_components::program::as_path(&runs) {
+                                Some(pieces) => (
+                                    sim.plan_path(pieces, inputs.time_optimal).map_err(command)?,
+                                    vec![sim.path_deviation(pieces, inputs.time_optimal).map_err(command)?],
                                 ),
                                 // A program: the deviation of each run from its pieces, each from where the one
                                 // before ends.
-                                _ => (
+                                None => (
                                     sim.plan_program(&runs, inputs.time_optimal).map_err(command)?,
                                     sim.program_deviations(&runs, inputs.time_optimal).map_err(command)?,
                                 ),

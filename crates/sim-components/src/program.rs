@@ -79,6 +79,16 @@ impl Run {
     }
 }
 
+/// The pieces of a program that plans as a path file does (`Sim::plan_path`): one run at the axes' limits in the config's
+/// corner tolerance. `None` for one to plan run by run (`Sim::plan_program`): with a feed, more runs, or a G61 or G64 P
+/// whose corner tolerance only `plan_program` takes.
+pub fn as_path(runs: &[Run]) -> Option<&[Piece]> {
+    match runs {
+        [run] if run.feed.is_none() && run.corner.is_none() => Some(&run.pieces),
+        _ => None,
+    }
+}
+
 /// The longest dwell (s) a G4 takes: the plan has a pose per profile cycle for it. This simulator's limit.
 pub const MAX_DWELL_S: f64 = 3600.0;
 
