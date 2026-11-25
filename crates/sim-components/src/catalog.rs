@@ -43,6 +43,8 @@ const TABLES: &[(&str, &str)] = &tables![
     "siemens/braking_s210.csv",
     "siemens/braking_s120.csv",
     "siemens/dc_link_measured.csv",
+    "siemens/parameters_s120.csv",
+    "siemens/parameters_s210.csv",
     "siemens/gearbox_nrb.csv",
     "siemens/gearbox_nrk.csv",
     "siemens/gearbox_nlc.csv",
@@ -99,7 +101,7 @@ const TABLES: &[(&str, &str)] = &tables![
 /// The tables read from a directory by `use_directory`; unset, the compiled-in ones are used.
 static LOADED: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
 
-fn table(name: &str) -> &'static str {
+pub(crate) fn table(name: &str) -> &'static str {
     let compiled = || TABLES.iter().find(|(n, _)| *n == name).map(|(_, text)| *text).expect("a table of TABLES");
     LOADED.get().and_then(|t| t.get(name).copied()).unwrap_or_else(compiled)
 }
@@ -251,11 +253,11 @@ fn vendor_rows(kind: &str, vendor: &str, line: f64) -> Vec<Row> {
         .collect()
 }
 
-type Row = &'static HashMap<&'static str, &'static str>;
+pub(crate) type Row = &'static HashMap<&'static str, &'static str>;
 
 /// The rows of a catalogue file; lines starting with '#' are notes. Each table is parsed once and kept for the life of
 /// the process, as its text is: a motor search reads the same tables for every motor it tries.
-fn rows(text: &'static str) -> Vec<Row> {
+pub(crate) fn rows(text: &'static str) -> Vec<Row> {
     type Parsed = Vec<((usize, usize), &'static [HashMap<&'static str, &'static str>])>;
     static PARSED: Mutex<Parsed> = Mutex::new(Vec::new());
     let key = (text.as_ptr() as usize, text.len());

@@ -2481,3 +2481,40 @@ fn tune_exits_1_where_its_targets_are_not_met() {
         assert!(help.contains("tuning") && help.contains("--no-notch"), "{lang}: {help}");
     }
 }
+
+/// `parameters` prints the header and, for the EXCT-30 (an S210 converter by name), the speed controller's gain as the
+/// p1460 row of each motor with the config's number unchanged, says on the error stream that it is an aid to be checked
+/// against the firmware, and exits 0; without a drive part it exits 2 with nothing on standard output, and `--family`
+/// makes the list (an S120's Kv parameter p2538 comes up; a family that is none is refused).
+#[test]
+fn parameters_lists_the_drive_parameters_and_refuses_a_machine_without_a_catalogue_drive() {
+    let exct = concat!(env!("CARGO_MANIFEST_DIR"), "/../machine-t-gantry/exct-30.toml");
+    let out = cli(&["parameters", "t-gantry", "--config", exct]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let stdout = text(&out.stdout);
+    let mut lines = stdout.lines();
+    assert_eq!(lines.next(), Some("motor,key,value,unit,parameter,name,parameter_value,parameter_unit,basis"));
+    let kp: Vec<Vec<&str>> =
+        stdout.lines().filter(|l| l.contains(",velocity_kp_nm_s_rad,")).map(|l| l.split(',').collect()).collect();
+    assert_eq!(kp.len(), 2, "one per motor: {stdout}");
+    for f in &kp {
+        assert_eq!(
+            (f.len(), f[3], f[4], f[5], f[7], f[8]),
+            (9, "N m s/rad", "p1460", "Speed controller P gain", "Nms/rad", "printed")
+        );
+        assert_eq!(f[2], f[6], "Kp is kept");
+    }
+    assert!(stdout.lines().any(|l| l.contains(",current_kp_v_a,") && l.ends_with(",,,,none")), "{stdout}");
+    assert!(text(&out.stderr).contains("commissioning") && text(&out.stderr).contains("firmware"));
+    let german = text(&cli(&["parameters", "t-gantry", "--config", exct, "--lang", "de"]).stderr);
+    assert!(german.contains("Inbetriebnahme"), "{german}");
+
+    let none = cli(&["parameters", "t-gantry"]);
+    assert_eq!((none.status.code(), none.stdout.is_empty()), (Some(2), true));
+    assert!(text(&none.stderr).contains("--family"), "{}", text(&none.stderr));
+    let s120 = cli(&["parameters", "t-gantry", "--family", "s120"]);
+    assert_eq!(s120.status.code(), Some(0), "{}", text(&s120.stderr));
+    assert!(text(&s120.stdout).contains(",p2538,"));
+    assert_eq!(cli(&["parameters", "t-gantry", "--family", "g120"]).status.code(), Some(2));
+    assert!(text(&cli(&["help", "parameters"]).stdout).contains("--family"));
+}

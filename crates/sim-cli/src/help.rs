@@ -36,6 +36,7 @@ pub(super) const COMMANDS: [&str; 26] = [
     "accuracy",
     "report",
     "fmu",
+    "parameters",
 ];
 
 /// The topics beside the commands: the options every command takes, the path formats and the units.

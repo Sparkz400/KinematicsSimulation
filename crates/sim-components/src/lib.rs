@@ -29,6 +29,7 @@ pub mod induction;
 pub mod joint;
 pub mod mech;
 pub mod motor_fit;
+pub mod parameters;
 pub mod path;
 pub mod pneumatic;
 pub mod profile;

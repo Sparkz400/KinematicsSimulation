@@ -1804,6 +1804,36 @@ Limits for this task:
 - The margins are measured with a tenth of the rated torque. Near standstill the motor's Coulomb friction (smoothed over 0.5 rad/s) damps the loop at that amplitude, so the margins are larger with friction on; take the ones with friction off for a cruise.
 - A gain that is fine at the nominal values can be unstable when rotor inertia, belt stiffness or inductance are off. That was found on the EXCT-30 config, whose velocity gain was lowered from 1.4 to 0.6 for it (and later to 0.45 for the margins above). Run `sensitivity` after tuning.
 
+**Take the settings to the drive.** The gains and filters above are config keys in the simulator's own units. `sim-cli parameters MACHINE` lists, for each motor, the settings of the config as resolved (the parts applied, a motor's own `[drive.<id>]` over the shared one) with the SINAMICS parameter that takes each and its value in that parameter's unit:
+
+```
+sim-cli parameters t-gantry --config crates/machine-t-gantry/exct-30.toml
+motor,key,value,unit,parameter,name,parameter_value,parameter_unit,basis
+```
+
+The columns `motor,key,value,unit` are the config's; `parameter,name,parameter_value,parameter_unit` the drive's (the name as the Siemens document prints it); `basis` is `printed` where the parameter's quantity and unit are the document's and the conversion only changes the unit (Nms/rad stays, 0.02 s is 20 ms), `derived` where the relation is worked out here from what the document prints, and `none` where there is no parameter (the parameter columns are empty; a number is never guessed). The family comes from the config's drive part: an S210 converter of `converters_s210.csv` or an S120 Motor Module of `motor_modules_s120.csv` (`--drive`, or `[parts] drive`); `--family s120|s210` names it where the config has none. A config without a catalogue drive, or with another maker's, is refused with a message that names the two families (the S210 New generation, the 6SL5310 converters, is not in the document and is refused too). Rotary servo motors only: a linear motor's gains have other units (N s/m), a stepper or an induction motor has no such cascade. A setting whose effect is off in the config (the notch, the speed filter, the monitoring settings) was not used by the simulation and has no row. One line on the error stream says that the list is an aid to be checked against the drive's own firmware version: the numbers come from Siemens' SINAMICS S120/S150 List Manual 07/2018 (LH1) and the S210 Operating Instructions 09/2022, the pages are in `catalog/siemens/parameters_s120.meta.toml` and `parameters_s210.meta.toml`.
+
+| Config key | S120 servo | S210 | Conversion |
+| --- | --- | --- | --- |
+| `velocity_kp_nm_s_rad` | p1460 (Nms/rad) | p1460 | unchanged: torque at the motor shaft per speed error at the motor shaft |
+| `velocity_tn_s` | p1462 (ms) | p1462 | seconds × 1000 |
+| `kv_1_s` | p2538 (1000 rpm) | none | p2538 = Kv / 16.667 (the manual prints the unit 1000 rpm; Kv in 1/s is 1000/60 times it, derived); needs the function module position control |
+| `velocity_feedforward_factor` | p2534 (%) | none | × 100 |
+| `precontrol_balance_s` | p2536 (ms) | none | seconds × 1000. Not p1429: that symmetrizes the speed setpoint of the speed controller for torque precontrol; the simulator lags the position setpoint |
+| `current_tn_s` | p1717 (ms) | none | seconds × 1000 (Tn = L/R holds in the simulator's winding and the drive's alike) |
+| `velocity_filter_s` | p1441 (ms) | p1441 | seconds × 1000 (a first-order low pass on the actual speed in both) |
+| `notch_frequency_hz`, `notch_bandwidth_hz` | current setpoint filter 1: p1657 = 2 (general 2nd order filter), p1658 and p1660 = the frequency, p1659 = D, p1661 = 0; switch it on with p1656 bit 0 | none | D = bandwidth / (2 × frequency), from the manual's f_3dB = 2 D f_notch; the simulator's bandwidth is the −3 dB width of its second order notch. Filters 2 to 4 are p1662 to p1676 |
+| `peak_torque_nm` | p1520 and p1521 (Nm) | p1520, p1521 | + and − the value; the drive's limit is constant where the simulator's also falls with the torque-speed curve |
+| `max_speed_rad_s` | p1082 (rpm) | p1082 | × 60/(2π) |
+| `off1_ramp_s`, `off3_ramp_s` | p1121, p1135 (s) | p1121, p1135 | the drive's ramp times run from the maximum speed p1082, the simulator's from the rated speed: p1121 = ramp × p1082 / rated speed |
+| `pulse_off_speed_rad_s` | p1226 (rpm) | none | × 60/(2π) |
+| `blocked_speed_rad_s`, `blocked_time_s` | p2175 (rpm), p2177 (s) | none | × 60/(2π); unchanged |
+| `standstill_time_s` | p2543 (ms) | none | seconds × 1000; needs the function module position control |
+
+No direct parameter, listed as `none`, and why: `current_kp_v_a` (the simulator's gain is that of its one winding, three times a phase's, and Siemens prints no convention for p1715 to convert to; the S210 documents p1715 in an alarm remedy only, no entry), `torque_filter_s` (a first-order lag of the torque setpoint: the current setpoint filters take a PT2 or a general filter, no PT1, and the S210 lists none; p1414 to p1416 filter the speed setpoint, a different place in the loop), `torque_feedforward_factor` (a servo has no weighting parameter: p1402.4 switches the torque precontrol on and the inertia, p0341 and p0342 with p1498 for the load, sets it; p1496 is for vector control only), `following_error_window_rad` and `standstill_window_rad` (p2546 and p2542 are in the drive's length units, which depend on the axis's setting p2506), `ss1_time_s` (p9652 is a Safety Integrated parameter, not read here), and on an S210 every key it has no row for: the S210 holds no position controller (its Kv is read-only, r5276; the position loop is in the controller above it), no current controller or current setpoint filter parameters were found in its documents, and no jerk or acceleration limits. The friction characteristic (p3820 and on) is not listed: it is ten (speed, torque) pairs of an array, which the config holds as its own lists. Other parameter numbers the documentation names are not settings of the tuned loops and have no row: the motor's winding resistance and inductance (p0350, p0356), the function modules (p0108, for example bit 6, DSC with spline) and the sign-of-life tolerance of a cyclic fieldbus (p0925).
+
+An example by hand: with `drive.kv_1_s` 50 1/s on an S120, p2538 is 50 / 16.667 = 3.0; with a notch of 60 Hz and a bandwidth of 20 Hz, p1658 and p1660 are 60 Hz and p1659 is 20 / (2 × 60) = 0.167. `--set` goes on top of the resolved parts as in every command, so `--set drive.velocity_kp_nm_s_rad=0.3` shows 0.3 in the list, where a motor by name would have had its gain retuned.
+
 ## Replay a drive trace and fit parameters
 
 **What a trace is.** A CSV file with a header line. Needed columns, at the motor shaft:

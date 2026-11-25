@@ -380,6 +380,65 @@
         }
       },
       "description": "An infeed module: line side and DC link ratings, braking where the module has a chopper."
+    },
+    "parameters": {
+      "type": "object",
+      "required": [
+        "config_key",
+        "parameter",
+        "name",
+        "unit",
+        "factor",
+        "basis",
+        "source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "enum": [
+            "printed",
+            "derived"
+          ],
+          "description": "printed: the quantity and unit as the manual prints them; derived: a relation worked out from what it prints."
+        },
+        "config_key": {
+          "type": "string",
+          "description": "The simulator's [drive] key (without the table name) whose value the parameter takes."
+        },
+        "factor": {
+          "type": "number",
+          "unit": "1",
+          "description": "The parameter's value per unit of the config key, in the unit column."
+        },
+        "name": {
+          "type": "string",
+          "description": "The parameter's name as the manual prints it."
+        },
+        "note": {
+          "type": "string"
+        },
+        "parameter": {
+          "type": "string",
+          "pattern": "^p[0-9]+$"
+        },
+        "rule": {
+          "enum": [
+            "notch_damping",
+            "zero",
+            "constant",
+            "ramp_time"
+          ],
+          "description": "A conversion a factor does not say; empty: value times factor."
+        },
+        "source": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string",
+          "description": "The parameter's unit as the manual prints it."
+        }
+      },
+      "description": "Which parameter of a drive family takes the value of a simulator config key, with the conversion from the config's unit."
     }
   }
 }
