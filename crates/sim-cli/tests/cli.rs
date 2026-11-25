@@ -2484,7 +2484,7 @@ fn tune_exits_1_where_its_targets_are_not_met() {
 
 /// `verdicts` says where the machine's own parts are not checked: the screw axis (its payload sits on its carriage, the
 /// two joined, nothing else) has no row "self-collision" and says so on the error stream; the six-axis arm, with links
-/// to compare, has the row and does not.
+/// to compare, has the row and tells the planned cycle's least clearance between its parts instead.
 #[test]
 fn verdicts_say_where_the_machines_own_parts_are_not_checked() {
     for (id, checked) in [("screw-axis", false), ("urdf-arm", true)] {
@@ -2492,6 +2492,7 @@ fn verdicts_say_where_the_machines_own_parts_are_not_checked() {
         assert_judged(&out);
         let row = text(&out.stdout).lines().any(|l| l.starts_with("self-collision,"));
         let said = text(&out.stderr).contains("not checked against each other");
-        assert_eq!((row, said), (checked, !checked), "{id}: {}", text(&out.stderr));
+        let figure = text(&out.stderr).contains("least clearance between the machine's own parts");
+        assert_eq!((row, said, figure), (checked, !checked, checked), "{id}: {}", text(&out.stderr));
     }
 }

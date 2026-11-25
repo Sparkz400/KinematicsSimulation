@@ -190,3 +190,21 @@ fn the_scaras_flange_point_is_joined_to_the_arm_before_its_quill() {
     }
     assert!(!joined.contains(&(1 + 1, 1 + 3)), "{joined:?}");
 }
+
+/// The run's least own clearance goes with a snapshot and stays over a reconfiguration, as the obstacles' does: the
+/// six-axis arm looks at its parts after its first step (the start pose), a simulation restored from that snapshot has
+/// the same figure, and one reconfigured with the same config keeps it.
+#[test]
+fn the_own_clearance_goes_with_a_snapshot_and_stays_over_a_reconfiguration() {
+    let entry = find("urdf-arm").unwrap();
+    let cfg = entry.config();
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    sim.step();
+    let seen = sim.own_parts.own.clone().expect("the arm has links to look at");
+    let mut other = Sim::new(entry, &cfg).unwrap();
+    assert_eq!(other.own_parts.own, None);
+    other.restore(&sim.snapshot()).unwrap();
+    assert_eq!(other.own_parts.own.as_ref(), Some(&seen));
+    sim.reconfigure(entry, &cfg).unwrap();
+    assert_eq!(sim.own_parts.own, Some(seen));
+}
