@@ -181,6 +181,10 @@ pub fn list_resolved(
             if !effect.is_empty() && !own.bool(&format!("effects.{effect}")).unwrap_or(false) {
                 continue;
             }
+            // A motor's notch at 0 Hz is none (`DriveParams::from_config`): the drive's filter stays off.
+            if effect == "notch_filter" && own.f64("drive.notch_frequency_hz") == Ok(0.0) {
+                continue;
+            }
             let found: Vec<_> = mapping.iter().filter(|r| r["config_key"] == key).collect();
             let row = |parameter: &str, name: &str, converted, parameter_unit: &str, basis| Row {
                 motor: motor.id.into(),

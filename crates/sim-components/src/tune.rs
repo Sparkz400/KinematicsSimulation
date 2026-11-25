@@ -24,8 +24,9 @@ impl Default for Targets {
     }
 }
 
-/// Per motor the gain is searched over a bracket of `BRACKET` doublings (or halvings) from the config's own, then by
-/// `BISECTIONS` bisections (in the logarithm): at most 1 + 8 + 6 = 15 evaluations (`velocity_loop_margins`, which
+/// Per motor the gain is searched over a bracket of `BRACKET` doublings or halvings from the config's own (together: a
+/// start that fails is doubled once to see which way the slack grows), then by `BISECTIONS` bisections (in the
+/// logarithm): at most 1 + 8 + 6 = 15 evaluations (`velocity_loop_margins`, which
 /// measures every motor at every pose), the last resolving the gain to 1.1 %.
 pub const BRACKET: usize = 8;
 pub const BISECTIONS: usize = 6;
@@ -36,8 +37,9 @@ pub const JOINT_ROUNDS: usize = 4;
 pub const NOTCH_MIN_GAIN: f64 = 1.15;
 /// The notch's width as a share of its centre frequency, as the flying saw's (250 Hz at 360 Hz, hand-tuned).
 pub const NOTCH_WIDTH: f64 = 0.7;
-/// A limit counts as a resonance where the sensitivity peaks this far above the gain crossover.
-pub const RESONANCE_OVER_CROSSOVER: f64 = 1.5;
+/// A gain margin limit counts as a resonance's where the sensitivity peaks at a mode of the machine or up to this factor
+/// above it (the flying saw without its notch: the mode at 367 Hz, the peak at 475 to 520 Hz).
+pub const PEAK_OVER_MODE: f64 = 1.5;
 
 /// A velocity loop's gains: Kp (N m s/rad), Tn (s) and the position loop's Kv (1/s).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -127,6 +129,8 @@ pub struct MotorTuning {
 /// A notch the tuning kept.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Notch {
+    /// The motor's index in `Tuned::motors`.
+    pub motor: usize,
     pub frequency_hz: f64,
     pub bandwidth_hz: f64,
     /// The tuned gain with it over the tuned gain without it.
@@ -139,7 +143,8 @@ pub struct Tuned {
     /// The config with the new gains (and the notch), as verified by the last `velocity_loop_margins` call.
     pub config: Config,
     pub motors: Vec<MotorTuning>,
-    pub notch: Option<Notch>,
+    /// The notches kept, one per motor at most; the other motors then have none (frequency 0).
+    pub notches: Vec<Notch>,
     /// Every motor meets the targets at every pose in that last measurement.
     pub met: bool,
     /// The calls of `velocity_loop_margins` made.
@@ -156,11 +161,18 @@ impl Tuned {
                 out.push(format!("{}={:?}", m.kv_key, m.after.kv));
             }
         }
-        if let Some(n) = &self.notch {
-            let key = |m: &MotorTuning, leaf: &str| m.kp_key.replace("velocity_kp_nm_s_rad", leaf);
+        if !self.notches.is_empty() {
             out.push("effects.notch_filter=true".into());
-            out.push(format!("{}={:?}", key(&self.motors[0], "notch_frequency_hz"), n.frequency_hz));
-            out.push(format!("{}={:?}", key(&self.motors[0], "notch_bandwidth_hz"), n.bandwidth_hz));
+            for (k, m) in self.motors.iter().enumerate() {
+                let key = |leaf: &str| m.kp_key.replace("velocity_kp_nm_s_rad", leaf);
+                match self.notches.iter().find(|n| n.motor == k) {
+                    Some(n) => {
+                        out.push(format!("{}={:?}", key("notch_frequency_hz"), n.frequency_hz));
+                        out.push(format!("{}={:?}", key("notch_bandwidth_hz"), n.bandwidth_hz));
+                    }
+                    None => out.push(format!("{}=0.0", key("notch_frequency_hz"))),
+                }
+            }
         }
         out
     }
@@ -181,21 +193,9 @@ impl Place {
         }
     }
 
-    fn put(&self, cfg: &mut Config, leaf: &str, value: f64) -> Result<(), ConfigError> {
-        let path = self.path(leaf);
-        if cfg.get(&path).is_ok() {
-            return cfg.set(&path, Value::Float(value));
-        }
-        // The motor's own table does not have the key yet: written into the text (`Config::set` changes keys that exist).
-        let Place::Own(id) = self else { return Err(ConfigError::Missing(path)) };
-        let mut all = cfg.to_text()?.parse::<toml::Table>().map_err(|e| ConfigError::Parse(e.to_string()))?;
-        let drive = all.entry("drive").or_insert_with(|| Value::Table(toml::Table::new()));
-        let drive = drive.as_table_mut().ok_or_else(|| ConfigError::Type("drive".into()))?;
-        let own = drive.entry(id.as_str()).or_insert_with(|| Value::Table(toml::Table::new()));
-        let own = own.as_table_mut().ok_or_else(|| ConfigError::Type(format!("drive.{id}")))?;
-        own.insert(leaf.into(), Value::Float(value));
-        *cfg = Config::parse(&toml::to_string(&all).map_err(|e| ConfigError::Parse(e.to_string()))?)?;
-        Ok(())
+    /// `value` at `leaf` of this place; a motor's own key is added where its table does not have it yet.
+    fn put(&self, entry: &MachineEntry, cfg: &mut Config, leaf: &str, value: f64) -> Result<(), ConfigError> {
+        crate::sim::set_config(entry, cfg, &self.path(leaf), Value::Float(value))
     }
 }
 
@@ -213,12 +213,11 @@ fn gains_of(entry: &MachineEntry, cfg: &Config, id: &str) -> Result<Gains, Confi
 /// Kp / J (Tn + 1 / Kv) only grows then) and is lowered where it falls, so that the product stays the config's own:
 /// 1 / Kv' = (Tn + 1 / Kv) Kp / Kp' - Tn. (`catalog::retuned` lowers Kv to a floor of 1.25 or the config's own margin
 /// by the same relation, with the inertia known; without it the config's own margin is the floor.)
-fn with_gain(cfg: &Config, place: &Place, base: Gains, kp: f64) -> Result<Config, ConfigError> {
+fn with_gain(entry: &MachineEntry, cfg: &Config, place: &Place, base: Gains, kp: f64) -> Result<Config, ConfigError> {
     let mut out = cfg.clone();
-    place.put(&mut out, "velocity_kp_nm_s_rad", kp)?;
-    if kp < base.kp {
-        place.put(&mut out, "kv_1_s", kv_for(base, kp))?;
-    }
+    place.put(entry, &mut out, "velocity_kp_nm_s_rad", kp)?;
+    // Written at either side: `cfg` may hold a Kv lowered for a smaller gain (the search without the notch).
+    place.put(entry, &mut out, "kv_1_s", kv_for(base, kp))?;
     Ok(out)
 }
 
@@ -230,8 +229,9 @@ struct Probe {
     gain: f64,
     least: Least,
     /// The motor's margin at the pose with the least gain margin (its crossover and the frequency of the sensitivity's
-    /// peak), for the notch.
+    /// peak), for the notch, and that pose's index in `analysis::margin_poses`.
     worst: LoopMargins,
+    worst_pose: usize,
 }
 
 struct Tuner<'a> {
@@ -253,12 +253,13 @@ impl Tuner<'_> {
     fn probe(&mut self, cfg: &Config, motor: usize, gain: f64) -> Result<Probe, ConfigError> {
         let runs = self.measure(cfg)?;
         let least = Least::of(&runs, motor);
-        let worst = runs
+        let (worst_pose, worst) = runs
             .iter()
             .map(|(_, m)| m[motor])
-            .min_by(|a, b| a.gain_margin_db.total_cmp(&b.gain_margin_db))
+            .enumerate()
+            .min_by(|a, b| a.1.gain_margin_db.total_cmp(&b.1.gain_margin_db))
             .ok_or_else(|| ConfigError::Invalid("margins".into()))?;
-        Ok(Probe { gain, least, worst })
+        Ok(Probe { gain, least, worst, worst_pose })
     }
 
     /// The largest gain of motor `motor` that meets the targets: bracket, then bisection. Returns the best probe (the
@@ -273,19 +274,64 @@ impl Tuner<'_> {
     ) -> Result<(Probe, Option<Probe>), ConfigError> {
         let t = self.targets;
         let probe = |s: &mut Self, gain: f64| -> Result<Probe, ConfigError> {
-            let candidate = with_gain(cfg, place, base, gain)?;
+            let candidate = with_gain(s.entry, cfg, place, base, gain)?;
             s.probe(&candidate, motor, gain)
         };
+        // The better of two failing probes (the one with the most slack) is kept, for where none meets.
+        let keep = |best: &mut Option<Probe>, p: Probe| {
+            *best = Some(match best.take() {
+                Some(b) if b.least.score(&t) >= p.least.score(&t) => b,
+                _ => p,
+            })
+        };
+        let (mut lo, mut hi, mut best_failing): (Option<Probe>, Option<Probe>, Option<Probe>) = (None, None, None);
+        // The bracket's probes, doublings and halvings together.
+        let mut left = BRACKET;
         let first = probe(self, start)?;
-        let mut lo: Option<Probe>;
-        let mut hi: Option<Probe>;
-        let mut best_failing: Option<Probe> = None;
         if first.least.meets(&t) {
             lo = Some(first);
-            hi = None;
-            for _ in 0..BRACKET {
-                let g = lo.as_ref().unwrap().gain * 2.0;
-                let p = probe(self, g)?;
+        } else {
+            // A gain fails on either side of those that meet: above them on the gain margin, below them on the phase
+            // margin (the integral's lag at a low crossover: the single axis at a quarter of its gain has 27 degrees).
+            // The way to them is the side the slack grows to.
+            let up = probe(self, 2.0 * start)?;
+            left -= 1;
+            if up.least.meets(&t) || up.least.score(&t) > first.least.score(&t) {
+                keep(&mut best_failing, first);
+                let mut current = up;
+                while !current.least.meets(&t) && left > 0 {
+                    let next = probe(self, 2.0 * current.gain)?;
+                    left -= 1;
+                    keep(&mut best_failing, current);
+                    current = next;
+                }
+                if current.least.meets(&t) {
+                    lo = Some(current);
+                } else {
+                    keep(&mut best_failing, current);
+                }
+            } else {
+                keep(&mut best_failing, up);
+                hi = Some(first);
+                while left > 0 {
+                    let p = probe(self, hi.as_ref().unwrap().gain / 2.0)?;
+                    left -= 1;
+                    if p.least.meets(&t) {
+                        lo = Some(p);
+                        break;
+                    }
+                    keep(&mut best_failing, hi.replace(p).unwrap());
+                }
+                if lo.is_none() {
+                    keep(&mut best_failing, hi.take().unwrap());
+                }
+            }
+        }
+        // From a gain that meets, up to the first that fails, where that is not known yet.
+        if hi.is_none() && lo.is_some() {
+            while left > 0 {
+                let p = probe(self, 2.0 * lo.as_ref().unwrap().gain)?;
+                left -= 1;
                 if p.least.meets(&t) {
                     lo = Some(p);
                 } else {
@@ -293,32 +339,10 @@ impl Tuner<'_> {
                     break;
                 }
             }
-        } else {
-            lo = None;
-            hi = Some(first);
-            for _ in 0..BRACKET {
-                let g = hi.as_ref().unwrap().gain / 2.0;
-                let p = probe(self, g)?;
-                if p.least.meets(&t) {
-                    lo = Some(p);
-                    break;
-                }
-                let worse = hi.take().unwrap();
-                best_failing = Some(match best_failing {
-                    Some(b) if b.least.score(&t) >= worse.least.score(&t) => b,
-                    _ => worse,
-                });
-                hi = Some(p);
-            }
         }
         let Some(mut lo) = lo else {
             // Nothing in the bracket meets the targets: the probe with the most slack.
-            let last = hi.unwrap();
-            let best = match best_failing {
-                Some(b) if b.least.score(&t) > last.least.score(&t) => b,
-                _ => last,
-            };
-            return Ok((best, None));
+            return Ok((best_failing.expect("every failing probe is kept"), None));
         };
         if let Some(mut high) = hi {
             for _ in 0..BISECTIONS {
@@ -338,11 +362,12 @@ impl Tuner<'_> {
 /// Tunes every motor's velocity loop: for each motor, in the order the machine lists them, the largest velocity gain
 /// at which the least phase margin and the least gain margin over all poses of `margin_poses` meet `targets` and the
 /// loop is `LoopMargins::stable` at every pose (the other motors as they are at that point). Tn stays and Kv follows as
-/// `with_gain` says. Then, where the machine has one motor and `targets.notch` is set and the notch is off: if the gain
-/// margin is what stops the gain, at a resonance (the sensitivity peaks `RESONANCE_OVER_CROSSOVER` times above the
-/// crossover), the notch is put at the frequency of that peak with `NOTCH_WIDTH` times it as its width, the gain is
-/// searched again, and the notch stays only where the gain is `NOTCH_MIN_GAIN` times higher. (The notch switch is the
-/// whole machine's, so with several motors it would change those without a resonance.) A final call of
+/// `with_gain` says. Then, where `targets.notch` is set and the notch is off, for each motor in turn: if the gain margin
+/// is what stops its gain, at a resonance (the sensitivity of the gain that fails peaks at a mode of the machine,
+/// `Machine::modes` at that pose, or up to `PEAK_OVER_MODE` times above it), a notch is put on that mode (the highest
+/// such) with `NOTCH_WIDTH` times its frequency as its width, the gain is searched again,
+/// and the notch stays only where the gain is `NOTCH_MIN_GAIN` times higher. The switch is the whole machine's: where a
+/// notch stays it is on, and every motor without one gets `notch_frequency_hz = 0` (no notch). A final call of
 /// `velocity_loop_margins` on the whole tuned config verifies all motors; a motor that fails there is lowered by
 /// `JOINT_FACTOR`, at most `JOINT_ROUNDS` times, and says so (`lowered_in_joint_check`). The gains returned are those
 /// of the last verification; where no gain meets the targets `met` is false and the gains are the best found.
@@ -365,35 +390,55 @@ pub fn velocity_loops(entry: &MachineEntry, cfg: &Config, targets: &Targets) -> 
     let mut reached: Vec<bool> = Vec::new();
     for k in 0..motors.len() {
         let (best, fail) = tuner.search(&config, k, &places[k], gains[k], gains[k].kp)?;
-        config = with_gain(&config, &places[k], gains[k], best.gain)?;
+        config = with_gain(entry, &config, &places[k], gains[k], best.gain)?;
         found.push(best.gain);
         reached.push(best.least.meets(&tuner.targets));
         last_fail.push(fail);
     }
-    let mut notch = None;
-    if targets.notch
-        && motors.len() == 1
-        && cfg.bool("effects.notch_filter").is_ok_and(|on| !on)
-        && let Some(fail) = &last_fail[0]
-    {
-        let (t, w) = (&tuner.targets, &fail.worst);
-        let at_gain = fail.least.stable && fail.least.gain_db < t.gain_margin_db;
-        let at_resonance = w.peak_frequency_hz > RESONANCE_OVER_CROSSOVER * w.crossover_hz.max(1.0);
-        if at_gain && at_resonance && w.peak_frequency_hz.is_finite() {
-            let (f, bw) = (w.peak_frequency_hz, NOTCH_WIDTH * w.peak_frequency_hz);
-            let mut trial = config.clone();
-            let placed = trial
-                .set_text("effects.notch_filter = true")
-                .and_then(|_| places[0].put(&mut trial, "notch_frequency_hz", f))
-                .and_then(|_| places[0].put(&mut trial, "notch_bandwidth_hz", bw));
-            if placed.is_ok() {
-                let (best, _) = tuner.search(&trial, 0, &places[0], gains[0], found[0])?;
-                if best.least.meets(&tuner.targets) && best.gain >= NOTCH_MIN_GAIN * found[0] {
-                    notch = Some(Notch { frequency_hz: f, bandwidth_hz: bw, gain_factor: best.gain / found[0] });
-                    config = with_gain(&trial, &places[0], gains[0], best.gain)?;
-                    found[0] = best.gain;
-                }
+    // The notch, motor by motor: tried against a config with the switch on and every motor's notch at 0 (none), which is
+    // the config without it.
+    let mut notches = Vec::new();
+    if targets.notch && cfg.bool("effects.notch_filter").is_ok_and(|on| !on) {
+        let mut none = config.clone();
+        none.set_text("effects.notch_filter = true")?;
+        for place in &places {
+            place.put(entry, &mut none, "notch_frequency_hz", 0.0)?;
+        }
+        for k in 0..motors.len() {
+            let Some(fail) = &last_fail[k] else { continue };
+            let (t, w) = (&tuner.targets, &fail.worst);
+            let at_gain = fail.least.stable && fail.least.gain_db < t.gain_margin_db;
+            if !(at_gain && w.peak_frequency_hz.is_finite()) {
+                continue;
             }
+            // The notch goes on the machine's mode that makes the peak: the highest at or below it at that pose, within
+            // `PEAK_OVER_MODE`. On the peak itself it lags the loop where it already turns (the flying saw: a notch at
+            // its peak of 520 Hz left 2.8 dB at a gain that kept 6 without it; on its mode at 367 Hz, 7.3 dB at 1.5 times
+            // that gain).
+            let resolved = resolve(entry, &config)?;
+            let pose = &crate::analysis::margin_poses(&resolved)?[fail.worst_pose];
+            let mode = (entry.build)(&resolved)?
+                .modes(pose)
+                .iter()
+                .map(|m| m.hz)
+                .filter(|hz| *hz <= w.peak_frequency_hz && w.peak_frequency_hz <= PEAK_OVER_MODE * hz)
+                .fold(f64::NAN, f64::max);
+            if !mode.is_finite() {
+                continue;
+            }
+            let (f, bw) = (mode, NOTCH_WIDTH * mode);
+            let mut trial = none.clone();
+            places[k].put(entry, &mut trial, "notch_frequency_hz", f)?;
+            places[k].put(entry, &mut trial, "notch_bandwidth_hz", bw)?;
+            let (best, _) = tuner.search(&trial, k, &places[k], gains[k], found[k])?;
+            if best.least.meets(&tuner.targets) && best.gain >= NOTCH_MIN_GAIN * found[k] {
+                notches.push(Notch { motor: k, frequency_hz: f, bandwidth_hz: bw, gain_factor: best.gain / found[k] });
+                none = with_gain(entry, &trial, &places[k], gains[k], best.gain)?;
+                found[k] = best.gain;
+            }
+        }
+        if !notches.is_empty() {
+            config = none;
         }
     }
     // The joint check, on the whole tuned config.
@@ -408,7 +453,7 @@ pub fn velocity_loops(entry: &MachineEntry, cfg: &Config, targets: &Targets) -> 
         for k in failing {
             found[k] *= JOINT_FACTOR;
             lowered[k] = true;
-            config = with_gain(&config, &places[k], gains[k], found[k])?;
+            config = with_gain(entry, &config, &places[k], gains[k], found[k])?;
         }
         runs = tuner.measure(&config)?;
     }
@@ -429,5 +474,5 @@ pub fn velocity_loops(entry: &MachineEntry, cfg: &Config, targets: &Targets) -> 
         });
     }
     let met = out.iter().all(|m| m.met);
-    Ok(Tuned { config, motors: out, notch, met, evaluations: tuner.evaluations })
+    Ok(Tuned { config, motors: out, notches, met, evaluations: tuner.evaluations })
 }

@@ -409,11 +409,14 @@ impl DriveParams {
             }
             Ok(if on("drive_delay")? { cycles as usize } else { 0 })
         };
-        let notch = if on("notch_filter")? {
-            let (f, bw) = (cfg.positive("drive.notch_frequency_hz")?, cfg.positive("drive.notch_bandwidth_hz")?);
-            Some(notch_coefficients(f, bw, velocity_cycle))
-        } else {
-            None
+        // A frequency of 0 is no notch: a motor of its own (`[drive.<id>]`) without a resonance where the notch is on
+        // for another.
+        let notch = match on("notch_filter")? {
+            true if cfg.non_negative("drive.notch_frequency_hz")? > 0.0 => {
+                let (f, bw) = (cfg.positive("drive.notch_frequency_hz")?, cfg.positive("drive.notch_bandwidth_hz")?);
+                Some(notch_coefficients(f, bw, velocity_cycle))
+            }
+            _ => None,
         };
         let (kt, resistance) = (cfg.positive("motor.torque_constant_nm_a")?, cfg.positive("motor.resistance_ohm")?);
         // The back-EMF per speed of a servo winding, where the maker prints a voltage constant apart from the torque
@@ -2513,14 +2516,14 @@ pub(crate) mod tests {
         };
         assert!(gain_at(60.0) < 0.01, "{}", gain_at(60.0));
         assert!((gain_at(5.0) - 1.0).abs() < 0.02 && (gain_at(600.0) - 1.0).abs() < 0.02);
-    }
-
-    #[test]
         // The bandwidth is the -3 dB width, as Siemens' f_3dB = 2 D f (damping D = 20 / 120): by hand, the edges of
         // (s² + w0²) / (s² + 2 D w0 s + w0²) are at 10 ± sqrt(10² + 60²) Hz, 50.83 and 70.83 Hz, gain 1 / sqrt 2.
         for edge in [50.83, 70.83] {
             assert!((gain_at(edge) - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.01, "{edge} Hz: {}", gain_at(edge));
         }
+    }
+
+    #[test]
     fn a_drive_starts_holding_its_load() {
         let mut p = params();
         p.torque_ff = 1.0;

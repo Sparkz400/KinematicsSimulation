@@ -73,21 +73,33 @@ fn an_unstable_gain_is_lowered_to_one_that_meets_the_targets() {
     assert!(stable && phase >= 35.0 && gain >= 6.0, "{phase} degrees, {gain} dB");
 }
 
-/// Where the gain margin stops the gain at a resonance (the flying saw without its hand-tuned notch: 5.5 dB at Kp 0.25
-/// over its bounds, the loop held by the gearbox's mode at 367 Hz) the notch is put at the peak, within 8 % of the
-/// mode, and the gain is higher than without a notch (`notch: false`) by at least `NOTCH_MIN_GAIN`; the result with it
-/// meets the targets in a measurement of its own. Expected from the hand tuning (0.25 against 0.2); the reviewer
-/// adjusts the frequency band to the measured value.
+/// Where the gain margin stops the gain at a resonance (the flying saw without its hand-tuned notch: at the cycle's
+/// poses Kp 0.25 keeps 7.6 dB and 0.3 5.9 dB, the sensitivity peaking at 475 to 520 Hz above its gearbox's mode at
+/// 367.3 Hz, `sim-cli modes`), the notch is put on that mode, not on the peak (there it left 2.8 dB at 0.3), and the
+/// gain is higher than without a notch (`notch: false`) by at least `NOTCH_MIN_GAIN` (measured 0.524 against 0.295);
+/// the result with it meets the targets in a measurement of its own. From 0.32, above the gain without a notch and
+/// below the one with it: the search without lowers Kv with the gain, the one with it raises the gain above the start
+/// again, and Kv is the config's own (it stayed lowered before 25 November 2026).
 #[test]
 fn a_resonance_that_holds_the_gain_back_gets_a_notch_and_a_higher_gain() {
     let entry = entry("flying-saw");
-    let start = with(&entry.config(), &["effects.notch_filter = false".into(), format!("{KP} = 0.2")]);
+    let start = with(&entry.config(), &["effects.notch_filter = false".into(), format!("{KP} = 0.32")]);
     let without = velocity_loops(entry, &start, &Targets { notch: false, ..Targets::default() }).unwrap();
-    assert!(without.notch.is_none());
+    assert!(without.notches.is_empty() && without.motors[0].after.kp < 0.32, "{without:?}");
     let with_notch = velocity_loops(entry, &start, &Targets::default()).unwrap();
-    let notch = with_notch.notch.expect("a notch at the resonance");
-    assert!((notch.frequency_hz / 367.0 - 1.0).abs() < 0.08, "{notch:?}");
-    assert!(with_notch.motors[0].after.kp >= 1.15 * without.motors[0].after.kp, "{with_notch:?} {without:?}");
+    let notch = with_notch.notches.first().copied().expect("a notch at the resonance");
+    let mode = sim_components::analysis::modes_along(
+        (entry.build)(&start).unwrap().as_ref(),
+        &start.f64s("start.pose").unwrap(),
+        0,
+        2,
+    )[0]
+    .1[0]
+        .hz;
+    assert!((notch.frequency_hz / mode - 1.0).abs() < 1e-9 && (mode - 367.3).abs() < 0.1, "{notch:?} at {mode} Hz");
+    let (tuned, before) = (&with_notch.motors[0], &without.motors[0].before);
+    assert!(tuned.after.kp >= 1.15 * without.motors[0].after.kp, "{with_notch:?} {without:?}");
+    assert!(tuned.after.kp > 0.32 && tuned.after.kv == before.kv, "{tuned:?}");
     assert!(with_notch.met && with_notch.config.bool("effects.notch_filter").unwrap());
     let (phase, gain, stable) = least(entry, &with_notch.config);
     assert!(stable && phase >= 35.0 && gain >= 6.0, "{phase} degrees, {gain} dB");
@@ -113,4 +125,59 @@ fn tuning_in_a_cancelled_job_ends_with_cancelled() {
     cancelled.cancel.store(true, Relaxed);
     let out = with_progress(&cancelled, || velocity_loops(entry, &cfg, &Targets::default()).map(|_| ()));
     assert_eq!(out.err(), Some(Cancelled));
+}
+
+/// A job cancelled from another thread after three measurements ends with `Cancelled` before its last, and leaves
+/// nothing behind: the margins measured after it, on this thread and on another, are those measured before, to the bit
+/// (as `analysis_threads::an_analysis_after_a_cancelled_one_gives_what_it_gave_before`).
+#[test]
+fn tuning_cancelled_mid_run_ends_with_cancelled_and_leaves_nothing_behind() {
+    let entry = entry("single-axis");
+    let cfg = entry.config();
+    let before = format!("{:?}", velocity_loop_margins(entry, &cfg, &[]).unwrap());
+    let job = Arc::new(Progress::default());
+    let watcher = {
+        let job = job.clone();
+        std::thread::spawn(move || {
+            while job.done.load(Relaxed) < 3 {
+                std::thread::yield_now();
+            }
+            job.cancel.store(true, Relaxed);
+        })
+    };
+    let out = with_progress(&job, || velocity_loops(entry, &cfg, &Targets::default()).map(|_| ()));
+    watcher.join().unwrap();
+    assert_eq!(out.err(), Some(Cancelled));
+    // At least the 1 + 2 bracket steps and the final measurement of an uncancelled run are left undone.
+    assert!(job.done.load(Relaxed) < 6, "{} measurements done", job.done.load(Relaxed));
+    assert_eq!(format!("{:?}", velocity_loop_margins(entry, &cfg, &[]).unwrap()), before);
+    let elsewhere =
+        std::thread::scope(|s| s.spawn(|| format!("{:?}", velocity_loop_margins(entry, &cfg, &[]).unwrap())).join());
+    assert_eq!(elsewhere.unwrap(), before);
+}
+
+/// A motor's notch at 0 Hz is none, so that the machine-wide switch can be on for one motor alone (what `tune` writes
+/// on a machine of several motors): on the T-gantry with the notch on (60 Hz, 20 Hz wide, inside its loops' band),
+/// both motors at 0 Hz have the margins of the notch off, to the bit, at every pose; with motor a alone at 0 Hz, motor
+/// b's phase margin moves by more than 0.1 degrees and a's by less than b's (a's only through the belt that couples
+/// them: measured 0.05 degrees at the start pose). The words `--set drive.a.notch_frequency_hz=0.0` are taken though
+/// the config has no `[drive.a]` (`sim_components::set_config_text`).
+#[test]
+fn a_notch_at_zero_hertz_is_none_for_that_motor_alone() {
+    let entry = entry("t-gantry");
+    let off = entry.config();
+    let ids: Vec<String> = (entry.build)(&off).unwrap().motors().iter().map(|m| m.id.to_string()).collect();
+    let at_zero = |ids: &[String]| {
+        let mut on = with(&off, &["effects.notch_filter = true".into()]);
+        for id in ids {
+            sim_components::set_config_text(entry, &mut on, &format!("drive.{id}.notch_frequency_hz=0.0")).unwrap();
+        }
+        velocity_loop_margins(entry, &on, &[]).unwrap()
+    };
+    let without = velocity_loop_margins(entry, &off, &[]).unwrap();
+    assert_eq!(format!("{without:?}"), format!("{:?}", at_zero(&ids)));
+    for ((pose, a), (_, b)) in without.iter().zip(&at_zero(&ids[..1])) {
+        let moved = |k: usize| (a[k].phase_margin_deg - b[k].phase_margin_deg).abs();
+        assert!(moved(1) > 0.1 && moved(0) < moved(1), "{pose}: {:?} against {:?}", a, b);
+    }
 }

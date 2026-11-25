@@ -2303,8 +2303,9 @@ fn tune(args: &Args, tr: &Translations) -> Result<(), Failure> {
             eprintln!("{}", tr.tr_arg("tune-lowered", &m.id));
         }
     }
-    if let Some(n) = &tuned.notch {
-        let at = format!("{:.1} Hz, {:.1} Hz, {:.2}", n.frequency_hz, n.bandwidth_hz, n.gain_factor);
+    for n in &tuned.notches {
+        let id = &tuned.motors[n.motor].id;
+        let at = format!("{id}: {:.1} Hz, {:.1} Hz, {:.2}", n.frequency_hz, n.bandwidth_hz, n.gain_factor);
         eprintln!("{}", tr.tr_arg("tune-notch", &at));
     }
     if !tuned.met {

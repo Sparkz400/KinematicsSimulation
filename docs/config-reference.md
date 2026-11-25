@@ -696,7 +696,7 @@ One drive per motor, all with the same settings. The parameter numbers of a SINA
 | `encoder_counts_per_rev` | T E S | counts | Encoder resolution. 1048576 is 20 bit, 4194304 is 22 bit | datasheet | `encoder_resolution`, `sensor_noise` |
 | `velocity_filter_s` | T E S | s | Time constant of the speed filter | choice | `velocity_filter` |
 | `torque_filter_s` | T E S | s | Time constant of the torque setpoint filter | choice | `torque_filter` |
-| `notch_frequency_hz` | T E S | Hz | Centre of the notch | choice | `notch_filter` |
+| `notch_frequency_hz` | T E S | Hz | Centre of the notch; 0: no notch for this motor (in its `[drive.<id>]`, where the notch is on for another; `sim-cli tune` sets it so) | choice | `notch_filter` |
 | `notch_bandwidth_hz` | T E S | Hz | Width of the notch | choice | `notch_filter` |
 | `encoder_noise_counts` | T E S | counts | Standard deviation of the noise on the measured position | estimate | `sensor_noise` |
 | `current_noise_a` | T E S | A | Standard deviation of the noise on the measured current | estimate | `sensor_noise` |

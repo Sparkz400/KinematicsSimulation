@@ -127,7 +127,7 @@ pub fn markers(cfg: &Config) -> Vec<(&'static str, f64)> {
         );
     }
     if cfg.bool("effects.notch_filter").unwrap_or(false) {
-        out.extend(cfg.f64("drive.notch_frequency_hz").ok().map(|hz| ("ui-loop-notch", hz)));
+        out.extend(cfg.f64("drive.notch_frequency_hz").ok().filter(|hz| *hz > 0.0).map(|hz| ("ui-loop-notch", hz)));
     }
     out
 }
