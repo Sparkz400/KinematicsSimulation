@@ -147,6 +147,24 @@ fn bahr_axes_by_name_bring_the_sheets_moved_masses_pulley_and_belt() {
     }
 }
 
+/// Festo rates the ELGA-TB-KF's loads for 5000 km and the -RF's for 10000 km; its own graph of the load comparison
+/// factor (fv 1.5: about 1500 km for KF, 3000 km for RF) is the cube law, so the RF-70's Fz of 500 N for 10000 km is
+/// 500 x 2^(1/3) = 629.96 N for 5000 km, the basis the axes are screened on. On the single axis a payload of 64.0 kg
+/// (627.84 N) is carried, 64.3 kg (630.78 N) is not; the KF-70 (1850 N for 5000 km) carries both.
+#[test]
+fn a_belt_axis_load_rated_for_another_travel_is_screened_on_the_5000_km_basis() {
+    let single = &machine_single_axis::ENTRY;
+    let reason = |payload: f64, axis: &str| {
+        let mut cfg = single.config();
+        cfg.set_text(&format!("mass.payload_kg = {payload}")).unwrap();
+        let found = sim_components::catalog::axes_for(&cfg);
+        found.into_iter().find(|(name, _)| name == axis).unwrap().1
+    };
+    assert_eq!(reason(64.0, "ELGA-TB-RF-70"), "");
+    assert_eq!(reason(64.3, "ELGA-TB-RF-70"), "axis-payload");
+    assert_eq!((reason(64.0, "ELGA-TB-KF-70"), reason(64.3, "ELGA-TB-KF-70")), ("", ""));
+}
+
 /// A belt by profile and width: a standard width is the handbook's row, one between two is linear between them,
 /// one below the narrowest in proportion to it. EA is the allowable pull over the stretch at it (4 mm/m).
 #[test]

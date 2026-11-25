@@ -19,9 +19,10 @@ max_speed_m_s, max_acceleration_m_s2, repeatability_m: "Max. speed" [m/s], "Max.
   the guide increases.
 dynamic_load_distance_m: the travel the fy/fz/mx/my/mz_dynamic are rated for, as the sheet's heading prints it: 5000 km
   (5000000 m) for KF and KF-F1, 10000 km (10000000 m) for RF and RF-F1, empty for G (its sheet states no life). The
-  loads of RF are therefore NOT on KF's basis and nothing here converts them: Festo prints the 5000 km values of
-  RF nowhere (only the 10000 km ones, and the 100 km ones for comparison with ISO and JIS ratings of other makers),
-  and a guide's load for a longer life is the lower one.
+  loads of RF are therefore NOT on KF's basis and this table does not convert them: Festo prints the 5000 km values of
+  RF nowhere, only the 10000 km ones. Its graph of the load comparison factor against the service life (RF page 52:
+  fv 1.5 gives about 3000 km, fv 1 gives 10000 km; KF page 17: 1500 and 5000 km) is the cube law, and the simulator
+  converts by it to 5000 km where it screens a slide's load (catalog.rs, BELT_AXIS_LOAD_DISTANCE_M).
 fy/fz/mx/my/mz_dynamic: ELGA-TB-KF "Max. permissible forces and torques for a service life of 5000 km", at the centre
   of the guide (the slide surface is "Dimension x" 37/50/70/86 mm above it, not extracted); ELGA-TB-G "Permissible
   forces and torques", at the slide surface, for at most 0.5 m/s and a pause longer than 5 s. Both "must not be

@@ -1501,6 +1501,11 @@ fn kind(cfg: &Config) -> Option<Kind> {
     }
 }
 
+/// The travel (m) a belt axis's slide load is screened for (`AxisData::slide_load_n`): the 5000 km Festo rates the
+/// ELGA-TB-KF and EGC-TB-KF for. A row rated for another (`dynamic_load_distance_m`, the RF's 10000 km) is converted to
+/// it by the cube law; a row without the column (Bahr, Rexroth) is taken as printed.
+const BELT_AXIS_LOAD_DISTANCE_M: f64 = 5.0e6;
+
 /// The catalogue's figures of an axis by name, as `apply_axis` and the axis search use them.
 #[derive(Debug, Clone)]
 struct AxisData {
@@ -1668,7 +1673,11 @@ fn axis_data(name: &str) -> Option<AxisData> {
         // Bahr gives the peak feed force; Festo and Rexroth the torque at the pulley as well, which holds where given.
         pulley_torque: number(r, "max_pulley_torque_nm").unwrap_or(number(r, "feed_force_peak_n")? * radius),
         payload_kg: None,
-        slide_load_n: number(r, "fz_dynamic_n"),
+        // On the 5000 km basis of Festo's KF guides: a load rated for another travel (RF: 10000 km) by the cube law of
+        // Festo's own graph of the load comparison factor against the service life.
+        slide_load_n: number(r, "fz_dynamic_n").map(|fz| {
+            fz * number(r, "dynamic_load_distance_m").map_or(1.0, |d| (d / BELT_AXIS_LOAD_DISTANCE_M).cbrt())
+        }),
         max_speed: number(r, "max_speed_m_s")?,
         max_acceleration: if bahr { None } else { number(r, "max_acceleration_m_s2") },
         moved,
