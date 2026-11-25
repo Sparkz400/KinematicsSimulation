@@ -2749,6 +2749,8 @@ fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply:
         _ => or(&job.gearbox, shared.gearbox),
     };
     let gearbox = gearbox.as_str();
+    // The drives the motors run on: the candidate's, or the config's where it keeps that (derated just the same).
+    let drives: Vec<String> = trains.iter().map(|train| train[2].clone()).collect();
     // What the combination buys, for a price list: every motor's parts, and the axis and belt (a candidate's or the
     // config's) where every motor is searched; a mechanical axis by its screws and guide carriages.
     let axis = or(&job.axis, shared.axis);
@@ -2791,7 +2793,9 @@ fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply:
         }
     }
     let mut estimated = estimated_data(job.article, supply, job.drive);
-    estimated.extend(estimated_derating(&with_parts, job.drive));
+    if drives.iter().any(|drive| !estimated_derating(&with_parts, drive).is_empty()) {
+        estimated.push("drive-derating");
+    }
     if !gearbox.is_empty() {
         estimated.extend(estimated_gearbox_data(gearbox));
     }

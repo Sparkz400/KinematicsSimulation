@@ -422,6 +422,15 @@ fn a_search_flags_a_derated_drive_as_estimated() {
     };
     assert!(estimated("drive_altitude_m = 3000.0\ndrive_ambient_c = 45.0").contains(&"drive-derating"));
     assert!(!estimated("").contains(&"drive-derating"));
+    // And where the candidate keeps the config's drive: the catalogue pairs none with the 1FT2208-3SB at 230 V.
+    let kept = |conditions: &str| {
+        let cfg = with_conditions(conditions);
+        let found = search_motors(&machine_t_gantry::ENTRY, &cfg, "230v", &|a| a == "1FT2208-3SB", None);
+        assert_eq!(found[0].drive, "");
+        found[0].figures.as_ref().map(|f| f.estimated.clone()).unwrap_or_else(|| panic!("{}", found[0].refused))
+    };
+    assert!(kept("drive_altitude_m = 3000.0\ndrive_ambient_c = 45.0").contains(&"drive-derating"));
+    assert!(!kept("").contains(&"drive-derating"));
 }
 
 /// A drive by name brings its DC link data where Siemens publishes it. The S210's internal braking resistor and trip level
