@@ -15,7 +15,7 @@ retries = 0
 # them too (some 25 minutes on 16 threads), and so does CI on a push to main (profile `ci-full`). After a full run,
 # `python tools/slow_tests.py` rewrites the list from target/nextest/full/junit.xml.
 # Left out of every profile but CI's last step: the sweeps of the velocity loops' margins across the bounds, a test per
-# shipped config (sim-machines control, `across_the_bounds::*::with(out)_friction`, 8600 s of processor time), and the EXCT-30's worst
+# shipped config (sim-machines control, `across_the_bounds::*`: as configured, with and without friction), and the EXCT-30's worst
 # corner of its bounds (2400 cycles, 1230 s): see the profile `full`.
 # The default filter, written by tools/slow_tests.py:
 default-filter = """
@@ -834,7 +834,7 @@ slow-timeout = { period = "60s", terminate-after = 330 }
 # (`cargo nextest run --workspace --release --exclude sim-py --ignore-default-filter -E "not default()" --test-threads 1`
 # with the profile `full` lists what the default leaves out). Its JUnit report is what tools/slow_tests.py reads.
 [profile.full]
-default-filter = "not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::.*_friction$/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))"
+default-filter = "not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))"
 
 [profile.full.junit]
 path = "junit.xml"
@@ -851,9 +851,11 @@ slow-timeout = { period = "60s", terminate-after = 30 }
 # parameter ranking). Alone on 16 threads they take 325 s and 177 s, the spatial cable robot's tables 310 s, the
 # platform on cranks' optimiser 216 s (24 November 2026); the T-gantry's tables take 30 s there against 257 to 315 s
 # on a runner, so up to 55 minutes for the longest, estimated, not measured.
+# Every sweep across the bounds, `as_configured` too, is left to the weekly job "sweeps": on 25 November 2026 the spatial
+# cable robot's alone ran past 90 minutes and two Windows partitions past the job's limit with them.
 [profile.ci-full]
 slow-timeout = { period = "60s", terminate-after = 90 }
-default-filter = "not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::.*_friction$/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))"
+default-filter = "not ((package(sim-machines) & binary(control) & test(/^across_the_bounds::/)) | test(=the_exct_30_config_passes_settling_at_the_worst_corner_of_its_bounds))"
 
 # Each partition's times, which CI keeps as the artifacts junit-*: tools/slow_tests.py reads them all.
 [profile.ci-full.junit]

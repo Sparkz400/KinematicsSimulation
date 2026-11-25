@@ -129,8 +129,9 @@ jobs:
     name: test (${{ matrix.os }}, ${{ matrix.partition }})
     runs-on: ${{ matrix.os }}
     # A push's partitions took up to 75 minutes on 16 November 2026 (Windows, 2 and 4), and the tests that took over
-    # 30 s then took 1.7 times as long on 22 November (median of 29, a pull request's run).
-    timeout-minutes: 150
+    # 30 s then took 1.7 times as long on 22 November (median of 29, a pull request's run); on 25 November two Windows
+    # partitions ran past 150 minutes.
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # nextest starts every binary of the archive to list its tests: the app's needs Bevy's libraries on Linux.
