@@ -116,6 +116,22 @@ fn a_failing_verdict_exits_with_1_and_a_diverged_result_is_named() {
     assert_eq!(cli(&["verdicts", entry.id, "--no-such-option"]).status.code(), Some(2));
 }
 
+/// A cycle that fails as configured (motors held to 0.5 m/s): the optimiser's refusal names the failing check by its
+/// label, once though every motor fails it, in the unit of a linear motor; in German too.
+#[test]
+fn the_optimisers_refusal_names_the_failing_checks_by_their_labels() {
+    let linear = MACHINES
+        .iter()
+        .find(|m| (m.build)(&m.config()).is_ok_and(|b| b.motor_linear(0)))
+        .expect("a machine of linear motors");
+    let slow = |lang| cli(&["optimise", linear.id, "--set", "drive.max_speed_rad_s=0.5", "--nominal", "--lang", lang]);
+    let english = slow("en");
+    assert_eq!(english.status.code(), Some(2));
+    assert_eq!(text(&english.stderr).trim(), "The cycle as configured already fails: Motor speed, peak [m/s]");
+    let german = text(&slow("de").stderr);
+    assert!(german.contains("[m/s]") && !german.contains("motor-speed") && !german.contains("rad/s"), "{german}");
+}
+
 /// A misspelt `--set` path names the nearest path of the config, and a value out of range is shown with its path: the
 /// message of the error stays as it was, with the help after it (the helper itself is tested in sim-core).
 #[test]

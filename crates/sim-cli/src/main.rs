@@ -167,12 +167,7 @@ fn main() {
                 None => eprintln!("{}", help::text(&tr, None).unwrap_or_default()),
             }
         } else {
-            // The failing checks by their labels, not their ids (the unit of a linear motor's speed is not known here).
-            let shown = match key {
-                "error-cycle-fails-already" => sim_components::report::check_labels(&arg, false, &tr),
-                _ => arg.clone(),
-            };
-            eprintln!("{}{}", tr.tr_arg(key, &shown), config_help(&args, &tr, key, &arg));
+            eprintln!("{}{}", tr.tr_arg(key, &arg), config_help(&args, &tr, key, &arg));
         }
         std::process::exit(2);
     }
@@ -915,7 +910,14 @@ fn optimise(args: &Args, tr: &Translations) -> Result<(), Failure> {
         pareto: args.option("--pareto").is_some(),
         worst: args.flag("--worst"),
     };
-    let found = sim_components::analysis::optimise_cycle_with(entry, &cfg, &options)?;
+    // The failing checks of a cycle that fails as configured by their labels, a linear motor's speed in m/s.
+    let found = sim_components::analysis::optimise_cycle_with(entry, &cfg, &options).map_err(|e| match e.key() {
+        key @ "error-cycle-fails-already" => {
+            let linear = (entry.build)(&cfg).is_ok_and(|m| m.motor_linear(0));
+            Failure(key, sim_components::report::check_labels(e.detail(), linear, tr))
+        }
+        _ => Failure::from(e),
+    })?;
     let mut out = output(args, "--out")?;
     writeln!(out, "setting,before,after").map_err(io)?;
     writeln!(out, "cycle_s,{:.4},{:.4}", found.before.duration, found.after.duration).map_err(io)?;

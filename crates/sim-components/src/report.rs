@@ -15,14 +15,20 @@ pub fn check_key(check: &str, linear: bool) -> String {
     if linear && check == "motor-speed" { "check-motor-speed-linear".into() } else { format!("check-{check}") }
 }
 
-/// The ids of failing checks, joined by ", " (as `error-cycle-fails-already` carries them), as their labels joined the
-/// same way; an id with no label stays as it is.
+/// The ids of failing checks, joined by ", " (as `error-cycle-fails-already` carries them, one per motor that fails
+/// it), as their labels, each once, joined by "; " (a label has commas of its own); an id with no label stays as it is.
 pub fn check_labels(ids: &str, linear: bool, tr: &Translations) -> String {
     let label = |id: &str| {
         let key = check_key(id, linear);
         if tr.has(&key) { tr.tr(&key).to_string() } else { id.to_string() }
     };
-    ids.split(", ").map(label).collect::<Vec<_>>().join(", ")
+    let mut labels: Vec<String> = Vec::new();
+    for shown in ids.split(", ").map(label) {
+        if !labels.contains(&shown) {
+            labels.push(shown);
+        }
+    }
+    labels.join("; ")
 }
 
 /// One part of the report, in reading order.
@@ -959,15 +965,16 @@ impl std::fmt::Write for Bytes<'_> {
 mod tests {
     use super::*;
 
-    /// The ids of an `error-cycle-fails-already` detail become the labels, joined as they were; a linear motor's speed
+    /// The ids of an `error-cycle-fails-already` detail become the labels, each once, joined by "; "; a linear motor's speed
     /// has its own unit, and an id with no label stays as it is.
     #[test]
     fn failing_check_ids_are_shown_by_their_labels() {
         let tr = |lang| Translations::parse(crate::I18N.iter().find(|(l, _)| *l == lang).unwrap().1);
         let (en, de) = (tr("en"), tr("de"));
-        let ids = "motor-speed, no-such-check";
-        assert_eq!(check_labels(ids, false, &en), "Motor speed, peak [rad/s], no-such-check");
-        assert_eq!(check_labels(ids, true, &en), "Motor speed, peak [m/s], no-such-check");
+        // One id per motor that fails the check: the label once.
+        let ids = "motor-speed, no-such-check, motor-speed";
+        assert_eq!(check_labels(ids, false, &en), "Motor speed, peak [rad/s]; no-such-check");
+        assert_eq!(check_labels(ids, true, &en), "Motor speed, peak [m/s]; no-such-check");
         assert_eq!(check_labels("motor-speed", false, &de), "Motordrehzahl, Spitze [rad/s]");
     }
 
