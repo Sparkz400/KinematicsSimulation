@@ -276,7 +276,7 @@ fn command_options(command: Option<&str>) -> &'static [&'static str] {
         Some("margins") => &["--bands"],
         Some("modes") => &["--axis-index", "--points", "--shapes"],
         Some("workspace") => &["--z", "--points"],
-        Some("replay") => &["--trace", "--map"],
+        Some("replay") => &["--trace", "--map", "--tolerance"],
         Some("fit") => &[
             "--trace",
             "--map",
@@ -287,6 +287,9 @@ fn command_options(command: Option<&str>) -> &'static [&'static str] {
             "--stiffness-key",
             "--dataset",
             "--report",
+            "--within",
+            "--write",
+            "--sigmas",
         ],
         Some("identify") => &[
             "--trace",
@@ -541,16 +544,48 @@ fn read(path: &str) -> Result<String, Failure> {
 /// `replay <machine> --trace FILE`: the position setpoints of a drive trace run through the simulator.
 /// Prints per motor how far simulated torque and following error are from the measured ones; `--out FILE`
 /// also writes measured and simulated torque, speed and following error side by side, one line per row
-/// of the trace.
+/// of the trace. With `--tolerance NAME=LIMIT,...` (the names are the table's columns) the twin is judged instead: one
+/// row per motor and limit, `motor,quantity,value,limit,result`, exit code 1 where a value is above its limit.
 fn replay(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    const QUANTITIES: [&str; 4] =
+        ["torque_rms_nm", "torque_peak_nm", "following_error_rms_rad", "following_error_peak_rad"];
+    let limits = match args.option("--tolerance") {
+        None => None,
+        Some(text) => {
+            let bad = || Failure("cli-error-bad-argument", format!("--tolerance {text}"));
+            let mut limits = [None; 4];
+            for part in text.split(',') {
+                let (name, value) = part.split_once('=').ok_or_else(bad)?;
+                let at = QUANTITIES.iter().position(|q| *q == name.trim()).ok_or_else(bad)?;
+                limits[at] =
+                    Some(value.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0).ok_or_else(bad)?);
+            }
+            Some(limits)
+        }
+    };
     let (entry, cfg) = machine_and_config(args)?;
     let machine = (entry.build)(&cfg)?;
     let motors = machine.motors().to_vec();
     let measured = load_trace(args, &motors, tr)?.trace;
     let simulated = sim_components::trace::replay(entry, &cfg, &measured)?;
-    println!("motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad");
-    for (motor, d) in motors.iter().zip(differences(&measured, &simulated)) {
-        println!("{},{:.6e},{:.6e},{:.6e},{:.6e}", motor.id, d[0], d[1], d[2], d[3]);
+    match limits {
+        None => {
+            println!("motor,torque_rms_nm,torque_peak_nm,following_error_rms_rad,following_error_peak_rad");
+            for (motor, d) in motors.iter().zip(differences(&measured, &simulated)) {
+                println!("{},{:.6e},{:.6e},{:.6e},{:.6e}", motor.id, d[0], d[1], d[2], d[3]);
+            }
+        }
+        Some(limits) => {
+            println!("motor,quantity,value,limit,result");
+            for (motor, d) in motors.iter().zip(differences(&measured, &simulated)) {
+                for (q, name) in QUANTITIES.iter().enumerate() {
+                    // A difference that is not a number is no pass.
+                    if let Some(limit) = limits[q] {
+                        println!("{},{name},{:.6e},{limit:.6e},{}", motor.id, d[q], judged(d[q] <= limit));
+                    }
+                }
+            }
+        }
     }
     if args.option("--out").is_some() {
         let mut out = output(args, "--out")?;
@@ -573,44 +608,113 @@ fn replay(args: &Args, tr: &Translations) -> Result<(), Failure> {
 /// own moves; with `--sweep FILE` (a frequency response as `sweep` writes it, taken on motor `--sweep-motor` with
 /// `--amplitude`) the load's resonance on the belt.
 /// With `--dataset DIR --report OUT` the whole report of a dataset folder instead (`report::run`).
+/// With `--within N` the twin is judged: each row whose fitted value is more than N standard errors from the config's
+/// says FAIL (columns `apart` and `result`), exit code 1. With `--write FILE` the config is written with the fitted
+/// values that are one key of it, and `[bounds]` of `--sigmas` standard errors (2 by default) about them.
 fn fit(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    let positive = |name: &str| -> Result<Option<f64>, Failure> {
+        let value = args.number(name)?;
+        match value.filter(|v| *v <= 0.0) {
+            Some(v) => Err(Failure("cli-error-bad-argument", format!("{name} {v}"))),
+            None => Ok(value),
+        }
+    };
+    let (within, sigmas) = (positive("--within")?, positive("--sigmas")?);
     if args.option("--dataset").is_some() || args.option("--report").is_some() {
+        // The report has no judgement or file of its own to write.
+        if within.is_some() || sigmas.is_some() || args.option("--write").is_some() {
+            return Err(Failure("cli-usage", String::new()));
+        }
         return report::run(args, tr);
     }
+    if sigmas.is_some() && args.option("--write").is_none() {
+        return Err(Failure("cli-error-missing-value", "--write".into()));
+    }
     let mut out = output(args, "--out")?;
-    let (advice, result) = fit_rows(args, tr, &mut *out)?;
+    let (advice, result, rows) = fit_rows(args, tr, &mut *out, within)?;
     out.flush().map_err(io)?;
     advice.iter().for_each(|line| eprintln!("{line}"));
-    result
+    // Nothing is written from a fit that failed.
+    match args.option("--write") {
+        Some(path) if result.is_ok() => write_fit(args, tr, &rows, path, sigmas.unwrap_or(2.0)),
+        _ => result,
+    }
 }
 
-/// The table of `fit` written to `out`, and what to change in the config, with the failure that came after the table.
+/// One value of `fit` that has a config counterpart and a standard error: what `--within` judges and `--write` writes.
+struct FitRow {
+    quantity: String,
+    of: String,
+    fitted: f64,
+    error: f64,
+}
+
+/// The table of `fit` as it is written: with `--within` two columns more, how many standard errors the fitted value is
+/// from the config's and the result (`ok`, `FAIL`, or `not judged` where the row has no standard error or no config's value).
+struct FitTable<'a> {
+    out: &'a mut dyn Write,
+    within: Option<f64>,
+    rows: Vec<FitRow>,
+}
+
+impl FitTable<'_> {
+    fn header(&mut self) -> Result<(), Failure> {
+        // "units" is the last of the six columns: the unit of the row's numbers, empty where there is none to name.
+        let columns = if self.within.is_some() { ",apart,result" } else { "" };
+        writeln!(self.out, "quantity,of,config,fitted,standard_error,units{columns}").map_err(io)
+    }
+
+    /// `line` is the row's six columns; `values` its config's value, the fitted one and the standard error, where it has them.
+    fn row(&mut self, line: String, quantity: &str, of: &str, values: Option<[f64; 3]>) -> Result<(), Failure> {
+        self.note(quantity, of, values);
+        let Some(limit) = self.within else { return writeln!(self.out, "{line}").map_err(io) };
+        let apart = values.filter(|[c, f, e]| c.is_finite() && f.is_finite() && *e > 0.0 && e.is_finite());
+        let judgement = match apart {
+            Some([c, f, e]) => {
+                let apart = (f - c).abs() / e;
+                format!("{apart:.2},{}", judged(apart <= limit))
+            }
+            None => ",not judged".into(),
+        };
+        writeln!(self.out, "{line},{judgement}").map_err(io)
+    }
+
+    fn note(&mut self, quantity: &str, of: &str, values: Option<[f64; 3]>) {
+        if let Some([_, fitted, error]) = values {
+            self.rows.push(FitRow { quantity: quantity.into(), of: of.into(), fitted, error });
+        }
+    }
+}
+
+/// The table of `fit` written to `out`, what to change in the config, the failure that came after the table, and the
+/// values the table has a config counterpart and standard error for.
 fn fit_rows(
     args: &Args,
     tr: &Translations,
     out: &mut dyn Write,
-) -> Result<(Vec<String>, Result<(), Failure>), Failure> {
+    within: Option<f64>,
+) -> Result<(Vec<String>, Result<(), Failure>, Vec<FitRow>), Failure> {
     let (entry, cfg) = machine_and_config(args)?;
     let machine = (entry.build)(&cfg)?;
     if args.option("--trace").is_none() && args.option("--sweep").is_none() {
         return Err(Failure("cli-usage", String::new()));
     }
     let (mut advice, mut result) = (Vec::new(), Ok(()));
-    // "units" is the last column: the unit of the row's numbers, empty where there is none to name.
-    writeln!(out, "quantity,of,config,fitted,standard_error,units").map_err(io)?;
+    let mut table = FitTable { out, within, rows: Vec::new() };
+    table.header()?;
     if args.option("--trace").is_some() && !sim_components::trace::per_axis_fit(machine.as_ref()) {
         let measured = load_trace(args, machine.motors(), tr)?.trace;
         match fit_joints(entry, &cfg, &measured)? {
             Some(fit) => {
                 for v in &fit.values {
-                    writeln!(out, "{},{},{:.6e},{:.6e},{:.3e},", v.quantity, v.of, v.config, v.fitted, v.error)
-                        .map_err(io)?;
+                    let line = format!("{},{},{:.6e},{:.6e},{:.3e},", v.quantity, v.of, v.config, v.fitted, v.error);
+                    table.row(line, v.quantity, &v.of, Some([v.config, v.fitted, v.error]))?;
                 }
                 // One step's row is of `payload`, several are numbered as their factors after them are.
                 for (j, (time, error)) in fit.payload_steps.iter().enumerate() {
                     let of =
                         if fit.payload_steps.len() == 1 { "payload".to_string() } else { format!("payload {}", j + 1) };
-                    writeln!(out, "payload_step_s,{of},,{time:.6e},{error:.3e},s").map_err(io)?;
+                    table.row(format!("payload_step_s,{of},,{time:.6e},{error:.3e},s"), "payload_step_s", &of, None)?;
                 }
                 advice.extend(fit.advice().iter().map(|(key, detail)| tr.tr_arg(key, detail)));
             }
@@ -626,22 +730,24 @@ fn fit_rows(
             for (q, name) in
                 ["moved_mass_kg", "viscous_friction_n_s_m", "coulomb_friction_n", "constant_force_n"].iter().enumerate()
             {
-                writeln!(
-                    out,
+                let line = format!(
                     "{name},{},{:.6e},{:.6e},{:.3e},{}",
                     axis.id, fit.config[q], fit.fitted[q], fit.error[q], fit.units[q]
-                )
-                .map_err(io)?;
+                );
+                table.row(line, name, axis.id, Some([fit.config[q], fit.fitted[q], fit.error[q]]))?;
             }
             // The friction beyond its sliding level, where the trace shows it (`identify::friction_details`).
             for d in &fit.details {
-                writeln!(out, "{},{},{:.6e},{:.6e},{:.3e},", d.quantity, axis.id, d.config, d.fitted, d.error)
-                    .map_err(io)?;
+                let line = format!("{},{},{:.6e},{:.6e},{:.3e},", d.quantity, axis.id, d.config, d.fitted, d.error);
+                table.row(line, d.quantity, axis.id, Some([d.config, d.fitted, d.error]))?;
             }
-            // A payload picked or dropped: its time, then the change of the payload's factor there.
+            // A payload picked or dropped: its time, then the change of the payload's factor there (a change, not a
+            // value of the config: not judged).
             for (time, time_error, change, error) in &fit.payload_steps {
-                writeln!(out, "payload_step_s,{},,{time:.6e},{time_error:.3e},s", axis.id).map_err(io)?;
-                writeln!(out, "payload_factor_change,{},0,{change:.6e},{error:.3e},", axis.id).map_err(io)?;
+                let line = format!("payload_step_s,{},,{time:.6e},{time_error:.3e},s", axis.id);
+                table.row(line, "payload_step_s", axis.id, None)?;
+                let line = format!("payload_factor_change,{},0,{change:.6e},{error:.3e},", axis.id);
+                table.row(line, "payload_factor_change", axis.id, None)?;
             }
             advice.extend(fit.advice(axis.id).iter().map(|(key, detail)| tr.tr_arg(key, detail)));
         }
@@ -651,10 +757,11 @@ fn fit_rows(
         let key = args.option("--stiffness-key").unwrap_or(BELT_STIFFNESS_KEY);
         match fit_move_stiffness(entry, &cfg, &measured, key) {
             Ok(fit) => {
-                writeln!(out, "stiffness_factor,{key},{:.6e},{:.6e},{:.3e},", 1.0, fit.factor, fit.error)
-                    .map_err(io)?;
-                writeln!(out, "ringing_rms_nm,{key},,{:.6e},,", fit.ringing).map_err(io)?;
-                writeln!(out, "ringing_left_rms_nm,{key},,{:.6e},,", fit.residual).map_err(io)?;
+                let line = format!("stiffness_factor,{key},{:.6e},{:.6e},{:.3e},", 1.0, fit.factor, fit.error);
+                table.row(line, "stiffness_factor", key, Some([1.0, fit.factor, fit.error]))?;
+                table.row(format!("ringing_rms_nm,{key},,{:.6e},,", fit.ringing), "ringing_rms_nm", key, None)?;
+                let line = format!("ringing_left_rms_nm,{key},,{:.6e},,", fit.residual);
+                table.row(line, "ringing_left_rms_nm", key, None)?;
                 let (key, detail) = fit.advice();
                 advice.push(tr.tr_arg(key, &detail));
             }
@@ -674,13 +781,18 @@ fn fit_rows(
         )? {
             Some(fit) => {
                 let (id, (config, fitted)) = (machine.motors()[motor].id, (fit.config, fit.fitted));
-                writeln!(
-                    out,
+                let line = format!(
                     "resonance_hz,{id},{:.6e},{:.6e},{:.3e},Hz",
                     config.frequency, fitted.frequency, fitted.frequency_error
-                )
-                .map_err(io)?;
-                writeln!(out, "resonance_damping,{id},{:.6e},{:.6e},,", config.damping, fitted.damping).map_err(io)?;
+                );
+                table.row(
+                    line,
+                    "resonance_hz",
+                    id,
+                    Some([config.frequency, fitted.frequency, fitted.frequency_error]),
+                )?;
+                let line = format!("resonance_damping,{id},{:.6e},{:.6e},,", config.damping, fitted.damping);
+                table.row(line, "resonance_damping", id, None)?;
                 let (key, detail) = fit.advice();
                 advice.push(tr.tr_arg(key, &detail));
             }
@@ -688,7 +800,111 @@ fn fit_rows(
             None => result = Err(Failure("fit-no-resonance", String::new())),
         }
     }
-    Ok((advice, result))
+    Ok((advice, result, table.rows))
+}
+
+/// `fit --write FILE`: the config as the command line gives it, with each fitted quantity that is one key of it set to
+/// the fitted value and a `[bounds]` entry of `sigmas` standard errors either side of it. Only the factor on a
+/// stiffness (`--stiffness`) is one key; every other quantity of the table is the trace's value of what several keys
+/// make up (the moved mass of an axis, a friction that the motor, gearbox and guide share) or of none, and is named on
+/// the error stream with the reason, as is a key the file cannot take. Comments of the written file are not kept
+/// (`Config::to_text`).
+fn write_fit(args: &Args, tr: &Translations, rows: &[FitRow], path: &str, sigmas: f64) -> Result<(), Failure> {
+    let (entry, resolved) = machine_and_config(args)?;
+    // What the file holds: the config before the parts it names are put in, so that those stay named.
+    let (_, mut file) = named_config(args)?;
+    for assignment in args.options("--set") {
+        file.set_text(assignment)?;
+    }
+    let mut written = Vec::new();
+    for row in rows {
+        let name = format!("{} {}", row.quantity, row.of);
+        if row.quantity != "stiffness_factor" {
+            eprintln!("{}", tr.tr_arg("cli-fit-write-lumped", &name));
+            continue;
+        }
+        match fitted_band(entry, &file, &resolved, row, sigmas) {
+            Ok(band) => written.push((row.of.clone(), band)),
+            Err(reason) => eprintln!("{}", tr.tr_arg(reason, &name)),
+        }
+    }
+    if written.is_empty() {
+        return Err(Failure("cli-fit-write-nothing", path.into()));
+    }
+    for (key, [value, low, high]) in &written {
+        sim_components::analysis::set_bounded(&mut file, key, *value)?;
+        // `Config::set` changes a key and never adds one: a bound the file has not got yet is added to its text below.
+        if file.get(&format!("bounds.{key}")).is_ok() {
+            file.set_text(&format!("bounds.{key} = [{low:?}, {high:?}]"))?;
+        }
+    }
+    let mut text = file.to_text()?;
+    for (key, [_, low, high]) in &written {
+        if file.get(&format!("bounds.{key}")).is_err() {
+            text = with_bound(&text, key, *low, *high);
+        }
+    }
+    // What is written has to load again, with its bounds read.
+    let loaded = sim_components::load_config(entry, &text)?;
+    sim_components::analysis::bounds(&loaded)?;
+    std::fs::write(path, text).map_err(|e| Failure("cli-error-io", format!("{path}: {e}")))?;
+    eprintln!("{}", tr.tr_arg("cli-fit-write-done", path));
+    Ok(())
+}
+
+/// The value of the key a stiffness factor was fitted on and its band `[low, high]`, or the translation key of why it is
+/// not written: the file has no such key (`cli-fit-write-no-key`), a named part sets it (the file's value is not the
+/// one the fit used: `cli-fit-write-by-part`), or the fitted value or its error is not usable (`cli-fit-write-refused`).
+/// A value or bound the machine's readers refuse (a stiffness at or below 0) is pulled in to the nearest one they take.
+fn fitted_band(
+    entry: &'static MachineEntry,
+    file: &Config,
+    resolved: &Config,
+    row: &FitRow,
+    sigmas: f64,
+) -> Result<[f64; 3], &'static str> {
+    let key = row.of.as_str();
+    let (Ok(base), Ok(own)) = (resolved.f64(key), file.f64(key)) else { return Err("cli-fit-write-no-key") };
+    if (own - base).abs() > 1e-9 * base.abs() {
+        return Err("cli-fit-write-by-part");
+    }
+    let builds = |v: f64| {
+        let mut at = file.clone();
+        sim_components::analysis::set_bounded(&mut at, key, v).is_ok()
+            && sim_components::catalog::resolve(entry, &at).and_then(|r| (entry.build)(&r)).is_ok()
+    };
+    let value = base * row.fitted;
+    if !(row.error.is_finite() && row.error > 0.0 && value.is_finite() && builds(value)) {
+        return Err("cli-fit-write-refused");
+    }
+    // Halving between the value and the bound found refused: the bound is the nearest one that builds.
+    let taken = |bound: f64| {
+        if builds(bound) {
+            return bound;
+        }
+        let (mut good, mut bad) = (value, bound);
+        for _ in 0..60 {
+            let middle = 0.5 * (good + bad);
+            if builds(middle) { good = middle } else { bad = middle }
+        }
+        good
+    };
+    let half = sigmas * base * row.error;
+    Ok([value, taken(value - half), taken(value + half)])
+}
+
+/// `text` (a config) with `key = [low, high]` under `[bounds]`, where the config has no entry for it yet.
+fn with_bound(text: &str, key: &str, low: f64, high: f64) -> String {
+    let (parent, leaf) = key.rsplit_once('.').unwrap_or(("", key));
+    let header = if parent.is_empty() { "[bounds]".to_string() } else { format!("[bounds.{parent}]") };
+    let entry = format!("{leaf} = [{low:?}, {high:?}]\n");
+    match text.find(&format!("\n{header}\n")) {
+        Some(at) => {
+            let end = at + header.len() + 2;
+            format!("{}{entry}{}", &text[..end], &text[end..])
+        }
+        None => format!("{text}\n{header}\n{entry}"),
+    }
 }
 
 /// The trace named by `--trace`: through the mapping file `--map` (a vendor export; see

@@ -1441,6 +1441,225 @@ fn the_belt_stiffness_is_fitted_to_a_moves_trace_on_the_command_line() {
     }
 }
 
+/// A file in the tests' scratch directory, named after the machine and the test.
+fn scratch(entry: &sim_core::MachineEntry, name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}-{name}", entry.id));
+    path.to_str().unwrap().to_string()
+}
+
+/// `replay --tolerance` judges a twin: the table is one row per motor and limit, `FAIL` and exit code 1 where the
+/// replay is farther from the trace than the limit says. A trace recorded from the config itself replays within a limit
+/// of half the difference that a trace from a config with a 3 kg heavier carriage leaves (so the limit is hand-made from
+/// the machine's own numbers: the self-replay is some thousandth of it), the heavier machine's trace fails the same
+/// limit in both rows. Without the option the table is the old one.
+#[test]
+fn replay_judges_a_twin_against_stated_tolerances() {
+    let entry = one_belt_axis();
+    let (same, heavy) = (scratch(entry, "twin-same.csv"), scratch(entry, "twin-heavy.csv"));
+    let flags = ["--set", "effects.payload=false", "--set", "effects.encoder_resolution=false"];
+    for (path, extra) in [(&same, &[][..]), (&heavy, &["--set", "mass.carriage_kg=9"][..])] {
+        let run = cli(&[&["run", entry.id, "--cycle", "--time", "2.5", "--out", path][..], &flags[..], extra].concat());
+        assert!(run.status.success(), "{}", text(&run.stderr));
+    }
+    let mut cfg = entry.config();
+    cfg.set_text("effects.payload = false").unwrap();
+    cfg.set_text("effects.encoder_resolution = false").unwrap();
+    let motors = (entry.build)(&cfg).unwrap().motors().to_vec();
+    let difference = |path: &str| {
+        let trace = sim_components::trace::Trace::parse(&std::fs::read_to_string(path).unwrap(), &motors).unwrap();
+        let replayed = sim_components::trace::replay(entry, &cfg, &trace).unwrap();
+        sim_components::trace::differences(&trace, &replayed)[0]
+    };
+    let (own, far) = (difference(&same), difference(&heavy));
+    let limits = [0.5 * far[0], 0.5 * far[1]];
+    assert!(own[0] < limits[0] && own[1] < limits[1], "self-replay {own:?}, heavier carriage {far:?}");
+    let tolerance = format!("torque_rms_nm={:e},torque_peak_nm={:e}", limits[0], limits[1]);
+    let judge =
+        |path: &str| cli(&[&["replay", entry.id, "--trace", path, "--tolerance", &tolerance][..], &flags[..]].concat());
+    let (good, bad) = (judge(&same), judge(&heavy));
+    assert_judged(&good);
+    assert_judged(&bad);
+    let rows = |out: &Output| text(&out.stdout).lines().map(String::from).collect::<Vec<_>>();
+    let motor = motors[0].id;
+    assert_eq!(
+        rows(&good),
+        [
+            "motor,quantity,value,limit,result".to_string(),
+            format!("{motor},torque_rms_nm,{:.6e},{:.6e},ok", own[0], limits[0]),
+            format!("{motor},torque_peak_nm,{:.6e},{:.6e},ok", own[1], limits[1]),
+        ]
+    );
+    assert_eq!(
+        rows(&bad)[1..],
+        [
+            format!("{motor},torque_rms_nm,{:.6e},{:.6e},FAIL", far[0], limits[0]),
+            format!("{motor},torque_peak_nm,{:.6e},{:.6e},FAIL", far[1], limits[1]),
+        ]
+    );
+    assert_eq!((good.status.code(), bad.status.code()), (Some(0), Some(1)));
+    // Without the option: the table of today, exit code 0 whatever the difference.
+    let plain = cli(&[&["replay", entry.id, "--trace", &heavy][..], &flags[..]].concat());
+    assert!(plain.status.success() && text(&plain.stdout).starts_with("motor,torque_rms_nm,torque_peak_nm,"));
+    // A limit that is no name=number of the table's columns is refused.
+    for bad in ["torque_rms=1", "torque_rms_nm=-1", "torque_rms_nm", "torque_rms_nm=x", ""] {
+        let run = cli(&["replay", entry.id, "--trace", &same, "--tolerance", bad]);
+        assert!(run.status.code() == Some(2) && run.stdout.is_empty(), "{bad:?}: {}", text(&run.stderr));
+    }
+}
+
+/// `fit --within N` judges the fit: each row gets `apart` (|fitted - config| / error, as the dataset report's "Apart") and
+/// a result. The config's own trace passes at 3 standard errors (the fit is within 0.9 of them over every machine, see
+/// `a_trace_from_run_replays_onto_itself_and_fits_its_own_config`), a trace from a carriage 1.5 kg heavier fails by
+/// some hundred (its mass is fitted to 0.01 kg) and the exit code is 1. Rows with no standard error or no config value
+/// are `not judged`. Without the option the table has its six columns.
+#[test]
+fn fit_within_judges_how_far_the_fit_is_from_the_config() {
+    let entry = one_belt_axis();
+    let (same, heavy) = (scratch(entry, "within-same.csv"), scratch(entry, "within-heavy.csv"));
+    let flags = ["--set", "effects.payload=false", "--set", "effects.encoder_resolution=false"];
+    for (path, extra) in [(&same, &[][..]), (&heavy, &["--set", "mass.carriage_kg=7.5"][..])] {
+        let run = cli(&[&["run", entry.id, "--cycle", "--time", "3", "--out", path][..], &flags[..], extra].concat());
+        assert!(run.status.success(), "{}", text(&run.stderr));
+    }
+    let fit = |path: &str, within: &str| {
+        cli(&[&["fit", entry.id, "--trace", path, "--within", within][..], &flags[..]].concat())
+    };
+    let table = |out: &Output| -> Vec<Vec<String>> {
+        text(&out.stdout).lines().map(|l| l.split(',').map(String::from).collect()).collect()
+    };
+
+    let good = fit(&same, "3");
+    assert_judged(&good);
+    assert_eq!(good.status.code(), Some(0), "{}", text(&good.stderr));
+    let rows = table(&good);
+    assert_eq!(rows[0].join(","), "quantity,of,config,fitted,standard_error,units,apart,result");
+    assert!(rows[1..].iter().all(|r| r.len() == 8 && ["ok", "not judged"].contains(&r[7].as_str())), "{rows:?}");
+    assert!(rows.iter().any(|r| r[0] == "moved_mass_kg" && r[7] == "ok"), "{rows:?}");
+
+    let bad = fit(&heavy, "3");
+    assert_judged(&bad);
+    assert_eq!(bad.status.code(), Some(1), "{}", text(&bad.stderr));
+    let rows = table(&bad);
+    let mass = rows.iter().find(|r| r[0] == "moved_mass_kg").unwrap();
+    let [config, fitted, error, apart] = [2, 3, 4, 6].map(|c| mass[c].parse::<f64>().unwrap());
+    // By hand from the row's own figures: 1.5 kg of 0.01 or less is 150 standard errors or more.
+    let by_hand = (fitted - config).abs() / error;
+    assert!(by_hand > 100.0 && (apart / by_hand - 1.0).abs() < 0.01 && mass[7] == "FAIL", "{mass:?}");
+    // The same table at a limit above every row's distance passes, and says how far each row was.
+    let loose = fit(&heavy, "1e15");
+    assert_eq!(loose.status.code(), Some(0), "{}", text(&loose.stderr));
+
+    // Without the option nothing changes; a limit of 0 or less is refused.
+    let plain = cli(&[&["fit", entry.id, "--trace", &same][..], &flags[..]].concat());
+    assert!(text(&plain.stdout).starts_with("quantity,of,config,fitted,standard_error,units\n"));
+    assert!(table(&plain).iter().all(|r| r.len() == 6));
+    for within in ["0", "-1", "x"] {
+        let run = fit(&same, within);
+        assert!(run.status.code() == Some(2) && run.stdout.is_empty(), "{within}: {}", text(&run.stderr));
+    }
+}
+
+/// `fit --write FILE` writes the one fitted value that is a single key of the config, the factor on the belt's stiffness
+/// (`--stiffness`), with `[bounds]` of `--sigmas` standard errors (2 by default) either side. The rows that several keys
+/// make up (the moved mass, the frictions) are named on the error stream and nothing else of the config changes. The file
+/// loads again, `verdicts --bands` reads its bounds, a bound that would cross a limit (a stiffness at 0) is pulled in, a
+/// failed fit writes nothing and a fit with nothing writable says so.
+#[test]
+fn fit_write_puts_the_fitted_stiffness_and_its_band_in_a_config_file() {
+    use sim_components::{analysis::bounds, load_config};
+    let entry = one_belt_axis();
+    let key = "belt.stiffness_ea_n";
+    let (cycle, written) = (scratch(entry, "write-cycle.csv"), scratch(entry, "write.toml"));
+    let flags = ["--set", "effects.payload=false"];
+    let run = cli(&[
+        &["run", entry.id, "--cycle", "--time", "3", "--out", &cycle, "--set", "belt.stiffness_ea_n=3.5e5"][..],
+        &flags[..],
+    ]
+    .concat());
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    let _ = std::fs::remove_file(&written);
+    let fit =
+        |extra: &[&str]| cli(&[&["fit", entry.id, "--trace", &cycle, "--stiffness"][..], &flags[..], extra].concat());
+
+    let out = fit(&["--write", &written]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let stdout = text(&out.stdout);
+    let rows: Vec<Vec<&str>> = stdout.lines().skip(1).map(|l| l.split(',').collect()).collect();
+    let row = rows.iter().find(|r| r[0] == "stiffness_factor").unwrap();
+    let [factor, error] = [3, 4].map(|c| row[c].parse::<f64>().unwrap());
+    let base = entry.config().f64(key).unwrap();
+    let loaded = load_config(entry, &std::fs::read_to_string(&written).unwrap()).unwrap();
+    // The key holds the fitted value, to the figures of the table (7 digits), and its bound 2 standard errors either side
+    // (the error has 4 digits: 0.05 % of the half width of 2 * base * error).
+    let value = loaded.f64(key).unwrap();
+    assert!((value / (base * factor) - 1.0).abs() < 1e-6, "{value} against {base} x {factor}");
+    let band = bounds(&loaded).unwrap();
+    let (_, low, high) = band.iter().find(|b| b.0 == key).unwrap();
+    let tolerance = 2e-3 * base * error + 1e-6 * value;
+    assert!((low - base * (factor - 2.0 * error)).abs() < tolerance, "low {low}");
+    assert!((high - base * (factor + 2.0 * error)).abs() < tolerance, "high {high}");
+    // The factor is far from 1 (the trace is from a belt of 0.7 times the config's): the written value is the soft belt.
+    assert!((0.6..0.8).contains(&(value / base)), "{value}");
+
+    // The rest of the config is the config as the command line gave it, so that what several keys make up was not touched.
+    let mut expected = entry.config();
+    expected.set_text("effects.payload = false").unwrap();
+    sim_components::analysis::set_bounded(&mut expected, key, value).unwrap();
+    expected.set_text(&format!("bounds.{key} = [{low:?}, {high:?}]")).unwrap();
+    assert_eq!(loaded, expected);
+    // The values several keys make up are named, with the reason, and every one with a standard error.
+    assert!(rows.iter().any(|r| r[0] == "moved_mass_kg"), "{stdout}");
+    let stderr = text(&out.stderr);
+    for r in rows.iter().filter(|r| r[0] != "stiffness_factor" && !r[2].is_empty() && !r[4].is_empty()) {
+        assert!(stderr.contains(&format!("Not written: {} {}", r[0], r[1])), "{} {}: {stderr}", r[0], r[1]);
+    }
+    assert!(stderr.contains(&format!("Config written: {written}")), "{stderr}");
+
+    // The written bounds are read by `verdicts --bands` (two runs with every bounded value sampled between its bounds).
+    let verdicts = cli(&[
+        "verdicts",
+        entry.id,
+        "--config",
+        &written,
+        "--bands",
+        "--samples",
+        "2",
+        "--set",
+        "effects.thermal_warm_start=false",
+    ]);
+    assert_judged(&verdicts);
+    assert!(text(&verdicts.stdout).starts_with("check,motor,value,limit,result,low,high,worst_case,pass_share"));
+
+    // Three standard errors: the band is half again as wide.
+    let wider = scratch(entry, "write-3.toml");
+    let out = fit(&["--write", &wider, "--sigmas", "3"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let again = load_config(entry, &std::fs::read_to_string(&wider).unwrap()).unwrap();
+    let (_, low3, high3) = bounds(&again).unwrap().into_iter().find(|b| b.0 == key).unwrap();
+    assert!(((high3 - low3) / (high - low) - 1.5).abs() < 1e-3, "{low3} {high3} against {low} {high}");
+
+    // A band that would reach below 0 is pulled in to a stiffness the machine takes.
+    let wide = scratch(entry, "write-1000.toml");
+    assert!(fit(&["--write", &wide, "--sigmas", "1000"]).status.success());
+    let (_, low, high) = bounds(&load_config(entry, &std::fs::read_to_string(&wide).unwrap()).unwrap())
+        .unwrap()
+        .into_iter()
+        .find(|b| b.0 == key)
+        .unwrap();
+    assert!(low > 0.0 && low < 0.01 * value && high > value, "{low} {high}");
+
+    // A fit that failed writes nothing; a fit with nothing writable (no stiffness) says so and writes nothing; `--sigmas`
+    // belongs to `--write`.
+    let nothing = scratch(entry, "write-nothing.toml");
+    let _ = std::fs::remove_file(&nothing);
+    let failed = fit(&["--stiffness-key", "belt.no_such_key", "--write", &nothing]);
+    assert!(failed.status.code() == Some(2) && !std::path::Path::new(&nothing).exists());
+    let rigid = cli(&[&["fit", entry.id, "--trace", &cycle, "--write", &nothing][..], &flags[..]].concat());
+    assert!(rigid.status.code() == Some(2) && !std::path::Path::new(&nothing).exists(), "{}", text(&rigid.stderr));
+    assert!(text(&rigid.stderr).contains("Not written: moved_mass_kg"), "{}", text(&rigid.stderr));
+    assert_eq!(fit(&["--sigmas", "3"]).status.code(), Some(2));
+}
+
 /// A config file is checked against the machine's default config: a misspelt key was ignored and the
 /// default's value used in its place. It is refused by name; the default config as a file passes.
 #[test]
