@@ -12,7 +12,7 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
 - `sim-cli` exits with 1 when a judged row fails (`verdicts`, also with `--bands` and `--worst`, `margins`, `stop`,
   `accuracy`, `report`); 0 when all pass; 2 stays for usage and config errors. The table is printed in full first.
   Scripts that read the exit code of these commands as "ran through" must accept 1: the overhead crane's shipped
-  config fails one check (its input shaper is off by default), and seven machines fail a worst case under `--bands`.
+  config fails one check (its input shaper is off by default), and a worst case that fails under `--bands` counts.
 - The MCP server refuses a config value that names a file (a key ending in `_file`, such as `arm.urdf_file` or a cam's
   `table_file`) unless it is empty, the machine's built-in value, or a file of at most 5 MB inside the folder the
   operator names in `KINEMATICS_SIM_MCP_IN_DIR`; the refusal does not tell whether the file exists. TOML text the
@@ -55,8 +55,8 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
 
 - `--catalog DIR` refuses a table with a missing column or a short row, naming the file and the column or line; such
   a table made the program panic later. A blank line in a table is passed over.
-- A machine file loaded again (a Python sweep, an FMU made in a loop, the CLI's second load) is the same entry, and a
-  refused file leaves nothing behind; each load leaked an entry before.
+- A machine file loaded again (a Python sweep, an FMU made in a loop, the CLI's second load) is the same entry; each
+  load leaked an entry before.
 - MCP server: `loop_margins` could cut off its worst row at the cap of 25.
 
 ## [1.1.0] - 2026-11-22

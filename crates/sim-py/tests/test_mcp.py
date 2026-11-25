@@ -369,7 +369,8 @@ def test_loop_margins_keeps_the_worst_rows_when_it_caps(monkeypatch):
 
 def test_a_call_given_up_at_the_timeout_is_cancelled_and_its_thread_ends(monkeypatch):
     # Uncancelled this 3000-run band calculation takes minutes on all processors (it used to be left running to its
-    # end after the timeout); with the call's job cancelled it ends with the runs under way, within seconds.
+    # end after the timeout); with the call's job cancelled it ends with the runs under way: 5 s here, and two minutes
+    # are allowed for a runner several times slower.
     import threading
 
     finished = threading.Event()
@@ -383,7 +384,7 @@ def test_a_call_given_up_at_the_timeout_is_cancelled_and_its_thread_ends(monkeyp
     monkeypatch.setattr(server, "TIMEOUT_S", 1.0)
     with pytest.raises(server.ToolError, match="did not finish within"):
         anyio.run(server._call, None, "verdicts", long_call)
-    assert finished.wait(15), "the thread of the given-up call still computes"
+    assert finished.wait(120), "the thread of the given-up call still computes"
 
 
 def test_the_progress_of_a_call_increases_with_every_notice(monkeypatch):

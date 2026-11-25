@@ -578,13 +578,13 @@ def test_a_running_job_is_cancelled_from_another_thread_long_before_its_end(capf
 
     worker = threading.Thread(target=work)
     worker.start()
-    deadline = time.perf_counter() + 60
+    deadline = time.perf_counter() + 300  # 9 s here; a runner is several times slower
     while job.done == 0 and time.perf_counter() < deadline:
         time.sleep(0.01)
     assert job.done > 0
     cancelled_at = time.perf_counter()
     job.cancel()
-    worker.join(timeout=60)
+    worker.join(timeout=300)
     ended_after = time.perf_counter() - cancelled_at
     assert not worker.is_alive() and isinstance(outcome[0], ks.Cancelled)
     assert ended_after < 5 * small + 2.0  # the runs under way finish, no new one starts
