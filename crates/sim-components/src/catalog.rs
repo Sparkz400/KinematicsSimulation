@@ -90,6 +90,8 @@ const TABLES: &[(&str, &str)] = &tables![
     "yaskawa/motor_shafts.csv",
     "hiwin/ball_screws.csv",
     "hiwin/linear_guides.csv",
+    "rexroth/linear_guides.csv",
+    "thk/linear_guides.csv",
     "siemens/linear_motors_1fn3.csv",
     "beckhoff/linear_motors_al8000.csv",
     "festo/belt_axes_egc.csv",
@@ -1123,6 +1125,16 @@ pub fn apply_drive(cfg: &mut Config, article: &str, supply: &str) -> Result<(), 
 pub const DRIVE_CONDITION_KEYS: [&str; 3] =
     ["ratings.drive_ambient_c", "ratings.drive_altitude_m", "ratings.drive_pulse_frequency_hz"];
 
+/// The first installation condition (`DRIVE_CONDITION_KEYS`) a config gives though it names no catalogue drive in
+/// `[parts]` or a motor's `[parts.<id>]`: its drive is hand-entered, the condition would derate nothing and the drive
+/// would be judged at its rated condition. Read from the config as written: `resolve` empties the names.
+pub fn condition_without_drive(cfg: &Config) -> Option<&'static str> {
+    let named = |v: Option<&toml::Value>| v.and_then(|v| v.as_str()).is_some_and(|name| !name.is_empty());
+    let parts = cfg.get("parts").ok().and_then(|p| p.as_table());
+    let any = parts.is_some_and(|p| named(p.get("drive")) || p.values().any(|own| named(own.get("drive"))));
+    DRIVE_CONDITION_KEYS.into_iter().find(|key| !any && cfg.get(key).is_ok())
+}
+
 /// Linear interpolation through `points` (x, y), the value of the first or last point beyond them; 1 for no points.
 fn interpolate(mut points: Vec<(f64, f64)>, x: f64) -> f64 {
     points.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1136,6 +1148,12 @@ fn interpolate(mut points: Vec<(f64, f64)>, x: f64) -> f64 {
         }
     }
     last.1
+}
+
+/// The y of the first of `points` (x, y) whose x is at least `x`, the last point's beyond them; 1 for no points.
+fn up_to(mut points: Vec<(f64, f64)>, x: f64) -> f64 {
+    points.sort_by(|a, b| a.0.total_cmp(&b.0));
+    points.iter().find(|p| x <= p.0).or(points.last()).map_or(1.0, |p| p.1)
 }
 
 /// The (x, y) points of one `quantity` of a derating table, x from the column `x`, y the output current factor.
@@ -1161,7 +1179,8 @@ fn last_x(points: &[(f64, f64)]) -> f64 {
 /// state no derating, and silently ignoring the condition would judge it at rated conditions.
 ///
 /// S210 (`derating_s210.csv`, operating instructions Table 12-9): the table of altitude against ambient temperature,
-/// interpolated linearly between its points, the pulse frequency fixed at 8 kHz. S120 booksize Motor Module
+/// an altitude by the row "up to" the next table altitude, the ambient interpolated linearly between the columns (as
+/// Siemens' rule trades 5 K for 10 % of the current), the pulse frequency fixed at 8 kHz. S120 booksize Motor Module
 /// (`derating_s120.csv`): the factors of altitude (10 % per 1000 m above 1000 m), ambient temperature (2.67 % per K above
 /// 40 degC) and pulse frequency (a curve by module group), multiplied. Siemens does not say how they combine; the product is
 /// this simulator's assumption on the safe side. Of Siemens' two ways to trade altitude (reduce the current by 10 % per
@@ -1205,7 +1224,8 @@ pub fn drive_derating(cfg: &Config, article: &str) -> Result<f64, ConfigError> {
             return Err(refused(pulse_key));
         }
         let h = altitude.unwrap_or_else(|| first_x(&altitudes));
-        let across: Vec<(f64, f64)> = columns.into_iter().map(|(t, points)| (t, interpolate(points, h))).collect();
+        // The rows are "up to 2000 m" and so on: an altitude takes the row of the next table altitude at or above it.
+        let across: Vec<(f64, f64)> = columns.into_iter().map(|(t, points)| (t, up_to(points, h))).collect();
         return Ok(interpolate(across.clone(), ambient.unwrap_or_else(|| first_x(&across))));
     }
     if let Some(module) = rows(table("siemens/motor_modules_s120.csv")).iter().find(|r| r["part_number"] == article) {
@@ -1501,6 +1521,11 @@ fn kind(cfg: &Config) -> Option<Kind> {
     }
 }
 
+/// The travel (m) a belt axis's slide load is screened for (`AxisData::slide_load_n`): the 5000 km Festo rates the
+/// ELGA-TB-KF and EGC-TB-KF for. A row rated for another (`dynamic_load_distance_m`, the RF's 10000 km) is converted to
+/// it by the cube law; a row without the column (Bahr, Rexroth) is taken as printed.
+const BELT_AXIS_LOAD_DISTANCE_M: f64 = 5.0e6;
+
 /// The catalogue's figures of an axis by name, as `apply_axis` and the axis search use them.
 #[derive(Debug, Clone)]
 struct AxisData {
@@ -1668,7 +1693,11 @@ fn axis_data(name: &str) -> Option<AxisData> {
         // Bahr gives the peak feed force; Festo and Rexroth the torque at the pulley as well, which holds where given.
         pulley_torque: number(r, "max_pulley_torque_nm").unwrap_or(number(r, "feed_force_peak_n")? * radius),
         payload_kg: None,
-        slide_load_n: number(r, "fz_dynamic_n"),
+        // On the 5000 km basis of Festo's KF guides: a load rated for another travel (RF: 10000 km) by the cube law of
+        // Festo's own graph of the load comparison factor against the service life.
+        slide_load_n: number(r, "fz_dynamic_n").map(|fz| {
+            fz * number(r, "dynamic_load_distance_m").map_or(1.0, |d| (d / BELT_AXIS_LOAD_DISTANCE_M).cbrt())
+        }),
         max_speed: number(r, "max_speed_m_s")?,
         max_acceleration: if bahr { None } else { number(r, "max_acceleration_m_s2") },
         moved,
@@ -1949,6 +1978,19 @@ pub fn motor_config(cfg: &Config, id: &str) -> Result<Config, ConfigError> {
     Ok(out)
 }
 
+/// The part `key` ("motor", "gearbox" or "drive") that motor `id` of an unresolved config has: the one its own
+/// `[parts.<id>]` names; else none where it has values of its own for that part (`[motor.<id>]`, `[gearbox.<id>]`: not
+/// a catalogue part); else `shared`.
+fn part_of(cfg: &Config, id: &str, key: &str, shared: &str) -> String {
+    let own = cfg.get(&format!("parts.{id}.{key}")).ok().and_then(|v| v.as_str()).filter(|n| !n.is_empty());
+    let by_hand = key != "drive" && cfg.get(&format!("{key}.{id}")).is_ok_and(|v| v.is_table());
+    match own.filter(|_| !id.is_empty()) {
+        Some(own) => own.to_string(),
+        None if by_hand && !id.is_empty() => String::new(),
+        None => shared.to_string(),
+    }
+}
+
 /// The config with the catalogue values of the parts it names: `[parts]` with `motor = "<article>"`,
 /// `motor_supply` (`SUPPLIES`), `gearbox = "<size-frame-ratio>"`, `drive = "<article>"`, `belt = "<profile-width>"`
 /// and `axis = "<name>"`, "" for none. A named part overwrites the numbers the config has for it, and the velocity
@@ -1980,9 +2022,10 @@ pub struct Candidate {
     /// names, kg. Motor and gearbox times the number of motors that take it (not those with a motor of their own,
     /// `[motor.<id>]` or `[parts.<id>]`; one for `search_motor`), and the axis at the config's strokes.
     pub cost: f64,
-    /// The parts the combination buys, as the search's table spells them: motor, gearbox, drive (each once per motor
-    /// that takes it, as `cost` counts them) and axis, with how many of each; the part a config keeps is named too.
-    /// Empty for an axis ruled out before any motor was tried.
+    /// The parts the combination buys, as the search's table spells them, with how many of each: every motor's motor,
+    /// gearbox and drive (the candidate's where it takes the shared ones, its own `[parts.<id>]` where it has them;
+    /// none where the config has hand-entered values), the axis and the belt; the parts a config keeps are named too.
+    /// For one motor (`search_motor`) that motor's alone. Empty for an axis ruled out before any motor was tried.
     pub parts: Vec<(String, f64)>,
     /// The user's price for `parts` (`apply_prices`); `None` without a price list or where a part has no price in it.
     pub price: Option<f64>,
@@ -2674,19 +2717,51 @@ fn judge(entry: &MachineEntry, cfg: &Config) -> Result<(CycleLoad, Vec<Verdict>)
 fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply: &str, job: &Job) -> Option<Candidate> {
     // Not offered at this supply, or a part the config cannot take.
     let (with_parts, motors) = job_config(entry, cfg, supply, job).ok()?;
-    // The gearbox the motor drives through: the candidate's, else its own (`[parts.<id>]` for one motor).
-    let own = if job.motor.is_empty() { Ok(cfg.clone()) } else { motor_config(cfg, &job.motor) };
-    let own = own.ok();
-    let own_parts = own.as_ref().and_then(|own| Parts::of(own).ok());
-    let own_gearbox = own_parts.as_ref().map(|p| p.gearbox.to_string()).unwrap_or_default();
-    let gearbox = if job.gearbox.is_empty() { own_gearbox.as_str() } else { job.gearbox.as_str() };
-    let drive = if job.drive.is_empty() { own_parts.as_ref().map_or("", |p| p.drive) } else { job.drive };
-    // What the combination buys, for a price list: every motor that takes the shared parts has its own of each.
-    let parts = [(job.article, motors), (gearbox, motors), (drive, motors), (job.axis.as_str(), 1.0)]
-        .into_iter()
-        .filter(|(name, _)| !name.is_empty())
-        .map(|(name, count)| (name.to_string(), count))
-        .collect();
+    let shared = Parts::of(cfg).unwrap_or_default();
+    let or = |candidate: &str, config: &str| if candidate.is_empty() { config } else { candidate }.to_string();
+    // Each motor's motor, gearbox and drive: the candidate's in place of the shared ones, a motor's own
+    // `[parts.<id>]` kept; for one motor (`search_motor`) that motor's alone, the candidate's in place of its own.
+    let trains: Vec<[String; 3]> = if job.motor.is_empty() {
+        let ids = (entry.build)(&with_parts).map(|m| m.motors().iter().map(|m| m.id.to_string()).collect());
+        let (gearbox, drive) = (or(&job.gearbox, shared.gearbox), or(job.drive, shared.drive));
+        let ids: Vec<String> = ids.unwrap_or_default();
+        ids.iter()
+            .map(|id| {
+                [
+                    part_of(cfg, id, "motor", job.article),
+                    part_of(cfg, id, "gearbox", &gearbox),
+                    part_of(cfg, id, "drive", &drive),
+                ]
+            })
+            .collect()
+    } else {
+        let id = job.motor.as_str();
+        let own = |key: &str, candidate: &str, config: &str| or(candidate, &part_of(cfg, id, key, config));
+        vec![[
+            job.article.to_string(),
+            own("gearbox", &job.gearbox, shared.gearbox),
+            own("drive", job.drive, shared.drive),
+        ]]
+    };
+    // The gearbox the candidate's motor drives through (the shared one where several take it).
+    let gearbox = match &trains[..] {
+        [one] if !job.motor.is_empty() => one[1].clone(),
+        _ => or(&job.gearbox, shared.gearbox),
+    };
+    let gearbox = gearbox.as_str();
+    // What the combination buys, for a price list: every motor's parts, and the axis and belt (a candidate's or the
+    // config's) where every motor is searched; a mechanical axis by its screws and guide carriages.
+    let axis = or(&job.axis, shared.axis);
+    let axis = mechanics::mech_axis_parts(&axis).unwrap_or_else(|| vec![(axis, 1.0)]);
+    let whole = axis.into_iter().chain([(shared.belt.to_string(), 1.0)]).filter(|_| job.motor.is_empty());
+    let mut parts: Vec<(String, f64)> = Vec::new();
+    let each = trains.into_iter().flatten().map(|name| (name, 1.0));
+    for (name, n) in each.chain(whole).filter(|(name, _)| !name.is_empty()) {
+        match parts.iter_mut().find(|(known, _)| *known == name) {
+            Some((_, count)) => *count += n,
+            None => parts.push((name, n)),
+        }
+    }
     // An unknown mass counts 0 (not NaN, which sorted the row last); `estimated` says so ("gearbox-mass").
     let gearbox_mass = if gearbox.is_empty() { 0.0 } else { gearbox_mass(gearbox).unwrap_or(0.0) };
     let mass = motor_mass_for(cfg, job.article, supply).unwrap_or(f64::INFINITY) + gearbox_mass;

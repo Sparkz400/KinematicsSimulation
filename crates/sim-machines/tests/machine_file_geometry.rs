@@ -544,3 +544,34 @@ fn the_search_sizes_one_motor_of_a_machine_file() {
     assert!(found[0].result.is_some() || !found[0].refused.is_empty());
     assert!(search_motor(entry, &cfg, "400v", &|a: &str| a == article, None, "mq").is_err());
 }
+
+/// What a candidate buys counts every motor's parts: on the XYZ portal with the Z motor's own `[parts.mz]` (a
+/// 1FK2103-2AH with an NRK050 gearbox, both its own), a search of the shared motor 1FK2104-4AF buys that motor and its
+/// paired drive twice (X and Y), the Z motor, its gearbox and its paired drive once. At 100 per shared motor, 10 per
+/// drive, 50 for the Z motor and 7 for its gearbox: 2 x 100 + 3 x 10 + 50 + 7 = 287. Sized alone (`--motor-id mz`)
+/// the Z motor keeps the gearbox `[parts.mz]` names: 50 + 7 + 10 = 67.
+#[test]
+fn a_price_counts_the_parts_of_every_motor_and_a_motors_own_gearbox() {
+    use sim_components::catalog::{Options, PriceList, apply_prices, search};
+    let entry = file("xyz-portal.toml");
+    let gearbox = "NRK050-03-5";
+    let own = format!("[parts.mz]\nmotor = \"1FK2103-2AH\"\ngearbox = \"{gearbox}\"\n\n[motor.mz]\n");
+    let text = std::fs::read_to_string(root().join("machines/xyz-portal.toml")).unwrap();
+    let mut cfg = Config::parse(&text.replacen("[motor.mz]\n", &own, 1)).unwrap();
+    // The parts are what is asked, not the verdicts: a coarse step keeps the cycles short.
+    cfg.set_text("sim.dt_s = 1.0e-3").unwrap();
+    let (shared, z) = ("1FK2104-4AF", "1FK2103-2AH");
+    let (shared_drive, z_drive) = (paired_drive(shared, "400v"), paired_drive(z, "400v"));
+    let mut list = format!("part_number,price\n{shared},100\n{z},50\n{gearbox},7\n{shared_drive},10\n");
+    if z_drive != shared_drive {
+        list.push_str(&format!("{z_drive},10\n"));
+    }
+    let list = PriceList::parse(&list).unwrap();
+    let mut found = search(entry, &cfg, &["400v"], &|a: &str| a == shared, &Options::default()).unwrap();
+    assert!(apply_prices(&mut found, &list).is_empty(), "{:?}", found[0].parts);
+    assert_eq!(found[0].price, Some(287.0), "{:?}", found[0].parts);
+    let options = Options { motor: Some("mz"), ..Options::default() };
+    let mut alone = search(entry, &cfg, &["400v"], &|a: &str| a == z, &options).unwrap();
+    assert!(apply_prices(&mut alone, &list).is_empty(), "{:?}", alone[0].parts);
+    assert_eq!(alone[0].price, Some(67.0), "{:?}", alone[0].parts);
+}

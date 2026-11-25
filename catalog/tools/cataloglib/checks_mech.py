@@ -118,7 +118,9 @@ def single_belt_axes_agree_with_their_geometry(tables):
     sensible band; the sizes as printed."""
     errors = []
     expected = {"festo/belt_axes_egc.csv": {"EGC-TB-KF": ["50", "70", "80", "120", "185"]},
-                "festo/belt_axes_elga.csv": {"ELGA-TB-KF": ["70", "80", "120", "150"], "ELGA-TB-G": ["70", "80", "120"]},
+                "festo/belt_axes_elga.csv": {"ELGA-TB-KF": ["70", "80", "120", "150"], "ELGA-TB-KF-F1": ["70", "80", "120"],
+                                             "ELGA-TB-RF": ["70", "80", "120"], "ELGA-TB-RF-F1": ["70", "80", "120"],
+                                             "ELGA-TB-G": ["70", "80", "120"]},
                 "rexroth/belt_axes_ckr.csv": {"CKR": ["070", "070L", "090", "090L", "110", "110L", "145", "145L",
                                                       "200", "200L", "280"]}}
     for path in SINGLE_AXIS_TABLES:
@@ -152,7 +154,8 @@ def single_belt_axes_agree_with_their_geometry(tables):
                     errors.append(f"{name}: moved mass {moved} >= mass at zero stroke {base}")
                 if not inside(need(r, "mass_per_stroke_kg_m"), 0.5, 100):
                     errors.append(f"{name}: mass_per_stroke_kg_m")
-                if not need(r, "max_no_load_torque_nm" if "max_no_load_torque_nm" in r else "no_load_torque_nm") < 0.2 * torque:
+                # (the food zone variants: 0.8 of 3.72 N m, 1.03 of 3.7 N m)
+                if not need(r, "max_no_load_torque_nm" if "max_no_load_torque_nm" in r else "no_load_torque_nm") < 0.3 * torque:
                     errors.append(f"{name}: no-load torque not well below the drive torque")
                 if not need(r, "fz_dynamic_n") >= need(r, "fy_dynamic_n") * 0.99 and r["series"] != "CKR":
                     errors.append(f"{name}: Fz < Fy")
@@ -414,6 +417,54 @@ def hiwin_screws_and_guides_agree_with_their_own_geometry(tables):
                         "rail_mass_kg_m", "seal_drag_n"):
                 if len({g[col] for g in group}) != 1:
                     errors.append(f"hiwin {group[0]['series']}{group[0]['size']}: {col} differs between blocks")
+    return errors
+
+
+# --- rexroth and thk guides
+def rexroth_and_thk_guides_agree_with_their_basis_and_with_hiwin(tables):
+    """Bosch Rexroth BSHP (C for 100 km) and THK SHS/HSR (C for 50 km): the distance is the document's basis on every row,
+    C0/C and the moments are in a sensible band, a bigger size of one block type is stronger and heavier, and the same
+    size of the three makers' flange blocks rates alike once C is brought to one distance (a factor of 2 either way)."""
+    errors = []
+    basis = {"rexroth/linear_guides.csv": 100000, "thk/linear_guides.csv": 50000}
+    for path, distance in basis.items():
+        if not have(tables, path):
+            continue
+        rows = tables[path]
+        for r in rows:
+            p = r["part_number"]
+            c, c0 = need(r, "dynamic_load_rating_n"), need(r, "static_load_rating_n")
+            if not inside(c0 / c, 1.0, 2.2):
+                errors.append(f"{path} {p}: C0/C = {c0 / c:.2f} outside 1.0..2.2")
+            if need(r, "dynamic_load_rating_distance_m") != distance:
+                errors.append(f"{path} {p}: C of this maker is for {distance} m")
+            if not need(r, "static_moment_y_nm") == need(r, "static_moment_z_nm") and path.startswith("rexroth"):
+                errors.append(f"{p}: ML0 is printed once, pitch and yaw must be equal")
+            if not inside(need(r, "rail_width_m"), 0.8 * float(r["size"]) / 1000, 1.25 * float(r["size"]) / 1000):
+                errors.append(f"{p}: rail width {r['rail_width_m']} m does not fit size {r['size']}")
+            if path.startswith("rexroth") and not (need(r, "dynamic_moment_x_nm") <= need(r, "static_moment_x_nm")
+                                                   and need(r, "dynamic_moment_y_nm") <= need(r, "static_moment_y_nm")):
+                errors.append(f"{p}: a dynamic moment above its static one")
+        groups = {}
+        for r in rows:
+            groups.setdefault(r["carriage_type"], []).append(r)
+        for group in groups.values():
+            group.sort(key=lambda r: int(r["size"]))
+            for a, b in zip(group, group[1:]):
+                for col in ("dynamic_load_rating_n", "static_load_rating_n", "carriage_mass_kg", "rail_mass_kg_m",
+                            "carriage_length_m"):
+                    if not need(a, col) < need(b, col):
+                        errors.append(f"{b['part_number']}: {col} not above {a['part_number']}'s")
+    if have(tables, "hiwin/linear_guides.csv", "rexroth/linear_guides.csv", "thk/linear_guides.csv"):
+        ref = {r["size"]: need(r, "dynamic_load_rating_n") for r in tables["hiwin/linear_guides.csv"] if r["series"] == "HG"
+               and r["part_number"].startswith("HGH")}
+        for path in basis:
+            for r in tables[path]:
+                size = r["size"]
+                c50 = need(r, "dynamic_load_rating_n") * (need(r, "dynamic_load_rating_distance_m") / 50000) ** (1 / 3)
+                if size in ref and not inside(c50 / ref[size], 0.5, 2.0) and r["carriage_type"] in (
+                        "FNS: flange; normal; standard height; steel; without ball chain", "SHS-C", "HSR-C"):
+                    errors.append(f"{r['part_number']}: C for 50 km {c50:.0f} N against HIWIN HGH{size}CA {ref[size]:.0f} N")
     return errors
 
 
@@ -747,6 +798,7 @@ MECH_CHECKS = [
     apex_gearboxes_agree_with_their_own_physics,
     harmonicdrive_strain_wave_gears_are_plausible,
     hiwin_screws_and_guides_agree_with_their_own_geometry,
+    rexroth_and_thk_guides_agree_with_their_basis_and_with_hiwin,
     siemens_1fn3_linear_motors_are_plausible,
     beckhoff_al8000_linear_motors_are_plausible,
     gates_belts_are_plausible,

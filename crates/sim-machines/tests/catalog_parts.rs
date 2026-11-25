@@ -147,6 +147,24 @@ fn bahr_axes_by_name_bring_the_sheets_moved_masses_pulley_and_belt() {
     }
 }
 
+/// Festo rates the ELGA-TB-KF's loads for 5000 km and the -RF's for 10000 km; its own graph of the load comparison
+/// factor (fv 1.5: about 1500 km for KF, 3000 km for RF) is the cube law, so the RF-70's Fz of 500 N for 10000 km is
+/// 500 x 2^(1/3) = 629.96 N for 5000 km, the basis the axes are screened on. On the single axis a payload of 64.0 kg
+/// (627.84 N) is carried, 64.3 kg (630.78 N) is not; the KF-70 (1850 N for 5000 km) carries both.
+#[test]
+fn a_belt_axis_load_rated_for_another_travel_is_screened_on_the_5000_km_basis() {
+    let single = &machine_single_axis::ENTRY;
+    let reason = |payload: f64, axis: &str| {
+        let mut cfg = single.config();
+        cfg.set_text(&format!("mass.payload_kg = {payload}")).unwrap();
+        let found = sim_components::catalog::axes_for(&cfg);
+        found.into_iter().find(|(name, _)| name == axis).unwrap().1
+    };
+    assert_eq!(reason(64.0, "ELGA-TB-RF-70"), "");
+    assert_eq!(reason(64.3, "ELGA-TB-RF-70"), "axis-payload");
+    assert_eq!((reason(64.0, "ELGA-TB-KF-70"), reason(64.3, "ELGA-TB-KF-70")), ("", ""));
+}
+
 /// A belt by profile and width: a standard width is the handbook's row, one between two is linear between them,
 /// one below the narrowest in proportion to it. EA is the allowable pull over the stretch at it (4 mm/m).
 #[test]
@@ -272,9 +290,9 @@ fn drive_currents(conditions: &str, article: &str, supply: &str) -> Result<(f64,
 
 /// Derating of an S210 converter by Table 12-9 of its operating instructions. 6SL3210-5HE11-5UF0: 5 A rated, 4.25 A base
 /// load (0.85), 19 A maximum. At 45 degC and 3000 m the table says 90 %: 4.5 A and 4.25 x 0.9 = 3.825 A, the maximum stays
-/// 19 A. Interpolated, at 2500 m and 47.5 degC: at 45 degC 1.0 at 2000 m and 0.9 at 3000 m give 0.95, at 50 degC 0.9 and
-/// 0.8 give 0.85, half way between those 0.90, so 4.5 A again. Altitude at the first point (1000 m) and 40 degC, the
-/// rated condition, change nothing, bit for bit.
+/// 19 A. The rows are "up to" their altitude: 2500 m is the 3000 m row, 0.9 at 45 degC and 0.8 at 50 degC, and 47.5 degC
+/// half way between those, 0.85: 4.25 A and 4.25 x 0.85 = 3.6125 A. At 3500 m and 40 degC the 4000 m row's 90 %
+/// (4.5 A), not 95 %. Altitude at the first point (1000 m) and 40 degC, the rated condition, change nothing, bit for bit.
 #[test]
 fn an_s210_converter_is_derated_by_altitude_and_ambient_as_its_table_says() {
     let article = "6SL3210-5HE11-5UF0";
@@ -293,7 +311,8 @@ fn an_s210_converter_is_derated_by_altitude_and_ambient_as_its_table_says() {
     assert!(close(current, 4.5, 1e-12) && close(base, 3.825, 1e-12) && max == 19.0, "{current} {base} {max}");
     let (current, base, _) =
         drive_currents("drive_ambient_c = 47.5\ndrive_altitude_m = 2500.0", article, "400v").unwrap();
-    assert!(close(current, 4.5, 1e-12) && close(base, 3.825, 1e-12), "{current} {base}");
+    assert!(close(current, 4.25, 1e-12) && close(base, 3.6125, 1e-12), "{current} {base}");
+    assert!(close(drive_currents("drive_altitude_m = 3500.0", article, "400v").unwrap().0, 4.5, 1e-12));
     // Below the table's lowest temperature the 40 degC column holds; 3000 m at 40 degC is 100 %, 4000 m 90 %.
     assert_eq!(drive_currents("drive_ambient_c = 20.0\ndrive_altitude_m = 3000.0", article, "400v").unwrap().0, 5.0);
     assert!(close(drive_currents("drive_altitude_m = 4000.0", article, "400v").unwrap().0, 4.5, 1e-12));
@@ -395,6 +414,14 @@ fn a_search_flags_a_derated_drive_as_estimated() {
         estimated_derating(&with_conditions("drive_altitude_m = 3000.0\ndrive_ambient_c = 45.0"), "6SL3210-5HE11-5UF0"),
         ["drive-derating"]
     );
+    // And the search's table says it: the EXCT-30's 1FK2205-4AF on its paired drive, at 3000 m and 45 degC.
+    let estimated = |conditions: &str| {
+        let cfg = with_conditions(conditions);
+        let found = search_motors(&machine_t_gantry::ENTRY, &cfg, "400v", &|a| a == "1FK2205-4AF", None);
+        found[0].figures.as_ref().map(|f| f.estimated.clone()).unwrap_or_else(|| panic!("{}", found[0].refused))
+    };
+    assert!(estimated("drive_altitude_m = 3000.0\ndrive_ambient_c = 45.0").contains(&"drive-derating"));
+    assert!(!estimated("").contains(&"drive-derating"));
 }
 
 /// A drive by name brings its DC link data where Siemens publishes it. The S210's internal braking resistor and trip level

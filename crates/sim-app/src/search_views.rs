@@ -151,7 +151,10 @@ pub fn run_search(entry: &MachineEntry, config: &Config, inputs: &Inputs) -> Res
     if at.is_empty() {
         return Err(("ui-search-bad-supply", format!("{} {}", s.vendor, inputs.supply).trim().to_string()));
     }
-    let by = search::parse_ranking(&s.rank_by).ok_or_else(|| ("ui-search-bad-rank", s.rank_by.clone()))?;
+    // No price list here: `price` would rank every candidate as unpriced, in the weight order without a word.
+    let by = search::parse_ranking(&s.rank_by)
+        .filter(|by| by.iter().all(|(c, _)| *c != search::Criterion::Price))
+        .ok_or_else(|| ("ui-search-bad-rank", s.rank_by.clone()))?;
     let motor = Some(s.motor.trim()).filter(|m| !m.is_empty());
     if motor.is_some() && inputs.axes {
         return Err(("ui-search-motor-axes", String::new()));
@@ -314,7 +317,10 @@ pub fn compare(entry: &'static MachineEntry, config: &Config, inputs: &Inputs) -
     if at.is_empty() {
         return Err(("ui-search-bad-supply", inputs.supply.clone()));
     }
-    let by = search::parse_ranking(&s.rank_by).ok_or_else(|| ("ui-search-bad-rank", s.rank_by.clone()))?;
+    // No price list here: `price` would rank every candidate as unpriced, in the weight order without a word.
+    let by = search::parse_ranking(&s.rank_by)
+        .filter(|by| by.iter().all(|(c, _)| *c != search::Criterion::Price))
+        .ok_or_else(|| ("ui-search-bad-rank", s.rank_by.clone()))?;
     let series = inputs.series.trim();
     let gearboxes = Some(inputs.gearboxes.trim()).filter(|g| !g.is_empty());
     let options = Options { gearboxes, drives: s.drives, ..Options::default() };

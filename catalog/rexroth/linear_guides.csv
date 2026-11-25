@@ -1,0 +1,62 @@
+part_number,series,size,carriage_type,rail_width_m,height_m,carriage_length_m,dynamic_load_rating_n,dynamic_load_rating_distance_m,static_load_rating_n,static_moment_x_nm,static_moment_y_nm,static_moment_z_nm,dynamic_moment_x_nm,dynamic_moment_y_nm,dynamic_moment_z_nm,carriage_mass_kg,rail_mass_kg_m
+FNS15,BSHP,15,FNS: flange; normal; standard height; steel; without ball chain,0.015,0.024,0.0582,9860,100000,12700,120,87,87,95,68,68,0.20,1.4
+FNS20,BSHP,20,FNS: flange; normal; standard height; steel; without ball chain,0.02,0.03,0.075,23400,100000,29800,380,260,260,300,200,200,0.45,2.4
+FNS25,BSHP,25,FNS: flange; normal; standard height; steel; without ball chain,0.023,0.036,0.0862,28600,100000,35900,510,360,360,410,290,290,0.65,3.2
+FNS30,BSHP,30,FNS: flange; normal; standard height; steel; without ball chain,0.028,0.042,0.0977,36500,100000,48100,830,580,580,630,440,440,1.10,5.0
+FNS35,BSHP,35,FNS: flange; normal; standard height; steel; without ball chain,0.034,0.048,0.1105,51800,100000,80900,1740,1130,1130,1110,720,720,1.60,6.8
+FNS45,BSHP,45,FNS: flange; normal; standard height; steel; without ball chain,0.045,0.06,0.1376,86400,100000,132000,3560,2350,2350,2330,1540,1540,3.00,10.5
+FLS15,BSHP,15,FLS: flange; long; standard height; steel; without ball chain,0.015,0.024,0.0726,12800,100000,18400,180,180,180,120,120,120,0.30,1.4
+FLS20,BSHP,20,FLS: flange; long; standard height; steel; without ball chain,0.02,0.03,0.091,29600,100000,41800,540,490,490,380,340,340,0.55,2.4
+FLS25,BSHP,25,FLS: flange; long; standard height; steel; without ball chain,0.023,0.036,0.1079,37300,100000,52500,750,740,740,530,530,530,0.90,3.2
+FLS30,BSHP,30,FLS: flange; long; standard height; steel; without ball chain,0.028,0.042,0.1197,46000,100000,66900,1160,1080,1080,800,740,740,1.50,5.0
+FLS35,BSHP,35,FLS: flange; long; standard height; steel; without ball chain,0.034,0.048,0.139,66700,100000,116000,2500,2240,2240,1440,1290,1290,2.25,6.8
+FLS45,BSHP,45,FLS: flange; long; standard height; steel; without ball chain,0.045,0.06,0.1741,111000,100000,190000,5120,4660,4660,3010,2730,2730,4.30,10.5
+FKS15,BSHP,15,FKS: flange; short; standard height; steel; without ball chain,0.015,0.024,0.0447,6720,100000,7340,71,32,32,65,29,29,0.15,1.4
+FKS20,BSHP,20,FKS: flange; short; standard height; steel; without ball chain,0.02,0.03,0.0573,15400,100000,16500,210,89,89,200,83,83,0.30,2.4
+FKS25,BSHP,25,FKS: flange; short; standard height; steel; without ball chain,0.023,0.036,0.067,19800,100000,21200,300,140,140,280,130,130,0.50,3.2
+FKS30,BSHP,30,FKS: flange; short; standard height; steel; without ball chain,0.028,0.042,0.0753,25600,100000,28900,500,230,230,440,200,200,0.80,5.0
+FKS35,BSHP,35,FKS: flange; short; standard height; steel; without ball chain,0.034,0.048,0.0849,36600,100000,49300,1060,460,460,790,340,340,1.20,6.8
+SNS15,BSHP,15,SNS: slimline; normal; standard height; steel; without ball chain,0.015,0.024,0.0582,9860,100000,12700,120,87,87,95,68,68,0.15,1.4
+SNS20,BSHP,20,SNS: slimline; normal; standard height; steel; without ball chain,0.02,0.03,0.075,23400,100000,29800,380,260,260,300,200,200,0.35,2.4
+SNS25,BSHP,25,SNS: slimline; normal; standard height; steel; without ball chain,0.023,0.036,0.0862,28600,100000,35900,510,360,360,410,290,290,0.50,3.2
+SNS30,BSHP,30,SNS: slimline; normal; standard height; steel; without ball chain,0.028,0.042,0.0977,36500,100000,48100,830,580,580,630,440,440,0.85,5.0
+SNS35,BSHP,35,SNS: slimline; normal; standard height; steel; without ball chain,0.034,0.048,0.1105,51800,100000,80900,1740,1130,1130,1110,720,720,1.25,6.8
+SNS45,BSHP,45,SNS: slimline; normal; standard height; steel; without ball chain,0.045,0.06,0.1376,86400,100000,132000,3560,2350,2350,2330,1540,1540,2.40,10.5
+SLS15,BSHP,15,SLS: slimline; long; standard height; steel; without ball chain,0.015,0.024,0.0726,12800,100000,18400,180,180,180,120,120,120,0.20,1.4
+SLS20,BSHP,20,SLS: slimline; long; standard height; steel; without ball chain,0.02,0.03,0.091,29600,100000,41800,540,490,490,380,340,340,0.45,2.4
+SLS25,BSHP,25,SLS: slimline; long; standard height; steel; without ball chain,0.023,0.036,0.1079,37300,100000,52500,750,740,740,530,530,530,0.65,3.2
+SLS30,BSHP,30,SLS: slimline; long; standard height; steel; without ball chain,0.028,0.042,0.1197,46000,100000,66900,1160,1080,1080,800,740,740,1.10,5.0
+SLS35,BSHP,35,SLS: slimline; long; standard height; steel; without ball chain,0.034,0.048,0.139,66700,100000,116000,2500,2240,2240,1440,1290,1290,1.70,6.8
+SLS45,BSHP,45,SLS: slimline; long; standard height; steel; without ball chain,0.045,0.06,0.1741,111000,100000,190000,5120,4660,4660,3010,2730,2730,3.20,10.5
+SKS15,BSHP,15,SKS: slimline; short; standard height; steel; without ball chain,0.015,0.024,0.0447,6720,100000,7340,71,32,32,65,29,29,0.10,1.4
+SKS20,BSHP,20,SKS: slimline; short; standard height; steel; without ball chain,0.02,0.03,0.0573,15400,100000,16500,210,89,89,200,83,83,0.25,2.4
+SKS25,BSHP,25,SKS: slimline; short; standard height; steel; without ball chain,0.023,0.036,0.067,19800,100000,21200,300,140,140,280,130,130,0.35,3.2
+SKS30,BSHP,30,SKS: slimline; short; standard height; steel; without ball chain,0.028,0.042,0.0753,25600,100000,28900,500,230,230,440,200,200,0.60,5.0
+SKS35,BSHP,35,SKS: slimline; short; standard height; steel; without ball chain,0.034,0.048,0.0849,36600,100000,49300,1060,460,460,790,340,340,0.90,6.8
+SNH15,BSHP,15,SNH: slimline; normal; high; steel; without ball chain,0.015,0.028,0.0582,9860,100000,12700,120,87,87,95,68,68,0.20,1.4
+SNH25,BSHP,25,SNH: slimline; normal; high; steel; without ball chain,0.023,0.04,0.0862,28600,100000,35900,510,360,360,410,290,290,0.60,3.2
+SNH30,BSHP,30,SNH: slimline; normal; high; steel; without ball chain,0.028,0.045,0.0977,36500,100000,48100,830,580,580,630,440,440,0.95,5.0
+SNH35,BSHP,35,SNH: slimline; normal; high; steel; without ball chain,0.034,0.055,0.1105,51800,100000,80900,1740,1130,1130,1110,720,720,1.55,6.8
+SNH45,BSHP,45,SNH: slimline; normal; high; steel; without ball chain,0.045,0.07,0.1376,86400,100000,132000,3560,2350,2350,2330,1540,1540,3.00,10.5
+SLH25,BSHP,25,SLH: slimline; long; high; steel; without ball chain,0.023,0.04,0.1079,37300,100000,52500,750,740,740,530,530,530,0.80,3.2
+SLH30,BSHP,30,SLH: slimline; long; high; steel; without ball chain,0.028,0.045,0.1197,46000,100000,66900,1160,1080,1080,800,740,740,1.20,5.0
+SLH35,BSHP,35,SLH: slimline; long; high; steel; without ball chain,0.034,0.055,0.139,66700,100000,116000,2500,2240,2240,1440,1290,1290,2.10,6.8
+SLH45,BSHP,45,SLH: slimline; long; high; steel; without ball chain,0.045,0.07,0.1741,111000,100000,190000,5120,4660,4660,3010,2730,2730,4.10,10.5
+FNN20,BSHP,20,FNN: flange; normal; low; steel; without ball chain,0.02,0.028,0.0725,14500,100000,24400,310,165,165,190,100,100,0.40,2.4
+FNN25,BSHP,25,FNN: flange; normal; low; steel; without ball chain,0.023,0.033,0.081,28600,100000,35900,510,360,360,410,290,290,0.60,3.2
+FKN20,BSHP,20,FKN: flange; short; low; steel; without ball chain,0.02,0.028,0.055,9600,100000,13600,170,58,58,120,40,40,0.25,2.4
+FKN25,BSHP,25,FKN: flange; short; low; steel; without ball chain,0.023,0.033,0.062,19800,100000,21200,300,140,140,280,130,130,0.45,3.2
+SNN20,BSHP,20,SNN: slimline; normal; low; steel; without ball chain,0.02,0.028,0.0725,14500,100000,24400,310,165,165,190,100,100,0.30,2.4
+SNN25,BSHP,25,SNN: slimline; normal; low; steel; without ball chain,0.023,0.033,0.081,28600,100000,35900,510,360,360,410,290,290,0.45,3.2
+SKN20,BSHP,20,SKN: slimline; short; low; steel; without ball chain,0.02,0.028,0.055,9600,100000,13600,170,58,58,120,40,40,0.20,2.4
+SKN25,BSHP,25,SKN: slimline; short; low; steel; without ball chain,0.023,0.033,0.062,19800,100000,21200,300,140,140,280,130,130,0.30,3.2
+FNS55,BSHP,55,FNS: flange; normal; standard height; steel; without ball chain,0.053,0.07,0.159,109000,100000,174000,5550,3690,3690,3480,2320,2320,5.20,16.2
+FNS65,BSHP,65,FNS: flange; normal; standard height; steel; without ball chain,0.063,0.09,0.188,172000,100000,280000,11100,7400,7400,6810,4560,4560,10.25,22.4
+FLS55,BSHP,55,FLS: flange; long; standard height; steel; without ball chain,0.053,0.07,0.199,139000,100000,245000,7780,6990,6990,4410,3960,3960,7.50,16.2
+FLS65,BSHP,65,FLS: flange; long; standard height; steel; without ball chain,0.063,0.09,0.243,223000,100000,404000,16000,14800,14800,8810,8160,8160,14.15,22.4
+SNS55,BSHP,55,SNS: slimline; normal; standard                                      height; steel; without ball chain,0.053,0.07,0.159,109000,100000,174000,5550,3690,3690,3480,2320,2320,3.80,16.2
+SNS65,BSHP,65,SNS: slimline; normal; standard                                      height; steel; without ball chain,0.063,0.09,0.188,172000,100000,280000,11100,7400,7400,6810,4560,4560,6.90,22.4
+SLS55,BSHP,55,SLS: slimline; long; standard height; steel; without ball chain,0.053,0.07,0.199,139000,100000,245000,7780,6990,6990,4410,3960,3960,4.8,16.2
+SLS65,BSHP,65,SLS: slimline; long; standard height; steel; without ball chain,0.063,0.09,0.243,223000,100000,404000,16000,14800,14800,8810,8160,8160,9.8,22.4
+SNH55,BSHP,55,SNH: slimline; normal; high; steel; without ball chain,0.053,0.08,0.159,109000,100000,174000,5550,3690,3690,3480,2320,2320,4.70,16.2
+SLH55,BSHP,55,SLH: slimline; long; high; steel; without ball chain,0.053,0.08,0.199,139000,100000,245000,7780,6990,6990,4410,3960,3960,6.00,16.2

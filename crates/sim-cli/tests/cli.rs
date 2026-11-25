@@ -2384,7 +2384,7 @@ fn search_prices_a_candidate_from_the_users_list_and_says_what_it_lacks() {
         path.to_string_lossy().into_owned()
     };
     let search = |extra: &[&str]| {
-        let mut args = vec!["search", "single-axis", "--series", "1FK2104-5AK"];
+        let mut args = vec!["search", MACHINES[1].id, "--series", "1FK2104-5AK"];
         args.extend_from_slice(extra);
         cli(&args)
     };
@@ -2430,6 +2430,28 @@ fn search_prices_a_candidate_from_the_users_list_and_says_what_it_lacks() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A drive's installation condition derates only a drive named from the catalogue: with the S210 6SL3210-5HE11-5UF0
+/// (5 A rated) at the rated 1000 m `drive-current` is judged against 5 A; with no drive part named the drive is the
+/// config's own by hand, which the condition cannot derate: refused with exit 2, naming the key.
+#[test]
+fn a_drive_condition_on_a_hand_entered_drive_is_refused() {
+    let entry = MACHINES[1];
+    let file = std::env::temp_dir().join(format!("sim-cli-derate-{}.toml", std::process::id()));
+    let text_of = entry.default_config.replacen("[ratings]\n", "[ratings]\ndrive_altitude_m = 1000.0\n", 1);
+    std::fs::write(&file, text_of).unwrap();
+    let config = file.to_str().unwrap();
+    let named =
+        cli(&["verdicts", entry.id, "--config", config, "--motor", "1FK2104-5AK", "--drive", "6SL3210-5HE11-5UF0"]);
+    let table = text(&named.stdout);
+    let row =
+        table.lines().find(|l| l.starts_with("drive-current,")).unwrap_or_else(|| panic!("{}", text(&named.stderr)));
+    assert_eq!(row.split(',').nth(3), Some("5.000"));
+    let hand = cli(&["verdicts", entry.id, "--config", config]);
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(hand.status.code(), Some(2), "{}", text(&hand.stderr));
+    assert!(text(&hand.stderr).contains("ratings.drive_altitude_m"), "{}", text(&hand.stderr));
+}
+
 /// A price list with a duplicate, a negative and a non-numeric price is refused with exit 2, naming the file and the
 /// line of the fault (the notes and blank lines count as lines); so is one without the header.
 #[test]
@@ -2446,7 +2468,7 @@ fn a_faulty_price_list_is_refused_with_file_and_line() {
         let path = dir.join(name);
         std::fs::write(&path, body).unwrap();
         let file = path.to_string_lossy().into_owned();
-        let out = cli(&["search", "single-axis", "--series", "1FK2104-5AK", "--prices", file.as_str()]);
+        let out = cli(&["search", MACHINES[1].id, "--series", "1FK2104-5AK", "--prices", file.as_str()]);
         assert_eq!(out.status.code(), Some(2), "{name}");
         let said_err = text(&out.stderr);
         assert!(said_err.contains(&format!("{file}{line}")) && said_err.contains(said), "{name}: {said_err}");

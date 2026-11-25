@@ -643,7 +643,10 @@ fn sizing(
         return Err(PyValueError::new_err(format!("no supply of the catalogue: {supply:?}, vendor {vendor:?}")));
     }
     let drives: Drives = drives.parse().map_err(|_| PyValueError::new_err(format!("drives: {drives}")))?;
-    let by = parse_ranking(rank_by).ok_or_else(|| PyValueError::new_err(format!("rank_by: {rank_by}")))?;
+    // No price list here: `price` would rank every candidate as unpriced, in the weight order without a word.
+    let by = parse_ranking(rank_by)
+        .filter(|by| by.iter().all(|(c, _)| *c != sim_components::search::Criterion::Price))
+        .ok_or_else(|| PyValueError::new_err(format!("rank_by: {rank_by}")))?;
     let mix: Vec<(sim_core::Config, f64)> =
         duties.unwrap_or_default().iter().map(|(c, w)| Ok((instead(c.cfg.clone())?, *w))).collect::<PyResult<_>>()?;
     if mix.iter().any(|(_, w)| !(*w > 0.0 && w.is_finite())) {

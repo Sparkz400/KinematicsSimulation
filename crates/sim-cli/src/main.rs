@@ -389,6 +389,13 @@ fn machine(args: &Args) -> Result<&'static MachineEntry, Failure> {
 fn machine_and_config(args: &Args) -> Result<(&'static MachineEntry, Config), Failure> {
     let (entry, mut cfg) = named_config(args)?;
     before_parts(args, entry, &mut cfg)?;
+    // Only a catalogue drive is derated; the search puts one in for every candidate. After `before_parts`, which sets
+    // the installation conditions `--set` names.
+    if args.positional(0) != Some("search")
+        && let Some(key) = sim_components::catalog::condition_without_drive(&cfg)
+    {
+        return Err(Failure("error-drive-derating-none", key.to_string()));
+    }
     // Parts by name from the catalogue, here and not only in the simulator, so that single values can be set on top.
     let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
     for assignment in args.options("--set") {
