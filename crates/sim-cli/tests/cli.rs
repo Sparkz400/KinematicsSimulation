@@ -146,6 +146,14 @@ fn config_errors_say_what_was_meant() {
         text(&light.stderr).trim(),
         format!("Configuration value is out of range: {mass} = -5.5 (must be above 0)")
     );
+    // A rating the drive model reads, not the machine: its limit is said all the same.
+    let rating = "ratings.drive_max_current_a";
+    assert!(entry.config().get(rating).is_ok());
+    let unrated = cli(&["verdicts", entry.id, "--set", &format!("{rating}=-1.5")]);
+    assert_eq!(
+        text(&unrated.stderr).trim(),
+        format!("Configuration value is out of range: {rating} = -1.5 (must be above 0)")
+    );
     let many = cli(&["verdicts", entry.id, "--set", &format!("{substeps}=5000")]);
     assert_eq!(text(&many.stderr).trim(), format!("Configuration value is out of range: {substeps} = 5000"));
     let german_low = cli(&["verdicts", entry.id, "--set", &format!("{mass}=-5.5"), "--lang", "de"]);

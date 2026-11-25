@@ -27,9 +27,16 @@ struct Failure(&'static str, String);
 
 impl From<ConfigError> for Failure {
     fn from(e: ConfigError) -> Self {
+        if let ConfigError::Bounded(bound, path) = &e {
+            *BOUNDED.lock().unwrap_or_else(|p| p.into_inner()) = Some((*bound, path.clone()));
+        }
         Failure(e.key(), e.detail().into())
     }
 }
+
+/// The limit and path of the last value a shared reader refused, wherever it was read (the machine, the analyses, the
+/// verdicts), for `config_help`: a `Failure` carries key and path only.
+static BOUNDED: std::sync::Mutex<Option<(Bound, String)>> = std::sync::Mutex::new(None);
 
 impl From<TraceError> for Failure {
     fn from(e: TraceError) -> Self {
@@ -194,10 +201,9 @@ fn config_help(args: &Args, tr: &Translations, key: &str, arg: &str) -> String {
         // The refused one is what the error is about.
         let _ = cfg.set_text(assignment);
     }
-    // The failure carries key and path only; building the machine again from the same config finds the refusal with
-    // the limit it broke, where the machine's own readers refused it (a check made elsewhere keeps the plain value).
-    let error = match (entry.build)(&cfg) {
-        Err(again @ ConfigError::Bounded(..)) if again.detail() == arg => again,
+    // With the limit it broke where a shared reader refused it (a check made elsewhere keeps the plain value).
+    let error = match BOUNDED.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        Some((bound, path)) if key == "error-config-invalid" && path == arg => ConfigError::Bounded(bound, path),
         _ => error,
     };
     match cfg.hint(&error) {
