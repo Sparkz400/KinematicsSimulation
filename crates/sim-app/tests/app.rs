@@ -5057,3 +5057,21 @@ fn parameters_are_filtered_and_the_changed_ones_listed() {
     model.undo();
     assert!(model.changed_params().is_empty());
 }
+
+/// The search tab has no price list: a ranking by `price` (alone or in a mix) would rank every candidate as unpriced, in
+/// the weight order, without a word, so it is refused as a ranking the tab does not know; `cost` runs.
+#[test]
+fn the_search_tab_refuses_a_ranking_by_price_it_has_no_list_for() {
+    use sim_app::search_views::run_search;
+    let entry = sim_machines::MACHINES[1];
+    let model = Model::new(entry, "en");
+    let mut inputs = model.inputs.clone();
+    inputs.series = "1FK2104-5AK".into();
+    for by in ["price", "cost=1,price=1"] {
+        inputs.search.rank_by = by.into();
+        let refused = run_search(entry, &model.config, &inputs).err();
+        assert_eq!(refused, Some(("ui-search-bad-rank", by.to_string())));
+    }
+    inputs.search.rank_by = "cost".into();
+    assert!(run_search(entry, &model.config, &inputs).is_ok());
+}
