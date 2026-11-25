@@ -128,3 +128,21 @@ fn a_rexroth_and_a_hiwin_carriage_of_equal_rating_have_the_same_life() {
     assert!(close(ratio, 2.0 * (28600.0_f64 / 34900.0).powi(3), 1e-9), "{ratio}");
     assert!(close(ratio, 1.1006, 1e-3), "{ratio}");
 }
+
+/// A price list names the guide by its carriage, not by the axis name the search spells: the linear motor axis kept on
+/// four FNS25 carriages ("FNS25x4") buys the 1FN3050-2WC00-0xAx and its paired Motor Module once and four FNS25. At 900
+/// for the motor, 300 for the drive and 50 a carriage: 900 + 300 + 4 x 50 = 1400.
+#[test]
+fn a_kept_guide_set_is_priced_by_its_carriages() {
+    use sim_components::catalog::{Options, PriceList, apply_prices, paired_drive, search};
+    let entry = &machine_joint_kit::LINEAR_MOTOR;
+    let mut cfg = linear_axis();
+    cfg.set_text("parts.axis = \"FNS25x4\"").unwrap();
+    // The parts are what is asked, not the verdicts: a coarse step keeps the cycle short.
+    cfg.set_text("sim.dt_s = 1.0e-3").unwrap();
+    let article = "1FN3050-2WC00-0xAx";
+    let list = format!("part_number,price\n{article},900\n{},300\nFNS25,50\n", paired_drive(article, "s120"));
+    let mut found = search(entry, &cfg, &["s120"], &|a: &str| a == article, &Options::default()).unwrap();
+    assert!(apply_prices(&mut found, &PriceList::parse(&list).unwrap()).is_empty(), "{:?}", found[0].parts);
+    assert_eq!(found[0].price, Some(1400.0), "{:?}", found[0].parts);
+}

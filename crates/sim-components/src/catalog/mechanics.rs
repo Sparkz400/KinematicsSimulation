@@ -354,6 +354,16 @@ pub(super) fn apply_mech_axis(cfg: &mut Config, name: &str) -> Option<Result<(),
     Some(apply())
 }
 
+/// The parts a mechanical axis's name (`apply_mech_axis`) buys, by part number with how many: each screw once, each
+/// guide's carriages. `None` for another name.
+pub(super) fn mech_axis_parts(name: &str) -> Option<Vec<(String, f64)>> {
+    let piece = |part: &str| match screw_row(part) {
+        Some(_) => Some((part.to_string(), 1.0)),
+        None => guide_set(part).map(|(row, count)| (row["part_number"].to_string(), count)),
+    };
+    name.split('+').map(piece).collect()
+}
+
 /// The highest speed and acceleration a config's axes allow ([axis.<id>]): of the axis `id` where it has one, else of
 /// all of them.
 fn axis_limits(cfg: &Config, id: Option<&str>) -> (f64, f64) {

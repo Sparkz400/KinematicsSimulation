@@ -2740,13 +2740,16 @@ fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply:
     };
     let gearbox = gearbox.as_str();
     // What the combination buys, for a price list: every motor's parts, and the axis and belt (a candidate's or the
-    // config's) where every motor is searched.
-    let whole = [or(&job.axis, shared.axis), shared.belt.to_string()].into_iter().filter(|_| job.motor.is_empty());
+    // config's) where every motor is searched; a mechanical axis by its screws and guide carriages.
+    let axis = or(&job.axis, shared.axis);
+    let axis = mechanics::mech_axis_parts(&axis).unwrap_or_else(|| vec![(axis, 1.0)]);
+    let whole = axis.into_iter().chain([(shared.belt.to_string(), 1.0)]).filter(|_| job.motor.is_empty());
     let mut parts: Vec<(String, f64)> = Vec::new();
-    for name in trains.into_iter().flatten().chain(whole).filter(|name| !name.is_empty()) {
-        match parts.iter_mut().find(|(n, _)| *n == name) {
-            Some((_, count)) => *count += 1.0,
-            None => parts.push((name, 1.0)),
+    let each = trains.into_iter().flatten().map(|name| (name, 1.0));
+    for (name, n) in each.chain(whole).filter(|(name, _)| !name.is_empty()) {
+        match parts.iter_mut().find(|(known, _)| *known == name) {
+            Some((_, count)) => *count += n,
+            None => parts.push((name, n)),
         }
     }
     // An unknown mass counts 0 (not NaN, which sorted the row last); `estimated` says so ("gearbox-mass").
