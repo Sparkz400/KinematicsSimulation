@@ -872,7 +872,6 @@ fn changed_params(ui: &mut Ui, model: &Model) {
         return;
     }
     let title = model.tr.tr_arg("ui-param-changed", &changed.len().to_string());
-    ui.separator();
     egui::CollapsingHeader::new(title).id_salt("changed-params").show(ui, |ui| {
         for (path, label, default, now) in changed {
             let was = default.as_ref().map_or_else(|| model.tr.tr("ui-param-no-default").to_string(), value_text);
@@ -880,6 +879,7 @@ fn changed_params(ui: &mut Ui, model: &Model) {
             ui.add(Label::new(row).sense(Sense::hover())).on_hover_text(path);
         }
     });
+    ui.separator();
 }
 
 /// The setup on the left: where the machine goes and how to drive it, which effects are modelled, the parameters,
@@ -957,6 +957,9 @@ pub fn setup(ui: &mut Ui, model: &Model, panels: PanelState, actions: &mut Vec<A
                 actions.push(Action::Inputs(inputs));
             }
             ui.separator();
+            // In a scope of its own, empty or not: its first row comes with the first change of a drag, and drawn straight
+            // into `ui` it changed the ids of the fields below, which ended the drag after one step.
+            ui.push_id("changed-params", |ui| changed_params(ui, model));
             let filter = model.inputs.param_filter.as_str();
             for group in model.param_groups() {
                 let shown: Vec<_> =
@@ -993,9 +996,6 @@ pub fn setup(ui: &mut Ui, model: &Model, panels: PanelState, actions: &mut Vec<A
                     }
                 });
             }
-            // Below the groups: the list grows with the first change of a drag, and above them it moved the field
-            // being dragged from under the pointer, which ended the drag after one step.
-            changed_params(ui, model);
         }
         SetupTab::Config => {
             let mut inputs = model.inputs.clone();
