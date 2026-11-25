@@ -173,6 +173,34 @@ fn a_belt_by_name_is_the_megadyne_row_or_between_two() {
     }
 }
 
+/// Every belt the app's list offers (`belt_names`) is taken as `parts.belt` by a machine with a belt, and gives its row
+/// of `megadyne/belts.csv`: the pitch, the mass per metre, the allowable pull, EA = pull / elongation at it, the width.
+#[test]
+fn every_belt_of_the_list_is_taken_with_its_row() {
+    let entry = &machine_t_gantry::ENTRY;
+    let rows = csv("megadyne/belts.csv");
+    let names = sim_components::catalog::belt_names();
+    assert_eq!(names.len(), rows.len());
+    for (name, row) in names.iter().zip(&rows) {
+        let n = |key: &str| row[key].parse::<f64>().unwrap();
+        let (profile, width) = name.rsplit_once('-').unwrap();
+        assert_eq!(profile, row["profile"]);
+        assert!(close(width.parse().unwrap(), n("width_m") * 1000.0, 1e-12) && !width.contains('.'), "{name}");
+        let mut cfg = exct_30();
+        cfg.set_text(&format!("parts.belt = {name:?}")).unwrap();
+        let r = resolve(entry, &cfg).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        for (path, want) in [
+            ("belt.tooth_pitch_m", n("pitch_m")),
+            ("belt.mass_kg_m", n("mass_kg_m")),
+            ("ratings.belt_max_tension_n", n("max_pull_n")),
+            ("belt.stiffness_ea_n", n("max_pull_n") / n("elongation_at_max_pull")),
+            ("ratings.belt_width_mm", n("width_m") * 1000.0),
+        ] {
+            assert!(close(r.f64(path).unwrap(), want, 1e-12), "{name} {path}: {} against {want}", r.f64(path).unwrap());
+        }
+    }
+}
+
 /// A drive by name sets its rated and maximum output current; the cycle's RMS and peak motor current are judged
 /// against them. By hand: an RMS current of 3.2 A against the 5 A of the S210 converter 6SL3210-5HE11-5UF0 is 0.64
 /// of it, a peak of 12.4 A against its 19 A 0.653; against the 1.2 A and 4.2 A of the smallest one, 6SL3210-5HE10-4UF0,
