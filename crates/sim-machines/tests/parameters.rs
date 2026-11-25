@@ -87,6 +87,20 @@ fn the_notch_becomes_a_current_setpoint_filter_with_the_damping_of_its_bandwidth
     assert_eq!(find(&rows, "a", "notch_bandwidth_hz", "p1659").basis, Basis::Derived);
 }
 
+/// A motor whose notch is at 0 Hz has none (`tune` writes so for a motor without a resonance where another has one):
+/// no notch rows for it, while the other motor keeps its filter's, the damping by hand from the shared values,
+/// bandwidth / (2 f); without the skip the damping's rule divided by 0 Hz and the whole list was refused.
+#[test]
+fn a_motor_with_its_notch_at_zero_hertz_has_no_notch_rows() {
+    let mut cfg = tuned(S120_DRIVE);
+    cfg.set_text("drive.a.notch_frequency_hz = 0.0").unwrap();
+    let rows = list(&machine_t_gantry::ENTRY, &cfg, None).unwrap();
+    assert!(rows.iter().all(|r| !(r.motor == "a" && r.key.starts_with("notch_"))));
+    let (f, bw) = (cfg.f64("drive.notch_frequency_hz").unwrap(), cfg.f64("drive.notch_bandwidth_hz").unwrap());
+    let damping = find(&rows, "b", "notch_bandwidth_hz", "p1659").parameter_value.unwrap();
+    assert!(close(damping, bw / (2.0 * f), 1e-12), "{damping} from {bw} Hz at {f} Hz");
+}
+
 /// A setting whose effect is off in the config was not used by the simulation: no row for the notch, the speed filter or
 /// the ramps then, as the drive would be given numbers nobody tuned.
 #[test]

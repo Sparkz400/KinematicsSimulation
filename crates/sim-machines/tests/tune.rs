@@ -127,8 +127,8 @@ fn tuning_in_a_cancelled_job_ends_with_cancelled() {
     assert_eq!(out.err(), Some(Cancelled));
 }
 
-/// A job cancelled from another thread after three measurements ends with `Cancelled` before its last, and leaves
-/// nothing behind: the margins measured after it, on this thread and on another, are those measured before, to the bit
+/// A job cancelled from another thread once three steps of its progress are done (each measurement's step and the
+/// runs it counts itself) ends with `Cancelled` before the job is through, and leaves nothing behind: the margins measured after it, on this thread and on another, are those measured before, to the bit
 /// (as `analysis_threads::an_analysis_after_a_cancelled_one_gives_what_it_gave_before`).
 #[test]
 fn tuning_cancelled_mid_run_ends_with_cancelled_and_leaves_nothing_behind() {
@@ -148,8 +148,7 @@ fn tuning_cancelled_mid_run_ends_with_cancelled_and_leaves_nothing_behind() {
     let out = with_progress(&job, || velocity_loops(entry, &cfg, &Targets::default()).map(|_| ()));
     watcher.join().unwrap();
     assert_eq!(out.err(), Some(Cancelled));
-    // At least the 1 + 2 bracket steps and the final measurement of an uncancelled run are left undone.
-    assert!(job.done.load(Relaxed) < 6, "{} measurements done", job.done.load(Relaxed));
+    assert!(job.done.load(Relaxed) < job.total.load(Relaxed));
     assert_eq!(format!("{:?}", velocity_loop_margins(entry, &cfg, &[]).unwrap()), before);
     let elsewhere =
         std::thread::scope(|s| s.spawn(|| format!("{:?}", velocity_loop_margins(entry, &cfg, &[]).unwrap())).join());

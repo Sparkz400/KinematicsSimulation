@@ -180,7 +180,7 @@ fn set_adds_the_keys_a_config_file_may_have() {
     let (before, after) = (crossovers(&[]), crossovers(&["--set", &own]));
     assert!(after[0] / before[0] > 1.1 && (after[1] / before[1] - 1.0).abs() < 0.01, "{before:?} -> {after:?}");
 
-    let one = MACHINES.iter().copied().find(|e| e.id == "single-axis").unwrap();
+    let one = one_belt_axis();
     let derated = |set: &[&str]| {
         let args = [&["verdicts", one.id, "--motor", "1FK2205-4AF", "--drive", "6SL3210-5HE11-5UF0"][..], set];
         let out = cli(&args.concat());
@@ -2516,8 +2516,8 @@ fn help_prints_the_commands_one_to_a_line_and_the_options_of_one() {
 /// differs from `tuning`, in both languages.
 #[test]
 fn tune_exits_1_where_its_targets_are_not_met() {
-    let out =
-        cli(&["tune", "single-axis", "--set", "cycle.segment=[]", "--phase-margin", "179", "--gain-margin", "80"]);
+    let id = one_belt_axis().id;
+    let out = cli(&["tune", id, "--set", "cycle.segment=[]", "--phase-margin", "179", "--gain-margin", "80"]);
     assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
     let rows = text(&out.stdout);
     assert!(rows.starts_with("motor,key,before,after,") && rows.contains("drive.velocity_kp_nm_s_rad"), "{rows}");

@@ -387,19 +387,25 @@ fn machine(args: &Args) -> Result<&'static MachineEntry, Failure> {
 /// `--set path=value` applied on top.
 fn machine_and_config(args: &Args) -> Result<(&'static MachineEntry, Config), Failure> {
     let (entry, mut cfg) = named_config(args)?;
-    // A drive's installation conditions are read where its part is put in (it is derated there): set before that.
-    for assignment in args.options("--set") {
-        let path = assignment.split('=').next().unwrap_or("").trim();
-        if sim_components::catalog::DRIVE_CONDITION_KEYS.contains(&path) {
-            sim_components::set_config_text(entry, &mut cfg, assignment)?;
-        }
-    }
+    before_parts(args, entry, &mut cfg)?;
     // Parts by name from the catalogue, here and not only in the simulator, so that single values can be set on top.
     let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
     for assignment in args.options("--set") {
         sim_components::set_config_text(entry, &mut cfg, assignment)?;
     }
     Ok((entry, cfg))
+}
+
+/// The `--set` assignments of a drive's installation conditions, which are read where its part is put in (it is derated
+/// there): set before the parts are resolved, as the others are after.
+fn before_parts(args: &Args, entry: &MachineEntry, cfg: &mut Config) -> Result<(), Failure> {
+    for assignment in args.options("--set") {
+        let path = assignment.split('=').next().unwrap_or("").trim();
+        if sim_components::catalog::DRIVE_CONDITION_KEYS.contains(&path) {
+            sim_components::set_config_text(entry, cfg, assignment)?;
+        }
+    }
+    Ok(())
 }
 
 /// The machine and its config with the parts the command line names in `[parts]`, before they are resolved.
@@ -1362,6 +1368,7 @@ fn duties(args: &Args, entry: &'static MachineEntry) -> Result<Vec<(Config, f64)
                 cfg.set_text(&format!("parts.{key} = {name:?}"))?;
             }
         }
+        before_parts(args, entry, &mut cfg)?;
         let mut cfg = sim_components::catalog::resolve(entry, &cfg)?;
         for assignment in args.options("--set") {
             sim_components::set_config_text(entry, &mut cfg, assignment)?;

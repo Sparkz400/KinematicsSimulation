@@ -97,7 +97,7 @@ cli-help-brief-sensitivity = Reiht die Parameter danach, wie stark sie die Ergeb
 cli-help-brief-step = Sprungantwort des Lageregelkreises einer Achse.
 cli-help-brief-bode = Frequenzgang des geschlossenen Lageregelkreises einer Achse.
 cli-help-brief-tuning = Eine Zeile je Achse: Anstiegszeit, Überschwingen, Ausregelzeit, Bandbreite.
-cli-help-brief-tune = Findet je Motor die größte Geschwindigkeitsverstärkung, die die Reserven hält (anders als tuning, das nur einen Sprung misst).
+cli-help-brief-tune = Größte Drehzahlverstärkung je Motor, die die Reserven hält (tuning misst nur einen Sprung).
 cli-help-brief-margins =Stabilitätsreserven des Drehzahlregelkreises jedes Motors.
 cli-help-brief-modes = Die Resonanzen der Maschine über den Hub einer Achse.
 cli-help-brief-workspace = Ein Schnitt der Arbeitsraumkarte: Erreichbarkeit, Konditionszahl, Beschleunigung.
@@ -110,7 +110,7 @@ cli-help-brief-stop = Hält die Maschine zu Zeitpunkten des Zyklus an und findet
 cli-help-brief-accuracy = Statische Positioniergenauigkeit und Wiederholgenauigkeit (ISO 230-2, ISO 9283).
 cli-help-brief-report = Schreibt den Auslegungsbericht mit jedem Urteil, als HTML oder PDF.
 cli-help-brief-fmu = Schreibt die Maschine als FMU für die Co-Simulation.
-cli-help-brief-parameters = Listet die Antriebsparameter (Nummer, Name, Einheit) für die ausgelegten Einstellungen jedes Motors.
+cli-help-brief-parameters = Listet je Motor die Antriebsparameter (Nummer, Name, Einheit) für seine ausgelegten Einstellungen.
 
 cli-help-list-1 = sim-cli list [--lang en|de]
 cli-help-run-1 = sim-cli run MASCHINE [OPTIONEN]
