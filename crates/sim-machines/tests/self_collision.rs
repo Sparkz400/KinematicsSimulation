@@ -44,9 +44,31 @@ fn a_scara_folded_over_its_column_is_reported_with_the_two_parts_and_opened_it_p
     assert!(!opened.own_fails(0.01), "{own:?}");
 }
 
+/// The same SCARA on a compliant base (effects.base_compliance: the arm wrapped in the base's model, `base::Based`)
+/// keeps its links and their joints: folded back it names the flange box and the column at -5 mm, as the bare arm does
+/// (the base tilts under the arm's weight and the box keeps its axes while the column's capsule leans: 1.2 um more,
+/// within 10 um). Fails if the wrapper does not forward
+/// `self_collision_capsules` and `connected_bodies`.
+#[test]
+fn a_scara_on_a_compliant_base_keeps_its_links() {
+    let entry = find("scara").unwrap();
+    let mut cfg = entry.config();
+    cfg.set_text("effects.base_compliance = true").unwrap();
+    let mut machine = (entry.build)(&cfg).unwrap();
+    machine.set_payload_attached(false);
+    let path = [vec![0.0, 0.5, 0.1, 0.0], vec![0.0, std::f64::consts::PI, 0.1, 0.0]];
+    let mut folded = PlanCheck::keeping(0.01);
+    check_path(machine.as_ref(), &[], &path, &mut folded);
+    let own = folded.own.expect("the SCARA on its base has parts to check");
+    assert_eq!(own.bodies, [Body::Box(0), Body::Capsule(0)], "{own:?}");
+    assert!((own.clearance + 0.005).abs() < 1e-5, "{own:?}");
+}
+
 /// The mover track's six movers (default.toml, six boxes of 0.06 x 0.06 x 0.05 m, payload off) stand 0.5 m apart along
-/// the loop; none of the boxes touches another at the start, so none is joined. Mover 2 driven from s = 0.628 to 0.125, where mover 1 stands, meets the same box:
-/// identical boxes overlap by their least size, 0.05 m in z, so -0.05 m, between boxes 0 and 1, at the last pose.
+/// the loop; none of the boxes touches another at the start, so none is joined. Mover 2 driven from s = 0.628 to 0.125,
+/// where mover 1 stands, runs into its box: the overlap is the least of the two boxes' overlaps along each axis
+/// (`Aabb::gap`), 0.05 m in z once the 0.06 m along the track overlap by 0.05 or more, from 0.01 m short of mover 1,
+/// s = 0.135: -0.05 m between boxes 0 and 1, first at the last sample (1 mm apart) up to s = 0.135.
 #[test]
 fn two_movers_brought_to_the_same_place_are_reported() {
     let entry = find("mover-track").unwrap();
@@ -59,7 +81,7 @@ fn two_movers_brought_to_the_same_place_are_reported() {
     check_path(machine.as_ref(), &[], &[start.clone(), together.clone()], &mut check);
     let own = check.own.clone().expect("six boxes to check");
     assert_eq!(own.bodies, [Body::Box(0), Body::Box(1)], "{own:?}");
-    assert!((own.clearance + 0.05).abs() < 1e-9 && (own.pose[1] - together[1]).abs() < 1e-9, "{own:?}");
+    assert!((own.clearance + 0.05).abs() < 1e-9 && (0.134..=0.135 + 1e-9).contains(&own.pose[1]), "{own:?}");
     assert!(check.own_fails(0.0));
 
     // The start pose alone keeps them apart.
