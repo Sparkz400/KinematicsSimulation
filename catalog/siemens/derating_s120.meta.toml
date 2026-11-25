@@ -1,0 +1,56 @@
+schema_version = 1
+class = "drive"
+table = "derating"
+key = ["part_number", "quantity", "altitude_m", "ambient_c", "pulse_frequency_hz"]
+default_source = "d21-4n"
+notes = '''
+Sources: Siemens, Catalog News D 21.4 N, SINAMICS S120 and SIMOTICS, October 2017, chapter 7, "Technical specifications" of
+the Single Motor Modules (derating rules page 7/8 and 7/14, curves on page 7/14) and of the Double Motor Modules (page
+7/23); and Siemens, SINAMICS S120 Power Units in Booksize C/D-Type Format, Manual, 01/2017, 6SL3097-4AC20-0BP1, printed
+page 36 (installation altitude, ambient temperature) and page 65, Fig. 3-20 (pulse frequency; a picture, read by eye).
+Typed in from the documents, figures only; the layout is ours. The rows hold for the booksize Motor Modules of
+motor_modules_s120.csv, as the documents state them for the whole family.
+quantity altitude: output_current_factor of the rated current by installation altitude. The documents give a rule, not
+  a table: up to 1000 m none, above 1000 m up to 4000 m a reduction of the output current by 10 % per 1000 m. The rows
+  at 2000, 3000 and 4000 m are that rule worked out (basis rule). Siemens offers as the alternative a reduction of the
+  ambient temperature by 5 K per 1000 m instead of the current; the simulator implements the current reduction only. The
+  C/D-type manual's table prints, besides the 5 K per 1000 m, "3.5 K per 500 m" (7 K per 1000 m) in the same row; the
+  two disagree and the question is open. Above 2000 m the line supply needs a grounded neutral point or an isolating
+  transformer.
+quantity ambient: no derating up to 40 degC, above that, up to 55 degC, a reduction of the output current by 2.67 % per K
+  (C/D-type manual page 36); the points at 45, 50 and 55 degC are that rule worked out and rounded to three digits
+  (0.8665, 0.7330, 0.5995 exactly). The curves of D 21.4 N (pages 7/14, 7/23) run as a straight line from 100 % at 40 degC
+  to about 60 % at 55 degC (measured 60.6 %).
+quantity pulse_frequency: output_current_factor by the pulse frequency, which is 4 kHz as rated. The curve is by module
+  group, not by rated current. The rows without a part_number: Single Motor Modules 3 A to 132 A and the Double Motor
+  Modules, 100 % up to 4 kHz, 60 % at 8 kHz, 40 % at 12 kHz, 30 % at 16 kHz. The rows of 6SL3120-1TE32-0AA4 (the 200 A
+  Single Motor Module): 100 % up to 4 kHz, a straight line to 40 % at 12 kHz (so 70 % at 8 kHz, which is not a vertex
+  of the curve and not a row here), 30 % at 16 kHz. A part with rows of its own uses them alone. Vertices read from the
+  vector graphics of D 21.4 N, error about 0.5 %.
+quantity ambient_limit: at a pulse frequency of 16 kHz the ambient temperature must not exceed ambient_c, 45 degC
+  (C/D-type manual page 65). No output_current_factor.
+basis: rule = the document states a rule and the row is worked out from it; curve = a vertex of a printed curve;
+  text = a statement in words.
+Not stated by Siemens: whether the three derating factors multiply (the documents say only that the current derating by
+  pulse frequency and by ambient temperature must be taken into account, and that altitude and ambient temperature are
+  alternatives); the simulator multiplies them, an assumption on the safe side. And whether the derating applies to the
+  maximum output current as well as to the rated one; the simulator leaves the maximum current as it is.
+Not used: the equipment manual GH2 of 12/2004 (the figures in its text are garbled; it only confirms 4 kHz without
+  derating and 16 kHz as the highest pulse frequency).
+'''
+
+[[sources]]
+id = "d21-4n"
+document = "Siemens, Catalog News D 21.4 N, SINAMICS S120 and SIMOTICS"
+date = "2017-10"
+locator = "chapter 7, pages 7/8, 7/14 (Single Motor Modules, derating data and curves), 7/23 (Double Motor Modules)"
+method = "manual: typed in from the derating rules and the curves of the catalogue, figures only"
+url = "https://cache.industry.siemens.com/dl/files/875/109751875/att_934896/v1/motion-control-drives-D21-4-N-complete-English-2017-10.pdf"
+
+[[sources]]
+id = "cd"
+document = "Siemens, SINAMICS S120 Power Units in Booksize C/D-Type Format, Manual, 6SL3097-4AC20-0BP1"
+date = "2017-01"
+locator = "printed page 36 (altitude, ambient), page 65 Fig. 3-20 (pulse frequency, 16 kHz at 45 degC at most)"
+method = "manual: typed in from the manual's text, figures only"
+url = "https://cache.industry.siemens.com/dl/files/808/109744808/att_909444/v1/s120_booksize_cd_type_equip_man_0117_en-US.pdf"

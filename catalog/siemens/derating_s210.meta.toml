@@ -1,0 +1,36 @@
+schema_version = 1
+class = "drive"
+table = "derating"
+key = ["part_number", "quantity", "altitude_m", "ambient_c", "pulse_frequency_hz"]
+default_source = "s210oi"
+notes = '''
+Source: Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, 09/2022, A5E41702836B AL,
+Table 12-9 "Maximum permissible output current depending on the installation altitude and ambient temperature" (printed
+page 517), and section 12.2.5 (printed page 518) for the pulse frequency. Typed in from the document; the numbers are
+Siemens', the layout is ours. Catalogue D 32 (January 2024, page 2/10) states the same rule in words: up to 1000 m without
+derating, from 1000 m a derating of 10 % of the current or 5 K per 1000 m, at most 4000 m (CSA: 2000 m), and that the
+technical data hold for all S210 servo converters; so the rows hold for every article of converters_s210.csv, the
+6SL3210-5H.. and the 6SL5310-1B.. ones.
+quantity altitude_ambient: output_current_factor is the share of the rated output current (and of the base load current)
+  the converter gives at an installation altitude of up to altitude_m and an ambient temperature of ambient_c (the air
+  around the converter). The table reads "output current in %"; whether it applies to the maximum output current as well
+  Siemens does not say. The ambient range is 0 ... 50 degC, the altitude at most 4000 m.
+quantity pulse_frequency: the pulse frequency is fixed at 8 kHz ("Pulse frequency 8 kHz"); there is no setting and no
+  derating by it. One row, its factor 1.
+basis: table = a cell of Table 12-9 as the text of the PDF reads. inferred = the PDF's text layer merges cells there (the
+  1000 m row shows one "100"; at 2000 m the 45 degC cell is empty between the 50 degC cell "90" and "100"): read as
+  100 % from the layout and from the rule "10 % per 1000 m or 5 K per 1000 m". The page was not rendered, so the two
+  places (the 1000 m row, and 2000 m at 45 degC) stay marked until someone checks them against the printed table.
+part_number is empty: every row holds for every S210 converter.
+The rated currents of converters_s210.csv hold at 40 degC and up to 1000 m (the 100 % column of the table at 2000 and
+  3000 m is the 40 degC one); Siemens does not state the reference temperature of the rated currents in so many words.
+Not stated by Siemens: how the table combines with any other derating, and the maximum output current under it.
+'''
+
+[[sources]]
+id = "s210oi"
+document = "Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, A5E41702836B AL"
+date = "2022-09"
+locator = "Table 12-9 (printed p.517); 12.2.5 pulse frequency (printed p.518); D 32 2024-01 p.2/10"
+method = "manual: typed in from Table 12-9 of the operating instructions, figures only"
+url = "https://cache.industry.siemens.com/dl/files/184/109801184/att_1118289/v1/S210_S-1FK2_S-1FT2_op_instr_0922_en-US.pdf"

@@ -224,6 +224,151 @@ fn a_drive_by_name_judges_the_motor_current_at_the_hand_calculated_share() {
     );
 }
 
+/// The EXCT-30 config with installation conditions of the drive added to its `[ratings]` (keys a config file may add).
+fn with_conditions(conditions: &str) -> Config {
+    let text = machine_t_gantry::EXCT_30_CONFIG.replacen("\n[ratings]\n", &format!("\n[ratings]\n{conditions}\n"), 1);
+    Config::parse(&text).unwrap()
+}
+
+/// The rated, base load and maximum current a drive by name gives under the conditions.
+fn drive_currents(conditions: &str, article: &str, supply: &str) -> Result<(f64, f64, f64), sim_core::ConfigError> {
+    let mut cfg = with_conditions(conditions);
+    apply_drive(&mut cfg, article, supply)?;
+    let get = |key: &str| cfg.f64(key).unwrap();
+    Ok((
+        get("ratings.drive_rated_current_a"),
+        get("ratings.drive_base_load_current_a"),
+        get("ratings.drive_max_current_a"),
+    ))
+}
+
+/// Derating of an S210 converter by Table 12-9 of its operating instructions. 6SL3210-5HE11-5UF0: 5 A rated, 4.25 A base
+/// load (0.85), 19 A maximum. At 45 degC and 3000 m the table says 90 %: 4.5 A and 4.25 x 0.9 = 3.825 A, the maximum stays
+/// 19 A. Interpolated, at 2500 m and 47.5 degC: at 45 degC 1.0 at 2000 m and 0.9 at 3000 m give 0.95, at 50 degC 0.9 and
+/// 0.8 give 0.85, half way between those 0.90, so 4.5 A again. Altitude at the first point (1000 m) and 40 degC, the
+/// rated condition, change nothing, bit for bit.
+#[test]
+fn an_s210_converter_is_derated_by_altitude_and_ambient_as_its_table_says() {
+    let article = "6SL3210-5HE11-5UF0";
+    let rated = drive_currents("", article, "400v").unwrap();
+    assert_eq!(rated, (5.0, 4.25, 19.0));
+    assert_eq!(
+        drive_currents(
+            "drive_ambient_c = 40.0\ndrive_altitude_m = 1000.0\ndrive_pulse_frequency_hz = 8000.0",
+            article,
+            "400v"
+        ),
+        Ok(rated)
+    );
+    let (current, base, max) =
+        drive_currents("drive_ambient_c = 45.0\ndrive_altitude_m = 3000.0", article, "400v").unwrap();
+    assert!(close(current, 4.5, 1e-12) && close(base, 3.825, 1e-12) && max == 19.0, "{current} {base} {max}");
+    let (current, base, _) =
+        drive_currents("drive_ambient_c = 47.5\ndrive_altitude_m = 2500.0", article, "400v").unwrap();
+    assert!(close(current, 4.5, 1e-12) && close(base, 3.825, 1e-12), "{current} {base}");
+    // Below the table's lowest temperature the 40 degC column holds; 3000 m at 40 degC is 100 %, 4000 m 90 %.
+    assert_eq!(drive_currents("drive_ambient_c = 20.0\ndrive_altitude_m = 3000.0", article, "400v").unwrap().0, 5.0);
+    assert!(close(drive_currents("drive_altitude_m = 4000.0", article, "400v").unwrap().0, 4.5, 1e-12));
+    // Outside what the document allows: refused, naming the key. The pulse frequency is fixed at 8 kHz.
+    for (conditions, key) in [
+        ("drive_altitude_m = 4001.0", "ratings.drive_altitude_m"),
+        ("drive_ambient_c = 50.5", "ratings.drive_ambient_c"),
+        ("drive_ambient_c = -1.0", "ratings.drive_ambient_c"),
+        ("drive_pulse_frequency_hz = 4000.0", "ratings.drive_pulse_frequency_hz"),
+    ] {
+        let error = drive_currents(conditions, article, "400v").unwrap_err();
+        assert_eq!((error.key(), error.detail()), ("error-drive-derating-range", key), "{conditions}");
+    }
+}
+
+/// Derating of an S120 booksize Motor Module: altitude, ambient temperature and pulse frequency, multiplied. 6SL3120-1TE15-0AD0:
+/// 5 A rated, 4.3 A base load, 15 A maximum. At 2000 m (0.9, 10 % per 1000 m above 1000 m), 45 degC (0.867, 2.67 % per K above
+/// 40 degC) and 8 kHz (0.6, the curve of the 3 to 132 A modules): 0.9 x 0.867 x 0.6 = 0.46818, so 2.3409 A and
+/// 4.3 x 0.46818 = 2.013174 A; the maximum stays 15 A. The 200 A module 6SL3120-1TE32-0AA4 has a curve of its own, a straight
+/// line from 1 at 4 kHz to 0.4 at 12 kHz: 0.7 at 8 kHz, so 140 A and 141 x 0.7 = 98.7 A; at 16 kHz the factor is 0.3 and the
+/// ambient may not exceed 45 degC (0.867 there: 200 x 0.3 x 0.867 = 52.02 A).
+#[test]
+fn an_s120_motor_module_is_derated_by_the_product_of_altitude_ambient_and_pulse_frequency() {
+    let small = "6SL3120-1TE15-0AD0";
+    let rated = drive_currents("", small, "s120").unwrap();
+    assert_eq!(rated, (5.0, 4.3, 15.0));
+    assert_eq!(
+        drive_currents(
+            "drive_ambient_c = 40.0\ndrive_altitude_m = 1000.0\ndrive_pulse_frequency_hz = 4000.0",
+            small,
+            "s120"
+        ),
+        Ok(rated)
+    );
+    let all = "drive_ambient_c = 45.0\ndrive_altitude_m = 2000.0\ndrive_pulse_frequency_hz = 8000.0";
+    let (current, base, max) = drive_currents(all, small, "s120").unwrap();
+    assert!(close(current, 2.3409, 1e-12) && close(base, 2.013174, 1e-12) && max == 15.0, "{current} {base} {max}");
+    // Each factor on its own: the altitude 0.9, the ambient temperature 0.867, the pulse frequency 0.6.
+    assert!(close(drive_currents("drive_altitude_m = 2000.0", small, "s120").unwrap().0, 4.5, 1e-12));
+    assert!(close(drive_currents("drive_ambient_c = 45.0", small, "s120").unwrap().0, 4.335, 1e-12));
+    assert!(close(drive_currents("drive_pulse_frequency_hz = 8000.0", small, "s120").unwrap().0, 3.0, 1e-12));
+    // Half way between 40 and 45 degC: 0.9335.
+    assert!(close(drive_currents("drive_ambient_c = 42.5", small, "s120").unwrap().0, 5.0 * 0.9335, 1e-12));
+
+    let big = "6SL3120-1TE32-0AA4";
+    let (current, base, _) = drive_currents("drive_pulse_frequency_hz = 8000.0", big, "s120").unwrap();
+    assert!(close(current, 140.0, 1e-12) && close(base, 98.7, 1e-12), "{current} {base}");
+    let (current, _, _) =
+        drive_currents("drive_pulse_frequency_hz = 16000.0\ndrive_ambient_c = 45.0", big, "s120").unwrap();
+    assert!(close(current, 52.02, 1e-12), "{current}");
+
+    for (conditions, key) in [
+        ("drive_altitude_m = 4001.0", "ratings.drive_altitude_m"),
+        ("drive_ambient_c = 55.5", "ratings.drive_ambient_c"),
+        ("drive_pulse_frequency_hz = 16001.0", "ratings.drive_pulse_frequency_hz"),
+        ("drive_pulse_frequency_hz = 0.0", "ratings.drive_pulse_frequency_hz"),
+        ("drive_pulse_frequency_hz = 16000.0\ndrive_ambient_c = 46.0", "ratings.drive_ambient_c"),
+    ] {
+        let error = drive_currents(conditions, small, "s120").unwrap_err();
+        assert_eq!((error.key(), error.detail()), ("error-drive-derating-range", key), "{conditions}");
+    }
+}
+
+/// A drive of another maker states no derating in the catalogue: with an installation condition given it is refused,
+/// naming the key, and without one it is as before. And a derated drive fails the check it passed at rated conditions:
+/// an RMS motor current of 4.8 A is 0.96 of the 5 A of 6SL3210-5HE11-5UF0 and passes `drive-current`; at 45 degC and 3000 m
+/// the limit is 4.5 A and the same current is 1.067 of it.
+#[test]
+fn a_drive_without_derating_refuses_conditions_and_a_derated_one_fails_the_cycle_it_passed() {
+    let mut cfg = with_conditions("drive_altitude_m = 2000.0");
+    let error = apply_drive(&mut cfg, "AKD-x00307", "kollmorgen-400v").unwrap_err();
+    assert_eq!((error.key(), error.detail()), ("error-drive-derating-none", "ratings.drive_altitude_m"));
+    let mut plain = exct_30();
+    apply_drive(&mut plain, "AKD-x00307", "kollmorgen-400v").unwrap();
+
+    let entry = &machine_t_gantry::ENTRY;
+    let judge = |conditions: &str| {
+        let resolved = resolve(entry, &with_conditions(conditions)).unwrap();
+        let mut load =
+            sim_components::analysis::analyse_cycle(&mut sim_components::Sim::new(entry, &resolved).unwrap()).unwrap();
+        load.motors[0].rms_current = 4.8;
+        let judged = sim_components::analysis::verdicts(&resolved, &load).unwrap();
+        judged.into_iter().find(|v| v.check == "drive-current" && v.motor == Some(0)).unwrap()
+    };
+    let rated = judge("");
+    assert!(rated.ok && close(rated.limit, 5.0, 1e-12));
+    let derated = judge("drive_ambient_c = 45.0\ndrive_altitude_m = 3000.0");
+    assert!(!derated.ok && close(derated.limit, 4.5, 1e-12) && close(derated.value / derated.limit, 4.8 / 4.5, 1e-12));
+}
+
+/// The search names a derated drive among what it estimates (Siemens states no combination and no maximum current under
+/// derating), and no other: at rated conditions the list is as before.
+#[test]
+fn a_search_flags_a_derated_drive_as_estimated() {
+    use sim_components::catalog::estimated_derating;
+    assert!(estimated_derating(&with_conditions(""), "6SL3210-5HE11-5UF0").is_empty());
+    assert!(estimated_derating(&with_conditions("drive_ambient_c = 40.0"), "6SL3210-5HE11-5UF0").is_empty());
+    assert_eq!(
+        estimated_derating(&with_conditions("drive_altitude_m = 3000.0\ndrive_ambient_c = 45.0"), "6SL3210-5HE11-5UF0"),
+        ["drive-derating"]
+    );
+}
+
 /// A drive by name brings its DC link data where Siemens publishes it. The S210's internal braking resistor and trip level
 /// from its operating instructions (Table 4-4, fault F07432): the EXCT-30's 6SL3210-5HE11-5UF0 has 100 W and 5.7 kW and
 /// trips at 820 V; its chopper threshold, which Siemens does not publish, stays the config's 770 V. A 1 AC converter,

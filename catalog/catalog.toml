@@ -49,6 +49,8 @@ tables = [
     "siemens/converters_s210.csv",
     "siemens/dc_link_measured.csv",
     "siemens/dc_link_trip_s120.csv",
+    "siemens/derating_s120.csv",
+    "siemens/derating_s210.csv",
     "siemens/dynamic_braking_1fk2.csv",
     "siemens/encoders_1fk2_1ft2.csv",
     "siemens/gearbox_mass.csv",
