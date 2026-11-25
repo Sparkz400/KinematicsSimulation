@@ -1069,7 +1069,7 @@ fn the_cycle_is_analysed_and_judged_in_the_app(entry: &'static MachineEntry) {
     model.run_analysis(Analysis::Cycle);
     wait_for_jobs(&mut model);
     // So weak a winding heats without end on most machines: its rise is infinite, which the app names
-    // (`verdict-not-finite`; `sim-cli verdicts delta-d2` with both currents at 0.02 A prints motor-thermal inf).
+    // (`verdict-not-finite`; `sim-cli verdicts` of the planar delta with both currents at 0.02 A prints motor-thermal inf).
     let noted =
         |m: &(&str, String)| m.0.starts_with("limit-") || m.0 == "ui-analysis-tripped" || m.0 == "verdict-not-finite";
     assert!(model.messages.iter().all(noted), "{}: {:?}", entry.id, model.messages);
