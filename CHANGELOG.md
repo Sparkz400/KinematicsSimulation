@@ -7,6 +7,58 @@ item are in [PROGRESS.md](docs/development/PROGRESS.md).
 
 ## [Unreleased]
 
+### Changed
+
+- `sim-cli` exits with 1 when a judged row fails (`verdicts`, also with `--bands` and `--worst`, `margins`, `stop`,
+  `accuracy`, `report`); 0 when all pass; 2 stays for usage and config errors. The table is printed in full first.
+  Scripts that read the exit code of these commands as "ran through" must accept 1: the overhead crane's shipped
+  config fails one check (its input shaper is off by default), and seven machines fail a worst case under `--bands`.
+- The MCP server refuses a config value that names a file (a key ending in `_file`, such as `arm.urdf_file` or a cam's
+  `table_file`) unless it is empty, the machine's built-in value, or a file of at most 5 MB inside the folder the
+  operator names in `KINEMATICS_SIM_MCP_IN_DIR`; the refusal does not tell whether the file exists. TOML text the
+  server's own parser cannot read is refused before the core reads it; on Python 3.10, which has no TOML parser of
+  its own, any TOML text that holds `_file` or an escape is refused.
+- The optimiser's refusal of a cycle that fails as configured has a message of its own ("The cycle as configured
+  already fails: ..."), no longer "Configuration value is out of range".
+- The web page's plain wheel scrolls the page; Ctrl + wheel (or a trackpad pinch) zooms the 3D view and the plots. On
+  touch a vertical swipe scrolls past the view.
+- The app's window title is "Kinematics Simulation"; its speed slider goes up to 10.
+
+### Added
+
+- A result that is not finite (an unstable loop, or a winding that heats without end) is named: `sim-cli` says so on
+  the error stream after `verdicts`, `stop` and `accuracy`, with a pointer to `sim-cli margins`; the app says it once
+  per analysis.
+- `sim-cli --version` and `-V`; `sim-cli help`, `help COMMAND` and `COMMAND --help` (one command to a line, a command's
+  options, the topics `options`, `paths`, `units`); a usage error names the command's help in one line.
+- Config errors at the command line name the nearest key of a misspelt one and show the value that is out of range
+  (not yet the range it must lie in).
+- Long analyses can be watched and stopped: `Progress`, `with_progress` and `Cancelled` in `sim_components::analysis`
+  (every batch of runs counts into the job and stops taking runs once it is cancelled; a run already started is
+  finished), `Job` and `Cancelled` in the Python module, a progress bar and a Cancel button for the app's long
+  computations (checks with bands, sensitivity, optimiser, tuning, report, band traces, motor search, kinematics
+  comparison). Switching the machine or opening another file stops the jobs under way.
+- MCP server: a call given up at its timeout or cancelled by the client stops computing; its progress notices carry
+  the time used of the timeout and the runs done of those planned; a panic of the core is an error of the tool, not
+  the end of the server; at most 32 sessions (the least recently used is dropped) and limits on `runs`, `points` and
+  `repeats`; `loop_margins` takes `top` and orders its rows worst first.
+- App: messages at the top of the left panel on every tab; undo and redo of config edits (Ctrl+Z, Ctrl+Y), a
+  "modified" mark and a Save / Discard / Cancel question before a machine switch or closing the window drops edits;
+  language, theme, units, speed and the last config file are remembered between starts (`settings.toml` in the
+  user's config folder, `SIM_APP_SETTINGS` for another file); the Parameters tab has a filter, the config path on
+  hover, a list of the values changed from the default and catalogue drop-downs for motor, supply, gearbox, drive
+  and axis.
+- Web page: Shift + drag or a right or middle drag pans, a double click or "Fit" fits the view again, "+" and "−"
+  zoom; on touch a sideways swipe turns the machine and two fingers pinch and pan.
+
+### Fixed
+
+- `--catalog DIR` refuses a table with a missing column or a short row, naming the file and the column or line; such
+  a table made the program panic later. A blank line in a table is passed over.
+- A machine file loaded again (a Python sweep, an FMU made in a loop, the CLI's second load) is the same entry, and a
+  refused file leaves nothing behind; each load leaked an entry before.
+- MCP server: `loop_margins` could cut off its worst row at the cap of 25.
+
 ## [1.1.0] - 2026-11-22
 
 ### Physics audit (21 and 22 November)
