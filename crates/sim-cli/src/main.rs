@@ -62,8 +62,18 @@ const COMMON: [&str; 12] = [
     "--lang",
 ];
 /// Options without a value.
-const FLAGS: [&str; 9] =
-    ["--cycle", "--time-optimal", "--bands", "--worst", "--axes", "--nominal", "--stiffness", "--shapes", "--help"];
+const FLAGS: [&str; 10] = [
+    "--cycle",
+    "--time-optimal",
+    "--bands",
+    "--worst",
+    "--axes",
+    "--nominal",
+    "--stiffness",
+    "--shapes",
+    "--no-notch",
+    "--help",
+];
 /// The ways to say what the machine should do: one at most.
 const MOTIONS: [&str; 4] = ["--cycle", "--move", "--trajectory", "--path"];
 
@@ -274,6 +284,7 @@ fn command_options(command: Option<&str>) -> &'static [&'static str] {
         Some("bode") => &["--axis-index", "--from", "--to", "--count", "--amplitude"],
         Some("tuning") => &["--size", "--amplitude"],
         Some("margins") => &["--bands"],
+        Some("tune") => &["--phase-margin", "--gain-margin", "--no-notch"],
         Some("modes") => &["--axis-index", "--points", "--shapes"],
         Some("workspace") => &["--z", "--points"],
         Some("replay") => &["--trace", "--map", "--tolerance"],
@@ -339,6 +350,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("bode") => bode(args),
         Some("tuning") => tuning(args),
         Some("margins") => margins(args, tr),
+        Some("tune") => tune(args, tr),
         Some("modes") => modes(args),
         Some("workspace") => workspace(args),
         Some("replay") => replay(args, tr),
@@ -2124,6 +2136,64 @@ fn margins(args: &Args, tr: &Translations) -> Result<(), Failure> {
         .collect();
         eprintln!("{}: {}", tr.tr(motor.key), tr.tr_arg("loop-least-over-poses", &found.join(", ")));
     }
+    out.flush().map_err(io)
+}
+
+/// `tune <machine> [--phase-margin DEG] [--gain-margin DB] [--no-notch]`: per motor the largest velocity gain at which
+/// the least phase and gain margin over the cycle's poses meet the targets (35 degrees and 6 dB by default), with Tn and
+/// Kv following (`tune::velocity_loops`). One row per key (motor, key, before, after) with the least margins over the
+/// poses before and after, each with its pose; a row of a motor whose targets are not met says FAIL (exit code 1). On
+/// stderr: what the tuning did beyond the gain (a notch, a gain lowered by the joint check) and the `--set` words that
+/// make the tuned config. Nothing is written to a file.
+fn tune(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    let (entry, cfg) = machine_and_config(args)?;
+    let defaults = sim_components::tune::Targets::default();
+    let targets = sim_components::tune::Targets {
+        phase_margin_deg: number(args, "--phase-margin", defaults.phase_margin_deg)?,
+        gain_margin_db: number(args, "--gain-margin", defaults.gain_margin_db)?,
+        notch: !args.flag("--no-notch"),
+    };
+    let tuned = sim_components::tune::velocity_loops(entry, &cfg, &targets)?;
+    let mut out = output(args, "--out")?;
+    writeln!(
+        out,
+        "motor,key,before,after,phase_before_deg,phase_before_pose,gain_before_db,gain_before_pose,\
+         phase_after_deg,phase_after_pose,gain_after_db,gain_after_pose,result"
+    )
+    .map_err(io)?;
+    let pose = |p: &str| if p.is_empty() { "start.pose".to_string() } else { p.to_string() };
+    let cell = |x: f64| if x.is_nan() { String::new() } else { format!("{x:.2}") };
+    for m in &tuned.motors {
+        let (b, a) = (&m.before_least, &m.after_least);
+        let margins = format!(
+            "{},{},{},{},{},{},{},{}",
+            cell(b.phase_deg),
+            pose(&b.phase_pose),
+            cell(b.gain_db),
+            pose(&b.gain_pose),
+            cell(a.phase_deg),
+            pose(&a.phase_pose),
+            cell(a.gain_db),
+            pose(&a.gain_pose)
+        );
+        let result = judged(m.met);
+        writeln!(out, "{},{},{:?},{:?},{margins},{result}", m.id, m.kp_key, m.before.kp, m.after.kp).map_err(io)?;
+        if m.after.kv != m.before.kv {
+            writeln!(out, "{},{},{:?},{:?},{margins},{result}", m.id, m.kv_key, m.before.kv, m.after.kv).map_err(io)?;
+        }
+        if m.lowered_in_joint_check {
+            eprintln!("{}", tr.tr_arg("tune-lowered", &m.id));
+        }
+    }
+    if let Some(n) = &tuned.notch {
+        let at = format!("{:.1} Hz, {:.1} Hz, {:.2}", n.frequency_hz, n.bandwidth_hz, n.gain_factor);
+        eprintln!("{}", tr.tr_arg("tune-notch", &at));
+    }
+    if !tuned.met {
+        eprintln!("{}", tr.tr("tune-not-met"));
+    }
+    let words: Vec<String> = tuned.settings().iter().flat_map(|s| ["--set".to_string(), s.clone()]).collect();
+    eprintln!("{}", words.join(" "));
     out.flush().map_err(io)
 }
 

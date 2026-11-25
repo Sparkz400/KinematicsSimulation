@@ -2377,3 +2377,21 @@ fn help_prints_the_commands_one_to_a_line_and_the_options_of_one() {
     assert_eq!(cli(&["help", "nonsense"]).status.code(), Some(2));
     assert_eq!(cli(&[]).status.code(), Some(2));
 }
+
+/// `tune` with targets no gain meets (at the start pose alone, to keep the run short): the rows say FAIL, the exit code
+/// is 1 (judged), and the error stream has the `--set` words and says the targets are not met. Its help says how it
+/// differs from `tuning`, in both languages.
+#[test]
+fn tune_exits_1_where_its_targets_are_not_met() {
+    let out =
+        cli(&["tune", "single-axis", "--set", "cycle.segment=[]", "--phase-margin", "179", "--gain-margin", "80"]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    let rows = text(&out.stdout);
+    assert!(rows.starts_with("motor,key,before,after,") && rows.contains("drive.velocity_kp_nm_s_rad"), "{rows}");
+    assert!(rows.lines().skip(1).all(|l| l.ends_with(",FAIL")), "{rows}");
+    assert!(text(&out.stderr).contains("--set drive.velocity_kp_nm_s_rad="), "{}", text(&out.stderr));
+    for lang in ["en", "de"] {
+        let help = text(&cli(&["help", "tune", "--lang", lang]).stdout);
+        assert!(help.contains("tuning") && help.contains("--no-notch"), "{lang}: {help}");
+    }
+}
