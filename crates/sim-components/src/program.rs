@@ -16,11 +16,14 @@
 //! - X, Y, Z (and A, B, C in degrees) move the axes of the same name (ids x, y, z, a, b, c); the start is where the
 //!   machine stands, an axis a block does not name stays;
 //! - G4 P<seconds> a dwell: the path stops at the end of the move before, stands P seconds (0 to `MAX_DWELL_S`) and goes
-//!   on (RS-274NGC's G4, as LinuxCNC reads it; Siemens' G4 F and Fanuc's P in milliseconds are not read). G61 exact stop
-//!   (corner tolerance 0 from here on), G64 continuous mode (the config's `profile.corner_tolerance_m`) and G64 P<length>
-//!   (that tolerance in the program's unit, G20/G21 apply), as RS-274NGC and LinuxCNC have them (Siemens' G64 takes no
-//!   P). The mode that governs a corner is the one in force for the block after it; a change of mode, like a dwell,
-//!   ends the run, so the corner at the change is stopped at (`Run::corner`, `Run::dwell_s`);
+//!   on (RS-274NGC's G4, as LinuxCNC reads it, but alone in its block; Siemens' G4 F and Fanuc's P in milliseconds are
+//!   not read). G61 exact path (corner tolerance 0 from here on: corners are stopped at, lines in one direction are
+//!   not), G64 (the config's `profile.corner_tolerance_m`, where LinuxCNC's G64 keeps the best speed at any deviation)
+//!   and G64 P<length> (that tolerance in the program's unit, G20/G21 apply; P0 is G64 alone, as in LinuxCNC). P bounds
+//!   the curve's distance from the two lines, where LinuxCNC's bounds it from the programmed corner: at a right angle the
+//!   curve passes up to sqrt(2) P from the corner. G61.1 and G64 Q are not read; Siemens' G64 takes no P. The mode that
+//!   governs a corner is the one in force for the block after it; a change of mode, like a dwell, ends the run, so the
+//!   corner at the change is stopped at (`Run::corner`, `Run::dwell_s`);
 //! - taken and without effect: N, O, M, S, T words, G40, G49, G54, G80, G94; comments in ( ) and after ;; % lines;
 //!   M2 and M30 end the program. Every other word or G code is refused with its line, and so is an arc that changes the
 //!   plane's third axis (a helix), whose start and end lie at different distances from its centre, or a word for an axis
@@ -298,14 +301,15 @@ pub fn gcode(text: &str, axes: &[AxisInfo], start: &[f64]) -> Result<Vec<Run>> {
             None if dwell => return fail(line, "program-error-p", clean),
             Some((_, word)) if !dwell && !g64 => return fail(line, "program-error-word", word),
             Some(_) if dwell && (g64 || moving) => return fail(line, "program-error-p", clean),
-            Some((v, _)) if g64 && v >= 0.0 => mode = Some(Some(v * length)),
+            // LinuxCNC: G64 P0 is G64 alone.
+            Some((v, _)) if g64 && v >= 0.0 => mode = Some((v > 0.0).then_some(v * length)),
             Some((v, _)) if dwell && (0.0..=MAX_DWELL_S).contains(&v) => {}
             Some(_) => return fail(line, "program-error-p", clean),
             None => {}
         }
-        // The mode in force for the block's moves, as RS-274 has it: a corner is governed by the mode of the block that
-        // follows it. A change starts a new run, so the corner at the change is stopped at (a path planned as one has one
-        // tolerance); from G61 to G64 that is where RS-274 would round it.
+        // The mode in force for the block's moves: a corner is governed by the mode of the block that follows it. A change
+        // starts a new run, so the corner at the change is stopped at (a path planned as one has one tolerance);
+        // LinuxCNC's G-code reference does not say what governs that corner.
         if let Some(m) = mode.filter(|m| *m != corner) {
             (corner, split) = (m, true);
         }
@@ -1039,6 +1043,8 @@ MoveC,0,0,0.5,0.5,0,0",
         );
         // The same mode again is no change; the unit of P is the program's.
         assert_eq!(corners("F6000\nG61\nG1 X10\nG61\nG1 Y10"), [(Some(0.0), 2)]);
+        // G64 P0 is G64 alone (LinuxCNC), not G61.
+        assert_eq!(corners("F6000\nG61\nG1 X10\nG64 P0\nG1 Y10"), [(Some(0.0), 1), (None, 1)]);
         let inch = read("F100\nG20 G64 P0.02\nG1 X1")[0].corner.unwrap();
         assert!((inch - 0.000508).abs() < 1e-15, "{inch}");
         // P with G64 in the block of the move: the mode governs that move.
