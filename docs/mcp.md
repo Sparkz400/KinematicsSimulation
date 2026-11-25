@@ -29,7 +29,8 @@ or into an environment of your own: `pip install "kinematics-sim[mcp]"`, then `k
 A call that runs longer than 900 s is given up with a message (set `KINEMATICS_SIM_MCP_TIMEOUT_S` to change it), and
 so is one the client cancels: its job (`kinematics_sim.Job`, [Python module](python.md#cancel-a-long-call)) is cancelled,
 so no new run starts and its thread ends once the runs under way have. Long calls report progress every 5 s to a client
-that asks for it: runs finished of runs planned so far. A panic of the simulator's core is answered as a tool error
+that asks for it: the progress is the seconds used of the timeout (it rises with every notice, as MCP wants), the
+message says the runs finished of runs planned so far. A panic of the simulator's core is answered as a tool error
 ("the model failed internally") and the server and its sessions stay.
 
 Limits, so that one call or a client's retries cannot use the machine for hours or the memory without end: at most 32
