@@ -47,7 +47,7 @@ sim-cli COMMAND MACHINE [options]
 | `--set path=value` | Change one config value, e.g. `--set mass.payload_kg=3.0`. Repeatable. Applied after the parts, so single values can be set on top of a catalogue part |
 | `--out FILE` | Write the CSV to a file instead of standard output |
 | `--lang en` or `de` | Language of messages. The CSV headers are not translated |
-| `--catalog DIR` | Read the component catalogue from DIR, a copy of [`catalog/`](../catalog) of the same schema version, instead of the one built in; a table with a missing column or a short row is refused, naming the file and the column or line (see [catalogue](catalogue.md)). `sim-app` takes it too |
+| `--catalog DIR` | Read the component catalogue from DIR, a copy of [`catalog/`](../catalog) of the same schema version, instead of the one built in; every table of the built-in catalogue must be there (a copy older than a table is refused, naming the file), and a table with a missing column or a short row is refused, naming the file and the column or line (see [catalogue](catalogue.md)). `sim-app` takes it too |
 
 Rules that are easy to trip over:
 

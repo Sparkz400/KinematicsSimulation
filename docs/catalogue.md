@@ -15,7 +15,7 @@ The column names and units below are schema 1's. The documents print other units
 
 ## What the simulator uses
 
-These files are read by the simulator itself. They are compiled into `sim-components` ([`catalog.rs`](../crates/sim-components/src/catalog.rs)), so the binaries need no path to them, and a changed file takes effect after a rebuild. `--catalog DIR` (on `sim-cli` and `sim-app`) reads them from another copy of the catalogue at run time instead; it must have the same `schema_version`, and every table must have all the columns of the built-in one and as many fields in each row as in its header; a directory that does not is refused at the start, naming the file and the column or line.
+These files are read by the simulator itself. They are compiled into `sim-components` ([`catalog.rs`](../crates/sim-components/src/catalog.rs)), so the binaries need no path to them, and a changed file takes effect after a rebuild. `--catalog DIR` (on `sim-cli` and `sim-app`) reads them from another copy of the catalogue at run time instead; it must have the same `schema_version` and every table the built-in catalogue has (a copy made before a table was added, such as `rexroth/linear_guides.csv` or `siemens/derating_s210.csv`, is refused, naming the missing file), and every table must have all the columns of the built-in one and as many fields in each row as in its header; a directory that does not is refused at the start, naming the file and the column or line.
 
 | File | Used for |
 | --- | --- |

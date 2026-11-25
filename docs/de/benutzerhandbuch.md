@@ -48,7 +48,7 @@ sim-cli COMMAND MACHINE [options]
 | `--set path=value` | Einen einzelnen Konfigurationswert ändern, z. B. `--set mass.payload_kg=3.0`. Mehrfach möglich. Wird nach den Bauteilen angewendet; einzelne Werte eines Katalogbauteils lassen sich so überschreiben |
 | `--out FILE` | Die CSV-Daten in eine Datei schreiben statt auf die Standardausgabe |
 | `--lang en` oder `de` | Sprache der Meldungen. Die Spaltennamen der CSV-Ausgabe werden nicht übersetzt |
-| `--catalog ORDNER` | Liest den Bauteilkatalog aus ORDNER, einer Kopie von [`catalog/`](../../catalog) mit derselben Schemaversion, statt des eingebauten; eine Tabelle, der eine Spalte fehlt oder deren Zeile weniger Felder hat als der Kopf, wird mit Dateiname und Spalte oder Zeile abgelehnt. Auch `sim-app` nimmt die Option |
+| `--catalog ORDNER` | Liest den Bauteilkatalog aus ORDNER, einer Kopie von [`catalog/`](../../catalog) mit derselben Schemaversion, statt des eingebauten; jede Tabelle des eingebauten Katalogs muss darin sein (eine ältere Kopie, der eine Tabelle fehlt, wird mit dem Dateinamen abgelehnt), und eine Tabelle, der eine Spalte fehlt oder deren Zeile weniger Felder hat als der Kopf, wird mit Dateiname und Spalte oder Zeile abgelehnt. Auch `sim-app` nimmt die Option |
 
 Regeln, über die man leicht stolpert:
 
