@@ -1661,7 +1661,12 @@ fn verdicts(args: &Args, tr: &Translations) -> Result<(), Failure> {
     // A path's clearance is in its run's verdict "collision"; the configured cycle's is told here.
     if args.option("--path").is_none() {
         let limit = cfg.non_negative("profile.min_clearance_m")?;
-        tell_plan(tr, sim_components::collision::check_cycle(entry, &cfg)?, limit);
+        let planned = sim_components::collision::check_cycle(entry, &cfg)?;
+        // The verdict "self-collision" is then left out, as "collision" is without obstacles.
+        if planned.as_ref().is_none_or(|check| check.own.is_none()) {
+            eprintln!("{}", tr.tr("cli-planned-own-none"));
+        }
+        tell_plan(tr, planned, limit);
     }
     let cfg = path_instead(args, entry, cfg)?;
     if args.flag("--worst") {

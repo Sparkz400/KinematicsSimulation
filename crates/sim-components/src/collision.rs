@@ -84,7 +84,7 @@ pub fn nearest(bodies: &Bodies, obstacles: &[Obstacle]) -> Option<(usize, ([f64;
 
 /// One of the machine's own parts, by its place among `Machine::collision_bodies` (a box) or
 /// `Machine::self_collision_capsules` (a capsule), counted from 0.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Body {
     Box(usize),
     Capsule(usize),
@@ -92,7 +92,7 @@ pub enum Body {
 
 /// The least clearance between two of the machine's own parts that are not joined along a path: m (negative in an
 /// overlap), the two parts, and the first pose at it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SelfClearance {
     pub clearance: f64,
     pub bodies: [Body; 2],
@@ -119,14 +119,17 @@ pub struct PlanCheck {
     pub contact: Option<Vec<f64>>,
     pub nearest: Option<Vec<f64>>,
     pub own: Option<SelfClearance>,
-    /// Parts closer than this at the first pose are taken as joined where the machine does not say (`profile.min_clearance_m`).
+    /// Parts closer than this at the start pose are taken as joined where the machine does not say
+    /// (`profile.min_clearance_m`).
     join_below: f64,
-    joins: Option<Joined>,
+    /// The joined pairs for each number of boxes and capsules: those of the start pose (`at_start`), or of the first
+    /// pose seen with that number.
+    joins: Vec<Joined>,
 }
 
 impl Default for PlanCheck {
     fn default() -> Self {
-        Self { clearance: f64::INFINITY, contact: None, nearest: None, own: None, join_below: 0.0, joins: None }
+        Self { clearance: f64::INFINITY, contact: None, nearest: None, own: None, join_below: 0.0, joins: Vec::new() }
     }
 }
 
@@ -134,6 +137,50 @@ impl PlanCheck {
     /// A check that takes parts of the machine closer than `clearance` at the first pose as joined.
     pub fn keeping(clearance: f64) -> Self {
         Self { join_below: clearance, ..Self::default() }
+    }
+
+    /// `keeping`, with the parts joined as they are at the machine's start pose `start` (`Machine::connected_bodies`,
+    /// or else closer than `clearance` there), with the payload off and on, whatever pose a path starts from. Leaves
+    /// the payload on, as the controller starts; switching it may leave more in a machine (a crane books a pick), so a
+    /// simulation looks with a machine of its own (`Sim::new`).
+    pub fn at_start(clearance: f64, machine: &mut dyn Machine, start: &[f64]) -> Self {
+        let mut check = Self::keeping(clearance);
+        let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
+        for attached in [false, true] {
+            machine.set_payload_attached(attached);
+            machine.equilibrium(start, &mut state, &mut torque);
+            let (boxes, capsules) = (machine.collision_bodies(&state), machine.self_collision_capsules(&state));
+            check.joins_for(&boxes, &capsules, || machine.connected_bodies(&state, boxes.len(), capsules.len()));
+        }
+        check
+    }
+
+    /// A check with the same joined pairs and nothing seen yet.
+    pub fn anew(&self) -> Self {
+        Self { join_below: self.join_below, joins: self.joins.clone(), ..Self::default() }
+    }
+
+    /// Whether the machine has two parts not joined to check, as far as the start pose tells (`at_start`).
+    pub fn has_pairs(&self) -> bool {
+        self.joins.iter().any(|j| j.open)
+    }
+
+    /// The joined pairs for parts of these numbers, found now where none are known for them.
+    fn joins_for(
+        &mut self,
+        boxes: &[Aabb],
+        capsules: &[Capsule],
+        connected: impl FnOnce() -> Option<Vec<(usize, usize)>>,
+    ) -> &Joined {
+        let counts = (boxes.len(), capsules.len());
+        let k = match self.joins.iter().position(|j| j.counts == counts) {
+            Some(k) => k,
+            None => {
+                self.joins.push(joined(connected(), boxes, capsules, self.join_below));
+                self.joins.len() - 1
+            }
+        };
+        &self.joins[k]
     }
 
     /// Whether the machine's own parts came nearer than `limit` (`profile.min_clearance_m`) or touched: as the check
@@ -145,14 +192,14 @@ impl PlanCheck {
     /// The machine's own parts at `state` (its boxes `boxes`): the least clearance of the pairs not joined, if it is
     /// below the least so far. Linear in the samples: a lower bound from the parts' extents spares most pairs, and no
     /// pair allocates.
-    fn look_at_own(&mut self, machine: &dyn Machine, state: &[f64], boxes: &[Aabb], pose: &[f64]) {
+    pub(crate) fn look_at_own(&mut self, machine: &dyn Machine, state: &[f64], boxes: &[Aabb], pose: &[f64]) {
         let capsules = machine.self_collision_capsules(state);
         let connected = || machine.connected_bodies(state, boxes.len(), capsules.len());
         self.look_at_parts(boxes, &capsules, connected, pose);
     }
 
     /// `look_at_own` for parts given: `connected` tells the joined pairs of these parts where the machine knows them
-    /// (`Machine::connected_bodies`), asked once for each number of boxes and capsules.
+    /// (`Machine::connected_bodies`), asked once for each number of boxes and capsules that `at_start` did not see.
     pub fn look_at_parts(
         &mut self,
         boxes: &[Aabb],
@@ -160,15 +207,15 @@ impl PlanCheck {
         connected: impl FnOnce() -> Option<Vec<(usize, usize)>>,
         pose: &[f64],
     ) {
-        let (n, counts) = (boxes.len() + capsules.len(), (boxes.len(), capsules.len()));
+        let n = boxes.len() + capsules.len();
         if n < 2 {
             return;
         }
-        if self.joins.as_ref().is_none_or(|j| j.counts != counts) {
-            self.joins = Some(joined(connected(), boxes, capsules, self.join_below));
-        }
-        let Some(joins) = self.joins.as_ref().filter(|j| j.open) else { return };
         let mut best = self.own.as_ref().map_or(f64::INFINITY, |own| own.clearance);
+        let joins = self.joins_for(boxes, capsules, connected);
+        if !joins.open {
+            return;
+        }
         let mut found = None;
         for i in 0..n {
             for j in i + 1..n {
@@ -228,6 +275,11 @@ impl Part<'_> {
     }
 }
 
+/// How near two parts are to count as touching when they are joined (`joined`): faces drawn at the same place miss
+/// each other by rounding (a slide's payload on its carriage stands 7e-18 m off it), and a pair so joined by chance
+/// would be judged on that noise.
+const TOUCHING: f64 = 1e-9;
+
 /// The pairs of parts not to check against each other: those the machine names (`Machine::connected_bodies`), or else
 /// those that touch, overlap or lie closer than `below` to each other now.
 fn joined(named: Option<Vec<(usize, usize)>>, boxes: &[Aabb], capsules: &[Capsule], below: f64) -> Joined {
@@ -243,7 +295,7 @@ fn joined(named: Option<Vec<(usize, usize)>>, boxes: &[Aabb], capsules: &[Capsul
             for i in 0..n {
                 for j in i + 1..n {
                     let gap = part(boxes, capsules, i).gap(&part(boxes, capsules, j));
-                    let together = gap < below || gap <= 0.0;
+                    let together = gap < below || gap <= TOUCHING;
                     (joined[i * n + j], joined[j * n + i]) = (together, together);
                 }
             }
@@ -292,9 +344,8 @@ fn check_passes(
     obstacles: &[Obstacle],
     conveyor: &mut Conveyor,
     start: &[f64],
-    limit: f64,
+    mut check: PlanCheck,
 ) -> PlanCheck {
-    let mut check = PlanCheck::keeping(limit);
     let axes = machine.axes().to_vec();
     let reachable = |pose: &[f64]| crate::control::in_range(&*machine, pose);
     let mut passes = Vec::new();
@@ -333,7 +384,8 @@ fn check_passes(
 /// payload as that one left it, and round from the last to the first again. A segment with via points takes the path
 /// the planner times through them; the straight moves are taken as lines, which corner blending would cut short (the
 /// simulation itself is checked as it runs). The machine's own parts are checked against each other along the way
-/// (`PlanCheck::own`, with `profile.min_clearance_m` as the distance under which parts at the start pose are joined).
+/// (`PlanCheck::own`, with `profile.min_clearance_m` as the distance under which parts at the start pose are joined,
+/// `PlanCheck::at_start`).
 /// `None` without obstacles where the machine has no two parts to check (or the cycle cannot be read: then it is
 /// not checked, where with obstacles it is an error). With `[conveyor]` the passes are checked instead
 /// (`check_passes`).
@@ -347,25 +399,15 @@ pub fn check_cycle(entry: &MachineEntry, cfg: &Config) -> Result<Option<PlanChec
     }
 }
 
-/// Whether the machine has two parts to check against each other at `start`, with the payload on or off.
-fn has_two_parts(machine: &mut dyn Machine, start: &[f64]) -> bool {
-    let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
-    [true, false].into_iter().any(|attached| {
-        machine.set_payload_attached(attached);
-        machine.equilibrium(start, &mut state, &mut torque);
-        machine.collision_bodies(&state).len() + machine.self_collision_capsules(&state).len() >= 2
-    })
-}
-
 fn cycle_check(entry: &MachineEntry, cfg: &Config, obstacles: &[Obstacle]) -> Result<PlanCheck, ConfigError> {
     let mut machine = (entry.build)(cfg)?;
     let start = crate::sim::start_pose(cfg, machine.as_ref())?;
-    let limit = cfg.non_negative("profile.min_clearance_m")?;
-    if obstacles.is_empty() && !has_two_parts(machine.as_mut(), &start) {
+    let mut check = PlanCheck::at_start(cfg.non_negative("profile.min_clearance_m")?, machine.as_mut(), &start);
+    if obstacles.is_empty() && !check.has_pairs() {
         return Ok(PlanCheck::default());
     }
     if let Some(mut conveyor) = crate::conveyor::Conveyor::from_config(cfg, machine.axes().len())? {
-        return Ok(check_passes(machine.as_mut(), obstacles, &mut conveyor, &start, limit));
+        return Ok(check_passes(machine.as_mut(), obstacles, &mut conveyor, &start, check));
     }
     let (cycle, tolerance) = (
         cfg.positive("profile.cycle_s")?,
@@ -397,7 +439,6 @@ fn cycle_check(entry: &MachineEntry, cfg: &Config, obstacles: &[Obstacle]) -> Re
         let corner = segment.get("corners_m").and_then(number);
         segments.push((target, payload, via.map(|v| (v, corner)), i));
     }
-    let mut check = PlanCheck::keeping(limit);
     check_path(machine.as_ref(), obstacles, std::slice::from_ref(&start), &mut check);
     let n = segments.len();
     // Leg k ends at segment k; leg n is the way round from the last segment to the first.

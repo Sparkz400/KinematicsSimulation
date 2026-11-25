@@ -2,6 +2,7 @@
 //! two movers of the track brought to one place, and the shipped cycles of every machine.
 
 use sim_components::collision::{Body, PlanCheck, check_cycle, check_path};
+use sim_components::{Sim, analysis};
 use sim_machines::{MACHINES, find};
 
 /// The SCARA (config/scara.toml, urdf/scara.urdf, payload off so that its 0.08 m cube is not there) draws its links as
@@ -21,7 +22,8 @@ use sim_machines::{MACHINES, find};
 /// (23 degrees: q2 = pi - 0.4): the quill's top at (0.325 - 0.275 cos 0.4, 0.275 sin 0.4, 0.3) = (0.07171, 0.10709,
 /// 0.3), the flange box x 0.04171 and y 0.07709 clear of the column's axis: sqrt(0.04171^2 + 0.07709^2) - 0.025 =
 /// 0.06265 m, the second arm's end and the quill 0.1289 - 0.05 = 0.0789 m, the first arm and the quill 0.1465 - 0.05 =
-/// 0.0965 m: the least 0.06265 m, which passes a clearance of 10 mm.
+/// 0.0965 m: the least 0.06265 m, which passes a clearance of 10 mm. Both poses lie beyond joint 2's range in the URDF
+/// (-2.5 to 2.5 rad), which the check does not judge: they show the check, not a collision the SCARA can reach.
 #[test]
 fn a_scara_folded_over_its_column_is_reported_with_the_two_parts_and_opened_it_passes() {
     let entry = find("scara").unwrap();
@@ -96,11 +98,75 @@ fn two_movers_brought_to_the_same_place_are_reported() {
 /// is a finding or a body drawn too coarse; the check is not to be loosened for it.
 #[test]
 fn the_shipped_cycle_of_every_machine_keeps_its_parts_apart_or_is_not_checked() {
+    let mut failed = Vec::new();
     for entry in MACHINES {
         let cfg = entry.config();
         let limit = cfg.non_negative("profile.min_clearance_m").unwrap();
         // Without obstacles `None` is "not checked"; with obstacles `own` None is.
         let Some(check) = check_cycle(entry, &cfg).unwrap() else { continue };
-        assert!(!check.own_fails(limit), "{}: {:?}", entry.id, check.own);
+        if check.own_fails(limit) {
+            failed.push(format!("{} (limit {limit}): {:?}", entry.id, check.own));
+        }
     }
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// Parts are joined as they are at the machine's start pose, not at the first pose of a path. The mover track's movers
+/// stand 0.5 m apart at the start, so nothing is joined there; a path that begins with mover 2 on mover 1 (s = 0.125
+/// both) is reported at that first pose, -0.05 m between boxes 0 and 1. Taken at the first pose, the two would be
+/// joined and nothing said.
+#[test]
+fn parts_are_joined_at_the_start_pose_not_at_a_paths_first() {
+    let entry = find("mover-track").unwrap();
+    let cfg = entry.config();
+    let mut machine = (entry.build)(&cfg).unwrap();
+    let start = cfg.f64s("start.pose").unwrap();
+    let mut check = PlanCheck::at_start(0.0, machine.as_mut(), &start);
+    machine.set_payload_attached(false);
+    let mut together = start.clone();
+    together[1] = start[0];
+    check_path(machine.as_ref(), &[], &[together.clone(), start], &mut check);
+    let own = check.own.expect("the movers are not joined at the start");
+    assert_eq!(own.bodies, [Body::Box(0), Body::Box(1)], "{own:?}");
+    assert!((own.clearance + 0.05).abs() < 1e-9 && own.pose == together, "{own:?}");
+}
+
+/// A slide's payload sits on its carriage (carriage 0.06 m high from z = 0, payload 0.08 m from z = 0.06): the two
+/// faces meet, 7e-18 m apart by rounding, and are joined. The screw axis has no other parts, so its own parts are not
+/// checked, and the run has no verdict "self-collision". Fails if the rounding leaves the two parts apart, to be judged
+/// on that noise.
+#[test]
+fn a_payload_on_its_carriage_is_joined_and_the_slide_is_not_checked() {
+    for id in ["screw-axis", "rack-axis", "linear-motor-axis"] {
+        let entry = find(id).unwrap();
+        let cfg = entry.config();
+        assert_eq!(check_cycle(entry, &cfg).unwrap(), None, "{id}");
+        let load = analysis::analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
+        assert_eq!(load.own_clearance, None, "{id}");
+    }
+}
+
+/// Two parts brought nearer than `profile.min_clearance_m` are judged and refused as an obstacle hit is. The six-axis
+/// arm's shipped cycle (config/arm.toml) brings box 2 within 13.4 mm of the link of capsule 5 at its first target, the
+/// joint angles (0.8, 0.45, -0.55, 0.3, 0.5, 1.0) (`sim-cli verdicts urdf-arm` tells that planned figure); the two are
+/// more than 50 mm apart at the start, or they would be joined. With 50 mm asked for, the cycle's verdict "self-collision" fails, its
+/// value the run's least own clearance (below 50 mm); and the move from the start to that target, planned
+/// time-optimal, is refused with `error-path-self-collision`. At the shipped 0 it passes.
+#[test]
+fn parts_nearer_than_the_clearance_fail_the_verdict_and_a_time_optimal_plan_is_refused() {
+    let entry = find("urdf-arm").unwrap();
+    let mut cfg = entry.config();
+    let load = analysis::analyse_cycle(&mut Sim::new(entry, &cfg).unwrap()).unwrap();
+    let verdicts = analysis::verdicts(&cfg, &load).unwrap();
+    assert!(verdicts.iter().any(|v| v.check == "self-collision" && v.ok), "{verdicts:?}");
+
+    cfg.set_text("profile.min_clearance_m = 0.05").unwrap();
+    let mut sim = Sim::new(entry, &cfg).unwrap();
+    let line = [sim_components::path::Piece::Line(vec![0.8, 0.45, -0.55, 0.3, 0.5, 1.0])];
+    assert_eq!(sim.plan_path(&line, true).unwrap_err().key, "error-path-self-collision");
+    let load = analysis::analyse_cycle(&mut sim).unwrap();
+    let own = load.own_clearance.unwrap();
+    let verdicts = analysis::verdicts(&cfg, &load).unwrap();
+    let verdict = verdicts.iter().find(|v| v.check == "self-collision").unwrap();
+    assert!(own < 0.05 && !verdict.ok && verdict.value == own && verdict.limit == 0.05, "{verdict:?}");
 }

@@ -630,7 +630,7 @@ const SENSITIVITY_KEYS: [&str; 6] = [
 ];
 const OPTIMISED_KEYS: [&str; 3] = ["ui-analysis-setting", "ui-analysis-before", "ui-analysis-after"];
 /// Every check a cycle can be judged by (`verdicts`); each has a label "check-<name>".
-const CHECKS: [&str; 53] = [
+const CHECKS: [&str; 54] = [
     "motor-peak",
     "motor-thermal",
     "stepper-synchronism",
@@ -678,6 +678,7 @@ const CHECKS: [&str; 53] = [
     "cam-acceleration",
     "cam-jerk",
     "collision",
+    "self-collision",
     "thermal-warm-start",
     "thermal-cycle-repeat",
     "pick-tracking",

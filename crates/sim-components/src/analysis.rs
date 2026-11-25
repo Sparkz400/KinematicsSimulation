@@ -239,6 +239,9 @@ pub struct CycleLoad {
     /// first pass included (`Sim::least_clearance`), m; and the run's first contact with one.
     pub clearance: Option<f64>,
     pub contact: Option<crate::Contact>,
+    /// Where the machine has two parts not joined at its start pose: the least clearance between such parts over the
+    /// whole run, as `clearance` (`Sim::own_parts`), m.
+    pub own_clearance: Option<f64>,
     /// The highest braking power of all drives at once, W: with the DC link simulated, what the braking resistors
     /// took (a shared one counted once); without, the power the drives fed back. For an S120 line-up, which brakes
     /// through one Braking Module (`verdicts`).
@@ -1169,6 +1172,7 @@ impl Tally {
                 .collect(),
             clearance: (!sim.obstacles.is_empty()).then_some(sim.least_clearance),
             contact: sim.contact.clone(),
+            own_clearance: sim.own_parts.own.as_ref().map(|own| own.clearance),
             braking_power_peak: self.braking_peak,
             warm_start: None,
             conveyor: sim.control.conveyor().map(|(c, _)| {
@@ -1582,7 +1586,7 @@ fn at_least(check: &'static str, motor: Option<usize>, value: f64, limit: f64) -
 
 /// The checks whose value has to stay at or above its limit ("belt-least-tension": above); every other check's value has to
 /// stay at or below it.
-pub const AT_LEAST: [&str; 10] = [
+pub const AT_LEAST: [&str; 11] = [
     "belt-least-tension",
     "pulley-bearing-life",
     "gearbox-life",
@@ -1593,6 +1597,7 @@ pub const AT_LEAST: [&str; 10] = [
     "screw-life",
     "strain-wave-life",
     "collision",
+    "self-collision",
 ];
 
 /// Above 1 it fails (but "belt-least-tension" at exactly 1). A check of `AT_LEAST` at or below zero (a contact, "collision" at no
@@ -1644,7 +1649,9 @@ pub fn utilisation(v: &Verdict) -> f64 {
 ///
 /// "collision" judges, where the config has obstacles, the least clearance of the run to them (`CycleLoad::clearance`)
 /// against `profile.min_clearance_m`: it passes at or above it, never at a contact. Without obstacles it is not judged,
-/// as a rating left out is not, so it cannot fail there.
+/// as a rating left out is not, so it cannot fail there. "self-collision" judges the least clearance between the
+/// machine's own parts that are not joined at its start pose (`CycleLoad::own_clearance`) against the same limit, as
+/// "collision" does; where the machine has no such two parts it is not judged.
 pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigError> {
     let cfg = &crate::catalog::parts_applied(cfg)?;
     // A rating that is no number (NaN) would otherwise count as left out, and not be judged.
@@ -1868,6 +1875,16 @@ pub fn verdicts(cfg: &Config, load: &CycleLoad) -> Result<Vec<Verdict>, ConfigEr
         let limit = cfg.non_negative("profile.min_clearance_m")?;
         out.push(Verdict {
             check: "collision",
+            motor: None,
+            value: clearance,
+            limit,
+            ok: clearance >= limit && clearance > 0.0,
+        });
+    }
+    if let Some(clearance) = load.own_clearance {
+        let limit = cfg.non_negative("profile.min_clearance_m")?;
+        out.push(Verdict {
+            check: "self-collision",
             motor: None,
             value: clearance,
             limit,
@@ -5470,6 +5487,7 @@ line_module_efficiency = 0.9
             checks: Vec::new(),
             clearance: None,
             contact: None,
+            own_clearance: None,
             braking_power_peak: 0.0,
             warm_start: None,
             conveyor: None,

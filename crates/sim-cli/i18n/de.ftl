@@ -30,6 +30,7 @@ cli-planned-clearance = Geplante Bahn: kleinster Abstand zu den Hindernissen { $
 cli-planned-contact = Geplante Bahn: erste Berührung eines Hindernisses in der Lage { $arg }
 cli-planned-own = Geplante Bahn: kleinster Abstand zwischen den eigenen Teilen der Maschine (Abstand, die beiden Teile, Lage) { $arg }
 cli-planned-own-fails = Geplante Bahn: die eigenen Teile der Maschine kommen sich zu nah oder berühren sich (Abstand, die beiden Teile, Lage) { $arg }
+cli-planned-own-none = Die eigenen Teile der Maschine werden nicht gegeneinander geprüft: Sie hat keine zwei Teile, die in ihrer Startlage nicht verbunden sind.
 cli-part-box = Quader { $arg }
 cli-part-capsule = Kapsel { $arg }
 cli-run-clearance = Lauf: kleinster Abstand zu den Hindernissen { $arg } mm

@@ -30,6 +30,7 @@ cli-planned-clearance = Planned path: least clearance to the obstacles { $arg } 
 cli-planned-contact = Planned path: first contact with an obstacle at the pose { $arg }
 cli-planned-own = Planned path: least clearance between the machine's own parts (clearance, the two parts, pose) { $arg }
 cli-planned-own-fails = Planned path: the machine's own parts come too close or touch (clearance, the two parts, pose) { $arg }
+cli-planned-own-none = The machine's own parts are not checked against each other: it has no two parts that are not joined at its start pose.
 cli-part-box = box { $arg }
 cli-part-capsule = capsule { $arg }
 cli-run-clearance = Run: least clearance to the obstacles { $arg } mm
