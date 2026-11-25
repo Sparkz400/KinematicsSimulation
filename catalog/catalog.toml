@@ -67,6 +67,8 @@ tables = [
     "siemens/motors_s120_electrical.csv",
     "siemens/motors_s210.csv",
     "siemens/motors_s210_oi.csv",
+    "siemens/parameters_s120.csv",
+    "siemens/parameters_s210.csv",
     "siemens/s1_curves_s210.csv",
     "wittenstein/gearbox_sp.csv",
     "wittenstein/gearbox_tp.csv",

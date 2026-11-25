@@ -1,0 +1,44 @@
+schema_version = 1
+class = "drive"
+table = "parameters"
+key = ["config_key", "parameter"]
+notes = '''
+Which parameter of a SINAMICS S210 (6SL3210 converters with S-1FK2 and S-1FT2) takes the value of a simulator config key,
+from section 17.2 "List of parameters" of the Operating Instructions, 09/2022. Columns, factor, rule and basis as in
+parameters_s120.csv. Only what that list has as a settable parameter is a row.
+Not found in any S210 document read: parameters of the current controller (p1715 appears only in the remedy of an alarm),
+of the current setpoint filters, a settable position controller gain (the S210 has none: the position controller is in the
+controller above it; r5276 is a read-only estimate of Kv), jerk or acceleration limits. Those config keys have no row.
+The 6SL5310 converters (S210 New) are not in this document: no row is read for them.
+The printed page numbers are read from the page footers; where an entry spans a page break the page may be one off.
+Text fields hold no commas (the simulator reads the table as plain CSV).
+The list is an aid for commissioning: parameter numbers and units can differ between firmware versions.
+'''
+
+[[sources]]
+id = "s210-608"
+document = "Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, A5E41702836B AL"
+date = "2022-09"
+locator = "section 17.2 List of parameters, printed page 608"
+method = "manual: typed in from the entry of the parameter list, the units as printed"
+
+[[sources]]
+id = "s210-609"
+document = "Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, A5E41702836B AL"
+date = "2022-09"
+locator = "section 17.2 List of parameters, printed page 609"
+method = "manual: typed in from the entry of the parameter list, the units as printed"
+
+[[sources]]
+id = "s210-610"
+document = "Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, A5E41702836B AL"
+date = "2022-09"
+locator = "section 17.2 List of parameters, printed page 610"
+method = "manual: typed in from the entry of the parameter list, the units as printed"
+
+[[sources]]
+id = "s210-611"
+document = "Siemens, SINAMICS S210 servo drive system with S-1FK2 and S-1FT2, Operating Instructions, A5E41702836B AL"
+date = "2022-09"
+locator = "section 17.2 List of parameters, printed page 611"
+method = "manual: typed in from the entry of the parameter list, the units as printed"

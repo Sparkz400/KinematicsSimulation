@@ -301,6 +301,7 @@ fn command_options(command: Option<&str>) -> &'static [&'static str] {
         ],
         Some("compare") => &["--effect", "--signal", "--differences"],
         Some("fmu") => &["--binary", "--fmi"],
+        Some("parameters") => &["--family"],
         Some("report") => &["--bands"],
         _ => &[],
     }
@@ -344,6 +345,7 @@ fn dispatch(args: &Args, tr: &Translations) -> Result<(), Failure> {
         Some("check-dataset") => check_dataset(args, tr),
         Some("compare") => compare(args),
         Some("fmu") => fmu(args),
+        Some("parameters") => parameters(args, tr),
         Some("report") => report(args, tr),
         Some("stop") => stop(args, tr),
         Some("accuracy") => accuracy(args, tr),
@@ -876,6 +878,57 @@ fn check_dataset(args: &Args, tr: &Translations) -> Result<(), Failure> {
     }
     problems.iter().for_each(|p| println!("{}", tr.tr_arg("dataset-problem", p)));
     Err(Failure("dataset-problem", format!("{} problems in {dir}", problems.len())))
+}
+
+/// `parameters <machine>`: per motor, the drive settings of the config with the SINAMICS parameter that takes each, and its
+/// value in that parameter's unit (`sim_components::parameters`). The config is read as the file states it, with
+/// `--set` applied: the drive part is read before the parts are resolved.
+fn parameters(args: &Args, tr: &Translations) -> Result<(), Failure> {
+    use sim_components::parameters::{Error, Family, list_resolved};
+    // The drive part is read from the config as named (the parts are emptied once resolved); the values come from the
+    // resolved one with `--set` on top, as in every command.
+    let (entry, named) = named_config(args)?;
+    let (_, cfg) = machine_and_config(args)?;
+    let family = match args.option("--family") {
+        Some(text) => {
+            Some(Family::parse(text).ok_or_else(|| Failure("cli-error-bad-argument", format!("--family {text}")))?)
+        }
+        None => None,
+    };
+    let rows = list_resolved(entry, &named, &cfg, family).map_err(|e| match e {
+        Error::Config(e) => e.into(),
+        Error::NoDrive(motor) => Failure("cli-error-parameters-no-drive", motor),
+        Error::UnknownDrive(article) => Failure("cli-error-parameters-unknown-drive", article),
+        Error::NotRotaryServo(motor) => Failure("cli-error-parameters-not-servo", motor),
+    })?;
+    // Six significant digits, without the trailing zeros of a fixed notation.
+    let number = |x: f64| {
+        if x != 0.0 && !(1e-4..1e7).contains(&x.abs()) {
+            return format!("{x:.5e}");
+        }
+        let text = format!("{x:.6}");
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    let mut out = output(args, "--out")?;
+    writeln!(out, "motor,key,value,unit,parameter,name,parameter_value,parameter_unit,basis").map_err(io)?;
+    for r in &rows {
+        let converted = r.parameter_value.map_or(String::new(), number);
+        writeln!(
+            out,
+            "{},{},{},{},{},{},{converted},{},{}",
+            r.motor,
+            r.key,
+            number(r.value),
+            r.unit,
+            r.parameter,
+            r.name,
+            r.parameter_unit,
+            r.basis.name()
+        )
+        .map_err(io)?;
+    }
+    eprintln!("{}", tr.tr("cli-parameters-note"));
+    Ok(())
 }
 
 fn io(e: std::io::Error) -> Failure {
