@@ -2282,6 +2282,8 @@ fn a_path_is_planned_run_and_analysed_in_the_app(entry: &'static MachineEntry) {
         feed: Some(0.05),
         caps: Vec::new(),
         pieces: sim_components::path::parse(pieces).unwrap(),
+        corner: None,
+        dwell_s: 0.0,
     };
     let per_run =
         sim_components::Sim::new(entry, &blended).unwrap().program_deviations(&[run(&pieces)], false).unwrap();
