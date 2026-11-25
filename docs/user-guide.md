@@ -59,7 +59,7 @@ Rules that are easy to trip over:
 - Numbers are checked when a config is read. NaN and infinity are refused for every value, a negative number where the quantity cannot be negative (a payload, a damping, a backlash, the belt pretension), and a start pose outside the axis ranges. The message names the key: `Configuration value is out of range: gearbox.backlash_rad`.
 - A failure prints one line on the error stream and exits with code 2.
 - `sim-cli help` lists the commands, one to a line, in the language of `--lang`; `sim-cli help COMMAND` (or `sim-cli COMMAND --help`) prints the options of one command, `sim-cli help options` those every command takes, `sim-cli help paths` the path file formats and `sim-cli help units` the units of the columns. A call with wrong or missing arguments names the help of its command. `sim-cli --version` (or `-V`) prints the version.
-- Exit codes: 0 when the command ran and everything it judged passes, 1 when it ran and printed a failing row (`FAIL` in the result column of `verdicts`, `margins` and `report`'s checks, or among the verdicts `stop` and `accuracy` print on the error stream), 2 for a usage or config error. The table is printed in full before the code is 1, so a script can read the rows and test the code. The overhead crane's default config fails `residual-sway` on purpose, so `verdicts` exits 1 on it.
+- Exit codes: 0 when the command ran and everything it judged passes, 1 when it ran and printed a failing row (`FAIL` in the result column of `verdicts`, `margins`, `report`'s checks, `replay --tolerance` and `fit --within`, or among the verdicts `stop` and `accuracy` print on the error stream), 2 for a usage or config error. The table is printed in full before the code is 1, so a script can read the rows and test the code. The overhead crane's default config fails `residual-sway` on purpose, so `verdicts` exits 1 on it.
 - A result that is not finite (an unstable loop gives `inf` or `nan`, and so does a winding that heats up without end) is named on the error stream after the table: run `sim-cli margins MACHINE` to measure the loops.
 - If the axis limits ask more of a motor than the drive data allows, commands that start a simulation directly (`run`) print a warning on the error stream and carry on:
 
@@ -1898,6 +1898,17 @@ What the fit can and cannot recover:
 | On a delta, SCARA or arm: the payload's mass as a factor, per motor added inertia, viscous and Coulomb friction and constant torque at the shaft | A factor on the arms' and platform's masses (it is one with the motors' inertias and constant torques); friction from gearbox losses |
 | | Drive delays and filters: per motor with `sim-cli identify` (below), not per axis |
 | | Backlash, tooth stiffness, frame and Z-axis stiffness |
+
+**Judging the twin.** `replay --tolerance NAME=LIMIT,...` states how far the replay may be from the trace: the names are the columns of the replay table (`torque_rms_nm`, `torque_peak_nm`, `following_error_rms_rad`, `following_error_peak_rad`), and only the limits you give are judged. The table is then one row per motor and limit, `motor,quantity,value,limit,result`, with `ok` or `FAIL` and the exit code 1 on a `FAIL` (see the exit codes above); without the option the table is the one shown above. `fit --within N` judges the fit: two columns `apart` (the distance between the fitted value and the config's, in standard errors, the "Apart" of the dataset report) and `result` are added, a row more than N standard errors apart says `FAIL`, and a row without a standard error or without a config value (the ringing rows, the payload steps) says `not judged`. Exit code 1 where a row fails.
+
+```text
+$ sim-cli replay single-axis --trace measured.csv --set effects.payload=false --tolerance torque_rms_nm=0.005,torque_peak_nm=0.02
+motor,quantity,value,limit,result
+m,torque_rms_nm,2.262567e-2,5.000000e-3,FAIL
+m,torque_peak_nm,6.525419e-2,2.000000e-2,FAIL
+```
+
+**Writing a fit back.** `fit ... --write FILE` writes the config (the file of `--config` with the `--set` values and parts of the command line, else the machine's default) to FILE with every fitted quantity that is exactly one key of it set to the fitted value, and `bounds.KEY = [value - K * error, value + K * error]` beside it, K from `--sigmas K` (2 by default: about 95 % of a normal error). A bound is pulled in where the machine would refuse it (a stiffness must stay above 0). Today that is the factor on the stiffness of `--stiffness` (value = the config's value times the factor, error likewise): the other quantities are the trace's values of what several keys make up (the moved mass of an axis, a friction that the guide and the motor share), and each is listed on the error stream with that reason and not written. A key that a named part (`[parts]`) sets is not written either, because the part would overwrite it. Nothing is written where the fit failed or nothing can be written, and FILE is overwritten only where you name it (name the input config to update it in place). The comments of a written file are not kept. `verdicts --bands` reads the written bounds like any others. Not for `fit --dataset`.
 
 Limits for this task:
 

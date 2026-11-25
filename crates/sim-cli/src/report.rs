@@ -135,7 +135,7 @@ pub(super) fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
             fit_args.extend([option.into(), dir.join(file).to_string_lossy().into_owned()]);
         }
         let mut table = Vec::new();
-        let (advice, result) = fit_rows(&Args(fit_args), tr, &mut table)?;
+        let (advice, result, _) = fit_rows(&Args(fit_args), tr, &mut table, None)?;
         result?;
         let table = String::from_utf8_lossy(&table).into_owned();
         write("fit.csv", &table)?;
@@ -148,7 +148,8 @@ pub(super) fn run(args: &Args, tr: &Translations) -> Result<(), Failure> {
         );
         for line in table.lines().skip(1) {
             let cells: Vec<&str> = line.split(',').collect();
-            let [quantity, of, config, fitted, error] = cells[..] else { continue };
+            // The sixth column is the unit (`fit_rows`); the table was empty while this took five.
+            let [quantity, of, config, fitted, error, _] = cells[..] else { continue };
             let number = |s: &str| s.parse::<f64>().ok();
             let shown = |s: &str| number(s).map_or("-".into(), |v| format!("{v:.4}"));
             let apart = match (number(config), number(fitted), number(error)) {

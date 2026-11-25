@@ -39,6 +39,12 @@ cli-accuracy-tool = Genauigkeit am Werkzeug nach ISO 9283, über die Achsen in M
 cli-accuracy-verdict = Bewertung der Genauigkeit: { $arg }
 
 fit-report-written = Bericht geschrieben: { $arg }
+cli-fit-write-lumped = Nicht geschrieben: { $arg } ist ein Wert der Aufzeichnung, den mehrere Schlüssel der Konfiguration zusammen ausmachen oder der kein Schlüssel von ihr ist.
+cli-fit-write-no-key = Nicht geschrieben: { $arg }: die Konfiguration hat diesen Schlüssel nicht.
+cli-fit-write-by-part = Nicht geschrieben: { $arg }: ein in der Konfiguration genanntes Bauteil setzt diesen Schlüssel, ein hineingeschriebener Wert würde überschrieben.
+cli-fit-write-refused = Nicht geschrieben: { $arg }: der angepasste Wert oder sein Fehler wird von der Maschine nicht angenommen.
+cli-fit-write-nothing = Nichts nach { $arg } geschrieben: kein angepasster Wert ist ein Schlüssel der Konfiguration (nur der Faktor von --stiffness ist es).
+cli-fit-write-done = Konfiguration geschrieben: { $arg }
 
 cli-sensitivity-zero = Nicht eingeordnet: { $arg } ist 0 und hat keinen Bereich in [bounds] (--delta von 0 ist 0); dort einen angeben, um ihn zu variieren.
 cli-sensitivity-runs = Für die globale Empfindlichkeit simulierte Zyklen: { $arg }
@@ -188,6 +194,8 @@ cli-help-workspace-3 = --points N  Knoten je Seite, standardmäßig 61.
 cli-help-replay-1 = sim-cli replay MASCHINE --trace DATEI [OPTIONEN]
 cli-help-replay-2 = --trace DATEI  Die Antriebsaufzeichnung (CSV).
 cli-help-replay-3 = --map DATEI  Welche Spalte der Aufzeichnung welches Signal ist.
+cli-help-replay-4 = --tolerance NAME=GRENZE,...  Beurteilt den Nachlauf: die größte erlaubte torque_rms_nm, torque_peak_nm, following_error_rms_rad, following_error_peak_rad, eine Zeile je angegebene Grenze.
+cli-help-replay-5 = Code 1, wo eine Zeile FAIL sagt.
 cli-help-fit-1 = sim-cli fit MASCHINE [OPTIONEN]  oder  sim-cli fit [MASCHINE] --dataset ORDNER --report ORDNER
 cli-help-fit-2 = --trace DATEI  Passt die Starrkörperwerte an eine Antriebsaufzeichnung (CSV) an.
 cli-help-fit-3 = --map DATEI  Welche Spalte der Aufzeichnung welches Signal ist.
@@ -198,6 +206,9 @@ cli-help-fit-7 = --stiffness  Passt auch den Faktor auf die Steifigkeit der Riem
 cli-help-fit-8 = --stiffness-key SCHLÜSSEL  Mit --stiffness: der Konfigurationsschlüssel der Steifigkeit.
 cli-help-fit-9 = --dataset ORDNER  Passt jede Messung eines Datensatzordners an.
 cli-help-fit-10 = --report ORDNER  Mit --dataset: wohin der Bericht geschrieben wird.
+cli-help-fit-11 = --within N  Beurteilt den Zwilling: eine Zeile, deren angepasster Wert mehr als N Standardfehler vom Wert der Konfiguration abweicht, sagt FAIL (Code 1); eine Zeile ohne Standardfehler oder Konfigurationswert wird nicht beurteilt.
+cli-help-fit-12 = --write DATEI  Schreibt die Konfiguration mit jedem angepassten Wert, der ein Schlüssel von ihr ist (der Faktor von --stiffness), und seinen [bounds]; Kommentare bleiben nicht erhalten.
+cli-help-fit-13 = --sigmas K  Mit --write: die Grenzen liegen K Standardfehler beiderseits, standardmäßig 2 (etwa 95 % bei normalverteiltem Fehler).
 cli-help-identify-1 = sim-cli identify [MASCHINE] (--trace DATEI | --sweep DATEI) [OPTIONEN]
 cli-help-identify-2 = --trace DATEI  Die eigene Antriebsaufzeichnung des Motors (CSV).
 cli-help-identify-3 = --map DATEI  Welche Spalte der Aufzeichnung welches Signal ist.

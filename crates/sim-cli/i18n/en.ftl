@@ -39,6 +39,12 @@ cli-accuracy-tool = Accuracy at the tool along ISO 9283, over the axes in metres
 cli-accuracy-verdict = Accuracy verdict: { $arg }
 
 fit-report-written = Report written: { $arg }
+cli-fit-write-lumped = Not written: { $arg } is a value of the trace that several keys of the config make up, or that is no key of it.
+cli-fit-write-no-key = Not written: { $arg }: the config has no such key.
+cli-fit-write-by-part = Not written: { $arg }: a part named in the config sets that key, so a value written to it would be overwritten.
+cli-fit-write-refused = Not written: { $arg }: the fitted value or its error is not one the machine accepts.
+cli-fit-write-nothing = Nothing written to { $arg }: no fitted value is one key of the config (only the factor of --stiffness is).
+cli-fit-write-done = Config written: { $arg }
 
 cli-sensitivity-zero = Not ranked: { $arg } is 0 and has no range in [bounds] (--delta of 0 is 0); give it one there to vary it.
 cli-sensitivity-runs = Cycles simulated for the global sensitivity: { $arg }
@@ -188,6 +194,8 @@ cli-help-workspace-3 = --points N  Nodes a side, 61 by default.
 cli-help-replay-1 = sim-cli replay MACHINE --trace FILE [OPTIONS]
 cli-help-replay-2 = --trace FILE  The drive trace (CSV).
 cli-help-replay-3 = --map FILE  Which column of the trace is which signal.
+cli-help-replay-4 = --tolerance NAME=LIMIT,...  Judges the replay: the largest allowed torque_rms_nm, torque_peak_nm, following_error_rms_rad, following_error_peak_rad, one row per limit given.
+cli-help-replay-5 = Exit code 1 where a row says FAIL.
 cli-help-fit-1 = sim-cli fit MACHINE [OPTIONS]   or   sim-cli fit [MACHINE] --dataset DIR --report DIR
 cli-help-fit-2 = --trace FILE  Fits the rigid values from a drive trace (CSV).
 cli-help-fit-3 = --map FILE  Which column of the trace is which signal.
@@ -198,6 +206,9 @@ cli-help-fit-7 = --stiffness  Also fits the factor on the belts' stiffness from 
 cli-help-fit-8 = --stiffness-key KEY  With --stiffness: the config key of the stiffness.
 cli-help-fit-9 = --dataset DIR  Fits every measurement of a dataset folder.
 cli-help-fit-10 = --report DIR  With --dataset: where the report is written.
+cli-help-fit-11 = --within N  Judges the twin: a row whose fitted value is more than N standard errors from the config's says FAIL (exit code 1); a row without a standard error or config value is not judged.
+cli-help-fit-12 = --write FILE  Writes the config with each fitted value that is one key of it (the factor of --stiffness) and its [bounds]; comments are not kept.
+cli-help-fit-13 = --sigmas K  With --write: the bounds lie K standard errors either side, 2 by default (about 95 % for a normal error).
 cli-help-identify-1 = sim-cli identify [MACHINE] (--trace FILE | --sweep FILE) [OPTIONS]
 cli-help-identify-2 = --trace FILE  The motor's own drive trace (CSV).
 cli-help-identify-3 = --map FILE  Which column of the trace is which signal.

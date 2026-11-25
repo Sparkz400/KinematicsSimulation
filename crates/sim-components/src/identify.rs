@@ -1,7 +1,9 @@
 //! Fitting a config to a measured machine, in stages: first the rigid values of each axis from a drive
 //! trace (or, where the motors do not turn in proportion to the axes, of each motor: `fit_joints`), then the
 //! load's resonance on the belt from a frequency sweep, or its stiffness from a move's trace
-//! (`fit_move_stiffness`). Nothing here edits a config; the results say what the config would have to be.
+//! (`fit_move_stiffness`). Nothing here edits a config; the results say what the config would have to be. `sim-cli fit
+//! --write` writes the one result that is a single key of the config (the factor on a stiffness) back, with its error
+//! band as `[bounds]`; the others are lumped values of several keys.
 //!
 //! Every stage runs the same estimate on the measurement and on the config's own simulation of the same
 //! run, and reports the two side by side. What the simple estimate gets wrong (gearbox losses that grow
