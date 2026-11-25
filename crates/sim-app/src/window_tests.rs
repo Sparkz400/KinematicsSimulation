@@ -652,6 +652,10 @@ fn pause_speed_units_and_theme_from_the_top_bar() {
     // The slider rounds to the two decimals it shows (0.0267 is 0.03).
     let expected = (0.01 * 1000f64.powf(at) * 100.0).round() / 100.0;
     assert_eq!(speed, expected, "at {at} of the range");
+    // The range reaches to 10 (it ended at 2): a click at the right end of the rail is above 2.
+    d.click_at(Vec2::new(slider.right() - r, slider.center().y));
+    d.wait("the speed at the end", |d| d.state().model.speed != speed);
+    assert!(d.state().model.speed > 2.0, "{}", d.state().model.speed);
     for key in ["ui-units-rpm", "ui-units-mm", "ui-theme-light"] {
         let label = d.tr(key);
         d.click(Role::CheckBox, &label);
