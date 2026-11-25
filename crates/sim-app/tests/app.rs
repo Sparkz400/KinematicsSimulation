@@ -1345,13 +1345,17 @@ fn switching_the_machine_cancels_the_jobs_under_way() {
     let analysis = model.job_progress(JobRef::Analysis(Analysis::Cycle)).unwrap();
     let traces = model.job_progress(JobRef::Bands).unwrap();
     model.set_machine(other);
+    let done = |p: &sim_components::analysis::Progress| p.done.load(Relaxed);
+    let at_switch = (done(&analysis), done(&traces));
     assert!(analysis.cancel.load(Relaxed) && traces.cancel.load(Relaxed));
     assert!(!model.analysis_running());
-    // Stopped, not run to their end: a run of the cycle takes well under a second here, and the thousand runs (or the
-    // bounds' traces) uncancelled take minutes.
-    let stopped = Duration::from_secs(60);
-    wait_for_thread_end(&analysis, stopped);
-    wait_for_thread_end(&traces, stopped);
+    // Stopped, not run to their end (uncancelled, both end within a minute here, so time alone does not show it): after
+    // the switch at most one more run per worker thread is done, of a thousand.
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    wait_for_thread_end(&analysis, PATIENCE);
+    wait_for_thread_end(&traces, PATIENCE);
+    assert!(done(&analysis) <= at_switch.0 + threads, "{} runs done, {} at the switch", done(&analysis), at_switch.0);
+    assert!(done(&traces) <= at_switch.1 + threads, "{} traces done, {} at the switch", done(&traces), at_switch.1);
     // The same where another config file replaces the machine's.
     model.set_machine(entry);
     model.run_analysis(Analysis::Cycle);
@@ -1362,7 +1366,9 @@ fn switching_the_machine_cancels_the_jobs_under_way() {
     model.open_config(path.to_str().unwrap());
     std::fs::remove_file(&path).ok();
     assert!(again.cancel.load(Relaxed));
-    wait_for_thread_end(&again, stopped);
+    let at_open = done(&again);
+    wait_for_thread_end(&again, PATIENCE);
+    assert!(done(&again) <= at_open + threads, "{} runs done, {at_open} at the opening", done(&again));
 }
 
 /// The kinematics comparison tries every catalogue motor on the task (thousands of cycles over the machines); it runs
