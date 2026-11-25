@@ -2006,10 +2006,10 @@ impl<M: Mechanism> Machine for JointMachine<M> {
         capsules
     }
 
-    /// The exact adjacency of the links: link i with link i + 1, and across a link of no length (the frames of a
-    /// spherical wrist coincide) to the next one; the tool's boxes with the last two links that have a length and those
-    /// after them (the flange box reaches back over the link before the last). The obstacles' capsules come first
-    /// among the capsules and are not joined to anything here.
+    /// The exact adjacency of the links: link i with link i + 1, across a link of no length (the frames of a spherical
+    /// wrist coincide) to the next one, and with the links of no length at the end of the next one; the tool's boxes
+    /// with the last two links that have a length and those after them (the flange box reaches back over the link
+    /// before the last). The obstacles' capsules come first among the capsules and are not joined to anything here.
     fn connected_bodies(&self, s: &[f64], boxes: usize, capsules: usize) -> Option<Vec<(usize, usize)>> {
         if self.mechanism.collision_links().is_empty() {
             return None;
@@ -2023,12 +2023,15 @@ impl<M: Mechanism> Machine for JointMachine<M> {
             all.iter().map(|c| (0..3).map(|i| (c.to[i] - c.from[i]).powi(2)).sum::<f64>() > 1e-12).collect();
         let mut pairs = Vec::new();
         for i in own..capsules {
-            // Up to and including the next link that has a length.
+            // Up to and including the next link that has a length, and the links of no length at its end (a point at the
+            // flange sits on the quill, at its length from the arm before).
+            let mut reached = false;
             for j in i + 1..capsules {
-                pairs.push((boxes + i, boxes + j));
-                if long[j] {
+                if reached && long[j] {
                     break;
                 }
+                pairs.push((boxes + i, boxes + j));
+                reached |= long[j];
             }
         }
         // The last two links with a length, and what comes after them.

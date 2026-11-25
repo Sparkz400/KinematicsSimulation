@@ -192,12 +192,11 @@ pub struct Sim {
     /// The first contact with an obstacle since the start.
     pub contact: Option<Contact>,
     /// The machine's own parts against each other (`collision::PlanCheck::own`): joined as they are at the start pose,
-    /// looked at after a base step where the setpoint has moved a millimetre (a thousandth of an axis unit) since the
-    /// last look, at most every `OWN_PARTS_EVERY_S`; its least since the start is the verdict "self-collision".
+    /// looked at after the first base step and then every `OWN_PARTS_EVERY_S`, in the simulated state (a load that
+    /// swings, a machine that coasts); its least since the start is the verdict "self-collision".
     pub own_parts: crate::collision::PlanCheck,
-    /// The setpoint at the last look at the own parts, empty before the first, and when (s).
-    own_from: Vec<f64>,
-    own_at: f64,
+    /// When the own parts were last looked at (s), `None` before the first look.
+    own_at: Option<f64>,
     /// Whether the drives tripped (effects.drive_monitoring) while a part touched an obstacle, and have not been
     /// enabled since. Which monitor, and the stopping distances, are in `control.fault`.
     pub crashed: bool,
@@ -259,9 +258,7 @@ pub struct Snapshot {
     #[serde(default)]
     own: Option<crate::collision::SelfClearance>,
     #[serde(default)]
-    own_from: Vec<f64>,
-    #[serde(default)]
-    own_at: f64,
+    own_at: Option<f64>,
     crashed: bool,
     contact_force: f64,
     gaps: Vec<f64>,
@@ -392,9 +389,9 @@ pub(crate) fn start_pose(cfg: &Config, machine: &dyn Machine) -> Result<Vec<f64>
     if in_range(machine, &pose) { Ok(pose) } else { Err(ConfigError::Invalid("start.pose".into())) }
 }
 
-/// The run's look at the machine's own parts (`Sim::own_parts`) comes at most this often (s): a look draws the machine's
-/// parts, which on an arm costs about as much as a step, and an arm's joints move a thousandth of a radian in a few base
-/// steps. At 1 m/s the setpoint moves a millimetre in this time, the planned path's spacing.
+/// How often the run looks at the machine's own parts (`Sim::own_parts`), s: a look draws the machine's parts, which on
+/// an arm costs about as much as a step. At 1 m/s the machine moves a millimetre in this time, the planned path's
+/// spacing.
 pub const OWN_PARTS_EVERY_S: f64 = 1e-3;
 
 impl Sim {
@@ -444,8 +441,7 @@ impl Sim {
             least_clearance: f64::INFINITY,
             contact: None,
             own_parts,
-            own_from: Vec::new(),
-            own_at: 0.0,
+            own_at: None,
             crashed: false,
             contact_force: 0.0,
             gaps: Vec::new(),
@@ -536,7 +532,6 @@ impl Sim {
             least_clearance: self.least_clearance,
             contact: self.contact.clone(),
             own: self.own_parts.own.clone(),
-            own_from: self.own_from.clone(),
             own_at: self.own_at,
             crashed: self.crashed,
             contact_force: self.contact_force,
@@ -572,7 +567,7 @@ impl Sim {
         (self.clearance, self.least_clearance, self.crashed) = (s.clearance, s.least_clearance, s.crashed);
         self.contact.clone_from(&s.contact);
         self.own_parts.own.clone_from(&s.own);
-        (self.own_from, self.own_at) = (s.own_from.clone(), s.own_at);
+        self.own_at = s.own_at;
         self.gaps.clone_from(&s.gaps);
         (self.contact_force, self.absorbed) = (s.contact_force, s.absorbed);
         // The pushes are those of the next step, which works them out afresh; until then the restored state has none.
@@ -769,17 +764,16 @@ impl Sim {
         self.step += 1;
     }
 
-    /// The machine's own parts after a base step (`own_parts`), where the setpoint has moved a millimetre since the last
-    /// look and `OWN_PARTS_EVERY_S` has passed, or there was none.
+    /// The machine's own parts after a base step (`own_parts`), where `OWN_PARTS_EVERY_S` has passed since the last look
+    /// or there was none. The pose said with a finding is the setpoint's.
     fn look_at_own_parts(&mut self) {
-        let (pose, now) = (&self.control.set_pos, self.time());
-        let moved = pose.iter().zip(&self.own_from).map(|(a, b)| (a - b).powi(2)).sum::<f64>();
-        if !self.own_from.is_empty() && (moved < 1e-6 || now - self.own_at < OWN_PARTS_EVERY_S) {
+        let now = self.time();
+        if self.own_at.is_some_and(|at| now - at < OWN_PARTS_EVERY_S) {
             return;
         }
         let boxes = self.machine.collision_bodies(&self.state);
-        self.own_parts.look_at_own(self.machine.as_ref(), &self.state, &boxes, pose);
-        (self.own_at, self.own_from) = (now, pose.clone());
+        self.own_parts.look_at_own(self.machine.as_ref(), &self.state, &boxes, &self.control.set_pos);
+        self.own_at = Some(now);
     }
 
     /// The clearance to the obstacles after a base step, which obstacles a part touches, and the first contact, the tool

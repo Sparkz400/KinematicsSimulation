@@ -170,3 +170,23 @@ fn parts_nearer_than_the_clearance_fail_the_verdict_and_a_time_optimal_plan_is_r
     let verdict = verdicts.iter().find(|v| v.check == "self-collision").unwrap();
     assert!(own < 0.05 && !verdict.ok && verdict.value == own && verdict.limit == 0.05, "{verdict:?}");
 }
+
+/// The point the SCARA draws at its flange (capsule 4, of no length) sits at the quill's end, the quill's 0.2 m from the
+/// second arm's end (capsule 2) whatever the pose: 0.2 - 0.025 - 0.015 = 0.16 m between the two always, which a clearance
+/// above it would fail on every cycle. The two are joined, as the quill (capsule 3) is to both. Fails if a link of no
+/// length is joined only to the link it ends.
+#[test]
+fn the_scaras_flange_point_is_joined_to_the_arm_before_its_quill() {
+    let entry = find("scara").unwrap();
+    let mut machine = (entry.build)(&entry.config()).unwrap();
+    machine.set_payload_attached(false);
+    let (mut state, mut torque) = (Vec::new(), vec![0.0; machine.motors().len()]);
+    machine.equilibrium(&[0.3, 1.0, 0.1, 0.0], &mut state, &mut torque);
+    let (boxes, capsules) = (machine.collision_bodies(&state).len(), machine.self_collision_capsules(&state).len());
+    assert_eq!((boxes, capsules), (1, 5));
+    let joined = machine.connected_bodies(&state, boxes, capsules).unwrap();
+    for pair in [(1 + 2, 1 + 3), (1 + 3, 1 + 4), (1 + 2, 1 + 4)] {
+        assert!(joined.contains(&pair), "{pair:?} not in {joined:?}");
+    }
+    assert!(!joined.contains(&(1 + 1, 1 + 3)), "{joined:?}");
+}
