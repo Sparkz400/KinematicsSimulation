@@ -1949,6 +1949,19 @@ pub fn motor_config(cfg: &Config, id: &str) -> Result<Config, ConfigError> {
     Ok(out)
 }
 
+/// The part `key` ("motor", "gearbox" or "drive") that motor `id` of an unresolved config has: the one its own
+/// `[parts.<id>]` names; else none where it has values of its own for that part (`[motor.<id>]`, `[gearbox.<id>]`: not
+/// a catalogue part); else `shared`.
+fn part_of(cfg: &Config, id: &str, key: &str, shared: &str) -> String {
+    let own = cfg.get(&format!("parts.{id}.{key}")).ok().and_then(|v| v.as_str()).filter(|n| !n.is_empty());
+    let by_hand = key != "drive" && cfg.get(&format!("{key}.{id}")).is_ok_and(|v| v.is_table());
+    match own.filter(|_| !id.is_empty()) {
+        Some(own) => own.to_string(),
+        None if by_hand && !id.is_empty() => String::new(),
+        None => shared.to_string(),
+    }
+}
+
 /// The config with the catalogue values of the parts it names: `[parts]` with `motor = "<article>"`,
 /// `motor_supply` (`SUPPLIES`), `gearbox = "<size-frame-ratio>"`, `drive = "<article>"`, `belt = "<profile-width>"`
 /// and `axis = "<name>"`, "" for none. A named part overwrites the numbers the config has for it, and the velocity
@@ -1980,9 +1993,10 @@ pub struct Candidate {
     /// names, kg. Motor and gearbox times the number of motors that take it (not those with a motor of their own,
     /// `[motor.<id>]` or `[parts.<id>]`; one for `search_motor`), and the axis at the config's strokes.
     pub cost: f64,
-    /// The parts the combination buys, as the search's table spells them: motor, gearbox, drive (each once per motor
-    /// that takes it, as `cost` counts them) and axis, with how many of each; the part a config keeps is named too.
-    /// Empty for an axis ruled out before any motor was tried.
+    /// The parts the combination buys, as the search's table spells them, with how many of each: every motor's motor,
+    /// gearbox and drive (the candidate's where it takes the shared ones, its own `[parts.<id>]` where it has them;
+    /// none where the config has hand-entered values), the axis and the belt; the parts a config keeps are named too.
+    /// For one motor (`search_motor`) that motor's alone. Empty for an axis ruled out before any motor was tried.
     pub parts: Vec<(String, f64)>,
     /// The user's price for `parts` (`apply_prices`); `None` without a price list or where a part has no price in it.
     pub price: Option<f64>,
@@ -2674,19 +2688,40 @@ fn judge(entry: &MachineEntry, cfg: &Config) -> Result<(CycleLoad, Vec<Verdict>)
 fn try_job(entry: &MachineEntry, cfg: &Config, duties: &[(Config, f64)], supply: &str, job: &Job) -> Option<Candidate> {
     // Not offered at this supply, or a part the config cannot take.
     let (with_parts, motors) = job_config(entry, cfg, supply, job).ok()?;
-    // The gearbox the motor drives through: the candidate's, else its own (`[parts.<id>]` for one motor).
-    let own = if job.motor.is_empty() { Ok(cfg.clone()) } else { motor_config(cfg, &job.motor) };
-    let own = own.ok();
-    let own_parts = own.as_ref().and_then(|own| Parts::of(own).ok());
-    let own_gearbox = own_parts.as_ref().map(|p| p.gearbox.to_string()).unwrap_or_default();
-    let gearbox = if job.gearbox.is_empty() { own_gearbox.as_str() } else { job.gearbox.as_str() };
-    let drive = if job.drive.is_empty() { own_parts.as_ref().map_or("", |p| p.drive) } else { job.drive };
-    // What the combination buys, for a price list: every motor that takes the shared parts has its own of each.
-    let parts = [(job.article, motors), (gearbox, motors), (drive, motors), (job.axis.as_str(), 1.0)]
-        .into_iter()
-        .filter(|(name, _)| !name.is_empty())
-        .map(|(name, count)| (name.to_string(), count))
-        .collect();
+    let shared = Parts::of(cfg).unwrap_or_default();
+    let or = |candidate: &str, config: &str| if candidate.is_empty() { config } else { candidate }.to_string();
+    // Each motor's motor, gearbox and drive: the candidate's in place of the shared ones, a motor's own
+    // `[parts.<id>]` kept; for one motor (`search_motor`) that motor's alone, the candidate's in place of its own.
+    let trains: Vec<[String; 3]> = if job.motor.is_empty() {
+        let ids = (entry.build)(&with_parts).map(|m| m.motors().iter().map(|m| m.id.to_string()).collect());
+        let (gearbox, drive) = (or(&job.gearbox, shared.gearbox), or(job.drive, shared.drive));
+        let ids: Vec<String> = ids.unwrap_or_default();
+        ids.iter()
+            .map(|id| {
+                [part_of(cfg, id, "motor", job.article), part_of(cfg, id, "gearbox", &gearbox), part_of(cfg, id, "drive", &drive)]
+            })
+            .collect()
+    } else {
+        let id = job.motor.as_str();
+        let own = |key: &str, candidate: &str, config: &str| or(candidate, &part_of(cfg, id, key, config));
+        vec![[job.article.to_string(), own("gearbox", &job.gearbox, shared.gearbox), own("drive", job.drive, shared.drive)]]
+    };
+    // The gearbox the candidate's motor drives through (the shared one where several take it).
+    let gearbox = match &trains[..] {
+        [one] if !job.motor.is_empty() => one[1].clone(),
+        _ => or(&job.gearbox, shared.gearbox),
+    };
+    let gearbox = gearbox.as_str();
+    // What the combination buys, for a price list: every motor's parts, and the axis and belt (a candidate's or the
+    // config's) where every motor is searched.
+    let whole = [or(&job.axis, shared.axis), shared.belt.to_string()].into_iter().filter(|_| job.motor.is_empty());
+    let mut parts: Vec<(String, f64)> = Vec::new();
+    for name in trains.into_iter().flatten().chain(whole).filter(|name| !name.is_empty()) {
+        match parts.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, count)) => *count += 1.0,
+            None => parts.push((name, 1.0)),
+        }
+    }
     // An unknown mass counts 0 (not NaN, which sorted the row last); `estimated` says so ("gearbox-mass").
     let gearbox_mass = if gearbox.is_empty() { 0.0 } else { gearbox_mass(gearbox).unwrap_or(0.0) };
     let mass = motor_mass_for(cfg, job.article, supply).unwrap_or(f64::INFINITY) + gearbox_mass;
