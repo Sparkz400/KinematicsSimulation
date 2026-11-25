@@ -292,7 +292,7 @@ impl Tuner<'_> {
             lo = Some(first);
         } else {
             // A gain fails on either side of those that meet: above them on the gain margin, below them on the phase
-            // margin (the integral's lag at a low crossover: the single axis at a quarter of its gain has 27 degrees).
+            // margin (the integral's lag at a low crossover: one motor's axis at a quarter of its gain had 27 degrees).
             // The way to them is the side the slack grows to.
             let up = probe(self, 2.0 * start)?;
             left -= 1;
