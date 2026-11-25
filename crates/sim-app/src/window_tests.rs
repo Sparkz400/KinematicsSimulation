@@ -1096,9 +1096,15 @@ fn every_tool_tab_starts_its_computation() {
     d.button_of("ui-trace-run");
     d.wait("the trace's answer", |d| d.messages().contains(&"ui-file-unreadable"));
     assert!(!d.state().model.running(Analysis::Trace));
-    // The cycle's result arrives in its tab.
+    // The cycle's result arrives in its tab. With its bands it shares the processors with the five computations started
+    // after it: on CI's 4-core runners (ci-full, 25 November 2026) it was still running after 600 s on Linux and on
+    // Windows, and the whole test took 675 s here with 4 of the 16 threads (a runner's core is some 2.5 times slower).
+    // An hour stays inside that profile's 90-minute limit.
     d.tab("ui-analysis");
-    d.wait_result("the cycle's result", |d| d.state().model.cycle_report.is_some());
+    let running = |d: &Driver| format!("analyses running: {}", d.state().model.analysis_running());
+    d.eventually_within(std::time::Duration::from_secs(3600), "the cycle's result", |d| {
+        if d.state().model.cycle_report.is_some() { Ok(()) } else { Err(running(d)) }
+    });
 }
 
 #[test]
