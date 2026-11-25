@@ -2369,7 +2369,7 @@ fn search_takes_the_configs_own_supply() {
     assert!(text(&out.stderr).contains("0 / 1"), "{}", text(&out.stderr));
 }
 
-/// The user's price list on the single axis with one motor, by hand: the 1FK2104-5AK at 700 and its paired drive at 120
+/// The user's price list on the second machine of the list, by hand: the 1FK2104-5AK at 700 and its paired drive at 120
 /// (one motor, so one of each) cost 820, printed in a `price` column beside `cost_kg`; a list without the drive leaves
 /// the cell empty and names the drive's part number on the error stream; without `--prices` the table is the same
 /// but for that column (header and row). `--rank-by price` without a list is refused with exit 2, before any search.
